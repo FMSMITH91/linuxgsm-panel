@@ -107,6 +107,10 @@ try:
     check("view console WITH VIEW_CONSOLE + access -> 200",
           c.get("/api/console/%d" % accessible_id).status_code == 200)
 
+    # Pages must actually RENDER for a non-superadmin (regression: a template calling a
+    # context-processor helper with the wrong arity 500'd only for limited users).
+    check("dashboard (/) renders for limited user -> 200", c.get("/").status_code == 200)
+
     r = c.get("/api/servers")
     ids = [x.get("id") for x in (r.get_json() or [])] if r.status_code == 200 else []
     check("/api/servers -> 200", r.status_code == 200, "got %d" % r.status_code)

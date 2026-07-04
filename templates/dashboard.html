@@ -18,7 +18,7 @@
     <h5 class="mt-3">No Game Servers Found</h5>
     <p class="text-secondary">
       No game servers are configured yet.
-      {% if current_user.is_superadmin or has_permission(current_user, 'manage_remotes') %}
+      {% if current_user.is_superadmin or has_permission('manage_remotes') %}
         <br>Start by adding a <a href="{{ url_for('manage_remotes') }}">remote server</a>, then install a game server from the <a href="{{ url_for('manage_servers') }}">Game Servers</a> page.
       {% endif %}
     </p>

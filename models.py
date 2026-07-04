@@ -34,6 +34,12 @@ class User(UserMixin, db.Model):
     api_token = db.Column(db.String(64), unique=True, nullable=True)
     groups = db.relationship("Group", secondary="user_groups", back_populates="users")
 
+    @property
+    def email_display(self):
+        """Decrypted email for display (stored encrypted at rest)."""
+        from config import decrypt_secret
+        return decrypt_secret(self.email) if self.email else ""
+
 
 user_groups = db.Table(
     "user_groups",

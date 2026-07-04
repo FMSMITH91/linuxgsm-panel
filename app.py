@@ -226,6 +226,24 @@ LOGIN_MAX_FAILS = 8
 LOGIN_WINDOW = 300  # seconds
 
 MIN_PASSWORD_LEN = 10
+import string as _string
+_PW_SYMBOLS = set(_string.punctuation)
+
+
+def password_problem(pw):
+    """Return a human error if the password is too weak, else None.
+    Requires: length, lower, upper, digit, and a symbol."""
+    if not pw or len(pw) < MIN_PASSWORD_LEN:
+        return f"Password must be at least {MIN_PASSWORD_LEN} characters."
+    if not any(c.islower() for c in pw):
+        return "Password must include a lowercase letter."
+    if not any(c.isupper() for c in pw):
+        return "Password must include an uppercase letter."
+    if not any(c.isdigit() for c in pw):
+        return "Password must include a number."
+    if not any(c in _PW_SYMBOLS for c in pw):
+        return "Password must include a symbol (e.g. !@#$%)."
+    return None
 
 
 def create_app():
@@ -259,15 +277,20 @@ def create_app():
     init_auth(app)
     init_db(app)
 
-    # One-time: encrypt any legacy plaintext SSH credentials already in the DB.
+    # One-time: encrypt any legacy plaintext secrets/PII already in the DB
+    # (remote SSH credentials, and user email addresses).
     with app.app_context():
         try:
-            from models import RemoteServer
+            from models import RemoteServer, User
             changed = False
             for r in RemoteServer.query.all():
                 if r.auth_credential and not is_encrypted(r.auth_credential) \
                         and r.auth_method in ("password", "key"):
                     r.auth_credential = encrypt_secret(r.auth_credential)
+                    changed = True
+            for u in User.query.all():
+                if u.email and not is_encrypted(u.email):
+                    u.email = encrypt_secret(u.email)
                     changed = True
             if changed:
                 db.session.commit()
@@ -435,21 +458,19 @@ def register_routes(app):
 
                 if not username or len(username) < 3:
                     flash("Username must be at least 3 characters.", "danger")
-                elif not password or len(password) < MIN_PASSWORD_LEN:
-                    flash(f"Password must be at least {MIN_PASSWORD_LEN} characters.", "danger")
+                elif password_problem(password):
+                    flash(password_problem(password), "danger")
                 elif password != confirm:
                     flash("Passwords do not match.", "danger")
                 else:
-                    existing = User.query.filter(
-                        (User.username == username) | (User.email == email)
-                    ).first()
+                    existing = User.query.filter_by(username=username).first()
                     if existing:
-                        flash("Username or email already exists.", "danger")
+                        flash("Username already exists.", "danger")
                     else:
                         admin = User(
                             username=username,
                             password_hash=hash_password(password),
-                            email=email if email else None,
+                            email=encrypt_secret(email) if email else None,
                             display_name=username,
                             is_superadmin=True,
                             is_active=True,
@@ -1437,8 +1458,9 @@ def register_routes(app):
         if not username or len(username) < 3:
             flash("Username must be at least 3 characters.", "danger")
             return redirect(url_for("manage_users"))
-        if not password or len(password) < MIN_PASSWORD_LEN:
-            flash(f"Password must be at least {MIN_PASSWORD_LEN} characters.", "danger")
+        pw_err = password_problem(password)
+        if pw_err:
+            flash(pw_err, "danger")
             return redirect(url_for("manage_users"))
 
         existing = User.query.filter_by(username=username).first()
@@ -1449,7 +1471,7 @@ def register_routes(app):
         user = User(
             username=username,
             password_hash=hash_password(password),
-            email=email if email else None,
+            email=encrypt_secret(email) if email else None,
             display_name=display_name,
             is_superadmin=is_superadmin,
         )
@@ -1471,15 +1493,17 @@ def register_routes(app):
     def edit_user(user_id):
         user = User.query.get_or_404(user_id)
         user.display_name = request.form.get("display_name", user.display_name).strip()
-        user.email = request.form.get("email", user.email).strip() or None
+        _new_email = request.form.get("email", "").strip()
+        user.email = encrypt_secret(_new_email) if _new_email else None
         user.is_active = request.form.get("is_active") == "on"
         user.is_superadmin = request.form.get("is_superadmin") == "on"
 
         # Update password if provided
         password = request.form.get("password", "")
         if password:
-            if len(password) < MIN_PASSWORD_LEN:
-                flash(f"Password must be at least {MIN_PASSWORD_LEN} characters.", "danger")
+            pw_err = password_problem(password)
+            if pw_err:
+                flash(pw_err, "danger")
                 return redirect(url_for("manage_users"))
             user.password_hash = hash_password(password)
 

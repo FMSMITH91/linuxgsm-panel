@@ -201,17 +201,15 @@ systemctl --user enable --now linuxgsm-panel
 
 ## Security
 
-- User passwords are bcrypt-hashed.
-- Sessions are signed with a random secret key (`data/secret_key`).
-- Remote SSH uses Paramiko (key/password) or the system `ssh` client for Tailscale SSH.
-- Audit logging records the acting user, real client IP, target, and result for sensitive actions.
-- Permission checks are enforced on routes (see the RBAC section).
+- Passwords are **bcrypt-hashed**; new passwords require length plus mixed case, a number and a symbol, and logins are rate-limited.
+- **Secrets are encrypted at rest** — remote SSH credentials and other sensitive fields are stored encrypted in `data/panel.db` (key in `data/cred_key`). The session key and these files are kept owner-only (`chmod 600`).
+- Sessions use signed, `HttpOnly`, `SameSite=Lax` cookies (`Secure` when served over HTTPS).
+- **Role-based access control is enforced server-side on every route** — not just hidden in the UI. Server access is scoped per host, and an automated test verifies the enforcement.
+- Remote access uses Paramiko (SSH key/password) or the system `ssh` client for Tailscale SSH — with Tailscale SSH there are **no stored credentials at all** (recommended).
+- Input that becomes shell/OS operations is strictly validated; audit logging records the acting user, real client IP, target, and result of sensitive actions.
 - Super admins bypass all permission checks — use that role sparingly.
 
-> **⚠️ Known limitation:** remote SSH credentials (passwords / key paths) are currently stored
-> **in plaintext** in `data/panel.db`. Keep that file private, run the panel on a trusted host,
-> and prefer Tailscale SSH (no stored credentials) where possible. Encrypting credentials at rest
-> is a planned improvement. **Never commit `data/` to version control** (it's in `.gitignore`).
+> **Operational note:** run the panel behind Tailscale (tailnet-only, no open ports) rather than exposing it to the public internet, and never commit `data/` to version control — it holds `panel.db`, `secret_key`, `cred_key`, and `config.json` (already in `.gitignore`).
 
 ## Development
 

@@ -29,7 +29,7 @@
         <tr>
           <td><strong>{{ user.username }}</strong></td>
           <td>{{ user.display_name }}</td>
-          <td>{{ user.email or '—' }}</td>
+          <td>{{ user.email_display or '—' }}</td>
           <td>
             {% for g in user.groups %}
               <span class="badge bg-secondary">{{ g.name }}</span>
@@ -90,6 +90,7 @@
           <div class="mb-3">
             <label class="form-label">Password</label>
             <input type="password" name="password" class="form-control" required minlength="10">
+            <div class="form-text">At least 10 characters with upper &amp; lowercase, a number, and a symbol.</div>
           </div>
           <div class="mb-3">
             <label class="form-label">Display Name</label>
@@ -155,11 +156,12 @@
           </div>
           <div class="mb-3">
             <label class="form-label">Email</label>
-            <input type="email" name="email" class="form-control" value="{{ user.email or '' }}">
+            <input type="email" name="email" class="form-control" value="{{ user.email_display }}">
           </div>
           <div class="mb-3">
             <label class="form-label">New Password (leave blank to keep current)</label>
             <input type="password" name="password" class="form-control" minlength="10">
+            <div class="form-text">At least 10 characters with upper &amp; lowercase, a number, and a symbol.</div>
           </div>
           <hr class="border-secondary">
           <div class="mb-2">
