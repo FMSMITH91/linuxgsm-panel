@@ -38,6 +38,7 @@ import subprocess
 import threading
 import time
 import uuid
+from types import SimpleNamespace
 from datetime import datetime
 from functools import wraps
 from pathlib import Path
@@ -80,6 +81,7 @@ from ssh_manager import (
     run_command, run_interactive, ssh_test_connection,
     get_server_status, run_as_game_user, send_console_command,
     list_server_commands, server_live_metrics, remote_public_ip, remote_live_metrics,
+    host_specs,
     set_autostart, get_autostart, install_game_cron, set_daily_restart,
     install_game_dependencies, parse_missing_deps, detect_game_port, detect_game_ports,
     lgsm_read_config, lgsm_write_config, lgsm_game_config,
@@ -1512,6 +1514,19 @@ def register_routes(app):
         """JSON status for server management dashboard."""
         return jsonify(so.get_server_status())
 
+    @app.route("/api/server-management/specs")
+    @login_required
+    @permission_required(SUPER_ADMIN)
+    def api_server_management_specs():
+        """Static hardware/OS specs for the panel host."""
+        local = RemoteServer.query.filter_by(is_local=True).first()
+        if local is None:
+            # Panel host wasn't added as a manageable remote — gather specs anyway
+            # via a lightweight local-only stand-in.
+            local = SimpleNamespace(is_local=True, auth_method="local",
+                                    sudo_enabled=False, linuxgsm_user="")
+        return jsonify(host_specs(local))
+
     @app.route("/api/server-management/live")
     @login_required
     @permission_required(SUPER_ADMIN)
@@ -1781,6 +1796,14 @@ def register_routes(app):
         remote = get_remote(remote_id)
         games = GameServer.query.filter_by(remote_id=remote_id).all()
         return render_template("remote_manage.html", remote=remote, games=games)
+
+    @app.route("/api/remote/<int:remote_id>/specs")
+    @login_required
+    @permission_required(MANAGE_REMOTES)
+    def api_remote_specs(remote_id):
+        """Static hardware/OS specs for a remote host (loaded once, not polled)."""
+        remote = get_remote(remote_id)
+        return jsonify(host_specs(remote))
 
     @app.route("/api/remote/<int:remote_id>/live")
     @login_required

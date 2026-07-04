@@ -813,6 +813,60 @@ def remote_ufw_status(server):
             "groups": _group_ufw_rules(rules)}
 
 
+# Single shell script that prints static host specs as TAB-separated KEY<TAB>VALUE
+# lines. POSIX-sh compatible (no sudo needed — everything read here is world-readable),
+# with fallbacks so it works on x86 servers and ARM SBCs (Raspberry Pi) alike.
+_SPECS_CMD = (
+    r'''OS=$(. /etc/os-release 2>/dev/null; printf '%s' "$PRETTY_NAME"); '''
+    r'''CPU=$(lscpu 2>/dev/null | sed -n 's/^Model name:[[:space:]]*//p' | head -1); '''
+    r'''[ -z "$CPU" ] && CPU=$(sed -n 's/^model name[[:space:]]*:[[:space:]]*//p' /proc/cpuinfo | head -1); '''
+    r'''[ -z "$CPU" ] && CPU=$(sed -n 's/^Model[[:space:]]*:[[:space:]]*//p' /proc/cpuinfo | head -1); '''
+    r'''MAXMHZ=$(lscpu 2>/dev/null | sed -n 's/^CPU max MHz:[[:space:]]*//p' | head -1); '''
+    r'''MEM=$(awk '/MemTotal/{printf "%.1f", $2/1048576}' /proc/meminfo); '''
+    r'''DISK=$(df -hP / 2>/dev/null | awk 'NR==2{print $2}'); '''
+    r'''VIRT=$(systemd-detect-virt 2>/dev/null || true); '''
+    r'''printf 'OS\t%s\nKERNEL\t%s\nARCH\t%s\nHOST\t%s\nCPU\t%s\nCORES\t%s\nMAXMHZ\t%s\nMEM\t%s\nDISK\t%s\nVIRT\t%s\n' '''
+    r'''"$OS" "$(uname -r)" "$(uname -m)" "$(hostname)" "$CPU" "$(nproc)" "$MAXMHZ" "$MEM" "$DISK" "$VIRT"'''
+)
+
+
+def host_specs(server):
+    """Static hardware/OS specs for a host (local or remote): OS, CPU model, cores,
+    RAM, disk, kernel, arch, virtualization. Returns {} keys or {'error': ...}."""
+    try:
+        out, err, rc = run_command(server, _SPECS_CMD, timeout=20, sudo=False)
+    except Exception as e:
+        return {"error": str(e)}
+    if not out:
+        return {"error": err or "Could not read system specs"}
+    d = {}
+    for line in out.splitlines():
+        if "\t" in line:
+            k, v = line.split("\t", 1)
+            d[k.strip()] = v.strip()
+    mhz = d.get("MAXMHZ", "")
+    ghz = ""
+    try:
+        if mhz:
+            ghz = f"{float(mhz) / 1000:.1f} GHz"
+    except ValueError:
+        ghz = ""
+    mem = d.get("MEM", "")
+    virt = d.get("VIRT", "")
+    return {
+        "os": d.get("OS", "") or "Unknown",
+        "kernel": d.get("KERNEL", ""),
+        "arch": d.get("ARCH", ""),
+        "hostname": d.get("HOST", ""),
+        "cpu": d.get("CPU", "") or "Unknown CPU",
+        "cores": d.get("CORES", ""),
+        "cpu_speed": ghz,
+        "ram": (mem + " GB") if mem else "",
+        "disk": d.get("DISK", ""),
+        "virt": "" if virt in ("none", "") else virt,
+    }
+
+
 def remote_ufw_open_port(server, port, protocol="tcp", comment=""):
     """Open a port on the remote server via UFW. protocol 'both'/'any' opens TCP+UDP
     in a single rule (a bare `ufw allow <port>` covers both)."""

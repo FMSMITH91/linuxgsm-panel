@@ -18,6 +18,16 @@
   </span>
 </div>
 
+<!-- System Specs (static hardware & OS) -->
+<div class="card mb-3">
+  <div class="card-header"><i class="bi bi-pc-display-horizontal"></i> System Specs</div>
+  <div class="card-body">
+    <div class="row g-2" id="specs-body">
+      <div class="col-12 text-secondary small"><i class="bi bi-arrow-repeat"></i> Loading specs…</div>
+    </div>
+  </div>
+</div>
+
 <!-- Live Resources (realtime bars — same as the Panel Server) -->
 <div class="card mb-3">
   <div class="card-header d-flex justify-content-between align-items-center">
@@ -239,6 +249,32 @@ function switchToTailscale(){
     .then(d=>{ if(d.success){ el.textContent='✓ '+(d.message||'Migrated')+' — reloading…'; el.className='small mt-1 text-success'; setTimeout(function(){location.reload();},1500); } else { el.textContent='✗ '+(d.message||'Failed'); el.className='small mt-1 text-danger'; } })
     .catch(()=>{ el.textContent='✗ Migration failed'; el.className='small mt-1 text-danger'; });
 }
+// ── System specs (static — fetched once) ──
+function specEsc(s){ return String(s==null?'':s).replace(/[&<>"']/g,function(c){return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c];}); }
+function renderSpecs(d, el){
+  if(!el) return;
+  if(!d || d.error){ el.innerHTML = '<div class="col-12 text-danger small">Specs unavailable'+(d&&d.error?': '+specEsc(d.error):'')+'</div>'; return; }
+  function tile(label, val, cls){
+    if(!val) return '';
+    return '<div class="'+(cls||'col-6 col-md-3')+'"><div class="stat-tile h-100"><div class="stat-label">'+label+'</div>'
+      +'<div style="font-size:.9rem;font-weight:600;color:var(--text-heading);word-break:break-word;line-height:1.3;">'+specEsc(val)+'</div></div></div>';
+  }
+  var cpu = d.cpu + (d.cpu_speed ? '  ·  ' + d.cpu_speed : '');
+  var html = tile('Operating System', d.os, 'col-12 col-md-6')
+    + tile('Processor', cpu, 'col-12 col-md-6')
+    + tile('CPU Cores', d.cores, 'col-6 col-md-3')
+    + tile('Memory', d.ram, 'col-6 col-md-3')
+    + tile('Disk (/)', d.disk, 'col-6 col-md-3')
+    + tile('Kernel', d.kernel, 'col-6 col-md-3')
+    + tile('Architecture', d.arch, 'col-6 col-md-3')
+    + tile('Virtualization', d.virt, 'col-6 col-md-3')
+    + tile('Hostname', d.hostname, 'col-6 col-md-3');
+  el.innerHTML = html || '<div class="col-12 text-secondary small">No spec data.</div>';
+}
+fetch(MOUNT + '/api/remote/' + REMOTE_ID + '/specs').then(r=>r.json())
+  .then(d=>renderSpecs(d, document.getElementById('specs-body')))
+  .catch(()=>renderSpecs({error:'request failed'}, document.getElementById('specs-body')));
+
 loadSshStatus();
 pollLive();
 setInterval(pollLive, 2000);
