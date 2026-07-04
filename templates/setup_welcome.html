@@ -8,13 +8,15 @@
       <h2 class="mt-3">Welcome to LinuxGSM Panel!</h2>
       <p class="text-secondary mb-4">
         This wizard will guide you through the initial setup.<br>
-        You'll set up your site, create an admin account, and connect to a remote VPS.
+        You'll set up your site and create an admin account. After that you can install
+        game servers right here on this machine, or on remote VPS nodes over SSH.
       </p>
       <h6 class="mb-3 text-start">What you'll need:</h6>
       <ul class="text-start text-secondary small mb-4">
-        <li>A Linux VPS with LinuxGSM installed (or SSH access to install it)</li>
-        <li>SSH key or password for the remote server</li>
-        <li>A sudo-capable user on the remote (or root)</li>
+        <li>A Linux host (Ubuntu recommended) — this machine and/or a remote VPS.
+            <strong>LinuxGSM and the game servers are installed for you</strong> — nothing to pre-install.</li>
+        <li>For a remote host: SSH access (key, password, or Tailscale SSH).</li>
+        <li>A sudo-capable user (or root) on whichever host you install game servers on.</li>
       </ul>
       <form method="POST">
         <input type="hidden" name="step" value="welcome">
