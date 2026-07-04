@@ -37,13 +37,19 @@ if git diff --cached --name-only | grep -qiE '(^|/)data/|\.db$|secret_key'; then
 fi
 
 if git diff --cached --quiet; then
-  echo "==> No changes since the last push. Nothing to do."
-  exit 0
+  echo "==> No new file changes."
+else
+  echo "==> Changes to be committed:"
+  git status --short
+  git commit -q -m "$MSG"
+  echo "==> Committed."
 fi
 
-echo "==> Changes to be committed:"
-git status --short
-git commit -q -m "$MSG"
-echo "==> Pushing to GitHub ..."
-git push origin main
-echo "==> Done. https://github.com/FMSMITH91/linuxgsm-panel"
+# Push anything not yet on GitHub (this run's commit and/or earlier unpushed ones).
+if [ -n "$(git log origin/main..main --oneline 2>/dev/null)" ]; then
+  echo "==> Pushing to GitHub ..."
+  git push origin main
+  echo "==> Done. https://github.com/FMSMITH91/linuxgsm-panel"
+else
+  echo "==> Already up to date with GitHub. Nothing to push."
+fi
