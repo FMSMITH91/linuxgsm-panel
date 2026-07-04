@@ -54,6 +54,7 @@ def _chmod600(path):
 
 def get_secret_key():
     if SECRET_FILE.exists():
+        _chmod600(SECRET_FILE)  # tighten perms on existing installs too
         with open(SECRET_FILE) as f:
             return f.read().strip()
     import secrets
