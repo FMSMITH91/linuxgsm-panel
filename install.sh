@@ -55,9 +55,34 @@ echo    "║      LinuxGSM Panel — install / update     ║"
 echo -e "╚═══════════════════════════════════════════╝${NC}"
 
 # ── Prerequisites ──
-command -v python3 >/dev/null 2>&1 || die "Python 3 is required.  apt install -y python3 python3-venv python3-pip"
-python3 -m venv --help >/dev/null 2>&1 || die "python3-venv is required.  apt install -y python3-venv"
-command -v curl >/dev/null 2>&1 || warn "curl not found — the post-update health check needs it.  apt install -y curl"
+command -v python3 >/dev/null 2>&1 || die "Python 3 is required."
+
+# `python3 -m venv --help` succeeds even when the python3-venv / ensurepip package
+# is missing (common on minimal Ubuntu/Debian VPS images), so the ONLY reliable
+# test is to actually build a throwaway venv.
+_venv_works() {
+    local t; t="$(mktemp -d)" || return 1
+    if python3 -m venv "${t}" >/dev/null 2>&1; then rm -rf "${t}"; return 0; fi
+    rm -rf "${t}"; return 1
+}
+
+# If anything's missing, install it automatically on Debian/Ubuntu (this runs as
+# root for a root install, and via sudo otherwise).
+if ! _venv_works || ! command -v git >/dev/null 2>&1 || ! command -v curl >/dev/null 2>&1; then
+    if command -v apt-get >/dev/null 2>&1; then
+        SUDO=""; [ "$(id -u)" -ne 0 ] && SUDO="sudo"
+        info "Installing prerequisites (python3-venv, python3-pip, git, curl)…"
+        ${SUDO} apt-get update -qq || true
+        ${SUDO} apt-get install -y python3-venv python3-pip git curl \
+            || warn "apt-get reported an error — re-checking prerequisites anyway."
+    fi
+fi
+
+# Hard-fail only on what we truly cannot proceed without.
+_venv_works || die "Python can't create virtual environments. Install the venv package and re-run:
+     sudo apt install -y python3-venv python3-pip"
+command -v git >/dev/null 2>&1 || die "git is required.  sudo apt install -y git"
+command -v curl >/dev/null 2>&1 || warn "curl not found — the health check will fall back to python3."
 ok "Python $(python3 -c 'import sys;print("%d.%d"%sys.version_info[:2])') found"
 
 # Where is the source? Prefer the current checkout; otherwise we'll clone.
