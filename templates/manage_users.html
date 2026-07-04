@@ -18,7 +18,7 @@
           <th>Display Name</th>
           <th>Email</th>
           <th>Groups</th>
-          <th>Role</th>
+          <th>Account Type</th>
           <th>Active</th>
           <th>Last Login</th>
           <th></th>
@@ -41,7 +41,7 @@
             {% if user.is_superadmin %}
               <span class="badge bg-danger">Super Admin</span>
             {% else %}
-              <span class="badge bg-info text-dark">User</span>
+              <span class="badge bg-info text-dark">Standard</span>
             {% endif %}
           </td>
           <td>
@@ -99,8 +99,13 @@
             <label class="form-label">Email</label>
             <input type="email" name="email" class="form-control">
           </div>
-          <div class="mb-3">
-            <label class="form-label">Groups</label>
+          <hr class="border-secondary">
+          <div class="mb-2">
+            <label class="form-label mb-1">Groups</label>
+            <div class="form-text mt-0 mb-2">
+              Groups grant permissions and access to specific servers. A user gets the
+              <strong>combined</strong> abilities of every group they're in.
+            </div>
             {% for g in groups %}
             <div class="form-check">
               <input type="checkbox" name="groups" value="{{ g.id }}" class="form-check-input"
@@ -110,10 +115,18 @@
             </div>
             {% endfor %}
           </div>
-          <div class="form-check">
-            <input type="checkbox" name="is_superadmin" class="form-check-input" id="new-superadmin">
-            <label class="form-check-label" for="new-superadmin">Super Administrator</label>
-            <div class="form-text">Super admins have full access to everything.</div>
+          <hr class="border-secondary">
+          <div>
+            <label class="form-label mb-1">Account type</label>
+            <div class="form-check form-switch">
+              <input type="checkbox" name="is_superadmin" class="form-check-input" role="switch" id="new-superadmin">
+              <label class="form-check-label" for="new-superadmin">Super Administrator</label>
+            </div>
+            <div class="form-text mt-0">
+              A master override that <strong>ignores groups entirely</strong> — full control of the panel,
+              every server, and all settings. Leave off for a standard user, whose access comes only from
+              the groups above.
+            </div>
           </div>
         </div>
         <div class="modal-footer">
@@ -148,8 +161,13 @@
             <label class="form-label">New Password (leave blank to keep current)</label>
             <input type="password" name="password" class="form-control" minlength="6">
           </div>
-          <div class="mb-3">
-            <label class="form-label">Groups</label>
+          <hr class="border-secondary">
+          <div class="mb-2">
+            <label class="form-label mb-1">Groups</label>
+            <div class="form-text mt-0 mb-2">
+              Groups grant permissions and access to specific servers. A user gets the
+              <strong>combined</strong> abilities of every group they're in.
+            </div>
             {% for g in groups %}
             <div class="form-check">
               <input type="checkbox" name="groups" value="{{ g.id }}" class="form-check-input"
@@ -159,15 +177,29 @@
             </div>
             {% endfor %}
           </div>
-          <div class="form-check mb-2">
-            <input type="checkbox" name="is_superadmin" class="form-check-input"
-                   id="edit-superadmin-{{ user.id }}" {% if user.is_superadmin %}checked{% endif %}>
-            <label class="form-check-label" for="edit-superadmin-{{ user.id }}">Super Administrator</label>
+          <hr class="border-secondary">
+          <div class="mb-3">
+            <label class="form-label mb-1">Account type</label>
+            <div class="form-check form-switch">
+              <input type="checkbox" name="is_superadmin" class="form-check-input" role="switch"
+                     id="edit-superadmin-{{ user.id }}" {% if user.is_superadmin %}checked{% endif %}>
+              <label class="form-check-label" for="edit-superadmin-{{ user.id }}">Super Administrator</label>
+            </div>
+            <div class="form-text mt-0">
+              Ignores groups entirely — full control of everything. Leave off for a standard user.
+            </div>
           </div>
-          <div class="form-check">
-            <input type="checkbox" name="is_active" class="form-check-input"
-                   id="edit-active-{{ user.id }}" {% if user.is_active %}checked{% endif %}>
-            <label class="form-check-label" for="edit-active-{{ user.id }}">Active</label>
+          <hr class="border-secondary">
+          <div>
+            <label class="form-label mb-1">Status</label>
+            <div class="form-check form-switch">
+              <input type="checkbox" name="is_active" class="form-check-input" role="switch"
+                     id="edit-active-{{ user.id }}" {% if user.is_active %}checked{% endif %}>
+              <label class="form-check-label" for="edit-active-{{ user.id }}">Active</label>
+            </div>
+            <div class="form-text mt-0">
+              Uncheck to block this user from logging in, without deleting the account.
+            </div>
           </div>
         </div>
         <div class="modal-footer">

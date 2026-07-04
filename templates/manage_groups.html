@@ -9,6 +9,12 @@
   </button>
 </div>
 
+<p class="text-secondary small mb-3" style="max-width:70ch;">
+  A <strong>group</strong> bundles a set of permissions with access to specific game servers.
+  Assign users to groups on the <a href="{{ url_for('manage_users') }}">Users</a> page — each user
+  gets the combined abilities of every group they're in. (Super Administrators bypass groups entirely.)
+</p>
+
 {% for group in groups %}
 <div class="card mb-3">
   <div class="card-header d-flex justify-content-between align-items-center">
