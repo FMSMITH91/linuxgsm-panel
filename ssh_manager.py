@@ -711,11 +711,93 @@ def get_server_status(server, game_server):
 # ─── Remote Firewall Management (UFW) ─────────────────────────
 
 
+def _parse_ufw_rule(detail):
+    """Parse one `ufw status numbered` rule line into structured fields, so the UI can
+    show clean columns instead of the raw string. Handles the optional `on <iface>`
+    clause, the `# comment` suffix, and the `(v6)` family markers."""
+    v6 = "(v6)" in detail
+    s = detail.replace("(v6)", " ")
+    comment = ""
+    if "#" in s:
+        s, comment = s.split("#", 1)
+        comment = comment.strip()
+    iface = ""
+    m = re.search(r"\bon\s+(\S+)", s)
+    if m:
+        iface = m.group(1)
+        s = s[:m.start()] + s[m.end():]
+    toks = s.split()
+    action = direction = ""
+    ai = None
+    for a in ("ALLOW", "DENY", "REJECT", "LIMIT"):
+        if a in toks:
+            action = a
+            ai = toks.index(a)
+            break
+    if ai is not None:
+        to = " ".join(toks[:ai])
+        rest = toks[ai + 1:]
+        if rest and rest[0] in ("IN", "OUT", "FWD"):
+            direction = rest[0]
+            rest = rest[1:]
+        frm = " ".join(rest)
+    else:
+        to = " ".join(toks)
+        frm = ""
+    return {
+        "v6": v6, "to": to.strip(), "action": action, "direction": direction,
+        "from": frm.strip(), "iface": iface, "comment": comment,
+    }
+
+
+def _group_ufw_rules(rules):
+    """Collapse the raw numbered rules into user-friendly groups, merging the separate
+    IPv4 and IPv6 entries UFW keeps for the same rule into a single row (with the list
+    of underlying rule numbers so a group can be deleted as a unit)."""
+    groups = []
+    index = {}
+    for r in rules:
+        p = _parse_ufw_rule(r["detail"])
+        key = (p["to"], p["action"], p["direction"], p["from"], p["iface"], p["comment"])
+        g = index.get(key)
+        if not g:
+            # Friendly derived fields.
+            iface = p["iface"]
+            to = p["to"]
+            is_iface = bool(iface)
+            if is_iface and to.lower() in ("anywhere", ""):
+                port_label = "All ports"
+            else:
+                port_label = to or "—"
+            if iface:
+                scope = iface + (" (Tailscale)" if iface.startswith("tailscale") else "")
+            else:
+                scope = "Any address" if p["from"].lower() == "anywhere" else (p["from"] or "—")
+            g = {
+                "nums": [], "families": [], "port_label": port_label,
+                "comment": p["comment"], "scope": scope, "iface": iface,
+                "action": p["action"] or "ALLOW", "direction": p["direction"] or "IN",
+                "is_iface": is_iface,
+            }
+            index[key] = g
+            groups.append(g)
+        g["nums"].append(int(r["num"]))
+        fam = "IPv6" if p["v6"] else "IPv4"
+        if fam not in g["families"]:
+            g["families"].append(fam)
+    # Stable, readable family label.
+    for g in groups:
+        fams = g["families"]
+        g["family_label"] = " + ".join(sorted(fams)) if len(fams) > 1 else (fams[0] if fams else "")
+        g["nums"].sort()
+    return groups
+
+
 def remote_ufw_status(server):
     """Get UFW status and rules from the remote server."""
     out, err, rc = run_command(server, "ufw status numbered 2>&1 || echo 'NOTINSTALLED'", timeout=15)
     if "NOTINSTALLED" in out or "not found" in err or "not installed" in err:
-        return {"installed": False, "enabled": False, "rules": []}
+        return {"installed": False, "enabled": False, "rules": [], "groups": []}
 
     enabled = "Status: active" in out
     rules = []
@@ -727,7 +809,8 @@ def remote_ufw_status(server):
             detail = re.sub(r"\s{2,}", "  ", m.group(2).strip())
             rules.append({"num": m.group(1), "detail": detail})
 
-    return {"installed": True, "enabled": enabled, "rules": rules}
+    return {"installed": True, "enabled": enabled, "rules": rules,
+            "groups": _group_ufw_rules(rules)}
 
 
 def remote_ufw_open_port(server, port, protocol="tcp", comment=""):
