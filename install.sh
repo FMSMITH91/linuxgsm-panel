@@ -385,19 +385,51 @@ echo -e "  Status:  ${CYAN}${SERVICE_HINT}${NC}"
 echo -e "  Logs:    ${CYAN}${LOG_HINT}${NC}"
 echo -e "  Update:  ${CYAN}re-run this same command any time — it updates in place and rolls back if the update fails${NC}"
 echo ""
-echo -e "Open ${CYAN}http://<your-server-ip>:5000${NC} — the first visit runs the setup wizard."
-echo ""
-warn "By default the panel binds 0.0.0.0:5000. For anything beyond local testing, put it"
-warn "behind Tailscale Serve (recommended) or a reverse proxy with HTTPS — do NOT expose"
-warn "the admin panel directly to the public internet."
-echo ""
+# ── Hand the user the real URL(s) to open ──
+PORT="$(panel_port)"
+SUDO=""; [ "$(id -u)" -ne 0 ] && SUDO="sudo"
 
-# If a firewall is blocking the port, tell the user (auto-opening the admin port would
-# be a bad default — the recommended path is Tailscale, which needs no open port).
-if command -v ufw >/dev/null 2>&1 && ufw status 2>/dev/null | grep -q "Status: active" \
-        && ! ufw status 2>/dev/null | grep -qw "5000"; then
-    warn "UFW is active and port 5000 is closed, so you can't reach the wizard by IP yet."
-    echo -e "  • Recommended: set up Tailscale (no open port needed)."
-    echo -e "  • Or, to reach it directly: ${CYAN}sudo ufw allow 5000/tcp${NC}"
-    echo ""
+PUBLIC_IP="$(curl -fsS --max-time 5 https://api.ipify.org 2>/dev/null \
+    || curl -fsS --max-time 5 https://ifconfig.me 2>/dev/null \
+    || hostname -I 2>/dev/null | awk '{print $1}')"
+
+# Tailscale address, only if it's installed AND logged in (MagicDNS name preferred).
+TS_ADDR=""
+if command -v tailscale >/dev/null 2>&1; then
+    TS_DNS="$(tailscale status --json 2>/dev/null | python3 -c 'import sys,json;print(json.load(sys.stdin).get("Self",{}).get("DNSName","").rstrip("."))' 2>/dev/null || true)"
+    TS_IP="$(tailscale ip -4 2>/dev/null | head -1)"
+    TS_ADDR="${TS_DNS:-${TS_IP}}"
 fi
+
+# Firewall state.
+UFW_ACTIVE=0; TS_UFW=0; PORT_OPEN=0
+if command -v ufw >/dev/null 2>&1; then
+    ufw status 2>/dev/null | grep -q "Status: active" && UFW_ACTIVE=1
+    ufw status 2>/dev/null | grep -qi "tailscale0"    && TS_UFW=1
+    ufw status 2>/dev/null | grep -qw "${PORT}"        && PORT_OPEN=1
+fi
+
+# Auto-open the port when Tailscale ISN'T already a way in (not logged in, or UFW
+# doesn't allow the tailscale0 interface) — so a plain-IP install just works. If
+# Tailscale access is set up we leave the public port closed (more private).
+if [ "${UFW_ACTIVE}" -eq 1 ] && [ "${PORT_OPEN}" -eq 0 ] \
+        && { [ -z "${TS_ADDR}" ] || [ "${TS_UFW}" -eq 0 ]; }; then
+    if ${SUDO} ufw allow "${PORT}/tcp" >/dev/null 2>&1; then
+        PORT_OPEN=1
+        ok "Opened ${PORT}/tcp in UFW so the panel is reachable by IP."
+    fi
+fi
+
+echo -e "${GREEN}Open the panel — the first visit runs the setup wizard:${NC}"
+[ -n "${TS_ADDR}" ] && echo -e "  • Tailscale:  ${CYAN}http://${TS_ADDR}:${PORT}${NC}"
+if [ -n "${PUBLIC_IP}" ]; then
+    if [ "${UFW_ACTIVE}" -eq 1 ] && [ "${PORT_OPEN}" -eq 0 ]; then
+        echo -e "  • Public IP:  ${CYAN}http://${PUBLIC_IP}:${PORT}${NC}  ${YELLOW}(firewalled — run 'ufw allow ${PORT}/tcp' to expose)${NC}"
+    else
+        echo -e "  • Public IP:  ${CYAN}http://${PUBLIC_IP}:${PORT}${NC}"
+    fi
+fi
+echo ""
+warn "The panel binds 0.0.0.0:${PORT}. For real use, put it behind Tailscale Serve (HTTPS,"
+warn "no open port needed) from the setup wizard — don't leave the admin panel open to the internet."
+echo ""
