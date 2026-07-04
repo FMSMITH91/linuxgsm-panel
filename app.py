@@ -1539,6 +1539,24 @@ def register_routes(app):
             return jsonify({"success": True, "message": msg})
         return jsonify({"success": False, "message": msg}), 500
 
+    @app.route("/api/server-management/run-command", methods=["POST"])
+    @login_required
+    @permission_required(SUPER_ADMIN)
+    def api_server_management_run_command():
+        """Run an arbitrary shell command (as root) on the panel's own host.
+        Super-admin only, fully audit-logged."""
+        cmd = (request.get_json(silent=True) or {}).get("command", "").strip()
+        if not cmd:
+            return jsonify({"success": False, "output": "No command provided."}), 400
+        try:
+            out, err, rc = so._run(cmd, timeout=90, sudo=True)
+            log_action(current_user, "panel_run_command", detail=cmd[:400], success=(rc == 0))
+            combined = ((out or "") + (("\n" + err) if err else "")).strip()
+            return jsonify({"success": rc == 0, "rc": rc, "output": combined[:12000] or "(no output)"})
+        except Exception as e:
+            log_action(current_user, "panel_run_command", detail=cmd[:400], success=False)
+            return jsonify({"success": False, "output": str(e)}), 500
+
     # ── Remote VPS Management (port/OS) ────────────────────
     @app.route("/remote/<int:remote_id>/firewall")
     @login_required
@@ -1673,6 +1691,29 @@ def register_routes(app):
         success, msg = remote_reboot(remote)
         log_action(current_user, "remote_reboot", target=remote.name)
         return jsonify({"success": success, "message": msg})
+
+    @app.route("/api/remote/<int:remote_id>/run-command", methods=["POST"])
+    @login_required
+    @permission_required(MANAGE_REMOTES)
+    def api_remote_run_command(remote_id):
+        """Run an arbitrary shell command (as root) on a remote VPS. Admin-only,
+        fully audit-logged. Running commands on the panel's OWN host requires
+        super admin (extra-sensitive)."""
+        remote = get_remote(remote_id)
+        if getattr(remote, "is_local", False) and not current_user.is_superadmin:
+            return jsonify({"success": False, "output": "Only a super admin can run commands on the panel host."}), 403
+        cmd = (request.get_json(silent=True) or {}).get("command", "").strip()
+        if not cmd:
+            return jsonify({"success": False, "output": "No command provided."}), 400
+        try:
+            out, err, rc = run_command(remote, cmd, timeout=90, sudo=True)
+            log_action(current_user, "remote_run_command", target=remote.name,
+                       detail=cmd[:400], success=(rc == 0))
+            combined = ((out or "") + (("\n" + err) if err else "")).strip()
+            return jsonify({"success": rc == 0, "rc": rc, "output": combined[:12000] or "(no output)"})
+        except Exception as e:
+            log_action(current_user, "remote_run_command", target=remote.name, detail=cmd[:400], success=False)
+            return jsonify({"success": False, "output": str(e)}), 500
 
     @app.route("/remote/<int:remote_id>/manage")
     @login_required
@@ -2260,6 +2301,8 @@ def register_routes(app):
     @server_access_required
     def api_console(server_id):
         gs = get_game(server_id)
+        if not current_user.is_superadmin and not has_permission(current_user, VIEW_CONSOLE):
+            return jsonify({"error": "Permission denied", "lines": []}), 403
         remote = gs.remote
         try:
             log_path = gs.console_log
@@ -2304,10 +2347,20 @@ def register_routes(app):
     @socketio.on("join_console")
     def on_join_console(data):
         server_id = data.get("server_id")
-        if server_id:
-            join_room(f"console_{server_id}")
-            with _viewers_lock:
-                _console_viewers.setdefault(server_id, set()).add(request.sid)
+        if not server_id:
+            return
+        # Enforce the SAME access control as the HTTP console routes: the socket must
+        # belong to a logged-in user who has access to this specific server AND holds
+        # VIEW_CONSOLE. Without this, any socket could stream any server's console.
+        if (not current_user.is_authenticated
+                or not can_access_server(current_user, server_id)
+                or not (current_user.is_superadmin or has_permission(current_user, VIEW_CONSOLE))):
+            emit("console_output", {"server_id": server_id,
+                                    "data": "[access denied — you don't have permission to view this console]"})
+            return
+        join_room(f"console_{server_id}")
+        with _viewers_lock:
+            _console_viewers.setdefault(server_id, set()).add(request.sid)
 
     @socketio.on("leave_console")
     def on_leave_console(data):

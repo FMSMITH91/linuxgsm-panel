@@ -133,6 +133,24 @@
   </div>
 </div>
 
+<!-- Run command (root shell) -->
+<div class="card mb-3">
+  <div class="card-header d-flex justify-content-between align-items-center">
+    <span><i class="bi bi-terminal"></i> Run Command</span>
+    <span class="small text-warning"><i class="bi bi-exclamation-triangle"></i> runs as root — full control, be careful</span>
+  </div>
+  <div class="card-body">
+    <form onsubmit="return runCmd(event)" class="d-flex gap-2 align-items-center">
+      <span class="text-secondary font-monospace">#</span>
+      <input type="text" id="cmd-input" class="form-control form-control-sm font-monospace"
+             placeholder="e.g.  df -h   ·   systemctl status ssh   ·   apt list --upgradable   ·   ss -tulpn"
+             autocomplete="off" spellcheck="false">
+      <button class="btn btn-sm btn-primary flex-shrink-0" type="submit"><i class="bi bi-play-fill"></i> Run</button>
+    </form>
+    <pre id="cmd-output" class="mt-2 mb-0 small" style="display:none;max-height:360px;overflow:auto;background:#080d17;border:1px solid var(--border);border-radius:6px;padding:10px;white-space:pre-wrap;word-break:break-word;color:#9caec9;"></pre>
+  </div>
+</div>
+
 {% if remote.games %}
 <div class="card">
   <div class="card-header"><i class="bi bi-controller"></i> Game Servers on this remote</div>
@@ -238,6 +256,17 @@ function switchToTailscale(){
   fetch(MOUNT+'/api/remote/'+REMOTE_ID+'/tailscale-migrate',{method:'POST'}).then(r=>r.json())
     .then(d=>{ if(d.success){ el.textContent='✓ '+(d.message||'Migrated')+' — reloading…'; el.className='small mt-1 text-success'; setTimeout(function(){location.reload();},1500); } else { el.textContent='✗ '+(d.message||'Failed'); el.className='small mt-1 text-danger'; } })
     .catch(()=>{ el.textContent='✗ Migration failed'; el.className='small mt-1 text-danger'; });
+}
+function runCmd(ev){
+  ev.preventDefault();
+  var inp=document.getElementById('cmd-input'); var cmd=inp.value.trim(); if(!cmd) return false;
+  var out=document.getElementById('cmd-output'); out.style.display='block'; out.textContent='$ '+cmd+'\n\n(running…)';
+  fetch(MOUNT+'/api/remote/'+REMOTE_ID+'/run-command',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({command:cmd})})
+    .then(r=>r.json()).then(d=>{
+      out.textContent='$ '+cmd+'\n\n'+(d.output||'')+((d.rc!=null && d.rc!==0)?('\n\n[exit code '+d.rc+']'):'');
+    })
+    .catch(()=>{ out.textContent='$ '+cmd+'\n\n[request failed]'; });
+  return false;
 }
 loadSshStatus();
 pollLive();
