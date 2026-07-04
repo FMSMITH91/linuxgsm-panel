@@ -432,10 +432,17 @@ def _compute_update_status():
     if not _is_git_checkout():
         return {"git": False, "update_available": False, "current_version": cur_ver,
                 "message": "The panel isn't a git checkout, so it can't self-update."}
-    _, _, frc = _git(["fetch", "--quiet", "origin", "main"], timeout=45)
+    cur_sha, _, _ = _git(["rev-parse", "--short", "HEAD"])
+    _, ferr, frc = _git(["fetch", "--quiet", "origin", "main"], timeout=45)
+    if frc != 0:
+        # Couldn't reach the remote (private repo without creds, or offline). Do NOT
+        # report an update from a stale remote-tracking ref — that would show a phantom
+        # "update available" that can never be applied.
+        return {"git": True, "fetched": False, "update_available": False,
+                "current_version": cur_ver, "current_sha": cur_sha.strip(),
+                "message": "Couldn't reach the update source — it may be private or offline."}
     behind, _, _ = _git(["rev-list", "--count", "HEAD..origin/main"])
     behind_n = int(behind.strip()) if behind.strip().isdigit() else 0
-    cur_sha, _, _ = _git(["rev-parse", "--short", "HEAD"])
     rem_sha, _, _ = _git(["rev-parse", "--short", "origin/main"])
     rem_ver, _, rv_rc = _git(["show", "origin/main:VERSION"])
     log, _, _ = _git(["log", "--oneline", "--no-decorate", "-10", "HEAD..origin/main"])

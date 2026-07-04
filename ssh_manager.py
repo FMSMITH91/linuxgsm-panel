@@ -656,12 +656,23 @@ def detect_game_port(server, user, selfname=None):
     return None
 
 
+# Port descriptions we DON'T open by default — only the ports players actually need
+# to connect should be exposed. 'Client' is outbound (nothing listens). SourceTV is
+# an optional spectator relay. RCON/telnet is remote admin and a security risk to
+# expose to the internet (and on Source it rides the game port anyway). Users can
+# still open any of these manually from the firewall page if they want them.
+_NONESSENTIAL_PORT_DESCS = ("client", "sourcetv", "source tv", "rcon", "telnet")
+
+
 def detect_game_ports(server, user, selfname=None):
-    """Parse LinuxGSM `details` for ALL of a server's ports. Many games need more
-    than one open (e.g. Source games use Game/Query/RCON/SourceTV; Rust uses a game
-    port + app/RCON port), so opening only the main port isn't enough. Returns:
-      {"game_port": int|None, "open_ports": [distinct inbound ports], "ports": [...]}.
-    The outbound 'Client' port is excluded (nothing listens on it)."""
+    """Parse LinuxGSM `details` for a server's ports and decide which to open.
+
+    We open only what a player needs to reach the server: the Game port and, if the
+    game lists a separate Query port (for server-browser visibility). Optional/admin/
+    outbound ports (SourceTV, RCON/telnet, Client) are deliberately left CLOSED — e.g.
+    Garry's Mod lists Game 27015 + SourceTV 27020, but only 27015 is needed. Returns:
+      {"game_port": int|None, "open_ports": [ports to open], "ports": [all parsed]}.
+    """
     out, _, _ = run_as_game_user(server, user, "details 2>&1", timeout=45, selfname=selfname)
     text = re.sub(r"\x1b\[[0-9;?]*[A-Za-z]", "", out or "")
     ports, game_port, in_table = [], None, False
@@ -679,11 +690,20 @@ def detect_game_ports(server, user, selfname=None):
                     game_port = port
             else:
                 in_table = False  # blank/other line → table ended
-    # Ports to open: every distinct inbound port (skip the outbound 'Client' port).
-    open_ports = sorted({p["port"] for p in ports if not p["desc"].lower().startswith("client")})
+    # Open only the essential inbound ports: Game + Query. Everything else (SourceTV,
+    # RCON, Client, …) is left closed so we don't expose more than the game needs.
+    open_ports = sorted({
+        p["port"] for p in ports
+        if not p["desc"].lower().startswith(_NONESSENTIAL_PORT_DESCS)
+        and (p["desc"].lower().startswith(("game", "query")))
+    })
     if game_port is None:
         m = re.search(r"(?:server|internet)\s+ip:.*?:(\d{2,5})", text, re.I)
         game_port = int(m.group(1)) if m else (open_ports[0] if open_ports else None)
+    # Always ensure the game port itself is opened, even if the details table used an
+    # unexpected description for it.
+    if game_port and game_port not in open_ports:
+        open_ports = sorted(set(open_ports) | {game_port})
     return {"game_port": game_port, "open_ports": open_ports, "ports": ports}
 
 
