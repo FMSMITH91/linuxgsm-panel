@@ -5,6 +5,12 @@ set -euo pipefail
 export GIT_TERMINAL_PROMPT=0
 export GIT_ASKPASS=true
 
+# `systemctl --user` needs XDG_RUNTIME_DIR to reach the user bus. It's set for
+# interactive logins, but NOT for a plain non-interactive SSH command (e.g. an
+# auto-deploy workflow running `ssh host 'bash install.sh'`). Default it so the
+# --user service model works in that case too. (Root installs use the system bus.)
+export XDG_RUNTIME_DIR="${XDG_RUNTIME_DIR:-/run/user/$(id -u)}"
+
 # ─────────────────────────────────────────────────────────
 # LinuxGSM Panel — all-in-one installer / updater
 #

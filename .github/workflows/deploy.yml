@@ -1,0 +1,58 @@
+name: Deploy
+
+# Auto-deploy to the panel host after CI passes on main. DORMANT by default: the job
+# only runs when the repo variable DEPLOY_ENABLED == 'true', so committing this file
+# changes nothing until you opt in. It deploys by running install.sh's UPDATE path
+# (snapshot -> git pull -> restart -> health-check -> AUTO-ROLLBACK on failure), so a
+# bad release can't leave the panel down.
+#
+# ── One-time setup to enable ──────────────────────────────────────────────────
+#  1. Tailscale OAuth client (admin console -> Settings -> OAuth clients), scope
+#     "auth_keys", tag: tag:ci. Save as repo SECRETS:
+#        TS_OAUTH_CLIENT_ID, TS_OAUTH_SECRET
+#  2. Tailnet ACL: allow tag:ci to SSH the host as the deploy user, e.g.
+#        "ssh": [{ "action": "accept", "src": ["tag:ci"],
+#                  "dst": ["tag:server"], "users": ["ubuntu"] }]
+#     (the host must have `tailscale up --ssh`).
+#  3. Repo VARIABLES (Settings -> Secrets and variables -> Actions -> Variables):
+#        DEPLOY_ENABLED = true
+#        DEPLOY_HOST    = <the host's MagicDNS name or tailnet IP>
+#        DEPLOY_USER    = ubuntu           # optional, defaults to ubuntu
+# ──────────────────────────────────────────────────────────────────────────────
+
+on:
+  workflow_run:
+    workflows: [ "CI" ]
+    types: [ completed ]
+
+concurrency:
+  group: deploy
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    # Only after CI SUCCEEDED on main, and only when explicitly enabled.
+    if: >-
+      github.event.workflow_run.conclusion == 'success' &&
+      github.event.workflow_run.head_branch == 'main' &&
+      vars.DEPLOY_ENABLED == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Join the tailnet
+        uses: tailscale/github-action@v3
+        with:
+          oauth-client-id: ${{ secrets.TS_OAUTH_CLIENT_ID }}
+          oauth-secret: ${{ secrets.TS_OAUTH_SECRET }}
+          tags: tag:ci
+
+      - name: Deploy via safe self-update (snapshot + health-check + rollback)
+        env:
+          DEPLOY_HOST: ${{ vars.DEPLOY_HOST }}
+          DEPLOY_USER: ${{ vars.DEPLOY_USER }}
+        run: |
+          set -euo pipefail
+          : "${DEPLOY_HOST:?Set repo variable DEPLOY_HOST to the tailnet host}"
+          U="${DEPLOY_USER:-ubuntu}"
+          # Tailscale SSH handles auth (no key needed); install.sh does the safe update.
+          ssh -o StrictHostKeyChecking=accept-new -o ConnectTimeout=20 \
+            "$U@$DEPLOY_HOST" 'cd ~/linuxgsm-panel && bash install.sh'
