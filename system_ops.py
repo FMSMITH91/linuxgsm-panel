@@ -2,11 +2,16 @@
 import json
 import os
 import re
+import shlex
 import subprocess
 import threading
 import time
 from datetime import datetime
 from pathlib import Path
+
+# The panel's own install directory (this module lives inside it) — used for the
+# git-based self-update feature.
+PANEL_DIR = os.path.dirname(os.path.abspath(__file__))
 
 
 def live_metrics():
@@ -392,3 +397,99 @@ def get_server_status():
         "updates": updates,
         "uptime": uptime,
     }
+
+
+# ─── Panel self-update (git-based) ─────────────────────────────
+_update_cache = {"ts": 0.0, "data": None}
+_UPDATE_TTL = 300  # re-check GitHub at most every 5 min for the sidebar badge
+
+
+def panel_version():
+    try:
+        with open(os.path.join(PANEL_DIR, "VERSION")) as f:
+            return f.read().strip() or "0.0.0"
+    except Exception:
+        return "0.0.0"
+
+
+def _git(args, timeout=45):
+    """Run a git command inside the panel dir (as the panel user, no sudo)."""
+    cmd = "git -C " + shlex.quote(PANEL_DIR) + " " + " ".join(shlex.quote(a) for a in args)
+    return _run(cmd, timeout=timeout, sudo=False)
+
+
+def _is_git_checkout():
+    return os.path.isdir(os.path.join(PANEL_DIR, ".git"))
+
+
+def _compute_update_status():
+    cur_ver = panel_version()
+    if not _is_git_checkout():
+        return {"git": False, "update_available": False, "current_version": cur_ver,
+                "message": "The panel isn't a git checkout, so it can't self-update."}
+    _, _, frc = _git(["fetch", "--quiet", "origin", "main"], timeout=45)
+    behind, _, _ = _git(["rev-list", "--count", "HEAD..origin/main"])
+    behind_n = int(behind.strip()) if behind.strip().isdigit() else 0
+    cur_sha, _, _ = _git(["rev-parse", "--short", "HEAD"])
+    rem_sha, _, _ = _git(["rev-parse", "--short", "origin/main"])
+    rem_ver, _, rv_rc = _git(["show", "origin/main:VERSION"])
+    log, _, _ = _git(["log", "--oneline", "--no-decorate", "-10", "HEAD..origin/main"])
+    return {
+        "git": True,
+        "fetched": frc == 0,
+        "update_available": behind_n > 0,
+        "behind": behind_n,
+        "current_version": cur_ver,
+        "current_sha": cur_sha.strip(),
+        "remote_version": ((rem_ver.strip() if rv_rc == 0 else "") or "?"),
+        "remote_sha": rem_sha.strip(),
+        "changes": [ln for ln in log.splitlines() if ln.strip()][:10],
+        "checked_at": int(time.time()),
+    }
+
+
+def panel_update_status(force=False):
+    """Whether the panel is behind its GitHub remote. Cached ~5 min (each check does
+    a network `git fetch`) unless `force` is set."""
+    now = time.time()
+    if not force and _update_cache["data"] is not None and (now - _update_cache["ts"]) < _UPDATE_TTL:
+        return _update_cache["data"]
+    data = _compute_update_status()
+    _update_cache["ts"] = now
+    _update_cache["data"] = data
+    return data
+
+
+def panel_self_update():
+    """Pull the latest panel code, install any new deps, and restart. Runs DETACHED
+    via `systemd-run --user` so it lives in its own cgroup and survives the panel's
+    own restart (the service uses KillMode=control-group, which would otherwise kill
+    a normal child mid-update). Returns immediately."""
+    if not _is_git_checkout():
+        return False, "The panel isn't a git checkout, so it can't self-update."
+    script = (
+        "#!/bin/bash\n"
+        "LOG=/tmp/panel-self-update.log\n"
+        'echo "=== panel self-update $(date) ===" > "$LOG"\n'
+        f"cd {shlex.quote(PANEL_DIR)}\n"
+        'git fetch --quiet origin main >> "$LOG" 2>&1\n'
+        'git reset --hard origin/main >> "$LOG" 2>&1\n'
+        './venv/bin/pip install -q -r requirements.txt >> "$LOG" 2>&1 || true\n'
+        'systemctl --user restart linuxgsm-panel >> "$LOG" 2>&1\n'
+        'echo "=== done ===" >> "$LOG"\n'
+    )
+    path = "/tmp/panel-self-update.sh"
+    try:
+        with open(path, "w") as f:
+            f.write(script)
+        os.chmod(path, 0o755)
+        subprocess.Popen(
+            ["systemd-run", "--user", "--no-block", "--collect",
+             "--unit", "panel-selfupdate", "/bin/bash", path],
+            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, env=os.environ.copy(),
+        )
+        # Invalidate the cache so the badge clears after the restart.
+        _update_cache["ts"] = 0.0
+        return True, "Update started — the panel is pulling the latest code and will restart in a few seconds."
+    except Exception as e:
+        return False, f"Could not start the updater: {e}"

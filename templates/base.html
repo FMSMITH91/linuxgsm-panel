@@ -489,6 +489,27 @@
 // different app. Server-rendered links use url_for and already include it.
 window.MOUNT = "{{ mount_prefix if mount_prefix and mount_prefix != '/' else '' }}";
 </script>
+{% if current_user.is_authenticated and current_user.is_superadmin %}
+<script>
+// Panel update badge (super admins only). Quietly checks if the panel is behind
+// its GitHub repo and shows an "update" pill next to the version in the sidebar.
+(function(){
+  var badge = document.getElementById('update-badge');
+  if (!badge) return;
+  fetch(window.MOUNT + '/api/panel/update-status')
+    .then(function(r){ return r.json(); })
+    .then(function(d){
+      if (d && d.update_available) {
+        badge.innerHTML = ' <a href="' + window.MOUNT + '/server-management#updates" '
+          + 'style="color:#d29922;text-decoration:none;font-weight:600;" '
+          + 'title="Version ' + (d.remote_version||'') + ' is available — click to update">'
+          + '<i class="bi bi-arrow-up-circle-fill"></i> update</a>';
+      }
+    })
+    .catch(function(){});
+})();
+</script>
+{% endif %}
 <script>
 setTimeout(function() {
   document.querySelectorAll('.alert-dismissible').forEach(function(el) {

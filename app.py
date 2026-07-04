@@ -1535,6 +1535,27 @@ def register_routes(app):
             return jsonify({"success": True, "message": msg})
         return jsonify({"success": False, "message": msg}), 500
 
+    @app.route("/api/panel/update-status")
+    @login_required
+    @permission_required(SUPER_ADMIN)
+    def api_panel_update_status():
+        """Is the LinuxGSM Panel itself behind its GitHub repo? (git-based check)"""
+        force = request.args.get("force") in ("1", "true", "yes")
+        try:
+            return jsonify(so.panel_update_status(force=force))
+        except Exception as e:
+            return jsonify({"git": False, "update_available": False,
+                            "current_version": so.panel_version(), "message": str(e)})
+
+    @app.route("/api/panel/update", methods=["POST"])
+    @login_required
+    @permission_required(SUPER_ADMIN)
+    def api_panel_update():
+        """Pull the latest panel code and restart (one-click self-update)."""
+        success, msg = so.panel_self_update()
+        log_action(current_user, "panel_self_update", detail=msg, success=success)
+        return jsonify({"success": success, "message": msg})
+
     @app.route("/api/server-management/os-update-check")
     @login_required
     @permission_required(SUPER_ADMIN)

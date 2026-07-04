@@ -44,6 +44,26 @@
   </div>
 </div>
 
+<!-- Panel updates -->
+<div class="card mb-3" id="updates">
+  <div class="card-header d-flex justify-content-between align-items-center">
+    <span><i class="bi bi-arrow-up-circle"></i> Panel Updates</span>
+    <span class="small text-secondary">LinuxGSM Panel <strong id="pu-current">v{{ panel_version }}</strong></span>
+  </div>
+  <div class="card-body">
+    <div id="pu-status" class="small text-secondary"><i class="bi bi-arrow-repeat"></i> Checking for updates…</div>
+    <div id="pu-changes" class="small mt-2" style="display:none;">
+      <div class="text-secondary mb-1">Changes since your version:</div>
+      <ul id="pu-changes-list" class="mb-0" style="font-size:.8rem;"></ul>
+    </div>
+    <div class="mt-2 d-flex gap-2 align-items-center">
+      <button class="btn btn-sm btn-outline-secondary" onclick="checkPanelUpdate(true)"><i class="bi bi-arrow-repeat"></i> Check now</button>
+      <button class="btn btn-sm btn-success" id="pu-update-btn" onclick="doPanelUpdate()" style="display:none;"><i class="bi bi-download"></i> Update now</button>
+      <span id="pu-msg" class="small"></span>
+    </div>
+  </div>
+</div>
+
 <!-- Live Resources (realtime bars) -->
 <div class="card mb-3">
   <div class="card-header d-flex justify-content-between align-items-center">
@@ -502,6 +522,61 @@ function pollLive() {
     })
     .catch(function(){});
 }
+
+// ── Panel self-update ──
+function renderUpdate(d){
+  var st = document.getElementById('pu-status');
+  var btn = document.getElementById('pu-update-btn');
+  var changes = document.getElementById('pu-changes');
+  document.getElementById('pu-current').textContent = 'v' + (d.current_version || '?');
+  if (d.git === false) {
+    st.innerHTML = '<i class="bi bi-info-circle"></i> ' + (d.message || 'Self-update unavailable (not a git checkout).');
+    btn.style.display = 'none'; changes.style.display = 'none'; return;
+  }
+  if (d.update_available) {
+    st.innerHTML = '<span class="text-warning"><i class="bi bi-arrow-up-circle-fill"></i> Update available: '
+      + '<strong>v' + (d.remote_version||'?') + '</strong> (' + d.behind + ' commit' + (d.behind===1?'':'s') + ' behind).</span>';
+    btn.style.display = '';
+    var ul = document.getElementById('pu-changes-list'); ul.innerHTML = '';
+    (d.changes||[]).forEach(function(c){ var li=document.createElement('li'); li.textContent = c; ul.appendChild(li); });
+    changes.style.display = (d.changes && d.changes.length) ? '' : 'none';
+  } else {
+    st.innerHTML = '<span class="text-success"><i class="bi bi-check-circle"></i> You\'re on the latest version'
+      + (d.current_sha ? ' (' + d.current_sha + ')' : '') + '.</span>';
+    btn.style.display = 'none'; changes.style.display = 'none';
+  }
+}
+function checkPanelUpdate(force){
+  var st = document.getElementById('pu-status');
+  st.innerHTML = '<i class="bi bi-arrow-repeat"></i> Checking for updates…';
+  fetch(MOUNT + '/api/panel/update-status' + (force ? '?force=1' : ''))
+    .then(function(r){ return r.json(); }).then(renderUpdate)
+    .catch(function(){ st.innerHTML = '<span class="text-danger">Update check failed.</span>'; });
+}
+function doPanelUpdate(){
+  if (!confirm('Update the panel to the latest version now?\n\nThe panel will pull the new code, install any new dependencies, and restart. It will be briefly unavailable (a few seconds).')) return;
+  var msg = document.getElementById('pu-msg');
+  msg.innerHTML = '<span class="text-secondary"><i class="bi bi-arrow-repeat"></i> Updating &amp; restarting…</span>';
+  document.getElementById('pu-update-btn').disabled = true;
+  fetch(MOUNT + '/api/panel/update', { method: 'POST' })
+    .then(function(r){ return r.json(); })
+    .then(function(d){
+      if (!d.success) { msg.innerHTML = '<span class="text-danger">' + (d.message||'Update failed') + '</span>'; document.getElementById('pu-update-btn').disabled = false; return; }
+      msg.innerHTML = '<span class="text-secondary">Restarting… this page will reload when it\'s back.</span>';
+      // Poll until the panel is back up, then reload.
+      var tries = 0;
+      var iv = setInterval(function(){
+        tries++;
+        fetch(MOUNT + '/api/panel/update-status').then(function(r){
+          if (r.ok) { clearInterval(iv); location.reload(); }
+        }).catch(function(){ /* still restarting */ });
+        if (tries > 40) { clearInterval(iv); msg.innerHTML = '<span class="text-warning">Taking a while — reload the page manually.</span>'; }
+      }, 3000);
+    })
+    .catch(function(){ msg.innerHTML = '<span class="text-danger">Update request failed.</span>'; document.getElementById('pu-update-btn').disabled = false; });
+}
+checkPanelUpdate(false);
+
 pollLive();
 setInterval(pollLive, 1500);
 </script>
