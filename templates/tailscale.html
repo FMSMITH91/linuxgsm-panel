@@ -101,8 +101,10 @@
             <td>
               {% if info.funnel_enabled %}
                 <span class="badge bg-warning text-dark">Enabled</span>
+                <span class="text-secondary" style="font-size:.7rem;">public internet</span>
               {% else %}
                 <span class="badge bg-secondary">Disabled</span>
+                <span class="text-secondary" style="font-size:.7rem;">private — tailnet only (recommended)</span>
               {% endif %}
             </td>
           </tr>
@@ -115,7 +117,7 @@
       <div class="card-header"><i class="bi bi-plug"></i> Peer Reachability Check</div>
       <div class="card-body">
         <p class="text-secondary small mb-2">
-          Check if a remote host is reachable on the tailnet before adding it as a remote VPS.
+          Check if a remote host is reachable on the tailnet before adding it as a remote server.
         </p>
         <div class="input-group mb-2">
           <input type="text" id="peer-host" class="form-control" placeholder="100.x.x.x or hostname"
@@ -154,20 +156,28 @@
         {% if not config.tailscale_setup_done and info.running %}
         <form id="serve-form" class="mt-2">
           <p class="text-secondary small mb-2">
-            Auto-configure Tailscale Serve to expose the panel on your tailnet:
+            <strong>Tailscale Serve</strong> exposes the panel <strong>privately on your tailnet</strong> —
+            free on the Personal plan and the recommended setup. Only devices signed in to your
+            tailnet can reach it; no public ports are opened.
           </p>
-          <div class="d-flex gap-2 align-items-end">
+          <div class="d-flex gap-2 align-items-end mb-2">
             <div class="flex-grow-1">
               <label class="form-label small">Mount Point</label>
               <input type="text" name="mount" class="form-control form-control-sm" value="/">
             </div>
-            <div class="form-check mb-2">
-              <input type="checkbox" id="funnel-check" class="form-check-input">
-              <label class="form-check-label small" for="funnel-check">Funnel (public)</label>
-            </div>
             <button type="button" class="btn btn-success btn-sm" onclick="enableServe()">
-              <i class="bi bi-wifi"></i> Enable Serve
+              <i class="bi bi-wifi"></i> Enable Serve <span class="text-uppercase" style="font-size:.65em;opacity:.8;">(private)</span>
             </button>
+          </div>
+          <div class="form-check">
+            <input type="checkbox" id="funnel-check" class="form-check-input">
+            <label class="form-check-label small" for="funnel-check">Also enable <strong>Funnel</strong> (advanced)</label>
+            <div class="form-text text-warning" style="margin-top:.15rem;">
+              <i class="bi bi-exclamation-triangle-fill"></i>
+              Funnel publishes the panel to the <strong>public internet</strong> — anyone with the URL reaches the
+              login page. Not recommended for an admin panel, and it may require a paid Tailscale plan. Leave this
+              off to keep access tailnet-only.
+            </div>
           </div>
         </form>
         {% endif %}
