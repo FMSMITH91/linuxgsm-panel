@@ -8,6 +8,9 @@ on:
   schedule:
     - cron: "0 6 * * 1"   # weekly, Monday 06:00 UTC — catches newly-disclosed CVEs
 
+permissions:
+  contents: read
+
 jobs:
   dependency-audit:
     name: Dependency vulnerabilities (pip-audit)
@@ -22,7 +25,7 @@ jobs:
       # is actionable (bump the version), so it's a hard gate.
       - run: pip-audit -r requirements.txt
 
-  code-scan:
+  sast-bandit:
     name: Python security lint (Bandit)
     runs-on: ubuntu-latest
     steps:
@@ -47,3 +50,52 @@ jobs:
             tail -c 8000 bandit.txt 2>/dev/null || echo '(no findings)';
             echo '```';
           } >> "$GITHUB_STEP_SUMMARY"
+
+  sast-semgrep:
+    name: Deep SAST (Semgrep)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.11"
+      - run: python -m pip install --quiet semgrep
+      # Registry rulesets, fetched anonymously (no Semgrep account/token needed):
+      # general security-audit + Python + Flask + command-injection + secrets. This
+      # catches real code vulns (injection, SSRF, path traversal, unsafe redirects,
+      # weak crypto, template XSS, etc.). Informational — the findings go to the job
+      # summary so a false positive never blocks an alpha build, but they're surfaced
+      # on every push/PR and weekly.
+      - name: Semgrep scan
+        run: |
+          semgrep scan \
+            --config p/security-audit --config p/python --config p/flask \
+            --config p/command-injection --config p/secrets \
+            --exclude venv --exclude .github --exclude data \
+            --metrics=off > semgrep.txt 2>&1 || true
+          {
+            echo '### 🛡️ Semgrep SAST';
+            echo '';
+            echo '```';
+            tail -c 12000 semgrep.txt 2>/dev/null || echo '(no findings)';
+            echo '```';
+          } >> "$GITHUB_STEP_SUMMARY"
+
+  secret-scan:
+    name: Secret scanning (Gitleaks)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0   # scan the FULL git history, not just the tip
+      # Blocking gate: a committed credential is always actionable. --redact keeps the
+      # secret out of the public log. Uses the OSS binary directly (free on any repo;
+      # the marketplace action needs a licence for orgs). The .gitleaks.toml allowlist
+      # excludes the UI's token *placeholders* so they don't trip a false positive.
+      - name: Gitleaks
+        run: |
+          URL=$(curl -sSfL https://api.github.com/repos/gitleaks/gitleaks/releases/latest \
+                | grep -o 'https://[^"]*linux_x64\.tar\.gz' | head -1)
+          curl -sSfL "$URL" | tar -xz -C /tmp gitleaks
+          /tmp/gitleaks detect --source . --config .gitleaks.toml \
+            --redact --verbose --exit-code 1
