@@ -204,6 +204,25 @@ class PrefixMiddleware:
         return self.app(environ, _start_response)
 
 
+# ── Strict input validation ───────────────────────────────────────────────
+# These values become LinuxGSM shortnames, Linux usernames, home-directory paths and
+# arguments to shell commands run as root during install. LinuxGSM shortnames are
+# lowercase alphanumeric; a game-server instance name becomes a Linux user. Rejecting
+# anything outside a safe charset here is what prevents shell/command injection into
+# the install pipeline (a user with INSTALL_SERVER must NOT be able to run arbitrary
+# root commands on a host).
+GAME_TYPE_RE = re.compile(r"^[a-z0-9]{1,32}$")
+INSTANCE_NAME_RE = re.compile(r"^[a-z][a-z0-9_-]{0,30}$")   # valid Linux username shape
+LINUX_USER_RE = re.compile(r"^[a-z_][a-z0-9_-]{0,31}$")     # for linuxgsm_user / ssh user
+
+# Lightweight in-memory login throttle (single-process eventlet app). Blocks an IP
+# after too many failed logins within the window — a basic brute-force speed bump.
+_LOGIN_FAILS = {}
+_LOGIN_FAILS_LOCK = threading.Lock()
+LOGIN_MAX_FAILS = 8
+LOGIN_WINDOW = 300  # seconds
+
+
 def create_app():
     app = Flask(__name__)
     cfg = load_config()
@@ -216,7 +235,18 @@ def create_app():
     # Cookie path must cover the mount point — always use root to be safe
     # since we don't know the final mount until after setup
     app.config["SESSION_COOKIE_PATH"] = "/"
-    
+
+    # Session-cookie hardening. HttpOnly keeps JS from reading it; Secure keeps it to
+    # HTTPS (the panel is served over HTTPS via Tailscale Serve); SameSite=Lax stops a
+    # cross-site page from sending the cookie on a POST, which mitigates CSRF on the
+    # form endpoints (the JSON API additionally requires an application/json body).
+    app.config["SESSION_COOKIE_HTTPONLY"] = True
+    app.config["SESSION_COOKIE_SAMESITE"] = "Lax"
+    # Secure defaults ON once served via Tailscale Serve (HTTPS); OFF during first-run
+    # setup over plain http://host:5000 so login still works. Override with cookie_secure.
+    app.config["SESSION_COOKIE_SECURE"] = cfg.get("cookie_secure", bool(cfg.get("tailscale_setup_done", False)))
+
+
     # Store mount prefix in app config so templates can access it
     app.config["_MOUNT_PREFIX"] = mount = cfg.get("tailscale_mount", "/")
 
@@ -508,19 +538,38 @@ def register_routes(app):
             return redirect("/")
 
         if request.method == "POST":
+            ip = client_ip() or "unknown"
+            now = time.time()
+            # Brute-force throttle: drop stale failures, block if too many remain.
+            with _LOGIN_FAILS_LOCK:
+                fails = [t for t in _LOGIN_FAILS.get(ip, []) if now - t < LOGIN_WINDOW]
+                _LOGIN_FAILS[ip] = fails
+                blocked = len(fails) >= LOGIN_MAX_FAILS
+            if blocked:
+                log_action(None, "login_blocked", detail=f"rate-limited {ip}", success=False)
+                flash("Too many failed attempts. Please wait a few minutes and try again.", "danger")
+                return render_template("login.html")
+
             username = request.form.get("username", "").strip()
             password = request.form.get("password", "")
             remember = request.form.get("remember") == "on"
 
             user = User.query.filter_by(username=username).first()
             if user and user.is_active and check_password(password, user.password_hash):
+                with _LOGIN_FAILS_LOCK:
+                    _LOGIN_FAILS.pop(ip, None)   # clear on success
                 login_user(user, remember=remember)
                 user.last_login = datetime.utcnow()
                 db.session.commit()
-                log_action(user, "login", detail=f"User logged in from {client_ip()}")
+                log_action(user, "login", detail=f"User logged in from {ip}")
+                # Open-redirect-safe: only allow same-site relative paths in ?next=.
                 next_page = request.args.get("next", "/")
+                if not next_page.startswith("/") or next_page.startswith("//"):
+                    next_page = "/"
                 return redirect(next_page)
             else:
+                with _LOGIN_FAILS_LOCK:
+                    _LOGIN_FAILS.setdefault(ip, []).append(now)
                 flash("Invalid username or password.", "danger")
 
         return render_template("login.html")
@@ -829,9 +878,17 @@ def register_routes(app):
         port = request.form.get("port", "27015").strip()
         remote = get_remote(remote_id)
 
-        if not game_type:
-            flash("Game type (shortname) is required.", "danger")
+        # SECURITY: game_type and server_name become Linux users / paths / root shell
+        # arguments during install — validate strictly to prevent command injection.
+        if not GAME_TYPE_RE.match(game_type) or game_type not in {g["shortname"] for g in load_game_list()}:
+            flash("Invalid or unknown game type.", "danger")
             return redirect(url_for("manage_servers"))
+        if server_name:
+            server_name = server_name.lower()
+            if not INSTANCE_NAME_RE.match(server_name):
+                flash("Server name must be lowercase letters, numbers, - or _ and start with "
+                      "a letter (it becomes a Linux user on the host).", "danger")
+                return redirect(url_for("manage_servers"))
 
         # Canonical LinuxGSM server name — always "{shortname}server".
         lgsm_name = f"{game_type}server"
@@ -1133,6 +1190,15 @@ def register_routes(app):
             flash("Name is required.", "danger")
             return redirect(url_for("manage_remotes"))
 
+        # SECURITY: these reach `sudo -u <user>` / SSH command construction — validate
+        # to a safe Linux-username charset so they can't inject shell commands.
+        if lgsm_user and not LINUX_USER_RE.match(lgsm_user):
+            flash("LinuxGSM user must be a valid Linux username (lowercase letters, numbers, - or _).", "danger")
+            return redirect(url_for("manage_remotes"))
+        if ssh_user and not LINUX_USER_RE.match(ssh_user):
+            flash("SSH user must be a valid Linux username.", "danger")
+            return redirect(url_for("manage_remotes"))
+
         if is_local:
             remote = RemoteServer(
                 name=name, host="127.0.0.1", port=22,
@@ -1189,14 +1255,23 @@ def register_routes(app):
     @permission_required(MANAGE_REMOTES)
     def edit_remote(remote_id):
         remote = get_remote(remote_id)
+        new_user = request.form.get("ssh_user", remote.username)
+        new_lgsm = request.form.get("lgsm_user", remote.linuxgsm_user)
+        # SECURITY: validate the username fields (reach `sudo -u <user>` / SSH commands).
+        if new_user and not LINUX_USER_RE.match(new_user):
+            flash("SSH user must be a valid Linux username.", "danger")
+            return redirect(url_for("manage_remotes"))
+        if new_lgsm and not LINUX_USER_RE.match(new_lgsm):
+            flash("LinuxGSM user must be a valid Linux username.", "danger")
+            return redirect(url_for("manage_remotes"))
         remote.name = request.form.get("name", remote.name)
         remote.host = request.form.get("host", remote.host)
         remote.port = int(request.form.get("ssh_port", remote.port))
-        remote.username = request.form.get("ssh_user", remote.username)
+        remote.username = new_user
         remote.auth_method = request.form.get("auth_method", remote.auth_method)
         remote.auth_credential = request.form.get("credential", remote.auth_credential)
         remote.sudo_enabled = request.form.get("sudo_enabled") == "on"
-        remote.linuxgsm_user = request.form.get("lgsm_user", remote.linuxgsm_user)
+        remote.linuxgsm_user = new_lgsm
         db.session.commit()
         log_action(current_user, "edit_remote", target=remote.name)
         flash(f"Remote '{remote.name}' updated.", "success")
