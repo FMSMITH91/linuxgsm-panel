@@ -2693,8 +2693,16 @@ if __name__ == "__main__":
     warnings.filterwarnings("ignore", category=DeprecationWarning, module="eventlet")
     app = create_app()
     cfg = load_config()
-    host = cfg.get("bind_host", "127.0.0.1")
     port = cfg.get("port", 5000)
+    host = (cfg.get("bind_host") or "").strip()
+    if not host:
+        # Not explicitly configured: bind where the panel is actually reachable —
+        # 127.0.0.1 if Tailscale Serve is up to proxy to it, otherwise 0.0.0.0 so the
+        # first-run setup wizard is reachable over the network on a plain VPS.
+        try:
+            host = ts.suggest_best_bind(port).get("bind_host") or "0.0.0.0"
+        except Exception:
+            host = "0.0.0.0"
     print(f"LinuxGSM Panel starting on {host}:{port}")
     print(f"Open http://{host}:{port} in your browser")
 

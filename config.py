@@ -17,7 +17,7 @@ DEFAULT_CONFIG = {
     "instance_id": "",
     "setup_complete": False,
     "port": 5000,
-    "bind_host": "127.0.0.1",
+    "bind_host": "",   # empty = auto (127.0.0.1 if Tailscale can proxy, else 0.0.0.0)
     "session_lifetime_hours": 24,
     "ssh_timeout": 10,
     "sudo_enabled": False,
