@@ -1,0 +1,18 @@
+version: 2
+updates:
+  # Python dependencies in requirements.txt — opens a PR when a newer (or
+  # security-patched) version is available.
+  - package-ecosystem: "pip"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+    open-pull-requests-limit: 5
+    labels: ["dependencies"]
+
+  # Keep the GitHub Actions themselves current (this is what clears the
+  # "Node.js 20 is deprecated" runner warning once new majors ship).
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+    labels: ["ci"]
