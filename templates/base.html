@@ -232,6 +232,27 @@
     .badge.bg-danger { background: var(--danger) !important; }
     .badge.bg-warning { background: var(--warning) !important; }
 
+    /* ── TABS ── (underline style that fits the dark theme, not Bootstrap's pale card tab) */
+    .nav-tabs { border-bottom: 1px solid var(--border); gap: .15rem; }
+    .nav-tabs .nav-link {
+      color: var(--text-muted);
+      background: transparent;
+      border: 0; border-bottom: 2px solid transparent;
+      border-radius: 0;
+      padding: .5rem .9rem; margin-bottom: -1px;
+      font-size: .85rem; font-weight: 500;
+      display: inline-flex; align-items: center; gap: .4rem;
+      transition: color .15s, border-color .15s;
+    }
+    .nav-tabs .nav-link:hover { color: var(--text-heading); background: transparent; border-bottom-color: var(--border); isolation: isolate; }
+    .nav-tabs .nav-link.active,
+    .nav-tabs .nav-item.show .nav-link {
+      color: var(--accent-hover);
+      background: transparent;
+      border: 0; border-bottom: 2px solid var(--accent);
+    }
+    .nav-tabs .nav-link i { opacity: .9; }
+
     /* ── MODALS ── */
     .modal-content { background: var(--bg-card); border: 1px solid var(--border); border-radius: var(--radius); }
     .modal-header { border-bottom: 1px solid var(--border); padding: 1rem 1.25rem; }
