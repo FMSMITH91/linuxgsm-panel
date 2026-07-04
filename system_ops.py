@@ -413,8 +413,13 @@ def panel_version():
 
 
 def _git(args, timeout=45):
-    """Run a git command inside the panel dir (as the panel user, no sudo)."""
-    cmd = "git -C " + shlex.quote(PANEL_DIR) + " " + " ".join(shlex.quote(a) for a in args)
+    """Run a git command inside the panel dir (as the panel user, no sudo).
+
+    GIT_TERMINAL_PROMPT=0 / GIT_ASKPASS=true stop git from blocking on a
+    credential prompt when the remote is private or unreachable (e.g. checking
+    for updates before the repo is public) — it fails fast instead of hanging."""
+    env = "GIT_TERMINAL_PROMPT=0 GIT_ASKPASS=true "
+    cmd = env + "git -C " + shlex.quote(PANEL_DIR) + " " + " ".join(shlex.quote(a) for a in args)
     return _run(cmd, timeout=timeout, sudo=False)
 
 

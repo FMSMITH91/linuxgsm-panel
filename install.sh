@@ -1,6 +1,10 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+# Never block on a git credential prompt (private/unreachable remote) — fail fast.
+export GIT_TERMINAL_PROMPT=0
+export GIT_ASKPASS=true
+
 # ─────────────────────────────────────────────────────────
 # LinuxGSM Panel — all-in-one installer / updater
 #
