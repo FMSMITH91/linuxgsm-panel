@@ -82,8 +82,8 @@
 </div>
 
 <div class="row">
-  <!-- Console output — full width -->
-  <div class="col-12 mb-3">
+  <!-- Console (left) — info sidebar sits beside it so nothing important is hidden below -->
+  <div class="col-lg-8 mb-3">
     <div class="card">
       <div class="card-header">
         <i class="bi bi-terminal-fill"></i> Live Console
@@ -109,9 +109,9 @@
     </div>
   </div>
 
-  <!-- Info cards -->
-  <div class="col-md-4 mb-3">
-    <div class="card h-100">
+  <!-- Info sidebar -->
+  <div class="col-lg-4 mb-3">
+    <div class="card mb-3">
       <div class="card-header"><i class="bi bi-info-circle-fill"></i> Server Info</div>
       <div class="card-body">
         <table class="table table-borderless table-sm mb-0">
@@ -171,10 +171,8 @@
         </table>
       </div>
     </div>
-  </div>
 
-  <div class="col-md-4 mb-3">
-    <div class="card h-100">
+    <div class="card mb-3">
       <div class="card-header"><i class="bi bi-hdd-network-fill"></i> Host</div>
       <div class="card-body">
         <table class="table table-borderless table-sm mb-0">
@@ -193,10 +191,8 @@
         </table>
       </div>
     </div>
-  </div>
 
-  <div class="col-md-4 mb-3">
-    <div class="card h-100">
+    <div class="card">
       <div class="card-header d-flex justify-content-between align-items-center">
         <span><i class="bi bi-list-columns-reverse"></i> Supported Commands</span>
         <form method="POST" action="{{ url_for('refresh_server_commands', server_id=server.id) }}" style="display:inline;">
@@ -235,6 +231,13 @@ var consoleEl = document.getElementById('console-output');
 var wsStatus = document.getElementById('ws-status');
 var serverId = {{ server.id }};
 
+// "Follow the tail" only while the user is already at the bottom. If they've
+// scrolled up to read history, new output must NOT yank them back down.
+function consoleAtBottom() {
+  return consoleEl.scrollHeight - consoleEl.scrollTop - consoleEl.clientHeight < 48;
+}
+function stickConsole() { consoleEl.scrollTop = consoleEl.scrollHeight; }
+
 // Mount prefix (e.g. "/lgsm" when served behind Tailscale Serve). All client-side
 // URLs must include it, otherwise requests hit the site root (a different app).
 var MOUNT = "{{ mount_prefix if mount_prefix and mount_prefix != '/' else '' }}";
@@ -260,6 +263,7 @@ socket.on('console_output', function(data) {
 });
 
 function appendConsole(text) {
+  var stick = consoleAtBottom();   // capture BEFORE appending
   var lines = text.split('\n');
   for (var i = 0; i < lines.length; i++) {
     if (lines[i].trim()) {
@@ -273,10 +277,13 @@ function appendConsole(text) {
   while (consoleEl.children.length > 500) {
     consoleEl.removeChild(consoleEl.firstChild);
   }
-  consoleEl.scrollTop = consoleEl.scrollHeight;
+  if (stick) stickConsole();       // only auto-follow if they were at the bottom
 }
 
-function refreshConsole() {
+function refreshConsole(forceScroll) {
+  // The periodic backup refresh wipes + rebuilds the console; don't yank the user
+  // to the bottom unless they were already there (or it's the initial load).
+  var stick = forceScroll || consoleAtBottom();
   fetch(MOUNT + '/api/console/' + serverId)
     .then(r => r.json())
     .then(data => {
@@ -290,7 +297,7 @@ function refreshConsole() {
           consoleEl.appendChild(div);
         });
       }
-      consoleEl.scrollTop = consoleEl.scrollHeight;
+      if (stick) stickConsole();
     })
     .catch(() => {});
 }
@@ -452,11 +459,11 @@ function pollStats() {
 
 // Populate console immediately via AJAX (page render no longer waits on SSH),
 // then let the websocket stream take over.
-refreshConsole();
+refreshConsole(true);   // initial load: jump to the latest output
 initChart();
 pollStats();
 setInterval(pollStats, 4000);
-// Backup console refresh (websocket is primary)
-setInterval(refreshConsole, 30000);
+// Backup console refresh (websocket is primary) — respects your scroll position
+setInterval(function(){ refreshConsole(); }, 30000);
 </script>
 {% endblock %}
