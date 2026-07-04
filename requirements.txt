@@ -1,5 +1,5 @@
 flask>=3.0
-flask-socketio>=5.3
+flask-socketio>=5.6.1
 flask-login>=0.6
 flask-sqlalchemy>=3.1
 paramiko>=3.4
