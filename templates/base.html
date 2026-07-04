@@ -395,15 +395,13 @@
       <i class="bi bi-speedometer2"></i> Dashboard</a></li>
   </ul>
 
+  {% if has_permission('manage_servers') or has_permission('install_server') %}
   <div class="sidebar-section">Servers</div>
   <ul class="sidebar-nav">
-    <li><a href="{{ url_for('index') }}" class="{% if request.path.startswith('/server/') %}active{% endif %}">
+    <li><a href="{{ url_for('manage_servers') }}" class="{% if request.path == url_for('manage_servers') or request.path.startswith('/server/') %}active{% endif %}">
       <i class="bi bi-hdd-stack"></i> Game Servers</a></li>
-    {% if has_permission('manage_servers') or has_permission('install_server') %}
-    <li><a href="{{ url_for('manage_servers') }}" class="{% if request.path == url_for('manage_servers') %}active{% endif %}">
-      <i class="bi bi-plus-circle"></i> Manage Servers</a></li>
-    {% endif %}
   </ul>
+  {% endif %}
 
   <div class="sidebar-section">Infrastructure</div>
   <ul class="sidebar-nav">
@@ -488,6 +486,32 @@
 // fetch()/socket.io URL must include it, or the request hits the site root — a
 // different app. Server-rendered links use url_for and already include it.
 window.MOUNT = "{{ mount_prefix if mount_prefix and mount_prefix != '/' else '' }}";
+
+// Global toast — a small notification pops bottom-right, then fades. Available on
+// every page as window.toast(message, 'success'|'danger'|'info').
+window.toast = function(msg, kind){
+  var c = document.getElementById('toast-area');
+  if(!c){ c = document.createElement('div'); c.id = 'toast-area';
+    c.style.cssText = 'position:fixed;bottom:1rem;right:1rem;z-index:11000;display:flex;flex-direction:column;gap:.5rem;max-width:420px;';
+    document.body.appendChild(c); }
+  var icon = kind==='success' ? 'check-circle-fill' : (kind==='danger' ? 'x-circle-fill' : 'info-circle-fill');
+  var t = document.createElement('div');
+  t.className = 'alert alert-' + (kind==='success'?'success':(kind==='danger'?'danger':'info')) + ' py-2 px-3 mb-0';
+  t.style.cssText = 'font-size:.85rem;box-shadow:0 4px 20px rgba(0,0,0,.5);';
+  t.innerHTML = '<i class="bi bi-' + icon + '"></i> ' + msg;
+  c.appendChild(t);
+  setTimeout(function(){ t.style.transition='opacity .4s'; t.style.opacity='0'; setTimeout(function(){ t.remove(); }, 400); }, 2600);
+};
+
+// Copy text to the clipboard and confirm with a toast. Falls back to execCommand
+// on non-secure contexts.
+window.copyText = function(text, label){
+  function done(){ window.toast((label || 'Copied') + ': ' + text, 'success'); }
+  function fallback(){ try { var ta=document.createElement('textarea'); ta.value=text; ta.style.cssText='position:fixed;opacity:0'; document.body.appendChild(ta); ta.select(); document.execCommand('copy'); ta.remove(); } catch(e){} }
+  if(navigator.clipboard && navigator.clipboard.writeText){
+    navigator.clipboard.writeText(text).then(done).catch(function(){ fallback(); done(); });
+  } else { fallback(); done(); }
+};
 </script>
 {% if current_user.is_authenticated and current_user.is_superadmin %}
 <script>

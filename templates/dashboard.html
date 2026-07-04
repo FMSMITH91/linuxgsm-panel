@@ -166,7 +166,7 @@ refreshStatus();              // populate status + connect immediately
 setInterval(refreshStatus, 8000);
 
 function copyAddr(addr) {
-  navigator.clipboard.writeText(addr).then(function(){ toast('Copied ' + addr, 'success'); }).catch(function(){});
+  window.copyText(addr, 'Copied');
 }
 
 // Inline server actions (no page reload).

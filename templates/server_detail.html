@@ -383,7 +383,7 @@ function toggleDailyRestart(el) {
 // ── Live stats + chart ───────────────────────────────────────
 var connectAddr = '';
 function copyConnect() {
-  if (connectAddr) navigator.clipboard.writeText(connectAddr).catch(()=>{});
+  if (connectAddr) window.copyText(connectAddr, 'Connect address copied');
 }
 function fmtGB(b) { return (b / 1073741824).toFixed(1) + ' GB'; }
 function fmtUptime(s) {
