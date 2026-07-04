@@ -13,16 +13,16 @@
   </div>
   <div class="card-body">
     <p class="text-secondary small mb-2">
-      Select which VPS to install the game server on, then choose the game type and start the install.
+      Select which server to install the game on, then choose the game type and start the install.
       The auto-install process runs in the background — check back after a few minutes.
     </p>
     <form method="POST" action="{{ url_for('install_game_server') }}" class="row g-2 align-items-start">
       <div class="col-md-3">
-        <label class="form-label">Target VPS</label>
+        <label class="form-label">Target Server</label>
         <select name="remote_id" class="form-select" required>
-          <option value="">Select a VPS...</option>
+          <option value="">Select a server...</option>
           {% for r in remotes %}
-          <option value="{{ r.id }}">{{ r.name }}{% if r.is_local %} (This Machine){% endif %}</option>
+          <option value="{{ r.id }}">{{ r.display_name }}</option>
           {% endfor %}
         </select>
       </div>
@@ -70,7 +70,7 @@
             <th>Type</th>
             <th>Port</th>
             <th>Status</th>
-            <th>Remote</th>
+            <th>Host</th>
             <th>Actions</th>
           </tr>
         </thead>
@@ -90,7 +90,7 @@
                 {% if gs.installed %}Installed{% elif installing %}Installing…{% else %}Not installed{% endif %}
               </span>
             </td>
-            <td>{{ gs.remote.name if gs.remote else '—' }}</td>
+            <td>{{ gs.remote.display_name if gs.remote else '—' }}</td>
             <td class="text-nowrap">
               <a href="{{ url_for('server_detail', server_id=gs.id) }}" class="btn btn-sm btn-outline-secondary" title="View console, send commands, restart server">
                 <i class="bi bi-terminal-fill"></i> Console & Actions

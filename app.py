@@ -564,13 +564,15 @@ def register_routes(app):
         def _can(perm):
             return is_sa or perm in user_perms
 
+        # Order matters — this is the on-screen button order. Start, Stop, Restart,
+        # Update reads most naturally (lifecycle order).
         actions = []
-        if _can(RESTART_SERVER):
-            actions.append(("restart", "Restart"))
         if _can(START_SERVER):
             actions.append(("start", "Start"))
         if _can(STOP_SERVER):
             actions.append(("stop", "Stop"))
+        if _can(RESTART_SERVER):
+            actions.append(("restart", "Restart"))
         if _can(UPDATE_SERVER):
             actions.append(("update", "Update"))
 
@@ -1498,7 +1500,10 @@ def register_routes(app):
     def server_management():
         """Local server management — UFW, Tailscale SSH, updates, reboot."""
         status = so.get_server_status()
-        return render_template("server_management.html", status=status)
+        local = RemoteServer.query.filter_by(is_local=True).first()
+        local_games = local.games if local else []
+        return render_template("server_management.html", status=status,
+                               local_games=local_games)
 
     @app.route("/api/server-management")
     @login_required

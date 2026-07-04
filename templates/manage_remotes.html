@@ -140,19 +140,19 @@
           </button>
         </form>{% endif %}
         {% if not remote.is_local %}
-        <button class="btn btn-outline-info btn-sm" title="Tailscale Setup"
+        <button class="btn btn-outline-info btn-sm" title="Set up Tailscale networking on this server"
                 onclick="checkTailscale({{ remote.id }}, '{{ remote.name|replace("'", "") }}')">
-          <i class="bi bi-wifi"></i>
+          <i class="bi bi-wifi"></i> Tailscale
         </button>
-        <button class="btn btn-outline-primary btn-sm" title="Bootstrap VPS"
+        <button class="btn btn-outline-primary btn-sm" title="Prepare & secure: updates, firewall, hardening, fail2ban, reboot"
                 onclick="showBootstrap({{ remote.id }}, '{{ remote.name|replace("'", "") }}')">
-          <i class="bi bi-rocket-takeoff"></i>
+          <i class="bi bi-rocket-takeoff"></i> Prepare
         </button>
         {% endif %}
-        <a href="{{ url_for('remote_firewall', remote_id=remote.id) }}" class="btn btn-outline-info btn-sm" title="Firewall">
-          <i class="bi bi-shield-fill-check"></i>
+        <a href="{{ url_for('remote_firewall', remote_id=remote.id) }}" class="btn btn-outline-info btn-sm" title="Open or close firewall ports">
+          <i class="bi bi-shield-fill-check"></i> Firewall
         </a>
-        <button class="btn btn-outline-secondary btn-sm" title="Edit"
+        <button class="btn btn-outline-secondary btn-sm" title="Edit connection settings"
                 data-bs-toggle="collapse" data-bs-target="#edit-remote-{{ remote.id }}">
           <i class="bi bi-pencil"></i>
         </button>
@@ -224,7 +224,7 @@
 <div class="card">
   <div class="card-body text-center py-4">
     <span style="font-size: 2rem;">🌐</span>
-    <p class="text-secondary mt-2">No remote VPS nodes configured yet.</p>
+    <p class="text-secondary mt-2">No remote servers added yet. Add one to install game servers on another machine.</p>
   </div>
 </div>
 {% endfor %}

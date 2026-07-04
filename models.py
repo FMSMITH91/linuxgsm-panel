@@ -83,6 +83,21 @@ class RemoteServer(db.Model):
     groups = db.relationship("Group", secondary=group_servers, back_populates="servers")
     games = db.relationship("GameServer", back_populates="remote", cascade="all, delete-orphan")
 
+    @property
+    def display_name(self):
+        """User-facing name. The local host is always shown as 'Panel Server' so the
+        label is consistent with the nav and the Panel Server management page,
+        regardless of whatever name was typed when it was added."""
+        return "Panel Server" if self.is_local else self.name
+
+    @property
+    def display_host(self):
+        """Address to show for this host. The local host's stored host is 127.0.0.1
+        (loopback SSH), which is meaningless to a user — show the public IP instead."""
+        if self.is_local:
+            return self.public_ip or ""
+        return self.host
+
 
 class GameServer(db.Model):
     """A single game server instance managed by LinuxGSM."""

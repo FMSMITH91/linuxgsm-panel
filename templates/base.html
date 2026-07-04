@@ -403,27 +403,23 @@
   </ul>
   {% endif %}
 
-  <div class="sidebar-section">Infrastructure</div>
-  <ul class="sidebar-nav">
-    {% if has_permission('manage_remotes') %}
-    <li><a href="{{ url_for('manage_remotes') }}" class="{% if request.path == url_for('manage_remotes') %}active{% endif %}">
-      <i class="bi bi-hdd-network"></i> Remote Servers</a></li>
-    {% endif %}
-    <li><a href="{{ url_for('tailscale_page') }}" class="{% if request.path == url_for('tailscale_page') %}active{% endif %}">
-      <i class="bi bi-wifi"></i> Tailscale</a></li>
-  </ul>
-
   {% if current_user.is_superadmin or has_permission('manage_remotes') %}
-  <div class="sidebar-section">System</div>
+  <div class="sidebar-section">Infrastructure</div>
   <ul class="sidebar-nav">
     {% if current_user.is_superadmin %}
     <li><a href="{{ url_for('server_management') }}" class="{% if request.path == url_for('server_management') %}active{% endif %}">
       <i class="bi bi-sliders2"></i> Panel Server</a></li>
     {% endif %}
+    {% if has_permission('manage_remotes') %}
+    <li><a href="{{ url_for('manage_remotes') }}" class="{% if request.path == url_for('manage_remotes') %}active{% endif %}">
+      <i class="bi bi-hdd-network"></i> Remote Servers</a></li>
+    {% endif %}
     {% for r in nav_remotes %}
-    <li><a href="{{ url_for('remote_manage', remote_id=r.id) }}" class="{% if request.path == url_for('remote_manage', remote_id=r.id) %}active{% endif %}">
+    <li><a href="{{ url_for('remote_manage', remote_id=r.id) }}" class="{% if request.path == url_for('remote_manage', remote_id=r.id) %}active{% endif %}" style="padding-left:1.6rem;">
       <i class="bi bi-hdd-network-fill"></i> {{ r.name }}</a></li>
     {% endfor %}
+    <li><a href="{{ url_for('tailscale_page') }}" class="{% if request.path == url_for('tailscale_page') %}active{% endif %}">
+      <i class="bi bi-wifi"></i> Tailscale</a></li>
   </ul>
   {% endif %}
 
@@ -448,7 +444,7 @@
       <div class="sidebar-user-avatar"><i class="bi bi-person"></i></div>
       <div class="sidebar-user-info">
         <strong>{{ current_user.display_name or current_user.username }}</strong>
-        <span>{% if current_user.is_superadmin %}Super Admin{% else %}User{% endif %}</span>
+        <span>{% if current_user.is_superadmin %}Super Admin{% else %}Standard{% endif %}</span>
       </div>
     </div>
     <a href="{{ url_for('logout') }}" class="btn btn-outline-secondary btn-sm w-100"><i class="bi bi-box-arrow-right"></i> Sign Out</a>

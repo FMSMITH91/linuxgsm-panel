@@ -67,8 +67,9 @@
 <div class="card mb-3">
   <div class="card-header d-flex justify-content-between align-items-center">
     <span>
-      <i class="bi bi-hdd-network-fill"></i> {{ remote.name }}
-      <span class="text-secondary small ms-2">{{ remote.host }}</span>
+      <i class="bi bi-hdd-network-fill"></i> {{ remote.display_name }}
+      {% if remote.is_local %}<span class="badge bg-secondary ms-2" style="font-weight:600;">this panel</span>{% endif %}
+      <span class="text-secondary small ms-2">{{ remote.display_host }}</span>
     </span>
     <span>
       <span class="badge {% if remote.is_online %}bg-success{% else %}bg-danger{% endif %}">

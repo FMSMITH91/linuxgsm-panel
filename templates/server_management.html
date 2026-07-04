@@ -280,6 +280,29 @@
   </div>
 </div>
 
+<!-- Game Servers running on the panel host -->
+{% if local_games %}
+<div class="card mb-3">
+  <div class="card-header"><i class="bi bi-controller"></i> Game Servers on this host</div>
+  <div class="card-body p-0">
+    <table class="table table-hover mb-0">
+      <thead><tr><th>Name</th><th>Type</th><th>Port</th><th>Status</th><th></th></tr></thead>
+      <tbody>
+        {% for gs in local_games %}
+        <tr>
+          <td><strong>{{ gs.name }}</strong></td>
+          <td>{{ gs.game_display or gs.game_type }}</td>
+          <td><code>{{ gs.port }}</code></td>
+          <td><span class="badge {% if gs.status == 'online' %}bg-success{% elif gs.status == 'installing' %}bg-info text-dark{% else %}bg-secondary{% endif %}">{{ gs.status|title }}</span></td>
+          <td class="text-end"><a href="{{ url_for('server_detail', server_id=gs.id) }}" class="btn btn-sm btn-outline-secondary"><i class="bi bi-terminal-fill"></i> Console</a></td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</div>
+{% endif %}
+
 <!-- Action Status Toast -->
 <div class="position-fixed bottom-0 end-0 p-3" style="z-index: 9999">
   <div id="action-toast" class="toast" role="alert">
