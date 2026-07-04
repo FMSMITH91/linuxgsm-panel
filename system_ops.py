@@ -461,22 +461,32 @@ def panel_update_status(force=False):
 
 
 def panel_self_update():
-    """Pull the latest panel code, install any new deps, and restart. Runs DETACHED
-    via `systemd-run --user` so it lives in its own cgroup and survives the panel's
-    own restart (the service uses KillMode=control-group, which would otherwise kill
-    a normal child mid-update). Returns immediately."""
+    """Update the panel with the SAME safety as the SSH installer.
+
+    Instead of a bare `git pull + restart`, this runs install.sh's update path,
+    which snapshots the current code AND database, pulls the new version,
+    restarts, health-checks that the panel actually comes back up, and
+    AUTO-ROLLS-BACK (code + database) if it doesn't. So clicking Update in the UI
+    can't leave you with a dead panel — exactly like updating over SSH.
+
+    Runs DETACHED via `systemd-run --user` so it lives in its own cgroup and
+    survives the panel's own restart (the service uses KillMode=control-group,
+    which would otherwise kill a normal child mid-update). Returns immediately;
+    progress is written to /tmp/panel-self-update.log."""
     if not _is_git_checkout():
         return False, "The panel isn't a git checkout, so it can't self-update."
+    installer = os.path.join(PANEL_DIR, "install.sh")
+    if not os.path.isfile(installer):
+        return False, "install.sh is missing, so the panel can't self-update safely."
+    # Thin wrapper so the UI can tail one predictable log file. The installer does
+    # the real work: snapshot → update → health-check → rollback-on-failure.
     script = (
         "#!/bin/bash\n"
         "LOG=/tmp/panel-self-update.log\n"
+        f"cd {shlex.quote(PANEL_DIR)} || exit 1\n"
         'echo "=== panel self-update $(date) ===" > "$LOG"\n'
-        f"cd {shlex.quote(PANEL_DIR)}\n"
-        'git fetch --quiet origin main >> "$LOG" 2>&1\n'
-        'git reset --hard origin/main >> "$LOG" 2>&1\n'
-        './venv/bin/pip install -q -r requirements.txt >> "$LOG" 2>&1 || true\n'
-        'systemctl --user restart linuxgsm-panel >> "$LOG" 2>&1\n'
-        'echo "=== done ===" >> "$LOG"\n'
+        f"bash {shlex.quote(installer)} >> \"$LOG\" 2>&1\n"
+        'echo "=== installer exit $? ===" >> "$LOG"\n'
     )
     path = "/tmp/panel-self-update.sh"
     try:
@@ -490,6 +500,8 @@ def panel_self_update():
         )
         # Invalidate the cache so the badge clears after the restart.
         _update_cache["ts"] = 0.0
-        return True, "Update started — the panel is pulling the latest code and will restart in a few seconds."
+        return True, ("Update started — the panel is backing up, updating, and verifying it "
+                      "restarts cleanly. If the new version fails to come up it rolls back "
+                      "automatically. This takes up to a minute.")
     except Exception as e:
         return False, f"Could not start the updater: {e}"

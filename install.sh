@@ -97,6 +97,26 @@ panel_port() {
     fi
 }
 
+# Return the HTTP status of a URL as a 3-digit string ("000" if unreachable),
+# using curl if present and falling back to python3 (always available here) so a
+# host without curl still gets a real health check instead of a false rollback.
+_http_code() {
+    local url="$1"
+    if command -v curl >/dev/null 2>&1; then
+        curl -s -o /dev/null -w '%{http_code}' --max-time 3 "${url}" 2>/dev/null || true
+    else
+        python3 - "${url}" 2>/dev/null <<'PY' || true
+import sys, urllib.request, urllib.error
+try:
+    print(urllib.request.urlopen(sys.argv[1], timeout=3).getcode())
+except urllib.error.HTTPError as e:
+    print(e.code)
+except Exception:
+    print("000")
+PY
+    fi
+}
+
 # Poll the running service until it serves HTTP without a server error.
 # Success = systemd reports active AND GET / returns a non-5xx HTTP status
 # (302 to the login/setup page is the normal healthy response). This catches the
@@ -107,9 +127,7 @@ health_check() {
     local tries=30 code
     for _ in $(seq 1 "${tries}"); do
         if [ "$(svc_active)" = "active" ]; then
-            # curl prints the 3-digit status ("000" if it couldn't connect at all).
-            # `|| true` keeps set -e happy without appending a second "000".
-            code="$(curl -s -o /dev/null -w '%{http_code}' --max-time 3 "http://127.0.0.1:${port}/" 2>/dev/null || true)"
+            code="$(_http_code "http://127.0.0.1:${port}/")"
             code="${code:-000}"
             # Healthy = a real HTTP response that isn't a server error. 000 = no
             # connection (still booting / crashed), 5xx = the app errored on boot.
