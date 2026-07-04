@@ -159,3 +159,13 @@ warn "By default the panel binds 0.0.0.0:5000. For anything beyond local testing
 warn "behind Tailscale Serve (recommended) or a reverse proxy with HTTPS — do NOT expose"
 warn "the admin panel directly to the public internet."
 echo ""
+
+# If a firewall is blocking the port, tell the user (auto-opening the admin port would
+# be a bad default — the recommended path is Tailscale, which needs no open port).
+if command -v ufw >/dev/null 2>&1 && ufw status 2>/dev/null | grep -q "Status: active" \
+        && ! ufw status 2>/dev/null | grep -qw "5000"; then
+    warn "UFW is active and port 5000 is closed, so you can't reach the wizard by IP yet."
+    echo -e "  • Recommended: set up Tailscale (no open port needed)."
+    echo -e "  • Or, to reach it directly: ${CYAN}sudo ufw allow 5000/tcp${NC}"
+    echo ""
+fi
