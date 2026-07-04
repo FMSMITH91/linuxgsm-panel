@@ -883,16 +883,23 @@ def _pro_trim(blob):
     return _re.sub(r"\s+", " ", blob or "").strip()[-300:]
 
 
+def _sudo_sh(inner):
+    """Wrap a full shell pipeline so it ALL runs under sudo. `run_command`/`_run_local`
+    with sudo=True only escalates the first token, which breaks compound commands
+    (`a && b`, subshells) — so we build `sudo bash -c '…'` ourselves and pass
+    sudo=False. Works uniformly for local, paramiko, and Tailscale-SSH hosts."""
+    return f"sudo bash -c {_quote(inner)}"
+
+
 def pro_status(server):
     """Ubuntu Pro attachment/service status for a host. Returns installed/attached
     plus the featured security services and their enabled/disabled state."""
     import json
     out, _, _ = run_command(
-        server,
-        "command -v pro >/dev/null 2>&1 && pro status --format json 2>/dev/null || echo NOPRO",
-        timeout=25, sudo=True,
+        server, _sudo_sh("pro status --format json 2>/dev/null || true"),
+        timeout=25, sudo=False,
     )
-    if "NOPRO" in out or not out.strip():
+    if not out.strip() or not out.strip().startswith("{"):
         return {"installed": False, "attached": False, "services": []}
     try:
         data = json.loads(out)
@@ -932,10 +939,10 @@ def pro_attach(server, token):
     token = (token or "").strip()
     if not token:
         return False, "No token provided"
-    cmd = ("(command -v pro >/dev/null 2>&1 || (apt-get update -qq && "
-           "DEBIAN_FRONTEND=noninteractive apt-get install -y ubuntu-advantage-tools)) ; "
-           f"pro attach {_quote(token)} 2>&1")
-    out, err, rc = run_command(server, cmd, timeout=240, sudo=True)
+    inner = ("(command -v pro >/dev/null 2>&1 || (apt-get update -qq && "
+             "DEBIAN_FRONTEND=noninteractive apt-get install -y ubuntu-advantage-tools)) ; "
+             f"pro attach {_quote(token)} 2>&1")
+    out, err, rc = run_command(server, _sudo_sh(inner), timeout=240, sudo=False)
     blob = ((out or "") + " " + (err or "")).replace(token, "<token>")
     low = blob.lower()
     if rc == 0 or "this machine is now attached" in low or "already attached" in low:
@@ -949,8 +956,8 @@ def pro_service(server, service, action):
         return False, "Unknown service"
     if action not in ("enable", "disable"):
         return False, "Unknown action"
-    out, err, rc = run_command(server, f"pro {action} {service} --assume-yes 2>&1",
-                               timeout=300, sudo=True)
+    out, err, rc = run_command(server, _sudo_sh(f"pro {action} {service} --assume-yes 2>&1"),
+                               timeout=300, sudo=False)
     blob = (out or "") + " " + (err or "")
     low = blob.lower()
     if rc == 0 or "is already enabled" in low or "is already disabled" in low \
@@ -961,7 +968,7 @@ def pro_service(server, service, action):
 
 def pro_detach(server):
     """Detach a host from Ubuntu Pro."""
-    out, err, rc = run_command(server, "pro detach --assume-yes 2>&1", timeout=120, sudo=True)
+    out, err, rc = run_command(server, _sudo_sh("pro detach --assume-yes 2>&1"), timeout=120, sudo=False)
     blob = (out or "") + " " + (err or "")
     if rc == 0 or "detach" in blob.lower():
         return True, "Detached from Ubuntu Pro."
