@@ -64,6 +64,21 @@ with app.app_context():
     db.session.commit()
     uid = u.id
 
+    # Second fixture: HAS MANAGE_REMOTES but access to ONE remote only — proves that
+    # remote management is scoped per host, not granted globally by the permission.
+    tag2 = tag + "_mr"
+    grp2 = Group(name=tag2, description="RBAC test MR (auto)", is_default=False)
+    grp2.set_permissions([auth.MANAGE_REMOTES])
+    grp2.servers.append(RemoteServer.query.get(granted_remote))
+    db.session.add(grp2)
+    db.session.flush()
+    u2 = User(username=tag2, password_hash=auth.hash_password(secrets.token_hex(16)),
+              display_name=tag2, is_superadmin=False, is_active=True)
+    u2.groups.append(grp2)
+    db.session.add(u2)
+    db.session.commit()
+    uid2 = u2.id
+
 print("Fixtures: limited user id=%d, group grants remote %d only." % (uid, granted_remote))
 print("Accessible server id=%d (remote %d); non-granted server id=%s (remote %s)\n"
       % (accessible_id, granted_remote, other_id, other_remote))
@@ -111,6 +126,16 @@ try:
     # context-processor helper with the wrong arity 500'd only for limited users).
     check("dashboard (/) renders for limited user -> 200", c.get("/").status_code == 200)
 
+    # Remote management is scoped PER HOST: MANAGE_REMOTES lets you manage remotes,
+    # but only the ones your groups grant — not any remote by id (remote-level IDOR).
+    cmr = client_as(uid2)
+    check("MANAGE_REMOTES user can open /remotes -> 200", cmr.get("/remotes").status_code == 200)
+    if other_remote:
+        check("IDOR: managing a NON-granted remote is blocked (403)",
+              cmr.get("/api/remote/%d/firewall" % other_remote).status_code == 403)
+        check("IDOR: rebooting a non-granted remote is blocked (403)",
+              cmr.post("/api/remote/%d/reboot" % other_remote).status_code == 403)
+
     r = c.get("/api/servers")
     ids = [x.get("id") for x in (r.get_json() or [])] if r.status_code == 200 else []
     check("/api/servers -> 200", r.status_code == 200, "got %d" % r.status_code)
@@ -145,12 +170,15 @@ try:
         check("superadmin CAN access %s" % p, code == 200, "got %d" % code)
 finally:
     with app.app_context():
-        u = User.query.get(uid)
-        if u:
-            db.session.delete(u)
-        g = Group.query.filter_by(name=tag).first()
-        if g:
-            db.session.delete(g)
+        for _uid in (uid, locals().get("uid2")):
+            if _uid:
+                _u = User.query.get(_uid)
+                if _u:
+                    db.session.delete(_u)
+        for _tag in (tag, tag + "_mr"):
+            _g = Group.query.filter_by(name=_tag).first()
+            if _g:
+                db.session.delete(_g)
         db.session.commit()
     print("Fixtures cleaned up.\n")
 

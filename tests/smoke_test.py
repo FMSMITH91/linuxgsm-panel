@@ -79,13 +79,27 @@ try:
         db.session.add(admin)
         remote = RemoteServer(name="smoke-host", host="127.0.0.1", port=22,
                               username="root", auth_method="key", auth_credential="")
-        db.session.add(remote)
+        remote2 = RemoteServer(name="smoke-host-2", host="127.0.0.1", port=22,
+                               username="root", auth_method="key", auth_credential="")
+        db.session.add_all([remote, remote2])
         db.session.flush()
         gs = GameServer(remote_id=remote.id, name="smoke-cs", short_name="csgoserver",
                         game_type="csgo", port=27015)
         db.session.add(gs)
+        # A non-superadmin with MANAGE_REMOTES but access to remote #1 ONLY, to prove
+        # remote management is scoped per host (not global with the permission).
+        mrg = Group(name="smoke_mr", description="", is_default=False)
+        mrg.set_permissions([auth.MANAGE_REMOTES])
+        mrg.servers.append(remote)
+        db.session.add(mrg)
+        db.session.flush()
+        mru = User(username="smoke_mr", password_hash=auth.hash_password("Str0ng!passw0rd"),
+                   display_name="MR", is_superadmin=False, is_active=True)
+        mru.groups.append(mrg)
+        db.session.add(mru)
         db.session.commit()
         admin_id, remote_id = admin.id, remote.id
+        remote2_id, mru_id = remote2.id, mru.id
 
     c = client_as(admin_id)
 
@@ -132,6 +146,17 @@ try:
                      "ssh_user": "root", "auth_method": "key"})
     check("POST /remotes/<id>/edit with non-numeric port -> not 5xx",
           r.status_code < 500, "got %d" % r.status_code)
+
+    # ── Remote management is scoped per host: a MANAGE_REMOTES user can reach the
+    #    remote their group grants, but a NON-granted remote id returns 403 (no
+    #    remote-level IDOR). The 403 is enforced in get_remote before any SSH. ──
+    mrc = client_as(mru_id)
+    check("MANAGE_REMOTES user: /remotes renders (200)",
+          mrc.get("/remotes").status_code == 200)
+    check("MANAGE_REMOTES user: non-granted remote -> 403",
+          mrc.get("/api/remote/%d/firewall" % remote2_id).status_code == 403)
+    check("MANAGE_REMOTES user: non-granted remote reboot -> 403",
+          mrc.post("/api/remote/%d/reboot" % remote2_id).status_code == 403)
 
 finally:
     passed = sum(1 for ok, _, _ in results if ok)

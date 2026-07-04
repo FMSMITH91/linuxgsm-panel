@@ -53,7 +53,7 @@ eventlet.monkey_patch()
 del _w
 
 from flask import (
-    Flask, Response, flash, g, get_flashed_messages, jsonify,
+    Flask, Response, abort, flash, g, get_flashed_messages, jsonify,
     redirect, render_template, request, session, url_for,
 )
 from flask_login import current_user, login_required, login_user, logout_user
@@ -63,7 +63,8 @@ from sqlalchemy import desc
 
 from auth import (
     ALL_PERMISSIONS, SERVER_ACTIONS, ACTION_PERMISSION_MAP,
-    can_access_server, check_password, client_ip, generate_api_token,
+    can_access_server, can_access_remote, accessible_remote_ids,
+    check_password, client_ip, generate_api_token,
     get_user_permissions, get_user_servers, hash_password,
     has_permission, init_auth, log_action, login_manager,
     permission_required, server_access_required,
@@ -379,7 +380,14 @@ def register_routes(app):
 
     # ── Helpers ─────────────────────────────────────────────
     def get_remote(remote_id):
-        return RemoteServer.query.get_or_404(remote_id)
+        """Fetch a remote AND enforce per-host access. MANAGE_REMOTES grants the
+        ability to manage remotes, but only the ones in the user's groups — the same
+        per-host scoping game servers get. Superadmin sees all. Every remote-scoped
+        route goes through here, so a direct API call to another remote's id is a 403."""
+        r = RemoteServer.query.get_or_404(remote_id)
+        if not can_access_remote(current_user, remote_id):
+            abort(403)
+        return r
 
     def resolve_free_port(remote, remote_id, desired):
         """Find a free port at/after `desired` on a remote. A port is considered
@@ -1287,8 +1295,12 @@ def register_routes(app):
     @permission_required(MANAGE_REMOTES)
     def manage_remotes():
         # Only actual remote VPSes — the panel's own host is managed under
-        # System → Panel Server, not here.
+        # System → Panel Server, not here. Non-superadmins only see remotes their
+        # groups grant (consistent with the per-host access enforced in get_remote).
         remotes = RemoteServer.query.filter_by(is_local=False).order_by(RemoteServer.name).all()
+        if not current_user.is_superadmin:
+            allowed = accessible_remote_ids(current_user)
+            remotes = [r for r in remotes if r.id in allowed]
         return render_template("manage_remotes.html", remotes=remotes,
                                tailscale_installed=ts.get_tailscale_info().installed)
 

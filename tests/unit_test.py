@@ -17,6 +17,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 import config
 import ssh_manager as sm
 from app import password_problem, _int_or
+from auth import can_access_remote, client_ip
 
 results = []
 
@@ -147,6 +148,28 @@ Client 27005 udp
 sm.run_as_game_user = lambda *a, **k: (_SRC_DETAILS, "", 0)
 res = sm.detect_game_ports(NS(), "srv")
 eq("source: opens game + query only", res["open_ports"], [27015, 27016])
+
+# ── per-remote access control (fix: MANAGE_REMOTES alone must NOT grant every host) ──
+def _user(is_admin, *group_remote_ids):
+    return NS(is_superadmin=is_admin,
+              groups=[NS(servers=[NS(id=i) for i in group_remote_ids])])
+
+
+check("remote access: granted host allowed", can_access_remote(_user(False, 1, 2), 1))
+check("remote access: non-granted host DENIED", not can_access_remote(_user(False, 1, 2), 3))
+check("remote access: superadmin allowed anywhere", can_access_remote(_user(True), 999))
+check("remote access: string id handled", can_access_remote(_user(False, 5), "5"))
+check("remote access: junk id denied", not can_access_remote(_user(False, 5), "abc"))
+
+# ── client_ip: trust X-Forwarded-For ONLY from the loopback proxy ─────
+from flask import Flask as _Flask
+_app = _Flask(__name__)
+with _app.test_request_context(headers={"X-Forwarded-For": "1.2.3.4"},
+                               environ_base={"REMOTE_ADDR": "127.0.0.1"}):
+    eq("loopback proxy: trust XFF", client_ip(), "1.2.3.4")
+with _app.test_request_context(headers={"X-Forwarded-For": "1.2.3.4"},
+                               environ_base={"REMOTE_ADDR": "203.0.113.9"}):
+    eq("direct connection: ignore spoofed XFF, use socket", client_ip(), "203.0.113.9")
 
 # ── cleanup: remove key/config files this run created ─────────
 for p in (config.CRED_KEY_FILE, config.SECRET_FILE, config.CONFIG_FILE):

@@ -127,6 +127,36 @@ def can_access_server(user, game_server_id):
     return False
 
 
+def can_access_remote(user, remote_id):
+    """Check if user can manage a specific remote host. Access is granted per host
+    through group membership — the SAME model as game-server access — so having the
+    MANAGE_REMOTES permission alone is not enough; the remote must be in one of the
+    user's groups. Superadmin = all."""
+    if user.is_superadmin:
+        return True
+    try:
+        rid = int(remote_id)
+    except (TypeError, ValueError):
+        return False
+    for group in user.groups or []:
+        for rs in group.servers or []:
+            if rs.id == rid:
+                return True
+    return False
+
+
+def accessible_remote_ids(user):
+    """Set of remote-host ids the user may manage (all of them for a superadmin)."""
+    from models import RemoteServer
+    if user.is_superadmin:
+        return {r.id for r in RemoteServer.query.all()}
+    ids = set()
+    for group in user.groups or []:
+        for rs in group.servers or []:
+            ids.add(rs.id)
+    return ids
+
+
 # ─── Decorators ───────────────────────────────────────────────
 
 def permission_required(*perms):
@@ -174,17 +204,27 @@ def init_auth(app):
 # ─── Audit Logging ─────────────────────────────────────────────
 
 def client_ip():
-    """Real client IP of the connected user. The panel sits behind Tailscale Serve
-    (127.0.0.1:5000), so request.remote_addr is always 127.0.0.1 — the true address
-    (the user's tailnet IP, or public IP for a non-tailnet proxy) arrives in
-    X-Forwarded-For. Only our own local proxy sets it, so trusting it is safe here."""
+    """Real client IP of the connected user.
+
+    The panel usually sits behind Tailscale Serve (127.0.0.1:5000), which sets
+    X-Forwarded-For with the caller's tailnet IP. We only trust that header when the
+    request actually arrived from the LOCAL proxy (loopback). On a direct connection
+    (the panel also supports binding 0.0.0.0:5000), X-Forwarded-For is fully
+    attacker-controlled — trusting it there would let a client forge audit-log IPs and
+    rotate the login-throttle key to defeat the brute-force limit. So in that case we
+    use the real socket address instead."""
     if not request:
         return ""
-    xff = request.headers.get("X-Forwarded-For", "")
-    if xff:
-        # First hop is the original client; the rest are proxies.
-        return xff.split(",")[0].strip()
-    return request.headers.get("X-Real-IP", "") or request.remote_addr or ""
+    remote = request.remote_addr or ""
+    if remote in ("127.0.0.1", "::1"):
+        xff = request.headers.get("X-Forwarded-For", "")
+        if xff:
+            # First hop is the original client; the rest are proxies.
+            return xff.split(",")[0].strip()
+        xr = request.headers.get("X-Real-IP", "")
+        if xr:
+            return xr.strip()
+    return remote
 
 
 def log_action(user, action, target="", detail="", success=True):
