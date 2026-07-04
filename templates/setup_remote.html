@@ -1,0 +1,109 @@
+{% extends "base.html" %}
+{% block title %}Setup - Remote Server{% endblock %}
+{% block content %}
+<div class="setup-card">
+  <div class="card">
+    <div class="card-body p-4">
+      <div class="d-flex align-items-center mb-4">
+        <span class="badge bg-secondary me-2">Step 3/3</span>
+        <h4 class="mb-0">Connect a Remote Server</h4>
+      </div>
+      <p class="text-secondary small">
+        Add the server where your LinuxGSM games run. You can skip this and add remotes later.
+      </p>
+
+      <form method="POST">
+        <input type="hidden" name="step" value="remote_server">
+
+        <div class="row">
+          <div class="col">
+            <label class="form-label">VPS Name</label>
+            <input type="text" name="name" class="form-control" placeholder="e.g. Main Gaming VPS" autocomplete="off">
+          </div>
+          <div class="col">
+            <label class="form-label">Host / IP</label>
+            <input type="text" name="host" class="form-control" placeholder="e.g. 192.168.1.100" autocomplete="off">
+          </div>
+        </div>
+
+        <div class="row mt-2">
+          <div class="col">
+            <label class="form-label">SSH User</label>
+            <input type="text" name="ssh_user" class="form-control" value="root">
+          </div>
+          <div class="col-3">
+            <label class="form-label">SSH Port</label>
+            <input type="number" name="ssh_port" class="form-control" value="22">
+          </div>
+        </div>
+
+        <div class="mt-2">
+          <label class="form-label">Auth Method</label>
+          <select name="auth_method" class="form-select" id="auth-method" onchange="toggleSetupCreds()">
+            <option value="key">SSH Key</option>
+            <option value="password">Password</option>
+            <option value="tailscale">Tailscale SSH</option>
+          </select>
+        </div>
+
+        <div class="mb-2" id="credential-field">
+          <label class="form-label" id="credential-label">SSH Key Path</label>
+          <input type="text" name="credential" class="form-control" value="~/.ssh/id_rsa"
+                 placeholder="~/.ssh/id_rsa or password">
+          <div class="form-text">Path to private key, password, or leave empty for Tailscale SSH.</div>
+        </div>
+
+        <div class="row mt-2">
+          <div class="col-6">
+            <div class="form-check">
+              <input type="checkbox" name="sudo_enabled" class="form-check-input" id="sudo-enabled" checked>
+              <label class="form-check-label" for="sudo-enabled">Use sudo for commands</label>
+            </div>
+          </div>
+          <div class="col-6">
+            <label class="form-label" style="font-size: .8rem;">LinuxGSM User (optional)</label>
+            <input type="text" name="lgsm_user" class="form-control" placeholder="e.g. gmodserver">
+            <div class="form-text">Leave blank to use the SSH user</div>
+          </div>
+        </div>
+
+        <div class="d-grid gap-2 mt-3">
+          <button type="submit" name="action" value="add" class="btn btn-primary">
+            <i class="bi bi-hdd-network-fill"></i> Add & Continue
+          </button>
+          <button type="submit" name="action" value="skip" class="btn btn-outline-secondary">
+            <i class="bi bi-skip-forward"></i> Skip — I'll add remotes later
+          </button>
+        </div>
+      </form>
+    </div>
+  </div>
+</div>
+
+<script>
+document.getElementById('auth-method').addEventListener('change', function() {
+  var label = document.getElementById('credential-label');
+  var input = document.querySelector('[name="credential"]');
+  var field = document.getElementById('credential-field');
+  if (this.value === 'password') {
+    field.style.display = '';
+    label.textContent = 'SSH Password';
+    input.placeholder = 'Enter SSH password';
+    input.value = '';
+  } else if (this.value === 'tailscale') {
+    field.style.display = 'none';
+    input.value = '';
+  } else {
+    field.style.display = '';
+    label.textContent = 'SSH Key Path';
+    input.placeholder = '~/.ssh/id_rsa';
+    input.value = '~/.ssh/id_rsa';
+  }
+});
+
+function toggleSetupCreds() {
+  // trigger the same logic from the select's onchange
+  document.getElementById('auth-method').dispatchEvent(new Event('change'));
+}
+</script>
+{% endblock %}

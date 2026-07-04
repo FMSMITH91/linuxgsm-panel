@@ -1,0 +1,210 @@
+{% extends "base.html" %}
+{% block title %}Manage Game Servers{% endblock %}
+{% block content %}
+
+<div class="d-flex justify-content-between align-items-center mb-3">
+  <h1 class="page-title mb-0"><i class="bi bi-plus-circle-fill"></i> Manage Game Servers</h1>
+</div>
+
+<!-- Step 1: Choose where to install -->
+<div class="card mb-3">
+  <div class="card-header">
+    <span class="badge bg-secondary me-2">1</span> Choose Installation Target
+  </div>
+  <div class="card-body">
+    <p class="text-secondary small mb-2">
+      Select which VPS to install the game server on, then choose the game type and start the install.
+      The auto-install process runs in the background — check back after a few minutes.
+    </p>
+    <form method="POST" action="{{ url_for('install_game_server') }}" class="row g-2 align-items-start">
+      <div class="col-md-3">
+        <label class="form-label">Target VPS</label>
+        <select name="remote_id" class="form-select" required>
+          <option value="">Select a VPS...</option>
+          {% for r in remotes %}
+          <option value="{{ r.id }}">{{ r.name }}{% if r.is_local %} (This Machine){% endif %}</option>
+          {% endfor %}
+        </select>
+      </div>
+      <div class="col-md-3">
+        <label class="form-label">Game</label>
+        <select name="game_type" class="form-select" required id="game-type-select" onchange="updatePort()">
+          <option value="">Choose game… ({{ games|length }} supported)</option>
+          {% for g in games %}
+          <option value="{{ g.shortname }}">{{ g.name }}</option>
+          {% endfor %}
+        </select>
+        <div class="form-text">All {{ games|length }} LinuxGSM games — everything is downloaded automatically.</div>
+      </div>
+      <div class="col-md-3">
+        <label class="form-label">Server Name <span class="text-secondary">(optional)</span></label>
+        <input type="text" name="server_name" class="form-control" placeholder="Leave blank for default">
+        <div class="form-text">Sets the Linux user/home name only.</div>
+      </div>
+      <div class="col-md-1">
+        <label class="form-label">Port</label>
+        <input type="number" name="port" class="form-control" id="port-input" value="27015">
+      </div>
+      <div class="col-md-2">
+        <label class="form-label d-none d-md-block">&nbsp;</label>
+        <button type="submit" class="btn btn-success w-100">
+          <i class="bi bi-download"></i> Install
+        </button>
+      </div>
+    </form>
+  </div>
+</div>
+
+<!-- Installed servers -->
+<div class="card">
+  <div class="card-header">
+    <i class="bi bi-list-columns"></i> Installed Game Servers
+  </div>
+  <div class="card-body p-0">
+    {% if all_servers %}
+    <div class="table-responsive">
+      <table class="table table-hover mb-0">
+        <thead>
+          <tr>
+            <th>Name</th>
+            <th>Type</th>
+            <th>Port</th>
+            <th>Status</th>
+            <th>Remote</th>
+            <th>Actions</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for gs in all_servers %}
+          {% set installing = (gs.status == 'installing' and not gs.installed) %}
+          <tr>
+            <td>
+              <strong>{{ gs.name }}</strong>
+              <span class="text-secondary d-block" style="font-size:.7rem;">{{ gs.short_name }}</span>
+            </td>
+            <td>{{ gs.game_display or gs.game_type }}</td>
+            <td><code>{{ gs.port }}</code></td>
+            <td>
+              <span data-server-id="{{ gs.id }}"
+                    class="badge {% if gs.installed %}bg-success{% elif installing %}bg-info text-dark{% else %}bg-warning text-dark{% endif %}">
+                {% if gs.installed %}Installed{% elif installing %}Installing…{% else %}Not installed{% endif %}
+              </span>
+            </td>
+            <td>{{ gs.remote.name if gs.remote else '—' }}</td>
+            <td class="text-nowrap">
+              <a href="{{ url_for('server_detail', server_id=gs.id) }}" class="btn btn-sm btn-outline-secondary" title="View console, send commands, restart server">
+                <i class="bi bi-terminal-fill"></i> Console & Actions
+              </a>
+              <a href="{{ url_for('server_files', server_id=gs.id) }}" class="btn btn-sm btn-outline-secondary" title="Edit config & browse/upload files">
+                <i class="bi bi-folder2-open"></i> Files
+              </a>
+              <form method="POST" action="{{ url_for('uninstall_server', server_id=gs.id) }}" style="display:inline;"
+                    onsubmit="return confirm('Uninstall {{ gs.name }}? This will delete the LinuxGSM user and all data.');">
+                <button type="submit" class="btn btn-sm btn-outline-danger" title="Delete server and all data">
+                  <i class="bi bi-trash"></i> Uninstall
+                </button>
+              </form>
+            </td>
+          </tr>
+          <tr class="install-progress-row" id="install-row-{{ gs.id }}"
+              data-installing="{{ '1' if installing else '0' }}"{% if not installing %} style="display:none;"{% endif %}>
+            <td colspan="6" class="py-2" style="background:rgba(88,166,255,.05);">
+              <div class="d-flex justify-content-between small mb-1">
+                <span class="text-info"><i class="bi bi-gear-fill"></i> <span id="inst-step-{{ gs.id }}">Preparing…</span></span>
+                <span class="text-secondary" id="inst-pct-{{ gs.id }}"></span>
+              </div>
+              <div class="progress" style="height:14px;">
+                <div class="progress-bar progress-bar-striped progress-bar-animated" id="inst-bar-{{ gs.id }}" style="width:0%"></div>
+              </div>
+              <a href="#" class="small text-secondary" style="font-size:.7rem;display:none;" id="inst-dismiss-{{ gs.id }}" onclick="dismissInstall({{ gs.id }});return false;">dismiss</a>
+            </td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+    {% else %}
+    <div class="text-center text-secondary py-4">
+      <span style="font-size:2rem;">📡</span>
+      <p class="mt-2">No game servers installed yet. Choose a game above and click Install.</p>
+    </div>
+    {% endif %}
+  </div>
+</div>
+
+{% endblock %}
+
+{% block scripts %}
+<script>
+// Auto-populate port when game type changes
+var PORTS = {
+  "gmod": 27015, "cs": 27015, "css": 27015, "cs2": 27015,
+  "tf2": 27015, "hl2dm": 27015, "dods": 27015,
+  "cod": 28960, "coduo": 28960, "cod2": 28960,
+  "cod4": 28960, "codwaw": 28960,
+  "mc": 25565, "mcbe": 19132,
+  "rust": 28015, "squad": 28015, "arma3": 2302,
+  "valheim": 2456, "7d2d": 26900,
+  "ts3": 9987,
+};
+function updatePort() {
+  var select = document.getElementById('game-type-select');
+  var port = document.getElementById('port-input');
+  if (PORTS[select.value]) {
+    port.value = PORTS[select.value];
+  }
+}
+
+// Live per-server install progress (step-by-step, mirrors the VPS bootstrap).
+document.addEventListener('DOMContentLoaded', function() {
+  document.querySelectorAll('.install-progress-row[data-installing="1"]').forEach(function(row) {
+    watchInstall(row.id.substring('install-row-'.length));
+  });
+});
+
+var _instTimers = {};
+function watchInstall(id) {
+  if (_instTimers[id]) return;
+  function tick() {
+    fetch(MOUNT + '/api/server/' + id + '/install-status')
+      .then(r => r.json())
+      .then(s => {
+        var row = document.getElementById('install-row-' + id);
+        if (!row) return;
+        if (s.status === 'none') { row.style.display = 'none'; stopInstall(id); return; }
+        row.style.display = '';
+        var step = document.getElementById('inst-step-' + id);
+        var bar = document.getElementById('inst-bar-' + id);
+        var pct = document.getElementById('inst-pct-' + id);
+        var badge = document.querySelector('[data-server-id="' + id + '"]');
+        if (pct) pct.textContent = (s.total ? s.step + '/' + s.total + ' · ' : '') + s.percent + '% · ' + s.elapsed + 's';
+        if (bar) bar.style.width = s.percent + '%';
+        if (s.status === 'done') {
+          bar.className = 'progress-bar bg-success'; bar.style.width = '100%';
+          step.innerHTML = '<i class="bi bi-check-circle-fill text-success"></i> ' + (s.message || 'Installed');
+          if (badge) { badge.className = 'badge bg-success'; badge.textContent = 'Installed'; }
+          var dz = document.getElementById('inst-dismiss-' + id); if (dz) dz.style.display = 'inline';
+          stopInstall(id);
+        } else if (s.status === 'failed') {
+          bar.className = 'progress-bar bg-danger';
+          step.innerHTML = '<i class="bi bi-x-circle-fill text-danger"></i> ' + (s.message || 'Install failed');
+          if (badge) { badge.className = 'badge bg-danger'; badge.textContent = 'Failed'; }
+          var df = document.getElementById('inst-dismiss-' + id); if (df) df.style.display = 'inline';
+          stopInstall(id);
+        } else {
+          step.innerHTML = '<i class="bi bi-gear-fill"></i> ' + s.step_name;
+        }
+      })
+      .catch(function() {});
+  }
+  tick();
+  _instTimers[id] = setInterval(tick, 2500);
+}
+function stopInstall(id) { if (_instTimers[id]) { clearInterval(_instTimers[id]); delete _instTimers[id]; } }
+function dismissInstall(id) {
+  stopInstall(id);
+  var row = document.getElementById('install-row-' + id); if (row) row.style.display = 'none';
+  fetch(MOUNT + '/api/server/' + id + '/install-dismiss', { method: 'POST' }).catch(function() {});
+}
+</script>
+{% endblock %}

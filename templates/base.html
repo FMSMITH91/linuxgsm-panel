@@ -1,0 +1,512 @@
+<!DOCTYPE html>
+<html lang="en" data-bs-theme="dark">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>{{ site_title }} - {% block title %}Dashboard{% endblock %}</title>
+  <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css" rel="stylesheet">
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.3/font/bootstrap-icons.min.css">
+  <style>
+    :root {
+      --sidebar-w: 250px;
+      --bg: #0a0f1a;
+      --bg-card: #111827;
+      --bg-elevated: #1a2332;
+      --border: #1f2937;
+      --text: #d1d5db;
+      --text-muted: #6b7280;
+      --text-heading: #f3f4f6;
+      --accent: #10b981;
+      --accent-hover: #34d399;
+      --accent-glow: rgba(16, 185, 129, .15);
+      --danger: #ef4444;
+      --warning: #f59e0b;
+      --radius: 10px;
+      --radius-sm: 6px;
+      --font-size-base: 0.9375rem;
+      --font-size-sm: 0.8125rem;
+      --font-size-xs: 0.7rem;
+    }
+    * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+    body {
+      background: var(--bg);
+      color: var(--text);
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
+      font-size: 1rem;
+      line-height: 1.6;
+      overflow-x: hidden;
+      min-height: 100vh;
+    }
+    ::-webkit-scrollbar { width: 5px; }
+    ::-webkit-scrollbar-thumb { background: var(--border); border-radius: 3px; }
+
+    /* ── SIDEBAR ── */
+    .sidebar {
+      position: fixed; top: 0; left: 0;
+      width: var(--sidebar-w); height: 100vh;
+      background: var(--bg-card);
+      border-right: 1px solid var(--border);
+      z-index: 100;
+      display: flex; flex-direction: column;
+      padding: 1.25rem 0 1rem;
+      overflow-y: auto;
+      transition: transform .25s cubic-bezier(.4,0,.2,1);
+    }
+    .sidebar-brand {
+      padding: 0 1.25rem 1rem;
+      text-decoration: none;
+      display: flex; align-items: center; gap: .75rem;
+    }
+    .sidebar-brand-icon {
+      width: 38px; height: 38px;
+      background: var(--accent);
+      border-radius: var(--radius-sm);
+      display: flex; align-items: center; justify-content: center;
+      font-size: 1.15rem; flex-shrink: 0;
+    }
+    .sidebar-brand-text { font-weight: 700; font-size: 1.1rem; color: var(--text-heading); line-height: 1.25; }
+    .sidebar-brand-text small { display: block; font-size: .6rem; color: var(--text-muted); font-weight: 500; letter-spacing: .05em; text-transform: uppercase; }
+    .sidebar-section {
+      padding: .9rem 1.25rem .3rem;
+      font-size: .6rem; font-weight: 700;
+      text-transform: uppercase; letter-spacing: .1em;
+      color: var(--text-muted);
+    }
+    .sidebar-nav { list-style: none; margin: 0; padding: 0 .65rem; }
+    .sidebar-nav li { margin-bottom: 1px; }
+    .sidebar-nav a {
+      display: flex; align-items: center; gap: .7rem;
+      padding: .55rem .75rem;
+      border-radius: var(--radius-sm);
+      color: var(--text-muted); text-decoration: none;
+      font-size: .88rem; font-weight: 500;
+      transition: all .15s;
+    }
+    .sidebar-nav a:hover { color: var(--text); background: var(--bg-elevated); }
+    .sidebar-nav a.active {
+      color: var(--text-heading);
+      background: var(--accent-glow);
+      box-shadow: inset 2px 0 0 var(--accent);
+    }
+    .sidebar-nav a i { font-size: 1.05rem; width: 20px; text-align: center; flex-shrink: 0; }
+    .sidebar-footer {
+      margin-top: auto;
+      padding: .75rem 1rem;
+      border-top: 1px solid var(--border);
+    }
+    .sidebar-user { display: flex; align-items: center; gap: .65rem; margin-bottom: .65rem; }
+    .sidebar-user-avatar {
+      width: 34px; height: 34px; border-radius: 50%;
+      background: var(--bg-elevated);
+      border: 1px solid var(--border);
+      display: flex; align-items: center; justify-content: center;
+      font-size: .9rem; color: var(--text-muted); flex-shrink: 0;
+    }
+    .sidebar-user-info strong { display: block; font-size: .85rem; color: var(--text-heading); line-height: 1.3; }
+    .sidebar-user-info span { font-size: .68rem; color: var(--text-muted); }
+
+    /* ── TOP BAR (mobile) ── */
+    .topbar {
+      display: none;
+      position: fixed; top: 0; left: 0; right: 0;
+      height: 54px;
+      background: var(--bg-card);
+      border-bottom: 1px solid var(--border);
+      z-index: 200;
+      align-items: center; gap: .5rem;
+      padding: 0 .75rem;
+    }
+    .hamburger {
+      background: none; border: none; color: var(--text);
+      font-size: 1.4rem; padding: .3rem;
+      cursor: pointer; margin-right: .25rem;
+      width: 40px; height: 40px;
+      display: flex; align-items: center; justify-content: center;
+      border-radius: var(--radius-sm);
+    }
+    .hamburger:active { background: var(--bg-elevated); }
+    .topbar-title {
+      font-weight: 700; font-size: 1rem;
+      color: var(--text-heading); text-decoration: none;
+    }
+    .sidebar-backdrop {
+      display: none; position: fixed; inset: 0;
+      background: rgba(0,0,0,.6);
+      z-index: 99;
+    }
+    .sidebar-backdrop.show { display: block; }
+
+    /* ── MAIN ── */
+    .main-content {
+      margin-left: var(--sidebar-w);
+      padding: 2rem 2.5rem;
+      min-height: 100vh;
+    }
+
+    /* ── CARDS ── */
+    .card {
+      background: var(--bg-card);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      margin-bottom: 1rem;
+    }
+    .card-header {
+      background: var(--bg-elevated);
+      border-bottom: 1px solid var(--border);
+      padding: .85rem 1.25rem;
+      font-weight: 600; font-size: .9rem;
+      color: var(--text-heading);
+      border-radius: var(--radius) var(--radius) 0 0 !important;
+      display: flex; align-items: center; gap: .5rem;
+    }
+    .card-header i { color: var(--text-muted); }
+    .card-body { padding: 1.25rem; }
+    .card-footer {
+      background: var(--bg-elevated);
+      border-top: 1px solid var(--border);
+      padding: .85rem 1.25rem;
+      border-radius: 0 0 var(--radius) var(--radius) !important;
+    }
+    .card + .card { margin-top: 0; }
+
+    /* ── BUTTONS ── */
+    .btn {
+      font-weight: 500; font-size: .85rem;
+      padding: .5rem 1rem; border-radius: var(--radius-sm);
+      transition: all .15s;
+      display: inline-flex; align-items: center; gap: .4rem;
+      white-space: nowrap;
+    }
+    .btn-sm { font-size: .8rem; padding: .4rem .75rem; }
+    .btn-primary { background: var(--accent); border-color: var(--accent); }
+    .btn-primary:hover { background: var(--accent-hover); border-color: var(--accent-hover); box-shadow: 0 0 0 3px var(--accent-glow); }
+    .btn-outline-secondary {
+      border-color: var(--border); color: var(--text); background: transparent;
+    }
+    .btn-outline-secondary:hover { background: var(--bg-elevated); border-color: var(--text-muted); color: var(--text-heading); }
+    .btn-danger { background: var(--danger); border-color: var(--danger); }
+    .btn-danger:hover { background: #dc2626; border-color: #dc2626; }
+    .btn-warning { background: var(--warning); border-color: var(--warning); color: #000; }
+
+    /* ── TABLES ── */
+    .table { color: var(--text); margin-bottom: 0; }
+    .table thead th {
+      background: var(--bg-elevated);
+      border-color: var(--border);
+      color: var(--text-muted);
+      font-size: .7rem; font-weight: 700;
+      text-transform: uppercase; letter-spacing: .06em;
+      padding: .65rem .9rem;
+      white-space: nowrap;
+    }
+    .table td {
+      border-color: var(--border);
+      padding: .65rem .9rem;
+      vertical-align: middle;
+      font-size: .88rem;
+    }
+    .table-hover tbody tr:hover { background: var(--bg-elevated); }
+    .table-responsive { margin-bottom: 0; }
+
+    /* ── FORMS ── */
+    .form-label { font-size: .82rem; font-weight: 600; color: var(--text-muted); margin-bottom: .3rem; }
+    .form-control, .form-select {
+      background: var(--bg); border: 1px solid var(--border);
+      color: var(--text); font-size: .9rem;
+      padding: .55rem .8rem;
+      border-radius: var(--radius-sm);
+      transition: all .15s;
+    }
+    .form-control:focus, .form-select:focus {
+      background: var(--bg); border-color: var(--accent);
+      color: var(--text-heading);
+      box-shadow: 0 0 0 3px var(--accent-glow);
+    }
+    .form-control-sm { font-size: .85rem; padding: .4rem .65rem; }
+    .form-check-input:checked { background-color: var(--accent); border-color: var(--accent); }
+    .form-text { color: var(--text-muted); font-size: .73rem; }
+
+    /* ── BADGES ── */
+    .badge { font-weight: 600; font-size: .7rem; padding: .3em .65em; border-radius: 4px; letter-spacing: .02em; }
+    .badge.bg-success { background: var(--accent) !important; }
+    .badge.bg-danger { background: var(--danger) !important; }
+    .badge.bg-warning { background: var(--warning) !important; }
+
+    /* ── MODALS ── */
+    .modal-content { background: var(--bg-card); border: 1px solid var(--border); border-radius: var(--radius); }
+    .modal-header { border-bottom: 1px solid var(--border); padding: 1rem 1.25rem; }
+    .modal-header .modal-title { font-size: 1rem; font-weight: 600; color: var(--text-heading); }
+    .modal-body { padding: 1.25rem; }
+    .modal-footer { border-top: 1px solid var(--border); padding: .75rem 1.25rem; }
+
+    /* ── CONSOLE ── */
+    .console-output {
+      background: #080d17;
+      border: 1px solid var(--border);
+      border-radius: var(--radius-sm);
+      font-family: 'JetBrains Mono', 'SF Mono', 'Fira Code', 'Consolas', monospace;
+      font-size: .78rem; padding: 1rem;
+      width: 100%; box-sizing: border-box;
+      max-height: 520px; min-height: 340px; overflow-y: auto;
+      /* NOTE: keep this "normal" — the console is built from <div class="console-line">
+         children, and pre-wrap here would render the template's own newlines/indentation
+         between those divs as blank lines. Per-line wrapping lives on .console-line. */
+      white-space: normal;
+      color: #9caec9;
+      line-height: 1.5;
+    }
+    .console-line { white-space: pre-wrap; word-break: break-all; }
+    .console-line:empty { display: none; }
+
+    /* ── LIVE STAT TILES ── */
+    .stat-tile {
+      background: #0d1420; border: 1px solid var(--border);
+      border-radius: var(--radius-sm); padding: .6rem .8rem; height: 100%;
+    }
+    .stat-label { font-size: .66rem; text-transform: uppercase; letter-spacing: .04em; color: #8b98a5; }
+    .stat-val { font-size: 1.3rem; font-weight: 700; color: var(--text-heading); line-height: 1.25; }
+    .stat-sub { font-size: .68rem; color: #6e7b8a; }
+    .connect-pill {
+      display: inline-flex; align-items: center; gap: .4rem;
+      background: #0d1420; border: 1px solid var(--border);
+      border-radius: 999px; padding: .25rem .75rem; font-family: monospace;
+    }
+
+    /* ── PER-CORE CPU BARS ── */
+    .cpu-cores-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 5px 14px; }
+    .core-row { display: flex; align-items: center; gap: 6px; }
+    .core-label { font-size: .66rem; color: #8b98a5; width: 42px; flex-shrink: 0; font-family: monospace; }
+    .core-track { flex: 1; height: 8px; background: #0d1420; border: 1px solid var(--border); border-radius: 4px; overflow: hidden; }
+    /* MUST be display:block — an inline <span> ignores width/height, so the fill
+       would never render or animate. */
+    .core-fill { display: block; height: 100%; width: 0; border-radius: 4px; transition: width .5s ease, background-color .5s ease; }
+    .core-val { font-size: .66rem; color: #c9d1d9; width: 34px; text-align: right; flex-shrink: 0; font-variant-numeric: tabular-nums; }
+
+    /* ── STATUS DOTS ── */
+    .status-dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; margin-right: 5px; box-shadow: 0 0 6px currentColor; }
+    .status-online { background: var(--accent); color: var(--accent); }
+    .status-offline { background: var(--danger); color: var(--danger); }
+    .status-unknown { background: var(--warning); color: var(--warning); }
+
+    /* ── FLASH ── */
+    .flash-container {
+      position: fixed; top: .75rem; right: .75rem;
+      z-index: 9999; width: 340px;
+      max-width: calc(100vw - 1.5rem);
+    }
+    .alert {
+      border: 1px solid var(--border); border-radius: var(--radius-sm);
+      font-size: .85rem; padding: .7rem 1rem;
+      box-shadow: 0 4px 20px rgba(0,0,0,.5);
+      margin-bottom: .5rem;
+    }
+
+    /* ── TYPOGRAPHY ── */
+    a { color: var(--accent); text-decoration: none; }
+    a:hover { color: var(--accent-hover); }
+    hr { border-color: var(--border); opacity: 1; margin: 1rem 0; }
+    .page-title {
+      font-size: 1.35rem; font-weight: 700;
+      color: var(--text-heading);
+      display: flex; align-items: center; gap: .5rem;
+      margin-bottom: 1.25rem;
+    }
+    .page-title i { color: var(--text-muted); }
+    code { font-size: .85rem; color: var(--text); background: var(--bg-elevated); padding: .1rem .3rem; border-radius: 3px; }
+    pre { font-size: .8rem; background: var(--bg); border: 1px solid var(--border); border-radius: var(--radius-sm); padding: .85rem; }
+    .setup-card { max-width: 480px; margin: 4rem auto; }
+    .empty-state { text-align: center; padding: 4rem 1.5rem; }
+    .empty-state-icon { font-size: 3rem; margin-bottom: 1rem; opacity: .4; }
+    .empty-state h5 { color: var(--text-heading); font-size: 1.15rem; margin-bottom: .5rem; }
+    .empty-state p { color: var(--text-muted); font-size: .9rem; max-width: 420px; margin: 0 auto; }
+
+    /* ── PAGINATION ── */
+    .pagination .page-link { background: var(--bg-card); border-color: var(--border); color: var(--text); padding: .4rem .8rem; font-size: .85rem; }
+    .pagination .page-item.active .page-link { background: var(--accent); border-color: var(--accent); }
+
+    /* ── STAT CARDS ── */
+    .stat-card { text-align: center; padding: 1.35rem .75rem; }
+    .stat-value { font-size: 1.75rem; font-weight: 700; color: var(--text-heading); line-height: 1.2; }
+    .stat-label { font-size: .75rem; color: var(--text-muted); margin-top: .25rem; font-weight: 500; }
+
+    /* ── RESPONSIVE ── */
+    @media (max-width: 991.98px) {
+      .main-content { padding: 1.5rem; }
+    }
+    @media (max-width: 767.98px) {
+      .sidebar { transform: translateX(-100%); width: 280px; }
+      .sidebar.open { transform: translateX(0); box-shadow: 8px 0 40px rgba(0,0,0,.7); }
+      .topbar { display: flex; }
+      .main-content {
+        margin-left: 0; margin-top: 54px;
+        padding: 1rem;
+      }
+      .page-title { font-size: 1.15rem; margin-bottom: 1rem; }
+      .card-header { padding: .7rem 1rem; font-size: .85rem; }
+      .card-body { padding: 1rem; }
+      .card-footer { padding: .7rem 1rem; }
+      .table thead th { font-size: .65rem; padding: .45rem .5rem; }
+      .table td { font-size: .8rem; padding: .45rem .5rem; }
+      .stat-value { font-size: 1.4rem; }
+      .row { --bs-gutter-x: .75rem; }
+      .btn { font-size: .8rem; padding: .45rem .8rem; }
+      .btn-sm { font-size: .75rem; padding: .35rem .6rem; }
+      .setup-card { margin: 2rem auto; }
+      .flash-container { top: 60px; right: .5rem; width: 280px; }
+      .empty-state { padding: 3rem 1rem; }
+      .empty-state-icon { font-size: 2.5rem; }
+      .modal-body { padding: 1rem; }
+      .form-control, .form-select { font-size: .85rem; padding: .5rem .7rem; }
+    }
+    @media (min-width: 768px) {
+      .sidebar { transform: none !important; }
+      .topbar { display: none; }
+      .hamburger { display: none; }
+    }
+  </style>
+</head>
+<body>
+
+{% if current_user.is_authenticated %}
+<!-- Mobile topbar -->
+<div class="topbar">
+  <button class="hamburger" id="hamburger" onclick="toggleSidebar()" aria-label="Menu">
+    <i class="bi bi-list"></i>
+  </button>
+  <a href="{{ url_for('index') }}" class="topbar-title">LinuxGSM</a>
+</div>
+
+<!-- Sidebar backdrop -->
+<div class="sidebar-backdrop" id="sidebar-backdrop" onclick="toggleSidebar()"></div>
+
+<!-- Sidebar -->
+<nav class="sidebar" id="sidebar">
+  <a href="{{ url_for('index') }}" class="sidebar-brand">
+    <div class="sidebar-brand-icon">🎮</div>
+    <div class="sidebar-brand-text">
+      LinuxGSM
+      <small>Server Panel</small>
+    </div>
+  </a>
+
+  <div class="sidebar-section">Overview</div>
+  <ul class="sidebar-nav">
+    <li><a href="{{ url_for('index') }}" class="{% if request.path == url_for('index') %}active{% endif %}">
+      <i class="bi bi-speedometer2"></i> Dashboard</a></li>
+  </ul>
+
+  <div class="sidebar-section">Servers</div>
+  <ul class="sidebar-nav">
+    <li><a href="{{ url_for('index') }}" class="{% if request.path.startswith('/server/') %}active{% endif %}">
+      <i class="bi bi-hdd-stack"></i> Game Servers</a></li>
+    {% if has_permission('manage_servers') or has_permission('install_server') %}
+    <li><a href="{{ url_for('manage_servers') }}" class="{% if request.path == url_for('manage_servers') %}active{% endif %}">
+      <i class="bi bi-plus-circle"></i> Manage Servers</a></li>
+    {% endif %}
+  </ul>
+
+  <div class="sidebar-section">Infrastructure</div>
+  <ul class="sidebar-nav">
+    {% if has_permission('manage_remotes') %}
+    <li><a href="{{ url_for('manage_remotes') }}" class="{% if request.path == url_for('manage_remotes') %}active{% endif %}">
+      <i class="bi bi-hdd-network"></i> Remote Servers</a></li>
+    {% endif %}
+    <li><a href="{{ url_for('tailscale_page') }}" class="{% if request.path == url_for('tailscale_page') %}active{% endif %}">
+      <i class="bi bi-wifi"></i> Tailscale</a></li>
+  </ul>
+
+  {% if current_user.is_superadmin or has_permission('manage_remotes') %}
+  <div class="sidebar-section">System</div>
+  <ul class="sidebar-nav">
+    {% if current_user.is_superadmin %}
+    <li><a href="{{ url_for('server_management') }}" class="{% if request.path == url_for('server_management') %}active{% endif %}">
+      <i class="bi bi-sliders2"></i> Panel Server</a></li>
+    {% endif %}
+    {% for r in nav_remotes %}
+    <li><a href="{{ url_for('remote_manage', remote_id=r.id) }}" class="{% if request.path == url_for('remote_manage', remote_id=r.id) %}active{% endif %}">
+      <i class="bi bi-hdd-network-fill"></i> {{ r.name }}</a></li>
+    {% endfor %}
+  </ul>
+  {% endif %}
+
+  <div class="sidebar-section">Administration</div>
+  <ul class="sidebar-nav">
+    {% if has_permission('manage_users') %}
+    <li><a href="{{ url_for('manage_users') }}" class="{% if request.path == url_for('manage_users') %}active{% endif %}">
+      <i class="bi bi-people"></i> Users</a></li>
+    {% endif %}
+    {% if has_permission('manage_groups') %}
+    <li><a href="{{ url_for('manage_groups') }}" class="{% if request.path == url_for('manage_groups') %}active{% endif %}">
+      <i class="bi bi-shield-check"></i> Groups & Permissions</a></li>
+    {% endif %}
+    {% if has_permission('view_logs') %}
+    <li><a href="{{ url_for('view_logs') }}" class="{% if request.path == url_for('view_logs') %}active{% endif %}">
+      <i class="bi bi-journal-text"></i> Audit Logs</a></li>
+    {% endif %}
+  </ul>
+
+  <div class="sidebar-footer">
+    <div class="sidebar-user">
+      <div class="sidebar-user-avatar"><i class="bi bi-person"></i></div>
+      <div class="sidebar-user-info">
+        <strong>{{ current_user.display_name or current_user.username }}</strong>
+        <span>{% if current_user.is_superadmin %}Super Admin{% else %}User{% endif %}</span>
+      </div>
+    </div>
+    <a href="{{ url_for('logout') }}" class="btn btn-outline-secondary btn-sm w-100"><i class="bi bi-box-arrow-right"></i> Sign Out</a>
+  </div>
+</nav>
+{% endif %}
+
+<!-- Flash messages -->
+<div class="flash-container">
+  {% with messages = get_flashed_messages(with_categories=true) %}
+    {% if messages %}
+      {% for category, message in messages %}
+      <div class="alert alert-{{ category }} alert-dismissible fade show" role="alert">
+        {{ message }}
+        <button type="button" class="btn-close btn-close-white" data-bs-dismiss="alert" style="font-size: .7rem;"></button>
+      </div>
+      {% endfor %}
+    {% endif %}
+  {% endwith %}
+</div>
+
+<!-- Main content -->
+<main class="main-content">
+  {% block content %}{% endblock %}
+</main>
+
+<script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/socket.io/4.7.5/socket.io.min.js"></script>
+<script>
+// Mount prefix (e.g. "/lgsm" when served behind Tailscale Serve). Every client-side
+// fetch()/socket.io URL must include it, or the request hits the site root — a
+// different app. Server-rendered links use url_for and already include it.
+window.MOUNT = "{{ mount_prefix if mount_prefix and mount_prefix != '/' else '' }}";
+</script>
+<script>
+setTimeout(function() {
+  document.querySelectorAll('.alert-dismissible').forEach(function(el) {
+    try { bootstrap.Alert.getOrCreateInstance(el).close(); } catch(e) {}
+  });
+}, 6000);
+
+function toggleSidebar() {
+  document.getElementById('sidebar').classList.toggle('open');
+  document.getElementById('sidebar-backdrop').classList.toggle('show');
+}
+document.addEventListener('DOMContentLoaded', function() {
+  document.querySelectorAll('.sidebar-nav a').forEach(function(link) {
+    link.addEventListener('click', function() {
+      if (window.innerWidth < 768) {
+        document.getElementById('sidebar').classList.remove('open');
+        document.getElementById('sidebar-backdrop').classList.remove('show');
+      }
+    });
+  });
+});
+</script>
+{% block scripts %}{% endblock %}
+</body>
+</html>

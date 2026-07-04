@@ -1,0 +1,192 @@
+"""Database models for LinuxGSM Panel."""
+import uuid
+from datetime import datetime
+from flask_login import UserMixin
+from flask_sqlalchemy import SQLAlchemy
+
+db = SQLAlchemy()
+
+# Association table: group -> permission strings
+group_permissions = db.Table(
+    "group_permissions",
+    db.Column("group_id", db.Integer, db.ForeignKey("group.id"), primary_key=True),
+    db.Column("permission", db.String(128), primary_key=True),
+)
+
+# Association table: group -> accessible servers
+group_servers = db.Table(
+    "group_servers",
+    db.Column("group_id", db.Integer, db.ForeignKey("group.id"), primary_key=True),
+    db.Column("server_id", db.Integer, db.ForeignKey("remote_server.id"), primary_key=True),
+)
+
+
+class User(UserMixin, db.Model):
+    id = db.Column(db.Integer, primary_key=True)
+    username = db.Column(db.String(80), unique=True, nullable=False, index=True)
+    password_hash = db.Column(db.String(256), nullable=False)
+    email = db.Column(db.String(120), unique=True, nullable=True)
+    display_name = db.Column(db.String(120), default="")
+    is_superadmin = db.Column(db.Boolean, default=False)
+    is_active = db.Column(db.Boolean, default=True)
+    created_at = db.Column(db.DateTime, default=datetime.utcnow)
+    last_login = db.Column(db.DateTime, nullable=True)
+    api_token = db.Column(db.String(64), unique=True, nullable=True)
+    groups = db.relationship("Group", secondary="user_groups", back_populates="users")
+
+
+user_groups = db.Table(
+    "user_groups",
+    db.Column("user_id", db.Integer, db.ForeignKey("user.id"), primary_key=True),
+    db.Column("group_id", db.Integer, db.ForeignKey("group.id"), primary_key=True),
+)
+
+
+class Group(db.Model):
+    id = db.Column(db.Integer, primary_key=True)
+    name = db.Column(db.String(80), unique=True, nullable=False)
+    description = db.Column(db.String(256), default="")
+    is_default = db.Column(db.Boolean, default=False)
+    created_at = db.Column(db.DateTime, default=datetime.utcnow)
+    users = db.relationship("User", secondary=user_groups, back_populates="groups")
+    servers = db.relationship("RemoteServer", secondary=group_servers, back_populates="groups")
+    permissions = db.Column(db.Text, default="[]")  # JSON list of permission strings
+
+    def get_permissions(self):
+        import json
+        return set(json.loads(self.permissions or "[]"))
+
+    def set_permissions(self, perms):
+        import json
+        self.permissions = json.dumps(list(perms))
+
+    def has_permission(self, perm):
+        return perm in self.get_permissions()
+
+
+class RemoteServer(db.Model):
+    """A remote VPS running LinuxGSM servers."""
+    id = db.Column(db.Integer, primary_key=True)
+    name = db.Column(db.String(120), nullable=False)
+    host = db.Column(db.String(255), nullable=False)
+    port = db.Column(db.Integer, default=22)
+    username = db.Column(db.String(64), nullable=False)
+    auth_method = db.Column(db.String(16), default="key")  # key, password, tailscale, or local
+    auth_credential = db.Column(db.Text, default="")  # password or key path
+    sudo_enabled = db.Column(db.Boolean, default=False)
+    linuxgsm_user = db.Column(db.String(64), default="")  # LinuxGSM user account on remote
+    is_local = db.Column(db.Boolean, default=False)  # True = this machine, run commands locally
+    public_ip = db.Column(db.String(45), default="")  # cached public IP (for connect address)
+    is_online = db.Column(db.Boolean, default=False)
+    last_seen = db.Column(db.DateTime, nullable=True)
+    created_at = db.Column(db.DateTime, default=datetime.utcnow)
+    groups = db.relationship("Group", secondary=group_servers, back_populates="servers")
+    games = db.relationship("GameServer", back_populates="remote", cascade="all, delete-orphan")
+
+
+class GameServer(db.Model):
+    """A single game server instance managed by LinuxGSM."""
+    id = db.Column(db.Integer, primary_key=True)
+    remote_id = db.Column(db.Integer, db.ForeignKey("remote_server.id"), nullable=False)
+    name = db.Column(db.String(120), nullable=False)
+    short_name = db.Column(db.String(64), nullable=False)  # e.g. "gmodserver"
+    game_type = db.Column(db.String(64), nullable=False)  # e.g. "gmod", "mc", "cod"
+    game_display = db.Column(db.String(120), default="")
+    port = db.Column(db.Integer, nullable=False)
+    query_port = db.Column(db.Integer, nullable=True)
+    status = db.Column(db.String(32), default="offline")
+    installed = db.Column(db.Boolean, default=False)
+    autostart = db.Column(db.Boolean, default=True)
+    daily_restart = db.Column(db.Boolean, default=False)  # daily restart when empty of players
+    commands = db.Column(db.Text, default="[]")  # JSON list of {cmd, short, desc} from LinuxGSM
+    created_at = db.Column(db.DateTime, default=datetime.utcnow)
+    remote = db.relationship("RemoteServer", back_populates="games")
+
+    def get_commands(self):
+        import json
+        try:
+            return json.loads(self.commands or "[]")
+        except (ValueError, TypeError):
+            return []
+
+    def set_commands(self, cmds):
+        import json
+        self.commands = json.dumps(cmds)
+
+    # Alias for compatibility
+    @property
+    def server_type(self):
+        return self.game_type
+
+    @property
+    def server_user(self):
+        return self.short_name
+
+    @property
+    def lgsm_name(self):
+        """The LinuxGSM script/instance name — ALWAYS '{game_type}server' (e.g.
+        'codserver'), regardless of the custom instance name. Only the Ubuntu user
+        (short_name) is renamed; the LinuxGSM command stays canonical, otherwise
+        LinuxGSM can't find its game data."""
+        return f"{self.game_type}server"
+
+    @property
+    def server_script(self):
+        return f"/home/{self.short_name}/{self.lgsm_name}"
+
+    @property
+    def console_log(self):
+        """LinuxGSM console log path: /home/<user>/log/console/<lgsm_name>-console.log
+        (the file is named after the script/selfname, not the user)."""
+        return f"/home/{self.short_name}/log/console/{self.lgsm_name}-console.log"
+
+
+class AuditLog(db.Model):
+    id = db.Column(db.Integer, primary_key=True)
+    user_id = db.Column(db.Integer, db.ForeignKey("user.id"), nullable=True)
+    username = db.Column(db.String(80), default="")
+    action = db.Column(db.String(128), nullable=False)
+    target = db.Column(db.String(255), default="")
+    detail = db.Column(db.Text, default="")
+    ip_address = db.Column(db.String(45), default="")
+    timestamp = db.Column(db.DateTime, default=datetime.utcnow, index=True)
+    success = db.Column(db.Boolean, default=True)
+
+
+class SetupState(db.Model):
+    """Tracks multi-step setup progress."""
+    id = db.Column(db.Integer, primary_key=True)
+    step = db.Column(db.String(64), default="welcome")
+    complete = db.Column(db.Boolean, default=False)
+    data = db.Column(db.Text, default="{}")  # JSON blob
+
+
+def _run_light_migrations():
+    """Add columns that may be missing on databases created by older versions.
+    SQLAlchemy's create_all() never ALTERs existing tables, so do it by hand."""
+    from sqlalchemy import inspect, text
+    insp = inspect(db.engine)
+    existing = {t: {c["name"] for c in insp.get_columns(t)} for t in insp.get_table_names()}
+    wanted = {
+        ("game_server", "commands"): "ALTER TABLE game_server ADD COLUMN commands TEXT DEFAULT '[]'",
+        ("game_server", "daily_restart"): "ALTER TABLE game_server ADD COLUMN daily_restart BOOLEAN DEFAULT 0",
+        ("remote_server", "public_ip"): "ALTER TABLE remote_server ADD COLUMN public_ip VARCHAR(45) DEFAULT ''",
+    }
+    for (table, col), ddl in wanted.items():
+        if table in existing and col not in existing[table]:
+            db.session.execute(text(ddl))
+    db.session.commit()
+
+
+def init_db(app):
+    db.init_app(app)
+    with app.app_context():
+        db.create_all()
+        _run_light_migrations()
+        # Create default group if not exists
+        default_group = Group.query.filter_by(name="Everyone").first()
+        if not default_group:
+            default_group = Group(name="Everyone", description="All authenticated users", is_default=True)
+            default_group.set_permissions({"view_servers", "view_console"})
+            db.session.add(default_group)
+            db.session.commit()

@@ -1,0 +1,380 @@
+{% extends "base.html" %}
+{% block title %}Tailscale Networking{% endblock %}
+{% block content %}
+
+<div class="d-flex justify-content-between align-items-center mb-3">
+  <h1 class="page-title mb-0"><i class="bi bi-wifi"></i> Tailscale Networking</h1>
+  <a href="{{ url_for('tailscale_page', refresh='1') }}" class="btn btn-outline-secondary btn-sm">
+    <i class="bi bi-arrow-repeat"></i> Refresh
+  </a>
+</div>
+
+{% if not info.installed %}
+<div class="card mb-3">
+  <div class="card-body text-center py-5">
+    <span style="font-size: 3rem;">📡</span>
+    <h5 class="mt-3">Tailscale Not Installed</h5>
+    <p class="text-secondary">
+      Tailscale is not installed on this server. Install it to access the panel securely
+      over your private tailnet without opening firewall ports.
+    </p>
+    <a href="https://tailscale.com/download" target="_blank" class="btn btn-primary">
+      <i class="bi bi-box-arrow-up-right"></i> Install Tailscale
+    </a>
+  </div>
+</div>
+{% else %}
+
+<!-- Status Card -->
+<div class="row mb-3">
+  <div class="col-md-4">
+    <div class="card text-center p-3">
+      <div class="h4 mb-1">
+        {% if info.running %}
+          <span class="status-dot status-online" style="width:12px;height:12px;"></span> Online
+        {% else %}
+          <span class="status-dot status-offline" style="width:12px;height:12px;"></span> Offline
+        {% endif %}
+      </div>
+      <div class="text-secondary small">Daemon Status</div>
+    </div>
+  </div>
+  <div class="col-md-4">
+    <div class="card text-center p-3">
+      <div class="h4 mb-1">
+        {{ info.tailscale_ips|length }}
+      </div>
+      <div class="text-secondary small">Tailscale IPs</div>
+    </div>
+  </div>
+  <div class="col-md-4">
+    <div class="card text-center p-3">
+      <div class="h4 mb-1">{{ info.peers|length }}</div>
+      <div class="text-secondary small">Connected Peers</div>
+    </div>
+  </div>
+</div>
+
+<div class="row">
+  <!-- Left column: Node info -->
+  <div class="col-md-6 mb-3">
+    <!-- Node Details -->
+    <div class="card mb-3">
+      <div class="card-header"><i class="bi bi-info-circle-fill"></i> Node Details</div>
+      <div class="card-body p-0">
+        <table class="table table-borderless table-sm mb-0">
+          <tr>
+            <td class="text-secondary ps-3" style="width:120px;">Hostname</td>
+            <td><code>{{ info.hostname }}</code></td>
+          </tr>
+          <tr>
+            <td class="text-secondary ps-3">Version</td>
+            <td>{{ info.version or '—' }}</td>
+          </tr>
+          <tr>
+            <td class="text-secondary ps-3">DNS Name</td>
+            <td>
+              {% if info.dns_name %}
+                <code>{{ info.dns_name }}</code>
+                <span class="badge bg-success">MagicDNS</span>
+              {% else %}
+                <span class="text-secondary">Not configured</span>
+              {% endif %}
+            </td>
+          </tr>
+          <tr>
+            <td class="text-secondary ps-3">IP Addresses</td>
+            <td>
+              {% for ip in info.tailscale_ips %}
+                <code>{{ ip }}</code>{% if not loop.last %}<br>{% endif %}
+              {% else %}
+                <span class="text-secondary">—</span>
+              {% endfor %}
+            </td>
+          </tr>
+          <tr>
+            <td class="text-secondary ps-3">Accept Routes</td>
+            <td>{{ "Yes" if info.accept_routes else "No" }}</td>
+          </tr>
+          <tr>
+            <td class="text-secondary ps-3">Funnel</td>
+            <td>
+              {% if info.funnel_enabled %}
+                <span class="badge bg-warning text-dark">Enabled</span>
+              {% else %}
+                <span class="badge bg-secondary">Disabled</span>
+              {% endif %}
+            </td>
+          </tr>
+        </table>
+      </div>
+    </div>
+
+    <!-- Peer Reachability Checker -->
+    <div class="card mb-3">
+      <div class="card-header"><i class="bi bi-plug"></i> Peer Reachability Check</div>
+      <div class="card-body">
+        <p class="text-secondary small mb-2">
+          Check if a remote host is reachable on the tailnet before adding it as a remote VPS.
+        </p>
+        <div class="input-group mb-2">
+          <input type="text" id="peer-host" class="form-control" placeholder="100.x.x.x or hostname"
+                 value="{{ config.get('site_domain', '') }}">
+          <button class="btn btn-primary" onclick="checkPeer()">
+            <i class="bi bi-search"></i> Ping
+          </button>
+        </div>
+        <div id="peer-result" class="small"></div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Right column: Serve/Funnel + Suggestion -->
+  <div class="col-md-6 mb-3">
+    <!-- Access Suggestion -->
+    <div class="card mb-3">
+      <div class="card-header">
+        <i class="bi bi-compass"></i> Recommended Access
+      </div>
+      <div class="card-body">
+        <p class="text-secondary small mb-2">
+          Based on your Tailscale status, here's the recommended way to reach the panel:
+        </p>
+        <div class="bg-dark p-3 rounded-3 mb-2">
+          <strong class="d-block small text-secondary mb-1">Method</strong>
+          <span class="badge bg-info text-dark text-uppercase mb-2">{{ suggestion.method }}</span>
+          <p class="small mb-1">{{ suggestion.description }}</p>
+          {% if suggestion.url %}
+          <a href="{{ suggestion.url }}" target="_blank" class="small">
+            <i class="bi bi-box-arrow-up-right"></i> {{ suggestion.url }}
+          </a>
+          {% endif %}
+        </div>
+
+        {% if not config.tailscale_setup_done and info.running %}
+        <form id="serve-form" class="mt-2">
+          <p class="text-secondary small mb-2">
+            Auto-configure Tailscale Serve to expose the panel on your tailnet:
+          </p>
+          <div class="d-flex gap-2 align-items-end">
+            <div class="flex-grow-1">
+              <label class="form-label small">Mount Point</label>
+              <input type="text" name="mount" class="form-control form-control-sm" value="/">
+            </div>
+            <div class="form-check mb-2">
+              <input type="checkbox" id="funnel-check" class="form-check-input">
+              <label class="form-check-label small" for="funnel-check">Funnel (public)</label>
+            </div>
+            <button type="button" class="btn btn-success btn-sm" onclick="enableServe()">
+              <i class="bi bi-wifi"></i> Enable Serve
+            </button>
+          </div>
+        </form>
+        {% endif %}
+      </div>
+    </div>
+
+    <!-- Serve Config Status -->
+    <div class="card">
+      <div class="card-header d-flex justify-content-between align-items-center">
+        <span><i class="bi bi-hdd-stack"></i> Serve Configuration</span>
+        {% if info.running and info.serve_config and info.serve_config.get('services') %}
+        <button class="btn btn-outline-danger btn-sm" onclick="disableServe()">
+          <i class="bi bi-x-circle"></i> Disable
+        </button>
+        {% endif %}
+      </div>
+      <div class="card-body p-0">
+        {% if info.serve_config and info.serve_config.get('services') %}
+        <table class="table table-sm mb-0">
+          <thead>
+            <tr>
+              <th>URL</th>
+              <th>Funnel</th>
+              <th>Routes</th>
+            </tr>
+          </thead>
+          <tbody>
+            {% for svc in info.serve_config.services %}
+            <tr>
+              <td><code class="small">{{ svc.url }}</code></td>
+              <td>
+                {% if svc.funnel %}
+                  <span class="badge bg-warning text-dark">Yes</span>
+                {% else %}
+                  <span class="badge bg-secondary">No</span>
+                {% endif %}
+              </td>
+              <td>
+                {% for route in svc.routes %}
+                  <div class="small">
+                    <code>{{ route.mount }}</code> → <code>{{ route.target }}</code>
+                  </div>
+                {% endfor %}
+              </td>
+            </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+        {% else %}
+        <div class="p-3 text-center text-secondary small">
+          {% if info.running %}
+            No Serve routes configured yet.
+          {% else %}
+            Tailscale is not running.
+          {% endif %}
+        </div>
+        {% endif %}
+      </div>
+    </div>
+
+    <!-- Peers List -->
+    <div class="card mt-3">
+      <div class="card-header"><i class="bi bi-people-fill"></i> Tailnet Peers ({{ info.peers|length }})</div>
+      <div class="card-body p-0">
+        {% if info.peers %}
+        <div class="table-responsive">
+          <table class="table table-sm table-hover mb-0">
+            <thead>
+              <tr>
+                <th>Hostname</th>
+                <th>IP</th>
+                <th>OS</th>
+                <th>Status</th>
+                <th>Last Seen</th>
+              </tr>
+            </thead>
+            <tbody>
+              {% for peer in info.peers[:20] %}
+              <tr>
+                <td>
+                  <strong>{{ peer.hostname }}</strong>
+                  <span class="d-block text-secondary" style="font-size:.7rem;">{{ peer.dns_name }}</span>
+                </td>
+                <td><code class="small">{{ peer.ips[0] if peer.ips else '—' }}</code></td>
+                <td><span class="small">{{ peer.os }}</span></td>
+                <td>
+                  {% if peer.online %}
+                    <span class="status-dot status-online"></span> Online
+                  {% else %}
+                    <span class="status-dot status-offline"></span> Offline
+                  {% endif %}
+                </td>
+                <td class="text-secondary small" style="font-size:.65rem;">
+                  {% if peer.last_seen %}
+                    {{ peer.last_seen[:19] }}
+                  {% else %}
+                    —
+                  {% endif %}
+                </td>
+              </tr>
+              {% endfor %}
+            </tbody>
+          </table>
+        </div>
+        {% if info.peers|length > 20 %}
+        <div class="text-center small text-secondary py-2">
+          +{{ info.peers|length - 20 }} more peers
+        </div>
+        {% endif %}
+        {% else %}
+        <div class="p-3 text-center text-secondary small">
+          No peers connected.
+        </div>
+        {% endif %}
+      </div>
+    </div>
+  </div>
+</div>
+
+{% endif %}
+
+{% endblock %}
+
+{% block scripts %}
+<script>
+function checkPeer() {
+  var host = document.getElementById('peer-host').value.trim();
+  if (!host) return;
+  var resultEl = document.getElementById('peer-result');
+  resultEl.innerHTML = '<span class="text-secondary"><i class="bi bi-arrow-repeat"></i> Checking...</span>';
+
+  fetch(MOUNT + '/api/tailscale/check-peer', {
+    method: 'POST',
+    headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({host: host}),
+  })
+  .then(r => r.json())
+  .then(data => {
+    if (data.reachable) {
+      resultEl.innerHTML = '<span class="text-success">✓ ' + host + ' is reachable'
+        + (data.latency_ms ? ' (' + data.latency_ms + 'ms)' : '')
+        + '</span>';
+    } else {
+      var tsHint = data.is_tailscale_ip ? ' (Tailscale IP)' : '';
+      resultEl.innerHTML = '<span class="text-danger">✗ ' + host + tsHint + ' is not responding</span>';
+    }
+  })
+  .catch(function() {
+    resultEl.innerHTML = '<span class="text-danger">Error checking host</span>';
+  });
+}
+
+function enableServe() {
+  var mount = document.querySelector('[name="mount"]').value || '/';
+  var funnel = document.getElementById('funnel-check').checked;
+  var btn = event.target;
+  btn.disabled = true;
+  btn.innerHTML = '<i class="bi bi-arrow-repeat"></i> Configuring...';
+
+  fetch(MOUNT + '/api/tailscale/serve', {
+    method: 'POST',
+    headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({action: 'enable', mount: mount, funnel: funnel}),
+  })
+  .then(r => r.json())
+  .then(data => {
+    if (data.success) {
+      alert('✅ ' + data.message);
+      window.location.reload();
+    } else {
+      alert('❌ ' + data.message);
+      btn.disabled = false;
+      btn.innerHTML = '<i class="bi bi-wifi"></i> Enable Serve';
+    }
+  })
+  .catch(function() {
+    alert('Error configuring Tailscale Serve');
+    btn.disabled = false;
+    btn.innerHTML = '<i class="bi bi-wifi"></i> Enable Serve';
+  });
+}
+
+function disableServe() {
+  if (!confirm('Disable Tailscale Serve? The panel will no longer be accessible via the Tailscale URL.')) return;
+
+  fetch(MOUNT + '/api/tailscale/serve', {
+    method: 'POST',
+    headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({action: 'disable', mount: '/'}),
+  })
+  .then(r => r.json())
+  .then(data => {
+    if (data.success) {
+      alert('🔄 ' + data.message);
+      window.location.reload();
+    } else {
+      alert('❌ ' + data.message);
+    }
+  })
+  .catch(function() {
+    alert('Error disabling Tailscale Serve');
+  });
+}
+
+// Enter key triggers peer check
+document.getElementById('peer-host').addEventListener('keydown', function(e) {
+  if (e.key === 'Enter') checkPeer();
+});
+</script>
+{% endblock %}

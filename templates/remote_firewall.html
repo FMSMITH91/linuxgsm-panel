@@ -1,0 +1,230 @@
+{% extends "base.html" %}
+{% block title %}Firewall - {{ remote.name }}{% endblock %}
+{% block content %}
+
+<div class="d-flex justify-content-between align-items-center mb-3">
+  <div>
+    <a href="{{ url_for('manage_remotes') }}" class="text-secondary text-decoration-none small">
+      <i class="bi bi-arrow-left"></i> Remote Servers
+    </a>
+    <h1 class="page-title mb-0 mt-1">
+      <i class="bi bi-shield-fill-check"></i> Firewall: {{ remote.name }}
+    </h1>
+    <span class="text-secondary small"><code>{{ remote.host }}:{{ remote.port }}</code></span>
+  </div>
+  <button class="btn btn-outline-secondary btn-sm" onclick="refreshFirewall()">
+    <i class="bi bi-arrow-repeat"></i> Refresh
+  </button>
+</div>
+
+<div class="row">
+  <!-- Left: UFW status + manual port opener -->
+  <div class="col-md-5 mb-3">
+
+    <!-- UFW Status -->
+    <div class="card mb-3">
+      <div class="card-header d-flex justify-content-between align-items-center">
+        <span><i class="bi bi-shield-fill-check"></i> UFW Status</span>
+        <span id="ufw-badge" class="badge {% if status.enabled %}bg-success{% else %}bg-secondary{% endif %}">
+          {{ "Active" if status.enabled else "Inactive" }}
+        </span>
+      </div>
+      <div class="card-body">
+        {% if not status.installed %}
+        <p class="text-warning small mb-0"><i class="bi bi-exclamation-triangle"></i> UFW is not installed on this remote.</p>
+        {% endif %}
+      </div>
+    </div>
+
+    <!-- Manual Port Opener -->
+    <div class="card mb-3">
+      <div class="card-header"><i class="bi bi-plus-circle"></i> Open a Port</div>
+      <div class="card-body">
+        <div class="row g-2">
+          <div class="col-4">
+            <input type="number" id="new-port" class="form-control form-control-sm" placeholder="Port" min="1" max="65535">
+          </div>
+          <div class="col-3">
+            <select id="new-proto" class="form-select form-select-sm">
+              <option value="both" selected>Both (TCP+UDP)</option>
+              <option value="tcp">TCP</option>
+              <option value="udp">UDP</option>
+            </select>
+          </div>
+          <div class="col-5">
+            <input type="text" id="new-comment" class="form-control form-control-sm" placeholder="Comment (optional)">
+          </div>
+          <div class="col-12 mt-1">
+            <button class="btn btn-success btn-sm w-100" onclick="openPort()">
+              <i class="bi bi-plus-lg"></i> Open Port
+            </button>
+          </div>
+        </div>
+        <div id="port-result" class="mt-2 small"></div>
+      </div>
+    </div>
+
+    <!-- Game server quick ports -->
+    {% if games %}
+    <div class="card">
+      <div class="card-header"><i class="bi bi-controller"></i> Game Server Ports</div>
+      <div class="card-body p-0">
+        <table class="table table-sm mb-0">
+          <thead>
+            <tr>
+              <th>Server</th>
+              <th>Port</th>
+              <th>Action</th>
+            </tr>
+          </thead>
+          <tbody>
+            {% for gs in games %}
+            <tr>
+              <td class="small">{{ gs.name }}</td>
+              <td><code>{{ gs.port }}</code></td>
+              <td>
+                <button class="btn btn-success btn-sm" onclick="openGamePort({{ gs.port }})"
+                        title="Open TCP+UDP on port {{ gs.port }} and {{ gs.port+1 }}">
+                  <i class="bi bi-unlock"></i>
+                </button>
+              </td>
+            </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+    </div>
+    {% endif %}
+  </div>
+
+  <!-- Right: Current rules -->
+  <div class="col-md-7 mb-3">
+    <div class="card">
+      <div class="card-header d-flex justify-content-between align-items-center">
+        <span><i class="bi bi-list-columns"></i> UFW Rules ({{ status.rules|length }})</span>
+        <span class="small text-secondary" id="rules-count">{{ status.rules|length }} rules</span>
+      </div>
+      <div class="card-body p-0">
+        <div id="rules-list" style="max-height: 500px; overflow-y: auto;">
+          {% if status.rules %}
+          <table class="table table-sm table-hover mb-0">
+            <thead>
+              <tr>
+                <th>#</th>
+                <th>Rule</th>
+                <th></th>
+              </tr>
+            </thead>
+            <tbody>
+              {% for rule in status.rules %}
+              <tr>
+                <td class="text-secondary" style="width:30px;">{{ rule.num }}</td>
+                <td class="small font-monospace">{{ rule.detail[:100] }}</td>
+                <td style="width:40px;">
+                  <button class="btn btn-outline-danger btn-sm py-0 px-1" title="Delete rule {{ rule.num }}"
+                          onclick="closeRule('{{ rule.num }}')">
+                    <i class="bi bi-x"></i>
+                  </button>
+                </td>
+              </tr>
+              {% endfor %}
+            </tbody>
+          </table>
+          {% else %}
+          <div class="p-3 text-center text-secondary small">No UFW rules configured.</div>
+          {% endif %}
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+{% endblock %}
+
+{% block scripts %}
+<script>
+var remoteId = {{ remote.id }};
+
+function refreshFirewall() {
+  fetch(MOUNT + '/api/remote/' + remoteId + '/firewall')
+    .then(r => r.json())
+    .then(data => {
+      var badge = document.getElementById('ufw-badge');
+      badge.textContent = data.enabled ? 'Active' : 'Inactive';
+      badge.className = 'badge ' + (data.enabled ? 'bg-success' : 'bg-secondary');
+
+      var listEl = document.getElementById('rules-list');
+      if (data.rules && data.rules.length) {
+        var html = '<table class="table table-sm table-hover mb-0"><thead><tr><th>#</th><th>Rule</th><th></th></tr></thead><tbody>';
+        data.rules.forEach(function(r) {
+          html += '<tr><td class="text-secondary">' + r.num + '</td><td class="small font-monospace">' + r.detail.slice(0, 100) + '</td>'
+               + '<td><button class="btn btn-outline-danger btn-sm py-0 px-1" onclick="closeRule(\'' + r.num + '\')"><i class="bi bi-x"></i></button></td></tr>';
+        });
+        html += '</tbody></table>';
+        listEl.innerHTML = html;
+      } else {
+        listEl.innerHTML = '<div class="p-3 text-center text-secondary small">No UFW rules configured.</div>';
+      }
+      document.getElementById('rules-count').textContent = data.rules.length + ' rules';
+    });
+}
+
+function openPort() {
+  var port = document.getElementById('new-port').value.trim();
+  var proto = document.getElementById('new-proto').value;
+  var comment = document.getElementById('new-comment').value.trim();
+  if (!port) return;
+  var resultEl = document.getElementById('port-result');
+  resultEl.innerHTML = '<span class="text-secondary"><i class="bi bi-arrow-repeat"></i> Opening...</span>';
+
+  fetch(MOUNT + '/api/remote/' + remoteId + '/firewall/open', {
+    method: 'POST',
+    headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({port: parseInt(port), protocol: proto, comment: comment}),
+  })
+  .then(r => r.json())
+  .then(data => {
+    if (data.success) {
+      resultEl.innerHTML = '<span class="text-success">✅ ' + data.message + '</span>';
+      document.getElementById('new-port').value = '';
+      document.getElementById('new-comment').value = '';
+      refreshFirewall();
+    } else {
+      resultEl.innerHTML = '<span class="text-danger">❌ ' + data.message + '</span>';
+    }
+  });
+}
+
+function closeRule(num) {
+  if (!confirm('Delete UFW rule #' + num + '?')) return;
+  fetch(MOUNT + '/api/remote/' + remoteId + '/firewall/delete-rule', {
+    method: 'POST',
+    headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({num: parseInt(num)}),
+  })
+  .then(r => r.json())
+  .then(d => { if (!d.success) alert(d.message || 'Failed to delete rule'); refreshFirewall(); })
+  .catch(function() { refreshFirewall(); });
+}
+
+function openGamePort(port) {
+  fetch(MOUNT + '/api/remote/' + remoteId + '/game-port/' + port + '/open', {
+    method: 'POST',
+  })
+  .then(r => r.json())
+  .then(data => {
+    if (data.success) {
+      alert('✅ ' + data.message);
+      refreshFirewall();
+    } else {
+      alert('❌ ' + data.message);
+    }
+  });
+}
+
+// Enter key opens port
+document.getElementById('new-port').addEventListener('keydown', function(e) {
+  if (e.key === 'Enter') openPort();
+});
+</script>
+{% endblock %}

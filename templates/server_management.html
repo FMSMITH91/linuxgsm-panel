@@ -1,0 +1,508 @@
+{% extends "base.html" %}
+{% block title %}Panel Server{% endblock %}
+{% block content %}
+
+<div class="d-flex justify-content-between align-items-center mb-3">
+  <h1 class="page-title mb-0"><i class="bi bi-gear-wide-connected"></i> Panel Server</h1>
+  <button class="btn btn-outline-secondary btn-sm" onclick="refreshAll()">
+    <i class="bi bi-arrow-repeat"></i> Refresh Status
+  </button>
+</div>
+
+<div class="alert alert-info py-2 small mb-3" style="background: rgba(16,185,129,.08); border-color: var(--accent);">
+  <i class="bi bi-info-circle"></i>
+  <strong>This page manages the server where the LinuxGSM Panel itself is installed.</strong>
+  To manage a remote server (live resources, updates, firewall, reboot), open it from
+  <a href="{{ url_for('manage_remotes') }}">Remote Servers</a>.
+</div>
+
+<!-- Server Info Bar -->
+<div class="row mb-3">
+  <div class="col-md-3">
+    <div class="card text-center p-2">
+      <div class="small text-secondary">Uptime</div>
+      <div class="h5 mb-0" id="uptime">{{ status.uptime.uptime }}</div>
+    </div>
+  </div>
+  <div class="col-md-3">
+    <div class="card text-center p-2">
+      <div class="small text-secondary">Kernel</div>
+      <div class="h6 mb-0" id="kernel">{{ status.uptime.kernel }}</div>
+    </div>
+  </div>
+  <div class="col-md-3">
+    <div class="card text-center p-2">
+      <div class="small text-secondary">Disk (/)</div>
+      <div class="h6 mb-0" id="disk">{{ status.uptime.disk_root }}</div>
+    </div>
+  </div>
+  <div class="col-md-3">
+    <div class="card text-center p-2">
+      <div class="small text-secondary">Memory</div>
+      <div class="h6 mb-0" id="memory">{{ status.uptime.memory }}</div>
+    </div>
+  </div>
+</div>
+
+<!-- Live Resources (realtime bars) -->
+<div class="card mb-3">
+  <div class="card-header d-flex justify-content-between align-items-center">
+    <span><i class="bi bi-cpu-fill"></i> Live Resources</span>
+    <span class="text-secondary" style="font-size:.7rem;"><i class="bi bi-broadcast"></i> realtime</span>
+  </div>
+  <div class="card-body">
+    <div class="row g-4">
+      <!-- CPU (overall + per-core) -->
+      <div class="col-lg-7">
+        <div class="d-flex justify-content-between align-items-baseline mb-1">
+          <span class="small text-secondary"><i class="bi bi-cpu"></i> CPU · <span id="cpu-cores-label">{{ status.uptime.cpu_cores }} cores</span></span>
+          <span class="h5 mb-0"><span id="cpu-overall-val">–</span><small class="text-secondary" style="font-size:.5em;">% overall</small></span>
+        </div>
+        <div class="progress mb-3" style="height:12px;">
+          <div class="progress-bar bg-success" id="cpu-overall-bar" role="progressbar" style="width:0%"></div>
+        </div>
+        <div id="cpu-cores" class="cpu-cores-grid"></div>
+      </div>
+      <!-- Memory + Swap + Load -->
+      <div class="col-lg-5">
+        <div class="d-flex justify-content-between align-items-baseline mb-1">
+          <span class="small text-secondary"><i class="bi bi-memory"></i> Memory</span>
+          <span class="h5 mb-0"><span id="ram-val">–</span><small class="text-secondary" style="font-size:.5em;">%</small></span>
+        </div>
+        <div class="progress mb-1" style="height:16px;">
+          <div class="progress-bar bg-info" id="ram-bar" role="progressbar" style="width:0%"></div>
+        </div>
+        <div class="small text-secondary mb-3" id="ram-detail">{{ status.uptime.memory }}</div>
+
+        <div class="d-flex justify-content-between align-items-baseline mb-1">
+          <span class="small text-secondary"><i class="bi bi-hdd"></i> Swap</span>
+          <span><span id="swap-val">–</span><small class="text-secondary">%</small></span>
+        </div>
+        <div class="progress mb-1" style="height:12px;">
+          <div class="progress-bar bg-secondary" id="swap-bar" role="progressbar" style="width:0%"></div>
+        </div>
+        <div class="small text-secondary" id="swap-detail"></div>
+
+        <hr class="my-3">
+        <div class="small text-secondary">Load average (1 · 5 · 15 min):
+          <span class="text-body" id="load-vals">{{ status.uptime.load_1m }} · {{ status.uptime.load_5m }} · {{ status.uptime.load_15m }}</span>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<div class="row">
+  <!-- Left Column -->
+  <div class="col-md-6 mb-3">
+
+    <!-- UFW Card -->
+    <div class="card mb-3">
+      <div class="card-header d-flex justify-content-between align-items-center">
+        <span><i class="bi bi-shield-fill-check"></i> UFW Firewall</span>
+        <span id="ufw-status-badge" class="badge {% if status.ufw.enabled %}bg-success{% else %}bg-secondary{% endif %}">
+          {{ status.ufw.status_text|title }}
+        </span>
+      </div>
+      <div class="card-body">
+        {% if status.ufw.status_text == 'not_installed' %}
+          <p class="text-warning small mb-0"><i class="bi bi-exclamation-triangle"></i> UFW is not installed on this system.</p>
+        {% else %}
+          <div class="d-flex align-items-center mb-2">
+            <span class="small text-secondary">Tailscale Interface:</span>
+            <code class="ms-2" id="ts-iface">{{ status.tailscale_interface or 'Not detected' }}</code>
+            {% if status.tailscale_ufw_allowed %}
+              <span class="badge bg-success ms-2"><i class="bi bi-check"></i> Allowed</span>
+            {% else %}
+              <span class="badge bg-warning text-dark ms-2"><i class="bi bi-x"></i> Not allowed</span>
+            {% endif %}
+          </div>
+          <div class="d-flex gap-2">
+            <button class="btn btn-sm btn-success" onclick="ufwAllowTailscale()"
+                    {% if status.tailscale_ufw_allowed %}disabled{% endif %}>
+              <i class="bi bi-shield-check"></i> Allow Tailscale Interface
+            </button>
+          </div>
+          {% if status.ufw.rules %}
+          <hr>
+          <div class="small">
+            <strong class="text-secondary">Rules ({{ status.ufw.rules|length }}):</strong>
+            <div style="max-height: 150px; overflow-y: auto;" class="mt-1">
+              {% for rule in status.ufw.rules[:15] %}
+              <div class="text-nowrap small">
+                <code>{{ rule.num }}</code> {{ rule.action }} — {{ rule.detail[:80] }}
+              </div>
+              {% endfor %}
+            </div>
+          </div>
+          {% endif %}
+        {% endif %}
+      </div>
+    </div>
+
+    <!-- Tailscale SSH Card -->
+    <div class="card mb-3">
+      <div class="card-header d-flex justify-content-between align-items-center">
+        <span><i class="bi bi-lock-fill"></i> Tailscale SSH</span>
+        <span id="ts-ssh-badge" class="badge {% if status.tailscale_ssh.enabled %}bg-success{% else %}bg-secondary{% endif %}">
+          {{ "Enabled" if status.tailscale_ssh.enabled else "Disabled" }}
+        </span>
+      </div>
+      <div class="card-body">
+        <p class="small text-secondary mb-2">
+          Tailscale SSH lets you SSH into any device on your tailnet without managing SSH keys —
+          it uses your Tailscale identity instead.
+        </p>
+        <div class="d-flex gap-2">
+          {% if status.tailscale_ssh.enabled %}
+          <button class="btn btn-sm btn-warning" onclick="tsSshDisable()">
+            <i class="bi bi-x-circle"></i> Disable Tailscale SSH
+          </button>
+          {% else %}
+          <button class="btn btn-sm btn-success" onclick="tsSshEnable()">
+            <i class="bi bi-lock"></i> Enable Tailscale SSH
+          </button>
+          {% endif %}
+        </div>
+        {% if status.tailscale_ssh.error %}
+        <p class="text-danger small mt-2">{{ status.tailscale_ssh.error }}</p>
+        {% endif %}
+      </div>
+    </div>
+
+  </div>
+
+  <!-- Right Column -->
+  <div class="col-md-6 mb-3">
+
+    <!-- OS Updates Card -->
+    <div class="card mb-3">
+      <div class="card-header d-flex justify-content-between align-items-center">
+        <span><i class="bi bi-cloud-arrow-up-fill"></i> OS Updates (Ubuntu)</span>
+        <span id="update-badge" class="badge {% if status.updates.updates_available %}bg-warning text-dark{% else %}bg-success{% endif %}">
+          {% if status.updates.updates_available %}
+            {{ status.updates.count }} available
+          {% else %}
+            Up to date
+          {% endif %}
+        </span>
+      </div>
+      <div class="card-body">
+        <div id="update-list">
+          {% if status.updates.packages %}
+          <div style="max-height: 150px; overflow-y: auto;" class="mb-2">
+            {% for pkg in status.updates.packages[:20] %}
+            <div class="small"><code>{{ pkg.name }}</code> → {{ pkg.version }}</div>
+            {% endfor %}
+            {% if status.updates.packages|length > 20 %}
+            <div class="text-secondary small">+{{ status.updates.packages|length - 20 }} more</div>
+            {% endif %}
+          </div>
+          {% else %}
+          <p class="text-success small mb-2"><i class="bi bi-check-circle"></i> System is up to date.</p>
+          {% endif %}
+        </div>
+        <div class="d-flex gap-2">
+          <button class="btn btn-sm btn-primary" onclick="checkUpdates()">
+            <i class="bi bi-arrow-repeat"></i> Check for Updates
+          </button>
+          <button class="btn btn-sm btn-warning" onclick="runUpdates()"
+                  {% if not status.updates.updates_available %}disabled{% endif %}>
+            <i class="bi bi-cloud-arrow-up-fill"></i> Install Updates
+          </button>
+        </div>
+        <div id="update-result" class="mt-2 small"></div>
+      </div>
+    </div>
+
+    <!-- Reboot Card -->
+    <div class="card mb-3">
+      <div class="card-header">
+        <i class="bi bi-arrow-clockwise"></i> Reboot
+      </div>
+      <div class="card-body">
+        <p class="small text-secondary mb-2">
+          Reboot the server. This will temporarily interrupt all game servers and the panel.
+        </p>
+        <div class="d-flex gap-2 align-items-center">
+          <input type="number" id="reboot-delay" class="form-control form-control-sm" value="10"
+                 style="width:80px;" min="1" max="120">
+          <span class="small text-secondary">seconds delay</span>
+          <button class="btn btn-sm btn-danger" onclick="rebootServer()">
+            <i class="bi bi-arrow-clockwise"></i> Reboot
+          </button>
+        </div>
+        <div id="reboot-result" class="mt-2 small"></div>
+      </div>
+    </div>
+
+    <!-- Load -->
+    <div class="card">
+      <div class="card-header"><i class="bi bi-activity"></i> System Load</div>
+      <div class="card-body">
+        <div class="row text-center">
+          <div class="col-4">
+            <div class="h4 mb-0" id="load-1">{{ status.uptime.load_1m }}</div>
+            <div class="text-secondary small">1 min</div>
+          </div>
+          <div class="col-4">
+            <div class="h4 mb-0" id="load-5">{{ status.uptime.load_5m }}</div>
+            <div class="text-secondary small">5 min</div>
+          </div>
+          <div class="col-4">
+            <div class="h4 mb-0" id="load-15">{{ status.uptime.load_15m }}</div>
+            <div class="text-secondary small">15 min</div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+  </div>
+</div>
+
+<!-- Action Status Toast -->
+<div class="position-fixed bottom-0 end-0 p-3" style="z-index: 9999">
+  <div id="action-toast" class="toast" role="alert">
+    <div class="toast-header">
+      <strong class="me-auto" id="toast-title">Action</strong>
+      <button type="button" class="btn-close btn-close-white" data-bs-dismiss="toast"></button>
+    </div>
+    <div class="toast-body" id="toast-message"></div>
+  </div>
+</div>
+
+{% endblock %}
+
+{% block scripts %}
+<script>
+function showToast(title, message, type) {
+  var toast = document.getElementById('action-toast');
+  document.getElementById('toast-title').textContent = title;
+  document.getElementById('toast-message').textContent = message;
+  toast.className = 'toast bg-' + (type || 'dark') + ' text-white';
+  var bs = new bootstrap.Toast(toast, { delay: 5000 });
+  bs.show();
+}
+
+function refreshAll() {
+  fetch(MOUNT + '/api/server-management')
+    .then(r => r.json())
+    .then(data => {
+      document.getElementById('uptime').textContent = data.uptime.uptime;
+      document.getElementById('kernel').textContent = data.uptime.kernel;
+      document.getElementById('disk').textContent = data.uptime.disk_root;
+      document.getElementById('memory').textContent = data.uptime.memory;
+      var lv = document.getElementById('load-vals');
+      if (lv) lv.textContent = data.uptime.load_1m + ' · ' + data.uptime.load_5m + ' · ' + data.uptime.load_15m;
+
+      // UFW
+      var ufwBadge = document.getElementById('ufw-status-badge');
+      ufwBadge.textContent = data.ufw.status_text.charAt(0).toUpperCase() + data.ufw.status_text.slice(1);
+      ufwBadge.className = 'badge ' + (data.ufw.enabled ? 'bg-success' : 'bg-secondary');
+
+      // Tailscale interface status
+      var ifaceEl = document.getElementById('ts-iface');
+      ifaceEl.textContent = data.tailscale_interface || 'Not detected';
+
+      // TS SSH
+      var sshBadge = document.getElementById('ts-ssh-badge');
+      sshBadge.textContent = data.tailscale_ssh.enabled ? 'Enabled' : 'Disabled';
+      sshBadge.className = 'badge ' + (data.tailscale_ssh.enabled ? 'bg-success' : 'bg-secondary');
+
+      // Updates
+      var updateBadge = document.getElementById('update-badge');
+      if (data.updates.updates_available) {
+        updateBadge.textContent = data.updates.count + ' available';
+        updateBadge.className = 'badge bg-warning text-dark';
+      } else {
+        updateBadge.textContent = 'Up to date';
+        updateBadge.className = 'badge bg-success';
+      }
+    })
+    .catch(function() {
+      showToast('Error', 'Failed to refresh server status', 'danger');
+    });
+}
+
+function ufwAllowTailscale() {
+  fetch(MOUNT + '/api/server-management/ufw-allow-tailscale', {method: 'POST'})
+    .then(r => r.json())
+    .then(data => {
+      if (data.success) {
+        showToast('UFW', data.message, 'success');
+        refreshAll();
+      } else {
+        showToast('UFW Error', data.message, 'danger');
+      }
+    })
+    .catch(function() {
+      showToast('Error', 'Failed to configure UFW', 'danger');
+    });
+}
+
+function tsSshEnable() {
+  if (!confirm('Enable Tailscale SSH? This will re-authenticate Tailscale with SSH support enabled.')) return;
+  fetch(MOUNT + '/api/server-management/ts-ssh-enable', {method: 'POST'})
+    .then(r => r.json())
+    .then(data => {
+      if (data.success) {
+        showToast('Tailscale SSH', data.message, 'success');
+        refreshAll();
+      } else {
+        showToast('Tailscale SSH Error', data.message, 'danger');
+      }
+    })
+    .catch(function() {
+      showToast('Error', 'Failed to enable Tailscale SSH', 'danger');
+    });
+}
+
+function tsSshDisable() {
+  if (!confirm('Disable Tailscale SSH?')) return;
+  fetch(MOUNT + '/api/server-management/ts-ssh-disable', {method: 'POST'})
+    .then(r => r.json())
+    .then(data => {
+      if (data.success) {
+        showToast('Tailscale SSH', data.message, 'success');
+        refreshAll();
+      } else {
+        showToast('Tailscale SSH Error', data.message, 'danger');
+      }
+    })
+    .catch(function() {
+      showToast('Error', 'Failed to disable Tailscale SSH', 'danger');
+    });
+}
+
+function checkUpdates() {
+  var resultEl = document.getElementById('update-result');
+  resultEl.innerHTML = '<span class="text-secondary"><i class="bi bi-arrow-repeat"></i> Checking...</span>';
+  fetch(MOUNT + '/api/server-management/os-update-check')
+    .then(r => r.json())
+    .then(data => {
+      if (data.updates_available) {
+        var list = data.packages.slice(0, 15).map(p => '<code>' + p.name + '</code> → ' + p.version).join('<br>');
+        resultEl.innerHTML = '<span class="text-warning">' + data.count + ' updates available:</span><br>' + list;
+        if (data.packages.length > 15) {
+          resultEl.innerHTML += '<br><span class="text-secondary small">+' + (data.packages.length - 15) + ' more</span>';
+        }
+        refreshAll();
+      } else {
+        resultEl.innerHTML = '<span class="text-success"><i class="bi bi-check-circle"></i> System is up to date.</span>';
+        refreshAll();
+      }
+    })
+    .catch(function() {
+      resultEl.innerHTML = '<span class="text-danger">Failed to check updates</span>';
+    });
+}
+
+function runUpdates() {
+  if (!confirm('Install all available OS updates? The system may need a reboot afterwards.')) return;
+  var resultEl = document.getElementById('update-result');
+  resultEl.innerHTML = '<span class="text-info"><i class="bi bi-arrow-repeat"></i> Updates running in background...</span>';
+  fetch(MOUNT + '/api/server-management/os-update-run', {method: 'POST'})
+    .then(r => r.json())
+    .then(data => {
+      if (data.success) {
+        resultEl.innerHTML = '<span class="text-success">' + data.message + '</span>';
+        showToast('OS Updates', data.message, 'success');
+      } else {
+        resultEl.innerHTML = '<span class="text-danger">' + data.message + '</span>';
+        showToast('Update Error', data.message, 'danger');
+      }
+    })
+    .catch(function() {
+      resultEl.innerHTML = '<span class="text-danger">Failed to start updates</span>';
+    });
+}
+
+function rebootServer() {
+  var delay = document.getElementById('reboot-delay').value || 10;
+  if (!confirm('REBOOT THE SERVER in ' + delay + ' seconds? All game servers and this panel will go down temporarily.')) return;
+  var resultEl = document.getElementById('reboot-result');
+  resultEl.innerHTML = '<span class="text-danger"><i class="bi bi-exclamation-triangle"></i> Rebooting in ' + delay + ' seconds...</span>';
+  fetch(MOUNT + '/api/server-management/reboot', {
+    method: 'POST',
+    headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({delay: parseInt(delay)}),
+  })
+  .then(r => r.json())
+  .then(data => {
+    if (data.success) {
+      resultEl.innerHTML = '<span class="text-danger"><i class="bi bi-arrow-clockwise"></i> ' + data.message + '</span>';
+      showToast('Reboot', data.message, 'warning');
+    } else {
+      resultEl.innerHTML = '<span class="text-danger">' + data.message + '</span>';
+    }
+  })
+  .catch(function() {
+    resultEl.innerHTML = '<span class="text-danger">Failed to initiate reboot</span>';
+  });
+}
+
+// Auto-refresh status every 30 seconds
+setInterval(refreshAll, 30000);
+
+// ── Realtime resource bars (per-core CPU + overall + RAM + swap) ──
+function barColor(pct) {
+  if (pct >= 85) return '#f85149';   // red
+  if (pct >= 60) return '#d29922';   // amber
+  return '#3fb950';                  // green
+}
+function fmtGB(b) { return (b / 1073741824).toFixed(1) + ' GB'; }
+
+var coresBuilt = 0;
+function buildCores(n) {
+  var wrap = document.getElementById('cpu-cores');
+  wrap.innerHTML = '';
+  for (var i = 0; i < n; i++) {
+    var row = document.createElement('div');
+    row.className = 'core-row';
+    row.innerHTML = '<span class="core-label">cpu' + i + '</span>' +
+      '<span class="core-track"><span class="core-fill" id="core-fill-' + i + '"></span></span>' +
+      '<span class="core-val" id="core-val-' + i + '">0%</span>';
+    wrap.appendChild(row);
+  }
+  coresBuilt = n;
+}
+
+function pollLive() {
+  fetch(MOUNT + '/api/server-management/live')
+    .then(r => r.json())
+    .then(d => {
+      // Overall CPU
+      var ov = d.cpu_overall || 0;
+      document.getElementById('cpu-overall-val').textContent = ov;
+      var ob = document.getElementById('cpu-overall-bar');
+      ob.style.width = ov + '%'; ob.style.backgroundColor = barColor(ov);
+      var lbl = document.getElementById('cpu-cores-label');
+      if (lbl) lbl.textContent = (d.core_count || (d.cpu_cores||[]).length) + ' cores';
+      // Per-core bars
+      var cores = d.cpu_cores || [];
+      if (cores.length !== coresBuilt) buildCores(cores.length);
+      cores.forEach(function(p, i) {
+        var f = document.getElementById('core-fill-' + i);
+        var v = document.getElementById('core-val-' + i);
+        if (f) { f.style.width = p + '%'; f.style.backgroundColor = barColor(p); }
+        if (v) v.textContent = p + '%';
+      });
+      // RAM
+      var rp = d.ram_percent || 0;
+      document.getElementById('ram-val').textContent = rp;
+      var rb = document.getElementById('ram-bar');
+      rb.style.width = rp + '%'; rb.style.backgroundColor = barColor(rp);
+      document.getElementById('ram-detail').textContent = fmtGB(d.ram_used||0) + ' / ' + fmtGB(d.ram_total||0) + ' used';
+      // Swap
+      var sp = d.swap_percent || 0;
+      document.getElementById('swap-val').textContent = sp;
+      document.getElementById('swap-bar').style.width = sp + '%';
+      document.getElementById('swap-detail').textContent =
+        d.swap_total ? (fmtGB(d.swap_used||0) + ' / ' + fmtGB(d.swap_total) + ' used') : 'No swap configured';
+    })
+    .catch(function(){});
+}
+pollLive();
+setInterval(pollLive, 1500);
+</script>
+{% endblock %}

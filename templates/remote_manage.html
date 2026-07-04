@@ -1,0 +1,246 @@
+{% extends "base.html" %}
+{% block title %}{{ remote.name }} — Manage{% endblock %}
+{% block content %}
+
+<div class="d-flex justify-content-between align-items-center mb-3">
+  <div>
+    <a href="{{ url_for('manage_remotes') }}" class="text-secondary text-decoration-none small">
+      <i class="bi bi-arrow-left"></i> Remote Servers
+    </a>
+    <h1 class="page-title mb-0 mt-1"><i class="bi bi-hdd-network-fill"></i> {{ remote.name }}</h1>
+    <span class="text-secondary small">
+      {{ remote.username }}@{{ remote.host }}:{{ remote.port }} &middot; Auth: {{ remote.auth_method }}
+      {% if remote.games %}&middot; {{ remote.games|length }} game server{{ '' if remote.games|length == 1 else 's' }}{% endif %}
+    </span>
+  </div>
+  <span class="badge {% if remote.is_online %}bg-success{% else %}bg-secondary{% endif %}" id="remote-status">
+    {{ 'Online' if remote.is_online else 'Unknown' }}
+  </span>
+</div>
+
+<!-- Live Resources (realtime bars — same as the Panel Server) -->
+<div class="card mb-3">
+  <div class="card-header d-flex justify-content-between align-items-center">
+    <span><i class="bi bi-cpu-fill"></i> Live Resources</span>
+    <span class="text-secondary" style="font-size:.7rem;"><i class="bi bi-broadcast"></i> realtime</span>
+  </div>
+  <div class="card-body">
+    <div class="row g-4">
+      <!-- CPU (overall + per-core) -->
+      <div class="col-lg-7">
+        <div class="d-flex justify-content-between align-items-baseline mb-1">
+          <span class="small text-secondary"><i class="bi bi-cpu"></i> CPU · <span id="cpu-cores-label">…</span></span>
+          <span class="h5 mb-0"><span id="cpu-overall-val">–</span><small class="text-secondary" style="font-size:.5em;">% overall</small></span>
+        </div>
+        <div class="progress mb-3" style="height:12px;">
+          <div class="progress-bar bg-success" id="cpu-overall-bar" role="progressbar" style="width:0%"></div>
+        </div>
+        <div id="cpu-cores" class="cpu-cores-grid"></div>
+      </div>
+      <!-- Memory + Swap -->
+      <div class="col-lg-5">
+        <div class="d-flex justify-content-between align-items-baseline mb-1">
+          <span class="small text-secondary"><i class="bi bi-memory"></i> Memory</span>
+          <span class="h5 mb-0"><span id="ram-val">–</span><small class="text-secondary" style="font-size:.5em;">%</small></span>
+        </div>
+        <div class="progress mb-1" style="height:16px;">
+          <div class="progress-bar bg-info" id="ram-bar" role="progressbar" style="width:0%"></div>
+        </div>
+        <div class="small text-secondary mb-3" id="ram-detail">…</div>
+
+        <div class="d-flex justify-content-between align-items-baseline mb-1">
+          <span class="small text-secondary"><i class="bi bi-hdd"></i> Swap</span>
+          <span><span id="swap-val">–</span><small class="text-secondary">%</small></span>
+        </div>
+        <div class="progress mb-1" style="height:12px;">
+          <div class="progress-bar bg-secondary" id="swap-bar" role="progressbar" style="width:0%"></div>
+        </div>
+        <div class="small text-secondary" id="swap-detail"></div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<div class="row">
+  <!-- OS Updates -->
+  <div class="col-md-4 mb-3">
+    <div class="card h-100">
+      <div class="card-header"><i class="bi bi-arrow-repeat"></i> OS Updates</div>
+      <div class="card-body">
+        <p class="small text-secondary">Check for and install system package updates on this server.</p>
+        <div class="d-flex gap-2 flex-wrap">
+          <button class="btn btn-sm btn-outline-secondary" onclick="checkUpdates()"><i class="bi bi-search"></i> Check</button>
+          <button class="btn btn-sm btn-outline-primary" onclick="runUpdates()"><i class="bi bi-download"></i> Install updates</button>
+        </div>
+        <div class="small mt-2 text-secondary" id="update-info"></div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Firewall -->
+  <div class="col-md-4 mb-3">
+    <div class="card h-100">
+      <div class="card-header"><i class="bi bi-shield-fill-check"></i> Firewall</div>
+      <div class="card-body">
+        <p class="small text-secondary">Open or close ports (UFW) on this server. Game ports are opened automatically at install.</p>
+        <a href="{{ url_for('remote_firewall', remote_id=remote.id) }}" class="btn btn-sm btn-outline-secondary">
+          <i class="bi bi-shield-lock"></i> Manage firewall
+        </a>
+      </div>
+    </div>
+  </div>
+
+  <!-- Power -->
+  <div class="col-md-4 mb-3">
+    <div class="card h-100">
+      <div class="card-header"><i class="bi bi-power"></i> Power</div>
+      <div class="card-body">
+        <p class="small text-secondary">Reboot this server. Game servers with autostart will come back on their own.</p>
+        <button class="btn btn-sm btn-outline-warning" onclick="rebootRemote()"><i class="bi bi-power"></i> Reboot server</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- Connection & SSH -->
+<div class="card mb-3">
+  <div class="card-header"><i class="bi bi-shield-lock"></i> Connection &amp; SSH</div>
+  <div class="card-body">
+    <div class="row g-3">
+      <div class="col-md-6">
+        <div class="small text-secondary mb-1">Panel connects via
+          <strong id="conn-method">{{ remote.auth_method }}</strong> to <code>{{ remote.username }}@{{ remote.host }}:{{ remote.port }}</code>
+        </div>
+        {% if remote.auth_method != 'tailscale' %}
+        <p class="small text-secondary mb-1">Switch the panel to reach this server over the tailnet (Tailscale SSH) and use its Tailscale address — then you can safely lock down public SSH.</p>
+        <button class="btn btn-sm btn-success" onclick="switchToTailscale()"><i class="bi bi-wifi"></i> Use Tailscale as connect address &amp; SSH</button>
+        <div id="migrate-msg" class="small mt-1"></div>
+        {% else %}
+        <p class="small text-success mb-0"><i class="bi bi-check-circle"></i> Already using Tailscale SSH.</p>
+        {% endif %}
+      </div>
+      <div class="col-md-6">
+        <div class="small text-secondary mb-1">Public SSH (port 22 from the internet) — current: <strong id="ssh-mode">…</strong></div>
+        <p class="small text-secondary mb-1">Tailscale SSH keeps working regardless. If you're on the tailnet you can rate-limit or fully disable public SSH.</p>
+        <div class="d-flex gap-2 flex-wrap">
+          <button class="btn btn-sm btn-outline-secondary" onclick="sshMode('allow')" title="Open port 22 to the internet">Allow</button>
+          <button class="btn btn-sm btn-outline-primary" onclick="sshMode('limit')" title="Rate-limit port 22 (brute-force protection)">Limit</button>
+          <button class="btn btn-sm btn-outline-danger" onclick="sshMode('off')" title="Remove public port 22 rule — SSH only over Tailscale">Disable (tailnet-only)</button>
+        </div>
+        <div id="ssh-msg" class="small mt-1"></div>
+      </div>
+    </div>
+  </div>
+</div>
+
+{% if remote.games %}
+<div class="card">
+  <div class="card-header"><i class="bi bi-controller"></i> Game Servers on this remote</div>
+  <div class="card-body p-0">
+    <table class="table table-hover mb-0">
+      <thead><tr><th>Name</th><th>Type</th><th>Port</th><th>Status</th><th></th></tr></thead>
+      <tbody>
+        {% for gs in remote.games %}
+        <tr>
+          <td><strong>{{ gs.name }}</strong></td>
+          <td>{{ gs.game_display or gs.game_type }}</td>
+          <td><code>{{ gs.port }}</code></td>
+          <td><span class="badge {% if gs.status == 'online' %}bg-success{% elif gs.status == 'installing' %}bg-info text-dark{% else %}bg-secondary{% endif %}">{{ gs.status|title }}</span></td>
+          <td class="text-end"><a href="{{ url_for('server_detail', server_id=gs.id) }}" class="btn btn-sm btn-outline-secondary"><i class="bi bi-terminal-fill"></i> Console</a></td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</div>
+{% endif %}
+
+{% endblock %}
+{% block scripts %}
+<script>
+var REMOTE_ID = {{ remote.id }};
+function barColor(p){ if(p>=85) return '#f85149'; if(p>=60) return '#d29922'; return '#3fb950'; }
+function fmtGB(b){ return (b/1073741824).toFixed(1)+' GB'; }
+
+var coresBuilt = 0;
+function buildCores(n){
+  var w = document.getElementById('cpu-cores'); w.innerHTML='';
+  for(var i=0;i<n;i++){
+    var r=document.createElement('div'); r.className='core-row';
+    r.innerHTML='<span class="core-label">cpu'+i+'</span>'
+      +'<span class="core-track"><span class="core-fill" id="core-fill-'+i+'"></span></span>'
+      +'<span class="core-val" id="core-val-'+i+'">0%</span>';
+    w.appendChild(r);
+  }
+  coresBuilt=n;
+}
+function pollLive(){
+  fetch(MOUNT + '/api/remote/'+REMOTE_ID+'/live').then(r=>r.json()).then(d=>{
+    if(d.error) return;
+    var ov=d.cpu_overall||0;
+    document.getElementById('cpu-overall-val').textContent=ov;
+    var ob=document.getElementById('cpu-overall-bar'); ob.style.width=ov+'%'; ob.style.backgroundColor=barColor(ov);
+    document.getElementById('cpu-cores-label').textContent=(d.core_count||(d.cpu_cores||[]).length)+' cores';
+    var cores=d.cpu_cores||[];
+    if(cores.length!==coresBuilt) buildCores(cores.length);
+    cores.forEach(function(p,i){
+      var f=document.getElementById('core-fill-'+i), v=document.getElementById('core-val-'+i);
+      if(f){ f.style.width=p+'%'; f.style.backgroundColor=barColor(p); }
+      if(v) v.textContent=p+'%';
+    });
+    var rp=d.ram_percent||0;
+    document.getElementById('ram-val').textContent=rp;
+    var rb=document.getElementById('ram-bar'); rb.style.width=rp+'%'; rb.style.backgroundColor=barColor(rp);
+    document.getElementById('ram-detail').textContent=fmtGB(d.ram_used||0)+' / '+fmtGB(d.ram_total||0)+' used';
+    var sp=d.swap_percent||0;
+    document.getElementById('swap-val').textContent=sp;
+    document.getElementById('swap-bar').style.width=sp+'%';
+    document.getElementById('swap-detail').textContent=d.swap_total?(fmtGB(d.swap_used||0)+' / '+fmtGB(d.swap_total)+' used'):'No swap configured';
+  }).catch(function(){});
+}
+function checkUpdates(){
+  var el=document.getElementById('update-info'); el.textContent='Checking…';
+  fetch(MOUNT+'/api/remote/'+REMOTE_ID+'/check-updates').then(r=>r.json())
+    .then(d=>{ el.textContent = (d.count!=null ? d.count+' update(s) available' : '—'); })
+    .catch(()=>el.textContent='Check failed');
+}
+function runUpdates(){
+  if(!confirm('Install all available updates on this server?')) return;
+  var el=document.getElementById('update-info'); el.textContent='Installing updates… (this can take a while)';
+  fetch(MOUNT+'/api/remote/'+REMOTE_ID+'/run-updates',{method:'POST'}).then(r=>r.json())
+    .then(d=>{ el.textContent = d.message || (d.success?'Updates installed':'Update failed'); })
+    .catch(()=>el.textContent='Update failed');
+}
+function rebootRemote(){
+  if(!confirm('Reboot this server now? It will be briefly unreachable.')) return;
+  fetch(MOUNT+'/api/remote/'+REMOTE_ID+'/reboot',{method:'POST'}).then(r=>r.json())
+    .then(d=>alert(d.message||'Reboot requested')).catch(()=>alert('Reboot failed'));
+}
+// ── SSH / connection ──
+var SSH_LABELS={allow:'open (allow)',limit:'rate-limited (limit)',off:'disabled — tailnet only'};
+function loadSshStatus(){
+  var el=document.getElementById('ssh-mode'); if(!el) return;
+  fetch(MOUNT+'/api/remote/'+REMOTE_ID+'/ssh-status').then(r=>r.json())
+    .then(d=>{ el.textContent = d.error?'unknown':(SSH_LABELS[d.mode]||d.mode||'unknown'); })
+    .catch(()=>{ el.textContent='unknown'; });
+}
+function sshMode(mode){
+  var warn = mode==='off' ? 'Disable PUBLIC SSH (port 22)? SSH will only work over Tailscale after this. Make sure Tailscale SSH works first!' : null;
+  if(warn && !confirm(warn)) return;
+  var el=document.getElementById('ssh-msg'); el.textContent='Applying…'; el.className='small mt-1 text-secondary';
+  fetch(MOUNT+'/api/remote/'+REMOTE_ID+'/ssh-mode',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({mode:mode})})
+    .then(r=>r.json()).then(d=>{ el.textContent=(d.success?'✓ ':'✗ ')+(d.message||''); el.className='small mt-1 '+(d.success?'text-success':'text-danger'); loadSshStatus(); })
+    .catch(()=>{ el.textContent='✗ Failed'; el.className='small mt-1 text-danger'; });
+}
+function switchToTailscale(){
+  if(!confirm('Switch the panel to Tailscale SSH for this server?\n\nThe connection address becomes the Tailscale IP/DNS and auth switches to Tailscale SSH. Requires Tailscale to be running on the remote.')) return;
+  var el=document.getElementById('migrate-msg'); el.textContent='Migrating…'; el.className='small mt-1 text-secondary';
+  fetch(MOUNT+'/api/remote/'+REMOTE_ID+'/tailscale-migrate',{method:'POST'}).then(r=>r.json())
+    .then(d=>{ if(d.success){ el.textContent='✓ '+(d.message||'Migrated')+' — reloading…'; el.className='small mt-1 text-success'; setTimeout(function(){location.reload();},1500); } else { el.textContent='✗ '+(d.message||'Failed'); el.className='small mt-1 text-danger'; } })
+    .catch(()=>{ el.textContent='✗ Migration failed'; el.className='small mt-1 text-danger'; });
+}
+loadSshStatus();
+pollLive();
+setInterval(pollLive, 2000);
+</script>
+{% endblock %}

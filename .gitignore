@@ -1,0 +1,38 @@
+# ── Python ──
+venv/
+.venv/
+env/
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+
+# ── Panel runtime data & SECRETS — NEVER COMMIT ──
+# Contains the SQLite DB (bcrypt password hashes + PLAINTEXT remote SSH
+# credentials), the session secret key, and per-install config.
+# NOTE: anchored to the repo root with a leading slash so the bundled
+# `lgsm/data/*.csv` reference files are NOT ignored.
+/data/
+*.db
+*.sqlite3
+*.secret
+secret_key
+
+# ── Downloaded at runtime (not part of this project) ──
+linuxgsm.sh
+serverfiles/
+lgsm/log/
+lgsm/config-lgsm/
+lgsm/backup/
+
+# ── Node (gamedig etc. are installed on the remote, not here) ──
+node_modules/
+
+# ── OS / editor cruft ──
+.DS_Store
+Thumbs.db
+*.swp
+*.swo
+*~
+.idea/
+.vscode/

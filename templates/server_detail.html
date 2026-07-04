@@ -1,0 +1,462 @@
+{% extends "base.html" %}
+{% block title %}{{ server.name }} - Console{% endblock %}
+{% block content %}
+
+<div class="d-flex justify-content-between align-items-center mb-3">
+  <div>
+    <a href="{{ url_for('index') }}" class="text-secondary text-decoration-none small">
+      <i class="bi bi-arrow-left"></i> Dashboard
+    </a>
+    <h1 class="page-title mb-0 mt-1">{{ server.name }}</h1>
+    <span class="text-secondary small">
+      <i class="bi bi-hdd-network-fill"></i> {{ remote.name }}
+      &middot; Port {{ server.port }}
+      &middot; Type: {{ server.game_display or server.game_type }}
+    </span>
+  </div>
+  <div class="d-flex align-items-center gap-2">
+    <a href="{{ url_for('server_files', server_id=server.id) }}" class="btn btn-sm btn-outline-secondary" title="Edit config & browse files">
+      <i class="bi bi-folder2-open"></i> Files &amp; Config
+    </a>
+    <span class="badge" id="status-badge"
+          style="background: {% if server.status == 'online' %}#3fb950{% elif server.status == 'offline' %}#f85149{% else %}#d29922{% endif %};">
+      <span id="status-text">{{ server.status|title }}</span>
+    </span>
+  </div>
+</div>
+
+<!-- Action buttons (AJAX — no page reload) -->
+<div class="card mb-3">
+  <div class="card-body">
+    <div class="d-flex gap-2 flex-wrap">
+      {% for action_key, action_label in actions %}
+      <button class="btn btn-sm {% if action_key == 'restart' %}btn-warning{% elif action_key == 'stop' %}btn-danger{% elif action_key == 'start' %}btn-success{% else %}btn-outline-secondary{% endif %}"
+              onclick="serverAction('{{ action_key }}', this, {{ 'true' if action_key in ['stop','restart'] else 'false' }})">
+        <i class="bi bi-{% if action_key == 'restart' %}arrow-repeat{% elif action_key == 'start' %}play-fill{% elif action_key == 'stop' %}stop-fill{% elif action_key == 'update' %}cloud-download-fill{% else %}gear{% endif %}"></i>
+        {{ action_label }}
+      </button>
+      {% endfor %}
+      <button class="btn btn-sm btn-outline-secondary" onclick="clearConsole()">
+        <i class="bi bi-eraser"></i> Clear Console
+      </button>
+    </div>
+
+    {% if maintenance %}
+    <hr class="my-2">
+    <div class="d-flex gap-2 flex-wrap align-items-center">
+      <span class="text-secondary small me-1"><i class="bi bi-tools"></i> Maintenance:</span>
+      {% for m in maintenance %}
+      <button class="btn btn-sm btn-outline-secondary" title="{{ m.desc }}"
+              onclick="serverAction('{{ m.cmd }}', this, {{ 'true' if m.cmd in ['validate','backup','force-update','mods-update'] else 'false' }})">
+        <i class="bi bi-{{ {'monitor':'activity','validate':'check2-circle','backup':'archive-fill','details':'info-circle','check-update':'cloud-arrow-down','force-update':'cloud-download-fill','update-lgsm':'arrow-up-circle','mods-update':'puzzle-fill','postdetails':'link-45deg','test-alert':'bell'}.get(m.cmd, 'gear') }}"></i>
+        {{ m.cmd }}
+      </button>
+      {% endfor %}
+    </div>
+    {% endif %}
+  </div>
+</div>
+
+<!-- Connect address + live stats -->
+<div class="card mb-3">
+  <div class="card-body">
+    <div class="d-flex flex-wrap align-items-center justify-content-between gap-2 mb-3">
+      <div class="d-flex align-items-center gap-2">
+        <span class="text-secondary small">Connect:</span>
+        <span class="connect-pill">
+          <i class="bi bi-controller text-info"></i>
+          <span id="connect-addr" class="text-info">resolving…</span>
+          <button class="btn btn-sm btn-link p-0 text-secondary" onclick="copyConnect()" title="Copy address"><i class="bi bi-clipboard"></i></button>
+        </span>
+      </div>
+      <span class="text-secondary" style="font-size:.7rem;"><i class="bi bi-broadcast"></i> live · updates every few seconds</span>
+    </div>
+    <div class="row g-2">
+      <div class="col-6 col-md-3"><div class="stat-tile"><div class="stat-label">CPU <span class="text-muted" style="font-size:.62rem;">this game</span></div><div class="stat-val" id="stat-gcpu">–</div><div class="stat-sub" id="stat-gcpu-sub"></div></div></div>
+      <div class="col-6 col-md-3"><div class="stat-tile"><div class="stat-label">Memory <span class="text-muted" style="font-size:.62rem;">this game</span></div><div class="stat-val" id="stat-gram">–</div><div class="stat-sub" id="stat-gram-sub"></div></div></div>
+      <div class="col-6 col-md-3"><div class="stat-tile"><div class="stat-label">Uptime <span class="text-muted" style="font-size:.62rem;">this game</span></div><div class="stat-val" id="stat-gup">–</div><div class="stat-sub" id="stat-gup-sub"></div></div></div>
+      <div class="col-6 col-md-3"><div class="stat-tile"><div class="stat-label">Server <span class="text-muted" style="font-size:.62rem;">whole VPS</span></div><div class="stat-val" id="stat-scpu">–</div><div class="stat-sub" id="stat-server-sub"></div></div></div>
+    </div>
+    <div class="mt-3" style="position:relative;height:150px;"><canvas id="stats-chart"></canvas></div>
+  </div>
+</div>
+
+<div class="row">
+  <!-- Console output — full width -->
+  <div class="col-12 mb-3">
+    <div class="card">
+      <div class="card-header">
+        <i class="bi bi-terminal-fill"></i> Live Console
+        <span class="text-secondary small ms-2" id="ws-status">(connecting...)</span>
+      </div>
+      <div class="card-body p-0">
+        <div class="console-output" id="console-output">
+          {% for line in console_lines if line.strip() %}<div class="console-line">{{ line }}</div>{% else %}<div class="text-secondary">Waiting for console output...</div>{% endfor %}
+        </div>
+      </div>
+      {% if can_send_command %}
+      <div class="card-footer">
+        <form class="d-flex gap-2" id="command-form" onsubmit="return sendCommand(event)">
+          <input type="text" name="command" class="form-control form-control-sm flex-grow-1"
+                 placeholder="Enter game server command…" id="command-input"
+                 autocomplete="off">
+          <button type="submit" class="btn btn-primary btn-sm">
+            <i class="bi bi-send-fill"></i> Send
+          </button>
+        </form>
+      </div>
+      {% endif %}
+    </div>
+  </div>
+
+  <!-- Info cards -->
+  <div class="col-md-4 mb-3">
+    <div class="card h-100">
+      <div class="card-header"><i class="bi bi-info-circle-fill"></i> Server Info</div>
+      <div class="card-body">
+        <table class="table table-borderless table-sm mb-0">
+          <tr>
+            <td class="text-secondary">Name</td>
+            <td class="text-end">{{ server.name }}</td>
+          </tr>
+          <tr>
+            <td class="text-secondary">Short Name</td>
+            <td class="text-end">{{ server.short_name }}</td>
+          </tr>
+          <tr>
+            <td class="text-secondary">Game Type</td>
+            <td class="text-end">{{ server.game_display or server.game_type }}</td>
+          </tr>
+          <tr>
+            <td class="text-secondary">Port</td>
+            <td class="text-end">{{ server.port }}</td>
+          </tr>
+          <tr>
+            <td class="text-secondary">Status</td>
+            <td class="text-end">
+              <span class="status-dot status-{{ server.status if server.status in ['online','offline'] else 'unknown' }}"></span>
+              {{ server.status|title }}
+            </td>
+          </tr>
+          <tr>
+            <td class="text-secondary">Installed</td>
+            <td class="text-end">{{ "Yes" if server.installed else "No" }}</td>
+          </tr>
+          <tr>
+            <td class="text-secondary">Auto-start on boot</td>
+            <td class="text-end">
+              {% if can_autostart %}
+              <div class="form-check form-switch d-inline-block m-0">
+                <input class="form-check-input" type="checkbox" role="switch" id="autostart-toggle"
+                       {% if server.autostart %}checked{% endif %} onchange="toggleAutostart(this)">
+              </div>
+              {% else %}
+              {{ "On" if server.autostart else "Off" }}
+              {% endif %}
+            </td>
+          </tr>
+          <tr>
+            <td class="text-secondary">Daily restart <span class="text-muted" style="font-size:.7rem;">(when empty)</span></td>
+            <td class="text-end">
+              {% if can_autostart %}
+              <div class="form-check form-switch d-inline-block m-0">
+                <input class="form-check-input" type="checkbox" role="switch" id="dailyrestart-toggle"
+                       {% if server.daily_restart %}checked{% endif %} onchange="toggleDailyRestart(this)">
+              </div>
+              {% else %}
+              {{ "On" if server.daily_restart else "Off" }}
+              {% endif %}
+            </td>
+          </tr>
+        </table>
+      </div>
+    </div>
+  </div>
+
+  <div class="col-md-4 mb-3">
+    <div class="card h-100">
+      <div class="card-header"><i class="bi bi-hdd-network-fill"></i> Remote Server</div>
+      <div class="card-body">
+        <table class="table table-borderless table-sm mb-0">
+          <tr>
+            <td class="text-secondary">Name</td>
+            <td class="text-end">{{ remote.name }}</td>
+          </tr>
+          <tr>
+            <td class="text-secondary">Host</td>
+            <td class="text-end">{{ remote.host }}:{{ remote.port }}</td>
+          </tr>
+          <tr>
+            <td class="text-secondary">SSH User</td>
+            <td class="text-end">{{ remote.username }}</td>
+          </tr>
+        </table>
+      </div>
+    </div>
+  </div>
+
+  <div class="col-md-4 mb-3">
+    <div class="card h-100">
+      <div class="card-header d-flex justify-content-between align-items-center">
+        <span><i class="bi bi-list-columns-reverse"></i> Supported Commands</span>
+        <form method="POST" action="{{ url_for('refresh_server_commands', server_id=server.id) }}" style="display:inline;">
+          <button type="submit" class="btn btn-sm btn-outline-secondary py-0 px-1" title="Reload command list from the server">
+            <i class="bi bi-arrow-repeat"></i>
+          </button>
+        </form>
+      </div>
+      <div class="card-body p-0" style="max-height:340px;overflow-y:auto;">
+        {% if all_commands %}
+        <table class="table table-sm table-borderless mb-0 small">
+          {% for c in all_commands %}
+          <tr>
+            <td class="ps-3" style="white-space:nowrap;vertical-align:top;"><code class="text-info">{{ c.cmd }}</code></td>
+            <td class="text-secondary pe-3">{{ c.desc }}</td>
+          </tr>
+          {% endfor %}
+        </table>
+        {% else %}
+        <div class="p-3 text-secondary small">
+          No command list cached yet.
+          {% if server.installed %}Click <i class="bi bi-arrow-repeat"></i> to load it from the server.{% else %}Available once the server is installed.{% endif %}
+        </div>
+        {% endif %}
+      </div>
+    </div>
+  </div>
+</div>
+
+{% endblock %}
+
+{% block scripts %}
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
+<script>
+var consoleEl = document.getElementById('console-output');
+var wsStatus = document.getElementById('ws-status');
+var serverId = {{ server.id }};
+
+// Mount prefix (e.g. "/lgsm" when served behind Tailscale Serve). All client-side
+// URLs must include it, otherwise requests hit the site root (a different app).
+var MOUNT = "{{ mount_prefix if mount_prefix and mount_prefix != '/' else '' }}";
+
+// WebSocket connection for live console streaming
+var socket = io({ path: MOUNT + '/socket.io', transports: ['websocket', 'polling'] });
+
+socket.on('connect', function() {
+  wsStatus.textContent = '(connected)';
+  wsStatus.className = 'text-success small ms-2';
+  socket.emit('join_console', { server_id: serverId });
+});
+
+socket.on('disconnect', function() {
+  wsStatus.textContent = '(disconnected)';
+  wsStatus.className = 'text-danger small ms-2';
+});
+
+socket.on('console_output', function(data) {
+  if (data.server_id === serverId && data.data) {
+    appendConsole(data.data);
+  }
+});
+
+function appendConsole(text) {
+  var lines = text.split('\n');
+  for (var i = 0; i < lines.length; i++) {
+    if (lines[i].trim()) {
+      var div = document.createElement('div');
+      div.className = 'console-line';
+      div.textContent = lines[i];
+      consoleEl.appendChild(div);
+    }
+  }
+  // Keep console from growing too large
+  while (consoleEl.children.length > 500) {
+    consoleEl.removeChild(consoleEl.firstChild);
+  }
+  consoleEl.scrollTop = consoleEl.scrollHeight;
+}
+
+function refreshConsole() {
+  fetch(MOUNT + '/api/console/' + serverId)
+    .then(r => r.json())
+    .then(data => {
+      consoleEl.innerHTML = '';
+      if (data.lines) {
+        data.lines.forEach(function(line) {
+          if (!line.trim()) return;  // skip blank log lines
+          var div = document.createElement('div');
+          div.className = 'console-line';
+          div.textContent = line;
+          consoleEl.appendChild(div);
+        });
+      }
+      consoleEl.scrollTop = consoleEl.scrollHeight;
+    })
+    .catch(() => {});
+}
+
+function clearConsole() {
+  consoleEl.innerHTML = '';
+}
+
+function sendCommand(ev) {
+  ev.preventDefault();
+  var input = document.getElementById('command-input');
+  var cmd = input.value.trim();
+  if (!cmd) return false;
+  input.value = '';
+  // Echo locally so it feels instant; the real output streams over the websocket.
+  var echo = document.createElement('div');
+  echo.className = 'console-line';
+  echo.style.color = '#58a6ff';
+  echo.textContent = '> ' + cmd;
+  consoleEl.appendChild(echo);
+  consoleEl.scrollTop = consoleEl.scrollHeight;
+  fetch(MOUNT + '/api/command/' + serverId, {
+    method: 'POST', headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({ command: cmd })
+  })
+  .then(r => r.json())
+  .then(d => { if (d.error) { echo.style.color = '#f85149'; echo.textContent = '> ' + cmd + '  — ' + d.error; } })
+  .catch(() => { echo.style.color = '#f85149'; });
+  input.focus();
+  return false;
+}
+
+function toast(msg, kind) {
+  var c = document.getElementById('toast-area');
+  if (!c) {
+    c = document.createElement('div'); c.id = 'toast-area';
+    c.style.cssText = 'position:fixed;bottom:1rem;right:1rem;z-index:9999;display:flex;flex-direction:column;gap:.5rem;max-width:400px;';
+    document.body.appendChild(c);
+  }
+  var t = document.createElement('div');
+  t.className = 'alert alert-' + (kind === 'success' ? 'success' : (kind === 'danger' ? 'danger' : 'info')) + ' py-2 px-3 mb-0';
+  t.style.cssText = 'box-shadow:0 4px 20px rgba(0,0,0,.5);font-size:.82rem;';
+  t.textContent = msg;
+  c.appendChild(t);
+  setTimeout(function(){ t.style.transition = 'opacity .4s'; t.style.opacity = '0'; setTimeout(function(){ t.remove(); }, 400); }, 6000);
+}
+
+var SERVER_NAME = {{ server.name|tojson }};
+function serverAction(action, btn, confirmFirst) {
+  if (confirmFirst && !confirm(action.charAt(0).toUpperCase() + action.slice(1) + ' ' + SERVER_NAME + '?')) return;
+  var orig = btn.innerHTML;
+  btn.disabled = true; btn.innerHTML = '<span class="spinner-border spinner-border-sm"></span>';
+  fetch(MOUNT + '/api/server/' + serverId + '/action', {
+    method: 'POST', headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({ action: action })
+  })
+  .then(r => r.json())
+  .then(d => { toast(d.message || (action + ' done'), d.success ? 'success' : 'danger'); setTimeout(pollStats, 1200); })
+  .catch(() => toast('Action failed — connection error', 'danger'))
+  .finally(() => { btn.disabled = false; btn.innerHTML = orig; });
+}
+
+function toggleAutostart(el) {
+  el.disabled = true;
+  fetch(MOUNT + '/api/server/' + serverId + '/autostart', {
+    method: 'POST', headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({ enabled: el.checked })
+  })
+  .then(r => r.json())
+  .then(d => { if (!d.success) { el.checked = !el.checked; alert(d.message || 'Failed to update autostart'); } })
+  .catch(() => { el.checked = !el.checked; })
+  .finally(() => { el.disabled = false; });
+}
+
+function toggleDailyRestart(el) {
+  el.disabled = true;
+  fetch(MOUNT + '/api/server/' + serverId + '/daily-restart', {
+    method: 'POST', headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({ enabled: el.checked })
+  })
+  .then(r => r.json())
+  .then(d => {
+    if (!d.success) { el.checked = !el.checked; alert(d.message || 'Failed to update daily restart'); }
+    else if (typeof toast === 'function') { toast(el.checked ? 'Daily restart (when empty) enabled' : 'Daily restart disabled', 'success'); }
+  })
+  .catch(() => { el.checked = !el.checked; })
+  .finally(() => { el.disabled = false; });
+}
+
+// ── Live stats + chart ───────────────────────────────────────
+var connectAddr = '';
+function copyConnect() {
+  if (connectAddr) navigator.clipboard.writeText(connectAddr).catch(()=>{});
+}
+function fmtGB(b) { return (b / 1073741824).toFixed(1) + ' GB'; }
+function fmtUptime(s) {
+  var d = Math.floor(s/86400), h = Math.floor(s%86400/3600), m = Math.floor(s%3600/60);
+  return d ? d+'d '+h+'h' : (h ? h+'h '+m+'m' : m+'m');
+}
+function setStatus(status) {
+  var badge = document.getElementById('status-badge'), text = document.getElementById('status-text');
+  if (!text) return;
+  text.textContent = status.charAt(0).toUpperCase() + status.slice(1);
+  badge.style.background = status === 'online' ? '#3fb950' : (status === 'offline' ? '#f85149' : '#d29922');
+}
+
+var statsChart = null;
+function initChart() {
+  if (typeof Chart === 'undefined') return;
+  var ctx = document.getElementById('stats-chart').getContext('2d');
+  var mk = function(label, color) {
+    return { label: label, data: [], borderColor: color, backgroundColor: color+'22',
+             fill: true, tension: .35, pointRadius: 0, borderWidth: 2 };
+  };
+  statsChart = new Chart(ctx, {
+    type: 'line',
+    data: { labels: [], datasets: [ mk('Game CPU %', '#3fb950'), mk('Server CPU %', '#58a6ff') ] },
+    options: {
+      responsive: true, maintainAspectRatio: false, animation: false,
+      interaction: { intersect: false, mode: 'index' },
+      scales: {
+        y: { min: 0, max: 100, ticks: { color: '#8b98a5', maxTicksLimit: 5 }, grid: { color: 'rgba(255,255,255,.05)' } },
+        x: { ticks: { color: '#8b98a5', maxTicksLimit: 6, maxRotation: 0 }, grid: { display: false } }
+      },
+      plugins: { legend: { labels: { color: '#c9d1d9', boxWidth: 12, boxHeight: 12 } } }
+    }
+  });
+}
+
+function pollStats() {
+  fetch(MOUNT + '/api/server/' + serverId + '/stats')
+    .then(r => r.json())
+    .then(d => {
+      if (d.error) return;
+      connectAddr = d.connect || '';
+      document.getElementById('connect-addr').textContent = connectAddr || 'unknown';
+      setStatus(d.status);
+      var m = d.metrics || {};
+      // Game-specific tiles
+      document.getElementById('stat-gcpu').textContent = (m.game_cpu_percent!=null? m.game_cpu_percent : '–') + '%';
+      document.getElementById('stat-gcpu-sub').textContent = 'of ' + (m.cores||1) + '-core server';
+      document.getElementById('stat-gram').textContent = (m.game_ram_mb||0) + ' MB';
+      document.getElementById('stat-gram-sub').textContent = (m.game_ram_percent!=null? m.game_ram_percent+'% of RAM' : (m.game_procs||0)+' procs');
+      document.getElementById('stat-gup').textContent = m.game_procs ? fmtUptime(m.game_uptime_secs||0) : 'stopped';
+      document.getElementById('stat-gup-sub').textContent = (m.game_procs||0) + ' process' + ((m.game_procs===1)?'':'es');
+      // Whole-server tile
+      document.getElementById('stat-scpu').textContent = (m.cpu_percent!=null? m.cpu_percent : '–') + '%';
+      document.getElementById('stat-server-sub').textContent = 'RAM ' + (m.ram_percent||0) + '% · disk ' + (m.disk_percent||0) + '%';
+      if (statsChart) {
+        var t = new Date().toLocaleTimeString([], {hour:'2-digit', minute:'2-digit', second:'2-digit'});
+        var L = statsChart.data.labels, A = statsChart.data.datasets[0].data, B = statsChart.data.datasets[1].data;
+        L.push(t); A.push(m.game_cpu_percent||0); B.push(m.cpu_percent||0);
+        if (L.length > 45) { L.shift(); A.shift(); B.shift(); }
+        statsChart.update('none');
+      }
+    })
+    .catch(() => {});
+}
+
+// Populate console immediately via AJAX (page render no longer waits on SSH),
+// then let the websocket stream take over.
+refreshConsole();
+initChart();
+pollStats();
+setInterval(pollStats, 4000);
+// Backup console refresh (websocket is primary)
+setInterval(refreshConsole, 30000);
+</script>
+{% endblock %}

@@ -1,0 +1,203 @@
+{% extends "base.html" %}
+{% block title %}Dashboard{% endblock %}
+{% block content %}
+
+<div class="d-flex justify-content-between align-items-center mb-4">
+  <h1 class="page-title mb-0"><i class="bi bi-grid-1x2-fill"></i> Dashboard</h1>
+  <div>
+    <span class="text-secondary small" id="refresh-indicator">
+      <i class="bi bi-arrow-repeat"></i> Auto-refreshing
+    </span>
+  </div>
+</div>
+
+{% if not servers %}
+<div class="card">
+  <div class="card-body text-center py-5">
+    <span style="font-size: 3rem;">📡</span>
+    <h5 class="mt-3">No Game Servers Found</h5>
+    <p class="text-secondary">
+      No game servers are configured yet.
+      {% if current_user.is_superadmin or has_permission(current_user, 'manage_remotes') %}
+        <br>Start by adding a <a href="{{ url_for('manage_remotes') }}">remote server</a>, then install a game server from the <a href="{{ url_for('manage_servers') }}">Game Servers</a> page.
+      {% endif %}
+    </p>
+  </div>
+</div>
+{% else %}
+
+<!-- Stats row -->
+<div class="row mb-4">
+  <div class="col-md-3">
+    <div class="card text-center p-3">
+      <div class="h3 mb-0" id="total-servers">{{ servers|length }}</div>
+      <div class="text-secondary small">Total Servers</div>
+    </div>
+  </div>
+  <div class="col-md-3">
+    <div class="card text-center p-3">
+      <div class="h3 mb-0" id="online-count">
+        <span class="status-dot status-online"></span>
+        {{ servers|selectattr('status', 'equalto', 'online')|list|length }}
+      </div>
+      <div class="text-secondary small">Online</div>
+    </div>
+  </div>
+  <div class="col-md-3">
+    <div class="card text-center p-3">
+      <div class="h3 mb-0" id="offline-count">
+        <span class="status-dot status-offline"></span>
+        {{ servers|selectattr('status', 'equalto', 'offline')|list|length }}
+      </div>
+      <div class="text-secondary small">Offline</div>
+    </div>
+  </div>
+  <div class="col-md-3">
+    <div class="card text-center p-3">
+      <div class="h3 mb-0">{{ remote_count }}</div>
+      <div class="text-secondary small">Remote Servers</div>
+    </div>
+  </div>
+</div>
+
+<!-- Server cards grouped by remote -->
+{% for remote in remotes %}
+{% set remote_servers = servers|selectattr('remote_id', 'equalto', remote.id)|list %}
+{% if remote_servers %}
+<div class="card mb-3">
+  <div class="card-header d-flex justify-content-between align-items-center">
+    <span>
+      <i class="bi bi-hdd-network-fill"></i> {{ remote.name }}
+      <span class="text-secondary small ms-2">{{ remote.host }}</span>
+    </span>
+    <span>
+      <span class="badge {% if remote.is_online %}bg-success{% else %}bg-danger{% endif %}">
+        {{ "Online" if remote.is_online else "Offline" }}
+      </span>
+    </span>
+  </div>
+  <div class="card-body p-0">
+    <div class="table-responsive">
+      <table class="table table-hover mb-0">
+        <thead>
+          <tr>
+            <th>Server</th>
+            <th>Type</th>
+            <th>Status</th>
+            <th>Connect</th>
+            <th class="text-end">Actions</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for srv in remote_servers %}
+          <tr>
+            <td>
+              <strong>{{ srv.name }}</strong>
+              <span class="text-secondary d-block" style="font-size: .75rem;">{{ srv.short_name }}</span>
+            </td>
+            <td>{{ srv.game_display or srv.game_type }}</td>
+            <td id="status-{{ srv.id }}" data-status="{{ srv.status }}">
+              <span class="status-dot status-{{ srv.status if srv.status in ['online','offline'] else 'unknown' }}"></span>
+              {{ srv.status|title }}
+            </td>
+            <td>
+              <span class="connect-cell" id="connect-{{ srv.id }}" data-addr="">
+                <code class="text-info" style="font-size:.78rem;">:{{ srv.port }}</code>
+              </span>
+            </td>
+            <td class="text-end text-nowrap">
+              {% if can_control %}
+              <button class="btn btn-outline-success btn-sm" title="Start" onclick="doAction({{ srv.id }}, 'start', this)"><i class="bi bi-play-fill"></i></button>
+              <button class="btn btn-outline-warning btn-sm" title="Restart" onclick="doAction({{ srv.id }}, 'restart', this)"><i class="bi bi-arrow-repeat"></i></button>
+              <button class="btn btn-outline-danger btn-sm" title="Stop" onclick="doAction({{ srv.id }}, 'stop', this)"><i class="bi bi-stop-fill"></i></button>
+              {% endif %}
+              <a href="{{ url_for('server_detail', server_id=srv.id) }}" class="btn btn-outline-secondary btn-sm" title="Console & stats">
+                <i class="bi bi-terminal-fill"></i>
+              </a>
+            </td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  </div>
+</div>
+{% endif %}
+{% endfor %}
+
+{% endif %}
+
+{% endblock %}
+
+{% block scripts %}
+<script>
+function titleCase(s){ return s ? s.charAt(0).toUpperCase()+s.slice(1) : ''; }
+
+// Live status: update the count tiles + each server row's status cell.
+function refreshStatus() {
+  fetch(MOUNT + '/api/servers')
+    .then(r => r.json())
+    .then(data => {
+      var online = data.filter(s => s.status === 'online').length;
+      var offline = data.filter(s => s.status === 'offline').length;
+      var oc = document.getElementById('online-count');
+      var fc = document.getElementById('offline-count');
+      var tc = document.getElementById('total-servers');
+      if (oc) oc.innerHTML = '<span class="status-dot status-online"></span> ' + online;
+      if (fc) fc.innerHTML = '<span class="status-dot status-offline"></span> ' + offline;
+      if (tc) tc.textContent = data.length;
+      data.forEach(function(s){
+        var cell = document.getElementById('status-' + s.id);
+        if (cell && cell.dataset.status !== s.status) {
+          cell.dataset.status = s.status;
+          var cls = (s.status === 'online' || s.status === 'offline') ? s.status : 'unknown';
+          cell.innerHTML = '<span class="status-dot status-' + cls + '"></span> ' + titleCase(s.status);
+        }
+        var conn = document.getElementById('connect-' + s.id);
+        if (conn && s.connect && conn.dataset.addr !== s.connect) {
+          conn.dataset.addr = s.connect;
+          conn.innerHTML = '<code class="text-info" style="font-size:.78rem;cursor:pointer;" title="Click to copy" onclick="copyAddr(\'' + s.connect + '\')">' + s.connect + '</code>';
+        }
+      });
+    })
+    .catch(() => {});
+}
+refreshStatus();              // populate status + connect immediately
+setInterval(refreshStatus, 8000);
+
+function copyAddr(addr) {
+  navigator.clipboard.writeText(addr).then(function(){ toast('Copied ' + addr, 'success'); }).catch(function(){});
+}
+
+// Inline server actions (no page reload).
+function doAction(id, action, btn) {
+  var original = btn.innerHTML;
+  btn.disabled = true; btn.innerHTML = '<span class="spinner-border spinner-border-sm"></span>';
+  fetch(MOUNT + '/api/server/' + id + '/action', {
+    method: 'POST', headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({ action: action })
+  })
+  .then(r => r.json())
+  .then(d => {
+    toast(d.message || (d.success ? ('Server ' + action + ' issued') : 'Action failed'), d.success ? 'success' : 'danger');
+    setTimeout(refreshStatus, 1500);
+  })
+  .catch(() => toast('Action failed', 'danger'))
+  .finally(() => { btn.disabled = false; btn.innerHTML = original; });
+}
+
+// Minimal toast helper.
+function toast(msg, kind) {
+  var c = document.getElementById('toast-area');
+  if (!c) { c = document.createElement('div'); c.id = 'toast-area';
+    c.style.cssText = 'position:fixed;bottom:1rem;right:1rem;z-index:9999;display:flex;flex-direction:column;gap:.5rem;';
+    document.body.appendChild(c); }
+  var t = document.createElement('div');
+  t.className = 'alert alert-' + (kind === 'success' ? 'success' : 'danger') + ' py-2 px-3 mb-0';
+  t.style.cssText = 'box-shadow:0 4px 20px rgba(0,0,0,.5);min-width:220px;';
+  t.textContent = msg;
+  c.appendChild(t);
+  setTimeout(function(){ t.style.opacity = '0'; t.style.transition = 'opacity .4s'; setTimeout(function(){ t.remove(); }, 400); }, 3500);
+}
+</script>
+{% endblock %}

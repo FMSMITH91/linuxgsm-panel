@@ -1,0 +1,394 @@
+"""System operations for the local server — UFW, Tailscale SSH, OS updates, reboot."""
+import json
+import os
+import re
+import subprocess
+import threading
+import time
+from datetime import datetime
+from pathlib import Path
+
+
+def live_metrics():
+    """Fast realtime metrics for the local host: per-core + overall CPU%% (via a
+    short /proc/stat delta) and RAM/swap (from /proc/meminfo). Reads /proc directly
+    — no subprocess — so it's cheap enough to poll every 1-2s."""
+    def _read_stat():
+        cpus = {}
+        try:
+            with open("/proc/stat") as f:
+                for line in f:
+                    if line.startswith("cpu"):
+                        parts = line.split()
+                        if len(parts) >= 8:
+                            cpus[parts[0]] = [int(x) for x in parts[1:8]]
+        except Exception:
+            pass
+        return cpus
+
+    a = _read_stat()
+    time.sleep(0.25)
+    b = _read_stat()
+
+    def _pct(name):
+        if name not in a or name not in b:
+            return 0.0
+        idle = b[name][3] - a[name][3]
+        total = sum(b[name]) - sum(a[name])
+        return round((1 - idle / total) * 100, 1) if total > 0 else 0.0
+
+    core_names = sorted(
+        (n for n in a if n != "cpu" and n.startswith("cpu")),
+        key=lambda x: int(x[3:]) if x[3:].isdigit() else 0,
+    )
+    cores = [_pct(n) for n in core_names]
+    overall = _pct("cpu")
+
+    mem = {}
+    try:
+        with open("/proc/meminfo") as f:
+            for line in f:
+                k, _, rest = line.partition(":")
+                mem[k.strip()] = int(rest.strip().split()[0]) * 1024  # kB → bytes
+    except Exception:
+        pass
+    ram_total = mem.get("MemTotal", 0)
+    ram_used = ram_total - mem.get("MemAvailable", 0)
+    swap_total = mem.get("SwapTotal", 0)
+    swap_used = swap_total - mem.get("SwapFree", 0)
+
+    return {
+        "cpu_overall": overall,
+        "cpu_cores": cores,
+        "core_count": len(cores),
+        "ram_used": ram_used,
+        "ram_total": ram_total,
+        "ram_percent": round(ram_used / ram_total * 100, 1) if ram_total else 0,
+        "swap_used": swap_used,
+        "swap_total": swap_total,
+        "swap_percent": round(swap_used / swap_total * 100, 1) if swap_total else 0,
+    }
+
+# ─── Helpers ──────────────────────────────────────────────────
+
+def _run(cmd, timeout=30, sudo=False, text=True):
+    """Run a shell command. Returns (stdout, stderr, exit_code)."""
+    if sudo and os.geteuid() != 0:
+        cmd = f"sudo {cmd}"
+    try:
+        r = subprocess.run(
+            cmd, shell=True, capture_output=True, text=text, timeout=timeout,
+        )
+        return r.stdout.strip(), r.stderr.strip(), r.returncode
+    except subprocess.TimeoutExpired:
+        return "", "Command timed out", -1
+    except FileNotFoundError:
+        return "", "Command not found", -1
+    except Exception as e:
+        return "", str(e), -1
+
+
+def _check_sudo():
+    """Check if we can sudo without a password prompt."""
+    out, err, rc = _run("sudo -n true 2>/dev/null && echo 'OK' || echo 'NOPASS'", timeout=10)
+    return "OK" in out
+
+
+# ─── UFW ──────────────────────────────────────────────────────
+
+def ufw_status():
+    """Get UFW status and rules."""
+    out, err, rc = _run("ufw status verbose 2>&1", timeout=15, sudo=True)
+    if rc != 0:
+        return {"enabled": False, "status_text": "not_installed" if "not found" in err or "not installed" in err else "inactive", "rules": []}
+
+    enabled = "Status: active" in out
+    status_text = "active" if enabled else "inactive"
+    rules = []
+
+    # Parse rules
+    for line in out.split("\n"):
+        line = line.strip()
+        # Match: "Anywhere on <interface>" or "Anywhere                   ALLOW      192.168.1.0/24"
+        if not line or "Status:" in line or "Logging:" in line or "Default:" in line or "New:" in line:
+            continue
+        if "(" in line and ")" in line:
+            continue  # Skip header lines like (v6)
+
+        parts = line.split()
+        if len(parts) >= 3 and parts[0][0].isdigit():
+            # Numbered rule
+            num = parts[0]
+            action = parts[1] if len(parts) > 1 else ""
+            rest = " ".join(parts[2:])
+            rules.append({"num": num, "action": action, "detail": rest})
+
+    return {"enabled": enabled, "status_text": status_text, "rules": rules}
+
+
+def ufw_allow_tailscale(ts_interface=None):
+    """Allow traffic on the Tailscale interface via UFW.
+
+    Detects the Tailscale interface name automatically if not provided.
+    Creates: ufw allow in on <interface> && ufw allow out on <interface>
+    """
+    # Auto-detect Tailscale interface
+    if not ts_interface:
+        ts_interface = detect_tailscale_interface()
+
+    if not ts_interface:
+        return False, "Could not detect Tailscale interface. Is Tailscale running?"
+
+    # Allow incoming on tailscale interface
+    out1, err1, rc1 = _run(
+        f"ufw allow in on {ts_interface} 2>&1", timeout=15, sudo=True
+    )
+    # Allow outgoing on tailscale interface
+    out2, err2, rc2 = _run(
+        f"ufw allow out on {ts_interface} 2>&1", timeout=15, sudo=True
+    )
+
+    if rc1 == 0 and rc2 == 0:
+        return True, f"UFW rules added for interface '{ts_interface}'"
+    else:
+        errors = [e for e in [err1, err2] if e]
+        return False, "; ".join(errors)
+
+
+def detect_tailscale_interface():
+    """Detect the Tailscale network interface name."""
+    # Method 1: ip link show type wireguard
+    out, _, rc = _run("ip -o link show type wireguard 2>/dev/null | awk -F': ' '{print $2}'", timeout=5)
+    if rc == 0 and out:
+        for iface in out.split("\n"):
+            if "tailscale" in iface.lower() or "wg" in iface.lower():
+                return iface.strip()
+
+    # Method 2: Look for tailscale interface in ip link
+    out, _, rc = _run("ip -o link show 2>/dev/null | grep -i tailscale | awk -F': ' '{print $2}'", timeout=5)
+    if rc == 0 and out:
+        return out.strip().split("\n")[0]
+
+    # Method 3: Check common names
+    for name in ["tailscale0", "wg0", "utun"]:
+        out, _, rc = _run(f"ip link show {name} 2>/dev/null && echo 'FOUND' || echo 'NOTFOUND'", timeout=5)
+        if "NOTFOUND" not in out:  # "FOUND" is a substring of "NOTFOUND"
+            return name
+
+    # Method 4: Parse tailscale status for interface info
+    out, _, rc = _run("tailscale status --json 2>/dev/null || echo '{}'", timeout=5)
+    if rc == 0:
+        try:
+            data = json.loads(out)
+            if data.get("TUN"):
+                return "tailscale0"
+        except Exception:
+            pass
+
+    return None
+
+
+# ─── Tailscale SSH ─────────────────────────────────────────────
+
+def tailscale_ssh_status():
+    """Check if this node runs the Tailscale SSH server.
+    The authoritative source is the local prefs (`RunSSH`), not `status --json`
+    (which has no SSHEnabled field — the old check always reported disabled)."""
+    # Is tailscale even up?
+    st, _, rc = _run("tailscale status --json 2>/dev/null", timeout=10)
+    if rc != 0 or not st:
+        return {"enabled": False, "error": "Tailscale not running"}
+    out, _, prc = _run("tailscale debug prefs 2>/dev/null", timeout=10)
+    if prc == 0 and out:
+        try:
+            return {"enabled": bool(json.loads(out).get("RunSSH", False)), "method": "prefs"}
+        except Exception:
+            pass
+    return {"enabled": False, "error": "Could not read Tailscale prefs"}
+
+
+def tailscale_ssh_enable():
+    """Enable Tailscale SSH by re-authenticating with --ssh flag."""
+    out, err, rc = _run(
+        "tailscale up --ssh --accept-routes --accept-dns --reset 2>&1",
+        timeout=30
+    )
+    if rc == 0:
+        return True, "Tailscale SSH enabled"
+    return False, err or out or "Failed to enable Tailscale SSH"
+
+
+def tailscale_ssh_disable():
+    """Disable Tailscale SSH by re-authenticating without --ssh flag."""
+    out, err, rc = _run(
+        "tailscale up --accept-routes --accept-dns --reset 2>&1",
+        timeout=30
+    )
+    if rc == 0:
+        return True, "Tailscale SSH disabled"
+    return False, err or out or "Failed to disable Tailscale SSH"
+
+
+# ─── OS Updates ───────────────────────────────────────────────
+
+def os_update_available(refresh=True):
+    """Check if OS updates are available (apt list --upgradable).
+    refresh=False skips the network `apt update` (uses the cached package lists),
+    which keeps page loads fast — the dedicated "check for updates" action passes
+    refresh=True to force a fresh sync."""
+    if refresh:
+        _run("apt update -qq 2>/dev/null", timeout=60, sudo=True)
+
+    out, _, rc = _run(
+        "apt list --upgradable 2>/dev/null | grep -v 'Listing...' | grep -v '^$'",
+        timeout=30
+    )
+    if not out.strip():
+        return {"updates_available": False, "count": 0, "packages": []}
+
+    packages = []
+    for line in out.strip().split("\n"):
+        # Format: pkg-name/stable 1.2.3 amd64 [upgradable from: 1.2.2]
+        parts = line.split()
+        if parts:
+            name = parts[0].split("/")[0] if "/" in parts[0] else parts[0]
+            version = parts[1] if len(parts) > 1 else ""
+            packages.append({"name": name, "version": version})
+
+    return {"updates_available": len(packages) > 0, "count": len(packages), "packages": packages}
+
+
+def os_run_update():
+    """Run apt upgrade in background. Returns (success, message)."""
+    has_sudo = _check_sudo()
+    if not has_sudo:
+        return False, "Sudo access required. Configure passwordless sudo for the panel user."
+
+    # Run in background thread
+    def _bg_update():
+        _run("apt upgrade -y -o Dpkg::Options::='--force-confdef' -o Dpkg::Options::='--force-confold' 2>&1",
+             timeout=600, sudo=True)
+
+    thread = threading.Thread(target=_bg_update, daemon=True)
+    thread.start()
+    return True, "OS update started in background. This may take several minutes."
+
+
+def os_update_log():
+    """Get recent apt history."""
+    log_file = "/var/log/apt/history.log"
+    if not os.path.exists(log_file):
+        return []
+    out, _, rc = _run(f"tail -50 {log_file}", timeout=5)
+    lines = out.split("\n") if out else []
+    entries = []
+    current = {}
+    for line in lines:
+        if line.startswith("Start-Date:"):
+            if current:
+                entries.append(current)
+            current = {"start": line.replace("Start-Date: ", ""), "command": "", "packages": []}
+        elif line.startswith("Commandline:"):
+            current["command"] = line.replace("Commandline: ", "")
+        elif line.startswith("Packages:"):
+            current["packages"] = line.replace("Packages: ", "").split()
+    if current:
+        entries.append(current)
+    return entries[-10:]  # Last 10
+
+
+# ─── Reboot ───────────────────────────────────────────────────
+
+def server_reboot(delay_seconds=5):
+    """Reboot the server with an optional delay."""
+    has_sudo = _check_sudo()
+    if not has_sudo:
+        return False, "Sudo access required for reboot."
+
+    # Schedule reboot in background
+    def _do_reboot():
+        import time
+        time.sleep(delay_seconds)
+        _run("reboot", timeout=30, sudo=True)
+
+    thread = threading.Thread(target=_do_reboot, daemon=True)
+    thread.start()
+    return True, f"Server will reboot in {delay_seconds} seconds."
+
+
+def server_uptime():
+    """Get server uptime."""
+    out, _, rc = _run("uptime -p", timeout=5)
+    uptime_str = out.replace("up ", "") if out else "unknown"
+
+    # Also get load average
+    load, _, _ = _run("cat /proc/loadavg 2>/dev/null | awk '{print $1, $2, $3}'", timeout=5)
+    load_parts = load.split() if load else ["?", "?", "?"]
+
+    # Get disk
+    disk, _, _ = _run("df -h / | tail -1 | awk '{print $3 \"/\" $2 \" (\" $5 \")\"}'", timeout=5)
+
+    # Memory
+    mem, _, _ = _run("free -h | grep Mem | awk '{print $3 \"/\" $2}'", timeout=5)
+    mem_percent, _, _ = _run("free | grep Mem | awk '{printf \"%.1f\", $3/$2 * 100}'", timeout=5)
+
+    # Kernel
+    kernel, _, _ = _run("uname -r", timeout=5)
+
+    # CPU
+    cpu_percent, _, _ = _run(
+        "top -bn1 | grep 'Cpu(s)' | awk '{print $2 + $4}'",
+        timeout=5
+    )
+    # CPU load / core count
+    cpu_cores, _, _ = _run("nproc", timeout=3)
+    cpu_per_core = ""
+    if cpu_percent and cpu_cores and cpu_cores.strip().isdigit():
+        try:
+            cpu_per_core = f"{float(cpu_percent)/int(cpu_cores):.1f}"
+        except ValueError:
+            pass
+
+    return {
+        "uptime": uptime_str,
+        "load_1m": load_parts[0] if len(load_parts) > 0 else "?",
+        "load_5m": load_parts[1] if len(load_parts) > 1 else "?",
+        "load_15m": load_parts[2] if len(load_parts) > 2 else "?",
+        "disk_root": disk or "?",
+        "memory": mem or "?",
+        "memory_percent": mem_percent or "?",
+        "kernel": kernel or "?",
+        "cpu_percent": cpu_percent or "?",
+        "cpu_cores": cpu_cores.strip() if cpu_cores else "?",
+        "cpu_per_core": cpu_per_core,
+    }
+
+
+# ─── Combined status ──────────────────────────────────────────
+
+def get_server_status():
+    """Get combined server status for the management page.
+    Uses the cached update list (no network apt-update) so the page loads fast;
+    the user can trigger a fresh check separately."""
+    ufw = ufw_status()
+    ts_ssh = tailscale_ssh_status()
+    updates = os_update_available(refresh=False)
+    uptime = server_uptime()
+    has_sudo = _check_sudo()
+    ts_iface = detect_tailscale_interface()
+
+    # Check if tailscale interface is already allowed in UFW
+    tailscale_ufw_allowed = False
+    if ts_iface and ufw["enabled"]:
+        out, _, _ = _run(f"ufw status verbose 2>&1 | grep -i '{ts_iface}'", timeout=10, sudo=True)
+        tailscale_ufw_allowed = bool(out.strip())
+
+    return {
+        "has_sudo": has_sudo,
+        "ufw": ufw,
+        "tailscale_ssh": ts_ssh,
+        "tailscale_interface": ts_iface,
+        "tailscale_ufw_allowed": tailscale_ufw_allowed,
+        "updates": updates,
+        "uptime": uptime,
+    }
