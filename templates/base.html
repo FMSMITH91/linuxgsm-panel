@@ -520,10 +520,11 @@ window.cursorFlash = function(msg, kind){
     + 'left:' + (window._cursor.x + 12) + 'px;top:' + (window._cursor.y - 10) + 'px;'
     + 'background:' + bg + ';color:#0b0f17;font-size:.72rem;font-weight:700;'
     + 'padding:2px 8px;border-radius:6px;box-shadow:0 2px 10px rgba(0,0,0,.45);'
-    + 'opacity:1;transform:translateY(0);transition:transform .55s ease, opacity .55s ease;';
+    + 'opacity:1;transform:translateY(0);transition:transform .6s ease, opacity .6s ease;';
   document.body.appendChild(el);
-  requestAnimationFrame(function(){ el.style.transform = 'translateY(-16px)'; el.style.opacity = '0'; });
-  setTimeout(function(){ el.remove(); }, 620);
+  // Hold it fully visible for a beat, THEN float up and fade — so it's not missed.
+  setTimeout(function(){ el.style.transform = 'translateY(-18px)'; el.style.opacity = '0'; }, 850);
+  setTimeout(function(){ el.remove(); }, 1500);
 };
 
 window.copyText = function(text, label){
