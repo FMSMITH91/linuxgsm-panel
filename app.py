@@ -72,7 +72,10 @@ from auth import (
     SUPER_ADMIN, VIEW_SERVERS, VIEW_CONSOLE, SEND_COMMAND,
     RESTART_SERVER, START_SERVER, STOP_SERVER, UPDATE_SERVER,
 )
-from config import DATA_DIR, DB_PATH, get_secret_key, load_config, save_config
+from config import (
+    DATA_DIR, DB_PATH, get_secret_key, load_config, save_config,
+    encrypt_secret, decrypt_secret, is_encrypted,
+)
 from models import (
     AuditLog, GameServer, Group, RemoteServer, SetupState, User, db, init_db,
 )
@@ -222,6 +225,8 @@ _LOGIN_FAILS_LOCK = threading.Lock()
 LOGIN_MAX_FAILS = 8
 LOGIN_WINDOW = 300  # seconds
 
+MIN_PASSWORD_LEN = 10
+
 
 def create_app():
     app = Flask(__name__)
@@ -253,6 +258,21 @@ def create_app():
     # Initialize extensions
     init_auth(app)
     init_db(app)
+
+    # One-time: encrypt any legacy plaintext SSH credentials already in the DB.
+    with app.app_context():
+        try:
+            from models import RemoteServer
+            changed = False
+            for r in RemoteServer.query.all():
+                if r.auth_credential and not is_encrypted(r.auth_credential) \
+                        and r.auth_method in ("password", "key"):
+                    r.auth_credential = encrypt_secret(r.auth_credential)
+                    changed = True
+            if changed:
+                db.session.commit()
+        except Exception:
+            db.session.rollback()
 
     # Register blueprints/routes
     register_routes(app)
@@ -415,8 +435,8 @@ def register_routes(app):
 
                 if not username or len(username) < 3:
                     flash("Username must be at least 3 characters.", "danger")
-                elif not password or len(password) < 6:
-                    flash("Password must be at least 6 characters.", "danger")
+                elif not password or len(password) < MIN_PASSWORD_LEN:
+                    flash(f"Password must be at least {MIN_PASSWORD_LEN} characters.", "danger")
                 elif password != confirm:
                     flash("Passwords do not match.", "danger")
                 else:
@@ -468,7 +488,7 @@ def register_routes(app):
                             remote = RemoteServer(
                                 name=name, host=host, port=ssh_port,
                                 username=ssh_user, auth_method=auth_method,
-                                auth_credential=credential,
+                                auth_credential=encrypt_secret(credential),
                                 sudo_enabled=sudo_enabled,
                                 linuxgsm_user=lgsm_user,
                                 is_online=True,
@@ -574,9 +594,10 @@ def register_routes(app):
 
         return render_template("login.html")
 
-    @app.route("/logout")
+    @app.route("/logout", methods=["POST"])
     @login_required
     def logout():
+        # POST-only so it can't be triggered cross-site via a GET (e.g. <img src=…/logout>).
         log_action(current_user, "logout", detail="User logged out")
         logout_user()
         flash("You have been logged out.", "info")
@@ -1226,7 +1247,7 @@ def register_routes(app):
         remote = RemoteServer(
             name=name, host=host, port=ssh_port,
             username=ssh_user, auth_method=auth_method,
-            auth_credential=credential,
+            auth_credential=encrypt_secret(credential),
             sudo_enabled=sudo_enabled, linuxgsm_user=lgsm_user,
             is_online=True, last_seen=datetime.utcnow(),
         )
@@ -1269,7 +1290,11 @@ def register_routes(app):
         remote.port = int(request.form.get("ssh_port", remote.port))
         remote.username = new_user
         remote.auth_method = request.form.get("auth_method", remote.auth_method)
-        remote.auth_credential = request.form.get("credential", remote.auth_credential)
+        # Credential: the edit form leaves it blank to keep the current one; a new
+        # value is (re)encrypted before storage.
+        new_cred = request.form.get("credential", "").strip()
+        if new_cred:
+            remote.auth_credential = encrypt_secret(new_cred)
         remote.sudo_enabled = request.form.get("sudo_enabled") == "on"
         remote.linuxgsm_user = new_lgsm
         db.session.commit()
@@ -1308,7 +1333,7 @@ def register_routes(app):
         remote = get_remote(remote_id)
         success, msg = ssh_test_connection(
             remote.host, remote.port, remote.username,
-            remote.auth_method, remote.auth_credential
+            remote.auth_method, decrypt_secret(remote.auth_credential)
         )
         if success:
             flash(f"Connection to {remote.name} successful!", "success")
@@ -1343,8 +1368,8 @@ def register_routes(app):
         if not username or len(username) < 3:
             flash("Username must be at least 3 characters.", "danger")
             return redirect(url_for("manage_users"))
-        if not password or len(password) < 6:
-            flash("Password must be at least 6 characters.", "danger")
+        if not password or len(password) < MIN_PASSWORD_LEN:
+            flash(f"Password must be at least {MIN_PASSWORD_LEN} characters.", "danger")
             return redirect(url_for("manage_users"))
 
         existing = User.query.filter_by(username=username).first()
@@ -1384,6 +1409,9 @@ def register_routes(app):
         # Update password if provided
         password = request.form.get("password", "")
         if password:
+            if len(password) < MIN_PASSWORD_LEN:
+                flash(f"Password must be at least {MIN_PASSWORD_LEN} characters.", "danger")
+                return redirect(url_for("manage_users"))
             user.password_hash = hash_password(password)
 
         # Update groups
@@ -2550,7 +2578,13 @@ def register_routes(app):
             return jsonify({"error": str(e)}), 500
 
     # ── WebSocket Console ───────────────────────────────────
-    socketio = SocketIO(app, cors_allowed_origins="*", async_mode="eventlet")
+    # cors_allowed_origins defaults to "*" so the WebSocket console works behind the
+    # Tailscale Serve reverse proxy out of the box; a security-conscious deploy can set
+    # socketio_cors_origins in config.json to the panel's own https URL to lock it down.
+    # (The join_console handler already requires an authenticated session, and the
+    # SameSite=Lax session cookie stops a cross-site page from carrying it.)
+    socketio = SocketIO(app, cors_allowed_origins=load_config().get("socketio_cors_origins", "*"),
+                        async_mode="eventlet")
 
     # Track which sockets are viewing which server console, so the poller only
     # polls consoles that someone is actually watching (idle = ~0% CPU).

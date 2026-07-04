@@ -13,6 +13,8 @@ from pathlib import Path
 
 import paramiko
 
+from config import decrypt_secret
+
 # Local subprocess execution must use the *unpatched* subprocess run inside
 # eventlet's native thread pool — see _run_local() for the full rationale.
 # When eventlet isn't active (standalone/CLI use) these fall back to plain subprocess.
@@ -93,13 +95,14 @@ def get_connection(server, force_new=False):
     client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
 
     timeout = 15
+    cred = decrypt_secret(server.auth_credential)  # stored encrypted at rest
     try:
-        if server.auth_method == "password" and server.auth_credential:
+        if server.auth_method == "password" and cred:
             client.connect(
                 server.host,
                 port=server.port or 22,
                 username=server.username,
-                password=server.auth_credential,
+                password=cred,
                 timeout=timeout,
                 allow_agent=False,
                 look_for_keys=False,
@@ -124,7 +127,7 @@ def get_connection(server, force_new=False):
                 look_for_keys=True,
             )
         else:
-            key_path = server.auth_credential or os.path.expanduser("~/.ssh/id_rsa")
+            key_path = cred or os.path.expanduser("~/.ssh/id_rsa")
             client.connect(
                 server.host,
                 port=server.port or 22,
@@ -1265,7 +1268,7 @@ def _wait_for_reboot(server, on_wait=None, down_timeout=150, up_timeout=480):
         try:
             ok, _ = ssh_test_connection(
                 server.host, server.port or 22, server.username,
-                server.auth_method, server.auth_credential,
+                server.auth_method, decrypt_secret(server.auth_credential),
             )
             return ok
         except Exception:
