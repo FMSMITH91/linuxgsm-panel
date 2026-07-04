@@ -597,11 +597,23 @@ def register_routes(app):
         can_send_command = _can(SEND_COMMAND)
         can_autostart = _can(RESTART_SERVER)
 
+        # Public address players connect to. For the LOCAL panel host, remote.host is
+        # 127.0.0.1 (loopback SSH), so resolve/cache the real public IP instead.
+        if not remote.public_ip:
+            try:
+                ip = remote_public_ip(remote)
+                if ip:
+                    remote.public_ip = ip
+                    db.session.commit()
+            except Exception:
+                pass
+        public_host = remote.public_ip or ("" if remote.is_local else remote.host)
+
         return render_template("server_detail.html", server=gs, remote=remote,
                                console_lines=console_lines, actions=actions,
                                maintenance=maintenance, all_commands=all_commands,
                                can_send_command=can_send_command,
-                               can_autostart=can_autostart)
+                               can_autostart=can_autostart, public_host=public_host)
 
     def _perm_for_action(action):
         """Which permission an action requires (core actions have specific perms;

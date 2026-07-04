@@ -175,20 +175,20 @@
 
   <div class="col-md-4 mb-3">
     <div class="card h-100">
-      <div class="card-header"><i class="bi bi-hdd-network-fill"></i> Remote Server</div>
+      <div class="card-header"><i class="bi bi-hdd-network-fill"></i> Host</div>
       <div class="card-body">
         <table class="table table-borderless table-sm mb-0">
           <tr>
-            <td class="text-secondary">Name</td>
-            <td class="text-end">{{ remote.name }}</td>
+            <td class="text-secondary">Machine</td>
+            <td class="text-end">{{ remote.name }}{% if remote.is_local %} <span class="badge bg-secondary" style="font-size:.6rem;">this panel</span>{% endif %}</td>
           </tr>
           <tr>
-            <td class="text-secondary">Host</td>
-            <td class="text-end">{{ remote.host }}:{{ remote.port }}</td>
+            <td class="text-secondary">Public IP</td>
+            <td class="text-end">{{ public_host or 'resolving…' }}</td>
           </tr>
           <tr>
-            <td class="text-secondary">SSH User</td>
-            <td class="text-end">{{ remote.username }}</td>
+            <td class="text-secondary">Connect</td>
+            <td class="text-end"><code class="text-info">{{ (public_host ~ ':' ~ server.port) if public_host else (':' ~ server.port) }}</code></td>
           </tr>
         </table>
       </div>
