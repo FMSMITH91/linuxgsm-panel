@@ -823,13 +823,34 @@ def _ssh_ports(server):
     return ports
 
 
+def _panel_web_port(server, tailscale_available):
+    """If `server` is the panel's OWN host and the panel isn't reachable over
+    Tailscale, the public web port is the only way into the panel UI — return it so
+    its rule can be protected. Returns None when it's a remote, when Tailscale is
+    available (Serve/MagicDNS or a tailscale0 rule → another way in), or on error."""
+    if not is_local_server(server) or tailscale_available:
+        return None
+    try:
+        from config import load_config
+        cfg = load_config()
+    except Exception:
+        return None
+    if cfg.get("tailscale_setup_done"):
+        return None  # served via Tailscale; the public port isn't the way in
+    try:
+        return int(cfg.get("port", 5000))
+    except (TypeError, ValueError):
+        return 5000
+
+
 def _annotate_firewall_protection(server, enabled, groups):
     """Flag rules whose removal could LOCK YOU OUT, so the UI and API can refuse to
-    delete the last way in. Two kinds of "access" rules: the SSH-port ALLOW, and the
-    Tailscale-interface ALLOW. A rule is only *blocked* when it's the sole remaining
-    access path (delete it and there'd be no SSH and no Tailscale left); when another
-    way in exists it's merely flagged to warn on. If UFW is disabled it isn't
-    enforcing anything, so nothing is protected."""
+    delete the last way in. Access rules: the SSH-port ALLOW and the Tailscale-
+    interface ALLOW — a rule is *blocked* only when it's the sole remaining one (no
+    SSH and no Tailscale would be left); otherwise it's flagged to warn on. On the
+    panel's OWN host, the panel's web port is also protected when Tailscale isn't an
+    alternate route (otherwise you'd delete your only way into the panel UI). If UFW
+    is disabled it isn't enforcing anything, so nothing is protected."""
     ssh_ports = _ssh_ports(server)
     access = 0
     for g in groups:
@@ -841,11 +862,29 @@ def _annotate_firewall_protection(server, enabled, groups):
         g["is_access"] = g["is_ssh"] or g["is_tailscale"]
         if g["is_access"]:
             access += 1
+
+    tailscale_available = any(g["is_tailscale"] for g in groups)
+    panel_port = _panel_web_port(server, tailscale_available)
+
     for g in groups:
         g["protected"] = False
         g["warn"] = False
         g["protect_reason"] = ""
-        if not enabled or not g["is_access"]:
+        g["is_panel"] = (panel_port is not None and not g.get("is_iface")
+                         and g.get("action") == "ALLOW"
+                         and str(g.get("port_num", "")).isdigit()
+                         and int(g["port_num"]) == panel_port)
+        if not enabled:
+            continue
+        if g["is_panel"]:
+            # No Tailscale route, so this public port is the only way into the panel.
+            g["protected"] = True
+            g["protect_reason"] = (
+                "Port %d is where this panel's own web interface listens, and it isn't reachable "
+                "over Tailscale — removing it would lock you out of the panel. Set up Tailscale "
+                "first if you want to close it." % panel_port)
+            continue
+        if not g["is_access"]:
             continue
         if access <= 1:
             g["protected"] = True
