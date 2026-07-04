@@ -58,6 +58,7 @@ from flask import (
 )
 from flask_login import current_user, login_required, login_user, logout_user
 from flask_socketio import SocketIO, emit, join_room, leave_room
+from flask_wtf.csrf import CSRFProtect
 from flask_sqlalchemy import SQLAlchemy
 from sqlalchemy import desc
 
@@ -287,6 +288,13 @@ def create_app():
     init_auth(app)
     init_db(app)
 
+    # CSRF protection for every state-changing request. Forms carry a hidden token
+    # (auto-injected in base.html); the JSON API sends it as an X-CSRFToken header
+    # (a global fetch wrapper adds it). Defense-in-depth on top of the SameSite=Lax
+    # session cookie. Tests disable it via WTF_CSRF_ENABLED=False.
+    app.config.setdefault("WTF_CSRF_TIME_LIMIT", None)  # token valid for the session
+    CSRFProtect(app)
+
     # One-time: encrypt any legacy plaintext secrets/PII already in the DB
     # (remote SSH credentials, and user email addresses).
     with app.app_context():
@@ -304,6 +312,22 @@ def create_app():
                     changed = True
             if changed:
                 db.session.commit()
+        except Exception:
+            db.session.rollback()
+
+    # Optional audit-log retention. Off by default (keep everything — audit history
+    # shouldn't vanish by surprise). Set "audit_log_retention_days" in config.json to a
+    # positive number to prune older entries on startup so the table can't grow forever.
+    with app.app_context():
+        try:
+            days = int(cfg.get("audit_log_retention_days", 0) or 0)
+            if days > 0:
+                from datetime import datetime, timedelta
+                from models import AuditLog
+                cutoff = datetime.utcnow() - timedelta(days=days)
+                deleted = AuditLog.query.filter(AuditLog.timestamp < cutoff).delete()
+                if deleted:
+                    db.session.commit()
         except Exception:
             db.session.rollback()
 
@@ -2709,13 +2733,22 @@ def register_routes(app):
             return jsonify({"error": str(e)}), 500
 
     # ── WebSocket Console ───────────────────────────────────
-    # cors_allowed_origins defaults to "*" so the WebSocket console works behind the
-    # Tailscale Serve reverse proxy out of the box; a security-conscious deploy can set
-    # socketio_cors_origins in config.json to the panel's own https URL to lock it down.
-    # (The join_console handler already requires an authenticated session, and the
-    # SameSite=Lax session cookie stops a cross-site page from carrying it.)
-    socketio = SocketIO(app, cors_allowed_origins=load_config().get("socketio_cors_origins", "*"),
-                        async_mode="eventlet")
+    def _socketio_cors():
+        """Origins allowed to open the console WebSocket. Explicit config wins; else,
+        once the panel has a domain (served via Tailscale Serve/nginx), lock to that
+        origin instead of "*". Falls back to "*" only for plain IP:port access, where
+        there's no fixed origin to pin to. (join_console also requires an authenticated
+        session, and the SameSite=Lax cookie stops a cross-site page carrying it.)"""
+        cfg = load_config()
+        explicit = cfg.get("socketio_cors_origins")
+        if explicit:
+            return explicit
+        dom = (cfg.get("site_domain") or "").strip()
+        if dom:
+            return ["https://%s" % dom, "http://%s" % dom]
+        return "*"
+
+    socketio = SocketIO(app, cors_allowed_origins=_socketio_cors(), async_mode="eventlet")
 
     # Track which sockets are viewing which server console, so the poller only
     # polls consoles that someone is actually watching (idle = ~0% CPU).
