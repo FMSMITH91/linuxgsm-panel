@@ -337,13 +337,13 @@ def register_routes(app):
 
     @app.route("/setup", methods=["GET", "POST"])
     def setup_wizard():
-        if is_setup_complete() and request.method == "GET":
-            state = SetupState.query.first()
-            if state and state.step == "complete":
-                # Allow viewing the completion page
-                pass
-            else:
-                return redirect("/")
+        # SECURITY: the setup wizard has NO authentication (it must be reachable on a
+        # fresh install to create the first admin). Once setup is finished it is
+        # PERMANENTLY LOCKED for both GET and POST. Previously only GET was blocked, so
+        # an unauthenticated POST /setup with step=admin_user could create a brand-new
+        # superadmin (or step=welcome could rewrite bind_host/port). Lock everything.
+        if is_setup_complete():
+            return redirect(url_for("login"))
 
         state = SetupState.query.first()
         if not state:
@@ -372,6 +372,11 @@ def register_routes(app):
                 return redirect("/setup")
 
             elif step == "admin_user":
+                # Defence in depth: the setup wizard only ever creates the FIRST admin.
+                # If a superadmin already exists, refuse (belt-and-suspenders behind the
+                # is_setup_complete lock above).
+                if User.query.filter_by(is_superadmin=True).first():
+                    return redirect(url_for("login"))
                 # Step 2: Create admin user
                 username = request.form.get("username", "").strip()
                 password = request.form.get("password", "")
@@ -1416,6 +1421,7 @@ def register_routes(app):
     # ── Tailscale Integration ───────────────────────────────
     @app.route("/tailscale")
     @login_required
+    @permission_required(MANAGE_REMOTES)
     def tailscale_page():
         """Tailscale status and management page."""
         info = ts.get_tailscale_info(force_refresh=request.args.get("refresh") == "1")
@@ -1425,6 +1431,7 @@ def register_routes(app):
 
     @app.route("/api/tailscale")
     @login_required
+    @permission_required(MANAGE_REMOTES)
     def api_tailscale():
         """JSON endpoint with live Tailscale info."""
         info = ts.get_tailscale_info(force_refresh=True)
