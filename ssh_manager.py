@@ -867,6 +867,107 @@ def host_specs(server):
     }
 
 
+# ── Ubuntu Pro (ubuntu-advantage-tools / `pro`) ────────────────────────────
+# The security-relevant services we surface (the rest — fips/cis/anbox/etc. —
+# aren't relevant to a game-server host and just add noise).
+_PRO_FEATURED = ["esm-infra", "esm-apps", "livepatch"]
+_PRO_SERVICES = {
+    "esm-infra", "esm-apps", "livepatch", "fips", "fips-updates", "fips-preview",
+    "cis", "usg", "realtime-kernel", "landscape", "anbox-cloud", "ros", "ros-updates",
+}
+
+
+def _pro_trim(blob):
+    """Collapse a pro CLI output blob to a short, single-line message."""
+    import re as _re
+    return _re.sub(r"\s+", " ", blob or "").strip()[-300:]
+
+
+def pro_status(server):
+    """Ubuntu Pro attachment/service status for a host. Returns installed/attached
+    plus the featured security services and their enabled/disabled state."""
+    import json
+    out, _, _ = run_command(
+        server,
+        "command -v pro >/dev/null 2>&1 && pro status --format json 2>/dev/null || echo NOPRO",
+        timeout=25, sudo=True,
+    )
+    if "NOPRO" in out or not out.strip():
+        return {"installed": False, "attached": False, "services": []}
+    try:
+        data = json.loads(out)
+    except Exception:
+        return {"installed": True, "attached": False, "services": [],
+                "error": "Could not parse pro status"}
+    by_name = {s.get("name"): s for s in (data.get("services") or [])}
+    featured = []
+    for name in _PRO_FEATURED:
+        s = by_name.get(name)
+        if s:
+            featured.append({
+                "name": name,
+                "description": s.get("description", ""),
+                "status": s.get("status", ""),
+                "entitled": s.get("entitled", ""),
+                "available": s.get("available", ""),
+            })
+    contract = data.get("contract") or {}
+    account = data.get("account") or {}
+    expires = data.get("expires", "") or ""
+    if expires.startswith("9999"):  # perpetual free sub — don't show a scary date
+        expires = ""
+    return {
+        "installed": True,
+        "attached": bool(data.get("attached")),
+        "account": account.get("name", "") if isinstance(account, dict) else "",
+        "contract": contract.get("name", "") if isinstance(contract, dict) else "",
+        "expires": expires,
+        "services": featured,
+    }
+
+
+def pro_attach(server, token):
+    """Attach a host to Ubuntu Pro with a subscription token. Installs the pro client
+    first if it's somehow missing. The token is NEVER echoed back in messages/logs."""
+    token = (token or "").strip()
+    if not token:
+        return False, "No token provided"
+    cmd = ("(command -v pro >/dev/null 2>&1 || (apt-get update -qq && "
+           "DEBIAN_FRONTEND=noninteractive apt-get install -y ubuntu-advantage-tools)) ; "
+           f"pro attach {_quote(token)} 2>&1")
+    out, err, rc = run_command(server, cmd, timeout=240, sudo=True)
+    blob = ((out or "") + " " + (err or "")).replace(token, "<token>")
+    low = blob.lower()
+    if rc == 0 or "this machine is now attached" in low or "already attached" in low:
+        return True, "Attached to Ubuntu Pro."
+    return False, _pro_trim(blob) or "Attach failed"
+
+
+def pro_service(server, service, action):
+    """Enable or disable an Ubuntu Pro service (esm-infra, esm-apps, livepatch, …)."""
+    if service not in _PRO_SERVICES:
+        return False, "Unknown service"
+    if action not in ("enable", "disable"):
+        return False, "Unknown action"
+    out, err, rc = run_command(server, f"pro {action} {service} --assume-yes 2>&1",
+                               timeout=300, sudo=True)
+    blob = (out or "") + " " + (err or "")
+    low = blob.lower()
+    if rc == 0 or "is already enabled" in low or "is already disabled" in low \
+            or "now enabled" in low or "updating package lists" in low:
+        return True, _pro_trim(blob) or f"{service} {action}d"
+    return False, _pro_trim(blob) or f"Could not {action} {service}"
+
+
+def pro_detach(server):
+    """Detach a host from Ubuntu Pro."""
+    out, err, rc = run_command(server, "pro detach --assume-yes 2>&1", timeout=120, sudo=True)
+    blob = (out or "") + " " + (err or "")
+    if rc == 0 or "detach" in blob.lower():
+        return True, "Detached from Ubuntu Pro."
+    return False, _pro_trim(blob) or "Detach failed"
+
+
 def remote_ufw_open_port(server, port, protocol="tcp", comment=""):
     """Open a port on the remote server via UFW. protocol 'both'/'any' opens TCP+UDP
     in a single rule (a bare `ufw allow <port>` covers both)."""

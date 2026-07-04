@@ -530,6 +530,84 @@ window.copyText = function(text, label){
     navigator.clipboard.writeText(text).then(done).catch(function(){ fallback(); done(); });
   } else { fallback(); done(); }
 };
+
+// ── Ubuntu Pro widget (shared by the Panel Server & Remote Manage pages) ──
+// Attaches to a host by its remote id (the panel host uses its own local remote
+// id). Renders status, attach form, per-service enable/disable, and detach.
+window.UPro = (function(){
+  var HOST = null, EL = null;
+  function e(s){ return String(s==null?'':s).replace(/[&<>"']/g,function(c){return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c];}); }
+  function msg(t, kind){ var m=document.getElementById('upro-msg'); if(m){ m.textContent=t; m.className='small mt-2 '+(kind==='success'?'text-success':(kind==='danger'?'text-danger':'text-secondary')); } }
+  function attachForm(){
+    return '<div class="input-group input-group-sm" style="max-width:540px;">'
+      + '<input type="password" id="upro-token" class="form-control" placeholder="Ubuntu Pro token (e.g. C1a…)" autocomplete="off">'
+      + '<button class="btn btn-success" onclick="UPro.attach()"><i class="bi bi-shield-check"></i> Attach</button></div>';
+  }
+  function render(d){
+    if(!EL) return;
+    if(!d || d.installed === false){
+      EL.innerHTML = '<div class="d-flex align-items-center gap-2 mb-2"><span class="badge bg-secondary">Not attached</span></div>'
+        + '<p class="small text-secondary mb-2">Ubuntu Pro is <strong>free for personal use</strong> (up to 5 machines) and adds ~10 years of security updates (ESM) plus kernel <strong>Livepatch</strong>. Get a token at <a href="https://ubuntu.com/pro/dashboard" target="_blank" rel="noopener">ubuntu.com/pro/dashboard</a>. The client will be installed automatically when you attach.</p>'
+        + attachForm() + '<div id="upro-msg" class="small mt-2"></div>';
+      return;
+    }
+    if(!d.attached){
+      EL.innerHTML = '<div class="d-flex align-items-center gap-2 mb-2"><span class="badge bg-secondary">Not attached</span></div>'
+        + '<p class="small text-secondary mb-2">Attach this host to your <strong>free</strong> Ubuntu Pro subscription for ~10 years of security updates (ESM) and kernel <strong>Livepatch</strong>. Get a token at <a href="https://ubuntu.com/pro/dashboard" target="_blank" rel="noopener">ubuntu.com/pro/dashboard</a>.</p>'
+        + attachForm() + '<div id="upro-msg" class="small mt-2"></div>';
+      return;
+    }
+    var head = '<div class="d-flex align-items-center gap-2 mb-2 flex-wrap"><span class="badge bg-success">Attached</span>'
+      + (d.contract ? '<span class="small text-secondary">'+e(d.contract)+'</span>' : '')
+      + (d.account ? '<span class="small text-secondary">· '+e(d.account)+'</span>' : '')
+      + (d.expires ? '<span class="small text-secondary">· expires '+e(d.expires.slice(0,10))+'</span>' : '') + '</div>';
+    var rows = '';
+    (d.services||[]).forEach(function(s){
+      var en = s.status === 'enabled';
+      var badge = en ? '<span class="badge bg-success">enabled</span>'
+        : (s.status === 'disabled' ? '<span class="badge bg-secondary">disabled</span>' : '<span class="badge bg-secondary">'+e(s.status||'—')+'</span>');
+      var canToggle = (s.entitled === 'yes');
+      var btn = !canToggle ? '<span class="small text-secondary">not entitled</span>'
+        : (en ? '<button class="btn btn-outline-secondary btn-sm py-0" onclick="UPro.service(\''+e(s.name)+'\',\'disable\')">Disable</button>'
+              : '<button class="btn btn-outline-success btn-sm py-0" onclick="UPro.service(\''+e(s.name)+'\',\'enable\')">Enable</button>');
+      rows += '<tr><td class="small"><code>'+e(s.name)+'</code><div class="text-secondary" style="font-size:.68rem;">'+e(s.description||'')+'</div></td><td>'+badge+'</td><td class="text-end">'+btn+'</td></tr>';
+    });
+    EL.innerHTML = head
+      + '<div class="table-responsive"><table class="table table-sm mb-2 align-middle"><tbody>'+rows+'</tbody></table></div>'
+      + '<button class="btn btn-outline-danger btn-sm" onclick="UPro.detach()"><i class="bi bi-x-circle"></i> Detach</button>'
+      + '<div id="upro-msg" class="small mt-2"></div>';
+  }
+  function refresh(){
+    if(!EL) return;
+    EL.innerHTML = '<div class="text-secondary small"><i class="bi bi-arrow-repeat"></i> Checking Ubuntu Pro…</div>';
+    fetch(MOUNT + '/api/remote/' + HOST + '/pro-status').then(function(r){ return r.json(); })
+      .then(render).catch(function(){ EL.innerHTML = '<div class="text-danger small">Could not read Ubuntu Pro status.</div>'; });
+  }
+  return {
+    load: function(hostId, elId){ HOST = hostId; EL = document.getElementById(elId); refresh(); },
+    attach: function(){
+      var t = document.getElementById('upro-token'); if(!t) return;
+      var token = t.value.trim(); if(!token){ msg('Enter your Ubuntu Pro token first.', 'danger'); return; }
+      msg('Attaching… this can take a minute.', 'info');
+      fetch(MOUNT + '/api/remote/' + HOST + '/pro-attach', {method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({token: token})})
+        .then(function(r){ return r.json(); }).then(function(d){ msg((d.success?'✓ ':'✗ ')+(d.message||''), d.success?'success':'danger'); if(d.success) setTimeout(refresh, 800); })
+        .catch(function(){ msg('✗ Request failed', 'danger'); });
+    },
+    service: function(name, action){
+      msg((action==='enable'?'Enabling ':'Disabling ')+name+'… this can take a moment.', 'info');
+      fetch(MOUNT + '/api/remote/' + HOST + '/pro-service', {method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({service:name, action:action})})
+        .then(function(r){ return r.json(); }).then(function(d){ msg((d.success?'✓ ':'✗ ')+(d.message||''), d.success?'success':'danger'); setTimeout(refresh, 800); })
+        .catch(function(){ msg('✗ Request failed', 'danger'); });
+    },
+    detach: function(){
+      if(!confirm('Detach this host from Ubuntu Pro? Security (ESM) updates and Livepatch will stop.')) return;
+      msg('Detaching…', 'info');
+      fetch(MOUNT + '/api/remote/' + HOST + '/pro-detach', {method:'POST'})
+        .then(function(r){ return r.json(); }).then(function(d){ msg((d.success?'✓ ':'✗ ')+(d.message||''), d.success?'success':'danger'); setTimeout(refresh, 800); })
+        .catch(function(){ msg('✗ Request failed', 'danger'); });
+    }
+  };
+})();
 </script>
 {% if current_user.is_authenticated and current_user.is_superadmin %}
 <script>

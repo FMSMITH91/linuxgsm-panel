@@ -81,7 +81,7 @@ from ssh_manager import (
     run_command, run_interactive, ssh_test_connection,
     get_server_status, run_as_game_user, send_console_command,
     list_server_commands, server_live_metrics, remote_public_ip, remote_live_metrics,
-    host_specs,
+    host_specs, pro_status, pro_attach, pro_service, pro_detach,
     set_autostart, get_autostart, install_game_cron, set_daily_restart,
     install_game_dependencies, parse_missing_deps, detect_game_port, detect_game_ports,
     lgsm_read_config, lgsm_write_config, lgsm_game_config,
@@ -1804,6 +1804,46 @@ def register_routes(app):
         """Static hardware/OS specs for a remote host (loaded once, not polled)."""
         remote = get_remote(remote_id)
         return jsonify(host_specs(remote))
+
+    # ── Ubuntu Pro (works for the panel host too, via its local remote id) ──
+    @app.route("/api/remote/<int:remote_id>/pro-status")
+    @login_required
+    @permission_required(MANAGE_REMOTES)
+    def api_remote_pro_status(remote_id):
+        return jsonify(pro_status(get_remote(remote_id)))
+
+    @app.route("/api/remote/<int:remote_id>/pro-attach", methods=["POST"])
+    @login_required
+    @permission_required(MANAGE_REMOTES)
+    def api_remote_pro_attach(remote_id):
+        remote = get_remote(remote_id)
+        token = (request.get_json(silent=True) or {}).get("token", "")
+        ok, msg = pro_attach(remote, token)
+        # NOTE: the token is deliberately never logged.
+        log_action(current_user, "pro_attach", target=remote.name, success=ok)
+        return jsonify({"success": ok, "message": msg})
+
+    @app.route("/api/remote/<int:remote_id>/pro-service", methods=["POST"])
+    @login_required
+    @permission_required(MANAGE_REMOTES)
+    def api_remote_pro_service(remote_id):
+        remote = get_remote(remote_id)
+        data = request.get_json(silent=True) or {}
+        service = (data.get("service") or "").strip()
+        action = (data.get("action") or "").strip()
+        ok, msg = pro_service(remote, service, action)
+        log_action(current_user, f"pro_{action or 'service'}", target=remote.name,
+                   detail=service, success=ok)
+        return jsonify({"success": ok, "message": msg})
+
+    @app.route("/api/remote/<int:remote_id>/pro-detach", methods=["POST"])
+    @login_required
+    @permission_required(MANAGE_REMOTES)
+    def api_remote_pro_detach(remote_id):
+        remote = get_remote(remote_id)
+        ok, msg = pro_detach(remote)
+        log_action(current_user, "pro_detach", target=remote.name, success=ok)
+        return jsonify({"success": ok, "message": msg})
 
     @app.route("/api/remote/<int:remote_id>/live")
     @login_required

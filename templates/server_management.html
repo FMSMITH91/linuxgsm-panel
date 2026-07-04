@@ -285,6 +285,16 @@
   </div>
 </div>
 
+<!-- Ubuntu Pro -->
+{% if local_remote %}
+<div class="card mb-3">
+  <div class="card-header"><i class="bi bi-shield-shaded"></i> Ubuntu Pro <span class="text-secondary ms-1" style="font-size:.7rem;font-weight:400;">free security updates (ESM) &amp; Livepatch</span></div>
+  <div class="card-body">
+    <div id="ubuntu-pro-body"><div class="text-secondary small">Checking Ubuntu Pro…</div></div>
+  </div>
+</div>
+{% endif %}
+
 <!-- Game Servers running on the panel host -->
 {% if local_games %}
 <div class="card mb-3">
@@ -348,6 +358,9 @@ function renderSpecs(d, el){
 fetch(MOUNT + '/api/server-management/specs').then(r=>r.json())
   .then(d=>renderSpecs(d, document.getElementById('specs-body')))
   .catch(()=>renderSpecs({error:'request failed'}, document.getElementById('specs-body')));
+
+// Ubuntu Pro card — the panel host is managed via its own local remote id.
+{% if local_remote %}UPro.load({{ local_remote.id }}, 'ubuntu-pro-body');{% endif %}
 
 function showToast(title, message, type) {
   var toast = document.getElementById('action-toast');
