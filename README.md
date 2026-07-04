@@ -55,17 +55,26 @@ A self-hosted web panel for managing **LinuxGSM** game servers on remote VPS mac
 
 ## Quick Install
 
+One command installs the panel — and re-running the **same command** later updates it in place:
+
 ```bash
-# Clone the repository
-git clone https://github.com/FMSMITH91/linuxgsm-panel.git
-cd linuxgsm-panel
-
-# Run the installer (auto-detects Tailscale)
-bash install.sh
-
-# Start the panel
-systemctl --user start linuxgsm-panel
+curl -fsSL https://raw.githubusercontent.com/FMSMITH91/linuxgsm-panel/main/install.sh | bash
 ```
+
+- Run as a normal user → installs under that user as a `systemd --user` service.
+- Run as **root** → the panel is **not** run as root; the installer creates a dedicated non-login service user and runs it as a system service.
+- Auto-detects Tailscale and offers HTTPS via Tailscale Serve during the setup wizard.
+
+### Safe, self-healing updates
+
+Re-running the command on an existing install performs a **verified update**: it snapshots the current code **and** database, pulls the new version, restarts the service, and **health-checks** that the panel actually comes back up. If it doesn't, it **automatically rolls back** to the previous version — code and database — so a bad release can't leave you with a dead panel. The command is idempotent; run it as often as you like.
+
+```bash
+# Later, to update (same command — installs or updates):
+curl -fsSL https://raw.githubusercontent.com/FMSMITH91/linuxgsm-panel/main/install.sh | bash
+```
+
+Prefer a checkout? `git clone` then `bash install.sh` does exactly the same thing, and `bash install.sh` again updates it.
 
 Or install manually:
 
