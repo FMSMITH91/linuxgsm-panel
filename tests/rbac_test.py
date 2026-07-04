@@ -1,0 +1,160 @@
+"""Automated RBAC enforcement test — proves permissions are enforced server-side and
+cannot be bypassed by calling endpoints directly.
+
+Run it against a configured install (from anywhere):
+
+    ./venv/bin/python tests/rbac_test.py      # exits 0 if all checks pass
+
+It creates a throwaway limited group + user (view-only, access to ONE host),
+exercises the real HTTP endpoints via Flask's test client, and deletes the fixtures
+again. Privileged actions are asserted to be BLOCKED *before* they execute, so it has
+no side effects on your game servers. Use it as a regression guard after auth changes.
+
+IMPORTANT: HTTP requests run WITHOUT an outer app_context. flask-login caches the
+loaded user on the app-context global `g`; a single shared app_context would leak the
+first authenticated user's identity into every later test client. Each test_client
+request pushes its own context, so we keep DB work in short, separate app_context
+blocks and never hold one open across HTTP calls.
+"""
+import os
+import secrets
+import sys
+
+# Allow running as `python tests/rbac_test.py` from the repo root.
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
+from app import create_app
+from models import db, User, Group, RemoteServer, GameServer
+import auth
+
+app = create_app()
+results = []
+
+
+def check(name, cond, detail=""):
+    results.append((bool(cond), name, detail))
+
+
+# ── Phase 1: gather ids + create throwaway fixtures (own context) ──
+with app.app_context():
+    from collections import defaultdict
+    by_remote = defaultdict(list)
+    for s in GameServer.query.all():
+        by_remote[s.remote_id].append(s)
+    rids = [rid for rid, l in by_remote.items() if l]
+    if not rids:
+        print("No game servers to test against — aborting.")
+        sys.exit(2)
+    granted_remote = rids[0]
+    other_remote = next((r for r in rids if r != granted_remote), None)
+    accessible_id = by_remote[granted_remote][0].id
+    other_id = by_remote[other_remote][0].id if other_remote else None
+    admin_id = User.query.filter_by(is_superadmin=True).first().id
+
+    tag = "rbactest_" + secrets.token_hex(3)
+    grp = Group(name=tag, description="RBAC test (auto)", is_default=False)
+    grp.set_permissions([auth.VIEW_SERVERS, auth.VIEW_CONSOLE])   # NO action/manage perms
+    grp.servers.append(RemoteServer.query.get(granted_remote))    # access to ONE remote only
+    db.session.add(grp)
+    db.session.flush()
+    u = User(username=tag, password_hash=auth.hash_password(secrets.token_hex(16)),
+             display_name=tag, is_superadmin=False, is_active=True)
+    u.groups.append(grp)
+    db.session.add(u)
+    db.session.commit()
+    uid = u.id
+
+print("Fixtures: limited user id=%d, group grants remote %d only." % (uid, granted_remote))
+print("Accessible server id=%d (remote %d); non-granted server id=%s (remote %s)\n"
+      % (accessible_id, granted_remote, other_id, other_remote))
+
+
+def client_as(user_id=None):
+    c = app.test_client()
+    if user_id is not None:
+        with c.session_transaction() as s:
+            s["_user_id"] = str(user_id)
+            s["_fresh"] = True
+    return c
+
+
+try:
+    # ── Limited user (VIEW_SERVERS + VIEW_CONSOLE, access to ONE remote) ──
+    c = client_as(uid)
+    for p in ["/users", "/groups", "/logs", "/remotes", "/server-management",
+              "/tailscale", "/api/tailscale",
+              "/api/remote/%d/specs" % granted_remote, "/api/panel/update-status"]:
+        code = c.get(p).status_code
+        check("limited user DENIED %s" % p, code != 200, "got %d" % code)
+
+    if other_id:
+        check("IDOR: console of non-granted server BLOCKED",
+              c.get("/api/console/%d" % other_id).status_code != 200)
+        check("IDOR: stats of non-granted server BLOCKED",
+              c.get("/api/server/%d/stats" % other_id).status_code != 200)
+        check("IDOR: action on non-granted server BLOCKED",
+              c.post("/api/server/%d/action" % other_id, json={"action": "start"}).status_code != 200)
+
+    check("action 'start' without START_SERVER -> 403",
+          c.post("/api/server/%d/action" % accessible_id, json={"action": "start"}).status_code == 403)
+    check("send command without SEND_COMMAND -> 403",
+          c.post("/api/command/%d" % accessible_id, json={"command": "status"}).status_code == 403)
+    check("read file without MANAGE_SERVERS -> 403",
+          c.get("/api/server/%d/file?path=.bashrc" % accessible_id).status_code == 403)
+    check("autostart toggle without RESTART_SERVER -> 403",
+          c.post("/api/server/%d/autostart" % accessible_id, json={"enabled": False}).status_code == 403)
+
+    check("view console WITH VIEW_CONSOLE + access -> 200",
+          c.get("/api/console/%d" % accessible_id).status_code == 200)
+
+    r = c.get("/api/servers")
+    ids = [x.get("id") for x in (r.get_json() or [])] if r.status_code == 200 else []
+    check("/api/servers -> 200", r.status_code == 200, "got %d" % r.status_code)
+    check("/api/servers INCLUDES granted server", accessible_id in ids, str(ids))
+    if other_id:
+        check("/api/servers HIDES non-granted server", other_id not in ids, str(ids))
+
+    # ── Unauthenticated ──
+    cu = client_as(None)
+    check("unauth GET / -> redirect to login", cu.get("/").status_code == 302)
+    check("unauth GET /users -> redirect", cu.get("/users").status_code == 302)
+    check("unauth GET /api/servers -> not 200", cu.get("/api/servers").status_code != 200)
+
+    # CRITICAL: /setup POST must NOT create a superadmin once setup is complete.
+    pwn = "pwned_" + tag
+    r = cu.post("/setup", data={"step": "admin_user", "username": pwn,
+                                "password": "hackme123", "confirm_password": "hackme123"})
+    with app.app_context():
+        created = User.query.filter_by(username=pwn).first()
+        was_created = created is not None
+        if created:
+            db.session.delete(created)
+            db.session.commit()
+    check("/setup POST CANNOT create a superadmin (unauth)", not was_created,
+          "ACCOUNT WAS CREATED (status %d)" % r.status_code if was_created else "blocked")
+    check("unauth GET /setup -> redirect", cu.get("/setup").status_code == 302)
+
+    # ── Superadmin sanity: still full access ──
+    ca = client_as(admin_id)
+    for p in ["/users", "/groups", "/logs", "/remotes", "/server-management", "/tailscale"]:
+        code = ca.get(p).status_code
+        check("superadmin CAN access %s" % p, code == 200, "got %d" % code)
+finally:
+    with app.app_context():
+        u = User.query.get(uid)
+        if u:
+            db.session.delete(u)
+        g = Group.query.filter_by(name=tag).first()
+        if g:
+            db.session.delete(g)
+        db.session.commit()
+    print("Fixtures cleaned up.\n")
+
+passed = sum(1 for ok, _, _ in results if ok)
+for ok, name, detail in results:
+    line = ("PASS" if ok else "FAIL") + "  " + name
+    if detail and not ok:
+        line += "   [%s]" % detail
+    print(line)
+print("\n%d / %d checks passed" % (passed, len(results)))
+sys.exit(0 if passed == len(results) else 1)

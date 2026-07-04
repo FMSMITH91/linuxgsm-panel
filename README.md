@@ -8,20 +8,50 @@
 
 A self-hosted web panel for managing **LinuxGSM** game servers on remote VPS machines. Full role-based access control with granular permissions — super admins, server admins, and moderators.
 
-> **🔒 Built-in Tailscale integration** — auto-detects your Tailscale status, one-click Serve/Funnel setup,
-> MagicDNS URL discovery, peer reachability checking for your remote VPS nodes.
+> **🔒 Built-in Tailscale integration** — auto-detects your Tailscale status, one-click **private** Serve
+> setup (tailnet-only, free on the Personal plan), MagicDNS URL discovery, and peer reachability checking
+> for your remote nodes.
 
 ## Features
 
 - **🔐 Multi-user RBAC** — Super Admin, Server Admin, Moderator, Viewer. Define groups with granular permissions (view, send commands, restart, install, uninstall, manage users, etc.)
 - **🖥️ Live Console** — Real-time WebSocket streaming of game server console output. Send commands directly to the running game.
-- **🔗 Tailscale Native** — Auto-detect Tailscale status, one-click Serve/Funnel configuration, MagicDNS URL, peer connectivity checker, auto-setup on first run.
+- **🔗 Tailscale Native** — Auto-detect Tailscale status, one-click private Serve setup (tailnet-only, free tier), MagicDNS URL, peer connectivity checker, auto-setup on first run. (Public Funnel exposure is an optional, clearly-warned advanced toggle.)
 - **🔌 Multiple Remote VPS** — Manage game servers across many machines via SSH key or password auth. Built-in Tailscale peer reachability check before adding remotes.
 - **📦 Install Game Servers** — Install any LinuxGSM-compatible game server with one click (Garry's Mod, Minecraft, CS:Source, TF2, ARMA 3, Rust, etc.)
 - **🛑 Full Control** — Start, stop, restart, update, monitor — all from the web UI.
 - **📋 Audit Logging** — Every action is logged with user, IP, target, and timestamp.
 - **⚡ Setup Wizard** — First-run wizard guides you through site config, admin creation, and remote VPS connection. Auto-configures Tailscale Serve if detected.
 - **🔌 REST API** — Full JSON API for server status, console, and commands.
+
+## Screenshots
+
+> ℹ️ IP addresses, hostnames, and account details in these screenshots are **redacted** with
+> placeholder values (`203.0.113.10`, `example.ts.net`, `admin@example.com`).
+
+**Dashboard** — every game server across every host, at a glance.
+
+![Dashboard](docs/screenshots/01-dashboard.png)
+
+**Live console & per-game stats** — real-time WebSocket console streaming, per-game CPU/RAM/uptime tiles, and a live resource graph.
+
+![Game server console](docs/screenshots/02-console.png)
+
+**Host manager** — the *same* page for the panel host and every remote: hardware/OS specs, live per-core resources, OS updates, firewall, power, Ubuntu Pro (free ESM + Livepatch), and one-click panel self-updates.
+
+![Host manager](docs/screenshots/03-host-manager.png)
+
+**Firewall** — raw UFW rules parsed into clean columns with IPv4/IPv6 merged, plus one-click opening of every port a game needs.
+
+![Firewall](docs/screenshots/04-firewall.png)
+
+**Files & config** — grouped LinuxGSM settings, the game's own config file, and a full file browser with drag-and-drop upload, in-browser editing, and delete guards that protect files LinuxGSM/the game needs.
+
+![Files & config](docs/screenshots/05-files.png)
+
+**Granular permissions** — groups bundle per-action permissions with per-server access; a user inherits the combined set. Enforcement is server-side on every endpoint.
+
+![Groups & permissions](docs/screenshots/06-permissions.png)
 
 ## Quick Install
 
