@@ -120,6 +120,7 @@
             <thead>
               <tr>
                 <th>Port</th>
+                <th>Protocol</th>
                 <th>For</th>
                 <th>Scope</th>
                 <th>IP</th>
@@ -130,8 +131,14 @@
               {% for g in status.groups %}
               <tr>
                 <td>
-                  {% if g.is_iface %}<span class="badge bg-info text-dark">{{ g.port_label }}</span>
-                  {% else %}<code>{{ g.port_label }}</code>{% endif %}
+                  {% if g.is_iface %}<span class="badge bg-info text-dark">{{ g.port_num }}</span>
+                  {% else %}<code>{{ g.port_num }}</code>{% endif %}
+                </td>
+                <td>
+                  {% if g.proto_label == 'TCP' %}<span class="badge bg-primary">TCP</span>
+                  {% elif g.proto_label == 'UDP' %}<span class="badge bg-warning text-dark">UDP</span>
+                  {% elif g.proto_label == 'BOTH' %}<span class="badge bg-secondary">Both</span>
+                  {% else %}<span class="text-secondary">—</span>{% endif %}
                 </td>
                 <td class="small">{{ g.comment or '—' }}</td>
                 <td class="small text-secondary">
@@ -177,13 +184,14 @@ function refreshFirewall() {
       var groups = data.groups || [];
       if (groups.length) {
         var html = '<table class="table table-sm table-hover mb-0 align-middle">'
-          + '<thead><tr><th>Port</th><th>For</th><th>Scope</th><th>IP</th><th></th></tr></thead><tbody>';
+          + '<thead><tr><th>Port</th><th>Protocol</th><th>For</th><th>Scope</th><th>IP</th><th></th></tr></thead><tbody>';
         groups.forEach(function(g) {
           var port = g.is_iface
-            ? '<span class="badge bg-info text-dark">' + esc(g.port_label) + '</span>'
-            : '<code>' + esc(g.port_label) + '</code>';
+            ? '<span class="badge bg-info text-dark">' + esc(g.port_num) + '</span>'
+            : '<code>' + esc(g.port_num) + '</code>';
           var scope = (g.action !== 'ALLOW' ? '<span class="badge bg-danger me-1">' + esc(g.action) + '</span>' : '') + esc(g.scope);
           html += '<tr><td>' + port + '</td>'
+            + '<td>' + protoBadge(g.proto_label) + '</td>'
             + '<td class="small">' + esc(g.comment || '—') + '</td>'
             + '<td class="small text-secondary">' + scope + '</td>'
             + '<td><span class="text-secondary" style="font-size:.68rem;">' + esc(g.family_label) + '</span></td>'
@@ -202,6 +210,13 @@ function esc(s) {
   return String(s == null ? '' : s).replace(/[&<>"']/g, function(c) {
     return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c];
   });
+}
+
+function protoBadge(p) {
+  if (p === 'TCP')  return '<span class="badge bg-primary">TCP</span>';
+  if (p === 'UDP')  return '<span class="badge bg-warning text-dark">UDP</span>';
+  if (p === 'BOTH') return '<span class="badge bg-secondary">Both</span>';
+  return '<span class="text-secondary">—</span>';
 }
 
 function openPort() {

@@ -142,6 +142,20 @@ health_check() {
     return 1
 }
 
+# Run git inside PANEL_DIR as the repo's owner. When the panel self-updates on a
+# root/system-service install, this script runs as root but the checkout is owned
+# by the service user — git refuses that ("detected dubious ownership") unless we
+# operate as the owner. As root we can sudo -u <owner> without a password.
+_gitc() {
+    local owner=""
+    [ -d "${PANEL_DIR}/.git" ] && owner="$(stat -c '%U' "${PANEL_DIR}/.git" 2>/dev/null || echo)"
+    if [ "$(id -u)" -eq 0 ] && [ -n "${owner}" ] && [ "${owner}" != "root" ]; then
+        sudo -u "${owner}" git -C "${PANEL_DIR}" "$@"
+    else
+        git -C "${PANEL_DIR}" "$@"
+    fi
+}
+
 # Copy the current checkout into PANEL_DIR (skips venv/data so we never clobber
 # secrets), or clone/pull from git when there's no local checkout.
 fetch_code() {
@@ -149,8 +163,8 @@ fetch_code() {
     if [ -n "${SRC}" ] && [ "${SRC}" != "${PANEL_DIR}" ]; then
         tar -C "${SRC}" --exclude=./venv --exclude=./data --exclude='*.pyc' -cf - . | tar -C "${PANEL_DIR}" -xf -
     elif [ -d "${PANEL_DIR}/.git" ]; then
-        git -C "${PANEL_DIR}" fetch --quiet origin "${DEFAULT_BRANCH}"
-        git -C "${PANEL_DIR}" reset --hard --quiet "origin/${DEFAULT_BRANCH}"
+        _gitc fetch --quiet origin "${DEFAULT_BRANCH}"
+        _gitc reset --hard --quiet "origin/${DEFAULT_BRANCH}"
     elif [ -z "${SRC}" ]; then
         command -v git >/dev/null 2>&1 || die "git is required to fetch the panel.  apt install -y git"
         git clone --depth 1 --branch "${DEFAULT_BRANCH}" "${REPO_URL}" "${PANEL_DIR}"

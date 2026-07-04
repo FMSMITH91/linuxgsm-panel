@@ -772,12 +772,26 @@ def _group_ufw_rules(rules):
                 port_label = "All ports"
             else:
                 port_label = to or "—"
+            # Split the protocol out of the port so the UI can show it in its own
+            # column (e.g. "5000/tcp" -> port "5000", protocol "TCP"). A bare
+            # numeric port with no suffix means UFW allowed both TCP and UDP.
+            m_proto = re.match(r"^(.*)/(tcp|udp)$", port_label, re.IGNORECASE)
+            if m_proto:
+                port_num = m_proto.group(1)
+                proto_label = m_proto.group(2).upper()
+            elif re.search(r"\d", port_label):
+                port_num = port_label
+                proto_label = "BOTH"
+            else:
+                port_num = port_label
+                proto_label = "—"
             if iface:
                 scope = iface + (" (Tailscale)" if iface.startswith("tailscale") else "")
             else:
                 scope = "Any address" if p["from"].lower() == "anywhere" else (p["from"] or "—")
             g = {
                 "nums": [], "families": [], "port_label": port_label,
+                "port_num": port_num, "proto_label": proto_label,
                 "comment": p["comment"], "scope": scope, "iface": iface,
                 "action": p["action"] or "ALLOW", "direction": p["direction"] or "IN",
                 "is_iface": is_iface,

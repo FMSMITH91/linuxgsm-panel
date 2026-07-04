@@ -489,13 +489,24 @@ def panel_self_update():
         'echo "=== installer exit $? ===" >> "$LOG"\n'
     )
     path = "/tmp/panel-self-update.sh"
+    # Launch the updater in a transient unit that OUTLIVES the panel's own restart.
+    # Match the install's service model: a per-user service uses `systemd-run --user`;
+    # a system service (root install → dedicated service user) is launched as root via
+    # `sudo systemd-run` (the service user has NOPASSWD sudo) so install.sh can drive
+    # the system unit. Falls back to --user.
+    user_unit = os.path.expanduser("~/.config/systemd/user/linuxgsm-panel.service")
+    system_unit = "/etc/systemd/system/linuxgsm-panel.service"
+    if os.path.exists(user_unit) or not os.path.exists(system_unit):
+        launcher = ["systemd-run", "--user"]
+    else:
+        launcher = ["sudo", "systemd-run"]
+    launcher += ["--no-block", "--collect", "--unit", "panel-selfupdate", "/bin/bash", path]
     try:
         with open(path, "w") as f:
             f.write(script)
         os.chmod(path, 0o755)
         subprocess.Popen(
-            ["systemd-run", "--user", "--no-block", "--collect",
-             "--unit", "panel-selfupdate", "/bin/bash", path],
+            launcher,
             stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, env=os.environ.copy(),
         )
         # Invalidate the cache so the badge clears after the restart.
