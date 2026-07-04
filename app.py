@@ -1503,7 +1503,7 @@ def register_routes(app):
         local = RemoteServer.query.filter_by(is_local=True).first()
         local_games = local.games if local else []
         return render_template("server_management.html", status=status,
-                               local_games=local_games)
+                               local_games=local_games, local_remote=local)
 
     @app.route("/api/server-management")
     @login_required

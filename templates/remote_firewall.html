@@ -4,13 +4,19 @@
 
 <div class="d-flex justify-content-between align-items-center mb-3">
   <div>
+    {% if remote.is_local %}
+    <a href="{{ url_for('server_management') }}" class="text-secondary text-decoration-none small">
+      <i class="bi bi-arrow-left"></i> Panel Server
+    </a>
+    {% else %}
     <a href="{{ url_for('manage_remotes') }}" class="text-secondary text-decoration-none small">
       <i class="bi bi-arrow-left"></i> Remote Servers
     </a>
+    {% endif %}
     <h1 class="page-title mb-0 mt-1">
-      <i class="bi bi-shield-fill-check"></i> Firewall: {{ remote.name }}
+      <i class="bi bi-shield-fill-check"></i> Firewall: {{ remote.display_name }}
     </h1>
-    <span class="text-secondary small"><code>{{ remote.host }}:{{ remote.port }}</code></span>
+    <span class="text-secondary small"><code>{{ remote.display_host or 'this host' }}</code></span>
   </div>
   <button class="btn btn-outline-secondary btn-sm" onclick="refreshFirewall()">
     <i class="bi bi-arrow-repeat"></i> Refresh

@@ -137,25 +137,20 @@
               <span class="badge bg-warning text-dark ms-2"><i class="bi bi-x"></i> Not allowed</span>
             {% endif %}
           </div>
-          <div class="d-flex gap-2">
+          <div class="d-flex gap-2 flex-wrap">
             <button class="btn btn-sm btn-success" onclick="ufwAllowTailscale()"
                     {% if status.tailscale_ufw_allowed %}disabled{% endif %}>
               <i class="bi bi-shield-check"></i> Allow Tailscale Interface
             </button>
+            {% if local_remote %}
+            <a href="{{ url_for('remote_firewall', remote_id=local_remote.id) }}" class="btn btn-sm btn-outline-secondary">
+              <i class="bi bi-shield-lock"></i> Manage firewall
+            </a>
+            {% endif %}
           </div>
-          {% if status.ufw.rules %}
-          <hr>
-          <div class="small">
-            <strong class="text-secondary">Rules ({{ status.ufw.rules|length }}):</strong>
-            <div style="max-height: 150px; overflow-y: auto;" class="mt-1">
-              {% for rule in status.ufw.rules[:15] %}
-              <div class="text-nowrap small">
-                <code>{{ rule.num }}</code> {{ rule.action }} — {{ rule.detail[:80] }}
-              </div>
-              {% endfor %}
-            </div>
-          </div>
-          {% endif %}
+          <p class="small text-secondary mb-0 mt-2">
+            Open or close ports and review all rules on the full firewall page{% if status.ufw.rules %} ({{ status.ufw.rules|length }} rule{{ '' if status.ufw.rules|length == 1 else 's' }} currently){% endif %}.
+          </p>
         {% endif %}
       </div>
     </div>
