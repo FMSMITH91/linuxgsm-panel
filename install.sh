@@ -2,106 +2,65 @@
 set -euo pipefail
 
 # ─────────────────────────────────────────────────────────
-# LinuxGSM Panel Installer
-# One-command setup: curl -fsSL https://raw.githubusercontent.com/... | bash
+# LinuxGSM Panel installer
+#
+#   Recommended:   git clone https://github.com/FMSMITH91/linuxgsm-panel.git
+#                  cd linuxgsm-panel && bash install.sh
+#
+#   Or (once the repo is public):
+#                  curl -fsSL https://raw.githubusercontent.com/FMSMITH91/linuxgsm-panel/main/install.sh | bash
+#
+# Creates a venv, installs the pinned dependencies, and registers a systemd *user*
+# service with linger enabled so the panel survives logout/reboot.
 # ─────────────────────────────────────────────────────────
 
+REPO_URL="https://github.com/FMSMITH91/linuxgsm-panel.git"
 PANEL_DIR="${HOME}/linuxgsm-panel"
-PANEL_USER="${USER}"
 
-# Colors
-RED='\033[0;31m'
-GREEN='\033[0;32m'
-YELLOW='\033[1;33m'
-CYAN='\033[0;36m'
-NC='\033[0m'
+RED='\033[0;31m'; GREEN='\033[0;32m'; YELLOW='\033[1;33m'; CYAN='\033[0;36m'; NC='\033[0m'
+info()  { echo -e "${CYAN}$*${NC}"; }
+ok()    { echo -e "${GREEN}✓${NC} $*"; }
+warn()  { echo -e "${YELLOW}[!]${NC} $*"; }
+die()   { echo -e "${RED}[ERROR]${NC} $*" >&2; exit 1; }
 
-echo -e "${CYAN}"
-echo "╔═══════════════════════════════════════════╗"
-echo "║     LinuxGSM Panel - Installer            ║"
-echo "║     Full Game Server Admin Panel           ║"
-echo "╚═══════════════════════════════════════════╝"
-echo -e "${NC}"
+echo -e "${CYAN}╔═══════════════════════════════════════════╗"
+echo    "║          LinuxGSM Panel — installer        ║"
+echo -e "╚═══════════════════════════════════════════╝${NC}"
 
-# Check Python
-if ! command -v python3 &>/dev/null; then
-    echo -e "${RED}[ERROR] Python 3 is required but not found.${NC}"
-    echo "Install it: sudo apt install python3 python3-pip python3-venv"
-    exit 1
-fi
+# ── Prerequisites ──
+command -v python3 >/dev/null 2>&1 || die "Python 3 is required.  sudo apt install -y python3 python3-venv python3-pip"
+python3 -m venv --help >/dev/null 2>&1 || die "python3-venv is required.  sudo apt install -y python3-venv"
+PYVER=$(python3 -c 'import sys;print("%d.%d"%sys.version_info[:2])')
+ok "Python ${PYVER} found"
 
-PYVER=$(python3 --version 2>&1 | awk '{print $2}')
-echo -e "${GREEN}✓${NC} Python ${PYVER} found"
-
-# Create directory
-if [ -d "${PANEL_DIR}" ]; then
-    echo -e "${YELLOW}[!] Directory ${PANEL_DIR} already exists.${NC}"
-    read -p "Overwrite? (y/N): " OVERWRITE
-    if [ "${OVERWRITE}" != "y" ] && [ "${OVERWRITE}" != "Y" ]; then
-        echo "Installation cancelled."
-        exit 1
-    fi
-fi
-
-mkdir -p "${PANEL_DIR}/data"
-mkdir -p "${PANEL_DIR}/templates"
-mkdir -p "${PANEL_DIR}/static"
-
-# Create virtual environment
-echo -e "\n${CYAN}[1/3] Creating Python virtual environment...${NC}"
-python3 -m venv "${PANEL_DIR}/venv"
-source "${PANEL_DIR}/venv/bin/activate"
-
-# Install dependencies
-echo -e "${CYAN}[2/3] Installing Python dependencies...${NC}"
-pip install --quiet --upgrade pip
-cat > /tmp/lgsm-panel-requirements.txt << 'REQEOF'
-flask>=3.0
-flask-socketio>=5.3
-flask-login>=0.6
-flask-sqlalchemy>=3.1
-paramiko>=3.4
-bcrypt>=4.1
-eventlet>=0.36
-REQEOF
-pip install --quiet -r /tmp/lgsm-panel-requirements.txt
-rm /tmp/lgsm-panel-requirements.txt
-echo -e "${GREEN}✓${NC} Dependencies installed"
-
-# Download panel files
-echo -e "${CYAN}[3/3] Downloading panel files...${NC}"
-
-# Source URL - change this to your actual repo
-REPO_BASE="https://raw.githubusercontent.com/YOUR_USER/linuxgsm-panel/main"
-
-download_file() {
-    local url="$1"
-    local dest="$2"
-    if command -v curl &>/dev/null; then
-        curl -fsSL "$url" -o "$dest"
-    elif command -v wget &>/dev/null; then
-        wget -q "$url" -O "$dest"
+# ── Get the code: use the current checkout if we're in one, else clone ──
+if [ -f "./app.py" ] && [ -f "./requirements.txt" ]; then
+    PANEL_DIR="$(pwd)"
+    ok "Using the current checkout: ${PANEL_DIR}"
+else
+    command -v git >/dev/null 2>&1 || die "git is required to fetch the panel.  sudo apt install -y git"
+    if [ -d "${PANEL_DIR}/.git" ]; then
+        info "Updating existing checkout at ${PANEL_DIR}…"
+        git -C "${PANEL_DIR}" pull --ff-only
     else
-        echo -e "${RED}[ERROR] Neither curl nor wget found.${NC}"
-        exit 1
+        info "Cloning ${REPO_URL} → ${PANEL_DIR}…"
+        git clone --depth 1 "${REPO_URL}" "${PANEL_DIR}"
     fi
-}
+    cd "${PANEL_DIR}"
+fi
 
-# NOTE: Replace this URL with your repository URL
-# For now, files need to be manually copied or the repo URL set.
-# The recommended install method is: git clone <repo> && cd linuxgsm-panel
-echo -e "${YELLOW}[!]${NC} To download the actual files, clone the repository:"
-echo ""
-echo "    git clone https://github.com/YOUR_USER/linuxgsm-panel.git"
-echo "    cd linuxgsm-panel"
-echo "    bash install.sh"
-echo ""
+# ── Virtual environment + dependencies (from the pinned requirements.txt) ──
+info "[1/3] Creating virtual environment…"
+python3 -m venv "${PANEL_DIR}/venv"
+"${PANEL_DIR}/venv/bin/pip" install --quiet --upgrade pip
+info "[2/3] Installing dependencies…"
+"${PANEL_DIR}/venv/bin/pip" install --quiet -r "${PANEL_DIR}/requirements.txt"
+ok "Dependencies installed"
 
-# Create systemd service
-echo -e "\n${CYAN}Creating systemd user service...${NC}"
+# ── systemd user service ──
+info "[3/3] Registering systemd user service…"
 mkdir -p "${HOME}/.config/systemd/user"
-
-cat > "${HOME}/.config/systemd/user/linuxgsm-panel.service" << 'SERVICEEOF'
+cat > "${HOME}/.config/systemd/user/linuxgsm-panel.service" <<SERVICEEOF
 [Unit]
 Description=LinuxGSM Game Server Admin Panel
 After=network-online.target
@@ -109,8 +68,8 @@ Wants=network-online.target
 
 [Service]
 Type=simple
-ExecStart=%h/linuxgsm-panel/venv/bin/python %h/linuxgsm-panel/app.py
-WorkingDirectory=%h/linuxgsm-panel
+ExecStart=${PANEL_DIR}/venv/bin/python ${PANEL_DIR}/app.py
+WorkingDirectory=${PANEL_DIR}
 Restart=always
 RestartSec=5
 Environment=PYTHONUNBUFFERED=1
@@ -119,26 +78,21 @@ Environment=PYTHONUNBUFFERED=1
 WantedBy=default.target
 SERVICEEOF
 
-echo -e "${GREEN}✓${NC} Service file created at ~/.config/systemd/user/linuxgsm-panel.service"
-
-# Enable and start
+# Linger lets the --user service run without an active login and start on boot.
+loginctl enable-linger "$(id -un)" >/dev/null 2>&1 || warn "Could not enable linger (the panel may not start on boot)."
 systemctl --user daemon-reload
-systemctl --user enable linuxgsm-panel.service
-echo -e "\n${GREEN}✓ Installation complete!${NC}"
+systemctl --user enable --now linuxgsm-panel.service
+ok "Service registered and started"
+
 echo ""
-echo -e "To start the panel:"
-echo -e "  ${CYAN}systemctl --user start linuxgsm-panel${NC}"
+ok "Installation complete!"
 echo ""
-echo -e "To check status:"
-echo -e "  ${CYAN}systemctl --user status linuxgsm-panel${NC}"
+echo -e "  Status:  ${CYAN}systemctl --user status linuxgsm-panel${NC}"
+echo -e "  Logs:    ${CYAN}journalctl --user -u linuxgsm-panel -f${NC}"
 echo ""
-echo -e "To view logs:"
-echo -e "  ${CYAN}journalctl --user -u linuxgsm-panel -f${NC}"
+echo -e "Open ${CYAN}http://<your-server-ip>:5000${NC} — the first visit runs the setup wizard."
 echo ""
-echo -e "Open your browser and go to:"
-echo -e "  ${CYAN}http://<your-server-ip>:5000${NC}"
-echo ""
-echo -e "The first visit will guide you through the setup wizard."
-echo -e "${YELLOW}WARNING:${NC} By default the panel binds to 0.0.0.0:5000."
-echo -e "Use a reverse proxy (nginx/Caddy) or Tailscale Serve for production."
+warn "By default the panel binds 0.0.0.0:5000. For anything beyond local testing, put it"
+warn "behind Tailscale Serve (recommended) or a reverse proxy with HTTPS — do NOT expose"
+warn "the admin panel directly to the public internet."
 echo ""
