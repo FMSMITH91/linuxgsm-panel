@@ -198,7 +198,7 @@ def _parse_serve_status(text):
 
 def get_tailscale_info(force_refresh=False) -> TailscaleInfo:
     """Get cached Tailscale info. Refreshes every `ttl` seconds."""
-    global _cache
+    # (_cache is a module-level dict mutated in place — no `global` needed.)
     now = time.time()
     with _cache_lock:
         if force_refresh or _cache["info"] is None or (now - _cache["ts"]) > _cache["ttl"]:
