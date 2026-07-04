@@ -454,6 +454,10 @@
       </div>
     </div>
     <a href="{{ url_for('logout') }}" class="btn btn-outline-secondary btn-sm w-100"><i class="bi bi-box-arrow-right"></i> Sign Out</a>
+    <div class="text-center mt-2" style="font-size:.66rem;color:var(--text-muted,#6b7684);">
+      LinuxGSM Panel <span id="panel-version">v{{ panel_version }}</span>
+      <span id="update-badge"></span>
+    </div>
   </div>
 </nav>
 {% endif %}

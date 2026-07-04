@@ -100,6 +100,18 @@ from ssh_manager import (
 import tailscale_integration as ts
 import system_ops as so
 
+
+def _read_version():
+    """Panel version from the VERSION file next to this module (bumped per release)."""
+    try:
+        with open(os.path.join(os.path.dirname(os.path.abspath(__file__)), "VERSION")) as f:
+            return f.read().strip() or "0.0.0"
+    except Exception:
+        return "0.0.0"
+
+
+PANEL_VERSION = _read_version()
+
 # In-memory registry of running/finished VPS bootstrap jobs, keyed by remote_id.
 # Populated by the async bootstrap runner and read by the status endpoint. Both
 # live in the same (single) panel process, so a plain dict + lock is sufficient.
@@ -268,6 +280,7 @@ def register_context_processors(app):
             "current_year": datetime.utcnow().year,
             "tailscale_url": tailscale_url,
             "mount_prefix": app.config.get("_MOUNT_PREFIX", "/"),
+            "panel_version": PANEL_VERSION,
             "nav_remotes": nav_remotes,
             "has_permission": lambda perm: (
                 current_user.is_superadmin
