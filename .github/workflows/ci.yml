@@ -25,3 +25,10 @@ jobs:
           # E9 = syntax errors, F63/F7/F82 = actual logic errors (e.g. undefined names).
           # Style is intentionally NOT checked.
           flake8 --select=E9,F63,F7,F82 --show-source --statistics .
+
+      - name: Smoke test — boot the app and assert the main routes don't 500
+        run: |
+          python -m pip install --quiet -r requirements.txt
+          # Boots the app on a throwaway DB and exercises the main pages plus the
+          # group create/edit routes, catching runtime 500s that compile/lint miss.
+          python tests/smoke_test.py

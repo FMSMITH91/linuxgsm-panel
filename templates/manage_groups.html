@@ -105,20 +105,19 @@
           </div>
           <div class="col-md-4">
             <label class="form-label fw-bold">Server Access</label>
+            <div class="form-text mt-0 mb-2">Access is granted per host — a checked host covers all of its game servers.</div>
             <div style="max-height: 300px; overflow-y: auto;">
-              {% for s in all_servers %}
+              {% for r in all_remotes %}
               <div class="form-check">
-                <input type="checkbox" name="servers" value="{{ s.id }}"
-                       class="form-check-input" id="srv-{{ group.id }}-{{ s.id }}"
-                       {% if s in group.servers %}checked{% endif %}>
-                <label class="form-check-label" for="srv-{{ group.id }}-{{ s.id }}">
-                  <span class="small">{{ s.name }}
-                    {% if s.remote %}({{ s.remote.name }}){% endif %}
-                  </span>
+                <input type="checkbox" name="servers" value="{{ r.id }}"
+                       class="form-check-input" id="srv-{{ group.id }}-{{ r.id }}"
+                       {% if r in group.servers %}checked{% endif %}>
+                <label class="form-check-label" for="srv-{{ group.id }}-{{ r.id }}">
+                  <span class="small">{{ r.name }}</span>
                 </label>
               </div>
               {% else %}
-              <p class="text-secondary small">No game servers configured yet.</p>
+              <p class="text-secondary small">No hosts configured yet.</p>
               {% endfor %}
             </div>
           </div>
@@ -174,17 +173,18 @@
             </div>
             <div class="col-md-3">
               <label class="form-label fw-bold">Server Access</label>
+              <div class="form-text mt-0 mb-2">Per host — covers all its game servers.</div>
               <div style="max-height: 350px; overflow-y: auto;">
-                {% for s in all_servers %}
+                {% for r in all_remotes %}
                 <div class="form-check">
-                  <input type="checkbox" name="servers" value="{{ s.id }}"
-                         class="form-check-input" id="new-srv-{{ s.id }}">
-                  <label class="form-check-label small" for="new-srv-{{ s.id }}">
-                    {{ s.name }} {% if s.remote %}({{ s.remote.name }}){% endif %}
+                  <input type="checkbox" name="servers" value="{{ r.id }}"
+                         class="form-check-input" id="new-srv-{{ r.id }}">
+                  <label class="form-check-label small" for="new-srv-{{ r.id }}">
+                    {{ r.name }}
                   </label>
                 </div>
                 {% else %}
-                <p class="text-secondary small">No servers yet</p>
+                <p class="text-secondary small">No hosts yet</p>
                 {% endfor %}
               </div>
             </div>

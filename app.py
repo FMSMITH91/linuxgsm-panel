@@ -246,6 +246,15 @@ def password_problem(pw):
     return None
 
 
+def _int_or(value, default):
+    """Parse an int from untrusted form input, falling back to default instead of
+    raising (a bad value like an empty or non-numeric port must not 500 the page)."""
+    try:
+        return int(str(value).strip())
+    except (TypeError, ValueError):
+        return default
+
+
 def create_app():
     app = Flask(__name__)
     cfg = load_config()
@@ -435,7 +444,7 @@ def register_routes(app):
                 # Step 1: Site settings
                 cfg["site_title"] = request.form.get("site_title", "LinuxGSM Panel")
                 cfg["site_domain"] = request.form.get("site_domain", "")
-                cfg["port"] = int(request.form.get("port", 5000))
+                cfg["port"] = _int_or(request.form.get("port"), 5000)
                 cfg["bind_host"] = request.form.get("bind_host", "0.0.0.0")
                 save_config(cfg)
                 data["site_configured"] = True
@@ -501,7 +510,7 @@ def register_routes(app):
                     name = request.form.get("name", "").strip()
                     host = request.form.get("host", "").strip()
                     ssh_user = request.form.get("ssh_user", "root").strip()
-                    ssh_port = int(request.form.get("ssh_port", 22))
+                    ssh_port = _int_or(request.form.get("ssh_port"), 22)
                     auth_method = request.form.get("auth_method", "key")
                     credential = request.form.get("credential", "").strip()
                     sudo_enabled = request.form.get("sudo_enabled") == "on"
@@ -1266,7 +1275,7 @@ def register_routes(app):
     def edit_server(server_id):
         gs = get_game(server_id)
         gs.name = request.form.get("name", gs.name)
-        gs.port = int(request.form.get("port", gs.port))
+        gs.port = _int_or(request.form.get("port"), gs.port)
         gs.game_display = request.form.get("game_display", gs.game_display)
         db.session.commit()
         flash(f"Server '{gs.name}' updated.", "success")
@@ -1290,7 +1299,7 @@ def register_routes(app):
         name = request.form.get("name", "").strip()
         host = request.form.get("host", "").strip()
         ssh_user = request.form.get("ssh_user", "root").strip()
-        ssh_port = int(request.form.get("ssh_port", 22))
+        ssh_port = _int_or(request.form.get("ssh_port"), 22)
         auth_method = request.form.get("auth_method", "key")
         credential = request.form.get("credential", "").strip()
         sudo_enabled = request.form.get("sudo_enabled") == "on"
@@ -1377,7 +1386,7 @@ def register_routes(app):
             return redirect(url_for("manage_remotes"))
         remote.name = request.form.get("name", remote.name)
         remote.host = request.form.get("host", remote.host)
-        remote.port = int(request.form.get("ssh_port", remote.port))
+        remote.port = _int_or(request.form.get("ssh_port"), remote.port)
         remote.username = new_user
         remote.auth_method = request.form.get("auth_method", remote.auth_method)
         # Credential: the edit form leaves it blank to keep the current one; a new
@@ -1492,7 +1501,7 @@ def register_routes(app):
     @permission_required(MANAGE_USERS)
     def edit_user(user_id):
         user = User.query.get_or_404(user_id)
-        user.display_name = request.form.get("display_name", user.display_name).strip()
+        user.display_name = (request.form.get("display_name") or user.display_name or "").strip()
         _new_email = request.form.get("email", "").strip()
         user.email = encrypt_secret(_new_email) if _new_email else None
         user.is_active = request.form.get("is_active") == "on"
@@ -1544,6 +1553,25 @@ def register_routes(app):
                                all_perms=all_perms, all_servers=all_servers,
                                all_remotes=all_remotes)
 
+    def _selected_remotes(server_ids):
+        """Resolve submitted remote ids to RemoteServer rows, skipping anything
+        malformed or unknown. A group grants access per *remote* (host), which
+        covers every game server on it — see auth.can_access_server."""
+        out = []
+        seen = set()
+        for sid in server_ids:
+            try:
+                rid = int(sid)
+            except (TypeError, ValueError):
+                continue
+            if rid in seen:
+                continue
+            rs = RemoteServer.query.get(rid)
+            if rs:
+                seen.add(rid)
+                out.append(rs)
+        return out
+
     @app.route("/groups/add", methods=["POST"])
     @login_required
     @permission_required(MANAGE_GROUPS)
@@ -1561,8 +1589,7 @@ def register_routes(app):
 
         group = Group(name=name, description=description)
         group.set_permissions(request.form.getlist("permissions"))
-        server_ids = request.form.getlist("servers")
-        group.servers = [GameServer.query.get(int(sid)) for sid in server_ids if GameServer.query.get(int(sid))]
+        group.servers = _selected_remotes(request.form.getlist("servers"))
 
         db.session.add(group)
         db.session.commit()
@@ -1575,11 +1602,10 @@ def register_routes(app):
     @permission_required(MANAGE_GROUPS)
     def edit_group(group_id):
         group = Group.query.get_or_404(group_id)
-        group.name = request.form.get("name", group.name)
-        group.description = request.form.get("description", group.description).strip()
+        group.name = (request.form.get("name") or group.name or "").strip() or group.name
+        group.description = (request.form.get("description") or group.description or "").strip()
         group.set_permissions(request.form.getlist("permissions"))
-        server_ids = request.form.getlist("servers")
-        group.servers = [GameServer.query.get(int(sid)) for sid in server_ids if GameServer.query.get(int(sid))]
+        group.servers = _selected_remotes(request.form.getlist("servers"))
 
         db.session.commit()
         log_action(current_user, "edit_group", target=group.name)
