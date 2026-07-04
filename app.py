@@ -81,12 +81,13 @@ from ssh_manager import (
     get_server_status, run_as_game_user, send_console_command,
     list_server_commands, server_live_metrics, remote_public_ip, remote_live_metrics,
     set_autostart, get_autostart, install_game_cron, set_daily_restart,
-    install_game_dependencies, parse_missing_deps, detect_game_port,
+    install_game_dependencies, parse_missing_deps, detect_game_port, detect_game_ports,
     lgsm_read_config, lgsm_write_config, lgsm_game_config,
     browse_dir, read_file, write_file, upload_file, delete_path,
     remote_ufw_delete_rule, remote_set_public_ssh, remote_public_ssh_status,
     remote_ufw_status, remote_ufw_open_port, remote_ufw_close_port,
     remote_ufw_allow_game_port, remote_ufw_close_game_port,
+    remote_ufw_allow_game_ports, remote_ufw_close_by_name,
     port_in_use, check_port_open,
     remote_os_check_updates, remote_os_run_updates,
     remote_reboot, remote_uptime,
@@ -802,16 +803,32 @@ def register_routes(app):
         lgsm_name = f"{game_type}server"
         short_name = server_name or lgsm_name
 
-        # Known default ports for common games
+        # Best-effort default port per game for the install form. This is only a
+        # pre-install HINT — after install the panel reads LinuxGSM's real port(s)
+        # via `details` and opens every one, so an imperfect default self-corrects.
         KNOWN_PORTS = {
-            "gmod": 27015, "cs": 27015, "css": 27015, "cs2": 27015,
-            "tf2": 27015, "hl2dm": 27015, "dods": 27015,
-            "cod": 28960, "coduo": 28960, "cod2": 28960,
-            "cod4": 28960, "codwaw": 28960,
-            "mc": 25565, "mcbe": 19132,
-            "rust": 28015, "squad": 28015, "arma3": 2302,
-            "valheim": 2456, "7d2d": 26900,
-            "mumble": 64738, "ts3": 9987,
+            # Source engine — default 27015
+            "gmod": 27015, "cs": 27015, "css": 27015, "cs2": 27015, "csgo": 27015,
+            "tf2": 27015, "hl2dm": 27015, "hldm": 27015, "hldms": 27015, "dods": 27015,
+            "ins": 27015, "insurgency": 27015, "nmrih": 27015, "l4d": 27015, "l4d2": 27015,
+            "zps": 27015, "fof": 27015, "gesource": 27015, "cscz": 27015, "tfc": 27015,
+            "ns": 27015, "ricochet": 27015, "dmc": 27015, "sfc": 27015, "bb2": 27015,
+            "unturned": 27015, "bt": 27015,
+            # Call of Duty — 28960
+            "cod": 28960, "coduo": 28960, "cod2": 28960, "cod4": 28960, "codwaw": 28960,
+            # Minecraft family
+            "mc": 25565, "pmc": 25565, "spigot": 25565, "paper": 25565, "bukkit": 25565,
+            "mcbe": 19132, "mcb": 19132,
+            # Survival / sandbox
+            "rust": 28015, "sdtd": 26900, "7d2d": 26900, "valheim": 2456, "vh": 2456,
+            "ark": 7777, "pz": 16261, "projectzomboid": 16261, "terraria": 7777,
+            "tshock": 7777, "factorio": 34197, "avorion": 27000, "eco": 3000, "vs": 42420,
+            # Mil-sim / shooters
+            "arma3": 2302, "squad": 7787, "mordhau": 7777, "kf": 7707, "kf2": 7777,
+            "q2": 27910, "q3": 27960, "ql": 27960, "et": 27960, "etl": 27960, "rtcw": 27960,
+            "xonotic": 26000, "ut99": 7777, "ut2k4": 7777,
+            # Voice / misc
+            "mumble": 64738, "ts3": 9987, "samp": 7777, "mta": 22003, "openttd": 3979,
         }
         if not port or port == "27015":
             port = str(KNOWN_PORTS.get(game_type, 27015))
@@ -960,17 +977,20 @@ def register_routes(app):
                         except Exception:
                             pass
 
-                    # 6. Sync to LinuxGSM's real port and open the firewall (TCP+UDP).
-                    _p(6, "Detecting port & opening firewall")
+                    # 6. Sync to LinuxGSM's real port(s) and open ALL of them (many
+                    #    games need game+query+rcon+etc., not just the main port).
+                    _p(6, "Detecting ports & opening firewall")
                     try:
-                        real_port = detect_game_port(remote, short_name, gs.lgsm_name)
+                        info = detect_game_ports(remote, short_name, gs.lgsm_name)
+                        real_port = info.get("game_port")
                         if real_port and real_port != gs.port:
                             old_port = gs.port; gs.port = real_port; db.session.commit()
                             try:
                                 remote_ufw_close_game_port(remote, old_port)
                             except Exception:
                                 pass
-                        remote_ufw_allow_game_port(remote, gs.port, short_name)
+                        to_open = info.get("open_ports") or ([gs.port] if gs.port else [])
+                        remote_ufw_allow_game_ports(remote, to_open, short_name)
                     except Exception:
                         pass
 
@@ -1011,12 +1031,14 @@ def register_routes(app):
         game_port = gs.port
 
         try:
-            # Close the game port(s) in the remote firewall first.
+            # Close ALL of this server's firewall rules (multi-port games tag every
+            # rule with the server name), then also the legacy single-port cleanup.
             fw_note = ""
             try:
-                count, _ = remote_ufw_close_game_port(remote, game_port)
+                count, _ = remote_ufw_close_by_name(remote, short_name)
+                remote_ufw_close_game_port(remote, game_port)
                 if count > 0:
-                    fw_note = f" Firewall rules for port {game_port} removed."
+                    fw_note = f" {count} firewall rule(s) removed."
             except Exception:
                 pass
 
@@ -1539,24 +1561,6 @@ def register_routes(app):
             return jsonify({"success": True, "message": msg})
         return jsonify({"success": False, "message": msg}), 500
 
-    @app.route("/api/server-management/run-command", methods=["POST"])
-    @login_required
-    @permission_required(SUPER_ADMIN)
-    def api_server_management_run_command():
-        """Run an arbitrary shell command (as root) on the panel's own host.
-        Super-admin only, fully audit-logged."""
-        cmd = (request.get_json(silent=True) or {}).get("command", "").strip()
-        if not cmd:
-            return jsonify({"success": False, "output": "No command provided."}), 400
-        try:
-            out, err, rc = so._run(cmd, timeout=90, sudo=True)
-            log_action(current_user, "panel_run_command", detail=cmd[:400], success=(rc == 0))
-            combined = ((out or "") + (("\n" + err) if err else "")).strip()
-            return jsonify({"success": rc == 0, "rc": rc, "output": combined[:12000] or "(no output)"})
-        except Exception as e:
-            log_action(current_user, "panel_run_command", detail=cmd[:400], success=False)
-            return jsonify({"success": False, "output": str(e)}), 500
-
     # ── Remote VPS Management (port/OS) ────────────────────
     @app.route("/remote/<int:remote_id>/firewall")
     @login_required
@@ -1648,6 +1652,31 @@ def register_routes(app):
         log_action(current_user, "game_port_open", target=f"{remote.name}:{port}", success=success)
         return jsonify({"success": success, "message": msg, "rules_added": count})
 
+    @app.route("/api/server/<int:server_id>/sync-ports", methods=["POST"])
+    @login_required
+    @server_access_required
+    def api_server_sync_ports(server_id):
+        """Detect ALL of a game server's ports from LinuxGSM and open every one in the
+        firewall (game/query/rcon/etc.). Also re-syncs the stored port. Fixes servers
+        that were installed before multi-port support, or whose ports changed."""
+        gs = get_game(server_id)
+        if not (current_user.is_superadmin or has_permission(current_user, MANAGE_REMOTES)
+                or has_permission(current_user, INSTALL_SERVER)):
+            return jsonify({"success": False, "message": "Permission denied"}), 403
+        try:
+            info = detect_game_ports(gs.remote, gs.short_name, gs.lgsm_name)
+            gp = info.get("game_port")
+            if gp and gp != gs.port:
+                gs.port = gp
+                db.session.commit()
+            to_open = info.get("open_ports") or ([gs.port] if gs.port else [])
+            opened, msg = remote_ufw_allow_game_ports(gs.remote, to_open, gs.short_name)
+            log_action(current_user, "sync_ports", target=gs.name, detail=str(to_open), success=True)
+            return jsonify({"success": True, "message": f"Ports {', '.join(map(str, to_open)) or '—'} opened.",
+                            "ports": info.get("ports", []), "open_ports": to_open, "game_port": gp})
+        except Exception as e:
+            return jsonify({"success": False, "message": str(e)}), 500
+
     @app.route("/api/remote/<int:remote_id>/live-stats")
     @login_required
     @permission_required(MANAGE_REMOTES)
@@ -1691,29 +1720,6 @@ def register_routes(app):
         success, msg = remote_reboot(remote)
         log_action(current_user, "remote_reboot", target=remote.name)
         return jsonify({"success": success, "message": msg})
-
-    @app.route("/api/remote/<int:remote_id>/run-command", methods=["POST"])
-    @login_required
-    @permission_required(MANAGE_REMOTES)
-    def api_remote_run_command(remote_id):
-        """Run an arbitrary shell command (as root) on a remote VPS. Admin-only,
-        fully audit-logged. Running commands on the panel's OWN host requires
-        super admin (extra-sensitive)."""
-        remote = get_remote(remote_id)
-        if getattr(remote, "is_local", False) and not current_user.is_superadmin:
-            return jsonify({"success": False, "output": "Only a super admin can run commands on the panel host."}), 403
-        cmd = (request.get_json(silent=True) or {}).get("command", "").strip()
-        if not cmd:
-            return jsonify({"success": False, "output": "No command provided."}), 400
-        try:
-            out, err, rc = run_command(remote, cmd, timeout=90, sudo=True)
-            log_action(current_user, "remote_run_command", target=remote.name,
-                       detail=cmd[:400], success=(rc == 0))
-            combined = ((out or "") + (("\n" + err) if err else "")).strip()
-            return jsonify({"success": rc == 0, "rc": rc, "output": combined[:12000] or "(no output)"})
-        except Exception as e:
-            log_action(current_user, "remote_run_command", target=remote.name, detail=cmd[:400], success=False)
-            return jsonify({"success": False, "output": str(e)}), 500
 
     @app.route("/remote/<int:remote_id>/manage")
     @login_required

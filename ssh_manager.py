@@ -653,6 +653,37 @@ def detect_game_port(server, user, selfname=None):
     return None
 
 
+def detect_game_ports(server, user, selfname=None):
+    """Parse LinuxGSM `details` for ALL of a server's ports. Many games need more
+    than one open (e.g. Source games use Game/Query/RCON/SourceTV; Rust uses a game
+    port + app/RCON port), so opening only the main port isn't enough. Returns:
+      {"game_port": int|None, "open_ports": [distinct inbound ports], "ports": [...]}.
+    The outbound 'Client' port is excluded (nothing listens on it)."""
+    out, _, _ = run_as_game_user(server, user, "details 2>&1", timeout=45, selfname=selfname)
+    text = re.sub(r"\x1b\[[0-9;?]*[A-Za-z]", "", out or "")
+    ports, game_port, in_table = [], None, False
+    for line in text.splitlines():
+        s = line.strip()
+        if re.match(r"DESCRIPTION\s+PORT\s+PROTOCOL", s, re.I):
+            in_table = True
+            continue
+        if in_table:
+            m = re.match(r"([A-Za-z][A-Za-z0-9/+ .-]*?)\s+(\d{2,5})\s+(tcp|udp|both|raw)\b", s, re.I)
+            if m:
+                desc, port, proto = m.group(1).strip(), int(m.group(2)), m.group(3).lower()
+                ports.append({"desc": desc, "port": port, "protocol": proto})
+                if game_port is None and desc.lower().startswith("game"):
+                    game_port = port
+            else:
+                in_table = False  # blank/other line → table ended
+    # Ports to open: every distinct inbound port (skip the outbound 'Client' port).
+    open_ports = sorted({p["port"] for p in ports if not p["desc"].lower().startswith("client")})
+    if game_port is None:
+        m = re.search(r"(?:server|internet)\s+ip:.*?:(\d{2,5})", text, re.I)
+        game_port = int(m.group(1)) if m else (open_ports[0] if open_ports else None)
+    return {"game_port": game_port, "open_ports": open_ports, "ports": ports}
+
+
 def get_server_status(server, game_server):
     """Get the status of a LinuxGSM game server.
 
@@ -751,6 +782,35 @@ def remote_ufw_allow_game_port(server, port, name="Game"):
     out, err, rc = run_command(server, f"ufw allow {port} comment {_quote(comment)} 2>&1", timeout=15, sudo=True)
     ok = rc == 0
     return (1 if ok else 0), f"Port {port}: {'opened (TCP+UDP)' if ok else (err or out or 'failed')}"
+
+
+def remote_ufw_allow_game_ports(server, ports, name="Game"):
+    """Open a LIST of ports (each bare rule = TCP+UDP), all tagged with the game
+    server's name. Idempotent — re-opening an existing port is a no-op. Used to open
+    every port a game actually needs (game/query/rcon/etc.), not just the main one."""
+    opened = []
+    for p in sorted({int(x) for x in ports if x}):
+        cnt, _ = remote_ufw_allow_game_port(server, p, name)
+        if cnt:
+            opened.append(p)
+    return opened, f"opened {len(opened)} port(s): {', '.join(map(str, opened)) or 'none'}"
+
+
+def remote_ufw_close_by_name(server, name):
+    """Delete ALL UFW rules tagged with a game server's name (its comment). Used on
+    uninstall so multi-port games are fully cleaned up. Deletes highest-numbered
+    rule first so the numbering stays valid as rules are removed."""
+    comment = re.sub(r"[^A-Za-z0-9 _.-]", "", name or "")[:60]
+    if not comment:
+        return 0, "no name"
+    out, _, _ = run_command(server, "ufw status numbered 2>&1", timeout=15, sudo=True)
+    nums = []
+    for line in (out or "").splitlines():
+        m = re.match(r"^\s*\[\s*(\d+)\]\s*(.*)$", line)
+        if m and re.search(r"#\s*" + re.escape(comment) + r"\s*$", m.group(2)):
+            nums.append(int(m.group(1)))
+    deleted = sum(1 for n in sorted(nums, reverse=True) if remote_ufw_delete_rule(server, n)[0])
+    return deleted, f"{deleted} rule(s) removed for {comment}"
 
 
 def remote_ufw_close_game_port(server, port):

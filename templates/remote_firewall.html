@@ -67,7 +67,10 @@
     <!-- Game server quick ports -->
     {% if games %}
     <div class="card">
-      <div class="card-header"><i class="bi bi-controller"></i> Game Server Ports</div>
+      <div class="card-header d-flex justify-content-between align-items-center">
+        <span><i class="bi bi-controller"></i> Game Server Ports</span>
+        <span class="small text-secondary">opens every port the game needs</span>
+      </div>
       <div class="card-body p-0">
         <table class="table table-sm mb-0">
           <thead>
@@ -83,9 +86,9 @@
               <td class="small">{{ gs.name }}</td>
               <td><code>{{ gs.port }}</code></td>
               <td>
-                <button class="btn btn-success btn-sm" onclick="openGamePort({{ gs.port }})"
-                        title="Open TCP+UDP on port {{ gs.port }} and {{ gs.port+1 }}">
-                  <i class="bi bi-unlock"></i>
+                <button class="btn btn-success btn-sm" onclick="syncPorts({{ gs.id }}, this)"
+                        title="Detect &amp; open ALL ports this game needs (game/query/rcon/etc.)">
+                  <i class="bi bi-unlock"></i> Open all ports
                 </button>
               </td>
             </tr>
@@ -207,19 +210,17 @@ function closeRule(num) {
   .catch(function() { refreshFirewall(); });
 }
 
-function openGamePort(port) {
-  fetch(MOUNT + '/api/remote/' + remoteId + '/game-port/' + port + '/open', {
-    method: 'POST',
-  })
-  .then(r => r.json())
-  .then(data => {
-    if (data.success) {
-      alert('✅ ' + data.message);
-      refreshFirewall();
-    } else {
-      alert('❌ ' + data.message);
-    }
-  });
+function syncPorts(serverId, btn) {
+  var orig = btn.innerHTML;
+  btn.disabled = true; btn.innerHTML = '<span class="spinner-border spinner-border-sm"></span> Detecting…';
+  fetch(MOUNT + '/api/server/' + serverId + '/sync-ports', { method: 'POST' })
+    .then(r => r.json())
+    .then(data => {
+      if (data.success) { alert('✅ ' + data.message); refreshFirewall(); }
+      else { alert('❌ ' + (data.message || 'Failed')); }
+    })
+    .catch(function(){ alert('❌ Request failed'); })
+    .finally(function(){ btn.disabled = false; btn.innerHTML = orig; });
 }
 
 // Enter key opens port

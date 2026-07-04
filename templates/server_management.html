@@ -260,24 +260,6 @@
   </div>
 </div>
 
-<!-- Run command (root shell) on the panel host -->
-<div class="card mb-3">
-  <div class="card-header d-flex justify-content-between align-items-center">
-    <span><i class="bi bi-terminal"></i> Run Command</span>
-    <span class="small text-warning"><i class="bi bi-exclamation-triangle"></i> runs as root on the panel host — be careful</span>
-  </div>
-  <div class="card-body">
-    <form onsubmit="return runPanelCmd(event)" class="d-flex gap-2 align-items-center">
-      <span class="text-secondary font-monospace">#</span>
-      <input type="text" id="pcmd-input" class="form-control form-control-sm font-monospace"
-             placeholder="e.g.  df -h   ·   systemctl --user status linuxgsm-panel   ·   free -h   ·   ss -tulpn"
-             autocomplete="off" spellcheck="false">
-      <button class="btn btn-sm btn-primary flex-shrink-0" type="submit"><i class="bi bi-play-fill"></i> Run</button>
-    </form>
-    <pre id="pcmd-output" class="mt-2 mb-0 small" style="display:none;max-height:360px;overflow:auto;background:#080d17;border:1px solid var(--border);border-radius:6px;padding:10px;white-space:pre-wrap;word-break:break-word;color:#9caec9;"></pre>
-  </div>
-</div>
-
 <!-- Action Status Toast -->
 <div class="position-fixed bottom-0 end-0 p-3" style="z-index: 9999">
   <div id="action-toast" class="toast" role="alert">
@@ -519,15 +501,6 @@ function pollLive() {
         d.swap_total ? (fmtGB(d.swap_used||0) + ' / ' + fmtGB(d.swap_total) + ' used') : 'No swap configured';
     })
     .catch(function(){});
-}
-function runPanelCmd(ev){
-  ev.preventDefault();
-  var inp=document.getElementById('pcmd-input'); var cmd=inp.value.trim(); if(!cmd) return false;
-  var out=document.getElementById('pcmd-output'); out.style.display='block'; out.textContent='$ '+cmd+'\n\n(running…)';
-  fetch(MOUNT+'/api/server-management/run-command',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({command:cmd})})
-    .then(r=>r.json()).then(d=>{ out.textContent='$ '+cmd+'\n\n'+(d.output||'')+((d.rc!=null && d.rc!==0)?('\n\n[exit code '+d.rc+']'):''); })
-    .catch(()=>{ out.textContent='$ '+cmd+'\n\n[request failed]'; });
-  return false;
 }
 pollLive();
 setInterval(pollLive, 1500);
