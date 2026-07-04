@@ -810,6 +810,61 @@ def _group_ufw_rules(rules):
     return groups
 
 
+def _ssh_ports(server):
+    """Ports whose firewall rule keeps SSH reachable. Always includes 22 (the default)
+    and the port the panel actually connects on — which covers a CUSTOM SSH port,
+    since that's exactly what's stored on the remote."""
+    ports = {22}
+    try:
+        if getattr(server, "port", None):
+            ports.add(int(server.port))
+    except (TypeError, ValueError):
+        pass
+    return ports
+
+
+def _annotate_firewall_protection(server, enabled, groups):
+    """Flag rules whose removal could LOCK YOU OUT, so the UI and API can refuse to
+    delete the last way in. Two kinds of "access" rules: the SSH-port ALLOW, and the
+    Tailscale-interface ALLOW. A rule is only *blocked* when it's the sole remaining
+    access path (delete it and there'd be no SSH and no Tailscale left); when another
+    way in exists it's merely flagged to warn on. If UFW is disabled it isn't
+    enforcing anything, so nothing is protected."""
+    ssh_ports = _ssh_ports(server)
+    access = 0
+    for g in groups:
+        pn = str(g.get("port_num", ""))
+        g["is_ssh"] = (not g.get("is_iface") and g.get("action") == "ALLOW"
+                       and pn.isdigit() and int(pn) in ssh_ports)
+        g["is_tailscale"] = (bool(g.get("is_iface")) and g.get("action") == "ALLOW"
+                             and str(g.get("iface", "")).startswith("tailscale"))
+        g["is_access"] = g["is_ssh"] or g["is_tailscale"]
+        if g["is_access"]:
+            access += 1
+    for g in groups:
+        g["protected"] = False
+        g["warn"] = False
+        g["protect_reason"] = ""
+        if not enabled or not g["is_access"]:
+            continue
+        if access <= 1:
+            g["protected"] = True
+            if g["is_ssh"]:
+                g["protect_reason"] = (
+                    "Port %s is the SSH port used to reach this host — removing it would lock "
+                    "you out. Add another way in (e.g. Tailscale) before removing it." % g["port_num"])
+            else:
+                g["protect_reason"] = (
+                    "This is the Tailscale access rule and currently the only way in — removing it "
+                    "would lock you out. Open your SSH port before removing it.")
+        else:
+            g["warn"] = True
+            g["protect_reason"] = (
+                "This keeps you connected (SSH or Tailscale). Another way in exists so it can be "
+                "removed, but make sure you won't lock yourself out.")
+    return groups
+
+
 def remote_ufw_status(server):
     """Get UFW status and rules from the remote server."""
     out, err, rc = run_command(server, "ufw status numbered 2>&1 || echo 'NOTINSTALLED'", timeout=15)
@@ -826,8 +881,8 @@ def remote_ufw_status(server):
             detail = re.sub(r"\s{2,}", "  ", m.group(2).strip())
             rules.append({"num": m.group(1), "detail": detail})
 
-    return {"installed": True, "enabled": enabled, "rules": rules,
-            "groups": _group_ufw_rules(rules)}
+    groups = _annotate_firewall_protection(server, enabled, _group_ufw_rules(rules))
+    return {"installed": True, "enabled": enabled, "rules": rules, "groups": groups}
 
 
 # Single shell script that prints static host specs as TAB-separated KEY<TAB>VALUE
@@ -1021,15 +1076,26 @@ def remote_ufw_close_port(server, port, protocol=None):
     return False, err or out or "Unknown error"
 
 
-def remote_ufw_delete_rule(server, num):
+def remote_ufw_delete_rule(server, num, force=False):
     """Delete a UFW rule by its number (as shown by `ufw status numbered`). This is
-    the reliable way to remove any rule — deleting by spec requires an exact match."""
+    the reliable way to remove any rule — deleting by spec requires an exact match.
+
+    Unless force=True, refuses to delete a rule that is the last thing keeping SSH or
+    Tailscale access open, so a click (or a direct API call) can't lock you out."""
     try:
         n = int(num)
     except (TypeError, ValueError):
         return False, "Invalid rule number"
     if n < 1:
         return False, "Invalid rule number"
+    if not force:
+        try:
+            for g in remote_ufw_status(server).get("groups", []):
+                if n in g.get("nums", []) and g.get("protected"):
+                    return False, g.get("protect_reason") or \
+                        "This rule protects your access to the host and can't be removed here."
+        except Exception:
+            pass  # don't let the safety check itself block a legitimate delete on error
     out, err, rc = run_command(server, f"yes | ufw delete {n} 2>&1", timeout=15, sudo=True)
     if rc == 0:
         return True, f"Rule {n} deleted"
