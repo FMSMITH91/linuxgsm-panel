@@ -8,6 +8,12 @@ on:
   schedule:
     - cron: "0 6 * * 1"   # weekly, Monday 06:00 UTC — catches newly-disclosed CVEs
 
+# Cancel an in-progress run when a newer commit is pushed to the same ref, so rapid
+# pushes don't queue up and waste runner minutes.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 permissions:
   contents: read
 

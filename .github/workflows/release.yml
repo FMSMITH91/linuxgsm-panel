@@ -1,0 +1,47 @@
+name: Release
+
+# When VERSION changes on main, tag the commit v<VERSION> and cut a GitHub Release
+# with the commit messages since the last tag as the notes. Pre-1.0 / -alpha/-beta/-rc
+# versions are marked as pre-releases. Fully automatic — no manual tagging.
+
+on:
+  push:
+    branches: [ main ]
+    paths: [ "VERSION" ]
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release
+  cancel-in-progress: false
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0   # need full history for the changelog + existing tags
+
+      - name: Tag and release when VERSION is new
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          V="v$(tr -d '[:space:]' < VERSION)"
+          if git rev-parse -q --verify "refs/tags/$V" >/dev/null; then
+            echo "$V already tagged — nothing to release."
+            exit 0
+          fi
+          git config user.name  "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git tag "$V"
+          git push origin "$V"
+          # Changelog: commits since the previous tag (or all history for the first).
+          PREV="$(git describe --tags --abbrev=0 "$V^" 2>/dev/null || true)"
+          if [ -n "$PREV" ]; then RANGE="$PREV..$V"; else RANGE="$V"; fi
+          NOTES="$(git log --no-merges --pretty='- %s' "$RANGE" | head -40)"
+          FLAG=""
+          case "$V" in *-alpha*|*-beta*|*-rc*) FLAG="--prerelease" ;; esac
+          gh release create "$V" --title "$V" --notes "${NOTES:-Release $V}" $FLAG
