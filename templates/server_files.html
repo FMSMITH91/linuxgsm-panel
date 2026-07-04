@@ -2,13 +2,37 @@
 {% block title %}{{ server.name }} — Files & Config{% endblock %}
 {% block content %}
 
+<style>
+  .fb-key { font-family: ui-monospace, 'JetBrains Mono', monospace; font-size: .72rem; color: var(--text-muted); }
+  .cfg-acc-header { background: var(--bg-elevated); color: var(--text-heading); cursor: pointer; border: none; }
+  .cfg-acc-header:hover { background: var(--border); }
+  .fb-panel { position: relative; border: 1px solid var(--border); border-radius: 8px; overflow: hidden; }
+  #file-list { max-height: 460px; overflow-y: auto; }
+  #file-list .list-group-item { background: transparent; border-color: var(--border); padding: .4rem .7rem; }
+  #file-list .list-group-item:hover { background: var(--bg-elevated); }
+  #file-list .list-group-item.active { background: var(--accent-glow); box-shadow: inset 2px 0 0 var(--accent); }
+  #drop-overlay {
+    position: absolute; inset: 0; z-index: 5; pointer-events: none;
+    display: none; align-items: center; justify-content: center; text-align: center;
+    background: rgba(16,185,129,.14); border: 2px dashed var(--accent); border-radius: 8px;
+    color: var(--text-heading); font-weight: 600; font-size: .85rem;
+  }
+  #drop-zone.dragging #drop-overlay { display: flex; }
+  #editor-empty {
+    height: 100%; min-height: 340px; display: flex; flex-direction: column;
+    align-items: center; justify-content: center; text-align: center;
+    border: 1px dashed var(--border); border-radius: 8px; color: var(--text-muted);
+  }
+  .fb-toolbar code { background: transparent; padding: 0; }
+</style>
+
 <div class="d-flex justify-content-between align-items-center mb-3">
   <div>
     <a href="{{ url_for('server_detail', server_id=server.id) }}" class="text-secondary text-decoration-none small">
       <i class="bi bi-arrow-left"></i> {{ server.name }} console
     </a>
     <h1 class="page-title mb-0 mt-1"><i class="bi bi-folder2-open"></i> Files &amp; Config</h1>
-    <span class="text-secondary small">{{ remote.name }} &middot; <code>/home/{{ server.short_name }}</code></span>
+    <span class="text-secondary small">{{ remote.display_name }} &middot; <code>/home/{{ server.short_name }}</code></span>
   </div>
 </div>
 
@@ -55,37 +79,41 @@
 
 <!-- File browser -->
 <div class="card">
-  <div class="card-header d-flex justify-content-between align-items-center">
-    <span><i class="bi bi-hdd"></i> File Browser <span class="text-secondary small ms-1">— browse, edit, upload &amp; delete</span></span>
-    <input type="file" id="upload-input" multiple style="display:none;" onchange="doUpload(event)">
+  <div class="card-header d-flex justify-content-between align-items-center flex-wrap gap-2">
+    <span><i class="bi bi-hdd"></i> File Browser</span>
+    <div class="d-flex align-items-center gap-3 fb-toolbar">
+      <span id="breadcrumb" class="small text-secondary"></span>
+      <button class="btn btn-sm btn-outline-secondary" onclick="document.getElementById('upload-input').click()">
+        <i class="bi bi-upload"></i> Upload
+      </button>
+      <input type="file" id="upload-input" multiple style="display:none;" onchange="doUpload(event)">
+    </div>
   </div>
   <div class="card-body">
-    <div id="breadcrumb" class="small mb-2 text-secondary"></div>
     <div class="row g-3">
-      <div class="col-md-5">
-        <div id="drop-zone" style="border:1px solid var(--border);border-radius:8px;transition:.15s;">
-          <div id="drop-hint" class="text-center py-3" style="cursor:pointer;border-bottom:1px dashed var(--border);" onclick="document.getElementById('upload-input').click()">
-            <i class="bi bi-cloud-upload" style="font-size:1.5rem;color:var(--accent,#3fb950);"></i>
-            <div class="small mt-1"><strong>Drag &amp; drop files here</strong> — or <span class="text-info text-decoration-underline">click to browse</span></div>
-            <div class="text-secondary" style="font-size:.66rem;">uploads to <code id="upload-dest">home</code></div>
-          </div>
-          <div id="file-list" class="list-group list-group-flush" style="max-height:440px;overflow-y:auto;"></div>
+      <div class="col-lg-5">
+        <div id="drop-zone" class="fb-panel">
+          <div id="file-list" class="list-group list-group-flush"></div>
+          <div id="drop-overlay"><span><i class="bi bi-cloud-upload" style="font-size:1.4rem;"></i><br>Drop to upload to <code id="upload-dest">home</code></span></div>
         </div>
+        <div id="upload-status" class="small mt-2"></div>
+        <div class="text-secondary mt-1" style="font-size:.66rem;"><i class="bi bi-info-circle"></i> Tip: drag files onto the list to upload. <i class="bi bi-shield-lock"></i> marks files protected from deletion.</div>
       </div>
-      <div class="col-md-7">
+      <div class="col-lg-7">
         <div id="editor-wrap" style="display:none;">
           <div class="d-flex justify-content-between align-items-center mb-1">
             <code class="small text-info" id="editor-path"></code>
-            <div>
+            <div class="d-flex align-items-center gap-2">
+              <span id="file-save-msg" class="small"></span>
               <button class="btn btn-primary btn-sm" onclick="saveFile()"><i class="bi bi-save"></i> Save</button>
-              <span id="file-save-msg" class="small ms-1"></span>
+              <button class="btn btn-outline-secondary btn-sm" onclick="closeEditor()" title="Close"><i class="bi bi-x-lg"></i></button>
             </div>
           </div>
           <textarea id="editor" class="form-control font-monospace" rows="20" style="font-size:.78rem;" spellcheck="false"></textarea>
         </div>
-        <div id="editor-empty" class="text-secondary small p-3 text-center">
-          <i class="bi bi-file-earmark-text" style="font-size:1.6rem;"></i>
-          <div class="mt-2">Select a text file on the left to view &amp; edit it.</div>
+        <div id="editor-empty">
+          <i class="bi bi-file-earmark-text" style="font-size:2rem;opacity:.5;"></i>
+          <div class="mt-2 small">Select a text file on the left to view &amp; edit it.</div>
         </div>
       </div>
     </div>
@@ -101,6 +129,17 @@ var curFile = null;     // path of the file open in the editor
 
 function esc(s){ return (s+'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); }
 function fmtSize(b){ if(b<1024)return b+' B'; if(b<1048576)return (b/1024).toFixed(1)+' KB'; return (b/1048576).toFixed(1)+' MB'; }
+function fileIcon(name){
+  var n=(name||'').toLowerCase();
+  if(/\.(cfg|conf|ini|cnf)$/.test(n)) return 'bi-sliders text-info';
+  if(/\.(log)$/.test(n)) return 'bi-journal-text text-secondary';
+  if(/\.(json|yml|yaml|xml|toml)$/.test(n)) return 'bi-file-earmark-code text-info';
+  if(/\.(sh|bash)$/.test(n)) return 'bi-terminal text-success';
+  if(/\.(txt|md)$/.test(n)) return 'bi-file-earmark-text';
+  if(/\.(zip|gz|tar|bz2|xz|7z|rar)$/.test(n)) return 'bi-file-earmark-zip text-warning';
+  if(/\.(jpe?g|png|gif|bmp|svg|webp)$/.test(n)) return 'bi-file-earmark-image text-warning';
+  return 'bi-file-earmark';
+}
 
 // ── Config tabs ──
 var gameCfgLoaded=false, gameCfgRel=null;
@@ -114,9 +153,12 @@ document.getElementById('cfg-tabs').addEventListener('click', function(ev){
 
 // ── LinuxGSM settings (grouped) ──
 function fieldHtml(s){
-  return '<div class="col-md-4 col-lg-3"><label class="form-label small mb-1" style="font-size:.72rem;"><code class="text-info">'+esc(s.key)+'</code>'
-    + (s.overridden?' <span class="badge bg-info text-dark" style="font-size:.55rem;">set</span>':'')
-    + '</label><input type="text" class="form-control form-control-sm" data-key="'+esc(s.key)+'" data-orig="'+esc(s.value)+'" value="'+esc(s.value)+'"'
+  return '<div class="col-6 col-md-4 col-xl-3 mb-1">'
+    + '<label class="form-label mb-1 d-flex align-items-center gap-1" style="font-size:.7rem;">'
+    + '<span class="fb-key">'+esc(s.key)+'</span>'
+    + (s.overridden?'<span class="badge bg-info text-dark" style="font-size:.5rem;">set</span>':'')
+    + '</label>'
+    + '<input type="text" class="form-control form-control-sm" data-key="'+esc(s.key)+'" data-orig="'+esc(s.value)+'" value="'+esc(s.value)+'"'
     + (s['default']!==''?' placeholder="'+esc(s['default'])+'"':'') + '></div>';
 }
 function loadConfig(){
@@ -128,10 +170,11 @@ function loadConfig(){
       var open = idx===0; // first group (Game Server Settings) expanded
       var body = '<div class="row g-2">'+grp.settings.map(fieldHtml).join('')+'</div>';
       g.insertAdjacentHTML('beforeend',
-        '<div class="mb-2 border rounded">'
-        + '<button type="button" class="btn btn-sm w-100 text-start d-flex justify-content-between align-items-center px-2 py-1" style="background:rgba(255,255,255,.03);" data-acc="'+idx+'">'
-        + '<span><i class="bi bi-caret-'+(open?'down':'right')+'-fill"></i> '+esc(grp.section)+' <span class="text-secondary small">('+grp.settings.length+')</span></span></button>'
-        + '<div class="p-2" data-accbody="'+idx+'" style="'+(open?'':'display:none;')+'">'+body+'</div></div>');
+        '<div class="mb-2 border rounded overflow-hidden">'
+        + '<button type="button" class="cfg-acc-header btn btn-sm w-100 text-start d-flex justify-content-between align-items-center px-3 py-2" data-acc="'+idx+'">'
+        + '<span class="fw-semibold"><i class="bi bi-caret-'+(open?'down':'right')+'-fill me-1"></i>'+esc(grp.section)+'</span>'
+        + '<span class="badge bg-secondary">'+grp.settings.length+'</span></button>'
+        + '<div class="p-3" data-accbody="'+idx+'" style="'+(open?'':'display:none;')+'">'+body+'</div></div>');
     });
     if(!(d.groups||[]).length) g.innerHTML='<div class="text-secondary small">No settings detected. Use the raw editor.</div>';
     document.getElementById('cfg-form').style.display='';
@@ -143,8 +186,8 @@ document.getElementById('cfg-groups').addEventListener('click', function(ev){
   var b=ev.target.closest('[data-acc]'); if(!b) return;
   var body=document.querySelector('[data-accbody="'+b.dataset.acc+'"]');
   var ic=b.querySelector('i');
-  if(body.style.display==='none'){ body.style.display=''; ic.className='bi bi-caret-down-fill'; }
-  else { body.style.display='none'; ic.className='bi bi-caret-right-fill'; }
+  if(body.style.display==='none'){ body.style.display=''; ic.className='bi bi-caret-down-fill me-1'; }
+  else { body.style.display='none'; ic.className='bi bi-caret-right-fill me-1'; }
 });
 function saveConfig(ev){
   ev.preventDefault();
@@ -199,22 +242,22 @@ function saveRaw(){
 // ── File browser ──
 function renderBreadcrumb(){
   var parts = curDir? curDir.split('/'):[];
-  var html='<a href="#" data-nav="">' + '<i class="bi bi-house"></i> home</a>';
+  var html='<a href="#" data-nav=""><i class="bi bi-house-door"></i> home</a>';
   var acc='';
-  parts.forEach(function(p){ acc = acc?acc+'/'+p:p; html+=' / <a href="#" data-nav="'+esc(acc)+'">'+esc(p)+'</a>'; });
-  var bc=document.getElementById('breadcrumb'); bc.innerHTML = html;
+  parts.forEach(function(p){ acc = acc?acc+'/'+p:p; html+=' <span class="text-secondary">/</span> <a href="#" data-nav="'+esc(acc)+'">'+esc(p)+'</a>'; });
+  document.getElementById('breadcrumb').innerHTML = html;
   var dest=document.getElementById('upload-dest'); if(dest) dest.textContent = curDir||'home';
 }
 function mkRow(opts){
-  // opts: {name, path, type: 'dir'|'file'|'up', size, deletable}
+  // opts: {name, path, type: 'dir'|'file'|'up', size, deletable, protected, icon}
   var row=document.createElement('div');
-  row.className='list-group-item list-group-item-action py-1 d-flex justify-content-between align-items-center';
+  row.className='list-group-item list-group-item-action d-flex justify-content-between align-items-center';
   row.style.cursor='pointer';
   row.dataset.path=opts.path; row.dataset.type=opts.type;
   var left=document.createElement('span'); left.style.flex='1'; left.style.minWidth='0'; left.style.overflow='hidden'; left.style.textOverflow='ellipsis'; left.style.whiteSpace='nowrap';
-  left.innerHTML=opts.icon+' '+esc(opts.name);
+  left.innerHTML=opts.icon+' <span style="font-size:.85rem;">'+esc(opts.name)+'</span>';
   var right=document.createElement('span'); right.className='d-flex align-items-center gap-2 flex-shrink-0';
-  if(opts.size!=null){ var s=document.createElement('span'); s.className='text-secondary small'; s.textContent=fmtSize(opts.size); right.appendChild(s); }
+  if(opts.size!=null){ var s=document.createElement('span'); s.className='text-secondary'; s.style.fontSize='.68rem'; s.textContent=fmtSize(opts.size); right.appendChild(s); }
   if(opts.protected){ var lk=document.createElement('span'); lk.className='text-secondary'; lk.title='Protected — required by LinuxGSM/the game'; lk.innerHTML='<i class="bi bi-shield-lock"></i>'; right.appendChild(lk); }
   else if(opts.deletable){ var b=document.createElement('button'); b.type='button'; b.className='btn btn-sm btn-link text-danger p-0'; b.title='Delete'; b.dataset.action='delete'; b.innerHTML='<i class="bi bi-trash"></i>'; right.appendChild(b); }
   row.appendChild(left); row.appendChild(right);
@@ -227,21 +270,23 @@ function browse(path){
     if(d.error){ l.innerHTML='<div class="text-danger small p-2">'+esc(d.error)+'</div>'; return; }
     renderBreadcrumb();
     if(curDir){
-      l.appendChild(mkRow({name:'..', path:curDir.split('/').slice(0,-1).join('/'), type:'up', icon:'<i class="bi bi-arrow-90deg-up"></i>'}));
+      l.appendChild(mkRow({name:'..', path:curDir.split('/').slice(0,-1).join('/'), type:'up', icon:'<i class="bi bi-arrow-90deg-up text-secondary"></i>'}));
     }
     (d.entries||[]).forEach(function(e){
       var p = curDir? curDir+'/'+e.name : e.name;
       l.appendChild(mkRow({
         name:e.name, path:p, type:e.is_dir?'dir':'file', deletable:true, protected:e.protected,
         size: e.is_dir?null:e.size,
-        icon: e.is_dir?'<i class="bi bi-folder-fill text-warning"></i>':'<i class="bi bi-file-earmark-text"></i>'
+        icon: e.is_dir?'<i class="bi bi-folder-fill text-warning"></i>':'<i class="bi '+fileIcon(e.name)+'"></i>'
       }));
     });
-    if(!(d.entries||[]).length) l.insertAdjacentHTML('beforeend','<div class="text-secondary small p-2">(empty)</div>');
+    if(!(d.entries||[]).length) l.insertAdjacentHTML('beforeend','<div class="text-secondary small p-3 text-center">(empty folder)</div>');
+    // Re-highlight the open file if it's in this directory.
+    if(curFile){ var open=l.querySelector('[data-path="'+CSS.escape(curFile)+'"]'); if(open) open.classList.add('active'); }
   }).catch(()=>{});
 }
 function openFile(path){
-  var msg=document.getElementById('file-save-msg'); msg.textContent='';
+  document.getElementById('file-save-msg').textContent='';
   fetch(MOUNT+'/api/server/'+serverId+'/file?path='+encodeURIComponent(path)).then(r=>r.json()).then(d=>{
     if(d.error){ alert(d.error); return; }
     curFile=path;
@@ -251,32 +296,42 @@ function openFile(path){
     document.getElementById('editor').value=d.content||'';
   }).catch(()=>{});
 }
+function closeEditor(){
+  curFile=null;
+  document.getElementById('editor-wrap').style.display='none';
+  document.getElementById('editor-empty').style.display='';
+  document.querySelectorAll('#file-list .list-group-item.active').forEach(function(x){ x.classList.remove('active'); });
+}
 function saveFile(){
   if(!curFile) return;
-  var msg=document.getElementById('file-save-msg'); msg.textContent='Saving…'; msg.className='small ms-1 text-secondary';
+  var msg=document.getElementById('file-save-msg'); msg.textContent='Saving…'; msg.className='small text-secondary';
   fetch(MOUNT+'/api/server/'+serverId+'/file',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({path:curFile,content:document.getElementById('editor').value})})
-    .then(r=>r.json()).then(d=>{ msg.textContent=d.success?'✓ Saved':'✗ '+(d.message||'Failed'); msg.className='small ms-1 '+(d.success?'text-success':'text-danger'); })
-    .catch(()=>{ msg.textContent='✗ Failed'; msg.className='small ms-1 text-danger'; });
+    .then(r=>r.json()).then(d=>{ msg.textContent=d.success?'✓ Saved':'✗ '+(d.message||'Failed'); msg.className='small '+(d.success?'text-success':'text-danger'); })
+    .catch(()=>{ msg.textContent='✗ Failed'; msg.className='small text-danger'; });
 }
 function deletePath(path, isDir){
   if(!confirm('Delete '+(isDir?'directory (and everything in it)':'file')+':\n'+path+' ?')) return;
   fetch(MOUNT+'/api/server/'+serverId+'/delete-path',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({path:path})})
     .then(r=>r.json()).then(d=>{
       if(!d.success){ alert(d.message||'Delete failed'); return; }
-      if(curFile===path){ curFile=null; document.getElementById('editor-wrap').style.display='none'; document.getElementById('editor-empty').style.display=''; }
+      if(curFile===path) closeEditor();
       browse(curDir);
     }).catch(()=>alert('Delete failed'));
 }
 // Upload one or more files to the current dir (used by button + drag-drop).
 function uploadFiles(files){
   if(!files || !files.length) return;
-  var hint=document.getElementById('drop-hint'); var orig=hint.innerHTML;
-  var arr=Array.prototype.slice.call(files); var done=0, failed=0;
-  hint.innerHTML='<i class="bi bi-arrow-repeat"></i> Uploading '+arr.length+' file(s)…';
+  var st=document.getElementById('upload-status');
+  var arr=Array.prototype.slice.call(files); var failed=0;
+  st.textContent='Uploading '+arr.length+' file(s)…'; st.className='small mt-2 text-secondary';
   function next(i){
-    if(i>=arr.length){ hint.innerHTML=(failed? '⚠ '+failed+' failed, ':'✓ ')+ (arr.length-failed)+' uploaded'; browse(curDir); setTimeout(function(){hint.innerHTML=orig;},2500); return; }
+    if(i>=arr.length){
+      st.textContent=(failed?'⚠ '+failed+' failed, ':'✓ ')+(arr.length-failed)+' uploaded to '+(curDir||'home');
+      st.className='small mt-2 '+(failed?'text-warning':'text-success');
+      browse(curDir); setTimeout(function(){ st.textContent=''; },4000); return;
+    }
     var fd=new FormData(); fd.append('file', arr[i]); fd.append('path', curDir);
-    fetch(MOUNT+'/api/server/'+serverId+'/upload',{method:'POST',body:fd}).then(r=>r.json()).then(d=>{ if(!d.success) failed++; }).catch(()=>{failed++;}).finally(()=>{ done++; next(i+1); });
+    fetch(MOUNT+'/api/server/'+serverId+'/upload',{method:'POST',body:fd}).then(r=>r.json()).then(d=>{ if(!d.success) failed++; }).catch(()=>{failed++;}).finally(()=>{ next(i+1); });
   }
   next(0);
 }
@@ -293,18 +348,21 @@ document.getElementById('file-list').addEventListener('click', function(ev){
   if(del){ ev.stopPropagation(); var r=del.closest('[data-path]'); deletePath(r.dataset.path, r.dataset.type==='dir'); return; }
   var row = ev.target.closest('[data-path]');
   if(!row) return;
-  if(row.dataset.type==='file') openFile(row.dataset.path);
-  else browse(row.dataset.path);
+  if(row.dataset.type==='file'){
+    document.querySelectorAll('#file-list .list-group-item.active').forEach(function(x){ x.classList.remove('active'); });
+    row.classList.add('active');
+    openFile(row.dataset.path);
+  } else browse(row.dataset.path);
 });
 // Breadcrumb navigation (delegated).
 document.getElementById('breadcrumb').addEventListener('click', function(ev){
   var a=ev.target.closest('[data-nav]'); if(a){ ev.preventDefault(); browse(a.getAttribute('data-nav')); }
 });
-// Drag & drop upload onto the browser.
+// Drag & drop upload onto the browser (overlay shows while dragging).
 (function(){
   var dz=document.getElementById('drop-zone');
-  ['dragenter','dragover'].forEach(function(e){ dz.addEventListener(e,function(ev){ ev.preventDefault(); ev.stopPropagation(); dz.style.borderColor='var(--accent, #3fb950)'; dz.style.background='rgba(63,185,80,.06)'; }); });
-  ['dragleave','drop'].forEach(function(e){ dz.addEventListener(e,function(ev){ ev.preventDefault(); ev.stopPropagation(); dz.style.borderColor='var(--border)'; dz.style.background=''; }); });
+  ['dragenter','dragover'].forEach(function(e){ dz.addEventListener(e,function(ev){ ev.preventDefault(); ev.stopPropagation(); dz.classList.add('dragging'); }); });
+  ['dragleave','drop'].forEach(function(e){ dz.addEventListener(e,function(ev){ ev.preventDefault(); ev.stopPropagation(); if(e==='drop' || !dz.contains(ev.relatedTarget)) dz.classList.remove('dragging'); }); });
   dz.addEventListener('drop', function(ev){ if(ev.dataTransfer && ev.dataTransfer.files) uploadFiles(ev.dataTransfer.files); });
 })();
 
