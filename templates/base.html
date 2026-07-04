@@ -505,8 +505,29 @@ window.toast = function(msg, kind){
 
 // Copy text to the clipboard and confirm with a toast. Falls back to execCommand
 // on non-secure contexts.
+// Track the cursor so feedback can pop right where the user clicked (a bottom-right
+// toast is easy to miss on big screens).
+window._cursor = { x: 0, y: 0 };
+document.addEventListener('mousemove', function(e){ window._cursor.x = e.clientX; window._cursor.y = e.clientY; }, { passive: true });
+
+// A small label that pops next to the cursor, floats up, and fades — for quick
+// confirmations like "Copied!".
+window.cursorFlash = function(msg, kind){
+  var bg = kind === 'danger' ? '#f85149' : (kind === 'info' ? '#58a6ff' : '#3fb950');
+  var el = document.createElement('div');
+  el.textContent = msg;
+  el.style.cssText = 'position:fixed;z-index:12000;pointer-events:none;white-space:nowrap;'
+    + 'left:' + (window._cursor.x + 12) + 'px;top:' + (window._cursor.y - 10) + 'px;'
+    + 'background:' + bg + ';color:#0b0f17;font-size:.72rem;font-weight:700;'
+    + 'padding:2px 8px;border-radius:6px;box-shadow:0 2px 10px rgba(0,0,0,.45);'
+    + 'opacity:1;transform:translateY(0);transition:transform .55s ease, opacity .55s ease;';
+  document.body.appendChild(el);
+  requestAnimationFrame(function(){ el.style.transform = 'translateY(-16px)'; el.style.opacity = '0'; });
+  setTimeout(function(){ el.remove(); }, 620);
+};
+
 window.copyText = function(text, label){
-  function done(){ window.toast((label || 'Copied') + ': ' + text, 'success'); }
+  function done(){ window.cursorFlash('✓ ' + (label || 'Copied'), 'success'); }
   function fallback(){ try { var ta=document.createElement('textarea'); ta.value=text; ta.style.cssText='position:fixed;opacity:0'; document.body.appendChild(ta); ta.select(); document.execCommand('copy'); ta.remove(); } catch(e){} }
   if(navigator.clipboard && navigator.clipboard.writeText){
     navigator.clipboard.writeText(text).then(done).catch(function(){ fallback(); done(); });
