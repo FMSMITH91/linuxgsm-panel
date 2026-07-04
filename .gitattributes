@@ -1,0 +1,5 @@
+# This project is deployed on Linux — keep LF line endings everywhere so shell
+# scripts and Python behave the same on the server regardless of who commits.
+* text=auto eol=lf
+*.sh text eol=lf
+*.py text eol=lf
