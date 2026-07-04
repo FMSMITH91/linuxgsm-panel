@@ -1,15 +1,24 @@
 {% extends "base.html" %}
-{% block title %}{{ remote.name }} — Manage{% endblock %}
+{% block title %}{% if remote.is_local %}Panel Server{% else %}{{ remote.display_name }} — Manage{% endif %}{% endblock %}
 {% block content %}
 
 <div class="d-flex justify-content-between align-items-center mb-3">
   <div>
+    {% if remote.is_local %}
+    <a href="{{ url_for('index') }}" class="text-secondary text-decoration-none small">
+      <i class="bi bi-arrow-left"></i> Dashboard
+    </a>
+    {% else %}
     <a href="{{ url_for('manage_remotes') }}" class="text-secondary text-decoration-none small">
       <i class="bi bi-arrow-left"></i> Remote Servers
     </a>
-    <h1 class="page-title mb-0 mt-1"><i class="bi bi-hdd-network-fill"></i> {{ remote.name }}</h1>
+    {% endif %}
+    <h1 class="page-title mb-0 mt-1">
+      <i class="bi {% if remote.is_local %}bi-gear-wide-connected{% else %}bi-hdd-network-fill{% endif %}"></i> {{ remote.display_name }}
+      {% if remote.is_local %}<span class="badge bg-secondary ms-1" style="font-size:.6rem;vertical-align:middle;font-weight:600;">this panel</span>{% endif %}
+    </h1>
     <span class="text-secondary small">
-      {{ remote.username }}@{{ remote.host }}:{{ remote.port }} &middot; Auth: {{ remote.auth_method }}
+      {% if remote.is_local %}{{ remote.display_host or 'this host' }}{% else %}{{ remote.username }}@{{ remote.host }}:{{ remote.port }} &middot; Auth: {{ remote.auth_method }}{% endif %}
       {% if remote.games %}&middot; {{ remote.games|length }} game server{{ '' if remote.games|length == 1 else 's' }}{% endif %}
     </span>
   </div>
@@ -17,6 +26,14 @@
     {{ 'Online' if remote.is_online else 'Unknown' }}
   </span>
 </div>
+
+{% if remote.is_local %}
+<div class="alert alert-info py-2 small mb-3" style="background: rgba(16,185,129,.08); border-color: var(--accent);">
+  <i class="bi bi-info-circle"></i>
+  <strong>This is the server the LinuxGSM Panel itself runs on.</strong>
+  It's managed exactly like a remote server, plus a couple of panel-specific extras (panel updates below).
+</div>
+{% endif %}
 
 <!-- System Specs (static hardware & OS) -->
 <div class="card mb-3">
@@ -105,12 +122,34 @@
     <div class="card h-100">
       <div class="card-header"><i class="bi bi-power"></i> Power</div>
       <div class="card-body">
-        <p class="small text-secondary">Reboot this server. Game servers with autostart will come back on their own.</p>
+        <p class="small text-secondary">{% if remote.is_local %}Reboot the panel host. This briefly takes down the panel <strong>and</strong> every game server on it.{% else %}Reboot this server. Game servers with autostart will come back on their own.{% endif %}</p>
         <button class="btn btn-sm btn-outline-warning" onclick="rebootRemote()"><i class="bi bi-power"></i> Reboot server</button>
       </div>
     </div>
   </div>
 </div>
+
+{% if remote.is_local and current_user.is_superadmin %}
+<!-- Panel Updates (panel host only) -->
+<div class="card mb-3" id="updates">
+  <div class="card-header d-flex justify-content-between align-items-center">
+    <span><i class="bi bi-arrow-up-circle"></i> Panel Updates</span>
+    <span class="small text-secondary">LinuxGSM Panel <strong id="pu-current">v{{ panel_version }}</strong></span>
+  </div>
+  <div class="card-body">
+    <div id="pu-status" class="small text-secondary"><i class="bi bi-arrow-repeat"></i> Checking for updates…</div>
+    <div id="pu-changes" class="small mt-2" style="display:none;">
+      <div class="text-secondary mb-1">Changes since your version:</div>
+      <ul id="pu-changes-list" class="mb-0" style="font-size:.8rem;"></ul>
+    </div>
+    <div class="mt-2 d-flex gap-2 align-items-center">
+      <button class="btn btn-sm btn-outline-secondary" onclick="checkPanelUpdate(true)"><i class="bi bi-arrow-repeat"></i> Check now</button>
+      <button class="btn btn-sm btn-success" id="pu-update-btn" onclick="doPanelUpdate()" style="display:none;"><i class="bi bi-download"></i> Update now</button>
+      <span id="pu-msg" class="small"></span>
+    </div>
+  </div>
+</div>
+{% endif %}
 
 <!-- Ubuntu Pro -->
 <div class="card mb-3">
@@ -124,6 +163,31 @@
 <div class="card mb-3">
   <div class="card-header"><i class="bi bi-shield-lock"></i> Connection &amp; SSH</div>
   <div class="card-body">
+    {% if remote.is_local %}
+    <div class="row g-3">
+      <div class="col-md-6">
+        <div class="d-flex align-items-center gap-2 mb-1">
+          <span class="small text-secondary">Tailscale SSH:</span>
+          <span id="ts-ssh-badge" class="badge {% if status and status.tailscale_ssh.enabled %}bg-success{% else %}bg-secondary{% endif %}">{{ 'Enabled' if (status and status.tailscale_ssh.enabled) else 'Disabled' }}</span>
+        </div>
+        <p class="small text-secondary mb-1">SSH into this host over your tailnet using your Tailscale identity — no SSH keys to manage.</p>
+        {% if status and status.tailscale_ssh.enabled %}
+        <button class="btn btn-sm btn-outline-warning" onclick="tsSshDisable()"><i class="bi bi-x-circle"></i> Disable Tailscale SSH</button>
+        {% else %}
+        <button class="btn btn-sm btn-success" onclick="tsSshEnable()"><i class="bi bi-lock"></i> Enable Tailscale SSH</button>
+        {% endif %}
+      </div>
+      <div class="col-md-6">
+        <div class="d-flex align-items-center gap-2 mb-1">
+          <span class="small text-secondary">Tailscale interface (UFW):</span>
+          <code>{{ status.tailscale_interface if status else 'tailscale0' }}</code>
+          {% if status and status.tailscale_ufw_allowed %}<span class="badge bg-success">Allowed</span>{% else %}<span class="badge bg-warning text-dark">Not allowed</span>{% endif %}
+        </div>
+        <p class="small text-secondary mb-1">Allowing the <code>tailscale0</code> interface in UFW keeps the panel reachable over the tailnet.</p>
+        <button class="btn btn-sm btn-success" onclick="ufwAllowTailscale()" {% if status and status.tailscale_ufw_allowed %}disabled{% endif %}><i class="bi bi-shield-check"></i> Allow Tailscale Interface</button>
+      </div>
+    </div>
+    {% else %}
     <div class="row g-3">
       <div class="col-md-6">
         <div class="small text-secondary mb-1">Panel connects via
@@ -148,12 +212,13 @@
         <div id="ssh-msg" class="small mt-1"></div>
       </div>
     </div>
+    {% endif %}
   </div>
 </div>
 
 {% if remote.games %}
 <div class="card">
-  <div class="card-header"><i class="bi bi-controller"></i> Game Servers on this remote</div>
+  <div class="card-header"><i class="bi bi-controller"></i> Game Servers on this host</div>
   <div class="card-body p-0">
     <table class="table table-hover mb-0">
       <thead><tr><th>Name</th><th>Type</th><th>Port</th><th>Status</th><th></th></tr></thead>
@@ -177,6 +242,7 @@
 {% block scripts %}
 <script>
 var REMOTE_ID = {{ remote.id }};
+var IS_LOCAL = {{ 'true' if remote.is_local else 'false' }};
 function barColor(p){ if(p>=85) return '#f85149'; if(p>=60) return '#d29922'; return '#3fb950'; }
 function fmtGB(b){ return (b/1073741824).toFixed(1)+' GB'; }
 
@@ -230,7 +296,9 @@ function runUpdates(){
     .catch(()=>el.textContent='Update failed');
 }
 function rebootRemote(){
-  if(!confirm('Reboot this server now? It will be briefly unreachable.')) return;
+  var q = IS_LOCAL ? 'Reboot the PANEL HOST now? The panel and all its game servers will go down briefly.'
+                   : 'Reboot this server now? It will be briefly unreachable.';
+  if(!confirm(q)) return;
   fetch(MOUNT+'/api/remote/'+REMOTE_ID+'/reboot',{method:'POST'}).then(r=>r.json())
     .then(d=>alert(d.message||'Reboot requested')).catch(()=>alert('Reboot failed'));
 }
@@ -286,7 +354,62 @@ fetch(MOUNT + '/api/remote/' + REMOTE_ID + '/specs').then(r=>r.json())
 // Ubuntu Pro card (shared widget from base.html).
 UPro.load(REMOTE_ID, 'ubuntu-pro-body');
 
-loadSshStatus();
+// ── Panel-host-only controls (Tailscale SSH, UFW-allow, self-update) ──
+function tsSshEnable(){
+  if(!confirm('Enable Tailscale SSH? This re-authenticates Tailscale with SSH support enabled.')) return;
+  fetch(MOUNT+'/api/server-management/ts-ssh-enable',{method:'POST'}).then(r=>r.json())
+    .then(d=>{ alert(d.message||(d.success?'Enabled':'Failed')); if(d.success) location.reload(); })
+    .catch(()=>alert('Failed to enable Tailscale SSH'));
+}
+function tsSshDisable(){
+  if(!confirm('Disable Tailscale SSH?')) return;
+  fetch(MOUNT+'/api/server-management/ts-ssh-disable',{method:'POST'}).then(r=>r.json())
+    .then(d=>{ alert(d.message||(d.success?'Disabled':'Failed')); if(d.success) location.reload(); })
+    .catch(()=>alert('Failed to disable Tailscale SSH'));
+}
+function ufwAllowTailscale(){
+  fetch(MOUNT+'/api/server-management/ufw-allow-tailscale',{method:'POST'}).then(r=>r.json())
+    .then(d=>{ alert(d.message||(d.success?'Allowed':'Failed')); if(d.success) location.reload(); })
+    .catch(()=>alert('Failed to configure UFW'));
+}
+function renderUpdate(d){
+  var st=document.getElementById('pu-status'); if(!st) return;
+  var btn=document.getElementById('pu-update-btn'); var changes=document.getElementById('pu-changes');
+  var cur=document.getElementById('pu-current'); if(cur) cur.textContent='v'+(d.current_version||'?');
+  if(d.git===false){ st.innerHTML='<i class="bi bi-info-circle"></i> '+(d.message||'Self-update unavailable (not a git checkout).'); btn.style.display='none'; changes.style.display='none'; return; }
+  if(d.update_available){
+    st.innerHTML='<span class="text-warning"><i class="bi bi-arrow-up-circle-fill"></i> Update available: <strong>v'+(d.remote_version||'?')+'</strong> ('+d.behind+' commit'+(d.behind===1?'':'s')+' behind).</span>';
+    btn.style.display='';
+    var ul=document.getElementById('pu-changes-list'); ul.innerHTML='';
+    (d.changes||[]).forEach(function(c){ var li=document.createElement('li'); li.textContent=c; ul.appendChild(li); });
+    changes.style.display=(d.changes&&d.changes.length)?'':'none';
+  } else {
+    st.innerHTML='<span class="text-success"><i class="bi bi-check-circle"></i> You\'re on the latest version'+(d.current_sha?' ('+d.current_sha+')':'')+'.</span>';
+    btn.style.display='none'; changes.style.display='none';
+  }
+}
+function checkPanelUpdate(force){
+  var st=document.getElementById('pu-status'); if(!st) return;
+  st.innerHTML='<i class="bi bi-arrow-repeat"></i> Checking for updates…';
+  fetch(MOUNT+'/api/panel/update-status'+(force?'?force=1':'')).then(function(r){return r.json();}).then(renderUpdate)
+    .catch(function(){ st.innerHTML='<span class="text-danger">Update check failed.</span>'; });
+}
+function doPanelUpdate(){
+  if(!confirm('Update the panel to the latest version now?\n\nThe panel will pull new code, install any new dependencies, and restart. It will be briefly unavailable (a few seconds).')) return;
+  var msg=document.getElementById('pu-msg'); msg.innerHTML='<span class="text-secondary"><i class="bi bi-arrow-repeat"></i> Updating &amp; restarting…</span>';
+  document.getElementById('pu-update-btn').disabled=true;
+  fetch(MOUNT+'/api/panel/update',{method:'POST'}).then(function(r){return r.json();}).then(function(d){
+    if(!d.success){ msg.innerHTML='<span class="text-danger">'+(d.message||'Update failed')+'</span>'; document.getElementById('pu-update-btn').disabled=false; return; }
+    msg.innerHTML='<span class="text-secondary">Restarting… this page will reload when it\'s back.</span>';
+    var tries=0; var iv=setInterval(function(){ tries++;
+      fetch(MOUNT+'/api/panel/update-status').then(function(r){ if(r.ok){ clearInterval(iv); location.reload(); } }).catch(function(){});
+      if(tries>40){ clearInterval(iv); msg.innerHTML='<span class="text-warning">Taking a while — reload the page manually.</span>'; }
+    },3000);
+  }).catch(function(){ msg.innerHTML='<span class="text-danger">Update request failed.</span>'; document.getElementById('pu-update-btn').disabled=false; });
+}
+
+if(!IS_LOCAL) loadSshStatus();       // public-SSH controls only exist for remotes
+if(IS_LOCAL) checkPanelUpdate(false); // panel self-update card only on the panel host
 pollLive();
 setInterval(pollLive, 2000);
 </script>

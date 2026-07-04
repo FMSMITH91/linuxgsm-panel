@@ -1500,12 +1500,23 @@ def register_routes(app):
     @login_required
     @permission_required(SUPER_ADMIN)
     def server_management():
-        """Local server management — UFW, Tailscale SSH, updates, reboot."""
-        status = so.get_server_status()
+        """Panel host management. The panel host is just the local remote, so it uses
+        the SAME template (and endpoints) as a remote server — only the panel-specific
+        extras (self-update, its own Tailscale SSH controls) differ, keyed on is_local."""
         local = RemoteServer.query.filter_by(is_local=True).first()
-        local_games = local.games if local else []
-        return render_template("server_management.html", status=status,
-                               local_games=local_games, local_remote=local)
+        if local is None:
+            # Fresh install that never added the panel host as a manageable server —
+            # create it so the panel can manage itself with the unified UI.
+            local = RemoteServer(
+                name="Panel Server", host="127.0.0.1", port=22, username="local",
+                auth_method="local", auth_credential="", sudo_enabled=True,
+                linuxgsm_user="", is_local=True, is_online=True,
+                last_seen=datetime.utcnow(),
+            )
+            db.session.add(local)
+            db.session.commit()
+        status = so.get_server_status()
+        return render_template("remote_manage.html", remote=local, status=status)
 
     @app.route("/api/server-management")
     @login_required
