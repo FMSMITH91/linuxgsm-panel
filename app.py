@@ -461,10 +461,18 @@ def register_routes(app):
                             admin.groups.append(everyone)
                         db.session.commit()
                         data["admin_created"] = True
-                        state.step = "remote_server"
+                        state.step = "tailscale"
                         state.data = json.dumps(data)
                         db.session.commit()
                         return redirect("/setup")
+
+            elif step == "tailscale":
+                # The interactive install/connect/serve runs via /api/setup/tailscale/*;
+                # this POST (Continue or Skip) just advances the wizard.
+                state.step = "remote_server"
+                state.data = json.dumps(data)
+                db.session.commit()
+                return redirect("/setup")
 
             elif step == "remote_server":
                 action = request.form.get("action", "skip")
@@ -545,11 +553,71 @@ def register_routes(app):
         step_templates = {
             "welcome": "setup_welcome.html",
             "admin_user": "setup_admin.html",
+            "tailscale": "setup_tailscale.html",
             "remote_server": "setup_remote.html",
             "complete": "setup_complete.html",
         }
         tmpl = step_templates.get(state.step, "setup_welcome.html")
-        return render_template(tmpl, step=state.step, data=data, config=cfg)
+        ts_info = ts.get_tailscale_info()
+        return render_template(tmpl, step=state.step, data=data, config=cfg, ts=ts_info)
+
+    # ── Setup-only Tailscale endpoints ─────────────────────────
+    # No login exists yet during setup, so these are unauthenticated BUT usable ONLY
+    # while setup is unfinished (they're a no-op/forbidden once complete, same as the
+    # wizard itself). They operate on THIS host only.
+    def _setup_open():
+        return not is_setup_complete()
+
+    @app.route("/api/setup/tailscale/status")
+    def api_setup_ts_status():
+        if not _setup_open():
+            return jsonify({"error": "forbidden"}), 403
+        info = ts.get_tailscale_info(force_refresh=True)
+        serve_url = next((s.get("url") for s in (info.serve_config or {}).get("services", [])), None)
+        return jsonify({
+            "installed": info.installed, "running": info.running,
+            "dns_name": info.dns_name, "ips": info.tailscale_ips,
+            "serve_url": serve_url,
+            "https_url": (f"https://{info.dns_name}" if info.dns_name else None),
+        })
+
+    @app.route("/api/setup/tailscale/install", methods=["POST"])
+    def api_setup_ts_install():
+        if not _setup_open():
+            return jsonify({"error": "forbidden"}), 403
+        ok, log = ts.install_tailscale_local()
+        return jsonify({"success": ok, "log": log})
+
+    @app.route("/api/setup/tailscale/up", methods=["POST"])
+    def api_setup_ts_up():
+        if not _setup_open():
+            return jsonify({"error": "forbidden"}), 403
+        ok, res = ts.tailscale_up_local(enable_ssh=True)
+        if not ok:
+            return jsonify({"success": False, "message": res})
+        if res == "ALREADY_CONNECTED":
+            return jsonify({"success": True, "connected": True})
+        return jsonify({"success": True, "connected": False, "auth_url": res})
+
+    @app.route("/api/setup/tailscale/serve", methods=["POST"])
+    def api_setup_ts_serve():
+        if not _setup_open():
+            return jsonify({"error": "forbidden"}), 403
+        cfg = load_config()
+        port = cfg.get("port", 5000)
+        mount = cfg.get("tailscale_mount", "/") or "/"
+        ok, msg = ts.setup_tailscale_serve(port=port, mount=mount, funnel=False)
+        if not ok:
+            return jsonify({"success": False, "message": msg})
+        info = ts.get_tailscale_info(force_refresh=True)
+        cfg["tailscale_setup_done"] = True
+        cfg["tailscale_mount"] = mount
+        cfg["bind_host"] = "127.0.0.1"   # Serve proxies to localhost; go tailnet-only
+        if info.dns_name and not cfg.get("site_domain"):
+            cfg["site_domain"] = info.dns_name
+        save_config(cfg)
+        return jsonify({"success": True, "message": msg,
+                        "url": (f"https://{info.dns_name}" if info.dns_name else None)})
 
     # ── Authentication Routes ──────────────────────────────
     @app.route("/login", methods=["GET", "POST"])
@@ -1191,7 +1259,8 @@ def register_routes(app):
         # Only actual remote VPSes — the panel's own host is managed under
         # System → Panel Server, not here.
         remotes = RemoteServer.query.filter_by(is_local=False).order_by(RemoteServer.name).all()
-        return render_template("manage_remotes.html", remotes=remotes)
+        return render_template("manage_remotes.html", remotes=remotes,
+                               tailscale_installed=ts.get_tailscale_info().installed)
 
     @app.route("/remotes/add", methods=["POST"])
     @login_required

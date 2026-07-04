@@ -1,0 +1,106 @@
+{% extends "base.html" %}
+{% block title %}Setup - Tailscale{% endblock %}
+{% block content %}
+<div class="setup-card">
+  <div class="card">
+    <div class="card-body p-4">
+      <div class="d-flex align-items-center mb-3">
+        <span class="badge bg-secondary me-2">Step 3/4</span>
+        <h4 class="mb-0">Secure access with Tailscale</h4>
+      </div>
+      <p class="text-secondary small mb-3">
+        Tailscale gives this panel a private <strong>HTTPS</strong> URL on your own tailnet
+        (MagicDNS) — no open ports, no certificates to manage, reachable only from your
+        devices. Free on the Personal plan. <strong>Recommended.</strong>
+      </p>
+
+      <div id="ts-box">
+        <div class="text-secondary small"><i class="bi bi-arrow-repeat"></i> Checking Tailscale on this host…</div>
+      </div>
+
+      <form method="POST" class="mt-3">
+        <input type="hidden" name="step" value="tailscale">
+        <button type="submit" class="btn btn-outline-secondary w-100" id="ts-continue">
+          <i class="bi bi-skip-forward"></i> Skip — I'll set this up later
+        </button>
+      </form>
+    </div>
+  </div>
+</div>
+
+<script>
+function tsEsc(s){ return String(s==null?'':s).replace(/[&<>"']/g,function(c){return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c];}); }
+function tsApi(p, opts){ return fetch((window.MOUNT||'') + '/api/setup/tailscale/' + p, opts).then(function(r){ return r.json(); }); }
+var tsBox = document.getElementById('ts-box');
+var tsCont = document.getElementById('ts-continue');
+
+function tsRefresh(){ return tsApi('status').then(function(s){ tsRender(s); return s; }).catch(function(){ tsBox.innerHTML='<div class="text-danger small">Could not check Tailscale status.</div>'; }); }
+
+function tsRender(s){
+  if(s.error){ tsBox.innerHTML='<div class="text-danger small">'+tsEsc(s.error)+'</div>'; return; }
+  if(s.running && s.dns_name){
+    if(s.serve_url){
+      tsBox.innerHTML='<div class="alert alert-success py-2 small mb-2"><i class="bi bi-check-circle-fill"></i> '
+        + 'Connected and serving over HTTPS at<br><a href="'+tsEsc(s.https_url)+'" target="_blank" style="word-break:break-all;">'+tsEsc(s.https_url)+'</a></div>'
+        + '<div class="text-secondary small">Finish setup, then reach the panel at that private HTTPS URL.</div>';
+      tsCont.innerHTML='<i class="bi bi-arrow-right"></i> Continue';
+      tsCont.className='btn btn-primary w-100';
+    } else {
+      tsBox.innerHTML='<div class="alert alert-info py-2 small mb-2"><i class="bi bi-check-circle"></i> Connected to your tailnet as <code>'+tsEsc(s.dns_name)+'</code>.</div>'
+        + '<button type="button" class="btn btn-success w-100" id="ts-serve"><i class="bi bi-lock-fill"></i> Enable private HTTPS (Tailscale Serve)</button>'
+        + '<div id="ts-msg" class="small mt-2"></div>';
+      document.getElementById('ts-serve').onclick=tsDoServe;
+    }
+    return;
+  }
+  if(s.installed && !s.running){
+    tsBox.innerHTML='<div class="small text-secondary mb-2">Tailscale is installed but not connected to a tailnet yet.</div>'
+      + '<button type="button" class="btn btn-primary w-100" id="ts-up"><i class="bi bi-box-arrow-up-right"></i> Connect to my tailnet</button>'
+      + '<div id="ts-out" class="small mt-2"></div>';
+    document.getElementById('ts-up').onclick=tsDoUp;
+    return;
+  }
+  tsBox.innerHTML='<div class="small text-secondary mb-2">Tailscale isn\'t installed on this host yet.</div>'
+    + '<button type="button" class="btn btn-primary w-100" id="ts-install"><i class="bi bi-download"></i> Install &amp; connect Tailscale</button>'
+    + '<div id="ts-out" class="small mt-2"></div>';
+  document.getElementById('ts-install').onclick=tsDoInstall;
+}
+
+function tsOut(){ return document.getElementById('ts-out'); }
+
+function tsDoInstall(){
+  var b=document.getElementById('ts-install'); b.disabled=true;
+  tsOut().innerHTML='<i class="bi bi-arrow-repeat"></i> Installing Tailscale… (up to a minute)';
+  tsApi('install',{method:'POST'}).then(function(d){
+    if(!d.success){ tsOut().innerHTML='<span class="text-danger">Install failed: '+tsEsc((d.log||'').slice(-200))+'</span>'; b.disabled=false; return; }
+    tsOut().innerHTML='<span class="text-success">Installed.</span> Starting…';
+    tsDoUp();
+  }).catch(function(){ tsOut().innerHTML='<span class="text-danger">Install request failed.</span>'; b.disabled=false; });
+}
+
+function tsDoUp(){
+  tsOut().innerHTML='<i class="bi bi-arrow-repeat"></i> Starting Tailscale…';
+  tsApi('up',{method:'POST'}).then(function(d){
+    if(!d.success){ tsOut().innerHTML='<span class="text-danger">'+tsEsc(d.message||'Failed')+'</span>'; return; }
+    if(d.connected){ tsOut().innerHTML='<span class="text-success">Connected!</span>'; setTimeout(tsRefresh,800); return; }
+    tsOut().innerHTML='<div class="alert alert-info py-2 small mb-0">'
+      + '<strong>1.</strong> Open this link and approve this machine in your Tailscale account:<br>'
+      + '<a href="'+tsEsc(d.auth_url)+'" target="_blank" style="word-break:break-all;">'+tsEsc(d.auth_url)+'</a>'
+      + ' <button type="button" class="btn btn-sm btn-outline-secondary py-0" onclick="navigator.clipboard.writeText(\''+tsEsc(d.auth_url)+'\')"><i class="bi bi-clipboard"></i></button><br>'
+      + '<strong>2.</strong> <span id="ts-wait"><i class="bi bi-hourglass-split"></i> Waiting for you to authorize…</span></div>';
+    var t=setInterval(function(){ tsApi('status').then(function(s){ if(s.running){ clearInterval(t); tsRender(s); } }); }, 4000);
+  }).catch(function(){ tsOut().innerHTML='<span class="text-danger">Request failed.</span>'; });
+}
+
+function tsDoServe(){
+  var m=document.getElementById('ts-msg'); var b=document.getElementById('ts-serve');
+  b.disabled=true; m.innerHTML='<i class="bi bi-arrow-repeat"></i> Configuring HTTPS…';
+  tsApi('serve',{method:'POST'}).then(function(d){
+    if(!d.success){ m.innerHTML='<span class="text-danger">'+tsEsc(d.message||'Failed')+'</span>'; b.disabled=false; return; }
+    tsRefresh();
+  }).catch(function(){ m.innerHTML='<span class="text-danger">Request failed.</span>'; b.disabled=false; });
+}
+
+tsRefresh();
+</script>
+{% endblock %}

@@ -41,7 +41,7 @@
         <select name="auth_method" class="form-select" onchange="toggleCreds(this)">
           <option value="key">SSH Key</option>
           <option value="password">Password</option>
-          <option value="tailscale">Tailscale SSH</option>
+          {% if tailscale_installed %}<option value="tailscale">Tailscale SSH</option>{% endif %}
         </select>
       </div>
       <div class="col-md-3" id="credential-group">

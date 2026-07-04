@@ -5,7 +5,7 @@
   <div class="card">
     <div class="card-body p-4">
       <div class="d-flex align-items-center mb-4">
-        <span class="badge bg-secondary me-2">Step 3/3</span>
+        <span class="badge bg-secondary me-2">Step 4/4</span>
         <h4 class="mb-0">Connect a Remote Server</h4>
       </div>
       <p class="text-secondary small">
@@ -42,8 +42,11 @@
           <select name="auth_method" class="form-select" id="auth-method" onchange="toggleSetupCreds()">
             <option value="key">SSH Key</option>
             <option value="password">Password</option>
-            <option value="tailscale">Tailscale SSH</option>
+            {% if ts and ts.installed %}<option value="tailscale">Tailscale SSH</option>{% endif %}
           </select>
+          {% if not (ts and ts.installed) %}
+          <div class="form-text">Tailscale SSH isn't available — Tailscale isn't installed on this host. Set it up in the previous step to enable it.</div>
+          {% endif %}
         </div>
 
         <div class="mb-2" id="credential-field">

@@ -281,6 +281,51 @@ def setup_tailscale_serve(port=5000, mount="/", funnel=False):
         return False, f"Failed to configure Tailscale Serve: {error}"
 
 
+def install_tailscale_local():
+    """Install Tailscale on THIS host (needs sudo). Returns (success, log tail)."""
+    try:
+        r = subprocess.run(
+            ["sudo", "bash", "-c", "curl -fsSL https://tailscale.com/install.sh | sh"],
+            capture_output=True, text=True, timeout=180,
+        )
+        with _cache_lock:
+            _cache["info"] = None
+        return r.returncode == 0, ((r.stdout or "") + (r.stderr or ""))[-1500:]
+    except Exception as e:
+        return False, str(e)
+
+
+def tailscale_up_local(enable_ssh=True):
+    """Run `tailscale up` on THIS host detached and return the browser login URL to
+    paste in (mirrors the remote flow). Returns (True, url) | (True, 'ALREADY_CONNECTED')
+    | (False, message)."""
+    up = "tailscale up --accept-routes --timeout=600s"
+    if enable_ssh:
+        up += " --ssh"
+    cmd = (
+        "rm -f /tmp/tsup.log ; "
+        f"nohup {up} > /tmp/tsup.log 2>&1 & "
+        "for i in $(seq 1 20); do "
+        "u=$(grep -oE 'https://login\\.tailscale\\.com/[A-Za-z0-9/]+' /tmp/tsup.log | head -1) ; "
+        "[ -n \"$u\" ] && { echo \"$u\" ; break ; } ; "
+        "grep -qi 'success' /tmp/tsup.log && { echo ALREADY_CONNECTED ; break ; } ; "
+        "sleep 1 ; done"
+    )
+    try:
+        r = subprocess.run(["sudo", "bash", "-c", cmd], capture_output=True, text=True, timeout=40)
+    except Exception as e:
+        return False, str(e)
+    line = (r.stdout or "").strip().split("\n")[-1].strip()
+    if line.startswith("https://login.tailscale.com"):
+        with _cache_lock:
+            _cache["info"] = None
+        return True, line
+    info = get_tailscale_info(force_refresh=True)
+    if info.running or line == "ALREADY_CONNECTED":
+        return True, "ALREADY_CONNECTED"
+    return False, (r.stderr or r.stdout or "Could not get a login link — is Tailscale installed on this host?")
+
+
 def disable_tailscale_serve(mount="/"):
     """Remove a Tailscale Serve/Funnel mapping."""
     out, err, rc = _run_ts(
