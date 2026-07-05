@@ -782,9 +782,12 @@ def register_routes(app):
                 user.last_login = datetime.utcnow()
                 db.session.commit()
                 log_action(user, "login", detail=f"User logged in from {ip}")
-                # Open-redirect-safe: only allow same-site relative paths in ?next=.
+                # Open-redirect-safe: same-site relative paths only. Reject absolute URLs,
+                # protocol-relative "//host", an embedded scheme, and backslash tricks like
+                # "/\\host" (some browsers normalise the backslash to "/", making it "//host").
                 next_page = request.args.get("next", "/")
-                if not next_page.startswith("/") or next_page.startswith("//"):
+                if (not next_page.startswith("/") or next_page.startswith("//")
+                        or "\\" in next_page or "://" in next_page):
                     next_page = "/"
                 return redirect(next_page)
 
