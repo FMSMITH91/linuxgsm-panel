@@ -4,6 +4,7 @@ Auto-detects Tailscale status, manages Serve/Funnel configuration,
 provides network diagnostics, and recommends optimal bind settings.
 """
 import json
+import logging
 import re
 import socket
 import subprocess
@@ -11,6 +12,8 @@ import threading
 import time
 from dataclasses import dataclass, field
 from typing import Optional
+
+_log = logging.getLogger(__name__)
 
 
 @dataclass
@@ -47,8 +50,12 @@ def _run_ts(args, timeout=5):
         return "", "tailscale binary not found", -1
     except subprocess.TimeoutExpired:
         return "", "tailscale command timed out", -1
-    except Exception as e:
-        return "", str(e), -1
+    except Exception:
+        # Never return str(e): this stderr channel can surface in the /api/tailscale
+        # response, and an exception message is a stack-trace-exposure sink. Log it
+        # server-side for debugging and hand the caller a generic message instead.
+        _log.exception("tailscale command failed")
+        return "", "tailscale command failed", -1
 
 
 def _run_ts_sudo(args, timeout=10):
@@ -63,8 +70,10 @@ def _run_ts_sudo(args, timeout=10):
         return "", "tailscale binary not found", -1
     except subprocess.TimeoutExpired:
         return "", "tailscale command timed out", -1
-    except Exception as e:
-        return "", str(e), -1
+    except Exception:
+        # See _run_ts: keep the raw exception text out of any caller-facing string.
+        _log.exception("privileged tailscale command failed")
+        return "", "tailscale command failed", -1
 
 
 def _current_os_user():
@@ -360,8 +369,11 @@ def install_tailscale_local():
         with _cache_lock:
             _cache["info"] = None
         return r.returncode == 0, ((r.stdout or "") + (r.stderr or ""))[-1500:]
-    except Exception as e:
-        return False, str(e)
+    except Exception:
+        # This message is echoed back to /api/tailscale/install — keep the raw
+        # exception text out of the response (stack-trace-exposure); log it instead.
+        _log.exception("tailscale install failed")
+        return False, "Install failed — see panel logs for details."
 
 
 def tailscale_up_local(enable_ssh=True):
@@ -382,8 +394,10 @@ def tailscale_up_local(enable_ssh=True):
     )
     try:
         r = subprocess.run(["sudo", "bash", "-c", cmd], capture_output=True, text=True, timeout=40)
-    except Exception as e:
-        return False, str(e)
+    except Exception:
+        # Echoed back to /api/tailscale/up — no raw exception text in the response.
+        _log.exception("tailscale up failed")
+        return False, "Could not start Tailscale — see panel logs for details."
     line = (r.stdout or "").strip().split("\n")[-1].strip()
     if line.startswith("https://login.tailscale.com/"):
         with _cache_lock:
