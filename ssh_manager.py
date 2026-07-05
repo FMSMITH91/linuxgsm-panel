@@ -1,5 +1,6 @@
 """SSH connection manager for remote LinuxGSM servers.
 Also supports local execution for running on the panel's own machine."""
+import logging
 import os
 import re
 import socket
@@ -11,6 +12,8 @@ from pathlib import Path
 import paramiko
 
 from config import decrypt_secret
+
+_log = logging.getLogger("panel.ssh")
 
 
 class HostKeyMismatch(ConnectionError):
@@ -90,8 +93,11 @@ def _run_local(cmd, timeout=30, sudo=False):
             return r.stdout.strip(), r.stderr.strip(), r.returncode
         except _real_subprocess.TimeoutExpired:
             return "", "Command timed out", -1
-        except Exception as e:
-            return "", str(e), -1
+        except Exception:
+            # Never surface raw exception text — it can flow into API responses
+            # (CodeQL py/stack-trace-exposure). Log it; callers act on rc == -1.
+            _log.debug("local command failed", exc_info=True)
+            return "", "command execution error", -1
 
     if _tpool is not None:
         return _tpool.execute(_do)
@@ -266,8 +272,11 @@ def _run_via_ssh_cli(server, command, timeout=30, sudo=None):
         return r.stdout.strip(), r.stderr.strip(), r.returncode
     except subprocess.TimeoutExpired:
         return "", "SSH command timed out", -1
-    except Exception as e:
-        return "", str(e), -1
+    except Exception:
+        # Generic message only; the real error is logged, not returned (it can
+        # reach API responses — CodeQL py/stack-trace-exposure).
+        _log.debug("ssh command failed", exc_info=True)
+        return "", "ssh command error", -1
 
 
 def run_command(server, command, timeout=30, sudo=None):

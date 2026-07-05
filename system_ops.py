@@ -613,15 +613,21 @@ def panel_repair(paths=None):
         return False, info.get("message", "Not a git checkout."), []
     if not info.get("verified", True):
         return False, "Couldn't verify file integrity with git — repair is unavailable right now.", []
-    tampered = {m["path"] for m in info["modified"]}
+    # `tampered` is built from git's OWN output (panel_integrity → git diff), never
+    # from caller input. The request's `paths` is used ONLY as a membership filter,
+    # and the strings we hand to git are taken from `tampered` — so nothing from the
+    # HTTP request ever reaches the git command line (defeats path-traversal /
+    # command-injection; git also only touches tracked files, and _git shlex-quotes).
+    tampered = sorted(m["path"] for m in info["modified"])
     if not tampered:
         return True, "Nothing to repair — all panel files match the installed version.", []
     if paths:
-        targets = sorted(p for p in paths if p in tampered)
+        requested = set(paths)
+        targets = [p for p in tampered if p in requested]
         if not targets:
             return False, "None of the requested files are currently modified.", []
     else:
-        targets = sorted(tampered)
+        targets = list(tampered)
     # Restore from HEAD. The explicit '--' plus paths validated against git's own
     # changed-file list means git only ever touches files in that set.
     _, err, rc = _git(["checkout", "HEAD", "--"] + targets)
