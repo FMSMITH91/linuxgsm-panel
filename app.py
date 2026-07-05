@@ -3000,8 +3000,8 @@ def register_routes(app):
         remote = gs.remote
         try:
             m = server_live_metrics(remote, gs.short_name, gs.port)
-        except Exception as e:
-            return jsonify({"error": str(e)}), 500
+        except Exception:
+            return jsonify({"error": _log_and_generic("server stats failed")}), 500
 
         status = "online" if (m.get("port_open") or m.get("game_procs")) else "offline"
         changed = False
