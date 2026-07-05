@@ -109,11 +109,22 @@ try:
         bc_codes = auth.generate_backup_codes()
         tfa.set_backup_codes(bc_codes)
         db.session.add(tfa)
+        # A delegated admin: MANAGE_USERS + MANAGE_GROUPS but NOT superadmin — used to prove
+        # they can't escalate to superadmin via user/group management.
+        dg = Group(name="smoke_deleg", description="", is_default=False)
+        dg.set_permissions([auth.MANAGE_USERS, auth.MANAGE_GROUPS])
+        db.session.add(dg)
+        db.session.flush()
+        deleg = User(username="smoke_deleg", password_hash=auth.hash_password("Str0ng!passw0rd"),
+                     display_name="Deleg", is_superadmin=False, is_active=True)
+        deleg.groups.append(dg)
+        db.session.add(deleg)
         db.session.commit()
         admin_id, remote_id = admin.id, remote.id
         remote2_id, mru_id = remote2.id, mru.id
         gs_id = gs.id
         bc_code = bc_codes[0]
+        deleg_id, admin2_id = deleg.id, tfa.id
 
     c = client_as(admin_id)
 
@@ -142,6 +153,26 @@ try:
     check("GET /healthz -> 200 ok (unauthenticated)",
           hz.status_code == 200 and (hz.get_json() or {}).get("status") == "ok",
           "got %d" % hz.status_code)
+
+    # ── Privilege-escalation guards: a delegated admin (MANAGE_USERS + MANAGE_GROUPS,
+    #    NOT superadmin) must not be able to become / create a superadmin. ──
+    dc = client_as(deleg_id)
+    dc.post("/users/add", data={"username": "esc_user", "password": "Str0ng!passw0rd",
+                                "is_superadmin": "on"})
+    with app.app_context():
+        eu = User.query.filter_by(username="esc_user").first()
+        check("MANAGE_USERS user can't create a superadmin", eu is None or not eu.is_superadmin)
+    dc.post("/users/%d/edit" % admin2_id,
+            data={"is_superadmin": "on", "is_active": "on", "password": "hijacked1!A"})
+    with app.app_context():
+        a2 = User.query.get(admin2_id)
+        check("MANAGE_USERS user can't reset a superadmin's password",
+              a2.is_superadmin and auth.check_password("Str0ng!passw0rd", a2.password_hash))
+    dc.post("/groups/add", data={"name": "esc_group", "permissions": ["super_admin", "manage_users"]})
+    with app.app_context():
+        eg = Group.query.filter_by(name="esc_group").first()
+        check("MANAGE_GROUPS user can't grant super_admin to a group",
+              eg is not None and "super_admin" not in eg.get_permissions())
 
     # ── Group create via the real route WITH a host selected. This is the exact
     #    regression that 500'd: the route assigned GameServer objects to

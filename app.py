@@ -1783,6 +1783,12 @@ def register_routes(app):
         is_superadmin = request.form.get("is_superadmin") == "on"
         group_ids = request.form.getlist("groups")
 
+        # Only a superadmin may grant superadmin — otherwise a user with just MANAGE_USERS
+        # could create a superadmin account and log in as it (privilege escalation).
+        if is_superadmin and not current_user.is_superadmin:
+            flash("Only a superadmin can grant superadmin.", "danger")
+            return redirect(url_for("manage_users"))
+
         if not username or len(username) < 3:
             flash("Username must be at least 3 characters.", "danger")
             return redirect(url_for("manage_users"))
@@ -1820,11 +1826,23 @@ def register_routes(app):
     @permission_required(MANAGE_USERS)
     def edit_user(user_id):
         user = User.query.get_or_404(user_id)
+        want_superadmin = request.form.get("is_superadmin") == "on"
+        # A user with only MANAGE_USERS must not be able to touch a superadmin account, nor
+        # grant/revoke superadmin — either would be a privilege escalation (e.g. resetting a
+        # superadmin's password and logging in as them, or promoting themselves).
+        if not current_user.is_superadmin:
+            if user.is_superadmin:
+                flash("Only a superadmin can modify a superadmin account.", "danger")
+                return redirect(url_for("manage_users"))
+            if want_superadmin != user.is_superadmin:
+                flash("Only a superadmin can change superadmin status.", "danger")
+                return redirect(url_for("manage_users"))
+
         user.display_name = (request.form.get("display_name") or user.display_name or "").strip()
         _new_email = request.form.get("email", "").strip()
         user.email = encrypt_secret(_new_email) if _new_email else None
         user.is_active = request.form.get("is_active") == "on"
-        user.is_superadmin = request.form.get("is_superadmin") == "on"
+        user.is_superadmin = want_superadmin
 
         # Update password if provided
         password = request.form.get("password", "")
@@ -1840,11 +1858,20 @@ def register_routes(app):
         if request.form.get("reset_2fa") == "on" and user.totp_enabled:
             user.totp_enabled = False
             user.totp_secret = None
+            user.backup_codes = ""
             log_action(current_user, "2fa_reset", target=user.username)
 
         # Update groups (one lookup per id, not two)
         group_ids = {int(gid) for gid in request.form.getlist("groups")}
         user.groups = [g for g in (Group.query.get(gid) for gid in group_ids) if g]
+
+        # Never let an edit leave the panel with no active superadmin (e.g. self-demotion
+        # or deactivating the last one) — that would lock everyone out of the web UI.
+        db.session.flush()
+        if User.query.filter_by(is_superadmin=True, is_active=True).count() == 0:
+            db.session.rollback()
+            flash("That change would leave no active superadmin — aborted.", "danger")
+            return redirect(url_for("manage_users"))
 
         db.session.commit()
         log_action(current_user, "edit_user", target=user.username)
@@ -1878,6 +1905,18 @@ def register_routes(app):
         return render_template("manage_groups.html", groups=groups,
                                all_perms=all_perms, all_servers=all_servers,
                                all_remotes=all_remotes)
+
+    def _grantable_perms(requested, existing=()):
+        """Compute a group's permission set after an edit, safely. A superadmin can set any
+        real permission. Anyone else (a delegated MANAGE_GROUPS user) can only toggle the
+        permissions they themselves hold — and never SUPER_ADMIN — so they can't escalate
+        their own privileges by editing a group they belong to. Permissions already on the
+        group that they can't grant are PRESERVED (so an edit can't silently strip them)."""
+        requested = set(requested) & set(ALL_PERMISSIONS.keys())
+        if current_user.is_superadmin:
+            return list(requested)
+        grantable = get_user_permissions(current_user) - {SUPER_ADMIN}
+        return list((set(existing) - grantable) | (requested & grantable))
 
     def _selected_remotes(server_ids):
         """Resolve submitted remote ids to RemoteServer rows, skipping anything
@@ -1914,7 +1953,7 @@ def register_routes(app):
             return redirect(url_for("manage_groups"))
 
         group = Group(name=name, description=description)
-        group.set_permissions(request.form.getlist("permissions"))
+        group.set_permissions(_grantable_perms(request.form.getlist("permissions")))
         group.servers = _selected_remotes(request.form.getlist("servers"))
 
         db.session.add(group)
@@ -1930,7 +1969,8 @@ def register_routes(app):
         group = Group.query.get_or_404(group_id)
         group.name = (request.form.get("name") or group.name or "").strip() or group.name
         group.description = (request.form.get("description") or group.description or "").strip()
-        group.set_permissions(request.form.getlist("permissions"))
+        group.set_permissions(_grantable_perms(request.form.getlist("permissions"),
+                                               group.get_permissions()))
         group.servers = _selected_remotes(request.form.getlist("servers"))
 
         db.session.commit()
