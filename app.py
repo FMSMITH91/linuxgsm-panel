@@ -59,7 +59,6 @@ from flask import (
 from flask_login import current_user, login_required, login_user, logout_user
 from flask_socketio import SocketIO, emit, join_room, leave_room
 from flask_wtf.csrf import CSRFProtect
-from flask_sqlalchemy import SQLAlchemy
 from sqlalchemy import desc, or_
 
 from auth import (
