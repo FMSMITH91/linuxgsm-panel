@@ -70,6 +70,17 @@ check("cron: daily-restart flag is managed",
       sm._cron_line_managed("0 5 * * * touch /home/gm/.restart-pending", "gm", "gmodserver"))
 check("cron: user backup line is NOT managed",
       not sm._cron_line_managed("0 3 * * * /home/gm/backup.sh", "gm", "gmodserver"))
+# update/delete must REFUSE a panel-managed line before touching SSH (server=None
+# proves no connection is attempted — the guard returns first). This is the security
+# invariant that the generic editor can't tamper with autostart/maintenance/restart.
+_up = sm.update_cron_job(None, "gm", "@reboot /home/gm/gmodserver start > /dev/null 2>&1",
+                         "@daily", "/home/gm/x.sh", "gmodserver")
+check("cron: update refuses a managed line (no SSH)", _up[0] is False and "managed" in _up[1])
+_dl = sm.delete_cron_job(None, "gm", "0 5 * * * touch /home/gm/.restart-pending", "gmodserver")
+check("cron: delete refuses a managed line (no SSH)", _dl[0] is False and "managed" in _dl[1])
+# a bad schedule is rejected by update before any SSH too
+_bad = sm.update_cron_job(None, "gm", "0 3 * * * /home/gm/backup.sh", "not-a-schedule", "x", "gmodserver")
+check("cron: update rejects a bad schedule (no SSH)", _bad[0] is False)
 # line splitting
 eq("cron: split 5-field", sm._split_cron_line("0 3 * * * /home/gm/b.sh a"), ("0 3 * * *", "/home/gm/b.sh a"))
 eq("cron: split @shortcut", sm._split_cron_line("@reboot /home/gm/x start"), ("@reboot", "/home/gm/x start"))

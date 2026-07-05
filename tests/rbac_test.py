@@ -119,6 +119,16 @@ try:
           c.post("/api/command/%d" % accessible_id, json={"command": "status"}).status_code == 403)
     check("read file without MANAGE_SERVERS -> 403",
           c.get("/api/server/%d/file?path=.bashrc" % accessible_id).status_code == 403)
+    check("list cron without MANAGE_SERVERS -> 403",
+          c.get("/api/server/%d/cron" % accessible_id).status_code == 403)
+    check("add cron without MANAGE_SERVERS -> 403",
+          c.post("/api/server/%d/cron" % accessible_id,
+                 json={"schedule": "@daily", "command": "/bin/true"}).status_code == 403)
+    check("update cron without MANAGE_SERVERS -> 403",
+          c.post("/api/server/%d/cron/update" % accessible_id,
+                 json={"raw": "x", "schedule": "@daily", "command": "/bin/true"}).status_code == 403)
+    check("delete cron without MANAGE_SERVERS -> 403",
+          c.post("/api/server/%d/cron/delete" % accessible_id, json={"raw": "x"}).status_code == 403)
     check("autostart toggle without RESTART_SERVER -> 403",
           c.post("/api/server/%d/autostart" % accessible_id, json={"enabled": False}).status_code == 403)
 

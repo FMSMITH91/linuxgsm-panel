@@ -104,6 +104,7 @@ try:
         db.session.commit()
         admin_id, remote_id = admin.id, remote.id
         remote2_id, mru_id = remote2.id, mru.id
+        gs_id = gs.id
 
     c = client_as(admin_id)
 
@@ -114,6 +115,14 @@ try:
     for path in ["/", "/users", "/groups", "/logs", "/remotes", "/tailscale"]:
         code = c.get(path).status_code
         check("GET %s renders (200)" % path, code == 200, "got %d" % code)
+
+    # ── Audit-log filters/sort must be injection-safe: a junk sort column, bad
+    #    direction/status, and hostile filter values are allowlisted/parameterized,
+    #    so the page still renders 200 rather than 500. ──
+    r = c.get("/logs?sort=id%3BDROP+TABLE&dir=nonsense&status=xyz"
+              "&q=%27%22%3B--&action=whatever&user=nobody")
+    check("GET /logs with junk filter/sort params -> 200 (allowlisted)",
+          r.status_code == 200, "got %d" % r.status_code)
 
     # ── Group create via the real route WITH a host selected. This is the exact
     #    regression that 500'd: the route assigned GameServer objects to
@@ -161,6 +170,18 @@ try:
           mrc.get("/api/remote/%d/firewall" % remote2_id).status_code == 403)
     check("MANAGE_REMOTES user: non-granted remote reboot -> 403",
           mrc.post("/api/remote/%d/reboot" % remote2_id).status_code == 403)
+
+    # ── Scheduled-tasks (cron) endpoints need MANAGE_SERVERS (same gate as the file
+    #    editor). The MANAGE_REMOTES user CAN reach this server (its group grants the
+    #    host) but lacks MANAGE_SERVERS, so every cron verb is refused with 403 — and
+    #    the refusal happens before any SSH, so the check stays offline/portable. ──
+    check("cron list without MANAGE_SERVERS -> 403",
+          mrc.get("/api/server/%d/cron" % gs_id).status_code == 403)
+    check("cron add without MANAGE_SERVERS -> 403",
+          mrc.post("/api/server/%d/cron" % gs_id,
+                   json={"schedule": "@daily", "command": "/bin/true"}).status_code == 403)
+    check("cron delete without MANAGE_SERVERS -> 403",
+          mrc.post("/api/server/%d/cron/delete" % gs_id, json={"raw": "x"}).status_code == 403)
 
     # ── Cookie-reuse defense: a session/remember cookie captured before logout must
     #    NOT work after logout. We log in for real (so we get genuine signed session +
