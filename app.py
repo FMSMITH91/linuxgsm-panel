@@ -2382,6 +2382,17 @@ def register_routes(app):
             return jsonify({"success": False,
                             "message": _log_and_generic("db optimize failed")}), 500
 
+    @app.route("/api/panel/debug-report")
+    @login_required
+    @permission_required(SUPER_ADMIN)
+    def api_panel_debug_report():
+        """A shareable diagnostic bundle (whitelisted fields + redacted log) the operator
+        can attach to a GitHub issue. No secrets by construction."""
+        try:
+            return jsonify(so.generate_debug_report())
+        except Exception:
+            return jsonify({"error": _log_and_generic("debug report failed")}), 500
+
     @app.route("/api/panel/auto-updates")
     @login_required
     @permission_required(SUPER_ADMIN)

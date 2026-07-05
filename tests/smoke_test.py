@@ -355,6 +355,20 @@ try:
         check("optimize: reports before/after sizes with a live file",
               "before" in _info and _info.get("after", 0) > 0)
 
+        # ── Debug report: generates, and never leaks the session/credential secrets ──
+        from system_ops import generate_debug_report
+        _dr = generate_debug_report()
+        check("debug report: returns report/summary/issues_url/filename",
+              all(k in _dr for k in ("report", "summary", "issues_url", "filename")))
+        check("debug report: issues_url is a github new-issue URL",
+              "github.com" in _dr["issues_url"] and _dr["issues_url"].endswith("/issues/new"))
+        import config as _cfgmod
+        for _sf in (_cfgmod.SECRET_FILE, _cfgmod.CRED_KEY_FILE):
+            if _sf.exists():
+                _sv = _sf.read_text(errors="replace").strip()
+                if len(_sv) >= 12:
+                    check("debug report: %s not leaked" % _sf.name, _sv not in _dr["report"])
+
     # ── Scenario: the database is FULL (like a full disk) ─────────
     # PRAGMA max_page_count caps the DB size on this one connection, so the next
     # write hits SQLITE_FULL ("database or disk is full") — exactly what a full

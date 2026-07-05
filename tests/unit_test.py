@@ -568,6 +568,18 @@ try:
 finally:
     _shutil.rmtree(_dbdir, ignore_errors=True)
 
+# ── debug report: redaction + secret-key whitelist (must not leak) ─
+from system_ops import _redact as _rd, _DEBUG_CONFIG_KEYS as _DCK
+check("redact: masks email addresses", "[email]" in _rd("reach me at admin@example.com now"))
+check("redact: masks long token/key strings",
+      "[redacted]" in _rd("key AKIAIOSFODNN7EXAMPLEabcdef1234567890XYZ"))
+check("redact: masks key=value secrets", "[redacted]" in _rd("password=hunter2superSecret"))
+check("redact: masks token: value", "[redacted]" in _rd("auth_token: abc.def.ghi"))
+check("redact: leaves ordinary text intact", "server is offline" in _rd("server is offline"))
+_secret_keys = {"secret_key", "cred_key", "secret", "credentials", "auth_credential",
+                "host_key", "totp_secret", "backup_codes", "password", "auth_credential"}
+check("debug whitelist excludes every secret key", not (set(_DCK) & _secret_keys))
+
 # ── cleanup: remove key/config files this run created ─────────
 for p in (config.CRED_KEY_FILE, config.SECRET_FILE, config.CONFIG_FILE):
     if p not in _pre and os.path.exists(p):

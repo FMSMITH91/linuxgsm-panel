@@ -230,6 +230,32 @@
         recommended for a box that runs unattended.
       </div>
     </div>
+
+    <!-- Report an issue -->
+    <div id="diag-report" class="mt-3">
+      <hr class="my-2">
+      <div class="small text-secondary mb-1"><i class="bi bi-bug"></i> Report an issue</div>
+      <p class="small text-secondary mb-2">
+        Builds a diagnostic report — panel version, health checks, OS, and a redacted log tail
+        (credentials, keys, tokens and emails are excluded). Review it, then download it or open a
+        pre-filled GitHub issue to send it to the maintainers.
+      </p>
+      <div class="d-flex gap-2 align-items-center mb-2 flex-wrap">
+        <button class="btn btn-sm btn-outline-secondary" id="diag-report-btn" onclick="genDebugReport()">
+          <i class="bi bi-clipboard2-data"></i> Generate debug report
+        </button>
+        <a class="btn btn-sm btn-outline-secondary" id="diag-report-dl" style="display:none;" download>
+          <i class="bi bi-download"></i> Download
+        </a>
+        <a class="btn btn-sm btn-outline-primary" id="diag-report-gh" style="display:none;"
+           target="_blank" rel="noopener">
+          <i class="bi bi-github"></i> Open a GitHub issue
+        </a>
+        <span id="diag-report-msg" class="small"></span>
+      </div>
+      <textarea id="diag-report-text" class="form-control" rows="8" readonly aria-label="Debug report"
+                style="display:none;font-family:ui-monospace,monospace;font-size:.72rem;"></textarea>
+    </div>
   </div>
 </div>
 {% endif %}
@@ -740,6 +766,27 @@ function enableAutoUpdates(){
       loadAutoUpd();
     }).catch(function(){ if(msg) msg.innerHTML='<span class="text-danger">Request failed.</span>'; })
     .finally(function(){ if(btn){ btn.disabled=false; btn.innerHTML='<i class="bi bi-shield-plus"></i> Enable automatic security updates'; } });
+}
+
+// Generate a shareable debug report — show it for review, then let the admin download
+// it or open a pre-filled GitHub issue (safe summary; log goes in the download).
+function genDebugReport(){
+  var btn=document.getElementById('diag-report-btn'), msg=document.getElementById('diag-report-msg');
+  if(btn){ btn.disabled=true; btn.innerHTML='<span class="spinner-border spinner-border-sm"></span> Generating…'; }
+  fetch(MOUNT+'/api/panel/debug-report').then(function(r){return r.json();}).then(function(d){
+    if(d.error){ if(msg) msg.innerHTML='<span class="text-danger">Could not generate the report.</span>'; return; }
+    var ta=document.getElementById('diag-report-text');
+    ta.value=d.report; ta.style.display='';   // .value (not innerHTML) — nothing to inject
+    var dl=document.getElementById('diag-report-dl');
+    dl.href=URL.createObjectURL(new Blob([d.report],{type:'text/markdown'}));
+    dl.download=d.filename; dl.style.display='';
+    var gh=document.getElementById('diag-report-gh');
+    var body=d.summary+'\n\n---\n**Describe the problem here.** For the full log, attach the downloaded debug file.\n';
+    gh.href=d.issues_url+'?labels=debug&title='+encodeURIComponent('Debug report')+'&body='+encodeURIComponent(body.slice(0,6000));
+    gh.style.display='';
+    if(msg) msg.innerHTML='<span class="text-success">Report ready — review it below before sharing.</span>';
+  }).catch(function(){ if(msg) msg.innerHTML='<span class="text-danger">Request failed.</span>'; })
+    .finally(function(){ if(btn){ btn.disabled=false; btn.innerHTML='<i class="bi bi-clipboard2-data"></i> Generate debug report'; } });
 }
 
 loadSshStatus();                     // public-SSH controls now exist on both local + remote (no-ops if absent)

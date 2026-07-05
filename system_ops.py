@@ -78,7 +78,8 @@ def live_metrics():
 
 def _run(cmd, timeout=30, sudo=False, text=True):
     """Run a shell command. Returns (stdout, stderr, exit_code)."""
-    if sudo and os.geteuid() != 0:
+    # os.geteuid() is Unix-only; guard it so callers don't crash off-Linux (tests).
+    if sudo and hasattr(os, "geteuid") and os.geteuid() != 0:
         cmd = f"sudo {cmd}"
     try:
         r = subprocess.run(
@@ -808,3 +809,130 @@ def panel_diagnostics():
     return {"checks": checks, "summary": summary,
             "ok": levels.count("ok"), "warn": levels.count("warn"),
             "fail": levels.count("fail")}
+
+
+# ─── Debug report (safe to share on a GitHub issue) ────────────
+# Config keys that are settings/behaviour, never secrets. Everything else in
+# config.json (secret_key, cred_key, credentials, host keys, TOTP, …) is excluded
+# by construction — this is a whitelist, not a "strip the secrets" blacklist.
+_DEBUG_CONFIG_KEYS = (
+    "port", "bind_host", "use_https", "trust_proxy", "cookie_secure",
+    "tailscale_setup_done", "tailscale_auto_setup", "tailscale_mount",
+    "setup_complete", "remember_days", "session_lifetime_hours",
+    "session_protection", "audit_log_retention_days", "site_title", "site_domain",
+)
+
+
+def _redact(text):
+    """Best-effort scrub of anything secret-looking from free text (a log tail). The
+    report is whitelist-built so this is defence-in-depth: emails, long token/key/hash
+    strings, and key=value secrets get masked before an admin reviews + shares it."""
+    import re
+    text = re.sub(r"[\w.+-]+@[\w-]+\.[\w.-]+", "[email]", text)
+    # key=value / key: value where the key name contains a secret-ish word (incl.
+    # prefixed forms like auth_token, access_key) — redact the value, keep the key.
+    text = re.sub(r"(?i)\b([\w-]*(?:password|passwd|secret|token|api[_-]?key|auth[_-]?key|"
+                  r"cred(?:ential)?|cookie|bearer)[\w-]*)(\s*[=:]\s*)\S+", r"\1\2[redacted]", text)
+    text = re.sub(r"\b[A-Za-z0-9+/_-]{28,}={0,2}\b", "[redacted]", text)
+    return text
+
+
+def _github_issues_url():
+    """New-issue URL for wherever this checkout's origin points (upstream for most,
+    a fork if they forked). Falls back to the canonical repo."""
+    import re
+    fallback = "https://github.com/FMSMITH91/linuxgsm-panel/issues/new"
+    try:
+        out, _, rc = _git(["config", "--get", "remote.origin.url"])
+        m = re.search(r"github\.com[:/]([^/\s]+/[^/\s.]+)", out.strip()) if rc == 0 else None
+        return "https://github.com/%s/issues/new" % m.group(1) if m else fallback
+    except Exception:
+        return fallback
+
+
+def generate_debug_report():
+    """Build a diagnostic report an operator can attach to a GitHub issue. Whitelisted
+    fields only + a redacted log tail. Returns {report, summary, issues_url, filename}."""
+    import sys
+    import time as _t
+    import platform
+    import config as _cfg
+    diag = panel_diagnostics()
+    ver = panel_version()
+    integ = panel_integrity()
+    sha = integ.get("current_sha") or "unknown"
+    ts = _t.strftime("%Y-%m-%dT%H:%M:%SZ", _t.gmtime())
+
+    # OS / runtime
+    osname = ""
+    try:
+        with open("/etc/os-release") as f:
+            kv = dict(ln.strip().split("=", 1) for ln in f if "=" in ln)
+        osname = (kv.get("PRETTY_NAME", "") or kv.get("NAME", "")).strip('"')
+    except OSError:
+        osname = platform.system()
+    kernel, _, _ = _run("uname -r", timeout=5)
+    pyver = "%d.%d.%d" % sys.version_info[:3]
+
+    # Key dependency versions
+    deps = {}
+    try:
+        from importlib.metadata import version as _v, PackageNotFoundError
+        for pkg in ("flask", "flask-socketio", "python-socketio", "paramiko",
+                    "sqlalchemy", "cryptography", "eventlet"):
+            try:
+                deps[pkg] = _v(pkg)
+            except PackageNotFoundError:
+                pass
+    except Exception:
+        pass
+
+    # Whitelisted config + object counts
+    conf = {}
+    try:
+        c = _cfg.load_config()
+        conf = {k: c.get(k) for k in _DEBUG_CONFIG_KEYS if k in c}
+    except Exception:
+        pass
+    counts = {}
+    try:
+        from models import RemoteServer, GameServer
+        counts = {"remotes": RemoteServer.query.count(), "game_servers": GameServer.query.count()}
+    except Exception:
+        pass
+    try:
+        from models import database_stats
+        dbs = database_stats()
+    except Exception:
+        dbs = {}
+
+    def _tbl(d):
+        return "\n".join("- **%s**: %s" % (k, v) for k, v in d.items()) or "- (none)"
+
+    diag_lines = "\n".join("- [%s] **%s** — %s" % (c["level"], c["name"], c["detail"])
+                           for c in diag.get("checks", []))
+    header = ("## LinuxGSM Panel debug report\n\n"
+              "- **Generated**: %s\n- **Panel version**: %s\n- **Commit**: %s\n"
+              "- **OS**: %s\n- **Kernel**: %s\n- **Python**: %s\n\n"
+              % (ts, ver, sha, osname or "?", kernel.strip() or "?", pyver))
+    summary = (header + "### Diagnostics\n%s\n\n### Counts\n%s\n"
+               % (diag_lines or "- (none)", _tbl(counts)))
+
+    # Redacted recent log (user service first, then system unit).
+    log, _, _ = _run("journalctl --user -u linuxgsm-panel -n 80 --no-pager 2>/dev/null", timeout=10)
+    if not log.strip():
+        log, _, _ = _run("journalctl -u linuxgsm-panel -n 80 --no-pager 2>/dev/null", timeout=10, sudo=True)
+    log_block = _redact(log)[-6000:] if log.strip() else "(no journal available)"
+
+    report = (summary
+              + "\n### Dependencies\n%s\n" % _tbl(deps)
+              + "\n### Database\n%s\n" % _tbl(dbs)
+              + "\n### Config (non-secret settings only)\n%s\n" % _tbl(conf)
+              + "\n### Recent log (redacted)\n```\n%s\n```\n"
+              "\n<!-- This report was generated by the panel. It contains no secrets "
+              "(credentials, keys, tokens, and emails are excluded/redacted). Review "
+              "before sharing. -->\n" % log_block)
+
+    return {"report": report, "summary": summary,
+            "issues_url": _github_issues_url(),
+            "filename": "linuxgsm-panel-debug-%s-%s.md" % (sha, _t.strftime("%Y%m%d-%H%M%S"))}
