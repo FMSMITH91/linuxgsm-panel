@@ -1569,10 +1569,7 @@ def register_routes(app):
             flash(f"Local server '{name}' added! You can now install game servers on this machine.", "success")
             return redirect(url_for("manage_remotes"))
 
-        if not host:
-            flash("Host is required.", "danger")
-            return redirect(url_for("manage_remotes"))
-
+        # (host presence + charset already validated above for non-local remotes)
         success, msg = ssh_test_connection(host, ssh_port, ssh_user, auth_method, credential)
         if not success:
             flash(f"Connection test failed: {msg}", "danger")
