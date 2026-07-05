@@ -416,6 +416,17 @@ def optimize_database():
                                          "freed": max(0, before - after)}
 
 
+def _silent_remove(p):
+    """Delete a path if present, ignoring 'already gone' / permission races. For
+    throwaway temp and stale WAL/SHM files where a failed remove isn't worth
+    surfacing."""
+    import os
+    try:
+        os.remove(p)
+    except OSError:
+        return   # nothing to clean up (missing or not removable) — not an error
+
+
 def _db_quick_check(path):
     """True if the SQLite file passes PRAGMA quick_check (i.e. not corrupt). A
     missing/empty file counts as healthy — a fresh DB will just be created. Any
@@ -456,19 +467,29 @@ def _ensure_db_healthy(path=None):
             # Healthy — refresh the rolling backup via the online backup API.
             if os.path.exists(path) and os.path.getsize(path) > 0:
                 tmp = backup + ".tmp"
+                src = dst = None
+                ok_copy = False
                 try:
                     src = sqlite3.connect(path, timeout=10)
                     dst = sqlite3.connect(tmp)
                     with dst:
                         src.backup(dst)
-                    dst.close()
-                    src.close()
-                    os.replace(tmp, backup)   # atomic swap — never leaves a half-written backup
+                    ok_copy = True
                 except sqlite3.DatabaseError:
-                    try:
-                        os.remove(tmp)
-                    except OSError:
-                        pass
+                    ok_copy = False   # source unreadable mid-copy — keep the existing backup
+                finally:
+                    for _c in (dst, src):
+                        if _c is not None:
+                            try:
+                                _c.close()
+                            except sqlite3.Error:
+                                pass   # connection already broken — nothing to close
+                # Swap the temp copy in only after the handles are closed (Windows won't
+                # rename an open file) and only if the copy actually completed.
+                if ok_copy:
+                    os.replace(tmp, backup)
+                else:
+                    _silent_remove(tmp)
             return
         # Corrupt — always move the bad file aside (preserved for forensics/recovery,
         # never deleted), then either restore the last good backup or let the app
@@ -477,13 +498,10 @@ def _ensure_db_healthy(path=None):
         try:
             os.replace(path, aside)
         except OSError:
-            pass
+            pass   # couldn't move it (perms) — fall through; a fresh DB gets created
         # Drop the corrupt DB's stale WAL/SHM so they aren't replayed over a new file.
         for ext in ("-wal", "-shm"):
-            try:
-                os.remove(path + ext)
-            except OSError:
-                pass
+            _silent_remove(path + ext)
         if os.path.exists(backup) and _db_quick_check(backup):
             _log.error("database at %s is corrupt — restored last good backup "
                        "(corrupt copy saved to %s)", path, aside)

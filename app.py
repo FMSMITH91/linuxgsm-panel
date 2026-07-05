@@ -3621,7 +3621,6 @@ if __name__ == "__main__":
     # setups). Browsers will warn about the self-signed cert — that's expected.
     ssl_args = {}
     if _effective_https(cfg):
-        from config import DATA_DIR
         cert_path = str(DATA_DIR / "ssl" / "cert.pem")
         key_path = str(DATA_DIR / "ssl" / "key.pem")
         try:
