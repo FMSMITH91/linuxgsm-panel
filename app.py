@@ -53,6 +53,7 @@ from flask import (
     Flask, abort, flash, jsonify, redirect, render_template, request,
     session, url_for,
 )
+from markupsafe import Markup
 from flask_login import current_user, login_required, login_user, logout_user
 from flask_socketio import SocketIO, emit, join_room, leave_room
 from flask_wtf.csrf import CSRFProtect
@@ -458,9 +459,15 @@ def create_app():
 def register_template_filters(app):
     @app.template_filter("datetime")
     def format_datetime(dt):
-        if dt:
-            return dt.strftime("%Y-%m-%d %H:%M:%S")
-        return "Never"
+        # Timestamps are stored as naive UTC. Emit the UTC value (ISO with a trailing Z)
+        # plus a readable UTC fallback, wrapped so the browser can render it in the
+        # viewer's own timezone (see base.html localizeTimes()). No user input, so the
+        # Markup is safe.
+        if not dt:
+            return "Never"
+        iso = dt.replace(microsecond=0).isoformat() + "Z"
+        return Markup('<span class="localtime" data-utc="%s">%s UTC</span>'
+                      % (iso, dt.strftime("%Y-%m-%d %H:%M:%S")))
 
     @app.template_filter("permlabel")
     def permission_label(perm):

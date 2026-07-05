@@ -544,6 +544,21 @@ window.escapeHtml = function(s){
     .replace(/"/g, '&quot;').replace(/'/g, '&#39;');
 };
 
+// Render server timestamps (stored UTC, emitted as <span class="localtime" data-utc="…Z">)
+// in the VIEWER's own timezone, with the exact UTC value on hover. Idempotent, so it's
+// safe to call again after AJAX inserts more. Runs on load.
+window.localizeTimes = function(root){
+  (root || document).querySelectorAll('.localtime[data-utc]').forEach(function(el){
+    if(el.dataset.localized) return;
+    var d = new Date(el.getAttribute('data-utc'));
+    if(isNaN(d.getTime())) return;
+    el.title = el.textContent;                 // keep the UTC value as a tooltip
+    el.textContent = d.toLocaleString();       // show local time
+    el.dataset.localized = '1';
+  });
+};
+document.addEventListener('DOMContentLoaded', function(){ window.localizeTimes(); });
+
 // Global toast — a small notification pops bottom-right, then fades. Available on
 // every page as window.toast(message, 'success'|'danger'|'info').
 window.toast = function(msg, kind){
