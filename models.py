@@ -34,7 +34,15 @@ class User(UserMixin, db.Model):
     api_token = db.Column(db.String(64), unique=True, nullable=True)
     totp_secret = db.Column(db.Text, nullable=True)      # TOTP secret, encrypted at rest
     totp_enabled = db.Column(db.Boolean, default=False)  # 2FA active for this user
+    auth_epoch = db.Column(db.Integer, default=0, nullable=False)  # bump to revoke all sessions
     groups = db.relationship("Group", secondary="user_groups", back_populates="users")
+
+    def get_id(self):
+        # Embed a session epoch in the login id. Bumping auth_epoch (on password
+        # change, or "sign out everywhere") makes every existing session/remember
+        # cookie for this user stop matching — i.e. instantly revoked. flask-login
+        # stores this in the cookie and hands it back to the user_loader each request.
+        return "%d:%d" % (self.id, self.auth_epoch or 0)
 
     @property
     def email_display(self):
@@ -202,6 +210,7 @@ def _run_light_migrations():
         ("remote_server", "public_ip"): "ALTER TABLE remote_server ADD COLUMN public_ip VARCHAR(45) DEFAULT ''",
         ("user", "totp_secret"): "ALTER TABLE user ADD COLUMN totp_secret TEXT",
         ("user", "totp_enabled"): "ALTER TABLE user ADD COLUMN totp_enabled BOOLEAN DEFAULT 0",
+        ("user", "auth_epoch"): "ALTER TABLE user ADD COLUMN auth_epoch INTEGER DEFAULT 0",
     }
     for (table, col), ddl in wanted.items():
         if table in existing and col not in existing[table]:

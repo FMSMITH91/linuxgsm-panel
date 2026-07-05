@@ -219,10 +219,29 @@ def server_access_required(f):
 
 def init_auth(app):
     login_manager.init_app(app)
+    # Session protection mode comes from app.config["SESSION_PROTECTION"] (set in
+    # create_app from config, default "strong"). "strong" ties the session to a hash
+    # of the client IP + User-Agent and drops it if either changes — so a cookie stolen
+    # and replayed from a different machine is rejected (most effective on a direct
+    # bind or behind a proxy with trust_proxy, where the real client IP is visible).
 
     @login_manager.user_loader
     def load_user(user_id):
-        return User.query.get(int(user_id))
+        # The id is "<user_id>:<auth_epoch>" (see User.get_id). Reject the cookie if the
+        # epoch no longer matches the user's current one — that's how we revoke sessions
+        # (sign-out-everywhere / password change bump auth_epoch).
+        s = str(user_id)
+        if ":" in s:
+            uid, _, epoch = s.partition(":")
+            if not uid.isdigit():
+                return None
+            user = User.query.get(int(uid))
+            if user is None or str(user.auth_epoch or 0) != epoch:
+                return None
+            return user
+        # Legacy cookie issued before epochs existed — accept by plain id (one-time,
+        # until they next log in and get an epoch-tagged cookie).
+        return User.query.get(int(s)) if s.isdigit() else None
 
 
 # ─── Audit Logging ─────────────────────────────────────────────

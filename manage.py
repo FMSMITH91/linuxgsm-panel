@@ -63,8 +63,9 @@ def cmd_reset_password(args):
     with app.app_context():
         u = _require_user(args.username)
         u.password_hash = auth.hash_password(_read_password(args))
+        u.auth_epoch = (u.auth_epoch or 0) + 1   # revoke existing sessions
         db.session.commit()
-        print("Password reset for '%s'." % args.username)
+        print("Password reset for '%s' (existing sessions revoked)." % args.username)
 
 
 def cmd_create_admin(args):

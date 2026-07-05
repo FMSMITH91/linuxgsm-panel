@@ -28,4 +28,19 @@
   </div>
 </div>
 
+<div class="card mt-3" style="max-width: 640px;">
+  <div class="card-header"><i class="bi bi-box-arrow-right"></i> Active Sessions</div>
+  <div class="card-body">
+    <p class="text-secondary mb-2">Signed in somewhere you don't recognise, or think a
+      device was compromised? This revokes <strong>every</strong> logged-in session for
+      your account (including this one) — you'll log back in fresh.</p>
+    <form method="POST" action="{{ url_for('account_revoke_sessions') }}"
+          onsubmit="return confirm('Sign out of ALL sessions, including this one?');">
+      <button class="btn btn-outline-danger btn-sm" type="submit">
+        <i class="bi bi-box-arrow-right"></i> Sign out everywhere
+      </button>
+    </form>
+  </div>
+</div>
+
 {% endblock %}

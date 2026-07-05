@@ -293,6 +293,11 @@ def create_app():
     app.config["REMEMBER_COOKIE_SAMESITE"] = "Lax"
     app.config["REMEMBER_COOKIE_SECURE"] = app.config["SESSION_COOKIE_SECURE"]
 
+    # flask-login session protection. "strong" rejects a session cookie replayed from a
+    # different client (IP+User-Agent binding); set "basic" if users roam between IPs a
+    # lot, or None to disable. Cookie theft is also recoverable via "sign out everywhere".
+    app.config["SESSION_PROTECTION"] = cfg.get("session_protection", "strong")
+
 
     # Store mount prefix in app config so templates can access it
     app.config["_MOUNT_PREFIX"] = mount = cfg.get("tailscale_mount", "/")
@@ -854,6 +859,18 @@ def register_routes(app):
         session["_2fa_setup_secret"] = secret
         uri = totp_provisioning_uri(secret, current_user.username)
         return render_template("account_2fa.html", secret=secret, qr_svg=_qr_svg(uri))
+
+    @app.route("/account/sessions/revoke", methods=["POST"])
+    @login_required
+    def account_revoke_sessions():
+        # Bump the epoch so every session/remember cookie for this account (including
+        # this one) stops matching — instantly signs out everywhere.
+        current_user.auth_epoch = (current_user.auth_epoch or 0) + 1
+        db.session.commit()
+        log_action(current_user, "revoke_sessions", target=current_user.username)
+        logout_user()
+        flash("Signed out of all sessions. Please log in again.", "success")
+        return redirect(url_for("login"))
 
     @app.route("/account/2fa/disable", methods=["POST"])
     @login_required
@@ -1686,6 +1703,7 @@ def register_routes(app):
                 flash(pw_err, "danger")
                 return redirect(url_for("manage_users"))
             user.password_hash = hash_password(password)
+            user.auth_epoch = (user.auth_epoch or 0) + 1   # revoke existing sessions
 
         # Admin reset of a user's 2FA (for when they lose their authenticator).
         if request.form.get("reset_2fa") == "on" and user.totp_enabled:

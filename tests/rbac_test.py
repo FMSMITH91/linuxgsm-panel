@@ -28,7 +28,8 @@ from models import db, User, Group, RemoteServer, GameServer
 import auth
 
 app = create_app()
-app.config["WTF_CSRF_ENABLED"] = False  # test client posts without a browser-issued token
+app.config["WTF_CSRF_ENABLED"] = False   # test client posts without a browser-issued token
+app.config["SESSION_PROTECTION"] = None  # tests inject the session directly (no IP/UA fingerprint)
 results = []
 
 

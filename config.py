@@ -21,6 +21,7 @@ DEFAULT_CONFIG = {
     "session_lifetime_hours": 12,   # idle session timeout (sliding, refreshed each request)
     "remember_days": 14,            # "remember me" cookie lifetime
     "ssh_timeout": 10,
+    "session_protection": "strong", # flask-login: "strong" | "basic" | null (IP+UA session binding)
     "use_https": False,             # serve HTTPS directly with a self-signed cert (no proxy/domain)
     "trust_proxy": False,           # behind a reverse proxy (Caddy/nginx/Cloudflare Tunnel)? trust X-Forwarded-*
     "sudo_enabled": False,
