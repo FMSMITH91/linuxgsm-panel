@@ -384,10 +384,12 @@ if command -v apt-get >/dev/null 2>&1; then
         || warn "Could not install unattended-upgrades — enable it later from the panel."
     if dpkg -s unattended-upgrades >/dev/null 2>&1; then
         # Turn on APT's daily package-list refresh + unattended security upgrade.
-        printf 'APT::Periodic::Update-Package-Lists "1";\nAPT::Periodic::Unattended-Upgrade "1";\n' \
-            | ${AU_SUDO} tee /etc/apt/apt.conf.d/20auto-upgrades >/dev/null \
-            && ok "Automatic security updates enabled" \
-            || warn "Could not enable automatic security updates — turn it on later from the panel."
+        if printf 'APT::Periodic::Update-Package-Lists "1";\nAPT::Periodic::Unattended-Upgrade "1";\n' \
+                | ${AU_SUDO} tee /etc/apt/apt.conf.d/20auto-upgrades >/dev/null; then
+            ok "Automatic security updates enabled"
+        else
+            warn "Could not enable automatic security updates — turn it on later from the panel."
+        fi
     fi
 fi
 

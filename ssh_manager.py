@@ -128,7 +128,7 @@ def get_connection(server, force_new=False):
                 pass  # probing a possibly-dead cached client → reconnect below
             try:
                 conn.close()
-            except Exception:
+            except Exception:  # nosec B110
                 pass  # already closed / unusable; nothing to clean up
             del _connections[key]
 

@@ -289,8 +289,8 @@ def check_peer_reachability(host) -> dict:
             m = re.search(r'time[=<]\s*(\d+\.?\d*)', r.stdout)
             if m:
                 latency_ms = float(m.group(1))
-    except Exception:
-        pass
+    except Exception:  # nosec B110
+        pass  # ping unavailable or output unparseable — return reachable/latency as-is
     return {"reachable": reachable, "latency_ms": latency_ms}
 
 

@@ -55,8 +55,8 @@ def live_metrics():
             for line in f:
                 k, _, rest = line.partition(":")
                 mem[k.strip()] = int(rest.strip().split()[0]) * 1024  # kB → bytes
-    except Exception:
-        pass
+    except Exception:  # nosec B110
+        pass  # /proc/meminfo unreadable or oddly formatted — fall back to zeros below
     ram_total = mem.get("MemTotal", 0)
     ram_used = ram_total - mem.get("MemAvailable", 0)
     swap_total = mem.get("SwapTotal", 0)

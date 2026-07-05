@@ -355,9 +355,10 @@ try:
         raw = db.engine.raw_connection()
         try:
             cur = raw.cursor()
-            cur.execute("PRAGMA page_count")
-            _pc = cur.fetchone()[0]
-            cur.execute("PRAGMA max_page_count = %d" % _pc)   # no room to grow
+            # Cap the DB at its current size: SQLite clamps a smaller max_page_count up
+            # to the current page count, so this static statement leaves no room to grow
+            # (and avoids any formatted SQL).
+            cur.execute("PRAGMA max_page_count = 1")
             _full = False
             try:
                 cur.execute("CREATE TABLE IF NOT EXISTS _fulltest (b TEXT)")
