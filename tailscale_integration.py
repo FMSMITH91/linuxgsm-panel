@@ -129,8 +129,13 @@ def _get_tailscale_info() -> TailscaleInfo:
     status = _run_ts_json(["status"])
     if status:
         info.running = status.get("BackendState") == "Running"
-        info.tailscale_ips = status.get("TailscaleIPs", [])
-        self_data = status.get("Self", {})
+        # NOTE: `.get(key, default)` only uses the default when the key is ABSENT. When
+        # Tailscale is installed but not yet authenticated (BackendState "NeedsLogin",
+        # after `tailscale up` prints a login URL the user hasn't clicked), the JSON has
+        # "Peer": null / "TailscaleIPs": null / "Self": null — .get returns None, and
+        # None.items()/iteration then 500s the page. Coerce nulls with `or <default>`.
+        info.tailscale_ips = status.get("TailscaleIPs") or []
+        self_data = status.get("Self") or {}
         if self_data:
             info.hostname = self_data.get("HostName", "")
             dns = self_data.get("DNSName", "")
@@ -142,7 +147,7 @@ def _get_tailscale_info() -> TailscaleInfo:
         # (Do NOT downgrade based on LastSeen: for an online peer the last handshake
         # can legitimately be many minutes old on a long-lived connection, so a
         # "last seen > 2 min" heuristic wrongly marks live peers offline.)
-        peer_data = status.get("Peer", {})
+        peer_data = status.get("Peer") or {}
         for peer_id, peer in peer_data.items():
             ts_online = bool(peer.get("Online", False))
             last_seen_str = peer.get("LastSeen", "")

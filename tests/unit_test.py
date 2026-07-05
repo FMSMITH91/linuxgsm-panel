@@ -581,6 +581,19 @@ _secret_keys = {"secret_key", "cred_key", "secret", "credentials", "auth_credent
 check("debug whitelist excludes every secret key",
       not (set(_so._DEBUG_CONFIG_KEYS) & _secret_keys))
 
+# ── Tailscale: installed-but-not-authenticated (NeedsLogin) must not 500 ─
+import tailscale_integration as _tsi
+_tsi._run_ts = lambda args, timeout=5: (("1.0", "", 0) if args and args[0] in ("version", "--version")
+                                        else ("", "", 0))
+# After `tailscale up` prints a login URL the user hasn't clicked, status --json has
+# null Peer/Self/TailscaleIPs — the page used to crash iterating None.
+_tsi._run_ts_json = lambda args, timeout=5: {"BackendState": "NeedsLogin",
+                                             "Self": None, "Peer": None, "TailscaleIPs": None}
+_tsinfo = _tsi._get_tailscale_info()
+check("tailscale: NeedsLogin state parses without crashing", _tsinfo.installed and not _tsinfo.running)
+check("tailscale: null Peer -> no peers (no None.items())", _tsinfo.peers == [])
+check("tailscale: null TailscaleIPs -> empty list", _tsinfo.tailscale_ips == [])
+
 # ── cleanup: remove key/config files this run created ─────────
 for p in (config.CRED_KEY_FILE, config.SECRET_FILE, config.CONFIG_FILE):
     if p not in _pre and os.path.exists(p):
