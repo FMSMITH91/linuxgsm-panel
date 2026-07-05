@@ -2044,19 +2044,19 @@ def _tailnet_ssh_state(server):
         out, _, _ = run_command(server, "tailscale status --json 2>/dev/null || echo '{}'", timeout=10)
         running = _json.loads(out or "{}").get("BackendState") == "Running"
     except Exception:
-        pass
+        running = False   # can't confirm → treat as no tailnet path (fail safe)
     if running:
         try:  # Tailscale SSH server advertised by this node — authoritative: prefs RunSSH
             out, _, _ = run_command(server, "tailscale debug prefs 2>/dev/null || echo '{}'", timeout=10)
             ssh_enabled = bool(_json.loads(out or "{}").get("RunSSH", False))
         except Exception:
-            pass
+            ssh_enabled = False   # fail safe
         try:  # tailscale interface allowed in UFW → sshd is reachable over the tailnet
             out, _, _ = run_command(server, "ufw status verbose 2>/dev/null | grep -i tailscale || true",
                                     timeout=12, sudo=True)
             iface_allowed = bool((out or "").strip())
         except Exception:
-            pass
+            iface_allowed = False   # fail safe
     return running, ssh_enabled, iface_allowed
 
 
