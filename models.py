@@ -1,10 +1,26 @@
 """Database models for LinuxGSM Panel."""
+import re
 import uuid
 from datetime import datetime
 from flask_login import UserMixin
 from flask_sqlalchemy import SQLAlchemy
+from sqlalchemy.orm import validates
 
 db = SQLAlchemy()
+
+# Identifiers that get interpolated into remote shell commands (Linux usernames, the
+# LinuxGSM instance/game name, paths like `/home/<user>/<selfname>`). They're validated
+# at the route layer on input, but enforcing the safe charset here — at the data layer —
+# makes it a hard guarantee no code path can ever store a value that could break out of a
+# shell command, regardless of how the row is written. Empty is allowed (optional fields).
+_SHELL_IDENT_RE = re.compile(r"^[A-Za-z0-9._-]+$")
+
+
+def _validate_shell_ident(key, value):
+    if value and not _SHELL_IDENT_RE.match(value):
+        raise ValueError("%s contains characters not allowed in a shell identifier: %r"
+                         % (key, value))
+    return value
 
 # Association table: group -> permission strings
 group_permissions = db.Table(
@@ -99,6 +115,10 @@ class RemoteServer(db.Model):
     linuxgsm_user = db.Column(db.String(64), default="")  # LinuxGSM user account on remote
     is_local = db.Column(db.Boolean, default=False)  # True = this machine, run commands locally
     public_ip = db.Column(db.String(45), default="")  # cached public IP (for connect address)
+
+    @validates("username", "linuxgsm_user")
+    def _validate_ident(self, key, value):
+        return _validate_shell_ident(key, value)
     is_online = db.Column(db.Boolean, default=False)
     last_seen = db.Column(db.DateTime, nullable=True)
     host_key = db.Column(db.Text, default="")     # pinned SSH host key ("keytype base64"); TOFU
@@ -176,6 +196,12 @@ class GameServer(db.Model):
     commands = db.Column(db.Text, default="[]")  # JSON list of {cmd, short, desc} from LinuxGSM
     created_at = db.Column(db.DateTime, default=datetime.utcnow)
     remote = db.relationship("RemoteServer", back_populates="games")
+
+    @validates("short_name", "game_type")
+    def _validate_ident(self, key, value):
+        # short_name -> the Linux user; game_type -> the LinuxGSM script name (lgsm_name).
+        # Both are interpolated into remote shell commands, so pin them to a safe charset.
+        return _validate_shell_ident(key, value)
 
     def get_commands(self):
         import json

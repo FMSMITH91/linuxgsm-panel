@@ -131,6 +131,20 @@ _bootstrap_lock = threading.Lock()
 _install_jobs = {}
 _install_lock = threading.Lock()
 
+
+def _prune_jobs(registry, lock, max_age=7200):
+    """Drop job entries whose last update is older than max_age seconds (default 2h).
+
+    Finished jobs are normally removed when their status is polled, but a job whose
+    result is never polled would otherwise linger forever — this bounds the registry so
+    it can't grow without limit over a long-running process. Called when a new job starts."""
+    now = time.time()
+    with lock:
+        stale = [k for k, j in registry.items()
+                 if now - (j.get("updated") or j.get("started") or 0) > max_age]
+        for k in stale:
+            registry.pop(k, None)
+
 # LinuxGSM commands the panel is willing to run from a button. Interactive /
 # install / destructive commands (console, debug, send, install, auto-install,
 # skeleton, developer, sponsor, mods-install, mods-remove, fastdl) are excluded.
@@ -1295,6 +1309,7 @@ def register_routes(app):
         db.session.add(gs)
         db.session.commit()
 
+        _prune_jobs(_install_jobs, _install_lock)
         with _install_lock:
             _install_jobs[gs.id] = {
                 "status": "running", "step": 0, "total": 8, "step_name": "Queued",
@@ -2627,6 +2642,7 @@ def register_routes(app):
     def _begin_bootstrap(remote_id, opts, actor_id):
         """Seed the job registry and start the background bootstrap. Returns
         (started, message). Refuses if one is already running for this remote."""
+        _prune_jobs(_bootstrap_jobs, _bootstrap_lock)
         with _bootstrap_lock:
             existing = _bootstrap_jobs.get(remote_id)
             if existing and existing.get("status") in ("running", "rebooting"):

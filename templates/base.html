@@ -536,6 +536,14 @@ window.CSRF = "{{ csrf_token() }}";
   });
 })();
 
+// Escape a string for safe interpolation into innerHTML — use this whenever a
+// server- or user-provided value goes into markup. Available on every page.
+window.escapeHtml = function(s){
+  return String(s == null ? '' : s)
+    .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+};
+
 // Global toast — a small notification pops bottom-right, then fades. Available on
 // every page as window.toast(message, 'success'|'danger'|'info').
 window.toast = function(msg, kind){
@@ -547,7 +555,7 @@ window.toast = function(msg, kind){
   var t = document.createElement('div');
   t.className = 'alert alert-' + (kind==='success'?'success':(kind==='danger'?'danger':'info')) + ' py-2 px-3 mb-0';
   t.style.cssText = 'font-size:.85rem;box-shadow:0 4px 20px rgba(0,0,0,.5);';
-  t.innerHTML = '<i class="bi bi-' + icon + '"></i> ' + msg;
+  t.innerHTML = '<i class="bi bi-' + icon + '"></i> ' + escapeHtml(msg);
   c.appendChild(t);
   setTimeout(function(){ t.style.transition='opacity .4s'; t.style.opacity='0'; setTimeout(function(){ t.remove(); }, 400); }, 2600);
 };

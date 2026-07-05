@@ -531,19 +531,19 @@ function tailscaleUp(remoteId) {
 
 function installTailscale(remoteId, name) {
   var logEl = document.getElementById('install-log');
-  logEl.innerHTML = '<span class="text-secondary"><i class="bi bi-arrow-repeat"></i> Installing Tailscale on ' + name + '...</span>';
+  logEl.innerHTML = '<span class="text-secondary"><i class="bi bi-arrow-repeat"></i> Installing Tailscale on ' + escapeHtml(name) + '...</span>';
 
   fetch(MOUNT + '/api/remote/' + remoteId + '/tailscale-install', {method: 'POST'})
     .then(r => r.json())
     .then(data => {
       if (data.success) {
-        logEl.innerHTML = '<span class="text-success"><i class="bi bi-check-circle"></i> ' + data.message + '</span>';
+        logEl.innerHTML = '<span class="text-success"><i class="bi bi-check-circle"></i> ' + escapeHtml(data.message) + '</span>';
         // Show auth form
         var extra = renderAuthKeyForm(remoteId, name);
         logEl.insertAdjacentHTML('afterend', extra);
       } else {
-        logEl.innerHTML = '<span class="text-danger"><i class="bi bi-x-circle"></i> ' + data.message + '</span>'
-          + (data.log ? '<pre class="text-secondary small mt-1" style="max-height:200px;overflow-y:auto;">' + data.log.slice(-2000) + '</pre>' : '');
+        logEl.innerHTML = '<span class="text-danger"><i class="bi bi-x-circle"></i> ' + escapeHtml(data.message) + '</span>'
+          + (data.log ? '<pre class="text-secondary small mt-1" style="max-height:200px;overflow-y:auto;">' + escapeHtml(data.log.slice(-2000)) + '</pre>' : '');
       }
     })
     .catch(function() {
@@ -571,11 +571,11 @@ function bootstrapTailscale(remoteId) {
   .then(r => r.json())
   .then(data => {
     if (data.success) {
-      logEl.innerHTML = '<span class="text-success"><i class="bi bi-check-circle"></i> ' + data.message + '</span>'
+      logEl.innerHTML = '<span class="text-success"><i class="bi bi-check-circle"></i> ' + escapeHtml(data.message) + '</span>'
         + '<div class="mt-2"><button class="btn btn-success btn-sm" onclick="migrateToTailscale(' + remoteId + ')"><i class="bi bi-arrow-repeat"></i> Migrate to Tailscale SSH</button></div>';
     } else {
-      logEl.innerHTML = '<span class="text-danger"><i class="bi bi-x-circle"></i> ' + data.message + '</span>'
-        + (data.log ? '<pre class="text-secondary small mt-1" style="max-height:200px;overflow-y:auto;">' + data.log.slice(-2000) + '</pre>' : '');
+      logEl.innerHTML = '<span class="text-danger"><i class="bi bi-x-circle"></i> ' + escapeHtml(data.message) + '</span>'
+        + (data.log ? '<pre class="text-secondary small mt-1" style="max-height:200px;overflow-y:auto;">' + escapeHtml(data.log.slice(-2000)) + '</pre>' : '');
     }
   })
   .catch(function() {
@@ -591,7 +591,7 @@ function migrateToTailscale(remoteId) {
     .then(r => r.json())
     .then(data => {
       if (data.success) {
-        setModalBody('<div class="text-success"><i class="bi bi-check-circle"></i> ' + data.message + '</div>'
+        setModalBody('<div class="text-success"><i class="bi bi-check-circle"></i> ' + escapeHtml(data.message) + '</div>'
           + '<p class="small mt-2">Old host: <code>' + data.old_host + '</code><br>'
           + 'New host: <code>' + data.new_host + '</code><br>'
           + (data.tailscale_ip ? 'Tailscale IP: <code>' + data.tailscale_ip + '</code><br>' : '')
@@ -602,7 +602,7 @@ function migrateToTailscale(remoteId) {
           + '<button class="btn btn-danger btn-sm" onclick="closePort22(' + remoteId + ')"><i class="bi bi-shield-lock"></i> Close Port 22 (UFW)</button>'
           + '</div>');
       } else {
-        setModalBody('<div class="text-danger"><i class="bi bi-x-circle"></i> ' + data.message + '</div>');
+        setModalBody('<div class="text-danger"><i class="bi bi-x-circle"></i> ' + escapeHtml(data.message) + '</div>');
       }
     })
     .catch(function() {
@@ -616,7 +616,7 @@ function closePort22(remoteId) {
   fetch(MOUNT + '/api/remote/' + remoteId + '/close-port-22', {method: 'POST'})
     .then(r => r.json())
     .then(data => {
-      setModalBody('<div class="' + (data.success ? 'text-success' : 'text-danger') + '"><i class="bi bi-' + (data.success ? 'check-circle' : 'x-circle') + '"></i> ' + data.message + '</div>'
+      setModalBody('<div class="' + (data.success ? 'text-success' : 'text-danger') + '"><i class="bi bi-' + (data.success ? 'check-circle' : 'x-circle') + '"></i> ' + escapeHtml(data.message) + '</div>'
         + '<button class="btn btn-primary btn-sm mt-2" onclick="location.reload()"><i class="bi bi-arrow-repeat"></i> Refresh Page</button>');
     })
     .catch(function() {
