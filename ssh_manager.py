@@ -896,7 +896,7 @@ def _ssh_ports(server):
         if getattr(server, "port", None):
             ports.add(int(server.port))
     except (TypeError, ValueError):
-        pass
+        pass  # a non-numeric stored port just means there's no extra SSH port to track
     return ports
 
 
