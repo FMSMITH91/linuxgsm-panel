@@ -1883,8 +1883,16 @@ def register_routes(app):
     @permission_required(MANAGE_USERS)
     def delete_user(user_id):
         user = User.query.get_or_404(user_id)
+        # Only a superadmin may delete a superadmin (else a MANAGE_USERS user could remove
+        # other admins), and never the last one.
+        if user.is_superadmin and not current_user.is_superadmin:
+            flash("Only a superadmin can delete a superadmin account.", "danger")
+            return redirect(url_for("manage_users"))
         if user.is_superadmin and User.query.filter_by(is_superadmin=True).count() <= 1:
             flash("Cannot delete the last superadmin.", "danger")
+            return redirect(url_for("manage_users"))
+        if user.id == current_user.id:
+            flash("You can't delete your own account.", "danger")
             return redirect(url_for("manage_users"))
         username = user.username
         db.session.delete(user)

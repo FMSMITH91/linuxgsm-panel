@@ -56,8 +56,16 @@ def load_config():
 
 
 def save_config(config):
-    with open(CONFIG_FILE, "w") as f:
+    # Write atomically: a crash or a concurrent read must never see a half-written
+    # config.json (a truncated file makes load_config() fall back to DEFAULTS, which
+    # would lose setup_complete/port/etc. and boot the panel back to the setup wizard).
+    # Write a temp file in the same dir, fsync, then os.replace (atomic on the same FS).
+    tmp = CONFIG_FILE.with_suffix(".json.tmp")
+    with open(tmp, "w") as f:
         json.dump(config, f, indent=2)
+        f.flush()
+        os.fsync(f.fileno())
+    os.replace(tmp, CONFIG_FILE)
     _cfg_cache["key"] = None   # force a re-read on the next load_config()
 
 
