@@ -447,10 +447,6 @@ def optimize_database():
            "database was busy; run it again in a moment to compact.")
     return True, msg, {"before": before, "after": after, "freed": max(0, before - after)}
 
-    after = _size()
-    return True, "Database optimized.", {"before": before, "after": after,
-                                         "freed": max(0, before - after)}
-
 
 def _silent_remove(p):
     """Delete a path if present, ignoring 'already gone' / permission races. For
