@@ -62,8 +62,8 @@ def cleanup():
         with app.app_context():
             db.session.remove()
             db.engine.dispose()
-    except Exception:  # nosec B110 - best-effort cleanup in a throwaway test
-        pass
+    except Exception:  # nosec B110
+        pass   # best-effort cleanup in a throwaway test
     # Remove only what we created, so a local run leaves the tree clean.
     for p in (DB_PATH, SECRET_FILE, CRED_KEY_FILE, CONFIG_FILE):
         if p not in _PREEXISTING and p.exists():

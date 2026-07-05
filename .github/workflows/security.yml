@@ -34,28 +34,33 @@ jobs:
   sast-bandit:
     name: Python security lint (Bandit)
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      security-events: write   # upload SARIF to the Security tab (code scanning)
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
       - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
         with:
           python-version: "3.11"
-      - run: python -m pip install --quiet bandit
-      # Informational only. This app intentionally shells out to LinuxGSM and uses
-      # paramiko's auto-add-host-key policy, so those checks are skipped; the report
-      # (hardcoded secrets, eval, unsafe deserialization, etc.) is written to the
-      # job summary. Never blocks the build.
-      - name: Bandit report
+      - run: python -m pip install --quiet bandit bandit-sarif-formatter
+      # Emit SARIF and publish it to GitHub code scanning (the Security tab), alongside
+      # CodeQL. The skips drop checks that don't apply to this app by design: assert,
+      # bind-all, the subprocess/shell + paramiko command family (commands are _quote()'d
+      # and shell identifiers are @validates-guarded), the auto-add host-key policy, and
+      # the intentional best-effort try/except pattern. B105 (hardcoded secrets), eval,
+      # unsafe deserialization, weak crypto, etc. stay ON — so real signal surfaces.
+      # tests/ is excluded (its fixture passwords are not secrets; Gitleaks scans the
+      # whole repo for real ones). Non-blocking: findings are tracked as alerts, not gates.
+      - name: Bandit (SARIF)
         run: |
-          bandit -r . -x ./venv,./.github \
-            --skip B101,B104,B404,B602,B603,B604,B607,B507 \
-            -f txt -o bandit.txt || true
-          {
-            echo '### 🔒 Bandit security report';
-            echo '';
-            echo '```';
-            tail -c 8000 bandit.txt 2>/dev/null || echo '(no findings)';
-            echo '```';
-          } >> "$GITHUB_STEP_SUMMARY"
+          bandit -r . -x ./venv,./.github,./tests \
+            --skip B101,B104,B404,B601,B602,B603,B604,B607,B507,B110,B112 \
+            -f sarif -o bandit.sarif || true
+      - name: Upload Bandit results to code scanning
+        uses: github/codeql-action/upload-sarif@54f647b7e1bb85c95cddabcd46b0c578ec92bc1a # v4
+        with:
+          sarif_file: bandit.sarif
+          category: bandit
 
   sast-semgrep:
     name: Deep SAST (Semgrep)

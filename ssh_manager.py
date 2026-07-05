@@ -118,8 +118,8 @@ def get_connection(server, force_new=False):
                 if transport and transport.is_active():
                     transport.send_ignore()
                     return conn
-            except Exception:  # nosec B110 - probing a possibly-dead cached client; reconnect below
-                pass  # cached client is dead → fall through and reconnect
+            except Exception:  # nosec B110
+                pass  # probing a possibly-dead cached client → reconnect below
             try:
                 conn.close()
             except Exception:
@@ -420,8 +420,8 @@ def remote_public_ip(server):
             ip = (out or "").strip().split("\n")[0].strip()
             if re.match(r"^\d{1,3}(\.\d{1,3}){3}$", ip):
                 return ip
-        except Exception:  # nosec B112 - best-effort: fall through to the next IP-detection command
-            continue
+        except Exception:  # nosec B112
+            continue   # best-effort: fall through to the next IP-detection command
     return ""
 
 
