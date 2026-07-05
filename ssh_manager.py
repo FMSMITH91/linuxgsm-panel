@@ -900,12 +900,15 @@ def _ssh_ports(server):
     return ports
 
 
-def _panel_web_port(server, tailscale_available):
-    """If `server` is the panel's OWN host and the panel isn't reachable over
-    Tailscale, the public web port is the only way into the panel UI — return it so
-    its rule can be protected. Returns None when it's a remote, when Tailscale is
-    available (Serve/MagicDNS or a tailscale0 rule → another way in), or on error."""
-    if not is_local_server(server) or tailscale_available:
+def _panel_web_port(server):
+    """If `server` is the panel's OWN host and the panel UI isn't reachable over Tailscale
+    yet, the public web port is the only way in — return it so its rule can be protected.
+    Returns None for a remote, or once Tailscale Serve is actually serving the panel.
+
+    Note: a `tailscale0` UFW rule (Tailscale SSH being reachable) is NOT enough to unprotect
+    it — that's only a recovery path, not panel-UI access. The panel UI is only reachable
+    over the tailnet once Serve is configured (tailscale_setup_done), so gate on that."""
+    if not is_local_server(server):
         return None
     try:
         from config import load_config
@@ -913,7 +916,7 @@ def _panel_web_port(server, tailscale_available):
     except Exception:
         return None
     if cfg.get("tailscale_setup_done"):
-        return None  # served via Tailscale; the public port isn't the way in
+        return None  # served via Tailscale; the public port isn't the only way in
     try:
         return int(cfg.get("port", 5000))
     except (TypeError, ValueError):
@@ -940,8 +943,7 @@ def _annotate_firewall_protection(server, enabled, groups):
         if g["is_access"]:
             access += 1
 
-    tailscale_available = any(g["is_tailscale"] for g in groups)
-    panel_port = _panel_web_port(server, tailscale_available)
+    panel_port = _panel_web_port(server)
 
     for g in groups:
         g["protected"] = False

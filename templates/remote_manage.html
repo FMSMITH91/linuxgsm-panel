@@ -187,6 +187,29 @@
         <button class="btn btn-sm btn-success" onclick="ufwAllowTailscale()" {% if status and status.tailscale_ufw_allowed %}disabled{% endif %}><i class="bi bi-shield-check"></i> Allow Tailscale Interface</button>
       </div>
     </div>
+    <div class="row g-3 mt-1">
+      <div class="col-md-6">
+        <div class="small text-secondary mb-1">Public SSH (port 22 from the internet) — current: <strong id="ssh-mode">…</strong></div>
+        <p class="small text-secondary mb-1">Tailscale SSH keeps working regardless. Once you can reach this host over the tailnet, rate-limit or fully disable public SSH.</p>
+        <div class="d-flex gap-2 flex-wrap">
+          <button class="btn btn-sm btn-outline-secondary" onclick="sshMode('allow')" title="Open port 22 to the internet">Allow</button>
+          <button class="btn btn-sm btn-outline-primary" onclick="sshMode('limit')" title="Rate-limit port 22 (brute-force protection)">Limit</button>
+          <button class="btn btn-sm btn-outline-danger" onclick="sshMode('off')" title="Remove public port 22 — SSH only over Tailscale">Disable (tailnet-only)</button>
+        </div>
+        <div id="ssh-msg" class="small mt-1"></div>
+      </div>
+      <div class="col-md-6">
+        <div class="small text-secondary mb-1">Public panel access (port {{ (config.port if config else 5000) }})</div>
+        {% if config and config.tailscale_setup_done %}
+        <p class="small text-secondary mb-1">Tailscale Serve is set up, so the panel is reachable on your tailnet. Close the public web port to make the panel <strong>tailnet-only</strong> — no open ports.</p>
+        <button class="btn btn-sm btn-outline-danger" onclick="closePanelPort()"><i class="bi bi-shield-lock"></i> Close public panel port (tailnet-only)</button>
+        {% else %}
+        <p class="small text-secondary mb-1">Set up <a href="{{ url_for('tailscale_page') }}">Tailscale Serve</a> first — then you can close the public web port and make the panel tailnet-only without locking yourself out.</p>
+        <button class="btn btn-sm btn-outline-secondary" disabled title="Set up Tailscale Serve first"><i class="bi bi-shield-lock"></i> Close public panel port</button>
+        {% endif %}
+        <div id="panel-port-msg" class="small mt-1"></div>
+      </div>
+    </div>
     {% else %}
     <div class="row g-3">
       <div class="col-md-6">
@@ -337,6 +360,13 @@ function sshMode(mode){
     .then(r=>r.json()).then(d=>{ el.textContent=(d.success?'✓ ':'✗ ')+(d.message||''); el.className='small mt-1 '+(d.success?'text-success':'text-danger'); loadSshStatus(); })
     .catch(()=>{ el.textContent='✗ Failed'; el.className='small mt-1 text-danger'; });
 }
+function closePanelPort(){
+  if(!confirm('Close the public web port so the panel is reachable ONLY over your tailnet?\n\nMake sure you can already reach the panel at your ts.net URL (Tailscale Serve) — this removes the public way in.')) return;
+  var m=document.getElementById('panel-port-msg'); m.innerHTML='<span class="text-secondary"><i class="bi bi-arrow-repeat"></i> Closing…</span>';
+  fetch(MOUNT+'/api/remote/'+REMOTE_ID+'/close-panel-port',{method:'POST'}).then(r=>r.json())
+    .then(d=>{ m.innerHTML='<span class="text-'+(d.success?'success':'danger')+'">'+(window.escapeHtml?escapeHtml(d.message):(d.message||''))+'</span>'; })
+    .catch(()=>{ m.innerHTML='<span class="text-danger">Request failed.</span>'; });
+}
 function switchToTailscale(){
   if(!confirm('Switch the panel to Tailscale SSH for this server?\n\nThe connection address becomes the Tailscale IP/DNS and auth switches to Tailscale SSH. Requires Tailscale to be running on the remote.')) return;
   var el=document.getElementById('migrate-msg'); el.textContent='Migrating…'; el.className='small mt-1 text-secondary';
@@ -427,7 +457,7 @@ function doPanelUpdate(){
   }).catch(function(){ msg.innerHTML='<span class="text-danger">Update request failed.</span>'; document.getElementById('pu-update-btn').disabled=false; });
 }
 
-if(!IS_LOCAL) loadSshStatus();       // public-SSH controls only exist for remotes
+loadSshStatus();                     // public-SSH controls now exist on both local + remote (no-ops if absent)
 if(IS_LOCAL) checkPanelUpdate(false); // panel self-update card only on the panel host
 pollLive();
 setInterval(pollLive, 2000);

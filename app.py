@@ -2038,7 +2038,8 @@ def register_routes(app):
             db.session.add(local)
             db.session.commit()
         status = so.get_server_status()
-        return render_template("remote_manage.html", remote=local, status=status)
+        return render_template("remote_manage.html", remote=local, status=status,
+                               config=load_config())
 
     @app.route("/api/server-management")
     @login_required
@@ -2259,6 +2260,35 @@ def register_routes(app):
         success, msg = remote_set_public_ssh(remote, mode)
         log_action(current_user, "remote_ssh_mode", target=f"{remote.name}:{mode}", success=success)
         return jsonify({"success": success, "message": msg})
+
+    @app.route("/api/remote/<int:remote_id>/close-panel-port", methods=["POST"])
+    @login_required
+    @permission_required(MANAGE_REMOTES)
+    def api_remote_close_panel_port(remote_id):
+        """Close the panel's public web port on the panel host so the UI is reachable only
+        over the tailnet. Refuses unless Tailscale Serve is configured — otherwise this
+        would remove your only way into the panel."""
+        remote = get_remote(remote_id)
+        if not remote.is_local:
+            return jsonify({"success": False, "message": "Only applies to the panel host."}), 400
+        cfg = load_config()
+        if not cfg.get("tailscale_setup_done"):
+            return jsonify({"success": False, "message": "Set up Tailscale Serve first — "
+                            "otherwise closing the public port would lock you out of the panel."}), 400
+        try:
+            port = int(cfg.get("port", 5000))
+        except (TypeError, ValueError):
+            port = 5000
+        # Remove any allow/limit rule for the panel port (bare = tcp+udp, and the /tcp form
+        # the installer adds). Deleting an absent rule is harmless, so tolerate non-zero.
+        cmd = (f"ufw delete allow {port} 2>&1; ufw delete allow {port}/tcp 2>&1; "
+               f"ufw delete limit {port}/tcp 2>&1; ufw status | grep -qw {port} && echo STILLOPEN || echo CLOSED")
+        out, err, rc = run_command(remote, cmd, timeout=20, sudo=True)
+        ok = "CLOSED" in (out or "")
+        log_action(current_user, "close_panel_port", target=str(port), success=ok)
+        return jsonify({"success": ok, "message": (
+            f"Public port {port} closed — the panel is now reachable only over your tailnet."
+            if ok else (err or out or "Failed to close the port"))})
 
     @app.route("/api/remote/<int:remote_id>/game-port/<int:port>/open", methods=["POST"])
     @login_required

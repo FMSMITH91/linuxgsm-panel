@@ -111,12 +111,22 @@ g = protect(NS(port=22), ["22/tcp ALLOW IN Anywhere", "5000/tcp ALLOW IN Anywher
 gp = {x["port_num"]: x for x in g}
 check("local, no tailscale: panel 5000 protected", gp["5000"]["protected"] and gp["5000"]["is_panel"])
 
-# Panel web port with a tailscale rule present -> NOT protected (alternate route).
+# Panel web port with a tailscale0 rule but Serve NOT set up -> STILL protected. The
+# tailscale interface only provides SSH recovery, not panel-UI access, so the public web
+# port is still the only way into the panel.
 g = protect(NS(port=22), ["22/tcp ALLOW IN Anywhere", "5000/tcp ALLOW IN Anywhere",
                           "Anywhere ALLOW IN Anywhere on tailscale0"],
             cfg={"port": 5000}, is_local=True)
 gp = {x["port_num"]: x for x in g}
-check("local + tailscale: panel 5000 NOT protected", not gp["5000"]["protected"])
+check("local + tailscale0 but no Serve: panel 5000 STILL protected", gp["5000"]["protected"])
+
+# Once Tailscale Serve is configured, the panel IS reachable over the tailnet -> the public
+# port is no longer the only way in -> NOT protected.
+g = protect(NS(port=22), ["22/tcp ALLOW IN Anywhere", "5000/tcp ALLOW IN Anywhere",
+                          "Anywhere ALLOW IN Anywhere on tailscale0"],
+            cfg={"port": 5000, "tailscale_setup_done": True}, is_local=True)
+gp = {x["port_num"]: x for x in g}
+check("local + Serve set up: panel 5000 NOT protected", not gp["5000"]["protected"])
 
 # On a REMOTE host the panel port is never protected.
 g = protect(NS(port=22), ["22/tcp ALLOW IN Anywhere", "5000/tcp ALLOW IN Anywhere"],
