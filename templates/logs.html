@@ -30,22 +30,22 @@
                placeholder="user, target or detail…">
       </div>
       <div class="col-6 col-md-2">
-        <label class="form-label mb-1" style="font-size:.7rem;">Action</label>
-        <select name="action" class="form-select form-select-sm">
+        <label class="form-label mb-1" style="font-size:.7rem;" for="filter-action">Action</label>
+        <select name="action" id="filter-action" class="form-select form-select-sm">
           <option value="">All actions</option>
           {% for a in actions %}<option value="{{ a }}" {% if a == filters.action %}selected{% endif %}>{{ a }}</option>{% endfor %}
         </select>
       </div>
       <div class="col-6 col-md-2">
-        <label class="form-label mb-1" style="font-size:.7rem;">User</label>
-        <select name="user" class="form-select form-select-sm">
+        <label class="form-label mb-1" style="font-size:.7rem;" for="filter-user">User</label>
+        <select name="user" id="filter-user" class="form-select form-select-sm">
           <option value="">All users</option>
           {% for u in users %}<option value="{{ u }}" {% if u == filters.user %}selected{% endif %}>{{ u }}</option>{% endfor %}
         </select>
       </div>
       <div class="col-6 col-md-2">
-        <label class="form-label mb-1" style="font-size:.7rem;">Status</label>
-        <select name="status" class="form-select form-select-sm">
+        <label class="form-label mb-1" style="font-size:.7rem;" for="filter-status">Status</label>
+        <select name="status" id="filter-status" class="form-select form-select-sm">
           <option value="" {% if not filters.status %}selected{% endif %}>All</option>
           <option value="ok" {% if filters.status == 'ok' %}selected{% endif %}>Success</option>
           <option value="fail" {% if filters.status == 'fail' %}selected{% endif %}>Failed</option>

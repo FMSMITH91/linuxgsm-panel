@@ -54,13 +54,15 @@
           <td class="text-secondary small">{{ user.last_login|datetime if user.last_login else 'Never' }}</td>
           <td class="text-end">
             <button class="btn btn-outline-secondary btn-sm" data-bs-toggle="modal"
-                    data-bs-target="#editUserModal-{{ user.id }}">
+                    data-bs-target="#editUserModal-{{ user.id }}"
+                    aria-label="Edit {{ user.username }}" title="Edit {{ user.username }}">
               <i class="bi bi-pencil"></i>
             </button>
             {% if not (user.is_superadmin and users|selectattr('is_superadmin', 'equalto', true)|list|length == 1) %}
             <form method="POST" action="{{ url_for('delete_user', user_id=user.id) }}" style="display:inline;"
                   onsubmit="return confirm('Delete user {{ user.username }}?');">
-              <button type="submit" class="btn btn-outline-danger btn-sm">
+              <button type="submit" class="btn btn-outline-danger btn-sm"
+                      aria-label="Delete {{ user.username }}" title="Delete {{ user.username }}">
                 <i class="bi bi-trash"></i>
               </button>
             </form>
