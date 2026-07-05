@@ -203,6 +203,19 @@
               Uncheck to block this user from logging in, without deleting the account.
             </div>
           </div>
+          {% if user.totp_enabled %}
+          <hr class="border-secondary">
+          <div>
+            <label class="form-label mb-1"><i class="bi bi-shield-lock"></i> Two-Factor Auth</label>
+            <div class="form-check form-switch">
+              <input type="checkbox" name="reset_2fa" class="form-check-input" role="switch" id="edit-reset2fa-{{ user.id }}">
+              <label class="form-check-label" for="edit-reset2fa-{{ user.id }}">Reset (disable) this user's 2FA</label>
+            </div>
+            <div class="form-text mt-0">
+              Use this if they've lost their authenticator. They can re-enable it from their Account page.
+            </div>
+          </div>
+          {% endif %}
         </div>
         <div class="modal-footer">
           <button type="button" class="btn btn-outline-secondary" data-bs-dismiss="modal">Cancel</button>

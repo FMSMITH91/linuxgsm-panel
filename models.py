@@ -32,6 +32,8 @@ class User(UserMixin, db.Model):
     created_at = db.Column(db.DateTime, default=datetime.utcnow)
     last_login = db.Column(db.DateTime, nullable=True)
     api_token = db.Column(db.String(64), unique=True, nullable=True)
+    totp_secret = db.Column(db.Text, nullable=True)      # TOTP secret, encrypted at rest
+    totp_enabled = db.Column(db.Boolean, default=False)  # 2FA active for this user
     groups = db.relationship("Group", secondary="user_groups", back_populates="users")
 
     @property
@@ -39,6 +41,12 @@ class User(UserMixin, db.Model):
         """Decrypted email for display (stored encrypted at rest)."""
         from config import decrypt_secret
         return decrypt_secret(self.email) if self.email else ""
+
+    @property
+    def totp_secret_plain(self):
+        """The decrypted TOTP secret (stored encrypted at rest), or ''."""
+        from config import decrypt_secret
+        return decrypt_secret(self.totp_secret) if self.totp_secret else ""
 
 
 user_groups = db.Table(
@@ -192,6 +200,8 @@ def _run_light_migrations():
         ("game_server", "commands"): "ALTER TABLE game_server ADD COLUMN commands TEXT DEFAULT '[]'",
         ("game_server", "daily_restart"): "ALTER TABLE game_server ADD COLUMN daily_restart BOOLEAN DEFAULT 0",
         ("remote_server", "public_ip"): "ALTER TABLE remote_server ADD COLUMN public_ip VARCHAR(45) DEFAULT ''",
+        ("user", "totp_secret"): "ALTER TABLE user ADD COLUMN totp_secret TEXT",
+        ("user", "totp_enabled"): "ALTER TABLE user ADD COLUMN totp_enabled BOOLEAN DEFAULT 0",
     }
     for (table, col), ddl in wanted.items():
         if table in existing and col not in existing[table]:

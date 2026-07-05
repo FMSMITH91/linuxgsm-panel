@@ -171,6 +171,15 @@ with _app.test_request_context(headers={"X-Forwarded-For": "1.2.3.4"},
                                environ_base={"REMOTE_ADDR": "203.0.113.9"}):
     eq("direct connection: ignore spoofed XFF, use socket", client_ip(), "203.0.113.9")
 
+# ── TOTP (2FA) ────────────────────────────────────────────────
+from auth import generate_totp_secret, verify_totp
+import pyotp as _pyotp
+_sec = generate_totp_secret()
+check("verify_totp accepts the current code", verify_totp(_sec, _pyotp.TOTP(_sec).now()))
+check("verify_totp accepts a spaced code", verify_totp(_sec, " " + _pyotp.TOTP(_sec).now() + " "))
+check("verify_totp rejects a wrong code", not verify_totp(_sec, "000000"))
+check("verify_totp rejects empty", not verify_totp(_sec, ""))
+
 # ── cleanup: remove key/config files this run created ─────────
 for p in (config.CRED_KEY_FILE, config.SECRET_FILE, config.CONFIG_FILE):
     if p not in _pre and os.path.exists(p):

@@ -78,6 +78,15 @@ def cmd_create_admin(args):
         print("Superadmin '%s' created." % args.username)
 
 
+def cmd_disable_2fa(args):
+    with app.app_context():
+        u = _require_user(args.username)
+        u.totp_enabled = False
+        u.totp_secret = None
+        db.session.commit()
+        print("Two-factor auth disabled for '%s'." % args.username)
+
+
 def _set_flag(username, field, value, label):
     with app.app_context():
         u = _require_user(username)
@@ -107,6 +116,10 @@ def main():
     cp.add_argument("username")
     cp.add_argument("--password")
     cp.set_defaults(func=cmd_create_admin)
+
+    dp2 = sub.add_parser("disable-2fa", help="Turn off a user's two-factor auth (lost authenticator)")
+    dp2.add_argument("username")
+    dp2.set_defaults(func=cmd_disable_2fa)
 
     for name, field, val, lbl in [
         ("promote", "is_superadmin", True, "promoted to superadmin"),

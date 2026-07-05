@@ -8,8 +8,22 @@
         <div class="text-center mb-4">
           <span style="font-size: 3rem;">🎮</span>
           <h3 class="mt-2">{{ site_title }}</h3>
-          <p class="text-secondary small">Sign in to manage your game servers</p>
+          <p class="text-secondary small">
+            {% if two_factor %}Enter the code from your authenticator app{% else %}Sign in to manage your game servers{% endif %}
+          </p>
         </div>
+        {% if two_factor %}
+        <form method="POST">
+          <div class="mb-3">
+            <label class="form-label"><i class="bi bi-shield-lock"></i> Authentication code</label>
+            <input type="text" name="totp_code" class="form-control text-center" inputmode="numeric"
+                   autocomplete="one-time-code" placeholder="000000" maxlength="6" autofocus required
+                   style="letter-spacing:.3em; font-size:1.2rem;">
+          </div>
+          <button type="submit" class="btn btn-primary w-100">Verify</button>
+          <a href="{{ url_for('login') }}" class="btn btn-link btn-sm text-secondary w-100 mt-2">Start over</a>
+        </form>
+        {% else %}
         <form method="POST">
           <div class="mb-3">
             <label class="form-label">Username</label>
@@ -25,6 +39,7 @@
           </div>
           <button type="submit" class="btn btn-primary w-100">Sign In</button>
         </form>
+        {% endif %}
       </div>
     </div>
   </div>

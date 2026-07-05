@@ -66,6 +66,7 @@ from auth import (
     ALL_PERMISSIONS, SERVER_ACTIONS, ACTION_PERMISSION_MAP,
     can_access_server, can_access_remote, accessible_remote_ids,
     check_password, client_ip, generate_api_token,
+    generate_totp_secret, totp_provisioning_uri, verify_totp,
     get_user_permissions, get_user_servers, hash_password,
     has_permission, init_auth, log_action, login_manager,
     permission_required, server_access_required,
@@ -276,9 +277,11 @@ def create_app():
     # form endpoints (the JSON API additionally requires an application/json body).
     app.config["SESSION_COOKIE_HTTPONLY"] = True
     app.config["SESSION_COOKIE_SAMESITE"] = "Lax"
-    # Secure defaults ON once served via Tailscale Serve (HTTPS); OFF during first-run
-    # setup over plain http://host:5000 so login still works. Override with cookie_secure.
-    app.config["SESSION_COOKIE_SECURE"] = cfg.get("cookie_secure", bool(cfg.get("tailscale_setup_done", False)))
+    # Secure defaults ON once the panel is served over HTTPS — via Tailscale Serve, or
+    # a reverse proxy once a site_domain is configured. OFF during first-run setup over
+    # plain http://host:5000 so login still works. Override with cookie_secure.
+    _https_ready = bool(cfg.get("tailscale_setup_done", False)) or bool((cfg.get("site_domain") or "").strip())
+    app.config["SESSION_COOKIE_SECURE"] = cfg.get("cookie_secure", _https_ready)
 
 
     # Store mount prefix in app config so templates can access it
@@ -294,6 +297,32 @@ def create_app():
     # session cookie. Tests disable it via WTF_CSRF_ENABLED=False.
     app.config.setdefault("WTF_CSRF_TIME_LIMIT", None)  # token valid for the session
     CSRFProtect(app)
+
+    # ── Security response headers ──
+    # unsafe-inline is required because the UI uses inline <script>/<style> and onclick
+    # handlers throughout; combined with Jinja auto-escaping it's still defense-in-depth
+    # (blocks loading scripts from arbitrary external origins). CDN = jsdelivr only.
+    _CSP = (
+        "default-src 'self'; "
+        "script-src 'self' 'unsafe-inline' https://cdn.jsdelivr.net; "
+        "style-src 'self' 'unsafe-inline' https://cdn.jsdelivr.net; "
+        "img-src 'self' data:; "
+        "font-src 'self' https://cdn.jsdelivr.net data:; "
+        "connect-src 'self'; "
+        "frame-ancestors 'self'; base-uri 'self'; object-src 'none'"
+    )
+
+    @app.after_request
+    def _security_headers(resp):
+        resp.headers.setdefault("X-Frame-Options", "SAMEORIGIN")
+        resp.headers.setdefault("X-Content-Type-Options", "nosniff")
+        resp.headers.setdefault("Referrer-Policy", "same-origin")
+        resp.headers.setdefault("Content-Security-Policy", _CSP)
+        # Only advertise HSTS when the request actually came in over HTTPS (directly or
+        # via a proxy that sets X-Forwarded-Proto), never over plain HTTP.
+        if request.is_secure or request.headers.get("X-Forwarded-Proto", "") == "https":
+            resp.headers.setdefault("Strict-Transport-Security", "max-age=31536000; includeSubDomains")
+        return resp
 
     # One-time: encrypt any legacy plaintext secrets/PII already in the DB
     # (remote SSH credentials, and user email addresses).
@@ -705,14 +734,17 @@ def register_routes(app):
                 flash("Too many failed attempts. Please wait a few minutes and try again.", "danger")
                 return render_template("login.html")
 
-            username = request.form.get("username", "").strip()
-            password = request.form.get("password", "")
-            remember = request.form.get("remember") == "on"
+            def _fail(msg, **kw):
+                with _LOGIN_FAILS_LOCK:
+                    _LOGIN_FAILS.setdefault(ip, []).append(now)
+                flash(msg, "danger")
+                return render_template("login.html", **kw)
 
-            user = User.query.filter_by(username=username).first()
-            if user and user.is_active and check_password(password, user.password_hash):
+            def _succeed(user, remember):
                 with _LOGIN_FAILS_LOCK:
                     _LOGIN_FAILS.pop(ip, None)   # clear on success
+                for k in ("_2fa_pending", "_2fa_at", "_2fa_remember"):
+                    session.pop(k, None)
                 login_user(user, remember=remember)
                 user.last_login = datetime.utcnow()
                 db.session.commit()
@@ -722,10 +754,34 @@ def register_routes(app):
                 if not next_page.startswith("/") or next_page.startswith("//"):
                     next_page = "/"
                 return redirect(next_page)
-            else:
-                with _LOGIN_FAILS_LOCK:
-                    _LOGIN_FAILS.setdefault(ip, []).append(now)
-                flash("Invalid username or password.", "danger")
+
+            # ── Step 2: the 2FA code for a login that passed the password step ──
+            pending_id = session.get("_2fa_pending")
+            if pending_id and request.form.get("totp_code"):
+                if now - session.get("_2fa_at", 0) > 300:   # prompt expires after 5 min
+                    session.pop("_2fa_pending", None)
+                    flash("The two-factor prompt expired — please log in again.", "danger")
+                    return render_template("login.html")
+                u = User.query.get(pending_id)
+                if u and u.is_active and u.totp_enabled and \
+                        verify_totp(u.totp_secret_plain, request.form.get("totp_code", "")):
+                    return _succeed(u, bool(session.get("_2fa_remember")))
+                return _fail("Invalid authentication code.", two_factor=True)
+
+            # ── Step 1: username + password ──
+            username = request.form.get("username", "").strip()
+            password = request.form.get("password", "")
+            remember = request.form.get("remember") == "on"
+
+            user = User.query.filter_by(username=username).first()
+            if user and user.is_active and check_password(password, user.password_hash):
+                if user.totp_enabled and user.totp_secret_plain:
+                    session["_2fa_pending"] = user.id
+                    session["_2fa_at"] = now
+                    session["_2fa_remember"] = remember
+                    return render_template("login.html", two_factor=True)
+                return _succeed(user, remember)
+            return _fail("Invalid username or password.")
 
         return render_template("login.html")
 
@@ -737,6 +793,60 @@ def register_routes(app):
         logout_user()
         flash("You have been logged out.", "info")
         return redirect("/login")
+
+    # ── Account / Two-factor auth ───────────────────────────
+    def _qr_svg(data):
+        """Render `data` as an inline SVG QR code (no PIL needed)."""
+        import io
+        import qrcode
+        import qrcode.image.svg
+        qr = qrcode.QRCode(box_size=9, border=2, image_factory=qrcode.image.svg.SvgPathImage)
+        qr.add_data(data)
+        qr.make(fit=True)
+        buf = io.BytesIO()
+        qr.make_image().save(buf)
+        return buf.getvalue().decode()
+
+    @app.route("/account")
+    @login_required
+    def account():
+        return render_template("account.html")
+
+    @app.route("/account/2fa/enable", methods=["GET", "POST"])
+    @login_required
+    def account_2fa_enable():
+        if current_user.totp_enabled:
+            flash("Two-factor authentication is already enabled.", "info")
+            return redirect(url_for("account"))
+        if request.method == "POST":
+            secret = session.get("_2fa_setup_secret", "")
+            if secret and verify_totp(secret, request.form.get("totp_code", "")):
+                current_user.totp_secret = encrypt_secret(secret)
+                current_user.totp_enabled = True
+                db.session.commit()
+                session.pop("_2fa_setup_secret", None)
+                log_action(current_user, "2fa_enabled", target=current_user.username)
+                flash("Two-factor authentication is now enabled.", "success")
+                return redirect(url_for("account"))
+            flash("That code didn't match — check your device's time and try again.", "danger")
+        # (Re)issue a pending secret for this enrolment attempt.
+        secret = session.get("_2fa_setup_secret") or generate_totp_secret()
+        session["_2fa_setup_secret"] = secret
+        uri = totp_provisioning_uri(secret, current_user.username)
+        return render_template("account_2fa.html", secret=secret, qr_svg=_qr_svg(uri))
+
+    @app.route("/account/2fa/disable", methods=["POST"])
+    @login_required
+    def account_2fa_disable():
+        if not check_password(request.form.get("password", ""), current_user.password_hash):
+            flash("Password incorrect — two-factor authentication was not changed.", "danger")
+            return redirect(url_for("account"))
+        current_user.totp_enabled = False
+        current_user.totp_secret = None
+        db.session.commit()
+        log_action(current_user, "2fa_disabled", target=current_user.username)
+        flash("Two-factor authentication disabled.", "success")
+        return redirect(url_for("account"))
 
     # ── Dashboard ──────────────────────────────────────────
     @app.route("/")
@@ -1556,6 +1666,12 @@ def register_routes(app):
                 flash(pw_err, "danger")
                 return redirect(url_for("manage_users"))
             user.password_hash = hash_password(password)
+
+        # Admin reset of a user's 2FA (for when they lose their authenticator).
+        if request.form.get("reset_2fa") == "on" and user.totp_enabled:
+            user.totp_enabled = False
+            user.totp_secret = None
+            log_action(current_user, "2fa_reset", target=user.username)
 
         # Update groups
         group_ids = {int(gid) for gid in request.form.getlist("groups")}

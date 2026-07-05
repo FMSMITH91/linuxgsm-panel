@@ -79,6 +79,30 @@ def generate_api_token():
     return secrets.token_hex(32)
 
 
+# ─── Two-factor auth (TOTP) ───────────────────────────────────
+def generate_totp_secret():
+    """A fresh base32 TOTP secret (what a new authenticator enrolment gets)."""
+    import pyotp
+    return pyotp.random_base32()
+
+
+def totp_provisioning_uri(secret, username, issuer="LinuxGSM Panel"):
+    """otpauth:// URI to encode in the enrolment QR code."""
+    import pyotp
+    return pyotp.totp.TOTP(secret).provisioning_uri(name=username, issuer_name=issuer)
+
+
+def verify_totp(secret, code):
+    """True if `code` is valid for `secret` now (±1 step for clock skew)."""
+    import pyotp
+    if not secret or not code:
+        return False
+    try:
+        return pyotp.TOTP(secret).verify(str(code).strip().replace(" ", ""), valid_window=1)
+    except Exception:
+        return False
+
+
 def get_user_permissions(user):
     """Get all permissions for a user (union of all their groups + superadmin)."""
     if user.is_superadmin:
