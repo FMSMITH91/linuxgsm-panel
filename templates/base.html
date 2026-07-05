@@ -245,9 +245,10 @@
 
     /* ── BADGES ── */
     .badge { font-weight: 600; font-size: .7rem; padding: .3em .65em; border-radius: 4px; letter-spacing: .02em; }
-    .badge.bg-success { background: var(--accent) !important; }
-    .badge.bg-danger { background: var(--danger) !important; }
-    .badge.bg-warning { background: var(--warning) !important; }
+    /* Dark text on the bright badge colors — white was only ~2.5:1 (fails AA); dark is 5–8:1. */
+    .badge.bg-success { background: var(--accent) !important; color: #0a0f1a !important; }
+    .badge.bg-danger { background: var(--danger) !important; color: #0a0f1a !important; }
+    .badge.bg-warning { background: var(--warning) !important; color: #0a0f1a !important; }
 
     /* ── TABS ── (underline style that fits the dark theme, not Bootstrap's pale card tab) */
     .nav-tabs { border-bottom: 1px solid var(--border); gap: .15rem; }

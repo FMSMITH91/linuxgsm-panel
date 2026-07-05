@@ -115,11 +115,11 @@
             </td>
             <td class="text-end text-nowrap">
               {% if can_control %}
-              <button class="btn btn-outline-success btn-sm" title="Start" onclick="doAction({{ srv.id }}, 'start', this)"><i class="bi bi-play-fill"></i></button>
-              <button class="btn btn-outline-warning btn-sm" title="Restart" onclick="doAction({{ srv.id }}, 'restart', this)"><i class="bi bi-arrow-repeat"></i></button>
-              <button class="btn btn-outline-danger btn-sm" title="Stop" onclick="doAction({{ srv.id }}, 'stop', this)"><i class="bi bi-stop-fill"></i></button>
+              <button class="btn btn-outline-success btn-sm" title="Start" aria-label="Start {{ srv.name }}" onclick="doAction({{ srv.id }}, 'start', this)"><i class="bi bi-play-fill"></i></button>
+              <button class="btn btn-outline-warning btn-sm" title="Restart" aria-label="Restart {{ srv.name }}" onclick="doAction({{ srv.id }}, 'restart', this)"><i class="bi bi-arrow-repeat"></i></button>
+              <button class="btn btn-outline-danger btn-sm" title="Stop" aria-label="Stop {{ srv.name }}" onclick="doAction({{ srv.id }}, 'stop', this)"><i class="bi bi-stop-fill"></i></button>
               {% endif %}
-              <a href="{{ url_for('server_detail', server_id=srv.id) }}" class="btn btn-outline-secondary btn-sm" title="Console & stats">
+              <a href="{{ url_for('server_detail', server_id=srv.id) }}" class="btn btn-outline-secondary btn-sm" title="Console &amp; stats" aria-label="Console &amp; stats for {{ srv.name }}">
                 <i class="bi bi-terminal-fill"></i>
               </a>
             </td>
