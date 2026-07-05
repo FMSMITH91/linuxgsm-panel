@@ -53,6 +53,44 @@ def _run_ts(args, timeout=5):
         return "", str(e), -1
 
 
+def _run_ts_sudo(args, timeout=10):
+    """Run a *privileged* tailscale command (serve/funnel/set) with sudo."""
+    try:
+        r = subprocess.run(
+            ["sudo", "tailscale"] + args,
+            capture_output=True, text=True, timeout=timeout,
+        )
+        return r.stdout.strip(), r.stderr.strip(), r.returncode
+    except FileNotFoundError:
+        return "", "tailscale binary not found", -1
+    except subprocess.TimeoutExpired:
+        return "", "tailscale command timed out", -1
+    except Exception as e:
+        return "", str(e), -1
+
+
+def _current_os_user():
+    """The OS user the panel runs as (the one that should own Tailscale management)."""
+    try:
+        import os
+        import pwd
+        return pwd.getpwuid(os.getuid()).pw_name
+    except Exception:
+        import getpass
+        return getpass.getuser()
+
+
+def ensure_operator():
+    """Make the panel's own user the Tailscale 'operator' so `tailscale serve` config AND
+    `tailscale serve status` work as the panel user without root — Tailscale's recommended
+    fix for 'Access denied: serve config denied'. Idempotent, best-effort (needs sudo once)."""
+    user = _current_os_user()
+    if not user or user == "root":
+        return True, "root"
+    _run_ts_sudo(["set", "--operator=" + user], timeout=10)
+    return True, user
+
+
 def _run_ts_json(args, timeout=5):
     """Run tailscale with --json flag and parse output."""
     out, err, rc = _run_ts(args + ["--json"], timeout=timeout)
@@ -267,34 +305,31 @@ def setup_tailscale_serve(port=5000, mount="/", funnel=False, backend_scheme="ht
     verb = "funnel" if funnel else "serve"
     mount = mount or "/"
 
-    # The `tailscale serve`/`funnel` CLI grammar changed across versions. Newer Tailscale
-    # (~1.58+) takes the target as the ONLY positional and sets a non-root mount with
-    # --set-path; older Tailscale took the mount as a positional argument (`... 443 / URL`).
-    # Passing the old form to a new binary fails with "invalid argument format", so try the
-    # modern form first and fall back to the legacy one — works regardless of version.
+    # serve/funnel is privileged — make the panel user the Tailscale operator first so it
+    # works (and status reads back) without root.
+    ensure_operator()
+
+    # Two things vary by Tailscale version/setup: (1) the CLI grammar changed — newer
+    # (~1.58+) takes the target as the only positional with a --set-path mount, older took
+    # the mount as a positional ("... 443 / URL"); (2) privilege — usually the operator set
+    # above is enough, but fall back to sudo if not. Try each combination and use the first
+    # that succeeds, so it works across Tailscale versions and permission setups.
     modern = [verb, "--bg", "--https=443"]
     if mount != "/":
         modern.append("--set-path=" + mount)
     modern.append(upstream)
-    out, err, rc = _run_ts(modern, timeout=10)
+    legacy = [verb, "--bg", "--https", "443", mount, upstream]
 
-    if rc != 0:
-        legacy = [verb, "--bg", "--https", "443", mount, upstream]
-        lout, lerr, lrc = _run_ts(legacy, timeout=10)
-        if lrc == 0:
-            out, err, rc = lout, lerr, lrc
-        else:
-            err = err or out or lerr or lout   # keep the most informative error
-
-    if rc == 0:
-        msg = "Tailscale Serve enabled" + (" (with Funnel)" if funnel else "")
-        # Flush cache
-        with _cache_lock:
-            _cache["info"] = None
-        return True, msg
-    else:
-        error = err or out or "Unknown error"
-        return False, f"Failed to configure Tailscale Serve: {error}"
+    err = ""
+    for runner in (_run_ts, _run_ts_sudo):          # non-root (operator) first, then sudo
+        for args in (modern, legacy):               # modern grammar first, then legacy
+            out, e, rc = runner(args, timeout=10)
+            if rc == 0:
+                with _cache_lock:
+                    _cache["info"] = None
+                return True, "Tailscale Serve enabled" + (" (with Funnel)" if funnel else "")
+            err = e or out or err
+    return False, f"Failed to configure Tailscale Serve: {err or 'Unknown error'}"
 
 
 def install_tailscale_local():
@@ -338,6 +373,7 @@ def tailscale_up_local(enable_ssh=True):
         return True, line
     info = get_tailscale_info(force_refresh=True)
     if info.running or line == "ALREADY_CONNECTED":
+        ensure_operator()   # so the panel user can manage Serve without root afterward
         return True, "ALREADY_CONNECTED"
     return False, (r.stderr or r.stdout or "Could not get a login link — is Tailscale installed on this host?")
 
