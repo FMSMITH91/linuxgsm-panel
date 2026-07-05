@@ -361,9 +361,9 @@ try:
         check("debug report: returns report/summary/issues_url/filename",
               all(k in _dr for k in ("report", "summary", "issues_url", "filename")))
         check("debug report: issues_url is a github new-issue URL",
-              "github.com" in _dr["issues_url"] and _dr["issues_url"].endswith("/issues/new"))
-        import config as _cfgmod
-        for _sf in (_cfgmod.SECRET_FILE, _cfgmod.CRED_KEY_FILE):
+              _dr["issues_url"].startswith("https://github.com/")
+              and _dr["issues_url"].endswith("/issues/new"))
+        for _sf in (SECRET_FILE, CRED_KEY_FILE):
             if _sf.exists():
                 _sv = _sf.read_text(errors="replace").strip()
                 if len(_sv) >= 12:

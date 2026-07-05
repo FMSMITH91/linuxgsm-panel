@@ -883,9 +883,9 @@ def generate_debug_report():
             try:
                 deps[pkg] = _v(pkg)
             except PackageNotFoundError:
-                pass
+                continue  # optional dep not installed — just omit it from the report
     except Exception:
-        pass
+        pass  # importlib.metadata unavailable — deps section stays empty, non-fatal
 
     # Whitelisted config + object counts
     conf = {}
@@ -893,13 +893,13 @@ def generate_debug_report():
         c = _cfg.load_config()
         conf = {k: c.get(k) for k in _DEBUG_CONFIG_KEYS if k in c}
     except Exception:
-        pass
+        pass  # config unreadable — omit the config section, non-fatal
     counts = {}
     try:
         from models import RemoteServer, GameServer
         counts = {"remotes": RemoteServer.query.count(), "game_servers": GameServer.query.count()}
     except Exception:
-        pass
+        pass  # DB not queryable here — omit counts, non-fatal
     try:
         from models import database_stats
         dbs = database_stats()
