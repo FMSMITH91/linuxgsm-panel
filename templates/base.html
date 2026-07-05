@@ -15,7 +15,13 @@
   <link rel="preload" as="font" type="font/woff2" crossorigin
         href="{{ url_for('static', filename='vendor/bootstrap-icons/fonts/bootstrap-icons.woff2') }}?dd67030699838ea613ee6dbda90effa6">
   <link href="{{ url_for('static', filename='vendor/bootstrap/bootstrap.min.css') }}" rel="stylesheet">
-  <link rel="stylesheet" href="{{ url_for('static', filename='vendor/bootstrap-icons/bootstrap-icons.min.css') }}">
+  <!-- Icons aren't needed for first paint, so load their 85 KB stylesheet
+       non-render-blocking (media=print until onload) — trims the mobile render-blocking
+       critical path. The min-width reservation + preloaded font keep icons from shifting
+       layout when the sheet applies. <noscript> falls back to a normal blocking load. -->
+  <link rel="stylesheet" href="{{ url_for('static', filename='vendor/bootstrap-icons/bootstrap-icons.min.css') }}"
+        media="print" onload="this.media='all'">
+  <noscript><link rel="stylesheet" href="{{ url_for('static', filename='vendor/bootstrap-icons/bootstrap-icons.min.css') }}"></noscript>
   <style>
     :root {
       --sidebar-w: 250px;
