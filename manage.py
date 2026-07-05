@@ -67,13 +67,13 @@ def _resolve_username(username):
     if username:
         return username
     admins = User.query.filter_by(is_superadmin=True).order_by(User.username).all()
-    if len(admins) == 1:
-        print("Resetting the only superadmin: %s" % admins[0].username)
-        return admins[0].username
     if not admins:
         sys.exit("No superadmin exists yet. Create one:  manage.py create-admin <name>")
-    sys.exit("There are several superadmins — say which one:\n  " +
-             "\n  ".join(a.username for a in admins))
+    if len(admins) > 1:
+        sys.exit("There are several superadmins — say which one:\n  " +
+                 "\n  ".join(a.username for a in admins))
+    print("Resetting the only superadmin: %s" % admins[0].username)
+    return admins[0].username
 
 
 def cmd_reset_password(args):
