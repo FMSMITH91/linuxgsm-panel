@@ -1940,6 +1940,31 @@ def register_routes(app):
             "suggestion": suggestion,
         })
 
+    @app.route("/api/tailscale/install", methods=["POST"])
+    @login_required
+    @permission_required(MANAGE_REMOTES)
+    def api_tailscale_install():
+        """Install Tailscale on the PANEL HOST itself — the same in-panel flow the setup
+        wizard and the remote-server bootstrap use, instead of sending the user off to
+        tailscale.com to do it by hand."""
+        ok, log = ts.install_tailscale_local()
+        log_action(current_user, "tailscale_install_local", success=ok)
+        return jsonify({"success": ok, "log": log})
+
+    @app.route("/api/tailscale/up", methods=["POST"])
+    @login_required
+    @permission_required(MANAGE_REMOTES)
+    def api_tailscale_up():
+        """Run `tailscale up` on the panel host and return the browser login URL to
+        approve this machine (or connected=True if it's already on the tailnet)."""
+        ok, res = ts.tailscale_up_local(enable_ssh=True)
+        if not ok:
+            return jsonify({"success": False, "message": res})
+        if res == "ALREADY_CONNECTED":
+            log_action(current_user, "tailscale_up_local", success=True)
+            return jsonify({"success": True, "connected": True})
+        return jsonify({"success": True, "connected": False, "auth_url": res})
+
     @app.route("/api/tailscale/serve", methods=["POST"])
     @login_required
     @permission_required(MANAGE_REMOTES)  # Infrastructure management

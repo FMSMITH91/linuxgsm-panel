@@ -15,14 +15,54 @@
     <span style="font-size: 3rem;">📡</span>
     <h5 class="mt-3">Tailscale Not Installed</h5>
     <p class="text-secondary">
-      Tailscale is not installed on this server. Install it to access the panel securely
-      over your private tailnet without opening firewall ports.
+      Install Tailscale on this panel host to reach the panel securely over your private
+      tailnet — no open firewall ports. The panel installs it and walks you through
+      connecting, just like it does for remote servers.
     </p>
-    <a href="https://tailscale.com/download" target="_blank" class="btn btn-primary">
-      <i class="bi bi-box-arrow-up-right"></i> Install Tailscale
-    </a>
+    <button type="button" class="btn btn-primary" id="ts-install-btn">
+      <i class="bi bi-download"></i> Install &amp; connect Tailscale
+    </button>
+    <div class="text-secondary small mt-2">
+      Runs on the panel host (needs sudo). Prefer to do it by hand?
+      <a href="https://tailscale.com/download" target="_blank" rel="noopener">tailscale.com/download</a>.
+    </div>
+    <div id="ts-install-out" class="small mt-3"></div>
   </div>
 </div>
+<script>
+(function(){
+  var MOUNT = window.MOUNT || '';
+  var out = document.getElementById('ts-install-out');
+  var btn = document.getElementById('ts-install-btn');
+  function esc(s){ return window.escapeHtml ? window.escapeHtml(s) : String(s == null ? '' : s); }
+  function doUp(){
+    out.innerHTML = '<i class="bi bi-arrow-repeat"></i> Starting Tailscale…';
+    fetch(MOUNT + '/api/tailscale/up', {method:'POST'}).then(function(r){return r.json();}).then(function(d){
+      if(!d.success){ out.innerHTML = '<span class="text-danger">' + esc(d.message || 'Failed') + '</span>'; btn.disabled = false; return; }
+      if(d.connected){ out.innerHTML = '<span class="text-success"><i class="bi bi-check-circle"></i> Connected!</span>'; setTimeout(function(){ location.reload(); }, 900); return; }
+      out.innerHTML = '<div class="alert alert-info py-2 small mb-0 text-start">'
+        + '<strong>1.</strong> Open this link and approve this machine in your Tailscale account:<br>'
+        + '<a href="' + esc(d.auth_url) + '" target="_blank" rel="noopener" style="word-break:break-all;">' + esc(d.auth_url) + '</a>'
+        + ' <button type="button" class="btn btn-sm btn-outline-secondary py-0" onclick="navigator.clipboard.writeText(this.dataset.u)" data-u="' + esc(d.auth_url) + '"><i class="bi bi-clipboard"></i></button><br>'
+        + '<strong>2.</strong> <span id="ts-wait"><i class="bi bi-hourglass-split"></i> Waiting for you to authorize…</span></div>';
+      var t = setInterval(function(){
+        fetch(MOUNT + '/api/tailscale').then(function(r){return r.json();}).then(function(s){
+          if(s.running){ clearInterval(t); location.reload(); }
+        }).catch(function(){});
+      }, 4000);
+    }).catch(function(){ out.innerHTML = '<span class="text-danger">Request failed.</span>'; btn.disabled = false; });
+  }
+  btn.addEventListener('click', function(){
+    btn.disabled = true;
+    out.innerHTML = '<i class="bi bi-arrow-repeat"></i> Installing Tailscale on the panel host… (up to a minute)';
+    fetch(MOUNT + '/api/tailscale/install', {method:'POST'}).then(function(r){return r.json();}).then(function(d){
+      if(!d.success){ out.innerHTML = '<span class="text-danger">Install failed: ' + esc((d.log || '').slice(-200)) + '</span>'; btn.disabled = false; return; }
+      out.innerHTML = '<span class="text-success">Installed.</span> Starting…';
+      doUp();
+    }).catch(function(){ out.innerHTML = '<span class="text-danger">Install request failed.</span>'; btn.disabled = false; });
+  });
+})();
+</script>
 {% else %}
 
 <!-- Status Card -->
