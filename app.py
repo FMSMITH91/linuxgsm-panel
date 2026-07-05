@@ -302,9 +302,11 @@ def create_app():
     # unsafe-inline is required because the UI uses inline <script>/<style> and onclick
     # handlers throughout; combined with Jinja auto-escaping it's still defense-in-depth
     # (blocks loading scripts from arbitrary external origins). CDN = jsdelivr only.
+    # CDNs actually loaded by the UI: jsdelivr (Bootstrap, icons, Chart.js) and
+    # cdnjs (the Socket.IO client for the live console).
     _CSP = (
         "default-src 'self'; "
-        "script-src 'self' 'unsafe-inline' https://cdn.jsdelivr.net; "
+        "script-src 'self' 'unsafe-inline' https://cdn.jsdelivr.net https://cdnjs.cloudflare.com; "
         "style-src 'self' 'unsafe-inline' https://cdn.jsdelivr.net; "
         "img-src 'self' data:; "
         "font-src 'self' https://cdn.jsdelivr.net data:; "
