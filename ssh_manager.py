@@ -2034,18 +2034,51 @@ def remote_public_ssh_status(server):
     return {"active": active, "mode": mode}
 
 
+def _tailnet_ssh_state(server):
+    """Best-effort (running, ssh_enabled, iface_allowed) for a host — the inputs to
+    deciding whether removing public SSH is safe. Works for the local panel host and
+    remote hosts alike (run_command routes to the right place)."""
+    import json as _json
+    running = ssh_enabled = iface_allowed = False
+    try:
+        out, _, _ = run_command(server, "tailscale status --json 2>/dev/null || echo '{}'", timeout=10)
+        running = _json.loads(out or "{}").get("BackendState") == "Running"
+    except Exception:
+        pass
+    if running:
+        try:  # Tailscale SSH server advertised by this node — authoritative: prefs RunSSH
+            out, _, _ = run_command(server, "tailscale debug prefs 2>/dev/null || echo '{}'", timeout=10)
+            ssh_enabled = bool(_json.loads(out or "{}").get("RunSSH", False))
+        except Exception:
+            pass
+        try:  # tailscale interface allowed in UFW → sshd is reachable over the tailnet
+            out, _, _ = run_command(server, "ufw status verbose 2>/dev/null | grep -i tailscale || true",
+                                    timeout=12, sudo=True)
+            iface_allowed = bool((out or "").strip())
+        except Exception:
+            pass
+    return running, ssh_enabled, iface_allowed
+
+
 def remote_set_public_ssh(server, mode):
     """Control PUBLIC (non-tailnet) SSH on port 22 via UFW:
       allow → `ufw allow 22/tcp`  (open to the internet)
       limit → `ufw limit 22/tcp`  (rate-limited brute-force protection; recommended)
       off   → remove the allow/limit rules (SSH only via the tailscale0 interface)
-    tailscale0 SSH is unaffected either way."""
+    tailscale0 SSH is unaffected either way. `off` is REFUSED unless there is a working
+    Tailscale path back in (Tailscale running + SSH enabled or the tailscale0 interface
+    allowed in UFW) — otherwise it would strand you with no way to reach the host."""
     mode = (mode or "").lower()
     if mode == "allow":
         cmds = ["ufw delete limit 22/tcp", "ufw allow 22/tcp"]
     elif mode == "limit":
         cmds = ["ufw delete allow 22/tcp", "ufw limit 22/tcp"]
     elif mode == "off":
+        running, ssh_enabled, iface_allowed = _tailnet_ssh_state(server)
+        if not (running and (ssh_enabled or iface_allowed)):
+            return False, ("Refused — there's no Tailscale way back into this host, so disabling "
+                           "public SSH would lock you out. Enable Tailscale SSH, or make sure "
+                           "Tailscale is running and the tailscale0 interface is allowed in UFW, first.")
         cmds = ["ufw delete allow 22/tcp", "ufw delete limit 22/tcp", "ufw delete allow OpenSSH"]
     else:
         return False, "Invalid mode"

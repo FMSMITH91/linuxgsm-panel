@@ -86,6 +86,41 @@ eq("cron: split 5-field", sm._split_cron_line("0 3 * * * /home/gm/b.sh a"), ("0 
 eq("cron: split @shortcut", sm._split_cron_line("@reboot /home/gm/x start"), ("@reboot", "/home/gm/x start"))
 eq("cron: split rejects short line", sm._split_cron_line("0 3 * *"), (None, None))
 
+# ── anti-lockout: disabling public SSH must be refused with no Tailscale path back in ──
+_orig_rc = sm.run_command
+def _rc_no_tailnet(server, cmd, **kw):
+    if "status --json" in cmd:
+        return ('{"BackendState":"Stopped"}', "", 0)   # Tailscale not running
+    return ("", "", 0)
+sm.run_command = _rc_no_tailnet
+_ok, _msg = sm.remote_set_public_ssh(object(), "off")
+check("ssh off REFUSED when no Tailscale path (anti-lockout)", _ok is False and "lock you out" in _msg.lower())
+
+def _rc_ts_ssh(server, cmd, **kw):
+    if "status --json" in cmd:
+        return ('{"BackendState":"Running"}', "", 0)
+    if "debug prefs" in cmd:
+        return ('{"RunSSH": true}', "", 0)                # Tailscale SSH enabled
+    return ("", "", 0)
+sm.run_command = _rc_ts_ssh
+check("ssh off ALLOWED when Tailscale SSH enabled", sm.remote_set_public_ssh(object(), "off")[0] is True)
+
+def _rc_iface(server, cmd, **kw):
+    if "status --json" in cmd:
+        return ('{"BackendState":"Running"}', "", 0)
+    if "debug prefs" in cmd:
+        return ('{"RunSSH": false}', "", 0)
+    if "ufw status" in cmd:
+        return ("Anywhere on tailscale0     ALLOW IN    Anywhere", "", 0)  # tailscale0 allowed
+    return ("", "", 0)
+sm.run_command = _rc_iface
+check("ssh off ALLOWED when tailscale0 allowed in UFW", sm.remote_set_public_ssh(object(), "off")[0] is True)
+
+sm.run_command = lambda *a, **k: ("", "", 0)
+check("ssh allow is never lockout-guarded", sm.remote_set_public_ssh(object(), "allow")[0] is True)
+check("ssh limit is never lockout-guarded", sm.remote_set_public_ssh(object(), "limit")[0] is True)
+sm.run_command = _orig_rc
+
 # ── secret encryption round-trip ──────────────────────────────
 _pre = {p for p in (config.CRED_KEY_FILE, config.SECRET_FILE, config.CONFIG_FILE)
         if os.path.exists(p)}
