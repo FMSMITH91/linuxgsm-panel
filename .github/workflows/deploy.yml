@@ -25,6 +25,10 @@ on:
     workflows: [ "CI" ]
     types: [ completed ]
 
+# Least-privilege GITHUB_TOKEN: deploy reads the repo and SSHes to the host; no write needed.
+permissions:
+  contents: read
+
 concurrency:
   group: deploy
   cancel-in-progress: false

@@ -1,0 +1,50 @@
+name: Scorecard
+
+# OpenSSF Scorecard — audits this repo's supply-chain / security posture (token
+# permissions, branch protection, pinned dependencies, dangerous workflow patterns, etc.)
+# and publishes a public report + badge.
+#
+# It intentionally does NOT upload findings into GitHub code scanning, to keep the
+# code-scanning alert list focused on actual code issues. View the report via the badge
+# in the README, or at https://scorecard.dev/viewer/?uri=github.com/FMSMITH91/linuxgsm-panel
+# (the SARIF is also kept as a build artifact on each run).
+
+on:
+  branch_protection_rule:
+  schedule:
+    - cron: "25 7 * * 1"   # weekly, Monday 07:25 UTC
+  push:
+    branches: [ main ]
+
+# Read-only at the top level; the analysis job adds only the one write scope it needs.
+permissions: read-all
+
+concurrency:
+  group: scorecard
+  cancel-in-progress: false
+
+jobs:
+  analysis:
+    name: Scorecard analysis
+    runs-on: ubuntu-latest
+    permissions:
+      id-token: write   # publish results to the OpenSSF API (this is what powers the badge)
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Run Scorecard
+        uses: ossf/scorecard-action@v2
+        with:
+          results_file: results.sarif
+          results_format: sarif
+          publish_results: true
+
+      - name: Upload results (build artifact, not code scanning)
+        uses: actions/upload-artifact@v4
+        with:
+          name: scorecard-results
+          path: results.sarif
+          retention-days: 5
