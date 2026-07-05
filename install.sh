@@ -372,6 +372,25 @@ if [ "${PANEL_NO_UPGRADE:-0}" != "1" ] && command -v apt-get >/dev/null 2>&1; th
     ok "System packages up to date"
 fi
 
+# ── Automatic OS security updates (FRESH install only). A panel meant to run
+# unattended should keep itself patched, so enable unattended-upgrades by default.
+# Idempotent and non-fatal — a problem here must never block the install, and it
+# can always be toggled later from the panel's Diagnostics page.
+if command -v apt-get >/dev/null 2>&1; then
+    AU_SUDO=""; [ "$(id -u)" -ne 0 ] && AU_SUDO="sudo"
+    info "Enabling automatic security updates (unattended-upgrades)…"
+    export DEBIAN_FRONTEND=noninteractive
+    ${AU_SUDO} apt-get install -y unattended-upgrades >/dev/null 2>&1 \
+        || warn "Could not install unattended-upgrades — enable it later from the panel."
+    if dpkg -s unattended-upgrades >/dev/null 2>&1; then
+        # Turn on APT's daily package-list refresh + unattended security upgrade.
+        printf 'APT::Periodic::Update-Package-Lists "1";\nAPT::Periodic::Unattended-Upgrade "1";\n' \
+            | ${AU_SUDO} tee /etc/apt/apt.conf.d/20auto-upgrades >/dev/null \
+            && ok "Automatic security updates enabled" \
+            || warn "Could not enable automatic security updates — turn it on later from the panel."
+    fi
+fi
+
 info "[1/4] Fetching the panel into ${PANEL_DIR}…"
 fetch_code
 

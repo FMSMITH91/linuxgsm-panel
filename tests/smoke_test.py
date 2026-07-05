@@ -361,7 +361,7 @@ try:
             _full = False
             try:
                 cur.execute("CREATE TABLE IF NOT EXISTS _fulltest (b TEXT)")
-                for _i in range(2000):
+                for _ in range(2000):
                     cur.execute("INSERT INTO _fulltest (b) VALUES (?)", ("x" * 900,))
                 raw.commit()
             except Exception:
