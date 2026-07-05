@@ -349,7 +349,7 @@ def create_app():
 
 
     # Store mount prefix in app config so templates can access it
-    app.config["_MOUNT_PREFIX"] = mount = cfg.get("tailscale_mount", "/")
+    app.config["_MOUNT_PREFIX"] = cfg.get("tailscale_mount", "/")
 
     # Initialize extensions
     init_auth(app)
@@ -576,7 +576,6 @@ def register_routes(app):
             db.session.add(state)
             db.session.commit()
 
-        current_step = state.step
         data = json.loads(state.data or "{}")
         cfg = load_config()
 
@@ -2670,7 +2669,7 @@ def register_routes(app):
         """Kick off a fresh-VPS bootstrap in the background: updates, essential
         packages, UFW, SSH hardening, swap, fail2ban, LinuxGSM user, then reboot.
         Returns immediately; poll /bootstrap-status for live progress."""
-        remote = get_remote(remote_id)
+        get_remote(remote_id)   # enforce access (403 if not permitted); bootstrap uses remote_id
         data = request.get_json(silent=True) or {}
         opts = {
             "set_timezone": data.get("timezone", "UTC"),
@@ -2856,7 +2855,7 @@ def register_routes(app):
             status = get_server_status(remote, gs)
             gs.status = status
             db.session.commit()
-        except Exception as e:
+        except Exception:
             status = "error"
 
         # Try to get player counts

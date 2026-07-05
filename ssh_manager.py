@@ -1597,10 +1597,8 @@ def _wait_for_reboot(server, on_wait=None, down_timeout=150, up_timeout=480):
 
     # Phase 1: wait for it to actually go down (confirms the reboot began).
     t0 = time.time()
-    went_down = False
     while time.time() - t0 < down_timeout:
         if not _up():
-            went_down = True
             break
         if on_wait:
             on_wait("Waiting for server to go down for reboot…")
@@ -1724,12 +1722,14 @@ def remote_bootstrap_vps(server, set_timezone="UTC", enable_ufw=True, install_lg
 
     # ── 5. Configure UFW ──
     if enable_ufw:
-        emit("Configuring UFW firewall (deny incoming, allow + rate-limit SSH)")
-        # Allow SSH first so we never lock ourselves out.
-        run_command(server, "ufw allow 22/tcp 2>&1", timeout=15, sudo=True)
+        emit("Configuring UFW firewall (deny incoming, rate-limit SSH)")
+        # Rate-limit SSH by default — `ufw limit` allows SSH (so we never lock ourselves
+        # out) while throttling brute-force sources. We do NOT add a plain `allow 22`:
+        # a lower-numbered allow rule would match first and shadow the limit, leaving SSH
+        # effectively unthrottled.
+        run_command(server, "ufw limit 22/tcp 2>&1", timeout=15, sudo=True)
         run_command(server, "ufw default deny incoming 2>&1", timeout=15, sudo=True)
         run_command(server, "ufw default allow outgoing 2>&1", timeout=15, sudo=True)
-        run_command(server, "ufw limit 22/tcp 2>&1", timeout=15, sudo=True)
         run_command(server, "ufw --force enable 2>&1", timeout=15, sudo=True)
 
     # ── 6. Basic SSH hardening ──

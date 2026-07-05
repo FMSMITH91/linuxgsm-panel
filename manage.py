@@ -5,10 +5,11 @@ Use this when you're locked out of the web UI — a forgotten password, or you
 deactivated / deleted your only superadmin. It operates directly on the panel
 database, so it needs no login.
 
-Run from the panel directory with its venv:
+Run from the panel directory with its venv (or just `bash reset-password.sh`):
 
     ./venv/bin/python manage.py list-users
-    ./venv/bin/python manage.py reset-password <username>
+    ./venv/bin/python manage.py reset-password            # the sole superadmin
+    ./venv/bin/python manage.py reset-password <username> # a specific user
     ./venv/bin/python manage.py create-admin <username>
     ./venv/bin/python manage.py promote <username>
     ./venv/bin/python manage.py activate <username>
@@ -59,13 +60,30 @@ def cmd_list_users(args):
             print("  %-20s [%s]  groups: %s" % (u.username, ", ".join(flags), groups))
 
 
+def _resolve_username(username):
+    """Pick the target user. If a name is given, use it. If omitted, default to the
+    ONLY superadmin — so a locked-out single-admin install just runs `reset-password`
+    with no arguments. Refuse to guess when there are several."""
+    if username:
+        return username
+    admins = User.query.filter_by(is_superadmin=True).order_by(User.username).all()
+    if len(admins) == 1:
+        print("Resetting the only superadmin: %s" % admins[0].username)
+        return admins[0].username
+    if not admins:
+        sys.exit("No superadmin exists yet. Create one:  manage.py create-admin <name>")
+    sys.exit("There are several superadmins — say which one:\n  " +
+             "\n  ".join(a.username for a in admins))
+
+
 def cmd_reset_password(args):
     with app.app_context():
-        u = _require_user(args.username)
+        username = _resolve_username(args.username)
+        u = _require_user(username)
         u.password_hash = auth.hash_password(_read_password(args))
         u.auth_epoch = (u.auth_epoch or 0) + 1   # revoke existing sessions
         db.session.commit()
-        print("Password reset for '%s' (existing sessions revoked)." % args.username)
+        print("Password reset for '%s' (existing sessions revoked)." % username)
 
 
 def cmd_create_admin(args):
@@ -108,8 +126,8 @@ def main():
 
     sub.add_parser("list-users", help="List all users").set_defaults(func=cmd_list_users)
 
-    sp = sub.add_parser("reset-password", help="Reset a user's password")
-    sp.add_argument("username")
+    sp = sub.add_parser("reset-password", help="Reset a user's password (defaults to the only superadmin)")
+    sp.add_argument("username", nargs="?", help="Omit to reset the sole superadmin")
     sp.add_argument("--password", help="Set non-interactively (avoid — ends up in shell history)")
     sp.set_defaults(func=cmd_reset_password)
 

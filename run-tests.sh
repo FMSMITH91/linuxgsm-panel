@@ -11,11 +11,11 @@ PY="${PYTHON:-python3}"
 echo "== byte-compile (syntax errors) =="
 "$PY" -m compileall -q .
 
-echo "== lint: real bugs + unused imports (undefined names, bad syntax, F401) =="
+echo "== lint: real bugs + unused imports/vars (undefined names, bad syntax, F401, F841) =="
 if "$PY" -m flake8 --version >/dev/null 2>&1; then
-    # F401 (unused import) is included so dead imports are caught here rather than
-    # later by CodeQL's py/unused-import in the Security tab.
-    "$PY" -m flake8 --select=E9,F63,F7,F82,F401 --show-source --statistics .
+    # F401 (unused import) + F841 (unused local var) are included so dead code is caught
+    # here rather than later by CodeQL / Codacy in the Security tab.
+    "$PY" -m flake8 --select=E9,F63,F7,F82,F401,F841 --show-source --statistics .
 else
     echo "  (flake8 not installed — skipping)"
 fi
@@ -28,7 +28,7 @@ echo "== smoke test (boots the app; routes must not 5xx) =="
 
 if command -v shellcheck >/dev/null 2>&1; then
     echo "== shellcheck (shell scripts) =="
-    shellcheck -S warning install.sh uninstall.sh run-tests.sh
+    shellcheck -S warning install.sh uninstall.sh run-tests.sh reset-password.sh
 else
     echo "== shellcheck (not installed — skipping) =="
 fi

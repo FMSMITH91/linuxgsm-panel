@@ -508,6 +508,9 @@ echo ""
 warn "The panel binds 0.0.0.0:${PORT}. For real use, put it behind Tailscale Serve (HTTPS,"
 warn "no open port needed) from the setup wizard — don't leave the admin panel open to the internet."
 echo ""
+echo -e "${CYAN}Forgot the admin password?${NC} Reset it from the server over SSH (no web login needed):"
+echo -e "    cd ${PANEL_DIR} && bash reset-password.sh"
+echo ""
 
 # ── Always reboot after a fresh install (unless the OS upgrade was skipped). Rebooting
 #    once now bakes in the OS update AND proves the box comes back cleanly with everything
