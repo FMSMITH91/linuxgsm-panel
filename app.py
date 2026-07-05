@@ -2635,8 +2635,9 @@ def register_routes(app):
             except Exception:
                 db.session.rollback()
             return jsonify({"success": True, **stats})
-        except Exception as e:
-            return jsonify({"success": False, "error": str(e)}), 500
+        except Exception:
+            # Unreachable host is expected — 200 with an error field, not a console 500.
+            return jsonify({"success": False, "error": _log_and_generic("remote live-stats failed")}), 200
 
     @app.route("/api/remote/<int:remote_id>/uptime")
     @login_required
@@ -3120,7 +3121,10 @@ def register_routes(app):
         try:
             m = server_live_metrics(remote, gs.short_name, gs.port)
         except Exception:
-            return jsonify({"error": _log_and_generic("server stats failed")}), 500
+            # An unreachable host is an expected condition, not a server error — return
+            # 200 with an error field (the poller handles it) so it doesn't log a console
+            # 500 on every poll of an offline server.
+            return jsonify({"error": _log_and_generic("server stats failed")}), 200
 
         status = "online" if (m.get("port_open") or m.get("game_procs")) else "offline"
         changed = False
