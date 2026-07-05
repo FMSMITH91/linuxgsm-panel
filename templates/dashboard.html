@@ -157,7 +157,16 @@ function refreshStatus() {
         var conn = document.getElementById('connect-' + s.id);
         if (conn && s.connect && conn.dataset.addr !== s.connect) {
           conn.dataset.addr = s.connect;
-          conn.innerHTML = '<code class="text-info" style="font-size:.78rem;cursor:pointer;" title="Click to copy" onclick="copyAddr(\'' + s.connect + '\')">' + s.connect + '</code>';
+          // Build via textContent + a listener (NOT innerHTML with the raw address) so a
+          // hostile connect address can't inject HTML/script into the dashboard.
+          conn.textContent = '';
+          var code = document.createElement('code');
+          code.className = 'text-info';
+          code.style.cssText = 'font-size:.78rem;cursor:pointer;';
+          code.title = 'Click to copy';
+          code.textContent = s.connect;
+          code.addEventListener('click', function(){ copyAddr(s.connect); });
+          conn.appendChild(code);
         }
       });
     })

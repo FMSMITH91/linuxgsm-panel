@@ -220,6 +220,13 @@ class PrefixMiddleware:
 GAME_TYPE_RE = re.compile(r"^[a-z0-9]{1,32}$")
 INSTANCE_NAME_RE = re.compile(r"^[a-z][a-z0-9_-]{0,30}$")   # valid Linux username shape
 LINUX_USER_RE = re.compile(r"^[a-z_][a-z0-9_-]{0,31}$")     # for linuxgsm_user / ssh user
+# Hostname / IPv4 / IPv6 / Tailscale MagicDNS — no HTML or shell metacharacters, so a
+# stored host can't inject markup where it's shown (e.g. the dashboard connect address).
+HOST_RE = re.compile(r"^[A-Za-z0-9._:\[\]-]{1,255}$")
+# Free-text display labels (e.g. a remote's name): allow spaces/punctuation but reject the
+# characters that would let a stored label break out of HTML or a JS string when it's shown
+# in the UI's client-side rendering. Defense-in-depth alongside output encoding.
+SAFE_LABEL_RE = re.compile(r"""^[^<>"'`\r\n\\]{1,120}$""")
 
 # Lightweight in-memory login throttle (single-process eventlet app). Blocks an IP
 # after too many failed logins within the window — a basic brute-force speed bump.
@@ -1531,8 +1538,8 @@ def register_routes(app):
         lgsm_user = request.form.get("lgsm_user", "").strip()
         is_local = request.form.get("is_local") == "1"
 
-        if not name:
-            flash("Name is required.", "danger")
+        if not name or not SAFE_LABEL_RE.match(name):
+            flash("Name is required and cannot contain < > \" ' ` or backslashes.", "danger")
             return redirect(url_for("manage_remotes"))
 
         # SECURITY: these reach `sudo -u <user>` / SSH command construction — validate
@@ -1542,6 +1549,9 @@ def register_routes(app):
             return redirect(url_for("manage_remotes"))
         if ssh_user and not LINUX_USER_RE.match(ssh_user):
             flash("SSH user must be a valid Linux username.", "danger")
+            return redirect(url_for("manage_remotes"))
+        if not is_local and (not host or not HOST_RE.match(host)):
+            flash("Host must be a valid hostname or IP address.", "danger")
             return redirect(url_for("manage_remotes"))
 
         if is_local:
@@ -1609,8 +1619,15 @@ def register_routes(app):
         if new_lgsm and not LINUX_USER_RE.match(new_lgsm):
             flash("LinuxGSM user must be a valid Linux username.", "danger")
             return redirect(url_for("manage_remotes"))
-        remote.name = request.form.get("name", remote.name)
+        new_name = request.form.get("name", remote.name)
+        if new_name and not SAFE_LABEL_RE.match(new_name):
+            flash("Name cannot contain < > \" ' ` or backslashes.", "danger")
+            return redirect(url_for("manage_remotes"))
+        remote.name = new_name
         new_host = request.form.get("host", remote.host)
+        if not remote.is_local and new_host and not HOST_RE.match(new_host):
+            flash("Host must be a valid hostname or IP address.", "danger")
+            return redirect(url_for("manage_remotes"))
         new_port = _int_or(request.form.get("ssh_port"), remote.port)
         # Repointing to a different host/port means the pinned key no longer applies —
         # clear it so the new target is re-pinned (TOFU) instead of failing as a mismatch.
