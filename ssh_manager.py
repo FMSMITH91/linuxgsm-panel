@@ -8,7 +8,6 @@ import socket
 import subprocess
 import threading
 import time
-from datetime import datetime
 from pathlib import Path
 
 import paramiko
@@ -118,11 +117,11 @@ def get_connection(server, force_new=False):
                     transport.send_ignore()
                     return conn
             except Exception:
-                pass
+                pass  # cached client is dead → fall through and reconnect
             try:
                 conn.close()
             except Exception:
-                pass
+                pass  # already closed / unusable; nothing to clean up
             del _connections[key]
 
     client = paramiko.SSHClient()
@@ -207,7 +206,7 @@ def _persist_host_key(server, keystr):
             from models import db
             db.session.rollback()
         except Exception:
-            pass
+            pass  # no usable session; the key just pins on the next connection instead
 
 
 def close_connection(server):

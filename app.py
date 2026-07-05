@@ -2123,7 +2123,7 @@ def register_routes(app):
         try:
             close_connection(remote)   # drop any cached client → reconnect fresh
         except Exception:
-            pass
+            pass  # no cached connection to drop, or it's already gone
         log_action(current_user, "retrust_hostkey", target=remote.name,
                    detail="cleared pinned host key (%s)" % (old_fp or "none"))
         return jsonify({"success": True,
