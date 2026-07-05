@@ -159,6 +159,9 @@
       padding: 2rem 2.5rem;
       min-height: 100vh;
     }
+    /* No sidebar when logged out (e.g. the login page) — don't reserve its width,
+       or the centered content sits 250px to the right (looks off-centre). */
+    .main-content-full { margin-left: 0; }
 
     /* ── CARDS ── */
     .card {
@@ -528,7 +531,7 @@
 </div>
 
 <!-- Main content -->
-<main class="main-content">
+<main class="main-content{% if not current_user.is_authenticated %} main-content-full{% endif %}">
   {% block content %}{% endblock %}
 </main>
 
