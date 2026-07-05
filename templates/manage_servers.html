@@ -68,7 +68,7 @@
           <tr>
             <th>Name</th>
             <th>Type</th>
-            <th>Port</th>
+            <th>Connect Address</th>
             <th>Status</th>
             <th>Host</th>
             <th>Actions</th>
@@ -83,7 +83,15 @@
               <span class="text-secondary d-block" style="font-size:.7rem;">{{ gs.short_name }}</span>
             </td>
             <td>{{ gs.game_display or gs.game_type }}</td>
-            <td><code>{{ gs.port }}</code></td>
+            <td>
+              {% set addr = gs.remote.display_host if gs.remote else '' %}
+              {% if addr %}
+              <code class="text-info copy-addr" style="cursor:pointer;" title="Click to copy"
+                    data-copy="{{ addr }}:{{ gs.port }}">{{ addr }}:{{ gs.port }}</code>
+              {% else %}
+              <code class="text-secondary" title="This host's public IP isn't known yet">:{{ gs.port }}</code>
+              {% endif %}
+            </td>
             <td>
               <span data-server-id="{{ gs.id }}"
                     class="badge {% if gs.installed %}bg-success{% elif installing %}bg-info text-dark{% else %}bg-warning text-dark{% endif %}">
@@ -136,6 +144,12 @@
 
 {% block scripts %}
 <script>
+// Click a connect address to copy the full ip:port.
+document.addEventListener('click', function(ev){
+  var el = ev.target.closest('.copy-addr'); if(!el) return;
+  if(window.copyText) window.copyText(el.getAttribute('data-copy'), 'Copied ' + el.getAttribute('data-copy'));
+});
+
 // Auto-populate a sensible default port when the game changes. This is only a
 // hint — after install the panel detects LinuxGSM's real port(s) and opens all of
 // them, so it self-corrects even for games not listed here.
