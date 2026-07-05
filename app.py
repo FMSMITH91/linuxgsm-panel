@@ -2253,9 +2253,10 @@ def register_routes(app):
             data = dict(so.panel_update_status(force=force))
             data["boot_id"] = _BOOT_ID   # flips only when the panel process restarts
             return jsonify(data)
-        except Exception as e:
+        except Exception:
             return jsonify({"git": False, "update_available": False, "boot_id": _BOOT_ID,
-                            "current_version": so.panel_version(), "message": str(e)})
+                            "current_version": so.panel_version(),
+                            "message": _log_and_generic("panel update-status failed")})
 
     @app.route("/api/panel/update", methods=["POST"])
     @login_required
@@ -2273,8 +2274,9 @@ def register_routes(app):
         """Live progress of an in-flight self-update (the [1/5]…[5/5] steps + result)."""
         try:
             return jsonify(so.panel_update_log())
-        except Exception as e:
-            return jsonify({"exists": False, "lines": [], "error": str(e)})
+        except Exception:
+            return jsonify({"exists": False, "lines": [],
+                            "error": _log_and_generic("panel update-log failed")})
 
     @app.route("/api/server-management/os-update-check")
     @login_required

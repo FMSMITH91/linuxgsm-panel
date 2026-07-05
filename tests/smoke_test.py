@@ -154,6 +154,11 @@ try:
           hz.status_code == 200 and (hz.get_json() or {}).get("status") == "ok",
           "got %d" % hz.status_code)
 
+    # Panel self-update live-log endpoint renders (no update running -> exists:false).
+    ul = c.get("/api/panel/update-log")
+    check("GET /api/panel/update-log -> 200 (superadmin)",
+          ul.status_code == 200 and "lines" in (ul.get_json() or {}), "got %d" % ul.status_code)
+
     # ── Privilege-escalation guards: a delegated admin (MANAGE_USERS + MANAGE_GROUPS,
     #    NOT superadmin) must not be able to become / create a superadmin. ──
     dc = client_as(deleg_id)
