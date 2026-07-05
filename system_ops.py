@@ -200,7 +200,7 @@ def tailscale_ssh_status():
     try:
         running = json.loads(st).get("BackendState") == "Running"
     except Exception:
-        pass
+        running = False   # unparseable status → treat as not running (fail safe)
     out, _, prc = _run("tailscale debug prefs 2>/dev/null", timeout=10)
     if prc == 0 and out:
         try:
