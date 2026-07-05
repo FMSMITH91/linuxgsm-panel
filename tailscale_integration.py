@@ -91,6 +91,17 @@ def ensure_operator():
     return True, user
 
 
+def allow_tailscale_ufw():
+    """Best-effort: allow the Tailscale interface through UFW on the panel host, so the node
+    stays reachable over the tailnet. A common lockout is UFW active but tailscale0 not
+    allowed — then Serve/SSH over the tailnet silently can't reach the node. Idempotent."""
+    try:
+        import system_ops
+        return system_ops.ufw_allow_tailscale()
+    except Exception as e:
+        return False, str(e)
+
+
 def _run_ts_json(args, timeout=5):
     """Run tailscale with --json flag and parse output."""
     out, err, rc = _run_ts(args + ["--json"], timeout=timeout)
@@ -306,8 +317,10 @@ def setup_tailscale_serve(port=5000, mount="/", funnel=False, backend_scheme="ht
     mount = mount or "/"
 
     # serve/funnel is privileged — make the panel user the Tailscale operator first so it
-    # works (and status reads back) without root.
+    # works (and status reads back) without root. Also make sure the tailnet interface is
+    # allowed through UFW, or the Serve URL would be unreachable on a firewalled host.
     ensure_operator()
+    allow_tailscale_ufw()
 
     # Two things vary by Tailscale version/setup: (1) the CLI grammar changed — newer
     # (~1.58+) takes the target as the only positional with a --set-path mount, older took
@@ -373,7 +386,8 @@ def tailscale_up_local(enable_ssh=True):
         return True, line
     info = get_tailscale_info(force_refresh=True)
     if info.running or line == "ALREADY_CONNECTED":
-        ensure_operator()   # so the panel user can manage Serve without root afterward
+        ensure_operator()      # so the panel user can manage Serve without root afterward
+        allow_tailscale_ufw()  # keep the node reachable over the tailnet if UFW is active
         return True, "ALREADY_CONNECTED"
     return False, (r.stderr or r.stdout or "Could not get a login link — is Tailscale installed on this host?")
 
