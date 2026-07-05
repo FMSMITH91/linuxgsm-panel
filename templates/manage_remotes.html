@@ -349,6 +349,7 @@ function refreshLocalStats() {
     .then(r => r.json())
     .then(data => {
       var u = data.uptime;
+      if (!u) return;   // no fresh stats -> keep the values already on screen
       var updateEl = function(id, val) {
         var el = document.getElementById(id);
         if (el) el.textContent = val;

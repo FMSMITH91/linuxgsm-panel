@@ -280,6 +280,7 @@ function appendConsole(text) {
   if (stick) stickConsole();       // only auto-follow if they were at the bottom
 }
 
+var _consoleSig = null;
 function refreshConsole(forceScroll) {
   // The periodic backup refresh wipes + rebuilds the console; don't yank the user
   // to the bottom unless they were already there (or it's the initial load).
@@ -287,16 +288,19 @@ function refreshConsole(forceScroll) {
   fetch(MOUNT + '/api/console/' + serverId)
     .then(r => r.json())
     .then(data => {
+      var lines = (data.lines || []).filter(function(l) { return l.trim(); });
+      // Only rebuild when the log actually changed — otherwise leave the console exactly as
+      // it is (no 30s wipe-and-rebuild flicker while a server sits idle).
+      var sig = lines.length + ' ' + (lines[lines.length - 1] || '');
+      if (sig === _consoleSig && !forceScroll) return;
+      _consoleSig = sig;
       consoleEl.innerHTML = '';
-      if (data.lines) {
-        data.lines.forEach(function(line) {
-          if (!line.trim()) return;  // skip blank log lines
-          var div = document.createElement('div');
-          div.className = 'console-line';
-          div.textContent = line;
-          consoleEl.appendChild(div);
-        });
-      }
+      lines.forEach(function(line) {
+        var div = document.createElement('div');
+        div.className = 'console-line';
+        div.textContent = line;
+        consoleEl.appendChild(div);
+      });
       if (stick) stickConsole();
     })
     .catch(() => {});
