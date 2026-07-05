@@ -1,0 +1,55 @@
+name: Lighthouse
+
+# Boot a throwaway panel and run Lighthouse against the login page (same base.html as
+# every page, so it catches CSS/layout-shift regressions). CLS is a hard failure; the
+# category scores are advisory warnings (they wobble run-to-run). Separate from CI, so
+# it never blocks the deploy pipeline.
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  lighthouse:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
+
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
+        with:
+          python-version: "3.11"
+
+      - name: Install dependencies
+        run: python -m pip install --quiet -r requirements.txt
+
+      - name: Start a throwaway panel (HTTP) and wait for it
+        run: |
+          python tools/lhci_serve.py > panel.log 2>&1 &
+          echo $! > panel.pid
+          for i in $(seq 1 40); do
+            curl -sf http://127.0.0.1:5000/healthz && { echo; echo "panel up"; break; }
+            sleep 1
+          done
+          curl -sf http://127.0.0.1:5000/healthz > /dev/null || { echo "panel failed to start"; cat panel.log; exit 1; }
+
+      - name: Run Lighthouse CI
+        uses: treosh/lighthouse-ci-action@3e7e23fb74242897f95c0ba9cabad3d0227b9b18 # v12.6.2
+        with:
+          urls: |
+            http://127.0.0.1:5000/login
+          configPath: .lighthouserc.json
+          uploadArtifacts: true
+
+      - name: Stop the panel
+        if: always()
+        run: kill "$(cat panel.pid)" 2>/dev/null || true
