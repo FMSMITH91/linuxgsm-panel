@@ -32,21 +32,33 @@ DEFAULT_CONFIG = {
 }
 
 
+# Cache the parsed config keyed by the file's (mtime, size). load_config() is called
+# a few times per request; this avoids re-reading + re-parsing the JSON every time,
+# while an mtime/size change (from save_config or an external edit) transparently
+# refreshes it. Values are scalars and each call returns a fresh dict, so callers
+# can't mutate the cache.
+_cfg_cache = {"key": None, "data": {}}
+
+
 def load_config():
     config = dict(DEFAULT_CONFIG)
-    if CONFIG_FILE.exists():
-        try:
+    try:
+        st = CONFIG_FILE.stat()
+        key = (st.st_mtime_ns, st.st_size)
+        if _cfg_cache["key"] != key:
             with open(CONFIG_FILE) as f:
-                loaded = json.load(f)
-                config.update(loaded)
-        except (json.JSONDecodeError, OSError):
-            pass
+                _cfg_cache["data"] = json.load(f)
+            _cfg_cache["key"] = key
+        config.update(_cfg_cache["data"])
+    except (json.JSONDecodeError, OSError):
+        _cfg_cache["key"] = None   # missing/unreadable → defaults, and drop stale cache
     return config
 
 
 def save_config(config):
     with open(CONFIG_FILE, "w") as f:
         json.dump(config, f, indent=2)
+    _cfg_cache["key"] = None   # force a re-read on the next load_config()
 
 
 def _chmod600(path):

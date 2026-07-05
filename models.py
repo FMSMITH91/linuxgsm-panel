@@ -245,8 +245,8 @@ class GameServer(db.Model):
 class AuditLog(db.Model):
     id = db.Column(db.Integer, primary_key=True)
     user_id = db.Column(db.Integer, db.ForeignKey("user.id"), nullable=True)
-    username = db.Column(db.String(80), default="")
-    action = db.Column(db.String(128), nullable=False)
+    username = db.Column(db.String(80), default="", index=True)
+    action = db.Column(db.String(128), nullable=False, index=True)
     target = db.Column(db.String(255), default="")
     detail = db.Column(db.Text, default="")
     ip_address = db.Column(db.String(45), default="")
@@ -281,6 +281,13 @@ def _run_light_migrations():
     for (table, col), ddl in wanted.items():
         if table in existing and col not in existing[table]:
             db.session.execute(text(ddl))
+    # Indexes the audit-log filters/sort rely on. create_all() adds these on a fresh DB,
+    # but never to an already-existing table — so add them here (idempotent) to keep the
+    # /logs page fast as the table grows. Names match SQLAlchemy's ix_<table>_<col>.
+    if "audit_log" in existing:
+        for col in ("action", "username"):
+            db.session.execute(text(
+                f"CREATE INDEX IF NOT EXISTS ix_audit_log_{col} ON audit_log ({col})"))
     db.session.commit()
 
 

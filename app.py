@@ -1803,9 +1803,9 @@ def register_routes(app):
             user.totp_secret = None
             log_action(current_user, "2fa_reset", target=user.username)
 
-        # Update groups
+        # Update groups (one lookup per id, not two)
         group_ids = {int(gid) for gid in request.form.getlist("groups")}
-        user.groups = [Group.query.get(gid) for gid in group_ids if Group.query.get(gid)]
+        user.groups = [g for g in (Group.query.get(gid) for gid in group_ids) if g]
 
         db.session.commit()
         log_action(current_user, "edit_user", target=user.username)
