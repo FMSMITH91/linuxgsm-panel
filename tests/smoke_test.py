@@ -346,6 +346,83 @@ try:
         check("optimize: reports before/after sizes with a live file",
               "before" in _info and _info.get("after", 0) > 0)
 
+    # ── Scenario: the database is FULL (like a full disk) ─────────
+    # PRAGMA max_page_count caps the DB size on this one connection, so the next
+    # write hits SQLITE_FULL ("database or disk is full") — exactly what a full
+    # filesystem produces. We prove the failure is CLEAN (a caught error, not
+    # corruption or a crash) and that writes RESUME once space is freed.
+    with app.app_context():
+        raw = db.engine.raw_connection()
+        try:
+            cur = raw.cursor()
+            cur.execute("PRAGMA page_count")
+            _pc = cur.fetchone()[0]
+            cur.execute("PRAGMA max_page_count = %d" % _pc)   # no room to grow
+            _full = False
+            try:
+                cur.execute("CREATE TABLE IF NOT EXISTS _fulltest (b TEXT)")
+                for _i in range(2000):
+                    cur.execute("INSERT INTO _fulltest (b) VALUES (?)", ("x" * 900,))
+                raw.commit()
+            except Exception:
+                _full = True
+                raw.rollback()
+            check("db-full: a write fails cleanly (SQLITE_FULL) when the DB is full", _full)
+
+            # Free the 'disk' and prove the SAME connection writes again — clean recovery.
+            cur.execute("PRAGMA max_page_count = 1073741823")
+            _recovered = False
+            try:
+                cur.execute("CREATE TABLE IF NOT EXISTS _fulltest (b TEXT)")
+                cur.execute("INSERT INTO _fulltest (b) VALUES ('ok')")
+                raw.commit()
+                _recovered = True
+            except Exception:
+                raw.rollback()
+            check("db-full: writes succeed again after space is freed (no corruption)", _recovered)
+            try:
+                cur.execute("DROP TABLE IF EXISTS _fulltest")
+                raw.commit()
+            except Exception:
+                raw.rollback()
+        finally:
+            raw.close()
+    # The process must still serve requests after a full-DB episode (Flask isolates
+    # the failed request; the scoped session rolls back at teardown).
+    _hz = app.test_client().get("/healthz")
+    check("db-full: panel still serves requests afterward (healthz ok)", _hz.status_code == 200)
+
+    # ── Scenario: updating from a FAR-BEHIND old version ──────────
+    # Simulate a database created by an old release that predates a column, then run
+    # the same light migrations the update runs. They must re-add what's missing,
+    # preserve existing rows, and be safe to run repeatedly — so an install can jump
+    # forward any number of versions without breaking.
+    with app.app_context():
+        from sqlalchemy import text as _t, inspect as _inspect
+        from models import _run_light_migrations
+
+        def _ucols():
+            return {col["name"] for col in _inspect(db.engine).get_columns("user")}
+
+        _dropped = False
+        try:
+            db.session.execute(_t("ALTER TABLE user DROP COLUMN backup_codes"))
+            db.session.commit()
+            _dropped = True
+        except Exception:
+            db.session.rollback()   # SQLite too old to DROP COLUMN — idempotency check still runs
+        if _dropped:
+            check("migrate: legacy DB is missing a newer column", "backup_codes" not in _ucols())
+            _n0 = db.session.execute(_t("SELECT COUNT(*) FROM user")).scalar()
+            _run_light_migrations()                       # <- the update path
+            check("migrate: update re-adds the missing column", "backup_codes" in _ucols())
+            _n1 = db.session.execute(_t("SELECT COUNT(*) FROM user")).scalar()
+            check("migrate: existing rows preserved through the migration", _n0 == _n1)
+        _run_light_migrations()
+        _run_light_migrations()   # re-running must be a safe no-op (far-behind upgrades re-apply)
+        check("migrate: repeated migrations stay a safe no-op",
+              "backup_codes" in _ucols() and "totp_secret" in _ucols())
+
 finally:
     passed = sum(1 for ok, _, _ in results if ok)
     for ok, name, detail in results:
