@@ -63,10 +63,10 @@
     <div class="d-flex flex-wrap align-items-center justify-content-between gap-2 mb-3">
       <div class="d-flex align-items-center gap-2">
         <span class="text-secondary small">Connect:</span>
-        <span class="connect-pill">
+        <span class="connect-pill" onclick="copyConnect()" style="cursor:pointer;" title="Click to copy address">
           <i class="bi bi-controller text-info"></i>
           <span id="connect-addr" class="text-info">resolving…</span>
-          <button class="btn btn-sm btn-link p-0 text-secondary" onclick="copyConnect()" title="Copy address"><i class="bi bi-clipboard"></i></button>
+          <i class="bi bi-clipboard text-secondary"></i>
         </span>
       </div>
       <span class="text-secondary" style="font-size:.7rem;"><i class="bi bi-broadcast"></i> live · updates every few seconds</span>
@@ -186,7 +186,8 @@
           </tr>
           <tr>
             <td class="text-secondary">Connect</td>
-            <td class="text-end"><code class="text-info">{{ (public_host ~ ':' ~ server.port) if public_host else (':' ~ server.port) }}</code></td>
+            <td class="text-end">{% set caddr = (public_host ~ ':' ~ server.port) if public_host else (':' ~ server.port) %}
+              <code class="text-info{% if public_host %} copy-addr{% endif %}"{% if public_host %} style="cursor:pointer;" title="Click to copy" data-copy="{{ caddr }}"{% endif %}>{{ caddr }}</code></td>
           </tr>
         </table>
       </div>
@@ -394,8 +395,15 @@ function toggleDailyRestart(el) {
 // ── Live stats + chart ───────────────────────────────────────
 var connectAddr = '';
 function copyConnect() {
-  if (connectAddr) window.copyText(connectAddr, 'Copied');
+  var addr = connectAddr || (document.getElementById('connect-addr') || {}).textContent || '';
+  addr = addr.trim();
+  if (addr && addr !== 'resolving…' && addr !== 'unknown') window.copyText(addr, 'Copied ' + addr);
 }
+// Sidebar "Connect" code cell — click anywhere on it to copy ip:port.
+document.addEventListener('click', function(ev){
+  var el = ev.target.closest('.copy-addr'); if(!el) return;
+  window.copyText(el.getAttribute('data-copy'), 'Copied ' + el.getAttribute('data-copy'));
+});
 function fmtGB(b) { return (b / 1073741824).toFixed(1) + ' GB'; }
 function fmtUptime(s) {
   var d = Math.floor(s/86400), h = Math.floor(s%86400/3600), m = Math.floor(s%3600/60);
