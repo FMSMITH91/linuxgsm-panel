@@ -2101,6 +2101,7 @@ def register_routes(app):
         return jsonify({
             "installed": info.installed,
             "running": info.running,
+            "backend_state": info.backend_state,
             "version": info.version,
             "hostname": info.hostname,
             "dns_name": info.dns_name,

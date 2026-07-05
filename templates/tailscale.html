@@ -29,41 +29,41 @@
     <div id="ts-install-out" class="small mt-3"></div>
   </div>
 </div>
-<script>
-(function(){
-  var MOUNT = window.MOUNT || '';
-  var out = document.getElementById('ts-install-out');
-  var btn = document.getElementById('ts-install-btn');
-  function esc(s){ return window.escapeHtml ? window.escapeHtml(s) : String(s == null ? '' : s); }
-  function doUp(){
-    out.innerHTML = '<i class="bi bi-arrow-repeat"></i> Starting Tailscale…';
-    fetch(MOUNT + '/api/tailscale/up', {method:'POST'}).then(function(r){return r.json();}).then(function(d){
-      if(!d.success){ out.innerHTML = '<span class="text-danger">' + esc(d.message || 'Failed') + '</span>'; btn.disabled = false; return; }
-      if(d.connected){ out.innerHTML = '<span class="text-success"><i class="bi bi-check-circle"></i> Connected!</span>'; setTimeout(function(){ location.reload(); }, 900); return; }
-      out.innerHTML = '<div class="alert alert-info py-2 small mb-0 text-start">'
-        + '<strong>1.</strong> Open this link and approve this machine in your Tailscale account:<br>'
-        + '<a href="' + esc(d.auth_url) + '" target="_blank" rel="noopener" style="word-break:break-all;">' + esc(d.auth_url) + '</a>'
-        + ' <button type="button" class="btn btn-sm btn-outline-secondary py-0" onclick="navigator.clipboard.writeText(this.dataset.u)" data-u="' + esc(d.auth_url) + '"><i class="bi bi-clipboard"></i></button><br>'
-        + '<strong>2.</strong> <span id="ts-wait"><i class="bi bi-hourglass-split"></i> Waiting for you to authorize…</span></div>';
-      var t = setInterval(function(){
-        fetch(MOUNT + '/api/tailscale').then(function(r){return r.json();}).then(function(s){
-          if(s.running){ clearInterval(t); location.reload(); }
-        }).catch(function(){});
-      }, 4000);
-    }).catch(function(){ out.innerHTML = '<span class="text-danger">Request failed.</span>'; btn.disabled = false; });
-  }
-  btn.addEventListener('click', function(){
-    btn.disabled = true;
-    out.innerHTML = '<i class="bi bi-arrow-repeat"></i> Installing Tailscale on the panel host… (up to a minute)';
-    fetch(MOUNT + '/api/tailscale/install', {method:'POST'}).then(function(r){return r.json();}).then(function(d){
-      if(!d.success){ out.innerHTML = '<span class="text-danger">Install failed: ' + esc((d.log || '').slice(-200)) + '</span>'; btn.disabled = false; return; }
-      out.innerHTML = '<span class="text-success">Installed.</span> Starting…';
-      doUp();
-    }).catch(function(){ out.innerHTML = '<span class="text-danger">Install request failed.</span>'; btn.disabled = false; });
-  });
-})();
-</script>
 {% else %}
+
+{% if not info.running %}
+<!-- Installed but not connected (NeedsLogin / Stopped): let the user link this machine -->
+<div class="card mb-3" style="border-color: var(--bs-warning, #f0ad4e);">
+  <div class="card-body">
+    <div class="d-flex align-items-start gap-3">
+      <span style="font-size:2rem;line-height:1;">🔗</span>
+      <div class="flex-grow-1">
+        <h2 class="h5 mb-1">
+          {% if info.backend_state == 'NeedsLogin' %}
+            Tailscale is installed, but this machine isn’t linked yet
+          {% else %}
+            Tailscale is installed, but the daemon isn’t connected
+          {% endif %}
+        </h2>
+        <p class="text-secondary small mb-2">
+          {% if info.backend_state == 'NeedsLogin' %}
+            You started Tailscale but never approved this machine on your tailnet. Click below to
+            get a fresh login link, approve it in your Tailscale account, and the panel will finish
+            connecting automatically — no need to hunt for the link from the install step.
+          {% else %}
+            Bring Tailscale up and link this machine to your tailnet. You’ll get a login link to
+            approve in your Tailscale account.
+          {% endif %}
+        </p>
+        <button type="button" class="btn btn-primary" id="ts-connect-btn">
+          <i class="bi bi-box-arrow-in-right"></i> Link this machine to Tailscale
+        </button>
+        <div id="ts-connect-out" class="small mt-3"></div>
+      </div>
+    </div>
+  </div>
+</div>
+{% endif %}
 
 <!-- Status Card -->
 <div class="row mb-3">
@@ -72,6 +72,8 @@
       <div class="h4 mb-1">
         {% if info.running %}
           <span class="status-dot status-online" style="width:12px;height:12px;"></span> Online
+        {% elif info.backend_state == 'NeedsLogin' %}
+          <span class="status-dot status-offline" style="width:12px;height:12px;"></span> Needs Login
         {% else %}
           <span class="status-dot status-offline" style="width:12px;height:12px;"></span> Offline
         {% endif %}
@@ -343,6 +345,54 @@
 
 {% block scripts %}
 <script>
+function tsEsc(s){ return window.escapeHtml ? window.escapeHtml(s) : String(s == null ? '' : s); }
+
+// Shared "bring Tailscale up + show the login link" flow. Used both by the first-time
+// install button (not-installed state) and the "Link this machine" button (installed but
+// NeedsLogin/Stopped) so a user who skipped the link step can always get a fresh link.
+function tsUp(outEl, btn){
+  outEl.innerHTML = '<i class="bi bi-arrow-repeat"></i> Starting Tailscale…';
+  fetch(MOUNT + '/api/tailscale/up', {method:'POST'}).then(function(r){return r.json();}).then(function(d){
+    if(!d.success){ outEl.innerHTML = '<span class="text-danger">' + tsEsc(d.message || 'Failed') + '</span>'; if(btn) btn.disabled = false; return; }
+    if(d.connected){ outEl.innerHTML = '<span class="text-success"><i class="bi bi-check-circle"></i> Connected!</span>'; setTimeout(function(){ location.reload(); }, 900); return; }
+    outEl.innerHTML = '<div class="alert alert-info py-2 small mb-0 text-start">'
+      + '<strong>1.</strong> Open this link and approve this machine in your Tailscale account:<br>'
+      + '<a href="' + tsEsc(d.auth_url) + '" target="_blank" rel="noopener" style="word-break:break-all;">' + tsEsc(d.auth_url) + '</a>'
+      + ' <button type="button" class="btn btn-sm btn-outline-secondary py-0" onclick="navigator.clipboard.writeText(this.dataset.u)" data-u="' + tsEsc(d.auth_url) + '"><i class="bi bi-clipboard"></i></button><br>'
+      + '<strong>2.</strong> <span id="ts-wait"><i class="bi bi-hourglass-split"></i> Waiting for you to authorize…</span></div>';
+    var t = setInterval(function(){
+      fetch(MOUNT + '/api/tailscale').then(function(r){return r.json();}).then(function(s){
+        if(s.running){ clearInterval(t); location.reload(); }
+      }).catch(function(){});
+    }, 4000);
+  }).catch(function(){ outEl.innerHTML = '<span class="text-danger">Request failed.</span>'; if(btn) btn.disabled = false; });
+}
+
+// First-time install button: install Tailscale on the panel host, then bring it up.
+var tsInstallBtn = document.getElementById('ts-install-btn');
+if (tsInstallBtn) {
+  var tsInstallOut = document.getElementById('ts-install-out');
+  tsInstallBtn.addEventListener('click', function(){
+    tsInstallBtn.disabled = true;
+    tsInstallOut.innerHTML = '<i class="bi bi-arrow-repeat"></i> Installing Tailscale on the panel host… (up to a minute)';
+    fetch(MOUNT + '/api/tailscale/install', {method:'POST'}).then(function(r){return r.json();}).then(function(d){
+      if(!d.success){ tsInstallOut.innerHTML = '<span class="text-danger">Install failed: ' + tsEsc((d.log || '').slice(-200)) + '</span>'; tsInstallBtn.disabled = false; return; }
+      tsInstallOut.innerHTML = '<span class="text-success">Installed.</span> Starting…';
+      tsUp(tsInstallOut, tsInstallBtn);
+    }).catch(function(){ tsInstallOut.innerHTML = '<span class="text-danger">Install request failed.</span>'; tsInstallBtn.disabled = false; });
+  });
+}
+
+// "Link this machine" button: Tailscale already installed but not authorized — just bring it up.
+var tsConnectBtn = document.getElementById('ts-connect-btn');
+if (tsConnectBtn) {
+  var tsConnectOut = document.getElementById('ts-connect-out');
+  tsConnectBtn.addEventListener('click', function(){
+    tsConnectBtn.disabled = true;
+    tsUp(tsConnectOut, tsConnectBtn);
+  });
+}
+
 function checkPeer() {
   var host = document.getElementById('peer-host').value.trim();
   if (!host) return;
@@ -422,9 +472,12 @@ function disableServe() {
   });
 }
 
-// Enter key triggers peer check
-document.getElementById('peer-host').addEventListener('keydown', function(e) {
-  if (e.key === 'Enter') checkPeer();
-});
+// Enter key triggers peer check (the peer-host input only exists when Tailscale is installed)
+var tsPeerHost = document.getElementById('peer-host');
+if (tsPeerHost) {
+  tsPeerHost.addEventListener('keydown', function(e) {
+    if (e.key === 'Enter') checkPeer();
+  });
+}
 </script>
 {% endblock %}

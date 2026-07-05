@@ -593,6 +593,14 @@ _tsinfo = _tsi._get_tailscale_info()
 check("tailscale: NeedsLogin state parses without crashing", _tsinfo.installed and not _tsinfo.running)
 check("tailscale: null Peer -> no peers (no None.items())", _tsinfo.peers == [])
 check("tailscale: null TailscaleIPs -> empty list", _tsinfo.tailscale_ips == [])
+check("tailscale: backend_state captured as NeedsLogin", _tsinfo.backend_state == "NeedsLogin")
+# The bind suggestion must point the user at linking (not "no Tailscale detected") in NeedsLogin,
+# so the page can offer a clear "Link this machine" action instead of looking un-installed.
+_tsi._cache["info"] = None  # bypass the 15s cache so suggest_best_bind re-reads our mock
+_tssug = _tsi.suggest_best_bind(5000)
+check("tailscale: NeedsLogin suggestion tells user to link, not 'not detected'",
+      "not linked" in _tssug["description"].lower())
+_tsi._cache["info"] = None
 
 # ── cleanup: remove key/config files this run created ─────────
 for p in (config.CRED_KEY_FILE, config.SECRET_FILE, config.CONFIG_FILE):

@@ -18,6 +18,7 @@ class TailscaleInfo:
     """All discovered Tailstate information for this node."""
     installed: bool = False
     running: bool = False
+    backend_state: str = ""  # Tailscale BackendState: Running, NeedsLogin, Stopped, NoState…
     tailscale_ips: list = field(default_factory=list)
     hostname: str = ""
     dns_name: str = ""
@@ -128,7 +129,8 @@ def _get_tailscale_info() -> TailscaleInfo:
     # Get status
     status = _run_ts_json(["status"])
     if status:
-        info.running = status.get("BackendState") == "Running"
+        info.backend_state = status.get("BackendState") or ""
+        info.running = info.backend_state == "Running"
         # NOTE: `.get(key, default)` only uses the default when the key is ABSENT. When
         # Tailscale is installed but not yet authenticated (BackendState "NeedsLogin",
         # after `tailscale up` prints a login URL the user hasn't clicked), the JSON has
@@ -166,6 +168,7 @@ def _get_tailscale_info() -> TailscaleInfo:
         # Fallback: simpler check
         out, _, rc = _run_ts(["status"])
         info.running = rc == 0 and "stopped" not in out.lower()
+        info.backend_state = "Running" if info.running else "Stopped"
 
         # Parse hostname from status
         if info.running:
@@ -448,6 +451,17 @@ def suggest_best_bind(port=5000):
             "port": port,
             "url": f"http://{ts_ip}:{port}" if ts_ip else f"http://<tailscale-ip>:{port}",
             "description": f"Bind to Tailscale IP {ts_ip} and access directly",
+        }
+    elif info.installed and info.backend_state == "NeedsLogin":
+        # Installed but never authorized — the recommendation is to finish linking, not to
+        # open the panel to all interfaces.
+        return {
+            "method": "direct",
+            "bind_host": "0.0.0.0",
+            "port": port,
+            "url": f"http://<your-server-ip>:{port}",
+            "description": ("Tailscale is installed but not linked yet. Link this machine above "
+                            "to reach the panel privately over your tailnet."),
         }
     else:
         return {
