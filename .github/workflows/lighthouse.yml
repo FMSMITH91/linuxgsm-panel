@@ -42,13 +42,6 @@ jobs:
           done
           curl -sf http://127.0.0.1:5000/healthz > /dev/null || { echo "panel failed to start"; cat panel.log; exit 1; }
 
-      - name: Debug — what does the CI panel actually serve?
-        run: |
-          echo "--- panel.log (seed output / errors) ---"; cat panel.log || true
-          echo "--- GET /login (status/redirect) ---"; curl -s -o /dev/null -w "http=%{http_code} redirect=%{redirect_url}\n" http://127.0.0.1:5000/login
-          echo "--- /login markers ---"; curl -sL http://127.0.0.1:5000/login | grep -oE 'id="username"|name="username"|/setup|Setup|Sign in' | sort -u || echo "(no markers found)"
-          echo "--- GET / (auth redirect target) ---"; curl -s -o /dev/null -w "http=%{http_code} redirect=%{redirect_url}\n" http://127.0.0.1:5000/
-
       - name: Run Lighthouse CI
         # URL + puppeteer login live in .lighthouserc.json so we audit the real
         # (authenticated) dashboard, not just the login page.
