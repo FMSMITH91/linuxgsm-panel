@@ -77,7 +77,11 @@ def _run_local(cmd, timeout=30, sudo=False):
     elif cmd.strip().startswith("sudo") or "sudo -u" in cmd:
         full_cmd = cmd  # already escalated
     else:
-        full_cmd = f"sudo {cmd}"
+        # Wrap the WHOLE command in `sudo bash -c` (like the remote path) so pipes and
+        # redirects run under root too. `sudo {cmd}` would only elevate the first command
+        # in a pipe — e.g. `sudo yes | ufw delete N` runs ufw as the panel user ("need to
+        # be root").
+        full_cmd = f"sudo bash -c {_quote(cmd)}"
 
     def _do():
         try:

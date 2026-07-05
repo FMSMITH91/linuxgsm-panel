@@ -132,6 +132,13 @@ _install_jobs = {}
 _install_lock = threading.Lock()
 
 
+# A token unique to THIS panel process — it changes only when the panel actually restarts.
+# The self-update UI polls for this to flip, rather than the git SHA: install.sh moves HEAD
+# the instant it resets, before the new process is serving, so a SHA change doesn't mean the
+# update is live — a boot-id change does.
+_BOOT_ID = "%.6f" % time.time()
+
+
 def _prune_jobs(registry, lock, max_age=7200):
     """Drop job entries whose last update is older than max_age seconds (default 2h).
 
@@ -2108,9 +2115,11 @@ def register_routes(app):
         """Is the LinuxGSM Panel itself behind its GitHub repo? (git-based check)"""
         force = request.args.get("force") in ("1", "true", "yes")
         try:
-            return jsonify(so.panel_update_status(force=force))
+            data = dict(so.panel_update_status(force=force))
+            data["boot_id"] = _BOOT_ID   # flips only when the panel process restarts
+            return jsonify(data)
         except Exception as e:
-            return jsonify({"git": False, "update_available": False,
+            return jsonify({"git": False, "update_available": False, "boot_id": _BOOT_ID,
                             "current_version": so.panel_version(), "message": str(e)})
 
     @app.route("/api/panel/update", methods=["POST"])

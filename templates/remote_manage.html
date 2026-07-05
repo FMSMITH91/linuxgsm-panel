@@ -448,20 +448,21 @@ function doPanelUpdate(){
   var msg=document.getElementById('pu-msg'); var btn=document.getElementById('pu-update-btn');
   msg.innerHTML='<span class="text-secondary"><i class="bi bi-arrow-repeat"></i> Updating &amp; restarting…</span>';
   btn.disabled=true;
-  // Remember the version we're on NOW. During a restart the OLD panel keeps answering, so
-  // "reachable again" isn't "updated" — we only reload once we actually see a NEW version
-  // live (current_sha changed). Until then the existing status stays on screen.
+  // Remember THIS process's boot_id. We reload only once the panel has actually restarted
+  // (boot_id changed) — NOT when the git SHA/version changes, because install.sh moves HEAD
+  // before the new process is serving (the old process would still render the old version).
+  // Until the restart lands, the existing status just stays on screen.
   fetch(MOUNT+'/api/panel/update-status').then(function(r){return r.json();}).then(function(before){
-    var beforeSha=(before&&before.current_sha)||'';
+    var beforeBoot=(before&&before.boot_id)||'';
     fetch(MOUNT+'/api/panel/update',{method:'POST'}).then(function(r){return r.json();}).then(function(d){
       if(!d.success){ msg.innerHTML='<span class="text-danger">'+(window.escapeHtml?escapeHtml(d.message||'Update failed'):(d.message||'Update failed'))+'</span>'; btn.disabled=false; return; }
       msg.innerHTML='<span class="text-secondary"><i class="bi bi-arrow-repeat"></i> Applying update &amp; restarting… this refreshes itself once the new version is live.</span>';
       var tries=0; var iv=setInterval(function(){ tries++;
         fetch(MOUNT+'/api/panel/update-status').then(function(r){ return r.ok?r.json():null; }).then(function(s){
           if(!s) return;                                        // restarting/unreachable -> keep old status, keep waiting
-          if(s.current_sha && beforeSha && s.current_sha!==beforeSha){ clearInterval(iv); location.reload(); }
+          if(s.boot_id && beforeBoot && s.boot_id!==beforeBoot){ clearInterval(iv); location.reload(); }
         }).catch(function(){});                                 // unreachable during restart -> keep waiting (old data stays)
-        if(tries>60){ clearInterval(iv); msg.innerHTML='<span class="text-warning">Update is taking a while — reload the page to confirm.</span>'; }
+        if(tries>80){ clearInterval(iv); msg.innerHTML='<span class="text-warning">Update is taking a while — reload the page to confirm.</span>'; }
       },3000);
     }).catch(function(){ msg.innerHTML='<span class="text-danger">Update request failed.</span>'; btn.disabled=false; });
   }).catch(function(){ msg.innerHTML='<span class="text-danger">Couldn\'t read the current version.</span>'; btn.disabled=false; });

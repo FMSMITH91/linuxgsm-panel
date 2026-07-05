@@ -144,20 +144,16 @@ def ufw_allow_tailscale(ts_interface=None):
     if not ts_interface:
         return False, "Could not detect Tailscale interface. Is Tailscale running?"
 
-    # Allow incoming on tailscale interface
+    # Allow INCOMING on the tailscale interface — that's the "way in" (reachability). We do
+    # NOT add a separate `allow out` rule: UFW's default outgoing policy is allow, so it's
+    # redundant, and a second rule just shows up as a confusing duplicate `tailscale0` row
+    # in the firewall list. (This matches the remote bootstrap, which adds `in` only.)
     out1, err1, rc1 = _run(
         f"ufw allow in on {ts_interface} 2>&1", timeout=15, sudo=True
     )
-    # Allow outgoing on tailscale interface
-    out2, err2, rc2 = _run(
-        f"ufw allow out on {ts_interface} 2>&1", timeout=15, sudo=True
-    )
-
-    if rc1 == 0 and rc2 == 0:
-        return True, f"UFW rules added for interface '{ts_interface}'"
-    else:
-        errors = [e for e in [err1, err2] if e]
-        return False, "; ".join(errors)
+    if rc1 == 0:
+        return True, f"UFW rule added for interface '{ts_interface}'"
+    return False, err1 or out1 or "Failed to add UFW rule"
 
 
 def detect_tailscale_interface():
