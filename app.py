@@ -370,12 +370,13 @@ def create_app():
     # (blocks loading scripts from arbitrary external origins). CDN = jsdelivr only.
     # CDNs actually loaded by the UI: jsdelivr (Bootstrap, icons, Chart.js) and
     # cdnjs (the Socket.IO client for the live console).
+    # All assets are self-hosted, so the CSP can stay same-origin (no external CDNs).
     _CSP = (
         "default-src 'self'; "
-        "script-src 'self' 'unsafe-inline' https://cdn.jsdelivr.net https://cdnjs.cloudflare.com; "
-        "style-src 'self' 'unsafe-inline' https://cdn.jsdelivr.net; "
+        "script-src 'self' 'unsafe-inline'; "
+        "style-src 'self' 'unsafe-inline'; "
         "img-src 'self' data:; "
-        "font-src 'self' https://cdn.jsdelivr.net data:; "
+        "font-src 'self' data:; "
         "connect-src 'self'; "
         "frame-ancestors 'self'; base-uri 'self'; object-src 'none'"
     )
