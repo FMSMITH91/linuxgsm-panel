@@ -40,6 +40,7 @@ app = create_app()
 app.config["WTF_CSRF_ENABLED"] = False   # test client posts without a browser-issued token
 app.config["SESSION_PROTECTION"] = None  # tests inject the session directly (no IP/UA fingerprint)
 app.config["SESSION_COOKIE_SECURE"] = False  # test client talks http://; Secure cookies wouldn't round-trip
+app.config["REMEMBER_COOKIE_SECURE"] = False
 results = []
 
 
@@ -160,6 +161,39 @@ try:
           mrc.get("/api/remote/%d/firewall" % remote2_id).status_code == 403)
     check("MANAGE_REMOTES user: non-granted remote reboot -> 403",
           mrc.post("/api/remote/%d/reboot" % remote2_id).status_code == 403)
+
+    # ── Cookie-reuse defense: a session/remember cookie captured before logout must
+    #    NOT work after logout. We log in for real (so we get genuine signed session +
+    #    remember_token cookies), copy them the way a thief would, log out, then replay
+    #    the copied cookies against a fresh client. They must be rejected. This proves
+    #    logout invalidates cookies server-side (epoch bump), not just in the browser. ──
+    victim = app.test_client()
+    lr = victim.post("/login", data={"username": "smoke_admin",
+                                     "password": "Str0ng!passw0rd", "remember": "on"})
+    check("real login succeeds (302 to app)", lr.status_code == 302, "got %d" % lr.status_code)
+    # Rebuild the raw Cookie header from the login response's Set-Cookie(s) — this is
+    # exactly what an attacker who sniffed/exfiltrated the cookies would hold.
+    set_cookies = lr.headers.getlist("Set-Cookie")
+    stolen = "; ".join(sc.split(";", 1)[0] for sc in set_cookies if "=" in sc.split(";", 1)[0])
+    check("login issued a session cookie", "session=" in stolen, stolen[:40])
+    check("login issued a remember_token cookie", "remember_token=" in stolen, stolen[:60])
+
+    # Sanity: the stolen cookies ARE a valid bearer token *before* logout.
+    thief_before = app.test_client()
+    check("stolen cookie works BEFORE logout (200)",
+          thief_before.get("/", headers={"Cookie": stolen}).status_code == 200)
+
+    # Log the victim out, then replay the pre-logout cookies from a fresh client.
+    victim.post("/logout")
+    thief_after = app.test_client()
+    reused = thief_after.get("/", headers={"Cookie": stolen})
+    check("REUSE BLOCKED: stolen cookie rejected AFTER logout (not 200)",
+          reused.status_code != 200, "got %d — cookie still valid!" % reused.status_code)
+    # And the remember_token alone (the long-lived one) must also be dead.
+    remember_only = "; ".join(p for p in stolen.split("; ") if p.startswith("remember_token="))
+    reused_rt = app.test_client().get("/", headers={"Cookie": remember_only})
+    check("REUSE BLOCKED: stolen remember_token rejected after logout (not 200)",
+          reused_rt.status_code != 200, "got %d" % reused_rt.status_code)
 
 finally:
     passed = sum(1 for ok, _, _ in results if ok)

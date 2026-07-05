@@ -823,6 +823,17 @@ def register_routes(app):
     def logout():
         # POST-only so it can't be triggered cross-site via a GET (e.g. <img src=…/logout>).
         log_action(current_user, "logout", detail="User logged out")
+        # Invalidate the cookies SERVER-SIDE, not just in the browser. Flask sessions (and
+        # the "remember me" token) are signed client-side cookies with no server store, so
+        # clearing the client's copy alone wouldn't stop a copy captured earlier from being
+        # replayed after logout. Bumping the epoch makes every outstanding session AND
+        # remember cookie for this account fail the user_loader's epoch check — so a logged-
+        # out cookie can't be reused. (This also signs the account out on other devices.)
+        try:
+            current_user.auth_epoch = (current_user.auth_epoch or 0) + 1
+            db.session.commit()
+        except Exception:
+            db.session.rollback()
         logout_user()
         flash("You have been logged out.", "info")
         return redirect("/login")
