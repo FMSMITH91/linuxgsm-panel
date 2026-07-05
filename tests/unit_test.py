@@ -356,6 +356,61 @@ _mc = _GS(game_type="mc", port=25565)
 eq("connect: minecraft -> no URI", _mc.connect_uri("1.2.3.4"), "")
 eq("connect: no host -> no URI", _steam.connect_uri(""), "")
 
+# ── panel file integrity + repair (git-based) ─────────────────
+import system_ops as _so
+_so._is_git_checkout = lambda: True
+_so._git = lambda args, timeout=45: (
+    ("abc1234\n", "", 0) if list(args) == ["rev-parse", "--short", "HEAD"]
+    else ("M\tapp.py\nD\ttemplates/base.html\n", "", 0) if list(args) == ["diff", "--name-status", "HEAD"]
+    else ("", "", 0))
+_intg = _so.panel_integrity()
+check("integrity: reports git checkout", _intg["git"] is True)
+eq("integrity: counts tampered files", _intg["count"], 2)
+check("integrity: not clean when files differ", _intg["clean"] is False)
+check("integrity: parses modified status",
+      {"path": "app.py", "status": "modified"} in _intg["modified"])
+check("integrity: parses deleted status",
+      {"path": "templates/base.html", "status": "deleted"} in _intg["modified"])
+
+# Repair must ONLY ever check out files git itself reported as changed — a caller
+# can't smuggle in an arbitrary path (path-traversal / arbitrary checkout).
+_co = {}
+def _repair_git(args, timeout=45):
+    a = list(args)
+    if a[:1] == ["checkout"]:
+        _co["args"] = a
+        return ("", "", 0)
+    if a == ["rev-parse", "--short", "HEAD"]:
+        return ("abc1234\n", "", 0)
+    if a == ["diff", "--name-status", "HEAD"]:
+        return ("M\tapp.py\n", "", 0)
+    return ("", "", 0)
+_so._git = _repair_git
+_ok, _msg, _restored = _so.panel_repair(["app.py", "/etc/passwd", "../../secret"])
+check("repair: restores only git-reported files", _restored == ["app.py"])
+check("repair: rejects paths not in tampered set",
+      "/etc/passwd" not in _co.get("args", []) and "../../secret" not in _co.get("args", []))
+check("repair: uses HEAD + '--' path guard", _co["args"][:3] == ["checkout", "HEAD", "--"])
+
+_so._git = lambda args, timeout=45: (
+    ("abc1234\n", "", 0) if list(args) == ["rev-parse", "--short", "HEAD"] else ("", "", 0))
+_ok2, _msg2, _ = _so.panel_repair()
+check("repair: no-op when nothing is tampered", _ok2 is True and "Nothing to repair" in _msg2)
+
+# Fail-safe: if git itself errors we must NOT claim the files are verified-clean.
+_so._git = lambda args, timeout=45: (
+    ("abc1234\n", "", 0) if list(args) == ["rev-parse", "--short", "HEAD"] else ("", "fatal", 1))
+_intgf = _so.panel_integrity()
+check("integrity: fail-safe when git errors (not verified)",
+      _intgf.get("verified") is False and _intgf["clean"] is True)
+_okf, _msgf, _ = _so.panel_repair()
+check("repair: refuses when integrity can't be verified", _okf is False)
+
+_so._is_git_checkout = lambda: False
+check("integrity: handles non-git checkout", _so.panel_integrity()["git"] is False)
+_ok3, _msg3, _ = _so.panel_repair()
+check("repair: refuses when not a git checkout", _ok3 is False)
+
 # ── cleanup: remove key/config files this run created ─────────
 for p in (config.CRED_KEY_FILE, config.SECRET_FILE, config.CONFIG_FILE):
     if p not in _pre and os.path.exists(p):

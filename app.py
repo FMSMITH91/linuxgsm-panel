@@ -2286,6 +2286,50 @@ def register_routes(app):
             return jsonify({"exists": False, "lines": [],
                             "error": _log_and_generic("panel update-log failed")})
 
+    @app.route("/api/panel/diagnostics")
+    @login_required
+    @permission_required(SUPER_ADMIN)
+    def api_panel_diagnostics():
+        """Fast local self-check of the panel's own health (integrity, DB, keys,
+        disk, cert, service). No SSH/network."""
+        try:
+            return jsonify(so.panel_diagnostics())
+        except Exception:
+            return jsonify({"checks": [], "summary": "fail", "ok": 0, "warn": 0, "fail": 1,
+                            "error": _log_and_generic("panel diagnostics failed")})
+
+    @app.route("/api/panel/integrity")
+    @login_required
+    @permission_required(SUPER_ADMIN)
+    def api_panel_integrity():
+        """Which of the panel's own git-tracked files have been modified/deleted."""
+        try:
+            return jsonify(so.panel_integrity())
+        except Exception:
+            return jsonify({"git": False, "clean": True, "modified": [], "count": 0,
+                            "current_sha": "",
+                            "error": _log_and_generic("panel integrity check failed")})
+
+    @app.route("/api/panel/repair", methods=["POST"])
+    @login_required
+    @permission_required(SUPER_ADMIN)
+    def api_panel_repair():
+        """Restore tampered panel files from git. Body: {"paths": [...]} to restore
+        specific reported files, or {} / omitted to restore all of them."""
+        data = request.get_json(silent=True) or {}
+        paths = data.get("paths")
+        if paths is not None and not isinstance(paths, list):
+            paths = None
+        try:
+            ok, msg, restored = so.panel_repair(paths or None)
+            if ok and restored:
+                log_action(current_user, "panel_repair", target="panel",
+                           detail=", ".join(restored)[:500], success=True)
+            return jsonify({"success": ok, "message": msg, "restored": restored})
+        except Exception:
+            return jsonify({"success": False,
+                            "message": _log_and_generic("panel repair failed")}), 500
+
     @app.route("/api/server-management/os-update-check")
     @login_required
     @permission_required(SUPER_ADMIN)

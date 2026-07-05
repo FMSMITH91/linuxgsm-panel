@@ -556,3 +556,177 @@ def panel_update_log(max_bytes=20000):
     data = _re.sub(r"\x1b\[[0-9;]*m", "", data)          # strip ANSI colour codes
     lines = [ln.rstrip() for ln in data.splitlines() if ln.strip()]
     return {"exists": True, "lines": lines}
+
+
+# ─── Panel self-diagnostics + file integrity/repair ────────────
+# Integrity and repair lean entirely on git: a deployed panel is a checkout, so
+# any TRACKED file that differs from HEAD is unexpected (nobody edits panel code
+# in place), and `git checkout -- <file>` restores it byte-for-byte from the
+# installed version. User data lives in data/, which is gitignored, so none of
+# this ever sees or touches the database, secrets or config.
+
+_STATUS_WORD = {"M": "modified", "D": "deleted", "A": "added",
+                "R": "renamed", "T": "type-changed", "C": "copied"}
+
+
+def panel_integrity():
+    """Which of the panel's own git-tracked files have been modified or deleted
+    since install. Returns {git, clean, current_sha, modified:[{path,status}],
+    count, message}."""
+    if not _is_git_checkout():
+        return {"git": False, "clean": True, "verified": False, "modified": [], "count": 0,
+                "current_sha": "",
+                "message": "The panel isn't a git checkout, so file integrity "
+                           "can't be verified or repaired here."}
+    sha, _, _ = _git(["rev-parse", "--short", "HEAD"])
+    # --name-status vs HEAD catches both staged and unstaged tampering; data/ is
+    # gitignored so user data never shows up.
+    out, _, rc = _git(["diff", "--name-status", "HEAD"])
+    if rc != 0:
+        # git itself failed (not installed, unreadable repo, …). Fail SAFE: never
+        # claim the files are verified-clean when we couldn't actually run the check.
+        return {"git": True, "clean": True, "verified": False, "modified": [], "count": 0,
+                "current_sha": sha.strip(),
+                "message": "Couldn't run git to verify file integrity."}
+    modified = []
+    for line in out.splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        parts = line.split("\t")
+        status = _STATUS_WORD.get(parts[0][:1], "changed")
+        modified.append({"path": parts[-1], "status": status})
+    modified.sort(key=lambda x: x["path"])
+    return {"git": True, "clean": not modified, "verified": True, "current_sha": sha.strip(),
+            "modified": modified, "count": len(modified)}
+
+
+def panel_repair(paths=None):
+    """Restore tampered panel files from git (`git checkout HEAD -- <file>`).
+
+    Only files that panel_integrity() reports as modified/deleted are eligible,
+    so this can never be used to check out arbitrary paths — each requested path
+    must exactly match one git itself reported as changed. paths=None restores
+    them all. Returns (ok, message, restored:list)."""
+    info = panel_integrity()
+    if not info["git"]:
+        return False, info.get("message", "Not a git checkout."), []
+    if not info.get("verified", True):
+        return False, "Couldn't verify file integrity with git — repair is unavailable right now.", []
+    tampered = {m["path"] for m in info["modified"]}
+    if not tampered:
+        return True, "Nothing to repair — all panel files match the installed version.", []
+    if paths:
+        targets = sorted(p for p in paths if p in tampered)
+        if not targets:
+            return False, "None of the requested files are currently modified.", []
+    else:
+        targets = sorted(tampered)
+    # Restore from HEAD. The explicit '--' plus paths validated against git's own
+    # changed-file list means git only ever touches files in that set.
+    _, err, rc = _git(["checkout", "HEAD", "--"] + targets)
+    if rc != 0:
+        _log.error("panel repair failed: %s", (err or "").strip())
+        return False, "Repair failed — see the panel logs.", []
+    return True, ("Restored %d file(s) from the installed version. Restart the panel "
+                  "to load the corrected code." % len(targets)), targets
+
+
+def panel_diagnostics():
+    """A fast, local self-check of the panel's own health: file integrity, data
+    dir, database, encryption keys, config, disk space, TLS cert and service
+    unit. No SSH/network. Returns {checks:[{name,level,detail}], summary, counts}."""
+    import shutil
+    import config as _cfg
+    from datetime import datetime, timezone
+    checks = []
+
+    def add(name, level, detail):
+        checks.append({"name": name, "level": level, "detail": detail})
+
+    # 1. file integrity (git)
+    integ = panel_integrity()
+    if not integ["git"]:
+        add("File integrity", "warn", integ["message"])
+    elif not integ.get("verified", True):
+        add("File integrity", "warn", integ.get("message", "Couldn't verify file integrity."))
+    elif integ["clean"]:
+        add("File integrity", "ok",
+            "All panel files match the installed version (%s)." % (integ["current_sha"] or "?"))
+    else:
+        add("File integrity", "fail",
+            "%d panel file(s) differ from the installed version." % integ["count"])
+
+    # 2. data directory writable
+    data_dir = str(_cfg.DATA_DIR)
+    if os.path.isdir(data_dir) and os.access(data_dir, os.W_OK):
+        add("Data directory", "ok", "Writable.")
+    else:
+        add("Data directory", "fail", "Not writable: %s" % data_dir)
+
+    # 3. database present
+    try:
+        sz = os.path.getsize(str(_cfg.DB_PATH))
+        if sz > 0:
+            add("Database", "ok", "Present (%.1f MB)." % (sz / 1048576))
+        else:
+            add("Database", "fail", "Database file is empty.")
+    except OSError:
+        add("Database", "fail", "Database file is missing.")
+
+    # 4. encryption keys
+    missing = [p.name for p in (_cfg.SECRET_FILE, _cfg.CRED_KEY_FILE) if not p.exists()]
+    if missing:
+        add("Encryption keys", "fail", "Missing: %s" % ", ".join(missing))
+    else:
+        add("Encryption keys", "ok", "Session + credential keys present.")
+
+    # 5. config loads
+    try:
+        _cfg.load_config()
+        add("Configuration", "ok", "config.json loads cleanly.")
+    except Exception:
+        add("Configuration", "fail", "config.json could not be read or parsed.")
+
+    # 6. disk space
+    try:
+        du = shutil.disk_usage(PANEL_DIR)
+        free_gb, used_pct = du.free / (1024 ** 3), du.used / du.total * 100
+        detail = "%.1f GB free (%.0f%% used)." % (free_gb, used_pct)
+        add("Disk space", "warn" if (free_gb < 1 or used_pct > 92) else "ok", detail)
+    except OSError:
+        add("Disk space", "warn", "Couldn't read disk usage.")
+
+    # 7. TLS certificate (only when the panel terminates TLS itself)
+    cert_path = os.path.join(str(_cfg.DATA_DIR), "ssl", "cert.pem")
+    if os.path.exists(cert_path):
+        try:
+            from cryptography import x509
+            with open(cert_path, "rb") as f:
+                cert = x509.load_pem_x509_certificate(f.read())
+            na = getattr(cert, "not_valid_after_utc", None)
+            if na is None:
+                na = cert.not_valid_after.replace(tzinfo=timezone.utc)
+            days = (na - datetime.now(timezone.utc)).days
+            if days < 0:
+                add("TLS certificate", "fail", "Expired %d day(s) ago." % -days)
+            elif days < 14:
+                add("TLS certificate", "warn", "Expires in %d day(s)." % days)
+            else:
+                add("TLS certificate", "ok", "Valid for %d more day(s)." % days)
+        except Exception:
+            add("TLS certificate", "warn", "Present but couldn't be parsed.")
+
+    # 8. systemd service unit
+    user_unit = os.path.expanduser("~/.config/systemd/user/linuxgsm-panel.service")
+    system_unit = "/etc/systemd/system/linuxgsm-panel.service"
+    if os.path.exists(user_unit) or os.path.exists(system_unit):
+        add("Service", "ok", "systemd unit installed (auto-starts on boot).")
+    else:
+        add("Service", "warn", "No systemd unit found — the panel may not auto-start on boot.")
+
+    levels = [c["level"] for c in checks]
+    summary = "fail" if "fail" in levels else ("warn" if "warn" in levels else "ok")
+    return {"checks": checks, "summary": summary,
+            "ok": levels.count("ok"), "warn": levels.count("warn"),
+            "fail": levels.count("fail")}
