@@ -273,6 +273,19 @@ if [ "${IS_UPDATE}" -eq 1 ]; then
         fi
         echo ""
         ok "Update complete: ${FROM_VER} → ${TO_VER}"
+        # If the panel now answers on HTTPS, say so explicitly. Older installs were plain
+        # HTTP, and the self-signed-HTTPS default means an existing http:// bookmark would
+        # otherwise just fail with ERR_EMPTY_RESPONSE and no explanation.
+        if [ "${PANEL_SCHEME}" = "https" ]; then
+            _uport="$(panel_port)"
+            _uip="$(curl -fsS --max-time 5 https://api.ipify.org 2>/dev/null \
+                || hostname -I 2>/dev/null | awk '{print $1}')"
+            echo ""
+            echo -e "  ${YELLOW}This panel now serves HTTPS.${NC} Open it at ${CYAN}https://${_uip:-<your-ip>}:${_uport}${NC}"
+            echo -e "  ${YELLOW}An http:// address will NOT load (ERR_EMPTY_RESPONSE) — use https://.${NC}"
+            echo -e "  ${YELLOW}The built-in cert is self-signed, so you'll see a one-time \"not private\"${NC}"
+            echo -e "  ${YELLOW}warning — click Advanced → Proceed. Set up Tailscale/a domain for a trusted cert.${NC}"
+        fi
         exit 0
     fi
 
