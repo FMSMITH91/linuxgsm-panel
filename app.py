@@ -279,10 +279,12 @@ def create_app():
     # form endpoints (the JSON API additionally requires an application/json body).
     app.config["SESSION_COOKIE_HTTPONLY"] = True
     app.config["SESSION_COOKIE_SAMESITE"] = "Lax"
-    # Secure defaults ON once the panel is served over HTTPS — via Tailscale Serve, or
-    # a reverse proxy once a site_domain is configured. OFF during first-run setup over
-    # plain http://host:5000 so login still works. Override with cookie_secure.
-    _https_ready = bool(cfg.get("tailscale_setup_done", False)) or bool((cfg.get("site_domain") or "").strip())
+    # Secure defaults ON once the panel is served over HTTPS — via built-in self-signed
+    # TLS, Tailscale Serve, or a reverse proxy once a site_domain is configured. Only OFF
+    # if HTTPS is explicitly disabled AND there's no proxy in front. Override cookie_secure.
+    _https_ready = (_effective_https(cfg)
+                    or bool(cfg.get("tailscale_setup_done", False))
+                    or bool((cfg.get("site_domain") or "").strip()))
     app.config["SESSION_COOKIE_SECURE"] = cfg.get("cookie_secure", _https_ready)
 
     # "Remember me" cookie (flask-login). Cap it at a sane window (14 days) instead of
@@ -335,9 +337,13 @@ def create_app():
         resp.headers.setdefault("X-Content-Type-Options", "nosniff")
         resp.headers.setdefault("Referrer-Policy", "same-origin")
         resp.headers.setdefault("Content-Security-Policy", _CSP)
-        # Only advertise HSTS when the request actually came in over HTTPS (directly or
-        # via a proxy that sets X-Forwarded-Proto), never over plain HTTP.
-        if request.is_secure or request.headers.get("X-Forwarded-Proto", "") == "https":
+        # Advertise HSTS only for HTTPS backed by a TRUSTED cert — via a proxy that sets
+        # X-Forwarded-Proto, or Tailscale. NOT for our own self-signed TLS: HSTS turns the
+        # one-time "not private" warning into a hard, un-clickable-through block on a named
+        # host, which would lock the user out of their own panel.
+        self_tls = _effective_https(cfg)
+        if (request.headers.get("X-Forwarded-Proto", "") == "https"
+                or (request.is_secure and not self_tls)):
             resp.headers.setdefault("Strict-Transport-Security", "max-age=31536000; includeSubDomains")
         return resp
 
@@ -654,6 +660,7 @@ def register_routes(app):
                                     port=cfg.get("port", 5000),
                                     mount=mount,
                                     funnel=cfg.get("tailscale_use_funnel", False),
+                                    backend_scheme=_ts_backend_scheme(cfg),
                                 )
                                 cfg["tailscale_mount"] = mount
                                 cfg["tailscale_setup_done"] = True
@@ -726,7 +733,8 @@ def register_routes(app):
         cfg = load_config()
         port = cfg.get("port", 5000)
         mount = cfg.get("tailscale_mount", "/") or "/"
-        ok, msg = ts.setup_tailscale_serve(port=port, mount=mount, funnel=False)
+        ok, msg = ts.setup_tailscale_serve(port=port, mount=mount, funnel=False,
+                                           backend_scheme=_ts_backend_scheme(cfg))
         if not ok:
             return jsonify({"success": False, "message": msg})
         info = ts.get_tailscale_info(force_refresh=True)
@@ -1880,7 +1888,8 @@ def register_routes(app):
         port = load_config().get("port", 5000)
 
         if action == "enable":
-            success, msg = ts.setup_tailscale_serve(port=port, mount=mount, funnel=funnel)
+            success, msg = ts.setup_tailscale_serve(port=port, mount=mount, funnel=funnel,
+                                                    backend_scheme=_ts_backend_scheme(load_config()))
             if success:
                 cfg = load_config()
                 cfg["tailscale_setup_done"] = True
@@ -2182,10 +2191,18 @@ def register_routes(app):
     @login_required
     @permission_required(MANAGE_REMOTES)
     def api_remote_live_stats(remote_id):
-        """Real-time CPU, RAM, disk, uptime from the remote VPS."""
+        """Real-time CPU, RAM, disk, uptime from the remote VPS. Also persisted to the
+        remote so the card can render the last-known values instantly on the next load
+        instead of showing a spinner."""
         remote = get_remote(remote_id)
         try:
-            return jsonify({"success": True, **remote_uptime(remote)})
+            stats = remote_uptime(remote)
+            try:
+                remote.update_cached_stats(stats)
+                db.session.commit()
+            except Exception:
+                db.session.rollback()
+            return jsonify({"success": True, **stats})
         except Exception as e:
             return jsonify({"success": False, "error": str(e)}), 500
 
@@ -3011,6 +3028,31 @@ def register_routes(app):
 
 # ─── Main Entry Point ──────────────────────────────────────────
 
+def _effective_https(cfg):
+    """Should the panel terminate TLS itself with the built-in self-signed cert?
+
+    Self-signed HTTPS is the default so a fresh public install is encrypted out of the
+    box. But when Tailscale Serve or a reverse proxy is in front, THAT layer terminates
+    TLS (with a real cert) and forwards plain HTTP to us on loopback — serving HTTPS
+    underneath would just break their http:// upstream. So we stand down in those cases
+    and let them do it. This keeps existing Tailscale installs serving HTTP exactly as
+    before (zero change on upgrade)."""
+    if not cfg.get("use_https", True):
+        return False
+    if cfg.get("tailscale_setup_done", False):
+        return False
+    if cfg.get("trust_proxy", False):
+        return False
+    return True
+
+
+def _ts_backend_scheme(cfg):
+    """Loopback scheme Tailscale Serve must use to reach us — has to match how the panel
+    is actually listening right now, or Serve 502s. When we're terminating self-signed
+    TLS ourselves, Serve talks https+insecure to us; otherwise plain http."""
+    return "https+insecure" if _effective_https(cfg) else "http"
+
+
 def _ensure_self_signed_cert(cert_path, key_path, hostname):
     """Create a long-lived (10-year) self-signed cert/key if one isn't already present
     or has (nearly) expired. Used when use_https is on and there's no reverse proxy.
@@ -3066,8 +3108,9 @@ if __name__ == "__main__":
             host = ts.suggest_best_bind(port).get("bind_host") or "0.0.0.0"
         except Exception:
             host = "0.0.0.0"
+    _scheme = "https" if _effective_https(cfg) else "http"
     print(f"LinuxGSM Panel starting on {host}:{port}")
-    print(f"Open http://{host}:{port} in your browser")
+    print(f"Open {_scheme}://{host}:{port} in your browser")
 
     # Show Tailscale URL if available
     try:
@@ -3084,7 +3127,7 @@ if __name__ == "__main__":
     # Optional built-in HTTPS with a self-signed cert (for public, no-domain, no-proxy
     # setups). Browsers will warn about the self-signed cert — that's expected.
     ssl_args = {}
-    if cfg.get("use_https"):
+    if _effective_https(cfg):
         from config import DATA_DIR
         cert_path = str(DATA_DIR / "ssl" / "cert.pem")
         key_path = str(DATA_DIR / "ssl" / "key.pem")
@@ -3095,5 +3138,20 @@ if __name__ == "__main__":
             print("     Browsers will show a certificate warning; click through to proceed.")
         except Exception as e:
             print(f"  [!] Could not enable HTTPS ({e}); serving plain HTTP instead.")
+
+    # Self-heal Tailscale Serve's upstream scheme. If we flipped between self-signed HTTPS
+    # and plain HTTP since Serve was configured (e.g. HTTPS during first-run setup, then
+    # HTTP once Tailscale took over TLS on the next restart), re-point Serve at the scheme
+    # we're actually listening on now. Idempotent when already correct; best-effort.
+    if cfg.get("tailscale_setup_done"):
+        try:
+            ts.setup_tailscale_serve(
+                port=port,
+                mount=cfg.get("tailscale_mount", "/") or "/",
+                funnel=cfg.get("tailscale_use_funnel", False),
+                backend_scheme=_ts_backend_scheme(cfg),
+            )
+        except Exception:
+            pass
 
     app.socketio.run(app, host=host, port=port, debug=False, allow_unsafe_werkzeug=True, **ssl_args)

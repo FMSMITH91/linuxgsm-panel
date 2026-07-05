@@ -101,6 +101,7 @@ class RemoteServer(db.Model):
     public_ip = db.Column(db.String(45), default="")  # cached public IP (for connect address)
     is_online = db.Column(db.Boolean, default=False)
     last_seen = db.Column(db.DateTime, nullable=True)
+    stats_cache = db.Column(db.Text, default="")  # last live stats (JSON: cpu_percent/memory/disk/uptime)
     created_at = db.Column(db.DateTime, default=datetime.utcnow)
     groups = db.relationship("Group", secondary=group_servers, back_populates="servers")
     games = db.relationship("GameServer", back_populates="remote", cascade="all, delete-orphan")
@@ -119,6 +120,25 @@ class RemoteServer(db.Model):
         if self.is_local:
             return self.public_ip or ""
         return self.host
+
+    @property
+    def cached_stats(self):
+        """Last known live stats (cpu_percent/memory/disk/uptime) as a dict, or None.
+        Rendered on page load so the card shows real numbers immediately instead of a
+        spinner; the background poll only repaints when a value actually changes."""
+        if not self.stats_cache:
+            return None
+        try:
+            import json
+            return json.loads(self.stats_cache)
+        except (ValueError, TypeError):
+            return None
+
+    def update_cached_stats(self, stats):
+        """Persist a fresh stats dict, keeping only the display fields."""
+        import json
+        keep = {k: stats.get(k) for k in ("cpu_percent", "memory", "disk", "uptime")}
+        self.stats_cache = json.dumps(keep)
 
 
 class GameServer(db.Model):
@@ -208,6 +228,7 @@ def _run_light_migrations():
         ("game_server", "commands"): "ALTER TABLE game_server ADD COLUMN commands TEXT DEFAULT '[]'",
         ("game_server", "daily_restart"): "ALTER TABLE game_server ADD COLUMN daily_restart BOOLEAN DEFAULT 0",
         ("remote_server", "public_ip"): "ALTER TABLE remote_server ADD COLUMN public_ip VARCHAR(45) DEFAULT ''",
+        ("remote_server", "stats_cache"): "ALTER TABLE remote_server ADD COLUMN stats_cache TEXT DEFAULT ''",
         ("user", "totp_secret"): "ALTER TABLE user ADD COLUMN totp_secret TEXT",
         ("user", "totp_enabled"): "ALTER TABLE user ADD COLUMN totp_enabled BOOLEAN DEFAULT 0",
         ("user", "auth_epoch"): "ALTER TABLE user ADD COLUMN auth_epoch INTEGER DEFAULT 0",

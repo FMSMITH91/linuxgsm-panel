@@ -135,15 +135,20 @@ panel_port() {
 # Return the HTTP status of a URL as a 3-digit string ("000" if unreachable),
 # using curl if present and falling back to python3 (always available here) so a
 # host without curl still gets a real health check instead of a false rollback.
+# -k / unverified SSL: the panel may serve its own self-signed cert, so accept it here
+# (this is a loopback health check, not a trust decision).
 _http_code() {
     local url="$1"
     if command -v curl >/dev/null 2>&1; then
-        curl -s -o /dev/null -w '%{http_code}' --max-time 3 "${url}" 2>/dev/null || true
+        curl -k -s -o /dev/null -w '%{http_code}' --max-time 3 "${url}" 2>/dev/null || true
     else
         python3 - "${url}" 2>/dev/null <<'PY' || true
-import sys, urllib.request, urllib.error
+import sys, ssl, urllib.request, urllib.error
+ctx = ssl.create_default_context()
+ctx.check_hostname = False
+ctx.verify_mode = ssl.CERT_NONE
 try:
-    print(urllib.request.urlopen(sys.argv[1], timeout=3).getcode())
+    print(urllib.request.urlopen(sys.argv[1], timeout=3, context=ctx).getcode())
 except urllib.error.HTTPError as e:
     print(e.code)
 except Exception:
@@ -157,19 +162,25 @@ PY
 # (302 to the login/setup page is the normal healthy response). This catches the
 # common breakages: crash-on-boot, failed DB migration, missing dependency,
 # syntax error, or a template that 500s on the entry page.
+# The panel may listen on either http or self-signed https (the default for a plain
+# public install), so probe both and record which one answered in PANEL_SCHEME for the
+# post-install URL banner.
+PANEL_SCHEME="http"
 health_check() {
     local port; port="$(panel_port)"
-    local tries=30 code
+    local tries=30 code scheme
     for _ in $(seq 1 "${tries}"); do
         if [ "$(svc_active)" = "active" ]; then
-            code="$(_http_code "http://127.0.0.1:${port}/")"
-            code="${code:-000}"
-            # Healthy = a real HTTP response that isn't a server error. 000 = no
-            # connection (still booting / crashed), 5xx = the app errored on boot.
-            case "${code}" in
-                000|5??|"") : ;;
-                [1-4][0-9][0-9]) HEALTH_CODE="${code}"; return 0 ;;
-            esac
+            for scheme in https http; do
+                code="$(_http_code "${scheme}://127.0.0.1:${port}/")"
+                code="${code:-000}"
+                # Healthy = a real HTTP response that isn't a server error. 000 = no
+                # connection (wrong scheme / still booting), 5xx = app errored on boot.
+                case "${code}" in
+                    000|5??|"") : ;;
+                    [1-4][0-9][0-9]) HEALTH_CODE="${code}"; PANEL_SCHEME="${scheme}"; return 0 ;;
+                esac
+            done
         fi
         sleep 1
     done
@@ -421,13 +432,19 @@ if [ "${UFW_ACTIVE}" -eq 1 ] && [ "${PORT_OPEN}" -eq 0 ] \
 fi
 
 echo -e "${GREEN}Open the panel — the first visit runs the setup wizard:${NC}"
-[ -n "${TS_ADDR}" ] && echo -e "  • Tailscale:  ${CYAN}http://${TS_ADDR}:${PORT}${NC}"
+[ -n "${TS_ADDR}" ] && echo -e "  • Tailscale:  ${CYAN}${PANEL_SCHEME}://${TS_ADDR}:${PORT}${NC}"
 if [ -n "${PUBLIC_IP}" ]; then
     if [ "${UFW_ACTIVE}" -eq 1 ] && [ "${PORT_OPEN}" -eq 0 ]; then
-        echo -e "  • Public IP:  ${CYAN}http://${PUBLIC_IP}:${PORT}${NC}  ${YELLOW}(firewalled — run 'ufw allow ${PORT}/tcp' to expose)${NC}"
+        echo -e "  • Public IP:  ${CYAN}${PANEL_SCHEME}://${PUBLIC_IP}:${PORT}${NC}  ${YELLOW}(firewalled — run 'ufw allow ${PORT}/tcp' to expose)${NC}"
     else
-        echo -e "  • Public IP:  ${CYAN}http://${PUBLIC_IP}:${PORT}${NC}"
+        echo -e "  • Public IP:  ${CYAN}${PANEL_SCHEME}://${PUBLIC_IP}:${PORT}${NC}"
     fi
+fi
+if [ "${PANEL_SCHEME}" = "https" ]; then
+    echo ""
+    echo -e "  ${YELLOW}Served over HTTPS with a built-in self-signed cert, so your browser will show a${NC}"
+    echo -e "  ${YELLOW}one-time \"not private\" warning — click Advanced → Proceed. Set up Tailscale Serve${NC}"
+    echo -e "  ${YELLOW}or a domain in the wizard for a trusted cert with no warning.${NC}"
 fi
 echo ""
 warn "The panel binds 0.0.0.0:${PORT}. For real use, put it behind Tailscale Serve (HTTPS,"

@@ -22,7 +22,7 @@ DEFAULT_CONFIG = {
     "remember_days": 14,            # "remember me" cookie lifetime
     "ssh_timeout": 10,
     "session_protection": "strong", # flask-login: "strong" | "basic" | null (IP+UA session binding)
-    "use_https": False,             # serve HTTPS directly with a self-signed cert (no proxy/domain)
+    "use_https": True,              # serve self-signed HTTPS by default (unless Tailscale/proxy does TLS)
     "trust_proxy": False,           # behind a reverse proxy (Caddy/nginx/Cloudflare Tunnel)? trust X-Forwarded-*
     "sudo_enabled": False,
     "tailscale_auto_setup": True,       # Auto-configure Tailscale Serve on first start

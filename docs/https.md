@@ -1,8 +1,14 @@
 # Serving the panel over HTTPS
 
+**A fresh install already serves HTTPS** with a built-in self-signed cert (option 4
+below), so your login and session cookie are encrypted out of the box — you'll just
+see a one-time browser warning. That's the safe default; the options below give a
+*trusted* cert (no warning) and are listed best-first for a public deployment.
+Setting up Tailscale Serve or a reverse proxy automatically takes over TLS, and the
+panel stops serving its own self-signed cert.
+
 **Never expose the panel on plain HTTP over the public internet** — your login
-password and session cookie would travel in cleartext. Pick one of the options
-below. They're listed best-first for a public deployment.
+password and session cookie would travel in cleartext.
 
 The relevant `data/config.json` settings:
 
@@ -53,16 +59,13 @@ yourname.duckdns.org {
 `config.json`: `"bind_host": "127.0.0.1"`, `"trust_proxy": true`,
 `"site_domain": "yourname.duckdns.org"`. Caddy renews the cert forever, untouched.
 
-## 4. Built-in self-signed HTTPS — no domain, no proxy (encrypts, but with a caveat)
+## 4. Built-in self-signed HTTPS — the default (no domain, no proxy)
 
-For a personal/lab box you just want encrypted. In `data/config.json`:
-
-```json
-{ "use_https": true }
-```
-
-Restart the panel — it generates a **10-year** self-signed cert under `data/ssl/`
-and serves `https://<your-ip>:5000` directly. No renewal, no domain.
+This is **on by default** (`"use_https": true`). It generates a **10-year**
+self-signed cert under `data/ssl/` and serves `https://<your-ip>:5000` directly —
+no renewal, no domain. To turn it off (serve plain HTTP), set `"use_https": false`
+and restart. It automatically stands down when Tailscale Serve or a reverse proxy
+(`trust_proxy`) is configured, since those terminate TLS with a real cert.
 
 **Caveat:** browsers show a "Not secure / proceed anyway" warning (the cert isn't
 from a trusted CA), and it protects against *passive* eavesdropping but not a

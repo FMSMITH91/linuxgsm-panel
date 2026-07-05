@@ -248,27 +248,27 @@ def check_peer_reachability(host) -> dict:
     return {"reachable": reachable, "latency_ms": latency_ms}
 
 
-def setup_tailscale_serve(port=5000, mount="/", funnel=False):
+def setup_tailscale_serve(port=5000, mount="/", funnel=False, backend_scheme="http"):
     """Configure Tailscale Serve to proxy this panel.
 
     Args:
         port: Local port the panel runs on (default 5000)
         mount: URL mount point (default '/')
         funnel: Whether to enable Funnel (public internet access)
+        backend_scheme: how to reach the panel on loopback — "http" (default) or
+            "https+insecure" when the panel is terminating its own self-signed TLS.
+            Tailscale re-terminates TLS with the real ts.net cert either way; this just
+            has to match how the panel is actually listening or the proxy 502s.
 
     Returns:
         (success, message)
     """
-    if funnel:
-        out, err, rc = _run_ts(
-            ["funnel", "--bg", "--https", "443", mount, f"http://127.0.0.1:{port}"],
-            timeout=10,
-        )
-    else:
-        out, err, rc = _run_ts(
-            ["serve", "--bg", "--https", "443", mount, f"http://127.0.0.1:{port}"],
-            timeout=10,
-        )
+    upstream = f"{backend_scheme}://127.0.0.1:{port}"
+    verb = "funnel" if funnel else "serve"
+    out, err, rc = _run_ts(
+        [verb, "--bg", "--https", "443", mount, upstream],
+        timeout=10,
+    )
 
     if rc == 0:
         msg = "Tailscale Serve enabled" + (" (with Funnel)" if funnel else "")
