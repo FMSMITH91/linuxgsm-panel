@@ -24,8 +24,8 @@ def live_metrics():
                         parts = line.split()
                         if len(parts) >= 8:
                             cpus[parts[0]] = [int(x) for x in parts[1:8]]
-        except Exception:
-            pass
+        except (OSError, ValueError, IndexError):
+            pass   # unreadable/odd /proc/stat → return whatever parsed
         return cpus
 
     a = _read_stat()

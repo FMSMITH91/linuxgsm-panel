@@ -188,8 +188,8 @@ def _get_tailscale_info() -> TailscaleInfo:
                 test_name = f"{info.hostname}.tailscale.net"
                 socket.getaddrinfo(test_name, 80, socket.AF_INET)
                 info.magic_dns_enabled = True
-        except Exception:
-            pass
+        except OSError:
+            pass   # name doesn't resolve → MagicDNS simply stays disabled
 
     return info
 
