@@ -1,10 +1,13 @@
 """System operations for the local server — UFW, Tailscale SSH, OS updates, reboot."""
 import json
+import logging
 import os
 import shlex
 import subprocess
 import threading
 import time
+
+_log = logging.getLogger("panel.system_ops")
 
 # The panel's own install directory (this module lives inside it) — used for the
 # git-based self-update feature.
@@ -86,8 +89,11 @@ def _run(cmd, timeout=30, sudo=False, text=True):
         return "", "Command timed out", -1
     except FileNotFoundError:
         return "", "Command not found", -1
-    except Exception as e:
-        return "", str(e), -1
+    except Exception:
+        # Don't surface the raw exception text — it can flow to API responses. Log it
+        # server-side; callers only act on the -1 return code anyway.
+        _log.debug("local command failed", exc_info=True)
+        return "", "command execution error", -1
 
 
 def _check_sudo():
@@ -531,8 +537,9 @@ def panel_self_update():
         return True, ("Update started — the panel is backing up, updating, and verifying it "
                       "restarts cleanly. If the new version fails to come up it rolls back "
                       "automatically. This takes up to a minute.")
-    except Exception as e:
-        return False, f"Could not start the updater: {e}"
+    except Exception:
+        _log.exception("panel self-update failed to start")
+        return False, "Could not start the updater — check the panel logs."
 
 
 def panel_update_log(max_bytes=20000):
