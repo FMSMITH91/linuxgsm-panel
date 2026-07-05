@@ -8,4 +8,4 @@ qrcode>=7.4
 paramiko>=3.4
 bcrypt>=4.1
 eventlet>=0.36
-cryptography>=42.0
+cryptography>=49.0.0
