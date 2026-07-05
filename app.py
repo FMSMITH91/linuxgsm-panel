@@ -390,6 +390,9 @@ def create_app():
         # response (crawlers can't miss it), and /robots.txt asks nicely too — a
         # private management UI has no business being indexed.
         resp.headers.setdefault("X-Robots-Tag", "noindex, nofollow, noarchive")
+        # Don't advertise the framework/version to scanners/fingerprinters (the WSGI
+        # server would otherwise send "Werkzeug/x Python/y"). Override, not setdefault.
+        resp.headers["Server"] = "LinuxGSM Panel"
         # Advertise HSTS only for HTTPS backed by a TRUSTED cert — via a proxy that sets
         # X-Forwarded-Proto, or Tailscale. NOT for our own self-signed TLS: HSTS turns the
         # one-time "not private" warning into a hard, un-clickable-through block on a named

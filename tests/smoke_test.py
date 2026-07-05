@@ -314,6 +314,8 @@ try:
     _rb = app.test_client().get("/robots.txt")
     check("robots.txt is served (200)", _rb.status_code == 200, "got %d" % _rb.status_code)
     check("robots.txt disallows all crawling", b"Disallow: /" in _rb.data)
+    check("Server header genericized (no framework/version leak)",
+          hr.headers.get("Server") == "LinuxGSM Panel" and "Werkzeug" not in (hr.headers.get("Server") or ""))
 
     # ── CSRF protection rejects a tokenless mutating POST ─────────
     # This client has CSRF disabled for convenience; flip it back on for one
