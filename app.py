@@ -2908,6 +2908,13 @@ def register_routes(app):
     def _can_manage_files():
         return current_user.is_superadmin or has_permission(current_user, MANAGE_SERVERS)
 
+    def _log_and_generic(context):
+        """Record the real exception in the server log and return a generic string,
+        so raw exception text is never sent to the client (CodeQL
+        py/stack-trace-exposure). Admins read the detail in the panel logs."""
+        app.logger.exception(context)
+        return "Internal server error"
+
     @app.route("/server/<int:server_id>/files")
     @login_required
     @server_access_required
@@ -3004,8 +3011,8 @@ def register_routes(app):
             ok, msg = delete_path(gs.remote, gs.short_name, rel, gs.lgsm_name)
             log_action(current_user, "delete_file", target=gs.name, detail=rel, success=ok)
             return jsonify({"success": ok, "message": msg})
-        except Exception as e:
-            return jsonify({"success": False, "message": str(e)}), 500
+        except Exception:
+            return jsonify({"success": False, "message": _log_and_generic("delete_path failed")}), 500
 
     # ── Scheduled tasks (cron) for the game user ──
     # Same privilege gate as the file editor: a cron entry runs an arbitrary command
@@ -3022,8 +3029,8 @@ def register_routes(app):
         if request.method == "GET":
             try:
                 return jsonify({"jobs": list_cron_jobs(gs.remote, gs.short_name, gs.lgsm_name)})
-            except Exception as e:
-                return jsonify({"error": str(e)}), 500
+            except Exception:
+                return jsonify({"error": _log_and_generic("list_cron_jobs failed")}), 500
         data = request.get_json(silent=True) or {}
         try:
             ok, msg = add_cron_job(gs.remote, gs.short_name, data.get("schedule"),
@@ -3031,8 +3038,8 @@ def register_routes(app):
             log_action(current_user, "cron_add", target=gs.name, success=ok,
                        detail=(data.get("schedule") or "")[:120])
             return jsonify({"success": ok, "message": msg or ("Added" if ok else "Failed")})
-        except Exception as e:
-            return jsonify({"success": False, "message": str(e)}), 500
+        except Exception:
+            return jsonify({"success": False, "message": _log_and_generic("add_cron_job failed")}), 500
 
     @app.route("/api/server/<int:server_id>/cron/update", methods=["POST"])
     @login_required
@@ -3048,8 +3055,8 @@ def register_routes(app):
             log_action(current_user, "cron_update", target=gs.name, success=ok,
                        detail=(data.get("schedule") or "")[:120])
             return jsonify({"success": ok, "message": msg or ("Updated" if ok else "Failed")})
-        except Exception as e:
-            return jsonify({"success": False, "message": str(e)}), 500
+        except Exception:
+            return jsonify({"success": False, "message": _log_and_generic("update_cron_job failed")}), 500
 
     @app.route("/api/server/<int:server_id>/cron/delete", methods=["POST"])
     @login_required
@@ -3063,8 +3070,8 @@ def register_routes(app):
             ok, msg = delete_cron_job(gs.remote, gs.short_name, data.get("raw") or "", gs.lgsm_name)
             log_action(current_user, "cron_delete", target=gs.name, success=ok)
             return jsonify({"success": ok, "message": msg or ("Deleted" if ok else "Failed")})
-        except Exception as e:
-            return jsonify({"success": False, "message": str(e)}), 500
+        except Exception:
+            return jsonify({"success": False, "message": _log_and_generic("delete_cron_job failed")}), 500
 
     @app.route("/api/server/<int:server_id>/upload", methods=["POST"])
     @login_required
