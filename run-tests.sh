@@ -11,9 +11,11 @@ PY="${PYTHON:-python3}"
 echo "== byte-compile (syntax errors) =="
 "$PY" -m compileall -q .
 
-echo "== lint: real bugs only (undefined names, bad syntax) =="
+echo "== lint: real bugs + unused imports (undefined names, bad syntax, F401) =="
 if "$PY" -m flake8 --version >/dev/null 2>&1; then
-    "$PY" -m flake8 --select=E9,F63,F7,F82 --show-source --statistics .
+    # F401 (unused import) is included so dead imports are caught here rather than
+    # later by CodeQL's py/unused-import in the Security tab.
+    "$PY" -m flake8 --select=E9,F63,F7,F82,F401 --show-source --statistics .
 else
     echo "  (flake8 not installed — skipping)"
 fi

@@ -1,13 +1,10 @@
 """System operations for the local server — UFW, Tailscale SSH, OS updates, reboot."""
 import json
 import os
-import re
 import shlex
 import subprocess
 import threading
 import time
-from datetime import datetime
-from pathlib import Path
 
 # The panel's own install directory (this module lives inside it) — used for the
 # git-based self-update feature.

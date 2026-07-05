@@ -34,13 +34,10 @@ Routes:
 import json
 import os
 import re
-import subprocess
 import threading
 import time
-import uuid
 from types import SimpleNamespace
 from datetime import datetime, timedelta
-from functools import wraps
 from pathlib import Path
 
 # Suppress eventlet deprecation (cosmetic only, panel works fine)
@@ -53,8 +50,8 @@ eventlet.monkey_patch()
 del _w
 
 from flask import (
-    Flask, Response, abort, flash, g, get_flashed_messages, jsonify,
-    redirect, render_template, request, session, url_for,
+    Flask, abort, flash, jsonify, redirect, render_template, request,
+    session, url_for,
 )
 from flask_login import current_user, login_required, login_user, logout_user
 from flask_socketio import SocketIO, emit, join_room, leave_room
@@ -62,16 +59,15 @@ from flask_wtf.csrf import CSRFProtect
 from sqlalchemy import desc, or_
 
 from auth import (
-    ALL_PERMISSIONS, SERVER_ACTIONS, ACTION_PERMISSION_MAP,
-    can_access_server, can_access_remote, accessible_remote_ids,
-    check_password, client_ip, generate_api_token,
-    generate_totp_secret, totp_provisioning_uri, verify_totp,
-    get_user_permissions, get_user_servers, hash_password,
-    has_permission, init_auth, log_action, login_manager,
-    permission_required, server_access_required,
-    INSTALL_SERVER, UNINSTALL_SERVER, MANAGE_SERVERS,
-    MANAGE_REMOTES, MANAGE_USERS, MANAGE_GROUPS, VIEW_LOGS,
-    SUPER_ADMIN, VIEW_SERVERS, VIEW_CONSOLE, SEND_COMMAND,
+    ALL_PERMISSIONS, ACTION_PERMISSION_MAP, can_access_server,
+    can_access_remote, accessible_remote_ids, check_password,
+    client_ip, generate_totp_secret, totp_provisioning_uri,
+    verify_totp, get_user_permissions, get_user_servers,
+    hash_password, has_permission, init_auth,
+    log_action, permission_required, server_access_required, INSTALL_SERVER,
+    UNINSTALL_SERVER, MANAGE_SERVERS,
+    MANAGE_REMOTES, MANAGE_USERS, MANAGE_GROUPS,
+    VIEW_LOGS, SUPER_ADMIN, VIEW_CONSOLE, SEND_COMMAND,
     RESTART_SERVER, START_SERVER, STOP_SERVER, UPDATE_SERVER,
 )
 from config import (
@@ -82,26 +78,23 @@ from models import (
     AuditLog, GameServer, Group, RemoteServer, SetupState, User, db, init_db,
 )
 from ssh_manager import (
-    close_connection, get_connection, list_linuxgsm_servers,
-    run_command, run_interactive, ssh_test_connection,
+    close_connection, run_command, ssh_test_connection,
     get_server_status, run_as_game_user, send_console_command,
-    list_server_commands, server_live_metrics, remote_public_ip, remote_live_metrics,
-    host_specs, pro_status, pro_attach, pro_service, pro_detach,
-    set_autostart, get_autostart, install_game_cron, set_daily_restart,
+    list_server_commands, server_live_metrics, remote_public_ip,
+    remote_live_metrics, host_specs, pro_status, pro_attach,
+    pro_service, pro_detach, set_autostart, install_game_cron, set_daily_restart,
     list_cron_jobs, add_cron_job, update_cron_job, delete_cron_job,
-    install_game_dependencies, parse_missing_deps, detect_game_port, detect_game_ports,
-    lgsm_read_config, lgsm_write_config, lgsm_game_config,
-    browse_dir, read_file, write_file, upload_file, delete_path,
-    remote_ufw_delete_rule, remote_set_public_ssh, remote_public_ssh_status,
-    remote_ufw_status, remote_ufw_open_port, remote_ufw_close_port,
-    remote_ufw_allow_game_port, remote_ufw_close_game_port,
-    remote_ufw_allow_game_ports, remote_ufw_close_by_name,
-    port_in_use, check_port_open,
+    install_game_dependencies, parse_missing_deps, detect_game_ports, lgsm_read_config,
+    lgsm_write_config, lgsm_game_config, browse_dir, read_file,
+    write_file, upload_file, delete_path,
+    remote_ufw_delete_rule, remote_set_public_ssh, remote_public_ssh_status, remote_ufw_status, remote_ufw_open_port,
+    remote_ufw_close_port, remote_ufw_allow_game_port, remote_ufw_close_game_port,
+    remote_ufw_allow_game_ports, remote_ufw_close_by_name, port_in_use,
     remote_os_check_updates, remote_os_run_updates,
     remote_reboot, remote_uptime,
-    remote_bootstrap_vps,
-    remote_check_tailscale, remote_install_tailscale,
-    remote_bootstrap_tailscale, remote_migrate_to_tailscale, remote_tailscale_up_url,
+    remote_bootstrap_vps, remote_check_tailscale,
+    remote_install_tailscale, remote_bootstrap_tailscale,
+    remote_migrate_to_tailscale, remote_tailscale_up_url,
     remote_tailscale_finalize,
     remote_ufw_close_port_22,
 )

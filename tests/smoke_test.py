@@ -16,7 +16,7 @@ import sys
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from config import DB_PATH, DATA_DIR, SECRET_FILE, CRED_KEY_FILE, CONFIG_FILE
+from config import DB_PATH, SECRET_FILE, CRED_KEY_FILE, CONFIG_FILE
 
 # Never clobber a real install: only run against a fresh, throwaway data dir.
 if DB_PATH.exists():

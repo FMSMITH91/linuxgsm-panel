@@ -1,17 +1,12 @@
 """Authentication and permission management."""
-import functools
-import hashlib
-import json
 import secrets
-import uuid
-from datetime import datetime
 from functools import wraps
 
 import bcrypt
-from flask import flash, g, redirect, request, session, url_for
-from flask_login import LoginManager, login_required, login_user, logout_user, current_user
+from flask import flash, redirect, request, url_for
+from flask_login import LoginManager, current_user
 
-from models import AuditLog, Group, Group as GroupModel, User, db
+from models import AuditLog, User, db
 
 login_manager = LoginManager()
 login_manager.login_view = "login"
