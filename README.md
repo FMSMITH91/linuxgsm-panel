@@ -100,7 +100,8 @@ Configuration is stored in `data/config.json` after the setup wizard runs. Key s
 | `site_domain` | (empty) | Public domain, for reverse proxy setup |
 | `port` | 5000 | Web server port |
 | `bind_host` | 0.0.0.0 | Bind address (use `127.0.0.1` behind nginx) |
-| `session_lifetime_hours` | 24 | Login session duration |
+| `session_lifetime_hours` | 12 | Idle session timeout (sliding) |
+| `remember_days` | 14 | "Remember me" cookie lifetime |
 | `ssh_timeout` | 10 | SSH connection timeout in seconds |
 
 ## Permission Groups

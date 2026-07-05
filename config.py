@@ -18,7 +18,8 @@ DEFAULT_CONFIG = {
     "setup_complete": False,
     "port": 5000,
     "bind_host": "",   # empty = auto (127.0.0.1 if Tailscale can proxy, else 0.0.0.0)
-    "session_lifetime_hours": 24,
+    "session_lifetime_hours": 12,   # idle session timeout (sliding, refreshed each request)
+    "remember_days": 14,            # "remember me" cookie lifetime
     "ssh_timeout": 10,
     "sudo_enabled": False,
     "tailscale_auto_setup": True,       # Auto-configure Tailscale Serve on first start

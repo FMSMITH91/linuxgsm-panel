@@ -39,7 +39,7 @@ import threading
 import time
 import uuid
 from types import SimpleNamespace
-from datetime import datetime
+from datetime import datetime, timedelta
 from functools import wraps
 from pathlib import Path
 
@@ -265,7 +265,9 @@ def create_app():
     app.config["SQLALCHEMY_DATABASE_URI"] = f"sqlite:///{DB_PATH}"
     app.config["SQLALCHEMY_TRACK_MODIFICATIONS"] = False
     app.config["SESSION_COOKIE_NAME"] = "lgpanel_session"
-    app.config["PERMANENT_SESSION_LIFETIME"] = cfg.get("session_lifetime_hours", 24) * 3600
+    # Idle session timeout (sliding — refreshed on each request). 12h by default so a
+    # forgotten browser doesn't stay logged in for a full day; configurable.
+    app.config["PERMANENT_SESSION_LIFETIME"] = cfg.get("session_lifetime_hours", 12) * 3600
 
     # Cookie path must cover the mount point — always use root to be safe
     # since we don't know the final mount until after setup
@@ -282,6 +284,14 @@ def create_app():
     # plain http://host:5000 so login still works. Override with cookie_secure.
     _https_ready = bool(cfg.get("tailscale_setup_done", False)) or bool((cfg.get("site_domain") or "").strip())
     app.config["SESSION_COOKIE_SECURE"] = cfg.get("cookie_secure", _https_ready)
+
+    # "Remember me" cookie (flask-login). Cap it at a sane window (14 days) instead of
+    # flask-login's 365-day default — a stolen remember-token shouldn't be valid for a
+    # year — and give it the same hardening as the session cookie.
+    app.config["REMEMBER_COOKIE_DURATION"] = timedelta(days=int(cfg.get("remember_days", 14)))
+    app.config["REMEMBER_COOKIE_HTTPONLY"] = True
+    app.config["REMEMBER_COOKIE_SAMESITE"] = "Lax"
+    app.config["REMEMBER_COOKIE_SECURE"] = app.config["SESSION_COOKIE_SECURE"]
 
 
     # Store mount prefix in app config so templates can access it
@@ -353,7 +363,6 @@ def create_app():
         try:
             days = int(cfg.get("audit_log_retention_days", 0) or 0)
             if days > 0:
-                from datetime import datetime, timedelta
                 from models import AuditLog
                 cutoff = datetime.utcnow() - timedelta(days=days)
                 deleted = AuditLog.query.filter(AuditLog.timestamp < cutoff).delete()
@@ -747,6 +756,7 @@ def register_routes(app):
                     _LOGIN_FAILS.pop(ip, None)   # clear on success
                 for k in ("_2fa_pending", "_2fa_at", "_2fa_remember"):
                     session.pop(k, None)
+                session.permanent = True   # so PERMANENT_SESSION_LIFETIME applies
                 login_user(user, remember=remember)
                 user.last_login = datetime.utcnow()
                 db.session.commit()
