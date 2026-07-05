@@ -316,7 +316,7 @@ def tailscale_up_local(enable_ssh=True):
     except Exception as e:
         return False, str(e)
     line = (r.stdout or "").strip().split("\n")[-1].strip()
-    if line.startswith("https://login.tailscale.com"):
+    if line.startswith("https://login.tailscale.com/"):
         with _cache_lock:
             _cache["info"] = None
         return True, line

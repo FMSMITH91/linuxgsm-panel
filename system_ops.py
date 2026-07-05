@@ -516,7 +516,7 @@ def panel_self_update():
     try:
         with open(path, "w") as f:
             f.write(script)
-        os.chmod(path, 0o755)
+        os.chmod(path, 0o700)  # owner-only; root (sudo path) can still read it
         subprocess.Popen(
             launcher,
             stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, env=os.environ.copy(),

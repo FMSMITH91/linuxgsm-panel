@@ -1727,7 +1727,7 @@ def remote_tailscale_up_url(server, enable_ssh=True, advertise_routes=""):
     )
     out, err, rc = run_command(server, cmd, timeout=40, sudo=True)
     line = (out or "").strip().split("\n")[-1].strip() if out else ""
-    if line.startswith("https://login.tailscale.com"):
+    if line.startswith("https://login.tailscale.com/"):
         return True, line
     status = remote_check_tailscale(server)
     if status.get("running") or line == "ALREADY_CONNECTED":
