@@ -314,6 +314,8 @@ try:
     _rb = app.test_client().get("/robots.txt")
     check("robots.txt is served (200)", _rb.status_code == 200, "got %d" % _rb.status_code)
     check("robots.txt disallows all crawling", b"Disallow: /" in _rb.data)
+    check("icon webfont is preloaded (CLS fix)",
+          b'rel="preload"' in hr.data and b"bootstrap-icons.woff2" in hr.data)
     check("Server header genericized (no framework/version leak)",
           hr.headers.get("Server") == "LinuxGSM Panel" and "Werkzeug" not in (hr.headers.get("Server") or ""))
 
