@@ -2266,6 +2266,16 @@ def register_routes(app):
         log_action(current_user, "panel_self_update", detail=msg, success=success)
         return jsonify({"success": success, "message": msg})
 
+    @app.route("/api/panel/update-log")
+    @login_required
+    @permission_required(SUPER_ADMIN)
+    def api_panel_update_log():
+        """Live progress of an in-flight self-update (the [1/5]…[5/5] steps + result)."""
+        try:
+            return jsonify(so.panel_update_log())
+        except Exception as e:
+            return jsonify({"exists": False, "lines": [], "error": str(e)})
+
     @app.route("/api/server-management/os-update-check")
     @login_required
     @permission_required(SUPER_ADMIN)

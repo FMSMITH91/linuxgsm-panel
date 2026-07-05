@@ -533,3 +533,19 @@ def panel_self_update():
                       "automatically. This takes up to a minute.")
     except Exception as e:
         return False, f"Could not start the updater: {e}"
+
+
+def panel_update_log(max_bytes=20000):
+    """Tail of the self-update log (ANSI stripped) so the UI can show live progress while
+    the panel updates and restarts. The detached updater keeps writing to this file across
+    the restart, so the new process can read the final steps too."""
+    import re as _re
+    path = os.path.join(PANEL_DIR, "data", "self-update.log")
+    try:
+        with open(path, "r", errors="replace") as f:
+            data = f.read()[-max_bytes:]
+    except OSError:
+        return {"exists": False, "lines": []}
+    data = _re.sub(r"\x1b\[[0-9;]*m", "", data)          # strip ANSI colour codes
+    lines = [ln.rstrip() for ln in data.splitlines() if ln.strip()]
+    return {"exists": True, "lines": lines}
