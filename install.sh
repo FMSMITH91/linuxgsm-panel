@@ -51,7 +51,7 @@ warn()  { echo -e "${YELLOW}[!]${NC} $*"; }
 die()   { echo -e "${RED}[ERROR]${NC} $*" >&2; exit 1; }
 
 echo -e "${CYAN}╔═══════════════════════════════════════════╗"
-echo    "║      LinuxGSM Panel — install / update     ║"
+echo    "║     LinuxGSM Panel — install / update     ║"
 echo -e "╚═══════════════════════════════════════════╝${NC}"
 
 # ── Prerequisites ──
