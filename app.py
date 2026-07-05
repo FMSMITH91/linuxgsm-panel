@@ -3296,9 +3296,9 @@ def register_routes(app):
                                                       room=f"console_{server_id}")
                                     last_positions[server_id] = current_size
                             except Exception:
-                                pass
+                                continue   # skip this server; keep polling the rest
             except Exception:
-                pass
+                app.logger.debug("console poller iteration failed", exc_info=True)
             time.sleep(2)
 
     # Start the console poller under a tiny supervisor: it has an inner try/except so it
@@ -3310,10 +3310,7 @@ def register_routes(app):
                 t = threading.Thread(target=target, daemon=True)
                 t.start()
                 t.join()   # only returns if the worker exited unexpectedly
-                try:
-                    app.logger.error("%s thread exited — respawning in 5s", name)
-                except Exception:
-                    pass
+                app.logger.error("%s thread exited — respawning in 5s", name)
                 time.sleep(5)
         threading.Thread(target=_runner, daemon=True).start()
 
