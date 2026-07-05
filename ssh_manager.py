@@ -1,7 +1,5 @@
 """SSH connection manager for remote LinuxGSM servers.
 Also supports local execution for running on the panel's own machine."""
-import io
-import json
 import os
 import re
 import socket
