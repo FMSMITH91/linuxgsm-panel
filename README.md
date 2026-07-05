@@ -31,7 +31,7 @@ One command installs the panel — and re-running the **same command** later upd
 curl -fsSL https://raw.githubusercontent.com/FMSMITH91/linuxgsm-panel/main/install.sh | bash
 ```
 
-- **Meant for a brand-new server:** on a *fresh* install it first brings the whole OS up to date (`apt full-upgrade`) so you don't have to, and **reboots at the end if that's required** (e.g. a new kernel) — the panel is set to start on boot, so it comes right back up. Skip this with `PANEL_NO_UPGRADE=1`. (Updates — re-running the command — never touch system packages.)
+- **Meant for a brand-new server:** a *fresh* install first brings the whole OS up to date (`apt full-upgrade`), installs the panel, then **reboots** — baking in the update and proving the box boots cleanly (the panel starts on boot, so it's back in ~1 min). *Updates* (re-running the command) are panel-only and don't reboot — **unless** they find pending OS updates, in which case they apply those and reboot too. Skip all of this with `PANEL_NO_UPGRADE=1`.
 - Run as a normal user → installs under that user as a `systemd --user` service.
 - Run as **root** → the panel is **not** run as root; the installer creates a dedicated non-login service user and runs it as a system service.
 - Serves HTTPS out of the box with a built-in self-signed certificate; auto-detects Tailscale and offers a **trusted** certificate via Tailscale Serve during the setup wizard.

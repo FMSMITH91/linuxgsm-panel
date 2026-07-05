@@ -58,5 +58,8 @@ jobs:
           : "${DEPLOY_HOST:?Set repo variable DEPLOY_HOST to the tailnet host}"
           U="${DEPLOY_USER:-ubuntu}"
           # Tailscale SSH handles auth (no key needed); install.sh does the safe update.
+          # PANEL_NO_UPGRADE=1: the auto-deploy is a panel-only update — it must never
+          # apt-upgrade or reboot the deploy host (that would drop this SSH session and fail
+          # the job). OS updates on that host stay a manual/interactive decision.
           ssh -o StrictHostKeyChecking=accept-new -o ConnectTimeout=20 \
-            "$U@$DEPLOY_HOST" 'cd ~/linuxgsm-panel && bash install.sh'
+            "$U@$DEPLOY_HOST" 'cd ~/linuxgsm-panel && PANEL_NO_UPGRADE=1 bash install.sh'

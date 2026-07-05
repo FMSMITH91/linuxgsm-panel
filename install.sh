@@ -286,6 +286,29 @@ if [ "${IS_UPDATE}" -eq 1 ]; then
             echo -e "  ${YELLOW}The built-in cert is self-signed, so you'll see a one-time \"not private\"${NC}"
             echo -e "  ${YELLOW}warning — click Advanced → Proceed. Set up Tailscale/a domain for a trusted cert.${NC}"
         fi
+
+        # A panel-only update doesn't need a reboot — but if the OS has pending updates,
+        # apply them now and reboot (same "bake it in + prove it boots" philosophy as a
+        # fresh install). Skipped entirely with PANEL_NO_UPGRADE=1, which the CI auto-deploy
+        # sets so it never upgrades/reboots the panel host.
+        if [ "${PANEL_NO_UPGRADE:-0}" != "1" ] && command -v apt-get >/dev/null 2>&1; then
+            UPG_SUDO=""; [ "$(id -u)" -ne 0 ] && UPG_SUDO="sudo"
+            export DEBIAN_FRONTEND=noninteractive NEEDRESTART_MODE=a
+            ${UPG_SUDO} apt-get update -qq || true
+            if [ "$(${UPG_SUDO} apt-get -s full-upgrade 2>/dev/null | grep -c '^Inst ')" -gt 0 ]; then
+                echo ""
+                info "System updates are available — applying them, then rebooting…"
+                ${UPG_SUDO} apt-get -y -o Dpkg::Options::="--force-confold" full-upgrade \
+                    || warn "Some packages could not be upgraded — continuing."
+                ${UPG_SUDO} apt-get -y autoremove --purge >/dev/null 2>&1 || true
+                warn "Rebooting to bake in the system update — reconnect in ~1 minute; the panel"
+                warn "restarts automatically. (Press Ctrl-C in the next 15s to skip.)"
+                sleep 15
+                ${UPG_SUDO} reboot
+            else
+                ok "System packages already up to date — no reboot needed."
+            fi
+        fi
         exit 0
     fi
 
@@ -480,14 +503,16 @@ warn "The panel binds 0.0.0.0:${PORT}. For real use, put it behind Tailscale Ser
 warn "no open port needed) from the setup wizard — don't leave the admin panel open to the internet."
 echo ""
 
-# ── If the one-time OS upgrade needs a reboot (new kernel / core library), do it now. The
-#    panel service is enabled to start on boot, so it comes right back up at the URL above.
+# ── Always reboot after a fresh install (unless the OS upgrade was skipped). Rebooting
+#    once now bakes in the OS update AND proves the box comes back cleanly with everything
+#    applied — better to find a broken boot now than the next time you actually need it.
+#    The panel service is enabled on boot, so it's back at the URL above after ~1 minute.
 #    Only fresh installs reach this point (the update path exits earlier). ──
-if [ "${PANEL_NO_UPGRADE:-0}" != "1" ] && [ -f /var/run/reboot-required ]; then
+if [ "${PANEL_NO_UPGRADE:-0}" != "1" ]; then
     RB_SUDO=""; [ "$(id -u)" -ne 0 ] && RB_SUDO="sudo"
-    warn "A reboot is needed to finish the system update (a new kernel or core library was installed)."
-    warn "Rebooting in 15s — reconnect in ~1 min and the panel will already be running at the URL above."
-    warn "(Press Ctrl-C now to skip the reboot and do it yourself later with '${RB_SUDO} reboot'.)"
+    warn "Rebooting to finish setup — bakes in the OS update and confirms the machine boots"
+    warn "cleanly. Reconnect in ~1 minute; the panel will already be running at the URL above."
+    warn "(Press Ctrl-C in the next 15s to skip.)"
     sleep 15
     ${RB_SUDO} reboot
 fi
