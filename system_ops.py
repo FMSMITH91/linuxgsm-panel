@@ -674,16 +674,23 @@ def panel_diagnostics():
     try:
         sz = os.path.getsize(str(_cfg.DB_PATH))
         if sz > 0:
-            add("Database", "ok", "Present (%.1f MB)." % (sz / 1048576))
+            human = "%.1f MB" % (sz / 1048576) if sz >= 1048576 else "%d KB" % max(1, sz // 1024)
+            add("Database", "ok", "Present (%s)." % human)
         else:
             add("Database", "fail", "Database file is empty.")
     except OSError:
         add("Database", "fail", "Database file is missing.")
 
-    # 4. encryption keys
-    missing = [p.name for p in (_cfg.SECRET_FILE, _cfg.CRED_KEY_FILE) if not p.exists()]
-    if missing:
-        add("Encryption keys", "fail", "Missing: %s" % ", ".join(missing))
+    # 4. encryption keys. The session secret is always needed (Flask signs cookies
+    # with it), so its absence is a real fault. The credential key is created ONLY
+    # when the first password-based credential is saved, so a missing cred_key is
+    # normal (e.g. all remotes use SSH-key / Tailscale / local auth) — not a fault.
+    if not _cfg.SECRET_FILE.exists():
+        add("Encryption keys", "fail", "Session secret key is missing.")
+    elif not _cfg.CRED_KEY_FILE.exists():
+        add("Encryption keys", "ok",
+            "Session key present; the credential key is created when the first "
+            "saved password/credential needs it.")
     else:
         add("Encryption keys", "ok", "Session + credential keys present.")
 
