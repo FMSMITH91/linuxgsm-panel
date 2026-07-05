@@ -114,6 +114,7 @@ fi
 
 if [ "${MODE}" = "system" ]; then
     rm -f /etc/sudoers.d/linuxgsm-panel
+    rm -f /usr/local/bin/linuxgsm-panel-recover
     ok "Removed the sudoers entry"
     # SAFETY: only ever remove the dedicated panel service user — NEVER a game-server user.
     if [ "${PANEL_USER}" = "${SERVICE_USER}" ] && id "${PANEL_USER}" >/dev/null 2>&1; then

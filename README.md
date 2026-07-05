@@ -251,30 +251,29 @@ systemctl --user enable --now linuxgsm-panel
 
 ### Recovery — forgot your password or locked out?
 
-Everything is recoverable from a shell on the **panel host** over SSH — the recovery CLI talks straight to `data/panel.db`, so it works even when you can't log in. Run these from the panel directory (e.g. `cd ~/linuxgsm-panel`, or `/home/lgsmpanel/linuxgsm-panel` for a root install).
-
-**Forgot your password** — including if you're the *only* superadmin:
+**One command, from anywhere on the panel host** — no `cd`, no paths, no venv. It finds your install and runs as the panel's own user:
 
 ```bash
-bash reset-password.sh              # resets the sole superadmin (no username needed)
-bash reset-password.sh <username>   # resets a specific user
+sudo linuxgsm-panel-recover              # reset the sole superadmin's password
 ```
 
-You're prompted for the new password (never echoed), and every existing session is revoked.
-
-**Lost your 2FA authenticator:**
+Other recovery actions use the same command:
 
 ```bash
-./venv/bin/python manage.py disable-2fa <username>
+sudo linuxgsm-panel-recover reset-password <user>   # a specific user
+sudo linuxgsm-panel-recover disable-2fa <user>       # lost your authenticator
+sudo linuxgsm-panel-recover create-admin <user>      # no superadmin left (or: promote / activate <user>)
+sudo linuxgsm-panel-recover list-users
 ```
 
-**No superadmin left** (you deleted or deactivated your only one):
+You're prompted for anything needed (passwords are never echoed), and existing sessions are revoked on a password reset. It works even when you can't log in — the CLI talks straight to `data/panel.db`. Run `sudo linuxgsm-panel-recover --help` for the full list.
+
+Don't have the command yet (older install), or prefer the installer-style one-liner? This does the same:
 
 ```bash
-./venv/bin/python manage.py create-admin <username>   # or: promote <username> / activate <username>
+curl -fsSL https://raw.githubusercontent.com/FMSMITH91/linuxgsm-panel/main/recover.sh | sudo bash
+# with an action:   curl -fsSL .../recover.sh | sudo bash -s -- disable-2fa alice
 ```
-
-Run `./venv/bin/python manage.py --help` for the full list (`list-users`, `reset-password`, `create-admin`, `promote`, `activate`, `disable-2fa`, …).
 
 ## Development
 

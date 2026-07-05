@@ -263,6 +263,10 @@ if [ "${IS_UPDATE}" -eq 1 ]; then
     info "[4/5] Restarting the service…"
     svc daemon-reload || true
     svc restart linuxgsm-panel.service || true
+    # Ensure the path-independent recovery command exists on existing installs too.
+    if [ "$(id -u)" -eq 0 ] && [ -f "${PANEL_DIR}/recover.sh" ]; then
+        ln -sf "${PANEL_DIR}/recover.sh" /usr/local/bin/linuxgsm-panel-recover 2>/dev/null || true
+    fi
 
     info "[5/5] Verifying the panel came back up…"
     if health_check; then
@@ -409,6 +413,8 @@ WantedBy=multi-user.target
 SERVICEEOF
     systemctl daemon-reload
     systemctl enable --now linuxgsm-panel.service
+    # Path-independent recovery command: `sudo linuxgsm-panel-recover` from anywhere.
+    ln -sf "${PANEL_DIR}/recover.sh" /usr/local/bin/linuxgsm-panel-recover 2>/dev/null || true
     SERVICE_HINT="sudo systemctl status linuxgsm-panel"
     LOG_HINT="sudo journalctl -u linuxgsm-panel -f"
 else
@@ -508,8 +514,8 @@ echo ""
 warn "The panel binds 0.0.0.0:${PORT}. For real use, put it behind Tailscale Serve (HTTPS,"
 warn "no open port needed) from the setup wizard — don't leave the admin panel open to the internet."
 echo ""
-echo -e "${CYAN}Forgot the admin password?${NC} Reset it from the server over SSH (no web login needed):"
-echo -e "    cd ${PANEL_DIR} && bash reset-password.sh"
+echo -e "${CYAN}Forgot the admin password?${NC} From a shell on this server (no web login needed):"
+echo -e "    sudo linuxgsm-panel-recover        ${YELLOW}# or: cd ${PANEL_DIR} && bash reset-password.sh${NC}"
 echo ""
 
 # ── Always reboot after a fresh install (unless the OS upgrade was skipped). Rebooting

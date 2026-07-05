@@ -28,7 +28,7 @@ echo "== smoke test (boots the app; routes must not 5xx) =="
 
 if command -v shellcheck >/dev/null 2>&1; then
     echo "== shellcheck (shell scripts) =="
-    shellcheck -S warning install.sh uninstall.sh run-tests.sh reset-password.sh
+    shellcheck -S warning install.sh uninstall.sh run-tests.sh reset-password.sh recover.sh
 else
     echo "== shellcheck (not installed — skipping) =="
 fi
