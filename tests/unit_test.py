@@ -522,6 +522,52 @@ finally:
     if _cfg_backup is not None:
         config.CONFIG_FILE.write_text(_cfg_backup)
 
+# ── database corruption detection + self-heal (bad drive / power loss) ─
+import sqlite3 as _sqlite
+import tempfile as _tempfile
+import shutil as _shutil
+from models import _db_quick_check, _ensure_db_healthy
+_dbdir = _tempfile.mkdtemp()
+_dbp = os.path.join(_dbdir, "t.db")
+try:
+    _c = _sqlite.connect(_dbp)
+    _c.execute("CREATE TABLE x (a INTEGER)")
+    _c.executemany("INSERT INTO x VALUES (?)", [(i,) for i in range(200)])
+    _c.commit()
+    _c.close()
+    check("corrupt: a healthy DB passes quick_check", _db_quick_check(_dbp) is True)
+
+    # A healthy startup makes/refreshes the rolling backup.
+    _ensure_db_healthy(_dbp)
+    check("corrupt: a rolling backup is created for a healthy DB", os.path.exists(_dbp + ".backup"))
+
+    # Simulate a bad drive: clobber the middle of the file (leave the 100-byte
+    # header so it still 'opens' as a DB but is malformed).
+    with open(_dbp, "r+b") as _f:
+        _f.seek(100)
+        _f.write(b"\x00" * 4000)
+    check("corrupt: a malformed DB fails quick_check", _db_quick_check(_dbp) is False)
+
+    # Self-heal: restore from the backup, preserve the corrupt file aside, keep data.
+    _ensure_db_healthy(_dbp)
+    check("corrupt: DB is auto-restored to a healthy state", _db_quick_check(_dbp) is True)
+    check("corrupt: the corrupt file is preserved aside (not destroyed)",
+          any(fn.startswith("t.db.corrupt-") for fn in os.listdir(_dbdir)))
+    _r = _sqlite.connect(_dbp).execute("SELECT COUNT(*) FROM x").fetchone()[0]
+    eq("corrupt: restored data is intact", _r, 200)
+
+    # No good backup + corrupt live DB -> move the corrupt file aside so the app can
+    # start fresh instead of crash-looping (the bad file is preserved, not deleted).
+    _dbp2 = os.path.join(_dbdir, "u.db")
+    with open(_dbp2, "wb") as _f:
+        _f.write(b"this is not a database at all, just garbage bytes" * 50)
+    _ensure_db_healthy(_dbp2)   # no u.db.backup exists — must not raise
+    check("corrupt: with no backup, the corrupt DB is moved aside (start-fresh)",
+          not os.path.exists(_dbp2) and any(fn.startswith("u.db.corrupt-")
+                                            for fn in os.listdir(_dbdir)))
+finally:
+    _shutil.rmtree(_dbdir, ignore_errors=True)
+
 # ── cleanup: remove key/config files this run created ─────────
 for p in (config.CRED_KEY_FILE, config.SECRET_FILE, config.CONFIG_FILE):
     if p not in _pre and os.path.exists(p):

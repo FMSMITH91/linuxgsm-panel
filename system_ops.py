@@ -719,6 +719,25 @@ def panel_diagnostics():
     except OSError:
         add("Database", "fail", "Database file is missing.")
 
+    # 3b. database integrity (corruption from a bad drive / power loss)
+    try:
+        import sqlite3
+        dbp = str(_cfg.DB_PATH)
+        if os.path.exists(dbp) and os.path.getsize(dbp) > 0:
+            con = sqlite3.connect(dbp, timeout=5)
+            try:
+                row = con.execute("PRAGMA quick_check").fetchone()
+            finally:
+                con.close()
+            if row and row[0] == "ok":
+                bak = " (a rolling backup is kept for recovery)" if os.path.exists(dbp + ".backup") else ""
+                add("Database integrity", "ok", "No corruption detected%s." % bak)
+            else:
+                add("Database integrity", "fail",
+                    "Corruption detected — the panel restores from backup automatically on restart.")
+    except Exception:
+        add("Database integrity", "warn", "Couldn't run the integrity check.")
+
     # 4. encryption keys. The session secret is always needed (Flask signs cookies
     # with it), so its absence is a real fault. The credential key is created ONLY
     # when the first password-based credential is saved, so a missing cred_key is

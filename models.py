@@ -1,5 +1,6 @@
 """Database models for LinuxGSM Panel."""
 import json
+import logging
 import re
 import bcrypt
 from datetime import datetime
@@ -9,6 +10,7 @@ from sqlalchemy import text
 from sqlalchemy.orm import validates
 
 db = SQLAlchemy()
+_log = logging.getLogger("panel.models")
 
 # Identifiers that get interpolated into remote shell commands (Linux usernames, the
 # LinuxGSM instance/game name, paths like `/home/<user>/<selfname>`). They're validated
@@ -414,7 +416,88 @@ def optimize_database():
                                          "freed": max(0, before - after)}
 
 
+def _db_quick_check(path):
+    """True if the SQLite file passes PRAGMA quick_check (i.e. not corrupt). A
+    missing/empty file counts as healthy — a fresh DB will just be created. Any
+    open/read error (a malformed image, "file is not a database", I/O error from a
+    bad drive) counts as NOT healthy."""
+    import os
+    import sqlite3
+    if not os.path.exists(path) or os.path.getsize(path) == 0:
+        return True
+    try:
+        con = sqlite3.connect(path, timeout=10)
+        try:
+            row = con.execute("PRAGMA quick_check").fetchone()
+            return bool(row) and row[0] == "ok"
+        finally:
+            con.close()
+    except sqlite3.DatabaseError:
+        return False
+
+
+def _ensure_db_healthy(path=None):
+    """Self-heal the database against on-disk corruption (bad drive, power loss).
+
+    Runs BEFORE the ORM opens the DB. If the live DB is healthy, refresh a rolling
+    known-good backup (SQLite's online backup — consistent even mid-write). If it's
+    corrupt, restore that backup — moving the corrupt file aside first so nothing is
+    destroyed — so the panel comes back on the last good data instead of failing to
+    boot. Best-effort: it never raises, so it can't itself block startup."""
+    import os
+    import shutil
+    import sqlite3
+    import time as _t
+    from config import DB_PATH
+    path = path or str(DB_PATH)
+    backup = path + ".backup"
+    try:
+        if _db_quick_check(path):
+            # Healthy — refresh the rolling backup via the online backup API.
+            if os.path.exists(path) and os.path.getsize(path) > 0:
+                tmp = backup + ".tmp"
+                try:
+                    src = sqlite3.connect(path, timeout=10)
+                    dst = sqlite3.connect(tmp)
+                    with dst:
+                        src.backup(dst)
+                    dst.close()
+                    src.close()
+                    os.replace(tmp, backup)   # atomic swap — never leaves a half-written backup
+                except sqlite3.DatabaseError:
+                    try:
+                        os.remove(tmp)
+                    except OSError:
+                        pass
+            return
+        # Corrupt — always move the bad file aside (preserved for forensics/recovery,
+        # never deleted), then either restore the last good backup or let the app
+        # build a fresh DB. Either way the panel starts instead of crash-looping.
+        aside = "%s.corrupt-%d" % (path, int(_t.time()))
+        try:
+            os.replace(path, aside)
+        except OSError:
+            pass
+        # Drop the corrupt DB's stale WAL/SHM so they aren't replayed over a new file.
+        for ext in ("-wal", "-shm"):
+            try:
+                os.remove(path + ext)
+            except OSError:
+                pass
+        if os.path.exists(backup) and _db_quick_check(backup):
+            _log.error("database at %s is corrupt — restored last good backup "
+                       "(corrupt copy saved to %s)", path, aside)
+            shutil.copy2(backup, path)
+        else:
+            _log.error("database at %s is corrupt and no healthy backup exists — moved "
+                       "it aside (%s) so the panel can start fresh; use the recovery "
+                       "tool if you need to salvage its data", path, aside)
+    except Exception:
+        _log.exception("database self-heal check failed (continuing startup)")
+
+
 def init_db(app):
+    _ensure_db_healthy()   # self-heal on-disk corruption before the ORM opens the file
     db.init_app(app)
     with app.app_context():
         # WAL lets readers and a writer work concurrently (default rollback journal
