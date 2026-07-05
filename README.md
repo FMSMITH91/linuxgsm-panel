@@ -63,6 +63,20 @@ pip install -r requirements.txt
 python app.py
 ```
 
+### Uninstalling
+
+The panel ships an uninstaller that removes **only the panel** — its service, files, data, sudoers entry, and (for a root install) the dedicated `lgsmpanel` user. **Your game servers are left completely intact** — their Linux users, files, and autostart are never touched, so they keep running.
+
+```bash
+# root/system install
+sudo bash ~lgsmpanel/linuxgsm-panel/uninstall.sh
+
+# per-user install
+bash ~/linuxgsm-panel/uninstall.sh
+```
+
+It asks you to type `yes` first (add `--yes` to skip the prompt).
+
 ## Features
 
 - **🔐 Multi-user RBAC** — Super Admin, Server Admin, Moderator, Viewer. Define groups with granular permissions (view, send commands, restart, install, uninstall, manage users, etc.)
