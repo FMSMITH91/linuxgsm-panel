@@ -428,6 +428,12 @@ def create_app():
                 deleted = AuditLog.query.filter(AuditLog.timestamp < cutoff).delete()
                 if deleted:
                     db.session.commit()
+                    # A plain DELETE leaves the freed pages in the file. After a
+                    # meaningful prune, reclaim the space + refresh stats so enabling
+                    # retention actually shrinks the DB (cheap on a small file).
+                    if deleted >= 100:
+                        from models import optimize_database
+                        optimize_database()
         except Exception:
             db.session.rollback()
 
@@ -2329,6 +2335,33 @@ def register_routes(app):
         except Exception:
             return jsonify({"success": False,
                             "message": _log_and_generic("panel repair failed")}), 500
+
+    @app.route("/api/panel/db-stats")
+    @login_required
+    @permission_required(SUPER_ADMIN)
+    def api_panel_db_stats():
+        """DB + WAL size and audit-log row count (so growth is visible)."""
+        try:
+            from models import database_stats
+            return jsonify(database_stats())
+        except Exception:
+            return jsonify({"error": _log_and_generic("db-stats failed")}), 500
+
+    @app.route("/api/panel/optimize-db", methods=["POST"])
+    @login_required
+    @permission_required(SUPER_ADMIN)
+    def api_panel_optimize_db():
+        """VACUUM + ANALYZE + WAL checkpoint — reclaim space, refresh stats."""
+        try:
+            from models import optimize_database
+            ok, msg, info = optimize_database()
+            if ok:
+                log_action(current_user, "panel_db_optimize",
+                           detail="freed %d bytes" % info.get("freed", 0), success=True)
+            return jsonify({"success": ok, "message": msg, **info})
+        except Exception:
+            return jsonify({"success": False,
+                            "message": _log_and_generic("db optimize failed")}), 500
 
     @app.route("/api/server-management/os-update-check")
     @login_required

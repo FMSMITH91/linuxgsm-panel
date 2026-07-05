@@ -195,6 +195,23 @@
         </div>
       </div>
     </div>
+
+    <!-- Database maintenance -->
+    <div id="diag-db" class="mt-3">
+      <hr class="my-2">
+      <div class="small text-secondary mb-1"><i class="bi bi-database"></i> Database maintenance</div>
+      <div id="diag-db-stats" class="small text-secondary">—</div>
+      <div class="mt-2 d-flex gap-2 align-items-center">
+        <button class="btn btn-sm btn-outline-secondary" id="diag-optimize-btn" onclick="optimizeDb()">
+          <i class="bi bi-stars"></i> Optimize database
+        </button>
+        <span id="diag-db-msg" class="small"></span>
+      </div>
+      <div class="small text-secondary mt-1">
+        Reclaims freed space and refreshes query statistics (VACUUM + ANALYZE). Safe to run anytime;
+        the only table that grows over time is the audit log.
+      </div>
+    </div>
   </div>
 </div>
 {% endif %}
@@ -587,6 +604,7 @@ function runDiagnostics(){
     }
     if(msg) msg.textContent='';
     loadIntegrity();  // refresh the file list + repair button
+    loadDbStats();    // refresh DB size + audit row count
   }).catch(function(){
     if(msg) msg.innerHTML='<span class="text-danger">Diagnostics failed — check the panel logs.</span>';
   }).finally(function(){ if(btn) btn.disabled=false; });
@@ -639,8 +657,44 @@ function repairPanel(){
     });
 }
 
+// ── Database maintenance (panel host only) ──────────────────────────
+function fmtBytes(b){
+  if(b == null) return '—';
+  if(b >= 1048576) return (b/1048576).toFixed(1)+' MB';
+  if(b >= 1024) return Math.max(1, Math.round(b/1024))+' KB';
+  return b+' B';
+}
+function loadDbStats(){
+  fetch(MOUNT+'/api/panel/db-stats').then(function(r){return r.json();}).then(function(d){
+    var el=document.getElementById('diag-db-stats'); if(!el) return;
+    if(d.error){ el.textContent='Could not read database stats.'; return; }
+    el.textContent='Size '+fmtBytes(d.size)+' · WAL '+fmtBytes(d.wal_size)+
+      ' · audit rows '+(d.audit_rows==null?'?':d.audit_rows);
+  }).catch(function(){});
+}
+function optimizeDb(){
+  var btn=document.getElementById('diag-optimize-btn');
+  var msg=document.getElementById('diag-db-msg');
+  if(btn){ btn.disabled=true; btn.innerHTML='<span class="spinner-border spinner-border-sm"></span> Optimizing…'; }
+  fetch(MOUNT+'/api/panel/optimize-db',{method:'POST',headers:{'Content-Type':'application/json'},body:'{}'})
+    .then(function(r){return r.json();}).then(function(d){
+      if(msg){
+        msg.className='small';
+        if(d.success){
+          var freed=d.freed||0;
+          msg.innerHTML='<span class="text-success"><i class="bi bi-check-circle-fill"></i> Optimized'+
+            (freed>0?(' — reclaimed '+fmtBytes(freed)):'')+'.</span>';
+        } else {
+          msg.innerHTML='<span class="text-danger">'+(d.message||'Optimize failed.')+'</span>';
+        }
+      }
+      loadDbStats();
+    }).catch(function(){ if(msg) msg.innerHTML='<span class="text-danger">Optimize request failed.</span>'; })
+    .finally(function(){ if(btn){ btn.disabled=false; btn.innerHTML='<i class="bi bi-stars"></i> Optimize database'; } });
+}
+
 loadSshStatus();                     // public-SSH controls now exist on both local + remote (no-ops if absent)
-if(IS_LOCAL){ checkPanelUpdate(false); loadIntegrity(); } // panel-only cards
+if(IS_LOCAL){ checkPanelUpdate(false); loadIntegrity(); loadDbStats(); } // panel-only cards
 pollLive();
 setInterval(pollLive, 2000);
 </script>

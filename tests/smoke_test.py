@@ -334,6 +334,18 @@ try:
     check("login: brute-force lockout blocks after %d failures" % LOGIN_MAX_FAILS, _locked)
     _LOGIN_FAILS.clear()   # isolate: don't leave 127.0.0.1 locked for anything else
 
+    # ── Database maintenance: stats + VACUUM/ANALYZE optimize ─────
+    with app.app_context():
+        from models import database_stats, optimize_database
+        _st = database_stats()
+        check("db-stats: reports a positive DB size", _st["size"] > 0,
+              "got %r" % _st.get("size"))
+        check("db-stats: audit_rows is an int count", isinstance(_st["audit_rows"], int))
+        _ok, _msg, _info = optimize_database()
+        check("optimize: VACUUM/ANALYZE runs cleanly", _ok is True)
+        check("optimize: reports before/after sizes with a live file",
+              "before" in _info and _info.get("after", 0) > 0)
+
 finally:
     passed = sum(1 for ok, _, _ in results if ok)
     for ok, name, detail in results:

@@ -355,6 +355,65 @@ def _run_light_migrations():
     db.session.commit()
 
 
+def database_stats():
+    """Size of the DB file + its WAL sidecar (bytes) and the audit_log row count —
+    the numbers that tell you whether the DB is growing and worth optimizing."""
+    import os
+    from config import DB_PATH
+
+    def _sz(p):
+        try:
+            return os.path.getsize(p)
+        except OSError:
+            return 0
+
+    path = str(DB_PATH)
+    try:
+        rows = db.session.execute(text("SELECT COUNT(*) FROM audit_log")).scalar()
+        rows = int(rows) if rows is not None else 0
+    except Exception:
+        db.session.rollback()
+        rows = None
+    return {"size": _sz(path), "wal_size": _sz(path + "-wal"), "audit_rows": rows}
+
+
+def optimize_database():
+    """Reclaim freed pages and refresh planner stats: VACUUM + ANALYZE + WAL
+    checkpoint(TRUNCATE). Returns (ok, message, {"before","after","freed"} bytes).
+
+    VACUUM can't run inside a transaction and SQLAlchemy always opens one, so we
+    run it over a short-lived direct sqlite3 connection in autocommit mode. Safe
+    to run on a live panel — it briefly locks writers but leaves data consistent."""
+    import os
+    import sqlite3
+    from config import DB_PATH
+    path = str(DB_PATH)
+
+    def _size():
+        try:
+            return os.path.getsize(path)
+        except OSError:
+            return 0
+
+    before = _size()
+    # Release any SQLAlchemy transaction/connection so VACUUM can take its lock.
+    try:
+        db.session.commit()
+    except Exception:
+        db.session.rollback()
+    db.session.remove()
+    con = sqlite3.connect(path, timeout=30, isolation_level=None)  # autocommit
+    try:
+        con.execute("VACUUM")
+        con.execute("ANALYZE")
+        con.execute("PRAGMA wal_checkpoint(TRUNCATE)")
+    finally:
+        con.close()
+    after = _size()
+    return True, "Database optimized.", {"before": before, "after": after,
+                                         "freed": max(0, before - after)}
+
+
 def init_db(app):
     db.init_app(app)
     with app.app_context():
