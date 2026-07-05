@@ -50,7 +50,7 @@ eventlet.monkey_patch()
 del _w
 
 from flask import (
-    Flask, abort, flash, jsonify, redirect, render_template, request,
+    Flask, Response, abort, flash, jsonify, redirect, render_template, request,
     session, url_for,
 )
 from markupsafe import Markup
@@ -386,6 +386,10 @@ def create_app():
         resp.headers.setdefault("X-Content-Type-Options", "nosniff")
         resp.headers.setdefault("Referrer-Policy", "same-origin")
         resp.headers.setdefault("Content-Security-Policy", _CSP)
+        # Keep the admin panel out of search engines. This header covers EVERY
+        # response (crawlers can't miss it), and /robots.txt asks nicely too — a
+        # private management UI has no business being indexed.
+        resp.headers.setdefault("X-Robots-Tag", "noindex, nofollow, noarchive")
         # Advertise HSTS only for HTTPS backed by a TRUSTED cert — via a proxy that sets
         # X-Forwarded-Proto, or Tailscale. NOT for our own self-signed TLS: HSTS turns the
         # one-time "not private" warning into a hard, un-clickable-through block on a named
@@ -570,7 +574,8 @@ def register_routes(app):
         # Tailscale status"). Those endpoints self-guard with _setup_open() (403 once
         # setup is done), so exempting them here is safe.
         if request.path.startswith("/static/") or request.path == "/setup" \
-                or request.path.startswith("/setup/") or request.path.startswith("/api/setup/"):
+                or request.path.startswith("/setup/") or request.path.startswith("/api/setup/") \
+                or request.path == "/robots.txt":
             return
         if not is_setup_complete():
             return redirect("/setup")
@@ -1006,6 +1011,13 @@ def register_routes(app):
         return render_template("backup_codes.html", codes=codes, first_time=False)
 
     # ── Dashboard ──────────────────────────────────────────
+    @app.route("/robots.txt")
+    def robots_txt():
+        """Tell well-behaved crawlers not to index the panel. Advisory only (the
+        X-Robots-Tag header is the enforceable part), but keeps the management UI
+        out of search results."""
+        return Response("User-agent: *\nDisallow: /\n", mimetype="text/plain")
+
     @app.route("/healthz")
     def healthz():
         """Unauthenticated liveness probe for monitors / an external watchdog. Confirms

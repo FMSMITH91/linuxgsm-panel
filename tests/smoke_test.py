@@ -309,6 +309,11 @@ try:
     check("security header: Referrer-Policy set", bool(hr.headers.get("Referrer-Policy")))
     check("security header: Content-Security-Policy set",
           bool(hr.headers.get("Content-Security-Policy")))
+    check("security header: X-Robots-Tag noindex (keep out of search engines)",
+          "noindex" in (hr.headers.get("X-Robots-Tag") or ""))
+    _rb = app.test_client().get("/robots.txt")
+    check("robots.txt is served (200)", _rb.status_code == 200, "got %d" % _rb.status_code)
+    check("robots.txt disallows all crawling", b"Disallow: /" in _rb.data)
 
     # ── CSRF protection rejects a tokenless mutating POST ─────────
     # This client has CSRF disabled for convenience; flip it back on for one
