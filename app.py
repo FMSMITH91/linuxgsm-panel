@@ -383,6 +383,14 @@ def create_app():
     # restart after the config is written.
     app.wsgi_app = PrefixMiddleware(app.wsgi_app)
 
+    # Behind a reverse proxy (Caddy/nginx/Cloudflare Tunnel), trust ONE hop of
+    # X-Forwarded-* so request.is_secure/scheme + client IP reflect the real client.
+    # Off by default — only enable when actually behind a trusted proxy, or these
+    # headers become spoofable. (client_ip() also only trusts XFF from loopback.)
+    if cfg.get("trust_proxy"):
+        from werkzeug.middleware.proxy_fix import ProxyFix
+        app.wsgi_app = ProxyFix(app.wsgi_app, x_for=1, x_proto=1, x_host=1, x_prefix=1)
+
     return app
 
 
@@ -2985,6 +2993,46 @@ def register_routes(app):
 
 # ─── Main Entry Point ──────────────────────────────────────────
 
+def _ensure_self_signed_cert(cert_path, key_path, hostname):
+    """Create a long-lived (10-year) self-signed cert/key if one isn't already present
+    or has (nearly) expired. Used when use_https is on and there's no reverse proxy.
+    Returns (cert_path, key_path). Uses cryptography (already a dependency)."""
+    import datetime as _dt
+    from cryptography import x509
+    from cryptography.x509.oid import NameOID
+    from cryptography.hazmat.primitives import hashes, serialization
+    from cryptography.hazmat.primitives.asymmetric import rsa
+
+    if os.path.exists(cert_path) and os.path.exists(key_path):
+        try:
+            with open(cert_path, "rb") as f:
+                existing = x509.load_pem_x509_certificate(f.read())
+            if existing.not_valid_after > _dt.datetime.utcnow() + _dt.timedelta(days=30):
+                return cert_path, key_path
+        except Exception:
+            pass
+
+    key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
+    name = x509.Name([x509.NameAttribute(NameOID.COMMON_NAME, hostname or "linuxgsm-panel")])
+    cert = (x509.CertificateBuilder()
+            .subject_name(name).issuer_name(name)
+            .public_key(key.public_key())
+            .serial_number(x509.random_serial_number())
+            .not_valid_before(_dt.datetime.utcnow() - _dt.timedelta(days=1))
+            .not_valid_after(_dt.datetime.utcnow() + _dt.timedelta(days=3650))
+            .add_extension(x509.SubjectAlternativeName([x509.DNSName(hostname or "localhost")]), critical=False)
+            .sign(key, hashes.SHA256()))
+    os.makedirs(os.path.dirname(cert_path), exist_ok=True)
+    with open(key_path, "wb") as f:
+        f.write(key.private_bytes(serialization.Encoding.PEM,
+                                  serialization.PrivateFormat.TraditionalOpenSSL,
+                                  serialization.NoEncryption()))
+    os.chmod(key_path, 0o600)
+    with open(cert_path, "wb") as f:
+        f.write(cert.public_bytes(serialization.Encoding.PEM))
+    return cert_path, key_path
+
+
 if __name__ == "__main__":
     import warnings
     warnings.filterwarnings("ignore", category=DeprecationWarning, module="eventlet")
@@ -3015,4 +3063,19 @@ if __name__ == "__main__":
     except Exception:
         pass
 
-    app.socketio.run(app, host=host, port=port, debug=False, allow_unsafe_werkzeug=True)
+    # Optional built-in HTTPS with a self-signed cert (for public, no-domain, no-proxy
+    # setups). Browsers will warn about the self-signed cert — that's expected.
+    ssl_args = {}
+    if cfg.get("use_https"):
+        from config import DATA_DIR
+        cert_path = str(DATA_DIR / "ssl" / "cert.pem")
+        key_path = str(DATA_DIR / "ssl" / "key.pem")
+        try:
+            _ensure_self_signed_cert(cert_path, key_path, cfg.get("site_domain") or host)
+            ssl_args = {"certfile": cert_path, "keyfile": key_path}
+            print(f"  🔒 HTTPS enabled (self-signed) — https://{host}:{port}")
+            print("     Browsers will show a certificate warning; click through to proceed.")
+        except Exception as e:
+            print(f"  [!] Could not enable HTTPS ({e}); serving plain HTTP instead.")
+
+    app.socketio.run(app, host=host, port=port, debug=False, allow_unsafe_werkzeug=True, **ssl_args)
