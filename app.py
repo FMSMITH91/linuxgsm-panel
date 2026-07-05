@@ -249,6 +249,14 @@ _LOGIN_FAILS_LOCK = threading.Lock()
 LOGIN_MAX_FAILS = 8
 LOGIN_WINDOW = 300  # seconds
 
+
+def _prune_login_fails(now):
+    """Drop IPs whose failures have all aged out of the window. Without this the map
+    grows one entry per client IP that ever failed a login (a public login page gets
+    hit by scanners from countless IPs), leaking memory. Call under _LOGIN_FAILS_LOCK."""
+    for ip in [k for k, v in _LOGIN_FAILS.items() if not v or now - v[-1] >= LOGIN_WINDOW]:
+        del _LOGIN_FAILS[ip]
+
 MIN_PASSWORD_LEN = 10
 import string as _string
 _PW_SYMBOLS = set(_string.punctuation)
@@ -797,8 +805,12 @@ def register_routes(app):
             now = time.time()
             # Brute-force throttle: drop stale failures, block if too many remain.
             with _LOGIN_FAILS_LOCK:
+                _prune_login_fails(now)   # keep the map bounded to recently-active IPs
                 fails = [t for t in _LOGIN_FAILS.get(ip, []) if now - t < LOGIN_WINDOW]
-                _LOGIN_FAILS[ip] = fails
+                if fails:
+                    _LOGIN_FAILS[ip] = fails
+                else:
+                    _LOGIN_FAILS.pop(ip, None)
                 blocked = len(fails) >= LOGIN_MAX_FAILS
             if blocked:
                 log_action(None, "login_blocked", detail=f"rate-limited {ip}", success=False)

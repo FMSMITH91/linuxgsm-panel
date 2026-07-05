@@ -251,6 +251,20 @@ check("check_password: None stored hash -> False (no raise)", not check_password
 check("check_password: garbage stored hash -> False (no raise)", not check_password("x", "not-a-bcrypt-hash"))
 check("dummy_password_check always returns False", dummy_password_check("anything") is False)
 
+# ── login-throttle map must not grow unbounded (prune stale/empty IP buckets) ──
+import app as _appmod
+from app import _prune_login_fails
+_now = 1_000_000.0
+_appmod._LOGIN_FAILS.clear()
+_appmod._LOGIN_FAILS["fresh"] = [_now - 10]     # last failure within the window
+_appmod._LOGIN_FAILS["stale"] = [_now - 9999]   # last failure aged out
+_appmod._LOGIN_FAILS["empty"] = []              # bucket emptied by trimming
+_prune_login_fails(_now)
+check("login-throttle prune keeps a recently-active IP", "fresh" in _appmod._LOGIN_FAILS)
+check("login-throttle prune drops an aged-out IP", "stale" not in _appmod._LOGIN_FAILS)
+check("login-throttle prune drops an empty bucket", "empty" not in _appmod._LOGIN_FAILS)
+_appmod._LOGIN_FAILS.clear()
+
 # ── cleanup: remove key/config files this run created ─────────
 for p in (config.CRED_KEY_FILE, config.SECRET_FILE, config.CONFIG_FILE):
     if p not in _pre and os.path.exists(p):
