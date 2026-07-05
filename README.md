@@ -12,6 +12,52 @@ A self-hosted web panel for managing **LinuxGSM** game servers on remote VPS mac
 > setup (tailnet-only, free on the Personal plan), MagicDNS URL discovery, and peer reachability checking
 > for your remote nodes.
 
+## What you need
+
+- **A Linux host to run the panel on** — Ubuntu/Debian recommended. The installer sets up everything else it needs (Python 3.9+, a virtualenv, and dependencies) automatically, so you don't have to install them yourself.
+- **One or more game-server machines you can reach over SSH** (key, password, or Tailscale SSH). The panel host can also manage itself.
+- **LinuxGSM** on those machines — or let the panel install it for you.
+- *Optional but recommended:* **[Tailscale](https://tailscale.com)** for private, HTTPS access with no open ports.
+
+## Quick Install
+
+One command installs the panel — and re-running the **same command** later updates it in place:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/FMSMITH91/linuxgsm-panel/main/install.sh | bash
+```
+
+- Run as a normal user → installs under that user as a `systemd --user` service.
+- Run as **root** → the panel is **not** run as root; the installer creates a dedicated non-login service user and runs it as a system service.
+- Serves HTTPS out of the box with a built-in self-signed certificate; auto-detects Tailscale and offers a **trusted** certificate via Tailscale Serve during the setup wizard.
+
+**Then open `https://your-server:5000`** — you'll see a one-time "not private" browser warning (that's the built-in self-signed cert; click **Advanced → Proceed**), and the first visit runs the setup wizard that walks you through the rest. *(An `http://` address won't load — the panel speaks TLS.)*
+
+That's it. The sections below are reference for when you want them.
+
+### Safe, self-healing updates
+
+Re-running the command on an existing install performs a **verified update**: it snapshots the current code **and** database, pulls the new version, restarts the service, and **health-checks** that the panel actually comes back up. If it doesn't, it **automatically rolls back** to the previous version — code and database — so a bad release can't leave you with a dead panel. The command is idempotent; run it as often as you like.
+
+```bash
+# Later, to update (same command — installs or updates):
+curl -fsSL https://raw.githubusercontent.com/FMSMITH91/linuxgsm-panel/main/install.sh | bash
+```
+
+Prefer a checkout? `git clone` then `bash install.sh` does exactly the same thing, and `bash install.sh` again updates it.
+
+Or install manually:
+
+```bash
+# Create environment
+python3 -m venv venv
+source venv/bin/activate
+pip install -r requirements.txt
+
+# Run
+python app.py
+```
+
 ## Features
 
 - **🔐 Multi-user RBAC** — Super Admin, Server Admin, Moderator, Viewer. Define groups with granular permissions (view, send commands, restart, install, uninstall, manage users, etc.)
@@ -53,43 +99,6 @@ A self-hosted web panel for managing **LinuxGSM** game servers on remote VPS mac
 **Granular permissions** — groups bundle per-action permissions with per-server access; a user inherits the combined set. Enforcement is server-side on every endpoint.
 
 ![Groups & permissions](docs/screenshots/06-permissions.png)
-
-## Quick Install
-
-One command installs the panel — and re-running the **same command** later updates it in place:
-
-```bash
-curl -fsSL https://raw.githubusercontent.com/FMSMITH91/linuxgsm-panel/main/install.sh | bash
-```
-
-- Run as a normal user → installs under that user as a `systemd --user` service.
-- Run as **root** → the panel is **not** run as root; the installer creates a dedicated non-login service user and runs it as a system service.
-- Serves HTTPS out of the box with a built-in self-signed certificate; auto-detects Tailscale and offers a **trusted** certificate via Tailscale Serve during the setup wizard.
-
-### Safe, self-healing updates
-
-Re-running the command on an existing install performs a **verified update**: it snapshots the current code **and** database, pulls the new version, restarts the service, and **health-checks** that the panel actually comes back up. If it doesn't, it **automatically rolls back** to the previous version — code and database — so a bad release can't leave you with a dead panel. The command is idempotent; run it as often as you like.
-
-```bash
-# Later, to update (same command — installs or updates):
-curl -fsSL https://raw.githubusercontent.com/FMSMITH91/linuxgsm-panel/main/install.sh | bash
-```
-
-Prefer a checkout? `git clone` then `bash install.sh` does exactly the same thing, and `bash install.sh` again updates it.
-
-Or install manually:
-
-```bash
-# Create environment
-python3 -m venv venv
-source venv/bin/activate
-pip install -r requirements.txt
-
-# Run
-python app.py
-```
-
-Open `https://your-server:5000` — the panel serves HTTPS out of the box with a built-in self-signed certificate, so your browser shows a one-time "not private" warning (click **Advanced → Proceed**). The first visit runs the setup wizard. (An `http://` address won't load — the panel speaks TLS.)
 
 ## Configuration
 
@@ -204,13 +213,6 @@ tailscale funnel --bg --https 443 http://127.0.0.1:5000
 ```bash
 systemctl --user enable --now linuxgsm-panel
 ```
-
-## Requirements
-
-- Python 3.9+
-- SSH access to target VPS (key or password)
-- LinuxGSM installed on target (or the panel will install it)
-- Remote VPS: Linux (Ubuntu/Debian/CentOS)
 
 ## Security
 
