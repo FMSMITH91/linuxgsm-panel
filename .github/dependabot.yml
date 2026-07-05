@@ -8,6 +8,11 @@ updates:
       interval: "weekly"
     open-pull-requests-limit: 5
     labels: ["dependencies"]
+    groups:
+      # Batch all Python bumps into ONE weekly PR instead of one per package, so they
+      # don't trickle in and hit the open-PR limit.
+      python-dependencies:
+        patterns: ["*"]
 
   # Keep the GitHub Actions themselves current (this is what clears the
   # "Node.js 20 is deprecated" runner warning once new majors ship).
@@ -16,3 +21,6 @@ updates:
     schedule:
       interval: "weekly"
     labels: ["ci"]
+    groups:
+      github-actions:
+        patterns: ["*"]
