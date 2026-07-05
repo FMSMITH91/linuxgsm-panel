@@ -329,6 +329,22 @@ else
     ok "Installing for the current user '${PANEL_USER}'"
 fi
 
+# ── One-time full OS upgrade (FRESH install only — the update path never reaches here).
+# This tool is meant to bring a brand-new VPS up fast, so bring the whole system current
+# up front instead of making the operator babysit apt; if the upgrade needs a reboot
+# (e.g. a new kernel) we reboot at the very end. Fully non-interactive. Skip it entirely
+# with PANEL_NO_UPGRADE=1.
+if [ "${PANEL_NO_UPGRADE:-0}" != "1" ] && command -v apt-get >/dev/null 2>&1; then
+    UPG_SUDO=""; [ "$(id -u)" -ne 0 ] && UPG_SUDO="sudo"
+    info "Bringing the OS fully up to date (one-time — set PANEL_NO_UPGRADE=1 to skip)…"
+    export DEBIAN_FRONTEND=noninteractive NEEDRESTART_MODE=a
+    ${UPG_SUDO} apt-get update -qq || true
+    ${UPG_SUDO} apt-get -y -o Dpkg::Options::="--force-confold" full-upgrade \
+        || warn "Some packages could not be upgraded — continuing with the install."
+    ${UPG_SUDO} apt-get -y autoremove --purge >/dev/null 2>&1 || true
+    ok "System packages up to date"
+fi
+
 info "[1/4] Fetching the panel into ${PANEL_DIR}…"
 fetch_code
 
@@ -463,3 +479,15 @@ echo ""
 warn "The panel binds 0.0.0.0:${PORT}. For real use, put it behind Tailscale Serve (HTTPS,"
 warn "no open port needed) from the setup wizard — don't leave the admin panel open to the internet."
 echo ""
+
+# ── If the one-time OS upgrade needs a reboot (new kernel / core library), do it now. The
+#    panel service is enabled to start on boot, so it comes right back up at the URL above.
+#    Only fresh installs reach this point (the update path exits earlier). ──
+if [ "${PANEL_NO_UPGRADE:-0}" != "1" ] && [ -f /var/run/reboot-required ]; then
+    RB_SUDO=""; [ "$(id -u)" -ne 0 ] && RB_SUDO="sudo"
+    warn "A reboot is needed to finish the system update (a new kernel or core library was installed)."
+    warn "Rebooting in 15s — reconnect in ~1 min and the panel will already be running at the URL above."
+    warn "(Press Ctrl-C now to skip the reboot and do it yourself later with '${RB_SUDO} reboot'.)"
+    sleep 15
+    ${RB_SUDO} reboot
+fi
