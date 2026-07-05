@@ -466,8 +466,9 @@ def register_template_filters(app):
         if not dt:
             return "Never"
         iso = dt.replace(microsecond=0).isoformat() + "Z"
-        return Markup('<span class="localtime" data-utc="%s">%s UTC</span>'
-                      % (iso, dt.strftime("%Y-%m-%d %H:%M:%S")))
+        return Markup(  # nosec B704 - both interpolations are datetime-derived, never user input
+            '<span class="localtime" data-utc="%s">%s UTC</span>'
+            % (iso, dt.strftime("%Y-%m-%d %H:%M:%S")))
 
     @app.template_filter("permlabel")
     def permission_label(perm):
