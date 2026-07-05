@@ -1,0 +1,14 @@
+---
+# Codacy analysis configuration.
+# https://docs.codacy.com/repositories-configure/codacy-configuration-file/
+#
+# Skip generated / non-source paths so the grade reflects the actual application code
+# (the Python modules, templates, and shell scripts). Everything else is analysed.
+exclude_paths:
+  - "venv/**"
+  - ".venv/**"
+  - "data/**"
+  - "node_modules/**"
+  - "**/__pycache__/**"
+  - "lgsm/data/**"          # bundled reference CSVs, not code
+  - "docs/screenshots/**"   # images
