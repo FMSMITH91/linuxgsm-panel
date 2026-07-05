@@ -2,9 +2,16 @@
 {% block title %}Dashboard{% endblock %}
 {% block content %}
 
-<div class="d-flex justify-content-between align-items-center mb-4">
+<div class="d-flex justify-content-between align-items-center mb-4 flex-wrap gap-2">
   <h1 class="page-title mb-0"><i class="bi bi-grid-1x2-fill"></i> Dashboard</h1>
-  <div>
+  <div class="d-flex align-items-center gap-3">
+    {% if servers and servers|length > 6 %}
+    <div class="input-group input-group-sm" style="width:220px;">
+      <span class="input-group-text"><i class="bi bi-search"></i></span>
+      <input type="text" id="srv-search" class="form-control" placeholder="Filter servers…"
+             autocomplete="off" oninput="filterServers()">
+    </div>
+    {% endif %}
     <span class="text-secondary small" id="refresh-indicator">
       <i class="bi bi-arrow-repeat"></i> Auto-refreshing
     </span>
@@ -64,7 +71,7 @@
 {% for remote in remotes %}
 {% set remote_servers = servers|selectattr('remote_id', 'equalto', remote.id)|list %}
 {% if remote_servers %}
-<div class="card mb-3">
+<div class="card mb-3 server-remote-card">
   <div class="card-header d-flex justify-content-between align-items-center">
     <span>
       <i class="bi bi-hdd-network-fill"></i> {{ remote.display_name }}
@@ -125,6 +132,7 @@
 </div>
 {% endif %}
 {% endfor %}
+<div id="srv-none" class="card" style="display:none;"><div class="card-body text-center text-secondary py-4">No servers match your filter.</div></div>
 
 {% endif %}
 
@@ -133,6 +141,25 @@
 {% block scripts %}
 <script>
 function titleCase(s){ return s ? s.charAt(0).toUpperCase()+s.slice(1) : ''; }
+
+// Client-side filter of the server list (name / short name / type / connect address).
+// Hides remote cards with no matching rows, and shows an empty-state when nothing matches.
+function filterServers(){
+  var input = document.getElementById('srv-search'); if(!input) return;
+  var q = input.value.trim().toLowerCase(), anyVisible = false;
+  document.querySelectorAll('.server-remote-card').forEach(function(card){
+    var cardHas = false;
+    card.querySelectorAll('tbody tr').forEach(function(tr){
+      var match = !q || tr.textContent.toLowerCase().indexOf(q) !== -1;
+      tr.style.display = match ? '' : 'none';
+      if(match) cardHas = true;
+    });
+    card.style.display = cardHas ? '' : 'none';
+    if(cardHas) anyVisible = true;
+  });
+  var none = document.getElementById('srv-none');
+  if(none) none.style.display = (q && !anyVisible) ? '' : 'none';
+}
 
 // Live status: update the count tiles + each server row's status cell.
 function refreshStatus() {
