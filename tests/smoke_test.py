@@ -299,6 +299,41 @@ try:
     check("2FA backup code is one-time (reuse rejected, not 302)", s3.status_code != 302,
           "got %d" % s3.status_code)
 
+    # ── Security headers present on every response ────────────────
+    hr = app.test_client().get("/login")
+    check("security header: X-Frame-Options=SAMEORIGIN",
+          hr.headers.get("X-Frame-Options") == "SAMEORIGIN",
+          "got %r" % hr.headers.get("X-Frame-Options"))
+    check("security header: X-Content-Type-Options=nosniff",
+          hr.headers.get("X-Content-Type-Options") == "nosniff")
+    check("security header: Referrer-Policy set", bool(hr.headers.get("Referrer-Policy")))
+    check("security header: Content-Security-Policy set",
+          bool(hr.headers.get("Content-Security-Policy")))
+
+    # ── CSRF protection rejects a tokenless mutating POST ─────────
+    # This client has CSRF disabled for convenience; flip it back on for one
+    # request and confirm a tokenless POST is refused (400) before the view runs.
+    app.config["WTF_CSRF_ENABLED"] = True
+    try:
+        cr = app.test_client().post("/api/server/1/action", json={"action": "start"})
+        check("CSRF: tokenless mutating POST is rejected (400)", cr.status_code == 400,
+              "got %d" % cr.status_code)
+    finally:
+        app.config["WTF_CSRF_ENABLED"] = False
+
+    # ── Login brute-force lockout kicks in after repeated failures ─
+    from app import _LOGIN_FAILS, LOGIN_MAX_FAILS
+    _LOGIN_FAILS.clear()
+    lc = app.test_client()
+    _locked = False
+    for _ in range(LOGIN_MAX_FAILS + 2):
+        lr = lc.post("/login", data={"username": "nobody_lockout", "password": "wrong"})
+        if b"Too many failed attempts" in lr.data:
+            _locked = True
+            break
+    check("login: brute-force lockout blocks after %d failures" % LOGIN_MAX_FAILS, _locked)
+    _LOGIN_FAILS.clear()   # isolate: don't leave 127.0.0.1 locked for anything else
+
 finally:
     passed = sum(1 for ok, _, _ in results if ok)
     for ok, name, detail in results:

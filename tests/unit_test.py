@@ -411,6 +411,98 @@ check("integrity: handles non-git checkout", _so.panel_integrity()["git"] is Fal
 _ok3, _msg3, _ = _so.panel_repair()
 check("repair: refuses when not a git checkout", _ok3 is False)
 
+# ── shell-identifier validation (the core injection defense) ──
+from models import _validate_shell_ident as _vsi
+for _bad in ("a;b", "a b", "a`b", "a$(x)", "a|b", "../x", "a&b", "a>b", "x'y", 'x"y', "a\nb", "a/b"):
+    _rej = False
+    try:
+        _vsi("field", _bad)
+    except ValueError:
+        _rej = True
+    check("shell-ident rejects %r" % _bad, _rej)
+for _good in ("gmodserver", "cod", "my-server_1", "a.b", ""):
+    _acc = True
+    try:
+        _vsi("field", _good)
+    except ValueError:
+        _acc = False
+    check("shell-ident accepts %r" % _good, _acc)
+
+# ── _quote() single-quoting neutralizes shell metacharacters ──
+eq("_quote wraps a plain string in single quotes", sm._quote("abc"), "'abc'")
+eq("_quote escapes an embedded single quote", sm._quote("a'b"), "'a'\\''b'")
+_q = sm._quote("; rm -rf / #")
+check("_quote fully single-quotes a metachar payload", _q[0] == "'" and _q[-1] == "'")
+check("_quote leaves no unescaped quote to break out",
+      _q.count("'") % 2 == 0)  # every quote is balanced/escaped
+
+# ── cron builders generate correct + safe crontab lines ───────
+# Capture what would be written instead of touching a real crontab.
+_cron = {}
+def _cap_rewrite(server, user, grep_args, add_lines, extra_pre=""):
+    _cron.update(grep=grep_args, add=list(add_lines), pre=extra_pre)
+    return True, "ok"
+sm._rewrite_crontab = _cap_rewrite
+
+sm.set_autostart(None, "gmodserver", True)
+eq("autostart(on): @reboot start line", _cron["add"],
+   ["@reboot /home/gmodserver/gmodserver start > /dev/null 2>&1"])
+sm.set_autostart(None, "gmodserver", False)
+eq("autostart(off): removes line, adds none", _cron["add"], [])
+
+sm.install_game_cron(None, "gmodserver", supported={"monitor", "update-lgsm"})
+check("install_game_cron: monitor every 5 min",
+      "*/5 * * * * /home/gmodserver/gmodserver monitor > /dev/null 2>&1" in _cron["add"])
+check("install_game_cron: weekly update-lgsm",
+      "30 5 * * 0 /home/gmodserver/gmodserver update-lgsm > /dev/null 2>&1" in _cron["add"])
+eq("install_game_cron: only supported commands scheduled", len(_cron["add"]), 2)
+
+sm.set_daily_restart(None, "gmodserver", game_type="gmod", port=27015, enabled=True)
+eq("daily_restart(mapped): sets pending flag at 05:00", _cron["add"][0],
+   "0 5 * * * touch /home/gmodserver/.restart-pending")
+check("daily_restart(mapped): queries gamedig for player count",
+      "gamedig --type garrysmod 127.0.0.1:27015" in _cron["add"][1])
+sm.set_daily_restart(None, "codserver", game_type="cod", port=28960, enabled=True)
+check("daily_restart(unmapped game): skips gamedig, no player query",
+      "gamedig" not in _cron["add"][1] and "P=; " in _cron["add"][1])
+sm.set_daily_restart(None, "gmodserver", enabled=False)
+check("daily_restart(disable): adds nothing and clears the flag",
+      _cron["add"] == [] and "rm -f" in _cron["pre"])
+
+# ── server_live_metrics parses SSH output into a numeric dict ──
+_METRICS_OUT = "\n".join([
+    "cpu 100 0 100 800 0 0 0", "GJA 1000",
+    "cpu 110 0 110 880 0 0 0", "GJB 1100",
+    "MEM 8000000000 4000000000", "LOAD 0.5 0.4 0.3",
+    "DISK 100000000000 33000000000", "CORES 4", "UPTIME 123456",
+    "GAMERAM 524288 3", "GUP 3600", "PORT 1",
+])
+sm.run_command = lambda server, cmd, timeout=30, sudo=None: (_METRICS_OUT, "", 0)
+_m = sm.server_live_metrics(None, "gmodserver", 27015)
+eq("metrics: ram_total parsed", _m["ram_total"], 8000000000)
+eq("metrics: ram_percent computed", _m["ram_percent"], 50.0)
+eq("metrics: disk_percent computed", _m["disk_percent"], 33.0)
+eq("metrics: cores parsed", _m["cores"], 4)
+eq("metrics: uptime parsed", _m["uptime_secs"], 123456)
+eq("metrics: game_ram_mb parsed", _m["game_ram_mb"], 512)
+eq("metrics: game_procs parsed", _m["game_procs"], 3)
+check("metrics: port_open true when a socket is listening", _m["port_open"] is True)
+eq("metrics: cpu_percent from the /proc/stat delta", _m["cpu_percent"], 20.0)
+eq("metrics: game_cpu_percent from the jiffie delta", _m["game_cpu_percent"], 100.0)
+
+# ── config save/load round-trips (guards the atomic-write path) ─
+_cfg_backup = config.CONFIG_FILE.read_text() if config.CONFIG_FILE.exists() else None
+try:
+    _c = config.load_config()
+    _c["_roundtrip_probe"] = "value-123"
+    config.save_config(_c)
+    check("config: value survives a save/load round-trip",
+          config.load_config().get("_roundtrip_probe") == "value-123")
+    check("config: file exists after atomic save", config.CONFIG_FILE.exists())
+finally:
+    if _cfg_backup is not None:
+        config.CONFIG_FILE.write_text(_cfg_backup)
+
 # ── cleanup: remove key/config files this run created ─────────
 for p in (config.CRED_KEY_FILE, config.SECRET_FILE, config.CONFIG_FILE):
     if p not in _pre and os.path.exists(p):
