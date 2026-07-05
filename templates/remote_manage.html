@@ -305,13 +305,16 @@
     </div>
     <div class="row g-3 mt-1">
       <div class="col-md-6">
-        {% set ssh_lockdown_safe = status and status.tailscale_ssh and (status.tailscale_ssh.enabled or status.tailscale_ufw_allowed) %}
+        {# Safe to close public SSH ONLY if Tailscale is actually CONNECTED (BackendState
+           Running) — `enabled` is just the RunSSH pref flag and stays true even when the
+           node is installed-but-not-linked (NeedsLogin), which would strand the user. #}
+        {% set ssh_lockdown_safe = ts_up and (status.tailscale_ssh.enabled or status.tailscale_ufw_allowed) %}
         <div class="small text-secondary mb-1">Public SSH (port 22 from the internet) — current: <strong id="ssh-mode">…</strong></div>
-        <p class="small text-secondary mb-1">Tailscale SSH keeps working regardless. Once you can reach this host over the tailnet, rate-limit or fully disable public SSH.{% if not ssh_lockdown_safe %} <span class="text-warning">Enable Tailscale SSH or allow the <code>tailscale0</code> interface first to safely disable public SSH.</span>{% endif %}</p>
+        <p class="small text-secondary mb-1">Tailscale SSH keeps working regardless. Once you can reach this host over the tailnet, rate-limit or fully disable public SSH.{% if not ssh_lockdown_safe %} <span class="text-warning">{% if not ts_up %}<a href="{{ url_for('tailscale_page') }}">Connect Tailscale (link this machine)</a> first{% else %}Enable Tailscale SSH or allow the <code>tailscale0</code> interface first{% endif %} to safely disable public SSH — otherwise you'd lock yourself out.</span>{% endif %}</p>
         <div class="d-flex gap-2 flex-wrap">
           <button class="btn btn-sm btn-outline-secondary" onclick="sshMode('allow')" title="Open port 22 to the internet">Allow</button>
           <button class="btn btn-sm btn-outline-primary" onclick="sshMode('limit')" title="Rate-limit port 22 (brute-force protection)">Limit</button>
-          <button class="btn btn-sm btn-outline-danger" onclick="sshMode('off')" {% if not ssh_lockdown_safe %}disabled title="No Tailscale path back in yet — enable Tailscale SSH or allow the tailscale0 interface first, or you'd lock yourself out"{% else %}title="Remove public port 22 — SSH only over Tailscale"{% endif %}>Disable (tailnet-only)</button>
+          <button class="btn btn-sm btn-outline-danger" onclick="sshMode('off')" {% if not ssh_lockdown_safe %}disabled title="{% if not ts_up %}Tailscale isn't connected yet — link this machine first, or you'd lock yourself out{% else %}No Tailscale path back in yet — enable Tailscale SSH or allow the tailscale0 interface first, or you'd lock yourself out{% endif %}"{% else %}title="Remove public port 22 — SSH only over Tailscale"{% endif %}>Disable (tailnet-only)</button>
         </div>
         <div id="ssh-msg" class="small mt-1"></div>
       </div>
