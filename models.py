@@ -379,24 +379,29 @@ def database_stats():
     return {"size": _sz(path), "wal_size": _sz(path + "-wal"), "audit_rows": rows}
 
 
-def _run_vacuum(path):
-    """The actual blocking sqlite maintenance. VACUUM can't run inside a
-    transaction, so use a short-lived autocommit connection. Checkpoint first so
-    VACUUM starts from a merged DB, then compact, then refresh stats."""
+def _run_maintenance(path):
+    """Blocking sqlite maintenance over one short-lived autocommit connection.
+    Checkpoint + ANALYZE are cheap and reliable and run first; VACUUM needs an
+    exclusive lock, so it's best-effort — skipped (not fatal) if the DB is busy.
+    Returns True if VACUUM actually ran."""
     import sqlite3
-    con = sqlite3.connect(path, timeout=60, isolation_level=None)  # autocommit
+    con = sqlite3.connect(path, timeout=20, isolation_level=None)  # autocommit
     try:
-        con.execute("PRAGMA wal_checkpoint(TRUNCATE)")
-        con.execute("VACUUM")
-        con.execute("ANALYZE")
+        con.execute("PRAGMA wal_checkpoint(TRUNCATE)")   # merge + trim the WAL
+        con.execute("ANALYZE")                           # refresh planner stats
+        try:
+            con.execute("VACUUM")                        # compact (needs exclusive lock)
+            return True
+        except sqlite3.OperationalError:
+            return False   # busy — checkpoint + ANALYZE already succeeded
     finally:
         con.close()
 
 
 def optimize_database():
-    """Reclaim freed pages and refresh planner stats: WAL checkpoint + VACUUM +
-    ANALYZE. Returns (ok, message, {"before","after","freed"} bytes). Never raises
-    — a busy DB or error yields (False, friendly message)."""
+    """Reclaim space + refresh stats: WAL checkpoint + ANALYZE (reliable) plus a
+    best-effort VACUUM. Returns (ok, message, {"before","after","freed"} bytes).
+    Never raises — any failure yields (False, friendly message)."""
     import os
     from config import DB_PATH
     path = str(DB_PATH)
@@ -408,38 +413,39 @@ def optimize_database():
             return 0
 
     before = _size()
-    # End any transaction the request already opened (permission checks read the DB)
-    # so its read lock is released before VACUUM.
+    # End this request's read transaction (permission checks read the DB) so it
+    # doesn't block VACUUM. commit() releases the lock; we deliberately DON'T call
+    # db.session.remove() — the caller still uses the session (audit log) after this.
     try:
         db.session.commit()
     except Exception:
         db.session.rollback()
-    db.session.remove()
 
     # sqlite3 is a blocking C call. Under eventlet (the panel's runtime) that would
-    # freeze the whole event loop, and if any greenlet holds a DB lock VACUUM can't
-    # get its own — deadlock until timeout ("database is locked"). Run it in a real
-    # worker thread via eventlet.tpool so the hub keeps turning and lock holders can
-    # release. Fall back to a direct call when eventlet isn't monkey-patched (tests).
+    # freeze the whole event loop, and if a greenlet holds a DB lock VACUUM can't get
+    # its own. Run the maintenance in a real worker thread via eventlet.tpool so the
+    # hub keeps turning and lock holders can release. Direct call under tests.
+    vacuumed = False
     try:
-        import sqlite3
         try:
             import eventlet.patcher
             if eventlet.patcher.is_monkey_patched("thread"):
                 from eventlet import tpool
-                tpool.execute(_run_vacuum, path)
+                vacuumed = tpool.execute(_run_maintenance, path)
             else:
-                _run_vacuum(path)
+                vacuumed = _run_maintenance(path)
         except ImportError:
-            _run_vacuum(path)
-    except sqlite3.OperationalError:
-        _log.warning("database optimize skipped — DB busy", exc_info=True)
-        return (False, "Couldn't optimize right now — the database was busy. Try again in a moment.",
-                {"before": before, "after": before, "freed": 0})
+            vacuumed = _run_maintenance(path)
     except Exception:
         _log.exception("database optimize failed")
         return (False, "Database optimize failed — see the panel logs.",
                 {"before": before, "after": before, "freed": 0})
+
+    after = _size()
+    msg = ("Database optimized." if vacuumed else
+           "Checkpointed the WAL and refreshed stats — VACUUM was deferred because the "
+           "database was busy; run it again in a moment to compact.")
+    return True, msg, {"before": before, "after": after, "freed": max(0, before - after)}
 
     after = _size()
     return True, "Database optimized.", {"before": before, "after": after,

@@ -2371,9 +2371,12 @@ def register_routes(app):
             from models import optimize_database
             ok, msg, info = optimize_database()
             if ok:
-                log_action(current_user, "panel_db_optimize",
-                           detail="freed %d bytes" % info.get("freed", 0), success=True)
-            return jsonify({"success": ok, "message": msg, **info})
+                try:
+                    log_action(current_user, "panel_db_optimize",
+                               detail="freed %d bytes" % info.get("freed", 0), success=True)
+                except Exception:
+                    app.logger.warning("optimize: audit-log write failed", exc_info=True)
+            return jsonify({"success": ok, "message": msg, **(info or {})})
         except Exception:
             return jsonify({"success": False,
                             "message": _log_and_generic("db optimize failed")}), 500
