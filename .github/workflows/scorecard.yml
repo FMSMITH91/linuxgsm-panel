@@ -31,7 +31,7 @@ jobs:
       id-token: write   # publish results to the OpenSSF API (this is what powers the badge)
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
         with:
           persist-credentials: false
 
@@ -43,7 +43,7 @@ jobs:
           publish_results: true
 
       - name: Upload results (build artifact, not code scanning)
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: scorecard-results
           path: results.sarif
