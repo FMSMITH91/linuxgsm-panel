@@ -192,17 +192,22 @@ def tailscale_ssh_status():
     """Check if this node runs the Tailscale SSH server.
     The authoritative source is the local prefs (`RunSSH`), not `status --json`
     (which has no SSHEnabled field — the old check always reported disabled)."""
-    # Is tailscale even up?
+    # Is tailscale even up? (installed AND backend running)
     st, _, rc = _run("tailscale status --json 2>/dev/null", timeout=10)
     if rc != 0 or not st:
-        return {"enabled": False, "error": "Tailscale not running"}
+        return {"enabled": False, "running": False, "error": "Tailscale not running"}
+    running = False
+    try:
+        running = json.loads(st).get("BackendState") == "Running"
+    except Exception:
+        pass
     out, _, prc = _run("tailscale debug prefs 2>/dev/null", timeout=10)
     if prc == 0 and out:
         try:
-            return {"enabled": bool(json.loads(out).get("RunSSH", False)), "method": "prefs"}
+            return {"enabled": bool(json.loads(out).get("RunSSH", False)), "running": running, "method": "prefs"}
         except Exception:
             pass
-    return {"enabled": False, "error": "Could not read Tailscale prefs"}
+    return {"enabled": False, "running": running, "error": "Could not read Tailscale prefs"}
 
 
 def tailscale_ssh_enable():

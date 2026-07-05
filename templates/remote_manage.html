@@ -171,10 +171,14 @@
           <span id="ts-ssh-badge" class="badge {% if status and status.tailscale_ssh.enabled %}bg-success{% else %}bg-secondary{% endif %}">{{ 'Enabled' if (status and status.tailscale_ssh.enabled) else 'Disabled' }}</span>
         </div>
         <p class="small text-secondary mb-1">SSH into this host over your tailnet using your Tailscale identity — no SSH keys to manage.</p>
+        {% set ts_up = status and status.tailscale_ssh and status.tailscale_ssh.running %}
         {% if status and status.tailscale_ssh.enabled %}
         <button class="btn btn-sm btn-outline-warning" onclick="tsSshDisable()"><i class="bi bi-x-circle"></i> Disable Tailscale SSH</button>
-        {% else %}
+        {% elif ts_up %}
         <button class="btn btn-sm btn-success" onclick="tsSshEnable()"><i class="bi bi-lock"></i> Enable Tailscale SSH</button>
+        {% else %}
+        <button class="btn btn-sm btn-success" disabled title="Tailscale isn't installed/connected on this host"><i class="bi bi-lock"></i> Enable Tailscale SSH</button>
+        <div class="small mt-1"><a href="{{ url_for('tailscale_page') }}"><i class="bi bi-box-arrow-in-down"></i> Set up Tailscale first</a></div>
         {% endif %}
       </div>
       <div class="col-md-6">
@@ -184,7 +188,10 @@
           {% if status and status.tailscale_ufw_allowed %}<span class="badge bg-success">Allowed</span>{% else %}<span class="badge bg-warning text-dark">Not allowed</span>{% endif %}
         </div>
         <p class="small text-secondary mb-1">Allowing the <code>tailscale0</code> interface in UFW keeps the panel reachable over the tailnet.</p>
-        <button class="btn btn-sm btn-success" onclick="ufwAllowTailscale()" {% if status and status.tailscale_ufw_allowed %}disabled{% endif %}><i class="bi bi-shield-check"></i> Allow Tailscale Interface</button>
+        <button class="btn btn-sm btn-success" onclick="ufwAllowTailscale()"
+                {% if (status and status.tailscale_ufw_allowed) or not ts_up %}disabled{% if not ts_up %} title="Tailscale isn't installed/connected on this host"{% endif %}{% endif %}>
+          <i class="bi bi-shield-check"></i> Allow Tailscale Interface</button>
+        {% if not ts_up %}<div class="small mt-1"><a href="{{ url_for('tailscale_page') }}"><i class="bi bi-box-arrow-in-down"></i> Set up Tailscale first</a></div>{% endif %}
       </div>
     </div>
     <div class="row g-3 mt-1">
