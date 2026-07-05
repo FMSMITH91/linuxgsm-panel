@@ -444,7 +444,12 @@ def register_routes(app):
         """Redirect to setup if not complete (except for setup pages and static).
         Until setup is finished there are no users, so every other page — including
         the login page and the dashboard root — funnels into the setup wizard."""
-        if request.path.startswith("/static/") or request.path == "/setup" or request.path.startswith("/setup/"):
+        # The wizard's own AJAX lives under /api/setup/* — it must NOT be redirected to
+        # /setup or the JS gets an HTML redirect instead of JSON ("Could not check
+        # Tailscale status"). Those endpoints self-guard with _setup_open() (403 once
+        # setup is done), so exempting them here is safe.
+        if request.path.startswith("/static/") or request.path == "/setup" \
+                or request.path.startswith("/setup/") or request.path.startswith("/api/setup/"):
             return
         if not is_setup_complete():
             return redirect("/setup")
