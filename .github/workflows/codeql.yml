@@ -15,6 +15,12 @@ concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
+# Least-privilege default for the whole workflow; the analyze job escalates only the
+# scopes CodeQL actually needs (security-events: write). Satisfies Scorecard's
+# Token-Permissions "define a top-level permissions block" check.
+permissions:
+  contents: read
+
 jobs:
   analyze:
     name: Analyze (python)

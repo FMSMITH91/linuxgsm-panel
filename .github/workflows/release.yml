@@ -10,8 +10,11 @@ on:
     branches: [ main ]
     paths: [ "VERSION" ]
 
+# Least-privilege default; only the release job escalates to contents: write (it
+# pushes the tag and creates the GitHub Release). Keeps Scorecard's Token-Permissions
+# check happy by not granting write at the top level.
 permissions:
-  contents: write
+  contents: read
 
 concurrency:
   group: release
@@ -20,6 +23,8 @@ concurrency:
 jobs:
   release:
     runs-on: ubuntu-latest
+    permissions:
+      contents: write   # push the v<VERSION> tag + create the Release
     steps:
       - uses: actions/checkout@v7
         with:

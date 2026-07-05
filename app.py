@@ -89,6 +89,7 @@ from ssh_manager import (
     list_server_commands, server_live_metrics, remote_public_ip, remote_live_metrics,
     host_specs, pro_status, pro_attach, pro_service, pro_detach,
     set_autostart, get_autostart, install_game_cron, set_daily_restart,
+    list_cron_jobs, add_cron_job, update_cron_job, delete_cron_job,
     install_game_dependencies, parse_missing_deps, detect_game_port, detect_game_ports,
     lgsm_read_config, lgsm_write_config, lgsm_game_config,
     browse_dir, read_file, write_file, upload_file, delete_path,
@@ -3003,6 +3004,65 @@ def register_routes(app):
             ok, msg = delete_path(gs.remote, gs.short_name, rel, gs.lgsm_name)
             log_action(current_user, "delete_file", target=gs.name, detail=rel, success=ok)
             return jsonify({"success": ok, "message": msg})
+        except Exception as e:
+            return jsonify({"success": False, "message": str(e)}), 500
+
+    # ── Scheduled tasks (cron) for the game user ──
+    # Same privilege gate as the file editor: a cron entry runs an arbitrary command
+    # as the (unprivileged) game user, exactly as file editing writes arbitrary
+    # content. The panel's own managed entries (autostart / maintenance / daily
+    # restart) are shown read-only and can't be edited or removed here.
+    @app.route("/api/server/<int:server_id>/cron", methods=["GET", "POST"])
+    @login_required
+    @server_access_required
+    def api_server_cron(server_id):
+        gs = get_game(server_id)
+        if not _can_manage_files():
+            return jsonify({"error": "Permission denied"}), 403
+        if request.method == "GET":
+            try:
+                return jsonify({"jobs": list_cron_jobs(gs.remote, gs.short_name, gs.lgsm_name)})
+            except Exception as e:
+                return jsonify({"error": str(e)}), 500
+        data = request.get_json(silent=True) or {}
+        try:
+            ok, msg = add_cron_job(gs.remote, gs.short_name, data.get("schedule"),
+                                   data.get("command"), gs.lgsm_name)
+            log_action(current_user, "cron_add", target=gs.name, success=ok,
+                       detail=(data.get("schedule") or "")[:120])
+            return jsonify({"success": ok, "message": msg or ("Added" if ok else "Failed")})
+        except Exception as e:
+            return jsonify({"success": False, "message": str(e)}), 500
+
+    @app.route("/api/server/<int:server_id>/cron/update", methods=["POST"])
+    @login_required
+    @server_access_required
+    def api_server_cron_update(server_id):
+        gs = get_game(server_id)
+        if not _can_manage_files():
+            return jsonify({"error": "Permission denied"}), 403
+        data = request.get_json(silent=True) or {}
+        try:
+            ok, msg = update_cron_job(gs.remote, gs.short_name, data.get("raw") or "",
+                                      data.get("schedule"), data.get("command"), gs.lgsm_name)
+            log_action(current_user, "cron_update", target=gs.name, success=ok,
+                       detail=(data.get("schedule") or "")[:120])
+            return jsonify({"success": ok, "message": msg or ("Updated" if ok else "Failed")})
+        except Exception as e:
+            return jsonify({"success": False, "message": str(e)}), 500
+
+    @app.route("/api/server/<int:server_id>/cron/delete", methods=["POST"])
+    @login_required
+    @server_access_required
+    def api_server_cron_delete(server_id):
+        gs = get_game(server_id)
+        if not _can_manage_files():
+            return jsonify({"error": "Permission denied"}), 403
+        data = request.get_json(silent=True) or {}
+        try:
+            ok, msg = delete_cron_job(gs.remote, gs.short_name, data.get("raw") or "", gs.lgsm_name)
+            log_action(current_user, "cron_delete", target=gs.name, success=ok)
+            return jsonify({"success": ok, "message": msg or ("Deleted" if ok else "Failed")})
         except Exception as e:
             return jsonify({"success": False, "message": str(e)}), 500
 

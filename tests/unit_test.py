@@ -45,6 +45,36 @@ eq("_int_or junk -> default", _int_or("abc", 22), 22)
 eq("_int_or None -> default", _int_or(None, 5000), 5000)
 eq("_int_or whitespace", _int_or("  80 ", 1), 80)
 
+# ── cron manager (pure logic; no crontab touched) ─────────────
+# schedule validation
+check("cron: 5-field ok", sm._validate_cron("*/5 * * * *", "/bin/true")[0])
+check("cron: @daily ok", sm._validate_cron("@daily", "/home/gm/backup.sh")[0])
+check("cron: @reboot ok", sm._validate_cron("@reboot", "echo hi")[0])
+check("cron: ranges/steps ok", sm._validate_cron("0-30/2 1,3 * * mon-fri", "x")[0])
+check("cron: normalises inner ws", sm._validate_cron("0   5  *  *  *", "x")[2] == "0 5 * * * x")
+check("cron: 4 fields rejected", not sm._validate_cron("* * * *", "x")[0])
+check("cron: bad @shortcut rejected", not sm._validate_cron("@sometimes", "x")[0])
+check("cron: empty command rejected", not sm._validate_cron("@daily", "")[0])
+check("cron: newline in command rejected", not sm._validate_cron("@daily", "a\nb")[0])
+check("cron: embedded CR rejected", not sm._validate_cron("@daily", "a\rb")[0])
+check("cron: embedded CR in schedule rejected", not sm._validate_cron("0 5 *\r* *", "x")[0])
+check("cron: shell metachars allowed in command", sm._validate_cron("@daily", "a && b | c")[0])
+# managed-line detection (must never let the generic editor touch panel entries)
+check("cron: autostart is managed",
+      sm._cron_line_managed("@reboot /home/gm/gmodserver start > /dev/null 2>&1", "gm", "gmodserver"))
+check("cron: maintenance update is managed",
+      sm._cron_line_managed("15 5 * * * /home/gm/gmodserver update > /dev/null 2>&1", "gm", "gmodserver"))
+check("cron: update-lgsm is managed",
+      sm._cron_line_managed("30 5 * * 0 /home/gm/gmodserver update-lgsm > /dev/null 2>&1", "gm", "gmodserver"))
+check("cron: daily-restart flag is managed",
+      sm._cron_line_managed("0 5 * * * touch /home/gm/.restart-pending", "gm", "gmodserver"))
+check("cron: user backup line is NOT managed",
+      not sm._cron_line_managed("0 3 * * * /home/gm/backup.sh", "gm", "gmodserver"))
+# line splitting
+eq("cron: split 5-field", sm._split_cron_line("0 3 * * * /home/gm/b.sh a"), ("0 3 * * *", "/home/gm/b.sh a"))
+eq("cron: split @shortcut", sm._split_cron_line("@reboot /home/gm/x start"), ("@reboot", "/home/gm/x start"))
+eq("cron: split rejects short line", sm._split_cron_line("0 3 * *"), (None, None))
+
 # ── secret encryption round-trip ──────────────────────────────
 _pre = {p for p in (config.CRED_KEY_FILE, config.SECRET_FILE, config.CONFIG_FILE)
         if os.path.exists(p)}

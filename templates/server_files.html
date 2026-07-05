@@ -120,6 +120,43 @@
   </div>
 </div>
 
+<!-- Scheduled tasks (cron) -->
+<div class="card mt-3">
+  <div class="card-header d-flex justify-content-between align-items-center flex-wrap gap-2">
+    <span><i class="bi bi-clock-history"></i> Scheduled Tasks <span class="text-secondary small">(cron)</span></span>
+    <span class="text-secondary" style="font-size:.66rem;"><i class="bi bi-info-circle"></i> Runs as <code>{{ server.short_name }}</code>. Entries the panel manages itself (autostart, updates, daily restart) show as <span class="badge bg-secondary" style="font-size:.5rem;">panel</span> and are controlled by their own toggles.</span>
+  </div>
+  <div class="card-body">
+    <!-- Add / edit form -->
+    <form id="cron-form" class="row g-2 align-items-end mb-3" onsubmit="return saveCron(event)">
+      <div class="col-12 col-md-3">
+        <label class="form-label mb-1" style="font-size:.7rem;">Schedule</label>
+        <input type="text" id="cron-sched" class="form-control form-control-sm font-monospace" placeholder="*/5 * * * *" spellcheck="false" required>
+        <div class="text-secondary" style="font-size:.62rem;">min hour day month weekday — or <code>@daily</code>, <code>@reboot</code>…</div>
+      </div>
+      <div class="col-12 col-md-6">
+        <label class="form-label mb-1" style="font-size:.7rem;">Command</label>
+        <input type="text" id="cron-cmd" class="form-control form-control-sm font-monospace" placeholder="/home/{{ server.short_name }}/backup.sh" spellcheck="false" required>
+      </div>
+      <div class="col-12 col-md-3 d-flex gap-2">
+        <button type="submit" class="btn btn-primary btn-sm" id="cron-submit"><i class="bi bi-plus-lg"></i> Add task</button>
+        <button type="button" class="btn btn-outline-secondary btn-sm" id="cron-cancel" style="display:none;" onclick="cancelCronEdit()">Cancel</button>
+      </div>
+      <div class="col-12"><span id="cron-msg" class="small"></span></div>
+    </form>
+    <!-- Existing entries -->
+    <div id="cron-list-wrap">
+      <div id="cron-loading" class="text-secondary small"><i class="bi bi-arrow-repeat"></i> Loading scheduled tasks…</div>
+      <div class="table-responsive" style="display:none;" id="cron-table-wrap">
+        <table class="table table-sm align-middle mb-0" style="font-size:.78rem;">
+          <thead><tr><th style="width:1%;white-space:nowrap;">Schedule</th><th>Command</th><th style="width:1%;white-space:nowrap;"></th></tr></thead>
+          <tbody id="cron-tbody"></tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+</div>
+
 {% endblock %}
 {% block scripts %}
 <script>
@@ -366,7 +403,78 @@ document.getElementById('breadcrumb').addEventListener('click', function(ev){
   dz.addEventListener('drop', function(ev){ if(ev.dataTransfer && ev.dataTransfer.files) uploadFiles(ev.dataTransfer.files); });
 })();
 
+// ── Scheduled tasks (cron) ──
+var cronEditRaw = null;   // when editing: the exact raw line being replaced
+// Attribute-safe escape: cron commands routinely contain " and ', which would
+// otherwise break the data-* attributes we round-trip the raw line through.
+function escA(s){ return esc(s).replace(/"/g,'&quot;').replace(/'/g,'&#39;'); }
+function cronMsg(text, cls){ var m=document.getElementById('cron-msg'); m.textContent=text||''; m.className='small '+(cls||'text-secondary'); }
+function loadCron(){
+  fetch(MOUNT+'/api/server/'+serverId+'/cron').then(r=>r.json()).then(d=>{
+    var loading=document.getElementById('cron-loading');
+    if(d.error){ loading.style.display=''; loading.innerHTML='<span class="text-danger">'+esc(d.error)+'</span>'; return; }
+    var tb=document.getElementById('cron-tbody'), rows='';
+    (d.jobs||[]).forEach(function(j){
+      var actions = j.managed
+        ? '<span class="badge bg-secondary" title="Managed by the panel — change it with its own toggle">panel</span>'
+        : '<button class="btn btn-sm btn-link p-0 me-2" data-cron-edit title="Edit"><i class="bi bi-pencil"></i></button>'
+          + '<button class="btn btn-sm btn-link text-danger p-0" data-cron-del title="Delete"><i class="bi bi-trash"></i></button>';
+      rows += '<tr data-raw="'+escA(j.raw)+'" data-sched="'+escA(j.schedule)+'" data-cmd="'+escA(j.command)+'"'
+        + (j.managed?' class="text-secondary"':'') + '>'
+        + '<td class="font-monospace" style="white-space:nowrap;">'+esc(j.schedule)+'</td>'
+        + '<td class="font-monospace" style="word-break:break-all;">'+esc(j.command)+'</td>'
+        + '<td class="text-end" style="white-space:nowrap;">'+actions+'</td></tr>';
+    });
+    if(!(d.jobs||[]).length) rows='<tr><td colspan="3" class="text-secondary text-center py-3">No scheduled tasks yet.</td></tr>';
+    // Only swap in the new list once it has arrived (keep the old rows until then).
+    tb.innerHTML=rows;
+    loading.style.display='none';
+    document.getElementById('cron-table-wrap').style.display='';
+  }).catch(()=>{ /* keep whatever is shown; transient errors shouldn't blank the list */ });
+}
+function saveCron(ev){
+  ev.preventDefault();
+  var sched=document.getElementById('cron-sched').value.trim();
+  var cmd=document.getElementById('cron-cmd').value.trim();
+  if(!sched || !cmd){ cronMsg('Schedule and command are both required.','text-danger'); return false; }
+  var editing = cronEditRaw!==null;
+  var url = MOUNT+'/api/server/'+serverId+'/cron'+(editing?'/update':'');
+  var body = editing ? {raw:cronEditRaw, schedule:sched, command:cmd} : {schedule:sched, command:cmd};
+  cronMsg('Saving…','text-secondary');
+  fetch(url,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)})
+    .then(r=>r.json()).then(d=>{
+      if(d.success){ cronMsg(editing?'✓ Task updated':'✓ Task added','text-success'); cancelCronEdit(); loadCron(); }
+      else cronMsg('✗ '+(d.message||'Failed'),'text-danger');
+    }).catch(()=>cronMsg('✗ Save failed','text-danger'));
+  return false;
+}
+function cancelCronEdit(){
+  cronEditRaw=null;
+  document.getElementById('cron-sched').value='';
+  document.getElementById('cron-cmd').value='';
+  document.getElementById('cron-submit').innerHTML='<i class="bi bi-plus-lg"></i> Add task';
+  document.getElementById('cron-cancel').style.display='none';
+}
+document.getElementById('cron-tbody').addEventListener('click', function(ev){
+  var row=ev.target.closest('tr[data-raw]'); if(!row) return;
+  if(ev.target.closest('[data-cron-edit]')){
+    cronEditRaw=row.getAttribute('data-raw');
+    document.getElementById('cron-sched').value=row.getAttribute('data-sched');
+    document.getElementById('cron-cmd').value=row.getAttribute('data-cmd');
+    document.getElementById('cron-submit').innerHTML='<i class="bi bi-save"></i> Save changes';
+    document.getElementById('cron-cancel').style.display='';
+    cronMsg('Editing an existing task…','text-secondary');
+    document.getElementById('cron-sched').focus();
+  } else if(ev.target.closest('[data-cron-del]')){
+    if(!confirm('Delete this scheduled task?\n\n'+row.getAttribute('data-sched')+'  '+row.getAttribute('data-cmd'))) return;
+    fetch(MOUNT+'/api/server/'+serverId+'/cron/delete',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({raw:row.getAttribute('data-raw')})})
+      .then(r=>r.json()).then(d=>{ if(d.success){ cronMsg('✓ Task deleted','text-success'); loadCron(); } else cronMsg('✗ '+(d.message||'Delete failed'),'text-danger'); })
+      .catch(()=>cronMsg('✗ Delete failed','text-danger'));
+  }
+});
+
 loadConfig();
 browse('');
+loadCron();
 </script>
 {% endblock %}

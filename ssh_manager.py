@@ -680,6 +680,121 @@ def get_autostart(server, user, selfname=None):
         return False
 
 
+# ── Generic per-server cron manager ──────────────────────────────────────────
+# The panel manages three kinds of cron entry itself (the @reboot autostart line,
+# the LinuxGSM maintenance jobs, and the daily restart-when-empty pair). Those are
+# driven by their own toggles, so the generic cron editor below MUST NOT let anyone
+# edit or delete them through here — that would silently desync the toggles. Such
+# lines are flagged `managed` (shown read-only) and rejected by update/delete.
+
+_CRON_FIELD = r"[-0-9*,/A-Za-z]+"
+_CRON_SCHED_RE = re.compile(
+    r"^(@(reboot|yearly|annually|monthly|weekly|daily|midnight|hourly)|"
+    + r"\s+".join([_CRON_FIELD] * 5) + r")$"
+)
+
+
+def _cron_managed_patterns(user, selfname):
+    """Substrings that identify a panel-managed crontab line for this game user."""
+    selfname = selfname or user
+    base = f"/home/{user}/{selfname}"
+    return [
+        f"{base} start",          # @reboot autostart
+        f"{base} monitor", f"{base} mods-update",
+        f"{base} update", f"{base} update-lgsm",   # LinuxGSM maintenance
+        f"/home/{user}/.restart-pending",          # daily restart-when-empty
+    ]
+
+
+def _cron_line_managed(line, user, selfname):
+    return any(p in line for p in _cron_managed_patterns(user, selfname))
+
+
+def _split_cron_line(line):
+    """Split a crontab entry into (schedule, command). Returns (None, None) for a
+    line that isn't a valid schedule+command entry."""
+    line = line.strip()
+    if line.startswith("@"):
+        parts = line.split(None, 1)
+        return parts[0], (parts[1] if len(parts) > 1 else "")
+    parts = line.split(None, 5)
+    if len(parts) < 6:
+        return None, None
+    return " ".join(parts[:5]), parts[5]
+
+
+def _validate_cron(schedule, command):
+    """Return (ok, message, line). Rejects anything that would break the crontab's
+    one-entry-per-line structure. The command itself is free-form — it runs as the
+    unprivileged game user via cron, exactly like the file editor writes arbitrary
+    content — so only the schedule's charset and newlines are constrained."""
+    schedule = (schedule or "").strip()
+    command = (command or "").strip()
+    if not schedule or not command:
+        return False, "Schedule and command are both required.", None
+    if any(c in (schedule + command) for c in ("\n", "\r", "\x00")):
+        return False, "A cron entry can't contain line breaks.", None
+    schedule = " ".join(schedule.split())   # normalise inner whitespace
+    if not _CRON_SCHED_RE.match(schedule):
+        return False, ("Invalid schedule — use 5 fields (min hour day month weekday) "
+                       "or a @shortcut like @reboot / @daily / @hourly."), None
+    return True, "", f"{schedule} {command}"
+
+
+def list_cron_jobs(server, user, selfname=None):
+    """Read the game user's crontab as a list of jobs. Comment/blank lines are
+    skipped. Each job: {raw, schedule, command, managed}. `raw` is the exact line
+    (used as the identity for edit/delete)."""
+    selfname = selfname or user
+    out, _, _ = run_command(server, f"crontab -u {user} -l 2>/dev/null", timeout=10, sudo=True)
+    jobs = []
+    for raw in (out or "").splitlines():
+        s = raw.strip()
+        if not s or s.startswith("#"):
+            continue
+        sched, cmd = _split_cron_line(s)
+        if sched is None:
+            continue
+        jobs.append({
+            "raw": raw, "schedule": sched, "command": cmd,
+            "managed": _cron_line_managed(s, user, selfname),
+        })
+    return jobs
+
+
+def add_cron_job(server, user, schedule, command, selfname=None):
+    """Append a new cron entry to the game user's crontab (keeps all existing lines)."""
+    ok, msg, line = _validate_cron(schedule, command)
+    if not ok:
+        return False, msg
+    return _rewrite_crontab(server, user, "", [line])
+
+
+def update_cron_job(server, user, old_raw, schedule, command, selfname=None):
+    """Replace an existing user cron entry (matched exactly by `old_raw`) with a new
+    schedule+command. Refuses to touch a panel-managed line."""
+    selfname = selfname or user
+    old_raw = old_raw or ""
+    if _cron_line_managed(old_raw, user, selfname):
+        return False, "That entry is managed by the panel — use its own toggle to change it."
+    ok, msg, line = _validate_cron(schedule, command)
+    if not ok:
+        return False, msg
+    # -vxF: drop the line that exactly (whole-line, fixed-string) matches old_raw,
+    # keep everything else, then append the rewritten entry.
+    return _rewrite_crontab(server, user, f"-vxF {_quote(old_raw)}", [line])
+
+
+def delete_cron_job(server, user, old_raw, selfname=None):
+    """Remove a user cron entry (matched exactly by `old_raw`). Refuses to remove a
+    panel-managed line."""
+    selfname = selfname or user
+    old_raw = old_raw or ""
+    if _cron_line_managed(old_raw, user, selfname):
+        return False, "That entry is managed by the panel — use its own toggle to change it."
+    return _rewrite_crontab(server, user, f"-vxF {_quote(old_raw)}", [])
+
+
 def list_server_commands(server, user, selfname=None):
     """Run the LinuxGSM instance script with no arguments to read its command list,
     which varies per game. Returns a list of {"cmd", "short", "desc"} dicts."""
