@@ -241,6 +241,16 @@ check("verify_totp accepts a spaced code", verify_totp(_sec, " " + _pyotp.TOTP(_
 check("verify_totp rejects a wrong code", not verify_totp(_sec, "000000"))
 check("verify_totp rejects empty", not verify_totp(_sec, ""))
 
+# ── password check robustness (a bad stored hash must never raise) ───
+from auth import check_password, hash_password, dummy_password_check
+_h = hash_password("Test1234!@")
+check("check_password: correct password -> True", check_password("Test1234!@", _h))
+check("check_password: wrong password -> False", not check_password("nope", _h))
+check("check_password: empty stored hash -> False (no raise)", not check_password("x", ""))
+check("check_password: None stored hash -> False (no raise)", not check_password("x", None))
+check("check_password: garbage stored hash -> False (no raise)", not check_password("x", "not-a-bcrypt-hash"))
+check("dummy_password_check always returns False", dummy_password_check("anything") is False)
+
 # ── cleanup: remove key/config files this run created ─────────
 for p in (config.CRED_KEY_FILE, config.SECRET_FILE, config.CONFIG_FILE):
     if p not in _pre and os.path.exists(p):

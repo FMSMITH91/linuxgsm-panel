@@ -3,6 +3,7 @@ import re
 from datetime import datetime
 from flask_login import UserMixin
 from flask_sqlalchemy import SQLAlchemy
+from sqlalchemy import text
 from sqlalchemy.orm import validates
 
 db = SQLAlchemy()
@@ -286,6 +287,13 @@ def _run_light_migrations():
 def init_db(app):
     db.init_app(app)
     with app.app_context():
+        # WAL lets readers and a writer work concurrently (default rollback journal
+        # blocks readers during a write) — fewer "database is locked" stalls under the
+        # eventlet workers. It's a persistent DB-level setting, so run it once here.
+        try:
+            db.session.execute(text("PRAGMA journal_mode=WAL"))
+        except Exception:
+            db.session.rollback()
         db.create_all()
         _run_light_migrations()
         # Create default group if not exists

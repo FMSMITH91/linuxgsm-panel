@@ -61,7 +61,7 @@ from sqlalchemy import desc, or_
 from auth import (
     ALL_PERMISSIONS, ACTION_PERMISSION_MAP, can_access_server,
     can_access_remote, accessible_remote_ids, check_password,
-    client_ip, generate_totp_secret, totp_provisioning_uri,
+    client_ip, dummy_password_check, generate_totp_secret, totp_provisioning_uri,
     verify_totp, get_user_permissions, get_user_servers,
     hash_password, has_permission, init_auth,
     log_action, permission_required, server_access_required, INSTALL_SERVER,
@@ -300,6 +300,9 @@ def create_app():
     app.config["SECRET_KEY"] = get_secret_key()
     app.config["SQLALCHEMY_DATABASE_URI"] = f"sqlite:///{DB_PATH}"
     app.config["SQLALCHEMY_TRACK_MODIFICATIONS"] = False
+    # Wait up to 15s for a locked SQLite DB instead of failing immediately with
+    # "database is locked" — the eventlet workers can briefly contend on writes.
+    app.config["SQLALCHEMY_ENGINE_OPTIONS"] = {"connect_args": {"timeout": 15}}
     app.config["SESSION_COOKIE_NAME"] = "lgpanel_session"
     # Idle session timeout (sliding — refreshed on each request). 8h by default so a
     # forgotten browser doesn't stay logged in overnight; configurable.
@@ -853,6 +856,11 @@ def register_routes(app):
                     session["_2fa_remember"] = remember
                     return render_template("login.html", two_factor=True)
                 return _succeed(user, remember)
+            # For a missing/inactive user we skipped the (slow) bcrypt compare above;
+            # run a dummy one now so response time doesn't reveal whether the account
+            # exists (username-enumeration by timing).
+            if not (user and user.is_active):
+                dummy_password_check(password)
             return _fail("Invalid username or password.")
 
         return render_template("login.html")
@@ -1168,8 +1176,8 @@ def register_routes(app):
                     from auth import log_action as _log
                     _log(None, f"{action}_complete", target=gs.name if gs else short_name,
                          success=(rc == 0), detail=(out or err or "")[-300:])
-            except Exception as e:
-                print(f"bg action error: {e}", flush=True)
+            except Exception:
+                app.logger.exception("background action failed")
 
         threading.Thread(target=_run, daemon=True).start()
 
@@ -1470,7 +1478,7 @@ def register_routes(app):
                     j = _install_jobs.get(gs_id)
                     if j is not None:
                         j["status"], j["message"], j["updated"] = "failed", str(e), time.time()
-                print(f"install job error: {e}", flush=True)
+                app.logger.exception("install job failed")
 
         threading.Thread(target=_run, daemon=True).start()
 

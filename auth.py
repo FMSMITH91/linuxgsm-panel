@@ -67,7 +67,26 @@ def hash_password(password):
 
 
 def check_password(password, password_hash):
-    return bcrypt.checkpw(password.encode(), password_hash.encode())
+    """Verify a password against a bcrypt hash. Returns False (never raises) if the
+    stored hash is missing or malformed, so a bad DB row can't 500 the login."""
+    try:
+        return bcrypt.checkpw(password.encode(), (password_hash or "").encode())
+    except (ValueError, TypeError):
+        return False
+
+
+# A bcrypt hash of a random throwaway value. Comparing against it when a login's
+# username doesn't exist (or is inactive) makes that path spend the same time as a
+# real password check — bcrypt is deliberately slow, so skipping it would otherwise
+# leak, by timing, whether an account exists (username enumeration).
+_DUMMY_BCRYPT_HASH = bcrypt.hashpw(secrets.token_bytes(16), bcrypt.gensalt()).decode()
+
+
+def dummy_password_check(password):
+    """Run a throwaway bcrypt compare to equalize login timing for a nonexistent or
+    inactive user. Always returns False."""
+    check_password(password, _DUMMY_BCRYPT_HASH)
+    return False
 
 
 def generate_api_token():

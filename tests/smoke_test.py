@@ -223,6 +223,13 @@ try:
     check("REUSE BLOCKED: stolen remember_token rejected after logout (not 200)",
           thief_rt.get("/").status_code != 200, "remember_token still valid after logout!")
 
+    # A login for a nonexistent user must not 5xx (it runs the anti-enumeration dummy
+    # bcrypt path) and must not authenticate. One attempt stays under the throttle.
+    r = app.test_client().post("/login", data={"username": "no_such_user_smoke",
+                                               "password": "whatever"})
+    check("login with unknown user -> not 5xx (dummy-check path)",
+          r.status_code < 500, "got %d" % r.status_code)
+
 finally:
     passed = sum(1 for ok, _, _ in results if ok)
     for ok, name, detail in results:
