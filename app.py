@@ -261,13 +261,28 @@ def _int_or(value, default):
 def create_app():
     app = Flask(__name__)
     cfg = load_config()
+
+    # One-time nudge for installs still sitting on the previous, longer session defaults
+    # (12h idle / 14d remember) → the tighter 8h / 3d. Only touches values left at the old
+    # default, so a deliberately-customized value is never overwritten. Runs once: after
+    # the bump the condition is false, so it won't fire again.
+    _cfg_changed = False
+    if cfg.get("session_lifetime_hours") == 12:
+        cfg["session_lifetime_hours"] = 8
+        _cfg_changed = True
+    if cfg.get("remember_days") == 14:
+        cfg["remember_days"] = 3
+        _cfg_changed = True
+    if _cfg_changed:
+        save_config(cfg)
+
     app.config["SECRET_KEY"] = get_secret_key()
     app.config["SQLALCHEMY_DATABASE_URI"] = f"sqlite:///{DB_PATH}"
     app.config["SQLALCHEMY_TRACK_MODIFICATIONS"] = False
     app.config["SESSION_COOKIE_NAME"] = "lgpanel_session"
-    # Idle session timeout (sliding — refreshed on each request). 12h by default so a
-    # forgotten browser doesn't stay logged in for a full day; configurable.
-    app.config["PERMANENT_SESSION_LIFETIME"] = cfg.get("session_lifetime_hours", 12) * 3600
+    # Idle session timeout (sliding — refreshed on each request). 8h by default so a
+    # forgotten browser doesn't stay logged in overnight; configurable.
+    app.config["PERMANENT_SESSION_LIFETIME"] = cfg.get("session_lifetime_hours", 8) * 3600
 
     # Cookie path must cover the mount point — always use root to be safe
     # since we don't know the final mount until after setup
@@ -290,7 +305,7 @@ def create_app():
     # "Remember me" cookie (flask-login). Cap it at a sane window (14 days) instead of
     # flask-login's 365-day default — a stolen remember-token shouldn't be valid for a
     # year — and give it the same hardening as the session cookie.
-    app.config["REMEMBER_COOKIE_DURATION"] = timedelta(days=int(cfg.get("remember_days", 14)))
+    app.config["REMEMBER_COOKIE_DURATION"] = timedelta(days=int(cfg.get("remember_days", 3)))
     app.config["REMEMBER_COOKIE_HTTPONLY"] = True
     app.config["REMEMBER_COOKIE_SAMESITE"] = "Lax"
     app.config["REMEMBER_COOKIE_SECURE"] = app.config["SESSION_COOKIE_SECURE"]

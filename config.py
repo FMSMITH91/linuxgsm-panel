@@ -18,8 +18,8 @@ DEFAULT_CONFIG = {
     "setup_complete": False,
     "port": 5000,
     "bind_host": "",   # empty = auto (127.0.0.1 if Tailscale can proxy, else 0.0.0.0)
-    "session_lifetime_hours": 12,   # idle session timeout (sliding, refreshed each request)
-    "remember_days": 14,            # "remember me" cookie lifetime
+    "session_lifetime_hours": 8,    # idle session timeout (sliding, refreshed each request)
+    "remember_days": 3,             # "remember me" cookie lifetime
     "ssh_timeout": 10,
     "session_protection": "strong", # flask-login: "strong" | "basic" | null (IP+UA session binding)
     "use_https": True,              # serve self-signed HTTPS by default (unless Tailscale/proxy does TLS)
