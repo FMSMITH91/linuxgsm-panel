@@ -142,8 +142,23 @@
         <button type="button" class="btn btn-outline-secondary btn-sm" id="cron-cancel" style="display:none;" onclick="cancelCronEdit()">Cancel</button>
       </div>
     </form>
+    <!-- Quick-pick presets -->
+    <div class="d-flex flex-wrap gap-1 mb-2 align-items-center" id="cron-presets">
+      <span class="text-secondary me-1" style="font-size:.68rem;">Quick pick:</span>
+      <button type="button" class="btn btn-outline-secondary btn-sm py-0 px-2" style="font-size:.7rem;" data-cron="*/5 * * * *">Every 5 min</button>
+      <button type="button" class="btn btn-outline-secondary btn-sm py-0 px-2" style="font-size:.7rem;" data-cron="0 * * * *">Hourly</button>
+      <button type="button" class="btn btn-outline-secondary btn-sm py-0 px-2" style="font-size:.7rem;" data-cron="0 5 * * *">Daily 5am</button>
+      <button type="button" class="btn btn-outline-secondary btn-sm py-0 px-2" style="font-size:.7rem;" data-cron="0 5 * * 0">Weekly (Sun)</button>
+      <button type="button" class="btn btn-outline-secondary btn-sm py-0 px-2" style="font-size:.7rem;" data-cron="0 5 1 * *">Monthly (1st)</button>
+      <button type="button" class="btn btn-outline-secondary btn-sm py-0 px-2" style="font-size:.7rem;" data-cron="@reboot">At boot</button>
+    </div>
+    <!-- Live explainer (crontab.guru style) -->
+    <div id="cron-explain" class="mb-1 px-2 py-2 rounded" style="border:1px solid var(--border); background:var(--bg-elevated);">
+      <div id="cron-desc" class="text-secondary" style="font-size:.8rem;"><i class="bi bi-magic"></i> Type a schedule (or pick one above) to see what it means.</div>
+      <div id="cron-next" class="text-secondary mt-1" style="font-size:.66rem;"></div>
+    </div>
     <div class="d-flex justify-content-between align-items-center flex-wrap gap-2 mb-3">
-      <span class="text-secondary" style="font-size:.64rem;">Schedule: <code>min hour day month weekday</code> — or a shortcut like <code>@daily</code>, <code>@hourly</code>, <code>@reboot</code>.</span>
+      <span class="text-secondary" style="font-size:.62rem;">Fields: <code>min hour day month weekday</code>. Ranges <code>1-5</code>, lists <code>1,3,5</code>, steps <code>*/10</code>, names <code>mon</code>/<code>jan</code>.</span>
       <span id="cron-msg" class="small"></span>
     </div>
     <!-- Existing entries -->
@@ -456,6 +471,7 @@ function cancelCronEdit(){
   document.getElementById('cron-cmd').value='';
   document.getElementById('cron-submit').innerHTML='<i class="bi bi-plus-lg"></i> Add task';
   document.getElementById('cron-cancel').style.display='none';
+  updateCronExplain();
 }
 document.getElementById('cron-tbody').addEventListener('click', function(ev){
   var row=ev.target.closest('tr[data-raw]'); if(!row) return;
@@ -463,6 +479,7 @@ document.getElementById('cron-tbody').addEventListener('click', function(ev){
     cronEditRaw=row.getAttribute('data-raw');
     document.getElementById('cron-sched').value=row.getAttribute('data-sched');
     document.getElementById('cron-cmd').value=row.getAttribute('data-cmd');
+    updateCronExplain();
     document.getElementById('cron-submit').innerHTML='<i class="bi bi-save"></i> Save changes';
     document.getElementById('cron-cancel').style.display='';
     cronMsg('Editing an existing task…','text-secondary');
@@ -474,6 +491,103 @@ document.getElementById('cron-tbody').addEventListener('click', function(ev){
       .catch(()=>cronMsg('✗ Delete failed','text-danger'));
   }
 });
+
+// ── Live cron explainer (crontab.guru-style: translate + preview next runs) ──
+(function(){
+  var DOW=['Sunday','Monday','Tuesday','Wednesday','Thursday','Friday','Saturday'];
+  var MON=['','January','February','March','April','May','June','July','August','September','October','November','December'];
+  var NM_DOW={sun:0,mon:1,tue:2,wed:3,thu:4,fri:5,sat:6};
+  var NM_MON={jan:1,feb:2,mar:3,apr:4,may:5,jun:6,jul:7,aug:8,sep:9,oct:10,nov:11,dec:12};
+  var SHORT={'@yearly':'0 0 1 1 *','@annually':'0 0 1 1 *','@monthly':'0 0 1 * *','@weekly':'0 0 * * 0','@daily':'0 0 * * *','@midnight':'0 0 * * *','@hourly':'0 * * * *'};
+  // Parse one cron field into a Set of allowed ints (ranges, lists, steps, names). null = invalid.
+  function parseField(f,lo,hi,names){
+    f=(f||'').trim().toLowerCase(); if(f==='') return null;
+    var out=new Set(), parts=f.split(',');
+    for(var i=0;i<parts.length;i++){
+      var p=parts[i], step=1, range=p, sl=p.indexOf('/');
+      if(sl>=0){ step=parseInt(p.slice(sl+1),10); range=p.slice(0,sl); if(!(step>=1)) return null; }
+      var a,b;
+      if(range==='*'){ a=lo; b=hi; }
+      else {
+        var seg=range.split('-');
+        var mv=function(x){ x=x.trim(); if(names&&names[x]!=null) return names[x]; if(!/^\d+$/.test(x)) return NaN; return parseInt(x,10); };
+        a=mv(seg[0]); b=(seg.length>1)?mv(seg[1]):(sl>=0?hi:a);
+        if(isNaN(a)||isNaN(b)) return null;
+      }
+      if(names===NM_DOW){ if(a===7)a=0; if(b===7)b=0; }
+      if(a>b || a<lo || b>hi) return null;
+      for(var v=a; v<=b; v+=step) out.add(v);
+    }
+    return out;
+  }
+  function pad(n){ return (n<10?'0':'')+n; }
+  function toArr(s){ return Array.from(s).sort(function(a,b){return a-b;}); }
+  function joinList(arr,fmt){ arr=arr.map(fmt); if(arr.length<=1) return arr[0]||''; return arr.slice(0,-1).join(', ')+' and '+arr[arr.length-1]; }
+  function contiguous(a){ for(var i=1;i<a.length;i++) if(a[i]!==a[i-1]+1) return false; return a.length>1; }
+  function describe(f,sets){
+    var mR=f[0],hR=f[1],domR=f[2],monR=f[3],dowR=f[4];
+    var mAll=mR==='*', hAll=hR==='*', mOne=/^\d+$/.test(mR), hOne=/^\d+$/.test(hR), stepM=/^\*\/(\d+)$/.exec(mR);
+    var time;
+    if(mAll&&hAll) time='Every minute';
+    else if(stepM&&hAll) time='Every '+stepM[1]+' minutes';
+    else if(mOne&&hOne) time='At '+pad(+hR)+':'+pad(+mR);
+    else if(mOne&&hAll) time=(+mR===0)?'Every hour, on the hour':'At '+(+mR)+' minutes past every hour';
+    else {
+      var mp=hAll?'past every hour':'past '+(hOne?('hour '+(+hR)):('hours '+joinList(toArr(sets.hour),String)));
+      time=(mAll?'Every minute':'At '+(mOne?('minute '+(+mR)):('minutes '+joinList(toArr(sets.min),String))))+' '+mp;
+    }
+    var q=[];
+    if(domR!=='*') q.push('on day-of-month '+joinList(toArr(sets.dom),String));
+    if(dowR!=='*'){ var dw=toArr(sets.dow); q.push((domR!=='*'?'and on ':'on ')+(contiguous(dw)?DOW[dw[0]]+'–'+DOW[dw[dw.length-1]]:joinList(dw,function(x){return DOW[x];}))); }
+    if(monR!=='*') q.push('in '+joinList(toArr(sets.mon),function(x){return MON[x];}));
+    return time+(q.length?' '+q.join(' '):'');
+  }
+  function analyze(expr){
+    expr=(expr||'').trim().replace(/\s+/g,' ');
+    if(expr==='') return {empty:true};
+    if(expr.charAt(0)==='@'){
+      var k=expr.toLowerCase();
+      if(k==='@reboot') return {ok:true,text:'Runs once, at server boot.',reboot:true};
+      if(SHORT[k]) expr=SHORT[k]; else return {error:'Unknown shortcut "'+expr+'".'};
+    }
+    var f=expr.split(' ');
+    if(f.length!==5) return {error:'Needs 5 fields (min hour day month weekday) or an @shortcut.'};
+    var sets={min:parseField(f[0],0,59),hour:parseField(f[1],0,23),dom:parseField(f[2],1,31),mon:parseField(f[3],1,12,NM_MON),dow:parseField(f[4],0,6,NM_DOW)};
+    for(var kk in sets){ if(!sets[kk]||!sets[kk].size) return {error:'Invalid or out-of-range '+kk+' field.'}; }
+    sets.domStar=f[2]==='*'; sets.dowStar=f[4]==='*';
+    return {ok:true,text:describe(f,sets),sets:sets};
+  }
+  function nextRuns(sets,count){
+    var res=[], d=new Date(); d.setSeconds(0,0); d.setMinutes(d.getMinutes()+1);
+    for(var g=0; g<367*24*60 && res.length<count; g++){
+      var domOk=sets.dom.has(d.getDate()), dowOk=sets.dow.has(d.getDay()), dayMatch;
+      if(sets.domStar&&sets.dowStar) dayMatch=true; else if(sets.domStar) dayMatch=dowOk; else if(sets.dowStar) dayMatch=domOk; else dayMatch=domOk||dowOk;
+      if(sets.min.has(d.getMinutes())&&sets.hour.has(d.getHours())&&sets.mon.has(d.getMonth()+1)&&dayMatch) res.push(new Date(d));
+      d.setMinutes(d.getMinutes()+1);
+    }
+    return res;
+  }
+  function fmtWhen(dt){ return dt.toLocaleString([],{weekday:'short',month:'short',day:'numeric',hour:'2-digit',minute:'2-digit'}); }
+  window.updateCronExplain=function(){
+    var el=document.getElementById('cron-desc'), nx=document.getElementById('cron-next');
+    if(!el) return;
+    var r=analyze(document.getElementById('cron-sched').value);
+    if(r.empty){ el.className='text-secondary'; el.innerHTML='<i class="bi bi-magic"></i> Type a schedule (or pick one above) to see what it means.'; nx.textContent=''; return; }
+    if(r.error){ el.className='text-danger'; el.textContent='✗ '+r.error; nx.textContent=''; return; }
+    el.className='text-info'; el.textContent='“'+r.text+'”';
+    if(r.reboot){ nx.textContent='Runs at each boot — no fixed clock time.'; return; }
+    var runs=nextRuns(r.sets,3);
+    nx.textContent = runs.length ? ('Next: '+runs.map(fmtWhen).join('  ·  ')+'   (your browser’s time — the server may use a different zone)') : 'No upcoming runs within a year.';
+  };
+})();
+document.getElementById('cron-sched').addEventListener('input', updateCronExplain);
+document.getElementById('cron-presets').addEventListener('click', function(ev){
+  var b=ev.target.closest('[data-cron]'); if(!b) return;
+  document.getElementById('cron-sched').value=b.getAttribute('data-cron');
+  updateCronExplain();
+  document.getElementById('cron-cmd').focus();
+});
+updateCronExplain();
 
 loadConfig();
 browse('');

@@ -124,6 +124,10 @@ try:
     check("GET /logs with junk filter/sort params -> 200 (allowlisted)",
           r.status_code == 200, "got %d" % r.status_code)
 
+    # The Files & Config page (config editor + file browser + cron manager) must render.
+    check("GET /server/<id>/files renders (200)",
+          c.get("/server/%d/files" % gs_id).status_code == 200)
+
     # ── Group create via the real route WITH a host selected. This is the exact
     #    regression that 500'd: the route assigned GameServer objects to
     #    Group.servers, which is a RemoteServer collection. ──
