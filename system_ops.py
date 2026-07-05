@@ -482,23 +482,30 @@ def panel_self_update():
     Runs DETACHED via `systemd-run --user` so it lives in its own cgroup and
     survives the panel's own restart (the service uses KillMode=control-group,
     which would otherwise kill a normal child mid-update). Returns immediately;
-    progress is written to /tmp/panel-self-update.log."""
+    progress is written to data/self-update.log under the panel dir."""
     if not _is_git_checkout():
         return False, "The panel isn't a git checkout, so it can't self-update."
     installer = os.path.join(PANEL_DIR, "install.sh")
     if not os.path.isfile(installer):
         return False, "install.sh is missing, so the panel can't self-update safely."
+    # Write the wrapper + its log inside the panel's own data dir (owned by the service
+    # user, not world-writable) rather than /tmp. This script is later executed as root
+    # via `sudo systemd-run`, so a predictable /tmp path would let a local user pre-plant
+    # a symlink/file and get root code execution.
+    _upd_dir = os.path.join(PANEL_DIR, "data")
+    os.makedirs(_upd_dir, exist_ok=True)
+    _log_path = os.path.join(_upd_dir, "self-update.log")
     # Thin wrapper so the UI can tail one predictable log file. The installer does
     # the real work: snapshot → update → health-check → rollback-on-failure.
     script = (
         "#!/bin/bash\n"
-        "LOG=/tmp/panel-self-update.log\n"
+        f"LOG={shlex.quote(_log_path)}\n"
         f"cd {shlex.quote(PANEL_DIR)} || exit 1\n"
         'echo "=== panel self-update $(date) ===" > "$LOG"\n'
         f"bash {shlex.quote(installer)} >> \"$LOG\" 2>&1\n"
         'echo "=== installer exit $? ===" >> "$LOG"\n'
     )
-    path = "/tmp/panel-self-update.sh"
+    path = os.path.join(_upd_dir, "self-update.sh")
     # Launch the updater in a transient unit that OUTLIVES the panel's own restart.
     # Match the install's service model: a per-user service uses `systemd-run --user`;
     # a system service (root install → dedicated service user) is launched as root via

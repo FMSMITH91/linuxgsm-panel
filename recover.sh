@@ -31,8 +31,8 @@ elif [ -f "${USER_UNIT}" ]; then
     SVC_USER="$(id -un)"
 fi
 if [ -z "${PANEL_DIR}" ] || [ ! -f "${PANEL_DIR}/manage.py" ]; then
-    for d in "/home/lgsmpanel/linuxgsm-panel" "${HOME}/linuxgsm-panel" \
-             "$(cd "$(dirname "$0")" 2>/dev/null && pwd || true)"; do
+    selfdir="$(cd "$(dirname "$0")" 2>/dev/null && pwd)" || selfdir=""
+    for d in "/home/lgsmpanel/linuxgsm-panel" "${HOME}/linuxgsm-panel" "${selfdir}"; do
         if [ -n "${d}" ] && [ -f "${d}/manage.py" ]; then PANEL_DIR="${d}"; break; fi
     done
 fi
