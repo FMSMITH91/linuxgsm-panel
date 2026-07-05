@@ -152,6 +152,7 @@
               {% if can_autostart %}
               <div class="form-check form-switch d-inline-block m-0">
                 <input class="form-check-input" type="checkbox" role="switch" id="autostart-toggle"
+                       aria-label="Auto-start on boot"
                        {% if server.autostart %}checked{% endif %} onchange="toggleAutostart(this)">
               </div>
               {% else %}
@@ -165,6 +166,7 @@
               {% if can_autostart %}
               <div class="form-check form-switch d-inline-block m-0">
                 <input class="form-check-input" type="checkbox" role="switch" id="dailyrestart-toggle"
+                       aria-label="Daily restart when empty"
                        {% if server.daily_restart %}checked{% endif %} onchange="toggleDailyRestart(this)">
               </div>
               {% else %}

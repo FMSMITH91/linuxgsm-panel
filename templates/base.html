@@ -198,6 +198,20 @@
     .btn-primary { background: var(--accent); border-color: var(--accent); color: #0a0f1a; }
     /* Bootstrap's .text-secondary (#6c757d) is only 3.8:1 on the dark bg — lift it to AA. */
     .text-secondary { color: #9ca3af !important; }
+    /* Bootstrap's semantic text/outline colors are too dark for AA on the dark theme;
+       lift them to lighter shades that clear 4.5:1, and give filled bright buttons dark
+       text (white was ~3.5:1). */
+    .text-success { color: #34d399 !important; }
+    .text-danger  { color: #f87171 !important; }
+    .text-warning { color: #fbbf24 !important; }
+    .text-info    { color: #67e8f9 !important; }
+    .text-primary { color: #93c5fd !important; }
+    .btn-outline-success { color: #34d399; border-color: #34d399; }
+    .btn-outline-danger  { color: #f87171; border-color: #f87171; }
+    .btn-outline-warning { color: #fbbf24; border-color: #fbbf24; }
+    .btn-outline-primary { color: #93c5fd; border-color: #93c5fd; }
+    .btn-danger  { color: #0a0f1a; }
+    .btn-warning { color: #0a0f1a; }
     .btn-primary:hover { background: var(--accent-hover); border-color: var(--accent-hover); box-shadow: 0 0 0 3px var(--accent-glow); }
     .btn-outline-secondary {
       border-color: var(--border); color: var(--text); background: transparent;

@@ -18,8 +18,8 @@
     </p>
     <form method="POST" action="{{ url_for('install_game_server') }}" class="row g-2 align-items-start">
       <div class="col-md-3">
-        <label class="form-label">Target Server</label>
-        <select name="remote_id" class="form-select" required>
+        <label class="form-label" for="remote-select">Target Server</label>
+        <select name="remote_id" id="remote-select" class="form-select" required>
           <option value="">Select a server...</option>
           {% for r in remotes %}
           <option value="{{ r.id }}">{{ r.display_name }}</option>
@@ -27,7 +27,7 @@
         </select>
       </div>
       <div class="col-md-3">
-        <label class="form-label">Game</label>
+        <label class="form-label" for="game-type-select">Game</label>
         <select name="game_type" class="form-select" required id="game-type-select" onchange="updatePort()">
           <option value="">Choose game… ({{ games|length }} supported)</option>
           {% for g in games %}
@@ -37,12 +37,12 @@
         <div class="form-text">All {{ games|length }} LinuxGSM games — everything is downloaded automatically.</div>
       </div>
       <div class="col-md-3">
-        <label class="form-label">Server Name <span class="text-secondary">(optional)</span></label>
-        <input type="text" name="server_name" class="form-control" placeholder="Leave blank for default">
+        <label class="form-label" for="server-name-input">Server Name <span class="text-secondary">(optional)</span></label>
+        <input type="text" name="server_name" id="server-name-input" class="form-control" placeholder="Leave blank for default">
         <div class="form-text">Sets the Linux user/home name only.</div>
       </div>
       <div class="col-md-1">
-        <label class="form-label">Port</label>
+        <label class="form-label" for="port-input">Port</label>
         <input type="number" name="port" class="form-control" id="port-input" value="27015">
       </div>
       <div class="col-md-2">
