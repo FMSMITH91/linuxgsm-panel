@@ -411,6 +411,25 @@ check("integrity: handles non-git checkout", _so.panel_integrity()["git"] is Fal
 _ok3, _msg3, _ = _so.panel_repair()
 check("repair: refuses when not a git checkout", _ok3 is False)
 
+# ── automatic security updates detection ──────────────────────
+def _mk_run(installed_rc, apt_out):
+    def _r(cmd, timeout=30, sudo=False, text=True):
+        if "dpkg-query" in cmd:
+            return ("", "", installed_rc)
+        if "apt-config" in cmd:
+            return (apt_out, "", 0)
+        return ("", "", 0)
+    return _r
+_so._run = _mk_run(0, 'APT::Periodic::Unattended-Upgrade "1";')
+_au = _so.unattended_upgrades_status()
+check("auto-updates: installed + enabled detected", _au["installed"] and _au["enabled"])
+_so._run = _mk_run(0, 'APT::Periodic::Unattended-Upgrade "0";')
+_au = _so.unattended_upgrades_status()
+check("auto-updates: installed but disabled detected", _au["installed"] and not _au["enabled"])
+_so._run = _mk_run(1, "")
+_au = _so.unattended_upgrades_status()
+check("auto-updates: not installed detected", not _au["installed"] and not _au["enabled"])
+
 # ── shell-identifier validation (the core injection defense) ──
 from models import _validate_shell_ident as _vsi
 for _bad in ("a;b", "a b", "a`b", "a$(x)", "a|b", "../x", "a&b", "a>b", "x'y", 'x"y', "a\nb", "a/b"):

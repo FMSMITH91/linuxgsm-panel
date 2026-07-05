@@ -2363,6 +2363,29 @@ def register_routes(app):
             return jsonify({"success": False,
                             "message": _log_and_generic("db optimize failed")}), 500
 
+    @app.route("/api/panel/auto-updates")
+    @login_required
+    @permission_required(SUPER_ADMIN)
+    def api_panel_auto_updates():
+        """Whether automatic OS security updates are installed + enabled."""
+        try:
+            return jsonify(so.unattended_upgrades_status())
+        except Exception:
+            return jsonify({"error": _log_and_generic("auto-updates status failed")}), 500
+
+    @app.route("/api/panel/enable-auto-updates", methods=["POST"])
+    @login_required
+    @permission_required(SUPER_ADMIN)
+    def api_panel_enable_auto_updates():
+        """Install + enable unattended-upgrades so the OS patches itself."""
+        try:
+            ok, msg = so.enable_unattended_upgrades()
+            log_action(current_user, "enable_auto_updates", detail=msg, success=ok)
+            return jsonify({"success": ok, "message": msg})
+        except Exception:
+            return jsonify({"success": False,
+                            "message": _log_and_generic("enable auto-updates failed")}), 500
+
     @app.route("/api/server-management/os-update-check")
     @login_required
     @permission_required(SUPER_ADMIN)

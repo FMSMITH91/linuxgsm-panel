@@ -638,6 +638,44 @@ def panel_repair(paths=None):
                   "to load the corrected code." % len(targets)), targets
 
 
+def unattended_upgrades_status():
+    """Whether automatic security updates (the unattended-upgrades package) are
+    installed AND actually enabled. Read-only, no sudo. Returns
+    {installed, enabled, detail}. Non-Debian systems report not-installed."""
+    _, _, prc = _run(
+        "dpkg-query -W -f='${Status}' unattended-upgrades 2>/dev/null "
+        "| grep -q 'install ok installed'", timeout=10)
+    installed = (prc == 0)
+    # The package being present isn't enough — APT's periodic flag must be "1".
+    out, _, _ = _run("apt-config dump APT::Periodic::Unattended-Upgrade 2>/dev/null", timeout=10)
+    enabled = installed and ('"1"' in (out or ""))
+    if not installed:
+        detail = "The unattended-upgrades package isn't installed."
+    elif enabled:
+        detail = "Installed and enabled — the OS applies security updates automatically."
+    else:
+        detail = "Installed but not enabled (APT periodic upgrade flag is off)."
+    return {"installed": installed, "enabled": enabled, "detail": detail}
+
+
+def enable_unattended_upgrades():
+    """Install + enable automatic security updates. Needs sudo (NOPASSWD, same path
+    as the OS-update actions). Returns (ok, message)."""
+    # 1) install the package (no-op if already present); noninteractive avoids prompts.
+    _run("DEBIAN_FRONTEND=noninteractive apt-get install -y unattended-upgrades 2>&1",
+         timeout=300, sudo=True)
+    # 2) write the APT periodic config that actually turns it on. printf is
+    # unprivileged; only the file write (via `sudo tee`) needs root.
+    conf = ('APT::Periodic::Update-Package-Lists "1";\n'
+            'APT::Periodic::Unattended-Upgrade "1";\n')
+    _run("printf %s " + shlex.quote(conf) +
+         " | sudo tee /etc/apt/apt.conf.d/20auto-upgrades >/dev/null", timeout=30)
+    st = unattended_upgrades_status()
+    if st.get("enabled"):
+        return True, "Automatic security updates are now enabled."
+    return False, "Could not confirm automatic security updates were enabled — check the panel logs."
+
+
 def panel_diagnostics():
     """A fast, local self-check of the panel's own health: file integrity, data
     dir, database, encryption keys, config, disk space, TLS cert and service
@@ -737,6 +775,14 @@ def panel_diagnostics():
         add("Service", "ok", "systemd unit installed (auto-starts on boot).")
     else:
         add("Service", "warn", "No systemd unit found — the panel may not auto-start on boot.")
+
+    # 9. automatic security updates (hardening — a warn, not a fault: the panel runs
+    # fine either way, but for an unattended box you want the OS patching itself).
+    try:
+        au = unattended_upgrades_status()
+        add("Automatic security updates", "ok" if au["enabled"] else "warn", au["detail"])
+    except Exception:
+        add("Automatic security updates", "warn", "Couldn't determine the update status.")
 
     levels = [c["level"] for c in checks]
     summary = "fail" if "fail" in levels else ("warn" if "warn" in levels else "ok")
