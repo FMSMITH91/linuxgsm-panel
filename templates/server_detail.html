@@ -68,6 +68,10 @@
           <span id="connect-addr" class="text-info">resolving…</span>
           <i class="bi bi-clipboard text-secondary"></i>
         </span>
+        <a id="connect-join" class="btn btn-sm btn-success" style="display:none;" rel="noopener"
+           title="Launch the game and join this server">
+          <i class="bi bi-box-arrow-in-right"></i> Join
+        </a>
       </div>
       <span class="text-secondary" style="font-size:.7rem;"><i class="bi bi-broadcast"></i> live · updates every few seconds</span>
     </div>
@@ -446,6 +450,12 @@ function pollStats() {
       if (d.error) return;
       connectAddr = d.connect || '';
       document.getElementById('connect-addr').textContent = connectAddr || 'unknown';
+      // One-click join link (steam://connect/…) for games that support it.
+      var join = document.getElementById('connect-join');
+      if (join) {
+        if (d.connect_url) { join.href = d.connect_url; join.style.display = ''; }
+        else { join.removeAttribute('href'); join.style.display = 'none'; }
+      }
       setStatus(d.status);
       var m = d.metrics || {};
       // Game-specific tiles

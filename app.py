@@ -2939,6 +2939,7 @@ def register_routes(app):
                 "installed": gs.installed,
                 "remote_name": r.name if r else "",
                 "connect": f"{host}:{gs.port}" if host else "",
+                "connect_url": gs.connect_uri(host),
             })
         return jsonify(data)
 
@@ -3023,6 +3024,7 @@ def register_routes(app):
         return jsonify({
             "status": status,
             "connect": f"{host}:{gs.port}" if host else f":{gs.port}",
+            "connect_url": gs.connect_uri(host),
             "public_ip": remote.public_ip,
             "port": gs.port,
             "metrics": m,

@@ -88,6 +88,11 @@
               {% if addr %}
               <code class="text-info copy-addr" style="cursor:pointer;" title="Click to copy"
                     data-copy="{{ addr }}:{{ gs.port }}">{{ addr }}:{{ gs.port }}</code>
+              {% set join_url = gs.connect_uri(addr) %}
+              {% if join_url %}
+              <a class="btn btn-success btn-sm py-0 px-1 ms-1" style="font-size:.7rem;" rel="noopener"
+                 href="{{ join_url }}" title="Launch the game and join"><i class="bi bi-box-arrow-in-right"></i> Join</a>
+              {% endif %}
               {% else %}
               <code class="text-secondary" title="This host's public IP isn't known yet">:{{ gs.port }}</code>
               {% endif %}

@@ -342,6 +342,20 @@ check("backup: a used code can't be reused (one-time)", not _u.use_backup_code(_
 check("backup: a different code still works", _u.use_backup_code(_codes[1]))
 check("backup: no codes set is handled", not _User().use_backup_code("whatever"))
 
+# ── one-click connect URI (steam://connect for Source/GoldSrc) ─
+from models import GameServer as _GS
+_steam = _GS(game_type="gmod", port=27015)
+eq("connect: steam game -> steam://connect", _steam.connect_uri("1.2.3.4"),
+   "steam://connect/1.2.3.4:27015")
+_cs16 = _GS(game_type="cs", port=27015)
+eq("connect: goldsrc game -> steam://connect", _cs16.connect_uri("host.example"),
+   "steam://connect/host.example:27015")
+_cod = _GS(game_type="cod", port=28960)
+eq("connect: non-steam game (cod) -> no URI", _cod.connect_uri("1.2.3.4"), "")
+_mc = _GS(game_type="mc", port=25565)
+eq("connect: minecraft -> no URI", _mc.connect_uri("1.2.3.4"), "")
+eq("connect: no host -> no URI", _steam.connect_uri(""), "")
+
 # ── cleanup: remove key/config files this run created ─────────
 for p in (config.CRED_KEY_FILE, config.SECRET_FILE, config.CONFIG_FILE):
     if p not in _pre and os.path.exists(p):

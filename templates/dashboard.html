@@ -182,8 +182,9 @@ function refreshStatus() {
           cell.innerHTML = '<span class="status-dot status-' + cls + '"></span> ' + titleCase(s.status);
         }
         var conn = document.getElementById('connect-' + s.id);
-        if (conn && s.connect && conn.dataset.addr !== s.connect) {
-          conn.dataset.addr = s.connect;
+        var key = (s.connect || '') + '|' + (s.connect_url || '');
+        if (conn && s.connect && conn.dataset.addr !== key) {
+          conn.dataset.addr = key;
           // Build via textContent + a listener (NOT innerHTML with the raw address) so a
           // hostile connect address can't inject HTML/script into the dashboard.
           conn.textContent = '';
@@ -194,6 +195,17 @@ function refreshStatus() {
           code.textContent = s.connect;
           code.addEventListener('click', function(){ copyAddr(s.connect); });
           conn.appendChild(code);
+          // One-click join link (steam://connect/…) for games that support it.
+          if (s.connect_url) {
+            var join = document.createElement('a');
+            join.className = 'btn btn-success btn-sm py-0 px-1 ms-2';
+            join.style.fontSize = '.7rem';
+            join.rel = 'noopener';
+            join.title = 'Launch the game and join';
+            join.href = s.connect_url;   // href property assignment — no HTML parsing
+            join.innerHTML = '<i class="bi bi-box-arrow-in-right"></i> Join';
+            conn.appendChild(join);
+          }
         }
       });
     })

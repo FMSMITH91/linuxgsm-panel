@@ -218,6 +218,20 @@ class RemoteServer(db.Model):
             return ""
 
 
+# LinuxGSM shortnames whose game clients honor the steam://connect/<ip>:<port>
+# URI — Source and GoldSrc engine servers. Clicking such a link launches the game
+# and joins the server directly. Games without a reliable URI scheme (CoD,
+# Minecraft, Rust, ARK, …) are intentionally absent so callers fall back to a
+# plain copyable ip:port instead of offering a button that would do nothing.
+STEAM_CONNECT_GAMES = frozenset({
+    # Source engine
+    "gmod", "css", "cs2", "csgo", "tf2", "hl2dm", "dods", "l4d", "l4d2",
+    "ins", "insurgency", "nmrih", "zps", "fof", "gesource", "bb2",
+    # GoldSrc engine
+    "cs", "cscz", "tfc", "dmc", "ns", "ricochet", "hldm", "ahl",
+})
+
+
 class GameServer(db.Model):
     """A single game server instance managed by LinuxGSM."""
     id = db.Column(db.Integer, primary_key=True)
@@ -250,6 +264,18 @@ class GameServer(db.Model):
 
     def set_commands(self, cmds):
         self.commands = json.dumps(cmds)
+
+    def connect_uri(self, host):
+        """One-click join URI for clients that support one, else "".
+
+        Source/GoldSrc games use steam://connect/<ip>:<port>, which launches the
+        game and joins the server. `host` is the already-resolved public IP or
+        hostname (validated upstream); we only ever interpolate it plus the
+        integer port, so there is nothing shell/HTML-injectable here. Returns ""
+        for games with no scheme so the UI shows a copyable ip:port instead."""
+        if host and self.game_type in STEAM_CONNECT_GAMES:
+            return f"steam://connect/{host}:{self.port}"
+        return ""
 
     # Alias for compatibility
     @property
