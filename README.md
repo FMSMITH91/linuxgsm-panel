@@ -16,8 +16,10 @@ A self-hosted web panel for managing **LinuxGSM** game servers on remote VPS mac
 
 ## What you need
 
-- **A Linux host to run the panel on** — Ubuntu/Debian recommended. The installer sets up everything else it needs (Python 3.9+, a virtualenv, and dependencies) automatically, so you don't have to install them yourself.
-- **One or more game-server machines you can reach over SSH** (key, password, or Tailscale SSH). The panel host can also manage itself.
+> ⚠️ **Ubuntu 24.04 only, for now.** The panel is currently built and tested against **Ubuntu 24.04 LTS** — that's the only supported OS at the moment (other distros may work but aren't supported yet).
+
+- **A host running Ubuntu 24.04 to run the panel on.** The installer sets up everything else it needs (Python 3.9+, a virtualenv, and dependencies) automatically, so you don't have to install them yourself.
+- **One or more game-server machines (Ubuntu 24.04) you can reach over SSH** (key, password, or Tailscale SSH). The panel host can also manage itself.
 - **LinuxGSM** on those machines — or let the panel install it for you.
 - *Optional but recommended:* **[Tailscale](https://tailscale.com)** for private, HTTPS access with no open ports.
 
