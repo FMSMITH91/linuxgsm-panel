@@ -43,10 +43,10 @@ jobs:
           curl -sf http://127.0.0.1:5000/healthz > /dev/null || { echo "panel failed to start"; cat panel.log; exit 1; }
 
       - name: Run Lighthouse CI
+        # URL + puppeteer login live in .lighthouserc.json so we audit the real
+        # (authenticated) dashboard, not just the login page.
         uses: treosh/lighthouse-ci-action@3e7e23fb74242897f95c0ba9cabad3d0227b9b18 # v12.6.2
         with:
-          urls: |
-            http://127.0.0.1:5000/login
           configPath: .lighthouserc.json
           uploadArtifacts: true
 

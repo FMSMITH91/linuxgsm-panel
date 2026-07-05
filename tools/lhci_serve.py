@@ -23,17 +23,26 @@ cfg["setup_complete"] = True
 save_config(cfg)
 
 from app import create_app
-from models import db, User, SetupState
+from models import db, User, SetupState, RemoteServer, GameServer
 import auth
 
 app = create_app()
 with app.app_context():
     if not SetupState.query.first():
-        db.session.add(SetupState(complete=True))
+        db.session.add(SetupState(step="complete", complete=True))
     if not User.query.filter_by(username="lhci").first():
         db.session.add(User(username="lhci",
                             password_hash=auth.hash_password("Str0ng!passw0rd-lhci"),
                             display_name="LHCI", is_superadmin=True, is_active=True))
+    # Seed a host + game server so the dashboard renders a full server card (status
+    # badge, Start/Restart/Stop + Console controls) — that's the UI Lighthouse audits.
+    if not RemoteServer.query.first():
+        r = RemoteServer(name="lhci-host", host="127.0.0.1", port=22,
+                         username="root", auth_method="key", auth_credential="")
+        db.session.add(r)
+        db.session.flush()
+        db.session.add(GameServer(remote_id=r.id, name="lhci-cs", short_name="csgoserver",
+                                  game_type="csgo", port=27015))
     db.session.commit()
 
 # Plain HTTP (no ssl_args) so Lighthouse's headless Chrome can hit it without cert wrangling.
