@@ -4,6 +4,9 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>{{ site_title }} - {% block title %}Dashboard{% endblock %}</title>
+  <!-- Inline emoji favicon — avoids the automatic /favicon.ico request 404ing (a console
+       error Lighthouse counts against Best Practices) without shipping a separate file. -->
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Ctext y='.9em' font-size='90'%3E%F0%9F%8E%AE%3C/text%3E%3C/svg%3E">
   <!-- Speed up CDN fetches, and PRELOAD the icon webfont so icons render at first paint.
        bootstrap-icons uses font-display:block, so without this every <i class="bi"> is
        zero-width until the font loads, then pops to full width — reflowing the whole page
@@ -22,7 +25,7 @@
       --bg-elevated: #1a2332;
       --border: #1f2937;
       --text: #d1d5db;
-      --text-muted: #6b7280;
+      --text-muted: #9ca3af;  /* AA-contrast (>=4.5:1) on the dark card bg; was #6b7280 (3.6:1) */
       --text-heading: #f3f4f6;
       --accent: #10b981;
       --accent-hover: #34d399;
@@ -190,7 +193,9 @@
       white-space: nowrap;
     }
     .btn-sm { font-size: .8rem; padding: .4rem .75rem; }
-    .btn-primary { background: var(--accent); border-color: var(--accent); }
+    .btn-primary { background: var(--accent); border-color: var(--accent); color: #0a0f1a; }
+    /* Bootstrap's .text-secondary (#6c757d) is only 3.8:1 on the dark bg — lift it to AA. */
+    .text-secondary { color: #9ca3af !important; }
     .btn-primary:hover { background: var(--accent-hover); border-color: var(--accent-hover); box-shadow: 0 0 0 3px var(--accent-glow); }
     .btn-outline-secondary {
       border-color: var(--border); color: var(--text); background: transparent;

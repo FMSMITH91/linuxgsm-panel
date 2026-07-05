@@ -15,8 +15,8 @@
         {% if two_factor %}
         <form method="POST">
           <div class="mb-3">
-            <label class="form-label"><i class="bi bi-shield-lock"></i> Authentication code</label>
-            <input type="text" name="totp_code" class="form-control text-center"
+            <label class="form-label" for="totp_code"><i class="bi bi-shield-lock"></i> Authentication code</label>
+            <input type="text" name="totp_code" id="totp_code" class="form-control text-center"
                    autocomplete="one-time-code" placeholder="000000" maxlength="14" autofocus required
                    style="letter-spacing:.2em; font-size:1.2rem;">
             <div class="form-text small">Lost your authenticator? Enter one of your backup codes instead.</div>
@@ -27,12 +27,12 @@
         {% else %}
         <form method="POST">
           <div class="mb-3">
-            <label class="form-label">Username</label>
-            <input type="text" name="username" class="form-control" required autofocus autocomplete="username">
+            <label class="form-label" for="username">Username</label>
+            <input type="text" name="username" id="username" class="form-control" required autofocus autocomplete="username">
           </div>
           <div class="mb-3">
-            <label class="form-label">Password</label>
-            <input type="password" name="password" class="form-control" required autocomplete="current-password">
+            <label class="form-label" for="password">Password</label>
+            <input type="password" name="password" id="password" class="form-control" required autocomplete="current-password">
           </div>
           <div class="mb-3 form-check">
             <input type="checkbox" name="remember" class="form-check-input" id="remember">
