@@ -379,15 +379,25 @@ def database_stats():
     return {"size": _sz(path), "wal_size": _sz(path + "-wal"), "audit_rows": rows}
 
 
-def optimize_database():
-    """Reclaim freed pages and refresh planner stats: VACUUM + ANALYZE + WAL
-    checkpoint(TRUNCATE). Returns (ok, message, {"before","after","freed"} bytes).
-
-    VACUUM can't run inside a transaction and SQLAlchemy always opens one, so we
-    run it over a short-lived direct sqlite3 connection in autocommit mode. Safe
-    to run on a live panel — it briefly locks writers but leaves data consistent."""
-    import os
+def _run_vacuum(path):
+    """The actual blocking sqlite maintenance. VACUUM can't run inside a
+    transaction, so use a short-lived autocommit connection. Checkpoint first so
+    VACUUM starts from a merged DB, then compact, then refresh stats."""
     import sqlite3
+    con = sqlite3.connect(path, timeout=60, isolation_level=None)  # autocommit
+    try:
+        con.execute("PRAGMA wal_checkpoint(TRUNCATE)")
+        con.execute("VACUUM")
+        con.execute("ANALYZE")
+    finally:
+        con.close()
+
+
+def optimize_database():
+    """Reclaim freed pages and refresh planner stats: WAL checkpoint + VACUUM +
+    ANALYZE. Returns (ok, message, {"before","after","freed"} bytes). Never raises
+    — a busy DB or error yields (False, friendly message)."""
+    import os
     from config import DB_PATH
     path = str(DB_PATH)
 
@@ -398,19 +408,39 @@ def optimize_database():
             return 0
 
     before = _size()
-    # Release any SQLAlchemy transaction/connection so VACUUM can take its lock.
+    # End any transaction the request already opened (permission checks read the DB)
+    # so its read lock is released before VACUUM.
     try:
         db.session.commit()
     except Exception:
         db.session.rollback()
     db.session.remove()
-    con = sqlite3.connect(path, timeout=30, isolation_level=None)  # autocommit
+
+    # sqlite3 is a blocking C call. Under eventlet (the panel's runtime) that would
+    # freeze the whole event loop, and if any greenlet holds a DB lock VACUUM can't
+    # get its own — deadlock until timeout ("database is locked"). Run it in a real
+    # worker thread via eventlet.tpool so the hub keeps turning and lock holders can
+    # release. Fall back to a direct call when eventlet isn't monkey-patched (tests).
     try:
-        con.execute("VACUUM")
-        con.execute("ANALYZE")
-        con.execute("PRAGMA wal_checkpoint(TRUNCATE)")
-    finally:
-        con.close()
+        import sqlite3
+        try:
+            import eventlet.patcher
+            if eventlet.patcher.is_monkey_patched("thread"):
+                from eventlet import tpool
+                tpool.execute(_run_vacuum, path)
+            else:
+                _run_vacuum(path)
+        except ImportError:
+            _run_vacuum(path)
+    except sqlite3.OperationalError:
+        _log.warning("database optimize skipped — DB busy", exc_info=True)
+        return (False, "Couldn't optimize right now — the database was busy. Try again in a moment.",
+                {"before": before, "after": before, "freed": 0})
+    except Exception:
+        _log.exception("database optimize failed")
+        return (False, "Database optimize failed — see the panel logs.",
+                {"before": before, "after": before, "freed": 0})
+
     after = _size()
     return True, "Database optimized.", {"before": before, "after": after,
                                          "freed": max(0, before - after)}
