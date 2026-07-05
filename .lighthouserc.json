@@ -2,7 +2,10 @@
   "ci": {
     "collect": {
       "numberOfRuns": 3,
-      "url": ["http://127.0.0.1:5000/"],
+      "url": [
+        "http://127.0.0.1:5000/",
+        "http://127.0.0.1:5000/server/1"
+      ],
       "puppeteerScript": "./lhci-login.js",
       "settings": {
         "chromeFlags": "--no-sandbox --headless=new",
