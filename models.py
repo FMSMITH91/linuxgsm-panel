@@ -1,5 +1,7 @@
 """Database models for LinuxGSM Panel."""
+import json
 import re
+import bcrypt
 from datetime import datetime
 from flask_login import UserMixin
 from flask_sqlalchemy import SQLAlchemy
@@ -51,7 +53,48 @@ class User(UserMixin, db.Model):
     totp_secret = db.Column(db.Text, nullable=True)      # TOTP secret, encrypted at rest
     totp_enabled = db.Column(db.Boolean, default=False)  # 2FA active for this user
     auth_epoch = db.Column(db.Integer, default=0, nullable=False)  # bump to revoke all sessions
+    backup_codes = db.Column(db.Text, default="")   # JSON list of bcrypt-hashed one-time 2FA backup codes
     groups = db.relationship("Group", secondary="user_groups", back_populates="users")
+
+    @staticmethod
+    def _norm_code(code):
+        # Compare codes case-insensitively and ignore the display dashes/spaces.
+        return (code or "").strip().lower().replace("-", "").replace(" ", "")
+
+    def set_backup_codes(self, plain_codes):
+        """Store one-time 2FA backup codes as bcrypt hashes (the plaintext is shown to
+        the user once and never persisted)."""
+        self.backup_codes = json.dumps([
+            bcrypt.hashpw(self._norm_code(c).encode(), bcrypt.gensalt()).decode()
+            for c in plain_codes
+        ])
+
+    def use_backup_code(self, code):
+        """If `code` matches an unused backup code, consume it (one-time) and return
+        True. Caller must commit."""
+        code = self._norm_code(code)
+        if not code or not self.backup_codes:
+            return False
+        try:
+            hashes = json.loads(self.backup_codes)
+        except (ValueError, TypeError):
+            return False
+        for h in hashes:
+            try:
+                if bcrypt.checkpw(code.encode(), h.encode()):
+                    hashes.remove(h)
+                    self.backup_codes = json.dumps(hashes)
+                    return True
+            except (ValueError, TypeError):
+                continue
+        return False
+
+    @property
+    def backup_codes_remaining(self):
+        try:
+            return len(json.loads(self.backup_codes or "[]"))
+        except (ValueError, TypeError):
+            return 0
 
     def get_id(self):
         # Embed a session epoch in the login id. Bumping auth_epoch (on password
@@ -277,6 +320,7 @@ def _run_light_migrations():
         ("user", "totp_secret"): "ALTER TABLE user ADD COLUMN totp_secret TEXT",
         ("user", "totp_enabled"): "ALTER TABLE user ADD COLUMN totp_enabled BOOLEAN DEFAULT 0",
         ("user", "auth_epoch"): "ALTER TABLE user ADD COLUMN auth_epoch INTEGER DEFAULT 0",
+        ("user", "backup_codes"): "ALTER TABLE user ADD COLUMN backup_codes TEXT DEFAULT ''",
     }
     for (table, col), ddl in wanted.items():
         if table in existing and col not in existing[table]:

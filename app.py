@@ -61,7 +61,8 @@ from sqlalchemy import desc, or_, text
 from auth import (
     ALL_PERMISSIONS, ACTION_PERMISSION_MAP, can_access_server,
     can_access_remote, accessible_remote_ids, check_password,
-    client_ip, dummy_password_check, generate_totp_secret, totp_provisioning_uri,
+    client_ip, dummy_password_check, generate_backup_codes,
+    generate_totp_secret, totp_provisioning_uri,
     verify_totp, get_user_permissions, get_user_servers,
     hash_password, has_permission, init_auth,
     log_action, permission_required, server_access_required, INSTALL_SERVER,
@@ -849,10 +850,17 @@ def register_routes(app):
                     flash("The two-factor prompt expired — please log in again.", "danger")
                     return render_template("login.html")
                 u = User.query.get(pending_id)
-                if u and u.is_active and u.totp_enabled and \
-                        verify_totp(u.totp_secret_plain, request.form.get("totp_code", "")):
-                    return _succeed(u, bool(session.get("_2fa_remember")))
-                return _fail("Invalid authentication code.", two_factor=True)
+                entered = request.form.get("totp_code", "")
+                if u and u.is_active and u.totp_enabled:
+                    if verify_totp(u.totp_secret_plain, entered):
+                        return _succeed(u, bool(session.get("_2fa_remember")))
+                    # Fall back to a one-time backup code (for a lost authenticator).
+                    if u.use_backup_code(entered):
+                        db.session.commit()
+                        log_action(u, "2fa_backup_code_used", target=u.username,
+                                   detail=f"{u.backup_codes_remaining} codes left")
+                        return _succeed(u, bool(session.get("_2fa_remember")))
+                return _fail("Invalid authentication code or backup code.", two_factor=True)
 
             # ── Step 1: username + password ──
             username = request.form.get("username", "").strip()
@@ -925,11 +933,14 @@ def register_routes(app):
             if secret and verify_totp(secret, request.form.get("totp_code", "")):
                 current_user.totp_secret = encrypt_secret(secret)
                 current_user.totp_enabled = True
+                codes = generate_backup_codes()
+                current_user.set_backup_codes(codes)
                 db.session.commit()
                 session.pop("_2fa_setup_secret", None)
                 log_action(current_user, "2fa_enabled", target=current_user.username)
                 flash("Two-factor authentication is now enabled.", "success")
-                return redirect(url_for("account"))
+                # Show the one-time backup codes once, right now — they're never shown again.
+                return render_template("backup_codes.html", codes=codes, first_time=True)
             flash("That code didn't match — check your device's time and try again.", "danger")
         # (Re)issue a pending secret for this enrolment attempt.
         secret = session.get("_2fa_setup_secret") or generate_totp_secret()
@@ -957,10 +968,28 @@ def register_routes(app):
             return redirect(url_for("account"))
         current_user.totp_enabled = False
         current_user.totp_secret = None
+        current_user.backup_codes = ""   # 2FA off → its backup codes no longer apply
         db.session.commit()
         log_action(current_user, "2fa_disabled", target=current_user.username)
         flash("Two-factor authentication disabled.", "success")
         return redirect(url_for("account"))
+
+    @app.route("/account/2fa/backup-codes", methods=["POST"])
+    @login_required
+    def account_backup_codes():
+        """Regenerate the one-time 2FA backup codes (invalidates the old set). Requires
+        the account password, since a new set replaces recovery access."""
+        if not current_user.totp_enabled:
+            flash("Enable two-factor authentication first.", "info")
+            return redirect(url_for("account"))
+        if not check_password(request.form.get("password", ""), current_user.password_hash):
+            flash("Password incorrect — backup codes were not changed.", "danger")
+            return redirect(url_for("account"))
+        codes = generate_backup_codes()
+        current_user.set_backup_codes(codes)
+        db.session.commit()
+        log_action(current_user, "backup_codes_regenerated", target=current_user.username)
+        return render_template("backup_codes.html", codes=codes, first_time=False)
 
     # ── Dashboard ──────────────────────────────────────────
     @app.route("/healthz")

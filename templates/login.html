@@ -16,9 +16,10 @@
         <form method="POST">
           <div class="mb-3">
             <label class="form-label"><i class="bi bi-shield-lock"></i> Authentication code</label>
-            <input type="text" name="totp_code" class="form-control text-center" inputmode="numeric"
-                   autocomplete="one-time-code" placeholder="000000" maxlength="6" autofocus required
-                   style="letter-spacing:.3em; font-size:1.2rem;">
+            <input type="text" name="totp_code" class="form-control text-center"
+                   autocomplete="one-time-code" placeholder="000000" maxlength="14" autofocus required
+                   style="letter-spacing:.2em; font-size:1.2rem;">
+            <div class="form-text small">Lost your authenticator? Enter one of your backup codes instead.</div>
           </div>
           <button type="submit" class="btn btn-primary w-100">Verify</button>
           <a href="{{ url_for('login') }}" class="btn btn-link btn-sm text-secondary w-100 mt-2">Start over</a>

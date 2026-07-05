@@ -1,0 +1,45 @@
+{% extends "base.html" %}
+{% block title %}Backup codes{% endblock %}
+{% block content %}
+
+<div class="card mx-auto" style="max-width: 640px;">
+  <div class="card-header"><i class="bi bi-key-fill"></i> Your 2FA backup codes</div>
+  <div class="card-body">
+    <div class="alert alert-warning py-2 small mb-3">
+      <i class="bi bi-exclamation-triangle-fill"></i> Save these now — they are shown <strong>once</strong> and won't be
+      displayed again. Each code signs you in a single time if you lose your authenticator. Store them somewhere safe
+      (a password manager).{% if not first_time %} These replace any previous backup codes.{% endif %}
+    </div>
+    <div class="row row-cols-2 g-2 font-monospace mb-3" style="font-size:1rem;">
+      {% for c in codes %}
+      <div class="col"><div class="border rounded text-center py-2" style="letter-spacing:.1em;">{{ c }}</div></div>
+      {% endfor %}
+    </div>
+    <div class="d-flex gap-2 flex-wrap align-items-center">
+      <button class="btn btn-outline-secondary btn-sm" onclick="copyCodes()"><i class="bi bi-clipboard"></i> Copy</button>
+      <button class="btn btn-outline-secondary btn-sm" onclick="downloadCodes()"><i class="bi bi-download"></i> Download .txt</button>
+      <span id="copy-msg" class="small text-success"></span>
+      <a href="{{ url_for('account') }}" class="btn btn-primary btn-sm ms-auto">I've saved them — continue</a>
+    </div>
+  </div>
+</div>
+
+{% endblock %}
+{% block scripts %}
+<script>
+var CODES = {{ codes|tojson }};
+function copyCodes(){
+  navigator.clipboard.writeText(CODES.join('\n')).then(function(){
+    document.getElementById('copy-msg').textContent = 'Copied to clipboard.';
+  }, function(){ document.getElementById('copy-msg').textContent = 'Copy failed — select the codes and copy manually.'; });
+}
+function downloadCodes(){
+  var blob = new Blob([CODES.join('\n') + '\n'], {type: 'text/plain'});
+  var a = document.createElement('a');
+  a.href = URL.createObjectURL(blob);
+  a.download = 'linuxgsm-panel-backup-codes.txt';
+  document.body.appendChild(a); a.click();
+  setTimeout(function(){ document.body.removeChild(a); URL.revokeObjectURL(a.href); }, 0);
+}
+</script>
+{% endblock %}

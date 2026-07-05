@@ -101,10 +101,19 @@ try:
                    display_name="MR", is_superadmin=False, is_active=True)
         mru.groups.append(mrg)
         db.session.add(mru)
+        # A 2FA-enabled user with known backup codes, to exercise backup-code login.
+        from config import encrypt_secret
+        tfa = User(username="smoke_2fa", password_hash=auth.hash_password("Str0ng!passw0rd"),
+                   display_name="2FA", is_superadmin=True, is_active=True, totp_enabled=True,
+                   totp_secret=encrypt_secret(auth.generate_totp_secret()))
+        bc_codes = auth.generate_backup_codes()
+        tfa.set_backup_codes(bc_codes)
+        db.session.add(tfa)
         db.session.commit()
         admin_id, remote_id = admin.id, remote.id
         remote2_id, mru_id = remote2.id, mru.id
         gs_id = gs.id
+        bc_code = bc_codes[0]
 
     c = client_as(admin_id)
 
@@ -112,7 +121,7 @@ try:
     #    to /setup or /login (which would mean the check isn't really exercising
     #    the page). We skip pages that shell out to host-only tooling
     #    (/server-management runs ufw/systemctl), so the test stays portable.
-    for path in ["/", "/users", "/groups", "/logs", "/remotes", "/tailscale"]:
+    for path in ["/", "/users", "/groups", "/logs", "/remotes", "/tailscale", "/account"]:
         code = c.get(path).status_code
         check("GET %s renders (200)" % path, code == 200, "got %d" % code)
 
@@ -239,6 +248,20 @@ try:
                                                "password": "whatever"})
     check("login with unknown user -> not 5xx (dummy-check path)",
           r.status_code < 500, "got %d" % r.status_code)
+
+    # 2FA backup code: after the password step, a valid one-time backup code signs the
+    # user in — and can't be reused. (A success clears the login throttle for this IP.)
+    b1 = app.test_client()
+    s1 = b1.post("/login", data={"username": "smoke_2fa", "password": "Str0ng!passw0rd"})
+    check("2FA user: password step returns the 2FA prompt (200)", s1.status_code == 200,
+          "got %d" % s1.status_code)
+    s2 = b1.post("/login", data={"totp_code": bc_code})
+    check("2FA backup code signs the user in (302)", s2.status_code == 302, "got %d" % s2.status_code)
+    b2 = app.test_client()
+    b2.post("/login", data={"username": "smoke_2fa", "password": "Str0ng!passw0rd"})
+    s3 = b2.post("/login", data={"totp_code": bc_code})
+    check("2FA backup code is one-time (reuse rejected, not 302)", s3.status_code != 302,
+          "got %d" % s3.status_code)
 
 finally:
     passed = sum(1 for ok, _, _ in results if ok)

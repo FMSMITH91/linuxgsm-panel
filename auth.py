@@ -93,6 +93,20 @@ def generate_api_token():
     return secrets.token_hex(32)
 
 
+# Unambiguous alphabet (no 0/O/1/l/I) so hand-typed backup codes don't get confused.
+_BACKUP_CODE_ALPHABET = "23456789abcdefghjkmnpqrstuvwxyz"
+
+
+def generate_backup_codes(n=10, length=10):
+    """Generate `n` human-friendly one-time 2FA backup codes, formatted xxxxx-xxxxx.
+    Returned in plaintext ONCE — only their bcrypt hashes are stored (User.set_backup_codes)."""
+    codes = []
+    for _ in range(n):
+        raw = "".join(secrets.choice(_BACKUP_CODE_ALPHABET) for _ in range(length))
+        codes.append(raw[:length // 2] + "-" + raw[length // 2:])
+    return codes
+
+
 # ─── Two-factor auth (TOTP) ───────────────────────────────────
 def generate_totp_secret():
     """A fresh base32 TOTP secret (what a new authenticator enrolment gets)."""
