@@ -134,11 +134,9 @@ class Group(db.Model):
     permissions = db.Column(db.Text, default="[]")  # JSON list of permission strings
 
     def get_permissions(self):
-        import json
         return set(json.loads(self.permissions or "[]"))
 
     def set_permissions(self, perms):
-        import json
         self.permissions = json.dumps(list(perms))
 
     def has_permission(self, perm):
@@ -193,14 +191,12 @@ class RemoteServer(db.Model):
         if not self.stats_cache:
             return None
         try:
-            import json
             return json.loads(self.stats_cache)
         except (ValueError, TypeError):
             return None
 
     def update_cached_stats(self, stats):
         """Persist a fresh stats dict, keeping only the display fields."""
-        import json
         keep = {k: stats.get(k) for k in ("cpu_percent", "memory", "disk", "uptime")}
         self.stats_cache = json.dumps(keep)
 
@@ -247,14 +243,12 @@ class GameServer(db.Model):
         return _validate_shell_ident(key, value)
 
     def get_commands(self):
-        import json
         try:
             return json.loads(self.commands or "[]")
         except (ValueError, TypeError):
             return []
 
     def set_commands(self, cmds):
-        import json
         self.commands = json.dumps(cmds)
 
     # Alias for compatibility
