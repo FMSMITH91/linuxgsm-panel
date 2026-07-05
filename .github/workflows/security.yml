@@ -99,8 +99,14 @@ jobs:
       # the marketplace action needs a licence for orgs). The .gitleaks.toml allowlist
       # excludes the UI's token *placeholders* so they don't trip a false positive.
       - name: Gitleaks
+        env:
+          # Authenticate the release lookup — an anonymous api.github.com call is capped
+          # at 60/hour per runner IP and intermittently 403s (rate limit). The built-in
+          # token lifts that to 5000/hour, so the download stops flaking.
+          GH_TOKEN: ${{ github.token }}
         run: |
-          URL=$(curl -sSfL https://api.github.com/repos/gitleaks/gitleaks/releases/latest \
+          URL=$(curl -sSfL -H "Authorization: Bearer $GH_TOKEN" \
+                     https://api.github.com/repos/gitleaks/gitleaks/releases/latest \
                 | grep -o 'https://[^"]*linux_x64\.tar\.gz' | head -1)
           curl -sSfL "$URL" | tar -xz -C /tmp gitleaks
           /tmp/gitleaks detect --source . --config .gitleaks.toml \
