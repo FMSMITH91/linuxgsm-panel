@@ -653,7 +653,7 @@ window.UPro = (function(){
   function msg(t, kind){ var m=document.getElementById('upro-msg'); if(m){ m.textContent=t; m.className='small mt-2 '+(kind==='success'?'text-success':(kind==='danger'?'text-danger':'text-secondary')); } }
   function attachForm(){
     return '<div class="input-group input-group-sm" style="max-width:540px;">'
-      + '<input type="password" id="upro-token" class="form-control" placeholder="Ubuntu Pro token (e.g. C1a…)" autocomplete="off">'
+      + '<input type="text" id="upro-token" class="form-control" placeholder="Ubuntu Pro token (e.g. C1a…)" autocomplete="off" autocapitalize="off" autocorrect="off" spellcheck="false">'
       + '<button class="btn btn-success" onclick="UPro.attach()"><i class="bi bi-shield-check"></i> Attach</button></div>';
   }
   function render(d){
