@@ -391,6 +391,9 @@ if [ "${RUN_AS_ROOT}" -eq 1 ]; then
 Description=LinuxGSM Game Server Admin Panel
 After=network-online.target
 Wants=network-online.target
+# Keep auto-restarting no matter how many times it has crashed — a self-healing
+# appliance should keep trying to recover rather than give up and stay down.
+StartLimitIntervalSec=0
 
 [Service]
 Type=simple
@@ -415,6 +418,9 @@ else
 Description=LinuxGSM Game Server Admin Panel
 After=network-online.target
 Wants=network-online.target
+# Keep auto-restarting no matter how many times it has crashed — a self-healing
+# appliance should keep trying to recover rather than give up and stay down.
+StartLimitIntervalSec=0
 
 [Service]
 Type=simple

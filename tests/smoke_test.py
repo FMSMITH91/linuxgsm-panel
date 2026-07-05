@@ -128,6 +128,12 @@ try:
     check("GET /server/<id>/files renders (200)",
           c.get("/server/%d/files" % gs_id).status_code == 200)
 
+    # Liveness probe: unauthenticated, returns 200 + {"status":"ok"}, works pre-login.
+    hz = app.test_client().get("/healthz")
+    check("GET /healthz -> 200 ok (unauthenticated)",
+          hz.status_code == 200 and (hz.get_json() or {}).get("status") == "ok",
+          "got %d" % hz.status_code)
+
     # ── Group create via the real route WITH a host selected. This is the exact
     #    regression that 500'd: the route assigned GameServer objects to
     #    Group.servers, which is a RemoteServer collection. ──

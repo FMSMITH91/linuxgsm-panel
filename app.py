@@ -56,7 +56,7 @@ from flask import (
 from flask_login import current_user, login_required, login_user, logout_user
 from flask_socketio import SocketIO, emit, join_room, leave_room
 from flask_wtf.csrf import CSRFProtect
-from sqlalchemy import desc, or_
+from sqlalchemy import desc, or_, text
 
 from auth import (
     ALL_PERMISSIONS, ACTION_PERMISSION_MAP, can_access_server,
@@ -964,6 +964,17 @@ def register_routes(app):
         return redirect(url_for("account"))
 
     # ── Dashboard ──────────────────────────────────────────
+    @app.route("/healthz")
+    def healthz():
+        """Unauthenticated liveness probe for monitors / an external watchdog. Confirms
+        the process is serving AND the database is reachable; returns no sensitive data.
+        A hung/deadlocked worker or a wedged DB makes this fail, so a watchdog can act."""
+        try:
+            db.session.execute(text("SELECT 1"))
+            return jsonify({"status": "ok"}), 200
+        except Exception:
+            return jsonify({"status": "degraded"}), 503
+
     @app.route("/")
     @login_required
     def index():
@@ -3290,9 +3301,23 @@ def register_routes(app):
                 pass
             time.sleep(2)
 
-    # Start the console poller thread
-    poller_thread = threading.Thread(target=console_poller, daemon=True)
-    poller_thread.start()
+    # Start the console poller under a tiny supervisor: it has an inner try/except so it
+    # shouldn't die, but if it ever exits we log and respawn it — console streaming
+    # self-heals instead of silently staying dead until the next full restart.
+    def _supervise(name, target):
+        def _runner():
+            while True:
+                t = threading.Thread(target=target, daemon=True)
+                t.start()
+                t.join()   # only returns if the worker exited unexpectedly
+                try:
+                    app.logger.error("%s thread exited — respawning in 5s", name)
+                except Exception:
+                    pass
+                time.sleep(5)
+        threading.Thread(target=_runner, daemon=True).start()
+
+    _supervise("console-poller", console_poller)
 
     # Make socketio accessible from app
     app.socketio = socketio
