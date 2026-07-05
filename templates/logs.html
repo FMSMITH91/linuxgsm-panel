@@ -2,8 +2,64 @@
 {% block title %}Audit Logs{% endblock %}
 {% block content %}
 
-<div class="d-flex justify-content-between align-items-center mb-3">
+{# Header cell that links to sort by `col`, toggling direction and showing an arrow. #}
+{% macro sort_th(col, label, extra="") %}
+  {% set is_active = filters.sort == col %}
+  {% set next_dir = "asc" if (is_active and filters.dir == "desc") else ("desc" if is_active else "desc") %}
+  <th {{ extra|safe }}>
+    <a class="text-reset text-decoration-none d-inline-flex align-items-center gap-1"
+       href="{{ url_for('view_logs', sort=col, dir=next_dir, q=filters.q, action=filters.action, user=filters.user, status=filters.status) }}">
+      {{ label }}
+      {% if is_active %}<i class="bi bi-caret-{{ 'up' if filters.dir == 'asc' else 'down' }}-fill" style="font-size:.6rem;"></i>{% endif %}
+    </a>
+  </th>
+{% endmacro %}
+
+<div class="d-flex justify-content-between align-items-center mb-3 flex-wrap gap-2">
   <h1 class="page-title mb-0"><i class="bi bi-journal-text"></i> Audit Logs</h1>
+  <span class="text-secondary small">{{ logs.total }} entr{{ 'y' if logs.total == 1 else 'ies' }}{% if filters.q or filters.action or filters.user or filters.status %} (filtered){% endif %}</span>
+</div>
+
+<!-- Filter bar -->
+<div class="card mb-3">
+  <div class="card-body py-2">
+    <form method="get" class="row g-2 align-items-end">
+      <div class="col-12 col-md">
+        <label class="form-label mb-1" style="font-size:.7rem;">Search</label>
+        <input type="text" name="q" value="{{ filters.q }}" class="form-control form-control-sm"
+               placeholder="user, target or detail…">
+      </div>
+      <div class="col-6 col-md-2">
+        <label class="form-label mb-1" style="font-size:.7rem;">Action</label>
+        <select name="action" class="form-select form-select-sm">
+          <option value="">All actions</option>
+          {% for a in actions %}<option value="{{ a }}" {% if a == filters.action %}selected{% endif %}>{{ a }}</option>{% endfor %}
+        </select>
+      </div>
+      <div class="col-6 col-md-2">
+        <label class="form-label mb-1" style="font-size:.7rem;">User</label>
+        <select name="user" class="form-select form-select-sm">
+          <option value="">All users</option>
+          {% for u in users %}<option value="{{ u }}" {% if u == filters.user %}selected{% endif %}>{{ u }}</option>{% endfor %}
+        </select>
+      </div>
+      <div class="col-6 col-md-2">
+        <label class="form-label mb-1" style="font-size:.7rem;">Status</label>
+        <select name="status" class="form-select form-select-sm">
+          <option value="" {% if not filters.status %}selected{% endif %}>All</option>
+          <option value="ok" {% if filters.status == 'ok' %}selected{% endif %}>Success</option>
+          <option value="fail" {% if filters.status == 'fail' %}selected{% endif %}>Failed</option>
+        </select>
+      </div>
+      <!-- keep current sort when filtering -->
+      <input type="hidden" name="sort" value="{{ filters.sort }}">
+      <input type="hidden" name="dir" value="{{ filters.dir }}">
+      <div class="col-6 col-md-auto d-flex gap-2">
+        <button type="submit" class="btn btn-primary btn-sm"><i class="bi bi-funnel"></i> Filter</button>
+        <a href="{{ url_for('view_logs') }}" class="btn btn-outline-secondary btn-sm">Clear</a>
+      </div>
+    </form>
+  </div>
 </div>
 
 <div class="card">
@@ -12,10 +68,10 @@
       <table class="table table-sm table-hover mb-0">
         <thead>
           <tr>
-            <th>Time</th>
-            <th>User</th>
-            <th>Action</th>
-            <th>Target</th>
+            {{ sort_th('timestamp', 'Time', 'class="text-nowrap"') }}
+            {{ sort_th('username', 'User') }}
+            {{ sort_th('action', 'Action') }}
+            {{ sort_th('target', 'Target') }}
             <th>Detail</th>
             <th>IP</th>
             <th>Status</th>
@@ -40,7 +96,11 @@
           </tr>
           {% else %}
           <tr>
-            <td colspan="7" class="text-center text-secondary py-4">No audit log entries yet.</td>
+            <td colspan="7" class="text-center text-secondary py-4">
+              {% if filters.q or filters.action or filters.user or filters.status %}
+                No entries match these filters. <a href="{{ url_for('view_logs') }}">Clear filters</a>
+              {% else %}No audit log entries yet.{% endif %}
+            </td>
           </tr>
           {% endfor %}
         </tbody>
@@ -52,19 +112,19 @@
     <nav>
       <ul class="pagination pagination-sm justify-content-center mb-0">
         <li class="page-item {% if not logs.has_prev %}disabled{% endif %}">
-          <a class="page-link" href="{{ url_for('view_logs', page=logs.prev_num) if logs.has_prev else '#' }}">Previous</a>
+          <a class="page-link" href="{{ url_for('view_logs', page=logs.prev_num, q=filters.q, action=filters.action, user=filters.user, status=filters.status, sort=filters.sort, dir=filters.dir) if logs.has_prev else '#' }}">Previous</a>
         </li>
         {% for p in logs.iter_pages(left_edge=1, right_edge=1, left_current=2, right_current=2) %}
           {% if p %}
           <li class="page-item {% if p == logs.page %}active{% endif %}">
-            <a class="page-link" href="{{ url_for('view_logs', page=p) }}">{{ p }}</a>
+            <a class="page-link" href="{{ url_for('view_logs', page=p, q=filters.q, action=filters.action, user=filters.user, status=filters.status, sort=filters.sort, dir=filters.dir) }}">{{ p }}</a>
           </li>
           {% else %}
           <li class="page-item disabled"><span class="page-link">…</span></li>
           {% endif %}
         {% endfor %}
         <li class="page-item {% if not logs.has_next %}disabled{% endif %}">
-          <a class="page-link" href="{{ url_for('view_logs', page=logs.next_num) if logs.has_next else '#' }}">Next</a>
+          <a class="page-link" href="{{ url_for('view_logs', page=logs.next_num, q=filters.q, action=filters.action, user=filters.user, status=filters.status, sort=filters.sort, dir=filters.dir) if logs.has_next else '#' }}">Next</a>
         </li>
       </ul>
     </nav>
