@@ -15,6 +15,40 @@ import paramiko
 
 from config import decrypt_secret
 
+
+class HostKeyMismatch(ConnectionError):
+    """The server presented a different SSH host key than the one we pinned (possible
+    MITM, or the box was reinstalled). Raised instead of silently trusting the new key."""
+
+
+class _PinPolicy(paramiko.MissingHostKeyPolicy):
+    """Trust-on-first-use SSH host-key pinning, replacing paramiko's AutoAddPolicy (which
+    blindly trusts any key and is a MITM risk). We never pre-load keys into the client, so
+    paramiko always hands the presented key here and we decide:
+      • no key pinned yet → capture it (the caller persists it) and accept — first use
+      • matches the pin   → accept
+      • differs from pin  → reject, unless reject_on_change is False (e.g. a pre-save probe
+        with nothing to compare, or a Tailscale connection already authenticated by
+        WireGuard, where the tailnet — not the SSH host key — is the trust anchor)."""
+
+    def __init__(self, expected="", reject_on_change=True):
+        self.expected = (expected or "").strip()
+        self.reject_on_change = reject_on_change
+        self.captured = None
+
+    def missing_host_key(self, client, hostname, key):
+        presented = "%s %s" % (key.get_name(), key.get_base64())
+        if self.expected:
+            if presented != self.expected and self.reject_on_change:
+                raise HostKeyMismatch(
+                    'The SSH host key for %s has CHANGED since it was first trusted. '
+                    'This is either a man-in-the-middle attempt or the server was '
+                    'reinstalled. If you reinstalled it, click "Re-trust host key" on the '
+                    'server page; otherwise do NOT connect.' % hostname)
+        else:
+            self.captured = presented   # first contact → caller pins it
+
+
 # Local subprocess execution must use the *unpatched* subprocess run inside
 # eventlet's native thread pool — see _run_local() for the full rationale.
 # When eventlet isn't active (standalone/CLI use) these fall back to plain subprocess.
@@ -92,7 +126,12 @@ def get_connection(server, force_new=False):
             del _connections[key]
 
     client = paramiko.SSHClient()
-    client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
+    # Pin the server's SSH host key (TOFU). Tailscale connections are already
+    # authenticated by WireGuard, so there the tailnet is the trust anchor, not the SSH
+    # host key — capture it but don't reject a change (tailscaled may rotate it).
+    enforce_pin = server.auth_method not in ("tailscale", "local")
+    policy = _PinPolicy(expected=(server.host_key or ""), reject_on_change=enforce_pin)
+    client.set_missing_host_key_policy(policy)
 
     timeout = 15
     cred = decrypt_secret(server.auth_credential)  # stored encrypted at rest
@@ -135,6 +174,8 @@ def get_connection(server, force_new=False):
                 key_filename=key_path,
                 timeout=timeout,
             )
+    except HostKeyMismatch:
+        raise   # surface the clear "host key changed" message unwrapped
     except paramiko.AuthenticationException:
         raise ConnectionError("SSH authentication failed. Check credentials.")
     except socket.timeout:
@@ -144,10 +185,29 @@ def get_connection(server, force_new=False):
     except Exception as e:
         raise ConnectionError(f"SSH connection failed: {e}")
 
+    # First successful contact with a direct-SSH host → pin the key we just saw.
+    if policy.captured and enforce_pin:
+        _persist_host_key(server, policy.captured)
+
     with _conn_lock:
         _connections[key] = client
 
     return client
+
+
+def _persist_host_key(server, keystr):
+    """Store the pinned host key on the server row (best-effort; if there's no DB session
+    in scope it simply pins on the next connection instead)."""
+    try:
+        from models import db
+        server.host_key = keystr
+        db.session.commit()
+    except Exception:
+        try:
+            from models import db
+            db.session.rollback()
+        except Exception:
+            pass
 
 
 def close_connection(server):
@@ -1893,7 +1953,9 @@ def ssh_test_connection(host, port=22, username="root", auth_method="key", crede
         return False, f"Tailscale SSH failed: {(err or out or 'unknown')[:150]}"
 
     client = paramiko.SSHClient()
-    client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
+    # Pre-save connectivity probe: nothing to compare against yet, so capture-only (no
+    # AutoAddPolicy). The key gets pinned for real on the first operational connection.
+    client.set_missing_host_key_policy(_PinPolicy(reject_on_change=False))
     try:
         if auth_method == "password" and credential:
             client.connect(

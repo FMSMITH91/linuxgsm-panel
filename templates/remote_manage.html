@@ -212,6 +212,18 @@
         <div id="ssh-msg" class="small mt-1"></div>
       </div>
     </div>
+    {% if remote.auth_method != 'tailscale' %}
+    <div class="row g-3">
+      <div class="col-12 mt-2 pt-3 border-top">
+        <div class="small text-secondary mb-1"><i class="bi bi-fingerprint"></i> Pinned SSH host key:
+          {% if remote.host_key_fingerprint %}<code>{{ remote.host_key_fingerprint }}</code>{% else %}<span class="text-warning">not pinned yet — pins automatically on first connection</span>{% endif %}
+        </div>
+        <p class="small text-secondary mb-1">The panel remembers this server's SSH host key and refuses to connect if it changes — protection against a man-in-the-middle. If you reinstalled or rebuilt the server its key changed legitimately; re-trust it to pin the new one.</p>
+        <button class="btn btn-sm btn-outline-warning" onclick="retrustHostKey()"><i class="bi bi-arrow-repeat"></i> Re-trust host key</button>
+        <div id="hostkey-msg" class="small mt-1"></div>
+      </div>
+    </div>
+    {% endif %}
     {% endif %}
   </div>
 </div>
@@ -303,6 +315,13 @@ function rebootRemote(){
     .then(d=>alert(d.message||'Reboot requested')).catch(()=>alert('Reboot failed'));
 }
 // ── SSH / connection ──
+function retrustHostKey(){
+  if(!confirm('Clear the pinned SSH host key for this server?\n\nOnly do this if YOU reinstalled or rebuilt the server. The next connection will trust and pin whatever host key the server presents.')) return;
+  var m=document.getElementById('hostkey-msg'); m.innerHTML='<span class="text-secondary"><i class="bi bi-arrow-repeat"></i> Clearing…</span>';
+  fetch(MOUNT+'/api/remote/'+REMOTE_ID+'/retrust-hostkey',{method:'POST'}).then(r=>r.json())
+    .then(d=>{ m.innerHTML='<span class="text-'+(d.success?'success':'danger')+'">'+(d.message||(d.success?'Done':'Failed'))+'</span>'; if(d.success) setTimeout(function(){location.reload();},1000); })
+    .catch(()=>{ m.innerHTML='<span class="text-danger">Request failed.</span>'; });
+}
 var SSH_LABELS={allow:'open (allow)',limit:'rate-limited (limit)',off:'disabled — tailnet only'};
 function loadSshStatus(){
   var el=document.getElementById('ssh-mode'); if(!el) return;

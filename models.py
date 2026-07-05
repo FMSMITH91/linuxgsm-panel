@@ -101,6 +101,7 @@ class RemoteServer(db.Model):
     public_ip = db.Column(db.String(45), default="")  # cached public IP (for connect address)
     is_online = db.Column(db.Boolean, default=False)
     last_seen = db.Column(db.DateTime, nullable=True)
+    host_key = db.Column(db.Text, default="")     # pinned SSH host key ("keytype base64"); TOFU
     stats_cache = db.Column(db.Text, default="")  # last live stats (JSON: cpu_percent/memory/disk/uptime)
     created_at = db.Column(db.DateTime, default=datetime.utcnow)
     groups = db.relationship("Group", secondary=group_servers, back_populates="servers")
@@ -139,6 +140,23 @@ class RemoteServer(db.Model):
         import json
         keep = {k: stats.get(k) for k in ("cpu_percent", "memory", "disk", "uptime")}
         self.stats_cache = json.dumps(keep)
+
+    @property
+    def host_key_fingerprint(self):
+        """SHA256 fingerprint of the pinned SSH host key (OpenSSH format), or "" if none
+        is pinned yet. Shown so the operator can eyeball what they're trusting."""
+        if not self.host_key:
+            return ""
+        try:
+            import base64
+            import hashlib
+            parts = self.host_key.split()
+            raw = base64.b64decode(parts[1] if len(parts) > 1 else parts[0])
+            digest = base64.b64encode(hashlib.sha256(raw).digest()).decode().rstrip("=")
+            keytype = parts[0] if len(parts) > 1 else "key"
+            return "%s SHA256:%s" % (keytype, digest)
+        except Exception:
+            return ""
 
 
 class GameServer(db.Model):
@@ -229,6 +247,7 @@ def _run_light_migrations():
         ("game_server", "daily_restart"): "ALTER TABLE game_server ADD COLUMN daily_restart BOOLEAN DEFAULT 0",
         ("remote_server", "public_ip"): "ALTER TABLE remote_server ADD COLUMN public_ip VARCHAR(45) DEFAULT ''",
         ("remote_server", "stats_cache"): "ALTER TABLE remote_server ADD COLUMN stats_cache TEXT DEFAULT ''",
+        ("remote_server", "host_key"): "ALTER TABLE remote_server ADD COLUMN host_key TEXT DEFAULT ''",
         ("user", "totp_secret"): "ALTER TABLE user ADD COLUMN totp_secret TEXT",
         ("user", "totp_enabled"): "ALTER TABLE user ADD COLUMN totp_enabled BOOLEAN DEFAULT 0",
         ("user", "auth_epoch"): "ALTER TABLE user ADD COLUMN auth_epoch INTEGER DEFAULT 0",

@@ -1595,8 +1595,14 @@ def register_routes(app):
             flash("LinuxGSM user must be a valid Linux username.", "danger")
             return redirect(url_for("manage_remotes"))
         remote.name = request.form.get("name", remote.name)
-        remote.host = request.form.get("host", remote.host)
-        remote.port = _int_or(request.form.get("ssh_port"), remote.port)
+        new_host = request.form.get("host", remote.host)
+        new_port = _int_or(request.form.get("ssh_port"), remote.port)
+        # Repointing to a different host/port means the pinned key no longer applies —
+        # clear it so the new target is re-pinned (TOFU) instead of failing as a mismatch.
+        if (new_host, new_port) != (remote.host, remote.port):
+            remote.host_key = ""
+        remote.host = new_host
+        remote.port = new_port
         remote.username = new_user
         remote.auth_method = request.form.get("auth_method", remote.auth_method)
         # Credential: the edit form leaves it blank to keep the current one; a new
@@ -2102,6 +2108,26 @@ def register_routes(app):
     def api_remote_firewall(remote_id):
         remote = get_remote(remote_id)
         return jsonify(remote_ufw_status(remote))
+
+    @app.route("/api/remote/<int:remote_id>/retrust-hostkey", methods=["POST"])
+    @login_required
+    @permission_required(MANAGE_REMOTES)
+    def api_remote_retrust_hostkey(remote_id):
+        # Clear the pinned SSH host key so the next connection re-pins it (TOFU). Use
+        # after legitimately reinstalling a server, when its host key has changed and
+        # connections are being rejected as a mismatch.
+        remote = get_remote(remote_id)
+        old_fp = remote.host_key_fingerprint
+        remote.host_key = ""
+        db.session.commit()
+        try:
+            close_connection(remote)   # drop any cached client → reconnect fresh
+        except Exception:
+            pass
+        log_action(current_user, "retrust_hostkey", target=remote.name,
+                   detail="cleared pinned host key (%s)" % (old_fp or "none"))
+        return jsonify({"success": True,
+                        "message": "Host key cleared — it will be re-pinned on the next connection."})
 
     @app.route("/api/remote/<int:remote_id>/firewall/open", methods=["POST"])
     @login_required
