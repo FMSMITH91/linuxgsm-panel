@@ -164,36 +164,43 @@ try:
 
     # ── Cookie-reuse defense: a session/remember cookie captured before logout must
     #    NOT work after logout. We log in for real (so we get genuine signed session +
-    #    remember_token cookies), copy them the way a thief would, log out, then replay
-    #    the copied cookies against a fresh client. They must be rejected. This proves
-    #    logout invalidates cookies server-side (epoch bump), not just in the browser. ──
+    #    remember_token cookies), clone the cookie jar the way a thief would, log out,
+    #    then replay the pre-logout cookies. They must work BEFORE and be rejected AFTER.
+    #    This proves logout invalidates cookies server-side (epoch bump), not just in the
+    #    browser (where clearing the client's copy wouldn't stop a captured one). ──
+    def _cookie_names(client):
+        return {k[2] for k in getattr(client, "_cookies", {})}
+
+    def _clone_cookies(src, keep=None):
+        """A fresh client holding a snapshot of src's cookies (optionally only those
+        whose name is in `keep`) — a stand-in for cookies captured off the wire/disk."""
+        t = app.test_client()
+        jar = dict(getattr(src, "_cookies", {}))
+        if keep is not None:
+            jar = {k: v for k, v in jar.items() if k[2] in keep}
+        t._cookies = jar
+        return t
+
     victim = app.test_client()
     lr = victim.post("/login", data={"username": "smoke_admin",
                                      "password": "Str0ng!passw0rd", "remember": "on"})
     check("real login succeeds (302 to app)", lr.status_code == 302, "got %d" % lr.status_code)
-    # Rebuild the raw Cookie header from the login response's Set-Cookie(s) — this is
-    # exactly what an attacker who sniffed/exfiltrated the cookies would hold.
-    set_cookies = lr.headers.getlist("Set-Cookie")
-    stolen = "; ".join(sc.split(";", 1)[0] for sc in set_cookies if "=" in sc.split(";", 1)[0])
-    check("login issued a session cookie", "session=" in stolen, stolen[:40])
-    check("login issued a remember_token cookie", "remember_token=" in stolen, stolen[:60])
+    names = _cookie_names(victim)
+    check("login issued a session cookie", any("session" in n for n in names), str(names))
+    check("login issued a remember_token cookie", "remember_token" in names, str(names))
 
-    # Sanity: the stolen cookies ARE a valid bearer token *before* logout.
-    thief_before = app.test_client()
-    check("stolen cookie works BEFORE logout (200)",
-          thief_before.get("/", headers={"Cookie": stolen}).status_code == 200)
+    # Snapshot the cookies a thief would hold — BOTH cookies, and the remember_token
+    # (the long-lived one) on its own — while the victim is still logged in.
+    thief = _clone_cookies(victim)
+    thief_rt = _clone_cookies(victim, keep={"remember_token"})
+    check("stolen cookie works BEFORE logout (200)", thief.get("/").status_code == 200)
 
-    # Log the victim out, then replay the pre-logout cookies from a fresh client.
+    # Log the victim out (bumps auth_epoch), then replay the snapshots.
     victim.post("/logout")
-    thief_after = app.test_client()
-    reused = thief_after.get("/", headers={"Cookie": stolen})
     check("REUSE BLOCKED: stolen cookie rejected AFTER logout (not 200)",
-          reused.status_code != 200, "got %d — cookie still valid!" % reused.status_code)
-    # And the remember_token alone (the long-lived one) must also be dead.
-    remember_only = "; ".join(p for p in stolen.split("; ") if p.startswith("remember_token="))
-    reused_rt = app.test_client().get("/", headers={"Cookie": remember_only})
+          thief.get("/").status_code != 200, "cookie still valid after logout!")
     check("REUSE BLOCKED: stolen remember_token rejected after logout (not 200)",
-          reused_rt.status_code != 200, "got %d" % reused_rt.status_code)
+          thief_rt.get("/").status_code != 200, "remember_token still valid after logout!")
 
 finally:
     passed = sum(1 for ok, _, _ in results if ok)
