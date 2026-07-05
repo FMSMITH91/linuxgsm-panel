@@ -265,10 +265,26 @@ def setup_tailscale_serve(port=5000, mount="/", funnel=False, backend_scheme="ht
     """
     upstream = f"{backend_scheme}://127.0.0.1:{port}"
     verb = "funnel" if funnel else "serve"
-    out, err, rc = _run_ts(
-        [verb, "--bg", "--https", "443", mount, upstream],
-        timeout=10,
-    )
+    mount = mount or "/"
+
+    # The `tailscale serve`/`funnel` CLI grammar changed across versions. Newer Tailscale
+    # (~1.58+) takes the target as the ONLY positional and sets a non-root mount with
+    # --set-path; older Tailscale took the mount as a positional argument (`... 443 / URL`).
+    # Passing the old form to a new binary fails with "invalid argument format", so try the
+    # modern form first and fall back to the legacy one — works regardless of version.
+    modern = [verb, "--bg", "--https=443"]
+    if mount != "/":
+        modern.append("--set-path=" + mount)
+    modern.append(upstream)
+    out, err, rc = _run_ts(modern, timeout=10)
+
+    if rc != 0:
+        legacy = [verb, "--bg", "--https", "443", mount, upstream]
+        lout, lerr, lrc = _run_ts(legacy, timeout=10)
+        if lrc == 0:
+            out, err, rc = lout, lerr, lrc
+        else:
+            err = err or out or lerr or lout   # keep the most informative error
 
     if rc == 0:
         msg = "Tailscale Serve enabled" + (" (with Funnel)" if funnel else "")
