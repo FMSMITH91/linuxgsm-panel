@@ -151,8 +151,9 @@ eq("bare port keeps comment", by_port["28960"]["comment"], "codserver")
 eq("udp suffix -> UDP", by_port["27015"]["proto_label"], "UDP")
 
 # ── firewall lock-out protection ──────────────────────────────
-def protect(server, rules, enabled=True, cfg=None, is_local=False):
+def protect(server, rules, enabled=True, cfg=None, is_local=False, tailscale=(False, False)):
     sm.is_local_server = lambda s: is_local
+    sm._tailscale_conn_state = lambda s: tailscale   # (running, ssh_enabled) — deterministic in tests
     if cfg is not None:
         config.load_config = lambda: cfg
     return sm._annotate_firewall_protection(server, enabled, sm._group_ufw_rules(_rules(rules)))
@@ -164,12 +165,32 @@ gp = {x["port_num"]: x for x in g}
 check("SSH-only: 22 protected", gp["22"]["protected"])
 check("SSH-only: game port not protected", not gp["28960"]["protected"])
 
-# Custom SSH port + Tailscale: two ways in -> warn, not blocked; custom port recognised.
+# A rate-limited SSH rule (`ufw limit`, action LIMIT — now the default) is still SSH access,
+# and the only way in here -> protected. Regression: LIMIT != ALLOW was letting it be deleted.
+g = protect(NS(port=22), ["22/tcp LIMIT IN Anywhere", "28960 ALLOW IN Anywhere"])
+gp = {x["port_num"]: x for x in g}
+check("LIMIT SSH rule recognised as SSH", gp["22"]["is_ssh"])
+check("LIMIT SSH rule protected as the only way in", gp["22"]["protected"])
+
+# Custom SSH port + a tailscale0 rule, WITH Tailscale actually running -> two real ways in
+# -> the SSH rule can be removed (warn); custom port recognised as SSH.
 g = protect(NS(port=2222), ["2222/tcp ALLOW IN Anywhere",
-                            "Anywhere ALLOW IN Anywhere on tailscale0"])
+                            "Anywhere ALLOW IN Anywhere on tailscale0"], tailscale=(True, False))
 gp = {x["port_num"]: x for x in g}
 check("custom 2222 recognised as SSH", gp["2222"]["is_ssh"])
-check("2222 warn (another way in)", gp["2222"]["warn"] and not gp["2222"]["protected"])
+check("2222 warn when Tailscale is up (another way in)", gp["2222"]["warn"] and not gp["2222"]["protected"])
+
+# Same rules but Tailscale is DOWN -> the tailscale0 rule is no real route -> 2222 is the only
+# way in and must be PROTECTED (the reported bug: don't let me delete SSH with no tailnet path).
+g = protect(NS(port=2222), ["2222/tcp ALLOW IN Anywhere",
+                            "Anywhere ALLOW IN Anywhere on tailscale0"], tailscale=(False, False))
+gp = {x["port_num"]: x for x in g}
+check("2222 protected when Tailscale is down (no real fallback)", gp["2222"]["protected"])
+
+# Tailscale SSH enabled -> a guaranteed way in -> the sole SSH rule can be removed (warn).
+g = protect(NS(port=22), ["22/tcp ALLOW IN Anywhere"], tailscale=(True, True))
+gp = {x["port_num"]: x for x in g}
+check("SSH rule removable when Tailscale SSH is enabled", gp["22"]["warn"] and not gp["22"]["protected"])
 
 # Tailscale-only: the tailscale rule is the last way in -> protected.
 g = protect(NS(port=22), ["Anywhere ALLOW IN Anywhere on tailscale0",

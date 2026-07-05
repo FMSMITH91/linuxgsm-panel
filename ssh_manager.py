@@ -1051,22 +1051,31 @@ def _annotate_firewall_protection(server, enabled, groups):
     alternate route (otherwise you'd delete your only way into the panel UI). If UFW
     is disabled it isn't enforcing anything, so nothing is protected."""
     ssh_ports = _ssh_ports(server)
-    access = 0
     for g in groups:
         pn = str(g.get("port_num", ""))
         # Only an INCOMING rule is a "way in". An `allow out on tailscale0` rule (or any
-        # OUT rule) must not count, or the protection thinks there are two routes and
-        # un-protects the real (in) one — letting you delete your only way in.
+        # OUT rule) must not count. A rate-limited SSH rule (`ufw limit`, action LIMIT) is
+        # just as much a way in as an ALLOW — miss it and the panel would let you delete
+        # your only SSH access.
         inbound = g.get("direction", "IN") != "OUT"
-        g["is_ssh"] = (not g.get("is_iface") and g.get("action") == "ALLOW" and inbound
+        g["is_ssh"] = (not g.get("is_iface") and g.get("action") in ("ALLOW", "LIMIT") and inbound
                        and pn.isdigit() and int(pn) in ssh_ports)
         g["is_tailscale"] = (bool(g.get("is_iface")) and g.get("action") == "ALLOW" and inbound
                              and str(g.get("iface", "")).startswith("tailscale"))
         g["is_access"] = g["is_ssh"] or g["is_tailscale"]
-        if g["is_access"]:
-            access += 1
 
     panel_port = _panel_web_port(server)
+    ssh_count = sum(1 for g in groups if g.get("is_ssh"))
+    has_ts_iface = any(g.get("is_tailscale") for g in groups)
+
+    # A Tailscale rule only counts as a real fallback when Tailscale is ACTUALLY running —
+    # a lingering `allow tailscale0` UFW rule with Tailscale down/uninstalled is no route at
+    # all. Query the live state once (only when it could change a decision).
+    ts_running = ts_ssh_enabled = False
+    if enabled and any(g.get("is_access") for g in groups):
+        ts_running, ts_ssh_enabled = _tailscale_conn_state(server)
+    ts_ssh_ok = ts_running and ts_ssh_enabled    # Tailscale SSH → a way in regardless of UFW
+    ts_iface_ok = ts_running and has_ts_iface     # regular SSH over the tailnet (needs the iface rule)
 
     for g in groups:
         g["protected"] = False
@@ -1088,16 +1097,22 @@ def _annotate_firewall_protection(server, enabled, groups):
             continue
         if not g["is_access"]:
             continue
-        if access <= 1:
+        if g["is_ssh"]:
+            # Deleting this SSH rule is safe only if another way in remains: another SSH rule,
+            # Tailscale SSH, or regular SSH over a running tailnet (Tailscale isn't affected).
+            other_way = (ssh_count > 1) or ts_ssh_ok or ts_iface_ok
+            reason_last = (
+                "Port %s is the SSH port used to reach this host, and there's no working Tailscale "
+                "route to fall back on — removing it would lock you out. Enable Tailscale SSH, or "
+                "connect Tailscale and allow the tailscale0 interface, first." % g["port_num"])
+        else:  # is_tailscale — deleting it drops regular SSH over the tailnet; Tailscale SSH is unaffected
+            other_way = (ssh_count > 0) or ts_ssh_ok
+            reason_last = (
+                "This is the Tailscale interface rule and currently the only way in — removing it "
+                "would lock you out. Open your SSH port (or enable Tailscale SSH) first.")
+        if not other_way:
             g["protected"] = True
-            if g["is_ssh"]:
-                g["protect_reason"] = (
-                    "Port %s is the SSH port used to reach this host — removing it would lock "
-                    "you out. Add another way in (e.g. Tailscale) before removing it." % g["port_num"])
-            else:
-                g["protect_reason"] = (
-                    "This is the Tailscale access rule and currently the only way in — removing it "
-                    "would lock you out. Open your SSH port before removing it.")
+            g["protect_reason"] = reason_last
         else:
             g["warn"] = True
             g["protect_reason"] = (
@@ -2034,23 +2049,33 @@ def remote_public_ssh_status(server):
     return {"active": active, "mode": mode}
 
 
-def _tailnet_ssh_state(server):
-    """Best-effort (running, ssh_enabled, iface_allowed) for a host — the inputs to
-    deciding whether removing public SSH is safe. Works for the local panel host and
-    remote hosts alike (run_command routes to the right place)."""
+def _tailscale_conn_state(server):
+    """(running, ssh_enabled) — whether Tailscale is up on this host and advertises its
+    SSH server. Tailscale SSH works regardless of UFW, so when it's on the host always
+    has a way in. Best-effort; fails safe to (False, False)."""
     import json as _json
-    running = ssh_enabled = iface_allowed = False
+    running = ssh_enabled = False
     try:
         out, _, _ = run_command(server, "tailscale status --json 2>/dev/null || echo '{}'", timeout=10)
         running = _json.loads(out or "{}").get("BackendState") == "Running"
     except Exception:
-        running = False   # can't confirm → treat as no tailnet path (fail safe)
+        running = False   # can't confirm → treat as not running (fail safe)
     if running:
-        try:  # Tailscale SSH server advertised by this node — authoritative: prefs RunSSH
+        try:  # authoritative: prefs RunSSH
             out, _, _ = run_command(server, "tailscale debug prefs 2>/dev/null || echo '{}'", timeout=10)
             ssh_enabled = bool(_json.loads(out or "{}").get("RunSSH", False))
         except Exception:
             ssh_enabled = False   # fail safe
+    return running, ssh_enabled
+
+
+def _tailnet_ssh_state(server):
+    """(running, ssh_enabled, iface_allowed) — the inputs to deciding whether removing
+    public SSH is safe. iface_allowed = the tailscale0 interface is allowed in UFW (so
+    sshd is reachable over the tailnet). Works for local + remote hosts; fails safe."""
+    running, ssh_enabled = _tailscale_conn_state(server)
+    iface_allowed = False
+    if running:
         try:  # tailscale interface allowed in UFW → sshd is reachable over the tailnet
             out, _, _ = run_command(server, "ufw status verbose 2>/dev/null | grep -i tailscale || true",
                                     timeout=12, sudo=True)
