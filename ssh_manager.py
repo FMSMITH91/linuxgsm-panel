@@ -935,9 +935,13 @@ def _annotate_firewall_protection(server, enabled, groups):
     access = 0
     for g in groups:
         pn = str(g.get("port_num", ""))
-        g["is_ssh"] = (not g.get("is_iface") and g.get("action") == "ALLOW"
+        # Only an INCOMING rule is a "way in". An `allow out on tailscale0` rule (or any
+        # OUT rule) must not count, or the protection thinks there are two routes and
+        # un-protects the real (in) one — letting you delete your only way in.
+        inbound = g.get("direction", "IN") != "OUT"
+        g["is_ssh"] = (not g.get("is_iface") and g.get("action") == "ALLOW" and inbound
                        and pn.isdigit() and int(pn) in ssh_ports)
-        g["is_tailscale"] = (bool(g.get("is_iface")) and g.get("action") == "ALLOW"
+        g["is_tailscale"] = (bool(g.get("is_iface")) and g.get("action") == "ALLOW" and inbound
                              and str(g.get("iface", "")).startswith("tailscale"))
         g["is_access"] = g["is_ssh"] or g["is_tailscale"]
         if g["is_access"]:

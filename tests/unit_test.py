@@ -101,6 +101,16 @@ g = protect(NS(port=22), ["Anywhere ALLOW IN Anywhere on tailscale0",
 ts = next(x for x in g if x["is_tailscale"])
 check("tailscale-only: protected", ts["protected"])
 
+# `allow in on tailscale0` + `allow out on tailscale0` (the pair ufw adds), no SSH: only the
+# IN rule is a "way in", so it's the last route and must be protected. The OUT rule must NOT
+# count as access, or the protection would think there are two routes and let you delete the
+# real (in) one.
+g = protect(NS(port=22), ["Anywhere ALLOW IN Anywhere on tailscale0",
+                          "Anywhere ALLOW OUT Anywhere on tailscale0"])
+ins = [x for x in g if x["is_tailscale"]]
+check("tailscale in+out: only the IN rule counts as access", len(ins) == 1)
+check("tailscale in+out: the last-way-in IN rule is protected", bool(ins) and ins[0]["protected"])
+
 # UFW disabled -> nothing protected.
 g = protect(NS(port=22), ["22/tcp ALLOW IN Anywhere"], enabled=False)
 check("ufw disabled: nothing protected", not any(x["protected"] for x in g))

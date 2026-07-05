@@ -2279,16 +2279,26 @@ def register_routes(app):
             port = int(cfg.get("port", 5000))
         except (TypeError, ValueError):
             port = 5000
-        # Remove any allow/limit rule for the panel port (bare = tcp+udp, and the /tcp form
-        # the installer adds). Deleting an absent rule is harmless, so tolerate non-zero.
-        cmd = (f"ufw delete allow {port} 2>&1; ufw delete allow {port}/tcp 2>&1; "
-               f"ufw delete limit {port}/tcp 2>&1; ufw status | grep -qw {port} && echo STILLOPEN || echo CLOSED")
-        out, err, rc = run_command(remote, cmd, timeout=20, sudo=True)
-        ok = "CLOSED" in (out or "")
+
+        def _panel_port_rule_nums():
+            nums = []
+            for g in remote_ufw_status(remote).get("groups", []):
+                if not g.get("is_iface") and str(g.get("port_num", "")) == str(port):
+                    nums.extend(g.get("nums", []))
+            return sorted(set(nums), reverse=True)   # highest first so numbering stays valid
+
+        nums = _panel_port_rule_nums()
+        if not nums:
+            return jsonify({"success": True, "message": f"Public port {port} is already closed."})
+        # Delete by rule NUMBER (reliable across any rule format), force=True since this is
+        # the intentional guided close and Serve is already confirmed as the way in.
+        for n in nums:
+            remote_ufw_delete_rule(remote, n, force=True)
+        ok = not _panel_port_rule_nums()
         log_action(current_user, "close_panel_port", target=str(port), success=ok)
         return jsonify({"success": ok, "message": (
             f"Public port {port} closed — the panel is now reachable only over your tailnet."
-            if ok else (err or out or "Failed to close the port"))})
+            if ok else f"Couldn't remove every rule for port {port}; check the firewall page.")})
 
     @app.route("/api/remote/<int:remote_id>/game-port/<int:port>/open", methods=["POST"])
     @login_required
