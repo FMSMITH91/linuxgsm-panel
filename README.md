@@ -244,10 +244,37 @@ systemctl --user enable --now linuxgsm-panel
 - **Role-based access control is enforced server-side on every route** — not just hidden in the UI. Server access is scoped per host, and automated tests verify the enforcement.
 - **CSRF protection, a strict Content-Security-Policy, and security headers** (HSTS over HTTPS, `X-Frame-Options`, `X-Content-Type-Options`, `Referrer-Policy`) are applied to every response.
 - Input that becomes shell/OS operations is strictly validated; audit logging records the acting user, real client IP, target, and result of sensitive actions.
-- Locked out? A `manage.py` recovery CLI (reset a password, create/promote an admin, disable 2FA) is available from a shell on the panel host.
+- **Locked out?** Reset a forgotten password (even the sole superadmin's), recover 2FA, or restore an admin from a shell on the panel host — no web login needed. See [Recovery](#recovery--forgot-your-password-or-locked-out).
 - Super admins bypass all permission checks — use that role sparingly.
 
 > **Operational note:** run the panel behind Tailscale (tailnet-only, no open ports) rather than exposing it to the public internet, and never commit `data/` to version control — it holds `panel.db`, `secret_key`, `cred_key`, and `config.json` (already in `.gitignore`).
+
+### Recovery — forgot your password or locked out?
+
+Everything is recoverable from a shell on the **panel host** over SSH — the recovery CLI talks straight to `data/panel.db`, so it works even when you can't log in. Run these from the panel directory (e.g. `cd ~/linuxgsm-panel`, or `/home/lgsmpanel/linuxgsm-panel` for a root install).
+
+**Forgot your password** — including if you're the *only* superadmin:
+
+```bash
+bash reset-password.sh              # resets the sole superadmin (no username needed)
+bash reset-password.sh <username>   # resets a specific user
+```
+
+You're prompted for the new password (never echoed), and every existing session is revoked.
+
+**Lost your 2FA authenticator:**
+
+```bash
+./venv/bin/python manage.py disable-2fa <username>
+```
+
+**No superadmin left** (you deleted or deactivated your only one):
+
+```bash
+./venv/bin/python manage.py create-admin <username>   # or: promote <username> / activate <username>
+```
+
+Run `./venv/bin/python manage.py --help` for the full list (`list-users`, `reset-password`, `create-admin`, `promote`, `activate`, `disable-2fa`, …).
 
 ## Development
 
