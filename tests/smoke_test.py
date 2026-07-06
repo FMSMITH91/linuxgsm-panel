@@ -377,6 +377,8 @@ try:
         check("debug report: issues_url is a github new-issue URL",
               _dr["issues_url"].startswith("https://github.com/")
               and _dr["issues_url"].endswith("/issues/new"))
+        check("debug report: includes a Last-update section (surfaces failed/rolled-back updates)",
+              "### Last update" in _dr["report"])
         for _sf in (SECRET_FILE, CRED_KEY_FILE):
             if _sf.exists():
                 _sv = _sf.read_text(errors="replace").strip()
