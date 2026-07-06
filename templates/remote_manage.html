@@ -407,20 +407,43 @@
 <div class="card">
   <div class="card-header"><i class="bi bi-controller"></i> Game Servers on this host</div>
   <div class="card-body p-0">
-    <table class="table table-hover mb-0">
-      <thead><tr><th>Name</th><th>Type</th><th>Port</th><th>Status</th><th></th></tr></thead>
+    <div class="table-responsive">
+    <table class="table table-hover mb-0 align-middle">
+      <thead><tr><th>Name</th><th>Type</th><th>Connect</th><th>Status</th><th class="text-end">Actions</th></tr></thead>
       <tbody>
         {% for gs in remote.games %}
         <tr>
           <td><strong>{{ gs.name }}</strong></td>
           <td>{{ gs.game_display or gs.game_type }}</td>
-          <td><code>{{ gs.port }}</code></td>
+          <td>
+            {% set addr = remote.display_host %}
+            {% if addr %}
+            <code class="text-info copy-addr" style="cursor:pointer;font-size:.8rem;" title="Click to copy"
+                  data-copy="{{ addr }}:{{ gs.port }}">{{ addr }}:{{ gs.port }}</code>
+            {% set join_url = gs.connect_uri(addr) %}
+            {% if join_url %}
+            <a class="btn btn-success btn-sm py-0 px-1 ms-1" style="font-size:.7rem;" rel="noopener"
+               href="{{ join_url }}" title="Launch the game and join"><i class="bi bi-box-arrow-in-right"></i> Join</a>
+            {% endif %}
+            {% else %}
+            <code class="text-secondary" title="This host's public IP isn't known yet">:{{ gs.port }}</code>
+            {% endif %}
+          </td>
           <td><span class="badge {% if gs.status == 'online' %}bg-success{% elif gs.status == 'installing' %}bg-info text-dark{% else %}bg-secondary{% endif %}">{{ gs.status|title }}</span></td>
-          <td class="text-end"><a href="{{ url_for('server_detail', server_id=gs.id) }}" class="btn btn-sm btn-outline-secondary"><i class="bi bi-terminal-fill"></i> Console</a></td>
+          <td class="text-end text-nowrap">
+            <a href="{{ url_for('server_detail', server_id=gs.id) }}" class="btn btn-sm btn-outline-secondary" title="Console, commands, restart"><i class="bi bi-terminal-fill"></i> Console</a>
+            <a href="{{ url_for('server_files', server_id=gs.id) }}" class="btn btn-sm btn-outline-secondary" title="Edit LinuxGSM &amp; game config"><i class="bi bi-sliders"></i> Config</a>
+            <a href="{{ url_for('server_files', server_id=gs.id) }}#file-browser" class="btn btn-sm btn-outline-secondary" title="Browse &amp; upload files"><i class="bi bi-folder2-open"></i> Files</a>
+            <form method="POST" action="{{ url_for('uninstall_server', server_id=gs.id) }}" style="display:inline;"
+                  onsubmit="return confirm('Uninstall {{ gs.name }}? This will delete the LinuxGSM user and all data.');">
+              <button type="submit" class="btn btn-sm btn-outline-danger" title="Delete server and all data"><i class="bi bi-trash"></i> Uninstall</button>
+            </form>
+          </td>
         </tr>
         {% endfor %}
       </tbody>
     </table>
+    </div>
   </div>
 </div>
 {% endif %}
@@ -430,6 +453,11 @@
 <script>
 var REMOTE_ID = {{ remote.id }};
 var IS_LOCAL = {{ 'true' if remote.is_local else 'false' }};
+// Click a game server's connect address to copy the full ip:port.
+document.addEventListener('click', function(ev){
+  var el = ev.target.closest('.copy-addr'); if(!el) return;
+  if(window.copyText) window.copyText(el.getAttribute('data-copy'), 'Copied ' + el.getAttribute('data-copy'));
+});
 function barColor(p){ if(p>=85) return '#f85149'; if(p>=60) return '#d29922'; return '#3fb950'; }
 function fmtGB(b){ return (b/1073741824).toFixed(1)+' GB'; }
 
