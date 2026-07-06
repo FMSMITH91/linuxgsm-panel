@@ -155,16 +155,19 @@ def _prune_jobs(registry, lock, max_age=7200):
         for k in stale:
             registry.pop(k, None)
 
-# LinuxGSM commands the panel is willing to run from a button. Interactive /
-# install / destructive commands (console, debug, send, install, auto-install,
-# skeleton, developer, sponsor, mods-install, mods-remove, fastdl) are excluded.
+# LinuxGSM commands the panel is willing to run from a button. Each only appears for a game
+# whose LinuxGSM command list actually includes it, so e.g. fastdl shows only for Source games
+# and the wipe variants only for games (Rust) that have them. Genuinely interactive/foreground
+# commands (console, debug, send, install, auto-install, skeleton, developer, sponsor, and the
+# mods-install/mods-remove menu pickers) are still excluded — they can't be driven one-click.
 RUNNABLE_ACTIONS = {
     "start", "stop", "restart", "monitor", "update", "validate", "backup",
     "details", "check-update", "force-update", "update-lgsm", "mods-update",
-    "postdetails", "test-alert",
+    "postdetails", "test-alert", "fastdl", "wipe", "map-wipe", "full-wipe",
 }
 # Long-running ones run in the background so the HTTP request returns immediately.
-LONG_ACTIONS = {"update", "validate", "backup", "force-update", "mods-update"}
+LONG_ACTIONS = {"update", "validate", "backup", "force-update", "mods-update", "fastdl"}
+# The wipe variants are destructive (delete world/save data); the UI confirms them first.
 # Read-only ones: show their output back to the user.
 READONLY_ACTIONS = {"monitor", "details", "check-update", "postdetails", "test-alert"}
 
@@ -1134,7 +1137,8 @@ def register_routes(app):
             "monitor": VIEW_CONSOLE, "details": VIEW_CONSOLE, "check-update": VIEW_CONSOLE,
             "postdetails": VIEW_CONSOLE, "test-alert": VIEW_CONSOLE,
             "validate": UPDATE_SERVER, "backup": UPDATE_SERVER, "force-update": UPDATE_SERVER,
-            "update-lgsm": UPDATE_SERVER, "mods-update": UPDATE_SERVER,
+            "update-lgsm": UPDATE_SERVER, "mods-update": UPDATE_SERVER, "fastdl": UPDATE_SERVER,
+            "wipe": UPDATE_SERVER, "map-wipe": UPDATE_SERVER, "full-wipe": UPDATE_SERVER,
         }
         core = {"start", "stop", "restart", "update"}
         maintenance = [
