@@ -3465,6 +3465,16 @@ def register_routes(app):
     _console_viewers = {}  # server_id -> set of socket session ids
     _viewers_lock = threading.Lock()
 
+    @socketio.on("connect")
+    def on_socket_connect():
+        # Defence in depth: only authenticated sessions get a socket at all. Anonymous or
+        # cross-site handshakes (which, thanks to SameSite=Lax, won't carry the session
+        # cookie) are refused here — so no client can hold a connection or receive any
+        # broadcast (e.g. servers_changed) without being logged in. Returning False rejects
+        # the connection. Per-event checks (join_console) still apply on top of this.
+        if not current_user.is_authenticated:
+            return False
+
     @socketio.on("join_console")
     def on_join_console(data):
         server_id = data.get("server_id")
