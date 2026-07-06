@@ -104,6 +104,20 @@ try:
           _cst["bbbbbbbbbbbb"]["ok"] is False and _cst["bbbbbbbbbbbb"]["error"] == "boom: exit 1")
 finally:
     sm.run_command = _orig_run3
+# cron run-times from the journald cron log (last-run TIME for managed/legacy jobs)
+_orig_run4 = sm.run_command
+try:
+    sm.run_command = lambda s, c, **k: (
+        "1720000000 host CRON[11]: (gm) CMD (/home/gm/gmodserver monitor > /dev/null 2>&1)\n"
+        "1720003600 host CRON[12]: (gm) CMD (/home/gm/gmodserver monitor > /dev/null 2>&1)\n"
+        "1720007200 host CRON[13]: (gm) CMD (touch /home/gm/.restart-pending)\n", "", 0)
+    _rt = sm._read_cron_run_times(None, "gm")
+    check("cron run-times: newest run wins for a repeated command",
+          _rt["/home/gm/gmodserver monitor > /dev/null 2>&1"] == 1720003600)
+    check("cron run-times: parses a second distinct command",
+          _rt["touch /home/gm/.restart-pending"] == 1720007200)
+finally:
+    sm.run_command = _orig_run4
 # line splitting
 eq("cron: split 5-field", sm._split_cron_line("0 3 * * * /home/gm/b.sh a"), ("0 3 * * *", "/home/gm/b.sh a"))
 eq("cron: split @shortcut", sm._split_cron_line("@reboot /home/gm/x start"), ("@reboot", "/home/gm/x start"))

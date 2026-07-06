@@ -842,13 +842,39 @@ def _read_cron_status(server, user):
     return status
 
 
+def _read_cron_run_times(server, user):
+    """{command_string: last_run_epoch} from cron's OWN execution log (journald), so that
+    panel-managed and legacy entries — which the recorder doesn't wrap — still show WHEN they
+    last ran. Cron logs the command it ran but not its exit status, so this is time-only.
+    Best-effort (empty if cron logging is off/unavailable)."""
+    q = ("journalctl _COMM=cron --since '-14 days' -o short-unix --no-pager 2>/dev/null "
+         f"| grep -F '({user}) CMD ' | tail -n 800")
+    out, _, _ = run_command(server, q, timeout=12, sudo=True)
+    times = {}
+    for line in (out or "").splitlines():
+        head = line.split(None, 1)
+        if not head:
+            continue
+        try:
+            epoch = int(float(head[0]))
+        except ValueError:
+            continue
+        m = re.search(r"\)\s+CMD\s+\((.*)\)\s*$", line)
+        if m:
+            times[m.group(1).strip()] = epoch   # chronological log → last occurrence wins
+    return times
+
+
 def list_cron_jobs(server, user, selfname=None):
     """Read the game user's crontab as a list of jobs. Comment/blank lines are
     skipped. Each job: {raw, schedule, command, managed, last_run, ok, error}. `raw` is the
-    exact line (identity for edit/delete); `command` is the un-wrapped, human-readable form."""
+    exact line (identity for edit/delete); `command` is the un-wrapped, human-readable form.
+    Run history comes from the recorder for user-added jobs (time + ok/error) and from cron's
+    own log for managed/legacy jobs (time only — ok stays None, cron doesn't log exit status)."""
     selfname = selfname or user
     out, _, _ = run_command(server, f"crontab -u {user} -l 2>/dev/null", timeout=10, sudo=True)
     status = _read_cron_status(server, user)
+    run_times = _read_cron_run_times(server, user)
     jobs = []
     for raw in (out or "").splitlines():
         s = raw.strip()
@@ -859,12 +885,14 @@ def list_cron_jobs(server, user, selfname=None):
             continue
         display_cmd, jid = _unwrap_cron_command(cmd)
         st = status.get(jid) if jid else None
+        if st:                       # wrapped user job → full status from the recorder
+            last_run, ok, error = st.get("last_run"), st.get("ok"), st.get("error", "")
+        else:                        # managed/legacy → time only, matched by the raw command
+            last_run, ok, error = run_times.get((cmd or "").strip()), None, ""
         jobs.append({
             "raw": raw, "schedule": sched, "command": display_cmd,
             "managed": _cron_line_managed(s, user, selfname),
-            "last_run": (st or {}).get("last_run"),
-            "ok": (st or {}).get("ok"),
-            "error": (st or {}).get("error", ""),
+            "last_run": last_run, "ok": ok, "error": error,
         })
     return jobs
 

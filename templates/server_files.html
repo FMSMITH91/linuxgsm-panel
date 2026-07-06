@@ -434,15 +434,18 @@ function timeAgo(epoch){
   if(s < 86400) return Math.floor(s/3600)+'h ago';
   return Math.floor(s/86400)+'d ago';
 }
-// Last-run cell: OK/Failed badge + relative time, with the error shown under a failed run.
+// Last-run cell. Wrapped (user-added) jobs report an exit status → OK/Failed badge + the
+// error under a failure. Managed/legacy jobs only have a run TIME from cron's log (cron
+// doesn't record exit status) → a neutral "ran" badge. No recorded run → "—".
 function cronLastRun(j){
-  if(!j.last_run){ return '<span class="text-secondary" title="No recorded run yet (panel-managed jobs and jobs added before this feature don\'t record runs)">—</span>'; }
+  if(!j.last_run){ return '<span class="text-secondary" title="No recorded run yet">—</span>'; }
   var when = new Date(j.last_run*1000).toLocaleString();
-  var badge = j.ok
-    ? '<span class="badge bg-success" title="Exit code 0 at '+escA(when)+'">OK</span>'
-    : '<span class="badge bg-danger" title="Failed at '+escA(when)+'">Failed</span>';
+  var badge;
+  if(j.ok === true){ badge = '<span class="badge bg-success" title="Exit code 0 at '+escA(when)+'">OK</span>'; }
+  else if(j.ok === false){ badge = '<span class="badge bg-danger" title="Failed at '+escA(when)+'">Failed</span>'; }
+  else { badge = '<span class="badge bg-secondary" title="Ran at '+escA(when)+' — cron doesn\'t record exit status for panel-managed jobs">ran</span>'; }
   var out = badge + ' <span class="text-secondary" title="'+escA(when)+'">'+esc(timeAgo(j.last_run))+'</span>';
-  if(!j.ok && j.error){ out += '<div class="text-danger" style="font-size:.66rem;word-break:break-all;white-space:normal;max-width:22rem;">'+esc(j.error)+'</div>'; }
+  if(j.ok === false && j.error){ out += '<div class="text-danger" style="font-size:.66rem;word-break:break-all;white-space:normal;max-width:22rem;">'+esc(j.error)+'</div>'; }
   return out;
 }
 function loadCron(){
