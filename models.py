@@ -516,7 +516,7 @@ def _ensure_db_healthy(path=None):
                             try:
                                 _c.close()
                             except sqlite3.Error:
-                                pass   # connection already broken — nothing to close
+                                _log.debug("connection already broken — nothing to close", exc_info=True)
                 # Swap the temp copy in only after the handles are closed (Windows won't
                 # rename an open file) and only if the copy actually completed.
                 if ok_copy:
@@ -531,7 +531,7 @@ def _ensure_db_healthy(path=None):
         try:
             os.replace(path, aside)
         except OSError:
-            pass   # couldn't move it (perms) — fall through; a fresh DB gets created
+            _log.debug("couldn't move it (perms) — fall through; a fresh DB gets created", exc_info=True)
         # Drop the corrupt DB's stale WAL/SHM so they aren't replayed over a new file.
         for ext in ("-wal", "-shm"):
             _silent_remove(path + ext)

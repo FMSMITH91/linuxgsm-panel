@@ -28,7 +28,7 @@ def live_metrics():
                         if len(parts) >= 8:
                             cpus[parts[0]] = [int(x) for x in parts[1:8]]
         except (OSError, ValueError, IndexError):
-            pass   # unreadable/odd /proc/stat → return whatever parsed
+            _log.debug("unreadable/odd /proc/stat → return whatever parsed", exc_info=True)
         return cpus
 
     a = _read_stat()
@@ -56,7 +56,7 @@ def live_metrics():
                 k, _, rest = line.partition(":")
                 mem[k.strip()] = int(rest.strip().split()[0]) * 1024  # kB → bytes
     except Exception:  # nosec B110
-        pass  # /proc/meminfo unreadable or oddly formatted — fall back to zeros below
+        _log.debug("/proc/meminfo unreadable or oddly formatted — fall back to zeros below", exc_info=True)
     ram_total = mem.get("MemTotal", 0)
     ram_used = ram_total - mem.get("MemAvailable", 0)
     swap_total = mem.get("SwapTotal", 0)
@@ -357,7 +357,7 @@ def server_uptime():
         try:
             cpu_per_core = f"{float(cpu_percent)/int(cpu_cores):.1f}"
         except ValueError:
-            pass
+            _log.debug("server_uptime: ignored non-fatal error", exc_info=True)
 
     return {
         "uptime": uptime_str,
@@ -988,7 +988,7 @@ def generate_debug_report():
             except PackageNotFoundError:
                 continue  # optional dep not installed — just omit it from the report
     except Exception:
-        pass  # importlib.metadata unavailable — deps section stays empty, non-fatal
+        _log.debug("importlib.metadata unavailable — deps section stays empty, non-fatal", exc_info=True)
 
     # Whitelisted config + object counts
     conf = {}
@@ -996,13 +996,13 @@ def generate_debug_report():
         c = _cfg.load_config()
         conf = {k: c.get(k) for k in _DEBUG_CONFIG_KEYS if k in c}
     except Exception:
-        pass  # config unreadable — omit the config section, non-fatal
+        _log.debug("config unreadable — omit the config section, non-fatal", exc_info=True)
     counts = {}
     try:
         from models import RemoteServer, GameServer
         counts = {"remotes": RemoteServer.query.count(), "game_servers": GameServer.query.count()}
     except Exception:
-        pass  # DB not queryable here — omit counts, non-fatal
+        _log.debug("DB not queryable here — omit counts, non-fatal", exc_info=True)
     try:
         from models import database_stats
         dbs = database_stats()

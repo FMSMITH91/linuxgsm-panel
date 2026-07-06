@@ -125,11 +125,11 @@ def get_connection(server, force_new=False):
                     transport.send_ignore()
                     return conn
             except Exception:  # nosec B110
-                pass  # probing a possibly-dead cached client → reconnect below
+                _log.debug("probing a possibly-dead cached client → reconnect below", exc_info=True)
             try:
                 conn.close()
             except Exception:  # nosec B110
-                pass  # already closed / unusable; nothing to clean up
+                _log.debug("already closed / unusable; nothing to clean up", exc_info=True)
             del _connections[key]
 
     client = paramiko.SSHClient()
@@ -243,7 +243,7 @@ def _resolve_ts_host(server):
                 domain = info.dns_name.split(".", 1)[1] if "." in info.dns_name else "ts.net"
                 host = f"{host}.{domain}"
         except Exception:
-            pass
+            _log.debug("_resolve_ts_host: ignored non-fatal error", exc_info=True)
     return host
 
 
@@ -528,7 +528,7 @@ def remote_live_metrics(server):
             import system_ops
             return system_ops.live_metrics()
         except Exception:
-            pass
+            _log.debug("remote_live_metrics: ignored non-fatal error", exc_info=True)
     cmd = ("echo ===A; grep '^cpu' /proc/stat; echo ===B; sleep 0.25; grep '^cpu' /proc/stat; "
            "echo ===MEM; grep -E 'MemTotal|MemAvailable|SwapTotal|SwapFree' /proc/meminfo")
     out, _, _ = run_command(server, cmd, timeout=12)
@@ -547,7 +547,7 @@ def remote_live_metrics(server):
             try:
                 mem[parts[0].rstrip(":")] = int(parts[1]) * 1024  # kB → bytes
             except ValueError:
-                pass
+                _log.debug("remote_live_metrics: ignored non-fatal error", exc_info=True)
 
     def _pct(n):
         if n not in A or n not in B:
@@ -1261,7 +1261,7 @@ def _ssh_ports(server):
         if getattr(server, "port", None):
             ports.add(int(server.port))
     except (TypeError, ValueError):
-        pass  # a non-numeric stored port just means there's no extra SSH port to track
+        _log.debug("a non-numeric stored port just means there's no extra SSH port to track", exc_info=True)
     return ports
 
 
@@ -1627,7 +1627,7 @@ def remote_ufw_delete_rule(server, num, force=False):
                     return False, g.get("protect_reason") or \
                         "This rule protects your access to the host and can't be removed here."
         except Exception:
-            pass  # don't let the safety check itself block a legitimate delete on error
+            _log.debug("don't let the safety check itself block a legitimate delete on error", exc_info=True)
     out, err, rc = run_command(server, f"yes | ufw delete {n} 2>&1", timeout=15, sudo=True)
     if rc == 0:
         return True, f"Rule {n} deleted"
@@ -1856,7 +1856,7 @@ def remote_uptime(server):
         try:
             cpu_per_core = f"{float(cpu_percent)/int(cpu_cores):.1f}"
         except ValueError:
-            pass
+            _log.debug("remote_uptime: ignored non-fatal error", exc_info=True)
     return {
         "uptime": (out or "unknown").replace("up ", ""),
         "load": load or "?",
@@ -1943,7 +1943,7 @@ def remote_bootstrap_vps(server, set_timezone="UTC", enable_ufw=True, install_lg
             try:
                 progress(step, total, name, status)
             except Exception:
-                pass
+                _log.debug("emit: ignored non-fatal error", exc_info=True)
 
     def note(text, status="running"):
         log.append(f"   {text}")
@@ -1951,7 +1951,7 @@ def remote_bootstrap_vps(server, set_timezone="UTC", enable_ufw=True, install_lg
             try:
                 progress(step, total, text, status)
             except Exception:
-                pass
+                _log.debug("note: ignored non-fatal error", exc_info=True)
 
     # ── 1. Wait for cloud-init / apt to settle ──
     emit("Waiting for package manager to be free")
@@ -2104,7 +2104,7 @@ def remote_bootstrap_vps(server, set_timezone="UTC", enable_ufw=True, install_lg
         try:
             progress(total, total, "Bootstrap complete", "done")
         except Exception:
-            pass
+            _log.debug("remote_bootstrap_vps: ignored non-fatal error", exc_info=True)
     return True, f"VPS bootstrap complete ({step}/{total} steps).", "\n".join(log)
 
 
@@ -2132,7 +2132,7 @@ def remote_check_tailscale(server):
                     dns_name = dns.rstrip(".") if dns else ""
                     ts_ip = ", ".join(self_data.get("TailscaleIPs", []))
             except Exception:
-                pass
+                _log.debug("remote_check_tailscale: ignored non-fatal error", exc_info=True)
 
     return {
         "installed": installed,
@@ -2280,7 +2280,7 @@ def remote_migrate_to_tailscale(server, new_auth_method="tailscale"):
     try:
         remote_ufw_close_port_22(server)
     except Exception:
-        pass  # Non-fatal — might already be removed
+        _log.debug("Non-fatal — might already be removed", exc_info=True)
 
     return new_host, status
 

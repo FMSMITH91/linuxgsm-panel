@@ -32,6 +32,7 @@ Routes:
   WebSocket /console/<id>   -> Live console streaming
 """
 import json
+import logging
 import os
 import re
 import threading
@@ -103,6 +104,8 @@ from ssh_manager import (
 )
 import tailscale_integration as ts
 import system_ops as so
+
+_log = logging.getLogger("panel.app")
 
 
 def _read_version():
@@ -508,7 +511,7 @@ def register_context_processors(app):
             if ts_info.dns_name:
                 tailscale_url = f"https://{ts_info.dns_name}"
         except Exception:
-            pass
+            _log.debug("inject_globals: ignored non-fatal error", exc_info=True)
         # Non-local remotes for the SYSTEM nav (one management link per remote VPS).
         nav_remotes = []
         try:
@@ -742,7 +745,7 @@ def register_routes(app):
                                 cfg["tailscale_setup_done"] = True
                                 save_config(cfg)
                         except Exception:
-                            pass
+                            _log.debug("setup_wizard: ignored non-fatal error", exc_info=True)
                     db.session.commit()
                     flash("Setup complete! You can now log in.", "success")
                     return redirect("/setup")
@@ -1120,7 +1123,7 @@ def register_routes(app):
                     remote.public_ip = ip
                     db.session.commit()
             except Exception:
-                pass
+                _log.debug("server_detail: ignored non-fatal error", exc_info=True)
         public_host = remote.public_ip or ("" if remote.is_local else remote.host)
 
         return render_template("server_detail.html", server=gs, remote=remote,
@@ -1334,7 +1337,7 @@ def register_routes(app):
             if sio is not None:
                 sio.emit("servers_changed", {})
         except Exception:
-            pass  # UI-nicety broadcast only — never let it affect the install/uninstall
+            _log.debug("UI-nicety broadcast only — never let it affect the install/uninstall", exc_info=True)
 
     @app.route("/servers/add", methods=["POST"])
     @login_required
@@ -1502,7 +1505,7 @@ def register_routes(app):
                     try:
                         install_game_dependencies(remote, game_type)
                     except Exception:
-                        pass
+                        _log.debug("_run: ignored non-fatal error", exc_info=True)
 
                     # 4. Download the game server files (the long step).
                     _p(4, "Downloading game server files (this can take a while)")
@@ -1514,7 +1517,7 @@ def register_routes(app):
                             install_game_dependencies(remote, game_type, extra=" ".join(missing))
                             out, err, rc = run_command(remote, auto, timeout=1800, sudo=False)
                         except Exception:
-                            pass
+                            _log.debug("_run: ignored non-fatal error", exc_info=True)
                     if rc != 0:
                         gs.installed = False; gs.status = "offline"; db.session.commit()
                         _fail("Game install failed", (out or err)[-300:]); return
@@ -1529,14 +1532,14 @@ def register_routes(app):
                             try:
                                 install_game_cron(remote, short_name, gs.lgsm_name, {c["cmd"] for c in cmds})
                             except Exception:
-                                pass
+                                _log.debug("_run: ignored non-fatal error", exc_info=True)
                     except Exception:
-                        pass
+                        _log.debug("_run: ignored non-fatal error", exc_info=True)
                     if gs.game_type in ("mc", "mcbe", "pmc", "spigot", "paper"):
                         try:
                             run_command(remote, f"sudo -u {short_name} bash -c \"echo 'eula=true' > /home/{short_name}/serverfiles/eula.txt 2>/dev/null; true\"", timeout=15, sudo=False)
                         except Exception:
-                            pass
+                            _log.debug("_run: ignored non-fatal error", exc_info=True)
 
                     # 6. Sync to LinuxGSM's real port(s) and open ALL of them (many
                     #    games need game+query+rcon+etc., not just the main port).
@@ -1549,18 +1552,18 @@ def register_routes(app):
                             try:
                                 remote_ufw_close_game_port(remote, old_port)
                             except Exception:
-                                pass
+                                _log.debug("_run: ignored non-fatal error", exc_info=True)
                         to_open = info.get("open_ports") or ([gs.port] if gs.port else [])
                         remote_ufw_allow_game_ports(remote, to_open, short_name)
                     except Exception:
-                        pass
+                        _log.debug("_run: ignored non-fatal error", exc_info=True)
 
                     # 7. Enable autostart-on-boot by default.
                     _p(7, "Enabling autostart on boot")
                     try:
                         set_autostart(remote, short_name, True, gs.lgsm_name)
                     except Exception:
-                        pass
+                        _log.debug("_run: ignored non-fatal error", exc_info=True)
 
                     # 8. Start the server.
                     _p(8, "Starting server")
@@ -1568,7 +1571,7 @@ def register_routes(app):
                         _, _, s_rc = run_as_game_user(remote, short_name, "start 2>&1", timeout=120, selfname=gs.lgsm_name)
                         gs.status = "online" if s_rc == 0 else "offline"; db.session.commit()
                     except Exception:
-                        pass
+                        _log.debug("_run: ignored non-fatal error", exc_info=True)
 
                     _finish(f"{short_name} installed")
                     from auth import log_action as _log
@@ -1601,7 +1604,7 @@ def register_routes(app):
                 if count > 0:
                     fw_note = f" {count} firewall rule(s) removed."
             except Exception:
-                pass
+                _log.debug("uninstall_server: ignored non-fatal error", exc_info=True)
 
             # Remove LinuxGSM user and home
             out, err, rc = run_command(
@@ -2610,7 +2613,7 @@ def register_routes(app):
         try:
             close_connection(remote)   # drop any cached client → reconnect fresh
         except Exception:
-            pass  # no cached connection to drop, or it's already gone
+            _log.debug("no cached connection to drop, or it's already gone", exc_info=True)
         log_action(current_user, "retrust_hostkey", target=remote.name,
                    detail="cleared pinned host key (%s)" % (old_fp or "none"))
         return jsonify({"success": True,
@@ -3179,9 +3182,9 @@ def register_routes(app):
                             remote.public_ip = ip
                             changed = True
                     except Exception:
-                        pass
+                        _log.debug("api_servers: ignored non-fatal error", exc_info=True)
             except Exception:
-                pass
+                _log.debug("api_servers: ignored non-fatal error", exc_info=True)
         if changed:
             db.session.commit()
 
@@ -3235,7 +3238,7 @@ def register_routes(app):
                         max_players = int(m.group(2))
                         break
         except Exception:
-            pass
+            _log.debug("api_server_status: ignored non-fatal error", exc_info=True)
 
         return jsonify({
             "id": gs.id,
@@ -3279,7 +3282,7 @@ def register_routes(app):
                     remote.public_ip = ip
                     changed = True
             except Exception:
-                pass
+                _log.debug("api_server_stats: ignored non-fatal error", exc_info=True)
         if changed:
             db.session.commit()
 
@@ -3759,7 +3762,7 @@ def _ensure_self_signed_cert(cert_path, key_path, hostname):
             if existing.not_valid_after > _dt.datetime.utcnow() + _dt.timedelta(days=30):
                 return cert_path, key_path
         except Exception:
-            pass
+            _log.debug("_ensure_self_signed_cert: ignored non-fatal error", exc_info=True)
 
     key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
     name = x509.Name([x509.NameAttribute(NameOID.COMMON_NAME, hostname or "linuxgsm-panel")])
@@ -3811,7 +3814,7 @@ if __name__ == "__main__":
         elif ts_info.tailscale_ips:
             print(f"\n  🌐 Tailscale IP: http://{ts_info.tailscale_ips[0]}:{port}")
     except Exception:
-        pass
+        _log.debug("ignored non-fatal error", exc_info=True)
 
     # Optional built-in HTTPS with a self-signed cert (for public, no-domain, no-proxy
     # setups). Browsers will warn about the self-signed cert — that's expected.
@@ -3840,6 +3843,6 @@ if __name__ == "__main__":
                 backend_scheme=_ts_backend_scheme(cfg),
             )
         except Exception:
-            pass
+            _log.debug("ignored non-fatal error", exc_info=True)
 
     app.socketio.run(app, host=host, port=port, debug=False, allow_unsafe_werkzeug=True, **ssl_args)
