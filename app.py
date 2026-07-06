@@ -1296,8 +1296,8 @@ def register_routes(app):
         try:
             ok, msg = _run_action(gs, gs.remote, action, current_user)
             return jsonify({"success": ok, "message": msg})
-        except Exception as e:
-            return jsonify({"success": False, "message": str(e)}), 500
+        except Exception:
+            return jsonify({"success": False, "message": _log_and_generic("request failed")}), 500
 
     @app.route("/api/server/<int:server_id>/autostart", methods=["POST"])
     @login_required
@@ -1317,8 +1317,8 @@ def register_routes(app):
                 log_action(current_user, "set_autostart", target=gs.name, detail=str(enabled))
                 return jsonify({"success": True, "enabled": enabled})
             return jsonify({"success": False, "message": detail or "Failed to update crontab"}), 500
-        except Exception as e:
-            return jsonify({"success": False, "message": str(e)}), 500
+        except Exception:
+            return jsonify({"success": False, "message": _log_and_generic("request failed")}), 500
 
     @app.route("/api/server/<int:server_id>/daily-restart", methods=["POST"])
     @login_required
@@ -1338,8 +1338,8 @@ def register_routes(app):
                 log_action(current_user, "set_daily_restart", target=gs.name, detail=str(enabled))
                 return jsonify({"success": True, "enabled": enabled})
             return jsonify({"success": False, "message": detail or "Failed to update schedule"}), 500
-        except Exception as e:
-            return jsonify({"success": False, "message": str(e)}), 500
+        except Exception:
+            return jsonify({"success": False, "message": _log_and_generic("request failed")}), 500
 
     def _bg_action(server_id, remote_id, short_name, action, selfname=None):
         """Run a long LinuxGSM command in the background (green thread)."""
@@ -3138,8 +3138,8 @@ def register_routes(app):
             log_action(current_user, "sync_ports", target=gs.name, detail=str(to_open), success=True)
             return jsonify({"success": True, "message": f"Ports {', '.join(map(str, to_open)) or '—'} opened.",
                             "ports": info.get("ports", []), "open_ports": to_open, "game_port": gp})
-        except Exception as e:
-            return jsonify({"success": False, "message": str(e)}), 500
+        except Exception:
+            return jsonify({"success": False, "message": _log_and_generic("request failed")}), 500
 
     @app.route("/api/remote/<int:remote_id>/live-stats")
     @login_required
@@ -3260,8 +3260,8 @@ def register_routes(app):
         remote = get_remote(remote_id)
         try:
             return jsonify(remote_live_metrics(remote))
-        except Exception as e:
-            return jsonify({"error": str(e)}), 500
+        except Exception:
+            return jsonify({"error": _log_and_generic("request failed")}), 500
 
     # ── Remote Tailscale Bootstrap Routes ──────────────────
     @app.route("/api/remote/<int:remote_id>/tailscale-check")
@@ -3273,8 +3273,8 @@ def register_routes(app):
         try:
             status = remote_check_tailscale(remote)
             return jsonify({"success": True, **status})
-        except Exception as e:
-            return jsonify({"success": False, "error": str(e)}), 500
+        except Exception:
+            return jsonify({"success": False, "error": _log_and_generic("request failed")}), 500
 
     @app.route("/api/remote/<int:remote_id>/tailscale-up", methods=["POST"])
     @login_required
@@ -3295,8 +3295,8 @@ def register_routes(app):
             if result == "ALREADY_CONNECTED":
                 return jsonify({"success": True, "connected": True})
             return jsonify({"success": True, "connected": False, "url": result})
-        except Exception as e:
-            return jsonify({"success": False, "message": str(e)}), 500
+        except Exception:
+            return jsonify({"success": False, "message": _log_and_generic("request failed")}), 500
 
     @app.route("/api/remote/<int:remote_id>/tailscale-finalize", methods=["POST"])
     @login_required
@@ -3311,8 +3311,8 @@ def register_routes(app):
                 "tailscale_ip": status.get("tailscale_ip", ""),
                 "dns_name": status.get("dns_name", ""), "log": log,
             })
-        except Exception as e:
-            return jsonify({"success": False, "message": str(e)}), 500
+        except Exception:
+            return jsonify({"success": False, "message": _log_and_generic("request failed")}), 500
 
     @app.route("/api/remote/<int:remote_id>/tailscale-install", methods=["POST"])
     @login_required
@@ -3324,8 +3324,8 @@ def register_routes(app):
             success, msg, log = remote_install_tailscale(remote)
             log_action(current_user, "remote_tailscale_install", target=remote.name, detail=msg, success=success)
             return jsonify({"success": success, "message": msg, "log": log})
-        except Exception as e:
-            return jsonify({"success": False, "message": str(e), "log": ""}), 500
+        except Exception:
+            return jsonify({"success": False, "message": _log_and_generic("request failed"), "log": ""}), 500
 
     @app.route("/api/remote/<int:remote_id>/tailscale-bootstrap", methods=["POST"])
     @login_required
@@ -3351,8 +3351,8 @@ def register_routes(app):
             )
             log_action(current_user, "remote_tailscale_bootstrap", target=remote.name, detail=msg, success=success)
             return jsonify({"success": success, "message": msg, "log": log})
-        except Exception as e:
-            return jsonify({"success": False, "message": str(e), "log": ""}), 500
+        except Exception:
+            return jsonify({"success": False, "message": _log_and_generic("request failed"), "log": ""}), 500
 
     @app.route("/api/remote/<int:remote_id>/tailscale-migrate", methods=["POST"])
     @login_required
@@ -3384,8 +3384,8 @@ def register_routes(app):
                 "tailscale_ip": status.get("tailscale_ip", ""),
                 "dns_name": status.get("dns_name", ""),
             })
-        except Exception as e:
-            return jsonify({"success": False, "message": str(e)}), 500
+        except Exception:
+            return jsonify({"success": False, "message": _log_and_generic("request failed")}), 500
 
     # ── Close port 22 after Tailscale ───────────────────────
     @app.route("/api/remote/<int:remote_id>/close-port-22", methods=["POST"])
@@ -3397,8 +3397,8 @@ def register_routes(app):
             success, msg = remote_ufw_close_port_22(remote)
             log_action(current_user, "remote_close_port_22", target=remote.name, detail=msg, success=success)
             return jsonify({"success": success, "message": msg})
-        except Exception as e:
-            return jsonify({"success": False, "message": str(e)}), 500
+        except Exception:
+            return jsonify({"success": False, "message": _log_and_generic("request failed")}), 500
 
     # ── Remote VPS Bootstrap Route (async, with live progress) ──
     @app.route("/api/remote/<int:remote_id>/bootstrap", methods=["POST"])
@@ -3800,8 +3800,8 @@ def register_routes(app):
         if request.method == "GET":
             try:
                 return jsonify(lgsm_read_config(gs.remote, gs.short_name, gs.lgsm_name))
-            except Exception as e:
-                return jsonify({"error": str(e)}), 500
+            except Exception:
+                return jsonify({"error": _log_and_generic("request failed")}), 500
         data = _json_body()
         try:
             if data.get("raw") is not None:
@@ -3811,8 +3811,8 @@ def register_routes(app):
                 ok, msg = lgsm_write_config(gs.remote, gs.short_name, gs.lgsm_name, data.get("settings") or {})
             log_action(current_user, "edit_config", target=gs.name, success=ok)
             return jsonify({"success": ok, "message": msg or ("Saved" if ok else "Failed")})
-        except Exception as e:
-            return jsonify({"success": False, "message": str(e)}), 500
+        except Exception:
+            return jsonify({"success": False, "message": _log_and_generic("request failed")}), 500
 
     @app.route("/api/server/<int:server_id>/game-config")
     @login_required
@@ -3913,8 +3913,8 @@ def register_routes(app):
             if result is None:
                 return jsonify({"error": "Invalid path"}), 400
             return jsonify(result)
-        except Exception as e:
-            return jsonify({"error": str(e)}), 500
+        except Exception:
+            return jsonify({"error": _log_and_generic("request failed")}), 500
 
     @app.route("/api/server/<int:server_id>/file", methods=["GET", "POST"])
     @login_required
@@ -3934,8 +3934,8 @@ def register_routes(app):
             ok, msg = write_file(gs.remote, gs.short_name, rel, data.get("content", ""))
             log_action(current_user, "edit_file", target=gs.name, detail=rel, success=ok)
             return jsonify({"success": ok, "message": msg or ("Saved" if ok else "Failed")})
-        except Exception as e:
-            return jsonify({"success": False, "message": str(e)}), 500
+        except Exception:
+            return jsonify({"success": False, "message": _log_and_generic("request failed")}), 500
 
     @app.route("/api/server/<int:server_id>/delete-path", methods=["POST"])
     @login_required
@@ -4051,8 +4051,8 @@ def register_routes(app):
             ok, msg = upload_file(gs.remote, gs.short_name, reldir, f.filename, data)
             log_action(current_user, "upload_file", target=gs.name, detail=f"{reldir}/{f.filename}", success=ok)
             return jsonify({"success": ok, "message": msg or ("Uploaded" if ok else "Failed"), "name": f.filename})
-        except Exception as e:
-            return jsonify({"success": False, "message": str(e)}), 500
+        except Exception:
+            return jsonify({"success": False, "message": _log_and_generic("request failed")}), 500
 
     @app.route("/api/console/<int:server_id>")
     @login_required
@@ -4091,8 +4091,8 @@ def register_routes(app):
             if rc != 0:
                 return jsonify({"error": "Console (tmux) not accessible. Is the server running?"}), 502
             return jsonify({"success": True, "command": cmd_text})
-        except Exception as e:
-            return jsonify({"error": str(e)}), 500
+        except Exception:
+            return jsonify({"error": _log_and_generic("request failed")}), 500
 
     # ── WebSocket Console ───────────────────────────────────
     def _socketio_cors():
