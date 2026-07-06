@@ -47,8 +47,8 @@
       <span class="text-secondary small me-1"><i class="bi bi-tools"></i> Maintenance:</span>
       {% for m in maintenance %}
       <button class="btn btn-sm btn-outline-secondary" title="{{ m.desc }}"
-              onclick="serverAction('{{ m.cmd }}', this, {{ 'true' if m.cmd in ['validate','backup','force-update','mods-update','fastdl','wipe','map-wipe','full-wipe'] else 'false' }})">
-        <i class="bi bi-{{ {'monitor':'activity','validate':'check2-circle','backup':'archive-fill','details':'info-circle','check-update':'cloud-arrow-down','force-update':'cloud-download-fill','update-lgsm':'arrow-up-circle','mods-update':'puzzle-fill','postdetails':'link-45deg','test-alert':'bell','fastdl':'hdd-network-fill','wipe':'eraser-fill','map-wipe':'eraser-fill','full-wipe':'trash3-fill'}.get(m.cmd, 'gear') }}"></i>
+              onclick="serverAction('{{ m.cmd }}', this, {{ 'true' if m.cmd in ['validate','backup','force-update','mods-update','fastdl'] else 'false' }})">
+        <i class="bi bi-{{ {'monitor':'activity','validate':'check2-circle','backup':'archive-fill','details':'info-circle','check-update':'cloud-arrow-down','force-update':'cloud-download-fill','update-lgsm':'arrow-up-circle','mods-update':'puzzle-fill','postdetails':'link-45deg','test-alert':'bell','fastdl':'hdd-network-fill'}.get(m.cmd, 'gear') }}"></i>
         {{ m.cmd }}
       </button>
       {% endfor %}
@@ -363,9 +363,9 @@ var SERVER_NAME = {{ server.name|tojson }};
 function serverAction(action, btn, confirmFirst) {
   if (confirmFirst) {
     var msg = action.charAt(0).toUpperCase() + action.slice(1) + ' ' + SERVER_NAME + '?';
-    if (['wipe', 'map-wipe', 'full-wipe'].indexOf(action) !== -1) {
-      msg = 'This will DELETE saved world data for ' + SERVER_NAME +
-            ' (a "' + action + '"). This cannot be undone. Continue?';
+    if (action === 'fastdl') {
+      msg = 'Generate FastDL files for ' + SERVER_NAME +
+            '? This overwrites the existing FastDL directory and can take a while.';
     }
     if (!confirm(msg)) return;
   }

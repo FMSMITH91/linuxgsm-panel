@@ -158,19 +158,21 @@ def _prune_jobs(registry, lock, max_age=7200):
         for k in stale:
             registry.pop(k, None)
 
-# LinuxGSM commands the panel is willing to run from a button. Each only appears for a game
-# whose LinuxGSM command list actually includes it, so e.g. fastdl shows only for Source games
-# and the wipe variants only for games (Rust) that have them. Genuinely interactive/foreground
-# commands (console, debug, send, install, auto-install, skeleton, developer, sponsor, and the
-# mods-install/mods-remove menu pickers) are still excluded — they can't be driven one-click.
+# LinuxGSM commands the panel is willing to run from a button. Each only appears for a game whose
+# LinuxGSM command list actually includes it, so fastdl shows only for Source games. fastdl asks a
+# few yes/no questions (all default Y) and loops forever on EOF, so it's fed answers in _bg_action.
+# The wipe variants were dropped: they're destructive and their non-interactive behaviour couldn't
+# be verified without a live Rust server (fastdl proved these commands DO prompt-loop). Genuinely
+# interactive/foreground commands (console, debug, send, install, auto-install, skeleton, developer,
+# sponsor, and the mods-install/mods-remove pickers, which are handled by the dedicated mods UI)
+# are excluded — they can't be driven by a blind one-click button.
 RUNNABLE_ACTIONS = {
     "start", "stop", "restart", "monitor", "update", "validate", "backup",
     "details", "check-update", "force-update", "update-lgsm", "mods-update",
-    "postdetails", "test-alert", "fastdl", "wipe", "map-wipe", "full-wipe",
+    "postdetails", "test-alert", "fastdl",
 }
 # Long-running ones run in the background so the HTTP request returns immediately.
 LONG_ACTIONS = {"update", "validate", "backup", "force-update", "mods-update", "fastdl"}
-# The wipe variants are destructive (delete world/save data); the UI confirms them first.
 # Read-only ones: show their output back to the user.
 READONLY_ACTIONS = {"monitor", "details", "check-update", "postdetails", "test-alert"}
 
@@ -1141,7 +1143,6 @@ def register_routes(app):
             "postdetails": VIEW_CONSOLE, "test-alert": VIEW_CONSOLE,
             "validate": UPDATE_SERVER, "backup": UPDATE_SERVER, "force-update": UPDATE_SERVER,
             "update-lgsm": UPDATE_SERVER, "mods-update": UPDATE_SERVER, "fastdl": UPDATE_SERVER,
-            "wipe": UPDATE_SERVER, "map-wipe": UPDATE_SERVER, "full-wipe": UPDATE_SERVER,
         }
         core = {"start", "stop", "restart", "update"}
         maintenance = [
@@ -1300,7 +1301,12 @@ def register_routes(app):
                     remote = RemoteServer.query.get(remote_id)
                     if not remote:
                         return
-                    out, err, rc = run_as_game_user(remote, short_name, f"{action} 2>&1", timeout=1800, selfname=selfname)
+                    act_cmd = f"{action} 2>&1"
+                    if action == "fastdl":
+                        # fastdl asks a few yes/no questions (overwrite / force-download / continue),
+                        # all default Y, and loops forever on EOF — feed Y's so it runs unattended.
+                        act_cmd = "fastdl <<< $'Y\\nY\\nY\\nY\\nY\\nY\\nY\\nY' 2>&1"
+                    out, err, rc = run_as_game_user(remote, short_name, act_cmd, timeout=1800, selfname=selfname)
                     gs = GameServer.query.get(server_id)
                     from auth import log_action as _log
                     _log(None, f"{action}_complete", target=gs.name if gs else short_name,
