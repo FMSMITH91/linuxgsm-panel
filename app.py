@@ -88,6 +88,7 @@ from ssh_manager import (
     pro_service, pro_detach, set_autostart, install_game_cron, set_daily_restart,
     list_cron_jobs, add_cron_job, update_cron_job, delete_cron_job, upgrade_managed_cron_tracking,
     run_cron_job_now, run_game_backup, list_game_backups,
+    mods_available, mods_installed, mods_action,
     install_game_dependencies, parse_missing_deps, detect_game_ports, lgsm_read_config,
     lgsm_write_config, lgsm_game_config, lgsm_get_values, browse_dir, read_file,
     write_file, upload_file, delete_path,
@@ -2556,16 +2557,23 @@ def register_routes(app):
                 targets = [(gs.remote, gs.short_name, gs.lgsm_name, gs.name)
                            for gs in GameServer.query.filter_by(installed=True).all() if gs.remote_id]
             ok_n = fail_n = 0
+            failures = []
             for remote, short, lgsm, gname in targets:
                 try:
-                    ok, _ = run_game_backup(remote, short, lgsm, keep)
-                    ok_n += 1 if ok else 0
-                    fail_n += 0 if ok else 1
+                    ok, reason = run_game_backup(remote, short, lgsm, keep)
+                    if ok:
+                        ok_n += 1
+                    else:
+                        fail_n += 1
+                        failures.append("%s: %s" % (gname, reason or "failed"))
                 except Exception:
                     fail_n += 1
+                    failures.append("%s: internal error" % gname)
                     app.logger.warning("full backup of %s failed", gname, exc_info=True)
-            bk.record_full_backup("%d server(s) backed up%s" %
-                                  (ok_n, (", %d failed" % fail_n) if fail_n else ""))
+            summary = "%d server(s) backed up%s" % (ok_n, (", %d failed" % fail_n) if fail_n else "")
+            if failures:
+                summary += " — " + "; ".join(failures)
+            bk.record_full_backup(summary[:500])
         except Exception:
             app.logger.warning("full backup run failed", exc_info=True)
         finally:
@@ -3573,6 +3581,51 @@ def register_routes(app):
             return jsonify({"success": ok, "message": msg or ("Saved" if ok else "Failed")})
         except Exception:
             return jsonify({"success": False, "message": _log_and_generic("alerts save failed")}), 200
+
+    @app.route("/api/server/<int:server_id>/mods", methods=["GET", "POST"])
+    @login_required
+    @server_access_required
+    def api_server_mods(server_id):
+        """List / install / remove LinuxGSM mods (SourceMod, MetaMod, Oxide, …). Listing
+        drives LinuxGSM's mods menus with empty input; install/remove feed the chosen
+        menu number. Install/remove modify the install, so they need UPDATE_SERVER."""
+        gs = get_game(server_id)
+        if not _can_manage_files():
+            return jsonify({"error": "Permission denied"}), 403
+        if request.method == "GET":
+            available, installed = [], []
+            try:
+                available = mods_available(gs.remote, gs.short_name, gs.lgsm_name)
+                installed = mods_installed(gs.remote, gs.short_name, gs.lgsm_name)
+            except Exception:
+                app.logger.debug("mods list failed", exc_info=True)  # unreachable host — return empties
+            return jsonify({"available": available, "installed": installed})
+        # POST: install or remove a mod by its menu index.
+        if not (current_user.is_superadmin or has_permission(current_user, UPDATE_SERVER)):
+            return jsonify({"success": False, "message": "Permission denied"}), 403
+        data = request.get_json(silent=True) or {}
+        which = "install" if data.get("action") == "install" else ("remove" if data.get("action") == "remove" else "")
+        try:
+            index = int(data.get("index"))
+        except (TypeError, ValueError):
+            index = 0
+        if not which or index < 1:
+            return jsonify({"success": False, "message": "Pick a mod to " + (which or "act on") + "."}), 400
+        try:
+            out, err, rc = mods_action(gs.remote, gs.short_name, gs.lgsm_name, which, index)
+            clean = re.sub(r"\x1b\[[0-9;?]*[A-Za-z]", "", ((out or "") + "\n" + (err or ""))).strip()
+            log_action(current_user, f"mods_{which}", target=gs.name, success=(rc == 0), detail=clean[-400:])
+            ok = rc == 0
+            tail = ""
+            for line in reversed(clean.splitlines()):
+                if line.strip():
+                    tail = line.strip()
+                    break
+            msg = (f"Mod {which} finished." if ok
+                   else f"Mod {which} reported an error: {tail[:200] or 'check the console'}")
+            return jsonify({"success": ok, "message": msg})
+        except Exception:
+            return jsonify({"success": False, "message": _log_and_generic("mods action failed")}), 200
 
     @app.route("/api/server/<int:server_id>/browse")
     @login_required

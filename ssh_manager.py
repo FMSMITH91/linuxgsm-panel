@@ -1074,9 +1074,11 @@ def run_game_backup(server, user, selfname=None, keep=3):
     ~/lgsm/backup/), then prune to the newest `keep`. Runs AS THE GAME USER, non-interactively
     (like a cron backup). Long-running — archives can be large. Returns (ok, message)."""
     selfname = selfname or user
-    # `< /dev/null` guarantees a non-tty stdin so LinuxGSM runs the backup non-interactively
-    # (like cron) and can never hang waiting on a confirmation prompt.
-    inner = f"cd /home/{user} && ./{selfname} backup < /dev/null"
+    # LinuxGSM's `backup` prompts "server is running, continue? [y/N]" when the instance is
+    # up; with a non-tty stdin that prompt defaults to NO and aborts, so a running server would
+    # never get backed up. Feed a few "y"s so it proceeds either way (no prompt → the input is
+    # simply ignored). The stream is bounded, so it still can't hang.
+    inner = f"cd /home/{user} && printf 'y\\ny\\ny\\n' | ./{selfname} backup"
     out, err, rc = run_command(server, f"sudo -u {user} bash -c {_quote(inner)}",
                                timeout=3600, sudo=False)
     ok = rc == 0
@@ -1086,7 +1088,17 @@ def run_game_backup(server, user, selfname=None, keep=3):
         _log.debug("game backup prune failed", exc_info=True)
     if ok:
         return True, "Backed up"
-    return False, (err or out or "backup failed")[-200:]
+    # Surface the most relevant LinuxGSM line so the panel can show WHY it failed.
+    clean = re.sub(r"\x1b\[[0-9;?]*[A-Za-z]", "", ((out or "") + "\n" + (err or ""))).strip()
+    reason = ""
+    for line in reversed(clean.splitlines()):
+        low = line.lower()
+        if any(k in low for k in ("fail", "error", "unable", "no space", "not enough", "denied", "cannot")):
+            reason = line.strip()
+            break
+    if not reason and clean.splitlines():
+        reason = clean.splitlines()[-1].strip()
+    return False, (reason or "backup failed")[-200:]
 
 
 def list_server_commands(server, user, selfname=None):
@@ -2691,6 +2703,52 @@ def lgsm_write_config(server, user, selfname, updates):
             lines.append(newline)
     content = "\n".join(lines).rstrip("\n") + "\n"
     return _write_file_as_user(server, user, inst, content.encode())
+
+
+# --- Mods / addons (LinuxGSM mods-install / mods-remove) --------------------
+# LinuxGSM's mods-install/mods-remove are interactive: they print a numbered menu
+# of mods and read one selection. On invalid/empty input they print "not a valid
+# option" and exit cleanly (no loop), so we can list by feeding empty input and
+# act by feeding the chosen number — both via a bash here-string (`<<<`).
+_MOD_MENU_RE = re.compile(r"^\s*(\d+)\)\s+(.*\S)\s*$")
+
+
+def _parse_mods_menu(out):
+    """Parse LinuxGSM's numbered mod menu into [{index,name,installed}]."""
+    mods = []
+    for raw in (out or "").splitlines():
+        line = re.sub(r"\x1b\[[0-9;?]*[A-Za-z]", "", raw)  # strip ANSI colour codes
+        m = _MOD_MENU_RE.match(line)
+        if not m:
+            continue
+        name = m.group(2).strip()
+        installed = "already installed" in name.lower()
+        name = re.sub(r"\s*\(already installed\)\s*$", "", name, flags=re.I).strip()
+        if name:
+            mods.append({"index": int(m.group(1)), "name": name, "installed": installed})
+    return mods
+
+
+def mods_available(server, user, selfname, timeout=60):
+    """Mods LinuxGSM can install for this game (empty input → menu prints, then exits)."""
+    out, err, _ = run_as_game_user(server, user, 'mods-install <<< ""', timeout=timeout, selfname=selfname)
+    return _parse_mods_menu((out or "") + "\n" + (err or ""))
+
+
+def mods_installed(server, user, selfname, timeout=60):
+    """Currently-installed mods, via the mods-remove menu (empty input → list, then exit)."""
+    out, err, _ = run_as_game_user(server, user, 'mods-remove <<< ""', timeout=timeout, selfname=selfname)
+    return _parse_mods_menu((out or "") + "\n" + (err or ""))
+
+
+def mods_action(server, user, selfname, which, index, timeout=600):
+    """Install or remove the mod at 1-based menu position `index`.
+    `which` is 'install' or 'remove'. Returns (out, err, rc). `index` is coerced
+    to an int so nothing but a number is ever fed to the LinuxGSM command."""
+    cmd = "mods-install" if which == "install" else "mods-remove"
+    idx = int(index)
+    out, err, rc = run_as_game_user(server, user, f'{cmd} <<< "{idx}"', timeout=timeout, selfname=selfname)
+    return out, err, rc
 
 
 # Files/dirs whose deletion would break LinuxGSM or the game install — protected

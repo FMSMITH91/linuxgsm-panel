@@ -194,6 +194,35 @@
   </div>
 </div>
 
+<!-- Mods / addons -->
+<div class="card mt-3" id="mods-card">
+  <div class="card-header d-flex justify-content-between align-items-center flex-wrap gap-2">
+    <span><i class="bi bi-puzzle"></i> Mods &amp; Addons</span>
+    <button class="btn btn-sm btn-outline-secondary" onclick="loadMods(true)"><i class="bi bi-arrow-repeat"></i> Refresh</button>
+  </div>
+  <div class="card-body">
+    <p class="small text-secondary mb-2">
+      Install or remove LinuxGSM-supported mods (SourceMod, MetaMod, Oxide, and more) for this game.
+      Installing runs LinuxGSM's own installer; stop the server first if a mod asks for it.
+    </p>
+    <div id="mods-loading" class="text-secondary small"><i class="bi bi-arrow-repeat"></i> Loading mods…</div>
+    <div id="mods-unsupported" class="text-secondary small" style="display:none;">
+      This game doesn't have any LinuxGSM-installable mods.
+    </div>
+    <div id="mods-body" style="display:none;">
+      <div class="mb-2">
+        <div class="fw-semibold small mb-1"><i class="bi bi-box-arrow-in-down"></i> Available</div>
+        <div id="mods-available" class="d-flex flex-column gap-1"></div>
+      </div>
+      <div id="mods-installed-wrap" style="display:none;">
+        <div class="fw-semibold small mb-1"><i class="bi bi-check2-square"></i> Installed</div>
+        <div id="mods-installed" class="d-flex flex-column gap-1"></div>
+      </div>
+    </div>
+    <span id="mods-msg" class="small"></span>
+  </div>
+</div>
+
 {% endblock %}
 {% block scripts %}
 <script>
@@ -688,5 +717,48 @@ function testAlert(btn){
     .catch(function(){ alertsMsg('✗ Could not send','text-danger'); if(btn) btn.disabled=false; });
 }
 loadAlerts();
+
+// ── Mods & addons ──
+function modsMsg(t,cls){ var m=document.getElementById('mods-msg'); if(m){ m.textContent=t||''; m.className='small '+(cls||'text-secondary'); } }
+function modRow(m, which){
+  var isInstall = which==='install';
+  var btn = isInstall
+    ? (m.installed
+        ? '<span class="badge bg-secondary">Installed</span>'
+        : '<button class="btn btn-sm btn-outline-primary" onclick="modAction(\'install\','+m.index+',this,'+escA(JSON.stringify(m.name))+')"><i class="bi bi-download"></i> Install</button>')
+    : '<button class="btn btn-sm btn-outline-danger" onclick="modAction(\'remove\','+m.index+',this,'+escA(JSON.stringify(m.name))+')"><i class="bi bi-trash"></i> Remove</button>';
+  return '<div class="d-flex justify-content-between align-items-center border rounded px-2 py-1">'
+    + '<span class="small">'+esc(m.name)+'</span>'+btn+'</div>';
+}
+function loadMods(force){
+  var load=document.getElementById('mods-loading'), body=document.getElementById('mods-body'),
+      uns=document.getElementById('mods-unsupported');
+  if(force){ load.style.display=''; body.style.display='none'; uns.style.display='none'; modsMsg(''); }
+  fetch(MOUNT+'/api/server/'+serverId+'/mods').then(r=>r.json()).then(function(d){
+    if(d.error){ load.innerHTML='<span class="text-danger">'+esc(d.error)+'</span>'; return; }
+    var avail=d.available||[], inst=d.installed||[];
+    load.style.display='none';
+    if(!avail.length && !inst.length){ uns.style.display=''; body.style.display='none'; return; }
+    document.getElementById('mods-available').innerHTML =
+      avail.length ? avail.map(function(m){ return modRow(m,'install'); }).join('') :
+      '<span class="text-secondary small">None available.</span>';
+    var iwrap=document.getElementById('mods-installed-wrap');
+    if(inst.length){ document.getElementById('mods-installed').innerHTML=inst.map(function(m){ return modRow(m,'remove'); }).join(''); iwrap.style.display=''; }
+    else { iwrap.style.display='none'; }
+    body.style.display='';
+  }).catch(function(){ load.innerHTML='<span class="text-danger">Could not load mods.</span>'; });
+}
+function modAction(which, index, btn, name){
+  if(which==='remove' && !confirm('Remove '+name+' from this server?')) return;
+  var orig=btn.innerHTML; btn.disabled=true; btn.innerHTML='<span class="spinner-border spinner-border-sm"></span>';
+  modsMsg((which==='install'?'Installing ':'Removing ')+name+'… this can take a moment.','text-secondary');
+  fetch(MOUNT+'/api/server/'+serverId+'/mods',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({action:which,index:index})})
+    .then(r=>r.json()).then(function(d){
+      modsMsg((d.success?'✓ ':'✗ ')+(d.message||''), d.success?'text-success':'text-danger');
+      loadMods(false);
+    })
+    .catch(function(){ modsMsg('✗ Action failed — connection error','text-danger'); btn.disabled=false; btn.innerHTML=orig; });
+}
+loadMods(true);
 </script>
 {% endblock %}
