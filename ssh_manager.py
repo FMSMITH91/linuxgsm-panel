@@ -601,7 +601,7 @@ def set_autostart(server, user, enabled, selfname=None):
     (@reboot ... start). This is LinuxGSM's recommended autostart method."""
     selfname = selfname or user
     marker = f"/home/{user}/{selfname} start"
-    add = [f"@reboot {marker} > /dev/null 2>&1"] if enabled else []
+    add = [f"@reboot {_record_managed_cmd(user, marker)}"] if enabled else []
     return _rewrite_crontab(server, user, f"-vF {_quote(marker)}", add)
 
 
@@ -618,7 +618,9 @@ def install_game_cron(server, user, selfname=None, supported=None):
     base = f"/home/{user}/{selfname}"
 
     def sc(cmd):
-        return f"{base} {cmd} > /dev/null 2>&1"
+        # Record each maintenance run's exit code + output (keeps the command visible so the
+        # managed-line grep still matches), so the panel can show update/monitor success.
+        return _record_managed_cmd(user, f"{base} {cmd}")
 
     lines = []
     if "monitor" in supported:
@@ -667,7 +669,7 @@ def set_daily_restart(server, user, selfname=None, game_type=None, port=None, en
         f'if [ -z "$P" ] || [ "$P" = 0 ] || [ "$P" = null ]; then '
         f"/home/{user}/{selfname} restart >/dev/null 2>&1; rm -f {flag}; fi; }}"
     )
-    touch_line = f"0 5 * * * touch {flag}"
+    touch_line = f"0 5 * * * {_record_managed_cmd(user, f'touch {flag}')}"
     check_line = f"10 * * * * {check_cmd}"
     # Both lines contain the flag path — strip by that to remove/rebuild idempotently.
     grep_args = f"-vF {_quote(flag)}"
@@ -802,17 +804,42 @@ def _wrap_cron_command(server, user, command):
     return "/home/%s/.lgsm-cron/run %s %s" % (user, _cron_job_id(command), b64)
 
 
+# Inline recorder for the panel's OWN managed jobs (autostart/monitor/update/restart-flag).
+# Unlike the base64 form, it keeps the command VISIBLE so the managed-line detection (which
+# greps for `<base> monitor` etc.) still matches — panel commands carry no `%` for cron to
+# mangle, so it's safe to write the status suffix inline.
+_CRON_REC_RE = re.compile(
+    r"^mkdir -p /home/[^/\s]+/\.lgsm-cron && (.+?) > "
+    r"/home/[^/\s]+/\.lgsm-cron/([0-9a-f]{6,})\.log 2>&1; R=\$\?;")
+
+
+def _record_managed_cmd(user, core):
+    """Wrap a FIXED panel command so cron records its exit code + time + output, keeping the
+    command itself readable in the crontab line. Pairs with _unwrap_cron_command /
+    _read_cron_status. Panel-generated commands only (no user `%`)."""
+    d = "/home/%s/.lgsm-cron" % user
+    jid = _cron_job_id(core)
+    # \% because cron treats % specially; mkdir keeps the status dir self-healing.
+    return (f"mkdir -p {d} && {core} > {d}/{jid}.log 2>&1; "
+            f"R=$?; T=$(date +\\%s); echo \"$R $T $T\" > {d}/{jid}.status")
+
+
 def _unwrap_cron_command(command):
-    """(original_command, job_id) if `command` is a panel-wrapped cron command, else
+    """(original_command, job_id) if `command` is a panel-wrapped cron command (either the
+    base64 recorder for user jobs or the inline recorder for managed jobs), else
     (command, None) so plain/legacy entries display and behave unchanged."""
     import base64
-    m = _CRON_WRAP_RE.match((command or "").strip())
-    if not m:
-        return command, None
-    try:
-        return base64.b64decode(m.group(2)).decode("utf-8", "replace"), m.group(1)
-    except Exception:
-        return command, None
+    c = (command or "").strip()
+    m = _CRON_WRAP_RE.match(c)
+    if m:
+        try:
+            return base64.b64decode(m.group(2)).decode("utf-8", "replace"), m.group(1)
+        except Exception:
+            return command, None
+    m2 = _CRON_REC_RE.match(c)
+    if m2:
+        return m2.group(1).strip(), m2.group(2)
+    return command, None
 
 
 def _read_cron_status(server, user):

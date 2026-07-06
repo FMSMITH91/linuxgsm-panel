@@ -93,6 +93,16 @@ check("cron: unwrap recovers the original command",
       sm._unwrap_cron_command(_wrapped) == (_ccmd, _cjid))
 check("cron: unwrap leaves a plain command untouched",
       sm._unwrap_cron_command("/home/gm/x.sh") == ("/home/gm/x.sh", None))
+# Managed jobs use the INLINE recorder: the command stays visible (so the grep-based
+# managed-line detection/removal still works) and unwraps to the core command + a job id.
+_mrec = sm._record_managed_cmd("gm", "/home/gm/gmodserver update")
+check("managed cron: wrapped line is still detected as managed",
+      sm._cron_line_managed(_mrec, "gm", "gmodserver"))
+check("managed cron: wrapped line still matches the maintenance remove-regex (no dup on re-apply)",
+      bool(__import__("re").search(r"/home/gm/gmodserver (monitor|mods-update|update|update-lgsm) ", _mrec)))
+check("managed cron: unwrap recovers the core command + id",
+      sm._unwrap_cron_command(_mrec)
+      == ("/home/gm/gmodserver update", sm._cron_job_id("/home/gm/gmodserver update")))
 _orig_run3 = sm.run_command
 try:
     sm.run_command = lambda s, c, **k: ("aaaaaaaaaaaa\t0\t100\t142\t\n"
@@ -557,21 +567,29 @@ def _cap_rewrite(server, user, grep_args, add_lines, extra_pre=""):
 sm._rewrite_crontab = _cap_rewrite
 
 sm.set_autostart(None, "gmodserver", True)
-eq("autostart(on): @reboot start line", _cron["add"],
-   ["@reboot /home/gmodserver/gmodserver start > /dev/null 2>&1"])
+# The managed lines now run through the inline recorder — the command stays VISIBLE (so the
+# grep-based detection/removal still works) but a status-recording suffix is appended.
+check("autostart(on): @reboot start line, recorder-wrapped",
+      _cron["add"][0].startswith("@reboot ")
+      and "/home/gmodserver/gmodserver start" in _cron["add"][0]
+      and ".lgsm-cron/" in _cron["add"][0] and ".status" in _cron["add"][0])
 sm.set_autostart(None, "gmodserver", False)
 eq("autostart(off): removes line, adds none", _cron["add"], [])
 
 sm.install_game_cron(None, "gmodserver", supported={"monitor", "update-lgsm"})
-check("install_game_cron: monitor every 5 min",
-      "*/5 * * * * /home/gmodserver/gmodserver monitor > /dev/null 2>&1" in _cron["add"])
-check("install_game_cron: weekly update-lgsm",
-      "30 5 * * 0 /home/gmodserver/gmodserver update-lgsm > /dev/null 2>&1" in _cron["add"])
+check("install_game_cron: monitor every 5 min (recorder-wrapped, command visible)",
+      any(ln.startswith("*/5 * * * * ") and "/home/gmodserver/gmodserver monitor" in ln
+          and ".status" in ln for ln in _cron["add"]))
+check("install_game_cron: weekly update-lgsm (recorder-wrapped)",
+      any(ln.startswith("30 5 * * 0 ") and "/home/gmodserver/gmodserver update-lgsm" in ln
+          and ".status" in ln for ln in _cron["add"]))
 eq("install_game_cron: only supported commands scheduled", len(_cron["add"]), 2)
 
 sm.set_daily_restart(None, "gmodserver", game_type="gmod", port=27015, enabled=True)
-eq("daily_restart(mapped): sets pending flag at 05:00", _cron["add"][0],
-   "0 5 * * * touch /home/gmodserver/.restart-pending")
+check("daily_restart(mapped): sets pending flag at 05:00 (recorder-wrapped)",
+      _cron["add"][0].startswith("0 5 * * * ")
+      and "touch /home/gmodserver/.restart-pending" in _cron["add"][0]
+      and ".status" in _cron["add"][0])
 check("daily_restart(mapped): queries gamedig for player count",
       "gamedig --type garrysmod 127.0.0.1:27015" in _cron["add"][1])
 sm.set_daily_restart(None, "codserver", game_type="cod", port=28960, enabled=True)
