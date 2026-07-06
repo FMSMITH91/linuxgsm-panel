@@ -7,7 +7,12 @@
  "Groups": "Grupos",
  "Groups & Permissions": "Grupos y permisos",
  "Infrastructure": "Infraestructura",
+ "No groups defined yet.": "Aún no hay grupos definidos.",
  "Overview": "Resumen",
+ "Panel Updates": "Actualizaciones del panel",
+ "Reclaims freed space and refreshes query statistics (VACUUM + ANALYZE). Safe to run anytime; the only table that grows over time is the audit log.": "Recupera espacio liberado y actualiza las estadísticas de consulta (VACUUM + ANALYZE). Es seguro ejecutarlo en cualquier momento; la única tabla que crece con el tiempo es el registro de auditoría.",
+ "Runs on the panel host (needs sudo). Prefer to do it by hand?": "Se ejecuta en el host del panel (necesita sudo). ¿Prefieres hacerlo a mano?",
+ "Skip — I'll add remotes later": "Omitir: añadiré remotos más tarde",
  "Users": "Usuarios",
  "this panel": "este panel"
 }
