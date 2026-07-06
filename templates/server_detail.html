@@ -57,6 +57,16 @@
   </div>
 </div>
 
+<!-- Restart-pending banner: a mod change is waiting for a restart to load -->
+<div class="alert alert-warning py-2 px-3 d-flex justify-content-between align-items-center flex-wrap gap-2 {% if not server.restart_pending %}d-none{% endif %}"
+     id="restart-pending-banner">
+  <span><i class="bi bi-exclamation-triangle-fill"></i>
+    A mod change is waiting for a restart to load. It'll restart automatically once the server is empty, or restart now.</span>
+  <button class="btn btn-sm btn-warning" onclick="serverAction('restart', this, true)">
+    <i class="bi bi-arrow-clockwise"></i> Restart now
+  </button>
+</div>
+
 <!-- Connect address + live stats -->
 <div class="card mb-3">
   <div class="card-body">
@@ -376,7 +386,15 @@ function serverAction(action, btn, confirmFirst) {
     body: JSON.stringify({ action: action })
   })
   .then(r => r.json())
-  .then(d => { toast(d.message || (action + ' done'), d.success ? 'success' : 'danger'); setTimeout(pollStats, 1200); })
+  .then(d => {
+    toast(d.message || (action + ' done'), d.success ? 'success' : 'danger');
+    // A successful start/stop/restart loads any pending mod change — hide the banner.
+    if (d.success && (action === 'restart' || action === 'start' || action === 'stop')) {
+      var b = document.getElementById('restart-pending-banner');
+      if (b) b.classList.add('d-none');
+    }
+    setTimeout(pollStats, 1200);
+  })
   .catch(() => toast('Action failed — connection error', 'danger'))
   .finally(() => { btn.disabled = false; btn.innerHTML = orig; });
 }

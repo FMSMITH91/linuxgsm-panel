@@ -1233,6 +1233,22 @@ def player_count(server, user, game_type=None, port=None):
     return int(s)
 
 
+def mod_restart_decision(status, players, force=False):
+    """Decide how to handle the restart a mod change needs, given the server `status`
+    ('online'/'offline'/'unknown'), the current player count (int, or None when unknown),
+    and whether the admin forced it. Pure/side-effect-free so it can be tested directly:
+      'idle'    — server is stopped; nothing to do (the change loads on next start)
+      'restart' — restart now (server is confirmed empty, or the admin forced it)
+      'pending' — defer: players are online, or we can't confirm it's empty."""
+    if status == "offline":
+        return "idle"
+    if force:
+        return "restart"
+    if status == "online" and players == 0:
+        return "restart"
+    return "pending"
+
+
 def run_game_backup(server, user, selfname=None, keep=3, game_type=None, port=None, force=False):
     """Run LinuxGSM's own `backup` for a game instance (archives serverfiles into
     ~/lgsm/backup/), then prune to the newest `keep`. Runs AS THE GAME USER, non-interactively

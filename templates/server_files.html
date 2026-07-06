@@ -762,9 +762,25 @@ function modAction(which, id, btn){
   fetch(MOUNT+'/api/server/'+serverId+'/mods',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({action:which,mod:id})})
     .then(r=>r.json()).then(function(d){
       modsMsg((d.success?'✓ ':'✗ ')+(d.message||''), d.success?'text-success':'text-danger');
+      // The change only loads after a restart. If the panel deferred it (players online / can't
+      // confirm empty), offer a one-click force right here.
+      if(d.success && d.restart_pending){
+        var m=document.getElementById('mods-msg');
+        if(m){ m.insertAdjacentHTML('beforeend',
+          ' <button class="btn btn-sm btn-warning py-0 px-1 ms-1" onclick="modRestartNow(this)"><i class="bi bi-arrow-clockwise"></i> Restart now</button>'); }
+      }
       loadMods(false);
     })
     .catch(function(){ modsMsg('✗ Action failed — connection error','text-danger'); btn.disabled=false; btn.innerHTML=orig; });
+}
+function modRestartNow(btn){
+  if(!confirm('Restart the server now to load the change?\n\nAnyone currently playing will be disconnected.')) return;
+  btn.disabled=true; btn.innerHTML='<span class="spinner-border spinner-border-sm"></span> Restarting…';
+  fetch(MOUNT+'/api/server/'+serverId+'/action',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({action:'restart'})})
+    .then(r=>r.json()).then(function(d){
+      modsMsg((d.success?'✓ Restarted — the change is now loaded.':'✗ '+(d.message||'Restart failed')), d.success?'text-success':'text-danger');
+    })
+    .catch(function(){ modsMsg('✗ Restart failed — connection error','text-danger'); });
 }
 loadMods(true);
 </script>

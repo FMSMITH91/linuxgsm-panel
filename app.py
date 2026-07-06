@@ -91,6 +91,7 @@ from ssh_manager import (
     run_cron_job_now, run_game_backup, list_game_backups,
     delete_game_backup, stream_game_backup, backup_disk_info,
     mods_available, mods_installed, mods_action,
+    player_count as sm_player_count, mod_restart_decision,
     install_game_dependencies, parse_missing_deps, detect_game_ports, lgsm_read_config,
     lgsm_write_config, lgsm_game_config, lgsm_get_values, browse_dir, read_file,
     write_file, upload_file, delete_path,
@@ -1230,6 +1231,52 @@ def register_routes(app):
             p = VIEW_CONSOLE if action in READONLY_ACTIONS else UPDATE_SERVER
         return p
 
+    def _apply_mod_restart(gs, remote, force=False):
+        """A mod install/remove/update only takes effect after the server restarts. Restart now
+        if it's empty (or forced); otherwise flag restart_pending so the hourly ticker restarts it
+        once the players leave — never kicking anyone unless the admin forces it. A stopped server
+        needs nothing (the change loads on next start). Returns (state, message) with state in
+        {'restarted','pending','idle'}."""
+        try:
+            status = get_server_status(remote, gs)
+        except Exception:
+            status = "unknown"
+        if status == "offline":
+            if gs.restart_pending:
+                gs.restart_pending = False
+                db.session.commit()
+            return "idle", "The server is stopped — the change will load when you next start it."
+        # Only auto-restart when we can CONFIRM the server is empty (pc == 0). An unknown count
+        # (game not queryable / gamedig missing) is left to the admin's "Restart now", so we never
+        # disconnect players we can't see.
+        pc = None
+        try:
+            pc = sm_player_count(remote, gs.short_name, gs.game_type, gs.port)
+        except Exception:
+            pc = None
+        if mod_restart_decision(status, pc, force) == "restart":
+            try:
+                run_as_game_user(remote, gs.short_name, "restart 2>&1", timeout=90, selfname=gs.lgsm_name)
+            except Exception:
+                app.logger.warning("mod restart of %s failed", gs.name, exc_info=True)
+                if not gs.restart_pending:
+                    gs.restart_pending = True
+                    db.session.commit()
+                return "pending", "Change saved, but the restart to load it didn't go through — use Restart now."
+            if gs.restart_pending:
+                gs.restart_pending = False
+                db.session.commit()
+            return "restarted", "Server restarted to load the change."
+        # Players on, or can't confirm empty → defer and let the ticker/admin handle it.
+        if not gs.restart_pending:
+            gs.restart_pending = True
+            db.session.commit()
+        if pc and pc > 0:
+            return "pending", (f"{pc} player(s) online — the server will restart to load the change "
+                               "once it's empty (or use Restart now).")
+        return "pending", ("A restart is needed to load the change — couldn't confirm the server is "
+                           "empty, so use Restart now when you're ready.")
+
     def _run_action(gs, remote, action, actor):
         """Execute a whitelisted action (permission already checked).
         Returns (ok, message). Long actions run in the background."""
@@ -1246,6 +1293,11 @@ def register_routes(app):
             return re.sub(r"[ \t]{2,}", " ", s)
         log_action(actor, f"{action}_server", target=gs.name, success=(rc == 0), detail=_clean(out)[-400:])
         clean = _clean((out or "") + "\n" + (err or "")).strip()
+        # A restart/start reloads the game (and a stop means it'll reload on next start), so any of
+        # these clears a pending mod-restart flag.
+        if rc == 0 and action in ("restart", "start", "stop") and gs.restart_pending:
+            gs.restart_pending = False
+            db.session.commit()
         if action in READONLY_ACTIONS:
             return True, f"{action}: {clean[:600] or 'no output'}"
         if rc == 0:
@@ -1361,6 +1413,13 @@ def register_routes(app):
                     from auth import log_action as _log
                     _log(None, f"{action}_complete", target=gs.name if gs else short_name,
                          success=(rc == 0), detail=(out or err or "")[-300:])
+                    # Updated mods only load after a restart — apply it when empty, else flag pending.
+                    if action == "mods-update" and rc == 0 and gs:
+                        try:
+                            _apply_mod_restart(gs, remote)
+                        except Exception:
+                            app.logger.warning("post mods-update restart of %s failed",
+                                               gs.name, exc_info=True)
             except Exception:
                 app.logger.exception("background action failed")
 
@@ -2706,6 +2765,32 @@ def register_routes(app):
         finally:
             _full_backup_lock.release()
 
+    def _run_due_restarts():
+        """Servers with a pending mod-restart: restart each once it's empty (rechecked hourly), so a
+        mod change loads without kicking players. A stopped server clears its flag (it'll load on
+        the next start); an online-but-unqueryable server is left pending for the admin to force."""
+        with app.app_context():
+            pending = GameServer.query.filter_by(installed=True, restart_pending=True).all()
+            for gs in pending:
+                if not gs.remote_id:
+                    continue
+                try:
+                    status = get_server_status(gs.remote, gs)
+                    pc = sm_player_count(gs.remote, gs.short_name, gs.game_type, gs.port) \
+                        if status == "online" else None
+                    decision = mod_restart_decision(status, pc)
+                    if decision == "restart":
+                        run_as_game_user(gs.remote, gs.short_name, "restart 2>&1",
+                                         timeout=90, selfname=gs.lgsm_name)
+                        gs.restart_pending = False
+                        db.session.commit()
+                    elif decision == "idle":      # server stopped — will load on next start
+                        gs.restart_pending = False
+                        db.session.commit()
+                    # 'pending' (players on / unknown): leave the flag, retry next tick
+                except Exception:
+                    app.logger.debug("pending mod-restart of %s failed", gs.name, exc_info=True)
+
     @app.route("/api/panel/backup/full", methods=["POST"])
     @login_required
     @permission_required(SUPER_ADMIN)
@@ -3931,7 +4016,14 @@ def register_routes(app):
                     break
             msg = (f"Mod {which} finished." if ok
                    else f"Mod {which} reported an error: {tail[:200] or 'check the console'}")
-            return jsonify({"success": ok, "message": msg})
+            restart_pending = False
+            if ok:
+                # A mod change needs a restart to load — do it if empty, else flag it.
+                state, rmsg = _apply_mod_restart(gs, gs.remote)
+                restart_pending = (state == "pending")
+                if rmsg:
+                    msg = msg + " " + rmsg
+            return jsonify({"success": ok, "message": msg, "restart_pending": restart_pending})
         except Exception:
             return jsonify({"success": False, "message": _log_and_generic("mods action failed")}), 200
 
@@ -4270,6 +4362,7 @@ def register_routes(app):
             try:
                 bk.daily_backup_tick()
                 _run_due_game_backups()   # per-server schedules (each records its own last-run)
+                _run_due_restarts()       # apply deferred mod-restarts once servers empty
             except Exception:
                 app.logger.debug("backup tick failed", exc_info=True)
             time.sleep(3600)

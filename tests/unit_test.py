@@ -311,6 +311,22 @@ try:
 finally:
     sm.run_command = _orig_run8c
 
+# ── mod-restart decision (pure): restart when empty, defer when busy/unknown, force wins ──
+check("mod_restart_decision: stopped server -> idle (loads on next start)",
+      sm.mod_restart_decision("offline", None) == "idle")
+check("mod_restart_decision: online + empty -> restart now",
+      sm.mod_restart_decision("online", 0) == "restart")
+check("mod_restart_decision: online + players -> pending (don't kick)",
+      sm.mod_restart_decision("online", 3) == "pending")
+check("mod_restart_decision: online + unknown count -> pending (can't confirm empty)",
+      sm.mod_restart_decision("online", None) == "pending")
+check("mod_restart_decision: unknown status -> pending",
+      sm.mod_restart_decision("unknown", None) == "pending")
+check("mod_restart_decision: force restarts even with players online",
+      sm.mod_restart_decision("online", 5, force=True) == "restart")
+check("mod_restart_decision: force on a stopped server stays idle (nothing to restart)",
+      sm.mod_restart_decision("offline", 5, force=True) == "idle")
+
 # ── smart headroom: free space before a backup only when the disk is tight ──
 _hr_saved = (sm.list_game_backups, sm.backup_disk_info, sm.delete_game_backup)
 try:
