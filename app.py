@@ -85,7 +85,7 @@ from ssh_manager import (
     list_server_commands, server_live_metrics, remote_public_ip,
     remote_live_metrics, host_specs, pro_status, pro_attach,
     pro_service, pro_detach, set_autostart, install_game_cron, set_daily_restart,
-    list_cron_jobs, add_cron_job, update_cron_job, delete_cron_job,
+    list_cron_jobs, add_cron_job, update_cron_job, delete_cron_job, upgrade_managed_cron_tracking,
     install_game_dependencies, parse_missing_deps, detect_game_ports, lgsm_read_config,
     lgsm_write_config, lgsm_game_config, browse_dir, read_file,
     write_file, upload_file, delete_path,
@@ -3446,6 +3446,12 @@ def register_routes(app):
             return jsonify({"error": "Permission denied"}), 403
         if request.method == "GET":
             try:
+                # One-time, in-place upgrade so pre-existing managed jobs start reporting
+                # success/error (idempotent + state-preserving; never blocks the listing).
+                try:
+                    upgrade_managed_cron_tracking(gs.remote, gs.short_name, gs.lgsm_name)
+                except Exception:
+                    app.logger.debug("cron tracking upgrade skipped", exc_info=True)
                 return jsonify({"jobs": list_cron_jobs(gs.remote, gs.short_name, gs.lgsm_name)})
             except Exception:
                 return jsonify({"error": _log_and_generic("list_cron_jobs failed")}), 500

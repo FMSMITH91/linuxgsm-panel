@@ -892,6 +892,41 @@ def _read_cron_run_times(server, user):
     return times
 
 
+def upgrade_managed_cron_tracking(server, user, selfname=None):
+    """One-time, IN-PLACE upgrade: re-wrap existing panel-managed cron lines through the inline
+    recorder so their runs start reporting success/error — without changing schedules, on/off
+    state, or behaviour (each existing line is transformed, not re-derived from state, so it
+    can't accidentally toggle anything). Only the simple managed commands are wrapped; the
+    compound restart-when-empty check is left alone. No-op once everything is wrapped. Returns
+    True if it changed anything. Best-effort."""
+    selfname = selfname or user
+    base = f"/home/{user}/{selfname}"
+    flag = f"/home/{user}/.restart-pending"
+    simple_cores = {f"{base} {c}" for c in ("start", "monitor", "mods-update", "update", "update-lgsm")}
+    simple_cores.add(f"touch {flag}")
+    suffix = " > /dev/null 2>&1"
+    out, _, _ = run_command(server, f"crontab -u {user} -l 2>/dev/null", timeout=10, sudo=True)
+    new_lines, changed = [], False
+    for raw in (out or "").splitlines():
+        s = raw.strip()
+        sched, cmd = (None, None) if (not s or s.startswith("#")) else _split_cron_line(s)
+        if sched is None:
+            new_lines.append(raw)
+            continue
+        _disp, jid = _unwrap_cron_command(cmd)
+        core = cmd[:-len(suffix)].strip() if cmd.endswith(suffix) else cmd
+        if jid is None and core in simple_cores:   # unwrapped simple managed line → wrap it
+            new_lines.append(f"{sched} {_record_managed_cmd(user, core)}")
+            changed = True
+        else:
+            new_lines.append(raw)
+    if not changed:
+        return False
+    # Replace the whole crontab: drop everything (grep -vE '^' matches every line), re-add ours.
+    ok, _ = _rewrite_crontab(server, user, "-vE '^'", new_lines)
+    return ok
+
+
 def list_cron_jobs(server, user, selfname=None):
     """Read the game user's crontab as a list of jobs. Comment/blank lines are
     skipped. Each job: {raw, schedule, command, managed, last_run, ok, error}. `raw` is the

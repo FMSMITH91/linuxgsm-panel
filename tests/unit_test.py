@@ -103,6 +103,31 @@ check("managed cron: wrapped line still matches the maintenance remove-regex (no
 check("managed cron: unwrap recovers the core command + id",
       sm._unwrap_cron_command(_mrec)
       == ("/home/gm/gmodserver update", sm._cron_job_id("/home/gm/gmodserver update")))
+# upgrade_managed_cron_tracking rewraps EXISTING managed lines in place, leaving user jobs and
+# the compound restart-check untouched (so old installs get success/error without a reinstall).
+_upcap = {}
+_orig_rw_u = sm._rewrite_crontab
+_orig_run_u = sm.run_command
+try:
+    sm.run_command = lambda s, c, **k: (
+        "*/5 * * * * /home/gm/gmodserver monitor > /dev/null 2>&1\n"
+        "@reboot /home/gm/gmodserver start > /dev/null 2>&1\n"
+        "0 3 * * * /home/gm/backup.sh\n"
+        "10 * * * * [ -f /home/gm/.restart-pending ] && { /home/gm/gmodserver restart; }\n", "", 0)
+    sm._rewrite_crontab = lambda s, u, grep, add, extra_pre="": (_upcap.update(add=list(add)) or (True, "ok"))
+    _ures = sm.upgrade_managed_cron_tracking(None, "gm", "gmodserver")
+    _uadd = _upcap.get("add", [])
+    check("cron upgrade: reports a change", _ures is True)
+    check("cron upgrade: monitor line wrapped in place", any(
+        ln.startswith("*/5 * * * * ") and "/home/gm/gmodserver monitor" in ln and ".status" in ln for ln in _uadd))
+    check("cron upgrade: autostart line wrapped in place", any(
+        ln.startswith("@reboot ") and "/home/gm/gmodserver start" in ln and ".status" in ln for ln in _uadd))
+    check("cron upgrade: user job left untouched", "0 3 * * * /home/gm/backup.sh" in _uadd)
+    check("cron upgrade: compound restart-check left untouched", any(
+        ln.startswith("10 * * * * [ -f") and ".status" not in ln for ln in _uadd))
+finally:
+    sm._rewrite_crontab = _orig_rw_u
+    sm.run_command = _orig_run_u
 _orig_run3 = sm.run_command
 try:
     sm.run_command = lambda s, c, **k: ("aaaaaaaaaaaa\t0\t100\t142\t\n"
