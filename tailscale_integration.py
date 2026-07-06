@@ -206,7 +206,7 @@ def _get_tailscale_info() -> TailscaleInfo:
                 socket.getaddrinfo(test_name, 80, socket.AF_INET)
                 info.magic_dns_enabled = True
         except OSError:
-            pass   # name doesn't resolve → MagicDNS simply stays disabled
+            _log.debug("name doesn't resolve → MagicDNS simply stays disabled", exc_info=True)
 
     return info
 
@@ -307,7 +307,7 @@ def check_peer_reachability(host) -> dict:
             if m:
                 latency_ms = float(m.group(1))
     except Exception:  # nosec B110
-        pass  # ping unavailable or output unparseable — return reachable/latency as-is
+        _log.debug("ping unavailable or output unparseable — return reachable/latency as-is", exc_info=True)
     return {"reachable": reachable, "latency_ms": latency_ms}
 
 

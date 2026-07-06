@@ -1,7 +1,10 @@
 """Configuration management for LinuxGSM Panel."""
 import json
+import logging
 import os
 from pathlib import Path
+
+_log = logging.getLogger("panel.config")
 
 HERE = Path(__file__).parent
 DATA_DIR = HERE / "data"
@@ -73,7 +76,7 @@ def _chmod600(path):
     try:
         os.chmod(path, 0o600)
     except OSError:
-        pass
+        _log.debug("_chmod600: ignored non-fatal error", exc_info=True)
 
 
 def get_secret_key():
