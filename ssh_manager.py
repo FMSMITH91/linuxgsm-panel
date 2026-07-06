@@ -1074,11 +1074,20 @@ def run_game_backup(server, user, selfname=None, keep=3):
     ~/lgsm/backup/), then prune to the newest `keep`. Runs AS THE GAME USER, non-interactively
     (like a cron backup). Long-running — archives can be large. Returns (ok, message)."""
     selfname = selfname or user
+    # A crashed/killed/timed-out earlier backup can leave LinuxGSM's backup.lock behind, after
+    # which every backup refuses with "Lockfile found: Backup is currently running". Clear a
+    # STALE lock first — but only when no `./<selfname> backup` process is actually alive for this
+    # instance, so a genuinely-running backup is never interrupted. The "[.]" stops pgrep from
+    # matching its own command line.
+    precheck = (
+        f"LF=$(find /home/{user}/lgsm -maxdepth 3 -name '*backup.lock' 2>/dev/null | head -1); "
+        f'if [ -n "$LF" ] && ! pgrep -u {user} -f "[.]/{selfname} backup" >/dev/null 2>&1; then rm -f "$LF"; fi; '
+    )
     # LinuxGSM's `backup` prompts "server is running, continue? [y/N]" when the instance is
     # up; with a non-tty stdin that prompt defaults to NO and aborts, so a running server would
     # never get backed up. Feed a few "y"s so it proceeds either way (no prompt → the input is
     # simply ignored). The stream is bounded, so it still can't hang.
-    inner = f"cd /home/{user} && printf 'y\\ny\\ny\\n' | ./{selfname} backup"
+    inner = precheck + f"cd /home/{user} && printf 'y\\ny\\ny\\n' | ./{selfname} backup"
     out, err, rc = run_command(server, f"sudo -u {user} bash -c {_quote(inner)}",
                                timeout=3600, sudo=False)
     ok = rc == 0
