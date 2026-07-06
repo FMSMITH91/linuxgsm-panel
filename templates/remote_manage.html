@@ -211,6 +211,7 @@
       <div class="d-flex align-items-center gap-1">
         <label class="form-label small mb-0" for="fb-interval">Every</label>
         <select id="fb-interval" class="form-select form-select-sm" style="width:auto;" onchange="saveBackupSettings()">
+          <option value="1">Day</option>
           <option value="7">Week</option>
           <option value="14">2 weeks</option>
           <option value="30">Month</option>
@@ -223,10 +224,14 @@
           <option value="2">2</option>
           <option value="3">3</option>
           <option value="5">5</option>
+          <option value="7">7</option>
+          <option value="14">14</option>
+          <option value="30">30</option>
         </select>
       </div>
       <span id="fb-status" class="small text-secondary"></span>
     </div>
+    <div id="fb-disk" class="small text-secondary mb-1"></div>
     <div id="fb-summary" class="small text-info-emphasis mb-2"></div>
     <div id="fb-games" class="small"></div>
   </div>
@@ -1031,6 +1036,16 @@ function loadBackups(){
     var fi=document.getElementById('fb-interval');
     if(fi){ fi.value=String(autoOn?f.interval_days:7); fi.disabled=!autoOn; }
     var fk=document.getElementById('fb-keep'); if(fk) fk.value=String(f.keep||2);
+    window._bkDisk=d.disk||{free:0,total:0,backup_bytes:0,est_cycle:0};
+    var fdk=document.getElementById('fb-disk');
+    if(fdk){
+      var dk=window._bkDisk;
+      if(dk.total>0){
+        var pct=Math.round((dk.total-dk.free)/dk.total*100);
+        fdk.innerHTML='<i class="bi bi-hdd"></i> Disk: <strong>'+bkFmtBytes(dk.free)+'</strong> free of '+bkFmtBytes(dk.total)
+          +' ('+pct+'% used). Game backups currently use '+bkFmtBytes(dk.backup_bytes||0)+'.';
+      } else { fdk.textContent=''; }
+    }
     fbSummary();
     var fnow=document.getElementById('fb-now'); if(fnow) fnow.disabled = !!d.full_running;
     var fs=document.getElementById('fb-status');
@@ -1083,19 +1098,44 @@ function fbSummary(){
   var el=document.getElementById('fb-summary'); if(!el) return;
   var on=document.getElementById('fb-auto-enabled').checked;
   var keep=parseInt(document.getElementById('fb-keep').value,10)||1;
-  var keepTxt=(keep===1?'only the latest backup':'the '+keep+' most recent backups');
+  var dk=window._bkDisk||{free:0,est_cycle:0};
+  var cycle=dk.est_cycle||0;        // size of one full backup run (all servers)
+  var free=dk.free||0;
+  var projected=cycle*keep;         // rough space the retained backups will occupy
+  function fmt(b){ return (typeof bkFmtBytes==='function')?bkFmtBytes(b):(b+' B'); }
+  var parts=[];
+
   if(!on){
-    el.innerHTML='<i class="bi bi-info-circle"></i> Automatic backups are <strong>off</strong> — nothing runs on a schedule. '
-      + 'You can still use “Back up game servers now” any time; when you do, '+keepTxt+' per server '+(keep===1?'is':'are')+' kept.';
-    return;
+    parts.push('<i class="bi bi-info-circle"></i> Automatic backups are <strong>off</strong> — nothing runs on a schedule. '
+      +'Use “Back up game servers now” for a one-off; '+(keep===1?'only the latest backup':'the '+keep+' most recent backups')
+      +' per server '+(keep===1?'is':'are')+' kept.');
+    el.innerHTML=parts.join('<br>'); return;
   }
+
   var days=parseInt(document.getElementById('fb-interval').value,10)||7;
-  var every=(days===7?'once a week':(days===14?'once every 2 weeks':'once a month'));
-  var span=days*keep, spanTxt;
-  if(span%30===0){ var mo=span/30; spanTxt='about '+mo+' month'+(mo===1?'':'s'); }
-  else { var wk=Math.round(span/7); spanTxt='about '+wk+' week'+(wk===1?'':'s'); }
-  el.innerHTML='<i class="bi bi-info-circle"></i> Each server is backed up <strong>'+every+'</strong>, keeping <strong>'+keepTxt
-    +'</strong> (older ones are deleted) — so you keep '+spanTxt+' of history per server.';
+  var every=(days===1?'every day':(days===7?'once a week':(days===14?'once every 2 weeks':'once a month')));
+  var s='<i class="bi bi-info-circle"></i> Every installed server is backed up <strong>'+every+'</strong>. '
+    +'The <strong>'+keep+'</strong> newest '+(keep===1?'backup is':'backups are')+' kept per server; older ones are deleted automatically.';
+  if(cycle>0){ s+=' At the current size that\'s up to <strong>'+fmt(projected)+'</strong> of backups'+(free>0?' ('+fmt(free)+' free now)':'')+'.'; }
+  parts.push(s);
+
+  if(days===1){
+    parts.push('<span class="text-warning"><i class="bi bi-exclamation-triangle"></i> Daily full backups of game files eat disk fast — keep a low “keep” count unless you have lots of free space.</span>');
+  }
+  if(cycle>0 && free>0){
+    if(projected>free){
+      parts.push('<span class="text-danger"><i class="bi bi-exclamation-octagon"></i> This needs more than your free disk ('+fmt(free)+') — backups will fail once it fills up.</span>');
+    } else if(projected>free*0.5){
+      parts.push('<span class="text-warning"><i class="bi bi-exclamation-triangle"></i> This would use over half your free disk.</span>');
+    }
+    var recKeep=Math.max(1, Math.floor(free*0.4/cycle));
+    if(recKeep<keep){
+      parts.push('<span class="text-secondary"><i class="bi bi-lightbulb"></i> Recommended: keep ≤ <strong>'+recKeep+'</strong> at ~'+fmt(cycle)+' per run (leaves comfortable headroom).</span>');
+    }
+  } else if(cycle===0){
+    parts.push('<span class="text-secondary">Run a backup once and this will estimate the space each cycle uses and recommend a safe “keep”.</span>');
+  }
+  el.innerHTML=parts.join('<br>');
 }
 function saveBackupSettings(){
   var enabled=document.getElementById('bk-enabled').checked;

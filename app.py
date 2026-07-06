@@ -88,7 +88,7 @@ from ssh_manager import (
     pro_service, pro_detach, set_autostart, install_game_cron, set_daily_restart,
     list_cron_jobs, add_cron_job, update_cron_job, delete_cron_job, upgrade_managed_cron_tracking,
     run_cron_job_now, run_game_backup, list_game_backups,
-    delete_game_backup, stream_game_backup,
+    delete_game_backup, stream_game_backup, backup_disk_info,
     mods_available, mods_installed, mods_action,
     install_game_dependencies, parse_missing_deps, detect_game_ports, lgsm_read_config,
     lgsm_write_config, lgsm_game_config, lgsm_get_values, browse_dir, read_file,
@@ -2691,6 +2691,10 @@ def register_routes(app):
         and each installed game server's LinuxGSM backups."""
         try:
             games = []
+            backup_bytes = 0   # total size of all existing game backups
+            est_cycle = 0      # estimated size of ONE full backup run (all servers), from newest each
+            disk = {"free": 0, "total": 0}
+            disk_done = False
             for gs in GameServer.query.filter_by(installed=True).all():
                 if not gs.remote_id:
                     continue
@@ -2698,11 +2702,21 @@ def register_routes(app):
                     gb = list_game_backups(gs.remote, gs.short_name)
                 except Exception:
                     gb = []
+                backup_bytes += sum(b.get("size", 0) for b in gb)
+                est_cycle += (gb[0]["size"] if gb else 0)  # newest backup ≈ one backup of this server
                 games.append({"id": gs.id, "name": gs.name, "backups": gb,
                               "status": _game_backup_status.get(gs.id)})
+                if not disk_done:
+                    try:
+                        disk = backup_disk_info(gs.remote, gs.short_name)
+                        disk_done = True
+                    except Exception:
+                        pass
             return jsonify({"backups": bk.list_backups(), "settings": bk.get_settings(),
                             "full": bk.get_full_settings(), "full_running": _full_backup_lock.locked(),
-                            "games": games})
+                            "games": games,
+                            "disk": {"free": disk["free"], "total": disk["total"],
+                                     "backup_bytes": backup_bytes, "est_cycle": est_cycle}})
         except Exception:
             return jsonify({"error": _log_and_generic("list backups failed")}), 200
 

@@ -1073,6 +1073,21 @@ def prune_game_backups(server, user, keep=3):
     run_command(server, f"sudo -u {user} bash -c {_quote(cmd)}", timeout=30, sudo=False)
 
 
+def backup_disk_info(server, user):
+    """Free/total bytes of the filesystem that holds this game user's LinuxGSM backups
+    (~/lgsm/backup lives under the home dir). Best-effort — returns zeros on error."""
+    out, _, _ = run_command(server, "df -PB1 %s" % _quote("/home/%s" % user), timeout=15, sudo=False)
+    lines = [ln for ln in (out or "").splitlines() if ln.strip()]
+    if len(lines) >= 2:
+        parts = lines[-1].split()
+        if len(parts) >= 4:
+            try:
+                return {"free": int(parts[3]), "total": int(parts[1])}
+            except ValueError:
+                pass
+    return {"free": 0, "total": 0}
+
+
 # Game-backup file names are "<selfname>-YYYY-MM-DD-HHMMSS.tar.<ext>" — a strict shape we
 # require before ever touching a path (callers ALSO check the name is in the real backup list).
 _GAME_BACKUP_NAME = re.compile(r"^[A-Za-z0-9._-]+\.tar\.[A-Za-z0-9.]+$")
