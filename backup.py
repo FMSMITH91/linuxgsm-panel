@@ -258,3 +258,57 @@ def set_settings(enabled=None, keep_days=None):
             _log.debug("ignored invalid keep_days", exc_info=True)
     save_config(cfg)
     return get_settings()
+
+
+# ── Full backups (game server files, via LinuxGSM's own backup) ──────────────
+# Space-heavy, so they run on their own (longer) interval and keep only a few per server.
+DEFAULT_FULL_INTERVAL = 7   # days; 0 = off
+DEFAULT_FULL_KEEP = 2       # LinuxGSM backups kept per game server
+
+
+def get_full_settings():
+    cfg = load_config()
+
+    def _int(k, d):
+        try:
+            return int(cfg.get(k, d))
+        except (TypeError, ValueError):
+            return d
+    return {
+        "interval_days": max(0, min(365, _int("full_backup_interval_days", DEFAULT_FULL_INTERVAL))),
+        "keep": max(1, min(30, _int("full_backup_keep", DEFAULT_FULL_KEEP))),
+        "last": _int("full_backup_last", 0),
+        "summary": cfg.get("full_backup_summary", ""),
+    }
+
+
+def set_full_settings(interval_days=None, keep=None):
+    cfg = load_config()
+    if interval_days is not None:
+        try:
+            cfg["full_backup_interval_days"] = max(0, min(365, int(interval_days)))
+        except (TypeError, ValueError):
+            _log.debug("ignored invalid full interval", exc_info=True)
+    if keep is not None:
+        try:
+            cfg["full_backup_keep"] = max(1, min(30, int(keep)))
+        except (TypeError, ValueError):
+            _log.debug("ignored invalid full keep", exc_info=True)
+    save_config(cfg)
+    return get_full_settings()
+
+
+def record_full_backup(summary):
+    """Persist the time + one-line summary of the most recent full backup."""
+    cfg = load_config()
+    cfg["full_backup_last"] = int(time.time())
+    cfg["full_backup_summary"] = str(summary)[:300]
+    save_config(cfg)
+
+
+def full_backup_due():
+    """True if scheduled full backups are on and one is due (interval elapsed since the last)."""
+    s = get_full_settings()
+    if s["interval_days"] <= 0:
+        return False
+    return time.time() - s["last"] >= s["interval_days"] * 86400

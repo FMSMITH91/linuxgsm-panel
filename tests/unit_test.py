@@ -210,6 +210,42 @@ check("backup: prune drops an old DAILY backup but keeps the manual one",
       _bk.prune_backups(7) == 1 and all(b["kind"] != "daily" for b in _bk.list_backups()))
 _sh2.rmtree(_bktmp, ignore_errors=True)
 
+# ── full (game-file) backups: per-server LinuxGSM backup + settings/due ──
+_orig_run7 = sm.run_command
+try:
+    sm.run_command = lambda s, c, **k: (
+        "gmodserver-2026.tar.gz\t1048576\t1720000000\nold.tar.gz\t500\t1719000000\n", "", 0)
+    _gbl = sm.list_game_backups(None, "gm")
+    check("game backups: parsed newest-first with sizes",
+          len(_gbl) == 2 and _gbl[0]["name"] == "gmodserver-2026.tar.gz" and _gbl[0]["size"] == 1048576)
+finally:
+    sm.run_command = _orig_run7
+_cap7 = {"cmds": []}
+_orig_run8 = sm.run_command
+try:
+    sm.run_command = lambda s, c, **k: (_cap7["cmds"].append(c), ("", "", 0))[1]
+    _gok, _ = sm.run_game_backup(None, "gm", "gmodserver", 2)
+    _joined = " ".join(_cap7["cmds"])
+    check("run_game_backup: runs LinuxGSM backup as the game user",
+          _gok is True and "sudo -u gm bash -c" in _joined and "./gmodserver backup" in _joined)
+    check("run_game_backup: prunes to keep N (keep=2 -> tail +3)", "tail -n +3" in _joined)
+finally:
+    sm.run_command = _orig_run8
+
+_fake_cfg = {}
+_orig_bkload, _orig_bksave = _bk.load_config, _bk.save_config
+_bk.load_config = lambda: dict(_fake_cfg); _bk.save_config = lambda c: _fake_cfg.update(c)
+try:
+    _fs = _bk.set_full_settings(interval_days=7, keep=2)
+    check("full backup: settings save round-trip", _fs["interval_days"] == 7 and _fs["keep"] == 2)
+    check("full backup: due when never run", _bk.full_backup_due() is True)
+    _bk.record_full_backup("2 server(s) backed up")
+    check("full backup: not due right after a run", _bk.full_backup_due() is False)
+    _bk.set_full_settings(interval_days=0)
+    check("full backup: interval 0 = off (never due)", _bk.full_backup_due() is False)
+finally:
+    _bk.load_config, _bk.save_config = _orig_bkload, _orig_bksave
+
 # line splitting
 eq("cron: split 5-field", sm._split_cron_line("0 3 * * * /home/gm/b.sh a"), ("0 3 * * *", "/home/gm/b.sh a"))
 eq("cron: split @shortcut", sm._split_cron_line("@reboot /home/gm/x start"), ("@reboot", "/home/gm/x start"))

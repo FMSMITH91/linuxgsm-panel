@@ -1041,6 +1041,54 @@ def delete_cron_job(server, user, old_raw, selfname=None):
     return _rewrite_crontab(server, user, f"-vxF {_quote(old_raw)}", [])
 
 
+def list_game_backups(server, user):
+    """A game server's LinuxGSM backups (~/lgsm/backup/*.tar.gz): [{name, size, created}],
+    newest first. Read as the game user; best-effort (empty on error)."""
+    bdir = "/home/%s/lgsm/backup" % user
+    cmd = ('for f in %s/*.tar.gz; do [ -e "$f" ] || continue; '
+           'printf "%%s\\t%%s\\t%%s\\n" "$(basename "$f")" "$(stat -c%%s "$f")" "$(stat -c%%Y "$f")"; '
+           'done') % bdir
+    out, _, _ = run_command(server, f"sudo -u {user} bash -c {_quote(cmd)}", timeout=20, sudo=False)
+    res = []
+    for line in (out or "").splitlines():
+        parts = line.split("\t")
+        if len(parts) >= 3:
+            try:
+                res.append({"name": parts[0], "size": int(parts[1]), "created": int(parts[2])})
+            except ValueError:
+                continue
+    res.sort(key=lambda b: b["created"], reverse=True)
+    return res
+
+
+def prune_game_backups(server, user, keep=3):
+    """Keep only the newest `keep` LinuxGSM backups for a game server; delete the rest."""
+    bdir = "/home/%s/lgsm/backup" % user
+    keep = max(1, int(keep))
+    cmd = "ls -1t %s/*.tar.gz 2>/dev/null | tail -n +%d | xargs -r rm -f" % (bdir, keep + 1)
+    run_command(server, f"sudo -u {user} bash -c {_quote(cmd)}", timeout=30, sudo=False)
+
+
+def run_game_backup(server, user, selfname=None, keep=3):
+    """Run LinuxGSM's own `backup` for a game instance (archives serverfiles into
+    ~/lgsm/backup/), then prune to the newest `keep`. Runs AS THE GAME USER, non-interactively
+    (like a cron backup). Long-running — archives can be large. Returns (ok, message)."""
+    selfname = selfname or user
+    # `< /dev/null` guarantees a non-tty stdin so LinuxGSM runs the backup non-interactively
+    # (like cron) and can never hang waiting on a confirmation prompt.
+    inner = f"cd /home/{user} && ./{selfname} backup < /dev/null"
+    out, err, rc = run_command(server, f"sudo -u {user} bash -c {_quote(inner)}",
+                               timeout=3600, sudo=False)
+    ok = rc == 0
+    try:
+        prune_game_backups(server, user, keep)
+    except Exception:
+        _log.debug("game backup prune failed", exc_info=True)
+    if ok:
+        return True, "Backed up"
+    return False, (err or out or "backup failed")[-200:]
+
+
 def list_server_commands(server, user, selfname=None):
     """Run the LinuxGSM instance script with no arguments to read its command list,
     which varies per game. Returns a list of {"cmd", "short", "desc"} dicts."""

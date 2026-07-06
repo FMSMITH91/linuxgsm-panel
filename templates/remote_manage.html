@@ -190,6 +190,40 @@
         </table>
       </div>
     </div>
+
+    <!-- Full (game server files) backups -->
+    <hr class="my-3">
+    <div class="d-flex justify-content-between align-items-center flex-wrap gap-2 mb-1">
+      <strong class="small"><i class="bi bi-hdd-stack"></i> Game server files (full backup)</strong>
+      <button class="btn btn-sm btn-outline-success" id="fb-now" onclick="runFullBackup(this)"><i class="bi bi-play-circle"></i> Back up game servers now</button>
+    </div>
+    <p class="small text-secondary mb-2">
+      Uses LinuxGSM's own backup per installed server (stored on each host under
+      <code>~/lgsm/backup</code>, browsable from Files &amp; Config). These can be large, so they
+      run on a longer schedule and only the newest few per server are kept.
+    </p>
+    <div class="d-flex gap-3 flex-wrap align-items-center mb-2">
+      <div class="d-flex align-items-center gap-1">
+        <label class="form-label small mb-0" for="fb-interval">Automatic</label>
+        <select id="fb-interval" class="form-select form-select-sm" style="width:auto;" onchange="saveBackupSettings()">
+          <option value="0">Off</option>
+          <option value="7">Weekly</option>
+          <option value="14">Every 2 weeks</option>
+          <option value="30">Monthly</option>
+        </select>
+      </div>
+      <div class="d-flex align-items-center gap-1">
+        <label class="form-label small mb-0" for="fb-keep">Keep per server</label>
+        <select id="fb-keep" class="form-select form-select-sm" style="width:auto;" onchange="saveBackupSettings()">
+          <option value="1">1</option>
+          <option value="2">2</option>
+          <option value="3">3</option>
+          <option value="5">5</option>
+        </select>
+      </div>
+      <span id="fb-status" class="small text-secondary"></span>
+    </div>
+    <div id="fb-games" class="small"></div>
   </div>
 </div>
 
@@ -985,6 +1019,22 @@ function loadBackups(){
     tb.innerHTML=rows;
     document.getElementById('bk-loading').style.display='none';
     document.getElementById('bk-table-wrap').style.display='';
+    // ── Full (game server files) backup section ──
+    var f=d.full||{};
+    var fi=document.getElementById('fb-interval'); if(fi) fi.value=String(f.interval_days!=null?f.interval_days:7);
+    var fk=document.getElementById('fb-keep'); if(fk) fk.value=String(f.keep||2);
+    var fnow=document.getElementById('fb-now'); if(fnow) fnow.disabled = !!d.full_running;
+    var fs=document.getElementById('fb-status');
+    if(fs){ fs.textContent = d.full_running ? 'Running now…' : (f.last ? ('Last: '+bkAgo(f.last)+(f.summary?' — '+f.summary:'')) : 'Never run'); }
+    var fg=document.getElementById('fb-games');
+    if(fg){
+      var gh='';
+      (d.games||[]).forEach(function(g){
+        var items=(g.backups||[]).map(function(b){ return escapeHtml(b.name)+' <span class="text-secondary">('+bkFmtBytes(b.size)+', '+bkAgo(b.created)+')</span>'; }).join('<br>');
+        gh += '<div class="mb-1"><strong>'+escapeHtml(g.name)+'</strong>: '+(items||'<span class="text-secondary">no backups yet</span>')+'</div>';
+      });
+      fg.innerHTML = (d.games||[]).length ? gh : '<span class="text-secondary">No installed game servers.</span>';
+    }
   }).catch(function(){ var l=document.getElementById('bk-loading'); if(l) l.innerHTML='<span class="text-danger">Could not load backups.</span>'; });
 }
 function createBackup(btn){
@@ -998,8 +1048,20 @@ function createBackup(btn){
 function saveBackupSettings(){
   var enabled=document.getElementById('bk-enabled').checked;
   var keep=parseInt(document.getElementById('bk-keep').value,10);
-  fetch(MOUNT+'/api/panel/backup/settings',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({enabled:enabled,keep_days:keep})})
+  var fi=parseInt(document.getElementById('fb-interval').value,10);
+  var fk=parseInt(document.getElementById('fb-keep').value,10);
+  fetch(MOUNT+'/api/panel/backup/settings',{method:'POST',headers:{'Content-Type':'application/json'},
+        body:JSON.stringify({enabled:enabled,keep_days:keep,full_interval_days:fi,full_keep:fk})})
     .then(r=>r.json()).then(function(){ bkMsg('✓ Saved','text-success'); }).catch(function(){ bkMsg('✗ Could not save','text-danger'); });
+}
+function runFullBackup(btn){
+  if(!confirm('Back up all installed game servers now?\n\nThis runs LinuxGSM\'s backup on each server — it can take a while and use disk space.')) return;
+  if(btn) btn.disabled=true;
+  bkMsg('Starting full backup…','text-secondary');
+  fetch(MOUNT+'/api/panel/backup/full',{method:'POST'}).then(r=>r.json()).then(function(d){
+    bkMsg((d.success?'✓ ':'✗ ')+(d.message||''), d.success?'text-success':'text-danger');
+    [4000,15000,45000].forEach(function(ms){ setTimeout(loadBackups, ms); });   // refresh as it runs
+  }).catch(function(){ bkMsg('✗ Could not start','text-danger'); if(btn) btn.disabled=false; });
 }
 function deleteBackup(name,btn){
   if(!confirm('Delete this backup?\n\n'+name)) return;

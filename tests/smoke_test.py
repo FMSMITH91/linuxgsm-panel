@@ -175,11 +175,16 @@ try:
 
     # ── Backups: list + settings + name validation (no real backup/restart triggered) ──
     bl = c.get("/api/panel/backups")
+    _blj = bl.get_json() or {}
     check("backups: list endpoint returns backups + settings",
-          bl.status_code == 200 and "settings" in (bl.get_json() or {}) and "backups" in (bl.get_json() or {}))
-    bset = c.post("/api/panel/backup/settings", json={"enabled": True, "keep_days": 7})
-    check("backups: settings save round-trips keep_days",
-          (bset.get_json() or {}).get("settings", {}).get("keep_days") == 7)
+          bl.status_code == 200 and "settings" in _blj and "backups" in _blj)
+    check("backups: response includes full-backup settings + per-server games",
+          "full" in _blj and "games" in _blj)
+    bset = c.post("/api/panel/backup/settings", json={"enabled": True, "keep_days": 7,
+                                                      "full_interval_days": 7, "full_keep": 2})
+    check("backups: settings save round-trips keep_days + full settings",
+          (bset.get_json() or {}).get("settings", {}).get("keep_days") == 7
+          and (bset.get_json() or {}).get("full", {}).get("interval_days") == 7)
     bdel = c.post("/api/panel/backup/delete", json={"name": "../../etc/passwd"})
     check("backups: delete rejects a traversal name", not (bdel.get_json() or {}).get("success"))
     bres = c.post("/api/panel/backup/restore", json={"name": "nope.tar.gz"})

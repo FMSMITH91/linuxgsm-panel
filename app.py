@@ -87,7 +87,7 @@ from ssh_manager import (
     remote_live_metrics, host_specs, pro_status, pro_attach,
     pro_service, pro_detach, set_autostart, install_game_cron, set_daily_restart,
     list_cron_jobs, add_cron_job, update_cron_job, delete_cron_job, upgrade_managed_cron_tracking,
-    run_cron_job_now,
+    run_cron_job_now, run_game_backup, list_game_backups,
     install_game_dependencies, parse_missing_deps, detect_game_ports, lgsm_read_config,
     lgsm_write_config, lgsm_game_config, browse_dir, read_file,
     write_file, upload_file, delete_path,
@@ -130,6 +130,9 @@ _bootstrap_lock = threading.Lock()
 # plain dict + lock is fine). Read by /api/server/<id>/install-status.
 _install_jobs = {}
 _install_lock = threading.Lock()
+
+# Only one full (game-file) backup at a time — they're slow and space-heavy.
+_full_backup_lock = threading.Lock()
 
 
 # A token unique to THIS panel process — it changes only when the panel actually restarts.
@@ -2510,13 +2513,68 @@ def register_routes(app):
                         "message": f"Panel binding to {new_bind}:{new_port}. Restarting…{fw_note}"})
 
     # ── Panel backup & restore (superadmin) ──────────────────────
+    def _run_full_backup():
+        """Run LinuxGSM's backup for every installed game server (space-heavy), pruning each to
+        the configured keep-count. Records a one-line outcome. Background; only one at a time."""
+        if not _full_backup_lock.acquire(blocking=False):
+            return
+        try:
+            keep = bk.get_full_settings()["keep"]
+            with app.app_context():
+                targets = [(gs.remote, gs.short_name, gs.lgsm_name, gs.name)
+                           for gs in GameServer.query.filter_by(installed=True).all() if gs.remote_id]
+            ok_n = fail_n = 0
+            for remote, short, lgsm, gname in targets:
+                try:
+                    ok, _ = run_game_backup(remote, short, lgsm, keep)
+                    ok_n += 1 if ok else 0
+                    fail_n += 0 if ok else 1
+                except Exception:
+                    fail_n += 1
+                    app.logger.warning("full backup of %s failed", gname, exc_info=True)
+            bk.record_full_backup("%d server(s) backed up%s" %
+                                  (ok_n, (", %d failed" % fail_n) if fail_n else ""))
+        except Exception:
+            app.logger.warning("full backup run failed", exc_info=True)
+        finally:
+            _full_backup_lock.release()
+
+    def _trigger_full_backup():
+        if _full_backup_lock.locked():
+            return False
+        threading.Thread(target=_run_full_backup, daemon=True).start()
+        return True
+
+    @app.route("/api/panel/backup/full", methods=["POST"])
+    @login_required
+    @permission_required(SUPER_ADMIN)
+    def api_panel_backup_full():
+        """Kick off a full (game-file) backup of all installed servers in the background."""
+        started = _trigger_full_backup()
+        log_action(current_user, "panel_full_backup", success=True)
+        return jsonify({"success": True, "running": True,
+                        "message": ("Full backup started — this can take a while for large servers."
+                                    if started else "A full backup is already running.")})
+
     @app.route("/api/panel/backups")
     @login_required
     @permission_required(SUPER_ADMIN)
     def api_panel_backups():
-        """List backups + the retention settings."""
+        """List panel backups + retention settings, plus full (game-file) backup settings/status
+        and each installed game server's LinuxGSM backups."""
         try:
-            return jsonify({"backups": bk.list_backups(), "settings": bk.get_settings()})
+            games = []
+            for gs in GameServer.query.filter_by(installed=True).all():
+                if not gs.remote_id:
+                    continue
+                try:
+                    gb = list_game_backups(gs.remote, gs.short_name)
+                except Exception:
+                    gb = []
+                games.append({"name": gs.name, "backups": gb})
+            return jsonify({"backups": bk.list_backups(), "settings": bk.get_settings(),
+                            "full": bk.get_full_settings(), "full_running": _full_backup_lock.locked(),
+                            "games": games})
         except Exception:
             return jsonify({"error": _log_and_generic("list backups failed")}), 200
 
@@ -2570,8 +2628,10 @@ def register_routes(app):
     def api_panel_backup_settings():
         data = request.get_json(silent=True) or {}
         s = bk.set_settings(enabled=data.get("enabled"), keep_days=data.get("keep_days"))
+        full = bk.set_full_settings(interval_days=data.get("full_interval_days"),
+                                    keep=data.get("full_keep"))
         log_action(current_user, "panel_backup_settings", detail=str(s))
-        return jsonify({"success": True, "settings": s})
+        return jsonify({"success": True, "settings": s, "full": full})
 
     @app.route("/api/panel/debug-report")
     @login_required
@@ -3784,8 +3844,10 @@ def register_routes(app):
         while True:
             try:
                 bk.daily_backup_tick()
+                if bk.full_backup_due():
+                    _trigger_full_backup()   # marks itself done via record_full_backup()
             except Exception:
-                app.logger.debug("daily backup tick failed", exc_info=True)
+                app.logger.debug("backup tick failed", exc_info=True)
             time.sleep(3600)
     _supervise("backup-ticker", backup_ticker)
 
