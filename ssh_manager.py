@@ -1042,10 +1042,12 @@ def delete_cron_job(server, user, old_raw, selfname=None):
 
 
 def list_game_backups(server, user):
-    """A game server's LinuxGSM backups (~/lgsm/backup/*.tar.gz): [{name, size, created}],
-    newest first. Read as the game user; best-effort (empty on error)."""
+    """A game server's LinuxGSM backups (~/lgsm/backup/*.tar.*): [{name, size, created}],
+    newest first. Read as the game user; best-effort (empty on error). LinuxGSM compresses with
+    zstd when available (.tar.zst), else gzip (.tar.gz) — match all archive types like LinuxGSM's
+    own tooling does, not just .tar.gz."""
     bdir = "/home/%s/lgsm/backup" % user
-    cmd = ('for f in %s/*.tar.gz; do [ -e "$f" ] || continue; '
+    cmd = ('for f in %s/*.tar.*; do [ -e "$f" ] || continue; '
            'printf "%%s\\t%%s\\t%%s\\n" "$(basename "$f")" "$(stat -c%%s "$f")" "$(stat -c%%Y "$f")"; '
            'done') % bdir
     out, _, _ = run_command(server, f"sudo -u {user} bash -c {_quote(cmd)}", timeout=20, sudo=False)
@@ -1062,10 +1064,12 @@ def list_game_backups(server, user):
 
 
 def prune_game_backups(server, user, keep=3):
-    """Keep only the newest `keep` LinuxGSM backups for a game server; delete the rest."""
+    """Keep only the newest `keep` LinuxGSM backups for a game server; delete the rest.
+    Matches every archive type LinuxGSM produces (.tar.zst / .tar.gz / …), not just .tar.gz —
+    otherwise large zstd backups would never be pruned and could fill the disk."""
     bdir = "/home/%s/lgsm/backup" % user
     keep = max(1, int(keep))
-    cmd = "ls -1t %s/*.tar.gz 2>/dev/null | tail -n +%d | xargs -r rm -f" % (bdir, keep + 1)
+    cmd = "ls -1t %s/*.tar.* 2>/dev/null | tail -n +%d | xargs -r rm -f" % (bdir, keep + 1)
     run_command(server, f"sudo -u {user} bash -c {_quote(cmd)}", timeout=30, sudo=False)
 
 
@@ -1083,10 +1087,10 @@ def run_game_backup(server, user, selfname=None, keep=3):
     precheck = (
         f"find /home/{user} -maxdepth 4 -name '*backup.lock' -mmin +5 -delete 2>/dev/null; "
     )
-    # LinuxGSM's `backup` prompts "server is running, continue? [y/N]" when the instance is
-    # up; with a non-tty stdin that prompt defaults to NO and aborts, so a running server would
-    # never get backed up. Feed a few "y"s so it proceeds either way (no prompt → the input is
-    # simply ignored). The stream is bounded, so it still can't hang.
+    # When the instance is running, LinuxGSM's `backup` warns + counts down, then STOPS the
+    # server, archives it, and RESTARTS it (verified on a live box: ~1.5 min outage for a 6.5G
+    # GMod install). It doesn't strictly need a y/N answer, but we feed a few harmless "y"s as a
+    # safety net for any version that does prompt. The stream is bounded, so it can't hang.
     inner = precheck + f"cd /home/{user} && printf 'y\\ny\\ny\\n' | ./{selfname} backup"
     out, err, rc = run_command(server, f"sudo -u {user} bash -c {_quote(inner)}",
                                timeout=3600, sudo=False)

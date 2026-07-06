@@ -200,7 +200,8 @@
     <p class="small text-secondary mb-2">
       Uses LinuxGSM's own backup per installed server (stored on each host under
       <code>~/lgsm/backup</code>, browsable from Files &amp; Config). These can be large, so they
-      run on a longer schedule and only the newest few per server are kept.
+      run on a longer schedule and only the newest few per server are kept. A running server is
+      briefly stopped and restarted while it's archived.
     </p>
     <div class="d-flex gap-3 flex-wrap align-items-center mb-2">
       <div class="d-flex align-items-center gap-1">
@@ -1068,7 +1069,7 @@ function saveBackupSettings(){
     .then(r=>r.json()).then(function(){ bkMsg('✓ Saved','text-success'); }).catch(function(){ bkMsg('✗ Could not save','text-danger'); });
 }
 function runFullBackup(btn){
-  if(!confirm('Back up all installed game servers now?\n\nThis runs LinuxGSM\'s backup on each server — it can take a while and use disk space.')) return;
+  if(!confirm('Back up all installed game servers now?\n\nThis runs LinuxGSM\'s backup on each server — any that are running will be briefly STOPPED and restarted for their backup (a short outage each). It can take a while and use disk space.')) return;
   if(btn) btn.disabled=true;
   bkMsg('Starting full backup…','text-secondary');
   fetch(MOUNT+'/api/panel/backup/full',{method:'POST'}).then(r=>r.json()).then(function(d){
@@ -1077,7 +1078,7 @@ function runFullBackup(btn){
   }).catch(function(){ bkMsg('✗ Could not start','text-danger'); if(btn) btn.disabled=false; });
 }
 function backupOneGame(id,btn){
-  if(!confirm('Back up this game server now?\n\nLinuxGSM will archive its files into ~/lgsm/backup — this can take a while and use disk space.')) return;
+  if(!confirm('Back up this game server now?\n\nLinuxGSM archives its files into ~/lgsm/backup. Note: if the server is running it will be briefly STOPPED and then restarted for the backup (a short outage), and the archive can be large.')) return;
   if(btn) btn.disabled=true;
   bkMsg('Starting backup…','text-secondary');
   fetch(MOUNT+'/api/panel/backup/game/'+id,{method:'POST'}).then(r=>r.json()).then(function(d){
