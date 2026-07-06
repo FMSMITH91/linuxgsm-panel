@@ -204,13 +204,16 @@
       briefly stopped and restarted while it's archived.
     </p>
     <div class="d-flex gap-3 flex-wrap align-items-center mb-2">
+      <div class="form-check form-switch mb-0">
+        <input class="form-check-input" type="checkbox" id="fb-auto-enabled" onchange="onFbAutoToggle()">
+        <label class="form-check-label small" for="fb-auto-enabled">Automatic backups</label>
+      </div>
       <div class="d-flex align-items-center gap-1">
-        <label class="form-label small mb-0" for="fb-interval">Automatic</label>
+        <label class="form-label small mb-0" for="fb-interval">Every</label>
         <select id="fb-interval" class="form-select form-select-sm" style="width:auto;" onchange="saveBackupSettings()">
-          <option value="0">Off</option>
-          <option value="7">Weekly</option>
-          <option value="14">Every 2 weeks</option>
-          <option value="30">Monthly</option>
+          <option value="7">Week</option>
+          <option value="14">2 weeks</option>
+          <option value="30">Month</option>
         </select>
       </div>
       <div class="d-flex align-items-center gap-1">
@@ -1022,7 +1025,10 @@ function loadBackups(){
     document.getElementById('bk-table-wrap').style.display='';
     // ── Full (game server files) backup section ──
     var f=d.full||{};
-    var fi=document.getElementById('fb-interval'); if(fi) fi.value=String(f.interval_days!=null?f.interval_days:7);
+    var autoOn=(f.interval_days||0)>0;
+    var fen=document.getElementById('fb-auto-enabled'); if(fen) fen.checked=autoOn;
+    var fi=document.getElementById('fb-interval');
+    if(fi){ fi.value=String(autoOn?f.interval_days:7); fi.disabled=!autoOn; }
     var fk=document.getElementById('fb-keep'); if(fk) fk.value=String(f.keep||2);
     var fnow=document.getElementById('fb-now'); if(fnow) fnow.disabled = !!d.full_running;
     var fs=document.getElementById('fb-status');
@@ -1066,10 +1072,17 @@ function createBackup(btn){
     if(btn) btn.disabled=false; loadBackups();
   }).catch(function(){ bkMsg('✗ Backup failed','text-danger'); if(btn) btn.disabled=false; });
 }
+function onFbAutoToggle(){
+  var on=document.getElementById('fb-auto-enabled').checked;
+  var fi=document.getElementById('fb-interval'); if(fi) fi.disabled=!on;
+  saveBackupSettings();
+}
 function saveBackupSettings(){
   var enabled=document.getElementById('bk-enabled').checked;
   var keep=parseInt(document.getElementById('bk-keep').value,10);
-  var fi=parseInt(document.getElementById('fb-interval').value,10);
+  // Automatic game backups off → send interval 0 (disabled); on → the chosen interval.
+  var autoOn=document.getElementById('fb-auto-enabled').checked;
+  var fi=autoOn ? (parseInt(document.getElementById('fb-interval').value,10)||7) : 0;
   var fk=parseInt(document.getElementById('fb-keep').value,10);
   fetch(MOUNT+'/api/panel/backup/settings',{method:'POST',headers:{'Content-Type':'application/json'},
         body:JSON.stringify({enabled:enabled,keep_days:keep,full_interval_days:fi,full_keep:fk})})
