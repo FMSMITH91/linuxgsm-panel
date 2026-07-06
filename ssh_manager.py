@@ -112,7 +112,10 @@ def _run_local(cmd, timeout=30, sudo=False):
             # whole group — otherwise subprocess's timeout only kills the direct `sh -c` child and
             # any grandchildren (e.g. a stuck LinuxGSM command) get orphaned and run forever,
             # burning CPU. (Observed: mods commands stuck at ~100% CPU for hours.)
-            p = _real_subprocess.Popen(full_cmd, shell=True, stdout=_real_subprocess.PIPE,
+            # Explicit ["/bin/bash","-c",cmd] instead of shell=True — identical behaviour (a shell
+            # interprets the composed command, with the panel's own _quote-escaping upstream) but
+            # not the subprocess-shell-injection sink shape.
+            p = _real_subprocess.Popen(["/bin/bash", "-c", full_cmd], stdout=_real_subprocess.PIPE,
                                        stderr=_real_subprocess.PIPE, text=True, start_new_session=True)
             try:
                 out, err = p.communicate(timeout=timeout)
