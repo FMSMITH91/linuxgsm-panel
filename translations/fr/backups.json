@@ -1,0 +1,21 @@
+{
+ "A backup contains secrets": "Une sauvegarde contient des secrets",
+ "Automatic backups": "Sauvegardes automatiques",
+ "Automatic daily backups": "Sauvegardes quotidiennes automatiques",
+ "Backups": "Sauvegardes",
+ "Daily": "Quotidien",
+ "Daily 5am": "Quotidien 5 h",
+ "Daily restart": "Redémarrage quotidien",
+ "Daily restart when empty": "Redémarrage quotidien lorsque vide",
+ "Delete backup": "Supprimer la sauvegarde",
+ "Download backup": "Télécharger la sauvegarde",
+ "Game server files (full backup)": "Fichiers du serveur de jeu (sauvegarde complète)",
+ "Keep": "Conserver",
+ "Keep daily backups for": "Conserver les sauvegardes quotidiennes pendant",
+ "Keep per server": "Conserver par serveur",
+ "Monthly": "Mensuel",
+ "Schedule": "Planification",
+ "Weekly": "Hebdomadaire",
+ "Weekly (Sun)": "Hebdomadaire (dim)",
+ "no backups yet": "aucune sauvegarde pour l'instant"
+}

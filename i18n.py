@@ -15,10 +15,13 @@ _DIR = Path(__file__).resolve().parent / "translations"
 # Supported languages: code -> native name (shown in the switcher).
 LANGUAGES = {"en": "English", "es": "Español", "fr": "Français"}
 DEFAULT_LANG = "en"
-# Fixed code -> catalog filename map. Looking the filename up here (rather than building it from
-# the language string) means the path opened below is always one of these constant literals, never
-# a value derived from request input.
-_CATALOG_FILES = {code: code + ".json" for code in LANGUAGES if code != DEFAULT_LANG}
+# Each non-English language is a FOLDER of section files (translations/<lang>/*.json) that are all
+# merged into one catalog — so translations can be organised per page/section and grown file by
+# file. The code -> folder map is fixed (constant literals), so the directory we list below is
+# never built from request input. A legacy single translations/<lang>.json is still merged if it
+# happens to exist.
+_LANG_DIRS = {code: code for code in LANGUAGES if code != DEFAULT_LANG}
+_LEGACY_FILES = {code: code + ".json" for code in LANGUAGES if code != DEFAULT_LANG}
 
 _cache = {}
 _lock = threading.Lock()
@@ -33,19 +36,34 @@ def normalize_lang(lang):
 def catalog(lang):
     """The {english: translated} map for a language ({} for English or an unknown/missing file)."""
     lang = normalize_lang(lang)
-    fname = _CATALOG_FILES.get(lang)   # constant literal (e.g. "es.json") or None for en/unknown
-    if not fname:
+    dname = _LANG_DIRS.get(lang)   # constant literal (e.g. "es") or None for en/unknown
+    if not dname:
         return {}
     with _lock:
         if lang not in _cache:
-            data = {}
+            merged = {}
+
+            def _merge(path):
+                try:
+                    loaded = json.loads(path.read_text(encoding="utf-8"))
+                    if isinstance(loaded, dict):
+                        for k, v in loaded.items():
+                            if isinstance(v, str) and v:
+                                merged[k] = v
+                except Exception:
+                    pass   # a malformed/missing section file just contributes nothing
+
             try:
-                loaded = json.loads((_DIR / fname).read_text(encoding="utf-8"))
-                if isinstance(loaded, dict):
-                    data = {k: v for k, v in loaded.items() if isinstance(v, str) and v}
+                # Every section file in translations/<lang>/ (paths come from the directory listing,
+                # not from request input), then the legacy single file if present.
+                for p in sorted((_DIR / dname).glob("*.json")):
+                    _merge(p)
             except Exception:
-                data = {}
-            _cache[lang] = data
+                pass
+            legacy = _DIR / _LEGACY_FILES[lang]
+            if legacy.is_file():
+                _merge(legacy)
+            _cache[lang] = merged
         return _cache[lang]
 
 
