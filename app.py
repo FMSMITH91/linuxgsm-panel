@@ -2681,29 +2681,31 @@ def register_routes(app):
             return
         try:
             keep = bk.get_full_settings()["keep"]
-            with app.app_context():
-                targets = [(gs.remote, gs.short_name, gs.lgsm_name, gs.name, gs.game_type, gs.port)
-                           for gs in GameServer.query.filter_by(installed=True).all() if gs.remote_id]
             ok_n = fail_n = skip_n = 0
             failures = []
             skipped = []
-            for remote, short, lgsm, gname, gtype, port in targets:
-                try:
-                    # Scheduled/bulk backup: never disconnect players — skip a busy server.
-                    ok, reason, was_skipped = run_game_backup(remote, short, lgsm, keep,
-                                                              game_type=gtype, port=port)
-                    if was_skipped:
-                        skip_n += 1
-                        skipped.append(gname)
-                    elif ok:
-                        ok_n += 1
-                    else:
+            # Keep the whole run inside ONE app context: run_command touches the remote's ORM
+            # attributes, which would raise DetachedInstanceError once the session is gone.
+            with app.app_context():
+                targets = [(gs.remote, gs.short_name, gs.lgsm_name, gs.name, gs.game_type, gs.port)
+                           for gs in GameServer.query.filter_by(installed=True).all() if gs.remote_id]
+                for remote, short, lgsm, gname, gtype, port in targets:
+                    try:
+                        # Scheduled/bulk backup: never disconnect players — skip a busy server.
+                        ok, reason, was_skipped = run_game_backup(remote, short, lgsm, keep,
+                                                                  game_type=gtype, port=port)
+                        if was_skipped:
+                            skip_n += 1
+                            skipped.append(gname)
+                        elif ok:
+                            ok_n += 1
+                        else:
+                            fail_n += 1
+                            failures.append("%s: %s" % (gname, reason or "failed"))
+                    except Exception as e:
                         fail_n += 1
-                        failures.append("%s: %s" % (gname, reason or "failed"))
-                except Exception as e:
-                    fail_n += 1
-                    failures.append("%s: backup error (%s)" % (gname, type(e).__name__))
-                    app.logger.warning("full backup of %s failed", gname, exc_info=True)
+                        failures.append("%s: backup error (%s)" % (gname, type(e).__name__))
+                        app.logger.warning("full backup of %s failed", gname, exc_info=True)
             summary = "%d server(s) backed up%s%s" % (
                 ok_n,
                 (", %d failed" % fail_n) if fail_n else "",
@@ -2817,14 +2819,24 @@ def register_routes(app):
         if not _full_backup_lock.acquire(blocking=False):
             return jsonify({"success": False, "message": "A backup is already running — try again in a moment."}), 200
         keep = bk.get_full_settings()["keep"]
-        remote, short, lgsm, gname = gs.remote, gs.short_name, gs.lgsm_name, gs.name
-        gtype, port = gs.game_type, gs.port
+        gname = gs.name   # plain string for logging; the ORM objects are re-fetched in the worker
         _game_backup_status[server_id] = {"running": True, "ok": None, "msg": "", "ts": time.time()}
 
         def _worker():
+            # Re-fetch inside a fresh app context: the request's DB session is gone by the time this
+            # thread runs, so ORM objects captured outside would raise DetachedInstanceError the
+            # moment run_command touches the remote's connection attributes.
             try:
-                ok, reason, was_skipped = run_game_backup(remote, short, lgsm, keep,
-                                                          game_type=gtype, port=port, force=force)
+                with app.app_context():
+                    g = GameServer.query.get(server_id)
+                    if not g or not g.remote:
+                        _game_backup_status[server_id] = {"running": False, "ok": False,
+                                                          "msg": "server is no longer available",
+                                                          "ts": time.time()}
+                        return
+                    ok, reason, was_skipped = run_game_backup(
+                        g.remote, g.short_name, g.lgsm_name, keep,
+                        game_type=g.game_type, port=g.port, force=force)
                 _game_backup_status[server_id] = {"running": False,
                                                   "ok": (None if was_skipped else ok),
                                                   "busy": was_skipped,
