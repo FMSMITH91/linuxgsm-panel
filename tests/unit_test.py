@@ -913,6 +913,22 @@ check("metrics: port_open true when a socket is listening", _m["port_open"] is T
 eq("metrics: cpu_percent from the /proc/stat delta", _m["cpu_percent"], 20.0)
 eq("metrics: game_cpu_percent from the jiffie delta", _m["game_cpu_percent"], 100.0)
 
+# ── remote_live_metrics parses CPU/MEM/DISK sections (incl. new disk fields) ──
+_RLM_OUT = "\n".join([
+    "===A", "cpu 100 0 100 800 0 0 0", "cpu0 25 0 25 200 0 0 0",
+    "===B", "cpu 110 0 110 880 0 0 0", "cpu0 28 0 28 220 0 0 0",
+    "===MEM", "MemTotal: 8000000 kB", "MemAvailable: 4000000 kB",
+    "SwapTotal: 0 kB", "SwapFree: 0 kB",
+    "===DISK", "Filesystem 1B-blocks Used Available Use% Mounted on",
+    "/dev/vda2 100000000000 40000000000 60000000000 40% /",
+])
+sm.run_command = lambda server, cmd, timeout=12, **k: (_RLM_OUT, "", 0)
+_rlm = sm.remote_live_metrics(NS(is_local=False, auth_method="tailscale", host="x", name="x"))
+eq("remote metrics: disk_total parsed", _rlm["disk_total"], 100000000000)
+eq("remote metrics: disk_used parsed", _rlm["disk_used"], 40000000000)
+eq("remote metrics: disk_percent computed", _rlm["disk_percent"], 40.0)
+eq("remote metrics: swap 0 -> no divide-by-zero", _rlm["swap_percent"], 0)
+
 # ── config save/load round-trips (guards the atomic-write path) ─
 _cfg_backup = config.CONFIG_FILE.read_text() if config.CONFIG_FILE.exists() else None
 try:

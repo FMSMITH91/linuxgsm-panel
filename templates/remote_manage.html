@@ -82,7 +82,16 @@
         <div class="progress mb-1" style="height:12px;">
           <div class="progress-bar bg-secondary" id="swap-bar" role="progressbar" style="width:0%"></div>
         </div>
-        <div class="small text-secondary" id="swap-detail"></div>
+        <div class="small text-secondary mb-3" id="swap-detail"></div>
+
+        <div class="d-flex justify-content-between align-items-baseline mb-1">
+          <span class="small text-secondary"><i class="bi bi-hdd-fill"></i> Disk</span>
+          <span><span id="disk-val">–</span><small class="text-secondary">%</small></span>
+        </div>
+        <div class="progress mb-1" style="height:12px;">
+          <div class="progress-bar bg-primary" id="disk-bar" role="progressbar" style="width:0%"></div>
+        </div>
+        <div class="small text-secondary" id="disk-detail"></div>
       </div>
     </div>
   </div>
@@ -579,6 +588,10 @@ function pollLive(){
     document.getElementById('swap-val').textContent=sp;
     document.getElementById('swap-bar').style.width=sp+'%';
     document.getElementById('swap-detail').textContent=d.swap_total?(fmtGB(d.swap_used||0)+' / '+fmtGB(d.swap_total)+' used'):'No swap configured';
+    var dp=d.disk_percent||0;
+    document.getElementById('disk-val').textContent=dp;
+    var db=document.getElementById('disk-bar'); db.style.width=dp+'%'; db.style.backgroundColor=barColor(dp);
+    document.getElementById('disk-detail').textContent=d.disk_total?(fmtGB(d.disk_used||0)+' / '+fmtGB(d.disk_total)+' used'):'—';
   }).catch(function(){});
 }
 function checkUpdates(){

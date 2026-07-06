@@ -562,10 +562,12 @@ def remote_live_metrics(server):
         except Exception:
             _log.debug("remote_live_metrics: ignored non-fatal error", exc_info=True)
     cmd = ("echo ===A; grep '^cpu' /proc/stat; echo ===B; sleep 0.25; grep '^cpu' /proc/stat; "
-           "echo ===MEM; grep -E 'MemTotal|MemAvailable|SwapTotal|SwapFree' /proc/meminfo")
+           "echo ===MEM; grep -E 'MemTotal|MemAvailable|SwapTotal|SwapFree' /proc/meminfo; "
+           "echo ===DISK; df -PB1 /")
     out, _, _ = run_command(server, cmd, timeout=12)
     section = None
     A, B, mem = {}, {}, {}
+    disk_total = disk_used = 0
     for line in (out or "").splitlines():
         if line.startswith("==="):
             section = line[3:]
@@ -580,6 +582,9 @@ def remote_live_metrics(server):
                 mem[parts[0].rstrip(":")] = int(parts[1]) * 1024  # kB → bytes
             except ValueError:
                 _log.debug("remote_live_metrics: ignored non-fatal error", exc_info=True)
+        elif section == "DISK" and len(parts) >= 4 and parts[1].isdigit():
+            # df -PB1 data row: Filesystem 1B-blocks Used Available Use% Mounted (skip the header)
+            disk_total, disk_used = int(parts[1]), int(parts[2])
 
     def _pct(n):
         if n not in A or n not in B:
@@ -603,6 +608,8 @@ def remote_live_metrics(server):
         "ram_percent": round(ram_used / ram_total * 100, 1) if ram_total else 0,
         "swap_used": swap_used, "swap_total": swap_total,
         "swap_percent": round(swap_used / swap_total * 100, 1) if swap_total else 0,
+        "disk_used": disk_used, "disk_total": disk_total,
+        "disk_percent": round(disk_used / disk_total * 100, 1) if disk_total else 0,
     }
 
 

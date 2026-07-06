@@ -62,6 +62,16 @@ def live_metrics():
     swap_total = mem.get("SwapTotal", 0)
     swap_used = swap_total - mem.get("SwapFree", 0)
 
+    # Root-filesystem usage (where installs/backups live). shutil.disk_usage is a cheap statvfs,
+    # no subprocess — fine to poll alongside the CPU/RAM sample.
+    import shutil
+    disk_total = disk_used = 0
+    try:
+        du = shutil.disk_usage("/")
+        disk_total, disk_used = du.total, du.used
+    except OSError:
+        _log.debug("disk_usage('/') failed — reporting zeros", exc_info=True)
+
     return {
         "cpu_overall": overall,
         "cpu_cores": cores,
@@ -72,6 +82,9 @@ def live_metrics():
         "swap_used": swap_used,
         "swap_total": swap_total,
         "swap_percent": round(swap_used / swap_total * 100, 1) if swap_total else 0,
+        "disk_used": disk_used,
+        "disk_total": disk_total,
+        "disk_percent": round(disk_used / disk_total * 100, 1) if disk_total else 0,
     }
 
 # ─── Helpers ──────────────────────────────────────────────────
