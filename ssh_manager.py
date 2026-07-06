@@ -214,7 +214,8 @@ def _persist_host_key(server, keystr):
             from models import db
             db.session.rollback()
         except Exception:
-            pass  # no usable session; the key just pins on the next connection instead
+            # no usable session; the key just pins on the next connection instead
+            _log.debug("host-key pin: session rollback unavailable", exc_info=True)
 
 
 def close_connection(server):

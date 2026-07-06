@@ -347,13 +347,14 @@ def _run_light_migrations():
     for (table, col), ddl in wanted.items():
         if table in existing and col not in existing[table]:
             db.session.execute(text(ddl))
-    # Indexes the audit-log filters/sort rely on. create_all() adds these on a fresh DB,
-    # but never to an already-existing table — so add them here (idempotent) to keep the
-    # /logs page fast as the table grows. Names match SQLAlchemy's ix_<table>_<col>.
+    # Indexes the audit-log filters/sort rely on. create_all() adds these on a fresh DB but
+    # never to an already-existing table — so (re)create the model's own declared indexes
+    # here, idempotently, to keep the /logs page fast as the table grows. Driving this off the
+    # ORM's Index metadata (with checkfirst) instead of hand-written DDL keeps it
+    # injection-free by construction — no table/column name is ever interpolated into SQL.
     if "audit_log" in existing:
-        for col in ("action", "username"):
-            db.session.execute(text(
-                f"CREATE INDEX IF NOT EXISTS ix_audit_log_{col} ON audit_log ({col})"))
+        for ix in AuditLog.__table__.indexes:
+            ix.create(db.engine, checkfirst=True)
     db.session.commit()
 
 

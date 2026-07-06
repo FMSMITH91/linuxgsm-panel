@@ -188,7 +188,7 @@ def detect_tailscale_interface():
             if data.get("TUN"):
                 return "tailscale0"
         except Exception:
-            pass
+            _log.debug("detect_tailscale_interface: could not parse status", exc_info=True)
 
     return None
 
