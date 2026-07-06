@@ -1073,7 +1073,7 @@ function runFullBackup(btn){
   bkMsg('Starting full backup…','text-secondary');
   fetch(MOUNT+'/api/panel/backup/full',{method:'POST'}).then(r=>r.json()).then(function(d){
     bkMsg((d.success?'✓ ':'✗ ')+(d.message||''), d.success?'text-success':'text-danger');
-    [4000,15000,45000].forEach(function(ms){ setTimeout(loadBackups, ms); });   // refresh as it runs
+    [4000,15000,45000,90000,150000].forEach(function(ms){ setTimeout(loadBackups, ms); });   // refresh as it runs
   }).catch(function(){ bkMsg('✗ Could not start','text-danger'); if(btn) btn.disabled=false; });
 }
 function backupOneGame(id,btn){
@@ -1082,7 +1082,9 @@ function backupOneGame(id,btn){
   bkMsg('Starting backup…','text-secondary');
   fetch(MOUNT+'/api/panel/backup/game/'+id,{method:'POST'}).then(r=>r.json()).then(function(d){
     bkMsg((d.success?'✓ ':'✗ ')+(d.message||''), d.success?'text-success':'text-danger');
-    [3000,10000,30000].forEach(function(ms){ setTimeout(loadBackups, ms); });   // refresh as it runs
+    // Refresh repeatedly so the new archive shows once it lands — backups can take a while on
+    // real servers, so keep checking out to a couple of minutes.
+    [3000,8000,20000,40000,70000,120000].forEach(function(ms){ setTimeout(loadBackups, ms); });
     if(!d.success && btn) btn.disabled=false;
   }).catch(function(){ bkMsg('✗ Could not start','text-danger'); if(btn) btn.disabled=false; });
 }
