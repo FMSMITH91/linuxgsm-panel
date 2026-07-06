@@ -1186,14 +1186,20 @@ def _ensure_backup_headroom(server, user, keep):
         backups = list_game_backups(server, user)   # newest first
         if not backups:
             return ""   # first backup — nothing to prune; let LinuxGSM/disk decide
-        est = backups[0].get("size", 0)              # newest backup ≈ size of the next one
+        # Estimate the next backup from the LARGEST existing one (worst case), ignoring 0-byte
+        # failed archives — the newest can be tiny or empty and badly underestimate the need.
+        est = max((b.get("size", 0) for b in backups), default=0)
         free = backup_disk_info(server, user).get("free", 0)
         if not est or free >= int(est * 1.15):
             return ""   # plenty of room — keep full safety (old backup survives if the new fails)
-        keep_newest = max(1, int(keep) - 1)          # always protect at least the newest backup
+        # 0-byte archives are failed backups (junk) — delete them first and never protect one.
+        # Protect the newest keep-1 VALID backups; delete the oldest valid ones beyond that.
+        valid = [b for b in backups if b.get("size", 0) > 0]        # newest first
+        junk = [b for b in backups if b.get("size", 0) == 0]
+        keep_newest = max(1, int(keep) - 1)
+        candidates = junk + list(reversed(valid[keep_newest:]))     # junk first, then oldest valid
         deleted = 0
-        # backups is newest-first; delete the OLDEST of the unprotected ones first.
-        for b in reversed(backups[keep_newest:]):
+        for b in candidates:
             if delete_game_backup(server, user, b["name"]):
                 free += b.get("size", 0)
                 deleted += 1

@@ -301,6 +301,15 @@ try:
     sm.list_game_backups = lambda s, u: []
     _hr_deleted[:] = []
     check("headroom: no backups yet -> no deletion", sm._ensure_backup_headroom(None, "gm", 2) == "" and _hr_deleted == [])
+    # 0-byte newest is a failed backup (junk): delete it first, protect the good older one, and
+    # estimate from the LARGEST (so a 0-byte newest doesn't make it skip on a full disk).
+    sm.list_game_backups = lambda s, u: [{"name": "junk", "size": 0, "created": 300},
+                                         {"name": "good", "size": 226 * _GB, "created": 200}]
+    sm.backup_disk_info = lambda s, u: {"free": 50 * 1024 * 1024, "total": 25 * _GB}
+    _hr_deleted[:] = []
+    sm._ensure_backup_headroom(None, "pmc", 2)
+    check("headroom: deletes 0-byte junk first, protects the valid backup",
+          _hr_deleted == ["junk"])
 finally:
     sm.list_game_backups, sm.backup_disk_info, sm.delete_game_backup = _hr_saved
 

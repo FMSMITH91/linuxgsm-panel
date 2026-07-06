@@ -2816,7 +2816,8 @@ def register_routes(app):
                 except Exception:
                     gb = []
                 backup_bytes += sum(b.get("size", 0) for b in gb)
-                est_cycle += (gb[0]["size"] if gb else 0)  # newest backup ≈ one backup of this server
+                _est_one = max((b.get("size", 0) for b in gb), default=0)  # largest = worst case
+                est_cycle += _est_one
                 if gs.remote_id not in disk_by_remote:
                     try:
                         disk_by_remote[gs.remote_id] = backup_disk_info(gs.remote, gs.short_name)
@@ -2830,7 +2831,7 @@ def register_routes(app):
                               "status": _game_backup_status.get(gs.id),
                               "schedule": bk.get_game_schedule(gs.id),
                               "host": host_label,
-                              "est_backup": (gb[0]["size"] if gb else 0),  # this server's own backup size
+                              "est_backup": _est_one,  # largest existing backup = worst-case next size
                               "disk": {"free": hdisk["free"], "total": hdisk["total"]}})
             # Top-line disk uses the first host (kept for the summary); per-server disk is authoritative.
             first = next(iter(disk_by_remote.values()), {"free": 0, "total": 0})
