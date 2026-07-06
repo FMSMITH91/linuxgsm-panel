@@ -1023,7 +1023,6 @@ def register_routes(app):
     def set_language(lang):
         """Switch the UI language. Saved to the session, and to the user's profile when logged in
         (so it follows them across devices). Usable pre-login too (login page switcher)."""
-        from urllib.parse import urlparse
         lang = i18n.normalize_lang(lang)
         session["lang"] = lang
         if getattr(current_user, "is_authenticated", False):
@@ -1032,11 +1031,12 @@ def register_routes(app):
                 db.session.commit()
             except Exception:
                 db.session.rollback()
-        # Return to the page they were on, but only if it's a local URL (guard against open redirect).
-        ref = request.referrer or ""
-        if ref and urlparse(ref).netloc and urlparse(ref).netloc != urlparse(request.host_url).netloc:
-            ref = ""
-        return redirect(ref or url_for("index"))
+        # Return to the page they came from via ?next=, but only a same-site relative path (a single
+        # leading slash, not "//" or "/\" which are protocol-relative) — never an off-site redirect.
+        nxt = request.args.get("next", "")
+        if nxt.startswith("/") and not nxt.startswith("//") and not nxt.startswith("/\\"):
+            return redirect(nxt)
+        return redirect(url_for("index"))
 
     @app.route("/account/2fa/enable", methods=["GET", "POST"])
     @login_required
