@@ -89,7 +89,7 @@ from ssh_manager import (
     list_cron_jobs, add_cron_job, update_cron_job, delete_cron_job, upgrade_managed_cron_tracking,
     run_cron_job_now, run_game_backup, list_game_backups,
     install_game_dependencies, parse_missing_deps, detect_game_ports, lgsm_read_config,
-    lgsm_write_config, lgsm_game_config, browse_dir, read_file,
+    lgsm_write_config, lgsm_game_config, lgsm_get_values, browse_dir, read_file,
     write_file, upload_file, delete_path,
     remote_ufw_delete_rule, remote_set_public_ssh, remote_public_ssh_status, remote_ufw_status, remote_ufw_open_port,
     remote_ufw_close_port, remote_ufw_allow_game_port, remote_ufw_close_game_port,
@@ -167,6 +167,34 @@ RUNNABLE_ACTIONS = {
 LONG_ACTIONS = {"update", "validate", "backup", "force-update", "mods-update"}
 # Read-only ones: show their output back to the user.
 READONLY_ACTIONS = {"monitor", "details", "check-update", "postdetails", "test-alert"}
+
+# LinuxGSM alert providers: a toggle key (on/off) + the fields each needs. Exposed as a
+# friendly per-server "Alerts" editor that writes straight into the LinuxGSM config.
+ALERT_PROVIDERS = [
+    {"id": "discord", "label": "Discord", "toggle": "discordalert",
+     "fields": [{"key": "discordwebhook", "label": "Webhook URL"}]},
+    {"id": "telegram", "label": "Telegram", "toggle": "telegramalert",
+     "fields": [{"key": "telegramtoken", "label": "Bot token"},
+                {"key": "telegramchatid", "label": "Chat ID"}]},
+    {"id": "email", "label": "Email", "toggle": "emailalert",
+     "fields": [{"key": "email", "label": "To address"},
+                {"key": "emailfrom", "label": "From (optional)"}]},
+    {"id": "pushover", "label": "Pushover", "toggle": "pushoveralert",
+     "fields": [{"key": "pushovertoken", "label": "App token"},
+                {"key": "pushoveruserkey", "label": "User key"}]},
+    {"id": "pushbullet", "label": "Pushbullet", "toggle": "pushbulletalert",
+     "fields": [{"key": "pushbullettoken", "label": "Access token"}]},
+    {"id": "slack", "label": "Slack", "toggle": "slackalert",
+     "fields": [{"key": "slacktoken", "label": "Webhook / token"}]},
+    {"id": "gotify", "label": "Gotify", "toggle": "gotifyalert",
+     "fields": [{"key": "gotifywebhook", "label": "Server URL"},
+                {"key": "gotifytoken", "label": "App token"}]},
+    {"id": "ifttt", "label": "IFTTT", "toggle": "iftttalert",
+     "fields": [{"key": "iftttmakerapi", "label": "Maker API key"},
+                {"key": "iftttevent", "label": "Event name"}]},
+]
+_ALERT_KEYS = [p["toggle"] for p in ALERT_PROVIDERS] + [f["key"] for p in ALERT_PROVIDERS for f in p["fields"]]
+_ALERT_KEY_SET = set(_ALERT_KEYS)
 
 # The game dropdown is built from LinuxGSM's own serverlist.csv (every supported
 # game). For all entries the server name is exactly "{shortname}server", so the
@@ -3507,8 +3535,40 @@ def register_routes(app):
             return jsonify({"error": "Permission denied"}), 403
         try:
             return jsonify(lgsm_game_config(gs.remote, gs.short_name, gs.lgsm_name))
-        except Exception as e:
-            return jsonify({"error": str(e)}), 500
+        except Exception:
+            return jsonify({"error": _log_and_generic("game config read failed")}), 200
+
+    @app.route("/api/server/<int:server_id>/alerts", methods=["GET", "POST"])
+    @login_required
+    @server_access_required
+    def api_server_alerts(server_id):
+        """Read/write the server's LinuxGSM alert settings (Discord/Telegram/email/…). Writes
+        straight into the LinuxGSM config so the game server itself sends the notifications."""
+        gs = get_game(server_id)
+        if not _can_manage_files():
+            return jsonify({"error": "Permission denied"}), 403
+        if request.method == "GET":
+            try:
+                vals = lgsm_get_values(gs.remote, gs.short_name, gs.lgsm_name, _ALERT_KEYS)
+            except Exception:
+                vals = {}   # host unreachable — still return the static provider list so it renders
+                app.logger.debug("alerts read failed", exc_info=True)
+            return jsonify({"providers": ALERT_PROVIDERS, "values": vals})
+        # POST: only the known alert keys; toggles coerced to on/off.
+        data = (request.get_json(silent=True) or {}).get("values") or {}
+        updates = {}
+        for k, v in data.items():
+            if k not in _ALERT_KEY_SET:
+                continue
+            if k.endswith("alert"):
+                v = "on" if str(v).lower() in ("on", "true", "1", "yes") else "off"
+            updates[k] = v
+        try:
+            ok, msg = lgsm_write_config(gs.remote, gs.short_name, gs.lgsm_name, updates)
+            log_action(current_user, "server_alerts_save", target=gs.name, success=ok)
+            return jsonify({"success": ok, "message": msg or ("Saved" if ok else "Failed")})
+        except Exception:
+            return jsonify({"success": False, "message": _log_and_generic("alerts save failed")}), 200
 
     @app.route("/api/server/<int:server_id>/browse")
     @login_required

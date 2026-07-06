@@ -148,6 +148,14 @@ try:
     check("GET /server/<id>/files renders (200)",
           c.get("/server/%d/files" % gs_id).status_code == 200)
 
+    # Alerts endpoint: GET returns the provider list; POST filters to known keys and never 500s
+    # (the config write to the game host fails on the test box, but returns gracefully).
+    al = c.get("/api/server/%d/alerts" % gs_id)
+    check("alerts: GET returns the provider list",
+          al.status_code == 200 and isinstance((al.get_json() or {}).get("providers"), list))
+    alp = c.post("/api/server/%d/alerts" % gs_id, json={"values": {"discordalert": "on", "notakey": "x"}})
+    check("alerts: POST returns a JSON result (no 500)", "success" in (alp.get_json() or {}))
+
     # Liveness probe: unauthenticated, returns 200 + {"status":"ok"}, works pre-login.
     hz = app.test_client().get("/healthz")
     check("GET /healthz -> 200 ok (unauthenticated)",

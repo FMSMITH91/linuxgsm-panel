@@ -246,6 +246,21 @@ try:
 finally:
     _bk.load_config, _bk.save_config = _orig_bkload, _orig_bksave
 
+# ── alerts: lgsm_get_values reads merged config, instance overrides win ──
+_orig_run9 = sm.run_command
+try:
+    sm.run_command = lambda s, c, **k: (
+        'discordalert="off"\ndiscordwebhook="default"\nemailalert="on"\n'
+        'discordalert="on"\ndiscordwebhook="https://x/hook"\n', "", 0)
+    _av = sm.lgsm_get_values(None, "gm", "gmodserver",
+                             ["discordalert", "discordwebhook", "emailalert", "missingkey"])
+    check("lgsm_get_values: later (instance) value wins",
+          _av["discordwebhook"] == "https://x/hook" and _av["discordalert"] == "on")
+    check("lgsm_get_values: reads other toggles; missing key -> empty",
+          _av["emailalert"] == "on" and _av["missingkey"] == "")
+finally:
+    sm.run_command = _orig_run9
+
 # line splitting
 eq("cron: split 5-field", sm._split_cron_line("0 3 * * * /home/gm/b.sh a"), ("0 3 * * *", "/home/gm/b.sh a"))
 eq("cron: split @shortcut", sm._split_cron_line("@reboot /home/gm/x start"), ("@reboot", "/home/gm/x start"))

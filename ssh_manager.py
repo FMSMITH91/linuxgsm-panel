@@ -2656,6 +2656,18 @@ def lgsm_game_config(server, user, selfname):
     return {"rel": rel, "content": content or "", "exists": err is None, "error": err}
 
 
+def lgsm_get_values(server, user, selfname, keys):
+    """Return {key: value} for `keys` from the merged LinuxGSM config (_default < common <
+    instance — instance wins). Missing keys come back as "". Used by focused editors (alerts)."""
+    d = _lgsm_cfg_dir(user, selfname)
+    inner = (f"cat {_quote(d + '/_default.cfg')} 2>/dev/null; "
+             f"cat {_quote(d + '/common.cfg')} 2>/dev/null; "
+             f"cat {_quote(d + '/' + selfname + '.cfg')} 2>/dev/null")
+    out, _, _ = run_command(server, f"sudo -u {user} bash -c {_quote(inner)}", timeout=20, sudo=False)
+    merged = _parse_cfg(out or "")
+    return {k: merged.get(k, "") for k in keys}
+
+
 def lgsm_write_config(server, user, selfname, updates):
     """Apply key→value updates to the instance <selfname>.cfg (replace an existing
     uncommented line, else append). Other files (_default/common) are left alone."""

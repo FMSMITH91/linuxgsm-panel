@@ -174,6 +174,26 @@
   </div>
 </div>
 
+<!-- Alerts & notifications -->
+<div class="card mt-3" id="alerts-card">
+  <div class="card-header d-flex justify-content-between align-items-center flex-wrap gap-2">
+    <span><i class="bi bi-bell"></i> Alerts &amp; Notifications</span>
+    <button class="btn btn-sm btn-outline-secondary" onclick="testAlert(this)"><i class="bi bi-send"></i> Send test alert</button>
+  </div>
+  <div class="card-body">
+    <p class="small text-secondary mb-2">
+      Get notified when this server crashes, restarts, or updates. LinuxGSM sends these itself,
+      so they still fire even if the panel is down. Enable a provider and fill in its details.
+    </p>
+    <div id="alerts-loading" class="text-secondary small"><i class="bi bi-arrow-repeat"></i> Loading alert settings…</div>
+    <div id="alerts-body" style="display:none;"></div>
+    <div class="mt-2">
+      <button class="btn btn-primary btn-sm" onclick="saveAlerts(this)"><i class="bi bi-save"></i> Save alerts</button>
+      <span id="alerts-msg" class="small ms-2"></span>
+    </div>
+  </div>
+</div>
+
 {% endblock %}
 {% block scripts %}
 <script>
@@ -627,5 +647,46 @@ updateCronExplain();
 loadConfig();
 browse('');
 loadCron();
+
+// ── Alerts & notifications ──
+function alertsMsg(t,cls){ var m=document.getElementById('alerts-msg'); if(m){ m.textContent=t||''; m.className='small ms-2 '+(cls||'text-secondary'); } }
+function loadAlerts(){
+  fetch(MOUNT+'/api/server/'+serverId+'/alerts').then(r=>r.json()).then(function(d){
+    var body=document.getElementById('alerts-body'); if(!body) return;
+    if(d.error){ document.getElementById('alerts-loading').innerHTML='<span class="text-danger">'+esc(d.error)+'</span>'; return; }
+    var vals=d.values||{}, html='';
+    (d.providers||[]).forEach(function(p){
+      var on=String(vals[p.toggle]||'').toLowerCase()==='on';
+      html += '<div class="border rounded p-2 mb-2">'
+        + '<div class="form-check form-switch mb-1"><input class="form-check-input" type="checkbox" data-alert-toggle="'+escA(p.toggle)+'"'+(on?' checked':'')+'>'
+        + '<label class="form-check-label"><strong>'+esc(p.label)+'</strong></label></div>'
+        + '<div class="row g-2">';
+      (p.fields||[]).forEach(function(f){
+        html += '<div class="col-md-6"><label class="form-label small mb-0">'+esc(f.label)+'</label>'
+          + '<input type="text" class="form-control form-control-sm font-monospace" data-alert-key="'+escA(f.key)+'" value="'+escA(vals[f.key]||'')+'" spellcheck="false"></div>';
+      });
+      html += '</div></div>';
+    });
+    body.innerHTML=html;
+    document.getElementById('alerts-loading').style.display='none';
+    body.style.display='';
+  }).catch(function(){ document.getElementById('alerts-loading').innerHTML='<span class="text-danger">Could not load alert settings.</span>'; });
+}
+function saveAlerts(btn){
+  var values={};
+  document.querySelectorAll('[data-alert-toggle]').forEach(function(el){ values[el.getAttribute('data-alert-toggle')] = el.checked ? 'on' : 'off'; });
+  document.querySelectorAll('[data-alert-key]').forEach(function(el){ values[el.getAttribute('data-alert-key')] = el.value.trim(); });
+  if(btn) btn.disabled=true; alertsMsg('Saving…','text-secondary');
+  fetch(MOUNT+'/api/server/'+serverId+'/alerts',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({values:values})})
+    .then(r=>r.json()).then(function(d){ alertsMsg((d.success?'✓ ':'✗ ')+(d.message||''), d.success?'text-success':'text-danger'); if(btn) btn.disabled=false; })
+    .catch(function(){ alertsMsg('✗ Save failed','text-danger'); if(btn) btn.disabled=false; });
+}
+function testAlert(btn){
+  if(btn) btn.disabled=true; alertsMsg('Sending a test alert…','text-secondary');
+  fetch(MOUNT+'/api/server/'+serverId+'/action',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({action:'test-alert'})})
+    .then(r=>r.json()).then(function(d){ alertsMsg((d.success?'✓ ':'✗ ')+(d.message||'Sent — check your alert channels.'), d.success?'text-success':'text-danger'); if(btn) btn.disabled=false; })
+    .catch(function(){ alertsMsg('✗ Could not send','text-danger'); if(btn) btn.disabled=false; });
+}
+loadAlerts();
 </script>
 {% endblock %}
