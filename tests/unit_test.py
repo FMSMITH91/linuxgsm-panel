@@ -929,6 +929,21 @@ eq("remote metrics: disk_used parsed", _rlm["disk_used"], 40000000000)
 eq("remote metrics: disk_percent computed", _rlm["disk_percent"], 40.0)
 eq("remote metrics: swap 0 -> no divide-by-zero", _rlm["swap_percent"], 0)
 
+# ── apt upgradable parsing: name + old→new version ──
+_APT_OUT = "\n".join([
+    "Listing...",
+    "libssl3/jammy-security 3.0.2-0ubuntu1.15 amd64 [upgradable from: 3.0.2-0ubuntu1.12]",
+    "curl/jammy-updates 7.81.0-1ubuntu1.16 amd64 [upgradable from: 7.81.0-1ubuntu1.15]",
+    "",
+])
+_pu = sm._parse_upgradable(_APT_OUT)
+eq("apt parse: count (Listing/blank skipped)", len(_pu), 2)
+eq("apt parse: sorted by name (curl first)", _pu[0]["name"], "curl")
+eq("apt parse: new version", _pu[1]["name"] == "libssl3" and _pu[1]["version"], "3.0.2-0ubuntu1.15")
+eq("apt parse: old (from) version", _pu[1]["from"], "3.0.2-0ubuntu1.12")
+_pu2 = sm._parse_upgradable("")
+eq("apt parse: empty -> no packages", len(_pu2), 0)
+
 # ── config save/load round-trips (guards the atomic-write path) ─
 _cfg_backup = config.CONFIG_FILE.read_text() if config.CONFIG_FILE.exists() else None
 try:

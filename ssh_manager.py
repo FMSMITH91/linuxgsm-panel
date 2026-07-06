@@ -2137,15 +2137,37 @@ def check_port_open(server, port):
 # ─── Remote OS Commands ───────────────────────────────────────
 
 
+def _parse_upgradable(out):
+    """Parse `apt list --upgradable` output into [{name, version, from}]. Each line looks like
+    'pkg/repo 1.2.3 amd64 [upgradable from: 1.2.2]' — we pull the package name, the NEW version,
+    and the currently-installed version so the UI can show 'name  old → new'."""
+    pkgs = []
+    for line in (out or "").splitlines():
+        line = line.strip()
+        if not line or line.startswith("Listing"):
+            continue
+        parts = line.split()
+        if not parts:
+            continue
+        name = parts[0].split("/")[0]
+        new_ver = parts[1] if len(parts) > 1 else ""
+        old_ver = ""
+        if "upgradable from:" in line:
+            old_ver = line.split("upgradable from:", 1)[1].strip().rstrip("]").strip()
+        pkgs.append({"name": name, "version": new_ver, "from": old_ver})
+    pkgs.sort(key=lambda p: p["name"])
+    return pkgs
+
+
 def remote_os_check_updates(server):
-    """Check for OS updates on the remote server."""
+    """Check for OS updates on the remote server. Returns {count, packages:[{name,version,from}]}."""
     run_command(server, "apt update -qq 2>/dev/null", timeout=60, sudo=True)
-    out, _, rc = run_command(server,
-        "apt list --upgradable 2>/dev/null | grep -v 'Listing...' | grep -v '^$' | wc -l",
+    out, _, _ = run_command(server,
+        "apt list --upgradable 2>/dev/null | grep -v 'Listing...' | grep -v '^$'",
         timeout=30
     )
-    count = int(out.strip()) if out.strip().isdigit() else 0
-    return count
+    pkgs = _parse_upgradable(out)
+    return {"count": len(pkgs), "packages": pkgs}
 
 
 def remote_os_run_updates(server):

@@ -276,7 +276,10 @@ def os_update_available(refresh=True):
         if parts:
             name = parts[0].split("/")[0] if "/" in parts[0] else parts[0]
             version = parts[1] if len(parts) > 1 else ""
-            packages.append({"name": name, "version": version})
+            old = ""
+            if "upgradable from:" in line:
+                old = line.split("upgradable from:", 1)[1].strip().rstrip("]").strip()
+            packages.append({"name": name, "version": version, "from": old})
 
     return {"updates_available": len(packages) > 0, "count": len(packages), "packages": packages}
 

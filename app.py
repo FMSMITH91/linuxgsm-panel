@@ -3382,8 +3382,8 @@ def register_routes(app):
     @permission_required(MANAGE_REMOTES)
     def api_remote_check_updates(remote_id):
         remote = get_remote(remote_id)
-        count = remote_os_check_updates(remote)
-        return jsonify({"count": count})
+        result = remote_os_check_updates(remote)
+        return jsonify({"count": result["count"], "packages": result["packages"]})
 
     @app.route("/api/remote/<int:remote_id>/run-updates", methods=["POST"])
     @login_required

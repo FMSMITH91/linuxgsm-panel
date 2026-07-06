@@ -599,7 +599,18 @@ function pollLive(){
 function checkUpdates(){
   var el=document.getElementById('update-info'); el.textContent='Checking…';
   fetch(MOUNT+'/api/remote/'+REMOTE_ID+'/check-updates').then(r=>r.json())
-    .then(d=>{ el.textContent = (d.count!=null ? d.count+' update(s) available' : '—'); })
+    .then(d=>{
+      var n=d.count||0, pkgs=d.packages||[];
+      if(!n){ el.textContent='System is up to date.'; return; }
+      var head='<div class="mb-1 text-secondary">'+n+' update'+(n===1?'':'s')+' available:</div>';
+      var rows=pkgs.map(function(p){
+        var ver = p.from ? (escapeHtml(p.from)+' → <span class="text-success">'+escapeHtml(p.version)+'</span>')
+                         : escapeHtml(p.version||'');
+        return '<div style="font-family:monospace;font-size:.72rem;line-height:1.5;">'
+             + '<span class="text-info">'+escapeHtml(p.name)+'</span> '+ver+'</div>';
+      }).join('');
+      el.innerHTML=head+'<div style="max-height:200px;overflow:auto;">'+rows+'</div>';
+    })
     .catch(()=>el.textContent='Check failed');
 }
 function runUpdates(){
