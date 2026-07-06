@@ -4448,6 +4448,10 @@ def register_routes(app):
     # Daily automatic backups: check hourly; daily_backup_tick() takes one only when the last
     # daily backup is ~a day old (and enabled), then prunes past the retention window.
     def backup_ticker():
+        # Wait before the FIRST tick so a restart (e.g. a panel self-update) doesn't immediately
+        # fire this batch — which can start a due backup, archiving a server on top of the cold-start
+        # and pinning the CPU. Hourly cadence is unchanged; the first run is just shifted ~2 min.
+        time.sleep(120)
         while True:
             try:
                 bk.daily_backup_tick()
