@@ -52,43 +52,45 @@
     <span class="text-secondary" style="font-size:.7rem;"><i class="bi bi-broadcast"></i> realtime</span>
   </div>
   <div class="card-body">
-    <div class="row g-4">
-      <!-- CPU (overall + per-core) -->
-      <div class="col-lg-7">
-        <div class="d-flex justify-content-between align-items-baseline mb-1">
-          <span class="small text-secondary"><i class="bi bi-cpu"></i> CPU · <span id="cpu-cores-label">…</span></span>
-          <span class="h5 mb-0"><span id="cpu-overall-val">–</span><small class="text-secondary" style="font-size:.5em;">% overall</small></span>
-        </div>
-        <div class="progress mb-3" style="height:12px;">
-          <div class="progress-bar bg-success" id="cpu-overall-bar" role="progressbar" style="width:0%"></div>
-        </div>
-        <div id="cpu-cores" class="cpu-cores-grid"></div>
+    <!-- CPU (overall + per-core) — full width on top -->
+    <div class="mb-4">
+      <div class="d-flex justify-content-between align-items-baseline mb-1">
+        <span class="small text-secondary"><i class="bi bi-cpu"></i> CPU · <span id="cpu-cores-label">…</span></span>
+        <span class="h5 mb-0"><span id="cpu-overall-val">–</span><small class="text-secondary" style="font-size:.5em;">% overall</small></span>
       </div>
-      <!-- Memory + Swap -->
-      <div class="col-lg-5">
+      <div class="progress mb-3" style="height:12px;">
+        <div class="progress-bar bg-success" id="cpu-overall-bar" role="progressbar" style="width:0%"></div>
+      </div>
+      <div id="cpu-cores" class="cpu-cores-grid"></div>
+    </div>
+    <!-- Memory / Swap / Disk — three equal columns so it stays balanced at any core count -->
+    <div class="row g-4">
+      <div class="col-md-4">
         <div class="d-flex justify-content-between align-items-baseline mb-1">
           <span class="small text-secondary"><i class="bi bi-memory"></i> Memory</span>
           <span class="h5 mb-0"><span id="ram-val">–</span><small class="text-secondary" style="font-size:.5em;">%</small></span>
         </div>
-        <div class="progress mb-1" style="height:16px;">
+        <div class="progress mb-1" style="height:14px;">
           <div class="progress-bar bg-info" id="ram-bar" role="progressbar" style="width:0%"></div>
         </div>
-        <div class="small text-secondary mb-3" id="ram-detail">…</div>
-
+        <div class="small text-secondary" id="ram-detail">…</div>
+      </div>
+      <div class="col-md-4">
         <div class="d-flex justify-content-between align-items-baseline mb-1">
           <span class="small text-secondary"><i class="bi bi-hdd"></i> Swap</span>
-          <span><span id="swap-val">–</span><small class="text-secondary">%</small></span>
+          <span class="h5 mb-0"><span id="swap-val">–</span><small class="text-secondary" style="font-size:.5em;">%</small></span>
         </div>
-        <div class="progress mb-1" style="height:12px;">
+        <div class="progress mb-1" style="height:14px;">
           <div class="progress-bar bg-secondary" id="swap-bar" role="progressbar" style="width:0%"></div>
         </div>
-        <div class="small text-secondary mb-3" id="swap-detail"></div>
-
+        <div class="small text-secondary" id="swap-detail"></div>
+      </div>
+      <div class="col-md-4">
         <div class="d-flex justify-content-between align-items-baseline mb-1">
           <span class="small text-secondary"><i class="bi bi-hdd-fill"></i> Disk</span>
-          <span><span id="disk-val">–</span><small class="text-secondary">%</small></span>
+          <span class="h5 mb-0"><span id="disk-val">–</span><small class="text-secondary" style="font-size:.5em;">%</small></span>
         </div>
-        <div class="progress mb-1" style="height:12px;">
+        <div class="progress mb-1" style="height:14px;">
           <div class="progress-bar bg-primary" id="disk-bar" role="progressbar" style="width:0%"></div>
         </div>
         <div class="small text-secondary" id="disk-detail"></div>
