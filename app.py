@@ -55,6 +55,7 @@ from flask import (
     send_file, session, url_for,
 )
 from markupsafe import Markup
+import i18n
 from flask_login import current_user, login_required, login_user, logout_user
 from flask_socketio import SocketIO, emit, join_room, leave_room
 from flask_wtf.csrf import CSRFProtect
@@ -541,6 +542,22 @@ def register_template_filters(app):
 
 # ─── Context Processors ───────────────────────────────────────
 
+def _current_lang():
+    """Active UI language: the logged-in user's saved preference, else the session choice, else en."""
+    lang = None
+    try:
+        if getattr(current_user, "is_authenticated", False):
+            lang = getattr(current_user, "language", None)
+    except Exception:
+        lang = None
+    if not lang:
+        try:
+            lang = session.get("lang")
+        except Exception:
+            lang = None
+    return i18n.normalize_lang(lang)
+
+
 def register_context_processors(app):
     @app.context_processor
     def inject_globals():
@@ -563,6 +580,7 @@ def register_context_processors(app):
                                .order_by(RemoteServer.name).all())
         except Exception:
             nav_remotes = []
+        lang = _current_lang()
         return {
             "site_title": cfg.get("site_title", "LinuxGSM Panel"),
             "current_year": datetime.utcnow().year,
@@ -570,6 +588,12 @@ def register_context_processors(app):
             "mount_prefix": app.config.get("_MOUNT_PREFIX", "/"),
             "panel_version": PANEL_VERSION,
             "nav_remotes": nav_remotes,
+            # i18n: `t()` translates a string for the active language (falls back to English);
+            # the catalog is also handed to the browser so client JS can translate too.
+            "t": lambda s: i18n.translate(lang, s),
+            "current_lang": lang,
+            "languages": i18n.LANGUAGES,
+            "i18n_catalog": i18n.catalog(lang),
             "has_permission": lambda perm: (
                 current_user.is_superadmin
                 or perm in get_user_permissions(current_user)
@@ -993,7 +1017,26 @@ def register_routes(app):
     @app.route("/account")
     @login_required
     def account():
-        return render_template("account.html")
+        return render_template("account.html", languages=i18n.LANGUAGES)
+
+    @app.route("/set-language/<lang>")
+    def set_language(lang):
+        """Switch the UI language. Saved to the session, and to the user's profile when logged in
+        (so it follows them across devices). Usable pre-login too (login page switcher)."""
+        from urllib.parse import urlparse
+        lang = i18n.normalize_lang(lang)
+        session["lang"] = lang
+        if getattr(current_user, "is_authenticated", False):
+            try:
+                current_user.language = lang
+                db.session.commit()
+            except Exception:
+                db.session.rollback()
+        # Return to the page they were on, but only if it's a local URL (guard against open redirect).
+        ref = request.referrer or ""
+        if ref and urlparse(ref).netloc and urlparse(ref).netloc != urlparse(request.host_url).netloc:
+            ref = ""
+        return redirect(ref or url_for("dashboard"))
 
     @app.route("/account/2fa/enable", methods=["GET", "POST"])
     @login_required

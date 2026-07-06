@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="en" data-bs-theme="dark">
+<html lang="{{ current_lang|default('en') }}" data-bs-theme="dark">
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
@@ -425,6 +425,51 @@
 </head>
 <body>
 
+<script>
+  // i18n: hand the active language's catalog to the browser. window.t(s) translates one string
+  // (falls back to English). We also auto-translate the DOM — every text node and a few attributes
+  // whose EXACT text is in the catalog get swapped — so both server-rendered and JS-generated
+  // content are localised without wrapping every string. Anything not in the catalog stays English.
+  window.I18N = {{ i18n_catalog|tojson }};
+  window.LANG = "{{ current_lang|default('en') }}";
+  window.t = function(s){ return (window.I18N && window.I18N[s]) || s; };
+  (function(){
+    var I = window.I18N;
+    if (!I || window.LANG === 'en') return;
+    var SKIP = {SCRIPT:1, STYLE:1, TEXTAREA:1, CODE:1, PRE:1, NOSCRIPT:1, OPTION:0};
+    var ATTRS = ['title', 'placeholder', 'aria-label'];
+    function walk(node){
+      if (!node) return;
+      if (node.nodeType === 3){ // text node
+        var raw = node.nodeValue, key = raw.trim();
+        if (key){ var v = I[key]; if (v !== undefined && v !== raw) node.nodeValue = raw.replace(key, v); }
+        return;
+      }
+      if (node.nodeType !== 1) return;
+      if (SKIP[node.tagName] || node.hasAttribute('data-no-i18n')) return;
+      for (var i = 0; i < ATTRS.length; i++){
+        var a = ATTRS[i], val = node.getAttribute(a);
+        if (val){ var tv = I[val.trim()]; if (tv !== undefined) node.setAttribute(a, tv); }
+      }
+      for (var c = node.firstChild; c; c = c.nextSibling) walk(c);
+    }
+    function run(root){ try { walk(root || document.body); } catch(e){} }
+    function boot(){
+      run(document.body);
+      var mo = new MutationObserver(function(muts){
+        for (var i = 0; i < muts.length; i++){
+          var m = muts[i];
+          if (m.type === 'characterData') walk(m.target);
+          else for (var j = 0; j < m.addedNodes.length; j++) walk(m.addedNodes[j]);
+        }
+      });
+      mo.observe(document.body, {childList:true, subtree:true, characterData:true});
+    }
+    if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', boot);
+    else boot();
+  })();
+</script>
+
 {% if current_user.is_authenticated %}
 <!-- Mobile topbar -->
 <div class="topbar">
@@ -506,8 +551,17 @@
       </div>
     </a>
     <form method="POST" action="{{ url_for('logout') }}" class="d-grid">
-      <button type="submit" class="btn btn-outline-secondary btn-sm w-100"><i class="bi bi-box-arrow-right"></i> Sign Out</button>
+      <button type="submit" class="btn btn-outline-secondary btn-sm w-100"><i class="bi bi-box-arrow-right"></i> {{ t('Sign Out') }}</button>
     </form>
+    <div class="mt-2 d-flex align-items-center gap-1" title="{{ t('Language') }}">
+      <i class="bi bi-translate text-secondary"></i>
+      <select class="form-select form-select-sm py-0" aria-label="{{ t('Language') }}"
+              onchange="if(this.value){window.location.href='{{ url_for('set_language', lang='LANGCODE') }}'.replace('LANGCODE', this.value);}">
+        {% for code, name in languages.items() %}
+        <option value="{{ code }}" {% if code == current_lang %}selected{% endif %}>{{ name }}</option>
+        {% endfor %}
+      </select>
+    </div>
     <div class="text-center mt-2" style="font-size:.66rem;color:var(--text-muted,#6b7684);">
       LinuxGSM Panel <span id="panel-version">v{{ panel_version }}</span>
       <span id="update-badge"></span>
