@@ -370,7 +370,7 @@
         </div>
         {% if remote.auth_method != 'tailscale' %}
         <p class="small text-secondary mb-1">Switch the panel to reach this server over the tailnet (Tailscale SSH) and use its Tailscale address — then you can safely lock down public SSH.</p>
-        <button class="btn btn-sm btn-success" onclick="switchToTailscale()"><i class="bi bi-wifi"></i> Use Tailscale as connect address &amp; SSH</button>
+        <button class="btn btn-sm btn-success" onclick="switchToTailscale()"><i class="bi bi-arrow-repeat"></i> Migrate to Tailscale SSH</button>
         <div id="migrate-msg" class="small mt-1"></div>
         {% else %}
         <p class="small text-success mb-0"><i class="bi bi-check-circle"></i> Already using Tailscale SSH.</p>

@@ -520,7 +520,7 @@ function tailscaleUp(remoteId) {
               if (w) w.innerHTML = '<span class="text-success"><i class="bi bi-check-circle"></i> Connected! IP: <code>' + ip + '</code>'
                 + '<br><span class="small">UFW now allows the <code>tailscale0</code> interface.</span></span>'
                 + '<div class="mt-2"><button class="btn btn-success btn-sm" onclick="migrateToTailscale(' + remoteId + ')">'
-                + '<i class="bi bi-shield-lock"></i> Use Tailscale as connect address &amp; drop public SSH</button></div>';
+                + '<i class="bi bi-arrow-repeat"></i> Migrate to Tailscale SSH</button></div>';
             })
             .catch(function(){ if (w) w.innerHTML = '<span class="text-success"><i class="bi bi-check-circle"></i> Connected! IP: ' + (s.tailscale_ip || '') + '</span>'; });
         }

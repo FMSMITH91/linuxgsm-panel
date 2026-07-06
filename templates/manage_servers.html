@@ -105,8 +105,8 @@
             </td>
             <td>{{ gs.remote.display_name if gs.remote else '—' }}</td>
             <td class="text-nowrap">
-              <a href="{{ url_for('server_detail', server_id=gs.id) }}" class="btn btn-sm btn-outline-secondary" title="View console, send commands, restart server">
-                <i class="bi bi-terminal-fill"></i> Console & Actions
+              <a href="{{ url_for('server_detail', server_id=gs.id) }}" class="btn btn-sm btn-outline-secondary" title="Console, commands, restart">
+                <i class="bi bi-terminal-fill"></i> Console
               </a>
               <a href="{{ url_for('server_files', server_id=gs.id) }}" class="btn btn-sm btn-outline-secondary" title="Edit config & browse/upload files">
                 <i class="bi bi-folder2-open"></i> Files &amp; Config
