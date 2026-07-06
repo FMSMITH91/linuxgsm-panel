@@ -1328,7 +1328,7 @@ def register_routes(app):
             if sio is not None:
                 sio.emit("servers_changed", {})
         except Exception:
-            pass
+            pass  # UI-nicety broadcast only — never let it affect the install/uninstall
 
     @app.route("/servers/add", methods=["POST"])
     @login_required
