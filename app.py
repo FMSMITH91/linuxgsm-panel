@@ -3031,7 +3031,10 @@ def register_routes(app):
         for gslist in by_remote.values():
             remote = gslist[0].remote
             try:
-                out, _, _ = run_command(remote, "ss -H -lntu 2>/dev/null | awk '{print $5}'", timeout=8, sudo=True)
+                # No sudo: listing listening-socket *addresses* (no -p process info) is
+                # unprivileged, so this frequent poll doesn't need root — avoids a sudo
+                # session per remote on every dashboard refresh (log noise + least privilege).
+                out, _, _ = run_command(remote, "ss -H -lntu 2>/dev/null | awk '{print $5}'", timeout=8)
                 ports = set()
                 for addr in (out or "").split():
                     if ":" in addr:
