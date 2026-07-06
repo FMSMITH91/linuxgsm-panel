@@ -2594,6 +2594,30 @@ def register_routes(app):
         threading.Thread(target=_run_full_backup, daemon=True).start()
         return True
 
+    def _run_due_game_backups():
+        """Scheduled per-server backups: back up each installed server whose OWN schedule is due
+        (its override, or the global default). Serialised via the same lock as manual backups."""
+        if not _full_backup_lock.acquire(blocking=False):
+            return
+        try:
+            with app.app_context():
+                targets = [(gs.id, gs.remote, gs.short_name, gs.lgsm_name, gs.name)
+                           for gs in GameServer.query.filter_by(installed=True).all() if gs.remote_id]
+                for sid, remote, short, lgsm, gname in targets:
+                    try:
+                        if not bk.game_backup_due(sid):
+                            continue
+                        keep = bk.get_game_schedule(sid)["keep"]
+                        ok, reason = run_game_backup(remote, short, lgsm, keep)
+                        bk.record_game_backup(sid)
+                        _game_backup_status[sid] = {"running": False, "ok": ok,
+                                                    "msg": (reason or ("Backed up" if ok else "failed")),
+                                                    "ts": time.time()}
+                    except Exception:
+                        app.logger.warning("scheduled backup of %s failed", gname, exc_info=True)
+        finally:
+            _full_backup_lock.release()
+
     @app.route("/api/panel/backup/full", methods=["POST"])
     @login_required
     @permission_required(SUPER_ADMIN)
@@ -2683,6 +2707,27 @@ def register_routes(app):
             'attachment; filename="%s"' % os.path.basename(match["name"]))
         return resp
 
+    @app.route("/api/panel/backup/game/<int:server_id>/schedule", methods=["POST"])
+    @login_required
+    @permission_required(SUPER_ADMIN)
+    def api_panel_backup_game_schedule(server_id):
+        """Set one server's backup schedule. `interval` and `keep` are each a number to override,
+        or "default" to inherit the global schedule."""
+        gs = get_game(server_id)
+        data = request.get_json(silent=True) or {}
+
+        def _field(v):
+            if v is None or v == "default":
+                return None
+            try:
+                return int(v)
+            except (TypeError, ValueError):
+                return None
+        sched = bk.set_game_schedule(server_id, _field(data.get("interval")), _field(data.get("keep")))
+        log_action(current_user, "game_backup_schedule", target=gs.name,
+                   detail="interval=%s keep=%s" % (sched["interval_days"], sched["keep"]))
+        return jsonify({"success": True, "schedule": sched})
+
     @app.route("/api/panel/backups")
     @login_required
     @permission_required(SUPER_ADMIN)
@@ -2705,13 +2750,14 @@ def register_routes(app):
                 backup_bytes += sum(b.get("size", 0) for b in gb)
                 est_cycle += (gb[0]["size"] if gb else 0)  # newest backup ≈ one backup of this server
                 games.append({"id": gs.id, "name": gs.name, "backups": gb,
-                              "status": _game_backup_status.get(gs.id)})
+                              "status": _game_backup_status.get(gs.id),
+                              "schedule": bk.get_game_schedule(gs.id)})
                 if not disk_done:
                     try:
                         disk = backup_disk_info(gs.remote, gs.short_name)
                         disk_done = True
                     except Exception:
-                        pass
+                        app.logger.debug("backup disk info failed", exc_info=True)  # best-effort
             return jsonify({"backups": bk.list_backups(), "settings": bk.get_settings(),
                             "full": bk.get_full_settings(), "full_running": _full_backup_lock.locked(),
                             "games": games,
@@ -4060,8 +4106,7 @@ def register_routes(app):
         while True:
             try:
                 bk.daily_backup_tick()
-                if bk.full_backup_due():
-                    _trigger_full_backup()   # marks itself done via record_full_backup()
+                _run_due_game_backups()   # per-server schedules (each records its own last-run)
             except Exception:
                 app.logger.debug("backup tick failed", exc_info=True)
             time.sleep(3600)

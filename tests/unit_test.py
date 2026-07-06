@@ -210,6 +210,31 @@ check("backup: prune drops an old DAILY backup but keeps the manual one",
       _bk.prune_backups(7) == 1 and all(b["kind"] != "daily" for b in _bk.list_backups()))
 _sh2.rmtree(_bktmp, ignore_errors=True)
 
+# ── per-server backup schedules (config-backed; swap in an in-memory config) ──
+_sched_load, _sched_save = _bk.load_config, _bk.save_config
+_fakecfg = {}
+_bk.load_config = lambda: dict(_fakecfg)
+_bk.save_config = lambda c: (_fakecfg.clear(), _fakecfg.update(c))
+try:
+    _d = _bk.get_game_schedule(4242)
+    check("schedule: unset server inherits the global default",
+          _d["overridden"] is False and _d["interval_set"] is False and _d["keep"] == _bk.DEFAULT_FULL_KEEP)
+    _bk.set_game_schedule(4242, 1, 5)
+    _o = _bk.get_game_schedule(4242)
+    check("schedule: override sets interval + keep",
+          _o["interval_days"] == 1 and _o["keep"] == 5 and _o["interval_set"] and _o["keep_set"])
+    check("schedule: due immediately when never run", _bk.game_backup_due(4242) is True)
+    _bk.record_game_backup(4242)
+    check("schedule: not due right after a run", _bk.game_backup_due(4242) is False)
+    _bk.set_game_schedule(4242, 0, None)   # interval 0 = off for this server, keep back to default
+    check("schedule: interval 0 disables and keep falls back to default",
+          _bk.game_backup_due(4242) is False and _bk.get_game_schedule(4242)["keep"] == _bk.DEFAULT_FULL_KEEP)
+    _bk.set_game_schedule(4242, None, None)
+    check("schedule: clearing the override returns to inherit",
+          _bk.get_game_schedule(4242)["overridden"] is False)
+finally:
+    _bk.load_config, _bk.save_config = _sched_load, _sched_save
+
 # ── full (game-file) backups: per-server LinuxGSM backup + settings/due ──
 _orig_run7 = sm.run_command
 try:

@@ -312,3 +312,68 @@ def full_backup_due():
     if s["interval_days"] <= 0:
         return False
     return time.time() - s["last"] >= s["interval_days"] * 86400
+
+
+# ── Per-server schedules ─────────────────────────────────────────────────────
+# Each game server can override the global default (interval + keep), or inherit it. Overrides
+# live in cfg["game_schedules"] keyed by server id; a server's own last-run is tracked there too,
+# so scheduled backups are decided (and staggered) per server.
+def get_game_schedule(sid):
+    """Effective schedule for one server: its override where set, else the global default.
+    Returns {interval_days, keep, last, overridden}."""
+    cfg = load_config()
+    entry = (cfg.get("game_schedules") or {}).get(str(sid)) or {}
+    d = get_full_settings()
+    has_iv, has_keep = "interval_days" in entry, "keep" in entry
+
+    def _clamp(v, lo, hi, dflt):
+        try:
+            return max(lo, min(hi, int(v)))
+        except (TypeError, ValueError):
+            return dflt
+    return {
+        "interval_days": _clamp(entry["interval_days"], 0, 365, d["interval_days"]) if has_iv else d["interval_days"],
+        "keep": _clamp(entry["keep"], 1, 30, d["keep"]) if has_keep else d["keep"],
+        "last": _clamp(entry.get("last", 0), 0, 2 ** 63, 0),
+        "overridden": has_iv or has_keep,
+        "interval_set": has_iv,   # True → this server overrides the interval (else inherits default)
+        "keep_set": has_keep,     # True → this server overrides keep
+    }
+
+
+def set_game_schedule(sid, interval_days, keep):
+    """Set/clear a server's schedule override. For each of interval_days/keep: a number sets an
+    override, None clears it (inherit the global default). The server's last-run is preserved."""
+    cfg = load_config()
+    sched = cfg.setdefault("game_schedules", {})
+    entry = sched.get(str(sid)) or {}
+    if interval_days is None:
+        entry.pop("interval_days", None)
+    else:
+        entry["interval_days"] = max(0, min(365, int(interval_days)))
+    if keep is None:
+        entry.pop("keep", None)
+    else:
+        entry["keep"] = max(1, min(30, int(keep)))
+    if entry:
+        sched[str(sid)] = entry
+    else:
+        sched.pop(str(sid), None)
+    save_config(cfg)
+    return get_game_schedule(sid)
+
+
+def record_game_backup(sid):
+    """Mark a server's scheduled backup as just done (updates only that server's last-run)."""
+    cfg = load_config()
+    sched = cfg.setdefault("game_schedules", {})
+    sched.setdefault(str(sid), {})["last"] = int(time.time())
+    save_config(cfg)
+
+
+def game_backup_due(sid):
+    """True if this server's schedule is enabled (interval > 0) and a backup is due."""
+    s = get_game_schedule(sid)
+    if s["interval_days"] <= 0:
+        return False
+    return time.time() - s["last"] >= s["interval_days"] * 86400

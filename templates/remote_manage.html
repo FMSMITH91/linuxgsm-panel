@@ -201,7 +201,8 @@
       Uses LinuxGSM's own backup per installed server (stored on each host under
       <code>~/lgsm/backup</code>, browsable from Files &amp; Config). These can be large, so they
       run on a longer schedule and only the newest few per server are kept. A running server is
-      briefly stopped and restarted while it's archived.
+      briefly stopped and restarted while it's archived. The settings below are the
+      <strong>default</strong> — each server can override its own schedule in the list further down.
     </p>
     <div class="d-flex gap-3 flex-wrap align-items-center mb-2">
       <div class="form-check form-switch mb-0">
@@ -1074,6 +1075,7 @@ function loadBackups(){
             + '<button class="btn btn-sm btn-outline-success py-0 px-2" '+(st&&st.running?'disabled':'')
             + ' onclick="backupOneGame('+g.id+',this)"><i class="bi bi-play-circle"></i> Back up now</button>'
             + '</div>'
+            + gameSchedule(g)
             + '<div>'+(items||'<span class="text-secondary">no backups yet</span>')+stHtml+'</div>'
             + '</div>';
       });
@@ -1114,8 +1116,9 @@ function fbSummary(){
 
   var days=parseInt(document.getElementById('fb-interval').value,10)||7;
   var every=(days===1?'every day':(days===7?'once a week':(days===14?'once every 2 weeks':'once a month')));
-  var s='<i class="bi bi-info-circle"></i> Every installed server is backed up <strong>'+every+'</strong>. '
-    +'The <strong>'+keep+'</strong> newest '+(keep===1?'backup is':'backups are')+' kept per server; older ones are deleted automatically.';
+  var s='<i class="bi bi-info-circle"></i> By default, each server is backed up <strong>'+every+'</strong>. '
+    +'The <strong>'+keep+'</strong> newest '+(keep===1?'backup is':'backups are')+' kept per server; older ones are deleted automatically. '
+    +'(Override per server below.)';
   if(cycle>0){ s+=' At the current size that\'s up to <strong>'+fmt(projected)+'</strong> of backups'+(free>0?' ('+fmt(free)+' free now)':'')+'.'; }
   parts.push(s);
 
@@ -1169,6 +1172,38 @@ function backupOneGame(id,btn){
     [3000,8000,20000,40000,70000,120000].forEach(function(ms){ setTimeout(loadBackups, ms); });
     if(!d.success && btn) btn.disabled=false;
   }).catch(function(){ bkMsg('✗ Could not start','text-danger'); if(btn) btn.disabled=false; });
+}
+function schedNote(sc){
+  var iv=sc.interval_days, kp=sc.keep;
+  var base=(sc.interval_set||sc.keep_set) ? 'Custom — ' : 'Using default — ';
+  if(iv<=0) return base+'no automatic backups.';
+  var every=(iv===1?'daily':(iv===7?'weekly':(iv===14?'every 2 weeks':(iv===30?'monthly':'every '+iv+' days'))));
+  var nextTxt='';
+  if(sc.last){ var d=Math.round((sc.last+iv*86400-Date.now()/1000)/86400); nextTxt=' · next '+(d<=0?'due now':'in ~'+d+'d'); }
+  return base+every+', keep '+kp+nextTxt+'.';
+}
+function gameSchedule(g){
+  var sc=g.schedule||{interval_days:0,keep:2,interval_set:false,keep_set:false,last:0};
+  var ivVal=sc.interval_set?String(sc.interval_days):'default';
+  var kpVal=sc.keep_set?String(sc.keep):'default';
+  function opt(v,label,cur){ return '<option value="'+v+'"'+(String(v)===cur?' selected':'')+'>'+label+'</option>'; }
+  var ivSel='<select class="form-select form-select-sm py-0" style="width:auto;" id="gsi-'+g.id+'" onchange="setGameSchedule('+g.id+')">'
+    +opt('default','Default',ivVal)+opt('0','Off',ivVal)+opt('1','Daily',ivVal)+opt('7','Weekly',ivVal)+opt('14','Every 2 weeks',ivVal)+opt('30','Monthly',ivVal)+'</select>';
+  var kpSel='<select class="form-select form-select-sm py-0" style="width:auto;" id="gsk-'+g.id+'" onchange="setGameSchedule('+g.id+')">'
+    +opt('default','Default',kpVal)+opt('1','1',kpVal)+opt('2','2',kpVal)+opt('3','3',kpVal)+opt('5','5',kpVal)+opt('7','7',kpVal)+opt('14','14',kpVal)+opt('30','30',kpVal)+'</select>';
+  return '<div class="d-flex align-items-center gap-2 flex-wrap small my-1">'
+    +'<span class="text-secondary"><i class="bi bi-calendar-event"></i> Schedule:</span>'+ivSel
+    +'<span class="text-secondary">Keep</span>'+kpSel
+    +'<span class="text-secondary" id="gsn-'+g.id+'">'+schedNote(sc)+'</span></div>';
+}
+function setGameSchedule(id){
+  var iv=document.getElementById('gsi-'+id).value, kp=document.getElementById('gsk-'+id).value;
+  bkMsg('Saving schedule…','text-secondary');
+  fetch(MOUNT+'/api/panel/backup/game/'+id+'/schedule',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({interval:iv,keep:kp})})
+    .then(r=>r.json()).then(function(d){
+      bkMsg(d.success?'✓ Schedule saved':'✗ Save failed', d.success?'text-success':'text-danger');
+      if(d.success&&d.schedule){ var n=document.getElementById('gsn-'+id); if(n) n.innerHTML=schedNote(d.schedule); }
+    }).catch(function(){ bkMsg('✗ Could not save schedule','text-danger'); });
 }
 function deleteGameBackup(btn){
   var name=btn.getAttribute('data-name'), gid=btn.getAttribute('data-gid');
