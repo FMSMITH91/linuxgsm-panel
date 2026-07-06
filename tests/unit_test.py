@@ -311,6 +311,25 @@ try:
 finally:
     sm.run_command = _orig_run8c
 
+# ── pre-flight disk guard: don't start a doomed backup when the disk is full ──
+check("_fmt_size: bytes/MB/GB readable",
+      sm._fmt_size(0) == "0 B" and sm._fmt_size(512) == "512 B"
+      and sm._fmt_size(5 * 1024 * 1024) == "5.0 MB" and sm._fmt_size(2 * 1024 ** 3) == "2.0 GB")
+_hs_saved = (sm._ensure_backup_headroom, sm.list_game_backups, sm.backup_disk_info, sm.run_command)
+try:
+    _GB2 = 1024 ** 3
+    sm._ensure_backup_headroom = lambda s, u, k: ""       # nothing left to free
+    sm.list_game_backups = lambda s, u: [{"name": "b-1", "size": int(1.2 * _GB2), "created": 1}]
+    sm.backup_disk_info = lambda s, u: {"free": 22 * 1024 * 1024, "total": 23 * _GB2}   # ~22 MB free
+    _pf_cmds = []
+    sm.run_command = lambda s, c, **k: (_pf_cmds.append(c), ("", "", 0))[1]
+    _pok, _pmsg, _pskip = sm.run_game_backup(None, "cs", "codserver", 2)
+    check("run_game_backup: full disk -> clear 'Not enough disk space' failure, no backup run",
+          _pok is False and _pskip is False and "Not enough disk space" in _pmsg
+          and not any("./codserver backup" in c for c in _pf_cmds))
+finally:
+    (sm._ensure_backup_headroom, sm.list_game_backups, sm.backup_disk_info, sm.run_command) = _hs_saved
+
 # ── mod-restart decision (pure): restart when empty, defer when busy/unknown, force wins ──
 check("mod_restart_decision: stopped server -> idle (loads on next start)",
       sm.mod_restart_decision("offline", None) == "idle")

@@ -2700,9 +2700,9 @@ def register_routes(app):
                     else:
                         fail_n += 1
                         failures.append("%s: %s" % (gname, reason or "failed"))
-                except Exception:
+                except Exception as e:
                     fail_n += 1
-                    failures.append("%s: internal error" % gname)
+                    failures.append("%s: backup error (%s)" % (gname, type(e).__name__))
                     app.logger.warning("full backup of %s failed", gname, exc_info=True)
             summary = "%d server(s) backed up%s%s" % (
                 ok_n,
@@ -2830,10 +2830,12 @@ def register_routes(app):
                                                   "busy": was_skipped,
                                                   "msg": (reason or ("Backed up" if ok else "failed")),
                                                   "ts": time.time()}
-            except Exception:
+            except Exception as e:
                 app.logger.warning("on-demand backup of %s failed", gname, exc_info=True)
                 _game_backup_status[server_id] = {"running": False, "ok": False,
-                                                  "msg": "internal error", "ts": time.time()}
+                                                  "msg": "backup error (%s) — check the host is reachable "
+                                                         "and has free disk space" % type(e).__name__,
+                                                  "ts": time.time()}
             finally:
                 _full_backup_lock.release()
 

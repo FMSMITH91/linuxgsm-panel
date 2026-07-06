@@ -1105,6 +1105,16 @@ def prune_game_backups(server, user, keep=3):
     run_command(server, f"sudo -u {user} bash -c {_quote(cmd)}", timeout=30, sudo=False)
 
 
+def _fmt_size(nbytes):
+    """Human-readable size (e.g. '1.2 GB', '640 MB') for backup/disk messages."""
+    n = float(nbytes or 0)
+    for unit in ("B", "KB", "MB", "GB", "TB"):
+        if n < 1024 or unit == "TB":
+            return ("%d %s" % (n, unit)) if unit in ("B", "KB") else ("%.1f %s" % (n, unit))
+        n /= 1024
+    return "%d B" % (nbytes or 0)
+
+
 def backup_disk_info(server, user):
     """Free/total bytes of the filesystem that holds this game user's LinuxGSM backups
     (~/lgsm/backup lives under the home dir). Best-effort — returns zeros on error."""
@@ -1273,6 +1283,26 @@ def run_game_backup(server, user, selfname=None, keep=3, game_type=None, port=No
     # Smart retention: if the disk is nearly full, delete old backups BEFORE creating the new one
     # so the backup succeeds instead of aborting for lack of space.
     headroom_note = _ensure_backup_headroom(server, user, keep)
+    # Pre-flight space check: if there STILL isn't room for the archive after freeing what we can,
+    # don't even start LinuxGSM's backup. A backup that runs out of space mid-write half-fills the
+    # disk with a partial archive and can leave a stale lock behind — far worse than not starting.
+    # We estimate the next archive from the largest existing one; with none to go by we let it try.
+    try:
+        _bks = list_game_backups(server, user)
+        _est = max((b.get("size", 0) for b in _bks), default=0)
+        _disk = backup_disk_info(server, user)
+        _free, _total = _disk.get("free", 0), _disk.get("total", 0)
+        # Only enforce when we actually read the disk (total > 0); a failed df reads as 0/0 and must
+        # NOT block an otherwise-fine backup.
+        if _est and _total and _free < int(_est * 1.05):
+            note = " after clearing what old backups it could" if headroom_note else ""
+            return (False,
+                    f"Not enough disk space to back up{note}: the archive needs about "
+                    f"{_fmt_size(int(_est * 1.05))} but only {_fmt_size(_free)} is free on the host. "
+                    f"Lower this server's 'keep' count, remove old backups, or free space on the disk.",
+                    False)
+    except Exception:
+        _log.debug("backup pre-flight space check failed", exc_info=True)
     # A crashed/killed/timed-out earlier backup can leave LinuxGSM's backup.lock behind, after
     # which every backup refuses with "Lockfile found: Backup is currently running". The panel
     # only ever runs one game backup at a time (serialised by a lock in app.py), so if we're here
