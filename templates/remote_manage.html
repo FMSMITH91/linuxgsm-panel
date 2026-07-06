@@ -227,6 +227,7 @@
       </div>
       <span id="fb-status" class="small text-secondary"></span>
     </div>
+    <div id="fb-summary" class="small text-info-emphasis mb-2"></div>
     <div id="fb-games" class="small"></div>
   </div>
 </div>
@@ -1030,6 +1031,7 @@ function loadBackups(){
     var fi=document.getElementById('fb-interval');
     if(fi){ fi.value=String(autoOn?f.interval_days:7); fi.disabled=!autoOn; }
     var fk=document.getElementById('fb-keep'); if(fk) fk.value=String(f.keep||2);
+    fbSummary();
     var fnow=document.getElementById('fb-now'); if(fnow) fnow.disabled = !!d.full_running;
     var fs=document.getElementById('fb-status');
     if(fs){ fs.textContent = d.full_running ? 'Running now…' : (f.last ? ('Last: '+bkAgo(f.last)+(f.summary?' — '+f.summary:'')) : 'Never run'); }
@@ -1077,6 +1079,24 @@ function onFbAutoToggle(){
   var fi=document.getElementById('fb-interval'); if(fi) fi.disabled=!on;
   saveBackupSettings();
 }
+function fbSummary(){
+  var el=document.getElementById('fb-summary'); if(!el) return;
+  var on=document.getElementById('fb-auto-enabled').checked;
+  var keep=parseInt(document.getElementById('fb-keep').value,10)||1;
+  var keepTxt=(keep===1?'only the latest backup':'the '+keep+' most recent backups');
+  if(!on){
+    el.innerHTML='<i class="bi bi-info-circle"></i> Automatic backups are <strong>off</strong> — nothing runs on a schedule. '
+      + 'You can still use “Back up game servers now” any time; when you do, '+keepTxt+' per server '+(keep===1?'is':'are')+' kept.';
+    return;
+  }
+  var days=parseInt(document.getElementById('fb-interval').value,10)||7;
+  var every=(days===7?'once a week':(days===14?'once every 2 weeks':'once a month'));
+  var span=days*keep, spanTxt;
+  if(span%30===0){ var mo=span/30; spanTxt='about '+mo+' month'+(mo===1?'':'s'); }
+  else { var wk=Math.round(span/7); spanTxt='about '+wk+' week'+(wk===1?'':'s'); }
+  el.innerHTML='<i class="bi bi-info-circle"></i> Each server is backed up <strong>'+every+'</strong>, keeping <strong>'+keepTxt
+    +'</strong> (older ones are deleted) — so you keep '+spanTxt+' of history per server.';
+}
 function saveBackupSettings(){
   var enabled=document.getElementById('bk-enabled').checked;
   var keep=parseInt(document.getElementById('bk-keep').value,10);
@@ -1084,6 +1104,7 @@ function saveBackupSettings(){
   var autoOn=document.getElementById('fb-auto-enabled').checked;
   var fi=autoOn ? (parseInt(document.getElementById('fb-interval').value,10)||7) : 0;
   var fk=parseInt(document.getElementById('fb-keep').value,10);
+  fbSummary();
   fetch(MOUNT+'/api/panel/backup/settings',{method:'POST',headers:{'Content-Type':'application/json'},
         body:JSON.stringify({enabled:enabled,keep_days:keep,full_interval_days:fi,full_keep:fk})})
     .then(r=>r.json()).then(function(){ bkMsg('✓ Saved','text-success'); }).catch(function(){ bkMsg('✗ Could not save','text-danger'); });
