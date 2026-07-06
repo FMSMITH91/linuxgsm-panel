@@ -258,10 +258,19 @@ finally:
 _orig_run7 = sm.run_command
 try:
     sm.run_command = lambda s, c, **k: (
-        "gmodserver-2026.tar.gz\t1048576\t1720000000\nold.tar.gz\t500\t1719000000\n", "", 0)
+        "F\tgmodserver-2026.tar.gz\t1048576\t1720000000\nF\told.tar.gz\t500\t1719000000\n", "", 0)
     _gbl = sm.list_game_backups(None, "gm")
     check("game backups: parsed newest-first with sizes",
           len(_gbl) == 2 and _gbl[0]["name"] == "gmodserver-2026.tar.gz" and _gbl[0]["size"] == 1048576)
+    check("game backups: no lock -> nothing marked in-progress",
+          not any(b.get("in_progress") for b in _gbl))
+    # A backup.lock present -> the NEWEST archive is being written (in progress), older ones aren't.
+    sm.run_command = lambda s, c, **k: (
+        "F\tgmodserver-new.tar.zst\t2000\t1720000100\nF\tgmodserver-old.tar.zst\t1048576\t1720000000\nLOCK\n", "", 0)
+    _gbl2 = sm.list_game_backups(None, "gm")
+    check("game backups: active lock flags newest as in-progress only",
+          _gbl2[0]["name"] == "gmodserver-new.tar.zst" and _gbl2[0].get("in_progress") is True
+          and not _gbl2[1].get("in_progress"))
 finally:
     sm.run_command = _orig_run7
 _cap7 = {"cmds": []}

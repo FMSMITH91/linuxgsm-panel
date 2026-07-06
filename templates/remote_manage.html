@@ -1063,9 +1063,13 @@ function loadBackups(){
     if(fg){
       var gh='';
       (d.games||[]).forEach(function(g){
-        var rows=(g.backups||[]).map(function(b){
+        var rows=(g.backups||[])
+          // Skip a backup that's still being written — show it only once it's finished.
+          .filter(function(b){ return !b.in_progress; })
+          .map(function(b){
           return '<tr>'
-            + '<td title="'+escapeHtml(b.name)+'">'+escapeHtml(bkAgo(b.created))+'</td>'
+            + '<td><div style="font-family:monospace;font-size:.72rem;word-break:break-all;">'+escapeHtml(b.name)+'</div>'
+            +   '<div class="text-secondary" style="font-size:.68rem;">'+escapeHtml(bkAgo(b.created))+'</div></td>'
             + '<td>'+bkFmtBytes(b.size)+'</td>'
             + '<td class="text-end text-nowrap">'
             + '<a class="btn btn-sm btn-outline-secondary py-0 px-1" href="'+MOUNT+'/backup/game/'+g.id+'/download?name='+encodeURIComponent(b.name)+'" title="Download backup"><i class="bi bi-download"></i></a> '
@@ -1074,7 +1078,7 @@ function loadBackups(){
         }).join('');
         var table = rows
           ? '<div class="table-responsive mt-1"><table class="table table-sm align-middle mb-0" style="font-size:.8rem;">'
-            + '<thead><tr><th>When</th><th>Size</th><th class="text-end">Actions</th></tr></thead>'
+            + '<thead><tr><th>Backup file</th><th>Size</th><th class="text-end">Actions</th></tr></thead>'
             + '<tbody>'+rows+'</tbody></table></div>'
           : '<div class="small text-secondary mt-1">no backups yet</div>';
         var st=g.status, stHtml='';

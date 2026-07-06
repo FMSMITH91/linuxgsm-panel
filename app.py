@@ -2940,8 +2940,11 @@ def register_routes(app):
                     gb = list_game_backups(gs.remote, gs.short_name)
                 except Exception:
                     gb = []
-                backup_bytes += sum(b.get("size", 0) for b in gb)
-                _est_one = max((b.get("size", 0) for b in gb), default=0)  # largest = worst case
+                # A backup being written right now is partial — don't count it toward totals or the
+                # next-size estimate (it would read as a too-small worst case).
+                done = [b for b in gb if not b.get("in_progress")]
+                backup_bytes += sum(b.get("size", 0) for b in done)
+                _est_one = max((b.get("size", 0) for b in done), default=0)  # largest = worst case
                 est_cycle += _est_one
                 if gs.remote_id not in disk_by_remote:
                     try:
