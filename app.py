@@ -1022,7 +1022,9 @@ def register_routes(app):
     @app.route("/set-language/<lang>")
     def set_language(lang):
         """Switch the UI language. Saved to the session, and to the user's profile when logged in
-        (so it follows them across devices). Usable pre-login too (login page switcher)."""
+        (so it follows them across devices). Usable pre-login too. The switcher calls this with
+        ?ajax=1 and then reloads the current page itself, so we never redirect to a user-supplied
+        URL (no open-redirect surface); a plain GET just lands on the dashboard."""
         lang = i18n.normalize_lang(lang)
         session["lang"] = lang
         if getattr(current_user, "is_authenticated", False):
@@ -1031,11 +1033,8 @@ def register_routes(app):
                 db.session.commit()
             except Exception:
                 db.session.rollback()
-        # Return to the page they came from via ?next=, but only a same-site relative path (a single
-        # leading slash, not "//" or "/\" which are protocol-relative) — never an off-site redirect.
-        nxt = request.args.get("next", "")
-        if nxt.startswith("/") and not nxt.startswith("//") and not nxt.startswith("/\\"):
-            return redirect(nxt)
+        if request.args.get("ajax"):
+            return jsonify({"ok": True, "lang": lang})
         return redirect(url_for("index"))
 
     @app.route("/account/2fa/enable", methods=["GET", "POST"])

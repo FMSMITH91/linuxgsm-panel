@@ -556,7 +556,7 @@
     <div class="mt-2 d-flex align-items-center gap-1" title="{{ t('Language') }}">
       <i class="bi bi-translate text-secondary"></i>
       <select class="form-select form-select-sm py-0" aria-label="{{ t('Language') }}"
-              onchange="if(this.value){window.location.href='{{ url_for('set_language', lang='LANGCODE') }}'.replace('LANGCODE', this.value)+'?next='+encodeURIComponent(location.pathname+location.search);}">
+              onchange="if(this.value){fetch('{{ url_for('set_language', lang='LANGCODE') }}'.replace('LANGCODE', this.value)+'?ajax=1',{cache:'no-store'}).then(function(){location.reload();});}">
         {% for code, name in languages.items() %}
         <option value="{{ code }}" {% if code == current_lang %}selected{% endif %}>{{ name }}</option>
         {% endfor %}
