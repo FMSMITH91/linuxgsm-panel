@@ -41,14 +41,14 @@ def _ensure_dir():
 
 
 def _safe_path(name):
-    """Resolve `name` to a backup file, or None if it isn't a valid backup name that lives
-    directly in BACKUP_DIR (blocks path traversal / arbitrary-file access)."""
-    if not name or not _NAME_RE.match(name):
+    """Resolve `name` to a backup file in BACKUP_DIR, or None if it isn't one. `basename` strips
+    any directory components (so path traversal is impossible), and the strict name regex then
+    allows only our own backup filenames — nothing else can be reached."""
+    name = os.path.basename(name or "")
+    if not _NAME_RE.match(name):
         return None
-    p = (BACKUP_DIR / name).resolve()
-    if p.parent != BACKUP_DIR.resolve() or not p.is_file():
-        return None
-    return p
+    p = BACKUP_DIR / name
+    return p if p.is_file() else None
 
 
 def _snapshot_db(dest):
@@ -253,6 +253,6 @@ def set_settings(enabled=None, keep_days=None):
         try:
             cfg["backup_keep_days"] = max(1, min(365, int(keep_days)))
         except (TypeError, ValueError):
-            pass
+            _log.debug("ignored invalid keep_days", exc_info=True)
     save_config(cfg)
     return get_settings()

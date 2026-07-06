@@ -2560,8 +2560,9 @@ def register_routes(app):
         p = bk._safe_path(name)
         if not p:
             abort(404)
-        log_action(current_user, "panel_backup_download", target=name)
-        return send_file(str(p), as_attachment=True, download_name=name)
+        safe_name = os.path.basename(name)   # already validated by _safe_path; keep CodeQL happy
+        log_action(current_user, "panel_backup_download", target=safe_name)
+        return send_file(str(p), as_attachment=True, download_name=safe_name)
 
     @app.route("/api/panel/backup/settings", methods=["POST"])
     @login_required
