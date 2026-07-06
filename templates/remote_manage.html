@@ -1211,13 +1211,49 @@ function saveBackupSettings(){
     .then(r=>r.json()).then(function(){ bkMsg('✓ Saved','text-success'); }).catch(function(){ bkMsg('✗ Could not save','text-danger'); });
 }
 function runFullBackup(btn){
-  if(!confirm('Back up all installed game servers now?\n\nThis runs LinuxGSM\'s backup on each server — any that are running will be briefly STOPPED and restarted for their backup (a short outage each). It can take a while and use disk space.')) return;
-  if(btn) btn.disabled=true;
+  // First check who's online — if any server has players, ask before disconnecting them.
+  if(btn){ btn.disabled=true; }
+  bkMsg('Checking for players…','text-secondary');
+  fetch(MOUNT+'/api/panel/backup/full/precheck').then(r=>r.json()).then(function(d){
+    if(btn) btn.disabled=false;
+    var busy=(d&&d.busy)||[];
+    if(!busy.length){
+      if(!confirm('Back up all installed game servers now?\n\nThis runs LinuxGSM\'s backup on each server — any that are running will be briefly STOPPED and restarted for their backup (a short outage each). It can take a while and use disk space.')){ bkMsg('',''); return; }
+      fbStart('');
+      return;
+    }
+    fbPlayersDialog(busy);
+  }).catch(function(){ if(btn) btn.disabled=false; bkMsg('✗ Could not check players','text-danger'); });
+}
+function fbStart(mode){
   bkMsg('Starting full backup…','text-secondary');
-  fetch(MOUNT+'/api/panel/backup/full',{method:'POST'}).then(r=>r.json()).then(function(d){
-    bkMsg((d.success?'✓ ':'✗ ')+(d.message||''), d.success?'text-success':'text-danger');
-    [4000,15000,45000,90000,150000].forEach(function(ms){ setTimeout(loadBackups, ms); });   // refresh as it runs
-  }).catch(function(){ bkMsg('✗ Could not start','text-danger'); if(btn) btn.disabled=false; });
+  fetch(MOUNT+'/api/panel/backup/full',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({mode:mode})})
+    .then(r=>r.json()).then(function(d){
+      bkMsg((d.success?'✓ ':'✗ ')+(d.message||''), d.success?'text-success':'text-danger');
+      [4000,15000,45000,90000,150000].forEach(function(ms){ setTimeout(loadBackups, ms); });   // refresh as it runs
+    }).catch(function(){ bkMsg('✗ Could not start','text-danger'); });
+}
+function fbPlayersDialog(busy){
+  var total=busy.reduce(function(s,b){return s+(b.players||0);},0);
+  var list=busy.map(function(b){return escapeHtml(b.name)+' ('+b.players+')';}).join(', ');
+  var ov=document.createElement('div');
+  ov.style.cssText='position:fixed;inset:0;background:rgba(0,0,0,.6);z-index:1080;display:flex;align-items:center;justify-content:center;padding:1rem;';
+  ov.innerHTML='<div class="card" style="max-width:540px;width:100%;">'
+    +'<div class="card-header"><i class="bi bi-people-fill"></i> Players are online</div>'
+    +'<div class="card-body">'
+    +'<p class="mb-2"><strong>'+total+'</strong> player'+(total===1?' is':'s are')+' connected to <strong>'+busy.length+'</strong> server'+(busy.length===1?'':'s')+': '+list+'.</p>'
+    +'<p class="small text-secondary mb-3">A backup briefly stops each server. Empty servers get backed up either way — this is about the busy ones.</p>'
+    +'<div class="d-flex flex-column gap-2">'
+    +'<button class="btn btn-warning" id="fbd-now"><i class="bi bi-play-circle"></i> Back up now (disconnects '+total+' player'+(total===1?'':'s')+')</button>'
+    +'<button class="btn btn-success" id="fbd-wait"><i class="bi bi-hourglass-split"></i> Wait until they\'re empty, then back up</button>'
+    +'<button class="btn btn-outline-secondary" id="fbd-cancel">Cancel</button>'
+    +'</div></div></div>';
+  document.body.appendChild(ov);
+  function close(){ ov.remove(); }
+  ov.querySelector('#fbd-now').onclick=function(){ close(); fbStart('now'); };
+  ov.querySelector('#fbd-wait').onclick=function(){ close(); fbStart('wait'); };
+  ov.querySelector('#fbd-cancel').onclick=function(){ close(); bkMsg('',''); };
+  ov.addEventListener('click',function(e){ if(e.target===ov){ close(); bkMsg('',''); } });
 }
 function backupOneGame(id,btn,force){
   var msg = force

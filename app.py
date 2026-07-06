@@ -2674,57 +2674,98 @@ def register_routes(app):
                         "message": f"Panel binding to {new_bind}:{new_port}. Restarting…{fw_note}"})
 
     # ── Panel backup & restore (superadmin) ──────────────────────
-    def _run_full_backup():
+    def _run_full_backup(force=False, defer=False):
         """Run LinuxGSM's backup for every installed game server (space-heavy), pruning each to
-        the configured keep-count. Records a one-line outcome. Background; only one at a time."""
+        the configured keep-count. Records a one-line outcome. Background; only one at a time.
+
+        force=True   → back up even servers with players (disconnects them).
+        defer=True   → back up empty servers now; QUEUE busy ones (backup_pending) so the hourly
+                       ticker backs them up automatically once they empty.
+        Neither      → back up empty servers, skip busy ones (no queue)."""
         if not _full_backup_lock.acquire(blocking=False):
             return
         try:
             keep = bk.get_full_settings()["keep"]
             ok_n = fail_n = skip_n = 0
             failures = []
-            skipped = []
+            queued = []
             # Keep the whole run inside ONE app context: run_command touches the remote's ORM
             # attributes, which would raise DetachedInstanceError once the session is gone.
             with app.app_context():
-                targets = [(gs.remote, gs.short_name, gs.lgsm_name, gs.name, gs.game_type, gs.port)
-                           for gs in GameServer.query.filter_by(installed=True).all() if gs.remote_id]
-                for remote, short, lgsm, gname, gtype, port in targets:
+                servers = [gs for gs in GameServer.query.filter_by(installed=True).all() if gs.remote_id]
+                for gs in servers:
                     try:
-                        # Scheduled/bulk backup: never disconnect players — skip a busy server.
-                        ok, reason, was_skipped = run_game_backup(remote, short, lgsm, keep,
-                                                                  game_type=gtype, port=port)
+                        ok, reason, was_skipped = run_game_backup(
+                            gs.remote, gs.short_name, gs.lgsm_name, keep,
+                            game_type=gs.game_type, port=gs.port, force=force)
                         if was_skipped:
                             skip_n += 1
-                            skipped.append(gname)
-                        elif ok:
-                            ok_n += 1
+                            if defer:
+                                gs.backup_pending = True   # ticker backs it up once it empties
+                                db.session.commit()
+                                queued.append(gs.name)
                         else:
-                            fail_n += 1
-                            failures.append("%s: %s" % (gname, reason or "failed"))
+                            if gs.backup_pending:          # this run satisfied any prior queue
+                                gs.backup_pending = False
+                                db.session.commit()
+                            if ok:
+                                ok_n += 1
+                            else:
+                                fail_n += 1
+                                failures.append("%s: %s" % (gs.name, reason or "failed"))
                     except Exception as e:
                         fail_n += 1
-                        failures.append("%s: backup error (%s)" % (gname, type(e).__name__))
-                        app.logger.warning("full backup of %s failed", gname, exc_info=True)
+                        failures.append("%s: backup error (%s)" % (gs.name, type(e).__name__))
+                        app.logger.warning("full backup of %s failed", gs.name, exc_info=True)
             summary = "%d server(s) backed up%s%s" % (
                 ok_n,
                 (", %d failed" % fail_n) if fail_n else "",
                 (", %d skipped (players online)" % skip_n) if skip_n else "")
             if failures:
                 summary += " — " + "; ".join(failures)
-            if skipped:
-                summary += " — waiting for empty: " + ", ".join(skipped)
+            if queued:
+                summary += " — will back up once empty: " + ", ".join(queued)
             bk.record_full_backup(summary[:500])
         except Exception:
             app.logger.warning("full backup run failed", exc_info=True)
         finally:
             _full_backup_lock.release()
 
-    def _trigger_full_backup():
+    def _trigger_full_backup(force=False, defer=False):
         if _full_backup_lock.locked():
             return False
-        threading.Thread(target=_run_full_backup, daemon=True).start()
+        threading.Thread(target=lambda: _run_full_backup(force=force, defer=defer), daemon=True).start()
         return True
+
+    def _run_pending_backups():
+        """Servers queued via 'wait until empty' (backup_pending): back up each one that's now empty
+        and clear its flag; leave the still-busy ones queued for the next tick. Serialised via the
+        same lock as the other backup paths."""
+        if not _full_backup_lock.acquire(blocking=False):
+            return
+        try:
+            with app.app_context():
+                keep = bk.get_full_settings()["keep"]
+                pending = GameServer.query.filter_by(installed=True, backup_pending=True).all()
+                for gs in pending:
+                    if not gs.remote_id:
+                        continue
+                    try:
+                        ok, reason, was_skipped = run_game_backup(
+                            gs.remote, gs.short_name, gs.lgsm_name, keep,
+                            game_type=gs.game_type, port=gs.port)
+                        if not was_skipped:
+                            # Backed up (or genuinely failed) — either way the wait is over.
+                            gs.backup_pending = False
+                            db.session.commit()
+                            _game_backup_status[gs.id] = {"running": False, "ok": ok,
+                                                          "msg": (reason or ("Backed up" if ok else "failed")),
+                                                          "ts": time.time()}
+                        # still players on → leave queued, retry next tick
+                    except Exception:
+                        app.logger.warning("queued backup of %s failed", gs.name, exc_info=True)
+        finally:
+            _full_backup_lock.release()
 
     def _run_due_game_backups():
         """Scheduled per-server backups: back up each installed server whose OWN schedule is due
@@ -2793,16 +2834,48 @@ def register_routes(app):
                 except Exception:
                     app.logger.debug("pending mod-restart of %s failed", gs.name, exc_info=True)
 
+    @app.route("/api/panel/backup/full/precheck")
+    @login_required
+    @permission_required(SUPER_ADMIN)
+    def api_panel_backup_full_precheck():
+        """Report which installed servers have players connected right now, so the UI can ask
+        whether to disconnect them, wait until they're empty, or cancel before a full backup."""
+        busy = []
+        total = 0
+        for gs in GameServer.query.filter_by(installed=True).all():
+            if not gs.remote_id:
+                continue
+            total += 1
+            try:
+                pc = sm_player_count(gs.remote, gs.short_name, gs.game_type, gs.port)
+            except Exception:
+                pc = None
+            if pc and pc > 0:
+                busy.append({"name": gs.name, "players": pc})
+        return jsonify({"total": total, "busy": busy})
+
     @app.route("/api/panel/backup/full", methods=["POST"])
     @login_required
     @permission_required(SUPER_ADMIN)
     def api_panel_backup_full():
-        """Kick off a full (game-file) backup of all installed servers in the background."""
-        started = _trigger_full_backup()
-        log_action(current_user, "panel_full_backup", success=True)
-        return jsonify({"success": True, "running": True,
-                        "message": ("Full backup started — this can take a while for large servers."
-                                    if started else "A full backup is already running.")})
+        """Kick off a full (game-file) backup of all installed servers in the background.
+        mode: 'now' → back up even busy servers (disconnects players); 'wait' → back up empty
+        servers now and queue busy ones to back up once they empty; '' → skip busy servers."""
+        mode = (_json_body().get("mode") or "").strip()
+        force = (mode == "now")
+        defer = (mode == "wait")
+        started = _trigger_full_backup(force=force, defer=defer)
+        log_action(current_user, "panel_full_backup", detail="mode=%s" % (mode or "default"), success=True)
+        if not started:
+            return jsonify({"success": True, "running": True, "message": "A full backup is already running."})
+        if defer:
+            msg = ("Backing up empty servers now; any with players will back up automatically once "
+                   "they're empty.")
+        elif force:
+            msg = "Backing up all servers now — those with players are briefly stopped (players disconnected)."
+        else:
+            msg = "Full backup started — this can take a while for large servers."
+        return jsonify({"success": True, "running": True, "message": msg})
 
     @app.route("/api/panel/backup/game/<int:server_id>", methods=["POST"])
     @login_required
@@ -4379,6 +4452,7 @@ def register_routes(app):
             try:
                 bk.daily_backup_tick()
                 _run_due_game_backups()   # per-server schedules (each records its own last-run)
+                _run_pending_backups()    # 'wait until empty' full-backup queue
                 _run_due_restarts()       # apply deferred mod-restarts once servers empty
             except Exception:
                 app.logger.debug("backup tick failed", exc_info=True)
