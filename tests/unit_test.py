@@ -163,6 +163,27 @@ check("run-time match: exact command matches",
       sm._match_run_time({"touch /home/gm/.restart-pending": 50}, "touch /home/gm/.restart-pending") == 50)
 check("run-time match: no match returns None",
       sm._match_run_time({"a b c": 1}, "/home/gm/nothing") is None)
+# run_cron_job_now: runs the job's UNWRAPPED core command, detached, as the game user, and
+# records to the job's own status file (so Last-run updates).
+import base64 as _b64rn, re as _rern
+_wl = ("*/5 * * * * /home/gm/.lgsm-cron/run " + sm._cron_job_id("/home/gm/backup.sh --full")
+       + " " + _b64rn.b64encode(b"/home/gm/backup.sh --full").decode())
+_rncap = {}
+_orig_run6 = sm.run_command
+try:
+    sm.run_command = lambda s, c, **k: (_rncap.update(cmd=c), ("", "", 0))[1]
+    _rok, _ = sm.run_cron_job_now(None, "gm", _wl, "gmodserver")
+    _c = _rncap["cmd"]
+    check("run now: dispatched ok", _rok is True)
+    check("run now: detached run as the game user",
+          "sudo -u gm bash -c" in _c and "setsid bash" in _c)
+    _m = _rern.search(r"echo ([A-Za-z0-9+/=]+) \| base64 -d", _c)
+    _rec = _b64rn.b64decode(_m.group(1)).decode() if _m else ""
+    check("run now: runs the unwrapped core command", "/home/gm/backup.sh --full >" in _rec)
+    check("run now: records to the job's own status file",
+          ("/home/gm/.lgsm-cron/" + sm._cron_job_id("/home/gm/backup.sh --full") + ".status") in _rec)
+finally:
+    sm.run_command = _orig_run6
 # line splitting
 eq("cron: split 5-field", sm._split_cron_line("0 3 * * * /home/gm/b.sh a"), ("0 3 * * *", "/home/gm/b.sh a"))
 eq("cron: split @shortcut", sm._split_cron_line("@reboot /home/gm/x start"), ("@reboot", "/home/gm/x start"))

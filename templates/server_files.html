@@ -454,10 +454,11 @@ function loadCron(){
     if(d.error){ loading.style.display=''; loading.innerHTML='<span class="text-danger">'+esc(d.error)+'</span>'; return; }
     var tb=document.getElementById('cron-tbody'), rows='';
     (d.jobs||[]).forEach(function(j){
-      var actions = j.managed
+      var runBtn = '<button class="btn btn-sm btn-link p-0 me-2" data-cron-run title="Run now"><i class="bi bi-play-circle"></i></button>';
+      var actions = runBtn + (j.managed
         ? '<span class="badge bg-secondary" title="Managed by the panel — change it with its own toggle">panel</span>'
         : '<button class="btn btn-sm btn-link p-0 me-2" data-cron-edit title="Edit"><i class="bi bi-pencil"></i></button>'
-          + '<button class="btn btn-sm btn-link text-danger p-0" data-cron-del title="Delete"><i class="bi bi-trash"></i></button>';
+          + '<button class="btn btn-sm btn-link text-danger p-0" data-cron-del title="Delete"><i class="bi bi-trash"></i></button>');
       rows += '<tr data-raw="'+escA(j.raw)+'" data-sched="'+escA(j.schedule)+'" data-cmd="'+escA(j.command)+'"'
         + (j.managed?' class="text-secondary"':'') + '>'
         + '<td class="font-monospace" style="white-space:nowrap;">'+esc(j.schedule)+'</td>'
@@ -512,6 +513,17 @@ document.getElementById('cron-tbody').addEventListener('click', function(ev){
     fetch(MOUNT+'/api/server/'+serverId+'/cron/delete',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({raw:row.getAttribute('data-raw')})})
       .then(r=>r.json()).then(d=>{ if(d.success){ cronMsg('✓ Task deleted','text-success'); loadCron(); } else cronMsg('✗ '+(d.message||'Delete failed'),'text-danger'); })
       .catch(()=>cronMsg('✗ Delete failed','text-danger'));
+  } else if(ev.target.closest('[data-cron-run]')){
+    var btn=ev.target.closest('[data-cron-run]'); btn.disabled=true;
+    cronMsg('Running '+row.getAttribute('data-cmd')+'…','text-secondary');
+    fetch(MOUNT+'/api/server/'+serverId+'/cron/run',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({raw:row.getAttribute('data-raw')})})
+      .then(r=>r.json()).then(d=>{
+        cronMsg((d.success?'✓ ':'✗ ')+(d.message||'Done'), d.success?'text-success':'text-danger');
+        btn.disabled=false;
+        // The run is detached; refresh a few times so the OK/Failed badge lands when it finishes.
+        [3000,8000,15000].forEach(function(ms){ setTimeout(loadCron, ms); });
+      })
+      .catch(()=>{ cronMsg('✗ Run failed','text-danger'); btn.disabled=false; });
   }
 });
 

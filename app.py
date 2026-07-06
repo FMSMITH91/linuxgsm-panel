@@ -86,6 +86,7 @@ from ssh_manager import (
     remote_live_metrics, host_specs, pro_status, pro_attach,
     pro_service, pro_detach, set_autostart, install_game_cron, set_daily_restart,
     list_cron_jobs, add_cron_job, update_cron_job, delete_cron_job, upgrade_managed_cron_tracking,
+    run_cron_job_now,
     install_game_dependencies, parse_missing_deps, detect_game_ports, lgsm_read_config,
     lgsm_write_config, lgsm_game_config, browse_dir, read_file,
     write_file, upload_file, delete_path,
@@ -3496,6 +3497,22 @@ def register_routes(app):
             return jsonify({"success": ok, "message": msg or ("Deleted" if ok else "Failed")})
         except Exception:
             return jsonify({"success": False, "message": _log_and_generic("delete_cron_job failed")}), 500
+
+    @app.route("/api/server/<int:server_id>/cron/run", methods=["POST"])
+    @login_required
+    @server_access_required
+    def api_server_cron_run(server_id):
+        """Run a scheduled task on demand (records its exit code + output so Last-run updates)."""
+        gs = get_game(server_id)
+        if not _can_manage_files():
+            return jsonify({"error": "Permission denied"}), 403
+        raw = (request.get_json(silent=True) or {}).get("raw") or ""
+        try:
+            ok, msg = run_cron_job_now(gs.remote, gs.short_name, raw, gs.lgsm_name)
+            log_action(current_user, "cron_run_now", target=gs.name, success=ok)
+            return jsonify({"success": ok, "message": msg})
+        except Exception:
+            return jsonify({"success": False, "message": _log_and_generic("cron run failed")}), 200
 
     @app.route("/api/server/<int:server_id>/upload", methods=["POST"])
     @login_required

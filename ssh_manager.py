@@ -961,7 +961,9 @@ def list_cron_jobs(server, user, selfname=None):
         if sched is None:
             continue
         display_cmd, jid = _unwrap_cron_command(cmd)
-        st = status.get(jid) if jid else None
+        # Status is keyed by the wrapped id, or — so an on-demand "Run now" updates the row even
+        # for an unwrapped job — the hash of the (display) command.
+        st = status.get(jid or _cron_job_id(display_cmd))
         if st:                       # wrapped job that has RUN → full status from the recorder
             last_run, ok, error = st.get("last_run"), st.get("ok"), st.get("error", "")
         else:
@@ -975,6 +977,30 @@ def list_cron_jobs(server, user, selfname=None):
             "last_run": last_run, "ok": ok, "error": error,
         })
     return jobs
+
+
+def run_cron_job_now(server, user, raw, selfname=None):
+    """Run a cron job's command NOW, DETACHED, as the game user — recording its exit code +
+    output to the same status/log files a scheduled run uses, so the Last-run column updates
+    (even for a slow job like `update`, which the detach keeps from hanging the request). The
+    command is taken from the crontab line `raw` and un-wrapped to its core first. Best-effort;
+    returns (ok, message)."""
+    import base64
+    _sched, cmd = _split_cron_line((raw or "").strip())
+    core, jid = _unwrap_cron_command(cmd if cmd is not None else (raw or "").strip())
+    core = (core or "").strip()
+    if not core:
+        return False, "Nothing to run."
+    d = "/home/%s/.lgsm-cron" % user
+    jid = jid or _cron_job_id(core)
+    rec = (f"{core} > {d}/{jid}.log 2>&1; R=$?; T=$(date +%s); "
+           f'echo "$R $T $T" > {d}/{jid}.status')
+    b64 = base64.b64encode(rec.encode()).decode()
+    # setsid detaches the run so a long command records its result later instead of blocking;
+    # `sudo -u` confines it to the game user's own privileges (same as a scheduled run).
+    inner = f"mkdir -p {d}; echo {b64} | base64 -d | setsid bash >/dev/null 2>&1 &"
+    run_command(server, f"sudo -u {user} bash -c {_quote(inner)}", timeout=15, sudo=False)
+    return True, "Started — the result will appear under Last run shortly."
 
 
 def add_cron_job(server, user, schedule, command, selfname=None):
