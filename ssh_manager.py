@@ -927,6 +927,21 @@ def upgrade_managed_cron_tracking(server, user, selfname=None):
     return ok
 
 
+def _match_run_time(run_times, cmd):
+    """Last-run epoch for `cmd` from the cron-log map. Exact match first; then substring, so a
+    wrapped job's CORE command (e.g. `<base> monitor`) still matches its logged line whether it
+    was the old `… > /dev/null 2>&1` form or the new recorder form. Newest match wins."""
+    if not cmd:
+        return None
+    if cmd in run_times:
+        return run_times[cmd]
+    best = None
+    for logged, epoch in run_times.items():
+        if cmd in logged and (best is None or epoch > best):
+            best = epoch
+    return best
+
+
 def list_cron_jobs(server, user, selfname=None):
     """Read the game user's crontab as a list of jobs. Comment/blank lines are
     skipped. Each job: {raw, schedule, command, managed, last_run, ok, error}. `raw` is the
@@ -947,10 +962,13 @@ def list_cron_jobs(server, user, selfname=None):
             continue
         display_cmd, jid = _unwrap_cron_command(cmd)
         st = status.get(jid) if jid else None
-        if st:                       # wrapped user job → full status from the recorder
+        if st:                       # wrapped job that has RUN → full status from the recorder
             last_run, ok, error = st.get("last_run"), st.get("ok"), st.get("error", "")
-        else:                        # managed/legacy → time only, matched by the raw command
-            last_run, ok, error = run_times.get((cmd or "").strip()), None, ""
+        else:
+            # No recorder status yet (unwrapped job, or a freshly-wrapped one that hasn't run in
+            # the new form). Show the last-run TIME from cron's own log so it never regresses to
+            # "—"; the core command matches both the old redirect form and the wrapped form.
+            last_run, ok, error = _match_run_time(run_times, display_cmd or cmd), None, ""
         jobs.append({
             "raw": raw, "schedule": sched, "command": display_cmd,
             "managed": _cron_line_managed(s, user, selfname),

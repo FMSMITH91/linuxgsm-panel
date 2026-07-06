@@ -153,6 +153,16 @@ try:
           _rt["touch /home/gm/.restart-pending"] == 1720007200)
 finally:
     sm.run_command = _orig_run4
+# _match_run_time: a wrapped job's CORE command matches its logged line (old or wrapped form),
+# so a freshly-upgraded job shows its run time instead of "—" until the recorder status lands.
+_rtm = {"/home/gm/gmodserver monitor > /dev/null 2>&1": 100,
+        "mkdir -p /home/gm/.lgsm-cron && /home/gm/gmodserver monitor > /home/gm/.lgsm-cron/ab.log 2>&1": 200}
+check("run-time match: core command matches wrapped/old log line (newest wins)",
+      sm._match_run_time(_rtm, "/home/gm/gmodserver monitor") == 200)
+check("run-time match: exact command matches",
+      sm._match_run_time({"touch /home/gm/.restart-pending": 50}, "touch /home/gm/.restart-pending") == 50)
+check("run-time match: no match returns None",
+      sm._match_run_time({"a b c": 1}, "/home/gm/nothing") is None)
 # line splitting
 eq("cron: split 5-field", sm._split_cron_line("0 3 * * * /home/gm/b.sh a"), ("0 3 * * *", "/home/gm/b.sh a"))
 eq("cron: split @shortcut", sm._split_cron_line("@reboot /home/gm/x start"), ("@reboot", "/home/gm/x start"))
