@@ -2426,21 +2426,32 @@ def register_routes(app):
             return jsonify({"success": False,
                             "message": f"Port {new_port} is already in use on this host."}), 400
 
-        bind_host = cfg.get("bind_host", "0.0.0.0")
-        public = bind_host not in ("127.0.0.1", "localhost", "::1")
+        # Was the panel's CURRENT port publicly open in UFW? Decide from the live rule state
+        # (more reliable than bind_host, which the "close public port" flow may leave at
+        # 0.0.0.0). We mirror that exposure onto the new port.
+        was_open = False
+        if local:
+            try:
+                was_open = bool(remote_public_ssh_status(
+                    local, panel_port=cur_port).get("panel_port_open"))
+            except Exception:
+                was_open = False
 
         # Save first so the restart binds to (and re-points Serve at) the new port.
         cfg["port"] = new_port
         save_config(cfg)
 
-        # If the panel is reachable on a PUBLIC interface, move the firewall rule with it:
-        # open the new port, close the old one. Tailnet-only panels have no public rule.
+        # Move the firewall rule with the port: open the new port ONLY if the old one was
+        # actually open (never silently expose a tailnet-only panel), and ALWAYS remove the
+        # now-stale rule for the old port so it isn't left dangling.
         fw_note = ""
-        if public and local:
+        if local:
             try:
-                remote_ufw_open_port(local, new_port, "tcp", "LinuxGSM Panel")
+                if was_open:
+                    remote_ufw_open_port(local, new_port, "tcp", "LinuxGSM Panel")
                 remote_ufw_close_port(local, cur_port, "tcp")
-                fw_note = f" Firewall updated (opened {new_port}, closed {cur_port})."
+                fw_note = (f" Firewall: opened {new_port}, closed {cur_port}." if was_open
+                           else f" Firewall: removed the stale rule for {cur_port}.")
             except Exception:
                 app.logger.warning("change-port: firewall update failed", exc_info=True)
 
@@ -2452,7 +2463,7 @@ def register_routes(app):
                                        "automatically — restart it (or reboot the host) to apply."}), 200
         return jsonify({"success": True, "new_port": new_port, "old_port": cur_port,
                         "served_over_tailscale": bool(cfg.get("tailscale_setup_done")),
-                        "public": public,
+                        "firewall_moved": was_open,
                         "message": f"Panel port changing to {new_port}. Restarting…{fw_note}"})
 
     @app.route("/api/panel/debug-report")

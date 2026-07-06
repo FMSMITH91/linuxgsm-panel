@@ -132,6 +132,50 @@ panel_port() {
     fi
 }
 
+# Pick a free listen port and record it in data/config.json before the first boot. If the
+# desired port (5000, or a previously configured one) is already taken by another service,
+# the panel would fail to bind — so probe upward for a free port and persist the choice so
+# the first start, the health check, and the firewall step all agree. Prints the chosen port.
+choose_and_record_port() {
+    local desired="${1:-5000}"
+    python3 - "${desired}" "${PANEL_DIR}/data/config.json" <<'PYEOF'
+import json, os, socket, sys
+desired, cfg_path = int(sys.argv[1]), sys.argv[2]
+
+def free(p):
+    # Free = we can bind a fresh listening socket on it (an active listener makes bind fail
+    # with EADDRINUSE regardless of SO_REUSEADDR). IPv4 is what the panel binds by default.
+    s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    try:
+        s.bind(("0.0.0.0", p))
+        return True
+    except OSError:
+        return False
+    finally:
+        s.close()
+
+port = desired
+for cand in range(desired, desired + 51):   # 5000..5050 — plenty of headroom
+    if free(cand):
+        port = cand
+        break
+
+cfg = {}
+try:
+    with open(cfg_path) as f:
+        cfg = json.load(f)
+except Exception:
+    cfg = {}
+cfg["port"] = port
+os.makedirs(os.path.dirname(cfg_path), exist_ok=True)
+tmp = cfg_path + ".tmp"
+with open(tmp, "w") as f:
+    json.dump(cfg, f, indent=2)
+os.replace(tmp, cfg_path)
+print(port)
+PYEOF
+}
+
 # Return the HTTP status of a URL as a 3-digit string ("000" if unreachable),
 # using curl if present and falling back to python3 (always available here) so a
 # host without curl still gets a real health check instead of a false rollback.
@@ -399,6 +443,19 @@ fetch_code
 info "[2/4] Creating virtual environment & installing dependencies…"
 install_deps
 ok "Dependencies installed"
+
+# Ensure the panel's listen port is free BEFORE the first boot: if 5000 (or a previously
+# configured port) is already taken by another service, the panel would fail to bind. Probe
+# for a free port and record it in config.json so the service start, the health check, and
+# the firewall step below all use the same, working port. (Written before the chown below so
+# the root-install path fixes ownership afterward.)
+DESIRED_PORT="$(panel_port)"
+PANEL_PORT="$(choose_and_record_port "${DESIRED_PORT}")"
+if [ "${PANEL_PORT}" != "${DESIRED_PORT}" ]; then
+    warn "Port ${DESIRED_PORT} is already in use — the panel will use port ${PANEL_PORT} instead."
+else
+    ok "Port ${PANEL_PORT} is free for the panel"
+fi
 
 info "[3/4] Registering the service…"
 if [ "${RUN_AS_ROOT}" -eq 1 ]; then
