@@ -88,6 +88,7 @@ from ssh_manager import (
     pro_service, pro_detach, set_autostart, install_game_cron, set_daily_restart,
     list_cron_jobs, add_cron_job, update_cron_job, delete_cron_job, upgrade_managed_cron_tracking,
     run_cron_job_now, run_game_backup, list_game_backups,
+    delete_game_backup, stream_game_backup,
     mods_available, mods_installed, mods_action,
     install_game_dependencies, parse_missing_deps, detect_game_ports, lgsm_read_config,
     lgsm_write_config, lgsm_game_config, lgsm_get_values, browse_dir, read_file,
@@ -2636,6 +2637,51 @@ def register_routes(app):
         log_action(current_user, "game_backup", target=gname, success=True)
         return jsonify({"success": True, "running": True,
                         "message": "Backing up " + gname + " — it'll appear below when done."})
+
+    def _find_game_backup(gs, name):
+        """Return the backup dict whose name matches `name` from the server's real backup list, or
+        None. Validating against the listing (not building a path from user input) keeps this
+        path-injection safe."""
+        for b in list_game_backups(gs.remote, gs.short_name):
+            if b["name"] == name:
+                return b
+        return None
+
+    @app.route("/api/panel/backup/game/<int:server_id>/delete", methods=["POST"])
+    @login_required
+    @permission_required(SUPER_ADMIN)
+    def api_panel_backup_game_delete(server_id):
+        """Delete one game-server backup archive."""
+        gs = get_game(server_id)
+        name = (request.get_json(silent=True) or {}).get("name") or ""
+        match = _find_game_backup(gs, name)
+        if not match:
+            return jsonify({"success": False, "message": "Backup not found."}), 404
+        try:
+            ok = delete_game_backup(gs.remote, gs.short_name, match["name"])
+            log_action(current_user, "game_backup_delete", target=gs.name,
+                       detail=match["name"], success=ok)
+            return jsonify({"success": ok, "message": ("Deleted." if ok else "Delete failed.")})
+        except Exception:
+            return jsonify({"success": False, "message": _log_and_generic("game backup delete failed")}), 200
+
+    @app.route("/backup/game/<int:server_id>/download")
+    @login_required
+    @permission_required(SUPER_ADMIN)
+    def panel_backup_game_download(server_id):
+        """Stream a game-server backup archive to the browser (files live in the game user's home,
+        so they're read via sudo/SSH rather than served from disk)."""
+        gs = get_game(server_id)
+        match = _find_game_backup(gs, request.args.get("name") or "")
+        if not match:
+            abort(404)
+        log_action(current_user, "game_backup_download", target=gs.name, detail=match["name"])
+        resp = Response(stream_game_backup(gs.remote, gs.short_name, match["name"]),
+                        mimetype="application/octet-stream")
+        resp.headers["Content-Length"] = str(match["size"])
+        resp.headers["Content-Disposition"] = (
+            'attachment; filename="%s"' % os.path.basename(match["name"]))
+        return resp
 
     @app.route("/api/panel/backups")
     @login_required

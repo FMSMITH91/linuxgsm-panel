@@ -1073,6 +1073,63 @@ def prune_game_backups(server, user, keep=3):
     run_command(server, f"sudo -u {user} bash -c {_quote(cmd)}", timeout=30, sudo=False)
 
 
+# Game-backup file names are "<selfname>-YYYY-MM-DD-HHMMSS.tar.<ext>" — a strict shape we
+# require before ever touching a path (callers ALSO check the name is in the real backup list).
+_GAME_BACKUP_NAME = re.compile(r"^[A-Za-z0-9._-]+\.tar\.[A-Za-z0-9.]+$")
+
+
+def delete_game_backup(server, user, name):
+    """Delete one game backup by file name from ~/lgsm/backup/, as the game user. Returns True on
+    success. `name` is shape-validated here; the caller validates it against the actual listing."""
+    if not _GAME_BACKUP_NAME.match(name or ""):
+        return False
+    path = "/home/%s/lgsm/backup/%s" % (user, name)
+    _, _, rc = run_command(server, f"sudo -u {user} rm -f -- {_quote(path)}", timeout=30, sudo=False)
+    return rc == 0
+
+
+def stream_game_backup(server, user, name, chunk=262144):
+    """Yield the bytes of ~/lgsm/backup/<name> as the game user, for a browser download. Works for
+    local, paramiko and Tailscale-CLI remotes. `name` MUST already be validated by the caller
+    (checked against the real backup list); we also re-check its shape here. Uses the (green,
+    eventlet-patched) subprocess/paramiko IO so a multi-GB download doesn't block the event hub."""
+    if not _GAME_BACKUP_NAME.match(name or ""):
+        return
+    path = "/home/%s/lgsm/backup/%s" % (user, name)
+
+    if is_local_server(server) or getattr(server, "auth_method", "") == "tailscale":
+        if is_local_server(server):
+            argv = ["sudo", "-u", user, "cat", path]
+        else:
+            host = _resolve_ts_host(server)
+            argv = ["ssh", "-T", "-o", "StrictHostKeyChecking=accept-new", "-o", "BatchMode=yes",
+                    "-p", str(server.port or 22), f"{server.username}@{host}",
+                    f"sudo -u {user} cat {_quote(path)}"]
+        p = subprocess.Popen(argv, stdout=subprocess.PIPE)
+        try:
+            while True:
+                b = p.stdout.read(chunk)
+                if not b:
+                    break
+                yield b
+        finally:
+            try:
+                p.stdout.close()
+            except Exception:  # nosec B110
+                pass
+            p.wait()
+        return
+
+    # paramiko remote
+    client = get_connection(server)
+    _in, out, _err = client.exec_command(f"sudo -u {user} cat {_quote(path)}")
+    while True:
+        b = out.read(chunk)
+        if not b:
+            break
+        yield b
+
+
 def run_game_backup(server, user, selfname=None, keep=3):
     """Run LinuxGSM's own `backup` for a game instance (archives serverfiles into
     ~/lgsm/backup/), then prune to the newest `keep`. Runs AS THE GAME USER, non-interactively

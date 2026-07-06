@@ -912,6 +912,17 @@ check("mods: 'No installed mods' output yields empty list",
 check("mods: mods_action rejects an unsafe id",
       sm.mods_action(None, "u", "u", "install", "foo; rm -rf x")[1] == "invalid mod id")
 
+# game-backup download/delete validate the file name before touching any path (server=None here,
+# so a passing regex would crash — proving rejection happens purely on the name)
+check("game backup: delete rejects an unsafe name",
+      sm.delete_game_backup(None, "u", "x; rm -rf y") is False)
+check("game backup: delete rejects a path-traversal name",
+      sm.delete_game_backup(None, "u", "../../etc/passwd") is False)
+check("game backup: stream yields nothing for an unsafe name",
+      list(sm.stream_game_backup(None, "u", "../../etc/passwd")) == [])
+check("game backup: name shape accepts a real archive",
+      bool(sm._GAME_BACKUP_NAME.match("gmodserver-2026-07-06-141117.tar.zst")))
+
 # ── cleanup: remove key/config files this run created ─────────
 for p in (config.CRED_KEY_FILE, config.SECRET_FILE, config.CONFIG_FILE):
     if p not in _pre and os.path.exists(p):

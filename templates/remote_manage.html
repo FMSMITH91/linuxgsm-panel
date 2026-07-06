@@ -1031,7 +1031,14 @@ function loadBackups(){
     if(fg){
       var gh='';
       (d.games||[]).forEach(function(g){
-        var items=(g.backups||[]).map(function(b){ return escapeHtml(b.name)+' <span class="text-secondary">('+bkFmtBytes(b.size)+', '+bkAgo(b.created)+')</span>'; }).join('<br>');
+        var items=(g.backups||[]).map(function(b){
+          return '<div class="d-flex justify-content-between align-items-center gap-2 py-1">'
+            + '<span class="small text-break">'+escapeHtml(b.name)+' <span class="text-secondary">('+bkFmtBytes(b.size)+', '+bkAgo(b.created)+')</span></span>'
+            + '<span class="text-nowrap">'
+            + '<a class="btn btn-sm btn-outline-secondary py-0 px-1" href="'+MOUNT+'/backup/game/'+g.id+'/download?name='+encodeURIComponent(b.name)+'" title="Download backup"><i class="bi bi-download"></i></a> '
+            + '<button class="btn btn-sm btn-outline-danger py-0 px-1" data-gid="'+g.id+'" data-name="'+escapeHtml(b.name)+'" onclick="deleteGameBackup(this)" title="Delete backup"><i class="bi bi-trash"></i></button>'
+            + '</span></div>';
+        }).join('');
         var st=g.status, stHtml='';
         if(st){
           if(st.running){ stHtml=' <span class="text-secondary"><i class="bi bi-arrow-repeat"></i> backing up…</span>'; }
@@ -1088,6 +1095,16 @@ function backupOneGame(id,btn){
     [3000,8000,20000,40000,70000,120000].forEach(function(ms){ setTimeout(loadBackups, ms); });
     if(!d.success && btn) btn.disabled=false;
   }).catch(function(){ bkMsg('✗ Could not start','text-danger'); if(btn) btn.disabled=false; });
+}
+function deleteGameBackup(btn){
+  var name=btn.getAttribute('data-name'), gid=btn.getAttribute('data-gid');
+  if(!confirm('Delete this game-server backup?\n\n'+name)) return;
+  btn.disabled=true; bkMsg('Deleting…','text-secondary');
+  fetch(MOUNT+'/api/panel/backup/game/'+gid+'/delete',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({name:name})})
+    .then(r=>r.json()).then(function(d){
+      bkMsg((d.success?'✓ ':'✗ ')+(d.message||''), d.success?'text-success':'text-danger');
+      loadBackups();
+    }).catch(function(){ bkMsg('✗ Delete failed','text-danger'); btn.disabled=false; });
 }
 function deleteBackup(name,btn){
   if(!confirm('Delete this backup?\n\n'+name)) return;
