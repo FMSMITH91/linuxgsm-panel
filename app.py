@@ -1036,7 +1036,7 @@ def register_routes(app):
         ref = request.referrer or ""
         if ref and urlparse(ref).netloc and urlparse(ref).netloc != urlparse(request.host_url).netloc:
             ref = ""
-        return redirect(ref or url_for("dashboard"))
+        return redirect(ref or url_for("index"))
 
     @app.route("/account/2fa/enable", methods=["GET", "POST"])
     @login_required
