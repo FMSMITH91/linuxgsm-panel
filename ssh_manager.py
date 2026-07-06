@@ -3,6 +3,7 @@ Also supports local execution for running on the panel's own machine."""
 import logging
 import os
 import re
+import signal
 import socket
 import subprocess
 import threading
@@ -65,6 +66,24 @@ _connections = {}
 _conn_lock = threading.Lock()
 
 
+def _kill_process_tree(p):
+    """Kill a Popen and its entire process group, so no grandchildren are left orphaned."""
+    try:
+        if hasattr(os, "killpg") and hasattr(os, "getpgid"):
+            os.killpg(os.getpgid(p.pid), signal.SIGKILL)
+        else:
+            p.kill()   # Windows / no process groups
+    except Exception:
+        try:
+            p.kill()
+        except Exception:  # nosec B110
+            pass
+    try:
+        p.communicate(timeout=5)   # reap it so it doesn't linger as a zombie
+    except Exception:  # nosec B110
+        pass
+
+
 def _run_local(cmd, timeout=30, sudo=False):
     """Run a command locally on the panel's own machine.
     If the command already uses privilege escalation, don't double-wrap.
@@ -87,16 +106,26 @@ def _run_local(cmd, timeout=30, sudo=False):
         full_cmd = f"sudo bash -c {_quote(cmd)}"
 
     def _do():
+        p = None
         try:
-            r = _real_subprocess.run(full_cmd, shell=True, capture_output=True,
-                                     text=True, timeout=timeout)
-            return r.stdout.strip(), r.stderr.strip(), r.returncode
-        except _real_subprocess.TimeoutExpired:
-            return "", "Command timed out", -1
+            # Run in a NEW process group (start_new_session) so that on timeout we can kill the
+            # whole group — otherwise subprocess's timeout only kills the direct `sh -c` child and
+            # any grandchildren (e.g. a stuck LinuxGSM command) get orphaned and run forever,
+            # burning CPU. (Observed: mods commands stuck at ~100% CPU for hours.)
+            p = _real_subprocess.Popen(full_cmd, shell=True, stdout=_real_subprocess.PIPE,
+                                       stderr=_real_subprocess.PIPE, text=True, start_new_session=True)
+            try:
+                out, err = p.communicate(timeout=timeout)
+                return (out or "").strip(), (err or "").strip(), p.returncode
+            except _real_subprocess.TimeoutExpired:
+                _kill_process_tree(p)
+                return "", "Command timed out", -1
         except Exception:
             # Never surface raw exception text — it can flow into API responses
             # (CodeQL py/stack-trace-exposure). Log it; callers act on rc == -1.
             _log.debug("local command failed", exc_info=True)
+            if p is not None:
+                _kill_process_tree(p)
             return "", "command execution error", -1
 
     if _tpool is not None:
