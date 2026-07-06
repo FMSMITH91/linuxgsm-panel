@@ -132,8 +132,10 @@ _bootstrap_lock = threading.Lock()
 _install_jobs = {}
 _install_lock = threading.Lock()
 
-# Only one full (game-file) backup at a time — they're slow and space-heavy.
+# Only one game-file backup at a time (full OR single-server) — they're slow and space-heavy.
 _full_backup_lock = threading.Lock()
+# Last on-demand per-server backup outcome, keyed by server id (transient, in-memory).
+_game_backup_status = {}
 
 
 # A token unique to THIS panel process — it changes only when the panel actually restarts.
@@ -2596,6 +2598,39 @@ def register_routes(app):
                         "message": ("Full backup started — this can take a while for large servers."
                                     if started else "A full backup is already running.")})
 
+    @app.route("/api/panel/backup/game/<int:server_id>", methods=["POST"])
+    @login_required
+    @permission_required(SUPER_ADMIN)
+    def api_panel_backup_game(server_id):
+        """Run LinuxGSM's backup for a single server on demand (background). Serialised with the
+        full backup via the same lock so game backups never overlap and thrash the disk."""
+        gs = get_game(server_id)
+        if not gs.installed or not gs.remote_id:
+            return jsonify({"success": False, "message": "Server is not installed."}), 400
+        if not _full_backup_lock.acquire(blocking=False):
+            return jsonify({"success": False, "message": "A backup is already running — try again in a moment."}), 200
+        keep = bk.get_full_settings()["keep"]
+        remote, short, lgsm, gname = gs.remote, gs.short_name, gs.lgsm_name, gs.name
+        _game_backup_status[server_id] = {"running": True, "ok": None, "msg": "", "ts": time.time()}
+
+        def _worker():
+            try:
+                ok, reason = run_game_backup(remote, short, lgsm, keep)
+                _game_backup_status[server_id] = {"running": False, "ok": ok,
+                                                  "msg": (reason or ("Backed up" if ok else "failed")),
+                                                  "ts": time.time()}
+            except Exception:
+                app.logger.warning("on-demand backup of %s failed", gname, exc_info=True)
+                _game_backup_status[server_id] = {"running": False, "ok": False,
+                                                  "msg": "internal error", "ts": time.time()}
+            finally:
+                _full_backup_lock.release()
+
+        threading.Thread(target=_worker, daemon=True).start()
+        log_action(current_user, "game_backup", target=gname, success=True)
+        return jsonify({"success": True, "running": True,
+                        "message": "Backing up " + gname + " — it'll appear below when done."})
+
     @app.route("/api/panel/backups")
     @login_required
     @permission_required(SUPER_ADMIN)
@@ -2611,7 +2646,8 @@ def register_routes(app):
                     gb = list_game_backups(gs.remote, gs.short_name)
                 except Exception:
                     gb = []
-                games.append({"name": gs.name, "backups": gb})
+                games.append({"id": gs.id, "name": gs.name, "backups": gb,
+                              "status": _game_backup_status.get(gs.id)})
             return jsonify({"backups": bk.list_backups(), "settings": bk.get_settings(),
                             "full": bk.get_full_settings(), "full_running": _full_backup_lock.locked(),
                             "games": games})

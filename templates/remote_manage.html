@@ -1031,7 +1031,20 @@ function loadBackups(){
       var gh='';
       (d.games||[]).forEach(function(g){
         var items=(g.backups||[]).map(function(b){ return escapeHtml(b.name)+' <span class="text-secondary">('+bkFmtBytes(b.size)+', '+bkAgo(b.created)+')</span>'; }).join('<br>');
-        gh += '<div class="mb-1"><strong>'+escapeHtml(g.name)+'</strong>: '+(items||'<span class="text-secondary">no backups yet</span>')+'</div>';
+        var st=g.status, stHtml='';
+        if(st){
+          if(st.running){ stHtml=' <span class="text-secondary"><i class="bi bi-arrow-repeat"></i> backing up…</span>'; }
+          else if(st.ok===true){ stHtml=' <span class="text-success">✓ '+escapeHtml(st.msg||'backed up')+'</span>'; }
+          else if(st.ok===false){ stHtml=' <span class="text-danger">✗ '+escapeHtml(st.msg||'failed')+'</span>'; }
+        }
+        gh += '<div class="mb-2 border-bottom pb-1">'
+            + '<div class="d-flex justify-content-between align-items-center gap-2">'
+            + '<strong>'+escapeHtml(g.name)+'</strong>'
+            + '<button class="btn btn-sm btn-outline-success py-0 px-2" '+(st&&st.running?'disabled':'')
+            + ' onclick="backupOneGame('+g.id+',this)"><i class="bi bi-play-circle"></i> Back up now</button>'
+            + '</div>'
+            + '<div>'+(items||'<span class="text-secondary">no backups yet</span>')+stHtml+'</div>'
+            + '</div>';
       });
       fg.innerHTML = (d.games||[]).length ? gh : '<span class="text-secondary">No installed game servers.</span>';
     }
@@ -1061,6 +1074,16 @@ function runFullBackup(btn){
   fetch(MOUNT+'/api/panel/backup/full',{method:'POST'}).then(r=>r.json()).then(function(d){
     bkMsg((d.success?'✓ ':'✗ ')+(d.message||''), d.success?'text-success':'text-danger');
     [4000,15000,45000].forEach(function(ms){ setTimeout(loadBackups, ms); });   // refresh as it runs
+  }).catch(function(){ bkMsg('✗ Could not start','text-danger'); if(btn) btn.disabled=false; });
+}
+function backupOneGame(id,btn){
+  if(!confirm('Back up this game server now?\n\nLinuxGSM will archive its files into ~/lgsm/backup — this can take a while and use disk space.')) return;
+  if(btn) btn.disabled=true;
+  bkMsg('Starting backup…','text-secondary');
+  fetch(MOUNT+'/api/panel/backup/game/'+id,{method:'POST'}).then(r=>r.json()).then(function(d){
+    bkMsg((d.success?'✓ ':'✗ ')+(d.message||''), d.success?'text-success':'text-danger');
+    [3000,10000,30000].forEach(function(ms){ setTimeout(loadBackups, ms); });   // refresh as it runs
+    if(!d.success && btn) btn.disabled=false;
   }).catch(function(){ bkMsg('✗ Could not start','text-danger'); if(btn) btn.disabled=false; });
 }
 function deleteBackup(name,btn){
