@@ -1051,6 +1051,22 @@ def _panel_web_port(server):
         return 5000
 
 
+def _panel_served_over_tailscale(server):
+    """True when THIS host is the panel AND its web UI is published over Tailscale Serve
+    (tailscale_setup_done). In that case the *inbound* tailscale0 UFW rule is exactly what
+    keeps the panel reachable over the tailnet — with UFW default-deny, deleting it drops
+    inbound tailnet traffic to Serve and locks you out of the panel. It's the mirror image
+    of _panel_web_port: once Serve is the way in, the public port is free to close BUT the
+    tailscale0 rule becomes load-bearing and must be protected."""
+    try:
+        if not is_local_server(server):
+            return False
+        from config import load_config
+        return bool(load_config().get("tailscale_setup_done"))
+    except Exception:
+        return False
+
+
 def _annotate_firewall_protection(server, enabled, groups):
     """Flag rules whose removal could LOCK YOU OUT, so the UI and API can refuse to
     delete the last way in. Access rules: the SSH-port ALLOW and the Tailscale-
@@ -1074,6 +1090,7 @@ def _annotate_firewall_protection(server, enabled, groups):
         g["is_access"] = g["is_ssh"] or g["is_tailscale"]
 
     panel_port = _panel_web_port(server)
+    served_over_ts = _panel_served_over_tailscale(server)
     ssh_count = sum(1 for g in groups if g.get("is_ssh"))
     has_ts_iface = any(g.get("is_tailscale") for g in groups)
 
@@ -1115,6 +1132,19 @@ def _annotate_firewall_protection(server, enabled, groups):
                 "route to fall back on — removing it would lock you out. Enable Tailscale SSH, or "
                 "connect Tailscale and allow the tailscale0 interface, first." % g["port_num"])
         else:  # is_tailscale — deleting it drops regular SSH over the tailnet; Tailscale SSH is unaffected
+            if served_over_ts:
+                # This is the panel host and its UI is published over Tailscale Serve, so this
+                # inbound tailscale0 rule is what keeps the PANEL reachable over the tailnet —
+                # not just SSH. With UFW default-deny, removing it drops inbound tailnet traffic
+                # to Serve and locks you out of the panel, and an available SSH path doesn't save
+                # the UI. Protect it outright (blocks the UI's × and any direct delete API call).
+                g["protected"] = True
+                g["protect_reason"] = (
+                    "This Tailscale interface rule keeps the panel reachable over your tailnet "
+                    "(Tailscale Serve). With the firewall's default-deny, removing it would drop "
+                    "inbound tailnet traffic and lock you out of the panel — so it can't be "
+                    "deleted here.")
+                continue
             other_way = (ssh_count > 0) or ts_ssh_ok
             reason_last = (
                 "This is the Tailscale interface rule and currently the only way in — removing it "

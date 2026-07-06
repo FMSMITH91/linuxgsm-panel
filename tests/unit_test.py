@@ -234,6 +234,11 @@ g = protect(NS(port=22), ["22/tcp ALLOW IN Anywhere", "5000/tcp ALLOW IN Anywher
             cfg={"port": 5000, "tailscale_setup_done": True}, is_local=True)
 gp = {x["port_num"]: x for x in g}
 check("local + Serve set up: panel 5000 NOT protected", not gp["5000"]["protected"])
+# ...and with Serve serving the panel, the inbound tailscale0 rule is now what keeps the
+# panel reachable over the tailnet, so it must be PROTECTED (the reported bug: the UI let
+# you delete tailscale0 while the panel was served over it — a lock-out).
+_tsrule = next(x for x in g if x["is_tailscale"])
+check("local + Serve set up: inbound tailscale0 rule protected", _tsrule["protected"])
 
 # On a REMOTE host the panel port is never protected.
 g = protect(NS(port=22), ["22/tcp ALLOW IN Anywhere", "5000/tcp ALLOW IN Anywhere"],
