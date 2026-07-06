@@ -572,7 +572,7 @@ finally:
 _rd = _so._redact
 check("redact: masks email addresses", "[email]" in _rd("reach me at admin@example.com now"))
 check("redact: masks long token/key strings",
-      "[redacted]" in _rd("key AKIAIOSFODNN7EXAMPLEabcdef1234567890XYZ"))
+      "[redacted]" in _rd("key exampletokenexampletokenexampletoken12345"))
 check("redact: masks key=value secrets", "[redacted]" in _rd("password=hunter2superSecret"))
 check("redact: masks token: value", "[redacted]" in _rd("auth_token: abc.def.ghi"))
 check("redact: leaves ordinary text intact", "server is offline" in _rd("server is offline"))

@@ -12,3 +12,5 @@ exclude_paths:
   - "**/__pycache__/**"
   - "lgsm/data/**"          # bundled reference CSVs, not code
   - "docs/screenshots/**"   # images
+  - "tests/**"              # test fixtures legitimately hold fake secrets and disable CSRF
+                            # (the test client has no browser token) — not shipped app code
