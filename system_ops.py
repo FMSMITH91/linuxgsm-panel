@@ -543,6 +543,46 @@ def panel_self_update():
         return False, "Could not start the updater — check the panel logs."
 
 
+def restart_panel(delay_seconds=2):
+    """Restart the panel's OWN systemd service via a DETACHED transient timer so it survives
+    the panel process being killed mid-restart (the unit is KillMode=control-group, which
+    would otherwise kill a normal child). Used after a config change that only takes effect on
+    a rebind — notably the listen port. The `--on-active` delay lets the triggering HTTP
+    response flush to the browser before the server goes down. Mirrors the self-update
+    launcher's service-model detection. Best-effort; returns (ok, msg)."""
+    delay = "--on-active=%d" % max(1, int(delay_seconds))
+    user_unit = os.path.expanduser("~/.config/systemd/user/linuxgsm-panel.service")
+    system_unit = "/etc/systemd/system/linuxgsm-panel.service"
+    if os.path.exists(user_unit) or not os.path.exists(system_unit):
+        launcher = ["systemd-run", "--user", delay, "--collect",
+                    "systemctl", "--user", "restart", "linuxgsm-panel.service"]
+    else:
+        launcher = ["sudo", "systemd-run", delay, "--collect",
+                    "systemctl", "restart", "linuxgsm-panel.service"]
+    try:
+        subprocess.Popen(launcher, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                         env=os.environ.copy())
+        return True, "Panel restart scheduled."
+    except Exception:
+        _log.exception("panel restart failed to dispatch")
+        return False, "Could not restart the panel — check the panel logs."
+
+
+def port_in_use(port):
+    """True if something is already listening on `port` (tcp or udp) on this host — used to
+    refuse changing the panel to a port that's already taken (which would fail to bind and
+    leave the panel down). Best-effort: on any error, returns False (don't block a change on
+    a flaky check; the restart's own health path is the backstop)."""
+    try:
+        out, _, _ = _run("ss -H -lntu 2>/dev/null | awk '{print $5}'", timeout=8)
+        for addr in (out or "").split():
+            if ":" in addr and addr.rsplit(":", 1)[1] == str(int(port)):
+                return True
+    except Exception:
+        return False
+    return False
+
+
 def panel_update_log(max_bytes=20000):
     """Tail of the self-update log (ANSI stripped) so the UI can show live progress while
     the panel updates and restarts. The detached updater keeps writing to this file across

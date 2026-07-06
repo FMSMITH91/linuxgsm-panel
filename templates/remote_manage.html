@@ -330,6 +330,19 @@
         <div id="panel-port-msg" class="small mt-1"></div>
       </div>
     </div>
+    <div class="row g-3 mt-1">
+      <div class="col-md-6">
+        <div class="small text-secondary mb-1">Panel port <span class="text-secondary">(the web port this panel listens on)</span></div>
+        <p class="small text-secondary mb-1">Change the port the panel serves on. It briefly restarts to apply the change{% if config and config.tailscale_setup_done %} — your Tailscale URL stays the same.{% else %}, then reconnect on the new port.{% endif %}</p>
+        <div class="input-group input-group-sm" style="max-width:340px;">
+          <span class="input-group-text">Port</span>
+          <input type="number" id="panel-port-input" class="form-control" min="1024" max="65535"
+                 value="{{ config.port if config else 5000 }}" aria-label="Panel web port">
+          <button class="btn btn-outline-primary" type="button" onclick="changePanelPort()">Change</button>
+        </div>
+        <div id="panel-port-change-msg" class="small mt-1"></div>
+      </div>
+    </div>
     {% else %}
     <div class="row g-3">
       <div class="col-md-6">
@@ -509,6 +522,33 @@ function closePanelPort(){
   fetch(MOUNT+'/api/remote/'+REMOTE_ID+'/close-panel-port',{method:'POST'}).then(r=>r.json())
     .then(d=>{ m.innerHTML='<span class="text-'+(d.success?'success':'danger')+'">'+(window.escapeHtml?escapeHtml(d.message):(d.message||''))+'</span>'; if(d.success) loadSshStatus(); })
     .catch(()=>{ m.innerHTML='<span class="text-danger">Request failed.</span>'; });
+}
+function changePanelPort(){
+  var inp=document.getElementById('panel-port-input'); if(!inp) return;
+  var p=parseInt(inp.value,10);
+  if(!(p>=1024 && p<=65535)){ alert('Pick a port between 1024 and 65535.'); return; }
+  if(!confirm('Change the panel port to '+p+'?\n\nThe panel will briefly restart to apply it. '
+    +'Make sure you can still reach it afterward (over Tailscale, or on the new port).')) return;
+  var m=document.getElementById('panel-port-change-msg');
+  m.innerHTML='<span class="text-secondary"><i class="bi bi-arrow-repeat"></i> Applying…</span>';
+  fetch(MOUNT+'/api/panel/change-port',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({port:p})})
+    .then(r=>r.json()).then(d=>{
+      if(!d.success){ m.innerHTML='<span class="text-danger">'+(window.escapeHtml?escapeHtml(d.message):(d.message||'Failed'))+'</span>'; return; }
+      // The panel is restarting. Work out where it'll be reachable afterward.
+      var target;
+      if(d.served_over_tailscale || !location.port){
+        target = location.href;                       // same URL (Tailscale Serve / no explicit port)
+      } else {
+        var u=new URL(location.href); u.port=d.new_port; target=u.href;   // direct access → new port
+      }
+      m.innerHTML='<span class="text-success">Panel restarting on port '+d.new_port+'… reconnecting shortly.</span>';
+      setTimeout(function(){ location.href=target; }, 7000);   // give the service time to rebind
+    })
+    .catch(function(){
+      // The restart may cut the connection before the response arrives.
+      m.innerHTML='<span class="text-warning">The panel is restarting — reconnect in a moment'
+        + (location.port ? ' on the new port' : '') + '.</span>';
+    });
 }
 function switchToTailscale(){
   if(!confirm('Switch the panel to Tailscale SSH for this server?\n\nThe connection address becomes the Tailscale IP/DNS and auth switches to Tailscale SSH. Requires Tailscale to be running on the remote.')) return;

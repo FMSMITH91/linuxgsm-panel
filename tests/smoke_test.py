@@ -159,6 +159,15 @@ try:
     check("GET /api/panel/update-log -> 200 (superadmin)",
           ul.status_code == 200 and "lines" in (ul.get_json() or {}), "got %d" % ul.status_code)
 
+    # change-port validation: out-of-range ports are refused BEFORE any save/restart, so
+    # these are side-effect-free. (A valid port would restart the panel — not exercised here.)
+    cp1 = c.post("/api/panel/change-port", json={"port": 80})
+    check("change-port refuses a privileged port (<1024)",
+          cp1.status_code == 400 and not (cp1.get_json() or {}).get("success"))
+    cp2 = c.post("/api/panel/change-port", json={"port": 99999})
+    check("change-port refuses an out-of-range port (>65535)",
+          cp2.status_code == 400 and not (cp2.get_json() or {}).get("success"))
+
     # ── Privilege-escalation guards: a delegated admin (MANAGE_USERS + MANAGE_GROUPS,
     #    NOT superadmin) must not be able to become / create a superadmin. ──
     dc = client_as(deleg_id)

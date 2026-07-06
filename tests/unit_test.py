@@ -391,6 +391,30 @@ _intg = _so.panel_integrity()
 check("integrity: reports git checkout", _intg["git"] is True)
 eq("integrity: counts tampered files", _intg["count"], 2)
 check("integrity: not clean when files differ", _intg["clean"] is False)
+
+# ── change panel port: port_in_use + restart_panel dispatch ──
+_orig_sorun = _so._run
+try:
+    _so._run = lambda c, **k: ("0.0.0.0:5000\n127.0.0.1:22\n[::]:8080\n", "", 0)
+    check("port_in_use: detects a listening port", _so.port_in_use(5000) is True)
+    check("port_in_use: ignores a free port", _so.port_in_use(9999) is False)
+    check("port_in_use: matches bracketed IPv6 address", _so.port_in_use(8080) is True)
+finally:
+    _so._run = _orig_sorun
+
+_orig_popen = _so.subprocess.Popen
+_cap = {}
+try:
+    _so.subprocess.Popen = lambda a, **k: (_cap.update(args=a), type("P", (), {})())[1]
+    _ok, _ = _so.restart_panel()
+    check("restart_panel: dispatches successfully", _ok is True)
+    check("restart_panel: targets the panel service via systemd-run restart",
+          "systemd-run" in _cap["args"] and "restart" in _cap["args"]
+          and "linuxgsm-panel.service" in _cap["args"])
+    check("restart_panel: delays so the HTTP response can flush",
+          any(str(x).startswith("--on-active=") for x in _cap["args"]))
+finally:
+    _so.subprocess.Popen = _orig_popen
 check("integrity: parses modified status",
       {"path": "app.py", "status": "modified"} in _intg["modified"])
 check("integrity: parses deleted status",

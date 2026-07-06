@@ -2397,6 +2397,64 @@ def register_routes(app):
             return jsonify({"success": False,
                             "message": _log_and_generic("db optimize failed")}), 500
 
+    @app.route("/api/panel/change-port", methods=["POST"])
+    @login_required
+    @permission_required(SUPER_ADMIN)
+    def api_panel_change_port():
+        """Change the web port the panel listens on. Saves the new port, moves the public
+        firewall rule with it when the panel is exposed directly (tailnet-only panels have no
+        public rule), then restarts the panel so it rebinds — on restart it also re-points
+        Tailscale Serve at the new port automatically. Refuses a port outside 1024-65535, the
+        current port, one already in use, or one a local game server occupies — any of which
+        would leave the panel unable to bind and effectively down."""
+        data = request.get_json(silent=True) or {}
+        new_port = _int_or(data.get("port"), 0)
+        cfg = load_config()
+        cur_port = int(cfg.get("port", 5000))
+
+        if not (1024 <= new_port <= 65535):
+            return jsonify({"success": False, "message": "Pick a port between 1024 and 65535."}), 400
+        if new_port == cur_port:
+            return jsonify({"success": False, "message": "That's already the panel's port."}), 400
+        local = RemoteServer.query.filter_by(is_local=True).first()
+        clash = GameServer.query.filter_by(remote_id=local.id, port=new_port).first() if local else None
+        if clash:
+            return jsonify({"success": False,
+                            "message": f"Port {new_port} is used by game server "
+                                       f"'{clash.name}'. Pick another."}), 400
+        if so.port_in_use(new_port):
+            return jsonify({"success": False,
+                            "message": f"Port {new_port} is already in use on this host."}), 400
+
+        bind_host = cfg.get("bind_host", "0.0.0.0")
+        public = bind_host not in ("127.0.0.1", "localhost", "::1")
+
+        # Save first so the restart binds to (and re-points Serve at) the new port.
+        cfg["port"] = new_port
+        save_config(cfg)
+
+        # If the panel is reachable on a PUBLIC interface, move the firewall rule with it:
+        # open the new port, close the old one. Tailnet-only panels have no public rule.
+        fw_note = ""
+        if public and local:
+            try:
+                remote_ufw_open_port(local, new_port, "tcp", "LinuxGSM Panel")
+                remote_ufw_close_port(local, cur_port, "tcp")
+                fw_note = f" Firewall updated (opened {new_port}, closed {cur_port})."
+            except Exception:
+                app.logger.warning("change-port: firewall update failed", exc_info=True)
+
+        log_action(current_user, "panel_change_port", detail=f"{cur_port} -> {new_port}", success=True)
+        ok, _ = so.restart_panel()
+        if not ok:
+            return jsonify({"success": False,
+                            "message": "Saved the new port, but couldn't restart the panel "
+                                       "automatically — restart it (or reboot the host) to apply."}), 200
+        return jsonify({"success": True, "new_port": new_port, "old_port": cur_port,
+                        "served_over_tailscale": bool(cfg.get("tailscale_setup_done")),
+                        "public": public,
+                        "message": f"Panel port changing to {new_port}. Restarting…{fw_note}"})
+
     @app.route("/api/panel/debug-report")
     @login_required
     @permission_required(SUPER_ADMIN)
