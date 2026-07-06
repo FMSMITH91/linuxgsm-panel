@@ -878,6 +878,40 @@ check("log dedupe: distinct tracebacks are both kept",
       _dd2.count("Traceback (most recent call last):") == 2
       and "ValueError" in _dd2 and "KeyError" in _dd2)
 
+# ── mods parsing (real LinuxGSM formats, verified on a live Garry's Mod box) ──
+_mods_avail_out = (
+    "\x1b[1mGarry's Mod Installing Mods\x1b[0m\n"
+    "=================================\n"
+    "Available addons/mods\n"
+    "=================================\n"
+    "Metamod: Source - Plugins Framework - https://www.sourcemm.net\n"
+    " * \x1b[36mmetamodsource\x1b[0m\n"
+    "SourceMod - Admin Features (requires Metamod: Source) - http://www.sourcemod.net\n"
+    " * \x1b[36msourcemod\x1b[0m\n"
+    "Wiremod Extras - Addition to Wiremod - https://github.com/wiremod/wire-extras/\n"
+    " * \x1b[36mwiremod-extras\x1b[0m\n"
+)
+_av = sm._parse_mods_available(_mods_avail_out)
+check("mods: available parses id + name from ' * <id>' format",
+      [m["id"] for m in _av] == ["metamodsource", "sourcemod", "wiremod-extras"]
+      and _av[0]["name"] == "Metamod: Source")
+_mods_inst_out = (
+    "Garry's Mod Removing Mods\n"
+    "=================================\n"
+    "Remove addons/mods\n"
+    "=================================\n"
+    "metamodsource - Metamod: Source - Plugins Framework\n"
+    "Enter an addon/mod to remove (or exit to abort): "
+)
+_in = sm._parse_mods_installed(_mods_inst_out)
+check("mods: installed parses '<id> - <name>' format",
+      len(_in) == 1 and _in[0]["id"] == "metamodsource" and _in[0]["name"] == "Metamod: Source")
+check("mods: 'No installed mods' output yields empty list",
+      sm._parse_mods_installed("Failure! No installed mods or addons were found") == [])
+# mods_action rejects unsafe ids before ever building a shell command (injection guard)
+check("mods: mods_action rejects an unsafe id",
+      sm.mods_action(None, "u", "u", "install", "foo; rm -rf x")[1] == "invalid mod id")
+
 # ── cleanup: remove key/config files this run created ─────────
 for p in (config.CRED_KEY_FILE, config.SECRET_FILE, config.CONFIG_FILE):
     if p not in _pre and os.path.exists(p):

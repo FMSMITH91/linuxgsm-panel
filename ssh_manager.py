@@ -2719,48 +2719,71 @@ def lgsm_write_config(server, user, selfname, updates):
 
 
 # --- Mods / addons (LinuxGSM mods-install / mods-remove) --------------------
-# LinuxGSM's mods-install/mods-remove are interactive: they print a numbered menu
-# of mods and read one selection. On invalid/empty input they print "not a valid
-# option" and exit cleanly (no loop), so we can list by feeding empty input and
-# act by feeding the chosen number — both via a bash here-string (`<<<`).
-_MOD_MENU_RE = re.compile(r"^\s*(\d+)\)\s+(.*\S)\s*$")
+# LinuxGSM's mods-install/mods-remove print a list of mods and `read` one selection — the mod's
+# text id (e.g. "sourcemod"), NOT a number. Typing "abort"/"exit" makes the command print the
+# list then exit cleanly, so we list by feeding "abort" and act by feeding the chosen id — via a
+# bash here-string. The two lists use DIFFERENT formats (verified on a live Garry's Mod server):
+#   mods-install (available): a description line, then a " * <id>" line under it.
+#   mods-remove  (installed):  one line per mod, "<id> - <name> - <desc>".
+_MOD_AVAIL_RE = re.compile(r"^\s*\*\s+(\S+)\s*$")               # available: " * <id>"
+_MOD_INST_RE = re.compile(r"^([A-Za-z0-9._-]+)\s+-\s+(.+)$")    # installed: "<id> - <name> - …"
+_MOD_ID_OK = re.compile(r"^[A-Za-z0-9._-]+$")                   # safe id charset (guards here-string)
 
 
-def _parse_mods_menu(out):
-    """Parse LinuxGSM's numbered mod menu into [{index,name,installed}]."""
+def _strip_ansi(s):
+    return re.sub(r"\x1b\[[0-9;?]*[A-Za-z]", "", s or "")
+
+
+def _parse_mods_available(out):
+    """Parse the mods-install list: id is on a ' * <id>' line, name from the line above it."""
+    mods = []
+    prev = ""
+    for raw in (out or "").splitlines():
+        line = _strip_ansi(raw).rstrip()
+        m = _MOD_AVAIL_RE.match(line)
+        if m and _MOD_ID_OK.match(m.group(1)):
+            name = prev.split(" - ")[0].strip() if prev else m.group(1)
+            mods.append({"id": m.group(1), "name": name or m.group(1), "desc": prev})
+        else:
+            t = line.strip()
+            if t and set(t) != {"="}:   # remember the latest real description line, skip === rules
+                prev = t
+    return mods
+
+
+def _parse_mods_installed(out):
+    """Parse the mods-remove list: one '<id> - <name> - <desc>' line per installed mod."""
     mods = []
     for raw in (out or "").splitlines():
-        line = re.sub(r"\x1b\[[0-9;?]*[A-Za-z]", "", raw)  # strip ANSI colour codes
-        m = _MOD_MENU_RE.match(line)
-        if not m:
-            continue
-        name = m.group(2).strip()
-        installed = "already installed" in name.lower()
-        name = re.sub(r"\s*\(already installed\)\s*$", "", name, flags=re.I).strip()
-        if name:
-            mods.append({"index": int(m.group(1)), "name": name, "installed": installed})
+        m = _MOD_INST_RE.match(_strip_ansi(raw).strip())
+        if m:
+            name = m.group(2).split(" - ")[0].strip()
+            mods.append({"id": m.group(1), "name": name or m.group(1), "desc": m.group(2)})
     return mods
 
 
 def mods_available(server, user, selfname, timeout=60):
-    """Mods LinuxGSM can install for this game (empty input → menu prints, then exits)."""
-    out, err, _ = run_as_game_user(server, user, 'mods-install <<< ""', timeout=timeout, selfname=selfname)
-    return _parse_mods_menu((out or "") + "\n" + (err or ""))
+    """Mods LinuxGSM can install for this game ('abort' → list prints, then it exits cleanly)."""
+    out, err, _ = run_as_game_user(server, user, 'mods-install <<< "abort"', timeout=timeout, selfname=selfname)
+    return _parse_mods_available((out or "") + "\n" + (err or ""))
 
 
 def mods_installed(server, user, selfname, timeout=60):
-    """Currently-installed mods, via the mods-remove menu (empty input → list, then exit)."""
-    out, err, _ = run_as_game_user(server, user, 'mods-remove <<< ""', timeout=timeout, selfname=selfname)
-    return _parse_mods_menu((out or "") + "\n" + (err or ""))
+    """Currently-installed mods, via the mods-remove list ('abort' → list, then exit)."""
+    out, err, _ = run_as_game_user(server, user, 'mods-remove <<< "abort"', timeout=timeout, selfname=selfname)
+    return _parse_mods_installed((out or "") + "\n" + (err or ""))
 
 
-def mods_action(server, user, selfname, which, index, timeout=600):
-    """Install or remove the mod at 1-based menu position `index`.
-    `which` is 'install' or 'remove'. Returns (out, err, rc). `index` is coerced
-    to an int so nothing but a number is ever fed to the LinuxGSM command."""
+def mods_action(server, user, selfname, which, mod_id, timeout=600):
+    """Install or remove a mod by its LinuxGSM id (e.g. "sourcemod"). `which` is 'install' or
+    'remove'. Returns (out, err, rc). We feed the id then a "Y": mods-remove always asks
+    "Continue?" before deleting files, and mods-install asks it too when the mod is already
+    installed (both default to Y). The id is validated to a safe charset first, so nothing but a
+    bare id + Y is ever fed to the command. Verified install+remove on a live Garry's Mod box."""
+    if not _MOD_ID_OK.match(mod_id or ""):
+        return "", "invalid mod id", 1
     cmd = "mods-install" if which == "install" else "mods-remove"
-    idx = int(index)
-    out, err, rc = run_as_game_user(server, user, f'{cmd} <<< "{idx}"', timeout=timeout, selfname=selfname)
+    out, err, rc = run_as_game_user(server, user, f"{cmd} <<< $'{mod_id}\\nY'", timeout=timeout, selfname=selfname)
     return out, err, rc
 
 

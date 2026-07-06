@@ -3623,8 +3623,8 @@ def register_routes(app):
     @server_access_required
     def api_server_mods(server_id):
         """List / install / remove LinuxGSM mods (SourceMod, MetaMod, Oxide, …). Listing
-        drives LinuxGSM's mods menus with empty input; install/remove feed the chosen
-        menu number. Install/remove modify the install, so they need UPDATE_SERVER."""
+        drives LinuxGSM's mods menus; install/remove feed the chosen mod id. Install/remove
+        modify the install, so they need UPDATE_SERVER."""
         gs = get_game(server_id)
         if not _can_manage_files():
             return jsonify({"error": "Permission denied"}), 403
@@ -3636,19 +3636,16 @@ def register_routes(app):
             except Exception:
                 app.logger.debug("mods list failed", exc_info=True)  # unreachable host — return empties
             return jsonify({"available": available, "installed": installed})
-        # POST: install or remove a mod by its menu index.
+        # POST: install or remove a mod by its LinuxGSM id (e.g. "sourcemod").
         if not (current_user.is_superadmin or has_permission(current_user, UPDATE_SERVER)):
             return jsonify({"success": False, "message": "Permission denied"}), 403
         data = request.get_json(silent=True) or {}
         which = "install" if data.get("action") == "install" else ("remove" if data.get("action") == "remove" else "")
+        mod_id = (data.get("mod") or "").strip()
+        if not which or not re.match(r"^[A-Za-z0-9._-]+$", mod_id):
+            return jsonify({"success": False, "message": "Pick a valid mod to " + (which or "act on") + "."}), 400
         try:
-            index = int(data.get("index"))
-        except (TypeError, ValueError):
-            index = 0
-        if not which or index < 1:
-            return jsonify({"success": False, "message": "Pick a mod to " + (which or "act on") + "."}), 400
-        try:
-            out, err, rc = mods_action(gs.remote, gs.short_name, gs.lgsm_name, which, index)
+            out, err, rc = mods_action(gs.remote, gs.short_name, gs.lgsm_name, which, mod_id)
             clean = re.sub(r"\x1b\[[0-9;?]*[A-Za-z]", "", ((out or "") + "\n" + (err or ""))).strip()
             log_action(current_user, f"mods_{which}", target=gs.name, success=(rc == 0), detail=clean[-400:])
             ok = rc == 0
