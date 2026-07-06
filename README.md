@@ -81,16 +81,35 @@ It asks you to type `yes` first (add `--yes` to skip the prompt).
 
 ## Features
 
-- **🔐 Multi-user RBAC** — Super Admin, Server Admin, Moderator, Viewer. Define groups with granular permissions (view, send commands, restart, install, uninstall, manage users, etc.)
-- **🖥️ Live Console** — Real-time WebSocket streaming of game server console output. Send commands directly to the running game.
-- **🔗 Tailscale Native** — Auto-detect Tailscale status, one-click private Serve setup (tailnet-only, free tier), MagicDNS URL, peer connectivity checker, auto-setup on first run. (Public Funnel exposure is an optional, clearly-warned advanced toggle.)
-- **🔌 Multiple Remote VPS** — Manage game servers across many machines via SSH key or password auth. Built-in Tailscale peer reachability check before adding remotes.
-- **📦 Install Game Servers** — Install any LinuxGSM-compatible game server with one click (Garry's Mod, Minecraft, CS:Source, TF2, ARMA 3, Rust, etc.)
-- **🛑 Full Control** — Start, stop, restart, update, monitor — all from the web UI.
-- **📋 Audit Logging** — Every action is logged with user, IP, target, and timestamp.
-- **⚡ Setup Wizard** — First-run wizard guides you through site config, admin creation, and remote VPS connection. Auto-configures Tailscale Serve if detected.
-- **🔌 REST API** — Full JSON API for server status, console, and commands.
-- **🔒 Secure by default** — HTTPS out of the box (built-in self-signed cert, or a trusted cert via Tailscale/reverse proxy), optional TOTP two-factor auth, revocable sessions, CSRF protection + security headers, and SSH host-key pinning.
+### Game servers
+- **📦 Install any LinuxGSM game** — one-click install of any LinuxGSM-compatible server (Garry's Mod, Minecraft, CS2/CS:Source, TF2, ARMA 3, Rust, and 100+ more). The panel can install LinuxGSM itself, then auto-detects and opens every port the game needs.
+- **🖥️ Live console & stats** — real-time WebSocket console streaming, send commands to the running game, and per-game CPU/RAM/uptime tiles with a live resource graph.
+- **🛑 Full control** — start, stop, restart, update, validate, monitor, and the game's other LinuxGSM commands from the web UI.
+- **🧩 Mods & addons manager** — browse, install, and remove LinuxGSM-supported mods (SourceMod, MetaMod, Oxide, ULX, and game-specific ones) right from the panel.
+- **📣 Alerts & notifications** — configure LinuxGSM's own alerts (Discord, Telegram, email, Pushover, Pushbullet, Slack, Gotify, IFTTT) per server, with a test button. They fire even if the panel is down.
+- **🌐 FastDL** — generate a Source-engine FastDL directory for games that support it.
+- **⏰ Scheduled tasks (cron)** — manage a server's cron jobs from the UI, with last-run time, success/failure, and a "run now" button; plus auto-start-on-boot and daily-restart-when-empty toggles.
+- **🗂️ Files & config** — grouped LinuxGSM settings, the game's own config file, and a full file browser with drag-and-drop upload, in-browser editing, and delete guards for files LinuxGSM/the game needs.
+
+### Backups
+- **💾 Panel backups** — one-click and automatic daily backups of the panel's database, settings, and encryption keys, with retention, download, and one-click restore.
+- **🎮 Game-server backups** — LinuxGSM full backups per server, on-demand or on a schedule, browsable in a table with per-backup **download** and **delete**.
+- **📅 Per-server schedules** — a global default (daily / weekly / fortnightly / monthly + keep-count) that each server can override or turn off individually.
+- **📊 Disk-aware & explained** — shows free disk, estimates how much a retention setting will use, warns before it gets tight, and recommends a safe "keep" count, all in plain language.
+
+### Access, security & hosts
+- **🔐 Multi-user RBAC** — Super Admin, Server Admin, Moderator, Viewer. Define groups with granular per-action permissions and per-server access; users inherit the combined set, enforced server-side on every endpoint.
+- **🔗 Tailscale native** — auto-detect Tailscale status, one-click private Serve setup (tailnet-only, free tier), MagicDNS URL, SSH-over-tailnet, peer reachability checker, and auto-setup on first run. (Public Funnel exposure is an optional, clearly-warned advanced toggle.)
+- **🔌 Multiple remote VPS** — manage game servers across many machines via SSH key, password, or Tailscale SSH, with SSH host-key pinning.
+- **🖧 Host management** — the *same* page for the panel host and every remote: hardware/OS specs, live per-core resources, OS updates, UFW firewall, power controls, Ubuntu Pro (free ESM + Livepatch), one-click SSH lockdown, and changing the panel's own web port/bind address.
+- **🩺 Diagnostics & self-heal** — verify the panel's own file integrity against the installed version and restore altered files in one click; generate a debug report; safe self-healing panel updates.
+- **🔒 Secure by default** — HTTPS out of the box (built-in self-signed cert, or a trusted cert via Tailscale/reverse proxy), optional TOTP two-factor auth with backup codes, revocable sessions, CSRF protection + security headers, and passwords hashed with bcrypt.
+
+### Everything else
+- **🌍 Multi-language** — English, Spanish, and French, with a language switcher and a saved per-user preference. (Untranslated strings fall back to English.)
+- **📋 Audit logging** — every action logged with user, IP, target, and timestamp.
+- **⚡ Setup wizard** — first-run wizard for site config, admin creation, and remote VPS connection; auto-configures Tailscale Serve if detected.
+- **🔌 REST API** — JSON API for server status, console, and commands.
 
 ## Screenshots
 
