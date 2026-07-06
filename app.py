@@ -1714,6 +1714,13 @@ def register_routes(app):
             # Remove from DB
             db.session.delete(gs)
             db.session.commit()
+            # Clean up this server's per-server backup schedule + status so nothing is orphaned
+            # (and can't be inherited if SQLite reuses the row id for a future server).
+            try:
+                bk.remove_game_schedule(server_id)
+                _game_backup_status.pop(server_id, None)
+            except Exception:
+                _log.debug("uninstall: schedule cleanup failed", exc_info=True)
             _notify_servers_changed()   # row disappears live on other sessions
             flash(f"Server '{gs.name}' uninstalled.{fw_note}", "success")
 

@@ -374,6 +374,16 @@ def set_game_schedule(sid, interval_days, keep):
     return get_game_schedule(sid)
 
 
+def remove_game_schedule(sid):
+    """Drop a server's schedule entry entirely — used when it's uninstalled, so no stale override
+    or last-run lingers in config (and can't be inherited if SQLite later reuses the row id)."""
+    cfg = load_config()
+    gs = cfg.get("game_schedules")
+    if isinstance(gs, dict) and str(sid) in gs:
+        gs.pop(str(sid), None)
+        save_config(cfg)
+
+
 def record_game_backup(sid):
     """Mark a server's scheduled backup as just done (updates only that server's last-run)."""
     cfg = load_config()

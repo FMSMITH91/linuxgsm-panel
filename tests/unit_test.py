@@ -242,6 +242,15 @@ try:
               _s["keep"] == _bk.DEFAULT_FULL_KEEP and isinstance(_s["interval_days"], int)
               and _bk.game_backup_due(4242) in (True, False))
         _bk.record_game_backup(4242)   # must not raise on a corrupted entry
+    # remove_game_schedule (uninstall cleanup) drops the entry entirely, and is a safe no-op on
+    # a missing/corrupted map.
+    _fakecfg.clear(); _fakecfg.update({"game_schedules": {"77": {"interval_days": 7, "last": 1}}})
+    _bk.remove_game_schedule(77)
+    check("schedule: remove_game_schedule drops the entry",
+          "77" not in _fakecfg.get("game_schedules", {}))
+    _fakecfg.clear(); _fakecfg.update({"game_schedules": "corrupt"})
+    _bk.remove_game_schedule(77)   # must not raise on a corrupted map
+    check("schedule: remove_game_schedule is a safe no-op on junk", True)
 finally:
     _bk.load_config, _bk.save_config = _sched_load, _sched_save
 
