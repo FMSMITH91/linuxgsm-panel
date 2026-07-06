@@ -1075,13 +1075,13 @@ def run_game_backup(server, user, selfname=None, keep=3):
     (like a cron backup). Long-running — archives can be large. Returns (ok, message)."""
     selfname = selfname or user
     # A crashed/killed/timed-out earlier backup can leave LinuxGSM's backup.lock behind, after
-    # which every backup refuses with "Lockfile found: Backup is currently running". Clear a
-    # STALE lock first — but only when no `./<selfname> backup` process is actually alive for this
-    # instance, so a genuinely-running backup is never interrupted. The "[.]" stops pgrep from
-    # matching its own command line.
+    # which every backup refuses with "Lockfile found: Backup is currently running". The panel
+    # only ever runs one game backup at a time (serialised by a lock in app.py), so if we're here
+    # and a backup.lock exists that hasn't been touched in >5 min, it's orphaned — delete it.
+    # LinuxGSM writes the lock once at start and removes it on completion, so its mtime is the
+    # backup's start time; a real, freshly-started backup (<5 min) is left untouched.
     precheck = (
-        f"LF=$(find /home/{user}/lgsm -maxdepth 3 -name '*backup.lock' 2>/dev/null | head -1); "
-        f'if [ -n "$LF" ] && ! pgrep -u {user} -f "[.]/{selfname} backup" >/dev/null 2>&1; then rm -f "$LF"; fi; '
+        f"find /home/{user} -maxdepth 4 -name '*backup.lock' -mmin +5 -delete 2>/dev/null; "
     )
     # LinuxGSM's `backup` prompts "server is running, continue? [y/N]" when the instance is
     # up; with a non-tty stdin that prompt defaults to NO and aborts, so a running server would
