@@ -2,6 +2,8 @@
 import json
 import logging
 import os
+import tempfile
+import threading
 from pathlib import Path
 
 _log = logging.getLogger("panel.config")
@@ -41,6 +43,9 @@ DEFAULT_CONFIG = {
 # refreshes it. Values are scalars and each call returns a fresh dict, so callers
 # can't mutate the cache.
 _cfg_cache = {"key": None, "data": {}}
+# Serialises config writes (and read-modify-write via update_config) so concurrent writers can't
+# lose each other's updates or race on the temp file. Re-entrant so update_config can call save.
+_write_lock = threading.RLock()
 
 
 def load_config():
@@ -62,14 +67,35 @@ def save_config(config):
     # Write atomically: a crash or a concurrent read must never see a half-written
     # config.json (a truncated file makes load_config() fall back to DEFAULTS, which
     # would lose setup_complete/port/etc. and boot the panel back to the setup wizard).
-    # Write a temp file in the same dir, fsync, then os.replace (atomic on the same FS).
-    tmp = CONFIG_FILE.with_suffix(".json.tmp")
-    with open(tmp, "w") as f:
-        json.dump(config, f, indent=2)
-        f.flush()
-        os.fsync(f.fileno())
-    os.replace(tmp, CONFIG_FILE)
-    _cfg_cache["key"] = None   # force a re-read on the next load_config()
+    # A UNIQUE temp file per write (mkstemp) means two concurrent writers never clobber a shared
+    # temp; the lock serialises the replace. fsync + os.replace = atomic on the same FS.
+    with _write_lock:
+        fd, tmp = tempfile.mkstemp(dir=str(CONFIG_FILE.parent), prefix=".config-", suffix=".tmp")
+        try:
+            with os.fdopen(fd, "w") as f:
+                json.dump(config, f, indent=2)
+                f.flush()
+                os.fsync(f.fileno())
+            os.replace(tmp, CONFIG_FILE)
+            tmp = None
+        finally:
+            if tmp and os.path.exists(tmp):
+                try:
+                    os.remove(tmp)
+                except OSError:
+                    _log.debug("save_config: temp cleanup failed", exc_info=True)
+        _cfg_cache["key"] = None   # force a re-read on the next load_config()
+
+
+def update_config(mutator):
+    """Atomically read-modify-write config under the write lock, so concurrent writers (HTTP
+    handlers + background worker threads) can't lose each other's changes. `mutator(cfg)` mutates
+    the dict in place. Returns the saved config."""
+    with _write_lock:
+        cfg = load_config()
+        mutator(cfg)
+        save_config(cfg)
+        return cfg
 
 
 def _chmod600(path):
