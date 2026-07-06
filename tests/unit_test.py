@@ -267,6 +267,34 @@ try:
 finally:
     sm.run_command = _orig_run8
 
+# ── smart headroom: free space before a backup only when the disk is tight ──
+_hr_saved = (sm.list_game_backups, sm.backup_disk_info, sm.delete_game_backup)
+try:
+    _GB = 1024 ** 3
+    _hr_deleted = []
+    sm.delete_game_backup = lambda s, u, name: (_hr_deleted.append(name), True)[1]
+    _three = [{"name": "g-3", "size": 4 * _GB, "created": 300},
+              {"name": "g-2", "size": 4 * _GB, "created": 200},
+              {"name": "g-1", "size": 4 * _GB, "created": 100}]
+    sm.list_game_backups = lambda s, u: list(_three)
+    # plenty of room -> no deletion
+    sm.backup_disk_info = lambda s, u: {"free": 57 * _GB, "total": 60 * _GB}
+    _hr_deleted[:] = []
+    _n1 = sm._ensure_backup_headroom(None, "gm", 2)
+    check("headroom: with free disk, nothing is deleted", _hr_deleted == [] and _n1 == "")
+    # tight -> delete oldest first, protect the newest (keep-1)
+    sm.backup_disk_info = lambda s, u: {"free": 1 * _GB, "total": 60 * _GB}
+    _hr_deleted[:] = []
+    _n2 = sm._ensure_backup_headroom(None, "gm", 2)
+    check("headroom: tight disk frees the OLDEST backup first, protects newest",
+          _hr_deleted[:1] == ["g-1"] and "g-3" not in _hr_deleted and _n2)
+    # no backups yet -> nothing to free
+    sm.list_game_backups = lambda s, u: []
+    _hr_deleted[:] = []
+    check("headroom: no backups yet -> no deletion", sm._ensure_backup_headroom(None, "gm", 2) == "" and _hr_deleted == [])
+finally:
+    sm.list_game_backups, sm.backup_disk_info, sm.delete_game_backup = _hr_saved
+
 _fake_cfg = {}
 _orig_bkload, _orig_bksave = _bk.load_config, _bk.save_config
 _bk.load_config = lambda: dict(_fake_cfg); _bk.save_config = lambda c: _fake_cfg.update(c)

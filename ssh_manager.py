@@ -1177,11 +1177,45 @@ def stream_game_backup(server, user, name, chunk=262144):
         yield b
 
 
+def _ensure_backup_headroom(server, user, keep):
+    """Make room for a new backup on a tight disk by deleting the OLDEST backups first (keeping the
+    newest keep-1), so a nearly-full host can still take a fresh backup instead of LinuxGSM aborting
+    on "not enough disk space". Normally backups prune AFTER the run (peak = keep+1); this only
+    kicks in when free disk is below ~1.15× the expected new-backup size. Returns a short note."""
+    try:
+        backups = list_game_backups(server, user)   # newest first
+        if not backups:
+            return ""   # first backup — nothing to prune; let LinuxGSM/disk decide
+        est = backups[0].get("size", 0)              # newest backup ≈ size of the next one
+        free = backup_disk_info(server, user).get("free", 0)
+        if not est or free >= int(est * 1.15):
+            return ""   # plenty of room — keep full safety (old backup survives if the new fails)
+        keep_newest = max(1, int(keep) - 1)          # always protect at least the newest backup
+        deleted = 0
+        # backups is newest-first; delete the OLDEST of the unprotected ones first.
+        for b in reversed(backups[keep_newest:]):
+            if delete_game_backup(server, user, b["name"]):
+                free += b.get("size", 0)
+                deleted += 1
+            if free >= int(est * 1.15):
+                break
+        if deleted:
+            _log.info("freed disk before backing up %s: removed %d old backup(s)", user, deleted)
+            return "freed space first (removed %d old backup%s)" % (deleted, "" if deleted == 1 else "s")
+    except Exception:
+        _log.debug("backup headroom check failed", exc_info=True)
+    return ""
+
+
 def run_game_backup(server, user, selfname=None, keep=3):
     """Run LinuxGSM's own `backup` for a game instance (archives serverfiles into
     ~/lgsm/backup/), then prune to the newest `keep`. Runs AS THE GAME USER, non-interactively
     (like a cron backup). Long-running — archives can be large. Returns (ok, message)."""
     selfname = selfname or user
+    keep = max(1, int(keep))
+    # Smart retention: if the disk is nearly full, delete old backups BEFORE creating the new one
+    # so the backup succeeds instead of aborting for lack of space.
+    headroom_note = _ensure_backup_headroom(server, user, keep)
     # A crashed/killed/timed-out earlier backup can leave LinuxGSM's backup.lock behind, after
     # which every backup refuses with "Lockfile found: Backup is currently running". The panel
     # only ever runs one game backup at a time (serialised by a lock in app.py), so if we're here
@@ -1204,7 +1238,7 @@ def run_game_backup(server, user, selfname=None, keep=3):
     except Exception:
         _log.debug("game backup prune failed", exc_info=True)
     if ok:
-        return True, "Backed up"
+        return True, ("Backed up — " + headroom_note if headroom_note else "Backed up")
     # Surface the most relevant LinuxGSM line so the panel can show WHY it failed.
     clean = re.sub(r"\x1b\[[0-9;?]*[A-Za-z]", "", ((out or "") + "\n" + (err or ""))).strip()
     reason = ""
