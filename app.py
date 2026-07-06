@@ -3651,11 +3651,71 @@ def register_routes(app):
             "metrics": m,
         })
 
+    def _looks_installed(remote, short_name, lgsm_name):
+        """Best-effort check of whether a game server is actually installed on the remote — used
+        to reconcile an install whose live progress was lost (e.g. the panel restarted mid-install).
+        Returns True (installed), False (clearly not), or None (couldn't tell)."""
+        try:
+            out, err, _ = run_command(
+                remote,
+                f"sudo -u {short_name} bash -c 'cd /home/{short_name} && ./{lgsm_name} details 2>&1'",
+                timeout=30, sudo=False)
+            low = re.sub(r"\x1b\[[0-9;?]*[A-Za-z]", "", (out or "") + "\n" + (err or "")).lower()
+            if re.search(r"not installed|please run .*install|serverfiles.*(missing|not found)|no such file", low):
+                return False
+            if "status:" in low or "server ip:" in low:
+                return True
+            # Fallback: real content in serverfiles means the download completed.
+            out2, _, _ = run_command(
+                remote,
+                f"sudo -u {short_name} bash -c 'du -sm /home/{short_name}/serverfiles 2>/dev/null | cut -f1'",
+                timeout=20, sudo=False)
+            try:
+                return int((out2 or "0").strip() or "0") > 50
+            except ValueError:
+                return None
+        except Exception:
+            app.logger.debug("install reconcile check failed", exc_info=True)
+            return None
+
     @app.route("/api/server/<int:server_id>/install-status")
     @login_required
     @server_access_required
     def api_server_install_status(server_id):
         """Live step-by-step progress of a game-server install (mirrors bootstrap)."""
+        with _install_lock:
+            j = _install_jobs.get(server_id)
+        if not j:
+            # No live job. If the DB still says "installing", the in-memory progress was lost —
+            # almost always because the panel restarted mid-install (e.g. a deploy). Reconcile
+            # against the real server so the user gets a definite answer instead of a vanished row.
+            gs = GameServer.query.get(server_id)
+            if gs and gs.status == "installing" and not gs.installed:
+                verdict = _looks_installed(gs.remote, gs.short_name, gs.lgsm_name)
+                if verdict is True:
+                    gs.installed = True
+                    gs.status = "offline"   # live metrics will flip it to online if it's running
+                    db.session.commit()
+                    _notify_servers_changed()
+                    return jsonify({"status": "done", "step": 8, "total": 8, "percent": 100,
+                                    "step_name": "Complete",
+                                    "message": "Install finished — verified after the panel restarted.",
+                                    "log": [], "elapsed": 0})
+                if verdict is False:
+                    gs.status = "failed"
+                    db.session.commit()
+                    _notify_servers_changed()
+                    return jsonify({"status": "failed", "step": 0, "total": 8, "percent": 0,
+                                    "step_name": "Interrupted",
+                                    "message": "The panel restarted before this install finished, so it "
+                                               "didn't complete. Uninstall it, then install again.",
+                                    "log": [], "elapsed": 0})
+                # Couldn't reach the host to check — report an interrupted-but-unknown state.
+                return jsonify({"status": "interrupted", "step": 0, "total": 8, "percent": 0,
+                                "step_name": "Unknown", "log": [], "elapsed": 0,
+                                "message": "Install progress was lost (the panel may have restarted) and "
+                                           "the server couldn't be reached to confirm. Try refreshing."})
+            return jsonify({"status": "none"})
         with _install_lock:
             j = _install_jobs.get(server_id)
             if not j:

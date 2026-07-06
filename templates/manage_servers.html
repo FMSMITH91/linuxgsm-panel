@@ -218,6 +218,12 @@ function watchInstall(id) {
           if (badge) { badge.className = 'badge bg-danger'; badge.textContent = 'Failed'; }
           var df = document.getElementById('inst-dismiss-' + id); if (df) df.style.display = 'inline';
           stopInstall(id);
+        } else if (s.status === 'interrupted') {
+          if (bar) bar.className = 'progress-bar bg-warning';
+          step.innerHTML = '<i class="bi bi-exclamation-triangle-fill text-warning"></i> ' + (s.message || 'Install status unknown');
+          if (badge) { badge.className = 'badge bg-warning text-dark'; badge.textContent = 'Unknown'; }
+          var di = document.getElementById('inst-dismiss-' + id); if (di) di.style.display = 'inline';
+          stopInstall(id);
         } else {
           step.innerHTML = '<i class="bi bi-gear-fill"></i> ' + s.step_name;
         }
