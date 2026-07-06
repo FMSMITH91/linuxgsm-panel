@@ -71,8 +71,9 @@ def save_config(config):
     # temp; the lock serialises the replace. fsync + os.replace = atomic on the same FS.
     with _write_lock:
         fd, tmp = tempfile.mkstemp(dir=str(CONFIG_FILE.parent), prefix=".config-", suffix=".tmp")
+        os.close(fd)   # we only wanted a unique name; reopen by path (avoids eventlet fd wrapping)
         try:
-            with os.fdopen(fd, "w") as f:
+            with open(tmp, "w") as f:
                 json.dump(config, f, indent=2)
                 f.flush()
                 os.fsync(f.fileno())
