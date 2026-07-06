@@ -3474,6 +3474,7 @@ def register_routes(app):
         # the connection. Per-event checks (join_console) still apply on top of this.
         if not current_user.is_authenticated:
             return False
+        return True   # authenticated → accept the socket
 
     @socketio.on("join_console")
     def on_join_console(data):
