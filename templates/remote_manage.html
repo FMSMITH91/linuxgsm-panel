@@ -1038,10 +1038,15 @@ function loadBackups(){
     if(fi){ fi.value=String(autoOn?f.interval_days:7); fi.disabled=!autoOn; }
     var fk=document.getElementById('fb-keep'); if(fk) fk.value=String(f.keep||2);
     window._bkDisk=d.disk||{free:0,total:0,backup_bytes:0,est_cycle:0};
+    window._bkMultiHost=!!d.multi_host;
     var fdk=document.getElementById('fb-disk');
     if(fdk){
       var dk=window._bkDisk;
-      if(dk.total>0){
+      if(window._bkMultiHost){
+        // Servers span multiple hosts — a single disk figure would be misleading, so show
+        // each server's own host disk on its row below instead.
+        fdk.innerHTML='<i class="bi bi-hdd"></i> Your servers are on more than one host — free disk is shown per server below.';
+      } else if(dk.total>0){
         var pct=Math.round((dk.total-dk.free)/dk.total*100);
         fdk.innerHTML='<i class="bi bi-hdd"></i> Disk: <strong>'+bkFmtBytes(dk.free)+'</strong> free of '+bkFmtBytes(dk.total)
           +' ('+pct+'% used). Game backups currently use '+bkFmtBytes(dk.backup_bytes||0)+'.';
@@ -1075,13 +1080,28 @@ function loadBackups(){
           else if(st.ok===true){ stHtml=' <span class="text-success">✓ '+escapeHtml(st.msg||'backed up')+'</span>'; }
           else if(st.ok===false){ stHtml=' <span class="text-danger">✗ '+escapeHtml(st.msg||'failed')+'</span>'; }
         }
+        // Host label disambiguates same-named servers on different machines; per-server disk is
+        // that server's OWN host, so the numbers/warnings are right even with multiple hosts.
+        var hostHtml = g.host ? ' <span class="text-secondary small">· <i class="bi bi-hdd-network"></i> '+escapeHtml(g.host)+'</span>' : '';
+        var dkHtml = '';
+        if(g.disk && g.disk.total>0){
+          dkHtml = '<div class="small text-secondary"><i class="bi bi-hdd"></i> '+escapeHtml(g.host||'host')+': '+bkFmtBytes(g.disk.free)+' free';
+          var eb=g.est_backup||0, keep=(g.schedule&&g.schedule.keep)||2;
+          if(eb>0){
+            var proj=eb*keep;
+            if(proj>g.disk.free) dkHtml += ' <span class="text-danger">— ~'+bkFmtBytes(proj)+' needed for '+keep+' backups, not enough space!</span>';
+            else if(proj>g.disk.free*0.5) dkHtml += ' <span class="text-warning">— ~'+bkFmtBytes(proj)+' for '+keep+' backups (over half free)</span>';
+          }
+          dkHtml += '</div>';
+        }
         gh += '<div class="mb-3 border-bottom pb-2">'
             + '<div class="d-flex justify-content-between align-items-center gap-2">'
-            + '<strong>'+escapeHtml(g.name)+'</strong>'
+            + '<span><strong>'+escapeHtml(g.name)+'</strong>'+hostHtml+'</span>'
             + '<button class="btn btn-sm btn-outline-success py-0 px-2" '+(st&&st.running?'disabled':'')
             + ' onclick="backupOneGame('+g.id+',this)"><i class="bi bi-play-circle"></i> Back up now</button>'
             + '</div>'
             + gameSchedule(g)
+            + dkHtml
             + (stHtml ? '<div class="small">'+stHtml+'</div>' : '')
             + table
             + '</div>';
@@ -1126,13 +1146,17 @@ function fbSummary(){
   var s='<i class="bi bi-info-circle"></i> By default, each server is backed up <strong>'+every+'</strong>. '
     +'The <strong>'+keep+'</strong> newest '+(keep===1?'backup is':'backups are')+' kept per server; older ones are deleted automatically. '
     +'(Override per server below.)';
-  if(cycle>0){ s+=' At the current size that\'s up to <strong>'+fmt(projected)+'</strong> of backups'+(free>0?' ('+fmt(free)+' free now)':'')+'.'; }
+  var multi = !!window._bkMultiHost;
+  if(cycle>0 && !multi){ s+=' At the current size that\'s up to <strong>'+fmt(projected)+'</strong> of backups'+(free>0?' ('+fmt(free)+' free now)':'')+'.'; }
   parts.push(s);
 
   if(days===1){
     parts.push('<span class="text-warning"><i class="bi bi-exclamation-triangle"></i> Daily full backups of game files eat disk fast — keep a low “keep” count unless you have lots of free space.</span>');
   }
-  if(cycle>0 && free>0){
+  if(multi){
+    parts.push('<span class="text-secondary"><i class="bi bi-hdd-network"></i> Disk usage is shown per server below (they\'re on different hosts).</span>');
+  }
+  if(cycle>0 && free>0 && !multi){
     if(projected>free){
       parts.push('<span class="text-danger"><i class="bi bi-exclamation-octagon"></i> This needs more than your free disk ('+fmt(free)+') — backups will fail once it fills up.</span>');
     } else if(projected>free*0.5){
@@ -1170,15 +1194,20 @@ function runFullBackup(btn){
 }
 function backupOneGame(id,btn){
   if(!confirm('Back up this game server now?\n\nLinuxGSM archives its files into ~/lgsm/backup. Note: if the server is running it will be briefly STOPPED and then restarted for the backup (a short outage), and the archive can be large.')) return;
-  if(btn) btn.disabled=true;
+  // Immediate feedback right where the user clicked: spinner on the button.
+  var orig = btn ? btn.innerHTML : '';
+  if(btn){ btn.disabled=true; btn.innerHTML='<span class="spinner-border spinner-border-sm"></span> Backing up…'; }
+  function resetBtn(){ if(btn){ btn.disabled=false; btn.innerHTML=orig || '<i class="bi bi-play-circle"></i> Back up now'; } }
+  if(window.toast) toast('Starting backup…','info');
   bkMsg('Starting backup…','text-secondary');
   fetch(MOUNT+'/api/panel/backup/game/'+id,{method:'POST'}).then(r=>r.json()).then(function(d){
     bkMsg((d.success?'✓ ':'✗ ')+(d.message||''), d.success?'text-success':'text-danger');
-    // Refresh repeatedly so the new archive shows once it lands — backups can take a while on
-    // real servers, so keep checking out to a couple of minutes.
-    [3000,8000,20000,40000,70000,120000].forEach(function(ms){ setTimeout(loadBackups, ms); });
-    if(!d.success && btn) btn.disabled=false;
-  }).catch(function(){ bkMsg('✗ Could not start','text-danger'); if(btn) btn.disabled=false; });
+    // Floating toast so the result is visible even when scrolled down to this server's row.
+    if(window.toast) toast((d.success?'✓ ':'✗ ')+(d.message||(d.success?'Backup started':'Could not start backup')), d.success?'success':'danger');
+    if(!d.success){ resetBtn(); return; }
+    // Refresh soon (so the row's "backing up…" status appears), then keep checking as it runs.
+    [600,3000,8000,20000,40000,70000,120000].forEach(function(ms){ setTimeout(loadBackups, ms); });
+  }).catch(function(){ bkMsg('✗ Could not start','text-danger'); if(window.toast) toast('✗ Could not start backup — connection error','danger'); resetBtn(); });
 }
 function schedNote(sc){
   var iv=sc.interval_days, kp=sc.keep;
@@ -1215,12 +1244,14 @@ function setGameSchedule(id){
 function deleteGameBackup(btn){
   var name=btn.getAttribute('data-name'), gid=btn.getAttribute('data-gid');
   if(!confirm('Delete this game-server backup?\n\n'+name)) return;
-  btn.disabled=true; bkMsg('Deleting…','text-secondary');
+  btn.disabled=true; btn.innerHTML='<span class="spinner-border spinner-border-sm"></span>';
+  bkMsg('Deleting…','text-secondary');
   fetch(MOUNT+'/api/panel/backup/game/'+gid+'/delete',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({name:name})})
     .then(r=>r.json()).then(function(d){
       bkMsg((d.success?'✓ ':'✗ ')+(d.message||''), d.success?'text-success':'text-danger');
+      if(window.toast) toast((d.success?'✓ ':'✗ ')+(d.message||(d.success?'Backup deleted':'Delete failed')), d.success?'success':'danger');
       loadBackups();
-    }).catch(function(){ bkMsg('✗ Delete failed','text-danger'); btn.disabled=false; });
+    }).catch(function(){ bkMsg('✗ Delete failed','text-danger'); if(window.toast) toast('✗ Delete failed — connection error','danger'); btn.disabled=false; btn.innerHTML='<i class="bi bi-trash"></i>'; });
 }
 function deleteBackup(name,btn){
   if(!confirm('Delete this backup?\n\n'+name)) return;

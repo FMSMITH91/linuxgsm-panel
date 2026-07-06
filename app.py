@@ -2780,8 +2780,7 @@ def register_routes(app):
             games = []
             backup_bytes = 0   # total size of all existing game backups
             est_cycle = 0      # estimated size of ONE full backup run (all servers), from newest each
-            disk = {"free": 0, "total": 0}
-            disk_done = False
+            disk_by_remote = {}   # remote_id -> {free,total}; computed once per host
             for gs in GameServer.query.filter_by(installed=True).all():
                 if not gs.remote_id:
                     continue
@@ -2791,19 +2790,27 @@ def register_routes(app):
                     gb = []
                 backup_bytes += sum(b.get("size", 0) for b in gb)
                 est_cycle += (gb[0]["size"] if gb else 0)  # newest backup ≈ one backup of this server
+                if gs.remote_id not in disk_by_remote:
+                    try:
+                        disk_by_remote[gs.remote_id] = backup_disk_info(gs.remote, gs.short_name)
+                    except Exception:
+                        disk_by_remote[gs.remote_id] = {"free": 0, "total": 0}
+                        app.logger.debug("backup disk info failed", exc_info=True)  # best-effort
+                hdisk = disk_by_remote[gs.remote_id]
+                rem = gs.remote
+                host_label = "This host" if getattr(rem, "is_local", False) else (rem.name or rem.host or "remote")
                 games.append({"id": gs.id, "name": gs.name, "backups": gb,
                               "status": _game_backup_status.get(gs.id),
-                              "schedule": bk.get_game_schedule(gs.id)})
-                if not disk_done:
-                    try:
-                        disk = backup_disk_info(gs.remote, gs.short_name)
-                        disk_done = True
-                    except Exception:
-                        app.logger.debug("backup disk info failed", exc_info=True)  # best-effort
+                              "schedule": bk.get_game_schedule(gs.id),
+                              "host": host_label,
+                              "est_backup": (gb[0]["size"] if gb else 0),  # this server's own backup size
+                              "disk": {"free": hdisk["free"], "total": hdisk["total"]}})
+            # Top-line disk uses the first host (kept for the summary); per-server disk is authoritative.
+            first = next(iter(disk_by_remote.values()), {"free": 0, "total": 0})
             return jsonify({"backups": bk.list_backups(), "settings": bk.get_settings(),
                             "full": bk.get_full_settings(), "full_running": _full_backup_lock.locked(),
-                            "games": games,
-                            "disk": {"free": disk["free"], "total": disk["total"],
+                            "games": games, "multi_host": len(disk_by_remote) > 1,
+                            "disk": {"free": first["free"], "total": first["total"],
                                      "backup_bytes": backup_bytes, "est_cycle": est_cycle}})
         except Exception:
             return jsonify({"error": _log_and_generic("list backups failed")}), 200
