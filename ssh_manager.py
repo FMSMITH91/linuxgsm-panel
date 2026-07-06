@@ -1841,9 +1841,38 @@ def _sudo_sh(inner):
     return f"sudo bash -c {_quote(inner)}"
 
 
-def pro_status(server):
-    """Ubuntu Pro attachment/service status for a host. Returns installed/attached
-    plus the featured security services and their enabled/disabled state."""
+# `pro status` spawns Ubuntu's heavy advantage-tools client (slow + CPU-hungry, especially on a
+# small VPS). Its result changes only when someone attaches/detaches/toggles a service — all of
+# which go through this module — so cache it and invalidate on those actions instead of re-running
+# it on every page load.
+_pro_status_cache = {}   # key -> (expiry_epoch, result)
+_PRO_STATUS_TTL = 300
+
+
+def _pro_key(server):
+    return getattr(server, "id", None) or getattr(server, "host", None) or "local"
+
+
+def _pro_cache_invalidate(server):
+    _pro_status_cache.pop(_pro_key(server), None)
+
+
+def pro_status(server, force=False):
+    """Ubuntu Pro attachment/service status for a host (cached ~5 min; pass force=True to refresh)."""
+    key = _pro_key(server)
+    now = time.time()
+    if not force:
+        cached = _pro_status_cache.get(key)
+        if cached and cached[0] > now:
+            return cached[1]
+    result = _compute_pro_status(server)
+    _pro_status_cache[key] = (now + _PRO_STATUS_TTL, result)
+    return result
+
+
+def _compute_pro_status(server):
+    """Run `pro status` and shape the result. Returns installed/attached plus the featured
+    security services and their enabled/disabled state."""
     import json
     out, _, _ = run_command(
         server, _sudo_sh("pro status --format json 2>/dev/null || true"),
@@ -1889,6 +1918,7 @@ def pro_attach(server, token):
     token = (token or "").strip()
     if not token:
         return False, "No token provided"
+    _pro_cache_invalidate(server)   # state is about to change; next status read must be fresh
     inner = ("(command -v pro >/dev/null 2>&1 || (apt-get update -qq && "
              "DEBIAN_FRONTEND=noninteractive apt-get install -y ubuntu-advantage-tools)) ; "
              f"pro attach {_quote(token)} 2>&1")
@@ -1906,6 +1936,7 @@ def pro_service(server, service, action):
         return False, "Unknown service"
     if action not in ("enable", "disable"):
         return False, "Unknown action"
+    _pro_cache_invalidate(server)
     out, err, rc = run_command(server, _sudo_sh(f"pro {action} {service} --assume-yes 2>&1"),
                                timeout=300, sudo=False)
     blob = (out or "") + " " + (err or "")
@@ -1918,6 +1949,7 @@ def pro_service(server, service, action):
 
 def pro_detach(server):
     """Detach a host from Ubuntu Pro."""
+    _pro_cache_invalidate(server)
     out, err, rc = run_command(server, _sudo_sh("pro detach --assume-yes 2>&1"), timeout=120, sudo=False)
     blob = (out or "") + " " + (err or "")
     if rc == 0 or "detach" in blob.lower():

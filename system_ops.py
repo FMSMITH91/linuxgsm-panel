@@ -1040,10 +1040,18 @@ def generate_debug_report():
     # Redacted recent log (user service first, then system unit). Grab a generous window
     # and collapse repeated tracebacks so one recurring benign error doesn't drown out the
     # useful lines, then redact and keep the tail.
-    log, _, _ = _run("journalctl --user -u linuxgsm-panel -n 200 --no-pager 2>/dev/null", timeout=10)
+    # Grab a wide window (400 lines) so a recent restart's shutdown AND startup lines both land in
+    # the report — that "before + after it came back up" context is usually what's needed.
+    log, _, _ = _run("journalctl --user -u linuxgsm-panel -n 400 --no-pager 2>/dev/null", timeout=10)
     if not log.strip():
-        log, _, _ = _run("journalctl -u linuxgsm-panel -n 200 --no-pager 2>/dev/null", timeout=10, sudo=True)
-    log_block = _redact(_dedupe_log_tracebacks(log))[-6000:] if log.strip() else "(no journal available)"
+        log, _, _ = _run("journalctl -u linuxgsm-panel -n 400 --no-pager 2>/dev/null", timeout=10, sudo=True)
+    if log.strip():
+        log_block = _redact(_dedupe_log_tracebacks(log))
+        if len(log_block) > 8000:                       # keep the tail, but never start mid-line
+            log_block = log_block[-8000:]
+            log_block = log_block[log_block.find("\n") + 1:]   # drop the partial first line
+    else:
+        log_block = "(no journal available)"
 
     # Last self-update outcome (from data/self-update.log): explicitly surface a FAILED /
     # rolled-back update — exactly the case an operator needs help diagnosing — plus the log

@@ -929,6 +929,28 @@ eq("remote metrics: disk_used parsed", _rlm["disk_used"], 40000000000)
 eq("remote metrics: disk_percent computed", _rlm["disk_percent"], 40.0)
 eq("remote metrics: swap 0 -> no divide-by-zero", _rlm["swap_percent"], 0)
 
+# ── pro_status is cached (don't respawn the heavy Ubuntu Pro client every page load) ──
+_pro_n = {"n": 0}
+_orig_pro_run = sm.run_command
+try:
+    def _procount(s, c, **k):
+        _pro_n["n"] += 1
+        return ('{"attached": true, "services": []}', "", 0)
+    sm.run_command = _procount
+    sm._pro_status_cache.clear()
+    _psrv = NS(id=42, host="h")
+    _r1 = sm.pro_status(_psrv)
+    _r2 = sm.pro_status(_psrv)   # served from cache — no second run_command
+    check("pro_status: cached (one run_command for two reads)", _pro_n["n"] == 1 and _r2["attached"] is True)
+    sm.pro_status(_psrv, force=True)
+    check("pro_status: force=True bypasses cache", _pro_n["n"] == 2)
+    sm._pro_cache_invalidate(_psrv)
+    sm.pro_status(_psrv)
+    check("pro_status: invalidate forces a refetch", _pro_n["n"] == 3)
+finally:
+    sm.run_command = _orig_pro_run
+    sm._pro_status_cache.clear()
+
 # ── apt upgradable parsing: name + old→new version ──
 _APT_OUT = "\n".join([
     "Listing...",
