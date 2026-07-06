@@ -1613,6 +1613,11 @@ def remote_ufw_status(server):
     out, err, rc = run_command(server, "ufw status numbered 2>&1 || echo 'NOTINSTALLED'", timeout=15)
     if "NOTINSTALLED" in out or "not found" in err or "not installed" in err:
         return {"installed": False, "enabled": False, "rules": [], "groups": []}
+    # `ufw status` always prints a "Status:" line when it actually runs. If it's missing (or the
+    # command failed), the host is unreachable / the command errored — don't claim UFW is installed
+    # (that would show a misleading empty-rules "installed" firewall for a down remote).
+    if rc != 0 or "Status:" not in out:
+        return {"installed": False, "enabled": False, "rules": [], "groups": [], "unreachable": True}
 
     enabled = "Status: active" in out
     rules = []
