@@ -228,7 +228,7 @@ def close_connection(server):
             try:
                 _connections[key].close()
             except Exception:
-                pass
+                _log.debug("close_connection: closing a stale SSH client failed", exc_info=True)
             del _connections[key]
 
 

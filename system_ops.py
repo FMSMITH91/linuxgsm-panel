@@ -213,7 +213,7 @@ def tailscale_ssh_status():
         try:
             return {"enabled": bool(json.loads(out).get("RunSSH", False)), "running": running, "method": "prefs"}
         except Exception:
-            pass
+            _log.debug("tailscale_ssh_status: could not parse prefs", exc_info=True)
     return {"enabled": False, "running": running, "error": "Could not read Tailscale prefs"}
 
 
