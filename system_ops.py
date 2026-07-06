@@ -837,6 +837,57 @@ def _redact(text):
     return text
 
 
+def _dedupe_log_tracebacks(text):
+    """Collapse repeated identical Python tracebacks in a journal tail so one recurring
+    error (e.g. an internet scanner tripping the panel's self-signed TLS cert) doesn't
+    crowd out everything else in a debug report. The FIRST full occurrence of each
+    distinct traceback is kept; later identical ones are replaced with a one-line note.
+    The dedup signature ignores the syslog 'time host proc[pid]:' prefix, so the same
+    traceback logged at different times still matches."""
+    import re
+    prefix_re = re.compile(r"^[A-Z][a-z]{2}\s+\d+\s+[\d:]+\s+\S+\s+[^:]+:\s?")
+
+    def body(ln):
+        return prefix_re.sub("", ln)
+
+    lines = text.split("\n")
+    n = len(lines)
+    out = []           # list of str, or dict placeholders {"n": repeat_count}
+    note_idx = {}      # traceback signature -> index of its placeholder in `out`
+    i = 0
+    while i < n:
+        if body(lines[i]).startswith("Traceback (most recent call last):"):
+            block = [lines[i]]
+            j = i + 1
+            while j < n and body(lines[j]).startswith(" "):   # indented frame lines
+                block.append(lines[j])
+                j += 1
+            if j < n:                                          # the exception line
+                block.append(lines[j])
+                j += 1
+            sig = "\n".join(body(b) for b in block)
+            if sig in note_idx:
+                out[note_idx[sig]]["n"] += 1                   # seen before → bump count
+            else:
+                out.extend(block)
+                note_idx[sig] = len(out)
+                out.append({"n": 1})                           # placeholder for a repeat note
+            i = j
+            continue
+        out.append(lines[i])
+        i += 1
+
+    rendered = []
+    for item in out:
+        if isinstance(item, dict):
+            if item["n"] > 1:   # only annotate when it actually repeated
+                rendered.append("    ↳ (the same traceback repeated %d× more — collapsed)"
+                                % (item["n"] - 1))
+        else:
+            rendered.append(item)
+    return "\n".join(rendered)
+
+
 def _github_issues_url():
     """New-issue URL for wherever this checkout's origin points (upstream for most,
     a fork if they forked). Falls back to the canonical repo."""
@@ -918,11 +969,13 @@ def generate_debug_report():
     summary = (header + "### Diagnostics\n%s\n\n### Counts\n%s\n"
                % (diag_lines or "- (none)", _tbl(counts)))
 
-    # Redacted recent log (user service first, then system unit).
-    log, _, _ = _run("journalctl --user -u linuxgsm-panel -n 80 --no-pager 2>/dev/null", timeout=10)
+    # Redacted recent log (user service first, then system unit). Grab a generous window
+    # and collapse repeated tracebacks so one recurring benign error doesn't drown out the
+    # useful lines, then redact and keep the tail.
+    log, _, _ = _run("journalctl --user -u linuxgsm-panel -n 200 --no-pager 2>/dev/null", timeout=10)
     if not log.strip():
-        log, _, _ = _run("journalctl -u linuxgsm-panel -n 80 --no-pager 2>/dev/null", timeout=10, sudo=True)
-    log_block = _redact(log)[-6000:] if log.strip() else "(no journal available)"
+        log, _, _ = _run("journalctl -u linuxgsm-panel -n 200 --no-pager 2>/dev/null", timeout=10, sudo=True)
+    log_block = _redact(_dedupe_log_tracebacks(log))[-6000:] if log.strip() else "(no journal available)"
 
     report = (summary
               + "\n### Dependencies\n%s\n" % _tbl(deps)

@@ -602,6 +602,38 @@ check("tailscale: NeedsLogin suggestion tells user to link, not 'not detected'",
       "not linked" in _tssug["description"].lower())
 _tsi._cache["info"] = None
 
+# ── Debug report: repeated tracebacks in the log tail get collapsed ───
+_pfx = "Jul 05 23:44:%02d vultr python[74699]: "
+_one_tb = [
+    _pfx % 14 + "Traceback (most recent call last):",
+    _pfx % 14 + '  File "/x.py", line 1, in main',
+    _pfx % 14 + "    do()",
+    _pfx % 14 + "ssl.SSLError: sslv3 alert certificate unknown",
+]
+# same traceback logged 3× at different timestamps, interleaved with unique lines
+_noisy = "\n".join(
+    _one_tb + [_pfx % 15 + "Removing descriptor: 12"]
+    + _one_tb + [_pfx % 16 + "Removing descriptor: 13"]
+    + _one_tb + [_pfx % 17 + "Removing descriptor: 14"]
+)
+_dd = _so._dedupe_log_tracebacks(_noisy)
+check("log dedupe: keeps exactly one full copy of a repeated traceback",
+      _dd.count("Traceback (most recent call last):") == 1)
+check("log dedupe: annotates the collapsed repeats", "repeated 2× more" in _dd)
+check("log dedupe: preserves the surrounding unique lines",
+      "Removing descriptor: 12" in _dd and "Removing descriptor: 14" in _dd)
+# distinct tracebacks must NOT be collapsed into each other
+_distinct = "\n".join([
+    _pfx % 14 + "Traceback (most recent call last):",
+    _pfx % 14 + "ValueError: bad",
+    _pfx % 15 + "Traceback (most recent call last):",
+    _pfx % 15 + "KeyError: nope",
+])
+_dd2 = _so._dedupe_log_tracebacks(_distinct)
+check("log dedupe: distinct tracebacks are both kept",
+      _dd2.count("Traceback (most recent call last):") == 2
+      and "ValueError" in _dd2 and "KeyError" in _dd2)
+
 # ── cleanup: remove key/config files this run created ─────────
 for p in (config.CRED_KEY_FILE, config.SECRET_FILE, config.CONFIG_FILE):
     if p not in _pre and os.path.exists(p):
