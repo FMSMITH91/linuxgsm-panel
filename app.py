@@ -386,6 +386,11 @@ def create_app():
         resp.headers.setdefault("X-Frame-Options", "SAMEORIGIN")
         resp.headers.setdefault("X-Content-Type-Options", "nosniff")
         resp.headers.setdefault("Referrer-Policy", "same-origin")
+        # The panel uses none of these powerful browser features, so deny them outright —
+        # a defence-in-depth limit on what any injected/compromised script could reach for.
+        resp.headers.setdefault("Permissions-Policy",
+                                "camera=(), microphone=(), geolocation=(), usb=(), "
+                                "payment=(), interest-cohort=()")
         resp.headers.setdefault("Content-Security-Policy", _CSP)
         # Keep the admin panel out of search engines. This header covers EVERY
         # response (crawlers can't miss it), and /robots.txt asks nicely too — a

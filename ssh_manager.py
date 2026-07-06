@@ -777,15 +777,20 @@ def _cron_job_id(command):
 
 
 def _install_cron_runner(server, user):
-    """Install the per-user cron wrapper script (idempotent), owned by and runnable as the
-    game user. Best-effort — if it can't be installed the job just won't record status."""
+    """Install the per-user cron wrapper script (idempotent). Runs AS THE GAME USER (like the
+    file manager) — never as root — so it can only ever touch that user's own home. Writing
+    the runner as root could be redirected through a symlink a compromised game process
+    planted in ~/.lgsm-cron; dropping to the user removes that escalation. Best-effort."""
     import base64
     b64 = base64.b64encode(_CRON_RUNNER_SCRIPT.encode()).decode()
-    cmd = ("install -d -m700 -o {u} -g {u} /home/{u}/.lgsm-cron && "
-           "printf %s {b} | base64 -d > /home/{u}/.lgsm-cron/run && "
-           "chmod 755 /home/{u}/.lgsm-cron/run && chown {u}:{u} /home/{u}/.lgsm-cron/run"
-           ).format(u=user, b=_quote(b64))
-    run_command(server, cmd, timeout=15, sudo=True)
+    # Absolute path (not ~) — `sudo -u` doesn't reliably set $HOME, and the game user's home
+    # is /home/<user> by construction (useradd -m). Cron itself sets $HOME correctly when it
+    # later runs the script, so the runner's own $HOME use resolves to the same dir.
+    d = "/home/%s/.lgsm-cron" % user
+    inner = ('mkdir -p {d} && chmod 700 {d} && '
+             'printf %s {b} | base64 -d > {d}/run && chmod 700 {d}/run'
+             ).format(d=_quote(d), b=_quote(b64))
+    run_command(server, f"sudo -u {user} bash -c {_quote(inner)}", timeout=15, sudo=False)
 
 
 def _wrap_cron_command(server, user, command):
@@ -812,14 +817,16 @@ def _unwrap_cron_command(command):
 
 def _read_cron_status(server, user):
     """{job_id: {last_run(epoch), ok(bool), error(str), rc(int)}} from the recorder's status
-    files for `user`. One shell round-trip; best-effort (empty on any error)."""
+    files for `user`. Runs AS THE GAME USER so reading a job's log can't be redirected through
+    a symlink to a root-only file (info leak) — it only ever reads that user's own files. One
+    shell round-trip; best-effort (empty on any error)."""
     d = "/home/%s/.lgsm-cron" % user
-    cmd = (f'cd {_quote(d)} 2>/dev/null || exit 0; '
-           'for s in *.status; do [ -e "$s" ] || continue; id="${s%.status}"; '
-           'read rc st en < "$s" 2>/dev/null; err=""; '
-           '[ "$rc" != "0" ] && err="$(tail -n 3 "$id.log" 2>/dev/null | tr "\\n\\t" "  " | tail -c 240)"; '
-           'printf "%s\\t%s\\t%s\\t%s\\t%s\\n" "$id" "$rc" "$st" "$en" "$err"; done')
-    out, _, _ = run_command(server, cmd, timeout=12, sudo=True)
+    inner = (f'cd {_quote(d)} 2>/dev/null || exit 0; '
+             'for s in *.status; do [ -e "$s" ] || continue; id="${s%.status}"; '
+             'read rc st en < "$s" 2>/dev/null; err=""; '
+             '[ "$rc" != "0" ] && err="$(tail -n 3 "$id.log" 2>/dev/null | tr "\\n\\t" "  " | tail -c 240)"; '
+             'printf "%s\\t%s\\t%s\\t%s\\t%s\\n" "$id" "$rc" "$st" "$en" "$err"; done')
+    out, _, _ = run_command(server, f"sudo -u {user} bash -c {_quote(inner)}", timeout=12, sudo=False)
     status = {}
     for line in (out or "").splitlines():
         parts = line.split("\t")

@@ -321,6 +321,8 @@ try:
     check("security header: X-Content-Type-Options=nosniff",
           hr.headers.get("X-Content-Type-Options") == "nosniff")
     check("security header: Referrer-Policy set", bool(hr.headers.get("Referrer-Policy")))
+    check("security header: Permissions-Policy denies unused features",
+          "camera=()" in (hr.headers.get("Permissions-Policy") or ""))
     check("security header: Content-Security-Policy set",
           bool(hr.headers.get("Content-Security-Policy")))
     check("security header: X-Robots-Tag noindex (keep out of search engines)",
