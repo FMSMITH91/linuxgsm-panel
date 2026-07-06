@@ -109,7 +109,7 @@
                 <i class="bi bi-terminal-fill"></i> Console & Actions
               </a>
               <a href="{{ url_for('server_files', server_id=gs.id) }}" class="btn btn-sm btn-outline-secondary" title="Edit config & browse/upload files">
-                <i class="bi bi-folder2-open"></i> Files
+                <i class="bi bi-folder2-open"></i> Files &amp; Config
               </a>
               <form method="POST" action="{{ url_for('uninstall_server', server_id=gs.id) }}" style="display:inline;"
                     onsubmit="return confirm('Uninstall {{ gs.name }}? This will delete the LinuxGSM user and all data.');">

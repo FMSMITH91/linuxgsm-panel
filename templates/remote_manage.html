@@ -432,8 +432,7 @@
           <td><span class="badge {% if gs.status == 'online' %}bg-success{% elif gs.status == 'installing' %}bg-info text-dark{% else %}bg-secondary{% endif %}">{{ gs.status|title }}</span></td>
           <td class="text-end text-nowrap">
             <a href="{{ url_for('server_detail', server_id=gs.id) }}" class="btn btn-sm btn-outline-secondary" title="Console, commands, restart"><i class="bi bi-terminal-fill"></i> Console</a>
-            <a href="{{ url_for('server_files', server_id=gs.id) }}" class="btn btn-sm btn-outline-secondary" title="Edit LinuxGSM &amp; game config"><i class="bi bi-sliders"></i> Config</a>
-            <a href="{{ url_for('server_files', server_id=gs.id) }}#file-browser" class="btn btn-sm btn-outline-secondary" title="Browse &amp; upload files"><i class="bi bi-folder2-open"></i> Files</a>
+            <a href="{{ url_for('server_files', server_id=gs.id) }}" class="btn btn-sm btn-outline-secondary" title="Edit config &amp; browse/upload files"><i class="bi bi-folder2-open"></i> Files &amp; Config</a>
             <form method="POST" action="{{ url_for('uninstall_server', server_id=gs.id) }}" style="display:inline;"
                   onsubmit="return confirm('Uninstall {{ gs.name }}? This will delete the LinuxGSM user and all data.');">
               <button type="submit" class="btn btn-sm btn-outline-danger" title="Delete server and all data"><i class="bi bi-trash"></i> Uninstall</button>
