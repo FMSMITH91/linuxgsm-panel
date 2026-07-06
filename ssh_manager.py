@@ -750,12 +750,97 @@ def _validate_cron(schedule, command):
     return True, "", f"{schedule} {command}"
 
 
+# ── Cron run-history: wrap user commands through a recorder so the panel can show each
+# job's last-run time and success/error. The command runs via a tiny per-user script that
+# writes "<rc> <start> <end>" to ~/.lgsm-cron/<id>.status and its output to <id>.log. The
+# command is base64-encoded in the crontab line so nothing has to be escaped for cron
+# (notably `%`, which cron treats specially) or the shell.
+_CRON_RUNNER_SCRIPT = (
+    "#!/bin/bash\n"
+    "# LinuxGSM Panel cron wrapper — records a scheduled job's last-run time, exit code,\n"
+    "# and (the tail of) its output so the panel can show success/error. Args: <id> <b64cmd>.\n"
+    'D="$HOME/.lgsm-cron"; mkdir -p "$D"; chmod 700 "$D" 2>/dev/null\n'
+    'ID="$1"; CMD="$(printf %s "$2" | base64 -d 2>/dev/null)"\n'
+    'S=$(date +%s)\n'
+    'bash -c "$CMD" > "$D/$ID.log" 2>&1\n'
+    'R=$?\n'
+    'printf "%s %s %s\\n" "$R" "$S" "$(date +%s)" > "$D/$ID.status"\n'
+    "exit $R\n"
+)
+_CRON_WRAP_RE = re.compile(r"^/home/[^/\s]+/\.lgsm-cron/run\s+([0-9a-f]{6,})\s+([A-Za-z0-9+/=]+)\s*$")
+
+
+def _cron_job_id(command):
+    import hashlib
+    return hashlib.sha256((command or "").encode("utf-8", "replace")).hexdigest()[:12]
+
+
+def _install_cron_runner(server, user):
+    """Install the per-user cron wrapper script (idempotent), owned by and runnable as the
+    game user. Best-effort — if it can't be installed the job just won't record status."""
+    import base64
+    b64 = base64.b64encode(_CRON_RUNNER_SCRIPT.encode()).decode()
+    cmd = ("install -d -m700 -o {u} -g {u} /home/{u}/.lgsm-cron && "
+           "printf %s {b} | base64 -d > /home/{u}/.lgsm-cron/run && "
+           "chmod 755 /home/{u}/.lgsm-cron/run && chown {u}:{u} /home/{u}/.lgsm-cron/run"
+           ).format(u=user, b=_quote(b64))
+    run_command(server, cmd, timeout=15, sudo=True)
+
+
+def _wrap_cron_command(server, user, command):
+    """Return the crontab command that runs `command` through the recorder (installing it
+    first). base64 keeps the crontab line free of quotes and cron's special `%`."""
+    import base64
+    _install_cron_runner(server, user)
+    b64 = base64.b64encode((command or "").encode()).decode()
+    return "/home/%s/.lgsm-cron/run %s %s" % (user, _cron_job_id(command), b64)
+
+
+def _unwrap_cron_command(command):
+    """(original_command, job_id) if `command` is a panel-wrapped cron command, else
+    (command, None) so plain/legacy entries display and behave unchanged."""
+    import base64
+    m = _CRON_WRAP_RE.match((command or "").strip())
+    if not m:
+        return command, None
+    try:
+        return base64.b64decode(m.group(2)).decode("utf-8", "replace"), m.group(1)
+    except Exception:
+        return command, None
+
+
+def _read_cron_status(server, user):
+    """{job_id: {last_run(epoch), ok(bool), error(str), rc(int)}} from the recorder's status
+    files for `user`. One shell round-trip; best-effort (empty on any error)."""
+    d = "/home/%s/.lgsm-cron" % user
+    cmd = (f'cd {_quote(d)} 2>/dev/null || exit 0; '
+           'for s in *.status; do [ -e "$s" ] || continue; id="${s%.status}"; '
+           'read rc st en < "$s" 2>/dev/null; err=""; '
+           '[ "$rc" != "0" ] && err="$(tail -n 3 "$id.log" 2>/dev/null | tr "\\n\\t" "  " | tail -c 240)"; '
+           'printf "%s\\t%s\\t%s\\t%s\\t%s\\n" "$id" "$rc" "$st" "$en" "$err"; done')
+    out, _, _ = run_command(server, cmd, timeout=12, sudo=True)
+    status = {}
+    for line in (out or "").splitlines():
+        parts = line.split("\t")
+        if len(parts) < 4:
+            continue
+        jid, rc, en = parts[0], parts[1], parts[3]
+        err = parts[4] if len(parts) > 4 else ""
+        try:
+            status[jid] = {"last_run": int(en), "ok": rc == "0", "rc": int(rc),
+                           "error": err.strip()}
+        except ValueError:
+            continue
+    return status
+
+
 def list_cron_jobs(server, user, selfname=None):
     """Read the game user's crontab as a list of jobs. Comment/blank lines are
-    skipped. Each job: {raw, schedule, command, managed}. `raw` is the exact line
-    (used as the identity for edit/delete)."""
+    skipped. Each job: {raw, schedule, command, managed, last_run, ok, error}. `raw` is the
+    exact line (identity for edit/delete); `command` is the un-wrapped, human-readable form."""
     selfname = selfname or user
     out, _, _ = run_command(server, f"crontab -u {user} -l 2>/dev/null", timeout=10, sudo=True)
+    status = _read_cron_status(server, user)
     jobs = []
     for raw in (out or "").splitlines():
         s = raw.strip()
@@ -764,19 +849,27 @@ def list_cron_jobs(server, user, selfname=None):
         sched, cmd = _split_cron_line(s)
         if sched is None:
             continue
+        display_cmd, jid = _unwrap_cron_command(cmd)
+        st = status.get(jid) if jid else None
         jobs.append({
-            "raw": raw, "schedule": sched, "command": cmd,
+            "raw": raw, "schedule": sched, "command": display_cmd,
             "managed": _cron_line_managed(s, user, selfname),
+            "last_run": (st or {}).get("last_run"),
+            "ok": (st or {}).get("ok"),
+            "error": (st or {}).get("error", ""),
         })
     return jobs
 
 
 def add_cron_job(server, user, schedule, command, selfname=None):
-    """Append a new cron entry to the game user's crontab (keeps all existing lines)."""
-    ok, msg, line = _validate_cron(schedule, command)
+    """Append a new cron entry to the game user's crontab (keeps all existing lines). The
+    command is wrapped through the recorder so its runs are tracked."""
+    ok, msg, _line = _validate_cron(schedule, command)
     if not ok:
         return False, msg
-    return _rewrite_crontab(server, user, "", [line])
+    schedule = " ".join(schedule.split())
+    wrapped = _wrap_cron_command(server, user, command)
+    return _rewrite_crontab(server, user, "", [f"{schedule} {wrapped}"])
 
 
 def update_cron_job(server, user, old_raw, schedule, command, selfname=None):
@@ -786,12 +879,14 @@ def update_cron_job(server, user, old_raw, schedule, command, selfname=None):
     old_raw = old_raw or ""
     if _cron_line_managed(old_raw, user, selfname):
         return False, "That entry is managed by the panel — use its own toggle to change it."
-    ok, msg, line = _validate_cron(schedule, command)
+    ok, msg, _line = _validate_cron(schedule, command)
     if not ok:
         return False, msg
+    schedule = " ".join(schedule.split())
+    wrapped = _wrap_cron_command(server, user, command)
     # -vxF: drop the line that exactly (whole-line, fixed-string) matches old_raw,
-    # keep everything else, then append the rewritten entry.
-    return _rewrite_crontab(server, user, f"-vxF {_quote(old_raw)}", [line])
+    # keep everything else, then append the rewritten (recorder-wrapped) entry.
+    return _rewrite_crontab(server, user, f"-vxF {_quote(old_raw)}", [f"{schedule} {wrapped}"])
 
 
 def delete_cron_job(server, user, old_raw, selfname=None):

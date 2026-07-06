@@ -81,6 +81,29 @@ check("cron: delete refuses a managed line (no SSH)", _dl[0] is False and "manag
 # a bad schedule is rejected by update before any SSH too
 _bad = sm.update_cron_job(None, "gm", "0 3 * * * /home/gm/backup.sh", "not-a-schedule", "x", "gmodserver")
 check("cron: update rejects a bad schedule (no SSH)", _bad[0] is False)
+# cron run-history: the recorder wrap/unwrap round-trips, and status files parse.
+import base64 as _b64
+_ccmd = "/home/gm/backup.sh --full && echo done"
+_cjid = sm._cron_job_id(_ccmd)
+check("cron: job id is a stable 12-hex hash",
+      _cjid == sm._cron_job_id(_ccmd) and len(_cjid) == 12
+      and all(c in "0123456789abcdef" for c in _cjid))
+_wrapped = "/home/gm/.lgsm-cron/run %s %s" % (_cjid, _b64.b64encode(_ccmd.encode()).decode())
+check("cron: unwrap recovers the original command",
+      sm._unwrap_cron_command(_wrapped) == (_ccmd, _cjid))
+check("cron: unwrap leaves a plain command untouched",
+      sm._unwrap_cron_command("/home/gm/x.sh") == ("/home/gm/x.sh", None))
+_orig_run3 = sm.run_command
+try:
+    sm.run_command = lambda s, c, **k: ("aaaaaaaaaaaa\t0\t100\t142\t\n"
+                                        "bbbbbbbbbbbb\t1\t200\t205\tboom: exit 1\n", "", 0)
+    _cst = sm._read_cron_status(None, "gm")
+    check("cron status: a successful run parses (ok + last_run)",
+          _cst["aaaaaaaaaaaa"]["ok"] is True and _cst["aaaaaaaaaaaa"]["last_run"] == 142)
+    check("cron status: a failed run parses with its error tail",
+          _cst["bbbbbbbbbbbb"]["ok"] is False and _cst["bbbbbbbbbbbb"]["error"] == "boom: exit 1")
+finally:
+    sm.run_command = _orig_run3
 # line splitting
 eq("cron: split 5-field", sm._split_cron_line("0 3 * * * /home/gm/b.sh a"), ("0 3 * * *", "/home/gm/b.sh a"))
 eq("cron: split @shortcut", sm._split_cron_line("@reboot /home/gm/x start"), ("@reboot", "/home/gm/x start"))
