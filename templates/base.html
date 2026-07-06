@@ -558,6 +558,16 @@ window.onServersChanged = function(cb){
   var s = window.ensureSocket();
   if(s){ s.on('servers_changed', cb); }
 };
+// An open WebSocket makes a page ineligible for the browser's back/forward cache
+// (bfcache), which slows down back/forward navigation. Close the socket when the page is
+// hidden so it can be cached, and reconnect when it's shown again (incl. restored from
+// bfcache). Listeners registered on the socket object survive the disconnect/reconnect.
+window.addEventListener('pagehide', function(){
+  try { if(window.socket && window.socket.connected) window.socket.disconnect(); } catch(e){}
+});
+window.addEventListener('pageshow', function(ev){
+  if(ev.persisted && window.socket){ try { window.socket.connect(); } catch(e){} }
+});
 
 // ── CSRF ──────────────────────────────────────────────────────────────────
 // One token per session. We inject it everywhere automatically so no individual

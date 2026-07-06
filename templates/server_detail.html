@@ -249,8 +249,11 @@ function stickConsole() { consoleEl.scrollTop = consoleEl.scrollHeight; }
 // URLs must include it, otherwise requests hit the site root (a different app).
 var MOUNT = "{{ mount_prefix if mount_prefix and mount_prefix != '/' else '' }}";
 
-// WebSocket connection for live console streaming
-var socket = io({ path: MOUNT + '/socket.io', transports: ['websocket', 'polling'] });
+// WebSocket connection for live console streaming. Use the shared window.socket so the
+// base-layout pagehide/pageshow handlers close it for bfcache and reconnect it on return —
+// the 'connect' handler below re-joins the console room automatically after a reconnect.
+var socket = (window.ensureSocket && window.ensureSocket())
+  || io({ path: MOUNT + '/socket.io', transports: ['websocket', 'polling'] });
 
 socket.on('connect', function() {
   wsStatus.textContent = '(connected)';
