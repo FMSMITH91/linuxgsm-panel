@@ -6,6 +6,7 @@ import re
 import signal
 import socket
 import subprocess
+import tempfile
 import threading
 import time
 from pathlib import Path
@@ -279,10 +280,31 @@ def _resolve_ts_host(server):
     return host
 
 
+# Connection-multiplexing socket dir for the ssh-CLI path (Tailscale remotes). Per-uid so the
+# sockets aren't shared across users. The first command to a host opens a master connection that
+# lingers briefly; rapid follow-ups (e.g. the live-metrics poll) reuse it instead of re-handshaking.
+_SSH_CM_DIR = os.path.join(tempfile.gettempdir(),
+                           ".lgsm-ssh-cm-%d" % (os.getuid() if hasattr(os, "getuid") else 0))
+
+
+def _ssh_mux_opts():
+    """SSH options that reuse one persistent connection per host. ControlMaster=auto falls back to a
+    fresh connection automatically if the master died, so it's safe. Returns [] if the socket dir
+    can't be created (then ssh just connects normally)."""
+    try:
+        os.makedirs(_SSH_CM_DIR, mode=0o700, exist_ok=True)
+    except OSError:
+        return []
+    return ["-o", "ControlMaster=auto",
+            "-o", f"ControlPath={_SSH_CM_DIR}/%C",   # %C = short fixed-length hash of host/port/user
+            "-o", "ControlPersist=30s"]
+
+
 def _run_via_ssh_cli(server, command, timeout=30, sudo=None):
     """Run a command over the system `ssh` binary — used for Tailscale SSH remotes,
     where auth happens at the tailscaled level (paramiko can't do it, but the ssh CLI,
-    running from this tailnet node, can — exactly like PuTTY does)."""
+    running from this tailnet node, can — exactly like PuTTY does). Uses connection
+    multiplexing so back-to-back commands don't each pay a fresh SSH handshake."""
     use_sudo = sudo if sudo is not None else server.sudo_enabled
     if use_sudo:
         if server.linuxgsm_user:
@@ -297,6 +319,7 @@ def _run_via_ssh_cli(server, command, timeout=30, sudo=None):
         "-o", "StrictHostKeyChecking=accept-new",
         "-o", "BatchMode=yes",
         "-o", "ConnectTimeout=12",
+    ] + _ssh_mux_opts() + [
         "-p", str(server.port or 22),
         f"{server.username}@{host}", remote_cmd,
     ]
