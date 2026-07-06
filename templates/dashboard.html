@@ -161,11 +161,23 @@ function filterServers(){
   if(none) none.style.display = (q && !anyVisible) ? '' : 'none';
 }
 
+// The set of game-server ids currently rendered on this page (sorted, comma-joined),
+// so we can detect when another user has added or removed one.
+function renderedServerIds() {
+  return Array.prototype.map.call(document.querySelectorAll('[id^="status-"]'),
+    function(el){ return el.id.slice('status-'.length); }).sort().join(',');
+}
+var _serverIdsBaseline = null;
+
 // Live status: update the count tiles + each server row's status cell.
 function refreshStatus() {
   fetch(MOUNT + '/api/servers')
     .then(r => r.json())
     .then(data => {
+      // If the set of servers changed underneath us (another user installed/uninstalled
+      // one), the rows are server-rendered — reload so this session shows the same reality.
+      var liveIds = data.map(function(s){ return String(s.id); }).sort().join(',');
+      if (_serverIdsBaseline !== null && liveIds !== _serverIdsBaseline) { location.reload(); return; }
       var online = data.filter(s => s.status === 'online').length;
       var offline = data.filter(s => s.status === 'offline').length;
       var oc = document.getElementById('online-count');
@@ -211,8 +223,11 @@ function refreshStatus() {
     })
     .catch(() => {});
 }
+_serverIdsBaseline = renderedServerIds();   // what this page was rendered with
 refreshStatus();              // populate status + connect immediately
 setInterval(refreshStatus, 8000);
+// Instant reaction when another user adds/removes a server (poll above is the fallback).
+if (window.onServersChanged) onServersChanged(refreshStatus);
 
 function copyAddr(addr) {
   window.copyText(addr, 'Copied');

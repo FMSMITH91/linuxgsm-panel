@@ -16,7 +16,7 @@
       Select which server to install the game on, then choose the game type and start the install.
       The auto-install process runs in the background — check back after a few minutes.
     </p>
-    <form method="POST" action="{{ url_for('install_game_server') }}" class="row g-2 align-items-start">
+    <form id="install-form" method="POST" action="{{ url_for('install_game_server') }}" class="row g-2 align-items-start">
       <div class="col-md-3">
         <label class="form-label" for="remote-select">Target Server</label>
         <select name="remote_id" id="remote-select" class="form-select" required>
@@ -233,5 +233,33 @@ function dismissInstall(id) {
   var row = document.getElementById('install-row-' + id); if (row) row.style.display = 'none';
   fetch(MOUNT + '/api/server/' + id + '/install-dismiss', { method: 'POST' }).catch(function() {});
 }
+
+// ── Live sync: reflect servers other users add/remove ──────────────────────
+// The rows are server-rendered, so when the set of servers changes we reload. We hold
+// off if the user is mid-way through the install form (so we don't wipe their selection).
+function serverIdsOnPage() {
+  return Array.prototype.map.call(document.querySelectorAll('[id^="install-row-"]'),
+    function(el){ return el.id.slice('install-row-'.length); }).sort().join(',');
+}
+var _svrBaseline = serverIdsOnPage();
+function editingInstallForm() {
+  var f = document.getElementById('install-form');
+  return f && f.contains(document.activeElement)
+    && /^(INPUT|SELECT|TEXTAREA)$/.test((document.activeElement.tagName || ''));
+}
+function reconcileServerList() {
+  fetch(MOUNT + '/api/servers')
+    .then(function(r){ return r.ok ? r.json() : null; })
+    .then(function(data){
+      if (!data) return;
+      var live = data.map(function(s){ return String(s.id); }).sort().join(',');
+      if (live === _svrBaseline) return;
+      if (editingInstallForm()) return;   // don't yank the form out from under the user
+      location.reload();
+    })
+    .catch(function(){});
+}
+setInterval(reconcileServerList, 8000);
+if (window.onServersChanged) onServersChanged(reconcileServerList);
 </script>
 {% endblock %}

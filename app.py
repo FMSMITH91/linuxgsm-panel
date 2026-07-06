@@ -1318,6 +1318,18 @@ def register_routes(app):
         return render_template("manage_servers.html", remotes=remotes,
                                all_servers=all_servers, games=load_game_list())
 
+    def _notify_servers_changed():
+        """Best-effort broadcast to every connected browser that the game-server set
+        changed (one was added or removed), so open dashboards / Game Servers pages
+        reconcile live instead of waiting for a manual refresh. A dropped broadcast must
+        never affect the actual install/uninstall, so this is fully swallowed."""
+        try:
+            sio = getattr(app, "socketio", None)
+            if sio is not None:
+                sio.emit("servers_changed", {})
+        except Exception:
+            pass
+
     @app.route("/servers/add", methods=["POST"])
     @login_required
     @permission_required(INSTALL_SERVER, MANAGE_SERVERS)
@@ -1406,6 +1418,7 @@ def register_routes(app):
                 "name": gs.name,
             }
         _run_install_job(gs.id, remote_id, short_name, game_type, lgsm_name, final_port)
+        _notify_servers_changed()   # new "installing" row → appears live on other sessions
 
         log_action(current_user, "install_server", target=gs.name,
                    detail=f"Type: {game_type}, port: {final_port}")
@@ -1593,6 +1606,7 @@ def register_routes(app):
             # Remove from DB
             db.session.delete(gs)
             db.session.commit()
+            _notify_servers_changed()   # row disappears live on other sessions
             flash(f"Server '{gs.name}' uninstalled.{fw_note}", "success")
 
         except Exception as e:

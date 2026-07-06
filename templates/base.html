@@ -543,6 +543,22 @@
 // different app. Server-rendered links use url_for and already include it.
 window.MOUNT = "{{ mount_prefix if mount_prefix and mount_prefix != '/' else '' }}";
 
+// ── Live cross-user updates ───────────────────────────────────────────────
+// A shared Socket.IO connection (created lazily, reused by the console page) plus a
+// helper to subscribe to server-pushed events. Used so that when one user adds or
+// removes a game server, every other open session reflects it live.
+window.ensureSocket = function(){
+  if(!window.socket && window.io){
+    try { window.socket = io({ path: MOUNT + '/socket.io', transports: ['websocket', 'polling'] }); }
+    catch(e){ window.socket = null; }
+  }
+  return window.socket;
+};
+window.onServersChanged = function(cb){
+  var s = window.ensureSocket();
+  if(s){ s.on('servers_changed', cb); }
+};
+
 // ── CSRF ──────────────────────────────────────────────────────────────────
 // One token per session. We inject it everywhere automatically so no individual
 // form or fetch() call has to be edited:
