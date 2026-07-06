@@ -246,6 +246,25 @@ g = protect(NS(port=22), ["22/tcp ALLOW IN Anywhere", "5000/tcp ALLOW IN Anywher
 gp = {x["port_num"]: x for x in g}
 check("remote host: panel 5000 not protected", not gp["5000"]["protected"])
 
+# ── ssh-status: panel_port_open (gates the "Close public panel port" button) ──
+_orig_run = sm.run_command
+try:
+    sm.run_command = lambda s, c, **k: ("Status: active\n5000/tcp  ALLOW  Anywhere\n"
+                                        "22/tcp  ALLOW  Anywhere\n", "", 0)
+    check("ssh-status: panel port open detected",
+          sm.remote_public_ssh_status(NS(), panel_port=5000).get("panel_port_open") is True)
+    # Closed: only a tailscale0 rule and a *different* port — must read as closed, and 27015
+    # must not word-boundary-match 5000.
+    sm.run_command = lambda s, c, **k: ("Status: active\nAnywhere  ALLOW  Anywhere on tailscale0\n"
+                                        "27015  ALLOW  Anywhere\n", "", 0)
+    check("ssh-status: panel port closed detected (no false match on 27015)",
+          sm.remote_public_ssh_status(NS(), panel_port=5000).get("panel_port_open") is False)
+    # Without panel_port the key is omitted entirely (remote hosts don't report it).
+    check("ssh-status: panel_port_open omitted when not asked",
+          "panel_port_open" not in sm.remote_public_ssh_status(NS()))
+finally:
+    sm.run_command = _orig_run
+
 # ── game-port selection: open only what's needed ──────────────
 _GMOD_DETAILS = """\
 Some header text

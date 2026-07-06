@@ -312,9 +312,9 @@
         <div class="small text-secondary mb-1">Public SSH (port 22 from the internet) — current: <strong id="ssh-mode">…</strong></div>
         <p class="small text-secondary mb-1">Tailscale SSH keeps working regardless. Once you can reach this host over the tailnet, rate-limit or fully disable public SSH.{% if not ssh_lockdown_safe %} <span class="text-warning">{% if not ts_up %}<a href="{{ url_for('tailscale_page') }}">Connect Tailscale (link this machine)</a> first{% else %}Enable Tailscale SSH or allow the <code>tailscale0</code> interface first{% endif %} to safely disable public SSH — otherwise you'd lock yourself out.</span>{% endif %}</p>
         <div class="d-flex gap-2 flex-wrap">
-          <button class="btn btn-sm btn-outline-secondary" onclick="sshMode('allow')" title="Open port 22 to the internet">Allow</button>
-          <button class="btn btn-sm btn-outline-primary" onclick="sshMode('limit')" title="Rate-limit port 22 (brute-force protection)">Limit</button>
-          <button class="btn btn-sm btn-outline-danger" onclick="sshMode('off')" {% if not ssh_lockdown_safe %}disabled title="{% if not ts_up %}Tailscale isn't connected yet — link this machine first, or you'd lock yourself out{% else %}No Tailscale path back in yet — enable Tailscale SSH or allow the tailscale0 interface first, or you'd lock yourself out{% endif %}"{% else %}title="Remove public port 22 — SSH only over Tailscale"{% endif %}>Disable (tailnet-only)</button>
+          <button class="btn btn-sm btn-outline-secondary" data-ssh-btn="allow" onclick="sshMode('allow')" title="Open port 22 to the internet">Allow</button>
+          <button class="btn btn-sm btn-outline-primary" data-ssh-btn="limit" onclick="sshMode('limit')" title="Rate-limit port 22 (brute-force protection)">Limit</button>
+          <button class="btn btn-sm btn-outline-danger" data-ssh-btn="off" {% if not ssh_lockdown_safe %}data-lockdown="1" disabled title="{% if not ts_up %}Tailscale isn't connected yet — link this machine first, or you'd lock yourself out{% else %}No Tailscale path back in yet — enable Tailscale SSH or allow the tailscale0 interface first, or you'd lock yourself out{% endif %}"{% else %}title="Remove public port 22 — SSH only over Tailscale"{% endif %} onclick="sshMode('off')">Disable (tailnet-only)</button>
         </div>
         <div id="ssh-msg" class="small mt-1"></div>
       </div>
@@ -322,7 +322,7 @@
         <div class="small text-secondary mb-1">Public panel access (port {{ (config.port if config else 5000) }})</div>
         {% if config and config.tailscale_setup_done %}
         <p class="small text-secondary mb-1">Tailscale Serve is set up, so the panel is reachable on your tailnet. Close the public web port to make the panel <strong>tailnet-only</strong> — no open ports.</p>
-        <button class="btn btn-sm btn-outline-danger" onclick="closePanelPort()"><i class="bi bi-shield-lock"></i> Close public panel port (tailnet-only)</button>
+        <button class="btn btn-sm btn-outline-danger" id="close-panel-btn" onclick="closePanelPort()"><i class="bi bi-shield-lock"></i> Close public panel port (tailnet-only)</button>
         {% else %}
         <p class="small text-secondary mb-1">Set up <a href="{{ url_for('tailscale_page') }}">Tailscale Serve</a> first — then you can close the public web port and make the panel tailnet-only without locking yourself out.</p>
         <button class="btn btn-sm btn-outline-secondary" disabled title="Set up Tailscale Serve first"><i class="bi bi-shield-lock"></i> Close public panel port</button>
@@ -348,9 +348,9 @@
         <div class="small text-secondary mb-1">Public SSH (port 22 from the internet) — current: <strong id="ssh-mode">…</strong></div>
         <p class="small text-secondary mb-1">Tailscale SSH keeps working regardless. If you're on the tailnet you can rate-limit or fully disable public SSH.</p>
         <div class="d-flex gap-2 flex-wrap">
-          <button class="btn btn-sm btn-outline-secondary" onclick="sshMode('allow')" title="Open port 22 to the internet">Allow</button>
-          <button class="btn btn-sm btn-outline-primary" onclick="sshMode('limit')" title="Rate-limit port 22 (brute-force protection)">Limit</button>
-          <button class="btn btn-sm btn-outline-danger" onclick="sshMode('off')" title="Remove public port 22 rule — SSH only over Tailscale">Disable (tailnet-only)</button>
+          <button class="btn btn-sm btn-outline-secondary" data-ssh-btn="allow" onclick="sshMode('allow')" title="Open port 22 to the internet">Allow</button>
+          <button class="btn btn-sm btn-outline-primary" data-ssh-btn="limit" onclick="sshMode('limit')" title="Rate-limit port 22 (brute-force protection)">Limit</button>
+          <button class="btn btn-sm btn-outline-danger" data-ssh-btn="off" onclick="sshMode('off')" title="Remove public port 22 rule — SSH only over Tailscale">Disable (tailnet-only)</button>
         </div>
         <div id="ssh-msg" class="small mt-1"></div>
       </div>
@@ -469,7 +469,30 @@ var SSH_LABELS={allow:'open (allow)',limit:'rate-limited (limit)',off:'disabled 
 function loadSshStatus(){
   var el=document.getElementById('ssh-mode'); if(!el) return;
   fetch(MOUNT+'/api/remote/'+REMOTE_ID+'/ssh-status').then(r=>r.json())
-    .then(d=>{ el.textContent = d.error?'unknown':(SSH_LABELS[d.mode]||d.mode||'unknown'); })
+    .then(d=>{
+      el.textContent = d.error?'unknown':(SSH_LABELS[d.mode]||d.mode||'unknown');
+      // Reflect the CURRENT public-SSH mode on the buttons: the active mode's button is
+      // marked active + disabled (you're already in that state — clicking it is a no-op).
+      // Other buttons become clickable again, EXCEPT the "off" button when it's disabled
+      // by the lock-out guard (data-lockdown), which must stay disabled.
+      document.querySelectorAll('[data-ssh-btn]').forEach(function(b){
+        var isCur = !d.error && b.getAttribute('data-ssh-btn') === d.mode;
+        b.classList.toggle('active', isCur);
+        if (isCur) { b.disabled = true; b.setAttribute('aria-current', 'true'); }
+        else if (!b.hasAttribute('data-lockdown')) { b.disabled = false; b.removeAttribute('aria-current'); }
+      });
+      // "Close public panel port" is a no-op once the port is already closed — disable it.
+      var cp = document.getElementById('close-panel-btn');
+      if (cp && !cp.hasAttribute('data-hard-disabled')) {
+        if (d.panel_port_open === false) {
+          cp.disabled = true;
+          cp.title = 'The public panel port is already closed — the panel is tailnet-only.';
+        } else if (d.panel_port_open === true) {
+          cp.disabled = false;
+          cp.title = '';
+        }
+      }
+    })
     .catch(()=>{ el.textContent='unknown'; });
 }
 function sshMode(mode){
@@ -484,7 +507,7 @@ function closePanelPort(){
   if(!confirm('Close the public web port so the panel is reachable ONLY over your tailnet?\n\nMake sure you can already reach the panel at your ts.net URL (Tailscale Serve) — this removes the public way in.')) return;
   var m=document.getElementById('panel-port-msg'); m.innerHTML='<span class="text-secondary"><i class="bi bi-arrow-repeat"></i> Closing…</span>';
   fetch(MOUNT+'/api/remote/'+REMOTE_ID+'/close-panel-port',{method:'POST'}).then(r=>r.json())
-    .then(d=>{ m.innerHTML='<span class="text-'+(d.success?'success':'danger')+'">'+(window.escapeHtml?escapeHtml(d.message):(d.message||''))+'</span>'; })
+    .then(d=>{ m.innerHTML='<span class="text-'+(d.success?'success':'danger')+'">'+(window.escapeHtml?escapeHtml(d.message):(d.message||''))+'</span>'; if(d.success) loadSshStatus(); })
     .catch(()=>{ m.innerHTML='<span class="text-danger">Request failed.</span>'; });
 }
 function switchToTailscale(){

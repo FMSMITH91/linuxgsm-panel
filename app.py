@@ -2553,11 +2553,14 @@ def register_routes(app):
     def api_remote_ssh_status(remote_id):
         remote = get_remote(remote_id)
         try:
-            st = remote_public_ssh_status(remote)
+            # On the panel host, also report whether the panel's own public web port is
+            # still open, so the UI can disable "Close public panel port" once it's closed.
+            panel_port = load_config().get("port", 5000) if remote.is_local else None
+            st = remote_public_ssh_status(remote, panel_port=panel_port)
             st["auth_method"] = remote.auth_method
             return jsonify(st)
-        except Exception as e:
-            return jsonify({"error": str(e)}), 500
+        except Exception:
+            return jsonify({"error": _log_and_generic("ssh-status failed")}), 200
 
     @app.route("/api/remote/<int:remote_id>/ssh-mode", methods=["POST"])
     @login_required

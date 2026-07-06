@@ -2072,12 +2072,17 @@ def remote_ufw_close_port_22(server):
     return False, err or out or "Failed to remove port 22"
 
 
-def remote_public_ssh_status(server):
+def remote_public_ssh_status(server, panel_port=None):
     """Report public SSH state on port 22: 'allow', 'limit', or 'off' (no rule —
-    reachable only over tailscale0), plus whether UFW is active at all."""
+    reachable only over tailscale0), plus whether UFW is active at all. When
+    `panel_port` is given, also report whether that port has a public ALLOW rule
+    (`panel_port_open`) so the UI can disable "Close public panel port" once it's
+    already closed."""
     out, _, _ = run_command(server, "ufw status 2>&1", timeout=12, sudo=True)
     active = "Status: active" in (out or "")
     mode = "off"
+    panel_open = False
+    port_re = re.compile(r"\b%d\b" % int(panel_port)) if panel_port else None
     for line in (out or "").splitlines():
         low = line.lower()
         if ("22/tcp" in low or "openssh" in low) and " (v6)" not in low:
@@ -2085,7 +2090,16 @@ def remote_public_ssh_status(server):
                 mode = "limit"
             elif "allow" in low:
                 mode = "allow" if mode != "limit" else mode
-    return {"active": active, "mode": mode}
+        # A public ALLOW rule for the panel port (ignore IPv6 duplicates and the
+        # tailscale0 interface rule, which isn't the *public* port).
+        if (port_re and "allow" in low and " (v6)" not in low
+                and "tailscale" not in low and port_re.search(line)):
+            panel_open = True
+    res = {"active": active, "mode": mode}
+    if panel_port:
+        res["panel_port"] = int(panel_port)
+        res["panel_port_open"] = panel_open
+    return res
 
 
 def _tailscale_conn_state(server):
