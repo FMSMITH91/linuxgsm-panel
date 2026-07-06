@@ -59,7 +59,7 @@ def catalog(lang):
                 for p in sorted((_DIR / dname).glob("*.json")):
                     _merge(p)
             except Exception:
-                pass
+                pass   # no translations dir for this language yet — fall through with what we have
             legacy = _DIR / _LEGACY_FILES[lang]
             if legacy.is_file():
                 _merge(legacy)
