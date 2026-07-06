@@ -1506,6 +1506,10 @@ def register_routes(app):
         )
         db.session.add(gs)
         db.session.commit()
+        # Start the server's scheduled-backup clock now, so a brand-new install isn't seen as
+        # immediately "due" and backed up mid-install (its first scheduled backup is one interval
+        # out). Without this, last=0 makes game_backup_due() true the moment installed flips True.
+        bk.record_game_backup(gs.id)
 
         _prune_jobs(_install_jobs, _install_lock)
         with _install_lock:
@@ -2647,9 +2651,18 @@ def register_routes(app):
                            for gs in GameServer.query.filter_by(installed=True).all() if gs.remote_id]
                 for sid, remote, short, lgsm, gname in targets:
                     try:
+                        sched = bk.get_game_schedule(sid)
+                        if sched["interval_days"] <= 0:
+                            continue   # backups off for this server
+                        if not sched["last"]:
+                            # Never backed up on a schedule yet (fresh install / pre-existing server):
+                            # start its clock now instead of backing up immediately, so the first
+                            # scheduled backup is one interval out — not the moment it's installed.
+                            bk.record_game_backup(sid)
+                            continue
                         if not bk.game_backup_due(sid):
                             continue
-                        keep = bk.get_game_schedule(sid)["keep"]
+                        keep = sched["keep"]
                         ok, reason = run_game_backup(remote, short, lgsm, keep)
                         bk.record_game_backup(sid)
                         _game_backup_status[sid] = {"running": False, "ok": ok,
