@@ -1078,6 +1078,11 @@ function loadBackups(){
         var st=g.status, stHtml='';
         if(st){
           if(st.running){ stHtml=' <span class="text-secondary"><i class="bi bi-arrow-repeat"></i> backing up…</span>'; }
+          else if(st.busy){
+            // Skipped because players were connected — offer a one-click force.
+            stHtml=' <span class="text-warning"><i class="bi bi-people-fill"></i> '+escapeHtml(st.msg||'players online — skipped')+'</span>'
+              +' <button class="btn btn-sm btn-outline-warning py-0 px-1 ms-1" onclick="backupOneGame('+g.id+',this,true)">Back up anyway</button>';
+          }
           else if(st.ok===true){ stHtml=' <span class="text-success">✓ '+escapeHtml(st.msg||'backed up')+'</span>'; }
           else if(st.ok===false){ stHtml=' <span class="text-danger">✗ '+escapeHtml(st.msg||'failed')+'</span>'; }
         }
@@ -1193,15 +1198,18 @@ function runFullBackup(btn){
     [4000,15000,45000,90000,150000].forEach(function(ms){ setTimeout(loadBackups, ms); });   // refresh as it runs
   }).catch(function(){ bkMsg('✗ Could not start','text-danger'); if(btn) btn.disabled=false; });
 }
-function backupOneGame(id,btn){
-  if(!confirm('Back up this game server now?\n\nLinuxGSM archives its files into ~/lgsm/backup. Note: if the server is running it will be briefly STOPPED and then restarted for the backup (a short outage), and the archive can be large.')) return;
+function backupOneGame(id,btn,force){
+  var msg = force
+    ? 'Back up NOW and disconnect the players who are currently on?\n\nThe server will be briefly STOPPED and restarted for the backup — anyone playing will be kicked.'
+    : 'Back up this game server now?\n\nLinuxGSM archives its files into ~/lgsm/backup. If players are on, the backup will WAIT (it won\'t kick them). If the server is empty it will be briefly STOPPED and restarted for the backup, and the archive can be large.';
+  if(!confirm(msg)) return;
   // Immediate feedback right where the user clicked: spinner on the button.
   var orig = btn ? btn.innerHTML : '';
   if(btn){ btn.disabled=true; btn.innerHTML='<span class="spinner-border spinner-border-sm"></span> Backing up…'; }
   function resetBtn(){ if(btn){ btn.disabled=false; btn.innerHTML=orig || '<i class="bi bi-play-circle"></i> Back up now'; } }
   if(window.toast) toast('Starting backup…','info');
   bkMsg('Starting backup…','text-secondary');
-  fetch(MOUNT+'/api/panel/backup/game/'+id,{method:'POST'}).then(r=>r.json()).then(function(d){
+  fetch(MOUNT+'/api/panel/backup/game/'+id,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({force:!!force})}).then(r=>r.json()).then(function(d){
     bkMsg((d.success?'✓ ':'✗ ')+(d.message||''), d.success?'text-success':'text-danger');
     // Floating toast so the result is visible even when scrolled down to this server's row.
     if(window.toast) toast((d.success?'✓ ':'✗ ')+(d.message||(d.success?'Backup started':'Could not start backup')), d.success?'success':'danger');

@@ -2623,14 +2623,20 @@ def register_routes(app):
         try:
             keep = bk.get_full_settings()["keep"]
             with app.app_context():
-                targets = [(gs.remote, gs.short_name, gs.lgsm_name, gs.name)
+                targets = [(gs.remote, gs.short_name, gs.lgsm_name, gs.name, gs.game_type, gs.port)
                            for gs in GameServer.query.filter_by(installed=True).all() if gs.remote_id]
-            ok_n = fail_n = 0
+            ok_n = fail_n = skip_n = 0
             failures = []
-            for remote, short, lgsm, gname in targets:
+            skipped = []
+            for remote, short, lgsm, gname, gtype, port in targets:
                 try:
-                    ok, reason = run_game_backup(remote, short, lgsm, keep)
-                    if ok:
+                    # Scheduled/bulk backup: never disconnect players — skip a busy server.
+                    ok, reason, was_skipped = run_game_backup(remote, short, lgsm, keep,
+                                                              game_type=gtype, port=port)
+                    if was_skipped:
+                        skip_n += 1
+                        skipped.append(gname)
+                    elif ok:
                         ok_n += 1
                     else:
                         fail_n += 1
@@ -2639,9 +2645,14 @@ def register_routes(app):
                     fail_n += 1
                     failures.append("%s: internal error" % gname)
                     app.logger.warning("full backup of %s failed", gname, exc_info=True)
-            summary = "%d server(s) backed up%s" % (ok_n, (", %d failed" % fail_n) if fail_n else "")
+            summary = "%d server(s) backed up%s%s" % (
+                ok_n,
+                (", %d failed" % fail_n) if fail_n else "",
+                (", %d skipped (players online)" % skip_n) if skip_n else "")
             if failures:
                 summary += " — " + "; ".join(failures)
+            if skipped:
+                summary += " — waiting for empty: " + ", ".join(skipped)
             bk.record_full_backup(summary[:500])
         except Exception:
             app.logger.warning("full backup run failed", exc_info=True)
@@ -2661,9 +2672,9 @@ def register_routes(app):
             return
         try:
             with app.app_context():
-                targets = [(gs.id, gs.remote, gs.short_name, gs.lgsm_name, gs.name)
+                targets = [(gs.id, gs.remote, gs.short_name, gs.lgsm_name, gs.name, gs.game_type, gs.port)
                            for gs in GameServer.query.filter_by(installed=True).all() if gs.remote_id]
-                for sid, remote, short, lgsm, gname in targets:
+                for sid, remote, short, lgsm, gname, gtype, port in targets:
                     try:
                         sched = bk.get_game_schedule(sid)
                         if sched["interval_days"] <= 0:
@@ -2677,7 +2688,15 @@ def register_routes(app):
                         if not bk.game_backup_due(sid):
                             continue
                         keep = sched["keep"]
-                        ok, reason = run_game_backup(remote, short, lgsm, keep)
+                        ok, reason, was_skipped = run_game_backup(remote, short, lgsm, keep,
+                                                                  game_type=gtype, port=port)
+                        if was_skipped:
+                            # Players online — leave the clock untouched so it stays "due" and we
+                            # retry on the next hourly tick, backing up once the server empties.
+                            # busy=True so the UI shows why it's waiting (+ a "back up anyway").
+                            _game_backup_status[sid] = {"running": False, "ok": None, "busy": True,
+                                                        "msg": reason, "ts": time.time()}
+                            continue
                         bk.record_game_backup(sid)
                         _game_backup_status[sid] = {"running": False, "ok": ok,
                                                     "msg": (reason or ("Backed up" if ok else "failed")),
@@ -2707,16 +2726,23 @@ def register_routes(app):
         gs = get_game(server_id)
         if not gs.installed or not gs.remote_id:
             return jsonify({"success": False, "message": "Server is not installed."}), 400
+        # `force` = the admin already saw the "players online" prompt and chose to back up anyway
+        # (which will disconnect them). Default off, so a normal click never kicks players.
+        force = bool(_json_body().get("force"))
         if not _full_backup_lock.acquire(blocking=False):
             return jsonify({"success": False, "message": "A backup is already running — try again in a moment."}), 200
         keep = bk.get_full_settings()["keep"]
         remote, short, lgsm, gname = gs.remote, gs.short_name, gs.lgsm_name, gs.name
+        gtype, port = gs.game_type, gs.port
         _game_backup_status[server_id] = {"running": True, "ok": None, "msg": "", "ts": time.time()}
 
         def _worker():
             try:
-                ok, reason = run_game_backup(remote, short, lgsm, keep)
-                _game_backup_status[server_id] = {"running": False, "ok": ok,
+                ok, reason, was_skipped = run_game_backup(remote, short, lgsm, keep,
+                                                          game_type=gtype, port=port, force=force)
+                _game_backup_status[server_id] = {"running": False,
+                                                  "ok": (None if was_skipped else ok),
+                                                  "busy": was_skipped,
                                                   "msg": (reason or ("Backed up" if ok else "failed")),
                                                   "ts": time.time()}
             except Exception:

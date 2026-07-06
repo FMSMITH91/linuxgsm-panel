@@ -268,13 +268,48 @@ _cap7 = {"cmds": []}
 _orig_run8 = sm.run_command
 try:
     sm.run_command = lambda s, c, **k: (_cap7["cmds"].append(c), ("", "", 0))[1]
-    _gok, _ = sm.run_game_backup(None, "gm", "gmodserver", 2)
+    _gok, _, _gskip = sm.run_game_backup(None, "gm", "gmodserver", 2)
     _joined = " ".join(_cap7["cmds"])
     check("run_game_backup: runs LinuxGSM backup as the game user",
-          _gok is True and "sudo -u gm bash -c" in _joined and "./gmodserver backup" in _joined)
+          _gok is True and _gskip is False and "sudo -u gm bash -c" in _joined and "./gmodserver backup" in _joined)
     check("run_game_backup: prunes to keep N (keep=2 -> tail +3)", "tail -n +3" in _joined)
 finally:
     sm.run_command = _orig_run8
+
+# ── players-online guard: don't kick players for a backup unless forced ──
+_orig_run8b = sm.run_command
+try:
+    # gamedig query reports 2 players; the LinuxGSM backup command must NOT run.
+    def _run_busy(s, c, **k):
+        if "gamedig" in c:
+            return ("2", "", 0)
+        return ("", "", 0)
+    _cap_busy = {"cmds": []}
+    sm.run_command = lambda s, c, **k: (_cap_busy["cmds"].append(c), _run_busy(s, c, **k))[1]
+    _pc = sm.player_count(None, "gm", "gmod", 27015)
+    check("player_count: parses gamedig player count", _pc == 2)
+    _bok, _bmsg, _bskip = sm.run_game_backup(None, "gm", "gmodserver", 2, game_type="gmod", port=27015)
+    check("run_game_backup: skips (no backup) when players are online",
+          _bok is False and _bskip is True and "backup" not in " ".join(c for c in _cap_busy["cmds"] if "gamedig" not in c))
+    # force=True backs up anyway even with players on
+    _cap_busy["cmds"] = []
+    _fok, _fmsg, _fskip = sm.run_game_backup(None, "gm", "gmodserver", 2, game_type="gmod", port=27015, force=True)
+    check("run_game_backup: force=True backs up even with players online",
+          _fok is True and _fskip is False and "./gmodserver backup" in " ".join(_cap_busy["cmds"]))
+finally:
+    sm.run_command = _orig_run8b
+
+# ── empty/unqueryable server: player_count None, backup proceeds ──
+_orig_run8c = sm.run_command
+try:
+    sm.run_command = lambda s, c, **k: ("0", "", 0) if "gamedig" in c else ("", "", 0)
+    check("player_count: 0 players -> 0", sm.player_count(None, "gm", "gmod", 27015) == 0)
+    check("player_count: unmapped game -> None (unknown)", sm.player_count(None, "gm", "nosuchgame", 27015) is None)
+    check("player_count: no port -> None", sm.player_count(None, "gm", "gmod", None) is None)
+    _eok, _emsg, _eskip = sm.run_game_backup(None, "gm", "gmodserver", 2, game_type="gmod", port=27015)
+    check("run_game_backup: empty server backs up normally", _eok is True and _eskip is False)
+finally:
+    sm.run_command = _orig_run8c
 
 # ── smart headroom: free space before a backup only when the disk is tight ──
 _hr_saved = (sm.list_game_backups, sm.backup_disk_info, sm.delete_game_backup)

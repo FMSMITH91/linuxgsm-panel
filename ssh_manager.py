@@ -1213,12 +1213,47 @@ def _ensure_backup_headroom(server, user, keep):
     return ""
 
 
-def run_game_backup(server, user, selfname=None, keep=3):
+def player_count(server, user, game_type=None, port=None):
+    """Best-effort CURRENT player count for a running instance, via gamedig (the same
+    tool the empty-only daily restart uses). Returns an int, or None when the game
+    isn't queryable (no gamedig mapping / no port) or the query fails — callers treat
+    None as 'unknown' and don't block on it. gamedig is a bare command on PATH exactly
+    as the restart cron invokes it (installed globally via npm at setup)."""
+    gdtype = GAMEDIG_TYPE.get(game_type or "", "")
+    if not gdtype or not port:
+        return None
+    cmd = f"gamedig --type {gdtype} 127.0.0.1:{int(port)} 2>/dev/null | jq -r '.players|length' 2>/dev/null"
+    try:
+        out, _, _ = run_command(server, f"sudo -u {user} bash -c {_quote(cmd)}", timeout=25, sudo=False)
+    except Exception:
+        return None
+    s = (out or "").strip().splitlines()[-1].strip() if (out or "").strip() else ""
+    if not s or s == "null" or not s.isdigit():
+        return None
+    return int(s)
+
+
+def run_game_backup(server, user, selfname=None, keep=3, game_type=None, port=None, force=False):
     """Run LinuxGSM's own `backup` for a game instance (archives serverfiles into
     ~/lgsm/backup/), then prune to the newest `keep`. Runs AS THE GAME USER, non-interactively
-    (like a cron backup). Long-running — archives can be large. Returns (ok, message)."""
+    (like a cron backup). Long-running — archives can be large.
+
+    LinuxGSM's `backup` STOPS a running server for the duration, which disconnects
+    anyone playing. So unless `force=True`, we first check the live player count and,
+    if anyone is on, SKIP rather than kick them. Returns (ok, message, skipped):
+      - (True, note, False)   backup completed
+      - (False, reason, False) backup attempted but failed
+      - (False, "N player(s) online …", True) skipped because players were connected
+    An unknown/unqueryable player count (None) is treated as empty, so games gamedig
+    can't query still back up on schedule (matching the daily-restart behaviour)."""
     selfname = selfname or user
     keep = max(1, int(keep))
+    if not force:
+        pc = player_count(server, user, game_type, port)
+        if pc is not None and pc > 0:
+            return (False,
+                    f"{pc} player(s) online — backup skipped so nobody gets disconnected",
+                    True)
     # Smart retention: if the disk is nearly full, delete old backups BEFORE creating the new one
     # so the backup succeeds instead of aborting for lack of space.
     headroom_note = _ensure_backup_headroom(server, user, keep)
@@ -1244,7 +1279,7 @@ def run_game_backup(server, user, selfname=None, keep=3):
     except Exception:
         _log.debug("game backup prune failed", exc_info=True)
     if ok:
-        return True, ("Backed up — " + headroom_note if headroom_note else "Backed up")
+        return True, ("Backed up — " + headroom_note if headroom_note else "Backed up"), False
     # Surface the most relevant LinuxGSM line so the panel can show WHY it failed.
     clean = re.sub(r"\x1b\[[0-9;?]*[A-Za-z]", "", ((out or "") + "\n" + (err or ""))).strip()
     reason = ""
@@ -1255,7 +1290,7 @@ def run_game_backup(server, user, selfname=None, keep=3):
             break
     if not reason and clean.splitlines():
         reason = clean.splitlines()[-1].strip()
-    return False, (reason or "backup failed")[-200:]
+    return False, (reason or "backup failed")[-200:], False
 
 
 def list_server_commands(server, user, selfname=None):
