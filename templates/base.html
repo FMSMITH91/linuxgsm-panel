@@ -441,15 +441,24 @@
     function walk(node){
       if (!node) return;
       if (node.nodeType === 3){ // text node
-        var raw = node.nodeValue, key = raw.trim();
-        if (key){ var v = I[key]; if (v !== undefined && v !== raw) node.nodeValue = raw.replace(key, v); }
+        var raw = node.nodeValue;
+        // Normalise internal whitespace so multi-line template text (newlines + indentation) still
+        // matches the single-spaced catalog keys; keep the leading/trailing space so inline layout
+        // (e.g. the gap after an icon) is preserved.
+        var key = raw.replace(/\s+/g, ' ').trim();
+        if (key){
+          var v = I[key];
+          if (v !== undefined){
+            node.nodeValue = raw.match(/^\s*/)[0] + v + raw.match(/\s*$/)[0];
+          }
+        }
         return;
       }
       if (node.nodeType !== 1) return;
       if (SKIP[node.tagName] || node.hasAttribute('data-no-i18n')) return;
       for (var i = 0; i < ATTRS.length; i++){
         var a = ATTRS[i], val = node.getAttribute(a);
-        if (val){ var tv = I[val.trim()]; if (tv !== undefined) node.setAttribute(a, tv); }
+        if (val){ var tv = I[val.replace(/\s+/g, ' ').trim()]; if (tv !== undefined) node.setAttribute(a, tv); }
       }
       for (var c = node.firstChild; c; c = c.nextSibling) walk(c);
     }
