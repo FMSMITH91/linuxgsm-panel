@@ -173,6 +173,19 @@ try:
     check("change-port refuses a non-IP bind address",
           cp3.status_code == 400 and not (cp3.get_json() or {}).get("success"))
 
+    # ── Backups: list + settings + name validation (no real backup/restart triggered) ──
+    bl = c.get("/api/panel/backups")
+    check("backups: list endpoint returns backups + settings",
+          bl.status_code == 200 and "settings" in (bl.get_json() or {}) and "backups" in (bl.get_json() or {}))
+    bset = c.post("/api/panel/backup/settings", json={"enabled": True, "keep_days": 7})
+    check("backups: settings save round-trips keep_days",
+          (bset.get_json() or {}).get("settings", {}).get("keep_days") == 7)
+    bdel = c.post("/api/panel/backup/delete", json={"name": "../../etc/passwd"})
+    check("backups: delete rejects a traversal name", not (bdel.get_json() or {}).get("success"))
+    bres = c.post("/api/panel/backup/restore", json={"name": "nope.tar.gz"})
+    check("backups: restore rejects an invalid name", not (bres.get_json() or {}).get("success"))
+    check("backups: download 404s on a bad name", c.get("/api/panel/backup/download/..%2f..%2fetc%2fpasswd").status_code in (400, 404))
+
     # ── Privilege-escalation guards: a delegated admin (MANAGE_USERS + MANAGE_GROUPS,
     #    NOT superadmin) must not be able to become / create a superadmin. ──
     dc = client_as(deleg_id)

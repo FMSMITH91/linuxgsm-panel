@@ -52,7 +52,7 @@ del _w
 
 from flask import (
     Flask, Response, abort, flash, jsonify, redirect, render_template, request,
-    session, url_for,
+    send_file, session, url_for,
 )
 from markupsafe import Markup
 from flask_login import current_user, login_required, login_user, logout_user
@@ -104,6 +104,7 @@ from ssh_manager import (
 )
 import tailscale_integration as ts
 import system_ops as so
+import backup as bk
 
 _log = logging.getLogger("panel.app")
 
@@ -2508,6 +2509,69 @@ def register_routes(app):
                         "served_over_tailscale": bool(cfg.get("tailscale_setup_done")),
                         "message": f"Panel binding to {new_bind}:{new_port}. Restarting…{fw_note}"})
 
+    # ── Panel backup & restore (superadmin) ──────────────────────
+    @app.route("/api/panel/backups")
+    @login_required
+    @permission_required(SUPER_ADMIN)
+    def api_panel_backups():
+        """List backups + the retention settings."""
+        try:
+            return jsonify({"backups": bk.list_backups(), "settings": bk.get_settings()})
+        except Exception:
+            return jsonify({"error": _log_and_generic("list backups failed")}), 200
+
+    @app.route("/api/panel/backup", methods=["POST"])
+    @login_required
+    @permission_required(SUPER_ADMIN)
+    def api_panel_backup_create():
+        """Create a backup now (database + config + encryption keys)."""
+        try:
+            ok, res = bk.create_backup("manual")
+            log_action(current_user, "panel_backup_create", detail=res if ok else "", success=ok)
+            return jsonify({"success": ok, "message": ("Backup created." if ok else res),
+                            "name": res if ok else ""})
+        except Exception:
+            return jsonify({"success": False, "message": _log_and_generic("backup failed")}), 200
+
+    @app.route("/api/panel/backup/delete", methods=["POST"])
+    @login_required
+    @permission_required(SUPER_ADMIN)
+    def api_panel_backup_delete():
+        name = (request.get_json(silent=True) or {}).get("name") or ""
+        ok, msg = bk.delete_backup(name)
+        log_action(current_user, "panel_backup_delete", target=name, success=ok)
+        return jsonify({"success": ok, "message": msg})
+
+    @app.route("/api/panel/backup/restore", methods=["POST"])
+    @login_required
+    @permission_required(SUPER_ADMIN)
+    def api_panel_backup_restore():
+        """Restore a backup (destructive — takes a pre-restore safety backup, then swaps the
+        data into place and restarts the panel)."""
+        name = (request.get_json(silent=True) or {}).get("name") or ""
+        ok, msg = bk.restore_backup(name)
+        log_action(current_user, "panel_backup_restore", target=name, success=ok)
+        return jsonify({"success": ok, "message": msg})
+
+    @app.route("/api/panel/backup/download/<path:name>")
+    @login_required
+    @permission_required(SUPER_ADMIN)
+    def api_panel_backup_download(name):
+        p = bk._safe_path(name)
+        if not p:
+            abort(404)
+        log_action(current_user, "panel_backup_download", target=name)
+        return send_file(str(p), as_attachment=True, download_name=name)
+
+    @app.route("/api/panel/backup/settings", methods=["POST"])
+    @login_required
+    @permission_required(SUPER_ADMIN)
+    def api_panel_backup_settings():
+        data = request.get_json(silent=True) or {}
+        s = bk.set_settings(enabled=data.get("enabled"), keep_days=data.get("keep_days"))
+        log_action(current_user, "panel_backup_settings", detail=str(s))
+        return jsonify({"success": True, "settings": s})
+
     @app.route("/api/panel/debug-report")
     @login_required
     @permission_required(SUPER_ADMIN)
@@ -3712,6 +3776,17 @@ def register_routes(app):
         threading.Thread(target=_runner, daemon=True).start()
 
     _supervise("console-poller", console_poller)
+
+    # Daily automatic backups: check hourly; daily_backup_tick() takes one only when the last
+    # daily backup is ~a day old (and enabled), then prunes past the retention window.
+    def backup_ticker():
+        while True:
+            try:
+                bk.daily_backup_tick()
+            except Exception:
+                app.logger.debug("daily backup tick failed", exc_info=True)
+            time.sleep(3600)
+    _supervise("backup-ticker", backup_ticker)
 
     # Make socketio accessible from app
     app.socketio = socketio

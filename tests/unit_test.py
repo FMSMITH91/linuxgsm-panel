@@ -184,6 +184,32 @@ try:
           ("/home/gm/.lgsm-cron/" + sm._cron_job_id("/home/gm/backup.sh --full") + ".status") in _rec)
 finally:
     sm.run_command = _orig_run6
+
+# ── backup module: create / list / prune + path-traversal guard ──
+import backup as _bk
+import tempfile as _tf, sqlite3 as _sq, pathlib as _pl, os as _osb, tarfile as _tar, shutil as _sh2
+_bktmp = _pl.Path(_tf.mkdtemp())
+_bk.BACKUP_DIR = _bktmp / "backups"; _bk.DATA_DIR = _bktmp; _bk.DB_PATH = _bktmp / "panel.db"
+_bk.CONFIG_FILE = _bktmp / "config.json"; _bk.SECRET_FILE = _bktmp / "secret_key"; _bk.CRED_KEY_FILE = _bktmp / "cred_key"
+_dbc = _sq.connect(str(_bk.DB_PATH)); _dbc.execute("create table t(x)"); _dbc.commit(); _dbc.close()
+_bk.CONFIG_FILE.write_text("{}"); _bk.SECRET_FILE.write_text("s"); _bk.CRED_KEY_FILE.write_text("k")
+_bok, _bname = _bk.create_backup("manual")
+check("backup: create returns a valid name", _bok and bool(_bk._NAME_RE.match(_bname)))
+_blist = _bk.list_backups()
+check("backup: appears in the list as 'manual'",
+      len(_blist) == 1 and _blist[0]["kind"] == "manual" and _blist[0]["size"] > 0)
+with _tar.open(_bk.BACKUP_DIR / _bname) as _t:
+    check("backup: archive holds db+config+keys",
+          set(_t.getnames()) == {"panel.db", "config.json", "secret_key", "cred_key"})
+check("backup: _safe_path allows a real backup, rejects traversal/junk",
+      _bk._safe_path(_bname) is not None and _bk._safe_path("../../etc/passwd") is None
+      and _bk._safe_path("panel-backup-x.tar.gz") is None)
+_old = _bk.BACKUP_DIR / "panel-backup-20000101-000000-daily.tar.gz"
+_sh2.copy(_bk.BACKUP_DIR / _bname, _old); _osb.utime(_old, (0, 0))
+check("backup: prune drops an old DAILY backup but keeps the manual one",
+      _bk.prune_backups(7) == 1 and all(b["kind"] != "daily" for b in _bk.list_backups()))
+_sh2.rmtree(_bktmp, ignore_errors=True)
+
 # line splitting
 eq("cron: split 5-field", sm._split_cron_line("0 3 * * * /home/gm/b.sh a"), ("0 3 * * *", "/home/gm/b.sh a"))
 eq("cron: split @shortcut", sm._split_cron_line("@reboot /home/gm/x start"), ("@reboot", "/home/gm/x start"))

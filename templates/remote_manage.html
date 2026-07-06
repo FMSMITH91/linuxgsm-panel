@@ -154,6 +154,45 @@
   </div>
 </div>
 
+<!-- Backups (panel host only) -->
+<div class="card mb-3" id="backups">
+  <div class="card-header d-flex justify-content-between align-items-center">
+    <span><i class="bi bi-archive"></i> Backups</span>
+    <button class="btn btn-sm btn-success" onclick="createBackup(this)"><i class="bi bi-plus-circle"></i> Back up now</button>
+  </div>
+  <div class="card-body">
+    <p class="small text-secondary mb-2">
+      Saves the panel's database, settings and encryption keys as a single file, so you can
+      roll back a bad change or recover after a failure. <strong class="text-warning">A backup contains secrets</strong> —
+      keep any downloaded copies somewhere safe.
+    </p>
+    <div class="d-flex gap-3 flex-wrap align-items-center mb-2">
+      <div class="form-check form-switch mb-0">
+        <input class="form-check-input" type="checkbox" id="bk-enabled" onchange="saveBackupSettings()">
+        <label class="form-check-label small" for="bk-enabled">Automatic daily backups</label>
+      </div>
+      <div class="d-flex align-items-center gap-1">
+        <label class="form-label small mb-0" for="bk-keep">Keep daily backups for</label>
+        <select id="bk-keep" class="form-select form-select-sm" style="width:auto;" onchange="saveBackupSettings()">
+          <option value="7">7 days</option>
+          <option value="14">14 days</option>
+          <option value="30">30 days</option>
+        </select>
+      </div>
+      <span id="bk-msg" class="small"></span>
+    </div>
+    <div id="bk-list-wrap">
+      <div id="bk-loading" class="text-secondary small"><i class="bi bi-arrow-repeat"></i> Loading backups…</div>
+      <div class="table-responsive" id="bk-table-wrap" style="display:none;">
+        <table class="table table-sm align-middle mb-0" style="font-size:.8rem;">
+          <thead><tr><th>When</th><th>Type</th><th>Size</th><th class="text-end">Actions</th></tr></thead>
+          <tbody id="bk-tbody"></tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+</div>
+
 <!-- Diagnostics & File Integrity (panel host only) -->
 <div class="card mb-3" id="diagnostics">
   <div class="card-header d-flex justify-content-between align-items-center">
@@ -916,8 +955,73 @@ function genDebugReport(){
     .finally(function(){ if(btn){ btn.disabled=false; btn.innerHTML='<i class="bi bi-clipboard2-data"></i> Generate debug report'; } });
 }
 
+// ── Backups (panel host only) ──
+function bkFmtBytes(b){ if(b<1024)return b+' B'; if(b<1048576)return (b/1024).toFixed(0)+' KB'; return (b/1048576).toFixed(1)+' MB'; }
+function bkAgo(epoch){ var s=Math.max(0,Math.floor(Date.now()/1000-epoch)); if(s<60)return 'just now'; if(s<3600)return Math.floor(s/60)+'m ago'; if(s<86400)return Math.floor(s/3600)+'h ago'; return Math.floor(s/86400)+'d ago'; }
+function bkMsg(t,cls){ var m=document.getElementById('bk-msg'); if(m){ m.textContent=t||''; m.className='small '+(cls||'text-secondary'); } }
+function loadBackups(){
+  fetch(MOUNT+'/api/panel/backups').then(r=>r.json()).then(function(d){
+    var s=d.settings||{};
+    var en=document.getElementById('bk-enabled'); if(en) en.checked = s.enabled!==false;
+    var kp=document.getElementById('bk-keep'); if(kp && s.keep_days) kp.value = String(s.keep_days);
+    var tb=document.getElementById('bk-tbody'); if(!tb) return;
+    var rows='';
+    (d.backups||[]).forEach(function(b){
+      var when=new Date(b.created*1000).toLocaleString();
+      var kind = b.kind==='daily'?'<span class="badge bg-secondary">daily</span>'
+               : b.kind==='prerestore'?'<span class="badge bg-info text-dark">pre-restore</span>'
+               : '<span class="badge bg-primary">manual</span>';
+      rows += '<tr>'
+        + '<td title="'+escapeHtml(when)+'">'+escapeHtml(bkAgo(b.created))+'</td>'
+        + '<td>'+kind+'</td>'
+        + '<td>'+bkFmtBytes(b.size)+'</td>'
+        + '<td class="text-end text-nowrap">'
+        + '<a class="btn btn-sm btn-outline-secondary py-0 px-1" href="'+MOUNT+'/api/panel/backup/download/'+encodeURIComponent(b.name)+'" title="Download"><i class="bi bi-download"></i></a> '
+        + '<button class="btn btn-sm btn-outline-warning py-0 px-1" title="Restore" onclick="restoreBackup('+JSON.stringify(b.name)+',this)"><i class="bi bi-arrow-counterclockwise"></i></button> '
+        + '<button class="btn btn-sm btn-outline-danger py-0 px-1" title="Delete" onclick="deleteBackup('+JSON.stringify(b.name)+',this)"><i class="bi bi-trash"></i></button>'
+        + '</td></tr>';
+    });
+    if(!(d.backups||[]).length) rows='<tr><td colspan="4" class="text-secondary text-center py-3">No backups yet.</td></tr>';
+    tb.innerHTML=rows;
+    document.getElementById('bk-loading').style.display='none';
+    document.getElementById('bk-table-wrap').style.display='';
+  }).catch(function(){ var l=document.getElementById('bk-loading'); if(l) l.innerHTML='<span class="text-danger">Could not load backups.</span>'; });
+}
+function createBackup(btn){
+  if(btn){ btn.disabled=true; }
+  bkMsg('Creating backup…','text-secondary');
+  fetch(MOUNT+'/api/panel/backup',{method:'POST'}).then(r=>r.json()).then(function(d){
+    bkMsg((d.success?'✓ ':'✗ ')+(d.message||''), d.success?'text-success':'text-danger');
+    if(btn) btn.disabled=false; loadBackups();
+  }).catch(function(){ bkMsg('✗ Backup failed','text-danger'); if(btn) btn.disabled=false; });
+}
+function saveBackupSettings(){
+  var enabled=document.getElementById('bk-enabled').checked;
+  var keep=parseInt(document.getElementById('bk-keep').value,10);
+  fetch(MOUNT+'/api/panel/backup/settings',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({enabled:enabled,keep_days:keep})})
+    .then(r=>r.json()).then(function(){ bkMsg('✓ Saved','text-success'); }).catch(function(){ bkMsg('✗ Could not save','text-danger'); });
+}
+function deleteBackup(name,btn){
+  if(!confirm('Delete this backup?\n\n'+name)) return;
+  if(btn) btn.disabled=true;
+  fetch(MOUNT+'/api/panel/backup/delete',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({name:name})})
+    .then(r=>r.json()).then(function(d){ bkMsg((d.success?'✓ ':'✗ ')+(d.message||''), d.success?'text-success':'text-danger'); loadBackups(); })
+    .catch(function(){ bkMsg('✗ Delete failed','text-danger'); if(btn) btn.disabled=false; });
+}
+function restoreBackup(name,btn){
+  if(!confirm('Restore this backup?\n\n'+name+'\n\nThis OVERWRITES the panel\'s current database, settings and keys, then restarts the panel. A pre-restore safety backup is taken first.')) return;
+  if(btn) btn.disabled=true;
+  bkMsg('Restoring…','text-secondary');
+  fetch(MOUNT+'/api/panel/backup/restore',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({name:name})})
+    .then(r=>r.json()).then(function(d){
+      bkMsg((d.success?'✓ ':'✗ ')+(d.message||''), d.success?'text-success':'text-danger');
+      if(d.success){ setTimeout(function(){ location.reload(); }, 8000); } else if(btn){ btn.disabled=false; }
+    })
+    .catch(function(){ bkMsg('The panel is restarting — reconnect in a moment.','text-warning'); });
+}
+
 loadSshStatus();                     // public-SSH controls now exist on both local + remote (no-ops if absent)
-if(IS_LOCAL){ checkPanelUpdate(false); loadIntegrity(); loadDbStats(); loadAutoUpd(); } // panel-only cards
+if(IS_LOCAL){ checkPanelUpdate(false); loadIntegrity(); loadDbStats(); loadAutoUpd(); loadBackups(); } // panel-only cards
 pollLive();
 setInterval(pollLive, 2000);
 </script>
