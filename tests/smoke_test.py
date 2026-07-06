@@ -167,6 +167,11 @@ try:
     cp2 = c.post("/api/panel/change-port", json={"port": 99999})
     check("change-port refuses an out-of-range port (>65535)",
           cp2.status_code == 400 and not (cp2.get_json() or {}).get("success"))
+    # Bind-address validation: a non-IP is rejected by ipaddress parsing before any save or
+    # restart, so this is env-independent and side-effect-free.
+    cp3 = c.post("/api/panel/change-port", json={"port": 5000, "bind_host": "not-an-ip"})
+    check("change-port refuses a non-IP bind address",
+          cp3.status_code == 400 and not (cp3.get_json() or {}).get("success"))
 
     # ── Privilege-escalation guards: a delegated admin (MANAGE_USERS + MANAGE_GROUPS,
     #    NOT superadmin) must not be able to become / create a superadmin. ──

@@ -2401,70 +2401,103 @@ def register_routes(app):
     @login_required
     @permission_required(SUPER_ADMIN)
     def api_panel_change_port():
-        """Change the web port the panel listens on. Saves the new port, moves the public
-        firewall rule with it when the panel is exposed directly (tailnet-only panels have no
-        public rule), then restarts the panel so it rebinds — on restart it also re-points
-        Tailscale Serve at the new port automatically. Refuses a port outside 1024-65535, the
-        current port, one already in use, or one a local game server occupies — any of which
-        would leave the panel unable to bind and effectively down."""
+        """Change where the panel's web server listens: its bind address and/or port. Saves the
+        new binding, brings the firewall in line (a publicly-bound panel needs its port open; a
+        loopback/tailnet-bound one doesn't, and a changed port's old rule is removed), then
+        restarts the panel so it rebinds (on restart it re-points Tailscale Serve at the current
+        port). Refuses anything that would leave the panel unreachable: a port outside 1024-65535
+        / already in use / used by a local game server, a bind address that isn't a valid IP or
+        isn't on this host, or a loopback-only bind without Tailscale Serve to proxy to it."""
+        import ipaddress
         data = request.get_json(silent=True) or {}
-        new_port = _int_or(data.get("port"), 0)
         cfg = load_config()
         cur_port = int(cfg.get("port", 5000))
+        cur_bind = (cfg.get("bind_host") or "0.0.0.0").strip()
+        new_port = _int_or(data.get("port"), cur_port)
+        new_bind = str(data.get("bind_host") or cur_bind).strip()
 
+        local = RemoteServer.query.filter_by(is_local=True).first()
+        wildcard = {"0.0.0.0", "::"}
+        loopback = {"127.0.0.1", "::1", "localhost"}
+
+        # ── Validate the port ──
         if not (1024 <= new_port <= 65535):
             return jsonify({"success": False, "message": "Pick a port between 1024 and 65535."}), 400
-        if new_port == cur_port:
-            return jsonify({"success": False, "message": "That's already the panel's port."}), 400
-        local = RemoteServer.query.filter_by(is_local=True).first()
-        clash = GameServer.query.filter_by(remote_id=local.id, port=new_port).first() if local else None
-        if clash:
-            return jsonify({"success": False,
-                            "message": f"Port {new_port} is used by game server "
-                                       f"'{clash.name}'. Pick another."}), 400
-        if so.port_in_use(new_port):
-            return jsonify({"success": False,
-                            "message": f"Port {new_port} is already in use on this host."}), 400
+        if new_port != cur_port:
+            clash = GameServer.query.filter_by(remote_id=local.id, port=new_port).first() if local else None
+            if clash:
+                return jsonify({"success": False,
+                                "message": f"Port {new_port} is used by game server "
+                                           f"'{clash.name}'. Pick another."}), 400
+            if so.port_in_use(new_port):
+                return jsonify({"success": False,
+                                "message": f"Port {new_port} is already in use on this host."}), 400
 
-        # Was the panel's CURRENT port publicly open in UFW? Decide from the live rule state
-        # (more reliable than bind_host, which the "close public port" flow may leave at
-        # 0.0.0.0). We mirror that exposure onto the new port.
-        was_open = False
-        if local:
+        # ── Validate the bind address ──
+        served = bool(cfg.get("tailscale_setup_done"))
+        if new_bind not in wildcard:
             try:
-                was_open = bool(remote_public_ssh_status(
-                    local, panel_port=cur_port).get("panel_port_open"))
-            except Exception:
-                was_open = False
+                ipaddress.ip_address(new_bind)
+            except ValueError:
+                return jsonify({"success": False,
+                                "message": "Bind address must be an IP — e.g. 0.0.0.0 (all "
+                                           "interfaces), 127.0.0.1 (localhost), or this host's "
+                                           "Tailscale IP."}), 400
+            if new_bind not in loopback:
+                # A specific IP: with Tailscale Serve (which proxies to localhost) this would
+                # break Serve and lock you out; without Serve it must at least be a real local IP.
+                if served:
+                    return jsonify({"success": False,
+                                    "message": "Tailscale Serve reaches the panel on localhost, so "
+                                               "bind to 0.0.0.0 (all) or 127.0.0.1 (localhost). A "
+                                               "specific IP would break Serve and lock you out."}), 400
+                if not so.host_has_ip(new_bind):
+                    return jsonify({"success": False,
+                                    "message": f"{new_bind} isn't an address on this host — the "
+                                               "panel couldn't bind to it."}), 400
+        if new_bind in loopback and not served:
+            return jsonify({"success": False,
+                            "message": "Binding to localhost only would lock you out unless "
+                                       "Tailscale Serve is set up to reach the panel. Set up "
+                                       "Serve first."}), 400
+        if new_port == cur_port and new_bind == cur_bind:
+            return jsonify({"success": False, "message": "That's already the panel's binding."}), 400
 
-        # Save first so the restart binds to (and re-points Serve at) the new port.
+        # ── Save the new binding ──
         cfg["port"] = new_port
+        cfg["bind_host"] = new_bind
         save_config(cfg)
 
-        # Move the firewall rule with the port: open the new port ONLY if the old one was
-        # actually open (never silently expose a tailnet-only panel), and ALWAYS remove the
-        # now-stale rule for the old port so it isn't left dangling.
+        # ── Bring the firewall in line with the resulting exposure ──
+        # Publicly bound (0.0.0.0/::) → the port must be open. Loopback/specific-IP bound → the
+        # public port rule isn't needed, so close it. A changed port also gets its old rule gone.
+        now_public = new_bind in wildcard
         fw_note = ""
         if local:
             try:
-                if was_open:
+                if now_public:
                     remote_ufw_open_port(local, new_port, "tcp", "LinuxGSM Panel")
-                remote_ufw_close_port(local, cur_port, "tcp")
-                fw_note = (f" Firewall: opened {new_port}, closed {cur_port}." if was_open
-                           else f" Firewall: removed the stale rule for {cur_port}.")
+                    fw_note = f" Firewall: opened {new_port}."
+                else:
+                    remote_ufw_close_port(local, new_port, "tcp")
+                    fw_note = f" Firewall: {new_port} kept tailnet-only."
+                if new_port != cur_port:
+                    remote_ufw_close_port(local, cur_port, "tcp")
+                    fw_note += f" Removed the old rule for {cur_port}."
             except Exception:
                 app.logger.warning("change-port: firewall update failed", exc_info=True)
 
-        log_action(current_user, "panel_change_port", detail=f"{cur_port} -> {new_port}", success=True)
+        log_action(current_user, "panel_change_binding",
+                   detail=f"{cur_bind}:{cur_port} -> {new_bind}:{new_port}", success=True)
         ok, _ = so.restart_panel()
         if not ok:
             return jsonify({"success": False,
-                            "message": "Saved the new port, but couldn't restart the panel "
+                            "message": "Saved the new binding, but couldn't restart the panel "
                                        "automatically — restart it (or reboot the host) to apply."}), 200
         return jsonify({"success": True, "new_port": new_port, "old_port": cur_port,
+                        "new_bind": new_bind, "port_changed": new_port != cur_port,
                         "served_over_tailscale": bool(cfg.get("tailscale_setup_done")),
-                        "firewall_moved": was_open,
-                        "message": f"Panel port changing to {new_port}. Restarting…{fw_note}"})
+                        "message": f"Panel binding to {new_bind}:{new_port}. Restarting…{fw_note}"})
 
     @app.route("/api/panel/debug-report")
     @login_required

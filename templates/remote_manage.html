@@ -331,14 +331,33 @@
       </div>
     </div>
     <div class="row g-3 mt-1">
-      <div class="col-md-6">
-        <div class="small text-secondary mb-1">Panel port <span class="text-secondary">(the web port this panel listens on)</span></div>
-        <p class="small text-secondary mb-1">Change the port the panel serves on. It briefly restarts to apply the change{% if config and config.tailscale_setup_done %} — your Tailscale URL stays the same.{% else %}, then reconnect on the new port.{% endif %}</p>
-        <div class="input-group input-group-sm" style="max-width:340px;">
-          <span class="input-group-text">Port</span>
-          <input type="number" id="panel-port-input" class="form-control" min="1024" max="65535"
-                 value="{{ config.port if config else 5000 }}" aria-label="Panel web port">
-          <button class="btn btn-outline-primary" type="button" onclick="changePanelPort()">Change</button>
+      <div class="col-md-8">
+        {% set _bind = (config.bind_host if config else '0.0.0.0') or '0.0.0.0' %}
+        <div class="small text-secondary mb-1">Panel binding <span class="text-secondary">(where the panel web server listens)</span></div>
+        <p class="small text-secondary mb-1">Change the bind address and/or port. The panel briefly restarts to apply it{% if config and config.tailscale_setup_done %} — your Tailscale URL stays the same.{% else %}, then reconnect on the new address/port.{% endif %}</p>
+        <div class="d-flex gap-2 flex-wrap align-items-end">
+          <div>
+            <label class="form-label small mb-1" for="panel-bind-select">Bind address</label>
+            <select id="panel-bind-select" class="form-select form-select-sm" style="width:auto;"
+                    onchange="onBindSelect()">
+              <option value="0.0.0.0"{% if _bind in ('0.0.0.0', '::') %} selected{% endif %}>All interfaces (public + tailnet)</option>
+              <option value="127.0.0.1"{% if _bind in ('127.0.0.1', '::1', 'localhost') %} selected{% endif %}
+                      {% if not (config and config.tailscale_setup_done) %}disabled{% endif %}>Localhost only (needs Tailscale Serve)</option>
+              <option value="__custom__"{% if _bind not in ('0.0.0.0', '::', '127.0.0.1', '::1', 'localhost') %} selected{% endif %}
+                      {% if config and config.tailscale_setup_done %}disabled{% endif %}>Specific IP…{% if config and config.tailscale_setup_done %} (n/a with Serve){% endif %}</option>
+            </select>
+          </div>
+          <div id="panel-bind-custom-wrap"{% if _bind in ('0.0.0.0', '::', '127.0.0.1', '::1', 'localhost') %} style="display:none;"{% endif %}>
+            <label class="form-label small mb-1" for="panel-bind-custom">IP address</label>
+            <input type="text" id="panel-bind-custom" class="form-control form-control-sm" style="width:150px;"
+                   placeholder="100.x.x.x" value="{{ _bind if _bind not in ('0.0.0.0', '::', '127.0.0.1', '::1', 'localhost') else '' }}">
+          </div>
+          <div>
+            <label class="form-label small mb-1" for="panel-port-input">Port</label>
+            <input type="number" id="panel-port-input" class="form-control form-control-sm" min="1024" max="65535"
+                   style="width:110px;" value="{{ config.port if config else 5000 }}" aria-label="Panel web port">
+          </div>
+          <button class="btn btn-sm btn-outline-primary" type="button" onclick="changePanelBinding()">Apply &amp; restart</button>
         </div>
         <div id="panel-port-change-msg" class="small mt-1"></div>
       </div>
@@ -523,31 +542,46 @@ function closePanelPort(){
     .then(d=>{ m.innerHTML='<span class="text-'+(d.success?'success':'danger')+'">'+(window.escapeHtml?escapeHtml(d.message):(d.message||''))+'</span>'; if(d.success) loadSshStatus(); })
     .catch(()=>{ m.innerHTML='<span class="text-danger">Request failed.</span>'; });
 }
-function changePanelPort(){
-  var inp=document.getElementById('panel-port-input'); if(!inp) return;
-  var p=parseInt(inp.value,10);
+function onBindSelect(){
+  var sel=document.getElementById('panel-bind-select');
+  var wrap=document.getElementById('panel-bind-custom-wrap');
+  if(sel && wrap) wrap.style.display = (sel.value === '__custom__') ? '' : 'none';
+}
+function changePanelBinding(){
+  var pinp=document.getElementById('panel-port-input'); if(!pinp) return;
+  var p=parseInt(pinp.value,10);
   if(!(p>=1024 && p<=65535)){ alert('Pick a port between 1024 and 65535.'); return; }
-  if(!confirm('Change the panel port to '+p+'?\n\nThe panel will briefly restart to apply it. '
-    +'Make sure you can still reach it afterward (over Tailscale, or on the new port).')) return;
+  var sel=document.getElementById('panel-bind-select');
+  var bind = sel ? sel.value : '0.0.0.0';
+  if(bind === '__custom__'){
+    bind = (document.getElementById('panel-bind-custom').value || '').trim();
+    if(!bind){ alert('Enter the IP address to bind to.'); return; }
+  }
+  var pretty = bind + ':' + p;
+  if(!confirm('Change the panel binding to '+pretty+'?\n\nThe panel will briefly restart to apply it. '
+    +'Make sure you can still reach it afterward (over Tailscale, or on the new address/port).')) return;
   var m=document.getElementById('panel-port-change-msg');
   m.innerHTML='<span class="text-secondary"><i class="bi bi-arrow-repeat"></i> Applying…</span>';
-  fetch(MOUNT+'/api/panel/change-port',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({port:p})})
+  fetch(MOUNT+'/api/panel/change-port',{method:'POST',headers:{'Content-Type':'application/json'},
+        body:JSON.stringify({port:p, bind_host:bind})})
     .then(r=>r.json()).then(d=>{
       if(!d.success){ m.innerHTML='<span class="text-danger">'+(window.escapeHtml?escapeHtml(d.message):(d.message||'Failed'))+'</span>'; return; }
       // The panel is restarting. Work out where it'll be reachable afterward.
       var target;
       if(d.served_over_tailscale || !location.port){
         target = location.href;                       // same URL (Tailscale Serve / no explicit port)
-      } else {
+      } else if(d.port_changed){
         var u=new URL(location.href); u.port=d.new_port; target=u.href;   // direct access → new port
+      } else {
+        target = location.href;                       // only the bind changed; same URL
       }
-      m.innerHTML='<span class="text-success">Panel restarting on port '+d.new_port+'… reconnecting shortly.</span>';
+      m.innerHTML='<span class="text-success">Panel restarting on '+(window.escapeHtml?escapeHtml(d.new_bind):d.new_bind)+':'+d.new_port+'… reconnecting shortly.</span>';
       setTimeout(function(){ location.href=target; }, 7000);   // give the service time to rebind
     })
     .catch(function(){
       // The restart may cut the connection before the response arrives.
       m.innerHTML='<span class="text-warning">The panel is restarting — reconnect in a moment'
-        + (location.port ? ' on the new port' : '') + '.</span>';
+        + (location.port ? ' on the new address/port' : '') + '.</span>';
     });
 }
 function switchToTailscale(){

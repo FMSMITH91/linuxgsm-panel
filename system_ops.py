@@ -583,6 +583,18 @@ def port_in_use(port):
     return False
 
 
+def host_has_ip(ip):
+    """True if `ip` is assigned to an interface on this host, so the panel could actually bind
+    to it. Used to refuse binding the panel to an address that isn't local (a typo would fail
+    to bind and take the panel down). Best-effort: on any error returns True, so a flaky check
+    never blocks a legitimate change — the caller still guards the risky loopback case."""
+    try:
+        out, _, _ = _run("ip -o addr show 2>/dev/null | awk '{print $4}' | cut -d/ -f1", timeout=8)
+        return str(ip) in set(out.split())
+    except Exception:
+        return True
+
+
 def panel_update_log(max_bytes=20000):
     """Tail of the self-update log (ANSI stripped) so the UI can show live progress while
     the panel updates and restarts. The detached updater keeps writing to this file across

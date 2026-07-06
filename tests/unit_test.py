@@ -402,6 +402,14 @@ try:
 finally:
     _so._run = _orig_sorun
 
+_orig_sorun2 = _so._run
+try:
+    _so._run = lambda c, **k: ("127.0.0.1\n100.84.48.111\n45.76.63.211\n", "", 0)
+    check("host_has_ip: recognises a local address", _so.host_has_ip("100.84.48.111") is True)
+    check("host_has_ip: rejects an address not on the host", _so.host_has_ip("10.0.0.9") is False)
+finally:
+    _so._run = _orig_sorun2
+
 _orig_popen = _so.subprocess.Popen
 _cap = {}
 try:
