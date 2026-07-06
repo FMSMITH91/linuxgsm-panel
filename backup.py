@@ -322,7 +322,9 @@ def get_game_schedule(sid):
     """Effective schedule for one server: its override where set, else the global default.
     Returns {interval_days, keep, last, overridden}."""
     cfg = load_config()
-    entry = (cfg.get("game_schedules") or {}).get(str(sid)) or {}
+    entry = _game_schedules(cfg).get(str(sid))
+    if not isinstance(entry, dict):   # tolerate a corrupted config — treat as no override
+        entry = {}
     d = get_full_settings()
     has_iv, has_keep = "interval_days" in entry, "keep" in entry
 
@@ -341,12 +343,21 @@ def get_game_schedule(sid):
     }
 
 
+def _game_schedules(cfg):
+    """The game_schedules map from config, tolerant of corruption (returns {} if it isn't a dict)."""
+    gs = cfg.get("game_schedules")
+    return gs if isinstance(gs, dict) else {}
+
+
 def set_game_schedule(sid, interval_days, keep):
     """Set/clear a server's schedule override. For each of interval_days/keep: a number sets an
     override, None clears it (inherit the global default). The server's last-run is preserved."""
     cfg = load_config()
-    sched = cfg.setdefault("game_schedules", {})
-    entry = sched.get(str(sid)) or {}
+    sched = _game_schedules(cfg)
+    cfg["game_schedules"] = sched   # normalise a corrupted value back to a dict
+    entry = sched.get(str(sid))
+    if not isinstance(entry, dict):
+        entry = {}
     if interval_days is None:
         entry.pop("interval_days", None)
     else:
@@ -366,8 +377,13 @@ def set_game_schedule(sid, interval_days, keep):
 def record_game_backup(sid):
     """Mark a server's scheduled backup as just done (updates only that server's last-run)."""
     cfg = load_config()
-    sched = cfg.setdefault("game_schedules", {})
-    sched.setdefault(str(sid), {})["last"] = int(time.time())
+    sched = _game_schedules(cfg)
+    cfg["game_schedules"] = sched
+    entry = sched.get(str(sid))
+    if not isinstance(entry, dict):
+        entry = {}
+    entry["last"] = int(time.time())
+    sched[str(sid)] = entry
     save_config(cfg)
 
 

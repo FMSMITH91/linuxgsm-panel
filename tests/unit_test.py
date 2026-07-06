@@ -232,6 +232,16 @@ try:
     _bk.set_game_schedule(4242, None, None)
     check("schedule: clearing the override returns to inherit",
           _bk.get_game_schedule(4242)["overridden"] is False)
+    # corrupted config (game_schedules not a dict, or an entry not a dict) must not crash —
+    # it should degrade to the global default, and set/record must repair it.
+    for _i, _bad in enumerate(({"game_schedules": "notadict"}, {"game_schedules": {"4242": "notadict"}},
+                               {"game_schedules": {"4242": {"interval_days": "x", "keep": None, "last": "y"}}})):
+        _fakecfg.clear(); _fakecfg.update(_bad)
+        _s = _bk.get_game_schedule(4242)   # must not raise; garbage values clamp to sane defaults
+        check("schedule: corrupted config degrades safely (case %d)" % _i,
+              _s["keep"] == _bk.DEFAULT_FULL_KEEP and isinstance(_s["interval_days"], int)
+              and _bk.game_backup_due(4242) in (True, False))
+        _bk.record_game_backup(4242)   # must not raise on a corrupted entry
 finally:
     _bk.load_config, _bk.save_config = _sched_load, _sched_save
 

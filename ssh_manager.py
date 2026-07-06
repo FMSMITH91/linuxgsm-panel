@@ -2668,7 +2668,8 @@ def _safe_abspath(user, relpath):
     """Resolve a user-supplied relative path under /home/<user>, rejecting any
     traversal outside it. Returns the absolute path or None."""
     home = f"/home/{user}"
-    ap = _pp.normpath(_pp.join(home, (relpath or "").lstrip("/")))
+    rel = str(relpath) if relpath else ""   # tolerate non-str input without crashing
+    ap = _pp.normpath(_pp.join(home, rel.lstrip("/")))
     if ap == home or ap.startswith(home + "/"):
         return ap
     return None
