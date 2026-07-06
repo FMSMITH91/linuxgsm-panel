@@ -506,8 +506,9 @@
                   data-copy="{{ addr }}:{{ gs.port }}">{{ addr }}:{{ gs.port }}</code>
             {% set join_url = gs.connect_uri(addr) %}
             {% if join_url %}
-            <a class="btn btn-success btn-sm py-0 px-1 ms-1" style="font-size:.7rem;" rel="noopener"
-               href="{{ join_url }}" title="Launch the game and join"><i class="bi bi-box-arrow-in-right"></i> Join</a>
+            <a class="btn btn-success btn-sm py-0 px-1 ms-1 join-link" style="font-size:.7rem;" rel="noopener"
+               href="{{ join_url }}" data-addr="{{ addr }}:{{ gs.port }}"
+               title="Launch the game and join (on phones, taps to copy the address)"><i class="bi bi-box-arrow-in-right"></i> Join</a>
             {% endif %}
             {% else %}
             <code class="text-secondary" title="This host's public IP isn't known yet">:{{ gs.port }}</code>

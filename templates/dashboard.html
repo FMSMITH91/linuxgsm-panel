@@ -210,11 +210,12 @@ function refreshStatus() {
           // One-click join link (steam://connect/…) for games that support it.
           if (s.connect_url) {
             var join = document.createElement('a');
-            join.className = 'btn btn-success btn-sm py-0 px-1 ms-2';
+            join.className = 'btn btn-success btn-sm py-0 px-1 ms-2 join-link';
             join.style.fontSize = '.7rem';
             join.rel = 'noopener';
-            join.title = 'Launch the game and join';
+            join.title = 'Launch the game and join (on phones, taps to copy the address)';
             join.href = s.connect_url;   // href property assignment — no HTML parsing
+            if (s.connect) join.setAttribute('data-addr', s.connect);  // touch fallback: copy addr
             join.innerHTML = '<i class="bi bi-box-arrow-in-right"></i> Join';
             conn.appendChild(join);
           }

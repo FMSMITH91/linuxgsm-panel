@@ -733,6 +733,21 @@ window.copyText = function(text, label){
   } else { fallback(); done(); }
 };
 
+// One-click "Join" links use steam://connect/… which launches the game on a
+// desktop that has Steam. On a phone there's no client to hand off to, so the
+// link silently dies (or pops an ugly "no app found" dialog). On touch devices
+// we intercept it, copy the ip:port instead, and tell the user to paste it into
+// their game — the phone is for managing, the actual joining happens elsewhere.
+window.__isTouch = ('ontouchstart' in window) || (navigator.maxTouchPoints || 0) > 0;
+document.addEventListener('click', function(ev){
+  var j = ev.target.closest && ev.target.closest('.join-link');
+  if(!j || !window.__isTouch) return;
+  var addr = j.getAttribute('data-addr');
+  if(!addr) return;
+  ev.preventDefault();
+  if(window.copyText) window.copyText(addr, 'Copied ' + addr + ' — paste it in your game to join');
+});
+
 // ── Ubuntu Pro widget (shared by the Panel Server & Remote Manage pages) ──
 // Attaches to a host by its remote id (the panel host uses its own local remote
 // id). Renders status, attach form, per-service enable/disable, and detach.

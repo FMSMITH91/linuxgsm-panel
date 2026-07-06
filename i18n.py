@@ -44,22 +44,27 @@ def catalog(lang):
             merged = {}
 
             def _merge(path):
+                # OSError: file vanished/unreadable. ValueError: malformed JSON
+                # (json.JSONDecodeError subclasses it). Either way the section just
+                # contributes nothing — the catalog degrades gracefully.
                 try:
                     loaded = json.loads(path.read_text(encoding="utf-8"))
-                    if isinstance(loaded, dict):
-                        for k, v in loaded.items():
-                            if isinstance(v, str) and v:
-                                merged[k] = v
-                except Exception:
-                    pass   # a malformed/missing section file just contributes nothing
+                except (OSError, ValueError):
+                    return
+                if isinstance(loaded, dict):
+                    for k, v in loaded.items():
+                        if isinstance(v, str) and v:
+                            merged[k] = v
 
+            # Every section file in translations/<lang>/ (paths come from the directory
+            # listing, not from request input), then the legacy single file if present.
+            # OSError => no translations dir for this language yet; fall through.
             try:
-                # Every section file in translations/<lang>/ (paths come from the directory listing,
-                # not from request input), then the legacy single file if present.
-                for p in sorted((_DIR / dname).glob("*.json")):
-                    _merge(p)
-            except Exception:
-                pass   # no translations dir for this language yet — fall through with what we have
+                section_files = sorted((_DIR / dname).glob("*.json"))
+            except OSError:
+                section_files = []
+            for p in section_files:
+                _merge(p)
             legacy = _DIR / _LEGACY_FILES[lang]
             if legacy.is_file():
                 _merge(legacy)
