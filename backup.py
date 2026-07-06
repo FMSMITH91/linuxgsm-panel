@@ -41,14 +41,16 @@ def _ensure_dir():
 
 
 def _safe_path(name):
-    """Resolve `name` to a backup file in BACKUP_DIR, or None if it isn't one. `basename` strips
-    any directory components (so path traversal is impossible), and the strict name regex then
-    allows only our own backup filenames — nothing else can be reached."""
+    """Return the backup file named `name` from BACKUP_DIR, or None. The returned path is taken
+    from the directory LISTING — never built from the request — and `name` must basename-match
+    one of our strictly-named backups, so nothing outside data/backups can ever be reached."""
     name = os.path.basename(name or "")
     if not _NAME_RE.match(name):
         return None
-    p = BACKUP_DIR / name
-    return p if p.is_file() else None
+    for p in BACKUP_DIR.glob("panel-backup-*.tar.gz"):
+        if p.name == name and p.is_file():
+            return p
+    return None
 
 
 def _snapshot_db(dest):
