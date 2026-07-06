@@ -295,14 +295,23 @@ if [ "${IS_UPDATE}" -eq 1 ]; then
     ok "Snapshot saved"
 
     info "[2/5] Fetching the new version…"
+    REQ_BEFORE="$(sha256sum "${PANEL_DIR}/requirements.txt" 2>/dev/null | awk '{print $1}')"
     fetch_code
     TO_VER="$(panel_version)"
+    REQ_AFTER="$(sha256sum "${PANEL_DIR}/requirements.txt" 2>/dev/null | awk '{print $1}')"
     ok "Code updated (${FROM_VER} → ${TO_VER})"
 
+    # Most updates are code-only. Reinstalling deps means pip resolves + may rebuild wheels,
+    # which pegs the CPU on a small VPS for no reason. Skip it when requirements.txt is byte-for-byte
+    # unchanged AND the venv already exists — the packages are already installed at the same version.
     info "[3/5] Installing dependencies…"
-    install_deps
+    if [ -x "${PANEL_DIR}/venv/bin/python3" ] && [ -n "${REQ_BEFORE}" ] && [ "${REQ_BEFORE}" = "${REQ_AFTER}" ]; then
+        ok "Dependencies unchanged — skipping pip (nothing to build)"
+    else
+        install_deps
+        ok "Dependencies installed"
+    fi
     [ "${RUN_AS_ROOT}" -eq 1 ] && chown -R "${PANEL_USER}:${PANEL_USER}" "${PANEL_DIR}"
-    ok "Dependencies installed"
 
     info "[4/5] Restarting the service…"
     svc daemon-reload || true
