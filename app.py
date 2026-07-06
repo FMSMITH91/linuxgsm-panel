@@ -542,6 +542,13 @@ def register_template_filters(app):
 
 # ─── Context Processors ───────────────────────────────────────
 
+def _json_body():
+    """Request JSON coerced to a dict — {} for a missing, non-object (array/scalar), or malformed
+    body. Guards every endpoint's `.get(...)` from crashing on a hostile/buggy request body."""
+    d = request.get_json(silent=True)
+    return d if isinstance(d, dict) else {}
+
+
 def _current_lang():
     """Active UI language: the logged-in user's saved preference, else the session choice, else en."""
     lang = None
@@ -1280,7 +1287,7 @@ def register_routes(app):
     def api_server_action(server_id):
         """JSON action endpoint for inline controls (dashboard/lists) — no reload."""
         gs = get_game(server_id)
-        data = request.get_json(silent=True) or {}
+        data = _json_body()
         action = (data.get("action") or "").strip()
         if action not in RUNNABLE_ACTIONS:
             return jsonify({"success": False, "message": f"Unsupported action: {action}"}), 400
@@ -1300,7 +1307,7 @@ def register_routes(app):
         gs = get_game(server_id)
         if not current_user.is_superadmin and not has_permission(current_user, RESTART_SERVER):
             return jsonify({"success": False, "message": "Permission denied"}), 403
-        data = request.get_json(silent=True) or {}
+        data = _json_body()
         enabled = bool(data.get("enabled"))
         try:
             ok, detail = set_autostart(gs.remote, gs.short_name, enabled, gs.lgsm_name)
@@ -1321,7 +1328,7 @@ def register_routes(app):
         gs = get_game(server_id)
         if not current_user.is_superadmin and not has_permission(current_user, RESTART_SERVER):
             return jsonify({"success": False, "message": "Permission denied"}), 403
-        enabled = bool((request.get_json(silent=True) or {}).get("enabled"))
+        enabled = bool(_json_body().get("enabled"))
         try:
             ok, detail = set_daily_restart(gs.remote, gs.short_name, gs.lgsm_name,
                                            gs.game_type, gs.port, enabled)
@@ -2258,7 +2265,7 @@ def register_routes(app):
     @permission_required(MANAGE_REMOTES)  # Infrastructure management
     def api_tailscale_serve():
         """Enable/disable Tailscale Serve for the panel."""
-        data = request.get_json(silent=True) or {}
+        data = _json_body()
         action = data.get("action", "enable")
         mount = data.get("mount", "/")
         funnel = data.get("funnel", False)
@@ -2291,7 +2298,7 @@ def register_routes(app):
     @permission_required(MANAGE_REMOTES)
     def api_tailscale_check_peer():
         """Check if a host is reachable on the tailnet."""
-        data = request.get_json(silent=True) or {}
+        data = _json_body()
         host = data.get("host", "")
         if not host:
             return jsonify({"success": False, "message": "Host required"}), 400
@@ -2454,7 +2461,7 @@ def register_routes(app):
     def api_panel_repair():
         """Restore tampered panel files from git. Body: {"paths": [...]} to restore
         specific reported files, or {} / omitted to restore all of them."""
-        data = request.get_json(silent=True) or {}
+        data = _json_body()
         paths = data.get("paths")
         if paths is not None and not isinstance(paths, list):
             paths = None
@@ -2510,7 +2517,7 @@ def register_routes(app):
         / already in use / used by a local game server, a bind address that isn't a valid IP or
         isn't on this host, or a loopback-only bind without Tailscale Serve to proxy to it."""
         import ipaddress
-        data = request.get_json(silent=True) or {}
+        data = _json_body()
         cfg = load_config()
         cur_port = int(cfg.get("port", 5000))
         cur_bind = (cfg.get("bind_host") or "0.0.0.0").strip()
@@ -2732,7 +2739,7 @@ def register_routes(app):
     def api_panel_backup_game_delete(server_id):
         """Delete one game-server backup archive."""
         gs = get_game(server_id)
-        name = (request.get_json(silent=True) or {}).get("name") or ""
+        name = _json_body().get("name") or ""
         match = _find_game_backup(gs, name)
         if not match:
             return jsonify({"success": False, "message": "Backup not found."}), 404
@@ -2769,14 +2776,14 @@ def register_routes(app):
         """Set one server's backup schedule. `interval` and `keep` are each a number to override,
         or "default" to inherit the global schedule."""
         gs = get_game(server_id)
-        data = request.get_json(silent=True) or {}
+        data = _json_body()
 
         def _field(v):
             if v is None or v == "default":
                 return None
             try:
-                return int(v)
-            except (TypeError, ValueError):
+                return int(v)   # OverflowError guards against JSON infinity (e.g. 1e400)
+            except (TypeError, ValueError, OverflowError):
                 return None
         sched = bk.set_game_schedule(server_id, _field(data.get("interval")), _field(data.get("keep")))
         log_action(current_user, "game_backup_schedule", target=gs.name,
@@ -2845,7 +2852,7 @@ def register_routes(app):
     @login_required
     @permission_required(SUPER_ADMIN)
     def api_panel_backup_delete():
-        name = (request.get_json(silent=True) or {}).get("name") or ""
+        name = _json_body().get("name") or ""
         ok, msg = bk.delete_backup(name)
         log_action(current_user, "panel_backup_delete", target=name, success=ok)
         return jsonify({"success": ok, "message": msg})
@@ -2856,7 +2863,7 @@ def register_routes(app):
     def api_panel_backup_restore():
         """Restore a backup (destructive — takes a pre-restore safety backup, then swaps the
         data into place and restarts the panel)."""
-        name = (request.get_json(silent=True) or {}).get("name") or ""
+        name = _json_body().get("name") or ""
         ok, msg = bk.restore_backup(name)
         log_action(current_user, "panel_backup_restore", target=name, success=ok)
         return jsonify({"success": ok, "message": msg})
@@ -2876,7 +2883,7 @@ def register_routes(app):
     @login_required
     @permission_required(SUPER_ADMIN)
     def api_panel_backup_settings():
-        data = request.get_json(silent=True) or {}
+        data = _json_body()
         s = bk.set_settings(enabled=data.get("enabled"), keep_days=data.get("keep_days"))
         full = bk.set_full_settings(interval_days=data.get("full_interval_days"),
                                     keep=data.get("full_keep"))
@@ -2948,7 +2955,7 @@ def register_routes(app):
     @permission_required(SUPER_ADMIN)
     def api_server_reboot():
         """Reboot the server."""
-        data = request.get_json(silent=True) or {}
+        data = _json_body()
         delay = data.get("delay", 5)
         success, msg = so.server_reboot(delay)
         if success:
@@ -2999,7 +3006,7 @@ def register_routes(app):
     @permission_required(MANAGE_REMOTES)
     def api_remote_firewall_open(remote_id):
         remote = get_remote(remote_id)
-        data = request.get_json(silent=True) or {}
+        data = _json_body()
         port = data.get("port", "")
         proto = data.get("protocol", "tcp")
         if not port:
@@ -3013,7 +3020,7 @@ def register_routes(app):
     @permission_required(MANAGE_REMOTES)
     def api_remote_firewall_close(remote_id):
         remote = get_remote(remote_id)
-        data = request.get_json(silent=True) or {}
+        data = _json_body()
         port = data.get("port", "")
         proto = data.get("protocol", "tcp")
         if not port:
@@ -3028,7 +3035,7 @@ def register_routes(app):
     def api_remote_firewall_delete_rule(remote_id):
         """Delete a UFW rule by its number (the reliable way to remove any rule)."""
         remote = get_remote(remote_id)
-        num = (request.get_json(silent=True) or {}).get("num")
+        num = _json_body().get("num")
         success, msg = remote_ufw_delete_rule(remote, num)
         log_action(current_user, "remote_ufw_delete_rule", target=f"{remote.name}:#{num}", success=success)
         return jsonify({"success": success, "message": msg})
@@ -3054,7 +3061,7 @@ def register_routes(app):
     def api_remote_ssh_mode(remote_id):
         """Set public SSH via UFW: allow / limit / off (tailnet-only)."""
         remote = get_remote(remote_id)
-        mode = (request.get_json(silent=True) or {}).get("mode", "")
+        mode = _json_body().get("mode", "")
         success, msg = remote_set_public_ssh(remote, mode)
         log_action(current_user, "remote_ssh_mode", target=f"{remote.name}:{mode}", success=success)
         return jsonify({"success": success, "message": msg})
@@ -3217,7 +3224,7 @@ def register_routes(app):
     @permission_required(MANAGE_REMOTES)
     def api_remote_pro_attach(remote_id):
         remote = get_remote(remote_id)
-        token = (request.get_json(silent=True) or {}).get("token", "")
+        token = _json_body().get("token", "")
         ok, msg = pro_attach(remote, token)
         # NOTE: the token is deliberately never logged.
         log_action(current_user, "pro_attach", target=remote.name, success=ok)
@@ -3228,7 +3235,7 @@ def register_routes(app):
     @permission_required(MANAGE_REMOTES)
     def api_remote_pro_service(remote_id):
         remote = get_remote(remote_id)
-        data = request.get_json(silent=True) or {}
+        data = _json_body()
         service = (data.get("service") or "").strip()
         action = (data.get("action") or "").strip()
         ok, msg = pro_service(remote, service, action)
@@ -3275,7 +3282,7 @@ def register_routes(app):
     def api_remote_tailscale_up(remote_id):
         """Start `tailscale up` and return a browser login URL (no auth key needed)."""
         remote = get_remote(remote_id)
-        data = request.get_json(silent=True) or {}
+        data = _json_body()
         try:
             ok, result = remote_tailscale_up_url(
                 remote,
@@ -3328,7 +3335,7 @@ def register_routes(app):
         Requires a Tailscale pre-auth key.
         """
         remote = get_remote(remote_id)
-        data = request.get_json(silent=True) or {}
+        data = _json_body()
         auth_key = data.get("auth_key", "").strip()
         enable_ssh = data.get("enable_ssh", True)
         advertise_routes = data.get("advertise_routes", "").strip()
@@ -3402,7 +3409,7 @@ def register_routes(app):
         packages, UFW, SSH hardening, swap, fail2ban, LinuxGSM user, then reboot.
         Returns immediately; poll /bootstrap-status for live progress."""
         get_remote(remote_id)   # enforce access (403 if not permitted); bootstrap uses remote_id
-        data = request.get_json(silent=True) or {}
+        data = _json_body()
         opts = {
             "set_timezone": data.get("timezone", "UTC"),
             "enable_ufw": data.get("enable_ufw", True),
@@ -3795,7 +3802,7 @@ def register_routes(app):
                 return jsonify(lgsm_read_config(gs.remote, gs.short_name, gs.lgsm_name))
             except Exception as e:
                 return jsonify({"error": str(e)}), 500
-        data = request.get_json(silent=True) or {}
+        data = _json_body()
         try:
             if data.get("raw") is not None:
                 rel = f"lgsm/config-lgsm/{gs.lgsm_name}/{gs.lgsm_name}.cfg"
@@ -3837,7 +3844,7 @@ def register_routes(app):
                 app.logger.debug("alerts read failed", exc_info=True)
             return jsonify({"providers": ALERT_PROVIDERS, "values": vals})
         # POST: only the known alert keys; toggles coerced to on/off.
-        data = (request.get_json(silent=True) or {}).get("values") or {}
+        data = _json_body().get("values") or {}
         updates = {}
         for k, v in data.items():
             if k not in _ALERT_KEY_SET:
@@ -3873,9 +3880,9 @@ def register_routes(app):
         # POST: install or remove a mod by its LinuxGSM id (e.g. "sourcemod").
         if not (current_user.is_superadmin or has_permission(current_user, UPDATE_SERVER)):
             return jsonify({"success": False, "message": "Permission denied"}), 403
-        data = request.get_json(silent=True) or {}
+        data = _json_body()
         which = "install" if data.get("action") == "install" else ("remove" if data.get("action") == "remove" else "")
-        mod_id = (data.get("mod") or "").strip()
+        mod_id = str(data.get("mod") or "").strip()   # str() so a numeric/other type can't crash .strip()
         if not which or not re.match(r"^[A-Za-z0-9._-]+$", mod_id):
             return jsonify({"success": False, "message": "Pick a valid mod to " + (which or "act on") + "."}), 400
         try:
@@ -3921,7 +3928,7 @@ def register_routes(app):
             if err:
                 return jsonify({"error": err}), 400
             return jsonify({"content": content, "path": request.args.get("path", "")})
-        data = request.get_json(silent=True) or {}
+        data = _json_body()
         rel = data.get("path", "")
         try:
             ok, msg = write_file(gs.remote, gs.short_name, rel, data.get("content", ""))
@@ -3937,7 +3944,7 @@ def register_routes(app):
         gs = get_game(server_id)
         if not _can_manage_files():
             return jsonify({"error": "Permission denied"}), 403
-        rel = (request.get_json(silent=True) or {}).get("path", "")
+        rel = _json_body().get("path", "")
         try:
             ok, msg = delete_path(gs.remote, gs.short_name, rel, gs.lgsm_name)
             log_action(current_user, "delete_file", target=gs.name, detail=rel, success=ok)
@@ -3968,7 +3975,7 @@ def register_routes(app):
                 return jsonify({"jobs": list_cron_jobs(gs.remote, gs.short_name, gs.lgsm_name)})
             except Exception:
                 return jsonify({"error": _log_and_generic("list_cron_jobs failed")}), 500
-        data = request.get_json(silent=True) or {}
+        data = _json_body()
         try:
             ok, msg = add_cron_job(gs.remote, gs.short_name, data.get("schedule"),
                                    data.get("command"), gs.lgsm_name)
@@ -3985,7 +3992,7 @@ def register_routes(app):
         gs = get_game(server_id)
         if not _can_manage_files():
             return jsonify({"error": "Permission denied"}), 403
-        data = request.get_json(silent=True) or {}
+        data = _json_body()
         try:
             ok, msg = update_cron_job(gs.remote, gs.short_name, data.get("raw") or "",
                                       data.get("schedule"), data.get("command"), gs.lgsm_name)
@@ -4002,7 +4009,7 @@ def register_routes(app):
         gs = get_game(server_id)
         if not _can_manage_files():
             return jsonify({"error": "Permission denied"}), 403
-        data = request.get_json(silent=True) or {}
+        data = _json_body()
         try:
             ok, msg = delete_cron_job(gs.remote, gs.short_name, data.get("raw") or "", gs.lgsm_name)
             log_action(current_user, "cron_delete", target=gs.name, success=ok)
@@ -4018,7 +4025,7 @@ def register_routes(app):
         gs = get_game(server_id)
         if not _can_manage_files():
             return jsonify({"error": "Permission denied"}), 403
-        raw = (request.get_json(silent=True) or {}).get("raw") or ""
+        raw = _json_body().get("raw") or ""
         try:
             ok, msg = run_cron_job_now(gs.remote, gs.short_name, raw, gs.lgsm_name)
             log_action(current_user, "cron_run_now", target=gs.name, success=ok)
@@ -4069,7 +4076,7 @@ def register_routes(app):
     def api_send_command(server_id):
         gs = get_game(server_id)
         remote = gs.remote
-        data = request.get_json(silent=True) or {}
+        data = _json_body()
         cmd_text = data.get("command", "").strip()
 
         if not cmd_text:
