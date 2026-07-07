@@ -1293,10 +1293,10 @@ def register_routes(app):
             return re.sub(r"[ \t]{2,}", " ", s)
         log_action(actor, f"{action}_server", target=gs.name, success=(rc == 0), detail=_clean(out)[-400:])
         clean = _clean((out or "") + "\n" + (err or "")).strip()
-        # A restart/start reloads the game (and a stop means it'll reload on next start), so any of
-        # these clears a pending mod-restart flag.
-        if rc == 0 and action in ("restart", "start", "stop") and gs.restart_pending:
+        # A manual start/stop/restart makes any queued 'when empty' restart/stop moot — clear both.
+        if rc == 0 and action in ("restart", "start", "stop") and (gs.restart_pending or gs.stop_pending):
             gs.restart_pending = False
+            gs.stop_pending = False
             db.session.commit()
         # Give the freshly-(re)started game a small CPU-priority edge over background work.
         if rc == 0 and action in ("restart", "start"):
@@ -1380,10 +1380,27 @@ def register_routes(app):
         if not current_user.is_superadmin and not has_permission(current_user, _perm_for_action("restart")):
             return jsonify({"success": False, "message": "Permission denied"}), 403
         gs.restart_pending = True
+        gs.stop_pending = False   # restart supersedes a queued stop
         db.session.commit()
         log_action(current_user, "restart_when_empty", target=gs.name, success=True)
         return jsonify({"success": True,
                         "message": "Queued — %s will restart automatically once it's empty." % gs.name})
+
+    @app.route("/api/server/<int:server_id>/stop-when-empty", methods=["POST"])
+    @login_required
+    @server_access_required
+    def api_server_stop_when_empty(server_id):
+        """Queue a stop for once the server is empty, instead of kicking players now. The hourly
+        ticker stops it as soon as it's empty."""
+        gs = get_game(server_id)
+        if not current_user.is_superadmin and not has_permission(current_user, _perm_for_action("stop")):
+            return jsonify({"success": False, "message": "Permission denied"}), 403
+        gs.stop_pending = True
+        gs.restart_pending = False   # stop supersedes a queued restart
+        db.session.commit()
+        log_action(current_user, "stop_when_empty", target=gs.name, success=True)
+        return jsonify({"success": True,
+                        "message": "Queued — %s will stop automatically once it's empty." % gs.name})
 
     @app.route("/api/server/<int:server_id>/autostart", methods=["POST"])
     @login_required
@@ -2859,30 +2876,36 @@ def register_routes(app):
             _full_backup_lock.release()
 
     def _run_due_restarts():
-        """Servers with a pending mod-restart: restart each once it's empty (rechecked hourly), so a
-        mod change loads without kicking players. A stopped server clears its flag (it'll load on
-        the next start); an online-but-unqueryable server is left pending for the admin to force."""
+        """Servers queued to restart OR stop once they empty — mod-restarts and the user's
+        'restart/stop when empty'. Once empty, run the queued action (rechecked hourly). A stopped
+        server clears its flags; an online-but-unqueryable one stays queued for a manual force."""
         with app.app_context():
-            pending = GameServer.query.filter_by(installed=True, restart_pending=True).all()
+            pending = [gs for gs in GameServer.query.filter_by(installed=True).all()
+                       if gs.remote_id and (gs.restart_pending or gs.stop_pending)]
             for gs in pending:
-                if not gs.remote_id:
-                    continue
                 try:
                     status = get_server_status(gs.remote, gs)
                     pc = sm_player_count(gs.remote, gs.short_name, gs.game_type, gs.port) \
                         if status == "online" else None
+                    # 'restart' here means "online + empty -> act now"; 'idle' = already stopped.
                     decision = mod_restart_decision(status, pc)
-                    if decision == "restart":
-                        run_as_game_user(gs.remote, gs.short_name, "restart 2>&1",
+                    if decision == "idle":
+                        gs.restart_pending = gs.stop_pending = False
+                        db.session.commit()
+                    elif decision == "restart":
+                        act = "stop" if gs.stop_pending else "restart"
+                        run_as_game_user(gs.remote, gs.short_name, act + " 2>&1",
                                          timeout=90, selfname=gs.lgsm_name)
-                        gs.restart_pending = False
+                        if act == "restart":
+                            try:
+                                set_game_priority(gs.remote, gs.short_name)
+                            except Exception:
+                                app.logger.debug("priority boost failed", exc_info=True)
+                        gs.restart_pending = gs.stop_pending = False
                         db.session.commit()
-                    elif decision == "idle":      # server stopped — will load on next start
-                        gs.restart_pending = False
-                        db.session.commit()
-                    # 'pending' (players on / unknown): leave the flag, retry next tick
+                    # 'pending' (players on / unknown): leave the flags, retry next tick
                 except Exception:
-                    app.logger.debug("pending mod-restart of %s failed", gs.name, exc_info=True)
+                    app.logger.debug("pending restart/stop of %s failed", gs.name, exc_info=True)
 
     @app.route("/api/panel/backup/full/precheck")
     @login_required
@@ -3443,6 +3466,25 @@ def register_routes(app):
         success, msg = remote_os_run_updates(remote)
         log_action(current_user, "remote_os_update", target=remote.name, success=success)
         return jsonify({"success": success, "message": msg})
+
+    @app.route("/api/remote/<int:remote_id>/players")
+    @login_required
+    @permission_required(MANAGE_REMOTES)
+    def api_remote_players(remote_id):
+        """Players connected across ALL installed game servers on this host, so a reboot can warn
+        before disconnecting everyone. Returns {total, busy:[{name, players}]}."""
+        remote = get_remote(remote_id)
+        busy = []
+        total = 0
+        for gs in GameServer.query.filter_by(remote_id=remote.id, installed=True).all():
+            try:
+                pc = sm_player_count(gs.remote, gs.short_name, gs.game_type, gs.port)
+            except Exception:
+                pc = None
+            if pc and pc > 0:
+                busy.append({"name": gs.name, "players": pc})
+                total += pc
+        return jsonify({"total": total, "busy": busy})
 
     @app.route("/api/remote/<int:remote_id>/reboot", methods=["POST"])
     @login_required

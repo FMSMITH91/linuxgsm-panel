@@ -621,9 +621,27 @@ function runUpdates(){
     .catch(()=>el.textContent='Update failed');
 }
 function rebootRemote(){
-  var q = IS_LOCAL ? 'Reboot the PANEL HOST now? The panel and all its game servers will go down briefly.'
-                   : 'Reboot this server now? It will be briefly unreachable.';
-  if(!confirm(q)) return;
+  // Check for players on ANY game server on this host first — a reboot disconnects them all.
+  fetch(MOUNT+'/api/remote/'+REMOTE_ID+'/players').then(r=>r.json()).then(function(d){
+    var busy=(d&&d.busy)||[], total=(d&&d.total)||0;
+    var base = IS_LOCAL ? 'Reboot the PANEL HOST now? The panel and all its game servers will go down briefly.'
+                        : 'Reboot this server now? It will be briefly unreachable.';
+    var q = base;
+    if(total>0){
+      var list = busy.map(function(b){ return b.name+' ('+b.players+')'; }).join(', ');
+      q = '⚠ '+total+' player'+(total===1?' is':'s are')+' currently connected across '+busy.length+' server'+(busy.length===1?'':'s')+':\n  '+list
+        + '\n\nRebooting will DISCONNECT all of them. '+base+'\n\nAre you sure?';
+    }
+    if(!confirm(q)) return;
+    doRebootRemote();
+  }).catch(function(){
+    // Couldn't check — fall back to the plain confirm rather than blocking.
+    var q = IS_LOCAL ? 'Reboot the PANEL HOST now? The panel and all its game servers will go down briefly.'
+                     : 'Reboot this server now? It will be briefly unreachable.';
+    if(confirm(q)) doRebootRemote();
+  });
+}
+function doRebootRemote(){
   fetch(MOUNT+'/api/remote/'+REMOTE_ID+'/reboot',{method:'POST'}).then(r=>r.json())
     .then(d=>alert(d.message||'Reboot requested')).catch(()=>alert('Reboot failed'));
 }

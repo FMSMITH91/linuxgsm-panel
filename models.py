@@ -251,6 +251,7 @@ class GameServer(db.Model):
     daily_restart = db.Column(db.Boolean, default=False)  # daily restart when empty of players
     restart_pending = db.Column(db.Boolean, default=False)  # a mod change needs a restart to load it
     backup_pending = db.Column(db.Boolean, default=False)   # queued to back up once players leave
+    stop_pending = db.Column(db.Boolean, default=False)     # queued to stop once players leave
     commands = db.Column(db.Text, default="[]")  # JSON list of {cmd, short, desc} from LinuxGSM
     created_at = db.Column(db.DateTime, default=datetime.utcnow)
     remote = db.relationship("RemoteServer", back_populates="games")
@@ -341,6 +342,7 @@ def _run_light_migrations():
         ("game_server", "daily_restart"): "ALTER TABLE game_server ADD COLUMN daily_restart BOOLEAN DEFAULT 0",
         ("game_server", "restart_pending"): "ALTER TABLE game_server ADD COLUMN restart_pending BOOLEAN DEFAULT 0",
         ("game_server", "backup_pending"): "ALTER TABLE game_server ADD COLUMN backup_pending BOOLEAN DEFAULT 0",
+        ("game_server", "stop_pending"): "ALTER TABLE game_server ADD COLUMN stop_pending BOOLEAN DEFAULT 0",
         ("remote_server", "public_ip"): "ALTER TABLE remote_server ADD COLUMN public_ip VARCHAR(45) DEFAULT ''",
         ("remote_server", "stats_cache"): "ALTER TABLE remote_server ADD COLUMN stats_cache TEXT DEFAULT ''",
         ("remote_server", "host_key"): "ALTER TABLE remote_server ADD COLUMN host_key TEXT DEFAULT ''",
