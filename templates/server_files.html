@@ -379,10 +379,22 @@ function saveConfig(ev){
     .then(r=>r.json()).then(d=>{
       msg.textContent = d.success?'✓ Saved — restart the server to apply.':'✗ '+(d.message||'Failed');
       msg.className='small ms-2 '+(d.success?'text-success':'text-danger');
-      // Mark saved values as the new baseline (preserves accordion state).
-      if(d.success) document.querySelectorAll('#cfg-groups input[data-key]').forEach(function(i){ i.setAttribute('data-orig', i.value); });
+      if(d.success){
+        // Mark saved values as the new baseline (preserves accordion state).
+        document.querySelectorAll('#cfg-groups input[data-key]').forEach(function(i){ i.setAttribute('data-orig', i.value); });
+        // The settings write changed the instance .cfg — refresh the Raw tab so it isn't stale.
+        refreshRawConfig();
+      }
     }).catch(()=>{ msg.textContent='✗ Save failed'; msg.className='small ms-2 text-danger'; });
   return false;
+}
+// Re-read just the raw instance cfg and update the Raw tab, WITHOUT re-rendering the settings
+// form (which would collapse the accordion). Skipped if the user is actively editing the raw box.
+function refreshRawConfig(){
+  fetch(MOUNT+'/api/server/'+serverId+'/config').then(r=>r.json()).then(function(d){
+    var ta=document.getElementById('cfg-raw');
+    if(ta && d && d.raw !== undefined && document.activeElement!==ta) ta.value = d.raw || '';
+  }).catch(function(){});
 }
 // ── Game config file ──
 function loadGameCfg(){
