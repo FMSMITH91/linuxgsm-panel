@@ -252,17 +252,6 @@ function doAction(id, action, btn) {
 }
 
 // Minimal toast helper.
-function toast(msg, kind) {
-  var c = document.getElementById('toast-area');
-  if (!c) { c = document.createElement('div'); c.id = 'toast-area';
-    c.style.cssText = 'position:fixed;bottom:1rem;right:1rem;z-index:9999;display:flex;flex-direction:column;gap:.5rem;';
-    document.body.appendChild(c); }
-  var t = document.createElement('div');
-  t.className = 'alert alert-' + (kind === 'success' ? 'success' : 'danger') + ' py-2 px-3 mb-0';
-  t.style.cssText = 'box-shadow:0 4px 20px rgba(0,0,0,.5);min-width:220px;';
-  t.textContent = msg;
-  c.appendChild(t);
-  setTimeout(function(){ t.style.opacity = '0'; t.style.transition = 'opacity .4s'; setTimeout(function(){ t.remove(); }, 400); }, 3500);
-}
+// Uses the global window.toast (base.html) — one implementation, consistent independent timing.
 </script>
 {% endblock %}

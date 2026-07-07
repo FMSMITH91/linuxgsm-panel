@@ -698,7 +698,9 @@ window.toast = function(msg, kind){
   t.style.cssText = 'font-size:.85rem;box-shadow:0 4px 20px rgba(0,0,0,.5);';
   t.innerHTML = '<i class="bi bi-' + icon + '"></i> ' + escapeHtml(msg);
   c.appendChild(t);
-  setTimeout(function(){ t.style.transition='opacity .4s'; t.style.opacity='0'; setTimeout(function(){ t.remove(); }, 400); }, 2600);
+  // Each toast owns its own timer (captured `t`), so it fades ~4s after ITS OWN creation —
+  // independent of any other toast on screen.
+  setTimeout(function(){ t.style.transition='opacity .4s'; t.style.opacity='0'; setTimeout(function(){ t.remove(); }, 400); }, 4000);
 };
 
 // Copy text to the clipboard and confirm with a toast. Falls back to execCommand
