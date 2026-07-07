@@ -53,6 +53,8 @@
       line-height: 1.6;
       overflow-x: hidden;
       min-height: 100vh;
+      min-height: 100dvh;   /* 100vh includes the mobile browser bar -> body taller than the screen
+                               -> scrolls into empty space. dvh matches the visible viewport. */
     }
     ::-webkit-scrollbar { width: 5px; }
     ::-webkit-scrollbar-thumb { background: var(--border); border-radius: 3px; }
