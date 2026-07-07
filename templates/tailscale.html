@@ -238,6 +238,7 @@
       </div>
       <div class="card-body p-0">
         {% if info.serve_config and info.serve_config.get('services') %}
+        <div class="table-responsive">
         <table class="table table-sm mb-0">
           <thead>
             <tr>
@@ -268,6 +269,7 @@
             {% endfor %}
           </tbody>
         </table>
+        </div>
         {% else %}
         <div class="p-3 text-center text-secondary small">
           {% if info.running %}

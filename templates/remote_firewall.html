@@ -78,6 +78,7 @@
         <span class="small text-secondary">opens every port the game needs</span>
       </div>
       <div class="card-body p-0">
+        <div class="table-responsive">
         <table class="table table-sm mb-0">
           <thead>
             <tr>
@@ -101,6 +102,7 @@
             {% endfor %}
           </tbody>
         </table>
+        </div>
       </div>
     </div>
     {% endif %}
@@ -114,7 +116,7 @@
         <span class="small text-secondary" id="rules-count">{{ status.groups|length }} rule{{ '' if status.groups|length == 1 else 's' }}</span>
       </div>
       <div class="card-body p-0">
-        <div id="rules-list" style="max-height: 500px; overflow-y: auto;">
+        <div id="rules-list" style="max-height: 500px; overflow: auto;">
           {% if status.groups %}
           <table class="table table-sm table-hover mb-0 align-middle">
             <thead>
