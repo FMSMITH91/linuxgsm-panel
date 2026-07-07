@@ -4095,13 +4095,14 @@ def register_routes(app):
         if not _can_manage_files():
             return jsonify({"error": "Permission denied"}), 403
         if request.method == "GET":
-            available, installed = [], []
+            available, installed, supported = [], [], True
             try:
-                available = mods_available(gs.remote, gs.short_name, gs.lgsm_name)
-                installed = mods_installed(gs.remote, gs.short_name, gs.lgsm_name)
+                available, av_ok = mods_available(gs.remote, gs.short_name, gs.lgsm_name)
+                installed, in_ok = mods_installed(gs.remote, gs.short_name, gs.lgsm_name)
+                supported = av_ok and in_ok   # this game has a LinuxGSM mods installer
             except Exception:
                 app.logger.debug("mods list failed", exc_info=True)  # unreachable host — return empties
-            return jsonify({"available": available, "installed": installed})
+            return jsonify({"available": available, "installed": installed, "supported": supported})
         # POST: install or remove a mod by its LinuxGSM id (e.g. "sourcemod").
         if not (current_user.is_superadmin or has_permission(current_user, UPDATE_SERVER)):
             return jsonify({"success": False, "message": "Permission denied"}), 403

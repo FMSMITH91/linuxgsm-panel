@@ -264,13 +264,22 @@ try:
           len(_gbl) == 2 and _gbl[0]["name"] == "gmodserver-2026.tar.gz" and _gbl[0]["size"] == 1048576)
     check("game backups: no lock -> nothing marked in-progress",
           not any(b.get("in_progress") for b in _gbl))
-    # A backup.lock present -> the NEWEST archive is being written (in progress), older ones aren't.
+    # Lock present + a NEW archive written after the backup started (lock mtime 1720000050) -> that
+    # new one is in-progress; the pre-existing older backup is not.
     sm.run_command = lambda s, c, **k: (
-        "F\tgmodserver-new.tar.zst\t2000\t1720000100\nF\tgmodserver-old.tar.zst\t1048576\t1720000000\nLOCK\n", "", 0)
+        "F\tgmodserver-new.tar.zst\t2000\t1720000100\nF\tgmodserver-old.tar.zst\t1048576\t1720000000\n"
+        "LOCK\t1720000050.5\n", "", 0)
     _gbl2 = sm.list_game_backups(None, "gm")
-    check("game backups: active lock flags newest as in-progress only",
+    check("game backups: active lock flags the new archive in-progress only",
           _gbl2[0]["name"] == "gmodserver-new.tar.zst" and _gbl2[0].get("in_progress") is True
           and not _gbl2[1].get("in_progress"))
+    # Early in a backup (lock present, new archive not created yet): the existing backup predates the
+    # lock, so it must NOT be flagged/hidden — this is the "existing backup disappears" regression.
+    sm.run_command = lambda s, c, **k: (
+        "F\tgmodserver-old.tar.zst\t1048576\t1720000000\nLOCK\t1720000050.5\n", "", 0)
+    _gbl3 = sm.list_game_backups(None, "gm")
+    check("game backups: a pre-existing backup isn't hidden while a new one is starting",
+          len(_gbl3) == 1 and not _gbl3[0].get("in_progress"))
 finally:
     sm.run_command = _orig_run7
 _cap7 = {"cmds": []}

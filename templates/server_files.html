@@ -742,6 +742,8 @@ function loadMods(force){
   if(force){ load.style.display=''; body.style.display='none'; uns.style.display='none'; modsMsg(''); }
   fetch(MOUNT+'/api/server/'+serverId+'/mods').then(r=>r.json()).then(function(d){
     if(d.error){ load.innerHTML='<span class="text-danger">'+esc(d.error)+'</span>'; return; }
+    // This game has no LinuxGSM mods installer (e.g. Call of Duty) — hide the whole card.
+    if(d.supported===false){ var card=document.getElementById('mods-card'); if(card) card.style.display='none'; return; }
     var avail=d.available||[], inst=d.installed||[];
     load.style.display='none';
     if(!avail.length && !inst.length){ uns.style.display=''; body.style.display='none'; return; }

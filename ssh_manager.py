@@ -1109,32 +1109,40 @@ def list_game_backups(server, user):
     zstd when available (.tar.zst), else gzip (.tar.gz) — match all archive types like LinuxGSM's
     own tooling does, not just .tar.gz."""
     bdir = "/home/%s/lgsm/backup" % user
-    # Also report whether a backup is being written RIGHT NOW: LinuxGSM holds a backup.lock only
-    # for the duration of a backup, and writes the archive under its final name while it's still
-    # growing — so the newest file during an active lock is an in-progress (incomplete) backup.
-    # Bound the lock to the last 60 min so a stale lock from a crash doesn't hide a real backup
-    # forever (the next run clears stale locks anyway).
+    # Also report the backup.lock's start time (LinuxGSM holds it only while a backup runs, and
+    # writes the archive under its final name while it's still growing). We report the lock's mtime
+    # (= backup start) so we can flag ONLY an archive written AFTER the backup began as in-progress —
+    # not a pre-existing backup that merely happens to be the newest. Bound to the last 60 min so a
+    # stale lock from a crash doesn't hide a real backup forever.
     cmd = ('for f in %s/*.tar.*; do [ -e "$f" ] || continue; '
            'printf "F\\t%%s\\t%%s\\t%%s\\n" "$(basename "$f")" "$(stat -c%%s "$f")" "$(stat -c%%Y "$f")"; '
            'done; '
-           'if find /home/%s -maxdepth 4 -name "*backup.lock" -mmin -60 2>/dev/null | grep -q .; '
-           'then echo "LOCK"; fi') % (bdir, user)
+           'find /home/%s -maxdepth 4 -name "*backup.lock" -mmin -60 -printf "LOCK\\t%%T@\\n" '
+           '2>/dev/null | head -1') % (bdir, user)
     out, _, _ = run_command(server, f"sudo -u {user} bash -c {_quote(cmd)}", timeout=20, sudo=False)
     res = []
-    backing_up = False
+    lock_mtime = None
     for line in (out or "").splitlines():
-        if line.strip() == "LOCK":
-            backing_up = True
-            continue
         parts = line.split("\t")
+        if parts[0] == "LOCK":
+            try:
+                lock_mtime = int(float(parts[1]))
+            except (ValueError, IndexError):
+                lock_mtime = 0   # lock exists but its mtime is unreadable — see below
+            continue
         if len(parts) >= 4 and parts[0] == "F":
             try:
                 res.append({"name": parts[1], "size": int(parts[2]), "created": int(parts[3])})
             except ValueError:
                 continue
     res.sort(key=lambda b: b["created"], reverse=True)
-    if backing_up and res:
-        res[0]["in_progress"] = True   # newest archive is still being written
+    # Only the archive being written NOW is in-progress: a backup is running (lock present) AND the
+    # newest file was created at/after the backup started (2s slack for clock granularity). A backup
+    # that existed before the run keeps showing. lock_mtime==0 means "lock present, time unknown" —
+    # fall back to flagging the newest so a partial can't masquerade as complete.
+    if lock_mtime is not None and res:
+        if lock_mtime == 0 or res[0]["created"] >= lock_mtime - 2:
+            res[0]["in_progress"] = True
     return res
 
 
@@ -3114,19 +3122,21 @@ def _parse_mods_installed(out):
 
 
 def mods_available(server, user, selfname, timeout=60):
-    """Mods LinuxGSM can install for this game ('abort' → list prints, then it exits cleanly).
-    Empty for games with no mods installer (LinuxGSM reports 'Unknown command')."""
+    """Returns (available_mods, supported). `supported` is False for games with no LinuxGSM mods
+    installer (e.g. cod), where mods-install answers 'Unknown command' — so the UI can hide the
+    whole card rather than show an empty one."""
     out, err, _ = run_as_game_user(server, user, 'mods-install <<< "abort"', timeout=timeout, selfname=selfname)
     text = (out or "") + "\n" + (err or "")
-    return _parse_mods_available(text) if _game_supports_mods(text) else []
+    supported = _game_supports_mods(text)
+    return (_parse_mods_available(text) if supported else []), supported
 
 
 def mods_installed(server, user, selfname, timeout=60):
-    """Currently-installed mods, via the mods-remove list ('abort' → list, then exit).
-    Empty for games with no mods installer (LinuxGSM reports 'Unknown command')."""
+    """Returns (installed_mods, supported). See mods_available for `supported`."""
     out, err, _ = run_as_game_user(server, user, 'mods-remove <<< "abort"', timeout=timeout, selfname=selfname)
     text = (out or "") + "\n" + (err or "")
-    return _parse_mods_installed(text) if _game_supports_mods(text) else []
+    supported = _game_supports_mods(text)
+    return (_parse_mods_installed(text) if supported else []), supported
 
 
 def mods_action(server, user, selfname, which, mod_id, timeout=600):
