@@ -1195,11 +1195,20 @@ def generate_debug_report():
         counts = {"remotes": RemoteServer.query.count(), "game_servers": GameServer.query.count()}
     except Exception:
         _log.debug("DB not queryable here — omit counts, non-fatal", exc_info=True)
+    # DB health first (PRAGMA integrity_check), then size/WAL/row stats — so a corrupt or
+    # flagged database is obvious near the top of the Database section of an issue report.
+    dbs = {}
+    try:
+        import db_maintenance
+        _db_ok, _db_detail = db_maintenance.integrity_check(str(_cfg.DB_PATH))
+        dbs["health"] = "ok" if _db_ok else ("PROBLEM — %s" % _db_detail)
+    except Exception:
+        _log.debug("db integrity_check unavailable for debug report, non-fatal", exc_info=True)
     try:
         from models import database_stats
-        dbs = database_stats()
+        dbs.update(database_stats())
     except Exception:
-        dbs = {}
+        _log.debug("database_stats unavailable for debug report, non-fatal", exc_info=True)
 
     def _tbl(d):
         return "\n".join("- **%s**: %s" % (k, v) for k, v in d.items()) or "- (none)"
