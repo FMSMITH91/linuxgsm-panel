@@ -267,6 +267,29 @@ install_deps() {
     "${PANEL_DIR}/venv/bin/pip" install --quiet -r "${PANEL_DIR}/requirements.txt"
 }
 
+# Run the panel (and its bursts: updates, backups, page-load probes) at LOW CPU/IO priority so it
+# yields to the game servers under contention — important on a 1-core VPS. Game servers autostart
+# via their own cron (nice 0), so they keep priority; the panel just waits its turn. Written as a
+# systemd DROP-IN so it applies on updates too (the main unit is only written on a fresh install)
+# and survives future unit changes.
+ensure_service_tuning() {
+    local dir
+    if [ "${RUN_AS_ROOT}" -eq 1 ]; then
+        dir="/etc/systemd/system/linuxgsm-panel.service.d"
+    else
+        dir="${HOME}/.config/systemd/user/linuxgsm-panel.service.d"
+    fi
+    mkdir -p "${dir}"
+    cat > "${dir}/priority.conf" <<'PRIOEOF'
+[Service]
+Nice=10
+CPUWeight=30
+IOSchedulingClass=best-effort
+IOSchedulingPriority=6
+PRIOEOF
+    svc daemon-reload || true
+}
+
 # ── Is this a fresh install or an update of an existing one? ──
 IS_UPDATE=0
 if [ -f "${PANEL_DIR}/app.py" ] && [ -f "${UNIT_FILE}" ]; then
@@ -316,6 +339,7 @@ if [ "${IS_UPDATE}" -eq 1 ]; then
     [ "${RUN_AS_ROOT}" -eq 1 ] && chown -R "${PANEL_USER}:${PANEL_USER}" "${PANEL_DIR}"
 
     info "[4/5] Restarting the service…"
+    ensure_service_tuning   # refresh the low-priority drop-in (existing installs get it on update)
     svc daemon-reload || true
     svc restart linuxgsm-panel.service || true
     # Ensure the path-independent recovery command exists on existing installs too.
@@ -534,6 +558,8 @@ SERVICEEOF
     SERVICE_HINT="systemctl --user status linuxgsm-panel"
     LOG_HINT="journalctl --user -u linuxgsm-panel -f"
 fi
+ensure_service_tuning                          # low CPU/IO priority so the panel yields to games
+svc restart linuxgsm-panel.service || true     # apply the priority drop-in just written
 ok "Service registered and started (running as '${PANEL_USER}')"
 
 info "[4/4] Verifying the panel is up…"
