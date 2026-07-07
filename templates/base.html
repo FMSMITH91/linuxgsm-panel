@@ -829,8 +829,19 @@ window.UPro = (function(){
     fetch(MOUNT + '/api/remote/' + HOST + '/pro-status').then(function(r){ return r.json(); })
       .then(render).catch(function(){ EL.innerHTML = '<div class="text-danger small">Could not read Ubuntu Pro status.</div>'; });
   }
+  // Quietly re-read without blanking the card — keeps the shown value until the new one lands.
+  function quietRefresh(){
+    if(!EL) return;
+    fetch(MOUNT + '/api/remote/' + HOST + '/pro-status').then(function(r){ return r.json(); })
+      .then(render).catch(function(){});
+  }
   return {
-    load: function(hostId, elId){ HOST = hostId; EL = document.getElementById(elId); refresh(); },
+    // `initial` (the persisted status) paints instantly so the card never blanks to a spinner;
+    // it's then refreshed silently in the background. Without it, fall back to the spinner path.
+    load: function(hostId, elId, initial){
+      HOST = hostId; EL = document.getElementById(elId);
+      if(initial){ render(initial); quietRefresh(); } else { refresh(); }
+    },
     attach: function(){
       var t = document.getElementById('upro-token'); if(!t) return;
       var token = t.value.trim(); if(!token){ msg('Enter your Ubuntu Pro token first.', 'danger'); return; }

@@ -773,8 +773,9 @@ fetch(MOUNT + '/api/remote/' + REMOTE_ID + '/specs').then(r=>r.json())
   .then(d=>renderSpecs(d, document.getElementById('specs-body')))
   .catch(()=>renderSpecs({error:'request failed'}, document.getElementById('specs-body')));
 
-// Ubuntu Pro card (shared widget from base.html).
-UPro.load(REMOTE_ID, 'ubuntu-pro-body');
+// Ubuntu Pro card (shared widget from base.html). Pass the persisted status so the card
+// paints instantly instead of blanking to "Checking Ubuntu Pro…"; it then refreshes silently.
+UPro.load(REMOTE_ID, 'ubuntu-pro-body', {{ (remote.cached_pro.data if remote.cached_pro else None) | tojson }});
 
 // ── Panel-host-only controls (Tailscale SSH, UFW-allow, self-update) ──
 function tsSshEnable(){
