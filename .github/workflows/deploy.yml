@@ -61,5 +61,11 @@ jobs:
           # PANEL_NO_UPGRADE=1: the auto-deploy is a panel-only update — it must never
           # apt-upgrade or reboot the deploy host (that would drop this SSH session and fail
           # the job). OS updates on that host stay a manual/interactive decision.
+          # Refresh install.sh ITSELF to the latest before running it. The deploy executes the
+          # on-disk updater, so a bug in a shipped install.sh would otherwise trap the host on that
+          # broken version forever (it crashes before it can pull the fix). Updating just install.sh
+          # first — the rest of the tree is still updated by install.sh under its own
+          # snapshot/health-check/rollback — also means the deploy validates the CURRENT commit's
+          # updater, not the previous one.
           ssh -o StrictHostKeyChecking=accept-new -o ConnectTimeout=20 \
-            "$U@$DEPLOY_HOST" 'cd ~/linuxgsm-panel && PANEL_NO_UPGRADE=1 bash install.sh'
+            "$U@$DEPLOY_HOST" 'cd ~/linuxgsm-panel && git fetch --quiet origin main && git checkout origin/main -- install.sh && PANEL_NO_UPGRADE=1 bash install.sh'

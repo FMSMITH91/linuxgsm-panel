@@ -306,21 +306,37 @@ install_deps() {
 # simply stay unavailable until it's sorted.
 ensure_gamedig() {
     command -v apt-get >/dev/null 2>&1 || return 0
-    local S=""; [ "$(id -u)" -ne 0 ] && S="sudo"
-    command -v jq >/dev/null 2>&1 && command -v curl >/dev/null 2>&1 \
-        || ${S} apt-get install -y jq curl >/dev/null 2>&1 || true
-    local nmaj; nmaj="$(node -v 2>/dev/null | grep -oE '[0-9]+' | head -1)"; nmaj="${nmaj:-0}"
-    if [ "${nmaj}" -lt 18 ]; then
+    # Every command below is guarded so it returns 0 — the script runs under `set -euo pipefail`,
+    # so an unguarded failure here (e.g. a missing `node`) would abort the whole install.
+    local S=""
+    [ "$(id -u)" -eq 0 ] || S="sudo"
+    if ! command -v jq >/dev/null 2>&1 || ! command -v curl >/dev/null 2>&1; then
+        ${S} apt-get install -y jq curl >/dev/null 2>&1 || true
+    fi
+    # Read Node's major version ONLY if node exists: `node -v` on a host without node fails the pipe
+    # under `set -o pipefail`, which would kill install.sh. Absent/unparseable => 0 => (re)install.
+    local nmaj=0
+    if command -v node >/dev/null 2>&1; then
+        nmaj="$(node -v 2>/dev/null | grep -oE '[0-9]+' | head -1 || true)"
+        nmaj="${nmaj:-0}"
+    fi
+    if [ "${nmaj:-0}" -lt 18 ] 2>/dev/null; then
         info "Installing Node.js LTS (gamedig needs it for player queries)…"
-        curl -fsSL https://deb.nodesource.com/setup_lts.x | ${S} bash - >/dev/null 2>&1 \
-            && ${S} apt-get install -y nodejs >/dev/null 2>&1 \
-            || warn "Node.js LTS install failed — player queries stay unavailable until it's installed."
+        if curl -fsSL --connect-timeout 15 --max-time 120 https://deb.nodesource.com/setup_lts.x \
+                | ${S} bash - >/dev/null 2>&1; then
+            ${S} apt-get install -y nodejs >/dev/null 2>&1 \
+                || warn "Node.js LTS install failed — player queries stay unavailable until installed."
+        else
+            warn "Node.js LTS install failed — player queries stay unavailable until it's installed."
+        fi
     fi
     if command -v npm >/dev/null 2>&1 && ! command -v gamedig >/dev/null 2>&1; then
         info "Installing gamedig globally…"
-        ${S} npm install -g gamedig >/dev/null 2>&1 || warn "gamedig install failed — player queries unavailable."
+        ${S} npm install -g gamedig >/dev/null 2>&1 \
+            || warn "gamedig install failed — player queries unavailable."
     fi
     command -v gamedig >/dev/null 2>&1 && ok "gamedig ready for player queries" || true
+    return 0
 }
 
 # Run the panel (and its bursts: updates, backups, page-load probes) at LOW CPU/IO priority so it
