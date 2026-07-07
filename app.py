@@ -1033,7 +1033,7 @@ def register_routes(app):
                     session.pop("_2fa_pending", None)
                     flash("The two-factor prompt expired — please log in again.", "danger")
                     return render_template("login.html")
-                u = User.query.get(pending_id)
+                u = db.session.get(User, pending_id)
                 entered = request.form.get("totp_code", "")
                 if u and u.is_active and u.totp_enabled:
                     if verify_totp(u.totp_secret_plain, entered):
@@ -1540,7 +1540,7 @@ def register_routes(app):
         def _run():
             try:
                 with _app.app_context():
-                    remote = RemoteServer.query.get(remote_id)
+                    remote = db.session.get(RemoteServer, remote_id)
                     if not remote:
                         return
                     act_cmd = f"{action} 2>&1"
@@ -1549,7 +1549,7 @@ def register_routes(app):
                         # all default Y, and loops forever on EOF — feed Y's so it runs unattended.
                         act_cmd = "fastdl <<< $'Y\\nY\\nY\\nY\\nY\\nY\\nY\\nY' 2>&1"
                     out, err, rc = run_as_game_user(remote, short_name, act_cmd, timeout=1800, selfname=selfname)
-                    gs = GameServer.query.get(server_id)
+                    gs = db.session.get(GameServer, server_id)
                     from auth import log_action as _log
                     _log(None, f"{action}_complete", target=gs.name if gs else short_name,
                          success=(rc == 0), detail=(out or err or "")[-300:])
@@ -1770,8 +1770,8 @@ def register_routes(app):
             try:
                 from models import db, RemoteServer, GameServer
                 with _app.app_context():
-                    remote = RemoteServer.query.get(remote_id)
-                    gs = GameServer.query.get(gs_id)
+                    remote = db.session.get(RemoteServer, remote_id)
+                    gs = db.session.get(GameServer, gs_id)
                     if not remote or not gs:
                         return
                     # Hard stop before any destructive root command below: an empty short_name
@@ -2194,7 +2194,7 @@ def register_routes(app):
         )
         # Add to selected groups
         for gid in group_ids:
-            group = Group.query.get(int(gid))
+            group = db.session.get(Group, int(gid))
             if group:
                 user.groups.append(group)
 
@@ -2246,7 +2246,7 @@ def register_routes(app):
 
         # Update groups (one lookup per id, not two)
         group_ids = {int(gid) for gid in request.form.getlist("groups")}
-        user.groups = [g for g in (Group.query.get(gid) for gid in group_ids) if g]
+        user.groups = [g for g in (db.session.get(Group, gid) for gid in group_ids) if g]
 
         # Never let an edit leave the panel with no active superadmin (e.g. self-demotion
         # or deactivating the last one) — that would lock everyone out of the web UI.
@@ -2322,7 +2322,7 @@ def register_routes(app):
                 continue
             if rid in seen:
                 continue
-            rs = RemoteServer.query.get(rid)
+            rs = db.session.get(RemoteServer, rid)
             if rs:
                 seen.add(rid)
                 out.append(rs)
@@ -3094,7 +3094,7 @@ def register_routes(app):
             # moment run_command touches the remote's connection attributes.
             try:
                 with app.app_context():
-                    g = GameServer.query.get(server_id)
+                    g = db.session.get(GameServer, server_id)
                     if not g or not g.remote:
                         _game_backup_status[server_id] = {"running": False, "ok": False,
                                                           "msg": "server is no longer available",
@@ -3925,7 +3925,7 @@ def register_routes(app):
         def _run():
             try:
                 with _app.app_context():
-                    remote = RemoteServer.query.get(remote_id)
+                    remote = db.session.get(RemoteServer, remote_id)
                     if not remote:
                         raise RuntimeError("Remote no longer exists")
                     success, msg, log = remote_bootstrap_vps(remote, progress=_progress, **opts)
@@ -4150,7 +4150,7 @@ def register_routes(app):
             # No live job. If the DB still says "installing", the in-memory progress was lost —
             # almost always because the panel restarted mid-install (e.g. a deploy). Reconcile
             # against the real server so the user gets a definite answer instead of a vanished row.
-            gs = GameServer.query.get(server_id)
+            gs = db.session.get(GameServer, server_id)
             if gs and gs.status == "installing" and not gs.installed:
                 verdict = _looks_installed(gs.remote, gs.short_name, gs.lgsm_name)
                 if verdict is True:
@@ -4618,7 +4618,7 @@ def register_routes(app):
                 if active_ids:
                     with app.app_context():
                         for server_id in active_ids:
-                            gs = GameServer.query.get(server_id)
+                            gs = db.session.get(GameServer, server_id)
                             if not gs or not gs.remote:
                                 continue
                             remote = gs.remote

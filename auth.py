@@ -101,10 +101,6 @@ def dummy_password_check(password):
     return False
 
 
-def generate_api_token():
-    return secrets.token_hex(32)
-
-
 # Unambiguous alphabet (no 0/O/1/l/I) so hand-typed backup codes don't get confused.
 _BACKUP_CODE_ALPHABET = "23456789abcdefghjkmnpqrstuvwxyz"
 
@@ -186,7 +182,7 @@ def can_access_server(user, game_server_id):
     if user.is_superadmin:
         return True
     from models import GameServer
-    gs = GameServer.query.get(game_server_id)
+    gs = db.session.get(GameServer, game_server_id)
     if not gs:
         return False
     for group in user.groups or []:
@@ -253,7 +249,7 @@ def server_access_required(f):
         if not current_user.is_authenticated:
             return redirect(url_for("login"))
         server_id = kwargs.get("server_id")
-        if server_id and not can_access_server(current_user, server_id):
+        if server_id is not None and not can_access_server(current_user, server_id):
             flash("You do not have access to that server.", "danger")
             return redirect(url_for("index"))
         return f(*args, **kwargs)
@@ -295,13 +291,13 @@ def init_auth(app):
             uid, _, epoch = s.partition(":")
             if not uid.isdigit():
                 return None
-            user = User.query.get(int(uid))
+            user = db.session.get(User, int(uid))
             if user is None or str(user.auth_epoch or 0) != epoch:
                 return None
             return user
         # Legacy cookie issued before epochs existed — accept by plain id (one-time,
         # until they next log in and get an epoch-tagged cookie).
-        return User.query.get(int(s)) if s.isdigit() else None
+        return db.session.get(User, int(s)) if s.isdigit() else None
 
 
 # ─── Audit Logging ─────────────────────────────────────────────
