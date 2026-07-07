@@ -145,8 +145,13 @@ def get_user_permissions(user):
 def get_user_servers(user):
     """Get game servers a user has access to (superadmin = all)."""
     from models import GameServer
+    from sqlalchemy.orm import joinedload
+    # Eager-load each server's remote in the SAME query. Callers (dashboard, /api/servers) all
+    # read gs.remote per server; without this, accessing it lazily fires one query per remote
+    # (e.g. 50 extra queries at 50 hosts on every status poll).
+    q = GameServer.query.options(joinedload(GameServer.remote))
     if user.is_superadmin:
-        return GameServer.query.all()
+        return q.all()
 
     server_ids = set()
     for group in user.groups or []:
@@ -154,7 +159,7 @@ def get_user_servers(user):
             server_ids.add(s.id)
 
     # Now get all game servers belonging to those remote servers
-    return GameServer.query.filter(GameServer.remote_id.in_(list(server_ids))).all()
+    return q.filter(GameServer.remote_id.in_(list(server_ids))).all()
 
 
 def has_permission(user, perm):
