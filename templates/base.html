@@ -61,12 +61,15 @@
     .sidebar {
       position: fixed; top: 0; left: 0;
       width: var(--sidebar-w); height: 100vh;
+      height: 100dvh;   /* dynamic viewport: on mobile 100vh is taller than the screen, pushing the
+                           footer (Sign Out) off the bottom with nothing to scroll to */
       background: var(--bg-card);
       border-right: 1px solid var(--border);
       z-index: 100;
       display: flex; flex-direction: column;
       padding: 1.25rem 0 1rem;
       overflow-y: auto;
+      -webkit-overflow-scrolling: touch;   /* smooth momentum scroll on iOS when the nav overflows */
       transition: transform .25s cubic-bezier(.4,0,.2,1);
     }
     .sidebar-brand {
