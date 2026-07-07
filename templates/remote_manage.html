@@ -305,12 +305,16 @@
       <hr class="my-2">
       <div class="small text-secondary mb-1"><i class="bi bi-database"></i> Database maintenance</div>
       <div id="diag-db-stats" class="small text-secondary">—</div>
-      <div class="mt-2 d-flex gap-2 align-items-center">
+      <div class="mt-2 d-flex gap-2 align-items-center flex-wrap">
+        <button class="btn btn-sm btn-outline-secondary" id="diag-dbhealth-btn" onclick="checkDbHealth()">
+          <i class="bi bi-heart-pulse"></i> Check health
+        </button>
         <button class="btn btn-sm btn-outline-secondary" id="diag-optimize-btn" onclick="optimizeDb()">
           <i class="bi bi-stars"></i> Optimize database
         </button>
         <span id="diag-db-msg" class="small"></span>
       </div>
+      <div id="diag-dbhealth-result" class="small mt-1"></div>
       <div class="small text-secondary mt-1">
         Reclaims freed space and refreshes query statistics (VACUUM + ANALYZE). Safe to run anytime;
         the only table that grows over time is the audit log.
@@ -1034,6 +1038,23 @@ function optimizeDb(){
       loadDbStats();
     }).catch(function(){ if(msg) msg.innerHTML='<span class="text-danger">Optimize request failed.</span>'; })
     .finally(function(){ if(btn){ btn.disabled=false; btn.innerHTML='<i class="bi bi-stars"></i> Optimize database'; } });
+}
+function checkDbHealth(){
+  var btn=document.getElementById('diag-dbhealth-btn');
+  var out=document.getElementById('diag-dbhealth-result');
+  if(btn){ btn.disabled=true; btn.innerHTML='<span class="spinner-border spinner-border-sm"></span> Checking…'; }
+  fetch(MOUNT+'/api/panel/db-health').then(function(r){return r.json();}).then(function(d){
+    if(!out) return;
+    if(d.healthy===true){
+      out.innerHTML='<span class="text-success"><i class="bi bi-check-circle-fill"></i> Database is healthy — integrity check passed.</span>';
+    } else if(d.healthy===false){
+      out.innerHTML='<span class="text-danger"><i class="bi bi-exclamation-triangle-fill"></i> Integrity check flagged a problem: '+escapeHtml(d.detail||'')+'.</span>'+
+        '<div class="text-secondary" style="font-size:.7rem;">The next panel update repairs this automatically (rebuild the readable data, else restore the last healthy backup) — your data is copied aside first, never deleted.</div>';
+    } else {
+      out.innerHTML='<span class="text-warning">Could not run the health check right now.</span>';
+    }
+  }).catch(function(){ if(out) out.innerHTML='<span class="text-danger">Health check request failed.</span>'; })
+  .finally(function(){ if(btn){ btn.disabled=false; btn.innerHTML='<i class="bi bi-heart-pulse"></i> Check health'; } });
 }
 
 // ── Automatic security updates (panel host only) ────────────────────

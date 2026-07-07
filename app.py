@@ -2805,6 +2805,21 @@ def register_routes(app):
             return jsonify({"success": False,
                             "message": _log_and_generic("db optimize failed")}), 500
 
+    @app.route("/api/panel/db-health")
+    @login_required
+    @permission_required(SUPER_ADMIN)
+    def api_panel_db_health():
+        """On-demand database integrity check — read-only PRAGMA integrity_check, which is
+        deeper than the fast quick_check the panel runs at startup. Reports healthy/flagged;
+        an actual repair is never done to the live file, it runs safely offline during an
+        update (or a restart), so this endpoint has no destructive side effects."""
+        try:
+            import db_maintenance
+            ok, detail = db_maintenance.integrity_check(str(DB_PATH))
+            return jsonify({"healthy": bool(ok), "detail": detail})
+        except Exception:
+            return jsonify({"healthy": None, "detail": _log_and_generic("db health check failed")}), 200
+
     @app.route("/api/panel/change-port", methods=["POST"])
     @login_required
     @permission_required(SUPER_ADMIN)

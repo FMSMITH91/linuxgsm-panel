@@ -521,6 +521,15 @@ try:
           bi_denied.status_code in (301, 302, 303, 403),
           "got %d" % bi_denied.status_code)
 
+    # ── On-demand DB health check (read-only integrity_check), superadmin only ──
+    dh = c.get("/api/panel/db-health")
+    _dh = dh.get_json() or {}
+    check("db-health: reports the test DB as healthy",
+          dh.status_code == 200 and _dh.get("healthy") is True, "got %d %s" % (dh.status_code, _dh))
+    dh_denied = client_as(mru_id).get("/api/panel/db-health")
+    check("db-health: non-superadmin is denied", dh_denied.status_code in (301, 302, 303, 403),
+          "got %d" % dh_denied.status_code)
+
     # ── perf regression guard: NO N+1 on the hot paths ────────────
     # Seed 50 game servers across 5 hosts — enough that a per-server (rather than
     # per-host) query pattern would blow the budget — then assert the dashboard render
