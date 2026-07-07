@@ -405,7 +405,13 @@
       .main-content {
         margin-left: 0; margin-top: 54px;
         padding: 1rem;
+        /* 54px is reserved for the mobile topbar — subtract it from the height, or main-content
+           (min-height:100dvh) + the margin makes the page 54px taller than the screen and it scrolls. */
+        min-height: calc(100vh - 54px);
+        min-height: calc(100dvh - 54px);
       }
+      /* Logged-out pages (login/setup) have NO topbar — no margin to reserve, full height. */
+      .main-content-full { margin-top: 0; min-height: 100vh; min-height: 100dvh; }
       .page-title { font-size: 1.15rem; margin-bottom: 1rem; }
       .card-header { padding: .7rem 1rem; font-size: .85rem; }
       .card-body { padding: 1rem; }
