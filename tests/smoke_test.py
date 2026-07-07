@@ -510,6 +510,17 @@ try:
     check("bulk-action: caller lacking the permission -> 403", ba_perm.status_code == 403,
           "got %d" % ba_perm.status_code)
 
+    # ── Per-server backups info (data for the Files & Config tab), superadmin only ──
+    bi = c.get("/api/panel/backup/game/%d/info" % gs_id)
+    _bi = bi.get_json() or {}
+    check("backup-info: returns schedule/backups/disk/default for the server",
+          bi.status_code == 200 and all(k in _bi for k in ("schedule", "backups", "disk", "default")),
+          "got %d %s" % (bi.status_code, sorted(_bi)))
+    bi_denied = client_as(mru_id).get("/api/panel/backup/game/%d/info" % gs_id)
+    check("backup-info: non-superadmin is denied (redirect/403, not 200)",
+          bi_denied.status_code in (301, 302, 303, 403),
+          "got %d" % bi_denied.status_code)
+
     # ── perf regression guard: NO N+1 on the hot paths ────────────
     # Seed 50 game servers across 5 hosts — enough that a per-server (rather than
     # per-host) query pattern would blow the budget — then assert the dashboard render

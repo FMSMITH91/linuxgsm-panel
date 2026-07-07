@@ -3251,6 +3251,36 @@ def register_routes(app):
                    detail="interval=%s keep=%s" % (sched["interval_days"], sched["keep"]))
         return jsonify({"success": True, "schedule": sched})
 
+    @app.route("/api/panel/backup/game/<int:server_id>/info")
+    @login_required
+    @permission_required(SUPER_ADMIN)
+    def api_panel_backup_game_info(server_id):
+        """One server's backup picture for its Files & Config tab: its schedule (plus the global
+        default it may inherit), its existing LinuxGSM backups, host disk headroom, and the live
+        status of any in-flight backup. Single-server on purpose — opening the tab must not scan
+        every host the way the all-servers /api/panel/backups does."""
+        gs = get_game(server_id)
+        try:
+            backups = list_game_backups(gs.remote, gs.short_name) if gs.remote_id else []
+        except Exception:
+            backups = []
+        try:
+            disk = backup_disk_info(gs.remote, gs.short_name) if gs.remote_id else {"free": 0, "total": 0}
+        except Exception:
+            disk = {"free": 0, "total": 0}
+        done = [b for b in backups if not b.get("in_progress")]
+        est = max((b.get("size", 0) for b in done), default=0)   # largest existing = worst-case next
+        default = bk.get_full_settings()
+        return jsonify({
+            "installed": bool(gs.installed and gs.remote_id),
+            "schedule": bk.get_game_schedule(gs.id),
+            "default": {"interval_days": default["interval_days"], "keep": default["keep"]},
+            "backups": backups,
+            "disk": {"free": disk.get("free", 0), "total": disk.get("total", 0)},
+            "est_backup": est,
+            "status": _game_backup_status.get(gs.id),
+        })
+
     @app.route("/api/panel/backups")
     @login_required
     @permission_required(SUPER_ADMIN)

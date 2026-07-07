@@ -139,6 +139,57 @@
   </div>
 </div>
 
+{% if current_user.is_superadmin %}
+<!-- Backups (this server) — reuses the existing game-backup endpoints; superadmin only -->
+<div class="card mt-3" id="backup-card">
+  <div class="card-header d-flex justify-content-between align-items-center flex-wrap gap-2">
+    <span><i class="bi bi-archive"></i> Backups</span>
+    <span class="text-secondary" style="font-size:.66rem;"><i class="bi bi-info-circle"></i> LinuxGSM backups of this server's files, stored on the host. Automatic backups run on the schedule below; the newest <em>keep</em> are retained and older ones pruned. A backup skips itself if players are online.</span>
+  </div>
+  <div class="card-body">
+    <div id="bk-loading" class="text-secondary small"><i class="bi bi-arrow-repeat"></i> Loading backups…</div>
+    <div id="bk-wrap" style="display:none;">
+      <div class="row g-3 align-items-end mb-2">
+        <div class="col-6 col-md-4">
+          <label class="form-label mb-1" style="font-size:.7rem;" for="bk-interval">Automatic backup</label>
+          <select id="bk-interval" class="form-select form-select-sm" onchange="saveBkSchedule()">
+            <option value="default">Use panel default</option>
+            <option value="0">Off</option>
+            <option value="1">Every day</option>
+            <option value="3">Every 3 days</option>
+            <option value="7">Every week</option>
+            <option value="14">Every 2 weeks</option>
+            <option value="30">Every 30 days</option>
+          </select>
+        </div>
+        <div class="col-6 col-md-3">
+          <label class="form-label mb-1" style="font-size:.7rem;" for="bk-keep">Keep newest</label>
+          <select id="bk-keep" class="form-select form-select-sm" onchange="saveBkSchedule()">
+            <option value="default">Use panel default</option>
+            <option value="1">1</option><option value="2">2</option><option value="3">3</option>
+            <option value="4">4</option><option value="5">5</option><option value="6">6</option>
+            <option value="7">7</option><option value="8">8</option><option value="10">10</option>
+          </select>
+        </div>
+        <div class="col-12 col-md-5">
+          <div id="bk-disk" class="small text-secondary"></div>
+        </div>
+      </div>
+      <div class="d-flex align-items-center gap-2 mb-2 flex-wrap">
+        <button class="btn btn-primary btn-sm" id="bk-now" onclick="backupNow(false)"><i class="bi bi-archive-fill"></i> Back up now</button>
+        <span id="bk-status" class="small"></span>
+      </div>
+      <div class="table-responsive">
+        <table class="table table-sm mb-0 align-middle">
+          <thead><tr><th>Backup</th><th style="width:1%;white-space:nowrap;">Size</th><th style="width:1%;white-space:nowrap;">When</th><th style="width:1%;"></th></tr></thead>
+          <tbody id="bk-rows"><tr><td colspan="4" class="text-secondary text-center py-3">No backups yet.</td></tr></tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+</div>
+{% endif %}
+
 <!-- Scheduled tasks (cron) -->
 <div class="card mt-3">
   <div class="card-header d-flex justify-content-between align-items-center flex-wrap gap-2">
@@ -806,5 +857,108 @@ function modRestartNow(btn){
     .catch(function(){ modsMsg('✗ Restart failed — connection error','text-danger'); });
 }
 loadMods(true);
+
+// ── Backups (this server) — superadmin card; reuses the game-backup endpoints ──
+function bkFmt(b){ b=b||0; if(b<1024)return b+' B'; if(b<1048576)return (b/1024).toFixed(0)+' KB'; if(b<1073741824)return (b/1048576).toFixed(1)+' MB'; if(b<1099511627776)return (b/1073741824).toFixed(1)+' GB'; return (b/1099511627776).toFixed(2)+' TB'; }
+function bkWhen(sec){ try { return new Date(sec*1000).toLocaleString(); } catch(e){ return ''; } }
+var _bkPoll = null, _bkDefault = {interval_days:0, keep:2};
+
+function loadBackups(){
+  if(!document.getElementById('backup-card')) return;
+  fetch(MOUNT+'/api/panel/backup/game/'+serverId+'/info')
+    .then(r=>r.json()).then(renderBackups)
+    .catch(function(){ /* transient error — keep whatever is already shown */ });
+}
+
+function renderBackups(d){
+  if(!d || d.error) return;
+  var loading=document.getElementById('bk-loading'), wrap=document.getElementById('bk-wrap');
+  if(loading) loading.style.display='none';
+  if(wrap) wrap.style.display='';
+  _bkDefault = d.default || _bkDefault;
+  var sc = d.schedule || {interval_days:0, keep:2, interval_set:false, keep_set:false};
+  // Don't clobber a select the user is actively changing.
+  var iv=document.getElementById('bk-interval'), kp=document.getElementById('bk-keep');
+  if(iv && document.activeElement!==iv) iv.value = sc.interval_set ? String(sc.interval_days) : 'default';
+  if(kp && document.activeElement!==kp) kp.value = sc.keep_set ? String(sc.keep) : 'default';
+  // Disk headroom + a rough projection for the retained set.
+  var keepEff=sc.keep, est=d.est_backup||0, disk=d.disk||{free:0,total:0}, parts=[];
+  if(disk.total){
+    var usedPct=Math.round((disk.total-disk.free)/disk.total*100);
+    parts.push('<i class="bi bi-hdd"></i> '+bkFmt(disk.free)+' free of '+bkFmt(disk.total)+' ('+usedPct+'% used)');
+    if(est){
+      var proj=est*keepEff;
+      if(proj>disk.free) parts.push('<span class="text-danger">~'+bkFmt(proj)+' needed to keep '+keepEff+', not enough space</span>');
+      else if(proj>disk.free*0.5) parts.push('<span class="text-warning">~'+bkFmt(proj)+' to keep '+keepEff+'</span>');
+    }
+  }
+  var defTxt=(_bkDefault.interval_days>0)?('every '+_bkDefault.interval_days+'d, keep '+_bkDefault.keep):'off';
+  parts.push('<span class="text-secondary">Panel default: '+defTxt+'</span>');
+  var dk=document.getElementById('bk-disk'); if(dk) dk.innerHTML=parts.join(' &middot; ');
+  // Live status of any in-flight/last backup.
+  var st=document.getElementById('bk-status'), s=d.status;
+  if(st){
+    if(s && s.running){ st.className='small text-info'; st.innerHTML='<i class="bi bi-arrow-repeat"></i> Backing up…'; }
+    else if(s && s.busy){ st.className='small text-warning'; st.innerHTML='<i class="bi bi-people-fill"></i> '+esc(s.msg||'players online — waiting')+' <button class="btn btn-sm btn-outline-warning py-0 px-1 ms-1" onclick="backupNow(true)">Back up anyway</button>'; }
+    else if(s && s.ok===true){ st.className='small text-success'; st.innerHTML='<i class="bi bi-check-circle"></i> '+esc(s.msg||'Backed up'); }
+    else if(s && s.ok===false){ st.className='small text-danger'; st.innerHTML='<i class="bi bi-x-circle"></i> '+esc(s.msg||'Backup failed'); }
+    else st.textContent='';
+  }
+  var nowBtn=document.getElementById('bk-now'); if(nowBtn) nowBtn.disabled=!!(s && s.running);
+  // Backup rows.
+  var rows=(d.backups||[]).map(function(b){
+    var ip=b.in_progress;
+    return '<tr>'
+      + '<td><span class="font-monospace" style="font-size:.72rem;word-break:break-all;">'+esc(b.name)+'</span>'+(ip?' <span class="badge bg-info">in progress</span>':'')+'</td>'
+      + '<td class="text-nowrap">'+bkFmt(b.size)+'</td>'
+      + '<td class="text-nowrap" style="font-size:.72rem;">'+esc(bkWhen(b.created))+'</td>'
+      + '<td class="text-nowrap">'
+      +   (ip?'':('<a class="btn btn-sm btn-outline-secondary py-0 px-1" href="'+MOUNT+'/backup/game/'+serverId+'/download?name='+encodeURIComponent(b.name)+'" title="Download"><i class="bi bi-download"></i></a> '
+      +          '<button class="btn btn-sm btn-outline-danger py-0 px-1" title="Delete" data-name="'+esc(b.name)+'" onclick="deleteBk(this)"><i class="bi bi-trash"></i></button>'))
+      + '</td></tr>';
+  });
+  var tb=document.getElementById('bk-rows');
+  if(tb) tb.innerHTML = rows.length ? rows.join('') : '<tr><td colspan="4" class="text-secondary text-center py-3">No backups yet.</td></tr>';
+  // Poll while a backup is running; stop once it finishes.
+  var running=s && s.running;
+  if(running && !_bkPoll) _bkPoll=setInterval(loadBackups, 4000);
+  if(!running && _bkPoll){ clearInterval(_bkPoll); _bkPoll=null; }
+}
+
+function saveBkSchedule(){
+  var iv=document.getElementById('bk-interval').value, kp=document.getElementById('bk-keep').value;
+  fetch(MOUNT+'/api/panel/backup/game/'+serverId+'/schedule',{method:'POST',headers:{'Content-Type':'application/json'},
+    body:JSON.stringify({interval:iv, keep:kp})})
+    .then(r=>r.json()).then(function(d){
+      if(d.success){ window.toast('Backup schedule saved','success'); loadBackups(); }
+      else window.toast('Could not save schedule','danger');
+    }).catch(function(){ window.toast('Could not save schedule','danger'); });
+}
+
+function backupNow(force){
+  var btn=document.getElementById('bk-now'); if(btn) btn.disabled=true;
+  fetch(MOUNT+'/api/panel/backup/game/'+serverId,{method:'POST',headers:{'Content-Type':'application/json'},
+    body:JSON.stringify({force:!!force})})
+    .then(r=>r.json()).then(function(d){
+      window.toast(d.message || (d.success?'Backup started':'Could not start backup'), d.success?'success':'warning');
+      setTimeout(loadBackups, 800);
+      if(!_bkPoll) _bkPoll=setInterval(loadBackups, 4000);   // watch it complete
+    })
+    .catch(function(){ window.toast('Could not start backup','danger'); if(btn) btn.disabled=false; });
+}
+
+function deleteBk(btn){
+  var name = btn.getAttribute('data-name') || '';
+  if(!confirm('Delete this backup?\n\n'+name)) return;
+  btn.disabled=true;
+  fetch(MOUNT+'/api/panel/backup/game/'+serverId+'/delete',{method:'POST',headers:{'Content-Type':'application/json'},
+    body:JSON.stringify({name:name})})
+    .then(r=>r.json()).then(function(d){
+      window.toast(d.message || (d.success?'Deleted':'Delete failed'), d.success?'success':'danger');
+      loadBackups();
+    }).catch(function(){ window.toast('Delete failed','danger'); btn.disabled=false; });
+}
+
+loadBackups();
 </script>
 {% endblock %}
