@@ -169,6 +169,10 @@
     /* No sidebar when logged out (e.g. the login page) — don't reserve its width,
        or the centered content sits 250px to the right (looks off-centre). */
     .main-content-full { margin-left: 0; }
+    /* On wide / ultra-wide monitors, cap the content width and centre it within the area beside
+       the sidebar so cards, tables and text don't stretch uncomfortably edge-to-edge. It's a
+       no-op below this width, so normal laptops and mobile are unaffected. */
+    .content-wrap { max-width: 1600px; margin-inline: auto; }
 
     /* ── CARDS ── */
     .card {
@@ -608,7 +612,9 @@
 
 <!-- Main content -->
 <main class="main-content{% if not current_user.is_authenticated %} main-content-full{% endif %}">
-  {% block content %}{% endblock %}
+  <div class="content-wrap">
+    {% block content %}{% endblock %}
+  </div>
 </main>
 
 <script src="{{ url_for('static', filename='vendor/bootstrap/bootstrap.bundle.min.js') }}"></script>
