@@ -271,6 +271,27 @@ fetch_code() {
     fi
 }
 
+# Read-only counterpart to fetch_code: fetch and work out which commit we'd update TO,
+# WITHOUT touching the working tree — so the update path can skip the snapshot + restart
+# entirely when already current. Sets CURRENT_SHA / TARGET_REF / TARGET_SHA. Returns 1 only
+# if the fetch itself fails (offline / private repo), so the caller can stop cleanly.
+resolve_update_target() {
+    CURRENT_SHA=""; TARGET_REF=""; TARGET_SHA=""
+    if [ -n "${SRC}" ] && [ "${SRC}" != "${PANEL_DIR}" ]; then
+        return 0   # local-source update: no git comparison, always applies
+    fi
+    [ -d "${PANEL_DIR}/.git" ] || return 0   # not a git checkout: let fetch_code decide
+    _gitc fetch --quiet origin "${DEFAULT_BRANCH}" || return 1
+    CURRENT_SHA="$(_gitc rev-parse HEAD 2>/dev/null)"
+    TARGET_REF="origin/${DEFAULT_BRANCH}"
+    if [ -n "${PANEL_UPDATE_REF:-}" ] \
+       && _gitc merge-base --is-ancestor "${PANEL_UPDATE_REF}" "origin/${DEFAULT_BRANCH}" 2>/dev/null; then
+        TARGET_REF="${PANEL_UPDATE_REF}"
+    fi
+    TARGET_SHA="$(_gitc rev-parse "${TARGET_REF}" 2>/dev/null)"
+    return 0
+}
+
 install_deps() {
     python3 -m venv "${PANEL_DIR}/venv"
     "${PANEL_DIR}/venv/bin/pip" install --quiet --upgrade pip
@@ -327,10 +348,23 @@ if [ "${IS_UPDATE}" -eq 1 ]; then
     FROM_VER="$(panel_version)"
     info "Existing install detected at ${PANEL_DIR} (version ${FROM_VER}). Updating…"
 
+    # Decide whether there's anything to do BEFORE snapshotting or touching the service — a
+    # no-op update shouldn't burn a snapshot (disk + gzip CPU) or blink the panel. This only
+    # fetches; the working tree stays untouched until fetch_code below.
+    CURRENT_SHA=""; TARGET_REF=""; TARGET_SHA=""
+    if ! resolve_update_target; then
+        die "Couldn't reach the update source (offline, or a private repo without credentials).
+     Nothing was changed."
+    fi
+    if [ -n "${CURRENT_SHA}" ] && [ "${CURRENT_SHA}" = "${TARGET_SHA}" ]; then
+        ok "Already up to date (version ${FROM_VER}) — no snapshot taken, panel left running."
+        exit 0
+    fi
+
     BACKUP_ROOT="${PANEL_DIR}/data/.backups"
     STAMP="$(date +%Y%m%d-%H%M%S)"
     BACKUP="${BACKUP_ROOT}/${STAMP}"
-    info "[1/5] Snapshotting current version + database → ${BACKUP}"
+    info "[1/6] Snapshotting current version + database → ${BACKUP}"
     mkdir -p "${BACKUP}"
     # Snapshot the code (minus venv/data) so we can restore the exact prior version…
     # gzip -1 (fastest) not default -6: on a 1-core VPS the snapshot shouldn't burn CPU for a few
@@ -343,7 +377,32 @@ if [ "${IS_UPDATE}" -eq 1 ]; then
     fi
     ok "Snapshot saved"
 
-    info "[2/5] Fetching the new version…"
+    # Database maintenance runs AFTER the snapshot (so nothing here can lose data — the
+    # snapshot is the fallback) and with the service STOPPED (VACUUM and any rebuild need
+    # exclusive access). check -> repair only if needed -> optimize -> re-check. The tool is
+    # part of the INSTALLED version, so it's present whenever this newer install.sh runs.
+    info "[2/6] Checking + optimising the database…"
+    svc stop linuxgsm-panel.service || true
+    if [ -x "${PANEL_DIR}/venv/bin/python3" ] && [ -f "${PANEL_DIR}/db_maintenance.py" ]; then
+        if "${PANEL_DIR}/venv/bin/python3" "${PANEL_DIR}/db_maintenance.py" update; then
+            ok "Database checked"
+        else
+            _dbrc=$?
+            if [ "${_dbrc}" -eq 2 ]; then
+                warn "The database failed its health check and could not be repaired."
+                svc start linuxgsm-panel.service || true
+                die "Update ABORTED to protect your data. The panel is UNCHANGED and has been
+     restarted on the current version (${FROM_VER}); its database was left exactly as it was
+     (a copy of the flagged file is saved alongside it). Repair it from the panel's database
+     tools, or restore a backup, then update again.  Snapshot of this attempt: ${BACKUP}"
+            fi
+            warn "Database maintenance reported a non-fatal issue (rc=${_dbrc}) — continuing."
+        fi
+    else
+        info "  (database maintenance tool not present in this version — skipping)"
+    fi
+
+    info "[3/6] Fetching the new version…"
     REQ_BEFORE="$(sha256sum "${PANEL_DIR}/requirements.txt" 2>/dev/null | awk '{print $1}')"
     fetch_code
     TO_VER="$(panel_version)"
@@ -353,7 +412,7 @@ if [ "${IS_UPDATE}" -eq 1 ]; then
     # Most updates are code-only. Reinstalling deps means pip resolves + may rebuild wheels,
     # which pegs the CPU on a small VPS for no reason. Skip it when requirements.txt is byte-for-byte
     # unchanged AND the venv already exists — the packages are already installed at the same version.
-    info "[3/5] Installing dependencies…"
+    info "[4/6] Installing dependencies…"
     if [ -x "${PANEL_DIR}/venv/bin/python3" ] && [ -n "${REQ_BEFORE}" ] && [ "${REQ_BEFORE}" = "${REQ_AFTER}" ]; then
         ok "Dependencies unchanged — skipping pip (nothing to build)"
     else
@@ -362,17 +421,17 @@ if [ "${IS_UPDATE}" -eq 1 ]; then
     fi
     [ "${RUN_AS_ROOT}" -eq 1 ] && chown -R "${PANEL_USER}:${PANEL_USER}" "${PANEL_DIR}"
 
-    info "[4/5] Restarting the service…"
+    info "[5/6] Starting the service…"
     ensure_service_tuning   # refresh the low-priority drop-in (existing installs get it on update)
     ensure_system_tuning    # prefer RAM over swap (applied on update too)
     svc daemon-reload || true
-    svc restart linuxgsm-panel.service || true
+    svc start linuxgsm-panel.service || true   # it was stopped in [2/6] for offline DB maintenance
     # Ensure the path-independent recovery command exists on existing installs too.
     if [ "$(id -u)" -eq 0 ] && [ -f "${PANEL_DIR}/recover.sh" ]; then
         ln -sf "${PANEL_DIR}/recover.sh" /usr/local/bin/linuxgsm-panel-recover 2>/dev/null || true
     fi
 
-    info "[5/5] Verifying the panel came back up…"
+    info "[6/6] Verifying the panel came back up…"
     if health_check; then
         ok "Health check passed (HTTP ${HEALTH_CODE}) — now running version ${TO_VER}"
         # Prune old snapshots, keep the most recent few.

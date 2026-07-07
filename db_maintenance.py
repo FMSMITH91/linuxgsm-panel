@@ -14,12 +14,15 @@ Safety: repair NEVER deletes the original — it copies the flagged file aside f
 either swaps in a data-preserving rebuild or restores the last-known-good rolling backup.
 Every function is best-effort and never raises; each returns a (ok, message) tuple.
 """
+import logging
 import os
 import shutil
 import sqlite3
 import subprocess  # nosec B404 - only ever invokes the sqlite3 CLI with fixed args
 import sys
 import time
+
+_log = logging.getLogger("panel.db_maintenance")
 
 
 def _paths():
@@ -35,7 +38,7 @@ def _silent_rm(path):
         if path and os.path.exists(path):
             os.remove(path)
     except OSError:
-        pass
+        _log.debug("db_maintenance: could not remove %s", path, exc_info=True)
 
 
 def integrity_check(path):
@@ -141,7 +144,8 @@ def _rebuild_via_dump(src_path, dst_path):
                     try:
                         dst.execute(line)
                     except sqlite3.DatabaseError:
-                        pass   # skip an unrecoverable statement; keep everything else
+                        # Skip an unrecoverable statement and keep salvaging the rest.
+                        _log.debug("db rebuild: skipped an unrecoverable statement", exc_info=True)
         finally:
             src.close()
             dst.close()
@@ -177,7 +181,7 @@ def repair(path=None, backup=None):
                     _silent_rm(path + ext)   # stale WAL/SHM must not replay over the rebuilt file
                 return True, "rebuilt from recoverable data" + kept
             except OSError:
-                pass
+                _log.debug("db repair: could not swap in the rebuilt DB", exc_info=True)
     _silent_rm(tmp)
 
     if backup and os.path.exists(backup):
@@ -189,7 +193,7 @@ def repair(path=None, backup=None):
                     _silent_rm(path + ext)
                 return True, "restored the last healthy backup" + kept
             except OSError:
-                pass
+                _log.debug("db repair: could not restore the backup", exc_info=True)
     return False, "could not repair — rebuild failed and no healthy backup exists" + kept
 
 
