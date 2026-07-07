@@ -1751,8 +1751,24 @@ def register_routes(app):
         remote = gs.remote
         short_name = gs.short_name
         game_port = gs.port
+        selfname = gs.lgsm_name
 
         try:
+            # Stop the game server and kill any lingering processes BEFORE deleting the user.
+            # Otherwise userdel removes the user + home while the game process is still running —
+            # leaving it orphaned under a now-deleted uid: not manageable from the panel, and still
+            # eating CPU/RAM and holding its port. Graceful LinuxGSM stop first, then a hard kill of
+            # anything left, then delete.
+            try:
+                run_as_game_user(remote, short_name, "stop 2>&1", timeout=60, selfname=selfname)
+            except Exception:
+                _log.debug("uninstall: graceful stop failed; force-killing next", exc_info=True)
+            try:
+                run_command(remote, f"pkill -9 -u {short_name} 2>/dev/null; sleep 1; echo done",
+                            timeout=20, sudo=True)
+            except Exception:
+                _log.debug("uninstall: pkill failed; proceeding to userdel", exc_info=True)
+
             # Close ALL of this server's firewall rules (multi-port games tag every
             # rule with the server name), then also the legacy single-port cleanup.
             fw_note = ""
