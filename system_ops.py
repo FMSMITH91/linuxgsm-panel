@@ -495,37 +495,49 @@ def _repo_slug():
     return m.group(1) if m else None
 
 
-def _remote_ci_state(sha):
-    """Best-effort: has the remote commit `sha` cleared CI on GitHub yet?
+# Conclusions that mean a completed check did NOT pass.
+_CI_BAD = {"failure", "timed_out", "cancelled", "action_required", "startup_failure", "stale"}
+# Checks that don't gate the update-offer: `deploy` is the deployment action itself (gating on
+# it would be circular, and it only exists when auto-deploy is enabled), not a verification.
+_CI_IGNORE = {"deploy"}
 
-    Returns 'passing' | 'pending' | 'failing' | 'unknown'. The panel offers an update only
-    once the target commit is 'passing' — the SAME signal the auto-deploy gates on (deploy
-    runs when the CI workflow concludes success) — so "check for updates" no longer surfaces
-    a commit whose CI is still running or has failed. Keyed on the ci.yml workflow file (not
-    a job name), so it survives job renames. Reads GitHub's public Actions API anonymously
-    (the production panel has no token); any network/parse error → 'unknown', which the
-    caller treats leniently so an API hiccup never hides a real update."""
+
+def _remote_ci_state(sha):
+    """Best-effort: have ALL of the remote commit `sha`'s checks passed on GitHub yet?
+
+    Returns 'passing' | 'pending' | 'failing' | 'unknown'. The panel offers an update only once
+    EVERY check on the commit has completed successfully — CI plus the security scans (CodeQL,
+    Bandit, Semgrep, Gitleaks, pip-audit) and Lighthouse — so "check for updates" never surfaces
+    a commit while anything is still running or after any check failed. (The `deploy` action is
+    ignored: it's the deployment, not a verification.) Reads GitHub's public check-runs API
+    anonymously (the production panel has no token); any network/parse error → 'unknown', which
+    the caller treats leniently so an API hiccup never hides a real update.
+
+    Registration timing isn't a problem in practice: every check here is push-triggered, so they
+    all register within seconds of the push — long before CI (minutes) completes — so seeing
+    'all completed' really does mean all of them, not just the fast ones."""
     slug = _repo_slug()
     if not slug:
         return "unknown"
-    url = ("https://api.github.com/repos/%s/actions/workflows/ci.yml/runs"
-           "?head_sha=%s&per_page=1" % (slug, sha))
+    url = ("https://api.github.com/repos/%s/commits/%s/check-runs?per_page=100" % (slug, sha))
     req = urllib.request.Request(url, headers={
         "Accept": "application/vnd.github+json",
         "User-Agent": "linuxgsm-panel-update-check",
     })
     try:
         with urllib.request.urlopen(req, timeout=8) as resp:  # nosec B310 - fixed https host
-            runs = json.loads(resp.read().decode("utf-8")).get("workflow_runs", [])
+            runs = json.loads(resp.read().decode("utf-8")).get("check_runs", [])
     except (urllib.error.URLError, ValueError, OSError):
-        _log.debug("CI-gate: couldn't read CI runs for %s", sha, exc_info=True)
+        _log.debug("CI-gate: couldn't read check-runs for %s", sha, exc_info=True)
         return "unknown"
+    runs = [r for r in runs if r.get("name") not in _CI_IGNORE]
     if not runs:
-        return "pending"  # push landed but the CI run hasn't been created yet
-    run = runs[0]
-    if run.get("status") != "completed":
-        return "pending"
-    return "passing" if run.get("conclusion") == "success" else "failing"
+        return "pending"  # push landed but no checks have registered yet
+    if any(r.get("status") != "completed" for r in runs):
+        return "pending"  # at least one check still queued/running
+    if any((r.get("conclusion") or "") in _CI_BAD for r in runs):
+        return "failing"  # every check finished, but one didn't pass
+    return "passing"
 
 
 def _compute_update_status():

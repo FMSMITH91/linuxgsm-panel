@@ -1258,14 +1258,29 @@ try:
             return _io.BytesIO(payload.encode() if isinstance(payload, str) else payload)
         return _op
 
-    _so.urllib.request.urlopen = _fake_open('{"workflow_runs":[{"status":"completed","conclusion":"success"}]}')
-    eq("ci-gate: completed+success -> passing", _so._remote_ci_state("a"*40), "passing")
-    _so.urllib.request.urlopen = _fake_open('{"workflow_runs":[{"status":"in_progress","conclusion":null}]}')
-    eq("ci-gate: still running -> pending", _so._remote_ci_state("a"*40), "pending")
-    _so.urllib.request.urlopen = _fake_open('{"workflow_runs":[{"status":"completed","conclusion":"failure"}]}')
-    eq("ci-gate: completed+failure -> failing", _so._remote_ci_state("a"*40), "failing")
-    _so.urllib.request.urlopen = _fake_open('{"workflow_runs":[]}')
-    eq("ci-gate: no run yet -> pending", _so._remote_ci_state("a"*40), "pending")
+    # The gate now requires EVERY check-run (except 'deploy') to be completed + successful.
+    _all_ok = ('{"check_runs":[{"name":"checks","status":"completed","conclusion":"success"},'
+               '{"name":"Analyze (python)","status":"completed","conclusion":"success"},'
+               '{"name":"lighthouse","status":"completed","conclusion":"success"}]}')
+    _so.urllib.request.urlopen = _fake_open(_all_ok)
+    eq("ci-gate: all checks passed -> passing", _so._remote_ci_state("a"*40), "passing")
+    # CI passed but Lighthouse still running -> pending (the exact case the user hit).
+    _lh_running = ('{"check_runs":[{"name":"checks","status":"completed","conclusion":"success"},'
+                   '{"name":"lighthouse","status":"in_progress","conclusion":null}]}')
+    _so.urllib.request.urlopen = _fake_open(_lh_running)
+    eq("ci-gate: one check still running -> pending", _so._remote_ci_state("a"*40), "pending")
+    # One check failed (even if the rest passed) -> failing.
+    _one_fail = ('{"check_runs":[{"name":"checks","status":"completed","conclusion":"success"},'
+                 '{"name":"lighthouse","status":"completed","conclusion":"failure"}]}')
+    _so.urllib.request.urlopen = _fake_open(_one_fail)
+    eq("ci-gate: any check failed -> failing", _so._remote_ci_state("a"*40), "failing")
+    # 'deploy' is ignored: a pending deploy alongside all-passing checks is still passing.
+    _deploy_pending = ('{"check_runs":[{"name":"checks","status":"completed","conclusion":"success"},'
+                       '{"name":"deploy","status":"in_progress","conclusion":null}]}')
+    _so.urllib.request.urlopen = _fake_open(_deploy_pending)
+    eq("ci-gate: pending 'deploy' is ignored -> passing", _so._remote_ci_state("a"*40), "passing")
+    _so.urllib.request.urlopen = _fake_open('{"check_runs":[]}')
+    eq("ci-gate: no checks yet -> pending", _so._remote_ci_state("a"*40), "pending")
 
     def _boom(req, timeout=8):
         raise _so.urllib.error.URLError("offline")
