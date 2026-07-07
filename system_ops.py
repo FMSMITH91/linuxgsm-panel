@@ -16,10 +16,15 @@ _log = logging.getLogger("panel.system_ops")
 PANEL_DIR = os.path.dirname(os.path.abspath(__file__))
 
 
+_last_cpu_stat = {"cpus": None, "ts": 0.0}   # previous /proc/stat snapshot for a sleepless delta
+
+
 def live_metrics():
     """Fast realtime metrics for the local host: per-core + overall CPU%% (via a
-    short /proc/stat delta) and RAM/swap (from /proc/meminfo). Reads /proc directly
-    — no subprocess — so it's cheap enough to poll every 1-2s."""
+    /proc/stat delta) and RAM/swap (from /proc/meminfo). Reads /proc directly — no
+    subprocess. The CPU delta is taken against the PREVIOUS poll's snapshot, so a
+    steady poll (the page refreshes every couple of seconds) needs only ONE /proc read
+    and NO in-call sleep; the % is then a smooth average over the real poll interval."""
     def _read_stat():
         cpus = {}
         try:
@@ -33,9 +38,21 @@ def live_metrics():
             _log.debug("unreadable/odd /proc/stat → return whatever parsed", exc_info=True)
         return cpus
 
-    a = _read_stat()
-    time.sleep(0.25)
+    now = time.time()
     b = _read_stat()
+    prev, age = _last_cpu_stat["cpus"], now - _last_cpu_stat["ts"]
+    if prev is not None and 0.5 <= age < 30:
+        # Steady polling: diff against the last snapshot — no sleep, one read.
+        a = prev
+        _last_cpu_stat["cpus"], _last_cpu_stat["ts"] = b, now
+    else:
+        # Cold start, a long gap, or a near-simultaneous second caller: take an independent
+        # 0.25s sample so the reading is always accurate (and never chains a tiny interval).
+        a = b
+        time.sleep(0.25)
+        b = _read_stat()
+        if prev is None or age >= 0.5:
+            _last_cpu_stat["cpus"], _last_cpu_stat["ts"] = b, now
 
     def _pct(name):
         if name not in a or name not in b:

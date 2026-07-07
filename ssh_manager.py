@@ -1859,10 +1859,14 @@ def _compute_host_specs(server):
     """Probe hardware/OS specs (OS, CPU model, cores, RAM, disk, kernel, arch, virt)."""
     try:
         out, err, rc = run_command(server, _SPECS_CMD, timeout=20, sudo=False)
-    except Exception as e:
-        return {"error": str(e)}
+    except Exception:
+        # Never surface raw exception text — it flows to a JSON response (CodeQL
+        # py/stack-trace-exposure). Log it server-side; the caller shows a generic message.
+        _log.warning("host specs probe failed", exc_info=True)
+        return {"error": "Could not read system specs"}
     if not out:
-        return {"error": err or "Could not read system specs"}
+        _log.debug("host specs: empty output (stderr: %s)", (err or "")[:200])
+        return {"error": "Could not read system specs"}
     d = {}
     for line in out.splitlines():
         if "\t" in line:
