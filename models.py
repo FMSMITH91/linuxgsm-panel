@@ -259,7 +259,7 @@ STEAM_CONNECT_GAMES = frozenset({
 class GameServer(db.Model):
     """A single game server instance managed by LinuxGSM."""
     id = db.Column(db.Integer, primary_key=True)
-    remote_id = db.Column(db.Integer, db.ForeignKey("remote_server.id"), nullable=False)
+    remote_id = db.Column(db.Integer, db.ForeignKey("remote_server.id"), nullable=False, index=True)
     name = db.Column(db.String(120), nullable=False)
     short_name = db.Column(db.String(64), nullable=False)  # e.g. "gmodserver"
     game_type = db.Column(db.String(64), nullable=False)  # e.g. "gmod", "mc", "cod"
@@ -384,6 +384,11 @@ def _run_light_migrations():
     # injection-free by construction — no table/column name is ever interpolated into SQL.
     if "audit_log" in existing:
         for ix in AuditLog.__table__.indexes:
+            ix.create(db.engine, checkfirst=True)
+    # game_server.remote_id: every dashboard/status query filters or joins on it, so index it
+    # (create_all only adds it to a fresh DB; add it to existing installs here, idempotently).
+    if "game_server" in existing:
+        for ix in GameServer.__table__.indexes:
             ix.create(db.engine, checkfirst=True)
     db.session.commit()
 

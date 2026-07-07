@@ -37,6 +37,7 @@ import os
 import re
 import threading
 import time
+import gzip as _gzip
 from types import SimpleNamespace
 from datetime import datetime, timedelta
 from pathlib import Path
@@ -491,6 +492,43 @@ def create_app():
         if (request.headers.get("X-Forwarded-Proto", "") == "https"
                 or (request.is_secure and not self_tls)):
             resp.headers.setdefault("Strict-Transport-Security", "max-age=31536000; includeSubDomains")
+        return resp
+
+    # Compressible content types worth gzipping (skip already-compressed images/fonts/archives).
+    _GZIP_TYPES = {"text/html", "text/css", "text/plain", "text/javascript",
+                   "application/javascript", "application/json", "image/svg+xml",
+                   "application/manifest+json", "application/xml"}
+    _static_prefix = (app.static_url_path or "/static") + "/"
+
+    @app.after_request
+    def _compress_and_cache(resp):
+        # 1) Cache the vendored static assets (bootstrap/icons/socketio). They ship WITH the panel
+        #    version, so a long cache is safe — a panel update restarts the process and the user
+        #    reloads. This stops the browser revalidating ~600KB of assets on every page load.
+        try:
+            if request.path.startswith(_static_prefix):
+                resp.headers["Cache-Control"] = "public, max-age=604800"   # 1 week
+        except Exception:  # nosec B110
+            pass
+        # 2) gzip text responses (HTML ~10x, JSON ~17x smaller) when the client accepts it — the
+        #    biggest win for page loads and the every-few-seconds status polls, especially remote.
+        try:
+            if ("gzip" in request.headers.get("Accept-Encoding", "").lower()
+                    and resp.status_code == 200
+                    and "Content-Encoding" not in resp.headers
+                    and (resp.content_type or "").split(";")[0].strip() in _GZIP_TYPES):
+                resp.direct_passthrough = False
+                data = resp.get_data()
+                if len(data) >= 500:   # not worth the CPU/overhead below this
+                    resp.set_data(_gzip.compress(data, 6))
+                    resp.headers["Content-Encoding"] = "gzip"
+                    _vary = resp.headers.get("Vary")
+                    if not _vary:
+                        resp.headers["Vary"] = "Accept-Encoding"
+                    elif "accept-encoding" not in _vary.lower():
+                        resp.headers["Vary"] = _vary + ", Accept-Encoding"
+        except Exception:
+            app.logger.debug("response gzip skipped", exc_info=True)
         return resp
 
     # One-time: encrypt any legacy plaintext secrets/PII already in the DB
