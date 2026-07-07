@@ -373,6 +373,10 @@ if [ "${IS_UPDATE}" -eq 1 ]; then
     FROM_VER="$(panel_version)"
     info "Existing install detected at ${PANEL_DIR} (version ${FROM_VER}). Updating…"
 
+    # Ensure Node LTS + gamedig on the host regardless of whether there's an update to apply, so a
+    # plain `install.sh` run also fixes a missing/old install (idempotent + best-effort).
+    ensure_gamedig
+
     # Decide whether there's anything to do BEFORE snapshotting or touching the service — a
     # no-op update shouldn't burn a snapshot (disk + gzip CPU) or blink the panel. This only
     # fetches; the working tree stays untouched until fetch_code below.
@@ -463,7 +467,6 @@ if [ "${IS_UPDATE}" -eq 1 ]; then
         if [ -d "${BACKUP_ROOT}" ]; then
             ls -1dt "${BACKUP_ROOT}"/*/ 2>/dev/null | tail -n +"$((KEEP_BACKUPS+1))" | xargs -r rm -rf
         fi
-        ensure_gamedig   # keep Node LTS + gamedig present on existing installs (host game queries)
         echo ""
         ok "Update complete: ${FROM_VER} → ${TO_VER}"
         # If the panel now answers on HTTPS, say so explicitly. Older installs were plain
