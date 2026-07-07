@@ -17,7 +17,10 @@ _log = logging.getLogger("panel.models")
 # at the route layer on input, but enforcing the safe charset here — at the data layer —
 # makes it a hard guarantee no code path can ever store a value that could break out of a
 # shell command, regardless of how the row is written. Empty is allowed (optional fields).
-_SHELL_IDENT_RE = re.compile(r"^[A-Za-z0-9._-]+$")
+# Must start with a letter/digit/underscore — never a dash or dot. A leading dash would let
+# a stored identifier be mis-parsed as an option by tools it's passed to (e.g. `ssh user@host`
+# → `-oProxyCommand=…`); a leading dot risks hidden-file/relative-path confusion.
+_SHELL_IDENT_RE = re.compile(r"^[A-Za-z0-9_][A-Za-z0-9._-]*$")
 
 
 def _validate_shell_ident(key, value):

@@ -3309,7 +3309,7 @@ def register_routes(app):
         proto = data.get("protocol", "tcp")
         if not port:
             return jsonify({"success": False, "message": "Port required"}), 400
-        success, msg = remote_ufw_open_port(remote, int(port), proto, data.get("comment", ""))
+        success, msg = remote_ufw_open_port(remote, port, proto, data.get("comment", ""))
         log_action(current_user, "remote_port_open", target=f"{remote.name}:{port}/{proto}", success=success)
         return jsonify({"success": success, "message": msg})
 
@@ -3323,7 +3323,7 @@ def register_routes(app):
         proto = data.get("protocol", "tcp")
         if not port:
             return jsonify({"success": False, "message": "Port required"}), 400
-        success, msg = remote_ufw_close_port(remote, int(port), proto)
+        success, msg = remote_ufw_close_port(remote, port, proto)
         log_action(current_user, "remote_port_close", target=f"{remote.name}:{port}/{proto}", success=success)
         return jsonify({"success": success, "message": msg})
 

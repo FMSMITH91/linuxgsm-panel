@@ -2017,16 +2017,44 @@ def pro_detach(server):
     return False, _pro_trim(blob) or "Detach failed"
 
 
+def _ufw_port_int(port):
+    """Coerce a UFW port to a validated int (1-65535), or raise ValueError. Ports and
+    protocols are interpolated straight into a root shell command, so they must never
+    carry anything but a number / a known protocol keyword."""
+    p = int(port)   # rejects non-numeric ("abc", "22; rm -rf /") with ValueError
+    if not (1 <= p <= 65535):
+        raise ValueError("port out of range")
+    return p
+
+
+def _ufw_proto(protocol):
+    """Normalise a UFW protocol to one of tcp/udp/both, or None for an invalid value.
+    Anything outside the allowlist is rejected — it must never reach the shell."""
+    p = (protocol or "").strip().lower()
+    if p in ("", "both", "any"):
+        return "both"
+    if p in ("tcp", "udp"):
+        return p
+    return None
+
+
 def remote_ufw_open_port(server, port, protocol="tcp", comment=""):
     """Open a port on the remote server via UFW. protocol 'both'/'any' opens TCP+UDP
     in a single rule (a bare `ufw allow <port>` covers both)."""
+    try:
+        port = _ufw_port_int(port)
+    except (TypeError, ValueError):
+        return False, "Invalid port"
+    proto = _ufw_proto(protocol)
+    if proto is None:
+        return False, "Invalid protocol"
     cmt = f" comment {_quote(comment)}" if comment else ""
-    if protocol in ("both", "any", "", None):
+    if proto == "both":
         cmd = f"ufw allow {port}{cmt} 2>&1"
         label = f"{port} (TCP+UDP)"
     else:
-        cmd = f"ufw allow proto {protocol} to any port {port}{cmt} 2>&1"
-        label = f"{port}/{protocol}"
+        cmd = f"ufw allow proto {proto} to any port {port}{cmt} 2>&1"
+        label = f"{port}/{proto}"
     out, err, rc = run_command(server, cmd, timeout=15, sudo=True)
     if rc == 0:
         return True, f"Port {label} opened on remote"
@@ -2036,13 +2064,20 @@ def remote_ufw_open_port(server, port, protocol="tcp", comment=""):
 def remote_ufw_close_port(server, port, protocol=None):
     """Close a port on the remote server via UFW. With protocol=None (or 'both'/'any'),
     deletes the bare `allow <port>` rule (both protocols); otherwise the proto-specific rule."""
-    if protocol and protocol not in ("both", "any"):
-        cmd = f"ufw delete allow proto {protocol} to any port {port} 2>&1"
+    try:
+        port = _ufw_port_int(port)
+    except (TypeError, ValueError):
+        return False, "Invalid port"
+    proto = _ufw_proto(protocol)
+    if proto is None:
+        return False, "Invalid protocol"
+    if proto in ("tcp", "udp"):
+        cmd = f"ufw delete allow proto {proto} to any port {port} 2>&1"
     else:
         cmd = f"ufw delete allow {port} 2>&1"
     out, err, rc = run_command(server, cmd, timeout=15, sudo=True)
     if rc == 0:
-        return True, f"Port {port}{('/' + protocol) if protocol else ''} closed on remote"
+        return True, f"Port {port}{('/' + proto) if proto in ('tcp', 'udp') else ''} closed on remote"
     return False, err or out or "Unknown error"
 
 
@@ -2469,7 +2504,8 @@ def remote_bootstrap_vps(server, set_timezone="UTC", enable_ufw=True, install_lg
     # ── 4. Set timezone ──
     if set_timezone:
         emit(f"Setting timezone to {set_timezone}")
-        run_command(server, f"timedatectl set-timezone {set_timezone} 2>&1", timeout=10, sudo=True)
+        # set_timezone is user-supplied and runs as root — quote it against injection.
+        run_command(server, f"timedatectl set-timezone {_quote(set_timezone)} 2>&1", timeout=10, sudo=True)
 
     # ── 5. Configure UFW ──
     if enable_ufw:
@@ -2522,14 +2558,20 @@ def remote_bootstrap_vps(server, set_timezone="UTC", enable_ufw=True, install_lg
         run_command(server, f"systemctl disable --now {svc} 2>/dev/null; echo done", timeout=10, sudo=True)
 
     # ── 9. Create linuxgsm user if username provided ──
-    if username:
+    # `username` arrives raw from the bootstrap request (it doesn't pass through the model's
+    # @validates), and it's interpolated into root-run useradd/id/passwd — so validate it to a
+    # safe Linux-username charset (must start with a letter/underscore; no shell metacharacters,
+    # no leading dash) and refuse anything else rather than let it reach the shell.
+    if username and not re.match(r"^[A-Za-z_][A-Za-z0-9._-]*$", username):
+        note(f"Skipped account creation: '{username[:32]}' isn't a valid username")
+    elif username:
         emit(f"Creating LinuxGSM user: {username}")
-        out, _, _ = run_command(server, f"id {username} 2>/dev/null && echo 'EXISTS' || echo 'NOTEXISTS'", timeout=10)
+        out, _, _ = run_command(server, f"id {_quote(username)} 2>/dev/null && echo 'EXISTS' || echo 'NOTEXISTS'", timeout=10)
         if "NOTEXISTS" not in out:
             note(f"User {username} already exists")
         else:
-            run_command(server, f"useradd -m -s /bin/bash {username} 2>&1", timeout=15, sudo=True)
-            run_command(server, f"passwd -l {username} 2>&1", timeout=10, sudo=True)
+            run_command(server, f"useradd -m -s /bin/bash {_quote(username)} 2>&1", timeout=15, sudo=True)
+            run_command(server, f"passwd -l {_quote(username)} 2>&1", timeout=10, sudo=True)
             note(f"User {username} created (login password locked)")
 
     # ── 10. Configure fail2ban ──
@@ -2643,7 +2685,7 @@ def remote_tailscale_up_url(server, enable_ssh=True, advertise_routes=""):
     if enable_ssh:
         up += " --ssh"
     if advertise_routes:
-        up += f" --advertise-routes={advertise_routes}"
+        up += f" --advertise-routes={_quote(advertise_routes)}"
     if advertise_routes:
         run_command(server,
             "echo 'net.ipv4.ip_forward = 1' > /etc/sysctl.d/99-tailscale.conf && "
@@ -2693,14 +2735,15 @@ def remote_bootstrap_tailscale(server, auth_key="", enable_ssh=True, advertise_r
         )
         log.append("IP forwarding enabled")
 
-    # 2. Build the up command
-    up_cmd = f"tailscale up --auth-key {auth_key} --accept-routes"
+    # 2. Build the up command. auth_key / advertise_routes / tags are user-supplied and run
+    # in a root shell, so every one is shell-quoted to prevent command injection.
+    up_cmd = f"tailscale up --auth-key {_quote(auth_key)} --accept-routes"
     if enable_ssh:
         up_cmd += " --ssh"
     if advertise_routes:
-        up_cmd += f" --advertise-routes={advertise_routes}"
+        up_cmd += f" --advertise-routes={_quote(advertise_routes)}"
     if tags:
-        up_cmd += f" --advertise-tags={tags}"
+        up_cmd += f" --advertise-tags={_quote(tags)}"
 
     out, err, rc = run_command(server, up_cmd, timeout=60, sudo=True)
     log.append(f"tailscale up: {out[-300:] if out else ''}")

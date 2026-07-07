@@ -70,6 +70,64 @@ check("cron: daily-restart flag is managed",
       sm._cron_line_managed("0 5 * * * touch /home/gm/.restart-pending", "gm", "gmodserver"))
 check("cron: user backup line is NOT managed",
       not sm._cron_line_managed("0 3 * * * /home/gm/backup.sh", "gm", "gmodserver"))
+
+# ── UFW port/protocol validation (both interpolate into a ROOT shell command) ──
+eq("ufw: tcp normalises", sm._ufw_proto("tcp"), "tcp")
+eq("ufw: UDP case-folds", sm._ufw_proto("UDP"), "udp")
+eq("ufw: blank -> both", sm._ufw_proto(""), "both")
+eq("ufw: None -> both", sm._ufw_proto(None), "both")
+eq("ufw: 'any' -> both", sm._ufw_proto("any"), "both")
+check("ufw: injection protocol rejected", sm._ufw_proto("tcp; rm -rf /") is None)
+check("ufw: unknown protocol rejected", sm._ufw_proto("sctp") is None)
+eq("ufw: valid port coerced to int", sm._ufw_port_int("27015"), 27015)
+
+
+def _ufw_raises(fn):
+    try:
+        fn()
+        return False
+    except (TypeError, ValueError):
+        return True
+
+
+check("ufw: non-numeric port rejected", _ufw_raises(lambda: sm._ufw_port_int("22; reboot")))
+check("ufw: port 0 rejected", _ufw_raises(lambda: sm._ufw_port_int(0)))
+check("ufw: port 70000 rejected", _ufw_raises(lambda: sm._ufw_port_int(70000)))
+# End-to-end: a malicious protocol/port must NOT reach run_command (no shell runs).
+_orig_ufw_rc = sm.run_command
+try:
+    _ufw_calls = []
+    sm.run_command = lambda *a, **k: (_ufw_calls.append(a), ("", "", 0))[1]
+    _ok, _m = sm.remote_ufw_open_port(None, 27015, "tcp; touch /tmp/x #")
+    check("ufw: open rejects injection proto, runs nothing", _ok is False and not _ufw_calls)
+    _ok, _m = sm.remote_ufw_close_port(None, "22; reboot", "tcp")
+    check("ufw: close rejects injection port, runs nothing", _ok is False and not _ufw_calls)
+finally:
+    sm.run_command = _orig_ufw_rc
+
+# ── shell-identifier validation (usernames/short_names reach ssh + shell) ──
+from models import _validate_shell_ident as _vsi
+check("ident: normal value accepted", _vsi("k", "gmodserver") == "gmodserver")
+check("ident: internal dash/dot/underscore ok", _vsi("k", "game-1.beta_2") == "game-1.beta_2")
+check("ident: empty allowed (optional field)", _vsi("k", "") == "")
+check("ident: leading dash rejected (ssh option-injection guard)",
+      _ufw_raises(lambda: _vsi("k", "-oProxyCommand=x")))
+check("ident: leading dot rejected", _ufw_raises(lambda: _vsi("k", ".hidden")))
+check("ident: shell metachar rejected", _ufw_raises(lambda: _vsi("k", "a;b")))
+
+# ── Tailscale bootstrap quotes user-supplied auth_key/routes/tags (root shell) ──
+_orig_ts_rc = sm.run_command
+try:
+    _ts_cmds = []
+    sm.run_command = lambda s, c, **k: (_ts_cmds.append(c), ("ok", "", 0))[1]
+    sm.remote_bootstrap_tailscale(None, auth_key="tskey; touch /tmp/x",
+                                  advertise_routes="1.2.3.0/24; reboot", tags="tag:x; rm -rf /")
+    _joined = " ".join(_ts_cmds)
+    check("tailscale: auth_key is shell-quoted", sm._quote("tskey; touch /tmp/x") in _joined)
+    check("tailscale: routes are shell-quoted", sm._quote("1.2.3.0/24; reboot") in _joined)
+    check("tailscale: tags are shell-quoted", sm._quote("tag:x; rm -rf /") in _joined)
+finally:
+    sm.run_command = _orig_ts_rc
 # update/delete must REFUSE a panel-managed line before touching SSH (server=None
 # proves no connection is attempted — the guard returns first). This is the security
 # invariant that the generic editor can't tamper with autostart/maintenance/restart.
