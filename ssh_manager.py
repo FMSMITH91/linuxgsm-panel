@@ -3095,27 +3095,38 @@ def _parse_mods_available(out):
     return mods
 
 
+def _game_supports_mods(text):
+    """False for games with no LinuxGSM mods installer (e.g. cod): running mods-install/-remove
+    on them prints 'Error! Unknown command' followed by a usage banner ('LinuxGSM - <Game> -
+    Version v…') that would otherwise be misparsed as an installed mod."""
+    return "unknown command" not in (text or "").lower()
+
+
 def _parse_mods_installed(out):
     """Parse the mods-remove list: one '<id> - <name> - <desc>' line per installed mod."""
     mods = []
     for raw in (out or "").splitlines():
         m = _MOD_INST_RE.match(_strip_ansi(raw).strip())
-        if m:
+        if m and m.group(1) != "LinuxGSM":   # skip the 'LinuxGSM - <Game> - Version …' banner line
             name = m.group(2).split(" - ")[0].strip()
             mods.append({"id": m.group(1), "name": name or m.group(1), "desc": m.group(2)})
     return mods
 
 
 def mods_available(server, user, selfname, timeout=60):
-    """Mods LinuxGSM can install for this game ('abort' → list prints, then it exits cleanly)."""
+    """Mods LinuxGSM can install for this game ('abort' → list prints, then it exits cleanly).
+    Empty for games with no mods installer (LinuxGSM reports 'Unknown command')."""
     out, err, _ = run_as_game_user(server, user, 'mods-install <<< "abort"', timeout=timeout, selfname=selfname)
-    return _parse_mods_available((out or "") + "\n" + (err or ""))
+    text = (out or "") + "\n" + (err or "")
+    return _parse_mods_available(text) if _game_supports_mods(text) else []
 
 
 def mods_installed(server, user, selfname, timeout=60):
-    """Currently-installed mods, via the mods-remove list ('abort' → list, then exit)."""
+    """Currently-installed mods, via the mods-remove list ('abort' → list, then exit).
+    Empty for games with no mods installer (LinuxGSM reports 'Unknown command')."""
     out, err, _ = run_as_game_user(server, user, 'mods-remove <<< "abort"', timeout=timeout, selfname=selfname)
-    return _parse_mods_installed((out or "") + "\n" + (err or ""))
+    text = (out or "") + "\n" + (err or "")
+    return _parse_mods_installed(text) if _game_supports_mods(text) else []
 
 
 def mods_action(server, user, selfname, which, mod_id, timeout=600):

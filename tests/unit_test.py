@@ -1138,6 +1138,15 @@ check("mods: installed parses '<id> - <name>' format",
       len(_in) == 1 and _in[0]["id"] == "metamodsource" and _in[0]["name"] == "Metamod: Source")
 check("mods: 'No installed mods' output yields empty list",
       sm._parse_mods_installed("Failure! No installed mods or addons were found") == [])
+# A game with no mods installer (cod) prints 'Unknown command' + a 'LinuxGSM - <Game> - Version …'
+# banner — that banner must NOT be parsed as an installed mod.
+_cod_out = ("Error! Unknown command: ./codserver mods-remove\n"
+            "LinuxGSM - Call of Duty - Version v26.1.0\nstart st | Start the server.")
+check("mods: 'Unknown command' output -> game not supported", sm._game_supports_mods(_cod_out) is False)
+check("mods: version banner isn't parsed as an installed mod",
+      not any(m["id"] == "LinuxGSM" for m in sm._parse_mods_installed(_cod_out)))
+check("mods: a real mods list is still 'supported'",
+      sm._game_supports_mods("metamodsource - Metamod: Source - desc") is True)
 # mods_action rejects unsafe ids before ever building a shell command (injection guard)
 check("mods: mods_action rejects an unsafe id",
       sm.mods_action(None, "u", "u", "install", "foo; rm -rf x")[1] == "invalid mod id")
