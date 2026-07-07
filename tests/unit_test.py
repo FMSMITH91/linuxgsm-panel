@@ -951,6 +951,23 @@ finally:
     sm.run_command = _orig_pro_run
     sm._pro_status_cache.clear()
 
+# ── host_specs is cached (static hardware — don't re-run lscpu every page load) ──
+_hs_n = {"n": 0}
+_orig_hs_run = sm.run_command
+try:
+    def _hscount(s, c, **k):
+        _hs_n["n"] += 1
+        return ("OS\tUbuntu\nCORES\t1\nMEM\t0.9\n", "", 0)
+    sm.run_command = _hscount
+    sm._specs_cache.clear()
+    _hsrv = NS(id=7, host="h")
+    sm.host_specs(_hsrv)
+    sm.host_specs(_hsrv)   # cached
+    check("host_specs: cached (one run_command for two reads)", _hs_n["n"] == 1)
+finally:
+    sm.run_command = _orig_hs_run
+    sm._specs_cache.clear()
+
 # ── apt upgradable parsing: name + old→new version ──
 _APT_OUT = "\n".join([
     "Listing...",

@@ -638,7 +638,23 @@ _STATUS_WORD = {"M": "modified", "D": "deleted", "A": "added",
                 "R": "renamed", "T": "type-changed", "C": "copied"}
 
 
-def panel_integrity():
+_integrity_cache = {"ts": 0.0, "data": None}
+_INTEGRITY_TTL = 60
+
+
+def panel_integrity(force=False):
+    """File-integrity check (git diff), cached ~60s so a page load / debug report doesn't spawn
+    git every time. pass force=True to re-check immediately (e.g. right after a repair)."""
+    now = time.time()
+    if not force and _integrity_cache["data"] is not None and (now - _integrity_cache["ts"]) < _INTEGRITY_TTL:
+        return _integrity_cache["data"]
+    data = _compute_panel_integrity()
+    _integrity_cache["ts"] = now
+    _integrity_cache["data"] = data
+    return data
+
+
+def _compute_panel_integrity():
     """Which of the panel's own git-tracked files have been modified or deleted
     since install. Returns {git, clean, current_sha, modified:[{path,status}],
     count, message}."""
@@ -677,7 +693,7 @@ def panel_repair(paths=None):
     so this can never be used to check out arbitrary paths — each requested path
     must exactly match one git itself reported as changed. paths=None restores
     them all. Returns (ok, message, restored:list)."""
-    info = panel_integrity()
+    info = panel_integrity(force=True)   # repair must act on the CURRENT state, not a cached one
     if not info["git"]:
         return False, info.get("message", "Not a git checkout."), []
     if not info.get("verified", True):
@@ -703,6 +719,7 @@ def panel_repair(paths=None):
     if rc != 0:
         _log.error("panel repair failed: %s", (err or "").strip())
         return False, "Repair failed — see the panel logs.", []
+    _integrity_cache["data"] = None   # files changed on disk — next check must re-read
     return True, ("Restored %d file(s) from the installed version. Restart the panel "
                   "to load the corrected code." % len(targets)), targets
 

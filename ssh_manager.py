@@ -1780,9 +1780,26 @@ _SPECS_CMD = (
 )
 
 
+_specs_cache = {}   # key -> (expiry_epoch, result); hardware/OS specs are effectively static
+_SPECS_TTL = 3600
+
+
 def host_specs(server):
-    """Static hardware/OS specs for a host (local or remote): OS, CPU model, cores,
-    RAM, disk, kernel, arch, virtualization. Returns {} keys or {'error': ...}."""
+    """Static hardware/OS specs for a host. Cached ~1h — this runs lscpu/systemd-detect-virt/df,
+    and the answer doesn't change between page loads, so there's no reason to re-probe every time."""
+    key = _pro_key(server)
+    now = time.time()
+    cached = _specs_cache.get(key)
+    if cached and cached[0] > now:
+        return cached[1]
+    result = _compute_host_specs(server)
+    if not result.get("error"):     # don't pin a transient failure for an hour
+        _specs_cache[key] = (now + _SPECS_TTL, result)
+    return result
+
+
+def _compute_host_specs(server):
+    """Probe hardware/OS specs (OS, CPU model, cores, RAM, disk, kernel, arch, virt)."""
     try:
         out, err, rc = run_command(server, _SPECS_CMD, timeout=20, sudo=False)
     except Exception as e:
