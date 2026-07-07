@@ -15,9 +15,6 @@
     </span>
   </div>
   <div class="d-flex align-items-center gap-2">
-    <a href="{{ url_for('server_files', server_id=server.id) }}" class="btn btn-sm btn-outline-secondary" title="Edit config & browse files">
-      <i class="bi bi-folder2-open"></i> Files &amp; Config
-    </a>
     <span class="badge" id="status-badge"
           style="color:#0a0f1a; background: {% if server.status == 'online' %}#3fb950{% elif server.status == 'offline' %}#f85149{% else %}#d29922{% endif %};">
       <span id="status-text">{{ server.status|title }}</span>
@@ -73,6 +70,7 @@
 <ul class="nav nav-pills mb-3 flex-nowrap overflow-auto" id="sdtab-nav">
   <li class="nav-item"><button type="button" class="nav-link active" data-mtab-btn="console"><i class="bi bi-terminal-fill"></i> Console</button></li>
   <li class="nav-item"><button type="button" class="nav-link" data-mtab-btn="details"><i class="bi bi-info-circle"></i> Details</button></li>
+  <li class="nav-item"><a class="nav-link" href="{{ url_for('server_files', server_id=server.id) }}"><i class="bi bi-folder2-open"></i> Files &amp; Config</a></li>
 </ul>
 
 <!-- Connect address + live stats -->

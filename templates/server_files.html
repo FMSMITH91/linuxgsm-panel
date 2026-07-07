@@ -36,6 +36,13 @@
   </div>
 </div>
 
+<!-- Page-level tabs — same set as the server detail page, so Files & Config reads as a tab of it. -->
+<ul class="nav nav-pills mb-3 flex-nowrap overflow-auto">
+  <li class="nav-item"><a class="nav-link" href="{{ url_for('server_detail', server_id=server.id) }}"><i class="bi bi-terminal-fill"></i> Console</a></li>
+  <li class="nav-item"><a class="nav-link" href="{{ url_for('server_detail', server_id=server.id) }}#details"><i class="bi bi-info-circle"></i> Details</a></li>
+  <li class="nav-item"><a class="nav-link active" href="#" onclick="return false;"><i class="bi bi-folder2-open"></i> Files &amp; Config</a></li>
+</ul>
+
 <!-- Config editor (tabbed) -->
 <div class="card mb-3">
   <div class="card-header p-0">

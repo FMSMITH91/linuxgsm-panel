@@ -837,23 +837,16 @@ function renderUpdate(d){
   if(d.git===false){ st.innerHTML='<i class="bi bi-info-circle"></i> '+(d.message||'Self-update unavailable (not a git checkout).'); btn.style.display='none'; changes.style.display='none'; return; }
   if(d.fetched===false){ st.innerHTML='<span class="text-secondary"><i class="bi bi-cloud-slash"></i> '+(d.message||'Couldn\'t reach the update source.')+'</span>'; btn.style.display='none'; changes.style.display='none'; return; }
   if(d.update_available){
-    var note = (d.newer_unverified>0)
-      ? '<div class="small text-secondary mt-1"><i class="bi bi-hourglass-split"></i> '+d.newer_unverified+' newer commit'+(d.newer_unverified===1?'':'s')+' still being verified — you\'ll get '+(d.newer_unverified===1?'it':'them')+' once '+(d.newer_unverified===1?'it passes':'they pass')+' CI.</div>'
-      : '';
-    st.innerHTML='<span class="text-warning"><i class="bi bi-arrow-up-circle-fill"></i> Update available: <strong>v'+(d.remote_version||'?')+'</strong> ('+d.behind+' commit'+(d.behind===1?'':'s')+' behind).</span>'+note;
+    st.innerHTML='<span class="text-warning"><i class="bi bi-arrow-up-circle-fill"></i> Update available: <strong>v'+(d.remote_version||'?')+'</strong> ('+d.behind+' commit'+(d.behind===1?'':'s')+' behind).</span>';
     btn.style.display='';
     var ul=document.getElementById('pu-changes-list'); ul.innerHTML='';
     (d.changes||[]).forEach(function(c){ var li=document.createElement('li'); li.textContent=c; ul.appendChild(li); });
     changes.style.display=(d.changes&&d.changes.length)?'':'none';
-  } else if(d.behind>0){
-    // A newer commit exists but it hasn't cleared CI yet (or its checks failed), so we
-    // don't offer it. Show why rather than a misleading "you're up to date".
-    var pending = d.ci_state!=='failing';
-    st.innerHTML='<span class="'+(pending?'text-info':'text-danger')+'"><i class="bi bi-'+(pending?'hourglass-split':'exclamation-triangle')+'"></i> '
-      +(d.message||(pending?'An update is being verified…':'The latest commit didn\'t pass its checks.'))+'</span>';
-    btn.style.display='none'; changes.style.display='none';
   } else {
-    st.innerHTML='<span class="text-success"><i class="bi bi-check-circle"></i> You\'re on the latest version'+(d.current_sha?' ('+d.current_sha+')':'')+'.</span>';
+    // No VERIFIED update ahead — show it as up to date. If a newer commit exists but is still
+    // being verified (or failed a check), we deliberately DON'T surface a "being verified"
+    // state; the update only appears once a commit has fully passed every check.
+    st.innerHTML='<span class="text-success"><i class="bi bi-check-circle"></i> You\'re up to date'+(d.current_sha?' ('+d.current_sha+')':'')+'.</span>';
     btn.style.display='none'; changes.style.display='none';
   }
 }
