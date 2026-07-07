@@ -2,7 +2,6 @@
 import json
 import logging
 import os
-import re
 import shlex
 import subprocess
 import threading
@@ -453,6 +452,7 @@ def _is_git_checkout():
 
 def _repo_slug():
     """owner/repo parsed from origin's URL, so the CI-gate check works on forks too."""
+    import re
     url, _, rc = _git(["remote", "get-url", "origin"], timeout=10)
     if rc != 0:
         return None
@@ -530,7 +530,7 @@ def _compute_update_status():
                else "The latest commit didn't pass its checks; holding off on this update.")
     return {
         "git": True,
-        "fetched": frc == 0,
+        "fetched": True,   # we returned early above if the fetch failed (frc != 0)
         "update_available": update_ready,
         "ci_state": ci_state,
         "behind": behind_n,
@@ -571,6 +571,18 @@ def panel_self_update():
     progress is written to data/self-update.log under the panel dir."""
     if not _is_git_checkout():
         return False, "The panel isn't a git checkout, so it can't self-update."
+    # Enforce the CI gate server-side, not just by hiding the button. Re-check fresh so we
+    # also catch the race where a newer, unverified commit landed between page-load and the
+    # click. Refuse to pull onto a commit whose CI is still running or has FAILED — updating
+    # to it could bring up an unstable panel. 'unknown' (GitHub unreachable) stays allowed so
+    # a transient API outage can't lock the admin out of a legitimate update.
+    st = panel_update_status(force=True)
+    if st.get("behind", 0) > 0 and st.get("ci_state") in ("pending", "failing"):
+        if st.get("ci_state") == "failing":
+            return False, ("This update is blocked: the latest commit didn't pass its "
+                           "automated checks. It'll be offered once a fixed version passes CI.")
+        return False, ("This update is still being verified — its checks are running. "
+                       "Try again once they've passed (usually a couple of minutes).")
     installer = os.path.join(PANEL_DIR, "install.sh")
     if not os.path.isfile(installer):
         return False, "install.sh is missing, so the panel can't self-update safely."

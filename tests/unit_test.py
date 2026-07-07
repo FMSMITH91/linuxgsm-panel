@@ -1126,6 +1126,31 @@ finally:
     _so._repo_slug = _orig_ci_slug
     _so.urllib.request.urlopen = _orig_urlopen
 
+# panel_self_update ENFORCES the CI gate server-side (not just by hiding the button), and
+# re-checks fresh so it also catches a bad commit that landed between page-load and click.
+_orig_isgit = _so._is_git_checkout
+_orig_pus = _so.panel_update_status
+_orig_isfile = _so.os.path.isfile
+try:
+    _so._is_git_checkout = lambda: True
+    _so.panel_update_status = lambda force=False: {"behind": 1, "ci_state": "failing"}
+    _ok, _m = _so.panel_self_update()
+    check("self-update: refuses a commit that FAILED CI", _ok is False and "didn't pass" in _m)
+    _so.panel_update_status = lambda force=False: {"behind": 1, "ci_state": "pending"}
+    _ok, _m = _so.panel_self_update()
+    check("self-update: refuses while CI is still running", _ok is False and "being verified" in _m)
+    # A CI-passing commit must get PAST the gate. Make install.sh look missing so it stops
+    # there (proving the gate let it through) instead of actually launching an update.
+    _so.os.path.isfile = lambda p: False
+    _so.panel_update_status = lambda force=False: {"behind": 1, "ci_state": "passing"}
+    _ok, _m = _so.panel_self_update()
+    check("self-update: a CI-passing commit is NOT blocked by the gate",
+          _ok is False and "install.sh is missing" in _m)
+finally:
+    _so._is_git_checkout = _orig_isgit
+    _so.panel_update_status = _orig_pus
+    _so.os.path.isfile = _orig_isfile
+
 # ── Tailscale: installed-but-not-authenticated (NeedsLogin) must not 500 ─
 import tailscale_integration as _tsi
 _tsi._run_ts = lambda args, timeout=5: (("1.0", "", 0) if args and args[0] in ("version", "--version")
