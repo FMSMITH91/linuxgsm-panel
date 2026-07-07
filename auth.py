@@ -264,9 +264,21 @@ def server_access_required(f):
 
 def init_auth(app):
     login_manager.init_app(app)
-    # Pre-compute the login-timing dummy hash in the background (bcrypt is ~400ms) so it's ready
-    # before the first login WITHOUT adding that to startup or to the first failed-login timing.
-    threading.Thread(target=_dummy_hash, daemon=True).start()
+    # Pre-compute the login-timing dummy hash (~400ms bcrypt) so it's ready before the first login
+    # WITHOUT adding it to startup or to the first failed-login timing. Run it on a real worker
+    # thread via eventlet's tpool so the deliberately-slow hash doesn't block the event hub (a plain
+    # green thread would, since bcrypt never yields). Falls back to a daemon thread off eventlet.
+    def _warm():
+        try:
+            from eventlet import tpool
+            tpool.execute(_dummy_hash)
+        except Exception:
+            _dummy_hash()
+    try:
+        import eventlet
+        eventlet.spawn_n(_warm)
+    except Exception:
+        threading.Thread(target=_warm, daemon=True).start()
     # Session protection mode comes from app.config["SESSION_PROTECTION"] (set in
     # create_app from config, default "strong"). "strong" ties the session to a hash
     # of the client IP + User-Agent and drops it if either changes — so a cookie stolen
