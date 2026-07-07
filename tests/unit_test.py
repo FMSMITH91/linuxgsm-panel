@@ -1541,6 +1541,14 @@ check("lgsm-name map: gmodserver -> gmod", _app.lgsm_name_to_game_type("gmodserv
 check("lgsm-name map: rustserver -> rust", _app.lgsm_name_to_game_type("rustserver") == "rust")
 check("lgsm-name map: an unknown script -> None", _app.lgsm_name_to_game_type("notagameserver") is None)
 
+# ── GameServer.supports_update: drives the (bulk) Update button + backend skip per game ──
+check("supports_update: game exposing 'update' -> True",
+      _GS(commands='[{"cmd":"update"},{"cmd":"start"}]').supports_update is True)
+check("supports_update: game with no 'update' command (cod family) -> False",
+      _GS(commands='[{"cmd":"start"},{"cmd":"stop"}]').supports_update is False)
+check("supports_update: an empty command list fails open -> True",
+      _GS(commands='[]').supports_update is True)
+
 # ── db_maintenance: offline SQLite check / repair / optimize (updater + health card) ──
 import db_maintenance as _dbm
 import sqlite3 as _sq3

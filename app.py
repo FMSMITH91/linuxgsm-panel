@@ -1528,6 +1528,11 @@ def register_routes(app):
             if not can_access_server(current_user, sid):
                 skipped.append({"server_id": sid, "name": gs.name, "reason": "no access"})
                 continue
+            # Never run 'update' on a game that has no LinuxGSM update command (e.g. the Call of
+            # Duty family) — in a mixed selection those are skipped, not failed.
+            if action == "update" and not gs.supports_update:
+                skipped.append({"server_id": sid, "name": gs.name, "reason": "no update support"})
+                continue
             _bg_bulk_action(gs.id, gs.remote_id, action, current_user.id)
             queued.append({"server_id": sid, "name": gs.name})
 

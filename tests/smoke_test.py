@@ -517,6 +517,22 @@ try:
     check("bulk-action: caller lacking the permission -> 403", ba_perm.status_code == 403,
           "got %d" % ba_perm.status_code)
 
+    # A game with no LinuxGSM update command (e.g. the cod family) must be SKIPPED by a bulk
+    # update, not dispatched — enforced server-side even if the client sends it.
+    with app.app_context():
+        noupd = GameServer(remote_id=remote_id, name="noupd", short_name="noupdsrv",
+                           game_type="cod", port=28960, installed=True,
+                           commands='[{"cmd":"start"},{"cmd":"stop"}]')
+        db.session.add(noupd)
+        db.session.commit()
+        noupd_id = noupd.id
+    ba_up = c.post("/api/servers/bulk-action", json={"action": "update", "server_ids": [noupd_id]})
+    _bup = ba_up.get_json() or {}
+    check("bulk-action: update skips a game with no update command (not dispatched)",
+          ba_up.status_code == 200 and not _bup.get("queued")
+          and any(s.get("reason") == "no update support" for s in _bup.get("skipped", [])),
+          "got %s" % _bup)
+
     # ── Per-server backups info (data for the Files & Config tab), superadmin only ──
     bi = c.get("/api/panel/backup/game/%d/info" % gs_id)
     _bi = bi.get_json() or {}

@@ -2,6 +2,23 @@
 {% block title %}Dashboard{% endblock %}
 {% block content %}
 
+{# Bulk-action bar, rendered both above and below the server list so it's reachable from either
+   end. Uses classes (not ids) so both instances stay in sync via JS. #}
+{% macro bulk_bar(pos) %}
+<div class="bulk-bar card shadow-lg" style="display:none; position:sticky; {{ 'top' if pos == 'top' else 'bottom' }}:1rem; z-index:1020; border:1px solid var(--bs-border-color);">
+  <div class="card-body py-2 d-flex align-items-center gap-2 flex-wrap">
+    <span class="fw-bold me-1"><i class="bi bi-check2-square"></i> <span class="bulk-count">0</span> selected</span>
+    <button class="btn btn-outline-success btn-sm" onclick="bulkAction('start')"><i class="bi bi-play-fill"></i> Start</button>
+    <button class="btn btn-outline-warning btn-sm" onclick="bulkAction('restart')"><i class="bi bi-arrow-repeat"></i> Restart</button>
+    <button class="btn btn-outline-danger btn-sm" onclick="bulkAction('stop')"><i class="bi bi-stop-fill"></i> Stop</button>
+    {% if current_user.is_superadmin or has_permission('update_server') %}
+    <button class="btn btn-outline-info btn-sm bulk-update-btn" onclick="bulkAction('update')"><i class="bi bi-download"></i> Update</button>
+    {% endif %}
+    <button class="btn btn-link btn-sm text-secondary text-decoration-none ms-auto" onclick="clearSelection()">Clear</button>
+  </div>
+</div>
+{% endmacro %}
+
 <div class="d-flex justify-content-between align-items-center mb-4 flex-wrap gap-2">
   <h1 class="page-title mb-0"><i class="bi bi-grid-1x2-fill"></i> Dashboard</h1>
   <div class="d-flex align-items-center gap-3">
@@ -67,6 +84,8 @@
   </div>
 </div>
 
+{% if can_control %}{{ bulk_bar('top') }}{% endif %}
+
 <!-- Server cards grouped by remote -->
 {% for remote in remotes %}
 {% set remote_servers = servers|selectattr('remote_id', 'equalto', remote.id)|list %}
@@ -100,7 +119,7 @@
         <tbody>
           {% for srv in remote_servers %}
           <tr>
-            {% if can_control %}<td><input type="checkbox" class="form-check-input srv-check" value="{{ srv.id }}" data-name="{{ srv.name }}" aria-label="Select {{ srv.name }}"></td>{% endif %}
+            {% if can_control %}<td><input type="checkbox" class="form-check-input srv-check" value="{{ srv.id }}" data-name="{{ srv.name }}" data-supports-update="{{ 'true' if srv.supports_update else 'false' }}" aria-label="Select {{ srv.name }}"></td>{% endif %}
             <td>
               <strong>{{ srv.name }}</strong>
               <span class="text-secondary d-block" style="font-size: .75rem;">{{ srv.short_name }}</span>
@@ -136,22 +155,7 @@
 {% endfor %}
 <div id="srv-none" class="card" style="display:none;"><div class="card-body text-center text-secondary py-4">No servers match your filter.</div></div>
 
-{% if can_control %}
-<!-- Bulk action bar: appears only while one or more servers are selected. Sticks to the
-     bottom of the viewport so it stays reachable when scrolling a long server list. -->
-<div id="bulk-bar" class="card shadow-lg" style="display:none; position:sticky; bottom:1rem; z-index:1020; border:1px solid var(--bs-border-color);">
-  <div class="card-body py-2 d-flex align-items-center gap-2 flex-wrap">
-    <span class="fw-bold me-1"><i class="bi bi-check2-square"></i> <span id="bulk-count">0</span> selected</span>
-    <button class="btn btn-outline-success btn-sm" onclick="bulkAction('start')"><i class="bi bi-play-fill"></i> Start</button>
-    <button class="btn btn-outline-warning btn-sm" onclick="bulkAction('restart')"><i class="bi bi-arrow-repeat"></i> Restart</button>
-    <button class="btn btn-outline-danger btn-sm" onclick="bulkAction('stop')"><i class="bi bi-stop-fill"></i> Stop</button>
-    {% if current_user.is_superadmin or has_permission('update_server') %}
-    <button class="btn btn-outline-info btn-sm" onclick="bulkAction('update')"><i class="bi bi-download"></i> Update</button>
-    {% endif %}
-    <button class="btn btn-link btn-sm text-secondary text-decoration-none ms-auto" onclick="clearSelection()">Clear</button>
-  </div>
-</div>
-{% endif %}
+{% if can_control %}{{ bulk_bar('bottom') }}{% endif %}
 
 {% endif %}
 
@@ -274,16 +278,20 @@ function doAction(id, action, btn) {
 // Run one action across every checked server in a single request. The server
 // dispatches each in the background, so this returns immediately and the live
 // status poll below reflects the outcome per row.
+function selectedChecks() {
+  return Array.prototype.slice.call(document.querySelectorAll('.srv-check:checked'));
+}
 function selectedIds() {
-  return Array.prototype.map.call(
-    document.querySelectorAll('.srv-check:checked'), function (c) { return c.value; });
+  return selectedChecks().map(function (c) { return c.value; });
 }
 function updateBulkBar() {
-  var bar = document.getElementById('bulk-bar');
-  if (!bar) return;
-  var n = selectedIds().length;
-  document.getElementById('bulk-count').textContent = n;
-  bar.style.display = n ? '' : 'none';
+  var checks = selectedChecks(), n = checks.length;
+  document.querySelectorAll('.bulk-count').forEach(function (el) { el.textContent = n; });
+  document.querySelectorAll('.bulk-bar').forEach(function (bar) { bar.style.display = n ? '' : 'none'; });
+  // Hide the Update button when NONE of the selected servers support updating (e.g. a lone cod
+  // server, which has no LinuxGSM update command) — no point offering an action that can't run.
+  var anyUpdatable = checks.some(function (c) { return c.getAttribute('data-supports-update') !== 'false'; });
+  document.querySelectorAll('.bulk-update-btn').forEach(function (b) { b.style.display = anyUpdatable ? '' : 'none'; });
 }
 function toggleAll(cb) {
   var card = cb.closest('.server-remote-card');
@@ -298,12 +306,21 @@ function clearSelection() {
   updateBulkBar();
 }
 function bulkAction(action) {
-  var ids = selectedIds().map(Number);
+  var checks = selectedChecks();
+  var ids = checks.map(function (c) { return Number(c.value); });
   if (!ids.length) return;
+  var skippedNoUpdate = 0;
+  if (action === 'update') {
+    // Mixed selection: only update servers whose game has a LinuxGSM update command; skip the
+    // rest instead of failing them. The server enforces this too (defence in depth).
+    var updatable = checks.filter(function (c) { return c.getAttribute('data-supports-update') !== 'false'; });
+    skippedNoUpdate = ids.length - updatable.length;
+    ids = updatable.map(function (c) { return Number(c.value); });
+    if (!ids.length) { toast('None of the selected servers support updating.', 'warning'); return; }
+  }
   if ((action === 'stop' || action === 'update') &&
       !confirm('Run "' + action + '" on ' + ids.length + ' server' + (ids.length === 1 ? '' : 's') + '?')) return;
-  var bar = document.getElementById('bulk-bar');
-  var btns = bar.querySelectorAll('button');
+  var btns = document.querySelectorAll('.bulk-bar button');
   btns.forEach(function (b) { b.disabled = true; });
   fetch(MOUNT + '/api/servers/bulk-action', {
     method: 'POST', headers: { 'Content-Type': 'application/json' },
@@ -311,9 +328,9 @@ function bulkAction(action) {
   })
     .then(r => r.json())
     .then(d => {
-      var n = (d.queued || []).length, skip = (d.skipped || []).length;
+      var nq = (d.queued || []).length, skip = (d.skipped || []).length + skippedNoUpdate;
       var extra = skip ? ' (' + skip + ' skipped)' : '';
-      if (n) toast(titleCase(action) + ' started on ' + n + ' server' + (n === 1 ? '' : 's') + extra, 'success');
+      if (nq) toast(titleCase(action) + ' started on ' + nq + ' server' + (nq === 1 ? '' : 's') + extra, 'success');
       else toast((d.message || 'Nothing to do') + extra, 'warning');
       clearSelection();
       setTimeout(refreshStatus, 1500);

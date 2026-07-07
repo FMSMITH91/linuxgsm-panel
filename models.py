@@ -292,6 +292,14 @@ class GameServer(db.Model):
     def set_commands(self, cmds):
         self.commands = json.dumps(cmds)
 
+    @property
+    def supports_update(self):
+        """True if this game exposes LinuxGSM's `update` command. Some games (e.g. the Call of
+        Duty family) aren't SteamCMD-based and have no `update`. An empty command list (not yet
+        fetched) fails open, matching the server detail page's Update-button logic."""
+        cmds = {c.get("cmd") for c in self.get_commands()}
+        return (not cmds) or ("update" in cmds)
+
     def connect_uri(self, host):
         """One-click join URI for clients that support one, else "".
 
