@@ -411,10 +411,19 @@ def server_uptime():
 
 # ─── Combined status ──────────────────────────────────────────
 
-def get_server_status():
+_status_cache = {"ts": 0.0, "data": None}
+_STATUS_TTL = 15   # ufw/tailscale/sudo state changes rarely (and via the panel) — no need to
+#                    re-probe (~1.2s of CPU across sudo ufw + tailscale subprocesses) every render
+
+
+def get_server_status(force=False):
     """Get combined server status for the management page.
     Uses the cached update list (no network apt-update) so the page loads fast;
-    the user can trigger a fresh check separately."""
+    the user can trigger a fresh check separately. The whole result is cached ~15s so a page
+    render + its follow-up poll don't each re-run the sudo ufw / tailscale probes."""
+    now = time.time()
+    if not force and _status_cache["data"] is not None and (now - _status_cache["ts"]) < _STATUS_TTL:
+        return _status_cache["data"]
     ufw = ufw_status()
     ts_ssh = tailscale_ssh_status()
     updates = os_update_available(refresh=False)
@@ -428,7 +437,7 @@ def get_server_status():
         out, _, _ = _run(f"ufw status verbose 2>&1 | grep -i '{ts_iface}'", timeout=10, sudo=True)
         tailscale_ufw_allowed = bool(out.strip())
 
-    return {
+    result = {
         "has_sudo": has_sudo,
         "ufw": ufw,
         "tailscale_ssh": ts_ssh,
@@ -437,6 +446,15 @@ def get_server_status():
         "updates": updates,
         "uptime": uptime,
     }
+    _status_cache["ts"] = now
+    _status_cache["data"] = result
+    return result
+
+
+def invalidate_server_status():
+    """Drop the cached management-page status so the next read re-probes — call after a firewall
+    or Tailscale-SSH change so the page reflects it immediately instead of up to _STATUS_TTL later."""
+    _status_cache["data"] = None
 
 
 # ─── Panel self-update (git-based) ─────────────────────────────

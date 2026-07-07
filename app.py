@@ -2601,6 +2601,7 @@ def register_routes(app):
         """Allow traffic on the Tailscale interface via UFW."""
         success, msg = so.ufw_allow_tailscale()
         if success:
+            so.invalidate_server_status()   # firewall changed → next page load re-probes
             log_action(current_user, "ufw_allow_tailscale", detail=msg)
             return jsonify({"success": True, "message": msg})
         return jsonify({"success": False, "message": msg}), 500
@@ -2612,6 +2613,7 @@ def register_routes(app):
         """Enable Tailscale SSH."""
         success, msg = so.tailscale_ssh_enable()
         if success:
+            so.invalidate_server_status()   # tailscale-ssh state changed → next load re-probes
             log_action(current_user, "tailscale_ssh_enable", detail=msg)
             return jsonify({"success": True, "message": msg})
         return jsonify({"success": False, "message": msg}), 500
@@ -2623,6 +2625,7 @@ def register_routes(app):
         """Disable Tailscale SSH."""
         success, msg = so.tailscale_ssh_disable()
         if success:
+            so.invalidate_server_status()   # tailscale-ssh state changed → next load re-probes
             log_action(current_user, "tailscale_ssh_disable", detail=msg)
             return jsonify({"success": True, "message": msg})
         return jsonify({"success": False, "message": msg}), 500
