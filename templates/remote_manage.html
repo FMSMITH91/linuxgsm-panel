@@ -799,6 +799,7 @@ function renderUpdate(d){
   var btn=document.getElementById('pu-update-btn'); var changes=document.getElementById('pu-changes');
   var cur=document.getElementById('pu-current'); if(cur) cur.textContent='v'+(d.current_version||'?');
   if(d.git===false){ st.innerHTML='<i class="bi bi-info-circle"></i> '+(d.message||'Self-update unavailable (not a git checkout).'); btn.style.display='none'; changes.style.display='none'; return; }
+  if(d.fetched===false){ st.innerHTML='<span class="text-secondary"><i class="bi bi-cloud-slash"></i> '+(d.message||'Couldn\'t reach the update source.')+'</span>'; btn.style.display='none'; changes.style.display='none'; return; }
   if(d.update_available){
     st.innerHTML='<span class="text-warning"><i class="bi bi-arrow-up-circle-fill"></i> Update available: <strong>v'+(d.remote_version||'?')+'</strong> ('+d.behind+' commit'+(d.behind===1?'':'s')+' behind).</span>';
     btn.style.display='';

@@ -576,7 +576,13 @@ def panel_self_update():
     # click. Refuse to pull onto a commit whose CI is still running or has FAILED — updating
     # to it could bring up an unstable panel. 'unknown' (GitHub unreachable) stays allowed so
     # a transient API outage can't lock the admin out of a legitimate update.
-    st = panel_update_status(force=True)
+    try:
+        st = panel_update_status(force=True)
+    except Exception:
+        # A failure to compute status must not crash the endpoint or block a legitimate
+        # update — fall through as if the CI state were unknown (lenient).
+        _log.warning("self-update CI-gate: status check failed; allowing", exc_info=True)
+        st = {}
     if st.get("behind", 0) > 0 and st.get("ci_state") in ("pending", "failing"):
         if st.get("ci_state") == "failing":
             return False, ("This update is blocked: the latest commit didn't pass its "
