@@ -727,7 +727,7 @@ _so._git = lambda args, timeout=45: (
     ("abc1234\n", "", 0) if list(args) == ["rev-parse", "--short", "HEAD"]
     else ("M\tapp.py\nD\ttemplates/base.html\n", "", 0) if list(args) == ["diff", "--name-status", "HEAD"]
     else ("", "", 0))
-_intg = _so.panel_integrity()
+_intg = _so.panel_integrity(force=True)   # force: each scenario mocks a different git state
 check("integrity: reports git checkout", _intg["git"] is True)
 eq("integrity: counts tampered files", _intg["count"], 2)
 check("integrity: not clean when files differ", _intg["clean"] is False)
@@ -796,14 +796,14 @@ check("repair: no-op when nothing is tampered", _ok2 is True and "Nothing to rep
 # Fail-safe: if git itself errors we must NOT claim the files are verified-clean.
 _so._git = lambda args, timeout=45: (
     ("abc1234\n", "", 0) if list(args) == ["rev-parse", "--short", "HEAD"] else ("", "fatal", 1))
-_intgf = _so.panel_integrity()
+_intgf = _so.panel_integrity(force=True)
 check("integrity: fail-safe when git errors (not verified)",
       _intgf.get("verified") is False and _intgf["clean"] is True)
 _okf, _msgf, _ = _so.panel_repair()
 check("repair: refuses when integrity can't be verified", _okf is False)
 
 _so._is_git_checkout = lambda: False
-check("integrity: handles non-git checkout", _so.panel_integrity()["git"] is False)
+check("integrity: handles non-git checkout", _so.panel_integrity(force=True)["git"] is False)
 _ok3, _msg3, _ = _so.panel_repair()
 check("repair: refuses when not a git checkout", _ok3 is False)
 
