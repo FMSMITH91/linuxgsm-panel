@@ -91,7 +91,7 @@ from ssh_manager import (
     run_cron_job_now, run_game_backup, list_game_backups,
     delete_game_backup, stream_game_backup, backup_disk_info,
     mods_available, mods_installed, mods_action,
-    player_count as sm_player_count, mod_restart_decision,
+    player_count as sm_player_count, mod_restart_decision, set_game_priority,
     install_game_dependencies, parse_missing_deps, detect_game_ports, lgsm_read_config,
     lgsm_write_config, lgsm_game_config, lgsm_get_values, browse_dir, read_file,
     write_file, upload_file, delete_path,
@@ -1298,6 +1298,12 @@ def register_routes(app):
         if rc == 0 and action in ("restart", "start", "stop") and gs.restart_pending:
             gs.restart_pending = False
             db.session.commit()
+        # Give the freshly-(re)started game a small CPU-priority edge over background work.
+        if rc == 0 and action in ("restart", "start"):
+            try:
+                set_game_priority(remote, gs.short_name)
+            except Exception:
+                app.logger.debug("game priority boost failed (non-fatal)", exc_info=True)
         if action in READONLY_ACTIONS:
             return True, f"{action}: {clean[:600] or 'no output'}"
         if rc == 0:

@@ -977,6 +977,17 @@ finally:
     sm.run_command = _orig_hs_run
     sm._specs_cache.clear()
 
+# ── set_game_priority renices the game user's processes as ROOT (negative nice needs root) ──
+_gp_cmds = []
+_orig_gp = sm.run_command
+try:
+    sm.run_command = lambda s, c, **k: (_gp_cmds.append(c), ("", "", 0))[1]
+    sm.set_game_priority(None, "codserver")
+    check("set_game_priority: renices the game user via sudo (root)",
+          any("renice -n -1 -u codserver" in c and "sudo bash -c" in c for c in _gp_cmds))
+finally:
+    sm.run_command = _orig_gp
+
 # ── apt upgradable parsing: name + old→new version ──
 _APT_OUT = "\n".join([
     "Listing...",

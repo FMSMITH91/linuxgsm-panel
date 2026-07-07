@@ -456,6 +456,22 @@ def run_as_game_user(server, user, action_cmd, timeout=30, selfname=None):
     return run_command(server, cmd, timeout=timeout, sudo=False)
 
 
+GAME_PRIORITY_NICE = -1   # slight CPU priority edge for game processes (root-only to set negative)
+
+
+def set_game_priority(server, user, nice=GAME_PRIORITY_NICE):
+    """Give a game user's processes a small CPU-priority edge by renicing them. A NEGATIVE nice is
+    root-only, so this runs via sudo (as root, NOT the game user). Best-effort — a failure just
+    leaves the game at its default nice. Called right after a start/restart so the freshly-spawned
+    game process gets the boost. (Games autostarted on boot via cron stay at the default nice 0,
+    which is already above the deprioritised panel.)"""
+    try:
+        run_command(server, _sudo_sh("renice -n %d -u %s" % (int(nice), user)),
+                    timeout=15, sudo=False)
+    except Exception:
+        _log.debug("set_game_priority failed (non-fatal)", exc_info=True)
+
+
 def send_console_command(server, user, command, timeout=20, selfname=None):
     """Inject a command into a LinuxGSM instance's live console.
 
