@@ -67,8 +67,16 @@
   </button>
 </div>
 
+<!-- Section tabs: keep the console (and its live stats) front-and-centre; tuck the static
+     reference cards under Details. Cards tagged data-mtab, filtered client-side — markup and JS
+     untouched. Actions + the pending banner above are always visible. -->
+<ul class="nav nav-pills mb-3 flex-nowrap overflow-auto" id="sdtab-nav">
+  <li class="nav-item"><button type="button" class="nav-link active" data-mtab-btn="console"><i class="bi bi-terminal-fill"></i> Console</button></li>
+  <li class="nav-item"><button type="button" class="nav-link" data-mtab-btn="details"><i class="bi bi-info-circle"></i> Details</button></li>
+</ul>
+
 <!-- Connect address + live stats -->
-<div class="card mb-3">
+<div class="card mb-3" data-mtab="console">
   <div class="card-body">
     <div class="d-flex flex-wrap align-items-center justify-content-between gap-2 mb-3">
       <div class="d-flex align-items-center gap-2">
@@ -95,10 +103,8 @@
   </div>
 </div>
 
-<div class="row">
-  <!-- Console (left) — info sidebar sits beside it so nothing important is hidden below -->
-  <div class="col-lg-8 mb-3">
-    <div class="card">
+<!-- Live Console — full width in its own tab -->
+<div class="card mb-3" data-mtab="console">
       <div class="card-header">
         <i class="bi bi-terminal-fill"></i> Live Console
         <span class="text-secondary small ms-2" id="ws-status">(connecting...)</span>
@@ -120,12 +126,12 @@
         </form>
       </div>
       {% endif %}
-    </div>
-  </div>
+</div>
 
-  <!-- Info sidebar -->
+<!-- Details: server info, host and commands (grouped into the Details tab) -->
+<div class="row" data-mtab="details">
   <div class="col-lg-4 mb-3">
-    <div class="card mb-3">
+    <div class="card h-100">
       <div class="card-header"><i class="bi bi-info-circle-fill"></i> Server Info</div>
       <div class="card-body">
         <table class="table table-borderless table-sm mb-0">
@@ -187,8 +193,9 @@
         </table>
       </div>
     </div>
-
-    <div class="card mb-3">
+  </div>
+  <div class="col-lg-4 mb-3">
+    <div class="card h-100">
       <div class="card-header"><i class="bi bi-hdd-network-fill"></i> Host</div>
       <div class="card-body">
         <table class="table table-borderless table-sm mb-0">
@@ -208,8 +215,9 @@
         </table>
       </div>
     </div>
-
-    <div class="card">
+  </div>
+  <div class="col-lg-4 mb-3">
+    <div class="card h-100">
       <div class="card-header d-flex justify-content-between align-items-center">
         <span><i class="bi bi-list-columns-reverse"></i> Supported Commands</span>
         <form method="POST" action="{{ url_for('refresh_server_commands', server_id=server.id) }}" style="display:inline;">
@@ -244,6 +252,28 @@
 {% block scripts %}
 <script src="{{ url_for('static', filename='vendor/chartjs/chart.umd.min.js') }}"></script>
 <script>
+// ── Section tabs (Console / Details): show only the selected group's cards. Actions and the
+// pending banner are untagged, so they stay visible on both. The chart + console live in the
+// default Console tab, so they initialise visible (no hidden-canvas sizing issues). ──
+(function(){
+  var nav = document.getElementById('sdtab-nav'); if(!nav) return;
+  var TABS = ['console','details'];
+  function show(tab){
+    document.querySelectorAll('[data-mtab]').forEach(function(el){
+      el.style.display = (el.getAttribute('data-mtab') === tab) ? '' : 'none';
+    });
+    nav.querySelectorAll('[data-mtab-btn]').forEach(function(b){
+      b.classList.toggle('active', b.getAttribute('data-mtab-btn') === tab);
+    });
+    try { history.replaceState(null, '', '#' + tab); } catch(e){}
+  }
+  nav.addEventListener('click', function(e){
+    var b = e.target.closest('[data-mtab-btn]'); if(b) show(b.getAttribute('data-mtab-btn'));
+  });
+  var h = (location.hash || '').replace('#','');
+  show(TABS.indexOf(h) >= 0 ? h : 'console');
+})();
+
 var consoleEl = document.getElementById('console-output');
 var wsStatus = document.getElementById('ws-status');
 var serverId = {{ server.id }};
