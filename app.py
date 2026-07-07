@@ -2883,6 +2883,11 @@ def register_routes(app):
             pending = [gs for gs in GameServer.query.filter_by(installed=True).all()
                        if gs.remote_id and (gs.restart_pending or gs.stop_pending)]
             for gs in pending:
+                # Don't restart/stop a server that's being backed up right now — the backup already
+                # stops+starts it, and racing it could fail the backup. Leave it queued for next tick.
+                _bst = _game_backup_status.get(gs.id)
+                if _bst and _bst.get("running"):
+                    continue
                 try:
                     status = get_server_status(gs.remote, gs)
                     pc = sm_player_count(gs.remote, gs.short_name, gs.game_type, gs.port) \
