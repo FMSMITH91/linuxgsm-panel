@@ -1,5 +1,6 @@
 """Authentication and permission management."""
 import secrets
+import threading
 from functools import wraps
 
 import bcrypt
@@ -79,13 +80,24 @@ def check_password(password, password_hash):
 # username doesn't exist (or is inactive) makes that path spend the same time as a
 # real password check — bcrypt is deliberately slow, so skipping it would otherwise
 # leak, by timing, whether an account exists (username enumeration).
-_DUMMY_BCRYPT_HASH = bcrypt.hashpw(secrets.token_bytes(16), bcrypt.gensalt()).decode()
+#
+# Computed LAZILY (a single bcrypt hash is ~400ms) so it doesn't add that to every panel
+# start/restart. init_auth() pre-warms it in the background, so it's ready before the first
+# login without either delaying startup or making that first login abnormally slow.
+_DUMMY_BCRYPT_HASH = None
+
+
+def _dummy_hash():
+    global _DUMMY_BCRYPT_HASH
+    if _DUMMY_BCRYPT_HASH is None:
+        _DUMMY_BCRYPT_HASH = bcrypt.hashpw(secrets.token_bytes(16), bcrypt.gensalt()).decode()
+    return _DUMMY_BCRYPT_HASH
 
 
 def dummy_password_check(password):
     """Run a throwaway bcrypt compare to equalize login timing for a nonexistent or
     inactive user. Always returns False."""
-    check_password(password, _DUMMY_BCRYPT_HASH)
+    check_password(password, _dummy_hash())
     return False
 
 
@@ -252,6 +264,9 @@ def server_access_required(f):
 
 def init_auth(app):
     login_manager.init_app(app)
+    # Pre-compute the login-timing dummy hash in the background (bcrypt is ~400ms) so it's ready
+    # before the first login WITHOUT adding that to startup or to the first failed-login timing.
+    threading.Thread(target=_dummy_hash, daemon=True).start()
     # Session protection mode comes from app.config["SESSION_PROTECTION"] (set in
     # create_app from config, default "strong"). "strong" ties the session to a hash
     # of the client IP + User-Agent and drops it if either changes — so a cookie stolen
