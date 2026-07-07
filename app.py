@@ -1586,7 +1586,9 @@ def register_routes(app):
     @login_required
     @server_access_required
     def api_server_autostart(server_id):
-        """Toggle auto-start on boot (manages the game user's @reboot crontab)."""
+        """Toggle autostart. This manages the game user's LinuxGSM `monitor` cron (which keeps
+        the server in its intended state across crashes/reboots) — it does not start or stop the
+        server here and now."""
         gs = get_game(server_id)
         if not current_user.is_superadmin and not has_permission(current_user, RESTART_SERVER):
             return jsonify({"success": False, "message": "Permission denied"}), 403
@@ -1956,8 +1958,9 @@ def register_routes(app):
                     except Exception:
                         _log.debug("_run: ignored non-fatal error", exc_info=True)
 
-                    # 7. Enable autostart-on-boot by default.
-                    _p(7, "Enabling autostart on boot")
+                    # 7. Enable autostart by default (the LinuxGSM monitor cron; install_game_cron
+                    #    above already adds it when supported — this ensures it either way).
+                    _p(7, "Enabling autostart (monitor)")
                     try:
                         set_autostart(remote, short_name, True, gs.lgsm_name)
                     except Exception:
@@ -2294,13 +2297,15 @@ def register_routes(app):
                 port = int(it.get("port") or 0)
             except (TypeError, ValueError):
                 port = 0
-            # Adopt the autostart state we detected during discovery so the panel's toggle matches
-            # reality; its cron, backups and mods are read live by the panel once it's imported.
+            # Import NEVER starts or reconfigures a discovered server — it's left exactly as it
+            # is (its own cron/backups/mods are read live by the panel once imported). Autostart
+            # is off until you enable it here, which is what sets up the panel's monitor cron, so
+            # the panel never takes over a server you didn't ask it to manage.
             db.session.add(GameServer(
                 remote_id=remote_id, name=user, short_name=user, game_type=gt,
                 game_display=game_names.get(gt, ""),
                 port=(port if 1 <= port <= 65535 else 27015), installed=True, status="offline",
-                autostart=bool(it.get("autostart"))))
+                autostart=False))
             existing.add(user)
             added.append(user)
         if added:

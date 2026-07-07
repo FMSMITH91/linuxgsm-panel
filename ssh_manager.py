@@ -454,7 +454,7 @@ def discover_linuxgsm_servers(server):
         '    b=$(ls -1 "/home/$u/lgsm/backup/" 2>/dev/null | grep -cE "\\.(tar|tgz|zip)"); '
         '    m=$(grep -c . "/home/$u/lgsm/mods/installed-mods.txt" 2>/dev/null); '
         '    c=$(printf "%s\\n" "$cj" | grep -vE "^[[:space:]]*(#|$)" | grep -c .); '
-        '    a=$(printf "%s\\n" "$cj" | grep -c "@reboot"); '
+        '    a=$(printf "%s\\n" "$cj" | grep -cE "@reboot|monitor"); '
         '    echo "FOUND|$u|$g|${p:-0}|${b:-0}|${m:-0}|${c:-0}|${a:-0}"; '
         '  done; '
         'done'
@@ -739,18 +739,30 @@ def _rewrite_crontab(server, user, grep_args, add_lines, extra_pre=""):
 
 
 def set_autostart(server, user, enabled, selfname=None):
-    """Enable/disable auto-start on boot via the game user's crontab
-    (@reboot ... start). This is LinuxGSM's recommended autostart method."""
+    """Enable/disable autostart via LinuxGSM's `monitor` cron (every 5 min), NOT a
+    `@reboot ... start` line.
+
+    `monitor` keeps a server in its INTENDED state: `start` writes a persistent lockfile and
+    `stop` removes it, so monitor brings back one that should be running — including after a
+    reboot, since the lockfile survives — and leaves a deliberately-stopped server (no lockfile)
+    down. A `@reboot start` would instead force-start even a server the operator had stopped, so
+    we no longer use it and strip any legacy one. Enabling ensures the monitor line exists;
+    disabling removes it."""
     selfname = selfname or user
-    marker = f"/home/{user}/{selfname} start"
-    add = [f"@reboot {_record_managed_cmd(user, marker)}"] if enabled else []
-    return _rewrite_crontab(server, user, f"-vF {_quote(marker)}", add)
+    base = f"/home/{user}/{selfname}"
+    monitor_line = f"*/5 * * * * {_record_managed_cmd(user, f'{base} monitor')}"
+    add = [monitor_line] if enabled else []
+    # Strip any existing monitor line AND any legacy '@reboot ... start' autostart line in one
+    # pass, then re-add monitor when enabling.
+    remove_re = f"({base} monitor |@reboot .*{selfname} start)"
+    return _rewrite_crontab(server, user, f"-vE {_quote(remove_re)}", add)
 
 
 def install_game_cron(server, user, selfname=None, supported=None):
     """Set up LinuxGSM maintenance cron for a game instance — only for the commands
-    that game supports. Preserves the @reboot autostart line. Idempotent.
-      monitor      every 5 min   (restart if crashed)
+    that game supports. Also strips any legacy '@reboot ... start' line — autostart is now the
+    monitor cron below (see set_autostart), which respects the server's intended state. Idempotent.
+      monitor      every 5 min   (autostart + restart if crashed)
       mods-update  daily 05:00   (before update)
       update       daily 05:15
       update-lgsm  weekly Sun 05:30
@@ -776,7 +788,7 @@ def install_game_cron(server, user, selfname=None, supported=None):
     if not lines:
         return True, "no maintenance commands to schedule"
 
-    remove_re = f"{base} (monitor|mods-update|update|update-lgsm) "
+    remove_re = f"({base} (monitor|mods-update|update|update-lgsm) |@reboot .*{selfname} start)"
     return _rewrite_crontab(server, user, f"-vE {_quote(remove_re)}", lines)
 
 
@@ -821,9 +833,11 @@ def set_daily_restart(server, user, selfname=None, game_type=None, port=None, en
 
 
 def get_autostart(server, user, selfname=None):
-    """Return True if the @reboot autostart cron entry exists for the game user."""
+    """Return True if autostart is on — i.e. the LinuxGSM `monitor` cron exists for the game
+    user. monitor (not a @reboot line) is what keeps the server in its intended state across
+    crashes and reboots."""
     selfname = selfname or user
-    marker = f"/home/{user}/{selfname} start"
+    marker = f"/home/{user}/{selfname} monitor"
     out, _, _ = run_command(
         server, f"crontab -u {user} -l 2>/dev/null | grep -cF {_quote(marker)}",
         timeout=10, sudo=True,

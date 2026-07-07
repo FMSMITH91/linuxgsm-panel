@@ -966,12 +966,15 @@ def _cap_rewrite(server, user, grep_args, add_lines, extra_pre=""):
 sm._rewrite_crontab = _cap_rewrite
 
 sm.set_autostart(None, "gmodserver", True)
-# The managed lines now run through the inline recorder — the command stays VISIBLE (so the
-# grep-based detection/removal still works) but a status-recording suffix is appended.
-check("autostart(on): @reboot start line, recorder-wrapped",
-      _cron["add"][0].startswith("@reboot ")
-      and "/home/gmodserver/gmodserver start" in _cron["add"][0]
+# Autostart is now the LinuxGSM monitor cron (every 5 min), NOT a @reboot start line — monitor
+# respects the server's intended state via the lockfile. The managed line runs through the inline
+# recorder so the command stays VISIBLE (grep-based detection/removal still works).
+check("autostart(on): adds the */5 monitor line, recorder-wrapped",
+      _cron["add"][0].startswith("*/5 * * * * ")
+      and "/home/gmodserver/gmodserver monitor" in _cron["add"][0]
       and ".lgsm-cron/" in _cron["add"][0] and ".status" in _cron["add"][0])
+check("autostart(on): also strips any legacy @reboot start line",
+      "@reboot" in _cron["grep"] and "monitor" in _cron["grep"])
 sm.set_autostart(None, "gmodserver", False)
 eq("autostart(off): removes line, adds none", _cron["add"], [])
 
