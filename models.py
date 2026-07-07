@@ -255,6 +255,10 @@ STEAM_CONNECT_GAMES = frozenset({
     "cs", "cscz", "tfc", "dmc", "ns", "ricochet", "hldm", "ahl",
 })
 
+# LinuxGSM game_types with NO `update` command (not SteamCMD-based — LinuxGSM omits update from
+# their menu). Used to hide the Update action even before a server's command list is fetched.
+_NO_UPDATE_GAMES = frozenset({"cod", "coduo", "cod2", "cod4", "codwaw"})
+
 
 class GameServer(db.Model):
     """A single game server instance managed by LinuxGSM."""
@@ -294,11 +298,14 @@ class GameServer(db.Model):
 
     @property
     def supports_update(self):
-        """True if this game exposes LinuxGSM's `update` command. Some games (e.g. the Call of
-        Duty family) aren't SteamCMD-based and have no `update`. An empty command list (not yet
-        fetched) fails open, matching the server detail page's Update-button logic."""
+        """True if this game exposes LinuxGSM's `update` command. The fetched command list is
+        authoritative; before it's been fetched (empty) we assume yes, EXCEPT for games known to
+        lack update (the Call of Duty family isn't SteamCMD-based), so their Update button is
+        correctly hidden even on a freshly imported server whose commands aren't populated yet."""
         cmds = {c.get("cmd") for c in self.get_commands()}
-        return (not cmds) or ("update" in cmds)
+        if cmds:
+            return "update" in cmds
+        return self.game_type not in _NO_UPDATE_GAMES
 
     def connect_uri(self, host):
         """One-click join URI for clients that support one, else "".
