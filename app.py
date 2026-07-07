@@ -2262,7 +2262,9 @@ def register_routes(app):
             if not gt or gt not in games:
                 continue   # a game the panel doesn't support — don't offer a broken import
             out.append({"user": user, "game_type": gt, "game_name": games.get(gt, gt),
-                        "port": f.get("port") or 0})
+                        "port": f.get("port") or 0,
+                        "backups": f.get("backups", 0), "mods": f.get("mods", 0),
+                        "cron": f.get("cron", 0), "autostart": bool(f.get("autostart"))})
         return jsonify({"servers": out})
 
     @app.route("/api/remote/<int:remote_id>/import", methods=["POST"])
@@ -2279,7 +2281,8 @@ def register_routes(app):
         if not isinstance(items, list) or not items:
             return jsonify({"success": False, "message": "Nothing selected."}), 400
         existing = {gs.short_name for gs in GameServer.query.filter_by(remote_id=remote_id).all()}
-        valid_games = {g["shortname"] for g in load_game_list()}
+        game_names = {g["shortname"]: g["name"] for g in load_game_list()}
+        valid_games = set(game_names)
         added, skipped = [], []
         for it in items[:100]:
             user = (it.get("user") or "").strip()
@@ -2291,9 +2294,13 @@ def register_routes(app):
                 port = int(it.get("port") or 0)
             except (TypeError, ValueError):
                 port = 0
+            # Adopt the autostart state we detected during discovery so the panel's toggle matches
+            # reality; its cron, backups and mods are read live by the panel once it's imported.
             db.session.add(GameServer(
                 remote_id=remote_id, name=user, short_name=user, game_type=gt,
-                port=(port if 1 <= port <= 65535 else 27015), installed=True, status="offline"))
+                game_display=game_names.get(gt, ""),
+                port=(port if 1 <= port <= 65535 else 27015), installed=True, status="offline",
+                autostart=bool(it.get("autostart"))))
             existing.add(user)
             added.append(user)
         if added:

@@ -157,7 +157,7 @@
     <button class="btn btn-sm btn-outline-primary" id="disc-scan-btn" onclick="scanExisting()"><i class="bi bi-search"></i> Scan</button>
   </div>
   <div class="card-body">
-    <p class="small text-secondary mb-2">Finds LinuxGSM game servers already installed under any user account on this host and adds the ones not yet in the panel. It's read-only until you import.</p>
+    <p class="small text-secondary mb-2">Finds LinuxGSM game servers already installed under any user account on this host — with their backups, installed mods and scheduled tasks — and adds the ones not yet in the panel. It's read-only until you import; once imported, the panel shows each server's cron, backups and mods live.</p>
     <div id="disc-result"></div>
   </div>
 </div>
@@ -1459,13 +1459,16 @@ function scanExisting(){
     if(!s.length){ out.innerHTML='<span class="text-secondary small"><i class="bi bi-check2"></i> No new LinuxGSM servers found — anything already in the panel is skipped.</span>'; return; }
     var rows=s.map(function(g){
       return '<tr>'
-        +'<td><input type="checkbox" class="form-check-input disc-chk" checked data-user="'+escapeHtml(g.user)+'" data-game="'+escapeHtml(g.game_type)+'" data-port="'+(g.port||0)+'"></td>'
-        +'<td class="font-monospace">'+escapeHtml(g.user)+'</td>'
+        +'<td><input type="checkbox" class="form-check-input disc-chk" checked data-user="'+escapeHtml(g.user)+'" data-game="'+escapeHtml(g.game_type)+'" data-port="'+(g.port||0)+'" data-autostart="'+(g.autostart?1:0)+'"></td>'
+        +'<td class="font-monospace">'+escapeHtml(g.user)+(g.autostart?' <span class="badge bg-success" style="font-size:.58rem;">autostart</span>':'')+'</td>'
         +'<td>'+escapeHtml(g.game_name||g.game_type)+'</td>'
-        +'<td>'+(g.port||'—')+'</td></tr>';
+        +'<td>'+(g.port||'—')+'</td>'
+        +'<td>'+(g.backups||0)+'</td>'
+        +'<td>'+(g.mods||0)+'</td>'
+        +'<td>'+(g.cron||0)+'</td></tr>';
     }).join('');
     out.innerHTML='<div class="table-responsive"><table class="table table-sm align-middle mb-2">'
-      +'<thead><tr><th style="width:1%"><input type="checkbox" class="form-check-input" checked onclick="discToggleAll(this)" aria-label="Select all"></th><th>User</th><th>Game</th><th>Port</th></tr></thead>'
+      +'<thead><tr><th style="width:1%"><input type="checkbox" class="form-check-input" checked onclick="discToggleAll(this)" aria-label="Select all"></th><th>User</th><th>Game</th><th>Port</th><th title="LinuxGSM backups on disk">Backups</th><th title="Installed mods">Mods</th><th title="Cron entries for this user">Cron</th></tr></thead>'
       +'<tbody>'+rows+'</tbody></table></div>'
       +'<button class="btn btn-sm btn-primary" onclick="importExisting(this)"><i class="bi bi-plus-circle"></i> Import selected</button> <span id="disc-msg" class="small ms-2"></span>';
   }).catch(function(){ if(out) out.innerHTML='<span class="text-danger small">Scan failed.</span>'; })
@@ -1476,7 +1479,8 @@ function importExisting(btn){
   var picks=[], msg=document.getElementById('disc-msg');
   document.querySelectorAll('.disc-chk:checked').forEach(function(c){
     picks.push({user:c.getAttribute('data-user'), game_type:c.getAttribute('data-game'),
-                port:parseInt(c.getAttribute('data-port'),10)||0});
+                port:parseInt(c.getAttribute('data-port'),10)||0,
+                autostart:c.getAttribute('data-autostart')==='1'});
   });
   if(!picks.length){ if(msg) msg.innerHTML='<span class="text-warning">Select at least one.</span>'; return; }
   btn.disabled=true; btn.innerHTML='<span class="spinner-border spinner-border-sm"></span> Importing…';

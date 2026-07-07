@@ -437,16 +437,25 @@ def discover_linuxgsm_servers(server):
     config as a hint — the panel re-reads the authoritative port(s) after import. The caller maps
     <gameservername> to the panel's game_type and skips servers already added. Sudo is required
     because game-user home dirs aren't world-readable. Best-effort — returns [] on any failure."""
-    # A single POSIX-sh script so the whole scan is one SSH command. Variables are quoted; the
-    # only inputs are on-host filenames (users / LinuxGSM dirs), never anything panel-supplied.
+    # A single POSIX-sh script so the whole scan is one SSH command. For each instance it also
+    # counts what already exists — LinuxGSM backups (~/lgsm/backup), installed mods
+    # (~/lgsm/mods/installed-mods.txt), the user's cron lines, and whether an @reboot autostart
+    # is set — so the preview shows the full picture and import can adopt the autostart state.
+    # The crontab is read once per user. Variables are quoted; the only inputs are on-host
+    # filenames (users / LinuxGSM dirs), never anything panel-supplied.
     script = (
         'for u in $(ls -1 /home/ 2>/dev/null); do '
         '  d="/home/$u/lgsm/config-lgsm"; [ -d "$d" ] || continue; '
+        '  cj=$(crontab -u "$u" -l 2>/dev/null); '
         '  for g in $(ls -1 "$d" 2>/dev/null); do '
         '    [ -x "/home/$u/$g" ] || continue; '
         '    p=$(grep -hE "^[[:space:]]*port=" "$d/$g/$g.cfg" "$d/$g/common.cfg" '
         '        "$d/$g/_default.cfg" 2>/dev/null | grep -oE "[0-9]+" | head -1); '
-        '    echo "FOUND|$u|$g|${p:-0}"; '
+        '    b=$(ls -1 "/home/$u/lgsm/backup/" 2>/dev/null | grep -cE "\\.(tar|tgz|zip)"); '
+        '    m=$(grep -c . "/home/$u/lgsm/mods/installed-mods.txt" 2>/dev/null); '
+        '    c=$(printf "%s\\n" "$cj" | grep -vE "^[[:space:]]*(#|$)" | grep -c .); '
+        '    a=$(printf "%s\\n" "$cj" | grep -c "@reboot"); '
+        '    echo "FOUND|$u|$g|${p:-0}|${b:-0}|${m:-0}|${c:-0}|${a:-0}"; '
         '  done; '
         'done'
     )
@@ -457,18 +466,28 @@ def discover_linuxgsm_servers(server):
         return []
     if rc != 0:
         return []
+
+    def _n(x):
+        x = (x or "").strip()
+        return int(x) if x.isdigit() else 0
+
     found = []
     for line in (out or "").splitlines():
         if not line.startswith("FOUND|"):
             continue
         parts = line.split("|")
-        if len(parts) >= 4:
-            user, lgsm_name, port = parts[1].strip(), parts[2].strip(), parts[3].strip()
+        if len(parts) >= 8:
+            user, lgsm_name = parts[1].strip(), parts[2].strip()
+            port = _n(parts[3])
             if user and lgsm_name:
                 found.append({
                     "user": user,
                     "lgsm_name": lgsm_name,
-                    "port": int(port) if port.isdigit() and int(port) > 0 else None,
+                    "port": port or None,
+                    "backups": _n(parts[4]),
+                    "mods": _n(parts[5]),
+                    "cron": _n(parts[6]),
+                    "autostart": _n(parts[7]) > 0,
                 })
     return found
 

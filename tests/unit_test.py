@@ -1515,16 +1515,19 @@ check("game backup: name shape accepts a real archive",
 _orig_disc_rc = sm.run_command
 try:
     sm.run_command = lambda *a, **k: (
-        "FOUND|gmodserver|gmodserver|27015\n"
-        "FOUND|myrust|rustserver|28015\n"
+        "FOUND|gmodserver|gmodserver|27015|3|2|4|1\n"
+        "FOUND|myrust|rustserver|28015|0|0|0|0\n"
         "some unrelated line\n"
-        "FOUND|zeroport|csgoserver|0\n", "", 0)
+        "FOUND|shortline|gmodserver|0\n"          # missing the count fields -> skipped
+        "FOUND|zeroport|csgoserver|0|0|0|0|0\n", "", 0)
     _disc = sm.discover_linuxgsm_servers(None)
-    eq("discover: keeps only well-formed FOUND lines", len(_disc), 3)
-    check("discover: parses user / lgsm_name / port",
-          _disc[0] == {"user": "gmodserver", "lgsm_name": "gmodserver", "port": 27015})
-    check("discover: a 0/blank port becomes None (panel re-reads the real one)",
-          _disc[2]["user"] == "zeroport" and _disc[2]["port"] is None)
+    eq("discover: keeps only well-formed (8-field) FOUND lines", len(_disc), 3)
+    check("discover: parses user / lgsm_name / port + backup/mod/cron counts + autostart",
+          _disc[0] == {"user": "gmodserver", "lgsm_name": "gmodserver", "port": 27015,
+                       "backups": 3, "mods": 2, "cron": 4, "autostart": True})
+    check("discover: a 0/blank port becomes None and autostart is False",
+          _disc[2]["user"] == "zeroport" and _disc[2]["port"] is None
+          and _disc[2]["autostart"] is False)
     sm.run_command = lambda *a, **k: ("", "err", 1)
     check("discover: returns [] when the scan command fails", sm.discover_linuxgsm_servers(None) == [])
 finally:
