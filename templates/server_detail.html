@@ -57,11 +57,11 @@
   </div>
 </div>
 
-<!-- Restart-pending banner: a mod change is waiting for a restart to load -->
+<!-- Restart-pending banner: a restart is queued (mod change, or a user "restart when empty") -->
 <div class="alert alert-warning py-2 px-3 d-flex justify-content-between align-items-center flex-wrap gap-2 {% if not server.restart_pending %}d-none{% endif %}"
      id="restart-pending-banner">
   <span><i class="bi bi-exclamation-triangle-fill"></i>
-    A mod change is waiting for a restart to load. It'll restart automatically once the server is empty, or restart now.</span>
+    A restart is queued — it'll run automatically once the server is empty, or restart now.</span>
   <button class="btn btn-sm btn-warning" onclick="serverAction('restart', this, true)">
     <i class="bi bi-arrow-clockwise"></i> Restart now
   </button>
@@ -357,15 +357,10 @@ function sendCommand(ev) {
 // Uses the global window.toast (base.html) — one implementation, consistent independent timing.
 
 var SERVER_NAME = {{ server.name|tojson }};
-function serverAction(action, btn, confirmFirst) {
-  if (confirmFirst) {
-    var msg = action.charAt(0).toUpperCase() + action.slice(1) + ' ' + SERVER_NAME + '?';
-    if (action === 'fastdl') {
-      msg = 'Generate FastDL files for ' + SERVER_NAME +
-            '? This overwrites the existing FastDL directory and can take a while.';
-    }
-    if (!confirm(msg)) return;
-  }
+function _esc(s){ return (window.escapeHtml ? escapeHtml(s) : String(s)); }
+
+// Fire a server action against the JSON endpoint (spinner + toast + banner handling).
+function _doServerAction(action, btn) {
   var orig = btn.innerHTML;
   btn.disabled = true; btn.innerHTML = '<span class="spinner-border spinner-border-sm"></span>';
   fetch(MOUNT + '/api/server/' + serverId + '/action', {
@@ -375,7 +370,6 @@ function serverAction(action, btn, confirmFirst) {
   .then(r => r.json())
   .then(d => {
     toast(d.message || (action + ' done'), d.success ? 'success' : 'danger');
-    // A successful start/stop/restart loads any pending mod change — hide the banner.
     if (d.success && (action === 'restart' || action === 'start' || action === 'stop')) {
       var b = document.getElementById('restart-pending-banner');
       if (b) b.classList.add('d-none');
@@ -384,6 +378,62 @@ function serverAction(action, btn, confirmFirst) {
   })
   .catch(() => toast('Action failed — connection error', 'danger'))
   .finally(() => { btn.disabled = false; btn.innerHTML = orig; });
+}
+
+function serverAction(action, btn, confirmFirst) {
+  // Restart gets a player check first, so we can warn / offer "restart when empty".
+  if (action === 'restart') { return restartWithPlayerCheck(btn); }
+  if (confirmFirst) {
+    var msg = action.charAt(0).toUpperCase() + action.slice(1) + ' ' + SERVER_NAME + '?';
+    if (action === 'fastdl') {
+      msg = 'Generate FastDL files for ' + SERVER_NAME +
+            '? This overwrites the existing FastDL directory and can take a while.';
+    }
+    if (!confirm(msg)) return;
+  }
+  _doServerAction(action, btn);
+}
+
+function restartWithPlayerCheck(btn) {
+  var orig = btn.innerHTML;
+  btn.disabled = true; btn.innerHTML = '<span class="spinner-border spinner-border-sm"></span>';
+  fetch(MOUNT + '/api/server/' + serverId + '/players').then(r => r.json()).then(function(d){
+    btn.disabled = false; btn.innerHTML = orig;
+    var n = (d && d.players) || 0;   // null/unknown -> treat as none (fall back to a plain confirm)
+    if (!n) { if (confirm('Restart ' + SERVER_NAME + '?')) _doServerAction('restart', btn); return; }
+    restartPlayersDialog(n, btn);
+  }).catch(function(){
+    btn.disabled = false; btn.innerHTML = orig;
+    if (confirm('Restart ' + SERVER_NAME + "? (couldn't check who's online)")) _doServerAction('restart', btn);
+  });
+}
+
+function restartPlayersDialog(n, btn) {
+  var ov = document.createElement('div');
+  ov.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,.6);z-index:1080;display:flex;align-items:center;justify-content:center;padding:1rem;';
+  ov.innerHTML = '<div class="card" style="max-width:540px;width:100%;">'
+    + '<div class="card-header"><i class="bi bi-people-fill"></i> Players are online</div>'
+    + '<div class="card-body">'
+    + '<p class="mb-2"><strong>' + n + '</strong> player' + (n===1?' is':'s are') + ' connected to <strong>' + _esc(SERVER_NAME) + '</strong>. Restarting now disconnects ' + (n===1?'them':'everyone') + '.</p>'
+    + '<p class="small text-secondary mb-3">Are you sure you want to restart with players on?</p>'
+    + '<div class="d-flex flex-column gap-2">'
+    + '<button class="btn btn-warning" id="rd-now"><i class="bi bi-arrow-clockwise"></i> Yes, restart now (disconnect ' + n + ' player' + (n===1?'':'s') + ')</button>'
+    + '<button class="btn btn-success" id="rd-wait"><i class="bi bi-hourglass-split"></i> No — restart when the server is empty</button>'
+    + '<button class="btn btn-outline-secondary" id="rd-cancel">Cancel</button>'
+    + '</div></div></div>';
+  document.body.appendChild(ov);
+  function close(){ ov.remove(); }
+  ov.querySelector('#rd-now').onclick = function(){ close(); _doServerAction('restart', btn); };
+  ov.querySelector('#rd-wait').onclick = function(){
+    close();
+    fetch(MOUNT + '/api/server/' + serverId + '/restart-when-empty', {method:'POST', headers:{'Content-Type':'application/json'}})
+      .then(r => r.json()).then(function(d){
+        toast(d.message || 'Queued — will restart once empty.', d.success ? 'success' : 'danger');
+        if (d.success) { var b = document.getElementById('restart-pending-banner'); if (b) b.classList.remove('d-none'); }
+      }).catch(function(){ toast('Could not queue the restart', 'danger'); });
+  };
+  ov.querySelector('#rd-cancel').onclick = close;
+  ov.addEventListener('click', function(e){ if (e.target === ov) close(); });
 }
 
 function toggleAutostart(el) {

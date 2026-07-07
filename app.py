@@ -1357,6 +1357,34 @@ def register_routes(app):
         except Exception:
             return jsonify({"success": False, "message": _log_and_generic("request failed")}), 500
 
+    @app.route("/api/server/<int:server_id>/players")
+    @login_required
+    @server_access_required
+    def api_server_players(server_id):
+        """Current player count for a server (or null if not queryable). Used to warn before a
+        restart that would disconnect players."""
+        gs = get_game(server_id)
+        try:
+            pc = sm_player_count(gs.remote, gs.short_name, gs.game_type, gs.port)
+        except Exception:
+            pc = None
+        return jsonify({"players": pc})
+
+    @app.route("/api/server/<int:server_id>/restart-when-empty", methods=["POST"])
+    @login_required
+    @server_access_required
+    def api_server_restart_when_empty(server_id):
+        """Queue a restart for once the server is empty (players leave), instead of kicking them now.
+        Reuses restart_pending — the hourly ticker restarts it as soon as it's empty."""
+        gs = get_game(server_id)
+        if not current_user.is_superadmin and not has_permission(current_user, _perm_for_action("restart")):
+            return jsonify({"success": False, "message": "Permission denied"}), 403
+        gs.restart_pending = True
+        db.session.commit()
+        log_action(current_user, "restart_when_empty", target=gs.name, success=True)
+        return jsonify({"success": True,
+                        "message": "Queued — %s will restart automatically once it's empty." % gs.name})
+
     @app.route("/api/server/<int:server_id>/autostart", methods=["POST"])
     @login_required
     @server_access_required
