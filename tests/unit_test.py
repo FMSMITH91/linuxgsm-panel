@@ -329,6 +329,16 @@ try:
 finally:
     sm.run_command = _orig_run8c
 
+# ── 'Lockfile found' (LinuxGSM exits 0 but made no backup) must NOT read as success ──
+_orig_lock = sm.run_command
+try:
+    sm.run_command = lambda s, c, **k: ("[ INFO ] Backup gmodserver: Lockfile found: Backup is currently running", "", 0)
+    _lok, _lmsg, _lskip = sm.run_game_backup(None, "gm", "gmodserver", 2)
+    check("run_game_backup: 'Lockfile found' at exit 0 is treated as failure",
+          _lok is False and _lskip is False and "lock" in _lmsg.lower())
+finally:
+    sm.run_command = _orig_lock
+
 # ── pre-flight disk guard: don't start a doomed backup when the disk is full ──
 check("_fmt_size: bytes/MB/GB readable",
       sm._fmt_size(0) == "0 B" and sm._fmt_size(512) == "512 B"

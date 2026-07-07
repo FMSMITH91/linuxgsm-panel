@@ -158,6 +158,8 @@
       margin-left: var(--sidebar-w);
       padding: 2rem 2.5rem;
       min-height: 100vh;
+      min-height: 100dvh;   /* dynamic viewport height: excludes the mobile browser bar so short
+                               pages (e.g. login) fit exactly instead of forcing a small scroll */
     }
     /* No sidebar when logged out (e.g. the login page) — don't reserve its width,
        or the centered content sits 250px to the right (looks off-centre). */

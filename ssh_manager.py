@@ -1387,12 +1387,22 @@ def run_game_backup(server, user, selfname=None, keep=3, game_type=None, port=No
     out, err, rc = run_command(server, f"sudo -u {user} bash -c {_quote(inner)}",
                                timeout=3600, sudo=False)
     ok = rc == 0
+    # LinuxGSM can exit 0 while REFUSING to back up because a (possibly stale) lock exists —
+    # "Lockfile found: Backup is currently running". No archive is created, so this is NOT a
+    # success; reporting it as one is what makes the UI show "✓ Backed up" with no actual backup.
+    _blob = ((out or "") + " " + (err or "")).lower()
+    lock_refused = "lockfile found" in _blob or "backup is currently running" in _blob
+    if lock_refused:
+        ok = False
     try:
         prune_game_backups(server, user, keep)
     except Exception:
         _log.debug("game backup prune failed", exc_info=True)
     if ok:
         return True, ("Backed up — " + headroom_note if headroom_note else "Backed up"), False
+    if lock_refused:
+        return False, ("A backup lock was in the way — a previous backup may still be running, or it "
+                       "left a stale lock. Try again in a minute."), False
     # Surface the most relevant LinuxGSM line so the panel can show WHY it failed.
     clean = re.sub(r"\x1b\[[0-9;?]*[A-Za-z]", "", ((out or "") + "\n" + (err or ""))).strip()
     reason = ""
