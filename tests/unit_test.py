@@ -1511,6 +1511,65 @@ check("game backup: stream yields nothing for an unsafe name",
 check("game backup: name shape accepts a real archive",
       bool(sm._GAME_BACKUP_NAME.match("gmodserver-2026-07-06-141117.tar.zst")))
 
+# ── db_maintenance: offline SQLite check / repair / optimize (updater + health card) ──
+import db_maintenance as _dbm
+import sqlite3 as _sq3
+import tempfile as _tf
+import shutil as _sh
+
+_dbm_dir = _tf.mkdtemp(prefix="dbm-")
+
+
+def _mk_db(p, rows=40):
+    c = _sq3.connect(p)
+    try:
+        c.execute("CREATE TABLE t (id INTEGER PRIMARY KEY, v TEXT)")
+        c.executemany("INSERT INTO t (v) VALUES (?)", [("x" * 80,) for _ in range(rows)])
+        c.commit()
+    finally:
+        c.close()
+
+
+def _garbage(p, n=9000):
+    with open(p, "wb") as f:
+        f.write(os.urandom(n))
+
+
+try:
+    _good = os.path.join(_dbm_dir, "good.db")
+    _mk_db(_good)
+    check("db-maint: a healthy DB passes integrity_check", _dbm.integrity_check(_good)[0] is True)
+    check("db-maint: a missing DB counts as healthy (fresh install)",
+          _dbm.integrity_check(os.path.join(_dbm_dir, "nope.db"))[0] is True)
+    _garbage(os.path.join(_dbm_dir, "bad.db"))
+    check("db-maint: a non-database file is flagged as unhealthy",
+          _dbm.integrity_check(os.path.join(_dbm_dir, "bad.db"))[0] is False)
+    check("db-maint: optimize a healthy DB succeeds", _dbm.optimize(_good)[0] is True)
+
+    # repair a healthy DB → rebuilds it, and it stays healthy
+    _rep_ok, _ = _dbm.repair(_good, None)
+    check("db-maint: repair rebuilds a DB that verifies healthy",
+          _rep_ok is True and _dbm.integrity_check(_good)[0] is True)
+
+    # corrupt DB + healthy backup → restores the backup, keeps the corrupt copy aside
+    _main = os.path.join(_dbm_dir, "main.db")
+    _garbage(_main)
+    _bkp = _main + ".backup"
+    _mk_db(_bkp, rows=8)
+    _r2_ok, _ = _dbm.repair(_main, _bkp)
+    _aside = any(f.startswith("main.db.corrupt-") for f in os.listdir(_dbm_dir))
+    check("db-maint: repair restores a healthy backup when a rebuild can't salvage",
+          _r2_ok is True and _dbm.integrity_check(_main)[0] is True and _aside)
+
+    # unsalvageable + no backup → fails safely, original never deleted
+    _m2 = os.path.join(_dbm_dir, "m2.db")
+    _garbage(_m2)
+    _r3_ok, _ = _dbm.repair(_m2, os.path.join(_dbm_dir, "absent.backup"))
+    check("db-maint: repair fails safely (keeps the original) when nothing is salvageable",
+          _r3_ok is False and os.path.exists(_m2))
+finally:
+    _sh.rmtree(_dbm_dir, ignore_errors=True)
+
 # ── cleanup: remove key/config files this run created ─────────
 for p in (config.CRED_KEY_FILE, config.SECRET_FILE, config.CONFIG_FILE):
     if p not in _pre and os.path.exists(p):
