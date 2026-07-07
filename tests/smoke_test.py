@@ -162,6 +162,13 @@ try:
           hz.status_code == 200 and (hz.get_json() or {}).get("status") == "ok",
           "got %d" % hz.status_code)
 
+    # The login page (unauthenticated) offers a language switcher so the UI language can be
+    # changed before signing in — set-language works pre-login (session-scoped).
+    lg = app.test_client().get("/login")
+    check("GET /login renders with a language switcher",
+          lg.status_code == 200 and b"/set-language/" in lg.data and b"bi-translate" in lg.data,
+          "got %d" % lg.status_code)
+
     # Panel self-update live-log endpoint renders (no update running -> exists:false).
     ul = c.get("/api/panel/update-log")
     check("GET /api/panel/update-log -> 200 (superadmin)",

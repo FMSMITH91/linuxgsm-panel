@@ -44,6 +44,17 @@
         {% endif %}
       </div>
     </div>
+    {% if languages and languages|length > 1 %}
+    <div class="d-flex justify-content-center align-items-center gap-1 mt-3" title="{{ t('Language') }}">
+      <i class="bi bi-translate text-secondary"></i>
+      <select class="form-select form-select-sm py-0" style="width:auto;" aria-label="{{ t('Language') }}"
+              onchange="if(this.value){fetch('{{ url_for('set_language', lang='LANGCODE') }}'.replace('LANGCODE', this.value)+'?ajax=1',{cache:'no-store'}).then(function(){location.reload();});}">
+        {% for code, name in languages.items() %}
+        <option value="{{ code }}" {% if code == current_lang %}selected{% endif %}>{{ name }}</option>
+        {% endfor %}
+      </select>
+    </div>
+    {% endif %}
   </div>
 </div>
 {% endblock %}
