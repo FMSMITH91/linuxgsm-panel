@@ -106,17 +106,30 @@ def _chmod600(path):
         _log.debug("_chmod600: ignored non-fatal error", exc_info=True)
 
 
+def _create_key_once(path, gen_bytes):
+    """Create `path` (mode 0600) containing gen_bytes() EXACTLY once, even if several threads
+    or processes race to create it on a fresh install. O_EXCL makes the create atomic: only one
+    caller wins; everyone else gets FileExistsError and falls through to read the winner's key.
+    This prevents two callers each generating a different key and clobbering the other — which,
+    for cred_key, would silently make already-encrypted secrets undecryptable."""
+    try:
+        fd = os.open(str(path), os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+    except FileExistsError:
+        return  # someone else created it first; the caller re-reads it
+    try:
+        os.write(fd, gen_bytes())
+        os.fsync(fd)
+    finally:
+        os.close(fd)
+
+
 def get_secret_key():
-    if SECRET_FILE.exists():
-        _chmod600(SECRET_FILE)  # tighten perms on existing installs too
-        with open(SECRET_FILE) as f:
-            return f.read().strip()
-    import secrets
-    key = secrets.token_hex(32)
-    with open(SECRET_FILE, "w") as f:
-        f.write(key)
-    _chmod600(SECRET_FILE)
-    return key
+    if not SECRET_FILE.exists():
+        import secrets
+        _create_key_once(SECRET_FILE, lambda: secrets.token_hex(32).encode())
+    _chmod600(SECRET_FILE)  # tighten perms on existing installs too
+    with open(SECRET_FILE) as f:
+        return f.read().strip()
 
 
 # ── Encryption for secrets stored in the DB (remote SSH passwords/key paths) ──
@@ -126,14 +139,12 @@ _ENC_PREFIX = "enc:v1:"
 
 def _cred_fernet():
     from cryptography.fernet import Fernet
-    if CRED_KEY_FILE.exists():
-        key = CRED_KEY_FILE.read_bytes().strip()
-    else:
-        key = Fernet.generate_key()
-        with open(CRED_KEY_FILE, "wb") as f:
-            f.write(key)
-        _chmod600(CRED_KEY_FILE)
-    return Fernet(key)
+    # Create-once (atomic, race-safe): two concurrent first-time credential saves must not each
+    # generate a different key and clobber the other — that would leave the first-saved secret
+    # encrypted with a key the file no longer holds, i.e. permanently undecryptable.
+    if not CRED_KEY_FILE.exists():
+        _create_key_once(CRED_KEY_FILE, Fernet.generate_key)
+    return Fernet(CRED_KEY_FILE.read_bytes().strip())
 
 
 def encrypt_secret(plaintext):
