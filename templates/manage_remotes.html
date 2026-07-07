@@ -333,7 +333,7 @@ function loadLiveStats(remoteId) {
 }
 
 // ── Live refresh local server stats ──────────────────────
-setInterval(function() {
+pollWhenVisible(function() {
   var statEls = document.querySelectorAll('[id^="live-stats-"]');
   statEls.forEach(function(el) {
     var id = el.id.replace('live-stats-', '');

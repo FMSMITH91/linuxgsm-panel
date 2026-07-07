@@ -226,7 +226,7 @@ function refreshStatus() {
 }
 _serverIdsBaseline = renderedServerIds();   // what this page was rendered with
 refreshStatus();              // populate status + connect immediately
-setInterval(refreshStatus, 8000);
+pollWhenVisible(refreshStatus, 8000);
 // Instant reaction when another user adds/removes a server (poll above is the fallback).
 if (window.onServersChanged) onServersChanged(refreshStatus);
 

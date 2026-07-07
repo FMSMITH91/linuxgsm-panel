@@ -573,8 +573,8 @@ function pollStats() {
 refreshConsole(true);   // initial load: jump to the latest output
 initChart();
 pollStats();
-setInterval(pollStats, 4000);
+pollWhenVisible(pollStats, 4000);
 // Backup console refresh (websocket is primary) — respects your scroll position
-setInterval(function(){ refreshConsole(); }, 30000);
+pollWhenVisible(function(){ refreshConsole(); }, 30000);
 </script>
 {% endblock %}

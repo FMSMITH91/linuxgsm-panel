@@ -1381,6 +1381,6 @@ function restoreBackup(name,btn){
 loadSshStatus();                     // public-SSH controls now exist on both local + remote (no-ops if absent)
 if(IS_LOCAL){ checkPanelUpdate(false); loadIntegrity(); loadDbStats(); loadAutoUpd(); loadBackups(); } // panel-only cards
 pollLive();
-setInterval(pollLive, 2000);
+pollWhenVisible(pollLive, 2000);
 </script>
 {% endblock %}

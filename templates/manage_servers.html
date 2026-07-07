@@ -266,7 +266,7 @@ function reconcileServerList() {
     })
     .catch(function(){});
 }
-setInterval(reconcileServerList, 8000);
+pollWhenVisible(reconcileServerList, 8000);
 if (window.onServersChanged) onServersChanged(reconcileServerList);
 </script>
 {% endblock %}

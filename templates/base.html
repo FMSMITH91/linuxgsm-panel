@@ -683,6 +683,20 @@ window.escapeHtml = function(s){
     .replace(/"/g, '&quot;').replace(/'/g, '&#39;');
 };
 
+// Recurring poll that PAUSES while the tab is hidden and refreshes immediately when it
+// becomes visible again. Most of our pollers hit SSH on a remote host every few seconds;
+// a dashboard left open in a background tab would keep doing that work for nobody. This
+// keeps identical freshness while you're looking at a page and does zero work when you're
+// not. Returns the interval id (clearable). Use in place of setInterval for anything that
+// fetches live data on a timer.
+window.pollWhenVisible = function(fn, intervalMs){
+  var id = setInterval(function(){ if(!document.hidden){ try { fn(); } catch(e){} } }, intervalMs);
+  document.addEventListener('visibilitychange', function(){
+    if(!document.hidden){ try { fn(); } catch(e){} }   // catch up the moment the tab is focused
+  });
+  return id;
+};
+
 // Render server timestamps (stored UTC, emitted as <span class="localtime" data-utc="…Z">)
 // in the VIEWER's own timezone, with the exact UTC value on hover. Idempotent, so it's
 // safe to call again after AJAX inserts more. Runs on load.

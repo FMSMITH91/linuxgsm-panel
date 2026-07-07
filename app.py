@@ -140,6 +140,43 @@ _full_backup_lock = threading.Lock()
 # Last on-demand per-server backup outcome, keyed by server id (transient, in-memory).
 _game_backup_status = {}
 
+# Short-lived cache of each remote's listening ports (the dashboard status poll). Keyed by
+# remote id -> (expiry_epoch, set_of_ports). Collapses the thundering herd: a servers_changed
+# broadcast makes EVERY open dashboard call /api/servers at once, and without this each one
+# would run its own `ss` scan per remote. Invalidated on start/stop/restart so status stays
+# accurate right after an action. TTL is short — status only ever lags by a couple of seconds.
+_port_scan_cache = {}
+_PORT_SCAN_TTL = 5
+
+
+def _remote_listening_ports(remote):
+    """Set of ports currently listening on `remote`, cached for _PORT_SCAN_TTL seconds so
+    concurrent dashboard polls (multiple tabs/users, or a servers_changed broadcast) share one
+    SSH scan instead of each running their own. A failed/empty scan isn't cached, so a transient
+    SSH blip retries next poll instead of pinning every server 'offline' for the whole TTL."""
+    now = time.time()
+    hit = _port_scan_cache.get(remote.id)
+    if hit and hit[0] > now:
+        return hit[1]
+    # No sudo: listing listening-socket *addresses* (no -p process info) is unprivileged, so this
+    # frequent poll doesn't need root — avoids a sudo session per remote on every refresh.
+    out, _, _ = run_command(remote, "ss -H -lntu 2>/dev/null | awk '{print $5}'", timeout=8)
+    ports = set()
+    for addr in (out or "").split():
+        if ":" in addr:
+            p = addr.rsplit(":", 1)[1]
+            if p.isdigit():
+                ports.add(int(p))
+    if out:   # cache only a scan that returned something (empty output == SSH blip)
+        _port_scan_cache[remote.id] = (now + _PORT_SCAN_TTL, ports)
+    return ports
+
+
+def _invalidate_port_scan(remote_id):
+    """Drop a remote's cached port scan so the next status poll re-reads it — call after any
+    action that changes what's listening (start/stop/restart), so status is fresh immediately."""
+    _port_scan_cache.pop(remote_id, None)
+
 
 # A token unique to THIS panel process — it changes only when the panel actually restarts.
 # The self-update UI polls for this to flip, rather than the git SHA: install.sh moves HEAD
@@ -1293,6 +1330,10 @@ def register_routes(app):
             return re.sub(r"[ \t]{2,}", " ", s)
         log_action(actor, f"{action}_server", target=gs.name, success=(rc == 0), detail=_clean(out)[-400:])
         clean = _clean((out or "") + "\n" + (err or "")).strip()
+        # This changed what's listening on the host — drop the cached port scan so the dashboard
+        # reflects the new state on its next poll instead of up to a TTL of stale "offline/online".
+        if rc == 0 and action in ("restart", "start", "stop"):
+            _invalidate_port_scan(remote.id)
         # A manual start/stop/restart makes any queued 'when empty' restart/stop moot — clear both.
         if rc == 0 and action in ("restart", "start", "stop") and (gs.restart_pending or gs.stop_pending):
             gs.restart_pending = False
@@ -1464,6 +1505,9 @@ def register_routes(app):
                     from auth import log_action as _log
                     _log(None, f"{action}_complete", target=gs.name if gs else short_name,
                          success=(rc == 0), detail=(out or err or "")[-300:])
+                    # An update/validate/fastdl can restart the server (port cycles) — drop the
+                    # cached port scan so the dashboard shows the real state on its next poll.
+                    _invalidate_port_scan(remote_id)
                     # Updated mods only load after a restart — apply it when empty, else flag pending.
                     if action == "mods-update" and rc == 0 and gs:
                         try:
@@ -3864,16 +3908,7 @@ def register_routes(app):
         for gslist in by_remote.values():
             remote = gslist[0].remote
             try:
-                # No sudo: listing listening-socket *addresses* (no -p process info) is
-                # unprivileged, so this frequent poll doesn't need root — avoids a sudo
-                # session per remote on every dashboard refresh (log noise + least privilege).
-                out, _, _ = run_command(remote, "ss -H -lntu 2>/dev/null | awk '{print $5}'", timeout=8)
-                ports = set()
-                for addr in (out or "").split():
-                    if ":" in addr:
-                        p = addr.rsplit(":", 1)[1]
-                        if p.isdigit():
-                            ports.add(int(p))
+                ports = _remote_listening_ports(remote)
                 for gs in gslist:
                     st = "online" if gs.port in ports else "offline"
                     if gs.status != st:

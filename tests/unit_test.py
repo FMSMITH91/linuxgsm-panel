@@ -1149,6 +1149,35 @@ try:
 finally:
     _shutil.rmtree(_kd, ignore_errors=True)
 
+# ── dashboard port-scan cache: concurrent polls share ONE ssh scan per remote ──
+import app as _app
+_o_ps_rc = _app.run_command
+try:
+    _scan_n = {"n": 0}
+
+    def _fake_ss(remote, cmd, **k):
+        _scan_n["n"] += 1
+        return ("127.0.0.1:22\n*:27015\n[::]:27016", "", 0)
+
+    _app.run_command = _fake_ss
+    _app._port_scan_cache.clear()
+    _rem = NS(id=99)
+    _p1 = _app._remote_listening_ports(_rem)
+    _app._remote_listening_ports(_rem)   # within TTL → cache hit, no 2nd ssh
+    check("portscan: parses listening ports", 27015 in _p1 and 22 in _p1 and 27016 in _p1)
+    check("portscan: second concurrent poll served from cache (one ssh)", _scan_n["n"] == 1)
+    _app._invalidate_port_scan(99)
+    _app._remote_listening_ports(_rem)   # invalidated → re-scans
+    check("portscan: invalidate forces a fresh scan", _scan_n["n"] == 2)
+    # A failed scan (empty output) must NOT be cached, so a blip doesn't pin servers offline.
+    _app.run_command = lambda remote, cmd, **k: ("", "err", -1)
+    _app._port_scan_cache.clear()
+    _app._remote_listening_ports(_rem)
+    check("portscan: an empty/failed scan is not cached", 99 not in _app._port_scan_cache)
+finally:
+    _app.run_command = _o_ps_rc
+    _app._port_scan_cache.clear()
+
 # ── debug report: redaction + secret-key whitelist (must not leak) ─
 _rd = _so._redact
 check("redact: masks email addresses", "[email]" in _rd("reach me at admin@example.com now"))
