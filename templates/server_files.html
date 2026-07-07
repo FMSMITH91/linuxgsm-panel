@@ -24,6 +24,18 @@
     border: 1px dashed var(--border); border-radius: 8px; color: var(--text-muted);
   }
   .fb-toolbar code { background: transparent; padding: 0; }
+  /* Command cells wrap at word/token boundaries (not between every character). */
+  .cron-cmd { overflow-wrap: anywhere; white-space: pre-wrap; word-break: normal; }
+  /* On phones the 4-column cron table can't fit, so stack each entry as a card — the command
+     then gets the full width and wraps readably instead of shattering into ~7-char fragments. */
+  @media (max-width: 576px) {
+    #cron-table-wrap thead { display: none; }
+    #cron-table-wrap table, #cron-table-wrap tbody, #cron-table-wrap tr, #cron-table-wrap td { display: block; width: 100%; }
+    #cron-table-wrap tr { border: 1px solid var(--border); border-radius: 8px; padding: 6px 10px; margin-bottom: 8px; }
+    #cron-table-wrap td { white-space: normal !important; border: 0 !important; padding: 2px 0; }
+    #cron-table-wrap td[data-label]::before { content: attr(data-label) ": "; color: var(--text-muted); font-size: .62rem; text-transform: uppercase; letter-spacing: .03em; margin-right: 5px; }
+    #cron-table-wrap td.text-end { text-align: left !important; }
+  }
 </style>
 
 <div class="d-flex justify-content-between align-items-center mb-3">
@@ -519,9 +531,9 @@ function loadCron(){
           + '<button class="btn btn-sm btn-link text-danger p-0" data-cron-del title="Delete"><i class="bi bi-trash"></i></button>');
       rows += '<tr data-raw="'+escA(j.raw)+'" data-sched="'+escA(j.schedule)+'" data-cmd="'+escA(j.command)+'"'
         + (j.managed?' class="text-secondary"':'') + '>'
-        + '<td class="font-monospace" style="white-space:nowrap;">'+esc(j.schedule)+'</td>'
-        + '<td class="font-monospace" style="word-break:break-all;">'+esc(j.command)+'</td>'
-        + '<td style="white-space:nowrap;">'+cronLastRun(j)+'</td>'
+        + '<td data-label="Schedule" class="font-monospace" style="white-space:nowrap;">'+esc(j.schedule)+'</td>'
+        + '<td data-label="Command" class="font-monospace cron-cmd">'+esc(j.command)+'</td>'
+        + '<td data-label="Last run" style="white-space:nowrap;">'+cronLastRun(j)+'</td>'
         + '<td class="text-end" style="white-space:nowrap;">'+actions+'</td></tr>';
     });
     if(!(d.jobs||[]).length) rows='<tr><td colspan="4" class="text-secondary text-center py-3">No scheduled tasks yet.</td></tr>';
