@@ -1446,6 +1446,72 @@ def register_routes(app):
         except Exception:
             return jsonify({"success": False, "message": _log_and_generic("request failed")}), 500
 
+    def _bg_bulk_action(server_id, remote_id, action, actor_id):
+        """Run one server's action in the background for the bulk endpoint, so a request
+        that fans out to many servers returns immediately instead of blocking on each SSH
+        round trip. Re-fetches the rows inside the worker's app context (the request's
+        objects would be detached), then dispatches through the same _run_action path as
+        the single-server controls."""
+        _app = app
+
+        def _run():
+            try:
+                with _app.app_context():
+                    gs = db.session.get(GameServer, server_id)
+                    remote = db.session.get(RemoteServer, remote_id)
+                    actor = db.session.get(User, actor_id)
+                    if gs and remote:
+                        _run_action(gs, remote, action, actor)
+            except Exception:
+                app.logger.exception("bulk action %s failed for server %s", action, server_id)
+
+        threading.Thread(target=_run, daemon=True).start()
+
+    @app.route("/api/servers/bulk-action", methods=["POST"])
+    @login_required
+    def api_bulk_action():
+        """Run one action (start/stop/restart/update/…) across several servers at once.
+
+        Checks the caller's permission for the action once, then their access to EACH
+        selected server, and dispatches each in the background so the request returns
+        immediately — the dashboard's status poll reflects the outcome. Returns a
+        per-server queued/skipped list. The fan-out is capped so one request can't spawn
+        an unbounded number of SSH operations."""
+        data = _json_body()
+        action = (data.get("action") or "").strip()
+        raw_ids = data.get("server_ids")
+        if action not in RUNNABLE_ACTIONS:
+            return jsonify({"success": False, "message": f"Unsupported action: {action}"}), 400
+        if not isinstance(raw_ids, list) or not raw_ids:
+            return jsonify({"success": False, "message": "No servers selected"}), 400
+        if not current_user.is_superadmin and not has_permission(current_user, _perm_for_action(action)):
+            return jsonify({"success": False, "message": "Permission denied"}), 403
+
+        ids = []
+        for sid in raw_ids[:100]:   # cap the batch — bounds the SSH fan-out per request
+            try:
+                ids.append(int(sid))
+            except (TypeError, ValueError):
+                continue
+
+        queued, skipped = [], []
+        for sid in ids:
+            gs = db.session.get(GameServer, sid)
+            if gs is None:
+                skipped.append({"server_id": sid, "name": "#%d" % sid, "reason": "not found"})
+                continue
+            if not can_access_server(current_user, sid):
+                skipped.append({"server_id": sid, "name": gs.name, "reason": "no access"})
+                continue
+            _bg_bulk_action(gs.id, gs.remote_id, action, current_user.id)
+            queued.append({"server_id": sid, "name": gs.name})
+
+        if queued:
+            log_action(current_user, "bulk_%s" % action, target="%d server(s)" % len(queued),
+                       detail="ids=%s" % ",".join(str(q["server_id"]) for q in queued))
+        return jsonify({"success": bool(queued), "action": action,
+                        "queued": queued, "skipped": skipped})
+
     @app.route("/api/server/<int:server_id>/players")
     @login_required
     @server_access_required

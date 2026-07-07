@@ -491,6 +491,25 @@ try:
         check("migrate: repeated migrations stay a safe no-op",
               "backup_codes" in _ucols() and "totp_secret" in _ucols())
 
+    # ── Bulk action endpoint: guards + dispatch bookkeeping ───────
+    ba_bad = c.post("/api/servers/bulk-action", json={"action": "nope", "server_ids": [gs_id]})
+    check("bulk-action: unsupported action -> 400", ba_bad.status_code == 400)
+    ba_empty = c.post("/api/servers/bulk-action", json={"action": "restart", "server_ids": []})
+    check("bulk-action: empty selection -> 400", ba_empty.status_code == 400)
+    # An unknown id is reported as skipped and dispatches nothing (keeps this test free of
+    # real background SSH); with no valid ids left, success is False.
+    ba_unknown = c.post("/api/servers/bulk-action", json={"action": "start", "server_ids": [999999]})
+    _bu = ba_unknown.get_json() or {}
+    check("bulk-action: unknown id is skipped, nothing queued",
+          ba_unknown.status_code == 200 and _bu.get("success") is False
+          and len(_bu.get("queued", [])) == 0 and len(_bu.get("skipped", [])) == 1,
+          "got %s" % _bu)
+    # A caller lacking the action's permission is refused before anything is dispatched.
+    ba_perm = client_as(mru_id).post("/api/servers/bulk-action",
+                                     json={"action": "start", "server_ids": [gs_id]})
+    check("bulk-action: caller lacking the permission -> 403", ba_perm.status_code == 403,
+          "got %d" % ba_perm.status_code)
+
     # ── perf regression guard: NO N+1 on the hot paths ────────────
     # Seed 50 game servers across 5 hosts — enough that a per-server (rather than
     # per-host) query pattern would blow the budget — then assert the dashboard render

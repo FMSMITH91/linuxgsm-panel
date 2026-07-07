@@ -89,6 +89,7 @@
       <table class="table table-hover mb-0">
         <thead>
           <tr>
+            {% if can_control %}<th style="width:1%;"><input type="checkbox" class="form-check-input srv-check-all" onclick="toggleAll(this)" title="Select all on this host" aria-label="Select all servers on this host"></th>{% endif %}
             <th>Server</th>
             <th>Type</th>
             <th>Status</th>
@@ -99,6 +100,7 @@
         <tbody>
           {% for srv in remote_servers %}
           <tr>
+            {% if can_control %}<td><input type="checkbox" class="form-check-input srv-check" value="{{ srv.id }}" data-name="{{ srv.name }}" aria-label="Select {{ srv.name }}"></td>{% endif %}
             <td>
               <strong>{{ srv.name }}</strong>
               <span class="text-secondary d-block" style="font-size: .75rem;">{{ srv.short_name }}</span>
@@ -133,6 +135,23 @@
 {% endif %}
 {% endfor %}
 <div id="srv-none" class="card" style="display:none;"><div class="card-body text-center text-secondary py-4">No servers match your filter.</div></div>
+
+{% if can_control %}
+<!-- Bulk action bar: appears only while one or more servers are selected. Sticks to the
+     bottom of the viewport so it stays reachable when scrolling a long server list. -->
+<div id="bulk-bar" class="card shadow-lg" style="display:none; position:sticky; bottom:1rem; z-index:1020; border:1px solid var(--bs-border-color);">
+  <div class="card-body py-2 d-flex align-items-center gap-2 flex-wrap">
+    <span class="fw-bold me-1"><i class="bi bi-check2-square"></i> <span id="bulk-count">0</span> selected</span>
+    <button class="btn btn-outline-success btn-sm" onclick="bulkAction('start')"><i class="bi bi-play-fill"></i> Start</button>
+    <button class="btn btn-outline-warning btn-sm" onclick="bulkAction('restart')"><i class="bi bi-arrow-repeat"></i> Restart</button>
+    <button class="btn btn-outline-danger btn-sm" onclick="bulkAction('stop')"><i class="bi bi-stop-fill"></i> Stop</button>
+    {% if current_user.is_superadmin or has_permission('update_server') %}
+    <button class="btn btn-outline-info btn-sm" onclick="bulkAction('update')"><i class="bi bi-download"></i> Update</button>
+    {% endif %}
+    <button class="btn btn-link btn-sm text-secondary text-decoration-none ms-auto" onclick="clearSelection()">Clear</button>
+  </div>
+</div>
+{% endif %}
 
 {% endif %}
 
@@ -250,6 +269,62 @@ function doAction(id, action, btn) {
   .catch(() => toast('Action failed', 'danger'))
   .finally(() => { btn.disabled = false; btn.innerHTML = original; });
 }
+
+// ── Bulk actions ──────────────────────────────────────────────
+// Run one action across every checked server in a single request. The server
+// dispatches each in the background, so this returns immediately and the live
+// status poll below reflects the outcome per row.
+function selectedIds() {
+  return Array.prototype.map.call(
+    document.querySelectorAll('.srv-check:checked'), function (c) { return c.value; });
+}
+function updateBulkBar() {
+  var bar = document.getElementById('bulk-bar');
+  if (!bar) return;
+  var n = selectedIds().length;
+  document.getElementById('bulk-count').textContent = n;
+  bar.style.display = n ? '' : 'none';
+}
+function toggleAll(cb) {
+  var card = cb.closest('.server-remote-card');
+  if (!card) return;
+  card.querySelectorAll('.srv-check').forEach(function (c) {
+    if (c.closest('tr').style.display !== 'none') c.checked = cb.checked;   // visible rows only
+  });
+  updateBulkBar();
+}
+function clearSelection() {
+  document.querySelectorAll('.srv-check, .srv-check-all').forEach(function (c) { c.checked = false; });
+  updateBulkBar();
+}
+function bulkAction(action) {
+  var ids = selectedIds().map(Number);
+  if (!ids.length) return;
+  if ((action === 'stop' || action === 'update') &&
+      !confirm('Run "' + action + '" on ' + ids.length + ' server' + (ids.length === 1 ? '' : 's') + '?')) return;
+  var bar = document.getElementById('bulk-bar');
+  var btns = bar.querySelectorAll('button');
+  btns.forEach(function (b) { b.disabled = true; });
+  fetch(MOUNT + '/api/servers/bulk-action', {
+    method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ action: action, server_ids: ids })
+  })
+    .then(r => r.json())
+    .then(d => {
+      var n = (d.queued || []).length, skip = (d.skipped || []).length;
+      var extra = skip ? ' (' + skip + ' skipped)' : '';
+      if (n) toast(titleCase(action) + ' started on ' + n + ' server' + (n === 1 ? '' : 's') + extra, 'success');
+      else toast((d.message || 'Nothing to do') + extra, 'warning');
+      clearSelection();
+      setTimeout(refreshStatus, 1500);
+    })
+    .catch(() => toast('Bulk action failed', 'danger'))
+    .finally(() => { btns.forEach(function (b) { b.disabled = false; }); });
+}
+// Keep the bar's count in sync as individual boxes are toggled.
+document.addEventListener('change', function (e) {
+  if (e.target && e.target.classList && e.target.classList.contains('srv-check')) updateBulkBar();
+});
 
 // Minimal toast helper.
 // Uses the global window.toast (base.html) — one implementation, consistent independent timing.
