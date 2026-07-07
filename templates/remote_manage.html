@@ -35,8 +35,17 @@
 </div>
 {% endif %}
 
+<!-- Section tabs: group the cards so the page isn't one long wall. Cards are tagged with
+     data-mtab and filtered client-side (see the mtab script), so every card keeps its exact
+     markup, conditionals and JS — only visibility changes. -->
+<ul class="nav nav-pills mb-3 flex-nowrap overflow-auto" id="mtab-nav">
+  <li class="nav-item"><button type="button" class="nav-link active" data-mtab-btn="overview"><i class="bi bi-speedometer2"></i> Overview</button></li>
+  <li class="nav-item"><button type="button" class="nav-link" data-mtab-btn="controls"><i class="bi bi-sliders"></i> Host Controls</button></li>
+  <li class="nav-item"><button type="button" class="nav-link" data-mtab-btn="maintenance"><i class="bi bi-tools"></i> Maintenance</button></li>
+</ul>
+
 <!-- System Specs (static hardware & OS) -->
-<div class="card mb-3">
+<div class="card mb-3" data-mtab="overview">
   <div class="card-header"><i class="bi bi-pc-display-horizontal"></i> System Specs</div>
   <div class="card-body">
     <div class="row g-2" id="specs-body">
@@ -46,7 +55,7 @@
 </div>
 
 <!-- Live Resources (realtime bars — same as the Panel Server) -->
-<div class="card mb-3">
+<div class="card mb-3" data-mtab="overview">
   <div class="card-header d-flex justify-content-between align-items-center">
     <span><i class="bi bi-cpu-fill"></i> Live Resources</span>
     <span class="text-secondary" style="font-size:.7rem;"><i class="bi bi-broadcast"></i> realtime</span>
@@ -99,7 +108,7 @@
   </div>
 </div>
 
-<div class="row">
+<div class="row" data-mtab="controls">
   <!-- OS Updates -->
   <div class="col-md-4 mb-3">
     <div class="card h-100">
@@ -142,7 +151,7 @@
 
 {% if remote.is_local and current_user.is_superadmin %}
 <!-- Panel Updates (panel host only) -->
-<div class="card mb-3" id="updates">
+<div class="card mb-3" id="updates" data-mtab="maintenance">
   <div class="card-header d-flex justify-content-between align-items-center">
     <span><i class="bi bi-arrow-up-circle"></i> Panel Updates</span>
     <span class="small text-secondary">LinuxGSM Panel <strong id="pu-current">v{{ panel_version }}</strong></span>
@@ -166,7 +175,7 @@
 </div>
 
 <!-- Backups (panel host only) -->
-<div class="card mb-3" id="backups">
+<div class="card mb-3" id="backups" data-mtab="maintenance">
   <div class="card-header d-flex justify-content-between align-items-center">
     <span><i class="bi bi-archive"></i> Backups</span>
     <button class="btn btn-sm btn-success" onclick="createBackup(this)"><i class="bi bi-plus-circle"></i> Back up now</button>
@@ -250,7 +259,7 @@
 </div>
 
 <!-- Diagnostics & File Integrity (panel host only) -->
-<div class="card mb-3" id="diagnostics">
+<div class="card mb-3" id="diagnostics" data-mtab="maintenance">
   <div class="card-header d-flex justify-content-between align-items-center">
     <span><i class="bi bi-clipboard2-pulse"></i> Diagnostics &amp; File Integrity</span>
     <span id="diag-summary" class="badge bg-secondary">not run</span>
@@ -356,7 +365,7 @@
 {% endif %}
 
 <!-- Ubuntu Pro -->
-<div class="card mb-3">
+<div class="card mb-3" data-mtab="maintenance">
   <div class="card-header"><i class="bi bi-shield-shaded"></i> Ubuntu Pro <span class="text-secondary ms-1" style="font-size:.7rem;font-weight:400;">free security updates (ESM) &amp; Livepatch</span></div>
   <div class="card-body">
     <div id="ubuntu-pro-body"><div class="text-secondary small">Checking Ubuntu Pro…</div></div>
@@ -364,7 +373,7 @@
 </div>
 
 <!-- Connection & SSH -->
-<div class="card mb-3">
+<div class="card mb-3" data-mtab="controls">
   <div class="card-header"><i class="bi bi-shield-lock"></i> Connection &amp; SSH</div>
   <div class="card-body">
     {% if remote.is_local %}
@@ -499,7 +508,7 @@
 </div>
 
 {% if remote.games %}
-<div class="card">
+<div class="card" data-mtab="overview">
   <div class="card-header"><i class="bi bi-controller"></i> Game Servers on this host</div>
   <div class="card-body p-0">
     <div class="table-responsive">
@@ -548,6 +557,32 @@
 <script>
 var REMOTE_ID = {{ remote.id }};
 var IS_LOCAL = {{ 'true' if remote.is_local else 'false' }};
+
+// ── Section tabs: show only the cards for the selected group (Overview / Host Controls /
+// Maintenance). Cards keep their place/markup/JS; we just toggle visibility. The sidebar's
+// "update available" badge links to #updates, so a hash pointing at a card opens its tab and
+// scrolls to it. ──
+(function(){
+  var nav = document.getElementById('mtab-nav'); if(!nav) return;
+  var TABS = ['overview','controls','maintenance'];
+  var CARD_TAB = {updates:'maintenance', backups:'maintenance', diagnostics:'maintenance'};
+  function show(tab){
+    document.querySelectorAll('[data-mtab]').forEach(function(el){
+      el.style.display = (el.getAttribute('data-mtab') === tab) ? '' : 'none';
+    });
+    nav.querySelectorAll('[data-mtab-btn]').forEach(function(b){
+      b.classList.toggle('active', b.getAttribute('data-mtab-btn') === tab);
+    });
+    try { history.replaceState(null, '', '#' + tab); } catch(e){}
+  }
+  nav.addEventListener('click', function(e){
+    var b = e.target.closest('[data-mtab-btn]'); if(b) show(b.getAttribute('data-mtab-btn'));
+  });
+  var h = (location.hash || '').replace('#','');
+  if (TABS.indexOf(h) >= 0) { show(h); }
+  else if (CARD_TAB[h]) { show(CARD_TAB[h]); var el = document.getElementById(h); if(el) el.scrollIntoView(); }
+  else { show('overview'); }
+})();
 // Click a game server's connect address to copy the full ip:port.
 document.addEventListener('click', function(ev){
   var el = ev.target.closest('.copy-addr'); if(!el) return;
