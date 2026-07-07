@@ -1780,21 +1780,20 @@ _SPECS_CMD = (
 )
 
 
-_specs_cache = {}   # key -> (expiry_epoch, result); hardware/OS specs are effectively static
-_SPECS_TTL = 3600
+_specs_cache = {}   # key -> result; hardware/OS specs don't change without a reboot (which restarts us)
 
 
-def host_specs(server):
-    """Static hardware/OS specs for a host. Cached ~1h — this runs lscpu/systemd-detect-virt/df,
-    and the answer doesn't change between page loads, so there's no reason to re-probe every time."""
+def host_specs(server, force=False):
+    """Static hardware/OS specs for a host (OS, CPU, cores, RAM, disk, kernel, arch, virt). Probed
+    ONCE and cached for the panel's whole lifetime — these don't change while the machine is up, and
+    a reboot/resize restarts the panel anyway, so there's no periodic re-check. force=True re-probes
+    (e.g. after resizing the box without a reboot)."""
     key = _pro_key(server)
-    now = time.time()
-    cached = _specs_cache.get(key)
-    if cached and cached[0] > now:
-        return cached[1]
+    if not force and key in _specs_cache:
+        return _specs_cache[key]
     result = _compute_host_specs(server)
-    if not result.get("error"):     # don't pin a transient failure for an hour
-        _specs_cache[key] = (now + _SPECS_TTL, result)
+    if not result.get("error"):     # cache only a good read; a transient failure retries next time
+        _specs_cache[key] = result
     return result
 
 
