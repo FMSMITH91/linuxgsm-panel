@@ -958,7 +958,7 @@ try:
     sm.run_command = _procount
     sm._pro_status_cache.clear()
     _psrv = NS(id=42, host="h")
-    _r1 = sm.pro_status(_psrv)
+    sm.pro_status(_psrv)         # primes the cache; return value isn't checked
     _r2 = sm.pro_status(_psrv)   # served from cache — no second run_command
     check("pro_status: cached (one run_command for two reads)", _pro_n["n"] == 1 and _r2["attached"] is True)
     sm.pro_status(_psrv, force=True)

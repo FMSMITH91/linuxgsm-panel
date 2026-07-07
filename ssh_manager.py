@@ -230,6 +230,16 @@ def get_connection(server, force_new=False):
         _persist_host_key(server, policy.captured)
 
     with _conn_lock:
+        existing = _connections.get(key)
+        if existing is not None and not force_new:
+            # Another green thread finished connecting to the same host while we were busy
+            # doing our own (yielding) network I/O. Keep theirs and close ours so the extra
+            # client doesn't leak a socket/transport thread.
+            try:
+                client.close()
+            except Exception:  # nosec B110
+                _log.debug("closing redundant duplicate connection", exc_info=True)
+            return existing
         _connections[key] = client
 
     return client

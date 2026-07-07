@@ -2969,10 +2969,24 @@ def register_routes(app):
         force = bool(_json_body().get("force"))
         if not _full_backup_lock.acquire(blocking=False):
             return jsonify({"success": False, "message": "A backup is already running — try again in a moment."}), 200
-        keep = bk.get_full_settings()["keep"]
-        gname = gs.name   # plain string for logging; the ORM objects are re-fetched in the worker
-        _game_backup_status[server_id] = {"running": True, "ok": None, "msg": "", "ts": time.time()}
+        # From here the lock is HELD; the worker's finally releases it. But if we fail to even hand
+        # off to the worker (config read throws, thread can't start), release it ourselves — a leaked
+        # lock would wedge ALL backups until a panel restart.
+        try:
+            keep = bk.get_full_settings()["keep"]
+            gname = gs.name   # plain string for logging; the ORM objects are re-fetched in the worker
+            _game_backup_status[server_id] = {"running": True, "ok": None, "msg": "", "ts": time.time()}
+            _start_backup_worker(server_id, gname, keep, force)
+        except Exception:
+            _full_backup_lock.release()
+            _game_backup_status[server_id] = {"running": False, "ok": False,
+                                              "msg": "couldn't start the backup", "ts": time.time()}
+            return jsonify({"success": False, "message": _log_and_generic("could not start backup")}), 500
+        log_action(current_user, "game_backup", target=gname, success=True)
+        return jsonify({"success": True, "running": True,
+                        "message": "Backing up " + gname + " — it'll appear below when done."})
 
+    def _start_backup_worker(server_id, gname, keep, force):
         def _worker():
             # Re-fetch inside a fresh app context: the request's DB session is gone by the time this
             # thread runs, so ORM objects captured outside would raise DetachedInstanceError the
@@ -3003,9 +3017,6 @@ def register_routes(app):
                 _full_backup_lock.release()
 
         threading.Thread(target=_worker, daemon=True).start()
-        log_action(current_user, "game_backup", target=gname, success=True)
-        return jsonify({"success": True, "running": True,
-                        "message": "Backing up " + gname + " — it'll appear below when done."})
 
     def _find_game_backup(gs, name):
         """Return the backup dict whose name matches `name` from the server's real backup list, or
