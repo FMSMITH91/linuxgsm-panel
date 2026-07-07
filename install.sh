@@ -322,20 +322,28 @@ ensure_gamedig() {
     fi
     if [ "${nmaj:-0}" -lt 18 ] 2>/dev/null; then
         info "Installing Node.js LTS (gamedig needs it for player queries)…"
-        if curl -fsSL --connect-timeout 15 --max-time 120 https://deb.nodesource.com/setup_lts.x \
-                | ${S} bash - >/dev/null 2>&1; then
+        # Download the NodeSource setup script to a file and run it, rather than piping curl
+        # straight into a shell — one less way for a hijacked fetch to run unseen code inline.
+        local ns
+        ns="$(mktemp 2>/dev/null || echo "/tmp/nodesource-setup.$$")"
+        if curl -fsSL --connect-timeout 15 --max-time 120 \
+                https://deb.nodesource.com/setup_lts.x -o "${ns}" 2>/dev/null; then
+            ${S} bash "${ns}" >/dev/null 2>&1 || true
             ${S} apt-get install -y nodejs >/dev/null 2>&1 \
                 || warn "Node.js LTS install failed — player queries stay unavailable until installed."
         else
             warn "Node.js LTS install failed — player queries stay unavailable until it's installed."
         fi
+        rm -f "${ns}"
     fi
     if command -v npm >/dev/null 2>&1 && ! command -v gamedig >/dev/null 2>&1; then
         info "Installing gamedig globally…"
         ${S} npm install -g gamedig >/dev/null 2>&1 \
             || warn "gamedig install failed — player queries unavailable."
     fi
-    command -v gamedig >/dev/null 2>&1 && ok "gamedig ready for player queries" || true
+    if command -v gamedig >/dev/null 2>&1; then
+        ok "gamedig ready for player queries"
+    fi
     return 0
 }
 
