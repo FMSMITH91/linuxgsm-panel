@@ -30,6 +30,14 @@ def eq(name, got, want):
     check(name, got == want, "got %r want %r" % (got, want))
 
 
+# ── perf guard: importing `auth` must NOT compute the ~400ms bcrypt "dummy" hash.
+#    It's lazy (computed on the first bad-login attempt, warmed off-thread by init_auth)
+#    so panel startup stays fast — a regression here re-adds ~0.4s to every boot. This
+#    runs BEFORE the dummy_password_check() call later in this file, which is what
+#    actually populates it. ──
+check("perf: auth import does no bcrypt work (dummy hash stays lazy)",
+      sys.modules["auth"]._DUMMY_BCRYPT_HASH is None)
+
 # ── password policy ───────────────────────────────────────────
 check("weak: too short", password_problem("Ab1!") is not None)
 check("weak: no upper", password_problem("test1234!@") is not None)
@@ -826,6 +834,27 @@ try:
     check("host_has_ip: rejects an address not on the host", _so.host_has_ip("10.0.0.9") is False)
 finally:
     _so._run = _orig_sorun2
+
+# ── perf guard: the /server-management host probe (sudo ufw + tailscale + apt, ~1.2s of
+#    CPU across several subprocesses) is cached for _STATUS_TTL, so a page render and its
+#    follow-up poll don't each re-run it. Mock the single subprocess entrypoint and count
+#    how often it's actually hit across cold call / cached call / after invalidation. ──
+_orig_ss_run = _so._run
+_ss = {"n": 0}
+try:
+    _so._run = lambda c, **k: (_ss.__setitem__("n", _ss["n"] + 1), ("", "", 0))[1]
+    _so._status_cache["data"] = None
+    _so.get_server_status(force=True)          # cold: must probe the host
+    check("perf: get_server_status probes the host on a cold call", _ss["n"] > 0)
+    _ss["n"] = 0
+    _so.get_server_status()                    # within TTL: served from cache, no subprocess
+    check("perf: get_server_status is cached (no host re-probe on the next render)", _ss["n"] == 0)
+    _so.invalidate_server_status()
+    _so.get_server_status()                    # cache dropped: must probe again
+    check("perf: invalidate_server_status forces a fresh probe", _ss["n"] > 0)
+finally:
+    _so._run = _orig_ss_run
+    _so._status_cache["data"] = None
 
 _orig_popen = _so.subprocess.Popen
 _cap = {}

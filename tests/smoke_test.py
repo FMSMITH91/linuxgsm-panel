@@ -491,6 +491,58 @@ try:
         check("migrate: repeated migrations stay a safe no-op",
               "backup_codes" in _ucols() and "totp_secret" in _ucols())
 
+    # ── perf regression guard: NO N+1 on the hot paths ────────────
+    # Seed 50 game servers across 5 hosts — enough that a per-server (rather than
+    # per-host) query pattern would blow the budget — then assert the dashboard render
+    # and the /api/servers status poll each stay within a small, host-bounded query
+    # budget. This is the class of regression that let /api/servers balloon to 53
+    # queries before the joinedload fix (now ~3); a budget here fails the build if it
+    # ever comes back. run_command is stubbed so the port scan does no real SSH.
+    from sqlalchemy import event as _sa_event
+    _appmod = sys.modules["app"]
+    with app.app_context():
+        for _r in range(5):
+            _rem = RemoteServer(name="qc-host%d" % _r, host="10.20.0.%d" % _r, port=22,
+                                username="root", auth_method="key", auth_credential="",
+                                public_ip="203.0.113.%d" % _r)
+            db.session.add(_rem)
+            db.session.flush()
+            for _g in range(10):
+                db.session.add(GameServer(remote_id=_rem.id, name="qc%d-%d" % (_r, _g),
+                                          short_name="qc%d_%d" % (_r, _g), game_type="gmod",
+                                          port=27100 + _g, installed=True, status="offline"))
+        db.session.commit()
+        _seeded = GameServer.query.count()
+        _engine = db.engine
+
+    _Q = {"n": 0}
+
+    def _count_query(*_a, **_k):
+        _Q["n"] += 1
+
+    _orig_rc = _appmod.run_command
+    _appmod.run_command = lambda *a, **k: ("", "", 0)   # port scan: no real SSH, no matches
+    _sa_event.listen(_engine, "after_cursor_execute", _count_query)
+    try:
+        def _qcount(path):
+            _appmod._port_scan_cache.clear()   # force the (stubbed) scan each time, for consistency
+            _Q["n"] = 0
+            resp = c.get(path)
+            return _Q["n"], resp.status_code
+
+        c.get("/api/servers")                  # warm one-time caches so the count is steady
+        _api_q, _api_code = _qcount("/api/servers")
+        _dash_q, _dash_code = _qcount("/")
+        check("perf: /api/servers renders with 50 servers", _api_code == 200, "got %d" % _api_code)
+        check("perf: /api/servers query count is host-bounded, not per-server (no N+1)",
+              _api_q <= 15, "%d queries for %d servers" % (_api_q, _seeded))
+        check("perf: dashboard renders with 50 servers", _dash_code == 200, "got %d" % _dash_code)
+        check("perf: dashboard query count stays small (no N+1)",
+              _dash_q <= 20, "%d queries for %d servers" % (_dash_q, _seeded))
+    finally:
+        _sa_event.remove(_engine, "after_cursor_execute", _count_query)
+        _appmod.run_command = _orig_rc
+
 finally:
     passed = sum(1 for ok, _, _ in results if ok)
     for ok, name, detail in results:
