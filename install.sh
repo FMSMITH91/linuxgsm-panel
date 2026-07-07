@@ -290,6 +290,20 @@ PRIOEOF
     svc daemon-reload || true
 }
 
+# Prefer RAM over swap on small game hosts. The default vm.swappiness=60 makes the kernel swap out
+# pages the game/panel still want even when RAM is free, adding disk-latency stalls. 10 keeps active
+# memory in RAM but still lets swap save us from OOM under real pressure (so we DON'T disable swap).
+# Root-only (writes /etc/sysctl.d); namespaced file so it's easy to find/remove. Idempotent.
+ensure_system_tuning() {
+    [ "${RUN_AS_ROOT}" -eq 1 ] || return 0
+    cat > /etc/sysctl.d/99-linuxgsm-panel.conf <<'SYSCTLEOF'
+# LinuxGSM Panel host tuning — prefer RAM over swap (swap stays as an OOM safety net, just used less).
+vm.swappiness=10
+vm.vfs_cache_pressure=50
+SYSCTLEOF
+    sysctl --system >/dev/null 2>&1 || true
+}
+
 # ── Is this a fresh install or an update of an existing one? ──
 IS_UPDATE=0
 if [ -f "${PANEL_DIR}/app.py" ] && [ -f "${UNIT_FILE}" ]; then
@@ -340,6 +354,7 @@ if [ "${IS_UPDATE}" -eq 1 ]; then
 
     info "[4/5] Restarting the service…"
     ensure_service_tuning   # refresh the low-priority drop-in (existing installs get it on update)
+    ensure_system_tuning    # prefer RAM over swap (applied on update too)
     svc daemon-reload || true
     svc restart linuxgsm-panel.service || true
     # Ensure the path-independent recovery command exists on existing installs too.
@@ -559,6 +574,7 @@ SERVICEEOF
     LOG_HINT="journalctl --user -u linuxgsm-panel -f"
 fi
 ensure_service_tuning                          # low CPU/IO priority so the panel yields to games
+ensure_system_tuning                           # prefer RAM over swap (vm.swappiness)
 svc restart linuxgsm-panel.service || true     # apply the priority drop-in just written
 ok "Service registered and started (running as '${PANEL_USER}')"
 
