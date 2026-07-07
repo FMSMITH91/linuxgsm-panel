@@ -270,6 +270,7 @@ class GameServer(db.Model):
     game_display = db.Column(db.String(120), default="")
     port = db.Column(db.Integer, nullable=False)
     query_port = db.Column(db.Integer, nullable=True)
+    query_type = db.Column(db.String(40), nullable=True)  # gamedig type override (else GAMEDIG_TYPE map)
     status = db.Column(db.String(32), default="offline")
     installed = db.Column(db.Boolean, default=False)
     autostart = db.Column(db.Boolean, default=True)
@@ -375,6 +376,7 @@ def _run_light_migrations():
     existing = {t: {c["name"] for c in insp.get_columns(t)} for t in insp.get_table_names()}
     wanted = {
         ("game_server", "commands"): "ALTER TABLE game_server ADD COLUMN commands TEXT DEFAULT '[]'",
+        ("game_server", "query_type"): "ALTER TABLE game_server ADD COLUMN query_type VARCHAR(40)",
         ("game_server", "daily_restart"): "ALTER TABLE game_server ADD COLUMN daily_restart BOOLEAN DEFAULT 0",
         ("game_server", "restart_pending"): "ALTER TABLE game_server ADD COLUMN restart_pending BOOLEAN DEFAULT 0",
         ("game_server", "backup_pending"): "ALTER TABLE game_server ADD COLUMN backup_pending BOOLEAN DEFAULT 0",

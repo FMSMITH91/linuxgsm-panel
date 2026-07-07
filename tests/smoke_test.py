@@ -570,6 +570,18 @@ try:
     check("moderate: caller without moderate/console permission -> 403",
           mod_denied.status_code == 403, "got %d" % mod_denied.status_code)
 
+    # ── gamedig query-type override (fix games the built-in map gets wrong, e.g. cod) ──
+    qt = c.post("/api/server/%d/query-type" % gs_id, json={"query_type": "cod"})
+    _qt = qt.get_json() or {}
+    check("query-type: an override can be set and takes effect",
+          qt.status_code == 200 and _qt.get("success") is True and _qt.get("query_type") == "cod"
+          and _qt.get("queryable") is True, "got %d %s" % (qt.status_code, _qt))
+    qt_bad = c.post("/api/server/%d/query-type" % gs_id, json={"query_type": "bad; rm -rf"})
+    check("query-type: an unsafe/invalid type is rejected (400)", qt_bad.status_code == 400)
+    qt_clear = c.post("/api/server/%d/query-type" % gs_id, json={"query_type": ""})
+    check("query-type: blank clears the override",
+          qt_clear.status_code == 200 and (qt_clear.get_json() or {}).get("query_type") == "")
+
     # ── Discover / import existing LinuxGSM servers on a host ──
     dsc = c.get("/api/remote/%d/discover" % remote_id)
     check("discover: superadmin gets a servers list (SSH to the fixture host yields none)",

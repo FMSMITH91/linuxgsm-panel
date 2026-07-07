@@ -1576,6 +1576,18 @@ try:
 finally:
     sm.send_console_command = _orig_scc
 
+# ── gamedig query type: per-server override wins over the built-in map, sanitized ──
+check("query-type: an explicit override wins over the built-in map",
+      sm._gamedig_type("cod", "cod") == "cod")
+check("query-type: unmapped game with no override -> '' (not queryable)",
+      sm._gamedig_type("cod", None) == "")
+check("query-type: a mapped game with no override uses the map",
+      sm._gamedig_type("gmod", None) == "garrysmod")
+check("query-type: the override is sanitized to a gamedig-safe charset",
+      sm._gamedig_type("cod", "co d;rm -rf") == "codrm-rf")
+check("query-type: cod becomes queryable once an override is set",
+      sm.is_player_queryable("cod", None) is False and sm.is_player_queryable("cod", "cod") is True)
+
 # ── db_maintenance: offline SQLite check / repair / optimize (updater + health card) ──
 import db_maintenance as _dbm
 import sqlite3 as _sq3

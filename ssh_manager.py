@@ -1368,13 +1368,22 @@ def _ensure_backup_headroom(server, user, keep):
     return ""
 
 
-def player_count(server, user, game_type=None, port=None):
+def _gamedig_type(game_type, query_type=None):
+    """The gamedig `--type` to use for a server: an explicit per-server override when set (the
+    panel's GAMEDIG_TYPE map is only a default and can be wrong/missing, e.g. cod), else the map.
+    The override is sanitised to a safe charset here too, so it can never break out of the query
+    command regardless of upstream validation. Returns '' when the game isn't queryable."""
+    qt = re.sub(r"[^a-z0-9_-]", "", (query_type or "").strip().lower())[:40]
+    return qt or GAMEDIG_TYPE.get(game_type or "", "")
+
+
+def player_count(server, user, game_type=None, port=None, query_type=None):
     """Best-effort CURRENT player count for a running instance, via gamedig (the same
     tool the empty-only daily restart uses). Returns an int, or None when the game
-    isn't queryable (no gamedig mapping / no port) or the query fails — callers treat
+    isn't queryable (no gamedig type / no port) or the query fails — callers treat
     None as 'unknown' and don't block on it. gamedig is a bare command on PATH exactly
     as the restart cron invokes it (installed globally via npm at setup)."""
-    gdtype = GAMEDIG_TYPE.get(game_type or "", "")
+    gdtype = _gamedig_type(game_type, query_type)
     if not gdtype or not port:
         return None
     cmd = f"gamedig --type {gdtype} 127.0.0.1:{int(port)} 2>/dev/null | jq -r '.players|length' 2>/dev/null"
@@ -1388,11 +1397,11 @@ def player_count(server, user, game_type=None, port=None):
     return int(s)
 
 
-def player_list(server, user, game_type=None, port=None):
+def player_list(server, user, game_type=None, port=None, query_type=None):
     """Best-effort list of connected players via gamedig. Returns [{name, score, time}] (score/time
     may be None depending on the game), or [] when the game isn't queryable or is empty. Never
     raises. Same query path as player_count — just keeping the names instead of only the count."""
-    gdtype = GAMEDIG_TYPE.get(game_type or "", "")
+    gdtype = _gamedig_type(game_type, query_type)
     if not gdtype or not port:
         return []
     jqf = ('[.players[] | {name:(.name // ""), score:(.raw.score // .score // null), '
@@ -1430,9 +1439,10 @@ _MOD_SOURCE = frozenset({                                                       
 })
 
 
-def is_player_queryable(game_type):
-    """True if the panel can query a live player list for this game (has a gamedig mapping)."""
-    return bool(GAMEDIG_TYPE.get(game_type or ""))
+def is_player_queryable(game_type, query_type=None):
+    """True if the panel can query a live player list for this game (has a gamedig type, either a
+    per-server override or the built-in map)."""
+    return bool(_gamedig_type(game_type, query_type))
 
 
 def moderation_caps(game_type):

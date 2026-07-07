@@ -87,6 +87,7 @@ from ssh_manager import (
     get_server_status, run_as_game_user, send_console_command,
     list_server_commands, server_live_metrics, remote_public_ip,
     discover_linuxgsm_servers, player_list, moderation_caps, moderate, is_player_queryable,
+    GAMEDIG_TYPE as GAMEDIG_TYPE_MAP,
     remote_live_metrics, host_specs, pro_status, pro_attach,
     pro_service, pro_detach, set_autostart, install_game_cron, set_daily_restart,
     list_cron_jobs, add_cron_job, update_cron_job, delete_cron_job, upgrade_managed_cron_tracking,
@@ -1551,7 +1552,7 @@ def register_routes(app):
         restart that would disconnect players."""
         gs = get_game(server_id)
         try:
-            pc = sm_player_count(gs.remote, gs.short_name, gs.game_type, gs.port)
+            pc = sm_player_count(gs.remote, gs.short_name, gs.game_type, gs.port, gs.query_type)
         except Exception:
             pc = None
         return jsonify({"players": pc})
@@ -1564,11 +1565,35 @@ def register_routes(app):
         which moderation actions this game supports, for the Players panel."""
         gs = get_game(server_id)
         try:
-            players = player_list(gs.remote, gs.short_name, gs.game_type, gs.port)
+            players = player_list(gs.remote, gs.short_name, gs.game_type, gs.port, gs.query_type)
         except Exception:
             players = []
         return jsonify({"players": players, "caps": moderation_caps(gs.game_type),
-                        "queryable": is_player_queryable(gs.game_type)})
+                        "queryable": is_player_queryable(gs.game_type, gs.query_type),
+                        "query_type": gs.query_type or "",
+                        "default_query": GAMEDIG_TYPE_MAP.get(gs.game_type, "")})
+
+    @app.route("/api/server/<int:server_id>/query-type", methods=["POST"])
+    @login_required
+    @server_access_required
+    def api_server_query_type(server_id):
+        """Override (or clear) the gamedig query type for a server, so games the built-in map gets
+        wrong or doesn't cover (e.g. cod) can still be queried. Validated to a gamedig-safe charset.
+        Requires the same permission as sending console commands / moderating."""
+        gs = get_game(server_id)
+        if not (current_user.is_superadmin or has_permission(current_user, MODERATE_SERVER)
+                or has_permission(current_user, SEND_COMMAND)
+                or has_permission(current_user, MANAGE_SERVERS)):
+            return jsonify({"success": False, "message": "Permission denied"}), 403
+        raw = (_json_body().get("query_type") or "").strip().lower()
+        if raw and not re.fullmatch(r"[a-z0-9][a-z0-9_-]{0,39}", raw):
+            return jsonify({"success": False, "message": "Invalid query type — use letters, "
+                            "numbers, - or _ (see the gamedig games list)."}), 400
+        gs.query_type = raw or None
+        db.session.commit()
+        log_action(current_user, "set_query_type", target=gs.name, detail=raw or "(default)")
+        return jsonify({"success": True, "query_type": gs.query_type or "",
+                        "queryable": is_player_queryable(gs.game_type, gs.query_type)})
 
     @app.route("/api/server/<int:server_id>/moderate", methods=["POST"])
     @login_required
