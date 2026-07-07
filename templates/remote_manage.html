@@ -805,6 +805,13 @@ function renderUpdate(d){
     var ul=document.getElementById('pu-changes-list'); ul.innerHTML='';
     (d.changes||[]).forEach(function(c){ var li=document.createElement('li'); li.textContent=c; ul.appendChild(li); });
     changes.style.display=(d.changes&&d.changes.length)?'':'none';
+  } else if(d.behind>0){
+    // A newer commit exists but it hasn't cleared CI yet (or its checks failed), so we
+    // don't offer it. Show why rather than a misleading "you're up to date".
+    var pending = d.ci_state!=='failing';
+    st.innerHTML='<span class="'+(pending?'text-info':'text-danger')+'"><i class="bi bi-'+(pending?'hourglass-split':'exclamation-triangle')+'"></i> '
+      +(d.message||(pending?'An update is being verified…':'The latest commit didn\'t pass its checks.'))+'</span>';
+    btn.style.display='none'; changes.style.display='none';
   } else {
     st.innerHTML='<span class="text-success"><i class="bi bi-check-circle"></i> You\'re on the latest version'+(d.current_sha?' ('+d.current_sha+')':'')+'.</span>';
     btn.style.display='none'; changes.style.display='none';

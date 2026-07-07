@@ -1085,6 +1085,47 @@ _secret_keys = {"secret_key", "cred_key", "secret", "credentials", "auth_credent
 check("debug whitelist excludes every secret key",
       not (set(_so._DEBUG_CONFIG_KEYS) & _secret_keys))
 
+# ── panel self-update CI gate: don't offer an update until its CI has passed ──
+# _repo_slug must parse both HTTPS and SSH remote URLs (so the check works on forks).
+_orig_rslug_git = _so._git
+try:
+    def _slug_git(args, timeout=45):
+        return ("https://github.com/FMSMITH91/linuxgsm-panel.git\n", "", 0)
+    _so._git = _slug_git
+    eq("update: repo slug parsed from origin URL", _so._repo_slug(), "FMSMITH91/linuxgsm-panel")
+finally:
+    _so._git = _orig_rslug_git
+
+# _remote_ci_state maps GitHub's Actions API response to passing/pending/failing, and
+# never raises on a network/parse error (returns 'unknown', treated leniently).
+import io as _io
+_orig_ci_slug = _so._repo_slug
+_orig_urlopen = _so.urllib.request.urlopen
+try:
+    _so._repo_slug = lambda: "o/r"
+
+    def _fake_open(payload):
+        def _op(req, timeout=8):
+            return _io.BytesIO(payload.encode() if isinstance(payload, str) else payload)
+        return _op
+
+    _so.urllib.request.urlopen = _fake_open('{"workflow_runs":[{"status":"completed","conclusion":"success"}]}')
+    eq("ci-gate: completed+success -> passing", _so._remote_ci_state("a"*40), "passing")
+    _so.urllib.request.urlopen = _fake_open('{"workflow_runs":[{"status":"in_progress","conclusion":null}]}')
+    eq("ci-gate: still running -> pending", _so._remote_ci_state("a"*40), "pending")
+    _so.urllib.request.urlopen = _fake_open('{"workflow_runs":[{"status":"completed","conclusion":"failure"}]}')
+    eq("ci-gate: completed+failure -> failing", _so._remote_ci_state("a"*40), "failing")
+    _so.urllib.request.urlopen = _fake_open('{"workflow_runs":[]}')
+    eq("ci-gate: no run yet -> pending", _so._remote_ci_state("a"*40), "pending")
+
+    def _boom(req, timeout=8):
+        raise _so.urllib.error.URLError("offline")
+    _so.urllib.request.urlopen = _boom
+    eq("ci-gate: network error -> unknown (never raises)", _so._remote_ci_state("a"*40), "unknown")
+finally:
+    _so._repo_slug = _orig_ci_slug
+    _so.urllib.request.urlopen = _orig_urlopen
+
 # ── Tailscale: installed-but-not-authenticated (NeedsLogin) must not 500 ─
 import tailscale_integration as _tsi
 _tsi._run_ts = lambda args, timeout=5: (("1.0", "", 0) if args and args[0] in ("version", "--version")

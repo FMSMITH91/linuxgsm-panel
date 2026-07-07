@@ -2,10 +2,13 @@
 import json
 import logging
 import os
+import re
 import shlex
 import subprocess
 import threading
 import time
+import urllib.error
+import urllib.request
 
 _log = logging.getLogger("panel.system_ops")
 
@@ -448,6 +451,48 @@ def _is_git_checkout():
     return os.path.isdir(os.path.join(PANEL_DIR, ".git"))
 
 
+def _repo_slug():
+    """owner/repo parsed from origin's URL, so the CI-gate check works on forks too."""
+    url, _, rc = _git(["remote", "get-url", "origin"], timeout=10)
+    if rc != 0:
+        return None
+    m = re.search(r"github\.com[/:]([^/]+/[^/]+?)(?:\.git)?/?\s*$", url.strip())
+    return m.group(1) if m else None
+
+
+def _remote_ci_state(sha):
+    """Best-effort: has the remote commit `sha` cleared CI on GitHub yet?
+
+    Returns 'passing' | 'pending' | 'failing' | 'unknown'. The panel offers an update only
+    once the target commit is 'passing' — the SAME signal the auto-deploy gates on (deploy
+    runs when the CI workflow concludes success) — so "check for updates" no longer surfaces
+    a commit whose CI is still running or has failed. Keyed on the ci.yml workflow file (not
+    a job name), so it survives job renames. Reads GitHub's public Actions API anonymously
+    (the production panel has no token); any network/parse error → 'unknown', which the
+    caller treats leniently so an API hiccup never hides a real update."""
+    slug = _repo_slug()
+    if not slug:
+        return "unknown"
+    url = ("https://api.github.com/repos/%s/actions/workflows/ci.yml/runs"
+           "?head_sha=%s&per_page=1" % (slug, sha))
+    req = urllib.request.Request(url, headers={
+        "Accept": "application/vnd.github+json",
+        "User-Agent": "linuxgsm-panel-update-check",
+    })
+    try:
+        with urllib.request.urlopen(req, timeout=8) as resp:  # nosec B310 - fixed https host
+            runs = json.loads(resp.read().decode("utf-8")).get("workflow_runs", [])
+    except (urllib.error.URLError, ValueError, OSError):
+        _log.debug("CI-gate: couldn't read CI runs for %s", sha, exc_info=True)
+        return "unknown"
+    if not runs:
+        return "pending"  # push landed but the CI run hasn't been created yet
+    run = runs[0]
+    if run.get("status") != "completed":
+        return "pending"
+    return "passing" if run.get("conclusion") == "success" else "failing"
+
+
 def _compute_update_status():
     cur_ver = panel_version()
     if not _is_git_checkout():
@@ -467,10 +512,27 @@ def _compute_update_status():
     rem_sha, _, _ = _git(["rev-parse", "--short", "origin/main"])
     rem_ver, _, rv_rc = _git(["show", "origin/main:VERSION"])
     log, _, _ = _git(["log", "--oneline", "--no-decorate", "-10", "HEAD..origin/main"])
+
+    # Don't surface an update until the target commit has cleared CI on GitHub — otherwise
+    # the badge pops the instant a push lands, before the workflows finish (or even if they
+    # go on to fail). 'unknown' (API unreachable) is treated leniently: fall back to the old
+    # behind-count behaviour so a transient API error never hides a legitimate update.
+    ci_state = "passing"
+    if behind_n > 0:
+        rem_full, _, _ = _git(["rev-parse", "origin/main"], timeout=10)
+        ci_state = _remote_ci_state(rem_full.strip())
+    update_ready = behind_n > 0 and ci_state in ("passing", "unknown")
+
+    msg = None
+    if behind_n > 0 and not update_ready:
+        msg = ("An update is being verified — its checks are still running."
+               if ci_state == "pending"
+               else "The latest commit didn't pass its checks; holding off on this update.")
     return {
         "git": True,
         "fetched": frc == 0,
-        "update_available": behind_n > 0,
+        "update_available": update_ready,
+        "ci_state": ci_state,
         "behind": behind_n,
         "current_version": cur_ver,
         "current_sha": cur_sha.strip(),
@@ -478,6 +540,7 @@ def _compute_update_status():
         "remote_sha": rem_sha.strip(),
         "changes": [ln for ln in log.splitlines() if ln.strip()][:10],
         "checked_at": int(time.time()),
+        **({"message": msg} if msg else {}),
     }
 
 
