@@ -1682,6 +1682,12 @@ def register_routes(app):
                     gs = GameServer.query.get(gs_id)
                     if not remote or not gs:
                         return
+                    # Hard stop before any destructive root command below: an empty short_name
+                    # would turn `rm -rf /home/{short_name}` into `rm -rf /home/` (every home dir).
+                    # It's always set upstream (server_name or lgsm_name), but never trust that here.
+                    if not short_name:
+                        _fail("Preparing user account", "internal error: missing instance name")
+                        return
 
                     # 1. User account (clean any half-finished leftover first).
                     _p(1, "Preparing user account")
