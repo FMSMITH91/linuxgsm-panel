@@ -328,13 +328,16 @@ document.getElementById('cfg-tabs').addEventListener('click', function(ev){
 
 // ── LinuxGSM settings (grouped) ──
 function fieldHtml(s){
+  var def = s['default'];
   return '<div class="col-6 col-md-4 col-xl-3 mb-1">'
     + '<label class="form-label mb-1 d-flex align-items-center gap-1" style="font-size:.7rem;">'
     + '<span class="fb-key">'+esc(s.key)+'</span>'
-    + (s.overridden?'<span class="badge bg-info text-dark" style="font-size:.5rem;">set</span>':'')
+    + '<span class="badge bg-info text-dark cfg-set-badge" style="font-size:.5rem;'+(s.overridden?'':'display:none;')+'">set</span>'
     + '</label>'
     + '<input type="text" class="form-control form-control-sm" data-key="'+esc(s.key)+'" data-orig="'+esc(s.value)+'" value="'+esc(s.value)+'"'
-    + (s['default']!==''?' placeholder="'+esc(s['default'])+'"':'') + '></div>';
+    + (def!==''?' placeholder="'+esc(def)+'"':'') + '>'
+    + (def!==''?'<div class="text-secondary text-truncate" style="font-size:.62rem;" title="default: '+esc(def)+'">default: <code>'+esc(def)+'</code></div>':'')
+    + '</div>';
 }
 function loadConfig(){
   fetch(MOUNT+'/api/server/'+serverId+'/config').then(r=>r.json()).then(d=>{
@@ -380,8 +383,14 @@ function saveConfig(ev){
       msg.textContent = d.success?'✓ Saved — restart the server to apply.':'✗ '+(d.message||'Failed');
       msg.className='small ms-2 '+(d.success?'text-success':'text-danger');
       if(d.success){
-        // Mark saved values as the new baseline (preserves accordion state).
-        document.querySelectorAll('#cfg-groups input[data-key]').forEach(function(i){ i.setAttribute('data-orig', i.value); });
+        // Mark saved values as the new baseline (preserves accordion state), and show the "set"
+        // badge on the fields we just wrote — they're now overrides in the instance .cfg.
+        document.querySelectorAll('#cfg-groups input[data-key]').forEach(function(i){
+          i.setAttribute('data-orig', i.value);
+          if(settings.hasOwnProperty(i.getAttribute('data-key'))){
+            var b=i.parentElement.querySelector('.cfg-set-badge'); if(b) b.style.display='';
+          }
+        });
         // The settings write changed the instance .cfg — refresh the Raw tab so it isn't stale.
         refreshRawConfig();
       }
