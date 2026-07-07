@@ -230,7 +230,9 @@ var serverId = {{ server.id }};
 var curDir = "";        // current browse dir (relative to home)
 var curFile = null;     // path of the file open in the editor
 
-function esc(s){ return (s+'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); }
+// Escapes quotes too (&#39;/&quot;) — config keys/values are interpolated into
+// double-quoted HTML attributes below, so a bare " would otherwise break out (XSS).
+function esc(s){ return (s+'').replace(/[&<>"']/g, function(c){ return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]; }); }
 function fmtSize(b){ if(b<1024)return b+' B'; if(b<1048576)return (b/1024).toFixed(1)+' KB'; return (b/1048576).toFixed(1)+' MB'; }
 function fileIcon(name){
   var n=(name||'').toLowerCase();
