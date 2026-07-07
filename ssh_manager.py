@@ -1916,11 +1916,12 @@ def _sudo_sh(inner):
 
 
 # `pro status` spawns Ubuntu's heavy advantage-tools client (slow + CPU-hungry, especially on a
-# small VPS). Its result changes only when someone attaches/detaches/toggles a service — all of
-# which go through this module — so cache it and invalidate on those actions instead of re-running
-# it on every page load.
+# small VPS). Its result changes ONLY when someone attaches/detaches/toggles a service — all of
+# which go through this module and invalidate the cache — so there's no reason to re-run it on a
+# timer. The long TTL is just a safety net to eventually catch an out-of-band change (a lapsed
+# subscription, or a manual `pro detach` on the host); day-to-day it's effectively set-and-forget.
 _pro_status_cache = {}   # key -> (expiry_epoch, result)
-_PRO_STATUS_TTL = 300
+_PRO_STATUS_TTL = 86400  # 24h
 
 
 def _pro_key(server):

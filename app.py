@@ -3586,11 +3586,30 @@ def register_routes(app):
         return jsonify(host_specs(remote))
 
     # ── Ubuntu Pro (works for the panel host too, via its local remote id) ──
+    _PRO_MAX_AGE = 86400   # only auto-run the slow `pro status` client if the stored value is >1 day old
+
+    def _pro_status_cached(remote, force=False):
+        """Ubuntu Pro status, served from the persisted value so a page visit (even right after a
+        panel restart) never re-spawns the slow client. Only refreshes on an explicit force or when
+        the stored value is genuinely stale — the attach/detach/service actions refresh it directly,
+        so it's otherwise set-and-forget. Returns the status dict."""
+        cached = remote.cached_pro
+        if cached and not force and (time.time() - cached.get("ts", 0)) < _PRO_MAX_AGE:
+            return cached["data"]
+        data = pro_status(remote, force=force)
+        try:
+            remote.update_pro_cache(data)
+            db.session.commit()
+        except Exception:
+            db.session.rollback()
+        return data
+
     @app.route("/api/remote/<int:remote_id>/pro-status")
     @login_required
     @permission_required(MANAGE_REMOTES)
     def api_remote_pro_status(remote_id):
-        return jsonify(pro_status(get_remote(remote_id)))
+        force = request.args.get("force") in ("1", "true", "yes")
+        return jsonify(_pro_status_cached(get_remote(remote_id), force=force))
 
     @app.route("/api/remote/<int:remote_id>/pro-attach", methods=["POST"])
     @login_required
@@ -3600,6 +3619,8 @@ def register_routes(app):
         token = _json_body().get("token", "")
         ok, msg = pro_attach(remote, token)
         # NOTE: the token is deliberately never logged.
+        if ok:
+            _pro_status_cached(remote, force=True)   # state changed → refresh the stored status
         log_action(current_user, "pro_attach", target=remote.name, success=ok)
         return jsonify({"success": ok, "message": msg})
 
@@ -3612,6 +3633,8 @@ def register_routes(app):
         service = (data.get("service") or "").strip()
         action = (data.get("action") or "").strip()
         ok, msg = pro_service(remote, service, action)
+        if ok:
+            _pro_status_cached(remote, force=True)   # a service toggled → refresh the stored status
         log_action(current_user, f"pro_{action or 'service'}", target=remote.name,
                    detail=service, success=ok)
         return jsonify({"success": ok, "message": msg})
@@ -3622,6 +3645,8 @@ def register_routes(app):
     def api_remote_pro_detach(remote_id):
         remote = get_remote(remote_id)
         ok, msg = pro_detach(remote)
+        if ok:
+            _pro_status_cached(remote, force=True)   # detached → refresh the stored status
         log_action(current_user, "pro_detach", target=remote.name, success=ok)
         return jsonify({"success": ok, "message": msg})
 

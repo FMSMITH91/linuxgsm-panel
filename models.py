@@ -170,6 +170,7 @@ class RemoteServer(db.Model):
     last_seen = db.Column(db.DateTime, nullable=True)
     host_key = db.Column(db.Text, default="")     # pinned SSH host key ("keytype base64"); TOFU
     stats_cache = db.Column(db.Text, default="")  # last live stats (JSON: cpu_percent/memory/disk/uptime)
+    pro_cache = db.Column(db.Text, default="")    # last Ubuntu Pro status (JSON: {data, ts}); rarely changes
     created_at = db.Column(db.DateTime, default=datetime.utcnow)
     groups = db.relationship("Group", secondary=group_servers, back_populates="servers")
     games = db.relationship("GameServer", back_populates="remote", cascade="all, delete-orphan")
@@ -205,6 +206,23 @@ class RemoteServer(db.Model):
         """Persist a fresh stats dict, keeping only the display fields."""
         keep = {k: stats.get(k) for k in ("cpu_percent", "memory", "disk", "uptime")}
         self.stats_cache = json.dumps(keep)
+
+    @property
+    def cached_pro(self):
+        """Last known Ubuntu Pro status as {"data": {...}, "ts": epoch}, or None. Served/rendered
+        instantly so the page never re-spawns the slow `pro status` client just to show a state that
+        only changes through the panel (attach/detach/service, which refresh this)."""
+        if not self.pro_cache:
+            return None
+        try:
+            return json.loads(self.pro_cache)
+        except (ValueError, TypeError):
+            return None
+
+    def update_pro_cache(self, data):
+        """Persist a fresh Ubuntu Pro status dict with a timestamp (survives restarts)."""
+        from datetime import datetime as _dt
+        self.pro_cache = json.dumps({"data": data, "ts": int(_dt.utcnow().timestamp())})
 
     @property
     def host_key_fingerprint(self):
@@ -348,6 +366,7 @@ def _run_light_migrations():
         ("game_server", "stop_pending"): "ALTER TABLE game_server ADD COLUMN stop_pending BOOLEAN DEFAULT 0",
         ("remote_server", "public_ip"): "ALTER TABLE remote_server ADD COLUMN public_ip VARCHAR(45) DEFAULT ''",
         ("remote_server", "stats_cache"): "ALTER TABLE remote_server ADD COLUMN stats_cache TEXT DEFAULT ''",
+        ("remote_server", "pro_cache"): "ALTER TABLE remote_server ADD COLUMN pro_cache TEXT DEFAULT ''",
         ("remote_server", "host_key"): "ALTER TABLE remote_server ADD COLUMN host_key TEXT DEFAULT ''",
         ("user", "totp_secret"): "ALTER TABLE user ADD COLUMN totp_secret TEXT",
         ("user", "totp_enabled"): "ALTER TABLE user ADD COLUMN totp_enabled BOOLEAN DEFAULT 0",

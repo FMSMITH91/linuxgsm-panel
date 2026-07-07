@@ -1181,6 +1181,17 @@ try:
 finally:
     _shutil.rmtree(_kd, ignore_errors=True)
 
+# ── Ubuntu Pro status persists (set-and-forget: no re-running the slow client every visit) ──
+from models import RemoteServer as _RS
+_pr = _RS()
+check("pro-cache: empty -> None", _pr.cached_pro is None)
+_pr.update_pro_cache({"attached": True, "installed": True, "services": []})
+_pc = _pr.cached_pro
+check("pro-cache: round-trips the status dict", bool(_pc) and _pc["data"]["attached"] is True)
+check("pro-cache: stamps a timestamp for staleness checks", isinstance(_pc.get("ts"), int) and _pc["ts"] > 0)
+_pr.pro_cache = "{not valid json"
+check("pro-cache: malformed stored value -> None (never raises)", _pr.cached_pro is None)
+
 # ── dashboard port-scan cache: concurrent polls share ONE ssh scan per remote ──
 _app = sys.modules["app"]   # already imported via `from app import ...` above
 _o_ps_rc = _app.run_command
