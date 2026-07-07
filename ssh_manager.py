@@ -229,6 +229,16 @@ def get_connection(server, force_new=False):
     if policy.captured and enforce_pin:
         _persist_host_key(server, policy.captured)
 
+    # Keep the pooled connection warm: a periodic keepalive stops the server/NAT silently
+    # dropping it while idle, so the next command reuses this connection instead of paying a
+    # fresh handshake. Also lets paramiko notice a dead peer promptly.
+    try:
+        _tr = client.get_transport()
+        if _tr:
+            _tr.set_keepalive(30)
+    except Exception:  # nosec B110
+        _log.debug("set_keepalive failed (non-fatal)", exc_info=True)
+
     with _conn_lock:
         existing = _connections.get(key)
         if existing is not None and not force_new:
@@ -292,7 +302,7 @@ def _resolve_ts_host(server):
 
 # Connection-multiplexing socket dir for the ssh-CLI path (Tailscale remotes). Per-uid so the
 # sockets aren't shared across users. The first command to a host opens a master connection that
-# lingers briefly; rapid follow-ups (e.g. the live-metrics poll) reuse it instead of re-handshaking.
+# stays warm; follow-ups (polls, actions, navigating between pages) reuse it instead of re-handshaking.
 _SSH_CM_DIR = os.path.join(tempfile.gettempdir(),
                            ".lgsm-ssh-cm-%d" % (os.getuid() if hasattr(os, "getuid") else 0))
 
@@ -300,14 +310,20 @@ _SSH_CM_DIR = os.path.join(tempfile.gettempdir(),
 def _ssh_mux_opts():
     """SSH options that reuse one persistent connection per host. ControlMaster=auto falls back to a
     fresh connection automatically if the master died, so it's safe. Returns [] if the socket dir
-    can't be created (then ssh just connects normally)."""
+    can't be created (then ssh just connects normally).
+
+    ControlPersist=10m keeps the master warm well past the poll cadence AND across page
+    navigations / short idle gaps, so you rarely pay for a fresh handshake. ServerAlive* pings keep
+    that idle master from being dropped by a NAT/firewall and reap it promptly if the peer dies."""
     try:
         os.makedirs(_SSH_CM_DIR, mode=0o700, exist_ok=True)
     except OSError:
         return []
     return ["-o", "ControlMaster=auto",
             "-o", f"ControlPath={_SSH_CM_DIR}/%C",   # %C = short fixed-length hash of host/port/user
-            "-o", "ControlPersist=30s"]
+            "-o", "ControlPersist=10m",
+            "-o", "ServerAliveInterval=20",
+            "-o", "ServerAliveCountMax=3"]
 
 
 def _run_via_ssh_cli(server, command, timeout=30, sudo=None):
