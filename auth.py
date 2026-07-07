@@ -18,6 +18,7 @@ login_manager.login_message = "Please log in to access this page."
 VIEW_SERVERS = "view_servers"
 VIEW_CONSOLE = "view_console"
 SEND_COMMAND = "send_command"
+MODERATE_SERVER = "moderate_server"     # Kick/ban players + announce, without full console access
 RESTART_SERVER = "restart_server"
 START_SERVER = "start_server"
 STOP_SERVER = "stop_server"
@@ -35,6 +36,7 @@ ALL_PERMISSIONS = {
     VIEW_SERVERS: "View server status list",
     VIEW_CONSOLE: "View live console output",
     SEND_COMMAND: "Send commands to game server console",
+    MODERATE_SERVER: "Moderate players (kick / ban / announce in-game)",
     RESTART_SERVER: "Restart game servers",
     START_SERVER: "Start game servers",
     STOP_SERVER: "Stop game servers",

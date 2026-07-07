@@ -126,6 +126,30 @@
       {% endif %}
 </div>
 
+<!-- Players + in-game moderation (Console tab) -->
+<div class="card mb-3" data-mtab="console" id="players-card" style="display:none;">
+  <div class="card-header d-flex justify-content-between align-items-center flex-wrap gap-2">
+    <span><i class="bi bi-people-fill"></i> Players <span class="text-secondary small" id="pl-count"></span></span>
+    <button class="btn btn-sm btn-outline-secondary py-0 px-1" onclick="loadPlayers()" title="Refresh player list"><i class="bi bi-arrow-repeat"></i></button>
+  </div>
+  <div class="card-body">
+    <div id="pl-unsupported" class="text-secondary small" style="display:none;"><i class="bi bi-info-circle"></i> A live player list isn't available for this game.</div>
+    <div id="pl-empty" class="text-secondary small" style="display:none;">No players connected.</div>
+    <div class="table-responsive" id="pl-table-wrap" style="display:none;">
+      <table class="table table-sm align-middle mb-0">
+        <thead><tr><th>Player</th><th style="width:1%;" class="text-nowrap">Score</th><th style="width:1%;" class="text-nowrap">Time</th>{% if can_moderate %}<th style="width:1%;"></th>{% endif %}</tr></thead>
+        <tbody id="pl-rows"></tbody>
+      </table>
+    </div>
+    {% if can_moderate %}
+    <div id="pl-announce" class="d-flex gap-2 mt-3" style="display:none;">
+      <input type="text" id="pl-say" class="form-control form-control-sm" placeholder="Announce a message to everyone in-game…" maxlength="200" aria-label="Announce message" onkeydown="if(event.key==='Enter'){event.preventDefault();announceSay();}">
+      <button class="btn btn-sm btn-outline-primary text-nowrap" onclick="announceSay()"><i class="bi bi-megaphone"></i> Say</button>
+    </div>
+    {% endif %}
+  </div>
+</div>
+
 <!-- Details: server info, host and commands (grouped into the Details tab) -->
 <div class="row" data-mtab="details">
   <div class="col-lg-4 mb-3">
@@ -275,6 +299,69 @@
 var consoleEl = document.getElementById('console-output');
 var wsStatus = document.getElementById('ws-status');
 var serverId = {{ server.id }};
+var _CAN_MODERATE = {{ 'true' if can_moderate else 'false' }};
+
+// ── Players + in-game moderation ──────────────────────────────
+function plTime(t){
+  var n = Number(t); if(!isFinite(n)) return String(t);
+  n = Math.floor(n); var h=Math.floor(n/3600), m=Math.floor((n%3600)/60), s=n%60;
+  return h>0 ? (h+':'+String(m).padStart(2,'0')) : (m+':'+String(s).padStart(2,'0'));
+}
+function loadPlayers(){
+  if(!document.getElementById('players-card')) return;
+  fetch(MOUNT+'/api/server/'+serverId+'/playerlist').then(function(r){return r.json();})
+    .then(renderPlayers).catch(function(){ /* transient: keep what's shown */ });
+}
+function renderPlayers(d){
+  var card=document.getElementById('players-card'); if(!card||!d) return;
+  var caps=d.caps||{}, players=d.players||[], queryable=!!d.queryable;
+  card.style.display = (queryable || caps.say) ? '' : 'none';   // hide entirely if nothing to show
+  if(card.style.display==='none') return;
+  var unsup=document.getElementById('pl-unsupported'), empty=document.getElementById('pl-empty'),
+      wrap=document.getElementById('pl-table-wrap'), ann=document.getElementById('pl-announce'),
+      cnt=document.getElementById('pl-count');
+  if(ann) ann.style.display = caps.say ? 'flex' : 'none';
+  if(!queryable){ if(unsup)unsup.style.display=''; if(empty)empty.style.display='none'; if(wrap)wrap.style.display='none'; if(cnt)cnt.textContent=''; return; }
+  if(unsup) unsup.style.display='none';
+  if(cnt) cnt.textContent='('+players.length+')';
+  if(!players.length){ if(empty)empty.style.display=''; if(wrap)wrap.style.display='none'; return; }
+  if(empty) empty.style.display='none'; if(wrap) wrap.style.display='';
+  var rows=players.map(function(p){
+    var acts='';
+    if(_CAN_MODERATE){
+      if(caps.kick) acts+='<button class="btn btn-sm btn-outline-warning py-0 px-1 me-1" data-name="'+escapeHtml(p.name)+'" onclick="moderatePlayer(this,\'kick\')">Kick</button>';
+      if(caps.ban) acts+='<button class="btn btn-sm btn-outline-danger py-0 px-1" data-name="'+escapeHtml(p.name)+'" onclick="moderatePlayer(this,\'ban\')">Ban</button>';
+    }
+    return '<tr><td class="text-truncate" style="max-width:260px;">'+escapeHtml(p.name)+'</td>'
+      +'<td class="text-nowrap">'+(p.score!=null?escapeHtml(String(p.score)):'—')+'</td>'
+      +'<td class="text-nowrap">'+(p.time!=null?escapeHtml(plTime(p.time)):'—')+'</td>'
+      +(_CAN_MODERATE?('<td class="text-nowrap">'+acts+'</td>'):'')+'</tr>';
+  }).join('');
+  document.getElementById('pl-rows').innerHTML=rows;
+}
+function moderatePlayer(btn, action){
+  var name=btn.getAttribute('data-name')||'';
+  if(action==='ban' && !confirm('Ban '+name+'?')) return;
+  btn.disabled=true;
+  fetch(MOUNT+'/api/server/'+serverId+'/moderate',{method:'POST',headers:{'Content-Type':'application/json'},
+    body:JSON.stringify({action:action, target:name})})
+    .then(function(r){return r.json();}).then(function(d){
+      window.toast(d.message || (d.success?'Done':'Failed'), d.success?'success':'danger');
+      setTimeout(loadPlayers, 1200);
+    }).catch(function(){ window.toast('Moderation failed','danger'); btn.disabled=false; });
+}
+function announceSay(){
+  var inp=document.getElementById('pl-say'); if(!inp) return;
+  var msg=(inp.value||'').trim(); if(!msg) return;
+  fetch(MOUNT+'/api/server/'+serverId+'/moderate',{method:'POST',headers:{'Content-Type':'application/json'},
+    body:JSON.stringify({action:'say', message:msg})})
+    .then(function(r){return r.json();}).then(function(d){
+      window.toast(d.message || (d.success?'Announced':'Failed'), d.success?'success':'danger');
+      if(d.success) inp.value='';
+    }).catch(function(){ window.toast('Announce failed','danger'); });
+}
+loadPlayers();
+if(window.pollWhenVisible) pollWhenVisible(loadPlayers, 15000);
 
 // "Follow the tail" only while the user is already at the bottom. If they've
 // scrolled up to read history, new output must NOT yank them back down.

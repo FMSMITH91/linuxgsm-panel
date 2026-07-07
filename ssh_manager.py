@@ -1388,6 +1388,95 @@ def player_count(server, user, game_type=None, port=None):
     return int(s)
 
 
+def player_list(server, user, game_type=None, port=None):
+    """Best-effort list of connected players via gamedig. Returns [{name, score, time}] (score/time
+    may be None depending on the game), or [] when the game isn't queryable or is empty. Never
+    raises. Same query path as player_count — just keeping the names instead of only the count."""
+    gdtype = GAMEDIG_TYPE.get(game_type or "", "")
+    if not gdtype or not port:
+        return []
+    jqf = ('[.players[] | {name:(.name // ""), score:(.raw.score // .score // null), '
+           'time:(.raw.time // .time // null)}]')
+    cmd = f"gamedig --type {gdtype} 127.0.0.1:{int(port)} 2>/dev/null | jq -c {_quote(jqf)} 2>/dev/null"
+    try:
+        out, _, _ = run_command(server, f"sudo -u {user} bash -c {_quote(cmd)}", timeout=25, sudo=False)
+    except Exception:
+        return []
+    line = next((ln.strip() for ln in (out or "").splitlines() if ln.strip().startswith("[")), "")
+    if not line:
+        return []
+    try:
+        import json as _json
+        data = _json.loads(line)
+    except (ValueError, TypeError):
+        return []
+    players = []
+    for p in (data if isinstance(data, list) else []):
+        if isinstance(p, dict):
+            name = str(p.get("name") or "").strip()
+            if name:
+                players.append({"name": name[:64], "score": p.get("score"), "time": p.get("time")})
+    return players
+
+
+# Games whose in-game console (driven via tmux) understands moderation commands, grouped by the
+# command syntax. Anything not listed degrades to "no in-game moderation" — the player list may
+# still show, but with no kick/ban/say buttons.
+_MOD_MC = frozenset({"mc", "pmc", "spigot", "paper", "bukkit"})                  # Minecraft (Java)
+_MOD_SOURCE = frozenset({                                                         # Valve Source / GoldSrc
+    "gmod", "css", "cs2", "csgo", "cs", "cscz", "tf2", "tfc", "hl2dm", "hl2mp", "hldm", "hldms",
+    "dods", "dod", "l4d", "l4d2", "ins", "insurgency", "nmrih", "zps", "fof", "gesource",
+    "ns", "ricochet", "dmc", "sfc", "bb2", "ship",
+})
+
+
+def is_player_queryable(game_type):
+    """True if the panel can query a live player list for this game (has a gamedig mapping)."""
+    return bool(GAMEDIG_TYPE.get(game_type or ""))
+
+
+def moderation_caps(game_type):
+    """Which moderation actions this game supports from its console: {kick, ban, say}."""
+    gt = (game_type or "").lower()
+    if gt in _MOD_MC:
+        return {"kick": True, "ban": True, "say": True}
+    if gt in _MOD_SOURCE:
+        return {"kick": True, "ban": False, "say": True}   # Source ban needs a steamid, not a name
+    return {"kick": False, "ban": False, "say": False}
+
+
+# SECURITY: player names come FROM the game, so a hostile player can set a name containing console
+# metacharacters. ';' chains commands (Source), quotes/backticks break arg parsing, and CR/LF would
+# inject a whole new console line — strip them before the name/message goes into a console command.
+_MOD_BAD_CHARS = str.maketrans({c: None for c in ';"`\r\n\t\x00'})
+
+
+def _mod_sanitize(s, maxlen=64):
+    return str(s or "").translate(_MOD_BAD_CHARS).strip()[:maxlen]
+
+
+def moderate(server, user, game_type, action, target="", message="", selfname=None):
+    """Kick/ban a player or announce a message through the game's own console. The player name /
+    message are sanitized first so a hostile name can't inject console commands. Returns (ok, msg)."""
+    gt = (game_type or "").lower()
+    caps = moderation_caps(gt)
+    if action not in ("kick", "ban", "say") or not caps.get(action):
+        return False, "That action isn't supported for this game."
+    if action == "say":
+        msg = _mod_sanitize(message, 200)
+        if not msg:
+            return False, "Nothing to announce."
+        cmd = "say %s" % msg
+    else:
+        tgt = _mod_sanitize(target, 64)
+        if not tgt:
+            return False, "No player selected."
+        cmd = ("%s %s" % (action, tgt)) if gt in _MOD_MC else ('kick "%s"' % tgt)
+    out = send_console_command(server, user, cmd, timeout=15, selfname=selfname)
+    rc = out[2] if isinstance(out, tuple) and len(out) >= 3 else 1
+    return (rc == 0), ("Done." if rc == 0 else "Console not reachable — is the server running?")
+
+
 def mod_restart_decision(status, players, force=False):
     """Decide how to handle the restart a mod change needs, given the server `status`
     ('online'/'offline'/'unknown'), the current player count (int, or None when unknown),

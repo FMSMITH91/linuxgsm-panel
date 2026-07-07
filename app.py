@@ -72,7 +72,7 @@ from auth import (
     log_action, permission_required, server_access_required, INSTALL_SERVER,
     UNINSTALL_SERVER, MANAGE_SERVERS,
     MANAGE_REMOTES, MANAGE_USERS, MANAGE_GROUPS,
-    VIEW_LOGS, SUPER_ADMIN, VIEW_CONSOLE, SEND_COMMAND,
+    VIEW_LOGS, SUPER_ADMIN, VIEW_CONSOLE, SEND_COMMAND, MODERATE_SERVER,
     RESTART_SERVER, START_SERVER, STOP_SERVER, UPDATE_SERVER,
 )
 from config import (
@@ -86,7 +86,7 @@ from ssh_manager import (
     close_connection, run_command, ssh_test_connection,
     get_server_status, run_as_game_user, send_console_command,
     list_server_commands, server_live_metrics, remote_public_ip,
-    discover_linuxgsm_servers,
+    discover_linuxgsm_servers, player_list, moderation_caps, moderate, is_player_queryable,
     remote_live_metrics, host_specs, pro_status, pro_attach,
     pro_service, pro_detach, set_autostart, install_game_cron, set_daily_restart,
     list_cron_jobs, add_cron_job, update_cron_job, delete_cron_job, upgrade_managed_cron_tracking,
@@ -1327,10 +1327,11 @@ def register_routes(app):
                 _log.debug("server_detail: ignored non-fatal error", exc_info=True)
         public_host = remote.public_ip or ("" if remote.is_local else remote.host)
 
+        can_moderate = _can(MODERATE_SERVER) or _can(SEND_COMMAND)
         return render_template("server_detail.html", server=gs, remote=remote,
                                console_lines=console_lines, actions=actions,
                                maintenance=maintenance, all_commands=all_commands,
-                               can_send_command=can_send_command,
+                               can_send_command=can_send_command, can_moderate=can_moderate,
                                can_autostart=can_autostart, public_host=public_host)
 
     def _perm_for_action(action):
@@ -1554,6 +1555,45 @@ def register_routes(app):
         except Exception:
             pc = None
         return jsonify({"players": pc})
+
+    @app.route("/api/server/<int:server_id>/playerlist")
+    @login_required
+    @server_access_required
+    def api_server_playerlist(server_id):
+        """Live list of connected players (names + score/time where the game reports them) plus
+        which moderation actions this game supports, for the Players panel."""
+        gs = get_game(server_id)
+        try:
+            players = player_list(gs.remote, gs.short_name, gs.game_type, gs.port)
+        except Exception:
+            players = []
+        return jsonify({"players": players, "caps": moderation_caps(gs.game_type),
+                        "queryable": is_player_queryable(gs.game_type)})
+
+    @app.route("/api/server/<int:server_id>/moderate", methods=["POST"])
+    @login_required
+    @server_access_required
+    def api_server_moderate(server_id):
+        """Kick/ban a player or announce a message via the game console. Requires the moderate
+        permission (or full console access / superadmin — those can already do it by hand). The
+        player name is sanitized in ssh_manager.moderate() so a hostile name can't inject."""
+        gs = get_game(server_id)
+        if not (current_user.is_superadmin or has_permission(current_user, MODERATE_SERVER)
+                or has_permission(current_user, SEND_COMMAND)):
+            return jsonify({"success": False, "message": "Permission denied"}), 403
+        data = _json_body()
+        action = (data.get("action") or "").strip()
+        if action not in ("kick", "ban", "say"):
+            return jsonify({"success": False, "message": "Unknown action"}), 400
+        try:
+            ok, msg = moderate(gs.remote, gs.short_name, gs.game_type, action,
+                               target=data.get("target", ""), message=data.get("message", ""),
+                               selfname=gs.lgsm_name)
+            log_action(current_user, "moderate_%s" % action, target=gs.name,
+                       detail=(data.get("target") or data.get("message") or "")[:120], success=ok)
+            return jsonify({"success": ok, "message": msg})
+        except Exception:
+            return jsonify({"success": False, "message": _log_and_generic("moderation failed")}), 500
 
     @app.route("/api/server/<int:server_id>/restart-when-empty", methods=["POST"])
     @login_required

@@ -1551,6 +1551,31 @@ check("supports_update: empty list + known no-update game (cod) -> False",
 check("supports_update: empty list + SteamCMD game -> True (fail open)",
       _GS(commands='[]', game_type='csgo').supports_update is True)
 
+# ── player moderation: per-game caps + injection-safe command building ──
+check("moderation: gmod (Source) supports kick + say, not ban",
+      sm.moderation_caps("gmod") == {"kick": True, "ban": False, "say": True})
+check("moderation: minecraft supports kick + ban + say",
+      sm.moderation_caps("mc") == {"kick": True, "ban": True, "say": True})
+check("moderation: an unlisted game (cod) supports nothing",
+      sm.moderation_caps("cod") == {"kick": False, "ban": False, "say": False})
+check("moderation: gmod is player-queryable (gamedig), cod is not",
+      sm.is_player_queryable("gmod") is True and sm.is_player_queryable("cod") is False)
+check("moderation: console metacharacters are stripped from a name (no injection)",
+      sm._mod_sanitize('a;b"c`d\ne') == "abcde")
+_msent = {}
+_orig_scc = sm.send_console_command
+try:
+    sm.send_console_command = lambda *a, **k: (_msent.__setitem__("cmd", a[2]), ("", "", 0))[1]
+    sm.moderate(None, "u", "gmod", "kick", target='Bad;Guy"x')
+    check("moderation: gmod kick quotes the sanitized name (injection neutralised)",
+          _msent.get("cmd") == 'kick "BadGuyx"')
+    sm.moderate(None, "u", "mc", "ban", target="Steve")
+    check("moderation: minecraft ban is a bare name command", _msent.get("cmd") == "ban Steve")
+    check("moderation: an unsupported action is refused",
+          sm.moderate(None, "u", "gmod", "ban", target="x")[0] is False)
+finally:
+    sm.send_console_command = _orig_scc
+
 # ── db_maintenance: offline SQLite check / repair / optimize (updater + health card) ──
 import db_maintenance as _dbm
 import sqlite3 as _sq3

@@ -553,6 +553,23 @@ try:
     check("db-health: non-superadmin is denied", dh_denied.status_code in (301, 302, 303, 403),
           "got %d" % dh_denied.status_code)
 
+    # ── Players + in-game moderation ──
+    plr = c.get("/api/server/%d/playerlist" % gs_id)
+    _pl = plr.get_json() or {}
+    check("playerlist: returns players + caps + queryable",
+          plr.status_code == 200 and all(k in _pl for k in ("players", "caps", "queryable")),
+          "got %d %s" % (plr.status_code, sorted(_pl)))
+    check("playerlist: caps reflect the game (csgo -> kick + say)",
+          _pl.get("caps", {}).get("kick") is True and _pl.get("caps", {}).get("say") is True)
+    mod_bad = c.post("/api/server/%d/moderate" % gs_id, json={"action": "nope"})
+    check("moderate: unknown action -> 400", mod_bad.status_code == 400)
+    # A user with server access but no moderate/console permission is refused (mru can reach the
+    # server via its group's remote, but lacks moderate_server / send_command).
+    mod_denied = client_as(mru_id).post("/api/server/%d/moderate" % gs_id,
+                                        json={"action": "kick", "target": "x"})
+    check("moderate: caller without moderate/console permission -> 403",
+          mod_denied.status_code == 403, "got %d" % mod_denied.status_code)
+
     # ── Discover / import existing LinuxGSM servers on a host ──
     dsc = c.get("/api/remote/%d/discover" % remote_id)
     check("discover: superadmin gets a servers list (SSH to the fixture host yields none)",
