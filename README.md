@@ -20,7 +20,7 @@ A self-hosted web panel for managing **LinuxGSM** game servers on remote VPS mac
 
 > ⚠️ **Ubuntu 24.04 only, for now.** The panel is currently built and tested against **Ubuntu 24.04 LTS** — that's the only supported OS at the moment (other distros may work but aren't supported yet).
 
-- **A host running Ubuntu 24.04 to run the panel on.** The installer sets up everything else it needs (Python 3.9+, a virtualenv, and dependencies) automatically, so you don't have to install them yourself.
+- **A host running Ubuntu 24.04 to run the panel on.** The installer sets up everything else it needs (Python 3.11+, a virtualenv, and dependencies) automatically, so you don't have to install them yourself.
 - **One or more game-server machines (Ubuntu 24.04) you can reach over SSH** (key, password, or Tailscale SSH). The panel host can also manage itself.
 - **LinuxGSM** on those machines — or let the panel install it for you.
 - *Optional but recommended:* **[Tailscale](https://tailscale.com)** for private, HTTPS access with no open ports.
@@ -82,10 +82,10 @@ It asks you to type `yes` first (add `--yes` to skip the prompt).
 ## Features
 
 ### Game servers
-- **📦 Install any LinuxGSM game** — one-click install of any LinuxGSM-compatible server (Garry's Mod, Minecraft, CS2/CS:Source, TF2, ARMA 3, Rust, and 100+ more). The panel can install LinuxGSM itself, then auto-detects and opens every port the game needs.
+- **📦 Install any LinuxGSM game** — one-click install of any LinuxGSM-compatible server (Garry's Mod, Minecraft, CS2/CS:Source, TF2, ARMA 3, Rust, and 130+ more, straight from LinuxGSM's own game list). The panel can install LinuxGSM itself, then auto-detects and opens every port the game needs.
 - **🖥️ Live console & stats** — real-time WebSocket console streaming, send commands to the running game, and per-game CPU/RAM/uptime tiles with a live resource graph.
-- **🛑 Full control** — start, stop, restart, update, validate, monitor, and the game's other LinuxGSM commands from the web UI.
-- **🧩 Mods & addons manager** — browse, install, and remove LinuxGSM-supported mods (SourceMod, MetaMod, Oxide, ULX, and game-specific ones) right from the panel.
+- **🛑 Full, player-aware control** — start, stop, restart, update, validate, monitor, and the game's other LinuxGSM commands from the web UI. **Restart and stop check who's online first** — if players are connected, they warn you and offer to *wait until the server is empty* instead of disconnecting anyone; rebooting a host warns if any of its servers has players. Installed games are also given a small CPU-priority edge on (re)start.
+- **🧩 Mods & addons manager** — browse, install, and remove LinuxGSM-supported mods (SourceMod, MetaMod, Oxide, ULX, and game-specific ones) right from the panel. A pending mod change restarts the server to load it — automatically once it's empty, so players aren't kicked. (Games with no LinuxGSM mods installer simply don't show the section.)
 - **📣 Alerts & notifications** — configure LinuxGSM's own alerts (Discord, Telegram, email, Pushover, Pushbullet, Slack, Gotify, IFTTT) per server, with a test button. They fire even if the panel is down.
 - **🌐 FastDL** — generate a Source-engine FastDL directory for games that support it.
 - **⏰ Scheduled tasks (cron)** — manage a server's cron jobs from the UI, with last-run time, success/failure, and a "run now" button; plus auto-start-on-boot and daily-restart-when-empty toggles.
@@ -93,9 +93,9 @@ It asks you to type `yes` first (add `--yes` to skip the prompt).
 
 ### Backups
 - **💾 Panel backups** — one-click and automatic daily backups of the panel's database, settings, and encryption keys, with retention, download, and one-click restore.
-- **🎮 Game-server backups** — LinuxGSM full backups per server, on-demand or on a schedule, browsable in a table with per-backup **download** and **delete**.
+- **🎮 Game-server backups** — LinuxGSM full backups per server, on-demand or on a schedule, browsable in a table (by filename) with per-backup **download** and **delete**. **Player-aware:** a server with people on it is skipped and queued to back up once it empties (rather than kicking them) — unless you choose to back up now.
 - **📅 Per-server schedules** — a global default (daily / weekly / fortnightly / monthly + keep-count) that each server can override or turn off individually.
-- **📊 Disk-aware & explained** — shows free disk, estimates how much a retention setting will use, warns before it gets tight, and recommends a safe "keep" count, all in plain language.
+- **📊 Disk-aware & explained** — shows free disk, estimates how much a retention setting will use, warns before it gets tight, frees space for a new backup when the disk is nearly full, and won't start a backup that can't fit — all in plain language.
 
 ### Access, security & hosts
 - **🔐 Multi-user RBAC** — Super Admin, Server Admin, Moderator, Viewer. Define groups with granular per-action permissions and per-server access; users inherit the combined set, enforced server-side on every endpoint.
@@ -106,6 +106,7 @@ It asks you to type `yes` first (add `--yes` to skip the prompt).
 - **🔒 Secure by default** — HTTPS out of the box (built-in self-signed cert, or a trusted cert via Tailscale/reverse proxy), optional TOTP two-factor auth with backup codes, revocable sessions, CSRF protection + security headers, and passwords hashed with bcrypt.
 
 ### Everything else
+- **🪶 Light on small VPSes** — the panel runs at low CPU/IO priority so it yields to your game servers under load, tunes the host to prefer RAM over swap, and caches/skips needless work — so a 1-core box stays responsive for players.
 - **🌍 Multi-language** — English, Spanish, and French, with a language switcher and a saved per-user preference. (Untranslated strings fall back to English.)
 - **📋 Audit logging** — every action logged with user, IP, target, and timestamp.
 - **⚡ Setup wizard** — first-run wizard for site config, admin creation, and remote VPS connection; auto-configures Tailscale Serve if detected.
