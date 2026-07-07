@@ -510,36 +510,58 @@ def _compute_update_status():
     behind, _, _ = _git(["rev-list", "--count", "HEAD..origin/main"])
     behind_n = int(behind.strip()) if behind.strip().isdigit() else 0
     rem_sha, _, _ = _git(["rev-parse", "--short", "origin/main"])
-    rem_ver, _, rv_rc = _git(["show", "origin/main:VERSION"])
-    log, _, _ = _git(["log", "--oneline", "--no-decorate", "-10", "HEAD..origin/main"])
+
+    base = {"git": True, "fetched": True, "current_version": cur_ver,
+            "current_sha": cur_sha.strip(), "remote_sha": rem_sha.strip(),
+            "checked_at": int(time.time())}
+    if behind_n == 0:
+        return {**base, "update_available": False, "ci_state": "passing", "behind": 0}
 
     # Don't surface an update until the target commit has cleared CI on GitHub — otherwise
     # the badge pops the instant a push lands, before the workflows finish (or even if they
-    # go on to fail). 'unknown' (API unreachable) is treated leniently: fall back to the old
-    # behind-count behaviour so a transient API error never hides a legitimate update.
-    ci_state = "passing"
-    if behind_n > 0:
-        rem_full, _, _ = _git(["rev-parse", "origin/main"], timeout=10)
-        ci_state = _remote_ci_state(rem_full.strip())
-    update_ready = behind_n > 0 and ci_state in ("passing", "unknown")
+    # go on to fail). But if the TIP is still verifying while an EARLIER commit has already
+    # passed, offer that earlier verified commit instead of blocking entirely. So: walk the
+    # commits we're behind by, newest first, and update to the first one that's passed CI.
+    # 'unknown' (API unreachable) counts as acceptable so a transient API error never hides a
+    # legitimate update. Capped so a long-offline panel can't fire dozens of API calls.
+    revs, _, _ = _git(["rev-list", "-n", "25", "HEAD..origin/main"])
+    commits = [c for c in (revs or "").split() if c]
+    tip_state = _remote_ci_state(commits[0]) if commits else "unknown"
 
-    msg = None
-    if behind_n > 0 and not update_ready:
+    target_sha, target_state, newer_unverified = None, tip_state, 0
+    for idx, sha in enumerate(commits):
+        st = tip_state if idx == 0 else _remote_ci_state(sha)
+        if st in ("passing", "unknown"):
+            target_sha, target_state, newer_unverified = sha, st, idx
+            break   # newest verified commit — anything above it is still unverified
+
+    if not target_sha:
+        # Nothing in range has passed yet (all still pending, or failed).
         msg = ("An update is being verified — its checks are still running."
-               if ci_state == "pending"
+               if tip_state == "pending"
                else "The latest commit didn't pass its checks; holding off on this update.")
+        return {**base, "update_available": False, "ci_state": tip_state,
+                "behind": behind_n, "message": msg}
+
+    # We have a verified target (possibly older than the tip if newer commits are still verifying).
+    behind_target = behind_n - newer_unverified   # commits from HEAD up to & including the target
+    tgt_ver, _, tv_rc = _git(["show", f"{target_sha}:VERSION"])
+    log, _, _ = _git(["log", "--oneline", "--no-decorate", "-10", f"HEAD..{target_sha}"])
+    msg = None
+    if newer_unverified > 0:
+        msg = ("Updating to the latest verified version — %d newer commit%s still being verified."
+               % (newer_unverified, "" if newer_unverified == 1 else "s"))
     return {
-        "git": True,
-        "fetched": True,   # we returned early above if the fetch failed (frc != 0)
-        "update_available": update_ready,
-        "ci_state": ci_state,
-        "behind": behind_n,
-        "current_version": cur_ver,
-        "current_sha": cur_sha.strip(),
-        "remote_version": ((rem_ver.strip() if rv_rc == 0 else "") or "?"),
-        "remote_sha": rem_sha.strip(),
+        **base,
+        "update_available": True,
+        "ci_state": target_state,
+        "behind": behind_target,
+        "behind_tip": behind_n,
+        "newer_unverified": newer_unverified,
+        "remote_version": ((tgt_ver.strip() if tv_rc == 0 else "") or "?"),
+        "remote_sha": target_sha[:7],
+        "target_sha": target_sha,
         "changes": [ln for ln in log.splitlines() if ln.strip()][:10],
-        "checked_at": int(time.time()),
         **({"message": msg} if msg else {}),
     }
 
@@ -569,6 +591,7 @@ def panel_self_update():
     survives the panel's own restart (the service uses KillMode=control-group,
     which would otherwise kill a normal child mid-update). Returns immediately;
     progress is written to data/self-update.log under the panel dir."""
+    import re
     if not _is_git_checkout():
         return False, "The panel isn't a git checkout, so it can't self-update."
     # Enforce the CI gate server-side, not just by hiding the button. Re-check fresh so we
@@ -592,6 +615,13 @@ def panel_self_update():
     installer = os.path.join(PANEL_DIR, "install.sh")
     if not os.path.isfile(installer):
         return False, "install.sh is missing, so the panel can't self-update safely."
+    # The commit we're cleared to move to — the newest CI-verified one, which may be BELOW the
+    # tip when newer commits are still verifying. install.sh resets to it (validated there as an
+    # ancestor of the fetched tip). Only ever a bare hex SHA from git rev-list; guard the shape
+    # anyway before it's exported into a root-run script.
+    target_ref = (st.get("target_sha") or "").strip()
+    if not re.fullmatch(r"[0-9a-fA-F]{7,40}", target_ref):
+        target_ref = ""   # fall back to install.sh's default (origin/<branch> tip)
     # Write the wrapper + its log inside the panel's own data dir (owned by the service
     # user, not world-writable) rather than /tmp. This script is later executed as root
     # via `sudo systemd-run`, so a predictable /tmp path would let a local user pre-plant
@@ -605,6 +635,7 @@ def panel_self_update():
         "#!/bin/bash\n"
         f"LOG={shlex.quote(_log_path)}\n"
         f"cd {shlex.quote(PANEL_DIR)} || exit 1\n"
+        f"export PANEL_UPDATE_REF={shlex.quote(target_ref)}\n"
         'echo "=== panel self-update $(date) ===" > "$LOG"\n'
         f"bash {shlex.quote(installer)} >> \"$LOG\" 2>&1\n"
         'echo "=== installer exit $? ===" >> "$LOG"\n'

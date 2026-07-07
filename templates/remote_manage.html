@@ -801,7 +801,10 @@ function renderUpdate(d){
   if(d.git===false){ st.innerHTML='<i class="bi bi-info-circle"></i> '+(d.message||'Self-update unavailable (not a git checkout).'); btn.style.display='none'; changes.style.display='none'; return; }
   if(d.fetched===false){ st.innerHTML='<span class="text-secondary"><i class="bi bi-cloud-slash"></i> '+(d.message||'Couldn\'t reach the update source.')+'</span>'; btn.style.display='none'; changes.style.display='none'; return; }
   if(d.update_available){
-    st.innerHTML='<span class="text-warning"><i class="bi bi-arrow-up-circle-fill"></i> Update available: <strong>v'+(d.remote_version||'?')+'</strong> ('+d.behind+' commit'+(d.behind===1?'':'s')+' behind).</span>';
+    var note = (d.newer_unverified>0)
+      ? '<div class="small text-secondary mt-1"><i class="bi bi-hourglass-split"></i> '+d.newer_unverified+' newer commit'+(d.newer_unverified===1?'':'s')+' still being verified — you\'ll get '+(d.newer_unverified===1?'it':'them')+' once '+(d.newer_unverified===1?'it passes':'they pass')+' CI.</div>'
+      : '';
+    st.innerHTML='<span class="text-warning"><i class="bi bi-arrow-up-circle-fill"></i> Update available: <strong>v'+(d.remote_version||'?')+'</strong> ('+d.behind+' commit'+(d.behind===1?'':'s')+' behind).</span>'+note;
     btn.style.display='';
     var ul=document.getElementById('pu-changes-list'); ul.innerHTML='';
     (d.changes||[]).forEach(function(c){ var li=document.createElement('li'); li.textContent=c; ul.appendChild(li); });

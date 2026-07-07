@@ -1209,6 +1209,66 @@ finally:
     _so.panel_update_status = _orig_pus
     _so.os.path.isfile = _orig_isfile
 
+# ── _compute_update_status targets the newest VERIFIED commit ──
+# When the tip is still verifying but an earlier commit already passed CI, the panel must
+# offer that earlier verified commit (not block entirely, and not jump to the pending tip).
+_cus_git = _so._git
+_cus_isco = _so._is_git_checkout
+_cus_ver = _so.panel_version
+_cus_ci = _so._remote_ci_state
+try:
+    _so._is_git_checkout = lambda: True
+    _so.panel_version = lambda: "1.0.0"
+
+    def _mk_git(behind, commits):
+        # commits: full SHAs, newest (tip) first.
+        def _g(args, timeout=45):
+            if args[0] == "fetch":
+                return ("", "", 0)
+            if args[:3] == ["rev-parse", "--short", "HEAD"]:
+                return ("headabc", "", 0)
+            if args[:2] == ["rev-list", "--count"]:
+                return (str(behind), "", 0)
+            if args[:3] == ["rev-parse", "--short", "origin/main"]:
+                return (commits[0][:7] if commits else "", "", 0)
+            if args[0] == "rev-list" and "-n" in args:
+                return ("\n".join(commits), "", 0)
+            if args[0] == "show" and str(args[-1]).endswith(":VERSION"):
+                return ("9.9.9", "", 0)
+            if args[0] == "log":
+                return ("c1 a change", "", 0)
+            return ("", "", 0)
+        return _g
+
+    _C = ["a" * 40, "b" * 40, "c" * 40]   # tip=a, mid=b, old=c
+
+    # tip pending, middle passed → offer the middle (skip the pending tip).
+    _so._git = _mk_git(3, _C)
+    _so._remote_ci_state = lambda sha: {"a" * 40: "pending", "b" * 40: "passing",
+                                        "c" * 40: "passing"}.get(sha, "unknown")
+    _r = _so._compute_update_status()
+    check("update-target: offers the verified commit when the tip is pending",
+          _r["update_available"] and _r["target_sha"] == "b" * 40)
+    eq("update-target: newer unverified counted", _r.get("newer_unverified"), 1)
+    eq("update-target: behind is measured to the target, not the tip", _r["behind"], 2)
+
+    # tip passed → target is the tip, nothing pending above it.
+    _so._remote_ci_state = lambda sha: "passing"
+    _r = _so._compute_update_status()
+    check("update-target: tip passed -> target is the tip",
+          _r["update_available"] and _r["target_sha"] == "a" * 40 and _r["newer_unverified"] == 0)
+
+    # everything still verifying → offer nothing, explain why.
+    _so._remote_ci_state = lambda sha: "pending"
+    _r = _so._compute_update_status()
+    check("update-target: all pending -> no update offered",
+          _r["update_available"] is False and _r["ci_state"] == "pending")
+finally:
+    _so._git = _cus_git
+    _so._is_git_checkout = _cus_isco
+    _so.panel_version = _cus_ver
+    _so._remote_ci_state = _cus_ci
+
 # ── Tailscale: installed-but-not-authenticated (NeedsLogin) must not 500 ─
 import tailscale_integration as _tsi
 _tsi._run_ts = lambda args, timeout=5: (("1.0", "", 0) if args and args[0] in ("version", "--version")

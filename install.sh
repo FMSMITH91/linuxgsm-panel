@@ -254,7 +254,17 @@ fetch_code() {
         tar -C "${SRC}" --exclude=./venv --exclude=./data --exclude='*.pyc' -cf - . | tar -C "${PANEL_DIR}" -xf -
     elif [ -d "${PANEL_DIR}/.git" ]; then
         _gitc fetch --quiet origin "${DEFAULT_BRANCH}"
-        _gitc reset --hard --quiet "origin/${DEFAULT_BRANCH}"
+        # Default target is the fetched branch tip. The panel's CI-gated self-update may instead
+        # pin PANEL_UPDATE_REF to the newest CI-VERIFIED commit (which can be below the tip when
+        # newer commits are still being checked). Honour it ONLY when it's an ancestor of the tip
+        # we just fetched, so a bogus value can never check out arbitrary or untracked code.
+        local _target="origin/${DEFAULT_BRANCH}"
+        if [ -n "${PANEL_UPDATE_REF:-}" ] \
+           && _gitc merge-base --is-ancestor "${PANEL_UPDATE_REF}" "origin/${DEFAULT_BRANCH}" 2>/dev/null; then
+            _target="${PANEL_UPDATE_REF}"
+            echo "  Updating to verified commit ${PANEL_UPDATE_REF}"
+        fi
+        _gitc reset --hard --quiet "${_target}"
     elif [ -z "${SRC}" ]; then
         command -v git >/dev/null 2>&1 || die "git is required to fetch the panel.  apt install -y git"
         git clone --depth 1 --branch "${DEFAULT_BRANCH}" "${REPO_URL}" "${PANEL_DIR}"
