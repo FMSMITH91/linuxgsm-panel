@@ -86,6 +86,7 @@ from ssh_manager import (
     close_connection, run_command, ssh_test_connection,
     get_server_status, run_as_game_user, send_console_command,
     list_server_commands, server_live_metrics, remote_public_ip,
+    discover_linuxgsm_servers,
     remote_live_metrics, host_specs, pro_status, pro_attach,
     pro_service, pro_detach, set_autostart, install_game_cron, set_daily_restart,
     list_cron_jobs, add_cron_job, update_cron_job, delete_cron_job, upgrade_managed_cron_tracking,
@@ -271,6 +272,30 @@ def load_game_list():
         games = []
     _GAME_LIST_CACHE["games"] = games
     return games
+
+
+_LGSM_NAME_MAP = {"data": None}
+
+
+def lgsm_name_to_game_type(lgsm_name):
+    """Map a LinuxGSM 'gameservername' (e.g. 'gmodserver') to the panel's game_type / shortname
+    (e.g. 'gmod'), from the bundled serverlist. Used when importing servers discovered on a host.
+    Returns None for a game the panel doesn't know."""
+    if _LGSM_NAME_MAP["data"] is None:
+        import csv
+        m = {}
+        path = Path(__file__).parent / "lgsm" / "data" / "serverlist.csv"
+        try:
+            with open(path, newline="") as f:
+                for row in csv.DictReader(f):
+                    gsn = (row.get("gameservername") or "").strip()
+                    sn = (row.get("shortname") or "").strip()
+                    if gsn and sn:
+                        m[gsn] = sn
+        except Exception:
+            m = {}
+        _LGSM_NAME_MAP["data"] = m
+    return _LGSM_NAME_MAP["data"].get(lgsm_name)
 
 # ─── App Factory ──────────────────────────────────────────────
 
@@ -2211,6 +2236,71 @@ def register_routes(app):
         remote.last_seen = datetime.utcnow()
         db.session.commit()
         return redirect(url_for("manage_remotes"))
+
+    # ── Discover + import LinuxGSM servers already installed on a host ──
+    @app.route("/api/remote/<int:remote_id>/discover")
+    @login_required
+    @permission_required(MANAGE_SERVERS)
+    def api_remote_discover(remote_id):
+        """Scan a host for LinuxGSM servers already installed under any user account and return
+        the ones NOT yet in the panel, mapped to a known game. Read-only — imports nothing."""
+        if not (current_user.is_superadmin or can_access_remote(current_user, remote_id)):
+            return jsonify({"error": "You don't have access to that host."}), 403
+        remote = get_remote(remote_id)
+        try:
+            found = discover_linuxgsm_servers(remote)
+        except Exception:
+            return jsonify({"error": _log_and_generic("server discovery failed")}), 200
+        existing = {gs.short_name for gs in GameServer.query.filter_by(remote_id=remote_id).all()}
+        games = {g["shortname"]: g["name"] for g in load_game_list()}
+        out = []
+        for f in found:
+            user = f.get("user") or ""
+            if user in existing:
+                continue   # already in the panel
+            gt = lgsm_name_to_game_type(f.get("lgsm_name") or "")
+            if not gt or gt not in games:
+                continue   # a game the panel doesn't support — don't offer a broken import
+            out.append({"user": user, "game_type": gt, "game_name": games.get(gt, gt),
+                        "port": f.get("port") or 0})
+        return jsonify({"servers": out})
+
+    @app.route("/api/remote/<int:remote_id>/import", methods=["POST"])
+    @login_required
+    @permission_required(MANAGE_SERVERS)
+    def api_remote_import(remote_id):
+        """Create panel records for selected discovered servers. Each user/game_type is validated
+        with the SAME strict rules as a fresh install (so an imported short_name can never carry
+        shell metacharacters), and duplicates/unknowns are skipped."""
+        if not (current_user.is_superadmin or can_access_remote(current_user, remote_id)):
+            return jsonify({"error": "You don't have access to that host."}), 403
+        remote = get_remote(remote_id)
+        items = _json_body().get("servers") or []
+        if not isinstance(items, list) or not items:
+            return jsonify({"success": False, "message": "Nothing selected."}), 400
+        existing = {gs.short_name for gs in GameServer.query.filter_by(remote_id=remote_id).all()}
+        valid_games = {g["shortname"] for g in load_game_list()}
+        added, skipped = [], []
+        for it in items[:100]:
+            user = (it.get("user") or "").strip()
+            gt = (it.get("game_type") or "").strip().lower()
+            if not INSTANCE_NAME_RE.match(user) or gt not in valid_games or user in existing:
+                skipped.append(user or "?")
+                continue
+            try:
+                port = int(it.get("port") or 0)
+            except (TypeError, ValueError):
+                port = 0
+            db.session.add(GameServer(
+                remote_id=remote_id, name=user, short_name=user, game_type=gt,
+                port=(port if 1 <= port <= 65535 else 27015), installed=True, status="offline"))
+            existing.add(user)
+            added.append(user)
+        if added:
+            db.session.commit()
+            log_action(current_user, "import_servers", target=remote.name,
+                       detail="added=%s" % ",".join(added))
+        return jsonify({"success": bool(added), "added": added, "skipped": skipped})
 
     # ── User Management ────────────────────────────────────
     @app.route("/users")

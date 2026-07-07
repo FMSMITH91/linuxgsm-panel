@@ -530,6 +530,28 @@ try:
     check("db-health: non-superadmin is denied", dh_denied.status_code in (301, 302, 303, 403),
           "got %d" % dh_denied.status_code)
 
+    # ── Discover / import existing LinuxGSM servers on a host ──
+    dsc = c.get("/api/remote/%d/discover" % remote_id)
+    check("discover: superadmin gets a servers list (SSH to the fixture host yields none)",
+          dsc.status_code == 200 and isinstance((dsc.get_json() or {}).get("servers"), list),
+          "got %d" % dsc.status_code)
+    imp_empty = c.post("/api/remote/%d/import" % remote_id, json={"servers": []})
+    check("import: empty selection -> 400", imp_empty.status_code == 400)
+    # Import validates each entry like a fresh install: a bad username or unknown game is
+    # skipped (so an imported short_name can never carry shell metacharacters); a valid one is added.
+    imp = c.post("/api/remote/%d/import" % remote_id, json={"servers": [
+        {"user": "importedcs", "game_type": "csgo", "port": 27015},
+        {"user": "BAD NAME", "game_type": "csgo", "port": 1},
+        {"user": "okuser", "game_type": "notarealgame", "port": 1}]})
+    _im = imp.get_json() or {}
+    check("import: adds the valid server, skips the bad name + unknown game",
+          imp.status_code == 200 and _im.get("added") == ["importedcs"] and len(_im.get("skipped", [])) == 2,
+          "got %s" % _im)
+    imp_denied = client_as(mru_id).post("/api/remote/%d/import" % remote_id,
+                                        json={"servers": [{"user": "x", "game_type": "csgo"}]})
+    check("import: caller without manage_servers is denied",
+          imp_denied.status_code in (301, 302, 303, 403), "got %d" % imp_denied.status_code)
+
     # ── perf regression guard: NO N+1 on the hot paths ────────────
     # Seed 50 game servers across 5 hosts — enough that a per-server (rather than
     # per-host) query pattern would blow the budget — then assert the dashboard render

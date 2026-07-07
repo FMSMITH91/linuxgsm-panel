@@ -429,43 +429,48 @@ def _quote(s):
     return f"'{escaped}'"
 
 
-def list_linuxgsm_servers(server):
-    """List LinuxGSM servers found on the remote machine."""
-    out, err, rc = run_command(server, "ls -1 /home/ 2>/dev/null", timeout=10)
+def discover_linuxgsm_servers(server):
+    """Find LinuxGSM instances ALREADY installed on `server`, across every user account (each
+    LinuxGSM server usually lives under its own Ubuntu user). One sudo round trip: for each
+    /home/<user> that has an lgsm/config-lgsm/<gameservername>/ dir and a matching executable
+    ./<gameservername> script, report (user, lgsm_name, port). The port is read from the LinuxGSM
+    config as a hint — the panel re-reads the authoritative port(s) after import. The caller maps
+    <gameservername> to the panel's game_type and skips servers already added. Sudo is required
+    because game-user home dirs aren't world-readable. Best-effort — returns [] on any failure."""
+    # A single POSIX-sh script so the whole scan is one SSH command. Variables are quoted; the
+    # only inputs are on-host filenames (users / LinuxGSM dirs), never anything panel-supplied.
+    script = (
+        'for u in $(ls -1 /home/ 2>/dev/null); do '
+        '  d="/home/$u/lgsm/config-lgsm"; [ -d "$d" ] || continue; '
+        '  for g in $(ls -1 "$d" 2>/dev/null); do '
+        '    [ -x "/home/$u/$g" ] || continue; '
+        '    p=$(grep -hE "^[[:space:]]*port=" "$d/$g/$g.cfg" "$d/$g/common.cfg" '
+        '        "$d/$g/_default.cfg" 2>/dev/null | grep -oE "[0-9]+" | head -1); '
+        '    echo "FOUND|$u|$g|${p:-0}"; '
+        '  done; '
+        'done'
+    )
+    try:
+        out, _, rc = run_command(server, script, timeout=45, sudo=True)
+    except Exception:
+        _log.debug("discover_linuxgsm_servers: scan command failed", exc_info=True)
+        return []
     if rc != 0:
         return []
-    users = [u.strip() for u in out.split("\n") if u.strip()]
-
-    servers = []
-    for user in users:
-        script_path = f"/home/{user}/{user}"
-        check, _, rc = run_command(server, f"test -x {script_path} && echo 'exists'", timeout=5)
-        if rc == 0 and check == "exists":
-            details, _, _ = run_command(server, f"{script_path} details 2>/dev/null | head -50", timeout=15)
-            name = user
-            game_type = "unknown"
-            port = "27015"
-
-            for line in details.split("\n"):
-                l = line.strip()
-                if "port" in l.lower() and "=" in l:
-                    m = re.search(r'port\s*=\s*["\']?(\d+)', l, re.IGNORECASE)
-                    if m:
-                        port = m.group(1)
-
-            installed_check, _, _ = run_command(
-                server, f"{script_path} check-installed 2>&1 | tail -1", timeout=15
-            )
-            installed = "installed" in installed_check.lower()
-
-            servers.append({
-                "short_name": name,
-                "script_path": script_path,
-                "game_type": game_type,
-                "port": port,
-                "installed": installed,
-            })
-    return servers
+    found = []
+    for line in (out or "").splitlines():
+        if not line.startswith("FOUND|"):
+            continue
+        parts = line.split("|")
+        if len(parts) >= 4:
+            user, lgsm_name, port = parts[1].strip(), parts[2].strip(), parts[3].strip()
+            if user and lgsm_name:
+                found.append({
+                    "user": user,
+                    "lgsm_name": lgsm_name,
+                    "port": int(port) if port.isdigit() and int(port) > 0 else None,
+                })
+    return found
 
 
 def run_as_game_user(server, user, action_cmd, timeout=30, selfname=None):

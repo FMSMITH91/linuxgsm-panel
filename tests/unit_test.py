@@ -1511,6 +1511,30 @@ check("game backup: stream yields nothing for an unsafe name",
 check("game backup: name shape accepts a real archive",
       bool(sm._GAME_BACKUP_NAME.match("gmodserver-2026-07-06-141117.tar.zst")))
 
+# ── discover_linuxgsm_servers: parse the one-shot host scan output ──
+_orig_disc_rc = sm.run_command
+try:
+    sm.run_command = lambda *a, **k: (
+        "FOUND|gmodserver|gmodserver|27015\n"
+        "FOUND|myrust|rustserver|28015\n"
+        "some unrelated line\n"
+        "FOUND|zeroport|csgoserver|0\n", "", 0)
+    _disc = sm.discover_linuxgsm_servers(None)
+    eq("discover: keeps only well-formed FOUND lines", len(_disc), 3)
+    check("discover: parses user / lgsm_name / port",
+          _disc[0] == {"user": "gmodserver", "lgsm_name": "gmodserver", "port": 27015})
+    check("discover: a 0/blank port becomes None (panel re-reads the real one)",
+          _disc[2]["user"] == "zeroport" and _disc[2]["port"] is None)
+    sm.run_command = lambda *a, **k: ("", "err", 1)
+    check("discover: returns [] when the scan command fails", sm.discover_linuxgsm_servers(None) == [])
+finally:
+    sm.run_command = _orig_disc_rc
+
+# ── lgsm_name_to_game_type: gameservername -> panel game_type, from serverlist.csv ──
+check("lgsm-name map: gmodserver -> gmod", _app.lgsm_name_to_game_type("gmodserver") == "gmod")
+check("lgsm-name map: rustserver -> rust", _app.lgsm_name_to_game_type("rustserver") == "rust")
+check("lgsm-name map: an unknown script -> None", _app.lgsm_name_to_game_type("notagameserver") is None)
+
 # ── db_maintenance: offline SQLite check / repair / optimize (updater + health card) ──
 import db_maintenance as _dbm
 import sqlite3 as _sq3
