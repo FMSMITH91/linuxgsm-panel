@@ -298,6 +298,31 @@ install_deps() {
     "${PANEL_DIR}/venv/bin/pip" install --quiet -r "${PANEL_DIR}/requirements.txt"
 }
 
+# Node.js LTS + jq + gamedig, for the panel's game-server player queries (player count/list, the
+# empty-only restart, and the moderation Players panel). Installed on the panel HOST so game
+# servers running here can be queried; remote hosts get it from the add-remote bootstrap. apt's
+# own nodejs is too old for current gamedig (needs Node >=18), so we pin LTS via NodeSource.
+# Fully idempotent + best-effort — a failure here must never break the install; player queries
+# simply stay unavailable until it's sorted.
+ensure_gamedig() {
+    command -v apt-get >/dev/null 2>&1 || return 0
+    local S=""; [ "$(id -u)" -ne 0 ] && S="sudo"
+    command -v jq >/dev/null 2>&1 && command -v curl >/dev/null 2>&1 \
+        || ${S} apt-get install -y jq curl >/dev/null 2>&1 || true
+    local nmaj; nmaj="$(node -v 2>/dev/null | grep -oE '[0-9]+' | head -1)"; nmaj="${nmaj:-0}"
+    if [ "${nmaj}" -lt 18 ]; then
+        info "Installing Node.js LTS (gamedig needs it for player queries)…"
+        curl -fsSL https://deb.nodesource.com/setup_lts.x | ${S} bash - >/dev/null 2>&1 \
+            && ${S} apt-get install -y nodejs >/dev/null 2>&1 \
+            || warn "Node.js LTS install failed — player queries stay unavailable until it's installed."
+    fi
+    if command -v npm >/dev/null 2>&1 && ! command -v gamedig >/dev/null 2>&1; then
+        info "Installing gamedig globally…"
+        ${S} npm install -g gamedig >/dev/null 2>&1 || warn "gamedig install failed — player queries unavailable."
+    fi
+    command -v gamedig >/dev/null 2>&1 && ok "gamedig ready for player queries" || true
+}
+
 # Run the panel (and its bursts: updates, backups, page-load probes) at LOW CPU/IO priority so it
 # yields to the game servers under contention — important on a 1-core VPS. Game servers autostart
 # via their own cron (nice 0), so they keep priority; the panel just waits its turn. Written as a
@@ -438,6 +463,7 @@ if [ "${IS_UPDATE}" -eq 1 ]; then
         if [ -d "${BACKUP_ROOT}" ]; then
             ls -1dt "${BACKUP_ROOT}"/*/ 2>/dev/null | tail -n +"$((KEEP_BACKUPS+1))" | xargs -r rm -rf
         fi
+        ensure_gamedig   # keep Node LTS + gamedig present on existing installs (host game queries)
         echo ""
         ok "Update complete: ${FROM_VER} → ${TO_VER}"
         # If the panel now answers on HTTPS, say so explicitly. Older installs were plain
@@ -562,6 +588,7 @@ fetch_code
 info "[2/4] Creating virtual environment & installing dependencies…"
 install_deps
 ok "Dependencies installed"
+ensure_gamedig   # Node LTS + gamedig for querying game servers that run on this panel host
 
 # Ensure the panel's listen port is free BEFORE the first boot: if 5000 (or a previously
 # configured port) is already taken by another service, the panel would fail to bind. Probe

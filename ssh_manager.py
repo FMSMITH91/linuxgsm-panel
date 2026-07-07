@@ -2628,7 +2628,7 @@ def remote_bootstrap_vps(server, set_timezone="UTC", enable_ufw=True, install_lg
 
     # Precompute the total step count so the progress bar is accurate.
     is_local = is_local_server(server)
-    total = 7  # lock, update, full-upgrade, autoremove, install, gamedig, unattended-upgrades
+    total = 8  # lock, update, full-upgrade, autoremove, install, node-lts, gamedig, unattended-upgrades
     total += 1 if set_timezone else 0
     total += 1 if enable_ufw else 0
     total += 2  # ssh hardening, swap
@@ -2677,10 +2677,10 @@ def remote_bootstrap_vps(server, set_timezone="UTC", enable_ufw=True, install_lg
     emit("Removing unused packages (autoremove)")
     run_command(server, "apt-get autoremove -y 2>&1 | tail -3", timeout=180, sudo=True)
 
-    # ── 3. Install essential packages (incl Node.js for gamedig) ──
+    # ── 3. Install essential packages (jq parses gamedig's JSON output) ──
     emit("Installing essential packages")
     pkgs = ("curl wget git ufw tmux htop net-tools unzip jq ca-certificates "
-            "software-properties-common nodejs npm unattended-upgrades apt-listchanges")
+            "software-properties-common unattended-upgrades apt-listchanges")
     if install_lgsm_deps:
         # LinuxGSM base dependencies (32-bit libs for SteamCMD, etc.)
         pkgs += " python3 python3-pip bc lib32gcc-s1 lib32stdc++6 libsdl2-2.0-0:i386"
@@ -2689,6 +2689,19 @@ def remote_bootstrap_vps(server, set_timezone="UTC", enable_ufw=True, install_lg
     run_command(server, "dpkg --add-architecture i386 2>/dev/null; add-apt-repository -y universe 2>/dev/null; apt-get update -qq 2>/dev/null", timeout=120, sudo=True)
     out, _, _ = run_command(server, f"DEBIAN_FRONTEND=noninteractive apt-get install -y {pkgs} 2>&1 | tail -6", timeout=600, sudo=True)
     note(out or "OK")
+
+    # ── 3a. Node.js LTS via NodeSource — apt's own nodejs is too old for current gamedig
+    # (gamedig v5 needs Node >=18; e.g. Ubuntu 22.04's apt ships Node 12). Idempotent. ──
+    emit("Installing Node.js LTS")
+    node_cmd = (
+        'n=$(node -v 2>/dev/null | grep -oE "[0-9]+" | head -1); '
+        'if [ "${n:-0}" -lt 18 ]; then '
+        'curl -fsSL https://deb.nodesource.com/setup_lts.x | bash - >/dev/null 2>&1 && '
+        'DEBIAN_FRONTEND=noninteractive apt-get install -y nodejs 2>&1 | tail -3; '
+        'else echo "Node $(node -v) already present"; fi'
+    )
+    nd_out, _, _ = run_command(server, node_cmd, timeout=300, sudo=True)
+    note(nd_out or "Node.js LTS installed")
 
     # ── 3b. gamedig (game-server query tool) via npm ──
     emit("Installing gamedig (game server query tool)")
