@@ -286,11 +286,13 @@ if [ "${IS_UPDATE}" -eq 1 ]; then
     info "[1/5] Snapshotting current version + database → ${BACKUP}"
     mkdir -p "${BACKUP}"
     # Snapshot the code (minus venv/data) so we can restore the exact prior version…
-    tar -C "${PANEL_DIR}" --exclude=./venv --exclude=./data -czf "${BACKUP}/code.tgz" . 2>/dev/null
+    # gzip -1 (fastest) not default -6: on a 1-core VPS the snapshot shouldn't burn CPU for a few
+    # KB of extra compression. Still a valid .tgz, so rollback (tar -xzf) reads old + new snapshots.
+    tar -C "${PANEL_DIR}" --exclude=./venv --exclude=./data -cf - . 2>/dev/null | gzip -1 > "${BACKUP}/code.tgz"
     # …and the whole data dir (DB + encryption keys + config), since the app runs a
     # startup migration that mutates the DB — we restore this verbatim on rollback.
     if [ -d "${PANEL_DIR}/data" ]; then
-        tar -C "${PANEL_DIR}/data" --exclude=./.backups -czf "${BACKUP}/data.tgz" . 2>/dev/null
+        tar -C "${PANEL_DIR}/data" --exclude=./.backups -cf - . 2>/dev/null | gzip -1 > "${BACKUP}/data.tgz"
     fi
     ok "Snapshot saved"
 
