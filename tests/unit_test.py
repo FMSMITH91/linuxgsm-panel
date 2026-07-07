@@ -1056,6 +1056,38 @@ try:
 finally:
     sm.run_command = _orig_gp
 
+# ── remote_uptime is ONE ssh round-trip (was eight) + parses the composite output + caches ──
+_orig_ru = sm.run_command
+try:
+    _ru_n = {"n": 0}
+    _ru_out = "\n".join([
+        "UPTIME up 3 days, 4 hours", "LOAD 0.15 0.10 0.05", "DISK 5.0G/20G",
+        "MEM 1.2G/4.0G", "MEMPCT 30.0", "KERNEL 6.1.0", "CORES 2",
+        "cpu 100 0 100 800 0 0 0",   # sample A: total 1000, idle 800
+        "cpu 150 0 150 900 0 0 0",   # sample B: total 1200, idle 900 → idleΔ100/totalΔ200 = 50% busy
+    ])
+
+    def _ru_fake(server, cmd, **k):
+        _ru_n["n"] += 1
+        return (_ru_out, "", 0)
+    sm.run_command = _ru_fake
+    sm._uptime_cache.clear()
+    _usrv = NS(id=7)
+    _ru = sm.remote_uptime(_usrv)
+    check("uptime: a SINGLE ssh round-trip (was 8 separate commands)", _ru_n["n"] == 1)
+    eq("uptime: parses the uptime string", _ru["uptime"], "3 days, 4 hours")
+    eq("uptime: parses cores", _ru["cpu_cores"], "2")
+    eq("uptime: parses memory", _ru["memory"], "1.2G/4.0G")
+    eq("uptime: cpu% from /proc/stat delta", _ru["cpu_percent"], "50.0")
+    eq("uptime: cpu per-core derived", _ru["cpu_per_core"], "25.0")
+    sm.remote_uptime(_usrv)   # within TTL → served from cache, no 2nd ssh
+    check("uptime: second call served from cache", _ru_n["n"] == 1)
+    sm.remote_uptime(_usrv, force=True)   # force bypasses cache
+    check("uptime: force=True re-reads", _ru_n["n"] == 2)
+finally:
+    sm.run_command = _orig_ru
+    sm._uptime_cache.clear()
+
 # ── apt upgradable parsing: name + old→new version ──
 _APT_OUT = "\n".join([
     "Listing...",
@@ -1150,7 +1182,7 @@ finally:
     _shutil.rmtree(_kd, ignore_errors=True)
 
 # ── dashboard port-scan cache: concurrent polls share ONE ssh scan per remote ──
-import app as _app
+_app = sys.modules["app"]   # already imported via `from app import ...` above
 _o_ps_rc = _app.run_command
 try:
     _scan_n = {"n": 0}

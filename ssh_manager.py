@@ -516,14 +516,26 @@ def remote_public_ip(server):
     return ""
 
 
-def server_live_metrics(server, short_name=None, game_port=None):
+_live_metrics_cache = {}   # (server.id, short_name, game_port) -> (expiry_epoch, dict)
+_LIVE_METRICS_TTL = 2      # de-dups concurrent viewers of the SAME server (the detail page polls
+#                            every 4s, so a single viewer still gets a fresh read each poll)
+
+
+def server_live_metrics(server, short_name=None, game_port=None, force=False):
     """One-round-trip live metrics for polling. Reports both whole-VPS figures
     (CPU%% via /proc/stat delta, RAM, disk, load, uptime) AND — when a game user
     is given — that GAME's own CPU%%, RAM, process count and uptime, plus a
     port-listening online check. Per-game CPU is sampled by diffing the game
     processes' utime+stime jiffies across the same 0.25s window as the VPS CPU
     sample, expressed as a share of total machine capacity (same basis as
-    cpu_percent). Kept to a single SSH command for speed."""
+    cpu_percent). Kept to a single SSH command for speed, and cached for a couple
+    of seconds so two open tabs/viewers of one server don't each run the sample."""
+    _now = time.time()
+    _ck = (getattr(server, "id", None), short_name, game_port)
+    if not force:
+        _hit = _live_metrics_cache.get(_ck)
+        if _hit and _hit[0] > _now:
+            return _hit[1]
     # Robust per-process jiffie sum (utime+stime). /proc/pid/stat's comm field can
     # contain spaces/parens, so split on the LAST ')' before reading numeric fields.
     def _gjiffies(tag):
@@ -596,6 +608,8 @@ def server_live_metrics(server, short_name=None, game_port=None):
         m["game_ram_percent"] = round(m["game_ram_mb"] * 1024 * 1024 / m["ram_total"] * 100, 1)
     if m["disk_total"]:
         m["disk_percent"] = round(m["disk_used"] / m["disk_total"] * 100, 1)
+    if out:   # cache a real read only (an empty result == SSH blip; don't pin stale zeros)
+        _live_metrics_cache[_ck] = (_now + _LIVE_METRICS_TTL, m)
     return m
 
 
@@ -2336,33 +2350,70 @@ def remote_reboot(server):
     return True, "Reboot command sent to remote"
 
 
-def remote_uptime(server):
-    """Get uptime, CPU, RAM, disk from the remote server."""
-    out, _, _ = run_command(server, "uptime -p", timeout=10)
-    load, _, _ = run_command(server, "cat /proc/loadavg | awk '{print $1, $2, $3}'", timeout=10)
-    disk, _, _ = run_command(server, "df -h / | tail -1 | awk '{print $3\"/\"$2}'", timeout=10)
-    mem, _, _ = run_command(server, "free -h | grep Mem | awk '{print $3\"/\"$2}'", timeout=10)
-    mem_percent, _, _ = run_command(server, "free | grep Mem | awk '{printf \"%.1f\", $3/$2 * 100}'", timeout=10)
-    kernel, _, _ = run_command(server, "uname -r", timeout=10)
-    cpu_percent, _, _ = run_command(server, "top -bn1 | grep 'Cpu(s)' | awk '{print $2+$4}'", timeout=10)
-    cpu_cores, _, _ = run_command(server, "nproc", timeout=5)
-    cpu_per_core = ""
-    if cpu_percent and cpu_cores and cpu_cores.strip().isdigit():
+_uptime_cache = {}   # server.id -> (expiry_epoch, dict) — de-dups concurrent viewers of the card
+_UPTIME_TTL = 8      # the manage-remotes card polls ~every 15s; this only collapses overlap
+
+
+def remote_uptime(server, force=False):
+    """Uptime, CPU%, RAM, disk, kernel from the remote — in a SINGLE SSH round-trip (this used
+    to be EIGHT separate commands, incl. a `top -bn1`, on every 15s poll). CPU% is a /proc/stat
+    delta over 0.25s, which is far lighter than spawning top. Cached briefly so several viewers
+    of the Remotes page share one read instead of each doing their own."""
+    now = time.time()
+    if not force and server is not None:
+        hit = _uptime_cache.get(server.id)
+        if hit and hit[0] > now:
+            return hit[1]
+    # One composite command with tagged lines, parsed below — one round-trip, one process spawn.
+    parts = [
+        "echo UPTIME $(uptime -p)",
+        "awk '{print \"LOAD\",$1,$2,$3}' /proc/loadavg",
+        "df -h / | tail -1 | awk '{print \"DISK\",$3\"/\"$2}'",
+        "free -h | awk '/Mem:/{print \"MEM\",$3\"/\"$2}'",
+        "free | awk '/Mem:/{printf \"MEMPCT %.1f\\n\", $3/$2*100}'",
+        "echo KERNEL $(uname -r)",
+        "echo CORES $(nproc)",
+        "grep '^cpu ' /proc/stat", "sleep 0.25", "grep '^cpu ' /proc/stat",
+    ]
+    out, _, _ = run_command(server, " ; ".join(parts), timeout=15)
+    d = {"uptime": "unknown", "load": "?", "disk": "?", "memory": "?", "memory_percent": "?",
+         "kernel": "?", "cpu_percent": "?", "cpu_cores": "?", "cpu_per_core": ""}
+    cpu_lines = []
+    for line in (out or "").splitlines():
+        f = line.split()
+        if not f:
+            continue
+        tag = f[0]
+        if tag == "cpu" and len(f) >= 8:
+            cpu_lines.append([int(x) for x in f[1:8]])
+        elif tag == "UPTIME":
+            d["uptime"] = line[7:].replace("up ", "").strip() or "unknown"
+        elif tag == "LOAD" and len(f) >= 4:
+            d["load"] = f"{f[1]} {f[2]} {f[3]}"
+        elif tag == "DISK" and len(f) >= 2:
+            d["disk"] = f[1]
+        elif tag == "MEM" and len(f) >= 2:
+            d["memory"] = f[1]
+        elif tag == "MEMPCT" and len(f) >= 2:
+            d["memory_percent"] = f[1]
+        elif tag == "KERNEL" and len(f) >= 2:
+            d["kernel"] = f[1]
+        elif tag == "CORES" and len(f) >= 2:
+            d["cpu_cores"] = f[1]
+    if len(cpu_lines) >= 2:
+        a, b = cpu_lines[0], cpu_lines[1]
+        idle = b[3] - a[3]
+        total = sum(b) - sum(a)
+        if total > 0:
+            d["cpu_percent"] = f"{round((1 - idle / total) * 100, 1)}"
+    if d["cpu_percent"] not in ("?", "") and d["cpu_cores"].isdigit():
         try:
-            cpu_per_core = f"{float(cpu_percent)/int(cpu_cores):.1f}"
-        except ValueError:
-            _log.debug("remote_uptime: ignored non-fatal error", exc_info=True)
-    return {
-        "uptime": (out or "unknown").replace("up ", ""),
-        "load": load or "?",
-        "disk": disk or "?",
-        "memory": mem or "?",
-        "memory_percent": mem_percent or "?",
-        "kernel": kernel or "?",
-        "cpu_percent": cpu_percent or "?",
-        "cpu_cores": cpu_cores.strip() if cpu_cores else "?",
-        "cpu_per_core": cpu_per_core,
-    }
+            d["cpu_per_core"] = f"{float(d['cpu_percent']) / int(d['cpu_cores']):.1f}"
+        except (ValueError, ZeroDivisionError):
+            _log.debug("remote_uptime: per-core calc skipped", exc_info=True)
+    if server is not None and out:   # don't cache a failed/empty read
+        _uptime_cache[server.id] = (now + _UPTIME_TTL, d)
+    return d
 
 
 # ─── Full VPS Bootstrap ─────────────────────────────────

@@ -1207,6 +1207,17 @@ def register_routes(app):
         def _can(perm):
             return is_sa or perm in user_perms
 
+        # Use the cached LinuxGSM command list (populated at install time). If it's
+        # somehow empty, the sidebar's refresh button repopulates it on demand — we
+        # never block the page render on an SSH call to fetch it.
+        all_commands = gs.get_commands()
+        cmd_set = {c["cmd"] for c in all_commands}
+        # Some games aren't SteamCMD-based (e.g. the Call of Duty family) and have NO `update`
+        # command — LinuxGSM omits it from their menu. Only offer Update when the game actually
+        # supports it. If the command list hasn't been fetched yet (empty), fail open and show it
+        # — the sidebar's refresh button repopulates the list.
+        supports_update = (not cmd_set) or ("update" in cmd_set)
+
         # Order matters — this is the on-screen button order. Start, Stop, Restart,
         # Update reads most naturally (lifecycle order).
         actions = []
@@ -1216,13 +1227,8 @@ def register_routes(app):
             actions.append(("stop", "Stop"))
         if _can(RESTART_SERVER):
             actions.append(("restart", "Restart"))
-        if _can(UPDATE_SERVER):
+        if _can(UPDATE_SERVER) and supports_update:
             actions.append(("update", "Update"))
-
-        # Use the cached LinuxGSM command list (populated at install time). If it's
-        # somehow empty, the sidebar's refresh button repopulates it on demand — we
-        # never block the page render on an SSH call to fetch it.
-        all_commands = gs.get_commands()
 
         # Extra maintenance commands (beyond start/stop/restart/update) this game
         # supports and the user is allowed to run.
