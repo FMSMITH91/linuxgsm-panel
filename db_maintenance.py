@@ -122,11 +122,15 @@ def _rebuild_via_recover(src_path, dst_path):
     cli = shutil.which("sqlite3")
     if not cli:
         return False
+    # Both calls: fixed `sqlite3` binary (shutil.which), a literal '.recover' subcommand, and
+    # config-derived DB paths — no shell, nothing caller/HTTP supplied. Bandit B603 and Semgrep's
+    # dangerous-subprocess audit are false positives here (they flag any non-static argv).
     try:
-        rec = subprocess.run([cli, src_path, ".recover"], capture_output=True, timeout=600)  # nosec B603
+        rec = subprocess.run([cli, src_path, ".recover"], capture_output=True, timeout=600)  # nosec B603  # nosemgrep
         if rec.returncode != 0 or not rec.stdout:
             return False
-        load = subprocess.run([cli, dst_path], input=rec.stdout, capture_output=True, timeout=600)  # nosec B603
+        load = subprocess.run([cli, dst_path], input=rec.stdout,  # nosec B603  # nosemgrep
+                              capture_output=True, timeout=600)
         return load.returncode == 0 and os.path.exists(dst_path) and os.path.getsize(dst_path) > 0
     except (OSError, subprocess.SubprocessError):
         return False
