@@ -512,14 +512,31 @@ GAME_PRIORITY_NICE = -1   # slight CPU priority edge for game processes (root-on
 def set_game_priority(server, user, nice=GAME_PRIORITY_NICE):
     """Give a game user's processes a small CPU-priority edge by renicing them. A NEGATIVE nice is
     root-only, so this runs via sudo (as root, NOT the game user). Best-effort — a failure just
-    leaves the game at its default nice. Called right after a start/restart so the freshly-spawned
-    game process gets the boost. (Games autostarted on boot via cron stay at the default nice 0,
-    which is already above the deprioritised panel.)"""
+    leaves the game at its default nice. Called right after a panel start/restart so the freshly
+    spawned game process gets the boost; the periodic keeper (set_game_priority_bulk) then holds it
+    there even for servers the LinuxGSM monitor cron restarts as the game user."""
     try:
         run_command(server, _sudo_sh("renice -n %d -u %s" % (int(nice), user)),
                     timeout=15, sudo=False)
     except Exception:
         _log.debug("set_game_priority failed (non-fatal)", exc_info=True)
+
+
+def set_game_priority_bulk(server, users, nice=GAME_PRIORITY_NICE):
+    """Renice ALL processes of several game users in ONE root command (negative nice needs root).
+    The panel boosts a game on its own start/restart, but the LinuxGSM monitor cron restarts a
+    crashed server AS the game user — which can't lower its own nice — so it drops back to 0. The
+    periodic keeper calls this to re-apply the edge to every game, however it (re)started. A user
+    with no running processes is a harmless no-op. `users` are validated instance names (no
+    injection risk). Best-effort."""
+    users = [u for u in users if u]
+    if not users:
+        return
+    try:
+        run_command(server, _sudo_sh("renice -n %d -u %s" % (int(nice), " ".join(users))),
+                    timeout=20, sudo=False)
+    except Exception:
+        _log.debug("set_game_priority_bulk failed (non-fatal)", exc_info=True)
 
 
 def send_console_command(server, user, command, timeout=20, selfname=None):

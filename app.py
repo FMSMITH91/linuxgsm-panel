@@ -96,6 +96,7 @@ from ssh_manager import (
     delete_game_backup, stream_game_backup, backup_disk_info,
     mods_available, mods_installed, mods_action,
     player_count as sm_player_count, mod_restart_decision, set_game_priority,
+    set_game_priority_bulk,
     install_game_dependencies, parse_missing_deps, detect_game_ports, lgsm_read_config,
     lgsm_write_config, lgsm_game_config, lgsm_get_values, browse_dir, read_file,
     write_file, upload_file, delete_path,
@@ -5016,6 +5017,31 @@ def register_routes(app):
                 app.logger.debug("backup tick failed", exc_info=True)
             time.sleep(3600)
     _supervise("backup-ticker", backup_ticker)
+
+    # Keep game processes at their slight CPU-priority edge (nice -1). The panel boosts a game on
+    # its own start/restart, but the LinuxGSM monitor cron restarts a crashed server AS the game
+    # user — which can't set a negative nice — so it falls back to nice 0. Re-apply the boost on a
+    # slow cadence so every game, however it (re)started, settles at the intended priority. One
+    # batched `renice` per host; users with no running processes are a no-op.
+    def priority_keeper():
+        time.sleep(60)
+        while True:
+            try:
+                with app.app_context():
+                    by_remote = {}   # remote_id -> (remote, {short_name, …})
+                    for gs in GameServer.query.filter_by(installed=True).all():
+                        if not gs.remote_id:
+                            continue
+                        by_remote.setdefault(gs.remote_id, (gs.remote, set()))[1].add(gs.short_name)
+                    for remote, users in by_remote.values():
+                        try:
+                            set_game_priority_bulk(remote, sorted(users))
+                        except Exception:
+                            app.logger.debug("priority keeper: renice failed", exc_info=True)
+            except Exception:
+                app.logger.debug("priority keeper tick failed", exc_info=True)
+            time.sleep(120)
+    _supervise("priority-keeper", priority_keeper)
 
     # Make socketio accessible from app
     app.socketio = socketio

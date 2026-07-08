@@ -1085,6 +1085,13 @@ try:
     sm.set_game_priority(None, "codserver")
     check("set_game_priority: renices the game user via sudo (root)",
           any("renice -n -1 -u codserver" in c and "sudo bash -c" in c for c in _gp_cmds))
+    _gp_cmds.clear()
+    sm.set_game_priority_bulk(None, ["codserver", "gmodserver"])
+    check("set_game_priority_bulk: renices every game user in one sudo renice (keeper for cron restarts)",
+          any("renice -n -1 -u codserver gmodserver" in c and "sudo bash -c" in c for c in _gp_cmds))
+    _gp_cmds.clear()
+    sm.set_game_priority_bulk(None, [])
+    check("set_game_priority_bulk: no users -> no command", _gp_cmds == [])
 finally:
     sm.run_command = _orig_gp
 
