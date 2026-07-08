@@ -36,7 +36,7 @@ jobs:
         run: |
           python tools/lhci_serve.py > panel.log 2>&1 &
           echo $! > panel.pid
-          for i in $(seq 1 40); do
+          for _ in $(seq 1 40); do
             curl -sf http://127.0.0.1:5000/healthz && { echo; echo "panel up"; break; }
             sleep 1
           done
