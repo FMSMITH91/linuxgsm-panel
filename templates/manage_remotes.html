@@ -96,11 +96,16 @@
         {% if not remote.is_local %}
         <span class="text-secondary small">
           <code>{{ remote.username }}@{{ remote.host }}:{{ remote.port }}</code>
-          &middot; Auth: 
+          &middot; Auth:
           {% if remote.auth_method == 'tailscale' %}
-            <span class="badge bg-info text-dark">Tailscale SSH</span>
+            <span class="badge bg-success" title="Auth is handled by your tailnet — no SSH credential is stored in the panel, and SSH doesn't need to be exposed to the public internet.">
+              <i class="bi bi-shield-lock-fill"></i> Tailscale SSH</span>
+          {% elif remote.auth_method == 'key' %}
+            <span class="badge bg-secondary" title="Authenticates with an SSH key (the panel stores the key's path, not a password). Keys can't be brute-forced like a password.">
+              <i class="bi bi-key-fill"></i> SSH key</span>
           {% else %}
-            {{ remote.auth_method }}
+            <span class="badge bg-warning text-dark" title="A reusable SSH password is stored (encrypted) in the panel. If this host's SSH port is reachable from the internet it can be brute-forced — an SSH key or Tailscale SSH is stronger.">
+              <i class="bi bi-exclamation-triangle-fill"></i> Password</span>
           {% endif %}
           {% if remote.linuxgsm_user %} &middot; LGSM User: {{ remote.linuxgsm_user }}{% endif %}
           &middot; Sudo: {{ "Yes" if remote.sudo_enabled else "No" }}
