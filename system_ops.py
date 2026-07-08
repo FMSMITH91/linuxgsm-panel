@@ -1149,7 +1149,7 @@ def _panel_f2b_jail_port():
                 if m:
                     return int(m.group(1))
     except OSError:
-        pass
+        _log.debug("f2b: could not read jail port", exc_info=True)
     return None
 
 
