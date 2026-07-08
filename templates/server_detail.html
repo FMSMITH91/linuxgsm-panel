@@ -613,7 +613,7 @@ function showActionOutput(title, text, ok) {
     + '<div class="card-header d-flex justify-content-between align-items-center">'
     + '<span><i class="bi bi-' + (ok ? 'info-circle' : 'x-circle') + '"></i> ' + escapeHtml(title) + '</span>'
     + '<button class="btn btn-sm btn-outline-secondary py-0 px-2" data-close="1">Close</button></div>'
-    + '<div class="card-body" style="overflow:auto;">'
+    + '<div class="card-body" style="flex:1 1 auto;min-height:0;overflow-y:auto;">'
     + '<pre style="white-space:pre-wrap;word-break:break-word;margin:0;font-size:.8rem;">' + escapeHtml(text) + '</pre>'
     + '</div></div>';
   function close(){ ov.remove(); document.removeEventListener('keydown', onEsc); }
