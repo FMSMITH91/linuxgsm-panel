@@ -1,0 +1,31 @@
+name: Dependency Review
+
+# On every pull request, flag a NEWLY-INTRODUCED dependency that has a known vulnerability
+# (high or above), using the repo's dependency graph. This complements the other two dependency
+# layers rather than duplicating them: Dependabot UPDATES existing deps, pip-audit scans the WHOLE
+# current set on every push — this is the review-time gate on what a PR is about to ADD.
+#
+# It only runs on pull_request (the action diffs the PR base against its head), so a push straight
+# to main won't trigger it; it stays dormant until a PR is opened. Skipped on a private repo
+# without GitHub Advanced Security (same guard the CodeQL workflow uses).
+
+on:
+  pull_request:
+    branches: [ main ]
+
+# Least-privilege: this only needs to read the repo + its dependency graph.
+permissions:
+  contents: read
+
+jobs:
+  dependency-review:
+    name: Dependency Review
+    runs-on: ubuntu-latest
+    if: ${{ github.event.repository.private == false }}
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
+      - name: Dependency Review
+        uses: actions/dependency-review-action@a1d282b36b6f3519aa1f3fc636f609c47dddb294 # v5.0.0
+        with:
+          # Fail the PR check when it would pull in a dependency with a high/critical advisory.
+          fail-on-severity: high

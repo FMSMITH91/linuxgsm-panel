@@ -1,0 +1,33 @@
+name: Actionlint
+
+# Static analysis of the GitHub Actions workflow files THEMSELVES. actionlint catches shell
+# injection via untrusted ${{ github.event.* }} interpolated into run: steps, invalid/deprecated
+# workflow syntax, bad globs/refs, and — through its built-in shellcheck — real bugs in the
+# embedded run: scripts. Complements CodeQL's semantic "actions" analysis and the standalone-.sh
+# shellcheck that already runs in CI.
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+
+# Least-privilege default; the job below escalates only to post its check-run annotations.
+permissions:
+  contents: read
+
+jobs:
+  actionlint:
+    name: actionlint
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      checks: write   # reviewdog posts actionlint findings as a check run
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
+      - name: actionlint
+        uses: reviewdog/action-actionlint@6fb7acc99f4a1008869fa8a0f09cfca740837d9d # v1.72.0
+        with:
+          reporter: github-check
+          filter_mode: nofilter   # lint EVERY workflow file, not just lines a PR changed
+          fail_level: error
