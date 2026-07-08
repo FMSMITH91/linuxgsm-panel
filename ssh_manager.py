@@ -1605,7 +1605,11 @@ def _gamedig_player_list(server, user, game_type=None, port=None, query_type=Non
     gdtype = _gamedig_type(game_type, query_type)
     if not gdtype or not port:
         return None
-    jqf = ('[.players[] | {name:(.name // ""), score:(.raw.score // .score // null), '
+    # Player fields are protocol-specific in gamedig: Source/valve exposes score + time (seconds
+    # connected); Quake3/idTech3 (cod) exposes `frags` and no time. Pull score from score OR frags
+    # so cod shows a score too; time stays null where the game doesn't report it.
+    jqf = ('[.players[] | {name:(.name // ""), '
+           'score:(.raw.score // .score // .raw.frags // .frags // null), '
            'time:(.raw.time // .time // null)}]')
     cmd = f"gamedig --type {gdtype} 127.0.0.1:{int(port)} 2>/dev/null | jq -c {_quote(jqf)} 2>/dev/null"
     try:
