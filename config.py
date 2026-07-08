@@ -15,6 +15,13 @@ DB_PATH = DATA_DIR / "panel.db"
 SECRET_FILE = DATA_DIR / "secret_key"
 
 DATA_DIR.mkdir(parents=True, exist_ok=True)
+try:
+    # Owner-only: no other local user can even enter data/, so the DB, keys, backups and config
+    # inside are unreachable by another unprivileged account on the box (defence in depth against a
+    # compromised co-tenant / service). Runs on every import so existing installs get tightened too.
+    os.chmod(DATA_DIR, 0o700)
+except OSError:
+    _log.debug("could not chmod data dir to 0700", exc_info=True)
 
 DEFAULT_CONFIG = {
     "site_title": "LinuxGSM Panel",
@@ -174,3 +181,21 @@ def decrypt_secret(value):
 
 def is_encrypted(value):
     return bool(value) and value.startswith(_ENC_PREFIX)
+
+
+def harden_data_permissions():
+    """Tighten filesystem permissions on the data dir and every file in it that holds sensitive
+    data. Idempotent — call it on every startup so existing installs are locked down too. The
+    0700 on data/ is the real guard (another local user can't enter it at all); the per-file 0600s
+    are defence in depth for the case a file is ever copied out of the dir. Best-effort: a chmod
+    failure (e.g. odd filesystem) is logged, never fatal."""
+    targets = [(DATA_DIR, 0o700), (DB_PATH, 0o600), (CONFIG_FILE, 0o600),
+               (SECRET_FILE, 0o600), (CRED_KEY_FILE, 0o600),
+               # SQLite's WAL/SHM side files carry the same rows as the DB.
+               (Path(str(DB_PATH) + "-wal"), 0o600), (Path(str(DB_PATH) + "-shm"), 0o600)]
+    for path, mode in targets:
+        try:
+            if path.exists():
+                os.chmod(path, mode)
+        except OSError:
+            _log.debug("harden_data_permissions: chmod %s failed", path, exc_info=True)

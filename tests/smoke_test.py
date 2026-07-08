@@ -16,7 +16,7 @@ import sys
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from config import DB_PATH, SECRET_FILE, CRED_KEY_FILE, CONFIG_FILE
+from config import DATA_DIR, DB_PATH, SECRET_FILE, CRED_KEY_FILE, CONFIG_FILE
 
 # Never clobber a real install: only run against a fresh, throwaway data dir.
 if DB_PATH.exists():
@@ -367,6 +367,20 @@ try:
           b'rel="preload"' in hr.data and b"bootstrap-icons.woff2" in hr.data)
     check("Server header genericized (no framework/version leak)",
           hr.headers.get("Server") == "LinuxGSM Panel" and "Werkzeug" not in (hr.headers.get("Server") or ""))
+
+    # ── Data-dir hardening: sensitive files must be owner-only. chmod only sets POSIX bits, so
+    #    this is a no-op check off-Linux (Windows dev boxes); CI runs on Linux and enforces it.
+    if os.name == "posix":
+        import stat as _stat
+        dmode = _stat.S_IMODE(os.stat(DATA_DIR).st_mode)
+        check("perms: data/ is 0700 (owner-only)", dmode == 0o700, "got %o" % dmode)
+        if DB_PATH.exists():
+            dbmode = _stat.S_IMODE(os.stat(DB_PATH).st_mode)
+            check("perms: panel.db is 0600", dbmode == 0o600, "got %o" % dbmode)
+        for _kf in (SECRET_FILE, CRED_KEY_FILE):
+            if _kf.exists():
+                _km = _stat.S_IMODE(os.stat(_kf).st_mode)
+                check("perms: %s is 0600" % _kf.name, _km == 0o600, "got %o" % _km)
 
     # ── CSRF protection rejects a tokenless mutating POST ─────────
     # This client has CSRF disabled for convenience; flip it back on for one

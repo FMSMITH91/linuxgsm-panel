@@ -174,11 +174,20 @@ try:
 except Exception:
     cfg = {}
 cfg["port"] = port
-os.makedirs(os.path.dirname(cfg_path), exist_ok=True)
+data_dir = os.path.dirname(cfg_path)
+os.makedirs(data_dir, exist_ok=True)
+try:
+    os.chmod(data_dir, 0o700)   # owner-only: keep the DB/keys/config out of other local users' reach
+except OSError:
+    pass
 tmp = cfg_path + ".tmp"
 with open(tmp, "w") as f:
     json.dump(cfg, f, indent=2)
 os.replace(tmp, cfg_path)
+try:
+    os.chmod(cfg_path, 0o600)
+except OSError:
+    pass
 print(port)
 PYEOF
 }

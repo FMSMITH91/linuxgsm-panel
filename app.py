@@ -78,7 +78,7 @@ from auth import (
 )
 from config import (
     DATA_DIR, DB_PATH, get_secret_key, load_config, save_config,
-    encrypt_secret, decrypt_secret, is_encrypted,
+    encrypt_secret, decrypt_secret, is_encrypted, harden_data_permissions,
 )
 from models import (
     AuditLog, GameServer, Group, RemoteServer, SetupState, User, db, init_db,
@@ -471,6 +471,9 @@ def create_app():
     # Initialize extensions
     init_auth(app)
     init_db(app)
+    # Lock down data/ (0700) and the sensitive files inside (DB, keys, config → 0600) now that the
+    # DB exists — keeps them unreachable by other local users. Idempotent; tightens old installs too.
+    harden_data_permissions()
 
     # CSRF protection for every state-changing request. Forms carry a hidden token
     # (auto-injected in base.html); the JSON API sends it as an X-CSRFToken header
