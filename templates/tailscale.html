@@ -327,8 +327,9 @@
           </table>
         </div>
         {% if info.peers|length > 20 %}
+        {% set extra_peers = info.peers|length - 20 %}
         <div class="text-center small text-secondary py-2">
-          +{{ info.peers|length - 20 }} more peers
+          +{{ extra_peers }} more peers
         </div>
         {% endif %}
         {% else %}

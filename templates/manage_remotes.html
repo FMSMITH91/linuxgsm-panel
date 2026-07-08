@@ -150,11 +150,11 @@
         </form>{% endif %}
         {% if not remote.is_local %}
         <button class="btn btn-outline-info btn-sm" title="Set up Tailscale networking on this server"
-                onclick="checkTailscale({{ remote.id }}, '{{ remote.name|replace("'", "") }}')">
+                data-ts-check data-remote-id="{{ remote.id }}" data-remote-name="{{ remote.name }}">
           <i class="bi bi-wifi"></i> Tailscale
         </button>
         <button class="btn btn-outline-primary btn-sm" title="Prepare & secure: updates, firewall, hardening, fail2ban, reboot"
-                onclick="showBootstrap({{ remote.id }}, '{{ remote.name|replace("'", "") }}')">
+                data-ts-bootstrap data-remote-id="{{ remote.id }}" data-remote-name="{{ remote.name }}">
           <i class="bi bi-rocket-takeoff"></i> Prepare
         </button>
         {% endif %}
@@ -423,8 +423,9 @@ function toggleEditCreds(select, id) {
 // ── Tailscale Bootstrap ─────────────────────────────────
 
 function checkTailscale(remoteId, name) {
-  var html = '<div class="text-center py-4"><i class="bi bi-arrow-repeat"></i> Checking Tailscale status on ' + name + '...</div>';
-  showModal('Tailscale Setup: ' + name, html);
+  var safe = escapeHtml(name);   // name comes from a data-attribute; escape at every HTML sink
+  var html = '<div class="text-center py-4"><i class="bi bi-arrow-repeat"></i> Checking Tailscale status on ' + safe + '...</div>';
+  showModal('Tailscale Setup: ' + safe, html);
 
   fetch(MOUNT + '/api/remote/' + remoteId + '/tailscale-check')
     .then(r => r.json())
@@ -443,12 +444,13 @@ function checkTailscale(remoteId, name) {
 function renderTailscaleStatus(remoteId, name, status) {
   var installed = status.installed;
   var running = status.running;
+  var safe = escapeHtml(name);   // name is from a data-attribute — escape at each HTML sink
 
   var html = '';
 
   // Status badge
   if (installed && running) {
-    html += '<div class="alert alert-success py-2 small"><i class="bi bi-check-circle"></i> Tailscale is <strong>installed</strong> and <strong>running</strong> on ' + name + '.</div>';
+    html += '<div class="alert alert-success py-2 small"><i class="bi bi-check-circle"></i> Tailscale is <strong>installed</strong> and <strong>running</strong> on ' + safe + '.</div>';
     if (status.tailscale_ip) html += '<p class="small mb-1"><strong>IP:</strong> <code>' + status.tailscale_ip + '</code></p>';
     if (status.dns_name) html += '<p class="small mb-1"><strong>DNS:</strong> <code>' + status.dns_name + '</code></p>';
     html += '<hr><button class="btn btn-success btn-sm" onclick="migrateToTailscale(' + remoteId + ')"><i class="bi bi-arrow-repeat"></i> Migrate to Tailscale SSH</button>';
@@ -456,8 +458,8 @@ function renderTailscaleStatus(remoteId, name, status) {
     html += '<div class="alert alert-warning py-2 small"><i class="bi bi-exclamation-triangle"></i> Tailscale is <strong>installed</strong> but <strong>not running</strong>.</div>';
     html += renderAuthKeyForm(remoteId, name);
   } else {
-    html += '<div class="alert alert-info py-2 small"><i class="bi bi-info-circle"></i> Tailscale is <strong>not installed</strong> on ' + name + '.</div>';
-    html += '<button class="btn btn-primary btn-sm mb-2" onclick="installTailscale(' + remoteId + ', \'' + name + '\')"><i class="bi bi-download"></i> Install Tailscale</button>';
+    html += '<div class="alert alert-info py-2 small"><i class="bi bi-info-circle"></i> Tailscale is <strong>not installed</strong> on ' + safe + '.</div>';
+    html += '<button class="btn btn-primary btn-sm mb-2" data-install-ts data-ts-remote="' + Number(remoteId) + '" data-ts-name="' + safe + '"><i class="bi bi-download"></i> Install Tailscale</button>';
     html += '<div id="install-log" class="small mt-2"></div>';
   }
 
@@ -663,7 +665,7 @@ function showBootstrap(remoteId, name) {
       + '</div>'
     + '<pre id="bootstrap-log" class="small mt-2" style="max-height:260px;overflow-y:auto;font-size:.7rem;display:none;background:#0d1117;padding:8px;border-radius:4px;"></pre>';
 
-  showModal('Prepare & Secure: ' + name, html);
+  showModal('Prepare & Secure: ' + escapeHtml(name), html);   // name from a data-attribute
 }
 
 var _bootstrapPoll = null;
@@ -772,5 +774,19 @@ function setModalBody(html) {
   var el = document.getElementById('ts-modal-body');
   if (el) el.innerHTML = html;
 }
+
+// The per-remote Tailscale / Prepare buttons (and the generated "Install Tailscale" button) carry
+// their remote id + name in data-attributes instead of an inline onclick — so a remote NAME can
+// never break out of an attribute/handler, and there's no Jinja inside a JS-parsed context. The id
+// is coerced to a Number here (it's only ever used to build request URLs / handler calls).
+document.addEventListener('click', function(e){
+  var t = e.target;
+  var c = t.closest && t.closest('[data-ts-check]');
+  if (c) { checkTailscale(Number(c.getAttribute('data-remote-id')), c.getAttribute('data-remote-name')); return; }
+  var b = t.closest && t.closest('[data-ts-bootstrap]');
+  if (b) { showBootstrap(Number(b.getAttribute('data-remote-id')), b.getAttribute('data-remote-name')); return; }
+  var i = t.closest && t.closest('[data-install-ts]');
+  if (i) { installTailscale(Number(i.getAttribute('data-ts-remote')), i.getAttribute('data-ts-name')); return; }
+});
 </script>
 {% endblock %}
