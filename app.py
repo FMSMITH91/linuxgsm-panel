@@ -2435,6 +2435,14 @@ def register_routes(app):
     def delete_remote(remote_id):
         remote = get_remote(remote_id)
         name = remote.name
+        # Re-authenticate: deleting a remote (and ALL its game servers) is destructive, so require
+        # the operator to re-enter their own account password — a guard against an accidental or
+        # hijacked click. Verified constant-time via bcrypt (check_password).
+        if not check_password(_json_body().get("password", ""), current_user.password_hash):
+            if _wants_json():
+                return jsonify({"success": False, "message": "Incorrect password."}), 403
+            flash("Incorrect password.", "danger")
+            return redirect(url_for("manage_remotes"))
         # Delete associated game servers
         GameServer.query.filter_by(remote_id=remote_id).delete()
         # Delete group associations

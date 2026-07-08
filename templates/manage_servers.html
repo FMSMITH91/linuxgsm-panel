@@ -128,7 +128,7 @@
                  Disabled mid-install — uninstalling would delete the user/files out from under the
                  running install. watchInstall/stopInstall re-enables it when the install ends. #}
               <button type="button" class="btn btn-sm btn-outline-danger uninstall-btn" id="uninstall-btn-{{ gs.id }}"
-                      data-server-id="{{ gs.id }}" data-server-name="{{ gs.name }}"
+                      data-server-id="{{ gs.id }}" data-server-name="{{ gs.name }}" data-server-short="{{ gs.short_name }}"
                       {% if in_progress %}disabled title="Can't uninstall while it's installing — wait for it to finish"{% else %}title="Delete server and all data"{% endif %}>
                 <i class="bi bi-trash"></i> <span class="d-none d-md-inline">Uninstall</span>
               </button>
@@ -271,10 +271,13 @@ document.addEventListener('click', function(e){
   var b = e.target.closest && e.target.closest('.uninstall-btn');
   if (!b || b.disabled) return;
   var name = b.getAttribute('data-server-name') || '';
+  var short = b.getAttribute('data-server-short') || '';
   confirmDialog({
     title: 'Uninstall server', icon: 'trash', confirmLabel: 'Uninstall', confirmClass: 'btn-danger',
     body: 'Uninstall <strong>' + escapeHtml(name) + '</strong>? This permanently deletes the server, '
         + 'all its files, AND every backup it has — this cannot be undone.',
+    requireText: short,
+    requireLabel: 'Type the server’s username (' + short + ') to confirm:',
     onConfirm: function(){ doUninstall(b.getAttribute('data-server-id'), name, b); }
   });
 });

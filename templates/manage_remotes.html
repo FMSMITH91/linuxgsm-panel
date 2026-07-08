@@ -797,23 +797,27 @@ function removeRemote(btn){
   confirmDialog({
     title: 'Delete remote', icon: 'trash', confirmLabel: 'Delete', confirmClass: 'btn-danger',
     body: 'Delete <strong>' + escapeHtml(name) + '</strong>? This removes it and all of its game servers from the panel.',
-    onConfirm: function(){
-      var orig = btn.innerHTML;
-      btn.disabled = true; btn.innerHTML = '<span class="spinner-border spinner-border-sm"></span>';
-      fetch(MOUNT + '/remotes/' + id + '/delete', { method: 'POST' })
-        .then(function(r){ return r.json(); })
-        .then(function(d){
-          if (d && d.success){
+    requirePassword: true,
+    requireLabel: 'Enter your account password to confirm:',
+    onConfirm: function(pw, api){
+      fetch(MOUNT + '/remotes/' + id + '/delete', {
+        method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({ password: pw })
+      })
+        .then(function(r){ return r.json().then(function(d){ return { status: r.status, d: d || {} }; }); })
+        .then(function(res){
+          if (res.status === 200 && res.d.success){
+            api.close();
             var card = document.getElementById('remote-card-' + id);
             if (card){ card.style.transition = 'opacity .3s'; card.style.opacity = '0';
                        setTimeout(function(){ card.remove(); }, 300); }
-            if (window.toast) toast(d.message || 'Deleted', 'success');
+            if (window.toast) toast(res.d.message || 'Deleted', 'success');
+          } else if (res.status === 403){
+            api.error(res.d.message || 'Incorrect password.');
           } else {
-            btn.disabled = false; btn.innerHTML = orig;
-            if (window.toast) toast((d && d.message) || 'Delete failed', 'danger');
+            api.error(res.d.message || 'Delete failed.');
           }
         })
-        .catch(function(){ btn.disabled = false; btn.innerHTML = orig; if (window.toast) toast('Delete request failed', 'danger'); });
+        .catch(function(){ api.error('Delete request failed.'); });
     }
   });
 }

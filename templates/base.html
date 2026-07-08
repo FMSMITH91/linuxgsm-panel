@@ -779,28 +779,68 @@ window.toast = function(msg, kind){
 };
 
 // Global styled confirm dialog — replaces the browser's native confirm() so confirmations stay
-// in-app and look consistent. window.confirmDialog({title, icon, body (safe HTML — escape any
-// dynamic text), confirmLabel, confirmClass, onConfirm}). Dismiss via Cancel / backdrop / Esc;
-// only onConfirm runs the action.
+// in-app and look consistent. opts:
+//   {title, icon, body (safe HTML — escape any dynamic text), confirmLabel, confirmClass, onConfirm}
+// Extra gates:
+//   requireText:  a string the user must TYPE exactly before Confirm enables (type-to-confirm).
+//   requirePassword: true -> show a password field; Confirm passes its value to onConfirm and the
+//                    dialog STAYS OPEN so the caller can verify server-side, then call api.close()
+//                    on success or api.error('…') to re-prompt. onConfirm(value, api).
+//   requireLabel: label shown above the input.
+// Dismiss via Cancel / backdrop / Esc; only Confirm runs onConfirm.
 window.confirmDialog = function(opts){
   opts = opts || {};
+  var inputHtml = '';
+  if (opts.requireText || opts.requirePassword) {
+    inputHtml = '<div class="mb-3">'
+      + (opts.requireLabel ? '<label class="form-label small" for="cd-input">' + escapeHtml(opts.requireLabel) + '</label>' : '')
+      + '<input type="' + (opts.requirePassword ? 'password' : 'text') + '" class="form-control" id="cd-input"'
+      + (opts.requirePassword ? ' autocomplete="current-password" placeholder="Your account password"' : ' autocomplete="off" autocapitalize="off" spellcheck="false"') + '>'
+      + '<div class="small text-danger mt-1" id="cd-err" style="display:none;"></div>'
+      + '</div>';
+  }
   var ov = document.createElement('div');
   ov.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,.6);z-index:11050;display:flex;align-items:center;justify-content:center;padding:1rem;';
   ov.innerHTML = '<div class="card" style="max-width:480px;width:100%;">'
     + '<div class="card-header"><i class="bi bi-' + (opts.icon || 'question-circle') + '"></i> ' + escapeHtml(opts.title || 'Confirm') + '</div>'
     + '<div class="card-body">'
     + '<p class="mb-3">' + (opts.body || '') + '</p>'
+    + inputHtml
     + '<div class="d-flex justify-content-end gap-2">'
     + '<button class="btn btn-outline-secondary" data-cd="cancel">Cancel</button>'
     + '<button class="btn ' + (opts.confirmClass || 'btn-primary') + '" data-cd="ok">' + escapeHtml(opts.confirmLabel || 'Confirm') + '</button>'
     + '</div></div></div>';
   document.body.appendChild(ov);
+  var input = ov.querySelector('#cd-input'), okBtn = ov.querySelector('[data-cd="ok"]'),
+      errEl = ov.querySelector('#cd-err'), okHtml = okBtn.innerHTML;
   function close(){ ov.remove(); document.removeEventListener('keydown', onKey); }
   function onKey(e){ if(e.key === 'Escape') close(); }
   document.addEventListener('keydown', onKey);
-  ov.querySelector('[data-cd="ok"]').onclick = function(){ close(); if(opts.onConfirm) opts.onConfirm(); };
+  var api = {
+    close: close,
+    error: function(m){ if(errEl){ errEl.textContent = m || 'Incorrect.'; errEl.style.display=''; } okBtn.disabled=false; okBtn.innerHTML=okHtml; if(input){ input.value=''; input.focus(); } },
+    busy: function(){ okBtn.disabled=true; okBtn.innerHTML='<span class="spinner-border spinner-border-sm"></span>'; }
+  };
+  if (opts.requireText) {
+    okBtn.disabled = true;
+    input.addEventListener('input', function(){ okBtn.disabled = (input.value !== opts.requireText); });
+  } else if (opts.requirePassword) {
+    okBtn.disabled = true;
+    input.addEventListener('input', function(){ okBtn.disabled = !input.value; if(errEl) errEl.style.display='none'; });
+  }
+  function submit(){
+    if (okBtn.disabled) return;
+    var val = input ? input.value : undefined;
+    if (opts.requirePassword) { api.busy(); if(opts.onConfirm) opts.onConfirm(val, api); return; } // caller closes/errors
+    close(); if (opts.onConfirm) opts.onConfirm(val, api);
+  }
+  okBtn.onclick = submit;
   ov.querySelector('[data-cd="cancel"]').onclick = close;
   ov.addEventListener('click', function(e){ if(e.target === ov) close(); });
+  if (input) {
+    input.addEventListener('keydown', function(e){ if(e.key === 'Enter'){ e.preventDefault(); submit(); } });
+    setTimeout(function(){ input.focus(); }, 50);
+  }
 };
 
 // Copy text to the clipboard and confirm with a toast. Falls back to execCommand
