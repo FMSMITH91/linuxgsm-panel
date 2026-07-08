@@ -797,9 +797,13 @@ def install_game_cron(server, user, selfname=None, supported=None):
 GAMEDIG_TYPE = {
     "gmod": "garrysmod", "cs": "cs16", "css": "css", "cs2": "cs2", "tf2": "tf2",
     "hl2dm": "hl2dm", "dods": "dods", "left4dead2": "left4dead2", "l4d2": "left4dead2",
-    "insurgency": "insurgency", "rust": "rust", "valheim": "valheim", "vh": "valheim",
+    "insurgency": "insurgency", "ins": "insurgency", "rust": "rust",
+    "valheim": "valheim", "vh": "valheim",
     "sdtd": "sdtd", "7d2d": "sdtd", "mc": "minecraft", "mcb": "minecraftpe",
     "squad": "squad", "arma3": "arma3", "mumble": "mumble",
+    # Call of Duty family — gamedig CAN query these (protocol names match the LinuxGSM shortnames),
+    # so the player count (restart/backup guards + daily-restart-when-empty) works for them too.
+    "cod": "cod", "coduo": "coduo", "cod2": "cod2", "cod4": "cod4", "codwaw": "codwaw",
 }
 
 

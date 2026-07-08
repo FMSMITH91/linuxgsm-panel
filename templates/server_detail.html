@@ -339,10 +339,6 @@ function renderPlayers(d){
   if(qt && document.activeElement!==qt) qt.value = d.query_type || '';
   if(qd) qd.textContent = d.default_query || '(none)';
   var engine=d.engine||'';
-  // Console engines (valve/idTech3/Minecraft) read players from the console, so the gamedig
-  // query-type override is irrelevant — hide it for them (e.g. Call of Duty).
-  var qblock=document.getElementById('pl-qtype-block');
-  if(qblock) qblock.style.display = d.uses_gamedig ? '' : 'none';
   // A cross-server ban only ports where the identifier is portable: SteamID on Valve servers, name
   // on Minecraft. idTech3 slot bans can't, so the toggle stays hidden there.
   var scopeBox=document.getElementById('pl-ban-scope');

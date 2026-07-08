@@ -336,9 +336,18 @@ function fieldHtml(s){
     + '</label>'
     + '<input type="text" class="form-control form-control-sm" data-key="'+esc(s.key)+'" data-orig="'+esc(s.value)+'" value="'+esc(s.value)+'"'
     + (def!==''?' placeholder="'+esc(def)+'"':'') + '>'
-    + (def!==''?'<div class="text-secondary text-truncate" style="font-size:.62rem;" title="default: '+esc(def)+'">default: <code>'+esc(def)+'</code></div>':'')
+    + (def!==''?'<div class="text-secondary text-truncate" style="font-size:.62rem;">default: '
+        + '<code class="cfg-copy-default" data-copy="'+esc(def)+'" style="cursor:pointer;" '
+        + 'title="default: '+esc(def)+' — click to copy">'+esc(def)+'</code></div>':'')
     + '</div>';
 }
+// Click any "default: <value>" to copy that value to the clipboard (delegated, so it keeps working
+// after the config list re-renders). Uses the shared copyText() helper for the copy + confirmation.
+document.addEventListener('click', function(ev){
+  var c = ev.target.closest && ev.target.closest('.cfg-copy-default');
+  if(!c) return;
+  if(window.copyText) window.copyText(c.getAttribute('data-copy') || '', 'Copied default');
+});
 function loadConfig(){
   fetch(MOUNT+'/api/server/'+serverId+'/config').then(r=>r.json()).then(d=>{
     document.getElementById('cfg-loading').style.display='none';

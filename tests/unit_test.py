@@ -994,7 +994,7 @@ check("daily_restart(mapped): sets pending flag at 05:00 (recorder-wrapped)",
       and ".status" in _cron["add"][0])
 check("daily_restart(mapped): queries gamedig for player count",
       "gamedig --type garrysmod 127.0.0.1:27015" in _cron["add"][1])
-sm.set_daily_restart(None, "codserver", game_type="cod", port=28960, enabled=True)
+sm.set_daily_restart(None, "noqueryserver", game_type="noquerygame", port=28960, enabled=True)
 check("daily_restart(unmapped game): skips gamedig, no player query",
       "gamedig" not in _cron["add"][1] and "P=; " in _cron["add"][1])
 sm.set_daily_restart(None, "gmodserver", enabled=False)
@@ -1616,13 +1616,15 @@ finally:
 
 # ── gamedig query type: per-server override wins over the built-in map, sanitized ──
 check("query-type: an explicit override wins over the built-in map",
-      sm._gamedig_type("cod", "cod") == "cod")
+      sm._gamedig_type("gmod", "customtype") == "customtype")
 check("query-type: unmapped game with no override -> '' (no gamedig type)",
-      sm._gamedig_type("cod", None) == "")
+      sm._gamedig_type("noquerygame", None) == "")
 check("query-type: a mapped game with no override uses the map",
       sm._gamedig_type("gmod", None) == "garrysmod")
 check("query-type: the override is sanitized to a gamedig-safe charset",
       sm._gamedig_type("cod", "co d;rm -rf") == "codrm-rf")
+check("query-type: the Call of Duty family is mapped, so its player count (restart/backup) works",
+      sm._gamedig_type("cod", None) == "cod" and sm._gamedig_type("cod4", None) == "cod4")
 check("query-type: a game with neither engine nor map becomes queryable once an override is set",
       sm.is_player_queryable("nosuchgame", None) is False
       and sm.is_player_queryable("nosuchgame", "quake3") is True)

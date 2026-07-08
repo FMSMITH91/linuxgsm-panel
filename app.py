@@ -1576,14 +1576,9 @@ def register_routes(app):
                                   selfname=gs.lgsm_name)
         except Exception:
             players = []
-        engine = game_engine(gs.game_type)
         return jsonify({"players": players, "caps": moderation_caps(gs.game_type),
                         "queryable": is_player_queryable(gs.game_type, gs.query_type),
-                        "engine": engine,
-                        # The gamedig query-type override only matters for games we query via gamedig;
-                        # console engines (valve/idTech3/Minecraft) read the player list from the
-                        # console, so the panel hides that field for them.
-                        "uses_gamedig": (not engine),
+                        "engine": game_engine(gs.game_type),
                         "query_type": gs.query_type or "",
                         "default_query": GAMEDIG_TYPE_MAP.get(gs.game_type, "")})
 
