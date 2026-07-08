@@ -269,7 +269,12 @@ fetch_code() {
     if [ -n "${SRC}" ] && [ "${SRC}" != "${PANEL_DIR}" ]; then
         tar -C "${SRC}" --exclude=./venv --exclude=./data --exclude='*.pyc' -cf - . | tar -C "${PANEL_DIR}" -xf -
     elif [ -d "${PANEL_DIR}/.git" ]; then
-        _gitc fetch --quiet origin "${DEFAULT_BRANCH}"
+        # The fresh clone below is shallow + single-branch (main only). Widen it so ANY branch is
+        # fetchable and give it real history, so switching branches / updating on a branch works.
+        _gitc remote set-branches origin '*' 2>/dev/null || true
+        _gitc fetch --quiet --prune --unshallow origin 2>/dev/null \
+            || _gitc fetch --quiet --prune origin 2>/dev/null \
+            || _gitc fetch --quiet origin "${DEFAULT_BRANCH}"
         # Default target is the fetched branch tip. The panel's CI-gated self-update may instead
         # pin PANEL_UPDATE_REF to the newest CI-VERIFIED commit (which can be below the tip when
         # newer commits are still being checked). Honour it ONLY when it's an ancestor of the tip
@@ -283,7 +288,9 @@ fetch_code() {
         _gitc reset --hard --quiet "${_target}"
     elif [ -z "${SRC}" ]; then
         command -v git >/dev/null 2>&1 || die "git is required to fetch the panel.  apt install -y git"
-        git clone --depth 1 --branch "${DEFAULT_BRANCH}" "${REPO_URL}" "${PANEL_DIR}"
+        # --no-single-branch keeps the clone shallow (fast) but fetches EVERY branch tip, so the
+        # panel's branch switcher can see + check out non-main branches without re-fetching history.
+        git clone --depth 1 --no-single-branch --branch "${DEFAULT_BRANCH}" "${REPO_URL}" "${PANEL_DIR}"
     fi
 }
 
