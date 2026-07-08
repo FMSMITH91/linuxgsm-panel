@@ -1667,6 +1667,12 @@ check("query-type: a game with neither engine nor map becomes queryable once an 
       sm.is_player_queryable("nosuchgame", None) is False
       and sm.is_player_queryable("nosuchgame", "quake3") is True)
 
+# ── change_ssh_port: input validation rejects bad ports BEFORE touching the host ──
+check("ssh-port: non-numeric rejected", sm.change_ssh_port(None, "abc")[0] is False)
+check("ssh-port: port 0 rejected", sm.change_ssh_port(None, 0)[0] is False)
+check("ssh-port: port 70000 (out of range) rejected", sm.change_ssh_port(None, 70000)[0] is False)
+check("ssh-port: negative port rejected", sm.change_ssh_port(None, -5)[0] is False)
+
 # ── db_maintenance: offline SQLite check / repair / optimize (updater + health card) ──
 import db_maintenance as _dbm
 import sqlite3 as _sq3

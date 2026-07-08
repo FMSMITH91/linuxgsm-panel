@@ -111,7 +111,7 @@ from ssh_manager import (
     remote_install_tailscale, remote_bootstrap_tailscale,
     remote_migrate_to_tailscale, remote_tailscale_up_url,
     remote_tailscale_finalize,
-    remote_ufw_close_port_22,
+    remote_ufw_close_port_22, change_ssh_port,
 )
 import tailscale_integration as ts
 import system_ops as so
@@ -4095,6 +4095,36 @@ def register_routes(app):
         success, msg = remote_set_public_ssh(remote, mode)
         log_action(current_user, "remote_ssh_mode", target=f"{remote.name}:{mode}", success=success)
         return jsonify({"success": success, "message": msg})
+
+    @app.route("/api/remote/<int:remote_id>/ssh-port", methods=["POST"])
+    @login_required
+    @permission_required(MANAGE_REMOTES)
+    def api_remote_ssh_port(remote_id):
+        """Move this host's sshd to a new port (lockout-safe: the old port stays open as a fallback,
+        and UFW + fail2ban are updated with it). Works for a remote and the panel host itself."""
+        if not (current_user.is_superadmin or can_access_remote(current_user, remote_id)):
+            return jsonify({"success": False, "message": "You don't have access to that host."}), 403
+        remote = get_remote(remote_id)
+        try:
+            new_port = int(_json_body().get("port"))
+        except (TypeError, ValueError):
+            return jsonify({"success": False, "message": "Enter a valid port number."}), 400
+        if not (1 <= new_port <= 65535):
+            return jsonify({"success": False, "message": "Port must be between 1 and 65535."}), 400
+        old = remote.port
+        try:
+            ok, msg = change_ssh_port(remote, new_port)
+        except Exception:
+            return jsonify({"success": False, "message": _log_and_generic("SSH port change failed")}), 500
+        if ok:
+            # Point the panel at the new port for future connections (cosmetic for the local host,
+            # which doesn't SSH). Same host, so the pinned host key still applies — leave it. The old
+            # port stays open, so any connection the panel is using right now survives.
+            remote.port = new_port
+            db.session.commit()
+        log_action(current_user, "change_ssh_port", target=remote.name,
+                   detail=f"{old} -> {new_port}", success=ok)
+        return jsonify({"success": ok, "message": msg})
 
     @app.route("/api/remote/<int:remote_id>/close-panel-port", methods=["POST"])
     @login_required

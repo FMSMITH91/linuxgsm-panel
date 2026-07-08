@@ -501,6 +501,21 @@
         <div id="panel-port-change-msg" class="small mt-1"></div>
       </div>
     </div>
+    <div class="row g-3 mt-1">
+      <div class="col-md-8">
+        <div class="small text-secondary mb-1"><i class="bi bi-door-closed"></i> SSH port <span class="text-secondary">(the port sshd listens on)</span> — current: <code>{{ remote.port }}</code></div>
+        <p class="small text-secondary mb-1">Moving SSH off port 22 stops most automated scanning and brute-force. This is lockout-safe — the current port stays open as a fallback, and the firewall and fail2ban are updated to the new port. Close the old port from the <a href="{{ url_for('remote_firewall', remote_id=remote.id) }}">Firewall</a> page once you've confirmed the new one.</p>
+        <div class="d-flex gap-2 flex-wrap align-items-end">
+          <div>
+            <label class="form-label small mb-1" for="ssh-port-input">New SSH port</label>
+            <input type="number" id="ssh-port-input" class="form-control form-control-sm" min="1" max="65535"
+                   style="width:120px;" placeholder="e.g. 2222" aria-label="New SSH port">
+          </div>
+          <button class="btn btn-sm btn-outline-primary" type="button" onclick="changeSshPort()">Change SSH port</button>
+        </div>
+        <div id="ssh-port-msg" class="small mt-1"></div>
+      </div>
+    </div>
     {% else %}
     <div class="row g-3">
       <div class="col-md-6">
@@ -524,6 +539,21 @@
           <button class="btn btn-sm btn-outline-danger" data-ssh-btn="off" onclick="sshMode('off')" title="Remove public port 22 rule — SSH only over Tailscale">Disable (tailnet-only)</button>
         </div>
         <div id="ssh-msg" class="small mt-1"></div>
+      </div>
+    </div>
+    <div class="row g-3 mt-1">
+      <div class="col-12">
+        <div class="small text-secondary mb-1"><i class="bi bi-door-closed"></i> SSH port <span class="text-secondary">(the port sshd listens on)</span> — current: <code>{{ remote.port }}</code></div>
+        <p class="small text-secondary mb-1">Moving SSH off port 22 stops most automated scanning and brute-force. This is lockout-safe — the current port stays open as a fallback, and the firewall and fail2ban are updated to the new port. Close the old port from the <a href="{{ url_for('remote_firewall', remote_id=remote.id) }}">Firewall</a> page once you've confirmed the new one, and the panel will use the new port automatically.</p>
+        <div class="d-flex gap-2 flex-wrap align-items-end">
+          <div>
+            <label class="form-label small mb-1" for="ssh-port-input">New SSH port</label>
+            <input type="number" id="ssh-port-input" class="form-control form-control-sm" min="1" max="65535"
+                   style="width:120px;" placeholder="e.g. 2222" aria-label="New SSH port">
+          </div>
+          <button class="btn btn-sm btn-outline-primary" type="button" onclick="changeSshPort()">Change SSH port</button>
+        </div>
+        <div id="ssh-port-msg" class="small mt-1"></div>
       </div>
     </div>
     {% if remote.auth_method != 'tailscale' %}
@@ -830,6 +860,25 @@ function _changePanelBinding(p, bind){
       m.innerHTML='<span class="text-warning">The panel is restarting — reconnect in a moment'
         + (location.port ? ' on the new address/port' : '') + '.</span>';
     });
+}
+function changeSshPort(){
+  var inp=document.getElementById('ssh-port-input'); if(!inp) return;
+  var p=parseInt(inp.value,10);
+  if(!(p>=1 && p<=65535)){ if(window.toast) toast('Enter a port between 1 and 65535.','warning'); return; }
+  confirmDialog({title:'Change SSH port', icon:'door-closed', confirmClass:'btn-primary', confirmLabel:'Change SSH port',
+    bodyText:'Move SSH to port '+p+'?\n\nLockout-safe: the current port stays open as a fallback, and the '
+      +'firewall and fail2ban are updated to the new port. Once you\'ve confirmed you can reach SSH on '
+      +p+', close the old port from the Firewall page.',
+    onConfirm:function(){
+      var m=document.getElementById('ssh-port-msg');
+      if(m) m.innerHTML='<span class="text-secondary"><i class="bi bi-arrow-repeat"></i> Applying (opening the port, updating sshd + fail2ban, restarting sshd)…</span>';
+      fetch(MOUNT+'/api/remote/'+REMOTE_ID+'/ssh-port',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({port:p})})
+        .then(function(r){return r.json();}).then(function(d){
+          if(m) m.innerHTML='<span class="text-'+(d.success?'success':'danger')+'">'+(window.escapeHtml?escapeHtml(d.message||''):(d.message||''))+'</span>';
+          if(window.toast) toast(d.message||(d.success?'SSH port changed':'Failed'), d.success?'success':'danger');
+        })
+        .catch(function(){ if(m) m.innerHTML='<span class="text-danger">Request failed.</span>'; });
+    }});
 }
 function switchToTailscale(){
   confirmDialog({title:'Migrate to Tailscale SSH', icon:'arrow-repeat', confirmClass:'btn-primary', confirmLabel:'Migrate',

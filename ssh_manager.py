@@ -3289,6 +3289,83 @@ def remote_ufw_close_port_22(server):
     return False, err or out or "Failed to remove port 22"
 
 
+def _sshd_current_ports(server):
+    """The ports sshd currently listens on (from its *effective* config). Empty on failure."""
+    out, _, _ = run_command(server, "sshd -T 2>/dev/null | awk 'tolower($1)==\"port\"{print $2}'",
+                            timeout=15, sudo=True)
+    return [p for p in (out or "").split() if p.isdigit()]
+
+
+def change_ssh_port(server, new_port):
+    """Move this host's sshd onto `new_port` WITHOUT risking a lockout: the current port(s) stay
+    open the whole time, so a bad new port can never cut the panel off. It opens the new port in
+    UFW, drops in an sshd config listening on the new port AND the old one(s), validates the config
+    (aborting cleanly if it's bad), repoints fail2ban's [sshd] jail at the new port(s) so bans keep
+    hitting the right place, restarts sshd, and verifies it actually bound the new port — reverting
+    if not. The OLD port is deliberately LEFT OPEN as a fallback; the caller tells the operator to
+    close it from the Firewall page once they've confirmed the new port. Works for a remote (over
+    SSH) and the panel host itself (local exec). Returns (ok, message)."""
+    try:
+        new_port = int(new_port)
+    except (TypeError, ValueError):
+        return False, "Enter a valid port number."
+    if not (1 <= new_port <= 65535):
+        return False, "Port must be between 1 and 65535."
+
+    old_ports = _sshd_current_ports(server) or [str(int(getattr(server, "port", 22) or 22))]
+    if old_ports == [str(new_port)]:
+        return False, "SSH is already on port %d." % new_port
+
+    # Keep every current port plus the new one (new first). No current port is ever removed here,
+    # so the connection the panel is using right now cannot be interrupted.
+    ports = []
+    for p in [str(new_port)] + old_ports:
+        if p not in ports:
+            ports.append(p)
+
+    # 1. Open the new port in the firewall FIRST (best-effort; a host without UFW just no-ops).
+    remote_ufw_open_port(server, new_port, "tcp", comment="SSH (panel)")
+
+    # 2. Drop-in that listens on the new + existing ports (Ubuntu 22.04/24.04 Include this dir).
+    import base64
+    dropin = "/etc/ssh/sshd_config.d/99-panel-sshport.conf"
+    conf = ("# Managed by LinuxGSM Panel. The previous SSH port is kept as a fallback; close it\n"
+            "# from the panel's Firewall page once you've confirmed the new port works.\n"
+            + "".join("Port %s\n" % p for p in ports))
+    b64 = base64.b64encode(conf.encode()).decode()
+    run_command(server, f"echo '{b64}' | base64 -d > {_quote(dropin)}", timeout=15, sudo=True)
+
+    # 3. Validate the WHOLE sshd config; if the drop-in breaks it, remove it and abort (no restart).
+    _, terr, trc = run_command(server, "sshd -t 2>&1", timeout=15, sudo=True)
+    if trc != 0:
+        run_command(server, f"rm -f {_quote(dropin)}", timeout=10, sudo=True)
+        return False, "sshd rejected the new config — nothing changed. (%s)" % ((terr or "invalid")[:120])
+
+    # 4. Point fail2ban's [sshd] jail at the new + old ports so its bans target the right port.
+    f2b_ports = ",".join(ports)
+    run_command(server,
+                "if [ -f /etc/fail2ban/jail.local ]; then "
+                f"sed -i '/^\\[sshd\\]/,/^\\[/{{s/^port *=.*/port = {f2b_ports}/}}' /etc/fail2ban/jail.local; "
+                "systemctl restart fail2ban 2>&1 || true; fi",
+                timeout=20, sudo=True)
+
+    # 5. Restart sshd (Ubuntu's unit is 'ssh'; fall back to 'sshd'). Established sessions survive.
+    run_command(server, "systemctl restart ssh 2>&1 || systemctl restart sshd 2>&1", timeout=20, sudo=True)
+
+    # 6. Verify sshd actually bound the new port; revert the drop-in if it didn't (old port intact).
+    out, _, _ = run_command(
+        server, f"ss -lnt 2>/dev/null | grep -qE '[:.]{new_port}[[:space:]]' && echo OK || echo NO",
+        timeout=15, sudo=True)
+    if "OK" not in (out or ""):
+        run_command(server, f"rm -f {_quote(dropin)}", timeout=10, sudo=True)
+        run_command(server, "systemctl restart ssh 2>&1 || systemctl restart sshd 2>&1", timeout=20, sudo=True)
+        return False, "sshd didn't come up on port %d — reverted. Your existing port still works." % new_port
+
+    return True, ("SSH now listens on port %d (firewall + fail2ban updated). The old port is still "
+                  "open as a fallback — once you've confirmed you can reach SSH on %d, close the old "
+                  "one from the Firewall page." % (new_port, new_port))
+
+
 def remote_public_ssh_status(server, panel_port=None):
     """Report public SSH state on port 22: 'allow', 'limit', or 'off' (no rule —
     reachable only over tailscale0), plus whether UFW is active at all. When
