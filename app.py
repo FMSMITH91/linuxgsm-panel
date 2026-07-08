@@ -4433,13 +4433,14 @@ def register_routes(app):
     @server_access_required
     def api_server_install_status(server_id):
         """Live step-by-step progress of a game-server install (mirrors bootstrap)."""
+        gs = db.session.get(GameServer, server_id)
+        installed_flag = bool(gs and gs.installed)
         with _install_lock:
             j = _install_jobs.get(server_id)
         if not j:
             # No live job. If the DB still says "installing", the in-memory progress was lost —
             # almost always because the panel restarted mid-install (e.g. a deploy). Reconcile
             # against the real server so the user gets a definite answer instead of a vanished row.
-            gs = db.session.get(GameServer, server_id)
             if gs and gs.status == "installing" and not gs.installed:
                 verdict = _looks_installed(gs.remote, gs.short_name, gs.lgsm_name)
                 if verdict is True:
@@ -4478,6 +4479,11 @@ def register_routes(app):
                 "status": j["status"], "step": j["step"], "total": j["total"], "percent": pct,
                 "step_name": j["step_name"], "message": j.get("message", ""),
                 "log": j["log"][-100:], "elapsed": int(time.time() - j["started"]),
+                # installed flips True after the game files download (step 4), several steps before
+                # the job's final "done" (config → ports → autostart → start). Surface it so the page
+                # shows "Installed" live at the same point a refresh would, instead of sitting on
+                # "Installing…" until the start step finishes.
+                "installed": installed_flag,
             })
 
     @app.route("/api/server/<int:server_id>/install-dismiss", methods=["POST"])

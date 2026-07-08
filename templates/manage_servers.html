@@ -207,6 +207,14 @@ function watchInstall(id) {
         var badge = document.querySelector('[data-server-id="' + id + '"]');
         if (pct) pct.textContent = (s.total ? s.step + '/' + s.total + ' · ' : '') + s.percent + '% · ' + s.elapsed + 's';
         if (bar) bar.style.width = s.percent + '%';
+        // The DB marks the server installed after the game files download — several steps before
+        // the job's final "done" (it's still configuring/starting). Flip the badge to "Installed"
+        // right then, so the live view matches what a refresh already shows instead of sitting on
+        // "Installing…". The bar keeps showing the remaining setup steps until they complete.
+        if (s.installed && badge && s.status !== 'failed'
+            && badge.textContent.trim() !== 'Installed') {
+          badge.className = 'badge bg-success'; badge.textContent = 'Installed';
+        }
         if (s.status === 'done') {
           bar.className = 'progress-bar bg-success'; bar.style.width = '100%';
           step.innerHTML = '<i class="bi bi-check-circle-fill text-success"></i> ' + (s.message || 'Installed');
