@@ -1118,12 +1118,52 @@ _F2B_PANEL_FILTER = "/etc/fail2ban/filter.d/linuxgsm-panel.conf"
 _F2B_PANEL_JAIL = "/etc/fail2ban/jail.d/linuxgsm-panel.conf"
 
 
+def _panel_f2b_filter_body():
+    """fail2ban filter matching the panel's own auth.log lines; <HOST> captures the offender."""
+    return ("[Definition]\n"
+            "failregex = panel login (?:failed|blocked) from <HOST>$\n"
+            "ignoreregex =\n")
+
+
+def _panel_f2b_jail_body(auth_log, web_port):
+    """Jail: 5 failures in 10 min → 1-hour ban, on the panel's web port. In jail.d/ so it sits
+    alongside (doesn't conflict with) any [sshd] jail."""
+    return ("[linuxgsm-panel]\n"
+            "enabled = true\n"
+            "port = %d\n"
+            "filter = linuxgsm-panel\n"
+            "logpath = %s\n"
+            "maxretry = 5\n"
+            "findtime = 10m\n"
+            "bantime = 1h\n" % (web_port, auth_log))
+
+
+def _panel_f2b_jail_port():
+    """Port the current panel jail file is set to, or None. The jail file is root-owned but
+    world-readable, so the panel process can read it without sudo. Best-effort."""
+    import re
+    try:
+        with open(_F2B_PANEL_JAIL) as f:
+            for line in f:
+                m = re.match(r"\s*port\s*=\s*(\d+)\s*$", line)
+                if m:
+                    return int(m.group(1))
+    except OSError:
+        pass
+    return None
+
+
 def _write_root_file(path, content):
-    """Write `content` to a root-owned path, base64-piped so no shell metacharacter in the content
-    can matter. Path is shell-quoted. Returns the _run tuple."""
+    """Write `content` to a root-owned path. The WRITE must be elevated: a plain `sudo echo … > path`
+    elevates only `echo` while the shell does the `>` redirect as the (unprivileged) panel user —
+    which fails on a root-owned dir, because the panel runs as a non-root systemd --user service.
+    Pipe into `sudo tee` so the write lands as root. base64 keeps any shell metacharacter in
+    `content` inert; the path is shell-quoted. Returns the _run tuple."""
     import base64
     b64 = base64.b64encode(content.encode()).decode()
-    return _run("echo %s | base64 -d > %s" % (shlex.quote(b64), shlex.quote(path)), timeout=15, sudo=True)
+    tee = "tee" if (hasattr(os, "geteuid") and os.geteuid() == 0) else "sudo tee"
+    return _run("echo %s | base64 -d | %s %s >/dev/null"
+                % (shlex.quote(b64), tee, shlex.quote(path)), timeout=15, sudo=False)
 
 
 def panel_fail2ban_status():
@@ -1153,6 +1193,17 @@ def configure_panel_fail2ban(auth_log, web_port):
     if not auth_log or "\n" in auth_log:
         return False, "Invalid auth-log path."
 
+    # fail2ban 0.11 (Ubuntu 22.04) REFUSES to start a jail whose logpath doesn't exist yet, and a
+    # brand-new panel has no failed logins, so auth.log may be absent — that's the usual "jail
+    # didn't come up" cause. Create it now (as the panel user, which owns it, so the panel can still
+    # write to it) so the jail always has a file to tail.
+    try:
+        os.makedirs(os.path.dirname(auth_log) or ".", exist_ok=True)
+        with open(auth_log, "a"):
+            pass
+    except OSError:
+        _log.debug("f2b: could not pre-create auth log", exc_info=True)
+
     have, _, _ = _run("command -v fail2ban-client >/dev/null 2>&1 && echo yes || echo no", timeout=10)
     if "yes" not in (have or ""):
         _run("DEBIAN_FRONTEND=noninteractive apt-get update -qq 2>/dev/null", timeout=120, sudo=True)
@@ -1161,31 +1212,52 @@ def configure_panel_fail2ban(auth_log, web_port):
         if "yes" not in (have2 or ""):
             return False, "Couldn't install fail2ban on this host."
 
-    # Filter: match the panel's own auth.log lines. <HOST> captures the offending IP.
-    _write_root_file(_F2B_PANEL_FILTER,
-                     "[Definition]\n"
-                     "failregex = panel login (?:failed|blocked) from <HOST>$\n"
-                     "ignoreregex =\n")
-    # Jail: 5 failures in 10 min → 1-hour ban, on the web port. In jail.d/ so it sits alongside
-    # (not conflicting with) any [sshd] jail in jail.local.
-    _write_root_file(_F2B_PANEL_JAIL,
-                     "[linuxgsm-panel]\n"
-                     "enabled = true\n"
-                     "port = %d\n"
-                     "filter = linuxgsm-panel\n"
-                     "logpath = %s\n"
-                     "maxretry = 5\n"
-                     "findtime = 10m\n"
-                     "bantime = 1h\n" % (web_port, auth_log))
+    _write_root_file(_F2B_PANEL_FILTER, _panel_f2b_filter_body())
+    _write_root_file(_F2B_PANEL_JAIL, _panel_f2b_jail_body(auth_log, web_port))
 
-    _run("systemctl enable --now fail2ban 2>&1", timeout=30, sudo=True)
-    _run("fail2ban-client reload 2>&1 || systemctl restart fail2ban 2>&1", timeout=30, sudo=True)
+    _run("systemctl enable --now fail2ban 2>&1", timeout=45, sudo=True)
+    _run("fail2ban-client reload 2>&1 || systemctl restart fail2ban 2>&1", timeout=45, sudo=True)
+
+    _f2b_ok_msg = ("fail2ban is now protecting the panel login — 5 failed logins from an IP in "
+                   "10 minutes get it banned for an hour.")
+    # fail2ban's reload is ASYNCHRONOUS — on a busy host the jail can take a moment to register, so
+    # poll instead of checking once (the old single check was the "didn't come up" false alarm).
+    for _ in range(6):
+        if panel_fail2ban_status().get("enabled"):
+            return True, _f2b_ok_msg
+        time.sleep(1)
+    # Still down after a reload: one hard restart, then a final look.
+    _run("systemctl restart fail2ban 2>&1", timeout=45, sudo=True)
+    time.sleep(2)
+    if panel_fail2ban_status().get("enabled"):
+        return True, _f2b_ok_msg
+    # Give up — but surface the REAL reason instead of a generic message.
+    detail, derr, _ = _run("fail2ban-client status linuxgsm-panel 2>&1", timeout=10, sudo=True)
+    reason = (detail or derr or "").strip()
+    if not reason:
+        reason, _, _ = _run("journalctl -u fail2ban --no-pager -n 25 2>/dev/null | "
+                            "grep -iE 'linuxgsm-panel|have not found|log file|error' | tail -2",
+                            timeout=10, sudo=True)
+    reason = (reason or "").replace("\n", " ").strip()[:200]
+    return False, ("Configured fail2ban, but the jail didn't come up. %s"
+                   % (reason or "Check `fail2ban-client status linuxgsm-panel` and the panel logs."))
+
+
+def ensure_panel_fail2ban(auth_log, web_port):
+    """Idempotently make sure the panel-login jail is active on the CURRENT web port. Safe to call
+    on EVERY startup and after a port change: a healthy jail on the right port costs just a status
+    read (no reload), while a missing jail or a stale port triggers a rewrite + reload. Does NOT
+    install fail2ban (that's the installer's job) — no-ops when it isn't present. Returns (ok, msg)."""
+    try:
+        web_port = int(web_port)
+    except (TypeError, ValueError):
+        return False, "Invalid web port."
     st = panel_fail2ban_status()
-    if st.get("enabled"):
-        return True, ("fail2ban is now protecting the panel login — 5 failed logins from an IP in "
-                      "10 minutes get it banned for an hour.")
-    return False, ("Configured fail2ban, but the jail didn't come up. Check `fail2ban-client status "
-                   "linuxgsm-panel` and the panel logs.")
+    if not st.get("installed"):
+        return False, "fail2ban isn't installed on this host."
+    if st.get("enabled") and _panel_f2b_jail_port() == web_port:
+        return True, "panel-login jail already active on port %d" % web_port
+    return configure_panel_fail2ban(auth_log, web_port)
 
 
 def panel_diagnostics():

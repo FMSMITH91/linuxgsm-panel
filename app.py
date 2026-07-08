@@ -3525,6 +3525,14 @@ def register_routes(app):
             except Exception:
                 app.logger.warning("change-port: firewall update failed", exc_info=True)
 
+        # Keep the fail2ban panel-login jail pointed at the new port so brute-force protection
+        # follows the move. Idempotent + best-effort; a no-op if the jail isn't set up.
+        if new_port != cur_port:
+            try:
+                so.ensure_panel_fail2ban(AUTH_LOG_PATH, new_port)
+            except Exception:
+                app.logger.warning("change-port: fail2ban port update failed", exc_info=True)
+
         log_action(current_user, "panel_change_binding",
                    detail=f"{cur_bind}:{cur_port} -> {new_bind}:{new_port}", success=True)
         ok, _ = so.restart_panel()
@@ -5673,6 +5681,19 @@ if __name__ == "__main__":
     app = create_app()
     cfg = load_config()
     port = cfg.get("port", 5000)
+
+    # Make sure the fail2ban panel-login jail is up and pointed at the current port. fail2ban is
+    # installed by the panel installer; this self-heals the jail on every boot (and after a port
+    # change) so it's protected by default — no manual "enable" click. Backgrounded so it never
+    # delays startup, and idempotent so a healthy jail just costs a quick status read.
+    def _f2b_autostart():
+        try:
+            _ok, _msg = so.ensure_panel_fail2ban(AUTH_LOG_PATH, port)
+            _log.info("panel fail2ban: %s", _msg)
+        except Exception:
+            _log.debug("panel fail2ban autostart failed", exc_info=True)
+    threading.Thread(target=_f2b_autostart, daemon=True).start()
+
     host = (cfg.get("bind_host") or "").strip()
     if not host:
         # Not explicitly configured: bind where the panel is actually reachable —

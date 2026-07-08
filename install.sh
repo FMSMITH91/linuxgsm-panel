@@ -370,6 +370,24 @@ ensure_gamedig() {
     return 0
 }
 
+# fail2ban on the panel HOST, so the panel-login brute-force jail (which the panel configures and
+# self-heals on startup) has something to bind to. Best-effort + idempotent — a failure here just
+# means the jail stays off until fail2ban is installed; it must NEVER abort the install (the script
+# runs under set -euo pipefail), so every command is guarded.
+ensure_fail2ban() {
+    command -v apt-get >/dev/null 2>&1 || return 0
+    if command -v fail2ban-client >/dev/null 2>&1; then
+        ok "fail2ban present (panel-login brute-force protection)"
+        return 0
+    fi
+    local S=""
+    [ "$(id -u)" -eq 0 ] || S="sudo"
+    info "Installing fail2ban (brute-force protection for the panel login)…"
+    ${S} apt-get install -y fail2ban >/dev/null 2>&1 \
+        || warn "fail2ban install failed — panel-login brute-force protection stays off until it's installed."
+    return 0
+}
+
 # Run the panel (and its bursts: updates, backups, page-load probes) at LOW CPU/IO priority so it
 # yields to the game servers under contention — important on a 1-core VPS. Game servers autostart
 # via their own cron (nice 0), so they keep priority; the panel just waits its turn. Written as a
@@ -423,6 +441,7 @@ if [ "${IS_UPDATE}" -eq 1 ]; then
     # Ensure Node LTS + gamedig on the host regardless of whether there's an update to apply, so a
     # plain `install.sh` run also fixes a missing/old install (idempotent + best-effort).
     ensure_gamedig
+    ensure_fail2ban   # backfill fail2ban on existing installs so the panel-login jail can come up
 
     # Decide whether there's anything to do BEFORE snapshotting or touching the service — a
     # no-op update shouldn't burn a snapshot (disk + gzip CPU) or blink the panel. This only
@@ -639,6 +658,7 @@ info "[2/4] Creating virtual environment & installing dependencies…"
 install_deps
 ok "Dependencies installed"
 ensure_gamedig   # Node LTS + gamedig for querying game servers that run on this panel host
+ensure_fail2ban  # brute-force protection for the panel login (jail is configured by the panel itself)
 
 # Ensure the panel's listen port is free BEFORE the first boot: if 5000 (or a previously
 # configured port) is already taken by another service, the panel would fail to bind. Probe
