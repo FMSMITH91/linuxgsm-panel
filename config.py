@@ -19,7 +19,9 @@ try:
     # Owner-only: no other local user can even enter data/, so the DB, keys, backups and config
     # inside are unreachable by another unprivileged account on the box (defence in depth against a
     # compromised co-tenant / service). Runs on every import so existing installs get tightened too.
-    os.chmod(DATA_DIR, 0o700)
+    # 0o700 IS the least-privilege setting here (owner-only rwx; a dir needs the owner execute bit to
+    # be traversable) — the Semgrep insecure-file-permissions heuristic misreads the literal.
+    os.chmod(DATA_DIR, 0o700)  # nosemgrep
 except OSError:
     _log.debug("could not chmod data dir to 0700", exc_info=True)
 
