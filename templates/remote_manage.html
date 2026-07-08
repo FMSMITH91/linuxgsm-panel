@@ -934,7 +934,7 @@ function watchPanelRestart(beforeBoot, msg, doneLabel){
         done=true; clearInterval(iv);
         fetch(MOUNT+'/api/panel/update-log').then(function(r){ return r.ok?r.json():null; }).then(function(l){
           if(l && l.lines) renderPuLog(l.lines);
-          msg.innerHTML='<span class="text-success"><i class="bi bi-check-circle"></i> '+(doneLabel||'Done')+' — reloading…</span>';
+          msg.innerHTML='<span class="text-success"><i class="bi bi-check-circle"></i> '+(window.escapeHtml?escapeHtml(doneLabel||'Done'):(doneLabel||'Done'))+' — reloading…</span>';
           setTimeout(function(){ location.reload(); }, 2500);
         });
       }

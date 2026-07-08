@@ -1787,17 +1787,17 @@ check("custom arg: rejects spaces", not _arg_ok("mp toujane"))
 check("custom arg: rejects newline", not _arg_ok("a\nb"))
 check("custom arg: rejects empty", not _arg_ok(""))
 
-# ── panel branch-switch: git-ref name validation (interpolated into git + the root installer) ──
-from system_ops import _valid_branch
-check("branch: main valid", _valid_branch("main"))
-check("branch: feature/x valid", _valid_branch("feature/moderation-permissions"))
-check("branch: release/v1.2.3 valid", _valid_branch("release/v1.2.3"))
-check("branch: rejects leading dash (option injection)", not _valid_branch("-oProxyCommand=x"))
-check("branch: rejects traversal", not _valid_branch("a..b"))
-check("branch: rejects space", not _valid_branch("a b"))
-check("branch: rejects ; metachar", not _valid_branch("a;reboot"))
-check("branch: rejects command substitution", not _valid_branch("$(id)"))
-check("branch: rejects empty", not _valid_branch(""))
+# ── panel branch-switch: git-ref name validation (fed to git + the root installer) ──
+# _so is the `import system_ops as _so` from the integrity-tests section above.
+check("branch: main valid", _so._valid_branch("main"))
+check("branch: feature/x valid", _so._valid_branch("feature/moderation-permissions"))
+check("branch: release/v1.2.3 valid", _so._valid_branch("release/v1.2.3"))
+check("branch: rejects leading dash (option injection)", not _so._valid_branch("-oProxyCommand=x"))
+check("branch: rejects traversal", not _so._valid_branch("a..b"))
+check("branch: rejects space", not _so._valid_branch("a b"))
+check("branch: rejects ; metachar", not _so._valid_branch("a;reboot"))
+check("branch: rejects command substitution", not _so._valid_branch("$(id)"))
+check("branch: rejects empty", not _so._valid_branch(""))
 
 # ── cleanup: remove key/config files this run created ─────────
 for p in (config.CRED_KEY_FILE, config.SECRET_FILE, config.CONFIG_FILE):

@@ -2,7 +2,6 @@
 import json
 import logging
 import os
-import re
 import shlex
 import subprocess
 import threading
@@ -20,14 +19,15 @@ PANEL_DIR = os.path.dirname(os.path.abspath(__file__))
 # (panel_switch_branch) and stored in config as "panel_branch".
 _DEFAULT_BRANCH = "main"
 # A deliberately strict git-ref charset: no spaces, no leading dash (option injection) and
-# no ".." (traversal). This value is interpolated into git commands AND exported to the
-# root-run installer, so it must be safe by construction.
-_BRANCH_RE = re.compile(r"^[A-Za-z0-9._/-]{1,100}$")
+# no ".." (traversal). Defence-in-depth — git is invoked without a shell (see _git) and the
+# installer re-validates PANEL_BRANCH — but we still refuse anything outside this shape.
+_BRANCH_RE = r"^[A-Za-z0-9._/-]{1,100}$"
 
 
 def _valid_branch(name):
+    import re
     name = (name or "").strip()
-    return bool(name) and bool(_BRANCH_RE.match(name)) and not name.startswith("-") and ".." not in name
+    return bool(name) and bool(re.match(_BRANCH_RE, name)) and not name.startswith("-") and ".." not in name
 
 
 def _tracked_branch():
@@ -496,14 +496,23 @@ def panel_version():
 
 
 def _git(args, timeout=45):
-    """Run a git command inside the panel dir (as the panel user, no sudo).
+    """Run a git command inside the panel dir (as the panel user, no sudo). Returns
+    (stdout, stderr, returncode).
 
-    GIT_TERMINAL_PROMPT=0 / GIT_ASKPASS=true stop git from blocking on a
-    credential prompt when the remote is private or unreachable (e.g. checking
-    for updates before the repo is public) — it fails fast instead of hanging."""
-    env = "GIT_TERMINAL_PROMPT=0 GIT_ASKPASS=true "
-    cmd = env + "git -C " + shlex.quote(PANEL_DIR) + " " + " ".join(shlex.quote(a) for a in args)
-    return _run(cmd, timeout=timeout, sudo=False)
+    Invoked WITHOUT a shell (argument list) so a value flowing into `args` — e.g. a
+    branch name from config/UI — is always a single literal argument and can never be
+    parsed as an option or a second command. GIT_TERMINAL_PROMPT=0 / GIT_ASKPASS=true stop
+    git from blocking on a credential prompt when the remote is private or unreachable
+    (e.g. checking for updates before the repo is public) — it fails fast instead."""
+    genv = dict(os.environ, GIT_TERMINAL_PROMPT="0", GIT_ASKPASS="true")
+    try:
+        r = subprocess.run(["git", "-C", PANEL_DIR, *args], capture_output=True,
+                           text=True, timeout=timeout, env=genv)  # shell=False: no injection
+        return r.stdout.strip(), r.stderr.strip(), r.returncode
+    except subprocess.TimeoutExpired:
+        return "", "git timed out", -1
+    except (FileNotFoundError, OSError):
+        return "", "git not found", -1
 
 
 def _is_git_checkout():
