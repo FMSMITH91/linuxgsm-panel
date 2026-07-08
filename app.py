@@ -4330,6 +4330,12 @@ def register_routes(app):
             try:
                 ports = _remote_listening_ports(remote)
                 for gs in gslist:
+                    # NEVER overwrite an in-progress install's status. This poller only reflects
+                    # running/stopped, and a not-yet-running install would otherwise get flipped
+                    # "installing" -> "offline" (it isn't listening on its port yet) — which made the
+                    # progress row vanish and show "Not installed" the moment you navigated back.
+                    if not gs.installed or gs.status == "installing":
+                        continue
                     st = "online" if gs.port in ports else "offline"
                     if gs.status != st:
                         gs.status = st
@@ -4374,8 +4380,11 @@ def register_routes(app):
         remote = gs.remote
         try:
             status = get_server_status(remote, gs)
-            gs.status = status
-            db.session.commit()
+            # Don't clobber an in-progress install's status (see /api/servers) — only persist
+            # running/stopped for a server that's actually installed and not mid-install.
+            if gs.installed and gs.status != "installing":
+                gs.status = status
+                db.session.commit()
         except Exception:
             status = "error"
 

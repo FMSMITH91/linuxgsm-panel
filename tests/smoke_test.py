@@ -652,6 +652,24 @@ try:
         check("perf: dashboard renders with 50 servers", _dash_code == 200, "got %d" % _dash_code)
         check("perf: dashboard query count stays small (no N+1)",
               _dash_q <= 20, "%d queries for %d servers" % (_dash_q, _seeded))
+
+        # Regression: the /api/servers status poll must NOT clobber an in-progress install's
+        # status. The port scan (stubbed empty here) finds nothing listening for a still-installing
+        # server, so the old code flipped "installing" -> "offline" — which made the progress row
+        # vanish and show "Not installed" the moment you navigated back to the page.
+        with app.app_context():
+            _rid = RemoteServer.query.first().id
+            _inst = GameServer(remote_id=_rid, name="inst-cs", short_name="instcs",
+                               game_type="gmod", port=27099, installed=False, status="installing")
+            db.session.add(_inst)
+            db.session.commit()
+            _inst_id = _inst.id
+        _appmod._port_scan_cache.clear()
+        c.get("/api/servers")   # the poll that reconcileServerList / the dashboard fires
+        with app.app_context():
+            _after_status = db.session.get(GameServer, _inst_id).status
+        check("install: /api/servers poll does NOT clobber an installing server's status",
+              _after_status == "installing", "status became %r after the poll" % _after_status)
     finally:
         _sa_event.remove(_engine, "after_cursor_execute", _count_query)
         _appmod.run_command = _orig_rc
