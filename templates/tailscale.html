@@ -408,13 +408,15 @@ function checkPeer() {
   })
   .then(r => r.json())
   .then(data => {
+    // host comes from a text field — escape it before it goes into innerHTML (DOM XSS).
+    var safeHost = escapeHtml(host);
     if (data.reachable) {
-      resultEl.innerHTML = '<span class="text-success">✓ ' + host + ' is reachable'
-        + (data.latency_ms ? ' (' + data.latency_ms + 'ms)' : '')
+      resultEl.innerHTML = '<span class="text-success">✓ ' + safeHost + ' is reachable'
+        + (data.latency_ms ? ' (' + Number(data.latency_ms) + 'ms)' : '')
         + '</span>';
     } else {
       var tsHint = data.is_tailscale_ip ? ' (Tailscale IP)' : '';
-      resultEl.innerHTML = '<span class="text-danger">✗ ' + host + tsHint + ' is not responding</span>';
+      resultEl.innerHTML = '<span class="text-danger">✗ ' + safeHost + tsHint + ' is not responding</span>';
     }
   })
   .catch(function() {
