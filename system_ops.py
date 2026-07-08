@@ -577,6 +577,45 @@ def _remote_ci_state(sha):
     return "passing"
 
 
+# Paths that DON'T affect the running panel — changes touching only these shouldn't raise the
+# "update available" badge (e.g. editing the README or a workflow). Denylist (not allowlist) so a
+# new kind of runtime file is never accidentally treated as noise: anything not listed here counts.
+_NOISE_DIRS = (".github/", "docs/", "tests/", ".vscode/")
+_NOISE_FILES = {".gitignore", ".gitattributes", ".editorconfig", ".dockerignore",
+                ".pre-commit-config.yaml", "run-tests.sh", "codecov.yml", ".flake8", "mypy.ini"}
+
+
+def _is_runtime_path(path):
+    """True if this repo path affects the RUNNING panel (code, templates, static, requirements,
+    install.sh, …). Docs/CI/test-scaffolding paths return False."""
+    p = path.strip()
+    if p.startswith("./"):      # a literal "./" prefix only — NOT lstrip("./"), which would also
+        p = p[2:]               # eat the leading dot of dotfiles/dotdirs (.github, .gitignore).
+    if not p:
+        return False
+    low = p.lower()
+    if low.endswith(".md") or low == "license" or low.startswith("license."):
+        return False
+    if any(p.startswith(d) for d in _NOISE_DIRS):
+        return False
+    if p in _NOISE_FILES:
+        return False
+    return True
+
+
+def _update_touches_runtime(target_ref):
+    """Whether updating from HEAD to `target_ref` would change any file the panel actually uses.
+    A pure-docs/CI/test diff returns False so the badge stops nagging about changes that don't
+    affect the panel. Fails safe: if we can't compute the diff, assume it matters."""
+    out, _, rc = _git(["diff", "--name-only", "HEAD.." + target_ref])
+    if rc != 0:
+        return True
+    files = [f for f in (out or "").splitlines() if f.strip()]
+    if not files:
+        return True
+    return any(_is_runtime_path(f) for f in files)
+
+
 def _compute_update_status():
     cur_ver = panel_version()
     if not _is_git_checkout():
@@ -608,6 +647,10 @@ def _compute_update_status():
     # show a permanent "verifying" and never apply. Offer the branch tip directly instead —
     # the snapshot + health-check + auto-rollback still guards against a branch that won't boot.
     if branch != _DEFAULT_BRANCH:
+        if not _update_touches_runtime(ref):
+            return {**base, "update_available": False, "ci_state": "unverified", "behind": behind_n,
+                    "docs_only": True,
+                    "message": "New commits on this branch only change docs/CI — nothing the panel runs."}
         tgt_ver, _, tv_rc = _git(["show", "%s:VERSION" % ref])
         rem_full, _, _ = _git(["rev-parse", ref])
         log, _, _ = _git(["log", "--oneline", "--no-decorate", "-10", "HEAD.." + ref])
@@ -644,6 +687,13 @@ def _compute_update_status():
 
     # We have a verified target (possibly older than the tip if newer commits are still verifying).
     behind_target = behind_n - newer_unverified   # commits from HEAD up to & including the target
+    # Don't nag if everything between here and the verified target is docs/CI/tests only — those
+    # changes don't affect the running panel. (A later commit with real code will move the target
+    # up and re-trigger the badge once it passes CI.)
+    if not _update_touches_runtime(target_sha):
+        return {**base, "update_available": False, "ci_state": target_state,
+                "behind": behind_target, "behind_tip": behind_n, "docs_only": True,
+                "message": "Newer commits only change docs/CI — nothing the panel runs."}
     tgt_ver, _, tv_rc = _git(["show", f"{target_sha}:VERSION"])
     log, _, _ = _git(["log", "--oneline", "--no-decorate", "-10", f"HEAD..{target_sha}"])
     msg = None

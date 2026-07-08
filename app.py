@@ -4105,15 +4105,17 @@ def register_routes(app):
         if not (current_user.is_superadmin or can_access_remote(current_user, remote_id)):
             return jsonify({"success": False, "message": "You don't have access to that host."}), 403
         remote = get_remote(remote_id)
+        body = _json_body()
         try:
-            new_port = int(_json_body().get("port"))
+            new_port = int(body.get("port"))
         except (TypeError, ValueError):
             return jsonify({"success": False, "message": "Enter a valid port number."}), 400
         if not (1 <= new_port <= 65535):
             return jsonify({"success": False, "message": "Port must be between 1 and 65535."}), 400
+        bind = (body.get("bind") or "").strip()
         old = remote.port
         try:
-            ok, msg = change_ssh_port(remote, new_port)
+            ok, msg = change_ssh_port(remote, new_port, bind)
         except Exception:
             return jsonify({"success": False, "message": _log_and_generic("SSH port change failed")}), 500
         if ok:

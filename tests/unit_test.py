@@ -817,6 +817,30 @@ check("integrity: reports git checkout", _intg["git"] is True)
 eq("integrity: counts tampered files", _intg["count"], 2)
 check("integrity: not clean when files differ", _intg["clean"] is False)
 
+# ── update-noise filter: only real runtime changes should raise the "update available" badge ──
+check("runtime-path: app.py counts", _so._is_runtime_path("app.py") is True)
+check("runtime-path: a template counts", _so._is_runtime_path("templates/base.html") is True)
+check("runtime-path: static asset counts", _so._is_runtime_path("static/js/app.js") is True)
+check("runtime-path: requirements counts", _so._is_runtime_path("requirements.txt") is True)
+check("runtime-path: install.sh counts", _so._is_runtime_path("install.sh") is True)
+check("runtime-path: README is noise", _so._is_runtime_path("README.md") is False)
+check("runtime-path: any .md is noise", _so._is_runtime_path("docs/SECURITY.md") is False)
+check("runtime-path: .github workflow is noise", _so._is_runtime_path(".github/workflows/ci.yml") is False)
+check("runtime-path: tests are noise", _so._is_runtime_path("tests/unit_test.py") is False)
+check("runtime-path: LICENSE is noise", _so._is_runtime_path("LICENSE") is False)
+check("runtime-path: dotfiles are noise", _so._is_runtime_path(".gitignore") is False)
+_orig_utr_git = _so._git
+try:
+    _so._git = lambda args, timeout=45: ("README.md\ndocs/x.md\n.github/workflows/ci.yml\n", "", 0)
+    check("update-touches-runtime: docs-only diff -> no update", _so._update_touches_runtime("origin/main") is False)
+    _so._git = lambda args, timeout=45: ("README.md\napp.py\n", "", 0)
+    check("update-touches-runtime: any code change -> update", _so._update_touches_runtime("origin/main") is True)
+    _so._git = lambda args, timeout=45: ("", "err", 1)
+    check("update-touches-runtime: unknown diff -> assume update (fail safe)",
+          _so._update_touches_runtime("origin/main") is True)
+finally:
+    _so._git = _orig_utr_git
+
 # ── change panel port: port_in_use + restart_panel dispatch ──
 _orig_sorun = _so._run
 try:
@@ -1672,6 +1696,11 @@ check("ssh-port: non-numeric rejected", sm.change_ssh_port(None, "abc")[0] is Fa
 check("ssh-port: port 0 rejected", sm.change_ssh_port(None, 0)[0] is False)
 check("ssh-port: port 70000 (out of range) rejected", sm.change_ssh_port(None, 70000)[0] is False)
 check("ssh-port: negative port rejected", sm.change_ssh_port(None, -5)[0] is False)
+check("ssh-port: invalid bind IP rejected", sm.change_ssh_port(None, 2222, "not-an-ip")[0] is False)
+check("valid-ip: accepts IPv4", sm._valid_ip("192.168.1.5") is True)
+check("valid-ip: accepts IPv6", sm._valid_ip("::1") is True)
+check("valid-ip: rejects junk", sm._valid_ip("nope") is False)
+check("valid-ip: rejects host:port form", sm._valid_ip("1.2.3.4:22") is False)
 
 # ── db_maintenance: offline SQLite check / repair / optimize (updater + health card) ──
 import db_maintenance as _dbm

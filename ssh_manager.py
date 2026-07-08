@@ -3296,28 +3296,57 @@ def _sshd_current_ports(server):
     return [p for p in (out or "").split() if p.isdigit()]
 
 
-def change_ssh_port(server, new_port):
-    """Move this host's sshd onto `new_port` WITHOUT risking a lockout: the current port(s) stay
-    open the whole time, so a bad new port can never cut the panel off. It opens the new port in
-    UFW, drops in an sshd config listening on the new port AND the old one(s), validates the config
-    (aborting cleanly if it's bad), repoints fail2ban's [sshd] jail at the new port(s) so bans keep
-    hitting the right place, restarts sshd, and verifies it actually bound the new port — reverting
-    if not. The OLD port is deliberately LEFT OPEN as a fallback; the caller tells the operator to
-    close it from the Firewall page once they've confirmed the new port. Works for a remote (over
-    SSH) and the panel host itself (local exec). Returns (ok, message)."""
+def _valid_ip(s):
+    """True if `s` is a valid IPv4 or IPv6 literal."""
+    import ipaddress
+    try:
+        ipaddress.ip_address(str(s).strip())
+        return True
+    except ValueError:
+        return False
+
+
+def _tcp_reachable(host, port, timeout=8):
+    """Whether the panel can open a TCP connection to host:port — used to confirm it won't lose its
+    way in before committing an SSH bind-address change. Best-effort; False on any error."""
+    try:
+        with socket.create_connection((host, int(port)), timeout=timeout):
+            return True
+    except OSError:
+        return False
+
+
+def change_ssh_port(server, new_port, bind_addr=""):
+    """Move this host's sshd onto `new_port`, optionally restricting it to a single `bind_addr` IP
+    (for hosts with several IPs), WITHOUT risking a lockout.
+
+    Port-only change: every current port stays open on all interfaces the whole time, so a bad new
+    port can't cut the panel off — we open the new port in UFW, add it (alongside the old ones) via
+    an sshd drop-in, validate with `sshd -t`, repoint fail2ban's [sshd] jail, restart sshd and
+    confirm the new port is listening (reverting if not).
+
+    Bind-address change: sshd's ListenAddress is all-or-nothing (once set, sshd listens ONLY on the
+    given addresses), so the always-open fallback doesn't apply. Instead we snapshot the current
+    drop-in, apply the binding, restart, and verify the panel can still REACH SSH on the host —
+    reverting to the snapshot if it can't. So a bind address that would cut the panel off is rolled
+    back automatically; the operator must include the address the panel connects on.
+
+    Works for a remote (over SSH) and the panel host itself. Returns (ok, message)."""
     try:
         new_port = int(new_port)
     except (TypeError, ValueError):
         return False, "Enter a valid port number."
     if not (1 <= new_port <= 65535):
         return False, "Port must be between 1 and 65535."
+    bind_addr = (str(bind_addr) if bind_addr else "").strip()
+    if bind_addr and not _valid_ip(bind_addr):
+        return False, "Bind address must be a valid IP address, or blank for all interfaces."
 
     old_ports = _sshd_current_ports(server) or [str(int(getattr(server, "port", 22) or 22))]
-    if old_ports == [str(new_port)]:
+    if not bind_addr and old_ports == [str(new_port)]:
         return False, "SSH is already on port %d." % new_port
 
-    # Keep every current port plus the new one (new first). No current port is ever removed here,
-    # so the connection the panel is using right now cannot be interrupted.
+    # Keep every current port plus the new one (new first).
     ports = []
     for p in [str(new_port)] + old_ports:
         if p not in ports:
@@ -3326,20 +3355,38 @@ def change_ssh_port(server, new_port):
     # 1. Open the new port in the firewall FIRST (best-effort; a host without UFW just no-ops).
     remote_ufw_open_port(server, new_port, "tcp", comment="SSH (panel)")
 
-    # 2. Drop-in that listens on the new + existing ports (Ubuntu 22.04/24.04 Include this dir).
+    # 2. Snapshot any existing drop-in (so a failed bind change restores the EXACT prior state),
+    #    then write the new one. Ubuntu 22.04/24.04 Include /etc/ssh/sshd_config.d/*.conf by default.
     import base64
     dropin = "/etc/ssh/sshd_config.d/99-panel-sshport.conf"
-    conf = ("# Managed by LinuxGSM Panel. The previous SSH port is kept as a fallback; close it\n"
-            "# from the panel's Firewall page once you've confirmed the new port works.\n"
-            + "".join("Port %s\n" % p for p in ports))
-    b64 = base64.b64encode(conf.encode()).decode()
+    bak = dropin + ".bak"
+    run_command(server, f"[ -f {_quote(dropin)} ] && cp -f {_quote(dropin)} {_quote(bak)} || true",
+                timeout=10, sudo=True)
+    header = ("# Managed by LinuxGSM Panel. The previous SSH port is kept as a fallback; close it\n"
+              "# from the panel's Firewall page once you've confirmed the new port works.\n")
+    if bind_addr:
+        # sshd needs an IPv6 literal bracketed when a port follows: ListenAddress [::1]:22.
+        _a = "[%s]" % bind_addr if ":" in bind_addr else bind_addr
+        body = "".join("ListenAddress %s:%s\n" % (_a, p) for p in ports)
+    else:
+        body = "".join("Port %s\n" % p for p in ports)
+    b64 = base64.b64encode((header + body).encode()).decode()
     run_command(server, f"echo '{b64}' | base64 -d > {_quote(dropin)}", timeout=15, sudo=True)
 
-    # 3. Validate the WHOLE sshd config; if the drop-in breaks it, remove it and abort (no restart).
+    def _revert(msg):
+        # Restore the snapshot if we took one, else drop the file, then restart sshd. The prior
+        # binding is untouched the whole time, so SSH keeps working.
+        run_command(server,
+                    f"if [ -f {_quote(bak)} ]; then mv -f {_quote(bak)} {_quote(dropin)}; "
+                    f"else rm -f {_quote(dropin)}; fi",
+                    timeout=10, sudo=True)
+        run_command(server, "systemctl restart ssh 2>&1 || systemctl restart sshd 2>&1", timeout=20, sudo=True)
+        return False, msg
+
+    # 3. Validate the WHOLE sshd config; if the drop-in breaks it, roll back and abort (no restart).
     _, terr, trc = run_command(server, "sshd -t 2>&1", timeout=15, sudo=True)
     if trc != 0:
-        run_command(server, f"rm -f {_quote(dropin)}", timeout=10, sudo=True)
-        return False, "sshd rejected the new config — nothing changed. (%s)" % ((terr or "invalid")[:120])
+        return _revert("sshd rejected the new config — nothing changed. (%s)" % ((terr or "invalid")[:120]))
 
     # 4. Point fail2ban's [sshd] jail at the new + old ports so its bans target the right port.
     f2b_ports = ",".join(ports)
@@ -3352,18 +3399,25 @@ def change_ssh_port(server, new_port):
     # 5. Restart sshd (Ubuntu's unit is 'ssh'; fall back to 'sshd'). Established sessions survive.
     run_command(server, "systemctl restart ssh 2>&1 || systemctl restart sshd 2>&1", timeout=20, sudo=True)
 
-    # 6. Verify sshd actually bound the new port; revert the drop-in if it didn't (old port intact).
-    out, _, _ = run_command(
-        server, f"ss -lnt 2>/dev/null | grep -qE '[:.]{new_port}[[:space:]]' && echo OK || echo NO",
-        timeout=15, sudo=True)
-    if "OK" not in (out or ""):
-        run_command(server, f"rm -f {_quote(dropin)}", timeout=10, sudo=True)
-        run_command(server, "systemctl restart ssh 2>&1 || systemctl restart sshd 2>&1", timeout=20, sudo=True)
-        return False, "sshd didn't come up on port %d — reverted. Your existing port still works." % new_port
+    # 6. Verify. A bind change must confirm the panel can still REACH the host (no all-interfaces
+    #    fallback); a port-only change just confirms sshd bound the new port.
+    if bind_addr and not is_local_server(server):
+        if not _tcp_reachable(server.host, new_port, timeout=8):
+            return _revert("After binding SSH to %s, the panel couldn't reach it on %s:%d — reverted. "
+                           "The bind address has to be the one the panel connects to."
+                           % (bind_addr, server.host, new_port))
+    else:
+        out, _, _ = run_command(
+            server, f"ss -lnt 2>/dev/null | grep -qE '[:.]{new_port}[[:space:]]' && echo OK || echo NO",
+            timeout=15, sudo=True)
+        if "OK" not in (out or ""):
+            return _revert("sshd didn't come up on port %d — reverted. Your existing SSH still works." % new_port)
 
-    return True, ("SSH now listens on port %d (firewall + fail2ban updated). The old port is still "
-                  "open as a fallback — once you've confirmed you can reach SSH on %d, close the old "
-                  "one from the Firewall page." % (new_port, new_port))
+    run_command(server, f"rm -f {_quote(bak)}", timeout=10, sudo=True)   # success — drop the snapshot
+    where = (" on %s" % bind_addr) if bind_addr else ""
+    return True, ("SSH now listens on port %d%s (firewall + fail2ban updated). The previous port is "
+                  "still available as a fallback — once you've confirmed you can reach SSH on %d, "
+                  "close the old one from the Firewall page." % (new_port, where, new_port))
 
 
 def remote_public_ssh_status(server, panel_port=None):
