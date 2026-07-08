@@ -1237,23 +1237,6 @@ def register_routes(app):
         flash("Two-factor authentication disabled.", "success")
         return redirect(url_for("account"))
 
-    @app.route("/account/2fa/backup-codes", methods=["POST"])
-    @login_required
-    def account_backup_codes():
-        """Regenerate the one-time 2FA backup codes (invalidates the old set). Requires
-        the account password, since a new set replaces recovery access."""
-        if not current_user.totp_enabled:
-            flash("Enable two-factor authentication first.", "info")
-            return redirect(url_for("account"))
-        if not check_password(request.form.get("password", ""), current_user.password_hash):
-            flash("Password incorrect — backup codes were not changed.", "danger")
-            return redirect(url_for("account"))
-        codes = generate_backup_codes()
-        current_user.set_backup_codes(codes)
-        db.session.commit()
-        log_action(current_user, "backup_codes_regenerated", target=current_user.username)
-        return render_template("backup_codes.html", codes=codes, first_time=False)
-
     @app.route("/account/password", methods=["POST"])
     @login_required
     def account_change_password():
@@ -1298,6 +1281,15 @@ def register_routes(app):
         log_action(u, "password_changed", target=u.username)
         flash("Your password has been changed. Any other sessions were signed out.", "success")
         return redirect(url_for("account"))
+
+    @app.route("/account/2fa/dismiss-nag", methods=["POST"])
+    @login_required
+    def account_dismiss_otp_nag():
+        """Permanently stop showing the 'your admin account has no 2FA' banner for this user."""
+        current_user.otp_nag_dismissed = True
+        db.session.commit()
+        log_action(current_user, "otp_nag_dismissed", target=current_user.username)
+        return jsonify({"success": True})
 
     # ── Dashboard ──────────────────────────────────────────
     @app.route("/robots.txt")

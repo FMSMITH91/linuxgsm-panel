@@ -76,6 +76,8 @@ class User(UserMixin, db.Model):
     auth_epoch = db.Column(db.Integer, default=0, nullable=False)  # bump to revoke all sessions
     backup_codes = db.Column(db.Text, default="")   # JSON list of bcrypt-hashed one-time 2FA backup codes
     language = db.Column(db.String(5), default="en")  # UI language: en / es / fr
+    # A superadmin without 2FA sees a nag banner; this remembers a permanent "don't remind me".
+    otp_nag_dismissed = db.Column(db.Boolean, default=False, nullable=False)
     groups = db.relationship("Group", secondary="user_groups", back_populates="users")
 
     @staticmethod
@@ -451,6 +453,7 @@ def _run_light_migrations():
         ("user", "auth_epoch"): "ALTER TABLE user ADD COLUMN auth_epoch INTEGER DEFAULT 0",
         ("user", "backup_codes"): "ALTER TABLE user ADD COLUMN backup_codes TEXT DEFAULT ''",
         ("user", "language"): "ALTER TABLE user ADD COLUMN language VARCHAR(5) DEFAULT 'en'",
+        ("user", "otp_nag_dismissed"): "ALTER TABLE user ADD COLUMN otp_nag_dismissed BOOLEAN DEFAULT 0",
     }
     for (table, col), ddl in wanted.items():
         if table in existing and col not in existing[table]:

@@ -639,6 +639,36 @@
 <!-- Main content -->
 <main class="main-content{% if not current_user.is_authenticated %} main-content-full{% endif %}">
   <div class="content-wrap">
+    {% if current_user.is_authenticated and current_user.is_superadmin and not current_user.totp_enabled and not current_user.otp_nag_dismissed %}
+    <div class="alert alert-warning d-flex flex-wrap align-items-center gap-2" id="otp-nag" role="alert" style="display:none;">
+      <i class="bi bi-shield-exclamation fs-5"></i>
+      <div class="flex-grow-1" style="min-width:220px;">
+        <strong>Two-factor authentication is off on your admin account.</strong>
+        <div class="small">You have full control of the panel — add an authenticator code to your sign-in so a stolen password alone can't get in.</div>
+      </div>
+      <a href="{{ url_for('account_2fa_enable') }}" class="btn btn-primary btn-sm text-nowrap"><i class="bi bi-shield-plus"></i> Enable 2FA</a>
+      <button type="button" class="btn btn-outline-secondary btn-sm" onclick="hideOtpNag(true)">Not now</button>
+      <button type="button" class="btn btn-link btn-sm text-secondary px-1" onclick="dismissOtpNagForever()">Don't remind me again</button>
+    </div>
+    <script>
+      // Show unless suppressed for this browser session ("Not now"). Permanent dismissal is stored
+      // server-side, so if we got here the account hasn't chosen "Don't remind me again".
+      (function(){ var n=document.getElementById('otp-nag'); if(!n) return;
+        if(sessionStorage.getItem('otpNagHidden')==='1'){ n.remove(); } else { n.style.display=''; } })();
+      function hideOtpNag(session){ var n=document.getElementById('otp-nag'); if(n) n.remove();
+        if(session){ try{ sessionStorage.setItem('otpNagHidden','1'); }catch(e){} } }
+      function dismissOtpNagForever(){
+        confirmDialog({title:'Stop reminding me', icon:'bell-slash', confirmClass:'btn-warning', confirmLabel:"Don't remind me",
+          bodyText:'Permanently hide the two-factor reminder for your account? You can still turn 2FA on any time from your Account page.',
+          onConfirm:function(){
+            fetch(MOUNT + '/account/2fa/dismiss-nag', {method:'POST'})
+              .then(function(r){ return r.json(); })
+              .then(function(){ hideOtpNag(false); if(window.toast) toast("You won't be reminded again.", 'info'); })
+              .catch(function(){ if(window.toast) toast('Could not save that — please try again.', 'danger'); });
+          }});
+      }
+    </script>
+    {% endif %}
     {% block content %}{% endblock %}
   </div>
 </main>

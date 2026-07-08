@@ -6,9 +6,11 @@
   <div class="card-header"><i class="bi bi-key-fill"></i> Your 2FA backup codes</div>
   <div class="card-body">
     <div class="alert alert-warning py-2 small mb-3">
-      <i class="bi bi-exclamation-triangle-fill"></i> Save these now — they are shown <strong>once</strong> and won't be
-      displayed again. Each code signs you in a single time if you lose your authenticator. Store them somewhere safe
-      (a password manager).{% if not first_time %} These replace any previous backup codes.{% endif %}
+      <i class="bi bi-exclamation-triangle-fill"></i> Save these now — they are shown <strong>once</strong> and can never
+      be displayed again. Each code signs you in a single time if you lose your authenticator. Store them somewhere safe,
+      such as a password manager. If you download the .txt file, keep it somewhere secure and
+      <strong>encrypt it with a password</strong> — anyone who gets this file can use these codes to bypass your
+      two-factor login.
     </div>
     <div class="row row-cols-2 g-2 font-monospace mb-3" style="font-size:1rem;">
       {% for c in codes %}
