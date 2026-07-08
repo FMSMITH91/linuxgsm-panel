@@ -100,8 +100,8 @@
             </td>
             <td>
               <span data-server-id="{{ gs.id }}"
-                    class="badge {% if gs.installed %}bg-success{% elif installing %}bg-info text-dark{% else %}bg-warning text-dark{% endif %}">
-                {% if gs.installed %}Installed{% elif installing %}Installing…{% else %}Not installed{% endif %}
+                    class="badge {% if gs.installed %}bg-success{% elif installing %}bg-info text-dark{% elif gs.status == 'failed' %}bg-danger{% else %}bg-warning text-dark{% endif %}">
+                {% if gs.installed %}Installed{% elif installing %}Installing…{% elif gs.status == 'failed' %}Install failed{% else %}Not installed{% endif %}
               </span>
             </td>
             <td>{{ gs.remote.display_name if gs.remote else '—' }}</td>

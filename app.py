@@ -2029,7 +2029,7 @@ def register_routes(app):
                         except Exception:
                             _log.debug("_run: ignored non-fatal error", exc_info=True)
                     if rc != 0:
-                        gs.installed = False; gs.status = "offline"; db.session.commit()
+                        gs.installed = False; gs.status = "failed"; db.session.commit()
                         _fail("Game install failed", (out or err)[-300:]); return
                     gs.installed = True; db.session.commit()
 
