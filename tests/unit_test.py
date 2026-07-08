@@ -1588,6 +1588,20 @@ check("parser(minecraft): names from a prefixed log line",
 check("parser(minecraft): empty server -> no players",
       sm._parse_minecraft_list("There are 0 of a max of 20 players online: ") == [])
 
+# player_list: console engines use the console (ids for kick/ban), else fall back to gamedig
+_orig_cpl, _orig_gpl = sm.console_player_list, sm._gamedig_player_list
+try:
+    sm.console_player_list = lambda *a, **k: [{"name": "Ace", "num": 0, "steamid": "",
+                                               "score": None, "time": None}]
+    sm._gamedig_player_list = lambda *a, **k: [{"name": "Zed"}]
+    check("player_list: uses the console result when present (carries slot/steamid for moderation)",
+          [p["name"] for p in sm.player_list(None, "u", "cod", 28960, None, "codserver")] == ["Ace"])
+    sm.console_player_list = lambda *a, **k: []   # console parsed nothing / empty
+    check("player_list: falls back to gamedig when the console yields nothing",
+          [p["name"] for p in sm.player_list(None, "u", "cod", 28960, None, "codserver")] == ["Zed"])
+finally:
+    sm.console_player_list, sm._gamedig_player_list = _orig_cpl, _orig_gpl
+
 # injection-safe command building, dispatched by engine
 _msent = {}
 _orig_scc = sm.send_console_command

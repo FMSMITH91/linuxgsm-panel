@@ -1612,11 +1612,14 @@ def _gamedig_player_list(server, user, game_type=None, port=None, query_type=Non
 
 def player_list(server, user, game_type=None, port=None, query_type=None, selfname=None):
     """Connected players for the Players panel. For games with console moderation (valve, idTech3,
-    Minecraft) read the console so the list carries the kick/ban identifiers; for everything else
-    fall back to gamedig (names only). Returns [{name, steamid, num, score, time}]. Never raises."""
+    Minecraft) read the console first so the list carries the kick/ban identifiers; if that yields
+    nothing (an empty server, OR a `status` layout this build formats differently than we parse)
+    fall back to gamedig so a working gamedig query still shows who's on — names only, no kick/ban.
+    Everything else uses gamedig. Returns [{name, steamid, num, score, time}]. Never raises."""
     if game_engine(game_type):
         pl = console_player_list(server, user, game_type, selfname=selfname)
-        return pl or []
+        if pl:
+            return pl
     return _gamedig_player_list(server, user, game_type, port, query_type)
 
 
