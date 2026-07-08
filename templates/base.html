@@ -615,7 +615,8 @@
       </select>
     </div>
     <div class="text-center mt-2" style="font-size:.66rem;color:var(--text-muted,#6b7684);">
-      LinuxGSM Panel <span id="panel-version">v{{ panel_version }}</span>
+      LinuxGSM Panel <span id="panel-version">v{{ panel_version }}</span>{% if panel_commit %}
+      <span id="panel-commit" title="Running git commit ({{ panel_commit }})">· {{ panel_commit }}</span>{% endif %}
       <span id="update-badge"></span>
     </div>
   </div>

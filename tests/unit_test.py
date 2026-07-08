@@ -847,6 +847,9 @@ check("panel-f2b: zero port rejected", _so.configure_panel_fail2ban("/x", 0)[0] 
 check("panel-f2b: non-numeric port rejected", _so.configure_panel_fail2ban("/x", "nope")[0] is False)
 check("panel-f2b: newline in log path rejected", _so.configure_panel_fail2ban("bad\npath", 5000)[0] is False)
 
+# ── panel_commit: always a string (short SHA, or '' when not a git checkout) ──
+check("panel-commit: returns a string", isinstance(_so.panel_commit(), str))
+
 # ── change panel port: port_in_use + restart_panel dispatch ──
 _orig_sorun = _so._run
 try:

@@ -164,6 +164,12 @@ def _read_version():
 
 
 PANEL_VERSION = _read_version()
+# The exact git commit this process is running. Computed once (it can't change until a restart,
+# and a self-update restarts the process). "" when not a git checkout.
+try:
+    PANEL_COMMIT = so.panel_commit()
+except Exception:
+    PANEL_COMMIT = ""
 
 # In-memory registry of running/finished VPS bootstrap jobs, keyed by remote_id.
 # Populated by the async bootstrap runner and read by the status endpoint. Both
@@ -767,6 +773,7 @@ def register_context_processors(app):
             "tailscale_url": tailscale_url,
             "mount_prefix": app.config.get("_MOUNT_PREFIX", "/"),
             "panel_version": PANEL_VERSION,
+            "panel_commit": PANEL_COMMIT,
             "nav_remotes": nav_remotes,
             # i18n: `t()` translates a string for the active language (falls back to English);
             # the catalog is also handed to the browser so client JS can translate too.

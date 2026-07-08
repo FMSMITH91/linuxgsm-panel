@@ -495,6 +495,21 @@ def panel_version():
         return "0.0.0"
 
 
+def panel_commit():
+    """The short git commit the panel is running, with a trailing '+' when the tracked working
+    tree has local modifications (e.g. a hand-edit or a partial update). Empty string if this
+    isn't a git checkout. Cheap; the app reads it once at startup (it can't change until a
+    restart)."""
+    if not _is_git_checkout():
+        return ""
+    sha, _, rc = _git(["rev-parse", "--short", "HEAD"], timeout=10)
+    sha = sha.strip()
+    if rc != 0 or not sha:
+        return ""
+    dirty, _, drc = _git(["status", "--porcelain", "--untracked-files=no"], timeout=10)
+    return sha + ("+" if (drc == 0 and dirty.strip()) else "")
+
+
 def _git(args, timeout=45):
     """Run a git command inside the panel dir (as the panel user, no sudo). Returns
     (stdout, stderr, returncode).
