@@ -40,7 +40,14 @@ export XDG_RUNTIME_DIR="${XDG_RUNTIME_DIR:-/run/user/$(id -u)}"
 # ─────────────────────────────────────────────────────────
 
 REPO_URL="https://github.com/FMSMITH91/linuxgsm-panel.git"
+# Branch to track. The panel can switch branches from the UI by exporting PANEL_BRANCH
+# before invoking this script; unset (the normal path) keeps the default "main" unchanged.
+# Restricted to a safe git-ref charset so it can't inject options/paths into git commands.
 DEFAULT_BRANCH="main"
+if [ -n "${PANEL_BRANCH:-}" ] && printf '%s' "${PANEL_BRANCH}" | grep -Eq '^[A-Za-z0-9._/-]{1,100}$' \
+   && [ "${PANEL_BRANCH#-}" = "${PANEL_BRANCH}" ] && [ "${PANEL_BRANCH##*..*}" = "${PANEL_BRANCH}" ]; then
+    DEFAULT_BRANCH="${PANEL_BRANCH}"
+fi
 SERVICE_USER="lgsmpanel"          # dedicated user created for root installs
 KEEP_BACKUPS=3                    # how many previous-version snapshots to retain
 

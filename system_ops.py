@@ -2,6 +2,7 @@
 import json
 import logging
 import os
+import re
 import shlex
 import subprocess
 import threading
@@ -14,6 +15,30 @@ _log = logging.getLogger("panel.system_ops")
 # The panel's own install directory (this module lives inside it) — used for the
 # git-based self-update feature.
 PANEL_DIR = os.path.dirname(os.path.abspath(__file__))
+
+# The branch the panel tracks out of the box. Switching to any other branch is opt-in
+# (panel_switch_branch) and stored in config as "panel_branch".
+_DEFAULT_BRANCH = "main"
+# A deliberately strict git-ref charset: no spaces, no leading dash (option injection) and
+# no ".." (traversal). This value is interpolated into git commands AND exported to the
+# root-run installer, so it must be safe by construction.
+_BRANCH_RE = re.compile(r"^[A-Za-z0-9._/-]{1,100}$")
+
+
+def _valid_branch(name):
+    name = (name or "").strip()
+    return bool(name) and bool(_BRANCH_RE.match(name)) and not name.startswith("-") and ".." not in name
+
+
+def _tracked_branch():
+    """Branch the panel follows for updates/self-update. Defaults to 'main'; a superadmin can
+    point it at another branch via panel_switch_branch (stored in config as 'panel_branch')."""
+    try:
+        import config as _cfg
+        b = (_cfg.load_config().get("panel_branch") or _DEFAULT_BRANCH).strip()
+    except Exception:
+        b = _DEFAULT_BRANCH
+    return b if _valid_branch(b) else _DEFAULT_BRANCH
 
 
 _last_cpu_stat = {"cpus": None, "ts": 0.0}   # previous /proc/stat snapshot for a sleepless delta
@@ -546,23 +571,38 @@ def _compute_update_status():
         return {"git": False, "update_available": False, "current_version": cur_ver,
                 "message": "The panel isn't a git checkout, so it can't self-update."}
     cur_sha, _, _ = _git(["rev-parse", "--short", "HEAD"])
-    _, ferr, frc = _git(["fetch", "--quiet", "origin", "main"], timeout=45)
+    branch = _tracked_branch()
+    ref = "origin/" + branch
+    _, ferr, frc = _git(["fetch", "--quiet", "origin", branch], timeout=45)
     if frc != 0:
         # Couldn't reach the remote (private repo without creds, or offline). Do NOT
         # report an update from a stale remote-tracking ref — that would show a phantom
         # "update available" that can never be applied.
         return {"git": True, "fetched": False, "update_available": False,
-                "current_version": cur_ver, "current_sha": cur_sha.strip(),
+                "current_version": cur_ver, "current_sha": cur_sha.strip(), "branch": branch,
                 "message": "Couldn't reach the update source — it may be private or offline."}
-    behind, _, _ = _git(["rev-list", "--count", "HEAD..origin/main"])
+    behind, _, _ = _git(["rev-list", "--count", "HEAD.." + ref])
     behind_n = int(behind.strip()) if behind.strip().isdigit() else 0
-    rem_sha, _, _ = _git(["rev-parse", "--short", "origin/main"])
+    rem_sha, _, _ = _git(["rev-parse", "--short", ref])
 
     base = {"git": True, "fetched": True, "current_version": cur_ver,
             "current_sha": cur_sha.strip(), "remote_sha": rem_sha.strip(),
-            "checked_at": int(time.time())}
+            "branch": branch, "checked_at": int(time.time())}
     if behind_n == 0:
         return {**base, "update_available": False, "ci_state": "passing", "behind": 0}
+
+    # Tracking a NON-default branch is an explicit, opt-in test mode. Those branches don't run
+    # the CI/security suite on this repo (it's gated to main + PRs), so the CI-gate below would
+    # show a permanent "verifying" and never apply. Offer the branch tip directly instead —
+    # the snapshot + health-check + auto-rollback still guards against a branch that won't boot.
+    if branch != _DEFAULT_BRANCH:
+        tgt_ver, _, tv_rc = _git(["show", "%s:VERSION" % ref])
+        rem_full, _, _ = _git(["rev-parse", ref])
+        log, _, _ = _git(["log", "--oneline", "--no-decorate", "-10", "HEAD.." + ref])
+        return {**base, "update_available": True, "ci_state": "unverified", "behind": behind_n,
+                "remote_version": ((tgt_ver.strip() if tv_rc == 0 else "") or "?"),
+                "target_sha": rem_full.strip(),
+                "changes": [ln for ln in (log or "").splitlines() if ln.strip()][:10]}
 
     # Don't surface an update until the target commit has cleared CI on GitHub — otherwise
     # the badge pops the instant a push lands, before the workflows finish (or even if they
@@ -571,7 +611,7 @@ def _compute_update_status():
     # commits we're behind by, newest first, and update to the first one that's passed CI.
     # 'unknown' (API unreachable) counts as acceptable so a transient API error never hides a
     # legitimate update. Capped so a long-offline panel can't fire dozens of API calls.
-    revs, _, _ = _git(["rev-list", "-n", "25", "HEAD..origin/main"])
+    revs, _, _ = _git(["rev-list", "-n", "25", "HEAD.." + ref])
     commits = [c for c in (revs or "").split() if c]
     tip_state = _remote_ci_state(commits[0]) if commits else "unknown"
 
@@ -669,30 +709,43 @@ def panel_self_update():
     target_ref = (st.get("target_sha") or "").strip()
     if not re.fullmatch(r"[0-9a-fA-F]{7,40}", target_ref):
         target_ref = ""   # fall back to install.sh's default (origin/<branch> tip)
-    # Write the wrapper + its log inside the panel's own data dir (owned by the service
-    # user, not world-writable) rather than /tmp. This script is later executed as root
-    # via `sudo systemd-run`, so a predictable /tmp path would let a local user pre-plant
-    # a symlink/file and get root code execution.
+    # Follow whatever branch the panel is tracking (default 'main'); the launcher passes it to
+    # install.sh so a panel that has switched branches keeps updating on THAT branch.
+    return _launch_installer(target_ref=target_ref, branch=_tracked_branch())
+
+
+def _launch_installer(target_ref="", branch="", started_msg=None):
+    """Write the self-update wrapper and launch it in a transient unit that OUTLIVES the panel's
+    own restart. The wrapper exports PANEL_UPDATE_REF (a CI-verified commit, or empty for the
+    branch tip) and PANEL_BRANCH (the branch install.sh fetches/resets to). install.sh does the
+    real work: snapshot → update → health-check → rollback-on-failure. Returns (ok, message).
+
+    Match the install's service model: a per-user service uses `systemd-run --user`; a system
+    service (root install → dedicated service user) is launched as root via `sudo systemd-run`
+    (the service user has NOPASSWD sudo) so install.sh can drive the system unit."""
+    installer = os.path.join(PANEL_DIR, "install.sh")
+    if not os.path.isfile(installer):
+        return False, "install.sh is missing, so the panel can't self-update safely."
+    if branch and not _valid_branch(branch):
+        return False, "Invalid branch name."
+    # Write the wrapper + its log inside the panel's own data dir (owned by the service user,
+    # not world-writable) rather than /tmp. This script is later executed as root via
+    # `sudo systemd-run`, so a predictable /tmp path would let a local user pre-plant a
+    # symlink/file and get root code execution.
     _upd_dir = os.path.join(PANEL_DIR, "data")
     os.makedirs(_upd_dir, exist_ok=True)
     _log_path = os.path.join(_upd_dir, "self-update.log")
-    # Thin wrapper so the UI can tail one predictable log file. The installer does
-    # the real work: snapshot → update → health-check → rollback-on-failure.
     script = (
         "#!/bin/bash\n"
         f"LOG={shlex.quote(_log_path)}\n"
         f"cd {shlex.quote(PANEL_DIR)} || exit 1\n"
-        f"export PANEL_UPDATE_REF={shlex.quote(target_ref)}\n"
+        f"export PANEL_UPDATE_REF={shlex.quote(target_ref or '')}\n"
+        f"export PANEL_BRANCH={shlex.quote(branch or '')}\n"
         'echo "=== panel self-update $(date) ===" > "$LOG"\n'
         f"bash {shlex.quote(installer)} >> \"$LOG\" 2>&1\n"
         'echo "=== installer exit $? ===" >> "$LOG"\n'
     )
     path = os.path.join(_upd_dir, "self-update.sh")
-    # Launch the updater in a transient unit that OUTLIVES the panel's own restart.
-    # Match the install's service model: a per-user service uses `systemd-run --user`;
-    # a system service (root install → dedicated service user) is launched as root via
-    # `sudo systemd-run` (the service user has NOPASSWD sudo) so install.sh can drive
-    # the system unit. Falls back to --user.
     user_unit = os.path.expanduser("~/.config/systemd/user/linuxgsm-panel.service")
     system_unit = "/etc/systemd/system/linuxgsm-panel.service"
     if os.path.exists(user_unit) or not os.path.exists(system_unit):
@@ -708,14 +761,63 @@ def panel_self_update():
             launcher,
             stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, env=os.environ.copy(),
         )
-        # Invalidate the cache so the badge clears after the restart.
-        _update_cache["ts"] = 0.0
-        return True, ("Update started — the panel is backing up, updating, and verifying it "
-                      "restarts cleanly. If the new version fails to come up it rolls back "
-                      "automatically. This takes up to a minute.")
+        _update_cache["ts"] = 0.0   # invalidate so the badge re-checks after the restart
+        return True, (started_msg or
+                      ("Update started — the panel is backing up, updating, and verifying it "
+                       "restarts cleanly. If the new version fails to come up it rolls back "
+                       "automatically. This takes up to a minute."))
     except Exception:
-        _log.exception("panel self-update failed to start")
+        _log.exception("panel installer launch failed to start")
         return False, "Could not start the updater — check the panel logs."
+
+
+def list_panel_branches():
+    """Remote branches available to switch to, most-recently-updated first, plus the currently
+    tracked branch. Returns (branches, current). Best-effort: ([current], current) on failure."""
+    branch = _tracked_branch()
+    if not _is_git_checkout():
+        return [branch], branch
+    _git(["fetch", "--quiet", "--prune", "origin"], timeout=45)   # refresh + drop deleted branches
+    out, _, rc = _git(["for-each-ref", "--format=%(refname:short)", "--sort=-committerdate",
+                       "refs/remotes/origin"], timeout=20)
+    branches = []
+    if rc == 0:
+        for line in (out or "").splitlines():
+            name = line.strip()
+            if not name.startswith("origin/"):
+                continue
+            name = name[len("origin/"):]
+            if name and name != "HEAD" and _valid_branch(name) and name not in branches:
+                branches.append(name)
+    if branch not in branches:
+        branches.insert(0, branch)
+    return branches, branch
+
+
+def panel_switch_branch(branch):
+    """Point the panel at a different branch and check it out, with the SAME snapshot / health-check
+    / auto-rollback safety as a normal update. Superadmin-gated at the route. Returns (ok, message)."""
+    branch = (branch or "").strip()
+    if not _valid_branch(branch):
+        return False, "Invalid branch name."
+    if not _is_git_checkout():
+        return False, "The panel isn't a git checkout, so it can't switch branches."
+    # Confirm the branch exists on the remote before committing the config to it.
+    _, _, rc = _git(["ls-remote", "--exit-code", "--heads", "origin", branch], timeout=20)
+    if rc != 0:
+        return False, "Branch '%s' doesn't exist on the remote." % branch
+    try:
+        import config as _cfg
+        cfg = _cfg.load_config()
+        cfg["panel_branch"] = branch
+        _cfg.save_config(cfg)
+    except Exception:
+        _log.exception("switch-branch: could not save tracked branch")
+        return False, "Could not save the branch selection."
+    msg = ("Switching to '%s' — the panel is backing up, checking out that branch and verifying it "
+           "restarts cleanly (auto-rollback if it doesn't). This takes up to a minute." % branch)
+    # target_ref empty → install.sh resets to the tip of PANEL_BRANCH.
+    return _launch_installer(target_ref="", branch=branch, started_msg=msg)
 
 
 def restart_panel(delay_seconds=2):

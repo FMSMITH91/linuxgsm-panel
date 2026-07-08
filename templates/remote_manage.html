@@ -181,6 +181,18 @@
       <button class="btn btn-sm btn-success" id="pu-update-btn" onclick="doPanelUpdate()" style="display:none;"><i class="bi bi-download"></i> Update now</button>
       <span id="pu-msg" class="small"></span>
     </div>
+    <!-- Branch selector: which branch the panel tracks and updates from -->
+    <div class="mt-3 pt-2 border-top" style="border-color:var(--border) !important;">
+      <div class="small text-secondary mb-1">
+        <i class="bi bi-diagram-2"></i> Tracking branch: <strong id="pu-branch-current">…</strong>
+      </div>
+      <div class="d-flex gap-2 align-items-center flex-wrap">
+        <select id="pu-branch-select" class="form-select form-select-sm" style="width:auto; max-width:280px;" aria-label="Panel branch"></select>
+        <button class="btn btn-sm btn-outline-warning" id="pu-branch-switch" onclick="switchPanelBranch()"><i class="bi bi-shuffle"></i> Switch</button>
+        <span id="pu-branch-msg" class="small"></span>
+      </div>
+      <div class="form-text mt-1">Switching checks out that branch's code and restarts, with the same backup + auto-rollback as an update. Non-<code>main</code> branches skip CI verification — intended for testing.</div>
+    </div>
     <!-- Live update progress (the installer's [1/5]…[5/5] steps, streamed) -->
     <div id="pu-log" class="mt-2" style="display:none;">
       <div id="pu-log-body" style="background:var(--bg-elevated); border:1px solid var(--border); border-radius:8px; padding:.5rem .7rem; max-height:280px; overflow-y:auto; font-family:ui-monospace,'JetBrains Mono',monospace; font-size:.72rem; line-height:1.55; white-space:pre-wrap; word-break:break-word;"></div>
@@ -902,27 +914,65 @@ function doPanelUpdate(){
     var beforeBoot=(before&&before.boot_id)||'';
     fetch(MOUNT+'/api/panel/update',{method:'POST'}).then(function(r){return r.json();}).then(function(d){
       if(!d.success){ msg.innerHTML='<span class="text-danger">'+(window.escapeHtml?escapeHtml(d.message||'Update failed'):(d.message||'Update failed'))+'</span>'; btn.disabled=false; return; }
-      var tries=0, restarted=false, done=false;
-      var iv=setInterval(function(){
-        tries++;
-        // 1) stream the step log (the detached updater keeps writing across the restart)
-        fetch(MOUNT+'/api/panel/update-log').then(function(r){ return r.ok?r.json():null; })
-          .then(function(l){ if(l && l.lines && l.lines.length) renderPuLog(l.lines); }).catch(function(){});
-        // 2) watch for the restart (boot_id flip) = finished and the new process is live
-        fetch(MOUNT+'/api/panel/update-status').then(function(r){ return r.ok?r.json():null; }).then(function(s){
-          if(!s){ if(!restarted){ restarted=true; msg.innerHTML='<span class="text-warning"><i class="bi bi-arrow-repeat"></i> Restarting the panel…</span>'; } return; }
-          if(s.boot_id && beforeBoot && s.boot_id!==beforeBoot && !done){
-            done=true; clearInterval(iv);
-            fetch(MOUNT+'/api/panel/update-log').then(function(r){ return r.ok?r.json():null; }).then(function(l){
-              if(l && l.lines) renderPuLog(l.lines);
-              msg.innerHTML='<span class="text-success"><i class="bi bi-check-circle"></i> Update complete — reloading…</span>';
-              setTimeout(function(){ location.reload(); }, 2500);
-            });
-          }
-        }).catch(function(){ if(!restarted){ restarted=true; msg.innerHTML='<span class="text-warning"><i class="bi bi-arrow-repeat"></i> Restarting the panel…</span>'; } });
-        if(tries>120){ clearInterval(iv); msg.innerHTML='<span class="text-warning">Still working — reload the page to check.</span>'; }
-      }, 1500);
+      watchPanelRestart(beforeBoot, msg, 'Update complete');
     }).catch(function(){ msg.innerHTML='<span class="text-danger">Update request failed.</span>'; btn.disabled=false; });
+  }).catch(function(){ msg.innerHTML='<span class="text-danger">Couldn\'t read the current version.</span>'; btn.disabled=false; });
+}
+
+// Watch for the panel restarting after a detached update/branch-switch: stream the installer's
+// step log, and finish when boot_id flips (the new process is live), then reload. Shared by the
+// "Update now" and "Switch branch" flows since both back up → change code → restart.
+function watchPanelRestart(beforeBoot, msg, doneLabel){
+  var tries=0, restarted=false, done=false;
+  var iv=setInterval(function(){
+    tries++;
+    fetch(MOUNT+'/api/panel/update-log').then(function(r){ return r.ok?r.json():null; })
+      .then(function(l){ if(l && l.lines && l.lines.length) renderPuLog(l.lines); }).catch(function(){});
+    fetch(MOUNT+'/api/panel/update-status').then(function(r){ return r.ok?r.json():null; }).then(function(s){
+      if(!s){ if(!restarted){ restarted=true; msg.innerHTML='<span class="text-warning"><i class="bi bi-arrow-repeat"></i> Restarting the panel…</span>'; } return; }
+      if(s.boot_id && beforeBoot && s.boot_id!==beforeBoot && !done){
+        done=true; clearInterval(iv);
+        fetch(MOUNT+'/api/panel/update-log').then(function(r){ return r.ok?r.json():null; }).then(function(l){
+          if(l && l.lines) renderPuLog(l.lines);
+          msg.innerHTML='<span class="text-success"><i class="bi bi-check-circle"></i> '+(doneLabel||'Done')+' — reloading…</span>';
+          setTimeout(function(){ location.reload(); }, 2500);
+        });
+      }
+    }).catch(function(){ if(!restarted){ restarted=true; msg.innerHTML='<span class="text-warning"><i class="bi bi-arrow-repeat"></i> Restarting the panel…</span>'; } });
+    if(tries>120){ clearInterval(iv); msg.innerHTML='<span class="text-warning">Still working — reload the page to check.</span>'; }
+  }, 1500);
+}
+// Populate the branch selector with the remote branches + the currently tracked one.
+function loadPanelBranches(){
+  var sel=document.getElementById('pu-branch-select'), cur=document.getElementById('pu-branch-current');
+  if(!sel) return;
+  fetch(MOUNT+'/api/panel/branches').then(function(r){return r.json();}).then(function(d){
+    var branches=d.branches||[], current=d.current||'main';
+    if(cur) cur.textContent=current;
+    sel.innerHTML='';
+    branches.forEach(function(b){
+      var o=document.createElement('option'); o.value=b; o.textContent=b;
+      if(b===current) o.selected=true; sel.appendChild(o);
+    });
+  }).catch(function(){});
+}
+function switchPanelBranch(){
+  var sel=document.getElementById('pu-branch-select'), msg=document.getElementById('pu-branch-msg');
+  var btn=document.getElementById('pu-branch-switch');
+  if(!sel||!sel.value){ return; }
+  var branch=sel.value;
+  if(!confirm('Switch the panel to branch "'+branch+'"?\n\nIt backs up, checks out that branch and restarts. If it fails to boot it rolls back automatically. Non-main branches are unverified code — use for testing.')) return;
+  var logWrap=document.getElementById('pu-log'), body=document.getElementById('pu-log-body');
+  btn.disabled=true; if(logWrap) logWrap.style.display='';
+  if(body) body.innerHTML='<span class="text-secondary">Starting…</span>';
+  msg.innerHTML='<span class="text-secondary"><i class="bi bi-arrow-repeat"></i> Switching…</span>';
+  fetch(MOUNT+'/api/panel/update-status').then(function(r){return r.json();}).then(function(before){
+    var beforeBoot=(before&&before.boot_id)||'';
+    fetch(MOUNT+'/api/panel/switch-branch',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({branch:branch})})
+      .then(function(r){return r.json();}).then(function(d){
+        if(!d.success){ msg.innerHTML='<span class="text-danger">'+(window.escapeHtml?escapeHtml(d.message||'Switch failed'):(d.message||'Switch failed'))+'</span>'; btn.disabled=false; return; }
+        watchPanelRestart(beforeBoot, msg, 'Switched to '+branch);
+      }).catch(function(){ msg.innerHTML='<span class="text-danger">Switch request failed.</span>'; btn.disabled=false; });
   }).catch(function(){ msg.innerHTML='<span class="text-danger">Couldn\'t read the current version.</span>'; btn.disabled=false; });
 }
 
@@ -1443,7 +1493,7 @@ function restoreBackup(name,btn){
 }
 
 loadSshStatus();                     // public-SSH controls now exist on both local + remote (no-ops if absent)
-if(IS_LOCAL){ checkPanelUpdate(false); loadIntegrity(); loadDbStats(); loadAutoUpd(); loadBackups(); } // panel-only cards
+if(IS_LOCAL){ checkPanelUpdate(false); loadPanelBranches(); loadIntegrity(); loadDbStats(); loadAutoUpd(); loadBackups(); } // panel-only cards
 pollLive();
 pollWhenVisible(pollLive, 2000);
 

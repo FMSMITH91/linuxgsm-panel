@@ -3168,6 +3168,28 @@ def register_routes(app):
             return jsonify({"exists": False, "lines": [],
                             "error": _log_and_generic("panel update-log failed")})
 
+    @app.route("/api/panel/branches")
+    @login_required
+    @permission_required(SUPER_ADMIN)
+    def api_panel_branches():
+        """Remote branches the panel can switch to, plus the one it currently tracks."""
+        try:
+            branches, current = so.list_panel_branches()
+            return jsonify({"branches": branches, "current": current})
+        except Exception:
+            return jsonify({"branches": [], "current": "main",
+                            "error": _log_and_generic("listing branches failed")})
+
+    @app.route("/api/panel/switch-branch", methods=["POST"])
+    @login_required
+    @permission_required(SUPER_ADMIN)
+    def api_panel_switch_branch():
+        """Switch the panel to another branch and pull it (same rollback-safe path as an update)."""
+        branch = (_json_body().get("branch") or "").strip()
+        success, msg = so.panel_switch_branch(branch)
+        log_action(current_user, "panel_switch_branch", target=branch, detail=msg, success=success)
+        return jsonify({"success": success, "message": msg})
+
     @app.route("/api/panel/diagnostics")
     @login_required
     @permission_required(SUPER_ADMIN)
