@@ -805,6 +805,42 @@ _mc = _GS(game_type="mc", port=25565)
 eq("connect: minecraft -> no URI", _mc.connect_uri("1.2.3.4"), "")
 eq("connect: no host -> no URI", _steam.connect_uri(""), "")
 
+# ── install port auto-assignment: span-aware, sequential packing ──
+#    Regression guard for the "increments by 2" bug — a single-port game (Call of Duty, Source,
+#    Minecraft) must pack sequentially, while a multi-port game reserves its whole adjacent block.
+from app import _port_span, _first_free_block
+eq("port-span: cod is single-port", _port_span("cod"), 1)
+eq("port-span: source game is single-port", _port_span("gmod"), 1)
+eq("port-span: unknown game defaults to 1", _port_span("totally-made-up"), 1)
+eq("port-span: rust reserves 2", _port_span("rust"), 2)
+eq("port-span: valheim reserves 3", _port_span("valheim"), 3)
+eq("port-span: case-insensitive", _port_span("RUST"), 2)
+
+
+def _pack(seq_spans, desired_of):
+    """Simulate installing servers in order; each reserves its span. Returns assigned ports."""
+    occupied, assigned = set(), []
+    for gt in seq_spans:
+        span = _port_span(gt)
+        p = _first_free_block(desired_of[gt], span, occupied)
+        for k in range(span):
+            occupied.add(p + k)
+        assigned.append(p)
+    return assigned
+
+eq("port-pack: 3 cod servers are sequential (no +2 gap)",
+   _pack(["cod", "cod", "cod"], {"cod": 28960}), [28960, 28961, 28962])
+eq("port-pack: cod then coduo pack tightly",
+   _pack(["cod", "coduo"], {"cod": 28960, "coduo": 28960}), [28960, 28961])
+eq("port-pack: 2 rust servers keep a 2-port block each",
+   _pack(["rust", "rust"], {"rust": 28015}), [28015, 28017])
+eq("port-pack: 2 valheim servers keep a 3-port block each",
+   _pack(["valheim", "valheim"], {"valheim": 2456}), [2456, 2459])
+eq("port-block: a live listening port is skipped",
+   _first_free_block(28960, 1, {28960, 28961}), 28962)
+eq("port-block: multi-port block steps past a partial overlap",
+   _first_free_block(28015, 2, {28016}), 28017)
+
 # ── panel file integrity + repair (git-based) ─────────────────
 import system_ops as _so
 _so._is_git_checkout = lambda: True

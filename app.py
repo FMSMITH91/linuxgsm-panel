@@ -105,7 +105,7 @@ from ssh_manager import (
     write_file, upload_file, delete_path,
     remote_ufw_delete_rule, remote_set_public_ssh, remote_public_ssh_status, remote_ufw_status, remote_ufw_open_port,
     remote_ufw_close_port, remote_ufw_allow_game_port, remote_ufw_close_game_port,
-    remote_ufw_allow_game_ports, remote_ufw_close_by_name, port_in_use,
+    remote_ufw_allow_game_ports, remote_ufw_close_by_name,
     remote_os_check_updates, remote_os_run_updates,
     remote_reboot, remote_uptime,
     remote_bootstrap_vps, remote_check_tailscale,
@@ -195,6 +195,38 @@ _game_backup_status = {}
 # accurate right after an action. TTL is short — status only ever lags by a couple of seconds.
 _port_scan_cache = {}
 _PORT_SCAN_TTL = 5
+
+# How many CONTIGUOUS ports one server of a game occupies, for auto-picking a non-colliding
+# port at install. Most LinuxGSM games answer queries on the game port itself, so a server needs
+# just ONE port (default 1) — that's why two Call of Duty servers should sit on 28960 and 28961,
+# not 28960 and 28962. A few games spread game + query/steam/voice across an ADJACENT block; those
+# reserve the whole block so two of them can't overlap. Anything not listed defaults to 1. This is
+# only a hint for STOPPED servers — resolve_free_port also unions in the host's live listening
+# ports, so a running server's real footprint is always respected regardless of this table.
+_PORT_SPAN = {
+    "rust": 2,                       # game 28015 + query 28016
+    "valheim": 3, "vh": 3,           # 2456–2458
+    "sdtd": 3, "7d2d": 3,            # 26900–26902 (game + query)
+    "arma3": 5,                      # 2302 + steam query/voice 2303–2306
+    "ark": 2,                        # 7777 game + 7778 raw
+    "squad": 2,                      # game 7787 + query 7788
+    "unturned": 2,                   # game 27015 + steam query 27016
+}
+
+
+def _port_span(game_type):
+    """Contiguous ports one server of `game_type` reserves (default 1)."""
+    return _PORT_SPAN.get((game_type or "").lower(), 1)
+
+
+def _first_free_block(desired, span, occupied, limit=400):
+    """Lowest start port >= `desired` whose `span` contiguous ports are all clear of `occupied`."""
+    p = desired
+    for _ in range(limit):
+        if all((p + k) not in occupied for k in range(span)):
+            return p
+        p += 1
+    return p
 
 
 def _remote_listening_ports(remote):
@@ -817,20 +849,25 @@ def register_routes(app):
             abort(403)
         return r
 
-    def resolve_free_port(remote, remote_id, desired):
-        """Find a free port at/after `desired` on a remote. A port is considered
-        taken if another panel game server on the same remote uses it (each reserves
-        port and port+1 for the query port) or if it's currently listening on the
-        remote host. Returns (port, changed)."""
-        occupied = set()
+    def resolve_free_port(remote, remote_id, desired, game_type):
+        """Find a free contiguous port block at/after `desired` on a remote for a `game_type`
+        server. A block of _port_span(game_type) ports must clear both (a) the ports other panel
+        game servers on this remote reserve — each per its own game's span — and (b) whatever is
+        actually listening on the host right now. Returns (start_port, changed).
+
+        The span makes the increment game-correct: single-port games (most, incl. Call of Duty and
+        Source) pack sequentially (28960, 28961, …) instead of wastefully skipping every other
+        port, while multi-port games (Rust, Valheim, …) still reserve their whole adjacent block."""
+        span = _port_span(game_type)
+        # Whatever is currently listening on the host (cached scan) — covers running servers'
+        # FULL real footprint (game + query + rcon + …) and any non-panel service, so we never
+        # land on one even if a game's span table entry is imperfect.
+        occupied = set(_remote_listening_ports(remote))
+        # Plus every panel server's reserved block (covers STOPPED servers, which aren't listening).
         for e in GameServer.query.filter_by(remote_id=remote_id).all():
-            occupied.add(e.port)
-            occupied.add(e.port + 1)
-        p = desired
-        for _ in range(200):
-            if p not in occupied and (p + 1) not in occupied and not port_in_use(remote, p):
-                break
-            p += 1
+            for k in range(_port_span(e.game_type)):
+                occupied.add(e.port + k)
+        p = _first_free_block(desired, span, occupied)
         return p, (p != desired)
 
     def get_game(server_id):
@@ -2066,7 +2103,7 @@ def register_routes(app):
             desired_port = KNOWN_PORTS.get(game_type, 27015)
 
         # Port-conflict handling: auto-pick the next free port if taken.
-        final_port, port_changed = resolve_free_port(remote, remote_id, desired_port)
+        final_port, port_changed = resolve_free_port(remote, remote_id, desired_port, game_type)
 
         # Reject a duplicate instance name on the same remote.
         if GameServer.query.filter_by(short_name=short_name, remote_id=remote_id).first():
