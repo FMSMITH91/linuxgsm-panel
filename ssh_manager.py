@@ -3429,8 +3429,9 @@ def ssh_test_connection(host, port=22, username="root", auth_method="key", crede
         return False, f"Cannot resolve hostname: {host}"
     except Exception:
         # Don't surface the raw exception text to the browser — it can carry internal detail
-        # (key paths, host internals). Log the full trace server-side, show a generic message.
-        _log.warning("ssh_test_connection to %s:%s failed", host, port, exc_info=True)
+        # (key paths, host internals). Log the full trace server-side (no user-supplied host/port
+        # in the message — exc_info already carries the detail), show a generic message.
+        _log.warning("ssh_test_connection failed", exc_info=True)
         return False, "Connection failed. Check the host, port, credentials, and that SSH is reachable."
 
 
