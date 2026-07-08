@@ -44,7 +44,7 @@
       <span class="text-secondary small me-1"><i class="bi bi-tools"></i> Maintenance:</span>
       {% for m in maintenance %}
       <button class="btn btn-sm btn-outline-secondary" title="{{ m.desc }}"
-              onclick="serverAction('{{ m.cmd }}', this, {{ 'true' if m.cmd in ['validate','backup','force-update','mods-update','fastdl'] else 'false' }})">
+              onclick="serverAction('{{ m.cmd }}', this, {{ 'true' if m.cmd in ['validate','backup','force-update','mods-update','fastdl'] else 'false' }}, true)">
         <i class="bi bi-{{ {'monitor':'activity','validate':'check2-circle','backup':'archive-fill','details':'info-circle','check-update':'cloud-arrow-down','force-update':'cloud-download-fill','update-lgsm':'arrow-up-circle','mods-update':'puzzle-fill','postdetails':'link-45deg','test-alert':'bell','fastdl':'hdd-network-fill'}.get(m.cmd, 'gear') }}"></i>
         {{ m.cmd }}
       </button>
@@ -520,7 +520,7 @@ var SERVER_NAME = {{ server.name|tojson }};
 function _esc(s){ return (window.escapeHtml ? escapeHtml(s) : String(s)); }
 
 // Fire a server action against the JSON endpoint (spinner + toast + banner handling).
-function _doServerAction(action, btn) {
+function _doServerAction(action, btn, showOutput) {
   var orig = btn.innerHTML;
   btn.disabled = true; btn.innerHTML = '<span class="spinner-border spinner-border-sm"></span>';
   fetch(MOUNT + '/api/server/' + serverId + '/action', {
@@ -529,7 +529,10 @@ function _doServerAction(action, btn) {
   })
   .then(r => r.json())
   .then(d => {
-    toast(d.message || (action + ' done'), d.success ? 'success' : 'danger');
+    // Maintenance/info actions (details, postdetails, monitor, …) return text you want to READ —
+    // show it in a dismissible panel, not a toast that disappears before you see it.
+    if (showOutput) showActionOutput(action, d.message || (d.success ? 'Done — no output' : 'Failed'), d.success);
+    else toast(d.message || (action + ' done'), d.success ? 'success' : 'danger');
     if (d.success && (action === 'restart' || action === 'start' || action === 'stop')) {
       var b = document.getElementById('restart-pending-banner');
       if (b) b.classList.add('d-none');
@@ -539,8 +542,28 @@ function _doServerAction(action, btn) {
   .catch(() => toast('Action failed — connection error', 'danger'))
   .finally(() => { btn.disabled = false; btn.innerHTML = orig; });
 }
+// Dismissible panel showing a command's full output (for maintenance/info actions). Persists until
+// you close it (button / backdrop / Esc), so you can read long output like `details`.
+function showActionOutput(title, text, ok) {
+  var ov = document.createElement('div');
+  ov.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,.6);z-index:1090;display:flex;align-items:center;justify-content:center;padding:1rem;';
+  ov.innerHTML = '<div class="card" style="max-width:760px;width:100%;max-height:85vh;display:flex;flex-direction:column;">'
+    + '<div class="card-header d-flex justify-content-between align-items-center">'
+    + '<span><i class="bi bi-' + (ok ? 'info-circle' : 'x-circle') + '"></i> ' + escapeHtml(title) + '</span>'
+    + '<button class="btn btn-sm btn-outline-secondary py-0 px-2" data-close="1">Close</button></div>'
+    + '<div class="card-body" style="overflow:auto;">'
+    + '<pre style="white-space:pre-wrap;word-break:break-word;margin:0;font-size:.8rem;">' + escapeHtml(text) + '</pre>'
+    + '</div></div>';
+  function close(){ ov.remove(); document.removeEventListener('keydown', onEsc); }
+  function onEsc(e){ if (e.key === 'Escape') close(); }
+  ov.addEventListener('click', function(ev){
+    if (ev.target === ov || (ev.target.closest && ev.target.closest('[data-close]'))) close();
+  });
+  document.addEventListener('keydown', onEsc);
+  document.body.appendChild(ov);
+}
 
-function serverAction(action, btn, confirmFirst) {
+function serverAction(action, btn, confirmFirst, showOutput) {
   // Restart AND stop get a player check first — warn, and offer "when empty".
   if (action === 'restart' || action === 'stop') { return actionWithPlayerCheck(action, btn); }
   if (confirmFirst) {
@@ -551,7 +574,7 @@ function serverAction(action, btn, confirmFirst) {
     }
     if (!confirm(msg)) return;
   }
-  _doServerAction(action, btn);
+  _doServerAction(action, btn, showOutput);
 }
 
 function _cap(s){ return s.charAt(0).toUpperCase() + s.slice(1); }
