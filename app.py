@@ -2133,6 +2133,16 @@ def register_routes(app):
     @permission_required(UNINSTALL_SERVER)
     def uninstall_server(server_id):
         gs = get_game(server_id)
+        # Refuse to uninstall while an install is in progress — deleting the user/files out from
+        # under the running install job corrupts it (and can orphan processes). The UI disables the
+        # button too, but guard the endpoint as well (belt and suspenders).
+        with _install_lock:
+            _installing = (server_id in _install_jobs
+                           and _install_jobs[server_id].get("status") == "running")
+        if _installing or (gs.status == "installing" and not gs.installed):
+            flash("'%s' is still installing — wait for it to finish before uninstalling." % gs.name,
+                  "warning")
+            return redirect(url_for("manage_servers"))
         remote = gs.remote
         short_name = gs.short_name
         game_port = gs.port

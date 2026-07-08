@@ -1,6 +1,16 @@
 {% extends "base.html" %}
 {% block title %}Manage Game Servers{% endblock %}
 {% block content %}
+<style>
+  /* On mobile the servers table scrolls horizontally, which pushed the install progress bar's
+     step/percent off the right edge. Pin the progress row's content to the left of the viewport
+     and fit it to the screen width so the whole bar (step + %) is visible without scrolling. */
+  @media (max-width: 767.98px) {
+    .install-progress-row > td { position: sticky; left: 0; z-index: 1; }
+    .install-progress-row > td > div,
+    .install-progress-row > td > a { max-width: calc(100vw - 2.5rem); }
+  }
+</style>
 
 <div class="d-flex justify-content-between align-items-center mb-3">
   <h1 class="page-title mb-0"><i class="bi bi-plus-circle-fill"></i> Manage Game Servers</h1>
@@ -114,7 +124,10 @@
               </a>
               <form method="POST" action="{{ url_for('uninstall_server', server_id=gs.id) }}" style="display:inline;"
                     onsubmit="return confirm('Uninstall {{ gs.name }}? This permanently deletes the server, all its files, AND every backup it has — this cannot be undone. Download any backups you want to keep first.');">
-                <button type="submit" class="btn btn-sm btn-outline-danger" title="Delete server and all data">
+                {# Disabled mid-install — uninstalling would delete the user/files out from under the
+                   running install. watchInstall re-enables it when the install finishes/fails. #}
+                <button type="submit" class="btn btn-sm btn-outline-danger" id="uninstall-btn-{{ gs.id }}"
+                        {% if installing %}disabled title="Can't uninstall while it's installing — wait for it to finish"{% else %}title="Delete server and all data"{% endif %}>
                   <i class="bi bi-trash"></i> Uninstall
                 </button>
               </form>
@@ -242,7 +255,11 @@ function watchInstall(id) {
   tick();
   _instTimers[id] = setInterval(tick, 2500);
 }
-function stopInstall(id) { if (_instTimers[id]) { clearInterval(_instTimers[id]); delete _instTimers[id]; } }
+function stopInstall(id) {
+  if (_instTimers[id]) { clearInterval(_instTimers[id]); delete _instTimers[id]; }
+  // Install has ended (done/failed/gone) — re-enable its Uninstall button (disabled during install).
+  var ub = document.getElementById('uninstall-btn-' + id); if (ub) ub.disabled = false;
+}
 function dismissInstall(id) {
   stopInstall(id);
   var row = document.getElementById('install-row-' + id); if (row) row.style.display = 'none';

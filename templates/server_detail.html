@@ -146,12 +146,6 @@
       <input type="text" id="pl-say" class="form-control form-control-sm" placeholder="Announce a message to everyone in-game…" maxlength="200" aria-label="Announce message" onkeydown="if(event.key==='Enter'){event.preventDefault();announceSay();}">
       <button class="btn btn-sm btn-outline-primary text-nowrap" onclick="announceSay()"><i class="bi bi-megaphone"></i> Say</button>
     </div>
-    <div id="pl-ban-scope" class="form-check mt-2" style="display:none;">
-      <input class="form-check-input" type="checkbox" id="pl-ban-all">
-      <label class="form-check-label small text-secondary" for="pl-ban-all">
-        <i class="bi bi-globe2"></i> When banning, ban on <strong>all my servers</strong> (same SteamID / name), not just this one
-      </label>
-    </div>
     {% endif %}
   </div>
 </div>
@@ -326,10 +320,7 @@ function renderPlayers(d){
   card.style.display = (_CAN_MODERATE || queryable || caps.say) ? '' : 'none';
   if(card.style.display==='none') return;
   var engine=d.engine||'';
-  // A cross-server ban only ports where the identifier is portable: SteamID on Valve servers, name
-  // on Minecraft. idTech3 slot bans can't, so the toggle stays hidden there.
-  var scopeBox=document.getElementById('pl-ban-scope');
-  if(scopeBox) scopeBox.style.display = (caps.ban && (engine==='valve'||engine==='minecraft')) ? '' : 'none';
+  window._plEngine = engine;   // the ban dialog uses this to decide if "all servers" can apply
   var unsup=document.getElementById('pl-unsupported'), empty=document.getElementById('pl-empty'),
       wrap=document.getElementById('pl-table-wrap'), ann=document.getElementById('pl-announce'),
       cnt=document.getElementById('pl-count');
@@ -364,10 +355,10 @@ function moderatePlayer(btn, action){
   var name=btn.getAttribute('data-name')||'';
   var steamid=btn.getAttribute('data-steamid')||'';
   var num=btn.getAttribute('data-num')||'';
-  var allBox=document.getElementById('pl-ban-all');
-  // scope 'all' only when the visible toggle is checked (offsetParent!==null => not hidden).
-  var scope=(action==='ban' && allBox && allBox.checked && allBox.offsetParent!==null) ? 'all' : 'this';
-  if(action==='ban' && !confirm('Ban '+name+(scope==='all'?' on ALL your servers':'')+'?')) return;
+  if(action==='ban'){ banScopeDialog(btn, name, steamid, num); return; }   // ban asks scope first
+  _doModerate(btn, action, name, steamid, num, 'this');
+}
+function _doModerate(btn, action, name, steamid, num, scope){
   btn.disabled=true;
   fetch(MOUNT+'/api/server/'+serverId+'/moderate',{method:'POST',headers:{'Content-Type':'application/json'},
     body:JSON.stringify({action:action, target:name, steamid:steamid, num:num, scope:scope})})
@@ -375,6 +366,34 @@ function moderatePlayer(btn, action){
       window.toast(d.message || (d.success?'Done':'Failed'), d.success?'success':'danger');
       setTimeout(loadPlayers, 1200);
     }).catch(function(){ window.toast('Moderation failed','danger'); btn.disabled=false; });
+}
+// When banning, ASK: this server only, or all my servers. "All servers" is only offered where the
+// identifier ports across servers (SteamID on Valve, name on Minecraft); idTech3 slot bans can't.
+function banScopeDialog(btn, name, steamid, num){
+  if(window._plEngine!=='valve' && window._plEngine!=='minecraft'){
+    if(confirm('Ban '+name+' from this server?')) _doModerate(btn,'ban',name,steamid,num,'this');
+    return;
+  }
+  var ov=document.createElement('div');
+  ov.style.cssText='position:fixed;inset:0;background:rgba(0,0,0,.6);z-index:1080;display:flex;align-items:center;justify-content:center;padding:1rem;';
+  ov.innerHTML='<div class="card" style="max-width:440px;width:100%;">'
+    +'<div class="card-header"><i class="bi bi-slash-circle"></i> Ban '+escapeHtml(name)+'</div>'
+    +'<div class="card-body"><p class="small text-secondary mb-3">Ban just on this server, or on '
+    +'<strong>all your servers</strong> that can match this player (same SteamID / name)?</p>'
+    +'<div class="d-grid gap-2">'
+    +'<button class="btn btn-danger" data-scope="all"><i class="bi bi-globe2"></i> Ban on ALL my servers</button>'
+    +'<button class="btn btn-outline-danger" data-scope="this">Ban on THIS server only</button>'
+    +'<button class="btn btn-outline-secondary" data-scope="cancel">Cancel</button>'
+    +'</div></div></div>';
+  ov.addEventListener('click', function(ev){
+    if(ev.target===ov){ ov.remove(); return; }   // click the backdrop = cancel
+    var b=ev.target.closest && ev.target.closest('button');
+    if(!b) return;
+    var scope=b.getAttribute('data-scope');
+    ov.remove();
+    if(scope==='all'||scope==='this') _doModerate(btn,'ban',name,steamid,num,scope);
+  });
+  document.body.appendChild(ov);
 }
 function announceSay(){
   var inp=document.getElementById('pl-say'); if(!inp) return;
