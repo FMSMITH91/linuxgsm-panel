@@ -509,7 +509,7 @@ def _git(args, timeout=45):
     # B603 is the generic "you used subprocess" note, not a real finding for this no-shell call.
     gitcmd = ["git", "-C", PANEL_DIR, *args]
     try:
-        r = subprocess.run(gitcmd, capture_output=True,  # nosec B603
+        r = subprocess.run(gitcmd, capture_output=True, check=False,  # nosec B603  # nosemgrep
                            text=True, timeout=timeout, env=genv)
         return r.stdout.strip(), r.stderr.strip(), r.returncode
     except subprocess.TimeoutExpired:
