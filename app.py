@@ -1753,9 +1753,8 @@ def register_routes(app):
                         act_cmd = "fastdl <<< $'Y\\nY\\nY\\nY\\nY\\nY\\nY\\nY' 2>&1"
                     out, err, rc = run_as_game_user(remote, short_name, act_cmd, timeout=1800, selfname=selfname)
                     gs = db.session.get(GameServer, server_id)
-                    from auth import log_action as _log
-                    _log(None, f"{action}_complete", target=gs.name if gs else short_name,
-                         success=(rc == 0), detail=(out or err or "")[-300:])
+                    log_action(None, f"{action}_complete", target=gs.name if gs else short_name,
+                               success=(rc == 0), detail=(out or err or "")[-300:])
                     # An update/validate/fastdl can restart the server (port cycles) — drop the
                     # cached port scan so the dashboard shows the real state on its next poll.
                     _invalidate_port_scan(remote_id)
@@ -2085,8 +2084,7 @@ def register_routes(app):
                         _log.debug("_run: ignored non-fatal error", exc_info=True)
 
                     _finish(f"{short_name} installed")
-                    from auth import log_action as _log
-                    _log(None, "install_complete", target=gs.name, success=True)
+                    log_action(None, "install_complete", target=gs.name, success=True)
             except Exception as e:
                 with _install_lock:
                     j = _install_jobs.get(gs_id)
@@ -4256,8 +4254,7 @@ def register_routes(app):
                         remote.is_online = True
                         remote.last_seen = datetime.utcnow()
                         db.session.commit()
-                    from auth import log_action as _log
-                    _log(None, "remote_vps_bootstrap", target=remote.name, detail=msg, success=success)
+                    log_action(None, "remote_vps_bootstrap", target=remote.name, detail=msg, success=success)
                     with _bootstrap_lock:
                         job = _bootstrap_jobs.get(remote_id)
                         if job is not None:
