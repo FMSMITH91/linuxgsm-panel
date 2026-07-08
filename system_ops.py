@@ -848,13 +848,26 @@ def _launch_installer(target_ref="", branch="", started_msg=None):
         return False, "Could not start the updater — check the panel logs."
 
 
+def _fetch_all_branches():
+    """Make EVERY remote branch visible + switchable, then fetch them. install.sh clones with
+    `--depth 1 --branch main`, i.e. a SHALLOW, SINGLE-BRANCH clone whose remote only tracks main —
+    so a plain fetch never sees other branches. Widen the refspec to all branches and unshallow so
+    the history a switch/rollback needs is present. Idempotent; each step is best-effort."""
+    _git(["remote", "set-branches", "origin", "*"], timeout=15)   # track every branch, not just main
+    # Unshallow if the clone was shallow (errors + no-ops on a complete repo); then a normal fetch
+    # covers the already-complete case.
+    _, _, rc = _git(["fetch", "--prune", "--tags", "--unshallow", "origin"], timeout=120)
+    if rc != 0:
+        _git(["fetch", "--prune", "--tags", "origin"], timeout=90)
+
+
 def list_panel_branches():
     """Remote branches available to switch to, most-recently-updated first, plus the currently
     tracked branch. Returns (branches, current). Best-effort: ([current], current) on failure."""
     branch = _tracked_branch()
     if not _is_git_checkout():
         return [branch], branch
-    _git(["fetch", "--quiet", "--prune", "origin"], timeout=45)   # refresh + drop deleted branches
+    _fetch_all_branches()   # widen a single-branch/shallow clone so ALL branches show up + refresh
     out, _, rc = _git(["for-each-ref", "--format=%(refname:short)", "--sort=-committerdate",
                        "refs/remotes/origin"], timeout=20)
     branches = []
