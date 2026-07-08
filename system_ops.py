@@ -505,9 +505,12 @@ def _git(args, timeout=45):
     git from blocking on a credential prompt when the remote is private or unreachable
     (e.g. checking for updates before the repo is public) — it fails fast instead."""
     genv = dict(os.environ, GIT_TERMINAL_PROMPT="0", GIT_ASKPASS="true")
+    # No shell, fixed 'git' exe, list args (each literal); refs are validated by callers.
+    # B603 is the generic "you used subprocess" note, not a real finding for this no-shell call.
+    gitcmd = ["git", "-C", PANEL_DIR, *args]
     try:
-        r = subprocess.run(["git", "-C", PANEL_DIR, *args], capture_output=True,
-                           text=True, timeout=timeout, env=genv)  # shell=False: no injection
+        r = subprocess.run(gitcmd, capture_output=True,  # nosec B603
+                           text=True, timeout=timeout, env=genv)
         return r.stdout.strip(), r.stderr.strip(), r.returncode
     except subprocess.TimeoutExpired:
         return "", "git timed out", -1
