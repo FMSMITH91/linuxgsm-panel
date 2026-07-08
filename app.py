@@ -5105,6 +5105,33 @@ def register_routes(app):
             time.sleep(120)
     _supervise("priority-keeper", priority_keeper)
 
+    # Refresh the panel's "update available" status on the SERVER, on its own schedule — so the
+    # check happens whether or not anyone has the panel open. The browser badge only polls while a
+    # tab is looking at it; this keeps the server's own knowledge current (warms the shared cache in
+    # system_ops), so the badge is correct the INSTANT someone loads a page instead of waiting on a
+    # first client-side check. Each tick does a `git fetch` (+ a CI-state lookup only when actually
+    # behind), and it logs once when a newly verified update first appears — a server-side record
+    # even with nobody watching. Half-hourly is plenty for a code update.
+    def update_check_ticker():
+        time.sleep(30)   # let boot settle before the first network fetch
+        last_logged_sha = None
+        while True:
+            try:
+                st = so.panel_update_status(force=True)
+                if st.get("update_available"):
+                    tgt = (st.get("target_sha") or st.get("remote_sha") or "")
+                    if tgt and tgt != last_logged_sha:
+                        last_logged_sha = tgt
+                        app.logger.info(
+                            "panel update available: version %s (%s), %s commit(s) behind",
+                            st.get("remote_version", "?"), tgt[:7], st.get("behind", "?"))
+                else:
+                    last_logged_sha = None   # up to date — let a future update log again
+            except Exception:
+                app.logger.debug("update-check tick failed", exc_info=True)
+            time.sleep(1800)
+    _supervise("update-check", update_check_ticker)
+
     # Make socketio accessible from app
     app.socketio = socketio
     return app
