@@ -6,10 +6,26 @@ name: Lighthouse
 # it never blocks the deploy pipeline.
 
 on:
+  # Docs-only pushes/PRs skip the Lighthouse run — a README/LICENSE edit can't change the
+  # rendered UI it audits. Anything else still runs it.
   push:
     branches: [ main ]
+    paths-ignore:
+      - '**/*.md'
+      - 'docs/**'
+      - 'LICENSE'
+      - '.gitignore'
+      - '.gitattributes'
+      - '.editorconfig'
   pull_request:
     branches: [ main ]
+    paths-ignore:
+      - '**/*.md'
+      - 'docs/**'
+      - 'LICENSE'
+      - '.gitignore'
+      - '.gitattributes'
+      - '.editorconfig'
   workflow_dispatch:
 
 permissions:

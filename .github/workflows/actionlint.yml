@@ -7,10 +7,16 @@ name: Actionlint
 # shellcheck that already runs in CI.
 
 on:
+  # actionlint only lints the workflow YAML, so only run it when a workflow actually changes —
+  # no point spinning it up on a code or docs push.
   push:
     branches: [ main ]
+    paths:
+      - '.github/workflows/**'
   pull_request:
     branches: [ main ]
+    paths:
+      - '.github/workflows/**'
 
 # Least-privilege default; the job below escalates only to post its check-run annotations.
 permissions:

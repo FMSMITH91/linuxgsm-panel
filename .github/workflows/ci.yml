@@ -1,10 +1,27 @@
 name: CI
 
 on:
+  # Skip a run when a push/PR touches ONLY docs/meta the tests don't exercise — a README or
+  # LICENSE edit shouldn't spin up the whole matrix. Any code, template, test, requirements,
+  # install.sh, or workflow change still triggers CI (those all affect what the tests check).
   push:
     branches: [ main ]
+    paths-ignore:
+      - '**/*.md'
+      - 'docs/**'
+      - 'LICENSE'
+      - '.gitignore'
+      - '.gitattributes'
+      - '.editorconfig'
   pull_request:
     branches: [ main ]
+    paths-ignore:
+      - '**/*.md'
+      - 'docs/**'
+      - 'LICENSE'
+      - '.gitignore'
+      - '.gitattributes'
+      - '.editorconfig'
   workflow_dispatch:  # allow manual runs from the Actions tab
 
 # Least-privilege GITHUB_TOKEN: these jobs only read the repo.

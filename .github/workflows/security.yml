@@ -1,5 +1,8 @@
 name: Security scan
 
+# NOTE: deliberately NOT path-filtered (unlike CI/CodeQL/Lighthouse, which skip docs-only pushes).
+# Gitleaks here scans the whole commit for accidentally-committed secrets — and a secret can land
+# in ANY file, including a README or a doc. So this runs on every push so nothing slips through.
 on:
   push:
     branches: [ main ]

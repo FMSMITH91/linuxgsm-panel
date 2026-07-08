@@ -5,10 +5,26 @@ name: CodeQL
 # reports them in the repo's Security tab.
 
 on:
+  # Docs-only pushes/PRs skip CodeQL — it analyses code (python/js) and the workflows
+  # (actions), none of which a markdown/LICENSE edit changes. Anything else still runs it.
   push:
     branches: [ main ]
+    paths-ignore:
+      - '**/*.md'
+      - 'docs/**'
+      - 'LICENSE'
+      - '.gitignore'
+      - '.gitattributes'
+      - '.editorconfig'
   pull_request:
     branches: [ main ]
+    paths-ignore:
+      - '**/*.md'
+      - 'docs/**'
+      - 'LICENSE'
+      - '.gitignore'
+      - '.gitattributes'
+      - '.editorconfig'
   workflow_dispatch:  # allow manual runs from the Actions tab
 
 concurrency:
