@@ -23,26 +23,39 @@ permissions:
 
 jobs:
   analyze:
-    name: Analyze (python)
+    name: Analyze (${{ matrix.name }})
     runs-on: ubuntu-latest
     # Code scanning uploads only work on public repos (or private w/ GitHub Advanced
-    # Security). While the repo is private this job is SKIPPED (grey), not failed; it
-    # activates automatically once the repo is made public.
+    # Security). While the repo is private these jobs are SKIPPED (grey), not failed; they
+    # activate automatically once the repo is made public.
     if: ${{ github.event.repository.private == false }}
     permissions:
       security-events: write
       actions: read
       contents: read
+    strategy:
+      fail-fast: false   # one language's analysis failing must not block the others
+      matrix:
+        include:
+          - language: python
+            name: python
+          # JavaScript/TypeScript — covers the inline <script> in the Jinja templates and any .js.
+          - language: javascript-typescript
+            name: javascript
+          # GitHub Actions — scans the workflow files themselves for CI security issues
+          # (script injection, untrusted checkout, over-broad permissions, etc.).
+          - language: actions
+            name: actions
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
 
       - name: Initialize CodeQL
         uses: github/codeql-action/init@54f647b7e1bb85c95cddabcd46b0c578ec92bc1a # v4
         with:
-          languages: python
+          languages: ${{ matrix.language }}
           queries: security-and-quality
 
       - name: Perform CodeQL Analysis
         uses: github/codeql-action/analyze@54f647b7e1bb85c95cddabcd46b0c578ec92bc1a # v4
         with:
-          category: "/language:python"
+          category: "/language:${{ matrix.language }}"
