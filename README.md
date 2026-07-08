@@ -2,7 +2,7 @@
 
 [![OpenSSF Scorecard](https://api.scorecard.dev/projects/github.com/FMSMITH91/linuxgsm-panel/badge)](https://scorecard.dev/viewer/?uri=github.com/FMSMITH91/linuxgsm-panel) [![Codacy Badge](https://app.codacy.com/project/badge/Grade/b179bcf8d27941bb9ad20839ea2fe4b7)](https://app.codacy.com/gh/FMSMITH91/linuxgsm-panel/dashboard?utm_source=gh&utm_medium=referral&utm_content=&utm_campaign=Badge_grade)
 
-[![CI](https://github.com/FMSMITH91/linuxgsm-panel/actions/workflows/ci.yml/badge.svg)](https://github.com/FMSMITH91/linuxgsm-panel/actions/workflows/ci.yml) [![CodeQL](https://github.com/FMSMITH91/linuxgsm-panel/actions/workflows/codeql.yml/badge.svg)](https://github.com/FMSMITH91/linuxgsm-panel/actions/workflows/codeql.yml) [![Security scan](https://github.com/FMSMITH91/linuxgsm-panel/actions/workflows/security.yml/badge.svg)](https://github.com/FMSMITH91/linuxgsm-panel/actions/workflows/security.yml) [![Lighthouse](https://github.com/FMSMITH91/linuxgsm-panel/actions/workflows/lighthouse.yml/badge.svg)](https://github.com/FMSMITH91/linuxgsm-panel/actions/workflows/lighthouse.yml) [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE) [![Python 3.11+](https://img.shields.io/badge/python-3.11%2B-blue)](https://www.python.org)
+[![CI](https://github.com/FMSMITH91/linuxgsm-panel/actions/workflows/ci.yml/badge.svg)](https://github.com/FMSMITH91/linuxgsm-panel/actions/workflows/ci.yml) [![CodeQL](https://github.com/FMSMITH91/linuxgsm-panel/actions/workflows/codeql.yml/badge.svg)](https://github.com/FMSMITH91/linuxgsm-panel/actions/workflows/codeql.yml) [![Security scan](https://github.com/FMSMITH91/linuxgsm-panel/actions/workflows/security.yml/badge.svg)](https://github.com/FMSMITH91/linuxgsm-panel/actions/workflows/security.yml) [![Lighthouse](https://github.com/FMSMITH91/linuxgsm-panel/actions/workflows/lighthouse.yml/badge.svg)](https://github.com/FMSMITH91/linuxgsm-panel/actions/workflows/lighthouse.yml) [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE) [![Python 3.10+](https://img.shields.io/badge/python-3.10%2B-blue)](https://www.python.org)
 
 > ## ⚠️ Disclaimer — please read first
 >
@@ -18,10 +18,10 @@ A self-hosted web panel for managing **LinuxGSM** game servers on remote VPS mac
 
 ## What you need
 
-> ⚠️ **Ubuntu 24.04 only, for now.** The panel is currently built and tested against **Ubuntu 24.04 LTS** — that's the only supported OS at the moment (other distros may work but aren't supported yet).
+> ⚠️ **Ubuntu LTS — 22.04 or 24.04.** The panel is built and tested against **Ubuntu 22.04 and 24.04 LTS** (CI runs both). Those are the supported releases; other distros may work but aren't supported yet.
 
-- **A host running Ubuntu 24.04 to run the panel on.** The installer sets up everything else it needs (Python 3.11+, a virtualenv, and dependencies) automatically, so you don't have to install them yourself.
-- **One or more game-server machines (Ubuntu 24.04) you can reach over SSH** (key, password, or Tailscale SSH). The panel host can also manage itself.
+- **A host running Ubuntu 22.04 or 24.04 LTS to run the panel on.** The installer sets up everything else it needs (Python 3.10+, a virtualenv, and dependencies) automatically, so you don't have to install them yourself.
+- **One or more game-server machines (Ubuntu 22.04 / 24.04 LTS) you can reach over SSH** (key, password, or Tailscale SSH). The panel host can also manage itself.
 - **LinuxGSM** on those machines — or let the panel install it for you.
 - *Optional but recommended:* **[Tailscale](https://tailscale.com)** for private, HTTPS access with no open ports.
 
@@ -44,7 +44,7 @@ That's it. The sections below are reference for when you want them.
 
 ### Safe, self-healing updates
 
-Re-running the command on an existing install performs a **verified update**: it snapshots the current code **and** database, pulls the new version, restarts the service, and **health-checks** that the panel actually comes back up. If it doesn't, it **automatically rolls back** to the previous version — code and database — so a bad release can't leave you with a dead panel. The command is idempotent; run it as often as you like.
+Re-running the command on an existing install performs a **verified update**: it snapshots the current code **and** database, pulls the new version, restarts the service, and **health-checks** that the panel actually comes back up. If it doesn't, it **automatically rolls back** to the previous version — code and database — so a bad release can't leave you with a dead panel. The command is idempotent; run it as often as you like. The in-panel *update-available* badge only lights up for changes that affect the running panel, so a docs- or CI-only commit won't nag you.
 
 ```bash
 # Later, to update (same command — installs or updates):
@@ -99,9 +99,10 @@ It asks you to type `yes` first (add `--yes` to skip the prompt).
 
 ### Access, security & hosts
 - **🔐 Multi-user RBAC** — Super Admin, Server Admin, Moderator, Viewer. Define groups with granular per-action permissions and per-server access; users inherit the combined set, enforced server-side on every endpoint.
+- **🛡️ Moderation & custom commands** — hand out fine-grained moderation (**kick / ban / announce**, individually) per group and per server, so a moderator can act without full console access. Super admins can also define reusable **custom console commands** — with an optional, charset-validated argument — and grant specific ones to specific groups.
 - **🔗 Tailscale native** — auto-detect Tailscale status, one-click private Serve setup (tailnet-only, free tier), MagicDNS URL, SSH-over-tailnet, peer reachability checker, and auto-setup on first run. (Public Funnel exposure is an optional, clearly-warned advanced toggle.)
 - **🔌 Multiple remote VPS** — manage game servers across many machines via SSH key, password, or Tailscale SSH, with SSH host-key pinning.
-- **🖧 Host management** — the *same* page for the panel host and every remote: hardware/OS specs, live per-core resources, OS updates, UFW firewall, power controls, Ubuntu Pro (free ESM + Livepatch), one-click SSH lockdown, and changing the panel's own web port/bind address.
+- **🖧 Host management** — the *same* page for the panel host and every remote: hardware/OS specs, live per-core resources, OS updates, UFW firewall, power controls, Ubuntu Pro (free ESM + Livepatch), one-click SSH lockdown, changing a host's **SSH port and bind address** (lockout-safe — it opens the new port first, keeps the old one as a fallback, updates UFW **and** fail2ban, and rolls back automatically if it can't reach the new one), and changing the panel's own web port/bind address.
 - **🩺 Diagnostics & self-heal** — verify the panel's own file integrity against the installed version and restore altered files in one click; generate a debug report; safe self-healing panel updates.
 - **🔒 Secure by default** — HTTPS out of the box (built-in self-signed cert, or a trusted cert via Tailscale/reverse proxy), optional TOTP two-factor auth with backup codes, revocable sessions, CSRF protection + security headers, and passwords hashed with bcrypt.
 
@@ -164,6 +165,10 @@ The panel uses a flexible group-based permission system:
 | `view_servers` | See server status on dashboard |
 | `view_console` | View live console output |
 | `send_command` | Send commands to game server console |
+| `moderate_server` | Moderate players — kick, ban & announce (umbrella for the three below) |
+| `kick_player` | Kick players from a server |
+| `ban_player` | Ban players from a server |
+| `say_server` | Announce a message in-game |
 | `restart_server` | Restart game servers |
 | `start_server` | Start game servers |
 | `stop_server` | Stop game servers |
@@ -181,7 +186,7 @@ The panel uses a flexible group-based permission system:
 
 - **Super Admin** — All permissions (auto-granted via `is_superadmin` flag, no group needed)
 - **Admins** — `view_servers`, `view_console`, `send_command`, `start_server`, `stop_server`, `restart_server`, `update_server`, `manage_servers`
-- **Moderators** — `view_servers`, `view_console`, `send_command` (on specific servers)
+- **Moderators** — `view_servers`, `view_console`, and `kick_player` / `ban_player` / `say_server` on specific servers — moderate players without full console access
 - **Viewers** — `view_servers` only
 
 ## API
@@ -259,9 +264,10 @@ systemctl --user enable --now linuxgsm-panel
 
 - **HTTPS by default** — a fresh install serves HTTPS immediately with a built-in, long-lived self-signed certificate (no config needed). Set up Tailscale Serve or a reverse proxy for a **trusted** (no-warning) certificate. See [docs/https.md](docs/https.md).
 - Passwords are **bcrypt-hashed**; new passwords require length plus mixed case, a number and a symbol, and logins are rate-limited.
-- **Optional two-factor authentication (TOTP)** — enable per account from the Account page; works with any authenticator app.
+- **Optional two-factor authentication (TOTP)** — enable per account from the Account page; works with any authenticator app. One-time backup codes are shown (and downloadable) once, at setup; super admins without 2FA get a reminder to turn it on.
+- **Self-service password change** — users change their own password from the Account page (current password required, plus a 2FA code when enabled); super admins can reset anyone's from the Users page.
 - **Hardened, revocable sessions** — signed, `HttpOnly`, `SameSite=Lax`, `Secure`-over-HTTPS cookies with a sliding idle timeout and a capped "remember me" window. Logging out, changing a password, or "sign out everywhere" **instantly invalidates every session and remember cookie server-side**; sessions are also bound to client IP + User-Agent.
-- **Secrets are encrypted at rest** — remote SSH credentials and other sensitive fields are stored encrypted in `data/panel.db` (key in `data/cred_key`). The session key and these files are kept owner-only (`chmod 600`).
+- **Secrets are encrypted at rest** — remote SSH credentials, email addresses, and 2FA secrets are stored encrypted (Fernet / AES) in `data/panel.db`, with the key in `data/cred_key` (kept separate from the session key, so a leaked DB alone reveals nothing); passwords and 2FA backup codes are bcrypt-hashed. The whole `data/` directory is owner-only (`chmod 700`) and the database, keys, and config inside are `chmod 600` — so another local user on the box can't read them.
 - **SSH host-key pinning** — the panel records each host's SSH key on first connect and refuses to connect if it later changes (man-in-the-middle protection); a reinstalled host can be re-trusted with one click. Tailscale SSH uses the system `ssh` client with **no stored credentials at all** (recommended).
 - **Role-based access control is enforced server-side on every route** — not just hidden in the UI. Server access is scoped per host, and automated tests verify the enforcement.
 - **CSRF protection, a strict Content-Security-Policy, and security headers** (HSTS over HTTPS, `X-Frame-Options`, `X-Content-Type-Options`, `Referrer-Policy`) are applied to every response.
