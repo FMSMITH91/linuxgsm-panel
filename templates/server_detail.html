@@ -400,7 +400,11 @@ function _doModerate(btn, action, name, steamid, num, scope){
 // identifier ports across servers (SteamID on Valve, name on Minecraft); idTech3 slot bans can't.
 function banScopeDialog(btn, name, steamid, num){
   if(window._plEngine!=='valve' && window._plEngine!=='minecraft'){
-    if(confirm('Ban '+name+' from this server?')) _doModerate(btn,'ban',name,steamid,num,'this');
+    confirmDialog({
+      title: 'Ban player', icon: 'slash-circle', confirmLabel: 'Ban', confirmClass: 'btn-danger',
+      body: 'Ban <strong>' + _esc(name) + '</strong> from <strong>' + _esc(SERVER_NAME) + '</strong>?',
+      onConfirm: function(){ _doModerate(btn,'ban',name,steamid,num,'this'); }
+    });
     return;
   }
   var ov=document.createElement('div');
@@ -629,29 +633,69 @@ function serverAction(action, btn, confirmFirst, showOutput) {
   // Restart AND stop get a player check first — warn, and offer "when empty".
   if (action === 'restart' || action === 'stop') { return actionWithPlayerCheck(action, btn); }
   if (confirmFirst) {
-    var msg = action.charAt(0).toUpperCase() + action.slice(1) + ' ' + SERVER_NAME + '?';
+    var body = _cap(action) + ' <strong>' + _esc(SERVER_NAME) + '</strong>?';
     if (action === 'fastdl') {
-      msg = 'Generate FastDL files for ' + SERVER_NAME +
-            '? This overwrites the existing FastDL directory and can take a while.';
+      body = 'Generate FastDL files for <strong>' + _esc(SERVER_NAME) + '</strong>? '
+           + 'This overwrites the existing FastDL directory and can take a while.';
     }
-    if (!confirm(msg)) return;
+    confirmDialog({ title: _cap(action), body: body, confirmLabel: _cap(action),
+                    onConfirm: function(){ _doServerAction(action, btn, showOutput); } });
+    return;
   }
   _doServerAction(action, btn, showOutput);
 }
 
 function _cap(s){ return s.charAt(0).toUpperCase() + s.slice(1); }
 
+// Styled in-app confirm (replaces the browser's native confirm()). opts:
+//   {title, icon, body (safe HTML), confirmLabel, confirmClass, onConfirm}
+// Dismissible via Cancel / backdrop / Esc; only onConfirm runs the action.
+function confirmDialog(opts){
+  opts = opts || {};
+  var ov = document.createElement('div');
+  ov.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,.6);z-index:1080;display:flex;align-items:center;justify-content:center;padding:1rem;';
+  ov.innerHTML = '<div class="card" style="max-width:480px;width:100%;">'
+    + '<div class="card-header"><i class="bi bi-' + (opts.icon || 'question-circle') + '"></i> ' + escapeHtml(opts.title || 'Confirm') + '</div>'
+    + '<div class="card-body">'
+    + '<p class="mb-3">' + (opts.body || '') + '</p>'
+    + '<div class="d-flex justify-content-end gap-2">'
+    + '<button class="btn btn-outline-secondary" id="cd-cancel">Cancel</button>'
+    + '<button class="btn ' + (opts.confirmClass || 'btn-primary') + '" id="cd-ok">' + escapeHtml(opts.confirmLabel || 'Confirm') + '</button>'
+    + '</div></div></div>';
+  document.body.appendChild(ov);
+  function close(){ ov.remove(); document.removeEventListener('keydown', onKey); }
+  function onKey(e){ if (e.key === 'Escape') close(); }
+  document.addEventListener('keydown', onKey);
+  ov.querySelector('#cd-ok').onclick = function(){ close(); if (opts.onConfirm) opts.onConfirm(); };
+  ov.querySelector('#cd-cancel').onclick = close;
+  ov.addEventListener('click', function(e){ if (e.target === ov) close(); });
+}
+
+// Restart/Stop confirm for an EMPTY server (or when the player count is unknown) — the
+// in-app equivalent of the old native confirm, matching the players-online dialog's look.
+function confirmActionDialog(action, btn, note){
+  confirmDialog({
+    title: _cap(action) + ' server',
+    icon: action === 'stop' ? 'stop-fill' : 'arrow-clockwise',
+    body: _cap(action) + ' <strong>' + _esc(SERVER_NAME) + '</strong>?'
+          + (note ? ' <span class="text-secondary">' + note + '</span>' : ''),
+    confirmLabel: _cap(action),
+    confirmClass: action === 'stop' ? 'btn-danger' : 'btn-warning',
+    onConfirm: function(){ _doServerAction(action, btn); }
+  });
+}
+
 function actionWithPlayerCheck(action, btn) {
   var orig = btn.innerHTML;
   btn.disabled = true; btn.innerHTML = '<span class="spinner-border spinner-border-sm"></span>';
   fetch(MOUNT + '/api/server/' + serverId + '/players').then(r => r.json()).then(function(d){
     btn.disabled = false; btn.innerHTML = orig;
-    var n = (d && d.players) || 0;   // null/unknown -> treat as none (fall back to a plain confirm)
-    if (!n) { if (confirm(_cap(action) + ' ' + SERVER_NAME + '?')) _doServerAction(action, btn); return; }
+    var n = (d && d.players) || 0;   // null/unknown -> treat as none (show a plain in-app confirm)
+    if (!n) { confirmActionDialog(action, btn); return; }
     actionPlayersDialog(action, n, btn);
   }).catch(function(){
     btn.disabled = false; btn.innerHTML = orig;
-    if (confirm(_cap(action) + ' ' + SERVER_NAME + "? (couldn't check who's online)")) _doServerAction(action, btn);
+    confirmActionDialog(action, btn, "(couldn't check who's online)");
   });
 }
 
