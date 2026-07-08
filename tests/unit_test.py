@@ -1551,42 +1551,81 @@ check("supports_update: empty list + known no-update game (cod) -> False",
 check("supports_update: empty list + SteamCMD game -> True (fail open)",
       _GS(commands='[]', game_type='csgo').supports_update is True)
 
-# ── player moderation: per-game caps + injection-safe command building ──
-check("moderation: gmod (Source) supports kick + say, not ban",
-      sm.moderation_caps("gmod") == {"kick": True, "ban": False, "say": True})
+# ── player moderation: engine-aware caps, status/list parsers + injection-safe commands ──
+check("moderation: gmod (valve) supports kick + ban + say",
+      sm.moderation_caps("gmod") == {"kick": True, "ban": True, "say": True})
 check("moderation: minecraft supports kick + ban + say",
       sm.moderation_caps("mc") == {"kick": True, "ban": True, "say": True})
-check("moderation: an unlisted game (cod) supports nothing",
-      sm.moderation_caps("cod") == {"kick": False, "ban": False, "say": False})
-check("moderation: gmod is player-queryable (gamedig), cod is not",
-      sm.is_player_queryable("gmod") is True and sm.is_player_queryable("cod") is False)
+check("moderation: cod (idTech3) supports kick + ban + say",
+      sm.moderation_caps("cod") == {"kick": True, "ban": True, "say": True})
+check("moderation: a non-console game (rust) supports nothing",
+      sm.moderation_caps("rust") == {"kick": False, "ban": False, "say": False})
+check("engine: gmod->valve, cod->idtech3, mc->minecraft, rust->''",
+      (sm.game_engine("gmod"), sm.game_engine("cod"), sm.game_engine("mc"), sm.game_engine("rust"))
+      == ("valve", "idtech3", "minecraft", ""))
+check("moderation: cod is now queryable (via console); a game with neither engine nor gamedig is not",
+      sm.is_player_queryable("cod") is True and sm.is_player_queryable("nosuchgame") is False)
 check("moderation: console metacharacters are stripped from a name (no injection)",
       sm._mod_sanitize('a;b"c`d\ne') == "abcde")
+
+# per-engine status/list parsers (sample output — I can't live-fire each engine)
+_SRC = ('# userid name uniqueid connected ping loss state adr\n'
+        '#  2 "Alice" STEAM_0:1:12345 15:30 45 0 active 5.6.7.8:27005\n'
+        '#  5 "Bob ^S" [U:1:99] 02:11 67 0 active 9.9.9.9:27005\n'
+        '#  7 "aBot" BOT 00:00 0 0 active\n')
+check("parser(valve): names + steamids (legacy / modern / bot-empty)",
+      [(p["name"], p["steamid"]) for p in sm._parse_valve_status(_SRC)]
+      == [("Alice", "STEAM_0:1:12345"), ("Bob ^S", "[U:1:99]"), ("aBot", "")])
+_COD = ('num score ping guid                             name            lastmsg address       qport rate\n'
+        '--- ----- ---- -------------------------------- --------------- ------- ------------- ----- ----\n'
+        '  0     5   45 1100001aaaaaaaaaaaaaaaaaaaaaaaaa ^1Alice^7             0 5.6.7.8:28960 12345 25000\n'
+        '  1     0   67 1100001bbbbbbbbbbbbbbbbbbbbbbbbb Bob Smith            50 9.9.9.9:28961 54321 25000\n')
+check("parser(idtech3): slot numbers + names (colours stripped, spaces kept)",
+      [(p["num"], p["name"]) for p in sm._parse_idtech3_status(_COD)] == [(0, "Alice"), (1, "Bob Smith")])
+_MC = "[12:34:56] [Server thread/INFO]: There are 2 of a max of 20 players online: Alice, Bob_1"
+check("parser(minecraft): names from a prefixed log line",
+      [p["name"] for p in sm._parse_minecraft_list(_MC)] == ["Alice", "Bob_1"])
+check("parser(minecraft): empty server -> no players",
+      sm._parse_minecraft_list("There are 0 of a max of 20 players online: ") == [])
+
+# injection-safe command building, dispatched by engine
 _msent = {}
 _orig_scc = sm.send_console_command
 try:
     sm.send_console_command = lambda *a, **k: (_msent.__setitem__("cmd", a[2]), ("", "", 0))[1]
     sm.moderate(None, "u", "gmod", "kick", target='Bad;Guy"x')
-    check("moderation: gmod kick quotes the sanitized name (injection neutralised)",
+    check("moderation: valve kick quotes the sanitized name (injection neutralised)",
           _msent.get("cmd") == 'kick "BadGuyx"')
+    sm.moderate(None, "u", "gmod", "ban", steamid="STEAM_0:1:5; rcon x")
+    check("moderation: valve ban uses banid+writeid on the re-validated SteamID only",
+          _msent.get("cmd") == "banid 0 STEAM_0:1:5; writeid")
+    check("moderation: valve ban with no SteamID is refused",
+          sm.moderate(None, "u", "gmod", "ban", steamid="")[0] is False)
+    sm.moderate(None, "u", "cod", "kick", num="3")
+    check("moderation: idTech3 kick is clientkick <slot>", _msent.get("cmd") == "clientkick 3")
+    sm.moderate(None, "u", "cod", "ban", num="3")
+    check("moderation: idTech3 ban is banclient <slot>", _msent.get("cmd") == "banclient 3")
+    check("moderation: idTech3 with a junk slot is refused",
+          sm.moderate(None, "u", "cod", "ban", num="3; quit")[0] is False)
     sm.moderate(None, "u", "mc", "ban", target="Steve")
     check("moderation: minecraft ban is a bare name command", _msent.get("cmd") == "ban Steve")
-    check("moderation: an unsupported action is refused",
-          sm.moderate(None, "u", "gmod", "ban", target="x")[0] is False)
+    check("moderation: a non-console game (rust) refuses moderation",
+          sm.moderate(None, "u", "rust", "ban", target="x")[0] is False)
 finally:
     sm.send_console_command = _orig_scc
 
 # ── gamedig query type: per-server override wins over the built-in map, sanitized ──
 check("query-type: an explicit override wins over the built-in map",
       sm._gamedig_type("cod", "cod") == "cod")
-check("query-type: unmapped game with no override -> '' (not queryable)",
+check("query-type: unmapped game with no override -> '' (no gamedig type)",
       sm._gamedig_type("cod", None) == "")
 check("query-type: a mapped game with no override uses the map",
       sm._gamedig_type("gmod", None) == "garrysmod")
 check("query-type: the override is sanitized to a gamedig-safe charset",
       sm._gamedig_type("cod", "co d;rm -rf") == "codrm-rf")
-check("query-type: cod becomes queryable once an override is set",
-      sm.is_player_queryable("cod", None) is False and sm.is_player_queryable("cod", "cod") is True)
+check("query-type: a game with neither engine nor map becomes queryable once an override is set",
+      sm.is_player_queryable("nosuchgame", None) is False
+      and sm.is_player_queryable("nosuchgame", "quake3") is True)
 
 # ── db_maintenance: offline SQLite check / repair / optimize (updater + health card) ──
 import db_maintenance as _dbm

@@ -146,7 +146,13 @@
       <input type="text" id="pl-say" class="form-control form-control-sm" placeholder="Announce a message to everyone in-game…" maxlength="200" aria-label="Announce message" onkeydown="if(event.key==='Enter'){event.preventDefault();announceSay();}">
       <button class="btn btn-sm btn-outline-primary text-nowrap" onclick="announceSay()"><i class="bi bi-megaphone"></i> Say</button>
     </div>
-    <div class="mt-3 pt-2 border-top">
+    <div id="pl-ban-scope" class="form-check mt-2" style="display:none;">
+      <input class="form-check-input" type="checkbox" id="pl-ban-all">
+      <label class="form-check-label small text-secondary" for="pl-ban-all">
+        <i class="bi bi-globe2"></i> When banning, ban on <strong>all my servers</strong> (same SteamID / name), not just this one
+      </label>
+    </div>
+    <div class="mt-3 pt-2 border-top" id="pl-qtype-block">
       <label class="small text-secondary" for="pl-qtype"><i class="bi bi-gear"></i> Player query type (gamedig)</label>
       <div class="d-flex gap-2 mt-1 flex-wrap">
         <input type="text" id="pl-qtype" class="form-control form-control-sm font-monospace" style="max-width:220px;" placeholder="(panel default)" spellcheck="false" aria-label="gamedig query type"
@@ -332,6 +338,15 @@ function renderPlayers(d){
   var qt=document.getElementById('pl-qtype'), qd=document.getElementById('pl-qtype-default');
   if(qt && document.activeElement!==qt) qt.value = d.query_type || '';
   if(qd) qd.textContent = d.default_query || '(none)';
+  var engine=d.engine||'';
+  // Console engines (valve/idTech3/Minecraft) read players from the console, so the gamedig
+  // query-type override is irrelevant — hide it for them (e.g. Call of Duty).
+  var qblock=document.getElementById('pl-qtype-block');
+  if(qblock) qblock.style.display = d.uses_gamedig ? '' : 'none';
+  // A cross-server ban only ports where the identifier is portable: SteamID on Valve servers, name
+  // on Minecraft. idTech3 slot bans can't, so the toggle stays hidden there.
+  var scopeBox=document.getElementById('pl-ban-scope');
+  if(scopeBox) scopeBox.style.display = (caps.ban && (engine==='valve'||engine==='minecraft')) ? '' : 'none';
   var unsup=document.getElementById('pl-unsupported'), empty=document.getElementById('pl-empty'),
       wrap=document.getElementById('pl-table-wrap'), ann=document.getElementById('pl-announce'),
       cnt=document.getElementById('pl-count');
@@ -344,8 +359,16 @@ function renderPlayers(d){
   var rows=players.map(function(p){
     var acts='';
     if(_CAN_MODERATE){
-      if(caps.kick) acts+='<button class="btn btn-sm btn-outline-warning py-0 px-1 me-1" data-name="'+escapeHtml(p.name)+'" onclick="moderatePlayer(this,\'kick\')">Kick</button>';
-      if(caps.ban) acts+='<button class="btn btn-sm btn-outline-danger py-0 px-1" data-name="'+escapeHtml(p.name)+'" onclick="moderatePlayer(this,\'ban\')">Ban</button>';
+      var sid=p.steamid||'', num=(p.num!=null?String(p.num):'');
+      var da='data-name="'+escapeHtml(p.name)+'" data-steamid="'+escapeHtml(sid)+'" data-num="'+escapeHtml(num)+'"';
+      if(caps.kick) acts+='<button class="btn btn-sm btn-outline-warning py-0 px-1 me-1" '+da+' onclick="moderatePlayer(this,\'kick\')">Kick</button>';
+      if(caps.ban){
+        // Valve bans go by SteamID; a bot / unresolved player has none, so its Ban is disabled.
+        var noBan=(engine==='valve' && !sid);
+        acts+='<button class="btn btn-sm btn-outline-danger py-0 px-1" '+da
+          +(noBan?' disabled title="No SteamID for this player — can\'t ban by ID"':'')
+          +' onclick="moderatePlayer(this,\'ban\')">Ban</button>';
+      }
     }
     return '<tr><td class="text-truncate" style="max-width:260px;">'+escapeHtml(p.name)+'</td>'
       +'<td class="text-nowrap">'+(p.score!=null?escapeHtml(String(p.score)):'—')+'</td>'
@@ -356,10 +379,15 @@ function renderPlayers(d){
 }
 function moderatePlayer(btn, action){
   var name=btn.getAttribute('data-name')||'';
-  if(action==='ban' && !confirm('Ban '+name+'?')) return;
+  var steamid=btn.getAttribute('data-steamid')||'';
+  var num=btn.getAttribute('data-num')||'';
+  var allBox=document.getElementById('pl-ban-all');
+  // scope 'all' only when the visible toggle is checked (offsetParent!==null => not hidden).
+  var scope=(action==='ban' && allBox && allBox.checked && allBox.offsetParent!==null) ? 'all' : 'this';
+  if(action==='ban' && !confirm('Ban '+name+(scope==='all'?' on ALL your servers':'')+'?')) return;
   btn.disabled=true;
   fetch(MOUNT+'/api/server/'+serverId+'/moderate',{method:'POST',headers:{'Content-Type':'application/json'},
-    body:JSON.stringify({action:action, target:name})})
+    body:JSON.stringify({action:action, target:name, steamid:steamid, num:num, scope:scope})})
     .then(function(r){return r.json();}).then(function(d){
       window.toast(d.message || (d.success?'Done':'Failed'), d.success?'success':'danger');
       setTimeout(loadPlayers, 1200);

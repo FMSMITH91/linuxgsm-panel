@@ -87,6 +87,7 @@ from ssh_manager import (
     get_server_status, run_as_game_user, send_console_command,
     list_server_commands, server_live_metrics, remote_public_ip,
     discover_linuxgsm_servers, player_list, moderation_caps, moderate, is_player_queryable,
+    game_engine,
     GAMEDIG_TYPE as GAMEDIG_TYPE_MAP,
     remote_live_metrics, host_specs, pro_status, pro_attach,
     pro_service, pro_detach, set_autostart, install_game_cron, set_daily_restart,
@@ -1571,11 +1572,18 @@ def register_routes(app):
         which moderation actions this game supports, for the Players panel."""
         gs = get_game(server_id)
         try:
-            players = player_list(gs.remote, gs.short_name, gs.game_type, gs.port, gs.query_type)
+            players = player_list(gs.remote, gs.short_name, gs.game_type, gs.port, gs.query_type,
+                                  selfname=gs.lgsm_name)
         except Exception:
             players = []
+        engine = game_engine(gs.game_type)
         return jsonify({"players": players, "caps": moderation_caps(gs.game_type),
                         "queryable": is_player_queryable(gs.game_type, gs.query_type),
+                        "engine": engine,
+                        # The gamedig query-type override only matters for games we query via gamedig;
+                        # console engines (valve/idTech3/Minecraft) read the player list from the
+                        # console, so the panel hides that field for them.
+                        "uses_gamedig": (not engine),
                         "query_type": gs.query_type or "",
                         "default_query": GAMEDIG_TYPE_MAP.get(gs.game_type, "")})
 
@@ -1616,12 +1624,42 @@ def register_routes(app):
         action = (data.get("action") or "").strip()
         if action not in ("kick", "ban", "say"):
             return jsonify({"success": False, "message": "Unknown action"}), 400
+        target = data.get("target", "")
+        steamid = data.get("steamid", "")
+        num = data.get("num", "")
+        scope = (data.get("scope") or "this").strip()
         try:
             ok, msg = moderate(gs.remote, gs.short_name, gs.game_type, action,
-                               target=data.get("target", ""), message=data.get("message", ""),
-                               selfname=gs.lgsm_name)
+                               target=target, message=data.get("message", ""),
+                               selfname=gs.lgsm_name, steamid=steamid, num=num)
             log_action(current_user, "moderate_%s" % action, target=gs.name,
-                       detail=(data.get("target") or data.get("message") or "")[:120], success=ok)
+                       detail=(target or steamid or data.get("message") or "")[:120], success=ok)
+            # Cross-server ban: on a successful ban with scope "all", apply the SAME ban to every
+            # OTHER server the user can moderate that acts on this player's identifier — SteamID on
+            # all Valve servers, name on all Minecraft servers. Slot-based (idTech3) bans reference a
+            # live connection slot, so they can't be ported and stay on this server only.
+            if ok and action == "ban" and scope == "all":
+                origin_eng = game_engine(gs.game_type)
+                applied = 0
+                for other in GameServer.query.filter_by(installed=True).all():
+                    if other.id == gs.id or game_engine(other.game_type) != origin_eng:
+                        continue
+                    if not can_access_server(current_user, other.id):
+                        continue
+                    if origin_eng == "valve" and steamid:
+                        ok2, _m = moderate(other.remote, other.short_name, other.game_type, "ban",
+                                           selfname=other.lgsm_name, steamid=steamid)
+                    elif origin_eng == "minecraft" and target:
+                        ok2, _m = moderate(other.remote, other.short_name, other.game_type, "ban",
+                                           selfname=other.lgsm_name, target=target)
+                    else:
+                        continue   # idTech3 slot bans don't port to servers they're not on
+                    applied += 1 if ok2 else 0
+                if applied:
+                    log_action(current_user, "moderate_ban_all", target="%d server(s)" % applied,
+                               detail=(steamid or target)[:120], success=True)
+                    msg = (msg + " ").strip() + " Also banned on %d other server%s." % (
+                        applied, "" if applied == 1 else "s")
             return jsonify({"success": ok, "message": msg})
         except Exception:
             return jsonify({"success": False, "message": _log_and_generic("moderation failed")}), 500

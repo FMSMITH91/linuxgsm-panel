@@ -1397,10 +1397,187 @@ def player_count(server, user, game_type=None, port=None, query_type=None):
     return int(s)
 
 
-def player_list(server, user, game_type=None, port=None, query_type=None):
-    """Best-effort list of connected players via gamedig. Returns [{name, score, time}] (score/time
-    may be None depending on the game), or [] when the game isn't queryable or is empty. Never
-    raises. Same query path as player_count — just keeping the names instead of only the count."""
+# ── Engine families ──────────────────────────────────────────────────────────
+# Moderation (kick/ban/say) and the way we read a player list are per game ENGINE, not per game, so
+# one classifier covers every LinuxGSM game of a family instead of a per-game table. Source and
+# GoldSrc share the SAME console syntax (`status`, `kick "<name>"`, `banid`, `say`) and both print
+# SteamIDs in `status`, so they're one "valve" family here. Anything not classified has no console
+# moderation — its player list still shows via gamedig where available, just with no kick/ban/say.
+_ENG_VALVE = frozenset({
+    # Source
+    "gmod", "css", "cs2", "csgo", "tf2", "hl2dm", "hl2mp", "dods", "l4d", "l4d2",
+    "ins", "insurgency", "nmrih", "zps", "fof", "gesource", "bb2", "ship", "doi", "nd", "bm",
+    # GoldSrc
+    "cs", "cscz", "tfc", "dmc", "ns", "ricochet", "hldm", "hldms", "ahl", "sfc", "dod", "og", "ag",
+})
+_ENG_IDTECH3 = frozenset({           # Quake3 / idTech3 — `status` gives slot numbers, kick/ban by slot
+    "cod", "coduo", "cod2", "cod4", "codwaw", "q3", "quakelive", "et", "etl", "rtcw", "wet", "jamp",
+})
+_ENG_MINECRAFT = frozenset({         # Minecraft — `list` gives names, kick/ban by name
+    "mc", "pmc", "spigot", "paper", "bukkit", "forge", "fabric", "purpur", "mcbe", "mcb", "pocketmine",
+})
+
+
+def game_engine(game_type):
+    """The moderation/query engine family for a LinuxGSM game: 'valve', 'idtech3', 'minecraft',
+    or '' when the game has no console-based moderation the panel understands."""
+    gt = (game_type or "").lower()
+    if gt in _ENG_VALVE:
+        return "valve"
+    if gt in _ENG_IDTECH3:
+        return "idtech3"
+    if gt in _ENG_MINECRAFT:
+        return "minecraft"
+    return ""
+
+
+# A Steam ID in either legacy (STEAM_0:1:2) or modern ([U:1:5]) form — the only shape we accept as a
+# ban target, so a hostile name in a `status` line can never smuggle anything else into `banid`.
+_STEAMID_RE = re.compile(r"STEAM_[0-9]:[0-9]:[0-9]+|\[U:[0-9]:[0-9]+\]")
+
+
+def _strip_q3_colors(s):
+    return re.sub(r"\^[0-9]", "", s or "")
+
+
+def _int_or_none(s):
+    try:
+        return int(str(s).strip())
+    except (TypeError, ValueError):
+        return None
+
+
+def _sanitize_steamid(s):
+    m = _STEAMID_RE.search(str(s or ""))
+    return m.group(0) if m else ""
+
+
+def _sanitize_slotnum(s):
+    n = _int_or_none(s)
+    return n if (n is not None and 0 <= n <= 128) else None
+
+
+def capture_console(server, user, selfname=None, lines=180):
+    """Read-only snapshot of the last `lines` of a LinuxGSM instance's live tmux console. Used to
+    read a `status`/`list` reply back. rc 3 + NO_SESSION when the server isn't running."""
+    selfname = selfname or user
+    inner = (
+        'D=/tmp/tmux-$(id -u); '
+        f"SOCK=$(ls -1 \"$D\" 2>/dev/null | grep -m1 '^{selfname}-'); "
+        '[ -z "$SOCK" ] && { echo NO_SESSION; exit 3; }; '
+        f'tmux -L "$SOCK" capture-pane -p -t {selfname} -S -{int(lines)}'
+    )
+    cmd = f"sudo -u {user} bash -c {_quote(inner)}"
+    return run_command(server, cmd, timeout=15, sudo=False)
+
+
+def _parse_valve_status(text):
+    """Parse a Source/GoldSrc `status` reply into [{name, steamid, num, score, time}]. Player rows
+    start with '#' and carry a quoted name + a STEAM_/[U:..] id; bots have no id. Only the MOST
+    RECENT table is used (rows after the last 'uniqueid' header), so players who left don't linger."""
+    lines = (text or "").splitlines()
+    start = 0
+    for i, ln in enumerate(lines):
+        if "uniqueid" in ln.lower():
+            start = i + 1
+    players, seen = [], set()
+    for ln in lines[start:]:
+        # A real player row is '#<userid> "<name>" …'. Requiring the leading '#' + number rejects the
+        # '# userid name uniqueid' header AND stray chat/console lines that merely contain quotes.
+        m = re.match(r'\s*#\s*\d+\s+"([^"]*)"', ln)
+        if not m:
+            continue
+        name = m.group(1).strip()
+        if not name:
+            continue
+        steamid = _sanitize_steamid(ln)
+        key = (name, steamid)
+        if key in seen:
+            continue
+        seen.add(key)
+        players.append({"name": name[:64], "steamid": steamid, "num": None,
+                        "score": None, "time": None})
+    return players
+
+
+def _parse_idtech3_status(text):
+    """Parse a Quake3/CoD `status` reply into [{name, num, guid, steamid, score, time}]. Rows are
+    'num score ping guid name … address …'; the name can contain spaces + ^-colour codes. Only the
+    most recent table (rows after the last 'num…score…ping' header) is kept."""
+    lines = (text or "").splitlines()
+    start = 0
+    for i, ln in enumerate(lines):
+        low = ln.lower()
+        if "num" in low and "score" in low and "ping" in low:
+            start = i + 1
+    players, seen = [], set()
+    for ln in lines[start:]:
+        # Preferred: name is everything between the guid and the trailing 'lastmsg address' columns.
+        m = re.match(r"\s*(\d+)\s+(-?\d+)\s+(\d+)\s+(\S+)\s+(.+?)\s+\d+\s+\d{1,3}(?:\.\d{1,3}){3}:\d+", ln)
+        if not m:
+            # Fallback for formats without an address column: num score ping guid name(rest).
+            m = re.match(r"\s*(\d+)\s+(-?\d+)\s+(\d+)\s+([0-9A-Fa-f]{6,})\s+(.+)$", ln)
+            if not m:
+                continue
+        num = _int_or_none(m.group(1))
+        if num is None or num in seen:
+            continue
+        name = _strip_q3_colors(m.group(5)).strip()
+        if not name:
+            continue
+        seen.add(num)
+        players.append({"name": name[:64], "num": num, "guid": m.group(4), "steamid": "",
+                        "score": _int_or_none(m.group(2)), "time": None})
+    return players
+
+
+def _parse_minecraft_list(text):
+    """Parse a Minecraft `list` reply ('There are N of M players online: Alice, Bob') into
+    [{name, …}]. Splits on the last 'online:' so a log-line timestamp prefix can't confuse it."""
+    line = ""
+    for ln in (text or "").splitlines():
+        if "online:" in ln.lower():
+            line = ln
+    idx = line.lower().rfind("online:")
+    if idx == -1:
+        return []
+    after = line[idx + len("online:"):]
+    players, seen = [], set()
+    for chunk in after.split(","):
+        nm = re.sub(r"[^A-Za-z0-9_]", "", chunk)[:32]
+        if nm and nm not in seen:
+            seen.add(nm)
+            players.append({"name": nm, "steamid": "", "num": None, "score": None, "time": None})
+    return players
+
+
+def console_player_list(server, user, game_type, selfname=None):
+    """Player list from the game's OWN console — the only source that yields the identifiers needed
+    to kick/ban precisely (SteamIDs for valve, slot numbers for idTech3). Sends the list command,
+    then captures + parses the pane. Returns a list (possibly empty), or None for a non-console
+    game. Never raises."""
+    eng = game_engine(game_type)
+    if not eng:
+        return None
+    cmd = "list" if eng == "minecraft" else "status"
+    try:
+        send_console_command(server, user, cmd, timeout=12, selfname=selfname)
+        time.sleep(0.8)   # let the server print its reply into the pane before we capture it
+        out, _, rc = capture_console(server, user, selfname=selfname, lines=180)
+    except Exception:
+        return []
+    if rc != 0 or not out:
+        return []
+    if eng == "idtech3":
+        return _parse_idtech3_status(out)
+    if eng == "minecraft":
+        return _parse_minecraft_list(out)
+    return _parse_valve_status(out)
+
+
+def _gamedig_player_list(server, user, game_type=None, port=None, query_type=None):
+    """Player list via gamedig (names + score/time where the game reports them). Used for games
+    without console-based moderation. Returns [] when not queryable / empty. Never raises."""
     gdtype = _gamedig_type(game_type, query_type)
     if not gdtype or not port:
         return []
@@ -1424,34 +1601,32 @@ def player_list(server, user, game_type=None, port=None, query_type=None):
         if isinstance(p, dict):
             name = str(p.get("name") or "").strip()
             if name:
-                players.append({"name": name[:64], "score": p.get("score"), "time": p.get("time")})
+                players.append({"name": name[:64], "steamid": "", "num": None,
+                                "score": p.get("score"), "time": p.get("time")})
     return players
 
 
-# Games whose in-game console (driven via tmux) understands moderation commands, grouped by the
-# command syntax. Anything not listed degrades to "no in-game moderation" — the player list may
-# still show, but with no kick/ban/say buttons.
-_MOD_MC = frozenset({"mc", "pmc", "spigot", "paper", "bukkit"})                  # Minecraft (Java)
-_MOD_SOURCE = frozenset({                                                         # Valve Source / GoldSrc
-    "gmod", "css", "cs2", "csgo", "cs", "cscz", "tf2", "tfc", "hl2dm", "hl2mp", "hldm", "hldms",
-    "dods", "dod", "l4d", "l4d2", "ins", "insurgency", "nmrih", "zps", "fof", "gesource",
-    "ns", "ricochet", "dmc", "sfc", "bb2", "ship",
-})
+def player_list(server, user, game_type=None, port=None, query_type=None, selfname=None):
+    """Connected players for the Players panel. For games with console moderation (valve, idTech3,
+    Minecraft) read the console so the list carries the kick/ban identifiers; for everything else
+    fall back to gamedig (names only). Returns [{name, steamid, num, score, time}]. Never raises."""
+    if game_engine(game_type):
+        pl = console_player_list(server, user, game_type, selfname=selfname)
+        return pl or []
+    return _gamedig_player_list(server, user, game_type, port, query_type)
 
 
 def is_player_queryable(game_type, query_type=None):
-    """True if the panel can query a live player list for this game (has a gamedig type, either a
-    per-server override or the built-in map)."""
-    return bool(_gamedig_type(game_type, query_type))
+    """True if the panel can show a live player list: a console engine (valve/idTech3/Minecraft)
+    or a gamedig type (built-in map or a per-server override)."""
+    return bool(game_engine(game_type)) or bool(_gamedig_type(game_type, query_type))
 
 
 def moderation_caps(game_type):
-    """Which moderation actions this game supports from its console: {kick, ban, say}."""
-    gt = (game_type or "").lower()
-    if gt in _MOD_MC:
+    """Which moderation actions this game's console supports: {kick, ban, say}. Driven by the engine
+    family, so every game of a family is covered. Non-console games get nothing (view-only)."""
+    if game_engine(game_type):      # valve, idtech3 and minecraft all support all three
         return {"kick": True, "ban": True, "say": True}
-    if gt in _MOD_SOURCE:
-        return {"kick": True, "ban": False, "say": True}   # Source ban needs a steamid, not a name
     return {"kick": False, "ban": False, "say": False}
 
 
@@ -1465,23 +1640,47 @@ def _mod_sanitize(s, maxlen=64):
     return str(s or "").translate(_MOD_BAD_CHARS).strip()[:maxlen]
 
 
-def moderate(server, user, game_type, action, target="", message="", selfname=None):
-    """Kick/ban a player or announce a message through the game's own console. The player name /
-    message are sanitized first so a hostile name can't inject console commands. Returns (ok, msg)."""
-    gt = (game_type or "").lower()
-    caps = moderation_caps(gt)
-    if action not in ("kick", "ban", "say") or not caps.get(action):
+def moderate(server, user, game_type, action, target="", message="", selfname=None,
+             steamid="", num=""):
+    """Kick/ban a player or announce a message through the game's own console, dispatched by engine:
+      • valve (Source/GoldSrc): kick by name, ban by SteamID, say
+      • idTech3 (CoD/Quake3):   kick/ban by slot number, say
+      • minecraft:              kick/ban by name, say
+    Names/messages are sanitized (and the SteamID/slot re-validated) so a hostile name can't inject
+    a console command. Returns (ok, msg)."""
+    eng = game_engine(game_type)
+    if action not in ("kick", "ban", "say") or not moderation_caps(game_type).get(action):
         return False, "That action isn't supported for this game."
+
     if action == "say":
         msg = _mod_sanitize(message, 200)
         if not msg:
             return False, "Nothing to announce."
         cmd = "say %s" % msg
-    else:
-        tgt = _mod_sanitize(target, 64)
-        if not tgt:
+    elif eng == "valve":
+        if action == "kick":
+            nm = _mod_sanitize(target, 64)
+            if not nm:
+                return False, "No player selected."
+            cmd = 'kick "%s"' % nm
+        else:
+            sid = _sanitize_steamid(steamid)
+            if not sid:
+                return False, "No SteamID for this player — can't ban them by ID."
+            cmd = "banid 0 %s; writeid" % sid     # 0 minutes = permanent; writeid persists it
+    elif eng == "idtech3":
+        slot = _sanitize_slotnum(num)
+        if slot is None:
+            return False, "No player slot selected."
+        cmd = "%s %d" % ("clientkick" if action == "kick" else "banclient", slot)
+    elif eng == "minecraft":
+        nm = _mod_sanitize(target, 64)
+        if not nm:
             return False, "No player selected."
-        cmd = ("%s %s" % (action, tgt)) if gt in _MOD_MC else ('kick "%s"' % tgt)
+        cmd = "%s %s" % ("kick" if action == "kick" else "ban", nm)
+    else:
+        return False, "That action isn't supported for this game."
+
     out = send_console_command(server, user, cmd, timeout=15, selfname=selfname)
     rc = out[2] if isinstance(out, tuple) and len(out) >= 3 else 1
     return (rc == 0), ("Done." if rc == 0 else "Console not reachable — is the server running?")
