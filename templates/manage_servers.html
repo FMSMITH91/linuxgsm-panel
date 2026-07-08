@@ -87,6 +87,8 @@
         <tbody>
           {% for gs in all_servers %}
           {% set installing = (gs.status == 'installing' and not gs.installed) %}
+          {% set finishing = (gs.status == 'configuring') %}   {# steps 5-8: installed, still finishing #}
+          {% set in_progress = installing or finishing %}
           <tr>
             <td>
               <strong>{{ gs.name }}</strong>
@@ -110,8 +112,8 @@
             </td>
             <td>
               <span data-server-id="{{ gs.id }}"
-                    class="badge {% if gs.installed %}bg-success{% elif installing %}bg-info text-dark{% elif gs.status == 'failed' %}bg-danger{% else %}bg-warning text-dark{% endif %}">
-                {% if gs.installed %}Installed{% elif installing %}Installing…{% elif gs.status == 'failed' %}Install failed{% else %}Not installed{% endif %}
+                    class="badge {% if finishing %}bg-info text-dark{% elif gs.installed %}bg-success{% elif installing %}bg-info text-dark{% elif gs.status == 'failed' %}bg-danger{% else %}bg-warning text-dark{% endif %}">
+                {% if finishing %}Finishing setup…{% elif gs.installed %}Installed{% elif installing %}Installing…{% elif gs.status == 'failed' %}Install failed{% else %}Not installed{% endif %}
               </span>
             </td>
             <td>{{ gs.remote.display_name if gs.remote else '—' }}</td>
@@ -127,14 +129,14 @@
                 {# Disabled mid-install — uninstalling would delete the user/files out from under the
                    running install. watchInstall re-enables it when the install finishes/fails. #}
                 <button type="submit" class="btn btn-sm btn-outline-danger" id="uninstall-btn-{{ gs.id }}"
-                        {% if installing %}disabled title="Can't uninstall while it's installing — wait for it to finish"{% else %}title="Delete server and all data"{% endif %}>
+                        {% if in_progress %}disabled title="Can't uninstall while it's installing — wait for it to finish"{% else %}title="Delete server and all data"{% endif %}>
                   <i class="bi bi-trash"></i> Uninstall
                 </button>
               </form>
             </td>
           </tr>
           <tr class="install-progress-row" id="install-row-{{ gs.id }}"
-              data-installing="{{ '1' if installing else '0' }}"{% if not installing %} style="display:none;"{% endif %}>
+              data-installing="{{ '1' if in_progress else '0' }}"{% if not in_progress %} style="display:none;"{% endif %}>
             <td colspan="6" class="py-2" style="background:rgba(88,166,255,.05);">
               <div class="d-flex justify-content-between small mb-1">
                 <span class="text-info"><i class="bi bi-gear-fill"></i> <span id="inst-step-{{ gs.id }}">Preparing…</span></span>
@@ -220,14 +222,6 @@ function watchInstall(id) {
         var badge = document.querySelector('[data-server-id="' + id + '"]');
         if (pct) pct.textContent = (s.total ? s.step + '/' + s.total + ' · ' : '') + s.percent + '% · ' + s.elapsed + 's';
         if (bar) bar.style.width = s.percent + '%';
-        // The DB marks the server installed after the game files download — several steps before
-        // the job's final "done" (it's still configuring/starting). Flip the badge to "Installed"
-        // right then, so the live view matches what a refresh already shows instead of sitting on
-        // "Installing…". The bar keeps showing the remaining setup steps until they complete.
-        if (s.installed && badge && s.status !== 'failed'
-            && badge.textContent.trim() !== 'Installed') {
-          badge.className = 'badge bg-success'; badge.textContent = 'Installed';
-        }
         if (s.status === 'done') {
           bar.className = 'progress-bar bg-success'; bar.style.width = '100%';
           step.innerHTML = '<i class="bi bi-check-circle-fill text-success"></i> ' + (s.message || 'Installed');
@@ -247,7 +241,14 @@ function watchInstall(id) {
           var di = document.getElementById('inst-dismiss-' + id); if (di) di.style.display = 'inline';
           stopInstall(id);
         } else {
+          // Running (steps 1-8). Once the game files land (s.installed), the server IS installed
+          // but still finishing config/start — show "Finishing setup…" rather than a premature
+          // "Installed", with the bar tracking the remaining steps.
           step.innerHTML = '<i class="bi bi-gear-fill"></i> ' + s.step_name;
+          if (badge) {
+            badge.className = 'badge bg-info text-dark';
+            badge.textContent = s.installed ? 'Finishing setup…' : 'Installing…';
+          }
         }
       })
       .catch(function() {});

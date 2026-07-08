@@ -569,7 +569,7 @@
             <code class="text-secondary" title="This host's public IP isn't known yet">:{{ gs.port }}</code>
             {% endif %}
           </td>
-          <td><span class="badge {% if gs.status == 'online' %}bg-success{% elif gs.status == 'installing' %}bg-info text-dark{% else %}bg-secondary{% endif %}">{{ gs.status|title }}</span></td>
+          <td><span class="badge {% if gs.status == 'online' %}bg-success{% elif gs.status in ('installing', 'configuring') %}bg-info text-dark{% else %}bg-secondary{% endif %}">{{ gs.status|title }}</span></td>
           <td class="text-end text-nowrap">
             <a href="{{ url_for('server_detail', server_id=gs.id) }}" class="btn btn-sm btn-outline-secondary" title="Console, commands, restart"><i class="bi bi-terminal-fill"></i> Console</a>
             <a href="{{ url_for('server_files', server_id=gs.id) }}" class="btn btn-sm btn-outline-secondary" title="Edit config &amp; browse/upload files"><i class="bi bi-folder2-open"></i> Files &amp; Config</a>

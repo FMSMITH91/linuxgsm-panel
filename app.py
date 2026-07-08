@@ -2100,7 +2100,15 @@ def register_routes(app):
                         gs.installed = False; gs.status = "failed"; db.session.commit()
                         _fail("Game files didn't install after 3 tries — the download may be corrupt or "
                               "the mirror unreachable. Try again shortly.", last_out[-300:]); return
-                    gs.installed = True; db.session.commit()
+                    # Files have landed — the server IS installed, but it still needs configuring
+                    # and starting (steps 5-8). Use a distinct "configuring" status (NOT "installing")
+                    # so the state model is honest: the status poller skips it just like "installing"
+                    # (it isn't fully up yet), and if the panel restarts before step 8 the reconciler
+                    # heals it instead of it sitting stuck.
+                    gs.installed = True; gs.status = "configuring"; db.session.commit()
+
+                    # 5. Configure: cache command list + maintenance cron + Minecraft EULA.
+                    _p(5, "Configuring server")
 
                     # Make LinuxGSM actually use the free port we reserved at request time
                     # (resolve_free_port already skipped ports taken by another server or listening
@@ -2111,9 +2119,6 @@ def register_routes(app):
                         lgsm_write_config(remote, short_name, lgsm_name, {"port": final_port})
                     except Exception:
                         _log.debug("_run: ignored non-fatal error", exc_info=True)
-
-                    # 5. Configure: cache command list + maintenance cron + Minecraft EULA.
-                    _p(5, "Configuring server")
                     try:
                         cmds = list_server_commands(remote, short_name, gs.lgsm_name)
                         if cmds:
@@ -2162,6 +2167,18 @@ def register_routes(app):
                         gs.status = "online" if s_rc == 0 else "offline"; db.session.commit()
                     except Exception:
                         _log.debug("_run: ignored non-fatal error", exc_info=True)
+
+                    # Now that it's actually run once, re-read the ports and open any that only
+                    # become visible at runtime. A no-op for the static-config majority (step 6 already
+                    # opened them before start); future-proofs a game whose effective ports settle on
+                    # first start. Best-effort — ufw allow is idempotent.
+                    try:
+                        info2 = detect_game_ports(remote, short_name, gs.lgsm_name)
+                        extra = info2.get("open_ports") or []
+                        if extra:
+                            remote_ufw_allow_game_ports(remote, extra, short_name)
+                    except Exception:
+                        _log.debug("_run: post-start port re-detect failed", exc_info=True)
 
                     _finish(f"{short_name} installed")
                     log_action(None, "install_complete", target=gs.name, success=True)
@@ -4559,7 +4576,7 @@ def register_routes(app):
                     # running/stopped, and a not-yet-running install would otherwise get flipped
                     # "installing" -> "offline" (it isn't listening on its port yet) — which made the
                     # progress row vanish and show "Not installed" the moment you navigated back.
-                    if not gs.installed or gs.status == "installing":
+                    if not gs.installed or gs.status in ("installing", "configuring"):
                         continue
                     st = "online" if gs.port in ports else "offline"
                     if gs.status != st:
@@ -4606,8 +4623,8 @@ def register_routes(app):
         try:
             status = get_server_status(remote, gs)
             # Don't clobber an in-progress install's status (see /api/servers) — only persist
-            # running/stopped for a server that's actually installed and not mid-install.
-            if gs.installed and gs.status != "installing":
+            # running/stopped for a server that's actually installed and not mid-install/config.
+            if gs.installed and gs.status not in ("installing", "configuring"):
                 gs.status = status
                 db.session.commit()
         except Exception:
@@ -4730,10 +4747,9 @@ def register_routes(app):
             # No live job. If the DB still says "installing", the in-memory progress was lost —
             # almost always because the panel restarted mid-install (e.g. a deploy). Reconcile
             # against the real server so the user gets a definite answer instead of a vanished row.
-            # Check regardless of the installed flag: a restart BETWEEN step 4 (installed=True) and
-            # step 8 (status set) strands installed=True + status="installing", which the status
-            # poller then skips forever — so it must be reconciled too.
-            if gs and gs.status == "installing":
+            # Covers both "installing" (steps 1-4) and "configuring" (steps 5-8, installed=True): a
+            # restart in either phase strands a status the poller skips forever, so both reconcile.
+            if gs and gs.status in ("installing", "configuring"):
                 verdict = _looks_installed(gs.remote, gs.short_name, gs.lgsm_name)
                 if verdict is True:
                     gs.installed = True
@@ -4772,9 +4788,9 @@ def register_routes(app):
                 "step_name": j["step_name"], "message": j.get("message", ""),
                 "log": j["log"][-100:], "elapsed": int(time.time() - j["started"]),
                 # installed flips True after the game files download (step 4), several steps before
-                # the job's final "done" (config → ports → autostart → start). Surface it so the page
-                # shows "Installed" live at the same point a refresh would, instead of sitting on
-                # "Installing…" until the start step finishes.
+                # the job's final "done" (config → ports → autostart → start). Surface it so the live
+                # view can show "Finishing setup…" during those steps (server is installed but not yet
+                # fully up) instead of a premature "Installed".
                 "installed": installed_flag,
             })
 
@@ -5290,15 +5306,16 @@ def register_routes(app):
 
     # Self-heal installs stranded in "installing" with no live job — the panel restarting
     # mid-install (a deploy/self-update) loses the in-memory progress, and the status poller
-    # SKIPS anything marked "installing", so such a server would sit stuck forever. On boot (and
-    # periodically, to also catch a host that was unreachable earlier) reconcile each against the
-    # real server: verified-installed → offline (metrics flip it online), clearly-not → failed.
+    # SKIPS anything "installing"/"configuring", so such a server would sit stuck forever. On boot
+    # (and periodically, to also catch a host that was unreachable earlier) reconcile each against
+    # the real server: verified-installed → offline (metrics flip it online), clearly-not → failed.
     def install_reconcile_ticker():
         time.sleep(20)   # let boot settle; the per-server check is an SSH round trip
         while True:
             try:
                 with app.app_context():
-                    for gs in GameServer.query.filter_by(status="installing").all():
+                    for gs in GameServer.query.filter(
+                            GameServer.status.in_(("installing", "configuring"))).all():
                         with _install_lock:
                             live = (gs.id in _install_jobs
                                     and _install_jobs[gs.id].get("status") == "running")
