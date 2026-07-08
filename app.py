@@ -2016,20 +2016,44 @@ def register_routes(app):
                     except Exception:
                         _log.debug("_run: ignored non-fatal error", exc_info=True)
 
-                    # 4. Download the game server files (the long step).
-                    _p(4, "Downloading game server files (this can take a while)")
+                    # 4. Download the game server files (the long step). A truncated / corrupt archive
+                    #    can leave LinuxGSM "done" — even with exit code 0 — but with NO game files
+                    #    (exactly how a bad cod2 download failed silently). So DON'T trust the exit
+                    #    code: after each attempt verify the files actually landed (_looks_installed),
+                    #    and on failure wipe LinuxGSM's cached download and retry from scratch.
                     auto = f"sudo -u {short_name} bash -c 'cd /home/{short_name} && ./{lgsm_name} auto-install' 2>&1"
-                    out, err, rc = run_command(remote, auto, timeout=1800, sudo=False)
-                    missing = parse_missing_deps((out or "") + "\n" + (err or ""))
-                    if missing:
+                    installed_ok = False
+                    last_out = ""
+                    for attempt in range(3):
+                        _p(4, "Downloading game server files (this can take a while)"
+                              + ("" if attempt == 0 else " — retry %d" % attempt))
+                        out, err, rc = run_command(remote, auto, timeout=1800, sudo=False)
+                        last_out = out or err or last_out
+                        missing = parse_missing_deps((out or "") + "\n" + (err or ""))
+                        if missing:
+                            try:
+                                install_game_dependencies(remote, game_type, extra=" ".join(missing))
+                                out, err, rc = run_command(remote, auto, timeout=1800, sudo=False)
+                                last_out = out or err or last_out
+                            except Exception:
+                                _log.debug("_run: ignored non-fatal error", exc_info=True)
+                        # The real test — did the game files actually install? rc alone lies on a
+                        # corrupt/truncated download.
+                        if _looks_installed(remote, short_name, lgsm_name) is True:
+                            installed_ok = True
+                            break
+                        # Not really installed: wipe LinuxGSM's cached (likely corrupt) archive so the
+                        # next attempt re-downloads fresh instead of reusing the bad file.
                         try:
-                            install_game_dependencies(remote, game_type, extra=" ".join(missing))
-                            out, err, rc = run_command(remote, auto, timeout=1800, sudo=False)
+                            run_command(remote, f"sudo -u {short_name} bash -c "
+                                        f"'rm -rf /home/{short_name}/lgsm/tmp/* 2>/dev/null; echo cleared'",
+                                        timeout=30, sudo=False)
                         except Exception:
                             _log.debug("_run: ignored non-fatal error", exc_info=True)
-                    if rc != 0:
+                    if not installed_ok:
                         gs.installed = False; gs.status = "failed"; db.session.commit()
-                        _fail("Game install failed", (out or err)[-300:]); return
+                        _fail("Game files didn't install after 3 tries — the download may be corrupt or "
+                              "the mirror unreachable. Try again shortly.", last_out[-300:]); return
                     gs.installed = True; db.session.commit()
 
                     # 5. Configure: cache command list + maintenance cron + Minecraft EULA.
