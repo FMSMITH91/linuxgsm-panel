@@ -647,29 +647,7 @@ function serverAction(action, btn, confirmFirst, showOutput) {
 
 function _cap(s){ return s.charAt(0).toUpperCase() + s.slice(1); }
 
-// Styled in-app confirm (replaces the browser's native confirm()). opts:
-//   {title, icon, body (safe HTML), confirmLabel, confirmClass, onConfirm}
-// Dismissible via Cancel / backdrop / Esc; only onConfirm runs the action.
-function confirmDialog(opts){
-  opts = opts || {};
-  var ov = document.createElement('div');
-  ov.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,.6);z-index:1080;display:flex;align-items:center;justify-content:center;padding:1rem;';
-  ov.innerHTML = '<div class="card" style="max-width:480px;width:100%;">'
-    + '<div class="card-header"><i class="bi bi-' + (opts.icon || 'question-circle') + '"></i> ' + escapeHtml(opts.title || 'Confirm') + '</div>'
-    + '<div class="card-body">'
-    + '<p class="mb-3">' + (opts.body || '') + '</p>'
-    + '<div class="d-flex justify-content-end gap-2">'
-    + '<button class="btn btn-outline-secondary" id="cd-cancel">Cancel</button>'
-    + '<button class="btn ' + (opts.confirmClass || 'btn-primary') + '" id="cd-ok">' + escapeHtml(opts.confirmLabel || 'Confirm') + '</button>'
-    + '</div></div></div>';
-  document.body.appendChild(ov);
-  function close(){ ov.remove(); document.removeEventListener('keydown', onKey); }
-  function onKey(e){ if (e.key === 'Escape') close(); }
-  document.addEventListener('keydown', onKey);
-  ov.querySelector('#cd-ok').onclick = function(){ close(); if (opts.onConfirm) opts.onConfirm(); };
-  ov.querySelector('#cd-cancel').onclick = close;
-  ov.addEventListener('click', function(e){ if (e.target === ov) close(); });
-}
+// confirmDialog() is a shared global defined in base.html (window.confirmDialog).
 
 // Restart/Stop confirm for an EMPTY server (or when the player count is unknown) — the
 // in-app equivalent of the old native confirm, matching the players-online dialog's look.

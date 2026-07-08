@@ -659,6 +659,14 @@ def _json_body():
     return d if isinstance(d, dict) else {}
 
 
+def _wants_json():
+    """True when the caller is an in-page fetch() (so form-POST endpoints can answer with JSON and
+    let the page update in place instead of doing a full redirect+reload). The global fetch wrapper
+    in base.html sets X-Requested-With; a real browser form navigation does not."""
+    return (request.headers.get("X-Requested-With") == "XMLHttpRequest"
+            or "application/json" in (request.headers.get("Accept") or ""))
+
+
 def _current_lang():
     """Active UI language: the logged-in user's saved preference, else the session choice, else en."""
     lang = None
@@ -2196,6 +2204,7 @@ def register_routes(app):
     @permission_required(UNINSTALL_SERVER)
     def uninstall_server(server_id):
         gs = get_game(server_id)
+        name = gs.name   # capture before the row is deleted (used in the success/error message)
         # Refuse to uninstall while an install is in progress — deleting the user/files out from
         # under the running install job corrupts it (and can orphan processes). The UI disables the
         # button too, but guard the endpoint as well (belt and suspenders).
@@ -2203,8 +2212,10 @@ def register_routes(app):
             _installing = (server_id in _install_jobs
                            and _install_jobs[server_id].get("status") == "running")
         if _installing or (gs.status == "installing" and not gs.installed):
-            flash("'%s' is still installing — wait for it to finish before uninstalling." % gs.name,
-                  "warning")
+            _m = "'%s' is still installing — wait for it to finish before uninstalling." % name
+            if _wants_json():
+                return jsonify({"success": False, "message": _m}), 409
+            flash(_m, "warning")
             return redirect(url_for("manage_servers"))
         remote = gs.remote
         short_name = gs.short_name
@@ -2255,13 +2266,19 @@ def register_routes(app):
             except Exception:
                 _log.debug("uninstall: schedule cleanup failed", exc_info=True)
             _notify_servers_changed()   # row disappears live on other sessions
-            flash(f"Server '{gs.name}' uninstalled.{fw_note}", "success")
+            _m = f"Server '{name}' uninstalled.{fw_note}"
+            if _wants_json():
+                return jsonify({"success": True, "message": _m})
+            flash(_m, "success")
+            return redirect(url_for("manage_servers"))
 
-        except Exception as e:
-            log_action(current_user, "uninstall_server", target=gs.name, detail=str(e), success=False)
-            flash(f"Uninstall failed: {e}", "danger")
-
-        return redirect(url_for("manage_servers"))
+        except Exception:
+            _em = _log_and_generic("uninstall failed")
+            log_action(current_user, "uninstall_server", target=name, success=False)
+            if _wants_json():
+                return jsonify({"success": False, "message": _em}), 500
+            flash(_em, "danger")
+            return redirect(url_for("manage_servers"))
 
     @app.route("/servers/<int:server_id>/edit", methods=["POST"])
     @login_required
@@ -2433,7 +2450,10 @@ def register_routes(app):
         db.session.commit()
         close_connection(remote)
         log_action(current_user, "delete_remote", target=name)
-        flash(f"Remote '{name}' deleted.", "success")
+        _m = f"Remote '{name}' deleted."
+        if _wants_json():
+            return jsonify({"success": True, "message": _m})
+        flash(_m, "success")
         return redirect(url_for("manage_remotes"))
 
     @app.route("/remotes/<int:remote_id>/test", methods=["POST"])

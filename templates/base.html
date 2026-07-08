@@ -691,6 +691,9 @@ window.CSRF = "{{ csrf_token() }}";
     if (method !== 'GET' && method !== 'HEAD') {
       var h = new Headers(init.headers || {});
       if (!h.has('X-CSRFToken')) h.set('X-CSRFToken', window.CSRF);
+      // Mark every in-page fetch so form-POST endpoints can answer with JSON (update in place)
+      // instead of a full redirect+reload. A real browser form navigation won't have this.
+      if (!h.has('X-Requested-With')) h.set('X-Requested-With', 'XMLHttpRequest');
       init.headers = h;
     }
     return _fetch(input, init);
@@ -773,6 +776,31 @@ window.toast = function(msg, kind){
   // Each toast owns its own timer (captured `t`), so it fades ~4s after ITS OWN creation —
   // independent of any other toast on screen.
   setTimeout(function(){ t.style.transition='opacity .4s'; t.style.opacity='0'; setTimeout(function(){ t.remove(); }, 400); }, 4000);
+};
+
+// Global styled confirm dialog — replaces the browser's native confirm() so confirmations stay
+// in-app and look consistent. window.confirmDialog({title, icon, body (safe HTML — escape any
+// dynamic text), confirmLabel, confirmClass, onConfirm}). Dismiss via Cancel / backdrop / Esc;
+// only onConfirm runs the action.
+window.confirmDialog = function(opts){
+  opts = opts || {};
+  var ov = document.createElement('div');
+  ov.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,.6);z-index:11050;display:flex;align-items:center;justify-content:center;padding:1rem;';
+  ov.innerHTML = '<div class="card" style="max-width:480px;width:100%;">'
+    + '<div class="card-header"><i class="bi bi-' + (opts.icon || 'question-circle') + '"></i> ' + escapeHtml(opts.title || 'Confirm') + '</div>'
+    + '<div class="card-body">'
+    + '<p class="mb-3">' + (opts.body || '') + '</p>'
+    + '<div class="d-flex justify-content-end gap-2">'
+    + '<button class="btn btn-outline-secondary" data-cd="cancel">Cancel</button>'
+    + '<button class="btn ' + (opts.confirmClass || 'btn-primary') + '" data-cd="ok">' + escapeHtml(opts.confirmLabel || 'Confirm') + '</button>'
+    + '</div></div></div>';
+  document.body.appendChild(ov);
+  function close(){ ov.remove(); document.removeEventListener('keydown', onKey); }
+  function onKey(e){ if(e.key === 'Escape') close(); }
+  document.addEventListener('keydown', onKey);
+  ov.querySelector('[data-cd="ok"]').onclick = function(){ close(); if(opts.onConfirm) opts.onConfirm(); };
+  ov.querySelector('[data-cd="cancel"]').onclick = close;
+  ov.addEventListener('click', function(e){ if(e.target === ov) close(); });
 };
 
 // Copy text to the clipboard and confirm with a toast. Falls back to execCommand

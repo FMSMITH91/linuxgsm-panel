@@ -77,7 +77,7 @@
 
 <!-- Existing remotes -->
 {% for remote in remotes %}
-<div class="card mb-2">
+<div class="card mb-2" id="remote-card-{{ remote.id }}">
   <div class="card-body">
     <div class="d-flex justify-content-between align-items-start">
       <div>
@@ -165,12 +165,11 @@
                 data-bs-toggle="collapse" data-bs-target="#edit-remote-{{ remote.id }}">
           <i class="bi bi-pencil"></i>
         </button>
-        <form method="POST" action="{{ url_for('delete_remote', remote_id=remote.id) }}" style="display:inline;"
-              onsubmit="return confirm('Delete {{ remote.name }}? This will remove all associated game servers.');">
-          <button type="submit" class="btn btn-outline-danger btn-sm" title="Delete">
-            <i class="bi bi-trash"></i>
-          </button>
-        </form>
+        {# In-app confirm + AJAX delete (no page reload); the card is removed on success. #}
+        <button type="button" class="btn btn-outline-danger btn-sm remove-remote-btn" title="Delete"
+                data-remote-id="{{ remote.id }}" data-remote-name="{{ remote.name }}">
+          <i class="bi bi-trash"></i>
+        </button>
       </div>
     </div>
 
@@ -787,6 +786,36 @@ document.addEventListener('click', function(e){
   if (b) { showBootstrap(Number(b.getAttribute('data-remote-id')), b.getAttribute('data-remote-name')); return; }
   var i = t.closest && t.closest('[data-install-ts]');
   if (i) { installTailscale(Number(i.getAttribute('data-ts-remote')), i.getAttribute('data-ts-name')); return; }
+  var rm = t.closest && t.closest('.remove-remote-btn');
+  if (rm && !rm.disabled) { removeRemote(rm); return; }
 });
+
+// AJAX remove remote — styled confirm, then remove the card in place (no full-page reload).
+function removeRemote(btn){
+  var id = btn.getAttribute('data-remote-id');
+  var name = btn.getAttribute('data-remote-name') || '';
+  confirmDialog({
+    title: 'Delete remote', icon: 'trash', confirmLabel: 'Delete', confirmClass: 'btn-danger',
+    body: 'Delete <strong>' + escapeHtml(name) + '</strong>? This removes it and all of its game servers from the panel.',
+    onConfirm: function(){
+      var orig = btn.innerHTML;
+      btn.disabled = true; btn.innerHTML = '<span class="spinner-border spinner-border-sm"></span>';
+      fetch(MOUNT + '/remotes/' + id + '/delete', { method: 'POST' })
+        .then(function(r){ return r.json(); })
+        .then(function(d){
+          if (d && d.success){
+            var card = document.getElementById('remote-card-' + id);
+            if (card){ card.style.transition = 'opacity .3s'; card.style.opacity = '0';
+                       setTimeout(function(){ card.remove(); }, 300); }
+            if (window.toast) toast(d.message || 'Deleted', 'success');
+          } else {
+            btn.disabled = false; btn.innerHTML = orig;
+            if (window.toast) toast((d && d.message) || 'Delete failed', 'danger');
+          }
+        })
+        .catch(function(){ btn.disabled = false; btn.innerHTML = orig; if (window.toast) toast('Delete request failed', 'danger'); });
+    }
+  });
+}
 </script>
 {% endblock %}
