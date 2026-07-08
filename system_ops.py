@@ -1085,6 +1085,81 @@ def enable_unattended_upgrades():
     return False, "Could not confirm automatic security updates were enabled — check the panel logs."
 
 
+# ─── fail2ban jail for the panel's own web login ──────────────────────────────
+_F2B_PANEL_FILTER = "/etc/fail2ban/filter.d/linuxgsm-panel.conf"
+_F2B_PANEL_JAIL = "/etc/fail2ban/jail.d/linuxgsm-panel.conf"
+
+
+def _write_root_file(path, content):
+    """Write `content` to a root-owned path, base64-piped so no shell metacharacter in the content
+    can matter. Path is shell-quoted. Returns the _run tuple."""
+    import base64
+    b64 = base64.b64encode(content.encode()).decode()
+    return _run("echo %s | base64 -d > %s" % (shlex.quote(b64), shlex.quote(path)), timeout=15, sudo=True)
+
+
+def panel_fail2ban_status():
+    """Whether the panel-login fail2ban jail is active on this host, and how many IPs it's banning.
+    Best-effort; {'installed': bool, 'enabled': bool, 'banned': int}."""
+    have, _, _ = _run("command -v fail2ban-client >/dev/null 2>&1 && echo yes || echo no", timeout=10)
+    if "yes" not in (have or ""):
+        return {"installed": False, "enabled": False, "banned": 0}
+    out, _, rc = _run("fail2ban-client status linuxgsm-panel 2>/dev/null", timeout=10, sudo=True)
+    if rc != 0 or not out:
+        return {"installed": True, "enabled": False, "banned": 0}
+    import re
+    m = re.search(r"Currently banned:\s*(\d+)", out)
+    return {"installed": True, "enabled": True, "banned": int(m.group(1)) if m else 0}
+
+
+def configure_panel_fail2ban(auth_log, web_port):
+    """Install fail2ban (if needed) and configure a jail that bans IPs which repeatedly fail the
+    PANEL's web login — it tails the panel's auth.log and bans on the web port. Idempotent.
+    Returns (ok, message)."""
+    try:
+        web_port = int(web_port)
+    except (TypeError, ValueError):
+        return False, "Invalid web port."
+    if not (1 <= web_port <= 65535):
+        return False, "Invalid web port."
+    if not auth_log or "\n" in auth_log:
+        return False, "Invalid auth-log path."
+
+    have, _, _ = _run("command -v fail2ban-client >/dev/null 2>&1 && echo yes || echo no", timeout=10)
+    if "yes" not in (have or ""):
+        _run("DEBIAN_FRONTEND=noninteractive apt-get update -qq 2>/dev/null", timeout=120, sudo=True)
+        _run("DEBIAN_FRONTEND=noninteractive apt-get install -y fail2ban 2>&1", timeout=300, sudo=True)
+        have2, _, _ = _run("command -v fail2ban-client >/dev/null 2>&1 && echo yes || echo no", timeout=10)
+        if "yes" not in (have2 or ""):
+            return False, "Couldn't install fail2ban on this host."
+
+    # Filter: match the panel's own auth.log lines. <HOST> captures the offending IP.
+    _write_root_file(_F2B_PANEL_FILTER,
+                     "[Definition]\n"
+                     "failregex = panel login (?:failed|blocked) from <HOST>$\n"
+                     "ignoreregex =\n")
+    # Jail: 5 failures in 10 min → 1-hour ban, on the web port. In jail.d/ so it sits alongside
+    # (not conflicting with) any [sshd] jail in jail.local.
+    _write_root_file(_F2B_PANEL_JAIL,
+                     "[linuxgsm-panel]\n"
+                     "enabled = true\n"
+                     "port = %d\n"
+                     "filter = linuxgsm-panel\n"
+                     "logpath = %s\n"
+                     "maxretry = 5\n"
+                     "findtime = 10m\n"
+                     "bantime = 1h\n" % (web_port, auth_log))
+
+    _run("systemctl enable --now fail2ban 2>&1", timeout=30, sudo=True)
+    _run("fail2ban-client reload 2>&1 || systemctl restart fail2ban 2>&1", timeout=30, sudo=True)
+    st = panel_fail2ban_status()
+    if st.get("enabled"):
+        return True, ("fail2ban is now protecting the panel login — 5 failed logins from an IP in "
+                      "10 minutes get it banned for an hour.")
+    return False, ("Configured fail2ban, but the jail didn't come up. Check `fail2ban-client status "
+                   "linuxgsm-panel` and the panel logs.")
+
+
 def panel_diagnostics():
     """A fast, local self-check of the panel's own health: file integrity, data
     dir, database, encryption keys, config, disk space, TLS cert and service

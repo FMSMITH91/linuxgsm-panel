@@ -119,6 +119,35 @@ import backup as bk
 
 _log = logging.getLogger("panel.app")
 
+# Dedicated failed-login logger. Writes to data/auth.log (set up in create_app) in a fixed,
+# fail2ban-parseable format so the optional panel-login fail2ban jail can ban repeat offenders.
+_authlog = logging.getLogger("panel.auth")
+AUTH_LOG_PATH = os.path.join(str(DATA_DIR), "auth.log")
+
+
+def _log_ip(ip):
+    """Reduce a client IP to the IP charset before it goes in auth.log — belt-and-suspenders so
+    nothing weird (spaces, control chars) can ever land in a line fail2ban parses. fail2ban only
+    bans a valid IP anyway, so a stripped non-IP simply won't match its <HOST> pattern."""
+    return re.sub(r"[^0-9A-Fa-f:.]", "", str(ip or ""))[:45] or "unknown"
+
+
+def _setup_auth_log():
+    """Attach a small rotating file handler to _authlog once, so failed logins land in
+    data/auth.log for fail2ban to tail. Best-effort — a logging failure must never block a login."""
+    if any(getattr(h, "_panel_auth", False) for h in _authlog.handlers):
+        return
+    try:
+        from logging.handlers import RotatingFileHandler
+        h = RotatingFileHandler(AUTH_LOG_PATH, maxBytes=512 * 1024, backupCount=3)
+        h.setFormatter(logging.Formatter("%(asctime)s %(message)s", datefmt="%Y-%m-%d %H:%M:%S"))
+        h._panel_auth = True
+        _authlog.addHandler(h)
+        _authlog.setLevel(logging.INFO)
+        _authlog.propagate = False   # keep these lines out of the main app log / journal
+    except Exception:
+        _log.debug("auth-log setup failed", exc_info=True)
+
 
 def _read_version():
     """Panel version from the VERSION file next to this module (bumped per release)."""
@@ -474,6 +503,7 @@ def create_app():
     # Lock down data/ (0700) and the sensitive files inside (DB, keys, config → 0600) now that the
     # DB exists — keeps them unreachable by other local users. Idempotent; tightens old installs too.
     harden_data_permissions()
+    _setup_auth_log()   # failed logins → data/auth.log for the optional fail2ban jail
 
     # CSRF protection for every state-changing request. Forms carry a hidden token
     # (auto-injected in base.html); the JSON API sends it as an X-CSRFToken header
@@ -1062,12 +1092,14 @@ def register_routes(app):
                 blocked = len(fails) >= LOGIN_MAX_FAILS
             if blocked:
                 log_action(None, "login_blocked", detail=f"rate-limited {ip}", success=False)
+                _authlog.warning("panel login blocked from %s", _log_ip(ip))   # fail2ban: counts as a hit
                 flash("Too many failed attempts. Please wait a few minutes and try again.", "danger")
                 return render_template("login.html")
 
             def _fail(msg, **kw):
                 with _LOGIN_FAILS_LOCK:
                     _LOGIN_FAILS.setdefault(ip, []).append(now)
+                _authlog.warning("panel login failed from %s", _log_ip(ip))    # fail2ban tails data/auth.log
                 flash(msg, "danger")
                 return render_template("login.html", **kw)
 
@@ -3953,6 +3985,35 @@ def register_routes(app):
         except Exception:
             return jsonify({"success": False,
                             "message": _log_and_generic("enable auto-updates failed")}), 500
+
+    @app.route("/api/panel/fail2ban")
+    @login_required
+    @permission_required(SUPER_ADMIN)
+    def api_panel_fail2ban_status():
+        """Is the panel-login fail2ban jail active on the panel host, and how many IPs are banned?"""
+        try:
+            return jsonify(so.panel_fail2ban_status())
+        except Exception:
+            return jsonify({"installed": False, "enabled": False, "banned": 0,
+                            "error": _log_and_generic("fail2ban status failed")}), 500
+
+    @app.route("/api/panel/enable-fail2ban", methods=["POST"])
+    @login_required
+    @permission_required(SUPER_ADMIN)
+    def api_panel_enable_fail2ban():
+        """Install + configure a fail2ban jail that bans IPs repeatedly failing the panel's web
+        login (it tails data/auth.log and bans on the panel's web port)."""
+        try:
+            port = int(load_config().get("port", 5000))
+        except (TypeError, ValueError):
+            port = 5000
+        try:
+            ok, msg = so.configure_panel_fail2ban(AUTH_LOG_PATH, port)
+            log_action(current_user, "enable_panel_fail2ban", detail=msg, success=ok)
+            return jsonify({"success": ok, "message": msg})
+        except Exception:
+            return jsonify({"success": False,
+                            "message": _log_and_generic("enable panel fail2ban failed")}), 500
 
     @app.route("/api/server-management/os-update-check")
     @login_required
