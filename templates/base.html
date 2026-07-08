@@ -804,13 +804,16 @@ window.confirmDialog = function(opts){
   ov.innerHTML = '<div class="card" style="max-width:480px;width:100%;">'
     + '<div class="card-header"><i class="bi bi-' + (opts.icon || 'question-circle') + '"></i> ' + escapeHtml(opts.title || 'Confirm') + '</div>'
     + '<div class="card-body">'
-    + '<p class="mb-3">' + (opts.body || '') + '</p>'
+    + '<p class="mb-3" data-cd-body>' + (opts.body || '') + '</p>'
     + inputHtml
     + '<div class="d-flex justify-content-end gap-2">'
     + '<button class="btn btn-outline-secondary" data-cd="cancel">Cancel</button>'
     + '<button class="btn ' + (opts.confirmClass || 'btn-primary') + '" data-cd="ok">' + escapeHtml(opts.confirmLabel || 'Confirm') + '</button>'
     + '</div></div></div>';
   document.body.appendChild(ov);
+  // Plain-text body: assign via textContent (never innerHTML) so a caller may pass untrusted
+  // text (e.g. a form's data-confirm value) with zero HTML-injection risk.
+  if (opts.bodyText != null) { var _cb = ov.querySelector('[data-cd-body]'); if (_cb) _cb.textContent = opts.bodyText; }
   var input = ov.querySelector('#cd-input'), okBtn = ov.querySelector('[data-cd="ok"]'),
       errEl = ov.querySelector('#cd-err'), okHtml = okBtn.innerHTML;
   function close(){ ov.remove(); document.removeEventListener('keydown', onKey); }
@@ -902,7 +905,7 @@ window.ajaxForm = function(form){
       icon: form.getAttribute('data-confirm-icon') || 'question-circle',
       confirmClass: form.getAttribute('data-confirm-class') || 'btn-primary',
       confirmLabel: form.getAttribute('data-confirm-label') || 'Confirm',
-      body: escapeHtml(msg),   // data-confirm is treated as plain text (safe for any name)
+      bodyText: msg,   // data-confirm rendered via textContent — safe for any name, no HTML sink
       onConfirm: function(){ _submitAjaxForm(form); }
     });
   } else {

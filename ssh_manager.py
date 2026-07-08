@@ -3427,8 +3427,11 @@ def ssh_test_connection(host, port=22, username="root", auth_method="key", crede
         return False, f"Connection to {host}:{port} timed out. Is the host reachable?"
     except socket.gaierror:
         return False, f"Cannot resolve hostname: {host}"
-    except Exception as e:
-        return False, f"Connection failed: {e}"
+    except Exception:
+        # Don't surface the raw exception text to the browser — it can carry internal detail
+        # (key paths, host internals). Log the full trace server-side, show a generic message.
+        _log.warning("ssh_test_connection to %s:%s failed", host, port, exc_info=True)
+        return False, "Connection failed. Check the host, port, credentials, and that SSH is reachable."
 
 
 # ── LinuxGSM config + file management ──────────────────────────
