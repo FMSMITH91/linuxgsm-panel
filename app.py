@@ -667,6 +667,23 @@ def _wants_json():
             or "application/json" in (request.headers.get("Accept") or ""))
 
 
+def _form_ok(message, endpoint, **values):
+    """Success result for an action form: JSON for an in-page fetch (so the page updates in place),
+    else the classic flash + redirect for a plain browser submit."""
+    if _wants_json():
+        return jsonify({"success": True, "message": message})
+    flash(message, "success")
+    return redirect(url_for(endpoint, **values))
+
+
+def _form_err(message, endpoint, code=400, category="danger", **values):
+    """Failure result for an action form: JSON (+ status) for a fetch, else flash + redirect."""
+    if _wants_json():
+        return jsonify({"success": False, "message": message}), code
+    flash(message, category)
+    return redirect(url_for(endpoint, **values))
+
+
 def _current_lang():
     """Active UI language: the logged-in user's saved preference, else the session choice, else en."""
     lang = None
@@ -1905,14 +1922,12 @@ def register_routes(app):
         # SECURITY: game_type and server_name become Linux users / paths / root shell
         # arguments during install — validate strictly to prevent command injection.
         if not GAME_TYPE_RE.match(game_type) or game_type not in {g["shortname"] for g in load_game_list()}:
-            flash("Invalid or unknown game type.", "danger")
-            return redirect(url_for("manage_servers"))
+            return _form_err("Invalid or unknown game type.", "manage_servers")
         if server_name:
             server_name = server_name.lower()
             if not INSTANCE_NAME_RE.match(server_name):
-                flash("Server name must be lowercase letters, numbers, - or _ and start with "
-                      "a letter (it becomes a Linux user on the host).", "danger")
-                return redirect(url_for("manage_servers"))
+                return _form_err("Server name must be lowercase letters, numbers, - or _ and start with "
+                                 "a letter (it becomes a Linux user on the host).", "manage_servers")
 
         # Canonical LinuxGSM server name — always "{shortname}server".
         lgsm_name = f"{game_type}server"
@@ -1957,8 +1972,7 @@ def register_routes(app):
 
         # Reject a duplicate instance name on the same remote.
         if GameServer.query.filter_by(short_name=short_name, remote_id=remote_id).first():
-            flash(f"A server named '{short_name}' already exists on this remote.", "danger")
-            return redirect(url_for("manage_servers"))
+            return _form_err(f"A server named '{short_name}' already exists on this remote.", "manage_servers")
 
         # Create the DB row up-front in the "installing" state, then run the WHOLE
         # install in a background job with live step-by-step progress (polled by the
@@ -1989,9 +2003,8 @@ def register_routes(app):
         log_action(current_user, "install_server", target=gs.name,
                    detail=f"Type: {game_type}, port: {final_port}")
         port_note = (f" (port {desired_port} was busy — using {final_port})" if port_changed else "")
-        flash(f"Installing {short_name} on port {final_port}{port_note}. "
-              f"Progress is shown live below.", "success")
-        return redirect(url_for("manage_servers"))
+        return _form_ok(f"Installing {short_name} on port {final_port}{port_note}. "
+                        f"Progress is shown live below.", "manage_servers")
 
     def _run_install_job(gs_id, remote_id, short_name, game_type, lgsm_name, final_port):
         """Full game-server install as a tracked background job with step progress.
@@ -2289,8 +2302,7 @@ def register_routes(app):
         gs.port = _int_or(request.form.get("port"), gs.port)
         gs.game_display = request.form.get("game_display", gs.game_display)
         db.session.commit()
-        flash(f"Server '{gs.name}' updated.", "success")
-        return redirect(url_for("manage_servers"))
+        return _form_ok(f"Server '{gs.name}' updated.", "manage_servers")
 
     # ── Remote Server Management ───────────────────────────
     @app.route("/remotes")
@@ -2322,20 +2334,17 @@ def register_routes(app):
         is_local = request.form.get("is_local") == "1"
 
         if not name or not SAFE_LABEL_RE.match(name):
-            flash("Name is required and cannot contain < > \" ' ` or backslashes.", "danger")
-            return redirect(url_for("manage_remotes"))
+            return _form_err("Name is required and cannot contain < > \" ' ` or backslashes.", "manage_remotes")
 
         # SECURITY: these reach `sudo -u <user>` / SSH command construction — validate
         # to a safe Linux-username charset so they can't inject shell commands.
         if lgsm_user and not LINUX_USER_RE.match(lgsm_user):
-            flash("LinuxGSM user must be a valid Linux username (lowercase letters, numbers, - or _).", "danger")
-            return redirect(url_for("manage_remotes"))
+            return _form_err("LinuxGSM user must be a valid Linux username (lowercase letters, numbers, - or _).",
+                             "manage_remotes")
         if ssh_user and not LINUX_USER_RE.match(ssh_user):
-            flash("SSH user must be a valid Linux username.", "danger")
-            return redirect(url_for("manage_remotes"))
+            return _form_err("SSH user must be a valid Linux username.", "manage_remotes")
         if not is_local and (not host or not HOST_RE.match(host)):
-            flash("Host must be a valid hostname or IP address.", "danger")
-            return redirect(url_for("manage_remotes"))
+            return _form_err("Host must be a valid hostname or IP address.", "manage_remotes")
 
         if is_local:
             remote = RemoteServer(
@@ -2349,14 +2358,13 @@ def register_routes(app):
             db.session.add(remote)
             db.session.commit()
             log_action(current_user, "add_local_remote", target=name)
-            flash(f"Local server '{name}' added! You can now install game servers on this machine.", "success")
-            return redirect(url_for("manage_remotes"))
+            return _form_ok(f"Local server '{name}' added! You can now install game servers on this machine.",
+                            "manage_remotes")
 
         # (host presence + charset already validated above for non-local remotes)
         success, msg = ssh_test_connection(host, ssh_port, ssh_user, auth_method, credential)
         if not success:
-            flash(f"Connection test failed: {msg}", "danger")
-            return redirect(url_for("manage_remotes"))
+            return _form_err(f"Connection test failed: {msg}", "manage_remotes")
 
         remote = RemoteServer(
             name=name, host=host, port=ssh_port,
@@ -2379,11 +2387,11 @@ def register_routes(app):
                 "username": lgsm_user, "install_fail2ban": True, "do_reboot": True,
             }
             started, _ = _begin_bootstrap(remote.id, opts, current_user.id)
-            flash(f"Remote '{name}' added. Preparing & securing it now — watch the progress on its card."
-                  if started else f"Remote '{name}' added.", "success")
+            _m = (f"Remote '{name}' added. Preparing & securing it now — watch the progress on its card."
+                  if started else f"Remote '{name}' added.")
         else:
-            flash(f"Remote '{name}' added successfully!", "success")
-        return redirect(url_for("manage_remotes"))
+            _m = f"Remote '{name}' added successfully!"
+        return _form_ok(_m, "manage_remotes")
 
     @app.route("/remotes/<int:remote_id>/edit", methods=["POST"])
     @login_required
@@ -2394,20 +2402,16 @@ def register_routes(app):
         new_lgsm = request.form.get("lgsm_user", remote.linuxgsm_user)
         # SECURITY: validate the username fields (reach `sudo -u <user>` / SSH commands).
         if new_user and not LINUX_USER_RE.match(new_user):
-            flash("SSH user must be a valid Linux username.", "danger")
-            return redirect(url_for("manage_remotes"))
+            return _form_err("SSH user must be a valid Linux username.", "manage_remotes")
         if new_lgsm and not LINUX_USER_RE.match(new_lgsm):
-            flash("LinuxGSM user must be a valid Linux username.", "danger")
-            return redirect(url_for("manage_remotes"))
+            return _form_err("LinuxGSM user must be a valid Linux username.", "manage_remotes")
         new_name = request.form.get("name", remote.name)
         if new_name and not SAFE_LABEL_RE.match(new_name):
-            flash("Name cannot contain < > \" ' ` or backslashes.", "danger")
-            return redirect(url_for("manage_remotes"))
+            return _form_err("Name cannot contain < > \" ' ` or backslashes.", "manage_remotes")
         remote.name = new_name
         new_host = request.form.get("host", remote.host)
         if not remote.is_local and new_host and not HOST_RE.match(new_host):
-            flash("Host must be a valid hostname or IP address.", "danger")
-            return redirect(url_for("manage_remotes"))
+            return _form_err("Host must be a valid hostname or IP address.", "manage_remotes")
         new_port = _int_or(request.form.get("ssh_port"), remote.port)
         # Repointing to a different host/port means the pinned key no longer applies —
         # clear it so the new target is re-pinned (TOFU) instead of failing as a mismatch.
@@ -2426,8 +2430,7 @@ def register_routes(app):
         remote.linuxgsm_user = new_lgsm
         db.session.commit()
         log_action(current_user, "edit_remote", target=remote.name)
-        flash(f"Remote '{remote.name}' updated.", "success")
-        return redirect(url_for("manage_remotes"))
+        return _form_ok(f"Remote '{remote.name}' updated.", "manage_remotes")
 
     @app.route("/remotes/<int:remote_id>/delete", methods=["POST"])
     @login_required
@@ -2473,15 +2476,12 @@ def register_routes(app):
             remote.host, remote.port, remote.username,
             remote.auth_method, decrypt_secret(remote.auth_credential)
         )
-        if success:
-            flash(f"Connection to {remote.name} successful!", "success")
-            remote.is_online = True
-        else:
-            flash(f"Connection failed: {msg}", "danger")
-            remote.is_online = False
+        remote.is_online = bool(success)
         remote.last_seen = datetime.utcnow()
         db.session.commit()
-        return redirect(url_for("manage_remotes"))
+        if success:
+            return _form_ok(f"Connection to {remote.name} successful!", "manage_remotes")
+        return _form_err(f"Connection failed: {msg}", "manage_remotes")
 
     # ── Discover + import LinuxGSM servers already installed on a host ──
     @app.route("/api/remote/<int:remote_id>/discover")
@@ -2580,21 +2580,17 @@ def register_routes(app):
         # Only a superadmin may grant superadmin — otherwise a user with just MANAGE_USERS
         # could create a superadmin account and log in as it (privilege escalation).
         if is_superadmin and not current_user.is_superadmin:
-            flash("Only a superadmin can grant superadmin.", "danger")
-            return redirect(url_for("manage_users"))
+            return _form_err("Only a superadmin can grant superadmin.", "manage_users")
 
         if not username or len(username) < 3:
-            flash("Username must be at least 3 characters.", "danger")
-            return redirect(url_for("manage_users"))
+            return _form_err("Username must be at least 3 characters.", "manage_users")
         pw_err = password_problem(password)
         if pw_err:
-            flash(pw_err, "danger")
-            return redirect(url_for("manage_users"))
+            return _form_err(pw_err, "manage_users")
 
         existing = User.query.filter_by(username=username).first()
         if existing:
-            flash("Username already exists.", "danger")
-            return redirect(url_for("manage_users"))
+            return _form_err("Username already exists.", "manage_users")
 
         user = User(
             username=username,
@@ -2612,8 +2608,7 @@ def register_routes(app):
         db.session.add(user)
         db.session.commit()
         log_action(current_user, "add_user", target=username)
-        flash(f"User '{username}' created.", "success")
-        return redirect(url_for("manage_users"))
+        return _form_ok(f"User '{username}' created.", "manage_users")
 
     @app.route("/users/<int:user_id>/edit", methods=["POST"])
     @login_required
@@ -2626,11 +2621,9 @@ def register_routes(app):
         # superadmin's password and logging in as them, or promoting themselves).
         if not current_user.is_superadmin:
             if user.is_superadmin:
-                flash("Only a superadmin can modify a superadmin account.", "danger")
-                return redirect(url_for("manage_users"))
+                return _form_err("Only a superadmin can modify a superadmin account.", "manage_users")
             if want_superadmin != user.is_superadmin:
-                flash("Only a superadmin can change superadmin status.", "danger")
-                return redirect(url_for("manage_users"))
+                return _form_err("Only a superadmin can change superadmin status.", "manage_users")
 
         user.display_name = (request.form.get("display_name") or user.display_name or "").strip()
         _new_email = request.form.get("email", "").strip()
@@ -2643,8 +2636,7 @@ def register_routes(app):
         if password:
             pw_err = password_problem(password)
             if pw_err:
-                flash(pw_err, "danger")
-                return redirect(url_for("manage_users"))
+                return _form_err(pw_err, "manage_users")
             user.password_hash = hash_password(password)
             user.auth_epoch = (user.auth_epoch or 0) + 1   # revoke existing sessions
 
@@ -2664,13 +2656,11 @@ def register_routes(app):
         db.session.flush()
         if User.query.filter_by(is_superadmin=True, is_active=True).count() == 0:
             db.session.rollback()
-            flash("That change would leave no active superadmin — aborted.", "danger")
-            return redirect(url_for("manage_users"))
+            return _form_err("That change would leave no active superadmin — aborted.", "manage_users")
 
         db.session.commit()
         log_action(current_user, "edit_user", target=user.username)
-        flash(f"User '{user.username}' updated.", "success")
-        return redirect(url_for("manage_users"))
+        return _form_ok(f"User '{user.username}' updated.", "manage_users")
 
     @app.route("/users/<int:user_id>/delete", methods=["POST"])
     @login_required
@@ -2680,20 +2670,16 @@ def register_routes(app):
         # Only a superadmin may delete a superadmin (else a MANAGE_USERS user could remove
         # other admins), and never the last one.
         if user.is_superadmin and not current_user.is_superadmin:
-            flash("Only a superadmin can delete a superadmin account.", "danger")
-            return redirect(url_for("manage_users"))
+            return _form_err("Only a superadmin can delete a superadmin account.", "manage_users")
         if user.is_superadmin and User.query.filter_by(is_superadmin=True).count() <= 1:
-            flash("Cannot delete the last superadmin.", "danger")
-            return redirect(url_for("manage_users"))
+            return _form_err("Cannot delete the last superadmin.", "manage_users")
         if user.id == current_user.id:
-            flash("You can't delete your own account.", "danger")
-            return redirect(url_for("manage_users"))
+            return _form_err("You can't delete your own account.", "manage_users")
         username = user.username
         db.session.delete(user)
         db.session.commit()
         log_action(current_user, "delete_user", target=username)
-        flash(f"User '{username}' deleted.", "success")
-        return redirect(url_for("manage_users"))
+        return _form_ok(f"User '{username}' deleted.", "manage_users")
 
     # ── Group Management ───────────────────────────────────
     @app.route("/groups")
@@ -2764,13 +2750,11 @@ def register_routes(app):
         name = request.form.get("name", "").strip()
         description = request.form.get("description", "").strip()
         if not name:
-            flash("Group name is required.", "danger")
-            return redirect(url_for("manage_groups"))
+            return _form_err("Group name is required.", "manage_groups")
 
         existing = Group.query.filter_by(name=name).first()
         if existing:
-            flash(f"Group '{name}' already exists.", "danger")
-            return redirect(url_for("manage_groups"))
+            return _form_err(f"Group '{name}' already exists.", "manage_groups")
 
         group = Group(name=name, description=description)
         group.set_permissions(_grantable_perms(request.form.getlist("permissions")))
@@ -2780,8 +2764,7 @@ def register_routes(app):
         db.session.add(group)
         db.session.commit()
         log_action(current_user, "add_group", target=name)
-        flash(f"Group '{name}' created.", "success")
-        return redirect(url_for("manage_groups"))
+        return _form_ok(f"Group '{name}' created.", "manage_groups")
 
     @app.route("/groups/<int:group_id>/edit", methods=["POST"])
     @login_required
@@ -2797,8 +2780,7 @@ def register_routes(app):
 
         db.session.commit()
         log_action(current_user, "edit_group", target=group.name)
-        flash(f"Group '{group.name}' updated.", "success")
-        return redirect(url_for("manage_groups"))
+        return _form_ok(f"Group '{group.name}' updated.", "manage_groups")
 
     @app.route("/groups/<int:group_id>/delete", methods=["POST"])
     @login_required
@@ -2815,8 +2797,7 @@ def register_routes(app):
         db.session.delete(group)
         db.session.commit()
         log_action(current_user, "delete_group", target=group.name)
-        flash(f"Group '{group.name}' deleted.", "success")
-        return redirect(url_for("manage_groups"))
+        return _form_ok(f"Group '{group.name}' deleted.", "manage_groups")
 
     # ── Custom Commands (superadmin-defined game commands handed to groups) ──
     # A dict of engine value -> label for the scope selector. Kept here (not a new ssh_manager
@@ -2892,16 +2873,14 @@ def register_routes(app):
     def add_command():
         fields, err = _custom_cmd_form()
         if err:
-            flash(err, "danger")
-            return redirect(url_for("manage_commands"))
+            return _form_err(err, "manage_commands")
         cmd = CustomCommand(created_by=current_user.username, **fields)
         db.session.add(cmd)
         db.session.flush()          # get cmd.id before wiring the group associations
         _assign_command_groups(cmd)
         db.session.commit()
         log_action(current_user, "add_custom_command", target=cmd.name, detail=cmd.command_template[:120])
-        flash(f"Command '{cmd.name}' created.", "success")
-        return redirect(url_for("manage_commands"))
+        return _form_ok(f"Command '{cmd.name}' created.", "manage_commands")
 
     @app.route("/commands/<int:cmd_id>/edit", methods=["POST"])
     @login_required
@@ -2910,15 +2889,13 @@ def register_routes(app):
         cmd = CustomCommand.query.get_or_404(cmd_id)
         fields, err = _custom_cmd_form(cmd)
         if err:
-            flash(err, "danger")
-            return redirect(url_for("manage_commands"))
+            return _form_err(err, "manage_commands")
         for k, v in fields.items():
             setattr(cmd, k, v)
         _assign_command_groups(cmd)
         db.session.commit()
         log_action(current_user, "edit_custom_command", target=cmd.name, detail=cmd.command_template[:120])
-        flash(f"Command '{cmd.name}' updated.", "success")
-        return redirect(url_for("manage_commands"))
+        return _form_ok(f"Command '{cmd.name}' updated.", "manage_commands")
 
     @app.route("/commands/<int:cmd_id>/delete", methods=["POST"])
     @login_required
@@ -2930,8 +2907,7 @@ def register_routes(app):
         db.session.delete(cmd)
         db.session.commit()
         log_action(current_user, "delete_custom_command", target=name)
-        flash(f"Command '{name}' deleted.", "success")
-        return redirect(url_for("manage_commands"))
+        return _form_ok(f"Command '{name}' deleted.", "manage_commands")
 
     # ── Audit Logs ──────────────────────────────────────────
     @app.route("/logs")

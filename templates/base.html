@@ -843,6 +843,79 @@ window.confirmDialog = function(opts){
   }
 };
 
+// ── SPA-style forms: submit without a full-page reload ─────────────────────────────────────
+// Any <form class="ajax-form"> is submitted via fetch instead of a browser navigation. On success
+// it toasts the server's message, closes an enclosing modal, resets the form, and re-renders the
+// list section named by data-ajax-refresh (a CSS selector) by re-fetching THIS page and swapping
+// just that container — so page scripts/delegated listeners keep working and nothing reloads.
+// Optional attributes: data-confirm (+ -title/-icon/-class/-label) shows the styled confirm first;
+// data-ajax-after names a window function to run after the section refreshes (e.g. re-arm pollers).
+window.refreshSection = function(sel, afterName){
+  fetch(location.href, { headers: { 'X-Requested-With': 'XMLHttpRequest' }, cache: 'no-store' })
+    .then(function(r){ return r.text(); })
+    .then(function(html){
+      var doc = new DOMParser().parseFromString(html, 'text/html');
+      var fresh = doc.querySelector(sel), cur = document.querySelector(sel);
+      if (fresh && cur) cur.innerHTML = fresh.innerHTML;
+      if (afterName && typeof window[afterName] === 'function') { try { window[afterName](); } catch(e){} }
+    }).catch(function(){});
+};
+function _submitAjaxForm(form){
+  var btn = form.querySelector('[type="submit"]'), orig = btn ? btn.innerHTML : '';
+  if (btn){ btn.disabled = true; btn.innerHTML = '<span class="spinner-border spinner-border-sm"></span>'; }
+  var restore = function(){ if (btn){ btn.disabled = false; btn.innerHTML = orig; } };
+  fetch(form.action || location.href,
+        { method: (form.getAttribute('method') || 'POST').toUpperCase(), body: new FormData(form) })
+    .then(function(r){ return r.json().then(function(d){ return { status: r.status, d: d || {} }; })
+                                .catch(function(){ return { status: r.status, d: {} }; }); })
+    .then(function(res){
+      restore();
+      if (res.status >= 200 && res.status < 300 && res.d.success !== false){
+        if (window.toast && res.d.message) toast(res.d.message, 'success');
+        if (form.getAttribute('data-ajax-reset') !== 'off' && form.reset) form.reset();
+        var sel = form.getAttribute('data-ajax-refresh');
+        var after = form.getAttribute('data-ajax-after');
+        var doRefresh = function(){ if (sel) window.refreshSection(sel, after); };
+        var modal = form.closest('.modal');
+        if (modal && window.bootstrap){
+          // Wait for the modal to FULLY hide (Bootstrap removes its backdrop) before swapping the
+          // section DOM — destroying the modal mid-animation would strand a grey backdrop overlay.
+          var mi = bootstrap.Modal.getInstance(modal) || bootstrap.Modal.getOrCreateInstance(modal);
+          modal.addEventListener('hidden.bs.modal', function _h(){
+            modal.removeEventListener('hidden.bs.modal', _h); doRefresh();
+          });
+          mi.hide();
+        } else {
+          doRefresh();
+        }
+      } else if (window.toast) {
+        toast(res.d.message || 'Action failed', 'danger');
+      }
+    })
+    .catch(function(){ restore(); if (window.toast) toast('Request failed', 'danger'); });
+}
+window.ajaxForm = function(form){
+  var msg = form.getAttribute('data-confirm');
+  if (msg){
+    confirmDialog({
+      title: form.getAttribute('data-confirm-title') || 'Confirm',
+      icon: form.getAttribute('data-confirm-icon') || 'question-circle',
+      confirmClass: form.getAttribute('data-confirm-class') || 'btn-primary',
+      confirmLabel: form.getAttribute('data-confirm-label') || 'Confirm',
+      body: escapeHtml(msg),   // data-confirm is treated as plain text (safe for any name)
+      onConfirm: function(){ _submitAjaxForm(form); }
+    });
+  } else {
+    _submitAjaxForm(form);
+  }
+  return false;   // always prevent the native submit
+};
+// Delegate: any form.ajax-form submits through ajaxForm without needing an inline onsubmit.
+document.addEventListener('submit', function(e){
+  var f = e.target;
+  if (f && f.classList && f.classList.contains('ajax-form')){ e.preventDefault(); window.ajaxForm(f); }
+}, true);
+
 // Copy text to the clipboard and confirm with a toast. Falls back to execCommand
 // on non-secure contexts.
 // Track the cursor so feedback can pop right where the user clicked (a bottom-right

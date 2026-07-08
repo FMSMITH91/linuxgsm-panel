@@ -49,6 +49,7 @@
   <a href="{{ url_for('manage_commands') }}">Custom Commands</a> page. (Super Administrators bypass groups entirely.)
 </p>
 
+<div id="groups-list">
 {% for group in groups %}
 <div class="card mb-3">
   <div class="card-header d-flex justify-content-between align-items-center">
@@ -64,7 +65,10 @@
       </button>
       {% if not group.is_default %}
       <form method="POST" action="{{ url_for('delete_group', group_id=group.id) }}" style="display:inline;"
-            onsubmit="return confirm('Delete group {{ group.name }}?');">
+            class="ajax-form" data-ajax-refresh="#groups-list"
+            data-confirm="Delete group “{{ group.name }}”? Members lose the access it grants."
+            data-confirm-title="Delete Group" data-confirm-class="btn-danger"
+            data-confirm-label="Delete" data-confirm-icon="trash">
         <button type="submit" class="btn btn-outline-danger btn-sm">
           <i class="bi bi-trash"></i>
         </button>
@@ -114,7 +118,8 @@
   <!-- Edit form (collapsible) -->
   <div class="collapse" id="edit-group-{{ group.id }}">
     <div class="card-body border-top" style="border-color: #30363d !important;">
-      <form method="POST" action="{{ url_for('edit_group', group_id=group.id) }}">
+      <form method="POST" action="{{ url_for('edit_group', group_id=group.id) }}"
+            class="ajax-form" data-ajax-refresh="#groups-list" data-ajax-reset="off">
         <div class="row">
           <div class="col-md-4">
             <div class="mb-3">
@@ -177,12 +182,14 @@
   </div>
 </div>
 {% endfor %}
+</div><!-- /#groups-list -->
 
 <!-- Add Group Modal -->
 <div class="modal fade" id="addGroupModal" tabindex="-1">
   <div class="modal-dialog modal-lg">
     <div class="modal-content">
-      <form method="POST" action="{{ url_for('add_group') }}">
+      <form method="POST" action="{{ url_for('add_group') }}"
+            class="ajax-form" data-ajax-refresh="#groups-list">
         <div class="modal-header">
           <h5 class="modal-title"><i class="bi bi-shield-plus"></i> Add Group</h5>
           <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal"></button>

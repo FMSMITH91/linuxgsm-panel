@@ -9,6 +9,7 @@
   </button>
 </div>
 
+<div id="users-list">
 <div class="card">
   <div class="card-body p-0">
     <div class="table-responsive">
@@ -61,7 +62,10 @@
             </button>
             {% if not (user.is_superadmin and users|selectattr('is_superadmin', 'equalto', true)|list|length == 1) %}
             <form method="POST" action="{{ url_for('delete_user', user_id=user.id) }}" style="display:inline;"
-                  onsubmit="return confirm('Delete user {{ user.username }}?');">
+                  class="ajax-form" data-ajax-refresh="#users-list"
+                  data-confirm="Delete user “{{ user.username }}”? This can't be undone."
+                  data-confirm-title="Delete User" data-confirm-class="btn-danger"
+                  data-confirm-label="Delete" data-confirm-icon="trash">
               <button type="submit" class="btn btn-outline-danger btn-sm"
                       aria-label="Delete {{ user.username }}" title="Delete {{ user.username }}">
                 <i class="bi bi-trash"></i>
@@ -81,7 +85,8 @@
 <div class="modal fade" id="addUserModal" tabindex="-1">
   <div class="modal-dialog">
     <div class="modal-content">
-      <form method="POST" action="{{ url_for('add_user') }}">
+      <form method="POST" action="{{ url_for('add_user') }}"
+            class="ajax-form" data-ajax-refresh="#users-list">
         <div class="modal-header">
           <h5 class="modal-title"><i class="bi bi-person-plus-fill"></i> Add User</h5>
           <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal"></button>
@@ -148,7 +153,8 @@
 <div class="modal fade" id="editUserModal-{{ user.id }}" tabindex="-1">
   <div class="modal-dialog">
     <div class="modal-content">
-      <form method="POST" action="{{ url_for('edit_user', user_id=user.id) }}">
+      <form method="POST" action="{{ url_for('edit_user', user_id=user.id) }}"
+            class="ajax-form" data-ajax-refresh="#users-list" data-ajax-reset="off">
         <div class="modal-header">
           <h5 class="modal-title"><i class="bi bi-pencil"></i> Edit User: {{ user.username }}</h5>
           <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal"></button>
@@ -230,5 +236,6 @@
   </div>
 </div>
 {% endfor %}
+</div><!-- /#users-list -->
 
 {% endblock %}

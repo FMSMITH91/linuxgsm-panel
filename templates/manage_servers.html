@@ -26,7 +26,9 @@
       Select which server to install the game on, then choose the game type and start the install.
       The auto-install process runs in the background — check back after a few minutes.
     </p>
-    <form id="install-form" method="POST" action="{{ url_for('install_game_server') }}" class="row g-2 align-items-start">
+    <form id="install-form" method="POST" action="{{ url_for('install_game_server') }}"
+          class="row g-2 align-items-start ajax-form" data-ajax-refresh="#servers-list"
+          data-ajax-after="afterServerRefresh">
       <div class="col-md-3">
         <label class="form-label" for="remote-select">Target Server</label>
         <select name="remote_id" id="remote-select" class="form-select" required>
@@ -70,7 +72,7 @@
   <div class="card-header">
     <i class="bi bi-list-columns"></i> Installed Game Servers
   </div>
-  <div class="card-body p-0">
+  <div class="card-body p-0" id="servers-list">
     {% if all_servers %}
     <div class="table-responsive">
       <table class="table table-hover mb-0">
@@ -290,6 +292,7 @@ function doUninstall(id, name, btn){
     .then(function(d){
       if (d && d.success){
         var prog = document.getElementById('install-row-' + id); if (prog) prog.remove();
+        _svrBaseline = serverIdsOnPage();   // adopt the reduced set so live-sync doesn't force a reload
         var row = document.getElementById('server-row-' + id);
         if (row){ row.style.transition = 'opacity .3s'; row.style.opacity = '0';
                   setTimeout(function(){ row.remove(); }, 300); }
@@ -329,5 +332,15 @@ function reconcileServerList() {
 }
 pollWhenVisible(reconcileServerList, 8000);
 if (window.onServersChanged) onServersChanged(reconcileServerList);
+
+// After the servers table is swapped in place (AJAX install), re-arm the install-progress pollers
+// for any new "installing" rows and adopt the new server set, so the live-sync poller above doesn't
+// see a difference and force a full-page reload.
+window.afterServerRefresh = function(){
+  document.querySelectorAll('.install-progress-row[data-installing="1"]').forEach(function(row){
+    watchInstall(row.id.substring('install-row-'.length));
+  });
+  _svrBaseline = serverIdsOnPage();
+};
 </script>
 {% endblock %}

@@ -18,7 +18,8 @@
     <i class="bi bi-plus-circle"></i> Add Remote Server
   </div>
   <div class="card-body">
-    <form method="POST" action="{{ url_for('add_remote') }}" class="row g-2">
+    <form method="POST" action="{{ url_for('add_remote') }}" class="row g-2 ajax-form"
+          data-ajax-refresh="#remotes-list" data-ajax-after="afterRemotesRefresh">
       <div class="col-md-3">
         <label class="form-label">Name</label>
         <input type="text" name="name" class="form-control" required placeholder="e.g. Main VPS">
@@ -76,6 +77,7 @@
 </div>
 
 <!-- Existing remotes -->
+<div id="remotes-list">
 {% for remote in remotes %}
 <div class="card mb-2" id="remote-card-{{ remote.id }}">
   <div class="card-body">
@@ -143,7 +145,8 @@
           <i class="bi bi-sliders2"></i> Manage
         </a>
         {% if not remote.is_local %}
-        <form method="POST" action="{{ url_for('test_remote', remote_id=remote.id) }}" style="display:inline;">
+        <form method="POST" action="{{ url_for('test_remote', remote_id=remote.id) }}" style="display:inline;"
+              class="ajax-form" data-ajax-refresh="#remotes-list" data-ajax-after="afterRemotesRefresh">
           <button type="submit" class="btn btn-outline-secondary btn-sm" title="Test Connection">
             <i class="bi bi-plug"></i> Test
           </button>
@@ -176,7 +179,9 @@
     <!-- Edit form (collapsible) -->
     <div class="collapse mt-3" id="edit-remote-{{ remote.id }}">
       <div class="card card-body bg-dark">
-        <form method="POST" action="{{ url_for('edit_remote', remote_id=remote.id) }}" class="row g-2">
+        <form method="POST" action="{{ url_for('edit_remote', remote_id=remote.id) }}"
+              class="row g-2 ajax-form" data-ajax-refresh="#remotes-list"
+              data-ajax-after="afterRemotesRefresh" data-ajax-reset="off">
           <input type="hidden" name="remote_id" value="{{ remote.id }}">
           <div class="col-md-3">
             <label class="form-label">Name</label>
@@ -236,6 +241,7 @@
   </div>
 </div>
 {% endfor %}
+</div><!-- /#remotes-list -->
 
 <script>
 // ── Live stats for each remote card ──────────────────────
@@ -821,5 +827,17 @@ function removeRemote(btn){
     }
   });
 }
+
+// After the remotes list is swapped in place (AJAX add / edit / test), re-arm the per-card
+// live-stats pollers and re-attach to any in-progress bootstrap on the fresh DOM nodes.
+// (loadLiveStats just fetches; watchBootstrap guards against a duplicate timer — both safe to re-run.)
+window.afterRemotesRefresh = function(){
+  document.querySelectorAll('[id^="live-stats-"]').forEach(function(el){
+    var id = el.id.replace('live-stats-', ''); if (id) loadLiveStats(id);
+  });
+  document.querySelectorAll('[id^="bootstrap-card-"]').forEach(function(el){
+    var id = el.id.replace('bootstrap-card-', ''); if (id) watchBootstrap(id);
+  });
+};
 </script>
 {% endblock %}
