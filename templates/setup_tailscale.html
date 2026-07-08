@@ -28,7 +28,7 @@
   </div>
 </div>
 
-<script>
+<script nonce="{{ csp_nonce }}">
 function tsEsc(s){ return String(s==null?'':s).replace(/[&<>"']/g,function(c){return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c];}); }
 function tsApi(p, opts){ return fetch((window.MOUNT||'') + '/api/setup/tailscale/' + p, opts).then(function(r){ return r.json(); }); }
 var tsBox = document.getElementById('ts-box');
@@ -86,7 +86,7 @@ function tsDoUp(){
     tsOut().innerHTML='<div class="alert alert-info py-2 small mb-0">'
       + '<strong>1.</strong> Open this link and approve this machine in your Tailscale account:<br>'
       + '<a href="'+tsEsc(d.auth_url)+'" target="_blank" style="word-break:break-all;">'+tsEsc(d.auth_url)+'</a>'
-      + ' <button type="button" class="btn btn-sm btn-outline-secondary py-0" onclick="navigator.clipboard.writeText(\''+tsEsc(d.auth_url)+'\')"><i class="bi bi-clipboard"></i></button><br>'
+      + ' <button type="button" class="btn btn-sm btn-outline-secondary py-0"' + _da('copyText', [d.auth_url]) + '><i class="bi bi-clipboard"></i></button><br>'
       + '<strong>2.</strong> <span id="ts-wait"><i class="bi bi-hourglass-split"></i> Waiting for you to authorize…</span></div>';
     var t=setInterval(function(){ tsApi('status').then(function(s){ if(s.running){ clearInterval(t); tsRender(s); } }); }, 4000);
   }).catch(function(){ tsOut().innerHTML='<span class="text-danger">Request failed.</span>'; });

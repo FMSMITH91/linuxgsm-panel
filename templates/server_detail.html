@@ -28,12 +28,12 @@
     <div class="d-flex gap-2 flex-wrap">
       {% for action_key, action_label in actions %}
       <button class="btn btn-sm {% if action_key == 'restart' %}btn-warning{% elif action_key == 'stop' %}btn-danger{% elif action_key == 'start' %}btn-success{% else %}btn-outline-secondary{% endif %}"
-              onclick="serverAction('{{ action_key }}', this, {{ 'true' if action_key in ['stop','restart'] else 'false' }})">
+              data-action="serverAction" data-args='["{{ action_key }}", "@self", {{ 'true' if action_key in ['stop','restart'] else 'false' }}]'>
         <i class="bi bi-{% if action_key == 'restart' %}arrow-repeat{% elif action_key == 'start' %}play-fill{% elif action_key == 'stop' %}stop-fill{% elif action_key == 'update' %}cloud-download-fill{% else %}gear{% endif %}"></i>
         {{ action_label }}
       </button>
       {% endfor %}
-      <button class="btn btn-sm btn-outline-secondary" onclick="clearConsole()">
+      <button class="btn btn-sm btn-outline-secondary" data-action="clearConsole">
         <i class="bi bi-eraser"></i> Clear Console
       </button>
     </div>
@@ -44,7 +44,7 @@
       <span class="text-secondary small me-1"><i class="bi bi-tools"></i> Maintenance:</span>
       {% for m in maintenance %}
       <button class="btn btn-sm btn-outline-secondary" title="{{ m.desc }}"
-              onclick="serverAction('{{ m.cmd }}', this, {{ 'true' if m.cmd in ['validate','backup','force-update','mods-update','fastdl'] else 'false' }}, true)">
+              data-action="serverAction" data-args='["{{ m.cmd }}", "@self", {{ 'true' if m.cmd in ['validate','backup','force-update','mods-update','fastdl'] else 'false' }}, true]'>
         <i class="bi bi-{{ {'monitor':'activity','validate':'check2-circle','backup':'archive-fill','details':'info-circle','check-update':'cloud-arrow-down','force-update':'cloud-download-fill','update-lgsm':'arrow-up-circle','mods-update':'puzzle-fill','postdetails':'link-45deg','test-alert':'bell','fastdl':'hdd-network-fill'}.get(m.cmd, 'gear') }}"></i>
         {{ m.cmd }}
       </button>
@@ -59,7 +59,7 @@
      id="restart-pending-banner" data-action="{{ 'stop' if server.stop_pending else 'restart' }}">
   <span><i class="bi bi-exclamation-triangle-fill"></i>
     A <span id="rpb-verb">{{ 'stop' if server.stop_pending else 'restart' }}</span> is queued — it'll run automatically once the server is empty, or do it now.</span>
-  <button class="btn btn-sm btn-warning" onclick="bannerDoNow(this)">
+  <button class="btn btn-sm btn-warning" data-action="bannerDoNow" data-args='["@self"]'>
     <i class="bi bi-lightning-charge"></i> <span id="rpb-btn">{{ 'Stop' if server.stop_pending else 'Restart' }} now</span>
   </button>
 </div>
@@ -79,7 +79,7 @@
     <div class="d-flex flex-wrap align-items-center justify-content-between gap-2 mb-3">
       <div class="d-flex align-items-center gap-2">
         <span class="text-secondary small">Connect:</span>
-        <span class="connect-pill" onclick="copyConnect()" style="cursor:pointer;" title="Click to copy address">
+        <span class="connect-pill" data-action="copyConnect" style="cursor:pointer;" title="Click to copy address">
           <i class="bi bi-controller text-info"></i>
           <span id="connect-addr" class="text-info">resolving…</span>
           <i class="bi bi-clipboard text-secondary"></i>
@@ -114,7 +114,7 @@
       </div>
       {% if can_send_command %}
       <div class="card-footer">
-        <form class="d-flex gap-2" id="command-form" onsubmit="return sendCommand(event)">
+        <form class="d-flex gap-2" id="command-form" data-action="sendCommand" data-args='["@event"]' data-on="submit">
           <input type="text" name="command" class="form-control form-control-sm flex-grow-1"
                  placeholder="Enter game server command…" id="command-input"
                  aria-label="Game server command" autocomplete="off">
@@ -130,7 +130,7 @@
 <div class="card mb-3" data-mtab="console" id="players-card" style="display:none;">
   <div class="card-header d-flex justify-content-between align-items-center flex-wrap gap-2">
     <span><i class="bi bi-people-fill"></i> Players <span class="text-secondary small" id="pl-count"></span></span>
-    <button class="btn btn-sm btn-outline-secondary py-0 px-1" onclick="loadPlayers()" title="Refresh player list"><i class="bi bi-arrow-repeat"></i></button>
+    <button class="btn btn-sm btn-outline-secondary py-0 px-1" data-action="loadPlayers" title="Refresh player list"><i class="bi bi-arrow-repeat"></i></button>
   </div>
   <div class="card-body">
     <div id="pl-unsupported" class="text-secondary small" style="display:none;"><i class="bi bi-info-circle"></i> A live player list isn't available for this game.</div>
@@ -143,8 +143,8 @@
     </div>
     {% if can_say %}
     <div id="pl-announce" class="d-flex gap-2 mt-3" style="display:none;">
-      <input type="text" id="pl-say" class="form-control form-control-sm" placeholder="Announce a message to everyone in-game…" maxlength="200" aria-label="Announce message" onkeydown="if(event.key==='Enter'){event.preventDefault();announceSay();}">
-      <button class="btn btn-sm btn-outline-primary text-nowrap" onclick="announceSay()"><i class="bi bi-megaphone"></i> Say</button>
+      <input type="text" id="pl-say" class="form-control form-control-sm" placeholder="Announce a message to everyone in-game…" maxlength="200" aria-label="Announce message" data-action="_sayOnEnter" data-args='["@event"]' data-on="keydown">
+      <button class="btn btn-sm btn-outline-primary text-nowrap" data-action="announceSay"><i class="bi bi-megaphone"></i> Say</button>
     </div>
     {% endif %}
   </div>
@@ -217,7 +217,7 @@
               <div class="form-check form-switch d-inline-block m-0">
                 <input class="form-check-input" type="checkbox" role="switch" id="autostart-toggle"
                        aria-label="Auto-start on boot"
-                       {% if server.autostart %}checked{% endif %} onchange="toggleAutostart(this)">
+                       {% if server.autostart %}checked{% endif %} data-action="toggleAutostart" data-args='["@self"]' data-on="change">
               </div>
               {% else %}
               {{ "On" if server.autostart else "Off" }}
@@ -231,7 +231,7 @@
               <div class="form-check form-switch d-inline-block m-0">
                 <input class="form-check-input" type="checkbox" role="switch" id="dailyrestart-toggle"
                        aria-label="Daily restart when empty"
-                       {% if server.daily_restart %}checked{% endif %} onchange="toggleDailyRestart(this)">
+                       {% if server.daily_restart %}checked{% endif %} data-action="toggleDailyRestart" data-args='["@self"]' data-on="change">
               </div>
               {% else %}
               {{ "On" if server.daily_restart else "Off" }}
@@ -298,8 +298,8 @@
 {% endblock %}
 
 {% block scripts %}
-<script src="{{ url_for('static', filename='vendor/chartjs/chart.umd.min.js') }}"></script>
-<script>
+<script nonce="{{ csp_nonce }}" src="{{ url_for('static', filename='vendor/chartjs/chart.umd.min.js') }}"></script>
+<script nonce="{{ csp_nonce }}">
 // ── Section tabs (Console / Details): show only the selected group's cards. Actions and the
 // pending banner are untagged, so they stay visible on both. The chart + console live in the
 // default Console tab, so they initialise visible (no hidden-canvas sizing issues). ──
@@ -364,13 +364,13 @@ function renderPlayers(d){
     if(_CAN_MODERATE){
       var sid=p.steamid||'', num=(p.num!=null?String(p.num):'');
       var da='data-name="'+escapeHtml(p.name)+'" data-steamid="'+escapeHtml(sid)+'" data-num="'+escapeHtml(num)+'"';
-      if(_CAN_KICK && caps.kick) acts+='<button class="btn btn-sm btn-outline-warning py-0 px-1 me-1" '+da+' onclick="moderatePlayer(this,\'kick\')">Kick</button>';
+      if(_CAN_KICK && caps.kick) acts+='<button class="btn btn-sm btn-outline-warning py-0 px-1 me-1" '+da+'' + _da('moderatePlayer', ['@self', 'kick']) + '>Kick</button>';
       if(_CAN_BAN && caps.ban){
         // Valve bans go by SteamID; a bot / unresolved player has none, so its Ban is disabled.
         var noBan=(engine==='valve' && !sid);
         acts+='<button class="btn btn-sm btn-outline-danger py-0 px-1" '+da
           +(noBan?' disabled title="No SteamID for this player — can\'t ban by ID"':'')
-          +' onclick="moderatePlayer(this,\'ban\')">Ban</button>';
+          +'' + _da('moderatePlayer', ['@self', 'ban']) + '>Ban</button>';
       }
     }
     return '<tr><td class="text-truncate" style="max-width:260px;">'+escapeHtml(p.name)+'</td>'

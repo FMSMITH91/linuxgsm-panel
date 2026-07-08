@@ -18,8 +18,8 @@
       {% endfor %}
     </div>
     <div class="d-flex gap-2 flex-wrap align-items-center">
-      <button class="btn btn-outline-secondary btn-sm" onclick="copyCodes()"><i class="bi bi-clipboard"></i> Copy</button>
-      <button class="btn btn-outline-secondary btn-sm" onclick="downloadCodes()"><i class="bi bi-download"></i> Download .txt</button>
+      <button class="btn btn-outline-secondary btn-sm" data-action="copyCodes"><i class="bi bi-clipboard"></i> Copy</button>
+      <button class="btn btn-outline-secondary btn-sm" data-action="downloadCodes"><i class="bi bi-download"></i> Download .txt</button>
       <span id="copy-msg" class="small text-success"></span>
       <a href="{{ url_for('account') }}" class="btn btn-primary btn-sm ms-auto">I've saved them — continue</a>
     </div>
@@ -28,7 +28,7 @@
 
 {% endblock %}
 {% block scripts %}
-<script>
+<script nonce="{{ csp_nonce }}">
 var CODES = {{ codes|tojson }};
 function copyCodes(){
   navigator.clipboard.writeText(CODES.join('\n')).then(function(){

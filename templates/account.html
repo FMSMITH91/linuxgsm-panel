@@ -87,7 +87,7 @@
       your account (including this one) — you'll log back in fresh.</p>
     <form method="POST" action="{{ url_for('account_revoke_sessions') }}" id="revoke-sessions-form">
       <button class="btn btn-outline-danger btn-sm" type="button"
-              onclick="confirmDialog({title:'Sign out everywhere', icon:'box-arrow-right', confirmClass:'btn-danger', confirmLabel:'Sign out everywhere', bodyText:'Sign out of ALL sessions, including this one? You will be logged back in fresh.', onConfirm:function(){document.getElementById('revoke-sessions-form').submit();}});">
+              data-action="_acctSignOutAll">
         <i class="bi bi-box-arrow-right"></i> Sign out everywhere
       </button>
     </form>

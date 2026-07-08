@@ -40,7 +40,7 @@
       </div>
       <div class="col-md-3">
         <label class="form-label" for="game-type-select">Game</label>
-        <select name="game_type" class="form-select" required id="game-type-select" onchange="updatePort()">
+        <select name="game_type" class="form-select" required id="game-type-select" data-action="updatePort" data-on="change">
           <option value="">Choose game… ({{ games|length }} supported)</option>
           {% for g in games %}
           <option value="{{ g.shortname }}">{{ g.name }}</option>
@@ -146,7 +146,7 @@
               <div class="progress" style="height:14px;">
                 <div class="progress-bar progress-bar-striped progress-bar-animated" id="inst-bar-{{ gs.id }}" style="width:0%"></div>
               </div>
-              <a href="#" class="small text-secondary" style="font-size:.7rem;display:none;" id="inst-dismiss-{{ gs.id }}" onclick="dismissInstall({{ gs.id }});return false;">dismiss</a>
+              <a href="#" class="small text-secondary" style="font-size:.7rem;display:none;" id="inst-dismiss-{{ gs.id }}" data-action="dismissInstall" data-args='[{{ gs.id }}]' data-prevent>dismiss</a>
             </td>
           </tr>
           {% endfor %}
@@ -165,7 +165,7 @@
 {% endblock %}
 
 {% block scripts %}
-<script>
+<script nonce="{{ csp_nonce }}">
 // Click a connect address to copy the full ip:port.
 document.addEventListener('click', function(ev){
   var el = ev.target.closest('.copy-addr'); if(!el) return;

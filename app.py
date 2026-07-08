@@ -51,8 +51,9 @@ eventlet.monkey_patch()
 
 del _w
 
+import secrets
 from flask import (
-    Flask, Response, abort, flash, jsonify, redirect, render_template, request,
+    Flask, Response, abort, flash, g, jsonify, redirect, render_template, request,
     send_file, session, url_for,
 )
 from markupsafe import Markup
@@ -523,22 +524,34 @@ def create_app():
     app.config.setdefault("WTF_CSRF_TIME_LIMIT", None)  # token valid for the session
     CSRFProtect(app)
 
+    # A fresh CSP nonce per request. Every one of our own <script> blocks carries it
+    # (nonce="{{ csp_nonce }}"), so the Content-Security-Policy can drop 'unsafe-inline' from
+    # script-src — an injected <script> without the (unguessable, per-request) nonce won't run.
+    # Registered before check_setup so it's set even on the redirect-to-setup response.
+    @app.before_request
+    def _make_csp_nonce():
+        g.csp_nonce = secrets.token_urlsafe(16)
+
     # ── Security response headers ──
-    # unsafe-inline is required because the UI uses inline <script>/<style> and onclick
-    # handlers throughout; combined with Jinja auto-escaping it's still defense-in-depth
-    # (blocks loading scripts from arbitrary external origins). CDN = jsdelivr only.
-    # CDNs actually loaded by the UI: jsdelivr (Bootstrap, icons, Chart.js) and
-    # cdnjs (the Socket.IO client for the live console).
-    # All assets are self-hosted, so the CSP can stay same-origin (no external CDNs).
-    _CSP = (
-        "default-src 'self'; "
-        "script-src 'self' 'unsafe-inline'; "
-        "style-src 'self' 'unsafe-inline'; "
-        "img-src 'self' data:; "
-        "font-src 'self' data:; "
-        "connect-src 'self'; "
-        "frame-ancestors 'self'; base-uri 'self'; object-src 'none'"
-    )
+    # STRICT script-src: 'self' + a per-request nonce, NO 'unsafe-inline'. Every one of our own
+    # <script> blocks carries nonce="{{ csp_nonce }}"; all event handlers are attached via the
+    # delegated dispatcher in base.html (data-action), never inline on* attributes. So an injected
+    # <script>/handler without the nonce simply won't execute.
+    # style-src keeps 'unsafe-inline': the UI uses inline style="…" attributes throughout, and CSP
+    # can't nonce inline STYLE attributes (only <style> blocks). Style injection is far lower risk
+    # than script injection, so this is the standard, deliberate split.
+    # All assets are self-hosted, so no external origins are allowed.
+    def _csp():
+        nonce = getattr(g, "csp_nonce", "")
+        return (
+            "default-src 'self'; "
+            "script-src 'self' 'nonce-%s'; " % nonce +
+            "style-src 'self' 'unsafe-inline'; "
+            "img-src 'self' data:; "
+            "font-src 'self' data:; "
+            "connect-src 'self'; "
+            "frame-ancestors 'self'; base-uri 'self'; object-src 'none'"
+        )
 
     @app.after_request
     def _security_headers(resp):
@@ -550,7 +563,7 @@ def create_app():
         resp.headers.setdefault("Permissions-Policy",
                                 "camera=(), microphone=(), geolocation=(), usb=(), "
                                 "payment=(), interest-cohort=()")
-        resp.headers.setdefault("Content-Security-Policy", _CSP)
+        resp.headers.setdefault("Content-Security-Policy", _csp())
         # Keep the admin panel out of search engines. This header covers EVERY
         # response (crawlers can't miss it), and /robots.txt asks nicely too — a
         # private management UI has no business being indexed.
@@ -774,6 +787,7 @@ def register_context_processors(app):
             "mount_prefix": app.config.get("_MOUNT_PREFIX", "/"),
             "panel_version": PANEL_VERSION,
             "panel_commit": PANEL_COMMIT,
+            "csp_nonce": getattr(g, "csp_nonce", ""),
             "nav_remotes": nav_remotes,
             # i18n: `t()` translates a string for the active language (falls back to English);
             # the catalog is also handed to the browser so client JS can translate too.

@@ -52,7 +52,7 @@
 <ul class="nav nav-pills mb-3 flex-nowrap overflow-auto">
   <li class="nav-item"><a class="nav-link" href="{{ url_for('server_detail', server_id=server.id) }}"><i class="bi bi-terminal-fill"></i> Console</a></li>
   <li class="nav-item"><a class="nav-link" href="{{ url_for('server_detail', server_id=server.id) }}#details"><i class="bi bi-info-circle"></i> Details</a></li>
-  <li class="nav-item"><a class="nav-link active" href="#" onclick="return false;"><i class="bi bi-folder2-open"></i> Files &amp; Config</a></li>
+  <li class="nav-item"><a class="nav-link active" href="#" data-action="_noop" data-prevent><i class="bi bi-folder2-open"></i> Files &amp; Config</a></li>
 </ul>
 
 <!-- Config editor (tabbed) -->
@@ -69,7 +69,7 @@
     <div id="tab-lgsm" class="cfg-tab">
       <p class="small text-secondary mb-2">Every LinuxGSM setting for this game. Changes save to <code>{{ server.lgsm_name }}.cfg</code> (the instance override file). <strong>Restart the server</strong> to apply.</p>
       <div id="cfg-loading" class="text-secondary small"><i class="bi bi-arrow-repeat"></i> Loading config…</div>
-      <form id="cfg-form" style="display:none;" onsubmit="return saveConfig(event)">
+      <form id="cfg-form" style="display:none;" data-action="saveConfig" data-args='["@event"]' data-on="submit">
         <div id="cfg-groups"></div>
         <button type="submit" class="btn btn-primary btn-sm mt-2"><i class="bi bi-save"></i> Save settings</button>
         <span id="cfg-save-msg" class="small ms-2"></span>
@@ -81,7 +81,7 @@
       <div id="game-wrap" style="display:none;">
         <p class="small text-secondary mb-1">Game's own config file: <code id="game-path"></code> — where in-game settings (e.g. <code>sv_maxclients</code>) actually live for this game.</p>
         <textarea id="game-cfg" class="form-control font-monospace" rows="14" style="font-size:.8rem;" spellcheck="false"></textarea>
-        <button class="btn btn-primary btn-sm mt-2" onclick="saveGameCfg()"><i class="bi bi-save"></i> Save game config</button>
+        <button class="btn btn-primary btn-sm mt-2" data-action="saveGameCfg"><i class="bi bi-save"></i> Save game config</button>
         <span id="game-msg" class="small ms-2"></span>
       </div>
       <div id="game-none" class="text-secondary small" style="display:none;"></div>
@@ -90,7 +90,7 @@
     <div id="tab-raw" class="cfg-tab" style="display:none;">
       <p class="small text-secondary mb-1">Raw instance config <code>{{ server.lgsm_name }}.cfg</code>.</p>
       <textarea id="cfg-raw" class="form-control font-monospace" rows="14" style="font-size:.8rem;" spellcheck="false"></textarea>
-      <button class="btn btn-primary btn-sm mt-2" onclick="saveRaw()"><i class="bi bi-save"></i> Save raw config</button>
+      <button class="btn btn-primary btn-sm mt-2" data-action="saveRaw"><i class="bi bi-save"></i> Save raw config</button>
       <span id="cfg-raw-msg" class="small ms-2"></span>
     </div>
   </div>
@@ -102,10 +102,10 @@
     <span><i class="bi bi-hdd"></i> File Browser</span>
     <div class="d-flex align-items-center gap-3 fb-toolbar">
       <span id="breadcrumb" class="small text-secondary"></span>
-      <button class="btn btn-sm btn-outline-secondary" onclick="document.getElementById('upload-input').click()">
+      <button class="btn btn-sm btn-outline-secondary" data-action="_clickUpload">
         <i class="bi bi-upload"></i> Upload
       </button>
-      <input type="file" id="upload-input" multiple style="display:none;" onchange="doUpload(event)">
+      <input type="file" id="upload-input" multiple style="display:none;" data-action="doUpload" data-args='["@event"]' data-on="change">
     </div>
   </div>
   <div class="card-body">
@@ -124,8 +124,8 @@
             <code class="small text-info" id="editor-path"></code>
             <div class="d-flex align-items-center gap-2">
               <span id="file-save-msg" class="small"></span>
-              <button class="btn btn-primary btn-sm" onclick="saveFile()"><i class="bi bi-save"></i> Save</button>
-              <button class="btn btn-outline-secondary btn-sm" onclick="closeEditor()" title="Close"><i class="bi bi-x-lg"></i></button>
+              <button class="btn btn-primary btn-sm" data-action="saveFile"><i class="bi bi-save"></i> Save</button>
+              <button class="btn btn-outline-secondary btn-sm" data-action="closeEditor" title="Close"><i class="bi bi-x-lg"></i></button>
             </div>
           </div>
           <textarea id="editor" class="form-control font-monospace" rows="20" style="font-size:.78rem;" spellcheck="false"></textarea>
@@ -152,7 +152,7 @@
       <div class="row g-3 align-items-end mb-2">
         <div class="col-6 col-md-4">
           <label class="form-label mb-1" style="font-size:.7rem;" for="bk-interval">Automatic backup</label>
-          <select id="bk-interval" class="form-select form-select-sm" onchange="saveBkSchedule()">
+          <select id="bk-interval" class="form-select form-select-sm" data-action="saveBkSchedule" data-on="change">
             <option value="default">Use panel default</option>
             <option value="0">Off</option>
             <option value="1">Every day</option>
@@ -164,7 +164,7 @@
         </div>
         <div class="col-6 col-md-3">
           <label class="form-label mb-1" style="font-size:.7rem;" for="bk-keep">Keep newest</label>
-          <select id="bk-keep" class="form-select form-select-sm" onchange="saveBkSchedule()">
+          <select id="bk-keep" class="form-select form-select-sm" data-action="saveBkSchedule" data-on="change">
             <option value="default">Use panel default</option>
             <option value="1">1</option><option value="2">2</option><option value="3">3</option>
             <option value="4">4</option><option value="5">5</option><option value="6">6</option>
@@ -176,7 +176,7 @@
         </div>
       </div>
       <div class="d-flex align-items-center gap-2 mb-2 flex-wrap">
-        <button class="btn btn-primary btn-sm" id="bk-now" onclick="backupNow(false)"><i class="bi bi-archive-fill"></i> Back up now</button>
+        <button class="btn btn-primary btn-sm" id="bk-now" data-action="backupNow" data-args='[false]'><i class="bi bi-archive-fill"></i> Back up now</button>
         <span id="bk-status" class="small"></span>
       </div>
       <div class="table-responsive">
@@ -198,7 +198,7 @@
   </div>
   <div class="card-body">
     <!-- Add / edit form -->
-    <form id="cron-form" class="row g-2 align-items-end mb-2" onsubmit="return saveCron(event)">
+    <form id="cron-form" class="row g-2 align-items-end mb-2" data-action="saveCron" data-args='["@event"]' data-on="submit">
       <div class="col-12 col-md-3">
         <label class="form-label mb-1" style="font-size:.7rem;">Schedule</label>
         <input type="text" id="cron-sched" class="form-control form-control-sm font-monospace" placeholder="*/5 * * * *" spellcheck="false" required>
@@ -209,7 +209,7 @@
       </div>
       <div class="col-12 col-md-3 d-flex gap-2">
         <button type="submit" class="btn btn-primary btn-sm flex-grow-1" id="cron-submit"><i class="bi bi-plus-lg"></i> Add task</button>
-        <button type="button" class="btn btn-outline-secondary btn-sm" id="cron-cancel" style="display:none;" onclick="cancelCronEdit()">Cancel</button>
+        <button type="button" class="btn btn-outline-secondary btn-sm" id="cron-cancel" style="display:none;" data-action="cancelCronEdit">Cancel</button>
       </div>
     </form>
     <!-- Quick-pick presets -->
@@ -248,7 +248,7 @@
 <div class="card mt-3" id="alerts-card">
   <div class="card-header d-flex justify-content-between align-items-center flex-wrap gap-2">
     <span><i class="bi bi-bell"></i> Alerts &amp; Notifications</span>
-    <button class="btn btn-sm btn-outline-secondary" onclick="testAlert(this)"><i class="bi bi-send"></i> Send test alert</button>
+    <button class="btn btn-sm btn-outline-secondary" data-action="testAlert" data-args='["@self"]'><i class="bi bi-send"></i> Send test alert</button>
   </div>
   <div class="card-body">
     <p class="small text-secondary mb-2">
@@ -258,7 +258,7 @@
     <div id="alerts-loading" class="text-secondary small"><i class="bi bi-arrow-repeat"></i> Loading alert settings…</div>
     <div id="alerts-body" style="display:none;"></div>
     <div class="mt-2">
-      <button class="btn btn-primary btn-sm" onclick="saveAlerts(this)"><i class="bi bi-save"></i> Save alerts</button>
+      <button class="btn btn-primary btn-sm" data-action="saveAlerts" data-args='["@self"]'><i class="bi bi-save"></i> Save alerts</button>
       <span id="alerts-msg" class="small ms-2"></span>
     </div>
   </div>
@@ -268,7 +268,7 @@
 <div class="card mt-3" id="mods-card">
   <div class="card-header d-flex justify-content-between align-items-center flex-wrap gap-2">
     <span><i class="bi bi-puzzle"></i> Mods &amp; Addons</span>
-    <button class="btn btn-sm btn-outline-secondary" onclick="loadMods(true)"><i class="bi bi-arrow-repeat"></i> Refresh</button>
+    <button class="btn btn-sm btn-outline-secondary" data-action="loadMods" data-args='[true]'><i class="bi bi-arrow-repeat"></i> Refresh</button>
   </div>
   <div class="card-body">
     <p class="small text-secondary mb-2">
@@ -295,7 +295,7 @@
 
 {% endblock %}
 {% block scripts %}
-<script>
+<script nonce="{{ csp_nonce }}">
 var serverId = {{ server.id }};
 var curDir = "";        // current browse dir (relative to home)
 var curFile = null;     // path of the file open in the editor
@@ -837,9 +837,9 @@ function modRow(m, which, installedSet){
   if(which==='install'){
     btn = installedSet[m.id]
       ? '<span class="badge bg-secondary">Installed</span>'
-      : '<button class="btn btn-sm btn-outline-primary" onclick="modAction(\'install\',\''+m.id+'\',this)"><i class="bi bi-download"></i> Install</button>';
+      : '<button class="btn btn-sm btn-outline-primary"' + _da('modAction', ['install', m.id, '@self']) + '><i class="bi bi-download"></i> Install</button>';
   } else {
-    btn = '<button class="btn btn-sm btn-outline-danger" onclick="modAction(\'remove\',\''+m.id+'\',this)"><i class="bi bi-trash"></i> Remove</button>';
+    btn = '<button class="btn btn-sm btn-outline-danger"' + _da('modAction', ['remove', m.id, '@self']) + '><i class="bi bi-trash"></i> Remove</button>';
   }
   return '<div class="d-flex justify-content-between align-items-center border rounded px-2 py-1 gap-2">'
     + '<span class="small"'+(m.desc?' title="'+escA(m.desc)+'"':'')+'>'+modLabel(m)+'</span>'+btn+'</div>';
@@ -877,7 +877,7 @@ function modAction(which, id, btn){
         if(d.success && d.restart_pending){
           var m=document.getElementById('mods-msg');
           if(m){ m.insertAdjacentHTML('beforeend',
-            ' <button class="btn btn-sm btn-warning py-0 px-1 ms-1" onclick="modRestartNow(this)"><i class="bi bi-arrow-clockwise"></i> Restart now</button>'); }
+            ' <button class="btn btn-sm btn-warning py-0 px-1 ms-1"' + _da('modRestartNow', ['@self']) + '><i class="bi bi-arrow-clockwise"></i> Restart now</button>'); }
         }
         loadMods(false);
       })
@@ -943,7 +943,7 @@ function renderBackups(d){
   var st=document.getElementById('bk-status'), s=d.status;
   if(st){
     if(s && s.running){ st.className='small text-info'; st.innerHTML='<i class="bi bi-arrow-repeat"></i> Backing up…'; }
-    else if(s && s.busy){ st.className='small text-warning'; st.innerHTML='<i class="bi bi-people-fill"></i> '+esc(s.msg||'players online — waiting')+' <button class="btn btn-sm btn-outline-warning py-0 px-1 ms-1" onclick="backupNow(true)">Back up anyway</button>'; }
+    else if(s && s.busy){ st.className='small text-warning'; st.innerHTML='<i class="bi bi-people-fill"></i> '+esc(s.msg||'players online — waiting')+' <button class="btn btn-sm btn-outline-warning py-0 px-1 ms-1"' + _da('backupNow', [true]) + '>Back up anyway</button>'; }
     else if(s && s.ok===true){ st.className='small text-success'; st.innerHTML='<i class="bi bi-check-circle"></i> '+esc(s.msg||'Backed up'); }
     else if(s && s.ok===false){ st.className='small text-danger'; st.innerHTML='<i class="bi bi-x-circle"></i> '+esc(s.msg||'Backup failed'); }
     else st.textContent='';
@@ -958,7 +958,7 @@ function renderBackups(d){
       + '<td class="text-nowrap" style="font-size:.72rem;">'+esc(bkWhen(b.created))+'</td>'
       + '<td class="text-nowrap">'
       +   (ip?'':('<a class="btn btn-sm btn-outline-secondary py-0 px-1" href="'+MOUNT+'/backup/game/'+serverId+'/download?name='+encodeURIComponent(b.name)+'" title="Download"><i class="bi bi-download"></i></a> '
-      +          '<button class="btn btn-sm btn-outline-danger py-0 px-1" title="Delete" data-name="'+esc(b.name)+'" onclick="deleteBk(this)"><i class="bi bi-trash"></i></button>'))
+      +          '<button class="btn btn-sm btn-outline-danger py-0 px-1" title="Delete" data-name="'+esc(b.name)+'"' + _da('deleteBk', ['@self']) + '><i class="bi bi-trash"></i></button>'))
       + '</td></tr>';
   });
   var tb=document.getElementById('bk-rows');

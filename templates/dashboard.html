@@ -8,13 +8,13 @@
 <div class="bulk-bar card shadow-lg" style="display:none; position:sticky; {{ 'top' if pos == 'top' else 'bottom' }}:1rem; z-index:1020; border:1px solid var(--bs-border-color);">
   <div class="card-body py-2 d-flex align-items-center gap-2 flex-wrap">
     <span class="fw-bold me-1"><i class="bi bi-check2-square"></i> <span class="bulk-count">0</span> selected</span>
-    <button class="btn btn-outline-success btn-sm" onclick="bulkAction('start')"><i class="bi bi-play-fill"></i> Start</button>
-    <button class="btn btn-outline-warning btn-sm" onclick="bulkAction('restart')"><i class="bi bi-arrow-repeat"></i> Restart</button>
-    <button class="btn btn-outline-danger btn-sm" onclick="bulkAction('stop')"><i class="bi bi-stop-fill"></i> Stop</button>
+    <button class="btn btn-outline-success btn-sm" data-action="bulkAction" data-args='["start"]'><i class="bi bi-play-fill"></i> Start</button>
+    <button class="btn btn-outline-warning btn-sm" data-action="bulkAction" data-args='["restart"]'><i class="bi bi-arrow-repeat"></i> Restart</button>
+    <button class="btn btn-outline-danger btn-sm" data-action="bulkAction" data-args='["stop"]'><i class="bi bi-stop-fill"></i> Stop</button>
     {% if current_user.is_superadmin or has_permission('update_server') %}
-    <button class="btn btn-outline-info btn-sm bulk-update-btn" onclick="bulkAction('update')"><i class="bi bi-download"></i> Update</button>
+    <button class="btn btn-outline-info btn-sm bulk-update-btn" data-action="bulkAction" data-args='["update"]'><i class="bi bi-download"></i> Update</button>
     {% endif %}
-    <button class="btn btn-link btn-sm text-secondary text-decoration-none ms-auto" onclick="clearSelection()">Clear</button>
+    <button class="btn btn-link btn-sm text-secondary text-decoration-none ms-auto" data-action="clearSelection">Clear</button>
   </div>
 </div>
 {% endmacro %}
@@ -26,7 +26,7 @@
     <div class="input-group input-group-sm" style="width:220px;">
       <span class="input-group-text"><i class="bi bi-search"></i></span>
       <input type="text" id="srv-search" class="form-control" placeholder="Filter servers…"
-             autocomplete="off" oninput="filterServers()">
+             autocomplete="off" data-action="filterServers" data-on="input">
     </div>
     {% endif %}
     <span class="text-secondary small" id="refresh-indicator">
@@ -108,7 +108,7 @@
       <table class="table table-hover mb-0">
         <thead>
           <tr>
-            {% if can_control %}<th style="width:1%;"><input type="checkbox" class="form-check-input srv-check-all" onclick="toggleAll(this)" title="Select all on this host" aria-label="Select all servers on this host"></th>{% endif %}
+            {% if can_control %}<th style="width:1%;"><input type="checkbox" class="form-check-input srv-check-all" data-action="toggleAll" data-args='["@self"]' title="Select all on this host" aria-label="Select all servers on this host"></th>{% endif %}
             <th>Server</th>
             <th class="d-none d-md-table-cell">Type</th>
             <th>Status</th>
@@ -136,9 +136,9 @@
             </td>
             <td class="text-end text-nowrap">
               {% if can_control %}
-              <button class="btn btn-outline-success btn-sm" title="Start" aria-label="Start {{ srv.name }}" onclick="doAction({{ srv.id }}, 'start', this)"><i class="bi bi-play-fill"></i></button>
-              <button class="btn btn-outline-warning btn-sm" title="Restart" aria-label="Restart {{ srv.name }}" onclick="doAction({{ srv.id }}, 'restart', this)"><i class="bi bi-arrow-repeat"></i></button>
-              <button class="btn btn-outline-danger btn-sm" title="Stop" aria-label="Stop {{ srv.name }}" onclick="doAction({{ srv.id }}, 'stop', this)"><i class="bi bi-stop-fill"></i></button>
+              <button class="btn btn-outline-success btn-sm" title="Start" aria-label="Start {{ srv.name }}" data-action="doAction" data-args='[{{ srv.id }}, "start", "@self"]'><i class="bi bi-play-fill"></i></button>
+              <button class="btn btn-outline-warning btn-sm" title="Restart" aria-label="Restart {{ srv.name }}" data-action="doAction" data-args='[{{ srv.id }}, "restart", "@self"]'><i class="bi bi-arrow-repeat"></i></button>
+              <button class="btn btn-outline-danger btn-sm" title="Stop" aria-label="Stop {{ srv.name }}" data-action="doAction" data-args='[{{ srv.id }}, "stop", "@self"]'><i class="bi bi-stop-fill"></i></button>
               {% endif %}
               <a href="{{ url_for('server_detail', server_id=srv.id) }}" class="btn btn-outline-secondary btn-sm" title="Console &amp; stats" aria-label="Console &amp; stats for {{ srv.name }}">
                 <i class="bi bi-terminal-fill"></i>
@@ -162,7 +162,7 @@
 {% endblock %}
 
 {% block scripts %}
-<script>
+<script nonce="{{ csp_nonce }}">
 function titleCase(s){ return s ? s.charAt(0).toUpperCase()+s.slice(1) : ''; }
 
 // Client-side filter of the server list (name / short name / type / connect address).

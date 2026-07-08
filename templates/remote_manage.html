@@ -116,8 +116,8 @@
       <div class="card-body">
         <p class="small text-secondary">Check for and install system package updates on this server.</p>
         <div class="d-flex gap-2 flex-wrap">
-          <button class="btn btn-sm btn-outline-secondary" onclick="checkUpdates()"><i class="bi bi-search"></i> Check</button>
-          <button class="btn btn-sm btn-outline-primary" onclick="runUpdates()"><i class="bi bi-download"></i> Install updates</button>
+          <button class="btn btn-sm btn-outline-secondary" data-action="checkUpdates"><i class="bi bi-search"></i> Check</button>
+          <button class="btn btn-sm btn-outline-primary" data-action="runUpdates"><i class="bi bi-download"></i> Install updates</button>
         </div>
         <div class="small mt-2 text-secondary" id="update-info"></div>
       </div>
@@ -143,7 +143,7 @@
       <div class="card-header"><i class="bi bi-power"></i> Power</div>
       <div class="card-body">
         <p class="small text-secondary">{% if remote.is_local %}Reboot the panel host. This briefly takes down the panel <strong>and</strong> every game server on it.{% else %}Reboot this server. Game servers with autostart will come back on their own.{% endif %}</p>
-        <button class="btn btn-sm btn-outline-warning" onclick="rebootRemote()"><i class="bi bi-power"></i> Reboot server</button>
+        <button class="btn btn-sm btn-outline-warning" data-action="rebootRemote"><i class="bi bi-power"></i> Reboot server</button>
       </div>
     </div>
   </div>
@@ -154,7 +154,7 @@
 <div class="card mb-3" data-mtab="controls">
   <div class="card-header d-flex justify-content-between align-items-center flex-wrap gap-2">
     <span><i class="bi bi-search"></i> Existing servers on this host</span>
-    <button class="btn btn-sm btn-outline-primary" id="disc-scan-btn" onclick="scanExisting()"><i class="bi bi-search"></i> Scan</button>
+    <button class="btn btn-sm btn-outline-primary" id="disc-scan-btn" data-action="scanExisting"><i class="bi bi-search"></i> Scan</button>
   </div>
   <div class="card-body">
     <p class="small text-secondary mb-2">Finds LinuxGSM game servers already installed under any user account on this host — with their backups, installed mods and scheduled tasks — and adds the ones not yet in the panel. It's read-only until you import; once imported, the panel shows each server's cron, backups and mods live.</p>
@@ -180,8 +180,8 @@
           <ul id="pu-changes-list" class="mb-0" style="font-size:.8rem;"></ul>
         </div>
         <div class="mt-2 d-flex gap-2 align-items-center">
-          <button class="btn btn-sm btn-outline-secondary" onclick="checkPanelUpdate(true)"><i class="bi bi-arrow-repeat"></i> Check now</button>
-          <button class="btn btn-sm btn-success" id="pu-update-btn" onclick="doPanelUpdate()" style="display:none;"><i class="bi bi-download"></i> Update now</button>
+          <button class="btn btn-sm btn-outline-secondary" data-action="checkPanelUpdate" data-args='[true]'><i class="bi bi-arrow-repeat"></i> Check now</button>
+          <button class="btn btn-sm btn-success" id="pu-update-btn" data-action="doPanelUpdate" style="display:none;"><i class="bi bi-download"></i> Update now</button>
           <span id="pu-msg" class="small"></span>
         </div>
       </div>
@@ -192,7 +192,7 @@
         </div>
         <div class="d-flex gap-2 align-items-center flex-wrap">
           <select id="pu-branch-select" class="form-select form-select-sm" style="width:auto; max-width:280px;" aria-label="Panel branch"></select>
-          <button class="btn btn-sm btn-outline-warning" id="pu-branch-switch" onclick="switchPanelBranch()"><i class="bi bi-shuffle"></i> Switch</button>
+          <button class="btn btn-sm btn-outline-warning" id="pu-branch-switch" data-action="switchPanelBranch"><i class="bi bi-shuffle"></i> Switch</button>
           <span id="pu-branch-msg" class="small"></span>
         </div>
         <div class="form-text mt-1">Switching checks out that branch's code and restarts, with the same backup + auto-rollback as an update. Non-<code>main</code> branches skip CI verification — intended for testing.</div>
@@ -209,7 +209,7 @@
 <div class="card mb-3" id="backups" data-mtab="maintenance">
   <div class="card-header d-flex justify-content-between align-items-center">
     <span><i class="bi bi-archive"></i> Backups</span>
-    <button class="btn btn-sm btn-success" onclick="createBackup(this)"><i class="bi bi-plus-circle"></i> Back up now</button>
+    <button class="btn btn-sm btn-success" data-action="createBackup" data-args='["@self"]'><i class="bi bi-plus-circle"></i> Back up now</button>
   </div>
   <div class="card-body">
     <p class="small text-secondary mb-2">
@@ -219,12 +219,12 @@
     </p>
     <div class="d-flex gap-3 flex-wrap align-items-center mb-2">
       <div class="form-check form-switch mb-0">
-        <input class="form-check-input" type="checkbox" id="bk-enabled" onchange="saveBackupSettings()">
+        <input class="form-check-input" type="checkbox" id="bk-enabled" data-action="saveBackupSettings" data-on="change">
         <label class="form-check-label small" for="bk-enabled">Automatic daily backups</label>
       </div>
       <div class="d-flex align-items-center gap-1">
         <label class="form-label small mb-0" for="bk-keep">Keep daily backups for</label>
-        <select id="bk-keep" class="form-select form-select-sm" style="width:auto;" onchange="saveBackupSettings()">
+        <select id="bk-keep" class="form-select form-select-sm" style="width:auto;" data-action="saveBackupSettings" data-on="change">
           <option value="7">7 days</option>
           <option value="14">14 days</option>
           <option value="30">30 days</option>
@@ -246,7 +246,7 @@
     <hr class="my-3">
     <div class="d-flex justify-content-between align-items-center flex-wrap gap-2 mb-1">
       <strong class="small"><i class="bi bi-hdd-stack"></i> Game server files (full backup)</strong>
-      <button class="btn btn-sm btn-outline-success" id="fb-now" onclick="runFullBackup(this)"><i class="bi bi-play-circle"></i> Back up game servers now</button>
+      <button class="btn btn-sm btn-outline-success" id="fb-now" data-action="runFullBackup" data-args='["@self"]'><i class="bi bi-play-circle"></i> Back up game servers now</button>
     </div>
     <p class="small text-secondary mb-2">
       Uses LinuxGSM's own backup per installed server (stored on each host under
@@ -257,12 +257,12 @@
     </p>
     <div class="d-flex gap-3 flex-wrap align-items-center mb-2">
       <div class="form-check form-switch mb-0">
-        <input class="form-check-input" type="checkbox" id="fb-auto-enabled" onchange="onFbAutoToggle()">
+        <input class="form-check-input" type="checkbox" id="fb-auto-enabled" data-action="onFbAutoToggle" data-on="change">
         <label class="form-check-label small" for="fb-auto-enabled">Automatic backups</label>
       </div>
       <div class="d-flex align-items-center gap-1">
         <label class="form-label small mb-0" for="fb-interval">Every</label>
-        <select id="fb-interval" class="form-select form-select-sm" style="width:auto;" onchange="saveBackupSettings()">
+        <select id="fb-interval" class="form-select form-select-sm" style="width:auto;" data-action="saveBackupSettings" data-on="change">
           <option value="1">Day</option>
           <option value="7">Week</option>
           <option value="14">2 weeks</option>
@@ -271,7 +271,7 @@
       </div>
       <div class="d-flex align-items-center gap-1">
         <label class="form-label small mb-0" for="fb-keep">Keep per server</label>
-        <select id="fb-keep" class="form-select form-select-sm" style="width:auto;" onchange="saveBackupSettings()">
+        <select id="fb-keep" class="form-select form-select-sm" style="width:auto;" data-action="saveBackupSettings" data-on="change">
           <option value="1">1</option>
           <option value="2">2</option>
           <option value="3">3</option>
@@ -302,7 +302,7 @@
       edited or deleted, you can restore it to the installed version with one click.
     </p>
     <div class="d-flex gap-2 align-items-center mb-2">
-      <button class="btn btn-sm btn-outline-secondary" id="diag-run-btn" onclick="runDiagnostics()">
+      <button class="btn btn-sm btn-outline-secondary" id="diag-run-btn" data-action="runDiagnostics">
         <i class="bi bi-play-circle"></i> Run diagnostics
       </button>
       <span id="diag-msg" class="small"></span>
@@ -321,7 +321,7 @@
           <span id="diag-bad-count"></span> panel file(s) differ from the installed version:
         </div>
         <ul id="diag-bad-list" class="mb-2" style="font-size:.78rem;font-family:ui-monospace,monospace;"></ul>
-        <button class="btn btn-sm btn-warning" id="diag-repair-btn" onclick="repairPanel()">
+        <button class="btn btn-sm btn-warning" id="diag-repair-btn" data-action="repairPanel">
           <i class="bi bi-arrow-counterclockwise"></i> Restore all from installed version
         </button>
         <div class="small text-secondary mt-1">
@@ -337,10 +337,10 @@
       <div class="small text-secondary mb-1"><i class="bi bi-database"></i> Database maintenance</div>
       <div id="diag-db-stats" class="small text-secondary">—</div>
       <div class="mt-2 d-flex gap-2 align-items-center flex-wrap">
-        <button class="btn btn-sm btn-outline-secondary" id="diag-dbhealth-btn" onclick="checkDbHealth()">
+        <button class="btn btn-sm btn-outline-secondary" id="diag-dbhealth-btn" data-action="checkDbHealth">
           <i class="bi bi-heart-pulse"></i> Check health
         </button>
-        <button class="btn btn-sm btn-outline-secondary" id="diag-optimize-btn" onclick="optimizeDb()">
+        <button class="btn btn-sm btn-outline-secondary" id="diag-optimize-btn" data-action="optimizeDb">
           <i class="bi bi-stars"></i> Optimize database
         </button>
         <span id="diag-db-msg" class="small"></span>
@@ -359,7 +359,7 @@
       <div id="diag-autoupd-status" class="small text-secondary">—</div>
       <div class="mt-2 d-flex gap-2 align-items-center">
         <button class="btn btn-sm btn-outline-secondary" id="diag-autoupd-btn"
-                onclick="enableAutoUpdates()" style="display:none;">
+                data-action="enableAutoUpdates" style="display:none;">
           <i class="bi bi-shield-plus"></i> Enable automatic security updates
         </button>
         <span id="diag-autoupd-msg" class="small"></span>
@@ -377,7 +377,7 @@
       <div id="diag-panelf2b-status" class="small text-secondary">—</div>
       <div class="mt-2 d-flex gap-2 align-items-center">
         <button class="btn btn-sm btn-outline-secondary" id="diag-panelf2b-btn"
-                onclick="enablePanelF2b()" style="display:none;">
+                data-action="enablePanelF2b" style="display:none;">
           <i class="bi bi-shield-plus"></i> Protect the panel login with fail2ban
         </button>
         <span id="diag-panelf2b-msg" class="small"></span>
@@ -399,7 +399,7 @@
         pre-filled GitHub issue to send it to the maintainers.
       </p>
       <div class="d-flex gap-2 align-items-center mb-2 flex-wrap">
-        <button class="btn btn-sm btn-outline-secondary" id="diag-report-btn" onclick="genDebugReport()">
+        <button class="btn btn-sm btn-outline-secondary" id="diag-report-btn" data-action="genDebugReport">
           <i class="bi bi-clipboard2-data"></i> Generate debug report
         </button>
         <a class="btn btn-sm btn-outline-secondary" id="diag-report-dl" style="display:none;" download>
@@ -440,9 +440,9 @@
         <p class="small text-secondary mb-1">SSH into this host over your tailnet using your Tailscale identity — no SSH keys to manage.</p>
         {% set ts_up = status and status.tailscale_ssh and status.tailscale_ssh.running %}
         {% if status and status.tailscale_ssh.enabled %}
-        <button class="btn btn-sm btn-outline-warning" onclick="tsSshDisable()"><i class="bi bi-x-circle"></i> Disable Tailscale SSH</button>
+        <button class="btn btn-sm btn-outline-warning" data-action="tsSshDisable"><i class="bi bi-x-circle"></i> Disable Tailscale SSH</button>
         {% elif ts_up %}
-        <button class="btn btn-sm btn-success" onclick="tsSshEnable()"><i class="bi bi-lock"></i> Enable Tailscale SSH</button>
+        <button class="btn btn-sm btn-success" data-action="tsSshEnable"><i class="bi bi-lock"></i> Enable Tailscale SSH</button>
         {% else %}
         <button class="btn btn-sm btn-success" disabled title="Tailscale isn't installed/connected on this host"><i class="bi bi-lock"></i> Enable Tailscale SSH</button>
         <div class="small mt-1"><a href="{{ url_for('tailscale_page') }}"><i class="bi bi-box-arrow-in-down"></i> Set up Tailscale first</a></div>
@@ -455,7 +455,7 @@
           {% if status and status.tailscale_ufw_allowed %}<span class="badge bg-success">Allowed</span>{% else %}<span class="badge bg-warning text-dark">Not allowed</span>{% endif %}
         </div>
         <p class="small text-secondary mb-1">Allowing the <code>tailscale0</code> interface in UFW keeps the panel reachable over the tailnet.</p>
-        <button class="btn btn-sm btn-success" onclick="ufwAllowTailscale()"
+        <button class="btn btn-sm btn-success" data-action="ufwAllowTailscale"
                 {% if (status and status.tailscale_ufw_allowed) or not ts_up %}disabled{% if not ts_up %} title="Tailscale isn't installed/connected on this host"{% endif %}{% endif %}>
           <i class="bi bi-shield-check"></i> Allow Tailscale Interface</button>
         {% if not ts_up %}<div class="small mt-1"><a href="{{ url_for('tailscale_page') }}"><i class="bi bi-box-arrow-in-down"></i> Set up Tailscale first</a></div>{% endif %}
@@ -470,9 +470,9 @@
         <div class="small text-secondary mb-1">Public SSH (port 22 from the internet) — current: <strong id="ssh-mode">…</strong></div>
         <p class="small text-secondary mb-1">Tailscale SSH keeps working regardless. Once you can reach this host over the tailnet, rate-limit or fully disable public SSH.{% if not ssh_lockdown_safe %} <span class="text-warning">{% if not ts_up %}<a href="{{ url_for('tailscale_page') }}">Connect Tailscale (link this machine)</a> first{% else %}Enable Tailscale SSH or allow the <code>tailscale0</code> interface first{% endif %} to safely disable public SSH — otherwise you'd lock yourself out.</span>{% endif %}</p>
         <div class="d-flex gap-2 flex-wrap">
-          <button class="btn btn-sm btn-outline-secondary" data-ssh-btn="allow" onclick="sshMode('allow')" title="Open port 22 to the internet">Allow</button>
-          <button class="btn btn-sm btn-outline-primary" data-ssh-btn="limit" onclick="sshMode('limit')" title="Rate-limit port 22 (brute-force protection)">Limit</button>
-          <button class="btn btn-sm btn-outline-danger" data-ssh-btn="off" {% if not ssh_lockdown_safe %}data-lockdown="1" disabled title="{% if not ts_up %}Tailscale isn't connected yet — link this machine first, or you'd lock yourself out{% else %}No Tailscale path back in yet — enable Tailscale SSH or allow the tailscale0 interface first, or you'd lock yourself out{% endif %}"{% else %}title="Remove public port 22 — SSH only over Tailscale"{% endif %} onclick="sshMode('off')">Disable (tailnet-only)</button>
+          <button class="btn btn-sm btn-outline-secondary" data-ssh-btn="allow" data-action="sshMode" data-args='["allow"]' title="Open port 22 to the internet">Allow</button>
+          <button class="btn btn-sm btn-outline-primary" data-ssh-btn="limit" data-action="sshMode" data-args='["limit"]' title="Rate-limit port 22 (brute-force protection)">Limit</button>
+          <button class="btn btn-sm btn-outline-danger" data-ssh-btn="off" {% if not ssh_lockdown_safe %}data-lockdown="1" disabled title="{% if not ts_up %}Tailscale isn't connected yet — link this machine first, or you'd lock yourself out{% else %}No Tailscale path back in yet — enable Tailscale SSH or allow the tailscale0 interface first, or you'd lock yourself out{% endif %}"{% else %}title="Remove public port 22 — SSH only over Tailscale"{% endif %} data-action="sshMode" data-args='["off"]'>Disable (tailnet-only)</button>
         </div>
         <div id="ssh-msg" class="small mt-1"></div>
       </div>
@@ -480,7 +480,7 @@
         <div class="small text-secondary mb-1">Public panel access (port {{ (config.port if config else 5000) }})</div>
         {% if config and config.tailscale_setup_done %}
         <p class="small text-secondary mb-1">Tailscale Serve is set up, so the panel is reachable on your tailnet. Close the public web port to make the panel <strong>tailnet-only</strong> — no open ports.</p>
-        <button class="btn btn-sm btn-outline-danger" id="close-panel-btn" onclick="closePanelPort()"><i class="bi bi-shield-lock"></i> Close public panel port (tailnet-only)</button>
+        <button class="btn btn-sm btn-outline-danger" id="close-panel-btn" data-action="closePanelPort"><i class="bi bi-shield-lock"></i> Close public panel port (tailnet-only)</button>
         {% else %}
         <p class="small text-secondary mb-1">Set up <a href="{{ url_for('tailscale_page') }}">Tailscale Serve</a> first — then you can close the public web port and make the panel tailnet-only without locking yourself out.</p>
         <button class="btn btn-sm btn-outline-secondary" disabled title="Set up Tailscale Serve first"><i class="bi bi-shield-lock"></i> Close public panel port</button>
@@ -497,7 +497,7 @@
           <div>
             <label class="form-label small mb-1" for="panel-bind-select">Bind address</label>
             <select id="panel-bind-select" class="form-select form-select-sm" style="width:auto;"
-                    onchange="onBindSelect()">
+                    data-action="onBindSelect" data-on="change">
               <option value="0.0.0.0"{% if _bind in ('0.0.0.0', '::') %} selected{% endif %}>All interfaces (public + tailnet)</option>
               <option value="127.0.0.1"{% if _bind in ('127.0.0.1', '::1', 'localhost') %} selected{% endif %}
                       {% if not (config and config.tailscale_setup_done) %}disabled{% endif %}>Localhost only (needs Tailscale Serve)</option>
@@ -515,7 +515,7 @@
             <input type="number" id="panel-port-input" class="form-control form-control-sm" min="1024" max="65535"
                    style="width:110px;" value="{{ config.port if config else 5000 }}" aria-label="Panel web port">
           </div>
-          <button class="btn btn-sm btn-outline-primary" type="button" onclick="changePanelBinding()">Apply &amp; restart</button>
+          <button class="btn btn-sm btn-outline-primary" type="button" data-action="changePanelBinding">Apply &amp; restart</button>
         </div>
         <div id="panel-port-change-msg" class="small mt-1"></div>
       </div>
@@ -536,7 +536,7 @@
                    placeholder="All interfaces" aria-label="SSH bind IP address"
                    title="Leave blank to listen on all interfaces. If this host has several IPs, enter the one sshd should bind to — it must be the address the panel connects to, or the change is rolled back.">
           </div>
-          <button class="btn btn-sm btn-outline-primary" type="button" onclick="changeSshPort()">Change SSH port</button>
+          <button class="btn btn-sm btn-outline-primary" type="button" data-action="changeSshPort">Change SSH port</button>
         </div>
         <div id="ssh-port-msg" class="small mt-1"></div>
       </div>
@@ -549,7 +549,7 @@
         </div>
         {% if remote.auth_method != 'tailscale' %}
         <p class="small text-secondary mb-1">Switch the panel to reach this server over the tailnet (Tailscale SSH) and use its Tailscale address — then you can safely lock down public SSH.</p>
-        <button class="btn btn-sm btn-success" onclick="switchToTailscale()"><i class="bi bi-arrow-repeat"></i> Migrate to Tailscale SSH</button>
+        <button class="btn btn-sm btn-success" data-action="switchToTailscale"><i class="bi bi-arrow-repeat"></i> Migrate to Tailscale SSH</button>
         <div id="migrate-msg" class="small mt-1"></div>
         {% else %}
         <p class="small text-success mb-0"><i class="bi bi-check-circle"></i> Already using Tailscale SSH.</p>
@@ -559,9 +559,9 @@
         <div class="small text-secondary mb-1">Public SSH (port 22 from the internet) — current: <strong id="ssh-mode">…</strong></div>
         <p class="small text-secondary mb-1">Tailscale SSH keeps working regardless. If you're on the tailnet you can rate-limit or fully disable public SSH.</p>
         <div class="d-flex gap-2 flex-wrap">
-          <button class="btn btn-sm btn-outline-secondary" data-ssh-btn="allow" onclick="sshMode('allow')" title="Open port 22 to the internet">Allow</button>
-          <button class="btn btn-sm btn-outline-primary" data-ssh-btn="limit" onclick="sshMode('limit')" title="Rate-limit port 22 (brute-force protection)">Limit</button>
-          <button class="btn btn-sm btn-outline-danger" data-ssh-btn="off" onclick="sshMode('off')" title="Remove public port 22 rule — SSH only over Tailscale">Disable (tailnet-only)</button>
+          <button class="btn btn-sm btn-outline-secondary" data-ssh-btn="allow" data-action="sshMode" data-args='["allow"]' title="Open port 22 to the internet">Allow</button>
+          <button class="btn btn-sm btn-outline-primary" data-ssh-btn="limit" data-action="sshMode" data-args='["limit"]' title="Rate-limit port 22 (brute-force protection)">Limit</button>
+          <button class="btn btn-sm btn-outline-danger" data-ssh-btn="off" data-action="sshMode" data-args='["off"]' title="Remove public port 22 rule — SSH only over Tailscale">Disable (tailnet-only)</button>
         </div>
         <div id="ssh-msg" class="small mt-1"></div>
       </div>
@@ -582,7 +582,7 @@
                    placeholder="All interfaces" aria-label="SSH bind IP address"
                    title="Leave blank to listen on all interfaces. If this host has several IPs, enter the one sshd should bind to — it must be the address the panel connects to, or the change is rolled back.">
           </div>
-          <button class="btn btn-sm btn-outline-primary" type="button" onclick="changeSshPort()">Change SSH port</button>
+          <button class="btn btn-sm btn-outline-primary" type="button" data-action="changeSshPort">Change SSH port</button>
         </div>
         <div id="ssh-port-msg" class="small mt-1"></div>
       </div>
@@ -594,7 +594,7 @@
           {% if remote.host_key_fingerprint %}<code>{{ remote.host_key_fingerprint }}</code>{% else %}<span class="text-warning">not pinned yet — pins automatically on first connection</span>{% endif %}
         </div>
         <p class="small text-secondary mb-1">The panel remembers this server's SSH host key and refuses to connect if it changes — protection against a man-in-the-middle. If you reinstalled or rebuilt the server its key changed legitimately; re-trust it to pin the new one.</p>
-        <button class="btn btn-sm btn-outline-warning" onclick="retrustHostKey()"><i class="bi bi-arrow-repeat"></i> Re-trust host key</button>
+        <button class="btn btn-sm btn-outline-warning" data-action="retrustHostKey"><i class="bi bi-arrow-repeat"></i> Re-trust host key</button>
         <div id="hostkey-msg" class="small mt-1"></div>
       </div>
     </div>
@@ -650,7 +650,7 @@
 
 {% endblock %}
 {% block scripts %}
-<script>
+<script nonce="{{ csp_nonce }}">
 var REMOTE_ID = {{ remote.id }};
 var IS_LOCAL = {{ 'true' if remote.is_local else 'false' }};
 
@@ -1362,8 +1362,8 @@ function loadBackups(){
         + '<td>'+bkFmtBytes(b.size)+'</td>'
         + '<td class="text-end text-nowrap">'
         + '<a class="btn btn-sm btn-outline-secondary py-0 px-1" href="'+MOUNT+'/api/panel/backup/download/'+encodeURIComponent(b.name)+'" title="Download"><i class="bi bi-download"></i></a> '
-        + '<button class="btn btn-sm btn-outline-warning py-0 px-1" title="Restore" onclick="restoreBackup('+JSON.stringify(b.name)+',this)"><i class="bi bi-arrow-counterclockwise"></i></button> '
-        + '<button class="btn btn-sm btn-outline-danger py-0 px-1" title="Delete" onclick="deleteBackup('+JSON.stringify(b.name)+',this)"><i class="bi bi-trash"></i></button>'
+        + '<button class="btn btn-sm btn-outline-warning py-0 px-1" title="Restore"' + _da('restoreBackup', [b.name, '@self']) + '><i class="bi bi-arrow-counterclockwise"></i></button> '
+        + '<button class="btn btn-sm btn-outline-danger py-0 px-1" title="Delete"' + _da('deleteBackup', [b.name, '@self']) + '><i class="bi bi-trash"></i></button>'
         + '</td></tr>';
     });
     if(!(d.backups||[]).length) rows='<tr><td colspan="4" class="text-secondary text-center py-3">No backups yet.</td></tr>';
@@ -1410,7 +1410,7 @@ function loadBackups(){
             + '<td>'+bkFmtBytes(b.size)+'</td>'
             + '<td class="text-end text-nowrap">'
             + '<a class="btn btn-sm btn-outline-secondary py-0 px-1" href="'+MOUNT+'/backup/game/'+g.id+'/download?name='+encodeURIComponent(b.name)+'" title="Download backup"><i class="bi bi-download"></i></a> '
-            + '<button class="btn btn-sm btn-outline-danger py-0 px-1" data-gid="'+g.id+'" data-name="'+escapeHtml(b.name)+'" onclick="deleteGameBackup(this)" title="Delete backup"><i class="bi bi-trash"></i></button>'
+            + '<button class="btn btn-sm btn-outline-danger py-0 px-1" data-gid="'+g.id+'" data-name="'+escapeHtml(b.name)+'"' + _da('deleteGameBackup', ['@self']) + ' title="Delete backup"><i class="bi bi-trash"></i></button>'
             + '</td></tr>';
         }).join('');
         var table = rows
@@ -1424,7 +1424,7 @@ function loadBackups(){
           else if(st.busy){
             // Skipped because players were connected — offer a one-click force.
             stHtml=' <span class="text-warning"><i class="bi bi-people-fill"></i> '+escapeHtml(st.msg||'players online — skipped')+'</span>'
-              +' <button class="btn btn-sm btn-outline-warning py-0 px-1 ms-1" onclick="backupOneGame('+g.id+',this,true)">Back up anyway</button>';
+              +' <button class="btn btn-sm btn-outline-warning py-0 px-1 ms-1"' + _da('backupOneGame', [g.id, '@self', true]) + '>Back up anyway</button>';
           }
           else if(st.ok===true){ stHtml=' <span class="text-success">✓ '+escapeHtml(st.msg||'backed up')+'</span>'; }
           else if(st.ok===false){ stHtml=' <span class="text-danger">✗ '+escapeHtml(st.msg||'failed')+'</span>'; }
@@ -1447,7 +1447,7 @@ function loadBackups(){
             + '<div class="d-flex justify-content-between align-items-center gap-2">'
             + '<span><strong>'+escapeHtml(g.name)+'</strong>'+hostHtml+'</span>'
             + '<button class="btn btn-sm btn-outline-success py-0 px-2" '+(st&&st.running?'disabled':'')
-            + ' onclick="backupOneGame('+g.id+',this)"><i class="bi bi-play-circle"></i> Back up now</button>'
+            + '' + _da('backupOneGame', [g.id, '@self']) + '><i class="bi bi-play-circle"></i> Back up now</button>'
             + '</div>'
             + gameSchedule(g)
             + dkHtml
@@ -1616,9 +1616,9 @@ function gameSchedule(g){
   var ivVal=sc.interval_set?String(sc.interval_days):'default';
   var kpVal=sc.keep_set?String(sc.keep):'default';
   function opt(v,label,cur){ return '<option value="'+v+'"'+(String(v)===cur?' selected':'')+'>'+label+'</option>'; }
-  var ivSel='<select class="form-select form-select-sm py-0" style="width:auto;" id="gsi-'+g.id+'" onchange="setGameSchedule('+g.id+')">'
+  var ivSel='<select class="form-select form-select-sm py-0" style="width:auto;" id="gsi-'+g.id+'"' + _da('setGameSchedule', [g.id], 'change') + '>'
     +opt('default','Default',ivVal)+opt('0','Off',ivVal)+opt('1','Daily',ivVal)+opt('7','Weekly',ivVal)+opt('14','Every 2 weeks',ivVal)+opt('30','Monthly',ivVal)+'</select>';
-  var kpSel='<select class="form-select form-select-sm py-0" style="width:auto;" id="gsk-'+g.id+'" onchange="setGameSchedule('+g.id+')">'
+  var kpSel='<select class="form-select form-select-sm py-0" style="width:auto;" id="gsk-'+g.id+'"' + _da('setGameSchedule', [g.id], 'change') + '>'
     +opt('default','Default',kpVal)+opt('1','1',kpVal)+opt('2','2',kpVal)+opt('3','3',kpVal)+opt('5','5',kpVal)+opt('7','7',kpVal)+opt('14','14',kpVal)+opt('30','30',kpVal)+'</select>';
   return '<div class="d-flex align-items-center gap-2 flex-wrap small my-1">'
     +'<span class="text-secondary"><i class="bi bi-calendar-event"></i> Schedule:</span>'+ivSel
@@ -1718,9 +1718,9 @@ function scanExisting(){
         +'<td>'+(g.cron||0)+'</td></tr>';
     }).join('');
     out.innerHTML='<div class="table-responsive"><table class="table table-sm align-middle mb-2">'
-      +'<thead><tr><th style="width:1%"><input type="checkbox" class="form-check-input" checked onclick="discToggleAll(this)" aria-label="Select all"></th><th>User</th><th>Game</th><th>Port</th><th title="LinuxGSM backups on disk">Backups</th><th title="Installed mods">Mods</th><th title="Cron entries for this user">Cron</th></tr></thead>'
+      +'<thead><tr><th style="width:1%"><input type="checkbox" class="form-check-input" checked' + _da('discToggleAll', ['@self']) + ' aria-label="Select all"></th><th>User</th><th>Game</th><th>Port</th><th title="LinuxGSM backups on disk">Backups</th><th title="Installed mods">Mods</th><th title="Cron entries for this user">Cron</th></tr></thead>'
       +'<tbody>'+rows+'</tbody></table></div>'
-      +'<button class="btn btn-sm btn-primary" onclick="importExisting(this)"><i class="bi bi-plus-circle"></i> Import selected</button> <span id="disc-msg" class="small ms-2"></span>';
+      +'<button class="btn btn-sm btn-primary"' + _da('importExisting', ['@self']) + '><i class="bi bi-plus-circle"></i> Import selected</button> <span id="disc-msg" class="small ms-2"></span>';
   }).catch(function(){ if(out) out.innerHTML='<span class="text-danger small">Scan failed.</span>'; })
   .finally(function(){ if(btn){ btn.disabled=false; btn.innerHTML='<i class="bi bi-search"></i> Scan'; } });
 }

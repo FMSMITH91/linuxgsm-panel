@@ -39,7 +39,7 @@
 
         <div class="mt-2">
           <label class="form-label">Auth Method</label>
-          <select name="auth_method" class="form-select" id="auth-method" onchange="toggleSetupCreds()">
+          <select name="auth_method" class="form-select" id="auth-method" data-action="toggleSetupCreds" data-on="change">
             <option value="key">SSH Key</option>
             <option value="password">Password</option>
             {% if ts and ts.installed %}<option value="tailscale">Tailscale SSH</option>{% endif %}
@@ -83,7 +83,7 @@
   </div>
 </div>
 
-<script>
+<script nonce="{{ csp_nonce }}">
 document.getElementById('auth-method').addEventListener('change', function() {
   var label = document.getElementById('credential-label');
   var input = document.querySelector('[name="credential"]');

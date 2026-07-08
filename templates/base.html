@@ -451,7 +451,7 @@
 </head>
 <body>
 
-<script>
+<script nonce="{{ csp_nonce }}">
   // i18n: hand the active language's catalog to the browser. window.t(s) translates one string
   // (falls back to English). We also auto-translate the DOM — every text node and a few attributes
   // whose EXACT text is in the catalog get swapped — so both server-rendered and JS-generated
@@ -521,14 +521,14 @@
 {% if current_user.is_authenticated %}
 <!-- Mobile topbar -->
 <div class="topbar">
-  <button class="hamburger" id="hamburger" onclick="toggleSidebar()" aria-label="Menu">
+  <button class="hamburger" id="hamburger" data-action="toggleSidebar" aria-label="Menu">
     <i class="bi bi-list"></i>
   </button>
   <a href="{{ url_for('index') }}" class="topbar-title">LinuxGSM</a>
 </div>
 
 <!-- Sidebar backdrop -->
-<div class="sidebar-backdrop" id="sidebar-backdrop" onclick="toggleSidebar()"></div>
+<div class="sidebar-backdrop" id="sidebar-backdrop" data-action="toggleSidebar"></div>
 
 <!-- Sidebar -->
 <nav class="sidebar" id="sidebar">
@@ -648,10 +648,10 @@
         <div class="small">You have full control of the panel — add an authenticator code to your sign-in so a stolen password alone can't get in.</div>
       </div>
       <a href="{{ url_for('account_2fa_enable') }}" class="btn btn-primary btn-sm text-nowrap"><i class="bi bi-shield-plus"></i> Enable 2FA</a>
-      <button type="button" class="btn btn-outline-secondary btn-sm" onclick="hideOtpNag(true)">Not now</button>
-      <button type="button" class="btn btn-link btn-sm text-secondary px-1" onclick="dismissOtpNagForever()">Don't remind me again</button>
+      <button type="button" class="btn btn-outline-secondary btn-sm" data-action="hideOtpNag" data-args='[true]'>Not now</button>
+      <button type="button" class="btn btn-link btn-sm text-secondary px-1" data-action="dismissOtpNagForever">Don't remind me again</button>
     </div>
-    <script>
+    <script nonce="{{ csp_nonce }}">
       // Show unless suppressed for this browser session ("Not now"). Permanent dismissal is stored
       // server-side, so if we got here the account hasn't chosen "Don't remind me again".
       (function(){ var n=document.getElementById('otp-nag'); if(!n) return;
@@ -674,9 +674,9 @@
   </div>
 </main>
 
-<script src="{{ url_for('static', filename='vendor/bootstrap/bootstrap.bundle.min.js') }}"></script>
-<script src="{{ url_for('static', filename='vendor/socketio/socket.io.min.js') }}"></script>
-<script>
+<script nonce="{{ csp_nonce }}" src="{{ url_for('static', filename='vendor/bootstrap/bootstrap.bundle.min.js') }}"></script>
+<script nonce="{{ csp_nonce }}" src="{{ url_for('static', filename='vendor/socketio/socket.io.min.js') }}"></script>
+<script nonce="{{ csp_nonce }}">
 // Mount prefix (e.g. "/lgsm" when served behind Tailscale Serve). Every client-side
 // fetch()/socket.io URL must include it, or the request hits the site root — a
 // different app. Server-rendered links use url_for and already include it.
@@ -950,6 +950,59 @@ document.addEventListener('submit', function(e){
   if (f && f.classList && f.classList.contains('ajax-form')){ e.preventDefault(); window.ajaxForm(f); }
 }, true);
 
+// ── CSP-safe event delegation ──────────────────────────────────────────────────────────────
+// A strict Content-Security-Policy (script-src has no 'unsafe-inline') blocks inline on* handlers,
+// so every handler is declared with data attributes instead and dispatched here:
+//   data-action="funcName"   a GLOBAL function to call (comes only from our own templates)
+//   data-args='[...]'         optional JSON args; "@self" -> the element, "@event" -> the event
+//   data-on="change"          optional event type (default "click")
+//   data-prevent (attr)       call event.preventDefault() (e.g. an <a> that shouldn't navigate)
+// The call mirrors inline-handler semantics — foo() runs as foo(), foo(this) as foo(element).
+// If the function returns false, the default is prevented too (like `onclick="…;return false"`).
+window._noop = function(){};                    // for handlers that were only `return false`
+window._da = function(action, args, on){        // build the attributes from JS that generates HTML
+  var s = ' data-action="' + action + '"';
+  if (args && args.length){ s += " data-args='" + JSON.stringify(args).replace(/'/g, '&#39;') + "'"; }
+  if (on){ s += ' data-on="' + on + '"'; }
+  return s;
+};
+// Global wrappers so method-calls / statements that used to sit in inline handlers can be reached
+// by name from the data-action dispatcher (window[name] must be a function).
+window._reloadPage = function(){ location.reload(); };
+window._uproAttach = function(){ if (window.UPro) UPro.attach(); };
+window._uproDetach = function(){ if (window.UPro) UPro.detach(); };
+window._uproService = function(name, action){ if (window.UPro) UPro.service(name, action); };
+window._clickUpload = function(){ var i = document.getElementById('upload-input'); if (i) i.click(); };
+window._copyDataU = function(el){ var u = el && el.dataset ? el.dataset.u : ''; if (window.copyText) copyText(u, 'Copied'); else if (navigator.clipboard) navigator.clipboard.writeText(u); };
+window._showTsKeyAdv = function(){ var e = document.getElementById('ts-key-adv'); if (e) e.style.display = 'block'; return false; };
+window._sayOnEnter = function(e){ if (e && e.key === 'Enter'){ e.preventDefault(); if (window.announceSay) announceSay(); } };
+window._acctSignOutAll = function(){
+  confirmDialog({title:'Sign out everywhere', icon:'box-arrow-right', confirmClass:'btn-danger',
+    confirmLabel:'Sign out everywhere',
+    bodyText:'Sign out of ALL sessions, including this one? You will be logged back in fresh.',
+    onConfirm:function(){ var f = document.getElementById('revoke-sessions-form'); if (f) f.submit(); }});
+};
+(function(){
+  function fire(el, e){
+    var fn = window[el.getAttribute('data-action')];
+    if (typeof fn !== 'function') return;
+    var args = [];
+    var raw = el.getAttribute('data-args');
+    if (raw){ try { args = JSON.parse(raw); } catch (_e){ args = []; } }
+    args = args.map(function(a){ return a === '@self' ? el : (a === '@event' ? e : a); });
+    var ret = fn.apply(null, args);
+    if (ret === false || el.hasAttribute('data-prevent')){ if (e.cancelable) e.preventDefault(); }
+  }
+  ['click', 'change', 'submit', 'input', 'keydown'].forEach(function(type){
+    document.addEventListener(type, function(e){
+      var el = (e.target && e.target.closest) ? e.target.closest('[data-action]') : null;
+      if (!el) return;
+      if ((el.getAttribute('data-on') || 'click') !== type) return;
+      fire(el, e);
+    }, false);
+  });
+})();
+
 // Copy text to the clipboard and confirm with a toast. Falls back to execCommand
 // on non-secure contexts.
 // Track the cursor so feedback can pop right where the user clicked (a bottom-right
@@ -1007,7 +1060,7 @@ window.UPro = (function(){
   function attachForm(){
     return '<div class="input-group input-group-sm" style="max-width:540px;">'
       + '<input type="text" id="upro-token" class="form-control" placeholder="Ubuntu Pro token (e.g. C1a…)" autocomplete="off" autocapitalize="off" autocorrect="off" spellcheck="false">'
-      + '<button class="btn btn-success" onclick="UPro.attach()"><i class="bi bi-shield-check"></i> Attach</button></div>';
+      + '<button class="btn btn-success"' + _da('_uproAttach') + '><i class="bi bi-shield-check"></i> Attach</button></div>';
   }
   function render(d){
     if(!EL) return;
@@ -1034,13 +1087,13 @@ window.UPro = (function(){
         : (s.status === 'disabled' ? '<span class="badge bg-secondary">disabled</span>' : '<span class="badge bg-secondary">'+e(s.status||'—')+'</span>');
       var canToggle = (s.entitled === 'yes');
       var btn = !canToggle ? '<span class="small text-secondary">not entitled</span>'
-        : (en ? '<button class="btn btn-outline-secondary btn-sm py-0" onclick="UPro.service(\''+e(s.name)+'\',\'disable\')">Disable</button>'
-              : '<button class="btn btn-outline-success btn-sm py-0" onclick="UPro.service(\''+e(s.name)+'\',\'enable\')">Enable</button>');
+        : (en ? '<button class="btn btn-outline-secondary btn-sm py-0"' + _da('_uproService', [s.name, 'disable']) + '>Disable</button>'
+              : '<button class="btn btn-outline-success btn-sm py-0"' + _da('_uproService', [s.name, 'enable']) + '>Enable</button>');
       rows += '<tr><td class="small"><code>'+e(s.name)+'</code><div class="text-secondary" style="font-size:.68rem;">'+e(s.description||'')+'</div></td><td>'+badge+'</td><td class="text-end">'+btn+'</td></tr>';
     });
     EL.innerHTML = head
       + '<div class="table-responsive"><table class="table table-sm mb-2 align-middle"><tbody>'+rows+'</tbody></table></div>'
-      + '<button class="btn btn-outline-danger btn-sm" onclick="UPro.detach()"><i class="bi bi-x-circle"></i> Detach</button>'
+      + '<button class="btn btn-outline-danger btn-sm"' + _da('_uproDetach') + '><i class="bi bi-x-circle"></i> Detach</button>'
       + '<div id="upro-msg" class="small mt-2"></div>';
   }
   function refresh(){
@@ -1090,7 +1143,7 @@ window.UPro = (function(){
 })();
 </script>
 {% if current_user.is_authenticated and current_user.is_superadmin %}
-<script>
+<script nonce="{{ csp_nonce }}">
 // Panel update badge (super admins only). Quietly checks if the panel is behind
 // its GitHub repo and shows an "update" pill next to the version in the sidebar.
 (function(){
@@ -1120,7 +1173,7 @@ window.UPro = (function(){
 })();
 </script>
 {% endif %}
-<script>
+<script nonce="{{ csp_nonce }}">
 setTimeout(function() {
   document.querySelectorAll('.alert-dismissible').forEach(function(el) {
     try { bootstrap.Alert.getOrCreateInstance(el).close(); } catch(e) {}
