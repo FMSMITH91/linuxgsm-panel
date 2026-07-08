@@ -1,0 +1,160 @@
+{% extends "base.html" %}
+{% block title %}Custom Commands{% endblock %}
+
+{% macro scope_select(cmd) %}
+<select name="scope" class="form-select form-select-sm">
+  <option value="all|" {% if not cmd or cmd.scope_type == 'all' %}selected{% endif %}>All games</option>
+  <optgroup label="By engine">
+    {% for ev, el in engines.items() %}
+    <option value="engine|{{ ev }}"
+            {% if cmd and cmd.scope_type == 'engine' and cmd.scope_value == ev %}selected{% endif %}>{{ el }}</option>
+    {% endfor %}
+  </optgroup>
+  <optgroup label="By game">
+    {% for g in games %}
+    <option value="game|{{ g.shortname }}"
+            {% if cmd and cmd.scope_type == 'game' and cmd.scope_value == g.shortname %}selected{% endif %}>{{ g.name }}</option>
+    {% endfor %}
+  </optgroup>
+</select>
+{% endmacro %}
+
+{% macro command_fields(cmd, idp) %}
+<div class="row g-2">
+  <div class="col-md-4">
+    <label class="form-label small mb-0">Button label</label>
+    <input type="text" name="name" class="form-control form-control-sm" required
+           value="{{ cmd.name if cmd else '' }}" placeholder="e.g. Change map">
+  </div>
+  <div class="col-md-8">
+    <label class="form-label small mb-0">Console command</label>
+    <input type="text" name="command_template" class="form-control form-control-sm" required
+           value="{{ cmd.command_template if cmd else '' }}" placeholder="e.g. map {} — or a fixed line like: say Server restarting">
+    <div class="form-text mt-0">Use <code>{}</code> once where the operator fills in a value. No <code>{}</code> = one-click.</div>
+  </div>
+  <div class="col-md-4">
+    <label class="form-label small mb-0">Value label</label>
+    <input type="text" name="argument_label" class="form-control form-control-sm"
+           value="{{ cmd.argument_label if cmd else '' }}" placeholder="e.g. Map name (only if using {})">
+  </div>
+  <div class="col-md-4">
+    <label class="form-label small mb-0">Value validation (regex, optional)</label>
+    <input type="text" name="argument_pattern" class="form-control form-control-sm"
+           value="{{ cmd.argument_pattern if cmd else '' }}" placeholder="{{ default_pattern }}">
+    <div class="form-text mt-0">Blank = safe default (letters, digits, <code>_ . -</code>).</div>
+  </div>
+  <div class="col-md-4">
+    <label class="form-label small mb-0">Applies to</label>
+    {{ scope_select(cmd) }}
+  </div>
+  <div class="col-12">
+    <label class="form-label small mb-1 fw-bold">Groups allowed to run this</label>
+    <div class="d-flex flex-wrap gap-2" style="max-height: 120px; overflow-y: auto;">
+      {% for grp in groups %}
+      <div class="form-check">
+        <input type="checkbox" name="groups" value="{{ grp.id }}" class="form-check-input"
+               id="{{ idp }}-grp-{{ grp.id }}"
+               {% if cmd and grp in cmd.groups %}checked{% endif %}>
+        <label class="form-check-label small" for="{{ idp }}-grp-{{ grp.id }}">{{ grp.name }}</label>
+      </div>
+      {% else %}
+      <span class="text-secondary small">No groups yet — create one on Groups &amp; Permissions.</span>
+      {% endfor %}
+    </div>
+    <div class="form-check mt-2">
+      <input type="checkbox" name="enabled" class="form-check-input" id="{{ idp }}-enabled"
+             {% if not cmd or cmd.enabled %}checked{% endif %}>
+      <label class="form-check-label small" for="{{ idp }}-enabled">Enabled</label>
+    </div>
+  </div>
+</div>
+{% endmacro %}
+
+{% block content %}
+
+<div class="d-flex justify-content-between align-items-center mb-3">
+  <h1 class="page-title mb-0"><i class="bi bi-terminal-fill"></i> Custom Commands</h1>
+  <button class="btn btn-primary" data-bs-toggle="modal" data-bs-target="#addCommandModal">
+    <i class="bi bi-plus-circle"></i> Add Command
+  </button>
+</div>
+
+<p class="text-secondary small mb-3" style="max-width:75ch;">
+  Define game-console commands here and hand specific ones to specific
+  <a href="{{ url_for('manage_groups') }}">groups</a>. A member of an allowed group sees the command as a
+  button on any server it applies to — without needing full console access. The command line you write is
+  trusted; if it contains a <code>{}</code>, the value the operator types is validated before it's substituted,
+  so it can't smuggle in extra commands. (Only Super Administrators can manage this page.)
+</p>
+
+{% for cmd in commands %}
+<div class="card mb-2">
+  <div class="card-header d-flex justify-content-between align-items-center py-2">
+    <div>
+      <strong>{{ cmd.name }}</strong>
+      {% if not cmd.enabled %}<span class="badge bg-secondary ms-2">Disabled</span>{% endif %}
+      <code class="ms-2 small">{{ cmd.command_template }}</code>
+      <span class="badge bg-dark border ms-2">
+        {% if cmd.scope_type == 'all' %}All games
+        {% elif cmd.scope_type == 'engine' %}Engine: {{ cmd.scope_value }}
+        {% else %}Game: {{ cmd.scope_value }}{% endif %}
+      </span>
+      {% if cmd.has_argument %}<span class="badge bg-info text-dark ms-1">takes a value</span>{% endif %}
+    </div>
+    <div>
+      <button class="btn btn-outline-secondary btn-sm" data-bs-toggle="collapse"
+              data-bs-target="#edit-cmd-{{ cmd.id }}"><i class="bi bi-pencil"></i> Edit</button>
+      <form method="POST" action="{{ url_for('delete_command', cmd_id=cmd.id) }}" style="display:inline;"
+            onsubmit="return confirm('Delete command {{ cmd.name }}?');">
+        <button type="submit" class="btn btn-outline-danger btn-sm"><i class="bi bi-trash"></i></button>
+      </form>
+    </div>
+  </div>
+  <div class="card-body py-2">
+    <span class="text-secondary small">Groups:</span>
+    {% for grp in cmd.groups %}
+      <span class="badge bg-secondary">{{ grp.name }}</span>
+    {% else %}
+      <span class="text-secondary small">Not handed to any group yet — only super admins can run it.</span>
+    {% endfor %}
+  </div>
+  <div class="collapse" id="edit-cmd-{{ cmd.id }}">
+    <div class="card-body border-top" style="border-color: #30363d !important;">
+      <form method="POST" action="{{ url_for('edit_command', cmd_id=cmd.id) }}">
+        {{ command_fields(cmd, 'e' ~ cmd.id) }}
+        <button type="submit" class="btn btn-primary btn-sm mt-2"><i class="bi bi-check"></i> Save</button>
+      </form>
+    </div>
+  </div>
+</div>
+{% else %}
+<div class="card">
+  <div class="card-body text-center py-4">
+    <span style="font-size: 2rem;">⌨️</span>
+    <p class="text-secondary mt-2">No custom commands yet. Add one to hand a game command to a mod group.</p>
+  </div>
+</div>
+{% endfor %}
+
+<!-- Add Command Modal -->
+<div class="modal fade" id="addCommandModal" tabindex="-1">
+  <div class="modal-dialog modal-lg">
+    <div class="modal-content">
+      <form method="POST" action="{{ url_for('add_command') }}">
+        <div class="modal-header">
+          <h5 class="modal-title"><i class="bi bi-terminal-plus"></i> Add Custom Command</h5>
+          <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal"></button>
+        </div>
+        <div class="modal-body">
+          {{ command_fields(none, 'new') }}
+        </div>
+        <div class="modal-footer">
+          <button type="button" class="btn btn-outline-secondary" data-bs-dismiss="modal">Cancel</button>
+          <button type="submit" class="btn btn-primary">Create Command</button>
+        </div>
+      </form>
+    </div>
+  </div>
+</div>
+
+{% endblock %}

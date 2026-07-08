@@ -1,5 +1,38 @@
 {% extends "base.html" %}
 {% block title %}Groups & Permissions{% endblock %}
+
+{% macro game_server_access(all_remotes, all_servers, selected_ids, idprefix) %}
+<label class="form-label fw-bold mt-3">Individual game servers</label>
+<div class="form-text mt-0 mb-2">Optional — grant specific servers (adds to any whole-host access above).</div>
+<div style="max-height: 180px; overflow-y: auto;">
+  {% for r in all_remotes %}
+    {% set host_games = all_servers|selectattr('remote_id','equalto',r.id)|list %}
+    {% if host_games %}
+    <div class="small text-secondary mt-1 fw-bold">{{ r.display_name }}</div>
+    {% for g in host_games %}
+    <div class="form-check ms-2">
+      <input type="checkbox" name="game_servers" value="{{ g.id }}" class="form-check-input"
+             id="{{ idprefix }}-gs-{{ g.id }}" {% if g.id in selected_ids %}checked{% endif %}>
+      <label class="form-check-label small" for="{{ idprefix }}-gs-{{ g.id }}">{{ g.name }}
+        <span class="text-secondary">({{ g.game_type }})</span></label>
+    </div>
+    {% endfor %}
+    {% endif %}
+  {% else %}
+  <p class="text-secondary small">No game servers yet.</p>
+  {% endfor %}
+</div>
+{% endmacro %}
+
+{% macro role_presets() %}
+<div class="mb-2 d-flex gap-1 flex-wrap">
+  <span class="small text-secondary me-1">Quick roles:</span>
+  <button type="button" class="btn btn-outline-info btn-sm py-0" data-role-preset="moderator">Moderator</button>
+  <button type="button" class="btn btn-outline-info btn-sm py-0" data-role-preset="admin">Admin</button>
+  <button type="button" class="btn btn-outline-secondary btn-sm py-0" data-role-preset="none">Clear</button>
+</div>
+{% endmacro %}
+
 {% block content %}
 
 <div class="d-flex justify-content-between align-items-center mb-3">
@@ -12,7 +45,8 @@
 <p class="text-secondary small mb-3" style="max-width:70ch;">
   A <strong>group</strong> bundles a set of permissions with access to specific game servers.
   Assign users to groups on the <a href="{{ url_for('manage_users') }}">Users</a> page — each user
-  gets the combined abilities of every group they're in. (Super Administrators bypass groups entirely.)
+  gets the combined abilities of every group they're in. Hand out game commands to groups on the
+  <a href="{{ url_for('manage_commands') }}">Custom Commands</a> page. (Super Administrators bypass groups entirely.)
 </p>
 
 {% for group in groups %}
@@ -40,7 +74,7 @@
   </div>
   <div class="card-body py-2">
     <div class="row">
-      <div class="col-md-6">
+      <div class="col-md-4">
         <span class="text-secondary small fw-bold">Members ({{ group.users|length }})</span>
         <div class="mt-1">
           {% for u in group.users %}
@@ -50,7 +84,7 @@
           {% endfor %}
         </div>
       </div>
-      <div class="col-md-3">
+      <div class="col-md-4">
         <span class="text-secondary small fw-bold">Permissions</span>
         <div class="mt-1">
           {% for p in group.get_permissions() %}
@@ -60,14 +94,18 @@
           {% endfor %}
         </div>
       </div>
-      <div class="col-md-3">
+      <div class="col-md-4">
         <span class="text-secondary small fw-bold">Server Access</span>
         <div class="mt-1">
           {% for s in group.servers %}
-            <span class="badge bg-secondary">{{ s.name }}</span>
-          {% else %}
-            <span class="text-secondary small">None</span>
+            <span class="badge bg-secondary" title="Whole host">{{ s.display_name }}</span>
           {% endfor %}
+          {% for g in group.game_servers %}
+            <span class="badge bg-dark border" title="Single game server">{{ g.name }}</span>
+          {% endfor %}
+          {% if not group.servers and not group.game_servers %}
+            <span class="text-secondary small">None</span>
+          {% endif %}
         </div>
       </div>
     </div>
@@ -90,6 +128,7 @@
           </div>
           <div class="col-md-4">
             <label class="form-label fw-bold">Permissions</label>
+            {{ role_presets() }}
             <div style="max-height: 300px; overflow-y: auto;">
               {% for perm_key, perm_desc in all_perms.items() %}
               <div class="form-check">
@@ -105,21 +144,22 @@
           </div>
           <div class="col-md-4">
             <label class="form-label fw-bold">Server Access</label>
-            <div class="form-text mt-0 mb-2">Access is granted per host — a checked host covers all of its game servers.</div>
-            <div style="max-height: 300px; overflow-y: auto;">
+            <div class="form-text mt-0 mb-2">A checked host covers all of its game servers.</div>
+            <div style="max-height: 160px; overflow-y: auto;">
               {% for r in all_remotes %}
               <div class="form-check">
                 <input type="checkbox" name="servers" value="{{ r.id }}"
                        class="form-check-input" id="srv-{{ group.id }}-{{ r.id }}"
                        {% if r in group.servers %}checked{% endif %}>
                 <label class="form-check-label" for="srv-{{ group.id }}-{{ r.id }}">
-                  <span class="small">{{ r.name }}</span>
+                  <span class="small">{{ r.display_name }}</span>
                 </label>
               </div>
               {% else %}
               <p class="text-secondary small">No hosts configured yet.</p>
               {% endfor %}
             </div>
+            {{ game_server_access(all_remotes, all_servers, group.game_servers|map(attribute='id')|list, 'g' ~ group.id) }}
           </div>
         </div>
         <button type="submit" class="btn btn-primary mt-2">
@@ -149,7 +189,7 @@
         </div>
         <div class="modal-body">
           <div class="row">
-            <div class="col-md-6">
+            <div class="col-md-4">
               <div class="mb-3">
                 <label class="form-label">Group Name</label>
                 <input type="text" name="name" class="form-control" required>
@@ -159,8 +199,9 @@
                 <input type="text" name="description" class="form-control" placeholder="e.g. Server moderators">
               </div>
             </div>
-            <div class="col-md-3">
+            <div class="col-md-4">
               <label class="form-label fw-bold">Permissions</label>
+              {{ role_presets() }}
               <div style="max-height: 350px; overflow-y: auto;">
                 {% for perm_key, perm_desc in all_perms.items() %}
                 <div class="form-check">
@@ -171,22 +212,23 @@
                 {% endfor %}
               </div>
             </div>
-            <div class="col-md-3">
+            <div class="col-md-4">
               <label class="form-label fw-bold">Server Access</label>
-              <div class="form-text mt-0 mb-2">Per host — covers all its game servers.</div>
-              <div style="max-height: 350px; overflow-y: auto;">
+              <div class="form-text mt-0 mb-2">A checked host covers all its game servers.</div>
+              <div style="max-height: 160px; overflow-y: auto;">
                 {% for r in all_remotes %}
                 <div class="form-check">
                   <input type="checkbox" name="servers" value="{{ r.id }}"
                          class="form-check-input" id="new-srv-{{ r.id }}">
                   <label class="form-check-label small" for="new-srv-{{ r.id }}">
-                    {{ r.name }}
+                    {{ r.display_name }}
                   </label>
                 </div>
                 {% else %}
                 <p class="text-secondary small">No hosts yet</p>
                 {% endfor %}
               </div>
+              {{ game_server_access(all_remotes, all_servers, [], 'new') }}
             </div>
           </div>
         </div>
@@ -198,5 +240,29 @@
     </div>
   </div>
 </div>
+
+<script>
+// Quick-role presets: tick exactly the permissions for a role in whichever form the button is in.
+// Superadmin convenience only — the server still applies the anti-escalation rules on save.
+(function(){
+  var PRESETS = {
+    moderator: ["view_servers","view_console","kick_player","ban_player","say_server"],
+    admin: ["view_servers","view_console","send_command","moderate_server","kick_player","ban_player",
+            "say_server","restart_server","start_server","stop_server","update_server",
+            "install_server","uninstall_server","manage_servers","view_logs"],
+    none: []
+  };
+  document.addEventListener('click', function(e){
+    var btn = e.target.closest('[data-role-preset]');
+    if(!btn) return;
+    var form = btn.closest('form');
+    if(!form) return;
+    var set = PRESETS[btn.getAttribute('data-role-preset')] || [];
+    form.querySelectorAll('input[name="permissions"]').forEach(function(cb){
+      cb.checked = set.indexOf(cb.value) !== -1;
+    });
+  });
+})();
+</script>
 
 {% endblock %}

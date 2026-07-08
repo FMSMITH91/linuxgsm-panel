@@ -141,7 +141,7 @@
         <tbody id="pl-rows"></tbody>
       </table>
     </div>
-    {% if can_moderate %}
+    {% if can_say %}
     <div id="pl-announce" class="d-flex gap-2 mt-3" style="display:none;">
       <input type="text" id="pl-say" class="form-control form-control-sm" placeholder="Announce a message to everyone in-game…" maxlength="200" aria-label="Announce message" onkeydown="if(event.key==='Enter'){event.preventDefault();announceSay();}">
       <button class="btn btn-sm btn-outline-primary text-nowrap" onclick="announceSay()"><i class="bi bi-megaphone"></i> Say</button>
@@ -149,6 +149,32 @@
     {% endif %}
   </div>
 </div>
+
+{% if custom_commands %}
+<!-- Custom commands the current user may run on this server (assigned via their group) -->
+<div class="card mb-3" data-mtab="console" id="custom-cmd-card">
+  <div class="card-header"><i class="bi bi-terminal-fill"></i> Commands</div>
+  <div class="card-body">
+    <div class="d-flex flex-wrap gap-2 align-items-start">
+      {% for c in custom_commands %}
+      <div class="custom-cmd" data-cmd-id="{{ c.id }}" data-has-arg="{{ '1' if c.has_argument else '0' }}">
+        {% if c.has_argument %}
+        <div class="input-group input-group-sm" style="width:auto;">
+          <span class="input-group-text">{{ c.name }}</span>
+          <input type="text" class="form-control cc-arg" style="max-width:180px;" maxlength="64"
+                 placeholder="{{ c.argument_label or 'value' }}" aria-label="{{ c.argument_label or c.name }}">
+          <button class="btn btn-outline-primary cc-run" type="button">Run</button>
+        </div>
+        {% else %}
+        <button class="btn btn-sm btn-outline-primary cc-run" type="button">{{ c.name }}</button>
+        {% endif %}
+      </div>
+      {% endfor %}
+    </div>
+    <div class="form-text mt-2">These run on the live server console. Given to your group by an admin.</div>
+  </div>
+</div>
+{% endif %}
 
 <!-- Details: server info, host and commands (grouped into the Details tab) -->
 <div class="row" data-mtab="details">
@@ -300,6 +326,9 @@ var consoleEl = document.getElementById('console-output');
 var wsStatus = document.getElementById('ws-status');
 var serverId = {{ server.id }};
 var _CAN_MODERATE = {{ 'true' if can_moderate else 'false' }};
+var _CAN_KICK = {{ 'true' if can_kick else 'false' }};
+var _CAN_BAN = {{ 'true' if can_ban else 'false' }};
+var _CAN_SAY = {{ 'true' if can_say else 'false' }};
 
 // ── Players + in-game moderation ──────────────────────────────
 function plTime(t){
@@ -317,14 +346,14 @@ function renderPlayers(d){
   var caps=d.caps||{}, players=d.players||[], queryable=!!d.queryable;
   // Moderators see the card whenever there's something to do (a list, or the announce box);
   // everyone else only when there's a list or announce to show.
-  card.style.display = (_CAN_MODERATE || queryable || caps.say) ? '' : 'none';
+  card.style.display = (_CAN_MODERATE || queryable) ? '' : 'none';
   if(card.style.display==='none') return;
   var engine=d.engine||'';
   window._plEngine = engine;   // the ban dialog uses this to decide if "all servers" can apply
   var unsup=document.getElementById('pl-unsupported'), empty=document.getElementById('pl-empty'),
       wrap=document.getElementById('pl-table-wrap'), ann=document.getElementById('pl-announce'),
       cnt=document.getElementById('pl-count');
-  if(ann) ann.style.display = caps.say ? 'flex' : 'none';
+  if(ann) ann.style.display = (_CAN_SAY && caps.say) ? 'flex' : 'none';
   if(!queryable){ if(unsup)unsup.style.display=''; if(empty)empty.style.display='none'; if(wrap)wrap.style.display='none'; if(cnt)cnt.textContent=''; return; }
   if(unsup) unsup.style.display='none';
   if(cnt) cnt.textContent='('+players.length+')';
@@ -335,8 +364,8 @@ function renderPlayers(d){
     if(_CAN_MODERATE){
       var sid=p.steamid||'', num=(p.num!=null?String(p.num):'');
       var da='data-name="'+escapeHtml(p.name)+'" data-steamid="'+escapeHtml(sid)+'" data-num="'+escapeHtml(num)+'"';
-      if(caps.kick) acts+='<button class="btn btn-sm btn-outline-warning py-0 px-1 me-1" '+da+' onclick="moderatePlayer(this,\'kick\')">Kick</button>';
-      if(caps.ban){
+      if(_CAN_KICK && caps.kick) acts+='<button class="btn btn-sm btn-outline-warning py-0 px-1 me-1" '+da+' onclick="moderatePlayer(this,\'kick\')">Kick</button>';
+      if(_CAN_BAN && caps.ban){
         // Valve bans go by SteamID; a bot / unresolved player has none, so its Ban is disabled.
         var noBan=(engine==='valve' && !sid);
         acts+='<button class="btn btn-sm btn-outline-danger py-0 px-1" '+da
@@ -405,6 +434,39 @@ function announceSay(){
       if(d.success) inp.value='';
     }).catch(function(){ window.toast('Announce failed','danger'); });
 }
+
+// ── Custom commands (superadmin-defined, handed to this user's group) ──────────
+// Delegated so it also covers the argument-input Enter key. The server re-checks every run
+// (group assignment + scope + argument validation) — the button list is only a convenience.
+function runCustomCommand(wrap, btn){
+  var cmdId = wrap.getAttribute('data-cmd-id');
+  var hasArg = wrap.getAttribute('data-has-arg')==='1';
+  var value = '';
+  if(hasArg){
+    var inp = wrap.querySelector('.cc-arg');
+    value = inp ? (inp.value||'').trim() : '';
+    if(!value){ if(inp) inp.focus(); return; }
+  }
+  var orig = btn.innerHTML; btn.disabled = true;
+  btn.innerHTML = '<i class="bi bi-arrow-repeat"></i>';
+  fetch(MOUNT+'/api/server/'+serverId+'/custom-command/'+cmdId, {
+    method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({value: value})
+  }).then(function(r){return r.json();}).then(function(d){
+    window.toast(d.message || (d.success?'Done':'Failed'), d.success?'success':'danger');
+  }).catch(function(){ window.toast('Command failed','danger'); })
+  .finally(function(){ btn.disabled = false; btn.innerHTML = orig; });
+}
+document.addEventListener('click', function(e){
+  var btn = e.target.closest && e.target.closest('.cc-run'); if(!btn) return;
+  var wrap = btn.closest('.custom-cmd'); if(wrap) runCustomCommand(wrap, btn);
+});
+document.addEventListener('keydown', function(e){
+  if(e.key!=='Enter') return;
+  var inp = e.target.closest && e.target.closest('.cc-arg'); if(!inp) return;
+  e.preventDefault();
+  var wrap = inp.closest('.custom-cmd'); var btn = wrap && wrap.querySelector('.cc-run');
+  if(wrap && btn) runCustomCommand(wrap, btn);
+});
 loadPlayers();
 if(window.pollWhenVisible) pollWhenVisible(loadPlayers, 15000);
 

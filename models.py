@@ -36,11 +36,27 @@ group_permissions = db.Table(
     db.Column("permission", db.String(128), primary_key=True),
 )
 
-# Association table: group -> accessible servers
+# Association table: group -> accessible hosts (grants every game server on that host)
 group_servers = db.Table(
     "group_servers",
     db.Column("group_id", db.Integer, db.ForeignKey("group.id"), primary_key=True),
     db.Column("server_id", db.Integer, db.ForeignKey("remote_server.id"), primary_key=True),
+)
+
+# Association table: group -> individually-assigned game servers. Finer than group_servers
+# (which grants a whole host): a user may access a game server if its host is in the group's
+# `servers` OR the server itself is in the group's `game_servers`. See auth.can_access_server.
+group_game_servers = db.Table(
+    "group_game_servers",
+    db.Column("group_id", db.Integer, db.ForeignKey("group.id"), primary_key=True),
+    db.Column("game_server_id", db.Integer, db.ForeignKey("game_server.id"), primary_key=True),
+)
+
+# Association table: group -> custom commands the group is allowed to run
+group_custom_commands = db.Table(
+    "group_custom_commands",
+    db.Column("group_id", db.Integer, db.ForeignKey("group.id"), primary_key=True),
+    db.Column("custom_command_id", db.Integer, db.ForeignKey("custom_command.id"), primary_key=True),
 )
 
 
@@ -137,6 +153,10 @@ class Group(db.Model):
     created_at = db.Column(db.DateTime, default=datetime.utcnow)
     users = db.relationship("User", secondary=user_groups, back_populates="groups")
     servers = db.relationship("RemoteServer", secondary=group_servers, back_populates="groups")
+    game_servers = db.relationship("GameServer", secondary=group_game_servers,
+                                   back_populates="groups")
+    custom_commands = db.relationship("CustomCommand", secondary=group_custom_commands,
+                                      back_populates="groups")
     permissions = db.Column(db.Text, default="[]")  # JSON list of permission strings
 
     def get_permissions(self):
@@ -281,6 +301,7 @@ class GameServer(db.Model):
     commands = db.Column(db.Text, default="[]")  # JSON list of {cmd, short, desc} from LinuxGSM
     created_at = db.Column(db.DateTime, default=datetime.utcnow)
     remote = db.relationship("RemoteServer", back_populates="games")
+    groups = db.relationship("Group", secondary=group_game_servers, back_populates="game_servers")
 
     @validates("short_name", "game_type")
     def _validate_ident(self, key, value):
@@ -346,6 +367,46 @@ class GameServer(db.Model):
         """LinuxGSM console log path: /home/<user>/log/console/<lgsm_name>-console.log
         (the file is named after the script/selfname, not the user)."""
         return f"/home/{self.short_name}/log/console/{self.lgsm_name}-console.log"
+
+
+# Default validation for a custom-command argument: a single token with no shell/tmux
+# metacharacters (no spaces, quotes, ;, $, backticks, newlines), so substituting it into a
+# superadmin-authored template and sending the result to `tmux send-keys` can never break out
+# of the intended command. A superadmin may set a stricter per-command pattern.
+CUSTOM_ARG_DEFAULT_PATTERN = r"^[A-Za-z0-9_.\-]{1,64}$"
+
+# The single placeholder a command template may contain for the operator-supplied value.
+CUSTOM_ARG_PLACEHOLDER = "{}"
+
+
+class CustomCommand(db.Model):
+    """A superadmin-defined game console command that can be handed to specific groups.
+
+    The template is authored by a superadmin (trusted). It may contain a single `{}`
+    placeholder for one value the operator fills in at run time; that value is validated
+    against `argument_pattern` (default CUSTOM_ARG_DEFAULT_PATTERN) before being substituted,
+    so a mod who is given the command can't inject additional console/shell commands through it.
+    `scope_*` limits which servers the command applies to (all / a game engine / one game_type)."""
+    id = db.Column(db.Integer, primary_key=True)
+    name = db.Column(db.String(80), nullable=False)               # button label
+    command_template = db.Column(db.String(500), nullable=False)  # e.g. "map {}" or "say Restarting"
+    argument_label = db.Column(db.String(80), default="")     # shown by the input when templated
+    argument_pattern = db.Column(db.String(200), default="")  # optional regex; "" -> default
+    scope_type = db.Column(db.String(16), default="all")      # all | engine | game
+    scope_value = db.Column(db.String(64), default="")        # engine name or game_type when scoped
+    enabled = db.Column(db.Boolean, default=True)
+    created_by = db.Column(db.String(80), default="")
+    created_at = db.Column(db.DateTime, default=datetime.utcnow)
+    groups = db.relationship("Group", secondary=group_custom_commands,
+                             back_populates="custom_commands")
+
+    @property
+    def has_argument(self):
+        return CUSTOM_ARG_PLACEHOLDER in (self.command_template or "")
+
+    def effective_pattern(self):
+        """The regex an operator-supplied argument must match. Falls back to the safe default."""
+        return self.argument_pattern or CUSTOM_ARG_DEFAULT_PATTERN
 
 
 class AuditLog(db.Model):

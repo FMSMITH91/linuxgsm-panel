@@ -18,7 +18,10 @@ login_manager.login_message = "Please log in to access this page."
 VIEW_SERVERS = "view_servers"
 VIEW_CONSOLE = "view_console"
 SEND_COMMAND = "send_command"
-MODERATE_SERVER = "moderate_server"     # Kick/ban players + announce, without full console access
+MODERATE_SERVER = "moderate_server"     # Umbrella: kick + ban + announce (grants all three below)
+KICK_PLAYER = "kick_player"             # Kick players from the server
+BAN_PLAYER = "ban_player"               # Ban players from the server
+SAY_SERVER = "say_server"               # Announce a message in-game
 RESTART_SERVER = "restart_server"
 START_SERVER = "start_server"
 STOP_SERVER = "stop_server"
@@ -36,7 +39,10 @@ ALL_PERMISSIONS = {
     VIEW_SERVERS: "View server status list",
     VIEW_CONSOLE: "View live console output",
     SEND_COMMAND: "Send commands to game server console",
-    MODERATE_SERVER: "Moderate players (kick / ban / announce in-game)",
+    MODERATE_SERVER: "Moderate players — all of kick, ban & announce",
+    KICK_PLAYER: "Kick players from a server",
+    BAN_PLAYER: "Ban players from a server",
+    SAY_SERVER: "Announce a message in-game",
     RESTART_SERVER: "Restart game servers",
     START_SERVER: "Start game servers",
     STOP_SERVER: "Stop game servers",
@@ -163,13 +169,20 @@ def get_user_servers(user):
     if user.is_superadmin:
         return q.all()
 
-    server_ids = set()
+    from sqlalchemy import or_
+    remote_ids = set()   # whole-host grants (group.servers)
+    game_ids = set()     # individual game-server grants (group.game_servers)
     for group in user.groups or []:
         for s in group.servers or []:
-            server_ids.add(s.id)
+            remote_ids.add(s.id)
+        for g in group.game_servers or []:
+            game_ids.add(g.id)
 
-    # Now get all game servers belonging to those remote servers
-    return q.filter(GameServer.remote_id.in_(list(server_ids))).all()
+    if not remote_ids and not game_ids:
+        return []
+    # A game server is visible if its host is granted OR the server itself is granted.
+    return q.filter(or_(GameServer.remote_id.in_(list(remote_ids)),
+                        GameServer.id.in_(list(game_ids)))).all()
 
 
 def has_permission(user, perm):
@@ -180,7 +193,9 @@ def has_permission(user, perm):
 
 
 def can_access_server(user, game_server_id):
-    """Check if user can access a specific game server."""
+    """Check if user can access a specific game server. Access is granted either at the HOST
+    level (the server's remote is in one of the user's groups) or at the individual GAME-SERVER
+    level (the server itself is assigned to one of the user's groups). Superadmin = all."""
     if user.is_superadmin:
         return True
     from models import GameServer
@@ -188,10 +203,85 @@ def can_access_server(user, game_server_id):
     if not gs:
         return False
     for group in user.groups or []:
-        for rs in group.servers or []:
+        for rs in group.servers or []:          # whole-host grant
             if rs.id == gs.remote_id:
                 return True
+        for g in group.game_servers or []:      # individual game-server grant
+            if g.id == gs.id:
+                return True
     return False
+
+
+_MODERATION_PERM = {"kick": KICK_PLAYER, "ban": BAN_PLAYER, "say": SAY_SERVER}
+
+
+def can_moderate_action(user, action):
+    """Whether `user` may perform a moderation `action` ('kick' | 'ban' | 'say'). Full console
+    access (SEND_COMMAND) or the umbrella MODERATE_SERVER grant every action; otherwise the
+    matching granular permission (kick_player / ban_player / say_server) is required. This does
+    NOT check server access — pair it with can_access_server / @server_access_required."""
+    if user.is_superadmin:
+        return True
+    perms = get_user_permissions(user)
+    if SEND_COMMAND in perms or MODERATE_SERVER in perms:
+        return True
+    needed = _MODERATION_PERM.get(action)
+    return bool(needed) and needed in perms
+
+
+def _custom_command_scope_matches(cmd, game_server):
+    """True if custom command `cmd` applies to `game_server` (all games / a game engine / one
+    specific game_type)."""
+    scope = cmd.scope_type or "all"
+    if scope == "all":
+        return True
+    if scope == "game":
+        return game_server.game_type == cmd.scope_value
+    if scope == "engine":
+        from ssh_manager import game_engine   # lazy: avoid import cycle at module load
+        return game_engine(game_server.game_type) == cmd.scope_value
+    return False
+
+
+def can_run_custom_command(user, cmd, game_server):
+    """Whether `user` may run custom command `cmd` on `game_server`: the command must be enabled,
+    in scope for that game, on a server the user can access, and — for non-superadmins — assigned
+    to one of the user's groups. The command TEMPLATE is superadmin-authored; only the argument
+    is user-supplied and is validated separately before substitution."""
+    if not cmd or not cmd.enabled:
+        return False
+    if not _custom_command_scope_matches(cmd, game_server):
+        return False
+    if not can_access_server(user, game_server.id):
+        return False
+    if user.is_superadmin:
+        return True
+    for group in user.groups or []:
+        for c in (group.custom_commands or []):
+            if c.id == cmd.id:
+                return True
+    return False
+
+
+def allowed_custom_commands(user, game_server):
+    """The list of CustomCommand rows `user` may run on `game_server` (superadmin sees every
+    enabled, in-scope command; others see only those assigned to their groups)."""
+    from models import CustomCommand
+    out = []
+    seen = set()
+    if user.is_superadmin:
+        candidates = CustomCommand.query.filter_by(enabled=True).all()
+    else:
+        candidates = []
+        for group in user.groups or []:
+            candidates.extend(group.custom_commands or [])
+    for cmd in candidates:
+        if cmd.id in seen:
+            continue
+        if can_run_custom_command(user, cmd, game_server):
+            seen.add(cmd.id)
+            out.append(cmd)
+    return out
 
 
 def can_access_remote(user, remote_id):

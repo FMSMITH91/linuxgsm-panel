@@ -1726,6 +1726,67 @@ try:
 finally:
     _sh.rmtree(_dbm_dir, ignore_errors=True)
 
+# ── granular moderation permissions + custom-command scope/argument safety ──
+import re as _re
+from types import SimpleNamespace as _NS
+from auth import can_moderate_action, _custom_command_scope_matches
+from models import CUSTOM_ARG_DEFAULT_PATTERN
+
+
+class _FakeGroup:
+    def __init__(self, perms):
+        self._p = set(perms)
+
+    def get_permissions(self):
+        return self._p
+
+
+def _u(perms=(), superadmin=False):
+    return _NS(is_superadmin=superadmin, groups=[_FakeGroup(perms)])
+
+
+# A mod granted ONLY kick can kick, but not ban or announce.
+_kicker = _u(["kick_player"])
+check("mod perm: kick_player -> can kick", can_moderate_action(_kicker, "kick"))
+check("mod perm: kick_player -> can NOT ban", not can_moderate_action(_kicker, "ban"))
+check("mod perm: kick_player -> can NOT say", not can_moderate_action(_kicker, "say"))
+# The umbrella moderate_server (legacy groups) still grants all three.
+_umb = _u(["moderate_server"])
+check("mod perm: umbrella grants kick+ban+say",
+      can_moderate_action(_umb, "kick") and can_moderate_action(_umb, "ban")
+      and can_moderate_action(_umb, "say"))
+# Full console access implies moderation; no perms implies none; superadmin gets all.
+check("mod perm: send_command implies ban", can_moderate_action(_u(["send_command"]), "ban"))
+check("mod perm: no perms -> cannot kick", not can_moderate_action(_u([]), "kick"))
+check("mod perm: superadmin can do everything",
+      can_moderate_action(_u(superadmin=True), "ban"))
+
+# Custom-command scope matching (all / by engine / by game).
+_cod2 = _NS(game_type="cod2")
+_gmod = _NS(game_type="gmod")
+check("cmd scope all -> matches any game",
+      _custom_command_scope_matches(_NS(scope_type="all", scope_value=""), _cod2))
+check("cmd scope game=cod2 -> matches cod2",
+      _custom_command_scope_matches(_NS(scope_type="game", scope_value="cod2"), _cod2))
+check("cmd scope game=cod2 -> does NOT match gmod",
+      not _custom_command_scope_matches(_NS(scope_type="game", scope_value="cod2"), _gmod))
+check("cmd scope engine=idtech3 -> matches cod2 (idTech3)",
+      _custom_command_scope_matches(_NS(scope_type="engine", scope_value="idtech3"), _cod2))
+check("cmd scope engine=idtech3 -> does NOT match gmod (valve)",
+      not _custom_command_scope_matches(_NS(scope_type="engine", scope_value="idtech3"), _gmod))
+
+# Argument charset: real map/entity names pass; anything that could break out of the console
+# line (metacharacters, spaces, command substitution, empty) is rejected.
+_arg_ok = lambda v: _re.fullmatch(CUSTOM_ARG_DEFAULT_PATTERN, v) is not None
+check("custom arg: map name accepted", _arg_ok("mp_toujane"))
+check("custom arg: dotted/dashed accepted", _arg_ok("de_dust2-v2.1"))
+check("custom arg: rejects ; injection", not _arg_ok("a;rm -rf /"))
+check("custom arg: rejects command substitution", not _arg_ok("$(reboot)"))
+check("custom arg: rejects backtick", not _arg_ok("`id`"))
+check("custom arg: rejects spaces", not _arg_ok("mp toujane"))
+check("custom arg: rejects newline", not _arg_ok("a\nb"))
+check("custom arg: rejects empty", not _arg_ok(""))
+
 # ── cleanup: remove key/config files this run created ─────────
 for p in (config.CRED_KEY_FILE, config.SECRET_FILE, config.CONFIG_FILE):
     if p not in _pre and os.path.exists(p):

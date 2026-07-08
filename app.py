@@ -73,6 +73,7 @@ from auth import (
     UNINSTALL_SERVER, MANAGE_SERVERS,
     MANAGE_REMOTES, MANAGE_USERS, MANAGE_GROUPS,
     VIEW_LOGS, SUPER_ADMIN, VIEW_CONSOLE, SEND_COMMAND, MODERATE_SERVER,
+    can_moderate_action, can_run_custom_command, allowed_custom_commands,
     RESTART_SERVER, START_SERVER, STOP_SERVER, UPDATE_SERVER,
 )
 from config import (
@@ -81,6 +82,7 @@ from config import (
 )
 from models import (
     AuditLog, GameServer, Group, RemoteServer, SetupState, User, db, init_db,
+    CustomCommand, CUSTOM_ARG_DEFAULT_PATTERN, CUSTOM_ARG_PLACEHOLDER,
 )
 from ssh_manager import (
     close_connection, run_command, ssh_test_connection,
@@ -1336,11 +1338,19 @@ def register_routes(app):
                 _log.debug("server_detail: ignored non-fatal error", exc_info=True)
         public_host = remote.public_ip or ("" if remote.is_local else remote.host)
 
-        can_moderate = _can(MODERATE_SERVER) or _can(SEND_COMMAND)
+        # Granular moderation flags (kick / ban / announce can be granted independently now).
+        can_kick = can_moderate_action(current_user, "kick")
+        can_ban = can_moderate_action(current_user, "ban")
+        can_say = can_moderate_action(current_user, "say")
+        can_moderate = can_kick or can_ban or can_say
+        # Custom commands this user may run on THIS server (respects group assignment + scope).
+        custom_commands = allowed_custom_commands(current_user, gs)
         return render_template("server_detail.html", server=gs, remote=remote,
                                console_lines=console_lines, actions=actions,
                                maintenance=maintenance, all_commands=all_commands,
                                can_send_command=can_send_command, can_moderate=can_moderate,
+                               can_kick=can_kick, can_ban=can_ban, can_say=can_say,
+                               custom_commands=custom_commands,
                                can_autostart=can_autostart, public_host=public_host)
 
     def _perm_for_action(action):
@@ -1613,13 +1623,14 @@ def register_routes(app):
         permission (or full console access / superadmin — those can already do it by hand). The
         player name is sanitized in ssh_manager.moderate() so a hostile name can't inject."""
         gs = get_game(server_id)
-        if not (current_user.is_superadmin or has_permission(current_user, MODERATE_SERVER)
-                or has_permission(current_user, SEND_COMMAND)):
-            return jsonify({"success": False, "message": "Permission denied"}), 403
         data = _json_body()
         action = (data.get("action") or "").strip()
         if action not in ("kick", "ban", "say"):
             return jsonify({"success": False, "message": "Unknown action"}), 400
+        # Per-action permission: a mod may hold only kick, only ban, etc. (SEND_COMMAND / the
+        # umbrella MODERATE_SERVER / superadmin still grant all three).
+        if not can_moderate_action(current_user, action):
+            return jsonify({"success": False, "message": "Permission denied"}), 403
         target = data.get("target", "")
         steamid = data.get("steamid", "")
         num = data.get("num", "")
@@ -1659,6 +1670,41 @@ def register_routes(app):
             return jsonify({"success": ok, "message": msg})
         except Exception:
             return jsonify({"success": False, "message": _log_and_generic("moderation failed")}), 500
+
+    @app.route("/api/server/<int:server_id>/custom-command/<int:cmd_id>", methods=["POST"])
+    @login_required
+    @server_access_required
+    def api_server_custom_command(server_id, cmd_id):
+        """Run a superadmin-defined custom command on this server. The command TEMPLATE is trusted
+        (authored by a superadmin); the only user input is the optional {} value, which is validated
+        against the command's pattern before substitution so it can't inject extra console commands."""
+        gs = get_game(server_id)
+        cmd = db.session.get(CustomCommand, cmd_id)
+        if not cmd or not can_run_custom_command(current_user, cmd, gs):
+            return jsonify({"success": False, "message": "Permission denied"}), 403
+        final = cmd.command_template or ""
+        if cmd.has_argument:
+            value = (_json_body().get("value") or "").strip()
+            try:
+                if not re.fullmatch(cmd.effective_pattern(), value):
+                    raise ValueError
+            except (re.error, ValueError):
+                # A bad stored pattern must not become a bypass — fall back to the safe default.
+                if not re.fullmatch(CUSTOM_ARG_DEFAULT_PATTERN, value):
+                    return jsonify({"success": False,
+                                    "message": "Invalid value for %s." % (cmd.argument_label or "argument")}), 400
+            final = final.replace(CUSTOM_ARG_PLACEHOLDER, value)
+        try:
+            out, err, rc = send_console_command(gs.remote, gs.short_name, final,
+                                                timeout=10, selfname=gs.lgsm_name)
+            log_action(current_user, "custom_command", target=gs.name,
+                       detail=("%s: %s" % (cmd.name, final))[:200], success=(rc == 0))
+            if rc != 0:
+                return jsonify({"success": False,
+                                "message": "Console (tmux) not accessible. Is the server running?"}), 502
+            return jsonify({"success": True, "message": "Ran '%s'." % cmd.name})
+        except Exception:
+            return jsonify({"success": False, "message": _log_and_generic("custom command failed")}), 500
 
     @app.route("/api/server/<int:server_id>/restart-when-empty", methods=["POST"])
     @login_required
@@ -2648,6 +2694,24 @@ def register_routes(app):
                 out.append(rs)
         return out
 
+    def _selected_game_servers(ids):
+        """Resolve submitted game-server ids to GameServer rows (individual per-server grants,
+        finer than the whole-host grants from _selected_remotes). Skips malformed/unknown ids."""
+        out = []
+        seen = set()
+        for sid in ids:
+            try:
+                gid = int(sid)
+            except (TypeError, ValueError):
+                continue
+            if gid in seen:
+                continue
+            g = db.session.get(GameServer, gid)
+            if g:
+                seen.add(gid)
+                out.append(g)
+        return out
+
     @app.route("/groups/add", methods=["POST"])
     @login_required
     @permission_required(MANAGE_GROUPS)
@@ -2666,6 +2730,7 @@ def register_routes(app):
         group = Group(name=name, description=description)
         group.set_permissions(_grantable_perms(request.form.getlist("permissions")))
         group.servers = _selected_remotes(request.form.getlist("servers"))
+        group.game_servers = _selected_game_servers(request.form.getlist("game_servers"))
 
         db.session.add(group)
         db.session.commit()
@@ -2683,6 +2748,7 @@ def register_routes(app):
         group.set_permissions(_grantable_perms(request.form.getlist("permissions"),
                                                group.get_permissions()))
         group.servers = _selected_remotes(request.form.getlist("servers"))
+        group.game_servers = _selected_game_servers(request.form.getlist("game_servers"))
 
         db.session.commit()
         log_action(current_user, "edit_group", target=group.name)
@@ -2699,11 +2765,128 @@ def register_routes(app):
             user.groups.remove(group)
         group.users = []
         group.servers = []
+        group.game_servers = []
+        group.custom_commands = []
         db.session.delete(group)
         db.session.commit()
         log_action(current_user, "delete_group", target=group.name)
         flash(f"Group '{group.name}' deleted.", "success")
         return redirect(url_for("manage_groups"))
+
+    # ── Custom Commands (superadmin-defined game commands handed to groups) ──
+    # A dict of engine value -> label for the scope selector. Kept here (not a new ssh_manager
+    # export) so the admin UI stays self-contained.
+    _CUSTOM_CMD_ENGINES = {"valve": "Valve / Source & GoldSrc",
+                           "idtech3": "idTech3 / Quake3 (CoD family)",
+                           "minecraft": "Minecraft"}
+
+    def _custom_cmd_form(cmd=None):
+        """Read + validate the custom-command form. Returns (fields, error). `fields` is a dict
+        ready to assign onto a CustomCommand; `error` is a user-facing string or None."""
+        name = (request.form.get("name") or "").strip()
+        template = (request.form.get("command_template") or "").strip()
+        arg_label = (request.form.get("argument_label") or "").strip()
+        arg_pattern = (request.form.get("argument_pattern") or "").strip()
+        # Scope arrives as a single "<type>|<value>" field (e.g. "all|", "engine|idtech3", "game|cod2").
+        scope_raw = (request.form.get("scope") or "all").strip()
+        scope_type, _, scope_value = scope_raw.partition("|")
+        scope_type = scope_type.strip()
+        scope_value = scope_value.strip()
+        enabled = request.form.get("enabled") is not None
+        if not name or not template:
+            return None, "A label and a command template are required."
+        if template.count(CUSTOM_ARG_PLACEHOLDER) > 1:
+            return None, "The template may contain at most one {} placeholder."
+        # The template is sent to tmux as a console line — forbid control chars / newlines so it
+        # can't smuggle a second keystroke sequence. Normal console punctuation is allowed.
+        if any(ord(c) < 32 for c in template):
+            return None, "The command template can't contain control characters or newlines."
+        if scope_type not in ("all", "engine", "game"):
+            scope_type = "all"
+        if scope_type == "engine" and scope_value not in _CUSTOM_CMD_ENGINES:
+            return None, "Pick a valid engine for the engine scope."
+        if scope_type == "game" and scope_value not in {g["shortname"] for g in load_game_list()}:
+            return None, "Pick a valid game for the game scope."
+        if scope_type == "all":
+            scope_value = ""
+        # A custom pattern must compile; otherwise fall back to the safe default (blank stores default).
+        if arg_pattern:
+            try:
+                re.compile(arg_pattern)
+            except re.error:
+                return None, "The argument validation pattern isn't a valid regular expression."
+        return {"name": name[:80], "command_template": template[:500],
+                "argument_label": arg_label[:80], "argument_pattern": arg_pattern[:200],
+                "scope_type": scope_type, "scope_value": scope_value[:64],
+                "enabled": enabled}, None
+
+    def _assign_command_groups(cmd):
+        """Set which groups may run this command from the submitted checkboxes."""
+        ids = set()
+        for gid in request.form.getlist("groups"):
+            try:
+                ids.add(int(gid))
+            except (TypeError, ValueError):
+                continue
+        cmd.groups = Group.query.filter(Group.id.in_(list(ids))).all() if ids else []
+
+    @app.route("/commands")
+    @login_required
+    @permission_required(SUPER_ADMIN)
+    def manage_commands():
+        commands = CustomCommand.query.order_by(CustomCommand.name).all()
+        groups = Group.query.order_by(Group.name).all()
+        games = load_game_list()
+        return render_template("manage_commands.html", commands=commands, groups=groups,
+                               engines=_CUSTOM_CMD_ENGINES, games=games,
+                               default_pattern=CUSTOM_ARG_DEFAULT_PATTERN)
+
+    @app.route("/commands/add", methods=["POST"])
+    @login_required
+    @permission_required(SUPER_ADMIN)
+    def add_command():
+        fields, err = _custom_cmd_form()
+        if err:
+            flash(err, "danger")
+            return redirect(url_for("manage_commands"))
+        cmd = CustomCommand(created_by=current_user.username, **fields)
+        db.session.add(cmd)
+        db.session.flush()          # get cmd.id before wiring the group associations
+        _assign_command_groups(cmd)
+        db.session.commit()
+        log_action(current_user, "add_custom_command", target=cmd.name, detail=cmd.command_template[:120])
+        flash(f"Command '{cmd.name}' created.", "success")
+        return redirect(url_for("manage_commands"))
+
+    @app.route("/commands/<int:cmd_id>/edit", methods=["POST"])
+    @login_required
+    @permission_required(SUPER_ADMIN)
+    def edit_command(cmd_id):
+        cmd = CustomCommand.query.get_or_404(cmd_id)
+        fields, err = _custom_cmd_form(cmd)
+        if err:
+            flash(err, "danger")
+            return redirect(url_for("manage_commands"))
+        for k, v in fields.items():
+            setattr(cmd, k, v)
+        _assign_command_groups(cmd)
+        db.session.commit()
+        log_action(current_user, "edit_custom_command", target=cmd.name, detail=cmd.command_template[:120])
+        flash(f"Command '{cmd.name}' updated.", "success")
+        return redirect(url_for("manage_commands"))
+
+    @app.route("/commands/<int:cmd_id>/delete", methods=["POST"])
+    @login_required
+    @permission_required(SUPER_ADMIN)
+    def delete_command(cmd_id):
+        cmd = CustomCommand.query.get_or_404(cmd_id)
+        cmd.groups = []
+        name = cmd.name
+        db.session.delete(cmd)
+        db.session.commit()
+        log_action(current_user, "delete_custom_command", target=name)
+        flash(f"Command '{name}' deleted.", "success")
+        return redirect(url_for("manage_commands"))
 
     # ── Audit Logs ──────────────────────────────────────────
     @app.route("/logs")
