@@ -4730,7 +4730,10 @@ def register_routes(app):
             # No live job. If the DB still says "installing", the in-memory progress was lost —
             # almost always because the panel restarted mid-install (e.g. a deploy). Reconcile
             # against the real server so the user gets a definite answer instead of a vanished row.
-            if gs and gs.status == "installing" and not gs.installed:
+            # Check regardless of the installed flag: a restart BETWEEN step 4 (installed=True) and
+            # step 8 (status set) strands installed=True + status="installing", which the status
+            # poller then skips forever — so it must be reconciled too.
+            if gs and gs.status == "installing":
                 verdict = _looks_installed(gs.remote, gs.short_name, gs.lgsm_name)
                 if verdict is True:
                     gs.installed = True
@@ -5284,6 +5287,44 @@ def register_routes(app):
                 app.logger.debug("due-actions tick failed", exc_info=True)
             time.sleep(90)
     _supervise("due-actions", due_actions_ticker)
+
+    # Self-heal installs stranded in "installing" with no live job — the panel restarting
+    # mid-install (a deploy/self-update) loses the in-memory progress, and the status poller
+    # SKIPS anything marked "installing", so such a server would sit stuck forever. On boot (and
+    # periodically, to also catch a host that was unreachable earlier) reconcile each against the
+    # real server: verified-installed → offline (metrics flip it online), clearly-not → failed.
+    def install_reconcile_ticker():
+        time.sleep(20)   # let boot settle; the per-server check is an SSH round trip
+        while True:
+            try:
+                with app.app_context():
+                    for gs in GameServer.query.filter_by(status="installing").all():
+                        with _install_lock:
+                            live = (gs.id in _install_jobs
+                                    and _install_jobs[gs.id].get("status") == "running")
+                        if live:
+                            continue   # a genuinely in-progress install — leave it alone
+                        try:
+                            verdict = _looks_installed(gs.remote, gs.short_name, gs.lgsm_name)
+                        except Exception:
+                            verdict = None
+                        if verdict is True:
+                            gs.installed = True
+                            gs.status = "offline"   # live metrics flip it to online if running
+                            db.session.commit()
+                            _notify_servers_changed()
+                            app.logger.info("reconciled stranded install '%s' -> installed", gs.short_name)
+                        elif verdict is False:
+                            gs.installed = False
+                            gs.status = "failed"
+                            db.session.commit()
+                            _notify_servers_changed()
+                            app.logger.info("reconciled stranded install '%s' -> failed", gs.short_name)
+                        # None (host unreachable): leave it; the next tick retries.
+            except Exception:
+                app.logger.debug("install-reconcile tick failed", exc_info=True)
+            time.sleep(600)
+    _supervise("install-reconcile", install_reconcile_ticker)
 
     # Keep game processes at their slight CPU-priority edge (nice -1). The panel boosts a game on
     # its own start/restart, but the LinuxGSM monitor cron restarts a crashed server AS the game
