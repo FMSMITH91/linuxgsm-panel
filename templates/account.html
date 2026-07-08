@@ -17,6 +17,37 @@
   </div>
 </div>
 
+<div class="card mb-3" style="max-width: 640px;">
+  <div class="card-header"><i class="bi bi-key-fill"></i> Password</div>
+  <div class="card-body">
+    <p class="text-secondary small mb-3">Change your account password. You'll need your current password{% if current_user.totp_enabled %} and an authenticator code{% endif %} to confirm it's you.</p>
+    <form method="POST" action="{{ url_for('account_change_password') }}" autocomplete="off">
+      <div class="mb-2" style="max-width: 420px;">
+        <label class="form-label small mb-1">Current password</label>
+        <input type="password" name="current_password" class="form-control form-control-sm" autocomplete="current-password" required>
+      </div>
+      <div class="mb-2" style="max-width: 420px;">
+        <label class="form-label small mb-1">New password</label>
+        <input type="password" name="new_password" class="form-control form-control-sm" autocomplete="new-password" minlength="10" required>
+        <div class="form-text">At least 10 characters with upper &amp; lowercase, a number, and a symbol.</div>
+      </div>
+      <div class="mb-2" style="max-width: 420px;">
+        <label class="form-label small mb-1">Confirm new password</label>
+        <input type="password" name="confirm_password" class="form-control form-control-sm" autocomplete="new-password" minlength="10" required>
+      </div>
+      {% if current_user.totp_enabled %}
+      <div class="mb-3" style="max-width: 420px;">
+        <label class="form-label small mb-1">Authenticator code</label>
+        <input type="text" name="totp_code" class="form-control form-control-sm" inputmode="numeric"
+               autocomplete="one-time-code" placeholder="6-digit code (or a backup code)" required>
+        <div class="form-text">From your authenticator app — or one of your one-time backup codes.</div>
+      </div>
+      {% endif %}
+      <button class="btn btn-primary btn-sm" type="submit"><i class="bi bi-key"></i> Change password</button>
+    </form>
+  </div>
+</div>
+
 <div class="card" style="max-width: 640px;">
   <div class="card-header"><i class="bi bi-shield-lock-fill"></i> Two-Factor Authentication</div>
   <div class="card-body">

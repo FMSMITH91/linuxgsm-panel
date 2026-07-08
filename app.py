@@ -1254,6 +1254,51 @@ def register_routes(app):
         log_action(current_user, "backup_codes_regenerated", target=current_user.username)
         return render_template("backup_codes.html", codes=codes, first_time=False)
 
+    @app.route("/account/password", methods=["POST"])
+    @login_required
+    def account_change_password():
+        """Self-service password change. The user must prove they're really the account holder:
+        their CURRENT password, plus — when 2FA is on — a valid authenticator code (or a one-time
+        backup code). On success the new password is set and every OTHER session is signed out
+        (auth_epoch bump); this session is refreshed so the user stays logged in here.
+        (Superadmins change other people's passwords on the Users page, which needs neither.)"""
+        u = current_user
+        old = request.form.get("current_password", "")
+        new = request.form.get("new_password", "")
+        confirm = request.form.get("confirm_password", "")
+        code = request.form.get("totp_code", "").strip()
+
+        if not check_password(old, u.password_hash):
+            flash("Your current password is incorrect.", "danger")
+            return redirect(url_for("account"))
+        if new != confirm:
+            flash("The new passwords don't match.", "danger")
+            return redirect(url_for("account"))
+        pw_err = password_problem(new)
+        if pw_err:
+            flash(pw_err, "danger")
+            return redirect(url_for("account"))
+        if check_password(new, u.password_hash):
+            flash("Your new password must be different from your current one.", "danger")
+            return redirect(url_for("account"))
+        # 2FA is checked LAST so a one-time backup code is never spent on an otherwise-invalid
+        # request. A matching authenticator code passes; otherwise a valid backup code is consumed.
+        if u.totp_enabled:
+            ok_2fa = bool(u.totp_secret_plain and verify_totp(u.totp_secret_plain, code))
+            if not ok_2fa and u.use_backup_code(code):
+                ok_2fa = True                    # committed below alongside the new password
+            if not ok_2fa:
+                flash("That authenticator code didn't match — password not changed.", "danger")
+                return redirect(url_for("account"))
+
+        u.password_hash = hash_password(new)
+        u.auth_epoch = (u.auth_epoch or 0) + 1   # sign out every other session/remember cookie
+        db.session.commit()
+        login_user(u)                            # refresh THIS session to the new epoch so we stay in
+        log_action(u, "password_changed", target=u.username)
+        flash("Your password has been changed. Any other sessions were signed out.", "success")
+        return redirect(url_for("account"))
+
     # ── Dashboard ──────────────────────────────────────────
     @app.route("/robots.txt")
     def robots_txt():
