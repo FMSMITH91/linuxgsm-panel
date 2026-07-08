@@ -1004,22 +1004,18 @@ function switchPanelBranch(){
   var logWrap=document.getElementById('pu-log'), body=document.getElementById('pu-log-body');
   confirmDialog({title:'Switch panel branch', icon:'diagram-3', confirmClass:'btn-danger', confirmLabel:'Switch branch',
     bodyText:'Switch the panel to branch "'+branch+'"?\n\nIt backs up, checks out that branch and restarts. If it fails to boot it rolls back automatically. Non-main branches are unverified code — use for testing.',
-    requirePassword:true, requireLabel:'Enter your account password to confirm:',
-    onConfirm:function(pw, api){
+    onConfirm:function(){
+      btn.disabled=true; if(logWrap) logWrap.style.display='';
+      if(body) body.innerHTML='<span class="text-secondary">Starting…</span>';
+      msg.innerHTML='<span class="text-secondary"><i class="bi bi-arrow-repeat"></i> Switching…</span>';
       fetch(MOUNT+'/api/panel/update-status').then(function(r){return r.json();}).then(function(before){
         var beforeBoot=(before&&before.boot_id)||'';
-        fetch(MOUNT+'/api/panel/switch-branch',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({branch:branch, password:pw})})
-          .then(function(r){ return r.json().then(function(d){ return {status:r.status, d:d||{}}; }); })
-          .then(function(res){
-            if(res.status===403){ api.error(res.d.message||'Incorrect password.'); return; }
-            api.close();
-            btn.disabled=true; if(logWrap) logWrap.style.display='';
-            if(body) body.innerHTML='<span class="text-secondary">Starting…</span>';
-            msg.innerHTML='<span class="text-secondary"><i class="bi bi-arrow-repeat"></i> Switching…</span>';
-            if(!res.d.success){ msg.innerHTML='<span class="text-danger">'+(window.escapeHtml?escapeHtml(res.d.message||'Switch failed'):(res.d.message||'Switch failed'))+'</span>'; btn.disabled=false; return; }
+        fetch(MOUNT+'/api/panel/switch-branch',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({branch:branch})})
+          .then(function(r){return r.json();}).then(function(d){
+            if(!d.success){ msg.innerHTML='<span class="text-danger">'+(window.escapeHtml?escapeHtml(d.message||'Switch failed'):(d.message||'Switch failed'))+'</span>'; btn.disabled=false; return; }
             watchPanelRestart(beforeBoot, msg, 'Switched to '+branch);
-          }).catch(function(){ api.error('Switch request failed.'); });
-      }).catch(function(){ api.error('Couldn\'t read the current version.'); });
+          }).catch(function(){ msg.innerHTML='<span class="text-danger">Switch request failed.</span>'; btn.disabled=false; });
+      }).catch(function(){ msg.innerHTML='<span class="text-danger">Couldn\'t read the current version.</span>'; btn.disabled=false; });
     }});
 }
 
@@ -1549,18 +1545,15 @@ function deleteBackup(name,btn){
 function restoreBackup(name,btn){
   confirmDialog({title:'Restore backup', icon:'arrow-counterclockwise', confirmClass:'btn-danger', confirmLabel:'Restore',
     bodyText:'Restore this backup?\n\n'+name+'\n\nThis OVERWRITES the panel\'s current database, settings and keys, then restarts the panel. A pre-restore safety backup is taken first.',
-    requirePassword:true, requireLabel:'Enter your account password to confirm:',
-    onConfirm:function(pw, api){
-      fetch(MOUNT+'/api/panel/backup/restore',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({name:name, password:pw})})
-        .then(function(r){ return r.json().then(function(d){ return {status:r.status, d:d||{}}; }); })
-        .then(function(res){
-          if(res.status===403){ api.error(res.d.message||'Incorrect password.'); return; }
-          api.close();
-          if(btn) btn.disabled=true;
-          bkMsg((res.d.success?'✓ ':'✗ ')+(res.d.message||''), res.d.success?'text-success':'text-danger');
-          if(res.d.success){ setTimeout(function(){ location.reload(); }, 8000); } else if(btn){ btn.disabled=false; }
+    onConfirm:function(){
+      if(btn) btn.disabled=true;
+      bkMsg('Restoring…','text-secondary');
+      fetch(MOUNT+'/api/panel/backup/restore',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({name:name})})
+        .then(r=>r.json()).then(function(d){
+          bkMsg((d.success?'✓ ':'✗ ')+(d.message||''), d.success?'text-success':'text-danger');
+          if(d.success){ setTimeout(function(){ location.reload(); }, 8000); } else if(btn){ btn.disabled=false; }
         })
-        .catch(function(){ api.close(); bkMsg('The panel is restarting — reconnect in a moment.','text-warning'); });
+        .catch(function(){ bkMsg('The panel is restarting — reconnect in a moment.','text-warning'); });
     }});
 }
 
