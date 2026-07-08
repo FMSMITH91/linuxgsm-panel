@@ -510,7 +510,7 @@
 <div class="setup-lang" title="{{ t('Language') }}">
   <i class="bi bi-translate"></i>
   <select class="form-select form-select-sm py-0" style="width:auto;" aria-label="{{ t('Language') }}"
-          onchange="if(this.value){fetch('{{ url_for('set_language', lang='LANGCODE') }}'.replace('LANGCODE', this.value)+'?ajax=1',{cache:'no-store'}).then(function(){location.reload();});}">
+          data-lang-select data-lang-url="{{ url_for('set_language', lang='LANGCODE') }}">
     {% for code, name in languages.items() %}
     <option value="{{ code }}" {% if code == current_lang %}selected{% endif %}>{{ name }}</option>
     {% endfor %}
@@ -604,7 +604,7 @@
     <div class="mt-2 d-flex align-items-center gap-1" title="{{ t('Language') }}">
       <i class="bi bi-translate text-secondary"></i>
       <select class="form-select form-select-sm py-0" aria-label="{{ t('Language') }}"
-              onchange="if(this.value){fetch('{{ url_for('set_language', lang='LANGCODE') }}'.replace('LANGCODE', this.value)+'?ajax=1',{cache:'no-store'}).then(function(){location.reload();});}">
+              data-lang-select data-lang-url="{{ url_for('set_language', lang='LANGCODE') }}">
         {% for code, name in languages.items() %}
         <option value="{{ code }}" {% if code == current_lang %}selected{% endif %}>{{ name }}</option>
         {% endfor %}
@@ -710,6 +710,19 @@ window.escapeHtml = function(s){
     .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
     .replace(/"/g, '&quot;').replace(/'/g, '&#39;');
 };
+
+// Language picker — one delegated handler for every page's <select data-lang-select>
+// (sidebar, login, account, setup wizard; all extend this template). The target URL rides
+// in a data-attribute so no Jinja sits in a JS-parsed context, then LANGCODE is swapped for
+// the chosen value and the page reloads in the new language.
+document.addEventListener('change', function(e){
+  var el = e.target;
+  if (!el || !el.matches || !el.matches('select[data-lang-select]') || !el.value) return;
+  var tmpl = el.getAttribute('data-lang-url') || '';
+  if (!tmpl) return;
+  fetch(tmpl.replace('LANGCODE', encodeURIComponent(el.value)) + '?ajax=1', {cache: 'no-store'})
+    .then(function(){ location.reload(); });
+});
 
 // Recurring poll that PAUSES while the tab is hidden and refreshes immediately when it
 // becomes visible again. Most of our pollers hit SSH on a remote host every few seconds;

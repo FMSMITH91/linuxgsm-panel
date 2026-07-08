@@ -9,7 +9,7 @@
   <div class="card-body">
     <p class="text-secondary small mb-2">Choose the language for the panel interface. This preference is saved to your account and follows you across devices.</p>
     <select class="form-select form-select-sm" style="max-width: 260px;"
-            onchange="if(this.value){fetch('{{ url_for('set_language', lang='LANGCODE') }}'.replace('LANGCODE', this.value)+'?ajax=1',{cache:'no-store'}).then(function(){location.reload();});}">
+            data-lang-select data-lang-url="{{ url_for('set_language', lang='LANGCODE') }}">
       {% for code, name in languages.items() %}
       <option value="{{ code }}" {% if code == current_lang %}selected{% endif %}>{{ name }}</option>
       {% endfor %}
