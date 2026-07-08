@@ -110,7 +110,7 @@
           <tr>
             {% if can_control %}<th style="width:1%;"><input type="checkbox" class="form-check-input srv-check-all" onclick="toggleAll(this)" title="Select all on this host" aria-label="Select all servers on this host"></th>{% endif %}
             <th>Server</th>
-            <th>Type</th>
+            <th class="d-none d-md-table-cell">Type</th>
             <th>Status</th>
             <th>Connect</th>
             <th class="text-end">Actions</th>
@@ -124,7 +124,7 @@
               <strong>{{ srv.name }}</strong>
               <span class="text-secondary d-block" style="font-size: .75rem;">{{ srv.short_name }}</span>
             </td>
-            <td>{{ srv.game_display or srv.game_type }}</td>
+            <td class="d-none d-md-table-cell">{{ srv.game_display or srv.game_type }}</td>
             <td id="status-{{ srv.id }}" data-status="{{ srv.status }}">
               <span class="status-dot status-{{ srv.status if srv.status in ['online','offline'] else 'unknown' }}"></span>
               {{ srv.status|title }}

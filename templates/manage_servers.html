@@ -77,10 +77,10 @@
         <thead>
           <tr>
             <th>Name</th>
-            <th>Type</th>
+            <th class="d-none d-md-table-cell">Type</th>
             <th>Connect Address</th>
             <th>Status</th>
-            <th>Host</th>
+            <th class="d-none d-md-table-cell">Host</th>
             <th>Actions</th>
           </tr>
         </thead>
@@ -94,7 +94,7 @@
               <strong>{{ gs.name }}</strong>
               <span class="text-secondary d-block" style="font-size:.7rem;">{{ gs.short_name }}</span>
             </td>
-            <td>{{ gs.game_display or gs.game_type }}</td>
+            <td class="d-none d-md-table-cell">{{ gs.game_display or gs.game_type }}</td>
             <td>
               {% set addr = gs.remote.display_host if gs.remote else '' %}
               {% if addr %}
@@ -116,13 +116,13 @@
                 {% if finishing %}Finishing setup…{% elif gs.installed %}Installed{% elif installing %}Installing…{% elif gs.status == 'failed' %}Install failed{% else %}Not installed{% endif %}
               </span>
             </td>
-            <td>{{ gs.remote.display_name if gs.remote else '—' }}</td>
+            <td class="d-none d-md-table-cell">{{ gs.remote.display_name if gs.remote else '—' }}</td>
             <td class="text-nowrap">
               <a href="{{ url_for('server_detail', server_id=gs.id) }}" class="btn btn-sm btn-outline-secondary" title="Console, commands, restart">
-                <i class="bi bi-terminal-fill"></i> Console
+                <i class="bi bi-terminal-fill"></i> <span class="d-none d-md-inline">Console</span>
               </a>
               <a href="{{ url_for('server_files', server_id=gs.id) }}" class="btn btn-sm btn-outline-secondary" title="Edit config & browse/upload files">
-                <i class="bi bi-folder2-open"></i> Files &amp; Config
+                <i class="bi bi-folder2-open"></i> <span class="d-none d-md-inline">Files &amp; Config</span>
               </a>
               <form method="POST" action="{{ url_for('uninstall_server', server_id=gs.id) }}" style="display:inline;"
                     onsubmit="return confirm('Uninstall {{ gs.name }}? This permanently deletes the server, all its files, AND every backup it has — this cannot be undone. Download any backups you want to keep first.');">
@@ -130,7 +130,7 @@
                    running install. watchInstall re-enables it when the install finishes/fails. #}
                 <button type="submit" class="btn btn-sm btn-outline-danger" id="uninstall-btn-{{ gs.id }}"
                         {% if in_progress %}disabled title="Can't uninstall while it's installing — wait for it to finish"{% else %}title="Delete server and all data"{% endif %}>
-                  <i class="bi bi-trash"></i> Uninstall
+                  <i class="bi bi-trash"></i> <span class="d-none d-md-inline">Uninstall</span>
                 </button>
               </form>
             </td>
