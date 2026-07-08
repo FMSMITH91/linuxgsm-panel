@@ -58,9 +58,9 @@
     <p class="text-secondary mb-2">Signed in somewhere you don't recognise, or think a
       device was compromised? This revokes <strong>every</strong> logged-in session for
       your account (including this one) — you'll log back in fresh.</p>
-    <form method="POST" action="{{ url_for('account_revoke_sessions') }}"
-          onsubmit="return confirm('Sign out of ALL sessions, including this one?');">
-      <button class="btn btn-outline-danger btn-sm" type="submit">
+    <form method="POST" action="{{ url_for('account_revoke_sessions') }}" id="revoke-sessions-form">
+      <button class="btn btn-outline-danger btn-sm" type="button"
+              onclick="confirmDialog({title:'Sign out everywhere', icon:'box-arrow-right', confirmClass:'btn-danger', confirmLabel:'Sign out everywhere', bodyText:'Sign out of ALL sessions, including this one? You will be logged back in fresh.', onConfirm:function(){document.getElementById('revoke-sessions-form').submit();}});">
         <i class="bi bi-box-arrow-right"></i> Sign out everywhere
       </button>
     </form>

@@ -574,8 +574,8 @@
             <a href="{{ url_for('server_detail', server_id=gs.id) }}" class="btn btn-sm btn-outline-secondary" title="Console, commands, restart"><i class="bi bi-terminal-fill"></i> Console</a>
             <a href="{{ url_for('server_files', server_id=gs.id) }}" class="btn btn-sm btn-outline-secondary" title="Edit config &amp; browse/upload files"><i class="bi bi-folder2-open"></i> Files &amp; Config</a>
             <form method="POST" action="{{ url_for('uninstall_server', server_id=gs.id) }}" style="display:inline;"
-                  onsubmit="return confirm('Uninstall {{ gs.name }}? This permanently deletes the server, all its files, AND every backup it has — this cannot be undone. Download any backups you want to keep first.');">
-              <button type="submit" class="btn btn-sm btn-outline-danger" title="Delete server and all data"><i class="bi bi-trash"></i> Uninstall</button>
+                  class="uninstall-form" data-server-name="{{ gs.name }}" data-server-short="{{ gs.short_name }}">
+              <button type="button" class="btn btn-sm btn-outline-danger uninstall-trigger" title="Delete server and all data"><i class="bi bi-trash"></i> Uninstall</button>
             </form>
           </td>
         </tr>
@@ -684,11 +684,14 @@ function checkUpdates(){
     .catch(()=>el.textContent='Check failed');
 }
 function runUpdates(){
-  if(!confirm('Install all available updates on this server?')) return;
-  var el=document.getElementById('update-info'); el.textContent='Installing updates… (this can take a while)';
-  fetch(MOUNT+'/api/remote/'+REMOTE_ID+'/run-updates',{method:'POST'}).then(r=>r.json())
-    .then(d=>{ el.textContent = d.message || (d.success?'Updates installed':'Update failed'); })
-    .catch(()=>el.textContent='Update failed');
+  confirmDialog({title:'Install updates', icon:'arrow-up-circle', confirmClass:'btn-primary', confirmLabel:'Install updates',
+    bodyText:'Install all available updates on this server?',
+    onConfirm:function(){
+      var el=document.getElementById('update-info'); el.textContent='Installing updates… (this can take a while)';
+      fetch(MOUNT+'/api/remote/'+REMOTE_ID+'/run-updates',{method:'POST'}).then(r=>r.json())
+        .then(d=>{ el.textContent = d.message || (d.success?'Updates installed':'Update failed'); })
+        .catch(()=>el.textContent='Update failed');
+    }});
 }
 function rebootRemote(){
   // Check for players on ANY game server on this host first — a reboot disconnects them all.
@@ -702,26 +705,32 @@ function rebootRemote(){
       q = '⚠ '+total+' player'+(total===1?' is':'s are')+' currently connected across '+busy.length+' server'+(busy.length===1?'':'s')+':\n  '+list
         + '\n\nRebooting will DISCONNECT all of them. '+base+'\n\nAre you sure?';
     }
-    if(!confirm(q)) return;
-    doRebootRemote();
+    _confirmReboot(q);
   }).catch(function(){
     // Couldn't check — fall back to the plain confirm rather than blocking.
     var q = IS_LOCAL ? 'Reboot the PANEL HOST now? The panel and all its game servers will go down briefly.'
                      : 'Reboot this server now? It will be briefly unreachable.';
-    if(confirm(q)) doRebootRemote();
+    _confirmReboot(q);
   });
+}
+function _confirmReboot(q){
+  confirmDialog({title:'Reboot server', icon:'arrow-clockwise', confirmClass:'btn-warning', confirmLabel:'Reboot',
+    bodyText:q, onConfirm:doRebootRemote});
 }
 function doRebootRemote(){
   fetch(MOUNT+'/api/remote/'+REMOTE_ID+'/reboot',{method:'POST'}).then(r=>r.json())
-    .then(d=>alert(d.message||'Reboot requested')).catch(()=>alert('Reboot failed'));
+    .then(d=>{ if(window.toast) toast(d.message||'Reboot requested','info'); }).catch(()=>{ if(window.toast) toast('Reboot failed','danger'); });
 }
 // ── SSH / connection ──
 function retrustHostKey(){
-  if(!confirm('Clear the pinned SSH host key for this server?\n\nOnly do this if YOU reinstalled or rebuilt the server. The next connection will trust and pin whatever host key the server presents.')) return;
-  var m=document.getElementById('hostkey-msg'); m.innerHTML='<span class="text-secondary"><i class="bi bi-arrow-repeat"></i> Clearing…</span>';
-  fetch(MOUNT+'/api/remote/'+REMOTE_ID+'/retrust-hostkey',{method:'POST'}).then(r=>r.json())
-    .then(d=>{ m.innerHTML='<span class="text-'+(d.success?'success':'danger')+'">'+(d.message||(d.success?'Done':'Failed'))+'</span>'; if(d.success) setTimeout(function(){location.reload();},1000); })
-    .catch(()=>{ m.innerHTML='<span class="text-danger">Request failed.</span>'; });
+  confirmDialog({title:'Clear pinned host key', icon:'key', confirmClass:'btn-warning', confirmLabel:'Clear host key',
+    bodyText:'Clear the pinned SSH host key for this server?\n\nOnly do this if YOU reinstalled or rebuilt the server. The next connection will trust and pin whatever host key the server presents.',
+    onConfirm:function(){
+      var m=document.getElementById('hostkey-msg'); m.innerHTML='<span class="text-secondary"><i class="bi bi-arrow-repeat"></i> Clearing…</span>';
+      fetch(MOUNT+'/api/remote/'+REMOTE_ID+'/retrust-hostkey',{method:'POST'}).then(r=>r.json())
+        .then(d=>{ m.innerHTML='<span class="text-'+(d.success?'success':'danger')+'">'+(d.message||(d.success?'Done':'Failed'))+'</span>'; if(d.success) setTimeout(function(){location.reload();},1000); })
+        .catch(()=>{ m.innerHTML='<span class="text-danger">Request failed.</span>'; });
+    }});
 }
 var SSH_LABELS={allow:'open (allow)',limit:'rate-limited (limit)',off:'disabled — tailnet only'};
 function loadSshStatus(){
@@ -754,19 +763,27 @@ function loadSshStatus(){
     .catch(()=>{ el.textContent='unknown'; });
 }
 function sshMode(mode){
-  var warn = mode==='off' ? 'Disable PUBLIC SSH (port 22)? SSH will only work over Tailscale after this. Make sure Tailscale SSH works first!' : null;
-  if(warn && !confirm(warn)) return;
-  var el=document.getElementById('ssh-msg'); el.textContent='Applying…'; el.className='small mt-1 text-secondary';
-  fetch(MOUNT+'/api/remote/'+REMOTE_ID+'/ssh-mode',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({mode:mode})})
-    .then(r=>r.json()).then(d=>{ el.textContent=(d.success?'✓ ':'✗ ')+(d.message||''); el.className='small mt-1 '+(d.success?'text-success':'text-danger'); loadSshStatus(); })
-    .catch(()=>{ el.textContent='✗ Failed'; el.className='small mt-1 text-danger'; });
+  var run = function(){
+    var el=document.getElementById('ssh-msg'); el.textContent='Applying…'; el.className='small mt-1 text-secondary';
+    fetch(MOUNT+'/api/remote/'+REMOTE_ID+'/ssh-mode',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({mode:mode})})
+      .then(r=>r.json()).then(d=>{ el.textContent=(d.success?'✓ ':'✗ ')+(d.message||''); el.className='small mt-1 '+(d.success?'text-success':'text-danger'); loadSshStatus(); })
+      .catch(()=>{ el.textContent='✗ Failed'; el.className='small mt-1 text-danger'; });
+  };
+  if(mode==='off'){
+    confirmDialog({title:'Disable public SSH', icon:'shield-lock', confirmClass:'btn-danger', confirmLabel:'Disable public SSH',
+      bodyText:'Disable PUBLIC SSH (port 22)? SSH will only work over Tailscale after this. Make sure Tailscale SSH works first!',
+      onConfirm:run});
+  } else { run(); }
 }
 function closePanelPort(){
-  if(!confirm('Close the public web port so the panel is reachable ONLY over your tailnet?\n\nMake sure you can already reach the panel at your ts.net URL (Tailscale Serve) — this removes the public way in.')) return;
-  var m=document.getElementById('panel-port-msg'); m.innerHTML='<span class="text-secondary"><i class="bi bi-arrow-repeat"></i> Closing…</span>';
-  fetch(MOUNT+'/api/remote/'+REMOTE_ID+'/close-panel-port',{method:'POST'}).then(r=>r.json())
-    .then(d=>{ m.innerHTML='<span class="text-'+(d.success?'success':'danger')+'">'+(window.escapeHtml?escapeHtml(d.message):(d.message||''))+'</span>'; if(d.success) loadSshStatus(); })
-    .catch(()=>{ m.innerHTML='<span class="text-danger">Request failed.</span>'; });
+  confirmDialog({title:'Close public panel port', icon:'shield-lock', confirmClass:'btn-danger', confirmLabel:'Close public port',
+    bodyText:'Close the public web port so the panel is reachable ONLY over your tailnet?\n\nMake sure you can already reach the panel at your ts.net URL (Tailscale Serve) — this removes the public way in.',
+    onConfirm:function(){
+      var m=document.getElementById('panel-port-msg'); m.innerHTML='<span class="text-secondary"><i class="bi bi-arrow-repeat"></i> Closing…</span>';
+      fetch(MOUNT+'/api/remote/'+REMOTE_ID+'/close-panel-port',{method:'POST'}).then(r=>r.json())
+        .then(d=>{ m.innerHTML='<span class="text-'+(d.success?'success':'danger')+'">'+(window.escapeHtml?escapeHtml(d.message):(d.message||''))+'</span>'; if(d.success) loadSshStatus(); })
+        .catch(()=>{ m.innerHTML='<span class="text-danger">Request failed.</span>'; });
+    }});
 }
 function onBindSelect(){
   var sel=document.getElementById('panel-bind-select');
@@ -776,16 +793,20 @@ function onBindSelect(){
 function changePanelBinding(){
   var pinp=document.getElementById('panel-port-input'); if(!pinp) return;
   var p=parseInt(pinp.value,10);
-  if(!(p>=1024 && p<=65535)){ alert('Pick a port between 1024 and 65535.'); return; }
+  if(!(p>=1024 && p<=65535)){ if(window.toast) toast('Pick a port between 1024 and 65535.','warning'); return; }
   var sel=document.getElementById('panel-bind-select');
   var bind = sel ? sel.value : '0.0.0.0';
   if(bind === '__custom__'){
     bind = (document.getElementById('panel-bind-custom').value || '').trim();
-    if(!bind){ alert('Enter the IP address to bind to.'); return; }
+    if(!bind){ if(window.toast) toast('Enter the IP address to bind to.','warning'); return; }
   }
   var pretty = bind + ':' + p;
-  if(!confirm('Change the panel binding to '+pretty+'?\n\nThe panel will briefly restart to apply it. '
-    +'Make sure you can still reach it afterward (over Tailscale, or on the new address/port).')) return;
+  confirmDialog({title:'Change panel binding', icon:'hdd-network', confirmClass:'btn-warning', confirmLabel:'Change binding',
+    bodyText:'Change the panel binding to '+pretty+'?\n\nThe panel will briefly restart to apply it. '
+      +'Make sure you can still reach it afterward (over Tailscale, or on the new address/port).',
+    onConfirm:function(){ _changePanelBinding(p, bind); }});
+}
+function _changePanelBinding(p, bind){
   var m=document.getElementById('panel-port-change-msg');
   m.innerHTML='<span class="text-secondary"><i class="bi bi-arrow-repeat"></i> Applying…</span>';
   fetch(MOUNT+'/api/panel/change-port',{method:'POST',headers:{'Content-Type':'application/json'},
@@ -811,7 +832,11 @@ function changePanelBinding(){
     });
 }
 function switchToTailscale(){
-  if(!confirm('Switch the panel to Tailscale SSH for this server?\n\nThe connection address becomes the Tailscale IP/DNS and auth switches to Tailscale SSH. Requires Tailscale to be running on the remote.')) return;
+  confirmDialog({title:'Migrate to Tailscale SSH', icon:'arrow-repeat', confirmClass:'btn-primary', confirmLabel:'Migrate',
+    bodyText:'Switch the panel to Tailscale SSH for this server?\n\nThe connection address becomes the Tailscale IP/DNS and auth switches to Tailscale SSH. Requires Tailscale to be running on the remote.',
+    onConfirm:_switchToTailscale});
+}
+function _switchToTailscale(){
   var el=document.getElementById('migrate-msg'); el.textContent='Migrating…'; el.className='small mt-1 text-secondary';
   fetch(MOUNT+'/api/remote/'+REMOTE_ID+'/tailscale-migrate',{method:'POST'}).then(r=>r.json())
     .then(d=>{ if(d.success){ el.textContent='✓ '+(d.message||'Migrated')+' — reloading…'; el.className='small mt-1 text-success'; setTimeout(function(){location.reload();},1500); } else { el.textContent='✗ '+(d.message||'Failed'); el.className='small mt-1 text-danger'; } })
@@ -849,21 +874,27 @@ UPro.load(REMOTE_ID, 'ubuntu-pro-body', {{ (remote.cached_pro.data if remote.cac
 
 // ── Panel-host-only controls (Tailscale SSH, UFW-allow, self-update) ──
 function tsSshEnable(){
-  if(!confirm('Enable Tailscale SSH? This re-authenticates Tailscale with SSH support enabled.')) return;
-  fetch(MOUNT+'/api/server-management/ts-ssh-enable',{method:'POST'}).then(r=>r.json())
-    .then(d=>{ alert(d.message||(d.success?'Enabled':'Failed')); if(d.success) location.reload(); })
-    .catch(()=>alert('Failed to enable Tailscale SSH'));
+  confirmDialog({title:'Enable Tailscale SSH', icon:'shield-check', confirmClass:'btn-primary', confirmLabel:'Enable',
+    bodyText:'Enable Tailscale SSH? This re-authenticates Tailscale with SSH support enabled.',
+    onConfirm:function(){
+      fetch(MOUNT+'/api/server-management/ts-ssh-enable',{method:'POST'}).then(r=>r.json())
+        .then(d=>{ if(window.toast) toast(d.message||(d.success?'Enabled':'Failed'), d.success?'success':'danger'); if(d.success) setTimeout(function(){location.reload();},800); })
+        .catch(()=>{ if(window.toast) toast('Failed to enable Tailscale SSH','danger'); });
+    }});
 }
 function tsSshDisable(){
-  if(!confirm('Disable Tailscale SSH?')) return;
-  fetch(MOUNT+'/api/server-management/ts-ssh-disable',{method:'POST'}).then(r=>r.json())
-    .then(d=>{ alert(d.message||(d.success?'Disabled':'Failed')); if(d.success) location.reload(); })
-    .catch(()=>alert('Failed to disable Tailscale SSH'));
+  confirmDialog({title:'Disable Tailscale SSH', icon:'shield-slash', confirmClass:'btn-danger', confirmLabel:'Disable',
+    bodyText:'Disable Tailscale SSH?',
+    onConfirm:function(){
+      fetch(MOUNT+'/api/server-management/ts-ssh-disable',{method:'POST'}).then(r=>r.json())
+        .then(d=>{ if(window.toast) toast(d.message||(d.success?'Disabled':'Failed'), d.success?'success':'danger'); if(d.success) setTimeout(function(){location.reload();},800); })
+        .catch(()=>{ if(window.toast) toast('Failed to disable Tailscale SSH','danger'); });
+    }});
 }
 function ufwAllowTailscale(){
   fetch(MOUNT+'/api/server-management/ufw-allow-tailscale',{method:'POST'}).then(r=>r.json())
-    .then(d=>{ alert(d.message||(d.success?'Allowed':'Failed')); if(d.success) location.reload(); })
-    .catch(()=>alert('Failed to configure UFW'));
+    .then(d=>{ if(window.toast) toast(d.message||(d.success?'Allowed':'Failed'), d.success?'success':'danger'); if(d.success) setTimeout(function(){location.reload();},800); })
+    .catch(()=>{ if(window.toast) toast('Failed to configure UFW','danger'); });
 }
 function renderUpdate(d){
   var st=document.getElementById('pu-status'); if(!st) return;
@@ -907,7 +938,11 @@ function renderPuLog(lines){
   if(atBottom) body.scrollTop = body.scrollHeight;   // stay pinned to the newest line
 }
 function doPanelUpdate(){
-  if(!confirm('Update the panel to the latest version now?\n\nIt will back up, pull new code, install any new dependencies, and restart — briefly unavailable (a few seconds). Live progress shows below.')) return;
+  confirmDialog({title:'Update the panel', icon:'arrow-up-circle', confirmClass:'btn-primary', confirmLabel:'Update now',
+    bodyText:'Update the panel to the latest version now?\n\nIt will back up, pull new code, install any new dependencies, and restart — briefly unavailable (a few seconds). Live progress shows below.',
+    onConfirm:_doPanelUpdate});
+}
+function _doPanelUpdate(){
   var msg=document.getElementById('pu-msg'), btn=document.getElementById('pu-update-btn');
   var logWrap=document.getElementById('pu-log'), body=document.getElementById('pu-log-body');
   btn.disabled=true; logWrap.style.display='';
@@ -966,19 +1001,26 @@ function switchPanelBranch(){
   var btn=document.getElementById('pu-branch-switch');
   if(!sel||!sel.value){ return; }
   var branch=sel.value;
-  if(!confirm('Switch the panel to branch "'+branch+'"?\n\nIt backs up, checks out that branch and restarts. If it fails to boot it rolls back automatically. Non-main branches are unverified code — use for testing.')) return;
   var logWrap=document.getElementById('pu-log'), body=document.getElementById('pu-log-body');
-  btn.disabled=true; if(logWrap) logWrap.style.display='';
-  if(body) body.innerHTML='<span class="text-secondary">Starting…</span>';
-  msg.innerHTML='<span class="text-secondary"><i class="bi bi-arrow-repeat"></i> Switching…</span>';
-  fetch(MOUNT+'/api/panel/update-status').then(function(r){return r.json();}).then(function(before){
-    var beforeBoot=(before&&before.boot_id)||'';
-    fetch(MOUNT+'/api/panel/switch-branch',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({branch:branch})})
-      .then(function(r){return r.json();}).then(function(d){
-        if(!d.success){ msg.innerHTML='<span class="text-danger">'+(window.escapeHtml?escapeHtml(d.message||'Switch failed'):(d.message||'Switch failed'))+'</span>'; btn.disabled=false; return; }
-        watchPanelRestart(beforeBoot, msg, 'Switched to '+branch);
-      }).catch(function(){ msg.innerHTML='<span class="text-danger">Switch request failed.</span>'; btn.disabled=false; });
-  }).catch(function(){ msg.innerHTML='<span class="text-danger">Couldn\'t read the current version.</span>'; btn.disabled=false; });
+  confirmDialog({title:'Switch panel branch', icon:'diagram-3', confirmClass:'btn-danger', confirmLabel:'Switch branch',
+    bodyText:'Switch the panel to branch "'+branch+'"?\n\nIt backs up, checks out that branch and restarts. If it fails to boot it rolls back automatically. Non-main branches are unverified code — use for testing.',
+    requirePassword:true, requireLabel:'Enter your account password to confirm:',
+    onConfirm:function(pw, api){
+      fetch(MOUNT+'/api/panel/update-status').then(function(r){return r.json();}).then(function(before){
+        var beforeBoot=(before&&before.boot_id)||'';
+        fetch(MOUNT+'/api/panel/switch-branch',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({branch:branch, password:pw})})
+          .then(function(r){ return r.json().then(function(d){ return {status:r.status, d:d||{}}; }); })
+          .then(function(res){
+            if(res.status===403){ api.error(res.d.message||'Incorrect password.'); return; }
+            api.close();
+            btn.disabled=true; if(logWrap) logWrap.style.display='';
+            if(body) body.innerHTML='<span class="text-secondary">Starting…</span>';
+            msg.innerHTML='<span class="text-secondary"><i class="bi bi-arrow-repeat"></i> Switching…</span>';
+            if(!res.d.success){ msg.innerHTML='<span class="text-danger">'+(window.escapeHtml?escapeHtml(res.d.message||'Switch failed'):(res.d.message||'Switch failed'))+'</span>'; btn.disabled=false; return; }
+            watchPanelRestart(beforeBoot, msg, 'Switched to '+branch);
+          }).catch(function(){ api.error('Switch request failed.'); });
+      }).catch(function(){ api.error('Couldn\'t read the current version.'); });
+    }});
 }
 
 // ── Diagnostics & file integrity (panel host only) ──────────────────
@@ -1049,7 +1091,11 @@ function loadIntegrity(){
 }
 
 function repairPanel(){
-  if(!confirm('Restore all modified/deleted panel files to their installed version? Your database, keys and config are not affected.')) return;
+  confirmDialog({title:'Restore panel files', icon:'arrow-counterclockwise', confirmClass:'btn-danger', confirmLabel:'Restore files',
+    bodyText:'Restore all modified/deleted panel files to their installed version? Your database, keys and config are not affected.',
+    onConfirm:_repairPanel});
+}
+function _repairPanel(){
   var btn=document.getElementById('diag-repair-btn');
   if(btn){ btn.disabled=true; btn.innerHTML='<span class="spinner-border spinner-border-sm"></span> Restoring…'; }
   fetch(MOUNT+'/api/panel/repair',{method:'POST',headers:{'Content-Type':'application/json'},body:'{}'})
@@ -1140,7 +1186,11 @@ function loadAutoUpd(){
   }).catch(function(){});
 }
 function enableAutoUpdates(){
-  if(!confirm('Install and enable automatic security updates (unattended-upgrades)? This changes the system update settings.')) return;
+  confirmDialog({title:'Enable automatic security updates', icon:'shield-check', confirmClass:'btn-primary', confirmLabel:'Enable',
+    bodyText:'Install and enable automatic security updates (unattended-upgrades)? This changes the system update settings.',
+    onConfirm:_enableAutoUpdates});
+}
+function _enableAutoUpdates(){
   var btn=document.getElementById('diag-autoupd-btn'), msg=document.getElementById('diag-autoupd-msg');
   if(btn){ btn.disabled=true; btn.innerHTML='<span class="spinner-border spinner-border-sm"></span> Enabling…'; }
   fetch(MOUNT+'/api/panel/enable-auto-updates',{method:'POST',headers:{'Content-Type':'application/json'},body:'{}'})
@@ -1377,8 +1427,10 @@ function runFullBackup(btn){
     if(btn) btn.disabled=false;
     var busy=(d&&d.busy)||[];
     if(!busy.length){
-      if(!confirm('Back up all installed game servers now?\n\nThis runs LinuxGSM\'s backup on each server — any that are running will be briefly STOPPED and restarted for their backup (a short outage each). It can take a while and use disk space.')){ bkMsg('',''); return; }
-      fbStart('');
+      bkMsg('','');
+      confirmDialog({title:'Back up all servers', icon:'archive', confirmClass:'btn-primary', confirmLabel:'Back up all',
+        bodyText:'Back up all installed game servers now?\n\nThis runs LinuxGSM\'s backup on each server — any that are running will be briefly STOPPED and restarted for their backup (a short outage each). It can take a while and use disk space.',
+        onConfirm:function(){ fbStart(''); }});
       return;
     }
     fbPlayersDialog(busy);
@@ -1418,7 +1470,10 @@ function backupOneGame(id,btn,force){
   var msg = force
     ? 'Back up NOW and disconnect the players who are currently on?\n\nThe server will be briefly STOPPED and restarted for the backup — anyone playing will be kicked.'
     : 'Back up this game server now?\n\nLinuxGSM archives its files into ~/lgsm/backup. If players are on, the backup will WAIT (it won\'t kick them). If the server is empty it will be briefly STOPPED and restarted for the backup, and the archive can be large.';
-  if(!confirm(msg)) return;
+  confirmDialog({title:'Back up game server', icon:'archive', confirmClass: force?'btn-warning':'btn-primary', confirmLabel:'Back up',
+    bodyText: msg, onConfirm:function(){ _backupOneGame(id, btn, force); }});
+}
+function _backupOneGame(id,btn,force){
   // Immediate feedback right where the user clicked: spinner on the button.
   var orig = btn ? btn.innerHTML : '';
   if(btn){ btn.disabled=true; btn.innerHTML='<span class="spinner-border spinner-border-sm"></span> Backing up…'; }
@@ -1468,34 +1523,64 @@ function setGameSchedule(id){
 }
 function deleteGameBackup(btn){
   var name=btn.getAttribute('data-name'), gid=btn.getAttribute('data-gid');
-  if(!confirm('Delete this game-server backup?\n\n'+name)) return;
-  btn.disabled=true; btn.innerHTML='<span class="spinner-border spinner-border-sm"></span>';
-  bkMsg('Deleting…','text-secondary');
-  fetch(MOUNT+'/api/panel/backup/game/'+gid+'/delete',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({name:name})})
-    .then(r=>r.json()).then(function(d){
-      bkMsg((d.success?'✓ ':'✗ ')+(d.message||''), d.success?'text-success':'text-danger');
-      if(window.toast) toast((d.success?'✓ ':'✗ ')+(d.message||(d.success?'Backup deleted':'Delete failed')), d.success?'success':'danger');
-      loadBackups();
-    }).catch(function(){ bkMsg('✗ Delete failed','text-danger'); if(window.toast) toast('✗ Delete failed — connection error','danger'); btn.disabled=false; btn.innerHTML='<i class="bi bi-trash"></i>'; });
+  confirmDialog({title:'Delete backup', icon:'trash', confirmClass:'btn-danger', confirmLabel:'Delete',
+    bodyText:'Delete this game-server backup?\n\n'+name,
+    onConfirm:function(){
+      btn.disabled=true; btn.innerHTML='<span class="spinner-border spinner-border-sm"></span>';
+      bkMsg('Deleting…','text-secondary');
+      fetch(MOUNT+'/api/panel/backup/game/'+gid+'/delete',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({name:name})})
+        .then(r=>r.json()).then(function(d){
+          bkMsg((d.success?'✓ ':'✗ ')+(d.message||''), d.success?'text-success':'text-danger');
+          if(window.toast) toast((d.success?'✓ ':'✗ ')+(d.message||(d.success?'Backup deleted':'Delete failed')), d.success?'success':'danger');
+          loadBackups();
+        }).catch(function(){ bkMsg('✗ Delete failed','text-danger'); if(window.toast) toast('✗ Delete failed — connection error','danger'); btn.disabled=false; btn.innerHTML='<i class="bi bi-trash"></i>'; });
+    }});
 }
 function deleteBackup(name,btn){
-  if(!confirm('Delete this backup?\n\n'+name)) return;
-  if(btn) btn.disabled=true;
-  fetch(MOUNT+'/api/panel/backup/delete',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({name:name})})
-    .then(r=>r.json()).then(function(d){ bkMsg((d.success?'✓ ':'✗ ')+(d.message||''), d.success?'text-success':'text-danger'); loadBackups(); })
-    .catch(function(){ bkMsg('✗ Delete failed','text-danger'); if(btn) btn.disabled=false; });
+  confirmDialog({title:'Delete backup', icon:'trash', confirmClass:'btn-danger', confirmLabel:'Delete',
+    bodyText:'Delete this backup?\n\n'+name,
+    onConfirm:function(){
+      if(btn) btn.disabled=true;
+      fetch(MOUNT+'/api/panel/backup/delete',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({name:name})})
+        .then(r=>r.json()).then(function(d){ bkMsg((d.success?'✓ ':'✗ ')+(d.message||''), d.success?'text-success':'text-danger'); loadBackups(); })
+        .catch(function(){ bkMsg('✗ Delete failed','text-danger'); if(btn) btn.disabled=false; });
+    }});
 }
 function restoreBackup(name,btn){
-  if(!confirm('Restore this backup?\n\n'+name+'\n\nThis OVERWRITES the panel\'s current database, settings and keys, then restarts the panel. A pre-restore safety backup is taken first.')) return;
-  if(btn) btn.disabled=true;
-  bkMsg('Restoring…','text-secondary');
-  fetch(MOUNT+'/api/panel/backup/restore',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({name:name})})
-    .then(r=>r.json()).then(function(d){
-      bkMsg((d.success?'✓ ':'✗ ')+(d.message||''), d.success?'text-success':'text-danger');
-      if(d.success){ setTimeout(function(){ location.reload(); }, 8000); } else if(btn){ btn.disabled=false; }
-    })
-    .catch(function(){ bkMsg('The panel is restarting — reconnect in a moment.','text-warning'); });
+  confirmDialog({title:'Restore backup', icon:'arrow-counterclockwise', confirmClass:'btn-danger', confirmLabel:'Restore',
+    bodyText:'Restore this backup?\n\n'+name+'\n\nThis OVERWRITES the panel\'s current database, settings and keys, then restarts the panel. A pre-restore safety backup is taken first.',
+    requirePassword:true, requireLabel:'Enter your account password to confirm:',
+    onConfirm:function(pw, api){
+      fetch(MOUNT+'/api/panel/backup/restore',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({name:name, password:pw})})
+        .then(function(r){ return r.json().then(function(d){ return {status:r.status, d:d||{}}; }); })
+        .then(function(res){
+          if(res.status===403){ api.error(res.d.message||'Incorrect password.'); return; }
+          api.close();
+          if(btn) btn.disabled=true;
+          bkMsg((res.d.success?'✓ ':'✗ ')+(res.d.message||''), res.d.success?'text-success':'text-danger');
+          if(res.d.success){ setTimeout(function(){ location.reload(); }, 8000); } else if(btn){ btn.disabled=false; }
+        })
+        .catch(function(){ api.close(); bkMsg('The panel is restarting — reconnect in a moment.','text-warning'); });
+    }});
 }
+
+// Uninstall a game server from the list: in-app confirm + type-the-username gate, then submit the
+// form (a full POST — this admin page reloads to show the server gone). Delegated so it survives
+// any list re-render.
+document.addEventListener('click', function(e){
+  var b = e.target.closest && e.target.closest('.uninstall-trigger');
+  if(!b) return;
+  var form = b.closest('form'); if(!form) return;
+  var name = form.getAttribute('data-server-name') || '';
+  var short = form.getAttribute('data-server-short') || '';
+  confirmDialog({
+    title:'Uninstall server', icon:'trash', confirmClass:'btn-danger', confirmLabel:'Uninstall',
+    body:'Uninstall <strong>'+escapeHtml(name)+'</strong>? This permanently deletes the server, all its files, AND every backup it has — this cannot be undone.',
+    requireText: short,
+    requireLabel:'Type the server’s username ('+short+') to confirm:',
+    onConfirm:function(){ form.submit(); }
+  });
+});
 
 loadSshStatus();                     // public-SSH controls now exist on both local + remote (no-ops if absent)
 if(IS_LOCAL){ checkPanelUpdate(false); loadPanelBranches(); loadIntegrity(); loadDbStats(); loadAutoUpd(); loadBackups(); } // panel-only cards

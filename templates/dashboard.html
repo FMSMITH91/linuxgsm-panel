@@ -318,25 +318,35 @@ function bulkAction(action) {
     ids = updatable.map(function (c) { return Number(c.value); });
     if (!ids.length) { toast('None of the selected servers support updating.', 'warning'); return; }
   }
-  if ((action === 'stop' || action === 'update') &&
-      !confirm('Run "' + action + '" on ' + ids.length + ' server' + (ids.length === 1 ? '' : 's') + '?')) return;
-  var btns = document.querySelectorAll('.bulk-bar button');
-  btns.forEach(function (b) { b.disabled = true; });
-  fetch(MOUNT + '/api/servers/bulk-action', {
-    method: 'POST', headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ action: action, server_ids: ids })
-  })
-    .then(r => r.json())
-    .then(d => {
-      var nq = (d.queued || []).length, skip = (d.skipped || []).length + skippedNoUpdate;
-      var extra = skip ? ' (' + skip + ' skipped)' : '';
-      if (nq) toast(titleCase(action) + ' started on ' + nq + ' server' + (nq === 1 ? '' : 's') + extra, 'success');
-      else toast((d.message || 'Nothing to do') + extra, 'warning');
-      clearSelection();
-      setTimeout(refreshStatus, 1500);
+  var run = function () {
+    var btns = document.querySelectorAll('.bulk-bar button');
+    btns.forEach(function (b) { b.disabled = true; });
+    fetch(MOUNT + '/api/servers/bulk-action', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ action: action, server_ids: ids })
     })
-    .catch(() => toast('Bulk action failed', 'danger'))
-    .finally(() => { btns.forEach(function (b) { b.disabled = false; }); });
+      .then(r => r.json())
+      .then(d => {
+        var nq = (d.queued || []).length, skip = (d.skipped || []).length + skippedNoUpdate;
+        var extra = skip ? ' (' + skip + ' skipped)' : '';
+        if (nq) toast(titleCase(action) + ' started on ' + nq + ' server' + (nq === 1 ? '' : 's') + extra, 'success');
+        else toast((d.message || 'Nothing to do') + extra, 'warning');
+        clearSelection();
+        setTimeout(refreshStatus, 1500);
+      })
+      .catch(() => toast('Bulk action failed', 'danger'))
+      .finally(() => { btns.forEach(function (b) { b.disabled = false; }); });
+  };
+  if (action === 'stop' || action === 'update') {
+    confirmDialog({
+      title: titleCase(action) + ' ' + ids.length + ' server' + (ids.length === 1 ? '' : 's'),
+      icon: 'exclamation-triangle', confirmClass: 'btn-warning', confirmLabel: titleCase(action),
+      bodyText: 'Run "' + action + '" on ' + ids.length + ' server' + (ids.length === 1 ? '' : 's') + '?',
+      onConfirm: run
+    });
+  } else {
+    run();
+  }
 }
 // Keep the bar's count in sync as individual boxes are toggled.
 document.addEventListener('change', function (e) {

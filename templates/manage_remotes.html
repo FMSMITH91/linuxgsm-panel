@@ -592,7 +592,11 @@ function bootstrapTailscale(remoteId) {
 }
 
 function migrateToTailscale(remoteId) {
-  if (!confirm('Switch this remote to use Tailscale SSH? The connection will be updated to use the Tailscale IP/DNS name.')) return;
+  confirmDialog({title:'Migrate to Tailscale SSH', icon:'arrow-repeat', confirmClass:'btn-success', confirmLabel:'Migrate',
+    bodyText:'Switch this remote to use Tailscale SSH? The connection will be updated to use the Tailscale IP/DNS name.',
+    onConfirm:function(){ _migrateToTailscale(remoteId); }});
+}
+function _migrateToTailscale(remoteId) {
   setModalBody('<div class="text-center py-4"><i class="bi bi-arrow-repeat"></i> Migrating connection...</div>');
 
   fetch(MOUNT + '/api/remote/' + remoteId + '/tailscale-migrate', {method: 'POST'})
@@ -619,7 +623,11 @@ function migrateToTailscale(remoteId) {
 }
 
 function closePort22(remoteId) {
-  if (!confirm('Remove port 22 from UFW? This disables public SSH access. Only do this if Tailscale SSH is working.')) return;
+  confirmDialog({title:'Close port 22', icon:'shield-lock', confirmClass:'btn-danger', confirmLabel:'Close port 22',
+    bodyText:'Remove port 22 from UFW? This disables public SSH access. Only do this if Tailscale SSH is working.',
+    onConfirm:function(){ _closePort22(remoteId); }});
+}
+function _closePort22(remoteId) {
   setModalBody('<div class="text-center py-4"><i class="bi bi-arrow-repeat"></i> Removing port 22 rule...</div>');
   fetch(MOUNT + '/api/remote/' + remoteId + '/close-port-22', {method: 'POST'})
     .then(r => r.json())

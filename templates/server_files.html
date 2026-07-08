@@ -493,7 +493,7 @@ function browse(path){
 function openFile(path){
   document.getElementById('file-save-msg').textContent='';
   fetch(MOUNT+'/api/server/'+serverId+'/file?path='+encodeURIComponent(path)).then(r=>r.json()).then(d=>{
-    if(d.error){ alert(d.error); return; }
+    if(d.error){ if(window.toast) toast(d.error, 'danger'); return; }
     curFile=path;
     document.getElementById('editor-empty').style.display='none';
     document.getElementById('editor-wrap').style.display='';
@@ -515,13 +515,16 @@ function saveFile(){
     .catch(()=>{ msg.textContent='✗ Failed'; msg.className='small text-danger'; });
 }
 function deletePath(path, isDir){
-  if(!confirm('Delete '+(isDir?'directory (and everything in it)':'file')+':\n'+path+' ?')) return;
-  fetch(MOUNT+'/api/server/'+serverId+'/delete-path',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({path:path})})
-    .then(r=>r.json()).then(d=>{
-      if(!d.success){ alert(d.message||'Delete failed'); return; }
-      if(curFile===path) closeEditor();
-      browse(curDir);
-    }).catch(()=>alert('Delete failed'));
+  confirmDialog({title:'Delete '+(isDir?'directory':'file'), icon:'trash', confirmClass:'btn-danger', confirmLabel:'Delete',
+    bodyText:'Delete '+(isDir?'directory (and everything in it)':'file')+':\n'+path+' ?',
+    onConfirm:function(){
+      fetch(MOUNT+'/api/server/'+serverId+'/delete-path',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({path:path})})
+        .then(r=>r.json()).then(d=>{
+          if(!d.success){ if(window.toast) toast(d.message||'Delete failed','danger'); return; }
+          if(curFile===path) closeEditor();
+          browse(curDir);
+        }).catch(()=>{ if(window.toast) toast('Delete failed','danger'); });
+    }});
 }
 // Upload one or more files to the current dir (used by button + drag-drop).
 function uploadFiles(files){
@@ -660,10 +663,13 @@ document.getElementById('cron-tbody').addEventListener('click', function(ev){
     cronMsg('Editing an existing task…','text-secondary');
     document.getElementById('cron-sched').focus();
   } else if(ev.target.closest('[data-cron-del]')){
-    if(!confirm('Delete this scheduled task?\n\n'+row.getAttribute('data-sched')+'  '+row.getAttribute('data-cmd'))) return;
-    fetch(MOUNT+'/api/server/'+serverId+'/cron/delete',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({raw:row.getAttribute('data-raw')})})
-      .then(r=>r.json()).then(d=>{ if(d.success){ cronMsg('✓ Task deleted','text-success'); loadCron(); } else cronMsg('✗ '+(d.message||'Delete failed'),'text-danger'); })
-      .catch(()=>cronMsg('✗ Delete failed','text-danger'));
+    confirmDialog({title:'Delete scheduled task', icon:'trash', confirmClass:'btn-danger', confirmLabel:'Delete',
+      bodyText:'Delete this scheduled task?\n\n'+row.getAttribute('data-sched')+'  '+row.getAttribute('data-cmd'),
+      onConfirm:function(){
+        fetch(MOUNT+'/api/server/'+serverId+'/cron/delete',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({raw:row.getAttribute('data-raw')})})
+          .then(r=>r.json()).then(d=>{ if(d.success){ cronMsg('✓ Task deleted','text-success'); loadCron(); } else cronMsg('✗ '+(d.message||'Delete failed'),'text-danger'); })
+          .catch(()=>cronMsg('✗ Delete failed','text-danger'));
+      }});
   } else if(ev.target.closest('[data-cron-run]')){
     var btn=ev.target.closest('[data-cron-run]'); btn.disabled=true;
     cronMsg('Running '+row.getAttribute('data-cmd')+'…','text-secondary');
@@ -860,31 +866,39 @@ function loadMods(force){
   }).catch(function(){ load.innerHTML='<span class="text-danger">Could not load mods.</span>'; });
 }
 function modAction(which, id, btn){
-  if(which==='remove' && !confirm('Remove '+id+' from this server?')) return;
-  var orig=btn.innerHTML; btn.disabled=true; btn.innerHTML='<span class="spinner-border spinner-border-sm"></span>';
-  modsMsg((which==='install'?'Installing ':'Removing ')+id+'… this can take a moment.','text-secondary');
-  fetch(MOUNT+'/api/server/'+serverId+'/mods',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({action:which,mod:id})})
-    .then(r=>r.json()).then(function(d){
-      modsMsg((d.success?'✓ ':'✗ ')+(d.message||''), d.success?'text-success':'text-danger');
-      // The change only loads after a restart. If the panel deferred it (players online / can't
-      // confirm empty), offer a one-click force right here.
-      if(d.success && d.restart_pending){
-        var m=document.getElementById('mods-msg');
-        if(m){ m.insertAdjacentHTML('beforeend',
-          ' <button class="btn btn-sm btn-warning py-0 px-1 ms-1" onclick="modRestartNow(this)"><i class="bi bi-arrow-clockwise"></i> Restart now</button>'); }
-      }
-      loadMods(false);
-    })
-    .catch(function(){ modsMsg('✗ Action failed — connection error','text-danger'); btn.disabled=false; btn.innerHTML=orig; });
+  var run = function(){
+    var orig=btn.innerHTML; btn.disabled=true; btn.innerHTML='<span class="spinner-border spinner-border-sm"></span>';
+    modsMsg((which==='install'?'Installing ':'Removing ')+id+'… this can take a moment.','text-secondary');
+    fetch(MOUNT+'/api/server/'+serverId+'/mods',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({action:which,mod:id})})
+      .then(r=>r.json()).then(function(d){
+        modsMsg((d.success?'✓ ':'✗ ')+(d.message||''), d.success?'text-success':'text-danger');
+        // The change only loads after a restart. If the panel deferred it (players online / can't
+        // confirm empty), offer a one-click force right here.
+        if(d.success && d.restart_pending){
+          var m=document.getElementById('mods-msg');
+          if(m){ m.insertAdjacentHTML('beforeend',
+            ' <button class="btn btn-sm btn-warning py-0 px-1 ms-1" onclick="modRestartNow(this)"><i class="bi bi-arrow-clockwise"></i> Restart now</button>'); }
+        }
+        loadMods(false);
+      })
+      .catch(function(){ modsMsg('✗ Action failed — connection error','text-danger'); btn.disabled=false; btn.innerHTML=orig; });
+  };
+  if(which==='remove'){
+    confirmDialog({title:'Remove mod', icon:'trash', confirmClass:'btn-danger', confirmLabel:'Remove',
+      bodyText:'Remove '+id+' from this server?', onConfirm:run});
+  } else { run(); }
 }
 function modRestartNow(btn){
-  if(!confirm('Restart the server now to load the change?\n\nAnyone currently playing will be disconnected.')) return;
-  btn.disabled=true; btn.innerHTML='<span class="spinner-border spinner-border-sm"></span> Restarting…';
-  fetch(MOUNT+'/api/server/'+serverId+'/action',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({action:'restart'})})
-    .then(r=>r.json()).then(function(d){
-      modsMsg((d.success?'✓ Restarted — the change is now loaded.':'✗ '+(d.message||'Restart failed')), d.success?'text-success':'text-danger');
-    })
-    .catch(function(){ modsMsg('✗ Restart failed — connection error','text-danger'); });
+  confirmDialog({title:'Restart server', icon:'arrow-clockwise', confirmClass:'btn-warning', confirmLabel:'Restart now',
+    bodyText:'Restart the server now to load the change?\n\nAnyone currently playing will be disconnected.',
+    onConfirm:function(){
+      btn.disabled=true; btn.innerHTML='<span class="spinner-border spinner-border-sm"></span> Restarting…';
+      fetch(MOUNT+'/api/server/'+serverId+'/action',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({action:'restart'})})
+        .then(r=>r.json()).then(function(d){
+          modsMsg((d.success?'✓ Restarted — the change is now loaded.':'✗ '+(d.message||'Restart failed')), d.success?'text-success':'text-danger');
+        })
+        .catch(function(){ modsMsg('✗ Restart failed — connection error','text-danger'); });
+    }});
 }
 loadMods(true);
 
@@ -979,14 +993,17 @@ function backupNow(force){
 
 function deleteBk(btn){
   var name = btn.getAttribute('data-name') || '';
-  if(!confirm('Delete this backup?\n\n'+name)) return;
-  btn.disabled=true;
-  fetch(MOUNT+'/api/panel/backup/game/'+serverId+'/delete',{method:'POST',headers:{'Content-Type':'application/json'},
-    body:JSON.stringify({name:name})})
-    .then(r=>r.json()).then(function(d){
-      window.toast(d.message || (d.success?'Deleted':'Delete failed'), d.success?'success':'danger');
-      loadBackups();
-    }).catch(function(){ window.toast('Delete failed','danger'); btn.disabled=false; });
+  confirmDialog({title:'Delete backup', icon:'trash', confirmClass:'btn-danger', confirmLabel:'Delete',
+    bodyText:'Delete this backup?\n\n'+name,
+    onConfirm:function(){
+      btn.disabled=true;
+      fetch(MOUNT+'/api/panel/backup/game/'+serverId+'/delete',{method:'POST',headers:{'Content-Type':'application/json'},
+        body:JSON.stringify({name:name})})
+        .then(r=>r.json()).then(function(d){
+          window.toast(d.message || (d.success?'Deleted':'Delete failed'), d.success?'success':'danger');
+          loadBackups();
+        }).catch(function(){ window.toast('Delete failed','danger'); btn.disabled=false; });
+    }});
 }
 
 loadBackups();

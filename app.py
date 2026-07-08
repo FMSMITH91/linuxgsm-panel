@@ -3206,7 +3206,12 @@ def register_routes(app):
     @permission_required(SUPER_ADMIN)
     def api_panel_switch_branch():
         """Switch the panel to another branch and pull it (same rollback-safe path as an update)."""
-        branch = (_json_body().get("branch") or "").strip()
+        body = _json_body()
+        # Re-authenticate: switching branches runs unverified code and restarts the panel — require
+        # the operator to re-enter their own password (constant-time via bcrypt), like delete_remote.
+        if not check_password(body.get("password", ""), current_user.password_hash):
+            return jsonify({"success": False, "message": "Incorrect password."}), 403
+        branch = (body.get("branch") or "").strip()
         success, msg = so.panel_switch_branch(branch)
         log_action(current_user, "panel_switch_branch", target=branch, detail=msg, success=success)
         return jsonify({"success": success, "message": msg})
@@ -3853,7 +3858,12 @@ def register_routes(app):
     def api_panel_backup_restore():
         """Restore a backup (destructive — takes a pre-restore safety backup, then swaps the
         data into place and restarts the panel)."""
-        name = _json_body().get("name") or ""
+        body = _json_body()
+        # Re-authenticate: a restore OVERWRITES the live database, settings and keys — require the
+        # operator to re-enter their own password (constant-time via bcrypt) before proceeding.
+        if not check_password(body.get("password", ""), current_user.password_hash):
+            return jsonify({"success": False, "message": "Incorrect password."}), 403
+        name = body.get("name") or ""
         ok, msg = bk.restore_backup(name)
         log_action(current_user, "panel_backup_restore", target=name, success=ok)
         return jsonify({"success": ok, "message": msg})

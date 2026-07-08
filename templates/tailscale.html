@@ -440,41 +440,43 @@ function enableServe() {
   .then(r => r.json())
   .then(data => {
     if (data.success) {
-      alert('✅ ' + data.message);
-      window.location.reload();
+      if(window.toast) toast(data.message, 'success');
+      setTimeout(function(){ window.location.reload(); }, 800);
     } else {
-      alert('❌ ' + data.message);
+      if(window.toast) toast(data.message, 'danger');
       btn.disabled = false;
       btn.innerHTML = '<i class="bi bi-wifi"></i> Enable Serve';
     }
   })
   .catch(function() {
-    alert('Error configuring Tailscale Serve');
+    if(window.toast) toast('Error configuring Tailscale Serve', 'danger');
     btn.disabled = false;
     btn.innerHTML = '<i class="bi bi-wifi"></i> Enable Serve';
   });
 }
 
 function disableServe() {
-  if (!confirm('Disable Tailscale Serve? The panel will no longer be accessible via the Tailscale URL.')) return;
-
-  fetch(MOUNT + '/api/tailscale/serve', {
-    method: 'POST',
-    headers: {'Content-Type': 'application/json'},
-    body: JSON.stringify({action: 'disable', mount: '/'}),
-  })
-  .then(r => r.json())
-  .then(data => {
-    if (data.success) {
-      alert('🔄 ' + data.message);
-      window.location.reload();
-    } else {
-      alert('❌ ' + data.message);
-    }
-  })
-  .catch(function() {
-    alert('Error disabling Tailscale Serve');
-  });
+  confirmDialog({title:'Disable Tailscale Serve', icon:'exclamation-triangle', confirmClass:'btn-danger', confirmLabel:'Disable',
+    bodyText:'Disable Tailscale Serve? The panel will no longer be accessible via the Tailscale URL.',
+    onConfirm:function(){
+      fetch(MOUNT + '/api/tailscale/serve', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({action: 'disable', mount: '/'}),
+      })
+      .then(r => r.json())
+      .then(data => {
+        if (data.success) {
+          if (window.toast) toast(data.message, 'success');
+          setTimeout(function(){ window.location.reload(); }, 800);
+        } else if (window.toast) {
+          toast(data.message, 'danger');
+        }
+      })
+      .catch(function() {
+        if (window.toast) toast('Error disabling Tailscale Serve', 'danger');
+      });
+    }});
 }
 
 // Enter key triggers peer check (the peer-host input only exists when Tailscale is installed)

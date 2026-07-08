@@ -732,7 +732,7 @@ function toggleAutostart(el) {
     body: JSON.stringify({ enabled: el.checked })
   })
   .then(r => r.json())
-  .then(d => { if (!d.success) { el.checked = !el.checked; alert(d.message || 'Failed to update autostart'); } })
+  .then(d => { if (!d.success) { el.checked = !el.checked; if(window.toast) toast(d.message || 'Failed to update autostart', 'danger'); } })
   .catch(() => { el.checked = !el.checked; })
   .finally(() => { el.disabled = false; });
 }
@@ -745,7 +745,7 @@ function toggleDailyRestart(el) {
   })
   .then(r => r.json())
   .then(d => {
-    if (!d.success) { el.checked = !el.checked; alert(d.message || 'Failed to update daily restart'); }
+    if (!d.success) { el.checked = !el.checked; if(window.toast) toast(d.message || 'Failed to update daily restart', 'danger'); }
     else if (typeof toast === 'function') { toast(el.checked ? 'Daily restart (when empty) enabled' : 'Daily restart disabled', 'success'); }
   })
   .catch(() => { el.checked = !el.checked; })

@@ -263,20 +263,23 @@ function deleteGroup(nums, btn, warn, reason) {
   if (!nums || !nums.length) return;
   var msg = warn ? ((reason || 'This may affect your access.') + '\n\nRemove this rule anyway?')
                  : 'Remove this firewall rule?';
-  if (!confirm(msg)) return;
-  if (btn) { btn.disabled = true; btn.innerHTML = '<span class="spinner-border spinner-border-sm"></span>'; }
-  var ordered = nums.slice().sort(function(a, b) { return b - a; });
-  (function next(i) {
-    if (i >= ordered.length) { refreshFirewall(); return; }
-    fetch(MOUNT + '/api/remote/' + remoteId + '/firewall/delete-rule', {
-      method: 'POST',
-      headers: {'Content-Type': 'application/json'},
-      body: JSON.stringify({num: ordered[i]}),
-    })
-    .then(r => r.json())
-    .then(function(d) { if (!d.success) alert(d.message || 'Failed to delete rule'); next(i + 1); })
-    .catch(function() { next(i + 1); });
-  })(0);
+  confirmDialog({title:'Remove firewall rule', icon:'shield-exclamation',
+    confirmClass: warn ? 'btn-danger' : 'btn-warning', confirmLabel:'Remove', bodyText: msg,
+    onConfirm: function(){
+      if (btn) { btn.disabled = true; btn.innerHTML = '<span class="spinner-border spinner-border-sm"></span>'; }
+      var ordered = nums.slice().sort(function(a, b) { return b - a; });
+      (function next(i) {
+        if (i >= ordered.length) { refreshFirewall(); return; }
+        fetch(MOUNT + '/api/remote/' + remoteId + '/firewall/delete-rule', {
+          method: 'POST',
+          headers: {'Content-Type': 'application/json'},
+          body: JSON.stringify({num: ordered[i]}),
+        })
+        .then(r => r.json())
+        .then(function(d) { if (!d.success && window.toast) toast(d.message || 'Failed to delete rule', 'danger'); next(i + 1); })
+        .catch(function() { next(i + 1); });
+      })(0);
+    }});
 }
 
 function syncPorts(serverId, btn) {
@@ -285,10 +288,10 @@ function syncPorts(serverId, btn) {
   fetch(MOUNT + '/api/server/' + serverId + '/sync-ports', { method: 'POST' })
     .then(r => r.json())
     .then(data => {
-      if (data.success) { alert('✅ ' + data.message); refreshFirewall(); }
-      else { alert('❌ ' + (data.message || 'Failed')); }
+      if (data.success) { if(window.toast) toast(data.message, 'success'); refreshFirewall(); }
+      else if(window.toast) { toast(data.message || 'Failed', 'danger'); }
     })
-    .catch(function(){ alert('❌ Request failed'); })
+    .catch(function(){ if(window.toast) toast('Request failed', 'danger'); })
     .finally(function(){ btn.disabled = false; btn.innerHTML = orig; });
 }
 

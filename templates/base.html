@@ -804,7 +804,7 @@ window.confirmDialog = function(opts){
   ov.innerHTML = '<div class="card" style="max-width:480px;width:100%;">'
     + '<div class="card-header"><i class="bi bi-' + escapeHtml(opts.icon || 'question-circle') + '"></i> ' + escapeHtml(opts.title || 'Confirm') + '</div>'
     + '<div class="card-body">'
-    + '<p class="mb-3" data-cd-body>' + (opts.body || '') + '</p>'
+    + '<p class="mb-3" data-cd-body style="white-space:pre-line;">' + (opts.body || '') + '</p>'
     + inputHtml
     + '<div class="d-flex justify-content-end gap-2">'
     + '<button class="btn btn-outline-secondary" data-cd="cancel">Cancel</button>'
@@ -1046,11 +1046,14 @@ window.UPro = (function(){
         .catch(function(){ msg('✗ Request failed', 'danger'); });
     },
     detach: function(){
-      if(!confirm('Detach this host from Ubuntu Pro? Security (ESM) updates and Livepatch will stop.')) return;
-      msg('Detaching…', 'info');
-      fetch(MOUNT + '/api/remote/' + HOST + '/pro-detach', {method:'POST'})
-        .then(function(r){ return r.json(); }).then(function(d){ msg((d.success?'✓ ':'✗ ')+(d.message||''), d.success?'success':'danger'); setTimeout(refresh, 800); })
-        .catch(function(){ msg('✗ Request failed', 'danger'); });
+      confirmDialog({title:'Detach Ubuntu Pro', icon:'shield-slash', confirmClass:'btn-danger', confirmLabel:'Detach',
+        bodyText:'Detach this host from Ubuntu Pro? Security (ESM) updates and Livepatch will stop.',
+        onConfirm:function(){
+          msg('Detaching…', 'info');
+          fetch(MOUNT + '/api/remote/' + HOST + '/pro-detach', {method:'POST'})
+            .then(function(r){ return r.json(); }).then(function(d){ msg((d.success?'✓ ':'✗ ')+(d.message||''), d.success?'success':'danger'); setTimeout(refresh, 800); })
+            .catch(function(){ msg('✗ Request failed', 'danger'); });
+        }});
     }
   };
 })();
