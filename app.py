@@ -126,10 +126,15 @@ AUTH_LOG_PATH = os.path.join(str(DATA_DIR), "auth.log")
 
 
 def _log_ip(ip):
-    """Reduce a client IP to the IP charset before it goes in auth.log — belt-and-suspenders so
-    nothing weird (spaces, control chars) can ever land in a line fail2ban parses. fail2ban only
-    bans a valid IP anyway, so a stripped non-IP simply won't match its <HOST> pattern."""
-    return re.sub(r"[^0-9A-Fa-f:.]", "", str(ip or ""))[:45] or "unknown"
+    """Only a valid IP literal is written to auth.log (fail2ban bans IPs anyway); anything else
+    becomes 'unknown'. CR/LF are stripped explicitly first, so a forged header value can never
+    inject a second line into the log fail2ban parses."""
+    import ipaddress
+    s = str(ip or "").replace("\r", "").replace("\n", "").strip()
+    try:
+        return str(ipaddress.ip_address(s))
+    except ValueError:
+        return "unknown"
 
 
 def _setup_auth_log():

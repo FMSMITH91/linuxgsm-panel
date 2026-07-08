@@ -19,6 +19,8 @@ regexes = [
   '''C1a[.…]''',                    # Ubuntu Pro token input placeholder (e.g. "C1a…")
   '''~/\.ssh/id_rsa''',             # default SSH key *path* shown in the add-remote form
   '''tskey-[A-Za-z0-9]{0,6}\.\.\.''',
+  '''maxBytes=\d+''',               # false positive: the auth.log RotatingFileHandler size — the
+                                    # generic-api-key rule keys off "AUTH" in AUTH_LOG_PATH; not a secret
 ]
 # Belt-and-suspenders: these files only contain example/placeholder strings, never
 # real credentials.
