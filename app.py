@@ -2056,6 +2056,16 @@ def register_routes(app):
                               "the mirror unreachable. Try again shortly.", last_out[-300:]); return
                     gs.installed = True; db.session.commit()
 
+                    # Make LinuxGSM actually use the free port we reserved at request time
+                    # (resolve_free_port already skipped ports taken by another server or listening
+                    # on the host). auto-install used the game's DEFAULT port, which can collide with
+                    # another server — so write our port into the instance config. Step 6 then reads
+                    # it back via `details` and opens it, instead of overwriting with the default.
+                    try:
+                        lgsm_write_config(remote, short_name, lgsm_name, {"port": final_port})
+                    except Exception:
+                        _log.debug("_run: ignored non-fatal error", exc_info=True)
+
                     # 5. Configure: cache command list + maintenance cron + Minecraft EULA.
                     _p(5, "Configuring server")
                     try:
