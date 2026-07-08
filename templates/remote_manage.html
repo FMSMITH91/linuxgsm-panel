@@ -171,27 +171,32 @@
     <span class="small text-secondary">LinuxGSM Panel <strong id="pu-current">v{{ panel_version }}</strong></span>
   </div>
   <div class="card-body">
-    <div id="pu-status" class="small text-secondary"><i class="bi bi-arrow-repeat"></i> Checking for updates…</div>
-    <div id="pu-changes" class="small mt-2" style="display:none;">
-      <div class="text-secondary mb-1">Changes since your version:</div>
-      <ul id="pu-changes-list" class="mb-0" style="font-size:.8rem;"></ul>
-    </div>
-    <div class="mt-2 d-flex gap-2 align-items-center">
-      <button class="btn btn-sm btn-outline-secondary" onclick="checkPanelUpdate(true)"><i class="bi bi-arrow-repeat"></i> Check now</button>
-      <button class="btn btn-sm btn-success" id="pu-update-btn" onclick="doPanelUpdate()" style="display:none;"><i class="bi bi-download"></i> Update now</button>
-      <span id="pu-msg" class="small"></span>
-    </div>
-    <!-- Branch selector: which branch the panel tracks and updates from -->
-    <div class="mt-3 pt-2 border-top" style="border-color:var(--border) !important;">
-      <div class="small text-secondary mb-1">
-        <i class="bi bi-diagram-2"></i> Tracking branch: <strong id="pu-branch-current">…</strong>
+    <div class="row g-3">
+      <!-- Update status + actions -->
+      <div class="col-md-6">
+        <div id="pu-status" class="small text-secondary"><i class="bi bi-arrow-repeat"></i> Checking for updates…</div>
+        <div id="pu-changes" class="small mt-2" style="display:none;">
+          <div class="text-secondary mb-1">Changes since your version:</div>
+          <ul id="pu-changes-list" class="mb-0" style="font-size:.8rem;"></ul>
+        </div>
+        <div class="mt-2 d-flex gap-2 align-items-center">
+          <button class="btn btn-sm btn-outline-secondary" onclick="checkPanelUpdate(true)"><i class="bi bi-arrow-repeat"></i> Check now</button>
+          <button class="btn btn-sm btn-success" id="pu-update-btn" onclick="doPanelUpdate()" style="display:none;"><i class="bi bi-download"></i> Update now</button>
+          <span id="pu-msg" class="small"></span>
+        </div>
       </div>
-      <div class="d-flex gap-2 align-items-center flex-wrap">
-        <select id="pu-branch-select" class="form-select form-select-sm" style="width:auto; max-width:280px;" aria-label="Panel branch"></select>
-        <button class="btn btn-sm btn-outline-warning" id="pu-branch-switch" onclick="switchPanelBranch()"><i class="bi bi-shuffle"></i> Switch</button>
-        <span id="pu-branch-msg" class="small"></span>
+      <!-- Branch selector (sits next to the update controls; wraps below on mobile) -->
+      <div class="col-md-6 ps-md-4">
+        <div class="small text-secondary mb-1">
+          <i class="bi bi-diagram-2"></i> Tracking branch: <strong id="pu-branch-current">…</strong>
+        </div>
+        <div class="d-flex gap-2 align-items-center flex-wrap">
+          <select id="pu-branch-select" class="form-select form-select-sm" style="width:auto; max-width:280px;" aria-label="Panel branch"></select>
+          <button class="btn btn-sm btn-outline-warning" id="pu-branch-switch" onclick="switchPanelBranch()"><i class="bi bi-shuffle"></i> Switch</button>
+          <span id="pu-branch-msg" class="small"></span>
+        </div>
+        <div class="form-text mt-1">Switching checks out that branch's code and restarts, with the same backup + auto-rollback as an update. Non-<code>main</code> branches skip CI verification — intended for testing.</div>
       </div>
-      <div class="form-text mt-1">Switching checks out that branch's code and restarts, with the same backup + auto-rollback as an update. Non-<code>main</code> branches skip CI verification — intended for testing.</div>
     </div>
     <!-- Live update progress (the installer's [1/5]…[5/5] steps, streamed) -->
     <div id="pu-log" class="mt-2" style="display:none;">
