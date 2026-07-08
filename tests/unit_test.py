@@ -775,18 +775,18 @@ _LOGIN_FAILS.clear()
 from auth import generate_backup_codes
 from models import User as _User
 _codes = generate_backup_codes()
-check("backup: generates 10 codes", len(_codes) == 10)
-check("backup: codes are unique", len(set(_codes)) == 10)
+check("backup: generates 8 codes", len(_codes) == 8)
+check("backup: codes are unique", len(set(_codes)) == 8)
 check("backup: xxxxx-xxxxx format", all(len(c) == 11 and c[5] == "-" for c in _codes))
 check("backup: unambiguous alphabet (no 0/o/1/l/i)",
       all(ch in "23456789abcdefghjkmnpqrstuvwxyz-" for c in _codes for ch in c))
 _u = _User()
 _u.set_backup_codes(_codes)
-check("backup: 10 remaining after set", _u.backup_codes_remaining == 10)
+check("backup: 8 remaining after set", _u.backup_codes_remaining == 8)
 check("backup: wrong code rejected", not _u.use_backup_code("00000-00000"))
 check("backup: valid code accepted (ignores case + dashes)",
       _u.use_backup_code(_codes[0].upper().replace("-", "")))
-check("backup: remaining drops to 9 after use", _u.backup_codes_remaining == 9)
+check("backup: remaining drops to 7 after use", _u.backup_codes_remaining == 7)
 check("backup: a used code can't be reused (one-time)", not _u.use_backup_code(_codes[0]))
 check("backup: a different code still works", _u.use_backup_code(_codes[1]))
 check("backup: no codes set is handled", not _User().use_backup_code("whatever"))

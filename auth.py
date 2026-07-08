@@ -113,7 +113,7 @@ def dummy_password_check(password):
 _BACKUP_CODE_ALPHABET = "23456789abcdefghjkmnpqrstuvwxyz"
 
 
-def generate_backup_codes(n=10, length=10):
+def generate_backup_codes(n=8, length=10):
     """Generate `n` human-friendly one-time 2FA backup codes, formatted xxxxx-xxxxx.
     Returned in plaintext ONCE — only their bcrypt hashes are stored (User.set_backup_codes)."""
     codes = []
