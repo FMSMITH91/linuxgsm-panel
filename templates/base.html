@@ -384,6 +384,15 @@
     code { font-size: .85rem; color: var(--text); background: var(--bg-elevated); padding: .1rem .3rem; border-radius: 3px; }
     pre { font-size: .8rem; background: var(--bg); border: 1px solid var(--border); border-radius: var(--radius-sm); padding: .85rem; }
     .setup-card { max-width: 480px; margin: 4rem auto; }
+    /* Language picker for the unauthenticated setup wizard — there's no sidebar yet to hold the
+       usual one. Fixed top-LEFT so it clears the top-right flash/toast messages. */
+    .setup-lang {
+      position: fixed; top: .9rem; left: 1rem; z-index: 500;
+      display: flex; align-items: center; gap: .4rem;
+      background: var(--bg-card); border: 1px solid var(--border);
+      border-radius: var(--radius-sm); padding: .3rem .55rem;
+    }
+    .setup-lang i { color: var(--text-muted); }
     .empty-state { text-align: center; padding: 4rem 1.5rem; }
     .empty-state-icon { font-size: 3rem; margin-bottom: 1rem; opacity: .4; }
     .empty-state h5 { color: var(--text-heading); font-size: 1.15rem; margin-bottom: .5rem; }
@@ -495,6 +504,19 @@
     else boot();
   })();
 </script>
+
+{% if setup_mode and languages and languages|length > 1 %}
+<!-- Setup wizard language picker (no sidebar/login switcher available here yet) -->
+<div class="setup-lang" title="{{ t('Language') }}">
+  <i class="bi bi-translate"></i>
+  <select class="form-select form-select-sm py-0" style="width:auto;" aria-label="{{ t('Language') }}"
+          onchange="if(this.value){fetch('{{ url_for('set_language', lang='LANGCODE') }}'.replace('LANGCODE', this.value)+'?ajax=1',{cache:'no-store'}).then(function(){location.reload();});}">
+    {% for code, name in languages.items() %}
+    <option value="{{ code }}" {% if code == current_lang %}selected{% endif %}>{{ name }}</option>
+    {% endfor %}
+  </select>
+</div>
+{% endif %}
 
 {% if current_user.is_authenticated %}
 <!-- Mobile topbar -->

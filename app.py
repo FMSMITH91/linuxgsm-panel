@@ -836,6 +836,9 @@ def register_routes(app):
                             display_name=username,
                             is_superadmin=True,
                             is_active=True,
+                            # Carry the language chosen during setup into the admin account, so
+                            # they land in it after logging in (falls back to en).
+                            language=_current_lang(),
                         )
                         db.session.add(admin)
                         # Add to Everyone group
@@ -943,7 +946,10 @@ def register_routes(app):
         }
         tmpl = step_templates.get(state.step, "setup_welcome.html")
         ts_info = ts.get_tailscale_info()
-        return render_template(tmpl, step=state.step, data=data, config=cfg, ts=ts_info)
+        # setup_mode surfaces the language picker in base.html (there's no sidebar/login
+        # switcher during setup); the choice is kept in the session across steps.
+        return render_template(tmpl, step=state.step, data=data, config=cfg, ts=ts_info,
+                               setup_mode=True)
 
     # ── Setup-only Tailscale endpoints ─────────────────────────
     # No login exists yet during setup, so these are unauthenticated BUT usable ONLY
