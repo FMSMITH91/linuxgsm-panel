@@ -1597,26 +1597,29 @@ def console_player_list(server, user, game_type, selfname=None):
 
 
 def _gamedig_player_list(server, user, game_type=None, port=None, query_type=None):
-    """Player list via gamedig (names + score/time where the game reports them). Used for games
-    without console-based moderation. Returns [] when not queryable / empty. Never raises."""
+    """Player list via gamedig — the PRIMARY source. Returns a list ([{name, …}], possibly empty
+    for a confirmed-empty server) when gamedig could query the game, or None when it couldn't (no
+    gamedig type, no port, or the query failed) so the caller can fall back to the console. Never
+    raises. Names carry score/time where the game reports them; no kick/ban ids (those come from the
+    console on demand)."""
     gdtype = _gamedig_type(game_type, query_type)
     if not gdtype or not port:
-        return []
+        return None
     jqf = ('[.players[] | {name:(.name // ""), score:(.raw.score // .score // null), '
            'time:(.raw.time // .time // null)}]')
     cmd = f"gamedig --type {gdtype} 127.0.0.1:{int(port)} 2>/dev/null | jq -c {_quote(jqf)} 2>/dev/null"
     try:
         out, _, _ = run_command(server, f"sudo -u {user} bash -c {_quote(cmd)}", timeout=25, sudo=False)
     except Exception:
-        return []
+        return None
     line = next((ln.strip() for ln in (out or "").splitlines() if ln.strip().startswith("[")), "")
     if not line:
-        return []
+        return None
     try:
         import json as _json
         data = _json.loads(line)
     except (ValueError, TypeError):
-        return []
+        return None
     players = []
     for p in (data if isinstance(data, list) else []):
         if isinstance(p, dict):
@@ -1628,16 +1631,17 @@ def _gamedig_player_list(server, user, game_type=None, port=None, query_type=Non
 
 
 def player_list(server, user, game_type=None, port=None, query_type=None, selfname=None):
-    """Connected players for the Players panel. For games with console moderation (valve, idTech3,
-    Minecraft) read the console first so the list carries the kick/ban identifiers; if that yields
-    nothing (an empty server, OR a `status` layout this build formats differently than we parse)
-    fall back to gamedig so a working gamedig query still shows who's on — names only, no kick/ban.
-    Everything else uses gamedig. Returns [{name, steamid, num, score, time}]. Never raises."""
-    if game_engine(game_type):
-        pl = console_player_list(server, user, game_type, selfname=selfname)
-        if pl:
-            return pl
-    return _gamedig_player_list(server, user, game_type, port, query_type)
+    """Connected players for the Players panel. gamedig is the PRIMARY source (names + score/time,
+    and it never touches the game console); the game's own console (`status`/`list`) is only a
+    BACKUP, used when gamedig can't query the game at all. Returns [{name, steamid, num, score,
+    time}] — steamid/num are set only when the list came from the console; otherwise the kick/ban
+    id is resolved from the console on demand at moderation time. Never raises."""
+    pl = _gamedig_player_list(server, user, game_type, port, query_type)
+    if pl is not None:
+        return pl                       # gamedig answered (players, or a confirmed-empty server)
+    if game_engine(game_type):          # gamedig can't query this game — fall back to the console
+        return console_player_list(server, user, game_type, selfname=selfname) or []
+    return []
 
 
 def is_player_queryable(game_type, query_type=None):
@@ -1662,6 +1666,20 @@ _MOD_BAD_CHARS = str.maketrans({c: None for c in ';"`\r\n\t\x00'})
 
 def _mod_sanitize(s, maxlen=64):
     return str(s or "").translate(_MOD_BAD_CHARS).strip()[:maxlen]
+
+
+def _resolve_from_console(server, user, game_type, name, selfname):
+    """Find a player by name in the game's console list and return their {name, num, steamid, …}.
+    Used to resolve the kick/ban identifier (slot number / SteamID) when the list on screen came
+    from gamedig, which doesn't carry those ids. Matches on the colour-code-stripped name; returns
+    None if not found. Only runs when someone actually clicks kick/ban — no continuous polling."""
+    want = _strip_q3_colors(name or "").strip()
+    if not want:
+        return None
+    for p in (console_player_list(server, user, game_type, selfname=selfname) or []):
+        if _strip_q3_colors(p.get("name") or "").strip() == want:
+            return p
+    return None
 
 
 def moderate(server, user, game_type, action, target="", message="", selfname=None,
@@ -1689,13 +1707,19 @@ def moderate(server, user, game_type, action, target="", message="", selfname=No
             cmd = 'kick "%s"' % nm
         else:
             sid = _sanitize_steamid(steamid)
+            if not sid:      # list came from gamedig (no SteamID) — resolve it on the console now
+                p = _resolve_from_console(server, user, game_type, target, selfname)
+                sid = _sanitize_steamid(p.get("steamid")) if p else ""
             if not sid:
-                return False, "No SteamID for this player — can't ban them by ID."
+                return False, "Couldn't find that player's SteamID to ban them."
             cmd = "banid 0 %s; writeid" % sid     # 0 minutes = permanent; writeid persists it
     elif eng == "idtech3":
         slot = _sanitize_slotnum(num)
+        if slot is None:     # list came from gamedig (no slot number) — resolve it on the console now
+            p = _resolve_from_console(server, user, game_type, target, selfname)
+            slot = _sanitize_slotnum(p.get("num")) if p else None
         if slot is None:
-            return False, "No player slot selected."
+            return False, "Couldn't find that player on the server."
         cmd = "%s %d" % ("clientkick" if action == "kick" else "banclient", slot)
     elif eng == "minecraft":
         nm = _mod_sanitize(target, 64)
@@ -2926,9 +2950,13 @@ def remote_bootstrap_vps(server, set_timezone="UTC", enable_ufw=True, install_lg
     nd_out, _, _ = run_command(server, node_cmd, timeout=300, sudo=True)
     note(nd_out or "Node.js LTS installed")
 
-    # ── 3b. gamedig (game-server query tool) via npm ──
+    # ── 3b. gamedig (game-server query tool) via npm — idempotent (skip if already present) ──
     emit("Installing gamedig (game server query tool)")
-    gd_out, _, _ = run_command(server, "npm install -g gamedig 2>&1 | tail -3", timeout=300, sudo=True)
+    gd_out, _, _ = run_command(
+        server,
+        "if command -v gamedig >/dev/null 2>&1; then echo 'gamedig already installed'; "
+        "else npm install -g gamedig 2>&1 | tail -3; fi",
+        timeout=300, sudo=True)
     note(gd_out or "gamedig installed")
 
     # ── 3c. Enable + configure unattended-upgrades (auto security updates) ──

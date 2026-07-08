@@ -1595,23 +1595,28 @@ check("parser(minecraft): names from a prefixed log line",
 check("parser(minecraft): empty server -> no players",
       sm._parse_minecraft_list("There are 0 of a max of 20 players online: ") == [])
 
-# player_list: console engines use the console (ids for kick/ban), else fall back to gamedig
+# player_list: gamedig is PRIMARY (no console spam); the console is only a backup when gamedig
+# can't query the game at all (_gamedig_player_list returns None for that, [] for empty).
 _orig_cpl, _orig_gpl = sm.console_player_list, sm._gamedig_player_list
 try:
-    sm.console_player_list = lambda *a, **k: [{"name": "Ace", "num": 0, "steamid": "",
-                                               "score": None, "time": None}]
-    sm._gamedig_player_list = lambda *a, **k: [{"name": "Zed"}]
-    check("player_list: uses the console result when present (carries slot/steamid for moderation)",
-          [p["name"] for p in sm.player_list(None, "u", "cod", 28960, None, "codserver")] == ["Ace"])
-    sm.console_player_list = lambda *a, **k: []   # console parsed nothing / empty
-    check("player_list: falls back to gamedig when the console yields nothing",
+    sm.console_player_list = lambda *a, **k: [{"name": "Ace"}]
+    sm._gamedig_player_list = lambda *a, **k: [{"name": "Zed", "steamid": "", "num": None,
+                                                "score": None, "time": None}]
+    check("player_list: gamedig is primary — the console isn't touched when gamedig answers",
           [p["name"] for p in sm.player_list(None, "u", "cod", 28960, None, "codserver")] == ["Zed"])
+    sm._gamedig_player_list = lambda *a, **k: []   # gamedig says the server is empty
+    check("player_list: a gamedig-confirmed empty server does NOT fall back to the console",
+          sm.player_list(None, "u", "cod", 28960, None, "codserver") == [])
+    sm._gamedig_player_list = lambda *a, **k: None  # gamedig couldn't query at all
+    check("player_list: falls back to the console only when gamedig can't query",
+          [p["name"] for p in sm.player_list(None, "u", "cod", 28960, None, "codserver")] == ["Ace"])
 finally:
     sm.console_player_list, sm._gamedig_player_list = _orig_cpl, _orig_gpl
 
 # injection-safe command building, dispatched by engine
 _msent = {}
 _orig_scc = sm.send_console_command
+_orig_cpl_m = sm.console_player_list
 try:
     sm.send_console_command = lambda *a, **k: (_msent.__setitem__("cmd", a[2]), ("", "", 0))[1]
     sm.moderate(None, "u", "gmod", "kick", target='Bad;Guy"x')
@@ -1620,20 +1625,32 @@ try:
     sm.moderate(None, "u", "gmod", "ban", steamid="STEAM_0:1:5; rcon x")
     check("moderation: valve ban uses banid+writeid on the re-validated SteamID only",
           _msent.get("cmd") == "banid 0 STEAM_0:1:5; writeid")
-    check("moderation: valve ban with no SteamID is refused",
+    check("moderation: valve ban with no SteamID and no name is refused",
           sm.moderate(None, "u", "gmod", "ban", steamid="")[0] is False)
     sm.moderate(None, "u", "cod", "kick", num="3")
     check("moderation: idTech3 kick is clientkick <slot>", _msent.get("cmd") == "clientkick 3")
     sm.moderate(None, "u", "cod", "ban", num="3")
     check("moderation: idTech3 ban is banclient <slot>", _msent.get("cmd") == "banclient 3")
-    check("moderation: idTech3 with a junk slot is refused",
+    check("moderation: idTech3 with a junk slot and no name is refused",
           sm.moderate(None, "u", "cod", "ban", num="3; quit")[0] is False)
     sm.moderate(None, "u", "mc", "ban", target="Steve")
     check("moderation: minecraft ban is a bare name command", _msent.get("cmd") == "ban Steve")
     check("moderation: a non-console game (rust) refuses moderation",
           sm.moderate(None, "u", "rust", "ban", target="x")[0] is False)
+    # on-demand id resolution: a gamedig-sourced list carries no ids, so kick/ban looks the player
+    # up on the console by name and uses the slot / SteamID it finds there.
+    sm.console_player_list = lambda *a, **k: [{"name": "Ace", "num": 4, "steamid": "STEAM_0:1:9"}]
+    _msent.clear()
+    sm.moderate(None, "u", "cod", "kick", target="Ace")   # no num supplied
+    check("moderation: idTech3 kick resolves the slot from the console when given only a name",
+          _msent.get("cmd") == "clientkick 4")
+    _msent.clear()
+    sm.moderate(None, "u", "gmod", "ban", target="Ace")   # no steamid supplied
+    check("moderation: valve ban resolves the SteamID from the console when given only a name",
+          _msent.get("cmd") == "banid 0 STEAM_0:1:9; writeid")
 finally:
     sm.send_console_command = _orig_scc
+    sm.console_player_list = _orig_cpl_m
 
 # ── gamedig query type: per-server override wins over the built-in map, sanitized ──
 check("query-type: an explicit override wins over the built-in map",

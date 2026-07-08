@@ -5012,11 +5012,23 @@ def register_routes(app):
                 bk.daily_backup_tick()
                 _run_due_game_backups()   # per-server schedules (each records its own last-run)
                 _run_pending_backups()    # 'wait until empty' full-backup queue
-                _run_due_restarts()       # apply deferred mod-restarts once servers empty
             except Exception:
                 app.logger.debug("backup tick failed", exc_info=True)
             time.sleep(3600)
     _supervise("backup-ticker", backup_ticker)
+
+    # "Restart/stop when empty" needs to act PROMPTLY once the last player leaves — an hourly check
+    # would leave the server up for up to an hour after it emptied. Run the deferred-action sweep on
+    # a short cadence instead; it only does anything for servers that actually have a queued action.
+    def due_actions_ticker():
+        time.sleep(45)
+        while True:
+            try:
+                _run_due_restarts()   # apply queued 'restart/stop when empty' once a server empties
+            except Exception:
+                app.logger.debug("due-actions tick failed", exc_info=True)
+            time.sleep(90)
+    _supervise("due-actions", due_actions_ticker)
 
     # Keep game processes at their slight CPU-priority edge (nice -1). The panel boosts a game on
     # its own start/restart, but the LinuxGSM monitor cron restarts a crashed server AS the game
