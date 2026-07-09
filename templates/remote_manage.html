@@ -1679,7 +1679,7 @@ document.addEventListener('click', function(e){
 });
 
 loadSshStatus();                     // public-SSH controls now exist on both local + remote (no-ops if absent)
-if(IS_LOCAL){ checkPanelUpdate(false); loadPanelBranches(); loadIntegrity(); loadDbStats(); loadAutoUpd(); loadBackups(); } // panel-only cards
+if(IS_LOCAL){ checkPanelUpdate(false); loadPanelBranches(); loadIntegrity(); loadDbStats(); loadAutoUpd(); loadPanelF2b(); loadBackups(); } // panel-only cards
 pollLive();
 pollWhenVisible(pollLive, 2000);
 
