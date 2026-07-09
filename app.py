@@ -187,6 +187,10 @@ _install_lock = threading.Lock()
 # remote could both pick the same port or both pass the duplicate-name check before either commits.
 _install_alloc_lock = threading.Lock()
 
+# Largest file the browser upload accepts (enforced in the upload route AND as the app-wide
+# MAX_CONTENT_LENGTH, so an oversized body is rejected before it's read).
+_MAX_UPLOAD_BYTES = 50 * 1024 * 1024
+
 # Only one game-file backup at a time (full OR single-server) — they're slow and space-heavy.
 _full_backup_lock = threading.Lock()
 # Last on-demand per-server backup outcome, keyed by server id (transient, in-memory).
@@ -559,6 +563,12 @@ def create_app():
     # session cookie. Tests disable it via WTF_CSRF_ENABLED=False.
     app.config.setdefault("WTF_CSRF_TIME_LIMIT", None)  # token valid for the session
     CSRFProtect(app)
+
+    # Cap the total request body so an oversized upload can't be spooled to disk / read into memory
+    # before the per-file size check runs. Werkzeug already bounds in-memory form fields, but NOT
+    # multipart file parts; this rejects anything past the file limit (plus a little envelope
+    # headroom) with a 413 up front. Keep it in step with _MAX_UPLOAD_BYTES.
+    app.config["MAX_CONTENT_LENGTH"] = _MAX_UPLOAD_BYTES + 2 * 1024 * 1024
 
     # A fresh CSP nonce per request. Every one of our own <script> blocks carries it
     # (nonce="{{ csp_nonce }}"), so the Content-Security-Policy can drop 'unsafe-inline' from
@@ -5306,8 +5316,8 @@ def register_routes(app):
         f = request.files.get("file")
         if not f or not f.filename:
             return jsonify({"success": False, "message": "No file provided"}), 400
-        data = f.read()
-        if len(data) > 50 * 1024 * 1024:
+        data = f.read(_MAX_UPLOAD_BYTES + 1)   # bounded read: never pull more than the limit into memory
+        if len(data) > _MAX_UPLOAD_BYTES:
             return jsonify({"success": False, "message": "File too large (max 50 MB)"}), 400
         try:
             ok, msg = upload_file(gs.remote, gs.short_name, reldir, f.filename, data)
