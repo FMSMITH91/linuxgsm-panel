@@ -142,7 +142,10 @@
       <div class="card-header"><i class="bi bi-power"></i> Power</div>
       <div class="card-body">
         <p class="small text-secondary">{% if remote.is_local %}Takes down the panel <strong>and</strong> every game server on it.{% else %}Autostart servers come back on their own.{% endif %}</p>
-        <button class="btn btn-sm btn-outline-warning" data-action="rebootRemote"><i class="bi bi-power"></i> Reboot server</button>
+        <div class="d-flex gap-2 flex-wrap">
+          <button class="btn btn-sm btn-outline-warning" data-action="rebootRemote"><i class="bi bi-power"></i> Reboot now</button>
+          <button class="btn btn-sm btn-outline-secondary" data-action="rebootRemoteWhenEmpty" title="Reboot once no players are connected to any game server on this host"><i class="bi bi-hourglass-split"></i> Reboot when empty</button>
+        </div>
       </div>
     </div>
   </div>
@@ -662,6 +665,10 @@
 <script nonce="{{ csp_nonce }}">
 var REMOTE_ID = {{ remote.id }};
 var IS_LOCAL = {{ 'true' if remote.is_local else 'false' }};
+var REMOTE_NAME = {{ remote.name|tojson }};
+// Reboot-required banner for THIS remote (the panel host is shown globally by base.html, so skip it
+// here to avoid a duplicate).
+if (!IS_LOCAL && window.rebootNagCheck) { window.rebootNagCheck(REMOTE_ID, REMOTE_NAME); }
 
 // ── Section tabs: show only the cards for the selected group (Overview / Host Controls /
 // Maintenance). Cards keep their place/markup/JS; we just toggle visibility. The sidebar's
@@ -864,6 +871,10 @@ function _confirmReboot(q){
 function doRebootRemote(){
   fetch(MOUNT+'/api/remote/'+REMOTE_ID+'/reboot',{method:'POST'}).then(r=>r.json())
     .then(d=>{ if(window.toast) toast(d.message||'Reboot requested','info'); }).catch(()=>{ if(window.toast) toast('Reboot failed','danger'); });
+}
+function rebootRemoteWhenEmpty(){
+  // Schedule a reboot once every game server on this host is empty (reuses the shared banner flow).
+  if (window.rebootNagWhenEmpty) window.rebootNagWhenEmpty(REMOTE_ID, IS_LOCAL ? 'the panel host' : REMOTE_NAME);
 }
 // ── SSH / connection ──
 function retrustHostKey(){

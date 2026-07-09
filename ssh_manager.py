@@ -2759,6 +2759,26 @@ def remote_reboot(server):
     return True, "Reboot command sent to remote"
 
 
+def remote_reboot_required(server):
+    """Whether a host needs a reboot to finish applying updates. Debian/Ubuntu drop
+    /var/run/reboot-required after a kernel/libc upgrade, and list the responsible packages in
+    /var/run/reboot-required.pkgs. Works for the panel host too (run_command runs it locally when
+    the server is is_local). Returns {'required': bool, 'packages': [str, ...]}. Best-effort."""
+    try:
+        out, _, _ = run_command(server, "test -f /var/run/reboot-required && echo YES || echo NO", timeout=12)
+    except Exception:
+        return {"required": False, "packages": []}
+    if "YES" not in (out or ""):
+        return {"required": False, "packages": []}
+    packages = []
+    try:
+        pk, _, _ = run_command(server, "cat /var/run/reboot-required.pkgs 2>/dev/null", timeout=12)
+        packages = sorted({p.strip() for p in (pk or "").splitlines() if p.strip()})
+    except Exception:
+        packages = []
+    return {"required": True, "packages": packages}
+
+
 _uptime_cache = {}   # server.id -> (expiry_epoch, dict) — de-dups concurrent viewers of the card
 _UPTIME_TTL = 8      # the manage-remotes card polls ~every 15s; this only collapses overlap
 

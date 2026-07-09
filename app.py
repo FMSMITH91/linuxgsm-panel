@@ -108,7 +108,7 @@ from ssh_manager import (
     remote_ufw_allow_game_ports, remote_ufw_close_by_name,
     remote_os_check_updates, remote_os_run_updates,
     remote_fail2ban_overview, remote_fail2ban_unban, remote_security_log,
-    remote_reboot, remote_uptime,
+    remote_reboot, remote_reboot_required, remote_uptime,
     remote_bootstrap_vps, remote_check_tailscale,
     remote_install_tailscale, remote_bootstrap_tailscale,
     remote_migrate_to_tailscale, remote_tailscale_up_url,
@@ -272,6 +272,68 @@ def _invalidate_port_scan(remote_id):
 # the instant it resets, before the new process is serving, so a SHA change doesn't mean the
 # update is live — a boot-id change does.
 _BOOT_ID = "%.6f" % time.time()
+
+# Hosts the operator asked to "reboot when empty" — reboot once every game server on them is idle.
+# remote_id -> {"by": username, "since": epoch}. In-memory on purpose: a panel restart clears any
+# pending request, so no surprise reboot ever survives a restart.
+_reboot_when_empty = {}
+_rwe_lock = threading.Lock()
+
+
+def _host_players_total(remote):
+    """Total players across all installed game servers on a host (0 if none/unknown). Mirrors the
+    per-host tally the reboot warning already uses."""
+    total = 0
+    for gs in GameServer.query.filter_by(remote_id=remote.id, installed=True).all():
+        try:
+            pc = sm_player_count(gs.remote, gs.short_name, gs.game_type, gs.port)
+        except Exception:
+            pc = None
+        if pc and pc > 0:
+            total += pc
+    return total
+
+
+def _host_reachable(remote):
+    """Whether a host answers a trivial command right now (run_command runs it locally for the panel
+    host). Used to avoid rebooting a host we can't currently confirm is idle."""
+    try:
+        out, _, _ = run_command(remote, "echo ok", timeout=10)
+        return "ok" in (out or "")
+    except Exception:
+        return False
+
+
+def _reboot_when_empty_watch(app):
+    """Reboot each 'reboot when empty' host once it is reachable AND every game server on it reports
+    0 players. Unreachable hosts are skipped (never rebooted on a guess), so a host that can't be
+    queried just waits. Runs forever on a 60s tick; the registry is in-memory."""
+    while True:
+        time.sleep(60)
+        with _rwe_lock:
+            pending = list(_reboot_when_empty.keys())
+        if not pending:
+            continue
+        with app.test_request_context():   # DB + log_action context for the background thread
+            for rid in pending:
+                try:
+                    remote = RemoteServer.query.get(rid)
+                    if not remote:
+                        with _rwe_lock:
+                            _reboot_when_empty.pop(rid, None)
+                        continue
+                    if not _host_reachable(remote):
+                        continue   # can't reach it — don't reboot a host we can't confirm is idle
+                    if _host_players_total(remote) > 0:
+                        continue   # still busy — wait for the next tick
+                    with _rwe_lock:
+                        info = _reboot_when_empty.pop(rid, None)
+                    ok, msg = remote_reboot(remote)
+                    log_action(None, "reboot_when_empty_fire", target=remote.name,
+                               detail="host idle — %s" % msg, success=ok,
+                               actor=(info or {}).get("by") or "system")
+                except Exception:
+                    _log.debug("reboot-when-empty tick failed for remote %s", rid, exc_info=True)
 
 
 def _prune_jobs(registry, lock, max_age=7200):
@@ -831,6 +893,17 @@ def register_context_processors(app):
                                .order_by(RemoteServer.name).all())
         except Exception:
             nav_remotes = []
+        # The panel host's own remote-row id, so any page can render its "reboot required" banner
+        # (the panel host is just a remote with is_local=True). Only for users who could act on it.
+        local_remote_id = None
+        try:
+            if getattr(current_user, "is_authenticated", False) and (
+                current_user.is_superadmin or "manage_remotes" in get_user_permissions(current_user)
+            ):
+                _lr = RemoteServer.query.filter_by(is_local=True).first()
+                local_remote_id = _lr.id if _lr else None
+        except Exception:
+            local_remote_id = None
         lang = _current_lang()
         return {
             "site_title": cfg.get("site_title", "LinuxGSM Panel"),
@@ -841,6 +914,7 @@ def register_context_processors(app):
             "panel_commit": PANEL_COMMIT,
             "csp_nonce": getattr(g, "csp_nonce", ""),
             "nav_remotes": nav_remotes,
+            "local_remote_id": local_remote_id,
             # i18n: `t()` translates a string for the active language (falls back to English);
             # the catalog is also handed to the browser so client JS can translate too.
             "t": lambda s: i18n.translate(lang, s),
@@ -4542,14 +4616,54 @@ def register_routes(app):
                 total += pc
         return jsonify({"total": total, "busy": busy})
 
+    @app.route("/api/remote/<int:remote_id>/reboot-required")
+    @login_required
+    @permission_required(MANAGE_REMOTES)
+    def api_remote_reboot_required(remote_id):
+        """Does this host need a reboot to finish applying updates, and is an auto-reboot-when-empty
+        already scheduled for it? {required, packages[], pending_empty}."""
+        remote = get_remote(remote_id)
+        try:
+            info = dict(remote_reboot_required(remote))
+        except Exception:
+            info = {"required": False, "packages": []}
+        with _rwe_lock:
+            info["pending_empty"] = remote_id in _reboot_when_empty
+        return jsonify(info)
+
     @app.route("/api/remote/<int:remote_id>/reboot", methods=["POST"])
     @login_required
     @permission_required(MANAGE_REMOTES)
     def api_remote_reboot(remote_id):
+        """Reboot a host now, or (when_empty=true) schedule it to reboot once every game server on it
+        is empty. An explicit 'now' supersedes any pending when-empty request."""
         remote = get_remote(remote_id)
+        when_empty = bool((_json_body() or {}).get("when_empty"))
+        if when_empty:
+            with _rwe_lock:
+                _reboot_when_empty[remote_id] = {"by": current_user.username, "since": time.time()}
+            log_action(current_user, "reboot_when_empty_arm", target=remote.name)
+            return jsonify({"success": True, "pending": True,
+                            "message": "Scheduled — %s will reboot once every game server on it is "
+                                       "empty." % remote.name})
+        with _rwe_lock:
+            _reboot_when_empty.pop(remote_id, None)
         success, msg = remote_reboot(remote)
         log_action(current_user, "remote_reboot", target=remote.name)
         return jsonify({"success": success, "message": msg})
+
+    @app.route("/api/remote/<int:remote_id>/reboot-cancel", methods=["POST"])
+    @login_required
+    @permission_required(MANAGE_REMOTES)
+    def api_remote_reboot_cancel(remote_id):
+        """Cancel a pending 'reboot when empty' for this host."""
+        remote = get_remote(remote_id)
+        with _rwe_lock:
+            had = _reboot_when_empty.pop(remote_id, None)
+        if had:
+            log_action(current_user, "reboot_when_empty_cancel", target=remote.name)
+        return jsonify({"success": True, "pending": False,
+                        "message": "Auto-reboot canceled." if had else "Nothing was scheduled."})
 
     @app.route("/remote/<int:remote_id>/manage")
     @login_required
@@ -5865,6 +5979,9 @@ if __name__ == "__main__":
             time.sleep(90)
     if os.name == "posix":
         threading.Thread(target=_f2b_ban_watch, daemon=True).start()
+
+    # Fire any "reboot when empty" requests once a host has no players left.
+    threading.Thread(target=lambda: _reboot_when_empty_watch(app), daemon=True).start()
 
     host = (cfg.get("bind_host") or "").strip()
     if not host:

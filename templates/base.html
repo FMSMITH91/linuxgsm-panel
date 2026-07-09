@@ -670,6 +670,8 @@
       }
     </script>
     {% endif %}
+    {# Reboot-required banners (one per host that needs a reboot) — filled in by rebootNagCheck(). #}
+    <div id="reboot-nag"></div>
     {% block content %}{% endblock %}
   </div>
 </main>
@@ -1152,6 +1154,68 @@ window.UPro = (function(){
         }});
     }
   };
+})();
+</script>
+<script nonce="{{ csp_nonce }}">
+// ── "This host needs a reboot" banners ────────────────────────────────────────────
+// After an OS update that needs a reboot, Debian/Ubuntu drop /var/run/reboot-required. Show a
+// banner offering: reboot now, or reboot automatically once every game server on the host is empty.
+// Generic over a host id — base.html uses it for the panel host; remote_manage for a remote.
+window.LOCAL_HOST_ID = {{ local_remote_id if local_remote_id is not none else 'null' }};
+window.rebootNagRender = function(el, hostId, label, d){
+  var pkgs = (d.packages && d.packages.length)
+    ? ' <span class="text-secondary" style="font-size:.8rem;">('+d.packages.slice(0,6).map(escapeHtml).join(', ')+(d.packages.length>6?', …':'')+')</span>' : '';
+  var actions = d.pending_empty
+    ? '<span class="text-info me-2" style="font-size:.85rem;"><i class="bi bi-hourglass-split"></i> Auto-reboot scheduled once empty</span>'
+      + '<button class="btn btn-sm btn-outline-secondary"'+_da('rebootNagCancel',[hostId,label])+'>Cancel</button>'
+    : '<button class="btn btn-sm btn-danger"'+_da('rebootNagNow',[hostId,label])+'><i class="bi bi-power"></i> Reboot now</button>'
+      + '<button class="btn btn-sm btn-outline-primary"'+_da('rebootNagWhenEmpty',[hostId,label])+'><i class="bi bi-hourglass-split"></i> Reboot when empty</button>';
+  el.className = 'alert alert-warning d-flex flex-wrap align-items-center gap-2';
+  el.setAttribute('role','alert');
+  el.innerHTML = '<i class="bi bi-arrow-clockwise fs-5"></i>'
+    + '<div class="flex-grow-1" style="min-width:220px;"><strong>Reboot needed</strong> — '+escapeHtml(label)
+    + ' needs to reboot to finish applying system updates'+pkgs+'.</div>'
+    + '<div class="d-flex gap-2 flex-wrap">'+actions+'</div>';
+};
+window.rebootNagCheck = function(hostId, label){
+  var box = document.getElementById('reboot-nag'); if(!box || hostId==null) return;
+  fetch(MOUNT+'/api/remote/'+hostId+'/reboot-required',{cache:'no-store'})
+    .then(function(r){ return r.ok ? r.json() : null; })
+    .then(function(d){
+      var el = document.getElementById('reboot-nag-'+hostId);
+      if(!d || !d.required){ if(el) el.remove(); return; }
+      if(!el){ el = document.createElement('div'); el.id = 'reboot-nag-'+hostId; el.className='mb-2'; box.appendChild(el); }
+      window.rebootNagRender(el, hostId, label, d);
+    }).catch(function(){});
+};
+window.rebootNagNow = function(hostId, label){
+  confirmDialog({title:'Reboot '+label, icon:'power', confirmClass:'btn-danger', confirmLabel:'Reboot now',
+    bodyText:'Reboot '+label+' now? It — and any game servers running on it — will go down for about a minute, disconnecting anyone connected.',
+    onConfirm:function(){
+      fetch(MOUNT+'/api/remote/'+hostId+'/reboot',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({when_empty:false})})
+        .then(function(r){return r.json();}).then(function(d){ if(window.toast) toast(d.message||'Reboot requested','info'); })
+        .catch(function(){ if(window.toast) toast('Reboot request failed','danger'); });
+    }});
+};
+window.rebootNagWhenEmpty = function(hostId, label){
+  confirmDialog({title:'Reboot when empty', icon:'hourglass-split', confirmClass:'btn-primary', confirmLabel:'Schedule it',
+    bodyText:'Reboot '+label+' automatically once every game server on it has no players connected? It keeps running until then, and you can cancel any time.',
+    onConfirm:function(){
+      fetch(MOUNT+'/api/remote/'+hostId+'/reboot',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({when_empty:true})})
+        .then(function(r){return r.json();}).then(function(d){ if(window.toast) toast(d.message||'Scheduled','success'); window.rebootNagCheck(hostId,label); })
+        .catch(function(){ if(window.toast) toast('Request failed','danger'); });
+    }});
+};
+window.rebootNagCancel = function(hostId, label){
+  fetch(MOUNT+'/api/remote/'+hostId+'/reboot-cancel',{method:'POST'})
+    .then(function(r){return r.json();}).then(function(d){ if(window.toast) toast(d.message||'Canceled','info'); window.rebootNagCheck(hostId,label); })
+    .catch(function(){ if(window.toast) toast('Request failed','danger'); });
+};
+(function(){
+  if (window.LOCAL_HOST_ID == null) return;   // only for users who can manage/reboot the host
+  function chk(){ window.rebootNagCheck(window.LOCAL_HOST_ID, 'the panel host'); }
+  chk();
+  if (window.pollWhenVisible) window.pollWhenVisible(chk, 10*60*1000);
 })();
 </script>
 {% if current_user.is_authenticated and current_user.is_superadmin %}
