@@ -359,24 +359,6 @@
       </div>
     </div>
 
-    <!-- fail2ban for the panel's own web login -->
-    <div id="diag-panelf2b" class="mt-3">
-      <hr class="my-2">
-      <div class="small text-secondary mb-1"><i class="bi bi-shield-lock"></i> Brute-force protection for the panel login (fail2ban)</div>
-      <div id="diag-panelf2b-status" class="small text-secondary">—</div>
-      <div class="mt-2 d-flex gap-2 align-items-center">
-        <button class="btn btn-sm btn-outline-secondary" id="diag-panelf2b-btn"
-                data-action="enablePanelF2b" style="display:none;">
-          <i class="bi bi-shield-plus"></i> Protect the panel login with fail2ban
-        </button>
-        <span id="diag-panelf2b-msg" class="small"></span>
-      </div>
-      <div class="small text-secondary mt-1">
-        <strong>Bans</strong> an IP at the firewall after 5 failed logins in 10 minutes (1-hour ban), on top of
-        the built-in per-IP rate limit. Recommended if the panel is reachable from the public internet.
-      </div>
-    </div>
-
     <!-- Report an issue -->
     <div id="diag-report" class="mt-3">
       <hr class="my-2">
@@ -1126,7 +1108,6 @@ function runDiagnostics(){
     loadIntegrity();  // refresh the file list + repair button
     loadDbStats();    // refresh DB size + audit row count
     loadAutoUpd();    // refresh automatic-security-updates status
-    loadPanelF2b();   // refresh panel-login fail2ban status
   }).catch(function(){
     if(msg) msg.innerHTML='<span class="text-danger">Diagnostics failed — check the panel logs.</span>';
   }).finally(function(){ if(btn) btn.disabled=false; });
@@ -1270,39 +1251,6 @@ function _enableAutoUpdates(){
       loadAutoUpd();
     }).catch(function(){ if(msg) msg.innerHTML='<span class="text-danger">Request failed.</span>'; })
     .finally(function(){ if(btn){ btn.disabled=false; btn.innerHTML='<i class="bi bi-shield-plus"></i> Enable automatic security updates'; } });
-}
-
-// ── fail2ban for the panel's own web login (panel host only) ────────
-function loadPanelF2b(){
-  fetch(MOUNT+'/api/panel/fail2ban').then(function(r){return r.json();}).then(function(d){
-    var el=document.getElementById('diag-panelf2b-status'), btn=document.getElementById('diag-panelf2b-btn');
-    if(!el) return;
-    if(d.enabled){
-      el.innerHTML='<span class="text-success"><i class="bi bi-check-circle-fill"></i> Active'
-        + (d.banned>0 ? ' — currently banning '+d.banned+' IP'+(d.banned===1?'':'s')+'.' : ' — no IPs banned right now.')+'</span>';
-    } else {
-      el.innerHTML='<span class="text-warning"><i class="bi bi-exclamation-triangle-fill"></i> '
-        + (d.installed ? 'fail2ban is installed but the panel jail isn\'t set up.' : 'Not set up.')+'</span>';
-    }
-    if(btn) btn.style.display = d.enabled ? 'none' : '';
-  }).catch(function(){});
-}
-function enablePanelF2b(){
-  confirmDialog({title:'Protect the panel login', icon:'shield-lock', confirmClass:'btn-primary', confirmLabel:'Enable fail2ban',
-    bodyText:'Install (if needed) and configure a fail2ban jail that bans an IP after 5 failed panel logins in 10 minutes? It watches the panel\'s auth log and bans on the web port.',
-    onConfirm:function(){
-      var btn=document.getElementById('diag-panelf2b-btn'), msg=document.getElementById('diag-panelf2b-msg');
-      if(btn){ btn.disabled=true; btn.innerHTML='<span class="spinner-border spinner-border-sm"></span> Setting up…'; }
-      fetch(MOUNT+'/api/panel/enable-fail2ban',{method:'POST',headers:{'Content-Type':'application/json'},body:'{}'})
-        .then(function(r){return r.json();}).then(function(d){
-          if(msg){ msg.className='small';
-            msg.innerHTML = d.success
-              ? '<span class="text-success"><i class="bi bi-check-circle-fill"></i> '+(window.escapeHtml?escapeHtml(d.message||'Enabled.'):(d.message||'Enabled.'))+'</span>'
-              : '<span class="text-danger">'+(window.escapeHtml?escapeHtml(d.message||'Failed.'):(d.message||'Failed.'))+'</span>'; }
-          loadPanelF2b();
-        }).catch(function(){ if(msg) msg.innerHTML='<span class="text-danger">Request failed.</span>'; })
-        .finally(function(){ if(btn){ btn.disabled=false; btn.innerHTML='<i class="bi bi-shield-plus"></i> Protect the panel login with fail2ban'; } });
-    }});
 }
 
 // Generate a shareable debug report — show it for review, then let the admin download
@@ -1679,7 +1627,7 @@ document.addEventListener('click', function(e){
 });
 
 loadSshStatus();                     // public-SSH controls now exist on both local + remote (no-ops if absent)
-if(IS_LOCAL){ checkPanelUpdate(false); loadPanelBranches(); loadIntegrity(); loadDbStats(); loadAutoUpd(); loadPanelF2b(); loadBackups(); } // panel-only cards
+if(IS_LOCAL){ checkPanelUpdate(false); loadPanelBranches(); loadIntegrity(); loadDbStats(); loadAutoUpd(); loadBackups(); } // panel-only cards
 pollLive();
 pollWhenVisible(pollLive, 2000);
 

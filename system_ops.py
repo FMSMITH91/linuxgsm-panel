@@ -1205,6 +1205,17 @@ def panel_fail2ban_status():
     return {"installed": True, "enabled": True, "banned": int(m.group(1)) if m else 0}
 
 
+def panel_fail2ban_banned_ips():
+    """The set of IPs the panel-login jail is currently banning (empty if the jail isn't up).
+    Used by the ban-watcher to record new bans/unbans in the audit log."""
+    import re
+    out, _, rc = _run("fail2ban-client status linuxgsm-panel 2>/dev/null", timeout=10, sudo=True)
+    if rc != 0 or not out:
+        return set()
+    m = re.search(r"Banned IP list:\s*(.*)", out)
+    return set(p for p in (m.group(1).split() if m else []) if p)
+
+
 def configure_panel_fail2ban(auth_log, web_port):
     """Install fail2ban (if needed) and configure a jail that bans IPs which repeatedly fail the
     PANEL's web login — it tails the panel's auth.log and bans on the web port. Idempotent.

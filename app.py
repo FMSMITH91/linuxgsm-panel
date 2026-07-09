@@ -444,6 +444,9 @@ SAFE_LABEL_RE = re.compile(r"""^[^<>"'`\r\n\\]{1,120}$""")
 # after too many failed logins within the window — a basic brute-force speed bump.
 _LOGIN_FAILS = {}
 _LOGIN_FAILS_LOCK = threading.Lock()
+# IPs whose rate-limit block we've already written to the audit log this window, so a client that
+# keeps hammering after being blocked adds ONE "login_blocked" entry, not one per request.
+_LOGIN_BLOCK_LOGGED = {}
 LOGIN_MAX_FAILS = 8
 LOGIN_WINDOW = 300  # seconds
 
@@ -454,6 +457,8 @@ def _prune_login_fails(now):
     hit by scanners from countless IPs), leaking memory. Call under _LOGIN_FAILS_LOCK."""
     for ip in [k for k, v in _LOGIN_FAILS.items() if not v or now - v[-1] >= LOGIN_WINDOW]:
         del _LOGIN_FAILS[ip]
+    for ip in [k for k, t in _LOGIN_BLOCK_LOGGED.items() if now - t >= LOGIN_WINDOW]:
+        del _LOGIN_BLOCK_LOGGED[ip]
 
 MIN_PASSWORD_LEN = 10
 import string as _string
@@ -1168,15 +1173,28 @@ def register_routes(app):
                     _LOGIN_FAILS.pop(ip, None)
                 blocked = len(fails) >= LOGIN_MAX_FAILS
             if blocked:
-                log_action(None, "login_blocked", detail=f"rate-limited {ip}", success=False)
+                with _LOGIN_FAILS_LOCK:
+                    _first_block = (now - _LOGIN_BLOCK_LOGGED.get(ip, 0)) >= LOGIN_WINDOW
+                    if _first_block:
+                        _LOGIN_BLOCK_LOGGED[ip] = now
+                if _first_block:   # one audit entry per block window, not per hammering request
+                    _who = (request.form.get("username", "") or "").strip()[:64] or "(blank)"
+                    log_action(None, "login_blocked", target=_who,
+                               detail="rate-limited after %d failed attempts" % LOGIN_MAX_FAILS, success=False)
                 _authlog.warning("panel login blocked from %s", _log_ip(ip))   # fail2ban: counts as a hit
                 flash("Too many failed attempts. Please wait a few minutes and try again.", "danger")
                 return render_template("login.html")
 
-            def _fail(msg, **kw):
+            def _fail(msg, attempted=None, **kw):
                 with _LOGIN_FAILS_LOCK:
                     _LOGIN_FAILS.setdefault(ip, []).append(now)
+                    _cnt = len(_LOGIN_FAILS[ip])
                 _authlog.warning("panel login failed from %s", _log_ip(ip))    # fail2ban tails data/auth.log
+                # Record the ATTEMPTED username (user-controlled → sanitised + capped) in the audit
+                # trail so admins can see who was targeted. log_action already stores the client IP.
+                who = ((attempted if attempted is not None else request.form.get("username", "")) or "").strip()[:64] or "(blank)"
+                log_action(None, "login_failed", target=who,
+                           detail="failed attempt %d in %dm" % (_cnt, LOGIN_WINDOW // 60), success=False)
                 flash(msg, "danger")
                 return render_template("login.html", **kw)
 
@@ -1217,7 +1235,8 @@ def register_routes(app):
                         log_action(u, "2fa_backup_code_used", target=u.username,
                                    detail=f"{u.backup_codes_remaining} codes left")
                         return _succeed(u, bool(session.get("_2fa_remember")))
-                return _fail("Invalid authentication code or backup code.", two_factor=True)
+                return _fail("Invalid authentication code or backup code.",
+                             attempted=(u.username if u else None), two_factor=True)
 
             # ── Step 1: username + password ──
             username = request.form.get("username", "").strip()
@@ -4076,35 +4095,6 @@ def register_routes(app):
             return jsonify({"success": False,
                             "message": _log_and_generic("enable auto-updates failed")}), 500
 
-    @app.route("/api/panel/fail2ban")
-    @login_required
-    @permission_required(SUPER_ADMIN)
-    def api_panel_fail2ban_status():
-        """Is the panel-login fail2ban jail active on the panel host, and how many IPs are banned?"""
-        try:
-            return jsonify(so.panel_fail2ban_status())
-        except Exception:
-            return jsonify({"installed": False, "enabled": False, "banned": 0,
-                            "error": _log_and_generic("fail2ban status failed")}), 500
-
-    @app.route("/api/panel/enable-fail2ban", methods=["POST"])
-    @login_required
-    @permission_required(SUPER_ADMIN)
-    def api_panel_enable_fail2ban():
-        """Install + configure a fail2ban jail that bans IPs repeatedly failing the panel's web
-        login (it tails data/auth.log and bans on the panel's web port)."""
-        try:
-            port = int(load_config().get("port", 5000))
-        except (TypeError, ValueError):
-            port = 5000
-        try:
-            ok, msg = so.configure_panel_fail2ban(AUTH_LOG_PATH, port)
-            log_action(current_user, "enable_panel_fail2ban", detail=msg, success=ok)
-            return jsonify({"success": ok, "message": msg})
-        except Exception:
-            return jsonify({"success": False,
-                            "message": _log_and_generic("enable panel fail2ban failed")}), 500
-
     @app.route("/api/server-management/os-update-check")
     @login_required
     @permission_required(SUPER_ADMIN)
@@ -5712,6 +5702,31 @@ if __name__ == "__main__":
         except Exception:
             _log.debug("panel fail2ban autostart failed", exc_info=True)
     threading.Thread(target=_f2b_autostart, daemon=True).start()
+
+    # Record fail2ban bans/unbans of the panel-login jail in the audit log, so the activity is
+    # visible even though the jail runs automatically with no management UI. Seeds from the current
+    # bans on start (so existing bans aren't re-logged) and polls for changes.
+    def _f2b_ban_watch():
+        seen = None
+        while True:
+            try:
+                cur = so.panel_fail2ban_banned_ips()
+                if seen is None:
+                    seen = cur
+                elif cur != seen:
+                    with app.test_request_context():   # gives log_action an (empty) request/DB context
+                        for _ip in sorted(cur - seen):
+                            log_action(None, "fail2ban_ban", target=_ip,
+                                       detail="banned after 5 failed panel logins in 10 min (1-hour ban)",
+                                       success=False)
+                        for _ip in sorted(seen - cur):
+                            log_action(None, "fail2ban_unban", target=_ip, detail="ban expired or lifted")
+                    seen = cur
+            except Exception:
+                _log.debug("fail2ban ban-watch tick failed", exc_info=True)
+            time.sleep(90)
+    if os.name == "posix":
+        threading.Thread(target=_f2b_ban_watch, daemon=True).start()
 
     host = (cfg.get("bind_host") or "").strip()
     if not host:
