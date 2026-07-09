@@ -99,6 +99,8 @@ from ssh_manager import (
     delete_game_backup, stream_game_backup, backup_disk_info,
     mods_available, mods_installed, mods_action,
     player_count as sm_player_count, mod_restart_decision, set_game_priority,
+    game_engine as sm_game_engine, console_player_list as sm_console_player_list,
+    get_server_status as sm_get_server_status, is_player_queryable as sm_is_player_queryable,
     set_game_priority_bulk,
     install_game_dependencies, parse_missing_deps, detect_game_ports, lgsm_read_config,
     lgsm_write_config, lgsm_game_config, lgsm_get_values, browse_dir, read_file,
@@ -280,18 +282,46 @@ _reboot_when_empty = {}
 _rwe_lock = threading.Lock()
 
 
-def _host_players_total(remote):
-    """Total players across all installed game servers on a host (0 if none/unknown). Mirrors the
-    per-host tally the reboot warning already uses."""
-    total = 0
+def _server_players_confident(gs):
+    """A player count we can TRUST for one game server, or None when it genuinely can't be read.
+    Mirrors the panel's player list: gamedig first, then the game console for engine-classified games
+    (valve/idTech3/Minecraft) — gamedig doesn't cover every LinuxGSM game. A stopped server counts as
+    0. None means 'unknown' so the auto-reboot never fires on a game it can't actually see."""
+    try:
+        pc = sm_player_count(gs.remote, gs.short_name, gs.game_type, gs.port, gs.query_type)
+    except Exception:
+        pc = None
+    if pc is not None:
+        return pc
+    try:
+        if sm_game_engine(gs.game_type):
+            # Console backup — returns [] for a stopped/empty console game, so this is a real 0.
+            return len(sm_console_player_list(gs.remote, gs.short_name, gs.game_type,
+                                              selfname=gs.lgsm_name) or [])
+    except Exception:
+        return None
+    # No gamedig type and no console engine: a stopped server is definitely empty; a running one we
+    # simply can't read, so report unknown (the poller treats unknown as 'don't reboot').
+    try:
+        if sm_get_server_status(gs.remote, gs) == "offline":
+            return 0
+    except Exception:
+        pass
+    return None
+
+
+def _host_idle_state(remote):
+    """'idle' (no players on any game server, confidently), 'busy' (someone is connected), or
+    'unknown' (at least one server couldn't be read). The reboot-when-empty poller only acts on
+    'idle', so a game the panel can't query is never rebooted out from under its players."""
+    unknown = False
     for gs in GameServer.query.filter_by(remote_id=remote.id, installed=True).all():
-        try:
-            pc = sm_player_count(gs.remote, gs.short_name, gs.game_type, gs.port)
-        except Exception:
-            pc = None
-        if pc and pc > 0:
-            total += pc
-    return total
+        pc = _server_players_confident(gs)
+        if pc is None:
+            unknown = True
+        elif pc > 0:
+            return "busy"
+    return "unknown" if unknown else "idle"
 
 
 def _host_reachable(remote):
@@ -324,8 +354,8 @@ def _reboot_when_empty_watch(app):
                         continue
                     if not _host_reachable(remote):
                         continue   # can't reach it — don't reboot a host we can't confirm is idle
-                    if _host_players_total(remote) > 0:
-                        continue   # still busy — wait for the next tick
+                    if _host_idle_state(remote) != "idle":
+                        continue   # someone's connected, or a server's count is unknown — wait
                     with _rwe_lock:
                         info = _reboot_when_empty.pop(rid, None)
                     ok, msg = remote_reboot(remote)
@@ -4643,9 +4673,22 @@ def register_routes(app):
             with _rwe_lock:
                 _reboot_when_empty[remote_id] = {"by": current_user.username, "since": time.time()}
             log_action(current_user, "reboot_when_empty_arm", target=remote.name)
+            # Warn if any game here can't be player-queried (no gamedig type AND no console engine):
+            # the panel can't confirm it's empty while it's running, so the reboot waits until it is
+            # stopped. Cheap, offline check — no network calls.
+            try:
+                unq = [gs.name for gs in GameServer.query.filter_by(remote_id=remote.id, installed=True).all()
+                       if not sm_is_player_queryable(gs.game_type, getattr(gs, "query_type", None))]
+            except Exception:
+                unq = []
+            note = ""
+            if unq:
+                note = (" Note: the panel can't read the player count for %s, so it'll reboot only "
+                        "once that server is stopped (or the rest of the host is empty and it is too)."
+                        % ", ".join(unq[:4]))
             return jsonify({"success": True, "pending": True,
-                            "message": "Scheduled — %s will reboot once every game server on it is "
-                                       "empty." % remote.name})
+                            "message": ("Scheduled — %s will reboot once every game server on it is "
+                                        "empty." % remote.name) + note})
         with _rwe_lock:
             _reboot_when_empty.pop(remote_id, None)
         success, msg = remote_reboot(remote)
