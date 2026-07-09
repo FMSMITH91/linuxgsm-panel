@@ -88,7 +88,7 @@ try:
         db.session.add_all([remote, remote2])
         db.session.flush()
         gs = GameServer(remote_id=remote.id, name="smoke-cs", short_name="csgoserver",
-                        game_type="csgo", port=27015)
+                        game_type="csgo", port=27015, installed=True, status="offline")
         db.session.add(gs)
         # A non-superadmin with MANAGE_REMOTES but access to remote #1 ONLY, to prove
         # remote management is scoped per host (not global with the permission).
@@ -147,6 +147,18 @@ try:
     # The Files & Config page (config editor + file browser + cron manager) must render.
     check("GET /server/<id>/files renders (200)",
           c.get("/server/%d/files" % gs_id).status_code == 200)
+
+    # An un-installed (still-installing) server has no console/files yet — those routes must redirect
+    # away, not render, so you can't reach them before the install finishes.
+    with app.app_context():
+        _inst = GameServer(remote_id=remote.id, name="smoke-installing", short_name="instserver",
+                           game_type="gmod", port=27099, installed=False, status="installing")
+        db.session.add(_inst); db.session.commit()
+        _inst_id = _inst.id
+    check("console of an installing server redirects (not 200)",
+          c.get("/server/%d" % _inst_id).status_code in (302, 303))
+    check("files of an installing server redirects (not 200)",
+          c.get("/server/%d/files" % _inst_id).status_code in (302, 303))
 
     # Alerts endpoint: GET returns the provider list; POST filters to known keys and never 500s
     # (the config write to the game host fails on the test box, but returns gracefully).

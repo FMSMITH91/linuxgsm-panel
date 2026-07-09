@@ -1480,6 +1480,9 @@ def register_routes(app):
     @server_access_required
     def server_detail(server_id):
         gs = get_game(server_id)
+        if not gs.installed:   # still installing (or a failed install) — nothing to show a console for yet
+            flash("That server is still installing — its console isn't available until it's done.", "info")
+            return redirect(url_for("manage_servers"))
         remote = gs.remote
 
         # Render fast: no SSH on the render path. Live status, console output and
@@ -5068,6 +5071,9 @@ def register_routes(app):
     def server_files(server_id):
         """Config editor + live file browser for a game server."""
         gs = get_game(server_id)
+        if not gs.installed:   # files don't exist yet while it's still installing (or after a failure)
+            flash("That server is still installing — its files aren't available until it's done.", "info")
+            return redirect(url_for("manage_servers"))
         if not _can_manage_files():
             flash("You don't have permission to manage server files.", "danger")
             return redirect(url_for("server_detail", server_id=server_id))

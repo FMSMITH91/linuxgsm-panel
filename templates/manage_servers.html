@@ -120,10 +120,12 @@
             </td>
             <td class="d-none d-md-table-cell">{{ gs.remote.display_name if gs.remote else '—' }}</td>
             <td class="text-nowrap">
-              <a href="{{ url_for('server_detail', server_id=gs.id) }}" class="btn btn-sm btn-outline-secondary" title="Console, commands, restart">
+              <a id="console-btn-{{ gs.id }}" data-href="{{ url_for('server_detail', server_id=gs.id) }}"
+                 {% if gs.installed %}href="{{ url_for('server_detail', server_id=gs.id) }}" class="btn btn-sm btn-outline-secondary" title="Console, commands, restart"{% else %}class="btn btn-sm btn-outline-secondary disabled" tabindex="-1" aria-disabled="true" title="Available once the server finishes installing"{% endif %}>
                 <i class="bi bi-terminal-fill"></i> <span class="d-none d-md-inline">Console</span>
               </a>
-              <a href="{{ url_for('server_files', server_id=gs.id) }}" class="btn btn-sm btn-outline-secondary" title="Edit config & browse/upload files">
+              <a id="files-btn-{{ gs.id }}" data-href="{{ url_for('server_files', server_id=gs.id) }}"
+                 {% if gs.installed %}href="{{ url_for('server_files', server_id=gs.id) }}" class="btn btn-sm btn-outline-secondary" title="Edit config & browse/upload files"{% else %}class="btn btn-sm btn-outline-secondary disabled" tabindex="-1" aria-disabled="true" title="Available once the server finishes installing"{% endif %}>
                 <i class="bi bi-folder2-open"></i> <span class="d-none d-md-inline">Files &amp; Config</span>
               </a>
               {# In-app confirm + AJAX uninstall (no page reload); the row is removed on success.
@@ -223,6 +225,7 @@ function watchInstall(id) {
         var badge = document.querySelector('[data-server-id="' + id + '"]');
         if (pct) pct.textContent = (s.total ? s.step + '/' + s.total + ' · ' : '') + s.percent + '% · ' + s.elapsed + 's';
         if (bar) bar.style.width = s.percent + '%';
+        if (s.installed) enableServerLinks(id);   // files have landed — Console + Files are usable now
         if (s.status === 'done') {
           bar.className = 'progress-bar bg-success'; bar.style.width = '100%';
           step.innerHTML = '<i class="bi bi-check-circle-fill text-success"></i> ' + (s.message || 'Installed');
@@ -261,6 +264,18 @@ function stopInstall(id) {
   if (_instTimers[id]) { clearInterval(_instTimers[id]); delete _instTimers[id]; }
   // Install has ended (done/failed/gone) — re-enable its Uninstall button (disabled during install).
   var ub = document.getElementById('uninstall-btn-' + id); if (ub) ub.disabled = false;
+}
+// Turn the Console + Files links from disabled back into working links once the server is installed.
+function enableServerLinks(id) {
+  [['console-btn-', 'Console, commands, restart'], ['files-btn-', 'Edit config & browse/upload files']]
+    .forEach(function(x) {
+      var a = document.getElementById(x[0] + id);
+      if (a && a.classList.contains('disabled')) {
+        if (a.dataset.href) a.setAttribute('href', a.dataset.href);
+        a.classList.remove('disabled'); a.removeAttribute('tabindex'); a.removeAttribute('aria-disabled');
+        a.title = x[1];
+      }
+    });
 }
 function dismissInstall(id) {
   stopInstall(id);
