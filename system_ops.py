@@ -1289,6 +1289,45 @@ def fail2ban_overview():
     return {"installed": True, "jails": details}
 
 
+# The fail2ban aggregation is a pure counting pipeline over the (root-owned) fail2ban logs — no input
+# from the request reaches the shell, so it's a fixed command. Shared by the panel + remote helpers.
+_F2B_TOP_PIPELINE = (
+    "zcat -f /var/log/fail2ban.log* 2>/dev/null | "
+    "grep -oE '\\[[A-Za-z0-9._-]+\\] (Ban|Found) [0-9a-fA-F:.]+' | "
+    "awk '{a=$(NF-1); ip=$NF; if(a==\"Found\") f[ip]++; else if(a==\"Ban\") b[ip]++; s[ip]=1} "
+    "END{for(ip in s) print (f[ip]+0)\"\\t\"(b[ip]+0)\"\\t\"ip}' | "
+    "sort -rn | head -%d"
+)
+
+
+def _parse_top_ips(out, banned_now):
+    rows = []
+    for line in (out or "").splitlines():
+        parts = line.split("\t")
+        if len(parts) == 3 and parts[2].strip():
+            rows.append({
+                "ip": parts[2].strip(),
+                "attempts": int(parts[0]) if parts[0].isdigit() else 0,
+                "bans": int(parts[1]) if parts[1].isdigit() else 0,
+                "banned_now": parts[2].strip() in banned_now,
+            })
+    return rows
+
+
+def fail2ban_top_ips(limit=20):
+    """The most-active offending IPs from the fail2ban log (current + rotated), ranked by detected
+    attempts. Each: {ip, attempts, bans, banned_now}. Best-effort ([] if fail2ban/log absent)."""
+    limit = max(1, min(int(limit or 20), 100))
+    out, _, _ = _run(_F2B_TOP_PIPELINE % limit, timeout=25, sudo=True)
+    banned_now = set()
+    try:
+        for j in fail2ban_overview().get("jails", []):
+            banned_now.update(j.get("banned_ips", []))
+    except Exception:
+        _log.debug("top-ips: couldn't read current bans", exc_info=True)
+    return _parse_top_ips(out, banned_now)
+
+
 def fail2ban_unban(jail, ip):
     """Lift a ban: `fail2ban-client set <jail> unbanip <ip>`. The request-supplied values are
     neutralised BEFORE they reach the command: `jail` must be one of the host's actual jails (an

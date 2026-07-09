@@ -2785,8 +2785,10 @@ def remote_os_run_updates(server):
     return rc == 0, out[-300:] if out else err[:300]
 
 
-# Host-side log the detached OS-update job streams to, so the popup can watch it live.
-_OS_UPDATE_LOG = "/tmp/panel-os-update.log"
+# Host-side log the detached OS-update job streams to, so the popup can watch it live. Kept in /run
+# (root-owned, not world-writable) rather than /tmp so a local user can't pre-plant a symlink there
+# and redirect root's write — and it's cleared on reboot, which is fine for an ephemeral update log.
+_OS_UPDATE_LOG = "/run/panel-os-update.log"
 _OS_UPDATE_DONE = "PANEL_OS_UPDATE_DONE:"   # sentinel line the job appends with the exit code
 
 
@@ -3440,6 +3442,39 @@ def remote_fail2ban_overview(server):
                         "total_banned": _num("Total banned"), "total_failed": _num("Total failed"),
                         "banned_ips": ips})
     return {"installed": True, "jails": details}
+
+
+def remote_fail2ban_top_ips(server, limit=20):
+    """Top offending IPs from a REMOTE host's fail2ban log (current + rotated), ranked by detected
+    attempts. Each: {ip, attempts, bans, banned_now}. Fixed counting pipeline (no request input in
+    the shell). Best-effort ([] on failure)."""
+    try:
+        limit = max(1, min(int(limit or 20), 100))
+    except (TypeError, ValueError):
+        limit = 20
+    pipeline = (
+        "zcat -f /var/log/fail2ban.log* 2>/dev/null | "
+        "grep -oE '\\[[A-Za-z0-9._-]+\\] (Ban|Found) [0-9a-fA-F:.]+' | "
+        "awk '{a=$(NF-1); ip=$NF; if(a==\"Found\") f[ip]++; else if(a==\"Ban\") b[ip]++; s[ip]=1} "
+        "END{for(ip in s) print (f[ip]+0)\"\\t\"(b[ip]+0)\"\\t\"ip}' | "
+        "sort -rn | head -%d" % limit
+    )
+    out, _, _ = run_command(server, pipeline, timeout=25, sudo=True)
+    banned = set()
+    try:
+        for j in remote_fail2ban_overview(server).get("jails", []):
+            banned.update(j.get("banned_ips", []))
+    except Exception:
+        _log.debug("remote top-ips: couldn't read current bans", exc_info=True)
+    rows = []
+    for line in (out or "").splitlines():
+        p = line.split("\t")
+        if len(p) == 3 and p[2].strip():
+            rows.append({"ip": p[2].strip(),
+                         "attempts": int(p[0]) if p[0].isdigit() else 0,
+                         "bans": int(p[1]) if p[1].isdigit() else 0,
+                         "banned_now": p[2].strip() in banned})
+    return rows
 
 
 def remote_fail2ban_unban(server, jail, ip):

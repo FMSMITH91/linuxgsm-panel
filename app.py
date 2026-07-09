@@ -111,7 +111,7 @@ from ssh_manager import (
     remote_ufw_allow_game_ports, remote_ufw_close_by_name,
     remote_os_check_updates, remote_os_run_updates,
     remote_os_update_start, remote_os_update_status,
-    remote_fail2ban_overview, remote_fail2ban_unban, remote_security_log,
+    remote_fail2ban_overview, remote_fail2ban_unban, remote_security_log, remote_fail2ban_top_ips,
     remote_reboot, remote_reboot_required, remote_uptime,
     remote_bootstrap_vps, remote_check_tailscale,
     remote_install_tailscale, remote_bootstrap_tailscale,
@@ -3637,6 +3637,16 @@ def register_routes(app):
         except Exception:
             return jsonify({"installed": False, "jails": [], "error": _log_and_generic("ban list failed")}), 200
 
+    @app.route("/api/panel/security/top-ips")
+    @login_required
+    @permission_required(SUPER_ADMIN)
+    def api_panel_security_top_ips():
+        """Top offending IPs on the panel host, aggregated from the fail2ban log."""
+        try:
+            return jsonify({"ips": so.fail2ban_top_ips(20)})
+        except Exception:
+            return jsonify({"ips": [], "error": _log_and_generic("top-ips failed")}), 200
+
     @app.route("/api/panel/security/unban", methods=["POST"])
     @login_required
     @permission_required(SUPER_ADMIN)
@@ -3693,6 +3703,17 @@ def register_routes(app):
             return jsonify(remote_fail2ban_overview(remote))
         except Exception:
             return jsonify({"installed": False, "jails": [], "error": _log_and_generic("ban list failed")}), 200
+
+    @app.route("/api/remote/<int:remote_id>/security/top-ips")
+    @login_required
+    @permission_required(MANAGE_REMOTES)
+    def api_remote_security_top_ips(remote_id):
+        """Top offending IPs on a remote host, aggregated from its fail2ban log."""
+        remote = get_remote(remote_id)
+        try:
+            return jsonify({"ips": remote_fail2ban_top_ips(remote, 20)})
+        except Exception:
+            return jsonify({"ips": [], "error": _log_and_generic("top-ips failed")}), 200
 
     @app.route("/api/remote/<int:remote_id>/security/unban", methods=["POST"])
     @login_required
