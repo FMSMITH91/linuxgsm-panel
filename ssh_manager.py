@@ -3352,15 +3352,23 @@ def remote_fail2ban_unban(server, jail, ip):
     return False, ((out or err or "Unban failed").replace("\n", " ")[:200])
 
 
-def remote_security_log(server, which, lines=200):
+def remote_security_log(server, which, lines=200, jail=None):
     """Tail of a whitelisted security log on a REMOTE host: 'fail2ban' or 'ssh'. `which` is a fixed
-    set, never a path from the request. Returns text."""
+    set, never a path from the request. For 'fail2ban', an optional charset-validated `jail` narrows
+    the activity to that one jail. Returns text."""
     lines = max(20, min(int(lines or 200), 1000))
     if which == "fail2ban":
-        out, _, _ = run_command(server, "journalctl -u fail2ban --no-pager -n %d 2>/dev/null || "
-                                "tail -n %d /var/log/fail2ban.log 2>/dev/null" % (lines, lines),
-                                timeout=20, sudo=True)
-        return out or ""
+        # /var/log/fail2ban.log holds the real Ban/Unban/Found activity (journalctl only has the
+        # unit's start/stop noise), so read the file first and fall back to the journal.
+        out, _, _ = run_command(server, "tail -n 4000 /var/log/fail2ban.log 2>/dev/null", timeout=20, sudo=True)
+        if not out:
+            out, _, _ = run_command(server, "journalctl -u fail2ban --no-pager -n 4000 2>/dev/null",
+                                    timeout=20, sudo=True)
+        rows = (out or "").splitlines()
+        if jail and _F2B_JAIL_RE.match(jail):   # charset-only guard; used solely for in-Python filtering
+            tag = "[%s]" % jail
+            rows = [ln for ln in rows if tag in ln]
+        return "\n".join(rows[-lines:])
     if which == "ssh":
         out, _, _ = run_command(server, "journalctl -u ssh -u sshd --no-pager -n %d 2>/dev/null || "
                                 "tail -n %d /var/log/auth.log 2>/dev/null" % (lines * 2, lines),

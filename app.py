@@ -3562,8 +3562,9 @@ def register_routes(app):
         which = request.args.get("which", "panel")
         if which not in ("panel", "fail2ban", "ssh"):
             return jsonify({"text": "", "error": "unknown log"}), 400
+        jail = (request.args.get("jail") or "").strip() or None   # only meaningful for which=fail2ban
         try:
-            return jsonify({"text": so.security_log_tail(which, 300)})
+            return jsonify({"text": so.security_log_tail(which, 300, jail=jail)})
         except Exception:
             return jsonify({"text": "", "error": _log_and_generic("log read failed")}), 200
 
@@ -3601,8 +3602,9 @@ def register_routes(app):
         which = request.args.get("which", "ssh")
         if which not in ("fail2ban", "ssh"):
             return jsonify({"text": "", "error": "unknown log"}), 400
+        jail = (request.args.get("jail") or "").strip() or None   # only meaningful for which=fail2ban
         try:
-            return jsonify({"text": remote_security_log(remote, which, 300)})
+            return jsonify({"text": remote_security_log(remote, which, 300, jail=jail)})
         except Exception:
             return jsonify({"text": "", "error": _log_and_generic("log read failed")}), 200
 

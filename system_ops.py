@@ -1291,6 +1291,8 @@ def fail2ban_unban(jail, ip):
     ipaddress (which rejects anything that isn't a real IP). Then shell-quoted. (ok, msg)."""
     import ipaddress
     jail = (jail or "").strip()
+    if not _JAIL_RE.match(jail):             # ^[A-Za-z0-9._-]{1,64}$ — metacharacter-free barrier CodeQL recognises
+        return False, "Invalid jail name."
     if jail not in _fail2ban_jails():        # allowlist: only jails that actually exist on this host
         return False, "Unknown jail."
     ip = (ip or "").strip()
@@ -1307,9 +1309,11 @@ def fail2ban_unban(jail, ip):
     return False, ((out or err or "Unban failed").replace("\n", " ")[:200])
 
 
-def security_log_tail(which, lines=200):
+def security_log_tail(which, lines=200, jail=None):
     """Tail of a WHITELISTED security log for the raw-log viewer. `which` is one of a fixed set —
-    never a path from the request — so there's no traversal. Returns text (may be empty)."""
+    never a path from the request — so there's no traversal. For 'fail2ban', an optional `jail`
+    (allowlisted against the host's real jails) narrows the activity to that one jail. Returns text
+    (may be empty)."""
     lines = max(20, min(int(lines or 200), 1000))
     if which == "panel":
         import config as _cfg
@@ -1320,10 +1324,18 @@ def security_log_tail(which, lines=200):
         except OSError:
             return ""
     if which == "fail2ban":
-        out, _, _ = _run("journalctl -u fail2ban --no-pager -n %d 2>/dev/null" % lines, timeout=15, sudo=True)
+        # The real jail activity — Ban / Unban / Found, one line per event, each tagged with its
+        # jail — lives in /var/log/fail2ban.log (fail2ban's default logtarget). `journalctl -u
+        # fail2ban` only carries the systemd unit's start/stop noise, so read the file first and
+        # fall back to the journal only if it isn't there.
+        out, _, _ = _run("tail -n 4000 /var/log/fail2ban.log 2>/dev/null", timeout=15, sudo=True)
         if not out:
-            out, _, _ = _run("tail -n %d /var/log/fail2ban.log 2>/dev/null" % lines, timeout=15, sudo=True)
-        return out or ""
+            out, _, _ = _run("journalctl -u fail2ban --no-pager -n 4000 2>/dev/null", timeout=15, sudo=True)
+        rows = (out or "").splitlines()
+        if jail and jail in _fail2ban_jails():   # allowlist; used only for in-Python filtering, never a command
+            tag = "[%s]" % jail
+            rows = [ln for ln in rows if tag in ln]
+        return "\n".join(rows[-lines:])
     if which == "ssh":
         out, _, _ = _run("journalctl -u ssh -u sshd --no-pager -n %d 2>/dev/null" % (lines * 2), timeout=15, sudo=True)
         if not out:

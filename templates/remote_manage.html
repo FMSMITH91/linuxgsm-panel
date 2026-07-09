@@ -419,10 +419,11 @@
   <div class="card-body">
     <div class="d-flex gap-2 flex-wrap mb-2">
       {% if remote.is_local %}<button class="btn btn-sm btn-outline-secondary" data-action="loadSecurityLog" data-args='["panel"]'><i class="bi bi-box-arrow-in-right"></i> Panel login log</button>{% endif %}
-      <button class="btn btn-sm btn-outline-secondary" data-action="loadSecurityLog" data-args='["fail2ban"]'><i class="bi bi-shield"></i> fail2ban log</button>
+      <button class="btn btn-sm btn-outline-secondary" data-action="loadSecurityLog" data-args='["fail2ban"]'><i class="bi bi-shield"></i> fail2ban log (all jails)</button>
       <button class="btn btn-sm btn-outline-secondary" data-action="loadSecurityLog" data-args='["ssh"]'><i class="bi bi-terminal"></i> SSH auth log</button>
     </div>
-    <pre id="sec-log" style="background:var(--bg-elevated);border:1px solid var(--border);border-radius:8px;padding:.5rem .7rem;max-height:340px;overflow:auto;font-size:.72rem;line-height:1.5;white-space:pre-wrap;word-break:break-word;margin:0;">Pick a log above to view its recent lines.</pre>
+    <div id="sec-log-title" class="small text-secondary mb-1" style="min-height:1rem;"></div>
+    <pre id="sec-log" style="background:var(--bg-elevated);border:1px solid var(--border);border-radius:8px;padding:.5rem .7rem;max-height:340px;overflow:auto;font-size:.72rem;line-height:1.5;white-space:pre-wrap;word-break:break-word;margin:0;">Pick a log above, or "view log" on a jail above, to see its recent lines.</pre>
   </div>
 </div>
 
@@ -676,7 +677,9 @@ function loadSecurityBans(){
     el.innerHTML=d.jails.map(function(j){
       var head='<div class="small mb-1"><strong>'+escapeHtml(j.jail)+'</strong> '
         +'<span class="badge bg-'+(j.currently_banned?'danger':'secondary')+'">'+j.currently_banned+' banned</span> '
-        +'<span class="text-secondary" style="font-size:.7rem;">'+j.total_banned+' total · '+j.total_failed+' failed</span></div>';
+        +'<span class="text-secondary" style="font-size:.7rem;">'+j.total_banned+' total · '+j.total_failed+' failed</span> '
+        +'<button class="btn btn-link p-0 ms-1" style="font-size:.7rem;vertical-align:baseline;"'
+        +_da('loadSecurityLog',['fail2ban',j.jail])+' title="Show this jail\'s ban/unban activity">view log</button></div>';
       var body=(j.banned_ips&&j.banned_ips.length)
         ? '<div class="d-flex flex-wrap gap-2">'+j.banned_ips.map(function(ip){
             return '<span class="badge border bg-dark" style="font-weight:normal;">'+escapeHtml(ip)
@@ -713,11 +716,16 @@ function loadSecurityEvents(){
       +'<th class="small">When</th><th class="small">Event</th><th class="small">User</th><th class="small">Detail</th><th class="small">IP</th></tr></thead><tbody>'+rows+'</tbody></table>';
   }).catch(function(){ el.innerHTML='<div class="small text-danger">Could not load events.</div>'; });
 }
-function loadSecurityLog(which){
+function loadSecurityLog(which, jail){
   var el=document.getElementById('sec-log'); if(!el) return;
+  var hdr=document.getElementById('sec-log-title');
+  if(hdr) hdr.textContent = (which==='fail2ban' && jail) ? ('fail2ban activity — '+jail) : '';
   el.textContent='Loading…';
-  fetch(secBase()+'/log?which='+encodeURIComponent(which)).then(function(r){return r.json();}).then(function(d){
+  var url=secBase()+'/log?which='+encodeURIComponent(which);
+  if(jail) url += '&jail='+encodeURIComponent(jail);
+  fetch(url).then(function(r){return r.json();}).then(function(d){
     el.textContent=d.text||'(log is empty)'; el.scrollTop=el.scrollHeight;   // textContent: raw log is never HTML
+    if(el.scrollIntoView) el.scrollIntoView({behavior:'smooth',block:'nearest'});
   }).catch(function(){ el.textContent='Could not read the log.'; });
 }
 
