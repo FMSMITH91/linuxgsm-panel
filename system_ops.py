@@ -26,7 +26,6 @@ _BRANCH_RE = r"^[A-Za-z0-9._/-]{1,100}$"
 
 
 def _valid_branch(name):
-    import re
     name = (name or "").strip()
     return bool(name) and bool(re.match(_BRANCH_RE, name)) and not name.startswith("-") and ".." not in name
 
@@ -540,7 +539,6 @@ def _is_git_checkout():
 
 def _repo_slug():
     """owner/repo parsed from origin's URL, so the CI-gate check works on forks too."""
-    import re
     url, _, rc = _git(["remote", "get-url", "origin"], timeout=10)
     if rc != 0:
         return None
@@ -637,7 +635,6 @@ def _runtime_changelog(rev_range):
     'shorthash subject' lines. Docs-only / CI-only / test-only commits are dropped, so both the
     'N commits behind' count (len) and the update card's changelog (capped by the caller) ignore
     e.g. a README edit. One `git log` call; a commit is kept only if a file it touched is runtime."""
-    import re
     out, _, rc = _git(["log", "--no-decorate", "--format=%h%x09%s", "--name-only", rev_range])
     if rc != 0 or not out:
         return []
@@ -781,7 +778,6 @@ def panel_self_update():
     survives the panel's own restart (the service uses KillMode=control-group,
     which would otherwise kill a normal child mid-update). Returns immediately;
     progress is written to data/self-update.log under the panel dir."""
-    import re
     if not _is_git_checkout():
         return False, "The panel isn't a git checkout, so it can't self-update."
     # Enforce the CI gate server-side, not just by hiding the button. Re-check fresh so we
@@ -1201,7 +1197,6 @@ def _panel_f2b_jail_body(auth_log, web_port):
 def _panel_f2b_jail_port():
     """Port the current panel jail file is set to, or None. The jail file is root-owned but
     world-readable, so the panel process can read it without sudo. Best-effort."""
-    import re
     try:
         with open(_F2B_PANEL_JAIL) as f:
             for line in f:
@@ -1235,7 +1230,6 @@ def panel_fail2ban_status():
     out, _, rc = _run("fail2ban-client status linuxgsm-panel 2>/dev/null", timeout=10, sudo=True)
     if rc != 0 or not out:
         return {"installed": True, "enabled": False, "banned": 0}
-    import re
     m = re.search(r"Currently banned:\s*(\d+)", out)
     return {"installed": True, "enabled": True, "banned": int(m.group(1)) if m else 0}
 
@@ -1243,7 +1237,6 @@ def panel_fail2ban_status():
 def panel_fail2ban_banned_ips():
     """The set of IPs the panel-login jail is currently banning (empty if the jail isn't up).
     Used by the ban-watcher to record new bans/unbans in the audit log."""
-    import re
     out, _, rc = _run("fail2ban-client status linuxgsm-panel 2>/dev/null", timeout=10, sudo=True)
     if rc != 0 or not out:
         return set()
@@ -1292,7 +1285,9 @@ def fail2ban_overview():
 
 
 def fail2ban_unban(jail, ip):
-    """Lift a ban: `fail2ban-client set <jail> unbanip <ip>`. Both args validated. (ok, msg)."""
+    """Lift a ban: `fail2ban-client set <jail> unbanip <ip>`. Both args validated. (ok, msg).
+    Runs as an argv LIST (no shell) so the request-supplied jail/ip can never be interpreted by a
+    shell, on top of the charset/IP validation below."""
     import ipaddress
     if not _JAIL_RE.match(jail or ""):
         return False, "Invalid jail name."
@@ -1301,8 +1296,14 @@ def fail2ban_unban(jail, ip):
         ipaddress.ip_address(ip)
     except ValueError:
         return False, "Invalid IP address."
-    out, err, rc = _run("fail2ban-client set %s unbanip %s 2>&1" % (shlex.quote(jail), shlex.quote(ip)),
-                        timeout=15, sudo=True)
+    argv = ["fail2ban-client", "set", jail, "unbanip", ip]
+    if hasattr(os, "geteuid") and os.geteuid() != 0:
+        argv = ["sudo"] + argv
+    try:
+        r = subprocess.run(argv, capture_output=True, text=True, timeout=15)   # no shell — argv list
+        out, err, rc = r.stdout.strip(), r.stderr.strip(), r.returncode
+    except Exception:
+        return False, "Unban failed to run."
     if rc == 0:
         return True, "Unbanned %s from %s." % (ip, jail)
     return False, ((out or err or "Unban failed").replace("\n", " ")[:200])
@@ -1563,7 +1564,6 @@ def _redact(text):
     """Best-effort scrub of anything secret-looking from free text (a log tail). The
     report is whitelist-built so this is defence-in-depth: emails, long token/key/hash
     strings, and key=value secrets get masked before an admin reviews + shares it."""
-    import re
     text = re.sub(r"[\w.+-]+@[\w-]+\.[\w.-]+", "[email]", text)
     # key=value / key: value where the key name contains a secret-ish word (incl.
     # prefixed forms like auth_token, access_key) — redact the value, keep the key.
@@ -1580,7 +1580,6 @@ def _dedupe_log_tracebacks(text):
     distinct traceback is kept; later identical ones are replaced with a one-line note.
     The dedup signature ignores the syslog 'time host proc[pid]:' prefix, so the same
     traceback logged at different times still matches."""
-    import re
     prefix_re = re.compile(r"^[A-Z][a-z]{2}\s+\d+\s+[\d:]+\s+\S+\s+[^:]+:\s?")
 
     def body(ln):
@@ -1627,7 +1626,6 @@ def _dedupe_log_tracebacks(text):
 def _github_issues_url():
     """New-issue URL for wherever this checkout's origin points (upstream for most,
     a fork if they forked). Falls back to the canonical repo."""
-    import re
     fallback = "https://github.com/FMSMITH91/linuxgsm-panel/issues/new"
     try:
         out, _, rc = _git(["config", "--get", "remote.origin.url"])
