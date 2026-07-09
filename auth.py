@@ -418,11 +418,12 @@ def client_ip():
     return remote
 
 
-def log_action(user, action, target="", detail="", success=True):
-    """Write an audit log entry."""
+def log_action(user, action, target="", detail="", success=True, actor=None):
+    """Write an audit log entry. `actor` overrides the recorded username — used for a failed login,
+    where there's no authenticated user but we still want the ATTEMPTED username in the User column."""
     entry = AuditLog(
         user_id=user.id if user else None,
-        username=user.username if user else "system",
+        username=actor if actor else (user.username if user else "system"),
         action=action,
         target=target,
         detail=detail,

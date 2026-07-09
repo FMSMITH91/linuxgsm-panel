@@ -1179,22 +1179,22 @@ def register_routes(app):
                         _LOGIN_BLOCK_LOGGED[ip] = now
                 if _first_block:   # one audit entry per block window, not per hammering request
                     _who = (request.form.get("username", "") or "").strip()[:64] or "(blank)"
-                    log_action(None, "login_blocked", target=_who,
+                    log_action(None, "login_blocked", actor=_who,
                                detail="rate-limited after %d failed attempts" % LOGIN_MAX_FAILS, success=False)
                 _authlog.warning("panel login blocked from %s", _log_ip(ip))   # fail2ban: counts as a hit
                 flash("Too many failed attempts. Please wait a few minutes and try again.", "danger")
                 return render_template("login.html")
 
-            def _fail(msg, attempted=None, **kw):
+            def _fail(msg, attempted=None, reason="login failed", **kw):
                 with _LOGIN_FAILS_LOCK:
                     _LOGIN_FAILS.setdefault(ip, []).append(now)
                     _cnt = len(_LOGIN_FAILS[ip])
                 _authlog.warning("panel login failed from %s", _log_ip(ip))    # fail2ban tails data/auth.log
-                # Record the ATTEMPTED username (user-controlled → sanitised + capped) in the audit
-                # trail so admins can see who was targeted. log_action already stores the client IP.
+                # The ATTEMPTED username (user-controlled → sanitised + capped) goes in the User
+                # column via `actor`; the reason + attempt count go in detail. log_action stores the IP.
                 who = ((attempted if attempted is not None else request.form.get("username", "")) or "").strip()[:64] or "(blank)"
-                log_action(None, "login_failed", target=who,
-                           detail="failed attempt %d in %dm" % (_cnt, LOGIN_WINDOW // 60), success=False)
+                log_action(None, "login_failed", actor=who,
+                           detail="%s · attempt %d in %dm" % (reason, _cnt, LOGIN_WINDOW // 60), success=False)
                 flash(msg, "danger")
                 return render_template("login.html", **kw)
 
@@ -1236,7 +1236,7 @@ def register_routes(app):
                                    detail=f"{u.backup_codes_remaining} codes left")
                         return _succeed(u, bool(session.get("_2fa_remember")))
                 return _fail("Invalid authentication code or backup code.",
-                             attempted=(u.username if u else None), two_factor=True)
+                             attempted=(u.username if u else None), reason="wrong 2FA code", two_factor=True)
 
             # ── Step 1: username + password ──
             username = request.form.get("username", "").strip()
@@ -1256,7 +1256,12 @@ def register_routes(app):
             # exists (username-enumeration by timing).
             if not (user and user.is_active):
                 dummy_password_check(password)
-            return _fail("Invalid username or password.")
+            # Reason for the audit log only — the flash message below stays generic so a real
+            # attacker still can't tell existing usernames from wrong passwords (no enumeration).
+            _reason = ("no such user" if not user
+                       else "account disabled" if not user.is_active
+                       else "wrong password")
+            return _fail("Invalid username or password.", reason=_reason)
 
         return render_template("login.html")
 
