@@ -306,7 +306,8 @@ def _server_players_confident(gs):
         if sm_get_server_status(gs.remote, gs) == "offline":
             return 0
     except Exception:
-        pass
+        _log.debug("reboot-when-empty: status check failed for %s", getattr(gs, "short_name", "?"),
+                   exc_info=True)
     return None
 
 
