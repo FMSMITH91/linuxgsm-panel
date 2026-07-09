@@ -25,15 +25,16 @@ import os
 import sys
 import warnings
 
-# This offline CLI doesn't run the web server, but importing the app pulls in eventlet, which emits a
-# deprecation warning and — at interpreter shutdown — a harmless but alarming "greenlet is being
-# finalized" traceback. Silence the warning here, and hard-exit at the end (below) to skip the noisy
-# teardown, so a locked-out admin sees a clean tool.
-warnings.filterwarnings("ignore", category=DeprecationWarning)
-
-from app import create_app, password_problem   # noqa: E402  (after the warnings filter)
-from models import db, User                     # noqa: E402
-import auth                                      # noqa: E402
+# This offline CLI doesn't run the web server, but importing the app pulls in eventlet, which prints
+# an EventletDeprecationWarning (it subclasses Warning, NOT DeprecationWarning, so a
+# category=DeprecationWarning filter misses it) and — at interpreter shutdown — a harmless but
+# alarming "greenlet is being finalized" traceback. Ignore ALL warnings just for the app import, and
+# hard-exit at the end (below) to skip the noisy teardown, so a locked-out admin sees a clean tool.
+with warnings.catch_warnings():
+    warnings.simplefilter("ignore")
+    from app import create_app, password_problem   # noqa: E402  (inside the warnings guard)
+    from models import db, User                     # noqa: E402
+    import auth                                      # noqa: E402
 
 app = create_app()
 
