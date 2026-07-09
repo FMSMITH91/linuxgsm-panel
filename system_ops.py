@@ -1293,39 +1293,97 @@ def fail2ban_overview():
 # from the request reaches the shell, so it's a fixed command. Shared by the panel + remote helpers.
 _F2B_TOP_PIPELINE = (
     "zcat -f /var/log/fail2ban.log* 2>/dev/null | "
+    "awk -v c='%s' '$1 >= c' | "
     "grep -oE '\\[[A-Za-z0-9._-]+\\] (Ban|Found) [0-9a-fA-F:.]+' | "
     "awk '{a=$(NF-1); ip=$NF; if(a==\"Found\") f[ip]++; else if(a==\"Ban\") b[ip]++; s[ip]=1} "
     "END{for(ip in s) print (f[ip]+0)\"\\t\"(b[ip]+0)\"\\t\"ip}' | "
     "sort -rn | head -%d"
 )
 
+# UFW comment tags so the panel manages only its OWN deny rules.
+_UFW_BLOCK_TAG = "panel-block"          # one-off manual block
+_UFW_AUTOBLOCK_TAG = "panel-autoblock"  # rolling auto-block (poller-managed)
 
-def _parse_top_ips(out, banned_now):
+
+def ufw_blocked_ips():
+    """{ip: tag} for the panel host's own UFW deny rules (tag from the rule comment). Best-effort."""
+    out, _, _ = _run("ufw status 2>/dev/null", timeout=15, sudo=True)
+    blocked = {}
+    for line in (out or "").splitlines():
+        if "DENY" not in line or "panel-" not in line:
+            continue
+        mi = re.search(r"DENY(?:\s+IN)?\s+([0-9a-fA-F:.]+)", line)
+        mt = re.search(r"#\s*(panel-[a-z-]+)", line)
+        if mi and mt:
+            blocked[mi.group(1)] = mt.group(1)
+    return blocked
+
+
+def ufw_deny_ip(ip, tag=_UFW_BLOCK_TAG):
+    """Block an IP on ALL ports (UFW deny inserted at the top, tagged). The IP is reparsed to its
+    canonical ipaddress form so nothing request-supplied reaches the shell unchecked. (ok, msg)."""
+    import ipaddress
+    try:
+        ip = str(ipaddress.ip_address((ip or "").strip()))
+    except (ValueError, TypeError):
+        return False, "Invalid IP address."
+    tag = re.sub(r"[^a-z0-9-]", "", (tag or ""))[:32] or _UFW_BLOCK_TAG
+    _run("ufw delete deny from %s >/dev/null 2>&1; ufw insert 1 deny from %s comment %s 2>&1"
+         % (shlex.quote(ip), shlex.quote(ip), shlex.quote(tag)), timeout=20, sudo=True)
+    return True, "Blocked %s (all ports)." % ip
+
+
+def ufw_undeny_ip(ip):
+    """Remove a UFW deny rule for an IP (canonicalised first). (ok, msg)."""
+    import ipaddress
+    try:
+        ip = str(ipaddress.ip_address((ip or "").strip()))
+    except (ValueError, TypeError):
+        return False, "Invalid IP address."
+    _run("ufw delete deny from %s 2>&1" % shlex.quote(ip), timeout=15, sudo=True)
+    return True, "Unblocked %s." % ip
+
+
+def _parse_top_ips(out, banned_now, blocked):
     rows = []
     for line in (out or "").splitlines():
         parts = line.split("\t")
         if len(parts) == 3 and parts[2].strip():
+            ip = parts[2].strip()
             rows.append({
-                "ip": parts[2].strip(),
+                "ip": ip,
                 "attempts": int(parts[0]) if parts[0].isdigit() else 0,
                 "bans": int(parts[1]) if parts[1].isdigit() else 0,
-                "banned_now": parts[2].strip() in banned_now,
+                "banned_now": ip in banned_now,
+                "blocked": ip in blocked,
             })
     return rows
 
 
-def fail2ban_top_ips(limit=20):
-    """The most-active offending IPs from the fail2ban log (current + rotated), ranked by detected
-    attempts. Each: {ip, attempts, bans, banned_now}. Best-effort ([] if fail2ban/log absent)."""
+def fail2ban_top_ips(limit=20, days=7):
+    """The most-active offending IPs from the fail2ban log over the last `days` days (current +
+    rotated), ranked by detected attempts. Each: {ip, attempts, bans, banned_now, blocked}.
+    Best-effort ([] if fail2ban/log absent)."""
+    from datetime import datetime, timedelta
     limit = max(1, min(int(limit or 20), 100))
-    out, _, _ = _run(_F2B_TOP_PIPELINE % limit, timeout=25, sudo=True)
+    try:
+        days = max(1, min(int(days or 7), 90))
+    except (TypeError, ValueError):
+        days = 7
+    cutoff = (datetime.now() - timedelta(days=days)).strftime("%Y-%m-%d")
+    out, _, _ = _run(_F2B_TOP_PIPELINE % (cutoff, limit), timeout=25, sudo=True)
     banned_now = set()
     try:
         for j in fail2ban_overview().get("jails", []):
             banned_now.update(j.get("banned_ips", []))
     except Exception:
         _log.debug("top-ips: couldn't read current bans", exc_info=True)
-    return _parse_top_ips(out, banned_now)
+    try:
+        blocked = ufw_blocked_ips()
+    except Exception:
+        _log.debug("top-ips: couldn't read ufw blocks", exc_info=True)
+        blocked = {}
+    return _parse_top_ips(out, banned_now, blocked)
 
 
 def fail2ban_unban(jail, ip):

@@ -112,6 +112,7 @@ from ssh_manager import (
     remote_os_check_updates, remote_os_run_updates,
     remote_os_update_start, remote_os_update_status,
     remote_fail2ban_overview, remote_fail2ban_unban, remote_security_log, remote_fail2ban_top_ips,
+    remote_ufw_deny_ip, remote_ufw_undeny_ip, remote_ufw_blocked_ips,
     remote_reboot, remote_reboot_required, remote_uptime,
     remote_bootstrap_vps, remote_check_tailscale,
     remote_install_tailscale, remote_bootstrap_tailscale,
@@ -375,6 +376,93 @@ def _reboot_when_empty_watch(app):
                                actor=(info or {}).get("by") or "system")
                 except Exception:
                     _log.debug("reboot-when-empty tick failed for remote %s", rid, exc_info=True)
+
+
+# ── Rolling auto-block: keep the top-20 offenders (last 7 days) UFW-blocked, releasing an IP once it
+# ── ages out of that window. Which hosts have it on is stored in the panel config (a list of remote
+# ── ids). Only rules the panel itself tagged 'panel-autoblock' are ever added/removed here — manual
+# ── blocks and any other UFW rules are left untouched.
+_AUTOBLOCK_TAG = "panel-autoblock"
+
+
+def _autoblock_hosts():
+    return set(load_config().get("autoblock_hosts", []) or [])
+
+
+def _set_autoblock_host(remote_id, enabled):
+    cfg = load_config()
+    hosts = set(cfg.get("autoblock_hosts", []) or [])
+    hosts.add(remote_id) if enabled else hosts.discard(remote_id)
+    cfg["autoblock_hosts"] = sorted(hosts)
+    save_config(cfg)
+
+
+def _autoblock_reconcile(remote):
+    """Make the host's 'panel-autoblock' UFW rules match the current top-20 (last 7 days): block any
+    top IP that isn't already blocked (by us or manually), and release only our own auto-blocks that
+    have dropped out of the window."""
+    if remote.is_local:
+        top = so.fail2ban_top_ips(20, days=7)
+        blocked = so.ufw_blocked_ips()
+        def deny(ip):
+            return so.ufw_deny_ip(ip, tag=_AUTOBLOCK_TAG)
+        undeny = so.ufw_undeny_ip
+    else:
+        top = remote_fail2ban_top_ips(remote, 20, days=7)
+        blocked = remote_ufw_blocked_ips(remote)
+        def deny(ip):
+            return remote_ufw_deny_ip(remote, ip, tag=_AUTOBLOCK_TAG)
+        def undeny(ip):
+            return remote_ufw_undeny_ip(remote, ip)
+    top_ips = {r["ip"] for r in top}
+    auto = {ip for ip, tag in blocked.items() if tag == _AUTOBLOCK_TAG}
+    added = removed = 0
+    for ip in top_ips - set(blocked.keys()):   # not blocked at all yet → auto-block (skip manual ones)
+        deny(ip)
+        added += 1
+    for ip in auto - top_ips:                   # our auto-block aged out of the window → release
+        undeny(ip)
+        removed += 1
+    return added, removed
+
+
+def _local_remote_id():
+    r = RemoteServer.query.filter_by(is_local=True).first()
+    return r.id if r else None
+
+
+def _run_autoblock_now(app, remote_id):
+    """Reconcile one host's auto-block immediately (in the background), so toggling it on takes effect
+    without waiting for the hourly tick."""
+    def _go():
+        with app.app_context():
+            try:
+                remote = RemoteServer.query.get(remote_id)
+                if remote:
+                    _autoblock_reconcile(remote)
+            except Exception:
+                _log.debug("immediate autoblock reconcile failed for %s", remote_id, exc_info=True)
+    threading.Thread(target=_go, daemon=True).start()
+
+
+def _autoblock_watch(app):
+    """Reconcile every auto-block host hourly, so the block list rolls with the 7-day window."""
+    while True:
+        time.sleep(3600)
+        host_ids = _autoblock_hosts()
+        if not host_ids:
+            continue
+        with app.test_request_context():
+            for rid in host_ids:
+                try:
+                    remote = RemoteServer.query.get(rid)
+                    if remote:
+                        a, r = _autoblock_reconcile(remote)
+                        if a or r:
+                            log_action(None, "autoblock_reconcile", target=remote.name,
+                                       detail="+%d blocked, -%d released" % (a, r), actor="system")
+                except Exception:
+                    _log.debug("autoblock tick failed for remote %s", rid, exc_info=True)
 
 
 def _prune_jobs(registry, lock, max_age=7200):
@@ -3641,11 +3729,41 @@ def register_routes(app):
     @login_required
     @permission_required(SUPER_ADMIN)
     def api_panel_security_top_ips():
-        """Top offending IPs on the panel host, aggregated from the fail2ban log."""
+        """Top offending IPs on the panel host (last 7 days), aggregated from the fail2ban log."""
         try:
-            return jsonify({"ips": so.fail2ban_top_ips(20)})
+            return jsonify({"ips": so.fail2ban_top_ips(20, days=7),
+                            "autoblock": _local_remote_id() in _autoblock_hosts()})
         except Exception:
             return jsonify({"ips": [], "error": _log_and_generic("top-ips failed")}), 200
+
+    @app.route("/api/panel/security/block", methods=["POST"])
+    @login_required
+    @permission_required(SUPER_ADMIN)
+    def api_panel_security_block():
+        """UFW-block (all ports, permanent) an IP on the panel host."""
+        ip = (_json_body().get("ip") or "").strip()
+        unblock = bool(_json_body().get("unblock"))
+        try:
+            ok, msg = (so.ufw_undeny_ip(ip) if unblock else so.ufw_deny_ip(ip))
+            log_action(current_user, "ufw_unblock" if unblock else "ufw_block", target=ip, success=ok)
+            return jsonify({"success": ok, "message": msg})
+        except Exception:
+            return jsonify({"success": False, "message": _log_and_generic("block failed")}), 500
+
+    @app.route("/api/panel/security/autoblock", methods=["POST"])
+    @login_required
+    @permission_required(SUPER_ADMIN)
+    def api_panel_security_autoblock():
+        """Turn the rolling auto-block (top-20 over 7 days) on/off for the panel host."""
+        enabled = bool(_json_body().get("enabled"))
+        rid = _local_remote_id()
+        if rid is None:
+            return jsonify({"success": False, "message": "No local host record."}), 200
+        _set_autoblock_host(rid, enabled)
+        log_action(current_user, "autoblock_toggle", target="panel host", detail="on" if enabled else "off")
+        if enabled:
+            _run_autoblock_now(app, rid)
+        return jsonify({"success": True, "enabled": enabled})
 
     @app.route("/api/panel/security/unban", methods=["POST"])
     @login_required
@@ -3708,12 +3826,42 @@ def register_routes(app):
     @login_required
     @permission_required(MANAGE_REMOTES)
     def api_remote_security_top_ips(remote_id):
-        """Top offending IPs on a remote host, aggregated from its fail2ban log."""
+        """Top offending IPs on a remote host (last 7 days), aggregated from its fail2ban log."""
         remote = get_remote(remote_id)
         try:
-            return jsonify({"ips": remote_fail2ban_top_ips(remote, 20)})
+            return jsonify({"ips": remote_fail2ban_top_ips(remote, 20, days=7),
+                            "autoblock": remote_id in _autoblock_hosts()})
         except Exception:
             return jsonify({"ips": [], "error": _log_and_generic("top-ips failed")}), 200
+
+    @app.route("/api/remote/<int:remote_id>/security/block", methods=["POST"])
+    @login_required
+    @permission_required(MANAGE_REMOTES)
+    def api_remote_security_block(remote_id):
+        """UFW-block (all ports, permanent) an IP on a remote host."""
+        remote = get_remote(remote_id)
+        ip = (_json_body().get("ip") or "").strip()
+        unblock = bool(_json_body().get("unblock"))
+        try:
+            ok, msg = (remote_ufw_undeny_ip(remote, ip) if unblock else remote_ufw_deny_ip(remote, ip))
+            log_action(current_user, "ufw_unblock" if unblock else "ufw_block",
+                       target=ip, detail=remote.name, success=ok)
+            return jsonify({"success": ok, "message": msg})
+        except Exception:
+            return jsonify({"success": False, "message": _log_and_generic("block failed")}), 500
+
+    @app.route("/api/remote/<int:remote_id>/security/autoblock", methods=["POST"])
+    @login_required
+    @permission_required(MANAGE_REMOTES)
+    def api_remote_security_autoblock(remote_id):
+        """Turn the rolling auto-block (top-20 over 7 days) on/off for a remote host."""
+        remote = get_remote(remote_id)
+        enabled = bool(_json_body().get("enabled"))
+        _set_autoblock_host(remote_id, enabled)
+        log_action(current_user, "autoblock_toggle", target=remote.name, detail="on" if enabled else "off")
+        if enabled:
+            _run_autoblock_now(app, remote_id)
+        return jsonify({"success": True, "enabled": enabled})
 
     @app.route("/api/remote/<int:remote_id>/security/unban", methods=["POST"])
     @login_required
@@ -6083,6 +6231,9 @@ if __name__ == "__main__":
 
     # Fire any "reboot when empty" requests once a host has no players left.
     threading.Thread(target=lambda: _reboot_when_empty_watch(app), daemon=True).start()
+
+    # Keep each auto-block host's rolling top-20 (7-day) UFW block list in sync.
+    threading.Thread(target=lambda: _autoblock_watch(app), daemon=True).start()
 
     host = (cfg.get("bind_host") or "").strip()
     if not host:

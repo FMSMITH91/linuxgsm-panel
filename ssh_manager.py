@@ -3451,20 +3451,74 @@ def remote_fail2ban_overview(server):
     return {"installed": True, "jails": details}
 
 
-def remote_fail2ban_top_ips(server, limit=20):
-    """Top offending IPs from a REMOTE host's fail2ban log (current + rotated), ranked by detected
-    attempts. Each: {ip, attempts, bans, banned_now}. Fixed counting pipeline (no request input in
-    the shell). Best-effort ([] on failure)."""
+# UFW comment tags so the panel can recognise (and safely manage) only its OWN deny rules.
+_UFW_BLOCK_TAG = "panel-block"          # a one-off manual block
+_UFW_AUTOBLOCK_TAG = "panel-autoblock"  # a rolling auto-block (added/removed by the poller)
+
+
+def remote_ufw_deny_ip(server, ip, tag=_UFW_BLOCK_TAG):
+    """Firewall-block an IP on ALL ports via a UFW deny rule, inserted at the top so it beats any
+    allow, and tagged in the rule comment so the panel recognises its own blocks. The IP is reparsed
+    to its canonical ipaddress form so nothing request-supplied reaches the shell unchecked. (ok, msg)."""
+    import ipaddress
+    try:
+        ip = str(ipaddress.ip_address((ip or "").strip()))
+    except (ValueError, TypeError):
+        return False, "Invalid IP address."
+    tag = re.sub(r"[^a-z0-9-]", "", (tag or ""))[:32] or _UFW_BLOCK_TAG
+    # Drop any existing deny for this IP first (no duplicate rules), then insert at position 1.
+    run_command(server, "ufw delete deny from %s >/dev/null 2>&1; "
+                        "ufw insert 1 deny from %s comment %s 2>&1"
+                % (_quote(ip), _quote(ip), _quote(tag)), timeout=20, sudo=True)
+    return True, "Blocked %s (all ports)." % ip
+
+
+def remote_ufw_undeny_ip(server, ip):
+    """Remove a UFW deny rule for an IP (canonicalised first). (ok, msg)."""
+    import ipaddress
+    try:
+        ip = str(ipaddress.ip_address((ip or "").strip()))
+    except (ValueError, TypeError):
+        return False, "Invalid IP address."
+    run_command(server, "ufw delete deny from %s 2>&1" % _quote(ip), timeout=15, sudo=True)
+    return True, "Unblocked %s." % ip
+
+
+def remote_ufw_blocked_ips(server):
+    """{ip: tag} for the panel's own UFW deny rules — tag read from the rule comment. Best-effort."""
+    out, _, _ = run_command(server, "ufw status 2>/dev/null", timeout=15, sudo=True)
+    blocked = {}
+    for line in (out or "").splitlines():
+        if "DENY" not in line or "panel-" not in line:
+            continue
+        mi = re.search(r"DENY(?:\s+IN)?\s+([0-9a-fA-F:.]+)", line)
+        mt = re.search(r"#\s*(panel-[a-z-]+)", line)
+        if mi and mt:
+            blocked[mi.group(1)] = mt.group(1)
+    return blocked
+
+
+def remote_fail2ban_top_ips(server, limit=20, days=7):
+    """Top offending IPs from a REMOTE host's fail2ban log over the last `days` days (current +
+    rotated logs), ranked by detected attempts. Each: {ip, attempts, bans, banned_now, blocked}.
+    Fixed counting pipeline (no request input in the shell). Best-effort ([] on failure)."""
+    from datetime import datetime, timedelta
     try:
         limit = max(1, min(int(limit or 20), 100))
     except (TypeError, ValueError):
         limit = 20
+    try:
+        days = max(1, min(int(days or 7), 90))
+    except (TypeError, ValueError):
+        days = 7
+    cutoff = (datetime.now() - timedelta(days=days)).strftime("%Y-%m-%d")   # panel clock; no shell input
     pipeline = (
         "zcat -f /var/log/fail2ban.log* 2>/dev/null | "
+        "awk -v c='%s' '$1 >= c' | "
         "grep -oE '\\[[A-Za-z0-9._-]+\\] (Ban|Found) [0-9a-fA-F:.]+' | "
         "awk '{a=$(NF-1); ip=$NF; if(a==\"Found\") f[ip]++; else if(a==\"Ban\") b[ip]++; s[ip]=1} "
         "END{for(ip in s) print (f[ip]+0)\"\\t\"(b[ip]+0)\"\\t\"ip}' | "
-        "sort -rn | head -%d" % limit
+        "sort -rn | head -%d" % (cutoff, limit)
     )
     out, _, _ = run_command(server, pipeline, timeout=25, sudo=True)
     banned = set()
@@ -3473,14 +3527,21 @@ def remote_fail2ban_top_ips(server, limit=20):
             banned.update(j.get("banned_ips", []))
     except Exception:
         _log.debug("remote top-ips: couldn't read current bans", exc_info=True)
+    try:
+        blocked = remote_ufw_blocked_ips(server)
+    except Exception:
+        _log.debug("remote top-ips: couldn't read ufw blocks", exc_info=True)
+        blocked = {}
     rows = []
     for line in (out or "").splitlines():
         p = line.split("\t")
         if len(p) == 3 and p[2].strip():
-            rows.append({"ip": p[2].strip(),
+            ip = p[2].strip()
+            rows.append({"ip": ip,
                          "attempts": int(p[0]) if p[0].isdigit() else 0,
                          "bans": int(p[1]) if p[1].isdigit() else 0,
-                         "banned_now": p[2].strip() in banned})
+                         "banned_now": ip in banned,
+                         "blocked": ip in blocked})
     return rows
 
 

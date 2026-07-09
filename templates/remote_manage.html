@@ -430,12 +430,18 @@
 
 <!-- Top offending IPs (aggregated from the fail2ban log) -->
 <div class="card mb-3" data-mtab="security">
-  <div class="card-header d-flex justify-content-between align-items-center">
-    <span><i class="bi bi-graph-up-arrow"></i> Top offenders</span>
-    <button class="btn btn-sm btn-outline-secondary" data-action="loadSecurityTopIps"><i class="bi bi-arrow-repeat"></i> Refresh</button>
+  <div class="card-header d-flex justify-content-between align-items-center flex-wrap gap-2">
+    <span><i class="bi bi-graph-up-arrow"></i> Top offenders <span class="text-secondary" style="font-size:.7rem;font-weight:400;">last 7 days</span></span>
+    <div class="d-flex align-items-center gap-3">
+      <div class="form-check form-switch mb-0" title="Keep the current top-20 UFW-blocked; an IP is released once it drops out of the 7-day window">
+        <input class="form-check-input" type="checkbox" id="sec-autoblock" data-action="toggleAutoblock" data-args='["@self"]'>
+        <label class="form-check-label small" for="sec-autoblock">Auto-block</label>
+      </div>
+      <button class="btn btn-sm btn-outline-secondary" data-action="loadSecurityTopIps"><i class="bi bi-arrow-repeat"></i> Refresh</button>
+    </div>
   </div>
   <div class="card-body">
-    <p class="small text-secondary mb-2">The 20 busiest attacking IPs across every fail2ban jail on this host, by detected failed attempts (from the current + rotated fail2ban logs).</p>
+    <p class="small text-secondary mb-2">The 20 busiest attacking IPs across every fail2ban jail on this host, by detected failed attempts (current + rotated logs). <strong>Block</strong> firewalls an IP on <em>all</em> ports (UFW) — stronger than a fail2ban ban, which only covers the attacked service. <strong>Auto-block</strong> keeps the whole top-20 blocked and releases each IP once it goes quiet for 7 days.</p>
     <div id="sec-top"><div class="text-secondary small"><i class="bi bi-arrow-repeat"></i> Loading…</div></div>
   </div>
 </div>
@@ -714,21 +720,52 @@ function loadSecurity(){ loadSecurityBans(); loadSecurityTopIps(); loadSecurityE
 function loadSecurityTopIps(){
   var el=document.getElementById('sec-top'); if(!el) return;
   fetch(secBase()+'/top-ips').then(function(r){return r.json();}).then(function(d){
+    var tog=document.getElementById('sec-autoblock'); if(tog) tog.checked=!!(d&&d.autoblock);
     var ips=(d&&d.ips)||[];
     if(!ips.length){ el.innerHTML='<div class="small text-secondary">No fail2ban activity logged yet.</div>'; return; }
     var rows=ips.map(function(o,i){
       var badge = o.banned_now ? '<span class="badge bg-danger">banned now</span>'
                 : (o.bans>0 ? '<span class="badge bg-secondary" style="font-weight:normal;">'+o.bans+' ban'+(o.bans===1?'':'s')+'</span>' : '');
+      var block = o.blocked
+        ? '<span class="badge bg-dark border me-1" style="font-weight:normal;"><i class="bi bi-shield-fill-x"></i> blocked</span>'
+          +'<button class="btn btn-link btn-sm p-0" style="font-size:.72rem;"'+_da('unblockOffender',[o.ip,'@self'])+'>unblock</button>'
+        : '<button class="btn btn-sm btn-outline-danger py-0 px-1" style="font-size:.72rem;"'+_da('blockOffender',[o.ip,'@self'])+'><i class="bi bi-shield-lock"></i> Block</button>';
       return '<tr><td class="small text-secondary">'+(i+1)+'</td>'
         +'<td class="small"><code>'+escapeHtml(o.ip)+'</code></td>'
         +'<td class="small text-end">'+(o.attempts||0)+'</td>'
         +'<td class="small text-end">'+(o.bans||0)+'</td>'
-        +'<td class="small">'+badge+'</td></tr>';
+        +'<td class="small">'+badge+'</td>'
+        +'<td class="small text-nowrap">'+block+'</td></tr>';
     }).join('');
     el.innerHTML='<div class="table-responsive"><table class="table table-sm align-middle mb-0">'
       +'<thead><tr><th class="small">#</th><th class="small">IP</th><th class="small text-end">Attempts</th>'
-      +'<th class="small text-end">Bans</th><th class="small">Status</th></tr></thead><tbody>'+rows+'</tbody></table></div>';
+      +'<th class="small text-end">Bans</th><th class="small">Status</th><th class="small">Firewall</th></tr></thead>'
+      +'<tbody>'+rows+'</tbody></table></div>';
   }).catch(function(){ el.innerHTML='<div class="small text-danger">Could not load top offenders.</div>'; });
+}
+function blockOffender(ip, btn){
+  confirmDialog({title:'Block IP', icon:'shield-lock', confirmClass:'btn-danger', confirmLabel:'Block (all ports)',
+    bodyText:'Firewall-block '+ip+' on ALL ports (UFW)? It won\'t be able to reach SSH, the panel, or any game server on this host until you unblock it.',
+    onConfirm:function(){
+      if(btn) btn.disabled=true;
+      fetch(secBase()+'/block',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({ip:ip})})
+        .then(function(r){return r.json();}).then(function(d){ if(window.toast) toast(d.message||(d.success?'Blocked':'Failed'), d.success?'success':'danger'); loadSecurityTopIps(); })
+        .catch(function(){ if(window.toast) toast('Block failed','danger'); if(btn) btn.disabled=false; });
+    }});
+}
+function unblockOffender(ip, btn){
+  if(btn) btn.disabled=true;
+  fetch(secBase()+'/block',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({ip:ip,unblock:true})})
+    .then(function(r){return r.json();}).then(function(d){ if(window.toast) toast(d.message||(d.success?'Unblocked':'Failed'), d.success?'success':'info'); loadSecurityTopIps(); })
+    .catch(function(){ if(window.toast) toast('Unblock failed','danger'); if(btn) btn.disabled=false; });
+}
+function toggleAutoblock(cb){
+  var on=!!(cb&&cb.checked);
+  fetch(secBase()+'/autoblock',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({enabled:on})})
+    .then(function(r){return r.json();}).then(function(d){
+      if(window.toast) toast(on?'Auto-block on — syncing the top-20 now…':'Auto-block off', on?'success':'info');
+      setTimeout(loadSecurityTopIps, on?2500:300);   // give the immediate reconcile a moment
+    }).catch(function(){ if(window.toast) toast('Couldn\'t change auto-block','danger'); if(cb) cb.checked=!on; });
 }
 function loadSecurityBans(){
   var el=document.getElementById('sec-bans'); if(!el) return;
