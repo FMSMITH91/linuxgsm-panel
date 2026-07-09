@@ -840,6 +840,11 @@ def _launch_installer(target_ref="", branch="", started_msg=None):
         f"cd {shlex.quote(PANEL_DIR)} || exit 1\n"
         f"export PANEL_UPDATE_REF={shlex.quote(target_ref or '')}\n"
         f"export PANEL_BRANCH={shlex.quote(branch or '')}\n"
+        # A panel update / branch-switch updates panel code + restarts the panel ONLY. It must never
+        # apply host OS packages or reboot the machine (that would take every game server down mid-
+        # update). PANEL_NO_UPGRADE=1 makes install.sh skip its OS-upgrade+reboot step; OS updates
+        # stay a separate, explicit action (the OS Updates card, which warns about online players).
+        "export PANEL_NO_UPGRADE=1\n"
         'echo "=== panel self-update $(date) ===" > "$LOG"\n'
         f"bash {shlex.quote(installer)} >> \"$LOG\" 2>&1\n"
         'echo "=== installer exit $? ===" >> "$LOG"\n'
