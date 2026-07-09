@@ -59,13 +59,13 @@
         <label class="form-label">LinuxGSM User</label>
         <input type="text" name="lgsm_user" class="form-control" placeholder="(optional)">
       </div>
-      <div class="col-md-3 d-flex align-items-center">
-        <div class="form-check pt-3">
-          <input type="checkbox" name="auto_bootstrap" class="form-check-input" id="auto-bootstrap" checked>
-          <label class="form-check-label" for="auto-bootstrap" title="Right after adding: system updates, essential packages, firewall, SSH hardening, fail2ban, gamedig, auto-security-updates, then reboot.">
-            Auto prepare &amp; secure (updates + reboot)
-          </label>
-        </div>
+      <div class="col-md-3">
+        <label class="form-label" for="setup-type">Setup</label>
+        <select name="setup_type" id="setup-type" class="form-select"
+                title="Fresh: full setup (updates, firewall, SSH hardening, fail2ban, deps) then reboot — for a brand-new VPS. Existing: leave the host untouched and scan it for LinuxGSM servers already installed.">
+          <option value="fresh" selected>Fresh server — full setup + reboot</option>
+          <option value="existing">Existing server — just scan for LinuxGSM</option>
+        </select>
       </div>
       <div class="col-md-1 d-flex align-items-end">
         <button type="submit" class="btn btn-primary w-100">

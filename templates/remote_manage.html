@@ -745,6 +745,14 @@ function loadSecurityLog(which){
   if (TABS.indexOf(h) >= 0) { show(h); }
   else if (CARD_TAB[h]) { show(CARD_TAB[h]); var el = document.getElementById(h); if(el) el.scrollIntoView(); }
   else { show('overview'); }
+  // Added as an "existing" remote → land on Host Controls and auto-run the LinuxGSM scan.
+  try {
+    if (new URLSearchParams(location.search).get('scan') === '1') {
+      show('controls');
+      var sc = document.getElementById('disc-scan-btn'); if (sc) sc.scrollIntoView({block:'center'});
+      setTimeout(function(){ if (window.scanExisting) scanExisting(); }, 250);
+    }
+  } catch(e){}
 })();
 // Click a game server's connect address to copy the full ip:port.
 document.addEventListener('click', function(ev){

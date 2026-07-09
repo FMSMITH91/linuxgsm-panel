@@ -2570,20 +2570,25 @@ def register_routes(app):
         db.session.commit()
         log_action(current_user, "add_remote", target=name, detail=f"{ssh_user}@{host}")
 
-        # Auto-run the "Prepare & Secure" bootstrap unless opted out. Progress shows
-        # inline on the remote's card and survives closing the page.
-        auto_bootstrap = request.form.get("auto_bootstrap", "on") == "on"
-        if auto_bootstrap:
-            opts = {
-                "set_timezone": request.form.get("timezone", "UTC") or "UTC",
-                "enable_ufw": True, "install_lgsm_deps": True,
-                "username": lgsm_user, "install_fail2ban": True, "do_reboot": True,
-            }
-            started, _ = _begin_bootstrap(remote.id, opts, current_user.id)
-            _m = (f"Remote '{name}' added. Preparing & securing it now — watch the progress on its card."
-                  if started else f"Remote '{name}' added.")
-        else:
-            _m = f"Remote '{name}' added successfully!"
+        # Setup type. "fresh" runs the full Prepare & Secure bootstrap (updates, UFW, SSH hardening,
+        # fail2ban, deps, then reboot) for a brand-new VPS. "existing" leaves the host untouched and
+        # jumps straight to scanning it for LinuxGSM servers already installed. (The old auto_bootstrap
+        # checkbox is honoured as a fallback so older/cached forms still work.)
+        setup_type = request.form.get("setup_type", "").strip().lower()
+        if setup_type not in ("fresh", "existing"):
+            setup_type = "fresh" if request.form.get("auto_bootstrap", "on") == "on" else "existing"
+        if setup_type == "existing":
+            flash(f"Remote '{name}' added — scanning it for existing LinuxGSM servers…", "success")
+            return redirect(url_for("remote_manage", remote_id=remote.id) + "?scan=1")
+
+        opts = {
+            "set_timezone": request.form.get("timezone", "UTC") or "UTC",
+            "enable_ufw": True, "install_lgsm_deps": True,
+            "username": lgsm_user, "install_fail2ban": True, "do_reboot": True,
+        }
+        started, _ = _begin_bootstrap(remote.id, opts, current_user.id)
+        _m = (f"Remote '{name}' added. Preparing & securing it now — watch the progress on its card."
+              if started else f"Remote '{name}' added.")
         return _form_ok(_m, "manage_remotes")
 
     @app.route("/remotes/<int:remote_id>/edit", methods=["POST"])
