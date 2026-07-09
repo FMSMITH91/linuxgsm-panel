@@ -1418,6 +1418,37 @@ def player_count(server, user, game_type=None, port=None, query_type=None):
     return int(s)
 
 
+def player_count_via_lgsm_query(server, user, selfname, fallback_port=None):
+    """Player count using the game's OWN LinuxGSM query settings — this covers games the panel's
+    26-entry gamedig map doesn't. Reads querymode/querytype/queryport from the merged LinuxGSM
+    config and, when LinuxGSM queries the game with gamedig (querymode 2), runs gamedig with
+    LinuxGSM's own type. `fallback_port` (the port the panel already knows) is used when the query
+    port isn't in the LinuxGSM .cfg — e.g. Minecraft keeps it in server.properties. Returns int, or
+    None when LinuxGSM has no usable network query for the game (querymode 1 = process-check only,
+    e.g. Factorio; querymode 3 = the legacy gsquery, not parsed here yet) or the query fails. None =>
+    'unknown', which the reboot poller treats as 'don't reboot'. querytype is charset-sanitised and
+    the port is an int, so nothing user/config-supplied reaches the shell unchecked."""
+    try:
+        vals = lgsm_get_values(server, user, selfname, ["querymode", "querytype", "queryport", "port"])
+    except Exception:
+        return None
+    if (vals.get("querymode") or "").strip() != "2":   # only the gamedig querymode is handled here
+        return None
+    qtype = re.sub(r"[^A-Za-z0-9_-]", "", (vals.get("querytype") or "").strip())[:40]
+    qport = ((vals.get("queryport") or "").strip() or (vals.get("port") or "").strip()
+             or str(fallback_port or "").strip())
+    if not qtype or not qport.isdigit():
+        return None
+    cmd = ("gamedig --type %s 127.0.0.1:%d 2>/dev/null | jq -r '.players|length' 2>/dev/null"
+           % (qtype, int(qport)))
+    try:
+        out, _, _ = run_command(server, "sudo -u %s bash -c %s" % (user, _quote(cmd)), timeout=25, sudo=False)
+    except Exception:
+        return None
+    s = (out or "").strip().splitlines()[-1].strip() if (out or "").strip() else ""
+    return int(s) if s.isdigit() else None
+
+
 # ── Engine families ──────────────────────────────────────────────────────────
 # Moderation (kick/ban/say) and the way we read a player list are per game ENGINE, not per game, so
 # one classifier covers every LinuxGSM game of a family instead of a per-game table. Source and

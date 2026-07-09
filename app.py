@@ -101,6 +101,7 @@ from ssh_manager import (
     player_count as sm_player_count, mod_restart_decision, set_game_priority,
     game_engine as sm_game_engine, console_player_list as sm_console_player_list,
     get_server_status as sm_get_server_status, is_player_queryable as sm_is_player_queryable,
+    player_count_via_lgsm_query as sm_player_count_via_lgsm_query,
     set_game_priority_bulk,
     install_game_dependencies, parse_missing_deps, detect_game_ports, lgsm_read_config,
     lgsm_write_config, lgsm_game_config, lgsm_get_values, browse_dir, read_file,
@@ -300,8 +301,16 @@ def _server_players_confident(gs):
                                               selfname=gs.lgsm_name) or [])
     except Exception:
         return None
-    # No gamedig type and no console engine: a stopped server is definitely empty; a running one we
-    # simply can't read, so report unknown (the poller treats unknown as 'don't reboot').
+    # Not in the panel's gamedig map and not a console engine — ask LinuxGSM's OWN query settings
+    # (querytype/queryport), which cover games gamedig supports but the panel never mapped.
+    try:
+        lc = sm_player_count_via_lgsm_query(gs.remote, gs.short_name, gs.lgsm_name, fallback_port=gs.port)
+    except Exception:
+        lc = None
+    if lc is not None:
+        return lc
+    # No gamedig type, no console engine, and LinuxGSM has no network query: a stopped server is
+    # definitely empty; a running one we simply can't read, so report unknown (poller won't reboot).
     try:
         if sm_get_server_status(gs.remote, gs) == "offline":
             return 0
