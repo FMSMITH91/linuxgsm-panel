@@ -31,7 +31,7 @@ import warnings
 # teardown, so a locked-out admin sees a clean tool.
 warnings.filterwarnings("ignore", category=DeprecationWarning)
 
-from app import create_app, password_problem   # noqa: E402  (must follow the warnings filter)
+from app import create_app, password_problem, MIN_PASSWORD_LEN   # noqa: E402  (after the warnings filter)
 from models import db, User                     # noqa: E402
 import auth                                      # noqa: E402
 
@@ -56,9 +56,11 @@ def _read_password(args):
                 continue
         except (EOFError, KeyboardInterrupt):
             sys.exit("\nCancelled.")
-        err = password_problem(pw)
-        if err:
-            print("  %s — try again.\n" % err)
+        # Check the entry but DON'T echo anything derived from it — print a fixed policy hint so the
+        # password value never reaches output.
+        if password_problem(pw):
+            print("  Password must be at least %d characters and include a lowercase letter, an "
+                  "uppercase letter, a number and a symbol — try again.\n" % MIN_PASSWORD_LEN)
             continue
         return pw
 
@@ -115,14 +117,13 @@ def _resolve_username(username, default_sole_admin=True):
         return _pick_user_interactive()
     if default_sole_admin:
         admins = User.query.filter_by(is_superadmin=True).order_by(User.username).all()
-        if not admins:
-            sys.exit("No superadmin exists yet. Create one:  manage.py create-admin <name>")
         if len(admins) == 1:
             print("Resetting the only superadmin: %s" % admins[0].username)
             return admins[0].username
-        sys.exit("Several superadmins — pass a username (no terminal here for the menu):\n  " +
-                 "\n  ".join(a.username for a in admins))
-    sys.exit("Pass a username (no terminal here for the menu).")
+    # No terminal for the menu, and no single superadmin to default to → the caller must name one.
+    # `raise` (not sys.exit) so every path here clearly returns a value or terminates.
+    raise SystemExit("Not an interactive terminal — pass a username explicitly, e.g. "
+                     "`manage.py reset-password <username>` (see `manage.py list-users`).")
 
 
 def cmd_reset_password(args):
