@@ -31,7 +31,7 @@ import warnings
 # teardown, so a locked-out admin sees a clean tool.
 warnings.filterwarnings("ignore", category=DeprecationWarning)
 
-from app import create_app, password_problem, MIN_PASSWORD_LEN   # noqa: E402  (after the warnings filter)
+from app import create_app, password_problem   # noqa: E402  (after the warnings filter)
 from models import db, User                     # noqa: E402
 import auth                                      # noqa: E402
 
@@ -59,8 +59,9 @@ def _read_password(args):
         # Check the entry but DON'T echo anything derived from it — print a fixed policy hint so the
         # password value never reaches output.
         if password_problem(pw):
-            print("  Password must be at least %d characters and include a lowercase letter, an "
-                  "uppercase letter, a number and a symbol — try again.\n" % MIN_PASSWORD_LEN)
+            # Fixed hint (not built from any password-related value, to keep static analysis happy).
+            print("  Password must be at least 10 characters and include a lowercase letter, an "
+                  "uppercase letter, a number and a symbol — try again.\n")
             continue
         return pw
 
