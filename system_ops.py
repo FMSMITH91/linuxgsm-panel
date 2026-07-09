@@ -631,11 +631,11 @@ def _update_touches_runtime(target_ref):
     return any(_is_runtime_path(f) for f in files)
 
 
-def _runtime_changelog(rev_range, limit=10):
-    """The commits in `rev_range` that actually change files the panel RUNS, newest first, as
-    'shorthash subject' lines. Docs-only / CI-only / test-only commits are dropped so the update
-    card's changelog doesn't list e.g. a README edit. One `git log` call; each commit is kept only
-    if at least one file it touched is a runtime path."""
+def _runtime_changelog(rev_range):
+    """ALL commits in `rev_range` that actually change files the panel RUNS, newest first, as
+    'shorthash subject' lines. Docs-only / CI-only / test-only commits are dropped, so both the
+    'N commits behind' count (len) and the update card's changelog (capped by the caller) ignore
+    e.g. a README edit. One `git log` call; a commit is kept only if a file it touched is runtime."""
     import re
     out, _, rc = _git(["log", "--no-decorate", "--format=%h%x09%s", "--name-only", rev_range])
     if rc != 0 or not out:
@@ -652,7 +652,7 @@ def _runtime_changelog(rev_range, limit=10):
             runtime = True
     if cur and runtime:
         result.append(cur)
-    return result[:limit]
+    return result
 
 
 def _compute_update_status():
@@ -692,10 +692,12 @@ def _compute_update_status():
                     "message": "New commits on this branch only change docs/CI — nothing the panel runs."}
         tgt_ver, _, tv_rc = _git(["show", "%s:VERSION" % ref])
         rem_full, _, _ = _git(["rev-parse", ref])
-        return {**base, "update_available": True, "ci_state": "unverified", "behind": behind_n,
+        rc_log = _runtime_changelog("HEAD.." + ref)
+        return {**base, "update_available": True, "ci_state": "unverified",
+                "behind": len(rc_log) or behind_n, "behind_tip": behind_n,
                 "remote_version": ((tgt_ver.strip() if tv_rc == 0 else "") or "?"),
                 "target_sha": rem_full.strip(),
-                "changes": _runtime_changelog("HEAD.." + ref)}
+                "changes": rc_log[:10]}
 
     # Don't surface an update until the target commit has cleared CI on GitHub — otherwise
     # the badge pops the instant a push lands, before the workflows finish (or even if they
@@ -733,6 +735,7 @@ def _compute_update_status():
                 "behind": behind_target, "behind_tip": behind_n, "docs_only": True,
                 "message": "Newer commits only change docs/CI — nothing the panel runs."}
     tgt_ver, _, tv_rc = _git(["show", f"{target_sha}:VERSION"])
+    rc_log = _runtime_changelog(f"HEAD..{target_sha}")   # runtime commits only (drops docs/CI)
     msg = None
     if newer_unverified > 0:
         msg = ("Updating to the latest verified version — %d newer commit%s still being verified."
@@ -741,13 +744,13 @@ def _compute_update_status():
         **base,
         "update_available": True,
         "ci_state": target_state,
-        "behind": behind_target,
+        "behind": len(rc_log) or behind_target,   # count only commits that change what the panel runs
         "behind_tip": behind_n,
         "newer_unverified": newer_unverified,
         "remote_version": ((tgt_ver.strip() if tv_rc == 0 else "") or "?"),
         "remote_sha": target_sha[:7],
         "target_sha": target_sha,
-        "changes": _runtime_changelog(f"HEAD..{target_sha}"),
+        "changes": rc_log[:10],
         **({"message": msg} if msg else {}),
     }
 
