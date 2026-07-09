@@ -1300,9 +1300,9 @@ _F2B_TOP_PIPELINE = (
     "sort -rn | head -%d"
 )
 
-# UFW comment tags so the panel manages only its OWN deny rules.
+# Default UFW comment tag so the panel manages only its OWN deny rules. The rolling-auto-block tag
+# ("panel-autoblock") is passed in by app.py's reconcile.
 _UFW_BLOCK_TAG = "panel-block"          # one-off manual block
-_UFW_AUTOBLOCK_TAG = "panel-autoblock"  # rolling auto-block (poller-managed)
 
 
 def ufw_blocked_ips():

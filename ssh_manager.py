@@ -3451,9 +3451,9 @@ def remote_fail2ban_overview(server):
     return {"installed": True, "jails": details}
 
 
-# UFW comment tags so the panel can recognise (and safely manage) only its OWN deny rules.
+# Default UFW comment tag so the panel recognises its OWN deny rules. The rolling-auto-block tag
+# ("panel-autoblock") is passed in by the caller (app.py) when it reconciles.
 _UFW_BLOCK_TAG = "panel-block"          # a one-off manual block
-_UFW_AUTOBLOCK_TAG = "panel-autoblock"  # a rolling auto-block (added/removed by the poller)
 
 
 def remote_ufw_deny_ip(server, ip, tag=_UFW_BLOCK_TAG):
