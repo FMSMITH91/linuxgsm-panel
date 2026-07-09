@@ -41,7 +41,7 @@
   <li class="nav-item"><button type="button" class="nav-link active" data-mtab-btn="overview"><i class="bi bi-speedometer2"></i> Overview</button></li>
   <li class="nav-item"><button type="button" class="nav-link" data-mtab-btn="controls"><i class="bi bi-sliders"></i> Host Controls</button></li>
   <li class="nav-item"><button type="button" class="nav-link" data-mtab-btn="maintenance"><i class="bi bi-tools"></i> Maintenance</button></li>
-  {% if remote.is_local %}<li class="nav-item"><button type="button" class="nav-link" data-mtab-btn="security"><i class="bi bi-shield-lock"></i> Security</button></li>{% endif %}
+  <li class="nav-item"><button type="button" class="nav-link" data-mtab-btn="security"><i class="bi bi-shield-lock"></i> Security</button></li>
 </ul>
 
 <!-- System Specs (static hardware & OS) -->
@@ -388,19 +388,21 @@
     </div>
   </div>
 </div>
+{% endif %}
 
-<!-- ─── Security tab (panel host only) ───────────────────────── -->
+<!-- ─── Security tab: fail2ban bans (panel + ssh) + raw logs ─────── -->
 <div class="card mb-3" data-mtab="security">
   <div class="card-header d-flex justify-content-between align-items-center">
     <span><i class="bi bi-slash-circle"></i> Banned IPs (fail2ban)</span>
     <button class="btn btn-sm btn-outline-secondary" data-action="loadSecurityBans"><i class="bi bi-arrow-repeat"></i> Refresh</button>
   </div>
   <div class="card-body">
-    <p class="small text-secondary mb-2">IPs currently banned at the firewall across every fail2ban jail on this host — the panel login and SSH.</p>
+    <p class="small text-secondary mb-2">IPs currently banned at the firewall across every fail2ban jail on this host{% if remote.is_local %} — the panel login and SSH{% endif %}.</p>
     <div id="sec-bans"><div class="text-secondary small"><i class="bi bi-arrow-repeat"></i> Loading…</div></div>
   </div>
 </div>
 
+{% if remote.is_local %}
 <div class="card mb-3" data-mtab="security">
   <div class="card-header d-flex justify-content-between align-items-center">
     <span><i class="bi bi-activity"></i> Recent security events</span>
@@ -410,19 +412,19 @@
     <div id="sec-events" class="table-responsive"><div class="text-secondary small"><i class="bi bi-arrow-repeat"></i> Loading…</div></div>
   </div>
 </div>
+{% endif %}
 
 <div class="card mb-3" data-mtab="security">
   <div class="card-header"><i class="bi bi-file-earmark-text"></i> Raw logs</div>
   <div class="card-body">
     <div class="d-flex gap-2 flex-wrap mb-2">
-      <button class="btn btn-sm btn-outline-secondary" data-action="loadSecurityLog" data-args='["panel"]'><i class="bi bi-box-arrow-in-right"></i> Panel login log</button>
+      {% if remote.is_local %}<button class="btn btn-sm btn-outline-secondary" data-action="loadSecurityLog" data-args='["panel"]'><i class="bi bi-box-arrow-in-right"></i> Panel login log</button>{% endif %}
       <button class="btn btn-sm btn-outline-secondary" data-action="loadSecurityLog" data-args='["fail2ban"]'><i class="bi bi-shield"></i> fail2ban log</button>
       <button class="btn btn-sm btn-outline-secondary" data-action="loadSecurityLog" data-args='["ssh"]'><i class="bi bi-terminal"></i> SSH auth log</button>
     </div>
     <pre id="sec-log" style="background:var(--bg-elevated);border:1px solid var(--border);border-radius:8px;padding:.5rem .7rem;max-height:340px;overflow:auto;font-size:.72rem;line-height:1.5;white-space:pre-wrap;word-break:break-word;margin:0;">Pick a log above to view its recent lines.</pre>
   </div>
 </div>
-{% endif %}
 
 <!-- Ubuntu Pro -->
 <div class="card mb-3" data-mtab="maintenance">
@@ -663,10 +665,12 @@ var IS_LOCAL = {{ 'true' if remote.is_local else 'false' }};
 // ── Section tabs: show only the cards for the selected group (Overview / Host Controls /
 // Maintenance). Cards keep their place/markup/JS; we just toggle visibility. The sidebar's
 // ── Security tab: fail2ban bans (panel + ssh), recent events, raw logs ──────────
+// Panel host hits /api/panel/security/*; a remote hits /api/remote/<id>/security/* (over SSH).
+function secBase(){ return IS_LOCAL ? MOUNT+'/api/panel/security' : MOUNT+'/api/remote/'+REMOTE_ID+'/security'; }
 function loadSecurity(){ loadSecurityBans(); loadSecurityEvents(); }
 function loadSecurityBans(){
   var el=document.getElementById('sec-bans'); if(!el) return;
-  fetch(MOUNT+'/api/panel/security/bans').then(function(r){return r.json();}).then(function(d){
+  fetch(secBase()+'/bans').then(function(r){return r.json();}).then(function(d){
     if(!d.installed){ el.innerHTML='<div class="small text-secondary">fail2ban isn\'t installed on this host.</div>'; return; }
     if(!d.jails||!d.jails.length){ el.innerHTML='<div class="small text-secondary">No fail2ban jails found.</div>'; return; }
     el.innerHTML=d.jails.map(function(j){
@@ -685,7 +689,7 @@ function loadSecurityBans(){
 }
 function unbanIp(jail, ip, btn){
   if(btn) btn.disabled=true;
-  fetch(MOUNT+'/api/panel/security/unban',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({jail:jail,ip:ip})})
+  fetch(secBase()+'/unban',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({jail:jail,ip:ip})})
     .then(function(r){return r.json();}).then(function(d){
       if(window.toast) toast(d.message||(d.success?'Unbanned':'Failed'), d.success?'success':'danger');
       loadSecurityBans();
@@ -712,7 +716,7 @@ function loadSecurityEvents(){
 function loadSecurityLog(which){
   var el=document.getElementById('sec-log'); if(!el) return;
   el.textContent='Loading…';
-  fetch(MOUNT+'/api/panel/security/log?which='+encodeURIComponent(which)).then(function(r){return r.json();}).then(function(d){
+  fetch(secBase()+'/log?which='+encodeURIComponent(which)).then(function(r){return r.json();}).then(function(d){
     el.textContent=d.text||'(log is empty)'; el.scrollTop=el.scrollHeight;   // textContent: raw log is never HTML
   }).catch(function(){ el.textContent='Could not read the log.'; });
 }

@@ -3306,6 +3306,69 @@ def _valid_ip(s):
         return False
 
 
+_F2B_JAIL_RE = re.compile(r"^[A-Za-z0-9._-]{1,64}$")
+
+
+def remote_fail2ban_overview(server):
+    """fail2ban jails + their current bans on a REMOTE host, over SSH. Mirrors the panel-host version
+    but runs fail2ban-client on the remote. {'installed': bool, 'jails': [detail,...]}."""
+    import shlex
+    have, _, _ = run_command(server, "command -v fail2ban-client >/dev/null 2>&1 && echo yes || echo no", timeout=15)
+    if "yes" not in (have or ""):
+        return {"installed": False, "jails": []}
+    out, _, _ = run_command(server, "fail2ban-client status 2>/dev/null", timeout=15, sudo=True)
+    m = re.search(r"Jail list:\s*(.*)", out or "")
+    jails = [j.strip() for j in (m.group(1).split(",") if m else []) if _F2B_JAIL_RE.match(j.strip())]
+    details = []
+    for jail in jails:
+        jo, _, jrc = run_command(server, "fail2ban-client status %s 2>/dev/null" % shlex.quote(jail),
+                                 timeout=15, sudo=True)
+        if jrc != 0 or not jo:
+            continue
+
+        def _num(label):
+            mm = re.search(label + r":\s*(\d+)", jo)
+            return int(mm.group(1)) if mm else 0
+        mi = re.search(r"Banned IP list:\s*(.*)", jo)
+        ips = [ip for ip in (mi.group(1).split() if mi else []) if ip]
+        details.append({"jail": jail, "currently_banned": _num("Currently banned"),
+                        "total_banned": _num("Total banned"), "total_failed": _num("Total failed"),
+                        "banned_ips": ips})
+    return {"installed": True, "jails": details}
+
+
+def remote_fail2ban_unban(server, jail, ip):
+    """Lift a fail2ban ban on a REMOTE host (jail + IP validated). (ok, msg)."""
+    import shlex
+    if not _F2B_JAIL_RE.match(jail or ""):
+        return False, "Invalid jail name."
+    ip = (ip or "").strip()
+    if not _valid_ip(ip):
+        return False, "Invalid IP address."
+    out, err, rc = run_command(server, "fail2ban-client set %s unbanip %s 2>&1"
+                               % (shlex.quote(jail), shlex.quote(ip)), timeout=20, sudo=True)
+    if rc == 0:
+        return True, "Unbanned %s from %s." % (ip, jail)
+    return False, ((out or err or "Unban failed").replace("\n", " ")[:200])
+
+
+def remote_security_log(server, which, lines=200):
+    """Tail of a whitelisted security log on a REMOTE host: 'fail2ban' or 'ssh'. `which` is a fixed
+    set, never a path from the request. Returns text."""
+    lines = max(20, min(int(lines or 200), 1000))
+    if which == "fail2ban":
+        out, _, _ = run_command(server, "journalctl -u fail2ban --no-pager -n %d 2>/dev/null || "
+                                "tail -n %d /var/log/fail2ban.log 2>/dev/null" % (lines, lines),
+                                timeout=20, sudo=True)
+        return out or ""
+    if which == "ssh":
+        out, _, _ = run_command(server, "journalctl -u ssh -u sshd --no-pager -n %d 2>/dev/null || "
+                                "tail -n %d /var/log/auth.log 2>/dev/null" % (lines * 2, lines),
+                                timeout=20, sudo=True)
+        return "\n".join((out or "").splitlines()[-lines:])
+    return ""
+
+
 def _tcp_reachable(host, port, timeout=8):
     """Whether the panel can open a TCP connection to host:port — used to confirm it won't lose its
     way in before committing an SSH bind-address change. Best-effort; False on any error."""

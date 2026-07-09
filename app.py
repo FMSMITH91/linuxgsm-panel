@@ -107,6 +107,7 @@ from ssh_manager import (
     remote_ufw_close_port, remote_ufw_allow_game_port, remote_ufw_close_game_port,
     remote_ufw_allow_game_ports, remote_ufw_close_by_name,
     remote_os_check_updates, remote_os_run_updates,
+    remote_fail2ban_overview, remote_fail2ban_unban, remote_security_log,
     remote_reboot, remote_uptime,
     remote_bootstrap_vps, remote_check_tailscale,
     remote_install_tailscale, remote_bootstrap_tailscale,
@@ -3558,6 +3559,45 @@ def register_routes(app):
             return jsonify({"text": "", "error": "unknown log"}), 400
         try:
             return jsonify({"text": so.security_log_tail(which, 300)})
+        except Exception:
+            return jsonify({"text": "", "error": _log_and_generic("log read failed")}), 200
+
+    # ── Security tab for REMOTE hosts (fail2ban + SSH logs over SSH) ──
+    @app.route("/api/remote/<int:remote_id>/security/bans")
+    @login_required
+    @permission_required(MANAGE_REMOTES)
+    def api_remote_security_bans(remote_id):
+        remote = get_remote(remote_id)
+        try:
+            return jsonify(remote_fail2ban_overview(remote))
+        except Exception:
+            return jsonify({"installed": False, "jails": [], "error": _log_and_generic("ban list failed")}), 200
+
+    @app.route("/api/remote/<int:remote_id>/security/unban", methods=["POST"])
+    @login_required
+    @permission_required(MANAGE_REMOTES)
+    def api_remote_security_unban(remote_id):
+        remote = get_remote(remote_id)
+        d = _json_body()
+        jail, banned_ip = (d.get("jail") or "").strip(), (d.get("ip") or "").strip()
+        try:
+            ok, msg = remote_fail2ban_unban(remote, jail, banned_ip)
+            log_action(current_user, "fail2ban_unban", target=banned_ip,
+                       detail="%s on %s — %s" % (jail, remote.name, msg), success=ok)
+            return jsonify({"success": ok, "message": msg})
+        except Exception:
+            return jsonify({"success": False, "message": _log_and_generic("unban failed")}), 500
+
+    @app.route("/api/remote/<int:remote_id>/security/log")
+    @login_required
+    @permission_required(MANAGE_REMOTES)
+    def api_remote_security_log(remote_id):
+        remote = get_remote(remote_id)
+        which = request.args.get("which", "ssh")
+        if which not in ("fail2ban", "ssh"):
+            return jsonify({"text": "", "error": "unknown log"}), 400
+        try:
+            return jsonify({"text": remote_security_log(remote, which, 300)})
         except Exception:
             return jsonify({"text": "", "error": _log_and_generic("log read failed")}), 200
 
