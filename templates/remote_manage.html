@@ -123,6 +123,29 @@
     </div>
   </div>
 
+  <!-- OS update live-watch popup -->
+  <div class="modal fade" id="os-update-modal" tabindex="-1" aria-hidden="true">
+    <div class="modal-dialog modal-lg modal-dialog-scrollable">
+      <div class="modal-content">
+        <div class="modal-header">
+          <h5 class="modal-title"><i class="bi bi-arrow-repeat"></i> Installing OS updates
+            <span id="osu-spin" class="spinner-border spinner-border-sm ms-2"></span></h5>
+          <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+        </div>
+        <div class="modal-body">
+          <div id="osu-state" class="small mb-2 text-secondary"><i class="bi bi-hourglass-split"></i> Starting…</div>
+          <pre id="osu-log" style="background:var(--bg-elevated);border:1px solid var(--border);border-radius:8px;padding:.5rem .7rem;max-height:52vh;overflow:auto;font-size:.72rem;line-height:1.5;white-space:pre-wrap;word-break:break-word;margin:0;"></pre>
+          <div class="form-text mt-2">Runs unattended and answers prompts safely — it keeps any config
+            file you've edited and assumes yes to installs, so it never gets stuck waiting. You'll see
+            here if it kept a config file.</div>
+        </div>
+        <div class="modal-footer">
+          <button type="button" class="btn btn-outline-secondary btn-sm" data-bs-dismiss="modal">Close</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
   <!-- Firewall -->
   <div class="col-md-4 mb-3">
     <div class="card h-100">
@@ -834,15 +857,63 @@ function checkUpdates(){
     })
     .catch(()=>el.textContent='Check failed');
 }
+var _osuTimer=null, _osuStale=0;
 function runUpdates(){
   confirmDialog({title:'Install updates', icon:'arrow-up-circle', confirmClass:'btn-primary', confirmLabel:'Install updates',
-    bodyText:'Install all available updates on this server?',
-    onConfirm:function(){
-      var el=document.getElementById('update-info'); el.textContent='Installing updates… (this can take a while)';
-      fetch(MOUNT+'/api/remote/'+REMOTE_ID+'/run-updates',{method:'POST'}).then(r=>r.json())
-        .then(d=>{ el.textContent = d.message || (d.success?'Updates installed':'Update failed'); })
-        .catch(()=>el.textContent='Update failed');
-    }});
+    bodyText:'Install all available updates on this host? You can watch it live in a popup; it runs '
+      + 'unattended and answers prompts safely (keeps your config files, assumes yes), so it never '
+      + 'gets stuck waiting.',
+    onConfirm:_startOsUpdate});
+}
+function _startOsUpdate(){
+  if(_osuTimer){ clearTimeout(_osuTimer); _osuTimer=null; }
+  _osuStale=0;
+  var logEl=document.getElementById('osu-log'), stEl=document.getElementById('osu-state'),
+      spin=document.getElementById('osu-spin');
+  if(logEl) logEl.textContent='';
+  if(stEl){ stEl.className='small mb-2 text-secondary'; stEl.innerHTML='<i class="bi bi-hourglass-split"></i> Starting…'; }
+  if(spin) spin.style.display='';
+  var m=document.getElementById('os-update-modal');
+  if(m && window.bootstrap) bootstrap.Modal.getOrCreateInstance(m).show();
+  var info=document.getElementById('update-info'); if(info) info.textContent='Installing updates… (watch the popup)';
+  fetch(MOUNT+'/api/remote/'+REMOTE_ID+'/os-update/start',{method:'POST'}).then(function(r){return r.json();})
+    .then(function(d){
+      if(!d.success){ if(spin) spin.style.display='none';
+        if(stEl){ stEl.className='small mb-2 text-danger'; stEl.textContent=d.message||'Couldn\'t start.'; } return; }
+      _pollOsUpdate();
+    }).catch(function(){ if(spin) spin.style.display='none';
+      if(stEl){ stEl.className='small mb-2 text-danger'; stEl.textContent='Couldn\'t start the update.'; } });
+}
+function _pollOsUpdate(){
+  fetch(MOUNT+'/api/remote/'+REMOTE_ID+'/os-update/status').then(function(r){return r.json();})
+    .then(function(d){
+      var logEl=document.getElementById('osu-log'), stEl=document.getElementById('osu-state'),
+          spin=document.getElementById('osu-spin');
+      if(logEl){ var atBottom=logEl.scrollTop+logEl.clientHeight >= logEl.scrollHeight-30;
+        logEl.textContent=d.log||'';                     // textContent: apt output is never HTML
+        if(atBottom) logEl.scrollTop=logEl.scrollHeight; }
+      if(d.done){
+        if(spin) spin.style.display='none';
+        var ok=(d.rc===0);
+        if(stEl){ stEl.className='small mb-2 '+(ok?'text-success':'text-danger');
+          stEl.innerHTML=ok?'<i class="bi bi-check-circle-fill"></i> Updates installed.'
+                           :'<i class="bi bi-x-circle-fill"></i> Finished with errors (exit '+d.rc+') — see the log above.'; }
+        var info=document.getElementById('update-info');
+        if(info) info.innerHTML=ok?'<span class="text-success"><i class="bi bi-check-circle"></i> Updates installed.</span>'
+                                  :'<span class="text-danger">Update finished with errors — see the popup.</span>';
+        if(typeof checkUpdates==='function') checkUpdates();   // recount → should drop to 0
+        if(window.rebootNagCheck){ if(IS_LOCAL && window.LOCAL_HOST_ID!=null) rebootNagCheck(window.LOCAL_HOST_ID,'the panel host');
+                                   else if(!IS_LOCAL) rebootNagCheck(REMOTE_ID, REMOTE_NAME); }   // kernel update -> banner
+        return;
+      }
+      _osuStale = d.running ? 0 : (_osuStale+1);
+      if(_osuStale>=3){ if(spin) spin.style.display='none';
+        if(stEl){ stEl.className='small mb-2 text-warning';
+          stEl.innerHTML='<i class="bi bi-exclamation-triangle"></i> The update process ended without a completion marker — check the log.'; }
+        return; }
+      if(stEl && d.running) stEl.innerHTML='<i class="bi bi-hourglass-split"></i> Installing… (safe to close this popup — it keeps running)';
+      _osuTimer=setTimeout(_pollOsUpdate, 1500);
+    }).catch(function(){ _osuTimer=setTimeout(_pollOsUpdate, 3000); });
 }
 function rebootRemote(){
   // Check for players on ANY game server on this host first — a reboot disconnects them all.

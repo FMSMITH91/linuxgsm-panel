@@ -110,6 +110,7 @@ from ssh_manager import (
     remote_ufw_close_port, remote_ufw_allow_game_port, remote_ufw_close_game_port,
     remote_ufw_allow_game_ports, remote_ufw_close_by_name,
     remote_os_check_updates, remote_os_run_updates,
+    remote_os_update_start, remote_os_update_status,
     remote_fail2ban_overview, remote_fail2ban_unban, remote_security_log,
     remote_reboot, remote_reboot_required, remote_uptime,
     remote_bootstrap_vps, remote_check_tailscale,
@@ -4636,6 +4637,32 @@ def register_routes(app):
         success, msg = remote_os_run_updates(remote)
         log_action(current_user, "remote_os_update", target=remote.name, success=success)
         return jsonify({"success": success, "message": msg})
+
+    @app.route("/api/remote/<int:remote_id>/os-update/start", methods=["POST"])
+    @login_required
+    @permission_required(MANAGE_REMOTES)
+    def api_remote_os_update_start(remote_id):
+        """Start a detached, watchable OS update; the popup polls .../os-update/status for live output."""
+        remote = get_remote(remote_id)
+        try:
+            ok, msg = remote_os_update_start(remote)
+            if ok:
+                log_action(current_user, "remote_os_update", target=remote.name, detail="started")
+            return jsonify({"success": ok, "message": msg})
+        except Exception:
+            return jsonify({"success": False, "message": _log_and_generic("couldn't start update")}), 500
+
+    @app.route("/api/remote/<int:remote_id>/os-update/status")
+    @login_required
+    @permission_required(MANAGE_REMOTES)
+    def api_remote_os_update_status(remote_id):
+        """Live output + running/done state of the OS update, for the watch popup."""
+        remote = get_remote(remote_id)
+        try:
+            return jsonify(remote_os_update_status(remote))
+        except Exception:
+            return jsonify({"running": False, "done": True, "rc": None,
+                            "log": "", "error": _log_and_generic("status read failed")}), 200
 
     @app.route("/api/remote/<int:remote_id>/players")
     @login_required

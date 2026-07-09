@@ -2775,13 +2775,67 @@ def remote_os_check_updates(server):
 
 
 def remote_os_run_updates(server):
-    """Run apt upgrade on the remote server."""
+    """Run apt upgrade on the remote server (blocking; kept for callers that want a one-shot).
+    The UI uses the streaming remote_os_update_start/_status pair instead."""
     out, err, rc = run_command(server,
         "DEBIAN_FRONTEND=noninteractive apt upgrade -y "
         "-o Dpkg::Options::='--force-confdef' -o Dpkg::Options::='--force-confold' 2>&1",
         timeout=600, sudo=True
     )
     return rc == 0, out[-300:] if out else err[:300]
+
+
+# Host-side log the detached OS-update job streams to, so the popup can watch it live.
+_OS_UPDATE_LOG = "/tmp/panel-os-update.log"
+_OS_UPDATE_DONE = "PANEL_OS_UPDATE_DONE:"   # sentinel line the job appends with the exit code
+
+
+def remote_os_update_start(server):
+    """Kick off `apt upgrade` DETACHED, streaming output to a log the UI polls, so it survives the
+    request and can be watched live. Fully non-interactive with SAFE auto-answers — keep any existing
+    config file on a conflict (never clobber your edits) and assume-yes — so it can't hang waiting on
+    a prompt; the log records what it decided. Returns (ok, message)."""
+    # Don't launch a second run on top of one already going.
+    chk, _, _ = run_command(
+        server, "pgrep -f 'apt-get (upgrade|dist-upgrade|full-upgrade)' >/dev/null 2>&1 && echo RUN || echo IDLE",
+        timeout=10, sudo=True)
+    if "RUN" in (chk or ""):
+        return True, "An update is already running — watching it."
+    log = _OS_UPDATE_LOG
+    inner = (
+        ": > {L} 2>/dev/null || true; "
+        "echo \"=== OS update started $(date) ===\" >> {L} 2>&1; "
+        "export DEBIAN_FRONTEND=noninteractive; "
+        "apt-get update >> {L} 2>&1; "
+        "apt-get -y -o Dpkg::Options::='--force-confold' -o Dpkg::Options::='--force-confdef' upgrade >> {L} 2>&1; "
+        "rc=$?; "
+        "apt-get -y autoremove >> {L} 2>&1 || true; "
+        "echo \"{S}$rc\" >> {L} 2>&1"
+    ).format(L=log, S=_OS_UPDATE_DONE)
+    # setsid + detached stdio + & so it outlives the SSH channel / this request.
+    cmd = "setsid bash -c {} </dev/null >/dev/null 2>&1 & echo __STARTED__".format(_quote(inner))
+    out, _, _ = run_command(server, cmd, timeout=20, sudo=True)
+    if "__STARTED__" in (out or ""):
+        return True, "Update started."
+    return False, "Couldn't start the update."
+
+
+def remote_os_update_status(server):
+    """Live status of the running/last OS update: {running, done, rc, log}. `done` is set once the
+    detached job appends its sentinel; `running` reflects whether apt is still working."""
+    out, _, _ = run_command(server, "tail -c 20000 {} 2>/dev/null".format(_OS_UPDATE_LOG),
+                            timeout=15, sudo=True)
+    log = out or ""
+    m = re.search(re.escape(_OS_UPDATE_DONE) + r"(-?\d+)", log)
+    done = m is not None
+    rc = int(m.group(1)) if m else None
+    if done:
+        log = re.sub(r"\n?" + re.escape(_OS_UPDATE_DONE) + r"-?\d+\s*$", "", log)
+        return {"running": False, "done": True, "rc": rc, "log": log}
+    # No sentinel yet — is apt still working?
+    alive, _, _ = run_command(server, "pgrep -f apt-get >/dev/null 2>&1 && echo Y || echo N",
+                              timeout=10, sudo=True)
+    return {"running": "Y" in (alive or ""), "done": False, "rc": None, "log": log}
 
 
 def remote_reboot(server):
