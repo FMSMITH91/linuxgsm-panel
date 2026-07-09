@@ -30,8 +30,7 @@
 {% if remote.is_local %}
 <div class="alert alert-info py-2 small mb-3" style="background: rgba(16,185,129,.08); border-color: var(--accent);">
   <i class="bi bi-info-circle"></i>
-  <strong>This is the server the LinuxGSM Panel itself runs on.</strong>
-  It's managed exactly like a remote server, plus a couple of panel-specific extras (panel updates below).
+  <strong>The server the panel runs on</strong> — managed like any remote host, with panel-only extras below.
 </div>
 {% endif %}
 
@@ -114,7 +113,6 @@
     <div class="card h-100">
       <div class="card-header"><i class="bi bi-arrow-repeat"></i> OS Updates</div>
       <div class="card-body">
-        <p class="small text-secondary">Check for and install system package updates on this server.</p>
         <div class="d-flex gap-2 flex-wrap">
           <button class="btn btn-sm btn-outline-secondary" data-action="checkUpdates"><i class="bi bi-search"></i> Check</button>
           <button class="btn btn-sm btn-outline-primary" data-action="runUpdates"><i class="bi bi-download"></i> Install updates</button>
@@ -129,7 +127,7 @@
     <div class="card h-100">
       <div class="card-header"><i class="bi bi-shield-fill-check"></i> Firewall</div>
       <div class="card-body">
-        <p class="small text-secondary">Open or close ports (UFW) on this server. Game ports are opened automatically at install.</p>
+        <p class="small text-secondary">Game ports open automatically at install.</p>
         <a href="{{ url_for('remote_firewall', remote_id=remote.id) }}" class="btn btn-sm btn-outline-secondary">
           <i class="bi bi-shield-lock"></i> Manage firewall
         </a>
@@ -142,7 +140,7 @@
     <div class="card h-100">
       <div class="card-header"><i class="bi bi-power"></i> Power</div>
       <div class="card-body">
-        <p class="small text-secondary">{% if remote.is_local %}Reboot the panel host. This briefly takes down the panel <strong>and</strong> every game server on it.{% else %}Reboot this server. Game servers with autostart will come back on their own.{% endif %}</p>
+        <p class="small text-secondary">{% if remote.is_local %}Takes down the panel <strong>and</strong> every game server on it.{% else %}Autostart servers come back on their own.{% endif %}</p>
         <button class="btn btn-sm btn-outline-warning" data-action="rebootRemote"><i class="bi bi-power"></i> Reboot server</button>
       </div>
     </div>
@@ -157,7 +155,7 @@
     <button class="btn btn-sm btn-outline-primary" id="disc-scan-btn" data-action="scanExisting"><i class="bi bi-search"></i> Scan</button>
   </div>
   <div class="card-body">
-    <p class="small text-secondary mb-2">Finds LinuxGSM game servers already installed under any user account on this host — with their backups, installed mods and scheduled tasks — and adds the ones not yet in the panel. It's read-only until you import; once imported, the panel shows each server's cron, backups and mods live.</p>
+    <p class="small text-secondary mb-2">Finds LinuxGSM servers already installed on this host (any user) and imports the ones missing from the panel — with their backups, mods and cron. Read-only until you import.</p>
     <div id="disc-result"></div>
   </div>
 </div>
@@ -195,7 +193,7 @@
           <button class="btn btn-sm btn-outline-warning" id="pu-branch-switch" data-action="switchPanelBranch"><i class="bi bi-shuffle"></i> Switch</button>
           <span id="pu-branch-msg" class="small"></span>
         </div>
-        <div class="form-text mt-1">Switching checks out that branch's code and restarts, with the same backup + auto-rollback as an update. Non-<code>main</code> branches skip CI verification — intended for testing.</div>
+        <div class="form-text mt-1">Checks out that branch and restarts, with the same backup + auto-rollback. Non-<code>main</code> branches skip CI — for testing.</div>
       </div>
     </div>
     <!-- Live update progress (the installer's [1/5]…[5/5] steps, streamed) -->
@@ -213,9 +211,7 @@
   </div>
   <div class="card-body">
     <p class="small text-secondary mb-2">
-      Saves the panel's database, settings and encryption keys as a single file, so you can
-      roll back a bad change or recover after a failure. <strong class="text-warning">A backup contains secrets</strong> —
-      keep any downloaded copies somewhere safe.
+      Database, settings and encryption keys in one file. <strong class="text-warning">Contains secrets</strong> — keep any downloads safe.
     </p>
     <div class="d-flex gap-3 flex-wrap align-items-center mb-2">
       <div class="form-check form-switch mb-0">
@@ -249,11 +245,8 @@
       <button class="btn btn-sm btn-outline-success" id="fb-now" data-action="runFullBackup" data-args='["@self"]'><i class="bi bi-play-circle"></i> Back up game servers now</button>
     </div>
     <p class="small text-secondary mb-2">
-      Uses LinuxGSM's own backup per installed server (stored on each host under
-      <code>~/lgsm/backup</code>, browsable from Files &amp; Config). These can be large, so they
-      run on a longer schedule and only the newest few per server are kept. A running server is
-      briefly stopped and restarted while it's archived. The settings below are the
-      <strong>default</strong> — each server can override its own schedule in the list further down.
+      LinuxGSM's own per-server backup (under <code>~/lgsm/backup</code>). These get large, so only the newest few are kept
+      and a running server is briefly restarted while archiving. Below are the <strong>default</strong> settings — each server can override.
     </p>
     <div class="d-flex gap-3 flex-wrap align-items-center mb-2">
       <div class="form-check form-switch mb-0">
@@ -297,9 +290,7 @@
   </div>
   <div class="card-body">
     <p class="small text-secondary mb-2">
-      Verifies the panel's own health — that its code files haven't been altered, and that the
-      database, keys, config, disk, certificate and service are all OK. If any panel file was
-      edited or deleted, you can restore it to the installed version with one click.
+      Checks the panel's own health — code integrity, database, keys, config, disk, certificate and service. Restore any altered file in one click.
     </p>
     <div class="d-flex gap-2 align-items-center mb-2">
       <button class="btn btn-sm btn-outline-secondary" id="diag-run-btn" data-action="runDiagnostics">
@@ -347,8 +338,7 @@
       </div>
       <div id="diag-dbhealth-result" class="small mt-1"></div>
       <div class="small text-secondary mt-1">
-        Reclaims freed space and refreshes query statistics (VACUUM + ANALYZE). Safe to run anytime;
-        the only table that grows over time is the audit log.
+        Reclaims space and refreshes query stats (VACUUM + ANALYZE). Safe to run anytime.
       </div>
     </div>
 
@@ -365,8 +355,7 @@
         <span id="diag-autoupd-msg" class="small"></span>
       </div>
       <div class="small text-secondary mt-1">
-        Keeps the underlying OS patched on its own (installs the unattended-upgrades package) —
-        recommended for a box that runs unattended.
+        Patches the OS on its own (unattended-upgrades). Recommended for an unattended box.
       </div>
     </div>
 
@@ -383,9 +372,8 @@
         <span id="diag-panelf2b-msg" class="small"></span>
       </div>
       <div class="small text-secondary mt-1">
-        The panel already rate-limits per IP; this adds a fail2ban jail on the panel host that
-        <strong>bans</strong> an IP at the firewall after 5 failed logins in 10 minutes (1-hour ban),
-        which survives a panel restart. Recommended if the panel is reachable from the public internet.
+        <strong>Bans</strong> an IP at the firewall after 5 failed logins in 10 minutes (1-hour ban), on top of
+        the built-in per-IP rate limit. Recommended if the panel is reachable from the public internet.
       </div>
     </div>
 
@@ -394,9 +382,7 @@
       <hr class="my-2">
       <div class="small text-secondary mb-1"><i class="bi bi-bug"></i> Report an issue</div>
       <p class="small text-secondary mb-2">
-        Builds a diagnostic report — panel version, health checks, OS, and a redacted log tail
-        (credentials, keys, tokens and emails are excluded). Review it, then download it or open a
-        pre-filled GitHub issue to send it to the maintainers.
+        Builds a diagnostic report — version, health, OS and a redacted log tail (no secrets). Download it or open a pre-filled GitHub issue.
       </p>
       <div class="d-flex gap-2 align-items-center mb-2 flex-wrap">
         <button class="btn btn-sm btn-outline-secondary" id="diag-report-btn" data-action="genDebugReport">
@@ -454,7 +440,7 @@
           <code>{{ status.tailscale_interface if status else 'tailscale0' }}</code>
           {% if status and status.tailscale_ufw_allowed %}<span class="badge bg-success">Allowed</span>{% else %}<span class="badge bg-warning text-dark">Not allowed</span>{% endif %}
         </div>
-        <p class="small text-secondary mb-1">Allowing the <code>tailscale0</code> interface in UFW keeps the panel reachable over the tailnet.</p>
+        <p class="small text-secondary mb-1">Keeps the panel reachable over the tailnet in UFW.</p>
         <button class="btn btn-sm btn-success" data-action="ufwAllowTailscale"
                 {% if (status and status.tailscale_ufw_allowed) or not ts_up %}disabled{% if not ts_up %} title="Tailscale isn't installed/connected on this host"{% endif %}{% endif %}>
           <i class="bi bi-shield-check"></i> Allow Tailscale Interface</button>
@@ -468,7 +454,7 @@
            node is installed-but-not-linked (NeedsLogin), which would strand the user. #}
         {% set ssh_lockdown_safe = ts_up and (status.tailscale_ssh.enabled or status.tailscale_ufw_allowed) %}
         <div class="small text-secondary mb-1">Public SSH (port 22 from the internet) — current: <strong id="ssh-mode">…</strong></div>
-        <p class="small text-secondary mb-1">Tailscale SSH keeps working regardless. Once you can reach this host over the tailnet, rate-limit or fully disable public SSH.{% if not ssh_lockdown_safe %} <span class="text-warning">{% if not ts_up %}<a href="{{ url_for('tailscale_page') }}">Connect Tailscale (link this machine)</a> first{% else %}Enable Tailscale SSH or allow the <code>tailscale0</code> interface first{% endif %} to safely disable public SSH — otherwise you'd lock yourself out.</span>{% endif %}</p>
+        <p class="small text-secondary mb-1">Tailscale SSH keeps working regardless — rate-limit or disable public SSH once you're on the tailnet.{% if not ssh_lockdown_safe %} <span class="text-warning">{% if not ts_up %}<a href="{{ url_for('tailscale_page') }}">Connect Tailscale (link this machine)</a> first{% else %}Enable Tailscale SSH or allow the <code>tailscale0</code> interface first{% endif %} to safely disable public SSH — otherwise you'd lock yourself out.</span>{% endif %}</p>
         <div class="d-flex gap-2 flex-wrap">
           <button class="btn btn-sm btn-outline-secondary" data-ssh-btn="allow" data-action="sshMode" data-args='["allow"]' title="Open port 22 to the internet">Allow</button>
           <button class="btn btn-sm btn-outline-primary" data-ssh-btn="limit" data-action="sshMode" data-args='["limit"]' title="Rate-limit port 22 (brute-force protection)">Limit</button>
@@ -479,10 +465,10 @@
       <div class="col-md-6">
         <div class="small text-secondary mb-1">Public panel access (port {{ (config.port if config else 5000) }})</div>
         {% if config and config.tailscale_setup_done %}
-        <p class="small text-secondary mb-1">Tailscale Serve is set up, so the panel is reachable on your tailnet. Close the public web port to make the panel <strong>tailnet-only</strong> — no open ports.</p>
+        <p class="small text-secondary mb-1">Close the public web port to make the panel <strong>tailnet-only</strong> — no open ports.</p>
         <button class="btn btn-sm btn-outline-danger" id="close-panel-btn" data-action="closePanelPort"><i class="bi bi-shield-lock"></i> Close public panel port (tailnet-only)</button>
         {% else %}
-        <p class="small text-secondary mb-1">Set up <a href="{{ url_for('tailscale_page') }}">Tailscale Serve</a> first — then you can close the public web port and make the panel tailnet-only without locking yourself out.</p>
+        <p class="small text-secondary mb-1">Set up <a href="{{ url_for('tailscale_page') }}">Tailscale Serve</a> first, then you can close the public port safely.</p>
         <button class="btn btn-sm btn-outline-secondary" disabled title="Set up Tailscale Serve first"><i class="bi bi-shield-lock"></i> Close public panel port</button>
         {% endif %}
         <div id="panel-port-msg" class="small mt-1"></div>
@@ -492,7 +478,7 @@
       <div class="col-md-8">
         {% set _bind = (config.bind_host if config else '0.0.0.0') or '0.0.0.0' %}
         <div class="small text-secondary mb-1">Panel binding <span class="text-secondary">(where the panel web server listens)</span></div>
-        <p class="small text-secondary mb-1">Change the bind address and/or port. The panel briefly restarts to apply it{% if config and config.tailscale_setup_done %} — your Tailscale URL stays the same.{% else %}, then reconnect on the new address/port.{% endif %}</p>
+        <p class="small text-secondary mb-1">The panel restarts to apply{% if config and config.tailscale_setup_done %} — your Tailscale URL stays the same.{% else %}; reconnect on the new address/port.{% endif %}</p>
         <div class="d-flex gap-2 flex-wrap align-items-end">
           <div>
             <label class="form-label small mb-1" for="panel-bind-select">Bind address</label>
@@ -557,7 +543,7 @@
       </div>
       <div class="col-md-6">
         <div class="small text-secondary mb-1">Public SSH (port 22 from the internet) — current: <strong id="ssh-mode">…</strong></div>
-        <p class="small text-secondary mb-1">Tailscale SSH keeps working regardless. If you're on the tailnet you can rate-limit or fully disable public SSH.</p>
+        <p class="small text-secondary mb-1">Tailscale SSH keeps working regardless — rate-limit or disable public SSH once you're on the tailnet.</p>
         <div class="d-flex gap-2 flex-wrap">
           <button class="btn btn-sm btn-outline-secondary" data-ssh-btn="allow" data-action="sshMode" data-args='["allow"]' title="Open port 22 to the internet">Allow</button>
           <button class="btn btn-sm btn-outline-primary" data-ssh-btn="limit" data-action="sshMode" data-args='["limit"]' title="Rate-limit port 22 (brute-force protection)">Limit</button>
@@ -569,7 +555,7 @@
     <div class="row g-3 mt-1">
       <div class="col-12">
         <div class="small text-secondary mb-1"><i class="bi bi-door-closed"></i> SSH port <span class="text-secondary">(the port sshd listens on)</span> — current: <code>{{ remote.port }}</code></div>
-        <p class="small text-secondary mb-1">Moving SSH off port 22 stops most automated scanning and brute-force. This is lockout-safe — the current port stays open as a fallback, and the firewall and fail2ban are updated to the new port. Close the old port from the <a href="{{ url_for('remote_firewall', remote_id=remote.id) }}">Firewall</a> page once you've confirmed the new one, and the panel will use the new port automatically.</p>
+        <p class="small text-secondary mb-1">Moving off port 22 stops most scanning. Lockout-safe — the old port stays open as a fallback and firewall + fail2ban follow. Close the old port from <a href="{{ url_for('remote_firewall', remote_id=remote.id) }}">Firewall</a> once you've confirmed the new one.</p>
         <div class="d-flex gap-2 flex-wrap align-items-end">
           <div>
             <label class="form-label small mb-1" for="ssh-port-input">New SSH port</label>
@@ -593,7 +579,7 @@
         <div class="small text-secondary mb-1"><i class="bi bi-fingerprint"></i> Pinned SSH host key:
           {% if remote.host_key_fingerprint %}<code>{{ remote.host_key_fingerprint }}</code>{% else %}<span class="text-warning">not pinned yet — pins automatically on first connection</span>{% endif %}
         </div>
-        <p class="small text-secondary mb-1">The panel remembers this server's SSH host key and refuses to connect if it changes — protection against a man-in-the-middle. If you reinstalled or rebuilt the server its key changed legitimately; re-trust it to pin the new one.</p>
+        <p class="small text-secondary mb-1">Pins this server's SSH host key and refuses to connect if it changes (MITM protection). Reinstalled the server? Re-trust to pin the new key.</p>
         <button class="btn btn-sm btn-outline-warning" data-action="retrustHostKey"><i class="bi bi-arrow-repeat"></i> Re-trust host key</button>
         <div id="hostkey-msg" class="small mt-1"></div>
       </div>
@@ -1566,7 +1552,7 @@ function fbPlayersDialog(busy){
     +'<div class="card-header"><i class="bi bi-people-fill"></i> Players are online</div>'
     +'<div class="card-body">'
     +'<p class="mb-2"><strong>'+total+'</strong> player'+(total===1?' is':'s are')+' connected to <strong>'+busy.length+'</strong> server'+(busy.length===1?'':'s')+': '+list+'.</p>'
-    +'<p class="small text-secondary mb-3">A backup briefly stops each server. Empty servers get backed up either way — this is about the busy ones.</p>'
+    +'<p class="small text-secondary mb-3">A backup briefly stops each server — this is about the busy ones.</p>'
     +'<div class="d-flex flex-column gap-2">'
     +'<button class="btn btn-warning" id="fbd-now"><i class="bi bi-play-circle"></i> Back up now (disconnects '+total+' player'+(total===1?'':'s')+')</button>'
     +'<button class="btn btn-success" id="fbd-wait"><i class="bi bi-hourglass-split"></i> Wait until they\'re empty, then back up</button>'
