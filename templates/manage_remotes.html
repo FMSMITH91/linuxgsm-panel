@@ -615,7 +615,7 @@ function _migrateToTailscale(remoteId) {
           + (data.dns_name ? 'DNS: <code>' + data.dns_name + '</code>' : '')
           + '</p>'
           + '<div class="d-flex gap-2 mt-2">'
-          + '<button class="btn btn-primary btn-sm"' + _da('_reloadPage') + '><i class="bi bi-arrow-repeat"></i> Refresh Page</button>'
+          + '<button class="btn btn-primary btn-sm"' + _da('refreshRemotesAndClose') + '><i class="bi bi-check-lg"></i> Done</button>'
           + '<button class="btn btn-danger btn-sm"' + _da('closePort22', [remoteId]) + '><i class="bi bi-shield-lock"></i> Close Port 22 (UFW)</button>'
           + '</div>');
       } else {
@@ -638,7 +638,7 @@ function _closePort22(remoteId) {
     .then(r => r.json())
     .then(data => {
       setModalBody('<div class="' + (data.success ? 'text-success' : 'text-danger') + '"><i class="bi bi-' + (data.success ? 'check-circle' : 'x-circle') + '"></i> ' + escapeHtml(data.message) + '</div>'
-        + '<button class="btn btn-primary btn-sm mt-2"' + _da('_reloadPage') + '><i class="bi bi-arrow-repeat"></i> Refresh Page</button>');
+        + '<button class="btn btn-primary btn-sm mt-2"' + _da('refreshRemotesAndClose') + '><i class="bi bi-check-lg"></i> Done</button>');
     })
     .catch(function() {
       setModalBody('<div class="text-danger"><i class="bi bi-x-circle"></i> Failed to close port 22</div>');
@@ -791,6 +791,14 @@ function showModal(title, body) {
 function setModalBody(html) {
   var el = document.getElementById('ts-modal-body');
   if (el) el.innerHTML = html;
+}
+
+// Close the action modal and pull the fresh remote list into #remotes-list in place — replaces the
+// old "Refresh Page" full reload after a Tailscale migrate / close-port-22.
+function refreshRemotesAndClose(){
+  var modal = document.getElementById('ts-modal');
+  if (modal && window.bootstrap){ var mi = bootstrap.Modal.getInstance(modal); if (mi) mi.hide(); }
+  if (window.refreshSection) window.refreshSection('#remotes-list', 'afterRemotesRefresh');
 }
 
 // The per-remote Tailscale / Prepare buttons (and the generated "Install Tailscale" button) carry

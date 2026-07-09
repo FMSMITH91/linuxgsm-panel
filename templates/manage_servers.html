@@ -357,7 +357,9 @@ function reconcileServerList() {
       var added = liveIds.filter(function(id){ return baseIds.indexOf(id) === -1; });
       if (added.length) {
         if (editingInstallForm()) return;   // don't yank the form out from under the user
-        location.reload();
+        // Pull the freshly server-rendered rows into #servers-list in place (no full reload);
+        // afterServerRefresh re-arms install pollers and re-adopts the baseline.
+        window.refreshSection('#servers-list', 'afterServerRefresh');
         return;
       }
       _svrBaseline = serverIdsOnPage();   // removals only → adopt the reduced set, no reload

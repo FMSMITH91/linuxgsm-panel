@@ -436,7 +436,7 @@
 </div>
 
 <!-- Connection & SSH -->
-<div class="card mb-3" data-mtab="controls">
+<div class="card mb-3" data-mtab="controls" id="conn-ssh-card">
   <div class="card-header"><i class="bi bi-shield-lock"></i> Connection &amp; SSH</div>
   <div class="card-body">
     {% if remote.is_local %}
@@ -613,7 +613,7 @@
 </div>
 
 {% if remote.games %}
-<div class="card" data-mtab="overview">
+<div class="card" data-mtab="overview" id="host-servers-card">
   <div class="card-header"><i class="bi bi-controller"></i> Game Servers on this host</div>
   <div class="card-body p-0">
     <div class="table-responsive">
@@ -872,7 +872,7 @@ function retrustHostKey(){
     onConfirm:function(){
       var m=document.getElementById('hostkey-msg'); m.innerHTML='<span class="text-secondary"><i class="bi bi-arrow-repeat"></i> Clearing…</span>';
       fetch(MOUNT+'/api/remote/'+REMOTE_ID+'/retrust-hostkey',{method:'POST'}).then(r=>r.json())
-        .then(d=>{ m.innerHTML='<span class="text-'+(d.success?'success':'danger')+'">'+(d.message||(d.success?'Done':'Failed'))+'</span>'; if(d.success) setTimeout(function(){location.reload();},1000); })
+        .then(d=>{ m.innerHTML='<span class="text-'+(d.success?'success':'danger')+'">'+(d.message||(d.success?'Done — the next connection re-pins the key':'Failed'))+'</span>'; })
         .catch(()=>{ m.innerHTML='<span class="text-danger">Request failed.</span>'; });
     }});
 }
@@ -1005,7 +1005,7 @@ function switchToTailscale(){
 function _switchToTailscale(){
   var el=document.getElementById('migrate-msg'); el.textContent='Migrating…'; el.className='small mt-1 text-secondary';
   fetch(MOUNT+'/api/remote/'+REMOTE_ID+'/tailscale-migrate',{method:'POST'}).then(r=>r.json())
-    .then(d=>{ if(d.success){ el.textContent='✓ '+(d.message||'Migrated')+' — reloading…'; el.className='small mt-1 text-success'; setTimeout(function(){location.reload();},1500); } else { el.textContent='✗ '+(d.message||'Failed'); el.className='small mt-1 text-danger'; } })
+    .then(d=>{ if(d.success){ el.textContent='✓ '+(d.message||'Migrated'); el.className='small mt-1 text-success'; setTimeout(function(){window.refreshSection('#conn-ssh-card');},1200); } else { el.textContent='✗ '+(d.message||'Failed'); el.className='small mt-1 text-danger'; } })
     .catch(()=>{ el.textContent='✗ Migration failed'; el.className='small mt-1 text-danger'; });
 }
 // ── System specs (static — fetched once) ──
@@ -1044,7 +1044,7 @@ function tsSshEnable(){
     bodyText:'Enable Tailscale SSH? This re-authenticates Tailscale with SSH support enabled.',
     onConfirm:function(){
       fetch(MOUNT+'/api/server-management/ts-ssh-enable',{method:'POST'}).then(r=>r.json())
-        .then(d=>{ if(window.toast) toast(d.message||(d.success?'Enabled':'Failed'), d.success?'success':'danger'); if(d.success) setTimeout(function(){location.reload();},800); })
+        .then(d=>{ if(window.toast) toast(d.message||(d.success?'Enabled':'Failed'), d.success?'success':'danger'); if(d.success) setTimeout(function(){window.refreshSection('#conn-ssh-card');},800); })
         .catch(()=>{ if(window.toast) toast('Failed to enable Tailscale SSH','danger'); });
     }});
 }
@@ -1053,13 +1053,13 @@ function tsSshDisable(){
     bodyText:'Disable Tailscale SSH?',
     onConfirm:function(){
       fetch(MOUNT+'/api/server-management/ts-ssh-disable',{method:'POST'}).then(r=>r.json())
-        .then(d=>{ if(window.toast) toast(d.message||(d.success?'Disabled':'Failed'), d.success?'success':'danger'); if(d.success) setTimeout(function(){location.reload();},800); })
+        .then(d=>{ if(window.toast) toast(d.message||(d.success?'Disabled':'Failed'), d.success?'success':'danger'); if(d.success) setTimeout(function(){window.refreshSection('#conn-ssh-card');},800); })
         .catch(()=>{ if(window.toast) toast('Failed to disable Tailscale SSH','danger'); });
     }});
 }
 function ufwAllowTailscale(){
   fetch(MOUNT+'/api/server-management/ufw-allow-tailscale',{method:'POST'}).then(r=>r.json())
-    .then(d=>{ if(window.toast) toast(d.message||(d.success?'Allowed':'Failed'), d.success?'success':'danger'); if(d.success) setTimeout(function(){location.reload();},800); })
+    .then(d=>{ if(window.toast) toast(d.message||(d.success?'Allowed':'Failed'), d.success?'success':'danger'); if(d.success) setTimeout(function(){window.refreshSection('#conn-ssh-card');},800); })
     .catch(()=>{ if(window.toast) toast('Failed to configure UFW','danger'); });
 }
 function renderUpdate(d){
@@ -1808,7 +1808,10 @@ function importExisting(btn){
     body:JSON.stringify({servers:picks})})
     .then(function(r){return r.json();}).then(function(d){
       var n=(d.added||[]).length;
-      if(n){ window.toast('Imported '+n+' server'+(n===1?'':'s')+'.', 'success'); setTimeout(function(){ location.reload(); }, 1200); }
+      if(n){ window.toast('Imported '+n+' server'+(n===1?'':'s')+'.', 'success');
+             if(msg) msg.innerHTML='<span class="text-success">Imported '+n+' — see the Game Servers list.</span>';
+             btn.disabled=false; btn.innerHTML='<i class="bi bi-plus-circle"></i> Import selected';
+             window.refreshSection('#host-servers-card'); }   // show the new rows in place, no reload
       else { if(msg) msg.innerHTML='<span class="text-danger">'+escapeHtml(d.message||'Nothing imported.')+'</span>';
              btn.disabled=false; btn.innerHTML='<i class="bi bi-plus-circle"></i> Import selected'; }
     }).catch(function(){ if(msg) msg.innerHTML='<span class="text-danger">Import failed.</span>';

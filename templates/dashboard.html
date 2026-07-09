@@ -87,6 +87,7 @@
 {% if can_control %}{{ bulk_bar('top') }}{% endif %}
 
 <!-- Server cards grouped by remote -->
+<div id="server-cards">
 {% for remote in remotes %}
 {% set remote_servers = servers|selectattr('remote_id', 'equalto', remote.id)|list %}
 {% if remote_servers %}
@@ -154,6 +155,7 @@
 {% endif %}
 {% endfor %}
 <div id="srv-none" class="card" style="display:none;"><div class="card-body text-center text-secondary py-4">No servers match your filter.</div></div>
+</div>
 
 {% if can_control %}{{ bulk_bar('bottom') }}{% endif %}
 
@@ -197,10 +199,14 @@ function refreshStatus() {
   fetch(MOUNT + '/api/servers')
     .then(r => r.json())
     .then(data => {
-      // If the set of servers changed underneath us (another user installed/uninstalled
-      // one), the rows are server-rendered — reload so this session shows the same reality.
+      // If the set of servers changed underneath us (another user installed/uninstalled one), the
+      // rows are server-rendered — pull the fresh cards into #server-cards in place (no reload).
       var liveIds = data.map(function(s){ return String(s.id); }).sort().join(',');
-      if (_serverIdsBaseline !== null && liveIds !== _serverIdsBaseline) { location.reload(); return; }
+      if (_serverIdsBaseline !== null && liveIds !== _serverIdsBaseline) {
+        _serverIdsBaseline = liveIds;   // adopt now so this doesn't re-fire while the swap is in flight
+        window.refreshSection('#server-cards', 'afterDashRefresh');
+        return;
+      }
       var online = data.filter(s => s.status === 'online').length;
       var offline = data.filter(s => s.status === 'offline').length;
       var oc = document.getElementById('online-count');
@@ -252,6 +258,13 @@ refreshStatus();              // populate status + connect immediately
 pollWhenVisible(refreshStatus, 8000);
 // Instant reaction when another user adds/removes a server (poll above is the fallback).
 if (window.onServersChanged) onServersChanged(refreshStatus);
+
+// After #server-cards is swapped in place (a server appeared/disappeared elsewhere), re-apply the
+// search filter and repaint live statuses/connect cells onto the fresh rows — no full-page reload.
+window.afterDashRefresh = function(){
+  if (typeof filterServers === 'function') filterServers();
+  refreshStatus();
+};
 
 function copyAddr(addr) {
   window.copyText(addr, 'Copied');

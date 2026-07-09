@@ -752,14 +752,27 @@ window.escapeHtml = function(s){
 // Language picker — one delegated handler for every page's <select data-lang-select>
 // (sidebar, login, account, setup wizard; all extend this template). The target URL rides
 // in a data-attribute so no Jinja sits in a JS-parsed context, then LANGCODE is swapped for
-// the chosen value and the page reloads in the new language.
+// the chosen value. Sets the language server-side, then re-renders the sidebar + main content in
+// place in the new language (both are plain links / delegated handlers) — no full-page reload.
 document.addEventListener('change', function(e){
   var el = e.target;
   if (!el || !el.matches || !el.matches('select[data-lang-select]') || !el.value) return;
   var tmpl = el.getAttribute('data-lang-url') || '';
   if (!tmpl) return;
   fetch(tmpl.replace('LANGCODE', encodeURIComponent(el.value)) + '?ajax=1', {cache: 'no-store'})
-    .then(function(){ location.reload(); });
+    .then(function(){
+      return fetch(location.href, { headers: { 'X-Requested-With': 'XMLHttpRequest' }, cache: 'no-store' })
+        .then(function(r){ return r.text(); });
+    })
+    .then(function(html){
+      var doc = new DOMParser().parseFromString(html, 'text/html');
+      ['#sidebar', '.content-wrap'].forEach(function(sel){
+        var fresh = doc.querySelector(sel), cur = document.querySelector(sel);
+        if (fresh && cur) cur.innerHTML = fresh.innerHTML;
+      });
+      try { document.documentElement.lang = el.value; } catch(err){}
+    })
+    .catch(function(){});
 });
 
 // Recurring poll that PAUSES while the tab is hidden and refreshes immediately when it
@@ -968,7 +981,6 @@ window._da = function(action, args, on){        // build the attributes from JS 
 };
 // Global wrappers so method-calls / statements that used to sit in inline handlers can be reached
 // by name from the data-action dispatcher (window[name] must be a function).
-window._reloadPage = function(){ location.reload(); };
 window._uproAttach = function(){ if (window.UPro) UPro.attach(); };
 window._uproDetach = function(){ if (window.UPro) UPro.detach(); };
 window._uproService = function(name, action){ if (window.UPro) UPro.service(name, action); };
