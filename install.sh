@@ -461,14 +461,17 @@ if [ "${IS_UPDATE}" -eq 1 ]; then
     BACKUP="${BACKUP_ROOT}/${STAMP}"
     info "[1/6] Snapshotting current version + database → ${BACKUP}"
     mkdir -p "${BACKUP}"
+    # Compressor: pigz (parallel gzip) when present — ~3.5x faster than gzip on a multi-core box for
+    # the same size — else gzip -1 (fastest single-core). The level barely matters here: the payload
+    # is mostly already-compressed data (git packs + screenshots), so we pick speed. pigz/gzip both
+    # emit a standard .tgz, so rollback (tar -xzf) reads old + new snapshots.
+    if command -v pigz >/dev/null 2>&1; then SNAP_GZ="pigz -6"; else SNAP_GZ="gzip -1"; fi
     # Snapshot the code (minus venv/data) so we can restore the exact prior version…
-    # gzip -1 (fastest) not default -6: on a 1-core VPS the snapshot shouldn't burn CPU for a few
-    # KB of extra compression. Still a valid .tgz, so rollback (tar -xzf) reads old + new snapshots.
-    tar -C "${PANEL_DIR}" --exclude=./venv --exclude=./data -cf - . 2>/dev/null | gzip -1 > "${BACKUP}/code.tgz"
+    tar -C "${PANEL_DIR}" --exclude=./venv --exclude=./data -cf - . 2>/dev/null | ${SNAP_GZ} > "${BACKUP}/code.tgz"
     # …and the whole data dir (DB + encryption keys + config), since the app runs a
     # startup migration that mutates the DB — we restore this verbatim on rollback.
     if [ -d "${PANEL_DIR}/data" ]; then
-        tar -C "${PANEL_DIR}/data" --exclude=./.backups -cf - . 2>/dev/null | gzip -1 > "${BACKUP}/data.tgz"
+        tar -C "${PANEL_DIR}/data" --exclude=./.backups -cf - . 2>/dev/null | ${SNAP_GZ} > "${BACKUP}/data.tgz"
     fi
     ok "Snapshot saved"
 
