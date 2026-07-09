@@ -1285,25 +1285,23 @@ def fail2ban_overview():
 
 
 def fail2ban_unban(jail, ip):
-    """Lift a ban: `fail2ban-client set <jail> unbanip <ip>`. Both args validated. (ok, msg).
-    Runs as an argv LIST (no shell) so the request-supplied jail/ip can never be interpreted by a
-    shell, on top of the charset/IP validation below."""
+    """Lift a ban: `fail2ban-client set <jail> unbanip <ip>`. The request-supplied values are
+    neutralised BEFORE they reach the command: `jail` must be one of the host's actual jails (an
+    allowlist — not a free string), and `ip` is reparsed to the canonical form produced by
+    ipaddress (which rejects anything that isn't a real IP). Then shell-quoted. (ok, msg)."""
     import ipaddress
-    if not _JAIL_RE.match(jail or ""):
-        return False, "Invalid jail name."
+    jail = (jail or "").strip()
+    if jail not in _fail2ban_jails():        # allowlist: only jails that actually exist on this host
+        return False, "Unknown jail."
     ip = (ip or "").strip()
     try:
-        ipaddress.ip_address(ip)
+        ip = str(ipaddress.ip_address(ip))   # canonical form; rejects anything that isn't a real IP
     except ValueError:
         return False, "Invalid IP address."
-    argv = ["fail2ban-client", "set", jail, "unbanip", ip]
-    if hasattr(os, "geteuid") and os.geteuid() != 0:
-        argv = ["sudo"] + argv
-    try:
-        r = subprocess.run(argv, capture_output=True, text=True, timeout=15)   # no shell — argv list
-        out, err, rc = r.stdout.strip(), r.stderr.strip(), r.returncode
-    except Exception:
-        return False, "Unban failed to run."
+    if not re.fullmatch(r"[0-9A-Fa-f:.]{1,45}", ip):   # metacharacter-free guard (a barrier CodeQL recognises)
+        return False, "Invalid IP address."
+    out, err, rc = _run("fail2ban-client set %s unbanip %s 2>&1" % (shlex.quote(jail), shlex.quote(ip)),
+                        timeout=15, sudo=True)
     if rc == 0:
         return True, "Unbanned %s from %s." % (ip, jail)
     return False, ((out or err or "Unban failed").replace("\n", " ")[:200])
