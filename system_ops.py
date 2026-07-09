@@ -2,6 +2,7 @@
 import json
 import logging
 import os
+import re
 import shlex
 import subprocess
 import threading
@@ -1248,6 +1249,88 @@ def panel_fail2ban_banned_ips():
         return set()
     m = re.search(r"Banned IP list:\s*(.*)", out)
     return set(p for p in (m.group(1).split() if m else []) if p)
+
+
+_JAIL_RE = re.compile(r"^[A-Za-z0-9._-]{1,64}$")
+
+
+def _fail2ban_jails():
+    """Names of all configured fail2ban jails on this host ([] if fail2ban isn't up)."""
+    out, _, rc = _run("fail2ban-client status 2>/dev/null", timeout=10, sudo=True)
+    if rc != 0 or not out:
+        return []
+    m = re.search(r"Jail list:\s*(.*)", out)
+    return [j.strip() for j in (m.group(1).split(",") if m else []) if _JAIL_RE.match(j.strip())]
+
+
+def fail2ban_jail_detail(jail):
+    """Ban stats for one jail: {jail, currently_banned, total_banned, total_failed, banned_ips[]}
+    or None. Jail name is validated before it reaches the command."""
+    if not _JAIL_RE.match(jail or ""):
+        return None
+    out, _, rc = _run("fail2ban-client status %s 2>/dev/null" % shlex.quote(jail), timeout=10, sudo=True)
+    if rc != 0 or not out:
+        return None
+
+    def _num(label):
+        m = re.search(label + r":\s*(\d+)", out)
+        return int(m.group(1)) if m else 0
+    m = re.search(r"Banned IP list:\s*(.*)", out)
+    ips = [ip for ip in (m.group(1).split() if m else []) if ip]
+    return {"jail": jail, "currently_banned": _num("Currently banned"),
+            "total_banned": _num("Total banned"), "total_failed": _num("Total failed"),
+            "banned_ips": ips}
+
+
+def fail2ban_overview():
+    """Every jail with its ban stats. {'installed': bool, 'jails': [detail,...]}. Best-effort."""
+    have, _, _ = _run("command -v fail2ban-client >/dev/null 2>&1 && echo yes || echo no", timeout=10)
+    if "yes" not in (have or ""):
+        return {"installed": False, "jails": []}
+    details = [d for d in (fail2ban_jail_detail(j) for j in _fail2ban_jails()) if d]
+    return {"installed": True, "jails": details}
+
+
+def fail2ban_unban(jail, ip):
+    """Lift a ban: `fail2ban-client set <jail> unbanip <ip>`. Both args validated. (ok, msg)."""
+    import ipaddress
+    if not _JAIL_RE.match(jail or ""):
+        return False, "Invalid jail name."
+    ip = (ip or "").strip()
+    try:
+        ipaddress.ip_address(ip)
+    except ValueError:
+        return False, "Invalid IP address."
+    out, err, rc = _run("fail2ban-client set %s unbanip %s 2>&1" % (shlex.quote(jail), shlex.quote(ip)),
+                        timeout=15, sudo=True)
+    if rc == 0:
+        return True, "Unbanned %s from %s." % (ip, jail)
+    return False, ((out or err or "Unban failed").replace("\n", " ")[:200])
+
+
+def security_log_tail(which, lines=200):
+    """Tail of a WHITELISTED security log for the raw-log viewer. `which` is one of a fixed set —
+    never a path from the request — so there's no traversal. Returns text (may be empty)."""
+    lines = max(20, min(int(lines or 200), 1000))
+    if which == "panel":
+        import config as _cfg
+        p = os.path.join(str(_cfg.DATA_DIR), "auth.log")
+        try:
+            with open(p, encoding="utf-8", errors="replace") as f:
+                return "".join(f.readlines()[-lines:])
+        except OSError:
+            return ""
+    if which == "fail2ban":
+        out, _, _ = _run("journalctl -u fail2ban --no-pager -n %d 2>/dev/null" % lines, timeout=15, sudo=True)
+        if not out:
+            out, _, _ = _run("tail -n %d /var/log/fail2ban.log 2>/dev/null" % lines, timeout=15, sudo=True)
+        return out or ""
+    if which == "ssh":
+        out, _, _ = _run("journalctl -u ssh -u sshd --no-pager -n %d 2>/dev/null" % (lines * 2), timeout=15, sudo=True)
+        if not out:
+            out, _, _ = _run("tail -n %d /var/log/auth.log 2>/dev/null" % lines, timeout=15, sudo=True)
+        return "\n".join((out or "").splitlines()[-lines:])
+    return ""
 
 
 def configure_panel_fail2ban(auth_log, web_port):

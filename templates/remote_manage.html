@@ -41,6 +41,7 @@
   <li class="nav-item"><button type="button" class="nav-link active" data-mtab-btn="overview"><i class="bi bi-speedometer2"></i> Overview</button></li>
   <li class="nav-item"><button type="button" class="nav-link" data-mtab-btn="controls"><i class="bi bi-sliders"></i> Host Controls</button></li>
   <li class="nav-item"><button type="button" class="nav-link" data-mtab-btn="maintenance"><i class="bi bi-tools"></i> Maintenance</button></li>
+  {% if remote.is_local %}<li class="nav-item"><button type="button" class="nav-link" data-mtab-btn="security"><i class="bi bi-shield-lock"></i> Security</button></li>{% endif %}
 </ul>
 
 <!-- System Specs (static hardware & OS) -->
@@ -387,6 +388,40 @@
     </div>
   </div>
 </div>
+
+<!-- ─── Security tab (panel host only) ───────────────────────── -->
+<div class="card mb-3" data-mtab="security">
+  <div class="card-header d-flex justify-content-between align-items-center">
+    <span><i class="bi bi-slash-circle"></i> Banned IPs (fail2ban)</span>
+    <button class="btn btn-sm btn-outline-secondary" data-action="loadSecurityBans"><i class="bi bi-arrow-repeat"></i> Refresh</button>
+  </div>
+  <div class="card-body">
+    <p class="small text-secondary mb-2">IPs currently banned at the firewall across every fail2ban jail on this host — the panel login and SSH.</p>
+    <div id="sec-bans"><div class="text-secondary small"><i class="bi bi-arrow-repeat"></i> Loading…</div></div>
+  </div>
+</div>
+
+<div class="card mb-3" data-mtab="security">
+  <div class="card-header d-flex justify-content-between align-items-center">
+    <span><i class="bi bi-activity"></i> Recent security events</span>
+    <a class="small" href="{{ url_for('view_logs') }}?action=login_failed">Full audit log →</a>
+  </div>
+  <div class="card-body">
+    <div id="sec-events" class="table-responsive"><div class="text-secondary small"><i class="bi bi-arrow-repeat"></i> Loading…</div></div>
+  </div>
+</div>
+
+<div class="card mb-3" data-mtab="security">
+  <div class="card-header"><i class="bi bi-file-earmark-text"></i> Raw logs</div>
+  <div class="card-body">
+    <div class="d-flex gap-2 flex-wrap mb-2">
+      <button class="btn btn-sm btn-outline-secondary" data-action="loadSecurityLog" data-args='["panel"]'><i class="bi bi-box-arrow-in-right"></i> Panel login log</button>
+      <button class="btn btn-sm btn-outline-secondary" data-action="loadSecurityLog" data-args='["fail2ban"]'><i class="bi bi-shield"></i> fail2ban log</button>
+      <button class="btn btn-sm btn-outline-secondary" data-action="loadSecurityLog" data-args='["ssh"]'><i class="bi bi-terminal"></i> SSH auth log</button>
+    </div>
+    <pre id="sec-log" style="background:var(--bg-elevated);border:1px solid var(--border);border-radius:8px;padding:.5rem .7rem;max-height:340px;overflow:auto;font-size:.72rem;line-height:1.5;white-space:pre-wrap;word-break:break-word;margin:0;">Pick a log above to view its recent lines.</pre>
+  </div>
+</div>
 {% endif %}
 
 <!-- Ubuntu Pro -->
@@ -627,12 +662,68 @@ var IS_LOCAL = {{ 'true' if remote.is_local else 'false' }};
 
 // ── Section tabs: show only the cards for the selected group (Overview / Host Controls /
 // Maintenance). Cards keep their place/markup/JS; we just toggle visibility. The sidebar's
+// ── Security tab: fail2ban bans (panel + ssh), recent events, raw logs ──────────
+function loadSecurity(){ loadSecurityBans(); loadSecurityEvents(); }
+function loadSecurityBans(){
+  var el=document.getElementById('sec-bans'); if(!el) return;
+  fetch(MOUNT+'/api/panel/security/bans').then(function(r){return r.json();}).then(function(d){
+    if(!d.installed){ el.innerHTML='<div class="small text-secondary">fail2ban isn\'t installed on this host.</div>'; return; }
+    if(!d.jails||!d.jails.length){ el.innerHTML='<div class="small text-secondary">No fail2ban jails found.</div>'; return; }
+    el.innerHTML=d.jails.map(function(j){
+      var head='<div class="small mb-1"><strong>'+escapeHtml(j.jail)+'</strong> '
+        +'<span class="badge bg-'+(j.currently_banned?'danger':'secondary')+'">'+j.currently_banned+' banned</span> '
+        +'<span class="text-secondary" style="font-size:.7rem;">'+j.total_banned+' total · '+j.total_failed+' failed</span></div>';
+      var body=(j.banned_ips&&j.banned_ips.length)
+        ? '<div class="d-flex flex-wrap gap-2">'+j.banned_ips.map(function(ip){
+            return '<span class="badge border bg-dark" style="font-weight:normal;">'+escapeHtml(ip)
+              +' <button class="btn btn-link p-0 ms-1 text-danger" style="font-size:.7rem;vertical-align:baseline;"'
+              +_da('unbanIp',[j.jail,ip,'@self'])+' title="Lift this ban">unban</button></span>'; }).join('')+'</div>'
+        : '<div class="text-secondary small">No IPs banned right now.</div>';
+      return '<div class="mb-3">'+head+body+'</div>';
+    }).join('');
+  }).catch(function(){ el.innerHTML='<div class="small text-danger">Could not load bans.</div>'; });
+}
+function unbanIp(jail, ip, btn){
+  if(btn) btn.disabled=true;
+  fetch(MOUNT+'/api/panel/security/unban',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({jail:jail,ip:ip})})
+    .then(function(r){return r.json();}).then(function(d){
+      if(window.toast) toast(d.message||(d.success?'Unbanned':'Failed'), d.success?'success':'danger');
+      loadSecurityBans();
+    }).catch(function(){ if(window.toast) toast('Unban request failed','danger'); if(btn) btn.disabled=false; });
+}
+function loadSecurityEvents(){
+  var el=document.getElementById('sec-events'); if(!el) return;
+  fetch(MOUNT+'/api/panel/security/events').then(function(r){return r.json();}).then(function(d){
+    var ev=d.events||[];
+    if(!ev.length){ el.innerHTML='<div class="small text-secondary">No security events yet.</div>'; return; }
+    var rows=ev.map(function(e){
+      var t=e.time?new Date(e.time).toLocaleString():'';
+      var cls=e.action==='fail2ban_ban'?'text-danger':(e.action==='login_blocked'?'text-warning':'text-secondary');
+      return '<tr><td class="small text-secondary text-nowrap">'+escapeHtml(t)+'</td>'
+        +'<td class="small"><code class="'+cls+'">'+escapeHtml(e.action)+'</code></td>'
+        +'<td class="small">'+escapeHtml(e.user||'')+'</td>'
+        +'<td class="small text-secondary">'+escapeHtml(e.detail||'')+'</td>'
+        +'<td class="small text-secondary">'+escapeHtml(e.ip||e.target||'')+'</td></tr>';
+    }).join('');
+    el.innerHTML='<table class="table table-sm align-middle mb-0"><thead><tr>'
+      +'<th class="small">When</th><th class="small">Event</th><th class="small">User</th><th class="small">Detail</th><th class="small">IP</th></tr></thead><tbody>'+rows+'</tbody></table>';
+  }).catch(function(){ el.innerHTML='<div class="small text-danger">Could not load events.</div>'; });
+}
+function loadSecurityLog(which){
+  var el=document.getElementById('sec-log'); if(!el) return;
+  el.textContent='Loading…';
+  fetch(MOUNT+'/api/panel/security/log?which='+encodeURIComponent(which)).then(function(r){return r.json();}).then(function(d){
+    el.textContent=d.text||'(log is empty)'; el.scrollTop=el.scrollHeight;   // textContent: raw log is never HTML
+  }).catch(function(){ el.textContent='Could not read the log.'; });
+}
+
 // "update available" badge links to #updates, so a hash pointing at a card opens its tab and
 // scrolls to it. ──
 (function(){
   var nav = document.getElementById('mtab-nav'); if(!nav) return;
-  var TABS = ['overview','controls','maintenance'];
+  var TABS = ['overview','controls','maintenance','security'];
   var CARD_TAB = {updates:'maintenance', backups:'maintenance', diagnostics:'maintenance'};
+  var _secLoaded = false;
   function show(tab){
     document.querySelectorAll('[data-mtab]').forEach(function(el){
       el.style.display = (el.getAttribute('data-mtab') === tab) ? '' : 'none';
@@ -640,6 +731,7 @@ var IS_LOCAL = {{ 'true' if remote.is_local else 'false' }};
     nav.querySelectorAll('[data-mtab-btn]').forEach(function(b){
       b.classList.toggle('active', b.getAttribute('data-mtab-btn') === tab);
     });
+    if (tab === 'security' && !_secLoaded && window.loadSecurity) { _secLoaded = true; loadSecurity(); }
     try { history.replaceState(null, '', '#' + tab); } catch(e){}
   }
   nav.addEventListener('click', function(e){

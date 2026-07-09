@@ -3505,6 +3505,62 @@ def register_routes(app):
         except Exception:
             return jsonify({"success": False, "message": _log_and_generic("db repair failed")}), 500
 
+    # ── Security tab (panel host): fail2ban bans, recent security events, raw logs ──
+    @app.route("/api/panel/security/bans")
+    @login_required
+    @permission_required(SUPER_ADMIN)
+    def api_panel_security_bans():
+        """Every fail2ban jail on the panel host with its current bans (panel-login + sshd + …)."""
+        try:
+            return jsonify(so.fail2ban_overview())
+        except Exception:
+            return jsonify({"installed": False, "jails": [], "error": _log_and_generic("ban list failed")}), 200
+
+    @app.route("/api/panel/security/unban", methods=["POST"])
+    @login_required
+    @permission_required(SUPER_ADMIN)
+    def api_panel_security_unban():
+        """Lift a fail2ban ban (jail + IP validated server-side)."""
+        d = _json_body()
+        jail, banned_ip = (d.get("jail") or "").strip(), (d.get("ip") or "").strip()
+        try:
+            ok, msg = so.fail2ban_unban(jail, banned_ip)
+            log_action(current_user, "fail2ban_unban", target=banned_ip,
+                       detail="%s — %s" % (jail, msg), success=ok)
+            return jsonify({"success": ok, "message": msg})
+        except Exception:
+            return jsonify({"success": False, "message": _log_and_generic("unban failed")}), 500
+
+    @app.route("/api/panel/security/events")
+    @login_required
+    @permission_required(SUPER_ADMIN)
+    def api_panel_security_events():
+        """Recent security-relevant audit entries (failed/blocked logins, fail2ban bans)."""
+        try:
+            from models import AuditLog
+            acts = ["login_failed", "login_blocked", "fail2ban_ban", "fail2ban_unban"]
+            rows = (AuditLog.query.filter(AuditLog.action.in_(acts))
+                    .order_by(AuditLog.id.desc()).limit(50).all())
+            return jsonify({"events": [
+                {"time": (r.timestamp.isoformat() if r.timestamp else ""), "action": r.action,
+                 "user": r.username, "target": r.target, "detail": r.detail, "ip": r.ip_address}
+                for r in rows]})
+        except Exception:
+            return jsonify({"events": [], "error": _log_and_generic("security events failed")}), 200
+
+    @app.route("/api/panel/security/log")
+    @login_required
+    @permission_required(SUPER_ADMIN)
+    def api_panel_security_log():
+        """Tail of a whitelisted security log: panel (data/auth.log), fail2ban, or ssh."""
+        which = request.args.get("which", "panel")
+        if which not in ("panel", "fail2ban", "ssh"):
+            return jsonify({"text": "", "error": "unknown log"}), 400
+        try:
+            return jsonify({"text": so.security_log_tail(which, 300)})
+        except Exception:
+            return jsonify({"text": "", "error": _log_and_generic("log read failed")}), 200
+
     @app.route("/api/panel/change-port", methods=["POST"])
     @login_required
     @permission_required(SUPER_ADMIN)
