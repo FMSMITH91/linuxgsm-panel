@@ -2778,7 +2778,8 @@ def remote_os_run_updates(server):
     """Run apt upgrade on the remote server (blocking; kept for callers that want a one-shot).
     The UI uses the streaming remote_os_update_start/_status pair instead."""
     out, err, rc = run_command(server,
-        "DEBIAN_FRONTEND=noninteractive apt upgrade -y "
+        "DEBIAN_FRONTEND=noninteractive apt-get full-upgrade -y "
+        "-o APT::Get::Always-Include-Phased-Updates=true "
         "-o Dpkg::Options::='--force-confdef' -o Dpkg::Options::='--force-confold' 2>&1",
         timeout=600, sudo=True
     )
@@ -2809,10 +2810,13 @@ def remote_os_update_start(server):
         "echo \"=== OS update started $(date) ===\" >> {L} 2>&1; "
         "export DEBIAN_FRONTEND=noninteractive; "
         "apt-get update >> {L} 2>&1; "
-        # full-upgrade (dist-upgrade), not plain upgrade: plain upgrade holds back any package that
-        # needs a NEW dependency or a removal (e.g. libheif's split-out plugin packages), leaving
-        # "N updates still available" after an install. full-upgrade actually applies them all.
-        "apt-get -y -o Dpkg::Options::='--force-confold' -o Dpkg::Options::='--force-confdef' full-upgrade >> {L} 2>&1; "
+        # An explicit "Install updates" should apply everything the Check list shows. Two things
+        # otherwise leave "N still available" after a run: plain `upgrade` holds back packages needing
+        # a new dependency/removal (so use full-upgrade), and BOTH defer Ubuntu "phased" updates (a
+        # gradual rollout) — Always-Include-Phased-Updates=true installs those too, so the re-check
+        # actually reaches 0.
+        "apt-get -y -o APT::Get::Always-Include-Phased-Updates=true "
+        "-o Dpkg::Options::='--force-confold' -o Dpkg::Options::='--force-confdef' full-upgrade >> {L} 2>&1; "
         "rc=$?; "
         "apt-get -y autoremove >> {L} 2>&1 || true; "
         "echo \"{S}$rc\" >> {L} 2>&1"
