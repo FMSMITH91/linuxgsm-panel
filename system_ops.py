@@ -960,6 +960,40 @@ def restart_panel(delay_seconds=2):
         return False, "Could not restart the panel — check the panel logs."
 
 
+def panel_repair_database():
+    """Repair the panel database on-demand, OFFLINE and safely. A live DB can't be rebuilt while the
+    running panel holds it open, so a DETACHED transient job stops the panel service, runs
+    db_maintenance (health-check → rebuild readable data via SQLite .recover, else restore the last
+    healthy backup → optimize → re-check), then starts the service again — the flagged database is
+    copied aside first and never deleted. Same stop/repair/start the auto-updater uses. (ok, msg)."""
+    base = os.path.dirname(os.path.abspath(__file__))
+    py = os.path.join(base, "venv", "bin", "python3")
+    if not os.path.exists(py):
+        py = os.path.join(base, "venv", "bin", "python")
+    dbm = os.path.join(base, "db_maintenance.py")
+    if not os.path.exists(py) or not os.path.exists(dbm):
+        return False, "The repair tool isn't available on this install."
+    user_unit = os.path.expanduser("~/.config/systemd/user/linuxgsm-panel.service")
+    system_unit = "/etc/systemd/system/linuxgsm-panel.service"
+    if os.path.exists(user_unit) or not os.path.exists(system_unit):
+        sc = "systemctl --user"
+        run = ["systemd-run", "--user", "--collect", "--on-active=2"]
+    else:
+        sc = "sudo systemctl"
+        run = ["sudo", "systemd-run", "--collect", "--on-active=2"]
+    # ONE detached unit (survives the panel going down): stop → repair offline → start.
+    script = ("%s stop linuxgsm-panel.service; ( cd %s && %s %s update ); %s start linuxgsm-panel.service"
+              % (sc, shlex.quote(base), shlex.quote(py), shlex.quote(dbm), sc))
+    try:
+        subprocess.Popen(run + ["bash", "-c", script],
+                         stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, env=os.environ.copy())
+        return True, ("Repairing the database — the panel stops, repairs it offline (your data is copied "
+                      "aside first), and restarts. Give it about a minute, then reload the page.")
+    except Exception:
+        _log.exception("db repair failed to dispatch")
+        return False, "Couldn't start the repair job — check the panel logs."
+
+
 def port_in_use(port):
     """True if something is already listening on `port` (tcp or udp) on this host — used to
     refuse changing the panel to a port that's already taken (which would fail to bind and

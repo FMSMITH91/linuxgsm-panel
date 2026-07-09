@@ -3478,6 +3478,19 @@ def register_routes(app):
         except Exception:
             return jsonify({"healthy": None, "detail": _log_and_generic("db health check failed")}), 200
 
+    @app.route("/api/panel/repair-db", methods=["POST"])
+    @login_required
+    @permission_required(SUPER_ADMIN)
+    def api_panel_repair_db():
+        """Repair a flagged database on-demand: a detached job stops the panel, rebuilds/restores the
+        DB offline (original copied aside first), and restarts. For when the health check fails."""
+        try:
+            ok, msg = so.panel_repair_database()
+            log_action(current_user, "panel_repair_db", target="database", detail=msg, success=ok)
+            return jsonify({"success": ok, "message": msg})
+        except Exception:
+            return jsonify({"success": False, "message": _log_and_generic("db repair failed")}), 500
+
     @app.route("/api/panel/change-port", methods=["POST"])
     @login_required
     @permission_required(SUPER_ADMIN)

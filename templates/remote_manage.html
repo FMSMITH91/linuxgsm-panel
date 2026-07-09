@@ -334,6 +334,9 @@
         <button class="btn btn-sm btn-outline-secondary" id="diag-optimize-btn" data-action="optimizeDb">
           <i class="bi bi-stars"></i> Optimize database
         </button>
+        <button class="btn btn-sm btn-outline-warning" id="diag-repair-btn" data-action="repairDb" style="display:none;">
+          <i class="bi bi-wrench-adjustable"></i> Repair database
+        </button>
         <span id="diag-db-msg" class="small"></span>
       </div>
       <div id="diag-dbhealth-result" class="small mt-1"></div>
@@ -1207,16 +1210,37 @@ function checkDbHealth(){
   if(btn){ btn.disabled=true; btn.innerHTML='<span class="spinner-border spinner-border-sm"></span> Checking…'; }
   fetch(MOUNT+'/api/panel/db-health').then(function(r){return r.json();}).then(function(d){
     if(!out) return;
+    var rbtn=document.getElementById('diag-repair-btn');
     if(d.healthy===true){
       out.innerHTML='<span class="text-success"><i class="bi bi-check-circle-fill"></i> Database is healthy — integrity check passed.</span>';
+      if(rbtn) rbtn.style.display='none';
     } else if(d.healthy===false){
       out.innerHTML='<span class="text-danger"><i class="bi bi-exclamation-triangle-fill"></i> Integrity check flagged a problem: '+escapeHtml(d.detail||'')+'.</span>'+
-        '<div class="text-secondary" style="font-size:.7rem;">The next panel update repairs this automatically (rebuild the readable data, else restore the last healthy backup) — your data is copied aside first, never deleted.</div>';
+        '<div class="text-secondary" style="font-size:.7rem;">Click <strong>Repair database</strong> — it rebuilds the readable data, or restores the last healthy backup; your data is copied aside first, never deleted. The panel briefly restarts.</div>';
+      if(rbtn) rbtn.style.display='';
     } else {
       out.innerHTML='<span class="text-warning">Could not run the health check right now.</span>';
     }
   }).catch(function(){ if(out) out.innerHTML='<span class="text-danger">Health check request failed.</span>'; })
   .finally(function(){ if(btn){ btn.disabled=false; btn.innerHTML='<i class="bi bi-heart-pulse"></i> Check health'; } });
+}
+
+// Repair a flagged database on-demand: stops the panel, repairs offline, restarts (~1 min).
+function repairDb(){
+  confirmDialog({title:'Repair database', icon:'wrench-adjustable', confirmClass:'btn-warning', confirmLabel:'Repair & restart',
+    bodyText:'The panel will stop, repair the database offline (your data is copied aside first — never deleted), then restart. This takes about a minute. Continue?',
+    onConfirm:function(){
+      var rb=document.getElementById('diag-repair-btn'), msg=document.getElementById('diag-db-msg');
+      if(rb){ rb.disabled=true; rb.innerHTML='<span class="spinner-border spinner-border-sm"></span> Repairing…'; }
+      fetch(MOUNT+'/api/panel/repair-db',{method:'POST',headers:{'Content-Type':'application/json'},body:'{}'})
+        .then(function(r){return r.json();}).then(function(d){
+          if(msg){ msg.className='small';
+            msg.innerHTML = d.success
+              ? '<span class="text-success"><i class="bi bi-check-circle-fill"></i> '+(window.escapeHtml?escapeHtml(d.message||'Repair started.'):(d.message||'Repair started.'))+'</span>'
+              : '<span class="text-danger">'+(window.escapeHtml?escapeHtml(d.message||'Failed.'):(d.message||'Failed.'))+'</span>'; }
+        }).catch(function(){ if(msg) msg.innerHTML='<span class="text-danger">Request failed.</span>'; })
+        .finally(function(){ if(rb){ rb.disabled=false; rb.innerHTML='<i class="bi bi-wrench-adjustable"></i> Repair database'; } });
+    }});
 }
 
 // ── Automatic security updates (panel host only) ────────────────────
