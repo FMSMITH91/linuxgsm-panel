@@ -182,6 +182,10 @@ _bootstrap_lock = threading.Lock()
 # plain dict + lock is fine). Read by /api/server/<id>/install-status.
 _install_jobs = {}
 _install_lock = threading.Lock()
+# Serializes the install "slot" allocation (pick a free port → reject a duplicate name → create the
+# row). resolve_free_port yields on an SSH scan, so without this two concurrent installs on the same
+# remote could both pick the same port or both pass the duplicate-name check before either commits.
+_install_alloc_lock = threading.Lock()
 
 # Only one game-file backup at a time (full OR single-server) — they're slow and space-heavy.
 _full_backup_lock = threading.Lock()
@@ -2102,24 +2106,29 @@ def register_routes(app):
         except (TypeError, ValueError):
             desired_port = KNOWN_PORTS.get(game_type, 27015)
 
-        # Port-conflict handling: auto-pick the next free port if taken.
-        final_port, port_changed = resolve_free_port(remote, remote_id, desired_port, game_type)
+        # Allocate the install "slot" atomically: pick a free port, reject a duplicate name and
+        # create the row under one lock. resolve_free_port yields on an SSH scan, so without the
+        # lock two concurrent installs on the same remote could pick the same port or both clear the
+        # duplicate-name check before either committed.
+        with _install_alloc_lock:
+            # Port-conflict handling: auto-pick the next free port if taken.
+            final_port, port_changed = resolve_free_port(remote, remote_id, desired_port, game_type)
 
-        # Reject a duplicate instance name on the same remote.
-        if GameServer.query.filter_by(short_name=short_name, remote_id=remote_id).first():
-            return _form_err(f"A server named '{short_name}' already exists on this remote.", "manage_servers")
+            # Reject a duplicate instance name on the same remote.
+            if GameServer.query.filter_by(short_name=short_name, remote_id=remote_id).first():
+                return _form_err(f"A server named '{short_name}' already exists on this remote.", "manage_servers")
 
-        # Create the DB row up-front in the "installing" state, then run the WHOLE
-        # install in a background job with live step-by-step progress (polled by the
-        # Game Servers page — mirrors the VPS bootstrap progress). The route returns
-        # immediately so the browser never waits on the long download.
-        gs = GameServer(
-            remote_id=remote_id, name=server_name or short_name, short_name=short_name,
-            game_type=game_type, game_display=game_type, port=final_port,
-            installed=False, status="installing",
-        )
-        db.session.add(gs)
-        db.session.commit()
+            # Create the DB row up-front in the "installing" state, then run the WHOLE
+            # install in a background job with live step-by-step progress (polled by the
+            # Game Servers page — mirrors the VPS bootstrap progress). The route returns
+            # immediately so the browser never waits on the long download.
+            gs = GameServer(
+                remote_id=remote_id, name=server_name or short_name, short_name=short_name,
+                game_type=game_type, game_display=game_type, port=final_port,
+                installed=False, status="installing",
+            )
+            db.session.add(gs)
+            db.session.commit()
         # Start the server's scheduled-backup clock now, so a brand-new install isn't seen as
         # immediately "due" and backed up mid-install (its first scheduled backup is one interval
         # out). Without this, last=0 makes game_backup_due() true the moment installed flips True.
