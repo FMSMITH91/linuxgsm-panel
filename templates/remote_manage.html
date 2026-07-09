@@ -930,9 +930,10 @@ function _pollOsUpdate(){
           stEl.innerHTML=ok?'<i class="bi bi-check-circle-fill"></i> Updates installed.'
                            :'<i class="bi bi-x-circle-fill"></i> Finished with errors (exit '+d.rc+') — see the log above.'; }
         var info=document.getElementById('update-info');
-        if(info) info.innerHTML=ok?'<span class="text-success"><i class="bi bi-check-circle"></i> Updates installed.</span>'
+        if(info) info.innerHTML=ok?'<span class="text-success"><i class="bi bi-check-circle"></i> Updates installed — re-checking…</span>'
                                   :'<span class="text-danger">Update finished with errors — see the popup.</span>';
-        if(typeof checkUpdates==='function') checkUpdates();   // recount → should drop to 0
+        // Re-check after a beat so the "installed" note is readable; a full-upgrade should now show 0.
+        if(ok && typeof checkUpdates==='function') setTimeout(checkUpdates, 1500);
         if(window.rebootNagCheck){ if(IS_LOCAL && window.LOCAL_HOST_ID!=null) rebootNagCheck(window.LOCAL_HOST_ID,'the panel host');
                                    else if(!IS_LOCAL) rebootNagCheck(REMOTE_ID, REMOTE_NAME); }   // kernel update -> banner
         return;

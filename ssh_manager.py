@@ -2809,7 +2809,10 @@ def remote_os_update_start(server):
         "echo \"=== OS update started $(date) ===\" >> {L} 2>&1; "
         "export DEBIAN_FRONTEND=noninteractive; "
         "apt-get update >> {L} 2>&1; "
-        "apt-get -y -o Dpkg::Options::='--force-confold' -o Dpkg::Options::='--force-confdef' upgrade >> {L} 2>&1; "
+        # full-upgrade (dist-upgrade), not plain upgrade: plain upgrade holds back any package that
+        # needs a NEW dependency or a removal (e.g. libheif's split-out plugin packages), leaving
+        # "N updates still available" after an install. full-upgrade actually applies them all.
+        "apt-get -y -o Dpkg::Options::='--force-confold' -o Dpkg::Options::='--force-confdef' full-upgrade >> {L} 2>&1; "
         "rc=$?; "
         "apt-get -y autoremove >> {L} 2>&1 || true; "
         "echo \"{S}$rc\" >> {L} 2>&1"
