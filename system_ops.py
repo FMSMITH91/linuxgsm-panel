@@ -1291,7 +1291,10 @@ def fail2ban_unban(jail, ip):
     ipaddress (which rejects anything that isn't a real IP). Then shell-quoted. (ok, msg)."""
     import ipaddress
     jail = (jail or "").strip()
-    if not _JAIL_RE.match(jail):             # ^[A-Za-z0-9._-]{1,64}$ — metacharacter-free barrier CodeQL recognises
+    # NB: use the module-level re.fullmatch (inline pattern), not _JAIL_RE.match — CodeQL's
+    # command-injection barrier recognises the former as a sanitiser but not a compiled-pattern
+    # method call, so `_JAIL_RE.match(jail)` here still traced jail into the shell sink.
+    if not re.fullmatch(r"[A-Za-z0-9._-]{1,64}", jail):   # metacharacter-free guard (recognised barrier)
         return False, "Invalid jail name."
     if jail not in _fail2ban_jails():        # allowlist: only jails that actually exist on this host
         return False, "Unknown jail."
