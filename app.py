@@ -1187,12 +1187,23 @@ def register_routes(app):
 
             def _fail(msg, attempted=None, reason="login failed", **kw):
                 with _LOGIN_FAILS_LOCK:
-                    _LOGIN_FAILS.setdefault(ip, []).append(now)
-                    _cnt = len(_LOGIN_FAILS[ip])
+                    _LOGIN_FAILS.setdefault(ip, []).append(now)   # throttle counter (resets on success)
                 _authlog.warning("panel login failed from %s", _log_ip(ip))    # fail2ban tails data/auth.log
                 # The ATTEMPTED username (user-controlled → sanitised + capped) goes in the User
                 # column via `actor`; the reason + attempt count go in detail. log_action stores the IP.
                 who = ((attempted if attempted is not None else request.form.get("username", "")) or "").strip()[:64] or "(blank)"
+                # Attempt number = failed logins from THIS IP within the window, counted from the
+                # audit log — so it keeps climbing per IP (across different usernames) and, unlike the
+                # in-memory throttle counter, isn't reset by a successful login or a panel restart.
+                try:
+                    from models import AuditLog
+                    from datetime import timedelta
+                    _since = datetime.utcnow() - timedelta(seconds=LOGIN_WINDOW)
+                    _cnt = 1 + AuditLog.query.filter(AuditLog.action == "login_failed",
+                                                     AuditLog.ip_address == ip,
+                                                     AuditLog.timestamp >= _since).count()
+                except Exception:
+                    _cnt = len(_LOGIN_FAILS.get(ip, []))
                 log_action(None, "login_failed", actor=who,
                            detail="%s · attempt %d in %dm" % (reason, _cnt, LOGIN_WINDOW // 60), success=False)
                 flash(msg, "danger")

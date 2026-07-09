@@ -985,7 +985,7 @@ def panel_repair_database():
     script = ("%s stop linuxgsm-panel.service; ( cd %s && %s %s update ); %s start linuxgsm-panel.service"
               % (sc, shlex.quote(base), shlex.quote(py), shlex.quote(dbm), sc))
     try:
-        subprocess.Popen(run + ["bash", "-c", script],
+        subprocess.Popen(run + ["bash", "-c", script],  # nosec B603  # nosemgrep - internal paths, shlex-quoted, no user input
                          stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, env=os.environ.copy())
         return True, ("Repairing the database — the panel stops, repairs it offline (your data is copied "
                       "aside first), and restarts. Give it about a minute, then reload the page.")
