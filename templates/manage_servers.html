@@ -298,6 +298,14 @@ document.addEventListener('click', function(e){
     onConfirm: function(){ doUninstall(b.getAttribute('data-server-id'), name, b); }
   });
 });
+// Drop a server's rows (main row + its install-progress row) in place, with a short fade — no
+// full-page reload. Safe to call twice (getElementById returns null once a row is gone).
+function removeServerRow(id){
+  var prog = document.getElementById('install-row-' + id); if (prog) prog.remove();
+  var row = document.getElementById('server-row-' + id);
+  if (row){ row.style.transition = 'opacity .3s'; row.style.opacity = '0';
+            setTimeout(function(){ if (row.parentNode) row.remove(); }, 300); }
+}
 function doUninstall(id, name, btn){
   var orig = btn.innerHTML;
   btn.disabled = true; btn.innerHTML = '<span class="spinner-border spinner-border-sm"></span>';
@@ -306,11 +314,8 @@ function doUninstall(id, name, btn){
     .then(function(r){ return r.json(); })
     .then(function(d){
       if (d && d.success){
-        var prog = document.getElementById('install-row-' + id); if (prog) prog.remove();
+        removeServerRow(id);
         _svrBaseline = serverIdsOnPage();   // adopt the reduced set so live-sync doesn't force a reload
-        var row = document.getElementById('server-row-' + id);
-        if (row){ row.style.transition = 'opacity .3s'; row.style.opacity = '0';
-                  setTimeout(function(){ row.remove(); }, 300); }
         if (window.toast) toast(d.message || 'Uninstalled', 'success');
       } else {
         btn.disabled = false; btn.innerHTML = orig;
@@ -321,8 +326,9 @@ function doUninstall(id, name, btn){
 }
 
 // ── Live sync: reflect servers other users add/remove ──────────────────────
-// The rows are server-rendered, so when the set of servers changes we reload. We hold
-// off if the user is mid-way through the install form (so we don't wipe their selection).
+// Removed servers are dropped in place (no reload). Added servers need server-rendered markup, so
+// those reload — held off while the user is mid-way through the install form (so we don't wipe
+// their selection).
 function serverIdsOnPage() {
   return Array.prototype.map.call(document.querySelectorAll('[id^="install-row-"]'),
     function(el){ return el.id.slice('install-row-'.length); }).sort().join(',');
@@ -338,10 +344,23 @@ function reconcileServerList() {
     .then(function(r){ return r.ok ? r.json() : null; })
     .then(function(data){
       if (!data) return;
-      var live = data.map(function(s){ return String(s.id); }).sort().join(',');
-      if (live === _svrBaseline) return;
-      if (editingInstallForm()) return;   // don't yank the form out from under the user
-      location.reload();
+      var liveIds = data.map(function(s){ return String(s.id); });
+      if (liveIds.slice().sort().join(',') === _svrBaseline) return;
+      var baseIds = _svrBaseline ? _svrBaseline.split(',').filter(Boolean) : [];
+      // Servers that vanished (uninstalled here or elsewhere) — drop their rows in place, never a
+      // full-page reload. This is also what stops our OWN uninstall's servers_changed broadcast
+      // from reloading the page out from under us.
+      baseIds.filter(function(id){ return liveIds.indexOf(id) === -1; })
+             .forEach(function(id){ removeServerRow(id); });
+      // Servers that appeared need server-rendered markup we don't have client-side, so those still
+      // require a reload — but hold off while the user is filling in the install form.
+      var added = liveIds.filter(function(id){ return baseIds.indexOf(id) === -1; });
+      if (added.length) {
+        if (editingInstallForm()) return;   // don't yank the form out from under the user
+        location.reload();
+        return;
+      }
+      _svrBaseline = serverIdsOnPage();   // removals only → adopt the reduced set, no reload
     })
     .catch(function(){});
 }
