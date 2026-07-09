@@ -595,9 +595,9 @@ def _remote_ci_state(sha):
 # Paths that DON'T affect the running panel — changes touching only these shouldn't raise the
 # "update available" badge (e.g. editing the README or a workflow). Denylist (not allowlist) so a
 # new kind of runtime file is never accidentally treated as noise: anything not listed here counts.
-_NOISE_DIRS = (".github/", "docs/", "tests/", ".vscode/")
+_NOISE_DIRS = (".github/", "docs/", "tests/", "tools/", ".vscode/")
 _NOISE_FILES = {".gitignore", ".gitattributes", ".editorconfig", ".dockerignore",
-                ".pre-commit-config.yaml", "run-tests.sh", "codecov.yml", ".flake8", "mypy.ini"}
+                ".pre-commit-config.yaml", "codecov.yml", ".flake8", "mypy.ini"}
 
 
 def _is_runtime_path(path):

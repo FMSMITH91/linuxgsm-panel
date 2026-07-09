@@ -59,6 +59,6 @@ jobs:
         run: python -m pip install --quiet -r requirements.txt flake8
 
       - name: Run all checks (compile, lint, unit, smoke, shellcheck)
-        # Same script developers run locally via ./run-tests.sh, so green here == green there.
+        # Same script developers run locally via ./tools/run-tests.sh, so green here == green there.
         # shellcheck is pre-installed on the ubuntu runners.
-        run: PYTHON=python bash run-tests.sh
+        run: PYTHON=python bash tools/run-tests.sh

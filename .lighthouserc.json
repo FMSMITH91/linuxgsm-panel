@@ -12,7 +12,7 @@
         "http://127.0.0.1:5000/logs",
         "http://127.0.0.1:5000/account"
       ],
-      "puppeteerScript": "./lhci-login.js",
+      "puppeteerScript": "./tools/lhci-login.js",
       "settings": {
         "chromeFlags": "--no-sandbox --headless=new",
         "disableStorageReset": true

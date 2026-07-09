@@ -2,10 +2,10 @@
 # One command to run every local check before pushing. CI runs this same script,
 # so "green locally" means "green in CI". Each step fails the whole run on error.
 #
-#   ./run-tests.sh              # uses python3
-#   PYTHON=./venv/bin/python ./run-tests.sh
+#   ./tools/run-tests.sh              # uses python3
+#   PYTHON=./venv/bin/python ./tools/run-tests.sh
 set -euo pipefail
-cd "$(dirname "$0")"
+cd "$(dirname "$0")/.."   # repo root (this script lives in tools/)
 PY="${PYTHON:-python3}"
 
 echo "== byte-compile (syntax errors) =="
@@ -28,7 +28,7 @@ echo "== smoke test (boots the app; routes must not 5xx) =="
 
 if command -v shellcheck >/dev/null 2>&1; then
     echo "== shellcheck (shell scripts) =="
-    shellcheck -S warning install.sh uninstall.sh run-tests.sh reset-password.sh recover.sh
+    shellcheck -S warning install.sh uninstall.sh tools/run-tests.sh reset-password.sh recover.sh
 else
     echo "== shellcheck (not installed — skipping) =="
 fi
