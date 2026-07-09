@@ -526,9 +526,15 @@ if [ "${IS_UPDATE}" -eq 1 ]; then
     ensure_system_tuning    # prefer RAM over swap (applied on update too)
     svc daemon-reload || true
     svc start linuxgsm-panel.service || true   # it was stopped in [2/6] for offline DB maintenance
-    # Ensure the path-independent recovery command exists on existing installs too.
-    if [ "$(id -u)" -eq 0 ] && [ -f "${PANEL_DIR}/recover.sh" ]; then
-        ln -sf "${PANEL_DIR}/recover.sh" /usr/local/bin/linuxgsm-panel-recover 2>/dev/null || true
+    # Ensure the path-independent recovery command exists on existing installs too — including
+    # non-root (systemd --user) installs, where writing to /usr/local/bin needs sudo. This used to be
+    # root-only, so `--user` installs never got `linuxgsm-panel-recover` (command not found).
+    if [ -f "${PANEL_DIR}/recover.sh" ]; then
+        if [ "$(id -u)" -eq 0 ]; then
+            ln -sf "${PANEL_DIR}/recover.sh" /usr/local/bin/linuxgsm-panel-recover 2>/dev/null || true
+        else
+            sudo ln -sf "${PANEL_DIR}/recover.sh" /usr/local/bin/linuxgsm-panel-recover 2>/dev/null || true
+        fi
     fi
 
     info "[6/6] Verifying the panel came back up…"
@@ -743,6 +749,8 @@ SERVICEEOF
     systemctl --user enable --now linuxgsm-panel.service
     SERVICE_HINT="systemctl --user status linuxgsm-panel"
     LOG_HINT="journalctl --user -u linuxgsm-panel -f"
+    # Recovery command for --user installs too — this branch is non-root, so sudo writes /usr/local/bin.
+    sudo ln -sf "${PANEL_DIR}/recover.sh" /usr/local/bin/linuxgsm-panel-recover 2>/dev/null || true
 fi
 ensure_service_tuning                          # low CPU/IO priority so the panel yields to games
 ensure_system_tuning                           # prefer RAM over swap (vm.swappiness)

@@ -30,8 +30,22 @@ elif [ -f "${USER_UNIT}" ]; then
     PANEL_DIR="$(read_unit "${USER_UNIT}" WorkingDirectory)"
     SVC_USER="$(id -un)"
 fi
+# A systemd --user install: run under sudo, $HOME is root's, so the USER_UNIT above isn't found.
+# Scan every real user's home for the unit and adopt its owner as the service user.
+if [ -z "${PANEL_DIR}" ]; then
+    for uu in /home/*/.config/systemd/user/linuxgsm-panel.service; do
+        [ -f "${uu}" ] || continue
+        d="$(read_unit "${uu}" WorkingDirectory)"
+        if [ -n "${d}" ] && [ -f "${d}/manage.py" ]; then
+            PANEL_DIR="${d}"; SVC_USER="$(echo "${uu}" | awk -F/ '{print $3}')"; break
+        fi
+    done
+fi
 if [ -z "${PANEL_DIR}" ] || [ ! -f "${PANEL_DIR}/manage.py" ]; then
-    selfdir="$(cd "$(dirname "$0")" 2>/dev/null && pwd)" || selfdir=""
+    # Resolve THROUGH any symlink (e.g. /usr/local/bin/linuxgsm-panel-recover) to this script's real
+    # directory — the panel dir — so it's found even when run as root via the symlink.
+    self="$(readlink -f "$0" 2>/dev/null || echo "$0")"
+    selfdir="$(cd "$(dirname "${self}")" 2>/dev/null && pwd)" || selfdir=""
     for d in "/home/lgsmpanel/linuxgsm-panel" "${HOME}/linuxgsm-panel" "${selfdir}"; do
         if [ -n "${d}" ] && [ -f "${d}/manage.py" ]; then PANEL_DIR="${d}"; break; fi
     done
