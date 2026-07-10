@@ -78,7 +78,7 @@
   </div>
   <div class="col">
     <div class="card text-center p-3">
-      <div class="h3 mb-0" id="total-players"><i class="bi bi-people-fill text-info"></i> {{ total_players }}</div>
+      <div class="h3 mb-0" id="total-players"><i class="bi bi-people-fill text-info"></i> {{ total_players }}{% if total_max %} / {{ total_max }}{% endif %}</div>
       <div class="text-secondary small">Players Online</div>
     </div>
   </div>
@@ -139,7 +139,8 @@
             </td>
             <td id="players-{{ srv.id }}" class="text-nowrap">
               {% set pc = player_counts.get(srv.id) %}
-              {% if pc is not none %}<i class="bi bi-people-fill text-secondary"></i> {{ pc }}{% else %}<span class="text-secondary">—</span>{% endif %}
+              {% set mx = player_max.get(srv.id) %}
+              {% if pc is not none %}<i class="bi bi-people-fill text-secondary"></i> {{ pc }}{% if mx %} / {{ mx }}{% endif %}{% else %}<span class="text-secondary">—</span>{% endif %}
             </td>
             <td>
               <span class="connect-cell" id="connect-{{ srv.id }}" data-addr="">
@@ -226,15 +227,16 @@ function refreshStatus() {
       if (oc) oc.innerHTML = '<span class="status-dot status-online"></span> ' + online;
       if (fc) fc.innerHTML = '<span class="status-dot status-offline"></span> ' + offline;
       if (tc) tc.textContent = data.length;
-      // Total players online = sum of the known per-server counts (unknowns are excluded).
+      // Total online / total capacity = sums of the known per-server values (unknowns excluded).
       var totalPlayers = data.reduce(function(a, s){ return a + (typeof s.players === 'number' ? s.players : 0); }, 0);
+      var totalMax = data.reduce(function(a, s){ return a + (typeof s.max_players === 'number' ? s.max_players : 0); }, 0);
       var tp = document.getElementById('total-players');
-      if (tp) tp.innerHTML = '<i class="bi bi-people-fill text-info"></i> ' + totalPlayers;
+      if (tp) tp.innerHTML = '<i class="bi bi-people-fill text-info"></i> ' + totalPlayers + (totalMax > 0 ? ' / ' + totalMax : '');
       data.forEach(function(s){
         var pcell = document.getElementById('players-' + s.id);
         if (pcell) {
           pcell.innerHTML = (typeof s.players === 'number')
-            ? '<i class="bi bi-people-fill text-secondary"></i> ' + s.players
+            ? '<i class="bi bi-people-fill text-secondary"></i> ' + s.players + (typeof s.max_players === 'number' && s.max_players > 0 ? ' / ' + s.max_players : '')
             : '<span class="text-secondary">—</span>';
         }
         var cell = document.getElementById('status-' + s.id);

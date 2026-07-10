@@ -1418,6 +1418,31 @@ def player_count(server, user, game_type=None, port=None, query_type=None):
     return int(s)
 
 
+def player_slots(server, user, game_type=None, port=None, query_type=None):
+    """(current, max) player counts from a SINGLE gamedig query — `max` is the capacity the game
+    reports (or None when it doesn't). (None, None) when the game isn't gamedig-queryable or the
+    query fails, so the caller can fall back to the console / LinuxGSM config. Never raises. Same
+    bare-`gamedig` invocation as player_count, but pulls both numbers so the UI can show 'n / max'."""
+    gdtype = _gamedig_type(game_type, query_type)
+    if not gdtype or not port:
+        return None, None
+    # Emit "<count>/<max>" from one query; jq prints "null" where maxplayers is absent.
+    jqf = '(.players|length|tostring) + "/" + (.maxplayers|tostring)'
+    cmd = (f"gamedig --type {gdtype} 127.0.0.1:{int(port)} 2>/dev/null "
+           f"| jq -r {_quote(jqf)} 2>/dev/null")
+    try:
+        out, _, _ = run_command(server, f"sudo -u {user} bash -c {_quote(cmd)}", timeout=25, sudo=False)
+    except Exception:
+        return None, None
+    s = (out or "").strip().splitlines()[-1].strip() if (out or "").strip() else ""
+    if "/" not in s:
+        return None, None
+    c, _, m = s.partition("/")
+    cur = int(c) if c.strip().isdigit() else None
+    mx = int(m) if m.strip().isdigit() else None
+    return cur, mx
+
+
 def player_count_via_lgsm_query(server, user, selfname, fallback_port=None):
     """Player count using the game's OWN LinuxGSM query settings — this covers games the panel's
     26-entry gamedig map doesn't. Reads querymode/querytype/queryport from the merged LinuxGSM

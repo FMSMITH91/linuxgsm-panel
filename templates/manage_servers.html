@@ -121,7 +121,8 @@
             </td>
             <td id="msrv-players-{{ gs.id }}" class="text-nowrap">
               {% set pc = player_counts.get(gs.id) %}
-              {% if pc is not none %}<i class="bi bi-people-fill text-secondary"></i> {{ pc }}{% else %}<span class="text-secondary">—</span>{% endif %}
+              {% set mx = player_max.get(gs.id) %}
+              {% if pc is not none %}<i class="bi bi-people-fill text-secondary"></i> {{ pc }}{% if mx %} / {{ mx }}{% endif %}{% else %}<span class="text-secondary">—</span>{% endif %}
             </td>
             <td class="d-none d-md-table-cell">{{ gs.remote.display_name if gs.remote else '—' }}</td>
             <td class="text-nowrap">
@@ -355,7 +356,7 @@ function reconcileServerList() {
         var pc = document.getElementById('msrv-players-' + s.id);
         if (pc) {
           pc.innerHTML = (typeof s.players === 'number')
-            ? '<i class="bi bi-people-fill text-secondary"></i> ' + s.players
+            ? '<i class="bi bi-people-fill text-secondary"></i> ' + s.players + (typeof s.max_players === 'number' && s.max_players > 0 ? ' / ' + s.max_players : '')
             : '<span class="text-secondary">—</span>';
         }
       });
