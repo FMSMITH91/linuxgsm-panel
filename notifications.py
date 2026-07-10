@@ -25,13 +25,21 @@ EVENTS = {
     "server_down":        ("A game server goes offline unexpectedly", True),
     "server_up":          ("A game server comes back online", False),
     "server_empty":       ("A server you flagged has emptied (per-server, set on its page)", True),
+    "server_full":        ("A game server hits its player cap", False),
+    "server_peak":        ("A game server sets a new player-count record", False),
     "remote_unreachable": ("A remote host becomes unreachable", True),
     "remote_recovered":   ("A remote host comes back", True),
+    "high_load":          ("A host's CPU or memory is sustained high", True),
+    "disk_low":           ("A host's disk is running low", True),
+    "auto_reboot":        ("A host auto-reboots once empty (reboot-when-empty)", True),
     "backup_failed":      ("A backup fails", True),
+    "update_available":   ("A panel update is available", True),
+    "cert_expiring":      ("The panel's TLS certificate is expiring soon", True),
     "admin_login":        ("A super admin signs in", True),
     "admin_bruteforce":   ("A super admin account is being brute-forced", True),
+    "account_change":     ("A user is created or a group's permissions change", True),
     "ip_banned":          ("fail2ban bans an IP on the panel login", False),
-    "disk_low":           ("A host's disk is running low", True),
+    "ban_spike":          ("A burst of fail2ban bans (attack wave)", True),
 }
 
 # A Discord webhook MUST live on Discord — never let an admin-set (or tampered) URL become an SSRF

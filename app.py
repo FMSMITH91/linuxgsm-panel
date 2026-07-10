@@ -387,6 +387,9 @@ def _host_reachable(remote):
 # cache. count is an int, or None when the game genuinely can't be queried ("—" in the UI).
 _player_counts = {}          # server_id -> {"count": int|None, "ts": float}
 _PLAYER_POLL_SECONDS = 45
+_server_full_alerted = {}    # server_id -> bool (currently at cap; re-arms when it drops below)
+_server_peak_notified = {}   # server_id -> ts of the last new-record alert (rate-limit)
+_PEAK_NOTIFY_INTERVAL = 3600  # at most one "new record" alert per server per hour
 
 
 def _cached_player_count(server_id):
@@ -426,6 +429,29 @@ def _refresh_player_counts(app):
                 except Exception:
                     db.session.rollback()
                     _log.debug("notify-when-empty failed for %s", getattr(gs, "short_name", "?"), exc_info=True)
+            # Server full — alert on the transition INTO full, re-arm when it drops below the cap.
+            if isinstance(count, int) and isinstance(mx, int) and mx > 0:
+                if count >= mx and not _server_full_alerted.get(gs.id):
+                    notifications.notify("server_full", "Server full",
+                                         "%s on %s is full (%d/%d players)."
+                                         % (gs.name, gs.remote.display_name, count, mx))
+                    _server_full_alerted[gs.id] = True
+                elif count < mx and _server_full_alerted.get(gs.id):
+                    _server_full_alerted[gs.id] = False
+            # New player-count record — always track the peak; alert at most once/hour, and never on
+            # the first-ever count (0 -> N is a baseline, not a "record").
+            if isinstance(count, int) and count > (gs.peak_players or 0):
+                prev = gs.peak_players or 0
+                try:
+                    gs.peak_players = count
+                    db.session.commit()
+                except Exception:
+                    db.session.rollback()
+                if prev > 0 and (time.time() - _server_peak_notified.get(gs.id, 0)) > _PEAK_NOTIFY_INTERVAL:
+                    _server_peak_notified[gs.id] = time.time()
+                    notifications.notify("server_peak", "New player record",
+                                         "%s on %s just hit %d players — a new record."
+                                         % (gs.name, gs.remote.display_name, count))
 
 
 def _player_count_watch(app):
@@ -443,7 +469,8 @@ def _player_count_watch(app):
 _MONITOR_SECONDS = 60
 _DISK_ALERT_PCT = 90            # notify once a host's / crosses this; re-arms after it drops to PCT-5
 _EXPECT_OFFLINE_WINDOW = 180    # a panel-issued stop/restart suppresses "server down" for this long
-_monitor_state = {"remotes": {}, "servers": {}, "disk": {}}   # id -> last-seen (reachable / up / alerted)
+_LOAD_ALERT_PCT = 90            # CPU-load-per-core / memory %: sustained over this fires high_load
+_monitor_state = {"remotes": {}, "servers": {}, "disk": {}, "load": {}}   # id -> last-seen state
 _expected_offline = {}          # server_id -> ts the panel last stopped/restarted it
 
 
@@ -461,6 +488,21 @@ def _host_disk_pct(remote):
         return int(m.group(1)) if m else None
     except Exception:
         return None
+
+
+def _host_load_mem(remote):
+    """(cpu-load-per-core %, memory %) for a host, or (None, None). One cheap command."""
+    try:
+        out, _, _ = run_command(
+            remote,
+            "L=$(awk '{print $1}' /proc/loadavg); C=$(nproc); "
+            "M=$(awk '/MemTotal/{t=$2}/MemAvailable/{a=$2}END{printf \"%d\", t?(t-a)*100/t:0}' /proc/meminfo); "
+            "echo \"$L $C $M\"", timeout=10)
+        parts = (out or "").split()
+        load1, cores, mempct = float(parts[0]), max(1, int(parts[1])), int(parts[2])
+        return int(load1 / cores * 100), mempct
+    except Exception:
+        return None, None
 
 
 def _monitor_pass():
@@ -488,6 +530,20 @@ def _monitor_pass():
                 _monitor_state["disk"][remote.id] = True
             elif pct < _DISK_ALERT_PCT - 5 and alerted:
                 _monitor_state["disk"][remote.id] = False
+        # High CPU/memory — only when SUSTAINED (>= 2 consecutive passes over the threshold, ~2 min),
+        # so a momentary spike doesn't page you; re-arm once it drops well below.
+        loadpct, mempct = _host_load_mem(remote)
+        st = _monitor_state["load"].setdefault(remote.id, {})
+        for kind, val, label in (("cpu", loadpct, "CPU load"), ("mem", mempct, "memory")):
+            if val is None:
+                continue
+            st[kind + "_hi"] = (st.get(kind + "_hi", 0) + 1) if val >= _LOAD_ALERT_PCT else 0
+            if st[kind + "_hi"] >= 2 and not st.get(kind + "_alerted"):
+                notifications.notify("high_load", "Host under load",
+                                     "%s is at %d%% %s." % (remote.display_name, val, label))
+                st[kind + "_alerted"] = True
+            elif val < _LOAD_ALERT_PCT - 10 and st.get(kind + "_alerted"):
+                st[kind + "_alerted"] = False
         try:
             ports = _remote_listening_ports(remote)
         except Exception:
@@ -549,6 +605,8 @@ def _reboot_when_empty_watch(app):
                     log_action(None, "reboot_when_empty_fire", target=remote.name,
                                detail="host idle — %s" % msg, success=ok,
                                actor=(info or {}).get("by") or "system")
+                    notifications.notify("auto_reboot", "Host auto-rebooted",
+                                         "%s was empty of players, so its queued reboot ran." % remote.display_name)
                 except Exception:
                     _log.debug("reboot-when-empty tick failed for remote %s", rid, exc_info=True)
 
@@ -862,6 +920,37 @@ def _maybe_alert_admin_bruteforce(who, ip, now):
                 % (fails, who, ip, LOGIN_WINDOW // 60))
     except Exception:
         _log.debug("admin-bruteforce alert check failed", exc_info=True)
+
+
+# A burst of this many NEW fail2ban bans in one watch cycle looks like an active attack wave.
+_BAN_SPIKE_THRESHOLD = 3
+_CERT_ALERTED = {"at": 0}   # last time we alerted about the TLS cert (weekly dedup)
+
+
+def _maybe_alert_cert_expiring():
+    """Alert when the panel's own TLS certificate is within 14 days of expiry, at most once a week.
+    No-op if the cert file isn't present (e.g. Tailscale Serve / a reverse proxy terminates TLS).
+    Best-effort — never raises."""
+    try:
+        from datetime import timezone
+        from cryptography import x509
+        cert_path = DATA_DIR / "ssl" / "cert.pem"
+        if not cert_path.exists():
+            return
+        with open(cert_path, "rb") as f:
+            cert = x509.load_pem_x509_certificate(f.read())
+        try:
+            not_after = cert.not_valid_after_utc              # cryptography >= 42
+        except AttributeError:
+            not_after = cert.not_valid_after.replace(tzinfo=timezone.utc)
+        days = (not_after - datetime.now(timezone.utc)).days
+        if days <= 14 and (time.time() - _CERT_ALERTED["at"]) > 7 * 86400:
+            _CERT_ALERTED["at"] = time.time()
+            notifications.notify("cert_expiring", "TLS certificate expiring",
+                                 "The panel's TLS certificate expires in %d day(s) — renew it." % max(days, 0))
+    except Exception:
+        _log.debug("cert-expiry check failed", exc_info=True)
+
 
 MIN_PASSWORD_LEN = 10
 import string as _string
@@ -3332,6 +3421,9 @@ def register_routes(app):
         db.session.add(user)
         db.session.commit()
         log_action(current_user, "add_user", target=username)
+        notifications.notify("account_change", "New user created",
+                             "%s created the user '%s'%s."
+                             % (current_user.username, username, " (SUPER ADMIN)" if is_superadmin else ""))
         return _form_ok(f"User '{username}' created.", "manage_users")
 
     @app.route("/users/<int:user_id>/edit", methods=["POST"])
@@ -3488,6 +3580,8 @@ def register_routes(app):
         db.session.add(group)
         db.session.commit()
         log_action(current_user, "add_group", target=name)
+        notifications.notify("account_change", "Permission group created",
+                             "%s created the group '%s'." % (current_user.username, name))
         return _form_ok(f"Group '{name}' created.", "manage_groups")
 
     @app.route("/groups/<int:group_id>/edit", methods=["POST"])
@@ -3504,6 +3598,8 @@ def register_routes(app):
 
         db.session.commit()
         log_action(current_user, "edit_group", target=group.name)
+        notifications.notify("account_change", "Permission group changed",
+                             "%s edited the group '%s' (permissions/access)." % (current_user.username, group.name))
         return _form_ok(f"Group '{group.name}' updated.", "manage_groups")
 
     @app.route("/groups/<int:group_id>/delete", methods=["POST"])
@@ -6446,8 +6542,13 @@ def register_routes(app):
                         app.logger.info(
                             "panel update available: version %s (%s), %s commit(s) behind",
                             st.get("remote_version", "?"), tgt[:7], st.get("behind", "?"))
+                        notifications.notify(
+                            "update_available", "Panel update available",
+                            "Version %s (%s), %s commit(s) behind. Re-run the installer to update."
+                            % (st.get("remote_version", "?"), tgt[:7], st.get("behind", "?")))
                 else:
                     last_logged_sha = None   # up to date — let a future update log again
+                _maybe_alert_cert_expiring()   # piggyback the periodic TLS-cert expiry check here
             except Exception:
                 app.logger.debug("update-check tick failed", exc_info=True)
             time.sleep(1800)
@@ -6555,8 +6656,9 @@ if __name__ == "__main__":
                 if seen is None:
                     seen = cur
                 elif cur != seen:
+                    new_bans = cur - seen
                     with app.test_request_context():   # gives log_action an (empty) request/DB context
-                        for _ip in sorted(cur - seen):
+                        for _ip in sorted(new_bans):
                             log_action(None, "fail2ban_ban", target=_ip,
                                        detail="banned after 5 failed panel logins in 10 min (1-hour ban)",
                                        success=False)
@@ -6564,6 +6666,9 @@ if __name__ == "__main__":
                                                  "%s was banned by fail2ban (5 failed logins in 10 min)" % _ip)
                         for _ip in sorted(seen - cur):
                             log_action(None, "fail2ban_unban", target=_ip, detail="ban expired or lifted")
+                    if len(new_bans) >= _BAN_SPIKE_THRESHOLD:   # a burst of bans at once = an attack wave
+                        notifications.notify("ban_spike", "Login attack in progress",
+                                             "%d IPs were just banned from the panel login at once." % len(new_bans))
                     seen = cur
             except Exception:
                 _log.debug("fail2ban ban-watch tick failed", exc_info=True)
