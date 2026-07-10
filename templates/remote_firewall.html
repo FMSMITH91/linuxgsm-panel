@@ -1,6 +1,8 @@
 {% extends "base.html" %}
 {% block title %}Firewall - {{ remote.display_name }}{% endblock %}
 {% block content %}
+{% set block_groups = status.groups|selectattr('is_block')|list %}
+{% set open_groups = status.groups|rejectattr('is_block')|list %}
 
 <div class="d-flex justify-content-between align-items-center mb-3">
   <div>
@@ -113,11 +115,11 @@
     <div class="card">
       <div class="card-header d-flex justify-content-between align-items-center">
         <span><i class="bi bi-list-columns"></i> Open Ports &amp; Rules</span>
-        <span class="small text-secondary" id="rules-count">{{ status.groups|length }} rule{{ '' if status.groups|length == 1 else 's' }}</span>
+        <span class="small text-secondary" id="rules-count">{{ open_groups|length }} rule{{ '' if open_groups|length == 1 else 's' }}</span>
       </div>
       <div class="card-body p-0">
         <div id="rules-list" style="max-height: 500px; overflow: auto;">
-          {% if status.groups %}
+          {% if open_groups %}
           <table class="table table-sm table-hover mb-0 align-middle">
             <thead>
               <tr>
@@ -130,7 +132,7 @@
               </tr>
             </thead>
             <tbody id="rules-body">
-              {% for g in status.groups %}
+              {% for g in open_groups %}
               <tr>
                 <td>
                   {% if g.is_iface %}<span class="badge bg-info text-dark">{{ g.port_num }}</span>
@@ -175,6 +177,66 @@
   </div>
 </div>
 
+<!-- Blocked IPs: firewall denies from a specific address, kept separate from the open ports above -->
+<div class="row">
+  <div class="col-12 mb-3">
+    <div class="card">
+      <div class="card-header d-flex justify-content-between align-items-center">
+        <span><i class="bi bi-shield-slash"></i> Blocked IPs</span>
+        <span class="small text-secondary" id="blocks-count">{{ block_groups|length }} blocked</span>
+      </div>
+      <div class="card-body">
+        <p class="small text-secondary mb-2">
+          Blocking an IP denies it on <strong>every port</strong> — SSH, the panel and all game servers.
+          <span class="badge bg-info text-dark">Auto</span> entries are managed by the rolling auto-block; the rest are manual.
+        </p>
+        <div class="row g-2 mb-2">
+          <div class="col-sm">
+            <input type="text" id="block-ip" class="form-control form-control-sm" placeholder="IP address to block (e.g. 203.0.113.10)">
+          </div>
+          <div class="col-sm-auto">
+            <button class="btn btn-danger btn-sm w-100" data-action="blockIp">
+              <i class="bi bi-shield-slash"></i> Block IP
+            </button>
+          </div>
+        </div>
+        <div id="block-result" class="small mb-2"></div>
+        <div id="blocks-list" style="max-height: 400px; overflow: auto;">
+          {% if block_groups %}
+          <table class="table table-sm table-hover mb-0 align-middle">
+            <thead>
+              <tr><th>IP address</th><th>Source</th><th>Family</th><th></th></tr>
+            </thead>
+            <tbody id="blocks-body">
+              {% for g in block_groups %}
+              <tr>
+                <td><code>{{ g.block_ip }}</code></td>
+                <td>
+                  {% if g.comment == 'panel-autoblock' %}<span class="badge bg-info text-dark">Auto</span>
+                  {% elif g.comment == 'panel-block' %}<span class="badge bg-secondary">Manual</span>
+                  {% elif g.comment %}<span class="badge bg-dark">{{ g.comment }}</span>
+                  {% else %}<span class="text-secondary">—</span>{% endif %}
+                </td>
+                <td><span class="text-secondary" style="font-size:.68rem;">{{ g.family_label }}</span></td>
+                <td style="width:40px;">
+                  <button class="btn btn-outline-warning btn-sm py-0 px-1" title="Unblock {{ g.block_ip }}"
+                          data-action="unblockIp" data-args='[{{ g.block_ip|tojson }}, "@self"]'>
+                    <i class="bi bi-x"></i>
+                  </button>
+                </td>
+              </tr>
+              {% endfor %}
+            </tbody>
+          </table>
+          {% else %}
+          <div class="p-3 text-center text-secondary small">No IPs are blocked.</div>
+          {% endif %}
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
 {% endblock %}
 
 {% block scripts %}
@@ -191,10 +253,12 @@ function refreshFirewall() {
 
       var listEl = document.getElementById('rules-list');
       var groups = data.groups || [];
-      if (groups.length) {
+      var openGroups = groups.filter(function(g) { return !g.is_block; });
+      var blockGroups = groups.filter(function(g) { return g.is_block; });
+      if (openGroups.length) {
         var html = '<table class="table table-sm table-hover mb-0 align-middle">'
           + '<thead><tr><th>Port</th><th>Protocol</th><th>For</th><th>Scope</th><th>IP</th><th></th></tr></thead><tbody>';
-        groups.forEach(function(g) {
+        openGroups.forEach(function(g) {
           var port = g.is_iface
             ? '<span class="badge bg-info text-dark">' + esc(g.port_num) + '</span>'
             : '<code>' + esc(g.port_num) + '</code>';
@@ -212,10 +276,77 @@ function refreshFirewall() {
         html += '</tbody></table>';
         listEl.innerHTML = html;
       } else {
-        listEl.innerHTML = '<div class="p-3 text-center text-secondary small">No firewall rules yet.</div>';
+        listEl.innerHTML = '<div class="p-3 text-center text-secondary small">No open ports yet.</div>';
       }
-      document.getElementById('rules-count').textContent = groups.length + (groups.length === 1 ? ' rule' : ' rules');
+      document.getElementById('rules-count').textContent = openGroups.length + (openGroups.length === 1 ? ' rule' : ' rules');
+
+      // Blocked IPs (separate card)
+      var blocksEl = document.getElementById('blocks-list');
+      if (blocksEl) {
+        if (blockGroups.length) {
+          var bh = '<table class="table table-sm table-hover mb-0 align-middle">'
+            + '<thead><tr><th>IP address</th><th>Source</th><th>Family</th><th></th></tr></thead><tbody>';
+          blockGroups.forEach(function(g) {
+            bh += '<tr><td><code>' + esc(g.block_ip) + '</code></td>'
+              + '<td>' + blockBadge(g.comment) + '</td>'
+              + '<td><span class="text-secondary" style="font-size:.68rem;">' + esc(g.family_label) + '</span></td>'
+              + '<td><button class="btn btn-outline-warning btn-sm py-0 px-1" title="Unblock ' + esc(g.block_ip) + '"'
+              + _da('unblockIp', [g.block_ip, '@self']) + '><i class="bi bi-x"></i></button></td></tr>';
+          });
+          bh += '</tbody></table>';
+          blocksEl.innerHTML = bh;
+        } else {
+          blocksEl.innerHTML = '<div class="p-3 text-center text-secondary small">No IPs are blocked.</div>';
+        }
+        var bc = document.getElementById('blocks-count');
+        if (bc) bc.textContent = blockGroups.length + ' blocked';
+      }
     });
+}
+
+function blockBadge(c) {
+  if (c === 'panel-autoblock') return '<span class="badge bg-info text-dark">Auto</span>';
+  if (c === 'panel-block')     return '<span class="badge bg-secondary">Manual</span>';
+  return c ? '<span class="badge bg-dark">' + esc(c) + '</span>' : '<span class="text-secondary">—</span>';
+}
+
+function blockIp() {
+  var ip = document.getElementById('block-ip').value.trim();
+  if (!ip) return;
+  var resultEl = document.getElementById('block-result');
+  resultEl.innerHTML = '<span class="text-secondary"><i class="bi bi-arrow-repeat"></i> Blocking…</span>';
+  fetch(MOUNT + '/api/remote/' + remoteId + '/security/block', {
+    method: 'POST',
+    headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({ip: ip}),
+  })
+  .then(r => r.json())
+  .then(data => {
+    if (data.success) {
+      resultEl.innerHTML = '<span class="text-success">✅ ' + esc(data.message) + '</span>';
+      document.getElementById('block-ip').value = '';
+      refreshFirewall();
+    } else {
+      resultEl.innerHTML = '<span class="text-danger">❌ ' + esc(data.message) + '</span>';
+    }
+  })
+  .catch(function() { resultEl.innerHTML = '<span class="text-danger">❌ Request failed</span>'; });
+}
+
+function unblockIp(ip, btn) {
+  confirmDialog({title: 'Unblock IP', icon: 'shield-check', confirmClass: 'btn-warning', confirmLabel: 'Unblock',
+    bodyText: 'Remove the firewall block on ' + ip + '?',
+    onConfirm: function() {
+      if (btn) { btn.disabled = true; btn.innerHTML = '<span class="spinner-border spinner-border-sm"></span>'; }
+      fetch(MOUNT + '/api/remote/' + remoteId + '/security/block', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({ip: ip, unblock: true}),
+      })
+      .then(r => r.json())
+      .then(function(d) { if (!d.success && window.toast) toast(d.message || 'Failed to unblock', 'danger'); refreshFirewall(); })
+      .catch(function() { refreshFirewall(); });
+    }});
 }
 
 function esc(s) {
@@ -299,5 +430,13 @@ function syncPorts(serverId, btn) {
 document.getElementById('new-port').addEventListener('keydown', function(e) {
   if (e.key === 'Enter') openPort();
 });
+
+// Enter key blocks the typed IP
+var blockIpInput = document.getElementById('block-ip');
+if (blockIpInput) {
+  blockIpInput.addEventListener('keydown', function(e) {
+    if (e.key === 'Enter') blockIp();
+  });
+}
 </script>
 {% endblock %}

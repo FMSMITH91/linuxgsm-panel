@@ -112,7 +112,7 @@ from ssh_manager import (
     remote_os_check_updates, remote_os_run_updates,
     remote_os_update_start, remote_os_update_status,
     remote_fail2ban_overview, remote_fail2ban_unban, remote_security_log, remote_fail2ban_top_ips,
-    remote_ufw_deny_ip, remote_ufw_undeny_ip, remote_ufw_blocked_ips,
+    remote_ufw_deny_ip, remote_ufw_undeny_ip, remote_ufw_blocked_ips, tailnet_exempt_ips,
     remote_reboot, remote_reboot_required, remote_uptime,
     remote_bootstrap_vps, remote_check_tailscale,
     remote_install_tailscale, remote_bootstrap_tailscale,
@@ -415,6 +415,7 @@ def _autoblock_reconcile(remote):
         def undeny(ip):
             return remote_ufw_undeny_ip(remote, ip)
     top_ips = {r["ip"] for r in top}
+    top_ips -= tailnet_exempt_ips(remote, top_ips)   # never auto-block your own tailnet (Tailscale up)
     auto = {ip for ip, tag in blocked.items() if tag == _AUTOBLOCK_TAG}
     added = removed = 0
     for ip in top_ips - set(blocked.keys()):   # not blocked at all yet → auto-block (skip manual ones)
@@ -3743,6 +3744,11 @@ def register_routes(app):
         """UFW-block (all ports, permanent) an IP on the panel host."""
         ip = (_json_body().get("ip") or "").strip()
         unblock = bool(_json_body().get("unblock"))
+        if not unblock:
+            lr = RemoteServer.query.filter_by(is_local=True).first()
+            if lr and tailnet_exempt_ips(lr, {ip}):
+                return jsonify({"success": False, "message":
+                                "%s is a Tailscale address — blocking it would cut off tailnet access." % ip})
         try:
             ok, msg = (so.ufw_undeny_ip(ip) if unblock else so.ufw_deny_ip(ip))
             log_action(current_user, "ufw_unblock" if unblock else "ufw_block", target=ip, success=ok)
@@ -3842,6 +3848,9 @@ def register_routes(app):
         remote = get_remote(remote_id)
         ip = (_json_body().get("ip") or "").strip()
         unblock = bool(_json_body().get("unblock"))
+        if not unblock and tailnet_exempt_ips(remote, {ip}):
+            return jsonify({"success": False, "message":
+                            "%s is a Tailscale address — blocking it would cut off tailnet access." % ip})
         try:
             ok, msg = (remote_ufw_undeny_ip(remote, ip) if unblock else remote_ufw_deny_ip(remote, ip))
             log_action(current_user, "ufw_unblock" if unblock else "ufw_block",

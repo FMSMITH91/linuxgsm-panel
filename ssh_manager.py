@@ -2065,12 +2065,18 @@ def _group_ufw_rules(rules):
                 scope = iface + (" (Tailscale)" if iface.startswith("tailscale") else "")
             else:
                 scope = "Any address" if p["from"].lower() == "anywhere" else (p["from"] or "—")
+            # A "deny/reject from <specific IP>" rule is an IP block (its own UI section), as opposed
+            # to an open-port / access rule. Interface rules and "deny to a port" (no from-IP) aren't.
+            from_ip = "" if p["from"].lower() == "anywhere" else (p["from"] or "")
+            is_block = ((p["action"] or "").upper() in ("DENY", "REJECT")
+                        and bool(from_ip) and not iface)
             g = {
                 "nums": [], "families": [], "port_label": port_label,
                 "port_num": port_num, "proto_label": proto_label,
                 "comment": p["comment"], "scope": scope, "iface": iface,
                 "action": p["action"] or "ALLOW", "direction": p["direction"] or "IN",
-                "is_iface": is_iface,
+                "is_iface": is_iface, "is_block": is_block,
+                "block_ip": from_ip if is_block else "",
             }
             index[key] = g
             groups.append(g)
@@ -3751,6 +3757,39 @@ def _tailscale_conn_state(server):
         except Exception:
             ssh_enabled = False   # fail safe
     return running, ssh_enabled
+
+
+# Tailscale peers get CGNAT addresses from 100.64.0.0/10. A public attacker can't have a source in
+# that range, so the panel never firewall-blocks a tailnet IP while Tailscale is up — blocking one
+# would cut off tailnet access (and, inserted at UFW position 1, it would override the tailscale0
+# allow rule).
+_TAILNET_CGNAT = "100.64.0.0/10"
+
+
+def tailnet_exempt_ips(server, ips):
+    """Of `ips`, the Tailscale-range (100.64.0.0/10) addresses that must NOT be firewall-blocked —
+    but only when Tailscale is actually running on this host. Returns a set of canonical IP strings
+    (empty if Tailscale is down or nothing is in range). Works for local + remote (run_command
+    dispatches). Best-effort; fails safe to no exemptions."""
+    import ipaddress
+    try:
+        net = ipaddress.ip_network(_TAILNET_CGNAT)
+    except ValueError:
+        return set()
+    cand = set()
+    for ip in ips or ():
+        try:
+            addr = ipaddress.ip_address((ip or "").strip())
+        except (ValueError, TypeError):
+            continue
+        if addr in net:
+            cand.add(str(addr))
+    if not cand:
+        return set()   # nothing in the tailnet range → skip the (relatively costly) tailscale probe
+    try:
+        return cand if _tailscale_conn_state(server)[0] else set()
+    except Exception:
+        return set()   # can't confirm Tailscale → don't exempt
 
 
 def _tailnet_ssh_state(server):
