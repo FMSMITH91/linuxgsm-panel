@@ -114,6 +114,12 @@ def _post(url, data, headers):
     # user/admin-supplied URL can never make this request hit an internal or arbitrary host.
     if not (url or "").startswith(_ALLOWED_PREFIXES):
         return False, "blocked"
+    # NOTE (reviewed): CodeQL flags py/partial-ssrf here because a URL path segment (the Telegram bot
+    # token / Discord webhook token) originates from a request. It is a false positive — the request
+    # HOST is a hardcoded constant (built above from _ALLOWED_PREFIXES), and every path segment is
+    # charset-validated (_TG_TOKEN_RE / _DISCORD_WEBHOOK_RE: only [A-Za-z0-9_-] and digits, no '/' or
+    # '.'), so the path cannot traverse or redirect. The request can only ever reach the intended
+    # provider's API endpoint.
     req = urllib.request.Request(url, data=data, method="POST",
                                  headers={"User-Agent": "linuxgsm-panel", **headers})
     try:
