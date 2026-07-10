@@ -16,6 +16,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import config
 import ssh_manager as sm
+import notifications as N
 from app import password_problem, _int_or
 from auth import can_access_remote, client_ip
 
@@ -1886,6 +1887,40 @@ for p in (config.CRED_KEY_FILE, config.SECRET_FILE, config.CONFIG_FILE):
             p.unlink()
         except OSError:
             pass
+
+# ── Notifications: SSRF guards, provider validation, and event-key wiring ──
+import pathlib as _pl   # noqa: E402
+import re as _re        # noqa: E402
+
+# Discord webhook is rebuilt onto a CONSTANT host from a validated id/token (no user-controlled host).
+check("notify: valid discord webhook is accepted + kept on discord.com",
+      N._discord_api_url("https://discord.com/api/webhooks/123456789012/AbC-dEf_ghIJKLmnop")
+      == "https://discord.com/api/webhooks/123456789012/AbC-dEf_ghIJKLmnop")
+check("notify: discordapp.com webhook is canonicalised to discord.com",
+      N._discord_api_url("https://discordapp.com/api/webhooks/123456789012/tok_ABCdef")
+      == "https://discord.com/api/webhooks/123456789012/tok_ABCdef")
+check("notify: SSRF - an internal host is rejected",
+      N._discord_api_url("https://169.254.169.254/api/webhooks/123456789012/x") is None)
+check("notify: SSRF - a non-webhook discord path is rejected",
+      N._discord_api_url("https://discord.com/evil") is None)
+check("notify: SSRF - _post refuses a non-allow-listed host",
+      N._post("https://evil.example.com/x", b"", {}) == (False, "blocked"))
+check("notify: SSRF - _post refuses a non-https URL",
+      N._post("http://api.telegram.org/botX/sendMessage", b"", {})[0] is False)
+# Telegram token/chat validation short-circuits before any network call.
+check("notify: telegram rejects a malformed bot token",
+      N.send_telegram("not-a-real-token", "123456", "hi")[0] is False)
+check("notify: telegram rejects an empty chat id",
+      N.send_telegram("123456:AAABBBCCCDDDEEEFFF_gg-hh", "", "hi")[0] is False)
+# EVENTS registry shape, and every notify() call in app.py uses a registered key (a typo'd key would
+# silently never fire — like a data-action with no handler).
+check("notify: EVENTS entries are (label:str, default:bool)",
+      all(isinstance(v, tuple) and len(v) == 2 and isinstance(v[0], str) and isinstance(v[1], bool)
+          for v in N.EVENTS.values()))
+_app_src = (_pl.Path(__file__).resolve().parent.parent / "app.py").read_text(encoding="utf-8")
+_used_keys = set(_re.findall(r'notifications\.notify\(\s*"(\w+)"', _app_src))
+check("notify: every notify() key in app.py is registered in EVENTS",
+      _used_keys and _used_keys <= set(N.EVENTS), "unregistered: %s" % sorted(_used_keys - set(N.EVENTS)))
 
 passed = sum(1 for ok, _, _ in results if ok)
 for ok, name, detail in results:

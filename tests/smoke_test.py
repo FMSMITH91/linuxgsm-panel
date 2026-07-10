@@ -48,6 +48,24 @@ def check(name, cond, detail=""):
     results.append((bool(cond), name, detail))
 
 
+# Every url_for('endpoint') referenced in a template must resolve to a real route — otherwise the
+# page 500s the moment it renders. Catches a nav link / redirect pointing at a renamed or removed
+# endpoint (the template-side companion to the data-action button-wiring test).
+def _check_template_url_for():
+    import pathlib
+    import re
+    endpoints = {r.endpoint for r in app.url_map.iter_rules()}
+    bad = []
+    for p in sorted(pathlib.Path("templates").glob("*.html")):
+        for m in re.finditer(r"""url_for\(\s*['"]([A-Za-z_][\w]*)['"]""", p.read_text(encoding="utf-8")):
+            if m.group(1) not in endpoints:
+                bad.append("%s -> url_for('%s')" % (p.name, m.group(1)))
+    check("templates: every url_for() endpoint exists", not bad, "; ".join(sorted(set(bad))))
+
+
+_check_template_url_for()
+
+
 def client_as(user_id):
     c = app.test_client()
     with c.session_transaction() as s:
