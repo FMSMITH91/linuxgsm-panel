@@ -576,7 +576,7 @@ def _tg_status_text(app):
         players = sum((_player_counts.get(gs.id) or {}).get("count") or 0
                       for gs in installed if isinstance((_player_counts.get(gs.id) or {}).get("count"), int))
     return ("Version %s\nServers: %d online / %d installed\nPlayers online: %d"
-            % (so.panel_version(), online, len(installed), players))
+            % (_panel_ver_label(), online, len(installed), players))
 
 
 def _tg_servers_text(app):
@@ -591,31 +591,41 @@ def _tg_servers_text(app):
     return "\n".join(rows) if rows else "No servers installed."
 
 
-def _telegram_do_update(app, token, chat_id):
+def _panel_ver_label():
+    """Human-friendly version for messages: '<VERSION> (<short-commit>)'. The VERSION file rarely
+    changes between commits, so the commit is what tells you an update actually landed."""
     ver = so.panel_version()
+    commit = so.panel_commit()
+    return "%s (%s)" % (ver, commit) if commit else ver
+
+
+def _telegram_do_update(app, token, chat_id):
     try:
         st = so.panel_update_status(force=True)
     except Exception:
         st = {}
     if st.get("git") and not st.get("update_available"):
-        _tg_reply(token, chat_id, "✅ Already up to date (%s)." % ver)
+        _tg_reply(token, chat_id, "✅ Already up to date — %s." % _panel_ver_label())
         return
     ok, msg = so.panel_self_update()   # detached + CI-gated; returns immediately, then restarts us
     if not ok:
         _tg_reply(token, chat_id, "⚠️ Update not started: %s" % msg)
         return
-    _set_tg_pending_update(chat_id, ver)
-    _tg_reply(token, chat_id, "🔄 Update started (from %s). I'll message you here once I'm back." % ver)
+    # Store the COMMIT (not the VERSION string, which rarely changes) so the post-restart check can
+    # tell whether the update actually landed.
+    _set_tg_pending_update(chat_id, so.panel_commit())
+    _tg_reply(token, chat_id, "🔄 Update started (from %s). I'll message you here once I'm back." % _panel_ver_label())
 
 
-def _set_tg_pending_update(chat_id, from_version):
+def _set_tg_pending_update(chat_id, from_commit):
     cfg = load_config()
-    cfg["telegram_pending_update"] = {"chat_id": chat_id, "from_version": from_version, "ts": time.time()}
+    cfg["telegram_pending_update"] = {"chat_id": chat_id, "from_commit": from_commit, "ts": time.time()}
     save_config(cfg)
 
 
 def _report_tg_pending_update():
-    """After a restart, if a Telegram-triggered update was pending, tell the chat how it went."""
+    """After a restart, if a Telegram-triggered update was pending, tell the chat how it went — by
+    comparing the git commit before/after (the VERSION string usually doesn't move between commits)."""
     cfg = load_config()
     pend = cfg.get("telegram_pending_update")
     if not pend:
@@ -627,11 +637,13 @@ def _report_tg_pending_update():
     chat = pend.get("chat_id") or ""
     if not (token and chat):
         return
-    now_ver, frm = so.panel_version(), pend.get("from_version") or "?"
-    if now_ver != frm:
-        _tg_reply(token, chat, "✅ Update complete — now on %s (was %s). Back online." % (now_ver, frm))
+    now = so.panel_commit()
+    frm = pend.get("from_commit") or pend.get("from_version")   # from_version: older pending markers
+    if now and frm and now != frm:
+        _tg_reply(token, chat, "✅ Update complete — now on %s (was %s). Back online." % (_panel_ver_label(), frm))
     else:
-        _tg_reply(token, chat, "ℹ️ Update finished — still on %s (no change, or rolled back)." % now_ver)
+        _tg_reply(token, chat, "ℹ️ Update finished — no new commit landed (already current, or it "
+                               "rolled back). Still on %s." % _panel_ver_label())
 
 
 # ── Proactive monitor → admin notifications ────────────────────
