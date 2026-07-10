@@ -85,7 +85,7 @@ jobs:
           semgrep scan \
             --config p/security-audit --config p/python --config p/flask \
             --config p/command-injection --config p/secrets \
-            --exclude venv --exclude .github --exclude data \
+            --exclude venv --exclude .github --exclude data --exclude tests \
             --metrics=off > semgrep.txt 2>&1 || true
           {
             echo '### 🛡️ Semgrep SAST';

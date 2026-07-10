@@ -1,0 +1,9 @@
+# Scope CodeQL to the application's own source. tests/ (unit + smoke + the fuzz harnesses and their
+# corpus) and docs/ aren't shipped code, so analysing them only adds noise — Bandit and Semgrep
+# already exclude tests/ for the same reason. Security queries still cover all of app.py, the
+# ssh/system modules, the templates' inline JS, and the workflow files (actions).
+name: "linuxgsm-panel CodeQL config"
+
+paths-ignore:
+  - tests
+  - docs
