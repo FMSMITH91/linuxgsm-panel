@@ -3215,7 +3215,15 @@ def register_routes(app):
     @login_required
     @permission_required(SUPER_ADMIN)
     def notifications_test():
-        ok, msg = notifications.test_send((_json_body().get("channel") or "").strip())
+        b = _json_body()
+        # Test the values typed into the form (so you don't have to Save first); blank fields fall
+        # back to whatever's already saved.
+        ok, msg = notifications.test_send(
+            (b.get("channel") or "").strip(),
+            token=(b.get("token") or "").strip() or None,
+            chat_id=(b.get("chat_id") or "").strip() or None,
+            webhook=(b.get("webhook") or "").strip() or None,
+        )
         return jsonify({"success": ok, "message": msg})
 
     @app.route("/users/add", methods=["POST"])

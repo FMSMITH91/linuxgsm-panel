@@ -96,19 +96,25 @@
   </div>
 
   <button type="submit" class="btn btn-primary"><i class="bi bi-save"></i> Save settings</button>
-  <span class="text-secondary small ms-2">Save first, then use “Send test” to confirm a channel works.</span>
+  <span class="text-secondary small ms-2">“Send test” checks what you've typed above — you don't need to save first.</span>
 </form>
 
 {% endblock %}
 
 {% block scripts %}
 <script nonce="{{ csp_nonce }}">
+function _val(name) { var el = document.querySelector('[name="' + name + '"]'); return el ? el.value.trim() : ''; }
 function testChannel(channel, btn) {
   var orig = btn.innerHTML;
   btn.disabled = true; btn.innerHTML = '<span class="spinner-border spinner-border-sm"></span> Sending…';
+  // Send the values currently typed in the form so you can test BEFORE saving; blank fields fall
+  // back to whatever's already saved.
+  var payload = {channel: channel};
+  if (channel === 'telegram') { payload.token = _val('telegram_token'); payload.chat_id = _val('telegram_chat_id'); }
+  else if (channel === 'discord') { payload.webhook = _val('discord_webhook'); }
   fetch(MOUNT + '/api/notifications/test', {
     method: 'POST', headers: {'Content-Type': 'application/json'},
-    body: JSON.stringify({channel: channel})
+    body: JSON.stringify(payload)
   })
   .then(r => r.json())
   .then(d => { if (window.toast) toast(d.message || (d.success ? 'Sent' : 'Failed'), d.success ? 'success' : 'danger'); })

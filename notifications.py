@@ -92,35 +92,55 @@ def _valid_discord_webhook(url):
 
 
 def _post(url, data, headers):
-    """POST bytes to a validated https URL; True on a 2xx. Never raises."""
+    """POST bytes to a validated https URL. Returns (ok, detail): ok is True on a 2xx; detail carries
+    the server's response/error body (so callers can surface *why* it failed). Never raises."""
     req = urllib.request.Request(url, data=data, method="POST",
                                  headers={"User-Agent": "linuxgsm-panel", **headers})
     try:
         with urllib.request.urlopen(req, timeout=8) as resp:  # nosec B310 - https, host/format validated
-            return 200 <= resp.getcode() < 300
-    except (urllib.error.URLError, OSError, ValueError):
+            return (200 <= resp.getcode() < 300), resp.read().decode("utf-8", "replace")[:400]
+    except urllib.error.HTTPError as e:   # 4xx/5xx — the body usually says exactly what's wrong
+        try:
+            body = e.read().decode("utf-8", "replace")[:400]
+        except Exception:
+            body = ""
+        return False, body or ("HTTP %s" % e.code)
+    except (urllib.error.URLError, OSError, ValueError) as e:
         _log.debug("notification POST failed", exc_info=True)
-        return False
+        return False, "couldn't reach the server (%s) — check the host's outbound network" % type(e).__name__
+
+
+def _telegram_error(raw):
+    """Pull Telegram's human 'description' out of an error body, else the raw text."""
+    try:
+        return json.loads(raw or "{}").get("description") or (raw or "")[:200]
+    except (ValueError, TypeError):
+        return (raw or "")[:200]
 
 
 def send_telegram(token, chat_id, text):
-    """Send a Telegram message. The token is format-validated so it can't rewrite the request path;
-    chat_id + text are urlencoded into the body."""
-    if not token or not chat_id or not _TG_TOKEN_RE.match(token):
-        return False
+    """Send a Telegram message. Returns (ok, detail) — detail is Telegram's error description on
+    failure. The token is format-validated so it can't rewrite the request path; chat_id + text are
+    urlencoded into the body."""
+    if not token or not _TG_TOKEN_RE.match(token):
+        return False, "the bot token is missing or malformed"
+    if not chat_id:
+        return False, "the chat ID is missing"
     url = "https://api.telegram.org/bot%s/sendMessage" % token
     body = urllib.parse.urlencode({"chat_id": chat_id, "text": text[:4000],
                                    "disable_web_page_preview": "true"}).encode()
-    return _post(url, body, {"Content-Type": "application/x-www-form-urlencoded"})
+    ok, raw = _post(url, body, {"Content-Type": "application/x-www-form-urlencoded"})
+    return (True, "") if ok else (False, _telegram_error(raw))
 
 
 def send_discord(webhook, text):
-    """Send a Discord webhook message. The URL must be a discord.com webhook (SSRF guard)."""
+    """Send a Discord webhook message. Returns (ok, detail). The URL must be a discord.com webhook
+    (SSRF guard)."""
     if not _valid_discord_webhook(webhook):
-        if webhook:
-            _log.warning("discord webhook rejected: not a discord.com /api/webhooks/ URL")
-        return False
-    return _post(webhook, json.dumps({"content": text[:1900]}).encode(), {"Content-Type": "application/json"})
+        return False, "that isn't a valid discord.com webhook URL"
+    ok, raw = _post(webhook, json.dumps({"content": text[:1900]}).encode(),
+                    {"Content-Type": "application/json"})
+    return (True, "") if ok else (False, (raw or "")[:200])
 
 
 # ── public API ─────────────────────────────────────────────────
@@ -148,25 +168,32 @@ def notify(event_key, title, body=""):
         _log.debug("notify failed to dispatch", exc_info=True)
 
 
-def test_send(kind):
-    """Synchronously send a test message to one channel. (ok, message)."""
+def test_send(kind, token=None, chat_id=None, webhook=None):
+    """Synchronously send a test message to one channel. Uses the values passed from the form when
+    given (so you can test BEFORE saving), else the saved config. (ok, message) — message carries the
+    provider's actual error on failure."""
     cfg = _cfg()
     text = "🎮 LinuxGSM Panel — test alert. If you can read this, notifications are working."
     if kind == "telegram":
         tg = cfg.get("telegram") or {}
-        token, chat = decrypt_secret(tg.get("token") or ""), (tg.get("chat_id") or "").strip()
-        if not token or not chat:
-            return False, "Set the bot token and chat ID first (and Save)."
-        if not _TG_TOKEN_RE.match(token):
-            return False, "That bot token isn't in the expected format."
-        return (True, "Test message sent.") if send_telegram(token, chat, text) \
-            else (False, "Telegram rejected it — double-check the token and chat ID.")
+        tok = (token or "").strip() or decrypt_secret(tg.get("token") or "")
+        chat = ((chat_id or "").strip() or (tg.get("chat_id") or "")).strip()
+        if not tok:
+            return False, "Enter the bot token first."
+        if not _TG_TOKEN_RE.match(tok):
+            return False, "That bot token isn't in the expected format (like 123456789:AA…)."
+        if not chat:
+            return False, "Enter the chat ID first. Message your bot once, then use your numeric chat ID."
+        ok, detail = send_telegram(tok, chat, text)
+        return (True, "Test message sent — check Telegram.") if ok \
+            else (False, "Telegram error: %s" % (detail or "unknown"))
     if kind == "discord":
-        wh = decrypt_secret((cfg.get("discord") or {}).get("webhook") or "")
+        wh = (webhook or "").strip() or decrypt_secret((cfg.get("discord") or {}).get("webhook") or "")
         if not wh:
-            return False, "Set the webhook URL first (and Save)."
+            return False, "Enter the webhook URL first."
         if not _valid_discord_webhook(wh):
             return False, "That doesn't look like a Discord webhook URL."
-        return (True, "Test message sent.") if send_discord(wh, text) \
-            else (False, "Discord rejected it — double-check the webhook URL.")
+        ok, detail = send_discord(wh, text)
+        return (True, "Test message sent — check Discord.") if ok \
+            else (False, "Discord error: %s" % (detail or "unknown"))
     return False, "Unknown channel."
