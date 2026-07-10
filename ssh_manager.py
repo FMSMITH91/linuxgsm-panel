@@ -3467,10 +3467,14 @@ def remote_ufw_deny_ip(server, ip, tag=_UFW_BLOCK_TAG):
         return False, "Invalid IP address."
     tag = re.sub(r"[^a-z0-9-]", "", (tag or ""))[:32] or _UFW_BLOCK_TAG
     # Drop any existing deny for this IP first (no duplicate rules), then insert at position 1.
-    run_command(server, "ufw delete deny from %s >/dev/null 2>&1; "
+    # run_command wraps the whole compound in `sudo bash -c`, so both parts run as root and rc is
+    # the insert's exit status.
+    out, err, rc = run_command(server, "ufw delete deny from %s >/dev/null 2>&1; "
                         "ufw insert 1 deny from %s comment %s 2>&1"
                 % (_quote(ip), _quote(ip), _quote(tag)), timeout=20, sudo=True)
-    return True, "Blocked %s (all ports)." % ip
+    if rc == 0:
+        return True, "Blocked %s (all ports)." % ip
+    return False, ((out or err or "Block failed").replace("\n", " ")[:200])
 
 
 def remote_ufw_undeny_ip(server, ip):

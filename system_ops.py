@@ -1328,9 +1328,14 @@ def ufw_deny_ip(ip, tag=_UFW_BLOCK_TAG):
     except (ValueError, TypeError):
         return False, "Invalid IP address."
     tag = re.sub(r"[^a-z0-9-]", "", (tag or ""))[:32] or _UFW_BLOCK_TAG
-    _run("ufw delete deny from %s >/dev/null 2>&1; ufw insert 1 deny from %s comment %s 2>&1"
-         % (shlex.quote(ip), shlex.quote(ip), shlex.quote(tag)), timeout=20, sudo=True)
-    return True, "Blocked %s (all ports)." % ip
+    # Two separate sudo'd commands: _run prepends `sudo` to the FIRST command only, so a "a; b"
+    # compound would run `b` unprivileged. Drop any existing rule first (harmless if none), then add.
+    _run("ufw delete deny from %s" % shlex.quote(ip), timeout=15, sudo=True)
+    out, err, rc = _run("ufw insert 1 deny from %s comment %s 2>&1"
+                        % (shlex.quote(ip), shlex.quote(tag)), timeout=15, sudo=True)
+    if rc == 0:
+        return True, "Blocked %s (all ports)." % ip
+    return False, ((out or err or "Block failed").replace("\n", " ")[:200])
 
 
 def ufw_undeny_ip(ip):
