@@ -3595,6 +3595,54 @@ def remote_fail2ban_unban(server, jail, ip):
     return False, ((out or err or "Unban failed").replace("\n", " ")[:200])
 
 
+def _f2b_dropin_ignoreip_body(ignore_ips):
+    """A fail2ban `[DEFAULT] ignoreip` drop-in body built from validated entries only (localhost is
+    always included). Every entry is re-parsed through ipaddress, so a non-IP token can never reach
+    the file."""
+    import ipaddress
+    entries = ["127.0.0.1/8", "::1"]
+    for raw in (ignore_ips or []):
+        s = (str(raw) or "").strip()
+        try:
+            entries.append(str(ipaddress.ip_network(s, strict=False)) if "/" in s
+                           else str(ipaddress.ip_address(s)))
+        except ValueError:
+            continue
+    seen, uniq = set(), []
+    for e in entries:
+        if e not in seen:
+            seen.add(e)
+            uniq.append(e)
+    return "[DEFAULT]\nignoreip = %s\n" % " ".join(uniq)
+
+
+_F2B_PANEL_WHITELIST_DROPIN = "/etc/fail2ban/jail.d/zz-panel-whitelist.local"
+
+
+def remote_set_fail2ban_ignoreip(server, ignore_ips, unban_ip=None):
+    """Make a REMOTE host's fail2ban ignore the panel whitelist, so a whitelisted IP is never banned
+    on ANY of that host's jails (sshd included) — the remote counterpart of the panel's own
+    ignoreip. Writes a dedicated panel-owned drop-in (`jail.d/zz-panel-whitelist.local`) — its own
+    file, so it never clobbers the host's existing config — and reloads. Optionally lifts one IP that
+    is already banned (used when whitelisting). No-op if fail2ban isn't installed. (ok, msg)."""
+    have, _, _ = run_command(server, "command -v fail2ban-client >/dev/null 2>&1 && echo yes || echo no", timeout=10)
+    if "yes" not in (have or ""):
+        return False, "fail2ban not installed on this host"
+    import base64
+    b64 = base64.b64encode(_f2b_dropin_ignoreip_body(ignore_ips).encode()).decode()
+    run_command(server, f"echo '{b64}' | base64 -d > {_quote(_F2B_PANEL_WHITELIST_DROPIN)}", timeout=15, sudo=True)
+    run_command(server, "fail2ban-client reload 2>&1 || systemctl reload fail2ban 2>&1 || "
+                        "systemctl restart fail2ban 2>&1", timeout=30, sudo=True)
+    # ignoreip only stops FUTURE bans; lift a current ban across every jail so a just-whitelisted
+    # admin isn't left banned until it expires. `$J` is a jail name from fail2ban's own output.
+    if unban_ip and _valid_ip(unban_ip):
+        run_command(server, "for J in $(fail2ban-client status 2>/dev/null | "
+                            "sed -n 's/.*Jail list:[[:space:]]*//p' | tr ',' ' '); do "
+                            "fail2ban-client set \"$J\" unbanip %s 2>/dev/null; done" % _quote(unban_ip),
+                    timeout=30, sudo=True)
+    return True, "ignoreip applied on %s" % getattr(server, "name", "remote")
+
+
 def remote_security_log(server, which, lines=200, jail=None):
     """Tail of a whitelisted security log on a REMOTE host: 'fail2ban' or 'ssh'. `which` is a fixed
     set, never a path from the request. For 'fail2ban', an optional charset-validated `jail` narrows

@@ -1947,6 +1947,14 @@ _jail = SO._panel_f2b_jail_body("/data/auth.log", 5000, ["1.2.3.4", "junk"])
 check("f2b: the jail body carries an ignoreip line with the valid entry only",
       "\nignoreip = " in _jail and "1.2.3.4" in _jail and "junk" not in _jail)
 
+# The REMOTE ignoreip drop-in (pushed to remotes over SSH) is built from the same validated entries.
+_dropin = sm._f2b_dropin_ignoreip_body(["9.9.9.9", "10.0.0.0/8", "bad; rm -rf /"])
+check("remote-f2b: drop-in is a [DEFAULT] ignoreip block including localhost",
+      "[DEFAULT]" in _dropin and "ignoreip = " in _dropin and "127.0.0.1/8" in _dropin)
+check("remote-f2b: drop-in keeps the valid IP + CIDR entries", "9.9.9.9" in _dropin and "10.0.0.0/8" in _dropin)
+check("remote-f2b: drop-in drops non-IP tokens (no shell metachars in the file)",
+      not any(bad in _dropin for bad in (";", "$", "rm", "bad")))
+
 passed = sum(1 for ok, _, _ in results if ok)
 for ok, name, detail in results:
     line = ("PASS" if ok else "FAIL") + "  " + name

@@ -113,6 +113,7 @@ from ssh_manager import (
     remote_os_check_updates, remote_os_run_updates,
     remote_os_update_start, remote_os_update_status,
     remote_fail2ban_overview, remote_fail2ban_unban, remote_security_log, remote_fail2ban_top_ips,
+    remote_set_fail2ban_ignoreip,
     remote_ufw_deny_ip, remote_ufw_undeny_ip, remote_ufw_blocked_ips, tailnet_exempt_ips,
     remote_reboot, remote_reboot_required, remote_uptime,
     remote_bootstrap_vps, remote_check_tailscale,
@@ -704,12 +705,37 @@ def _whitelisted(ip, nets=None):
 
 def _apply_whitelist_to_fail2ban():
     """Rewrite the panel-login jail so its ignoreip matches the current whitelist (no-op if the jail
-    is already correct). Best-effort and local-only — the panel manages only its own host's jail."""
+    is already correct). Best-effort and panel-host-only — for remotes see _apply_whitelist_to_remotes."""
     try:
         return so.ensure_panel_fail2ban(AUTH_LOG_PATH, load_config().get("port", 5000), _security_whitelist())
     except Exception:
         _log.debug("applying whitelist to fail2ban failed", exc_info=True)
         return False, "could not update fail2ban"
+
+
+def _apply_whitelist_to_remotes(app, unban_ip=None):
+    """Push the whitelist into every remote host's fail2ban over SSH, so a whitelisted IP is never
+    banned on a remote either (parity with the panel host). Best-effort and backgrounded — one SSH
+    round-trip per remote. Needs its own app context (runs from a background thread)."""
+    with app.app_context():
+        wl = _security_whitelist()
+        for remote in RemoteServer.query.filter_by(is_local=False).all():
+            try:
+                remote_set_fail2ban_ignoreip(remote, wl, unban_ip=unban_ip)
+            except Exception:
+                _log.debug("remote fail2ban ignoreip failed for remote %s", remote.id, exc_info=True)
+
+
+def _apply_whitelist_everywhere(app, unban_ip=None):
+    """Apply the whitelist to fail2ban on the panel host AND every remote. Run in a background thread
+    (SSH per remote) so the request that changed the whitelist returns immediately."""
+    _apply_whitelist_to_fail2ban()                     # panel-login jail (local)
+    if unban_ip:
+        try:
+            so.fail2ban_unban_ip_everywhere(unban_ip)  # lift a current local ban immediately
+        except Exception:
+            _log.debug("whitelist: local unban-everywhere failed", exc_info=True)
+    _apply_whitelist_to_remotes(app, unban_ip=unban_ip)
 
 
 def _autoblock_reconcile(remote):
@@ -4243,22 +4269,15 @@ def register_routes(app):
         remove = bool(body.get("remove"))
         if remove:
             canon = _security_whitelist_remove(raw)
-            threading.Thread(target=_apply_whitelist_to_fail2ban, daemon=True).start()
+            threading.Thread(target=_apply_whitelist_everywhere, args=(app,), daemon=True).start()
             log_action(current_user, "whitelist_remove", target=canon)
             return jsonify({"success": True, "removed": canon, "whitelist": _security_whitelist()})
         canon = _security_whitelist_add(raw)
         if not canon:
             return jsonify({"success": False, "message": "Enter a valid IP address or CIDR (e.g. 1.2.3.4 or 10.0.0.0/8)."})
-
-        def _apply_add():
-            _apply_whitelist_to_fail2ban()
-            # Clear an existing ban for a single address immediately (a CIDR range isn't enumerated).
-            if "/" not in canon:
-                try:
-                    so.fail2ban_unban_ip_everywhere(canon)
-                except Exception:
-                    _log.debug("whitelist: unban-everywhere failed", exc_info=True)
-        threading.Thread(target=_apply_add, daemon=True).start()
+        # A single address (not a CIDR range) also gets any existing ban lifted immediately.
+        _unban = canon if "/" not in canon else None
+        threading.Thread(target=_apply_whitelist_everywhere, args=(app, _unban), daemon=True).start()
         for rid in _autoblock_hosts():      # release any auto-block for the now-whitelisted address
             _run_autoblock_now(app, rid)
         log_action(current_user, "whitelist_add", target=canon)
@@ -6805,6 +6824,13 @@ if __name__ == "__main__":
             _log.info("panel fail2ban: %s", _msg)
         except Exception:
             _log.debug("panel fail2ban autostart failed", exc_info=True)
+        # Re-sync the whitelist into every remote's fail2ban too, so a remote that was offline or
+        # newly added during a whitelist change catches up. Only when there's something to apply.
+        if _security_whitelist():
+            try:
+                _apply_whitelist_to_remotes(app)
+            except Exception:
+                _log.debug("remote fail2ban whitelist sync failed", exc_info=True)
     threading.Thread(target=_f2b_autostart, daemon=True).start()
 
     # Record fail2ban bans/unbans of the panel-login jail in the audit log, so the activity is
