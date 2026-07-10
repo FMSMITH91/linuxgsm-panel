@@ -97,41 +97,43 @@ def _valid_discord_webhook(url):
 
 
 def _post(url, data, headers):
-    """POST bytes to a validated https URL. Returns (ok, detail): ok is True on a 2xx; detail carries
-    the server's response/error body (so callers can surface *why* it failed). Never raises."""
-    # SSRF barrier at the sink: reject any URL whose host isn't one of our two known providers, so a
-    # user/admin-supplied URL can never make this request hit an internal or arbitrary host.
+    """POST bytes to a validated https URL. Returns (ok, status): ok is True on a 2xx; status is the
+    HTTP status code (0 = host blocked, -1 = couldn't connect). Deliberately does NOT read the
+    response body — the status code is enough to explain a failure, and reading a body back from a
+    (partly user-supplied) URL would turn this into an SSRF exfiltration sink. Never raises."""
+    # SSRF barrier at the sink: only ever talk to our two known providers.
     parsed = urllib.parse.urlparse(url or "")
     if parsed.scheme != "https" or parsed.hostname not in _ALLOWED_HOSTS:
-        return False, "refused: not an allowed notification host"
+        return False, 0
     req = urllib.request.Request(url, data=data, method="POST",
                                  headers={"User-Agent": "linuxgsm-panel", **headers})
     try:
-        with urllib.request.urlopen(req, timeout=8) as resp:  # nosec B310 - https, host/format validated
-            return (200 <= resp.getcode() < 300), resp.read().decode("utf-8", "replace")[:400]
-    except urllib.error.HTTPError as e:   # 4xx/5xx — the body usually says exactly what's wrong
-        try:
-            body = e.read().decode("utf-8", "replace")[:400]
-        except Exception:
-            body = ""
-        return False, body or ("HTTP %s" % e.code)
-    except (urllib.error.URLError, OSError, ValueError) as e:
+        with urllib.request.urlopen(req, timeout=8) as resp:  # nosec B310 - https, host-allowlisted
+            code = resp.getcode()
+            return (200 <= code < 300), code
+    except urllib.error.HTTPError as e:   # 4xx/5xx — the code tells us what's wrong
+        return False, e.code
+    except (urllib.error.URLError, OSError, ValueError):
         _log.debug("notification POST failed", exc_info=True)
-        return False, "couldn't reach the server (%s) — check the host's outbound network" % type(e).__name__
+        return False, -1
 
 
-def _telegram_error(raw):
-    """Pull Telegram's human 'description' out of an error body, else the raw text."""
-    try:
-        return json.loads(raw or "{}").get("description") or (raw or "")[:200]
-    except (ValueError, TypeError):
-        return (raw or "")[:200]
+def _telegram_reason(code):
+    """A helpful message for a failed Telegram send, from the HTTP status code."""
+    return {
+        401: "Unauthorized — the bot token is wrong or was revoked (re-copy it from @BotFather).",
+        400: "Bad request — usually a wrong chat ID; message the bot once, then use the numeric ID "
+             "from @userinfobot.",
+        403: "Forbidden — the bot is blocked, or you haven't pressed Start / messaged it yet.",
+        404: "Not found — the bot token looks invalid.",
+        -1: "couldn't reach api.telegram.org — check the host's outbound network / firewall.",
+        0: "internal: the request was blocked before sending.",
+    }.get(code, "Telegram returned HTTP %s." % code)
 
 
 def send_telegram(token, chat_id, text):
-    """Send a Telegram message. Returns (ok, detail) — detail is Telegram's error description on
-    failure. The token is format-validated so it can't rewrite the request path; chat_id + text are
-    urlencoded into the body."""
+    """Send a Telegram message. Returns (ok, detail). The token is format-validated so it can't
+    rewrite the request path; chat_id + text are urlencoded into the body."""
     if not token or not _TG_TOKEN_RE.match(token):
         return False, "the bot token is missing or malformed"
     if not chat_id:
@@ -139,8 +141,8 @@ def send_telegram(token, chat_id, text):
     url = "https://api.telegram.org/bot%s/sendMessage" % token
     body = urllib.parse.urlencode({"chat_id": chat_id, "text": text[:4000],
                                    "disable_web_page_preview": "true"}).encode()
-    ok, raw = _post(url, body, {"Content-Type": "application/x-www-form-urlencoded"})
-    return (True, "") if ok else (False, _telegram_error(raw))
+    ok, code = _post(url, body, {"Content-Type": "application/x-www-form-urlencoded"})
+    return (True, "") if ok else (False, _telegram_reason(code))
 
 
 def send_discord(webhook, text):
@@ -148,9 +150,12 @@ def send_discord(webhook, text):
     (SSRF guard)."""
     if not _valid_discord_webhook(webhook):
         return False, "that isn't a valid discord.com webhook URL"
-    ok, raw = _post(webhook, json.dumps({"content": text[:1900]}).encode(),
-                    {"Content-Type": "application/json"})
-    return (True, "") if ok else (False, (raw or "")[:200])
+    ok, code = _post(webhook, json.dumps({"content": text[:1900]}).encode(),
+                     {"Content-Type": "application/json"})
+    reason = {401: "the webhook is unauthorized", 404: "the webhook was not found (deleted?)",
+              400: "Discord rejected the message", -1: "couldn't reach discord.com"}.get(
+        code, "Discord returned HTTP %s" % code)
+    return (True, "") if ok else (False, reason)
 
 
 # ── public API ─────────────────────────────────────────────────
