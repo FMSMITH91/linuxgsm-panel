@@ -83,6 +83,11 @@ def save_settings(*, enabled, telegram, discord, events):
 
 
 # ── senders ────────────────────────────────────────────────────
+# Every request this module makes goes to exactly one of these hosts. _post enforces it at the sink
+# as an SSRF barrier, so no admin-set (or tampered) URL can point the panel at an internal service.
+_ALLOWED_HOSTS = {"api.telegram.org"} | set(_DISCORD_HOSTS)
+
+
 def _valid_discord_webhook(url):
     try:
         p = urllib.parse.urlparse(url or "")
@@ -94,6 +99,11 @@ def _valid_discord_webhook(url):
 def _post(url, data, headers):
     """POST bytes to a validated https URL. Returns (ok, detail): ok is True on a 2xx; detail carries
     the server's response/error body (so callers can surface *why* it failed). Never raises."""
+    # SSRF barrier at the sink: reject any URL whose host isn't one of our two known providers, so a
+    # user/admin-supplied URL can never make this request hit an internal or arbitrary host.
+    parsed = urllib.parse.urlparse(url or "")
+    if parsed.scheme != "https" or parsed.hostname not in _ALLOWED_HOSTS:
+        return False, "refused: not an allowed notification host"
     req = urllib.request.Request(url, data=data, method="POST",
                                  headers={"User-Agent": "linuxgsm-panel", **headers})
     try:
