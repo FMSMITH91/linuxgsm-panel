@@ -2934,9 +2934,11 @@ def register_routes(app):
                        .order_by(RemoteServer.name.asc(), GameServer.name.asc()).all())
         player_counts = {gs.id: _cached_player_count(gs.id) for gs in all_servers}
         player_max = {gs.id: _cached_player_max(gs.id) for gs in all_servers}
+        server_names = {gs.id: _cached_player_name(gs.id) for gs in all_servers}
         return render_template("manage_servers.html", remotes=remotes,
                                all_servers=all_servers, games=load_game_list(),
-                               player_counts=player_counts, player_max=player_max)
+                               player_counts=player_counts, player_max=player_max,
+                               server_names=server_names)
 
     def _notify_servers_changed():
         """Best-effort broadcast to every connected browser that the game-server set

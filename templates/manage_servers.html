@@ -106,6 +106,7 @@
               data-host="{{ gs.remote.display_name if gs.remote else '—' }}">
             <td>
               <strong>{{ gs.name }}</strong>
+              {% if server_names.get(gs.id) %}<span class="text-info d-block text-truncate" style="font-size:.7rem;max-width:22ch;" title="In-game server name (what players see)">{{ server_names.get(gs.id) }}</span>{% endif %}
               <span class="text-secondary d-block" style="font-size:.7rem;">{{ gs.short_name }}</span>
             </td>
             <td class="d-none d-md-table-cell">{{ gs.game_display or gs.game_type }}</td>
