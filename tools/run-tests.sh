@@ -23,6 +23,9 @@ fi
 echo "== unit tests (pure logic; no network) =="
 "$PY" tests/unit_test.py
 
+echo "== template actions (every data-action button is wired) =="
+"$PY" tests/template_actions_test.py
+
 echo "== smoke test (boots the app; routes must not 5xx) =="
 "$PY" tests/smoke_test.py
 
