@@ -35,7 +35,11 @@ EVENTS = {
 # A Discord webhook MUST live on Discord — never let an admin-set (or tampered) URL become an SSRF
 # probe into internal services. Telegram uses the fixed api.telegram.org host, so it needs no such
 # host check, but its token is format-validated so it can't rewrite the request path.
-_DISCORD_HOSTS = ("discord.com", "discordapp.com", "ptb.discord.com", "canary.discord.com")
+# A Discord webhook is parsed into its <id>/<token> and the request URL is then rebuilt from a
+# CONSTANT host, so the host the panel connects to is never taken from user input (no SSRF). The id
+# and token are charset-bounded, so the path can't traverse either.
+_DISCORD_WEBHOOK_RE = re.compile(
+    r"^https://(?:ptb\.|canary\.)?discord(?:app)?\.com/api/webhooks/(\d{5,25})/([\w-]{1,120})$")
 _TG_TOKEN_RE = re.compile(r"^\d{5,}:[A-Za-z0-9_-]{20,}$")
 
 
@@ -83,24 +87,22 @@ def save_settings(*, enabled, telegram, discord, events):
 
 
 # ── senders ────────────────────────────────────────────────────
-# Every request this module makes must start with one of these exact URL prefixes. _post checks the
-# URL itself (not a derived value) against them right before the request — a real SSRF barrier that
-# no admin-set/tampered URL can slip past, and the form the scanner recognises as sanitising the URL.
-_ALLOWED_PREFIXES = (
-    "https://api.telegram.org/",
-    "https://discord.com/api/webhooks/",
-    "https://discordapp.com/api/webhooks/",
-    "https://ptb.discord.com/api/webhooks/",
-    "https://canary.discord.com/api/webhooks/",
-)
+# Both request URLs the panel builds use one of these CONSTANT-host prefixes (Telegram's is a fixed
+# literal; a Discord webhook is rebuilt onto discord.com below). _post re-checks the URL against them
+# right before the request as an SSRF barrier — no user/admin-supplied value decides the host.
+_ALLOWED_PREFIXES = ("https://api.telegram.org/", "https://discord.com/api/webhooks/")
+
+
+def _discord_api_url(webhook):
+    """Canonical https://discord.com/api/webhooks/<id>/<token> rebuilt from a validated webhook URL,
+    or None if it isn't one. The host is a constant literal and the id/token are charset-checked, so
+    nothing user-supplied controls where the request goes."""
+    m = _DISCORD_WEBHOOK_RE.match(webhook or "")
+    return "https://discord.com/api/webhooks/%s/%s" % (m.group(1), m.group(2)) if m else None
 
 
 def _valid_discord_webhook(url):
-    try:
-        p = urllib.parse.urlparse(url or "")
-    except (ValueError, TypeError):
-        return False
-    return p.scheme == "https" and p.hostname in _DISCORD_HOSTS and "/api/webhooks/" in p.path
+    return _DISCORD_WEBHOOK_RE.match(url or "") is not None
 
 
 def _post(url, data, headers):
@@ -145,11 +147,12 @@ def send_telegram(token, chat_id, text):
 
 
 def send_discord(webhook, text):
-    """Send a Discord webhook message. Returns (ok, detail). The URL must be a discord.com webhook
-    (SSRF guard)."""
-    if not _valid_discord_webhook(webhook):
+    """Send a Discord webhook message. Returns (ok, detail). The URL is rebuilt onto a constant host
+    from the validated webhook id/token, so the request can only ever go to Discord."""
+    url = _discord_api_url(webhook)
+    if not url:
         return False, "that isn't a valid discord.com webhook URL"
-    ok, reason = _post(webhook, json.dumps({"content": text[:1900]}).encode(),
+    ok, reason = _post(url, json.dumps({"content": text[:1900]}).encode(),
                        {"Content-Type": "application/json"})
     if ok:
         return True, ""
