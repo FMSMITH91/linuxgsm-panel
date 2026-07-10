@@ -391,6 +391,17 @@ def init_auth(app):
         # until they next log in and get an epoch-tagged cookie).
         return db.session.get(User, int(s)) if s.isdigit() else None
 
+    @login_manager.request_loader
+    def load_user_from_request(req):
+        """Authenticate an API client via `Authorization: Bearer <token>` (for scripts/bots), so the
+        REST API is usable without a browser session. The token authenticates AS its owner and
+        inherits exactly that user's RBAC permissions — nothing more. Returns None for a normal
+        request so flask-login falls back to the session cookie (user_loader)."""
+        header = req.headers.get("Authorization", "")
+        if header.startswith("Bearer "):
+            return User.by_api_token(header[7:].strip())
+        return None
+
 
 # ─── Audit Logging ─────────────────────────────────────────────
 

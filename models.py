@@ -139,6 +139,33 @@ class User(UserMixin, db.Model):
         from config import decrypt_secret
         return decrypt_secret(self.totp_secret) if self.totp_secret else ""
 
+    # ── API token (Bearer auth for scripts/bots; inherits the user's RBAC) ──
+    def generate_api_token(self):
+        """Mint a new API token: return the plaintext (shown to the user ONCE) and store only its
+        SHA-256 hash, so a leaked DB never yields a working token. Replaces any existing token."""
+        import hashlib
+        import secrets
+        token = "lgsm_" + secrets.token_hex(24)
+        self.api_token = hashlib.sha256(token.encode()).hexdigest()
+        return token
+
+    def revoke_api_token(self):
+        self.api_token = None
+
+    @property
+    def has_api_token(self):
+        return bool(self.api_token)
+
+    @staticmethod
+    def by_api_token(token):
+        """The ACTIVE user whose token hashes to `token`, or None. Lookup is by the unique hash
+        index — an unknown token simply misses."""
+        import hashlib
+        if not token:
+            return None
+        digest = hashlib.sha256(token.encode()).hexdigest()
+        return User.query.filter_by(api_token=digest, is_active=True).first()
+
 
 user_groups = db.Table(
     "user_groups",
@@ -462,6 +489,7 @@ def _run_light_migrations():
         ("user", "backup_codes"): "ALTER TABLE user ADD COLUMN backup_codes TEXT DEFAULT ''",
         ("user", "language"): "ALTER TABLE user ADD COLUMN language VARCHAR(5) DEFAULT 'en'",
         ("user", "otp_nag_dismissed"): "ALTER TABLE user ADD COLUMN otp_nag_dismissed BOOLEAN DEFAULT 0",
+        ("user", "api_token"): "ALTER TABLE user ADD COLUMN api_token VARCHAR(64)",
     }
     for (table, col), ddl in wanted.items():
         if table in existing and col not in existing[table]:

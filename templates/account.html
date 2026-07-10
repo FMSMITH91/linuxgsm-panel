@@ -94,4 +94,41 @@
   </div>
 </div>
 
+<div class="card mt-3" style="max-width: 640px;">
+  <div class="card-header"><i class="bi bi-code-slash"></i> API access</div>
+  <div class="card-body">
+    <p class="text-secondary small mb-2">
+      A personal API token lets scripts and bots call the REST API without a browser session, using
+      an <code>Authorization: Bearer &lt;token&gt;</code> header. It acts as <strong>you</strong> — it
+      has exactly your permissions, no more.
+    </p>
+
+    {% if new_token %}
+    <div class="alert alert-success py-2">
+      <div class="small mb-1"><strong>Copy your new token now</strong> — it won't be shown again.</div>
+      <code class="user-select-all d-block p-2" style="word-break:break-all; background:rgba(0,0,0,.2); border-radius:6px;">{{ new_token }}</code>
+      <div class="small text-secondary mt-2">Example:</div>
+      <code class="d-block p-2 small" style="word-break:break-all; background:rgba(0,0,0,.2); border-radius:6px;">curl -H "Authorization: Bearer {{ new_token }}" https://your-panel:5000/api/servers</code>
+    </div>
+    {% endif %}
+
+    <p class="small mb-2">
+      Status:
+      {% if current_user.has_api_token %}<span class="badge bg-success">A token is active</span>
+      {% else %}<span class="badge bg-secondary">No token</span>{% endif %}
+    </p>
+    <form method="POST" action="{{ url_for('account_api_token_generate') }}" style="display:inline;">
+      <button class="btn btn-primary btn-sm" type="submit">
+        <i class="bi bi-key"></i> {{ 'Regenerate token' if current_user.has_api_token else 'Generate token' }}
+      </button>
+    </form>
+    {% if current_user.has_api_token %}
+    <form method="POST" action="{{ url_for('account_api_token_revoke') }}" style="display:inline;">
+      <button class="btn btn-outline-danger btn-sm" type="submit"><i class="bi bi-x-circle"></i> Revoke</button>
+    </form>
+    {% endif %}
+    <div class="small text-secondary mt-2">Regenerating or revoking immediately invalidates the old token.</div>
+  </div>
+</div>
+
 {% endblock %}

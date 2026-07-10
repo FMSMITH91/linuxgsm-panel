@@ -81,6 +81,7 @@ from config import (
     DATA_DIR, DB_PATH, get_secret_key, load_config, save_config,
     encrypt_secret, decrypt_secret, is_encrypted, harden_data_permissions,
 )
+import notifications
 from models import (
     AuditLog, GameServer, Group, RemoteServer, SetupState, User, db, init_db,
     CustomCommand, CUSTOM_ARG_DEFAULT_PATTERN, CUSTOM_ARG_PLACEHOLDER,
@@ -424,6 +425,88 @@ def _player_count_watch(app):
         except Exception:
             _log.debug("player-count poller pass failed", exc_info=True)
         time.sleep(_PLAYER_POLL_SECONDS)
+
+
+# ── Proactive monitor → admin notifications ────────────────────
+_MONITOR_SECONDS = 60
+_DISK_ALERT_PCT = 90            # notify once a host's / crosses this; re-arms after it drops to PCT-5
+_EXPECT_OFFLINE_WINDOW = 180    # a panel-issued stop/restart suppresses "server down" for this long
+_monitor_state = {"remotes": {}, "servers": {}, "disk": {}}   # id -> last-seen (reachable / up / alerted)
+_expected_offline = {}          # server_id -> ts the panel last stopped/restarted it
+
+
+def _mark_expected_offline(server_id):
+    """Record that the PANEL just took a server offline, so the monitor won't alert on an
+    intentional stop/restart."""
+    _expected_offline[server_id] = time.time()
+
+
+def _host_disk_pct(remote):
+    """Root-filesystem usage percent for a host (int), or None. Cheap df, best-effort."""
+    try:
+        out, _, _ = run_command(remote, "df -P / | awk 'NR==2{print $5}'", timeout=10)
+        m = re.search(r"(\d+)%", out or "")
+        return int(m.group(1)) if m else None
+    except Exception:
+        return None
+
+
+def _monitor_pass():
+    """One monitoring sweep: fire notifications on host-reachability, disk, and server up/down
+    transitions vs the previous pass. First pass only records a baseline (so nothing alerts on
+    startup). Never raises out."""
+    for remote in RemoteServer.query.all():
+        reachable = _host_reachable(remote)
+        prev = _monitor_state["remotes"].get(remote.id)
+        if prev is True and not reachable:
+            notifications.notify("remote_unreachable", "Host unreachable",
+                                 "%s stopped responding." % remote.display_name)
+        elif prev is False and reachable:
+            notifications.notify("remote_recovered", "Host back online",
+                                 "%s is responding again." % remote.display_name)
+        _monitor_state["remotes"][remote.id] = reachable
+        if not reachable:
+            continue
+        pct = _host_disk_pct(remote)
+        if pct is not None:
+            alerted = _monitor_state["disk"].get(remote.id, False)
+            if pct >= _DISK_ALERT_PCT and not alerted:
+                notifications.notify("disk_low", "Disk running low",
+                                     "%s is at %d%% disk usage." % (remote.display_name, pct))
+                _monitor_state["disk"][remote.id] = True
+            elif pct < _DISK_ALERT_PCT - 5 and alerted:
+                _monitor_state["disk"][remote.id] = False
+        try:
+            ports = _remote_listening_ports(remote)
+        except Exception:
+            ports = None
+        if ports is None:
+            continue
+        for gs in GameServer.query.filter_by(remote_id=remote.id, installed=True).all():
+            if gs.status in ("installing", "configuring"):
+                continue
+            up = gs.port in ports
+            prev_up = _monitor_state["servers"].get(gs.id)
+            if prev_up is True and not up:
+                if time.time() - _expected_offline.get(gs.id, 0) > _EXPECT_OFFLINE_WINDOW:
+                    notifications.notify("server_down", "Server offline",
+                                         "%s on %s went offline unexpectedly." % (gs.name, remote.display_name))
+            elif prev_up is False and up:
+                notifications.notify("server_up", "Server back online",
+                                     "%s on %s is back online." % (gs.name, remote.display_name))
+            _monitor_state["servers"][gs.id] = up
+
+
+def _monitor_watch(app):
+    """Background monitor loop that feeds the admin notifications (server down, host unreachable,
+    disk low)."""
+    while True:
+        time.sleep(_MONITOR_SECONDS)
+        try:
+            with app.app_context():
+                _monitor_pass()
+        except Exception:
+            _log.debug("monitor pass failed", exc_info=True)
 
 
 def _reboot_when_empty_watch(app):
@@ -840,7 +923,22 @@ def create_app():
     # (a global fetch wrapper adds it). Defense-in-depth on top of the SameSite=Lax
     # session cookie. Tests disable it via WTF_CSRF_ENABLED=False.
     app.config.setdefault("WTF_CSRF_TIME_LIMIT", None)  # token valid for the session
-    CSRFProtect(app)
+    # Protect per-request (below) instead of automatically, so we can skip CSRF for API-token
+    # (Bearer) requests — those carry no session cookie, so CSRF (a cookie-riding attack) can't
+    # apply, and an invalid token is still rejected by @login_required.
+    app.config["WTF_CSRF_CHECK_DEFAULT"] = False
+    csrf = CSRFProtect(app)
+
+    @app.before_request
+    def _csrf_protect_unless_bearer():
+        # csrf.protect() (called directly) does NOT itself honour WTF_CSRF_ENABLED — that check
+        # normally lives in flask-wtf's auto before_request, which WTF_CSRF_CHECK_DEFAULT=False turns
+        # off — so replicate it here (tests set WTF_CSRF_ENABLED=False).
+        if not app.config.get("WTF_CSRF_ENABLED", True):
+            return
+        if request.headers.get("Authorization", "").startswith("Bearer "):
+            return   # API-token request: no cookie to forge, so CSRF doesn't apply
+        csrf.protect()   # session/cookie request: full CSRF enforcement (no-op on safe methods)
 
     # Cap the total request body so an oversized upload can't be spooled to disk / read into memory
     # before the per-file size check runs. Werkzeug already bounds in-memory form fields, but NOT
@@ -1504,6 +1602,9 @@ def register_routes(app):
                 user.last_login = datetime.utcnow()
                 db.session.commit()
                 log_action(user, "login", detail=f"User logged in from {ip}")
+                if user.is_superadmin:
+                    notifications.notify("admin_login", "Super admin signed in",
+                                         "%s signed in from %s" % (user.username, ip))
                 # Open-redirect-safe: same-site relative paths only. Reject absolute URLs,
                 # protocol-relative "//host", an embedded scheme, and backslash tricks like
                 # "/\\host" (some browsers normalise the backslash to "/", making it "//host").
@@ -1598,6 +1699,26 @@ def register_routes(app):
     @login_required
     def account():
         return render_template("account.html", languages=i18n.LANGUAGES)
+
+    @app.route("/account/api-token/generate", methods=["POST"])
+    @login_required
+    def account_api_token_generate():
+        """Mint a fresh API token (replacing any existing one) and show it ONCE."""
+        token = current_user.generate_api_token()
+        db.session.commit()
+        log_action(current_user, "api_token_generate", target=current_user.username)
+        # Render directly (not a redirect) so the plaintext token is shown exactly once and never
+        # stored in the session cookie.
+        return render_template("account.html", languages=i18n.LANGUAGES, new_token=token)
+
+    @app.route("/account/api-token/revoke", methods=["POST"])
+    @login_required
+    def account_api_token_revoke():
+        current_user.revoke_api_token()
+        db.session.commit()
+        log_action(current_user, "api_token_revoke", target=current_user.username)
+        flash("API token revoked.", "success")
+        return redirect(url_for("account"))
 
     @app.route("/set-language/<lang>")
     def set_language(lang):
@@ -1913,6 +2034,8 @@ def register_routes(app):
     def _run_action(gs, remote, action, actor):
         """Execute a whitelisted action (permission already checked).
         Returns (ok, message). Long actions run in the background."""
+        if action in ("stop", "restart"):
+            _mark_expected_offline(gs.id)   # so the monitor doesn't alert on an intentional stop
         if action in LONG_ACTIONS:
             _bg_action(gs.id, remote.id, gs.short_name, action, gs.lgsm_name)
             log_action(actor, f"{action}_server", target=gs.name)
@@ -3057,6 +3180,44 @@ def register_routes(app):
         groups = Group.query.all()
         return render_template("manage_users.html", users=users, groups=groups)
 
+    # ── Admin notifications (Telegram / Discord) ──────────────
+    @app.route("/notifications")
+    @login_required
+    @permission_required(SUPER_ADMIN)
+    def notifications_settings():
+        return render_template("notifications.html",
+                               settings=notifications.settings_for_form(),
+                               events=notifications.EVENTS)
+
+    @app.route("/notifications/save", methods=["POST"])
+    @login_required
+    @permission_required(SUPER_ADMIN)
+    def notifications_save():
+        f = request.form
+        # A blank secret field means "keep the stored one" (None), so the real token/webhook is
+        # never required to round-trip through the browser just to change a toggle.
+        tg_token = f.get("telegram_token", "").strip()
+        dc_webhook = f.get("discord_webhook", "").strip()
+        notifications.save_settings(
+            enabled=bool(f.get("enabled")),
+            telegram={"enabled": bool(f.get("telegram_enabled")),
+                      "chat_id": f.get("telegram_chat_id", ""),
+                      "token": (tg_token or None)},
+            discord={"enabled": bool(f.get("discord_enabled")),
+                     "webhook": (dc_webhook or None)},
+            events={k: bool(f.get("event_" + k)) for k in notifications.EVENTS},
+        )
+        log_action(current_user, "notifications_update", target="panel")
+        flash("Notification settings saved.", "success")
+        return redirect(url_for("notifications_settings"))
+
+    @app.route("/api/notifications/test", methods=["POST"])
+    @login_required
+    @permission_required(SUPER_ADMIN)
+    def notifications_test():
+        ok, msg = notifications.test_send((_json_body().get("channel") or "").strip())
+        return jsonify({"success": ok, "message": msg})
+
     @app.route("/users/add", methods=["POST"])
     @login_required
     @permission_required(MANAGE_USERS)
@@ -4152,9 +4313,14 @@ def register_routes(app):
                 summary += " — " + "; ".join(failures)
             if queued:
                 summary += " — will back up once empty: " + ", ".join(queued)
+            if fail_n:
+                notifications.notify("backup_failed", "Backup failed",
+                                     "%d server backup(s) failed: %s" % (fail_n, "; ".join(failures)))
             bk.record_full_backup(summary[:500])
         except Exception:
             app.logger.warning("full backup run failed", exc_info=True)
+            notifications.notify("backup_failed", "Backup run failed",
+                                 "The panel backup run errored before completing.")
         finally:
             _full_backup_lock.release()
 
@@ -4232,6 +4398,8 @@ def register_routes(app):
                                                     "ts": time.time()}
                     except Exception:
                         app.logger.warning("scheduled backup of %s failed", gname, exc_info=True)
+                        notifications.notify("backup_failed", "Scheduled backup failed",
+                                             "The scheduled backup of %s failed." % gname)
         finally:
             _full_backup_lock.release()
 
@@ -6320,6 +6488,8 @@ if __name__ == "__main__":
                             log_action(None, "fail2ban_ban", target=_ip,
                                        detail="banned after 5 failed panel logins in 10 min (1-hour ban)",
                                        success=False)
+                            notifications.notify("ip_banned", "IP banned on the panel login",
+                                                 "%s was banned by fail2ban (5 failed logins in 10 min)" % _ip)
                         for _ip in sorted(seen - cur):
                             log_action(None, "fail2ban_unban", target=_ip, detail="ban expired or lifted")
                     seen = cur
@@ -6337,6 +6507,9 @@ if __name__ == "__main__":
 
     # Keep live per-server player counts fresh for the dashboard / Game Servers page.
     threading.Thread(target=lambda: _player_count_watch(app), daemon=True).start()
+
+    # Proactive monitor: server-down / host-unreachable / disk-low admin notifications.
+    threading.Thread(target=lambda: _monitor_watch(app), daemon=True).start()
 
     host = (cfg.get("bind_host") or "").strip()
     if not host:

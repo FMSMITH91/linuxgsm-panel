@@ -1,0 +1,119 @@
+{% extends "base.html" %}
+{% block title %}Notifications{% endblock %}
+{% block content %}
+
+<div class="d-flex justify-content-between align-items-center mb-3 flex-wrap gap-2">
+  <h1 class="page-title mb-0"><i class="bi bi-bell-fill"></i> Notifications</h1>
+</div>
+<p class="text-secondary">
+  Get alerted on Telegram or Discord when something needs your attention — a server drops, a host
+  goes unreachable, a backup fails, an admin signs in. This is the panel notifying <em>you</em>; a
+  game's own in-game alerts are still set per server on its Alerts tab.
+</p>
+
+<form method="POST" action="{{ url_for('notifications_save') }}">
+  <div class="card mb-3">
+    <div class="card-body">
+      <div class="form-check form-switch">
+        <input type="checkbox" name="enabled" class="form-check-input" role="switch" id="enabled"
+               {% if settings.enabled %}checked{% endif %}>
+        <label class="form-check-label" for="enabled"><strong>Enable notifications</strong> — master switch</label>
+      </div>
+    </div>
+  </div>
+
+  <div class="row">
+    <!-- Telegram -->
+    <div class="col-lg-6 mb-3">
+      <div class="card h-100">
+        <div class="card-header d-flex justify-content-between align-items-center">
+          <span><i class="bi bi-telegram"></i> Telegram</span>
+          <div class="form-check form-switch mb-0">
+            <input type="checkbox" name="telegram_enabled" class="form-check-input" role="switch" id="tg-en"
+                   {% if settings.telegram.enabled %}checked{% endif %}>
+          </div>
+        </div>
+        <div class="card-body">
+          <label class="form-label small mb-1">Bot token</label>
+          <input type="password" name="telegram_token" class="form-control form-control-sm" autocomplete="off"
+                 placeholder="{{ '•••••••••• (leave blank to keep)' if settings.telegram.has_token else '123456:ABC-DEF…' }}">
+          <label class="form-label small mb-1 mt-2">Chat ID</label>
+          <input type="text" name="telegram_chat_id" class="form-control form-control-sm" autocomplete="off"
+                 value="{{ settings.telegram.chat_id }}" placeholder="e.g. 123456789 or -100123…">
+          <div class="small text-secondary mt-2">
+            Create a bot with <code>@BotFather</code>, then get your chat ID from <code>@userinfobot</code>
+            (or a group's ID). Message the bot once so it can reply to you.
+          </div>
+          <button type="button" class="btn btn-outline-secondary btn-sm mt-2" data-action="testChannel" data-args='["telegram"]'>
+            <i class="bi bi-send"></i> Send test
+          </button>
+        </div>
+      </div>
+    </div>
+
+    <!-- Discord -->
+    <div class="col-lg-6 mb-3">
+      <div class="card h-100">
+        <div class="card-header d-flex justify-content-between align-items-center">
+          <span><i class="bi bi-discord"></i> Discord</span>
+          <div class="form-check form-switch mb-0">
+            <input type="checkbox" name="discord_enabled" class="form-check-input" role="switch" id="dc-en"
+                   {% if settings.discord.enabled %}checked{% endif %}>
+          </div>
+        </div>
+        <div class="card-body">
+          <label class="form-label small mb-1">Webhook URL</label>
+          <input type="password" name="discord_webhook" class="form-control form-control-sm" autocomplete="off"
+                 placeholder="{{ '•••••••••• (leave blank to keep)' if settings.discord.has_webhook else 'https://discord.com/api/webhooks/…' }}">
+          <div class="small text-secondary mt-2">
+            In your Discord channel: <em>Edit Channel → Integrations → Webhooks → New Webhook → Copy URL</em>.
+            Only <code>discord.com</code> webhook URLs are accepted.
+          </div>
+          <button type="button" class="btn btn-outline-secondary btn-sm mt-2" data-action="testChannel" data-args='["discord"]'>
+            <i class="bi bi-send"></i> Send test
+          </button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Events -->
+  <div class="card mb-3">
+    <div class="card-header"><i class="bi bi-list-check"></i> Alert me when…</div>
+    <div class="card-body">
+      <div class="row">
+        {% for key, meta in events.items() %}
+        <div class="col-md-6">
+          <div class="form-check form-switch">
+            <input type="checkbox" name="event_{{ key }}" class="form-check-input" role="switch"
+                   id="ev-{{ key }}" {% if settings.events.get(key) %}checked{% endif %}>
+            <label class="form-check-label" for="ev-{{ key }}">{{ meta[0] }}</label>
+          </div>
+        </div>
+        {% endfor %}
+      </div>
+    </div>
+  </div>
+
+  <button type="submit" class="btn btn-primary"><i class="bi bi-save"></i> Save settings</button>
+  <span class="text-secondary small ms-2">Save first, then use “Send test” to confirm a channel works.</span>
+</form>
+
+{% endblock %}
+
+{% block scripts %}
+<script nonce="{{ csp_nonce }}">
+function testChannel(channel, btn) {
+  var orig = btn.innerHTML;
+  btn.disabled = true; btn.innerHTML = '<span class="spinner-border spinner-border-sm"></span> Sending…';
+  fetch(MOUNT + '/api/notifications/test', {
+    method: 'POST', headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({channel: channel})
+  })
+  .then(r => r.json())
+  .then(d => { if (window.toast) toast(d.message || (d.success ? 'Sent' : 'Failed'), d.success ? 'success' : 'danger'); })
+  .catch(function(){ if (window.toast) toast('Request failed', 'danger'); })
+  .finally(function(){ btn.disabled = false; btn.innerHTML = orig; });
+}
+</script>
+{% endblock %}
