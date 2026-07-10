@@ -51,14 +51,14 @@
 {% else %}
 
 <!-- Stats row -->
-<div class="row mb-4">
-  <div class="col-md-3">
+<div class="row row-cols-2 row-cols-md-5 g-3 mb-4">
+  <div class="col">
     <div class="card text-center p-3">
       <div class="h3 mb-0" id="total-servers">{{ servers|length }}</div>
       <div class="text-secondary small">Total Servers</div>
     </div>
   </div>
-  <div class="col-md-3">
+  <div class="col">
     <div class="card text-center p-3">
       <div class="h3 mb-0" id="online-count">
         <span class="status-dot status-online"></span>
@@ -67,7 +67,7 @@
       <div class="text-secondary small">Online</div>
     </div>
   </div>
-  <div class="col-md-3">
+  <div class="col">
     <div class="card text-center p-3">
       <div class="h3 mb-0" id="offline-count">
         <span class="status-dot status-offline"></span>
@@ -76,7 +76,13 @@
       <div class="text-secondary small">Offline</div>
     </div>
   </div>
-  <div class="col-md-3">
+  <div class="col">
+    <div class="card text-center p-3">
+      <div class="h3 mb-0" id="total-players"><i class="bi bi-people-fill text-info"></i> {{ total_players }}</div>
+      <div class="text-secondary small">Players Online</div>
+    </div>
+  </div>
+  <div class="col">
     <div class="card text-center p-3">
       <div class="h3 mb-0">{{ remote_count }}</div>
       <div class="text-secondary small">Remote Servers</div>
@@ -113,6 +119,7 @@
             <th>Server</th>
             <th class="d-none d-md-table-cell">Type</th>
             <th>Status</th>
+            <th>Players</th>
             <th>Connect</th>
             <th class="text-end">Actions</th>
           </tr>
@@ -129,6 +136,10 @@
             <td id="status-{{ srv.id }}" data-status="{{ srv.status }}">
               <span class="status-dot status-{{ srv.status if srv.status in ['online','offline'] else 'unknown' }}"></span>
               {{ srv.status|title }}
+            </td>
+            <td id="players-{{ srv.id }}" class="text-nowrap">
+              {% set pc = player_counts.get(srv.id) %}
+              {% if pc is not none %}<i class="bi bi-people-fill text-secondary"></i> {{ pc }}{% else %}<span class="text-secondary">—</span>{% endif %}
             </td>
             <td>
               <span class="connect-cell" id="connect-{{ srv.id }}" data-addr="">
@@ -215,7 +226,17 @@ function refreshStatus() {
       if (oc) oc.innerHTML = '<span class="status-dot status-online"></span> ' + online;
       if (fc) fc.innerHTML = '<span class="status-dot status-offline"></span> ' + offline;
       if (tc) tc.textContent = data.length;
+      // Total players online = sum of the known per-server counts (unknowns are excluded).
+      var totalPlayers = data.reduce(function(a, s){ return a + (typeof s.players === 'number' ? s.players : 0); }, 0);
+      var tp = document.getElementById('total-players');
+      if (tp) tp.innerHTML = '<i class="bi bi-people-fill text-info"></i> ' + totalPlayers;
       data.forEach(function(s){
+        var pcell = document.getElementById('players-' + s.id);
+        if (pcell) {
+          pcell.innerHTML = (typeof s.players === 'number')
+            ? '<i class="bi bi-people-fill text-secondary"></i> ' + s.players
+            : '<span class="text-secondary">—</span>';
+        }
         var cell = document.getElementById('status-' + s.id);
         if (cell && cell.dataset.status !== s.status) {
           cell.dataset.status = s.status;

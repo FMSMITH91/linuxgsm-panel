@@ -346,6 +346,45 @@ def _host_reachable(remote):
         return False
 
 
+# ── Live player-count cache ────────────────────────────────
+# A gamedig query per server is far too slow to run on every dashboard status poll (every 8s), so a
+# background poller refreshes the counts on a slower cadence and the request path just reads this
+# cache. count is an int, or None when the game genuinely can't be queried ("—" in the UI).
+_player_counts = {}          # server_id -> {"count": int|None, "ts": float}
+_PLAYER_POLL_SECONDS = 45
+
+
+def _cached_player_count(server_id):
+    """Last known player count for a server (int, incl. 0), or None when unknown / not polled yet."""
+    entry = _player_counts.get(server_id)
+    return entry["count"] if entry else None
+
+
+def _refresh_player_counts(app):
+    """One pass: re-read the confident player count for every installed server into the cache. An
+    offline server is 0 without a (slow) query; a running server the panel can't read stays None."""
+    with app.app_context():
+        for gs in GameServer.query.filter_by(installed=True).all():
+            if gs.status in ("installing", "configuring"):
+                continue
+            try:
+                count = 0 if gs.status == "offline" else _server_players_confident(gs)
+            except Exception:
+                count = None
+            _player_counts[gs.id] = {"count": count, "ts": time.time()}
+
+
+def _player_count_watch(app):
+    """Keep _player_counts fresh in the background so the dashboard and Game Servers page can show
+    live per-server counts (and a total) without a query on the request path."""
+    while True:
+        try:
+            _refresh_player_counts(app)
+        except Exception:
+            _log.debug("player-count poller pass failed", exc_info=True)
+        time.sleep(_PLAYER_POLL_SECONDS)
+
+
 def _reboot_when_empty_watch(app):
     """Reboot each 'reboot when empty' host once it is reachable AND every game server on it reports
     0 players. Unreachable hosts are skipped (never rebooted on a guess), so a host that can't be
@@ -1675,9 +1714,12 @@ def register_routes(app):
         can_control = current_user.is_superadmin or bool(
             {START_SERVER, STOP_SERVER, RESTART_SERVER} & uperms
         )
+        player_counts = {gs.id: _cached_player_count(gs.id) for gs in servers}
+        total_players = sum(c for c in player_counts.values() if isinstance(c, int))
         return render_template("dashboard.html", remotes=remotes, servers=servers,
                                server_list=servers, can_control=can_control,
-                               remote_count=remote_count)
+                               remote_count=remote_count, player_counts=player_counts,
+                               total_players=total_players)
 
     # ── Server Detail + Console ────────────────────────────
     @app.route("/server/<int:server_id>")
@@ -2286,8 +2328,10 @@ def register_routes(app):
     def manage_servers():
         remotes = RemoteServer.query.all()
         all_servers = GameServer.query.all()
+        player_counts = {gs.id: _cached_player_count(gs.id) for gs in all_servers}
         return render_template("manage_servers.html", remotes=remotes,
-                               all_servers=all_servers, games=load_game_list())
+                               all_servers=all_servers, games=load_game_list(),
+                               player_counts=player_counts)
 
     def _notify_servers_changed():
         """Best-effort broadcast to every connected browser that the game-server set
@@ -5335,6 +5379,7 @@ def register_routes(app):
                 "remote_name": r.name if r else "",
                 "connect": f"{host}:{gs.port}" if host else "",
                 "connect_url": gs.connect_uri(host),
+                "players": _cached_player_count(gs.id),
             })
         return jsonify(data)
 
@@ -6243,6 +6288,9 @@ if __name__ == "__main__":
 
     # Keep each auto-block host's rolling top-20 (7-day) UFW block list in sync.
     threading.Thread(target=lambda: _autoblock_watch(app), daemon=True).start()
+
+    # Keep live per-server player counts fresh for the dashboard / Game Servers page.
+    threading.Thread(target=lambda: _player_count_watch(app), daemon=True).start()
 
     host = (cfg.get("bind_host") or "").strip()
     if not host:

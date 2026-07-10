@@ -82,6 +82,7 @@
             <th class="d-none d-md-table-cell">Type</th>
             <th>Connect Address</th>
             <th>Status</th>
+            <th>Players</th>
             <th class="d-none d-md-table-cell">Host</th>
             <th>Actions</th>
           </tr>
@@ -118,6 +119,10 @@
                 {% if finishing %}Finishing setup…{% elif gs.installed %}Installed{% elif installing %}Installing…{% elif gs.status == 'failed' %}Install failed{% else %}Not installed{% endif %}
               </span>
             </td>
+            <td id="msrv-players-{{ gs.id }}" class="text-nowrap">
+              {% set pc = player_counts.get(gs.id) %}
+              {% if pc is not none %}<i class="bi bi-people-fill text-secondary"></i> {{ pc }}{% else %}<span class="text-secondary">—</span>{% endif %}
+            </td>
             <td class="d-none d-md-table-cell">{{ gs.remote.display_name if gs.remote else '—' }}</td>
             <td class="text-nowrap">
               <a id="console-btn-{{ gs.id }}" data-href="{{ url_for('server_detail', server_id=gs.id) }}"
@@ -140,7 +145,7 @@
           </tr>
           <tr class="install-progress-row" id="install-row-{{ gs.id }}"
               data-installing="{{ '1' if in_progress else '0' }}"{% if not in_progress %} style="display:none;"{% endif %}>
-            <td colspan="6" class="py-2" style="background:rgba(88,166,255,.05);">
+            <td colspan="7" class="py-2" style="background:rgba(88,166,255,.05);">
               <div class="d-flex justify-content-between small mb-1">
                 <span class="text-info"><i class="bi bi-gear-fill"></i> <span id="inst-step-{{ gs.id }}">Preparing…</span></span>
                 <span class="text-secondary" id="inst-pct-{{ gs.id }}"></span>
@@ -344,6 +349,16 @@ function reconcileServerList() {
     .then(function(r){ return r.ok ? r.json() : null; })
     .then(function(data){
       if (!data) return;
+      // Refresh the live player-count cell for every row on every poll (independent of whether the
+      // set of servers changed).
+      data.forEach(function(s){
+        var pc = document.getElementById('msrv-players-' + s.id);
+        if (pc) {
+          pc.innerHTML = (typeof s.players === 'number')
+            ? '<i class="bi bi-people-fill text-secondary"></i> ' + s.players
+            : '<span class="text-secondary">—</span>';
+        }
+      });
       var liveIds = data.map(function(s){ return String(s.id); });
       if (liveIds.slice().sort().join(',') === _svrBaseline) return;
       var baseIds = _svrBaseline ? _svrBaseline.split(',').filter(Boolean) : [];
