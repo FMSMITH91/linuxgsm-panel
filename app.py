@@ -414,6 +414,18 @@ def _refresh_player_counts(app):
             except Exception:
                 count, mx = None, None
             _player_counts[gs.id] = {"count": count, "max": mx, "ts": time.time()}
+            # One-shot "notify when empty": fire once on a CONFIRMED 0 (never on an unknown count),
+            # then clear the flag so it doesn't ping every time the server empties.
+            if gs.notify_when_empty and count == 0:
+                try:
+                    notifications.notify("server_empty", "Server is empty",
+                                         "%s on %s now has 0 players — safe to make changes."
+                                         % (gs.name, gs.remote.display_name))
+                    gs.notify_when_empty = False
+                    db.session.commit()
+                except Exception:
+                    db.session.rollback()
+                    _log.debug("notify-when-empty failed for %s", getattr(gs, "short_name", "?"), exc_info=True)
 
 
 def _player_count_watch(app):
@@ -2443,6 +2455,22 @@ def register_routes(app):
             return jsonify({"success": False, "message": detail or "Failed to update schedule"}), 500
         except Exception:
             return jsonify({"success": False, "message": _log_and_generic("request failed")}), 500
+
+    @app.route("/api/server/<int:server_id>/notify-empty", methods=["POST"])
+    @login_required
+    @server_access_required
+    def api_server_notify_empty(server_id):
+        """Toggle the one-shot 'alert me once this server is empty' flag (a plain DB flag the player
+        poller acts on). Fires a single server_empty notification when the count next hits 0, then
+        clears itself — so an admin can wait for 0 players before making a change."""
+        gs = get_game(server_id)
+        if not current_user.is_superadmin and not has_permission(current_user, RESTART_SERVER):
+            return jsonify({"success": False, "message": "Permission denied"}), 403
+        enabled = bool(_json_body().get("enabled"))
+        gs.notify_when_empty = enabled
+        db.session.commit()
+        log_action(current_user, "set_notify_when_empty", target=gs.name, detail=str(enabled))
+        return jsonify({"success": True, "enabled": enabled})
 
     def _bg_action(server_id, remote_id, short_name, action, selfname=None):
         """Run a long LinuxGSM command in the background (green thread)."""

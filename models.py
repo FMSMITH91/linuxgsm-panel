@@ -332,6 +332,7 @@ class GameServer(db.Model):
     installed = db.Column(db.Boolean, default=False)
     autostart = db.Column(db.Boolean, default=True)
     daily_restart = db.Column(db.Boolean, default=False)  # daily restart when empty of players
+    notify_when_empty = db.Column(db.Boolean, default=False)  # one-shot: alert once this server hits 0 players
     restart_pending = db.Column(db.Boolean, default=False)  # a mod change needs a restart to load it
     backup_pending = db.Column(db.Boolean, default=False)   # queued to back up once players leave
     stop_pending = db.Column(db.Boolean, default=False)     # queued to stop once players leave
@@ -476,6 +477,7 @@ def _run_light_migrations():
         ("game_server", "commands"): "ALTER TABLE game_server ADD COLUMN commands TEXT DEFAULT '[]'",
         ("game_server", "query_type"): "ALTER TABLE game_server ADD COLUMN query_type VARCHAR(40)",
         ("game_server", "daily_restart"): "ALTER TABLE game_server ADD COLUMN daily_restart BOOLEAN DEFAULT 0",
+        ("game_server", "notify_when_empty"): "ALTER TABLE game_server ADD COLUMN notify_when_empty BOOLEAN DEFAULT 0",
         ("game_server", "restart_pending"): "ALTER TABLE game_server ADD COLUMN restart_pending BOOLEAN DEFAULT 0",
         ("game_server", "backup_pending"): "ALTER TABLE game_server ADD COLUMN backup_pending BOOLEAN DEFAULT 0",
         ("game_server", "stop_pending"): "ALTER TABLE game_server ADD COLUMN stop_pending BOOLEAN DEFAULT 0",

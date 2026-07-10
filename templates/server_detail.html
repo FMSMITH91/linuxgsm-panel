@@ -238,6 +238,19 @@
               {% endif %}
             </td>
           </tr>
+          {% if can_autostart %}
+          <tr>
+            <td class="text-secondary">Notify when empty
+              <span class="text-muted" style="font-size:.7rem;">(one-off; needs notifications set up)</span></td>
+            <td class="text-end">
+              <div class="form-check form-switch d-inline-block m-0">
+                <input class="form-check-input" type="checkbox" role="switch" id="notify-empty-toggle"
+                       aria-label="Notify me once this server is empty"
+                       {% if server.notify_when_empty %}checked{% endif %} data-action="toggleNotifyEmpty" data-args='["@self"]' data-on="change">
+              </div>
+            </td>
+          </tr>
+          {% endif %}
         </table>
       </div>
     </div>
@@ -747,6 +760,24 @@ function toggleDailyRestart(el) {
   .then(d => {
     if (!d.success) { el.checked = !el.checked; if(window.toast) toast(d.message || 'Failed to update daily restart', 'danger'); }
     else if (typeof toast === 'function') { toast(el.checked ? 'Daily restart (when empty) enabled' : 'Daily restart disabled', 'success'); }
+  })
+  .catch(() => { el.checked = !el.checked; })
+  .finally(() => { el.disabled = false; });
+}
+
+function toggleNotifyEmpty(el) {
+  el.disabled = true;
+  fetch(MOUNT + '/api/server/' + serverId + '/notify-empty', {
+    method: 'POST', headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({ enabled: el.checked })
+  })
+  .then(r => r.json())
+  .then(d => {
+    if (!d.success) { el.checked = !el.checked; if(window.toast) toast(d.message || 'Failed to update', 'danger'); }
+    else if (typeof toast === 'function') {
+      toast(el.checked ? "You'll be alerted once this server is empty (then it turns itself off)"
+                       : 'Empty alert cancelled', 'success');
+    }
   })
   .catch(() => { el.checked = !el.checked; })
   .finally(() => { el.disabled = false; });

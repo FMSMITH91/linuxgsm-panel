@@ -24,6 +24,7 @@ _log = logging.getLogger("notifications")
 EVENTS = {
     "server_down":        ("A game server goes offline unexpectedly", True),
     "server_up":          ("A game server comes back online", False),
+    "server_empty":       ("A server you flagged has emptied (per-server, set on its page)", True),
     "remote_unreachable": ("A remote host becomes unreachable", True),
     "remote_recovered":   ("A remote host comes back", True),
     "backup_failed":      ("A backup fails", True),
