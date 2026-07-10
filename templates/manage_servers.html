@@ -69,8 +69,14 @@
 
 <!-- Installed servers -->
 <div class="card">
-  <div class="card-header">
-    <i class="bi bi-list-columns"></i> Installed Game Servers
+  <div class="card-header d-flex justify-content-between align-items-center flex-wrap gap-2">
+    <span><i class="bi bi-list-columns"></i> Installed Game Servers</span>
+    {% if all_servers %}
+    <div class="form-check form-switch mb-0" title="Show a subheader for each host and keep its servers together">
+      <input type="checkbox" class="form-check-input" role="switch" id="grp-host" data-action="toggleGroupByHost" data-args='["@self"]'>
+      <label class="form-check-label small" for="grp-host">Group by host</label>
+    </div>
+    {% endif %}
   </div>
   <div class="card-body p-0" id="servers-list">
     {% if all_servers %}
@@ -78,12 +84,12 @@
       <table class="table table-hover mb-0">
         <thead>
           <tr>
-            <th>Name</th>
-            <th class="d-none d-md-table-cell">Type</th>
+            <th class="srv-sort" data-sortkey="name" style="cursor:pointer;" data-action="sortServers" data-args='["name","@self"]'>Name<span class="srv-caret"></span></th>
+            <th class="d-none d-md-table-cell srv-sort" data-sortkey="type" style="cursor:pointer;" data-action="sortServers" data-args='["type","@self"]'>Type<span class="srv-caret"></span></th>
             <th>Connect Address</th>
-            <th>Status</th>
-            <th>Players</th>
-            <th class="d-none d-md-table-cell">Host</th>
+            <th class="srv-sort" data-sortkey="status" style="cursor:pointer;" data-action="sortServers" data-args='["status","@self"]'>Status<span class="srv-caret"></span></th>
+            <th class="srv-sort" data-sortkey="players" style="cursor:pointer;" data-action="sortServers" data-args='["players","@self"]'>Players<span class="srv-caret"></span></th>
+            <th class="d-none d-md-table-cell srv-sort" data-sortkey="host" style="cursor:pointer;" data-action="sortServers" data-args='["host","@self"]'>Host<span class="srv-caret"></span></th>
             <th>Actions</th>
           </tr>
         </thead>
@@ -92,7 +98,12 @@
           {% set installing = (gs.status == 'installing' and not gs.installed) %}
           {% set finishing = (gs.status == 'configuring') %}   {# steps 5-8: installed, still finishing #}
           {% set in_progress = installing or finishing %}
-          <tr id="server-row-{{ gs.id }}">
+          <tr id="server-row-{{ gs.id }}"
+              data-name="{{ gs.name }}"
+              data-type="{{ gs.game_display or gs.game_type }}"
+              data-status="{{ gs.status }}"
+              data-players="{{ player_counts.get(gs.id) if player_counts.get(gs.id) is not none else -1 }}"
+              data-host="{{ gs.remote.display_name if gs.remote else '—' }}">
             <td>
               <strong>{{ gs.name }}</strong>
               <span class="text-secondary d-block" style="font-size:.7rem;">{{ gs.short_name }}</span>
@@ -394,5 +405,69 @@ window.afterServerRefresh = function(){
   });
   _svrBaseline = serverIdsOnPage();
 };
+</script>
+
+<script nonce="{{ csp_nonce }}">
+// Client-side sort + group-by-host for the Installed Game Servers table. Sorting keeps each server's
+// hidden install-progress row with it; grouping inserts a host subheader before each host's block.
+(function(){
+  function tbody(){ return document.querySelector('#servers-list tbody'); }
+  function dataRows(){ return tbody() ? Array.prototype.slice.call(tbody().querySelectorAll('tr[data-name]')) : []; }
+  function grpOn(){ var c = document.getElementById('grp-host'); return !!(c && c.checked); }
+  var curKey = 'host', curDir = 1;
+
+  function cmp(a, b, key){
+    if (key === 'players'){ return (parseInt(a.getAttribute('data-players'),10)||0) - (parseInt(b.getAttribute('data-players'),10)||0); }
+    return (a.getAttribute('data-'+key)||'').localeCompare(b.getAttribute('data-'+key)||'', undefined, {sensitivity:'base', numeric:true});
+  }
+  function applyOrder(rows){
+    var tb = tbody(); if(!tb) return;
+    rows.forEach(function(r){
+      tb.appendChild(r);   // appendChild MOVES an existing node — no duplication
+      var pr = document.getElementById('install-row-' + r.id.replace('server-row-',''));
+      if (pr) tb.appendChild(pr);
+    });
+  }
+  function clearGroups(){ if (tbody()) tbody().querySelectorAll('tr.srv-group-hdr').forEach(function(x){ x.remove(); }); }
+  function regroup(){
+    clearGroups();
+    var tb = tbody(), last = null;
+    dataRows().forEach(function(r){
+      var host = r.getAttribute('data-host') || '—';
+      if (host !== last){
+        var hdr = document.createElement('tr'); hdr.className = 'srv-group-hdr';
+        var td = document.createElement('td'); td.colSpan = 7; td.className = 'fw-semibold text-secondary py-1';
+        td.style.background = 'var(--bg-elevated, rgba(127,127,127,.12))';
+        var ic = document.createElement('i'); ic.className = 'bi bi-hdd-network me-1';
+        td.appendChild(ic); td.appendChild(document.createTextNode(host));
+        hdr.appendChild(td); tb.insertBefore(hdr, r); last = host;
+      }
+    });
+  }
+  function carets(){
+    document.querySelectorAll('#servers-list th[data-sortkey]').forEach(function(th){
+      var c = th.querySelector('.srv-caret'); if (!c) return;
+      c.textContent = (th.getAttribute('data-sortkey') === curKey) ? (curDir > 0 ? ' ▲' : ' ▼') : '';
+    });
+  }
+  function doSort(key){
+    var rows = dataRows();
+    rows.sort(function(a, b){
+      if (grpOn()){ var h = cmp(a, b, 'host'); if (h) return h; }   // host stays the primary key while grouped
+      return cmp(a, b, key) * curDir;
+    });
+    applyOrder(rows); carets();
+    if (grpOn()) regroup();
+  }
+  window.sortServers = function(key, th){
+    if (curKey === key) curDir = -curDir; else { curKey = key; curDir = 1; }
+    doSort(key);
+  };
+  window.toggleGroupByHost = function(cb){
+    if (cb && cb.checked){ curKey = 'host'; curDir = 1; doSort('host'); }
+    else clearGroups();
+  };
+  carets();   // reflect the server-side default (host order)
+})();
 </script>
 {% endblock %}

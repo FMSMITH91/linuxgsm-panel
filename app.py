@@ -2915,7 +2915,10 @@ def register_routes(app):
     @permission_required(MANAGE_SERVERS, INSTALL_SERVER)
     def manage_servers():
         remotes = RemoteServer.query.all()
-        all_servers = GameServer.query.all()
+        # Default to grouped-by-host order (host name, then server name); the page also lets you
+        # re-sort by any column and toggle a grouped view client-side.
+        all_servers = (GameServer.query.outerjoin(RemoteServer, GameServer.remote_id == RemoteServer.id)
+                       .order_by(RemoteServer.name.asc(), GameServer.name.asc()).all())
         player_counts = {gs.id: _cached_player_count(gs.id) for gs in all_servers}
         player_max = {gs.id: _cached_player_max(gs.id) for gs in all_servers}
         return render_template("manage_servers.html", remotes=remotes,
