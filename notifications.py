@@ -28,6 +28,7 @@ EVENTS = {
     "remote_recovered":   ("A remote host comes back", True),
     "backup_failed":      ("A backup fails", True),
     "admin_login":        ("A super admin signs in", True),
+    "admin_bruteforce":   ("A super admin account is being brute-forced", True),
     "ip_banned":          ("fail2ban bans an IP on the panel login", False),
     "disk_low":           ("A host's disk is running low", True),
 }

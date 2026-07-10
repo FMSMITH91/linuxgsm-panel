@@ -805,6 +805,10 @@ _LOGIN_FAILS_LOCK = threading.Lock()
 _LOGIN_BLOCK_LOGGED = {}
 LOGIN_MAX_FAILS = 8
 LOGIN_WINDOW = 300  # seconds
+# Notify when a SUPER ADMIN username is under a failed-login attack: >= this many fails against it
+# within the window fires the "admin_bruteforce" alert, at most once per window per admin.
+_ADMIN_BF_THRESHOLD = 5
+_ADMIN_BF_NOTIFIED = {}   # admin username -> ts we last alerted (dedup)
 
 
 def _prune_login_fails(now):
@@ -815,6 +819,37 @@ def _prune_login_fails(now):
         del _LOGIN_FAILS[ip]
     for ip in [k for k, t in _LOGIN_BLOCK_LOGGED.items() if now - t >= LOGIN_WINDOW]:
         del _LOGIN_BLOCK_LOGGED[ip]
+    for u in [k for k, t in _ADMIN_BF_NOTIFIED.items() if now - t >= LOGIN_WINDOW]:
+        del _ADMIN_BF_NOTIFIED[u]
+
+
+def _maybe_alert_admin_bruteforce(who, ip, now):
+    """Fire the admin_bruteforce notification when the ATTEMPTED username belongs to an existing
+    super admin AND it has failed to log in enough times within the window. Once per window per
+    admin. Best-effort — never breaks the login response."""
+    try:
+        if not who or who == "(blank)":
+            return
+        target = User.query.filter_by(username=who).first()
+        if not target or not target.is_superadmin:
+            return
+        since = datetime.utcnow() - timedelta(seconds=LOGIN_WINDOW)
+        fails = AuditLog.query.filter(AuditLog.action == "login_failed",
+                                      AuditLog.username == who,
+                                      AuditLog.timestamp >= since).count()
+        if fails < _ADMIN_BF_THRESHOLD:
+            return
+        with _LOGIN_FAILS_LOCK:
+            fire = (now - _ADMIN_BF_NOTIFIED.get(who, 0)) >= LOGIN_WINDOW
+            if fire:
+                _ADMIN_BF_NOTIFIED[who] = now
+        if fire:
+            notifications.notify(
+                "admin_bruteforce", "Admin account under attack",
+                "%d failed logins for super admin '%s' from %s in the last %d min."
+                % (fails, who, ip, LOGIN_WINDOW // 60))
+    except Exception:
+        _log.debug("admin-bruteforce alert check failed", exc_info=True)
 
 MIN_PASSWORD_LEN = 10
 import string as _string
@@ -1589,6 +1624,7 @@ def register_routes(app):
                     _cnt = len(_LOGIN_FAILS.get(ip, []))
                 log_action(None, "login_failed", actor=who,
                            detail="%s · attempt %d in %dm" % (reason, _cnt, LOGIN_WINDOW // 60), success=False)
+                _maybe_alert_admin_bruteforce(who, ip, now)   # alert if a super admin is being targeted
                 flash(msg, "danger")
                 return render_template("login.html", **kw)
 
