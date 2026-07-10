@@ -6913,10 +6913,14 @@ def register_routes(app):
                         app.logger.info(
                             "panel update available: version %s (%s), %s commit(s) behind",
                             st.get("remote_version", "?"), tgt[:7], st.get("behind", "?"))
+                        # Mirror the panel's update widget: name the target commit AND list the
+                        # changes (commit subjects) so you can see what's in the update.
+                        changes = [c[:100] for c in (st.get("changes") or [])][:10]
+                        change_lines = ("\n" + "\n".join("• " + c for c in changes)) if changes else ""
                         notifications.notify(
                             "update_available", "Panel update available",
-                            "Version %s (%s), %s commit(s) behind. Re-run the installer to update."
-                            % (st.get("remote_version", "?"), tgt[:7], st.get("behind", "?")))
+                            "%s (%s) — %s commit(s) behind:%s\nRe-run the installer, or send /update in Telegram."
+                            % (st.get("remote_version", "?"), tgt[:7], st.get("behind", "?"), change_lines))
                 else:
                     last_logged_sha = None   # up to date — let a future update log again
                 _maybe_alert_cert_expiring()   # piggyback the periodic TLS-cert expiry check here
