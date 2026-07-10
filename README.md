@@ -60,6 +60,7 @@ Type `yes` to confirm, or add `--yes` to skip the prompt.
 ### Game servers
 - **📦 Install any LinuxGSM game** — one-click install of any LinuxGSM-compatible server (Garry's Mod, Minecraft, CS2/CS:Source, TF2, ARMA 3, Rust, and 130+ more). Installs LinuxGSM itself and opens every port the game needs.
 - **🖥️ Live console & stats** — real-time WebSocket console, send commands to the game, and per-game CPU/RAM/uptime tiles with a live resource graph.
+- **👥 Live player counts** — current / max players per server on the dashboard and Game Servers page, plus a total-online tile, refreshed in the background (gamedig, with a game-console and LinuxGSM-query fallback).
 - **🛑 Player-aware control** — start, stop, restart, update, validate, monitor, and other LinuxGSM commands. Restart and stop check who's online and offer to wait until the server is empty; a host reboot warns if any of its servers has players.
 - **🧩 Mods & addons** — browse, install, and remove LinuxGSM-supported mods (SourceMod, MetaMod, Oxide, ULX, and game-specific ones). A pending change restarts the server once it's empty.
 - **📣 Alerts** — configure LinuxGSM's alerts (Discord, Telegram, email, Pushover, Pushbullet, Slack, Gotify, IFTTT) per server, with a test button.
@@ -78,7 +79,8 @@ Type `yes` to confirm, or add `--yes` to skip the prompt.
 - **🛡️ Moderation & custom commands** — grant fine-grained moderation (**kick / ban / announce**, individually) per group and per server. Super admins can define reusable **custom console commands** with an optional, charset-validated argument, and grant specific ones to specific groups.
 - **🔗 Tailscale** — auto-detect status, one-click private Serve (tailnet-only, free tier), MagicDNS URL, SSH-over-tailnet, and peer reachability checking. Public Funnel is an optional, warned toggle.
 - **🔌 Multiple remotes** — manage servers across many machines via SSH key, password, or Tailscale SSH, with host-key pinning.
-- **🖧 Host management** — one page for the panel host and every remote: hardware/OS specs, live per-core resources, OS updates, UFW firewall, power controls, Ubuntu Pro (ESM + Livepatch), SSH lockdown, and lockout-safe changes to a host's SSH port/bind address and the panel's own web port/bind.
+- **🖧 Host management** — one page for the panel host and every remote: hardware/OS specs, live per-core resources, OS updates, UFW firewall (open ports and a separate blocked-IPs view), power controls, Ubuntu Pro (ESM + Livepatch), SSH lockdown, and lockout-safe changes to a host's SSH port/bind address and the panel's own web port/bind.
+- **🚫 Brute-force protection** — a fail2ban-backed Security page with per-jail logs and the top offenders over the last 7 days, one-click UFW blocking of an IP on all ports, and an optional rolling auto-block that firewall-bans the worst offenders and releases each once it goes quiet. Tailscale peers are never blocked, so the auto-block can't lock you out of your own tailnet.
 - **🩺 Diagnostics & self-heal** — verify file integrity against the installed version and restore altered files, generate a debug report, and run self-healing updates.
 - **🔒 Secure by default** — HTTPS out of the box, optional TOTP two-factor with backup codes, revocable sessions, CSRF protection, security headers, and bcrypt-hashed passwords.
 
@@ -233,6 +235,7 @@ systemctl --user enable --now linuxgsm-panel
 - **Sessions** — signed, `HttpOnly`, `SameSite=Lax`, `Secure`-over-HTTPS cookies with a sliding idle timeout and a capped "remember me". Logout, password change, or "sign out everywhere" invalidates every session and remember cookie server-side; sessions are bound to client IP + User-Agent.
 - **Encryption at rest** — SSH credentials, email addresses, and 2FA secrets are Fernet/AES-encrypted in `data/panel.db`, with the key in `data/cred_key`; passwords and 2FA backup codes are bcrypt-hashed. `data/` is `chmod 700` and the database, keys, and config inside are `chmod 600`.
 - **SSH host-key pinning** — records each host's key on first connect and refuses to connect if it changes; re-trust a reinstalled host with one click. Tailscale SSH stores no credentials.
+- **Brute-force defense** — fail2ban integration with an optional rolling UFW auto-block of repeat offenders over a 7-day window; Tailscale peers are exempt so the auto-block can't cut off tailnet access.
 - **RBAC enforced server-side** on every route, scoped per host, and covered by automated tests.
 - **CSRF protection, a strict Content-Security-Policy, and security headers** (HSTS over HTTPS, `X-Frame-Options`, `X-Content-Type-Options`, `Referrer-Policy`) on every response.
 - **Input validation** on anything that becomes a shell/OS operation; audit logging records the acting user, real client IP, target, and result.
@@ -272,6 +275,26 @@ source venv/bin/activate
 pip install -r requirements.txt
 python app.py
 ```
+
+### Tests
+
+```bash
+bash tools/run-tests.sh    # compile, flake8, unit + smoke tests, shellcheck
+```
+
+CI runs the same suite on every push and pull request, plus CodeQL, Bandit, Semgrep, a dependency
+audit, and coverage-guided fuzzing of the untrusted-input parsers (`tests/fuzz/`).
+
+## Contributing
+
+Bug reports, feature ideas, and pull requests are welcome — this is a solo, AI-assisted project, so
+extra eyes genuinely help.
+
+- **Found a bug or have an idea?** Open an [issue](https://github.com/FMSMITH91/linuxgsm-panel/issues).
+- **Security vulnerability?** Please report it privately — see [SECURITY.md](SECURITY.md), not a public issue.
+- **Submitting a change?** Fork, create a branch, and open a pull request against `main`. Run
+  `bash tools/run-tests.sh` before pushing and keep the CI checks green, and match the style of the
+  surrounding code.
 
 ## License
 
