@@ -116,17 +116,17 @@
         <thead>
           <tr>
             {% if can_control %}<th style="width:1%;"><input type="checkbox" class="form-check-input srv-check-all" data-action="toggleAll" data-args='["@self"]' title="Select all on this host" aria-label="Select all servers on this host"></th>{% endif %}
-            <th>Server</th>
-            <th class="d-none d-md-table-cell">Type</th>
-            <th>Status</th>
-            <th>Players</th>
+            <th class="dash-sort" data-sortkey="name" style="cursor:pointer;" data-action="sortDashCol" data-args='["name","@self"]' title="Sort this host's servers by name">Server<span class="dash-caret"></span></th>
+            <th class="d-none d-md-table-cell dash-sort" data-sortkey="type" style="cursor:pointer;" data-action="sortDashCol" data-args='["type","@self"]'>Type<span class="dash-caret"></span></th>
+            <th class="dash-sort" data-sortkey="status" style="cursor:pointer;" data-action="sortDashCol" data-args='["status","@self"]'>Status<span class="dash-caret"></span></th>
+            <th class="dash-sort" data-sortkey="players" style="cursor:pointer;" data-action="sortDashCol" data-args='["players","@self"]'>Players<span class="dash-caret"></span></th>
             <th>Connect</th>
             <th class="text-end">Actions</th>
           </tr>
         </thead>
         <tbody>
           {% for srv in remote_servers %}
-          <tr>
+          <tr data-name="{{ srv.name }}" data-type="{{ srv.game_display or srv.game_type }}" data-status="{{ srv.status }}" data-players="{{ player_counts.get(srv.id) if player_counts.get(srv.id) is not none else -1 }}">
             {% if can_control %}<td><input type="checkbox" class="form-check-input srv-check" value="{{ srv.id }}" data-name="{{ srv.name }}" data-supports-update="{{ 'true' if srv.supports_update else 'false' }}" aria-label="Select {{ srv.name }}"></td>{% endif %}
             <td>
               <strong>{{ srv.name }}</strong>
@@ -278,10 +278,37 @@ function refreshStatus() {
         // so a hostile server name can't inject markup. Keep the old value when none is reported.
         var nm = document.getElementById('game-name-' + s.id);
         if (nm && s.game_name && nm.textContent !== s.game_name) nm.textContent = s.game_name;
+        // Keep the row's sort keys in sync with live status/players so a re-sort reflects reality.
+        var row = cell ? cell.closest('tr') : null;
+        if (row) {
+          row.setAttribute('data-status', s.status);
+          row.setAttribute('data-players', typeof s.players === 'number' ? s.players : -1);
+        }
       });
     })
     .catch(() => {});
 }
+
+// Click-to-sort a single host card's table (the dashboard is already grouped by host into cards, so
+// each card sorts its own servers). Toggles asc/desc per column; players numeric, others
+// case-insensitive. Rows are moved with appendChild — cells keep their ids so the poller still finds
+// them.
+window.sortDashCol = function(key, th){
+  var table = th.closest('table'); if (!table) return;
+  var tb = table.querySelector('tbody'); if (!tb) return;
+  var dir = (table.dataset.sortKey === key) ? -(parseInt(table.dataset.sortDir || '1', 10)) : 1;
+  table.dataset.sortKey = key; table.dataset.sortDir = String(dir);
+  Array.prototype.slice.call(tb.querySelectorAll('tr')).sort(function(a, b){
+    if (key === 'players') {
+      return ((parseInt(a.getAttribute('data-players'), 10)) - (parseInt(b.getAttribute('data-players'), 10))) * dir;
+    }
+    return (a.getAttribute('data-' + key) || '').localeCompare(b.getAttribute('data-' + key) || '', undefined, {sensitivity: 'base', numeric: true}) * dir;
+  }).forEach(function(r){ tb.appendChild(r); });
+  table.querySelectorAll('th[data-sortkey]').forEach(function(h){
+    var c = h.querySelector('.dash-caret');
+    if (c) c.textContent = (h.getAttribute('data-sortkey') === key) ? (dir > 0 ? ' ▲' : ' ▼') : '';
+  });
+};
 _serverIdsBaseline = renderedServerIds();   // what this page was rendered with
 refreshStatus();              // populate status + connect immediately
 pollWhenVisible(refreshStatus, 8000);
