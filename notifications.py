@@ -97,38 +97,24 @@ def _valid_discord_webhook(url):
 
 
 def _post(url, data, headers):
-    """POST bytes to a validated https URL. Returns (ok, status): ok is True on a 2xx; status is the
-    HTTP status code (0 = host blocked, -1 = couldn't connect). Deliberately does NOT read the
-    response body — the status code is enough to explain a failure, and reading a body back from a
-    (partly user-supplied) URL would turn this into an SSRF exfiltration sink. Never raises."""
+    """POST to a validated https URL. Returns (ok, reason): ok is True on a 2xx. `reason` is a FIXED
+    word describing the outcome — 'sent' / 'rejected' (the provider answered with an error status) /
+    'unreachable' (couldn't connect) / 'blocked' (host not allow-listed). It carries no data read
+    back from the response, so this can never become an SSRF exfiltration sink. Never raises."""
     # SSRF barrier at the sink: only ever talk to our two known providers.
     parsed = urllib.parse.urlparse(url or "")
     if parsed.scheme != "https" or parsed.hostname not in _ALLOWED_HOSTS:
-        return False, 0
+        return False, "blocked"
     req = urllib.request.Request(url, data=data, method="POST",
                                  headers={"User-Agent": "linuxgsm-panel", **headers})
     try:
         with urllib.request.urlopen(req, timeout=8) as resp:  # nosec B310 - https, host-allowlisted
-            code = resp.getcode()
-            return (200 <= code < 300), code
-    except urllib.error.HTTPError as e:   # 4xx/5xx — the code tells us what's wrong
-        return False, e.code
+            return (200 <= resp.getcode() < 300), "sent"
+    except urllib.error.HTTPError:      # the provider answered with a 4xx/5xx
+        return False, "rejected"
     except (urllib.error.URLError, OSError, ValueError):
         _log.debug("notification POST failed", exc_info=True)
-        return False, -1
-
-
-def _telegram_reason(code):
-    """A helpful message for a failed Telegram send, from the HTTP status code."""
-    return {
-        401: "Unauthorized — the bot token is wrong or was revoked (re-copy it from @BotFather).",
-        400: "Bad request — usually a wrong chat ID; message the bot once, then use the numeric ID "
-             "from @userinfobot.",
-        403: "Forbidden — the bot is blocked, or you haven't pressed Start / messaged it yet.",
-        404: "Not found — the bot token looks invalid.",
-        -1: "couldn't reach api.telegram.org — check the host's outbound network / firewall.",
-        0: "internal: the request was blocked before sending.",
-    }.get(code, "Telegram returned HTTP %s." % code)
+        return False, "unreachable"
 
 
 def send_telegram(token, chat_id, text):
@@ -141,8 +127,14 @@ def send_telegram(token, chat_id, text):
     url = "https://api.telegram.org/bot%s/sendMessage" % token
     body = urllib.parse.urlencode({"chat_id": chat_id, "text": text[:4000],
                                    "disable_web_page_preview": "true"}).encode()
-    ok, code = _post(url, body, {"Content-Type": "application/x-www-form-urlencoded"})
-    return (True, "") if ok else (False, _telegram_reason(code))
+    ok, reason = _post(url, body, {"Content-Type": "application/x-www-form-urlencoded"})
+    if ok:
+        return True, ""
+    if reason == "unreachable":
+        return False, "couldn't reach api.telegram.org — check the host's outbound network / firewall."
+    return False, ("Telegram rejected it — the bot token or chat ID is wrong, or you haven't messaged "
+                   "the bot yet. Re-copy the token from @BotFather, use your numeric ID from "
+                   "@userinfobot, and press Start in the bot's chat.")
 
 
 def send_discord(webhook, text):
@@ -150,12 +142,13 @@ def send_discord(webhook, text):
     (SSRF guard)."""
     if not _valid_discord_webhook(webhook):
         return False, "that isn't a valid discord.com webhook URL"
-    ok, code = _post(webhook, json.dumps({"content": text[:1900]}).encode(),
-                     {"Content-Type": "application/json"})
-    reason = {401: "the webhook is unauthorized", 404: "the webhook was not found (deleted?)",
-              400: "Discord rejected the message", -1: "couldn't reach discord.com"}.get(
-        code, "Discord returned HTTP %s" % code)
-    return (True, "") if ok else (False, reason)
+    ok, reason = _post(webhook, json.dumps({"content": text[:1900]}).encode(),
+                       {"Content-Type": "application/json"})
+    if ok:
+        return True, ""
+    if reason == "unreachable":
+        return False, "couldn't reach discord.com — check the host's outbound network."
+    return False, "Discord rejected it — the webhook URL is wrong or was deleted."
 
 
 # ── public API ─────────────────────────────────────────────────
