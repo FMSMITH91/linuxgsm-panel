@@ -83,9 +83,16 @@ def save_settings(*, enabled, telegram, discord, events):
 
 
 # ── senders ────────────────────────────────────────────────────
-# Every request this module makes goes to exactly one of these hosts. _post enforces it at the sink
-# as an SSRF barrier, so no admin-set (or tampered) URL can point the panel at an internal service.
-_ALLOWED_HOSTS = {"api.telegram.org"} | set(_DISCORD_HOSTS)
+# Every request this module makes must start with one of these exact URL prefixes. _post checks the
+# URL itself (not a derived value) against them right before the request — a real SSRF barrier that
+# no admin-set/tampered URL can slip past, and the form the scanner recognises as sanitising the URL.
+_ALLOWED_PREFIXES = (
+    "https://api.telegram.org/",
+    "https://discord.com/api/webhooks/",
+    "https://discordapp.com/api/webhooks/",
+    "https://ptb.discord.com/api/webhooks/",
+    "https://canary.discord.com/api/webhooks/",
+)
 
 
 def _valid_discord_webhook(url):
@@ -101,9 +108,9 @@ def _post(url, data, headers):
     word describing the outcome — 'sent' / 'rejected' (the provider answered with an error status) /
     'unreachable' (couldn't connect) / 'blocked' (host not allow-listed). It carries no data read
     back from the response, so this can never become an SSRF exfiltration sink. Never raises."""
-    # SSRF barrier at the sink: only ever talk to our two known providers.
-    parsed = urllib.parse.urlparse(url or "")
-    if parsed.scheme != "https" or parsed.hostname not in _ALLOWED_HOSTS:
+    # SSRF barrier at the sink: the URL must start with one of our known-provider prefixes, so a
+    # user/admin-supplied URL can never make this request hit an internal or arbitrary host.
+    if not (url or "").startswith(_ALLOWED_PREFIXES):
         return False, "blocked"
     req = urllib.request.Request(url, data=data, method="POST",
                                  headers={"User-Agent": "linuxgsm-panel", **headers})
