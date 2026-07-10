@@ -614,7 +614,9 @@ def _telegram_do_update(app, token, chat_id):
     # Store the COMMIT (not the VERSION string, which rarely changes) so the post-restart check can
     # tell whether the update actually landed.
     _set_tg_pending_update(chat_id, so.panel_commit())
-    _tg_reply(token, chat_id, "🔄 Update started (from %s). I'll message you here once I'm back." % _panel_ver_label())
+    target = (st.get("target_sha") or "")[:7] or "the newest verified commit"
+    _tg_reply(token, chat_id, "🔄 Update started: %s → %s. I'll message you here once I'm back."
+              % (_panel_ver_label(), target))
 
 
 def _set_tg_pending_update(chat_id, from_commit):
