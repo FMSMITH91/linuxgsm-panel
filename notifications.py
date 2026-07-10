@@ -71,7 +71,7 @@ def settings_for_form():
     return {
         "enabled": cfg.get("enabled", True),
         "telegram": {"enabled": bool(tg.get("enabled")), "chat_id": tg.get("chat_id") or "",
-                     "has_token": bool(tg.get("token"))},
+                     "has_token": bool(tg.get("token")), "accept_commands": bool(tg.get("accept_commands"))},
         "discord": {"enabled": bool(dc.get("enabled")), "has_webhook": bool(dc.get("webhook"))},
         "events": {k: event_enabled(cfg, k) for k in EVENTS},
     }
@@ -89,7 +89,8 @@ def save_settings(*, enabled, telegram, discord, events):
     cfg["notifications"] = {
         "enabled": bool(enabled),
         "telegram": {"enabled": bool(telegram.get("enabled")),
-                     "chat_id": (telegram.get("chat_id") or "").strip()[:64], "token": tg_token or ""},
+                     "chat_id": (telegram.get("chat_id") or "").strip()[:64], "token": tg_token or "",
+                     "accept_commands": bool(telegram.get("accept_commands"))},
         "discord": {"enabled": bool(discord.get("enabled")), "webhook": dc_webhook or ""},
         "events": {k: bool(events.get(k, EVENTS[k][1])) for k in EVENTS},
     }
@@ -160,6 +161,33 @@ def send_telegram(token, chat_id, text):
     return False, ("Telegram rejected it — the bot token or chat ID is wrong, or you haven't messaged "
                    "the bot yet. Re-copy the token from @BotFather, use your numeric ID from "
                    "@userinfobot, and press Start in the bot's chat.")
+
+
+def telegram_get_updates(token, offset=None, timeout=25):
+    """Long-poll Telegram for incoming messages (bot command input). Returns a list of update dicts
+    (possibly empty) or None on error/timeout/conflict. SSRF-safe: the host is the fixed
+    api.telegram.org literal and the token is format-validated, so nothing user-supplied decides
+    where the request goes — only the JSON `result` array is read back. Never raises."""
+    if not token or not _TG_TOKEN_RE.match(token):
+        return None
+    params = {"timeout": int(timeout)}
+    if offset is not None:
+        params["offset"] = int(offset)
+    url = "https://api.telegram.org/bot%s/getUpdates?%s" % (token, urllib.parse.urlencode(params))
+    if not url.startswith("https://api.telegram.org/"):   # SSRF barrier: constant-host prefix
+        return None
+    # NOTE (reviewed): as with _post, CodeQL may flag py/partial-ssrf because the bot token is a URL
+    # path segment sourced from config. The HOST is the hardcoded api.telegram.org literal and the
+    # token is charset-validated (_TG_TOKEN_RE: digits + [A-Za-z0-9_-], no '/' or '.'), so the path
+    # can't traverse — the request can only ever reach Telegram's getUpdates endpoint.
+    req = urllib.request.Request(url, headers={"User-Agent": "linuxgsm-panel"})
+    try:
+        with urllib.request.urlopen(req, timeout=timeout + 10) as resp:  # nosec B310 - https, host-literal
+            data = json.loads(resp.read(2_000_000).decode("utf-8", "replace"))
+        return (data.get("result") or []) if data.get("ok") else None
+    except (urllib.error.URLError, OSError, ValueError):
+        _log.debug("telegram getUpdates failed", exc_info=True)
+        return None
 
 
 def send_discord(webhook, text):

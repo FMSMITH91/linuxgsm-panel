@@ -18,7 +18,7 @@ import config
 import ssh_manager as sm
 import notifications as N
 import system_ops as SO
-from app import password_problem, _int_or, _valid_ip_or_cidr, _whitelisted
+from app import password_problem, _int_or, _valid_ip_or_cidr, _whitelisted, _parse_tg_command
 from auth import can_access_remote, client_ip
 
 results = []
@@ -1946,6 +1946,12 @@ check("f2b: ignoreip drops every non-IP token (no shell metachars reach the jail
 _jail = SO._panel_f2b_jail_body("/data/auth.log", 5000, ["1.2.3.4", "junk"])
 check("f2b: the jail body carries an ignoreip line with the valid entry only",
       "\nignoreip = " in _jail and "1.2.3.4" in _jail and "junk" not in _jail)
+
+# Telegram command parsing: normalise '/Cmd@Bot arg' to a bare lowercase verb; non-commands -> ''.
+check("telegram: /update parses to 'update'", _parse_tg_command("/update") == "update")
+check("telegram: a bot-mention + args is stripped", _parse_tg_command("/Update@MyBot now") == "update")
+check("telegram: /STATUS is lowercased", _parse_tg_command("/STATUS") == "status")
+check("telegram: a non-command is empty", _parse_tg_command("hello there") == "" and _parse_tg_command("") == "")
 
 # The REMOTE ignoreip drop-in (pushed to remotes over SSH) is built from the same validated entries.
 _dropin = sm._f2b_dropin_ignoreip_body(["9.9.9.9", "10.0.0.0/8", "bad; rm -rf /"])

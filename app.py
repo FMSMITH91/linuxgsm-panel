@@ -466,6 +466,162 @@ def _player_count_watch(app):
         time.sleep(_PLAYER_POLL_SECONDS)
 
 
+# ── Telegram command bot ───────────────────────────────────────────────────────────────────────
+# Drive the panel from the configured Telegram chat: /update, /status, /servers, /help. Opt-in
+# (Notifications → Telegram → "Accept commands") and locked to the saved chat_id — no other chat is
+# honoured. Discord webhooks are send-only, so this is Telegram-only. Long-polls getUpdates.
+_TG_CMD_BACKOFF = 15
+
+
+def _tg_panel_label():
+    """A short identifier for THIS panel so replies are unambiguous when someone runs several panels:
+    '<site title> (<hostname>)'."""
+    import socket
+    title = (load_config().get("site_title") or "LinuxGSM Panel").strip()
+    try:
+        host = socket.gethostname()
+    except Exception:
+        host = ""
+    return "🎮 %s (%s)" % (title, host) if host else "🎮 %s" % title
+
+
+def _tg_reply(token, chat_id, text):
+    notifications.send_telegram(token, chat_id, "%s\n%s" % (_tg_panel_label(), text))
+
+
+def _parse_tg_command(text):
+    """Normalise a Telegram command: '/Update@MyBot foo' -> 'update'. '' if it isn't a command."""
+    text = (text or "").strip()
+    if not text.startswith("/"):
+        return ""
+    return text.split()[0].split("@")[0].lstrip("/").lower()
+
+
+def _telegram_command_watch(app):
+    """Long-poll loop: honour commands from the authorised chat only. Skips any backlog on (re)start
+    so a command sent while we were down — including the /update that caused our own restart — is
+    never replayed."""
+    offset, primed = None, False
+    while True:
+        try:
+            cfg = notifications._cfg()
+            tg = cfg.get("telegram") or {}
+            if not (cfg.get("enabled", True) and tg.get("enabled") and tg.get("accept_commands")):
+                time.sleep(_TG_CMD_BACKOFF)
+                offset, primed = None, False   # re-prime (skip backlog) when it's re-enabled
+                continue
+            token = decrypt_secret(tg.get("token") or "")
+            authorized = (tg.get("chat_id") or "").strip()
+            if not token or not authorized:
+                time.sleep(_TG_CMD_BACKOFF)
+                continue
+            if not primed:
+                latest = notifications.telegram_get_updates(token, offset=-1, timeout=0)
+                if latest:
+                    offset = latest[-1].get("update_id", 0) + 1
+                primed = True
+                continue
+            updates = notifications.telegram_get_updates(token, offset=offset, timeout=25)
+            if updates is None:
+                time.sleep(_TG_CMD_BACKOFF)   # error / 409 conflict (a second poller) → back off
+                continue
+            for upd in updates:
+                offset = upd.get("update_id", 0) + 1
+                msg = upd.get("message") or upd.get("edited_message") or {}
+                text = (msg.get("text") or "").strip()
+                chat = str((msg.get("chat") or {}).get("id") or "")
+                if not text.startswith("/"):
+                    continue
+                if chat != authorized:
+                    _log.info("telegram: ignoring a command from unauthorised chat %s", chat[:32])
+                    continue
+                _handle_telegram_command(app, token, authorized, text)
+        except Exception:
+            _log.debug("telegram command-watch tick failed", exc_info=True)
+            time.sleep(_TG_CMD_BACKOFF)
+
+
+def _handle_telegram_command(app, token, chat_id, text):
+    cmd = _parse_tg_command(text)
+    if cmd in ("help", "start"):
+        _tg_reply(token, chat_id, "Commands:\n/update — update the panel to the latest version\n"
+                                  "/status — version + server counts\n/servers — per-server status\n"
+                                  "/help — this message")
+    elif cmd == "status":
+        _tg_reply(token, chat_id, _tg_status_text(app))
+    elif cmd == "servers":
+        _tg_reply(token, chat_id, _tg_servers_text(app))
+    elif cmd in ("update", "upgrade"):
+        _telegram_do_update(app, token, chat_id)
+    else:
+        _tg_reply(token, chat_id, "Unknown command '%s'. Try /help." % cmd[:24])
+
+
+def _tg_status_text(app):
+    with app.app_context():
+        installed = GameServer.query.filter_by(installed=True).all()
+        online = sum(1 for gs in installed if gs.status == "online")
+        players = sum((_player_counts.get(gs.id) or {}).get("count") or 0
+                      for gs in installed if isinstance((_player_counts.get(gs.id) or {}).get("count"), int))
+    return ("Version %s\nServers: %d online / %d installed\nPlayers online: %d"
+            % (so.panel_version(), online, len(installed), players))
+
+
+def _tg_servers_text(app):
+    with app.app_context():
+        rows = []
+        for gs in GameServer.query.filter_by(installed=True).order_by(GameServer.name).all():
+            slot = _player_counts.get(gs.id) or {}
+            count = slot.get("count")
+            pc = ("%s/%s" % (count, slot.get("max"))) if isinstance(count, int) else "?"
+            rows.append("%s %s — %s (%s players)"
+                        % ("🟢" if gs.status == "online" else "⚪", gs.name, gs.status, pc))
+    return "\n".join(rows) if rows else "No servers installed."
+
+
+def _telegram_do_update(app, token, chat_id):
+    ver = so.panel_version()
+    try:
+        st = so.panel_update_status(force=True)
+    except Exception:
+        st = {}
+    if st.get("git") and not st.get("update_available"):
+        _tg_reply(token, chat_id, "✅ Already up to date (%s)." % ver)
+        return
+    ok, msg = so.panel_self_update()   # detached + CI-gated; returns immediately, then restarts us
+    if not ok:
+        _tg_reply(token, chat_id, "⚠️ Update not started: %s" % msg)
+        return
+    _set_tg_pending_update(chat_id, ver)
+    _tg_reply(token, chat_id, "🔄 Update started (from %s). I'll message you here once I'm back." % ver)
+
+
+def _set_tg_pending_update(chat_id, from_version):
+    cfg = load_config()
+    cfg["telegram_pending_update"] = {"chat_id": chat_id, "from_version": from_version, "ts": time.time()}
+    save_config(cfg)
+
+
+def _report_tg_pending_update():
+    """After a restart, if a Telegram-triggered update was pending, tell the chat how it went."""
+    cfg = load_config()
+    pend = cfg.get("telegram_pending_update")
+    if not pend:
+        return
+    cfg.pop("telegram_pending_update", None)
+    save_config(cfg)
+    tg = (cfg.get("notifications") or {}).get("telegram") or {}
+    token = decrypt_secret(tg.get("token") or "")
+    chat = pend.get("chat_id") or ""
+    if not (token and chat):
+        return
+    now_ver, frm = so.panel_version(), pend.get("from_version") or "?"
+    if now_ver != frm:
+        _tg_reply(token, chat, "✅ Update complete — now on %s (was %s). Back online." % (now_ver, frm))
+    else:
+        _tg_reply(token, chat, "ℹ️ Update finished — still on %s (no change, or rolled back)." % now_ver)
+
+
 # ── Proactive monitor → admin notifications ────────────────────
 _MONITOR_SECONDS = 60
 _DISK_ALERT_PCT = 90            # notify once a host's / crosses this; re-arms after it drops to PCT-5
@@ -3467,6 +3623,7 @@ def register_routes(app):
             enabled=bool(f.get("enabled")),
             telegram={"enabled": bool(f.get("telegram_enabled")),
                       "chat_id": f.get("telegram_chat_id", ""),
+                      "accept_commands": bool(f.get("telegram_accept_commands")),
                       "token": (tg_token or None)},
             discord={"enabled": bool(f.get("discord_enabled")),
                      "webhook": (dc_webhook or None)},
@@ -6875,6 +7032,19 @@ if __name__ == "__main__":
 
     # Proactive monitor: server-down / host-unreachable / disk-low admin notifications.
     threading.Thread(target=lambda: _monitor_watch(app), daemon=True).start()
+
+    # Telegram command bot (/update, /status, …) — opt-in, locked to the configured chat.
+    threading.Thread(target=lambda: _telegram_command_watch(app), daemon=True).start()
+
+    # If a Telegram-triggered self-update just restarted us, tell the chat it's back (after a short
+    # settle so "back online" is true). No-op when there's no pending update.
+    def _tg_report():
+        time.sleep(8)
+        try:
+            _report_tg_pending_update()
+        except Exception:
+            _log.debug("telegram pending-update report failed", exc_info=True)
+    threading.Thread(target=_tg_report, daemon=True).start()
 
     host = (cfg.get("bind_host") or "").strip()
     if not host:

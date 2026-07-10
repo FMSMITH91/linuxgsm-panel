@@ -47,6 +47,17 @@
           <button type="button" class="btn btn-outline-secondary btn-sm mt-2" data-action="testChannel" data-args='["telegram", "@self"]'>
             <i class="bi bi-send"></i> Send test
           </button>
+          <hr class="my-3">
+          <div class="form-check form-switch">
+            <input type="checkbox" name="telegram_accept_commands" class="form-check-input" role="switch" id="tg-cmd"
+                   {% if settings.telegram.accept_commands %}checked{% endif %}>
+            <label class="form-check-label small" for="tg-cmd">Accept commands from this chat
+              (<code>/update</code>, <code>/status</code>)</label>
+          </div>
+          <div class="small text-secondary mt-1">
+            Lets you run the panel from Telegram — only messages from the Chat ID above are honoured.
+            Send <code>/help</code> in the chat for the list.
+          </div>
         </div>
       </div>
     </div>
