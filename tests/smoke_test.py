@@ -718,6 +718,144 @@ try:
         _sa_event.remove(_engine, "after_cursor_execute", _count_query)
         _appmod.run_command = _orig_rc
 
+    # ── Light-migration coverage ──────────────────────────────────────────────────────────────────
+    # The ALTER-TABLE list in models.py is what upgrades a database created by an OLDER panel version
+    # (create_all() never ALTERs existing tables). Assert it references only real columns and that it
+    # actually restores a column that's gone missing — a model column added WITHOUT a matching entry
+    # here is the class of bug that once shipped a broken api_token migration.
+    with app.app_context():
+        import re as _re_mig
+        import pathlib as _pl_mig
+        import sqlite3 as _sqlite_mig
+        from sqlalchemy import inspect as _sa_inspect, text as _sa_text
+        from models import _run_light_migrations as _rlm
+        _models_src = (_pl_mig.Path(__file__).resolve().parent.parent / "models.py").read_text(encoding="utf-8")
+        _mig = _re_mig.findall(r'\(\s*"(\w+)"\s*,\s*"(\w+)"\s*\)\s*:\s*"(ALTER TABLE [^"]+)"', _models_src)
+        check("migration: the light-migration list parses out of models.py", len(_mig) > 5)
+        _cols = {t: {c["name"] for c in _sa_inspect(db.engine).get_columns(t)}
+                 for t in _sa_inspect(db.engine).get_table_names()}
+        _stale = [(t, c) for t, c, _ in _mig if c not in _cols.get(t, set())]
+        check("migration: no entry targets a table/column that no longer exists", not _stale, str(_stale))
+        try:
+            _rlm(); _rlm()   # commits internally; a no-op on an already-current schema, run twice
+            _idem_ok, _idem_err = True, ""
+        except Exception as _e:
+            db.session.rollback(); _idem_ok, _idem_err = False, repr(_e)
+        check("migration: _run_light_migrations is a safe idempotent no-op on a current DB",
+              _idem_ok, _idem_err)
+        # Prove one entry's DDL really restores a dropped column (SQLite >= 3.35 supports DROP COLUMN).
+        if _sqlite_mig.sqlite_version_info >= (3, 35, 0) and "notify_when_empty" in _cols.get("game_server", set()):
+            try:
+                db.session.execute(_sa_text("ALTER TABLE game_server DROP COLUMN notify_when_empty"))
+                db.session.commit()
+                _gone = "notify_when_empty" not in {c["name"] for c in _sa_inspect(db.engine).get_columns("game_server")}
+                _rlm()
+                _back = "notify_when_empty" in {c["name"] for c in _sa_inspect(db.engine).get_columns("game_server")}
+                check("migration: a dropped column is restored by _run_light_migrations", _gone and _back)
+            except Exception as _e:
+                db.session.rollback()
+                check("migration: a dropped column is restored by _run_light_migrations", False, repr(_e))
+
+    # ── Monitor + player-count poller transition logic ────────────────────────────────────────────
+    # These background passes drive the admin notifications. create_app() does NOT start the watcher
+    # threads, so we run a pass by hand — single-threaded, with the host/SSH helpers stubbed — to
+    # exercise the real up/down, suppression, and notify-when-empty branches in _monitor_pass /
+    # _refresh_player_counts and confirm each fires (or stays silent) exactly when it should.
+    with app.app_context():
+        import time as _time_mon
+        _am = sys.modules["app"]
+        _r1 = RemoteServer.query.filter_by(name="smoke-host").first()
+        _mon = GameServer(remote_id=_r1.id, name="mon-srv", short_name="monserver",
+                          game_type="csgo", port=27100, installed=True, status="online")
+        db.session.add(_mon); db.session.commit()
+        _mon_id, _r1_id = _mon.id, _r1.id
+        _rec = []
+        _saved = {n: getattr(_am, n) for n in ("_host_reachable", "_remote_listening_ports",
+                  "_host_disk_pct", "_host_load_mem", "_server_slots", "_server_max_config")}
+        _saved_notify = _am.notifications.notify
+        _saved_mstate = _am._monitor_state
+        _saved_exp = dict(_am._expected_offline)
+        _saved_full = dict(_am._server_full_alerted)
+        _saved_peak = dict(_am._server_peak_notified)
+        _saved_pc = dict(_am._player_counts)
+        try:
+            _am.notifications.notify = lambda key, title, body="": _rec.append(key)
+            _am._host_reachable = lambda r: True
+            _am._host_disk_pct = lambda r: 40
+            _am._host_load_mem = lambda r: (10, 10)
+            _am._server_max_config = lambda gs: 16
+
+            def _reset_mon():
+                _am._monitor_state = {"remotes": {}, "servers": {}, "disk": {}, "load": {}}
+
+            # The very first pass only records a baseline — nothing alerts on startup.
+            _reset_mon()
+            _am._remote_listening_ports = lambda r: {27100}
+            _rec.clear(); _am._monitor_pass()
+            check("monitor: the first pass is a silent baseline (no startup alerts)",
+                  not any(k in _rec for k in ("server_down", "server_up", "remote_unreachable")),
+                  "fired: %s" % _rec)
+
+            # A server that was up and is no longer listening -> server_down.
+            _am._remote_listening_ports = lambda r: set()
+            _rec.clear(); _am._monitor_pass()
+            check("monitor: server_down fires on an up->down transition", "server_down" in _rec)
+
+            # ...but a panel-issued stop (inside the expected-offline window) suppresses it.
+            _reset_mon()
+            _am._monitor_state["servers"][_mon_id] = True
+            _am._expected_offline[_mon_id] = _time_mon.time()
+            _am._remote_listening_ports = lambda r: set()
+            _rec.clear(); _am._monitor_pass()
+            check("monitor: a panel-issued stop suppresses server_down", "server_down" not in _rec)
+            _am._expected_offline.pop(_mon_id, None)
+
+            # A reachable host that stops responding -> remote_unreachable.
+            _reset_mon()
+            _am._monitor_state["remotes"] = {_r1_id: True}
+            _am._host_reachable = lambda r: r.id != _r1_id
+            _rec.clear(); _am._monitor_pass()
+            check("monitor: remote_unreachable fires when a host stops responding",
+                  "remote_unreachable" in _rec)
+            _am._host_reachable = lambda r: True
+
+            # Poller: notify_when_empty is a one-shot on a CONFIRMED 0 that then disarms itself.
+            _mon.notify_when_empty = True; db.session.commit()
+            _am._server_slots = lambda gs: (0, 16)
+            _rec.clear(); _am._refresh_player_counts(app)
+            db.session.refresh(_mon)
+            check("poller: notify_when_empty fires server_empty at a confirmed 0", "server_empty" in _rec)
+            check("poller: notify_when_empty is one-shot (clears its own flag)",
+                  _mon.notify_when_empty is False)
+
+            # ...but it must NEVER fire on an unknown count (a running server the panel can't read).
+            _mon.notify_when_empty = True; db.session.commit()
+
+            def _unreadable(gs):
+                raise RuntimeError("count unavailable")
+            _am._server_slots = _unreadable
+            _rec.clear(); _am._refresh_player_counts(app)
+            db.session.refresh(_mon)
+            check("poller: notify_when_empty does NOT fire on an unknown count", "server_empty" not in _rec)
+            check("poller: notify_when_empty stays armed when the count is unknown",
+                  _mon.notify_when_empty is True)
+
+            # server_full fires when a server reaches its cap.
+            _am._server_full_alerted.pop(_mon_id, None)
+            _am._server_slots = lambda gs: (16, 16)
+            _rec.clear(); _am._refresh_player_counts(app)
+            check("poller: server_full fires when a server hits its cap", "server_full" in _rec)
+        finally:
+            _am.notifications.notify = _saved_notify
+            for _n, _v in _saved.items():
+                setattr(_am, _n, _v)
+            _am._monitor_state = _saved_mstate
+            _am._expected_offline.clear(); _am._expected_offline.update(_saved_exp)
+            _am._server_full_alerted.clear(); _am._server_full_alerted.update(_saved_full)
+            _am._server_peak_notified.clear(); _am._server_peak_notified.update(_saved_peak)
+            _am._player_counts.clear(); _am._player_counts.update(_saved_pc)
+            db.session.delete(_mon); db.session.commit()
+
 finally:
     passed = sum(1 for ok, _, _ in results if ok)
     for ok, name, detail in results:
