@@ -570,14 +570,21 @@ if [ "${IS_UPDATE}" -eq 1 ]; then
             ${UPG_SUDO} apt-get update -qq || true
             if [ "$(${UPG_SUDO} apt-get -s full-upgrade 2>/dev/null | grep -c '^Inst ')" -gt 0 ]; then
                 echo ""
-                info "System updates are available — applying them, then rebooting…"
+                info "System updates are available — applying them now…"
                 ${UPG_SUDO} apt-get -y -o Dpkg::Options::="--force-confold" full-upgrade \
                     || warn "Some packages could not be upgraded — continuing."
                 ${UPG_SUDO} apt-get -y autoremove --purge >/dev/null 2>&1 || true
-                warn "Rebooting to bake in the system update — reconnect in ~1 minute; the panel"
-                warn "restarts automatically. (Press Ctrl-C in the next 15s to skip.)"
-                sleep 15
-                ${UPG_SUDO} reboot
+                if [ ! -f /var/run/reboot-required ]; then
+                    ok "System updated — no reboot required."
+                elif pgrep -x tmux >/dev/null 2>&1 || pgrep -x SCREEN >/dev/null 2>&1; then
+                    warn "The update needs a reboot, but game servers are running (tmux/screen) —"
+                    warn "not rebooting so players aren't dropped. Reboot when they're empty:  ${UPG_SUDO} reboot"
+                else
+                    warn "Rebooting to bake in the system update — reconnect in ~1 minute; the panel"
+                    warn "restarts automatically. (Press Ctrl-C in the next 15s to skip.)"
+                    sleep 15
+                    ${UPG_SUDO} reboot
+                fi
             else
                 ok "System packages already up to date — no reboot needed."
             fi
@@ -828,16 +835,25 @@ echo -e "${CYAN}Forgot the admin password?${NC} From a shell on this server (no 
 echo -e "    sudo linuxgsm-panel-recover        ${YELLOW}# or: cd ${PANEL_DIR} && bash reset-password.sh${NC}"
 echo ""
 
-# ── Always reboot after a fresh install (unless the OS upgrade was skipped). Rebooting
-#    once now bakes in the OS update AND proves the box comes back cleanly with everything
-#    applied — better to find a broken boot now than the next time you actually need it.
-#    The panel service is enabled on boot, so it's back at the URL above after ~1 minute.
-#    Only fresh installs reach this point (the update path exits earlier). ──
-if [ "${PANEL_NO_UPGRADE:-0}" != "1" ]; then
+# ── Reboot ONLY if an update actually requires one — and NEVER out from under running game
+#    servers. A brand-new VPS with a fresh kernel reboots to bake it in and prove it boots cleanly;
+#    but if this host is already running game servers (tmux/screen sessions), a reboot would drop
+#    the players, so we never do it automatically — we tell you to reboot when they're empty.
+#    Skip the reboot entirely with PANEL_NO_UPGRADE=1 or PANEL_NO_REBOOT=1. The panel service is
+#    enabled on boot, so it's back at the URL above ~1 minute after any reboot. ──
+if [ "${PANEL_NO_UPGRADE:-0}" != "1" ] && [ "${PANEL_NO_REBOOT:-0}" != "1" ]; then
     RB_SUDO=""; [ "$(id -u)" -ne 0 ] && RB_SUDO="sudo"
-    warn "Rebooting to finish setup — bakes in the OS update and confirms the machine boots"
-    warn "cleanly. Reconnect in ~1 minute; the panel will already be running at the URL above."
-    warn "(Press Ctrl-C in the next 15s to skip.)"
-    sleep 15
-    ${RB_SUDO} reboot
+    if [ ! -f /var/run/reboot-required ]; then
+        ok "No reboot needed — nothing pending requires one."
+    elif pgrep -x tmux >/dev/null 2>&1 || pgrep -x SCREEN >/dev/null 2>&1; then
+        warn "A system update needs a reboot to finish (e.g. a new kernel), but this host is running"
+        warn "game servers (tmux/screen sessions detected) — NOT rebooting so players aren't dropped."
+        warn "Reboot it yourself once your servers are empty:  ${RB_SUDO} reboot"
+    else
+        warn "A system update needs a reboot to finish; no game servers are running, so rebooting now"
+        warn "to bake it in and confirm a clean boot. Reconnect in ~1 minute; the panel comes back"
+        warn "at the URL above. (Press Ctrl-C in the next 15s to skip and reboot yourself later.)"
+        sleep 15
+        ${RB_SUDO} reboot
+    fi
 fi

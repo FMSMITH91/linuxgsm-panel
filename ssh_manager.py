@@ -3031,7 +3031,7 @@ def remote_bootstrap_vps(server, set_timezone="UTC", enable_ufw=True, install_lg
     total += 1  # disable services
     total += 1 if username else 0
     total += 1 if install_fail2ban else 0
-    total += 1 if (do_reboot and not is_local) else 0
+    total += 1 if not is_local else 0   # a reboot-check step (may reboot, skip, or report none needed)
 
     def emit(name, status="running", detail=None):
         nonlocal step
@@ -3208,21 +3208,34 @@ def remote_bootstrap_vps(server, set_timezone="UTC", enable_ufw=True, install_lg
         run_command(server, f"echo '{b64}' | base64 -d > /etc/fail2ban/jail.local", timeout=15, sudo=True)
         run_command(server, "systemctl enable --now fail2ban 2>&1; systemctl restart fail2ban 2>&1", timeout=20, sudo=True)
 
-    # ── 11. Reboot to apply kernel/library updates, then wait for reconnect ──
-    if do_reboot and not is_local:
+    # ── 11. Reboot ONLY if an update actually requires one, and NEVER out from under running game
+    #        servers (a reboot would drop the players). We check /var/run/reboot-required and, before
+    #        rebooting, that no tmux/screen game-server sessions are live — otherwise we just flag the
+    #        pending reboot so the operator can do it when the host is empty. ──
+    if not is_local:
         reboot_req, _, _ = run_command(server, "test -f /var/run/reboot-required && echo YES || echo NO", timeout=10)
-        emit("Rebooting server to apply updates", status="rebooting",
-             detail=("Kernel/library update requires a reboot." if "YES" in reboot_req
-                     else "Rebooting to finalize the fresh setup."))
-        # Schedule the reboot slightly in the future so this command returns cleanly.
-        run_command(server, "( sleep 2 ; reboot ) >/dev/null 2>&1 & echo scheduled", timeout=15, sudo=True)
-        close_connection(server)
-        came_back = _wait_for_reboot(server, on_wait=lambda t: note(t, status="rebooting"))
-        if not came_back:
-            return False, "Server was rebooted but did not come back online within the timeout.", "\n".join(log)
-        note("Server is back online.", status="running")
-    elif do_reboot and is_local:
-        note("Reboot skipped — this is the panel's own host.")
+        needs_reboot = "YES" in (reboot_req or "")
+        gs_out, _, _ = run_command(server, "if pgrep -x tmux >/dev/null 2>&1 || pgrep -x SCREEN "
+                                   ">/dev/null 2>&1; then echo YES; else echo NO; fi", timeout=10)
+        servers_running = "YES" in (gs_out or "")
+        if not needs_reboot:
+            emit("No reboot needed", detail="Updates applied without requiring a reboot.")
+        elif servers_running or not do_reboot:
+            emit("Reboot required — skipped to protect running servers", status="reboot-required",
+                 detail="A kernel/library update needs a reboot. Reboot this host from its page "
+                        "once its game servers are empty.")
+        else:
+            emit("Rebooting to apply a kernel/library update", status="rebooting",
+                 detail="A system update requires a reboot and no game servers are running.")
+            # Schedule the reboot slightly in the future so this command returns cleanly.
+            run_command(server, "( sleep 2 ; reboot ) >/dev/null 2>&1 & echo scheduled", timeout=15, sudo=True)
+            close_connection(server)
+            came_back = _wait_for_reboot(server, on_wait=lambda t: note(t, status="rebooting"))
+            if not came_back:
+                return False, "Server was rebooted but did not come back online within the timeout.", "\n".join(log)
+            note("Server is back online.", status="running")
+    else:
+        note("Reboot check skipped — this is the panel's own host.")
 
     if progress:
         try:
