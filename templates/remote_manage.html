@@ -669,7 +669,7 @@
           <td><strong>{{ gs.name }}</strong></td>
           <td>{{ gs.game_display or gs.game_type }}</td>
           <td>
-            {% set addr = remote.display_host %}
+            {% set addr = remote.connect_host %}
             {% if addr %}
             <code class="text-info copy-addr" style="cursor:pointer;font-size:.8rem;" title="Click to copy"
                   data-copy="{{ addr }}:{{ gs.port }}">{{ addr }}:{{ gs.port }}</code>

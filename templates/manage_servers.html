@@ -99,7 +99,7 @@
             </td>
             <td class="d-none d-md-table-cell">{{ gs.game_display or gs.game_type }}</td>
             <td>
-              {% set addr = gs.remote.display_host if gs.remote else '' %}
+              {% set addr = gs.remote.connect_host if gs.remote else '' %}
               {% if addr %}
               <code class="text-info copy-addr" style="cursor:pointer;" title="Click to copy"
                     data-copy="{{ addr }}:{{ gs.port }}">{{ addr }}:{{ gs.port }}</code>

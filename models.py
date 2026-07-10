@@ -213,6 +213,14 @@ class RemoteServer(db.Model):
         return self.host
 
     @property
+    def connect_host(self):
+        """The PUBLIC address to hand players for a game connect string — the resolved public IP
+        when known, else the address the host was added with. For a Tailscale-managed remote,
+        `host` is a tailnet-only MagicDNS name players can't reach, so the public IP must win.
+        (public_ip is resolved and cached by the /api/servers poll that every server list runs.)"""
+        return self.public_ip or self.display_host
+
+    @property
     def cached_stats(self):
         """Last known live stats (cpu_percent/memory/disk/uptime) as a dict, or None.
         Rendered on page load so the card shows real numbers immediately instead of a
