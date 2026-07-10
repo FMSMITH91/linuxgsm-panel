@@ -4,11 +4,16 @@
 `_parse_top_ips` turns the tab-separated counting pipeline output (built from /var/log/fail2ban.log)
 into ranked offender rows. The log is attacker-influenced input, so the parser must never raise.
 
-Run locally:
+Run locally (from anywhere):
     pip install atheris
     python tests/fuzz/fuzz_fail2ban.py -max_total_time=60 tests/fuzz/corpus/fail2ban
 """
+import os
+import sys
+
 import atheris
+
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
 
 # system_ops imports only the standard library, so it can be instrumented directly.
 with atheris.instrument_imports():
@@ -24,7 +29,6 @@ def TestOneInput(data):
 
 
 def main():
-    import sys
     atheris.Setup(sys.argv, TestOneInput)
     atheris.Fuzz()
 

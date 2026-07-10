@@ -4,15 +4,20 @@
 Each parses text produced on a remote host — a LinuxGSM `.cfg`, `apt list --upgradable`, and the
 mods-install / mods-remove listings. All are best-effort and must never raise on malformed input.
 
-Run locally:
+Run locally (from anywhere):
     pip install atheris
     python tests/fuzz/fuzz_config.py -max_total_time=60 tests/fuzz/corpus/config
 """
+import importlib
+import os
+import sys
+
 import atheris
 
-import paramiko              # noqa: F401  (see fuzz_game_status for why these are pre-imported)
-from eventlet import tpool   # noqa: F401
-import config                # noqa: F401
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
+
+for _dep in ("paramiko", "eventlet.tpool", "config"):   # pre-load uninstrumented (see fuzz_game_status)
+    importlib.import_module(_dep)
 
 with atheris.instrument_imports():
     import ssh_manager
@@ -28,7 +33,6 @@ def TestOneInput(data):
 
 
 def main():
-    import sys
     atheris.Setup(sys.argv, TestOneInput)
     atheris.Fuzz()
 

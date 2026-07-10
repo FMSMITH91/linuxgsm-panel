@@ -6,17 +6,21 @@ each line goes through `_parse_ufw_rule`, and lines matching UFW's numbered-rule
 by `_group_ufw_rules` exactly as the live parser feeds it (rule numbers come from the `\\d+` capture,
 never arbitrary strings — feeding a non-numeric num would be a harness bug, not a real input).
 
-Run locally:
+Run locally (from anywhere):
     pip install atheris
     python tests/fuzz/fuzz_firewall.py -max_total_time=60 tests/fuzz/corpus/firewall
 """
+import importlib
+import os
 import re
+import sys
 
 import atheris
 
-import paramiko              # noqa: F401  (see fuzz_game_status for why these are pre-imported)
-from eventlet import tpool   # noqa: F401
-import config                # noqa: F401
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
+
+for _dep in ("paramiko", "eventlet.tpool", "config"):   # pre-load uninstrumented (see fuzz_game_status)
+    importlib.import_module(_dep)
 
 with atheris.instrument_imports():
     import ssh_manager
@@ -39,7 +43,6 @@ def TestOneInput(data):
 
 
 def main():
-    import sys
     atheris.Setup(sys.argv, TestOneInput)
     atheris.Fuzz()
 
