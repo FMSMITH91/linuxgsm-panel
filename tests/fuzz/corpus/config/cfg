@@ -1,0 +1,9 @@
+## LinuxGSM Config
+ip="0.0.0.0"
+port="28960"
+queryport="28960"
+querymode="2"
+querytype="cod"
+maxplayers="20"
+servername="My CoD Server"
+# commented="ignored"

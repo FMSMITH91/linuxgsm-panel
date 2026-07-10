@@ -1,0 +1,82 @@
+name: Fuzz
+
+# Coverage-guided fuzzing (Atheris / libFuzzer) of the pure parsers that ingest UNTRUSTED external
+# input: a remote game server's `status`/`list` reply, LinuxGSM config / apt / mod-list output,
+# fail2ban log lines, and UFW status. Each harness asserts the parser never raises on ANY input —
+# they are best-effort and must degrade to an empty result, not crash the player-list / firewall /
+# security paths that call them. Time is bounded so PR runs stay short; the nightly schedule soaks
+# longer over the committed seed corpus.
+on:
+  push:
+    branches: [ main ]
+    paths:
+      - 'ssh_manager.py'
+      - 'system_ops.py'
+      - 'tests/fuzz/**'
+      - '.github/workflows/fuzz.yml'
+      - 'requirements.txt'
+  pull_request:
+    branches: [ main ]
+    paths:
+      - 'ssh_manager.py'
+      - 'system_ops.py'
+      - 'tests/fuzz/**'
+      - '.github/workflows/fuzz.yml'
+      - 'requirements.txt'
+  schedule:
+    - cron: "0 4 * * *"   # nightly 04:00 UTC — a longer soak
+  workflow_dispatch:      # allow manual runs from the Actions tab
+
+# Least-privilege: these jobs only read the repo (crash reproducers are uploaded as artifacts).
+permissions:
+  contents: read
+
+# A newer push to the same ref cancels an in-progress run (faster feedback, fewer minutes).
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  fuzz:
+    name: fuzz (${{ matrix.target }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false   # fuzz every target even if one finds a crash, so all findings surface
+      matrix:
+        target: [ game_status, firewall, config, fail2ban ]
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
+
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
+        with:
+          python-version: "3.12"   # Atheris ships manylinux wheels for 3.12 (the runner's Python)
+
+      - name: Install dependencies + Atheris
+        run: |
+          python -m pip install --quiet -r requirements.txt
+          python -m pip install --quiet atheris
+
+      - name: Fuzz
+        env:
+          EVENT: ${{ github.event_name }}
+          TARGET: ${{ matrix.target }}
+        run: |
+          SECS=60
+          [ "$EVENT" = "schedule" ] && SECS=600
+          mkdir -p ".fuzz-corpus/$TARGET"
+          # First corpus dir is writable (new units land there); the committed seeds are read-only.
+          # A crash writes a crash-*/oom-*/timeout-* reproducer to the cwd and exits non-zero.
+          python "tests/fuzz/fuzz_${TARGET}.py" \
+            -max_total_time="$SECS" -timeout=25 -rss_limit_mb=2560 \
+            ".fuzz-corpus/$TARGET" "tests/fuzz/corpus/$TARGET"
+
+      - name: Upload crash reproducer
+        if: failure()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: fuzz-crash-${{ matrix.target }}
+          path: |
+            crash-*
+            oom-*
+            timeout-*
+          if-no-files-found: ignore

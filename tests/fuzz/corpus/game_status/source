@@ -1,0 +1,8 @@
+hostname: My Server
+version : 1.38.8.2/24 secure
+map     : de_dust2
+players : 2 humans, 1 bots (24 max)
+
+# userid name uniqueid connected ping loss state
+#  2 "Alice" STEAM_1:0:12345 05:20 45 0 active
+#  3 "Bob" [U:1:135780] 01:02 60 0 active

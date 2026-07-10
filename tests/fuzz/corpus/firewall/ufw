@@ -1,0 +1,10 @@
+Status: active
+
+     To                         Action      From
+     --                         ------      ----
+[ 1] 22/tcp                     ALLOW IN    Anywhere
+[ 2] 5000/tcp                   ALLOW IN    Anywhere
+[ 3] Anywhere                   DENY IN     203.0.113.5                # panel-autoblock
+[ 4] 28960                      ALLOW IN    Anywhere                   # codserver
+[ 5] 22/tcp (v6)                ALLOW IN    Anywhere (v6)
+[ 6] Anywhere on tailscale0     ALLOW IN    Anywhere
