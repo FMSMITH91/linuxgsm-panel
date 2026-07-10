@@ -1419,29 +1419,35 @@ def player_count(server, user, game_type=None, port=None, query_type=None):
 
 
 def player_slots(server, user, game_type=None, port=None, query_type=None):
-    """(current, max) player counts from a SINGLE gamedig query — `max` is the capacity the game
-    reports (or None when it doesn't). (None, None) when the game isn't gamedig-queryable or the
-    query fails, so the caller can fall back to the console / LinuxGSM config. Never raises. Same
-    bare-`gamedig` invocation as player_count, but pulls both numbers so the UI can show 'n / max'."""
+    """(current, max, name) from a SINGLE gamedig query: player count, the capacity the game reports
+    (or None), and the server's own advertised in-game name/hostname (what players see in the server
+    browser, or None). (None, None, None) when the game isn't gamedig-queryable or the query fails,
+    so the caller can fall back to the console / LinuxGSM config. Never raises."""
+    import json
     gdtype = _gamedig_type(game_type, query_type)
     if not gdtype or not port:
-        return None, None
-    # Emit "<count>/<max>" from one query; jq prints "null" where maxplayers is absent.
-    jqf = '(.players|length|tostring) + "/" + (.maxplayers|tostring)'
+        return None, None, None
+    # One query -> compact JSON {c:count, m:maxplayers, n:name}. JSON escaping lets a server name with
+    # any character (spaces, quotes, unicode) round-trip safely, with no delimiter that could collide.
+    jqf = '{c:(.players|length), m:.maxplayers, n:(.name // "")}'
     cmd = (f"gamedig --type {gdtype} 127.0.0.1:{int(port)} 2>/dev/null "
-           f"| jq -r {_quote(jqf)} 2>/dev/null")
+           f"| jq -c {_quote(jqf)} 2>/dev/null")
     try:
         out, _, _ = run_command(server, f"sudo -u {user} bash -c {_quote(cmd)}", timeout=25, sudo=False)
     except Exception:
-        return None, None
-    s = (out or "").strip().splitlines()[-1].strip() if (out or "").strip() else ""
-    if "/" not in s:
-        return None, None
-    c, _, m = s.partition("/")
-    cur = int(c) if c.strip().isdigit() else None
-    mx = int(m) if m.strip().isdigit() else None
-    return cur, mx
-
+        return None, None, None
+    line = (out or "").strip().splitlines()[-1].strip() if (out or "").strip() else ""
+    if not line:
+        return None, None, None
+    try:
+        d = json.loads(line)
+    except (ValueError, TypeError):
+        return None, None, None
+    cur = d.get("c") if isinstance(d.get("c"), int) else None
+    mx = d.get("m") if isinstance(d.get("m"), int) else None
+    nm = d.get("n")
+    nm = (" ".join(str(nm).split())[:120] or None) if nm else None
+    return cur, mx, nm
 
 def player_count_via_lgsm_query(server, user, selfname, fallback_port=None):
     """Player count using the game's OWN LinuxGSM query settings — this covers games the panel's

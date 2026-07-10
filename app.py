@@ -313,26 +313,27 @@ def _server_max_config(gs):
 
 
 def _server_slots(gs):
-    """(count, max) for one game server. The COUNT we can trust — gamedig first (which also yields
-    max in the same query), then the game console for engine-classified games (valve/idTech3/
-    Minecraft), then LinuxGSM's own query; a stopped server is 0, and None means 'unknown' so the
-    auto-reboot never fires on a game it can't see. MAX is gamedig's reported capacity when it has
-    one, otherwise the LinuxGSM config; None when not set. Never raises."""
-    # Primary: gamedig gives count AND max in a single query.
+    """(count, max, name) for one game server. The COUNT we can trust — gamedig first (which also
+    yields max AND the server's advertised in-game name in the same query), then the game console for
+    engine-classified games (valve/idTech3/Minecraft), then LinuxGSM's own query; a stopped server is
+    0, and None means 'unknown' so the auto-reboot never fires on a game it can't see. MAX is
+    gamedig's reported capacity when it has one, otherwise the LinuxGSM config. NAME (the in-game
+    hostname players see) only comes from gamedig; None from the other sources. Never raises."""
+    # Primary: gamedig gives count, max AND the advertised name in a single query.
     try:
-        cur, mx = sm_player_slots(gs.remote, gs.short_name, gs.game_type, gs.port, gs.query_type)
+        cur, mx, gname = sm_player_slots(gs.remote, gs.short_name, gs.game_type, gs.port, gs.query_type)
     except Exception:
-        cur, mx = None, None
+        cur, mx, gname = None, None, None
     if cur is not None:
-        return cur, (mx if mx is not None else _server_max_config(gs))
+        return cur, (mx if mx is not None else _server_max_config(gs)), gname
     try:
         if sm_game_engine(gs.game_type):
             # Console backup — returns [] for a stopped/empty console game, so this is a real 0.
             n = len(sm_console_player_list(gs.remote, gs.short_name, gs.game_type,
                                            selfname=gs.lgsm_name) or [])
-            return n, _server_max_config(gs)
+            return n, _server_max_config(gs), None
     except Exception:
-        return None, _server_max_config(gs)
+        return None, _server_max_config(gs), None
     # Not in the panel's gamedig map and not a console engine — ask LinuxGSM's OWN query settings
     # (querytype/queryport), which cover games gamedig supports but the panel never mapped.
     try:
@@ -340,16 +341,16 @@ def _server_slots(gs):
     except Exception:
         lc = None
     if lc is not None:
-        return lc, _server_max_config(gs)
+        return lc, _server_max_config(gs), None
     # No gamedig type, no console engine, and LinuxGSM has no network query: a stopped server is
     # definitely empty; a running one we simply can't read, so report unknown (poller won't reboot).
     try:
         if sm_get_server_status(gs.remote, gs) == "offline":
-            return 0, _server_max_config(gs)
+            return 0, _server_max_config(gs), None
     except Exception:
         _log.debug("reboot-when-empty: status check failed for %s", getattr(gs, "short_name", "?"),
                    exc_info=True)
-    return None, _server_max_config(gs)
+    return None, _server_max_config(gs), None
 
 
 def _server_players_confident(gs):
@@ -405,6 +406,13 @@ def _cached_player_max(server_id):
     return entry.get("max") if entry else None
 
 
+def _cached_player_name(server_id):
+    """Last known in-game server name (the hostname players see in the browser) for a server, or None
+    when unknown / not gamedig-queryable."""
+    entry = _player_counts.get(server_id)
+    return entry.get("name") if entry else None
+
+
 def _refresh_player_counts(app):
     """One pass: re-read the confident (count, max) for every installed server into the cache. An
     offline server is 0 players without a (slow) query — its capacity still comes from the config —
@@ -414,10 +422,14 @@ def _refresh_player_counts(app):
             if gs.status in ("installing", "configuring"):
                 continue
             try:
-                count, mx = (0, _server_max_config(gs)) if gs.status == "offline" else _server_slots(gs)
+                count, mx, gname = (0, _server_max_config(gs), None) if gs.status == "offline" else _server_slots(gs)
             except Exception:
-                count, mx = None, None
-            _player_counts[gs.id] = {"count": count, "max": mx, "ts": time.time()}
+                count, mx, gname = None, None, None
+            # Keep the last-known in-game name when this pass didn't get one (e.g. the server is
+            # stopped or momentarily unqueryable) rather than blanking it in the UI.
+            prev_name = (_player_counts.get(gs.id) or {}).get("name")
+            _player_counts[gs.id] = {"count": count, "max": mx,
+                                     "name": gname or prev_name, "ts": time.time()}
             # One-shot "notify when empty": fire once on a CONFIRMED 0 (never on an unknown count),
             # then clear the flag so it doesn't ping every time the server empties.
             if gs.notify_when_empty and count == 0:
@@ -2283,13 +2295,14 @@ def register_routes(app):
         )
         player_counts = {gs.id: _cached_player_count(gs.id) for gs in servers}
         player_max = {gs.id: _cached_player_max(gs.id) for gs in servers}
+        server_names = {gs.id: _cached_player_name(gs.id) for gs in servers}
         total_players = sum(c for c in player_counts.values() if isinstance(c, int))
         total_max = sum(m for m in player_max.values() if isinstance(m, int))
         return render_template("dashboard.html", remotes=remotes, servers=servers,
                                server_list=servers, can_control=can_control,
                                remote_count=remote_count, player_counts=player_counts,
-                               player_max=player_max, total_players=total_players,
-                               total_max=total_max)
+                               player_max=player_max, server_names=server_names,
+                               total_players=total_players, total_max=total_max)
 
     # ── Server Detail + Console ────────────────────────────
     @app.route("/server/<int:server_id>")
@@ -6103,6 +6116,7 @@ def register_routes(app):
                 "connect_url": gs.connect_uri(host),
                 "players": _cached_player_count(gs.id),
                 "max_players": _cached_player_max(gs.id),
+                "game_name": _cached_player_name(gs.id),
             })
         return jsonify(data)
 

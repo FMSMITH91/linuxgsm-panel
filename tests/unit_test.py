@@ -1953,6 +1953,23 @@ check("telegram: a bot-mention + args is stripped", _parse_tg_command("/Update@M
 check("telegram: /STATUS is lowercased", _parse_tg_command("/STATUS") == "status")
 check("telegram: a non-command is empty", _parse_tg_command("hello there") == "" and _parse_tg_command("") == "")
 
+# player_slots parses gamedig's compact JSON into (count, max, name); a name with spaces/quotes
+# round-trips and junk output is rejected. run_command is stubbed so no SSH/gamedig is needed.
+_orig_rc = sm.run_command
+try:
+    sm.run_command = lambda *a, **k: ('{"c":7,"m":24,"n":"[EU] Bob\'s \\"Fun\\" Server"}', "", 0)
+    check("player_slots: parses count/max/name from gamedig JSON",
+          sm.player_slots(object(), "u", game_type="csgo", port=27015, query_type="csgo")
+          == (7, 24, "[EU] Bob's \"Fun\" Server"))
+    sm.run_command = lambda *a, **k: ('{"c":0,"m":null,"n":""}', "", 0)
+    check("player_slots: null max + empty name -> (0, None, None)",
+          sm.player_slots(object(), "u", game_type="csgo", port=27015, query_type="csgo") == (0, None, None))
+    sm.run_command = lambda *a, **k: ("not json", "", 0)
+    check("player_slots: junk output -> (None, None, None)",
+          sm.player_slots(object(), "u", game_type="csgo", port=27015, query_type="csgo") == (None, None, None))
+finally:
+    sm.run_command = _orig_rc
+
 # The REMOTE ignoreip drop-in (pushed to remotes over SSH) is built from the same validated entries.
 _dropin = sm._f2b_dropin_ignoreip_body(["9.9.9.9", "10.0.0.0/8", "bad; rm -rf /"])
 check("remote-f2b: drop-in is a [DEFAULT] ignoreip block including localhost",

@@ -130,6 +130,8 @@
             {% if can_control %}<td><input type="checkbox" class="form-check-input srv-check" value="{{ srv.id }}" data-name="{{ srv.name }}" data-supports-update="{{ 'true' if srv.supports_update else 'false' }}" aria-label="Select {{ srv.name }}"></td>{% endif %}
             <td>
               <strong>{{ srv.name }}</strong>
+              <span class="game-name text-info d-block text-truncate" id="game-name-{{ srv.id }}"
+                    style="font-size:.72rem;max-width:22ch;" title="In-game server name (what players see)">{{ server_names.get(srv.id) or '' }}</span>
               <span class="text-secondary d-block" style="font-size: .75rem;">{{ srv.short_name }}</span>
             </td>
             <td class="d-none d-md-table-cell">{{ srv.game_display or srv.game_type }}</td>
@@ -272,6 +274,10 @@ function refreshStatus() {
             conn.appendChild(join);
           }
         }
+        // In-game server name (the hostname players see), from gamedig. textContent, never innerHTML,
+        // so a hostile server name can't inject markup. Keep the old value when none is reported.
+        var nm = document.getElementById('game-name-' + s.id);
+        if (nm && s.game_name && nm.textContent !== s.game_name) nm.textContent = s.game_name;
       });
     })
     .catch(() => {});

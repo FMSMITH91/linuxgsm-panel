@@ -821,7 +821,7 @@ try:
 
             # Poller: notify_when_empty is a one-shot on a CONFIRMED 0 that then disarms itself.
             _mon.notify_when_empty = True; db.session.commit()
-            _am._server_slots = lambda gs: (0, 16)
+            _am._server_slots = lambda gs: (0, 16, None)
             _rec.clear(); _am._refresh_player_counts(app)
             db.session.refresh(_mon)
             check("poller: notify_when_empty fires server_empty at a confirmed 0", "server_empty" in _rec)
@@ -842,7 +842,7 @@ try:
 
             # server_full fires when a server reaches its cap.
             _am._server_full_alerted.pop(_mon_id, None)
-            _am._server_slots = lambda gs: (16, 16)
+            _am._server_slots = lambda gs: (16, 16, None)
             _rec.clear(); _am._refresh_player_counts(app)
             check("poller: server_full fires when a server hits its cap", "server_full" in _rec)
         finally:
