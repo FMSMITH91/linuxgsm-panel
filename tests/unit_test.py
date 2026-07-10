@@ -17,7 +17,8 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 import config
 import ssh_manager as sm
 import notifications as N
-from app import password_problem, _int_or
+import system_ops as SO
+from app import password_problem, _int_or, _valid_ip_or_cidr, _whitelisted
 from auth import can_access_remote, client_ip
 
 results = []
@@ -1921,6 +1922,30 @@ _app_src = (_pl.Path(__file__).resolve().parent.parent / "app.py").read_text(enc
 _used_keys = set(_re.findall(r'notifications\.notify\(\s*"(\w+)"', _app_src))
 check("notify: every notify() key in app.py is registered in EVENTS",
       _used_keys and _used_keys <= set(N.EVENTS), "unregistered: %s" % sorted(_used_keys - set(N.EVENTS)))
+
+# ── Login-security whitelist + auto-block threshold ──
+import ipaddress as _ipaddr  # noqa: E402
+
+check("whitelist: a bare IP is accepted + canonicalised", _valid_ip_or_cidr("  1.2.3.4 ") == "1.2.3.4")
+check("whitelist: a CIDR is accepted + canonicalised to its network", _valid_ip_or_cidr("10.0.0.5/24") == "10.0.0.0/24")
+check("whitelist: junk / empty is rejected", _valid_ip_or_cidr("not-an-ip") is None and _valid_ip_or_cidr("") is None)
+check("whitelist: an out-of-range octet is rejected", _valid_ip_or_cidr("999.1.1.1") is None)
+_wl_nets = [_ipaddr.ip_network("10.0.0.0/8"), _ipaddr.ip_network("203.0.113.7")]
+check("whitelist: a CIDR entry covers an address inside it", _whitelisted("10.1.2.3", _wl_nets) is True)
+check("whitelist: an exact-IP entry matches that IP", _whitelisted("203.0.113.7", _wl_nets) is True)
+check("whitelist: an address outside every entry does not match", _whitelisted("8.8.8.8", _wl_nets) is False)
+check("whitelist: a non-IP string never matches", _whitelisted("garbage", _wl_nets) is False)
+
+# The fail2ban ignoreip line is built ONLY from entries that re-parse as an IP/CIDR — defence-in-depth
+# so no attacker-influenced token can ever be written into the root-owned jail file.
+_ign = SO._f2b_ignoreip_line(["1.2.3.4", "10.0.0.0/8", "evil; rm -rf /", "$(whoami)", "not-an-ip"])
+check("f2b: ignoreip always includes localhost", "127.0.0.1/8" in _ign and "::1" in _ign)
+check("f2b: ignoreip keeps the valid IP + CIDR entries", "1.2.3.4" in _ign and "10.0.0.0/8" in _ign)
+check("f2b: ignoreip drops every non-IP token (no shell metachars reach the jail file)",
+      not any(bad in _ign for bad in (";", "$", "rm", "whoami", "not-an-ip")))
+_jail = SO._panel_f2b_jail_body("/data/auth.log", 5000, ["1.2.3.4", "junk"])
+check("f2b: the jail body carries an ignoreip line with the valid entry only",
+      "\nignoreip = " in _jail and "1.2.3.4" in _jail and "junk" not in _jail)
 
 passed = sum(1 for ok, _, _ in results if ok)
 for ok, name, detail in results:

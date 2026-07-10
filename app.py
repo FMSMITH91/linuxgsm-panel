@@ -630,31 +630,117 @@ def _set_autoblock_host(remote_id, enabled):
     save_config(cfg)
 
 
+# ── Auto-block threshold: an IP earns an all-ports UFW block once its failed-login count over the
+# ── rolling 7-day window reaches this many. Ranking (old "top 20") let a patient attacker who spaced
+# ── attempts wider than fail2ban's findtime slip through; a cumulative count over 7 days can't be
+# ── dodged that way, and a still-active attacker stays blocked instead of aging out at rank 21.
+_AUTOBLOCK_DEFAULT_THRESHOLD = 20
+
+
+def _autoblock_threshold():
+    try:
+        return max(1, min(int(load_config().get("autoblock_threshold", _AUTOBLOCK_DEFAULT_THRESHOLD)), 100000))
+    except (TypeError, ValueError):
+        return _AUTOBLOCK_DEFAULT_THRESHOLD
+
+
+# ── Login-security whitelist: IPs / CIDRs that are NEVER fail2ban-banned or UFW auto-blocked (global,
+# ── on top of the automatic tailnet exemption). Stored as validated canonical strings in the config.
+def _valid_ip_or_cidr(value):
+    """Canonical 'ip' or 'cidr' string for a user-entered value, or None if it isn't a real one."""
+    import ipaddress
+    s = (str(value) or "").strip()
+    try:
+        return str(ipaddress.ip_network(s, strict=False)) if "/" in s else str(ipaddress.ip_address(s))
+    except ValueError:
+        return None
+
+
+def _security_whitelist():
+    return list(load_config().get("security_whitelist", []) or [])
+
+
+def _security_whitelist_add(value):
+    canon = _valid_ip_or_cidr(value)
+    if not canon:
+        return None
+    cfg = load_config()
+    wl = set(cfg.get("security_whitelist", []) or [])
+    wl.add(canon)
+    cfg["security_whitelist"] = sorted(wl)
+    save_config(cfg)
+    return canon
+
+
+def _security_whitelist_remove(value):
+    canon = _valid_ip_or_cidr(value) or (str(value) or "").strip()
+    cfg = load_config()
+    cfg["security_whitelist"] = [w for w in (cfg.get("security_whitelist", []) or []) if w != canon]
+    save_config(cfg)
+    return canon
+
+
+def _whitelist_networks():
+    """The whitelist parsed into ip_network objects once (skipping any that no longer parse)."""
+    import ipaddress
+    nets = []
+    for entry in _security_whitelist():
+        try:
+            nets.append(ipaddress.ip_network(entry, strict=False))
+        except ValueError:
+            continue
+    return nets
+
+
+def _whitelisted(ip, nets=None):
+    """True if `ip` is covered by any whitelist entry (an exact IP or a CIDR that contains it)."""
+    import ipaddress
+    try:
+        addr = ipaddress.ip_address((ip or "").strip())
+    except ValueError:
+        return False
+    return any(addr in n for n in (nets if nets is not None else _whitelist_networks()))
+
+
+def _apply_whitelist_to_fail2ban():
+    """Rewrite the panel-login jail so its ignoreip matches the current whitelist (no-op if the jail
+    is already correct). Best-effort and local-only — the panel manages only its own host's jail."""
+    try:
+        return so.ensure_panel_fail2ban(AUTH_LOG_PATH, load_config().get("port", 5000), _security_whitelist())
+    except Exception:
+        _log.debug("applying whitelist to fail2ban failed", exc_info=True)
+        return False, "could not update fail2ban"
+
+
 def _autoblock_reconcile(remote):
-    """Make the host's 'panel-autoblock' UFW rules match the current top-20 (last 7 days): block any
-    top IP that isn't already blocked (by us or manually), and release only our own auto-blocks that
-    have dropped out of the window."""
+    """Make the host's 'panel-autoblock' UFW rules match the current offenders: block any IP whose
+    failed-attempt count over the last 7 days is at/above the threshold and isn't already blocked (by
+    us or manually), tailnet-exempt, or whitelisted; and release only our own auto-blocks that have
+    since dropped below the threshold (or been whitelisted)."""
+    threshold = _autoblock_threshold()
     if remote.is_local:
-        top = so.fail2ban_top_ips(20, days=7)
+        top = so.fail2ban_top_ips(100, days=7)
         blocked = so.ufw_blocked_ips()
         def deny(ip):
             return so.ufw_deny_ip(ip, tag=_AUTOBLOCK_TAG)
         undeny = so.ufw_undeny_ip
     else:
-        top = remote_fail2ban_top_ips(remote, 20, days=7)
+        top = remote_fail2ban_top_ips(remote, 100, days=7)
         blocked = remote_ufw_blocked_ips(remote)
         def deny(ip):
             return remote_ufw_deny_ip(remote, ip, tag=_AUTOBLOCK_TAG)
         def undeny(ip):
             return remote_ufw_undeny_ip(remote, ip)
-    top_ips = {r["ip"] for r in top}
-    top_ips -= tailnet_exempt_ips(remote, top_ips)   # never auto-block your own tailnet (Tailscale up)
+    qualify = {r["ip"] for r in top if r.get("ip") and (r.get("attempts") or 0) >= threshold}
+    qualify -= tailnet_exempt_ips(remote, qualify)   # never auto-block your own tailnet (Tailscale up)
+    _nets = _whitelist_networks()
+    qualify = {ip for ip in qualify if not _whitelisted(ip, _nets)}   # never auto-block a whitelisted IP
     auto = {ip for ip, tag in blocked.items() if tag == _AUTOBLOCK_TAG}
     added = removed = 0
-    for ip in top_ips - set(blocked.keys()):   # not blocked at all yet → auto-block (skip manual ones)
+    for ip in qualify - set(blocked.keys()):   # over threshold, not blocked yet → auto-block
         deny(ip)
         added += 1
-    for ip in auto - top_ips:                   # our auto-block aged out of the window → release
+    for ip in auto - qualify:                   # our auto-block fell below threshold / got whitelisted → release
         undeny(ip)
         removed += 1
     return added, removed
@@ -4134,6 +4220,50 @@ def register_routes(app):
             return jsonify({"success": False, "message": _log_and_generic("db repair failed")}), 500
 
     # ── Security tab (panel host): fail2ban bans, recent security events, raw logs ──
+    def _maybe_set_threshold(body):
+        """If the request carries a 'threshold', validate + persist it. Returns the effective value."""
+        if body.get("threshold") is not None:
+            try:
+                val = max(1, min(int(body.get("threshold")), 100000))
+                cfg = load_config()
+                cfg["autoblock_threshold"] = val
+                save_config(cfg)
+                log_action(current_user, "autoblock_threshold", target="all hosts", detail="%d attempts / 7d" % val)
+            except (TypeError, ValueError):
+                pass
+        return _autoblock_threshold()
+
+    def _whitelist_mutate(body):
+        """Shared add/remove for the global security whitelist. On add: persist, push the new
+        ignoreip to the panel jail, and immediately lift any existing fail2ban ban / UFW auto-block
+        for the address so a just-whitelisted admin isn't left locked out until the next tick. The
+        slow firewall work (jail reload, unban) is backgrounded so the button responds instantly —
+        the config is already saved and reflected in the response."""
+        raw = (body.get("ip") or "").strip()
+        remove = bool(body.get("remove"))
+        if remove:
+            canon = _security_whitelist_remove(raw)
+            threading.Thread(target=_apply_whitelist_to_fail2ban, daemon=True).start()
+            log_action(current_user, "whitelist_remove", target=canon)
+            return jsonify({"success": True, "removed": canon, "whitelist": _security_whitelist()})
+        canon = _security_whitelist_add(raw)
+        if not canon:
+            return jsonify({"success": False, "message": "Enter a valid IP address or CIDR (e.g. 1.2.3.4 or 10.0.0.0/8)."})
+
+        def _apply_add():
+            _apply_whitelist_to_fail2ban()
+            # Clear an existing ban for a single address immediately (a CIDR range isn't enumerated).
+            if "/" not in canon:
+                try:
+                    so.fail2ban_unban_ip_everywhere(canon)
+                except Exception:
+                    _log.debug("whitelist: unban-everywhere failed", exc_info=True)
+        threading.Thread(target=_apply_add, daemon=True).start()
+        for rid in _autoblock_hosts():      # release any auto-block for the now-whitelisted address
+            _run_autoblock_now(app, rid)
+        log_action(current_user, "whitelist_add", target=canon)
+        return jsonify({"success": True, "added": canon, "whitelist": _security_whitelist()})
+
     @app.route("/api/panel/security/bans")
     @login_required
     @permission_required(SUPER_ADMIN)
@@ -4150,8 +4280,10 @@ def register_routes(app):
     def api_panel_security_top_ips():
         """Top offending IPs on the panel host (last 7 days), aggregated from the fail2ban log."""
         try:
-            return jsonify({"ips": so.fail2ban_top_ips(20, days=7),
-                            "autoblock": _local_remote_id() in _autoblock_hosts()})
+            return jsonify({"ips": so.fail2ban_top_ips(100, days=7),
+                            "autoblock": _local_remote_id() in _autoblock_hosts(),
+                            "threshold": _autoblock_threshold(),
+                            "whitelist": _security_whitelist()})
         except Exception:
             return jsonify({"ips": [], "error": _log_and_generic("top-ips failed")}), 200
 
@@ -4167,6 +4299,9 @@ def register_routes(app):
             if lr and tailnet_exempt_ips(lr, {ip}):
                 return jsonify({"success": False, "message":
                                 "%s is a Tailscale address — blocking it would cut off tailnet access." % ip})
+            if _whitelisted(ip):
+                return jsonify({"success": False, "message":
+                                "%s is on the security whitelist — remove it there first to block it." % ip})
         try:
             ok, msg = (so.ufw_undeny_ip(ip) if unblock else so.ufw_deny_ip(ip))
             log_action(current_user, "ufw_unblock" if unblock else "ufw_block", target=ip, success=ok)
@@ -4178,16 +4313,27 @@ def register_routes(app):
     @login_required
     @permission_required(SUPER_ADMIN)
     def api_panel_security_autoblock():
-        """Turn the rolling auto-block (top-20 over 7 days) on/off for the panel host."""
+        """Turn the rolling auto-block (attempts >= threshold over 7 days) on/off for the panel host,
+        and optionally update the shared threshold."""
         enabled = bool(_json_body().get("enabled"))
         rid = _local_remote_id()
         if rid is None:
             return jsonify({"success": False, "message": "No local host record."}), 200
+        _maybe_set_threshold(_json_body())
         _set_autoblock_host(rid, enabled)
         log_action(current_user, "autoblock_toggle", target="panel host", detail="on" if enabled else "off")
         if enabled:
             _run_autoblock_now(app, rid)
-        return jsonify({"success": True, "enabled": enabled})
+        return jsonify({"success": True, "enabled": enabled, "threshold": _autoblock_threshold()})
+
+    @app.route("/api/panel/security/whitelist", methods=["POST"])
+    @login_required
+    @permission_required(SUPER_ADMIN)
+    def api_panel_security_whitelist():
+        """Add or remove a global security-whitelist entry (IP or CIDR). Whitelisted addresses are
+        never fail2ban-banned (jail ignoreip) or UFW auto-blocked, and adding one lifts any ban/block
+        it already has."""
+        return _whitelist_mutate(_json_body())
 
     @app.route("/api/panel/security/unban", methods=["POST"])
     @login_required
@@ -4253,8 +4399,10 @@ def register_routes(app):
         """Top offending IPs on a remote host (last 7 days), aggregated from its fail2ban log."""
         remote = get_remote(remote_id)
         try:
-            return jsonify({"ips": remote_fail2ban_top_ips(remote, 20, days=7),
-                            "autoblock": remote_id in _autoblock_hosts()})
+            return jsonify({"ips": remote_fail2ban_top_ips(remote, 100, days=7),
+                            "autoblock": remote_id in _autoblock_hosts(),
+                            "threshold": _autoblock_threshold(),
+                            "whitelist": _security_whitelist()})
         except Exception:
             return jsonify({"ips": [], "error": _log_and_generic("top-ips failed")}), 200
 
@@ -4269,6 +4417,9 @@ def register_routes(app):
         if not unblock and tailnet_exempt_ips(remote, {ip}):
             return jsonify({"success": False, "message":
                             "%s is a Tailscale address — blocking it would cut off tailnet access." % ip})
+        if not unblock and _whitelisted(ip):
+            return jsonify({"success": False, "message":
+                            "%s is on the security whitelist — remove it there first to block it." % ip})
         try:
             ok, msg = (remote_ufw_undeny_ip(remote, ip) if unblock else remote_ufw_deny_ip(remote, ip))
             log_action(current_user, "ufw_unblock" if unblock else "ufw_block",
@@ -4281,14 +4432,25 @@ def register_routes(app):
     @login_required
     @permission_required(MANAGE_REMOTES)
     def api_remote_security_autoblock(remote_id):
-        """Turn the rolling auto-block (top-20 over 7 days) on/off for a remote host."""
+        """Turn the rolling auto-block (attempts >= threshold over 7 days) on/off for a remote host,
+        and optionally update the shared threshold."""
         remote = get_remote(remote_id)
         enabled = bool(_json_body().get("enabled"))
+        _maybe_set_threshold(_json_body())
         _set_autoblock_host(remote_id, enabled)
         log_action(current_user, "autoblock_toggle", target=remote.name, detail="on" if enabled else "off")
         if enabled:
             _run_autoblock_now(app, remote_id)
-        return jsonify({"success": True, "enabled": enabled})
+        return jsonify({"success": True, "enabled": enabled, "threshold": _autoblock_threshold()})
+
+    @app.route("/api/remote/<int:remote_id>/security/whitelist", methods=["POST"])
+    @login_required
+    @permission_required(MANAGE_REMOTES)
+    def api_remote_security_whitelist(remote_id):
+        """Add/remove a global security-whitelist entry from a remote host's page (the whitelist is
+        global; the panel-jail ignoreip it feeds is applied on the panel host)."""
+        get_remote(remote_id)
+        return _whitelist_mutate(_json_body())
 
     @app.route("/api/remote/<int:remote_id>/security/unban", methods=["POST"])
     @login_required
@@ -6639,7 +6801,7 @@ if __name__ == "__main__":
     # delays startup, and idempotent so a healthy jail just costs a quick status read.
     def _f2b_autostart():
         try:
-            _ok, _msg = so.ensure_panel_fail2ban(AUTH_LOG_PATH, port)
+            _ok, _msg = so.ensure_panel_fail2ban(AUTH_LOG_PATH, port, _security_whitelist())
             _log.info("panel fail2ban: %s", _msg)
         except Exception:
             _log.debug("panel fail2ban autostart failed", exc_info=True)

@@ -1186,9 +1186,30 @@ def _panel_f2b_filter_body():
             "ignoreregex =\n")
 
 
-def _panel_f2b_jail_body(auth_log, web_port):
+def _f2b_ignoreip_line(ignore_ips):
+    """Space-separated ignoreip value: always localhost, plus the caller's whitelist. EVERY entry is
+    re-parsed through ipaddress (IP or CIDR) so an unvalidated token can never reach the jail file —
+    a bad entry is dropped, not written. Deduped, order-stable."""
+    import ipaddress
+    entries = ["127.0.0.1/8", "::1"]
+    for raw in (ignore_ips or []):
+        s = (str(raw) or "").strip()
+        try:
+            entries.append(str(ipaddress.ip_network(s, strict=False)) if "/" in s
+                           else str(ipaddress.ip_address(s)))
+        except ValueError:
+            continue
+    seen, out = set(), []
+    for e in entries:
+        if e not in seen:
+            seen.add(e)
+            out.append(e)
+    return " ".join(out)
+
+
+def _panel_f2b_jail_body(auth_log, web_port, ignore_ips=None):
     """Jail: 5 failures in 10 min → 1-hour ban, on the panel's web port. In jail.d/ so it sits
-    alongside (doesn't conflict with) any [sshd] jail."""
+    alongside (doesn't conflict with) any [sshd] jail. `ignore_ips` (validated) are never banned."""
     return ("[linuxgsm-panel]\n"
             "enabled = true\n"
             "port = %d\n"
@@ -1196,7 +1217,21 @@ def _panel_f2b_jail_body(auth_log, web_port):
             "logpath = %s\n"
             "maxretry = 5\n"
             "findtime = 10m\n"
-            "bantime = 1h\n" % (web_port, auth_log))
+            "bantime = 1h\n"
+            "ignoreip = %s\n" % (web_port, auth_log, _f2b_ignoreip_line(ignore_ips)))
+
+
+def _panel_f2b_jail_ignoreip():
+    """The ignoreip tokens the current jail file carries (or None if unreadable). Used to decide
+    whether the whitelist changed and the jail needs a rewrite."""
+    try:
+        with open(_F2B_PANEL_JAIL) as f:
+            for line in f:
+                if line.strip().startswith("ignoreip"):
+                    return line.split("=", 1)[1].split()
+    except OSError:
+        _log.debug("f2b: could not read jail ignoreip", exc_info=True)
+    return None
 
 
 def _panel_f2b_jail_port():
@@ -1421,6 +1456,25 @@ def fail2ban_unban(jail, ip):
     return False, ((out or err or "Unban failed").replace("\n", " ")[:200])
 
 
+def fail2ban_unban_ip_everywhere(ip):
+    """Best-effort: lift `ip` from EVERY jail that currently bans it. Used when an IP is whitelisted,
+    so an existing ban is cleared immediately instead of waiting for it to expire. (ok, msg)."""
+    import ipaddress
+    try:
+        ip = str(ipaddress.ip_address((ip or "").strip()))
+    except ValueError:
+        return False, "Invalid IP address."
+    lifted = 0
+    try:
+        for j in fail2ban_overview().get("jails", []):
+            if ip in (j.get("banned_ips") or []):
+                ok, _msg = fail2ban_unban(j.get("jail"), ip)
+                lifted += 1 if ok else 0
+    except Exception:
+        _log.debug("f2b: unban-everywhere failed", exc_info=True)
+    return True, "lifted %s from %d jail(s)" % (ip, lifted)
+
+
 def security_log_tail(which, lines=200, jail=None):
     """Tail of a WHITELISTED security log for the raw-log viewer. `which` is one of a fixed set —
     never a path from the request — so there's no traversal. For 'fail2ban', an optional `jail`
@@ -1456,10 +1510,10 @@ def security_log_tail(which, lines=200, jail=None):
     return ""
 
 
-def configure_panel_fail2ban(auth_log, web_port):
+def configure_panel_fail2ban(auth_log, web_port, ignore_ips=None):
     """Install fail2ban (if needed) and configure a jail that bans IPs which repeatedly fail the
-    PANEL's web login — it tails the panel's auth.log and bans on the web port. Idempotent.
-    Returns (ok, message)."""
+    PANEL's web login — it tails the panel's auth.log and bans on the web port. `ignore_ips` are
+    whitelisted (never banned). Idempotent. Returns (ok, message)."""
     try:
         web_port = int(web_port)
     except (TypeError, ValueError):
@@ -1489,7 +1543,7 @@ def configure_panel_fail2ban(auth_log, web_port):
             return False, "Couldn't install fail2ban on this host."
 
     _write_root_file(_F2B_PANEL_FILTER, _panel_f2b_filter_body())
-    _write_root_file(_F2B_PANEL_JAIL, _panel_f2b_jail_body(auth_log, web_port))
+    _write_root_file(_F2B_PANEL_JAIL, _panel_f2b_jail_body(auth_log, web_port, ignore_ips))
 
     _run("systemctl enable --now fail2ban 2>&1", timeout=45, sudo=True)
     _run("fail2ban-client reload 2>&1 || systemctl restart fail2ban 2>&1", timeout=45, sudo=True)
@@ -1519,10 +1573,11 @@ def configure_panel_fail2ban(auth_log, web_port):
                    % (reason or "Check `fail2ban-client status linuxgsm-panel` and the panel logs."))
 
 
-def ensure_panel_fail2ban(auth_log, web_port):
-    """Idempotently make sure the panel-login jail is active on the CURRENT web port. Safe to call
-    on EVERY startup and after a port change: a healthy jail on the right port costs just a status
-    read (no reload), while a missing jail or a stale port triggers a rewrite + reload. Does NOT
+def ensure_panel_fail2ban(auth_log, web_port, ignore_ips=None):
+    """Idempotently make sure the panel-login jail is active on the CURRENT web port with the CURRENT
+    whitelist. Safe to call on EVERY startup, after a port change, and after a whitelist edit: a
+    healthy jail on the right port with the right ignoreip costs just a status read (no reload),
+    while a missing jail, a stale port, or a changed whitelist triggers a rewrite + reload. Does NOT
     install fail2ban (that's the installer's job) — no-ops when it isn't present. Returns (ok, msg)."""
     try:
         web_port = int(web_port)
@@ -1531,9 +1586,11 @@ def ensure_panel_fail2ban(auth_log, web_port):
     st = panel_fail2ban_status()
     if not st.get("installed"):
         return False, "fail2ban isn't installed on this host."
-    if st.get("enabled") and _panel_f2b_jail_port() == web_port:
+    want_ignore = _f2b_ignoreip_line(ignore_ips).split()
+    if (st.get("enabled") and _panel_f2b_jail_port() == web_port
+            and (_panel_f2b_jail_ignoreip() or []) == want_ignore):
         return True, "panel-login jail already active on port %d" % web_port
-    return configure_panel_fail2ban(auth_log, web_port)
+    return configure_panel_fail2ban(auth_log, web_port, ignore_ips)
 
 
 def panel_diagnostics():

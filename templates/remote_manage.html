@@ -433,7 +433,7 @@
   <div class="card-header d-flex justify-content-between align-items-center flex-wrap gap-2">
     <span><i class="bi bi-graph-up-arrow"></i> Top offenders <span class="text-secondary" style="font-size:.7rem;font-weight:400;">last 7 days</span></span>
     <div class="d-flex align-items-center gap-3">
-      <div class="form-check form-switch mb-0" title="Keep the current top-20 UFW-blocked; an IP is released once it drops out of the 7-day window">
+      <div class="form-check form-switch mb-0" title="UFW-block every IP whose failed-login count over the last 7 days reaches the threshold; each is released once its count falls back below it">
         <input class="form-check-input" type="checkbox" id="sec-autoblock" data-action="toggleAutoblock" data-args='["@self"]'>
         <label class="form-check-label small" for="sec-autoblock">Auto-block</label>
       </div>
@@ -441,7 +441,24 @@
     </div>
   </div>
   <div class="card-body">
-    <p class="small text-secondary mb-2">The 20 busiest attacking IPs across every fail2ban jail on this host, by detected failed attempts (current + rotated logs). <strong>Block</strong> firewalls an IP on <em>all</em> ports (UFW) — stronger than a fail2ban ban, which only covers the attacked service. <strong>Auto-block</strong> keeps the whole top-20 blocked and releases each IP once it goes quiet for 7 days.</p>
+    <p class="small text-secondary mb-2">The busiest attacking IPs on this host by failed attempts over the last 7 days (current + rotated logs). <strong>Block</strong> firewalls an IP on <em>all</em> ports (UFW) — stronger than a fail2ban ban, which only covers the attacked service. <strong>Auto-block</strong> firewalls every IP at or above the threshold and releases each once its 7-day count drops back below — a cumulative count a slow attacker who spaces attempts to dodge fail2ban's short window can't escape.</p>
+    <div class="d-flex flex-wrap align-items-end gap-4 mb-3">
+      <div>
+        <label class="form-label small mb-1" for="sec-threshold">Auto-block at <span class="text-secondary">(failed attempts / 7 days)</span></label>
+        <div class="input-group input-group-sm" style="max-width:230px;">
+          <input type="number" min="1" class="form-control" id="sec-threshold" value="20">
+          <button class="btn btn-outline-secondary" data-action="saveThreshold" data-args='["@self"]'><i class="bi bi-check2"></i> Save</button>
+        </div>
+      </div>
+      <div class="flex-grow-1" style="min-width:260px;">
+        <label class="form-label small mb-1" for="sec-wl-input">Whitelist <span class="text-secondary">— never banned or blocked (IP or CIDR)</span></label>
+        <div class="input-group input-group-sm mb-1" style="max-width:340px;">
+          <input type="text" class="form-control" id="sec-wl-input" placeholder="e.g. 1.2.3.4 or 10.0.0.0/8">
+          <button class="btn btn-outline-primary" data-action="addWhitelist" data-args='["@self"]'><i class="bi bi-plus-lg"></i> Add</button>
+        </div>
+        <div id="sec-wl-list" class="d-flex flex-wrap gap-1 align-items-center"></div>
+      </div>
+    </div>
     <div id="sec-top"><div class="text-secondary small"><i class="bi bi-arrow-repeat"></i> Loading…</div></div>
   </div>
 </div>
@@ -721,6 +738,8 @@ function loadSecurityTopIps(){
   var el=document.getElementById('sec-top'); if(!el) return;
   fetch(secBase()+'/top-ips').then(function(r){return r.json();}).then(function(d){
     var tog=document.getElementById('sec-autoblock'); if(tog) tog.checked=!!(d&&d.autoblock);
+    var th=document.getElementById('sec-threshold'); if(th && d && d.threshold) th.value=d.threshold;
+    renderWhitelist((d&&d.whitelist)||[]);
     var ips=(d&&d.ips)||[];
     if(!ips.length){ el.innerHTML='<div class="small text-secondary">No fail2ban activity logged yet.</div>'; return; }
     var rows=ips.map(function(o,i){
@@ -763,9 +782,50 @@ function toggleAutoblock(cb){
   var on=!!(cb&&cb.checked);
   fetch(secBase()+'/autoblock',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({enabled:on})})
     .then(function(r){return r.json();}).then(function(d){
-      if(window.toast) toast(on?'Auto-block on — syncing the top-20 now…':'Auto-block off', on?'success':'info');
+      if(window.toast) toast(on?'Auto-block on — applying now…':'Auto-block off', on?'success':'info');
       setTimeout(loadSecurityTopIps, on?2500:300);   // give the immediate reconcile a moment
     }).catch(function(){ if(window.toast) toast('Couldn\'t change auto-block','danger'); if(cb) cb.checked=!on; });
+}
+function saveThreshold(btn){
+  var inp=document.getElementById('sec-threshold'); var v=parseInt(inp&&inp.value,10);
+  if(!v||v<1){ if(window.toast) toast('Enter a number of attempts (1 or more)','info'); return; }
+  var on=!!(document.getElementById('sec-autoblock')||{}).checked;   // preserve the on/off state
+  if(btn) btn.disabled=true;
+  fetch(secBase()+'/autoblock',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({enabled:on,threshold:v})})
+    .then(function(r){return r.json();}).then(function(d){
+      if(btn) btn.disabled=false;
+      if(window.toast) toast('Threshold saved — auto-blocking IPs with '+(d.threshold||v)+'+ attempts / 7 days.', 'success');
+      setTimeout(loadSecurityTopIps, on?2500:300);
+    }).catch(function(){ if(btn) btn.disabled=false; if(window.toast) toast('Couldn\'t save the threshold','danger'); });
+}
+function renderWhitelist(list){
+  var el=document.getElementById('sec-wl-list'); if(!el) return;
+  if(!list.length){ el.innerHTML='<span class="small text-secondary">Nothing whitelisted. Your Tailscale IPs are always exempt.</span>'; return; }
+  el.innerHTML=list.map(function(ip){
+    return '<span class="badge bg-secondary d-inline-flex align-items-center gap-1" style="font-weight:normal;">'
+      +'<code style="color:inherit;">'+escapeHtml(ip)+'</code>'
+      +'<button type="button" class="btn btn-link p-0 text-light" style="font-size:.7rem;line-height:1;text-decoration:none;" '
+      +_da('removeWhitelist',[ip])+' title="Remove from whitelist">&times;</button></span>';
+  }).join('');
+}
+function addWhitelist(btn){
+  var inp=document.getElementById('sec-wl-input'); var ip=((inp&&inp.value)||'').trim();
+  if(!ip){ if(window.toast) toast('Enter an IP or CIDR first','info'); return; }
+  if(btn) btn.disabled=true;
+  fetch(secBase()+'/whitelist',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({ip:ip})})
+    .then(function(r){return r.json();}).then(function(d){
+      if(btn) btn.disabled=false;
+      if(d.success){ if(inp) inp.value=''; renderWhitelist(d.whitelist||[]);
+        if(window.toast) toast(d.added+' whitelisted — it won\'t be banned or blocked.', 'success'); loadSecurityTopIps(); }
+      else if(window.toast){ toast(d.message||'Could not add it','danger'); }
+    }).catch(function(){ if(btn) btn.disabled=false; if(window.toast) toast('Could not add it','danger'); });
+}
+function removeWhitelist(ip){
+  fetch(secBase()+'/whitelist',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({ip:ip,remove:true})})
+    .then(function(r){return r.json();}).then(function(d){
+      renderWhitelist(d.whitelist||[]);
+      if(window.toast) toast((d.removed||ip)+' removed from the whitelist','info');
+    }).catch(function(){ if(window.toast) toast('Could not remove it','danger'); });
 }
 function loadSecurityBans(){
   var el=document.getElementById('sec-bans'); if(!el) return;

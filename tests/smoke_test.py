@@ -856,6 +856,45 @@ try:
             _am._player_counts.clear(); _am._player_counts.update(_saved_pc)
             db.session.delete(_mon); db.session.commit()
 
+    # ── Auto-block reconcile: attempts-threshold selection + whitelist exemption ───────────────────
+    # Drive _autoblock_reconcile against a stubbed offender list / UFW so no SSH or real firewall is
+    # touched, proving it blocks by 7-day attempt count (not rank), skips whitelisted IPs, and
+    # releases its own stale blocks.
+    with app.app_context():
+        import ipaddress as _ipa_ab
+        _am = sys.modules["app"]
+        _r = RemoteServer.query.filter_by(name="smoke-host").first()
+        _was_local = _r.is_local
+        _r.is_local = True          # exercise the local (so.*) branch — no SSH
+        db.session.commit()
+        _denied, _undenied = [], []
+        _sv = {n: getattr(_am.so, n) for n in ("fail2ban_top_ips", "ufw_blocked_ips",
+               "ufw_deny_ip", "ufw_undeny_ip")}
+        _sv_tn, _sv_th, _sv_wl = _am.tailnet_exempt_ips, _am._autoblock_threshold, _am._whitelist_networks
+        try:
+            _am.so.fail2ban_top_ips = lambda limit=100, days=7: [
+                {"ip": "203.0.113.10", "attempts": 80, "bans": 0},   # over threshold  -> block
+                {"ip": "203.0.113.11", "attempts": 5, "bans": 0},    # under threshold -> ignore
+                {"ip": "10.9.9.9", "attempts": 500, "bans": 0},      # over, but WHITELISTED -> skip
+            ]
+            _am.so.ufw_blocked_ips = lambda: {"203.0.113.99": "panel-autoblock"}   # our stale block
+            _am.so.ufw_deny_ip = lambda ip, tag=None: (_denied.append(ip), (True, "ok"))[1]
+            _am.so.ufw_undeny_ip = lambda ip: (_undenied.append(ip), (True, "ok"))[1]
+            _am.tailnet_exempt_ips = lambda remote, ips: set()
+            _am._autoblock_threshold = lambda: 20
+            _am._whitelist_networks = lambda: [_ipa_ab.ip_network("10.0.0.0/8")]
+            _added, _removed = _am._autoblock_reconcile(_r)
+            check("autoblock: an IP at/above the 7-day attempt threshold is blocked", "203.0.113.10" in _denied)
+            check("autoblock: an IP below the threshold is NOT blocked", "203.0.113.11" not in _denied)
+            check("autoblock: a whitelisted IP is never blocked even far over threshold", "10.9.9.9" not in _denied)
+            check("autoblock: a stale auto-block that no longer qualifies is released", "203.0.113.99" in _undenied)
+        finally:
+            for _n, _v in _sv.items():
+                setattr(_am.so, _n, _v)
+            _am.tailnet_exempt_ips, _am._autoblock_threshold, _am._whitelist_networks = _sv_tn, _sv_th, _sv_wl
+            _r.is_local = _was_local
+            db.session.commit()
+
 finally:
     passed = sum(1 for ok, _, _ in results if ok)
     for ok, name, detail in results:
