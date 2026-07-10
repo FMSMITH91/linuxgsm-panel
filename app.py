@@ -4230,7 +4230,7 @@ def register_routes(app):
                 save_config(cfg)
                 log_action(current_user, "autoblock_threshold", target="all hosts", detail="%d attempts / 7d" % val)
             except (TypeError, ValueError):
-                pass
+                _log.debug("ignoring a non-numeric autoblock threshold", exc_info=True)
         return _autoblock_threshold()
 
     def _whitelist_mutate(body):
