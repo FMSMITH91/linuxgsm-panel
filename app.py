@@ -33,6 +33,7 @@ Routes:
 """
 import json
 import logging
+import concurrent.futures
 import os
 import re
 import threading
@@ -417,18 +418,43 @@ def _cached_player_name(server_id):
     return entry.get("name") if entry else None
 
 
+_PLAYER_POLL_WORKERS = 8   # cap on concurrent per-server queries (SSH/gamedig) in one poll pass
+
+
+def _query_server_slots(app, sid):
+    """Worker for the parallel poll: (count, max, name) for one server id, in its OWN app context
+    (SQLAlchemy sessions are per-context). Read-only — no DB writes here — so concurrent workers
+    don't contend on a session. Never raises."""
+    try:
+        with app.app_context():
+            gs = db.session.get(GameServer, sid)
+            if gs is None:
+                return sid, (None, None, None)
+            if gs.status == "offline":
+                return sid, (0, _server_max_config(gs), None)
+            return sid, tuple(_server_slots(gs))
+    except Exception:
+        return sid, (None, None, None)
+
+
 def _refresh_player_counts(app):
-    """One pass: re-read the confident (count, max) for every installed server into the cache. An
-    offline server is 0 players without a (slow) query — its capacity still comes from the config —
-    while a running server the panel can't read stays None."""
+    """One pass: re-read the confident (count, max, name) for every installed server into the cache.
+    The per-server queries (gamedig / console over SSH — the slow part) run in a small thread pool so
+    a pass doesn't grow linearly with the server count; the cache update + notifications then run
+    single-threaded here (all DB writes stay in this one context). An offline server is 0 players
+    without a query; a running one the panel can't read stays None."""
     with app.app_context():
-        for gs in GameServer.query.filter_by(installed=True).all():
-            if gs.status in ("installing", "configuring"):
-                continue
-            try:
-                count, mx, gname = (0, _server_max_config(gs), None) if gs.status == "offline" else _server_slots(gs)
-            except Exception:
-                count, mx, gname = None, None, None
+        servers = [gs for gs in GameServer.query.filter_by(installed=True).all()
+                   if gs.status not in ("installing", "configuring")]
+        if not servers:
+            return
+        # Query all servers concurrently (bounded), then apply the results serially below.
+        results = {}
+        with concurrent.futures.ThreadPoolExecutor(max_workers=min(_PLAYER_POLL_WORKERS, len(servers))) as ex:
+            for sid, slots in ex.map(lambda s: _query_server_slots(app, s), [gs.id for gs in servers]):
+                results[sid] = slots
+        for gs in servers:
+            count, mx, gname = results.get(gs.id, (None, None, None))
             # Keep the last-known in-game name when this pass didn't get one (e.g. the server is
             # stopped or momentarily unqueryable) rather than blanking it in the UI.
             prev_name = (_player_counts.get(gs.id) or {}).get("name")
