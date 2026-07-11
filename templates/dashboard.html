@@ -149,13 +149,14 @@
                 <code class="text-info" style="font-size:.78rem;">:{{ srv.port }}</code>
               </span>
             </td>
+            {% set busy = (not srv.installed) or srv.status in ('installing', 'configuring') %}
             <td class="text-end text-nowrap">
               {% if can_control %}
-              <button class="btn btn-outline-success btn-sm" title="Start" aria-label="Start {{ srv.name }}" data-action="doAction" data-args='[{{ srv.id }}, "start", "@self"]'><i class="bi bi-play-fill"></i></button>
-              <button class="btn btn-outline-warning btn-sm" title="Restart" aria-label="Restart {{ srv.name }}" data-action="doAction" data-args='[{{ srv.id }}, "restart", "@self"]'><i class="bi bi-arrow-repeat"></i></button>
-              <button class="btn btn-outline-danger btn-sm" title="Stop" aria-label="Stop {{ srv.name }}" data-action="doAction" data-args='[{{ srv.id }}, "stop", "@self"]'><i class="bi bi-stop-fill"></i></button>
+              <button class="btn btn-outline-success btn-sm srv-ctl" title="Start" aria-label="Start {{ srv.name }}" data-action="doAction" data-args='[{{ srv.id }}, "start", "@self"]'{% if busy %} disabled{% endif %}><i class="bi bi-play-fill"></i></button>
+              <button class="btn btn-outline-warning btn-sm srv-ctl" title="Restart" aria-label="Restart {{ srv.name }}" data-action="doAction" data-args='[{{ srv.id }}, "restart", "@self"]'{% if busy %} disabled{% endif %}><i class="bi bi-arrow-repeat"></i></button>
+              <button class="btn btn-outline-danger btn-sm srv-ctl" title="Stop" aria-label="Stop {{ srv.name }}" data-action="doAction" data-args='[{{ srv.id }}, "stop", "@self"]'{% if busy %} disabled{% endif %}><i class="bi bi-stop-fill"></i></button>
               {% endif %}
-              <a href="{{ url_for('server_detail', server_id=srv.id) }}" class="btn btn-outline-secondary btn-sm" title="Console &amp; stats" aria-label="Console &amp; stats for {{ srv.name }}">
+              <a href="{{ url_for('server_detail', server_id=srv.id) }}" class="btn btn-outline-secondary btn-sm srv-console{% if busy %} disabled{% endif %}" title="Console &amp; stats" aria-label="Console &amp; stats for {{ srv.name }}"{% if busy %} tabindex="-1" aria-disabled="true"{% endif %}>
                 <i class="bi bi-terminal-fill"></i>
               </a>
             </td>
@@ -283,6 +284,16 @@ function refreshStatus() {
         if (row) {
           row.setAttribute('data-status', s.status);
           row.setAttribute('data-players', typeof s.players === 'number' ? s.players : -1);
+          // Disable start/restart/stop + console while a server is installing/configuring (or not
+          // installed yet), and re-enable them live the moment it's ready — no page reload needed.
+          var busy = !s.installed || s.status === 'installing' || s.status === 'configuring';
+          row.querySelectorAll('.srv-ctl').forEach(function(b){ b.disabled = busy; });
+          var con = row.querySelector('.srv-console');
+          if (con) {
+            con.classList.toggle('disabled', busy);
+            if (busy) { con.setAttribute('tabindex', '-1'); con.setAttribute('aria-disabled', 'true'); }
+            else { con.removeAttribute('tabindex'); con.removeAttribute('aria-disabled'); }
+          }
         }
       });
     })

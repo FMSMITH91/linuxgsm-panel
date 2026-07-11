@@ -327,6 +327,17 @@ function removeServerRow(id){
 function doUninstall(id, name, btn){
   var orig = btn.innerHTML;
   btn.disabled = true; btn.innerHTML = '<span class="spinner-border spinner-border-sm"></span>';
+  // Disable this row's other actions (Console, Files) while it's being torn down — the server is
+  // going away, so those shouldn't be clickable. Bootstrap's .disabled kills pointer events on links.
+  var row = document.getElementById('server-row-' + id);
+  var others = row ? Array.prototype.slice.call(row.querySelectorAll('a.btn, button.btn')).filter(function(el){ return el !== btn; }) : [];
+  function setRowDisabled(off){
+    others.forEach(function(el){
+      if (off){ el.classList.add('disabled'); el.setAttribute('aria-disabled','true'); el.setAttribute('tabindex','-1'); }
+      else { el.classList.remove('disabled'); el.removeAttribute('aria-disabled'); el.removeAttribute('tabindex'); }
+    });
+  }
+  setRowDisabled(true);
   if (window.toast) toast('Uninstalling ' + name + '…', 'info');
   fetch(MOUNT + '/servers/' + id + '/delete', { method: 'POST' })
     .then(function(r){ return r.json(); })
@@ -336,11 +347,11 @@ function doUninstall(id, name, btn){
         _svrBaseline = serverIdsOnPage();   // adopt the reduced set so live-sync doesn't force a reload
         if (window.toast) toast(d.message || 'Uninstalled', 'success');
       } else {
-        btn.disabled = false; btn.innerHTML = orig;
+        btn.disabled = false; btn.innerHTML = orig; setRowDisabled(false);
         if (window.toast) toast((d && d.message) || 'Uninstall failed', 'danger');
       }
     })
-    .catch(function(){ btn.disabled = false; btn.innerHTML = orig; if (window.toast) toast('Uninstall request failed', 'danger'); });
+    .catch(function(){ btn.disabled = false; btn.innerHTML = orig; setRowDisabled(false); if (window.toast) toast('Uninstall request failed', 'danger'); });
 }
 
 // ── Live sync: reflect servers other users add/remove ──────────────────────
