@@ -50,7 +50,7 @@ EVENTS = {
 # and token are charset-bounded, so the path can't traverse either.
 _DISCORD_WEBHOOK_RE = re.compile(
     r"^https://(?:ptb\.|canary\.)?discord(?:app)?\.com/api/webhooks/(\d{5,25})/([\w-]{1,120})$")
-_TG_TOKEN_RE = re.compile(r"^\d{5,}:[A-Za-z0-9_-]{20,}$")
+_TG_TOKEN_RE = re.compile(r"^(\d{5,}):([A-Za-z0-9_-]{20,})$")   # (bot id):(secret) — captured for the URL rebuild
 
 
 # ── config read/write ──────────────────────────────────────────
@@ -116,21 +116,29 @@ def _valid_discord_webhook(url):
     return _DISCORD_WEBHOOK_RE.match(url or "") is not None
 
 
+def _tg_api_url(token, method, query=""):
+    """A Telegram Bot API URL on the CONSTANT api.telegram.org host, with the bot token REBUILT from
+    its regex-captured id/secret groups — so no request-tainted value flows into the request path
+    (the same rebuild that clears the SSRF taint on the Discord webhook). None if the token is
+    malformed. `method` and `query` are code-supplied literals."""
+    m = _TG_TOKEN_RE.match(token or "")
+    if not m:
+        return None
+    url = "https://api.telegram.org/bot%s:%s/%s" % (m.group(1), m.group(2), method)
+    return (url + "?" + query) if query else url
+
+
 def _post(url, data, headers):
     """POST to a validated https URL. Returns (ok, reason): ok is True on a 2xx. `reason` is a FIXED
     word describing the outcome — 'sent' / 'rejected' (the provider answered with an error status) /
     'unreachable' (couldn't connect) / 'blocked' (host not allow-listed). It carries no data read
     back from the response, so this can never become an SSRF exfiltration sink. Never raises."""
     # SSRF barrier at the sink: the URL must start with one of our known-provider prefixes, so a
-    # user/admin-supplied URL can never make this request hit an internal or arbitrary host.
+    # user/admin-supplied URL can never make this request hit an internal or arbitrary host. Every
+    # caller builds `url` on a CONSTANT host with the id/token rebuilt from regex-captured groups
+    # (_tg_api_url / _discord_api_url), so no request-tainted value reaches the host OR the path.
     if not (url or "").startswith(_ALLOWED_PREFIXES):
         return False, "blocked"
-    # NOTE (reviewed): CodeQL flags py/partial-ssrf here because a URL path segment (the Telegram bot
-    # token / Discord webhook token) originates from a request. It is a false positive — the request
-    # HOST is a hardcoded constant (built above from _ALLOWED_PREFIXES), and every path segment is
-    # charset-validated (_TG_TOKEN_RE / _DISCORD_WEBHOOK_RE: only [A-Za-z0-9_-] and digits, no '/' or
-    # '.'), so the path cannot traverse or redirect. The request can only ever reach the intended
-    # provider's API endpoint.
     req = urllib.request.Request(url, data=data, method="POST",
                                  headers={"User-Agent": "linuxgsm-panel", **headers})
     try:
@@ -146,11 +154,11 @@ def _post(url, data, headers):
 def send_telegram(token, chat_id, text):
     """Send a Telegram message. Returns (ok, detail). The token is format-validated so it can't
     rewrite the request path; chat_id + text are urlencoded into the body."""
-    if not token or not _TG_TOKEN_RE.match(token):
+    url = _tg_api_url(token, "sendMessage")
+    if not url:
         return False, "the bot token is missing or malformed"
     if not chat_id:
         return False, "the chat ID is missing"
-    url = "https://api.telegram.org/bot%s/sendMessage" % token
     body = urllib.parse.urlencode({"chat_id": chat_id, "text": text[:4000],
                                    "disable_web_page_preview": "true"}).encode()
     ok, reason = _post(url, body, {"Content-Type": "application/x-www-form-urlencoded"})
@@ -165,21 +173,16 @@ def send_telegram(token, chat_id, text):
 
 def telegram_get_updates(token, offset=None, timeout=25):
     """Long-poll Telegram for incoming messages (bot command input). Returns a list of update dicts
-    (possibly empty) or None on error/timeout/conflict. SSRF-safe: the host is the fixed
-    api.telegram.org literal and the token is format-validated, so nothing user-supplied decides
-    where the request goes — only the JSON `result` array is read back. Never raises."""
-    if not token or not _TG_TOKEN_RE.match(token):
-        return None
+    (possibly empty) or None on error/timeout/conflict. SSRF-safe: the URL is built by _tg_api_url on
+    the constant api.telegram.org host with the token rebuilt from its regex-captured groups, so
+    nothing user-supplied reaches the request path — only the JSON `result` array is read back.
+    Never raises."""
     params = {"timeout": int(timeout)}
     if offset is not None:
         params["offset"] = int(offset)
-    url = "https://api.telegram.org/bot%s/getUpdates?%s" % (token, urllib.parse.urlencode(params))
-    if not url.startswith("https://api.telegram.org/"):   # SSRF barrier: constant-host prefix
+    url = _tg_api_url(token, "getUpdates", urllib.parse.urlencode(params))
+    if not url:
         return None
-    # NOTE (reviewed): as with _post, CodeQL may flag py/partial-ssrf because the bot token is a URL
-    # path segment sourced from config. The HOST is the hardcoded api.telegram.org literal and the
-    # token is charset-validated (_TG_TOKEN_RE: digits + [A-Za-z0-9_-], no '/' or '.'), so the path
-    # can't traverse — the request can only ever reach Telegram's getUpdates endpoint.
     req = urllib.request.Request(url, headers={"User-Agent": "linuxgsm-panel"})
     try:
         with urllib.request.urlopen(req, timeout=timeout + 10) as resp:  # nosec B310 - https, host-literal
@@ -208,14 +211,13 @@ TG_COMMANDS = [
 def telegram_set_commands(token, clear=False):
     """Register the bot's command list with Telegram (setMyCommands) so typing '/' pops the command
     menu — or clear it when commands are turned off. Best-effort; returns True on success. SSRF-safe:
-    goes through _post, whose host allow-list already covers api.telegram.org, and the token is
-    format-validated."""
-    if not token or not _TG_TOKEN_RE.match(token):
+    the URL is built by _tg_api_url (constant host, token rebuilt from its regex groups)."""
+    url = _tg_api_url(token, "setMyCommands")
+    if not url:
         return False
     cmds = [] if clear else [{"command": c, "description": d} for c, d in TG_COMMANDS]
     body = json.dumps({"commands": cmds}).encode()
-    ok, _reason = _post("https://api.telegram.org/bot%s/setMyCommands" % token, body,
-                        {"Content-Type": "application/json"})
+    ok, _reason = _post(url, body, {"Content-Type": "application/json"})
     return ok
 
 
