@@ -1953,6 +1953,24 @@ check("telegram: a bot-mention + args is stripped", _parse_tg_command("/Update@M
 check("telegram: /STATUS is lowercased", _parse_tg_command("/STATUS") == "status")
 check("telegram: a non-command is empty", _parse_tg_command("hello there") == "" and _parse_tg_command("") == "")
 
+# telegram_set_commands registers the '/' autocomplete menu via setMyCommands (through _post).
+import json as _json_tg  # noqa: E402
+_tg_posts = []
+_orig_post = N._post
+try:
+    N._post = lambda url, data, headers: (_tg_posts.append((url, data)), (True, "sent"))[1]
+    check("telegram: set_commands posts to setMyCommands with update/status/servers/help",
+          N.telegram_set_commands("123456:AAABBBCCCDDDEEEFFF_gg-hh")
+          and _tg_posts[-1][0].endswith("/setMyCommands")
+          and {c["command"] for c in _json_tg.loads(_tg_posts[-1][1].decode())["commands"]}
+          == {"update", "status", "servers", "help"})
+    N.telegram_set_commands("123456:AAABBBCCCDDDEEEFFF_gg-hh", clear=True)
+    check("telegram: set_commands(clear=True) sends an empty command list",
+          _json_tg.loads(_tg_posts[-1][1].decode())["commands"] == [])
+    check("telegram: set_commands rejects a malformed token", N.telegram_set_commands("nope") is False)
+finally:
+    N._post = _orig_post
+
 # player_slots parses gamedig's compact JSON into (count, max, name); a name with spaces/quotes
 # round-trips and junk output is rejected. run_command is stubbed so no SSH/gamedig is needed.
 _orig_rc = sm.run_command

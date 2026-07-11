@@ -513,20 +513,26 @@ def _telegram_command_watch(app):
     """Long-poll loop: honour commands from the authorised chat only. Skips any backlog on (re)start
     so a command sent while we were down — including the /update that caused our own restart — is
     never replayed."""
-    offset, primed = None, False
+    offset, primed, registered = None, False, False
     while True:
         try:
             cfg = notifications._cfg()
             tg = cfg.get("telegram") or {}
+            token = decrypt_secret(tg.get("token") or "")
             if not (cfg.get("enabled", True) and tg.get("enabled") and tg.get("accept_commands")):
+                if registered and token:
+                    notifications.telegram_set_commands(token, clear=True)   # drop the '/' menu
+                    registered = False
                 time.sleep(_TG_CMD_BACKOFF)
                 offset, primed = None, False   # re-prime (skip backlog) when it's re-enabled
                 continue
-            token = decrypt_secret(tg.get("token") or "")
             authorized = (tg.get("chat_id") or "").strip()
             if not token or not authorized:
                 time.sleep(_TG_CMD_BACKOFF)
                 continue
+            if not registered:
+                # Populate Telegram's '/' autocomplete menu with the bot's commands.
+                registered = bool(notifications.telegram_set_commands(token))
             if not primed:
                 latest = notifications.telegram_get_updates(token, offset=-1, timeout=0)
                 if latest:

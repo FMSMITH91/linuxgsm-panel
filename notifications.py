@@ -190,6 +190,30 @@ def telegram_get_updates(token, offset=None, timeout=25):
         return None
 
 
+# The bot's command menu — what Telegram shows when you type '/'. Keep in sync with the commands
+# _handle_telegram_command actually handles.
+TG_COMMANDS = [
+    ("update", "Update the panel to the latest version"),
+    ("status", "Panel version + server counts"),
+    ("servers", "Per-server status + player counts"),
+    ("help", "Show the command list"),
+]
+
+
+def telegram_set_commands(token, clear=False):
+    """Register the bot's command list with Telegram (setMyCommands) so typing '/' pops the command
+    menu — or clear it when commands are turned off. Best-effort; returns True on success. SSRF-safe:
+    goes through _post, whose host allow-list already covers api.telegram.org, and the token is
+    format-validated."""
+    if not token or not _TG_TOKEN_RE.match(token):
+        return False
+    cmds = [] if clear else [{"command": c, "description": d} for c, d in TG_COMMANDS]
+    body = json.dumps({"commands": cmds}).encode()
+    ok, _reason = _post("https://api.telegram.org/bot%s/setMyCommands" % token, body,
+                        {"Content-Type": "application/json"})
+    return ok
+
+
 def send_discord(webhook, text):
     """Send a Discord webhook message. Returns (ok, detail). The URL is rebuilt onto a constant host
     from the validated webhook id/token, so the request can only ever go to Discord."""
