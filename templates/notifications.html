@@ -108,6 +108,23 @@
         </div>
         {% endfor %}
       </div>
+      <hr class="my-3">
+      <div class="row g-3 align-items-end">
+        <div class="col-md-6">
+          <label class="form-label small mb-1" for="threshold-disk">Disk-low alert threshold</label>
+          <div class="input-group input-group-sm">
+            <input type="number" min="50" max="99" name="threshold_disk" id="threshold-disk" class="form-control" value="{{ settings.thresholds.disk_pct }}">
+            <span class="input-group-text">% used</span>
+          </div>
+        </div>
+        <div class="col-md-6">
+          <label class="form-label small mb-1" for="threshold-load">High-load alert threshold (CPU / RAM)</label>
+          <div class="input-group input-group-sm">
+            <input type="number" min="50" max="99" name="threshold_load" id="threshold-load" class="form-control" value="{{ settings.thresholds.load_pct }}">
+            <span class="input-group-text">%</span>
+          </div>
+        </div>
+      </div>
     </div>
   </div>
 

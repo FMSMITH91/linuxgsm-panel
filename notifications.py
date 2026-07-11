@@ -63,6 +63,22 @@ def event_enabled(cfg, key):
     return bool(events.get(key, EVENTS.get(key, ("", False))[1]))
 
 
+_DEFAULT_THRESHOLDS = {"disk_pct": 90, "load_pct": 90}
+
+
+def get_thresholds():
+    """Configured alert thresholds — host disk %, and host CPU-load/RAM % — each clamped to 50-99,
+    falling back to the defaults. The monitor reads these to decide when disk_low / high_load fire."""
+    t = _cfg().get("thresholds") or {}
+    out = {}
+    for k, dflt in _DEFAULT_THRESHOLDS.items():
+        try:
+            out[k] = min(99, max(50, int(t.get(k, dflt))))
+        except (TypeError, ValueError):
+            out[k] = dflt
+    return out
+
+
 def settings_for_form():
     """Current settings with secrets masked (so the token/webhook are never re-sent to the browser)."""
     cfg = _cfg()
@@ -74,10 +90,11 @@ def settings_for_form():
                      "has_token": bool(tg.get("token")), "accept_commands": bool(tg.get("accept_commands"))},
         "discord": {"enabled": bool(dc.get("enabled")), "has_webhook": bool(dc.get("webhook"))},
         "events": {k: event_enabled(cfg, k) for k in EVENTS},
+        "thresholds": get_thresholds(),
     }
 
 
-def save_settings(*, enabled, telegram, discord, events):
+def save_settings(*, enabled, telegram, discord, events, thresholds=None):
     """Persist settings, encrypting secrets. `telegram`/`discord` secrets that come in as None mean
     'keep the stored value' (the form never round-trips the real secret back)."""
     cur = _cfg()
@@ -85,6 +102,13 @@ def save_settings(*, enabled, telegram, discord, events):
     cur_dc = cur.get("discord") or {}
     tg_token = cur_tg.get("token") if telegram.get("token") is None else encrypt_secret(telegram["token"])
     dc_webhook = cur_dc.get("webhook") if discord.get("webhook") is None else encrypt_secret(discord["webhook"])
+    th = get_thresholds()   # start from current/defaults; only overwrite fields that were submitted
+    for k in _DEFAULT_THRESHOLDS:
+        if thresholds and thresholds.get(k) not in (None, ""):
+            try:
+                th[k] = min(99, max(50, int(thresholds[k])))
+            except (TypeError, ValueError):
+                pass
     notif = {
         "enabled": bool(enabled),
         "telegram": {"enabled": bool(telegram.get("enabled")),
@@ -92,6 +116,7 @@ def save_settings(*, enabled, telegram, discord, events):
                      "accept_commands": bool(telegram.get("accept_commands"))},
         "discord": {"enabled": bool(discord.get("enabled")), "webhook": dc_webhook or ""},
         "events": {k: bool(events.get(k, EVENTS[k][1])) for k in EVENTS},
+        "thresholds": th,
     }
     # update_config: this can race with the Telegram poller thread's pending-update write.
     update_config(lambda cfg: cfg.update({"notifications": notif}))

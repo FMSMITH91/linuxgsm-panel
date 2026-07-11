@@ -949,9 +949,8 @@ def _report_tg_pending_update():
 
 # ── Proactive monitor → admin notifications ────────────────────
 _MONITOR_SECONDS = 60
-_DISK_ALERT_PCT = 90            # notify once a host's / crosses this; re-arms after it drops to PCT-5
 _EXPECT_OFFLINE_WINDOW = 180    # a panel-issued stop/restart suppresses "server down" for this long
-_LOAD_ALERT_PCT = 90            # CPU-load-per-core / memory %: sustained over this fires high_load
+# disk_pct / load_pct thresholds are user-configurable — see notifications.get_thresholds().
 _monitor_state = {"remotes": {}, "servers": {}, "disk": {}, "load": {}}   # id -> last-seen state
 _expected_offline = {}          # server_id -> ts the panel last stopped/restarted it
 
@@ -1003,14 +1002,15 @@ def _monitor_pass():
         _monitor_state["remotes"][remote.id] = reachable
         if not reachable:
             continue
+        _th = notifications.get_thresholds()   # user-configurable disk_pct / load_pct
         pct = _host_disk_pct(remote)
         if pct is not None:
             alerted = _monitor_state["disk"].get(remote.id, False)
-            if pct >= _DISK_ALERT_PCT and not alerted:
+            if pct >= _th["disk_pct"] and not alerted:
                 notifications.notify("disk_low", "Disk running low",
                                      "%s is at %d%% disk usage." % (remote.display_name, pct))
                 _monitor_state["disk"][remote.id] = True
-            elif pct < _DISK_ALERT_PCT - 5 and alerted:
+            elif pct < _th["disk_pct"] - 5 and alerted:
                 _monitor_state["disk"][remote.id] = False
         # High CPU/memory — only when SUSTAINED (>= 2 consecutive passes over the threshold, ~2 min),
         # so a momentary spike doesn't page you; re-arm once it drops well below.
@@ -1019,12 +1019,12 @@ def _monitor_pass():
         for kind, val, label in (("cpu", loadpct, "CPU load"), ("mem", mempct, "memory")):
             if val is None:
                 continue
-            st[kind + "_hi"] = (st.get(kind + "_hi", 0) + 1) if val >= _LOAD_ALERT_PCT else 0
+            st[kind + "_hi"] = (st.get(kind + "_hi", 0) + 1) if val >= _th["load_pct"] else 0
             if st[kind + "_hi"] >= 2 and not st.get(kind + "_alerted"):
                 notifications.notify("high_load", "Host under load",
                                      "%s is at %d%% %s." % (remote.display_name, val, label))
                 st[kind + "_alerted"] = True
-            elif val < _LOAD_ALERT_PCT - 10 and st.get(kind + "_alerted"):
+            elif val < _th["load_pct"] - 10 and st.get(kind + "_alerted"):
                 st[kind + "_alerted"] = False
         try:
             ports = _remote_listening_ports(remote)
@@ -4137,6 +4137,7 @@ def register_routes(app):
             discord={"enabled": bool(f.get("discord_enabled")),
                      "webhook": (dc_webhook or None)},
             events={k: bool(f.get("event_" + k)) for k in notifications.EVENTS},
+            thresholds={"disk_pct": f.get("threshold_disk"), "load_pct": f.get("threshold_load")},
         )
         log_action(current_user, "notifications_update", target="panel")
         flash("Notification settings saved.", "success")
