@@ -824,6 +824,38 @@ GAMEDIG_TYPE = {
 }
 
 
+_gamedig_host_cache = {}          # {remote_id: (expiry_ts, ip)} — where to point gamedig for a host
+_GAMEDIG_HOST_TTL = 3600
+
+
+def _gamedig_host(server):
+    """The address to point gamedig at for a game on `server` (a remote). A Source-engine server
+    replies to an A2S query FROM the host's real IP, so a query sent to 127.0.0.1 comes back from a
+    different source address and gamedig discards it ('Failed all attempts') even though the server
+    is up and answering fine on its real IP. So query the host's primary (default-route) IP — a
+    0.0.0.0-bound server answers there. Cached per remote for an hour; falls back to 127.0.0.1 when
+    the IP can't be resolved (so any host where loopback does answer keeps working). Never raises."""
+    rid = getattr(server, "id", None)
+    now = time.time()
+    hit = _gamedig_host_cache.get(rid)
+    if hit and hit[0] > now:
+        return hit[1]
+    ip = "127.0.0.1"
+    try:
+        out, _, _ = run_command(
+            server,
+            "ip route get 1.1.1.1 2>/dev/null | awk 'NR==1{for(i=1;i<=NF;i++)if($i==\"src\")print $(i+1)}'",
+            timeout=8)
+        cand = (out or "").strip()
+        if re.match(r"^\d{1,3}(?:\.\d{1,3}){3}$", cand):
+            ip = cand
+    except Exception:
+        pass
+    if rid is not None and ip != "127.0.0.1":
+        _gamedig_host_cache[rid] = (now + _GAMEDIG_HOST_TTL, ip)
+    return ip
+
+
 def set_daily_restart(server, user, selfname=None, game_type=None, port=None, enabled=True):
     """Enable/disable a daily restart that only fires when the server is EMPTY.
     A daily cron sets a 'restart-pending' flag; an hourly cron checks the player
@@ -837,7 +869,7 @@ def set_daily_restart(server, user, selfname=None, game_type=None, port=None, en
     # pipeline misbehave under eventlet's green subprocess; crontab-only works).
     #   daily 05:00: set the "pending" flag
     #   hourly :10 : if flag set and server empty (gamedig), restart + clear flag
-    getp = (f"P=$(gamedig --type {gdtype} 127.0.0.1:{port} 2>/dev/null | jq -r '.players|length' 2>/dev/null); "
+    getp = (f"P=$(gamedig --type {gdtype} {_gamedig_host(server)}:{port} 2>/dev/null | jq -r '.players|length' 2>/dev/null); "
             if (gdtype and port) else "P=; ")
     check_cmd = (
         f"[ -f {flag} ] && {{ {getp}"
@@ -1407,7 +1439,7 @@ def player_count(server, user, game_type=None, port=None, query_type=None):
     gdtype = _gamedig_type(game_type, query_type)
     if not gdtype or not port:
         return None
-    cmd = f"gamedig --type {gdtype} 127.0.0.1:{int(port)} 2>/dev/null | jq -r '.players|length' 2>/dev/null"
+    cmd = f"gamedig --type {gdtype} {_gamedig_host(server)}:{int(port)} 2>/dev/null | jq -r '.players|length' 2>/dev/null"
     try:
         out, _, _ = run_command(server, f"sudo -u {user} bash -c {_quote(cmd)}", timeout=25, sudo=False)
     except Exception:
@@ -1432,7 +1464,7 @@ def player_slots(server, user, game_type=None, port=None, query_type=None):
     # FAILED query reads as "0 players", which both shows a bogus 0 and blocks the console fallback.
     # JSON escaping lets a server name with any character round-trip safely.
     jqf = '{c:(.players|length), m:.maxplayers, n:(.name // ""), ok:(.players|type=="array")}'
-    cmd = (f"gamedig --type {gdtype} 127.0.0.1:{int(port)} 2>/dev/null "
+    cmd = (f"gamedig --type {gdtype} {_gamedig_host(server)}:{int(port)} 2>/dev/null "
            f"| jq -c {_quote(jqf)} 2>/dev/null")
     try:
         out, _, _ = run_command(server, f"sudo -u {user} bash -c {_quote(cmd)}", timeout=25, sudo=False)
@@ -1474,8 +1506,8 @@ def player_count_via_lgsm_query(server, user, selfname, fallback_port=None):
              or str(fallback_port or "").strip())
     if not qtype or not qport.isdigit():
         return None
-    cmd = ("gamedig --type %s 127.0.0.1:%d 2>/dev/null | jq -r '.players|length' 2>/dev/null"
-           % (qtype, int(qport)))
+    cmd = ("gamedig --type %s %s:%d 2>/dev/null | jq -r '.players|length' 2>/dev/null"
+           % (qtype, _gamedig_host(server), int(qport)))
     try:
         out, _, _ = run_command(server, "sudo -u %s bash -c %s" % (user, _quote(cmd)), timeout=25, sudo=False)
     except Exception:
@@ -1712,7 +1744,7 @@ def _gamedig_player_list(server, user, game_type=None, port=None, query_type=Non
     jqf = ('[.players[] | {name:(.name // ""), '
            'score:(.raw.score // .score // .raw.frags // .frags // null), '
            'time:(.raw.time // .time // null)}]')
-    cmd = f"gamedig --type {gdtype} 127.0.0.1:{int(port)} 2>/dev/null | jq -c {_quote(jqf)} 2>/dev/null"
+    cmd = f"gamedig --type {gdtype} {_gamedig_host(server)}:{int(port)} 2>/dev/null | jq -c {_quote(jqf)} 2>/dev/null"
     try:
         out, _, _ = run_command(server, f"sudo -u {user} bash -c {_quote(cmd)}", timeout=25, sudo=False)
     except Exception:

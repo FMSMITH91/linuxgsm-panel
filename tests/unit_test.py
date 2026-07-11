@@ -1702,6 +1702,34 @@ check("parser(minecraft): names from a prefixed log line",
 check("parser(minecraft): empty server -> no players",
       sm._parse_minecraft_list("There are 0 of a max of 20 players online: ") == [])
 
+# _gamedig_host: Source servers reply to A2S from the host's real IP, so a 127.0.0.1 query is
+# silently dropped — the panel must query the host's primary IP. (run_command runs the awk pipeline
+# remotely, so the stub returns what awk WOULD emit: just the IP, or nothing.)
+class _FakeRemote:
+    def __init__(self, rid): self.id = rid
+_orig_rc = sm.run_command
+try:
+    sm._gamedig_host_cache.clear()
+    sm.run_command = lambda *a, **k: ("45.76.63.211\n", "", 0)
+    check("gamedig-host: uses the host's primary IP, not 127.0.0.1",
+          sm._gamedig_host(_FakeRemote(9001)) == "45.76.63.211")
+    sm._gamedig_host_cache.clear()
+    sm.run_command = lambda *a, **k: ("", "", 0)          # no default route / no output
+    check("gamedig-host: falls back to 127.0.0.1 when the IP can't be resolved",
+          sm._gamedig_host(_FakeRemote(9002)) == "127.0.0.1")
+    sm._gamedig_host_cache.clear()
+    _calls = {"n": 0}
+    def _counting_rc(*a, **k):
+        _calls["n"] += 1
+        return ("10.0.0.5\n", "", 0)
+    sm.run_command = _counting_rc
+    _r = _FakeRemote(9003)
+    sm._gamedig_host(_r); sm._gamedig_host(_r)
+    check("gamedig-host: caches per remote (one lookup, not one per query)", _calls["n"] == 1)
+finally:
+    sm.run_command = _orig_rc
+    sm._gamedig_host_cache.clear()
+
 # player_list: gamedig is PRIMARY (no console spam). The console is a backup used ONLY when the
 # caller explicitly passes allow_console=True (a user action) — the automatic path (default) never
 # touches the console: it returns None ('unknown') so the UI shows a GSLT hint instead of querying.
