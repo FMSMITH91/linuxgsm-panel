@@ -1977,13 +1977,18 @@ finally:
 # round-trips and junk output is rejected. run_command is stubbed so no SSH/gamedig is needed.
 _orig_rc = sm.run_command
 try:
-    sm.run_command = lambda *a, **k: ('{"c":7,"m":24,"n":"[EU] Bob\'s \\"Fun\\" Server"}', "", 0)
+    sm.run_command = lambda *a, **k: ('{"c":7,"m":24,"n":"[EU] Bob\'s \\"Fun\\" Server","ok":true}', "", 0)
     check("player_slots: parses count/max/name from gamedig JSON",
           sm.player_slots(object(), "u", game_type="csgo", port=27015, query_type="csgo")
           == (7, 24, "[EU] Bob's \"Fun\" Server"))
-    sm.run_command = lambda *a, **k: ('{"c":0,"m":null,"n":""}', "", 0)
+    sm.run_command = lambda *a, **k: ('{"c":0,"m":null,"n":"","ok":true}', "", 0)
     check("player_slots: null max + empty name -> (0, None, None)",
           sm.player_slots(object(), "u", game_type="csgo", port=27015, query_type="csgo") == (0, None, None))
+    # A gamedig FAILURE ({"error":...} -> ok=false) is 'unknown', NOT 0 players, so the caller can
+    # fall back to the console instead of showing a bogus 0.
+    sm.run_command = lambda *a, **k: ('{"c":0,"m":null,"n":"","ok":false}', "", 0)
+    check("player_slots: a failed query (ok=false) -> (None, None, None), not a fake 0",
+          sm.player_slots(object(), "u", game_type="csgo", port=27015, query_type="csgo") == (None, None, None))
     sm.run_command = lambda *a, **k: ("not json", "", 0)
     check("player_slots: junk output -> (None, None, None)",
           sm.player_slots(object(), "u", game_type="csgo", port=27015, query_type="csgo") == (None, None, None))

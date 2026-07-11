@@ -101,6 +101,7 @@ from ssh_manager import (
     mods_available, mods_installed, mods_action,
     player_count as sm_player_count, player_slots as sm_player_slots, mod_restart_decision, set_game_priority,
     game_engine as sm_game_engine, console_player_list as sm_console_player_list,
+    console_server_name as sm_console_server_name,
     get_server_status as sm_get_server_status, is_player_queryable as sm_is_player_queryable,
     player_count_via_lgsm_query as sm_player_count_via_lgsm_query,
     set_game_priority_bulk,
@@ -328,10 +329,13 @@ def _server_slots(gs):
         return cur, (mx if mx is not None else _server_max_config(gs)), gname
     try:
         if sm_game_engine(gs.game_type):
-            # Console backup — returns [] for a stopped/empty console game, so this is a real 0.
+            # Console backup — returns [] for a stopped/empty console game, so this is a real 0. Also
+            # read the advertised name from the console `status`, since a server gamedig can't query
+            # (e.g. no GSLT) still reports its hostname there.
             n = len(sm_console_player_list(gs.remote, gs.short_name, gs.game_type,
                                            selfname=gs.lgsm_name) or [])
-            return n, _server_max_config(gs), None
+            name = sm_console_server_name(gs.remote, gs.short_name, gs.game_type, selfname=gs.lgsm_name)
+            return n, _server_max_config(gs), name
     except Exception:
         return None, _server_max_config(gs), None
     # Not in the panel's gamedig map and not a console engine — ask LinuxGSM's OWN query settings

@@ -1427,9 +1427,11 @@ def player_slots(server, user, game_type=None, port=None, query_type=None):
     gdtype = _gamedig_type(game_type, query_type)
     if not gdtype or not port:
         return None, None, None
-    # One query -> compact JSON {c:count, m:maxplayers, n:name}. JSON escaping lets a server name with
-    # any character (spaces, quotes, unicode) round-trip safely, with no delimiter that could collide.
-    jqf = '{c:(.players|length), m:.maxplayers, n:(.name // "")}'
+    # One query -> compact JSON {c:count, m:maxplayers, n:name, ok:<did it actually respond?>}. `ok`
+    # (players is an array) distinguishes a real reply from gamedig's {"error":...} — otherwise a
+    # FAILED query reads as "0 players", which both shows a bogus 0 and blocks the console fallback.
+    # JSON escaping lets a server name with any character round-trip safely.
+    jqf = '{c:(.players|length), m:.maxplayers, n:(.name // ""), ok:(.players|type=="array")}'
     cmd = (f"gamedig --type {gdtype} 127.0.0.1:{int(port)} 2>/dev/null "
            f"| jq -c {_quote(jqf)} 2>/dev/null")
     try:
@@ -1443,6 +1445,8 @@ def player_slots(server, user, game_type=None, port=None, query_type=None):
         d = json.loads(line)
     except (ValueError, TypeError):
         return None, None, None
+    if not (isinstance(d, dict) and d.get("ok")):
+        return None, None, None   # gamedig couldn't read the server (error / no A2S response) -> unknown
     cur = d.get("c") if isinstance(d.get("c"), int) else None
     mx = d.get("m") if isinstance(d.get("m"), int) else None
     nm = d.get("n")
@@ -1656,6 +1660,30 @@ def console_player_list(server, user, game_type, selfname=None):
     if eng == "minecraft":
         return _parse_minecraft_list(out)
     return _parse_valve_status(out)
+
+
+_HOSTNAME_RE = re.compile(r"^\s*(?:hostname|sv_hostname)\s*:?\s*(.+?)\s*$", re.MULTILINE | re.IGNORECASE)
+
+
+def console_server_name(server, user, game_type, selfname=None):
+    """The server's advertised in-game name from its own console `status` (the `hostname:` line) — a
+    fallback for the name shown in the UI when gamedig can't query the server (e.g. it has no GSLT and
+    doesn't answer A2S). valve/idTech3 engines only; None otherwise or on any failure. Never raises."""
+    if game_engine(game_type) not in ("valve", "idtech3"):
+        return None
+    try:
+        send_console_command(server, user, "status", timeout=12, selfname=selfname)
+        time.sleep(0.8)   # let the server print its reply into the pane
+        out, _, rc = capture_console(server, user, selfname=selfname, lines=60)
+    except Exception:
+        return None
+    if rc != 0 or not out:
+        return None
+    m = _HOSTNAME_RE.search(out)
+    if not m:
+        return None
+    name = " ".join(_strip_q3_colors(m.group(1)).split())[:120]
+    return name or None
 
 
 def _gamedig_player_list(server, user, game_type=None, port=None, query_type=None):
