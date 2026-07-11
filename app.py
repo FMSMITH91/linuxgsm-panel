@@ -424,6 +424,29 @@ def _resolve_source_aux_ports(remote, remote_id, short_name, lgsm_name, main_por
     return {k: str(v) for k, v in _dedupe_aux_ports(have, occupied).items()}
 
 
+# Known, actionable failure lines from a game's start log (srcds/LinuxGSM), most specific first — so a
+# failed auto-start can tell the admin WHY instead of a bare "offline". ANSI colour is stripped first.
+_START_ERROR_PATTERNS = (
+    r"Port\s+\d+\s+was unavailable[^\n]*",              # -strictportbind: a needed port is taken
+    r"Host_Error:[^\n]*",
+    r"(?:Couldn't|Could not|Failed to)\s+(?:open|load|find|bind|allocate|mount)[^\n]*",
+    r"FATAL[^\n]*",
+)
+
+
+def _extract_start_error(out):
+    """A short, human-meaningful reason from a start log, or "" when nothing clear stands out (so the
+    caller can fall back to a generic message rather than surfacing srcds boot noise). Never raises."""
+    text = re.sub(r"\x1b\[[0-9;?]*[A-Za-z]", "", out or "")
+    for pat in _START_ERROR_PATTERNS:
+        m = re.search(pat, text, re.I)
+        if m:
+            # Collapse whitespace and drop angle brackets: this game-generated text is surfaced in
+            # the install job message, which the progress UI inserts via innerHTML, so keep it inert.
+            return re.sub(r"\s+", " ", m.group(0)).replace("<", "").replace(">", "").strip()[:200]
+    return ""
+
+
 def _host_idle_state(remote):
     """'idle' (no players on any game server, confidently), 'busy' (someone is connected), or
     'unknown' (at least one server couldn't be read). The reboot-when-empty poller only acts on
@@ -3330,12 +3353,13 @@ def register_routes(app):
                 cur = j["step"] if j else 0
             _p(cur, name, status="failed", message=detail)
 
-        def _finish(msg):
+        def _finish(msg, warn=False):
             with _install_lock:
                 j = _install_jobs.get(gs_id)
                 if j is not None:
                     j["status"], j["step"] = "done", j["total"]
                     j["step_name"], j["message"], j["updated"] = "Complete", msg, time.time()
+                    j["warn"] = bool(warn)   # done, but with a caveat (e.g. installed yet didn't start)
 
         def _run():
             try:
@@ -3493,13 +3517,30 @@ def register_routes(app):
                     except Exception:
                         _log.debug("_run: ignored non-fatal error", exc_info=True)
 
-                    # 8. Start the server.
+                    # 8. Start the server — then VERIFY it actually came up. LinuxGSM's `start` exit
+                    # code alone can lie: a port taken under -strictportbind, or a crash-on-boot, can
+                    # still exit 0 or just flap. So capture the start log and confirm the game port is
+                    # really listening a few seconds later; if it isn't, mark it offline and surface
+                    # the reason from the log instead of a bare "offline".
                     _p(8, "Starting server")
+                    start_out = ""
                     try:
-                        _, _, s_rc = run_as_game_user(remote, short_name, "start 2>&1", timeout=120, selfname=gs.lgsm_name)
-                        gs.status = "online" if s_rc == 0 else "offline"; db.session.commit()
+                        start_out, _, s_rc = run_as_game_user(remote, short_name, "start 2>&1", timeout=120, selfname=gs.lgsm_name)
                     except Exception:
-                        _log.debug("_run: ignored non-fatal error", exc_info=True)
+                        s_rc = 1
+                        _log.debug("_run: start command failed", exc_info=True)
+                    really_up = False
+                    try:
+                        for _ in range(5):                    # poll ~15s: give a heavy first boot time to bind
+                            time.sleep(3)
+                            _invalidate_port_scan(remote.id)  # force a fresh scan each try
+                            if gs.port and gs.port in _remote_listening_ports(remote):
+                                really_up = True
+                                break
+                    except Exception:
+                        really_up = (s_rc == 0)               # host unreachable — fall back to the exit code
+                    gs.status = "online" if really_up else "offline"
+                    db.session.commit()
 
                     # Now that it's actually run once, re-read the ports and open any that only
                     # become visible at runtime. A no-op for the static-config majority (step 6 already
@@ -3513,8 +3554,16 @@ def register_routes(app):
                     except Exception:
                         _log.debug("_run: post-start port re-detect failed", exc_info=True)
 
-                    _finish(f"{short_name} installed")
-                    log_action(None, "install_complete", target=gs.name, success=True)
+                    if really_up:
+                        _finish(f"{short_name} installed and started")
+                        log_action(None, "install_complete", target=gs.name, success=True)
+                    else:
+                        reason = _extract_start_error(start_out)
+                        note = f"{short_name} installed, but it didn't start"
+                        note += (" — " + reason) if reason else " — check the console for the reason."
+                        _finish(note, warn=True)
+                        log_action(None, "install_complete", target=gs.name, success=False,
+                                   detail=(("start failed: " + reason) if reason else "start failed")[:300])
             except Exception as e:
                 with _install_lock:
                     j = _install_jobs.get(gs_id)
@@ -6607,6 +6656,7 @@ def register_routes(app):
             return jsonify({
                 "status": j["status"], "step": j["step"], "total": j["total"], "percent": pct,
                 "step_name": j["step_name"], "message": j.get("message", ""),
+                "warn": bool(j.get("warn")),   # done, but with a caveat (installed yet didn't start)
                 "log": j["log"][-100:], "elapsed": int(time.time() - j["started"]),
                 # installed flips True after the game files download (step 4), several steps before
                 # the job's final "done" (config → ports → autostart → start). Surface it so the live

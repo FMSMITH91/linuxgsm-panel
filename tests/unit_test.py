@@ -866,6 +866,16 @@ eq("aux-ports: scans past a run of taken ports",
 eq("aux-ports: two keys never land on the same freed port",
    _dedupe_aux_ports({"clientport": 27020, "sourcetvport": 27020}, {27020}),
    {"clientport": 27021, "sourcetvport": 27022})
+
+# _extract_start_error: turn a game's start log into a one-line reason (or "" if none is clear), so a
+# failed auto-start shows WHY instead of a bare "offline".
+from app import _extract_start_error
+eq("start-error: pulls the -strictportbind port line, ANSI stripped",
+   _extract_start_error('boot\n\x1b[38;2;255;90;90mERROR: Port 27020 was unavailable - quitting due to "-strictportbind" flag!\x1b[39m\nmore'),
+   'Port 27020 was unavailable - quitting due to "-strictportbind" flag!')
+eq("start-error: a clean boot log yields no reason", _extract_start_error("Loading map\nServer started"), "")
+eq("start-error: catches a couldn't-load line", _extract_start_error("Couldn't open mapcycle.txt"),
+   "Couldn't open mapcycle.txt")
 eq("port-block: multi-port block steps past a partial overlap",
    _first_free_block(28015, 2, {28016}), 28017)
 

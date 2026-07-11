@@ -245,9 +245,12 @@ function watchInstall(id) {
         if (bar) bar.style.width = s.percent + '%';
         if (s.installed) enableServerLinks(id);   // files have landed — Console + Files are usable now
         if (s.status === 'done') {
-          bar.className = 'progress-bar bg-success'; bar.style.width = '100%';
-          step.innerHTML = '<i class="bi bi-check-circle-fill text-success"></i> ' + (s.message || 'Installed');
-          if (badge) { badge.className = 'badge bg-success'; badge.textContent = 'Installed'; }
+          // Installed, but with a caveat (warn) — e.g. the files installed yet the server didn't
+          // start. Show that as a yellow warning with the reason, not a clean green success.
+          var warn = !!s.warn;
+          bar.className = 'progress-bar ' + (warn ? 'bg-warning' : 'bg-success'); bar.style.width = '100%';
+          step.innerHTML = '<i class="bi bi-' + (warn ? 'exclamation-triangle-fill text-warning' : 'check-circle-fill text-success') + '"></i> ' + (s.message || 'Installed');
+          if (badge) { badge.className = 'badge ' + (warn ? 'bg-warning text-dark' : 'bg-success'); badge.textContent = 'Installed'; }
           var dz = document.getElementById('inst-dismiss-' + id); if (dz) dz.style.display = 'inline';
           stopInstall(id);
         } else if (s.status === 'failed') {
