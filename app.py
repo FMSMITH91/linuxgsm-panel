@@ -2738,6 +2738,13 @@ def register_routes(app):
             _bg_action(gs.id, remote.id, gs.short_name, action, gs.lgsm_name)
             log_action(actor, f"{action}_server", target=gs.name)
             return True, f"'{action}' started — watch the live console for progress."
+        if action in ("start", "stop", "restart"):
+            # These block for ~8-17s (srcds Steam/VAC init on start, a graceful `quit` wait on stop,
+            # plus LinuxGSM confirming the outcome). Run them in the background so the click returns
+            # immediately and the status poll reflects the result, instead of hanging the button.
+            _bg_power_action(gs.id, remote.id, gs.short_name, action, gs.lgsm_name,
+                             actor.id if actor else None)
+            return True, f"'{action}' issued — status updates in a few seconds."
         timeout = 90 if action == "restart" else 60
         out, err, rc = run_as_game_user(remote, gs.short_name, f"{action} 2>&1", timeout=timeout, selfname=gs.lgsm_name)
         # Strip ALL ANSI/CSI escape sequences (colors end in 'm', but LinuxGSM also
@@ -3152,6 +3159,44 @@ def register_routes(app):
         db.session.commit()
         log_action(current_user, "set_notify_when_empty", target=gs.name, detail=str(enabled))
         return jsonify({"success": True, "enabled": enabled})
+
+    def _bg_power_action(server_id, remote_id, short_name, action, selfname, actor_id):
+        """Run a start/stop/restart in the background so the click returns immediately (the command
+        is slow — srcds Steam/VAC init on start, a graceful shutdown wait on stop, plus LinuxGSM's
+        confirm step). The dashboard/list status poll reflects the outcome. Mirrors the synchronous
+        path's post-action bookkeeping (audit log, port-scan invalidation, clearing 'when empty'
+        flags, and the CPU-priority nudge)."""
+        _app = app
+
+        def _run():
+            try:
+                with _app.app_context():
+                    remote = db.session.get(RemoteServer, remote_id)
+                    gs = db.session.get(GameServer, server_id)
+                    actor = db.session.get(User, actor_id) if actor_id else None
+                    if not remote or not gs:
+                        return
+                    timeout = 90 if action == "restart" else 60
+                    out, _, rc = run_as_game_user(remote, short_name, f"{action} 2>&1",
+                                                  timeout=timeout, selfname=selfname)
+                    clean = re.sub(r"\x1b\[[0-9;?]*[A-Za-z]", "", out or "")
+                    log_action(actor, f"{action}_server", target=gs.name, success=(rc == 0),
+                               detail=clean[-400:])
+                    if rc == 0:
+                        _invalidate_port_scan(remote_id)
+                        if gs.restart_pending or gs.stop_pending:
+                            gs.restart_pending = False
+                            gs.stop_pending = False
+                            db.session.commit()
+                        if action in ("restart", "start"):
+                            try:
+                                set_game_priority(remote, short_name)
+                            except Exception:
+                                app.logger.debug("game priority boost failed (non-fatal)", exc_info=True)
+            except Exception:
+                app.logger.exception("power action %s failed for server %s", action, server_id)
+
+        threading.Thread(target=_run, daemon=True).start()
 
     def _bg_action(server_id, remote_id, short_name, action, selfname=None):
         """Run a long LinuxGSM command in the background (green thread)."""
