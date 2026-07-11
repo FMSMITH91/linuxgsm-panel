@@ -193,9 +193,14 @@ def telegram_get_updates(token, offset=None, timeout=25):
 # The bot's command menu — what Telegram shows when you type '/'. Keep in sync with the commands
 # _handle_telegram_command actually handles.
 TG_COMMANDS = [
-    ("update", "Update the panel to the latest version"),
     ("status", "Panel version + server counts"),
-    ("servers", "Per-server status + player counts"),
+    ("servers", "List servers with player counts"),
+    ("hosts", "List hosts and their status"),
+    ("players", "Who's on a server: /players <name>"),
+    ("start", "Start a server: /start <name>"),
+    ("stop", "Stop a server: /stop <name>"),
+    ("restart", "Restart a server: /restart <name>"),
+    ("update", "Update the panel to the latest version"),
     ("help", "Show the command list"),
 ]
 

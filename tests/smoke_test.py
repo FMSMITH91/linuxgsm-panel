@@ -918,6 +918,16 @@ try:
         finally:
             _am._fan_out_global_ban = _saved_fan
 
+    # ── Telegram command bot: server-name resolution for /start /stop /restart /players ────────────
+    with app.app_context():
+        from app import _tg_find_server
+        _g, _e = _tg_find_server("smoke-cs")               # by display name
+        check("telegram: resolve a server by name", _g is not None and _e is None)
+        _g2, _e2 = _tg_find_server("csgoserver")           # by short_name
+        check("telegram: resolve a server by short_name", _g2 is not None)
+        _g3, _e3 = _tg_find_server("no-such-server-xyz")   # unknown
+        check("telegram: an unknown server name returns a helpful error", _g3 is None and "No server" in (_e3 or ""))
+
 finally:
     passed = sum(1 for ok, _, _ in results if ok)
     for ok, name, detail in results:

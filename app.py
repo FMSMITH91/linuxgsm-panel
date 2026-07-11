@@ -559,20 +559,112 @@ def _telegram_command_watch(app):
             time.sleep(_TG_CMD_BACKOFF)
 
 
+def _tg_command_arg(text):
+    """The text after the command word: '/restart my server' -> 'my server'."""
+    parts = (text or "").strip().split(None, 1)
+    return parts[1].strip() if len(parts) > 1 else ""
+
+
+def _tg_help_text():
+    return ("Commands:\n"
+            "/status — panel version + server counts\n"
+            "/servers — servers with player counts\n"
+            "/hosts — hosts and their status\n"
+            "/players <name> — who's on a server\n"
+            "/start <name> — start a server\n"
+            "/stop <name> — stop a server\n"
+            "/restart <name> — restart a server\n"
+            "/update — update the panel\n"
+            "/help — this message")
+
+
+def _tg_find_server(arg):
+    """Resolve a GameServer from a name/short_name argument (case-insensitive). Returns (gs, error):
+    an exact short_name/name match wins, else a unique partial name match, else (None, message)."""
+    arg = (arg or "").strip()
+    if not arg:
+        return None, "Which server? Send /servers to see the names."
+    servers = GameServer.query.filter_by(installed=True).all()
+    low = arg.lower()
+    exact = [g for g in servers if g.short_name.lower() == low or g.name.lower() == low]
+    if len(exact) == 1:
+        return exact[0], None
+    if len(exact) > 1:
+        return None, "That matches several — use the exact short name: %s" % ", ".join(g.short_name for g in exact)
+    partial = [g for g in servers if low in g.name.lower() or low in g.short_name.lower()]
+    if len(partial) == 1:
+        return partial[0], None
+    if len(partial) > 1:
+        return None, "Matches several: %s — be more specific." % ", ".join(g.name for g in partial[:8])
+    return None, "No server matches '%s'. Send /servers for the list." % arg[:40]
+
+
+def _tg_server_action(app, token, chat_id, action, arg):
+    run_action = getattr(app, "_run_action", None)
+    with app.app_context():
+        gs, err = _tg_find_server(arg)
+        if err:
+            _tg_reply(token, chat_id, err)
+            return
+        if not run_action:
+            _tg_reply(token, chat_id, "That action isn't available right now.")
+            return
+        try:
+            ok, msg = run_action(gs, gs.remote, action, None)   # actor None → logged as a system action
+        except Exception:
+            _log.debug("telegram server action failed", exc_info=True)
+            ok, msg = False, "the action failed"
+        _tg_reply(token, chat_id, "%s %s — %s" % ("✅" if ok else "⚠️", gs.name, msg))
+
+
+def _tg_players_text(app, arg):
+    with app.app_context():
+        gs, err = _tg_find_server(arg)
+        if err:
+            return err
+        try:
+            players = player_list(gs.remote, gs.short_name, gs.game_type, port=gs.port,
+                                  query_type=gs.query_type, selfname=gs.lgsm_name)
+        except Exception:
+            players = None
+        if players is None:
+            return "%s — couldn't read the player list (is it running?)." % gs.name
+        if not players:
+            return "%s — no players connected." % gs.name
+        names = [str(p.get("name") or "?") for p in players]
+        return "%s — %d player(s):\n%s" % (gs.name, len(names), "\n".join("• " + n for n in names[:40]))
+
+
+def _tg_hosts_text(app):
+    with app.app_context():
+        rows = []
+        for r in RemoteServer.query.order_by(RemoteServer.name).all():
+            n_srv = GameServer.query.filter_by(remote_id=r.id, installed=True).count()
+            dot = "🟢" if r.is_online else "🔴"
+            local = " (this panel)" if r.is_local else ""
+            rows.append("%s %s%s — %d server%s" % (dot, r.display_name, local, n_srv, "" if n_srv == 1 else "s"))
+    return "\n".join(rows) if rows else "No hosts configured."
+
+
 def _handle_telegram_command(app, token, chat_id, text):
     cmd = _parse_tg_command(text)
+    arg = _tg_command_arg(text)
     if cmd in ("help", "start"):
-        _tg_reply(token, chat_id, "Commands:\n/update — update the panel to the latest version\n"
-                                  "/status — version + server counts\n/servers — per-server status\n"
-                                  "/help — this message")
+        _tg_reply(token, chat_id, _tg_help_text())
     elif cmd == "status":
         _tg_reply(token, chat_id, _tg_status_text(app))
     elif cmd == "servers":
         _tg_reply(token, chat_id, _tg_servers_text(app))
+    elif cmd == "hosts":
+        _tg_reply(token, chat_id, _tg_hosts_text(app))
+    elif cmd == "players":
+        _tg_reply(token, chat_id, _tg_players_text(app, arg))
+    elif cmd in ("restart", "start", "stop"):
+        _tg_server_action(app, token, chat_id, cmd, arg)
     elif cmd in ("update", "upgrade"):
         _telegram_do_update(app, token, chat_id)
     else:
-        _tg_reply(token, chat_id, "Unknown command '%s'. Try /help." % cmd[:24])
+        _tg_reply(token, chat_id, "Unknown command '%s'. Send /help." % cmd[:24])
 
 
 def _tg_status_text(app):
@@ -7019,6 +7111,10 @@ def register_routes(app):
 
     # Make socketio accessible from app
     app.socketio = socketio
+    # Expose the action executor so the module-level Telegram command bot can start/stop/restart a
+    # server through the exact same path as the web controls (permission already implied by the bot
+    # being locked to the configured chat).
+    app._run_action = _run_action
     return app
 
 

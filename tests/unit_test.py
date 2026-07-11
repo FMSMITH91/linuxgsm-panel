@@ -18,7 +18,7 @@ import config
 import ssh_manager as sm
 import notifications as N
 import system_ops as SO
-from app import password_problem, _int_or, _valid_ip_or_cidr, _whitelisted, _parse_tg_command
+from app import password_problem, _int_or, _valid_ip_or_cidr, _whitelisted, _parse_tg_command, _tg_command_arg
 from auth import can_access_remote, client_ip
 
 results = []
@@ -1952,6 +1952,8 @@ check("telegram: /update parses to 'update'", _parse_tg_command("/update") == "u
 check("telegram: a bot-mention + args is stripped", _parse_tg_command("/Update@MyBot now") == "update")
 check("telegram: /STATUS is lowercased", _parse_tg_command("/STATUS") == "status")
 check("telegram: a non-command is empty", _parse_tg_command("hello there") == "" and _parse_tg_command("") == "")
+check("telegram: /restart <name> extracts the argument", _tg_command_arg("/restart my server") == "my server")
+check("telegram: a bare command has no argument", _tg_command_arg("/status") == "")
 
 # telegram_set_commands registers the '/' autocomplete menu via setMyCommands (through _post).
 import json as _json_tg  # noqa: E402
@@ -1959,11 +1961,11 @@ _tg_posts = []
 _orig_post = N._post
 try:
     N._post = lambda url, data, headers: (_tg_posts.append((url, data)), (True, "sent"))[1]
-    check("telegram: set_commands posts to setMyCommands with update/status/servers/help",
+    check("telegram: set_commands posts to setMyCommands with the registered command set",
           N.telegram_set_commands("123456:AAABBBCCCDDDEEEFFF_gg-hh")
           and _tg_posts[-1][0].endswith("/setMyCommands")
           and {c["command"] for c in _json_tg.loads(_tg_posts[-1][1].decode())["commands"]}
-          == {"update", "status", "servers", "help"})
+          == {c for c, _ in N.TG_COMMANDS})
     N.telegram_set_commands("123456:AAABBBCCCDDDEEEFFF_gg-hh", clear=True)
     check("telegram: set_commands(clear=True) sends an empty command list",
           _json_tg.loads(_tg_posts[-1][1].decode())["commands"] == [])
