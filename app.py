@@ -2997,21 +2997,34 @@ def register_routes(app):
             # live connection slot, so they can't be ported and stay on this server only.
             if ok and action == "ban" and scope == "all":
                 origin_eng = game_engine(gs.game_type)
-                applied = 0
+                # Pick the target servers (access + engine checks are cheap/DB), then ban them all IN
+                # PARALLEL so a many-server ban doesn't block on one SSH round trip per server.
+                targets = []
                 for other in GameServer.query.filter_by(installed=True).all():
                     if other.id == gs.id or game_engine(other.game_type) != origin_eng:
                         continue
                     if not can_access_server(current_user, other.id):
                         continue
-                    if origin_eng == "valve" and steamid:
-                        ok2, _m = moderate(other.remote, other.short_name, other.game_type, "ban",
-                                           selfname=other.lgsm_name, steamid=steamid)
-                    elif origin_eng == "minecraft" and target:
-                        ok2, _m = moderate(other.remote, other.short_name, other.game_type, "ban",
-                                           selfname=other.lgsm_name, target=target)
-                    else:
-                        continue   # idTech3 slot bans don't port to servers they're not on
-                    applied += 1 if ok2 else 0
+                    if (origin_eng == "valve" and steamid) or (origin_eng == "minecraft" and target):
+                        targets.append(other.id)   # idTech3 slot bans don't port; skipped
+
+                def _ban_other(oid):
+                    with app.app_context():
+                        o = db.session.get(GameServer, oid)
+                        if not o:
+                            return False
+                        try:
+                            kw = {"steamid": steamid} if origin_eng == "valve" else {"target": target}
+                            ok2, _m = moderate(o.remote, o.short_name, o.game_type, "ban",
+                                               selfname=o.lgsm_name, **kw)
+                            return bool(ok2)
+                        except Exception:
+                            return False
+
+                applied = 0
+                if targets:
+                    with concurrent.futures.ThreadPoolExecutor(max_workers=min(_PLAYER_POLL_WORKERS, len(targets))) as ex:
+                        applied = sum(1 for r in ex.map(_ban_other, targets) if r)
                 if applied:
                     log_action(current_user, "moderate_ban_all", target="%d server(s)" % applied,
                                detail=(steamid or target)[:120], success=True)
@@ -5435,16 +5448,16 @@ def register_routes(app):
     def api_panel_backup_full_precheck():
         """Report which installed servers have players connected right now, so the UI can ask
         whether to disconnect them, wait until they're empty, or cancel before a full backup."""
+        # Use the last poll's cached counts (instant) rather than an SSH gamedig call per server: this
+        # is only a UI courtesy prompt, and the backup itself re-checks each server live and skips any
+        # that are busy — so a slightly stale hint here can't disconnect anyone by mistake.
         busy = []
         total = 0
         for gs in GameServer.query.filter_by(installed=True).all():
             if not gs.remote_id:
                 continue
             total += 1
-            try:
-                pc = sm_player_count(gs.remote, gs.short_name, gs.game_type, gs.port)
-            except Exception:
-                pc = None
+            pc = _cached_player_count(gs.id)
             if pc and pc > 0:
                 busy.append({"name": gs.name, "players": pc})
         return jsonify({"total": total, "busy": busy})
@@ -5642,26 +5655,46 @@ def register_routes(app):
             backup_bytes = 0   # total size of all existing game backups
             est_cycle = 0      # estimated size of ONE full backup run (all servers), from newest each
             disk_by_remote = {}   # remote_id -> {free,total}; computed once per host
-            for gs in GameServer.query.filter_by(installed=True).all():
-                if not gs.remote_id:
-                    continue
-                try:
-                    gb = list_game_backups(gs.remote, gs.short_name)
-                except Exception:
-                    gb = []
+            servers = [g for g in GameServer.query.filter_by(installed=True).all() if g.remote_id]
+            # One SSH per server (LinuxGSM backup list) + one per host (disk) — fetched in PARALLEL so
+            # the page doesn't load in N sequential round trips; the aggregation below touches no SSH.
+            def _bk_list(sid):
+                with app.app_context():
+                    g = db.session.get(GameServer, sid)
+                    try:
+                        return sid, (list_game_backups(g.remote, g.short_name) if g else [])
+                    except Exception:
+                        return sid, []
+
+            def _bk_disk(item):
+                rid, short = item
+                with app.app_context():
+                    r = db.session.get(RemoteServer, rid)
+                    try:
+                        return rid, (backup_disk_info(r, short) if r else {"free": 0, "total": 0})
+                    except Exception:
+                        return rid, {"free": 0, "total": 0}
+
+            gb_by_sid, remote_short = {}, {}
+            for g in servers:
+                remote_short.setdefault(g.remote_id, g.short_name)
+            if servers:
+                with concurrent.futures.ThreadPoolExecutor(max_workers=min(_PLAYER_POLL_WORKERS, len(servers))) as ex:
+                    for sid, gb in ex.map(_bk_list, [g.id for g in servers]):
+                        gb_by_sid[sid] = gb
+            if remote_short:
+                with concurrent.futures.ThreadPoolExecutor(max_workers=min(_PLAYER_POLL_WORKERS, len(remote_short))) as ex:
+                    for rid, di in ex.map(_bk_disk, list(remote_short.items())):
+                        disk_by_remote[rid] = di
+            for gs in servers:
+                gb = gb_by_sid.get(gs.id, [])
                 # A backup being written right now is partial — don't count it toward totals or the
                 # next-size estimate (it would read as a too-small worst case).
                 done = [b for b in gb if not b.get("in_progress")]
                 backup_bytes += sum(b.get("size", 0) for b in done)
                 _est_one = max((b.get("size", 0) for b in done), default=0)  # largest = worst case
                 est_cycle += _est_one
-                if gs.remote_id not in disk_by_remote:
-                    try:
-                        disk_by_remote[gs.remote_id] = backup_disk_info(gs.remote, gs.short_name)
-                    except Exception:
-                        disk_by_remote[gs.remote_id] = {"free": 0, "total": 0}
-                        app.logger.debug("backup disk info failed", exc_info=True)  # best-effort
-                hdisk = disk_by_remote[gs.remote_id]
+                hdisk = disk_by_remote.get(gs.remote_id, {"free": 0, "total": 0})
                 rem = gs.remote
                 host_label = "This host" if getattr(rem, "is_local", False) else (rem.name or rem.host or "remote")
                 games.append({"id": gs.id, "name": gs.name, "backups": gb,
