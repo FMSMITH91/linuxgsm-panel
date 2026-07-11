@@ -480,6 +480,28 @@ class SetupState(db.Model):
     data = db.Column(db.Text, default="{}")  # JSON blob
 
 
+class MetricSample(db.Model):
+    """A periodic snapshot of one game server's live figures (game CPU%, RAM MB, player count) for the
+    history charts. Written by the metrics-history sampler (~1/min) and pruned after ~14 days. No FK —
+    orphans from an uninstalled server just age out — so it stays cheap to write."""
+    id = db.Column(db.Integer, primary_key=True)
+    server_id = db.Column(db.Integer, index=True, nullable=False)
+    ts = db.Column(db.DateTime, default=datetime.utcnow, index=True)
+    cpu = db.Column(db.Float, default=0.0)          # game CPU %
+    ram_mb = db.Column(db.Integer, default=0)       # game RAM MB
+    players = db.Column(db.Integer, nullable=True)  # None = unknown at sample time
+
+
+class HostSample(db.Model):
+    """A periodic snapshot of one host's whole-VPS figures (CPU%, RAM%, disk%) for the history charts."""
+    id = db.Column(db.Integer, primary_key=True)
+    remote_id = db.Column(db.Integer, index=True, nullable=False)
+    ts = db.Column(db.DateTime, default=datetime.utcnow, index=True)
+    cpu = db.Column(db.Float, default=0.0)
+    ram_pct = db.Column(db.Float, default=0.0)
+    disk_pct = db.Column(db.Float, default=0.0)
+
+
 def _run_light_migrations():
     """Add columns that may be missing on databases created by older versions.
     SQLAlchemy's create_all() never ALTERs existing tables, so do it by hand."""

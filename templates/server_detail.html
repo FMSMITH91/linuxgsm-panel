@@ -69,6 +69,7 @@
      untouched. Actions + the pending banner above are always visible. -->
 <ul class="nav nav-pills mb-3 flex-nowrap overflow-auto" id="sdtab-nav">
   <li class="nav-item"><button type="button" class="nav-link active" data-mtab-btn="console"><i class="bi bi-terminal-fill"></i> Console</button></li>
+  <li class="nav-item"><button type="button" class="nav-link" data-mtab-btn="history"><i class="bi bi-graph-up"></i> History</button></li>
   <li class="nav-item"><button type="button" class="nav-link" data-mtab-btn="details"><i class="bi bi-info-circle"></i> Details</button></li>
   <li class="nav-item"><a class="nav-link" href="{{ url_for('server_files', server_id=server.id) }}"><i class="bi bi-folder2-open"></i> Files &amp; Config</a></li>
 </ul>
@@ -176,6 +177,30 @@
   </div>
 </div>
 {% endif %}
+
+<!-- History: persisted CPU/RAM/player trends (sampled ~1/min) -->
+<div class="card mb-3" data-mtab="history" style="display:none;">
+  <div class="card-header d-flex justify-content-between align-items-center">
+    <span><i class="bi bi-graph-up"></i> History</span>
+    <div class="btn-group btn-group-sm" role="group" aria-label="History range">
+      <button type="button" class="btn btn-outline-secondary active" data-hist-range="24h">24h</button>
+      <button type="button" class="btn btn-outline-secondary" data-hist-range="7d">7d</button>
+    </div>
+  </div>
+  <div class="card-body">
+    <div id="hist-empty" class="text-secondary small text-center py-4" style="display:none;">
+      <i class="bi bi-hourglass-split"></i> No history yet — a sample is recorded every minute. Check back shortly.
+    </div>
+    <div id="hist-charts">
+      <div class="small text-secondary mb-1"><i class="bi bi-people-fill"></i> Players</div>
+      <div style="position:relative;height:140px;" class="mb-3"><canvas id="hist-players"></canvas></div>
+      <div class="small text-secondary mb-1"><i class="bi bi-cpu"></i> Game CPU % · RAM (MB)</div>
+      <div style="position:relative;height:140px;" class="mb-3"><canvas id="hist-server"></canvas></div>
+      <div class="small text-secondary mb-1"><i class="bi bi-hdd"></i> Host CPU % · RAM % · Disk %</div>
+      <div style="position:relative;height:140px;"><canvas id="hist-host"></canvas></div>
+    </div>
+  </div>
+</div>
 
 <!-- Details: server info, host and commands (grouped into the Details tab) -->
 <div class="row" data-mtab="details">
@@ -319,7 +344,7 @@
 // default Console tab, so they initialise visible (no hidden-canvas sizing issues). ──
 (function(){
   var nav = document.getElementById('sdtab-nav'); if(!nav) return;
-  var TABS = ['console','details'];
+  var TABS = ['console','history','details'];
   function show(tab){
     document.querySelectorAll('[data-mtab]').forEach(function(el){
       el.style.display = (el.getAttribute('data-mtab') === tab) ? '' : 'none';
@@ -328,6 +353,7 @@
       b.classList.toggle('active', b.getAttribute('data-mtab-btn') === tab);
     });
     try { history.replaceState(null, '', '#' + tab); } catch(e){}
+    if (tab === 'history' && window.loadHistory) window.loadHistory();   // lazy-load the trend charts
   }
   nav.addEventListener('click', function(e){
     var b = e.target.closest('[data-mtab-btn]'); if(b) show(b.getAttribute('data-mtab-btn'));
@@ -900,6 +926,62 @@ function pollStats() {
     .catch(() => {})
     .finally(_scheduleStats);
 }
+
+// ── History charts (persisted CPU/RAM/player trends, lazy-loaded when the History tab opens) ──
+var _histRange = '24h';
+var _histCharts = {};
+var _histX = { ticks:{color:'#8b98a5', maxTicksLimit:6, maxRotation:0}, grid:{display:false} };
+function _histChart(id, labels, datasets, yScales){
+  var el = document.getElementById(id); if(!el || typeof Chart==='undefined') return;
+  if(_histCharts[id]) _histCharts[id].destroy();
+  var scales = { x:_histX }; for(var k in yScales){ scales[k]=yScales[k]; }
+  _histCharts[id] = new Chart(el.getContext('2d'), {
+    type:'line', data:{ labels:labels, datasets:datasets },
+    options:{ responsive:true, maintainAspectRatio:false, animation:false,
+      interaction:{intersect:false, mode:'index'}, scales:scales,
+      plugins:{ legend:{ labels:{color:'#c9d1d9', boxWidth:12, boxHeight:12} } } }
+  });
+}
+function _histLbl(iso){
+  var d = new Date(iso);
+  return _histRange==='7d' ? d.toLocaleString([], {month:'short', day:'numeric', hour:'2-digit'})
+                           : d.toLocaleTimeString([], {hour:'2-digit', minute:'2-digit'});
+}
+function _ds(label, data, color, fill){
+  return { label:label, data:data, borderColor:color, backgroundColor:color+'22',
+           fill:!!fill, tension:.3, pointRadius:0, borderWidth:2, spanGaps:true };
+}
+window.loadHistory = function(){
+  fetch(MOUNT + '/api/server/' + serverId + '/history?range=' + encodeURIComponent(_histRange))
+    .then(function(r){ return r.json(); })
+    .then(function(d){
+      var s = d.server || [], h = d.host || [];
+      var empty = document.getElementById('hist-empty'), charts = document.getElementById('hist-charts');
+      if(!s.length && !h.length){ if(empty)empty.style.display=''; if(charts)charts.style.display='none'; return; }
+      if(empty)empty.style.display='none'; if(charts)charts.style.display='';
+      var sL = s.map(function(p){ return _histLbl(p.t); }), hL = h.map(function(p){ return _histLbl(p.t); });
+      var pctY = { y:{ min:0, max:100, ticks:{color:'#8b98a5', maxTicksLimit:5}, grid:{color:'rgba(255,255,255,.05)'} } };
+      _histChart('hist-players', sL,
+        [ _ds('Players', s.map(function(p){return p.players;}), '#58a6ff', true) ],
+        { y:{ min:0, ticks:{color:'#8b98a5', maxTicksLimit:5, precision:0}, grid:{color:'rgba(255,255,255,.05)'} } });
+      _histChart('hist-server', sL, [
+        Object.assign(_ds('CPU %', s.map(function(p){return p.cpu;}), '#3fb950', true), {yAxisID:'y'}),
+        Object.assign(_ds('RAM MB', s.map(function(p){return p.ram;}), '#d29922', false), {yAxisID:'y1'})
+      ], { y:{ min:0, max:100, position:'left', ticks:{color:'#8b98a5', maxTicksLimit:5}, grid:{color:'rgba(255,255,255,.05)'} },
+           y1:{ min:0, position:'right', ticks:{color:'#8b98a5', maxTicksLimit:5}, grid:{display:false} } });
+      _histChart('hist-host', hL, [
+        _ds('CPU %', h.map(function(p){return p.cpu;}), '#58a6ff', false),
+        _ds('RAM %', h.map(function(p){return p.ram;}), '#3fb950', false),
+        _ds('Disk %', h.map(function(p){return p.disk;}), '#d29922', false)
+      ], pctY);
+    }).catch(function(){});
+};
+document.addEventListener('click', function(e){
+  var b = e.target.closest && e.target.closest('[data-hist-range]'); if(!b) return;
+  _histRange = b.getAttribute('data-hist-range');
+  if(b.parentNode) b.parentNode.querySelectorAll('[data-hist-range]').forEach(function(x){ x.classList.toggle('active', x===b); });
+  window.loadHistory();
+});
 
 // Populate console immediately via AJAX (page render no longer waits on SSH),
 // then let the websocket stream take over.

@@ -86,6 +86,7 @@ import notifications
 from models import (
     AuditLog, GameServer, Group, RemoteServer, SetupState, User, db, init_db,
     CustomCommand, CUSTOM_ARG_DEFAULT_PATTERN, CUSTOM_ARG_PLACEHOLDER, GlobalBan,
+    MetricSample, HostSample,
 )
 from ssh_manager import (
     close_connection, run_command, ssh_test_connection,
@@ -613,6 +614,68 @@ def _player_count_watch(app):
         except Exception:
             _log.debug("player-count poller pass failed", exc_info=True)
         time.sleep(_PLAYER_POLL_SECONDS)
+
+
+_METRIC_SAMPLE_SECONDS = 60
+_METRIC_RETENTION_DAYS = 14
+_last_sample_prune = 0.0
+
+
+def _record_metric_samples(app):
+    """One pass: snapshot every installed server's game CPU%/RAM (+ the cached player count) and each
+    host's whole-VPS CPU%/RAM%/disk% into MetricSample/HostSample for the history charts. Reuses the
+    parallel metrics worker; the player count comes from the cache the player poller already keeps."""
+    with app.app_context():
+        sids = [gs.id for gs in GameServer.query.filter_by(installed=True).all()]
+        if not sids:
+            return
+        now = datetime.utcnow()
+        rows, hosts_seen = [], set()
+        with concurrent.futures.ThreadPoolExecutor(max_workers=min(_PLAYER_POLL_WORKERS, len(sids))) as ex:
+            for sid, m, rid, _mp in ex.map(lambda s: _query_server_metrics(app, s), sids):
+                if not m:
+                    continue
+                rows.append(MetricSample(server_id=sid, ts=now,
+                                         cpu=round(m.get("game_cpu_percent") or 0, 1),
+                                         ram_mb=int(m.get("game_ram_mb") or 0),
+                                         players=_cached_player_count(sid)))
+                if rid is not None and rid not in hosts_seen:
+                    hosts_seen.add(rid)
+                    rt, dt = m.get("ram_total") or 0, m.get("disk_total") or 0
+                    rows.append(HostSample(remote_id=rid, ts=now,
+                                           cpu=round(m.get("cpu_percent") or 0, 1),
+                                           ram_pct=round(100.0 * (m.get("ram_used") or 0) / rt, 1) if rt else 0,
+                                           disk_pct=round(100.0 * (m.get("disk_used") or 0) / dt, 1) if dt else 0))
+        if rows:
+            db.session.add_all(rows)
+            db.session.commit()
+
+
+def _prune_metric_samples(app):
+    """Drop samples older than the retention window — at most every 30 min so it isn't per-pass churn."""
+    global _last_sample_prune
+    if time.time() - _last_sample_prune < 1800:
+        return
+    _last_sample_prune = time.time()
+    with app.app_context():
+        cutoff = datetime.utcnow() - timedelta(days=_METRIC_RETENTION_DAYS)
+        MetricSample.query.filter(MetricSample.ts < cutoff).delete(synchronize_session=False)
+        HostSample.query.filter(HostSample.ts < cutoff).delete(synchronize_session=False)
+        db.session.commit()
+
+
+def _metrics_history_watch(app):
+    """Background loop: sample metrics into history every _METRIC_SAMPLE_SECONDS, then prune old rows."""
+    while True:
+        try:
+            _record_metric_samples(app)
+        except Exception:
+            _log.debug("metrics-history sampler pass failed", exc_info=True)
+        try:
+            _prune_metric_samples(app)
+        except Exception:
+            _log.debug("metrics-history prune failed", exc_info=True)
+        time.sleep(_METRIC_SAMPLE_SECONDS)
 
 
 # ── Telegram command bot ───────────────────────────────────────────────────────────────────────
@@ -6598,6 +6661,31 @@ def register_routes(app):
                         }
         return jsonify({"servers": out_servers, "hosts": hosts})
 
+    @app.route("/api/server/<int:server_id>/history")
+    @login_required
+    @server_access_required
+    def api_server_history(server_id):
+        """Down-sampled CPU/RAM/player time series for the history charts (range=24h|7d), plus the
+        host's CPU/RAM/disk over the same window. Capped to ~240 points so the chart stays light."""
+        gs = get_game(server_id)
+        rng = "7d" if request.args.get("range") == "7d" else "24h"
+        since = datetime.utcnow() - timedelta(hours=(168 if rng == "7d" else 24))
+        srows = (MetricSample.query
+                 .filter(MetricSample.server_id == server_id, MetricSample.ts >= since)
+                 .order_by(MetricSample.ts.asc()).all())
+        sstep = max(1, len(srows) // 240)
+        server = [{"t": r.ts.isoformat() + "Z", "cpu": r.cpu, "ram": r.ram_mb, "players": r.players}
+                  for r in srows[::sstep]]
+        host = []
+        if gs.remote_id:
+            hrows = (HostSample.query
+                     .filter(HostSample.remote_id == gs.remote_id, HostSample.ts >= since)
+                     .order_by(HostSample.ts.asc()).all())
+            hstep = max(1, len(hrows) // 240)
+            host = [{"t": r.ts.isoformat() + "Z", "cpu": r.cpu, "ram": r.ram_pct, "disk": r.disk_pct}
+                    for r in hrows[::hstep]]
+        return jsonify({"server": server, "host": host, "range": rng})
+
     @app.route("/api/free-port")
     @login_required
     @permission_required(INSTALL_SERVER, MANAGE_SERVERS)
@@ -7615,6 +7703,9 @@ if __name__ == "__main__":
 
     # Keep live per-server player counts fresh for the dashboard / Game Servers page.
     threading.Thread(target=lambda: _player_count_watch(app), daemon=True).start()
+
+    # Record CPU/RAM/player samples into history (for the trend charts on the server page).
+    threading.Thread(target=lambda: _metrics_history_watch(app), daemon=True).start()
 
     # Proactive monitor: server-down / host-unreachable / disk-low admin notifications.
     threading.Thread(target=lambda: _monitor_watch(app), daemon=True).start()
