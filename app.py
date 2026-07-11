@@ -78,7 +78,7 @@ from auth import (
     RESTART_SERVER, START_SERVER, STOP_SERVER, UPDATE_SERVER,
 )
 from config import (
-    DATA_DIR, DB_PATH, get_secret_key, load_config, save_config,
+    DATA_DIR, DB_PATH, get_secret_key, load_config, save_config, update_config,
     encrypt_secret, decrypt_secret, is_encrypted, harden_data_permissions,
 )
 import notifications
@@ -718,9 +718,10 @@ def _telegram_do_update(app, token, chat_id):
 
 
 def _set_tg_pending_update(chat_id, from_commit):
-    cfg = load_config()
-    cfg["telegram_pending_update"] = {"chat_id": chat_id, "from_commit": from_commit, "ts": time.time()}
-    save_config(cfg)
+    # update_config: this runs in the Telegram poller thread, so a plain load+save could clobber a
+    # concurrent whitelist/threshold write from an HTTP handler.
+    update_config(lambda cfg: cfg.update(
+        {"telegram_pending_update": {"chat_id": chat_id, "from_commit": from_commit, "ts": time.time()}}))
 
 
 def _report_tg_pending_update():
@@ -730,8 +731,7 @@ def _report_tg_pending_update():
     pend = cfg.get("telegram_pending_update")
     if not pend:
         return
-    cfg.pop("telegram_pending_update", None)
-    save_config(cfg)
+    update_config(lambda c: c.pop("telegram_pending_update", None))   # clear the marker atomically
     tg = (cfg.get("notifications") or {}).get("telegram") or {}
     token = decrypt_secret(tg.get("token") or "")
     chat = pend.get("chat_id") or ""
@@ -904,11 +904,11 @@ def _autoblock_hosts():
 
 
 def _set_autoblock_host(remote_id, enabled):
-    cfg = load_config()
-    hosts = set(cfg.get("autoblock_hosts", []) or [])
-    hosts.add(remote_id) if enabled else hosts.discard(remote_id)
-    cfg["autoblock_hosts"] = sorted(hosts)
-    save_config(cfg)
+    def _mut(cfg):   # read-modify-write under the config lock (toggled alongside threshold/whitelist)
+        hosts = set(cfg.get("autoblock_hosts", []) or [])
+        hosts.add(remote_id) if enabled else hosts.discard(remote_id)
+        cfg["autoblock_hosts"] = sorted(hosts)
+    update_config(_mut)
 
 
 # ── Auto-block threshold: an IP earns an all-ports UFW block once its failed-login count over the
@@ -945,19 +945,17 @@ def _security_whitelist_add(value):
     canon = _valid_ip_or_cidr(value)
     if not canon:
         return None
-    cfg = load_config()
-    wl = set(cfg.get("security_whitelist", []) or [])
-    wl.add(canon)
-    cfg["security_whitelist"] = sorted(wl)
-    save_config(cfg)
+
+    def _mut(cfg):   # read-modify-write under the config lock so a concurrent write can't clobber it
+        cfg["security_whitelist"] = sorted(set(cfg.get("security_whitelist", []) or []) | {canon})
+    update_config(_mut)
     return canon
 
 
 def _security_whitelist_remove(value):
     canon = _valid_ip_or_cidr(value) or (str(value) or "").strip()
-    cfg = load_config()
-    cfg["security_whitelist"] = [w for w in (cfg.get("security_whitelist", []) or []) if w != canon]
-    save_config(cfg)
+    update_config(lambda cfg: cfg.update(
+        {"security_whitelist": [w for w in (cfg.get("security_whitelist", []) or []) if w != canon]}))
     return canon
 
 
@@ -4620,9 +4618,7 @@ def register_routes(app):
         if body.get("threshold") is not None:
             try:
                 val = max(1, min(int(body.get("threshold")), 100000))
-                cfg = load_config()
-                cfg["autoblock_threshold"] = val
-                save_config(cfg)
+                update_config(lambda cfg: cfg.update({"autoblock_threshold": val}))
                 log_action(current_user, "autoblock_threshold", target="all hosts", detail="%d attempts / 7d" % val)
             except (TypeError, ValueError):
                 _log.debug("ignoring a non-numeric autoblock threshold", exc_info=True)
