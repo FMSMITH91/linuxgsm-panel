@@ -84,8 +84,8 @@
   </div>
   <div class="col">
     <div class="card text-center p-3">
-      <div class="h3 mb-0">{{ remote_count }}</div>
-      <div class="text-secondary small">Remote Servers</div>
+      <div class="h3 mb-0" id="host-summary"><i class="bi bi-cpu text-info"></i> <span class="text-secondary">—</span></div>
+      <div class="text-secondary small">Host CPU · RAM</div>
     </div>
   </div>
 </div>
@@ -104,7 +104,8 @@
       {% if remote.is_local %}<span class="badge bg-secondary ms-2" style="font-weight:600;">this panel</span>{% endif %}
       <span class="text-secondary small ms-2">{{ remote.display_host }}</span>
     </span>
-    <span>
+    <span class="d-flex align-items-center gap-2">
+      <span class="text-secondary small d-none d-md-inline" id="host-metrics-{{ remote.id }}"></span>
       <span class="badge {% if remote.is_online %}bg-success{% else %}bg-danger{% endif %}">
         {{ "Online" if remote.is_online else "Offline" }}
       </span>
@@ -120,6 +121,7 @@
             <th class="d-none d-md-table-cell dash-sort" data-sortkey="type" style="cursor:pointer;" data-action="sortDashCol" data-args='["type","@self"]'>Type<span class="dash-caret"></span></th>
             <th class="dash-sort" data-sortkey="status" style="cursor:pointer;" data-action="sortDashCol" data-args='["status","@self"]'>Status<span class="dash-caret"></span></th>
             <th class="dash-sort" data-sortkey="players" style="cursor:pointer;" data-action="sortDashCol" data-args='["players","@self"]'>Players<span class="dash-caret"></span></th>
+            <th class="d-none d-lg-table-cell">Resources</th>
             <th>Connect</th>
             <th class="text-end">Actions</th>
           </tr>
@@ -144,6 +146,7 @@
               {% set mx = player_max.get(srv.id) %}
               {% if pc is not none %}<i class="bi bi-people-fill text-secondary"></i> {{ pc }}{% if mx %} / {{ mx }}{% endif %}{% else %}<span class="text-secondary">—</span>{% endif %}
             </td>
+            <td id="res-{{ srv.id }}" class="d-none d-lg-table-cell text-nowrap text-secondary" style="font-size:.8rem;">—</td>
             <td>
               <span class="connect-cell" id="connect-{{ srv.id }}" data-addr="">
                 <code class="text-info" style="font-size:.78rem;">:{{ srv.port }}</code>
@@ -323,6 +326,41 @@ window.sortDashCol = function(key, th){
 _serverIdsBaseline = renderedServerIds();   // what this page was rendered with
 refreshStatus();              // populate status + connect immediately
 pollWhenVisible(refreshStatus, 8000);
+
+// Live resource metrics (per-host CPU/RAM/disk in each card header + the summary tile, and per-server
+// CPU/RAM/uptime in the Resources column). Heavier than the status feed (an SSH sample per server),
+// so it polls on a slower cadence.
+function _fmtUptimeShort(s){
+  s = Math.max(0, s|0);
+  var d = Math.floor(s/86400), h = Math.floor((s%86400)/3600), m = Math.floor((s%3600)/60);
+  return d ? (d+'d '+h+'h') : (h ? (h+'h '+m+'m') : (m+'m'));
+}
+function refreshMetrics(){
+  fetch(MOUNT + '/api/dashboard/metrics').then(function(r){ return r.ok ? r.json() : null; })
+    .then(function(d){
+      if(!d) return;
+      var hosts = d.hosts || {}, servers = d.servers || {}, summary = null;
+      Object.keys(hosts).forEach(function(rid){
+        var h = hosts[rid], el = document.getElementById('host-metrics-' + rid);
+        if(el) el.textContent = 'CPU ' + h.cpu + '% · RAM ' + h.ram_pct + '% · Disk ' + h.disk_pct + '%';
+        if(h.local || summary === null) summary = h;
+      });
+      var sum = document.getElementById('host-summary');
+      if(sum) sum.innerHTML = summary
+        ? '<i class="bi bi-cpu text-info"></i> ' + summary.cpu + '% · ' + summary.ram_pct + '%'
+        : '<i class="bi bi-cpu text-info"></i> <span class="text-secondary">—</span>';
+      Object.keys(servers).forEach(function(sid){
+        var s = servers[sid], cell = document.getElementById('res-' + sid);
+        if(!cell) return;
+        cell.innerHTML = s.up
+          ? ('<i class="bi bi-cpu"></i> ' + s.cpu + '% · ' + s.ram_mb + ' MB'
+             + (s.uptime ? ' · <span title="Uptime"><i class="bi bi-clock"></i> ' + _fmtUptimeShort(s.uptime) + '</span>' : ''))
+          : '<span class="text-secondary">—</span>';
+      });
+    }).catch(function(){});
+}
+refreshMetrics();
+pollWhenVisible(refreshMetrics, 10000);
 // Instant reaction when another user adds/removes a server (poll above is the fallback).
 if (window.onServersChanged) onServersChanged(refreshStatus);
 

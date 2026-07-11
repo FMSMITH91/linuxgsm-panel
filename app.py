@@ -520,6 +520,23 @@ def _query_server_slots(app, sid):
         return sid, (None, None, None)
 
 
+def _query_server_metrics(app, sid):
+    """Worker for the dashboard metrics poll: (sid, metrics_dict|None, remote_id) for one server in
+    its OWN app context. server_live_metrics is one cached SSH round trip that yields BOTH the whole
+    host's figures and this game's share. Never raises."""
+    try:
+        with app.app_context():
+            gs = db.session.get(GameServer, sid)
+            if gs is None or not gs.installed:
+                return sid, None, None
+            try:
+                return sid, server_live_metrics(gs.remote, gs.short_name, gs.port), gs.remote_id
+            except Exception:
+                return sid, None, gs.remote_id
+    except Exception:
+        return sid, None, None
+
+
 def _refresh_player_counts(app):
     """One pass: re-read the confident (count, max, name) for every installed server into the cache.
     The per-server queries (gamedig / console over SSH — the slow part) run in a small thread pool so
@@ -3222,8 +3239,11 @@ def register_routes(app):
         player_counts = {gs.id: _cached_player_count(gs.id) for gs in all_servers}
         player_max = {gs.id: _cached_player_max(gs.id) for gs in all_servers}
         server_names = {gs.id: _cached_player_name(gs.id) for gs in all_servers}
+        can_control = current_user.is_superadmin or bool(
+            {START_SERVER, STOP_SERVER, RESTART_SERVER} & get_user_permissions(current_user))
         return render_template("manage_servers.html", remotes=remotes,
                                all_servers=all_servers, games=load_game_list(),
+                               can_control=can_control,
                                player_counts=player_counts, player_max=player_max,
                                server_names=server_names)
 
@@ -6454,6 +6474,44 @@ def register_routes(app):
         return True, "Bootstrap started."
 
     # ── API Routes ──────────────────────────────────────────
+    @app.route("/api/dashboard/metrics")
+    @login_required
+    def api_dashboard_metrics():
+        """Live resource metrics for the dashboard / manage pages: per-server game CPU%/RAM/uptime,
+        and per-host whole-VPS CPU%/RAM%/disk%/uptime. Each server is one cached SSH sample, taken in
+        parallel; polled on a slower cadence than the status feed so it stays cheap."""
+        servers = get_user_servers(current_user)
+        ids = [gs.id for gs in servers]
+        host_name = {}
+        for gs in servers:
+            if gs.remote_id and gs.remote_id not in host_name:
+                host_name[gs.remote_id] = (gs.remote.display_name if gs.remote else "")
+        out_servers, hosts = {}, {}
+        if ids:
+            with concurrent.futures.ThreadPoolExecutor(max_workers=min(_PLAYER_POLL_WORKERS, len(ids))) as ex:
+                for sid, m, rid in ex.map(lambda s: _query_server_metrics(app, s), ids):
+                    if not m:
+                        continue
+                    out_servers[str(sid)] = {
+                        "cpu": round(m.get("game_cpu_percent") or 0, 1),
+                        "ram_mb": int(m.get("game_ram_mb") or 0),
+                        "uptime": int(m.get("game_uptime_secs") or 0),
+                        "up": bool(m.get("port_open")),
+                    }
+                    if rid is not None and str(rid) not in hosts:
+                        rt, dt = m.get("ram_total") or 0, m.get("disk_total") or 0
+                        _rem = db.session.get(RemoteServer, rid)
+                        hosts[str(rid)] = {
+                            "name": host_name.get(rid, ""),
+                            "local": bool(getattr(_rem, "is_local", False)),
+                            "cpu": round(m.get("cpu_percent") or 0, 1),
+                            "ram_pct": round(100.0 * (m.get("ram_used") or 0) / rt, 1) if rt else 0,
+                            "disk_pct": round(100.0 * (m.get("disk_used") or 0) / dt, 1) if dt else 0,
+                            "uptime": int(m.get("uptime_secs") or 0),
+                            "cores": int(m.get("cores") or 1),
+                        }
+        return jsonify({"servers": out_servers, "hosts": hosts})
+
     @app.route("/api/servers")
     @login_required
     def api_servers():

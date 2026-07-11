@@ -89,6 +89,7 @@
             <th>Connect Address</th>
             <th class="srv-sort" data-sortkey="status" style="cursor:pointer;" data-action="sortServers" data-args='["status","@self"]'>Status<span class="srv-caret"></span></th>
             <th class="srv-sort" data-sortkey="players" style="cursor:pointer;" data-action="sortServers" data-args='["players","@self"]'>Players<span class="srv-caret"></span></th>
+            <th class="d-none d-lg-table-cell">Resources</th>
             <th class="d-none d-md-table-cell srv-sort" data-sortkey="host" style="cursor:pointer;" data-action="sortServers" data-args='["host","@self"]'>Host<span class="srv-caret"></span></th>
             <th>Actions</th>
           </tr>
@@ -136,8 +137,15 @@
               {% set mx = player_max.get(gs.id) %}
               {% if pc is not none %}<i class="bi bi-people-fill text-secondary"></i> {{ pc }}{% if mx %} / {{ mx }}{% endif %}{% else %}<span class="text-secondary">—</span>{% endif %}
             </td>
+            <td id="msrv-res-{{ gs.id }}" class="d-none d-lg-table-cell text-nowrap text-secondary" style="font-size:.8rem;">—</td>
             <td class="d-none d-md-table-cell">{{ gs.remote.display_name if gs.remote else '—' }}</td>
             <td class="text-nowrap">
+              {% if can_control %}
+              {% set powerable = gs.installed and gs.status not in ('installing', 'configuring') %}
+              <button class="btn btn-sm btn-outline-success msrv-ctl" title="Start" aria-label="Start {{ gs.name }}" data-action="msrvAction" data-args='[{{ gs.id }}, "start", "@self"]'{% if not powerable %} disabled{% endif %}><i class="bi bi-play-fill"></i></button>
+              <button class="btn btn-sm btn-outline-warning msrv-ctl" title="Restart" aria-label="Restart {{ gs.name }}" data-action="msrvAction" data-args='[{{ gs.id }}, "restart", "@self"]'{% if not powerable %} disabled{% endif %}><i class="bi bi-arrow-repeat"></i></button>
+              <button class="btn btn-sm btn-outline-danger msrv-ctl" title="Stop" aria-label="Stop {{ gs.name }}" data-action="msrvAction" data-args='[{{ gs.id }}, "stop", "@self"]'{% if not powerable %} disabled{% endif %}><i class="bi bi-stop-fill"></i></button>
+              {% endif %}
               <a id="console-btn-{{ gs.id }}" data-href="{{ url_for('server_detail', server_id=gs.id) }}"
                  {% if gs.installed %}href="{{ url_for('server_detail', server_id=gs.id) }}" class="btn btn-sm btn-outline-secondary" title="Console, commands, restart"{% else %}class="btn btn-sm btn-outline-secondary disabled" tabindex="-1" aria-disabled="true" title="Available once the server finishes installing"{% endif %}>
                 <i class="bi bi-terminal-fill"></i> <span class="d-none d-md-inline">Console</span>
@@ -158,7 +166,7 @@
           </tr>
           <tr class="install-progress-row" id="install-row-{{ gs.id }}"
               data-installing="{{ '1' if in_progress else '0' }}"{% if not in_progress %} style="display:none;"{% endif %}>
-            <td colspan="7" class="py-2" style="background:rgba(88,166,255,.05);">
+            <td colspan="8" class="py-2" style="background:rgba(88,166,255,.05);">
               <div class="d-flex justify-content-between small mb-1">
                 <span class="text-info"><i class="bi bi-gear-fill"></i> <span id="inst-step-{{ gs.id }}">Preparing…</span></span>
                 <span class="text-secondary" id="inst-pct-{{ gs.id }}"></span>
@@ -357,6 +365,22 @@ function doUninstall(id, name, btn){
     .catch(function(){ btn.disabled = false; btn.innerHTML = orig; setRowDisabled(false); if (window.toast) toast('Uninstall request failed', 'danger'); });
 }
 
+// Power controls (start/stop/restart) for a row — POST the action, toast the result, then refresh
+// the live cells. Mirrors the dashboard's doAction, but refreshes via this page's reconcile poll.
+function msrvAction(id, action, btn){
+  var orig = btn.innerHTML;
+  btn.disabled = true; btn.innerHTML = '<span class="spinner-border spinner-border-sm"></span>';
+  fetch(MOUNT + '/api/server/' + id + '/action', {method:'POST', headers:{'Content-Type':'application/json'},
+    body: JSON.stringify({action: action})})
+    .then(function(r){ return r.json(); })
+    .then(function(d){
+      if(window.toast) toast(d.message || (d.success ? ('Server ' + action + ' issued') : 'Action failed'), d.success ? 'success' : 'danger');
+      setTimeout(reconcileServerList, 1500);
+    })
+    .catch(function(){ if(window.toast) toast('Action failed', 'danger'); })
+    .finally(function(){ btn.disabled = false; btn.innerHTML = orig; });
+}
+
 // ── Live sync: reflect servers other users add/remove ──────────────────────
 // Removed servers are dropped in place (no reload). Added servers need server-rendered markup, so
 // those reload — held off while the user is mid-way through the install form (so we don't wipe
@@ -410,6 +434,31 @@ function reconcileServerList() {
 }
 pollWhenVisible(reconcileServerList, 8000);
 if (window.onServersChanged) onServersChanged(reconcileServerList);
+
+// Live per-server resources (CPU/RAM/uptime) in the Resources column — a slower, heavier poll (an
+// SSH sample per server) than the status reconcile above.
+function _fmtUptimeShort(s){
+  s = Math.max(0, s|0);
+  var d = Math.floor(s/86400), h = Math.floor((s%86400)/3600), m = Math.floor((s%3600)/60);
+  return d ? (d+'d '+h+'h') : (h ? (h+'h '+m+'m') : (m+'m'));
+}
+function refreshMsrvMetrics(){
+  fetch(MOUNT + '/api/dashboard/metrics').then(function(r){ return r.ok ? r.json() : null; })
+    .then(function(d){
+      if(!d) return;
+      var servers = d.servers || {};
+      Object.keys(servers).forEach(function(sid){
+        var s = servers[sid], cell = document.getElementById('msrv-res-' + sid);
+        if(!cell) return;
+        cell.innerHTML = s.up
+          ? ('<i class="bi bi-cpu"></i> ' + s.cpu + '% · ' + s.ram_mb + ' MB'
+             + (s.uptime ? ' · <span title="Uptime"><i class="bi bi-clock"></i> ' + _fmtUptimeShort(s.uptime) + '</span>' : ''))
+          : '<span class="text-secondary">—</span>';
+      });
+    }).catch(function(){});
+}
+refreshMsrvMetrics();
+pollWhenVisible(refreshMsrvMetrics, 10000);
 
 // After the servers table is swapped in place (AJAX install), re-arm the install-progress pollers
 // for any new "installing" rows and adopt the new server set, so the live-sync poller above doesn't
