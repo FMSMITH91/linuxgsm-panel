@@ -398,11 +398,11 @@ function renderPlayers(d){
       var da='data-name="'+escapeHtml(p.name)+'" data-steamid="'+escapeHtml(sid)+'" data-num="'+escapeHtml(num)+'"';
       if(_CAN_KICK && caps.kick) acts+='<button class="btn btn-sm btn-outline-warning py-0 px-1 me-1" '+da+'' + _da('moderatePlayer', ['@self', 'kick']) + '>Kick</button>';
       if(_CAN_BAN && caps.ban){
-        // Valve bans go by SteamID; a bot / unresolved player has none, so its Ban is disabled.
-        var noBan=(engine==='valve' && !sid);
+        // gamedig lists carry no SteamID (valve) / slot (idTech3), but the backend resolves it from
+        // the console when Ban is clicked — so keep the button enabled. A player who genuinely can't
+        // be resolved (a bot, or someone who just left) comes back as a clear error toast.
         acts+='<button class="btn btn-sm btn-outline-danger py-0 px-1" '+da
-          +(noBan?' disabled title="No SteamID for this player — can\'t ban by ID"':'')
-          +'' + _da('moderatePlayer', ['@self', 'ban']) + '>Ban</button>';
+          + _da('moderatePlayer', ['@self', 'ban']) + '>Ban</button>';
       }
     }
     return '<tr><td class="text-truncate" style="max-width:260px;">'+escapeHtml(p.name)+'</td>'

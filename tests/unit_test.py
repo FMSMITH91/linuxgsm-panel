@@ -1730,6 +1730,15 @@ finally:
     sm.run_command = _orig_rc
     sm._gamedig_host_cache.clear()
 
+# _tmux_live_socket_sh: LinuxGSM leaves a stale <selfname>-<random> socket behind on every restart,
+# so the console targeting must pick the socket with a LIVE session (via has-session) rather than the
+# first match — otherwise send-keys/capture-pane hit a dead socket and kick/ban/say/status all no-op.
+_snip = sm._tmux_live_socket_sh("gmodserver")
+check("tmux-socket: verifies a live session instead of grabbing the first socket",
+      "has-session -t gmodserver" in _snip and "grep -m1" not in _snip)
+check("tmux-socket: still signals NO_SESSION when nothing is live",
+      "NO_SESSION" in _snip and "exit 3" in _snip)
+
 # player_list: gamedig is PRIMARY (no console spam). The console is a backup used ONLY when the
 # caller explicitly passes allow_console=True (a user action) — the automatic path (default) never
 # touches the console: it returns None ('unknown') so the UI shows a GSLT hint instead of querying.

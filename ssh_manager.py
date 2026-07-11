@@ -539,6 +539,20 @@ def set_game_priority_bulk(server, users, nice=GAME_PRIORITY_NICE):
         _log.debug("set_game_priority_bulk failed (non-fatal)", exc_info=True)
 
 
+def _tmux_live_socket_sh(selfname):
+    """Shell that sets $SOCK to the tmux socket holding a LIVE `<selfname>` session. LinuxGSM makes a
+    fresh `<selfname>-<random>` socket on every (re)start and the dead ones linger, so picking the
+    first match blindly can land on a STALE socket — then send-keys/capture-pane silently no-op,
+    which breaks console reads AND kick/ban/say for any server that has ever restarted. Iterate the
+    matches and take the one with a live session; emit NO_SESSION + exit 3 when none is live."""
+    return (
+        'D=/tmp/tmux-$(id -u); SOCK=""; '
+        f'for s in $(ls -1 "$D" 2>/dev/null | grep "^{selfname}-"); do '
+        f'tmux -L "$s" has-session -t {selfname} 2>/dev/null && {{ SOCK="$s"; break; }}; done; '
+        '[ -z "$SOCK" ] && { echo NO_SESSION; exit 3; }; '
+    )
+
+
 def send_console_command(server, user, command, timeout=20, selfname=None):
     """Inject a command into a LinuxGSM instance's live console.
 
@@ -548,12 +562,7 @@ def send_console_command(server, user, command, timeout=20, selfname=None):
     that don't expose LinuxGSM's own `send` subcommand. Returns rc 3 with
     NO_SESSION when the server isn't running (no tmux session to send to)."""
     selfname = selfname or user
-    inner = (
-        'D=/tmp/tmux-$(id -u); '
-        f"SOCK=$(ls -1 \"$D\" 2>/dev/null | grep -m1 '^{selfname}-'); "
-        '[ -z "$SOCK" ] && { echo NO_SESSION; exit 3; }; '
-        f'tmux -L "$SOCK" send-keys -t {selfname} {_quote(command)} Enter'
-    )
+    inner = _tmux_live_socket_sh(selfname) + f'tmux -L "$SOCK" send-keys -t {selfname} {_quote(command)} Enter'
     cmd = f"sudo -u {user} bash -c {_quote(inner)}"
     return run_command(server, cmd, timeout=timeout, sudo=False)
 
@@ -1580,12 +1589,7 @@ def capture_console(server, user, selfname=None, lines=180):
     """Read-only snapshot of the last `lines` of a LinuxGSM instance's live tmux console. Used to
     read a `status`/`list` reply back. rc 3 + NO_SESSION when the server isn't running."""
     selfname = selfname or user
-    inner = (
-        'D=/tmp/tmux-$(id -u); '
-        f"SOCK=$(ls -1 \"$D\" 2>/dev/null | grep -m1 '^{selfname}-'); "
-        '[ -z "$SOCK" ] && { echo NO_SESSION; exit 3; }; '
-        f'tmux -L "$SOCK" capture-pane -p -t {selfname} -S -{int(lines)}'
-    )
+    inner = _tmux_live_socket_sh(selfname) + f'tmux -L "$SOCK" capture-pane -p -t {selfname} -S -{int(lines)}'
     cmd = f"sudo -u {user} bash -c {_quote(inner)}"
     return run_command(server, cmd, timeout=15, sudo=False)
 
