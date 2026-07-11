@@ -618,7 +618,7 @@ def _player_count_watch(app):
 
 _METRIC_SAMPLE_SECONDS = 60
 _METRIC_RETENTION_DAYS = 14
-_last_sample_prune = 0.0
+_last_sample_prune = [0.0]   # 1-element holder so _prune_metric_samples updates it without `global`
 
 
 def _record_metric_samples(app):
@@ -653,10 +653,9 @@ def _record_metric_samples(app):
 
 def _prune_metric_samples(app):
     """Drop samples older than the retention window — at most every 30 min so it isn't per-pass churn."""
-    global _last_sample_prune
-    if time.time() - _last_sample_prune < 1800:
+    if time.time() - _last_sample_prune[0] < 1800:
         return
-    _last_sample_prune = time.time()
+    _last_sample_prune[0] = time.time()
     with app.app_context():
         cutoff = datetime.utcnow() - timedelta(days=_METRIC_RETENTION_DAYS)
         MetricSample.query.filter(MetricSample.ts < cutoff).delete(synchronize_session=False)
