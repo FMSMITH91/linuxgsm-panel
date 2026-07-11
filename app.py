@@ -6496,7 +6496,7 @@ def register_routes(app):
                         "cpu": round(m.get("game_cpu_percent") or 0, 1),
                         "ram_mb": int(m.get("game_ram_mb") or 0),
                         "uptime": int(m.get("game_uptime_secs") or 0),
-                        "up": bool(m.get("port_open")),
+                        "up": bool(m.get("game_procs")),   # a live game process, not just a listening port
                     }
                     if rid is not None and str(rid) not in hosts:
                         rt, dt = m.get("ram_total") or 0, m.get("disk_total") or 0
@@ -6511,6 +6511,27 @@ def register_routes(app):
                             "cores": int(m.get("cores") or 1),
                         }
         return jsonify({"servers": out_servers, "hosts": hosts})
+
+    @app.route("/api/free-port")
+    @login_required
+    @permission_required(INSTALL_SERVER, MANAGE_SERVERS)
+    def api_free_port():
+        """Suggest a non-colliding port for installing <game> on <remote_id> near <desired>, so the
+        install form can show a free port up front (the install resolves one anyway). Read-only."""
+        try:
+            remote_id = int(request.args.get("remote_id") or 0)
+            desired = int(request.args.get("desired") or 0)
+        except (TypeError, ValueError):
+            return jsonify({"port": None})
+        game = re.sub(r"[^a-z0-9]", "", (request.args.get("game") or "").lower())[:40]
+        remote = db.session.get(RemoteServer, remote_id) if remote_id else None
+        if not remote or not game or not (1 <= desired <= 65535):
+            return jsonify({"port": None})
+        try:
+            port, changed = resolve_free_port(remote, remote_id, desired, game)
+        except Exception:
+            return jsonify({"port": None})
+        return jsonify({"port": port, "changed": bool(changed)})
 
     @app.route("/api/servers")
     @login_required

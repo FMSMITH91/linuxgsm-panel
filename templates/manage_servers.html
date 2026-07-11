@@ -31,7 +31,7 @@
           data-ajax-after="afterServerRefresh">
       <div class="col-md-3">
         <label class="form-label" for="remote-select">Target Server</label>
-        <select name="remote_id" id="remote-select" class="form-select" required>
+        <select name="remote_id" id="remote-select" class="form-select" required data-action="suggestFreePort" data-on="change">
           <option value="">Select a server...</option>
           {% for r in remotes %}
           <option value="{{ r.id }}">{{ r.display_name }}</option>
@@ -56,6 +56,7 @@
       <div class="col-md-1">
         <label class="form-label" for="port-input">Port</label>
         <input type="number" name="port" class="form-control" id="port-input" value="27015">
+        <div class="form-text text-info" id="port-hint" style="min-height:1em;"></div>
       </div>
       <div class="col-md-2">
         <label class="form-label d-none d-md-block">&nbsp;</label>
@@ -225,6 +226,29 @@ function updatePort() {
   if (PORTS[select.value]) {
     port.value = PORTS[select.value];
   }
+  suggestFreePort();
+}
+// Once a target host + game are chosen, ask the panel for a free port near the default and bump the
+// field if the default is already taken (the install auto-resolves too — this just shows it up front).
+function suggestFreePort() {
+  var game = (document.getElementById('game-type-select') || {}).value;
+  var remote = (document.getElementById('remote-select') || {}).value;
+  var portEl = document.getElementById('port-input');
+  var hint = document.getElementById('port-hint');
+  if (hint) hint.textContent = '';
+  if (!game || !remote || !portEl) return;
+  var desired = portEl.value || PORTS[game] || 27015;
+  fetch(MOUNT + '/api/free-port?remote_id=' + encodeURIComponent(remote)
+        + '&game=' + encodeURIComponent(game) + '&desired=' + encodeURIComponent(desired))
+    .then(function(r){ return r.ok ? r.json() : null; })
+    .then(function(d){
+      if (!d || !d.port || !hint) return;
+      if (d.changed) {
+        portEl.value = d.port;
+        hint.innerHTML = '<i class="bi bi-info-circle"></i> Port ' + desired + ' is in use — using free port ' + d.port + '.';
+      }
+    })
+    .catch(function(){});
 }
 
 // Live per-server install progress (step-by-step, mirrors the VPS bootstrap).
