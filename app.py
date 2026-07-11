@@ -362,6 +362,68 @@ def _server_players_confident(gs):
     return _server_slots(gs)[0]
 
 
+# Source (srcds) instances bind a SourceTV port and a client port besides the game port, and LinuxGSM
+# starts them with `-strictportbind`, which makes srcds QUIT if ANY of those is already taken. So a
+# 2nd Source server on one host must de-conflict all of them — de-conflicting only the game port (as
+# resolve_free_port does) still leaves SourceTV/client at their shared defaults (27020/27005) and the
+# second server dies with "Port 27020 was unavailable". These keys live in the LinuxGSM config.
+_SOURCE_AUX_PORT_KEYS = ("clientport", "sourcetvport")
+
+
+def _dedupe_aux_ports(have, occupied):
+    """Pure port picker. `have` = {config_key: current_port_int}; `occupied` = ports already in use
+    on the host. Return {config_key: new_port} ONLY for keys whose current port collides and must
+    move — each is bumped to the next free port scanning upward, reserving it so two keys can't land
+    on the same port. Free ports keep their value (and are reserved) and are omitted from the result.
+    Deterministic (iterates `have` in insertion order) so it can be tested directly."""
+    updates = {}
+    occ = set(occupied)
+    for key, p in have.items():
+        if p in occ:
+            np = p + 1
+            while np in occ and np <= 65535:
+                np += 1
+            if np > 65535:
+                continue                 # nothing free above it — leave as-is rather than pick junk
+            updates[key] = np
+            occ.add(np)
+        else:
+            occ.add(p)
+    return updates
+
+
+def _resolve_source_aux_ports(remote, remote_id, short_name, lgsm_name, main_port):
+    """Config updates that move THIS instance's SourceTV/client ports off any already taken on the
+    host, so a 2nd Source server can start under -strictportbind. Reads the instance's effective
+    clientport/sourcetvport (absent/blank => not a Source game => returns {}); the 'occupied' set is
+    the host's live listening ports, every panel server's reserved game-port block, this instance's
+    own game port, and every OTHER valve server's configured aux ports (authoritative even when that
+    sibling is stopped and so not listening). Best-effort — returns {} on any read failure."""
+    try:
+        cur = lgsm_get_values(remote, short_name, lgsm_name, _SOURCE_AUX_PORT_KEYS)
+    except Exception:
+        return {}
+    have = {k: int(str(cur.get(k, "")).strip())
+            for k in _SOURCE_AUX_PORT_KEYS if str(cur.get(k, "")).strip().isdigit()}
+    if not have:
+        return {}                        # game has no SourceTV/client ports — nothing to do
+    occupied = set(_remote_listening_ports(remote))
+    occupied.add(int(main_port))
+    for e in GameServer.query.filter_by(remote_id=remote_id).all():
+        for k in range(_port_span(e.game_type)):
+            occupied.add(e.port + k)
+        if e.short_name == short_name or sm_game_engine(e.game_type) != "valve":
+            continue
+        try:
+            sib = lgsm_get_values(remote, e.short_name, e.lgsm_name, _SOURCE_AUX_PORT_KEYS)
+            for v in sib.values():
+                if str(v).strip().isdigit():
+                    occupied.add(int(str(v).strip()))
+        except Exception:
+            pass
+    return {k: str(v) for k, v in _dedupe_aux_ports(have, occupied).items()}
+
+
 def _host_idle_state(remote):
     """'idle' (no players on any game server, confidently), 'busy' (someone is connected), or
     'unknown' (at least one server couldn't be read). The reboot-when-empty poller only acts on
@@ -3378,6 +3440,16 @@ def register_routes(app):
                     # it back via `details` and opens it, instead of overwriting with the default.
                     try:
                         lgsm_write_config(remote, short_name, lgsm_name, {"port": final_port})
+                    except Exception:
+                        _log.debug("_run: ignored non-fatal error", exc_info=True)
+                    # Source games also bind a SourceTV + client port; if a sibling Source server
+                    # already holds the defaults (27020/27005), -strictportbind makes this one QUIT
+                    # on start. Move ours to free ports before the first start so it can come up.
+                    try:
+                        aux = _resolve_source_aux_ports(remote, remote_id, short_name, lgsm_name, final_port)
+                        if aux:
+                            lgsm_write_config(remote, short_name, lgsm_name, aux)
+                            _log.info("install %s: reassigned Source aux ports %s", short_name, aux)
                     except Exception:
                         _log.debug("_run: ignored non-fatal error", exc_info=True)
                     try:

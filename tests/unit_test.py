@@ -849,6 +849,23 @@ eq("port-pack: 2 valheim servers keep a 3-port block each",
    _pack(["valheim", "valheim"], {"valheim": 2456}), [2456, 2459])
 eq("port-block: a live listening port is skipped",
    _first_free_block(28960, 1, {28960, 28961}), 28962)
+
+# _dedupe_aux_ports: a 2nd Source server must move its SourceTV/client ports off any already taken,
+# so -strictportbind doesn't quit it. Free ports keep their value (and are omitted from the result).
+from app import _dedupe_aux_ports
+eq("aux-ports: both free -> no changes",
+   _dedupe_aux_ports({"clientport": 27005, "sourcetvport": 27020}, {27015}), {})
+eq("aux-ports: both taken -> each bumped to the next free port",
+   _dedupe_aux_ports({"clientport": 27005, "sourcetvport": 27020}, {27005, 27015, 27020}),
+   {"clientport": 27006, "sourcetvport": 27021})
+eq("aux-ports: only the colliding key moves",
+   _dedupe_aux_ports({"clientport": 27005, "sourcetvport": 27020}, {27020}),
+   {"sourcetvport": 27021})
+eq("aux-ports: scans past a run of taken ports",
+   _dedupe_aux_ports({"sourcetvport": 27020}, {27020, 27021, 27022}), {"sourcetvport": 27023})
+eq("aux-ports: two keys never land on the same freed port",
+   _dedupe_aux_ports({"clientport": 27020, "sourcetvport": 27020}, {27020}),
+   {"clientport": 27021, "sourcetvport": 27022})
 eq("port-block: multi-port block steps past a partial overlap",
    _first_free_block(28015, 2, {28016}), 28017)
 
