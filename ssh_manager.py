@@ -1665,25 +1665,36 @@ def console_player_list(server, user, game_type, selfname=None):
 _HOSTNAME_RE = re.compile(r"^\s*(?:hostname|sv_hostname)\s*:?\s*(.+?)\s*$", re.MULTILINE | re.IGNORECASE)
 
 
-def console_server_name(server, user, game_type, selfname=None):
-    """The server's advertised in-game name from its own console `status` (the `hostname:` line) — a
-    fallback for the name shown in the UI when gamedig can't query the server (e.g. it has no GSLT and
-    doesn't answer A2S). valve/idTech3 engines only; None otherwise or on any failure. Never raises."""
-    if game_engine(game_type) not in ("valve", "idtech3"):
-        return None
+def console_status(server, user, game_type, selfname=None):
+    """One console `status`/`list` capture → (players, name): the parsed player list AND the server's
+    advertised in-game name (the valve/idTech3 `hostname:` line), from a SINGLE round-trip. Used by
+    the background poller so a server gamedig can't query (e.g. no GSLT) isn't hit with two separate
+    `status` sends per pass — which would spam the very console an admin is watching. Returns
+    ([], None) for a non-console game or on failure. Never raises."""
+    eng = game_engine(game_type)
+    if not eng:
+        return [], None
+    cmd = "list" if eng == "minecraft" else "status"
     try:
-        send_console_command(server, user, "status", timeout=12, selfname=selfname)
+        send_console_command(server, user, cmd, timeout=12, selfname=selfname)
         time.sleep(0.8)   # let the server print its reply into the pane
-        out, _, rc = capture_console(server, user, selfname=selfname, lines=60)
+        out, _, rc = capture_console(server, user, selfname=selfname, lines=180)
     except Exception:
-        return None
+        return [], None
     if rc != 0 or not out:
-        return None
-    m = _HOSTNAME_RE.search(out)
-    if not m:
-        return None
-    name = " ".join(_strip_q3_colors(m.group(1)).split())[:120]
-    return name or None
+        return [], None
+    if eng == "idtech3":
+        players = _parse_idtech3_status(out)
+    elif eng == "minecraft":
+        players = _parse_minecraft_list(out)
+    else:
+        players = _parse_valve_status(out)
+    name = None
+    if eng in ("valve", "idtech3"):
+        m = _HOSTNAME_RE.search(out)
+        if m:
+            name = " ".join(_strip_q3_colors(m.group(1)).split())[:120] or None
+    return players, name
 
 
 def _gamedig_player_list(server, user, game_type=None, port=None, query_type=None):

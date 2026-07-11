@@ -810,22 +810,24 @@ window.localizeTimes = function(root){
 };
 document.addEventListener('DOMContentLoaded', function(){ window.localizeTimes(); });
 
-// Global toast — a small notification pops bottom-right, then fades. Available on
-// every page as window.toast(message, 'success'|'danger'|'info').
+// Global toast — a notification pops at the TOP-CENTRE (hard to miss on a wide monitor, where a
+// bottom-right corner is easy to overlook), then fades. window.toast(message, 'success'|'danger'|'info').
 window.toast = function(msg, kind){
   var c = document.getElementById('toast-area');
   if(!c){ c = document.createElement('div'); c.id = 'toast-area';
-    c.style.cssText = 'position:fixed;bottom:1rem;right:1rem;z-index:11000;display:flex;flex-direction:column;gap:.5rem;max-width:420px;';
+    c.style.cssText = 'position:fixed;top:1rem;left:50%;transform:translateX(-50%);z-index:11000;'
+      + 'display:flex;flex-direction:column;align-items:center;gap:.5rem;max-width:min(92vw,520px);';
     document.body.appendChild(c); }
   var icon = kind==='success' ? 'check-circle-fill' : (kind==='danger' ? 'x-circle-fill' : 'info-circle-fill');
   var t = document.createElement('div');
   t.className = 'alert alert-' + (kind==='success'?'success':(kind==='danger'?'danger':'info')) + ' py-2 px-3 mb-0';
-  t.style.cssText = 'font-size:.85rem;box-shadow:0 4px 20px rgba(0,0,0,.5);';
+  t.style.cssText = 'font-size:.85rem;box-shadow:0 6px 24px rgba(0,0,0,.55);text-align:center;';
   t.innerHTML = '<i class="bi bi-' + icon + '"></i> ' + escapeHtml(msg);
   c.appendChild(t);
-  // Each toast owns its own timer (captured `t`), so it fades ~4s after ITS OWN creation —
-  // independent of any other toast on screen.
-  setTimeout(function(){ t.style.transition='opacity .4s'; t.style.opacity='0'; setTimeout(function(){ t.remove(); }, 400); }, 4000);
+  // Each toast owns its own timer (captured `t`). Errors linger longer so they're readable before
+  // fading; success/info clear quicker.
+  setTimeout(function(){ t.style.transition='opacity .4s'; t.style.opacity='0'; setTimeout(function(){ t.remove(); }, 400); },
+             kind==='danger' ? 7000 : 4000);
 };
 
 // Global styled confirm dialog — replaces the browser's native confirm() so confirmations stay

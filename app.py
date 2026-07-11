@@ -101,8 +101,7 @@ from ssh_manager import (
     delete_game_backup, stream_game_backup, backup_disk_info,
     mods_available, mods_installed, mods_action,
     player_count as sm_player_count, player_slots as sm_player_slots, mod_restart_decision, set_game_priority,
-    game_engine as sm_game_engine, console_player_list as sm_console_player_list,
-    console_server_name as sm_console_server_name,
+    game_engine as sm_game_engine, console_status as sm_console_status,
     get_server_status as sm_get_server_status, is_player_queryable as sm_is_player_queryable,
     player_count_via_lgsm_query as sm_player_count_via_lgsm_query,
     set_game_priority_bulk,
@@ -330,13 +329,11 @@ def _server_slots(gs):
         return cur, (mx if mx is not None else _server_max_config(gs)), gname
     try:
         if sm_game_engine(gs.game_type):
-            # Console backup — returns [] for a stopped/empty console game, so this is a real 0. Also
-            # read the advertised name from the console `status`, since a server gamedig can't query
-            # (e.g. no GSLT) still reports its hostname there.
-            n = len(sm_console_player_list(gs.remote, gs.short_name, gs.game_type,
-                                           selfname=gs.lgsm_name) or [])
-            name = sm_console_server_name(gs.remote, gs.short_name, gs.game_type, selfname=gs.lgsm_name)
-            return n, _server_max_config(gs), name
+            # Console backup — ONE `status` gives BOTH the count (a real 0 for a stopped/empty console
+            # game) and the advertised name, so a server gamedig can't query (e.g. no GSLT) isn't hit
+            # with two separate console sends per poll.
+            players, name = sm_console_status(gs.remote, gs.short_name, gs.game_type, selfname=gs.lgsm_name)
+            return len(players or []), _server_max_config(gs), name
     except Exception:
         return None, _server_max_config(gs), None
     # Not in the panel's gamedig map and not a console engine — ask LinuxGSM's OWN query settings
@@ -3189,9 +3186,21 @@ def register_routes(app):
             # Port-conflict handling: auto-pick the next free port if taken.
             final_port, port_changed = resolve_free_port(remote, remote_id, desired_port, game_type)
 
-            # Reject a duplicate instance name on the same remote.
-            if GameServer.query.filter_by(short_name=short_name, remote_id=remote_id).first():
-                return _form_err(f"A server named '{short_name}' already exists on this remote.", "manage_servers")
+            # Name conflict: if the user TYPED the name it's a real conflict; if they left it blank
+            # (using the "{game}server" default), auto-suffix a number so leaving it blank always
+            # works — the same courtesy the port gets above.
+            def _name_taken(n):
+                return GameServer.query.filter_by(short_name=n, remote_id=remote_id).first() is not None
+            name_changed = False
+            if _name_taken(short_name):
+                if server_name:
+                    return _form_err(f"A server named '{short_name}' already exists on this remote — "
+                                     f"pick a different name.", "manage_servers")
+                _n = 2
+                while _name_taken(f"{lgsm_name}{_n}") and _n < 100:
+                    _n += 1
+                short_name = f"{lgsm_name}{_n}"
+                name_changed = True
 
             # Create the DB row up-front in the "installing" state, then run the WHOLE
             # install in a background job with live step-by-step progress (polled by the
@@ -3222,7 +3231,8 @@ def register_routes(app):
         log_action(current_user, "install_server", target=gs.name,
                    detail=f"Type: {game_type}, port: {final_port}")
         port_note = (f" (port {desired_port} was busy — using {final_port})" if port_changed else "")
-        return _form_ok(f"Installing {short_name} on port {final_port}{port_note}. "
+        name_note = (f" (the default name was taken — using '{short_name}')" if name_changed else "")
+        return _form_ok(f"Installing {short_name} on port {final_port}{port_note}{name_note}. "
                         f"Progress is shown live below.", "manage_servers")
 
     def _run_install_job(gs_id, remote_id, short_name, game_type, lgsm_name, final_port):
