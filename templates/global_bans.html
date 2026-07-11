@@ -1,0 +1,85 @@
+{% extends "base.html" %}
+{% block title %}Global Bans{% endblock %}
+{% block content %}
+
+<div class="d-flex justify-content-between align-items-center mb-4 flex-wrap gap-2">
+  <h1 class="page-title mb-0"><i class="bi bi-slash-circle"></i> Global Bans</h1>
+  <form method="POST" action="{{ url_for('global_bans_sync') }}" class="mb-0">
+    <button class="btn btn-outline-secondary btn-sm"
+            title="Re-apply every ban to all running Source servers — use after adding a new server or if a ban list was reset">
+      <i class="bi bi-arrow-repeat"></i> Sync to all servers</button>
+  </form>
+</div>
+
+<div class="card mb-3">
+  <div class="card-body">
+    <p class="small text-secondary mb-3">
+      A SteamID added here is banned on <strong>every Source / GoldSrc server</strong> across all your hosts —
+      ban a cheater once and they're gone everywhere. It's applied through each server's own console
+      (<code>banid</code> + <code>writeid</code>), so it uses the game's native ban list and survives restarts.
+      Currently propagates to <strong>{{ valve_count }}</strong> Source server{{ '' if valve_count == 1 else 's' }}.
+      <span class="d-block mt-1 text-secondary">Other engines (Minecraft bans by name, Call of Duty by slot) don't use SteamIDs, so they aren't covered here.</span>
+    </p>
+    <form method="POST" action="{{ url_for('global_bans_add') }}" class="row g-2 align-items-end">
+      <div class="col-md-4">
+        <label class="form-label small mb-1" for="gb-sid">SteamID</label>
+        <input type="text" class="form-control form-control-sm" id="gb-sid" name="steamid" required
+               placeholder="STEAM_0:1:12345 or [U:1:24691]" autocomplete="off">
+      </div>
+      <div class="col-md-3">
+        <label class="form-label small mb-1" for="gb-name">Player name <span class="text-secondary">(optional)</span></label>
+        <input type="text" class="form-control form-control-sm" id="gb-name" name="player_name" maxlength="80" autocomplete="off">
+      </div>
+      <div class="col-md-3">
+        <label class="form-label small mb-1" for="gb-reason">Reason <span class="text-secondary">(optional)</span></label>
+        <input type="text" class="form-control form-control-sm" id="gb-reason" name="reason" maxlength="200" autocomplete="off">
+      </div>
+      <div class="col-md-2">
+        <button class="btn btn-danger btn-sm w-100"><i class="bi bi-slash-circle"></i> Ban everywhere</button>
+      </div>
+    </form>
+  </div>
+</div>
+
+<div class="card">
+  <div class="card-header"><i class="bi bi-list-ul"></i> Banned SteamIDs ({{ bans|length }})</div>
+  <div class="card-body p-0">
+    {% if bans %}
+    <div class="table-responsive">
+      <table class="table table-hover mb-0">
+        <thead>
+          <tr>
+            <th>SteamID</th>
+            <th>Player</th>
+            <th>Reason</th>
+            <th class="d-none d-md-table-cell">Added by</th>
+            <th class="d-none d-md-table-cell">When</th>
+            <th class="text-end">Action</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for b in bans %}
+          <tr>
+            <td><code class="text-info">{{ b.steamid }}</code></td>
+            <td>{{ b.player_name or '—' }}</td>
+            <td class="small">{{ b.reason or '' }}</td>
+            <td class="d-none d-md-table-cell small text-secondary">{{ b.created_by }}</td>
+            <td class="d-none d-md-table-cell small text-secondary">{{ b.created_at.strftime('%Y-%m-%d') if b.created_at else '' }}</td>
+            <td class="text-end text-nowrap">
+              <form method="POST" action="{{ url_for('global_bans_delete', ban_id=b.id) }}" class="d-inline mb-0">
+                <button class="btn btn-outline-secondary btn-sm" title="Remove from the list and unban on every server">
+                  <i class="bi bi-x-lg"></i> Remove</button>
+              </form>
+            </td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+    {% else %}
+    <div class="text-center text-secondary py-4">No global bans yet. Add a SteamID above to ban it on every Source server.</div>
+    {% endif %}
+  </div>
+</div>
+
+{% endblock %}

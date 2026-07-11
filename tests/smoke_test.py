@@ -895,6 +895,29 @@ try:
             _r.is_local = _was_local
             db.session.commit()
 
+    # ── Global ban list endpoints (fan-out to servers stubbed, so no SSH) ──────────────────────────
+    with app.app_context():
+        from models import GlobalBan
+        _am = sys.modules["app"]
+        _saved_fan = _am._fan_out_global_ban
+        _am._fan_out_global_ban = lambda a, sid, unban=False: None
+        try:
+            _gc = client_as(admin_id)
+            _r1 = _gc.post("/global-bans/add", data={"steamid": "STEAM_0:1:99", "reason": "cheating"})
+            check("global-ban: add returns a redirect", _r1.status_code in (302, 303))
+            _gb = GlobalBan.query.filter_by(steamid="STEAM_0:1:99").first()
+            check("global-ban: add persists the SteamID + reason", _gb is not None and _gb.reason == "cheating")
+            _cnt = GlobalBan.query.count()
+            _gc.post("/global-bans/add", data={"steamid": "not-a-steamid"})
+            check("global-ban: an invalid SteamID is rejected (not stored)", GlobalBan.query.count() == _cnt)
+            _pg = _gc.get("/global-bans")
+            check("global-ban: page lists the ban", _pg.status_code == 200 and b"STEAM_0:1:99" in _pg.data)
+            _del = _gc.post("/global-bans/%d/delete" % _gb.id)
+            check("global-ban: delete removes it",
+                  _del.status_code in (302, 303) and db.session.get(GlobalBan, _gb.id) is None)
+        finally:
+            _am._fan_out_global_ban = _saved_fan
+
 finally:
     passed = sum(1 for ok, _, _ in results if ok)
     for ok, name, detail in results:

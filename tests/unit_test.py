@@ -1970,6 +1970,21 @@ try:
 finally:
     sm.run_command = _orig_rc
 
+# Global ban: console_steamid_ban builds the right native ban/unban command from a VALIDATED SteamID,
+# and refuses junk before anything reaches the console (send_console_command is stubbed to record it).
+_gb_cmds = []
+_orig_scc = sm.send_console_command
+try:
+    sm.send_console_command = lambda server, user, command, timeout=20, selfname=None: (_gb_cmds.append(command), ("", "", 0))[1]
+    _ok, _reason = sm.console_steamid_ban(object(), "u", "csgoserver", "STEAM_0:1:5")
+    check("global-ban: ban builds 'banid 0 <id>; writeid'", _ok and _gb_cmds[-1] == "banid 0 STEAM_0:1:5; writeid")
+    sm.console_steamid_ban(object(), "u", "csgoserver", "[U:1:11]", unban=True)
+    check("global-ban: unban builds 'removeid <id>; writeid'", _gb_cmds[-1] == "removeid [U:1:11]; writeid")
+    check("global-ban: an invalid SteamID is rejected before the console",
+          sm.console_steamid_ban(object(), "u", "s", "garbage; rm -rf") == (False, "invalid"))
+finally:
+    sm.send_console_command = _orig_scc
+
 # The REMOTE ignoreip drop-in (pushed to remotes over SSH) is built from the same validated entries.
 _dropin = sm._f2b_dropin_ignoreip_body(["9.9.9.9", "10.0.0.0/8", "bad; rm -rf /"])
 check("remote-f2b: drop-in is a [DEFAULT] ignoreip block including localhost",

@@ -84,14 +84,14 @@ from config import (
 import notifications
 from models import (
     AuditLog, GameServer, Group, RemoteServer, SetupState, User, db, init_db,
-    CustomCommand, CUSTOM_ARG_DEFAULT_PATTERN, CUSTOM_ARG_PLACEHOLDER,
+    CustomCommand, CUSTOM_ARG_DEFAULT_PATTERN, CUSTOM_ARG_PLACEHOLDER, GlobalBan,
 )
 from ssh_manager import (
     close_connection, run_command, ssh_test_connection,
     get_server_status, run_as_game_user, send_console_command,
     list_server_commands, server_live_metrics, remote_public_ip,
     discover_linuxgsm_servers, player_list, moderation_caps, moderate, is_player_queryable,
-    game_engine,
+    game_engine, console_steamid_ban, _sanitize_steamid,
     GAMEDIG_TYPE as GAMEDIG_TYPE_MAP,
     remote_live_metrics, host_specs, pro_status, pro_attach,
     pro_service, pro_detach, set_autostart, install_game_cron, set_daily_restart,
@@ -918,6 +918,37 @@ def _apply_whitelist_everywhere(app, unban_ip=None):
         except Exception:
             _log.debug("whitelist: local unban-everywhere failed", exc_info=True)
     _apply_whitelist_to_remotes(app, unban_ip=unban_ip)
+
+
+# ── Global ban list: one SteamID banned on every Source/GoldSrc server across every host ─────────
+def _valve_game_servers():
+    """Every installed valve-engine (Source/GoldSrc) game server — the only engine with SteamID bans."""
+    return [gs for gs in GameServer.query.filter_by(installed=True).all()
+            if game_engine(gs.game_type) == "valve"]
+
+
+def _fan_out_global_ban(app, steamid, unban=False):
+    """Apply (or lift) one SteamID on every running valve server across all hosts. Best-effort and
+    backgrounded — a stopped server picks the ban up from writeid/banned_user.cfg or the next Sync."""
+    with app.app_context():
+        for gs in _valve_game_servers():
+            try:
+                console_steamid_ban(gs.remote, gs.short_name, gs.lgsm_name, steamid, unban=unban)
+            except Exception:
+                _log.debug("global-ban fan-out failed for %s", getattr(gs, "short_name", "?"), exc_info=True)
+
+
+def _sync_global_bans(app):
+    """Re-apply the WHOLE global ban list to every running valve server (covers newly added servers
+    and any whose native ban list was reset). Best-effort, backgrounded."""
+    with app.app_context():
+        bans = [b.steamid for b in GlobalBan.query.all()]
+        for gs in _valve_game_servers():
+            for sid in bans:
+                try:
+                    console_steamid_ban(gs.remote, gs.short_name, gs.lgsm_name, sid)
+                except Exception:
+                    _log.debug("global-ban sync failed for %s", getattr(gs, "short_name", "?"), exc_info=True)
 
 
 def _autoblock_reconcile(remote):
@@ -3976,6 +4007,57 @@ def register_routes(app):
             except (TypeError, ValueError):
                 continue
         cmd.groups = Group.query.filter(Group.id.in_(list(ids))).all() if ids else []
+
+    @app.route("/global-bans")
+    @login_required
+    @permission_required(SUPER_ADMIN)
+    def global_bans_page():
+        bans = GlobalBan.query.order_by(GlobalBan.created_at.desc()).all()
+        return render_template("global_bans.html", bans=bans,
+                               valve_count=len(_valve_game_servers()))
+
+    @app.route("/global-bans/add", methods=["POST"])
+    @login_required
+    @permission_required(SUPER_ADMIN)
+    def global_bans_add():
+        sid = _sanitize_steamid(request.form.get("steamid", ""))
+        if not sid:
+            flash("Enter a valid SteamID — e.g. STEAM_0:1:12345 or [U:1:24691].", "danger")
+            return redirect(url_for("global_bans_page"))
+        if GlobalBan.query.filter_by(steamid=sid).first():
+            flash("%s is already on the global ban list." % sid, "info")
+            return redirect(url_for("global_bans_page"))
+        gb = GlobalBan(steamid=sid, player_name=request.form.get("player_name", "").strip()[:80],
+                       reason=request.form.get("reason", "").strip()[:200],
+                       created_by=current_user.username)
+        db.session.add(gb)
+        db.session.commit()
+        log_action(current_user, "global_ban_add", target=sid, detail=gb.reason)
+        threading.Thread(target=lambda: _fan_out_global_ban(app, sid, unban=False), daemon=True).start()
+        flash("Banned %s across all Source servers." % sid, "success")
+        return redirect(url_for("global_bans_page"))
+
+    @app.route("/global-bans/<int:ban_id>/delete", methods=["POST"])
+    @login_required
+    @permission_required(SUPER_ADMIN)
+    def global_bans_delete(ban_id):
+        gb = GlobalBan.query.get_or_404(ban_id)
+        sid = gb.steamid
+        db.session.delete(gb)
+        db.session.commit()
+        log_action(current_user, "global_ban_remove", target=sid)
+        threading.Thread(target=lambda: _fan_out_global_ban(app, sid, unban=True), daemon=True).start()
+        flash("Removed %s — unbanning it on all Source servers." % sid, "success")
+        return redirect(url_for("global_bans_page"))
+
+    @app.route("/global-bans/sync", methods=["POST"])
+    @login_required
+    @permission_required(SUPER_ADMIN)
+    def global_bans_sync():
+        threading.Thread(target=lambda: _sync_global_bans(app), daemon=True).start()
+        log_action(current_user, "global_ban_sync", target="all Source servers")
+        flash("Re-applying every global ban to all running Source servers…", "success")
+        return redirect(url_for("global_bans_page"))
 
     @app.route("/commands")
     @login_required

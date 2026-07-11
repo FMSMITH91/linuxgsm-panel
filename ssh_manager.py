@@ -1800,6 +1800,23 @@ def moderate(server, user, game_type, action, target="", message="", selfname=No
     return (rc == 0), ("Done." if rc == 0 else "Console not reachable — is the server running?")
 
 
+def console_steamid_ban(server, user, selfname, steamid, unban=False):
+    """Ban (or unban) a SteamID on ONE Source/GoldSrc server via its console — `banid 0 <id>; writeid`
+    to ban, `removeid <id>; writeid` to lift, using the game's native persistent ban list. The
+    SteamID is re-validated to STEAM_x:y:z / [U:x:y] so nothing injectable reaches the console.
+    Only affects a RUNNING server (needs a live console). (ok, reason) where reason is a fixed word:
+    'banned' / 'unbanned' / 'invalid' / 'offline' / 'failed'."""
+    sid = _sanitize_steamid(steamid)
+    if not sid:
+        return False, "invalid"
+    cmd = ("removeid %s; writeid" % sid) if unban else ("banid 0 %s; writeid" % sid)
+    out = send_console_command(server, user, cmd, timeout=15, selfname=selfname)
+    rc = out[2] if isinstance(out, tuple) and len(out) >= 3 else 1
+    if rc == 3:
+        return False, "offline"
+    return (rc == 0), ("unbanned" if unban and rc == 0 else "banned" if rc == 0 else "failed")
+
+
 def mod_restart_decision(status, players, force=False):
     """Decide how to handle the restart a mod change needs, given the server `status`
     ('online'/'offline'/'unknown'), the current player count (int, or None when unknown),

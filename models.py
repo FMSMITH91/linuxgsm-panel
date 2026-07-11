@@ -448,6 +448,18 @@ class CustomCommand(db.Model):
         return self.argument_pattern or CUSTOM_ARG_DEFAULT_PATTERN
 
 
+class GlobalBan(db.Model):
+    """A SteamID banned across EVERY Source/GoldSrc (valve-engine) server on every host — ban a
+    cheater once and they're gone everywhere. Applied through each server's own console
+    (`banid 0 <id>; writeid`), so it uses the game's native ban list and persists across restarts."""
+    id = db.Column(db.Integer, primary_key=True)
+    steamid = db.Column(db.String(48), unique=True, nullable=False)   # canonical STEAM_x:y:z or [U:x:y]
+    player_name = db.Column(db.String(80), default="")               # optional label, for reference
+    reason = db.Column(db.String(200), default="")
+    created_by = db.Column(db.String(80), default="")
+    created_at = db.Column(db.DateTime, default=datetime.utcnow)
+
+
 class AuditLog(db.Model):
     id = db.Column(db.Integer, primary_key=True)
     user_id = db.Column(db.Integer, db.ForeignKey("user.id"), nullable=True)

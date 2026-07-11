@@ -587,6 +587,8 @@
     {% if current_user.is_superadmin %}
     <li><a href="{{ url_for('manage_commands') }}" class="{% if request.path == url_for('manage_commands') %}active{% endif %}">
       <i class="bi bi-terminal"></i> Custom Commands</a></li>
+    <li><a href="{{ url_for('global_bans_page') }}" class="{% if request.path == url_for('global_bans_page') %}active{% endif %}">
+      <i class="bi bi-slash-circle"></i> Global Bans</a></li>
     <li><a href="{{ url_for('notifications_settings') }}" class="{% if request.path == url_for('notifications_settings') %}active{% endif %}">
       <i class="bi bi-bell"></i> Notifications</a></li>
     {% endif %}
