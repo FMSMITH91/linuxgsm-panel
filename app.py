@@ -92,7 +92,7 @@ from ssh_manager import (
     get_server_status, run_as_game_user, send_console_command,
     list_server_commands, server_live_metrics, remote_public_ip,
     discover_linuxgsm_servers, player_list, moderation_caps, moderate, is_player_queryable,
-    game_engine, console_steamid_ban, ensure_persistent_bans, _sanitize_steamid,
+    game_engine, console_steamid_ban, ensure_persistent_bans, _sanitize_steamid, _resolve_from_console,
     GAMEDIG_TYPE as GAMEDIG_TYPE_MAP,
     remote_live_metrics, host_specs, pro_status, pro_attach,
     pro_service, pro_detach, set_autostart, install_game_cron, set_daily_restart,
@@ -2943,6 +2943,16 @@ def register_routes(app):
         steamid = data.get("steamid", "")
         num = data.get("num", "")
         scope = (data.get("scope") or "this").strip()
+        # A Valve ban needs the SteamID up front — to also fan it out and record a global ban. The
+        # on-screen list may be gamedig-sourced (no id), so resolve it from the console once here;
+        # otherwise the cross-server fan-out below (guarded on `steamid`) would be silently skipped.
+        if action == "ban" and game_engine(gs.game_type) == "valve" and not _sanitize_steamid(steamid):
+            try:
+                _rp = _resolve_from_console(gs.remote, gs.short_name, gs.game_type, target, gs.lgsm_name)
+                if _rp and _rp.get("steamid"):
+                    steamid = _rp["steamid"]
+            except Exception:
+                _log.debug("moderate: steamid pre-resolve failed", exc_info=True)
         try:
             ok, msg = moderate(gs.remote, gs.short_name, gs.game_type, action,
                                target=target, message=data.get("message", ""),
@@ -2975,6 +2985,17 @@ def register_routes(app):
                                detail=(steamid or target)[:120], success=True)
                     msg = (msg + " ").strip() + " Also banned on %d other server%s." % (
                         applied, "" if applied == 1 else "s")
+                # Record a superadmin's cross-server SteamID ban on the MANAGED global list, so it
+                # shows on /global-bans and re-applies to servers added later (the fan-out above only
+                # hit servers that exist right now). Managing that list is superadmin-only, so gate it.
+                if origin_eng == "valve" and current_user.is_superadmin:
+                    _sid = _sanitize_steamid(steamid)
+                    if _sid and not GlobalBan.query.filter_by(steamid=_sid).first():
+                        db.session.add(GlobalBan(steamid=_sid, player_name=(target or "")[:80],
+                                                 created_by=current_user.username))
+                        db.session.commit()
+                        log_action(current_user, "global_ban_add", target=_sid, detail="via all-servers ban")
+                        msg = (msg + " Added to the global ban list.").strip()
             return jsonify({"success": ok, "message": msg})
         except Exception:
             return jsonify({"success": False, "message": _log_and_generic("moderation failed")}), 500
