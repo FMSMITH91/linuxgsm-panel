@@ -830,11 +830,23 @@ function initChart() {
   });
 }
 
+// Self-scheduling stats poll. A live server gets a snappy refresh so the CPU/RAM graph moves;
+// an offline/unreachable one barely changes, so we poll it lazily instead of SSH-ing every few
+// seconds. Paused entirely while the tab is hidden (see the visibilitychange catch-up below).
+var _lastStatus = '';
+var _statsTimer = null;
+function _scheduleStats() {
+  if (_statsTimer) { clearTimeout(_statsTimer); }
+  var delay = (_lastStatus === 'online') ? 8000 : 20000;
+  _statsTimer = setTimeout(pollStats, delay);
+}
 function pollStats() {
+  if (document.hidden) { _scheduleStats(); return; }   // don't poll a backgrounded tab; re-check later
   fetch(MOUNT + '/api/server/' + serverId + '/stats')
     .then(r => r.json())
     .then(d => {
       if (d.error) return;
+      _lastStatus = d.status || '';
       connectAddr = d.connect || '';
       document.getElementById('connect-addr').textContent = connectAddr || 'unknown';
       // One-click join link (steam://connect/…) for games that support it.
@@ -863,15 +875,17 @@ function pollStats() {
         statsChart.update('none');
       }
     })
-    .catch(() => {});
+    .catch(() => {})
+    .finally(_scheduleStats);
 }
 
 // Populate console immediately via AJAX (page render no longer waits on SSH),
 // then let the websocket stream take over.
 refreshConsole(true);   // initial load: jump to the latest output
 initChart();
-pollStats();
-pollWhenVisible(pollStats, 4000);
+pollStats();   // self-schedules: ~8s while online, ~20s while offline, paused while the tab is hidden
+// Refocusing the tab catches up immediately (the poll pauses while hidden).
+document.addEventListener('visibilitychange', function(){ if (!document.hidden) pollStats(); });
 // Backup console refresh (websocket is primary) — respects your scroll position
 pollWhenVisible(function(){ refreshConsole(); }, 30000);
 </script>
