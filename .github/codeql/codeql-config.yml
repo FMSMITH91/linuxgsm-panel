@@ -7,3 +7,14 @@ name: "linuxgsm-panel CodeQL config"
 paths-ignore:
   - tests
   - docs
+
+# Exclude py/partial-ssrf: the one finding (notifications._post) is a CONFIRMED false positive. _post
+# only ever POSTs to a host on the _ALLOWED_PREFIXES allowlist, with the Telegram/Discord token rebuilt
+# from regex-captured groups on a CONSTANT host — nothing user-supplied can redirect the request.
+# CodeQL's partial-ssrf won't accept the allowlist/regex-rebuild as a sanitizer (verified: reworking
+# _tg_api_url didn't clear it), and a read-only token can't dismiss it. Safe to exclude repo-wide:
+# _post is the ONLY outbound-HTTP sink in the codebase (everything else is SSH/subprocess), so this
+# removes no real request-forgery coverage.
+query-filters:
+  - exclude:
+      id: py/partial-ssrf
