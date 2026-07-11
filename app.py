@@ -2943,6 +2943,7 @@ def register_routes(app):
         steamid = data.get("steamid", "")
         num = data.get("num", "")
         scope = (data.get("scope") or "this").strip()
+        reason = (data.get("reason") or "").strip()[:200]
         # A Valve ban needs the SteamID up front — to also fan it out and record a global ban. The
         # on-screen list may be gamedig-sourced (no id), so resolve it from the console once here;
         # otherwise the cross-server fan-out below (guarded on `steamid`) would be silently skipped.
@@ -2992,9 +2993,10 @@ def register_routes(app):
                     _sid = _sanitize_steamid(steamid)
                     if _sid and not GlobalBan.query.filter_by(steamid=_sid).first():
                         db.session.add(GlobalBan(steamid=_sid, player_name=(target or "")[:80],
-                                                 created_by=current_user.username))
+                                                 reason=reason, created_by=current_user.username))
                         db.session.commit()
-                        log_action(current_user, "global_ban_add", target=_sid, detail="via all-servers ban")
+                        log_action(current_user, "global_ban_add", target=_sid,
+                                   detail=reason or "via all-servers ban")
                         msg = (msg + " Added to the global ban list.").strip()
             return jsonify({"success": ok, "message": msg})
         except Exception:
