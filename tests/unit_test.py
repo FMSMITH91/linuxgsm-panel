@@ -279,10 +279,18 @@ check("backup: prune drops an old DAILY backup but keeps the manual one",
 _sh2.rmtree(_bktmp, ignore_errors=True)
 
 # ── per-server backup schedules (config-backed; swap in an in-memory config) ──
-_sched_load, _sched_save = _bk.load_config, _bk.save_config
+def _fake_update(fakecfg, m):   # mirror config.update_config (backup now writes via update_config)
+    c = dict(fakecfg)
+    m(c)
+    fakecfg.clear()
+    fakecfg.update(c)
+    return c
+
+
+_sched_load, _sched_update = _bk.load_config, _bk.update_config
 _fakecfg = {}
 _bk.load_config = lambda: dict(_fakecfg)
-_bk.save_config = lambda c: (_fakecfg.clear(), _fakecfg.update(c))
+_bk.update_config = lambda m: _fake_update(_fakecfg, m)
 try:
     _d = _bk.get_game_schedule(4242)
     check("schedule: unset server inherits the global default",
@@ -320,7 +328,7 @@ try:
     _bk.remove_game_schedule(77)   # must not raise on a corrupted map
     check("schedule: remove_game_schedule is a safe no-op on junk", True)
 finally:
-    _bk.load_config, _bk.save_config = _sched_load, _sched_save
+    _bk.load_config, _bk.update_config = _sched_load, _sched_update
 
 # ── full (game-file) backups: per-server LinuxGSM backup + settings/due ──
 _orig_run7 = sm.run_command
@@ -480,8 +488,9 @@ finally:
     sm.list_game_backups, sm.backup_disk_info, sm.delete_game_backup = _hr_saved
 
 _fake_cfg = {}
-_orig_bkload, _orig_bksave = _bk.load_config, _bk.save_config
-_bk.load_config = lambda: dict(_fake_cfg); _bk.save_config = lambda c: _fake_cfg.update(c)
+_orig_bkload, _orig_bkupdate = _bk.load_config, _bk.update_config
+_bk.load_config = lambda: dict(_fake_cfg)
+_bk.update_config = lambda m: _fake_update(_fake_cfg, m)
 try:
     _fs = _bk.set_full_settings(interval_days=7, keep=2)
     check("full backup: settings save round-trip", _fs["interval_days"] == 7 and _fs["keep"] == 2)
@@ -491,7 +500,7 @@ try:
     _bk.set_full_settings(interval_days=0)
     check("full backup: interval 0 = off (never due)", _bk.full_backup_due() is False)
 finally:
-    _bk.load_config, _bk.save_config = _orig_bkload, _orig_bksave
+    _bk.load_config, _bk.update_config = _orig_bkload, _orig_bkupdate
 
 # ── alerts: lgsm_get_values reads merged config, instance overrides win ──
 _orig_run9 = sm.run_command

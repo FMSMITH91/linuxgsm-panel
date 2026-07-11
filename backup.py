@@ -20,7 +20,8 @@ import tarfile
 import tempfile
 import time
 
-from config import DATA_DIR, DB_PATH, CONFIG_FILE, SECRET_FILE, CRED_KEY_FILE, load_config, save_config
+from config import (DATA_DIR, DB_PATH, CONFIG_FILE, SECRET_FILE, CRED_KEY_FILE,
+                    load_config, update_config)
 
 _log = logging.getLogger("panel.backup")
 
@@ -248,15 +249,15 @@ def get_settings():
 
 
 def set_settings(enabled=None, keep_days=None):
-    cfg = load_config()
-    if enabled is not None:
-        cfg["backup_enabled"] = bool(enabled)
-    if keep_days is not None:
-        try:
-            cfg["backup_keep_days"] = max(1, min(365, int(keep_days)))
-        except (TypeError, ValueError):
-            _log.debug("ignored invalid keep_days", exc_info=True)
-    save_config(cfg)
+    def _mut(cfg):   # update_config: race-safe read-modify-write under the config lock
+        if enabled is not None:
+            cfg["backup_enabled"] = bool(enabled)
+        if keep_days is not None:
+            try:
+                cfg["backup_keep_days"] = max(1, min(365, int(keep_days)))
+            except (TypeError, ValueError):
+                _log.debug("ignored invalid keep_days", exc_info=True)
+    update_config(_mut)
     return get_settings()
 
 
@@ -283,27 +284,25 @@ def get_full_settings():
 
 
 def set_full_settings(interval_days=None, keep=None):
-    cfg = load_config()
-    if interval_days is not None:
-        try:
-            cfg["full_backup_interval_days"] = max(0, min(365, int(interval_days)))
-        except (TypeError, ValueError):
-            _log.debug("ignored invalid full interval", exc_info=True)
-    if keep is not None:
-        try:
-            cfg["full_backup_keep"] = max(1, min(30, int(keep)))
-        except (TypeError, ValueError):
-            _log.debug("ignored invalid full keep", exc_info=True)
-    save_config(cfg)
+    def _mut(cfg):
+        if interval_days is not None:
+            try:
+                cfg["full_backup_interval_days"] = max(0, min(365, int(interval_days)))
+            except (TypeError, ValueError):
+                _log.debug("ignored invalid full interval", exc_info=True)
+        if keep is not None:
+            try:
+                cfg["full_backup_keep"] = max(1, min(30, int(keep)))
+            except (TypeError, ValueError):
+                _log.debug("ignored invalid full keep", exc_info=True)
+    update_config(_mut)
     return get_full_settings()
 
 
 def record_full_backup(summary):
     """Persist the time + one-line summary of the most recent full backup."""
-    cfg = load_config()
-    cfg["full_backup_last"] = int(time.time())
-    cfg["full_backup_summary"] = str(summary)[:300]
-    save_config(cfg)
+    ts, note = int(time.time()), str(summary)[:300]   # runs in the backup thread → update_config
+    update_config(lambda cfg: cfg.update({"full_backup_last": ts, "full_backup_summary": note}))
 
 
 def full_backup_due():
@@ -352,49 +351,49 @@ def _game_schedules(cfg):
 def set_game_schedule(sid, interval_days, keep):
     """Set/clear a server's schedule override. For each of interval_days/keep: a number sets an
     override, None clears it (inherit the global default). The server's last-run is preserved."""
-    cfg = load_config()
-    sched = _game_schedules(cfg)
-    cfg["game_schedules"] = sched   # normalise a corrupted value back to a dict
-    entry = sched.get(str(sid))
-    if not isinstance(entry, dict):
-        entry = {}
-    if interval_days is None:
-        entry.pop("interval_days", None)
-    else:
-        entry["interval_days"] = max(0, min(365, int(interval_days)))
-    if keep is None:
-        entry.pop("keep", None)
-    else:
-        entry["keep"] = max(1, min(30, int(keep)))
-    if entry:
-        sched[str(sid)] = entry
-    else:
-        sched.pop(str(sid), None)
-    save_config(cfg)
+    def _mut(cfg):
+        sched = _game_schedules(cfg)
+        cfg["game_schedules"] = sched   # normalise a corrupted value back to a dict
+        entry = sched.get(str(sid))
+        if not isinstance(entry, dict):
+            entry = {}
+        if interval_days is None:
+            entry.pop("interval_days", None)
+        else:
+            entry["interval_days"] = max(0, min(365, int(interval_days)))
+        if keep is None:
+            entry.pop("keep", None)
+        else:
+            entry["keep"] = max(1, min(30, int(keep)))
+        if entry:
+            sched[str(sid)] = entry
+        else:
+            sched.pop(str(sid), None)
+    update_config(_mut)
     return get_game_schedule(sid)
 
 
 def remove_game_schedule(sid):
     """Drop a server's schedule entry entirely — used when it's uninstalled, so no stale override
     or last-run lingers in config (and can't be inherited if SQLite later reuses the row id)."""
-    cfg = load_config()
-    gs = cfg.get("game_schedules")
-    if isinstance(gs, dict) and str(sid) in gs:
-        gs.pop(str(sid), None)
-        save_config(cfg)
+    def _mut(cfg):
+        gs = cfg.get("game_schedules")
+        if isinstance(gs, dict):
+            gs.pop(str(sid), None)
+    update_config(_mut)
 
 
 def record_game_backup(sid):
     """Mark a server's scheduled backup as just done (updates only that server's last-run)."""
-    cfg = load_config()
-    sched = _game_schedules(cfg)
-    cfg["game_schedules"] = sched
-    entry = sched.get(str(sid))
-    if not isinstance(entry, dict):
-        entry = {}
-    entry["last"] = int(time.time())
-    sched[str(sid)] = entry
-    save_config(cfg)
+    def _mut(cfg):   # runs after a scheduled backup (background) → update_config
+        sched = _game_schedules(cfg)
+        cfg["game_schedules"] = sched
+        entry = sched.get(str(sid))
+        if not isinstance(entry, dict):
+            entry = {}
+        entry["last"] = int(time.time())
+        sched[str(sid)] = entry
+    update_config(_mut)
 
 
 def game_backup_due(sid):

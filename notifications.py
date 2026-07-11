@@ -16,7 +16,7 @@ import urllib.error
 import urllib.parse
 import urllib.request
 
-from config import load_config, save_config, encrypt_secret, decrypt_secret
+from config import load_config, update_config, encrypt_secret, decrypt_secret
 
 _log = logging.getLogger("notifications")
 
@@ -85,8 +85,7 @@ def save_settings(*, enabled, telegram, discord, events):
     cur_dc = cur.get("discord") or {}
     tg_token = cur_tg.get("token") if telegram.get("token") is None else encrypt_secret(telegram["token"])
     dc_webhook = cur_dc.get("webhook") if discord.get("webhook") is None else encrypt_secret(discord["webhook"])
-    cfg = load_config()
-    cfg["notifications"] = {
+    notif = {
         "enabled": bool(enabled),
         "telegram": {"enabled": bool(telegram.get("enabled")),
                      "chat_id": (telegram.get("chat_id") or "").strip()[:64], "token": tg_token or "",
@@ -94,7 +93,8 @@ def save_settings(*, enabled, telegram, discord, events):
         "discord": {"enabled": bool(discord.get("enabled")), "webhook": dc_webhook or ""},
         "events": {k: bool(events.get(k, EVENTS[k][1])) for k in EVENTS},
     }
-    save_config(cfg)
+    # update_config: this can race with the Telegram poller thread's pending-update write.
+    update_config(lambda cfg: cfg.update({"notifications": notif}))
 
 
 # ── senders ────────────────────────────────────────────────────

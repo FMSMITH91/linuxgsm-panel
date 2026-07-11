@@ -925,9 +925,7 @@ def panel_switch_branch(branch):
         return False, "Branch '%s' doesn't exist on the remote." % branch
     try:
         import config as _cfg
-        cfg = _cfg.load_config()
-        cfg["panel_branch"] = branch
-        _cfg.save_config(cfg)
+        _cfg.update_config(lambda cfg: cfg.update({"panel_branch": branch}))
     except Exception:
         _log.exception("switch-branch: could not save tracked branch")
         return False, "Could not save the branch selection."
