@@ -116,16 +116,22 @@ def _valid_discord_webhook(url):
     return _DISCORD_WEBHOOK_RE.match(url or "") is not None
 
 
-def _tg_api_url(token, method, query=""):
+# The only Bot API methods the panel calls — pinning `method` to this set makes the URL path
+# provably not user-controlled (add here to use a new one).
+_TG_METHODS = ("sendMessage", "getUpdates", "setMyCommands")
+
+
+def _tg_api_url(token, method):
     """A Telegram Bot API URL on the CONSTANT api.telegram.org host, with the bot token REBUILT from
-    its regex-captured id/secret groups — so no request-tainted value flows into the request path
-    (the same rebuild that clears the SSRF taint on the Discord webhook). None if the token is
-    malformed. `method` and `query` are code-supplied literals."""
+    its regex-captured id/secret groups and `method` restricted to _TG_METHODS — so no request-tainted
+    value reaches the request path. Same shape as the (un-flagged) Discord builder: token + fixed
+    method only. A query string is a separate concern appended by the one caller that needs it — it is
+    deliberately NOT a parameter here, so this function's return can't be tainted by one. None if the
+    token is malformed or the method is unknown."""
     m = _TG_TOKEN_RE.match(token or "")
-    if not m:
+    if not m or method not in _TG_METHODS:
         return None
-    url = "https://api.telegram.org/bot%s:%s/%s" % (m.group(1), m.group(2), method)
-    return (url + "?" + query) if query else url
+    return "https://api.telegram.org/bot%s:%s/%s" % (m.group(1), m.group(2), method)
 
 
 def _post(url, data, headers):
@@ -180,9 +186,10 @@ def telegram_get_updates(token, offset=None, timeout=25):
     params = {"timeout": int(timeout)}
     if offset is not None:
         params["offset"] = int(offset)
-    url = _tg_api_url(token, "getUpdates", urllib.parse.urlencode(params))
+    url = _tg_api_url(token, "getUpdates")
     if not url:
         return None
+    url += "?" + urllib.parse.urlencode(params)   # only int-coerced params; kept out of _tg_api_url
     req = urllib.request.Request(url, headers={"User-Agent": "linuxgsm-panel"})
     try:
         with urllib.request.urlopen(req, timeout=timeout + 10) as resp:  # nosec B310 - https, host-literal
