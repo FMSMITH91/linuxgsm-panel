@@ -420,7 +420,7 @@ def _resolve_source_aux_ports(remote, remote_id, short_name, lgsm_name, main_por
                 if str(v).strip().isdigit():
                     occupied.add(int(str(v).strip()))
         except Exception:
-            pass
+            _log.debug("aux-port: sibling servercfg read failed", exc_info=True)
     return {k: str(v) for k, v in _dedupe_aux_ports(have, occupied).items()}
 
 

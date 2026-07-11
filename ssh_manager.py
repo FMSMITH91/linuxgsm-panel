@@ -859,7 +859,7 @@ def _gamedig_host(server):
         if re.match(r"^\d{1,3}(?:\.\d{1,3}){3}$", cand):
             ip = cand
     except Exception:
-        pass
+        _log.debug("gamedig-host: default-route IP lookup failed", exc_info=True)
     if rid is not None and ip != "127.0.0.1":
         _gamedig_host_cache[rid] = (now + _GAMEDIG_HOST_TTL, ip)
     return ip

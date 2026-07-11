@@ -246,7 +246,7 @@ function suggestFreePort() {
       if (!d || !d.port || !hint) return;
       if (d.changed) {
         portEl.value = d.port;
-        hint.innerHTML = '<i class="bi bi-info-circle"></i> Port ' + desired + ' is in use — using free port ' + d.port + '.';
+        hint.textContent = 'Port ' + desired + ' is in use — using free port ' + d.port + '.';   // textContent: never treat the port value as HTML
       }
     })
     .catch(function(){});
