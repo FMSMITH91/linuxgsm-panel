@@ -1786,7 +1786,7 @@ try:
           _msent.get("cmd") == 'kick "BadGuyx"')
     sm.moderate(None, "u", "gmod", "ban", steamid="STEAM_0:1:5; rcon x")
     check("moderation: valve ban bans + kicks the re-validated SteamID only (injection stripped)",
-          _msent.get("cmd") == "banid 0 STEAM_0:1:5; kickid STEAM_0:1:5 Banned; writeid")
+          _msent.get("cmd") == "banid 0 STEAM_0:1:5 kick; writeid")
     check("moderation: valve ban with no SteamID and no name is refused",
           sm.moderate(None, "u", "gmod", "ban", steamid="")[0] is False)
     sm.moderate(None, "u", "cod", "kick", num="3")
@@ -1809,7 +1809,7 @@ try:
     _msent.clear()
     sm.moderate(None, "u", "gmod", "ban", target="Ace")   # no steamid supplied
     check("moderation: valve ban resolves the SteamID from the console when given only a name",
-          _msent.get("cmd") == "banid 0 STEAM_0:1:9; kickid STEAM_0:1:9 Banned; writeid")
+          _msent.get("cmd") == "banid 0 STEAM_0:1:9 kick; writeid")
 finally:
     sm.send_console_command = _orig_scc
     sm.console_player_list = _orig_cpl_m
@@ -2093,8 +2093,8 @@ _orig_scc = sm.send_console_command
 try:
     sm.send_console_command = lambda server, user, command, timeout=20, selfname=None: (_gb_cmds.append(command), ("", "", 0))[1]
     _ok, _reason = sm.console_steamid_ban(object(), "u", "csgoserver", "STEAM_0:1:5")
-    check("global-ban: ban builds 'banid 0 <id>; kickid <id>; writeid'",
-          _ok and _gb_cmds[-1] == "banid 0 STEAM_0:1:5; kickid STEAM_0:1:5 Banned; writeid")
+    check("global-ban: ban builds 'banid 0 <id> kick; writeid'",
+          _ok and _gb_cmds[-1] == "banid 0 STEAM_0:1:5 kick; writeid")
     sm.console_steamid_ban(object(), "u", "csgoserver", "[U:1:11]", unban=True)
     check("global-ban: unban builds 'removeid <id>; writeid'", _gb_cmds[-1] == "removeid [U:1:11]; writeid")
     check("global-ban: an invalid SteamID is rejected before the console",

@@ -1856,9 +1856,9 @@ def moderate(server, user, game_type, action, target="", message="", selfname=No
                 sid = _sanitize_steamid(p.get("steamid")) if p else ""
             if not sid:
                 return False, "Couldn't find that player's SteamID to ban them."
-            # ban the id (0 min = permanent), BOOT the player if they're on right now (banid alone
-            # only blocks future joins — it doesn't kick a live session), then persist with writeid.
-            cmd = "banid 0 %s; kickid %s Banned; writeid" % (sid, sid)
+            # banid <0=permanent> <id> kick — the `kick` keyword boots them if they're connected
+            # right now (banid without it only blocks future joins); writeid persists to the ban file.
+            cmd = "banid 0 %s kick; writeid" % sid
     elif eng == "idtech3":
         slot = _sanitize_slotnum(num)
         if slot is None:     # list came from gamedig (no slot number) — resolve it on the console now
@@ -1889,8 +1889,8 @@ def console_steamid_ban(server, user, selfname, steamid, unban=False):
     sid = _sanitize_steamid(steamid)
     if not sid:
         return False, "invalid"
-    # ban also kicks a currently-connected player (banid only blocks future joins); unban just lifts it
-    cmd = ("removeid %s; writeid" % sid) if unban else ("banid 0 %s; kickid %s Banned; writeid" % (sid, sid))
+    # the `kick` keyword boots a connected player too (banid alone only blocks future joins); unban lifts it
+    cmd = ("removeid %s; writeid" % sid) if unban else ("banid 0 %s kick; writeid" % sid)
     out = send_console_command(server, user, cmd, timeout=15, selfname=selfname)
     rc = out[2] if isinstance(out, tuple) and len(out) >= 3 else 1
     if rc == 3:
