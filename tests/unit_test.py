@@ -1675,8 +1675,9 @@ check("parser(minecraft): names from a prefixed log line",
 check("parser(minecraft): empty server -> no players",
       sm._parse_minecraft_list("There are 0 of a max of 20 players online: ") == [])
 
-# player_list: gamedig is PRIMARY (no console spam); the console is only a backup when gamedig
-# can't query the game at all (_gamedig_player_list returns None for that, [] for empty).
+# player_list: gamedig is PRIMARY (no console spam). The console is a backup used ONLY when the
+# caller explicitly passes allow_console=True (a user action) — the automatic path (default) never
+# touches the console: it returns None ('unknown') so the UI shows a GSLT hint instead of querying.
 _orig_cpl, _orig_gpl = sm.console_player_list, sm._gamedig_player_list
 try:
     sm.console_player_list = lambda *a, **k: [{"name": "Ace"}]
@@ -1688,8 +1689,11 @@ try:
     check("player_list: a gamedig-confirmed empty server does NOT fall back to the console",
           sm.player_list(None, "u", "cod", 28960, None, "codserver") == [])
     sm._gamedig_player_list = lambda *a, **k: None  # gamedig couldn't query at all
-    check("player_list: falls back to the console only when gamedig can't query",
-          [p["name"] for p in sm.player_list(None, "u", "cod", 28960, None, "codserver")] == ["Ace"])
+    check("player_list: the automatic path is gamedig-only — no console, returns None when unread",
+          sm.player_list(None, "u", "cod", 28960, None, "codserver") is None)
+    check("player_list: the console backup runs ONLY when allow_console=True (an explicit action)",
+          [p["name"] for p in sm.player_list(None, "u", "cod", 28960, None, "codserver",
+                                             allow_console=True)] == ["Ace"])
 finally:
     sm.console_player_list, sm._gamedig_player_list = _orig_cpl, _orig_gpl
 

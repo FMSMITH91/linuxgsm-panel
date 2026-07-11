@@ -313,11 +313,13 @@ def _server_max_config(gs):
     return mx
 
 
-def _server_slots(gs):
+def _server_slots(gs, allow_console=False):
     """(count, max, name) for one game server. The COUNT we can trust — gamedig first (which also
-    yields max AND the server's advertised in-game name in the same query), then the game console for
-    engine-classified games (valve/idTech3/Minecraft), then LinuxGSM's own query; a stopped server is
-    0, and None means 'unknown' so the auto-reboot never fires on a game it can't see. MAX is
+    yields max AND the server's advertised in-game name in the same query), then LinuxGSM's own
+    NETWORK query; a stopped server is 0, and None means 'unknown' so the auto-reboot never fires on
+    a game it can't see. The game CONSOLE (`status`) is used only when allow_console=True — every
+    caller here is a background/timer poll, so this stays False and the panel never types into a
+    game's console automatically (set a GSLT so gamedig can read the server instead). MAX is
     gamedig's reported capacity when it has one, otherwise the LinuxGSM config. NAME (the in-game
     hostname players see) only comes from gamedig; None from the other sources. Never raises."""
     # Primary: gamedig gives count, max AND the advertised name in a single query.
@@ -328,10 +330,9 @@ def _server_slots(gs):
     if cur is not None:
         return cur, (mx if mx is not None else _server_max_config(gs)), gname
     try:
-        if sm_game_engine(gs.game_type):
+        if allow_console and sm_game_engine(gs.game_type):
             # Console backup — ONE `status` gives BOTH the count (a real 0 for a stopped/empty console
-            # game) and the advertised name, so a server gamedig can't query (e.g. no GSLT) isn't hit
-            # with two separate console sends per poll.
+            # game) and the advertised name. Only on an explicit, on-demand request — NEVER on a poll.
             players, name = sm_console_status(gs.remote, gs.short_name, gs.game_type, selfname=gs.lgsm_name)
             return len(players or []), _server_max_config(gs), name
     except Exception:
@@ -650,8 +651,10 @@ def _tg_players_text(app, arg):
         if err:
             return err
         try:
+            # An explicit /players you typed — allowed to fall back to one console `status` if the
+            # server can't be read over the network (unlike the panel's automatic polling).
             players = player_list(gs.remote, gs.short_name, gs.game_type, port=gs.port,
-                                  query_type=gs.query_type, selfname=gs.lgsm_name)
+                                  query_type=gs.query_type, selfname=gs.lgsm_name, allow_console=True)
         except Exception:
             players = None
         if players is None:
@@ -2792,14 +2795,22 @@ def register_routes(app):
     @server_access_required
     def api_server_playerlist(server_id):
         """Live list of connected players (names + score/time where the game reports them) plus
-        which moderation actions this game supports, for the Players panel."""
+        which moderation actions this game supports, for the Players panel. The automatic poll asks
+        gamedig only (never the game console); the panel sends `?console=1` only when you click the
+        refresh button, so a single `status` is issued on your explicit request, not on a timer."""
         gs = get_game(server_id)
+        allow_console = request.args.get("console") == "1"
         try:
             players = player_list(gs.remote, gs.short_name, gs.game_type, gs.port, gs.query_type,
-                                  selfname=gs.lgsm_name)
+                                  selfname=gs.lgsm_name, allow_console=allow_console)
         except Exception:
-            players = []
-        return jsonify({"players": players, "caps": moderation_caps(gs.game_type),
+            players = None
+        # None => couldn't read over the network (and console wasn't run). Tell the UI so it shows a
+        # "set a GSLT / load once from console" hint instead of a misleading "no players connected".
+        unknown = players is None
+        return jsonify({"players": players or [], "unknown": unknown,
+                        "console_capable": bool(game_engine(gs.game_type)),
+                        "caps": moderation_caps(gs.game_type),
                         "queryable": is_player_queryable(gs.game_type, gs.query_type),
                         "engine": game_engine(gs.game_type),
                         "query_type": gs.query_type or "",

@@ -1735,18 +1735,21 @@ def _gamedig_player_list(server, user, game_type=None, port=None, query_type=Non
     return players
 
 
-def player_list(server, user, game_type=None, port=None, query_type=None, selfname=None):
+def player_list(server, user, game_type=None, port=None, query_type=None, selfname=None,
+                allow_console=False):
     """Connected players for the Players panel. gamedig is the PRIMARY source (names + score/time,
-    and it never touches the game console); the game's own console (`status`/`list`) is only a
-    BACKUP, used when gamedig can't query the game at all. Returns [{name, steamid, num, score,
-    time}] — steamid/num are set only when the list came from the console; otherwise the kick/ban
-    id is resolved from the console on demand at moderation time. Never raises."""
+    and it never touches the game console). The game's own console (`status`/`list`) is only used
+    when gamedig can't query the game AND the caller explicitly opts in with allow_console=True —
+    so a background/timer poll never issues a console command; only an on-demand user action does.
+    Returns [{name, steamid, num, score, time}] (steamid/num set only when the list came from the
+    console), an empty list for a confirmed-empty server, or None when it can't be read over the
+    network and the console wasn't allowed. Never raises."""
     pl = _gamedig_player_list(server, user, game_type, port, query_type)
     if pl is not None:
         return pl                       # gamedig answered (players, or a confirmed-empty server)
-    if game_engine(game_type):          # gamedig can't query this game — fall back to the console
+    if allow_console and game_engine(game_type):   # explicit, on-demand console read only
         return console_player_list(server, user, game_type, selfname=selfname) or []
-    return []
+    return None                         # can't read over the network; console not requested
 
 
 def is_player_queryable(game_type, query_type=None):

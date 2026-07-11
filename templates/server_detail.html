@@ -130,10 +130,11 @@
 <div class="card mb-3" data-mtab="console" id="players-card" style="display:none;">
   <div class="card-header d-flex justify-content-between align-items-center flex-wrap gap-2">
     <span><i class="bi bi-people-fill"></i> Players <span class="text-secondary small" id="pl-count"></span></span>
-    <button class="btn btn-sm btn-outline-secondary py-0 px-1" data-action="loadPlayers" title="Refresh player list"><i class="bi bi-arrow-repeat"></i></button>
+    <button class="btn btn-sm btn-outline-secondary py-0 px-1" data-action="refreshPlayers" title="Refresh from the game console (runs one status)"><i class="bi bi-arrow-repeat"></i></button>
   </div>
   <div class="card-body">
     <div id="pl-unsupported" class="text-secondary small" style="display:none;"><i class="bi bi-info-circle"></i> A live player list isn't available for this game.</div>
+    <div id="pl-netonly" class="text-secondary small" style="display:none;"><i class="bi bi-wifi-off"></i> Can't read players over the network. The panel no longer runs console commands automatically — set a <strong>GSLT</strong> (<code>sv_setsteamaccount</code>) so it can query this server, or click <i class="bi bi-arrow-repeat"></i> above to load the list once from the console.</div>
     <div id="pl-empty" class="text-secondary small" style="display:none;">No players connected.</div>
     <div class="table-responsive" id="pl-table-wrap" style="display:none;">
       <table class="table table-sm align-middle mb-0">
@@ -349,11 +350,15 @@ function plTime(t){
   n = Math.floor(n); var h=Math.floor(n/3600), m=Math.floor((n%3600)/60), s=n%60;
   return h>0 ? (h+':'+String(m).padStart(2,'0')) : (m+':'+String(s).padStart(2,'0'));
 }
-function loadPlayers(){
+// The automatic poll asks gamedig only (never the console). refreshPlayers() (the button, and the
+// re-read after a kick/ban) passes console=1 so a single `status` runs on your explicit action.
+function loadPlayers(useConsole){
   if(!document.getElementById('players-card')) return;
-  fetch(MOUNT+'/api/server/'+serverId+'/playerlist').then(function(r){return r.json();})
+  var url = MOUNT+'/api/server/'+serverId+'/playerlist' + (useConsole ? '?console=1' : '');
+  fetch(url).then(function(r){return r.json();})
     .then(renderPlayers).catch(function(){ /* transient: keep what's shown */ });
 }
+function refreshPlayers(){ loadPlayers(true); }
 function renderPlayers(d){
   var card=document.getElementById('players-card'); if(!card||!d) return;
   var caps=d.caps||{}, players=d.players||[], queryable=!!d.queryable;
@@ -365,10 +370,24 @@ function renderPlayers(d){
   window._plEngine = engine;   // the ban dialog uses this to decide if "all servers" can apply
   var unsup=document.getElementById('pl-unsupported'), empty=document.getElementById('pl-empty'),
       wrap=document.getElementById('pl-table-wrap'), ann=document.getElementById('pl-announce'),
-      cnt=document.getElementById('pl-count');
+      cnt=document.getElementById('pl-count'), netonly=document.getElementById('pl-netonly');
   if(ann) ann.style.display = (_CAN_SAY && caps.say) ? 'flex' : 'none';
+  if(netonly) netonly.style.display='none';
   if(!queryable){ if(unsup)unsup.style.display=''; if(empty)empty.style.display='none'; if(wrap)wrap.style.display='none'; if(cnt)cnt.textContent=''; return; }
   if(unsup) unsup.style.display='none';
+  // gamedig couldn't read the server and the console wasn't run: show the GSLT / load-once hint for
+  // a console-capable game, rather than a misleading "no players connected". But if a list is already
+  // on screen (e.g. you just loaded it from the console), keep it — an automatic gamedig miss must
+  // not blank what you explicitly pulled.
+  if(d.unknown){
+    var hasRows = wrap && wrap.style.display !== 'none';
+    if(!hasRows){
+      if(netonly && d.console_capable){ netonly.style.display=''; }
+      else if(unsup){ unsup.style.display=''; }
+      if(empty)empty.style.display='none';
+    }
+    return;
+  }
   if(cnt) cnt.textContent='('+players.length+')';
   if(!players.length){ if(empty)empty.style.display=''; if(wrap)wrap.style.display='none'; return; }
   if(empty) empty.style.display='none'; if(wrap) wrap.style.display='';
@@ -406,7 +425,7 @@ function _doModerate(btn, action, name, steamid, num, scope){
     body:JSON.stringify({action:action, target:name, steamid:steamid, num:num, scope:scope})})
     .then(function(r){return r.json();}).then(function(d){
       window.toast(d.message || (d.success?'Done':'Failed'), d.success?'success':'danger');
-      setTimeout(loadPlayers, 1200);
+      setTimeout(function(){ loadPlayers(true); }, 1200);   // you just moderated — re-read (console ok)
     }).catch(function(){ window.toast('Moderation failed','danger'); btn.disabled=false; });
 }
 // When banning, ASK: this server only, or all my servers. "All servers" is only offered where the

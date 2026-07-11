@@ -600,8 +600,9 @@ try:
     # ── Players + in-game moderation ──
     plr = c.get("/api/server/%d/playerlist" % gs_id)
     _pl = plr.get_json() or {}
-    check("playerlist: returns players + caps + queryable",
-          plr.status_code == 200 and all(k in _pl for k in ("players", "caps", "queryable")),
+    check("playerlist: returns players + caps + queryable + unknown/console_capable flags",
+          plr.status_code == 200 and all(k in _pl for k in
+              ("players", "caps", "queryable", "unknown", "console_capable")),
           "got %d %s" % (plr.status_code, sorted(_pl)))
     check("playerlist: caps reflect the game (csgo -> kick + say)",
           _pl.get("caps", {}).get("kick") is True and _pl.get("caps", {}).get("say") is True)
