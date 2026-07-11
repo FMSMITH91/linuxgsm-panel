@@ -1739,6 +1739,20 @@ check("tmux-socket: verifies a live session instead of grabbing the first socket
 check("tmux-socket: still signals NO_SESSION when nothing is live",
       "NO_SESSION" in _snip and "exit 3" in _snip)
 
+# ensure_persistent_bans: a banid ban only survives a restart if the server config execs
+# banned_user.cfg — this appends that (idempotently) to the resolved servercfg (${selfname}.cfg).
+_orig_lgv2, _orig_rc3 = sm.lgsm_get_values, sm.run_command
+try:
+    sm.lgsm_get_values = lambda *a, **k: {"servercfg": "${selfname}.cfg"}
+    _pb = {}
+    sm.run_command = lambda server, cmd, timeout=15, sudo=False: (_pb.__setitem__("cmd", cmd), ("", "", 0))[1]
+    _ok_pb = sm.ensure_persistent_bans(object(), "gmodserver2", "gmodserver")
+    check("persistent-bans: targets the resolved servercfg, adds the exec, guards duplicates",
+          _ok_pb is True and "*/cfg/gmodserver.cfg" in _pb["cmd"]
+          and "exec banned_user.cfg" in _pb["cmd"] and "grep -qiE" in _pb["cmd"])
+finally:
+    sm.lgsm_get_values, sm.run_command = _orig_lgv2, _orig_rc3
+
 # player_list: gamedig is PRIMARY (no console spam). The console is a backup used ONLY when the
 # caller explicitly passes allow_console=True (a user action) — the automatic path (default) never
 # touches the console: it returns None ('unknown') so the UI shows a GSLT hint instead of querying.

@@ -1898,6 +1898,32 @@ def console_steamid_ban(server, user, selfname, steamid, unban=False):
     return (rc == 0), ("unbanned" if unban and rc == 0 else "banned" if rc == 0 else "failed")
 
 
+def ensure_persistent_bans(server, user, selfname):
+    """Make a Source server RELOAD its ban list on every (re)start. `banid`/`writeid` persist a
+    SteamID ban to cfg/banned_user.cfg, but the engine only loads that file if the server config
+    execs it — without the exec line a ban is silently lost on the next map change / restart and the
+    player can rejoin (exactly what bit us: a flapping server dropped every ban). Append the exec
+    lines to the LinuxGSM servercfg (`${selfname}.cfg` in the game's cfg dir), idempotently. Best-
+    effort; returns True when the line is present/added, False on any failure or non-Source layout."""
+    try:
+        raw = (lgsm_get_values(server, user, selfname, ["servercfg"]).get("servercfg") or "").strip()
+        fname = (raw.replace("${selfname}", selfname).replace("$selfname", selfname)
+                 or "%s.cfg" % selfname)
+        if not re.match(r"^[A-Za-z0-9_.-]+\.cfg$", fname):     # guard the value going into `find`
+            fname = "%s.cfg" % selfname
+        inner = (
+            f"F=$(find ~/serverfiles -maxdepth 4 -path '*/cfg/{fname}' 2>/dev/null | head -1); "
+            '[ -z "$F" ] && exit 1; '
+            'grep -qiE "^[[:space:]]*exec[[:space:]]+banned_user" "$F" && exit 0; '
+            'printf "\\n// panel: load persistent bans on every (re)start\\n'
+            'exec banned_user.cfg\\nexec banned_ip.cfg\\n" >> "$F"'
+        )
+        _, _, rc = run_command(server, f"sudo -u {user} bash -c {_quote(inner)}", timeout=15, sudo=False)
+        return rc == 0
+    except Exception:
+        return False
+
+
 def mod_restart_decision(status, players, force=False):
     """Decide how to handle the restart a mod change needs, given the server `status`
     ('online'/'offline'/'unknown'), the current player count (int, or None when unknown),

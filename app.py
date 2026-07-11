@@ -92,7 +92,7 @@ from ssh_manager import (
     get_server_status, run_as_game_user, send_console_command,
     list_server_commands, server_live_metrics, remote_public_ip,
     discover_linuxgsm_servers, player_list, moderation_caps, moderate, is_player_queryable,
-    game_engine, console_steamid_ban, _sanitize_steamid,
+    game_engine, console_steamid_ban, ensure_persistent_bans, _sanitize_steamid,
     GAMEDIG_TYPE as GAMEDIG_TYPE_MAP,
     remote_live_metrics, host_specs, pro_status, pro_attach,
     pro_service, pro_detach, set_autostart, install_game_cron, set_daily_restart,
@@ -3489,6 +3489,14 @@ def register_routes(app):
                     if gs.game_type in ("mc", "mcbe", "pmc", "spigot", "paper"):
                         try:
                             run_command(remote, f"sudo -u {short_name} bash -c \"echo 'eula=true' > /home/{short_name}/serverfiles/eula.txt 2>/dev/null; true\"", timeout=15, sudo=False)
+                        except Exception:
+                            _log.debug("_run: ignored non-fatal error", exc_info=True)
+                    # Source/GoldSrc: make the server reload its ban list on every start, so a banid
+                    # ban actually survives a restart (without this the engine drops it on reboot and
+                    # the player rejoins). Best-effort.
+                    if sm_game_engine(gs.game_type) == "valve":
+                        try:
+                            ensure_persistent_bans(remote, short_name, lgsm_name)
                         except Exception:
                             _log.debug("_run: ignored non-fatal error", exc_info=True)
 
