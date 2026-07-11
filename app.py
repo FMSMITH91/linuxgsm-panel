@@ -90,7 +90,7 @@ from models import (
 from ssh_manager import (
     close_connection, run_command, ssh_test_connection,
     get_server_status, run_as_game_user, send_console_command,
-    list_server_commands, server_live_metrics, remote_public_ip,
+    list_server_commands, server_live_metrics, game_map, remote_public_ip,
     discover_linuxgsm_servers, player_list, moderation_caps, moderate, is_player_queryable,
     game_engine, console_steamid_ban, ensure_persistent_bans, _sanitize_steamid, _resolve_from_console,
     GAMEDIG_TYPE as GAMEDIG_TYPE_MAP,
@@ -528,13 +528,20 @@ def _query_server_metrics(app, sid):
         with app.app_context():
             gs = db.session.get(GameServer, sid)
             if gs is None or not gs.installed:
-                return sid, None, None
+                return sid, None, None, ""
             try:
-                return sid, server_live_metrics(gs.remote, gs.short_name, gs.port), gs.remote_id
+                m = server_live_metrics(gs.remote, gs.short_name, gs.port)
             except Exception:
-                return sid, None, gs.remote_id
+                return sid, None, gs.remote_id, ""
+            mp = ""
+            if m.get("game_procs"):     # only query the map for a running server
+                try:
+                    mp = game_map(gs.remote, gs.short_name, gs.game_type, gs.port, gs.query_type)
+                except Exception:
+                    mp = ""
+            return sid, m, gs.remote_id, mp
     except Exception:
-        return sid, None, None
+        return sid, None, None, ""
 
 
 def _refresh_player_counts(app):
@@ -6489,7 +6496,7 @@ def register_routes(app):
         out_servers, hosts = {}, {}
         if ids:
             with concurrent.futures.ThreadPoolExecutor(max_workers=min(_PLAYER_POLL_WORKERS, len(ids))) as ex:
-                for sid, m, rid in ex.map(lambda s: _query_server_metrics(app, s), ids):
+                for sid, m, rid, mp in ex.map(lambda s: _query_server_metrics(app, s), ids):
                     if not m:
                         continue
                     out_servers[str(sid)] = {
@@ -6497,6 +6504,7 @@ def register_routes(app):
                         "ram_mb": int(m.get("game_ram_mb") or 0),
                         "uptime": int(m.get("game_uptime_secs") or 0),
                         "up": bool(m.get("game_procs")),   # a live game process, not just a listening port
+                        "map": mp or "",
                     }
                     if rid is not None and str(rid) not in hosts:
                         rt, dt = m.get("ram_total") or 0, m.get("disk_total") or 0

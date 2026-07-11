@@ -1494,6 +1494,36 @@ def player_slots(server, user, game_type=None, port=None, query_type=None):
     nm = (" ".join(str(nm).split())[:120] or None) if nm else None
     return cur, mx, nm
 
+
+_game_map_cache = {}          # {(remote_id, port): (expiry_ts, mapname)}
+_GAME_MAP_TTL = 30
+
+
+def game_map(server, user, game_type=None, port=None, query_type=None):
+    """The map/level a gamedig-queryable server is currently running, or "" if unknown/unqueryable.
+    A separate, cached (~30s — maps change rarely) gamedig read, kept OUT of the player-count path so
+    it can't perturb the counts. Never raises."""
+    gdtype = _gamedig_type(game_type, query_type)
+    if not gdtype or not port:
+        return ""
+    key = (getattr(server, "id", None), int(port))
+    now = time.time()
+    hit = _game_map_cache.get(key)
+    if hit and hit[0] > now:
+        return hit[1]
+    cmd = (f"gamedig --type {gdtype} {_gamedig_host(server)}:{int(port)} 2>/dev/null "
+           f"| jq -r '.map // \"\"' 2>/dev/null")
+    val = ""
+    try:
+        out, _, _ = run_command(server, f"sudo -u {user} bash -c {_quote(cmd)}", timeout=25, sudo=False)
+        s = (out or "").strip().splitlines()[-1].strip() if (out or "").strip() else ""
+        # game-supplied text -> collapse whitespace and drop angle brackets (it's rendered as HTML)
+        val = "" if s in ("", "null") else " ".join(s.split()).replace("<", "").replace(">", "")[:40]
+    except Exception:
+        val = ""
+    _game_map_cache[key] = (now + _GAME_MAP_TTL, val)
+    return val
+
 def player_count_via_lgsm_query(server, user, selfname, fallback_port=None):
     """Player count using the game's OWN LinuxGSM query settings — this covers games the panel's
     26-entry gamedig map doesn't. Reads querymode/querytype/queryport from the merged LinuxGSM

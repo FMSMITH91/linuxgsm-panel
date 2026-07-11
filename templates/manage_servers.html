@@ -110,6 +110,7 @@
               <strong>{{ gs.name }}</strong>
               {% if server_names.get(gs.id) %}<span class="text-info d-block text-truncate" style="font-size:.7rem;max-width:22ch;" title="In-game server name (what players see)">{{ server_names.get(gs.id) }}</span>{% endif %}
               <span class="text-secondary d-block" style="font-size:.7rem;">{{ gs.short_name }}</span>
+              <span class="text-secondary d-none" id="msrv-map-{{ gs.id }}" style="font-size:.7rem;" title="Current map"></span>
             </td>
             <td class="d-none d-md-table-cell">{{ gs.game_display or gs.game_type }}</td>
             <td>
@@ -473,11 +474,15 @@ function refreshMsrvMetrics(){
       var servers = d.servers || {};
       Object.keys(servers).forEach(function(sid){
         var s = servers[sid], cell = document.getElementById('msrv-res-' + sid);
-        if(!cell) return;
-        cell.innerHTML = s.up
+        if(cell) cell.innerHTML = s.up
           ? ('<i class="bi bi-cpu"></i> ' + s.cpu + '% · ' + s.ram_mb + ' MB'
              + (s.uptime ? ' · <span title="Uptime"><i class="bi bi-clock"></i> ' + _fmtUptimeShort(s.uptime) + '</span>' : ''))
           : '<span class="text-secondary">—</span>';
+        var mapEl = document.getElementById('msrv-map-' + sid);
+        if(mapEl){
+          if(s.up && s.map){ mapEl.innerHTML = '<i class="bi bi-geo-alt"></i> ' + s.map; mapEl.classList.remove('d-none'); }
+          else { mapEl.classList.add('d-none'); }
+        }
       });
     }).catch(function(){});
 }

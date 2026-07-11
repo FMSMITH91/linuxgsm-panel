@@ -1753,6 +1753,20 @@ try:
 finally:
     sm.lgsm_get_values, sm.run_command = _orig_lgv2, _orig_rc3
 
+# game_map: a separate cached gamedig read for the current map, kept out of the player-count path.
+_orig_rc5 = sm.run_command
+try:
+    sm._game_map_cache.clear(); sm.run_command = lambda *a, **k: ("de_dust2\n", "", 0)
+    check("game-map: parses the map name from gamedig", sm.game_map(object(), "u", "css", 27015) == "de_dust2")
+    sm._game_map_cache.clear(); sm.run_command = lambda *a, **k: ("null\n", "", 0)
+    check("game-map: 'null'/empty gamedig output -> ''", sm.game_map(object(), "u", "css", 27015) == "")
+    sm._game_map_cache.clear(); sm.run_command = lambda *a, **k: ("<b>gm_x\n", "", 0)
+    check("game-map: strips angle brackets from game-supplied text",
+          "<" not in sm.game_map(object(), "u", "css", 27015) and ">" not in sm.game_map(object(), "u", "css", 27015))
+    check("game-map: no gamedig type/port -> '' (no query)", sm.game_map(object(), "u", "css", None) == "")
+finally:
+    sm.run_command = _orig_rc5; sm._game_map_cache.clear()
+
 # player_list: gamedig is PRIMARY (no console spam). The console is a backup used ONLY when the
 # caller explicitly passes allow_console=True (a user action) — the automatic path (default) never
 # touches the console: it returns None ('unknown') so the UI shows a GSLT hint instead of querying.
