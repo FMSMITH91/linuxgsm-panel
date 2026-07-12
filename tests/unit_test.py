@@ -1580,6 +1580,30 @@ check("tailscale: NeedsLogin suggestion tells user to link, not 'not detected'",
       "not linked" in _tssug["description"].lower())
 _tsi._cache["info"] = None
 
+# REGRESSION: Tailscale up WITH a MagicDNS name but Serve NOT configured must NOT bind to loopback
+# (that hid the panel on 127.0.0.1 with nothing proxying to it — a fresh install was unreachable).
+from tailscale_integration import TailscaleInfo   # noqa: E402
+_orig_gti = _tsi.get_tailscale_info
+try:
+    _tsi.get_tailscale_info = lambda *a, **k: TailscaleInfo(
+        installed=True, running=True, backend_state="Running", tailscale_ips=["100.90.141.12"],
+        dns_name="host.example.ts.net", serve_config={"services": [], "raw": "No serve config"})
+    _tsi._cache["info"] = None
+    _bns = _tsi.suggest_best_bind(5000)
+    check("tailscale: up + DNS name but Serve NOT set up -> does NOT bind loopback",
+          _bns["bind_host"] != "127.0.0.1")
+    _tsi.get_tailscale_info = lambda *a, **k: TailscaleInfo(
+        installed=True, running=True, backend_state="Running", tailscale_ips=["100.90.141.12"],
+        dns_name="host.example.ts.net",
+        serve_config={"services": [{"url": "https://host.example.ts.net", "routes": [{}]}], "raw": "x"})
+    _tsi._cache["info"] = None
+    _bys = _tsi.suggest_best_bind(5000)
+    check("tailscale: up + DNS name + Serve configured -> binds loopback for Serve",
+          _bys["bind_host"] == "127.0.0.1" and _bys["method"] == "tailscale-serve")
+finally:
+    _tsi.get_tailscale_info = _orig_gti
+    _tsi._cache["info"] = None
+
 # ── Debug report: repeated tracebacks in the log tail get collapsed ───
 _pfx = "Jul 05 23:44:%02d vultr python[74699]: "
 _one_tb = [

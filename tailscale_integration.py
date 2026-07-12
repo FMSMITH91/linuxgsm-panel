@@ -446,8 +446,11 @@ def suggest_best_bind(port=5000):
     """
     info = get_tailscale_info()
 
-    if info.running and info.dns_name:
-        # Tailscale is running - bind to localhost and use Serve
+    if info.running and info.dns_name and info.serve_config.get("services"):
+        # Serve is ACTUALLY proxying the panel — bind to localhost and reach it via the ts.net cert.
+        # (We must confirm Serve is configured, not just that Tailscale is up with a MagicDNS name —
+        # otherwise a fresh Tailscale-enabled install would bind loopback with nothing proxying to it
+        # and be unreachable.)
         url = f"https://{info.dns_name}"
         return {
             "method": "tailscale-serve",
