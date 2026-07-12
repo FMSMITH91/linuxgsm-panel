@@ -179,6 +179,63 @@ try:
     check("tailscale: tags are shell-quoted", sm._quote("tag:x; rm -rf /") in _joined)
 finally:
     sm.run_command = _orig_ts_rc
+
+# ── apt dependency names parsed from LinuxGSM output get interpolated into
+#    `apt-get install <pkgs>`, so parse_missing_deps is a security filter, not just a parser. ──
+eq("parse_missing_deps: extracts valid package names",
+   sm.parse_missing_deps("log line\nMissing dependencies: libssl-dev lib32gcc-s1 gcc:i386  Run: x\n"),
+   ["libssl-dev", "lib32gcc-s1", "gcc:i386"])
+eq("parse_missing_deps: drops shell-metachar tokens (injection guard)",
+   sm.parse_missing_deps("Missing dependencies: good $(reboot) a;b `id` also-good\n"),
+   ["good", "also-good"])
+eq("parse_missing_deps: no marker -> []", sm.parse_missing_deps("nothing to see here"), [])
+
+# ── local-host injection defenses: system_ops runs commands on THIS machine (shell=True), so its
+#    request-fed values (block/unban IPs, jail names) must be neutralised before reaching _run. ──
+_orig_so_run = SO._run
+try:
+    _so = []
+    SO._run = lambda cmd, *a, **k: (_so.append(cmd), ("", "", 0))[1]
+
+    _ok, _ = SO.ufw_deny_ip("1.2.3.4; rm -rf /")
+    check("ufw_deny_ip: non-IP rejected, runs nothing", _ok is False and not _so)
+    _so.clear()
+    _ok, _ = SO.ufw_deny_ip("10.0.0.5", tag="panel-test")
+    check("ufw_deny_ip: valid IP reaches ufw insert",
+          _ok is True and any("ufw insert 1 deny from 10.0.0.5" in c for c in _so))
+    _so.clear()
+    SO.ufw_deny_ip("10.0.0.6", tag="ev;il`x`")   # tag must be charset-stripped
+    check("ufw_deny_ip: tag stripped of shell metacharacters",
+          all(";" not in c and "`" not in c for c in _so))
+    _so.clear()
+    _ok, _ = SO.ufw_undeny_ip("not-an-ip")
+    check("ufw_undeny_ip: non-IP rejected, runs nothing", _ok is False and not _so)
+finally:
+    SO._run = _orig_so_run
+
+# ── fail2ban_unban: jail must be metacharacter-free AND on the host's real jail allowlist;
+#    IP is canonicalised through ipaddress. Both are shlex-quoted at the sink. ──
+_orig_so_run2, _orig_jails = SO._run, SO._fail2ban_jails
+try:
+    _fb = []
+    SO._run = lambda cmd, *a, **k: (_fb.append(cmd), ("", "", 0))[1]
+    SO._fail2ban_jails = lambda: ["sshd", "panel-login"]
+
+    _ok, _ = SO.fail2ban_unban("sshd; rm -rf /", "1.2.3.4")
+    check("fail2ban_unban: metachar jail rejected, runs nothing", _ok is False and not _fb)
+    _fb.clear()
+    _ok, _ = SO.fail2ban_unban("nftables", "1.2.3.4")   # charset-ok but not on the host
+    check("fail2ban_unban: jail not on host allowlist rejected", _ok is False and not _fb)
+    _fb.clear()
+    _ok, _ = SO.fail2ban_unban("sshd", "9.9.9.9; reboot")
+    check("fail2ban_unban: bad IP rejected, runs nothing", _ok is False and not _fb)
+    _fb.clear()
+    _ok, _ = SO.fail2ban_unban("sshd", "9.9.9.9")
+    check("fail2ban_unban: valid jail+IP reaches fail2ban-client",
+          _ok is True and any("fail2ban-client set sshd unbanip 9.9.9.9" in c for c in _fb))
+finally:
+    SO._run, SO._fail2ban_jails = _orig_so_run2, _orig_jails
+
 # a bad schedule is rejected by update before any SSH
 _bad = sm.update_cron_job(None, "gm", "0 3 * * * /home/gm/backup.sh", "not-a-schedule", "x", "gmodserver")
 check("cron: update rejects a bad schedule (no SSH)", _bad[0] is False)
