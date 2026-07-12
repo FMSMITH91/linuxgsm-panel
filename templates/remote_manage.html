@@ -749,16 +749,22 @@ function loadSecurityTopIps(){
         ? '<span class="badge bg-dark border me-1" style="font-weight:normal;"><i class="bi bi-shield-fill-x"></i> blocked</span>'
           +'<button class="btn btn-link btn-sm p-0" style="font-size:.72rem;"'+_da('unblockOffender',[o.ip,'@self'])+'>unblock</button>'
         : '<button class="btn btn-sm btn-outline-danger py-0 px-1" style="font-size:.72rem;"'+_da('blockOffender',[o.ip,'@self'])+'><i class="bi bi-shield-lock"></i> Block</button>';
+      // Which fail2ban jail(s) caught this IP (e.g. sshd, recidive, the panel-login jail).
+      var jails=(o.jails||[]);
+      var jailCell = jails.length
+        ? jails.map(function(j){ return '<span class="badge border text-secondary me-1 mb-1" style="font-weight:normal;">'+escapeHtml(j)+'</span>'; }).join('')
+        : '<span class="text-secondary">—</span>';
       return '<tr><td class="small text-secondary">'+(i+1)+'</td>'
         +'<td class="small"><code>'+escapeHtml(o.ip)+'</code></td>'
         +'<td class="small text-end">'+(o.attempts||0)+'</td>'
         +'<td class="small text-end">'+(o.bans||0)+'</td>'
+        +'<td class="small text-nowrap">'+jailCell+'</td>'
         +'<td class="small">'+badge+'</td>'
         +'<td class="small text-nowrap">'+block+'</td></tr>';
     }).join('');
     el.innerHTML='<div class="table-responsive"><table class="table table-sm align-middle mb-0">'
       +'<thead><tr><th class="small">#</th><th class="small">IP</th><th class="small text-end">Attempts</th>'
-      +'<th class="small text-end">Bans</th><th class="small">Status</th><th class="small">Firewall</th></tr></thead>'
+      +'<th class="small text-end">Bans</th><th class="small">Jail</th><th class="small">Status</th><th class="small">Firewall</th></tr></thead>'
       +'<tbody>'+rows+'</tbody></table></div>';
   }).catch(function(){ el.innerHTML='<div class="small text-danger">Could not load top offenders.</div>'; });
 }

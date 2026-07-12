@@ -2082,6 +2082,20 @@ _jail = SO._panel_f2b_jail_body("/data/auth.log", 5000, ["1.2.3.4", "junk"])
 check("f2b: the jail body carries an ignoreip line with the valid entry only",
       "\nignoreip = " in _jail and "1.2.3.4" in _jail and "junk" not in _jail)
 
+# top-offenders parsing: the counting pipeline emits "<attempts>\t<bans>\t<ip>\t<jail,jail>"; each row
+# must surface which fail2ban jail(s) caught the IP. Old 3-field lines (no jail) parse with jails=[].
+_top = SO._parse_top_ips("9\t3\t1.2.3.4\tsshd,recidive\n5\t0\t5.6.7.8\tpanel-login\n2\t0\t9.9.9.9",
+                         banned_now={"1.2.3.4"}, blocked={"5.6.7.8": "panel-block"})
+check("f2b top: attempts/bans/ip parse in order",
+      [(r["ip"], r["attempts"], r["bans"]) for r in _top]
+      == [("1.2.3.4", 9, 3), ("5.6.7.8", 5, 0), ("9.9.9.9", 2, 0)])
+check("f2b top: the jail column surfaces every jail that caught the IP",
+      _top[0]["jails"] == ["sshd", "recidive"] and _top[1]["jails"] == ["panel-login"])
+check("f2b top: a legacy 3-field line (no jail) parses with an empty jail list",
+      _top[2]["jails"] == [])
+check("f2b top: banned_now / blocked flags still track the passed-in sets",
+      _top[0]["banned_now"] is True and _top[1]["blocked"] is True and _top[2]["blocked"] is False)
+
 # Telegram command parsing: normalise '/Cmd@Bot arg' to a bare lowercase verb; non-commands -> ''.
 check("telegram: /update parses to 'update'", _parse_tg_command("/update") == "update")
 check("telegram: a bot-mention + args is stripped", _parse_tg_command("/Update@MyBot now") == "update")

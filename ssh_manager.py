@@ -3724,8 +3724,10 @@ def remote_fail2ban_top_ips(server, limit=20, days=7):
         "zcat -f /var/log/fail2ban.log* 2>/dev/null | "
         "awk -v c='%s' '$1 >= c' | "
         "grep -oE '\\[[A-Za-z0-9._-]+\\] (Ban|Found) [0-9a-fA-F:.]+' | "
-        "awk '{a=$(NF-1); ip=$NF; if(a==\"Found\") f[ip]++; else if(a==\"Ban\") b[ip]++; s[ip]=1} "
-        "END{for(ip in s) print (f[ip]+0)\"\\t\"(b[ip]+0)\"\\t\"ip}' | "
+        "awk '{jail=$1; gsub(/[][]/,\"\",jail); a=$(NF-1); ip=$NF; "
+        "if(a==\"Found\") f[ip]++; else if(a==\"Ban\") b[ip]++; s[ip]=1; "
+        "k=ip\"|\"jail; if(!(k in js)){js[k]=1; jl[ip]=jl[ip](jl[ip]==\"\"?\"\":\",\")jail}} "
+        "END{for(ip in s) print (f[ip]+0)\"\\t\"(b[ip]+0)\"\\t\"ip\"\\t\"jl[ip]}' | "
         "sort -rn | head -%d" % (cutoff, limit)
     )
     out, _, _ = run_command(server, pipeline, timeout=25, sudo=True)
@@ -3743,13 +3745,15 @@ def remote_fail2ban_top_ips(server, limit=20, days=7):
     rows = []
     for line in (out or "").splitlines():
         p = line.split("\t")
-        if len(p) == 3 and p[2].strip():
+        if len(p) >= 3 and p[2].strip():
             ip = p[2].strip()
+            jails = [j for j in (p[3].split(",") if len(p) > 3 and p[3] else []) if j]
             rows.append({"ip": ip,
                          "attempts": int(p[0]) if p[0].isdigit() else 0,
                          "bans": int(p[1]) if p[1].isdigit() else 0,
                          "banned_now": ip in banned,
-                         "blocked": ip in blocked})
+                         "blocked": ip in blocked,
+                         "jails": jails})
     return rows
 
 

@@ -1328,8 +1328,10 @@ _F2B_TOP_PIPELINE = (
     "zcat -f /var/log/fail2ban.log* 2>/dev/null | "
     "awk -v c='%s' '$1 >= c' | "
     "grep -oE '\\[[A-Za-z0-9._-]+\\] (Ban|Found) [0-9a-fA-F:.]+' | "
-    "awk '{a=$(NF-1); ip=$NF; if(a==\"Found\") f[ip]++; else if(a==\"Ban\") b[ip]++; s[ip]=1} "
-    "END{for(ip in s) print (f[ip]+0)\"\\t\"(b[ip]+0)\"\\t\"ip}' | "
+    "awk '{jail=$1; gsub(/[][]/,\"\",jail); a=$(NF-1); ip=$NF; "
+    "if(a==\"Found\") f[ip]++; else if(a==\"Ban\") b[ip]++; s[ip]=1; "
+    "k=ip\"|\"jail; if(!(k in js)){js[k]=1; jl[ip]=jl[ip](jl[ip]==\"\"?\"\":\",\")jail}} "
+    "END{for(ip in s) print (f[ip]+0)\"\\t\"(b[ip]+0)\"\\t\"ip\"\\t\"jl[ip]}' | "
     "sort -rn | head -%d"
 )
 
@@ -1386,14 +1388,16 @@ def _parse_top_ips(out, banned_now, blocked):
     rows = []
     for line in (out or "").splitlines():
         parts = line.split("\t")
-        if len(parts) == 3 and parts[2].strip():
+        if len(parts) >= 3 and parts[2].strip():
             ip = parts[2].strip()
+            jails = [j for j in (parts[3].split(",") if len(parts) > 3 and parts[3] else []) if j]
             rows.append({
                 "ip": ip,
                 "attempts": int(parts[0]) if parts[0].isdigit() else 0,
                 "bans": int(parts[1]) if parts[1].isdigit() else 0,
                 "banned_now": ip in banned_now,
                 "blocked": ip in blocked,
+                "jails": jails,
             })
     return rows
 
