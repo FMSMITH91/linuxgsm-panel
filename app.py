@@ -2857,6 +2857,35 @@ def register_routes(app):
         _cmd_fetch_attempts[server_id] = now
         _bg_cache_commands([server_id])
 
+    _pubip_resolve_attempts = {}  # remote_id -> last background public-IP resolve time
+
+    def _maybe_resolve_public_ip(remote_id):
+        """Resolve + cache a remote's public IP in the BACKGROUND (one SSH), rate-limited per
+        remote. Request/render paths use remote.host as the immediate connect-address fallback and
+        pick up the real public IP on a later load — instead of blocking on an SSH that hangs for
+        the full connect timeout when the remote is unreachable. Best-effort; never raises."""
+        now = time.time()
+        if now - _pubip_resolve_attempts.get(remote_id, 0) < 300:
+            return
+        _pubip_resolve_attempts[remote_id] = now
+        _app = app
+
+        def _run():
+            with _app.app_context():
+                try:
+                    remote = db.session.get(RemoteServer, remote_id)
+                    if remote is None or remote.public_ip:
+                        return
+                    ip = remote_public_ip(remote)
+                    if ip:
+                        remote.public_ip = ip
+                        db.session.commit()
+                except Exception:
+                    db.session.rollback()
+                    _log.debug("background public-IP resolve failed for remote %s", remote_id, exc_info=True)
+
+        threading.Thread(target=_run, daemon=True).start()
+
     @app.route("/server/<int:server_id>")
     @login_required
     @server_access_required
@@ -2923,15 +2952,11 @@ def register_routes(app):
         can_autostart = _can(RESTART_SERVER)
 
         # Public address players connect to. For the LOCAL panel host, remote.host is
-        # 127.0.0.1 (loopback SSH), so resolve/cache the real public IP instead.
+        # 127.0.0.1 (loopback SSH), so resolve/cache the real public IP instead. Do it in the
+        # background: show remote.host now, fill in the public IP next load — never block the
+        # render on an SSH that hangs for the whole connect timeout on an unreachable remote.
         if not remote.public_ip:
-            try:
-                ip = remote_public_ip(remote)
-                if ip:
-                    remote.public_ip = ip
-                    db.session.commit()
-            except Exception:
-                _log.debug("server_detail: ignored non-fatal error", exc_info=True)
+            _maybe_resolve_public_ip(remote.id)
         public_host = remote.public_ip or ("" if remote.is_local else remote.host)
 
         # Granular moderation flags (kick / ban / announce can be granted independently now).
@@ -6931,15 +6956,11 @@ def register_routes(app):
                     if gs.status != st:
                         gs.status = st
                         changed = True
-                # Resolve+cache the remote's public IP once for the connect address.
+                # Resolve+cache the remote's public IP for the connect address in the background
+                # (non-blocking) — the connect address falls back to remote.host until it's cached,
+                # so a slow/unreachable remote never stalls this polled endpoint.
                 if not remote.public_ip:
-                    try:
-                        ip = remote_public_ip(remote)
-                        if ip:
-                            remote.public_ip = ip
-                            changed = True
-                    except Exception:
-                        _log.debug("api_servers: ignored non-fatal error", exc_info=True)
+                    _maybe_resolve_public_ip(remote.id)
             except Exception:
                 _log.debug("api_servers: ignored non-fatal error", exc_info=True)
         if changed:
@@ -7037,15 +7058,10 @@ def register_routes(app):
         if gs.status != status:
             gs.status = status
             changed = True
-        # Resolve + cache the remote's public IP once (for the connect address).
+        # Resolve + cache the remote's public IP (for the connect address) in the background —
+        # non-blocking, so this polled endpoint never stalls on a slow/unreachable remote.
         if not remote.public_ip:
-            try:
-                ip = remote_public_ip(remote)
-                if ip:
-                    remote.public_ip = ip
-                    changed = True
-            except Exception:
-                _log.debug("api_server_stats: ignored non-fatal error", exc_info=True)
+            _maybe_resolve_public_ip(remote.id)
         if changed:
             db.session.commit()
 
