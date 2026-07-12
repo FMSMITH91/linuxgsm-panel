@@ -64,6 +64,16 @@
           <i class="bi bi-download"></i> Install
         </button>
       </div>
+      <div class="col-12 mt-1" id="gmod-content-opt" style="display:none;">
+        <div class="form-check">
+          <input type="checkbox" class="form-check-input" name="install_content" id="install-content" checked>
+          <label class="form-check-label small" for="install-content">
+            <strong>Mount Counter-Strike: Source content</strong> — GMod needs CS:S for most maps &amp; props
+            (without it you get missing-texture <em>ERROR</em> signs). The panel reuses existing content on the
+            host if it's already there, otherwise downloads it (~1.6&nbsp;GB) into a shared content user.
+          </label>
+        </div>
+      </div>
     </form>
   </div>
 </div>
@@ -227,6 +237,9 @@ function updatePort() {
   if (PORTS[select.value]) {
     port.value = PORTS[select.value];
   }
+  // GMod-only: offer to mount CS:S content (it's the one game that needs mounted content).
+  var contentOpt = document.getElementById('gmod-content-opt');
+  if (contentOpt) contentOpt.style.display = (select.value === 'gmod') ? '' : 'none';
   suggestFreePort();
 }
 // Once a target host + game are chosen, ask the panel for a free port near the default and bump the

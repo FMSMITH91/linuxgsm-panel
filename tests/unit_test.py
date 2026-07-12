@@ -272,6 +272,33 @@ try:
 finally:
     SO._run, SO._fail2ban_jails = _orig_so_run2, _orig_jails
 
+# ── GMod mountable content: the game picker is allow-listed, and the mount config is generated from a
+#    validated content username + constant game keys (so it's safe to write verbatim). ──
+eq("gmod content: unknown games filtered, order + dedupe preserved",
+   sm._valid_content_games(["cstrike", "doom", "cstrike"]), ["cstrike"])
+eq("gmod content: empty -> []", sm._valid_content_games([]), [])
+_gmc, _gmd = sm._gmod_mount_files("srcds", ["cstrike"])
+check("gmod content: mount.cfg points cstrike at the content user's serverfiles",
+      _gmc.startswith('"mountcfg"') and '"cstrike"\t"/home/srcds/serverfiles/cstrike"' in _gmc)
+check("gmod content: mountdepots enables hl2 + cstrike",
+      _gmd.startswith('"gamedepotsystem"') and '"hl2"' in _gmd and '"cstrike"' in _gmd)
+# detect_content_user: parse a host scan, reject non-username tokens, resolve the primary group.
+_orig_gm_rc = sm.run_command
+try:
+    def _gm_fake(server, cmd, **k):
+        if "for u in" in cmd:
+            return "HIT|srcds|cstrike\nHIT|b@d|cstrike\nHIT|srcds|cstrike", "", 0
+        if "id -gn" in cmd:
+            return "srcds", "", 0
+        return "", "", 0
+    sm.run_command = _gm_fake
+    _det = sm.detect_content_user(object(), ("cstrike",))
+    check("gmod content: detect reuses a valid content user, rejects bad usernames",
+          bool(_det) and _det["user"] == "srcds" and _det["group"] == "srcds"
+          and _det["present"].get("cstrike") == "/home/srcds/serverfiles/cstrike")
+finally:
+    sm.run_command = _orig_gm_rc
+
 # a bad schedule is rejected by update before any SSH
 _bad = sm.update_cron_job(None, "gm", "0 3 * * * /home/gm/backup.sh", "not-a-schedule", "x", "gmodserver")
 check("cron: update rejects a bad schedule (no SSH)", _bad[0] is False)

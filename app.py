@@ -107,6 +107,7 @@ from ssh_manager import (
     player_count_via_lgsm_query as sm_player_count_via_lgsm_query,
     set_game_priority_bulk,
     install_game_dependencies, parse_missing_deps, detect_game_ports, lgsm_read_config,
+    GMOD_CONTENT_GAMES, ensure_content_user, install_gmod_content, gmod_mount_setup,
     lgsm_write_config, lgsm_game_config, lgsm_get_values, browse_dir, read_file,
     write_file, upload_file, delete_path,
     remote_ufw_delete_rule, remote_set_public_ssh, remote_public_ssh_status, remote_ufw_status, remote_ufw_open_port,
@@ -3736,14 +3737,19 @@ def register_routes(app):
         # out). Without this, last=0 makes game_backup_due() true the moment installed flips True.
         bk.record_game_backup(gs.id)
 
+        # GMod is the one game that needs mounted content to render maps/props — offer CS:S when
+        # it's a GMod install and the box was ticked. This adds a step to the install job.
+        content_games = (["cstrike"] if (game_type == "gmod"
+                         and request.form.get("install_content") == "on") else [])
         _prune_jobs(_install_jobs, _install_lock)
         with _install_lock:
             _install_jobs[gs.id] = {
-                "status": "running", "step": 0, "total": 8, "step_name": "Queued",
+                "status": "running", "step": 0, "total": (9 if content_games else 8),
+                "step_name": "Queued",
                 "message": "", "log": [], "started": time.time(), "updated": time.time(),
                 "name": gs.name,
             }
-        _run_install_job(gs.id, remote_id, short_name, game_type, lgsm_name, final_port)
+        _run_install_job(gs.id, remote_id, short_name, game_type, lgsm_name, final_port, content_games)
         _notify_servers_changed()   # new "installing" row → appears live on other sessions
 
         log_action(current_user, "install_server", target=gs.name,
@@ -3753,10 +3759,11 @@ def register_routes(app):
         return _form_ok(f"Installing {short_name} on port {final_port}{port_note}{name_note}. "
                         f"Progress is shown live below.", "manage_servers")
 
-    def _run_install_job(gs_id, remote_id, short_name, game_type, lgsm_name, final_port):
+    def _run_install_job(gs_id, remote_id, short_name, game_type, lgsm_name, final_port, content_games=None):
         """Full game-server install as a tracked background job with step progress.
-        Steps (8): user → LinuxGSM → deps → game files → config → port/firewall →
-        autostart → start. Progress is streamed into _install_jobs[gs_id]."""
+        Steps (8, or 9 for GMod-with-content): user → LinuxGSM → deps → game files → config →
+        port/firewall → autostart → [GMod content] → start. Progress → _install_jobs[gs_id]."""
+        content_games = content_games or []
         _app = app
 
         def _p(step, name, status="running", message=""):
@@ -3947,12 +3954,35 @@ def register_routes(app):
                     except Exception:
                         _log.debug("_run: ignored non-fatal error", exc_info=True)
 
-                    # 8. Start the server — then VERIFY it actually came up. LinuxGSM's `start` exit
+                    # 8 (GMod only, if requested). Mountable content: reuse an existing content user's
+                    # games or download them (SteamCMD), grant read access, and write GMod's mount.cfg —
+                    # BEFORE start, so the server comes up with content already mounted and the content
+                    # group in effect. Best-effort: a content failure never fails the install.
+                    start_step = 8
+                    if content_games and game_type == "gmod":
+                        start_step = 9
+                        labels = ", ".join(GMOD_CONTENT_GAMES[g][0]
+                                           for g in content_games if g in GMOD_CONTENT_GAMES)
+                        _p(8, "Installing GMod content (%s)" % (labels or "content"))
+                        try:
+                            cu = ensure_content_user(remote)
+                            if cu:
+                                install_gmod_content(remote, cu["user"], content_games,
+                                                     on_progress=lambda m: _p(8, m))
+                                ok_m, msg_m = gmod_mount_setup(remote, short_name, cu["user"], content_games)
+                                if not ok_m:
+                                    _log.warning("gmod content mount for %s: %s", short_name, msg_m)
+                            else:
+                                _log.warning("gmod content: no content user could be prepared on %s", remote.name)
+                        except Exception:
+                            _log.warning("gmod content setup failed for %s", short_name, exc_info=True)
+
+                    # Start the server — then VERIFY it actually came up. LinuxGSM's `start` exit
                     # code alone can lie: a port taken under -strictportbind, or a crash-on-boot, can
                     # still exit 0 or just flap. So capture the start log and confirm the game port is
                     # really listening a few seconds later; if it isn't, mark it offline and surface
                     # the reason from the log instead of a bare "offline".
-                    _p(8, "Starting server")
+                    _p(start_step, "Starting server")
                     start_out = ""
                     try:
                         start_out, _, s_rc = run_as_game_user(remote, short_name, "start 2>&1", timeout=120, selfname=gs.lgsm_name)

@@ -4598,3 +4598,153 @@ def delete_path(server, user, relpath, selfname=None):
     if rc == 0 and "__OK__" in (out or ""):
         return True, "Deleted"
     return False, e or out or "Delete failed"
+
+
+# ── GMod mountable game content ────────────────────────────────────────────────────────────────
+# Garry's Mod renders another Source game's maps/props only if that game's content is present AND
+# mounted. We keep ONE shared copy per host under a "content user" and mount it read-only into each
+# GMod server via garrysmod/cfg/mount.cfg (+ mountdepots.txt), so multiple GMod servers share it
+# instead of each carrying gigabytes. Content is fetched with SteamCMD using the game's dedicated-
+# content app id. Counter-Strike: Source is the essential one (the vast majority of GMod maps/addons
+# expect it); more can be added to this map later.
+GMOD_CONTENT_GAMES = {
+    # mount-folder -> (label, steamcmd dedicated-content app id)
+    "cstrike": ("Counter-Strike: Source", 232330),
+}
+_CONTENT_USER = "gmodcontent"                         # panel-managed content user, created if none exists
+_CU_NAME_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9._-]*$")   # Linux username charset (reaches root-run cmds)
+
+
+def _valid_content_games(games):
+    """Keep only known content keys (each a constant [a-z] folder name), de-duped, order preserved."""
+    seen, out = set(), []
+    for g in (games or []):
+        if g in GMOD_CONTENT_GAMES and g not in seen:
+            seen.add(g)
+            out.append(g)
+    return out
+
+
+def _user_primary_group(server, user):
+    grp, _, _ = run_command(server, f"id -gn {_quote(user)} 2>/dev/null", timeout=10)
+    return (grp or "").strip() or user
+
+
+def detect_content_user(server, games=("cstrike",)):
+    """Find a host user whose serverfiles already hold the wanted game content (e.g. an existing
+    srcds / LinuxGSM cssserver). Returns {"user", "group", "present": {game: path}} for the user with
+    the MOST wanted games present, else None — so a GMod install can reuse content already on the host
+    instead of re-downloading gigabytes. One sudo scan; only constant game keys reach the shell."""
+    wanted = _valid_content_games(games) or list(GMOD_CONTENT_GAMES)
+    script = (
+        'for u in $(ls -1 /home 2>/dev/null); do '
+        '  d="/home/$u/serverfiles"; [ -d "$d" ] || continue; '
+        '  for g in ' + " ".join(wanted) + '; do [ -d "$d/$g" ] && echo "HIT|$u|$g"; done; '
+        'done'
+    )
+    try:
+        out, _, _ = run_command(server, _sudo_sh(script), timeout=30, sudo=False)
+    except Exception:
+        _log.debug("detect_content_user scan failed", exc_info=True)
+        return None
+    by_user = {}
+    for line in (out or "").splitlines():
+        parts = line.strip().split("|")
+        if len(parts) == 3 and parts[0] == "HIT" and _CU_NAME_RE.match(parts[1]) and parts[2] in GMOD_CONTENT_GAMES:
+            by_user.setdefault(parts[1], set()).add(parts[2])
+    if not by_user:
+        return None
+    user = max(by_user, key=lambda u: len(by_user[u]))
+    return {"user": user, "group": _user_primary_group(server, user),
+            "present": {g: f"/home/{user}/serverfiles/{g}" for g in sorted(by_user[user])}}
+
+
+def ensure_content_user(server):
+    """Return an existing content user (reuse), else create a locked, non-login content user with an
+    empty serverfiles dir to install content into. Returns {"user", "group", "present"} or None on
+    failure. Never downloads here — just guarantees a home."""
+    found = detect_content_user(server, tuple(GMOD_CONTENT_GAMES))
+    if found:
+        return found
+    u = _CONTENT_USER
+    exists, _, _ = run_command(server, f"id {_quote(u)} >/dev/null 2>&1 && echo Y || echo N", timeout=10)
+    if "Y" not in (exists or ""):
+        _, err, rc = run_command(server, _sudo_sh(
+            f"useradd -m -s /bin/bash {_quote(u)} && passwd -l {_quote(u)} >/dev/null 2>&1; "
+            f"install -d -o {u} -g {u} -m 750 /home/{u}/serverfiles"), timeout=30, sudo=False)
+        if rc != 0:
+            _log.warning("ensure_content_user: could not create %s: %s", u, (err or "")[:200])
+            return None
+    return {"user": u, "group": _user_primary_group(server, u), "present": {}}
+
+
+def content_present(server, content_user, game):
+    """True if <content_user>/serverfiles/<game> already exists on the host."""
+    if not (_CU_NAME_RE.match(content_user or "") and game in GMOD_CONTENT_GAMES):
+        return False
+    out, _, _ = run_command(
+        server, _sudo_sh(f"test -d /home/{content_user}/serverfiles/{game}/. && echo Y || echo N"),
+        timeout=10)
+    return "Y" in (out or "")
+
+
+def install_gmod_content(server, content_user, games, on_progress=None):
+    """SteamCMD-download each game's content into the content user's serverfiles, SKIPPING any already
+    present (reuse-existing / safe re-run). Long-running — CS:S is ~1.6GB. Returns (ok, installed_list,
+    msg). Requires steamcmd on the host (installed with GMod's own deps)."""
+    games = _valid_content_games(games)
+    if not _CU_NAME_RE.match(content_user or ""):
+        return False, [], "invalid content user"
+    installed = []
+    for g in games:
+        if content_present(server, content_user, g):
+            continue
+        appid = int(GMOD_CONTENT_GAMES[g][1])
+        if on_progress:
+            on_progress("Downloading %s content (SteamCMD)" % GMOD_CONTENT_GAMES[g][0])
+        inner = (f"steamcmd +force_install_dir /home/{content_user}/serverfiles "
+                 f"+login anonymous +app_update {appid} validate +quit")
+        run_command(server, f"sudo -u {_quote(content_user)} bash -c {_quote(inner)}",
+                    timeout=3600, sudo=False)
+        if content_present(server, content_user, g):
+            installed.append(g)
+    return True, installed, ("installed: " + ", ".join(installed) if installed else "already present")
+
+
+def _gmod_mount_files(content_user, games):
+    """Build the (mount.cfg, mountdepots.txt) text GMod reads to mount each game's content from the
+    content user's serverfiles. Pure — content_user is a validated Linux username and every game is a
+    constant key, so the output is safe to write verbatim. hl2 depot is always enabled (base content)."""
+    mountcfg = '"mountcfg"\n{\n' + "".join(
+        '\t"%s"\t"/home/%s/serverfiles/%s"\n' % (g, content_user, g) for g in games) + "}\n"
+    depots = ('"gamedepotsystem"\n{\n\t"hl2"\t\t"1"\n'
+              + "".join('\t"%s"\t\t"1"\n' % g for g in games) + "}\n")
+    return mountcfg, depots
+
+
+def gmod_mount_setup(server, gmod_user, content_user, games):
+    """Give the GMod user read access to the content user's files and write GMod's mount config so it
+    mounts each game. Idempotent. Returns (ok, msg). Group membership takes effect when the GMod
+    server (re)starts, which a fresh install does anyway."""
+    import base64
+    games = _valid_content_games(games)
+    if not (_CU_NAME_RE.match(gmod_user or "") and _CU_NAME_RE.match(content_user or "") and games):
+        return False, "invalid arguments"
+    group = _user_primary_group(server, content_user)
+    # 1. Read access: add the GMod user to the content group, and make the content group-traversable
+    #    (home) + group-readable (each game tree). Best-effort per command.
+    perms = ("usermod -aG %s %s; chmod g+x /home/%s; " % (_quote(group), _quote(gmod_user), content_user)
+             + "; ".join("chmod -R g+rX /home/%s/serverfiles/%s" % (content_user, g) for g in games))
+    run_command(server, _sudo_sh(perms), timeout=180, sudo=False)
+    # 2. Write mount.cfg + mountdepots.txt AS the GMod user (base64 so no quoting/interpolation risk).
+    mountcfg, depots = _gmod_mount_files(content_user, games)
+    cfgdir = f"/home/{gmod_user}/serverfiles/garrysmod/cfg"
+    b64c = base64.b64encode(mountcfg.encode()).decode()
+    b64d = base64.b64encode(depots.encode()).decode()
+    inner = (f"mkdir -p {cfgdir} && echo {b64c} | base64 -d > {cfgdir}/mount.cfg && "
+             f"echo {b64d} | base64 -d > {cfgdir}/mountdepots.txt && echo __OK__")
+    out, err, rc = run_command(server, f"sudo -u {_quote(gmod_user)} bash -c {_quote(inner)}",
+                               timeout=30, sudo=False)
+    if rc == 0 and "__OK__" in (out or ""):
+        return True, "Mounted: " + ", ".join(GMOD_CONTENT_GAMES[g][0] for g in games)
+    return False, (err or out or "mount write failed")[:200]
