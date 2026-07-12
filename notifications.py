@@ -119,7 +119,7 @@ def save_settings(*, enabled, telegram, discord, events, thresholds=None):
             try:
                 th[k] = min(99, max(50, int(thresholds[k])))
             except (TypeError, ValueError):
-                pass
+                _log.debug("ignoring non-numeric threshold %r; keeping %r", k, th[k])
     notif = {
         "enabled": bool(enabled),
         "telegram": {"enabled": bool(telegram.get("enabled")),
@@ -371,7 +371,7 @@ def discord_gateway_run(bot_token, on_message, _connect=None):
                     try:
                         ws.close()
                     except Exception:
-                        pass
+                        _log.debug("discord heartbeat close failed", exc_info=True)
                     break
                 state["acked"] = False
                 try:
@@ -409,7 +409,7 @@ def discord_gateway_run(bot_token, on_message, _connect=None):
             if ws is not None:
                 ws.close()
         except Exception:
-            pass
+            _log.debug("discord gateway close failed", exc_info=True)
 
 
 # ── public API ─────────────────────────────────────────────────
