@@ -281,6 +281,11 @@
     .input-group > :not(:last-child):not(.dropdown-toggle) { border-top-right-radius: 0; border-bottom-right-radius: 0; }
     .input-group > :not(:first-child) { border-top-left-radius: 0; border-bottom-left-radius: 0; margin-left: -1px; }
     .input-group .form-control:focus { position: relative; z-index: 2; }
+    /* Attached buttons get a subtly RAISED background so they read as a button — an outline button's
+       transparent bg would otherwise show the card colour, splitting the pill into a dark field + a
+       card-coloured "gap" (the "weird" two-tone look). */
+    .input-group > .btn { background: var(--bg-elevated); }
+    .input-group > .btn:hover { filter: brightness(1.28); }
 
     /* ── BADGES ── */
     .badge { font-weight: 600; font-size: .7rem; padding: .3em .65em; border-radius: 4px; letter-spacing: .02em; }

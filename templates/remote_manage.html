@@ -449,7 +449,7 @@
   <div class="card-body">
     <p class="small text-secondary mb-2">The busiest attacking IPs on this host by failed attempts over the last 7 days (current + rotated logs). <strong>Block</strong> firewalls an IP on <em>all</em> ports (UFW) — stronger than a fail2ban ban, which only covers the attacked service. <strong>Auto-block</strong> firewalls every IP at or above the threshold and releases each once its 7-day count drops back below — a cumulative count a slow attacker who spaces attempts to dodge fail2ban's short window can't escape.</p>
     <p class="small mb-3" style="border-left:2px solid var(--border,#1f2937);padding-left:.65rem;color:#9ca3af;">
-      <i class="bi bi-shield-check text-success"></i> Reachable only over Tailscale? If SSH and the panel aren't exposed to the public internet, there's no public attack surface — you can leave auto-block <strong>off</strong>. It only earns its keep when a port (SSH, the panel, or a game-server query port) is open publicly.
+      <i class="bi bi-shield-check text-success"></i> Reachable only over Tailscale? If SSH and the panel login aren't exposed to the public internet, there's nothing here for fail2ban to catch — you can leave auto-block <strong>off</strong>. It only earns its keep when <strong>SSH or the panel login</strong> is reachable from the public internet. (Game-server ports have no fail2ban jail, so this never covers those.)
     </p>
     <div class="d-flex flex-wrap align-items-end gap-4 mb-3">
       <div>
