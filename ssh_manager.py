@@ -4608,24 +4608,25 @@ def delete_path(server, user, relpath, selfname=None):
 # content app id. Counter-Strike: Source is the essential one (the vast majority of GMod maps/addons
 # expect it); more can be added to this map later.
 GMOD_CONTENT_GAMES = {
-    # mount-folder -> (label, steamcmd dedicated-content app id or None). A NUMERIC app id means the
-    # panel can download it (free anonymous SteamCMD; ids verified against LinuxGSM's own configs).
-    # None means MOUNT-ONLY: the game needs a purchased license so SteamCMD can't fetch it anonymously
-    # — the panel only mounts it when its content is already on the host (copied from an owned install).
-    "cstrike":    ("Counter-Strike: Source", 232330),
-    "tf":         ("Team Fortress 2", 232250),
-    "dod":        ("Day of Defeat: Source", 232290),
-    "hl2mp":      ("Half-Life 2: Deathmatch", 232370),
-    "left4dead":  ("Left 4 Dead", 222840),
-    "left4dead2": ("Left 4 Dead 2", 222860),
-    "insurgency": ("Insurgency", 237410),
-    "nmrih":      ("No More Room in Hell", 317670),
-    "fof":        ("Fistful of Frags", 295230),
-    # Mount-only — need a purchased license, so SteamCMD can't fetch them anonymously. Mounted when
-    # their content is already on the host. csgo is here because the app-740 download is now CS2
-    # (Source 2), which GMod (Source 1) can't use — classic CS:GO content is no longer on Steam.
+    # mount-folder -> (label, LinuxGSM game name or None). We install content the same way a normal
+    # LinuxGSM content box does — one shared content user with each game installed via LinuxGSM (so
+    # SteamCMD, validation and a weekly `update` cron all come for free). A game NAME means the panel
+    # can install it; None means MOUNT-ONLY: an owned single-player title with no LinuxGSM dedicated
+    # server, mounted only when its content is already on the host.
+    "cstrike":    ("Counter-Strike: Source", "cssserver"),
+    "tf":         ("Team Fortress 2", "tf2server"),
+    "dod":        ("Day of Defeat: Source", "dodsserver"),
+    "hl2mp":      ("Half-Life 2: Deathmatch", "hl2dmserver"),
+    "hl1mp":      ("Half-Life Deathmatch: Source", "hldmsserver"),
+    "left4dead":  ("Left 4 Dead", "l4dserver"),
+    "left4dead2": ("Left 4 Dead 2", "l4d2server"),
+    "insurgency": ("Insurgency", "insserver"),
+    "nmrih":      ("No More Room in Hell", "nmrihserver"),
+    "fof":        ("Fistful of Frags", "fofserver"),
+    # Mount-only — owned single-player titles (no LinuxGSM dedicated server); mounted when already on
+    # the host. csgo is here because since the CS2 update the download is Source-2 content GMod can't
+    # use, and classic CS:GO content is no longer on Steam.
     "hl1":        ("Half-Life: Source", None),
-    "hl1mp":      ("Half-Life Deathmatch: Source", None),
     "hl2":        ("Half-Life 2", None),
     "episodic":   ("Half-Life 2: Episode One", None),
     "ep2":        ("Half-Life 2: Episode Two", None),
@@ -4634,9 +4635,9 @@ GMOD_CONTENT_GAMES = {
     "portal2":    ("Portal 2", None),
     "csgo":       ("Counter-Strike: Global Offensive", None),
 }
-# Rough download sizes for the UI so nobody accidentally pulls 13GB (downloadable games only).
-GMOD_CONTENT_SIZES = {"cstrike": "~1.6 GB", "tf": "~13 GB", "dod": "~1.1 GB",
-                      "hl2mp": "~2 GB", "left4dead": "~3 GB", "left4dead2": "~9 GB",
+# Rough download sizes for the UI so nobody accidentally pulls 13GB (installable games only).
+GMOD_CONTENT_SIZES = {"cstrike": "~1.6 GB", "tf": "~13 GB", "dod": "~1.1 GB", "hl2mp": "~2 GB",
+                      "hl1mp": "~1 GB", "left4dead": "~3 GB", "left4dead2": "~9 GB",
                       "insurgency": "~7 GB", "nmrih": "~6 GB", "fof": "~2 GB"}
 _CONTENT_USER = "gmodcontent"                         # panel-managed content user, created if none exists
 _CU_NAME_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9._-]*$")   # Linux username charset (reaches root-run cmds)
@@ -4715,10 +4716,31 @@ def content_present(server, content_user, game):
     return "Y" in (out or "")
 
 
+_CONTENT_UPDATE_CRON_PATH = "/etc/cron.d/lgsm-gmod-content"
+
+
+def _content_update_cron_body(content_user, lgsm_names):
+    """Pure: the /etc/cron.d text that weekly-updates each content game as the content user. Mirrors a
+    standard LinuxGSM content box — `update-lgsm` (refresh scripts) Sunday 1AM then `update` (refresh
+    content) Sunday 2AM, staggered so they don't all run at once. content_user is validated upstream;
+    lgsm_names are constant script names, so the output is safe to write verbatim."""
+    lines = ["# LinuxGSM Panel - weekly GMod content updates for %s (managed by the panel)." % content_user,
+             "PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"]
+    for i, lgsm in enumerate(lgsm_names):
+        lines.append("%d 1 * * 0 %s /home/%s/%s update-lgsm > /dev/null 2>&1"
+                     % (min(59, i * 2), content_user, content_user, lgsm))
+    for i, lgsm in enumerate(lgsm_names):
+        lines.append("%d 2 * * 0 %s /home/%s/%s update > /dev/null 2>&1"
+                     % (min(59, i * 10), content_user, content_user, lgsm))
+    return "\n".join(lines) + "\n"
+
+
 def install_gmod_content(server, content_user, games, on_progress=None):
-    """SteamCMD-download each game's content into the content user's serverfiles, SKIPPING any already
-    present (reuse-existing / safe re-run). Long-running — CS:S is ~1.6GB. Returns (ok, installed_list,
-    msg). Requires steamcmd on the host (installed with GMod's own deps)."""
+    """Install each game's content under the content user via LinuxGSM — the same way a normal
+    LinuxGSM content box does: fetch the game's script, then `auto-install` (non-interactive; runs
+    SteamCMD + validate). Multiple games share ~/serverfiles, each in its own game dir. Skips games
+    already present, then (re)writes the weekly update cron so content stays current. Long-running.
+    Returns (ok, installed_list, msg)."""
     games = _valid_content_games(games)
     if not _CU_NAME_RE.match(content_user or ""):
         return False, [], "invalid content user"
@@ -4726,19 +4748,64 @@ def install_gmod_content(server, content_user, games, on_progress=None):
     for g in games:
         if content_present(server, content_user, g):
             continue
-        raw_appid = GMOD_CONTENT_GAMES[g][1]
-        if raw_appid is None:
-            continue   # mount-only (owned game): can't fetch anonymously — only mounts if already present
-        appid = int(raw_appid)
+        lgsm = GMOD_CONTENT_GAMES[g][1]
+        if lgsm is None:
+            continue   # mount-only (owned game): no LinuxGSM server — only mounts if already present
         if on_progress:
-            on_progress("Downloading %s content (SteamCMD)" % GMOD_CONTENT_GAMES[g][0])
-        inner = (f"steamcmd +force_install_dir /home/{content_user}/serverfiles "
-                 f"+login anonymous +app_update {appid} validate +quit")
+            on_progress("Installing %s content via LinuxGSM" % GMOD_CONTENT_GAMES[g][0])
+        # Fetch linuxgsm.sh once (shared), create the game's script, then auto-install its content.
+        inner = (f"cd /home/{content_user} && "
+                 f"{{ [ -x linuxgsm.sh ] || {{ wget -q -O linuxgsm.sh https://linuxgsm.sh && chmod +x linuxgsm.sh; }}; }} && "
+                 f"bash linuxgsm.sh {lgsm} && ./{lgsm} auto-install")
         run_command(server, f"sudo -u {_quote(content_user)} bash -c {_quote(inner)}",
-                    timeout=3600, sudo=False)
+                    timeout=7200, sudo=False)
         if content_present(server, content_user, g):
             installed.append(g)
+    try:
+        ensure_content_update_cron(server, content_user)
+    except Exception:
+        _log.debug("content update cron setup failed", exc_info=True)
     return True, installed, ("installed: " + ", ".join(installed) if installed else "already present")
+
+
+def _installed_content_lgsm_names(server, content_user):
+    """LinuxGSM game names of the content games currently installed under the content user (its
+    serverfiles has that game's dir AND the game's script exists). Used to build the update cron."""
+    names = []
+    for g, (_lbl, lgsm) in GMOD_CONTENT_GAMES.items():
+        if lgsm and content_present(server, content_user, g):
+            out, _, _ = run_command(
+                server, _sudo_sh(f"test -x /home/{content_user}/{lgsm} && echo Y || echo N"), timeout=10)
+            if "Y" in (out or ""):
+                names.append(lgsm)
+    return names
+
+
+def ensure_content_update_cron(server, content_user):
+    """Write a weekly cron (as the content user) that keeps every installed content game current —
+    Source games DO get content updates, and a stale copy eventually stops matching clients. Mirrors a
+    standard LinuxGSM content box: `update-lgsm` (refresh scripts) Sunday 1AM, then `update` (refresh
+    content via SteamCMD) Sunday 2AM, staggered so they don't all run at once. Idempotent — rewrites
+    the whole file to match whatever is currently installed. Removes the file when nothing's left."""
+    if not _CU_NAME_RE.match(content_user or ""):
+        return False
+    import base64
+    path = "%s-%s" % (_CONTENT_UPDATE_CRON_PATH, content_user)
+    # If the content user already automates updates in its OWN crontab (e.g. a hand-rolled content box
+    # like an existing srcds), leave it alone — never add duplicate update jobs on top of the admin's.
+    ct, _, _ = run_command(server, _sudo_sh("crontab -u %s -l 2>/dev/null" % content_user), timeout=10)
+    for line in (ct or "").splitlines():
+        s = line.strip()
+        if s and not s.startswith("#") and re.search(r"\bupdate(-lgsm)?\b", s):
+            return True   # the user already updates its content; don't manage a second cron
+    names = _installed_content_lgsm_names(server, content_user)
+    if not names:
+        run_command(server, _sudo_sh("rm -f %s" % path), timeout=10, sudo=False)
+        return True
+    b64 = base64.b64encode(_content_update_cron_body(content_user, names).encode()).decode()
+    _, _, rc = run_command(server, _sudo_sh(
+        "echo %s | base64 -d > %s && chmod 644 %s" % (b64, path, path)), timeout=15, sudo=False)
+    return rc == 0
 
 
 def _gmod_mount_files(content_user, games):

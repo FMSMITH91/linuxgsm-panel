@@ -1048,9 +1048,10 @@ function loadGmodContent(){
       }).join('');
       el.innerHTML =
         '<div class="mb-2 text-secondary" style="font-size:.8rem;">Tick the games GMod should mount — '
-        + 'the panel installs &amp; mounts them for you. Free games download automatically; content '
-        + 'already on the host mounts instantly. A few (Half-Life 2, Portal, and — since the CS2 update '
-        + '— CS:GO) have no free download, so they only appear once their content is on the host.</div>'
+        + 'the panel installs, mounts and keeps them updated (a weekly LinuxGSM update cron, so the '
+        + 'content never goes stale). Content already on the host mounts instantly. A few (Half-Life 2, '
+        + 'Portal, and — since the CS2 update — CS:GO) have no free dedicated server, so they only '
+        + 'appear once their content is on the host.</div>'
         + '<div class="d-flex flex-wrap gap-3 mb-2">' + boxes + '</div>'
         + (running
             ? '<div class="text-info small"><span class="spinner-border spinner-border-sm"></span> Applying… (a download can take a while)</div>'

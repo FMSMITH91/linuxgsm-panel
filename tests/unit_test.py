@@ -283,12 +283,20 @@ check("gmod content: mount.cfg points each game at the content user's serverfile
       and '"tf"\t"/home/srcds/serverfiles/tf"' in _gmc)
 check("gmod content: mountdepots enables hl2 + each game",
       _gmd.startswith('"gamedepotsystem"') and '"hl2"' in _gmd and '"cstrike"' in _gmd and '"tf"' in _gmd)
-check("gmod content: downloadable games carry an int appid, mount-only carry None",
-      all(isinstance(v[1], int) for v in sm.GMOD_CONTENT_GAMES.values() if v[1] is not None)
-      and sm.GMOD_CONTENT_GAMES["cstrike"][1] == 232330
-      and sm.GMOD_CONTENT_GAMES["insurgency"][1] == 237410       # free anonymous — panel downloads it
-      and sm.GMOD_CONTENT_GAMES["hl1mp"][1] is None              # owned — mount-only
-      and sum(1 for v in sm.GMOD_CONTENT_GAMES.values() if v[1] is not None) == 9)
+check("gmod content: installable games map to a LinuxGSM name, mount-only map to None",
+      all(isinstance(v[1], str) for v in sm.GMOD_CONTENT_GAMES.values() if v[1] is not None)
+      and sm.GMOD_CONTENT_GAMES["cstrike"][1] == "cssserver"
+      and sm.GMOD_CONTENT_GAMES["hl1mp"][1] == "hldmsserver"     # free via LinuxGSM, not owned-only
+      and sm.GMOD_CONTENT_GAMES["hl2"][1] is None                # owned single-player -> mount-only
+      and sum(1 for v in sm.GMOD_CONTENT_GAMES.values() if v[1] is not None) == 10)
+# Weekly content-update cron: update-lgsm (scripts) then update (content), Sunday, staggered, as the
+# content user — so mounted content stays current (Source games get content updates).
+_cron_body = sm._content_update_cron_body("srcds", ["cssserver", "tf2server"])
+check("gmod content cron: per-game update + update-lgsm as the content user, Sunday, staggered",
+      "0 1 * * 0 srcds /home/srcds/cssserver update-lgsm" in _cron_body
+      and "2 1 * * 0 srcds /home/srcds/tf2server update-lgsm" in _cron_body
+      and "0 2 * * 0 srcds /home/srcds/cssserver update >" in _cron_body
+      and "10 2 * * 0 srcds /home/srcds/tf2server update >" in _cron_body)
 # gmod_current_mounts: parse a real mount.cfg, keep only known games, ignore the header + unknowns.
 _orig_gm_rc2 = sm.run_command
 try:
