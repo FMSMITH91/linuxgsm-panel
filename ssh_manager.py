@@ -825,7 +825,12 @@ GAMEDIG_TYPE = {
     "hl2dm": "hl2dm", "dods": "dods", "left4dead2": "left4dead2", "l4d2": "left4dead2",
     "insurgency": "insurgency", "ins": "insurgency", "rust": "rust",
     "valheim": "valheim", "vh": "valheim",
-    "sdtd": "sdtd", "7d2d": "sdtd", "mc": "minecraft", "mcb": "minecraftpe",
+    "sdtd": "sdtd", "7d2d": "sdtd",
+    # Minecraft: Java editions (vanilla + Paper/Velocity/Waterfall, which answer Server List Ping)
+    # use "minecraft"; Bedrock uses "minecraftpe". This is what yields count AND max-players (Minecraft
+    # keeps max in server.properties, not the LinuxGSM config, so the config-fallback can't see it).
+    "mc": "minecraft", "pmc": "minecraft", "vmc": "minecraft", "wmc": "minecraft",
+    "mcb": "minecraftpe", "mcbe": "minecraftpe",
     "squad": "squad", "arma3": "arma3", "mumble": "mumble",
     # Call of Duty family — gamedig CAN query these (protocol names match the LinuxGSM shortnames),
     # so the player count (restart/backup guards + daily-restart-when-empty) works for them too.
