@@ -2568,6 +2568,37 @@ def _sudo_sh(inner):
     return f"sudo bash -c {_quote(inner)}"
 
 
+# ── Keep the node player-query tools (npm + gamedig) current ───────────────────
+# gamedig is installed once (bootstrap / install.sh) and never updates itself, so player queries can
+# silently break as games and gamedig evolve. This weekly ROOT cron refreshes npm + gamedig alongside
+# the host's other automatic updates (unattended-upgrades). Written to /etc/cron.d as root, idempotent;
+# the `command -v npm` guard makes it a harmless no-op on a host that never got node.
+_NODE_TOOLS_CRON_PATH = "/etc/cron.d/lgsm-node-tools"
+_NODE_TOOLS_CRON = (
+    "# LinuxGSM Panel - keep npm + gamedig current for player queries (managed by the panel).\n"
+    "PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin\n"
+    "30 4 * * 0 root command -v npm >/dev/null 2>&1 && "
+    "npm install -g npm gamedig >/var/log/lgsm-node-tools.log 2>&1\n"
+)
+
+
+def ensure_node_tools_cron(server):
+    """Idempotently install the weekly root cron that keeps npm + gamedig current on `server`, so the
+    panel's player queries don't rot. Best-effort; never raises. Returns True if the write succeeded.
+    The cron file is written under `sudo bash -c` (root) so it lands root-owned regardless of any
+    per-remote linuxgsm_user, and base64-piped so no quoting/`%` can mangle it."""
+    try:
+        import base64
+        b64 = base64.b64encode(_NODE_TOOLS_CRON.encode()).decode()
+        inner = "printf %s {b} | base64 -d > {f} && chmod 644 {f}".format(
+            b=_quote(b64), f=_quote(_NODE_TOOLS_CRON_PATH))
+        _out, _err, rc = run_command(server, _sudo_sh(inner), timeout=20, sudo=False)
+        return rc == 0
+    except Exception:
+        _log.debug("ensure_node_tools_cron failed", exc_info=True)
+        return False
+
+
 # `pro status` spawns Ubuntu's heavy advantage-tools client (slow + CPU-hungry, especially on a
 # small VPS). Its result changes ONLY when someone attaches/detaches/toggles a service — all of
 # which go through this module and invalidate the cache — so there's no reason to re-run it on a
@@ -3290,6 +3321,8 @@ def remote_bootstrap_vps(server, set_timezone="UTC", enable_ufw=True, install_lg
         "else npm install -g gamedig 2>&1 | tail -3; fi",
         timeout=300, sudo=True)
     note(gd_out or "gamedig installed")
+    ensure_node_tools_cron(server)   # weekly auto-update for npm + gamedig, alongside apt auto-updates
+    note("weekly npm/gamedig auto-update scheduled")
 
     # ── 3c. Enable + configure unattended-upgrades (auto security updates) ──
     emit("Enabling automatic security updates (unattended-upgrades)")

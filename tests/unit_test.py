@@ -103,6 +103,25 @@ try:
 finally:
     sm.run_command = _orig_wrap_rc
 
+# node-tools auto-update: a weekly ROOT cron keeps npm + gamedig (player-query tools) current.
+check("node-tools: the cron updates npm + gamedig weekly and logs it",
+      "npm install -g npm gamedig" in sm._NODE_TOOLS_CRON
+      and sm._NODE_TOOLS_CRON.lstrip().startswith("#")
+      and "/var/log/lgsm-node-tools.log" in sm._NODE_TOOLS_CRON
+      and sm._NODE_TOOLS_CRON_PATH == "/etc/cron.d/lgsm-node-tools")
+_ntc = {}
+_orig_ntc_rc = sm.run_command
+try:
+    sm.run_command = lambda s, c, **k: (_ntc.__setitem__("cmd", c), ("", "", 0))[1]
+    _ntc_ok = sm.ensure_node_tools_cron(object())
+    check("node-tools: ensure writes the cron.d file as ROOT (sudo bash -c)",
+          _ntc_ok is True and _ntc["cmd"].startswith("sudo bash -c")
+          and "/etc/cron.d/lgsm-node-tools" in _ntc["cmd"])
+    check("node-tools: the cron body is base64-piped + chmod 644 (no quoting/`%` hazards)",
+          "base64 -d" in _ntc["cmd"] and "chmod 644" in _ntc["cmd"])
+finally:
+    sm.run_command = _orig_ntc_rc
+
 # ── UFW port/protocol validation (both interpolate into a ROOT shell command) ──
 eq("ufw: tcp normalises", sm._ufw_proto("tcp"), "tcp")
 eq("ufw: UDP case-folds", sm._ufw_proto("UDP"), "udp")

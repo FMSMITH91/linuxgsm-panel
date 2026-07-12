@@ -118,7 +118,7 @@ from ssh_manager import (
     remote_set_fail2ban_ignoreip,
     remote_ufw_deny_ip, remote_ufw_undeny_ip, remote_ufw_blocked_ips, tailnet_exempt_ips,
     remote_reboot, remote_reboot_required, remote_uptime,
-    remote_bootstrap_vps, remote_check_tailscale,
+    remote_bootstrap_vps, remote_check_tailscale, ensure_node_tools_cron,
     remote_install_tailscale, remote_bootstrap_tailscale,
     remote_migrate_to_tailscale, remote_tailscale_up_url,
     remote_tailscale_finalize,
@@ -675,6 +675,23 @@ def _metrics_history_watch(app):
         except Exception:
             _log.debug("metrics-history prune failed", exc_info=True)
         time.sleep(_METRIC_SAMPLE_SECONDS)
+
+
+def _node_tools_cron_watch(app):
+    """Once at startup and daily after, make sure every host has the weekly npm+gamedig auto-update
+    cron — so hosts that predate it (or a remote added without the 'Prepare & Secure' bootstrap) still
+    keep their player-query tools current, without a manual re-bootstrap. Idempotent + best-effort."""
+    while True:
+        try:
+            with app.app_context():
+                for r in RemoteServer.query.all():   # includes the local/panel host
+                    try:
+                        ensure_node_tools_cron(r)
+                    except Exception:
+                        _log.debug("node-tools cron ensure failed for %s", r.name, exc_info=True)
+        except Exception:
+            _log.debug("node-tools cron watch pass failed", exc_info=True)
+        time.sleep(86400)   # daily
 
 
 # ── Telegram command bot ───────────────────────────────────────────────────────────────────────
@@ -7843,6 +7860,10 @@ if __name__ == "__main__":
 
     # Record CPU/RAM/player samples into history (for the trend charts on the server page).
     threading.Thread(target=lambda: _metrics_history_watch(app), daemon=True).start()
+
+    # Keep the npm + gamedig player-query tools auto-updating on every host (weekly cron; this ensures
+    # the cron exists on hosts that predate it).
+    threading.Thread(target=lambda: _node_tools_cron_watch(app), daemon=True).start()
 
     # Proactive monitor: server-down / host-unreachable / disk-low admin notifications.
     threading.Thread(target=lambda: _monitor_watch(app), daemon=True).start()

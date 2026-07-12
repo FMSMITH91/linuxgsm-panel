@@ -369,6 +369,14 @@ ensure_gamedig() {
     if command -v gamedig >/dev/null 2>&1; then
         ok "gamedig ready for player queries"
     fi
+    # Weekly auto-update for npm + gamedig, alongside the host's other automatic updates, so player
+    # queries don't silently break as games/gamedig evolve. Idempotent; no-op if npm isn't installed.
+    local cf="/etc/cron.d/lgsm-node-tools"
+    printf '%s\n' \
+        '# LinuxGSM Panel - keep npm + gamedig current for player queries (managed by the panel).' \
+        'PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin' \
+        '30 4 * * 0 root command -v npm >/dev/null 2>&1 && npm install -g npm gamedig >/var/log/lgsm-node-tools.log 2>&1' \
+        | ${S} tee "${cf}" >/dev/null 2>&1 && ${S} chmod 644 "${cf}" 2>/dev/null || true
     return 0
 }
 
