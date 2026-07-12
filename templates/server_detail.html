@@ -1023,7 +1023,7 @@ document.addEventListener('click', function(e){
 // lands every minute server-side). Updates in place, so it never flashes or steals focus.
 if(window.pollWhenVisible) pollWhenVisible(function(){ if(window._sdTab==='history') window.loadHistory(); }, 30000);
 
-// ── GMod game content: mount CS:S & other games so maps render ──
+// ── GMod game content: per-server mount (enable/disable) + host install/uninstall ──
 function loadGmodContent(){
   var el = document.getElementById('gmod-content-body');
   if(!el) return;
@@ -1032,44 +1032,65 @@ function loadGmodContent(){
     .then(function(d){
       if(d.error){ el.innerHTML = '<span class="text-danger">'+_esc(d.error)+'</span>'; return; }
       var running = d.job && d.job.status === 'running';
-      // Show downloadable games always; owned/mount-only games only once their content is on the host
+      // Installable games always show; owned/mount-only games only once their content is on the host
       // (or already mounted). Mount-only content that isn't present can't be added by the panel.
       var visible = (d.games||[]).filter(function(g){ return g.downloadable || g.present || g.mounted; });
-      var boxes = visible.map(function(g){
-        var tag;
-        if (g.present) tag = '<span class="text-success">on host</span>';
-        else if (g.downloadable) tag = '<span class="text-secondary">downloads '+_esc(g.size||'')+'</span>';
-        else tag = '<span class="text-warning">content missing on host</span>';
-        return '<div class="form-check">'
+      var rows = visible.map(function(g){
+        var status, act = '';
+        if (g.present) {
+          status = '<span class="text-success">installed on host</span>';
+          if (g.downloadable) act = '<button class="btn btn-link btn-sm p-0 text-danger" style="font-size:.72rem;" type="button" '
+            + 'data-gmc-uninstall="'+_esc(g.key)+'" data-gmc-label="'+_esc(g.label)+'"'+(running?' disabled':'')+'>Uninstall</button>';
+        } else if (g.downloadable) {
+          status = '<span class="text-secondary">installs on Apply · '+_esc(g.size||'')+'</span>';
+        } else {
+          status = '<span class="text-warning">content missing on host</span>';
+        }
+        return '<div class="d-flex align-items-center gap-2" style="max-width:520px;">'
+          + '<div class="form-check mb-0" style="min-width:210px;">'
           + '<input class="form-check-input gmc-box" type="checkbox" value="'+_esc(g.key)+'" id="gmc-'+_esc(g.key)+'"'
           + (g.mounted?' checked':'') + (running?' disabled':'') + '>'
-          + '<label class="form-check-label small" for="gmc-'+_esc(g.key)+'">'+_esc(g.label)
-          + ' <span class="text-secondary">('+tag+')</span></label></div>';
+          + '<label class="form-check-label small" for="gmc-'+_esc(g.key)+'">'+_esc(g.label)+'</label></div>'
+          + '<span class="small ms-auto text-nowrap">'+status+'</span>'
+          + '<span class="text-nowrap" style="min-width:56px;text-align:right;">'+act+'</span></div>';
       }).join('');
       el.innerHTML =
-        '<div class="mb-2 text-secondary" style="font-size:.8rem;">Tick the games GMod should mount — '
-        + 'the panel installs, mounts and keeps them updated (a weekly LinuxGSM update cron, so the '
-        + 'content never goes stale). Content already on the host mounts instantly. A few (Half-Life 2, '
-        + 'Portal, and — since the CS2 update — CS:GO) have no free dedicated server, so they only '
-        + 'appear once their content is on the host.</div>'
-        + '<div class="d-flex flex-wrap gap-3 mb-2">' + boxes + '</div>'
+        '<div class="mb-2 text-secondary" style="font-size:.78rem;">'
+        + '<b>Tick a game</b> to mount it on <b>this</b> server (enable/disable per server) — a game not '
+        + 'yet on the host is installed via LinuxGSM when you Apply, and kept current by a weekly update. '
+        + '<b>Uninstall</b> removes the content from the host, freeing disk for <i>every</i> GMod server '
+        + 'here. Restart the server to load mount changes.</div>'
+        + '<div class="d-flex flex-column gap-1 mb-2">' + rows + '</div>'
         + (running
-            ? '<div class="text-info small"><span class="spinner-border spinner-border-sm"></span> Applying… (a download can take a while)</div>'
-            : '<button class="btn btn-sm btn-primary" type="button" onclick="applyGmodContent(this)"><i class="bi bi-save"></i> Apply</button>'
+            ? '<div class="text-info small"><span class="spinner-border spinner-border-sm"></span> Working… (install/removal can take a while) '+_esc((d.job&&d.job.msg)||'')+'</div>'
+            : '<button class="btn btn-sm btn-primary" type="button" onclick="applyGmodContent(this)"><i class="bi bi-save"></i> Apply mounts</button>'
               + ' <span class="text-secondary small ms-1">Restart the server afterwards to load changes.</span>');
+      el.querySelectorAll('[data-gmc-uninstall]').forEach(function(b){
+        b.onclick = function(){ uninstallGmodContent(b.getAttribute('data-gmc-uninstall'), b.getAttribute('data-gmc-label')); };
+      });
       if(running) setTimeout(loadGmodContent, 5000);
     })
     .catch(function(){ el.innerHTML = '<span class="text-danger">Could not load content status.</span>'; });
 }
+function _gmcPost(bodyObj, okMsg){
+  fetch(MOUNT + '/api/server/' + serverId + '/gmod-content', {
+    method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify(bodyObj)
+  }).then(function(r){ return r.json(); }).then(function(d){
+    if(window.toast) toast(d.message || (d.success?okMsg:'Failed'), d.success?'success':'danger');
+    setTimeout(loadGmodContent, 1500);
+  }).catch(function(){ if(window.toast) toast('Request failed','danger'); });
+}
 function applyGmodContent(btn){
   var sel = Array.prototype.map.call(document.querySelectorAll('.gmc-box:checked'), function(b){ return b.value; });
   if(btn){ btn.disabled = true; btn.innerHTML = '<span class="spinner-border spinner-border-sm"></span> Applying…'; }
-  fetch(MOUNT + '/api/server/' + serverId + '/gmod-content', {
-    method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({games: sel})
-  }).then(function(r){ return r.json(); }).then(function(d){
-    if(window.toast) toast(d.message || (d.success?'Applying…':'Failed'), d.success?'success':'danger');
-    setTimeout(loadGmodContent, 1500);
-  }).catch(function(){ if(window.toast) toast('Request failed','danger'); if(btn) btn.disabled=false; });
+  _gmcPost({action:'mount', games: sel}, 'Applying…');
+}
+function uninstallGmodContent(key, label){
+  window.confirmDialog({
+    title:'Uninstall '+label+' content', icon:'trash', confirmClass:'btn-danger', confirmLabel:'Uninstall',
+    bodyText:'Remove '+label+' content from this host?\n\nThis frees disk but removes it for EVERY GMod server on the host. You can re-install it later from any GMod server.',
+    onConfirm:function(){ _gmcPost({action:'uninstall', games:[key]}, 'Removing…'); }
+  });
 }
 loadGmodContent();
 

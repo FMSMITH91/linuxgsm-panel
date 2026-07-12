@@ -297,6 +297,23 @@ check("gmod content cron: per-game update + update-lgsm as the content user, Sun
       and "2 1 * * 0 srcds /home/srcds/tf2server update-lgsm" in _cron_body
       and "0 2 * * 0 srcds /home/srcds/cssserver update >" in _cron_body
       and "10 2 * * 0 srcds /home/srcds/tf2server update >" in _cron_body)
+# uninstall removes the content dir + the LinuxGSM install (host-wide), and rejects a bad user.
+_orig_un_rc = sm.run_command
+try:
+    _un = []
+    sm.run_command = lambda s, c, **k: (_un.append(c), ("N", "", 0))[1]   # content_present -> not present
+    _uok, _urem, _ = sm.uninstall_gmod_content(object(), "gmodcontent", ["cstrike"])
+    _uj = " ".join(_un)
+    check("gmod content uninstall: removes content dir + LinuxGSM script + config for the game",
+          "rm -rf /home/gmodcontent/serverfiles/cstrike" in _uj
+          and "rm -rf /home/gmodcontent/cssserver" in _uj
+          and "rm -rf /home/gmodcontent/lgsm/config-lgsm/cssserver" in _uj and _urem == ["cstrike"])
+    _un[:] = []
+    _uok2, _, _ = sm.uninstall_gmod_content(object(), "bad;user", ["cstrike"])
+    check("gmod content uninstall: rejects an invalid content user, runs nothing",
+          _uok2 is False and not _un)
+finally:
+    sm.run_command = _orig_un_rc
 # gmod_current_mounts: parse a real mount.cfg, keep only known games, ignore the header + unknowns.
 _orig_gm_rc2 = sm.run_command
 try:

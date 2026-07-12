@@ -4808,6 +4808,35 @@ def ensure_content_update_cron(server, content_user):
     return rc == 0
 
 
+def uninstall_gmod_content(server, content_user, games):
+    """Remove each game's content from the host content user — the content dir plus its LinuxGSM
+    install (script + config) — then refresh the weekly update cron so it no longer lists the removed
+    games. HOST-WIDE: this frees disk for every GMod server on the host, so any server still mounting
+    it just loses that content (GMod skips a missing mount). Returns (ok, removed_list, msg)."""
+    games = _valid_content_games(games)
+    if not _CU_NAME_RE.match(content_user or ""):
+        return False, [], "invalid content user"
+    removed = []
+    for g in games:
+        lgsm = GMOD_CONTENT_GAMES[g][1]
+        # g is a constant folder key and content_user is validated -> safe paths. Remove as the
+        # content user (it owns the files); the shared lgsm/ framework dir is left for other games.
+        paths = ["/home/%s/serverfiles/%s" % (content_user, g)]
+        if lgsm:
+            paths += ["/home/%s/%s" % (content_user, lgsm),
+                      "/home/%s/lgsm/config-lgsm/%s" % (content_user, lgsm)]
+        inner = " ; ".join("rm -rf %s" % p for p in paths)
+        run_command(server, f"sudo -u {_quote(content_user)} bash -c {_quote(inner)}",
+                    timeout=120, sudo=False)
+        if not content_present(server, content_user, g):
+            removed.append(g)
+    try:
+        ensure_content_update_cron(server, content_user)   # rescan -> drop the removed games
+    except Exception:
+        _log.debug("content update cron refresh after uninstall failed", exc_info=True)
+    return True, removed, ("removed: " + ", ".join(removed) if removed else "nothing to remove")
+
+
 def _gmod_mount_files(content_user, games):
     """Build the (mount.cfg, mountdepots.txt) text GMod reads to mount each game's content from the
     content user's serverfiles. Pure — content_user is a validated Linux username and every game is a

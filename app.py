@@ -108,7 +108,7 @@ from ssh_manager import (
     set_game_priority_bulk,
     install_game_dependencies, parse_missing_deps, detect_game_ports, lgsm_read_config,
     GMOD_CONTENT_GAMES, GMOD_CONTENT_SIZES, ensure_content_user, install_gmod_content,
-    gmod_mount_setup, gmod_current_mounts, detect_content_user,
+    gmod_mount_setup, gmod_current_mounts, detect_content_user, uninstall_gmod_content,
     lgsm_write_config, lgsm_game_config, lgsm_get_values, browse_dir, read_file,
     write_file, upload_file, delete_path,
     remote_ufw_delete_rule, remote_set_public_ssh, remote_public_ssh_status, remote_ufw_status, remote_ufw_open_port,
@@ -7615,6 +7615,37 @@ def register_routes(app):
 
         threading.Thread(target=_run, daemon=True).start()
 
+    def _bg_gmod_content_uninstall(server_id, remote_id, gmod_user, games):
+        """Uninstall content from the host (host-wide) in the background, then drop the removed games
+        from THIS server's mounts. Result is stashed for the status poll."""
+        _app = app
+        _gmod_content_apply_state[server_id] = {"status": "running", "msg": "", "ts": time.time()}
+
+        def _run():
+            with _app.app_context():
+                try:
+                    remote = db.session.get(RemoteServer, remote_id)
+                    if not remote:
+                        return
+                    cu = detect_content_user(remote, tuple(GMOD_CONTENT_GAMES))
+                    removed = []
+                    if cu:
+                        _, removed, _m = uninstall_gmod_content(remote, cu["user"], games)
+                    # Drop the removed games from THIS server's mount.cfg (other servers just skip the
+                    # now-missing mount). Best-effort.
+                    remaining = [g for g in gmod_current_mounts(remote, gmod_user) if g not in games]
+                    gmod_mount_setup(remote, gmod_user, (cu or {}).get("user", ""), remaining)
+                    _gmod_content_apply_state[server_id] = {
+                        "status": "done", "msg": "Removed from host: " + (", ".join(removed) or "(none)"),
+                        "ts": time.time()}
+                except Exception:
+                    _log.warning("gmod content uninstall failed for %s", gmod_user, exc_info=True)
+                    _gmod_content_apply_state[server_id] = {
+                        "status": "error", "msg": "Uninstall failed — check the server logs.",
+                        "ts": time.time()}
+
+        threading.Thread(target=_run, daemon=True).start()
+
     @app.route("/api/server/<int:server_id>/gmod-content", methods=["GET", "POST"])
     @login_required
     @server_access_required
@@ -7639,11 +7670,19 @@ def register_routes(app):
         # POST: apply a selection (mutating → needs MANAGE_SERVERS).
         if not (current_user.is_superadmin or has_permission(current_user, MANAGE_SERVERS)):
             return jsonify({"error": "Permission denied"}), 403
-        sel = [g for g in (_json_body().get("games") or []) if g in GMOD_CONTENT_GAMES]
+        body = _json_body()
+        action = body.get("action") or "mount"
+        sel = [g for g in (body.get("games") or []) if g in GMOD_CONTENT_GAMES]
+        if action == "uninstall":
+            _bg_gmod_content_uninstall(gs.id, remote.id, gs.short_name, sel)
+            log_action(current_user, "gmod_content_uninstall", target=gs.name, detail=",".join(sel))
+            return jsonify({"success": True, "games": sel,
+                            "message": "Removing content from the host — this frees disk for every GMod "
+                                       "server here. Restart affected servers afterwards."})
         _bg_gmod_content_apply(gs.id, remote.id, gs.short_name, sel)
         log_action(current_user, "gmod_content", target=gs.name, detail=(",".join(sel) or "(none)"))
         return jsonify({"success": True, "games": sel,
-                        "message": "Applying content changes — a download can take a while for large games. "
+                        "message": "Applying mount changes — a download can take a while for large games. "
                                    "Restart the server afterwards to load the changes."})
 
     @app.route("/api/server/<int:server_id>/upload", methods=["POST"])
