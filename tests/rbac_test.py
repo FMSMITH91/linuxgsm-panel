@@ -100,7 +100,7 @@ try:
     # ── Limited user (VIEW_SERVERS + VIEW_CONSOLE, access to ONE remote) ──
     c = client_as(uid)
     for p in ["/users", "/groups", "/logs", "/remotes", "/server-management",
-              "/tailscale", "/api/tailscale",
+              "/tailscale", "/api/tailscale", "/settings", "/notifications",
               "/api/remote/%d/specs" % granted_remote, "/api/panel/update-status"]:
         code = c.get(p).status_code
         check("limited user DENIED %s" % p, code != 200, "got %d" % code)
@@ -178,7 +178,8 @@ try:
 
     # ── Superadmin sanity: still full access ──
     ca = client_as(admin_id)
-    for p in ["/users", "/groups", "/logs", "/remotes", "/server-management", "/tailscale"]:
+    for p in ["/users", "/groups", "/logs", "/remotes", "/server-management", "/tailscale",
+              "/settings", "/notifications"]:
         code = ca.get(p).status_code
         check("superadmin CAN access %s" % p, code == 200, "got %d" % code)
 finally:

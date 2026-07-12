@@ -1777,6 +1777,19 @@ def _int_or(value, default):
         return default
 
 
+_HEX_COLOR_RE = re.compile(r"^#[0-9A-Fa-f]{6}$")
+
+
+def _valid_hex_color(value):
+    """Return a normalised #rrggbb string if `value` is a 6-digit hex colour, else "".
+    The accent colour is emitted into a CSS custom property, so it must be a strict
+    colour literal — never arbitrary text that could carry `}` / `<` and break out."""
+    v = (value or "").strip()
+    if not v.startswith("#"):
+        v = "#" + v
+    return v.lower() if _HEX_COLOR_RE.match(v) else ""
+
+
 def create_app():
     app = Flask(__name__)
     cfg = load_config()
@@ -2146,6 +2159,8 @@ def register_context_processors(app):
         lang = _current_lang()
         return {
             "site_title": cfg.get("site_title", "LinuxGSM Panel"),
+            "login_tagline": (cfg.get("login_tagline") or "").strip(),
+            "accent_color": _valid_hex_color(cfg.get("accent_color")),
             "current_year": datetime.utcnow().year,
             "tailscale_url": tailscale_url,
             "mount_prefix": app.config.get("_MOUNT_PREFIX", "/"),
@@ -4329,6 +4344,56 @@ def register_routes(app):
         return render_template("manage_users.html", users=users, groups=groups)
 
     # ── Admin notifications (Telegram / Discord) ──────────────
+    @app.route("/settings")
+    @login_required
+    @permission_required(SUPER_ADMIN)
+    def panel_settings():
+        cfg = load_config()
+        return render_template("settings.html", languages=i18n.LANGUAGES, settings={
+            "site_title": cfg.get("site_title", "LinuxGSM Panel"),
+            "site_domain": cfg.get("site_domain", ""),
+            "login_tagline": cfg.get("login_tagline", ""),
+            "accent_color": _valid_hex_color(cfg.get("accent_color")),
+            "default_language": cfg.get("default_language", ""),
+            "session_lifetime_hours": int(cfg.get("session_lifetime_hours", 8) or 8),
+            "remember_days": int(cfg.get("remember_days", 3) or 3),
+            "session_protection": cfg.get("session_protection", "strong"),
+            "autoblock_threshold": _autoblock_threshold(),
+        })
+
+    @app.route("/settings/save", methods=["POST"])
+    @login_required
+    @permission_required(SUPER_ADMIN)
+    def panel_settings_save():
+        f = request.form
+        title = (f.get("site_title") or "").strip()[:80] or "LinuxGSM Panel"
+        domain = (f.get("site_domain") or "").strip()[:255]
+        tagline = (f.get("login_tagline") or "").strip()[:200]
+        accent = _valid_hex_color(f.get("accent_color"))          # "" if blank/invalid -> built-in
+        lang = (f.get("default_language") or "").strip()
+        lang = lang if lang in i18n.LANGUAGES else ""             # "" -> use creator's language
+        protection = f.get("session_protection") if f.get("session_protection") in ("strong", "basic") else "strong"
+        hours = max(1, min(_int_or(f.get("session_lifetime_hours"), 8), 168))     # 1h .. 7d
+        days = max(1, min(_int_or(f.get("remember_days"), 3), 90))                # 1 .. 90 days
+        autoblock = max(1, min(_int_or(f.get("autoblock_threshold"), 100), 100000))
+
+        def _mut(cfg):
+            cfg.update({
+                "site_title": title, "site_domain": domain, "login_tagline": tagline,
+                "accent_color": accent, "default_language": lang, "session_protection": protection,
+                "session_lifetime_hours": hours, "remember_days": days,
+                "autoblock_threshold": autoblock,
+            })
+        update_config(_mut)
+        # Session/security keys are read from app.config per request, so apply them live —
+        # no panel restart needed for the change to take effect.
+        app.config["PERMANENT_SESSION_LIFETIME"] = hours * 3600
+        app.config["REMEMBER_COOKIE_DURATION"] = timedelta(days=days)
+        app.config["SESSION_PROTECTION"] = protection
+        log_action(current_user, "settings_update", target="panel")
+        flash("Settings saved.", "success")
+        return redirect(url_for("panel_settings"))
+
     @app.route("/notifications")
     @login_required
     @permission_required(SUPER_ADMIN)
@@ -4407,12 +4472,16 @@ def register_routes(app):
         if existing:
             return _form_err("Username already exists.", "manage_users")
 
+        # New users start in the configured default UI language (Settings → Localization),
+        # falling back to English; each user can change their own afterwards.
+        new_lang = (load_config().get("default_language") or "en")
         user = User(
             username=username,
             password_hash=hash_password(password),
             email=encrypt_secret(email) if email else None,
             display_name=display_name,
             is_superadmin=is_superadmin,
+            language=(new_lang if new_lang in i18n.LANGUAGES else "en"),
         )
         # Add to selected groups
         for gid in group_ids:

@@ -40,6 +40,13 @@
       --font-size-sm: 0.8125rem;
       --font-size-xs: 0.7rem;
     }
+    {# Configurable brand accent (Settings → Branding). accent_color is server-validated to a
+       strict #rrggbb literal; this :root comes after the defaults so it wins the cascade. #}
+    {% if accent_color %}:root {
+      --accent: {{ accent_color }};
+      --accent-hover: color-mix(in srgb, {{ accent_color }} 80%, white);
+      --accent-glow: color-mix(in srgb, {{ accent_color }} 15%, transparent);
+    }{% endif %}
     * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
     /* Reserve a minimum width for icon glyphs so they can't shift layout while the
        icon webfont loads (bootstrap-icons uses font-display:block). min-width is a
@@ -612,6 +619,8 @@
       <i class="bi bi-slash-circle"></i> Global Bans</a></li>
     <li><a href="{{ url_for('notifications_settings') }}" class="{% if request.path == url_for('notifications_settings') %}active{% endif %}">
       <i class="bi bi-bell"></i> Notifications</a></li>
+    <li><a href="{{ url_for('panel_settings') }}" class="{% if request.path == url_for('panel_settings') %}active{% endif %}">
+      <i class="bi bi-gear"></i> Settings</a></li>
     {% endif %}
     {% if has_permission('view_logs') %}
     <li><a href="{{ url_for('view_logs') }}" class="{% if request.path == url_for('view_logs') %}active{% endif %}">

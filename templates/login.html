@@ -10,7 +10,7 @@
           <span style="font-size: 3rem;">🎮</span>
           <h3 class="mt-2">{{ site_title }}</h3>
           <p class="text-secondary small">
-            {% if two_factor %}Enter the code from your authenticator app{% else %}Sign in to manage your game servers{% endif %}
+            {% if two_factor %}Enter the code from your authenticator app{% else %}{{ login_tagline or 'Sign in to manage your game servers' }}{% endif %}
           </p>
         </div>
         {% if two_factor %}

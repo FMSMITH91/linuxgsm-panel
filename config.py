@@ -28,6 +28,9 @@ except OSError:
 DEFAULT_CONFIG = {
     "site_title": "LinuxGSM Panel",
     "site_domain": "",
+    "login_tagline": "",       # subtitle under the site name on the login page ("" = built-in default)
+    "accent_color": "",        # brand accent as #RRGGBB ("" = built-in green); validated before use
+    "default_language": "",    # UI language new users start in ("" = the creating admin's language)
     "instance_id": "",
     "setup_complete": False,
     "port": 5000,

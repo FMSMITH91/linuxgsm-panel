@@ -18,7 +18,8 @@ import config
 import ssh_manager as sm
 import notifications as N
 import system_ops as SO
-from app import password_problem, _int_or, _valid_ip_or_cidr, _whitelisted, _parse_tg_command, _tg_command_arg
+from app import (password_problem, _int_or, _valid_ip_or_cidr, _whitelisted, _parse_tg_command,
+                 _tg_command_arg, _valid_hex_color)
 from auth import can_access_remote, client_ip
 
 results = []
@@ -47,6 +48,18 @@ check("weak: no lower", password_problem("TEST1234!@") is not None)
 check("weak: no digit", password_problem("TestTest!@") is not None)
 check("weak: no symbol", password_problem("TestTest12") is not None)
 check("strong password accepted", password_problem("Test1234!@") is None)
+
+# ── accent colour (Settings → Branding) is emitted into a CSS custom property, so it MUST be a
+#    strict #rrggbb literal — never arbitrary text that could carry `}`/`<` and break out. ──
+eq("hex colour: valid passes through (lowercased)", _valid_hex_color("#10B981"), "#10b981")
+eq("hex colour: bare 6-hex gets a '#'", _valid_hex_color("1a2b3c"), "#1a2b3c")
+eq("hex colour: surrounding whitespace trimmed", _valid_hex_color("  #ABCDEF "), "#abcdef")
+eq("hex colour: blank -> '' (use built-in)", _valid_hex_color(""), "")
+eq("hex colour: None -> ''", _valid_hex_color(None), "")
+eq("hex colour: 3-digit shorthand rejected", _valid_hex_color("#fff"), "")
+eq("hex colour: named colour rejected", _valid_hex_color("red"), "")
+eq("hex colour: CSS/HTML breakout rejected", _valid_hex_color("#fff;}</style><script>"), "")
+eq("hex colour: too long rejected", _valid_hex_color("#1234567"), "")
 
 # ── safe int parsing (a non-numeric port must not raise) ──────
 eq("_int_or valid", _int_or("2222", 22), 2222)

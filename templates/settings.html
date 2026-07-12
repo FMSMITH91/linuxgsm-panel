@@ -1,0 +1,102 @@
+{% extends "base.html" %}
+{% block title %}Settings{% endblock %}
+{% block content %}
+
+<div class="d-flex justify-content-between align-items-center mb-3 flex-wrap gap-2">
+  <h1 class="page-title mb-0"><i class="bi bi-gear-fill"></i> Settings</h1>
+</div>
+<p class="text-secondary">
+  Panel-wide preferences. Changes take effect immediately — no restart needed.
+</p>
+
+<form method="POST" action="{{ url_for('panel_settings_save') }}">
+  <div class="row">
+    <!-- Branding -->
+    <div class="col-lg-6 mb-3">
+      <div class="card h-100">
+        <div class="card-header"><i class="bi bi-palette"></i> Branding</div>
+        <div class="card-body">
+          <label class="form-label small mb-1" for="s-title">Site name</label>
+          <input type="text" id="s-title" name="site_title" maxlength="80"
+                 class="form-control form-control-sm" value="{{ settings.site_title }}"
+                 placeholder="LinuxGSM Panel">
+          <div class="small text-secondary mt-1">Shown in the browser tab and on the login page.</div>
+
+          <label class="form-label small mb-1 mt-3" for="s-domain">Site domain</label>
+          <input type="text" id="s-domain" name="site_domain" maxlength="255"
+                 class="form-control form-control-sm" value="{{ settings.site_domain }}"
+                 placeholder="panel.example.com">
+          <div class="small text-secondary mt-1">Used for the TLS certificate and connect links.</div>
+
+          <label class="form-label small mb-1 mt-3" for="s-tagline">Login tagline</label>
+          <input type="text" id="s-tagline" name="login_tagline" maxlength="200"
+                 class="form-control form-control-sm" value="{{ settings.login_tagline }}"
+                 placeholder="Sign in to manage your game servers">
+          <div class="small text-secondary mt-1">Subtitle under the site name on the login page.</div>
+
+          <label class="form-label small mb-1 mt-3" for="s-accent">Accent colour</label>
+          <div class="d-flex align-items-center gap-2">
+            <input type="color" id="s-accent-picker" class="form-control form-control-sm"
+                   style="max-width:3rem; padding:.15rem;" value="{{ settings.accent_color or '#10b981' }}"
+                   oninput="document.getElementById('s-accent').value = this.value;">
+            <input type="text" id="s-accent" name="accent_color" maxlength="7"
+                   class="form-control form-control-sm" style="max-width:8rem;"
+                   value="{{ settings.accent_color }}" placeholder="#10b981"
+                   oninput="try{document.getElementById('s-accent-picker').value=this.value;}catch(e){}">
+          </div>
+          <div class="small text-secondary mt-1">Buttons, links and highlights. Blank = built-in green.</div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Localization + Sessions/Security -->
+    <div class="col-lg-6 mb-3">
+      <div class="card mb-3">
+        <div class="card-header"><i class="bi bi-translate"></i> Localization</div>
+        <div class="card-body">
+          <label class="form-label small mb-1" for="s-lang">Default language for new users</label>
+          <select id="s-lang" name="default_language" class="form-select form-select-sm">
+            <option value="" {% if not settings.default_language %}selected{% endif %}>Creator's language</option>
+            {% for code, name in languages.items() %}
+            <option value="{{ code }}" {% if settings.default_language == code %}selected{% endif %}>{{ name }}</option>
+            {% endfor %}
+          </select>
+          <div class="small text-secondary mt-1">The UI language a newly-created account starts in.</div>
+        </div>
+      </div>
+
+      <div class="card">
+        <div class="card-header"><i class="bi bi-shield-lock"></i> Sessions &amp; Security</div>
+        <div class="card-body">
+          <div class="row g-2">
+            <div class="col-6">
+              <label class="form-label small mb-1" for="s-idle">Session idle timeout (hours)</label>
+              <input type="number" id="s-idle" name="session_lifetime_hours" min="1" max="168"
+                     class="form-control form-control-sm" value="{{ settings.session_lifetime_hours }}">
+            </div>
+            <div class="col-6">
+              <label class="form-label small mb-1" for="s-remember">"Remember me" (days)</label>
+              <input type="number" id="s-remember" name="remember_days" min="1" max="90"
+                     class="form-control form-control-sm" value="{{ settings.remember_days }}">
+            </div>
+          </div>
+
+          <label class="form-label small mb-1 mt-3" for="s-prot">Session protection</label>
+          <select id="s-prot" name="session_protection" class="form-select form-select-sm">
+            <option value="strong" {% if settings.session_protection != 'basic' %}selected{% endif %}>Strong — re-verify on IP / device change (recommended)</option>
+            <option value="basic" {% if settings.session_protection == 'basic' %}selected{% endif %}>Basic — lighter checks</option>
+          </select>
+
+          <label class="form-label small mb-1 mt-3" for="s-autoblock">Auto-block threshold (attempts / 7 days)</label>
+          <input type="number" id="s-autoblock" name="autoblock_threshold" min="1" max="100000"
+                 class="form-control form-control-sm" value="{{ settings.autoblock_threshold }}">
+          <div class="small text-secondary mt-1">How many failed logins from one IP over 7 days before it's auto-blocked.</div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <button type="submit" class="btn btn-primary"><i class="bi bi-save"></i> Save settings</button>
+</form>
+
+{% endblock %}
