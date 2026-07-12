@@ -70,17 +70,24 @@ def event_enabled(cfg, key):
     return bool(events.get(key, EVENTS.get(key, ("", False))[1]))
 
 
-_DEFAULT_THRESHOLDS = {"disk_pct": 90, "load_pct": 90}
+_DEFAULT_THRESHOLDS = {"disk_pct": 90, "load_pct": 200, "mem_pct": 90, "load_mins": 5}
+# Per-key clamp ranges. disk % and mem % are real percentages (<=99). CPU 'load' is the 1-minute load
+# average per core x100, so it legitimately exceeds 100% (100% = one core fully busy) and gets a much
+# higher ceiling. load_mins is how long CPU/RAM must STAY over the line before it pages you (minutes).
+_THRESHOLD_BOUNDS = {"disk_pct": (50, 99), "load_pct": (50, 800), "mem_pct": (50, 99), "load_mins": (1, 120)}
 
 
 def get_thresholds():
-    """Configured alert thresholds — host disk %, and host CPU-load/RAM % — each clamped to 50-99,
-    falling back to the defaults. The monitor reads these to decide when disk_low / high_load fire."""
+    """Configured alert thresholds, each clamped to its own range, falling back to the defaults:
+    disk % and mem % (50-99), CPU load-average per-core % (50-800, so it can be >100), and load_mins
+    — the minutes CPU/RAM must stay high before alerting. The monitor reads these for disk_low /
+    high_load."""
     t = _cfg().get("thresholds") or {}
     out = {}
     for k, dflt in _DEFAULT_THRESHOLDS.items():
+        lo, hi = _THRESHOLD_BOUNDS[k]
         try:
-            out[k] = min(99, max(50, int(t.get(k, dflt))))
+            out[k] = min(hi, max(lo, int(t.get(k, dflt))))
         except (TypeError, ValueError):
             out[k] = dflt
     return out
@@ -116,8 +123,9 @@ def save_settings(*, enabled, telegram, discord, events, thresholds=None):
     th = get_thresholds()   # start from current/defaults; only overwrite fields that were submitted
     for k in _DEFAULT_THRESHOLDS:
         if thresholds and thresholds.get(k) not in (None, ""):
+            lo, hi = _THRESHOLD_BOUNDS[k]
             try:
-                th[k] = min(99, max(50, int(thresholds[k])))
+                th[k] = min(hi, max(lo, int(thresholds[k])))
             except (TypeError, ValueError):
                 _log.debug("ignoring non-numeric threshold %r; keeping %r", k, th[k])
     notif = {

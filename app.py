@@ -1164,19 +1164,23 @@ def _monitor_pass():
                 _monitor_state["disk"][remote.id] = True
             elif pct < _th["disk_pct"] - 5 and alerted:
                 _monitor_state["disk"][remote.id] = False
-        # High CPU/memory — only when SUSTAINED (>= 2 consecutive passes over the threshold, ~2 min),
-        # so a momentary spike doesn't page you; re-arm once it drops well below.
+        # High CPU/memory — only when SUSTAINED for the configured window (load_mins), so a brief spike
+        # on a small box doesn't page you; re-arm once it drops well below. CPU-load (a per-core loadavg
+        # %, which can exceed 100) and memory each have their own threshold.
         loadpct, mempct = _host_load_mem(remote)
         st = _monitor_state["load"].setdefault(remote.id, {})
-        for kind, val, label in (("cpu", loadpct, "CPU load"), ("mem", mempct, "memory")):
+        need = max(1, round(_th["load_mins"] * 60 / _MONITOR_SECONDS))   # monitor passes over the line
+        for kind, val, thresh, label in (("cpu", loadpct, _th["load_pct"], "CPU load"),
+                                         ("mem", mempct, _th["mem_pct"], "memory")):
             if val is None:
                 continue
-            st[kind + "_hi"] = (st.get(kind + "_hi", 0) + 1) if val >= _th["load_pct"] else 0
-            if st[kind + "_hi"] >= 2 and not st.get(kind + "_alerted"):
+            st[kind + "_hi"] = (st.get(kind + "_hi", 0) + 1) if val >= thresh else 0
+            if st[kind + "_hi"] >= need and not st.get(kind + "_alerted"):
                 notifications.notify("high_load", "Host under load",
-                                     "%s is at %d%% %s." % (remote.display_name, val, label))
+                                     "%s is at %d%% %s (sustained %d+ min)."
+                                     % (remote.display_name, val, label, _th["load_mins"]))
                 st[kind + "_alerted"] = True
-            elif val < _th["load_pct"] - 10 and st.get(kind + "_alerted"):
+            elif val < thresh - 10 and st.get(kind + "_alerted"):
                 st[kind + "_alerted"] = False
         try:
             ports = _remote_listening_ports(remote)
@@ -4268,7 +4272,8 @@ def register_routes(app):
                      "channel_id": f.get("discord_channel_id", ""),
                      "accept_commands": bool(f.get("discord_accept_commands"))},
             events={k: bool(f.get("event_" + k)) for k in notifications.EVENTS},
-            thresholds={"disk_pct": f.get("threshold_disk"), "load_pct": f.get("threshold_load")},
+            thresholds={"disk_pct": f.get("threshold_disk"), "load_pct": f.get("threshold_load"),
+                        "mem_pct": f.get("threshold_mem"), "load_mins": f.get("threshold_mins")},
         )
         log_action(current_user, "notifications_update", target="panel")
         flash("Notification settings saved.", "success")

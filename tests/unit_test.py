@@ -2077,6 +2077,30 @@ _used_keys = set(_re.findall(r'notifications\.notify\(\s*"(\w+)"', _app_src))
 check("notify: every notify() key in app.py is registered in EVENTS",
       _used_keys and _used_keys <= set(N.EVENTS), "unregistered: %s" % sorted(_used_keys - set(N.EVENTS)))
 
+# Alert thresholds: disk %/mem % are real percents (<=99); CPU 'load' is a per-core loadavg % that can
+# exceed 100; load_mins is the sustained window. Each is clamped to its own range with defaults.
+_orig_thr_cfg = N._cfg
+try:
+    N._cfg = lambda: {}
+    check("thresholds: sensible defaults when unset",
+          N.get_thresholds() == {"disk_pct": 90, "load_pct": 200, "mem_pct": 90, "load_mins": 5})
+    N._cfg = lambda: {"thresholds": {"disk_pct": 250, "mem_pct": 250, "load_pct": 250, "load_mins": 999}}
+    _thi = N.get_thresholds()
+    check("thresholds: disk % and mem % are capped at 99 (real percentages)",
+          _thi["disk_pct"] == 99 and _thi["mem_pct"] == 99)
+    check("thresholds: CPU load may exceed 100% (loadavg-based, ceiling 800)", _thi["load_pct"] == 250)
+    check("thresholds: the sustained-minutes window is capped at 120", _thi["load_mins"] == 120)
+    N._cfg = lambda: {"thresholds": {"load_pct": 5, "load_mins": 0}}
+    _thlo = N.get_thresholds()
+    check("thresholds: values below the floor clamp up (load>=50, mins>=1)",
+          _thlo["load_pct"] == 50 and _thlo["load_mins"] == 1)
+finally:
+    N._cfg = _orig_thr_cfg
+# The monitor's sustained window maps minutes -> consecutive passes at the 60s monitor cadence.
+import app as _app_thr  # noqa: E402
+check("thresholds: 60s monitor cadence means load_mins == required consecutive passes",
+      _app_thr._MONITOR_SECONDS == 60 and max(1, round(10 * 60 / _app_thr._MONITOR_SECONDS)) == 10)
+
 # ── Login-security whitelist + auto-block threshold ──
 import ipaddress as _ipaddr  # noqa: E402
 

@@ -139,20 +139,39 @@
         {% endfor %}
       </div>
       <hr class="my-3">
+      <div class="fw-semibold small mb-2"><i class="bi bi-speedometer2"></i> Host alert thresholds</div>
       <div class="row g-3 align-items-end">
-        <div class="col-md-6">
-          <label class="form-label small mb-1" for="threshold-disk">Disk-low alert threshold</label>
+        <div class="col-md-4">
+          <label class="form-label small mb-1" for="threshold-disk">Disk-low</label>
           <div class="input-group input-group-sm">
             <input type="number" min="50" max="99" name="threshold_disk" id="threshold-disk" class="form-control" value="{{ settings.thresholds.disk_pct }}">
             <span class="input-group-text">% used</span>
           </div>
         </div>
-        <div class="col-md-6">
-          <label class="form-label small mb-1" for="threshold-load">High-load alert threshold (CPU / RAM)</label>
+        <div class="col-md-4">
+          <label class="form-label small mb-1" for="threshold-load">High CPU load</label>
           <div class="input-group input-group-sm">
-            <input type="number" min="50" max="99" name="threshold_load" id="threshold-load" class="form-control" value="{{ settings.thresholds.load_pct }}">
+            <input type="number" min="50" max="800" name="threshold_load" id="threshold-load" class="form-control" value="{{ settings.thresholds.load_pct }}">
             <span class="input-group-text">%</span>
           </div>
+          <div class="form-text small">Load-average per core. 100% = one core fully busy; 200% = load 2.0 on a 1-core box.</div>
+        </div>
+        <div class="col-md-4">
+          <label class="form-label small mb-1" for="threshold-mem">High memory</label>
+          <div class="input-group input-group-sm">
+            <input type="number" min="50" max="99" name="threshold_mem" id="threshold-mem" class="form-control" value="{{ settings.thresholds.mem_pct }}">
+            <span class="input-group-text">% used</span>
+          </div>
+        </div>
+      </div>
+      <div class="row g-3 align-items-end mt-1">
+        <div class="col-md-6">
+          <label class="form-label small mb-1" for="threshold-mins">…only alert if CPU/memory stays high for at least</label>
+          <div class="input-group input-group-sm">
+            <input type="number" min="1" max="120" name="threshold_mins" id="threshold-mins" class="form-control" value="{{ settings.thresholds.load_mins }}">
+            <span class="input-group-text">minutes</span>
+          </div>
+          <div class="form-text small">Stops brief spikes from paging you — the level must hold this long first.</div>
         </div>
       </div>
     </div>
