@@ -4819,15 +4819,15 @@ def uninstall_gmod_content(server, content_user, games):
     removed = []
     for g in games:
         lgsm = GMOD_CONTENT_GAMES[g][1]
-        # g is a constant folder key and content_user is validated -> safe paths. Remove as the
-        # content user (it owns the files); the shared lgsm/ framework dir is left for other games.
+        # g is a constant folder key and content_user is validated (no '/'/'..'/metachars), so every
+        # path is a fixed subpath of the content home — safe to rm as root, which also sidesteps any
+        # parent-dir ownership quirk. The shared lgsm/ framework dir is left for the other games.
         paths = ["/home/%s/serverfiles/%s" % (content_user, g)]
         if lgsm:
             paths += ["/home/%s/%s" % (content_user, lgsm),
                       "/home/%s/lgsm/config-lgsm/%s" % (content_user, lgsm)]
         inner = " ; ".join("rm -rf %s" % p for p in paths)
-        run_command(server, f"sudo -u {_quote(content_user)} bash -c {_quote(inner)}",
-                    timeout=120, sudo=False)
+        run_command(server, _sudo_sh(inner), timeout=120, sudo=False)
         if not content_present(server, content_user, g):
             removed.append(g)
     try:
