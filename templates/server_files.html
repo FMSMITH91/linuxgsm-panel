@@ -194,7 +194,7 @@
 <div class="card mt-3">
   <div class="card-header d-flex justify-content-between align-items-center flex-wrap gap-2">
     <span><i class="bi bi-clock-history"></i> Scheduled Tasks <span class="text-secondary small">(cron)</span></span>
-    <span class="text-secondary" style="font-size:.66rem;"><i class="bi bi-info-circle"></i> Runs as <code>{{ server.short_name }}</code>. Only the autostart &amp; daily-restart lines show as <span class="badge bg-secondary" style="font-size:.5rem;">panel</span> (change them with their own toggles). The maintenance jobs (monitor/update/mods-update) can be edited or deleted here.</span>
+    <span class="text-secondary" style="font-size:.66rem;"><i class="bi bi-info-circle"></i> Runs as <code>{{ server.short_name }}</code>. The Autostart line (LinuxGSM <code>monitor</code>) &amp; the daily-restart line show as <span class="badge bg-secondary" style="font-size:.5rem;">panel</span> — turn those off with their toggles on the server page. The <code>update</code>/<code>mods-update</code>/<code>update-lgsm</code> jobs and any old <code>@reboot … start</code> line can be edited or deleted here.</span>
   </div>
   <div class="card-body">
     <!-- Add / edit form -->

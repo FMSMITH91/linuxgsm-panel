@@ -69,15 +69,16 @@ check("cron: newline in command rejected", not sm._validate_cron("@daily", "a\nb
 check("cron: embedded CR rejected", not sm._validate_cron("@daily", "a\rb")[0])
 check("cron: embedded CR in schedule rejected", not sm._validate_cron("0 5 *\r* *", "x")[0])
 check("cron: shell metachars allowed in command", sm._validate_cron("@daily", "a && b | c")[0])
-# managed-line detection — ONLY the toggle-backed lines (autostart + daily restart) are read-only.
-check("cron: autostart is managed",
-      sm._cron_line_managed("@reboot /home/gm/gmodserver start > /dev/null 2>&1", "gm", "gmodserver"))
+# managed-line detection — ONLY the toggle-backed lines are read-only: the LinuxGSM `monitor` cron
+# (the Autostart switch) and the `.restart-pending` flag (the daily-restart switch).
+check("cron: monitor (Autostart switch) is managed",
+      sm._cron_line_managed("*/5 * * * * /home/gm/gmodserver monitor > /dev/null 2>&1", "gm", "gmodserver"))
 check("cron: daily-restart flag is managed",
       sm._cron_line_managed("0 5 * * * touch /home/gm/.restart-pending", "gm", "gmodserver"))
-# The LinuxGSM maintenance jobs have no toggle, so they must be editable/deletable (NOT managed) —
-# otherwise the admin can't remove them at all.
-check("cron: maintenance monitor is NOT managed (deletable)",
-      not sm._cron_line_managed("*/5 * * * * /home/gm/gmodserver monitor > /dev/null 2>&1", "gm", "gmodserver"))
+# A legacy '@reboot … start' line has no toggle behind it (set_autostart strips it) — must be deletable.
+check("cron: legacy @reboot start is NOT managed (deletable)",
+      not sm._cron_line_managed("@reboot /home/gm/gmodserver start > /dev/null 2>&1", "gm", "gmodserver"))
+# The update/mods-update/update-lgsm maintenance jobs have no toggle either — deletable.
 check("cron: maintenance update is NOT managed (deletable)",
       not sm._cron_line_managed("15 5 * * * /home/gm/gmodserver update > /dev/null 2>&1", "gm", "gmodserver"))
 check("cron: update-lgsm is NOT managed (deletable)",
@@ -145,7 +146,7 @@ finally:
 # update/delete must REFUSE a panel-managed line before touching SSH (server=None
 # proves no connection is attempted — the guard returns first). This is the security
 # invariant that the generic editor can't tamper with autostart/maintenance/restart.
-_up = sm.update_cron_job(None, "gm", "@reboot /home/gm/gmodserver start > /dev/null 2>&1",
+_up = sm.update_cron_job(None, "gm", "*/5 * * * * /home/gm/gmodserver monitor > /dev/null 2>&1",
                          "@daily", "/home/gm/x.sh", "gmodserver")
 check("cron: update refuses a managed line (no SSH)", _up[0] is False and "managed" in _up[1])
 _dl = sm.delete_cron_job(None, "gm", "0 5 * * * touch /home/gm/.restart-pending", "gmodserver")
@@ -176,9 +177,9 @@ check("managed cron: unwrap recovers the core command + id",
 # A maintenance job (no toggle) is NOT managed even when inline-recorded — so it can be deleted.
 check("managed cron: inline-recorded maintenance line is NOT managed (deletable)",
       not sm._cron_line_managed(_mrec, "gm", "gmodserver"))
-# The autostart line, however, IS toggle-backed and must stay managed even when inline-recorded.
-check("managed cron: inline-recorded autostart is still detected as managed",
-      sm._cron_line_managed(sm._record_managed_cmd("gm", "/home/gm/gmodserver start"), "gm", "gmodserver"))
+# The monitor line, however, IS toggle-backed (Autostart) and must stay managed even when inline-recorded.
+check("managed cron: inline-recorded monitor (Autostart) is still detected as managed",
+      sm._cron_line_managed(sm._record_managed_cmd("gm", "/home/gm/gmodserver monitor"), "gm", "gmodserver"))
 # upgrade_managed_cron_tracking rewraps EXISTING managed lines in place, leaving user jobs and
 # the compound restart-check untouched (so old installs get success/error without a reinstall).
 _upcap = {}

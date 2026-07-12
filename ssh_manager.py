@@ -911,11 +911,14 @@ def get_autostart(server, user, selfname=None):
 
 
 # ── Generic per-server cron manager ──────────────────────────────────────────
-# A cron line is `managed` (read-only in the generic editor, no delete button) ONLY when the panel
-# drives it through a dedicated TOGGLE — editing/deleting it here would silently desync that toggle.
-# That's just the @reboot autostart (autostart switch) and the daily restart-when-empty flag (daily-
-# restart switch). The LinuxGSM maintenance jobs (monitor/update/mods-update/update-lgsm) are installed
-# once at install time but have NO toggle, so they are ordinary user entries the admin can edit/delete.
+# A cron line is `managed` (read-only in the generic editor, no delete button) ONLY when a dedicated
+# TOGGLE owns it — editing/deleting it here would fight that toggle. Those are:
+#   - the LinuxGSM `monitor` line  → the Autostart switch (monitor is how autostart works now: it keeps
+#     the server in its intended state across crashes/reboots; there is NO `@reboot start` line anymore),
+#   - the `.restart-pending` flag  → the daily restart-when-empty switch.
+# Everything else has no toggle and is an ordinary entry the admin can edit/delete: the update /
+# mods-update / update-lgsm maintenance jobs, AND any leftover legacy `@reboot … start` line from an
+# older install (set_autostart strips it; nothing reads it — so it's safe to remove here).
 
 _CRON_FIELD = r"[-0-9*,/A-Za-z]+"
 _CRON_SCHED_RE = re.compile(
@@ -925,15 +928,15 @@ _CRON_SCHED_RE = re.compile(
 
 
 def _cron_managed_patterns(user, selfname):
-    """Substrings identifying the ONLY crontab lines that are toggle-driven and so must stay read-only
-    here: the @reboot autostart and the daily restart-when-empty flag. The maintenance jobs
-    (monitor/update/mods-update/update-lgsm) are deliberately NOT listed — they have no toggle, so the
-    admin can edit or delete them like any other entry."""
+    """Substrings identifying the ONLY crontab lines a toggle owns, which must stay read-only here: the
+    LinuxGSM `monitor` line (the Autostart switch) and the `.restart-pending` flag (the daily-restart
+    switch). Deliberately NOT listed — so they can be edited/deleted here — are the update/mods-update/
+    update-lgsm maintenance jobs and any legacy `@reboot … start` line (no toggle backs those)."""
     selfname = selfname or user
     base = f"/home/{user}/{selfname}"
     return [
-        f"{base} start",                    # @reboot autostart  (autostart toggle)
-        f"/home/{user}/.restart-pending",   # daily restart-when-empty  (daily-restart toggle)
+        f"{base} monitor",                  # Autostart switch  (LinuxGSM monitor keeps it running)
+        f"/home/{user}/.restart-pending",   # daily restart-when-empty switch
     ]
 
 
