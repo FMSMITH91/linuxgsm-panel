@@ -181,7 +181,9 @@
 <!-- History: persisted CPU/RAM/player trends (sampled ~1/min) -->
 <div class="card mb-3" data-mtab="history" style="display:none;">
   <div class="card-header d-flex justify-content-between align-items-center">
-    <span><i class="bi bi-graph-up"></i> History</span>
+    <span><i class="bi bi-graph-up"></i> History
+      <span class="ms-1 text-success" style="font-size:.72rem; font-weight:normal;" title="Updates automatically (a sample is recorded every minute)">● Live</span>
+    </span>
     <div class="btn-group btn-group-sm" role="group" aria-label="History range">
       <button type="button" class="btn btn-outline-secondary active" data-hist-range="24h">24h</button>
       <button type="button" class="btn btn-outline-secondary" data-hist-range="7d">7d</button>
@@ -945,7 +947,19 @@ var _histCharts = {};
 var _histX = { ticks:{color:'#8b98a5', maxTicksLimit:6, maxRotation:0}, grid:{display:false} };
 function _histChart(id, labels, datasets, yScales){
   var el = document.getElementById(id); if(!el || typeof Chart==='undefined') return;
-  if(_histCharts[id]) _histCharts[id].destroy();
+  var existing = _histCharts[id];
+  if(existing){
+    // Live refresh: update the data in place (no destroy/recreate) so the chart doesn't flash and
+    // keeps the tooltip/hover state. The dataset structure is stable per chart id.
+    existing.data.labels = labels;
+    datasets.forEach(function(ds, i){
+      if(existing.data.datasets[i]) existing.data.datasets[i].data = ds.data;
+      else existing.data.datasets[i] = ds;
+    });
+    existing.data.datasets.length = datasets.length;
+    existing.update('none');
+    return;
+  }
   var scales = { x:_histX }; for(var k in yScales){ scales[k]=yScales[k]; }
   _histCharts[id] = new Chart(el.getContext('2d'), {
     type:'line', data:{ labels:labels, datasets:datasets },
@@ -994,6 +1008,9 @@ document.addEventListener('click', function(e){
   if(b.parentNode) b.parentNode.querySelectorAll('[data-hist-range]').forEach(function(x){ x.classList.toggle('active', x===b); });
   window.loadHistory();
 });
+// Keep the History charts live — refresh while its tab is open and the page is visible (a new sample
+// lands every minute server-side). Updates in place, so it never flashes or steals focus.
+if(window.pollWhenVisible) pollWhenVisible(function(){ if(window._sdTab==='history') window.loadHistory(); }, 30000);
 
 // Populate console immediately via AJAX (page render no longer waits on SSH),
 // then let the websocket stream take over.

@@ -2897,51 +2897,26 @@ def register_routes(app):
             p = VIEW_CONSOLE if action in READONLY_ACTIONS else UPDATE_SERVER
         return p
 
-    def _apply_mod_restart(gs, remote, force=False):
-        """A mod install/remove/update only takes effect after the server restarts. Restart now
-        if it's empty (or forced); otherwise flag restart_pending so the hourly ticker restarts it
-        once the players leave — never kicking anyone unless the admin forces it. A stopped server
-        needs nothing (the change loads on next start). Returns (state, message) with state in
-        {'restarted','pending','idle'}."""
+    def _apply_mod_restart(gs, remote):
+        """A mod install/remove/update only takes effect after the server restarts — but we NEVER
+        restart automatically. Auto-restarting would disconnect whoever's playing out from under the
+        admin, so instead we just report whether a manual restart is needed and let them press
+        'Restart now' when they're ready. A stopped server needs nothing (the change loads on next
+        start). Returns (state, message) with state in {'needed','idle'}."""
         try:
             status = get_server_status(remote, gs)
         except Exception:
             status = "unknown"
         if status == "offline":
-            if gs.restart_pending:
+            if gs.restart_pending:              # clear any stale flag; nothing auto-restarts it now
                 gs.restart_pending = False
                 db.session.commit()
             return "idle", "The server is stopped — the change will load when you next start it."
-        # Only auto-restart when we can CONFIRM the server is empty (pc == 0). An unknown count
-        # (game not queryable / gamedig missing) is left to the admin's "Restart now", so we never
-        # disconnect players we can't see.
-        pc = None
-        try:
-            pc = sm_player_count(remote, gs.short_name, gs.game_type, gs.port)
-        except Exception:
-            pc = None
-        if mod_restart_decision(status, pc, force) == "restart":
-            try:
-                run_as_game_user(remote, gs.short_name, "restart 2>&1", timeout=90, selfname=gs.lgsm_name)
-            except Exception:
-                app.logger.warning("mod restart of %s failed", gs.name, exc_info=True)
-                if not gs.restart_pending:
-                    gs.restart_pending = True
-                    db.session.commit()
-                return "pending", "Change saved, but the restart to load it didn't go through — use Restart now."
-            if gs.restart_pending:
-                gs.restart_pending = False
-                db.session.commit()
-            return "restarted", "Server restarted to load the change."
-        # Players on, or can't confirm empty → defer and let the ticker/admin handle it.
-        if not gs.restart_pending:
-            gs.restart_pending = True
-            db.session.commit()
-        if pc and pc > 0:
-            return "pending", (f"{pc} player(s) online — the server will restart to load the change "
-                               "once it's empty (or use Restart now).")
-        return "pending", ("A restart is needed to load the change — couldn't confirm the server is "
-                           "empty, so use Restart now when you're ready.")
+        # Running: a restart is needed to load the change, but we do NOT do it or queue it — the admin
+        # decides. (We deliberately don't set restart_pending, so the empty-ticker won't restart it
+        # either — no surprise restarts from installing a mod.)
+        return "needed", ("Restart the server to load the change — use Restart now when you're ready "
+                          "(nobody is disconnected until you do).")
 
     def _run_action(gs, remote, action, actor):
         """Execute a whitelisted action (permission already checked).
@@ -7251,9 +7226,10 @@ def register_routes(app):
                    else f"Mod {which} reported an error: {tail[:200] or 'check the console'}")
             restart_pending = False
             if ok:
-                # A mod change needs a restart to load — do it if empty, else flag it.
+                # A mod change only loads on restart — we never restart automatically; just tell the
+                # admin a restart is needed so the UI can offer "Restart now".
                 state, rmsg = _apply_mod_restart(gs, gs.remote)
-                restart_pending = (state == "pending")
+                restart_pending = (state == "needed")   # drives the "Restart now" button in the UI
                 if rmsg:
                     msg = msg + " " + rmsg
             return jsonify({"success": ok, "message": msg, "restart_pending": restart_pending})
