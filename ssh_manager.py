@@ -911,14 +911,12 @@ def get_autostart(server, user, selfname=None):
 
 
 # ── Generic per-server cron manager ──────────────────────────────────────────
-# A cron line is `managed` (read-only in the generic editor, no delete button) ONLY when a dedicated
-# TOGGLE owns it — editing/deleting it here would fight that toggle. Those are:
-#   - the LinuxGSM `monitor` line  → the Autostart switch (monitor is how autostart works now: it keeps
-#     the server in its intended state across crashes/reboots; there is NO `@reboot start` line anymore),
-#   - the `.restart-pending` flag  → the daily restart-when-empty switch.
-# Everything else has no toggle and is an ordinary entry the admin can edit/delete: the update /
-# mods-update / update-lgsm maintenance jobs, AND any leftover legacy `@reboot … start` line from an
-# older install (set_autostart strips it; nothing reads it — so it's safe to remove here).
+# NOTHING is locked in the generic editor any more — the admin can edit or delete EVERY line, even the
+# panel-installed ones (the LinuxGSM monitor/update jobs, the Autostart line, the daily-restart flag).
+# The two toggle-backed lines stay safe because (a) _wrap_cron_command keeps them VISIBLE in the raw
+# crontab, so the Autostart/daily-restart detection (which greps it) still works after a reschedule,
+# and (b) their state is derived live from the crontab, so deleting one just reads back as "off".
+# `_cron_role` gives them a non-blocking LABEL so the admin knows what a panel line is.
 
 _CRON_FIELD = r"[-0-9*,/A-Za-z]+"
 _CRON_SCHED_RE = re.compile(
@@ -928,20 +926,27 @@ _CRON_SCHED_RE = re.compile(
 
 
 def _cron_managed_patterns(user, selfname):
-    """Substrings identifying the ONLY crontab lines a toggle owns, which must stay read-only here: the
-    LinuxGSM `monitor` line (the Autostart switch) and the `.restart-pending` flag (the daily-restart
-    switch). Deliberately NOT listed — so they can be edited/deleted here — are the update/mods-update/
-    update-lgsm maintenance jobs and any legacy `@reboot … start` line (no toggle backs those)."""
-    selfname = selfname or user
-    base = f"/home/{user}/{selfname}"
-    return [
-        f"{base} monitor",                  # Autostart switch  (LinuxGSM monitor keeps it running)
-        f"/home/{user}/.restart-pending",   # daily restart-when-empty switch
-    ]
+    """No cron line is locked any more — every entry is editable/deletable (see the block comment
+    above). Kept as an (empty) hook so update/delete keep a harmless guard and a future 'lock this'
+    need has a single place to wire it."""
+    return []
 
 
 def _cron_line_managed(line, user, selfname):
     return any(p in line for p in _cron_managed_patterns(user, selfname))
+
+
+def _cron_role(command, user, selfname):
+    """A non-blocking LABEL for a panel-installed line so the admin knows what it is (they can still
+    edit or delete it): 'autostart' for the LinuxGSM `monitor` cron, 'daily-restart' for the
+    `.restart-pending` flag line, else ''. Unlike the old `managed`, this never locks the row."""
+    selfname = selfname or user
+    cmd = (command or "").strip()
+    if cmd == f"/home/{user}/{selfname} monitor":
+        return "autostart"
+    if ".restart-pending" in cmd:
+        return "daily-restart"
+    return ""
 
 
 def _split_cron_line(line):
@@ -1017,13 +1022,26 @@ def _install_cron_runner(server, user):
     run_command(server, f"sudo -u {user} bash -c {_quote(inner)}", timeout=15, sudo=False)
 
 
+# A plain command — a path plus simple args, with no shell operators, quotes, or cron-special `%`. Such
+# a command is safe to keep VISIBLE via the inline recorder, so the Autostart detection (which greps
+# the raw crontab for `<base> monitor`) still finds it after the admin reschedules it here.
+_SIMPLE_CMD_RE = re.compile(r"^[\w./ @:+=,-]+$")
+
+
 def _wrap_cron_command(server, user, command):
-    """Return the crontab command that runs `command` through the recorder (installing it
-    first). base64 keeps the crontab line free of quotes and cron's special `%`."""
+    """Return the crontab command that records `command`'s runs. Toggle-backed and plain commands are
+    kept VISIBLE (inline recorder) so the Autostart / daily-restart detection still works after a
+    reschedule; anything with `%`, quotes, or shell operators uses the base64 runner (robust, no
+    escaping needed)."""
+    cmd = (command or "").strip()
+    if ".restart-pending" in cmd:
+        return cmd                              # daily-restart flag line: keep it verbatim + visible
+    if _SIMPLE_CMD_RE.match(cmd):
+        return _record_managed_cmd(user, cmd)   # plain command (incl. `<base> monitor`): visible + tracked
     import base64
     _install_cron_runner(server, user)
-    b64 = base64.b64encode((command or "").encode()).decode()
-    return "/home/%s/.lgsm-cron/run %s %s" % (user, _cron_job_id(command), b64)
+    b64 = base64.b64encode(cmd.encode()).decode()
+    return "/home/%s/.lgsm-cron/run %s %s" % (user, _cron_job_id(cmd), b64)
 
 
 # Inline recorder for the panel's OWN managed jobs (autostart/monitor/update/restart-flag).
@@ -1195,7 +1213,8 @@ def list_cron_jobs(server, user, selfname=None):
             last_run, ok, error = _match_run_time(run_times, display_cmd or cmd), None, ""
         jobs.append({
             "raw": raw, "schedule": sched, "command": display_cmd,
-            "managed": _cron_line_managed(s, user, selfname),
+            "managed": _cron_line_managed(s, user, selfname),   # always False now — every line is editable
+            "role": _cron_role(display_cmd, user, selfname),    # informational label only (autostart/daily-restart)
             "last_run": last_run, "ok": ok, "error": error,
         })
     return jobs
