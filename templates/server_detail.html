@@ -346,6 +346,7 @@
   var nav = document.getElementById('sdtab-nav'); if(!nav) return;
   var TABS = ['console','history','details'];
   function show(tab){
+    window._sdTab = tab;
     document.querySelectorAll('[data-mtab]').forEach(function(el){
       el.style.display = (el.getAttribute('data-mtab') === tab) ? '' : 'none';
     });
@@ -353,6 +354,9 @@
       b.classList.toggle('active', b.getAttribute('data-mtab-btn') === tab);
     });
     try { history.replaceState(null, '', '#' + tab); } catch(e){}
+    // The players card is a Console-tab card whose visibility is ALSO driven by the poll — re-apply
+    // it so a background refresh can't leave it showing on History/Details.
+    if (window.applyPlayersVisibility) window.applyPlayersVisibility();
     if (tab === 'history' && window.loadHistory) window.loadHistory();   // lazy-load the trend charts
   }
   nav.addEventListener('click', function(e){
@@ -385,12 +389,20 @@ function loadPlayers(useConsole){
     .then(renderPlayers).catch(function(){ /* transient: keep what's shown */ });
 }
 function refreshPlayers(){ loadPlayers(true); }
+// The players card belongs to the Console tab AND is content-driven (moderators always see it; others
+// only when the server is queryable). Keep those two concerns from fighting: renderPlayers records
+// whether the content WANTS the card, and applyPlayersVisibility() combines that with the active tab.
+window.applyPlayersVisibility = function(){
+  var card=document.getElementById('players-card'); if(!card) return;
+  card.style.display = (window._sdTab==='console' && window._playersWanted) ? '' : 'none';
+};
 function renderPlayers(d){
   var card=document.getElementById('players-card'); if(!card||!d) return;
   var caps=d.caps||{}, players=d.players||[], queryable=!!d.queryable;
   // Moderators see the card whenever there's something to do (a list, or the announce box);
-  // everyone else only when there's a list or announce to show.
-  card.style.display = (_CAN_MODERATE || queryable) ? '' : 'none';
+  // everyone else only when there's a list or announce to show — but only on the Console tab.
+  window._playersWanted = (_CAN_MODERATE || queryable);
+  window.applyPlayersVisibility();
   if(card.style.display==='none') return;
   var engine=d.engine||'';
   window._plEngine = engine;   // the ban dialog uses this to decide if "all servers" can apply
