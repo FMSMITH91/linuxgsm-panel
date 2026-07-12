@@ -1063,8 +1063,11 @@ function loadGmodContent(){
         + '<div class="d-flex flex-column gap-1 mb-2">' + rows + '</div>'
         + (running
             ? '<div class="text-info small"><span class="spinner-border spinner-border-sm"></span> Working… (install/removal can take a while) '+_esc((d.job&&d.job.msg)||'')+'</div>'
-            : '<button class="btn btn-sm btn-primary" type="button" onclick="applyGmodContent(this)"><i class="bi bi-save"></i> Apply mounts</button>'
+            : '<button class="btn btn-sm btn-primary" type="button" id="gmc-apply"><i class="bi bi-save"></i> Apply mounts</button>'
               + ' <span class="text-secondary small ms-1">Restart the server afterwards to load changes.</span>');
+      // Attach handlers programmatically — the strict CSP (no unsafe-inline) blocks inline onclick=.
+      var _ap = el.querySelector('#gmc-apply');
+      if(_ap) _ap.onclick = function(){ applyGmodContent(_ap); };
       el.querySelectorAll('[data-gmc-uninstall]').forEach(function(b){
         b.onclick = function(){ uninstallGmodContent(b.getAttribute('data-gmc-uninstall'), b.getAttribute('data-gmc-label')); };
       });

@@ -37,12 +37,10 @@
           <label class="form-label small mb-1 mt-3" for="s-accent">Accent colour</label>
           <div class="d-flex align-items-center gap-2">
             <input type="color" id="s-accent-picker" class="form-control form-control-sm"
-                   style="max-width:3rem; padding:.15rem;" value="{{ settings.accent_color or '#10b981' }}"
-                   oninput="document.getElementById('s-accent').value = this.value;">
+                   style="max-width:3rem; padding:.15rem;" value="{{ settings.accent_color or '#10b981' }}">
             <input type="text" id="s-accent" name="accent_color" maxlength="7"
                    class="form-control form-control-sm" style="max-width:8rem;"
-                   value="{{ settings.accent_color }}" placeholder="#10b981"
-                   oninput="try{document.getElementById('s-accent-picker').value=this.value;}catch(e){}">
+                   value="{{ settings.accent_color }}" placeholder="#10b981">
           </div>
           <div class="small text-secondary mt-1">Buttons, links and highlights. Blank = built-in green.</div>
         </div>
@@ -99,4 +97,14 @@
   <button type="submit" class="btn btn-primary"><i class="bi bi-save"></i> Save settings</button>
 </form>
 
+<script nonce="{{ csp_nonce }}">
+// Two-way sync between the colour swatch and the hex field. Attached here (not inline oninput=)
+// because the strict CSP has no 'unsafe-inline' for scripts.
+(function(){
+  var pick = document.getElementById('s-accent-picker'), hex = document.getElementById('s-accent');
+  if(!pick || !hex) return;
+  pick.addEventListener('input', function(){ hex.value = pick.value; });
+  hex.addEventListener('input', function(){ try { pick.value = hex.value; } catch(e){} });
+})();
+</script>
 {% endblock %}
