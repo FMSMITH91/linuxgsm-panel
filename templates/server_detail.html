@@ -1038,22 +1038,24 @@ function loadGmodContent(){
       var rows = visible.map(function(g){
         var status, act = '';
         if (g.present) {
-          status = '<span class="text-success">installed on host</span>';
+          status = '<span class="text-success">on host</span>';
           // Any content on the host can be removed to free disk — including owned/mount-only games.
           act = '<button class="btn btn-link btn-sm p-0 text-danger" style="font-size:.72rem;" type="button" '
             + 'data-gmc-uninstall="'+_esc(g.key)+'" data-gmc-label="'+_esc(g.label)+'"'+(running?' disabled':'')+'>Uninstall</button>';
         } else if (g.downloadable) {
-          status = '<span class="text-secondary">installs on Apply · '+_esc(g.size||'')+'</span>';
+          status = '<span class="text-secondary">installs '+_esc(g.size||'')+'</span>';
         } else {
-          status = '<span class="text-warning">content missing on host</span>';
+          status = '<span class="text-warning">not on host</span>';
         }
-        return '<div class="d-flex align-items-center gap-2" style="max-width:520px;">'
-          + '<div class="form-check mb-0" style="min-width:210px;">'
-          + '<input class="form-check-input gmc-box" type="checkbox" value="'+_esc(g.key)+'" id="gmc-'+_esc(g.key)+'"'
+        // Flex row: the label flexes+truncates so the status + Uninstall stay inside the card on
+        // narrow (mobile) screens instead of being pushed off the right edge.
+        return '<div class="d-flex align-items-center gap-2">'
+          + '<input class="form-check-input gmc-box flex-shrink-0 mt-0" type="checkbox" value="'+_esc(g.key)+'" id="gmc-'+_esc(g.key)+'"'
           + (g.mounted?' checked':'') + (running?' disabled':'') + '>'
-          + '<label class="form-check-label small" for="gmc-'+_esc(g.key)+'">'+_esc(g.label)+'</label></div>'
-          + '<span class="small ms-auto text-nowrap">'+status+'</span>'
-          + '<span class="text-nowrap" style="min-width:56px;text-align:right;">'+act+'</span></div>';
+          + '<label class="small text-truncate" style="flex:1 1 auto;min-width:0;margin:0;cursor:pointer;" for="gmc-'+_esc(g.key)+'">'+_esc(g.label)+'</label>'
+          + '<span class="small text-nowrap flex-shrink-0">'+status+'</span>'
+          + (act ? '<span class="flex-shrink-0">'+act+'</span>' : '')
+          + '</div>';
       }).join('');
       el.innerHTML =
         '<div class="mb-2 text-secondary" style="font-size:.78rem;">'
