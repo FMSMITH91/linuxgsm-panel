@@ -1757,6 +1757,32 @@ check("supports_update: empty list + known no-update game (cod) -> False",
 check("supports_update: empty list + SteamCMD game -> True (fail open)",
       _GS(commands='[]', game_type='csgo').supports_update is True)
 
+# ── list_server_commands: parse LinuxGSM's command menu. This is what populates the
+#    "Supported Commands" panel; import now auto-caches it in the background, so lock in
+#    that a realistic menu (with ANSI colour + non-menu noise lines) parses correctly. ──
+_LGSM_MENU = (
+    "\x1b[0m./gmodserver [option]\n"
+    "start         st   | Start the server.\n"
+    "stop          sp   | Stop the server.\n"
+    "update        u    | Check and apply any updates.\n"
+    "some banner line without a pipe here\n"
+    "details       dt   | Display server information.\n"
+)
+_saved_run = sm.run_command
+try:
+    sm.run_command = lambda *a, **k: (_LGSM_MENU, "", 0)
+    _parsed = sm.list_server_commands(NS(), "gmodserver")
+finally:
+    sm.run_command = _saved_run
+_pc = {c["cmd"]: c for c in _parsed}
+check("list_server_commands: parses start (with short code)",
+      _pc.get("start", {}).get("short") == "st")
+check("list_server_commands: parses update", "update" in _pc)
+eq("list_server_commands: captures description", _pc.get("details", {}).get("desc"),
+   "Display server information.")
+check("list_server_commands: ignores the ./script header + no-pipe banner lines",
+      "some" not in _pc and "gmodserver" not in _pc and len(_pc) == 4)
+
 # ── player moderation: engine-aware caps, status/list parsers + injection-safe commands ──
 check("moderation: gmod (valve) supports kick + ban + say",
       sm.moderation_caps("gmod") == {"kick": True, "ban": True, "say": True})

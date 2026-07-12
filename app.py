@@ -2820,6 +2820,43 @@ def register_routes(app):
                                total_players=total_players, total_max=total_max)
 
     # ── Server Detail + Console ────────────────────────────
+    _cmd_fetch_attempts = {}  # server_id -> last background command-fetch time (rate-limits lazy refetch)
+
+    def _bg_cache_commands(server_ids):
+        """Fetch + cache each server's LinuxGSM command list in the background so the
+        "Supported Commands" panel is populated without the user hitting refresh. Install
+        does this at step 5; import used to skip it, leaving the cache blank. Best-effort and
+        per-server (one server's SSH failure never blocks the rest) and read-only on the host
+        — it runs the instance script with no args, which just prints its command menu."""
+        _app = app
+
+        def _run():
+            with _app.app_context():
+                for sid in server_ids:
+                    try:
+                        gs = db.session.get(GameServer, sid)
+                        if not gs:
+                            continue
+                        cmds = list_server_commands(gs.remote, gs.short_name, gs.lgsm_name)
+                        if cmds:
+                            gs.set_commands(cmds)
+                            db.session.commit()
+                    except Exception:
+                        db.session.rollback()
+                        _log.debug("command cache failed for server %s", sid, exc_info=True)
+
+        threading.Thread(target=_run, daemon=True).start()
+
+    def _maybe_cache_commands(server_id):
+        """Kick off a background command-list fetch for a server whose cache is empty, at most
+        once every few minutes so reloading the page can't stack SSH calls. Lets servers
+        imported before auto-caching existed self-heal the first time they're viewed."""
+        now = time.time()
+        if now - _cmd_fetch_attempts.get(server_id, 0) < 300:
+            return
+        _cmd_fetch_attempts[server_id] = now
+        _bg_cache_commands([server_id])
+
     @app.route("/server/<int:server_id>")
     @login_required
     @server_access_required
@@ -2842,10 +2879,12 @@ def register_routes(app):
         def _can(perm):
             return is_sa or perm in user_perms
 
-        # Use the cached LinuxGSM command list (populated at install time). If it's
-        # somehow empty, the sidebar's refresh button repopulates it on demand — we
-        # never block the page render on an SSH call to fetch it.
+        # Use the cached LinuxGSM command list (populated at install/import time). If it's
+        # empty (e.g. a server imported before auto-caching existed), kick off a background
+        # fetch so it fills in for the next load — we never block the page render on SSH.
         all_commands = gs.get_commands()
+        if not all_commands:
+            _maybe_cache_commands(gs.id)
         cmd_set = {c["cmd"] for c in all_commands}
         # Some games aren't SteamCMD-based (e.g. the Call of Duty family) and have NO `update`
         # command — LinuxGSM omits it from their menu. Only offer Update when the game actually
@@ -4247,6 +4286,12 @@ def register_routes(app):
             db.session.commit()
             log_action(current_user, "import_servers", target=remote.name,
                        detail="added=%s" % ",".join(added))
+            # Populate the imported servers' command lists so "Supported Commands" is ready
+            # without a manual refresh (install caches these; import didn't).
+            new_ids = [gs.id for gs in GameServer.query.filter(
+                GameServer.remote_id == remote_id,
+                GameServer.short_name.in_(added)).all()]
+            _bg_cache_commands(new_ids)
         return jsonify({"success": bool(added), "added": added, "skipped": skipped})
 
     # ── User Management ────────────────────────────────────
