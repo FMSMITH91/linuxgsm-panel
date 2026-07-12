@@ -12,6 +12,7 @@ import json
 import logging
 import re
 import threading
+import time
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -51,6 +52,12 @@ EVENTS = {
 _DISCORD_WEBHOOK_RE = re.compile(
     r"^https://(?:ptb\.|canary\.)?discord(?:app)?\.com/api/webhooks/(\d{5,25})/([\w-]{1,120})$")
 _TG_TOKEN_RE = re.compile(r"^(\d{5,}):([A-Za-z0-9_-]{20,})$")   # (bot id):(secret) — captured for the URL rebuild
+# A Discord *bot* token (for the Gateway command bot). It only ever goes into an `Authorization: Bot`
+# HTTP header, never a URL — the charset here forbids whitespace/control chars so it can't inject a
+# header, and it's deliberately loose on the internal `.`-separated shape so future token formats still
+# validate. A Discord channel id is a snowflake (digits only) and lands only in a charset-checked path.
+_DISCORD_BOT_TOKEN_RE = re.compile(r"^[A-Za-z0-9_.\-]{40,120}$")
+_DISCORD_CHANNEL_RE = re.compile(r"^\d{5,25}$")
 
 
 # ── config read/write ──────────────────────────────────────────
@@ -88,7 +95,9 @@ def settings_for_form():
         "enabled": cfg.get("enabled", True),
         "telegram": {"enabled": bool(tg.get("enabled")), "chat_id": tg.get("chat_id") or "",
                      "has_token": bool(tg.get("token")), "accept_commands": bool(tg.get("accept_commands"))},
-        "discord": {"enabled": bool(dc.get("enabled")), "has_webhook": bool(dc.get("webhook"))},
+        "discord": {"enabled": bool(dc.get("enabled")), "has_webhook": bool(dc.get("webhook")),
+                    "has_bot_token": bool(dc.get("bot_token")), "channel_id": dc.get("channel_id") or "",
+                    "accept_commands": bool(dc.get("accept_commands"))},
         "events": {k: event_enabled(cfg, k) for k in EVENTS},
         "thresholds": get_thresholds(),
     }
@@ -102,6 +111,8 @@ def save_settings(*, enabled, telegram, discord, events, thresholds=None):
     cur_dc = cur.get("discord") or {}
     tg_token = cur_tg.get("token") if telegram.get("token") is None else encrypt_secret(telegram["token"])
     dc_webhook = cur_dc.get("webhook") if discord.get("webhook") is None else encrypt_secret(discord["webhook"])
+    dc_bot_token = cur_dc.get("bot_token") if discord.get("bot_token") is None \
+        else encrypt_secret(discord["bot_token"])
     th = get_thresholds()   # start from current/defaults; only overwrite fields that were submitted
     for k in _DEFAULT_THRESHOLDS:
         if thresholds and thresholds.get(k) not in (None, ""):
@@ -114,7 +125,10 @@ def save_settings(*, enabled, telegram, discord, events, thresholds=None):
         "telegram": {"enabled": bool(telegram.get("enabled")),
                      "chat_id": (telegram.get("chat_id") or "").strip()[:64], "token": tg_token or "",
                      "accept_commands": bool(telegram.get("accept_commands"))},
-        "discord": {"enabled": bool(discord.get("enabled")), "webhook": dc_webhook or ""},
+        "discord": {"enabled": bool(discord.get("enabled")), "webhook": dc_webhook or "",
+                    "bot_token": dc_bot_token or "",
+                    "channel_id": (discord.get("channel_id") or "").strip()[:32],
+                    "accept_commands": bool(discord.get("accept_commands"))},
         "events": {k: bool(events.get(k, EVENTS[k][1])) for k in EVENTS},
         "thresholds": th,
     }
@@ -123,10 +137,12 @@ def save_settings(*, enabled, telegram, discord, events, thresholds=None):
 
 
 # ── senders ────────────────────────────────────────────────────
-# Both request URLs the panel builds use one of these CONSTANT-host prefixes (Telegram's is a fixed
-# literal; a Discord webhook is rebuilt onto discord.com below). _post re-checks the URL against them
-# right before the request as an SSRF barrier — no user/admin-supplied value decides the host.
-_ALLOWED_PREFIXES = ("https://api.telegram.org/", "https://discord.com/api/webhooks/")
+# Every request URL the panel builds uses one of these CONSTANT-host prefixes (Telegram's is a fixed
+# literal; Discord webhook + bot-API URLs are rebuilt onto the discord.com host below). _post re-checks
+# the URL against them right before the request as an SSRF barrier — no user/admin-supplied value
+# decides the host. The Discord prefix covers both /api/webhooks/… (alerts) and /api/v10/channels/…
+# (the command bot's replies); both are on the same constant host with charset-checked path parts.
+_ALLOWED_PREFIXES = ("https://api.telegram.org/", "https://discord.com/api/")
 
 
 def _discord_api_url(webhook):
@@ -268,6 +284,134 @@ def send_discord(webhook, text):
     return False, "Discord rejected it — the webhook URL is wrong or was deleted."
 
 
+# ── Discord command bot (Gateway) ──────────────────────────────
+# Discord offers no outbound long-poll like Telegram's getUpdates, so the two-way command bot keeps a
+# persistent Gateway WebSocket open (in a background greenlet) and posts replies over the bot REST API.
+# The Gateway host is a fixed literal; replies go to /channels/<id>/messages on the constant discord.com
+# host with a digits-only channel id — so, like the webhook sender, nothing user-supplied picks the host.
+DISCORD_GATEWAY_URL = "wss://gateway.discord.gg/?v=10&encoding=json"
+# GUILD_MESSAGES (1<<9) | DIRECT_MESSAGES (1<<12) | MESSAGE_CONTENT (1<<15). MESSAGE_CONTENT is a
+# privileged intent the bot owner must enable in the Discord Developer Portal to read command text.
+_DISCORD_INTENTS = (1 << 9) | (1 << 12) | (1 << 15)
+_ws_warned = [False]   # so a missing websocket-client dep is logged once, not every reconnect tick
+
+
+def _valid_discord_bot_token(token):
+    return _DISCORD_BOT_TOKEN_RE.match(token or "") is not None
+
+
+def _discord_bot_message_url(channel_id):
+    """Canonical https://discord.com/api/v10/channels/<id>/messages, or None if the channel id isn't a
+    plain snowflake. Constant host + digits-only id, so the request path is never user-controlled."""
+    return ("https://discord.com/api/v10/channels/%s/messages" % channel_id
+            if _DISCORD_CHANNEL_RE.match(channel_id or "") else None)
+
+
+def discord_bot_send(bot_token, channel_id, text):
+    """Post a message to a channel as the bot (the command bot's reply path). Returns (ok, detail). The
+    token rides only in the Authorization header; the URL is built on the constant discord.com host with
+    a charset-checked channel id, so this can't become an SSRF sink."""
+    url = _discord_bot_message_url((channel_id or "").strip())
+    if not url:
+        return False, "the channel ID is missing or malformed"
+    if not _valid_discord_bot_token(bot_token):
+        return False, "the bot token is missing or malformed"
+    body = json.dumps({"content": text[:1900]}).encode()
+    ok, reason = _post(url, body, {"Content-Type": "application/json",
+                                   "Authorization": "Bot %s" % bot_token})
+    if ok:
+        return True, ""
+    if reason == "unreachable":
+        return False, "couldn't reach discord.com — check the host's outbound network."
+    return False, ("Discord rejected it — check the bot token, that the bot is in the server, and that "
+                   "it can see/send in that channel.")
+
+
+def discord_gateway_run(bot_token, on_message, _connect=None):
+    """Open ONE Discord Gateway session and pump MESSAGE_CREATE events to `on_message(channel_id,
+    author_is_bot, content)` until the socket drops; then return so the caller can reconnect after a
+    backoff. A fresh IDENTIFY each time (no RESUME) means anything sent while we were down is skipped —
+    the same 'no backlog replay' the Telegram poller gets, so the /update that restarted us is never
+    re-run. Degrades to a no-op (logged) if websocket-client isn't installed. Never raises.
+
+    `_connect` is a seam for tests to inject a fake socket; production leaves it None."""
+    if _connect is None:
+        try:
+            import websocket  # optional dependency; command bot is off if it's absent
+        except Exception:
+            if not _ws_warned[0]:   # warn once, not every reconnect tick, if the dep is missing
+                _ws_warned[0] = True
+                _log.warning("discord command bot: the 'websocket-client' package isn't installed — "
+                             "skipping (webhook alerts are unaffected).")
+            return
+
+        def _connect():
+            return websocket.create_connection(DISCORD_GATEWAY_URL, timeout=40, enable_multithread=True)
+
+    ws = None
+    stop = {"v": False}
+    try:
+        ws = _connect()
+        hello = json.loads(ws.recv())
+        interval = float((hello.get("d") or {}).get("heartbeat_interval", 41250)) / 1000.0
+        ws.send(json.dumps({"op": 2, "d": {
+            "token": bot_token, "intents": _DISCORD_INTENTS,
+            "properties": {"os": "linux", "browser": "linuxgsm-panel", "device": "linuxgsm-panel"},
+        }}))
+        state = {"seq": None, "acked": True}
+
+        def _heartbeat():
+            # Zombied-connection guard: if the previous heartbeat wasn't ACKed (op 11) by the next tick,
+            # the link is dead — close it so recv() below unblocks and the caller reconnects.
+            while not stop["v"]:
+                time.sleep(interval)
+                if stop["v"]:
+                    break
+                if not state["acked"]:
+                    try:
+                        ws.close()
+                    except Exception:
+                        pass
+                    break
+                state["acked"] = False
+                try:
+                    ws.send(json.dumps({"op": 1, "d": state["seq"]}))
+                except Exception:
+                    break
+        threading.Thread(target=_heartbeat, daemon=True).start()
+
+        while True:
+            raw = ws.recv()
+            if not raw:
+                break
+            data = json.loads(raw)
+            if data.get("s") is not None:
+                state["seq"] = data["s"]
+            op = data.get("op")
+            if op == 11:                       # heartbeat ACK
+                state["acked"] = True
+            elif op == 1:                      # server demands an immediate heartbeat (don't touch the
+                ws.send(json.dumps({"op": 1, "d": state["seq"]}))   # periodic ACK tracking → no races
+            elif op in (7, 9):                 # reconnect / invalid-session → drop and re-identify
+                break
+            elif op == 0 and data.get("t") == "MESSAGE_CREATE":
+                d = data.get("d") or {}
+                author = d.get("author") or {}
+                try:
+                    on_message(str(d.get("channel_id") or ""), bool(author.get("bot")), d.get("content") or "")
+                except Exception:
+                    _log.debug("discord on_message handler failed", exc_info=True)
+    except Exception:
+        _log.debug("discord gateway session ended", exc_info=True)
+    finally:
+        stop["v"] = True
+        try:
+            if ws is not None:
+                ws.close()
+        except Exception:
+            pass
+
+
 # ── public API ─────────────────────────────────────────────────
 def notify(event_key, title, body=""):
     """Fire an alert for `event_key` to every enabled channel, in the background. No-op when
@@ -320,5 +464,18 @@ def test_send(kind, token=None, chat_id=None, webhook=None):
             return False, "That doesn't look like a Discord webhook URL."
         ok, detail = send_discord(wh, text)
         return (True, "Test message sent — check Discord.") if ok \
+            else (False, "Discord error: %s" % (detail or "unknown"))
+    if kind == "discord_bot":
+        dc = cfg.get("discord") or {}
+        tok = (token or "").strip() or decrypt_secret(dc.get("bot_token") or "")
+        chan = ((chat_id or "").strip() or (dc.get("channel_id") or "")).strip()
+        if not tok:
+            return False, "Enter the bot token first."
+        if not _valid_discord_bot_token(tok):
+            return False, "That bot token isn't in the expected format."
+        if not _DISCORD_CHANNEL_RE.match(chan):
+            return False, "Enter the numeric channel ID first (right-click the channel → Copy Channel ID)."
+        ok, detail = discord_bot_send(tok, chan, text)
+        return (True, "Test message sent — check the Discord channel.") if ok \
             else (False, "Discord error: %s" % (detail or "unknown"))
     return False, "Unknown channel."

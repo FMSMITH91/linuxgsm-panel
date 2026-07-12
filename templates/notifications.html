@@ -88,6 +88,36 @@
           <button type="button" class="btn btn-outline-secondary btn-sm mt-2" data-action="testChannel" data-args='["discord", "@self"]'>
             <i class="bi bi-send"></i> Send test
           </button>
+          <hr class="my-3">
+          <div class="fw-semibold small mb-2"><i class="bi bi-robot"></i> Two-way command bot <span class="text-secondary fw-normal">(optional)</span></div>
+          <label class="form-label small mb-1">Bot token</label>
+          <input type="password" name="discord_bot_token" class="form-control form-control-sm" autocomplete="off"
+                 placeholder="{{ '•••••••••• (leave blank to keep)' if settings.discord.has_bot_token else 'the bot token from the Developer Portal' }}">
+          <label class="form-label small mb-1 mt-2">Channel ID</label>
+          <input type="text" name="discord_channel_id" class="form-control form-control-sm" autocomplete="off"
+                 value="{{ settings.discord.channel_id }}" placeholder="e.g. 112233445566778899">
+          <div class="form-check form-switch mt-2">
+            <input type="checkbox" name="discord_accept_commands" class="form-check-input" role="switch" id="dc-cmd"
+                   {% if settings.discord.accept_commands %}checked{% endif %}>
+            <label class="form-check-label small" for="dc-cmd">Accept commands from this channel
+              (<code>!update</code>, <code>!status</code>)</label>
+          </div>
+          <div class="small text-secondary mt-2">
+            Create a bot at <em>discord.com/developers → New Application → Bot</em>, copy its token, and
+            invite it to your server. Under <em>Bot → Privileged Gateway Intents</em> turn on
+            <strong>Message Content Intent</strong> so it can read commands. Get the Channel ID with
+            <em>User Settings → Advanced → Developer Mode</em>, then right-click the channel → Copy Channel ID.
+            Type <code>!help</code> in that channel for the command list (Discord reserves <code>/</code> for
+            its own menu, so <code>!</code> types cleanly).
+          </div>
+          <div class="small text-warning mt-1">
+            <i class="bi bi-exclamation-triangle"></i> <em>Everyone who can post in that channel</em> can run
+            these commands — including <code>!start</code>, <code>!stop</code>, and <code>!restart</code>.
+            Use a private, admin-only channel for server control.
+          </div>
+          <button type="button" class="btn btn-outline-secondary btn-sm mt-2" data-action="testChannel" data-args='["discord_bot", "@self"]'>
+            <i class="bi bi-send"></i> Send test (bot)
+          </button>
         </div>
       </div>
     </div>
@@ -145,6 +175,7 @@ function testChannel(channel, btn) {
   var payload = {channel: channel};
   if (channel === 'telegram') { payload.token = _val('telegram_token'); payload.chat_id = _val('telegram_chat_id'); }
   else if (channel === 'discord') { payload.webhook = _val('discord_webhook'); }
+  else if (channel === 'discord_bot') { payload.token = _val('discord_bot_token'); payload.chat_id = _val('discord_channel_id'); }
   fetch(MOUNT + '/api/notifications/test', {
     method: 'POST', headers: {'Content-Type': 'application/json'},
     body: JSON.stringify(payload)

@@ -2078,6 +2078,83 @@ try:
 finally:
     N._post = _orig_post
 
+# ── Discord command bot (Gateway): parsing, SSRF-safe reply path, and the message pump ──
+from app import _parse_dc_command  # noqa: E402
+
+# Command parsing accepts either '!' (types cleanly — Discord reserves '/') or '/'; mention + args stripped.
+check("discord: !status parses to 'status'", _parse_dc_command("!status") == "status")
+check("discord: a '/' prefix also parses", _parse_dc_command("/restart foo") == "restart")
+check("discord: a bot-mention + args is stripped + lowercased", _parse_dc_command("!Restart@bot Now") == "restart")
+check("discord: a non-command / bare prefix is empty",
+      _parse_dc_command("hello") == "" and _parse_dc_command("! ") == "" and _parse_dc_command("") == "")
+
+# The bot reply URL is rebuilt onto the CONSTANT discord.com host with a digits-only channel id, and the
+# same _ALLOWED_PREFIXES barrier that guards the webhook sender now also covers the /channels/ API.
+check("discord: bot message URL is built on the constant host from a snowflake channel id",
+      N._discord_bot_message_url("112233445566778899")
+      == "https://discord.com/api/v10/channels/112233445566778899/messages")
+check("discord: SSRF - a non-numeric / traversal channel id is rejected",
+      N._discord_bot_message_url("../evil") is None and N._discord_bot_message_url("") is None)
+check("discord: SSRF - the bot channels URL sits on an allow-listed prefix",
+      "https://discord.com/api/v10/channels/1/messages".startswith(N._ALLOWED_PREFIXES))
+check("discord: SSRF - a discord.com look-alike host is not allow-listed",
+      not "https://discord.com.evil.example/api/x".startswith(N._ALLOWED_PREFIXES))
+
+# The bot token only ever rides in an Authorization header — the charset forbids whitespace/newlines so
+# it can't inject one, and it's loose on the internal '.'-separated shape so future formats still pass.
+# A dotted, real-shaped fixture that is deliberately NOT a valid Discord token layout (lowercase, wrong
+# segment lengths) so GitHub push-protection doesn't flag it — it only needs to exercise the charset.
+check("discord: a plausible bot token validates",
+      N._valid_discord_bot_token("panel.fixture.not_a_real_token_" + "a" * 30))
+check("discord: a bot token with a space is rejected", not N._valid_discord_bot_token("has a space " + "x" * 40))
+check("discord: a bot token with a newline (header injection) is rejected",
+      not N._valid_discord_bot_token("tok\nX-Evil: 1 " + "x" * 40))
+
+# discord_bot_send validates BEFORE any network call, and posts to the constant host with a Bot header.
+_dc_posts = []
+_orig_post2 = N._post
+try:
+    N._post = lambda url, data, headers: (_dc_posts.append((url, headers)), (True, "sent"))[1]
+    _ok_send, _ = N.discord_bot_send("A" * 50, "112233445566778899", "hi")
+    check("discord: a bot reply posts to the constant discord.com channels API",
+          _ok_send and _dc_posts[-1][0] == "https://discord.com/api/v10/channels/112233445566778899/messages")
+    check("discord: a bot reply carries an 'Authorization: Bot' header",
+          _dc_posts[-1][1].get("Authorization", "").startswith("Bot "))
+    check("discord: bot send rejects a malformed channel id without a network call",
+          N.discord_bot_send("A" * 50, "../evil", "hi")[0] is False)
+    check("discord: bot send rejects a malformed token without a network call",
+          N.discord_bot_send("bad token", "112233445566778899", "hi")[0] is False)
+finally:
+    N._post = _orig_post2
+
+
+# The Gateway pump: HELLO -> IDENTIFY (with the message-content intent) -> deliver MESSAGE_CREATE to the
+# handler -> return on EOF. A fake socket stands in for the WebSocket so no network is touched.
+class _FakeWS:
+    def __init__(self, frames):
+        self._frames = list(frames)
+        self.sent = []
+    def recv(self):
+        return self._frames.pop(0) if self._frames else ""   # "" == EOF -> the loop breaks
+    def send(self, s):
+        self.sent.append(s)
+    def close(self):
+        pass
+
+
+_dc_seen = []
+_fake_ws = _FakeWS([
+    '{"op":10,"d":{"heartbeat_interval":600000}}',
+    '{"op":0,"s":1,"t":"MESSAGE_CREATE","d":{"channel_id":"999","author":{"bot":false},"content":"!status"}}',
+])
+N.discord_gateway_run("A" * 50, lambda ch, is_bot, content: _dc_seen.append((ch, is_bot, content)),
+                      _connect=lambda: _fake_ws)
+check("discord: the gateway IDENTIFYs with the message-content intent",
+      any('"op": 2' in s and str(N._DISCORD_INTENTS) in s for s in _fake_ws.sent))
+check("discord: a MESSAGE_CREATE is delivered to the handler with (channel, is_bot, content)",
+      _dc_seen == [("999", False, "!status")])
+check("discord: the message-content intent bit (1<<15) is set", N._DISCORD_INTENTS & (1 << 15))
+
 # player_slots parses gamedig's compact JSON into (count, max, name); a name with spaces/quotes
 # round-trips and junk output is rejected. run_command is stubbed so no SSH/gamedig is needed.
 _orig_rc = sm.run_command
