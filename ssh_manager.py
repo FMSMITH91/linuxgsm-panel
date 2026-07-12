@@ -4608,16 +4608,28 @@ def delete_path(server, user, relpath, selfname=None):
 # content app id. Counter-Strike: Source is the essential one (the vast majority of GMod maps/addons
 # expect it); more can be added to this map later.
 GMOD_CONTENT_GAMES = {
-    # mount-folder -> (label, steamcmd dedicated-content app id). App ids verified against LinuxGSM's
-    # own configs. CS:S is the essential one; the rest are common GMod content too.
+    # mount-folder -> (label, steamcmd dedicated-content app id or None). A NUMERIC app id means the
+    # panel can download it (free anonymous SteamCMD; ids verified against LinuxGSM's own configs).
+    # None means MOUNT-ONLY: the game needs a purchased license so SteamCMD can't fetch it anonymously
+    # — the panel only mounts it when its content is already on the host (copied from an owned install).
     "cstrike":    ("Counter-Strike: Source", 232330),
     "tf":         ("Team Fortress 2", 232250),
     "dod":        ("Day of Defeat: Source", 232290),
     "hl2mp":      ("Half-Life 2: Deathmatch", 232370),
     "left4dead":  ("Left 4 Dead", 222840),
     "left4dead2": ("Left 4 Dead 2", 222860),
+    "hl1":        ("Half-Life: Source", None),
+    "hl1mp":      ("Half-Life Deathmatch: Source", None),
+    "hl2":        ("Half-Life 2", None),
+    "episodic":   ("Half-Life 2: Episode One", None),
+    "ep2":        ("Half-Life 2: Episode Two", None),
+    "lostcoast":  ("Half-Life 2: Lost Coast", None),
+    "portal":     ("Portal", None),
+    "portal2":    ("Portal 2", None),
+    "csgo":       ("Counter-Strike: Global Offensive", None),
+    "insurgency": ("Insurgency", None),
 }
-# Bytes on disk are big for some — a rough size hint for the UI so nobody accidentally pulls 13GB.
+# Rough download sizes for the UI so nobody accidentally pulls 13GB (downloadable games only).
 GMOD_CONTENT_SIZES = {"cstrike": "~1.6 GB", "tf": "~13 GB", "dod": "~1.1 GB",
                       "hl2mp": "~2 GB", "left4dead": "~3 GB", "left4dead2": "~9 GB"}
 _CONTENT_USER = "gmodcontent"                         # panel-managed content user, created if none exists
@@ -4708,7 +4720,10 @@ def install_gmod_content(server, content_user, games, on_progress=None):
     for g in games:
         if content_present(server, content_user, g):
             continue
-        appid = int(GMOD_CONTENT_GAMES[g][1])
+        raw_appid = GMOD_CONTENT_GAMES[g][1]
+        if raw_appid is None:
+            continue   # mount-only (owned game): can't fetch anonymously — only mounts if already present
+        appid = int(raw_appid)
         if on_progress:
             on_progress("Downloading %s content (SteamCMD)" % GMOD_CONTENT_GAMES[g][0])
         inner = (f"steamcmd +force_install_dir /home/{content_user}/serverfiles "
@@ -4789,4 +4804,5 @@ def gmod_content_options(server):
     cu = detect_content_user(server, tuple(GMOD_CONTENT_GAMES))
     present = set((cu or {}).get("present", {}))
     return [{"key": k, "label": GMOD_CONTENT_GAMES[k][0], "size": GMOD_CONTENT_SIZES.get(k, ""),
-             "present": k in present} for k in GMOD_CONTENT_GAMES]
+             "present": k in present, "downloadable": GMOD_CONTENT_GAMES[k][1] is not None}
+            for k in GMOD_CONTENT_GAMES]

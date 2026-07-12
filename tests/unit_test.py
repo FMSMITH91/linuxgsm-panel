@@ -283,8 +283,11 @@ check("gmod content: mount.cfg points each game at the content user's serverfile
       and '"tf"\t"/home/srcds/serverfiles/tf"' in _gmc)
 check("gmod content: mountdepots enables hl2 + each game",
       _gmd.startswith('"gamedepotsystem"') and '"hl2"' in _gmd and '"cstrike"' in _gmd and '"tf"' in _gmd)
-check("gmod content: all 6 games carry a verified steamcmd appid",
-      all(isinstance(v[1], int) for v in sm.GMOD_CONTENT_GAMES.values()) and len(sm.GMOD_CONTENT_GAMES) == 6)
+check("gmod content: downloadable games carry an int appid, mount-only carry None",
+      all(isinstance(v[1], int) for v in sm.GMOD_CONTENT_GAMES.values() if v[1] is not None)
+      and sm.GMOD_CONTENT_GAMES["cstrike"][1] == 232330
+      and sm.GMOD_CONTENT_GAMES["hl1mp"][1] is None
+      and sum(1 for v in sm.GMOD_CONTENT_GAMES.values() if v[1] is not None) == 6)
 # gmod_current_mounts: parse a real mount.cfg, keep only known games, ignore the header + unknowns.
 _orig_gm_rc2 = sm.run_command
 try:

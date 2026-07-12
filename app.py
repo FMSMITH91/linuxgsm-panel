@@ -3622,8 +3622,10 @@ def register_routes(app):
         server_names = {gs.id: _cached_player_name(gs.id) for gs in all_servers}
         can_control = current_user.is_superadmin or bool(
             {START_SERVER, STOP_SERVER, RESTART_SERVER} & get_user_permissions(current_user))
+        # Only downloadable games on the install form — the target host isn't chosen yet, so we can't
+        # know what mount-only (owned) content is already present. Those show on the server's own page.
         gmod_games = [{"key": k, "label": v[0], "size": GMOD_CONTENT_SIZES.get(k, "")}
-                      for k, v in GMOD_CONTENT_GAMES.items()]
+                      for k, v in GMOD_CONTENT_GAMES.items() if v[1] is not None]
         return render_template("manage_servers.html", remotes=remotes,
                                all_servers=all_servers, games=load_game_list(),
                                can_control=can_control, gmod_games=gmod_games,
@@ -7627,7 +7629,8 @@ def register_routes(app):
                 cu = detect_content_user(remote, tuple(GMOD_CONTENT_GAMES))
                 present = set((cu or {}).get("present", {}))
                 games = [{"key": k, "label": GMOD_CONTENT_GAMES[k][0], "size": GMOD_CONTENT_SIZES.get(k, ""),
-                          "present": (k in present), "mounted": (k in mounted)} for k in GMOD_CONTENT_GAMES]
+                          "present": (k in present), "mounted": (k in mounted),
+                          "downloadable": GMOD_CONTENT_GAMES[k][1] is not None} for k in GMOD_CONTENT_GAMES]
                 st = _gmod_content_apply_state.get(server_id)
                 return jsonify({"games": games, "mounted": mounted,
                                 "job": st if (st and st.get("status") == "running") else None})
