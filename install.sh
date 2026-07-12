@@ -479,11 +479,19 @@ if [ "${IS_UPDATE}" -eq 1 ]; then
     # emit a standard .tgz, so rollback (tar -xzf) reads old + new snapshots.
     if command -v pigz >/dev/null 2>&1; then SNAP_GZ="pigz -6"; else SNAP_GZ="gzip -1"; fi
     # Snapshot the code (minus venv/data) so we can restore the exact prior version…
-    tar -C "${PANEL_DIR}" --exclude=./venv --exclude=./data -cf - . 2>/dev/null | ${SNAP_GZ} > "${BACKUP}/code.tgz"
+    # --ignore-failed-read: a file the snapshot can't read (e.g. a root-owned Tailscale cert KEY that
+    # landed in the panel dir at mode 600) must NEVER abort the whole update — plain tar would exit 2
+    # here and `set -o pipefail` would kill the update. `|| true` also absorbs a compressor hiccup;
+    # then we VERIFY the archive is non-empty, so a GENUINE failure (disk full, etc.) still aborts
+    # cleanly with a clear message instead of a cryptic exit code.
+    tar -C "${PANEL_DIR}" --ignore-failed-read --exclude=./venv --exclude=./data -cf - . 2>/dev/null | ${SNAP_GZ} > "${BACKUP}/code.tgz" || true
+    [ -s "${BACKUP}/code.tgz" ] || die "Couldn't snapshot the current version (backup came out empty) —
+     update ABORTED, the panel is unchanged. Check free disk space with 'df -h' and try again."
     # …and the whole data dir (DB + encryption keys + config), since the app runs a
     # startup migration that mutates the DB — we restore this verbatim on rollback.
     if [ -d "${PANEL_DIR}/data" ]; then
-        tar -C "${PANEL_DIR}/data" --exclude=./.backups -cf - . 2>/dev/null | ${SNAP_GZ} > "${BACKUP}/data.tgz"
+        tar -C "${PANEL_DIR}/data" --ignore-failed-read --exclude=./.backups -cf - . 2>/dev/null | ${SNAP_GZ} > "${BACKUP}/data.tgz" || true
+        [ -s "${BACKUP}/data.tgz" ] || die "Couldn't snapshot the database/config (backup empty) — update ABORTED, the panel is unchanged."
     fi
     ok "Snapshot saved"
 
