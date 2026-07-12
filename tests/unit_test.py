@@ -19,7 +19,7 @@ import ssh_manager as sm
 import notifications as N
 import system_ops as SO
 from app import (password_problem, _int_or, _valid_ip_or_cidr, _whitelisted, _parse_tg_command,
-                 _tg_command_arg, _valid_hex_color)
+                 _tg_command_arg, _valid_hex_color, _clean_console_text)
 from auth import can_access_remote, client_ip
 
 results = []
@@ -60,6 +60,29 @@ eq("hex colour: 3-digit shorthand rejected", _valid_hex_color("#fff"), "")
 eq("hex colour: named colour rejected", _valid_hex_color("red"), "")
 eq("hex colour: CSS/HTML breakout rejected", _valid_hex_color("#fff;}</style><script>"), "")
 eq("hex colour: too long rejected", _valid_hex_color("#1234567"), "")
+
+# ── console cleaning: Minecraft/Paper's JLine console writes ANSI escapes (incl. \x1b[K -> a visible
+#    "[K"), carriage returns, and bare "> " prompt lines into its log. Strip them for display; leave
+#    plain-text (Source/CoD/GMod) consoles untouched. ──
+_mc_raw = ("\x1b[K[02:46:21 INFO]: UUID of player Kitty is abc\n> \n"
+           "\x1b[K[02:46:21 INFO]: Connection closed\n> \n")
+_mc_clean = _clean_console_text(_mc_raw)
+check("console: JLine \\x1b[K erase-line removed (no visible '[K')", "[K" not in _mc_clean)
+check("console: bare '> ' prompt lines dropped",
+      not any(ln.strip() == ">" for ln in _mc_clean.split("\n")))
+check("console: real log lines preserved",
+      "[02:46:21 INFO]: UUID of player Kitty is abc" in _mc_clean
+      and "[02:46:21 INFO]: Connection closed" in _mc_clean)
+eq("console: ANSI colour codes stripped",
+   _clean_console_text("\x1b[0;32mgreen\x1b[0m text"), "green text")
+eq("console: carriage-return redraw normalised",
+   _clean_console_text("first\r\nsecond\rthird"), "first\nsecond\nthird")
+eq("console: an echoed command line ('> list') is kept",
+   _clean_console_text("> list"), "> list")
+eq("console: plain Source/CoD line untouched",
+   _clean_console_text("L 01/01/2026 - 12:00: player connected"),
+   "L 01/01/2026 - 12:00: player connected")
+eq("console: empty input -> empty", _clean_console_text(""), "")
 
 # ── safe int parsing (a non-numeric port must not raise) ──────
 eq("_int_or valid", _int_or("2222", 22), 2222)

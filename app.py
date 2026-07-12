@@ -1790,6 +1790,25 @@ def _valid_hex_color(value):
     return v.lower() if _HEX_COLOR_RE.match(v) else ""
 
 
+# Terminal control noise that "fancy" game consoles write into their log. Minecraft/Paper run a
+# JLine console that emits ANSI escapes (colour, and \x1b[K "erase to end of line" — which shows up
+# as a literal "[K" once the ESC byte is dropped), carriage returns to redraw the input line, and a
+# bare "> " prompt line after every message. Plain-text consoles (Source/CoD/GMod) have none of it.
+_CONSOLE_ANSI_RE = re.compile(r"\x1b\[[0-9;?]*[ -/]*[@-~]")
+_CONSOLE_PROMPT_RE = re.compile(r"^>\s*$")
+
+
+def _clean_console_text(text):
+    """Strip terminal control noise (ANSI/CSI escapes, carriage returns, JLine's bare '> ' prompt
+    lines) from console-log text before it's shown. A no-op for plain-text game consoles. Never
+    drops a real message: only lines that are *just* the prompt are removed, so an echoed command
+    like '> list' is kept."""
+    if not text:
+        return text
+    text = _CONSOLE_ANSI_RE.sub("", text.replace("\r\n", "\n").replace("\r", "\n"))
+    return "\n".join(ln for ln in text.split("\n") if not _CONSOLE_PROMPT_RE.match(ln))
+
+
 def create_app():
     app = Flask(__name__)
     cfg = load_config()
@@ -7557,7 +7576,7 @@ def register_routes(app):
         try:
             log_path = gs.console_log
             out, err, rc = run_command(remote, f"tail -100 {log_path} 2>/dev/null", timeout=15)
-            lines = out.split("\n") if rc == 0 else []
+            lines = _clean_console_text(out).split("\n") if rc == 0 else []
         except Exception:
             lines = []
         return jsonify({"lines": lines})
@@ -7695,6 +7714,8 @@ def register_routes(app):
                                         f"tail -c +{last_pos + 1} {log_path} 2>/dev/null | head -c {diff}",
                                         timeout=5,
                                     )
+                                    if out:
+                                        out = _clean_console_text(out)
                                     if out:
                                         socketio.emit("console_output",
                                                       {"server_id": server_id, "data": out},
