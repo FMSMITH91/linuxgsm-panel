@@ -287,8 +287,10 @@ check("gmod content: installable games map to a LinuxGSM name, mount-only map to
       all(isinstance(v[1], str) for v in sm.GMOD_CONTENT_GAMES.values() if v[1] is not None)
       and sm.GMOD_CONTENT_GAMES["cstrike"][1] == "cssserver"
       and sm.GMOD_CONTENT_GAMES["hl1mp"][1] == "hldmsserver"     # free via LinuxGSM, not owned-only
+      and sm.GMOD_CONTENT_GAMES["zps"][1] == "zpsserver"         # extra free Source game
       and sm.GMOD_CONTENT_GAMES["hl2"][1] is None                # owned single-player -> mount-only
-      and sum(1 for v in sm.GMOD_CONTENT_GAMES.values() if v[1] is not None) == 10)
+      and "csgo" not in sm.GMOD_CONTENT_GAMES                    # dropped (CS2 now, unmountable)
+      and sum(1 for v in sm.GMOD_CONTENT_GAMES.values() if v[1] is not None) == 16)
 # Weekly content-update cron: update-lgsm (scripts) then update (content), Sunday, staggered, as the
 # content user — so mounted content stays current (Source games get content updates).
 _cron_body = sm._content_update_cron_body("srcds", ["cssserver", "tf2server"])

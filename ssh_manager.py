@@ -4623,9 +4623,14 @@ GMOD_CONTENT_GAMES = {
     "insurgency": ("Insurgency", "insserver"),
     "nmrih":      ("No More Room in Hell", "nmrihserver"),
     "fof":        ("Fistful of Frags", "fofserver"),
+    "zps":        ("Zombie Panic! Source", "zpsserver"),
+    "pvkii":      ("Pirates, Vikings & Knights II", "pvkiiserver"),
+    "dystopia":   ("Dystopia", "dysserver"),
+    "empires":    ("Empires Mod", "emserver"),
+    "cure":       ("Codename CURE", "ccserver"),
+    "dab":        ("Double Action: Boogaloo", "dabserver"),
     # Mount-only — owned single-player titles (no LinuxGSM dedicated server); mounted when already on
-    # the host. csgo is here because since the CS2 update the download is Source-2 content GMod can't
-    # use, and classic CS:GO content is no longer on Steam.
+    # the host. (CS:GO is deliberately NOT here: since CS2 there's no GMod-usable download for it.)
     "hl1":        ("Half-Life: Source", None),
     "hl2":        ("Half-Life 2", None),
     "episodic":   ("Half-Life 2: Episode One", None),
@@ -4633,12 +4638,13 @@ GMOD_CONTENT_GAMES = {
     "lostcoast":  ("Half-Life 2: Lost Coast", None),
     "portal":     ("Portal", None),
     "portal2":    ("Portal 2", None),
-    "csgo":       ("Counter-Strike: Global Offensive", None),
 }
 # Rough download sizes for the UI so nobody accidentally pulls 13GB (installable games only).
 GMOD_CONTENT_SIZES = {"cstrike": "~1.6 GB", "tf": "~13 GB", "dod": "~1.1 GB", "hl2mp": "~2 GB",
                       "hl1mp": "~1 GB", "left4dead": "~3 GB", "left4dead2": "~9 GB",
-                      "insurgency": "~7 GB", "nmrih": "~6 GB", "fof": "~2 GB"}
+                      "insurgency": "~7 GB", "nmrih": "~6 GB", "fof": "~2 GB", "zps": "~2 GB",
+                      "pvkii": "~3 GB", "dystopia": "~1.5 GB", "empires": "~2 GB", "cure": "~2 GB",
+                      "dab": "~3 GB"}
 _CONTENT_USER = "gmodcontent"                         # panel-managed content user, created if none exists
 _CU_NAME_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9._-]*$")   # Linux username charset (reaches root-run cmds)
 
