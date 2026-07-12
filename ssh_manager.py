@@ -911,11 +911,11 @@ def get_autostart(server, user, selfname=None):
 
 
 # ── Generic per-server cron manager ──────────────────────────────────────────
-# The panel manages three kinds of cron entry itself (the @reboot autostart line,
-# the LinuxGSM maintenance jobs, and the daily restart-when-empty pair). Those are
-# driven by their own toggles, so the generic cron editor below MUST NOT let anyone
-# edit or delete them through here — that would silently desync the toggles. Such
-# lines are flagged `managed` (shown read-only) and rejected by update/delete.
+# A cron line is `managed` (read-only in the generic editor, no delete button) ONLY when the panel
+# drives it through a dedicated TOGGLE — editing/deleting it here would silently desync that toggle.
+# That's just the @reboot autostart (autostart switch) and the daily restart-when-empty flag (daily-
+# restart switch). The LinuxGSM maintenance jobs (monitor/update/mods-update/update-lgsm) are installed
+# once at install time but have NO toggle, so they are ordinary user entries the admin can edit/delete.
 
 _CRON_FIELD = r"[-0-9*,/A-Za-z]+"
 _CRON_SCHED_RE = re.compile(
@@ -925,14 +925,15 @@ _CRON_SCHED_RE = re.compile(
 
 
 def _cron_managed_patterns(user, selfname):
-    """Substrings that identify a panel-managed crontab line for this game user."""
+    """Substrings identifying the ONLY crontab lines that are toggle-driven and so must stay read-only
+    here: the @reboot autostart and the daily restart-when-empty flag. The maintenance jobs
+    (monitor/update/mods-update/update-lgsm) are deliberately NOT listed — they have no toggle, so the
+    admin can edit or delete them like any other entry."""
     selfname = selfname or user
     base = f"/home/{user}/{selfname}"
     return [
-        f"{base} start",          # @reboot autostart
-        f"{base} monitor", f"{base} mods-update",
-        f"{base} update", f"{base} update-lgsm",   # LinuxGSM maintenance
-        f"/home/{user}/.restart-pending",          # daily restart-when-empty
+        f"{base} start",                    # @reboot autostart  (autostart toggle)
+        f"/home/{user}/.restart-pending",   # daily restart-when-empty  (daily-restart toggle)
     ]
 
 

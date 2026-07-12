@@ -69,15 +69,19 @@ check("cron: newline in command rejected", not sm._validate_cron("@daily", "a\nb
 check("cron: embedded CR rejected", not sm._validate_cron("@daily", "a\rb")[0])
 check("cron: embedded CR in schedule rejected", not sm._validate_cron("0 5 *\r* *", "x")[0])
 check("cron: shell metachars allowed in command", sm._validate_cron("@daily", "a && b | c")[0])
-# managed-line detection (must never let the generic editor touch panel entries)
+# managed-line detection — ONLY the toggle-backed lines (autostart + daily restart) are read-only.
 check("cron: autostart is managed",
       sm._cron_line_managed("@reboot /home/gm/gmodserver start > /dev/null 2>&1", "gm", "gmodserver"))
-check("cron: maintenance update is managed",
-      sm._cron_line_managed("15 5 * * * /home/gm/gmodserver update > /dev/null 2>&1", "gm", "gmodserver"))
-check("cron: update-lgsm is managed",
-      sm._cron_line_managed("30 5 * * 0 /home/gm/gmodserver update-lgsm > /dev/null 2>&1", "gm", "gmodserver"))
 check("cron: daily-restart flag is managed",
       sm._cron_line_managed("0 5 * * * touch /home/gm/.restart-pending", "gm", "gmodserver"))
+# The LinuxGSM maintenance jobs have no toggle, so they must be editable/deletable (NOT managed) —
+# otherwise the admin can't remove them at all.
+check("cron: maintenance monitor is NOT managed (deletable)",
+      not sm._cron_line_managed("*/5 * * * * /home/gm/gmodserver monitor > /dev/null 2>&1", "gm", "gmodserver"))
+check("cron: maintenance update is NOT managed (deletable)",
+      not sm._cron_line_managed("15 5 * * * /home/gm/gmodserver update > /dev/null 2>&1", "gm", "gmodserver"))
+check("cron: update-lgsm is NOT managed (deletable)",
+      not sm._cron_line_managed("30 5 * * 0 /home/gm/gmodserver update-lgsm > /dev/null 2>&1", "gm", "gmodserver"))
 check("cron: user backup line is NOT managed",
       not sm._cron_line_managed("0 3 * * * /home/gm/backup.sh", "gm", "gmodserver"))
 
@@ -161,16 +165,20 @@ check("cron: unwrap recovers the original command",
       sm._unwrap_cron_command(_wrapped) == (_ccmd, _cjid))
 check("cron: unwrap leaves a plain command untouched",
       sm._unwrap_cron_command("/home/gm/x.sh") == ("/home/gm/x.sh", None))
-# Managed jobs use the INLINE recorder: the command stays visible (so the grep-based
-# managed-line detection/removal still works) and unwraps to the core command + a job id.
+# Maintenance + autostart jobs use the INLINE recorder: the command stays visible (so the grep-based
+# dedup/removal + last-run detection still work) and unwraps to the core command + a job id.
 _mrec = sm._record_managed_cmd("gm", "/home/gm/gmodserver update")
-check("managed cron: wrapped line is still detected as managed",
-      sm._cron_line_managed(_mrec, "gm", "gmodserver"))
-check("managed cron: wrapped line still matches the maintenance remove-regex (no dup on re-apply)",
+check("managed cron: inline-recorded maintenance line still matches the dedup remove-regex",
       bool(__import__("re").search(r"/home/gm/gmodserver (monitor|mods-update|update|update-lgsm) ", _mrec)))
 check("managed cron: unwrap recovers the core command + id",
       sm._unwrap_cron_command(_mrec)
       == ("/home/gm/gmodserver update", sm._cron_job_id("/home/gm/gmodserver update")))
+# A maintenance job (no toggle) is NOT managed even when inline-recorded — so it can be deleted.
+check("managed cron: inline-recorded maintenance line is NOT managed (deletable)",
+      not sm._cron_line_managed(_mrec, "gm", "gmodserver"))
+# The autostart line, however, IS toggle-backed and must stay managed even when inline-recorded.
+check("managed cron: inline-recorded autostart is still detected as managed",
+      sm._cron_line_managed(sm._record_managed_cmd("gm", "/home/gm/gmodserver start"), "gm", "gmodserver"))
 # upgrade_managed_cron_tracking rewraps EXISTING managed lines in place, leaving user jobs and
 # the compound restart-check untouched (so old installs get success/error without a reinstall).
 _upcap = {}
