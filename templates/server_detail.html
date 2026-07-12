@@ -178,6 +178,17 @@
 </div>
 {% endif %}
 
+{% if server.game_type == 'gmod' %}
+<!-- GMod game content: mount CS:S etc. so maps/props render (missing content = ERROR textures) -->
+<div class="card mb-3" data-mtab="console" id="gmod-content-card">
+  <div class="card-header"><i class="bi bi-hdd-stack"></i> Game Content
+    <span class="text-secondary small fw-normal">— mount CS:S &amp; other games so maps render</span></div>
+  <div class="card-body">
+    <div id="gmod-content-body" class="text-secondary small"><i class="bi bi-hourglass-split"></i> Loading…</div>
+  </div>
+</div>
+{% endif %}
+
 <!-- History: persisted CPU/RAM/player trends (sampled ~1/min) -->
 <div class="card mb-3" data-mtab="history" style="display:none;">
   <div class="card-header d-flex justify-content-between align-items-center">
@@ -1011,6 +1022,48 @@ document.addEventListener('click', function(e){
 // Keep the History charts live — refresh while its tab is open and the page is visible (a new sample
 // lands every minute server-side). Updates in place, so it never flashes or steals focus.
 if(window.pollWhenVisible) pollWhenVisible(function(){ if(window._sdTab==='history') window.loadHistory(); }, 30000);
+
+// ── GMod game content: mount CS:S & other games so maps render ──
+function loadGmodContent(){
+  var el = document.getElementById('gmod-content-body');
+  if(!el) return;
+  fetch(MOUNT + '/api/server/' + serverId + '/gmod-content')
+    .then(function(r){ return r.json(); })
+    .then(function(d){
+      if(d.error){ el.innerHTML = '<span class="text-danger">'+_esc(d.error)+'</span>'; return; }
+      var running = d.job && d.job.status === 'running';
+      var boxes = (d.games||[]).map(function(g){
+        var tag = g.present ? '<span class="text-success">on host</span>'
+                            : '<span class="text-secondary">downloads '+_esc(g.size||'')+'</span>';
+        return '<div class="form-check">'
+          + '<input class="form-check-input gmc-box" type="checkbox" value="'+_esc(g.key)+'" id="gmc-'+_esc(g.key)+'"'
+          + (g.mounted?' checked':'') + (running?' disabled':'') + '>'
+          + '<label class="form-check-label small" for="gmc-'+_esc(g.key)+'">'+_esc(g.label)
+          + ' <span class="text-secondary">('+tag+')</span></label></div>';
+      }).join('');
+      el.innerHTML =
+        '<div class="mb-2 text-secondary" style="font-size:.8rem;">Tick the games GMod should mount. '
+        + 'Content already on the host mounts instantly; others download first into a shared content user.</div>'
+        + '<div class="d-flex flex-wrap gap-3 mb-2">' + boxes + '</div>'
+        + (running
+            ? '<div class="text-info small"><span class="spinner-border spinner-border-sm"></span> Applying… (a download can take a while)</div>'
+            : '<button class="btn btn-sm btn-primary" type="button" onclick="applyGmodContent(this)"><i class="bi bi-save"></i> Apply</button>'
+              + ' <span class="text-secondary small ms-1">Restart the server afterwards to load changes.</span>');
+      if(running) setTimeout(loadGmodContent, 5000);
+    })
+    .catch(function(){ el.innerHTML = '<span class="text-danger">Could not load content status.</span>'; });
+}
+function applyGmodContent(btn){
+  var sel = Array.prototype.map.call(document.querySelectorAll('.gmc-box:checked'), function(b){ return b.value; });
+  if(btn){ btn.disabled = true; btn.innerHTML = '<span class="spinner-border spinner-border-sm"></span> Applying…'; }
+  fetch(MOUNT + '/api/server/' + serverId + '/gmod-content', {
+    method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({games: sel})
+  }).then(function(r){ return r.json(); }).then(function(d){
+    if(window.toast) toast(d.message || (d.success?'Applying…':'Failed'), d.success?'success':'danger');
+    setTimeout(loadGmodContent, 1500);
+  }).catch(function(){ if(window.toast) toast('Request failed','danger'); if(btn) btn.disabled=false; });
+}
+loadGmodContent();
 
 // Populate console immediately via AJAX (page render no longer waits on SSH),
 // then let the websocket stream take over.

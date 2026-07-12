@@ -107,7 +107,8 @@ from ssh_manager import (
     player_count_via_lgsm_query as sm_player_count_via_lgsm_query,
     set_game_priority_bulk,
     install_game_dependencies, parse_missing_deps, detect_game_ports, lgsm_read_config,
-    GMOD_CONTENT_GAMES, ensure_content_user, install_gmod_content, gmod_mount_setup,
+    GMOD_CONTENT_GAMES, GMOD_CONTENT_SIZES, ensure_content_user, install_gmod_content,
+    gmod_mount_setup, gmod_current_mounts, detect_content_user,
     lgsm_write_config, lgsm_game_config, lgsm_get_values, browse_dir, read_file,
     write_file, upload_file, delete_path,
     remote_ufw_delete_rule, remote_set_public_ssh, remote_public_ssh_status, remote_ufw_status, remote_ufw_open_port,
@@ -3621,9 +3622,11 @@ def register_routes(app):
         server_names = {gs.id: _cached_player_name(gs.id) for gs in all_servers}
         can_control = current_user.is_superadmin or bool(
             {START_SERVER, STOP_SERVER, RESTART_SERVER} & get_user_permissions(current_user))
+        gmod_games = [{"key": k, "label": v[0], "size": GMOD_CONTENT_SIZES.get(k, "")}
+                      for k, v in GMOD_CONTENT_GAMES.items()]
         return render_template("manage_servers.html", remotes=remotes,
                                all_servers=all_servers, games=load_game_list(),
-                               can_control=can_control,
+                               can_control=can_control, gmod_games=gmod_games,
                                player_counts=player_counts, player_max=player_max,
                                server_names=server_names)
 
@@ -3737,10 +3740,10 @@ def register_routes(app):
         # out). Without this, last=0 makes game_backup_due() true the moment installed flips True.
         bk.record_game_backup(gs.id)
 
-        # GMod is the one game that needs mounted content to render maps/props — offer CS:S when
-        # it's a GMod install and the box was ticked. This adds a step to the install job.
-        content_games = (["cstrike"] if (game_type == "gmod"
-                         and request.form.get("install_content") == "on") else [])
+        # GMod is the one game that needs mounted content to render maps/props — offer the picked
+        # games (validated against the known set). This adds a content step to the install job.
+        content_games = ([g for g in request.form.getlist("content_games") if g in GMOD_CONTENT_GAMES]
+                         if game_type == "gmod" else [])
         _prune_jobs(_install_jobs, _install_lock)
         with _install_lock:
             _install_jobs[gs.id] = {
@@ -7573,6 +7576,72 @@ def register_routes(app):
             return jsonify({"success": ok, "message": msg})
         except Exception:
             return jsonify({"success": False, "message": _log_and_generic("cron run failed")}), 200
+
+    _gmod_content_apply_state = {}   # server_id -> {"status": running|done|error, "msg", "ts"}
+
+    def _bg_gmod_content_apply(server_id, remote_id, gmod_user, games):
+        """Apply a GMod content selection in the background (a download can take many minutes): ensure
+        a content user, fetch any missing games, then rewrite the server's mount.cfg to exactly the
+        selection. An empty selection unmounts everything. Result is stashed for the status poll."""
+        _app = app
+        _gmod_content_apply_state[server_id] = {"status": "running", "msg": "", "ts": time.time()}
+
+        def _run():
+            with _app.app_context():
+                try:
+                    remote = db.session.get(RemoteServer, remote_id)
+                    if not remote:
+                        return
+                    if games:
+                        cu = ensure_content_user(remote)
+                        if not cu:
+                            _gmod_content_apply_state[server_id] = {
+                                "status": "error", "msg": "No content storage could be prepared on the host.",
+                                "ts": time.time()}
+                            return
+                        install_gmod_content(remote, cu["user"], games)
+                        ok, msg = gmod_mount_setup(remote, gmod_user, cu["user"], games)
+                    else:
+                        ok, msg = gmod_mount_setup(remote, gmod_user, "", [])
+                    _gmod_content_apply_state[server_id] = {
+                        "status": "done" if ok else "error", "msg": msg, "ts": time.time()}
+                except Exception:
+                    _log.warning("gmod content apply failed for %s", gmod_user, exc_info=True)
+                    _gmod_content_apply_state[server_id] = {
+                        "status": "error", "msg": "Content setup failed — check the server logs.",
+                        "ts": time.time()}
+
+        threading.Thread(target=_run, daemon=True).start()
+
+    @app.route("/api/server/<int:server_id>/gmod-content", methods=["GET", "POST"])
+    @login_required
+    @server_access_required
+    def api_gmod_content(server_id):
+        gs = get_game(server_id)
+        if gs.game_type != "gmod":
+            return jsonify({"error": "Content mounting is available for Garry's Mod only."}), 400
+        remote = gs.remote
+        if request.method == "GET":
+            try:
+                mounted = gmod_current_mounts(remote, gs.short_name)
+                cu = detect_content_user(remote, tuple(GMOD_CONTENT_GAMES))
+                present = set((cu or {}).get("present", {}))
+                games = [{"key": k, "label": GMOD_CONTENT_GAMES[k][0], "size": GMOD_CONTENT_SIZES.get(k, ""),
+                          "present": (k in present), "mounted": (k in mounted)} for k in GMOD_CONTENT_GAMES]
+                st = _gmod_content_apply_state.get(server_id)
+                return jsonify({"games": games, "mounted": mounted,
+                                "job": st if (st and st.get("status") == "running") else None})
+            except Exception:
+                return jsonify({"error": _log_and_generic("gmod content status failed"), "games": []}), 200
+        # POST: apply a selection (mutating → needs MANAGE_SERVERS).
+        if not (current_user.is_superadmin or has_permission(current_user, MANAGE_SERVERS)):
+            return jsonify({"error": "Permission denied"}), 403
+        sel = [g for g in (_json_body().get("games") or []) if g in GMOD_CONTENT_GAMES]
+        _bg_gmod_content_apply(gs.id, remote.id, gs.short_name, sel)
+        log_action(current_user, "gmod_content", target=gs.name, detail=(",".join(sel) or "(none)"))
+        return jsonify({"success": True, "games": sel,
+                        "message": "Applying content changes — a download can take a while for large games. "
+                                   "Restart the server afterwards to load the changes."})
 
     @app.route("/api/server/<int:server_id>/upload", methods=["POST"])
     @login_required

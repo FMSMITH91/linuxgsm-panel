@@ -275,13 +275,26 @@ finally:
 # ── GMod mountable content: the game picker is allow-listed, and the mount config is generated from a
 #    validated content username + constant game keys (so it's safe to write verbatim). ──
 eq("gmod content: unknown games filtered, order + dedupe preserved",
-   sm._valid_content_games(["cstrike", "doom", "cstrike"]), ["cstrike"])
+   sm._valid_content_games(["cstrike", "tf", "doom", "cstrike"]), ["cstrike", "tf"])
 eq("gmod content: empty -> []", sm._valid_content_games([]), [])
-_gmc, _gmd = sm._gmod_mount_files("srcds", ["cstrike"])
-check("gmod content: mount.cfg points cstrike at the content user's serverfiles",
-      _gmc.startswith('"mountcfg"') and '"cstrike"\t"/home/srcds/serverfiles/cstrike"' in _gmc)
-check("gmod content: mountdepots enables hl2 + cstrike",
-      _gmd.startswith('"gamedepotsystem"') and '"hl2"' in _gmd and '"cstrike"' in _gmd)
+_gmc, _gmd = sm._gmod_mount_files("srcds", ["cstrike", "tf"])
+check("gmod content: mount.cfg points each game at the content user's serverfiles",
+      _gmc.startswith('"mountcfg"') and '"cstrike"\t"/home/srcds/serverfiles/cstrike"' in _gmc
+      and '"tf"\t"/home/srcds/serverfiles/tf"' in _gmc)
+check("gmod content: mountdepots enables hl2 + each game",
+      _gmd.startswith('"gamedepotsystem"') and '"hl2"' in _gmd and '"cstrike"' in _gmd and '"tf"' in _gmd)
+check("gmod content: all 6 games carry a verified steamcmd appid",
+      all(isinstance(v[1], int) for v in sm.GMOD_CONTENT_GAMES.values()) and len(sm.GMOD_CONTENT_GAMES) == 6)
+# gmod_current_mounts: parse a real mount.cfg, keep only known games, ignore the header + unknowns.
+_orig_gm_rc2 = sm.run_command
+try:
+    sm.run_command = lambda s, c, **k: (
+        '"mountcfg"\n{\n\t"cstrike"\t"/home/srcds/serverfiles/cstrike"\n'
+        '\t"tf"\t"/home/srcds/serverfiles/tf"\n\t"notagame"\t"/x"\n}\n', "", 0)
+    eq("gmod content: current mounts parsed (known games only, header/unknowns ignored)",
+       sm.gmod_current_mounts(object(), "gmodserver"), ["cstrike", "tf"])
+finally:
+    sm.run_command = _orig_gm_rc2
 # detect_content_user: parse a host scan, reject non-username tokens, resolve the primary group.
 _orig_gm_rc = sm.run_command
 try:

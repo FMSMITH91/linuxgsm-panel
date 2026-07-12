@@ -4608,9 +4608,18 @@ def delete_path(server, user, relpath, selfname=None):
 # content app id. Counter-Strike: Source is the essential one (the vast majority of GMod maps/addons
 # expect it); more can be added to this map later.
 GMOD_CONTENT_GAMES = {
-    # mount-folder -> (label, steamcmd dedicated-content app id)
-    "cstrike": ("Counter-Strike: Source", 232330),
+    # mount-folder -> (label, steamcmd dedicated-content app id). App ids verified against LinuxGSM's
+    # own configs. CS:S is the essential one; the rest are common GMod content too.
+    "cstrike":    ("Counter-Strike: Source", 232330),
+    "tf":         ("Team Fortress 2", 232250),
+    "dod":        ("Day of Defeat: Source", 232290),
+    "hl2mp":      ("Half-Life 2: Deathmatch", 232370),
+    "left4dead":  ("Left 4 Dead", 222840),
+    "left4dead2": ("Left 4 Dead 2", 222860),
 }
+# Bytes on disk are big for some — a rough size hint for the UI so nobody accidentally pulls 13GB.
+GMOD_CONTENT_SIZES = {"cstrike": "~1.6 GB", "tf": "~13 GB", "dod": "~1.1 GB",
+                      "hl2mp": "~2 GB", "left4dead": "~3 GB", "left4dead2": "~9 GB"}
 _CONTENT_USER = "gmodcontent"                         # panel-managed content user, created if none exists
 _CU_NAME_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9._-]*$")   # Linux username charset (reaches root-run cmds)
 
@@ -4723,21 +4732,24 @@ def _gmod_mount_files(content_user, games):
 
 
 def gmod_mount_setup(server, gmod_user, content_user, games):
-    """Give the GMod user read access to the content user's files and write GMod's mount config so it
-    mounts each game. Idempotent. Returns (ok, msg). Group membership takes effect when the GMod
-    server (re)starts, which a fresh install does anyway."""
+    """Write a GMod server's mount config to mount exactly `games` from the content user, granting the
+    GMod user read access first. An EMPTY `games` writes an empty mount.cfg (unmounts everything).
+    Idempotent. Returns (ok, msg). Group membership takes effect when the GMod server (re)starts."""
     import base64
     games = _valid_content_games(games)
-    if not (_CU_NAME_RE.match(gmod_user or "") and _CU_NAME_RE.match(content_user or "") and games):
-        return False, "invalid arguments"
-    group = _user_primary_group(server, content_user)
-    # 1. Read access: add the GMod user to the content group, and make the content group-traversable
-    #    (home) + group-readable (each game tree). Best-effort per command.
-    perms = ("usermod -aG %s %s; chmod g+x /home/%s; " % (_quote(group), _quote(gmod_user), content_user)
-             + "; ".join("chmod -R g+rX /home/%s/serverfiles/%s" % (content_user, g) for g in games))
-    run_command(server, _sudo_sh(perms), timeout=180, sudo=False)
-    # 2. Write mount.cfg + mountdepots.txt AS the GMod user (base64 so no quoting/interpolation risk).
-    mountcfg, depots = _gmod_mount_files(content_user, games)
+    if not _CU_NAME_RE.match(gmod_user or ""):
+        return False, "invalid gmod user"
+    if games and not _CU_NAME_RE.match(content_user or ""):
+        return False, "invalid content user"
+    if games:
+        group = _user_primary_group(server, content_user)
+        # Read access: add the GMod user to the content group, and make the content group-traversable
+        # (home) + group-readable (each game tree). Best-effort per command.
+        perms = ("usermod -aG %s %s; chmod g+x /home/%s; " % (_quote(group), _quote(gmod_user), content_user)
+                 + "; ".join("chmod -R g+rX /home/%s/serverfiles/%s" % (content_user, g) for g in games))
+        run_command(server, _sudo_sh(perms), timeout=180, sudo=False)
+    # Write mount.cfg + mountdepots.txt AS the GMod user (base64 so no quoting/interpolation risk).
+    mountcfg, depots = _gmod_mount_files(content_user or "", games)
     cfgdir = f"/home/{gmod_user}/serverfiles/garrysmod/cfg"
     b64c = base64.b64encode(mountcfg.encode()).decode()
     b64d = base64.b64encode(depots.encode()).decode()
@@ -4745,6 +4757,36 @@ def gmod_mount_setup(server, gmod_user, content_user, games):
              f"echo {b64d} | base64 -d > {cfgdir}/mountdepots.txt && echo __OK__")
     out, err, rc = run_command(server, f"sudo -u {_quote(gmod_user)} bash -c {_quote(inner)}",
                                timeout=30, sudo=False)
-    if rc == 0 and "__OK__" in (out or ""):
-        return True, "Mounted: " + ", ".join(GMOD_CONTENT_GAMES[g][0] for g in games)
-    return False, (err or out or "mount write failed")[:200]
+    if rc != 0 or "__OK__" not in (out or ""):
+        return False, (err or out or "mount write failed")[:200]
+    if not games:
+        return True, "Unmounted all content"
+    return True, "Mounted: " + ", ".join(GMOD_CONTENT_GAMES[g][0] for g in games)
+
+
+_MOUNT_LINE_RE = re.compile(r'"([a-z0-9_]+)"\s+"/')
+
+
+def gmod_current_mounts(server, gmod_user):
+    """Which content games a GMod server currently mounts, parsed from its garrysmod/cfg/mount.cfg.
+    Returns a list of known game keys (order as written). [] if no file / none. Read-only."""
+    if not _CU_NAME_RE.match(gmod_user or ""):
+        return []
+    path = f"/home/{gmod_user}/serverfiles/garrysmod/cfg/mount.cfg"
+    out, _, _ = run_command(server, _sudo_sh("cat %s 2>/dev/null || true" % path), timeout=10)
+    found = []
+    for m in _MOUNT_LINE_RE.finditer(out or ""):
+        g = m.group(1)
+        if g in GMOD_CONTENT_GAMES and g not in found:
+            found.append(g)
+    return found
+
+
+def gmod_content_options(server):
+    """The content picker for the UI: every known game with its label, size hint, whether it's
+    already downloaded on the host's content user (mountable now), and its steamcmd app id. Used by
+    both the install form and the per-server content manager."""
+    cu = detect_content_user(server, tuple(GMOD_CONTENT_GAMES))
+    present = set((cu or {}).get("present", {}))
+    return [{"key": k, "label": GMOD_CONTENT_GAMES[k][0], "size": GMOD_CONTENT_SIZES.get(k, ""),
+             "present": k in present} for k in GMOD_CONTENT_GAMES]

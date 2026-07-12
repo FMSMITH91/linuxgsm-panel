@@ -65,13 +65,21 @@
         </button>
       </div>
       <div class="col-12 mt-1" id="gmod-content-opt" style="display:none;">
-        <div class="form-check">
-          <input type="checkbox" class="form-check-input" name="install_content" id="install-content" checked>
-          <label class="form-check-label small" for="install-content">
-            <strong>Mount Counter-Strike: Source content</strong> — GMod needs CS:S for most maps &amp; props
-            (without it you get missing-texture <em>ERROR</em> signs). The panel reuses existing content on the
-            host if it's already there, otherwise downloads it (~1.6&nbsp;GB) into a shared content user.
-          </label>
+        <div class="border rounded p-2" style="border-color:var(--border)!important;">
+          <div class="small mb-1"><strong><i class="bi bi-hdd-stack"></i> Mount game content</strong>
+            — GMod needs another game's content to draw its maps &amp; props (without it you get
+            missing-texture <em>ERROR</em> signs). The panel reuses content already on the host, else
+            downloads it into a shared content user.</div>
+          <div class="d-flex flex-wrap gap-3">
+            {% for g in gmod_games %}
+            <div class="form-check mb-0">
+              <input type="checkbox" class="form-check-input" name="content_games" value="{{ g.key }}"
+                     id="cg-{{ g.key }}"{% if g.key == 'cstrike' %} checked{% endif %}>
+              <label class="form-check-label small" for="cg-{{ g.key }}">{{ g.label }}
+                <span class="text-secondary">{{ g.size }}</span></label>
+            </div>
+            {% endfor %}
+          </div>
         </div>
       </div>
     </form>
