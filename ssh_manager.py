@@ -4892,10 +4892,13 @@ def gmod_current_mounts(server, gmod_user):
     path = f"/home/{gmod_user}/serverfiles/garrysmod/cfg/mount.cfg"
     out, _, _ = run_command(server, _sudo_sh("cat %s 2>/dev/null || true" % path), timeout=10)
     found = []
-    for m in _MOUNT_LINE_RE.finditer(out or ""):
-        g = m.group(1)
-        if g in GMOD_CONTENT_GAMES and g not in found:
-            found.append(g)
+    for line in (out or "").splitlines():
+        s = line.strip()
+        if s.startswith("//"):
+            continue   # a commented-out mount (Valve KeyValues // comment) is NOT active
+        m = _MOUNT_LINE_RE.search(s)
+        if m and m.group(1) in GMOD_CONTENT_GAMES and m.group(1) not in found:
+            found.append(m.group(1))
     return found
 
 

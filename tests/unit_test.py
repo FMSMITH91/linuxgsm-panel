@@ -309,6 +309,10 @@ try:
           and "rm -rf /home/gmodcontent/cssserver" in _uj
           and "rm -rf /home/gmodcontent/lgsm/config-lgsm/cssserver" in _uj and _urem == ["cstrike"])
     _un[:] = []
+    _uok3, _urem3, _ = sm.uninstall_gmod_content(object(), "srcds", ["hl2"])   # mount-only: no LinuxGSM script
+    check("gmod content uninstall: a mount-only (owned) game removes its content dir",
+          "rm -rf /home/srcds/serverfiles/hl2" in " ".join(_un) and _urem3 == ["hl2"])
+    _un[:] = []
     _uok2, _, _ = sm.uninstall_gmod_content(object(), "bad;user", ["cstrike"])
     check("gmod content uninstall: rejects an invalid content user, runs nothing",
           _uok2 is False and not _un)
@@ -319,8 +323,10 @@ _orig_gm_rc2 = sm.run_command
 try:
     sm.run_command = lambda s, c, **k: (
         '"mountcfg"\n{\n\t"cstrike"\t"/home/srcds/serverfiles/cstrike"\n'
-        '\t"tf"\t"/home/srcds/serverfiles/tf"\n\t"notagame"\t"/x"\n}\n', "", 0)
-    eq("gmod content: current mounts parsed (known games only, header/unknowns ignored)",
+        '\t"tf"\t"/home/srcds/serverfiles/tf"\n'
+        '//\t"csgo"\t"/home/srcds/serverfiles/csgo"\n'      # commented-out mount must NOT count
+        '\t"notagame"\t"/x"\n}\n', "", 0)
+    eq("gmod content: current mounts skip commented (//) lines + header + unknowns",
        sm.gmod_current_mounts(object(), "gmodserver"), ["cstrike", "tf"])
 finally:
     sm.run_command = _orig_gm_rc2

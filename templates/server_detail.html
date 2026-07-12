@@ -1039,7 +1039,8 @@ function loadGmodContent(){
         var status, act = '';
         if (g.present) {
           status = '<span class="text-success">installed on host</span>';
-          if (g.downloadable) act = '<button class="btn btn-link btn-sm p-0 text-danger" style="font-size:.72rem;" type="button" '
+          // Any content on the host can be removed to free disk — including owned/mount-only games.
+          act = '<button class="btn btn-link btn-sm p-0 text-danger" style="font-size:.72rem;" type="button" '
             + 'data-gmc-uninstall="'+_esc(g.key)+'" data-gmc-label="'+_esc(g.label)+'"'+(running?' disabled':'')+'>Uninstall</button>';
         } else if (g.downloadable) {
           status = '<span class="text-secondary">installs on Apply · '+_esc(g.size||'')+'</span>';
