@@ -280,14 +280,8 @@
       This game doesn't have any LinuxGSM-installable mods.
     </div>
     <div id="mods-body" style="display:none;">
-      <div class="mb-2">
-        <div class="fw-semibold small mb-1"><i class="bi bi-box-arrow-in-down"></i> Available</div>
-        <div id="mods-available" class="d-flex flex-column gap-1"></div>
-      </div>
-      <div id="mods-installed-wrap" style="display:none;">
-        <div class="fw-semibold small mb-1"><i class="bi bi-check2-square"></i> Installed</div>
-        <div id="mods-installed" class="d-flex flex-column gap-1"></div>
-      </div>
+      <div id="mods-count" class="small text-secondary mb-2"></div>
+      <div id="mods-list" class="d-flex flex-column gap-1"></div>
     </div>
     <span id="mods-msg" class="small"></span>
   </div>
@@ -832,17 +826,14 @@ function modLabel(m){
   // "Name (id)" — id is a safe charset ([A-Za-z0-9._-]) so it's fine inline.
   return esc(m.name||m.id) + ' <span class="text-secondary">('+esc(m.id)+')</span>';
 }
-function modRow(m, which, installedSet){
-  var btn;
-  if(which==='install'){
-    btn = installedSet[m.id]
-      ? '<span class="badge bg-secondary">Installed</span>'
-      : '<button class="btn btn-sm btn-outline-primary"' + _da('modAction', ['install', m.id, '@self']) + '><i class="bi bi-download"></i> Install</button>';
-  } else {
-    btn = '<button class="btn btn-sm btn-outline-danger"' + _da('modAction', ['remove', m.id, '@self']) + '><i class="bi bi-trash"></i> Remove</button>';
-  }
+function modRow(m, installed){
+  // One row per mod: installed → green tick + Remove; not installed → Install. Same place for both.
+  var btn = installed
+    ? '<button class="btn btn-sm btn-outline-danger"' + _da('modAction', ['remove', m.id, '@self']) + '><i class="bi bi-trash"></i> Remove</button>'
+    : '<button class="btn btn-sm btn-outline-primary"' + _da('modAction', ['install', m.id, '@self']) + '><i class="bi bi-download"></i> Install</button>';
+  var tick = installed ? '<i class="bi bi-check-circle-fill text-success me-1" title="Installed"></i>' : '';
   return '<div class="d-flex justify-content-between align-items-center border rounded px-2 py-1 gap-2">'
-    + '<span class="small"'+(m.desc?' title="'+escA(m.desc)+'"':'')+'>'+modLabel(m)+'</span>'+btn+'</div>';
+    + '<span class="small"'+(m.desc?' title="'+escA(m.desc)+'"':'')+'>'+tick+modLabel(m)+'</span>'+btn+'</div>';
 }
 function loadMods(force){
   var load=document.getElementById('mods-loading'), body=document.getElementById('mods-body'),
@@ -856,12 +847,16 @@ function loadMods(force){
     load.style.display='none';
     if(!avail.length && !inst.length){ uns.style.display=''; body.style.display='none'; return; }
     var installedSet={}; inst.forEach(function(m){ installedSet[m.id]=1; });
-    document.getElementById('mods-available').innerHTML =
-      avail.length ? avail.map(function(m){ return modRow(m,'install',installedSet); }).join('') :
-      '<span class="text-secondary small">None available.</span>';
-    var iwrap=document.getElementById('mods-installed-wrap');
-    if(inst.length){ document.getElementById('mods-installed').innerHTML=inst.map(function(m){ return modRow(m,'remove',installedSet); }).join(''); iwrap.style.display=''; }
-    else { iwrap.style.display='none'; }
+    // One merged list: the available catalog is the superset; append any installed mod that isn't in
+    // the catalog so it stays removable. Each row shows Install or Remove for its current state.
+    var byId={}, merged=[];
+    avail.concat(inst).forEach(function(m){ if(!byId[m.id]){ byId[m.id]=1; merged.push(m); } });
+    document.getElementById('mods-list').innerHTML =
+      merged.length ? merged.map(function(m){ return modRow(m, !!installedSet[m.id]); }).join('')
+      : '<span class="text-secondary small">None available.</span>';
+    var n=inst.length;
+    document.getElementById('mods-count').textContent =
+      n ? (n+' installed · '+merged.length+' available') : (merged.length+' available');
     body.style.display='';
   }).catch(function(){ load.innerHTML='<span class="text-danger">Could not load mods.</span>'; });
 }
