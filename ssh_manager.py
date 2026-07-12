@@ -4712,6 +4712,22 @@ def ensure_content_user(server):
     return {"user": u, "group": _user_primary_group(server, u), "present": {}}
 
 
+_DF_PATH_RE = re.compile(r"^/[\w./-]*$")   # absolute path, no shell metacharacters
+
+
+def path_disk_free(server, path="/home"):
+    """Free + total bytes of the filesystem holding `path` (where game content is stored). Returns
+    (free_bytes, total_bytes) or (None, None). Best-effort; falls back to /home for a bad path."""
+    p = path if _DF_PATH_RE.match(path or "") else "/home"
+    out, _, _ = run_command(
+        server, _sudo_sh("df -PB1 %s 2>/dev/null | awk 'NR==2{print $2, $4}'" % p), timeout=10)
+    try:
+        total, free = (out or "").split()
+        return int(free), int(total)
+    except (ValueError, AttributeError):
+        return None, None
+
+
 def content_present(server, content_user, game):
     """True if <content_user>/serverfiles/<game> already exists on the host."""
     if not (_CU_NAME_RE.match(content_user or "") and game in GMOD_CONTENT_GAMES):

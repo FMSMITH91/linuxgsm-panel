@@ -320,6 +320,16 @@ try:
           _uok2 is False and not _un)
 finally:
     sm.run_command = _orig_un_rc
+# free disk on the content filesystem (shown on the card so nobody starts a 13GB install without room)
+_orig_df_rc = sm.run_command
+try:
+    sm.run_command = lambda s, c, **k: ("500107862016 123456789012", "", 0)   # df awk: total free
+    eq("path_disk_free: parses (free, total) from df",
+       sm.path_disk_free(object(), "/home/gmodcontent/serverfiles"), (123456789012, 500107862016))
+    sm.run_command = lambda s, c, **k: ("garbage", "", 0)
+    eq("path_disk_free: junk output -> (None, None)", sm.path_disk_free(object(), "/home"), (None, None))
+finally:
+    sm.run_command = _orig_df_rc
 # gmod_current_mounts: parse a real mount.cfg, keep only known games, ignore the header + unknowns.
 _orig_gm_rc2 = sm.run_command
 try:

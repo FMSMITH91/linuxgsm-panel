@@ -109,6 +109,7 @@ from ssh_manager import (
     install_game_dependencies, parse_missing_deps, detect_game_ports, lgsm_read_config,
     GMOD_CONTENT_GAMES, GMOD_CONTENT_SIZES, ensure_content_user, install_gmod_content,
     gmod_mount_setup, gmod_current_mounts, detect_content_user, uninstall_gmod_content,
+    path_disk_free,
     lgsm_write_config, lgsm_game_config, lgsm_get_values, browse_dir, read_file,
     write_file, upload_file, delete_path,
     remote_ufw_delete_rule, remote_set_public_ssh, remote_public_ssh_status, remote_ufw_status, remote_ufw_open_port,
@@ -7663,7 +7664,12 @@ def register_routes(app):
                           "present": (k in present), "mounted": (k in mounted),
                           "downloadable": GMOD_CONTENT_GAMES[k][1] is not None} for k in GMOD_CONTENT_GAMES]
                 st = _gmod_content_apply_state.get(server_id)
+                # Free disk on the filesystem where content is stored — so nobody starts a 13GB
+                # install without room. Uses the content user's serverfiles if one exists, else /home.
+                content_path = ("/home/%s/serverfiles" % cu["user"]) if cu else "/home"
+                disk_free, disk_total = path_disk_free(remote, content_path)
                 return jsonify({"games": games, "mounted": mounted,
+                                "disk_free": disk_free, "disk_total": disk_total,
                                 "job": st if (st and st.get("status") == "running") else None})
             except Exception:
                 return jsonify({"error": _log_and_generic("gmod content status failed"), "games": []}), 200

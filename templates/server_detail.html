@@ -1057,12 +1057,19 @@ function loadGmodContent(){
           + (act ? '<span class="flex-shrink-0">'+act+'</span>' : '')
           + '</div>';
       }).join('');
+      function _gb(b){ return (b/1073741824).toFixed(b >= 10.7e9 ? 0 : 1) + ' GB'; }   // bytes -> GB
+      var disk = (d.disk_free != null && d.disk_total != null)
+        ? '<div class="small mb-2"><i class="bi bi-hdd"></i> Host disk: '
+          + '<b class="'+(d.disk_free < 5368709120 ? 'text-danger' : 'text-success')+'">'+_gb(d.disk_free)+' free</b>'
+          + ' <span class="text-secondary">of '+_gb(d.disk_total)+'</span></div>'
+        : '';
       el.innerHTML =
         '<div class="mb-2 text-secondary" style="font-size:.78rem;">'
         + '<b>Tick a game</b> to mount it on <b>this</b> server (enable/disable per server) — a game not '
         + 'yet on the host is installed via LinuxGSM when you Apply, and kept current by a weekly update. '
         + '<b>Uninstall</b> removes the content from the host, freeing disk for <i>every</i> GMod server '
         + 'here. Restart the server to load mount changes.</div>'
+        + disk
         + '<div class="d-flex flex-column gap-1 mb-2">' + rows + '</div>'
         + (running
             ? '<div class="text-info small"><span class="spinner-border spinner-border-sm"></span> Working… (install/removal can take a while) '+_esc((d.job&&d.job.msg)||'')+'</div>'
