@@ -272,6 +272,15 @@
     .form-control-sm { font-size: .85rem; padding: .4rem .65rem; }
     .form-check-input:checked { background-color: var(--accent); border-color: var(--accent); }
     .form-text { color: var(--text-muted); font-size: .73rem; }
+    .form-control::placeholder { color: var(--text-muted); opacity: .6; }
+    /* Number inputs: hide the browser spinner arrows — they render light/misaligned on the dark theme. */
+    input[type=number] { -moz-appearance: textfield; appearance: textfield; }
+    input[type=number]::-webkit-outer-spin-button, input[type=number]::-webkit-inner-spin-button { -webkit-appearance: none; margin: 0; }
+    /* Make a field and its attached button ONE seamless unit — square the inner corners and overlap the
+       1px seam. Our custom .form-control/.btn radius could otherwise leave a notched/double-border look. */
+    .input-group > :not(:last-child):not(.dropdown-toggle) { border-top-right-radius: 0; border-bottom-right-radius: 0; }
+    .input-group > :not(:first-child) { border-top-left-radius: 0; border-bottom-left-radius: 0; margin-left: -1px; }
+    .input-group .form-control:focus { position: relative; z-index: 2; }
 
     /* ── BADGES ── */
     .badge { font-weight: 600; font-size: .7rem; padding: .3em .65em; border-radius: 4px; letter-spacing: .02em; }
