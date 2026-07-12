@@ -4346,15 +4346,33 @@ def _strip_ansi(s):
 
 
 def _parse_mods_available(out):
-    """Parse the mods-install list: id is on a ' * <id>' line, name from the line above it."""
+    """Parse the mods-install list: id is on a ' * <id>' line, name from the description line above.
+
+    LinuxGSM prints TWO sections: an 'Installed addons/mods' block of bare ' * <id>' lines (already
+    installed, NO description above them) and then 'Available addons/mods' where each ' * <id>' is
+    preceded by a 'Name - desc - url' line. Only the Available block carries real, named entries — the
+    Installed block's ids would otherwise be emitted named after the section header ('Installed
+    addons/mods') AND duplicate the real Available rows, so we skip that section and de-dupe by id."""
     mods = []
     prev = ""
+    in_installed = False
+    seen = set()
     for raw in (out or "").splitlines():
         line = _strip_ansi(raw).rstrip()
+        low = line.strip().lower()
+        if low == "installed addons/mods":   # enter the skip section (its ' * <id>' lines have no name)
+            in_installed, prev = True, ""
+            continue
+        if low == "available addons/mods":    # back to the real, described list
+            in_installed, prev = False, ""
+            continue
         m = _MOD_AVAIL_RE.match(line)
         if m and _MOD_ID_OK.match(m.group(1)):
-            name = prev.split(" - ")[0].strip() if prev else m.group(1)
-            mods.append({"id": m.group(1), "name": name or m.group(1), "desc": prev})
+            mod_id = m.group(1)
+            if not in_installed and mod_id not in seen:
+                seen.add(mod_id)
+                name = prev.split(" - ")[0].strip() if prev else mod_id
+                mods.append({"id": mod_id, "name": name or mod_id, "desc": prev})
         else:
             t = line.strip()
             if t and set(t) != {"="}:   # remember the latest real description line, skip === rules

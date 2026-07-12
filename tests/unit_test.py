@@ -1591,6 +1591,36 @@ _av = sm._parse_mods_available(_mods_avail_out)
 check("mods: available parses id + name from ' * <id>' format",
       [m["id"] for m in _av] == ["metamodsource", "sourcemod", "wiremod-extras"]
       and _av[0]["name"] == "Metamod: Source")
+# REGRESSION: LinuxGSM lists an 'Installed addons/mods' section (bare ' * <id>' lines, no
+# description) BEFORE 'Available addons/mods'. Those bare ids must NOT be emitted as phantom mods
+# named after the section header, nor duplicate the real Available rows (bug: ulib/ulx showed twice).
+_mods_avail_full = (
+    "Garry's Mod Installing Mods\n"
+    "=================================\n"
+    "Installed addons/mods\n"
+    "=================================\n"
+    " * ulib\n"
+    " * ulx\n"
+    "\n"
+    "Available addons/mods\n"
+    "=================================\n"
+    "Metamod: Source - Plugins Framework - https://www.sourcemm.net\n"
+    " * metamodsource\n"
+    "ULib - Complete Framework - http://ulyssesmod.net\n"
+    " * ulib\n"
+    "ULX - Admin Panel (requires ULib) - http://ulyssesmod.net\n"
+    " * ulx\n"
+    "Enter an addon/mod to install (or exit to abort):\n"
+)
+_avf = sm._parse_mods_available(_mods_avail_full)
+_avf_ids = [m["id"] for m in _avf]
+check("mods: the 'Installed addons/mods' section is not emitted as phantom entries",
+      not any(m["name"].lower() == "installed addons/mods" for m in _avf))
+check("mods: each available id appears exactly once (ulib/ulx not duplicated)",
+      _avf_ids == ["metamodsource", "ulib", "ulx"])
+check("mods: the deduped ulib/ulx keep their real names, not the section header",
+      {m["id"]: m["name"] for m in _avf}.get("ulib") == "ULib"
+      and {m["id"]: m["name"] for m in _avf}.get("ulx") == "ULX")
 _mods_inst_out = (
     "Garry's Mod Removing Mods\n"
     "=================================\n"
