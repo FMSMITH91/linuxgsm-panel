@@ -570,14 +570,14 @@
 
   <div class="sidebar-section">Overview</div>
   <ul class="sidebar-nav">
-    <li><a href="{{ url_for('index') }}" class="{% if request.path == url_for('index') %}active{% endif %}">
+    <li><a href="{{ url_for('index') }}" class="{% if request.endpoint == 'index' %}active{% endif %}">
       <i class="bi bi-speedometer2"></i> Dashboard</a></li>
   </ul>
 
   {% if has_permission('manage_servers') or has_permission('install_server') %}
   <div class="sidebar-section">Servers</div>
   <ul class="sidebar-nav">
-    <li><a href="{{ url_for('manage_servers') }}" class="{% if request.path == url_for('manage_servers') or request.path.startswith('/server/') %}active{% endif %}">
+    <li><a href="{{ url_for('manage_servers') }}" class="{% if request.endpoint in ('manage_servers', 'server_detail') %}active{% endif %}">
       <i class="bi bi-hdd-stack"></i> Game Servers</a></li>
   </ul>
   {% endif %}
@@ -586,18 +586,18 @@
   <div class="sidebar-section">Infrastructure</div>
   <ul class="sidebar-nav">
     {% if current_user.is_superadmin %}
-    <li><a href="{{ url_for('server_management') }}" class="{% if request.path == url_for('server_management') %}active{% endif %}">
+    <li><a href="{{ url_for('server_management') }}" class="{% if request.endpoint == 'server_management' %}active{% endif %}">
       <i class="bi bi-sliders2"></i> Panel Server</a></li>
     {% endif %}
     {% if has_permission('manage_remotes') %}
-    <li><a href="{{ url_for('manage_remotes') }}" class="{% if request.path == url_for('manage_remotes') %}active{% endif %}">
+    <li><a href="{{ url_for('manage_remotes') }}" class="{% if request.endpoint == 'manage_remotes' %}active{% endif %}">
       <i class="bi bi-hdd-network"></i> Remote Servers</a></li>
     {% endif %}
     {% for r in nav_remotes %}
-    <li><a href="{{ url_for('remote_manage', remote_id=r.id) }}" class="{% if request.path == url_for('remote_manage', remote_id=r.id) %}active{% endif %}" style="padding-left:1.6rem;">
+    <li><a href="{{ url_for('remote_manage', remote_id=r.id) }}" class="{% if request.endpoint == 'remote_manage' and request.view_args and request.view_args.get('remote_id') == r.id %}active{% endif %}" style="padding-left:1.6rem;">
       <i class="bi bi-hdd-network-fill"></i> {{ r.name }}</a></li>
     {% endfor %}
-    <li><a href="{{ url_for('tailscale_page') }}" class="{% if request.path == url_for('tailscale_page') %}active{% endif %}">
+    <li><a href="{{ url_for('tailscale_page') }}" class="{% if request.endpoint == 'tailscale_page' %}active{% endif %}">
       <i class="bi bi-wifi"></i> Tailscale</a></li>
   </ul>
   {% endif %}
@@ -605,25 +605,25 @@
   <div class="sidebar-section">Administration</div>
   <ul class="sidebar-nav">
     {% if has_permission('manage_users') %}
-    <li><a href="{{ url_for('manage_users') }}" class="{% if request.path == url_for('manage_users') %}active{% endif %}">
+    <li><a href="{{ url_for('manage_users') }}" class="{% if request.endpoint == 'manage_users' %}active{% endif %}">
       <i class="bi bi-people"></i> Users</a></li>
     {% endif %}
     {% if has_permission('manage_groups') %}
-    <li><a href="{{ url_for('manage_groups') }}" class="{% if request.path == url_for('manage_groups') %}active{% endif %}">
+    <li><a href="{{ url_for('manage_groups') }}" class="{% if request.endpoint == 'manage_groups' %}active{% endif %}">
       <i class="bi bi-shield-check"></i> Groups & Permissions</a></li>
     {% endif %}
     {% if current_user.is_superadmin %}
-    <li><a href="{{ url_for('manage_commands') }}" class="{% if request.path == url_for('manage_commands') %}active{% endif %}">
+    <li><a href="{{ url_for('manage_commands') }}" class="{% if request.endpoint == 'manage_commands' %}active{% endif %}">
       <i class="bi bi-terminal"></i> Custom Commands</a></li>
-    <li><a href="{{ url_for('global_bans_page') }}" class="{% if request.path == url_for('global_bans_page') %}active{% endif %}">
+    <li><a href="{{ url_for('global_bans_page') }}" class="{% if request.endpoint == 'global_bans_page' %}active{% endif %}">
       <i class="bi bi-slash-circle"></i> Global Bans</a></li>
-    <li><a href="{{ url_for('notifications_settings') }}" class="{% if request.path == url_for('notifications_settings') %}active{% endif %}">
+    <li><a href="{{ url_for('notifications_settings') }}" class="{% if request.endpoint == 'notifications_settings' %}active{% endif %}">
       <i class="bi bi-bell"></i> Notifications</a></li>
-    <li><a href="{{ url_for('panel_settings') }}" class="{% if request.path == url_for('panel_settings') %}active{% endif %}">
+    <li><a href="{{ url_for('panel_settings') }}" class="{% if request.endpoint == 'panel_settings' %}active{% endif %}">
       <i class="bi bi-gear"></i> Settings</a></li>
     {% endif %}
     {% if has_permission('view_logs') %}
-    <li><a href="{{ url_for('view_logs') }}" class="{% if request.path == url_for('view_logs') %}active{% endif %}">
+    <li><a href="{{ url_for('view_logs') }}" class="{% if request.endpoint == 'view_logs' %}active{% endif %}">
       <i class="bi bi-journal-text"></i> Audit Logs</a></li>
     {% endif %}
   </ul>

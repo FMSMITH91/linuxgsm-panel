@@ -155,6 +155,18 @@ try:
         code = c.get(path).status_code
         check("GET %s renders (200)" % path, code == 200, "got %d" % code)
 
+    # ── Sidebar active-state must use request.endpoint, NOT request.path == url_for(...) — the
+    #    latter breaks under a URL mount prefix (e.g. /lgsm), where url_for includes the prefix but
+    #    request.path doesn't, so nothing highlights. Exactly the current page's link is active. ──
+    import re as _nre
+    def _active_navs(html):
+        return [m.strip() for m in _nre.findall(r'class="active">\s*<i[^>]*></i>\s*([^<]+?)\s*</a>', html)]
+    check("nav active: Dashboard on /", _active_navs(c.get("/").get_data(as_text=True)) == ["Dashboard"],
+          _active_navs(c.get("/").get_data(as_text=True)))
+    check("nav active: Users on /users", _active_navs(c.get("/users").get_data(as_text=True)) == ["Users"])
+    check("nav active: Settings on /settings",
+          _active_navs(c.get("/settings").get_data(as_text=True)) == ["Settings"])
+
     # ── Audit-log filters/sort must be injection-safe: a junk sort column, bad
     #    direction/status, and hostile filter values are allowlisted/parameterized,
     #    so the page still renders 200 rather than 500. ──
