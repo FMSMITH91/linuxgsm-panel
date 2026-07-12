@@ -4618,6 +4618,12 @@ GMOD_CONTENT_GAMES = {
     "hl2mp":      ("Half-Life 2: Deathmatch", 232370),
     "left4dead":  ("Left 4 Dead", 222840),
     "left4dead2": ("Left 4 Dead 2", 222860),
+    "insurgency": ("Insurgency", 237410),
+    "nmrih":      ("No More Room in Hell", 317670),
+    "fof":        ("Fistful of Frags", 295230),
+    # Mount-only — need a purchased license, so SteamCMD can't fetch them anonymously. Mounted when
+    # their content is already on the host. csgo is here because the app-740 download is now CS2
+    # (Source 2), which GMod (Source 1) can't use — classic CS:GO content is no longer on Steam.
     "hl1":        ("Half-Life: Source", None),
     "hl1mp":      ("Half-Life Deathmatch: Source", None),
     "hl2":        ("Half-Life 2", None),
@@ -4627,11 +4633,11 @@ GMOD_CONTENT_GAMES = {
     "portal":     ("Portal", None),
     "portal2":    ("Portal 2", None),
     "csgo":       ("Counter-Strike: Global Offensive", None),
-    "insurgency": ("Insurgency", None),
 }
 # Rough download sizes for the UI so nobody accidentally pulls 13GB (downloadable games only).
 GMOD_CONTENT_SIZES = {"cstrike": "~1.6 GB", "tf": "~13 GB", "dod": "~1.1 GB",
-                      "hl2mp": "~2 GB", "left4dead": "~3 GB", "left4dead2": "~9 GB"}
+                      "hl2mp": "~2 GB", "left4dead": "~3 GB", "left4dead2": "~9 GB",
+                      "insurgency": "~7 GB", "nmrih": "~6 GB", "fof": "~2 GB"}
 _CONTENT_USER = "gmodcontent"                         # panel-managed content user, created if none exists
 _CU_NAME_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9._-]*$")   # Linux username charset (reaches root-run cmds)
 

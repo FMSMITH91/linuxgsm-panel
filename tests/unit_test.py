@@ -286,8 +286,9 @@ check("gmod content: mountdepots enables hl2 + each game",
 check("gmod content: downloadable games carry an int appid, mount-only carry None",
       all(isinstance(v[1], int) for v in sm.GMOD_CONTENT_GAMES.values() if v[1] is not None)
       and sm.GMOD_CONTENT_GAMES["cstrike"][1] == 232330
-      and sm.GMOD_CONTENT_GAMES["hl1mp"][1] is None
-      and sum(1 for v in sm.GMOD_CONTENT_GAMES.values() if v[1] is not None) == 6)
+      and sm.GMOD_CONTENT_GAMES["insurgency"][1] == 237410       # free anonymous — panel downloads it
+      and sm.GMOD_CONTENT_GAMES["hl1mp"][1] is None              # owned — mount-only
+      and sum(1 for v in sm.GMOD_CONTENT_GAMES.values() if v[1] is not None) == 9)
 # gmod_current_mounts: parse a real mount.cfg, keep only known games, ignore the header + unknowns.
 _orig_gm_rc2 = sm.run_command
 try:
