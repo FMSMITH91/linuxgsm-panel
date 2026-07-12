@@ -451,7 +451,10 @@
     <p class="small mb-3" style="border-left:2px solid var(--border,#1f2937);padding-left:.65rem;color:#9ca3af;">
       <i class="bi bi-shield-check text-success"></i> Reachable only over Tailscale? If SSH and the panel login aren't exposed to the public internet, there's nothing here for fail2ban to catch — you can leave auto-block <strong>off</strong>. It only earns its keep when <strong>SSH or the panel login</strong> is reachable from the public internet. (Game-server ports have no fail2ban jail, so this never covers those.)
     </p>
-    <div class="d-flex flex-wrap align-items-end gap-4 mb-3">
+    <!-- align-items-START (not end): the whitelist column grows downward when its chips/"nothing
+         whitelisted" text load, and bottom-aligning would then shove the threshold field down out of
+         line with it. Top-aligning keeps both fields level regardless of what loads below. -->
+    <div class="d-flex flex-wrap align-items-start gap-4 mb-3">
       <div>
         <label class="form-label small mb-1" for="sec-threshold">Auto-block at <span class="text-secondary">(failed attempts / 7 days)</span></label>
         <div class="input-group input-group-sm" style="max-width:230px;">
