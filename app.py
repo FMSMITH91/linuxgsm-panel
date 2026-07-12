@@ -1857,6 +1857,12 @@ def create_app():
     # Initialize extensions
     init_auth(app)
     init_db(app)
+    # One-time: drop the removed global notifications master switch from the stored config
+    # (preserves a muted state via the channel toggles). No-op once the key is gone.
+    try:
+        notifications.migrate_master_switch()
+    except Exception:
+        _log.debug("notifications master-switch migration skipped", exc_info=True)
     # Lock down data/ (0700) and the sensitive files inside (DB, keys, config → 0600) now that the
     # DB exists — keeps them unreachable by other local users. Idempotent; tightens old installs too.
     harden_data_permissions()
@@ -4413,7 +4419,6 @@ def register_routes(app):
         dc_webhook = f.get("discord_webhook", "").strip()
         dc_bot_token = f.get("discord_bot_token", "").strip()
         notifications.save_settings(
-            enabled=bool(f.get("enabled")),
             telegram={"enabled": bool(f.get("telegram_enabled")),
                       "chat_id": f.get("telegram_chat_id", ""),
                       "accept_commands": bool(f.get("telegram_accept_commands")),

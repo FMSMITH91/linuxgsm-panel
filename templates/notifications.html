@@ -12,16 +12,6 @@
 </p>
 
 <form method="POST" action="{{ url_for('notifications_save') }}">
-  <div class="card mb-3">
-    <div class="card-body">
-      <div class="form-check form-switch">
-        <input type="checkbox" name="enabled" class="form-check-input" role="switch" id="enabled"
-               {% if settings.enabled %}checked{% endif %}>
-        <label class="form-check-label" for="enabled"><strong>Enable notifications</strong> — master switch</label>
-      </div>
-    </div>
-  </div>
-
   <div class="row">
     <!-- Telegram -->
     <div class="col-lg-6 mb-3">

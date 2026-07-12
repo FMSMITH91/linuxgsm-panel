@@ -99,7 +99,6 @@ def settings_for_form():
     tg = cfg.get("telegram") or {}
     dc = cfg.get("discord") or {}
     return {
-        "enabled": cfg.get("enabled", True),
         "telegram": {"enabled": bool(tg.get("enabled")), "chat_id": tg.get("chat_id") or "",
                      "has_token": bool(tg.get("token")), "accept_commands": bool(tg.get("accept_commands"))},
         "discord": {"enabled": bool(dc.get("enabled")), "has_webhook": bool(dc.get("webhook")),
@@ -110,9 +109,10 @@ def settings_for_form():
     }
 
 
-def save_settings(*, enabled, telegram, discord, events, thresholds=None):
+def save_settings(*, telegram, discord, events, thresholds=None):
     """Persist settings, encrypting secrets. `telegram`/`discord` secrets that come in as None mean
-    'keep the stored value' (the form never round-trips the real secret back)."""
+    'keep the stored value' (the form never round-trips the real secret back). There is no global
+    master switch — a channel's own enable toggle is what turns its alerts on/off."""
     cur = _cfg()
     cur_tg = cur.get("telegram") or {}
     cur_dc = cur.get("discord") or {}
@@ -129,7 +129,6 @@ def save_settings(*, enabled, telegram, discord, events, thresholds=None):
             except (TypeError, ValueError):
                 _log.debug("ignoring non-numeric threshold %r; keeping %r", k, th[k])
     notif = {
-        "enabled": bool(enabled),
         "telegram": {"enabled": bool(telegram.get("enabled")),
                      "chat_id": (telegram.get("chat_id") or "").strip()[:64], "token": tg_token or "",
                      "accept_commands": bool(telegram.get("accept_commands"))},
@@ -142,6 +141,29 @@ def save_settings(*, enabled, telegram, discord, events, thresholds=None):
     }
     # update_config: this can race with the Telegram poller thread's pending-update write.
     update_config(lambda cfg: cfg.update({"notifications": notif}))
+
+
+def _drop_master_switch(notif):
+    """Pure, in-place migration of a notifications-config dict: the global 'enabled' master switch
+    was removed. If it was explicitly OFF that meant 'no notifications' — preserve that by disabling
+    both channels (so dropping the gate can't start sending), then remove the key. Returns True if
+    the old key was present (i.e. something changed)."""
+    if not isinstance(notif, dict) or "enabled" not in notif:
+        return False
+    if notif.get("enabled") is False:
+        for ch in ("telegram", "discord"):
+            if isinstance(notif.get(ch), dict):
+                notif[ch]["enabled"] = False
+    notif.pop("enabled", None)
+    return True
+
+
+def migrate_master_switch():
+    """One-time on startup: strip the removed global 'enabled' master switch from the stored config
+    (preserving a muted state via the channel toggles). No-op once the key is gone."""
+    if "enabled" not in _cfg():
+        return
+    update_config(lambda cfg: _drop_master_switch(cfg.get("notifications")) if isinstance(cfg.get("notifications"), dict) else None)
 
 
 # ── senders ────────────────────────────────────────────────────
@@ -426,7 +448,7 @@ def notify(event_key, title, body=""):
     notifications (or this event) are off, or no channel is configured. Never raises."""
     try:
         cfg = _cfg()
-        if not cfg.get("enabled", True) or not event_enabled(cfg, event_key):
+        if not event_enabled(cfg, event_key):
             return
         text = "🎮 LinuxGSM Panel — %s" % title + (("\n%s" % body) if body else "")
         tg = cfg.get("telegram") or {}

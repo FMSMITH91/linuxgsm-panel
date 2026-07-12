@@ -2216,6 +2216,21 @@ _used_keys = set(_re.findall(r'notifications\.notify\(\s*"(\w+)"', _app_src))
 check("notify: every notify() key in app.py is registered in EVENTS",
       _used_keys and _used_keys <= set(N.EVENTS), "unregistered: %s" % sorted(_used_keys - set(N.EVENTS)))
 
+# The global 'enabled' master switch was removed (a channel's own toggle is the on/off). The one-time
+# migration must PRESERVE a previously-muted state: master off -> disable both channels, then drop the
+# key — otherwise removing the gate would silently start sending to still-enabled channels.
+_m_off = {"enabled": False, "telegram": {"enabled": True}, "discord": {"enabled": True}}
+check("master-switch drop: was off -> both channels disabled + key removed",
+      N._drop_master_switch(_m_off) is True and "enabled" not in _m_off
+      and _m_off["telegram"]["enabled"] is False and _m_off["discord"]["enabled"] is False)
+_m_on = {"enabled": True, "telegram": {"enabled": True}, "discord": {"enabled": False}}
+check("master-switch drop: was on -> channels untouched, key removed",
+      N._drop_master_switch(_m_on) is True and "enabled" not in _m_on
+      and _m_on["telegram"]["enabled"] is True and _m_on["discord"]["enabled"] is False)
+_m_none = {"telegram": {"enabled": True}}
+check("master-switch drop: already migrated (no key) -> no change",
+      N._drop_master_switch(_m_none) is False and _m_none == {"telegram": {"enabled": True}})
+
 # Alert thresholds: disk %/mem % are real percents (<=99); CPU 'load' is a per-core loadavg % that can
 # exceed 100; load_mins is the sustained window. Each is clamped to its own range with defaults.
 _orig_thr_cfg = N._cfg

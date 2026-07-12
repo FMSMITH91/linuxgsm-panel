@@ -150,7 +150,8 @@ try:
     #    to /setup or /login (which would mean the check isn't really exercising
     #    the page). We skip pages that shell out to host-only tooling
     #    (/server-management runs ufw/systemctl), so the test stays portable.
-    for path in ["/", "/users", "/groups", "/logs", "/remotes", "/tailscale", "/account"]:
+    for path in ["/", "/users", "/groups", "/logs", "/remotes", "/tailscale", "/account",
+                 "/notifications", "/settings"]:
         code = c.get(path).status_code
         check("GET %s renders (200)" % path, code == 200, "got %d" % code)
 
