@@ -574,6 +574,9 @@
       <i class="bi bi-speedometer2"></i> Dashboard</a></li>
   </ul>
 
+  {# Sidebar active-state: each nav item must list EVERY endpoint that renders under it, including a
+     page's subpages (e.g. a server's Files & Config = server_files, a remote's Firewall =
+     remote_firewall) — otherwise the highlight drops when you're on that subpage. #}
   {% if has_permission('manage_servers') or has_permission('install_server') %}
   <div class="sidebar-section">Servers</div>
   <ul class="sidebar-nav">
