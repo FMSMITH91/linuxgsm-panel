@@ -2713,6 +2713,15 @@ def register_routes(app):
             return jsonify({"ok": True, "lang": lang})
         return redirect(url_for("index"))
 
+    @app.route("/api/i18n/<lang>")
+    def api_i18n_catalog(lang):
+        """The {english: translated} catalog for a language, so the switcher can re-translate the page
+        live without a reload. Public (the switcher is on the login page too) and non-sensitive — it's
+        only UI strings, the same map already embedded in every rendered page for the current language."""
+        resp = jsonify(i18n.catalog(i18n.normalize_lang(lang)))
+        resp.headers["Cache-Control"] = "public, max-age=300"   # catalogs change only on deploy
+        return resp
+
     @app.route("/account/2fa/enable", methods=["GET", "POST"])
     @login_required
     def account_2fa_enable():

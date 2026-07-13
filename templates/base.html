@@ -488,45 +488,62 @@
   window.LANG = "{{ current_lang|default('en') }}";
   window.t = function(s){ return (window.I18N && window.I18N[s]) || s; };
   (function(){
-    var I = window.I18N;
-    if (!I || window.LANG === 'en') return;
-    var SKIP = {SCRIPT:1, STYLE:1, TEXTAREA:1, CODE:1, PRE:1, NOSCRIPT:1, OPTION:0};
+    // Every text node + title/placeholder/aria-label whose EXACT (whitespace-collapsed) text is a
+    // catalog key gets swapped. Each node's ORIGINAL English is remembered (node.__i18nEn /
+    // el.__i18nA_<attr>) the first time it's seen — while it's still English — so window.setLang()
+    // can revert and re-apply for a different language LIVE, with no page reload.
+    var SKIP = {SCRIPT:1, STYLE:1, TEXTAREA:1, CODE:1, PRE:1, NOSCRIPT:1};
     var ATTRS = ['title', 'placeholder', 'aria-label'];
+    var observing = false;
+    function tText(node){
+      var en = node.__i18nEn;
+      if (en === undefined){ en = node.__i18nEn = node.nodeValue; }
+      var key = en.replace(/\s+/g, ' ').trim();
+      if (!key) return;
+      var v = window.I18N ? window.I18N[key] : undefined;
+      // keep leading/trailing whitespace (inline layout, e.g. the gap after an icon)
+      var out = (v !== undefined) ? en.match(/^\s*/)[0] + v + en.match(/\s*$/)[0] : en;
+      if (node.nodeValue !== out) node.nodeValue = out;   // guard: no redundant set => no observer loop
+    }
+    function tAttr(el, a){
+      var cur = el.getAttribute(a); if (cur == null) return;
+      var pk = '__i18nA_' + a, en = el[pk];
+      if (en === undefined){ en = el[pk] = cur; }
+      var key = en.replace(/\s+/g, ' ').trim(); if (!key) return;
+      var v = window.I18N ? window.I18N[key] : undefined;
+      var out = (v !== undefined) ? v : en;
+      if (el.getAttribute(a) !== out) el.setAttribute(a, out);
+    }
     function walk(node){
       if (!node) return;
-      if (node.nodeType === 3){ // text node
-        var raw = node.nodeValue;
-        // Normalise internal whitespace so multi-line template text (newlines + indentation) still
-        // matches the single-spaced catalog keys; keep the leading/trailing space so inline layout
-        // (e.g. the gap after an icon) is preserved.
-        var key = raw.replace(/\s+/g, ' ').trim();
-        if (key){
-          var v = I[key];
-          if (v !== undefined){
-            node.nodeValue = raw.match(/^\s*/)[0] + v + raw.match(/\s*$/)[0];
-          }
-        }
-        return;
-      }
+      if (node.nodeType === 3){ tText(node); return; }
       if (node.nodeType !== 1) return;
       if (SKIP[node.tagName] || node.hasAttribute('data-no-i18n')) return;
-      for (var i = 0; i < ATTRS.length; i++){
-        var a = ATTRS[i], val = node.getAttribute(a);
-        if (val){ var tv = I[val.replace(/\s+/g, ' ').trim()]; if (tv !== undefined) node.setAttribute(a, tv); }
-      }
+      for (var i = 0; i < ATTRS.length; i++) tAttr(node, ATTRS[i]);
       for (var c = node.firstChild; c; c = c.nextSibling) walk(c);
     }
     function run(root){ try { walk(root || document.body); } catch(e){} }
-    function boot(){
-      run(document.body);
-      var mo = new MutationObserver(function(muts){
+    function startObserver(){
+      if (observing || !document.body) return; observing = true;
+      new MutationObserver(function(muts){
         for (var i = 0; i < muts.length; i++){
           var m = muts[i];
           if (m.type === 'characterData') walk(m.target);
           else for (var j = 0; j < m.addedNodes.length; j++) walk(m.addedNodes[j]);
         }
-      });
-      mo.observe(document.body, {childList:true, subtree:true, characterData:true});
+      }).observe(document.body, {childList:true, subtree:true, characterData:true});
+    }
+    // Switch language live: swap the catalog, then re-translate the whole DOM from each node's stored
+    // English (so es->fr and any->English both work), and keep new nodes translated via the observer.
+    window.setLang = function(lang, catalog){
+      window.I18N = catalog || {};
+      window.LANG = lang;
+      try { document.documentElement.lang = lang; } catch(e){}
+      startObserver();
+      run(document.body);
+    };
+    function boot(){
+      if (window.LANG !== 'en' && window.I18N){ startObserver(); run(document.body); }
     }
     if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', boot);
     else boot();
@@ -640,7 +657,7 @@
       </div>
     </a>
     <form method="POST" action="{{ url_for('logout') }}" class="d-grid">
-      <button type="submit" class="btn btn-outline-secondary btn-sm w-100"><i class="bi bi-box-arrow-right"></i> {{ t('Sign Out') }}</button>
+      <button type="submit" class="btn btn-outline-secondary btn-sm w-100"><i class="bi bi-box-arrow-right"></i> Sign Out</button>
     </form>
     <div class="mt-2 d-flex align-items-center gap-1" title="{{ t('Language') }}">
       <i class="bi bi-translate text-secondary"></i>
@@ -796,20 +813,16 @@ window.escapeHtml = function(s){
 document.addEventListener('change', function(e){
   var el = e.target;
   if (!el || !el.matches || !el.matches('select[data-lang-select]') || !el.value) return;
-  var tmpl = el.getAttribute('data-lang-url') || '';
-  if (!tmpl) return;
-  fetch(tmpl.replace('LANGCODE', encodeURIComponent(el.value)) + '?ajax=1', {cache: 'no-store'})
-    .then(function(){
-      return fetch(location.href, { headers: { 'X-Requested-With': 'XMLHttpRequest' }, cache: 'no-store' })
-        .then(function(r){ return r.text(); });
-    })
-    .then(function(html){
-      var doc = new DOMParser().parseFromString(html, 'text/html');
-      ['#sidebar', '.content-wrap'].forEach(function(sel){
-        var fresh = doc.querySelector(sel), cur = document.querySelector(sel);
-        if (fresh && cur) cur.innerHTML = fresh.innerHTML;
-      });
-      try { document.documentElement.lang = el.value; } catch(err){}
+  var lang = el.value, tmpl = el.getAttribute('data-lang-url') || '';
+  // Save the choice (session + profile) for next load — fire-and-forget…
+  if (tmpl) fetch(tmpl.replace('LANGCODE', encodeURIComponent(lang)) + '?ajax=1', {cache: 'no-store'}).catch(function(){});
+  // …and flip the UI right now: fetch the new language's catalog and re-translate the page in place,
+  // no reload (window.setLang reverts every node to its stored English, then applies the new catalog).
+  fetch(MOUNT + '/api/i18n/' + encodeURIComponent(lang), {cache: 'no-store'})
+    .then(function(r){ return r.json(); })
+    .then(function(catalog){
+      if (window.setLang) window.setLang(lang, catalog || {});
+      document.querySelectorAll('select[data-lang-select]').forEach(function(s){ if (s.value !== lang) s.value = lang; });
     })
     .catch(function(){});
 });
