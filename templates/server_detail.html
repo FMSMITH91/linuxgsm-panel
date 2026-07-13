@@ -955,8 +955,34 @@ function pollStats() {
 // ── History charts (persisted CPU/RAM/player trends, lazy-loaded when the History tab opens) ──
 var _histRange = '24h';
 var _histCharts = {};
+var _histTimes = {};   // chart id -> Date[] (one per data point, by category index); refreshed each load
 var _histX = { ticks:{color:'#8b98a5', maxTicksLimit:6, maxRotation:0}, grid:{display:false} };
-function _histChart(id, labels, datasets, yScales){
+// Date-aware x-axis for the 24h view: a 24h window crosses midnight, so time-only ticks are
+// ambiguous about which day they belong to. Chart.js generates labels over the FULL tick set before
+// auto-skipping, so a per-point "is this a new day?" check lands the date on the midnight point,
+// which auto-skip usually then hides. Instead: the tick callback returns a 2-line [time, date] for
+// EVERY tick (so fit() reserves height for the date row), then afterFit — which runs on the actual
+// post-auto-skip rendered ticks — demotes repeated dates to time-only. Net: the date shows on the
+// first tick and wherever the day changes among the *shown* ticks. Reads _histTimes[id] live so the
+// 30s in-place refresh tracks the new timestamps. (If a build ignored the afterFit demotion it would
+// harmlessly fall back to date-on-every-tick — never clipped, since fit already reserved two lines.)
+function _histXScale(id){
+  var fmtT = function(t){ return t.toLocaleTimeString([], {hour:'2-digit', minute:'2-digit'}); };
+  var fmtD = function(t){ return t.toLocaleDateString([], {month:'short', day:'numeric'}); };
+  return { grid:{display:false},
+    afterFit: function(scale){
+      var prev = null;
+      scale.ticks.forEach(function(tk){
+        var t = (_histTimes[id] || [])[tk.value]; if(!t) return;
+        var d = fmtD(t);
+        tk.label = (d === prev) ? fmtT(t) : [fmtT(t), d];
+        prev = d;
+      });
+    },
+    ticks:{ color:'#8b98a5', maxTicksLimit:6, maxRotation:0, autoSkip:true,
+      callback: function(value){ var t=(_histTimes[id]||[])[value]; return t ? [fmtT(t), fmtD(t)] : ''; } } };
+}
+function _histChart(id, labels, datasets, yScales, xScale){
   var el = document.getElementById(id); if(!el || typeof Chart==='undefined') return;
   var existing = _histCharts[id];
   if(existing){
@@ -971,7 +997,7 @@ function _histChart(id, labels, datasets, yScales){
     existing.update('none');
     return;
   }
-  var scales = { x:_histX }; for(var k in yScales){ scales[k]=yScales[k]; }
+  var scales = { x:(xScale||_histX) }; for(var k in yScales){ scales[k]=yScales[k]; }
   _histCharts[id] = new Chart(el.getContext('2d'), {
     type:'line', data:{ labels:labels, datasets:datasets },
     options:{ responsive:true, maintainAspectRatio:false, animation:false,
@@ -980,9 +1006,11 @@ function _histChart(id, labels, datasets, yScales){
   });
 }
 function _histLbl(iso){
+  // Tooltip title (per point). Both ranges carry the date so a hovered point is never ambiguous
+  // about which day it is; the compact date-at-change lives on the x-axis ticks (_histXScale).
   var d = new Date(iso);
   return _histRange==='7d' ? d.toLocaleString([], {month:'short', day:'numeric', hour:'2-digit'})
-                           : d.toLocaleTimeString([], {hour:'2-digit', minute:'2-digit'});
+                           : d.toLocaleString([], {month:'short', day:'numeric', hour:'2-digit', minute:'2-digit'});
 }
 function _ds(label, data, color, fill){
   return { label:label, data:data, borderColor:color, backgroundColor:color+'22',
@@ -997,26 +1025,34 @@ window.loadHistory = function(){
       if(!s.length && !h.length){ if(empty)empty.style.display=''; if(charts)charts.style.display='none'; return; }
       if(empty)empty.style.display='none'; if(charts)charts.style.display='';
       var sL = s.map(function(p){ return _histLbl(p.t); }), hL = h.map(function(p){ return _histLbl(p.t); });
+      // Parsed timestamps for the date-aware 24h axis; refreshed every load so in-place updates stay in sync.
+      _histTimes['hist-players'] = _histTimes['hist-server'] = s.map(function(p){ return new Date(p.t); });
+      _histTimes['hist-host'] = h.map(function(p){ return new Date(p.t); });
+      var _xs = function(id){ return _histRange==='7d' ? _histX : _histXScale(id); };
       var pctY = { y:{ min:0, max:100, ticks:{color:'#8b98a5', maxTicksLimit:5}, grid:{color:'rgba(255,255,255,.05)'} } };
       _histChart('hist-players', sL,
         [ _ds('Players', s.map(function(p){return p.players;}), '#58a6ff', true) ],
-        { y:{ min:0, ticks:{color:'#8b98a5', maxTicksLimit:5, precision:0}, grid:{color:'rgba(255,255,255,.05)'} } });
+        { y:{ min:0, ticks:{color:'#8b98a5', maxTicksLimit:5, precision:0}, grid:{color:'rgba(255,255,255,.05)'} } }, _xs('hist-players'));
       _histChart('hist-server', sL, [
         Object.assign(_ds('CPU %', s.map(function(p){return p.cpu;}), '#3fb950', true), {yAxisID:'y'}),
         Object.assign(_ds('RAM MB', s.map(function(p){return p.ram;}), '#d29922', false), {yAxisID:'y1'})
       ], { y:{ min:0, max:100, position:'left', ticks:{color:'#8b98a5', maxTicksLimit:5}, grid:{color:'rgba(255,255,255,.05)'} },
-           y1:{ min:0, position:'right', ticks:{color:'#8b98a5', maxTicksLimit:5}, grid:{display:false} } });
+           y1:{ min:0, position:'right', ticks:{color:'#8b98a5', maxTicksLimit:5}, grid:{display:false} } }, _xs('hist-server'));
       _histChart('hist-host', hL, [
         _ds('CPU %', h.map(function(p){return p.cpu;}), '#58a6ff', false),
         _ds('RAM %', h.map(function(p){return p.ram;}), '#3fb950', false),
         _ds('Disk %', h.map(function(p){return p.disk;}), '#d29922', false)
-      ], pctY);
+      ], pctY, _xs('hist-host'));
     }).catch(function(){});
 };
 document.addEventListener('click', function(e){
   var b = e.target.closest && e.target.closest('[data-hist-range]'); if(!b) return;
-  _histRange = b.getAttribute('data-hist-range');
+  var rng = b.getAttribute('data-hist-range'); if(rng === _histRange) return;
+  _histRange = rng;
   if(b.parentNode) b.parentNode.querySelectorAll('[data-hist-range]').forEach(function(x){ x.classList.toggle('active', x===b); });
+  // Recreate the charts on range change so the x-axis swaps between the date-aware (24h) and plain
+  // (7d) formatter — the live-refresh path deliberately reuses the chart and won't re-apply scales.
+  Object.keys(_histCharts).forEach(function(id){ try{ _histCharts[id].destroy(); }catch(err){} delete _histCharts[id]; });
   window.loadHistory();
 });
 // Keep the History charts live — refresh while its tab is open and the page is visible (a new sample
