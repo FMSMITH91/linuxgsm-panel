@@ -151,6 +151,48 @@ def _log_ip(ip):
         return "unknown"
 
 
+def _session_label(ua):
+    """A short, human device/browser label from a session's User-Agent (best-effort, display only)."""
+    ua = ua or ""
+    br = ("Edge" if "Edg/" in ua else
+          "Opera" if ("OPR/" in ua or "Opera" in ua) else
+          "Chrome" if ("Chrome" in ua and "Chromium" not in ua) else
+          "Firefox" if "Firefox" in ua else
+          "Safari" if "Safari" in ua else "")
+    os_ = ("Windows" if "Windows" in ua else
+           "Android" if "Android" in ua else
+           "iPhone" if "iPhone" in ua else
+           "iPad" if "iPad" in ua else
+           "macOS" if ("Macintosh" in ua or "Mac OS" in ua) else
+           "Linux" if "Linux" in ua else "")
+    if br and os_:
+        return "%s on %s" % (br, os_)
+    return br or os_ or "Unknown device"
+
+
+def _register_session(user):
+    """Record a server-side row for this login and tag `user` with its sid so User.get_id embeds it
+    (letting load_user validate it and the account page revoke it individually). Also prunes this
+    user's long-dead sessions. Returns the sid, or None on failure — login still proceeds either way,
+    the cookie just falls back to epoch-only (not individually revocable)."""
+    from datetime import timedelta
+    from models import UserSession
+    sid = secrets.token_urlsafe(24)
+    try:
+        cutoff = datetime.utcnow() - timedelta(days=45)   # forget sessions untouched for ~6 weeks
+        UserSession.query.filter(UserSession.user_id == user.id,
+                                 UserSession.last_seen < cutoff).delete(synchronize_session=False)
+        db.session.add(UserSession(user_id=user.id, sid=sid,
+                                   ip=(client_ip() or "")[:64],
+                                   user_agent=(request.headers.get("User-Agent", "") or "")[:300]))
+        db.session.commit()
+    except Exception:
+        db.session.rollback()
+        return None
+    user._sid = sid
+    return sid
+
+
 def _setup_auth_log():
     """Attach a small rotating file handler to _authlog once, so failed logins land in
     data/auth.log for fail2ban to tail. Best-effort — a logging failure must never block a login."""
@@ -2573,7 +2615,8 @@ def register_routes(app):
                 for k in ("_2fa_pending", "_2fa_at", "_2fa_remember"):
                     session.pop(k, None)
                 session.permanent = True   # so PERMANENT_SESSION_LIFETIME applies
-                login_user(user, remember=remember)
+                _register_session(user)    # server-side row (sets user._sid) BEFORE login_user, so
+                login_user(user, remember=remember)   # get_id embeds the sid in the cookie
                 user.last_login = datetime.utcnow()
                 db.session.commit()
                 log_action(user, "login", detail=f"User logged in from {ip}")
@@ -2642,14 +2685,19 @@ def register_routes(app):
     def logout():
         # POST-only so it can't be triggered cross-site via a GET (e.g. <img src=…/logout>).
         log_action(current_user, "logout", detail="User logged out")
-        # Invalidate the cookies SERVER-SIDE, not just in the browser. Flask sessions (and
-        # the "remember me" token) are signed client-side cookies with no server store, so
-        # clearing the client's copy alone wouldn't stop a copy captured earlier from being
-        # replayed after logout. Bumping the epoch makes every outstanding session AND
-        # remember cookie for this account fail the user_loader's epoch check — so a logged-
-        # out cookie can't be reused. (This also signs the account out on other devices.)
+        # Invalidate the cookie SERVER-SIDE, not just in the browser — Flask sessions and the
+        # "remember me" token are signed client-side cookies with no server store, so clearing the
+        # client's copy alone wouldn't stop a copy captured earlier from being replayed. With per-
+        # session tracking we delete just THIS device's registry row, so its cookie fails the loader
+        # while other devices stay signed in. A legacy cookie (no sid) has nothing to delete, so fall
+        # back to bumping the epoch (which is global — the old all-devices behaviour).
         try:
-            current_user.auth_epoch = (current_user.auth_epoch or 0) + 1
+            sid = getattr(current_user, "_sid", None)
+            if sid:
+                from models import UserSession
+                UserSession.query.filter_by(sid=sid, user_id=current_user.id).delete()
+            else:
+                current_user.auth_epoch = (current_user.auth_epoch or 0) + 1
             db.session.commit()
         except Exception:
             db.session.rollback()
@@ -2751,14 +2799,55 @@ def register_routes(app):
     @app.route("/account/sessions/revoke", methods=["POST"])
     @login_required
     def account_revoke_sessions():
-        # Bump the epoch so every session/remember cookie for this account (including
-        # this one) stops matching — instantly signs out everywhere.
+        # Bump the epoch so every session/remember cookie for this account (including this one) stops
+        # matching, and clear the whole session registry — instantly signs out everywhere.
         current_user.auth_epoch = (current_user.auth_epoch or 0) + 1
+        try:
+            from models import UserSession
+            UserSession.query.filter_by(user_id=current_user.id).delete()
+        except Exception:
+            pass
         db.session.commit()
         log_action(current_user, "revoke_sessions", target=current_user.username)
         logout_user()
         flash("Signed out of all sessions. Please log in again.", "success")
         return redirect(url_for("login"))
+
+    @app.route("/api/account/sessions")
+    @login_required
+    def api_account_sessions():
+        """This user's active login sessions (devices), newest-active first, with the current one
+        flagged. Scoped to current_user — a user only ever sees or manages their own sessions."""
+        from models import UserSession
+        cur = getattr(current_user, "_sid", None)
+        rows = (UserSession.query.filter_by(user_id=current_user.id)
+                .order_by(UserSession.last_seen.desc()).all())
+        return jsonify({"sessions": [{
+            "id": r.id,
+            "device": _session_label(r.user_agent),
+            "ip": r.ip or "",
+            "created": (r.created_at.isoformat() + "Z") if r.created_at else None,
+            "last_seen": (r.last_seen.isoformat() + "Z") if r.last_seen else None,
+            "current": (r.sid == cur),
+        } for r in rows]})
+
+    @app.route("/api/account/sessions/<int:sess_id>/revoke", methods=["POST"])
+    @login_required
+    def api_account_session_revoke(sess_id):
+        """Revoke ONE login session by deleting its registry row (scoped to current_user, so you can
+        never revoke another account's session). If it's the current device, log out too."""
+        from models import UserSession
+        row = UserSession.query.filter_by(id=sess_id, user_id=current_user.id).first()
+        if not row:
+            return jsonify({"ok": False, "error": "Session not found."}), 404
+        is_current = (row.sid == getattr(current_user, "_sid", None))
+        db.session.delete(row)
+        db.session.commit()
+        log_action(current_user, "revoke_session", target=current_user.username,
+                   detail="revoked a login session" + (" (current device)" if is_current else ""))
+        if is_current:
+            logout_user()
+        return jsonify({"ok": True, "current": is_current})
 
     @app.route("/account/2fa/disable", methods=["POST"])
     @login_required
@@ -2813,8 +2902,14 @@ def register_routes(app):
 
         u.password_hash = hash_password(new)
         u.auth_epoch = (u.auth_epoch or 0) + 1   # sign out every other session/remember cookie
+        try:
+            from models import UserSession
+            UserSession.query.filter_by(user_id=u.id).delete()   # epoch bump killed them all; clear rows
+        except Exception:
+            pass
         db.session.commit()
-        login_user(u)                            # refresh THIS session to the new epoch so we stay in
+        _register_session(u)                     # fresh session row for THIS device
+        login_user(u)                            # refresh THIS session (new epoch + sid) so we stay in
         log_action(u, "password_changed", target=u.username)
         flash("Your password has been changed. Any other sessions were signed out.", "success")
         return redirect(url_for("account"))

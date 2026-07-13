@@ -1,6 +1,7 @@
 """Authentication and permission management."""
 import secrets
 import threading
+from datetime import datetime
 from functools import wraps
 
 import bcrypt
@@ -375,21 +376,38 @@ def init_auth(app):
 
     @login_manager.user_loader
     def load_user(user_id):
-        # The id is "<user_id>:<auth_epoch>" (see User.get_id). Reject the cookie if the
-        # epoch no longer matches the user's current one — that's how we revoke sessions
-        # (sign-out-everywhere / password change bump auth_epoch).
+        # The id is "<user_id>:<auth_epoch>[:<session_sid>]" (see User.get_id). Reject the cookie if
+        # the epoch no longer matches (sign-out-everywhere / password change bump auth_epoch — a
+        # GLOBAL revoke), or if it carries a session sid that's no longer in the registry (a SINGLE
+        # device was revoked). A missing sid = a legacy cookie from before per-session tracking;
+        # accepted on the epoch alone until the user next logs in and is issued a sid.
         s = str(user_id)
-        if ":" in s:
-            uid, _, epoch = s.partition(":")
-            if not uid.isdigit():
-                return None
-            user = db.session.get(User, int(uid))
-            if user is None or str(user.auth_epoch or 0) != epoch:
-                return None
-            return user
-        # Legacy cookie issued before epochs existed — accept by plain id (one-time,
-        # until they next log in and get an epoch-tagged cookie).
-        return db.session.get(User, int(s)) if s.isdigit() else None
+        if ":" not in s:
+            # Legacy cookie issued before epochs existed — accept by plain id (one-time, until they
+            # next log in and get an epoch-tagged cookie).
+            return db.session.get(User, int(s)) if s.isdigit() else None
+        parts = s.split(":")
+        uid, epoch = parts[0], parts[1]
+        sid = parts[2] if len(parts) > 2 and parts[2] else None
+        if not uid.isdigit():
+            return None
+        user = db.session.get(User, int(uid))
+        if user is None or str(user.auth_epoch or 0) != epoch:
+            return None
+        if sid:
+            try:
+                from models import UserSession
+                sess = UserSession.query.filter_by(sid=sid, user_id=user.id).first()
+                if sess is None:
+                    return None                       # this device's session was revoked
+                user._sid = sid                       # keep it so get_id re-embeds it on cookie refresh
+                now = datetime.utcnow()
+                if not sess.last_seen or (now - sess.last_seen).total_seconds() > 300:
+                    sess.last_seen = now              # throttled "last active" update (~5 min)
+                    db.session.commit()
+            except Exception:
+                db.session.rollback()                 # a DB hiccup must never lock a valid user out
+        return user
 
     @login_manager.request_loader
     def load_user_from_request(req):

@@ -8,6 +8,9 @@ regardless of this file — this changelog is for humans.
 ## [0.9.0-alpha] — 2026-07-13
 
 ### Added
+- **Per-device session management** — the account page now lists every device/browser signed in to
+  your account (device, IP, last-active) and lets you revoke them **individually**, not just all at
+  once. Logging out now signs out only the current device; "Sign out everywhere" still clears them all.
 - **Garry's Mod content mounting** — install Counter-Strike: Source and other Source-engine games'
   content via LinuxGSM so GMod maps and props render instead of missing-texture errors. One shared
   copy per host, mounted read-only into each GMod server with per-server enable/disable, one-click

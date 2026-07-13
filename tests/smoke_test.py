@@ -662,6 +662,64 @@ try:
     check("import: caller without manage_servers is denied",
           imp_denied.status_code in (301, 302, 303, 403), "got %d" % imp_denied.status_code)
 
+    # ── Session management: per-device login sessions + individual revoke ──
+    from models import UserSession
+
+    def _real_login(username="smoke_admin", pw="Str0ng!passw0rd"):
+        cc = app.test_client()
+        rr = cc.post("/login", data={"username": username, "password": pw}, follow_redirects=False)
+        return cc, rr
+
+    s1, r1 = _real_login()
+    check("session: real login lands in (redirect away from /login)",
+          r1.status_code in (301, 302, 303) and "/login" not in (r1.headers.get("Location") or ""),
+          "status=%d loc=%s" % (r1.status_code, r1.headers.get("Location") or ""))
+    with app.app_context():
+        n1 = UserSession.query.filter_by(user_id=admin_id).count()
+    check("session: login created a server-side session row", n1 >= 1, "rows=%d" % n1)
+
+    j1 = (s1.get("/api/account/sessions").get_json() or {})
+    sess1 = j1.get("sessions", [])
+    check("session: API lists the current session, flagged current",
+          any(s.get("current") for s in sess1), "n=%d" % len(sess1))
+
+    s2, _ = _real_login()   # a second device for the same account
+    all2 = ((s1.get("/api/account/sessions").get_json() or {}).get("sessions", []))
+    check("session: a second login shows two sessions", len(all2) == 2, "n=%d" % len(all2))
+
+    other = next((s for s in all2 if not s.get("current")), None)
+    rv = s1.post("/api/account/sessions/%d/revoke" % other["id"]) if other else None
+    rvj = rv.get_json() if rv is not None else {}
+    check("session: revoke a non-current session -> ok",
+          rv is not None and rv.status_code == 200 and rvj.get("ok") and not rvj.get("current"))
+
+    acc2 = s2.get("/account", follow_redirects=False)
+    check("session: the revoked device is signed out (loader rejects its sid)",
+          acc2.status_code in (301, 302, 303) and "/login" in (acc2.headers.get("Location") or ""),
+          "status=%d" % acc2.status_code)
+    with app.app_context():
+        n_after = UserSession.query.filter_by(user_id=admin_id).count()
+        os_ = UserSession(user_id=mru_id, sid="smoke_other_sid", ip="", user_agent="")
+        db.session.add(os_)
+        db.session.commit()
+        other_uid_sess = os_.id
+    check("session: revoked row is gone (one left)", n_after == 1, "rows=%d" % n_after)
+
+    xrv = s1.post("/api/account/sessions/%d/revoke" % other_uid_sess)
+    check("session: can't revoke another user's session (404)", xrv.status_code == 404,
+          "status=%d" % xrv.status_code)
+
+    with app.app_context():
+        epoch_before = db.session.get(User, admin_id).auth_epoch or 0
+    s1.post("/account/sessions/revoke")   # sign out everywhere
+    with app.app_context():
+        u_after = db.session.get(User, admin_id)
+        n_all = UserSession.query.filter_by(user_id=admin_id).count()
+        epoch_after = u_after.auth_epoch or 0
+    check("session: sign-out-everywhere clears all rows and bumps the epoch",
+          n_all == 0 and epoch_after > epoch_before,
+          "rows=%d epoch %d->%d" % (n_all, epoch_before, epoch_after))
+
     # ── perf regression guard: NO N+1 on the hot paths ────────────
     # Seed 50 game servers across 5 hosts — enough that a per-server (rather than
     # per-host) query pattern would blow the budget — then assert the dashboard render

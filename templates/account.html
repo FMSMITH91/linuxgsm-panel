@@ -91,17 +91,86 @@
   <div class="card">
     <div class="card-header"><i class="bi bi-box-arrow-right"></i> Active Sessions</div>
     <div class="card-body">
-      <p class="text-secondary mb-2">Signed in somewhere you don't recognise, or think a
-        device was compromised? This revokes <strong>every</strong> logged-in session for
-        your account (including this one) — you'll log back in fresh.</p>
+      <p class="text-secondary mb-2">Every device or browser signed in to your account. Revoke any you
+        don't recognise — the one you're using now is marked <span class="badge bg-success">This device</span>.</p>
+      <div id="sessions-list" class="mb-2"><div class="text-secondary small">Loading…</div></div>
+      <hr class="my-3">
+      <p class="text-secondary small mb-2">Think a device was compromised? Sign out of
+        <strong>every</strong> session at once (including this one) — you'll log back in fresh.</p>
       <form method="POST" action="{{ url_for('account_revoke_sessions') }}" id="revoke-sessions-form">
-        <button class="btn btn-outline-danger btn-sm" type="button"
-                data-action="_acctSignOutAll">
+        <button class="btn btn-outline-danger btn-sm" type="button" data-action="_acctSignOutAll">
           <i class="bi bi-box-arrow-right"></i> Sign out everywhere
         </button>
       </form>
     </div>
   </div>
 </div>
+
+<script nonce="{{ csp_nonce }}">
+// Active Sessions: list this account's login sessions and revoke them individually. Rows are built
+// with textContent (never innerHTML) so a spoofed User-Agent can't inject markup. The global fetch
+// wrapper adds the CSRF header automatically.
+(function(){
+  var box = document.getElementById('sessions-list');
+  if (!box || typeof MOUNT === 'undefined') return;
+  function rel(iso){
+    if(!iso) return '';
+    var s = (Date.now() - new Date(iso).getTime())/1000;
+    if(s < 60) return 'just now';
+    if(s < 3600) return Math.floor(s/60)+' min ago';
+    if(s < 86400) return Math.floor(s/3600)+' h ago';
+    return Math.floor(s/86400)+' d ago';
+  }
+  function row(s){
+    var wrap = document.createElement('div');
+    wrap.className = 'd-flex justify-content-between align-items-center gap-2 border rounded px-2 py-2 mb-2';
+    var left = document.createElement('div'); left.style.minWidth = '0';
+    var top = document.createElement('div'); top.className = 'small text-truncate';
+    var strong = document.createElement('strong'); strong.textContent = s.device || 'Unknown device';
+    top.appendChild(strong);
+    if(s.current){
+      var badge = document.createElement('span'); badge.className = 'badge bg-success ms-2';
+      badge.textContent = 'This device'; top.appendChild(badge);
+    }
+    var sub = document.createElement('div'); sub.className = 'text-secondary text-truncate';
+    sub.style.fontSize = '.72rem';
+    sub.textContent = (s.ip ? s.ip + ' · ' : '') + 'active ' + rel(s.last_seen);
+    left.appendChild(top); left.appendChild(sub); wrap.appendChild(left);
+    if(!s.current){
+      var btn = document.createElement('button'); btn.type = 'button';
+      btn.className = 'btn btn-outline-danger btn-sm text-nowrap'; btn.textContent = 'Revoke';
+      btn.addEventListener('click', function(){ revoke(s.id, btn); });
+      wrap.appendChild(btn);
+    }
+    return wrap;
+  }
+  function load(){
+    fetch(MOUNT + '/api/account/sessions', {cache:'no-store'})
+      .then(function(r){ return r.json(); })
+      .then(function(d){
+        box.textContent = '';
+        var list = (d && d.sessions) || [];
+        if(!list.length){ box.innerHTML = '<div class="text-secondary small">No active sessions.</div>'; return; }
+        list.forEach(function(s){ box.appendChild(row(s)); });
+      })
+      .catch(function(){ box.innerHTML = '<div class="text-danger small">Couldn\'t load sessions.</div>'; });
+  }
+  function revoke(id, btn){
+    if(btn){ btn.disabled = true; btn.textContent = 'Revoking…'; }
+    fetch(MOUNT + '/api/account/sessions/' + id + '/revoke', {method:'POST', cache:'no-store'})
+      .then(function(r){ return r.json(); })
+      .then(function(d){
+        if(d && d.current){ location.href = MOUNT + '/login'; return; }
+        if(window.toast) toast('Session revoked', 'success');
+        load();
+      })
+      .catch(function(){
+        if(window.toast) toast('Could not revoke that session', 'danger');
+        if(btn){ btn.disabled = false; btn.textContent = 'Revoke'; }
+      });
+  }
+  load();
+})();
+</script>
 
 {% endblock %}

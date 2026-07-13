@@ -121,11 +121,14 @@ class User(UserMixin, db.Model):
             return 0
 
     def get_id(self):
-        # Embed a session epoch in the login id. Bumping auth_epoch (on password
-        # change, or "sign out everywhere") makes every existing session/remember
-        # cookie for this user stop matching — i.e. instantly revoked. flask-login
-        # stores this in the cookie and hands it back to the user_loader each request.
-        return "%d:%d" % (self.id, self.auth_epoch or 0)
+        # Login id = "<user_id>:<auth_epoch>[:<session_sid>]". Bumping auth_epoch (password change /
+        # "sign out everywhere") makes every existing cookie stop matching — a global revoke. The
+        # optional per-login sid (set on this object at login, kept by the loader) ties the cookie to
+        # one UserSession row so a SINGLE device can be revoked by deleting that row. flask-login
+        # stores this whole string in the cookie and hands it back to user_loader each request.
+        base = "%d:%d" % (self.id, self.auth_epoch or 0)
+        sid = getattr(self, "_sid", None)
+        return base + ":" + sid if sid else base
 
     @property
     def email_display(self):
@@ -500,6 +503,23 @@ class HostSample(db.Model):
     cpu = db.Column(db.Float, default=0.0)
     ram_pct = db.Column(db.Float, default=0.0)
     disk_pct = db.Column(db.Float, default=0.0)
+
+
+class UserSession(db.Model):
+    """One active login (a device/browser). The random `sid` is embedded in the login cookie
+    (User.get_id) and checked on every request, so a session can be listed and revoked INDIVIDUALLY
+    from the account page — deleting the row makes that one cookie fail the loader, without touching
+    the others. (Signing out *everywhere* still bumps User.auth_epoch, which invalidates them all.)"""
+    __tablename__ = "user_session"
+    id = db.Column(db.Integer, primary_key=True)
+    user_id = db.Column(db.Integer, db.ForeignKey("user.id"), index=True, nullable=False)
+    sid = db.Column(db.String(64), unique=True, index=True, nullable=False)
+    created_at = db.Column(db.DateTime, default=datetime.utcnow, nullable=False)
+    last_seen = db.Column(db.DateTime, default=datetime.utcnow, nullable=False)
+    ip = db.Column(db.String(64), default="")
+    user_agent = db.Column(db.String(300), default="")
+    user = db.relationship("User", backref=db.backref(
+        "login_sessions", lazy="dynamic", cascade="all, delete-orphan"))
 
 
 def _run_light_migrations():
