@@ -112,7 +112,8 @@
 // wrapper adds the CSRF header automatically.
 (function(){
   var box = document.getElementById('sessions-list');
-  if (!box || typeof MOUNT === 'undefined') return;
+  if (!box) return;
+  function mp(){ return window.MOUNT || ''; }   // set by base.html's footer script (after this block)
   function rel(iso){
     if(!iso) return '';
     var s = (Date.now() - new Date(iso).getTime())/1000;
@@ -145,7 +146,7 @@
     return wrap;
   }
   function load(){
-    fetch(MOUNT + '/api/account/sessions', {cache:'no-store'})
+    fetch(mp() + '/api/account/sessions', {cache:'no-store'})
       .then(function(r){ return r.json(); })
       .then(function(d){
         box.textContent = '';
@@ -157,10 +158,10 @@
   }
   function revoke(id, btn){
     if(btn){ btn.disabled = true; btn.textContent = 'Revoking…'; }
-    fetch(MOUNT + '/api/account/sessions/' + id + '/revoke', {method:'POST', cache:'no-store'})
+    fetch(mp() + '/api/account/sessions/' + id + '/revoke', {method:'POST', cache:'no-store'})
       .then(function(r){ return r.json(); })
       .then(function(d){
-        if(d && d.current){ location.href = MOUNT + '/login'; return; }
+        if(d && d.current){ location.href = mp() + '/login'; return; }
         if(window.toast) toast('Session revoked', 'success');
         load();
       })
@@ -169,7 +170,10 @@
         if(btn){ btn.disabled = false; btn.textContent = 'Revoke'; }
       });
   }
-  load();
+  // This block is parsed INSIDE the content, before base.html's footer sets window.MOUNT — so wait
+  // for DOMContentLoaded (footer scripts have run by then) before the first fetch, or MOUNT is blank.
+  if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', load);
+  else load();
 })();
 </script>
 
