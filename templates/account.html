@@ -4,130 +4,103 @@
 
 <h1 class="page-title mb-3"><i class="bi bi-person-circle"></i> Account</h1>
 
-<div class="card mb-3" style="max-width: 640px;">
-  <div class="card-header"><i class="bi bi-translate"></i> Language</div>
-  <div class="card-body">
-    <p class="text-secondary small mb-2">Choose the language for the panel interface. This preference is saved to your account and follows you across devices.</p>
-    <select class="form-select form-select-sm" style="max-width: 260px;"
-            data-lang-select data-lang-url="{{ url_for('set_language', lang='LANGCODE') }}">
-      {% for code, name in languages.items() %}
-      <option value="{{ code }}" {% if code == current_lang %}selected{% endif %}>{{ name }}</option>
-      {% endfor %}
-    </select>
-  </div>
-</div>
+<style>
+  /* On desktop, flow the account cards into two columns (masonry-style) instead of one narrow
+     640px stack, so the width isn't wasted. Stacks to one column on tablet/mobile. */
+  .acct-grid { max-width: 1120px; }
+  @media (min-width: 992px) { .acct-grid { column-count: 2; column-gap: 1rem; } }
+  .acct-grid > .card { break-inside: avoid; margin-bottom: 1rem; width: 100%; }
+</style>
 
-<div class="card mb-3" style="max-width: 640px;">
-  <div class="card-header"><i class="bi bi-key-fill"></i> Password</div>
-  <div class="card-body">
-    <p class="text-secondary small mb-3">Change your account password. You'll need your current password{% if current_user.totp_enabled %} and an authenticator code{% endif %} to confirm it's you.</p>
-    <form method="POST" action="{{ url_for('account_change_password') }}" autocomplete="off">
-      <div class="mb-2" style="max-width: 420px;">
-        <label class="form-label small mb-1">Current password</label>
-        <input type="password" name="current_password" class="form-control form-control-sm" autocomplete="current-password" required>
-      </div>
-      <div class="mb-2" style="max-width: 420px;">
-        <label class="form-label small mb-1">New password</label>
-        <input type="password" name="new_password" class="form-control form-control-sm" autocomplete="new-password" minlength="10" required>
-        <div class="form-text">At least 10 characters with upper &amp; lowercase, a number, and a symbol.</div>
-      </div>
-      <div class="mb-2" style="max-width: 420px;">
-        <label class="form-label small mb-1">Confirm new password</label>
-        <input type="password" name="confirm_password" class="form-control form-control-sm" autocomplete="new-password" minlength="10" required>
-      </div>
-      {% if current_user.totp_enabled %}
-      <div class="mb-3" style="max-width: 420px;">
-        <label class="form-label small mb-1">Authenticator code</label>
-        <input type="text" name="totp_code" class="form-control form-control-sm" inputmode="numeric"
-               autocomplete="one-time-code" placeholder="6-digit code (or a backup code)" required>
-        <div class="form-text">From your authenticator app — or one of your one-time backup codes.</div>
-      </div>
-      {% endif %}
-      <button class="btn btn-primary btn-sm" type="submit"><i class="bi bi-key"></i> Change password</button>
-    </form>
-  </div>
-</div>
-
-<div class="card" style="max-width: 640px;">
-  <div class="card-header"><i class="bi bi-shield-lock-fill"></i> Two-Factor Authentication</div>
-  <div class="card-body">
-    {% if current_user.totp_enabled %}
-      <p class="mb-3"><span class="badge bg-success"><i class="bi bi-check-circle-fill"></i> Enabled</span>
-        <span class="text-secondary ms-2">You'll be asked for an authenticator code when you sign in.</span></p>
-      <form method="POST" action="{{ url_for('account_2fa_disable') }}">
-        <label class="form-label small">Confirm your password to turn 2FA off</label>
-        <div class="d-flex gap-2" style="max-width: 420px;">
-          <input type="password" name="password" class="form-control form-control-sm" autocomplete="current-password" required>
-          <button class="btn btn-outline-danger btn-sm text-nowrap" type="submit">Disable 2FA</button>
-        </div>
-      </form>
-      <hr class="my-3">
-      <p class="mb-2"><i class="bi bi-key"></i> <strong>Backup codes</strong>
-        <span class="badge {% if current_user.backup_codes_remaining > 2 %}bg-secondary{% else %}bg-warning text-dark{% endif %} ms-1">{{ current_user.backup_codes_remaining }} left</span>
-      </p>
-      <p class="text-secondary small mb-0">One-time codes to sign in if you lose your authenticator — each works once.
-        They were shown only when you enabled 2FA and can't be displayed again. If you've run low or lost them,
-        disable and re-enable 2FA to get a fresh set (shown once).</p>
-    {% else %}
-      <p class="text-secondary">Add a second step to your login — a 6-digit code from an authenticator
-        app (Google Authenticator, Authy, 1Password, etc.). Strongly recommended if the panel is reachable
-        over the public internet.</p>
-      <a href="{{ url_for('account_2fa_enable') }}" class="btn btn-primary btn-sm">
-        <i class="bi bi-shield-plus"></i> Enable 2FA
-      </a>
-    {% endif %}
-  </div>
-</div>
-
-<div class="card mt-3" style="max-width: 640px;">
-  <div class="card-header"><i class="bi bi-box-arrow-right"></i> Active Sessions</div>
-  <div class="card-body">
-    <p class="text-secondary mb-2">Signed in somewhere you don't recognise, or think a
-      device was compromised? This revokes <strong>every</strong> logged-in session for
-      your account (including this one) — you'll log back in fresh.</p>
-    <form method="POST" action="{{ url_for('account_revoke_sessions') }}" id="revoke-sessions-form">
-      <button class="btn btn-outline-danger btn-sm" type="button"
-              data-action="_acctSignOutAll">
-        <i class="bi bi-box-arrow-right"></i> Sign out everywhere
-      </button>
-    </form>
-  </div>
-</div>
-
-<div class="card mt-3" style="max-width: 640px;">
-  <div class="card-header"><i class="bi bi-code-slash"></i> API access</div>
-  <div class="card-body">
-    <p class="text-secondary small mb-2">
-      A personal API token lets scripts and bots call the REST API without a browser session, using
-      an <code>Authorization: Bearer &lt;token&gt;</code> header. It acts as <strong>you</strong> — it
-      has exactly your permissions, no more.
-    </p>
-
-    {% if new_token %}
-    <div class="alert alert-success py-2">
-      <div class="small mb-1"><strong>Copy your new token now</strong> — it won't be shown again.</div>
-      <code class="user-select-all d-block p-2" style="word-break:break-all; background:rgba(0,0,0,.2); border-radius:6px;">{{ new_token }}</code>
-      <div class="small text-secondary mt-2">Example:</div>
-      <code class="d-block p-2 small" style="word-break:break-all; background:rgba(0,0,0,.2); border-radius:6px;">curl -H "Authorization: Bearer {{ new_token }}" https://your-panel:5000/api/servers</code>
+<div class="acct-grid">
+  <div class="card">
+    <div class="card-header"><i class="bi bi-translate"></i> Language</div>
+    <div class="card-body">
+      <p class="text-secondary small mb-2">Choose the language for the panel interface. This preference is saved to your account and follows you across devices.</p>
+      <select class="form-select form-select-sm" style="max-width: 260px;"
+              data-lang-select data-lang-url="{{ url_for('set_language', lang='LANGCODE') }}">
+        {% for code, name in languages.items() %}
+        <option value="{{ code }}" {% if code == current_lang %}selected{% endif %}>{{ name }}</option>
+        {% endfor %}
+      </select>
     </div>
-    {% endif %}
+  </div>
 
-    <p class="small mb-2">
-      Status:
-      {% if current_user.has_api_token %}<span class="badge bg-success">A token is active</span>
-      {% else %}<span class="badge bg-secondary">No token</span>{% endif %}
-    </p>
-    <form method="POST" action="{{ url_for('account_api_token_generate') }}" style="display:inline;">
-      <button class="btn btn-primary btn-sm" type="submit">
-        <i class="bi bi-key"></i> {{ 'Regenerate token' if current_user.has_api_token else 'Generate token' }}
-      </button>
-    </form>
-    {% if current_user.has_api_token %}
-    <form method="POST" action="{{ url_for('account_api_token_revoke') }}" style="display:inline;">
-      <button class="btn btn-outline-danger btn-sm" type="submit"><i class="bi bi-x-circle"></i> Revoke</button>
-    </form>
-    {% endif %}
-    <div class="small text-secondary mt-2">Regenerating or revoking immediately invalidates the old token.</div>
+  <div class="card">
+    <div class="card-header"><i class="bi bi-key-fill"></i> Password</div>
+    <div class="card-body">
+      <p class="text-secondary small mb-3">Change your account password. You'll need your current password{% if current_user.totp_enabled %} and an authenticator code{% endif %} to confirm it's you.</p>
+      <form method="POST" action="{{ url_for('account_change_password') }}" autocomplete="off">
+        <div class="mb-2" style="max-width: 420px;">
+          <label class="form-label small mb-1">Current password</label>
+          <input type="password" name="current_password" class="form-control form-control-sm" autocomplete="current-password" required>
+        </div>
+        <div class="mb-2" style="max-width: 420px;">
+          <label class="form-label small mb-1">New password</label>
+          <input type="password" name="new_password" class="form-control form-control-sm" autocomplete="new-password" minlength="10" required>
+          <div class="form-text">At least 10 characters with upper &amp; lowercase, a number, and a symbol.</div>
+        </div>
+        <div class="mb-2" style="max-width: 420px;">
+          <label class="form-label small mb-1">Confirm new password</label>
+          <input type="password" name="confirm_password" class="form-control form-control-sm" autocomplete="new-password" minlength="10" required>
+        </div>
+        {% if current_user.totp_enabled %}
+        <div class="mb-3" style="max-width: 420px;">
+          <label class="form-label small mb-1">Authenticator code</label>
+          <input type="text" name="totp_code" class="form-control form-control-sm" inputmode="numeric"
+                 autocomplete="one-time-code" placeholder="6-digit code (or a backup code)" required>
+          <div class="form-text">From your authenticator app — or one of your one-time backup codes.</div>
+        </div>
+        {% endif %}
+        <button class="btn btn-primary btn-sm" type="submit"><i class="bi bi-key"></i> Change password</button>
+      </form>
+    </div>
+  </div>
+
+  <div class="card">
+    <div class="card-header"><i class="bi bi-shield-lock-fill"></i> Two-Factor Authentication</div>
+    <div class="card-body">
+      {% if current_user.totp_enabled %}
+        <p class="mb-3"><span class="badge bg-success"><i class="bi bi-check-circle-fill"></i> Enabled</span>
+          <span class="text-secondary ms-2">You'll be asked for an authenticator code when you sign in.</span></p>
+        <form method="POST" action="{{ url_for('account_2fa_disable') }}">
+          <label class="form-label small">Confirm your password to turn 2FA off</label>
+          <div class="d-flex gap-2" style="max-width: 420px;">
+            <input type="password" name="password" class="form-control form-control-sm" autocomplete="current-password" required>
+            <button class="btn btn-outline-danger btn-sm text-nowrap" type="submit">Disable 2FA</button>
+          </div>
+        </form>
+        <hr class="my-3">
+        <p class="mb-2"><i class="bi bi-key"></i> <strong>Backup codes</strong>
+          <span class="badge {% if current_user.backup_codes_remaining > 2 %}bg-secondary{% else %}bg-warning text-dark{% endif %} ms-1">{{ current_user.backup_codes_remaining }} left</span>
+        </p>
+        <p class="text-secondary small mb-0">One-time codes to sign in if you lose your authenticator — each works once.
+          They were shown only when you enabled 2FA and can't be displayed again. If you've run low or lost them,
+          disable and re-enable 2FA to get a fresh set (shown once).</p>
+      {% else %}
+        <p class="text-secondary">Add a second step to your login — a 6-digit code from an authenticator
+          app (Google Authenticator, Authy, 1Password, etc.). Strongly recommended if the panel is reachable
+          over the public internet.</p>
+        <a href="{{ url_for('account_2fa_enable') }}" class="btn btn-primary btn-sm">
+          <i class="bi bi-shield-plus"></i> Enable 2FA
+        </a>
+      {% endif %}
+    </div>
+  </div>
+
+  <div class="card">
+    <div class="card-header"><i class="bi bi-box-arrow-right"></i> Active Sessions</div>
+    <div class="card-body">
+      <p class="text-secondary mb-2">Signed in somewhere you don't recognise, or think a
+        device was compromised? This revokes <strong>every</strong> logged-in session for
+        your account (including this one) — you'll log back in fresh.</p>
+      <form method="POST" action="{{ url_for('account_revoke_sessions') }}" id="revoke-sessions-form">
+        <button class="btn btn-outline-danger btn-sm" type="button"
+                data-action="_acctSignOutAll">
+          <i class="bi bi-box-arrow-right"></i> Sign out everywhere
+        </button>
+      </form>
+    </div>
   </div>
 </div>
 
