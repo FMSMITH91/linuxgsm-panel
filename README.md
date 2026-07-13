@@ -47,6 +47,7 @@ bash ~/linuxgsm-panel/uninstall.sh                 # per-user install
 - Real-time WebSocket console, command sending, per-game CPU/RAM/uptime tiles, and live current/max player counts (gamedig, with console + LinuxGSM-query fallbacks).
 - Player-aware control — start/stop/restart/update/validate and more; restart, stop, backups, mod changes, and host reboots can wait until a server is empty.
 - Mods & addons (SourceMod, MetaMod, Oxide, ULX…), FastDL generation, per-server cron with autostart and daily-restart-when-empty, and a config/file browser with upload and in-browser editing.
+- **Garry's Mod content mounting** — install Counter-Strike: Source and other Source-engine games' content (via LinuxGSM) so GMod maps and props render instead of showing missing-texture errors. One shared copy per host, mounted read-only into each GMod server, with per-server enable/disable, one-click uninstall, a free-disk readout, and a weekly content auto-update cron.
 - Per-server LinuxGSM alerts (Discord, Telegram, email, Pushover, Slack, Gotify…).
 
 **Backups**
@@ -58,10 +59,11 @@ bash ~/linuxgsm-panel/uninstall.sh                 # per-user install
 - Fine-grained moderation (**kick / ban / announce** individually) and superadmin-defined **custom console commands** with a charset-validated argument, granted per group.
 - One host page for the panel and every remote: specs, live per-core resources, OS updates, UFW firewall, power controls, Ubuntu Pro, SSH lockdown, and lockout-safe port/bind changes.
 - **Brute-force defense** — fail2ban integration with per-jail logs, top offenders, one-click UFW blocking, and an optional rolling **auto-block** that firewalls every IP over a failed-attempt threshold (default 20 / 7 days) and releases it once its count drops back below. A whitelist (IP/CIDR) and your Tailscale peers are never banned or blocked.
-- **Proactive admin alerts** to Telegram/Discord — server down, host unreachable, disk low, high load, brute-force, backup failed, update available, and more.
+- **Proactive admin alerts** to Telegram/Discord for 18 events — server down, host unreachable, disk low, sustained high CPU/RAM load, brute-force, backup failed, update available, cert expiring, and more — with tunable thresholds (disk %, CPU-load %, memory %, and how long load must stay high before it pages you).
+- **Two-way command bot** (Telegram *or* Discord) — drive the panel from chat: `/status`, `/servers`, `/hosts`, `/players <name>`, `/update`, and `/start` / `/stop` / `/restart <name>`. Opt-in and locked to the configured chat/channel.
 - Tailscale integration (private Serve, MagicDNS, SSH-over-tailnet), multiple SSH remotes with host-key pinning, diagnostics with file-integrity self-heal, and audit logging.
 
-**Also** — HTTPS by default, TOTP 2FA with backup codes, revocable sessions, CSRF + strict CSP; light on small VPSes; multi-language (English, Spanish, French); a first-run setup wizard; and a JSON REST API.
+**Also** — a superadmin **Settings** page (branding: site name, accent colour, login tagline; default UI language; session & security tuning), all applied live; HTTPS by default, TOTP 2FA with backup codes, revocable sessions, CSRF + strict CSP; light on small VPSes; multi-language (English, Spanish, French); a first-run setup wizard; and a JSON API.
 
 ## Screenshots
 
@@ -89,6 +91,8 @@ Stored in `data/config.json` after the setup wizard. Key settings:
 | `remember_days` | 3 | "Remember me" cookie lifetime |
 | `ssh_timeout` | 10 | SSH connection timeout (seconds) |
 
+Branding (site name, accent colour, login tagline), the default UI language for new users, the session timeouts and protection level, and the brute-force auto-block threshold are editable in-app at **Administration → Settings** (superadmin) and apply live. Network keys (`port`, `bind_host`, `trust_proxy`) stay in `config.json` since changing them can't safely be done from the web.
+
 ## Permissions
 
 Groups grant any mix of these, scoped to specific servers/hosts. `super_admin` bypasses all checks.
@@ -107,15 +111,13 @@ Groups grant any mix of these, scoped to specific servers/hosts. `super_admin` b
 
 ## API
 
-JSON API over HTTPS. Authenticate with a logged-in session cookie **or** an API token (`Authorization: Bearer <token>`, generated on the Account page). Add `-k` to `curl` for the self-signed cert.
+The panel exposes a JSON API over HTTPS that its own UI is built on — e.g. `GET /api/servers`, `GET /api/server/<id>`, `GET /api/console/<id>`, and `POST` actions like `/api/command/<id>`. Requests are authenticated with your **session cookie** (and CSRF-protected for writes), so they're most naturally called from a logged-in browser session. Add `-k` to `curl` for the self-signed cert.
 
 ```bash
-curl -k https://localhost:5000/api/servers            # list servers
-curl -k https://localhost:5000/api/server/1           # server status
-curl -k https://localhost:5000/api/console/1          # console output
-curl -k -X POST https://localhost:5000/api/command/1 \
-  -H "Authorization: Bearer <token>" \
-  -H "Content-Type: application/json" -d '{"command":"status"}'
+# with a session cookie jar from a logged-in session
+curl -k -b cookies.txt https://localhost:5000/api/servers      # list servers
+curl -k -b cookies.txt https://localhost:5000/api/server/1     # server status
+curl -k -b cookies.txt https://localhost:5000/api/console/1    # console output
 ```
 
 ## Production deployment
