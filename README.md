@@ -63,7 +63,7 @@ bash ~/linuxgsm-panel/uninstall.sh                 # per-user install
 - **Two-way command bot** (Telegram *or* Discord) — drive the panel from chat: `/status`, `/servers`, `/hosts`, `/players <name>`, `/update`, and `/start` / `/stop` / `/restart <name>`. Opt-in and locked to the configured chat/channel.
 - Tailscale integration (private Serve, MagicDNS, SSH-over-tailnet), multiple SSH remotes with host-key pinning, diagnostics with file-integrity self-heal, and audit logging.
 
-**Also** — a superadmin **Settings** page (branding: site name, accent colour, login tagline; default UI language; session & security tuning), all applied live; HTTPS by default, TOTP 2FA with backup codes, revocable sessions, CSRF + strict CSP; light on small VPSes; multi-language (English, Spanish, French); a first-run setup wizard; and a JSON API.
+**Also** — a superadmin **Settings** page (branding: site name, accent colour, login tagline; default UI language; session & security tuning), all applied live; HTTPS by default, TOTP 2FA with backup codes, revocable sessions, CSRF + strict CSP; light on small VPSes; multi-language (English, Spanish, French); and a first-run setup wizard.
 
 ## Screenshots
 
@@ -108,17 +108,6 @@ Groups grant any mix of these, scoped to specific servers/hosts. `super_admin` b
 | `super_admin` | Full administrator access |
 
 **Typical groups:** *Admins* — view + power + `manage_servers`; *Moderators* — view + `kick/ban/say` on specific servers; *Viewers* — `view_servers` only. Super Admin is auto-granted via `is_superadmin` (no group needed).
-
-## API
-
-The panel exposes a JSON API over HTTPS that its own UI is built on — e.g. `GET /api/servers`, `GET /api/server/<id>`, `GET /api/console/<id>`, and `POST` actions like `/api/command/<id>`. Requests are authenticated with your **session cookie** (and CSRF-protected for writes), so they're most naturally called from a logged-in browser session. Add `-k` to `curl` for the self-signed cert.
-
-```bash
-# with a session cookie jar from a logged-in session
-curl -k -b cookies.txt https://localhost:5000/api/servers      # list servers
-curl -k -b cookies.txt https://localhost:5000/api/server/1     # server status
-curl -k -b cookies.txt https://localhost:5000/api/console/1    # console output
-```
 
 ## Production deployment
 

@@ -5,6 +5,46 @@ README disclaimer. Versioning is loosely [semantic](https://semver.org). Note: t
 "update available" check compares git commits, so you always get the newest CI-verified commit
 regardless of this file — this changelog is for humans.
 
+## [0.9.0-alpha] — 2026-07-13
+
+### Added
+- **Garry's Mod content mounting** — install Counter-Strike: Source and other Source-engine games'
+  content via LinuxGSM so GMod maps and props render instead of missing-texture errors. One shared
+  copy per host, mounted read-only into each GMod server with per-server enable/disable, one-click
+  uninstall, a free-disk readout, and a weekly content auto-update cron (16 installable games).
+- **Two-way Discord command bot** over the Gateway — alongside the Telegram bot; `!status`,
+  `!servers`, `!players <name>`, `!update`, and `!start` / `!stop` / `!restart <name>`, locked to the
+  configured channel.
+- **Settings page** (superadmin) — branding (site name, accent colour, login tagline), the default UI
+  language for new users, and session/security tuning (idle timeout, remember-me, session-protection
+  level, auto-block threshold), all applied live.
+- **Configurable alert thresholds** — disk %, CPU-load %, and memory % — plus **sustained-duration
+  high-load alerts** that page only after load stays over the line for a set number of minutes.
+- **Metrics + player history charts** (24h / 7d) on the server page, live-updating.
+- **Weekly auto-update of npm + gamedig** (the player-query tools) on every host.
+- **"Jail" column** on the login-security top-offenders table.
+
+### Changed
+- **Every scheduled task is now editable and deletable**, including the LinuxGSM/panel-installed ones.
+- **Mods merged into a single Install/Remove list**; installing a mod no longer auto-restarts the
+  server — you're prompted to restart when ready.
+- **GMod content installs via LinuxGSM** (not raw SteamCMD), so it gets validation and the weekly
+  update cron for free.
+- **Group-by-host** on the Game Servers list now shows one card per host.
+- Removed the global **notifications master switch** — a channel's own enable toggle is the on/off.
+- **start/stop/restart run in the background** so the button never hangs; remaining per-server SSH in
+  request handlers was parallelised.
+- **Account page** — two-column layout on desktop; the API-access (personal token) card was removed.
+
+### Fixed
+- **PaperMC / Velocity / Waterfall** now report player count + max (queried via gamedig on the real port).
+- **Minecraft/Paper console** no longer shows terminal control-code noise (JLine ANSI + prompt lines).
+- **Sidebar active-state** is correct under a URL mount prefix (e.g. `/lgsm` via Tailscale Serve).
+- **Import** auto-caches each server's LinuxGSM command list, so "Supported Commands" isn't blank.
+- Remote **public-IP resolution** moved off the request path — an unreachable host no longer hangs a page.
+- **Self-update snapshot** no longer aborts on a root-owned unreadable file (e.g. a Tailscale cert key).
+- The panel no longer binds to loopback unless Tailscale Serve is actually configured to proxy it.
+
 ## [0.8.0-alpha] — 2026-07-11
 
 First tracked release. The `VERSION` file had drifted from the git tags (last tag `v0.7.15-alpha`),
@@ -42,4 +82,5 @@ so this re-baselines it and starts the changelog. Notable changes since then:
   id/token).
 - The Telegram `/update` completion check compares the **git commit**, not the static VERSION.
 
+[0.9.0-alpha]: https://github.com/FMSMITH91/linuxgsm-panel/releases/tag/v0.9.0-alpha
 [0.8.0-alpha]: https://github.com/FMSMITH91/linuxgsm-panel/releases/tag/v0.8.0-alpha
