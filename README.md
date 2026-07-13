@@ -40,10 +40,20 @@ Then finish in the browser: open **`https://your-server:5000`** (`http://` won't
 
 ### Updating
 
+Trigger it one of two ways:
+
 - **In the panel:** *Panel Server → Update*. This is **CI-gated** — it only moves to a commit whose checks have all passed — and runs detached so it survives its own restart. Also available via the Telegram/Discord `/update` command.
 - **From the shell:** re-run the same command (or `bash install.sh` from the checkout). A manual re-run pulls the branch tip directly (not CI-gated), so do it when you know the tip is good.
 
-Either way the update is the same and safe: it **snapshots the code *and* database**, pulls, reinstalls deps, restarts, **health-checks** that the panel actually came back, and **auto-rolls-back** (code + DB) if it didn't — so a broken release can't leave you with a dead panel.
+**What the updater does** — the same safe path either way:
+
+1. **Checks if there's anything to do.** If you're already on the target version it stops here — no snapshot, panel left running.
+2. **Snapshots the current code *and* database** to a timestamped backup (keeps the last 3).
+3. **Checks and optimises the database** with the service stopped (the snapshot from step 2 is the fallback if anything goes wrong).
+4. **Fetches the new version** — the CI-verified commit for an in-panel update, the branch tip for a manual re-run.
+5. **Installs dependencies** — but only if `requirements.txt` actually changed, so a code-only update doesn't rebuild anything.
+6. **Starts the service** back up.
+7. **Health-checks that the panel answers.** On success it prunes old snapshots; on failure it **auto-rolls-back the code *and* database** to the snapshot — so a broken release can't leave you with a dead panel.
 
 ## Uninstall
 
@@ -53,9 +63,16 @@ bash ~/linuxgsm-panel/uninstall.sh                 # per-user install
 #   add --yes to skip the "type yes to confirm" prompt
 ```
 
-**Removes everything the installer created:** the systemd service, the panel files and its `data/` (accounts, config, encryption keys), and — for a root install — the sudoers entry, the `linuxgsm-panel-recover` command, the panel's own UFW port rule, its Tailscale Serve binding, and the dedicated `lgsmpanel` user.
+**What the uninstaller does:**
 
-**Leaves your game servers completely alone.** Their Linux users, home directories, LinuxGSM installs, `@reboot` autostart crontabs, and game-port firewall rules are never touched — so every server keeps running exactly as before once the panel is gone.
+1. **Detects** whether it's a root/system install or a per-user one (and refuses to run without `sudo` on a root install).
+2. **Asks you to confirm** — type `yes` (or pass `--yes`); anything else aborts with nothing changed.
+3. **Stops, disables, and removes** the systemd service.
+4. **(Root install)** Removes the panel's **own** UFW port rule and resets its Tailscale Serve binding — never a game-server port.
+5. **Deletes the panel files and its `data/`** — accounts, config, and encryption keys.
+6. **(Root install)** Removes the sudoers entry, the `linuxgsm-panel-recover` command, and the dedicated `lgsmpanel` user.
+
+**Your game servers are left completely alone** — their Linux users, home directories, LinuxGSM installs, `@reboot` autostart crontabs, and game-port firewall rules are never touched, so every server keeps running exactly as before once the panel is gone.
 
 ## Features
 
