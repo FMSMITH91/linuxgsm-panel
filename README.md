@@ -25,20 +25,37 @@ A self-hosted web panel for managing **[LinuxGSM](https://linuxgsm.com)** game s
 curl -fsSL https://raw.githubusercontent.com/FMSMITH91/linuxgsm-panel/main/install.sh | bash
 ```
 
-- Fresh install updates the OS (`apt full-upgrade`, skip with `PANEL_NO_UPGRADE=1`), installs the panel, and reboots.
-- Run as a normal user → a `systemd --user` service; run as **root** → a dedicated non-login service user. The panel never runs as root.
-- Serves HTTPS with a built-in self-signed cert (a trusted Tailscale Serve cert is offered in the setup wizard).
+**What the installer does** — one command, unattended:
 
-**Open `https://your-server:5000`**, accept the one-time cert warning (**Advanced → Proceed**), and the setup wizard takes over. (`http://` won't load — the panel speaks TLS.)
+1. Installs the prerequisites it needs (`python3-venv`, `pip`, `git`, `curl`).
+2. Patches the OS with `apt full-upgrade` — skip with `PANEL_NO_UPGRADE=1 bash install.sh`.
+3. Clones the repo, builds a Python virtualenv, and installs the panel's dependencies.
+4. Picks a free port (5000 by default) and records it in `data/config.json`.
+5. Sets up the service — **and never runs the panel as root**:
+   - **As a normal user** → a `systemd --user` service with linger, so it survives logout/reboot.
+   - **As root** → creates a dedicated non-login **`lgsmpanel`** user, runs a *system* service as that user, and adds a *scoped* passwordless-sudo entry so it can manage the local host (create game-server users, `apt`, `ufw`…). Also installs the `linuxgsm-panel-recover` command. Remove the sudoers entry if this panel only ever manages *remote* servers.
+6. Serves HTTPS with a built-in self-signed cert (a trusted Tailscale Serve cert is offered in the wizard), then **reboots**.
 
-**Updates:** re-run the same command (or `bash install.sh`). It snapshots code **and** database, pulls, restarts, health-checks, and rolls back automatically if the panel doesn't come back.
+Then finish in the browser: open **`https://your-server:5000`** (`http://` won't load — it's TLS-only), accept the one-time cert warning (**Advanced → Proceed**), and the **setup wizard** creates your first super admin.
 
-**Uninstall:** removes only the panel (service, files, data, sudoers, and the root install's user); game servers are left intact.
+### Updating
+
+- **In the panel:** *Panel Server → Update*. This is **CI-gated** — it only moves to a commit whose checks have all passed — and runs detached so it survives its own restart. Also available via the Telegram/Discord `/update` command.
+- **From the shell:** re-run the same command (or `bash install.sh` from the checkout). A manual re-run pulls the branch tip directly (not CI-gated), so do it when you know the tip is good.
+
+Either way the update is the same and safe: it **snapshots the code *and* database**, pulls, reinstalls deps, restarts, **health-checks** that the panel actually came back, and **auto-rolls-back** (code + DB) if it didn't — so a broken release can't leave you with a dead panel.
+
+## Uninstall
 
 ```bash
-sudo bash ~lgsmpanel/linuxgsm-panel/uninstall.sh   # root install
+sudo bash ~lgsmpanel/linuxgsm-panel/uninstall.sh   # root / system install
 bash ~/linuxgsm-panel/uninstall.sh                 # per-user install
+#   add --yes to skip the "type yes to confirm" prompt
 ```
+
+**Removes everything the installer created:** the systemd service, the panel files and its `data/` (accounts, config, encryption keys), and — for a root install — the sudoers entry, the `linuxgsm-panel-recover` command, the panel's own UFW port rule, its Tailscale Serve binding, and the dedicated `lgsmpanel` user.
+
+**Leaves your game servers completely alone.** Their Linux users, home directories, LinuxGSM installs, `@reboot` autostart crontabs, and game-port firewall rules are never touched — so every server keeps running exactly as before once the panel is gone.
 
 ## Features
 
