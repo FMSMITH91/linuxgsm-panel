@@ -2802,11 +2802,8 @@ def register_routes(app):
         # Bump the epoch so every session/remember cookie for this account (including this one) stops
         # matching, and clear the whole session registry — instantly signs out everywhere.
         current_user.auth_epoch = (current_user.auth_epoch or 0) + 1
-        try:
-            from models import UserSession
-            UserSession.query.filter_by(user_id=current_user.id).delete()
-        except Exception:
-            pass
+        from models import UserSession
+        UserSession.query.filter_by(user_id=current_user.id).delete()
         db.session.commit()
         log_action(current_user, "revoke_sessions", target=current_user.username)
         logout_user()
@@ -2902,11 +2899,8 @@ def register_routes(app):
 
         u.password_hash = hash_password(new)
         u.auth_epoch = (u.auth_epoch or 0) + 1   # sign out every other session/remember cookie
-        try:
-            from models import UserSession
-            UserSession.query.filter_by(user_id=u.id).delete()   # epoch bump killed them all; clear rows
-        except Exception:
-            pass
+        from models import UserSession
+        UserSession.query.filter_by(user_id=u.id).delete()   # epoch bump killed them all; clear rows
         db.session.commit()
         _register_session(u)                     # fresh session row for THIS device
         login_user(u)                            # refresh THIS session (new epoch + sid) so we stay in
