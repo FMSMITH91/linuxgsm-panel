@@ -720,6 +720,16 @@ try:
           n_all == 0 and epoch_after > epoch_before,
           "rows=%d epoch %d->%d" % (n_all, epoch_before, epoch_after))
 
+    # A legacy cookie (client_as injects a plain _user_id with no sid, like a pre-feature login) is
+    # adopted on first list — so you never see an empty list while logged in.
+    lc = client_as(deleg_id)
+    lsess = ((lc.get("/api/account/sessions").get_json() or {}).get("sessions", []))
+    check("session: a legacy (no-sid) login is adopted and shown as current",
+          len(lsess) == 1 and lsess[0].get("current"), "n=%d" % len(lsess))
+    with app.app_context():
+        n_leg = UserSession.query.filter_by(user_id=deleg_id).count()
+    check("session: adoption created a row for the legacy login", n_leg == 1, "rows=%d" % n_leg)
+
     # ── perf regression guard: NO N+1 on the hot paths ────────────
     # Seed 50 game servers across 5 hosts — enough that a per-server (rather than
     # per-host) query pattern would blow the budget — then assert the dashboard render

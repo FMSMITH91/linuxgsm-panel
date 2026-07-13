@@ -2817,6 +2817,16 @@ def register_routes(app):
         flagged. Scoped to current_user — a user only ever sees or manages their own sessions."""
         from models import UserSession
         cur = getattr(current_user, "_sid", None)
+        # Adopt a legacy login: a cookie issued before per-session tracking has no sid, so there's no
+        # row for it — which would show a confusing empty list while you're clearly logged in. Create
+        # one now and re-issue the cookie WITH the sid (skip Bearer/API clients — they have no cookie
+        # session to upgrade), so this device appears and becomes individually revocable.
+        if not cur and not request.headers.get("Authorization", "").startswith("Bearer "):
+            if _register_session(current_user):
+                # Re-issue the cookie with the new sid by rewriting the login id in the session
+                # (what login_user does, without re-running its machinery on the current_user proxy).
+                session["_user_id"] = current_user.get_id()
+                cur = getattr(current_user, "_sid", None)
         rows = (UserSession.query.filter_by(user_id=current_user.id)
                 .order_by(UserSession.last_seen.desc()).all())
         return jsonify({"sessions": [{
