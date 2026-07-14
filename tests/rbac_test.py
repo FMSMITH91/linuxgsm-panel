@@ -29,9 +29,21 @@ from app import create_app
 from models import db, User, Group, RemoteServer, GameServer, SetupState
 import auth
 
-# Snapshot DB files BEFORE create_app() opens/creates one — so if we seed a fresh (empty) DB we can
-# delete exactly what we created and leave a dev's real data/panel.db untouched.
-_db_before = set(glob.glob(os.path.join(_ROOT, "data", "panel.db*")))
+# Snapshot the data files BEFORE create_app() opens/creates them — so if we seed a fresh (empty) DB
+# we can delete exactly what we created and leave a dev's real data/ untouched.
+_DATA = os.path.join(_ROOT, "data")
+
+
+def _managed_files():
+    fs = set(glob.glob(os.path.join(_DATA, "panel.db*")))
+    for _n in ("config.json", "secret_key", "cred_key"):
+        _p = os.path.join(_DATA, _n)
+        if os.path.exists(_p):
+            fs.add(_p)
+    return fs
+
+
+_files_before = _managed_files()
 
 app = create_app()
 app.config["WTF_CSRF_ENABLED"] = False   # test client posts without a browser-issued token
@@ -72,6 +84,12 @@ with app.app_context():
                             game_type="gmod", port=_p, installed=True, status="offline")
             db.session.add(_g); db.session.flush(); seeded["servers"].append(_g.id)
         db.session.commit()
+        # is_setup_complete() = SetupState(complete) AND cfg["setup_complete"]; set the config flag too
+        # (like smoke_test does) or every request 302s to /setup.
+        from config import load_config, save_config
+        _cfg = load_config()
+        _cfg["setup_complete"] = True
+        save_config(_cfg)
 
     by_remote = defaultdict(list)
     for s in GameServer.query.all():
@@ -125,22 +143,6 @@ def client_as(user_id=None):
             s["_user_id"] = str(user_id)
             s["_fresh"] = True
     return c
-
-
-# TEMP DEBUG — diagnose CI 302s (remove after)
-with app.app_context():
-    _uexists = User.query.get(admin_id) is not None
-    _setup = SetupState.query.first()
-    _setup_desc = (_setup.step, _setup.complete) if _setup else None
-_rz = client_as(admin_id).get("/users")
-print("DEBUG /users:", _rz.status_code, "->", _rz.headers.get("Location"),
-      "| SECURE=", app.config.get("SESSION_COOKIE_SECURE"),
-      "PROT=", app.config.get("SESSION_PROTECTION"),
-      "ROOT=", app.config.get("APPLICATION_ROOT"),
-      "SCHEME=", app.config.get("PREFERRED_URL_SCHEME"),
-      "admin_id=", admin_id, "exists=", _uexists, "setup=", _setup_desc,
-      "secretlen=", len(app.config.get("SECRET_KEY") or b""))
-sys.stdout.flush()
 
 
 try:
@@ -239,7 +241,7 @@ finally:
                 db.engine.dispose()
         except Exception:
             pass   # best-effort teardown of a throwaway DB — nothing to recover if it fails
-        for _f in set(glob.glob(os.path.join(_ROOT, "data", "panel.db*"))) - _db_before:
+        for _f in _managed_files() - _files_before:
             try:
                 os.remove(_f)
             except OSError:
