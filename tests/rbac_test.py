@@ -16,16 +16,22 @@ first authenticated user's identity into every later test client. Each test_clie
 request pushes its own context, so we keep DB work in short, separate app_context
 blocks and never hold one open across HTTP calls.
 """
+import glob
 import os
 import secrets
 import sys
 
 # Allow running as `python tests/rbac_test.py` from the repo root.
-sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+sys.path.insert(0, _ROOT)
 
 from app import create_app
-from models import db, User, Group, RemoteServer, GameServer
+from models import db, User, Group, RemoteServer, GameServer, SetupState
 import auth
+
+# Snapshot DB files BEFORE create_app() opens/creates one — so if we seed a fresh (empty) DB we can
+# delete exactly what we created and leave a dev's real data/panel.db untouched.
+_db_before = set(glob.glob(os.path.join(_ROOT, "data", "panel.db*")))
 
 app = create_app()
 app.config["WTF_CSRF_ENABLED"] = False   # test client posts without a browser-issued token
@@ -38,9 +44,35 @@ def check(name, cond, detail=""):
     results.append((bool(cond), name, detail))
 
 
+# Rows we seed on an empty DB (so this runs standalone in CI); cleaned up at the end. Empty against a
+# live install → we seed nothing and delete nothing but our own throwaway users/groups.
+seeded = {"users": [], "remotes": [], "servers": [], "setup": []}
+
 # ── Phase 1: gather ids + create throwaway fixtures (own context) ──
 with app.app_context():
     from collections import defaultdict
+
+    # Self-seed a minimal fixture set when the database is empty (e.g. a fresh CI checkout), so the
+    # test can run in CI as well as against a configured install. Only touches a DB with no servers
+    # or no superadmin — a real install already has both, so nothing is seeded there.
+    if GameServer.query.first() is None or User.query.filter_by(is_superadmin=True).first() is None:
+        if SetupState.query.first() is None:
+            _st = SetupState(step="complete", complete=True)
+            db.session.add(_st); db.session.flush(); seeded["setup"].append(_st.id)
+        if User.query.filter_by(is_superadmin=True).first() is None:
+            _sa = User(username="rbac_seed_admin", display_name="RBAC seed admin",
+                       password_hash=auth.hash_password(secrets.token_hex(16)),
+                       is_superadmin=True, is_active=True)
+            db.session.add(_sa); db.session.flush(); seeded["users"].append(_sa.id)
+        for _i, (_n, _p) in enumerate((("rbac-seed-h1", 27015), ("rbac-seed-h2", 27016))):
+            _r = RemoteServer(name=_n, host="127.0.0.1", port=22, username="root",
+                              auth_method="key", auth_credential="")
+            db.session.add(_r); db.session.flush(); seeded["remotes"].append(_r.id)
+            _g = GameServer(remote_id=_r.id, name="%s-s" % _n, short_name="rbacseed%d" % _i,
+                            game_type="gmod", port=_p, installed=True, status="offline")
+            db.session.add(_g); db.session.flush(); seeded["servers"].append(_g.id)
+        db.session.commit()
+
     by_remote = defaultdict(list)
     for s in GameServer.query.all():
         by_remote[s.remote_id].append(s)
@@ -183,17 +215,33 @@ try:
         code = ca.get(p).status_code
         check("superadmin CAN access %s" % p, code == 200, "got %d" % code)
 finally:
-    with app.app_context():
-        for _uid in (uid, locals().get("uid2")):
-            if _uid:
-                _u = User.query.get(_uid)
-                if _u:
-                    db.session.delete(_u)
-        for _tag in (tag, tag + "_mr"):
-            _g = Group.query.filter_by(name=_tag).first()
-            if _g:
-                db.session.delete(_g)
-        db.session.commit()
+    if any(seeded.values()):
+        # The whole DB was seeded by us (it started empty) — drop the throwaway DB file(s) entirely,
+        # so nothing is left behind (a leftover empty panel.db would make smoke_test skip next run).
+        try:
+            with app.app_context():
+                db.session.remove()
+                db.engine.dispose()
+        except Exception:
+            pass   # best-effort teardown of a throwaway DB — nothing to recover if it fails
+        for _f in set(glob.glob(os.path.join(_ROOT, "data", "panel.db*"))) - _db_before:
+            try:
+                os.remove(_f)
+            except OSError:
+                pass
+    else:
+        # Live/configured install: remove ONLY our throwaway users/groups, never real data.
+        with app.app_context():
+            for _uid in (uid, locals().get("uid2")):
+                if _uid:
+                    _u = User.query.get(_uid)
+                    if _u:
+                        db.session.delete(_u)
+            for _tag in (tag, tag + "_mr"):
+                _g = Group.query.filter_by(name=_tag).first()
+                if _g:
+                    db.session.delete(_g)
+            db.session.commit()
     print("Fixtures cleaned up.\n")
 
 passed = sum(1 for ok, _, _ in results if ok)

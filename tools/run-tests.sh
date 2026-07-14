@@ -29,6 +29,9 @@ echo "== template actions (every data-action button is wired) =="
 echo "== smoke test (boots the app; routes must not 5xx) =="
 "$PY" tests/smoke_test.py
 
+echo "== rbac test (permissions/IDOR enforced server-side; self-seeds on an empty DB) =="
+"$PY" tests/rbac_test.py
+
 if command -v shellcheck >/dev/null 2>&1; then
     echo "== shellcheck (shell scripts) =="
     shellcheck -S warning install.sh uninstall.sh tools/run-tests.sh reset-password.sh recover.sh
