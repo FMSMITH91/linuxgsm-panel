@@ -118,7 +118,6 @@ print("Fixtures: limited user id=%d, group grants remote %d only." % (uid, grant
 print("Accessible server id=%d (remote %d); non-granted server id=%s (remote %s)\n"
       % (accessible_id, granted_remote, other_id, other_remote))
 
-
 def client_as(user_id=None):
     c = app.test_client()
     if user_id is not None:
@@ -126,6 +125,22 @@ def client_as(user_id=None):
             s["_user_id"] = str(user_id)
             s["_fresh"] = True
     return c
+
+
+# TEMP DEBUG — diagnose CI 302s (remove after)
+with app.app_context():
+    _uexists = User.query.get(admin_id) is not None
+    _setup = SetupState.query.first()
+    _setup_desc = (_setup.step, _setup.complete) if _setup else None
+_rz = client_as(admin_id).get("/users")
+print("DEBUG /users:", _rz.status_code, "->", _rz.headers.get("Location"),
+      "| SECURE=", app.config.get("SESSION_COOKIE_SECURE"),
+      "PROT=", app.config.get("SESSION_PROTECTION"),
+      "ROOT=", app.config.get("APPLICATION_ROOT"),
+      "SCHEME=", app.config.get("PREFERRED_URL_SCHEME"),
+      "admin_id=", admin_id, "exists=", _uexists, "setup=", _setup_desc,
+      "secretlen=", len(app.config.get("SECRET_KEY") or b""))
+sys.stdout.flush()
 
 
 try:
