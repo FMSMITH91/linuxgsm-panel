@@ -7134,8 +7134,16 @@ def register_routes(app):
                  .filter(MetricSample.server_id == server_id, MetricSample.ts >= since)
                  .order_by(MetricSample.ts.asc()).all())
         sstep = max(1, len(srows) // 240)
-        server = [{"t": r.ts.isoformat() + "Z", "cpu": r.cpu, "ram": r.ram_mb, "players": r.players}
-                  for r in srows[::sstep]]
+        # Players is a spiky, low-integer metric: plain decimation (every sstep-th sample) silently
+        # drops peaks that land on discarded samples — and 24h vs 7d use different steps, so they drop
+        # DIFFERENT sessions and disagree. Take the MAX players over each point's window so no peak or
+        # session is lost. CPU/RAM stay point-sampled (a level metric reads fine decimated).
+        server = []
+        for i in range(0, len(srows), sstep):
+            r = srows[i]
+            pv = [w.players for w in srows[i:i + sstep] if w.players is not None]
+            server.append({"t": r.ts.isoformat() + "Z", "cpu": r.cpu, "ram": r.ram_mb,
+                           "players": max(pv) if pv else None})
         host = []
         if gs.remote_id:
             hrows = (HostSample.query

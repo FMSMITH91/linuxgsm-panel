@@ -730,6 +730,27 @@ try:
         n_leg = UserSession.query.filter_by(user_id=deleg_id).count()
     check("session: adoption created a row for the legacy login", n_leg == 1, "rows=%d" % n_leg)
 
+    # ── History endpoint: a player peak must survive down-sampling (not be decimated away) ──
+    from models import MetricSample
+    from datetime import datetime as _dt, timedelta as _td
+    with app.app_context():
+        _base = _dt.utcnow() - _td(hours=6)
+        # 500 samples so sstep = 500//240 = 2; players is 0 everywhere except a single spike of 5 at an
+        # ODD index — which plain srows[::2] decimation skips. The max-over-window fix must keep it.
+        db.session.add_all([
+            MetricSample(server_id=gs_id, ts=_base + _td(seconds=i * 30),
+                         cpu=1.0, ram_mb=100, players=(5 if i == 101 else 0))
+            for i in range(500)])
+        db.session.commit()
+    _hist = c.get("/api/server/%d/history?range=24h" % gs_id)
+    _pl = [p.get("players") for p in (_hist.get_json() or {}).get("server", [])]
+    _pmax = max([x for x in _pl if x is not None] or [0])
+    check("history: player peak survives down-sampling (max==5, not decimated to 0)",
+          _hist.status_code == 200 and _pmax == 5, "status=%d max=%s" % (_hist.status_code, _pmax))
+    with app.app_context():
+        MetricSample.query.filter_by(server_id=gs_id).delete()
+        db.session.commit()
+
     # ── perf regression guard: NO N+1 on the hot paths ────────────
     # Seed 50 game servers across 5 hosts — enough that a per-server (rather than
     # per-host) query pattern would blow the budget — then assert the dashboard render
