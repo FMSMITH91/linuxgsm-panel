@@ -1087,16 +1087,43 @@ def _unwrap_cron_command(command):
     return command, None
 
 
+# Rendering a failed job's captured output into ONE readable line. LinuxGSM paints its console
+# with ANSI colour and appends its verdict as a separate " ... FAIL" line, so a blind last-N-lines
+# tail shows escape soup whose informative line ("curl: (22) ... 404") may not even be in it.
+_CRON_ANSI_RE = re.compile(r"\x1b\[[0-9;?]*[ -/]*[@-~]")
+# A line that is ONLY a verdict token: no information once the panel already knows the job failed.
+_CRON_VERDICT_RE = re.compile(r"^[.\s]*(OK|FAIL|ERROR|SKIP|UPDATE|WARNING|INFO|CANCELED)[.\s]*$", re.I)
+_CRON_WHY_RE = re.compile(r"fail|error|cannot|can't|denied|refus|timed? ?out|no such|not found|"
+                          r"missing|unable|invalid|permission|traceback|curl: \(|wget:", re.I)
+
+
+def _clean_cron_error(raw, limit=240):
+    """One-line summary of WHY a job failed, from the tail of its captured output. `raw` is the
+    log tail with newlines turned into \\037 by the reader. Strips ANSI, honours `\\r` redraws
+    (only a line's final repaint is what a terminal shows), drops bare " ... FAIL" verdict lines,
+    then keeps the last few lines that actually say something — the fatal one comes last."""
+    lines = []
+    for chunk in (raw or "").split("\x1f"):
+        seg = " ".join(_CRON_ANSI_RE.sub("", chunk).split("\r")[-1].split())
+        if seg and not _CRON_VERDICT_RE.match(seg):
+            lines.append(seg)
+    why = [ln for ln in lines if _CRON_WHY_RE.search(ln)] or lines
+    out = " ".join(why[-3:])
+    return out[-limit:].strip() if len(out) > limit else out
+
+
 def _read_cron_status(server, user):
     """{job_id: {last_run(epoch), ok(bool), error(str), rc(int)}} from the recorder's status
     files for `user`. Runs AS THE GAME USER so reading a job's log can't be redirected through
     a symlink to a root-only file (info leak) — it only ever reads that user's own files. One
     shell round-trip; best-effort (empty on any error)."""
     d = "/home/%s/.lgsm-cron" % user
+    # \037 (unit separator) keeps line boundaries across the tab-delimited wire format so
+    # _clean_cron_error can pick the informative lines; the byte cap keeps the reply small.
     inner = (f'cd {_quote(d)} 2>/dev/null || exit 0; '
              'for s in *.status; do [ -e "$s" ] || continue; id="${s%.status}"; '
              'read rc st en < "$s" 2>/dev/null; err=""; '
-             '[ "$rc" != "0" ] && err="$(tail -n 3 "$id.log" 2>/dev/null | tr "\\n\\t" "  " | tail -c 240)"; '
+             '[ "$rc" != "0" ] && err="$(tail -n 40 "$id.log" 2>/dev/null | tr "\\n\\t" "\\037 " | tail -c 2000)"; '
              'printf "%s\\t%s\\t%s\\t%s\\t%s\\n" "$id" "$rc" "$st" "$en" "$err"; done')
     out, _, _ = run_command(server, f"sudo -u {user} bash -c {_quote(inner)}", timeout=12, sudo=False)
     status = {}
@@ -1108,7 +1135,7 @@ def _read_cron_status(server, user):
         err = parts[4] if len(parts) > 4 else ""
         try:
             status[jid] = {"last_run": int(en), "ok": rc == "0", "rc": int(rc),
-                           "error": err.strip()}
+                           "error": _clean_cron_error(err)}
         except ValueError:
             continue
     return status
