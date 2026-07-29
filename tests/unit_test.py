@@ -425,6 +425,44 @@ try:
           _cst["bbbbbbbbbbbb"]["ok"] is False and _cst["bbbbbbbbbbbb"]["error"] == "boom: exit 1")
 finally:
     sm.run_command = _orig_run3
+# Failed-job output → one readable line. LinuxGSM colours its console and appends its verdict as
+# its own " ... FAIL" line, so the raw tail is escape soup with the reason buried mid-way.
+_lgsm_tail = ("fetching GitHub [ \x1b[3mubuntu-24.04.csv\x1b[0m ]"
+              "curl: (22) The requested URL returned error: 404\x1f"
+              " ... \x1b[31mERROR\x1b[0m\x1f"
+              "fetching Bitbucket [ \x1b[3mubuntu-24.04.csv\x1b[0m ]"
+              "curl: (22) The requested URL returned error: 404\x1f"
+              " ... \x1b[31mFAIL\x1b[0m\x1f")
+_lgsm_err = sm._clean_cron_error(_lgsm_tail)
+check("cron error: ANSI colour codes stripped", "\x1b" not in _lgsm_err and "[31m" not in _lgsm_err)
+check("cron error: keeps the line that says why",
+      "curl: (22) The requested URL returned error: 404" in _lgsm_err
+      and "ubuntu-24.04.csv" in _lgsm_err)
+check("cron error: bare ' ... FAIL' verdict lines dropped",
+      "FAIL" not in _lgsm_err and "ERROR" not in _lgsm_err)
+check("cron error: only a line's final \\r repaint is kept",
+      sm._clean_cron_error("checking....\rchecking [ done ] failed to start") ==
+      "checking [ done ] failed to start")
+check("cron error: informative lines win over surrounding chatter",
+      sm._clean_cron_error("step 1 ok\x1fstep 2 ok\x1fstep 3 ok\x1fstep 4 ok\x1f"
+                           "cannot write /home/gm/x: permission denied\x1f ... FAIL")
+      == "cannot write /home/gm/x: permission denied")
+check("cron error: falls back to the tail when nothing looks like a reason",
+      sm._clean_cron_error("aaa\x1fbbb\x1fccc\x1fddd") == "bbb ccc ddd")
+check("cron error: capped for the UI cell", len(sm._clean_cron_error("error " + "x" * 900)) <= 240)
+check("cron error: empty output stays empty", sm._clean_cron_error("") == ""
+      and sm._clean_cron_error(None) == "")
+# The reader must ship line boundaries (\037) and a wide enough tail for the above to work.
+_cronrd = {}
+_orig_run3b = sm.run_command
+try:
+    sm.run_command = lambda s, c, **k: (_cronrd.update(cmd=c), ("", "", 0))[1]
+    sm._read_cron_status(None, "gm")
+    check("cron status: reads a wide tail, line-delimited, byte-capped",
+          "tail -n 40" in _cronrd["cmd"] and '\\037' in _cronrd["cmd"]
+          and "tail -c 2000" in _cronrd["cmd"])
+finally:
+    sm.run_command = _orig_run3b
 # cron run-times from the journald cron log (last-run TIME for managed/legacy jobs)
 _orig_run4 = sm.run_command
 try:

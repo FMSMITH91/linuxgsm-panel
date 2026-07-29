@@ -8,14 +8,21 @@ set -euo pipefail
 cd "$(dirname "$0")/.."   # repo root (this script lives in tools/)
 PY="${PYTHON:-python3}"
 
+# A local virtualenv usually lives in the repo (see the PYTHON= example above, and venv/ + .venv/
+# in .gitignore), so both scanners have to skip it — third-party site-packages code is not ours to
+# compile or lint, and flake8's defaults don't exclude it. CI installs deps globally and never has
+# one, which is why this only ever bites a developer machine.
+VENVS='(^|/)(\.?venv)/'
+
 echo "== byte-compile (syntax errors) =="
-"$PY" -m compileall -q .
+"$PY" -m compileall -q -x "$VENVS" .
 
 echo "== lint: real bugs + unused imports/vars (undefined names, bad syntax, F401, F841) =="
 if "$PY" -m flake8 --version >/dev/null 2>&1; then
     # F401 (unused import) + F841 (unused local var) are included so dead code is caught
     # here rather than later by CodeQL / Codacy in the Security tab.
-    "$PY" -m flake8 --select=E9,F63,F7,F82,F401,F841 --show-source --statistics .
+    "$PY" -m flake8 --select=E9,F63,F7,F82,F401,F841 --show-source --statistics \
+        --extend-exclude=venv,.venv .
 else
     echo "  (flake8 not installed — skipping)"
 fi
