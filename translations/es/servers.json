@@ -48,6 +48,8 @@
  "Mount game content": "Montar contenido del juego",
  "Move this host down": "Mover este host hacia abajo",
  "Move this host up": "Mover este host hacia arriba",
+ "Move this server down": "Mover este servidor hacia abajo",
+ "Move this server up": "Mover este servidor hacia arriba",
  "No history yet — a sample is recorded every minute. Check back shortly.": "Aún no hay historial: se registra una muestra cada minuto. Vuelve en un momento.",
  "No hosts configured yet.": "Aún no hay hosts configurados.",
  "No players connected.": "No hay jugadores conectados.",

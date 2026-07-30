@@ -862,6 +862,32 @@ try:
     check("layout: unknown ids and junk are dropped, real ones kept", _stored == [_flip[0]], str(_stored))
     check("layout: a body with no recognised key is a 400, not a silent no-op",
           c.post("/api/account/ui-order", json={"nope": [1]}).status_code == 400)
+    # Per-host row order (phase 2). The dashboard slices one flat list per host, so the risk is a
+    # host's rows reordering correctly while some OTHER host's rows shift as a side effect.
+    def _row_order(html, remote):
+        """Server ids in the order their rows appear inside one host's card."""
+        import re as _re_r
+        card = _re_r.search(r'data-remote-id="%d".*?</table>' % remote, html, _re_r.S)
+        return [int(m) for m in _re_r.findall(r'<tr data-server-id="(\d+)"', card.group(0))] if card else []
+
+    _rows_default = _row_order(c.get("/").get_data(as_text=True), remote_id)
+    check("layout: server rows carry their id", len(_rows_default) >= 2, str(_rows_default))
+    _rows_flip = list(reversed(_rows_default))
+    _other_before = _row_order(c.get("/").get_data(as_text=True), remote2_id)
+    _sv = c.post("/api/account/ui-order", json={"server_order": {str(remote_id): _rows_flip}})
+    check("layout: saving a per-host server order succeeds", _sv.status_code == 200)
+    _html_sv = c.get("/").get_data(as_text=True)
+    check("layout: that host's rows render in the saved order",
+          _row_order(_html_sv, remote_id) == _rows_flip,
+          "got %s want %s" % (_row_order(_html_sv, remote_id), _rows_flip))
+    check("layout: another host's rows are NOT disturbed",
+          _row_order(_html_sv, remote2_id) == _other_before)
+    # A server id belonging to a different host must not be able to move it across cards.
+    c.post("/api/account/ui-order", json={"server_order": {str(remote_id): _other_before}})
+    _html_x = c.get("/").get_data(as_text=True)
+    check("layout: a foreign server id cannot pull a row into another host's card",
+          _row_order(_html_x, remote2_id) == _other_before
+          and sorted(_row_order(_html_x, remote_id)) == sorted(_rows_default))
     _lay_reset = c.post("/api/account/ui-order/reset")
     check("layout: reset returns success", _lay_reset.status_code == 200
           and (_lay_reset.get_json() or {}).get("success") is True)
