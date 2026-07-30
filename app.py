@@ -2321,24 +2321,19 @@ def _apply_user_server_order(servers, prefs):
     return out
 
 
-def _new_user_language(cfg, creator, known):
-    """The UI language a newly-created account starts in.
+def _new_user_language(cfg, known):
+    """The UI language a newly-created account starts in: whatever Settings → Localization is set
+    to, or English.
 
-    Settings offers an explicit language OR the blank "Creator's language" option. That blank case
-    used to fall straight through to English, so the option silently did nothing — a French-speaking
-    admin creating accounts still handed out English ones. Blank now means what it says: inherit the
-    language of whoever is creating the account, and only then fall back to English.
-
-    `known` is the supported-language map, so a language retired in a later version cannot be
-    assigned. Pure, for testability."""
-    configured = ((cfg or {}).get("default_language") or "").strip()
-    if configured in known:
-        return configured
-    if not configured:
-        inherited = (getattr(creator, "language", "") or "").strip()
-        if inherited in known:
-            return inherited
-    return "en"
+    The setting is always a concrete language code. It used to allow a blank "creator's language"
+    value, which was both confusing to read on the settings page and (before it was fixed) did
+    nothing at all — so the option is gone and a blank left over from an older install simply reads
+    as English. Validated against the supported-language map, so a language retired in a later
+    version cannot be assigned. Pure, for testability."""
+    # str() first: config.json is a file a human can hand-edit, and a non-string here would raise
+    # on .strip() while creating a user — a 500 on account creation over a cosmetic setting.
+    configured = str((cfg or {}).get("default_language") or "").strip()
+    return configured if configured in known else "en"
 
 
 def _current_lang():
@@ -4971,7 +4966,9 @@ def register_routes(app):
             "site_domain": cfg.get("site_domain", ""),
             "login_tagline": cfg.get("login_tagline", ""),
             "accent_color": _valid_hex_color(cfg.get("accent_color")),
-            "default_language": cfg.get("default_language", ""),
+            # Always concrete — an older install may still hold "" from the removed
+            # "creator's language" option, which means English.
+            "default_language": (cfg.get("default_language") or "en"),
             "session_lifetime_hours": int(cfg.get("session_lifetime_hours", 8) or 8),
             "remember_days": int(cfg.get("remember_days", 3) or 3),
             "session_protection": cfg.get("session_protection", "strong"),
@@ -4988,7 +4985,7 @@ def register_routes(app):
         tagline = (f.get("login_tagline") or "").strip()[:200]
         accent = _valid_hex_color(f.get("accent_color"))          # "" if blank/invalid -> built-in
         lang = (f.get("default_language") or "").strip()
-        lang = lang if lang in i18n.LANGUAGES else ""             # "" -> use creator's language
+        lang = lang if lang in i18n.LANGUAGES else "en"           # always store a real language
         protection = f.get("session_protection") if f.get("session_protection") in ("strong", "basic") else "strong"
         hours = max(1, min(_int_or(f.get("session_lifetime_hours"), 8), 168))     # 1h .. 7d
         days = max(1, min(_int_or(f.get("remember_days"), 3), 90))                # 1 .. 90 days
@@ -5091,7 +5088,7 @@ def register_routes(app):
         # New users start in the configured default UI language (Settings → Localization), or in
         # the creating admin's own language when that is left blank; each user can change theirs
         # afterwards.
-        new_lang = _new_user_language(load_config(), current_user, i18n.LANGUAGES)
+        new_lang = _new_user_language(load_config(), i18n.LANGUAGES)
         user = User(
             username=username,
             password_hash=hash_password(password),
