@@ -2225,6 +2225,55 @@ def _apply_user_order(items, order, key=lambda o: o.id):
     return sorted(items, key=lambda o: pos.get(key(o), len(pos)))
 
 
+_PANEL_KEY_RE = re.compile(r"^[a-z0-9_-]{1,32}$")
+
+
+def _panel_layout(prefs, region, default_keys):
+    """(visible, hidden) panel keys for one reorderable region, in this user's saved order.
+
+    Only keys the CALLER declares are ever returned. That is the safety property: a saved key can
+    never conjure a panel the page did not offer (several are permission-gated), and a panel retired
+    in a later version stops appearing the moment it leaves default_keys. Saved-but-unknown keys are
+    dropped; known-but-unsaved keys are appended in their default order, so a panel added by a future
+    version shows up for existing users instead of silently vanishing.
+
+    Pure, so the ordering rules are unit-testable with no app context."""
+    saved = hidden_saved = None
+    if isinstance(prefs, dict):
+        panels, hidden = prefs.get("panels"), prefs.get("hidden")
+        if isinstance(panels, dict):
+            saved = panels.get(region)
+        if isinstance(hidden, dict):
+            hidden_saved = hidden.get(region)
+    known = [k for k in (default_keys or [])]
+    hidden = [k for k in known if isinstance(hidden_saved, list) and k in hidden_saved]
+    order = []
+    if isinstance(saved, list):
+        for key in saved:
+            if key in known and key not in order:
+                order.append(key)
+    order += [k for k in known if k not in order]
+    return [k for k in order if k not in hidden], hidden
+
+
+def _clean_panel_map(raw):
+    """A {region: [panel key]} map from a request body, charset- and size-capped. Anything that is
+    not a plain lowercase key is dropped rather than rejected: the layout is cosmetic, and a hostile
+    or stale body should still leave the user with a sane one."""
+    out = {}
+    if not isinstance(raw, dict):
+        return out
+    for region, keys in list(raw.items())[:20]:
+        if not (isinstance(region, str) and _PANEL_KEY_RE.match(region) and isinstance(keys, list)):
+            continue
+        seen = []
+        for key in keys[:60]:
+            if isinstance(key, str) and _PANEL_KEY_RE.match(key) and key not in seen:
+                seen.append(key)
+        out[region] = seen
+    return out
+
+
 def _apply_user_server_order(servers, prefs):
     """`servers` with each host's rows in that user's saved order. The dashboard slices this one
     list per host (`servers|selectattr('remote_id', ...)`), so ordering it per host in a single pass
@@ -2304,6 +2353,12 @@ def register_context_processors(app):
             "site_title": cfg.get("site_title", "LinuxGSM Panel"),
             "login_tagline": (cfg.get("login_tagline") or "").strip(),
             "accent_color": _valid_hex_color(cfg.get("accent_color")),
+            # Templates ask for their own panel order: panel_layout(region, default_keys) ->
+            # (visible, hidden). Passed as a callable so a page declares the panels IT emitted and
+            # nothing stored can add one — see _panel_layout.
+            "panel_layout": (lambda region, keys: _panel_layout(
+                current_user.get_ui_prefs() if getattr(current_user, "is_authenticated", False) else {},
+                region, keys)),
             "current_year": datetime.utcnow().year,
             "tailscale_url": tailscale_url,
             "mount_prefix": app.config.get("_MOUNT_PREFIX", "/"),
@@ -3088,6 +3143,12 @@ def register_routes(app):
                         per_host[host_key] = _clean(ids, ok_servers)
                 current_user.set_ui_pref("server_order", per_host)
                 saved.append("server_order")
+            if "panels" in data:
+                current_user.set_ui_pref("panels", _clean_panel_map(data.get("panels")))
+                saved.append("panels")
+            if "hidden" in data:
+                current_user.set_ui_pref("hidden", _clean_panel_map(data.get("hidden")))
+                saved.append("hidden")
             if not saved:
                 return jsonify({"success": False, "message": "Nothing to save."}), 400
             try:
@@ -3107,7 +3168,7 @@ def register_routes(app):
         rather than a sentinel value in the save payload, so "never customised" and "reset back to
         default" end up as the SAME stored state (no keys) instead of two states to reason about."""
         try:
-            for key in ("host_order", "server_order"):
+            for key in ("host_order", "server_order", "panels", "hidden"):
                 current_user.set_ui_pref(key, None)
             try:
                 db.session.commit()

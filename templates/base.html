@@ -307,6 +307,18 @@
     .tag-chip[style*="background-color"] { color: #0a0f1a; border-color: transparent; }
     .btn.tag-filter.active { background: var(--accent); border-color: var(--accent); color: #0a0f1a; }
 
+    /* ── MOVABLE PANELS ── the move/hide tools sit in the panel's corner and only appear on hover or
+       keyboard focus, so the dashboard stays clean but the controls are still reachable by Tab.
+       position:absolute inside a positioned card keeps them OUT of the flow: they must not shift the
+       panel's contents, because reflow after first paint is exactly what the CLS budget forbids. */
+    .panel-movable { position: relative; }
+    .panel-tools { position: absolute; top: .25rem; right: .25rem; opacity: 0; transition: opacity .12s;
+                   z-index: 2; }
+    .panel-movable:hover .panel-tools, .panel-tools:focus-within { opacity: 1; }
+    .panel-tools .btn { --bs-btn-padding-y: .05rem; --bs-btn-padding-x: .3rem; font-size: .7rem; }
+    /* Touch has no hover: show them permanently where hovering is impossible. */
+    @media (hover: none) { .panel-tools { opacity: 1; } }
+
     /* ── TABS ── (underline style that fits the dark theme, not Bootstrap's pale card tab) */
     .nav-tabs { border-bottom: 1px solid var(--border); gap: .15rem; }
     .nav-tabs .nav-link {

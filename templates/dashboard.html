@@ -69,45 +69,69 @@
 </div>
 {% else %}
 
-<!-- Stats row -->
-<div class="row row-cols-2 row-cols-md-5 g-3 mb-4">
-  <div class="col">
-    <div class="card text-center p-3">
-      <div class="h3 mb-0" id="total-servers">{{ servers|length }}</div>
-      <div class="text-secondary small">Total Servers</div>
+<!-- Stats row. Each tile is a macro, so the row can be emitted in the user's own order: Jinja macros
+     are first-class values, so a key -> macro map plus an ordered key list is all the dispatch this
+     needs, and the page still declares exactly which panels exist. -->
+{% macro tile_total() %}
+  <div class="h3 mb-0" id="total-servers">{{ servers|length }}</div>
+  <div class="text-secondary small">Total Servers</div>
+{% endmacro %}
+{% macro tile_online() %}
+  <div class="h3 mb-0" id="online-count">
+    <span class="status-dot status-online"></span>
+    {{ servers|selectattr('status', 'equalto', 'online')|list|length }}
+  </div>
+  <div class="text-secondary small">Online</div>
+{% endmacro %}
+{% macro tile_offline() %}
+  <div class="h3 mb-0" id="offline-count">
+    <span class="status-dot status-offline"></span>
+    {{ servers|selectattr('status', 'equalto', 'offline')|list|length }}
+  </div>
+  <div class="text-secondary small">Offline</div>
+{% endmacro %}
+{% macro tile_players() %}
+  <div class="h3 mb-0" id="total-players"><i class="bi bi-people-fill text-info"></i> {{ total_players }}{% if total_max %} / {{ total_max }}{% endif %}</div>
+  <div class="text-secondary small">Players Online</div>
+{% endmacro %}
+{% macro tile_host() %}
+  <div class="h3 mb-0" id="host-summary"><i class="bi bi-cpu text-info"></i> <span class="text-secondary">—</span></div>
+  <div class="text-secondary small">Host CPU · RAM</div>
+{% endmacro %}
+
+{% set TILES = {'total': tile_total, 'online': tile_online, 'offline': tile_offline,
+                'players': tile_players, 'host': tile_host} %}
+{% set TILE_LABELS = {'total': 'Total Servers', 'online': 'Online', 'offline': 'Offline',
+                      'players': 'Players Online', 'host': 'Host CPU · RAM'} %}
+{% set tile_visible, tile_hidden = panel_layout('dash_tiles', ['total', 'online', 'offline', 'players', 'host']) %}
+<div class="row row-cols-2 row-cols-md-5 g-3 mb-4" id="dash-tiles" data-region="dash_tiles">
+  {% for key in tile_visible %}
+  <div class="col" data-panel="{{ key }}">
+    <div class="card text-center p-3 panel-movable">
+      <span class="panel-tools btn-group btn-group-sm" role="group" aria-label="Move or hide this panel">
+        <button type="button" class="btn btn-outline-secondary" data-action="movePanel" data-args='[-1,"@self"]'
+                title="Move left" aria-label="Move {{ TILE_LABELS[key] }} left"><i class="bi bi-arrow-left"></i></button>
+        <button type="button" class="btn btn-outline-secondary" data-action="movePanel" data-args='[1,"@self"]'
+                title="Move right" aria-label="Move {{ TILE_LABELS[key] }} right"><i class="bi bi-arrow-right"></i></button>
+        <button type="button" class="btn btn-outline-secondary" data-action="hidePanel" data-args='["@self"]'
+                title="Hide this panel" aria-label="Hide {{ TILE_LABELS[key] }}"><i class="bi bi-eye-slash"></i></button>
+      </span>
+      {{ TILES[key]() }}
     </div>
   </div>
-  <div class="col">
-    <div class="card text-center p-3">
-      <div class="h3 mb-0" id="online-count">
-        <span class="status-dot status-online"></span>
-        {{ servers|selectattr('status', 'equalto', 'online')|list|length }}
-      </div>
-      <div class="text-secondary small">Online</div>
-    </div>
-  </div>
-  <div class="col">
-    <div class="card text-center p-3">
-      <div class="h3 mb-0" id="offline-count">
-        <span class="status-dot status-offline"></span>
-        {{ servers|selectattr('status', 'equalto', 'offline')|list|length }}
-      </div>
-      <div class="text-secondary small">Offline</div>
-    </div>
-  </div>
-  <div class="col">
-    <div class="card text-center p-3">
-      <div class="h3 mb-0" id="total-players"><i class="bi bi-people-fill text-info"></i> {{ total_players }}{% if total_max %} / {{ total_max }}{% endif %}</div>
-      <div class="text-secondary small">Players Online</div>
-    </div>
-  </div>
-  <div class="col">
-    <div class="card text-center p-3">
-      <div class="h3 mb-0" id="host-summary"><i class="bi bi-cpu text-info"></i> <span class="text-secondary">—</span></div>
-      <div class="text-secondary small">Host CPU · RAM</div>
-    </div>
-  </div>
+  {% endfor %}
 </div>
+{% if tile_hidden %}
+<div class="mb-4 d-flex align-items-center gap-2 flex-wrap" id="dash-tiles-hidden">
+  <span class="text-secondary small">Hidden:</span>
+  {% for key in tile_hidden %}
+  <button type="button" class="btn btn-sm btn-outline-secondary" data-action="showPanel"
+          data-args='["dash_tiles","{{ key }}","@self"]' title="Show this panel again">
+    <i class="bi bi-eye"></i> {{ TILE_LABELS[key] }}
+  </button>
+  {% endfor %}
+</div>
+{% endif %}
 
 {% if can_control %}{{ bulk_bar('top') }}{% endif %}
 
@@ -474,6 +498,75 @@ function hostCards(){
 
 // Both orders are sent together on any change: they are one layout, the endpoint validates each
 // key independently, and sending both keeps them from drifting apart if a save is ever dropped.
+// ── Movable panels (the stat tiles today; any [data-region] container tomorrow) ─────────────────
+// A region is a container with data-region; its children carry data-panel="<key>". The SERVER
+// renders the saved order — this only moves the node for instant feedback and persists the result.
+function collectPanels(){
+  var panels = {}, hidden = {};
+  document.querySelectorAll('[data-region]').forEach(function(region){
+    var key = region.getAttribute('data-region');
+    panels[key] = Array.prototype.slice.call(region.querySelectorAll(':scope > [data-panel]'))
+      .map(function(el){ return el.getAttribute('data-panel'); });
+    // Hidden keys live on the restore bar, not in the region — they are not rendered at all.
+    var bar = document.getElementById(region.id + '-hidden');
+    hidden[key] = bar ? Array.prototype.slice.call(bar.querySelectorAll('[data-action="showPanel"]'))
+      .map(function(b){ return JSON.parse(b.getAttribute('data-args'))[1]; }) : [];
+  });
+  return {panels: panels, hidden: hidden};
+}
+
+window.movePanel = function(dir, btn){
+  var panel = btn.closest('[data-panel]');
+  var region = panel && panel.closest('[data-region]');
+  if (!region) return;
+  var sibs = Array.prototype.slice.call(region.querySelectorAll(':scope > [data-panel]'));
+  var at = sibs.indexOf(panel), to = at + (dir < 0 ? -1 : 1);
+  if (at < 0 || to < 0 || to >= sibs.length) return;
+  if (dir < 0) region.insertBefore(panel, sibs[to]);
+  else region.insertBefore(sibs[to], panel);
+  var keep = panel.querySelector('.panel-tools button:not([disabled])');
+  if (keep) keep.focus();
+  saveHostOrder();
+};
+
+// Hiding removes the node and drops a restore chip, so the next server render agrees with what the
+// user is looking at right now (the server skips hidden panels entirely).
+window.hidePanel = function(btn){
+  var panel = btn.closest('[data-panel]');
+  var region = panel && panel.closest('[data-region]');
+  if (!region) return;
+  var key = panel.getAttribute('data-panel');
+  var label = (panel.querySelector('.text-secondary.small') || {}).textContent || key;
+  var bar = document.getElementById(region.id + '-hidden');
+  if (!bar){
+    bar = document.createElement('div');
+    bar.id = region.id + '-hidden';
+    bar.className = 'mb-4 d-flex align-items-center gap-2 flex-wrap';
+    var lead = document.createElement('span');
+    lead.className = 'text-secondary small';
+    lead.textContent = 'Hidden:';
+    bar.appendChild(lead);
+    region.parentNode.insertBefore(bar, region.nextSibling);
+  }
+  var chip = document.createElement('button');
+  chip.type = 'button';
+  chip.className = 'btn btn-sm btn-outline-secondary';
+  chip.setAttribute('data-action', 'showPanel');
+  chip.setAttribute('data-args', JSON.stringify([region.getAttribute('data-region'), key, '@self']));
+  chip.title = 'Show this panel again';
+  chip.textContent = label.trim();
+  bar.appendChild(chip);
+  panel.remove();
+  saveHostOrder();
+};
+
+// Restoring needs the panel's markup back, which only the server has — so save first, then reload
+// once the save is acknowledged. Reloading before it lands would resurrect the old layout.
+window.showPanel = function(region, key, btn){
+  btn.remove();
+  saveHostOrder(function(){ location.reload(); });
+};
+
 function collectLayout(){
   var host_order = [], server_order = {};
   hostCards().forEach(function(card){
@@ -485,10 +578,14 @@ function collectLayout(){
       .map(function(tr){ return parseInt(tr.getAttribute('data-server-id'), 10); })
       .filter(function(n){ return !isNaN(n); });
   });
-  return {host_order: host_order, server_order: server_order};
+  var p = collectPanels();
+  return {host_order: host_order, server_order: server_order,
+          panels: p.panels, hidden: p.hidden};
 }
 
-function saveHostOrder(){
+// `then` runs only after the server has ACKNOWLEDGED the save — showPanel needs that, because it
+// reloads to get the restored panel's markup and a reload before the save lands would undo it.
+function saveHostOrder(then){
   clearTimeout(_orderSaveTimer);                 // one request per burst of clicks, not per click
   _orderSaveTimer = setTimeout(function(){
     fetch(MOUNT + '/api/account/ui-order', {
@@ -499,7 +596,7 @@ function saveHostOrder(){
       // r.ok first: an expired session answers 302 -> HTML login page and a CSRF failure answers
       // an HTML 400, either of which would explode inside r.json() and look like success.
       .then(function(r){ if(!r.ok) throw 0; return r.json(); })
-      .then(function(d){ if(!d || d.success === false) throw 0; })
+      .then(function(d){ if(!d || d.success === false) throw 0; if (then) then(); })
       .catch(function(){
         if (window.toast) toast('Could not save your layout — it will revert on reload.', 'danger');
       });
