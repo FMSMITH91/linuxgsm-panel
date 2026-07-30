@@ -48,6 +48,12 @@
       {% endif %}
     </div>
     {% endif %}
+    {# Editing controls stay out of the way until asked for — on a phone they used to sit on top of
+       every tile's value, and there is no hover to hide behind. #}
+    <button type="button" class="btn btn-sm btn-outline-secondary" data-action="toggleLayoutEdit"
+            aria-pressed="false" title="Show the controls for rearranging this page">
+      <i class="bi bi-grid-1x2"></i> <span data-edit-label>Customise</span>
+    </button>
     <span class="text-secondary small" id="refresh-indicator">
       <i class="bi bi-arrow-repeat"></i> Auto-refreshing
     </span>

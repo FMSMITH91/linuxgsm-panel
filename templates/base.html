@@ -307,17 +307,21 @@
     .tag-chip[style*="background-color"] { color: #0a0f1a; border-color: transparent; }
     .btn.tag-filter.active { background: var(--accent); border-color: var(--accent); color: #0a0f1a; }
 
-    /* ── MOVABLE PANELS ── the move/hide tools sit in the panel's corner and only appear on hover or
-       keyboard focus, so the dashboard stays clean but the controls are still reachable by Tab.
-       position:absolute inside a positioned card keeps them OUT of the flow: they must not shift the
-       panel's contents, because reflow after first paint is exactly what the CLS budget forbids. */
+    /* ── MOVABLE PANELS ──
+       Layout controls are HIDDEN during normal use and only appear in edit mode (the "Customise"
+       toggle sets .layout-edit on <body>). They used to reveal on hover, with a
+       @media (hover: none) rule making them permanent on touch — which put a row of buttons on top
+       of every stat tile's value on a phone. An explicit mode is the fix: no hover dependency, and
+       nothing to overlap when you are just reading the page. */
     .panel-movable { position: relative; }
-    .panel-tools { position: absolute; top: .25rem; right: .25rem; opacity: 0; transition: opacity .12s;
-                   z-index: 2; }
-    .panel-movable:hover .panel-tools, .panel-tools:focus-within { opacity: 1; }
+    .panel-tools, .host-move, .srv-move { display: none; }
+    body.layout-edit .panel-tools { display: inline-flex; }
+    body.layout-edit .host-move, body.layout-edit .srv-move { display: inline-flex; }
+    /* In flow, not overlaid: an absolutely-positioned strip is what collided with the content. The
+       card grows by a row of small buttons, which is acceptable inside an explicit editing mode. */
+    body.layout-edit .panel-tools { position: static; margin-bottom: .35rem; align-self: flex-end; }
     .panel-tools .btn { --bs-btn-padding-y: .05rem; --bs-btn-padding-x: .3rem; font-size: .7rem; }
-    /* Touch has no hover: show them permanently where hovering is impossible. */
-    @media (hover: none) { .panel-tools { opacity: 1; } }
+    body.layout-edit .panel-movable { outline: 1px dashed var(--border); outline-offset: 2px; }
 
     /* ── DRAG TO REORDER ── touch-action:none on the HANDLE only, so a touch drag reorders instead of
        scrolling the page, while the rest of the panel still scrolls normally. */
@@ -1133,6 +1137,30 @@ window.cursorFlash = function(msg, kind){
   setTimeout(function(){ el.style.transform = 'translateY(-18px)'; el.style.opacity = '0'; }, 850);
   setTimeout(function(){ el.remove(); }, 1500);
 };
+
+// ── Layout edit mode ────────────────────────────────────────────────────────────────────────────
+// Reordering controls are hidden until you ask for them. Kept in sessionStorage because hiding a
+// panel and restoring it reloads the page (a hidden panel is not rendered, so only the server has
+// its markup) — without this, restoring one would kick you out of edit mode mid-rearrange.
+window.layoutEditOn = function(){
+  try { return sessionStorage.getItem('layoutEdit') === '1'; } catch (e) { return false; }
+};
+window.applyLayoutEdit = function(){
+  var on = window.layoutEditOn();
+  document.body.classList.toggle('layout-edit', on);
+  document.querySelectorAll('[data-action="toggleLayoutEdit"]').forEach(function(btn){
+    btn.setAttribute('aria-pressed', on ? 'true' : 'false');
+    btn.classList.toggle('active', on);
+    var label = btn.querySelector('[data-edit-label]');
+    if (label) label.textContent = on ? (window.t ? t('Done') : 'Done')
+                                      : (window.t ? t('Customise') : 'Customise');
+  });
+};
+window.toggleLayoutEdit = function(){
+  try { sessionStorage.setItem('layoutEdit', window.layoutEditOn() ? '0' : '1'); } catch (e) {}
+  window.applyLayoutEdit();
+};
+document.addEventListener('DOMContentLoaded', function(){ window.applyLayoutEdit(); });
 
 // ── Drag-to-reorder ─────────────────────────────────────────────────────────────────────────────
 // POINTER events, not HTML5 drag-and-drop: HTML5 DnD emits nothing at all on touch, and its drop
