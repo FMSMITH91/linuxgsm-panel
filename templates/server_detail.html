@@ -75,7 +75,18 @@
 </ul>
 
 <!-- Connect address + live stats -->
-<div class="card mb-3" data-mtab="console">
+{% macro panel_controls() %}
+<div class="card mb-3 panel-movable" data-panel="controls" data-mtab="console">
+  <span class="panel-tools btn-group btn-group-sm" role="group" aria-label="Move or hide this panel">
+    <span class="btn btn-outline-secondary sort-handle" data-drag-handle aria-hidden="true"
+          title="Drag to reorder"><i class="bi bi-grip-vertical"></i></span>
+    <button type="button" class="btn btn-outline-secondary" data-action="movePanel" data-args='[-1,"@self"]'
+            title="Move up" aria-label="Move Controls up"><i class="bi bi-arrow-up"></i></button>
+    <button type="button" class="btn btn-outline-secondary" data-action="movePanel" data-args='[1,"@self"]'
+            title="Move down" aria-label="Move Controls down"><i class="bi bi-arrow-down"></i></button>
+    <button type="button" class="btn btn-outline-secondary" data-action="hidePanel" data-args='["@self"]'
+            title="Hide this panel" aria-label="Hide Controls"><i class="bi bi-eye-slash"></i></button>
+  </span>
   <div class="card-body">
     <div class="d-flex flex-wrap align-items-center justify-content-between gap-2 mb-3">
       <div class="d-flex align-items-center gap-2">
@@ -101,9 +112,21 @@
     <div class="mt-3" style="position:relative;height:150px;"><canvas id="stats-chart"></canvas></div>
   </div>
 </div>
+{% endmacro %}
 
 <!-- Live Console — full width in its own tab -->
-<div class="card mb-3" data-mtab="console">
+{% macro panel_console() %}
+<div class="card mb-3 panel-movable" data-panel="console" data-mtab="console">
+  <span class="panel-tools btn-group btn-group-sm" role="group" aria-label="Move or hide this panel">
+    <span class="btn btn-outline-secondary sort-handle" data-drag-handle aria-hidden="true"
+          title="Drag to reorder"><i class="bi bi-grip-vertical"></i></span>
+    <button type="button" class="btn btn-outline-secondary" data-action="movePanel" data-args='[-1,"@self"]'
+            title="Move up" aria-label="Move Console up"><i class="bi bi-arrow-up"></i></button>
+    <button type="button" class="btn btn-outline-secondary" data-action="movePanel" data-args='[1,"@self"]'
+            title="Move down" aria-label="Move Console down"><i class="bi bi-arrow-down"></i></button>
+    <button type="button" class="btn btn-outline-secondary" data-action="hidePanel" data-args='["@self"]'
+            title="Hide this panel" aria-label="Hide Console"><i class="bi bi-eye-slash"></i></button>
+  </span>
       <div class="card-header">
         <i class="bi bi-terminal-fill"></i> Live Console
         <span class="text-secondary small ms-2" id="ws-status">(connecting...)</span>
@@ -126,9 +149,21 @@
       </div>
       {% endif %}
 </div>
+{% endmacro %}
 
 <!-- Players + in-game moderation (Console tab) -->
-<div class="card mb-3" data-mtab="console" id="players-card" style="display:none;">
+{% macro panel_players() %}
+<div class="card mb-3 panel-movable" data-panel="players" data-mtab="console" id="players-card" style="display:none;">
+  <span class="panel-tools btn-group btn-group-sm" role="group" aria-label="Move or hide this panel">
+    <span class="btn btn-outline-secondary sort-handle" data-drag-handle aria-hidden="true"
+          title="Drag to reorder"><i class="bi bi-grip-vertical"></i></span>
+    <button type="button" class="btn btn-outline-secondary" data-action="movePanel" data-args='[-1,"@self"]'
+            title="Move up" aria-label="Move Players up"><i class="bi bi-arrow-up"></i></button>
+    <button type="button" class="btn btn-outline-secondary" data-action="movePanel" data-args='[1,"@self"]'
+            title="Move down" aria-label="Move Players down"><i class="bi bi-arrow-down"></i></button>
+    <button type="button" class="btn btn-outline-secondary" data-action="hidePanel" data-args='["@self"]'
+            title="Hide this panel" aria-label="Hide Players"><i class="bi bi-eye-slash"></i></button>
+  </span>
   <div class="card-header d-flex justify-content-between align-items-center flex-wrap gap-2">
     <span><i class="bi bi-people-fill"></i> Players <span class="text-secondary small" id="pl-count"></span></span>
     <button class="btn btn-sm btn-outline-secondary py-0 px-1" data-action="refreshPlayers" title="Refresh from the game console (runs one status)"><i class="bi bi-arrow-repeat"></i></button>
@@ -151,10 +186,22 @@
     {% endif %}
   </div>
 </div>
+{% endmacro %}
 
 {% if custom_commands %}
 <!-- Custom commands the current user may run on this server (assigned via their group) -->
-<div class="card mb-3" data-mtab="console" id="custom-cmd-card">
+{% macro panel_commands() %}
+<div class="card mb-3 panel-movable" data-panel="commands" data-mtab="console" id="custom-cmd-card">
+  <span class="panel-tools btn-group btn-group-sm" role="group" aria-label="Move or hide this panel">
+    <span class="btn btn-outline-secondary sort-handle" data-drag-handle aria-hidden="true"
+          title="Drag to reorder"><i class="bi bi-grip-vertical"></i></span>
+    <button type="button" class="btn btn-outline-secondary" data-action="movePanel" data-args='[-1,"@self"]'
+            title="Move up" aria-label="Move Commands up"><i class="bi bi-arrow-up"></i></button>
+    <button type="button" class="btn btn-outline-secondary" data-action="movePanel" data-args='[1,"@self"]'
+            title="Move down" aria-label="Move Commands down"><i class="bi bi-arrow-down"></i></button>
+    <button type="button" class="btn btn-outline-secondary" data-action="hidePanel" data-args='["@self"]'
+            title="Hide this panel" aria-label="Hide Commands"><i class="bi bi-eye-slash"></i></button>
+  </span>
   <div class="card-header"><i class="bi bi-terminal-fill"></i> Commands</div>
   <div class="card-body">
     <div class="d-flex flex-wrap gap-2 align-items-start">
@@ -176,16 +223,61 @@
     <div class="form-text mt-2">Run on the live console — granted to your group by an admin.</div>
   </div>
 </div>
+{% endmacro %}
 {% endif %}
 
 {% if server.game_type == 'gmod' %}
 <!-- GMod game content: mount CS:S etc. so maps/props render (missing content = ERROR textures) -->
-<div class="card mb-3" data-mtab="console" id="gmod-content-card">
+{% macro panel_content() %}
+<div class="card mb-3 panel-movable" data-panel="content" data-mtab="console" id="gmod-content-card">
+  <span class="panel-tools btn-group btn-group-sm" role="group" aria-label="Move or hide this panel">
+    <span class="btn btn-outline-secondary sort-handle" data-drag-handle aria-hidden="true"
+          title="Drag to reorder"><i class="bi bi-grip-vertical"></i></span>
+    <button type="button" class="btn btn-outline-secondary" data-action="movePanel" data-args='[-1,"@self"]'
+            title="Move up" aria-label="Move Game Content up"><i class="bi bi-arrow-up"></i></button>
+    <button type="button" class="btn btn-outline-secondary" data-action="movePanel" data-args='[1,"@self"]'
+            title="Move down" aria-label="Move Game Content down"><i class="bi bi-arrow-down"></i></button>
+    <button type="button" class="btn btn-outline-secondary" data-action="hidePanel" data-args='["@self"]'
+            title="Hide this panel" aria-label="Hide Game Content"><i class="bi bi-eye-slash"></i></button>
+  </span>
   <div class="card-header"><i class="bi bi-hdd-stack"></i> Game Content
     <span class="text-secondary small fw-normal">— mount CS:S &amp; other games so maps render</span></div>
   <div class="card-body">
     <div id="gmod-content-body" class="text-secondary small"><i class="bi bi-hourglass-split"></i> Loading…</div>
   </div>
+</div>
+{% endmacro %}
+{% endif %}
+
+{# ── Console-tab panels, emitted in THIS user's order ──────────────────────────────────────────
+   The declared list is built from the same conditions that define the macros above, so a stored key
+   can never reach a macro that was not defined — which is exactly what stops a saved layout
+   resurrecting a panel the user is not allowed to see. Dispatch is an explicit if/elif rather than a
+   key->macro dict, because a dict literal would have to name every macro including the ones that
+   only exist behind a guard. #}
+{% set panel_keys = ['controls', 'console', 'players'] %}
+{% if custom_commands %}{% set panel_keys = panel_keys + ['commands'] %}{% endif %}
+{% if server.game_type == 'gmod' %}{% set panel_keys = panel_keys + ['content'] %}{% endif %}
+{% set detail_visible, detail_hidden = panel_layout('detail_console', panel_keys) %}
+<div id="detail-console" data-region="detail_console">
+  {% for key in detail_visible %}
+  {% if key == 'controls' %}{{ panel_controls() }}
+  {% elif key == 'console' %}{{ panel_console() }}
+  {% elif key == 'players' %}{{ panel_players() }}
+  {% elif key == 'commands' %}{{ panel_commands() }}
+  {% elif key == 'content' %}{{ panel_content() }}
+  {% endif %}
+  {% endfor %}
+</div>
+{% if detail_hidden %}
+<div class="mb-3 d-flex align-items-center gap-2 flex-wrap" id="detail-console-hidden" data-mtab="console">
+  <span class="text-secondary small">Hidden:</span>
+  {% for key in detail_hidden %}
+  <button type="button" class="btn btn-sm btn-outline-secondary" data-action="showDetailPanel"
+          data-args='["detail_console","{{ key }}","@self"]' title="Show this panel again">
+    <i class="bi bi-eye"></i> {{ key|capitalize }}
+  </button>
+  {% endfor %}
 </div>
 {% endif %}
 
@@ -1152,5 +1244,85 @@ pollStats();   // self-schedules: ~8s while online, ~20s while offline, paused w
 document.addEventListener('visibilitychange', function(){ if (!document.hidden) pollStats(); });
 // Backup console refresh (websocket is primary) — respects your scroll position
 pollWhenVisible(function(){ refreshConsole(); }, 30000);
+
+// ── Per-user panel order for this page's Console tab ─────────────────────────────────────────────
+// Same shape as the dashboard: the SERVER renders the saved order, and these controls move the node
+// for instant feedback and persist the result. Scoped to one region, because the tab switcher drives
+// display on every [data-mtab] node and mixing tabs into one order would fight it.
+function saveDetailLayout(then){
+  var region = document.getElementById('detail-console');
+  if (!region) return;
+  var keys = Array.prototype.slice.call(region.querySelectorAll(':scope > [data-panel]'))
+    .map(function(el){ return el.getAttribute('data-panel'); });
+  var bar = document.getElementById('detail-console-hidden');
+  var hidden = bar ? Array.prototype.slice.call(bar.querySelectorAll('[data-action="showDetailPanel"]'))
+    .map(function(b){ return JSON.parse(b.getAttribute('data-args'))[1]; }) : [];
+  fetch(MOUNT + '/api/account/ui-order', {
+    method: 'POST', headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({panels: {detail_console: keys}, hidden: {detail_console: hidden}})
+  })
+    .then(function(r){ if(!r.ok) throw 0; return r.json(); })
+    .then(function(d){ if(!d || d.success === false) throw 0; if (then) then(); })
+    .catch(function(){
+      if (window.toast) toast('Could not save your layout — it will revert on reload.', 'danger');
+    });
+}
+
+// This page reuses the dashboard's action NAMES, so the handlers have to exist here too — they are
+// per-page by design (each page knows its own regions and save payload).
+window.movePanel = function(dir, btn){
+  var panel = btn.closest('[data-panel]');
+  var region = panel && panel.closest('[data-region]');
+  if (!region) return;
+  var sibs = Array.prototype.slice.call(region.querySelectorAll(':scope > [data-panel]'));
+  var at = sibs.indexOf(panel), to = at + (dir < 0 ? -1 : 1);
+  if (at < 0 || to < 0 || to >= sibs.length) return;
+  if (dir < 0) region.insertBefore(panel, sibs[to]);
+  else region.insertBefore(sibs[to], panel);
+  var keep = panel.querySelector('.panel-tools button:not([disabled])');
+  if (keep) keep.focus();
+  saveDetailLayout();
+};
+
+window.hidePanel = function(btn){
+  var panel = btn.closest('[data-panel]');
+  if (!panel) return;
+  var key = panel.getAttribute('data-panel');
+  var label = (panel.querySelector('.card-header') || {}).textContent || key;
+  var bar = document.getElementById('detail-console-hidden');
+  if (!bar){
+    bar = document.createElement('div');
+    bar.id = 'detail-console-hidden';
+    bar.className = 'mb-3 d-flex align-items-center gap-2 flex-wrap';
+    bar.setAttribute('data-mtab', 'console');   // or it would show on History/Details too
+    var lead = document.createElement('span');
+    lead.className = 'text-secondary small';
+    lead.textContent = 'Hidden:';
+    bar.appendChild(lead);
+    var region = document.getElementById('detail-console');
+    region.parentNode.insertBefore(bar, region.nextSibling);
+  }
+  var chip = document.createElement('button');
+  chip.type = 'button';
+  chip.className = 'btn btn-sm btn-outline-secondary';
+  chip.setAttribute('data-action', 'showDetailPanel');
+  chip.setAttribute('data-args', JSON.stringify(['detail_console', key, '@self']));
+  chip.textContent = label.trim().split('\n')[0] || key;
+  bar.appendChild(chip);
+  panel.remove();
+  saveDetailLayout();
+};
+
+// A hidden panel is not rendered at all, so restoring needs markup only the server has: save first,
+// reload on the acknowledgement.
+window.showDetailPanel = function(region, key, btn){
+  btn.remove();
+  saveDetailLayout(function(){ location.reload(); });
+};
+
+if (window.makeSortable) {
+  makeSortable(document.getElementById('detail-console'),
+               {itemSelector: '[data-panel]', axis: 'y', onDrop: saveDetailLayout});
+}
 </script>
 {% endblock %}

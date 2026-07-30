@@ -1052,6 +1052,60 @@ try:
     check("default: clearing it returns everyone to the built-in order",
           c.post("/api/settings/ui-default/clear").status_code == 200
           and _tile_order(_other.get("/").get_data(as_text=True))[0] == "total")
+    # ── server_detail console-tab panel order ─────────────────────────────────────────────────────
+    # The interesting property here is NEGATIVE: two of that page's panels only exist behind a
+    # condition (custom commands assigned; game_type == 'gmod'), so a stored key for one of them must
+    # render nothing at all. This smoke server has neither, which is exactly the case to assert.
+    def _detail_panels(html):
+        """Panel keys inside #detail-console, in render order. Walks div depth to find the region's
+        real end — a non-greedy match on '</div>' stops inside the FIRST card and silently reports
+        one panel, which makes every assertion built on it vacuous."""
+        i = html.find('id="detail-console"')
+        if i < 0:
+            return []
+        depth, j = 0, html.find(">", i) + 1
+        while j < len(html):
+            nxt_open, nxt_close = html.find("<div", j), html.find("</div>", j)
+            if nxt_close < 0:
+                break
+            if 0 <= nxt_open < nxt_close:
+                depth += 1
+                j = nxt_open + 4
+            else:
+                if depth == 0:
+                    break                      # this </div> closes the region itself
+                depth -= 1
+                j = nxt_close + 6
+        region = html[i:j]
+        return _re_d.findall(r'data-panel="([a-z_]+)"', region)
+
+    _det = c.get("/server/%d" % gs_id).get_data(as_text=True)
+    _det_default = _detail_panels(_det)
+    check("detail: the console panels render with keys",
+          _det_default == ["controls", "console", "players"], str(_det_default))
+    _dp = c.post("/api/account/ui-order",
+                 json={"panels": {"detail_console": ["players", "console", "controls"]}})
+    check("detail: saving the console panel order succeeds", _dp.status_code == 200)
+    check("detail: the saved order is rendered server-side",
+          _detail_panels(c.get("/server/%d" % gs_id).get_data(as_text=True))
+          == ["players", "console", "controls"])
+    # The safety property: 'commands' and 'content' are not declared for this server, so no stored
+    # value may summon them.
+    c.post("/api/account/ui-order",
+           json={"panels": {"detail_console": ["commands", "content", "controls", "console", "players"]}})
+    _det_evil = _detail_panels(c.get("/server/%d" % gs_id).get_data(as_text=True))
+    check("detail: a stored key for a gated panel renders NOTHING",
+          "commands" not in _det_evil and "content" not in _det_evil
+          and _det_evil == ["controls", "console", "players"], str(_det_evil))
+    # Hiding works the same as on the dashboard, and the restore bar is tab-scoped so it cannot leak
+    # onto the History/Details tabs.
+    c.post("/api/account/ui-order", json={"panels": {"detail_console": ["controls", "console", "players"]},
+                                          "hidden": {"detail_console": ["players"]}})
+    _det_hid = c.get("/server/%d" % gs_id).get_data(as_text=True)
+    check("detail: a hidden panel is not rendered", "players" not in _detail_panels(_det_hid))
+    check("detail: the restore bar is scoped to the console tab",
+          bool(_re_d.search(r'id="detail-console-hidden"[^>]*data-mtab="console"', _det_hid)))
+    c.post("/api/account/ui-order", json={"hidden": {"detail_console": []}})
     _lay_reset = c.post("/api/account/ui-order/reset")
     check("layout: reset returns success", _lay_reset.status_code == 200
           and (_lay_reset.get_json() or {}).get("success") is True)
