@@ -1015,6 +1015,14 @@ try:
           bool(_re_d.search(r'srv-move[^>]*>\s*<span[^>]*data-drag-handle', _drag_html)))
     # Assert the three bindings by their actual targets. A bare count would also match base.html's
     # own doc comment ("makeSortable(container, {...})"), which is inlined into every page.
+    # Pair each CALL with the DEFINITION: on its own, a call-site string proves only that the text
+    # exists — it would still pass if makeSortable had been renamed or deleted.
+    check("drag: makeSortable is actually defined on the page that calls it",
+          "window.makeSortable = function(container, opts)" in _drag_html)
+    check("drag: nested sortables cannot both claim one handle",
+          "handle.closest('[data-sortable]') !== container" in _drag_html)
+    check("drag: non-rendered siblings are skipped as drop targets",
+          "!el.getClientRects().length" in _drag_html)
     check("drag: the tile row is bound",
           "makeSortable(document.getElementById('dash-tiles')" in _drag_html)
     check("drag: the host-card region is bound",
@@ -1052,6 +1060,104 @@ try:
     check("default: clearing it returns everyone to the built-in order",
           c.post("/api/settings/ui-default/clear").status_code == 200
           and _tile_order(_other.get("/").get_data(as_text=True))[0] == "total")
+    # ── server_detail console-tab panel order ─────────────────────────────────────────────────────
+    # The interesting property here is NEGATIVE: two of that page's panels only exist behind a
+    # condition (custom commands assigned; game_type == 'gmod'), so a stored key for one of them must
+    # render nothing at all. This smoke server has neither, which is exactly the case to assert.
+    def _detail_panels(html):
+        """Panel keys inside #detail-console, in render order. Walks div depth to find the region's
+        real end — a non-greedy match on '</div>' stops inside the FIRST card and silently reports
+        one panel, which makes every assertion built on it vacuous."""
+        i = html.find('id="detail-console"')
+        if i < 0:
+            return []
+        depth, j = 0, html.find(">", i) + 1
+        while j < len(html):
+            nxt_open, nxt_close = html.find("<div", j), html.find("</div>", j)
+            if nxt_close < 0:
+                break
+            if 0 <= nxt_open < nxt_close:
+                depth += 1
+                j = nxt_open + 4
+            else:
+                if depth == 0:
+                    break                      # this </div> closes the region itself
+                depth -= 1
+                j = nxt_close + 6
+        region = html[i:j]
+        return _re_d.findall(r'data-panel="([a-z_]+)"', region)
+
+    _det = c.get("/server/%d" % gs_id).get_data(as_text=True)
+    _det_default = _detail_panels(_det)
+    check("detail: the console panels render with keys",
+          _det_default == ["controls", "console", "players"], str(_det_default))
+    _dp = c.post("/api/account/ui-order",
+                 json={"panels": {"detail_console": ["players", "console", "controls"]}})
+    check("detail: saving the console panel order succeeds", _dp.status_code == 200)
+    check("detail: the saved order is rendered server-side",
+          _detail_panels(c.get("/server/%d" % gs_id).get_data(as_text=True))
+          == ["players", "console", "controls"])
+    # The safety property: 'commands' and 'content' are not declared for this server, so no stored
+    # value may summon them.
+    c.post("/api/account/ui-order",
+           json={"panels": {"detail_console": ["commands", "content", "controls", "console", "players"]}})
+    _det_evil = _detail_panels(c.get("/server/%d" % gs_id).get_data(as_text=True))
+    check("detail: a stored key for a gated panel renders NOTHING",
+          "commands" not in _det_evil and "content" not in _det_evil
+          and _det_evil == ["controls", "console", "players"], str(_det_evil))
+    # Hiding works the same as on the dashboard, and the restore bar is tab-scoped so it cannot leak
+    # onto the History/Details tabs.
+    c.post("/api/account/ui-order", json={"panels": {"detail_console": ["controls", "console", "players"]},
+                                          "hidden": {"detail_console": ["players"]}})
+    _det_hid = c.get("/server/%d" % gs_id).get_data(as_text=True)
+    check("detail: a hidden panel is not rendered", "players" not in _detail_panels(_det_hid))
+    check("detail: the restore bar is scoped to the console tab",
+          bool(_re_d.search(r'id="detail-console-hidden"[^>]*data-mtab="console"', _det_hid)))
+    # Hiding the Controls panel removes the stats canvas. initChart() must survive that: it used to
+    # dereference the canvas unguarded, and the resulting TypeError aborted the REST of the inline
+    # script — including the handlers that undo a hide, so the page had no way back.
+    c.post("/api/account/ui-order", json={"panels": {"detail_console": ["controls", "console", "players"]},
+                                          "hidden": {"detail_console": ["controls"]}})
+    _no_ctrl = c.get("/server/%d" % gs_id).get_data(as_text=True)
+    check("detail: hiding Controls removes the stats canvas", 'id="stats-chart"' not in _no_ctrl)
+    check("detail: initChart is guarded against the missing canvas",
+          "var canvas = document.getElementById('stats-chart');\n  if (!canvas) return;" in _no_ctrl)
+    # "initChart();" (the CALL) — "function initChart() {" is a different string, so this anchors on
+    # the bootstrap, not the definition.
+    check("detail: the undo-a-hide handlers are defined BEFORE the bootstrap calls",
+          "initChart();" in _no_ctrl
+          and _no_ctrl.index("window.showDetailPanel = function") < _no_ctrl.index("initChart();"),
+          "showDetailPanel at %s, initChart() call at %s"
+          % (_no_ctrl.find("window.showDetailPanel = function"), _no_ctrl.find("initChart();")))
+    c.post("/api/account/ui-order", json={"hidden": {"detail_console": []}})
+    # Each page only knows its OWN regions, so the endpoint must merge rather than replace the map.
+    # Before this was fixed, saving on the dashboard deleted the server page's layout and vice versa.
+    c.post("/api/account/ui-order", json={"panels": {"detail_console": ["players", "console", "controls"]},
+                                          "declared": {"detail_console": ["controls", "console", "players"]}})
+    c.post("/api/account/ui-order", json={"panels": {"dash_tiles": ["host", "total", "online",
+                                                                    "offline", "players"]},
+                                          "declared": {"dash_tiles": ["total", "online", "offline",
+                                                                      "players", "host"]}})
+    with app.app_context():
+        _both = db.session.get(User, admin_id).get_ui_prefs().get("panels") or {}
+    check("regions: saving one page's layout does not wipe the other's",
+          _both.get("detail_console") == ["players", "console", "controls"]
+          and _both.get("dash_tiles", [""])[0] == "host", str(_both))
+    check("regions: the other page's order still renders",
+          _detail_panels(c.get("/server/%d" % gs_id).get_data(as_text=True))
+          == ["players", "console", "controls"])
+    # Within a region, keys the page could not have sent are preserved: a server without the gated
+    # Commands panel must not erase where that panel sits on servers that DO have it.
+    c.post("/api/account/ui-order", json={"panels": {"detail_console": ["commands", "controls",
+                                                                        "console", "players"]},
+                                          "declared": {"detail_console": ["controls", "console",
+                                                                          "players", "commands"]}})
+    c.post("/api/account/ui-order", json={"panels": {"detail_console": ["players", "controls", "console"]},
+                                          "declared": {"detail_console": ["controls", "console", "players"]}})
+    with app.app_context():
+        _kept = (db.session.get(User, admin_id).get_ui_prefs().get("panels") or {}).get("detail_console")
+    check("regions: a gated key the page never offered is kept, not erased",
+          "commands" in (_kept or []), str(_kept))
     _lay_reset = c.post("/api/account/ui-order/reset")
     check("layout: reset returns success", _lay_reset.status_code == 200
           and (_lay_reset.get_json() or {}).get("success") is True)

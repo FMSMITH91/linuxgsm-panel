@@ -1148,6 +1148,10 @@ window.cursorFlash = function(msg, kind){
 window.makeSortable = function(container, opts){
   if (!container || container._sortableBound) return;
   container._sortableBound = true;
+  // Marked so NESTED sortables can tell whose gesture a handle belongs to. On the dashboard
+  // #server-cards contains each host's tbody, and both are sortable: without this, one pointerdown
+  // on a row handle starts BOTH drags — the row reorders and its whole host card moves with it.
+  container.setAttribute('data-sortable', '');
   opts = opts || {};
   var ITEM = opts.itemSelector || '[data-panel]';
   var HANDLE = opts.handleSelector || '[data-drag-handle]';
@@ -1164,6 +1168,9 @@ window.makeSortable = function(container, opts){
     if (ev.button !== undefined && ev.button !== 0) return;
     var handle = ev.target.closest(HANDLE);
     if (!handle || !container.contains(handle)) return;
+    // The INNERMOST sortable owns the gesture. Without this the outer container also matches,
+    // because a row's handle is a descendant of both it and #server-cards.
+    if (handle.closest('[data-sortable]') !== container) return;
     var item = handle.closest(ITEM);
     if (!item || item.parentNode !== container) return;
     dragging = item; moved = false;
@@ -1187,8 +1194,15 @@ window.makeSortable = function(container, opts){
     var sibs = items();
     for (var i = 0; i < sibs.length; i++){
       var el = sibs[i];
-      if (el === dragging) continue;
+      // Skip anything not actually rendered. A display:none sibling (a row hidden by the search or
+      // tag filter) reports an ALL-ZERO rect, so its midpoint is 0 and "pointer past it" is true for
+      // every position on screen — it would swallow the very first pointermove as a drop target.
+      if (el === dragging || !el.getClientRects().length) continue;
       var r = el.getBoundingClientRect();
+      // On a wrapping grid (the stat tiles are row-cols-2 on phones) an x-axis compare alone matches
+      // tiles on OTHER rows, whose x ranges overlap. Require the pointer to be within this
+      // candidate's row before applying the horizontal test.
+      if (horizontal && (ev.clientY < r.top || ev.clientY > r.bottom)) continue;
       var mid = horizontal ? r.left + r.width / 2 : r.top + r.height / 2;
       var pos = horizontal ? ev.clientX : ev.clientY;
       var before = sibs.indexOf(dragging) > i;

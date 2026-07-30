@@ -536,7 +536,10 @@ function collectPanels(){
     hidden[key] = bar ? Array.prototype.slice.call(bar.querySelectorAll('[data-action="showPanel"]'))
       .map(function(b){ return JSON.parse(b.getAttribute('data-args'))[1]; }) : [];
   });
-  return {panels: panels, hidden: hidden};
+  // Every key this page rendered a control for, so the server can keep the ones it did not.
+  return {panels: panels, hidden: hidden,
+          declared: Object.keys(panels).reduce(function(acc, k){
+            acc[k] = panels[k].concat(hidden[k] || []); return acc; }, {})};
 }
 
 window.movePanel = function(dir, btn){
@@ -604,7 +607,7 @@ function collectLayout(){
   });
   var p = collectPanels();
   return {host_order: host_order, server_order: server_order,
-          panels: p.panels, hidden: p.hidden};
+          panels: p.panels, hidden: p.hidden, declared: p.declared};
 }
 
 // `then` runs only after the server has ACKNOWLEDGED the save — showPanel needs that, because it
