@@ -995,6 +995,29 @@ try:
     _evil = _tile_order(c.get("/").get_data(as_text=True))
     check("tiles: an unknown stored key renders no panel", "evil" not in _evil and len(_evil) == 5,
           str(_evil))
+    # Drag handles: the reorder LOGIC is JS (verified separately in a browser harness against the
+    # real makeSortable), but these assert the wiring exists — a handle with no makeSortable call, or
+    # a call with no handle, is a control that silently does nothing.
+    _drag_html = c.get("/").get_data(as_text=True)
+    import re as _re_d
+    check("drag: the stat tiles have a handle inside a data-panel item",
+          bool(_re_d.search(r'data-panel="\w+"[^>]*>\s*<div class="card[^"]*panel-movable"[^>]*>\s*'
+                            r'<span class="panel-tools[^"]*"[^>]*>\s*<span[^>]*data-drag-handle',
+                            _drag_html)))
+    check("drag: each host card header has a handle",
+          bool(_re_d.search(r'host-move[^>]*>\s*<span[^>]*data-drag-handle', _drag_html)))
+    check("drag: each server row has a handle",
+          bool(_re_d.search(r'srv-move[^>]*>\s*<span[^>]*data-drag-handle', _drag_html)))
+    # Assert the three bindings by their actual targets. A bare count would also match base.html's
+    # own doc comment ("makeSortable(container, {...})"), which is inlined into every page.
+    check("drag: the tile row is bound",
+          "makeSortable(document.getElementById('dash-tiles')" in _drag_html)
+    check("drag: the host-card region is bound",
+          "makeSortable(document.getElementById('server-cards')" in _drag_html)
+    check("drag: each host's row body is bound",
+          "makeSortable(tb, {itemSelector: 'tr[data-server-id]'" in _drag_html)
+    check("drag: handles are touch-safe and keyboard-neutral",
+          'class="btn btn-outline-secondary sort-handle" data-drag-handle aria-hidden="true"' in _drag_html)
     _lay_reset = c.post("/api/account/ui-order/reset")
     check("layout: reset returns success", _lay_reset.status_code == 200
           and (_lay_reset.get_json() or {}).get("success") is True)
