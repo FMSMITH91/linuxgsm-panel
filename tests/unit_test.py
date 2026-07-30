@@ -162,6 +162,37 @@ _up.set_ui_pref("host_order", None)
 check("ui_prefs: clearing a key restores the default (absent, not empty)",
       _up.get_ui_prefs() == {} and "host_order" not in (_up.ui_prefs or ""))
 
+# ── the install default layout: a superadmin's published arrangement sits UNDER each user's own, and
+# the merge is per-KEY so someone who only reordered their tiles still gets the house host order.
+from app import _effective_prefs as _ep
+_U = lambda prefs: NS(is_authenticated=True, get_ui_prefs=lambda: prefs)
+eq("default: no default and no user prefs -> nothing", _ep(_U({}), {}), {})
+eq("default: the install default applies when the user has none",
+   _ep(_U({}), {"default_ui_prefs": {"host_order": [2, 1]}}), {"host_order": [2, 1]})
+eq("default: the user's own key wins over the default",
+   _ep(_U({"host_order": [1, 2]}), {"default_ui_prefs": {"host_order": [2, 1]}}),
+   {"host_order": [1, 2]})
+eq("default: merge is per-key, not all-or-nothing",
+   _ep(_U({"panels": {"dash_tiles": ["host"]}}),
+       {"default_ui_prefs": {"host_order": [2, 1], "panels": {"dash_tiles": ["total"]}}}),
+   {"host_order": [2, 1], "panels": {"dash_tiles": ["host"]}})
+eq("default: a non-whitelisted key in the published default is ignored",
+   _ep(_U({}), {"default_ui_prefs": {"host_order": [1], "evil": "x"}}), {"host_order": [1]})
+eq("default: a junk default is ignored", _ep(_U({}), {"default_ui_prefs": "nope"}), {})
+eq("default: an anonymous visitor still gets the house layout",
+   _ep(NS(is_authenticated=False), {"default_ui_prefs": {"host_order": [3]}}), {"host_order": [3]})
+
+
+class _BoomPrefs:
+    is_authenticated = True
+
+    def get_ui_prefs(self):
+        raise RuntimeError("db gone")
+
+
+eq("default: a failure reading user prefs falls back to the house layout, no raise",
+   _ep(_BoomPrefs(), {"default_ui_prefs": {"host_order": [9]}}), {"host_order": [9]})
+
 # ── movable panels: _panel_layout decides what a page renders and in what order. The safety property
 # is that it can only ever return keys the PAGE declared — several panels are permission-gated, so a
 # stored key must never be able to conjure one.

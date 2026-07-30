@@ -904,6 +904,11 @@ try:
         import re as _re_l
         return [int(m) for m in _re_l.findall(r'server-remote-card"\s+data-remote-id="(\d+)"', html)]
 
+    # Deterministic baseline. A previous run that died mid-section can leave a published default in
+    # config.json (which this suite only deletes if it created the file), and that would silently
+    # redefine what "the default order" means for every check below.
+    c.post("/api/settings/ui-default/clear")
+    c.post("/api/account/ui-order/reset")
     _lay_default = _card_order(c.get("/").get_data(as_text=True))
     # ≥2 rather than ==2: the perf section above seeds extra hosts, and reordering has to work on
     # whatever is actually there.
@@ -1018,6 +1023,35 @@ try:
           "makeSortable(tb, {itemSelector: 'tr[data-server-id]'" in _drag_html)
     check("drag: handles are touch-safe and keyboard-neutral",
           'class="btn btn-outline-secondary sort-handle" data-drag-handle aria-hidden="true"' in _drag_html)
+    # ── The install default: a superadmin publishes their layout, OTHER accounts inherit it ───────
+    # The point of the feature is cross-account, so it is asserted with a second client.
+    c.post("/api/account/ui-order", json={"panels": {"dash_tiles": ["host", "total", "online",
+                                                                    "offline", "players"]}})
+    _pub = c.post("/api/settings/ui-default")
+    check("default: a superadmin can publish their layout", _pub.status_code == 200,
+          _pub.get_data(as_text=True)[:120])
+    # smoke_mr, not smoke_deleg: the latter has no server access, so its dashboard renders the
+    # empty-state with no tiles to order at all.
+    _other = client_as(mru_id)            # a non-superadmin with server access, no layout of its own
+    check("default: another account inherits the published order",
+          _tile_order(_other.get("/").get_data(as_text=True))[0] == "host",
+          str(_tile_order(_other.get("/").get_data(as_text=True))))
+    # ...but a user's own arrangement still wins over the house one.
+    _other.post("/api/account/ui-order", json={"panels": {"dash_tiles": ["players", "total"]}})
+    check("default: a user's own layout beats the published default",
+          _tile_order(_other.get("/").get_data(as_text=True))[0] == "players")
+    # Resetting returns them to the HOUSE layout, not to bare defaults — the whole reason an admin
+    # publishes one.
+    _other.post("/api/account/ui-order/reset")
+    check("default: reset lands on the house layout, not the built-in order",
+          _tile_order(_other.get("/").get_data(as_text=True))[0] == "host")
+    check("default: publishing is superadmin-only",
+          _other.post("/api/settings/ui-default").status_code == 403)
+    check("default: clearing is superadmin-only",
+          _other.post("/api/settings/ui-default/clear").status_code == 403)
+    check("default: clearing it returns everyone to the built-in order",
+          c.post("/api/settings/ui-default/clear").status_code == 200
+          and _tile_order(_other.get("/").get_data(as_text=True))[0] == "total")
     _lay_reset = c.post("/api/account/ui-order/reset")
     check("layout: reset returns success", _lay_reset.status_code == 200
           and (_lay_reset.get_json() or {}).get("success") is True)

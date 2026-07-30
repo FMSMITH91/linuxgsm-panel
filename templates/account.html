@@ -38,6 +38,20 @@
               {% if not has_custom_layout %}disabled{% endif %}>
         <i class="bi bi-arrow-counterclockwise"></i> Reset to the default order
       </button>
+      {% if current_user.is_superadmin %}
+      <hr class="my-3">
+      <p class="text-secondary small mb-2">As a superadmin you can publish your arrangement as this panel's default, so new accounts — and anyone who resets — start from it instead of the built-in order.</p>
+      <div class="d-flex gap-2 flex-wrap">
+        <button class="btn btn-outline-primary btn-sm" data-action="publishDashLayout" data-args='["@self"]'
+                {% if not has_custom_layout %}disabled title="Arrange your own layout first"{% endif %}>
+          <i class="bi bi-broadcast-pin"></i> Publish mine as the default
+        </button>
+        <button class="btn btn-outline-secondary btn-sm" data-action="clearDashDefault" data-args='["@self"]'
+                {% if not install_default_layout %}disabled{% endif %}>
+          <i class="bi bi-x-circle"></i> Remove the panel default
+        </button>
+      </div>
+      {% endif %}
     </div>
   </div>
 
@@ -189,6 +203,42 @@
   // for DOMContentLoaded (footer scripts have run by then) before the first fetch, or MOUNT is blank.
   if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', load);
   else load();
+
+  // Publish this superadmin's own layout as the panel default. Confirmed because it changes what
+  // every OTHER account sees on reset (and what new accounts start from).
+  window.publishDashLayout = function(btn){
+    confirmDialog({title:'Publish as the panel default', icon:'broadcast-pin',
+      confirmClass:'btn-primary', confirmLabel:'Publish default',
+      bodyText:'Make your current dashboard arrangement the default for this panel? New accounts '
+             + 'start from it, and anyone who resets their layout returns to it. Users who have '
+             + 'arranged their own layout keep theirs.',
+      onConfirm:function(){
+        fetch(mp() + '/api/settings/ui-default', {method:'POST'})
+          .then(function(r){ return r.json().then(function(d){ return {ok:r.ok, d:d}; }); })
+          .then(function(res){
+            if(!res.ok || !res.d || res.d.success === false) throw new Error((res.d && res.d.message) || '');
+            if(window.toast) toast('This is now the panel default.', 'success');
+          })
+          .catch(function(e){ if(window.toast) toast(e.message || 'Could not publish the default', 'danger'); });
+      }});
+  };
+
+  window.clearDashDefault = function(btn){
+    confirmDialog({title:'Remove the panel default', icon:'x-circle', confirmClass:'btn-warning',
+      confirmLabel:'Remove default',
+      bodyText:'Remove this panel’s default layout? Accounts without their own arrangement go '
+             + 'back to the built-in order. Nobody’s personal layout is affected.',
+      onConfirm:function(){
+        fetch(mp() + '/api/settings/ui-default/clear', {method:'POST'})
+          .then(function(r){ if(!r.ok) throw 0; return r.json(); })
+          .then(function(d){
+            if(!d || d.success === false) throw 0;
+            if(btn) btn.disabled = true;
+            if(window.toast) toast('Panel default removed.', 'success');
+          })
+          .catch(function(){ if(window.toast) toast('Could not remove the default', 'danger'); });
+      }});
+  };
 
   // Discard this user's saved dashboard order. Confirmed first: it is not recoverable, and on a
   // busy install the order may have taken real effort to arrange.
