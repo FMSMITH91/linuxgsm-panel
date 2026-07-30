@@ -129,6 +129,14 @@
               {% if server_names.get(gs.id) %}<span class="text-info d-block text-truncate" style="font-size:.7rem;max-width:22ch;" title="In-game server name (what players see)">{{ server_names.get(gs.id) }}</span>{% endif %}
               <span class="text-secondary d-block" style="font-size:.7rem;">{{ gs.short_name }}</span>
               <span class="text-secondary d-none" id="msrv-map-{{ gs.id }}" style="font-size:.7rem;" title="Current map"></span>
+              {# Rebuilt in place after an assignment, so it must be addressable. data-no-i18n for the
+                 same reason as the dashboard chips: these names are user-authored. #}
+              <span class="d-block mt-1 srv-tags" id="msrv-tags-{{ gs.id }}" data-no-i18n>
+                {% for tag in gs.tags|sort(attribute='name') %}
+                <span class="badge tag-chip" data-tag-id="{{ tag.id }}" data-no-i18n
+                      {% if tag.color %}style="background-color: {{ tag.color }};"{% endif %}>{{ tag.name }}</span>
+                {% endfor %}
+              </span>
             </td>
             <td class="d-none d-md-table-cell">{{ gs.game_display or gs.game_type }}</td>
             <td>
@@ -174,6 +182,11 @@
                  {% if gs.installed %}href="{{ url_for('server_files', server_id=gs.id) }}" class="btn btn-sm btn-outline-secondary" title="Edit config & browse/upload files"{% else %}class="btn btn-sm btn-outline-secondary disabled" tabindex="-1" aria-disabled="true" title="Available once the server finishes installing"{% endif %}>
                 <i class="bi bi-folder2-open"></i> <span class="d-none d-md-inline">Files &amp; Config</span>
               </a>
+              {% if can_edit_tags %}
+              <button type="button" class="btn btn-sm btn-outline-secondary" data-action="editServerTags"
+                      data-args='[{{ gs.id }}, "@self"]' title="Choose which tags this server carries"
+                      aria-label="Edit tags for {{ gs.name }}"><i class="bi bi-tags"></i></button>
+              {% endif %}
               {# In-app confirm + AJAX uninstall (no page reload); the row is removed on success.
                  Disabled mid-install — uninstalling would delete the user/files out from under the
                  running install. watchInstall/stopInstall re-enables it when the install ends. #}
@@ -209,6 +222,35 @@
     {% endif %}
   </div>
 </div>
+
+{% if can_edit_tags %}
+<div class="card mt-3">
+  <div class="card-header"><i class="bi bi-tags-fill"></i> Tags</div>
+  <div class="card-body">
+    <p class="text-secondary small mb-3">Labels shared by everyone on this panel, for grouping and filtering servers. Filter the dashboard by a tag and act on the whole group at once. A muted tag keeps its servers out of the alert channel without turning the alert off for everything else.</p>
+    <div class="d-flex gap-2 flex-wrap align-items-end mb-3">
+      <div>
+        <label class="form-label small mb-1" for="tag-name">Name</label>
+        <input type="text" id="tag-name" class="form-control form-control-sm" style="width:190px;"
+               maxlength="32" placeholder="production" autocomplete="off">
+      </div>
+      <div>
+        <label class="form-label small mb-1" for="tag-color">Colour</label>
+        <input type="color" id="tag-color" class="form-control form-control-color form-control-sm"
+               value="#4c8bf5" title="Chip colour">
+      </div>
+      <div class="form-check ms-1 mb-1">
+        <input class="form-check-input" type="checkbox" id="tag-notify" checked>
+        <label class="form-check-label small" for="tag-notify">Send alerts for these servers</label>
+      </div>
+      <button class="btn btn-primary btn-sm" data-action="createTag" data-args='["@self"]'>
+        <i class="bi bi-plus-lg"></i> Add tag
+      </button>
+    </div>
+    <div id="tag-list" class="d-flex flex-column gap-2" data-no-i18n></div>
+  </div>
+</div>
+{% endif %}
 
 {% endblock %}
 
@@ -619,6 +661,176 @@ window.afterServerRefresh = function(){
   // Called by afterServerRefresh after a full #servers-list re-render, to re-box if grouping is on.
   window.regroupAfterRefresh = function(){ if (grpOn()) buildBoxes(); };
   carets();   // reflect the server-side default (host order)
+})();
+
+// ── Tags: install-wide labels, created here and assigned per server ─────────────────────────────
+// Every tag name that reaches the DOM goes through textContent, never innerHTML: the names are
+// user-authored and this page has no other escaping layer. (window.escapeHtml exists for innerHTML
+// sinks, but not building one at all is the stronger guarantee.)
+(function(){
+  var TAGS = [];                      // last known tag list, from /api/tags
+
+  function mp(){ return window.MOUNT || ''; }
+
+  function chip(tag){
+    var el = document.createElement('span');
+    el.className = 'badge tag-chip';
+    el.setAttribute('data-tag-id', tag.id);
+    el.setAttribute('data-no-i18n', '');
+    if (tag.color) el.style.backgroundColor = tag.color;
+    el.textContent = tag.name;
+    return el;
+  }
+
+  // One row per tag: chip, how many servers carry it, whether it mutes alerts, and Delete.
+  function renderTagList(){
+    var box = document.getElementById('tag-list');
+    if (!box) return;
+    box.textContent = '';
+    if (!TAGS.length){
+      var empty = document.createElement('span');
+      empty.className = 'text-secondary small';
+      empty.textContent = 'No tags yet. Add one above, then use the tag button on a server row.';
+      box.appendChild(empty);
+      return;
+    }
+    TAGS.forEach(function(tag){
+      var row = document.createElement('div');
+      row.className = 'd-flex align-items-center gap-2';
+      row.appendChild(chip(tag));
+      var meta = document.createElement('span');
+      meta.className = 'text-secondary small';
+      meta.textContent = (tag.server_ids || []).length + ' server(s)'
+                         + (tag.notify ? '' : ' · alerts muted');
+      row.appendChild(meta);
+      var del = document.createElement('button');
+      del.className = 'btn btn-sm btn-link text-danger text-decoration-none ms-auto';
+      del.type = 'button';
+      del.textContent = 'Delete';
+      del.addEventListener('click', function(){ deleteTag(tag); });
+      row.appendChild(del);
+      box.appendChild(row);
+    });
+  }
+
+  function loadTags(then){
+    fetch(mp() + '/api/tags', {cache: 'no-store'})
+      .then(function(r){ if(!r.ok) throw 0; return r.json(); })
+      .then(function(d){ TAGS = (d && d.tags) || []; renderTagList(); if (then) then(); })
+      .catch(function(){ if (window.toast) toast('Could not load tags', 'danger'); });
+  }
+
+  window.createTag = function(btn){
+    var nameEl = document.getElementById('tag-name');
+    var name = (nameEl.value || '').trim();
+    if (!name){ nameEl.focus(); return; }
+    btn.disabled = true;
+    fetch(mp() + '/api/tags', {
+      method: 'POST', headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({name: name,
+                            color: document.getElementById('tag-color').value,
+                            notify: document.getElementById('tag-notify').checked})
+    })
+      .then(function(r){ return r.json().then(function(d){ return {ok: r.ok, d: d}; }); })
+      .then(function(res){
+        if (!res.ok || !res.d || res.d.success === false){
+          // Surface the server's own message: "already exists" and a rejected name are both
+          // things the user can fix, so a generic failure toast would be useless here.
+          throw new Error((res.d && res.d.message) || 'Could not create that tag');
+        }
+        nameEl.value = '';
+        loadTags();
+        if (window.toast) toast('Tag created', 'success');
+      })
+      .catch(function(err){ if (window.toast) toast(err.message || 'Could not create that tag', 'danger'); })
+      .then(function(){ btn.disabled = false; });
+  };
+
+  function deleteTag(tag){
+    confirmDialog({title: 'Delete tag', icon: 'tags', confirmClass: 'btn-danger',
+      confirmLabel: 'Delete tag',
+      bodyText: 'Delete this tag and remove it from every server that carries it? The servers '
+                + 'themselves are not touched.',
+      onConfirm: function(){
+        fetch(mp() + '/api/tags/' + tag.id + '/delete', {method: 'POST'})
+          .then(function(r){ if(!r.ok) throw 0; return r.json(); })
+          .then(function(d){
+            if (!d || d.success === false) throw 0;
+            // Drop its chips from every row without a reload.
+            document.querySelectorAll('.srv-tags .tag-chip[data-tag-id="' + tag.id + '"]')
+              .forEach(function(el){ el.remove(); });
+            loadTags();
+            if (window.toast) toast('Tag deleted', 'success');
+          })
+          .catch(function(){ if (window.toast) toast('Could not delete that tag', 'danger'); });
+      }});
+  }
+
+  // Assignment: a checkbox per tag, current state pre-ticked, saved as the whole set.
+  window.editServerTags = function(serverId, btn){
+    var row = btn.closest('tr');
+    var nameCell = row ? row.querySelector('strong') : null;
+    loadTags(function(){
+      if (!TAGS.length){
+        if (window.toast) toast('Create a tag first — the form is below the server list.', 'info');
+        return;
+      }
+      // Pre-tick from the JUST-FETCHED membership, not from the chips in the row: the row can be
+      // stale (another admin tagged this server since page load), and because saving REPLACES the
+      // whole set, a stale unticked box would silently delete their change.
+      var have = {}, holder = document.getElementById('msrv-tags-' + serverId);
+      TAGS.forEach(function(tag){
+        if ((tag.server_ids || []).indexOf(serverId) !== -1) have[tag.id] = true;
+      });
+      // Same reason: repaint the row's chips from authoritative data before the dialog opens.
+      if (holder){
+        holder.textContent = '';
+        TAGS.filter(function(t){ return have[t.id]; }).forEach(function(t){ holder.appendChild(chip(t)); });
+      }
+      var body = document.createElement('div');
+      TAGS.forEach(function(tag){
+        var line = document.createElement('div');
+        line.className = 'form-check';
+        var cb = document.createElement('input');
+        cb.className = 'form-check-input'; cb.type = 'checkbox';
+        cb.id = 'tagcb-' + tag.id; cb.value = tag.id; cb.checked = !!have[tag.id];
+        var lab = document.createElement('label');
+        lab.className = 'form-check-label'; lab.setAttribute('for', cb.id);
+        lab.setAttribute('data-no-i18n', '');
+        lab.textContent = tag.name + (tag.notify ? '' : ' (alerts muted)');
+        line.appendChild(cb); line.appendChild(lab);
+        body.appendChild(line);
+      });
+      confirmDialog({title: 'Tags for ' + (nameCell ? nameCell.textContent : 'this server'),
+        icon: 'tags', confirmClass: 'btn-primary', confirmLabel: 'Save tags', bodyNode: body,
+        onConfirm: function(){
+          var ids = Array.prototype.slice.call(body.querySelectorAll('input:checked'))
+                         .map(function(cb){ return Number(cb.value); });
+          fetch(mp() + '/api/server/' + serverId + '/tags', {
+            method: 'POST', headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({tag_ids: ids})
+          })
+            .then(function(r){ if(!r.ok) throw 0; return r.json(); })
+            .then(function(d){
+              if (!d || d.success === false) throw 0;
+              if (holder){
+                holder.textContent = '';
+                (d.tags || []).slice().sort(function(a, b){ return a.name.localeCompare(b.name); })
+                  .forEach(function(t){ holder.appendChild(chip(t)); });
+              }
+              loadTags();
+              if (window.toast) toast('Tags saved', 'success');
+            })
+            .catch(function(){ if (window.toast) toast('Could not save those tags', 'danger'); });
+        }});
+    });
+  };
+
+  // MOUNT is set by base.html's footer, after this block is parsed.
+  if (document.getElementById('tag-list')){
+    if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', function(){ loadTags(); });
+    else loadTags();
+  }
 })();
 </script>
 {% endblock %}

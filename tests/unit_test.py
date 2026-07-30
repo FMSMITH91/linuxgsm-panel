@@ -162,6 +162,43 @@ _up.set_ui_pref("host_order", None)
 check("ui_prefs: clearing a key restores the default (absent, not empty)",
       _up.get_ui_prefs() == {} and "host_order" not in (_up.ui_prefs or ""))
 
+# ── tags: the name charset is pinned at the DATA layer, so no route can store one that would need
+# escaping to be safe in HTML, in a filter key, or in alert text.
+_TagM = __import__("models").ServerTag
+for _good in ("production", "PvE", "source games", "cs-1.6", "v2.0_beta", "A"):
+    try:
+        _TagM(name=_good)
+        _ok = True
+    except ValueError:
+        _ok = False
+    check("tag name accepted: %r" % _good, _ok)
+for _bad in ("<script>", "drop; table", "tag'name", 'tag"name', " leading", "", "x" * 33,
+             "emoji🎮", "back\\slash", "semi;colon"):
+    try:
+        _TagM(name=_bad)
+        _rej = False
+    except ValueError:
+        _rej = True
+    check("tag name rejected: %r" % _bad, _rej)
+# _alerts_muted: any tag saying "don't alert" wins, and it must never raise inside a poller thread.
+from app import _alerts_muted as _am
+_tg = lambda n: NS(notify=n)
+check("mute: no tags -> not muted", _am(NS(tags=[], short_name="s")) is False)
+check("mute: all tags notify -> not muted", _am(NS(tags=[_tg(True), _tg(True)], short_name="s")) is False)
+check("mute: one muting tag wins", _am(NS(tags=[_tg(True), _tg(False)], short_name="s")) is True)
+check("mute: None tags -> not muted", _am(NS(tags=None, short_name="s")) is False)
+
+
+class _BoomTags:
+    short_name = "boom"
+
+    @property
+    def tags(self):
+        raise RuntimeError("db gone")
+
+
+check("mute: a failure fails OPEN (alert still sent, no raise)", _am(_BoomTags()) is False)
+
 # ── transports must decode leniently: command output is GAME SERVER output (player names, mod
 # chatter, latin-1 logs), so it is not guaranteed valid UTF-8. A strict decode raises inside
 # subprocess, gets swallowed by the generic handler, and returns ("", ..., -1) — a caller then

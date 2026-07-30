@@ -379,6 +379,9 @@ class GameServer(db.Model):
     created_at = db.Column(db.DateTime, default=datetime.utcnow)
     remote = db.relationship("RemoteServer", back_populates="games")
     groups = db.relationship("Group", secondary=group_game_servers, back_populates="game_servers")
+    # Install-wide labels. Eager-loaded where it's rendered in a loop (see get_user_servers) —
+    # lazily it is one query per server and the dashboard has an asserted query budget.
+    tags = db.relationship("ServerTag", secondary="game_server_tags", back_populates="servers")
 
     @validates("short_name", "game_type")
     def _validate_ident(self, key, value):
@@ -484,6 +487,39 @@ class CustomCommand(db.Model):
     def effective_pattern(self):
         """The regex an operator-supplied argument must match. Falls back to the safe default."""
         return self.argument_pattern or CUSTOM_ARG_DEFAULT_PATTERN
+
+
+class ServerTag(db.Model):
+    """An install-wide label for grouping game servers (e.g. "PvE", "modded", "production").
+
+    Shared by every user rather than per-user: a tag describes the SERVER, and tag-driven bulk
+    actions and notification routing only mean anything against one common vocabulary. Editing is
+    gated on MANAGE_SERVERS; reading is not. Which tags a given user is filtering by is a separate,
+    personal thing and belongs in User.ui_prefs, not here."""
+    id = db.Column(db.Integer, primary_key=True)
+    name = db.Column(db.String(32), unique=True, nullable=False)
+    color = db.Column(db.String(7), default="")   # "#rrggbb", or "" for the default chip colour
+    notify = db.Column(db.Boolean, default=True)  # False = suppress alerts for servers with this tag
+    created_by = db.Column(db.String(80), default="")
+    created_at = db.Column(db.DateTime, default=datetime.utcnow)
+    servers = db.relationship("GameServer", secondary="game_server_tags", back_populates="tags")
+
+    @validates("name")
+    def _validate_tag_name(self, key, value):
+        # A tag name is rendered into HTML, used as a filter key, and shown in alert text. Pin the
+        # charset at the DATA layer so no route can store one that needs escaping to be safe.
+        if value is not None and not re.match(r"^[A-Za-z0-9][A-Za-z0-9 _.\-]{0,31}$", value or ""):
+            raise ValueError("A tag name must start with a letter or number and use only "
+                             "letters, numbers, spaces, dots, hyphens or underscores.")
+        return value
+
+
+# Association: which install-wide tags a game server carries.
+game_server_tags = db.Table(
+    "game_server_tags",
+    db.Column("tag_id", db.Integer, db.ForeignKey("server_tag.id"), primary_key=True),
+    db.Column("game_server_id", db.Integer, db.ForeignKey("game_server.id"), primary_key=True),
+)
 
 
 class GlobalBan(db.Model):

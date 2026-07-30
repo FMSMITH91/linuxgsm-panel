@@ -300,6 +300,12 @@
     .badge.bg-success { background: var(--accent) !important; color: #0a0f1a !important; }
     .badge.bg-danger { background: var(--danger) !important; color: #0a0f1a !important; }
     .badge.bg-warning { background: var(--warning) !important; color: #0a0f1a !important; }
+    /* Tag chips. Default (uncoloured) is a muted outline so a wall of tags never out-shouts the
+       status badges next to it; a custom colour gets dark text for the same AA contrast reason. */
+    .tag-chip { background: transparent; border: 1px solid var(--border); color: var(--text-muted, #9aa4b2);
+                font-weight: 500; margin-right: .25rem; }
+    .tag-chip[style*="background-color"] { color: #0a0f1a; border-color: transparent; }
+    .btn.tag-filter.active { background: var(--accent); border-color: var(--accent); color: #0a0f1a; }
 
     /* ── TABS ── (underline style that fits the dark theme, not Bootstrap's pale card tab) */
     .nav-tabs { border-bottom: 1px solid var(--border); gap: .15rem; }
@@ -885,6 +891,7 @@ window.toast = function(msg, kind){
 //                    dialog STAYS OPEN so the caller can verify server-side, then call api.close()
 //                    on success or api.error('…') to re-prompt. onConfirm(value, api).
 //   requireLabel: label shown above the input.
+//   bodyNode:     a DOM node to place in the body instead of text (interactive dialog content).
 // Dismiss via Cancel / backdrop / Esc; only Confirm runs onConfirm.
 window.confirmDialog = function(opts){
   opts = opts || {};
@@ -912,6 +919,19 @@ window.confirmDialog = function(opts){
   // Plain-text body: assign via textContent (never innerHTML) so a caller may pass untrusted
   // text (e.g. a form's data-confirm value) with zero HTML-injection risk.
   if (opts.bodyText != null) { var _cb = ov.querySelector('[data-cd-body]'); if (_cb) _cb.textContent = opts.bodyText; }
+  // bodyNode: an already-built DOM node (e.g. a list of checkboxes). Appended, never serialised, so
+  // a caller that needs interactive content in the dialog does not have to reach for `body` (raw
+  // HTML) and hand-escape user-authored text into it.
+  if (opts.bodyNode) {
+    var _cn = ov.querySelector('[data-cd-body]');
+    if (_cn) {
+      _cn.textContent = '';
+      // Cap and scroll it: the overlay is a centred fixed flex box, so content taller than the
+      // viewport overflows BOTH edges with no scrollbar — putting Confirm out of reach entirely.
+      _cn.style.cssText = 'white-space:normal;max-height:50vh;overflow-y:auto;';
+      _cn.appendChild(opts.bodyNode);
+    }
+  }
   var input = ov.querySelector('#cd-input'), okBtn = ov.querySelector('[data-cd="ok"]'),
       errEl = ov.querySelector('#cd-err'), okHtml = okBtn.innerHTML;
   function close(){ ov.remove(); document.removeEventListener('keydown', onKey); }

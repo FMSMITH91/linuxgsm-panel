@@ -528,6 +528,21 @@ _server_peak_notified = {}   # server_id -> ts of the last new-record alert (rat
 _PEAK_NOTIFY_INTERVAL = 3600  # at most one "new record" alert per server per hour
 
 
+def _alerts_muted(gs):
+    """True when one of this server's tags is marked "don't alert" (ServerTag.notify=False) — how a
+    tag like "test" or "staging" keeps a noisy box out of the alert channel without turning the
+    event off globally for the real servers. Any muting tag wins: opting a server out is the
+    conservative outcome, and being wrong the other way means paging someone at 3am.
+
+    Fails OPEN (returns False) on any error: an alert we can't decide about should still be sent.
+    Runs in poller threads, so it must never raise."""
+    try:
+        return any(not tag.notify for tag in (gs.tags or []))
+    except Exception:
+        _log.debug("tag mute check failed for %s", getattr(gs, "short_name", "?"), exc_info=True)
+        return False
+
+
 def _cached_player_count(server_id):
     """Last known player count for a server (int, incl. 0), or None when unknown / not polled yet."""
     entry = _player_counts.get(server_id)
@@ -615,7 +630,10 @@ def _refresh_player_counts(app):
                                      "name": gname or prev_name, "ts": time.time()}
             # One-shot "notify when empty": fire once on a CONFIRMED 0 (never on an unknown count),
             # then clear the flag so it doesn't ping every time the server empties.
-            if gs.notify_when_empty and count == 0:
+            # A muting tag skips the whole block, flag included: the request stays ARMED, so it
+            # fires the next time the server empties after the tag comes off — rather than being
+            # silently consumed while nobody could be told.
+            if gs.notify_when_empty and count == 0 and not _alerts_muted(gs):
                 try:
                     notifications.notify("server_empty", "Server is empty",
                                          "%s on %s now has 0 players — safe to make changes."
@@ -628,9 +646,12 @@ def _refresh_player_counts(app):
             # Server full — alert on the transition INTO full, re-arm when it drops below the cap.
             if isinstance(count, int) and isinstance(mx, int) and mx > 0:
                 if count >= mx and not _server_full_alerted.get(gs.id):
-                    notifications.notify("server_full", "Server full",
-                                         "%s on %s is full (%d/%d players)."
-                                         % (gs.name, gs.remote.display_name, count, mx))
+                    if not _alerts_muted(gs):
+                        notifications.notify("server_full", "Server full",
+                                             "%s on %s is full (%d/%d players)."
+                                             % (gs.name, gs.remote.display_name, count, mx))
+                    # Marked alerted regardless, so unmuting mid-session doesn't fire retroactively
+                    # for a server that has been sitting at its cap the whole time.
                     _server_full_alerted[gs.id] = True
                 elif count < mx and _server_full_alerted.get(gs.id):
                     _server_full_alerted[gs.id] = False
@@ -643,7 +664,8 @@ def _refresh_player_counts(app):
                     db.session.commit()
                 except Exception:
                     db.session.rollback()
-                if prev > 0 and (time.time() - _server_peak_notified.get(gs.id, 0)) > _PEAK_NOTIFY_INTERVAL:
+                if (prev > 0 and (time.time() - _server_peak_notified.get(gs.id, 0)) > _PEAK_NOTIFY_INTERVAL
+                        and not _alerts_muted(gs)):
                     _server_peak_notified[gs.id] = time.time()
                     notifications.notify("server_peak", "New player record",
                                          "%s on %s just hit %d players — a new record."
@@ -1255,11 +1277,15 @@ def _monitor_pass():
                 continue
             up = gs.port in ports
             prev_up = _monitor_state["servers"].get(gs.id)
+            # State is tracked either way — only the ALERT is muted by a tag, so a server that goes
+            # down while muted still reports "back online" correctly once it is unmuted.
+            muted = _alerts_muted(gs)
             if prev_up is True and not up:
-                if time.time() - _expected_offline.get(gs.id, 0) > _EXPECT_OFFLINE_WINDOW:
+                if (time.time() - _expected_offline.get(gs.id, 0) > _EXPECT_OFFLINE_WINDOW
+                        and not muted):
                     notifications.notify("server_down", "Server offline",
                                          "%s on %s went offline unexpectedly." % (gs.name, remote.display_name))
-            elif prev_up is False and up:
+            elif prev_up is False and up and not muted:
                 notifications.notify("server_up", "Server back online",
                                      "%s on %s is back online." % (gs.name, remote.display_name))
             _monitor_state["servers"][gs.id] = up
@@ -2903,6 +2929,114 @@ def register_routes(app):
             logout_user()
         return jsonify({"ok": True, "current": is_current})
 
+    # ── Server tags: install-wide labels for grouping, bulk actions and alert routing ──────────
+    def _can_edit_tags():
+        """Tag writes need MANAGE_SERVERS. Checked INLINE rather than with @permission_required,
+        because that decorator flashes and redirects — which a fetch().then(r => r.json()) can only
+        see as unparseable HTML."""
+        return current_user.is_superadmin or has_permission(current_user, MANAGE_SERVERS)
+
+    def _tag_json(tag):
+        return {"id": tag.id, "name": tag.name, "color": tag.color or "", "notify": bool(tag.notify),
+                "server_ids": sorted(gs.id for gs in tag.servers)}
+
+    @app.route("/api/tags")
+    @login_required
+    def api_tags_list():
+        """Every tag, with the servers carrying it. Readable by any signed-in user — tags are how
+        the UI groups and filters, and the server ids here are only ever used to decorate rows the
+        caller can already see."""
+        from models import ServerTag
+        from sqlalchemy.orm import selectinload
+        tags = ServerTag.query.options(selectinload(ServerTag.servers)).order_by(ServerTag.name).all()
+        return jsonify({"success": True, "tags": [_tag_json(t) for t in tags]})
+
+    @app.route("/api/tags", methods=["POST"])
+    @login_required
+    def api_tags_create():
+        """Create a tag. The name's charset is enforced by the model (@validates), so a bad one
+        raises before it can be stored — caught here and returned as a 400 rather than a 500."""
+        from models import ServerTag
+        if not _can_edit_tags():
+            return jsonify({"success": False, "message": "Permission denied"}), 403
+        data = _json_body()
+        name = (data.get("name") or "").strip()
+        if not name:
+            return jsonify({"success": False, "message": "A tag needs a name."}), 400
+        if ServerTag.query.filter(db.func.lower(ServerTag.name) == name.lower()).first():
+            return jsonify({"success": False, "message": "A tag with that name already exists."}), 409
+        try:
+            tag = ServerTag(name=name, color=_valid_hex_color(data.get("color")),
+                            notify=bool(data.get("notify", True)),
+                            created_by=current_user.username)
+            db.session.add(tag)
+            db.session.commit()
+        except ValueError as exc:
+            db.session.rollback()
+            return jsonify({"success": False, "message": str(exc)}), 400
+        except Exception:
+            db.session.rollback()
+            return jsonify({"success": False, "message": _log_and_generic("create tag failed")}), 500
+        log_action(current_user, "tag_create", target=tag.name)
+        return jsonify({"success": True, "tag": _tag_json(tag)})
+
+    @app.route("/api/tags/<int:tag_id>/delete", methods=["POST"])
+    @login_required
+    def api_tags_delete(tag_id):
+        """Delete a tag. Its association rows go too — SQLAlchemy clears the secondary table for a
+        deleted parent, and nothing here relies on database FK enforcement (this app never sets
+        PRAGMA foreign_keys, so an orphan would otherwise outlive the tag and get inherited by a
+        future server reusing the rowid)."""
+        from models import ServerTag
+        if not _can_edit_tags():
+            return jsonify({"success": False, "message": "Permission denied"}), 403
+        tag = db.session.get(ServerTag, tag_id)
+        if not tag:
+            return jsonify({"success": False, "message": "Tag not found."}), 404
+        name = tag.name
+        try:
+            tag.servers = []          # drop the association rows explicitly, then the tag itself
+            db.session.delete(tag)
+            db.session.commit()
+        except Exception:
+            db.session.rollback()
+            return jsonify({"success": False, "message": _log_and_generic("delete tag failed")}), 500
+        log_action(current_user, "tag_delete", target=name)
+        return jsonify({"success": True})
+
+    @app.route("/api/server/<int:server_id>/tags", methods=["POST"])
+    @login_required
+    @server_access_required
+    def api_server_tags_set(server_id):
+        """Replace one server's tag set. @server_access_required covers visibility (server_id is a
+        URL kwarg here, so the decorator applies), and MANAGE_SERVERS is still required to write."""
+        from models import ServerTag
+        if not _can_edit_tags():
+            return jsonify({"success": False, "message": "Permission denied"}), 403
+        gs = get_game(server_id)
+        data = _json_body()
+        raw = data.get("tag_ids")
+        if not isinstance(raw, list):
+            return jsonify({"success": False, "message": "tag_ids must be a list."}), 400
+        ids = []
+        for ident in raw[:100]:
+            try:
+                ids.append(int(ident))
+            except (TypeError, ValueError):
+                continue
+        try:
+            # Assign through the relationship, never a raw INSERT: unknown ids are dropped, and a
+            # repeated id can't create a duplicate association row.
+            gs.tags = [t for t in (db.session.get(ServerTag, i) for i in dict.fromkeys(ids)) if t]
+            db.session.commit()
+        except Exception:
+            db.session.rollback()
+            return jsonify({"success": False, "message": _log_and_generic("set server tags failed")}), 500
+        log_action(current_user, "server_tags_set", target=gs.name,
+                   detail="tags: " + (", ".join(t.name for t in gs.tags) or "(none)"))
+        return jsonify({"success": True, "tags": [{"id": t.id, "name": t.name,
+                                                   "color": t.color or ""} for t in gs.tags]})
+
     @app.route("/api/account/ui-order", methods=["POST"])
     @login_required
     def api_account_ui_order():
@@ -3860,8 +3994,14 @@ def register_routes(app):
         remotes = RemoteServer.query.all()
         # Default to grouped-by-host order (host name, then server name); the page also lets you
         # re-sort by any column and toggle a grouped view client-side.
+        from models import ServerTag
+        from sqlalchemy.orm import selectinload
+        # selectinload the tags: they render per row, and this page has no per-server query budget
+        # only because nothing here is lazy — keep it that way.
         all_servers = (GameServer.query.outerjoin(RemoteServer, GameServer.remote_id == RemoteServer.id)
+                       .options(selectinload(GameServer.tags))
                        .order_by(RemoteServer.name.asc(), GameServer.name.asc()).all())
+        all_tags = ServerTag.query.order_by(ServerTag.name).all()
         player_counts = {gs.id: _cached_player_count(gs.id) for gs in all_servers}
         player_max = {gs.id: _cached_player_max(gs.id) for gs in all_servers}
         server_names = {gs.id: _cached_player_name(gs.id) for gs in all_servers}
@@ -3875,7 +4015,9 @@ def register_routes(app):
                                all_servers=all_servers, games=load_game_list(),
                                can_control=can_control, gmod_games=gmod_games,
                                player_counts=player_counts, player_max=player_max,
-                               server_names=server_names)
+                               server_names=server_names, all_tags=all_tags,
+                               can_edit_tags=(current_user.is_superadmin
+                                              or has_permission(current_user, MANAGE_SERVERS)))
 
     def _notify_servers_changed():
         """Best-effort broadcast to every connected browser that the game-server set
@@ -4522,8 +4664,20 @@ def register_routes(app):
                 return jsonify({"success": False, "message": "Incorrect password."}), 403
             flash("Incorrect password.", "danger")
             return redirect(url_for("manage_remotes"))
-        # Delete associated game servers
+        # Delete associated game servers. This is a BULK delete, which bypasses the ORM entirely —
+        # so every association row keyed on those game_server ids has to go by hand. This app never
+        # sets PRAGMA foreign_keys, so nothing removes them for us, and SQLite reuses rowids: an
+        # orphan here is later inherited by a completely unrelated server.
+        _doomed_ids = [gid for (gid,) in db.session.query(GameServer.id)
+                       .filter_by(remote_id=remote_id).all()]
         GameServer.query.filter_by(remote_id=remote_id).delete()
+        if _doomed_ids:
+            from models import game_server_tags
+            db.session.execute(game_server_tags.delete()
+                               .where(game_server_tags.c.game_server_id.in_(_doomed_ids)))
+            # Same shape of orphan, pre-existing: per-server group grants are keyed the same way.
+            _ggs = db.Table("group_game_servers", db.metadata, autoload_with=db.engine)
+            db.session.execute(_ggs.delete().where(_ggs.c.game_server_id.in_(_doomed_ids)))
         # Delete group associations
         group_servers_table = db.Table(
             "group_servers", db.metadata, autoload_with=db.engine
@@ -5936,7 +6090,8 @@ def register_routes(app):
         try:
             keep = bk.get_full_settings()["keep"]
             ok_n = fail_n = skip_n = 0
-            failures = []
+            failures = []      # every failure, for the recorded summary
+            alertable = []     # the subset whose servers aren't muted by a tag, for the alert
             queued = []
             # Keep the whole run inside ONE app context: run_command touches the remote's ORM
             # attributes, which would raise DetachedInstanceError once the session is gone.
@@ -5962,9 +6117,13 @@ def register_routes(app):
                             else:
                                 fail_n += 1
                                 failures.append("%s: %s" % (gs.name, reason or "failed"))
+                                if not _alerts_muted(gs):
+                                    alertable.append(failures[-1])
                     except Exception as e:
                         fail_n += 1
                         failures.append("%s: backup error (%s)" % (gs.name, type(e).__name__))
+                        if not _alerts_muted(gs):
+                            alertable.append(failures[-1])
                         app.logger.warning("full backup of %s failed", gs.name, exc_info=True)
             summary = "%d server(s) backed up%s%s" % (
                 ok_n,
@@ -5974,9 +6133,13 @@ def register_routes(app):
                 summary += " — " + "; ".join(failures)
             if queued:
                 summary += " — will back up once empty: " + ", ".join(queued)
-            if fail_n:
+            # The recorded summary keeps EVERY failure (it is the operator's record); the alert
+            # carries only the servers whose tags haven't muted them, and is skipped entirely when
+            # every failure came from a muted server.
+            if alertable:
                 notifications.notify("backup_failed", "Backup failed",
-                                     "%d server backup(s) failed: %s" % (fail_n, "; ".join(failures)))
+                                     "%d server backup(s) failed: %s"
+                                     % (len(alertable), "; ".join(alertable)))
             bk.record_full_backup(summary[:500])
         except Exception:
             app.logger.warning("full backup run failed", exc_info=True)
@@ -6059,8 +6222,12 @@ def register_routes(app):
                                                     "ts": time.time()}
                     except Exception:
                         app.logger.warning("scheduled backup of %s failed", gname, exc_info=True)
-                        notifications.notify("backup_failed", "Scheduled backup failed",
-                                             "The scheduled backup of %s failed." % gname)
+                        # Server-scoped, so a muting tag applies here too — the Tags UI promises
+                        # muting keeps a server out of the alert channel, without qualification.
+                        _bk_gs = db.session.get(GameServer, sid)
+                        if not (_bk_gs is not None and _alerts_muted(_bk_gs)):
+                            notifications.notify("backup_failed", "Scheduled backup failed",
+                                                 "The scheduled backup of %s failed." % gname)
         finally:
             _full_backup_lock.release()
 
