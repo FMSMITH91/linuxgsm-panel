@@ -109,6 +109,10 @@
   <div class="col" data-panel="{{ key }}">
     <div class="card text-center p-3 panel-movable">
       <span class="panel-tools btn-group btn-group-sm" role="group" aria-label="Move or hide this panel">
+        {# A real drag handle, but NOT the only way to reorder — the arrows next to it stay the
+           keyboard and screen-reader path. aria-hidden because it duplicates them. #}
+        <span class="btn btn-outline-secondary sort-handle" data-drag-handle aria-hidden="true"
+              title="Drag to reorder"><i class="bi bi-grip-vertical"></i></span>
         <button type="button" class="btn btn-outline-secondary" data-action="movePanel" data-args='[-1,"@self"]'
                 title="Move left" aria-label="Move {{ TILE_LABELS[key] }} left"><i class="bi bi-arrow-left"></i></button>
         <button type="button" class="btn btn-outline-secondary" data-action="movePanel" data-args='[1,"@self"]'
@@ -151,6 +155,8 @@
       {# Real buttons, not drag handles: `click` is the only gesture base.html's delegated
          dispatcher listens for, and buttons are keyboard- and touch-operable for free. #}
       <span class="btn-group btn-group-sm host-move" role="group" aria-label="Reorder this host">
+        <span class="btn btn-outline-secondary sort-handle" data-drag-handle aria-hidden="true"
+              title="Drag to reorder"><i class="bi bi-grip-vertical"></i></span>
         <button type="button" class="btn btn-outline-secondary" data-action="moveHostCard" data-args='[-1,"@self"]'
                 title="Move this host up" aria-label="Move {{ remote.display_name }} up"><i class="bi bi-arrow-up"></i></button>
         <button type="button" class="btn btn-outline-secondary" data-action="moveHostCard" data-args='[1,"@self"]'
@@ -229,6 +235,8 @@
               {# Same buttons-not-drag reasoning as the host cards, and doubly so here: these rows sit
                  inside a horizontally scrolling .table-responsive wrapper. #}
               <span class="btn-group btn-group-sm srv-move ms-1" role="group" aria-label="Reorder {{ srv.name }}">
+                <span class="btn btn-outline-secondary sort-handle" data-drag-handle aria-hidden="true"
+                      title="Drag to reorder"><i class="bi bi-grip-vertical"></i></span>
                 <button type="button" class="btn btn-outline-secondary" data-action="moveServerRow" data-args='[-1,"@self"]'
                         title="Move this server up" aria-label="Move {{ srv.name }} up"><i class="bi bi-arrow-up"></i></button>
                 <button type="button" class="btn btn-outline-secondary" data-action="moveServerRow" data-args='[1,"@self"]'
@@ -479,9 +487,25 @@ if (window.onServersChanged) onServersChanged(refreshStatus);
 
 // After #server-cards is swapped in place (a server appeared/disappeared elsewhere), re-apply the
 // search filter and repaint live statuses/connect cells onto the fresh rows — no full-page reload.
+// Bind drag to every reorderable region on this page. Same save path as the arrow buttons, so a
+// dragged order is server-rendered afterwards exactly like a clicked one.
+function bindDragRegions(){
+  if (!window.makeSortable) return;
+  makeSortable(document.getElementById('dash-tiles'),
+               {itemSelector: '[data-panel]', axis: 'x', onDrop: saveHostOrder});
+  makeSortable(document.getElementById('server-cards'),
+               {itemSelector: '.server-remote-card', axis: 'y', onDrop: saveHostOrder});
+  document.querySelectorAll('.server-remote-card tbody').forEach(function(tb){
+    makeSortable(tb, {itemSelector: 'tr[data-server-id]', axis: 'y', onDrop: saveHostOrder});
+  });
+}
+
 window.afterDashRefresh = function(){
   if (typeof filterServers === 'function') filterServers();
   refreshStatus();
+  // #server-cards itself survives a refreshSection (only its innerHTML is replaced), so its own
+  // listener persists — but the tbody elements inside are new objects and need binding again.
+  bindDragRegions();
 };
 
 // ── Per-user host-card order ────────────────────────────────────────────────────────────────
@@ -738,6 +762,10 @@ function bulkAction(action) {
 document.addEventListener('change', function (e) {
   if (e.target && e.target.classList && e.target.classList.contains('srv-check')) updateBulkBar();
 });
+
+// makeSortable lives in base.html, whose footer script runs after this block is parsed — so wait.
+if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', bindDragRegions);
+else bindDragRegions();
 
 // Minimal toast helper.
 // Uses the global window.toast (base.html) — one implementation, consistent independent timing.

@@ -319,6 +319,15 @@
     /* Touch has no hover: show them permanently where hovering is impossible. */
     @media (hover: none) { .panel-tools { opacity: 1; } }
 
+    /* ── DRAG TO REORDER ── touch-action:none on the HANDLE only, so a touch drag reorders instead of
+       scrolling the page, while the rest of the panel still scrolls normally. */
+    .sort-handle { cursor: grab; touch-action: none; }
+    .sort-handle:active { cursor: grabbing; }
+    body.sort-active { user-select: none; cursor: grabbing; }
+    .sort-dragging { opacity: .6; outline: 2px dashed var(--accent); outline-offset: 2px; }
+    /* The row variant needs the outline on the cells: a <tr> cannot paint one reliably. */
+    tr.sort-dragging > td { background: color-mix(in srgb, var(--accent) 12%, transparent); }
+
     /* ── TABS ── (underline style that fits the dark theme, not Bootstrap's pale card tab) */
     .nav-tabs { border-bottom: 1px solid var(--border); gap: .15rem; }
     .nav-tabs .nav-link {
@@ -1123,6 +1132,87 @@ window.cursorFlash = function(msg, kind){
   // Hold it fully visible for a beat, THEN float up and fade — so it's not missed.
   setTimeout(function(){ el.style.transform = 'translateY(-18px)'; el.style.opacity = '0'; }, 850);
   setTimeout(function(){ el.remove(); }, 1500);
+};
+
+// ── Drag-to-reorder ─────────────────────────────────────────────────────────────────────────────
+// POINTER events, not HTML5 drag-and-drop: HTML5 DnD emits nothing at all on touch, and its drop
+// targets behave badly inside the horizontally-scrolling .table-responsive wrappers the server lists
+// live in. Pointer events are one code path for mouse, touch and pen.
+//
+// This only reorders the DOM and then calls back — persistence and server-side rendering stay with
+// the page, which is what keeps a dragged order surviving the innerHTML swaps that refreshSection
+// performs on a poll. The arrow buttons remain the keyboard and screen-reader path; dragging is an
+// addition, never the only way to reorder.
+//
+// makeSortable(container, {itemSelector, handleSelector, axis, onDrop})
+window.makeSortable = function(container, opts){
+  if (!container || container._sortableBound) return;
+  container._sortableBound = true;
+  opts = opts || {};
+  var ITEM = opts.itemSelector || '[data-panel]';
+  var HANDLE = opts.handleSelector || '[data-drag-handle]';
+  var horizontal = opts.axis === 'x';
+  var dragging = null, startX = 0, startY = 0, moved = false;
+
+  function items(){
+    return Array.prototype.slice.call(container.querySelectorAll(':scope > ' + ITEM));
+  }
+
+  function onDown(ev){
+    // Primary button / single touch only, and only from a handle — so a click on a button inside a
+    // panel is never swallowed by the drag.
+    if (ev.button !== undefined && ev.button !== 0) return;
+    var handle = ev.target.closest(HANDLE);
+    if (!handle || !container.contains(handle)) return;
+    var item = handle.closest(ITEM);
+    if (!item || item.parentNode !== container) return;
+    dragging = item; moved = false;
+    startX = ev.clientX; startY = ev.clientY;
+    handle.setPointerCapture(ev.pointerId);
+    handle._sortRelease = function(){ try { handle.releasePointerCapture(ev.pointerId); } catch (e) {} };
+    handle.addEventListener('pointermove', onMove);
+    handle.addEventListener('pointerup', onUp);
+    handle.addEventListener('pointercancel', onUp);
+    ev.preventDefault();          // no text selection / native image drag while reordering
+  }
+
+  function onMove(ev){
+    if (!dragging) return;
+    // A 4px dead zone, so a slightly shaky click is still a click.
+    if (!moved && Math.abs(ev.clientX - startX) < 4 && Math.abs(ev.clientY - startY) < 4) return;
+    if (!moved){ moved = true; dragging.classList.add('sort-dragging'); document.body.classList.add('sort-active'); }
+    // Reorder only when the pointer passes a neighbour's MIDPOINT — a handful of DOM moves per drag
+    // rather than one per frame. That matters here: the i18n MutationObserver re-walks every
+    // inserted subtree, so moving the node per frame would translate the whole panel each time.
+    var sibs = items();
+    for (var i = 0; i < sibs.length; i++){
+      var el = sibs[i];
+      if (el === dragging) continue;
+      var r = el.getBoundingClientRect();
+      var mid = horizontal ? r.left + r.width / 2 : r.top + r.height / 2;
+      var pos = horizontal ? ev.clientX : ev.clientY;
+      var before = sibs.indexOf(dragging) > i;
+      if ((before && pos < mid) || (!before && pos > mid)){
+        container.insertBefore(dragging, before ? el : el.nextSibling);
+        break;
+      }
+    }
+  }
+
+  function onUp(ev){
+    var handle = ev.currentTarget;
+    handle.removeEventListener('pointermove', onMove);
+    handle.removeEventListener('pointerup', onUp);
+    handle.removeEventListener('pointercancel', onUp);
+    if (handle._sortRelease) handle._sortRelease();
+    if (dragging) dragging.classList.remove('sort-dragging');
+    document.body.classList.remove('sort-active');
+    var didMove = moved;
+    dragging = null; moved = false;
+    if (didMove && opts.onDrop) opts.onDrop();
+  }
+
+  container.addEventListener('pointerdown', onDown);
 };
 
 window.copyText = function(text, label){
