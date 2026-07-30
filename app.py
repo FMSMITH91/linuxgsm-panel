@@ -3167,12 +3167,26 @@ def register_routes(app):
                         per_host[host_key] = _clean(ids, ok_servers)
                 current_user.set_ui_pref("server_order", per_host)
                 saved.append("server_order")
-            if "panels" in data:
-                current_user.set_ui_pref("panels", _clean_panel_map(data.get("panels")))
-                saved.append("panels")
-            if "hidden" in data:
-                current_user.set_ui_pref("hidden", _clean_panel_map(data.get("hidden")))
-                saved.append("hidden")
+            # MERGE regions rather than replacing the whole map: a page only ever knows its own
+            # regions (the dashboard sends dash_tiles, a server page sends detail_console), so a
+            # whole-map write from one page would silently delete the other page's layout.
+            stored = current_user.get_ui_prefs()
+            declared = _clean_panel_map(data.get("declared"))
+            for field in ("panels", "hidden"):
+                if field not in data:
+                    continue
+                merged = dict(stored.get(field) or {})
+                for region, keys in _clean_panel_map(data.get(field)).items():
+                    # Within a region, keep keys this page could not have sent. server_detail's
+                    # gated panels (commands, content) are absent on servers that don't offer them,
+                    # and dropping them here would erase that placement for every OTHER server.
+                    known = declared.get(region)
+                    if known is not None:
+                        keys = keys + [k for k in (merged.get(region) or [])
+                                       if k not in keys and k not in known]
+                    merged[region] = keys
+                current_user.set_ui_pref(field, dict(list(merged.items())[:20]))
+                saved.append(field)
             if not saved:
                 return jsonify({"success": False, "message": "Nothing to save."}), 400
             try:

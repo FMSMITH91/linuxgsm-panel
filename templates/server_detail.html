@@ -259,7 +259,9 @@
 {% if custom_commands %}{% set panel_keys = panel_keys + ['commands'] %}{% endif %}
 {% if server.game_type == 'gmod' %}{% set panel_keys = panel_keys + ['content'] %}{% endif %}
 {% set detail_visible, detail_hidden = panel_layout('detail_console', panel_keys) %}
-<div id="detail-console" data-region="detail_console">
+{# data-declared, not a variable read in {% block scripts %}: Jinja blocks have separate
+   scopes, so panel_keys is not visible there. #}
+<div id="detail-console" data-region="detail_console" data-declared='{{ panel_keys|tojson }}'>
   {% for key in detail_visible %}
   {% if key == 'controls' %}{{ panel_controls() }}
   {% elif key == 'console' %}{{ panel_console() }}
@@ -975,7 +977,12 @@ function setStatus(status) {
 var statsChart = null;
 function initChart() {
   if (typeof Chart === 'undefined') return;
-  var ctx = document.getElementById('stats-chart').getContext('2d');
+  // The canvas lives inside the Controls panel, which a user can now HIDE. Without this guard the
+  // TypeError aborts the rest of this inline script — including the handlers that undo a hide, so
+  // hiding Controls would leave no way to bring it back.
+  var canvas = document.getElementById('stats-chart');
+  if (!canvas) return;
+  var ctx = canvas.getContext('2d');
   var mk = function(label, color) {
     return { label: label, data: [], borderColor: color, backgroundColor: color+'22',
              fill: true, tension: .35, pointRadius: 0, borderWidth: 2 };
@@ -1238,13 +1245,9 @@ loadGmodContent();
 // Populate console immediately via AJAX (page render no longer waits on SSH),
 // then let the websocket stream take over.
 refreshConsole(true);   // initial load: jump to the latest output
-initChart();
-pollStats();   // self-schedules: ~8s while online, ~20s while offline, paused while the tab is hidden
-// Refocusing the tab catches up immediately (the poll pauses while hidden).
-document.addEventListener('visibilitychange', function(){ if (!document.hidden) pollStats(); });
-// Backup console refresh (websocket is primary) — respects your scroll position
-pollWhenVisible(function(){ refreshConsole(); }, 30000);
-
+// Layout handlers are defined BEFORE the bootstrap calls below on purpose: initChart/pollStats
+// touch elements that a user can now hide, and a throw there would otherwise leave movePanel,
+// hidePanel and showDetailPanel undefined — i.e. no way to undo the hide that caused it.
 // ── Per-user panel order for this page's Console tab ─────────────────────────────────────────────
 // Same shape as the dashboard: the SERVER renders the saved order, and these controls move the node
 // for instant feedback and persist the result. Scoped to one region, because the tab switcher drives
@@ -1254,12 +1257,17 @@ function saveDetailLayout(then){
   if (!region) return;
   var keys = Array.prototype.slice.call(region.querySelectorAll(':scope > [data-panel]'))
     .map(function(el){ return el.getAttribute('data-panel'); });
+  var declared = [];
+  try { declared = JSON.parse(region.getAttribute('data-declared') || '[]'); } catch (e) {}
   var bar = document.getElementById('detail-console-hidden');
   var hidden = bar ? Array.prototype.slice.call(bar.querySelectorAll('[data-action="showDetailPanel"]'))
     .map(function(b){ return JSON.parse(b.getAttribute('data-args'))[1]; }) : [];
   fetch(MOUNT + '/api/account/ui-order', {
     method: 'POST', headers: {'Content-Type': 'application/json'},
-    body: JSON.stringify({panels: {detail_console: keys}, hidden: {detail_console: hidden}})
+    // `declared` = the keys THIS page could have sent. The server keeps stored keys outside it,
+    // so viewing a server without Commands/Game Content cannot erase where you put them elsewhere.
+    body: JSON.stringify({panels: {detail_console: keys}, hidden: {detail_console: hidden},
+                          declared: {detail_console: declared}})
   })
     .then(function(r){ if(!r.ok) throw 0; return r.json(); })
     .then(function(d){ if(!d || d.success === false) throw 0; if (then) then(); })
@@ -1324,5 +1332,12 @@ if (window.makeSortable) {
   makeSortable(document.getElementById('detail-console'),
                {itemSelector: '[data-panel]', axis: 'y', onDrop: saveDetailLayout});
 }
+
+initChart();
+pollStats();   // self-schedules: ~8s while online, ~20s while offline, paused while the tab is hidden
+// Refocusing the tab catches up immediately (the poll pauses while hidden).
+document.addEventListener('visibilitychange', function(){ if (!document.hidden) pollStats(); });
+// Backup console refresh (websocket is primary) — respects your scroll position
+pollWhenVisible(function(){ refreshConsole(); }, 30000);
 </script>
 {% endblock %}
