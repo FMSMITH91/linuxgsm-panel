@@ -86,7 +86,7 @@ import notifications
 from models import (
     AuditLog, GameServer, Group, RemoteServer, SetupState, User, db, init_db,
     CustomCommand, CUSTOM_ARG_DEFAULT_PATTERN, CUSTOM_ARG_PLACEHOLDER, GlobalBan,
-    MetricSample, HostSample,
+    MetricSample, HostSample, UI_PREF_KEYS,
 )
 from ssh_manager import (
     close_connection, run_command, ssh_test_connection,
@@ -2228,6 +2228,28 @@ def _apply_user_order(items, order, key=lambda o: o.id):
 _PANEL_KEY_RE = re.compile(r"^[a-z0-9_-]{1,32}$")
 
 
+def _effective_prefs(user, cfg=None):
+    """The layout a page should render for `user`: their own saved keys over the install default a
+    superadmin published, over the code default (no keys at all).
+
+    Per-KEY, not whole-object: someone who has only ever reordered their stat tiles still gets the
+    house host order, instead of the admin default being all-or-nothing. Falling back this way also
+    makes "reset" mean "back to the house layout" rather than "back to bare defaults", which is what
+    an admin publishing one would expect."""
+    try:
+        default = (cfg if cfg is not None else load_config()).get("default_ui_prefs") or {}
+    except Exception:
+        default = {}
+    if not isinstance(default, dict):
+        default = {}
+    prefs = {k: v for k, v in default.items() if k in UI_PREF_KEYS}
+    try:
+        prefs.update(user.get_ui_prefs() if getattr(user, "is_authenticated", False) else {})
+    except Exception:
+        _log.debug("reading user ui_prefs failed; using the install default", exc_info=True)
+    return prefs
+
+
 def _panel_layout(prefs, region, default_keys):
     """(visible, hidden) panel keys for one reorderable region, in this user's saved order.
 
@@ -2357,8 +2379,10 @@ def register_context_processors(app):
             # (visible, hidden). Passed as a callable so a page declares the panels IT emitted and
             # nothing stored can add one — see _panel_layout.
             "panel_layout": (lambda region, keys: _panel_layout(
-                current_user.get_ui_prefs() if getattr(current_user, "is_authenticated", False) else {},
-                region, keys)),
+                _effective_prefs(current_user, cfg), region, keys)),
+            # Whether a superadmin has published a house layout — the Account page's controls need it,
+            # and it is rendered from two routes, so it belongs here rather than in either of them.
+            "install_default_layout": bool(cfg.get("default_ui_prefs")),
             "current_year": datetime.utcnow().year,
             "tailscale_url": tailscale_url,
             "mount_prefix": app.config.get("_MOUNT_PREFIX", "/"),
@@ -3161,6 +3185,45 @@ def register_routes(app):
         except Exception:
             return jsonify({"success": False, "message": _log_and_generic("save layout failed")}), 500
 
+    @app.route("/api/settings/ui-default", methods=["POST"])
+    @login_required
+    def api_ui_default_publish():
+        """Publish THIS superadmin's current layout as the install default, so new accounts (and
+        anyone who resets) land on the house arrangement instead of bare defaults.
+
+        Takes no body on purpose: it copies the caller's own saved layout, which they arranged by
+        using the same controls as everyone else. That means there is nothing to validate here that
+        was not already validated on the way in, and no way to publish a layout nobody has seen."""
+        if not current_user.is_superadmin:
+            return jsonify({"success": False, "message": "Permission denied"}), 403
+        try:
+            mine = current_user.get_ui_prefs()
+            if not mine:
+                return jsonify({"success": False,
+                                "message": "Arrange your own layout first, then publish it."}), 400
+            update_config(lambda cfg: cfg.__setitem__("default_ui_prefs", mine))
+        except Exception:
+            return jsonify({"success": False,
+                            "message": _log_and_generic("publish default layout failed")}), 500
+        log_action(current_user, "ui_default_publish", target="install",
+                   detail="published a default dashboard layout for all users")
+        return jsonify({"success": True})
+
+    @app.route("/api/settings/ui-default/clear", methods=["POST"])
+    @login_required
+    def api_ui_default_clear():
+        """Drop the install default so everyone falls back to the layout the templates ship."""
+        if not current_user.is_superadmin:
+            return jsonify({"success": False, "message": "Permission denied"}), 403
+        try:
+            update_config(lambda cfg: cfg.pop("default_ui_prefs", None))
+        except Exception:
+            return jsonify({"success": False,
+                            "message": _log_and_generic("clear default layout failed")}), 500
+        log_action(current_user, "ui_default_clear", target="install",
+                   detail="removed the install default dashboard layout")
+        return jsonify({"success": True})
+
     @app.route("/api/account/ui-order/reset", methods=["POST"])
     @login_required
     def api_account_ui_order_reset():
@@ -3282,7 +3345,7 @@ def register_routes(app):
         # #server-cards' innerHTML from its poll and from a cross-user servers_changed broadcast,
         # so a DOM-only order would silently revert (and reordering after paint is layout shift,
         # which Lighthouse CI gates). With no saved order this is a no-op, so the default stands.
-        _prefs = current_user.get_ui_prefs()
+        _prefs = _effective_prefs(current_user)
         remotes = _apply_user_order(RemoteServer.query.all(), _prefs.get("host_order"))
         remote_count = RemoteServer.query.filter_by(is_local=False).count()
         servers = _apply_user_server_order(get_user_servers(current_user), _prefs)
@@ -7545,7 +7608,8 @@ def register_routes(app):
         # Same per-user order as the dashboard. This payload is keyed by id client-side, so order
         # is not load-bearing here — but any future consumer that iterates it should see the user's
         # order rather than a second, different one.
-        servers = _apply_user_server_order(get_user_servers(current_user), current_user.get_ui_prefs())
+        servers = _apply_user_server_order(get_user_servers(current_user),
+                                           _effective_prefs(current_user))
         # Refresh live status efficiently: one listening-port scan per remote,
         # then match each game server's port (instead of an SSH call per server).
         by_remote = {}
