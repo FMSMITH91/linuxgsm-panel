@@ -1019,6 +1019,21 @@ try:
     # exists — it would still pass if makeSortable had been renamed or deleted.
     check("drag: makeSortable is actually defined on the page that calls it",
           "window.makeSortable = function(container, opts)" in _drag_html)
+    # Editing controls must be INVISIBLE during normal use. They were absolutely positioned over the
+    # card and revealed on hover, with @media (hover: none) making them permanent on touch — which
+    # put a row of buttons on top of every stat tile's value on a phone. Verified in a browser at
+    # 375px: the old rules overlapped all five tiles, these overlap none.
+    check("layout: the editing controls are hidden until edit mode",
+          ".panel-tools, .host-move, .srv-move { display: none; }" in _drag_html)
+    check("layout: nothing makes them visible again on touch",
+          "@media (hover: none) { .panel-tools" not in _drag_html)
+    check("layout: in edit mode they sit IN FLOW, so they cannot overlay the content",
+          "body.layout-edit .panel-tools { position: static;" in _drag_html)
+    check("layout: the dashboard offers a way to turn edit mode on",
+          'data-action="toggleLayoutEdit"' in _drag_html
+          and "window.toggleLayoutEdit = function" in _drag_html)
+    check("layout: edit mode survives the reload that restoring a panel triggers",
+          "sessionStorage.getItem('layoutEdit')" in _drag_html)
     check("drag: nested sortables cannot both claim one handle",
           "handle.closest('[data-sortable]') !== container" in _drag_html)
     check("drag: non-rendered siblings are skipped as drop targets",
@@ -1119,6 +1134,8 @@ try:
     c.post("/api/account/ui-order", json={"panels": {"detail_console": ["controls", "console", "players"]},
                                           "hidden": {"detail_console": ["controls"]}})
     _no_ctrl = c.get("/server/%d" % gs_id).get_data(as_text=True)
+    check("detail: the server page offers the same edit-mode toggle",
+          'data-action="toggleLayoutEdit"' in _det)
     check("detail: hiding Controls removes the stats canvas", 'id="stats-chart"' not in _no_ctrl)
     check("detail: initChart is guarded against the missing canvas",
           "var canvas = document.getElementById('stats-chart');\n  if (!canvas) return;" in _no_ctrl)

@@ -72,6 +72,10 @@
   <li class="nav-item"><button type="button" class="nav-link" data-mtab-btn="history"><i class="bi bi-graph-up"></i> History</button></li>
   <li class="nav-item"><button type="button" class="nav-link" data-mtab-btn="details"><i class="bi bi-info-circle"></i> Details</button></li>
   <li class="nav-item"><a class="nav-link" href="{{ url_for('server_files', server_id=server.id) }}"><i class="bi bi-folder2-open"></i> Files &amp; Config</a></li>
+  {# Same as the dashboard: the rearranging controls stay hidden until asked for. #}
+  <li class="nav-item ms-auto"><button type="button" class="nav-link" data-action="toggleLayoutEdit"
+      aria-pressed="false" title="Show the controls for rearranging this tab"><i class="bi bi-grid-1x2"></i>
+      <span data-edit-label>Customise</span></button></li>
 </ul>
 
 <!-- Connect address + live stats -->
