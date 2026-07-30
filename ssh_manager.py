@@ -116,8 +116,13 @@ def _run_local(cmd, timeout=30, sudo=False):
             # Explicit ["/bin/bash","-c",cmd] instead of shell=True — identical behaviour (a shell
             # interprets the composed command, with the panel's own _quote-escaping upstream) but
             # not the subprocess-shell-injection sink shape.
+            # errors="replace" to match the paramiko path: command output is game-server output
+            # (player names, mod chatter, latin-1 logs), so it is NOT guaranteed valid UTF-8. A
+            # strict decode would raise, get swallowed below, and return rc=-1 with empty output —
+            # indistinguishable from "the command printed nothing".
             p = _real_subprocess.Popen(["/bin/bash", "-c", full_cmd], stdout=_real_subprocess.PIPE,
-                                       stderr=_real_subprocess.PIPE, text=True, start_new_session=True)
+                                       stderr=_real_subprocess.PIPE, text=True, encoding="utf-8",
+                                       errors="replace", start_new_session=True)
             try:
                 out, err = p.communicate(timeout=timeout)
                 return (out or "").strip(), (err or "").strip(), p.returncode
@@ -350,7 +355,10 @@ def _run_via_ssh_cli(server, command, timeout=30, sudo=None):
         f"{server.username}@{host}", remote_cmd,
     ]
     try:
-        r = subprocess.run(ssh_cmd, capture_output=True, text=True, timeout=timeout)
+        # errors="replace" like the other two transports — a game server's bytes are not
+        # necessarily valid UTF-8, and a strict decode would blank the whole result (see _run_local).
+        r = subprocess.run(ssh_cmd, capture_output=True, text=True, encoding="utf-8",
+                           errors="replace", timeout=timeout)
         return r.stdout.strip(), r.stderr.strip(), r.returncode
     except subprocess.TimeoutExpired:
         return "", "SSH command timed out", -1

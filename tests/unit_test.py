@@ -91,6 +91,41 @@ eq("_int_or junk -> default", _int_or("abc", 22), 22)
 eq("_int_or None -> default", _int_or(None, 5000), 5000)
 eq("_int_or whitespace", _int_or("  80 ", 1), 80)
 
+# ── transports must decode leniently: command output is GAME SERVER output (player names, mod
+# chatter, latin-1 logs), so it is not guaranteed valid UTF-8. A strict decode raises inside
+# subprocess, gets swallowed by the generic handler, and returns ("", ..., -1) — a caller then
+# cannot tell "printed nothing" from "could not be decoded". The paramiko path already used
+# errors="replace"; these two did not.
+_bad_out, _bad_err, _bad_rc = sm._run_local(r"printf 'caf\351: cannot start\n'", timeout=10, sudo=False)
+check("transport (local): invalid UTF-8 in stdout still returns the text",
+      _bad_rc == 0 and _bad_out.startswith("caf") and "cannot start" in _bad_out)
+check("transport (local): the undecodable byte becomes U+FFFD, not a lost result",
+      "�" in _bad_out and _bad_out != "")
+_bad2_out, _bad2_err, _bad2_rc = sm._run_local(r"printf 'x\200y\n' >&2; printf 'ok\n'",
+                                               timeout=10, sudo=False)
+check("transport (local): invalid UTF-8 on stderr does not blank stdout",
+      _bad2_rc == 0 and _bad2_out == "ok" and _bad2_err.startswith("x"))
+_sshkw = {}
+
+
+class _FakeCompleted:
+    stdout = "out"
+    stderr = ""
+    returncode = 0
+
+
+_orig_sprun = sm.subprocess.run
+try:
+    sm.subprocess.run = lambda cmd, **kw: (_sshkw.update(kw), _FakeCompleted())[1]
+    sm._run_via_ssh_cli(type("S", (), {"sudo_enabled": False, "linuxgsm_user": None, "port": 22,
+                                       "username": "u", "host": "h", "auth_method": "tailscale"})(),
+                        "echo hi", timeout=5, sudo=False)
+finally:
+    sm.subprocess.run = _orig_sprun
+check("transport (ssh cli): decodes with errors='replace' like the other two",
+      _sshkw.get("errors") == "replace" and _sshkw.get("encoding") == "utf-8"
+      and _sshkw.get("text") is True)
+
 # ── cron manager (pure logic; no crontab touched) ─────────────
 # schedule validation
 check("cron: 5-field ok", sm._validate_cron("*/5 * * * *", "/bin/true")[0])
