@@ -1097,19 +1097,45 @@ _CRON_WHY_RE = re.compile(r"fail|error|cannot|can't|denied|refus|timed? ?out|no 
                           r"missing|unable|invalid|permission|traceback|curl: \(|wget:", re.I)
 
 
+def _cron_log_text(b64):
+    """Decode the base64 log tail the reader ships. Base64 is what keeps the tab-delimited wire
+    format intact: a game log is arbitrary bytes, and LinuxGSM's `\\r` repaints alone would end a
+    record early — the text=True transports fold `\\r` into `\\n`, and str.splitlines() splits on it
+    — taking the failure reason with them. Lenient at both steps: whatever the game server printed
+    is not necessarily valid UTF-8, and a log we cannot decode must not cost us the other jobs."""
+    import base64 as _b64
+    import binascii
+    try:
+        return _b64.b64decode(b64 or "", validate=False).decode("utf-8", "replace")
+    except (binascii.Error, ValueError):
+        return ""
+
+
 def _clean_cron_error(raw, limit=240):
-    """One-line summary of WHY a job failed, from the tail of its captured output. `raw` is the
-    log tail with newlines turned into \\037 by the reader. Strips ANSI, honours `\\r` redraws
-    (only a line's final repaint is what a terminal shows), drops bare " ... FAIL" verdict lines,
-    then keeps the last few lines that actually say something — the fatal one comes last."""
+    """One-line summary of WHY a job failed, from its decoded log tail. Strips ANSI, honours `\\r`
+    redraws (only a line's final repaint is what a terminal shows), drops bare " ... FAIL" verdict
+    lines, then keeps the last few DISTINCT lines that say something — the fatal one comes last, and
+    LinuxGSM's fetch retry prints the SAME reason once per mirror, which would otherwise spend the
+    whole budget on one sentence. Fills from the newest line back in whole lines, never mid-word."""
     lines = []
-    for chunk in (raw or "").split("\x1f"):
+    for chunk in (raw or "").split("\n"):
         seg = " ".join(_CRON_ANSI_RE.sub("", chunk).split("\r")[-1].split())
         if seg and not _CRON_VERDICT_RE.match(seg):
             lines.append(seg)
     why = [ln for ln in lines if _CRON_WHY_RE.search(ln)] or lines
-    out = " ".join(why[-3:])
-    return out[-limit:].strip() if len(out) > limit else out
+    keep = []                                    # last 3 DISTINCT lines, chronological
+    for ln in reversed(why):
+        if ln not in keep:
+            keep.insert(0, ln)
+        if len(keep) == 3:
+            break
+    out = ""
+    for ln in reversed(keep):                    # newest first, so it always makes the cut
+        nxt = ln if not out else ln + " " + out
+        if len(nxt) > limit:
+            break
+        out = nxt
+    return out or (keep[-1][:limit] if keep else "")
 
 
 def _read_cron_status(server, user):
@@ -1118,16 +1144,19 @@ def _read_cron_status(server, user):
     a symlink to a root-only file (info leak) — it only ever reads that user's own files. One
     shell round-trip; best-effort (empty on any error)."""
     d = "/home/%s/.lgsm-cron" % user
-    # \037 (unit separator) keeps line boundaries across the tab-delimited wire format so
-    # _clean_cron_error can pick the informative lines; the byte cap keeps the reply small.
+    # The log tail is base64'd so NOTHING in it can break the tab-delimited protocol — a game log
+    # carries \r repaints, stray control bytes and invalid UTF-8, any of which would otherwise end
+    # the record early (or fail the transport's strict decode) and cost us the failure reason. Cap
+    # the bytes BEFORE encoding so the reply stays bounded; single line per job, so split on \n.
     inner = (f'cd {_quote(d)} 2>/dev/null || exit 0; '
              'for s in *.status; do [ -e "$s" ] || continue; id="${s%.status}"; '
              'read rc st en < "$s" 2>/dev/null; err=""; '
-             '[ "$rc" != "0" ] && err="$(tail -n 40 "$id.log" 2>/dev/null | tr "\\n\\t" "\\037 " | tail -c 2000)"; '
+             '[ "$rc" != "0" ] && err="$(tail -n 40 "$id.log" 2>/dev/null | tail -c 3000 '
+             '| base64 | tr -d "\\n")"; '
              'printf "%s\\t%s\\t%s\\t%s\\t%s\\n" "$id" "$rc" "$st" "$en" "$err"; done')
     out, _, _ = run_command(server, f"sudo -u {user} bash -c {_quote(inner)}", timeout=12, sudo=False)
     status = {}
-    for line in (out or "").splitlines():
+    for line in (out or "").split("\n"):
         parts = line.split("\t")
         if len(parts) < 4:
             continue
@@ -1135,7 +1164,7 @@ def _read_cron_status(server, user):
         err = parts[4] if len(parts) > 4 else ""
         try:
             status[jid] = {"last_run": int(en), "ok": rc == "0", "rc": int(rc),
-                           "error": _clean_cron_error(err)}
+                           "error": _clean_cron_error(_cron_log_text(err))}
         except ValueError:
             continue
     return status
