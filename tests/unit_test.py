@@ -162,25 +162,18 @@ _up.set_ui_pref("host_order", None)
 check("ui_prefs: clearing a key restores the default (absent, not empty)",
       _up.get_ui_prefs() == {} and "host_order" not in (_up.ui_prefs or ""))
 
-# ── new-user language: Settings offers "Same as whoever creates the account" (the blank value). That
-# blank case used to fall straight through to English, so the option silently did nothing.
+# ── new-user language: Settings holds a concrete language code. It used to allow a blank
+# "creator's language" value which read as English anyway — confusing on the page, so it is gone.
 from app import _new_user_language as _nul
 _LANGS = {"en": "English", "es": "Espanol", "fr": "Francais"}
-_creator = lambda lang: NS(language=lang)
-eq("new-user lang: an explicit setting wins over the creator's",
-   _nul({"default_language": "fr"}, _creator("es"), _LANGS), "fr")
-eq("new-user lang: blank inherits the creator's language (the label's promise)",
-   _nul({"default_language": ""}, _creator("es"), _LANGS), "es")
-eq("new-user lang: blank with an English creator gives English",
-   _nul({}, _creator("en"), _LANGS), "en")
-eq("new-user lang: a creator with no language set falls back to English",
-   _nul({}, _creator(""), _LANGS), "en")
-eq("new-user lang: a creator whose language is no longer supported falls back to English",
-   _nul({}, _creator("de"), _LANGS), "en")
-eq("new-user lang: an unsupported CONFIGURED language does not leak through",
-   _nul({"default_language": "de"}, _creator("es"), _LANGS), "en")
-eq("new-user lang: a creator object without the attribute is tolerated",
-   _nul({}, object(), _LANGS), "en")
+eq("new-user lang: the configured language is used", _nul({"default_language": "fr"}, _LANGS), "fr")
+eq("new-user lang: English when configured so", _nul({"default_language": "en"}, _LANGS), "en")
+eq("new-user lang: a blank left over from an older install reads as English",
+   _nul({"default_language": ""}, _LANGS), "en")
+eq("new-user lang: a missing key reads as English", _nul({}, _LANGS), "en")
+eq("new-user lang: a language no longer supported cannot be assigned",
+   _nul({"default_language": "de"}, _LANGS), "en")
+eq("new-user lang: junk in the config cannot be assigned", _nul({"default_language": 42}, _LANGS), "en")
 
 # ── the install default layout: a superadmin's published arrangement sits UNDER each user's own, and
 # the merge is per-KEY so someone who only reordered their tiles still gets the house host order.
