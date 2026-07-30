@@ -162,11 +162,14 @@ def get_user_permissions(user):
 def get_user_servers(user):
     """Get game servers a user has access to (superadmin = all)."""
     from models import GameServer
-    from sqlalchemy.orm import joinedload
+    from sqlalchemy.orm import joinedload, selectinload
     # Eager-load each server's remote in the SAME query. Callers (dashboard, /api/servers) all
     # read gs.remote per server; without this, accessing it lazily fires one query per remote
     # (e.g. 50 extra queries at 50 hosts on every status poll).
-    q = GameServer.query.options(joinedload(GameServer.remote))
+    # Tags likewise: they render per row, so lazily they cost one query per server. selectinload
+    # (not joinedload) because it is a many-to-many — one extra query total, no row multiplication.
+    q = GameServer.query.options(joinedload(GameServer.remote),
+                                 selectinload(GameServer.tags))
     if user.is_superadmin:
         return q.all()
 

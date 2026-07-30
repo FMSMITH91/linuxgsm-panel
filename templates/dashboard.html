@@ -29,6 +29,25 @@
              autocomplete="off" data-action="filterServers" data-on="input">
     </div>
     {% endif %}
+    {% set all_tags = servers|map(attribute='tags')|sum(start=[])|unique(attribute='id')|sort(attribute='name')|list %}
+    {% if all_tags %}
+    {# No data-no-i18n on this wrapper: the walker returns on the first element carrying it, which
+       would also skip the panel-authored "Select shown" button below. The per-tag buttons carry it
+       individually, which is where user-authored text actually lives. #}
+    <div class="d-flex align-items-center gap-1 flex-wrap tag-filter-bar">
+      {% for tag in all_tags %}
+      <button type="button" class="btn btn-sm btn-outline-secondary tag-filter" data-tag-id="{{ tag.id }}" data-no-i18n
+              data-action="toggleTagFilter" data-args='[{{ tag.id }},"@self"]'
+              aria-pressed="false">{{ tag.name }}</button>
+      {% endfor %}
+      {% if can_control %}
+      {# Lives here rather than in the bulk bar: that bar only appears once something is selected,
+         so it is the wrong place to START a selection. #}
+      <button type="button" class="btn btn-sm btn-link text-decoration-none" data-action="selectAllShown"
+              title="Tick every server the current filters leave visible">Select shown</button>
+      {% endif %}
+    </div>
+    {% endif %}
     <span class="text-secondary small" id="refresh-indicator">
       <i class="bi bi-arrow-repeat"></i> Auto-refreshing
     </span>
@@ -143,6 +162,18 @@
               <span class="game-name text-info d-block text-truncate" id="game-name-{{ srv.id }}"
                     style="font-size:.72rem;max-width:22ch;" title="In-game server name (what players see)">{{ server_names.get(srv.id) or '' }}</span>
               <span class="text-secondary d-block" style="font-size: .75rem;">{{ srv.short_name }}</span>
+              {% if srv.tags %}
+              {# data-no-i18n: tag names are user-authored, and the translation walker would happily
+                 "translate" one that collides with a catalog key ("Online", "Status", …). The colour
+                 is stored only after passing _valid_hex_color, so it is safe in a style attribute. #}
+              <span class="d-block mt-1 srv-tags" data-no-i18n>
+                {% for tag in srv.tags|sort(attribute='name') %}
+                <span class="badge tag-chip" data-tag-id="{{ tag.id }}" data-no-i18n
+                      {% if tag.color %}style="background-color: {{ tag.color }};"{% endif %}
+                      {% if not tag.notify %}title="Alerts are muted for this tag"{% endif %}>{{ tag.name }}{% if not tag.notify %} <i class="bi bi-bell-slash"></i>{% endif %}</span>
+                {% endfor %}
+              </span>
+              {% endif %}
               <span class="text-secondary d-none" id="map-{{ srv.id }}" style="font-size:.72rem;" title="Current map"></span>
             </td>
             <td class="d-none d-md-table-cell">{{ srv.game_display or srv.game_type }}</td>
@@ -204,13 +235,37 @@ function titleCase(s){ return s ? s.charAt(0).toUpperCase()+s.slice(1) : ''; }
 
 // Client-side filter of the server list (name / short name / type / connect address).
 // Hides remote cards with no matching rows, and shows an empty-state when nothing matches.
+// Tag ids currently toggled on in the filter bar. Deliberately not persisted: a filter is a
+// momentary lens, and a saved one would leave a user staring at a half-empty dashboard after a
+// week away with no memory of why.
+var _tagFilter = [];
+
+// Toggle one tag in the filter, then re-run the single filter pass below so tag + text compose.
+window.toggleTagFilter = function(tagId, btn){
+  var at = _tagFilter.indexOf(tagId);
+  if (at === -1) _tagFilter.push(tagId); else _tagFilter.splice(at, 1);
+  var on = at === -1;
+  btn.classList.toggle('active', on);
+  btn.setAttribute('aria-pressed', on ? 'true' : 'false');
+  filterServers();
+};
+
+function rowHasEveryTag(tr){
+  if (!_tagFilter.length) return true;
+  var have = Array.prototype.map.call(tr.querySelectorAll('.tag-chip'),
+                                      function(c){ return parseInt(c.getAttribute('data-tag-id'), 10); });
+  // AND, not OR: picking "production" + "modded" should narrow to servers that are both, which is
+  // what makes the filter useful as a bulk-action selector.
+  return _tagFilter.every(function(id){ return have.indexOf(id) !== -1; });
+}
+
 function filterServers(){
-  var input = document.getElementById('srv-search'); if(!input) return;
-  var q = input.value.trim().toLowerCase(), anyVisible = false;
+  var input = document.getElementById('srv-search');
+  var q = input ? input.value.trim().toLowerCase() : '', anyVisible = false;
   document.querySelectorAll('.server-remote-card').forEach(function(card){
     var cardHas = false;
     card.querySelectorAll('tbody tr').forEach(function(tr){
-      var match = !q || tr.textContent.toLowerCase().indexOf(q) !== -1;
+      var match = (!q || tr.textContent.toLowerCase().indexOf(q) !== -1) && rowHasEveryTag(tr);
       tr.style.display = match ? '' : 'none';
       if(match) cardHas = true;
     });
@@ -218,8 +273,21 @@ function filterServers(){
     if(cardHas) anyVisible = true;
   });
   var none = document.getElementById('srv-none');
-  if(none) none.style.display = (q && !anyVisible) ? '' : 'none';
+  // Show the empty-state when EITHER lens is active and matched nothing — a tag filter that hides
+  // everything used to leave a blank page with no explanation.
+  if(none) none.style.display = ((q || _tagFilter.length) && !anyVisible) ? '' : 'none';
 }
+
+// Tick every row the current filters leave visible, so "filter by tag, then act on all of them" is
+// two clicks. The bulk endpoint still re-checks the action permission and per-server access, so
+// this only ever selects rows the user can already see and act on.
+window.selectAllShown = function(){
+  document.querySelectorAll('.srv-check').forEach(function(cb){
+    var tr = cb.closest('tr');
+    cb.checked = !!(tr && tr.style.display !== 'none');
+  });
+  updateBulkBar();
+};
 
 // The set of game-server ids currently rendered on this page (sorted, comma-joined),
 // so we can detect when another user has added or removed one.

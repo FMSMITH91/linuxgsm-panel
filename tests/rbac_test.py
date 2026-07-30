@@ -180,6 +180,20 @@ try:
           c.post("/api/server/%d/cron/delete" % accessible_id, json={"raw": "x"}).status_code == 403)
     check("autostart toggle without RESTART_SERVER -> 403",
           c.post("/api/server/%d/autostart" % accessible_id, json={"enabled": False}).status_code == 403)
+    # Tags are install-wide, so WRITING one needs MANAGE_SERVERS even on a server you can see.
+    check("create tag without MANAGE_SERVERS -> 403",
+          c.post("/api/tags", json={"name": "sneaky"}).status_code == 403)
+    check("delete tag without MANAGE_SERVERS -> 403",
+          c.post("/api/tags/1/delete").status_code == 403)
+    check("assign tags without MANAGE_SERVERS -> 403",
+          c.post("/api/server/%d/tags" % accessible_id, json={"tag_ids": [1]}).status_code == 403)
+    if other_id:
+        check("IDOR: assigning tags on a non-granted server BLOCKED",
+              c.post("/api/server/%d/tags" % other_id, json={"tag_ids": []}).status_code != 200)
+    # Reading the tag list is deliberately open to any signed-in user: it is what decorates and
+    # filters rows they can already see.
+    check("tag list is readable without MANAGE_SERVERS -> 200",
+          c.get("/api/tags").status_code == 200)
 
     check("view console WITH VIEW_CONSOLE + access -> 200",
           c.get("/api/console/%d" % accessible_id).status_code == 200)

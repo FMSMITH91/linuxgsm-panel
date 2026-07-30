@@ -821,6 +821,73 @@ try:
         _sa_event.remove(_engine, "after_cursor_execute", _count_query)
         _appmod.run_command = _orig_rc
 
+    # ── Tags: install-wide labels, their guards, and orphan cleanup ────────────────────────────────
+    _tg_new = c.post("/api/tags", json={"name": "production", "color": "#22aa55", "notify": True})
+    check("tags: create returns the new tag", _tg_new.status_code == 200
+          and (_tg_new.get_json() or {}).get("tag", {}).get("name") == "production",
+          _tg_new.get_data(as_text=True)[:140])
+    _tag_id = (_tg_new.get_json() or {})["tag"]["id"]
+    _tg_mute = c.post("/api/tags", json={"name": "staging", "notify": False})
+    _mute_id = (_tg_mute.get_json() or {}).get("tag", {}).get("id")
+    check("tags: a muted tag stores notify=False", _tg_mute.status_code == 200 and _mute_id
+          and (_tg_mute.get_json() or {})["tag"]["notify"] is False)
+    check("tags: a duplicate name is refused (409, not a second row)",
+          c.post("/api/tags", json={"name": "PRODUCTION"}).status_code == 409)
+    check("tags: a name the model rejects is a 400, not a 500",
+          c.post("/api/tags", json={"name": "<script>x</script>"}).status_code == 400)
+    check("tags: a nameless tag is refused", c.post("/api/tags", json={"name": "  "}).status_code == 400)
+    check("tags: an invalid colour is dropped, not stored",
+          (c.post("/api/tags", json={"name": "nocolor", "color": "javascript:x"})
+           .get_json() or {}).get("tag", {}).get("color") == "")
+    # Assignment replaces the whole set, and unknown ids are dropped rather than erroring.
+    _as = c.post("/api/server/%d/tags" % gs_id, json={"tag_ids": [_tag_id, 999999, "junk"]})
+    check("tags: assignment keeps the real ids and drops the rest",
+          _as.status_code == 200 and [t["id"] for t in (_as.get_json() or {}).get("tags", [])] == [_tag_id])
+    check("tags: a repeated id cannot create a duplicate association",
+          [t["id"] for t in (c.post("/api/server/%d/tags" % gs_id,
+                                    json={"tag_ids": [_tag_id, _tag_id]}).get_json() or {}).get("tags", [])]
+          == [_tag_id])
+    check("tags: assignment rejects a non-list payload",
+          c.post("/api/server/%d/tags" % gs_id, json={"tag_ids": "production"}).status_code == 400)
+    # Assert the CHIP's own markup, not just "data-tag-id appears somewhere" — the filter bar emits
+    # that attribute too, and "data-no-i18n" appears in base.html's own i18n JS on every page, so a
+    # loose conjunction of the two would pass with no chips rendered at all.
+    _dash_html = c.get("/").get_data(as_text=True)
+    check("tags: the chip renders on the row with its name and do-not-translate marker",
+          ('class="badge tag-chip" data-tag-id="%d" data-no-i18n' % _tag_id) in _dash_html
+          and "production</span>" in _dash_html
+          and 'class="d-block mt-1 srv-tags" data-no-i18n' in _dash_html,
+          "chip markup missing from the rendered dashboard")
+    # The muted-tag branch (bell-slash + title) only renders when a MUTED tag is actually assigned.
+    c.post("/api/server/%d/tags" % gs_id, json={"tag_ids": [_tag_id, _mute_id]})
+    _muted_html = c.get("/").get_data(as_text=True)
+    check("tags: a muted tag's chip says so (title + bell-slash icon)",
+          'title="Alerts are muted for this tag"' in _muted_html
+          and "bi-bell-slash" in _muted_html)
+    c.post("/api/server/%d/tags" % gs_id, json={"tag_ids": [_tag_id]})
+    check("tags: the tag list endpoint reports which servers carry it",
+          gs_id in next((t["server_ids"] for t in (c.get("/api/tags").get_json() or {})["tags"]
+                         if t["id"] == _tag_id), []))
+    with app.app_context():
+        from models import game_server_tags as _gst
+        _n_assoc = len(db.session.execute(_gst.select()).fetchall())
+    check("tags: exactly one association row exists for that pair", _n_assoc == 1, "rows=%d" % _n_assoc)
+    # Deleting a tag must take its association rows with it: FKs are never enforced here and SQLite
+    # reuses rowids, so an orphan would later be inherited by an unrelated server.
+    check("tags: delete succeeds", c.post("/api/tags/%d/delete" % _tag_id).status_code == 200)
+    with app.app_context():
+        from models import game_server_tags as _gst2
+        _left = [r for r in db.session.execute(_gst2.select()).fetchall() if r.tag_id == _tag_id]
+    check("tags: deleting a tag leaves no orphan association rows", not _left, str(_left))
+    check("tags: deleting a tag that does not exist is a 404",
+          c.post("/api/tags/999999/delete").status_code == 404)
+    with app.app_context():
+        from models import ServerTag as _ST
+        db.session.delete(db.session.get(_ST, _mute_id))
+        for _t in _ST.query.filter_by(name="nocolor").all():
+            db.session.delete(_t)
+        db.session.commit()
+
     # ── Per-user dashboard layout: the saved order must be SERVER-rendered ─────────────────────────
     # The dashboard replaces #server-cards' innerHTML from its own poll and from another user's
     # install (a servers_changed broadcast), so an order applied only in JS silently reverts. These
@@ -1054,6 +1121,65 @@ try:
             _am._server_slots = lambda gs: (16, 16, None)
             _rec.clear(); _am._refresh_player_counts(app)
             check("poller: server_full fires when a server hits its cap", "server_full" in _rec)
+
+            # ── A tag with notify=False silences that server's alerts ──────────────────────────
+            # This is the only user-visible behaviour tags add beyond decoration, and it is wired
+            # into five separate notify() sites — so it is asserted through the REAL passes here.
+            # (Verified by mutation: with the _alerts_muted guards removed, every check below fails.)
+            from models import ServerTag as _STm
+            _mute_tag = _STm(name="muted-smoke", notify=False)
+            db.session.add(_mute_tag)
+            _mon.tags = [_mute_tag]
+            db.session.commit()
+
+            _reset_mon()
+            _am._monitor_state["servers"][_mon_id] = True
+            _am._remote_listening_ports = lambda r: set()
+            _rec.clear(); _am._monitor_pass()
+            check("mute: a muted tag suppresses server_down", "server_down" not in _rec, str(_rec))
+            _reset_mon()
+            _am._monitor_state["servers"][_mon_id] = False
+            _am._remote_listening_ports = lambda r: {27100}
+            _rec.clear(); _am._monitor_pass()
+            check("mute: a muted tag suppresses server_up", "server_up" not in _rec, str(_rec))
+
+            _mon.notify_when_empty = True; db.session.commit()
+            _am._server_slots = lambda gs: (0, 16, None)
+            _rec.clear(); _am._refresh_player_counts(app)
+            db.session.refresh(_mon)
+            check("mute: a muted tag suppresses server_empty", "server_empty" not in _rec, str(_rec))
+            # The request must stay ARMED: muting hides the alert, it does not consume the ask, so
+            # it still fires the first time the server empties after the tag comes off.
+            check("mute: notify_when_empty stays armed while muted", _mon.notify_when_empty is True)
+
+            _am._server_full_alerted.pop(_mon_id, None)
+            _am._server_slots = lambda gs: (16, 16, None)
+            _rec.clear(); _am._refresh_player_counts(app)
+            check("mute: a muted tag suppresses server_full", "server_full" not in _rec, str(_rec))
+            # ...but it IS marked alerted, so unmuting later doesn't fire retroactively about a
+            # server that has been sitting at its cap the whole time.
+            check("mute: server_full is still marked alerted while muted",
+                  _am._server_full_alerted.get(_mon_id) is True)
+
+            _am._server_peak_notified.pop(_mon_id, None)
+            _mon.peak_players = 1; db.session.commit()
+            _am._server_slots = lambda gs: (9, 16, None)
+            _rec.clear(); _am._refresh_player_counts(app)
+            db.session.refresh(_mon)
+            check("mute: a muted tag suppresses server_peak", "server_peak" not in _rec, str(_rec))
+            check("mute: the peak is still RECORDED while muted (data, not an alert)",
+                  _mon.peak_players == 9, "peak=%s" % _mon.peak_players)
+
+            # Remove the tag and the same transition alerts again — proving the silence above came
+            # from the tag and not from some unrelated state the passes left behind.
+            _mon.tags = []
+            db.session.commit()
+            _reset_mon()
+            _am._monitor_state["servers"][_mon_id] = True
+            _am._remote_listening_ports = lambda r: set()
+            _rec.clear(); _am._monitor_pass()
+            check("mute: removing the tag restores server_down", "server_down" in _rec, str(_rec))
+            db.session.delete(_mute_tag); db.session.commit()
         finally:
             _am.notifications.notify = _saved_notify
             for _n, _v in _saved.items():
