@@ -60,6 +60,13 @@ group_custom_commands = db.Table(
 )
 
 
+# Layout keys User.ui_prefs may hold. Whitelisted on BOTH read and write so a key retired in a
+# later version stops taking effect immediately, and a hand-edited blob can't smuggle anything in:
+#   host_order    [remote_id, ...]            dashboard host-card order
+#   server_order  {"remote_id": [game_server_id, ...]}   row order inside each host card
+UI_PREF_KEYS = frozenset({"host_order", "server_order"})
+
+
 class User(UserMixin, db.Model):
     id = db.Column(db.Integer, primary_key=True)
     username = db.Column(db.String(80), unique=True, nullable=False, index=True)
@@ -78,7 +85,35 @@ class User(UserMixin, db.Model):
     language = db.Column(db.String(5), default="en")  # UI language: en / es / fr
     # A superadmin without 2FA sees a nag banner; this remembers a permanent "don't remind me".
     otp_nag_dismissed = db.Column(db.Boolean, default=False, nullable=False)
+    # This user's own UI layout (host/server order), JSON. Personal and never queried, so it rides
+    # on the row instead of its own table — reading it costs no extra query. An ABSENT key means
+    # "use the default layout", so there is exactly one fallback path in the renderer.
+    ui_prefs = db.Column(db.Text, default="{}")
     groups = db.relationship("Group", secondary="user_groups", back_populates="users")
+
+    def get_ui_prefs(self):
+        """This user's saved UI layout, or {}. A NULL column (ALTER-added on an upgraded install),
+        a corrupt blob, or a key we no longer honour must fall back to the default layout rather
+        than raise into a page render."""
+        try:
+            prefs = json.loads(self.ui_prefs or "{}")
+        except (ValueError, TypeError):
+            return {}
+        if not isinstance(prefs, dict):
+            return {}
+        return {k: v for k, v in prefs.items() if k in UI_PREF_KEYS}
+
+    def set_ui_pref(self, key, value):
+        """Set one whitelisted layout key, or clear it with value=None (which restores the
+        default, since absent IS the default). Caller commits."""
+        if key not in UI_PREF_KEYS:
+            return
+        prefs = self.get_ui_prefs()
+        if value is None:
+            prefs.pop(key, None)
+        else:
+            prefs[key] = value
+        self.ui_prefs = json.dumps(prefs)
 
     @staticmethod
     def _norm_code(code):
@@ -548,6 +583,7 @@ def _run_light_migrations():
         ("user", "language"): "ALTER TABLE user ADD COLUMN language VARCHAR(5) DEFAULT 'en'",
         ("user", "otp_nag_dismissed"): "ALTER TABLE user ADD COLUMN otp_nag_dismissed BOOLEAN DEFAULT 0",
         ("user", "api_token"): "ALTER TABLE user ADD COLUMN api_token VARCHAR(64)",
+        ("user", "ui_prefs"): "ALTER TABLE user ADD COLUMN ui_prefs TEXT DEFAULT '{}'",
     }
     for (table, col), ddl in wanted.items():
         if table in existing and col not in existing[table]:
