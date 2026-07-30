@@ -19,7 +19,8 @@ import ssh_manager as sm
 import notifications as N
 import system_ops as SO
 from app import (password_problem, _int_or, _valid_ip_or_cidr, _whitelisted, _parse_tg_command,
-                 _tg_command_arg, _valid_hex_color, _clean_console_text, _apply_user_order)
+                 _tg_command_arg, _valid_hex_color, _clean_console_text, _apply_user_order,
+                 _apply_user_server_order)
 from auth import can_access_remote, client_ip
 
 results = []
@@ -113,6 +114,34 @@ check("order: the input list is never mutated in place",
       (_apply_user_order(_ord_items, [4, 3, 2, 1]) is not _ord_items) and _ids(_ord_items) == [1, 2, 3, 4])
 eq("order: a custom key function is honoured (ordering by something other than .id)",
    [o.rid for o in _apply_user_order([NS(rid=7), NS(rid=8)], [8, 7], key=lambda o: o.rid)], [8, 7])
+# Per-host server order. The dashboard slices ONE flat list per host, so this pass must reorder each
+# host's members WITHOUT disturbing anything else about the list — a host with no saved order, and the
+# positions the other hosts occupy, both have to come out untouched.
+_srv = lambda i, r: NS(id=i, remote_id=r)
+_mixed = [_srv(10, 1), _srv(11, 2), _srv(12, 1), _srv(13, 2), _srv(14, 1)]
+_sids = lambda seq: [o.id for o in seq]
+eq("server order: no saved order leaves the list alone", _sids(_apply_user_server_order(_mixed, {})),
+   [10, 11, 12, 13, 14])
+eq("server order: a junk pref value leaves the list alone",
+   _sids(_apply_user_server_order(_mixed, {"server_order": "not a dict"})), [10, 11, 12, 13, 14])
+eq("server order: one host is reordered within its own slots, other hosts untouched",
+   _sids(_apply_user_server_order(_mixed, {"server_order": {"1": [14, 12, 10]}})),
+   [14, 11, 12, 13, 10])
+eq("server order: two hosts reordered independently",
+   _sids(_apply_user_server_order(_mixed, {"server_order": {"1": [12, 10, 14], "2": [13, 11]}})),
+   [12, 13, 10, 11, 14])
+eq("server order: a host with no entry keeps its default order",
+   _sids(_apply_user_server_order(_mixed, {"server_order": {"2": [13, 11]}})),
+   [10, 13, 12, 11, 14])
+eq("server order: ids from another host cannot pull a server across hosts",
+   _sids(_apply_user_server_order(_mixed, {"server_order": {"1": [11, 13, 14]}})),
+   [14, 11, 10, 13, 12])
+eq("server order: an int key (not the JSON string key) is ignored, not crashed on",
+   _sids(_apply_user_server_order(_mixed, {"server_order": {1: [14, 12, 10]}})),
+   [10, 11, 12, 13, 14])
+check("server order: the input list is not mutated",
+      (_apply_user_server_order(_mixed, {"server_order": {"1": [14, 10, 12]}}) is not _mixed)
+      and _sids(_mixed) == [10, 11, 12, 13, 14])
 # ui_prefs accessors: a corrupt or NULL blob must degrade to the default layout, never raise into a
 # page render, and only whitelisted keys may take effect (a retired key stops working on upgrade).
 _UsrP = __import__("models").User

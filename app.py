@@ -2199,6 +2199,31 @@ def _apply_user_order(items, order, key=lambda o: o.id):
     return sorted(items, key=lambda o: pos.get(key(o), len(pos)))
 
 
+def _apply_user_server_order(servers, prefs):
+    """`servers` with each host's rows in that user's saved order. The dashboard slices this one
+    list per host (`servers|selectattr('remote_id', ...)`), so ordering it per host in a single pass
+    is enough — no need to know the host order here, since the slice preserves whatever we produce.
+
+    Hosts with no saved order keep their default order because _apply_user_order is stable and only
+    the ids it knows about move. Pure, so it is unit-testable without an app context."""
+    per_host = prefs.get("server_order") if isinstance(prefs, dict) else None
+    if not isinstance(per_host, dict) or not per_host:
+        return list(servers)
+    out = list(servers)
+    slots = {}                                   # host id -> the positions its servers occupy
+    for i, gs in enumerate(out):
+        slots.setdefault(gs.remote_id or 0, []).append(i)
+    for host_id, idxs in slots.items():
+        order = per_host.get(str(host_id))
+        if not order:
+            continue                             # this host has no saved order: leave it alone
+        # Permute a host's members among the slots they ALREADY occupy, so nothing about the
+        # surrounding list — including the caller's host ordering — can shift underneath us.
+        for slot, gs in zip(idxs, _apply_user_order([out[i] for i in idxs], order)):
+            out[slot] = gs
+    return out
+
+
 def _current_lang():
     """Active UI language: the logged-in user's saved preference, else the session choice, else en."""
     lang = None
@@ -3065,7 +3090,7 @@ def register_routes(app):
         _prefs = current_user.get_ui_prefs()
         remotes = _apply_user_order(RemoteServer.query.all(), _prefs.get("host_order"))
         remote_count = RemoteServer.query.filter_by(is_local=False).count()
-        servers = get_user_servers(current_user)
+        servers = _apply_user_server_order(get_user_servers(current_user), _prefs)
         uperms = get_user_permissions(current_user)
         can_control = current_user.is_superadmin or bool(
             {START_SERVER, STOP_SERVER, RESTART_SERVER} & uperms
@@ -7289,7 +7314,10 @@ def register_routes(app):
     @app.route("/api/servers")
     @login_required
     def api_servers():
-        servers = get_user_servers(current_user)
+        # Same per-user order as the dashboard. This payload is keyed by id client-side, so order
+        # is not load-bearing here — but any future consumer that iterates it should see the user's
+        # order rather than a second, different one.
+        servers = _apply_user_server_order(get_user_servers(current_user), current_user.get_ui_prefs())
         # Refresh live status efficiently: one listening-port scan per remote,
         # then match each game server's port (instead of an SSH call per server).
         by_remote = {}

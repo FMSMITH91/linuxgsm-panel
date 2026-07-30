@@ -136,7 +136,7 @@
         </thead>
         <tbody>
           {% for srv in remote_servers %}
-          <tr data-name="{{ srv.name }}" data-type="{{ srv.game_display or srv.game_type }}" data-status="{{ srv.status }}" data-players="{{ player_counts.get(srv.id) if player_counts.get(srv.id) is not none else -1 }}">
+          <tr data-server-id="{{ srv.id }}" data-name="{{ srv.name }}" data-type="{{ srv.game_display or srv.game_type }}" data-status="{{ srv.status }}" data-players="{{ player_counts.get(srv.id) if player_counts.get(srv.id) is not none else -1 }}">
             {% if can_control %}<td><input type="checkbox" class="form-check-input srv-check" value="{{ srv.id }}" data-name="{{ srv.name }}" data-supports-update="{{ 'true' if srv.supports_update else 'false' }}" aria-label="Select {{ srv.name }}"></td>{% endif %}
             <td>
               <strong>{{ srv.name }}</strong>
@@ -171,6 +171,14 @@
               <a href="{{ url_for('server_detail', server_id=srv.id) }}" class="btn btn-outline-secondary btn-sm srv-console{% if busy %} disabled{% endif %}" title="Console &amp; stats" aria-label="Console &amp; stats for {{ srv.name }}"{% if busy %} tabindex="-1" aria-disabled="true"{% endif %}>
                 <i class="bi bi-terminal-fill"></i>
               </a>
+              {# Same buttons-not-drag reasoning as the host cards, and doubly so here: these rows sit
+                 inside a horizontally scrolling .table-responsive wrapper. #}
+              <span class="btn-group btn-group-sm srv-move ms-1" role="group" aria-label="Reorder {{ srv.name }}">
+                <button type="button" class="btn btn-outline-secondary" data-action="moveServerRow" data-args='[-1,"@self"]'
+                        title="Move this server up" aria-label="Move {{ srv.name }} up"><i class="bi bi-arrow-up"></i></button>
+                <button type="button" class="btn btn-outline-secondary" data-action="moveServerRow" data-args='[1,"@self"]'
+                        title="Move this server down" aria-label="Move {{ srv.name }} down"><i class="bi bi-arrow-down"></i></button>
+              </span>
             </td>
           </tr>
           {% endfor %}
@@ -396,15 +404,29 @@ function hostCards(){
   return Array.prototype.slice.call(document.querySelectorAll('#server-cards > .server-remote-card'));
 }
 
+// Both orders are sent together on any change: they are one layout, the endpoint validates each
+// key independently, and sending both keeps them from drifting apart if a save is ever dropped.
+function collectLayout(){
+  var host_order = [], server_order = {};
+  hostCards().forEach(function(card){
+    var rid = parseInt(card.getAttribute('data-remote-id'), 10);
+    if (isNaN(rid)) return;
+    host_order.push(rid);
+    server_order[rid] = Array.prototype.slice
+      .call(card.querySelectorAll('tbody tr[data-server-id]'))
+      .map(function(tr){ return parseInt(tr.getAttribute('data-server-id'), 10); })
+      .filter(function(n){ return !isNaN(n); });
+  });
+  return {host_order: host_order, server_order: server_order};
+}
+
 function saveHostOrder(){
   clearTimeout(_orderSaveTimer);                 // one request per burst of clicks, not per click
   _orderSaveTimer = setTimeout(function(){
-    var ids = hostCards().map(function(c){ return parseInt(c.getAttribute('data-remote-id'), 10); })
-                         .filter(function(n){ return !isNaN(n); });
     fetch(MOUNT + '/api/account/ui-order', {
       method: 'POST',
       headers: {'Content-Type': 'application/json'},   // the wrapper adds CSRF, not this
-      body: JSON.stringify({host_order: ids})
+      body: JSON.stringify(collectLayout())
     })
       // r.ok first: an expired session answers 302 -> HTML login page and a CSRF failure answers
       // an HTML 400, either of which would explode inside r.json() and look like success.
@@ -430,6 +452,24 @@ window.moveHostCard = function(dir, btn){
   // Keep keyboard focus travelling with the card, so repeated arrow presses keep working. Guarded:
   // if a later change disables the end buttons, this must not throw mid-reorder.
   var keep = card.querySelector('.host-move button:not([disabled])');
+  if (keep) keep.focus();
+  saveHostOrder();
+};
+
+// Move one server row within its own host card. Rows hidden by the search filter are SKIPPED, so a
+// move always lands where the user can see it — swapping with an invisible neighbour looks like the
+// button did nothing.
+window.moveServerRow = function(dir, btn){
+  var row = btn.closest('tr[data-server-id]');
+  if (!row) return;
+  var body = row.parentNode;
+  var rows = Array.prototype.slice.call(body.querySelectorAll('tr[data-server-id]'))
+                  .filter(function(tr){ return tr === row || tr.style.display !== 'none'; });
+  var at = rows.indexOf(row), to = at + (dir < 0 ? -1 : 1);
+  if (at < 0 || to < 0 || to >= rows.length) return;      // already first/last visible: no-op
+  if (dir < 0) body.insertBefore(row, rows[to]);
+  else body.insertBefore(rows[to], row);
+  var keep = row.querySelector('.srv-move button:not([disabled])');
   if (keep) keep.focus();
   saveHostOrder();
 };
