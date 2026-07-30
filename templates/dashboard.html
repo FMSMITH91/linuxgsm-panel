@@ -97,7 +97,7 @@
 {% for remote in remotes %}
 {% set remote_servers = servers|selectattr('remote_id', 'equalto', remote.id)|list %}
 {% if remote_servers %}
-<div class="card mb-3 server-remote-card">
+<div class="card mb-3 server-remote-card" data-remote-id="{{ remote.id }}">
   <div class="card-header d-flex justify-content-between align-items-center">
     <span>
       <i class="bi bi-hdd-network-fill"></i> {{ remote.display_name }}
@@ -105,6 +105,14 @@
       <span class="text-secondary small ms-2">{{ remote.display_host }}</span>
     </span>
     <span class="d-flex align-items-center gap-2">
+      {# Real buttons, not drag handles: `click` is the only gesture base.html's delegated
+         dispatcher listens for, and buttons are keyboard- and touch-operable for free. #}
+      <span class="btn-group btn-group-sm host-move" role="group" aria-label="Reorder this host">
+        <button type="button" class="btn btn-outline-secondary" data-action="moveHostCard" data-args='[-1,"@self"]'
+                title="Move this host up" aria-label="Move {{ remote.display_name }} up"><i class="bi bi-arrow-up"></i></button>
+        <button type="button" class="btn btn-outline-secondary" data-action="moveHostCard" data-args='[1,"@self"]'
+                title="Move this host down" aria-label="Move {{ remote.display_name }} down"><i class="bi bi-arrow-down"></i></button>
+      </span>
       <span class="text-secondary small d-none d-md-inline" id="host-metrics-{{ remote.id }}"></span>
       <span class="badge {% if remote.is_online %}bg-success{% else %}bg-danger{% endif %}">
         {{ "Online" if remote.is_online else "Offline" }}
@@ -374,6 +382,56 @@ if (window.onServersChanged) onServersChanged(refreshStatus);
 window.afterDashRefresh = function(){
   if (typeof filterServers === 'function') filterServers();
   refreshStatus();
+};
+
+// ── Per-user host-card order ────────────────────────────────────────────────────────────────
+// The server renders the saved order, so this only has to (a) move the node for instant feedback
+// and (b) persist the new order. #server-cards is swapped wholesale by refreshSection() on a poll
+// or another user's install, and the replacement HTML already carries the saved order — which is
+// why nothing here needs re-applying afterwards.
+var _orderSaveTimer = null;
+
+function hostCards(){
+  // #srv-none is a sibling sentinel inside #server-cards — never treat it as a host card.
+  return Array.prototype.slice.call(document.querySelectorAll('#server-cards > .server-remote-card'));
+}
+
+function saveHostOrder(){
+  clearTimeout(_orderSaveTimer);                 // one request per burst of clicks, not per click
+  _orderSaveTimer = setTimeout(function(){
+    var ids = hostCards().map(function(c){ return parseInt(c.getAttribute('data-remote-id'), 10); })
+                         .filter(function(n){ return !isNaN(n); });
+    fetch(MOUNT + '/api/account/ui-order', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},   // the wrapper adds CSRF, not this
+      body: JSON.stringify({host_order: ids})
+    })
+      // r.ok first: an expired session answers 302 -> HTML login page and a CSRF failure answers
+      // an HTML 400, either of which would explode inside r.json() and look like success.
+      .then(function(r){ if(!r.ok) throw 0; return r.json(); })
+      .then(function(d){ if(!d || d.success === false) throw 0; })
+      .catch(function(){
+        if (window.toast) toast('Could not save your layout — it will revert on reload.', 'danger');
+      });
+  }, 400);
+}
+
+// Move one host card up (dir<0) or down (dir>0). MOVES the existing node rather than rebuilding:
+// the cells carry ids the pollers address (status-<id>, res-<id>) and the delegated handlers walk
+// up with closest(), both of which survive a move and neither of which survives a re-render.
+window.moveHostCard = function(dir, btn){
+  var card = btn.closest('.server-remote-card');
+  var wrap = document.getElementById('server-cards');
+  if (!card || !wrap) return;
+  var cards = hostCards(), at = cards.indexOf(card), to = at + (dir < 0 ? -1 : 1);
+  if (at < 0 || to < 0 || to >= cards.length) return;         // already at the end: no-op
+  if (dir < 0) wrap.insertBefore(card, cards[to]);
+  else wrap.insertBefore(cards[to], card);
+  // Keep keyboard focus travelling with the card, so repeated arrow presses keep working. Guarded:
+  // if a later change disables the end buttons, this must not throw mid-reorder.
+  var keep = card.querySelector('.host-move button:not([disabled])');
+  if (keep) keep.focus();
+  saveHostOrder();
 };
 
 function copyAddr(addr) {

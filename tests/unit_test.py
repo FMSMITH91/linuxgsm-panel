@@ -19,7 +19,7 @@ import ssh_manager as sm
 import notifications as N
 import system_ops as SO
 from app import (password_problem, _int_or, _valid_ip_or_cidr, _whitelisted, _parse_tg_command,
-                 _tg_command_arg, _valid_hex_color, _clean_console_text)
+                 _tg_command_arg, _valid_hex_color, _clean_console_text, _apply_user_order)
 from auth import can_access_remote, client_ip
 
 results = []
@@ -90,6 +90,48 @@ eq("_int_or blank -> default", _int_or("", 22), 22)
 eq("_int_or junk -> default", _int_or("abc", 22), 22)
 eq("_int_or None -> default", _int_or(None, 5000), 5000)
 eq("_int_or whitespace", _int_or("  80 ", 1), 80)
+
+# ── per-user layout order: _apply_user_order is the single chokepoint every page's ordering goes
+# through, so its edge cases are the whole feature's correctness. "No saved order" MUST mean "the
+# list you passed in, untouched" — that is what keeps the default layout the default.
+_ord_items = [NS(id=1), NS(id=2), NS(id=3), NS(id=4)]
+_ids = lambda seq: [o.id for o in seq]
+eq("order: no saved order leaves the default alone", _ids(_apply_user_order(_ord_items, None)), [1, 2, 3, 4])
+eq("order: empty saved order leaves the default alone", _ids(_apply_user_order(_ord_items, [])), [1, 2, 3, 4])
+eq("order: a full saved order is applied", _ids(_apply_user_order(_ord_items, [3, 1, 4, 2])), [3, 1, 4, 2])
+eq("order: items missing from the order keep their default order, after the ordered ones",
+   _ids(_apply_user_order(_ord_items, [4, 2])), [4, 2, 1, 3])
+eq("order: ids that no longer exist are ignored (a host was deleted)",
+   _ids(_apply_user_order(_ord_items, [99, 3, 42, 1])), [3, 1, 2, 4])
+eq("order: junk entries are skipped, the rest still applies",
+   _ids(_apply_user_order(_ord_items, ["2", None, {}, 1])), [2, 1, 3, 4])
+eq("order: a duplicated id does not displace its first position",
+   _ids(_apply_user_order(_ord_items, [3, 1, 3])), [3, 1, 2, 4])
+eq("order: an all-junk order is the same as no order", _ids(_apply_user_order(_ord_items, ["x", None])),
+   [1, 2, 3, 4])
+check("order: the input list is never mutated in place",
+      (_apply_user_order(_ord_items, [4, 3, 2, 1]) is not _ord_items) and _ids(_ord_items) == [1, 2, 3, 4])
+eq("order: a custom key function is honoured (ordering by something other than .id)",
+   [o.rid for o in _apply_user_order([NS(rid=7), NS(rid=8)], [8, 7], key=lambda o: o.rid)], [8, 7])
+# ui_prefs accessors: a corrupt or NULL blob must degrade to the default layout, never raise into a
+# page render, and only whitelisted keys may take effect (a retired key stops working on upgrade).
+_UsrP = __import__("models").User
+_up = _UsrP()
+check("ui_prefs: unset column reads as no preferences", _up.get_ui_prefs() == {})
+_up.ui_prefs = "not json at all"
+check("ui_prefs: a corrupt blob reads as no preferences", _up.get_ui_prefs() == {})
+_up.ui_prefs = '["a","list","not","a","dict"]'
+check("ui_prefs: a non-object blob reads as no preferences", _up.get_ui_prefs() == {})
+_up.ui_prefs = '{"host_order": [2, 1], "evil_key": "x"}'
+check("ui_prefs: only whitelisted keys are returned",
+      _up.get_ui_prefs() == {"host_order": [2, 1]})
+_up.set_ui_pref("host_order", [3, 2])
+check("ui_prefs: set writes a whitelisted key", _up.get_ui_prefs()["host_order"] == [3, 2])
+_up.set_ui_pref("not_a_key", [1])
+check("ui_prefs: set ignores a non-whitelisted key", "not_a_key" not in _up.get_ui_prefs())
+_up.set_ui_pref("host_order", None)
+check("ui_prefs: clearing a key restores the default (absent, not empty)",
+      _up.get_ui_prefs() == {} and "host_order" not in (_up.ui_prefs or ""))
 
 # ── transports must decode leniently: command output is GAME SERVER output (player names, mod
 # chatter, latin-1 logs), so it is not guaranteed valid UTF-8. A strict decode raises inside

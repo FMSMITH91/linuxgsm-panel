@@ -27,6 +27,21 @@
   </div>
 
   <div class="card">
+    <div class="card-header"><i class="bi bi-grid-1x2-fill"></i> Dashboard layout</div>
+    <div class="card-body">
+      <p class="text-secondary small mb-2">Reorder the host panels on your dashboard with the arrow buttons in each panel's header. Your order is saved to your account and follows you across devices.</p>
+      {# Read the preference straight off current_user so this card needs no route change — account.html
+         is rendered from two places (account() and the api-token mint), which would otherwise diverge. #}
+      {% set has_custom_layout = current_user.get_ui_prefs() %}
+      <p class="text-secondary small mb-2">{% if has_custom_layout %}You're using your own order.{% else %}You're using the default order.{% endif %}</p>
+      <button class="btn btn-outline-secondary btn-sm" data-action="resetDashLayout" data-args='["@self"]'
+              {% if not has_custom_layout %}disabled{% endif %}>
+        <i class="bi bi-arrow-counterclockwise"></i> Reset to the default order
+      </button>
+    </div>
+  </div>
+
+  <div class="card">
     <div class="card-header"><i class="bi bi-key-fill"></i> Password</div>
     <div class="card-body">
       <p class="text-secondary small mb-3">Change your account password. You'll need your current password{% if current_user.totp_enabled %} and an authenticator code{% endif %} to confirm it's you.</p>
@@ -174,6 +189,24 @@
   // for DOMContentLoaded (footer scripts have run by then) before the first fetch, or MOUNT is blank.
   if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', load);
   else load();
+
+  // Discard this user's saved dashboard order. Confirmed first: it is not recoverable, and on a
+  // busy install the order may have taken real effort to arrange.
+  window.resetDashLayout = function(btn){
+    confirmDialog({title:'Reset dashboard layout', icon:'arrow-counterclockwise',
+      confirmClass:'btn-warning', confirmLabel:'Reset layout',
+      bodyText:'Discard your saved panel order and go back to the default? Your other preferences are not affected.',
+      onConfirm:function(){
+        fetch(mp() + '/api/account/ui-order/reset', {method:'POST'})
+          .then(function(r){ if(!r.ok) throw 0; return r.json(); })
+          .then(function(d){
+            if(!d || d.success === false) throw 0;
+            if(btn) btn.disabled = true;
+            if(window.toast) toast('Your dashboard is back to the default order.', 'success');
+          })
+          .catch(function(){ if(window.toast) toast('Could not reset your layout', 'danger'); });
+      }});
+  };
 })();
 </script>
 

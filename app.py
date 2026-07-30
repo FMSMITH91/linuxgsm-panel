@@ -2177,6 +2177,28 @@ def _form_err(message, endpoint, code=400, category="danger", **values):
     return redirect(url_for(endpoint, **values))
 
 
+def _apply_user_order(items, order, key=lambda o: o.id):
+    """`items` in a user's saved order: saved ids first in their saved order, then everything else
+    in the order it arrived. Ids that no longer exist and items missing from the order are both
+    NORMAL (a host was deleted; a server was just added), so neither is an error. An empty or junk
+    order returns `items` untouched — that is what makes "no saved layout" mean "ship default".
+
+    The sort is stable, so items the user never ordered keep their relative default order instead of
+    being shuffled. Pure and module-level so it is unit-testable with no app context."""
+    pos = {}
+    for ident in (order or []):
+        try:
+            num = int(ident)
+        except (TypeError, ValueError):
+            continue                           # hand-edited blob: skip the junk, keep the rest
+        # len(pos), NOT the loop index: positions must stay dense, or a skipped junk entry leaves a
+        # gap and the len(pos) fallback below sorts un-ordered items AHEAD of ordered ones.
+        pos.setdefault(num, len(pos))          # first occurrence wins; a dupe can't displace it
+    if not pos:
+        return list(items)
+    return sorted(items, key=lambda o: pos.get(key(o), len(pos)))
+
+
 def _current_lang():
     """Active UI language: the logged-in user's saved preference, else the session choice, else en."""
     lang = None
@@ -2856,6 +2878,90 @@ def register_routes(app):
             logout_user()
         return jsonify({"ok": True, "current": is_current})
 
+    @app.route("/api/account/ui-order", methods=["POST"])
+    @login_required
+    def api_account_ui_order():
+        """Save THIS user's preferred dashboard order. Scoped to current_user: the body carries ids
+        only and never a user id, so there is no way to write someone else's layout.
+
+        Ids the caller can't see, ids that no longer exist, and non-numeric junk are DROPPED rather
+        than rejected — a stale tab or a hand-edited body should still produce a sane layout, and a
+        rejection here would leave the user's screen and their saved order disagreeing.
+
+        Deliberately NOT audit-logged: log_action commits its own session and /logs rebuilds its
+        filter dropdowns with SELECT DISTINCT over the whole table, so logging a preference nobody
+        can be attacked through would cost every reorder a second commit. set_language does the
+        same. The reset endpoint below IS logged, because it discards state.
+        """
+        try:
+            data = _json_body()
+            visible = get_user_servers(current_user)
+            ok_hosts = {gs.remote_id for gs in visible}
+            ok_servers = {gs.id for gs in visible}
+
+            def _clean(raw, allowed):
+                """Ids from `raw`, keeping only ones in `allowed`, deduped, order preserved."""
+                out, seen = [], set()
+                for ident in (raw or [])[:200]:
+                    try:
+                        num = int(ident)
+                    except (TypeError, ValueError):
+                        continue
+                    if num in allowed and num not in seen:
+                        seen.add(num)
+                        out.append(num)
+                return out
+
+            saved = []
+            if isinstance(data.get("host_order"), list):
+                current_user.set_ui_pref("host_order", _clean(data["host_order"], ok_hosts))
+                saved.append("host_order")
+            if isinstance(data.get("server_order"), dict):
+                per_host = {}
+                for host_id, ids in list(data["server_order"].items())[:100]:
+                    if not isinstance(ids, list):
+                        continue
+                    try:
+                        host_key = str(int(host_id))
+                    except (TypeError, ValueError):
+                        continue
+                    if int(host_key) in ok_hosts:
+                        per_host[host_key] = _clean(ids, ok_servers)
+                current_user.set_ui_pref("server_order", per_host)
+                saved.append("server_order")
+            if not saved:
+                return jsonify({"success": False, "message": "Nothing to save."}), 400
+            try:
+                db.session.commit()
+            except Exception:
+                db.session.rollback()
+                _log.debug("ui-order commit failed", exc_info=True)
+                return jsonify({"success": False, "message": "Could not save your layout."}), 500
+            return jsonify({"success": True, "saved": saved})
+        except Exception:
+            return jsonify({"success": False, "message": _log_and_generic("save layout failed")}), 500
+
+    @app.route("/api/account/ui-order/reset", methods=["POST"])
+    @login_required
+    def api_account_ui_order_reset():
+        """Drop this user's saved order so the default layout applies again. A separate endpoint
+        rather than a sentinel value in the save payload, so "never customised" and "reset back to
+        default" end up as the SAME stored state (no keys) instead of two states to reason about."""
+        try:
+            for key in ("host_order", "server_order"):
+                current_user.set_ui_pref(key, None)
+            try:
+                db.session.commit()
+            except Exception:
+                db.session.rollback()
+                _log.debug("ui-order reset commit failed", exc_info=True)
+                return jsonify({"success": False, "message": "Could not reset your layout."}), 500
+            log_action(current_user, "ui_layout_reset", target=current_user.username,
+                       detail="restored the default dashboard order")
+            return jsonify({"success": True})
+        except Exception:
+            return jsonify({"success": False, "message": _log_and_generic("reset layout failed")}), 500
+
     @app.route("/account/2fa/disable", methods=["POST"])
     @login_required
     def account_2fa_disable():
@@ -2952,7 +3058,12 @@ def register_routes(app):
         if not is_setup_complete():
             return redirect("/setup")
 
-        remotes = RemoteServer.query.all()
+        # This user's own host-card order. Applied server-side, NOT in JS: the dashboard swaps
+        # #server-cards' innerHTML from its poll and from a cross-user servers_changed broadcast,
+        # so a DOM-only order would silently revert (and reordering after paint is layout shift,
+        # which Lighthouse CI gates). With no saved order this is a no-op, so the default stands.
+        _prefs = current_user.get_ui_prefs()
+        remotes = _apply_user_order(RemoteServer.query.all(), _prefs.get("host_order"))
         remote_count = RemoteServer.query.filter_by(is_local=False).count()
         servers = get_user_servers(current_user)
         uperms = get_user_permissions(current_user)

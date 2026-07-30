@@ -821,6 +821,61 @@ try:
         _sa_event.remove(_engine, "after_cursor_execute", _count_query)
         _appmod.run_command = _orig_rc
 
+    # ── Per-user dashboard layout: the saved order must be SERVER-rendered ─────────────────────────
+    # The dashboard replaces #server-cards' innerHTML from its own poll and from another user's
+    # install (a servers_changed broadcast), so an order applied only in JS silently reverts. These
+    # checks assert the order is in the HTML the server sends, which is the only way it survives.
+    with app.app_context():
+        _lay_gs2 = GameServer(remote_id=remote2_id, name="smoke-tf2", short_name="tf2server",
+                              game_type="tf2", port=27025, installed=True, status="offline")
+        db.session.add(_lay_gs2)
+        db.session.commit()
+        _lay_gs2_id = _lay_gs2.id      # read it INSIDE the session; the instance detaches on exit
+
+    def _card_order(html):
+        """Host ids in the order their cards appear in #server-cards."""
+        import re as _re_l
+        return [int(m) for m in _re_l.findall(r'server-remote-card"\s+data-remote-id="(\d+)"', html)]
+
+    _lay_default = _card_order(c.get("/").get_data(as_text=True))
+    # ≥2 rather than ==2: the perf section above seeds extra hosts, and reordering has to work on
+    # whatever is actually there.
+    check("layout: every host card carries its id and the default order renders",
+          len(_lay_default) >= 2 and remote_id in _lay_default and remote2_id in _lay_default,
+          str(_lay_default))
+    _flip = list(reversed(_lay_default))
+    _lay_save = c.post("/api/account/ui-order", json={"host_order": _flip})
+    check("layout: saving an order returns success",
+          _lay_save.status_code == 200 and (_lay_save.get_json() or {}).get("success") is True,
+          "status=%d body=%s" % (_lay_save.status_code, _lay_save.get_data(as_text=True)[:120]))
+    check("layout: the saved order is rendered server-side on the next GET /",
+          _card_order(c.get("/").get_data(as_text=True)) == _flip, str(_flip))
+    # A refreshSection() swap re-fetches location.href with this header — the replacement HTML must
+    # carry the order too, or the user's layout is wiped seconds after they set it.
+    check("layout: order survives the in-page refresh path (X-Requested-With)",
+          _card_order(c.get("/", headers={"X-Requested-With": "XMLHttpRequest"})
+                      .get_data(as_text=True)) == _flip)
+    # Ids the caller can't see are dropped rather than rejected, so a stale tab can't poison storage.
+    c.post("/api/account/ui-order", json={"host_order": [999999, _flip[0], "junk", None]})
+    with app.app_context():
+        _stored = db.session.get(User, admin_id).get_ui_prefs().get("host_order")
+    check("layout: unknown ids and junk are dropped, real ones kept", _stored == [_flip[0]], str(_stored))
+    check("layout: a body with no recognised key is a 400, not a silent no-op",
+          c.post("/api/account/ui-order", json={"nope": [1]}).status_code == 400)
+    _lay_reset = c.post("/api/account/ui-order/reset")
+    check("layout: reset returns success", _lay_reset.status_code == 200
+          and (_lay_reset.get_json() or {}).get("success") is True)
+    with app.app_context():
+        check("layout: reset clears the keys entirely (absent == default)",
+              db.session.get(User, admin_id).get_ui_prefs() == {})
+    check("layout: after reset the default order is back",
+          _card_order(c.get("/").get_data(as_text=True)) == _lay_default)
+    _lay_anon = app.test_client().post("/api/account/ui-order", json={"host_order": [1]})
+    check("layout: saving requires a login", _lay_anon.status_code != 200, "got %d" % _lay_anon.status_code)
+    with app.app_context():
+        db.session.delete(db.session.get(GameServer, _lay_gs2_id))
+        db.session.commit()
+
     # ── Light-migration coverage ──────────────────────────────────────────────────────────────────
     # The ALTER-TABLE list in models.py is what upgrades a database created by an OLDER panel version
     # (create_all() never ALTERs existing tables). Assert it references only real columns and that it
@@ -839,6 +894,31 @@ try:
                  for t in _sa_inspect(db.engine).get_table_names()}
         _stale = [(t, c) for t, c, _ in _mig if c not in _cols.get(t, set())]
         check("migration: no entry targets a table/column that no longer exists", not _stale, str(_stale))
+        # The INVERSE check, which is the one that actually protects upgraded installs: a column added
+        # to a model WITHOUT a migration entry is invisible here (create_all builds CI's DB fresh, so
+        # it is always present) and then throws "no such column" on every request of every upgraded
+        # install — including /login, i.e. a total outage nobody can log in to fix. Columns present in
+        # the very first release need no entry, hence the baseline.
+        # Columns that shipped in the initial release (16cff95) — extracted from that commit's
+        # models.py, not hand-listed, so it is a fact rather than a guess. Anything a later version
+        # added must carry an entry; note api_token, commands, daily_restart and public_ip appear
+        # here AND in the map, which is harmless.
+        _baseline = {
+            "user": {"api_token", "created_at", "display_name", "email", "id", "is_active",
+                     "is_superadmin", "last_login", "password_hash", "username"},
+            "game_server": {"autostart", "commands", "created_at", "daily_restart", "game_display",
+                            "game_type", "id", "installed", "name", "port", "query_port",
+                            "remote_id", "short_name", "status"},
+            "remote_server": {"auth_credential", "auth_method", "created_at", "host", "id",
+                              "is_local", "is_online", "last_seen", "linuxgsm_user", "name",
+                              "port", "public_ip", "sudo_enabled", "username"},
+        }
+        _have_entry = {(t, c) for t, c, _ in _mig}
+        _unmigrated = sorted((t, c) for t, base in _baseline.items()
+                             for c in _cols.get(t, set())
+                             if c not in base and (t, c) not in _have_entry)
+        check("migration: every added column on a core table has an ALTER entry (upgrade safety)",
+              not _unmigrated, "missing entries for: %s" % str(_unmigrated))
         try:
             _rlm(); _rlm()   # commits internally; a no-op on an already-current schema, run twice
             _idem_ok, _idem_err = True, ""
