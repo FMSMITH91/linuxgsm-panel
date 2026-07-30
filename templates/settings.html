@@ -54,12 +54,12 @@
         <div class="card-body">
           <label class="form-label small mb-1" for="s-lang">Default language for new users</label>
           <select id="s-lang" name="default_language" class="form-select form-select-sm">
-            <option value="" {% if not settings.default_language %}selected{% endif %}>Creator's language</option>
+            <option value="" {% if not settings.default_language %}selected{% endif %}>Same as whoever creates the account</option>
             {% for code, name in languages.items() %}
             <option value="{{ code }}" {% if settings.default_language == code %}selected{% endif %}>{{ name }}</option>
             {% endfor %}
           </select>
-          <div class="small text-secondary mt-1">The UI language a newly-created account starts in.</div>
+          <div class="small text-secondary mt-1">The UI language a newly-created account starts in. Pick a language to pin every new account to it, or leave it on <em>Same as whoever creates the account</em> to inherit the admin's own language (English if theirs isn't available). Each user can change their own afterwards on their Account page.</div>
         </div>
       </div>
 

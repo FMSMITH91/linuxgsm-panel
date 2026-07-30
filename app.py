@@ -2321,6 +2321,26 @@ def _apply_user_server_order(servers, prefs):
     return out
 
 
+def _new_user_language(cfg, creator, known):
+    """The UI language a newly-created account starts in.
+
+    Settings offers an explicit language OR the blank "Creator's language" option. That blank case
+    used to fall straight through to English, so the option silently did nothing — a French-speaking
+    admin creating accounts still handed out English ones. Blank now means what it says: inherit the
+    language of whoever is creating the account, and only then fall back to English.
+
+    `known` is the supported-language map, so a language retired in a later version cannot be
+    assigned. Pure, for testability."""
+    configured = ((cfg or {}).get("default_language") or "").strip()
+    if configured in known:
+        return configured
+    if not configured:
+        inherited = (getattr(creator, "language", "") or "").strip()
+        if inherited in known:
+            return inherited
+    return "en"
+
+
 def _current_lang():
     """Active UI language: the logged-in user's saved preference, else the session choice, else en."""
     lang = None
@@ -5068,16 +5088,17 @@ def register_routes(app):
         if existing:
             return _form_err("Username already exists.", "manage_users")
 
-        # New users start in the configured default UI language (Settings → Localization),
-        # falling back to English; each user can change their own afterwards.
-        new_lang = (load_config().get("default_language") or "en")
+        # New users start in the configured default UI language (Settings → Localization), or in
+        # the creating admin's own language when that is left blank; each user can change theirs
+        # afterwards.
+        new_lang = _new_user_language(load_config(), current_user, i18n.LANGUAGES)
         user = User(
             username=username,
             password_hash=hash_password(password),
             email=encrypt_secret(email) if email else None,
             display_name=display_name,
             is_superadmin=is_superadmin,
-            language=(new_lang if new_lang in i18n.LANGUAGES else "en"),
+            language=new_lang,   # already validated against i18n.LANGUAGES by _new_user_language
         )
         # Add to selected groups
         for gid in group_ids:

@@ -671,6 +671,14 @@ try:
         return cc, rr
 
     s1, r1 = _real_login()
+    # The login cookie must be PERSISTENT (carry Expires/Max-Age). A bare session cookie dies with
+    # the browser process — and on Android the browser is killed constantly — which shows up as
+    # "it forgets my login every time", with a new server-side session row per re-login.
+    _login_cookies = {h.split("=", 1)[0]: h for h in r1.headers.getlist("Set-Cookie")}
+    _sess_cookie = _login_cookies.get("lgpanel_session", "")
+    check("session: the login cookie is persistent, not a browser-session cookie",
+          "Expires=" in _sess_cookie or "Max-Age=" in _sess_cookie,
+          "Set-Cookie: %s" % (_sess_cookie[:160] or "(none issued)"))
     check("session: real login lands in (redirect away from /login)",
           r1.status_code in (301, 302, 303) and "/login" not in (r1.headers.get("Location") or ""),
           "status=%d loc=%s" % (r1.status_code, r1.headers.get("Location") or ""))
