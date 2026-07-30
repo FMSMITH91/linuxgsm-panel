@@ -76,8 +76,33 @@ check("console: real log lines preserved",
       and "[02:46:21 INFO]: Connection closed" in _mc_clean)
 eq("console: ANSI colour codes stripped",
    _clean_console_text("\x1b[0;32mgreen\x1b[0m text"), "green text")
-eq("console: carriage-return redraw normalised",
-   _clean_console_text("first\r\nsecond\rthird"), "first\nsecond\nthird")
+# A carriage return OVERWRITES from column 0 — it does not start a new line. Rendering it as a
+# newline (the old behaviour) split JLine's prompt-erase into stray blank lines.
+eq("console: \\r overwrites from column 0 instead of starting a line",
+   _clean_console_text("abc\rX"), "Xbc")
+eq("console: a line merely ENDING in \\r is still shown in full",
+   _clean_console_text("> say hi\r"), "> say hi")
+eq("console: \\r\\n is a real line break", _clean_console_text("first\r\nsecond"), "first\nsecond")
+# JLine re-renders a typed command with syntax colour by erasing and rewriting it. Without applying
+# backspaces every discarded attempt stays on screen: "say hi" reads as "ssasay  hi".
+eq("console: backspaces erase, as a terminal would",
+   _clean_console_text("> s\bsa\b\bsay hi"), "> say hi")
+eq("console: two-byte escapes (ESC> / ESC=) are stripped, not shown as '>' and '=>'",
+   _clean_console_text("\x1b[?1l\x1b>\x1b[?1000l\x1b=\x1b[?2004hdone"), "done")
+eq("console: an OSC window-title sequence is stripped",
+   _clean_console_text("\x1b]0;a title\x07ready"), "ready")
+# The real thing: bytes taken verbatim from the panel's own Minecraft console log, where a typed
+# "say hi" rendered as "> ssasay  hi" followed by ">=>" noise.
+_jline_real = ("> s\b\x1b[31msa\x1b[0m\x1b[K\b\bsay\x1b[K\x1b[31m \x1b[0m\b \x1b[36mh\x1b[0m"
+               "\x1b[K\x1b[36mi\x1b[0m\r\r\n"
+               "\x1b[?1l\x1b>\x1b[?1000l\x1b[?2004l\x1b[?1h\x1b=\x1b[?2004h> \r\x1b[K"
+               "[23:52:54 INFO]: [Not Secure] [Server] hi\r\n")
+_jline_clean = _clean_console_text(_jline_real)
+eq("console: a real JLine command echo renders as typed",
+   [ln for ln in _jline_clean.split("\n") if ln.strip()],
+   ["> say hi", "[23:52:54 INFO]: [Not Secure] [Server] hi"])
+check("console: no control characters survive to the browser",
+      not any(ord(c) < 32 and c != "\n" for c in _jline_clean), repr(_jline_clean[:80]))
 eq("console: an echoed command line ('> list') is kept",
    _clean_console_text("> list"), "> list")
 eq("console: plain Source/CoD line untouched",
