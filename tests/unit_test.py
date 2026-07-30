@@ -414,10 +414,21 @@ try:
 finally:
     sm._rewrite_crontab = _orig_rw_u
     sm.run_command = _orig_run_u
+import base64 as _b64cr
+
+
+def _cron_wire(jobs):
+    """Build the reader's wire reply: one tab-delimited line per job, log tail base64'd."""
+    return "".join("%s\t%s\t%s\t%s\t%s\n"
+                   % (jid, rc, st, en, _b64cr.b64encode(log.encode()).decode())
+                   for jid, rc, st, en, log in jobs)
+
+
 _orig_run3 = sm.run_command
 try:
-    sm.run_command = lambda s, c, **k: ("aaaaaaaaaaaa\t0\t100\t142\t\n"
-                                        "bbbbbbbbbbbb\t1\t200\t205\tboom: exit 1\n", "", 0)
+    sm.run_command = lambda s, c, **k: (_cron_wire([("aaaaaaaaaaaa", 0, 100, 142, ""),
+                                                    ("bbbbbbbbbbbb", 1, 200, 205, "boom: exit 1")]),
+                                        "", 0)
     _cst = sm._read_cron_status(None, "gm")
     check("cron status: a successful run parses (ok + last_run)",
           _cst["aaaaaaaaaaaa"]["ok"] is True and _cst["aaaaaaaaaaaa"]["last_run"] == 142)
@@ -425,15 +436,44 @@ try:
           _cst["bbbbbbbbbbbb"]["ok"] is False and _cst["bbbbbbbbbbbb"]["error"] == "boom: exit 1")
 finally:
     sm.run_command = _orig_run3
-# Failed-job output → one readable line. LinuxGSM colours its console and appends its verdict as
-# its own " ... FAIL" line, so the raw tail is escape soup with the reason buried mid-way.
-_lgsm_tail = ("fetching GitHub [ \x1b[3mubuntu-24.04.csv\x1b[0m ]"
-              "curl: (22) The requested URL returned error: 404\x1f"
-              " ... \x1b[31mERROR\x1b[0m\x1f"
-              "fetching Bitbucket [ \x1b[3mubuntu-24.04.csv\x1b[0m ]"
-              "curl: (22) The requested URL returned error: 404\x1f"
-              " ... \x1b[31mFAIL\x1b[0m\x1f")
-_lgsm_err = sm._clean_cron_error(_lgsm_tail)
+# A FAITHFUL aborted `update-lgsm` log, byte-for-byte in the shape LinuxGSM writes one: fn_print_dots
+# repaints the first line with \r, the reason arrives mid-log, and fn_print_*_eol_nl appends its
+# verdict as a separate " ... FAIL" line. The \r is the whole point — it used to end the wire record
+# early (text=True transports fold \r into \n; str.splitlines() splits on it), so the panel showed a
+# red Failed badge with NO reason: worse than the ANSI soup this was meant to replace.
+_lgsm_log = ("\x1b[1m\r\x1b[K[\x1b[0m .... \x1b[0m]\x1b[0m Updating LinuxGSM pmcserver: "
+             "\x1b[0m\x1b[1m\r\x1b[K[\x1b[32m  OK  \x1b[0m]\x1b[0m Updating LinuxGSM: repo: GitHub\x1b[0m\n"
+             "checking GitHub config [ \x1b[3mubuntu-24.04.csv\x1b[0m ] ... \x1b[33mUPDATE\x1b[0m\n"
+             "fetching GitHub [ \x1b[3mubuntu-24.04.csv\x1b[0m ]"
+             "curl: (22) The requested URL returned error: 404\n"
+             " ... \x1b[31mERROR\x1b[0m\n"
+             "fetching Bitbucket [ \x1b[3mubuntu-24.04.csv\x1b[0m ]"
+             "curl: (22) The requested URL returned error: 404\n"
+             " ... \x1b[31mFAIL\x1b[0m\n")
+_orig_run3r = sm.run_command
+try:
+    sm.run_command = lambda s, c, **k: (_cron_wire([("cc33dd44ee55", 1, 100, 106, _lgsm_log)]), "", 0)
+    _rerr = sm._read_cron_status(None, "gm")["cc33dd44ee55"]["error"]
+finally:
+    sm.run_command = _orig_run3r
+# These go THROUGH the reader, not straight to the helper: that is the link the fix is about, and a
+# revert of either half (the base64 wire or the _clean_cron_error call) fails them.
+check("cron error (via reader): the reason survives a \\r-repainted log",
+      "curl: (22) The requested URL returned error: 404" in _rerr and "ubuntu-24.04.csv" in _rerr)
+check("cron error (via reader): no escape bytes reach the UI",
+      "\x1b" not in _rerr and "[31m" not in _rerr and "[K" not in _rerr)
+check("cron error (via reader): bare verdict lines dropped", "FAIL" not in _rerr)
+check("cron error (via reader): fits the UI cell", 0 < len(_rerr) <= 240)
+check("cron error (via reader): both mirror attempts are shown (they are different lines)",
+      "fetching GitHub" in _rerr and "fetching Bitbucket" in _rerr)
+check("cron error: an IDENTICAL repeated line is not shown twice",
+      sm._clean_cron_error("fetching GitHub [ x.csv ]curl: (22) 404\n ... ERROR\n"
+                           "fetching GitHub [ x.csv ]curl: (22) 404\n ... FAIL\n")
+      == "fetching GitHub [ x.csv ]curl: (22) 404")
+check("cron error (via reader): undecodable payload costs only that job's reason",
+      sm._cron_log_text("not valid base64 !!") == ""
+      and sm._cron_log_text(_b64cr.b64encode(b"caf\xe9: cannot start").decode()).startswith("caf"))
+_lgsm_err = sm._clean_cron_error(_lgsm_log)
 check("cron error: ANSI colour codes stripped", "\x1b" not in _lgsm_err and "[31m" not in _lgsm_err)
 check("cron error: keeps the line that says why",
       "curl: (22) The requested URL returned error: 404" in _lgsm_err
@@ -444,23 +484,30 @@ check("cron error: only a line's final \\r repaint is kept",
       sm._clean_cron_error("checking....\rchecking [ done ] failed to start") ==
       "checking [ done ] failed to start")
 check("cron error: informative lines win over surrounding chatter",
-      sm._clean_cron_error("step 1 ok\x1fstep 2 ok\x1fstep 3 ok\x1fstep 4 ok\x1f"
-                           "cannot write /home/gm/x: permission denied\x1f ... FAIL")
+      sm._clean_cron_error("step 1 ok\nstep 2 ok\nstep 3 ok\nstep 4 ok\n"
+                           "cannot write /home/gm/x: permission denied\n ... FAIL")
       == "cannot write /home/gm/x: permission denied")
 check("cron error: falls back to the tail when nothing looks like a reason",
-      sm._clean_cron_error("aaa\x1fbbb\x1fccc\x1fddd") == "bbb ccc ddd")
+      sm._clean_cron_error("aaa\nbbb\nccc\nddd") == "bbb ccc ddd")
 check("cron error: capped for the UI cell", len(sm._clean_cron_error("error " + "x" * 900)) <= 240)
+check("cron error: a line too long for the budget is not dropped entirely",
+      sm._clean_cron_error("error " + "x" * 900).startswith("error x"))
+_pack = sm._clean_cron_error("\n".join("failed step %d %s" % (i, "y" * 70) for i in range(4)))
+check("cron error: the budget packs whole lines and never cuts mid-line",
+      len(_pack) <= 240 and _pack.endswith("y" * 70)
+      and "failed step 2" in _pack and "failed step 3" in _pack
+      and "failed step 0" not in _pack)
 check("cron error: empty output stays empty", sm._clean_cron_error("") == ""
       and sm._clean_cron_error(None) == "")
-# The reader must ship line boundaries (\037) and a wide enough tail for the above to work.
+# The reader must base64 the tail (so no log byte can break the record) and cap it BEFORE encoding.
 _cronrd = {}
 _orig_run3b = sm.run_command
 try:
     sm.run_command = lambda s, c, **k: (_cronrd.update(cmd=c), ("", "", 0))[1]
     sm._read_cron_status(None, "gm")
-    check("cron status: reads a wide tail, line-delimited, byte-capped",
-          "tail -n 40" in _cronrd["cmd"] and '\\037' in _cronrd["cmd"]
-          and "tail -c 2000" in _cronrd["cmd"])
+    check("cron status: reads a wide tail, base64-framed, byte-capped before encoding",
+          "tail -n 40" in _cronrd["cmd"] and "base64" in _cronrd["cmd"]
+          and _cronrd["cmd"].index("tail -c 3000") < _cronrd["cmd"].index("base64"))
 finally:
     sm.run_command = _orig_run3b
 # cron run-times from the journald cron log (last-run TIME for managed/legacy jobs)
