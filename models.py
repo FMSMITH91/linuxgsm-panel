@@ -64,7 +64,9 @@ group_custom_commands = db.Table(
 # later version stops taking effect immediately, and a hand-edited blob can't smuggle anything in:
 #   host_order    [remote_id, ...]            dashboard host-card order
 #   server_order  {"remote_id": [game_server_id, ...]}   row order inside each host card
-UI_PREF_KEYS = frozenset({"host_order", "server_order"})
+#   panels        {"<region>": ["<panel key>", ...]}     order of the panels in a region
+#   hidden        {"<region>": ["<panel key>", ...]}     panels the user collapsed out of a region
+UI_PREF_KEYS = frozenset({"host_order", "server_order", "panels", "hidden"})
 
 
 class User(UserMixin, db.Model):

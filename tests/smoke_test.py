@@ -955,6 +955,46 @@ try:
     check("layout: a foreign server id cannot pull a row into another host's card",
           _row_order(_html_x, remote2_id) == _other_before
           and sorted(_row_order(_html_x, remote_id)) == sorted(_rows_default))
+    # Movable stat tiles: order and hiding are RENDERED by the server, same as the card order.
+    def _tile_order(html):
+        import re as _re_t
+        row = _re_t.search(r'id="dash-tiles".*?</div>\s*</div>\s*</div>\s*</div>', html, _re_t.S)
+        return [m for m in _re_t.findall(r'data-panel="([a-z_]+)"', row.group(0))] if row else []
+
+    _tiles_default = _tile_order(c.get("/").get_data(as_text=True))
+    check("tiles: the default order renders with every tile keyed",
+          _tiles_default[:2] == ["total", "online"] and len(_tiles_default) == 5, str(_tiles_default))
+    _tp = c.post("/api/account/ui-order",
+                 json={"panels": {"dash_tiles": ["host", "players", "total", "online", "offline"]}})
+    check("tiles: saving a panel order succeeds", _tp.status_code == 200)
+    check("tiles: the saved order is rendered server-side",
+          _tile_order(c.get("/").get_data(as_text=True))
+          == ["host", "players", "total", "online", "offline"])
+    # Hiding: the panel must not be rendered at all, and a restore control must appear.
+    c.post("/api/account/ui-order", json={"hidden": {"dash_tiles": ["offline", "host"]}})
+    _hid_html = c.get("/").get_data(as_text=True)
+    check("tiles: hidden tiles are not rendered",
+          "offline" not in _tile_order(_hid_html) and "host" not in _tile_order(_hid_html),
+          str(_tile_order(_hid_html)))
+    # Scoped to the restore BAR: counting over the whole page would also match the inline JS, which
+    # contains the literal selector '[data-action="showPanel"]'.
+    def _restore_bar(html):
+        import re as _re_h
+        m = _re_h.search(r'id="dash-tiles-hidden".*?</div>', html, _re_h.S)
+        return m.group(0) if m else ""
+
+    _bar = _restore_bar(_hid_html)
+    check("tiles: a restore control appears for each hidden tile",
+          _bar.count('data-action="showPanel"') == 2
+          and '["dash_tiles","offline","@self"]' in _bar
+          and '["dash_tiles","host","@self"]' in _bar,
+          "bar=%r" % _bar[:200])
+    # The safety property, end to end: a stored key the page never declared cannot add a panel.
+    c.post("/api/account/ui-order", json={"panels": {"dash_tiles": ["evil", "total"]},
+                                          "hidden": {"dash_tiles": []}})
+    _evil = _tile_order(c.get("/").get_data(as_text=True))
+    check("tiles: an unknown stored key renders no panel", "evil" not in _evil and len(_evil) == 5,
+          str(_evil))
     _lay_reset = c.post("/api/account/ui-order/reset")
     check("layout: reset returns success", _lay_reset.status_code == 200
           and (_lay_reset.get_json() or {}).get("success") is True)

@@ -162,6 +162,45 @@ _up.set_ui_pref("host_order", None)
 check("ui_prefs: clearing a key restores the default (absent, not empty)",
       _up.get_ui_prefs() == {} and "host_order" not in (_up.ui_prefs or ""))
 
+# ── movable panels: _panel_layout decides what a page renders and in what order. The safety property
+# is that it can only ever return keys the PAGE declared — several panels are permission-gated, so a
+# stored key must never be able to conjure one.
+from app import _panel_layout as _pl, _clean_panel_map as _cpm
+_KEYS = ["total", "online", "offline", "players", "host"]
+eq("panels: no prefs -> the page's own default order", _pl({}, "dash_tiles", _KEYS), (_KEYS, []))
+eq("panels: a saved order is applied",
+   _pl({"panels": {"dash_tiles": ["host", "total"]}}, "dash_tiles", _KEYS),
+   (["host", "total", "online", "offline", "players"], []))
+eq("panels: a key the page did not declare cannot appear",
+   _pl({"panels": {"dash_tiles": ["evil_panel", "host"]}}, "dash_tiles", _KEYS),
+   (["host", "total", "online", "offline", "players"], []))
+eq("panels: a hidden key is removed from visible and reported as hidden",
+   _pl({"hidden": {"dash_tiles": ["offline"]}}, "dash_tiles", _KEYS),
+   (["total", "online", "players", "host"], ["offline"]))
+eq("panels: hiding an undeclared key is a no-op",
+   _pl({"hidden": {"dash_tiles": ["nope"]}}, "dash_tiles", _KEYS), (_KEYS, []))
+eq("panels: another region's layout does not leak in",
+   _pl({"panels": {"other": ["host"]}}, "dash_tiles", _KEYS), (_KEYS, []))
+eq("panels: junk pref shapes fall back to the default",
+   _pl({"panels": "nope", "hidden": 7}, "dash_tiles", _KEYS), (_KEYS, []))
+eq("panels: a duplicated key is not rendered twice",
+   _pl({"panels": {"dash_tiles": ["host", "host", "total"]}}, "dash_tiles", _KEYS),
+   (["host", "total", "online", "offline", "players"], []))
+eq("panels: a panel added by a NEW version appears for an existing user",
+   _pl({"panels": {"dash_tiles": ["host", "total"]}}, "dash_tiles", _KEYS + ["brand_new"]),
+   (["host", "total", "online", "offline", "players", "brand_new"], []))
+eq("panels: an empty declared list renders nothing", _pl({"panels": {"dash_tiles": ["host"]}},
+   "dash_tiles", []), ([], []))
+# _clean_panel_map guards what gets STORED: cosmetic data, so junk is dropped, not rejected.
+eq("panels: a clean map survives", _cpm({"dash_tiles": ["total", "host"]}), {"dash_tiles": ["total", "host"]})
+eq("panels: non-dict input -> empty", _cpm("nope"), {})
+eq("panels: a bad region name is dropped", _cpm({"Bad Region!": ["total"]}), {})
+eq("panels: bad keys are dropped, good ones kept",
+   _cpm({"dash_tiles": ["total", "<script>", "", 42, "host"]}), {"dash_tiles": ["total", "host"]})
+eq("panels: duplicate keys are collapsed", _cpm({"r": ["a", "a", "b"]}), {"r": ["a", "b"]})
+check("panels: key count is capped", len(_cpm({"r": ["k%d" % i for i in range(200)]})["r"]) == 60)
+check("panels: region count is capped", len(_cpm({"r%d" % i: ["a"] for i in range(50)})) == 20)
+
 # ── tags: the name charset is pinned at the DATA layer, so no route can store one that would need
 # escaping to be safe in HTML, in a filter key, or in alert text.
 _TagM = __import__("models").ServerTag
