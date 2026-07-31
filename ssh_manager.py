@@ -3751,14 +3751,23 @@ def _sshd_current_ports(server):
     return [p for p in (out or "").split() if p.isdigit()]
 
 
-def _valid_ip(s):
-    """True if `s` is a valid IPv4 or IPv6 literal."""
+def _canonical_ip(s):
+    """`s` as its CANONICAL address string, or None if it isn't an IP.
+
+    Canonical matters: fail2ban and ufw store the normalised form, so unbanning
+    "2001:0DB8::0001" against a stored "2001:db8::1" silently matches nothing. Two of the three
+    remote helpers already normalised; the unban one compared the raw string."""
     import ipaddress
     try:
-        ipaddress.ip_address(str(s).strip())
-        return True
+        return str(ipaddress.ip_address(str(s).strip()))
     except ValueError:
-        return False
+        return None
+
+
+def _valid_ip(s):
+    """True if `s` is a valid IPv4 or IPv6 literal. Prefer _canonical_ip when the value is going to
+    be COMPARED or sent to a tool that stores a normalised form."""
+    return _canonical_ip(s) is not None
 
 
 _F2B_JAIL_RE = re.compile(r"^[A-Za-z0-9._-]{1,64}$")
@@ -3897,10 +3906,23 @@ def remote_fail2ban_top_ips(server, limit=20, days=7):
 def remote_fail2ban_unban(server, jail, ip):
     """Lift a fail2ban ban on a REMOTE host (jail + IP validated). (ok, msg)."""
     import shlex
-    if not _F2B_JAIL_RE.match(jail or ""):
+    # fullmatch, not match: with a "^…$" pattern, .match accepts a TRAILING NEWLINE ("sshd\n"
+    # passes), which the panel-host version rejects. It is shell-quoted below so this was never an
+    # injection, but the two validators disagreeing is exactly what this audit was looking for.
+    if not _F2B_JAIL_RE.fullmatch((jail or "").strip()):
         return False, "Invalid jail name."
-    ip = (ip or "").strip()
-    if not _valid_ip(ip):
+    jail = jail.strip()
+    # Rebind against the jails the host actually reports, like the panel-host helper does, so a
+    # well-formed but unknown jail is refused here rather than by fail2ban-client.
+    # "jails" holds DETAIL dicts, not names — comparing the name against them would refuse every
+    # unban. Also skip the rebind entirely when fail2ban is absent or the status read failed, so a
+    # transient SSH hiccup cannot turn into "Unknown jail".
+    _ov = remote_fail2ban_overview(server) or {}
+    known = [d.get("jail") for d in (_ov.get("jails") or []) if d.get("jail")]
+    if known and jail not in known:
+        return False, "Unknown jail on that host."
+    ip = _canonical_ip(ip)
+    if not ip:
         return False, "Invalid IP address."
     out, err, rc = run_command(server, "fail2ban-client set %s unbanip %s 2>&1"
                                % (shlex.quote(jail), shlex.quote(ip)), timeout=20, sudo=True)

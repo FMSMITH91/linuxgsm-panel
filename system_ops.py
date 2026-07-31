@@ -155,10 +155,25 @@ def _run(cmd, timeout=30, sudo=False, text=True):
         return "", "command execution error", -1
 
 
-def _check_sudo():
-    """Check if we can sudo without a password prompt."""
+_SUDO_PROBE = {"at": 0.0, "ok": None}
+_SUDO_PROBE_TTL = 300     # seconds; passwordless-sudo status does not change minute to minute
+
+
+def _check_sudo(force=False):
+    """Whether we can sudo without a password prompt. CACHED for _SUDO_PROBE_TTL.
+
+    Each probe is a real `sudo -n true`, and a failure is recorded by pam_faillock as an
+    authentication failure — so repeatedly asking (this is reached from several page renders) can
+    count a user towards a lockout on their own machine. The answer changes about as often as
+    /etc/sudoers does, so probing once every few minutes is plenty."""
+    import time as _time
+    now = _time.time()
+    if not force and _SUDO_PROBE["ok"] is not None and (now - _SUDO_PROBE["at"]) < _SUDO_PROBE_TTL:
+        return _SUDO_PROBE["ok"]
     out, err, rc = _run("sudo -n true 2>/dev/null && echo 'OK' || echo 'NOPASS'", timeout=10)
-    return "OK" in out
+    _SUDO_PROBE["ok"] = "OK" in out
+    _SUDO_PROBE["at"] = now
+    return _SUDO_PROBE["ok"]
 
 
 # ─── UFW ──────────────────────────────────────────────────────
@@ -1323,7 +1338,7 @@ def fail2ban_overview():
 
 
 # The fail2ban aggregation is a pure counting pipeline over the (root-owned) fail2ban logs — no input
-# from the request reaches the shell, so it's a fixed command. Shared by the panel + remote helpers.
+# from the request reaches the shell, so it's a fixed command. Panel-host only. ssh_manager.remote_fail2ban_top_ips inlines its own copy of this pipeline and of the row parsing below — keep the two in step by hand.
 _F2B_TOP_PIPELINE = (
     "zcat -f /var/log/fail2ban.log* 2>/dev/null | "
     "awk -v c='%s' '$1 >= c' | "

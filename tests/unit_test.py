@@ -62,6 +62,42 @@ eq("hex colour: named colour rejected", _valid_hex_color("red"), "")
 eq("hex colour: CSS/HTML breakout rejected", _valid_hex_color("#fff;}</style><script>"), "")
 eq("hex colour: too long rejected", _valid_hex_color("#1234567"), "")
 
+# ── remote fail2ban helpers: the remote unban docstring says it mirrors the panel-host version and
+# it did not — no jail allowlist, .match (which accepts a trailing newline against a ^…$ pattern),
+# and no IP canonicalisation, so unbanning 2001:0DB8::0001 silently missed the stored 2001:db8::1.
+_F2B_STATUS = "Status\n|- Number of jail:\t2\n`- Jail list:\tsshd, panel-auth\n"
+_F2B_JAIL = ("Status for the jail: sshd\n   |- Currently banned: 1\n   |- Total banned: 3\n"
+             "   |- Total failed: 0\n   `- Banned IP list: 10.0.0.9\n")
+
+
+def _f2b_fake_run(server, cmd, **kw):
+    if "command -v fail2ban-client" in cmd:
+        return ("yes", "", 0)
+    if cmd.startswith("fail2ban-client status 2>"):
+        return (_F2B_STATUS, "", 0)
+    if "fail2ban-client status" in cmd:
+        return (_F2B_JAIL, "", 0)
+    return ("1", "", 0)
+
+
+_orig_f2b = sm.run_command
+try:
+    sm.run_command = _f2b_fake_run
+    eq("f2b remote: a non-canonical IPv6 is normalised before unbanning",
+       sm.remote_fail2ban_unban(None, "sshd", "2001:0DB8::0001"),
+       (True, "Unbanned 2001:db8::1 from sshd."))
+    check("f2b remote: an unknown jail is refused against the host's own list",
+          sm.remote_fail2ban_unban(None, "nosuch", "10.0.0.9")[0] is False)
+    check("f2b remote: a non-IP is refused",
+          sm.remote_fail2ban_unban(None, "sshd", "not-an-ip")[0] is False)
+    check("f2b remote: a trailing newline in the jail name is stripped, not accepted raw",
+          sm.remote_fail2ban_unban(None, "sshd\n", "10.0.0.9") == (True, "Unbanned 10.0.0.9 from sshd."))
+finally:
+    sm.run_command = _orig_f2b
+eq("f2b: _canonical_ip normalises", sm._canonical_ip(" 2001:0DB8::0001 "), "2001:db8::1")
+eq("f2b: _canonical_ip rejects junk", sm._canonical_ip("nope"), None)
+check("f2b: _valid_ip still answers a bool", sm._valid_ip("10.0.0.1") is True)
+
 # ── config keys must agree with the code that reads them ────────────────────────────────────────
 # Each of these was a real divergence: a documented ssh_timeout nothing read (the two SSH paths
 # hardcoded 15 and 12), and an autoblock threshold that defaulted to 20 when read and 100 when
