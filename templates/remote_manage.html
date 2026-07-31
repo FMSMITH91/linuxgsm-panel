@@ -1238,7 +1238,7 @@ function _switchToTailscale(){
     .catch(()=>{ el.textContent='✗ Migration failed'; el.className='small mt-1 text-danger'; });
 }
 // ── System specs (static — fetched once) ──
-function specEsc(s){ return String(s==null?'':s).replace(/[&<>"']/g,function(c){return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c];}); }
+function specEsc(s){ return window.escapeHtml(s); }
 function renderSpecs(d, el){
   if(!el) return;
   if(!d || d.error){ el.innerHTML = '<div class="col-12 text-danger small">Specs unavailable'+(d&&d.error?': '+specEsc(d.error):'')+'</div>'; return; }

@@ -3,6 +3,16 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <script nonce="{{ csp_nonce }}">
+    // Defined HERE, not in the footer: a page's own scripts (in the content block) parse before the
+    // footer runs, which is why five templates grew their own copy — two of which returned the RAW
+    // string when the global was missing, turning innerHTML sinks into injection points.
+    window.escapeHtml = function(s){
+      return String(s == null ? '' : s)
+        .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+    };
+  </script>
   <title>{{ site_title }} - {% block title %}Dashboard{% endblock %}</title>
   <!-- Inline emoji favicon — avoids the automatic /favicon.ico request 404ing (a console
        error Lighthouse counts against Best Practices) without shipping a separate file. -->
@@ -830,11 +840,7 @@ window.CSRF = "{{ csrf_token() }}";
 
 // Escape a string for safe interpolation into innerHTML — use this whenever a
 // server- or user-provided value goes into markup. Available on every page.
-window.escapeHtml = function(s){
-  return String(s == null ? '' : s)
-    .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
-    .replace(/"/g, '&quot;').replace(/'/g, '&#39;');
-};
+// escapeHtml is defined in <head> so it exists before any page script runs.
 
 // Language picker — one delegated handler for every page's <select data-lang-select>
 // (sidebar, login, account, setup wizard; all extend this template). The target URL rides

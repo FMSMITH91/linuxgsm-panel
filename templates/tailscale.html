@@ -350,7 +350,8 @@
 
 {% block scripts %}
 <script nonce="{{ csp_nonce }}">
-function tsEsc(s){ return window.escapeHtml ? window.escapeHtml(s) : String(s == null ? '' : s); }
+// Delegates — the old fallback returned the RAW string when the global was missing.
+function tsEsc(s){ return window.escapeHtml(s); }
 
 // Shared "bring Tailscale up + show the login link" flow. Used both by the first-time
 // install button (not-installed state) and the "Link this machine" button (installed but

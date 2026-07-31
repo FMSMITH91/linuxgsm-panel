@@ -767,7 +767,8 @@ function sendCommand(ev) {
 // Uses the global window.toast (base.html) — one implementation, consistent independent timing.
 
 var SERVER_NAME = {{ server.name|tojson }};
-function _esc(s){ return (window.escapeHtml ? escapeHtml(s) : String(s)); }
+// Delegates — the old fallback returned the raw string, and String(null) rendered "null".
+function _esc(s){ return window.escapeHtml(s); }
 
 // Fire a server action against the JSON endpoint (spinner + toast + banner handling).
 function _doServerAction(action, btn, showOutput) {

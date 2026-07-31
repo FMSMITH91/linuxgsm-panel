@@ -296,7 +296,8 @@ var curFile = null;     // path of the file open in the editor
 
 // Escapes quotes too (&#39;/&quot;) — config keys/values are interpolated into
 // double-quoted HTML attributes below, so a bare " would otherwise break out (XSS).
-function esc(s){ return (s+'').replace(/[&<>"']/g, function(c){ return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]; }); }
+// Delegates; the old body used (s+'') so esc(null) rendered the literal "null".
+function esc(s){ return window.escapeHtml(s); }
 function fmtSize(b){ if(b<1024)return b+' B'; if(b<1048576)return (b/1024).toFixed(1)+' KB'; return (b/1048576).toFixed(1)+' MB'; }
 function fileIcon(name){
   var n=(name||'').toLowerCase();
@@ -572,7 +573,9 @@ document.getElementById('breadcrumb').addEventListener('click', function(ev){
 var cronEditRaw = null;   // when editing: the exact raw line being replaced
 // Attribute-safe escape: cron commands routinely contain " and ', which would
 // otherwise break the data-* attributes we round-trip the raw line through.
-function escA(s){ return esc(s).replace(/"/g,'&quot;').replace(/'/g,'&#39;'); }
+// escA was a no-op wrapper: esc already escapes both quote characters. Kept as an alias so its
+// ~call sites need not change, but it adds nothing.
+var escA = esc;
 function cronMsg(text, cls){ var m=document.getElementById('cron-msg'); m.textContent=text||''; m.className='small '+(cls||'text-secondary'); }
 // "3m ago" / "2h ago" / "5d ago" from an epoch (seconds).
 function timeAgo(epoch){
