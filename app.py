@@ -3100,10 +3100,16 @@ def register_routes(app):
         from models import ServerTag
         if not _can_edit_tags():
             return jsonify({"success": False, "message": "Permission denied"}), 403
+        from models import TAG_NAME_RE, TAG_NAME_HELP
         data = _json_body()
         name = (data.get("name") or "").strip()
         if not name:
             return jsonify({"success": False, "message": "A tag needs a name."}), 400
+        # Check the shared rule here so the caller gets a helpful, FIXED message. The model's
+        # validator still guards the data layer, but its exception text is never echoed back —
+        # returning str(exc) is how internals leak into an API response.
+        if not TAG_NAME_RE.match(name):
+            return jsonify({"success": False, "message": TAG_NAME_HELP}), 400
         if ServerTag.query.filter(db.func.lower(ServerTag.name) == name.lower()).first():
             return jsonify({"success": False, "message": "A tag with that name already exists."}), 409
         try:
@@ -3112,9 +3118,11 @@ def register_routes(app):
                             created_by=current_user.username)
             db.session.add(tag)
             db.session.commit()
-        except ValueError as exc:
+        except ValueError:
+            # Unreachable for the name (checked above); still handled so a validator added to
+            # another column later cannot turn a bad request into a 500.
             db.session.rollback()
-            return jsonify({"success": False, "message": str(exc)}), 400
+            return jsonify({"success": False, "message": TAG_NAME_HELP}), 400
         except Exception:
             db.session.rollback()
             return jsonify({"success": False, "message": _log_and_generic("create tag failed")}), 500
