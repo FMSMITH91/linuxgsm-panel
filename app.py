@@ -36,6 +36,7 @@ import logging
 import concurrent.futures
 import os
 import re
+import terminal
 import threading
 import time
 import gzip as _gzip
@@ -483,7 +484,7 @@ _START_ERROR_PATTERNS = (
 def _extract_start_error(out):
     """A short, human-meaningful reason from a start log, or "" when nothing clear stands out (so the
     caller can fall back to a generic message rather than surfacing srcds boot noise). Never raises."""
-    text = re.sub(r"\x1b\[[0-9;?]*[A-Za-z]", "", out or "")
+    text = terminal.strip_escapes(out or "")
     for pat in _START_ERROR_PATTERNS:
         m = re.search(pat, text, re.I)
         if m:
@@ -1865,66 +1866,17 @@ def _valid_hex_color(value):
 # JLine console that emits ANSI escapes (colour, and \x1b[K "erase to end of line" — which shows up
 # as a literal "[K" once the ESC byte is dropped), carriage returns to redraw the input line, and a
 # bare "> " prompt line after every message. Plain-text consoles (Source/CoD/GMod) have none of it.
-_CONSOLE_ANSI_RE = re.compile(r"\x1b\[[0-9;?]*[ -/]*[@-~]")
-# OSC (window-title etc.): ESC ] ... terminated by BEL or ESC \.
-_CONSOLE_OSC_RE = re.compile(r"\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)")
-# TWO-BYTE escapes: ESC followed by one character — ESC>, ESC=, ESC(B and friends. The CSI pattern
-# above does not match these (no '['), so they used to survive and render as literal ">" / "=>"
-# noise between every echoed command.
-_CONSOLE_ESC2_RE = re.compile(r"\x1b[ -/]*[0-~]")
 _CONSOLE_PROMPT_RE = re.compile(r"^>\s*$")
 
 
-def _apply_carriage_returns(line):
-    """A line with `\\r` applied as a terminal would: the cursor returns to column 0 and what follows
-    OVERWRITES from there, leaving any tail that is not overwritten. Taking the last `\\r` segment
-    instead would be wrong — a line merely ENDING in `\\r` (JLine does this constantly) is still
-    fully on screen, and discarding it would silently eat the echoed command."""
-    if "\r" not in line:
-        return line
-    buf = ""
-    for seg in line.split("\r"):
-        buf = seg + buf[len(seg):]
-    return buf
-
-
-def _apply_backspaces(line):
-    """A line with BS (0x08) applied, as a terminal would render it. JLine echoes a typed command
-    with syntax highlighting by rewriting it in place — 's', erase, 'sa', erase erase, 'say' — so
-    without this the erased attempts all remain and 'say hi' reads as 'ssasay  hi'."""
-    if "\b" not in line:
-        return line
-    out = []
-    for ch in line:
-        if ch == "\b":
-            if out:
-                out.pop()
-        else:
-            out.append(ch)
-    return "".join(out)
-
-
 def _clean_console_text(text):
-    """Render console-log text the way a terminal would, before it is shown: drop ANSI/CSI, OSC and
-    two-byte escapes, honour carriage returns (a `\\r` returns to column 0, so only the final
-    repaint of a line is visible) and backspaces, then drop JLine's bare '> ' prompt lines.
-
-    A no-op for plain-text game consoles. Never drops a real message: only lines that are *just* the
-    prompt are removed, so an echoed command like '> list' is kept."""
+    """Console-log text rendered the way a terminal would show it, then with JLine's bare '> ' prompt
+    lines dropped. A no-op for plain-text game consoles. Never drops a real message: only lines that
+    are *just* the prompt are removed, so an echoed command like '> list' is kept."""
     if not text:
         return text
-    text = _CONSOLE_OSC_RE.sub("", text)
-    text = _CONSOLE_ANSI_RE.sub("", text)
-    text = _CONSOLE_ESC2_RE.sub("", text)
-    lines = []
-    for raw_line in text.replace("\r\n", "\n").split("\n"):
-        # \r then \b, in that order: JLine returns to column 0 to overwrite its prompt with a log
-        # line ("> \r\x1b[K[23:52:54 INFO]: ..."), and separately erases characters while it
-        # re-renders a typed command with syntax colour.
-        line = _apply_backspaces(_apply_carriage_returns(raw_line))
-        if not _CONSOLE_PROMPT_RE.match(line):
-            lines.append(line)
-    return "\n".join(lines)
+    return "\n".join(ln for ln in terminal.render(text).split("\n")
+                      if not _CONSOLE_PROMPT_RE.match(ln))
 
 
 def create_app():
@@ -3657,7 +3609,7 @@ def register_routes(app):
         # Strip ALL ANSI/CSI escape sequences (colors end in 'm', but LinuxGSM also
         # emits erase-line "\x1b[K" etc.), plus collapse whitespace for a clean message.
         def _clean(s):
-            s = re.sub(r"\x1b\[[0-9;?]*[A-Za-z]", "", s or "")
+            s = terminal.strip_escapes(s or "")
             return re.sub(r"[ \t]{2,}", " ", s)
         log_action(actor, f"{action}_server", target=gs.name, success=(rc == 0), detail=_clean(out)[-400:])
         clean = _clean((out or "") + "\n" + (err or "")).strip()
@@ -4102,7 +4054,7 @@ def register_routes(app):
                     timeout = 90 if action == "restart" else 60
                     out, _, rc = run_as_game_user(remote, short_name, f"{action} 2>&1",
                                                   timeout=timeout, selfname=selfname)
-                    clean = re.sub(r"\x1b\[[0-9;?]*[A-Za-z]", "", out or "")
+                    clean = terminal.strip_escapes(out or "")
                     log_action(actor, f"{action}_server", target=gs.name, success=(rc == 0),
                                detail=clean[-400:])
                     if rc == 0:
@@ -7860,7 +7812,7 @@ def register_routes(app):
                 remote,
                 f"sudo -u {short_name} bash -c 'cd /home/{short_name} && ./{lgsm_name} details 2>&1'",
                 timeout=30, sudo=False)
-            low = re.sub(r"\x1b\[[0-9;?]*[A-Za-z]", "", (out or "") + "\n" + (err or "")).lower()
+            low = terminal.strip_escapes((out or "") + "\n" + (err or "")).lower()
             if re.search(r"not installed|please run .*install|serverfiles.*(missing|not found)|no such file", low):
                 return False
             if "status:" in low or "server ip:" in low:
@@ -8073,7 +8025,7 @@ def register_routes(app):
             return jsonify({"success": False, "message": "Pick a valid mod to " + (which or "act on") + "."}), 400
         try:
             out, err, rc = mods_action(gs.remote, gs.short_name, gs.lgsm_name, which, mod_id)
-            clean = re.sub(r"\x1b\[[0-9;?]*[A-Za-z]", "", ((out or "") + "\n" + (err or ""))).strip()
+            clean = terminal.strip_escapes(((out or "") + "\n" + (err or ""))).strip()
             log_action(current_user, f"mods_{which}", target=gs.name, success=(rc == 0), detail=clean[-400:])
             ok = rc == 0
             tail = ""

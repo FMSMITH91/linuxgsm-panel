@@ -6,6 +6,7 @@ import re
 import signal
 import socket
 import subprocess
+import terminal
 import tempfile
 import threading
 import time
@@ -1098,7 +1099,6 @@ def _unwrap_cron_command(command):
 # Rendering a failed job's captured output into ONE readable line. LinuxGSM paints its console
 # with ANSI colour and appends its verdict as a separate " ... FAIL" line, so a blind last-N-lines
 # tail shows escape soup whose informative line ("curl: (22) ... 404") may not even be in it.
-_CRON_ANSI_RE = re.compile(r"\x1b\[[0-9;?]*[ -/]*[@-~]")
 # A line that is ONLY a verdict token: no information once the panel already knows the job failed.
 _CRON_VERDICT_RE = re.compile(r"^[.\s]*(OK|FAIL|ERROR|SKIP|UPDATE|WARNING|INFO|CANCELED)[.\s]*$", re.I)
 _CRON_WHY_RE = re.compile(r"fail|error|cannot|can't|denied|refus|timed? ?out|no such|not found|"
@@ -1127,7 +1127,7 @@ def _clean_cron_error(raw, limit=240):
     whole budget on one sentence. Fills from the newest line back in whole lines, never mid-word."""
     lines = []
     for chunk in (raw or "").split("\n"):
-        seg = " ".join(_CRON_ANSI_RE.sub("", chunk).split("\r")[-1].split())
+        seg = " ".join(terminal.render_line(chunk).split())
         if seg and not _CRON_VERDICT_RE.match(seg):
             lines.append(seg)
     why = [ln for ln in lines if _CRON_WHY_RE.search(ln)] or lines
@@ -2140,7 +2140,7 @@ def run_game_backup(server, user, selfname=None, keep=3, game_type=None, port=No
         return False, ("A backup lock was in the way — a previous backup may still be running, or it "
                        "left a stale lock. Try again in a minute."), False
     # Surface the most relevant LinuxGSM line so the panel can show WHY it failed.
-    clean = re.sub(r"\x1b\[[0-9;?]*[A-Za-z]", "", ((out or "") + "\n" + (err or ""))).strip()
+    clean = terminal.strip_escapes(((out or "") + "\n" + (err or ""))).strip()
     reason = ""
     for line in reversed(clean.splitlines()):
         low = line.lower()
@@ -2161,7 +2161,7 @@ def list_server_commands(server, user, selfname=None):
         f"sudo -u {user} bash -c {_quote(f'cd /home/{user} && ./{selfname}')}",
         timeout=30, sudo=False,
     )
-    text = re.sub(r"\x1b\[[0-9;]*m", "", (out or "") + "\n" + (err or ""))
+    text = terminal.strip_escapes((out or "") + "\n" + (err or ""))
     cmds, seen = [], set()
     for line in text.splitlines():
         # "start         st   | Start the server."
@@ -2180,7 +2180,7 @@ def detect_game_port(server, user, selfname=None):
     match LinuxGSM's real port or status/firewall/connect are all wrong. Returns int
     or None."""
     out, _, _ = run_as_game_user(server, user, "details 2>&1", timeout=30, selfname=selfname)
-    text = re.sub(r"\x1b\[[0-9;]*[A-Za-z]", "", out or "")
+    text = terminal.strip_escapes(out or "")
     for line in text.splitlines():
         if re.search(r"(server|internet)\s+ip:", line, re.I):
             m = re.search(r":(\d{2,5})\b", line)
@@ -2207,7 +2207,7 @@ def detect_game_ports(server, user, selfname=None):
       {"game_port": int|None, "open_ports": [ports to open], "ports": [all parsed]}.
     """
     out, _, _ = run_as_game_user(server, user, "details 2>&1", timeout=45, selfname=selfname)
-    text = re.sub(r"\x1b\[[0-9;?]*[A-Za-z]", "", out or "")
+    text = terminal.strip_escapes(out or "")
     ports, game_port, in_table = [], None, False
     for line in text.splitlines():
         s = line.strip()
@@ -2253,7 +2253,7 @@ def get_server_status(server, game_server):
     # Strip ANSI color codes, then read the "Status:" line specifically. (Scanning
     # the whole blob is unsafe: the details output includes a query-check URL
     # containing "ismygameserver.online", which collides with a naive "online" check.)
-    clean = re.sub(r"\x1b\[[0-9;]*m", "", text)
+    clean = terminal.strip_escapes(text)
     for line in clean.splitlines():
         low = line.lower()
         if "status:" in low:
@@ -3026,7 +3026,7 @@ def install_game_dependencies(server, game_type=None, extra=""):
 def parse_missing_deps(output):
     """Extract package names LinuxGSM reported as missing (from its
     'Missing dependencies: pkg1 pkg2 ... Run:' warning)."""
-    text = re.sub(r"\x1b\[[0-9;]*m", "", output or "")
+    text = terminal.strip_escapes(output or "")
     deps = []
     for m in re.finditer(r"[Mm]issing dependencies:\s*(.+?)(?:\s+Run:|[\r\n]|$)", text):
         for pkg in m.group(1).split():
@@ -4405,7 +4405,7 @@ def lgsm_game_config(server, user, selfname):
         server, f"sudo -u {user} bash -c {_quote(f'cd /home/{user} && ./{selfname} details 2>&1')}",
         timeout=45, sudo=False,
     )
-    text = re.sub(r"\x1b\[[0-9;?]*[A-Za-z]", "", o or "")
+    text = terminal.strip_escapes(o or "")
     home = f"/home/{user}/"
     path = None
     for line in text.splitlines():
@@ -4471,7 +4471,7 @@ _MOD_ID_OK = re.compile(r"^[A-Za-z0-9._-]+$")                   # safe id charse
 
 
 def _strip_ansi(s):
-    return re.sub(r"\x1b\[[0-9;?]*[A-Za-z]", "", s or "")
+    return terminal.strip_escapes(s or "")
 
 
 def _parse_mods_available(out):
