@@ -1866,18 +1866,65 @@ def _valid_hex_color(value):
 # as a literal "[K" once the ESC byte is dropped), carriage returns to redraw the input line, and a
 # bare "> " prompt line after every message. Plain-text consoles (Source/CoD/GMod) have none of it.
 _CONSOLE_ANSI_RE = re.compile(r"\x1b\[[0-9;?]*[ -/]*[@-~]")
+# OSC (window-title etc.): ESC ] ... terminated by BEL or ESC \.
+_CONSOLE_OSC_RE = re.compile(r"\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)")
+# TWO-BYTE escapes: ESC followed by one character — ESC>, ESC=, ESC(B and friends. The CSI pattern
+# above does not match these (no '['), so they used to survive and render as literal ">" / "=>"
+# noise between every echoed command.
+_CONSOLE_ESC2_RE = re.compile(r"\x1b[ -/]*[0-~]")
 _CONSOLE_PROMPT_RE = re.compile(r"^>\s*$")
 
 
+def _apply_carriage_returns(line):
+    """A line with `\\r` applied as a terminal would: the cursor returns to column 0 and what follows
+    OVERWRITES from there, leaving any tail that is not overwritten. Taking the last `\\r` segment
+    instead would be wrong — a line merely ENDING in `\\r` (JLine does this constantly) is still
+    fully on screen, and discarding it would silently eat the echoed command."""
+    if "\r" not in line:
+        return line
+    buf = ""
+    for seg in line.split("\r"):
+        buf = seg + buf[len(seg):]
+    return buf
+
+
+def _apply_backspaces(line):
+    """A line with BS (0x08) applied, as a terminal would render it. JLine echoes a typed command
+    with syntax highlighting by rewriting it in place — 's', erase, 'sa', erase erase, 'say' — so
+    without this the erased attempts all remain and 'say hi' reads as 'ssasay  hi'."""
+    if "\b" not in line:
+        return line
+    out = []
+    for ch in line:
+        if ch == "\b":
+            if out:
+                out.pop()
+        else:
+            out.append(ch)
+    return "".join(out)
+
+
 def _clean_console_text(text):
-    """Strip terminal control noise (ANSI/CSI escapes, carriage returns, JLine's bare '> ' prompt
-    lines) from console-log text before it's shown. A no-op for plain-text game consoles. Never
-    drops a real message: only lines that are *just* the prompt are removed, so an echoed command
-    like '> list' is kept."""
+    """Render console-log text the way a terminal would, before it is shown: drop ANSI/CSI, OSC and
+    two-byte escapes, honour carriage returns (a `\\r` returns to column 0, so only the final
+    repaint of a line is visible) and backspaces, then drop JLine's bare '> ' prompt lines.
+
+    A no-op for plain-text game consoles. Never drops a real message: only lines that are *just* the
+    prompt are removed, so an echoed command like '> list' is kept."""
     if not text:
         return text
-    text = _CONSOLE_ANSI_RE.sub("", text.replace("\r\n", "\n").replace("\r", "\n"))
-    return "\n".join(ln for ln in text.split("\n") if not _CONSOLE_PROMPT_RE.match(ln))
+    text = _CONSOLE_OSC_RE.sub("", text)
+    text = _CONSOLE_ANSI_RE.sub("", text)
+    text = _CONSOLE_ESC2_RE.sub("", text)
+    lines = []
+    for raw_line in text.replace("\r\n", "\n").split("\n"):
+        # \r then \b, in that order: JLine returns to column 0 to overwrite its prompt with a log
+        # line ("> \r\x1b[K[23:52:54 INFO]: ..."), and separately erases characters while it
+        # re-renders a typed command with syntax colour.
+        line = _apply_backspaces(_apply_carriage_returns(raw_line))
+        if not _CONSOLE_PROMPT_RE.match(line):
+            lines.append(line)
+    return "\n".join(lines)
 
 
 def create_app():
