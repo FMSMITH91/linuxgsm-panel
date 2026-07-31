@@ -845,8 +845,15 @@ document.addEventListener('change', function(e){
   var el = e.target;
   if (!el || !el.matches || !el.matches('select[data-lang-select]') || !el.value) return;
   var lang = el.value, tmpl = el.getAttribute('data-lang-url') || '';
-  // Save the choice (session + profile) for next load — fire-and-forget…
-  if (tmpl) fetch(tmpl.replace('LANGCODE', encodeURIComponent(lang)) + '?ajax=1', {cache: 'no-store'}).catch(function(){});
+  // Save the choice (session + profile) for next load. NOT fire-and-forget: if the profile write
+  // fails the language still changes here and now, but it will not follow you to another device —
+  // and silently pretending otherwise is how a preference appears to "not stick".
+  if (tmpl) fetch(tmpl.replace('LANGCODE', encodeURIComponent(lang)) + '?ajax=1', {cache: 'no-store'})
+    .then(function(r){ return r.ok ? r.json() : null; })
+    .then(function(d){
+      if (d && d.success === false && window.toast) toast(d.message || 'Saved for this session only.', 'warning');
+    })
+    .catch(function(){});
   // …and flip the UI right now: fetch the new language's catalog and re-translate the page in place,
   // no reload (window.setLang reverts every node to its stored English, then applies the new catalog).
   fetch(MOUNT + '/api/i18n/' + encodeURIComponent(lang), {cache: 'no-store'})
@@ -895,16 +902,21 @@ window.toast = function(msg, kind){
     c.style.cssText = 'position:fixed;top:1rem;left:50%;transform:translateX(-50%);z-index:11000;'
       + 'display:flex;flex-direction:column;align-items:center;gap:.5rem;max-width:min(92vw,520px);';
     document.body.appendChild(c); }
-  var icon = kind==='success' ? 'check-circle-fill' : (kind==='danger' ? 'x-circle-fill' : 'info-circle-fill');
+  // 'warning' is honoured: six call sites already passed it and silently got a blue info toast,
+  // so a "this only half-worked" message looked like routine information.
+  var KINDS = {success: 'check-circle-fill', danger: 'x-circle-fill',
+               warning: 'exclamation-triangle-fill', info: 'info-circle-fill'};
+  if (!KINDS[kind]) kind = 'info';
+  var icon = KINDS[kind];
   var t = document.createElement('div');
-  t.className = 'alert alert-' + (kind==='success'?'success':(kind==='danger'?'danger':'info')) + ' py-2 px-3 mb-0';
+  t.className = 'alert alert-' + kind + ' py-2 px-3 mb-0';
   t.style.cssText = 'font-size:.85rem;box-shadow:0 6px 24px rgba(0,0,0,.55);text-align:center;';
   t.innerHTML = '<i class="bi bi-' + icon + '"></i> ' + escapeHtml(msg);
   c.appendChild(t);
   // Each toast owns its own timer (captured `t`). Errors linger longer so they're readable before
   // fading; success/info clear quicker.
   setTimeout(function(){ t.style.transition='opacity .4s'; t.style.opacity='0'; setTimeout(function(){ t.remove(); }, 400); },
-             kind==='danger' ? 7000 : 4000);
+             kind==='danger' ? 7000 : (kind==='warning' ? 6000 : 4000));
 };
 
 // Global styled confirm dialog — replaces the browser's native confirm() so confirmations stay

@@ -188,14 +188,22 @@
   function revoke(id, btn){
     if(btn){ btn.disabled = true; btn.textContent = 'Revoking…'; }
     fetch(mp() + '/api/account/sessions/' + id + '/revoke', {method:'POST', cache:'no-store'})
-      .then(function(r){ return r.json(); })
-      .then(function(d){
-        if(d && d.current){ location.href = mp() + '/login'; return; }
+      // Check the STATUS and the envelope. This used to toast "Session revoked" for any parseable
+      // body — so a 404 "Session not found" told the user their session had been revoked when it
+      // had not. (The route also answered with an `ok` key, which the universal `success === false`
+      // guard cannot see; both ends are fixed.)
+      .then(function(r){ return r.json().then(function(d){ return {ok: r.ok, d: d || {}}; })
+                          .catch(function(){ return {ok: false, d: {}}; }); })
+      .then(function(res){
+        if(!res.ok || res.d.success === false){
+          throw new Error(res.d.message || 'Could not revoke that session');
+        }
+        if(res.d.current){ location.href = mp() + '/login'; return; }
         if(window.toast) toast('Session revoked', 'success');
         load();
       })
-      .catch(function(){
-        if(window.toast) toast('Could not revoke that session', 'danger');
+      .catch(function(err){
+        if(window.toast) toast(err.message || 'Could not revoke that session', 'danger');
         if(btn){ btn.disabled = false; btn.textContent = 'Revoke'; }
       });
   }
