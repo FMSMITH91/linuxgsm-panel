@@ -34,7 +34,9 @@ MANAGE_REMOTES = "manage_remotes"       # Add/edit/remove remote VPS nodes
 MANAGE_USERS = "manage_users"           # Add/edit/remove users
 MANAGE_GROUPS = "manage_groups"         # Add/edit/remove groups and permissions
 VIEW_LOGS = "view_logs"
-SUPER_ADMIN = "super_admin"             # All permissions, bypass all checks
+SUPER_ADMIN = "super_admin"   # NOT grantable: superadmin is User.is_superadmin, the flag.
+                              # Kept only so an old stored group permission can be recognised
+                              # and stripped; see strip_legacy_superadmin_grants().
 
 ALL_PERMISSIONS = {
     VIEW_SERVERS: "View server status list",
@@ -55,7 +57,6 @@ ALL_PERMISSIONS = {
     MANAGE_USERS: "Manage user accounts",
     MANAGE_GROUPS: "Manage groups and permissions",
     VIEW_LOGS: "View audit logs",
-    SUPER_ADMIN: "Full system administrator access (bypasses all checks)",
 }
 
 SERVER_ACTIONS = ["restart", "start", "stop", "update", "install", "uninstall"]
@@ -364,6 +365,24 @@ def permission_required(*perms):
     return decorator
 
 
+def superadmin_required(f):
+    """Decorator: require the is_superadmin FLAG.
+
+    Replaces @permission_required(SUPER_ADMIN). That form also passed for anyone whose GROUP granted
+    a "super_admin" permission, while every other superadmin gate — the nav, /users, the settings
+    pages — tests the flag. The result was an account with real power (settings, notification
+    credentials, host reboot) and no way to see or reach most of it."""
+    @wraps(f)
+    def decorated_function(*args, **kwargs):
+        if not current_user.is_authenticated:
+            return _deny("Please sign in to continue.", 401)
+        if not current_user.is_superadmin:
+            return _deny("That area is for administrators only.", 403)
+        return f(*args, **kwargs)
+    decorated_function._required_perms = (SUPER_ADMIN,)   # rbac_test reads this
+    return decorated_function
+
+
 def server_access_required(f):
     """Decorator: require access to the specific server referenced in the route.
 
@@ -495,3 +514,25 @@ def log_action(user, action, target="", detail="", success=True, actor=None):
     )
     db.session.add(entry)
     db.session.commit()
+
+
+def strip_legacy_superadmin_grants():
+    """Remove a stored "super_admin" group permission left over from when it was grantable.
+
+    Nothing consults it any more, so this changes no access — it stops a stale string sitting in the
+    permissions JSON where the Groups UI can no longer show or untick it, and where a future
+    has_permission(user, SUPER_ADMIN) would silently start honouring it again. Returns how many
+    groups were cleaned; best-effort and never fatal at startup."""
+    from models import Group
+    cleaned = 0
+    try:
+        for group in Group.query.all():
+            perms = group.get_permissions()
+            if SUPER_ADMIN in perms:
+                group.set_permissions([p for p in perms if p != SUPER_ADMIN])
+                cleaned += 1
+        if cleaned:
+            db.session.commit()
+    except Exception:
+        db.session.rollback()
+    return cleaned

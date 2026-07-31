@@ -72,7 +72,9 @@ from auth import (
     generate_totp_secret, totp_provisioning_uri,
     verify_totp, get_user_permissions, get_user_servers,
     hash_password, has_permission, init_auth,
-    log_action, permission_required, server_access_required, INSTALL_SERVER,
+    log_action, permission_required, server_access_required, superadmin_required,
+    strip_legacy_superadmin_grants,
+    INSTALL_SERVER,
     UNINSTALL_SERVER, MANAGE_SERVERS,
     MANAGE_REMOTES, MANAGE_USERS, MANAGE_GROUPS,
     VIEW_LOGS, SUPER_ADMIN, VIEW_CONSOLE, SEND_COMMAND, MODERATE_SERVER,
@@ -1953,6 +1955,17 @@ def create_app():
         notifications.migrate_master_switch()
     except Exception:
         _log.debug("notifications master-switch migration skipped", exc_info=True)
+    # One-time: strip a stored "super_admin" group permission from when it was grantable. It is no
+    # longer consulted anywhere, so this grants and revokes nothing — it clears a string the Groups
+    # UI can no longer show or untick, and which a future has_permission(user, SUPER_ADMIN) would
+    # otherwise silently start honouring again.
+    try:
+        with app.app_context():
+            _stripped = strip_legacy_superadmin_grants()
+        if _stripped:
+            _log.info("removed the legacy super_admin permission from %d group(s)", _stripped)
+    except Exception:
+        _log.debug("legacy super_admin cleanup skipped", exc_info=True)
     # Lock down data/ (0700) and the sensitive files inside (DB, keys, config → 0600) now that the
     # DB exists — keeps them unreachable by other local users. Idempotent; tightens old installs too.
     harden_data_permissions()
@@ -4975,7 +4988,7 @@ def register_routes(app):
     # ── Admin notifications (Telegram / Discord) ──────────────
     @app.route("/settings")
     @login_required
-    @permission_required(SUPER_ADMIN)
+    @superadmin_required
     def panel_settings():
         cfg = load_config()
         return render_template("settings.html", languages=i18n.LANGUAGES, settings={
@@ -4994,7 +5007,7 @@ def register_routes(app):
 
     @app.route("/settings/save", methods=["POST"])
     @login_required
-    @permission_required(SUPER_ADMIN)
+    @superadmin_required
     def panel_settings_save():
         f = request.form
         title = (f.get("site_title") or "").strip()[:80] or "LinuxGSM Panel"
@@ -5028,7 +5041,7 @@ def register_routes(app):
 
     @app.route("/notifications")
     @login_required
-    @permission_required(SUPER_ADMIN)
+    @superadmin_required
     def notifications_settings():
         return render_template("notifications.html",
                                settings=notifications.settings_for_form(),
@@ -5036,7 +5049,7 @@ def register_routes(app):
 
     @app.route("/notifications/save", methods=["POST"])
     @login_required
-    @permission_required(SUPER_ADMIN)
+    @superadmin_required
     def notifications_save():
         f = request.form
         # A blank secret field means "keep the stored one" (None), so the real token/webhook is
@@ -5064,7 +5077,7 @@ def register_routes(app):
 
     @app.route("/api/notifications/test", methods=["POST"])
     @login_required
-    @permission_required(SUPER_ADMIN)
+    @superadmin_required
     def notifications_test():
         b = _json_body()
         # Test the values typed into the form (so you don't have to Save first); blank fields fall
@@ -5380,7 +5393,7 @@ def register_routes(app):
 
     @app.route("/global-bans")
     @login_required
-    @permission_required(SUPER_ADMIN)
+    @superadmin_required
     def global_bans_page():
         bans = GlobalBan.query.order_by(GlobalBan.created_at.desc()).all()
         return render_template("global_bans.html", bans=bans,
@@ -5388,7 +5401,7 @@ def register_routes(app):
 
     @app.route("/global-bans/add", methods=["POST"])
     @login_required
-    @permission_required(SUPER_ADMIN)
+    @superadmin_required
     def global_bans_add():
         sid = _sanitize_steamid(request.form.get("steamid", ""))
         if not sid:
@@ -5409,7 +5422,7 @@ def register_routes(app):
 
     @app.route("/global-bans/<int:ban_id>/delete", methods=["POST"])
     @login_required
-    @permission_required(SUPER_ADMIN)
+    @superadmin_required
     def global_bans_delete(ban_id):
         gb = GlobalBan.query.get_or_404(ban_id)
         sid = gb.steamid
@@ -5422,7 +5435,7 @@ def register_routes(app):
 
     @app.route("/global-bans/sync", methods=["POST"])
     @login_required
-    @permission_required(SUPER_ADMIN)
+    @superadmin_required
     def global_bans_sync():
         threading.Thread(target=lambda: _sync_global_bans(app), daemon=True).start()
         log_action(current_user, "global_ban_sync", target="all Source servers")
@@ -5431,7 +5444,7 @@ def register_routes(app):
 
     @app.route("/commands")
     @login_required
-    @permission_required(SUPER_ADMIN)
+    @superadmin_required
     def manage_commands():
         commands = CustomCommand.query.order_by(CustomCommand.name).all()
         groups = Group.query.order_by(Group.name).all()
@@ -5442,7 +5455,7 @@ def register_routes(app):
 
     @app.route("/commands/add", methods=["POST"])
     @login_required
-    @permission_required(SUPER_ADMIN)
+    @superadmin_required
     def add_command():
         fields, err = _custom_cmd_form()
         if err:
@@ -5457,7 +5470,7 @@ def register_routes(app):
 
     @app.route("/commands/<int:cmd_id>/edit", methods=["POST"])
     @login_required
-    @permission_required(SUPER_ADMIN)
+    @superadmin_required
     def edit_command(cmd_id):
         cmd = CustomCommand.query.get_or_404(cmd_id)
         fields, err = _custom_cmd_form(cmd)
@@ -5472,7 +5485,7 @@ def register_routes(app):
 
     @app.route("/commands/<int:cmd_id>/delete", methods=["POST"])
     @login_required
-    @permission_required(SUPER_ADMIN)
+    @superadmin_required
     def delete_command(cmd_id):
         cmd = CustomCommand.query.get_or_404(cmd_id)
         cmd.groups = []
@@ -5652,7 +5665,7 @@ def register_routes(app):
     # ── Server Management (local) ──────────────────────────
     @app.route("/server-management")
     @login_required
-    @permission_required(SUPER_ADMIN)
+    @superadmin_required
     def server_management():
         """Panel host management. The panel host is just the local remote, so it uses
         the SAME template (and endpoints) as a remote server — only the panel-specific
@@ -5675,14 +5688,14 @@ def register_routes(app):
 
     @app.route("/api/server-management")
     @login_required
-    @permission_required(SUPER_ADMIN)
+    @superadmin_required
     def api_server_management():
         """JSON status for server management dashboard."""
         return jsonify(so.get_server_status())
 
     @app.route("/api/server-management/specs")
     @login_required
-    @permission_required(SUPER_ADMIN)
+    @superadmin_required
     def api_server_management_specs():
         """Static hardware/OS specs for the panel host."""
         local = RemoteServer.query.filter_by(is_local=True).first()
@@ -5695,14 +5708,14 @@ def register_routes(app):
 
     @app.route("/api/server-management/live")
     @login_required
-    @permission_required(SUPER_ADMIN)
+    @superadmin_required
     def api_server_management_live():
         """Realtime per-core + overall CPU and RAM/swap for the live bar graphs."""
         return jsonify(so.live_metrics())
 
     @app.route("/api/server-management/ufw-allow-tailscale", methods=["POST"])
     @login_required
-    @permission_required(SUPER_ADMIN)
+    @superadmin_required
     def api_ufw_allow_tailscale():
         """Allow traffic on the Tailscale interface via UFW."""
         success, msg = so.ufw_allow_tailscale()
@@ -5714,7 +5727,7 @@ def register_routes(app):
 
     @app.route("/api/server-management/ts-ssh-enable", methods=["POST"])
     @login_required
-    @permission_required(SUPER_ADMIN)
+    @superadmin_required
     def api_ts_ssh_enable():
         """Enable Tailscale SSH."""
         success, msg = so.tailscale_ssh_enable()
@@ -5726,7 +5739,7 @@ def register_routes(app):
 
     @app.route("/api/server-management/ts-ssh-disable", methods=["POST"])
     @login_required
-    @permission_required(SUPER_ADMIN)
+    @superadmin_required
     def api_ts_ssh_disable():
         """Disable Tailscale SSH."""
         success, msg = so.tailscale_ssh_disable()
@@ -5738,7 +5751,7 @@ def register_routes(app):
 
     @app.route("/api/panel/update-status")
     @login_required
-    @permission_required(SUPER_ADMIN)
+    @superadmin_required
     def api_panel_update_status():
         """Is the LinuxGSM Panel itself behind its GitHub repo? (git-based check)"""
         force = request.args.get("force") in ("1", "true", "yes")
@@ -5753,7 +5766,7 @@ def register_routes(app):
 
     @app.route("/api/panel/update", methods=["POST"])
     @login_required
-    @permission_required(SUPER_ADMIN)
+    @superadmin_required
     def api_panel_update():
         """Pull the latest panel code and restart (one-click self-update)."""
         success, msg = so.panel_self_update()
@@ -5762,7 +5775,7 @@ def register_routes(app):
 
     @app.route("/api/panel/update-log")
     @login_required
-    @permission_required(SUPER_ADMIN)
+    @superadmin_required
     def api_panel_update_log():
         """Live progress of an in-flight self-update (the [1/5]…[5/5] steps + result)."""
         try:
@@ -5773,7 +5786,7 @@ def register_routes(app):
 
     @app.route("/api/panel/branches")
     @login_required
-    @permission_required(SUPER_ADMIN)
+    @superadmin_required
     def api_panel_branches():
         """Remote branches the panel can switch to, plus the one it currently tracks."""
         try:
@@ -5785,7 +5798,7 @@ def register_routes(app):
 
     @app.route("/api/panel/switch-branch", methods=["POST"])
     @login_required
-    @permission_required(SUPER_ADMIN)
+    @superadmin_required
     def api_panel_switch_branch():
         """Switch the panel to another branch and pull it (same rollback-safe path as an update)."""
         branch = (_json_body().get("branch") or "").strip()
@@ -5795,7 +5808,7 @@ def register_routes(app):
 
     @app.route("/api/panel/diagnostics")
     @login_required
-    @permission_required(SUPER_ADMIN)
+    @superadmin_required
     def api_panel_diagnostics():
         """Fast local self-check of the panel's own health (integrity, DB, keys,
         disk, cert, service). No SSH/network."""
@@ -5807,7 +5820,7 @@ def register_routes(app):
 
     @app.route("/api/panel/integrity")
     @login_required
-    @permission_required(SUPER_ADMIN)
+    @superadmin_required
     def api_panel_integrity():
         """Which of the panel's own git-tracked files have been modified/deleted."""
         try:
@@ -5819,7 +5832,7 @@ def register_routes(app):
 
     @app.route("/api/panel/repair", methods=["POST"])
     @login_required
-    @permission_required(SUPER_ADMIN)
+    @superadmin_required
     def api_panel_repair():
         """Restore tampered panel files from git. Body: {"paths": [...]} to restore
         specific reported files, or {} / omitted to restore all of them."""
@@ -5839,7 +5852,7 @@ def register_routes(app):
 
     @app.route("/api/panel/db-stats")
     @login_required
-    @permission_required(SUPER_ADMIN)
+    @superadmin_required
     def api_panel_db_stats():
         """DB + WAL size and audit-log row count (so growth is visible)."""
         try:
@@ -5850,7 +5863,7 @@ def register_routes(app):
 
     @app.route("/api/panel/optimize-db", methods=["POST"])
     @login_required
-    @permission_required(SUPER_ADMIN)
+    @superadmin_required
     def api_panel_optimize_db():
         """VACUUM + ANALYZE + WAL checkpoint — reclaim space, refresh stats."""
         try:
@@ -5869,7 +5882,7 @@ def register_routes(app):
 
     @app.route("/api/panel/db-health")
     @login_required
-    @permission_required(SUPER_ADMIN)
+    @superadmin_required
     def api_panel_db_health():
         """On-demand database integrity check — read-only PRAGMA integrity_check, which is
         deeper than the fast quick_check the panel runs at startup. Reports healthy/flagged;
@@ -5884,7 +5897,7 @@ def register_routes(app):
 
     @app.route("/api/panel/repair-db", methods=["POST"])
     @login_required
-    @permission_required(SUPER_ADMIN)
+    @superadmin_required
     def api_panel_repair_db():
         """Repair a flagged database on-demand: a detached job stops the panel, rebuilds/restores the
         DB offline (original copied aside first), and restarts. For when the health check fails."""
@@ -5933,7 +5946,7 @@ def register_routes(app):
 
     @app.route("/api/panel/security/bans")
     @login_required
-    @permission_required(SUPER_ADMIN)
+    @superadmin_required
     def api_panel_security_bans():
         """Every fail2ban jail on the panel host with its current bans (panel-login + sshd + …)."""
         try:
@@ -5943,7 +5956,7 @@ def register_routes(app):
 
     @app.route("/api/panel/security/top-ips")
     @login_required
-    @permission_required(SUPER_ADMIN)
+    @superadmin_required
     def api_panel_security_top_ips():
         """Top offending IPs on the panel host (last 7 days), aggregated from the fail2ban log."""
         try:
@@ -5956,7 +5969,7 @@ def register_routes(app):
 
     @app.route("/api/panel/security/block", methods=["POST"])
     @login_required
-    @permission_required(SUPER_ADMIN)
+    @superadmin_required
     def api_panel_security_block():
         """UFW-block (all ports, permanent) an IP on the panel host."""
         ip = (_json_body().get("ip") or "").strip()
@@ -5978,7 +5991,7 @@ def register_routes(app):
 
     @app.route("/api/panel/security/autoblock", methods=["POST"])
     @login_required
-    @permission_required(SUPER_ADMIN)
+    @superadmin_required
     def api_panel_security_autoblock():
         """Turn the rolling auto-block (attempts >= threshold over 7 days) on/off for the panel host,
         and optionally update the shared threshold."""
@@ -5995,7 +6008,7 @@ def register_routes(app):
 
     @app.route("/api/panel/security/whitelist", methods=["POST"])
     @login_required
-    @permission_required(SUPER_ADMIN)
+    @superadmin_required
     def api_panel_security_whitelist():
         """Add or remove a global security-whitelist entry (IP or CIDR). Whitelisted addresses are
         never fail2ban-banned (jail ignoreip) or UFW auto-blocked, and adding one lifts any ban/block
@@ -6004,7 +6017,7 @@ def register_routes(app):
 
     @app.route("/api/panel/security/unban", methods=["POST"])
     @login_required
-    @permission_required(SUPER_ADMIN)
+    @superadmin_required
     def api_panel_security_unban():
         """Lift a fail2ban ban (jail + IP validated server-side)."""
         d = _json_body()
@@ -6019,7 +6032,7 @@ def register_routes(app):
 
     @app.route("/api/panel/security/events")
     @login_required
-    @permission_required(SUPER_ADMIN)
+    @superadmin_required
     def api_panel_security_events():
         """Recent security-relevant audit entries (failed/blocked logins, fail2ban bans)."""
         try:
@@ -6036,7 +6049,7 @@ def register_routes(app):
 
     @app.route("/api/panel/security/log")
     @login_required
-    @permission_required(SUPER_ADMIN)
+    @superadmin_required
     def api_panel_security_log():
         """Tail of a whitelisted security log: panel (data/auth.log), fail2ban, or ssh."""
         which = request.args.get("which", "panel")
@@ -6150,7 +6163,7 @@ def register_routes(app):
 
     @app.route("/api/panel/change-port", methods=["POST"])
     @login_required
-    @permission_required(SUPER_ADMIN)
+    @superadmin_required
     def api_panel_change_port():
         """Change where the panel's web server listens: its bind address and/or port. Saves the
         new binding, brings the firewall in line (a publicly-bound panel needs its port open; a
@@ -6452,7 +6465,7 @@ def register_routes(app):
 
     @app.route("/api/panel/backup/full/precheck")
     @login_required
-    @permission_required(SUPER_ADMIN)
+    @superadmin_required
     def api_panel_backup_full_precheck():
         """Report which installed servers have players connected right now, so the UI can ask
         whether to disconnect them, wait until they're empty, or cancel before a full backup."""
@@ -6472,7 +6485,7 @@ def register_routes(app):
 
     @app.route("/api/panel/backup/full", methods=["POST"])
     @login_required
-    @permission_required(SUPER_ADMIN)
+    @superadmin_required
     def api_panel_backup_full():
         """Kick off a full (game-file) backup of all installed servers in the background.
         mode: 'now' → back up even busy servers (disconnects players); 'wait' → back up empty
@@ -6495,7 +6508,7 @@ def register_routes(app):
 
     @app.route("/api/panel/backup/game/<int:server_id>", methods=["POST"])
     @login_required
-    @permission_required(SUPER_ADMIN)
+    @superadmin_required
     def api_panel_backup_game(server_id):
         """Run LinuxGSM's backup for a single server on demand (background). Serialised with the
         full backup via the same lock so game backups never overlap and thrash the disk."""
@@ -6567,7 +6580,7 @@ def register_routes(app):
 
     @app.route("/api/panel/backup/game/<int:server_id>/delete", methods=["POST"])
     @login_required
-    @permission_required(SUPER_ADMIN)
+    @superadmin_required
     def api_panel_backup_game_delete(server_id):
         """Delete one game-server backup archive."""
         gs = get_game(server_id)
@@ -6585,7 +6598,7 @@ def register_routes(app):
 
     @app.route("/backup/game/<int:server_id>/download")
     @login_required
-    @permission_required(SUPER_ADMIN)
+    @superadmin_required
     def panel_backup_game_download(server_id):
         """Stream a game-server backup archive to the browser (files live in the game user's home,
         so they're read via sudo/SSH rather than served from disk)."""
@@ -6603,7 +6616,7 @@ def register_routes(app):
 
     @app.route("/api/panel/backup/game/<int:server_id>/schedule", methods=["POST"])
     @login_required
-    @permission_required(SUPER_ADMIN)
+    @superadmin_required
     def api_panel_backup_game_schedule(server_id):
         """Set one server's backup schedule. `interval` and `keep` are each a number to override,
         or "default" to inherit the global schedule."""
@@ -6624,7 +6637,7 @@ def register_routes(app):
 
     @app.route("/api/panel/backup/game/<int:server_id>/info")
     @login_required
-    @permission_required(SUPER_ADMIN)
+    @superadmin_required
     def api_panel_backup_game_info(server_id):
         """One server's backup picture for its Files & Config tab: its schedule (plus the global
         default it may inherit), its existing LinuxGSM backups, host disk headroom, and the live
@@ -6654,7 +6667,7 @@ def register_routes(app):
 
     @app.route("/api/panel/backups")
     @login_required
-    @permission_required(SUPER_ADMIN)
+    @superadmin_required
     def api_panel_backups():
         """List panel backups + retention settings, plus full (game-file) backup settings/status
         and each installed game server's LinuxGSM backups."""
@@ -6723,7 +6736,7 @@ def register_routes(app):
 
     @app.route("/api/panel/backup", methods=["POST"])
     @login_required
-    @permission_required(SUPER_ADMIN)
+    @superadmin_required
     def api_panel_backup_create():
         """Create a backup now (database + config + encryption keys)."""
         try:
@@ -6736,7 +6749,7 @@ def register_routes(app):
 
     @app.route("/api/panel/backup/delete", methods=["POST"])
     @login_required
-    @permission_required(SUPER_ADMIN)
+    @superadmin_required
     def api_panel_backup_delete():
         name = _json_body().get("name") or ""
         ok, msg = bk.delete_backup(name)
@@ -6745,7 +6758,7 @@ def register_routes(app):
 
     @app.route("/api/panel/backup/restore", methods=["POST"])
     @login_required
-    @permission_required(SUPER_ADMIN)
+    @superadmin_required
     def api_panel_backup_restore():
         """Restore a backup (destructive — takes a pre-restore safety backup, then swaps the
         data into place and restarts the panel)."""
@@ -6756,7 +6769,7 @@ def register_routes(app):
 
     @app.route("/api/panel/backup/download/<path:name>")
     @login_required
-    @permission_required(SUPER_ADMIN)
+    @superadmin_required
     def api_panel_backup_download(name):
         p = bk._safe_path(name)
         if not p:
@@ -6767,7 +6780,7 @@ def register_routes(app):
 
     @app.route("/api/panel/backup/settings", methods=["POST"])
     @login_required
-    @permission_required(SUPER_ADMIN)
+    @superadmin_required
     def api_panel_backup_settings():
         data = _json_body()
         s = bk.set_settings(enabled=data.get("enabled"), keep_days=data.get("keep_days"))
@@ -6778,7 +6791,7 @@ def register_routes(app):
 
     @app.route("/api/panel/debug-report")
     @login_required
-    @permission_required(SUPER_ADMIN)
+    @superadmin_required
     def api_panel_debug_report():
         """A shareable diagnostic bundle (whitelisted fields + redacted log) the operator
         can attach to a GitHub issue. No secrets by construction."""
@@ -6789,7 +6802,7 @@ def register_routes(app):
 
     @app.route("/api/panel/auto-updates")
     @login_required
-    @permission_required(SUPER_ADMIN)
+    @superadmin_required
     def api_panel_auto_updates():
         """Whether automatic OS security updates are installed + enabled."""
         try:
@@ -6799,7 +6812,7 @@ def register_routes(app):
 
     @app.route("/api/panel/enable-auto-updates", methods=["POST"])
     @login_required
-    @permission_required(SUPER_ADMIN)
+    @superadmin_required
     def api_panel_enable_auto_updates():
         """Install + enable unattended-upgrades so the OS patches itself."""
         try:
@@ -6812,7 +6825,7 @@ def register_routes(app):
 
     @app.route("/api/server-management/os-update-check")
     @login_required
-    @permission_required(SUPER_ADMIN)
+    @superadmin_required
     def api_os_update_check():
         """Check for available OS updates."""
         result = so.os_update_available()
@@ -6820,7 +6833,7 @@ def register_routes(app):
 
     @app.route("/api/server-management/os-update-run", methods=["POST"])
     @login_required
-    @permission_required(SUPER_ADMIN)
+    @superadmin_required
     def api_os_update_run():
         """Run apt upgrade."""
         success, msg = so.os_run_update()
@@ -6831,14 +6844,14 @@ def register_routes(app):
 
     @app.route("/api/server-management/os-update-log")
     @login_required
-    @permission_required(SUPER_ADMIN)
+    @superadmin_required
     def api_os_update_log():
         """Get recent apt history."""
         return jsonify(so.os_update_log())
 
     @app.route("/api/server-management/reboot", methods=["POST"])
     @login_required
-    @permission_required(SUPER_ADMIN)
+    @superadmin_required
     def api_server_reboot():
         """Reboot the server."""
         data = _json_body()

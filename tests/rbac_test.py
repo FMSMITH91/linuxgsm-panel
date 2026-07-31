@@ -132,6 +132,22 @@ with app.app_context():
     db.session.commit()
     uid2 = u2.id
 
+    # Third fixture: a group whose stored permissions still contain the legacy "super_admin"
+    # string, as an install from before it stopped being grantable would have. It must confer
+    # NOTHING — that grant used to pass @permission_required(SUPER_ADMIN) on ~61 routes while every
+    # flag-based gate and the whole nav refused the same account.
+    tag3 = tag + "_legacy_sa"
+    grp3 = Group(name=tag3, description="RBAC test legacy SA (auto)", is_default=False)
+    grp3.set_permissions([auth.VIEW_SERVERS, "super_admin"])
+    db.session.add(grp3)
+    db.session.flush()
+    u3 = User(username=tag3, password_hash=auth.hash_password(secrets.token_hex(16)),
+              display_name=tag3, is_superadmin=False, is_active=True)
+    u3.groups.append(grp3)
+    db.session.add(u3)
+    db.session.commit()
+    uid3 = u3.id
+
 print("Fixtures: limited user id=%d, group grants remote %d only." % (uid, granted_remote))
 print("Accessible server id=%d (remote %d); non-granted server id=%s (remote %s)\n"
       % (accessible_id, granted_remote, other_id, other_remote))
@@ -194,6 +210,19 @@ try:
     # filters rows they can already see.
     check("tag list is readable without MANAGE_SERVERS -> 200",
           c.get("/api/tags").status_code == 200)
+
+    # ── A legacy "super_admin" group grant confers nothing ────────────────────────────────────
+    c3 = client_as(uid3)
+    for p3 in ["/settings", "/notifications", "/server-management", "/users"]:
+        _code = c3.get(p3).status_code
+        check("legacy super_admin grant DENIED %s" % p3, _code != 200, "got %d" % _code)
+    check("legacy super_admin grant cannot reboot the panel host",
+          c3.post("/api/server-management/reboot").status_code != 200)
+    check("legacy super_admin grant cannot publish an install-wide layout",
+          c3.post("/api/settings/ui-default").status_code == 403)
+    # ...and it is no longer offered in the Groups UI at all.
+    check("super_admin is not a grantable permission any more",
+          "super_admin" not in auth.ALL_PERMISSIONS)
 
     # ── A denial must be readable by whoever asked ────────────────────────────────────────────
     # The decorators used to flash + 302 unconditionally. An in-page fetch follows that redirect,
@@ -289,12 +318,12 @@ finally:
     else:
         # Live/configured install: remove ONLY our throwaway users/groups, never real data.
         with app.app_context():
-            for _uid in (uid, locals().get("uid2")):
+            for _uid in (uid, locals().get("uid2"), locals().get("uid3")):
                 if _uid:
                     _u = User.query.get(_uid)
                     if _u:
                         db.session.delete(_u)
-            for _tag in (tag, tag + "_mr"):
+            for _tag in (tag, tag + "_mr", tag + "_legacy_sa"):
                 _g = Group.query.filter_by(name=_tag).first()
                 if _g:
                     db.session.delete(_g)
