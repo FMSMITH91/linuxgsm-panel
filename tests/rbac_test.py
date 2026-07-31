@@ -195,6 +195,32 @@ try:
     check("tag list is readable without MANAGE_SERVERS -> 200",
           c.get("/api/tags").status_code == 200)
 
+    # ── A denial must be readable by whoever asked ────────────────────────────────────────────
+    # The decorators used to flash + 302 unconditionally. An in-page fetch follows that redirect,
+    # gets HTML, fails to parse it, and base.html's fallback turned the refusal into a SUCCESS
+    # toast. So: JSON callers get JSON, browser navigations still get the redirect.
+    # A DECORATOR-gated /api/ route (this one is @permission_required(MANAGE_REMOTES)) — the routes
+    # that already answered with an inline jsonify 403 would pass either way, so they prove nothing
+    # about the decorator.
+    _api_denied = c.get("/api/remote/%d/specs" % granted_remote)
+    check("denial (API, decorator-gated): status is 403, not a redirect",
+          _api_denied.status_code == 403, "got %d" % _api_denied.status_code)
+    check("denial (API, decorator-gated): body is JSON with success=false",
+          (_api_denied.get_json() or {}).get("success") is False,
+          _api_denied.get_data(as_text=True)[:100])
+    _fetch_denied = c.post("/servers/%d/delete" % accessible_id,
+                           headers={"X-Requested-With": "XMLHttpRequest"})
+    check("denial (in-page fetch): JSON, so it cannot be mistaken for success",
+          _fetch_denied.status_code == 403
+          and (_fetch_denied.get_json() or {}).get("success") is False,
+          "status=%d" % _fetch_denied.status_code)
+    _browser_denied = c.post("/servers/%d/delete" % accessible_id,
+                             headers={"Accept": "text/html"})
+    check("denial (browser form): still a redirect, not JSON",
+          _browser_denied.status_code in (301, 302, 303),
+          "got %d" % _browser_denied.status_code)
+
+
     check("view console WITH VIEW_CONSOLE + access -> 200",
           c.get("/api/console/%d" % accessible_id).status_code == 200)
 
