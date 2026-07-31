@@ -1012,8 +1012,21 @@ function _submitAjaxForm(form){
   var restore = function(){ if (btn){ btn.disabled = false; btn.innerHTML = orig; } };
   fetch(form.action || location.href,
         { method: (form.getAttribute('method') || 'POST').toUpperCase(), body: new FormData(form) })
-    .then(function(r){ return r.json().then(function(d){ return { status: r.status, d: d || {} }; })
-                                .catch(function(){ return { status: r.status, d: {} }; }); })
+    .then(function(r){
+      // A form endpoint that answers with a PAGE — a permission redirect, or the login page after
+      // the session expired — is a failure. Parsing that as JSON fails, and the old fallback
+      // returned {} … whose `.success !== false` is true, so a refused action rendered a green
+      // success toast. Treat a followed redirect or a non-JSON body as the failure it is.
+      var ct = r.headers.get('content-type') || '';
+      if (r.redirected || ct.indexOf('application/json') === -1) {
+        return { status: r.status, d: { success: false,
+                 message: r.redirected ? 'Not permitted, or your session expired.'
+                                       : 'The server sent an unexpected response.' } };
+      }
+      return r.json().then(function(d){ return { status: r.status, d: d || {} }; })
+                     .catch(function(){ return { status: r.status,
+                              d: { success: false, message: 'The server sent an unexpected response.' } }; });
+    })
     .then(function(res){
       restore();
       if (res.status >= 200 && res.status < 300 && res.d.success !== false){

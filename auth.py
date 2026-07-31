@@ -5,7 +5,7 @@ from datetime import datetime
 from functools import wraps
 
 import bcrypt
-from flask import flash, redirect, request, url_for
+from flask import flash, jsonify, redirect, request, url_for
 from flask_login import LoginManager, current_user
 
 from models import AuditLog, User, db
@@ -320,19 +320,42 @@ def accessible_remote_ids(user):
 
 # ─── Decorators ───────────────────────────────────────────────
 
+def _denial_wants_json():
+    """True when the caller can only make sense of a JSON denial.
+
+    These decorators used to flash + 302 unconditionally. For an in-page fetch that is worse than
+    useless: it follows the redirect, gets 200 text/html, JSON-parsing fails, and the caller's
+    fallback turns a REFUSED action into a success toast. Several routes worked around it with an
+    inline check returning jsonify(...), 403 — this makes the decorators do the same thing, so the
+    workaround stops being necessary."""
+    if (request.path or "").startswith("/api/"):
+        return True
+    if request.headers.get("X-Requested-With") == "XMLHttpRequest":
+        return True            # base.html's fetch wrapper sets this on every non-GET
+    return "application/json" in (request.headers.get("Accept") or "")
+
+
+def _deny(message, code):
+    """A denial in the shape the caller can read: JSON for fetch/API, flash + redirect for a real
+    browser navigation."""
+    if _denial_wants_json():
+        return jsonify({"success": False, "message": message}), code
+    flash(message, "danger")
+    return redirect(url_for("login") if code == 401 else url_for("index"))
+
+
 def permission_required(*perms):
     """Decorator: require one of the listed permissions to access a route."""
     def decorator(f):
         @wraps(f)
         def decorated_function(*args, **kwargs):
             if not current_user.is_authenticated:
-                return redirect(url_for("login"))
+                return _deny("Please sign in to continue.", 401)
             if current_user.is_superadmin:
                 return f(*args, **kwargs)
             user_perms = get_user_permissions(current_user)
             if not any(p in user_perms for p in perms):
-                flash("You do not have permission to access this page.", "danger")
-                return redirect(url_for("index"))
+                return _deny("You do not have permission to do that.", 403)
             return f(*args, **kwargs)
         # Recorded so rbac_test can tell a SUPER_ADMIN-only route (which needs no per-server check,
         # because a superadmin can reach every server) from one that merely holds a permission.
@@ -351,11 +374,10 @@ def server_access_required(f):
     @wraps(f)
     def decorated_function(*args, **kwargs):
         if not current_user.is_authenticated:
-            return redirect(url_for("login"))
+            return _deny("Please sign in to continue.", 401)
         server_id = kwargs.get("server_id")
         if server_id is not None and not can_access_server(current_user, server_id):
-            flash("You do not have access to that server.", "danger")
-            return redirect(url_for("index"))
+            return _deny("You do not have access to that server.", 403)
         return f(*args, **kwargs)
     decorated_function._checks_server_access = True
     return decorated_function
