@@ -491,6 +491,14 @@ class CustomCommand(db.Model):
         return self.argument_pattern or CUSTOM_ARG_DEFAULT_PATTERN
 
 
+# The tag-name rule, shared with the routes so a request can be rejected with THIS fixed message
+# instead of echoing the exception back — returning str(exc) to a client is how raw internals leak
+# into API responses (CodeQL py/stack-trace-exposure), and this codebase's rule is never to do it.
+TAG_NAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9 _.\-]{0,31}$")
+TAG_NAME_HELP = ("A tag name must start with a letter or number and use only letters, numbers, "
+                 "spaces, dots, hyphens or underscores (up to 32 characters).")
+
+
 class ServerTag(db.Model):
     """An install-wide label for grouping game servers (e.g. "PvE", "modded", "production").
 
@@ -510,9 +518,8 @@ class ServerTag(db.Model):
     def _validate_tag_name(self, key, value):
         # A tag name is rendered into HTML, used as a filter key, and shown in alert text. Pin the
         # charset at the DATA layer so no route can store one that needs escaping to be safe.
-        if value is not None and not re.match(r"^[A-Za-z0-9][A-Za-z0-9 _.\-]{0,31}$", value or ""):
-            raise ValueError("A tag name must start with a letter or number and use only "
-                             "letters, numbers, spaces, dots, hyphens or underscores.")
+        if value is not None and not TAG_NAME_RE.match(value or ""):
+            raise ValueError(TAG_NAME_HELP)
         return value
 
 

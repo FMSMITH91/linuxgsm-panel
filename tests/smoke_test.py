@@ -841,8 +841,15 @@ try:
           and (_tg_mute.get_json() or {})["tag"]["notify"] is False)
     check("tags: a duplicate name is refused (409, not a second row)",
           c.post("/api/tags", json={"name": "PRODUCTION"}).status_code == 409)
-    check("tags: a name the model rejects is a 400, not a 500",
-          c.post("/api/tags", json={"name": "<script>x</script>"}).status_code == 400)
+    _bad_tag = c.post("/api/tags", json={"name": "<script>x</script>"})
+    check("tags: a name the model rejects is a 400, not a 500", _bad_tag.status_code == 400)
+    # The message must be the FIXED help text, never the exception's own string: echoing str(exc)
+    # back to a client is how internals leak into API responses (CodeQL py/stack-trace-exposure —
+    # this exact endpoint tripped that rule once already).
+    _bad_msg = (_bad_tag.get_json() or {}).get("message", "")
+    check("tags: the rejection message is fixed help text, not exception internals",
+          _bad_msg.startswith("A tag name must start with")
+          and "<script>" not in _bad_msg and "Traceback" not in _bad_msg, _bad_msg[:120])
     check("tags: a nameless tag is refused", c.post("/api/tags", json={"name": "  "}).status_code == 400)
     check("tags: an invalid colour is dropped, not stored",
           (c.post("/api/tags", json={"name": "nocolor", "color": "javascript:x"})
