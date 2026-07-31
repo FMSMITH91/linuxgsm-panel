@@ -334,12 +334,20 @@ def permission_required(*perms):
                 flash("You do not have permission to access this page.", "danger")
                 return redirect(url_for("index"))
             return f(*args, **kwargs)
+        # Recorded so rbac_test can tell a SUPER_ADMIN-only route (which needs no per-server check,
+        # because a superadmin can reach every server) from one that merely holds a permission.
+        decorated_function._required_perms = tuple(perms)
         return decorated_function
     return decorator
 
 
 def server_access_required(f):
-    """Decorator: require access to the specific server referenced in the route."""
+    """Decorator: require access to the specific server referenced in the route.
+
+    A permission alone is NOT a grant for every server — get_game() is a bare get_or_404 — so any
+    route taking <int:server_id> needs this as well as its permission decorator. rbac_test asserts
+    that structurally via the marker below, which is why the marker exists rather than each route
+    being probed one at a time (probing a destructive route on a real install would fire it)."""
     @wraps(f)
     def decorated_function(*args, **kwargs):
         if not current_user.is_authenticated:
@@ -349,6 +357,7 @@ def server_access_required(f):
             flash("You do not have access to that server.", "danger")
             return redirect(url_for("index"))
         return f(*args, **kwargs)
+    decorated_function._checks_server_access = True
     return decorated_function
 
 

@@ -230,7 +230,7 @@
 {% endmacro %}
 {% endif %}
 
-{% if server.game_type == 'gmod' %}
+{% if server.game_type == 'gmod' and (current_user.is_superadmin or has_permission('manage_servers')) %}
 <!-- GMod game content: mount CS:S etc. so maps/props render (missing content = ERROR textures) -->
 {% macro panel_content() %}
 <div class="card mb-3 panel-movable" data-panel="content" data-mtab="console" id="gmod-content-card">
@@ -261,7 +261,7 @@
    only exist behind a guard. #}
 {% set panel_keys = ['controls', 'console', 'players'] %}
 {% if custom_commands %}{% set panel_keys = panel_keys + ['commands'] %}{% endif %}
-{% if server.game_type == 'gmod' %}{% set panel_keys = panel_keys + ['content'] %}{% endif %}
+{% if server.game_type == 'gmod' and (current_user.is_superadmin or has_permission('manage_servers')) %}{% set panel_keys = panel_keys + ['content'] %}{% endif %}
 {% set detail_visible, detail_hidden = panel_layout('detail_console', panel_keys) %}
 {# data-declared, not a variable read in {% block scripts %}: Jinja blocks have separate
    scopes, so panel_keys is not visible there. #}

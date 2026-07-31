@@ -3841,7 +3841,10 @@ def register_routes(app):
     def api_server_query_type(server_id):
         """Override (or clear) the gamedig query type for a server, so games the built-in map gets
         wrong or doesn't cover (e.g. cod) can still be queried. Validated to a gamedig-safe charset.
-        Requires the same permission as sending console commands / moderating."""
+
+        Requires MODERATE_SERVER, SEND_COMMAND or MANAGE_SERVERS. Deliberately NOT the granular
+        moderation permissions (kick_player / say_server): this writes server configuration, so it
+        is not routed through can_moderate_action, which grants on any single moderation right."""
         gs = get_game(server_id)
         if not (current_user.is_superadmin or has_permission(current_user, MODERATE_SERVER)
                 or has_permission(current_user, SEND_COMMAND)
@@ -4636,6 +4639,7 @@ def register_routes(app):
     @app.route("/servers/<int:server_id>/delete", methods=["POST"])
     @login_required
     @permission_required(UNINSTALL_SERVER)
+    @server_access_required   # get_game() does NOT check access; the permission alone is not enough
     def uninstall_server(server_id):
         gs = get_game(server_id)
         name = gs.name   # capture before the row is deleted (used in the success/error message)
@@ -4717,6 +4721,7 @@ def register_routes(app):
     @app.route("/servers/<int:server_id>/edit", methods=["POST"])
     @login_required
     @permission_required(MANAGE_SERVERS)
+    @server_access_required   # same: MANAGE_SERVERS is not a grant for EVERY server
     def edit_server(server_id):
         gs = get_game(server_id)
         gs.name = request.form.get("name", gs.name)
@@ -7498,6 +7503,7 @@ def register_routes(app):
     @permission_required(MANAGE_REMOTES)
     def api_remote_bootstrap_status(remote_id):
         """Live status of an in-progress (or just-finished) bootstrap job."""
+        get_remote(remote_id)   # enforce access, like the route that starts the job
         with _bootstrap_lock:
             job = _bootstrap_jobs.get(remote_id)
             if not job:
@@ -7524,6 +7530,7 @@ def register_routes(app):
     @permission_required(MANAGE_REMOTES)
     def api_remote_bootstrap_dismiss(remote_id):
         """Clear a finished (done/failed) bootstrap job so its card goes away."""
+        get_remote(remote_id)   # enforce access, like the route that starts the job
         with _bootstrap_lock:
             job = _bootstrap_jobs.get(remote_id)
             if job and job["status"] in ("done", "failed"):
@@ -7680,7 +7687,9 @@ def register_routes(app):
         except (TypeError, ValueError):
             return jsonify({"port": None})
         game = re.sub(r"[^a-z0-9]", "", (request.args.get("game") or "").lower())[:40]
-        remote = db.session.get(RemoteServer, remote_id) if remote_id else None
+        # get_remote(), not a bare lookup: this scans listening ports on the host, so it must be
+        # a host the caller may see (see get_remote's "every remote-scoped route" contract).
+        remote = get_remote(remote_id) if remote_id else None
         if not remote or not game or not (1 <= desired <= 65535):
             return jsonify({"port": None})
         try:
@@ -8285,6 +8294,11 @@ def register_routes(app):
     @login_required
     @server_access_required
     def api_gmod_content(server_id):
+        # Gate BOTH methods, like every other file-editor route: mount status exposes what content
+        # exists on the host. The POST branch used to carry its own inline copy of this check, which
+        # is what left the GET ungated.
+        if not _can_manage_files():
+            return jsonify({"error": "Permission denied"}), 403
         gs = get_game(server_id)
         if gs.game_type != "gmod":
             return jsonify({"error": "Content mounting is available for Garry's Mod only."}), 400
@@ -8307,9 +8321,7 @@ def register_routes(app):
                                 "job": st if (st and st.get("status") == "running") else None})
             except Exception:
                 return jsonify({"error": _log_and_generic("gmod content status failed"), "games": []}), 200
-        # POST: apply a selection (mutating → needs MANAGE_SERVERS).
-        if not (current_user.is_superadmin or has_permission(current_user, MANAGE_SERVERS)):
-            return jsonify({"error": "Permission denied"}), 403
+        # POST: apply a selection (mutating). The MANAGE_SERVERS gate is at the top of the route.
         body = _json_body()
         action = body.get("action") or "mount"
         sel = [g for g in (body.get("games") or []) if g in GMOD_CONTENT_GAMES]
