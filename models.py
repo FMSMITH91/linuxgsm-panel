@@ -504,8 +504,9 @@ class ServerTag(db.Model):
 
     Shared by every user rather than per-user: a tag describes the SERVER, and tag-driven bulk
     actions and notification routing only mean anything against one common vocabulary. Editing is
-    gated on MANAGE_SERVERS; reading is not. Which tags a given user is filtering by is a separate,
-    personal thing and belongs in User.ui_prefs, not here."""
+    gated on MANAGE_SERVERS; reading is not. Which tags a user is FILTERING by is a separate,
+    personal thing — deliberately not persisted at all (see dashboard.html), so it is not a
+    UI_PREF_KEY and set_ui_pref would silently ignore it."""
     id = db.Column(db.Integer, primary_key=True)
     name = db.Column(db.String(32), unique=True, nullable=False)
     color = db.Column(db.String(7), default="")   # "#rrggbb", or "" for the default chip colour

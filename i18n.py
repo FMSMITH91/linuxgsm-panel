@@ -2,9 +2,11 @@
 
 Strings are keyed by their English source text (gettext-style), so anything not yet translated
 falls back to English automatically — pages never break, they just show English until a phrase is
-added to a language file. Per-language catalogs live in translations/<lang>.json as a flat
-{"English": "Translated"} map. The same catalog is handed to the browser (window.I18N) so the
-panel's JavaScript can translate the strings it renders too.
+added to a language file. Each non-English catalog is a FOLDER of section files
+(translations/<lang>/*.json), each a flat {"English": "Translated"} map, merged into one catalog.
+A single flat translations/<lang>.json is legacy and merged LAST if present — so following the old
+layout would silently override every section file. The merged catalog is also handed to the browser
+(window.I18N) so the panel's JavaScript can translate the strings it renders too.
 """
 import json
 import threading

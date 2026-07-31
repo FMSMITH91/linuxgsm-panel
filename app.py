@@ -803,7 +803,7 @@ def _telegram_command_watch(app):
             cfg = notifications._cfg()
             tg = cfg.get("telegram") or {}
             token = decrypt_secret(tg.get("token") or "")
-            if not (cfg.get("enabled", True) and tg.get("enabled") and tg.get("accept_commands")):
+            if not (tg.get("enabled") and tg.get("accept_commands")):
                 if registered and token:
                     notifications.telegram_set_commands(token, clear=True)   # drop the '/' menu
                     registered = False
@@ -1066,7 +1066,7 @@ def _discord_command_watch(app):
             dc = cfg.get("discord") or {}
             bot_token = decrypt_secret(dc.get("bot_token") or "")
             channel = (dc.get("channel_id") or "").strip()
-            if not (cfg.get("enabled", True) and dc.get("accept_commands") and bot_token and channel):
+            if not (dc.get("enabled") and dc.get("accept_commands") and bot_token and channel):
                 time.sleep(_DC_CMD_BACKOFF)
                 continue
 
@@ -1926,7 +1926,8 @@ def create_app():
                     or bool((cfg.get("site_domain") or "").strip()))
     app.config["SESSION_COOKIE_SECURE"] = cfg.get("cookie_secure", _https_ready)
 
-    # "Remember me" cookie (flask-login). Cap it at a sane window (14 days) instead of
+    # "Remember me" cookie (flask-login). Capped at the configured remember_days (default 3,
+    # max 90 — see settings.html) instead of
     # flask-login's 365-day default — a stolen remember-token shouldn't be valid for a
     # year — and give it the same hardening as the session cookie.
     app.config["REMEMBER_COOKIE_DURATION"] = timedelta(days=int(cfg.get("remember_days", 3)))
@@ -5005,7 +5006,8 @@ def register_routes(app):
         protection = f.get("session_protection") if f.get("session_protection") in ("strong", "basic") else "strong"
         hours = max(1, min(_int_or(f.get("session_lifetime_hours"), 8), 168))     # 1h .. 7d
         days = max(1, min(_int_or(f.get("remember_days"), 3), 90))                # 1 .. 90 days
-        autoblock = max(1, min(_int_or(f.get("autoblock_threshold"), 100), 100000))
+        autoblock = max(1, min(_int_or(f.get("autoblock_threshold"),
+                                      _AUTOBLOCK_DEFAULT_THRESHOLD), 100000))
 
         def _mut(cfg):
             cfg.update({
@@ -5101,9 +5103,8 @@ def register_routes(app):
         if existing:
             return _form_err("Username already exists.", "manage_users")
 
-        # New users start in the configured default UI language (Settings → Localization), or in
-        # the creating admin's own language when that is left blank; each user can change theirs
-        # afterwards.
+        # New users start in the configured default UI language (Settings → Localization);
+        # each user can change their own afterwards.
         new_lang = _new_user_language(load_config(), i18n.LANGUAGES)
         user = User(
             username=username,
@@ -5614,6 +5615,15 @@ def register_routes(app):
         elif action == "disable":
             success, msg = ts.disable_tailscale_serve(mount=mount)
             if success:
+                # Mirror the enable branch. Nothing else in the repo ever cleared these, so a
+                # disable left tailscale_setup_done True — which six readers treat as ground truth:
+                # one permits a 127.0.0.1-only bind (lockout risk) and the boot path RE-APPLIES
+                # Serve, quietly undoing the disable on the next restart.
+                cfg = load_config()
+                cfg["tailscale_setup_done"] = False
+                cfg["tailscale_use_funnel"] = False
+                cfg["tailscale_mount"] = ""
+                save_config(cfg)
                 log_action(current_user, "tailscale_serve_disable", detail=msg)
                 return jsonify({"success": True, "message": msg})
             return jsonify({"success": False, "message": msg}), 500
@@ -8101,8 +8111,10 @@ def register_routes(app):
     # ── Scheduled tasks (cron) for the game user ──
     # Same privilege gate as the file editor: a cron entry runs an arbitrary command
     # as the (unprivileged) game user, exactly as file editing writes arbitrary
-    # content. The panel's own managed entries (autostart / maintenance / daily
-    # restart) are shown read-only and can't be edited or removed here.
+    # content. The panel's own managed entries (autostart / maintenance / daily restart) are
+    # editable here too — nothing is locked in the generic editor any more (see
+    # ssh_manager._cron_managed_patterns, which now returns []). This comment previously claimed
+    # they were read-only, which read as a security guarantee that the code does not make.
     @app.route("/api/server/<int:server_id>/cron", methods=["GET", "POST"])
     @login_required
     @server_access_required
