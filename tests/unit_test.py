@@ -62,6 +62,25 @@ eq("hex colour: named colour rejected", _valid_hex_color("red"), "")
 eq("hex colour: CSS/HTML breakout rejected", _valid_hex_color("#fff;}</style><script>"), "")
 eq("hex colour: too long rejected", _valid_hex_color("#1234567"), "")
 
+# ── config keys must agree with the code that reads them ────────────────────────────────────────
+# Each of these was a real divergence: a documented ssh_timeout nothing read (the two SSH paths
+# hardcoded 15 and 12), and an autoblock threshold that defaulted to 20 when read and 100 when
+# saved — so saving Settings once made the panel five times more permissive than documented.
+import config as _cfgmod
+import ssh_manager as _smod
+check("config: every DEFAULT_CONFIG key has a reader",
+      all(k in open("app.py").read() + open("ssh_manager.py").read() + open("system_ops.py").read()
+          + open("notifications.py").read() + open("backup.py").read()
+          for k in _cfgmod.DEFAULT_CONFIG),
+      str([k for k in _cfgmod.DEFAULT_CONFIG
+           if k not in open("app.py").read() + open("ssh_manager.py").read()
+           + open("system_ops.py").read() + open("notifications.py").read() + open("backup.py").read()]))
+check("config: ssh_timeout is actually used by the SSH layer",
+      _smod._ssh_connect_timeout() == _cfgmod.DEFAULT_CONFIG["ssh_timeout"],
+      "helper returned %r" % _smod._ssh_connect_timeout())
+check("config: the autoblock default is one constant, not two",
+      "_AUTOBLOCK_DEFAULT_THRESHOLD), 100000)" in open("app.py").read())
+
 # ── terminal.py: ONE renderer, because this had drifted into four incompatible ANSI regexes and two
 # carriage-return rules that contradicted each other (each docstring calling the other wrong).
 import terminal as _term

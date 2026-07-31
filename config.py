@@ -31,7 +31,6 @@ DEFAULT_CONFIG = {
     "login_tagline": "",       # subtitle under the site name on the login page ("" = built-in default)
     "accent_color": "",        # brand accent as #RRGGBB ("" = built-in green); validated before use
     "default_language": "en",  # UI language new users start in; always a concrete language code
-    "instance_id": "",
     "setup_complete": False,
     "port": 5000,
     "bind_host": "",   # empty = auto (127.0.0.1 if Tailscale can proxy, else 0.0.0.0)
@@ -41,7 +40,6 @@ DEFAULT_CONFIG = {
     "session_protection": "strong", # flask-login: "strong" | "basic" | null (IP+UA session binding)
     "use_https": True,              # serve self-signed HTTPS by default (unless Tailscale/proxy does TLS)
     "trust_proxy": False,           # behind a reverse proxy (Caddy/nginx/Cloudflare Tunnel)? trust X-Forwarded-*
-    "sudo_enabled": False,
     "tailscale_auto_setup": True,       # Auto-configure Tailscale Serve on first start
     "tailscale_use_funnel": False,       # Expose panel publicly via Tailscale Funnel
     "tailscale_mount": "/",              # URL mount point (usually "/" or "/lgsm-panel")

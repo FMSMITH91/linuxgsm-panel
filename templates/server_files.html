@@ -585,9 +585,10 @@ function timeAgo(epoch){
   if(s < 86400) return Math.floor(s/3600)+'h ago';
   return Math.floor(s/86400)+'d ago';
 }
-// Last-run cell. Wrapped (user-added) jobs report an exit status → OK/Failed badge + the
-// error under a failure. Managed/legacy jobs only have a run TIME from cron's log (cron
-// doesn't record exit status) → a neutral "ran" badge. No recorded run → "—".
+// Last-run cell. Wrapped jobs report an exit status → OK/Failed badge + the error under a
+// failure. A managed or legacy job that has not run since the panel re-wrapped it (which
+// upgrade_managed_cron_tracking does on every cron GET) has only a run TIME from cron's log → a
+// neutral "ran" badge until its next run records a status. No recorded run → "—".
 function cronLastRun(j){
   if(!j.last_run){ return '<span class="text-secondary" title="No recorded run yet">—</span>'; }
   var when = new Date(j.last_run*1000).toLocaleString();

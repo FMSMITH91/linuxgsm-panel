@@ -148,6 +148,18 @@ def is_local_server(server):
     return getattr(server, 'is_local', False) or server.auth_method == "local"
 
 
+
+def _ssh_connect_timeout():
+    """Connection timeout in seconds, from config's `ssh_timeout`. It is documented in the README
+    and has always been declared in DEFAULT_CONFIG, but nothing read it: the paramiko path hardcoded
+    15 and the ssh-CLI path 12, so the documented knob did nothing and the two disagreed."""
+    try:
+        from config import load_config
+        return max(1, min(int(load_config().get("ssh_timeout", 10)), 120))
+    except Exception:
+        return 10
+
+
 def get_connection(server, force_new=False):
     """Get or create a cached SSH connection to a remote server.
     For local servers, returns None (no SSH needed)."""
@@ -179,7 +191,7 @@ def get_connection(server, force_new=False):
     policy = _PinPolicy(expected=(server.host_key or ""), reject_on_change=enforce_pin)
     client.set_missing_host_key_policy(policy)
 
-    timeout = 15
+    timeout = _ssh_connect_timeout()
     cred = decrypt_secret(server.auth_credential)  # stored encrypted at rest
     try:
         if server.auth_method == "password" and cred:
@@ -350,7 +362,7 @@ def _run_via_ssh_cli(server, command, timeout=30, sudo=None):
         "ssh", "-T",
         "-o", "StrictHostKeyChecking=accept-new",
         "-o", "BatchMode=yes",
-        "-o", "ConnectTimeout=12",
+        "-o", "ConnectTimeout=%d" % _ssh_connect_timeout(),
     ] + _ssh_mux_opts() + [
         "-p", str(server.port or 22),
         f"{server.username}@{host}", remote_cmd,
