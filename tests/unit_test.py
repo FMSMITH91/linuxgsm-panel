@@ -62,6 +62,26 @@ eq("hex colour: named colour rejected", _valid_hex_color("red"), "")
 eq("hex colour: CSS/HTML breakout rejected", _valid_hex_color("#fff;}</style><script>"), "")
 eq("hex colour: too long rejected", _valid_hex_color("#1234567"), "")
 
+# ── terminal.py: ONE renderer, because this had drifted into four incompatible ANSI regexes and two
+# carriage-return rules that contradicted each other (each docstring calling the other wrong).
+import terminal as _term
+eq("terminal: SGR colour stripped", _term.strip_escapes("\x1b[31mred\x1b[0m"), "red")
+eq("terminal: erase-line stripped (an SGR-only regex left a literal '[K')",
+   _term.strip_escapes("a\x1b[Kb"), "ab")
+eq("terminal: private modes stripped (a CSI-only-with-letters regex left these)",
+   _term.strip_escapes("\x1b[?2004ha\x1b[?1l"), "a")
+eq("terminal: two-byte escapes stripped (these rendered as '>' and '=')",
+   _term.strip_escapes("\x1b>a\x1b=b\x1b(Bc"), "abc")
+eq("terminal: OSC window title stripped", _term.strip_escapes("\x1b]0;title\x07x"), "x")
+eq("terminal: control CHARACTERS are left for the renderers", _term.strip_escapes("a\rb\bc"), "a\rb\bc")
+eq("terminal: \\r overwrites from column 0", _term.apply_carriage_returns("abcdef\rXY"), "XYcdef")
+eq("terminal: a line ENDING in \\r keeps its content (split('\\r')[-1] would lose it)",
+   _term.apply_carriage_returns("done\r"), "done")
+eq("terminal: backspaces erase", _term.apply_backspaces("ab\b\bxy"), "xy")
+eq("terminal: render_line does all three", _term.render_line("\x1b[31ms\b\x1b[0msay hi\r"), "say hi")
+eq("terminal: render treats \\r\\n as a line break", _term.render("a\r\nb"), "a\nb")
+eq("terminal: empty input is returned unchanged", _term.render(""), "")
+
 # ── console cleaning: Minecraft/Paper's JLine console writes ANSI escapes (incl. \x1b[K -> a visible
 #    "[K"), carriage returns, and bare "> " prompt lines into its log. Strip them for display; leave
 #    plain-text (Source/CoD/GMod) consoles untouched. ──
@@ -748,6 +768,14 @@ check("cron error: the budget packs whole lines and never cuts mid-line",
       len(_pack) <= 240 and _pack.endswith("y" * 70)
       and "failed step 2" in _pack and "failed step 3" in _pack
       and "failed step 0" not in _pack)
+# A CRLF log tail is the case the old `.split("\r")[-1]` silently emptied: every line ends in \r,
+# so the "last repaint" was "" and the failure reason vanished — the blank red "Failed" badge again,
+# in the module the console fix did not touch.
+eq("cron error: a CRLF log still yields its reason",
+   sm._clean_cron_error("checking config\r\ncurl: (22) The requested URL returned error: 404\r\n"),
+   "curl: (22) The requested URL returned error: 404")
+check("cron error: a mid-line repaint keeps what is on screen",
+      sm._clean_cron_error("working...\rdone: permission denied") == "done: permission denied")
 check("cron error: empty output stays empty", sm._clean_cron_error("") == ""
       and sm._clean_cron_error(None) == "")
 # The reader must base64 the tail (so no log byte can break the record) and cap it BEFORE encoding.
