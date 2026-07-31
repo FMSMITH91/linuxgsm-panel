@@ -29,7 +29,7 @@
 </div>
 
 <script nonce="{{ csp_nonce }}">
-function tsEsc(s){ return String(s==null?'':s).replace(/[&<>"']/g,function(c){return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c];}); }
+function tsEsc(s){ return window.escapeHtml(s); }
 function tsApi(p, opts){ return fetch((window.MOUNT||'') + '/api/setup/tailscale/' + p, opts).then(function(r){ return r.json(); }); }
 var tsBox = document.getElementById('ts-box');
 var tsCont = document.getElementById('ts-continue');

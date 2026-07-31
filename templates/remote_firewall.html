@@ -349,11 +349,7 @@ function unblockIp(ip, btn) {
     }});
 }
 
-function esc(s) {
-  return String(s == null ? '' : s).replace(/[&<>"']/g, function(c) {
-    return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c];
-  });
-}
+function esc(s){ return window.escapeHtml(s); }
 
 function protoBadge(p) {
   if (p === 'TCP')  return '<span class="badge bg-primary">TCP</span>';

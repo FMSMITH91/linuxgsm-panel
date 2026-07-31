@@ -846,6 +846,23 @@ try:
         _sa_event.remove(_engine, "after_cursor_execute", _count_query)
         _appmod.run_command = _orig_rc
 
+    # escapeHtml must exist BEFORE a page's own scripts run — five templates had grown local copies
+    # because it did not, and two of those returned the RAW string when the global was missing,
+    # turning innerHTML sinks into injection points. Assert the definition is in <head>, ahead of
+    # the content, and that no fail-open fallback remains.
+    _home = c.get("/").get_data(as_text=True)
+    _head_end = _home.find("</head>")
+    check("escaping: escapeHtml is defined inside <head>",
+          0 < _home.find("window.escapeHtml = function") < _head_end,
+          "at %d, </head> at %d" % (_home.find("window.escapeHtml = function"), _head_end))
+    check("escaping: it is defined exactly once",
+          _home.count("window.escapeHtml = function") == 1)
+    import pathlib as _pl_esc
+    _tpl_dir = _pl_esc.Path(__file__).resolve().parent.parent / "templates"
+    _failopen = [p.name for p in _tpl_dir.glob("*.html")
+                 if "window.escapeHtml ?" in p.read_text(encoding="utf-8")]
+    check("escaping: no template falls back to the raw string", not _failopen, str(_failopen))
+
     # ── Tags: install-wide labels, their guards, and orphan cleanup ────────────────────────────────
     _tg_new = c.post("/api/tags", json={"name": "production", "color": "#22aa55", "notify": True})
     check("tags: create returns the new tag", _tg_new.status_code == 200
