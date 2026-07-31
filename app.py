@@ -2965,14 +2965,18 @@ def register_routes(app):
         URL (no open-redirect surface); a plain GET just lands on the dashboard."""
         lang = i18n.normalize_lang(lang)
         session["lang"] = lang
+        saved = True
         if getattr(current_user, "is_authenticated", False):
             try:
                 current_user.language = lang
                 db.session.commit()
             except Exception:
                 db.session.rollback()
+                _log.debug("saving the language preference failed", exc_info=True)
+                saved = False   # the session still switches; only the profile write failed
         if request.args.get("ajax"):
-            return jsonify({"ok": True, "lang": lang})
+            return jsonify({"success": saved, "lang": lang,
+                            "message": "" if saved else "Language changed for this session only."})
         return redirect(url_for("index"))
 
     @app.route("/api/i18n/<lang>")
@@ -3060,7 +3064,7 @@ def register_routes(app):
         from models import UserSession
         row = UserSession.query.filter_by(id=sess_id, user_id=current_user.id).first()
         if not row:
-            return jsonify({"ok": False, "error": "Session not found."}), 404
+            return jsonify({"success": False, "message": "Session not found."}), 404
         is_current = (row.sid == getattr(current_user, "_sid", None))
         db.session.delete(row)
         db.session.commit()
@@ -3068,7 +3072,7 @@ def register_routes(app):
                    detail="revoked a login session" + (" (current device)" if is_current else ""))
         if is_current:
             logout_user()
-        return jsonify({"ok": True, "current": is_current})
+        return jsonify({"success": True, "current": is_current})
 
     # ── Server tags: install-wide labels for grouping, bulk actions and alert routing ──────────
     def _can_edit_tags():

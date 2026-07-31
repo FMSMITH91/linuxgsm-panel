@@ -686,6 +686,22 @@ try:
         n1 = UserSession.query.filter_by(user_id=admin_id).count()
     check("session: login created a server-side session row", n1 >= 1, "rows=%d" % n1)
 
+    # One response envelope. These three routes used an `ok` key, which the universal
+    # `d.success === false` client guard cannot see — so account.html reported "Session revoked"
+    # even for a 404 "Session not found".
+    _rev404 = s1.post("/api/account/sessions/999999/revoke")
+    check("session: revoking a session that does not exist is a 404", _rev404.status_code == 404)
+    check("session: ...and says success=false in the standard envelope",
+          (_rev404.get_json() or {}).get("success") is False
+          and "ok" not in (_rev404.get_json() or {}),
+          _rev404.get_data(as_text=True)[:120])
+    _lang = s1.get("/set-language/es?ajax=1")
+    check("language: the ajax save answers in the standard envelope",
+          (_lang.get_json() or {}).get("success") is True
+          and "ok" not in (_lang.get_json() or {}),
+          _lang.get_data(as_text=True)[:120])
+    s1.get("/set-language/en?ajax=1")   # put it back
+
     j1 = (s1.get("/api/account/sessions").get_json() or {})
     sess1 = j1.get("sessions", [])
     check("session: API lists the current session, flagged current",
@@ -698,8 +714,9 @@ try:
     other = next((s for s in all2 if not s.get("current")), None)
     rv = s1.post("/api/account/sessions/%d/revoke" % other["id"]) if other else None
     rvj = rv.get_json() if rv is not None else {}
-    check("session: revoke a non-current session -> ok",
-          rv is not None and rv.status_code == 200 and rvj.get("ok") and not rvj.get("current"))
+    check("session: revoke a non-current session succeeds",
+          rv is not None and rv.status_code == 200 and rvj.get("success") is True
+          and not rvj.get("current"), str(rvj)[:120])
 
     acc2 = s2.get("/account", follow_redirects=False)
     check("session: the revoked device is signed out (loader rejects its sid)",
