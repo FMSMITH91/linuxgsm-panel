@@ -275,6 +275,29 @@ finally:
             db.session.commit()
     print("Fixtures cleaned up.\n")
 
+# ── Structural: EVERY <int:server_id> route must check server access ───────────────────────────
+# A permission decorator is not enough — get_game() is a bare get_or_404, so a user holding e.g.
+# UNINSTALL_SERVER for their own server could otherwise act on someone else's. Checked structurally
+# rather than by probing each route: firing /servers/<id>/delete to prove a guard exists would
+# UNINSTALL A REAL SERVER on a configured install if the guard were ever missing.
+with app.app_context():
+    _unguarded = []
+    for _rule in app.url_map.iter_rules():
+        if "<int:server_id>" not in str(_rule):
+            continue
+        _fn = app.view_functions.get(_rule.endpoint)
+        _seen, _superadmin_only = False, False
+        while _fn is not None:                                # walk the stacked decorators
+            _seen = _seen or getattr(_fn, "_checks_server_access", False)
+            _perms = getattr(_fn, "_required_perms", ())
+            # SUPER_ADMIN-only routes are exempt: a superadmin reaches every server by definition.
+            _superadmin_only = _superadmin_only or (_perms == (auth.SUPER_ADMIN,))
+            _fn = getattr(_fn, "__wrapped__", None)
+        if not (_seen or _superadmin_only):
+            _unguarded.append("%s %s" % (sorted(_rule.methods & {"GET", "POST", "PUT", "DELETE"}), _rule))
+    check("every <server_id> route enforces server access (not just a permission)",
+          not _unguarded, "; ".join(sorted(_unguarded)[:6]))
+
 passed = sum(1 for ok, _, _ in results if ok)
 for ok, name, detail in results:
     line = ("PASS" if ok else "FAIL") + "  " + name
