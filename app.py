@@ -93,6 +93,7 @@ from models import (
 )
 from ssh_manager import (
     close_connection, run_command, ssh_test_connection,
+    _quote as sm_quote,
     get_server_status, run_as_game_user, send_console_command,
     list_server_commands, server_live_metrics, game_map, remote_public_ip,
     discover_linuxgsm_servers, player_list, moderation_caps, moderate, is_player_queryable,
@@ -1200,6 +1201,43 @@ def _mark_expected_offline(server_id):
     _expected_offline[server_id] = time.time()
 
 
+# LinuxGSM commands that legitimately take a server down for a while. `monitor` is deliberately NOT
+# here — it runs every few minutes and would suppress everything.
+_LGSM_MAINTENANCE_CMDS = ("update", "force-update", "update-lgsm", "validate", "mods-update",
+                          "restart", "backup")
+
+
+def _lgsm_maintenance_running(remote, gs):
+    """True if LinuxGSM is mid-maintenance for this server right now.
+
+    _expected_offline only knows about stops the PANEL issued. A server's own LinuxGSM cron —
+    `30 4 * * * ./gmodserver force-update` on a stock install — takes it down without telling the
+    panel anything, so the monitor read a nightly scheduled update as "went offline unexpectedly"
+    and alerted every single night.
+
+    Checked by process, not by parsing crontabs: the maintenance command's own shell process lives
+    for the whole stop→update→start cycle, so its presence covers exactly the window during which
+    the port is legitimately closed. Only runs when a server has just been seen DOWN, so it costs
+    nothing in the normal case.
+
+    Fails to False on any error — a probe that cannot answer must not hide a real outage."""
+    try:
+        user = (gs.short_name or "").strip()
+        selfname = (gs.lgsm_name or gs.short_name or "").strip()
+        if not user or not selfname:
+            return False
+        pattern = "%s (%s)" % (selfname, "|".join(_LGSM_MAINTENANCE_CMDS))
+        out, _, _ = run_command(
+            remote,
+            "pgrep -u %s -f %s >/dev/null 2>&1 && echo BUSY || echo IDLE"
+            % (sm_quote(user), sm_quote(pattern)),
+            timeout=10)
+        return "BUSY" in (out or "")
+    except Exception:
+        _log.debug("maintenance probe failed for %s", getattr(gs, "name", "?"), exc_info=True)
+        return False
+
+
 def _host_disk_pct(remote):
     """Root-filesystem usage percent for a host (int), or None. Cheap df, best-effort."""
     try:
@@ -1283,6 +1321,11 @@ def _monitor_pass():
             # State is tracked either way — only the ALERT is muted by a tag, so a server that goes
             # down while muted still reports "back online" correctly once it is unmuted.
             muted = _alerts_muted(gs)
+            if prev_up is True and not up and _lgsm_maintenance_running(remote, gs):
+                # A scheduled LinuxGSM update/restart is running: the port is SUPPOSED to be shut.
+                # Leave the recorded state untouched so neither this pass nor the recovery pass
+                # alerts — otherwise suppressing "offline" would just produce "back online" instead.
+                continue
             if prev_up is True and not up:
                 if (time.time() - _expected_offline.get(gs.id, 0) > _EXPECT_OFFLINE_WINDOW
                         and not muted):

@@ -1391,6 +1391,41 @@ try:
             _rec.clear(); _am._refresh_player_counts(app)
             check("poller: server_full fires when a server hits its cap", "server_full" in _rec)
 
+            # ── A scheduled LinuxGSM update must not read as a crash ───────────────────────────
+            # Stock LinuxGSM installs carry their own cron (e.g. "30 4 * * * ./gmodserver
+            # force-update"). That takes the server down without telling the panel, so the monitor
+            # alerted "went offline unexpectedly" every single night at the same minute.
+            _saved_maint = _am._lgsm_maintenance_running
+            try:
+                _reset_mon()
+                _am._monitor_state["servers"][_mon_id] = True
+                _am._remote_listening_ports = lambda r: set()
+                _am._lgsm_maintenance_running = lambda remote, gs: True
+                _rec.clear(); _am._monitor_pass()
+                check("maintenance: a scheduled update does not alert as a crash",
+                      "server_down" not in _rec, str(_rec))
+                check("maintenance: the recorded state is left alone, so recovery is not an 'up' alert",
+                      _am._monitor_state["servers"].get(_mon_id) is True)
+                # Record bodies too: _rec holds only event KEYS, and the fixture has other servers
+                # whose own transitions would otherwise be read as this one's.
+                _bodies = []
+                _am.notifications.notify = lambda k, t, b="": (_rec.append(k), _bodies.append((k, b)))[0]
+                _am._remote_listening_ports = lambda r: {27100}
+                _am._monitor_pass()
+                check("maintenance: coming back from an update is silent too",
+                      not [b for k, b in _bodies if k == "server_up" and "mon-srv" in b],
+                      str([b for k, b in _bodies if k == "server_up"])[:120])
+                _am.notifications.notify = lambda key, title, body="": _rec.append(key)
+                # ...and a REAL crash still alerts: same down transition, no maintenance running.
+                _reset_mon()
+                _am._monitor_state["servers"][_mon_id] = True
+                _am._remote_listening_ports = lambda r: set()
+                _am._lgsm_maintenance_running = lambda remote, gs: False
+                _rec.clear(); _am._monitor_pass()
+                check("maintenance: a genuine crash still alerts", "server_down" in _rec, str(_rec))
+            finally:
+                _am._lgsm_maintenance_running = _saved_maint
+
             # ── A tag with notify=False silences that server's alerts ──────────────────────────
             # This is the only user-visible behaviour tags add beyond decoration, and it is wired
             # into five separate notify() sites — so it is asserted through the REAL passes here.
