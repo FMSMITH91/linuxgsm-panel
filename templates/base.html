@@ -218,7 +218,7 @@
       <div class="sidebar-user-avatar"><i class="bi bi-person"></i></div>
       <div class="sidebar-user-info">
         <strong>{{ current_user.display_name or current_user.username }}</strong>
-        <span>{% if current_user.is_superadmin %}Super Admin{% else %}Standard{% endif %} · <i class="bi bi-gear-fill"></i> Account</span>
+        <span>{% if current_user.is_superadmin %}Super Admin{% else %}Standard{% endif %} · <i class="bi bi-person-circle"></i> Account</span>
       </div>
     </a>
     <form method="POST" action="{{ url_for('logout') }}" class="d-grid">

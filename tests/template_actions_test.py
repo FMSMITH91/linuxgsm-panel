@@ -59,6 +59,32 @@ check(not _jinja_in_js,
       "templates: no Jinja statement/comment tags inside an inline <script> (they break JS parsers)",
       "; ".join(_jinja_in_js[:4]))
 
+# ── 0b. the server tab bar is the SAME set of destinations on both pages ──────────────────────
+# server_detail.html and server_files.html each render the tab strip, and server_files.html even
+# documents the rule ("same set as the server detail page"). It drifted anyway: History was on the
+# detail page only, so from Files & Config there was no way to reach it. Prose does not enforce
+# itself, so compare the two.
+def _tab_labels(src, nav_id):
+    m = re.search(r'<ul[^>]*id="%s"[^>]*>(.*?)</ul>' % nav_id, src, re.S)
+    if not m:
+        return None
+    out = []
+    for li in re.findall(r"<li\b.*?</li>", m.group(1), re.S):
+        if "toggleLayoutEdit" in li:
+            continue      # a control, not a destination — the detail page alone can rearrange
+        text = re.sub(r"<[^>]+>", "", li)
+        text = re.sub(r"\s+", " ", text).replace("&amp;", "&").strip()
+        if text:
+            out.append(text)
+    return out
+
+
+_detail_tabs = _tab_labels(srcs.get("server_detail.html", ""), "sdtab-nav")
+_files_tabs = _tab_labels(srcs.get("server_files.html", ""), "sftab-nav")
+check(_detail_tabs and _files_tabs and _detail_tabs == _files_tabs,
+      "templates: Files & Config offers the same server tabs, in the same order, as the detail page",
+      "detail=%s files=%s" % (_detail_tabs, _files_tabs))
+
 # ── 1. gather every global function definition: name -> (params, body) ──
 _DEFS = [
     re.compile(r"function\s+([A-Za-z_$][\w$]*)\s*\(([^)]*)\)\s*\{"),
