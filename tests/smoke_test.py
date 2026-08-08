@@ -1649,6 +1649,72 @@ try:
         _g3, _e3 = _tg_find_server("no-such-server-xyz")   # unknown
         check("telegram: an unknown server name returns a helpful error", _g3 is None and "No server" in (_e3 or ""))
 
+    # ── The player poll must not hold database connections across its network calls ───────────────
+    # Each worker used to run inside its own app context, so it held a pooled connection for the
+    # whole gamedig/SSH round trip. SQLAlchemy's default QueuePool here is 5 + 10 overflow, and 8
+    # workers pinned 9 of those 15 for as long as one slow host took to answer — every web request
+    # in that window queues behind them. Measured 9 before, 1 after.
+    import time as _t
+    with app.app_context():
+        _eng = db.engine          # captured in a context; the pool object itself needs none, which
+                                  # is what lets the stub below read it from a worker thread safely
+    _sv_slots2, _sv_max2 = _am._server_slots, _am._server_max_config
+    _held = []
+    try:
+        # The stub has to DWELL. A real gamedig/SSH call takes hundreds of ms, which is what makes
+        # the workers overlap and their connections pile up; a stub that returns instantly never
+        # reproduces that, and the check passes against the very code it is meant to catch.
+        def _dwell():
+            _held.append(_eng.pool.checkedout())
+            _t.sleep(0.05)
+
+        def _slots_probe(gs):
+            _dwell()
+            return (3, 16, "probe")
+
+        def _max_probe(gs):
+            # The seeded servers are "offline", so the worker takes the early branch and calls this
+            # one instead of _server_slots — same thread, same question, so measure in both.
+            _dwell()
+            return 16
+        _am._server_slots = _slots_probe
+        _am._server_max_config = _max_probe
+        _am._refresh_player_counts(app)
+        check("player poll: every installed server is still queried",
+              len(_held) >= 1, "workers ran: %d" % len(_held))
+        check("player poll: no DB connection is held while the network call runs",
+              _held and max(_held) <= 2, "peak checked-out during the call: %s" % (max(_held) if _held else "n/a"))
+    finally:
+        _am._server_slots, _am._server_max_config = _sv_slots2, _sv_max2
+
+    # ── Login redirect: ?next= must stay on this site ─────────────────────────────────────────────
+    # The guard rejects absolute URLs, protocol-relative "//host", an embedded scheme and the
+    # backslash trick — four distinct bypasses, none of them previously asserted. A hit here sends
+    # someone who just typed their password to an attacker's copy of the login page.
+    for _nx in ("//evil.example", "https://evil.example", "http://evil.example",
+                "/\\evil.example", "\\evil.example", "javascript:alert(1)",
+                "https:/\\evil.example", "////evil.example"):
+        _lc = app.test_client()
+        _lr = _lc.post("/login?next=" + _nx,
+                       data={"username": "smoke_admin", "password": "Str0ng!passw0rd"})
+        _loc = _lr.headers.get("Location", "")
+        check("login redirect: %r cannot send the user off-site" % _nx,
+              _lr.status_code != 302 or (_loc.startswith("/") and not _loc.startswith("//")
+                                         and "\\" not in _loc and "://" not in _loc),
+              "Location: %r" % _loc)
+        _lc.get("/logout")
+    # ...and a genuine same-site destination is still honoured, or the guard is just breaking things.
+    _okc = app.test_client()
+    _okr = _okc.post("/login?next=/settings",
+                     data={"username": "smoke_admin", "password": "Str0ng!passw0rd"})
+    check("login redirect: a same-site path is still followed",
+          _okr.status_code == 302 and _okr.headers.get("Location", "").endswith("/settings"),
+          "%d %r" % (_okr.status_code, _okr.headers.get("Location")))
+    _okc.get("/logout")
+    with app.app_context():
+        from app import _LOGIN_FAILS as _LF
+        _LF.clear()   # those logins were all successful, but keep the throttle clean for later tests
+
     # ── Bearer API tokens: the other way into every route ─────────────────────────────────────────
     # A token authenticates AS its owner and inherits exactly that user's RBAC, and app.py exempts
     # Bearer requests from CSRF — so this is a full authentication path that had no test at all.
