@@ -67,8 +67,15 @@ appmod.remote_public_ip = lambda *a, **k: ""
 
 
 def build_app():
+    """An in-process app for the benchmark only — it is never served or bound to a port.
+
+    The four settings below are what a Werkzeug test client needs to talk to it: no browser means
+    no CSRF token, no session fingerprint and no https. This is the same reason .codacy.yaml
+    excludes tests/** ("test fixtures legitimately ... disable CSRF ... not shipped app code");
+    this file is a harness that happens to live in tools/, so it says so at the line instead.
+    """
     a = create_app()
-    a.config["WTF_CSRF_ENABLED"] = False
+    a.config["WTF_CSRF_ENABLED"] = False   # nosemgrep - benchmark harness, never served
     a.config["SESSION_PROTECTION"] = None
     a.config["SESSION_COOKIE_SECURE"] = False
     a.config["REMEMBER_COOKIE_SECURE"] = False
