@@ -66,6 +66,8 @@ jobs:
   coverage:
     name: coverage
     runs-on: ubuntu-latest
+    env:
+      CODACY_PROJECT_TOKEN: ${{ secrets.CODACY_PROJECT_TOKEN }}
     # Informational, and deliberately a SEPARATE job: it re-runs the suites under tracing, which is
     # slower, and the gate above should stay the fast answer. Codacy has a 60% coverage goal that
     # has always read as "not reported" because nothing ever produced a report.
@@ -107,10 +109,11 @@ jobs:
             coverage.xml
             coverage.txt
 
-      # Codacy's coverage goal only lights up once a report is uploaded, which needs a project
-      # token this repo does not have. To enable: add CODACY_PROJECT_TOKEN as a repository secret
-      # and uncomment. Left off rather than half-wired, so the job never fails on a missing secret.
-      # - name: Send to Codacy
-      #   env:
-      #     CODACY_PROJECT_TOKEN: ${{ secrets.CODACY_PROJECT_TOKEN }}
-      #   run: bash <(curl -Ls https://coverage.codacy.com/get.sh) report -r coverage.xml
+      # Codacy's coverage goal only lights up once a report is uploaded. This step is live but
+      # self-disabling: with no CODACY_PROJECT_TOKEN secret it is skipped, and it starts working by
+      # itself the moment one is added — no second PR to remember. Use a REPOSITORY token (Codacy →
+      # the repo → Settings → Integrations), not an account token: it is scoped to this repo alone,
+      # so a leak cannot reach anything else.
+      - name: Send coverage to Codacy
+        if: env.CODACY_PROJECT_TOKEN != ''
+        run: bash <(curl -Ls https://coverage.codacy.com/get.sh) report -r coverage.xml
