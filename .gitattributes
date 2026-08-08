@@ -3,3 +3,7 @@
 * text=auto eol=lf
 *.sh text eol=lf
 *.py text eol=lf
+
+# Fuzzing corpora are exact byte sequences, not text. The `* text=auto eol=lf` rule above rewrote
+# CRLF out of the console seeds — which is the very thing those seeds exist to feed the renderer.
+tests/fuzz/corpus/** -text

@@ -29,7 +29,13 @@ def strip_escapes(text):
     left alone — they carry rendering meaning; see apply_carriage_returns / apply_backspaces."""
     if not text:
         return text
-    return ESC2_RE.sub("", CSI_RE.sub("", OSC_RE.sub("", text)))
+    text = ESC2_RE.sub("", CSI_RE.sub("", OSC_RE.sub("", text)))
+    # Any ESC still standing is a sequence that never completed: a log read mid-write, or ESC
+    # followed by something none of the three grammars accept (\x1b\t, \x1b\x00, a trailing \x1b).
+    # Player names and chat reach this text, so those bytes are authored, not just accidental. They
+    # carry no rendering meaning on their own, and the one guarantee this module owes its callers is
+    # that control bytes do not reach the page.
+    return text.replace("\x1b", "")
 
 
 def apply_carriage_returns(line):

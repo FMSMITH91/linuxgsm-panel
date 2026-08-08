@@ -43,7 +43,7 @@ jobs:
     strategy:
       fail-fast: false   # fuzz every target even if one finds a crash, so all findings surface
       matrix:
-        target: [ game_status, firewall, config, fail2ban ]
+        target: [ game_status, firewall, config, fail2ban, console ]
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
 

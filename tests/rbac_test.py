@@ -148,6 +148,30 @@ with app.app_context():
     db.session.commit()
     uid3 = u3.id
 
+    # Fourth fixture: a DELEGATED group admin — MANAGE_GROUPS and nothing else. They can edit a
+    # group they belong to, so _grantable_perms is the only thing between them and self-promotion.
+    tag4 = tag + "_grpadm"
+    grp4 = Group(name=tag4, description="RBAC test group-admin (auto)", is_default=False)
+    grp4.set_permissions([auth.VIEW_SERVERS, auth.MANAGE_GROUPS])
+    grp4.servers.append(RemoteServer.query.get(granted_remote))
+    db.session.add(grp4)
+    db.session.flush()
+    u4 = User(username=tag4, password_hash=auth.hash_password(secrets.token_hex(16)),
+              display_name=tag4, is_superadmin=False, is_active=True)
+    u4.groups.append(grp4)
+    db.session.add(u4)
+    db.session.commit()
+    uid4 = u4.id
+
+    # A group that already holds a permission the delegated admin CANNOT grant, to prove an edit
+    # by them preserves it instead of silently stripping it.
+    tag5 = tag + "_holds_mu"
+    grp5 = Group(name=tag5, description="RBAC test preserve (auto)", is_default=False)
+    grp5.set_permissions([auth.MANAGE_USERS])
+    db.session.add(grp5)
+    db.session.commit()
+    gid5 = grp5.id
+
 print("Fixtures: limited user id=%d, group grants remote %d only." % (uid, granted_remote))
 print("Accessible server id=%d (remote %d); non-granted server id=%s (remote %s)\n"
       % (accessible_id, granted_remote, other_id, other_remote))
@@ -293,6 +317,73 @@ try:
     check("/setup POST CANNOT create a superadmin (unauth)", not was_created,
           "ACCOUNT WAS CREATED (status %d)" % r.status_code if was_created else "blocked")
     check("unauth GET /setup -> redirect", cu.get("/setup").status_code == 302)
+
+    # ── Privilege escalation: a delegated group admin cannot grant what they don't hold ──────────
+    # They have MANAGE_GROUPS, so they may create and edit groups — including groups they are in.
+    # _grantable_perms is the whole defence, and nothing exercised it for a non-superadmin
+    # permission. The existing "can't grant super_admin" check passes even with the guard removed,
+    # because super_admin was dropped from ALL_PERMISSIONS and is filtered separately.
+    c4 = client_as(uid4)
+    esc_name = tag + "_escalation"
+    c4.post("/groups/add", data={"name": esc_name, "description": "",
+                                 "permissions": [auth.MANAGE_USERS, auth.UNINSTALL_SERVER,
+                                                 auth.VIEW_SERVERS]})
+    with app.app_context():
+        made = Group.query.filter_by(name=esc_name).first()
+        got = set(made.get_permissions()) if made else None
+    check("escalation: a MANAGE_GROUPS admin cannot grant permissions they lack",
+          made is not None and auth.MANAGE_USERS not in got and auth.UNINSTALL_SERVER not in got,
+          "granted: %s" % sorted(got or []))
+    check("escalation: they CAN grant a permission they do hold",
+          made is not None and auth.VIEW_SERVERS in (got or set()), "granted: %s" % sorted(got or []))
+
+    # ...and editing a group must not silently strip a permission they cannot grant.
+    c4.post("/groups/%d/edit" % gid5, data={"name": tag5, "description": "",
+                                            "permissions": [auth.VIEW_SERVERS]})
+    with app.app_context():
+        kept = set(Group.query.get(gid5).get_permissions())
+    check("escalation: an edit PRESERVES a permission the editor cannot grant",
+          auth.MANAGE_USERS in kept, "after edit: %s" % sorted(kept))
+
+    # ── Bulk actions are access-checked per id ────────────────────────────────────────────────────
+    # /api/servers/bulk-action is not an /<int:server_id> route, so the structural sweep below
+    # never sees it, and it carries no @server_access_required — the check is hand-written in the
+    # loop. A break here fans a power action out over SSH to every server in the install.
+    if other_id:
+        import app as _appmod
+        _ran = []
+        _sv_rag = _appmod.run_as_game_user
+        try:
+            _appmod.run_as_game_user = lambda *a, **k: (_ran.append(a), ("", "", 0))[1]
+            grpb = None
+            with app.app_context():
+                grpb = Group(name=tag + "_bulk", description="RBAC bulk (auto)", is_default=False)
+                grpb.set_permissions([auth.VIEW_SERVERS, auth.START_SERVER])
+                grpb.servers.append(RemoteServer.query.get(granted_remote))
+                db.session.add(grpb)
+                db.session.flush()
+                ub = User(username=tag + "_bulk", password_hash=auth.hash_password(secrets.token_hex(16)),
+                          display_name=tag + "_bulk", is_superadmin=False, is_active=True)
+                ub.groups.append(grpb)
+                db.session.add(ub)
+                db.session.commit()
+                uidb, gidb = ub.id, grpb.id
+            rb = client_as(uidb).post("/api/servers/bulk-action",
+                                      json={"action": "start", "server_ids": [other_id]})
+            jb = rb.get_json() or {}
+            check("bulk-action: a server on a non-granted host is refused, not queued",
+                  not jb.get("queued")
+                  and any(sk.get("reason") == "no access" for sk in jb.get("skipped") or []),
+                  "queued=%s skipped=%s" % (jb.get("queued"), jb.get("skipped")))
+            import time as _t
+            _t.sleep(0.3)   # the action runs in a background thread; give it time to have fired
+            check("bulk-action: and nothing was actually run on it", not _ran, "ran: %s" % _ran[:1])
+            with app.app_context():
+                db.session.delete(User.query.get(uidb))
+                db.session.delete(Group.query.get(gidb))
+                db.session.commit()
+        finally:
+            _appmod.run_as_game_user = _sv_rag
 
     # ── Superadmin sanity: still full access ──
     ca = client_as(admin_id)
