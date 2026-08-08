@@ -569,20 +569,23 @@ def _cached_player_name(server_id):
 _PLAYER_POLL_WORKERS = 8   # cap on concurrent per-server queries (SSH/gamedig) in one poll pass
 
 
-def _query_server_slots(app, sid):
-    """Worker for the parallel poll: (count, max, name) for one server id, in its OWN app context
-    (SQLAlchemy sessions are per-context). Read-only — no DB writes here — so concurrent workers
-    don't contend on a session. Never raises."""
+def _query_server_slots(gs):
+    """Worker for the parallel poll: (id, (count, max, name)) for one server.
+
+    Takes the ALREADY-LOADED row rather than an id, and opens no app context of its own. It used to
+    do both, which meant it held a database connection for the whole gamedig/SSH round trip — up to
+    the query timeout. With 8 workers that pinned 9 of the pool's 15 connections (SQLAlchemy's
+    default 5 + 10 overflow) for as long as one slow host took to answer, and every web request in
+    that window queued behind them.
+
+    Reads only loaded columns plus the joinedloaded host, so nothing lazy-loads on a pool thread.
+    Never raises."""
     try:
-        with app.app_context():
-            gs = db.session.get(GameServer, sid)
-            if gs is None:
-                return sid, (None, None, None)
-            if gs.status == "offline":
-                return sid, (0, _server_max_config(gs), None)
-            return sid, tuple(_server_slots(gs))
+        if gs.status == "offline":
+            return gs.id, (0, _server_max_config(gs), None)
+        return gs.id, tuple(_server_slots(gs))
     except Exception:
-        return sid, (None, None, None)
+        return gs.id, (None, None, None)
 
 
 def _metrics_work(servers):
@@ -623,14 +626,18 @@ def _refresh_player_counts(app):
     single-threaded here (all DB writes stay in this one context). An offline server is 0 players
     without a query; a running one the panel can't read stays None."""
     with app.app_context():
-        servers = [gs for gs in GameServer.query.filter_by(installed=True).all()
+        from sqlalchemy.orm import joinedload
+        # joinedload: the workers read gs.remote, and lazily that is both a query per server AND a
+        # lazy load fired from a pool thread against this context's session.
+        servers = [gs for gs in GameServer.query.options(joinedload(GameServer.remote))
+                   .filter_by(installed=True).all()
                    if gs.status not in ("installing", "configuring")]
         if not servers:
             return
         # Query all servers concurrently (bounded), then apply the results serially below.
         results = {}
         with concurrent.futures.ThreadPoolExecutor(max_workers=min(_PLAYER_POLL_WORKERS, len(servers))) as ex:
-            for sid, slots in ex.map(lambda s: _query_server_slots(app, s), [gs.id for gs in servers]):
+            for sid, slots in ex.map(_query_server_slots, servers):
                 results[sid] = slots
         for gs in servers:
             count, mx, gname = results.get(gs.id, (None, None, None))

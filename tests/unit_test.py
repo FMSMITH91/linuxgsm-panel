@@ -3128,6 +3128,30 @@ for _src, _want in (("\x1b[32mgreen\x1b[0m", "green"), ("a\x1b[Kb", "ab"), ("x\x
                     ("abcdef\rXY", "XYcdef"), ("done\r\nnext", "done\nnext")):
     eq("terminal: %r still renders as a terminal would" % _src, _term.render(_src), _want)
 
+# ── File manager: the path resolver every read/write/upload/browse goes through ────────────────
+# _is_protected_path stops you deleting the game install; _safe_abspath is the one that stops you
+# leaving the game user's home at all, and it guards four more operations than delete does.
+_HOME = "/home/csgoserver"
+for _p in ("../etc/passwd", "..", "a/../../etc", "../../root/.ssh/id_rsa", "../csgoserver2/secrets",
+           "cfg/../../../etc/shadow"):
+    eq("path resolver: %r cannot escape the home dir" % _p,
+       sm._safe_abspath("csgoserver", _p), None)
+# A leading slash is treated as home-relative, not as the filesystem root: "/etc/passwd" must land
+# inside the home, never at the real /etc/passwd.
+eq("path resolver: an absolute-looking path is clamped into the home dir",
+   sm._safe_abspath("csgoserver", "/etc/passwd"), _HOME + "/etc/passwd")
+for _p, _want in (("cfg/server.cfg", _HOME + "/cfg/server.cfg"),
+                  ("./cfg/server.cfg", _HOME + "/cfg/server.cfg"),
+                  ("a//b", _HOME + "/a/b"),
+                  ("cfg/./x/../y", _HOME + "/cfg/y"),
+                  ("", _HOME)):
+    eq("path resolver: %r resolves under the home dir" % _p, sm._safe_abspath("csgoserver", _p), _want)
+# Non-str input must not crash the file manager.
+for _junk in (None, 0, 12, [], {}):
+    _r = sm._safe_abspath("csgoserver", _junk)
+    check("path resolver: %r is handled, not raised on" % (_junk,),
+          _r is None or _r.startswith(_HOME), repr(_r))
+
 passed = sum(1 for ok, _, _ in results if ok)
 for ok, name, detail in results:
     line = ("PASS" if ok else "FAIL") + "  " + name
