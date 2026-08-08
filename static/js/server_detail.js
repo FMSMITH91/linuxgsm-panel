@@ -398,7 +398,7 @@ function actionWithPlayerCheck(action, btn) {
     if (!n) { confirmActionDialog(action, btn); return; }
     actionPlayersDialog(action, n, btn);
   }).catch(function(){
-    btn.disabled = false; btn.innerHTML = orig;
+    btn.disabled = false; btn.innerHTML = orig;  // nosemgrep
     confirmActionDialog(action, btn, "(couldn't check who's online)");
   });
 }

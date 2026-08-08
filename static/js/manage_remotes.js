@@ -336,7 +336,7 @@ function bootstrapTailscale(remoteId) {
       logEl.innerHTML = '<span class="text-success"><i class="bi bi-check-circle"></i> ' + escapeHtml(data.message) + '</span>'  // nosemgrep
         + '<div class="mt-2"><button class="btn btn-success btn-sm"' + _da('migrateToTailscale', [remoteId]) + '><i class="bi bi-arrow-repeat"></i> Migrate to Tailscale SSH</button></div>';
     } else {
-      logEl.innerHTML = '<span class="text-danger"><i class="bi bi-x-circle"></i> ' + escapeHtml(data.message) + '</span>'
+      logEl.innerHTML = '<span class="text-danger"><i class="bi bi-x-circle"></i> ' + escapeHtml(data.message) + '</span>'  // nosemgrep
         + (data.log ? '<pre class="text-secondary small mt-1" style="max-height:200px;overflow-y:auto;">' + escapeHtml(data.log.slice(-2000)) + '</pre>' : '');
     }
   })
