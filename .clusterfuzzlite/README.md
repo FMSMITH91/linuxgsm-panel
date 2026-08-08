@@ -33,13 +33,21 @@ cleanly and still die on its first import if a dynamically-imported module was n
 why `build.sh` names `paramiko`, `eventlet`, `eventlet.tpool` and `config` as `--hidden-import` —
 the harnesses pull them in via `importlib.import_module("...")`, a string PyInstaller cannot see.
 
-## Not enabled: batch fuzzing, corpus pruning, coverage
+## Batch fuzzing, pruning and coverage — written, dormant
 
-Those three modes want somewhere to keep a corpus between runs, which means a **separate storage
-repo** and a personal access token. Without one, every run starts from the seeds in
-`tests/fuzz/corpus/` and learns nothing from the last run. To turn them on: create an empty repo,
-add a PAT with write access to it as a secret, then pass `storage-repo` to both actions and add
-workflows with `mode: batch`, `mode: prune` and `mode: coverage`. See
+`cflite_batch.yml` (nightly, all targets, 15 min) and `cflite_cron.yml` (weekly prune + coverage)
+are committed and wired, but every job is guarded by `if: env.CFL_STORAGE_REPO != ''` and so does
+nothing until that secret exists. They stay dormant rather than red.
+
+They need somewhere to keep the corpus between runs — without it each run restarts from the seeds
+in `tests/fuzz/corpus/` and learns nothing from the last one. To switch them on:
+
+1. create an empty repo, e.g. `linuxgsm-panel-fuzz-corpus`
+2. create a PAT that can write to it
+3. add `CFL_STORAGE_REPO` as a repository secret here (the https URL with the token in it, per the
+   ClusterFuzzLite docs)
+
+Nothing else changes; the next scheduled run picks it up. See
 <https://google.github.io/clusterfuzzlite/running-clusterfuzzlite/github-actions/>.
 
 ## Upstream OSS-Fuzz
