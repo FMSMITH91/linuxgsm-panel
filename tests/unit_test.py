@@ -3152,6 +3152,19 @@ for _junk in (None, 0, 12, [], {}):
     check("path resolver: %r is handled, not raised on" % (_junk,),
           _r is None or _r.startswith(_HOME), repr(_r))
 
+# ── Never echo an exception's text to the browser ─────────────────────────────────────────────
+# models.py states the rule ("returning str(exc) to a client is how raw internals leak into API
+# responses (CodeQL py/stack-trace-exposure), and this codebase's rule is never to do it"), and
+# three flash() calls were doing exactly that. The audit log is where the detail belongs.
+import re as _re_fl
+_app_src = open(os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "app.py"),
+                encoding="utf-8").read()
+_leaky = []
+for _m in _re_fl.finditer(r"flash\(\s*f?[\"'][^\"']*\{\s*(e|exc|err|ex)\b[^}]*\}", _app_src):
+    _leaky.append("app.py:%d" % (_app_src[:_m.start()].count("\n") + 1))
+check("no route flashes an exception's text to the browser (py/stack-trace-exposure)",
+      not _leaky, ", ".join(_leaky))
+
 passed = sum(1 for ok, _, _ in results if ok)
 for ok, name, detail in results:
     line = ("PASS" if ok else "FAIL") + "  " + name

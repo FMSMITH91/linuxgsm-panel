@@ -85,6 +85,81 @@ check(_detail_tabs and _files_tabs and _detail_tabs == _files_tabs,
       "templates: Files & Config offers the same server tabs, in the same order, as the detail page",
       "detail=%s files=%s" % (_detail_tabs, _files_tabs))
 
+# ── 0c. confirmDialog's raw `body:` may only carry markup the panel itself wrote ───────────────
+# The dialog has three body options: bodyText (assigned via textContent — safe for anything),
+# bodyNode (a DOM node, appended), and body (interpolated straight into innerHTML). Only the last
+# is an HTML sink, and it exists so a caller can bold a word. Today both callers escape their one
+# dynamic value with escapeHtml(); this makes that a rule rather than a habit, because the day one
+# does not is an XSS carrying the server's own data.
+def _direct_body_args(src):
+    """Every `body:` that is a DIRECT key of a confirmDialog({...}) call, with its expression.
+
+    Walks brace/paren depth rather than pattern-matching: the onConfirm callbacks are full of
+    fetch(..., {body: JSON.stringify(...)}), which is a different `body` entirely."""
+    out = []
+    for m in re.finditer(r"confirmDialog\s*\(\s*\{", src):
+        i, depth, key_start = m.end(), 1, m.end()
+        while i < len(src) and depth:
+            ch = src[i]
+            if ch in "\'\"":                       # skip over a string literal wholesale
+                q, i = ch, i + 1
+                while i < len(src) and src[i] != q:
+                    i += 2 if src[i] == "\\" else 1
+            elif ch in "{([":
+                depth += 1
+            elif ch in "})]":
+                depth -= 1
+                if not depth:
+                    break
+            elif ch == "," and depth == 1:
+                key_start = i + 1
+            elif depth == 1 and src.startswith("body", i) and re.match(r"body\s*:", src[i:]):
+                if src[key_start:i].strip() in ("", ","):      # a key, not part of another word
+                    j, d2 = i + src[i:].index(":") + 1, 0
+                    val = []
+                    while j < len(src):
+                        c = src[j]
+                        if c in "\'\"":
+                            q = c; val.append(c); j += 1
+                            while j < len(src) and src[j] != q:
+                                val.append(src[j]); j += 2 if src[j] == "\\" else 1
+                            val.append(q)
+                        elif c in "{([":
+                            d2 += 1; val.append(c)
+                        elif c in "})]":
+                            if d2 == 0:
+                                break
+                            d2 -= 1; val.append(c)
+                        elif c == "," and d2 == 0:
+                            break
+                        else:
+                            val.append(c)
+                        j += 1
+                    out.append((src[:i].count("\n") + 1, "".join(val).strip()))
+            i += 1
+    return out
+
+
+_raw_body = []
+for _name, _src in srcs.items():
+    for _line, _expr in _direct_body_args(_src):
+        # Strip the literal text so only the code skeleton is left.
+        _bare = re.sub(r"'(?:[^'\\]|\\.)*'|\"(?:[^\"\\]|\\.)*\"", "", _expr)
+        # escapeHtml(x) is the sanctioned wrapper — remove the whole call, argument included. _esc
+        # is server_detail.html's one-line alias for it. Named explicitly, so the allow-list stays a
+        # short reviewable list rather than "anything that looks like a call".
+        _bare = re.sub(r"(?:escapeHtml|_esc)\s*\((?:[^()]|\([^()]*\))*\)", "", _bare)
+        # Only CONCATENATION injects. `body: body` hands over a string built (and escaped) above,
+        # and `note ? … : …` is a truthiness test — neither puts the identifier into the markup.
+        # `'<b>' + name` does, and that is the shape this looks for.
+        _dyn = (re.findall(r"\+\s*([A-Za-z_$][\w$.]*)", _bare)
+                + re.findall(r"([A-Za-z_$][\w$.]*)\s*\+", _bare))
+        if _dyn:
+            _raw_body.append("%s:%d %s" % (_name, _line, ", ".join(sorted(set(_dyn)))[:48]))
+check(not _raw_body,
+      "confirmDialog: a raw body: interpolates nothing but escapeHtml() output (bodyText is the safe one)",
+      "; ".join(_raw_body[:3]))
+
 # ── 1. gather every global function definition: name -> (params, body) ──
 _DEFS = [
     re.compile(r"function\s+([A-Za-z_$][\w$]*)\s*\(([^)]*)\)\s*\{"),

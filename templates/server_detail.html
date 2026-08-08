@@ -818,7 +818,7 @@ function serverAction(action, btn, confirmFirst, showOutput) {
   // Restart AND stop get a player check first — warn, and offer "when empty".
   if (action === 'restart' || action === 'stop') { return actionWithPlayerCheck(action, btn); }
   if (confirmFirst) {
-    var body = _cap(action) + ' <strong>' + _esc(SERVER_NAME) + '</strong>?';
+    var body = _esc(_cap(action)) + ' <strong>' + _esc(SERVER_NAME) + '</strong>?';
     if (action === 'fastdl') {
       body = 'Generate FastDL files for <strong>' + _esc(SERVER_NAME) + '</strong>? '
            + 'This overwrites the existing FastDL directory and can take a while.';
@@ -840,8 +840,8 @@ function confirmActionDialog(action, btn, note){
   confirmDialog({
     title: _cap(action) + ' server',
     icon: action === 'stop' ? 'stop-fill' : 'arrow-clockwise',
-    body: _cap(action) + ' <strong>' + _esc(SERVER_NAME) + '</strong>?'
-          + (note ? ' <span class="text-secondary">' + note + '</span>' : ''),
+    body: _esc(_cap(action)) + ' <strong>' + _esc(SERVER_NAME) + '</strong>?'
+          + (note ? ' <span class="text-secondary">' + _esc(note) + '</span>' : ''),
     confirmLabel: _cap(action),
     confirmClass: action === 'stop' ? 'btn-danger' : 'btn-warning',
     onConfirm: function(){ _doServerAction(action, btn); }

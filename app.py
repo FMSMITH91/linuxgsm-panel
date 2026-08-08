@@ -3804,7 +3804,10 @@ def register_routes(app):
             flash(msg, "info" if (action in LONG_ACTIONS or action in READONLY_ACTIONS) else ("success" if ok else "warning"))
         except Exception as e:
             log_action(current_user, f"{action}_server", target=gs.name, detail=str(e), success=False)
-            flash(f"Action failed: {e}", "danger")
+            # The exception text is in the audit log above, not in the flash: echoing str(e) to the
+            # browser is how internals leak into the UI (py/stack-trace-exposure), and this
+            # codebase's rule is never to do it.
+            flash("That action failed. The audit log has the details.", "danger")
         return redirect(url_for("server_detail", server_id=server_id))
 
     @app.route("/api/server/<int:server_id>/action", methods=["POST"])
@@ -4261,8 +4264,9 @@ def register_routes(app):
             gs.set_commands(cmds)
             db.session.commit()
             flash(f"Loaded {len(cmds)} commands for '{gs.name}'.", "success")
-        except Exception as e:
-            flash(f"Could not load commands: {e}", "danger")
+        except Exception:
+            _log.debug("command list refresh failed for %s", gs.name, exc_info=True)
+            flash(f"Could not read the command list for '{gs.name}'.", "danger")
         return redirect(url_for("server_detail", server_id=server_id))
 
     @app.route("/server/<int:server_id>/command", methods=["POST"])
@@ -4293,7 +4297,7 @@ def register_routes(app):
 
         except Exception as e:
             log_action(current_user, "send_command", target=gs.name, detail=f"{cmd_text} - {e}", success=False)
-            flash(f"Failed to send command: {e}", "danger")
+            flash("Failed to send that command. The audit log has the details.", "danger")
 
         return redirect(url_for("server_detail", server_id=server_id))
 
