@@ -1,0 +1,59 @@
+name: ClusterFuzzLite
+
+# ClusterFuzzLite is OSS-Fuzz's engine packaged to run on any repository — same base images, same
+# build contract (.clusterfuzzlite/{Dockerfile,build.sh,project.yaml}), no enrolment needed.
+#
+# It overlaps with fuzz.yml, deliberately and differently: fuzz.yml runs every target for a fixed
+# 60s on each push, while this runs in 'code-change' mode, fuzzing only what the diff actually
+# touched and reporting a crash as a SARIF finding in the Security tab next to the CodeQL and
+# Bandit alerts. Keeping both is a choice — fuzz.yml is the broad sweep, this is the targeted one.
+on:
+  pull_request:
+    branches: [ main ]
+
+permissions:
+  contents: read
+
+jobs:
+  code-change:
+    name: fuzz the diff (${{ matrix.sanitizer }})
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      security-events: write   # upload-sarif writes the crash into code scanning
+    concurrency:
+      group: ${{ github.workflow }}-${{ matrix.sanitizer }}-${{ github.ref }}
+      cancel-in-progress: true
+    strategy:
+      fail-fast: false
+      matrix:
+        sanitizer: [ address ]
+    steps:
+      - name: Build fuzzers (${{ matrix.sanitizer }})
+        id: build
+        uses: google/clusterfuzzlite/actions/build_fuzzers@884713a6c30a92e5e8544c39945cd7cb630abcd1 # v1
+        with:
+          language: python
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          sanitizer: ${{ matrix.sanitizer }}
+          # bad-build-check is left ON (the default). These targets are PyInstaller bundles, so the
+          # failure to worry about is a fuzzer that builds fine and then dies on its first import —
+          # which is exactly what that check catches.
+
+      - name: Fuzz the changed code (${{ matrix.sanitizer }})
+        id: run
+        uses: google/clusterfuzzlite/actions/run_fuzzers@884713a6c30a92e5e8544c39945cd7cb630abcd1 # v1
+        with:
+          language: python   # run_fuzzers defaults to c++ — it does not inherit the build's setting
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          fuzz-seconds: 180   # per PR, across the targets the diff touches — fuzz.yml does the sweep
+          mode: code-change
+          sanitizer: ${{ matrix.sanitizer }}
+          output-sarif: true
+
+      - name: Report a crash as a code-scanning finding
+        if: always() && steps.build.outcome == 'success'
+        uses: github/codeql-action/upload-sarif@5595ccaf912efad79be6eef63a5619ff05969be3 # v4
+        with:
+          sarif_file: cifuzz-sarif/results.sarif
+          checkout_path: cifuzz-sarif
