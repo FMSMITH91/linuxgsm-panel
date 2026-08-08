@@ -127,7 +127,7 @@
       <form method="POST" action="{{ url_for('edit_command', cmd_id=cmd.id) }}"
             class="ajax-form" data-ajax-refresh="#commands-list" data-ajax-reset="off">
         {{ command_fields(cmd, 'e' ~ cmd.id) }}
-        <button type="submit" class="btn btn-primary btn-sm mt-2"><i class="bi bi-check"></i> Save</button>
+        <button type="submit" class="btn btn-primary btn-sm mt-2"><i class="bi bi-save"></i> Save</button>
       </form>
     </div>
   </div>

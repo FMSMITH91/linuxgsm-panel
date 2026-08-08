@@ -130,6 +130,7 @@ window.toast = function(msg, kind){
   var t = document.createElement('div');
   t.className = 'alert alert-' + kind + ' py-2 px-3 mb-0';
   t.style.cssText = 'font-size:.85rem;box-shadow:0 6px 24px rgba(0,0,0,.55);text-align:center;';
+  // nosemgrep - icon is one of four literals from KINDS above; msg goes through escapeHtml.
   t.innerHTML = '<i class="bi bi-' + icon + '"></i> ' + escapeHtml(msg);
   c.appendChild(t);
   // Each toast owns its own timer (captured `t`). Errors linger longer so they're readable before
@@ -162,6 +163,8 @@ window.confirmDialog = function(opts){
   }
   var ov = document.createElement('div');
   ov.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,.6);z-index:11050;display:flex;align-items:center;justify-content:center;padding:1rem;';
+  // nosemgrep - static markup; every interpolation is escapeHtml'd, and opts.body is documented
+  // as trusted markup (both callers escape their one dynamic value; a test now enforces that).
   ov.innerHTML = '<div class="card" style="max-width:480px;width:100%;">'
     + '<div class="card-header"><i class="bi bi-' + escapeHtml(opts.icon || 'question-circle') + '"></i> ' + escapeHtml(opts.title || 'Confirm') + '</div>'
     + '<div class="card-body">'
@@ -195,6 +198,7 @@ window.confirmDialog = function(opts){
   document.addEventListener('keydown', onKey);
   var api = {
     close: close,
+    // nosemgrep - okHtml is this button's OWN markup, captured above; the message uses textContent.
     error: function(m){ if(errEl){ errEl.textContent = m || 'Incorrect.'; errEl.style.display=''; } okBtn.disabled=false; okBtn.innerHTML=okHtml; if(input){ input.value=''; input.focus(); } },
     busy: function(){ okBtn.disabled=true; okBtn.innerHTML='<span class="spinner-border spinner-border-sm"></span>'; }
   };
@@ -233,12 +237,17 @@ window.refreshSection = function(sel, afterName){
     .then(function(html){
       var doc = new DOMParser().parseFromString(html, 'text/html');
       var fresh = doc.querySelector(sel), cur = document.querySelector(sel);
+      // nosemgrep - a fragment of THIS panel's own server-rendered page (Jinja autoescapes),
+      // re-parsed same-origin to refresh one region in place.
       if (fresh && cur) cur.innerHTML = fresh.innerHTML;
+      // nosemgrep - the delegated dispatcher this whole UI is built on: afterName comes from a
+      // data- attribute in our own template, and the typeof guard is the contract.
       if (afterName && typeof window[afterName] === 'function') { try { window[afterName](); } catch(e){} }
     }).catch(function(){});
 };
 function _submitAjaxForm(form){
   var btn = form.querySelector('[type="submit"]'), orig = btn ? btn.innerHTML : '';
+  // nosemgrep - a static spinner in, and the button's own saved markup back out on restore.
   if (btn){ btn.disabled = true; btn.innerHTML = '<span class="spinner-border spinner-border-sm"></span>'; }
   var restore = function(){ if (btn){ btn.disabled = false; btn.innerHTML = orig; } };
   fetch(form.action || location.href,
@@ -539,12 +548,14 @@ window.UPro = (function(){
   function render(d){
     if(!EL) return;
     if(!d || d.installed === false){
+      // nosemgrep - static literal; attachForm() is fixed markup too.
       EL.innerHTML = '<div class="d-flex align-items-center gap-2 mb-2"><span class="badge bg-secondary">Not attached</span></div>'
         + '<p class="small text-secondary mb-2">Ubuntu Pro is <strong>free for personal use</strong> (up to 5 machines) and adds ~10 years of security updates (ESM) plus kernel <strong>Livepatch</strong>. Get a token at <a href="https://ubuntu.com/pro/dashboard" target="_blank" rel="noopener">ubuntu.com/pro/dashboard</a>. The client will be installed automatically when you attach.</p>'
         + attachForm() + '<div id="upro-msg" class="small mt-2"></div>';
       return;
     }
     if(!d.attached){
+      // nosemgrep - static literal; attachForm() is fixed markup too.
       EL.innerHTML = '<div class="d-flex align-items-center gap-2 mb-2"><span class="badge bg-secondary">Not attached</span></div>'
         + '<p class="small text-secondary mb-2">Attach this host to your <strong>free</strong> Ubuntu Pro subscription for ~10 years of security updates (ESM) and kernel <strong>Livepatch</strong>. Get a token at <a href="https://ubuntu.com/pro/dashboard" target="_blank" rel="noopener">ubuntu.com/pro/dashboard</a>.</p>'
         + attachForm() + '<div id="upro-msg" class="small mt-2"></div>';
@@ -565,6 +576,7 @@ window.UPro = (function(){
               : '<button class="btn btn-outline-success btn-sm py-0"' + _da('_uproService', [s.name, 'enable']) + '>Enable</button>');
       rows += '<tr><td class="small"><code>'+e(s.name)+'</code><div class="text-secondary" style="font-size:.68rem;">'+e(s.description||'')+'</div></td><td>'+badge+'</td><td class="text-end">'+btn+'</td></tr>';
     });
+    // nosemgrep - head/rows/btn are built above with e() on every value from the server.
     EL.innerHTML = head
       + '<div class="table-responsive"><table class="table table-sm mb-2 align-middle"><tbody>'+rows+'</tbody></table></div>'
       + '<button class="btn btn-outline-danger btn-sm"' + _da('_uproDetach') + '><i class="bi bi-x-circle"></i> Detach</button>'
