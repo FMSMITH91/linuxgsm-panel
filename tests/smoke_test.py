@@ -776,6 +776,39 @@ try:
         MetricSample.query.filter_by(server_id=gs_id).delete()
         db.session.commit()
 
+    # ── The dashboard metrics poll, which fans out over a thread pool ─────────────────────────────
+    # Each worker used to open its own app context and re-fetch the server + its host: two queries
+    # per server, every few seconds, on a page that polls. It now reads frozen values from rows the
+    # request already loaded, so this asserts the data still ARRIVES — per-server figures keyed by
+    # id, and the host block named from the same rows rather than a fresh lookup.
+    _dmapp = sys.modules["app"]        # defined here: the shared _appmod alias comes later
+    _sv_slm, _sv_map = _dmapp.server_live_metrics, _dmapp.game_map
+    try:
+        _dmapp.server_live_metrics = lambda remote, short=None, port=None, force=False: {
+            "game_procs": 2, "game_cpu_percent": 12.5, "game_ram_mb": 2048, "game_uptime_secs": 900,
+            "cpu_percent": 30.0, "ram_used": 4, "ram_total": 8, "disk_used": 1, "disk_total": 4,
+            "uptime_secs": 86400, "cores": 4}
+        _dmapp.game_map = lambda *a, **k: "de_dust2"
+        _dm = c.get("/api/dashboard/metrics")
+        _dj = _dm.get_json() or {}
+        _one = (_dj.get("servers") or {}).get(str(gs_id)) or {}
+        check("dashboard metrics: the poll answers with per-server figures keyed by id",
+              _dm.status_code == 200 and _one.get("ram_mb") == 2048 and _one.get("cpu") == 12.5
+              and _one.get("up") is True, "%d %s" % (_dm.status_code, str(_one)[:90]))
+        check("dashboard metrics: the running server's map comes back with it",
+              _one.get("map") == "de_dust2", str(_one)[:90])
+        with app.app_context():
+            _g = db.session.get(GameServer, gs_id)
+            _want, _rid = _g.remote.display_name, _g.remote_id
+        _hostblk = (_dj.get("hosts") or {}).get(str(_rid)) or {}
+        check("dashboard metrics: the host block is named from the rows already loaded",
+              _hostblk.get("name") == _want, "got %r want %r" % (_hostblk.get("name"), _want))
+        check("dashboard metrics: host CPU/RAM/disk percentages are derived, not passed through",
+              _hostblk.get("cpu") == 30.0 and _hostblk.get("ram_pct") == 50.0
+              and _hostblk.get("disk_pct") == 25.0, str(_hostblk)[:110])
+    finally:
+        _dmapp.server_live_metrics, _dmapp.game_map = _sv_slm, _sv_map
+
     # ── perf regression guard: NO N+1 on the hot paths ────────────
     # Seed 50 game servers across 5 hosts — enough that a per-server (rather than
     # per-host) query pattern would blow the budget — then assert the dashboard render
@@ -809,10 +842,10 @@ try:
     _appmod.run_command = lambda *a, **k: ("", "", 0)   # port scan: no real SSH, no matches
     _sa_event.listen(_engine, "after_cursor_execute", _count_query)
     try:
-        def _qcount(path):
+        def _qcount(path, client=None):
             _appmod._port_scan_cache.clear()   # force the (stubbed) scan each time, for consistency
             _Q["n"] = 0
-            resp = c.get(path)
+            resp = (client or c).get(path)
             return _Q["n"], resp.status_code
 
         c.get("/api/servers")                  # warm one-time caches so the count is steady
@@ -824,6 +857,34 @@ try:
         check("perf: dashboard renders with 50 servers", _dash_code == 200, "got %d" % _dash_code)
         check("perf: dashboard query count stays small (no N+1)",
               _dash_q <= 20, "%d queries for %d servers" % (_dash_q, _seeded))
+
+        # The dashboard polls this one every few seconds. Each worker used to open its own session
+        # and re-fetch the server + host, so it cost 2 queries PER SERVER — 104 at 50 servers, and
+        # ~1000 on a big install, every poll. It is the most expensive thing to get wrong here
+        # because nobody has to click anything for it to run.
+        _sv_slm2 = _appmod.server_live_metrics
+        _appmod.server_live_metrics = lambda *a, **k: {"game_procs": 0, "cpu_percent": 1.0}
+        try:
+            _met_q, _met_code = _qcount("/api/dashboard/metrics")
+            check("perf: /api/dashboard/metrics renders with 50 servers", _met_code == 200,
+                  "got %d" % _met_code)
+            check("perf: the metrics poll does NOT query per server (it polls on a timer)",
+                  _met_q <= 15, "%d queries for %d servers" % (_met_q, _seeded))
+
+            # Every budget above is measured as a SUPERADMIN, and is_superadmin short-circuits
+            # get_user_servers — so the permission-resolution path that every ORDINARY account goes
+            # through was never once counted. Measure it as one.
+            _uc = client_as(mru_id)
+            _uapi_q, _uapi_code = _qcount("/api/servers", _uc)
+            _umet_q, _umet_code = _qcount("/api/dashboard/metrics", _uc)
+            check("perf: /api/servers stays in budget for a NON-superadmin too",
+                  _uapi_code == 200 and _uapi_q <= 20,
+                  "%d queries (status %d)" % (_uapi_q, _uapi_code))
+            check("perf: the metrics poll stays in budget for a NON-superadmin too",
+                  _umet_code == 200 and _umet_q <= 20,
+                  "%d queries (status %d)" % (_umet_q, _umet_code))
+        finally:
+            _appmod.server_live_metrics = _sv_slm2
 
         # Regression: the /api/servers status poll must NOT clobber an in-progress install's
         # status. The port scan (stubbed empty here) finds nothing listening for a still-installing

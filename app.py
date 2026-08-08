@@ -585,28 +585,35 @@ def _query_server_slots(app, sid):
         return sid, (None, None, None)
 
 
-def _query_server_metrics(app, sid):
-    """Worker for the dashboard metrics poll: (sid, metrics_dict|None, remote_id) for one server in
-    its OWN app context. server_live_metrics is one cached SSH round trip that yields BOTH the whole
-    host's figures and this game's share. Never raises."""
+def _metrics_work(servers):
+    """Freeze what the metrics workers need, read in the CALLER's thread.
+
+    Each worker used to open an app context of its own and re-fetch the server plus lazy-load its
+    host — two queries per server on an endpoint the dashboard polls every few seconds, so 500
+    servers meant ~1000 queries per poll. The rows are already loaded here (get_user_servers
+    joinedloads the host), so read them once and hand the workers plain values."""
+    return [(gs.remote, gs.id, gs.short_name, gs.port, gs.game_type, gs.query_type, gs.remote_id)
+            for gs in servers if gs.installed]
+
+
+def _query_server_metrics(work):
+    """Worker for the dashboard metrics poll: (sid, metrics_dict|None, remote_id, map) for one
+    server. server_live_metrics is one cached SSH round trip that yields BOTH the whole host's
+    figures and this game's share. Takes the frozen tuple from _metrics_work rather than an id: it
+    runs on a pool thread, where a session of its own costs a query per server and sharing the
+    caller's would not be thread-safe. Reads only already-loaded columns. Never raises."""
+    remote, sid, short_name, port, game_type, query_type, remote_id = work
     try:
-        with app.app_context():
-            gs = db.session.get(GameServer, sid)
-            if gs is None or not gs.installed:
-                return sid, None, None, ""
-            try:
-                m = server_live_metrics(gs.remote, gs.short_name, gs.port)
-            except Exception:
-                return sid, None, gs.remote_id, ""
-            mp = ""
-            if m.get("game_procs"):     # only query the map for a running server
-                try:
-                    mp = game_map(gs.remote, gs.short_name, gs.game_type, gs.port, gs.query_type)
-                except Exception:
-                    mp = ""
-            return sid, m, gs.remote_id, mp
+        m = server_live_metrics(remote, short_name, port)
     except Exception:
-        return sid, None, None, ""
+        return sid, None, remote_id, ""
+    mp = ""
+    if m.get("game_procs"):     # only query the map for a running server
+        try:
+            mp = game_map(remote, short_name, game_type, port, query_type)
+        except Exception:
+            mp = ""
+    return sid, m, remote_id, mp
 
 
 def _refresh_player_counts(app):
@@ -697,13 +704,16 @@ def _record_metric_samples(app):
     host's whole-VPS CPU%/RAM%/disk% into MetricSample/HostSample for the history charts. Reuses the
     parallel metrics worker; the player count comes from the cache the player poller already keeps."""
     with app.app_context():
-        sids = [gs.id for gs in GameServer.query.filter_by(installed=True).all()]
-        if not sids:
+        # joinedload: the workers need each server's host, and lazily that is one query per server.
+        from sqlalchemy.orm import joinedload
+        work = _metrics_work(GameServer.query.options(joinedload(GameServer.remote))
+                             .filter_by(installed=True).all())
+        if not work:
             return
         now = datetime.utcnow()
         rows, hosts_seen = [], set()
-        with concurrent.futures.ThreadPoolExecutor(max_workers=min(_PLAYER_POLL_WORKERS, len(sids))) as ex:
-            for sid, m, rid, _mp in ex.map(lambda s: _query_server_metrics(app, s), sids):
+        with concurrent.futures.ThreadPoolExecutor(max_workers=min(_PLAYER_POLL_WORKERS, len(work))) as ex:
+            for sid, m, rid, _mp in ex.map(_query_server_metrics, work):
                 if not m:
                     continue
                 rows.append(MetricSample(server_id=sid, ts=now,
@@ -5033,7 +5043,10 @@ def register_routes(app):
     @login_required
     @permission_required(MANAGE_USERS)
     def manage_users():
-        users = User.query.all()
+        from sqlalchemy.orm import selectinload
+        # The page prints each user's groups, so lazily this costs one query per user (108 queries
+        # for 100 accounts). selectinload folds them into a single extra statement.
+        users = User.query.options(selectinload(User.groups)).all()
         groups = Group.query.all()
         return render_template("manage_users.html", users=users, groups=groups)
 
@@ -7641,15 +7654,14 @@ def register_routes(app):
         and per-host whole-VPS CPU%/RAM%/disk%/uptime. Each server is one cached SSH sample, taken in
         parallel; polled on a slower cadence than the status feed so it stays cheap."""
         servers = get_user_servers(current_user)
-        ids = [gs.id for gs in servers]
-        host_name = {}
-        for gs in servers:
-            if gs.remote_id and gs.remote_id not in host_name:
-                host_name[gs.remote_id] = (gs.remote.display_name if gs.remote else "")
+        # One pass over the rows already in hand: the hosts are joinedloaded, so naming them and
+        # answering "is this host local?" below costs no further queries.
+        remote_by_id = {gs.remote_id: gs.remote for gs in servers if gs.remote_id and gs.remote}
+        work = _metrics_work(servers)
         out_servers, hosts = {}, {}
-        if ids:
-            with concurrent.futures.ThreadPoolExecutor(max_workers=min(_PLAYER_POLL_WORKERS, len(ids))) as ex:
-                for sid, m, rid, mp in ex.map(lambda s: _query_server_metrics(app, s), ids):
+        if work:
+            with concurrent.futures.ThreadPoolExecutor(max_workers=min(_PLAYER_POLL_WORKERS, len(work))) as ex:
+                for sid, m, rid, mp in ex.map(_query_server_metrics, work):
                     if not m:
                         continue
                     out_servers[str(sid)] = {
@@ -7661,9 +7673,9 @@ def register_routes(app):
                     }
                     if rid is not None and str(rid) not in hosts:
                         rt, dt = m.get("ram_total") or 0, m.get("disk_total") or 0
-                        _rem = db.session.get(RemoteServer, rid)
+                        _rem = remote_by_id.get(rid)
                         hosts[str(rid)] = {
-                            "name": host_name.get(rid, ""),
+                            "name": getattr(_rem, "display_name", "") or "",
                             "local": bool(getattr(_rem, "is_local", False)),
                             "cpu": round(m.get("cpu_percent") or 0, 1),
                             "ram_pct": round(100.0 * (m.get("ram_used") or 0) / rt, 1) if rt else 0,
@@ -7682,7 +7694,11 @@ def register_routes(app):
         gs = get_game(server_id)
         rng = "7d" if request.args.get("range") == "7d" else "24h"
         since = datetime.utcnow() - timedelta(hours=(168 if rng == "7d" else 24))
-        srows = (MetricSample.query
+        # with_entities, not the mapped class: the 7-day window is ~10k samples, of which at most
+        # 240 survive down-sampling. Building a full ORM instance (and an identity-map entry) for
+        # every discarded row was ~80% of this endpoint's time. Rows are plain named tuples.
+        srows = (db.session.query(MetricSample.ts, MetricSample.cpu, MetricSample.ram_mb,
+                                  MetricSample.players)
                  .filter(MetricSample.server_id == server_id, MetricSample.ts >= since)
                  .order_by(MetricSample.ts.asc()).all())
         sstep = max(1, len(srows) // 240)
@@ -7698,7 +7714,8 @@ def register_routes(app):
                            "players": max(pv) if pv else None})
         host = []
         if gs.remote_id:
-            hrows = (HostSample.query
+            hrows = (db.session.query(HostSample.ts, HostSample.cpu, HostSample.ram_pct,
+                                      HostSample.disk_pct)
                      .filter(HostSample.remote_id == gs.remote_id, HostSample.ts >= since)
                      .order_by(HostSample.ts.asc()).all())
             hstep = max(1, len(hrows) // 240)
