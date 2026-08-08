@@ -34,7 +34,12 @@ def check(cond, name, detail=""):
     results.append((bool(cond), name, detail))
 
 
+# base.html's dispatcher and most of its handlers now live in a cacheable static file rather than
+# inline, so the handler definitions this test resolves against are in static/js as well as in the
+# templates. Both are searched; the filename is only ever used for reporting.
+STATIC_JS = ROOT / "static" / "js"
 srcs = {p.name: p.read_text(encoding="utf-8") for p in sorted(TEMPLATES.glob("*.html"))}
+srcs.update({p.name: p.read_text(encoding="utf-8") for p in sorted(STATIC_JS.glob("*.js"))})
 
 # ── 1. gather every global function definition: name -> (params, body) ──
 _DEFS = [

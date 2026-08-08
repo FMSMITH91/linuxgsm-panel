@@ -1287,12 +1287,51 @@ def _host_load_mem(remote):
         return None, None
 
 
+# Hosts probed at once in one monitoring sweep. The sweep used to walk them one at a time, so its
+# duration was the SUM of every host's latency and a single unreachable host (an SSH connect timeout)
+# delayed the checks for every other host behind it.
+_MONITOR_HOST_WORKERS = 8
+
+
+def _probe_host(remote):
+    """Every network probe for one host, gathered off the database.
+
+    Runs on a pool thread, so it touches no session and reads only already-loaded columns of
+    `remote`; a slow host costs latency, never a pooled connection. Returns (remote_id, dict) and
+    never raises — each probe already degrades to None/False on its own."""
+    try:
+        if not _host_reachable(remote):
+            return remote.id, {"reachable": False}
+        try:
+            ports = _remote_listening_ports(remote)
+        except Exception:
+            ports = None
+        return remote.id, {"reachable": True, "disk": _host_disk_pct(remote),
+                           "load_mem": _host_load_mem(remote), "ports": ports}
+    except Exception:
+        _log.debug("host probe failed for %s", getattr(remote, "name", "?"), exc_info=True)
+        return remote.id, {"reachable": False}
+
+
 def _monitor_pass():
     """One monitoring sweep: fire notifications on host-reachability, disk, and server up/down
     transitions vs the previous pass. First pass only records a baseline (so nothing alerts on
-    startup). Never raises out."""
-    for remote in RemoteServer.query.all():
-        reachable = _host_reachable(remote)
+    startup). Never raises out.
+
+    The network probes run concurrently; everything that touches the database, the recorded state or
+    a notification stays serial in this thread, so ordering and the alert logic are unchanged."""
+    remotes = RemoteServer.query.all()
+    if not remotes:
+        return
+    probes = {}
+    with concurrent.futures.ThreadPoolExecutor(
+            max_workers=min(_MONITOR_HOST_WORKERS, len(remotes))) as ex:
+        for rid, data in ex.map(_probe_host, remotes):
+            probes[rid] = data
+    _th = notifications.get_thresholds()   # user-configurable disk_pct / load_pct; once per sweep
+    for remote in remotes:
+        probe = probes.get(remote.id) or {"reachable": False}
+        reachable = probe["reachable"]
         prev = _monitor_state["remotes"].get(remote.id)
         if prev is True and not reachable:
             notifications.notify("remote_unreachable", "Host unreachable",
@@ -1303,8 +1342,7 @@ def _monitor_pass():
         _monitor_state["remotes"][remote.id] = reachable
         if not reachable:
             continue
-        _th = notifications.get_thresholds()   # user-configurable disk_pct / load_pct
-        pct = _host_disk_pct(remote)
+        pct = probe["disk"]
         if pct is not None:
             alerted = _monitor_state["disk"].get(remote.id, False)
             if pct >= _th["disk_pct"] and not alerted:
@@ -1316,7 +1354,7 @@ def _monitor_pass():
         # High CPU/memory — only when SUSTAINED for the configured window (load_mins), so a brief spike
         # on a small box doesn't page you; re-arm once it drops well below. CPU-load (a per-core loadavg
         # %, which can exceed 100) and memory each have their own threshold.
-        loadpct, mempct = _host_load_mem(remote)
+        loadpct, mempct = probe["load_mem"]
         st = _monitor_state["load"].setdefault(remote.id, {})
         need = max(1, round(_th["load_mins"] * 60 / _MONITOR_SECONDS))   # monitor passes over the line
         for kind, val, thresh, label in (("cpu", loadpct, _th["load_pct"], "CPU load"),
@@ -1331,10 +1369,7 @@ def _monitor_pass():
                 st[kind + "_alerted"] = True
             elif val < thresh - 10 and st.get(kind + "_alerted"):
                 st[kind + "_alerted"] = False
-        try:
-            ports = _remote_listening_ports(remote)
-        except Exception:
-            ports = None
+        ports = probe["ports"]
         if ports is None:
             continue
         for gs in GameServer.query.filter_by(remote_id=remote.id, installed=True).all():
@@ -2434,7 +2469,33 @@ def _current_lang():
     return i18n.normalize_lang(lang)
 
 
+# Content hash per static file, computed once per process. Cheap enough to do lazily and it must
+# never be a per-request stat: these are on every page render.
+_ASSET_HASHES = {}
+
+
+def _asset_url(app, filename):
+    """url_for('static', ...) with a content hash appended.
+
+    The panel serves /static with `Cache-Control: public, max-age=604800`, so without this a
+    browser would keep a week-old panel.js after an update. With it the URL changes the moment the
+    bytes do, and not a moment sooner — which is what makes a long cache safe rather than a trap."""
+    ver = _ASSET_HASHES.get(filename)
+    if ver is None:
+        try:
+            import hashlib
+            with open(os.path.join(app.static_folder, filename), "rb") as fh:
+                ver = hashlib.sha256(fh.read()).hexdigest()[:12]
+        except OSError:
+            ver = ""      # missing file: still emit a usable URL and let the 404 speak for itself
+        _ASSET_HASHES[filename] = ver
+    url = url_for("static", filename=filename)
+    return "%s?v=%s" % (url, ver) if ver else url
+
+
 def register_context_processors(app):
+    app.jinja_env.globals["asset_url"] = lambda filename: _asset_url(app, filename)
+
     @app.context_processor
     def inject_globals():
         cfg = load_config()
