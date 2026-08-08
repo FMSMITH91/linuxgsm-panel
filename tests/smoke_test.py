@@ -1452,6 +1452,32 @@ try:
             _rec.clear(); _am._refresh_player_counts(app)
             check("poller: server_full fires when a server hits its cap", "server_full" in _rec)
 
+            # ── The sweep probes hosts concurrently, not one after another ────────────────────
+            # It used to walk them serially, so its duration was the SUM of every host's latency and
+            # one unreachable host (an SSH connect timeout) held up the checks for all the others.
+            import time as _mt
+            _sv_probes = (_am._host_reachable, _am._host_disk_pct, _am._host_load_mem,
+                          _am._remote_listening_ports)
+            try:
+                _DWELL = 0.05
+                _am._host_reachable = lambda r: (_mt.sleep(_DWELL), True)[1]
+                _am._host_disk_pct = lambda r: (_mt.sleep(_DWELL), 40)[1]
+                _am._host_load_mem = lambda r: (_mt.sleep(_DWELL), (10, 10))[1]
+                _am._remote_listening_ports = lambda r: (_mt.sleep(_DWELL), set())[1]
+                with app.app_context():
+                    _nhosts = RemoteServer.query.count()
+                _reset_mon()
+                _t0 = _mt.time(); _am._monitor_pass(); _elapsed = _mt.time() - _t0
+                # Serial would be hosts x 4 probes x dwell; concurrent is ~4 x dwell regardless of
+                # how many hosts there are. Half of serial is a wide margin either way.
+                _serial = _nhosts * 4 * _DWELL
+                check("monitor: hosts are probed concurrently, so one slow host holds up no others",
+                      _nhosts >= 3 and _elapsed < _serial / 2,
+                      "%d hosts: %.2fs elapsed vs %.2fs if serial" % (_nhosts, _elapsed, _serial))
+            finally:
+                (_am._host_reachable, _am._host_disk_pct, _am._host_load_mem,
+                 _am._remote_listening_ports) = _sv_probes
+
             # ── A scheduled LinuxGSM update must not read as a crash ───────────────────────────
             # Stock LinuxGSM installs carry their own cron (e.g. "30 4 * * * ./gmodserver
             # force-update"). That takes the server down without telling the panel, so the monitor
