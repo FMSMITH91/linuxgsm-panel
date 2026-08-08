@@ -1262,18 +1262,21 @@ try:
     c.post("/api/account/ui-order", json={"panels": {"detail_console": ["controls", "console", "players"]},
                                           "hidden": {"detail_console": ["controls"]}})
     _no_ctrl = c.get("/server/%d" % gs_id).get_data(as_text=True)
+    # The page's own script is a cacheable file now, so the JS assertions below have to follow the
+    # reference. The markup check above stays on the HTML alone — that is what it is about.
+    _no_ctrl_js = page_with_assets(c, "/server/%d" % gs_id)
     check("detail: the server page offers the same edit-mode toggle",
           'data-action="toggleLayoutEdit"' in _det)
     check("detail: hiding Controls removes the stats canvas", 'id="stats-chart"' not in _no_ctrl)
     check("detail: initChart is guarded against the missing canvas",
-          "var canvas = document.getElementById('stats-chart');\n  if (!canvas) return;" in _no_ctrl)
+          "var canvas = document.getElementById('stats-chart');\n  if (!canvas) return;" in _no_ctrl_js)
     # "initChart();" (the CALL) — "function initChart() {" is a different string, so this anchors on
     # the bootstrap, not the definition.
     check("detail: the undo-a-hide handlers are defined BEFORE the bootstrap calls",
-          "initChart();" in _no_ctrl
-          and _no_ctrl.index("window.showDetailPanel = function") < _no_ctrl.index("initChart();"),
+          "initChart();" in _no_ctrl_js
+          and _no_ctrl_js.index("window.showDetailPanel = function") < _no_ctrl_js.index("initChart();"),
           "showDetailPanel at %s, initChart() call at %s"
-          % (_no_ctrl.find("window.showDetailPanel = function"), _no_ctrl.find("initChart();")))
+          % (_no_ctrl_js.find("window.showDetailPanel = function"), _no_ctrl_js.find("initChart();")))
     c.post("/api/account/ui-order", json={"hidden": {"detail_console": []}})
     # Each page only knows its OWN regions, so the endpoint must merge rather than replace the map.
     # Before this was fixed, saving on the dashboard deleted the server page's layout and vice versa.
