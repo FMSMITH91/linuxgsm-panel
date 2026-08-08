@@ -160,6 +160,65 @@ check(not _raw_body,
       "confirmDialog: a raw body: interpolates nothing but escapeHtml() output (bodyText is the safe one)",
       "; ".join(_raw_body[:3]))
 
+# ── 0d. no NEW unescaped value may reach an HTML sink in static/js ────────────────────────────
+# Moving the page scripts out of the templates put 306KB of JavaScript in front of the analysers
+# for the first time, and ~200 innerHTML findings appeared — on code that had not changed. Reading
+# them found one that mattered: the map name, which the QUERIED GAME SERVER supplies, went into
+# innerHTML raw on two pages. That is fixed; this stops the next one.
+#
+# Of 258 HTML sinks, 219 are provably static or escaped. The remainder are numbers from our own
+# API and markup fragments composed a few lines above, which this cannot follow — so they are
+# recorded in tests/html_sink_baseline.json by the NAMES they interpolate. A new unescaped value
+# is a new name, and fails. Shrinking the baseline is always welcome; growing it needs a reason.
+_ESCAPERS = ("escapeHtml", "_esc", "esc", "e")
+_SINK = re.compile(r"(\.innerHTML|\.outerHTML)\s*=\s*|insertAdjacentHTML\s*\(")
+
+
+def _js_expr_at(src, i):
+    """One JS expression from i, stopping at a statement end outside any bracket or string."""
+    out, depth = [], 0
+    while i < len(src):
+        c = src[i]
+        if c in "'\"`":
+            q = c; out.append(c); i += 1
+            while i < len(src) and src[i] != q:
+                out.append(src[i]); i += 2 if src[i] == "\\" else 1
+            out.append(q)
+        elif c in "([{":
+            depth += 1; out.append(c)
+        elif c in ")]}":
+            if depth == 0:
+                break
+            depth -= 1; out.append(c)
+        elif c == ";" and depth == 0:
+            break
+        else:
+            out.append(c)
+        i += 1
+    return "".join(out)
+
+
+_found = {}
+for _p in sorted((ROOT / "static" / "js").glob("*.js")):
+    _src = _p.read_text(encoding="utf-8")
+    for _m in _SINK.finditer(_src):
+        _expr = _js_expr_at(_src, _m.end())
+        _bare = re.sub(r"'(?:[^'\\]|\\.)*'|\"(?:[^\"\\]|\\.)*\"|`(?:[^`\\]|\\.)*`", "", _expr)
+        for _fn in _ESCAPERS:
+            _bare = re.sub(r"\b%s\s*\((?:[^()]|\([^()]*\))*\)" % _fn, "", _bare)
+        _dyn = sorted(set(re.findall(r"\+\s*([A-Za-z_$][\w$.]*)", _bare)
+                          + re.findall(r"([A-Za-z_$][\w$.]*)\s*\+", _bare)))
+        if _dyn:
+            _found.setdefault(_p.name, set()).add(",".join(_dyn))
+
+_baseline = json.loads((ROOT / "tests" / "html_sink_baseline.json").read_text(encoding="utf-8"))
+_new = sorted("%s: %s" % (f, sig) for f, sigs in _found.items()
+              for sig in sigs if sig not in _baseline.get(f, []))
+check(not _new,
+      "static/js: no NEW unescaped value reaches innerHTML (wrap it in escapeHtml, or explain it "
+      "in tests/html_sink_baseline.json)",
+      "; ".join(_new[:3]))
+
 # ── 1. gather every global function definition: name -> (params, body) ──
 _DEFS = [
     re.compile(r"function\s+([A-Za-z_$][\w$]*)\s*\(([^)]*)\)\s*\{"),

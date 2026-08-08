@@ -33,7 +33,7 @@ function watchBootstrap(remoteId) {
         if (log && s.log) { log.textContent = s.log.join('\n'); if (log.style.display !== 'none') log.scrollTop = log.scrollHeight; }
         if (s.status === 'rebooting') {
           bar.className = 'progress-bar progress-bar-striped progress-bar-animated bg-warning';
-          step.innerHTML = '<i class="bi bi-arrow-clockwise"></i> ' + s.step_name;
+          step.innerHTML = '<i class="bi bi-arrow-clockwise"></i> ' + escapeHtml(s.step_name);
         } else if (s.status === 'done') {
           bar.className = 'progress-bar bg-success'; bar.style.width = '100%';
           step.innerHTML = '<i class="bi bi-check-circle-fill text-success"></i> ' + (s.message || 'Prepared & secured!');
@@ -47,7 +47,7 @@ function watchBootstrap(remoteId) {
           var df = document.getElementById('bs-dismiss-' + remoteId); if (df) df.style.display = 'inline';
           stopWatch(remoteId);
         } else {
-          step.innerHTML = '<i class="bi bi-gear-fill"></i> ' + s.step_name;
+          step.innerHTML = '<i class="bi bi-gear-fill"></i> ' + escapeHtml(s.step_name);
         }
       })
       .catch(function(){});
@@ -278,7 +278,7 @@ function tailscaleUp(remoteId) {
           fetch(MOUNT + '/api/remote/' + remoteId + '/tailscale-finalize', {method:'POST'})
             .then(r => r.json()).then(f => {
               var ip = ((f.tailscale_ip || s.tailscale_ip || '').split(',')[0] || '').trim();
-              if (w) w.innerHTML = '<span class="text-success"><i class="bi bi-check-circle"></i> Connected! IP: <code>' + ip + '</code>'
+              if (w) w.innerHTML = '<span class="text-success"><i class="bi bi-check-circle"></i> Connected! IP: <code>' + escapeHtml(ip) + '</code>'
                 + '<br><span class="small">UFW now allows the <code>tailscale0</code> interface.</span></span>'
                 + '<div class="mt-2"><button class="btn btn-success btn-sm"' + _da('migrateToTailscale', [remoteId]) + '>'
                 + '<i class="bi bi-arrow-repeat"></i> Migrate to Tailscale SSH</button></div>';
@@ -495,7 +495,7 @@ function pollBootstrap(remoteId, btn) {
         }
         if (s.status === 'rebooting') {
           barEl.className = 'progress-bar progress-bar-striped progress-bar-animated bg-warning';
-          stepEl.innerHTML = '<i class="bi bi-arrow-clockwise"></i> ' + s.step_name;
+          stepEl.innerHTML = '<i class="bi bi-arrow-clockwise"></i> ' + escapeHtml(s.step_name);
         } else if (s.status === 'done') {
           clearInterval(_bootstrapPoll); _bootstrapPoll = null;
           barEl.className = 'progress-bar bg-success'; barEl.style.width = '100%';
@@ -508,7 +508,7 @@ function pollBootstrap(remoteId, btn) {
           stepEl.innerHTML = '<i class="bi bi-x-circle-fill text-danger"></i> ' + (s.message || 'Bootstrap failed');
           if (btn) { btn.disabled = false; btn.innerHTML = '<i class="bi bi-rocket-takeoff"></i> Retry'; }
         } else {
-          stepEl.innerHTML = '<i class="bi bi-gear-fill"></i> ' + s.step_name;
+          stepEl.innerHTML = '<i class="bi bi-gear-fill"></i> ' + escapeHtml(s.step_name);
         }
       })
       .catch(function(){ /* transient poll error, keep going */ });

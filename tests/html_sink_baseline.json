@@ -1,0 +1,51 @@
+{
+  "dashboard.js": [
+    "_fmtUptimeShort,s.cpu,s.ram_mb",
+    "cls,titleCase",
+    "offline",
+    "online",
+    "s.max_players,s.players",
+    "summary.cpu,summary.ram_pct",
+    "totalMax,totalPlayers"
+  ],
+  "manage_remotes.js": [
+    "_da",
+    "_da,d.url,remoteId",
+    "body,title",
+    "data.cpu_percent,data.disk,data.memory,data.uptime"
+  ],
+  "manage_servers.js": [
+    "_fmtUptimeShort,s.cpu,s.ram_mb",
+    "s.max_players,s.players"
+  ],
+  "panel.js": [
+    "_da,head,rows",
+    "attachForm",
+    "icon",
+    "inputHtml"
+  ],
+  "remote_manage.js": [
+    "_da,body,head,j.banned_ips.map,j.currently_banned,j.total_banned,j.total_failed,return",
+    "_da,return",
+    "_da,rows",
+    "bkFmtBytes,pct",
+    "busy.length,list,total",
+    "d.behind",
+    "d.rc",
+    "fmtBytes",
+    "head,rows",
+    "i",
+    "n",
+    "rows",
+    "specEsc"
+  ],
+  "server_detail.js": [
+    "disk,rows",
+    "lower,n,nowIcon,verb"
+  ],
+  "server_files.js": [
+    "_da",
+    "body,grp.settings.length,idx",
+    "opts.icon"
+  ]
+}
