@@ -7,7 +7,7 @@ FROM gcr.io/oss-fuzz-base/base-builder-python
 # becomes a fuzzer that dies on startup instead of a build that fails loudly.
 # Copied on its own first so this layer caches across source-only changes.
 COPY requirements.txt $SRC/requirements.txt
-RUN pip3 install --no-cache-dir -r $SRC/requirements.txt
+RUN pip3 install --no-cache-dir -r "$SRC/requirements.txt"
 
 COPY . $SRC/linuxgsm-panel
 WORKDIR $SRC/linuxgsm-panel
