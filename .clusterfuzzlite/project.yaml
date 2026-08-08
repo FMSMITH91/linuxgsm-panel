@@ -1,0 +1,10 @@
+# ClusterFuzzLite project configuration. `language` is the only required key; the rest are the
+# fields an upstream OSS-Fuzz submission also wants, kept here so the two stay in sync.
+language: python
+homepage: "https://github.com/FMSMITH91/linuxgsm-panel"
+main_repo: "https://github.com/FMSMITH91/linuxgsm-panel"
+fuzzing_engines:
+  - libfuzzer
+sanitizers:
+  - address
+  - undefined
