@@ -12,20 +12,26 @@ SRC_DIR="$SRC/linuxgsm-panel"
 # bundle while compiling.
 export PYTHONPATH="$SRC_DIR${PYTHONPATH:+:$PYTHONPATH}"
 
-# The harnesses pre-load these through importlib.import_module("...") — a string, so PyInstaller's
-# static analysis cannot see them and would ship a fuzzer that dies on its first import. Named here
-# for every target rather than per target: the only cost is a slightly larger binary for the one
-# harness (console) that does not need them, and a uniform build is worth more than those bytes.
-HIDDEN_IMPORTS=(
-  --hidden-import paramiko
-  --hidden-import eventlet
-  --hidden-import eventlet.tpool
+# PyInstaller only bundles what it can see in an `import` statement, and these packages reach for
+# their real implementations through strings at import time. eventlet.hubs is the one that bit:
+#
+#   builtin_hub_modules = tuple(importlib.import_module('eventlet.hubs.' + name)
+#                               for name in ('epolls', 'kqueue', 'poll', 'selects'))
+#
+# so naming --hidden-import eventlet.tpool built five targets that all died on
+# `No module named 'eventlet.hubs.epolls'`. --collect-submodules takes the whole package and does
+# not need updating when a new submodule shows up. dns arrives transitively (eventlet's greendns);
+# paramiko resolves its kex/cipher backends the same dynamic way.
+COMPILE_ARGS=(
+  --collect-submodules eventlet
+  --collect-submodules paramiko
+  --collect-submodules dns
   --hidden-import config
 )
 
 for fuzzer in "$SRC_DIR"/tests/fuzz/fuzz_*.py; do
   name="$(basename -s .py "$fuzzer")"
-  compile_python_fuzzer "$fuzzer" "${HIDDEN_IMPORTS[@]}"
+  compile_python_fuzzer "$fuzzer" "${COMPILE_ARGS[@]}"
 
   # Seed corpus. The runner picks up <fuzz_target>_seed_corpus.zip sitting next to the binary in
   # $OUT. The corpora are named after the target minus its fuzz_ prefix (tests/fuzz/corpus/console
