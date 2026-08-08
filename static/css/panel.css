@@ -256,7 +256,7 @@
     input[type=number]::-webkit-outer-spin-button, input[type=number]::-webkit-inner-spin-button { -webkit-appearance: none; margin: 0; }
     /* Make a field and its attached button ONE seamless unit — square the inner corners and overlap the
        1px seam. Our custom .form-control/.btn radius could otherwise leave a notched/double-border look. */
-    .input-group > :not(:last-child):not(.dropdown-toggle) { border-top-right-radius: 0; border-bottom-right-radius: 0; }
+    .input-group > :not(:last-child, .dropdown-toggle) { border-top-right-radius: 0; border-bottom-right-radius: 0; }
     .input-group > :not(:first-child) { border-top-left-radius: 0; border-bottom-left-radius: 0; margin-left: -1px; }
     .input-group .form-control:focus { position: relative; z-index: 2; }
     /* Attached buttons get a subtly RAISED background so they read as a button — an outline button's
