@@ -74,6 +74,24 @@ def client_as(user_id):
     return c
 
 
+def page_with_assets(client, path):
+    """The page's HTML plus the text of every non-vendor static .js/.css it pulls in.
+
+    base.html serves its own CSS and JS as cacheable static files rather than inlining them, so a
+    check that greps a page for a handler or a rule has to follow the reference. That is a STRONGER
+    assertion than the old inline grep, not a weaker one: it only passes if the asset is really
+    linked from this page and really served."""
+    import re as _re_pa
+    html = client.get(path).get_data(as_text=True)
+    parts = [html]
+    for url in _re_pa.findall(r'(?:src|href)="([^"]+\.(?:js|css)(?:\?[^"]*)?)"', html):
+        if url.startswith("/") and "/static/" in url and "/vendor/" not in url:
+            r = client.get(url)
+            if r.status_code == 200:
+                parts.append(r.get_data(as_text=True))
+    return "\n".join(parts)
+
+
 def cleanup():
     # Release the SQLite file handle first, or Windows won't let us delete it.
     try:
@@ -1113,7 +1131,7 @@ try:
     # Drag handles: the reorder LOGIC is JS (verified separately in a browser harness against the
     # real makeSortable), but these assert the wiring exists — a handle with no makeSortable call, or
     # a call with no handle, is a control that silently does nothing.
-    _drag_html = c.get("/").get_data(as_text=True)
+    _drag_html = page_with_assets(c, "/")
     import re as _re_d
     check("drag: the stat tiles have a handle inside a data-panel item",
           bool(_re_d.search(r'data-panel="\w+"[^>]*>\s*<div class="card[^"]*panel-movable"[^>]*>\s*'
@@ -1674,6 +1692,39 @@ try:
         check("telegram: resolve a server by short_name", _g2 is not None)
         _g3, _e3 = _tg_find_server("no-such-server-xyz")   # unknown
         check("telegram: an unknown server name returns a helpful error", _g3 is None and "No server" in (_e3 or ""))
+
+    # ── The panel's own CSS/JS are cacheable files, not 64KB re-sent on every navigation ──────────
+    # They used to be inline in base.html, so every page load re-sent them and no browser could ever
+    # cache them. A long cache is only safe if the URL changes when the bytes do, so all three parts
+    # are asserted together: linked, served with a content hash, and cached hard.
+    _pg = c.get("/").get_data(as_text=True)
+    import re as _re_as
+    _assets = [u for u in _re_as.findall(r'(?:src|href)="([^"]+)"', _pg)
+               if "/static/" in u and "/vendor/" not in u and (".js" in u or ".css" in u)]
+    check("assets: base.html links its own CSS and JS as static files",
+          any(".css" in a for a in _assets) and any(".js" in a for a in _assets),
+          "linked: %s" % _assets[:4])
+    check("assets: each carries a content hash, so a stale copy cannot survive an update",
+          _assets and all(_re_as.search(r"\?v=[0-9a-f]{6,}", a) for a in _assets),
+          "no ?v= on: %s" % [a for a in _assets if "?v=" not in a][:3])
+    for _a in _assets[:4]:
+        _ar = c.get(_a)
+        check("assets: %s is served" % _a.split("/")[-1].split("?")[0],
+              _ar.status_code == 200, "got %d" % _ar.status_code)
+        check("assets: %s is cached hard" % _a.split("/")[-1].split("?")[0],
+              "max-age=" in _ar.headers.get("Cache-Control", ""),
+              "Cache-Control: %r" % _ar.headers.get("Cache-Control"))
+    # The shared bundle must be in the FILE and not in the page. Measuring total inline bytes would
+    # measure each page's own scripts too (the dashboard still inlines ~27KB of its own, a separate
+    # and much smaller win); these markers are specifically base.html's shared code.
+    _shared = c.get([a for a in _assets if ".js" in a][0]).get_data(as_text=True)
+    _shared_css = c.get([a for a in _assets if ".css" in a][0]).get_data(as_text=True)
+    for _marker, _where, _text in (("window.makeSortable = function", "panel.js", _shared),
+                                   ("window.toggleLayoutEdit = function", "panel.js", _shared),
+                                   ("body.layout-edit .panel-tools", "panel.css", _shared_css)):
+        check("assets: %r is served from %s..." % (_marker[:34], _where), _marker in _text)
+        check("assets: ...and is NOT also inlined into the page", _marker not in _pg,
+              "still inline: %r" % _marker)
 
     # ── The player poll must not hold database connections across its network calls ───────────────
     # Each worker used to run inside its own app context, so it held a pooled connection for the

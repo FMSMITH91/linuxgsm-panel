@@ -2469,7 +2469,33 @@ def _current_lang():
     return i18n.normalize_lang(lang)
 
 
+# Content hash per static file, computed once per process. Cheap enough to do lazily and it must
+# never be a per-request stat: these are on every page render.
+_ASSET_HASHES = {}
+
+
+def _asset_url(app, filename):
+    """url_for('static', ...) with a content hash appended.
+
+    The panel serves /static with `Cache-Control: public, max-age=604800`, so without this a
+    browser would keep a week-old panel.js after an update. With it the URL changes the moment the
+    bytes do, and not a moment sooner — which is what makes a long cache safe rather than a trap."""
+    ver = _ASSET_HASHES.get(filename)
+    if ver is None:
+        try:
+            import hashlib
+            with open(os.path.join(app.static_folder, filename), "rb") as fh:
+                ver = hashlib.sha256(fh.read()).hexdigest()[:12]
+        except OSError:
+            ver = ""      # missing file: still emit a usable URL and let the 404 speak for itself
+        _ASSET_HASHES[filename] = ver
+    url = url_for("static", filename=filename)
+    return "%s?v=%s" % (url, ver) if ver else url
+
+
 def register_context_processors(app):
+    app.jinja_env.globals["asset_url"] = lambda filename: _asset_url(app, filename)
+
     @app.context_processor
     def inject_globals():
         cfg = load_config()
