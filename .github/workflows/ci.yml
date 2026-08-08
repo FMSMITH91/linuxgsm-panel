@@ -62,3 +62,55 @@ jobs:
         # Same script developers run locally via ./tools/run-tests.sh, so green here == green there.
         # shellcheck is pre-installed on the ubuntu runners.
         run: PYTHON=python bash tools/run-tests.sh
+
+  coverage:
+    name: coverage
+    runs-on: ubuntu-latest
+    # Informational, and deliberately a SEPARATE job: it re-runs the suites under tracing, which is
+    # slower, and the gate above should stay the fast answer. Codacy has a 60% coverage goal that
+    # has always read as "not reported" because nothing ever produced a report.
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.12"
+
+      - name: Install dependencies
+        run: python -m pip install --quiet -r requirements.txt coverage
+
+      - name: Measure
+        # --parallel-mode + combine: each suite is its own process, and smoke/rbac fork threads.
+        # || true on the suites themselves — the gate job decides pass/fail, this one only measures.
+        run: |
+          for suite in unit template_actions smoke rbac; do
+            rm -f data/panel.db data/panel.db-shm data/panel.db-wal data/panel.db.backup
+            python -m coverage run --parallel-mode --source=. \
+              --omit="./tests/*,./tools/*,./.venv/*" "tests/${suite}_test.py" >/dev/null 2>&1 || true
+          done
+          python -m coverage combine
+          python -m coverage xml -o coverage.xml
+          python -m coverage report --sort=miss > coverage.txt
+          {
+            echo '### Coverage'
+            echo ''
+            echo '```'
+            tail -n 20 coverage.txt
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload the report
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: coverage
+          path: |
+            coverage.xml
+            coverage.txt
+
+      # Codacy's coverage goal only lights up once a report is uploaded, which needs a project
+      # token this repo does not have. To enable: add CODACY_PROJECT_TOKEN as a repository secret
+      # and uncomment. Left off rather than half-wired, so the job never fails on a missing secret.
+      # - name: Send to Codacy
+      #   env:
+      #     CODACY_PROJECT_TOKEN: ${{ secrets.CODACY_PROJECT_TOKEN }}
+      #   run: bash <(curl -Ls https://coverage.codacy.com/get.sh) report -r coverage.xml
