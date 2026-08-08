@@ -2971,6 +2971,68 @@ check("remote-f2b: drop-in keeps the valid IP + CIDR entries", "9.9.9.9" in _dro
 check("remote-f2b: drop-in drops non-IP tokens (no shell metachars in the file)",
       not any(bad in _dropin for bad in (";", "$", "rm", "bad")))
 
+# ── The maintenance probe that keeps a scheduled LinuxGSM update from reading as a crash. The
+# monitor tests stub this function out wholesale, so the shell command it builds — the one place a
+# real bug can hide — is only ever asserted here.
+import app as _mapp
+from app import _lgsm_maintenance_running as _lmr
+
+_sent = []
+
+
+def _fake_run(remote, cmd, timeout=None):
+    _sent.append(cmd)
+    return ("BUSY\n", "", 0)
+
+
+_GS = lambda **kw: NS(**dict(dict(short_name="gmodserver", game_type="gmod", name="Gmod",
+                                  lgsm_name="gmodserver"), **kw))
+_orig_rc = _mapp.run_command
+try:
+    _mapp.run_command = _fake_run
+    check("maintenance probe: a running force-update reads as busy", _lmr(object(), _GS()) is True)
+    _cmd = _sent[-1]
+    check("maintenance probe: pgrep is scoped to that server's OWN unix user",
+          "pgrep -u gmodserver " in _cmd or "pgrep -u 'gmodserver' " in _cmd, _cmd)
+    check("maintenance probe: it matches the lgsm script name followed by a maintenance command",
+          "gmodserver (update|force-update|" in _cmd, _cmd)
+    check("maintenance probe: monitor is NOT a maintenance command (it would mute every alert)",
+          "|monitor" not in _cmd and "(monitor" not in _cmd, _cmd)
+    check("maintenance probe: update-lgsm is NOT one either — it never stops the server",
+          "update-lgsm" not in _cmd, _cmd)
+
+    _mapp.run_command = lambda remote, cmd, timeout=None: ("IDLE\n", "", 0)
+    check("maintenance probe: nothing running reads as idle", _lmr(object(), _GS()) is False)
+
+    # The command text itself contains the word BUSY, so a substring test would latch on forever.
+    _mapp.run_command = lambda remote, cmd, timeout=None: ("echo BUSYIDLE\nIDLE\n", "", 0)
+    check("maintenance probe: an echoed command line is not mistaken for a busy answer",
+          _lmr(object(), _GS()) is False)
+
+    def _boom(remote, cmd, timeout=None):
+        raise OSError("host unreachable")
+
+    _mapp.run_command = _boom
+    check("maintenance probe: a probe that cannot answer must NOT hide a real outage",
+          _lmr(object(), _GS()) is False)
+
+    _mapp.run_command = _fake_run
+    check("maintenance probe: no unix user -> no probe at all",
+          _lmr(object(), _GS(short_name="")) is False)
+    check("maintenance probe: no game type -> no probe (a bare 'server' pattern would over-match)",
+          _lmr(object(), _GS(game_type="", lgsm_name="server")) is False)
+    _sent.clear()
+    _lmr(object(), _GS(short_name="", game_type=""))
+    check("maintenance probe: the guards short-circuit before any SSH round trip", not _sent)
+
+    # short_name/game_type are pinned to [A-Za-z0-9._-]; "." is the one ERE metacharacter that fits.
+    _sent.clear()
+    _lmr(object(), _GS(game_type="cs.source", lgsm_name="cs.sourceserver"))
+    check("maintenance probe: a dot in the name is matched literally, not as 'any character'",
+          "cs[.]sourceserver" in _sent[-1], _sent[-1])
+finally:
+    _mapp.run_command = _orig_rc
+
 passed = sum(1 for ok, _, _ in results if ok)
 for ok, name, detail in results:
     line = ("PASS" if ok else "FAIL") + "  " + name
