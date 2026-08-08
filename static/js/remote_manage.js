@@ -457,7 +457,7 @@ function _changePanelBinding(p, bind){
       } else {
         target = location.href;                       // only the bind changed; same URL
       }
-      m.innerHTML='<span class="text-success">Panel restarting on '+(window.escapeHtml?escapeHtml(d.new_bind):d.new_bind)+':'+d.new_port+'… reconnecting shortly.</span>';
+      m.innerHTML='<span class="text-success">Panel restarting on '+(window.escapeHtml?escapeHtml(d.new_bind):d.new_bind)+':'+escapeHtml(d.new_port)+'… reconnecting shortly.</span>';
       setTimeout(function(){ location.href=target; }, 7000);   // give the service time to rebind
     })
     .catch(function(){
@@ -568,7 +568,7 @@ function renderUpdate(d){
     // No VERIFIED update ahead — show it as up to date. If a newer commit exists but is still
     // being verified (or failed a check), we deliberately DON'T surface a "being verified"
     // state; the update only appears once a commit has fully passed every check.
-    st.innerHTML='<span class="text-success"><i class="bi bi-check-circle"></i> You\'re up to date'+(d.current_sha?' ('+d.current_sha+')':'')+'.</span>';
+    st.innerHTML='<span class="text-success"><i class="bi bi-check-circle"></i> You\'re up to date'+(d.current_sha?' ('+escapeHtml(d.current_sha)+')':'')+'.</span>';
     btn.style.display='none'; changes.style.display='none';
   }
 }

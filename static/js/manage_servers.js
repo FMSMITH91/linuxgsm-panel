@@ -107,7 +107,7 @@ function watchInstall(id) {
           // Running (steps 1-8). Once the game files land (s.installed), the server IS installed
           // but still finishing config/start — show "Finishing setup…" rather than a premature
           // "Installed", with the bar tracking the remaining steps.
-          step.innerHTML = '<i class="bi bi-gear-fill"></i> ' + s.step_name;
+          step.innerHTML = '<i class="bi bi-gear-fill"></i> ' + escapeHtml(s.step_name);
           if (badge) {
             badge.className = 'badge bg-info text-dark';
             badge.textContent = s.installed ? 'Finishing setup…' : 'Installing…';
@@ -285,7 +285,7 @@ function refreshMsrvMetrics(){
           : '<span class="text-secondary">—</span>';
         var mapEl = document.getElementById('msrv-map-' + sid);
         if(mapEl){
-          if(s.up && s.map){ mapEl.innerHTML = '<i class="bi bi-geo-alt"></i> ' + s.map; mapEl.classList.remove('d-none'); }
+          if(s.up && s.map){ mapEl.innerHTML = '<i class="bi bi-geo-alt"></i> ' + escapeHtml(s.map);  // the map name comes from the queried GAME SERVER, not from us mapEl.classList.remove('d-none'); }
           else { mapEl.classList.add('d-none'); }
         }
       });

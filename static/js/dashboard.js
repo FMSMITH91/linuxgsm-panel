@@ -209,7 +209,7 @@ function refreshMetrics(){
           : '<span class="text-secondary">—</span>';
         var mapEl = document.getElementById('map-' + sid);
         if(mapEl){
-          if(s.up && s.map){ mapEl.innerHTML = '<i class="bi bi-geo-alt"></i> ' + s.map; mapEl.classList.remove('d-none'); }
+          if(s.up && s.map){ mapEl.innerHTML = '<i class="bi bi-geo-alt"></i> ' + escapeHtml(s.map);  // the map name comes from the queried GAME SERVER, not from us mapEl.classList.remove('d-none'); }
           else { mapEl.classList.add('d-none'); }
         }
       });
