@@ -203,7 +203,9 @@ for _p in sorted((ROOT / "static" / "js").glob("*.js")):
     _src = _p.read_text(encoding="utf-8")
     for _m in _SINK.finditer(_src):
         _expr = _js_expr_at(_src, _m.end())
-        _bare = re.sub(r"'(?:[^'\\]|\\.)*'|\"(?:[^\"\\]|\\.)*\"|`(?:[^`\\]|\\.)*`", "", _expr)
+        # Drop comments first: a trailing "// nosemgrep" would otherwise read as an interpolation.
+        _expr_nc = re.sub(r"//[^\n]*|/\*.*?\*/", "", _expr, flags=re.S)
+        _bare = re.sub(r"'(?:[^'\\]|\\.)*'|\"(?:[^\"\\]|\\.)*\"|`(?:[^`\\]|\\.)*`", "", _expr_nc)
         for _fn in _ESCAPERS:
             _bare = re.sub(r"\b%s\s*\((?:[^()]|\([^()]*\))*\)" % _fn, "", _bare)
         _dyn = sorted(set(re.findall(r"\+\s*([A-Za-z_$][\w$.]*)", _bare)

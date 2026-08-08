@@ -165,7 +165,7 @@ window.confirmDialog = function(opts){
   ov.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,.6);z-index:11050;display:flex;align-items:center;justify-content:center;padding:1rem;';
   // nosemgrep - static markup; every interpolation is escapeHtml'd, and opts.body is documented
   // as trusted markup (both callers escape their one dynamic value; a test now enforces that).
-  ov.innerHTML = '<div class="card" style="max-width:480px;width:100%;">'
+  ov.innerHTML = '<div class="card" style="max-width:480px;width:100%;">'  // nosemgrep
     + '<div class="card-header"><i class="bi bi-' + escapeHtml(opts.icon || 'question-circle') + '"></i> ' + escapeHtml(opts.title || 'Confirm') + '</div>'
     + '<div class="card-body">'
     + '<p class="mb-3" data-cd-body style="white-space:pre-line;">' + (opts.body || '') + '</p>'
@@ -239,17 +239,17 @@ window.refreshSection = function(sel, afterName){
       var fresh = doc.querySelector(sel), cur = document.querySelector(sel);
       // nosemgrep - a fragment of THIS panel's own server-rendered page (Jinja autoescapes),
       // re-parsed same-origin to refresh one region in place.
-      if (fresh && cur) cur.innerHTML = fresh.innerHTML;
+      if (fresh && cur) cur.innerHTML = fresh.innerHTML;  // nosemgrep
       // nosemgrep - the delegated dispatcher this whole UI is built on: afterName comes from a
       // data- attribute in our own template, and the typeof guard is the contract.
-      if (afterName && typeof window[afterName] === 'function') { try { window[afterName](); } catch(e){} }
+      if (afterName && typeof window[afterName] === 'function') { try { window[afterName](); } catch(e){} }  // nosemgrep
     }).catch(function(){});
 };
 function _submitAjaxForm(form){
   var btn = form.querySelector('[type="submit"]'), orig = btn ? btn.innerHTML : '';
   // nosemgrep - a static spinner in, and the button's own saved markup back out on restore.
   if (btn){ btn.disabled = true; btn.innerHTML = '<span class="spinner-border spinner-border-sm"></span>'; }
-  var restore = function(){ if (btn){ btn.disabled = false; btn.innerHTML = orig; } };
+  var restore = function(){ if (btn){ btn.disabled = false; btn.innerHTML = orig; } };  // nosemgrep
   fetch(form.action || location.href,
         { method: (form.getAttribute('method') || 'POST').toUpperCase(), body: new FormData(form) })
     .then(function(r){
