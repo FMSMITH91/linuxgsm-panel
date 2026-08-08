@@ -19,6 +19,7 @@ SAFETY: refuses to run if a real database already exists, and removes what it cr
 import argparse
 import json
 import os
+import secrets
 import statistics
 import sys
 import time
@@ -45,7 +46,6 @@ import system_ops as so                                    # noqa: E402
 so._check_sudo = lambda force=False: False                 # never probe real sudo (pam_faillock)
 
 import app as appmod                                       # noqa: E402
-from app import create_app                                 # noqa: E402
 from models import db, User, Group, RemoteServer, GameServer, ServerTag, SetupState  # noqa: E402
 import auth                                                # noqa: E402
 
@@ -74,7 +74,7 @@ def build_app():
     excludes tests/** ("test fixtures legitimately ... disable CSRF ... not shipped app code");
     this file is a harness that happens to live in tools/, so it says so at the line instead.
     """
-    a = create_app()
+    a = appmod.create_app()
     a.config["WTF_CSRF_ENABLED"] = False   # nosemgrep - benchmark harness, never served
     a.config["SESSION_PROTECTION"] = None
     a.config["SESSION_COOKIE_SECURE"] = False
@@ -153,9 +153,12 @@ def seed(app, hosts, per_host, tags=3, groups=5, users=100):
             db.session.add(grp)
             restricted.groups.append(grp)
         db.session.add(restricted)
-        # ...and a crowd of plain accounts, so the user-management page has rows to render.
+        # ...and a crowd of plain accounts, so the user-management page has rows to render. They
+        # never log in; one throwaway hash is computed once and shared, because bcrypt per account
+        # would dominate the seeding this script exists to keep out of its own measurements.
+        filler_hash = auth.hash_password(secrets.token_hex(16))
         db.session.add_all([
-            User(username="filler%d" % i, password_hash="x", display_name="Filler %d" % i,
+            User(username="filler%d" % i, password_hash=filler_hash, display_name="Filler %d" % i,
                  is_superadmin=False, is_active=True) for i in range(users)])
         db.session.commit()
         return admin.id, first_gs, restricted.id
@@ -270,19 +273,17 @@ def run_size(total_servers, hosts, iterations, paths):
 def cleanup():
     if _CFG_BACKUP is not None:
         CONFIG_FILE.write_bytes(_CFG_BACKUP)
-    for p in (DB_PATH, SECRET_FILE, CRED_KEY_FILE, CONFIG_FILE):
-        if p not in _PREEXISTING and p.exists():
-            try:
-                p.unlink()
-            except OSError:
-                pass
     # create_app() also drops a startup backup next to the DB.
-    for extra in (DATA_DIR / "panel.db-wal", DATA_DIR / "panel.db-shm", DATA_DIR / "panel.db.backup"):
-        if extra.exists():
-            try:
-                extra.unlink()
-            except OSError:
-                pass
+    leftovers = (DATA_DIR / "panel.db-wal", DATA_DIR / "panel.db-shm", DATA_DIR / "panel.db.backup")
+    for p in (DB_PATH, SECRET_FILE, CRED_KEY_FILE, CONFIG_FILE) + leftovers:
+        if p in _PREEXISTING or not p.exists():
+            continue
+        try:
+            p.unlink()
+        except OSError as exc:
+            # Not fatal, but not silent either: a leftover DB makes the NEXT run refuse to start,
+            # and hunting that is worse than one line of output now.
+            print("warning: could not remove %s (%s)" % (p, exc), file=sys.stderr)
 
 
 PATHS = [
