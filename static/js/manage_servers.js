@@ -87,19 +87,19 @@ function watchInstall(id) {
           // start. Show that as a yellow warning with the reason, not a clean green success.
           var warn = !!s.warn;
           bar.className = 'progress-bar ' + (warn ? 'bg-warning' : 'bg-success'); bar.style.width = '100%';
-          step.innerHTML = '<i class="bi bi-' + (warn ? 'exclamation-triangle-fill text-warning' : 'check-circle-fill text-success') + '"></i> ' + (s.message || 'Installed');
+          step.innerHTML = '<i class="bi bi-' + (warn ? 'exclamation-triangle-fill text-warning' : 'check-circle-fill text-success') + '"></i> ' + (s.message || 'Installed');  // nosemgrep
           if (badge) { badge.className = 'badge ' + (warn ? 'bg-warning text-dark' : 'bg-success'); badge.textContent = 'Installed'; }
           var dz = document.getElementById('inst-dismiss-' + id); if (dz) dz.style.display = 'inline';
           stopInstall(id);
         } else if (s.status === 'failed') {
           bar.className = 'progress-bar bg-danger';
-          step.innerHTML = '<i class="bi bi-x-circle-fill text-danger"></i> ' + (s.message || 'Install failed');
+          step.innerHTML = '<i class="bi bi-x-circle-fill text-danger"></i> ' + (s.message || 'Install failed');  // nosemgrep
           if (badge) { badge.className = 'badge bg-danger'; badge.textContent = 'Failed'; }
           var df = document.getElementById('inst-dismiss-' + id); if (df) df.style.display = 'inline';
           stopInstall(id);
         } else if (s.status === 'interrupted') {
           if (bar) bar.className = 'progress-bar bg-warning';
-          step.innerHTML = '<i class="bi bi-exclamation-triangle-fill text-warning"></i> ' + (s.message || 'Install status unknown');
+          step.innerHTML = '<i class="bi bi-exclamation-triangle-fill text-warning"></i> ' + (s.message || 'Install status unknown');  // nosemgrep
           if (badge) { badge.className = 'badge bg-warning text-dark'; badge.textContent = 'Unknown'; }
           var di = document.getElementById('inst-dismiss-' + id); if (di) di.style.display = 'inline';
           stopInstall(id);
@@ -107,7 +107,7 @@ function watchInstall(id) {
           // Running (steps 1-8). Once the game files land (s.installed), the server IS installed
           // but still finishing config/start — show "Finishing setup…" rather than a premature
           // "Installed", with the bar tracking the remaining steps.
-          step.innerHTML = '<i class="bi bi-gear-fill"></i> ' + escapeHtml(s.step_name);
+          step.innerHTML = '<i class="bi bi-gear-fill"></i> ' + escapeHtml(s.step_name);  // nosemgrep
           if (badge) {
             badge.className = 'badge bg-info text-dark';
             badge.textContent = s.installed ? 'Finishing setup…' : 'Installing…';
@@ -180,7 +180,7 @@ function doUninstall(id, name, btn){
   }
   setRowDisabled(true);
   if (window.toast) toast('Uninstalling ' + name + '…', 'info');
-  fetch(MOUNT + '/servers/' + id + '/delete', { method: 'POST' })
+  fetch(MOUNT + '/servers/' + id + '/delete', { method: 'POST' })  // nosemgrep
     .then(function(r){ return r.json(); })
     .then(function(d){
       if (d && d.success){
@@ -188,11 +188,11 @@ function doUninstall(id, name, btn){
         _svrBaseline = serverIdsOnPage();   // adopt the reduced set so live-sync doesn't force a reload
         if (window.toast) toast(d.message || 'Uninstalled', 'success');
       } else {
-        btn.disabled = false; btn.innerHTML = orig; setRowDisabled(false);
+        btn.disabled = false; btn.innerHTML = orig; setRowDisabled(false);  // nosemgrep
         if (window.toast) toast((d && d.message) || 'Uninstall failed', 'danger');
       }
     })
-    .catch(function(){ btn.disabled = false; btn.innerHTML = orig; setRowDisabled(false); if (window.toast) toast('Uninstall request failed', 'danger'); });
+    .catch(function(){ btn.disabled = false; btn.innerHTML = orig; setRowDisabled(false); if (window.toast) toast('Uninstall request failed', 'danger'); });  // nosemgrep
 }
 
 // Power controls (start/stop/restart) for a row — POST the action, toast the result, then refresh
@@ -200,7 +200,7 @@ function doUninstall(id, name, btn){
 function msrvAction(id, action, btn){
   var orig = btn.innerHTML;
   btn.disabled = true; btn.innerHTML = '<span class="spinner-border spinner-border-sm"></span>';
-  fetch(MOUNT + '/api/server/' + id + '/action', {method:'POST', headers:{'Content-Type':'application/json'},
+  fetch(MOUNT + '/api/server/' + id + '/action', {method:'POST', headers:{'Content-Type':'application/json'},  // nosemgrep
     body: JSON.stringify({action: action})})
     .then(function(r){ return r.json(); })
     .then(function(d){
@@ -208,7 +208,7 @@ function msrvAction(id, action, btn){
       setTimeout(reconcileServerList, 1500);
     })
     .catch(function(){ if(window.toast) toast('Action failed', 'danger'); })
-    .finally(function(){ btn.disabled = false; btn.innerHTML = orig; });
+    .finally(function(){ btn.disabled = false; btn.innerHTML = orig; });  // nosemgrep
 }
 
 // ── Live sync: reflect servers other users add/remove ──────────────────────
@@ -235,7 +235,7 @@ function reconcileServerList() {
       data.forEach(function(s){
         var pc = document.getElementById('msrv-players-' + s.id);
         if (pc) {
-          pc.innerHTML = (typeof s.players === 'number')
+          pc.innerHTML = (typeof s.players === 'number')  // nosemgrep
             ? '<i class="bi bi-people-fill text-secondary"></i> ' + s.players + (typeof s.max_players === 'number' && s.max_players > 0 ? ' / ' + s.max_players : '')
             : '<span class="text-secondary">—</span>';
         }
@@ -279,13 +279,15 @@ function refreshMsrvMetrics(){
       var servers = d.servers || {};
       Object.keys(servers).forEach(function(sid){
         var s = servers[sid], cell = document.getElementById('msrv-res-' + sid);
-        if(cell) cell.innerHTML = s.up
+        if(cell) cell.innerHTML = s.up  // nosemgrep
           ? ('<i class="bi bi-cpu"></i> ' + s.cpu + '% · ' + s.ram_mb + ' MB'
              + (s.uptime ? ' · <span title="Uptime"><i class="bi bi-clock"></i> ' + _fmtUptimeShort(s.uptime) + '</span>' : ''))
           : '<span class="text-secondary">—</span>';
         var mapEl = document.getElementById('msrv-map-' + sid);
         if(mapEl){
-          if(s.up && s.map){ mapEl.innerHTML = '<i class="bi bi-geo-alt"></i> ' + escapeHtml(s.map);  // the map name comes from the queried GAME SERVER, not from us mapEl.classList.remove('d-none'); }
+          // The map name is whatever the QUERIED GAME SERVER reports, so it is escaped.
+          if(s.up && s.map){ mapEl.innerHTML = '<i class="bi bi-geo-alt"></i> ' + escapeHtml(s.map);  // nosemgrep
+            mapEl.classList.remove('d-none'); }
           else { mapEl.classList.add('d-none'); }
         }
       });

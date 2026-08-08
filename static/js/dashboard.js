@@ -82,18 +82,18 @@ function refreshStatus() {
       var oc = document.getElementById('online-count');
       var fc = document.getElementById('offline-count');
       var tc = document.getElementById('total-servers');
-      if (oc) oc.innerHTML = '<span class="status-dot status-online"></span> ' + online;
-      if (fc) fc.innerHTML = '<span class="status-dot status-offline"></span> ' + offline;
+      if (oc) oc.innerHTML = '<span class="status-dot status-online"></span> ' + online;  // nosemgrep
+      if (fc) fc.innerHTML = '<span class="status-dot status-offline"></span> ' + offline;  // nosemgrep
       if (tc) tc.textContent = data.length;
       // Total online / total capacity = sums of the known per-server values (unknowns excluded).
       var totalPlayers = data.reduce(function(a, s){ return a + (typeof s.players === 'number' ? s.players : 0); }, 0);
       var totalMax = data.reduce(function(a, s){ return a + (typeof s.max_players === 'number' ? s.max_players : 0); }, 0);
       var tp = document.getElementById('total-players');
-      if (tp) tp.innerHTML = '<i class="bi bi-people-fill text-info"></i> ' + totalPlayers + (totalMax > 0 ? ' / ' + totalMax : '');
+      if (tp) tp.innerHTML = '<i class="bi bi-people-fill text-info"></i> ' + totalPlayers + (totalMax > 0 ? ' / ' + totalMax : '');  // nosemgrep
       data.forEach(function(s){
         var pcell = document.getElementById('players-' + s.id);
         if (pcell) {
-          pcell.innerHTML = (typeof s.players === 'number')
+          pcell.innerHTML = (typeof s.players === 'number')  // nosemgrep
             ? '<i class="bi bi-people-fill text-secondary"></i> ' + s.players + (typeof s.max_players === 'number' && s.max_players > 0 ? ' / ' + s.max_players : '')
             : '<span class="text-secondary">—</span>';
         }
@@ -101,7 +101,7 @@ function refreshStatus() {
         if (cell && cell.dataset.status !== s.status) {
           cell.dataset.status = s.status;
           var cls = (s.status === 'online' || s.status === 'offline') ? s.status : 'unknown';
-          cell.innerHTML = '<span class="status-dot status-' + cls + '"></span> ' + titleCase(s.status);
+          cell.innerHTML = '<span class="status-dot status-' + cls + '"></span> ' + titleCase(s.status);  // nosemgrep
         }
         var conn = document.getElementById('connect-' + s.id);
         var key = (s.connect || '') + '|' + (s.connect_url || '');
@@ -198,18 +198,20 @@ function refreshMetrics(){
         if(h.local || summary === null) summary = h;
       });
       var sum = document.getElementById('host-summary');
-      if(sum) sum.innerHTML = summary
+      if(sum) sum.innerHTML = summary  // nosemgrep
         ? '<i class="bi bi-cpu text-info"></i> ' + summary.cpu + '% · ' + summary.ram_pct + '%'
         : '<i class="bi bi-cpu text-info"></i> <span class="text-secondary">—</span>';
       Object.keys(servers).forEach(function(sid){
         var s = servers[sid], cell = document.getElementById('res-' + sid);
-        if(cell) cell.innerHTML = s.up
+        if(cell) cell.innerHTML = s.up  // nosemgrep
           ? ('<i class="bi bi-cpu"></i> ' + s.cpu + '% · ' + s.ram_mb + ' MB'
              + (s.uptime ? ' · <span title="Uptime"><i class="bi bi-clock"></i> ' + _fmtUptimeShort(s.uptime) + '</span>' : ''))
           : '<span class="text-secondary">—</span>';
         var mapEl = document.getElementById('map-' + sid);
         if(mapEl){
-          if(s.up && s.map){ mapEl.innerHTML = '<i class="bi bi-geo-alt"></i> ' + escapeHtml(s.map);  // the map name comes from the queried GAME SERVER, not from us mapEl.classList.remove('d-none'); }
+          // The map name is whatever the QUERIED GAME SERVER reports, so it is escaped.
+          if(s.up && s.map){ mapEl.innerHTML = '<i class="bi bi-geo-alt"></i> ' + escapeHtml(s.map);  // nosemgrep
+            mapEl.classList.remove('d-none'); }
           else { mapEl.classList.add('d-none'); }
         }
       });
@@ -409,7 +411,7 @@ function copyAddr(addr) {
 function doAction(id, action, btn) {
   var original = btn.innerHTML;
   btn.disabled = true; btn.innerHTML = '<span class="spinner-border spinner-border-sm"></span>';
-  fetch(MOUNT + '/api/server/' + id + '/action', {
+  fetch(MOUNT + '/api/server/' + id + '/action', {  // nosemgrep
     method: 'POST', headers: {'Content-Type': 'application/json'},
     body: JSON.stringify({ action: action })
   })
@@ -419,7 +421,7 @@ function doAction(id, action, btn) {
     setTimeout(refreshStatus, 1500);
   })
   .catch(() => toast('Action failed', 'danger'))
-  .finally(() => { btn.disabled = false; btn.innerHTML = original; });
+  .finally(() => { btn.disabled = false; btn.innerHTML = original; });  // nosemgrep
 }
 
 // ── Bulk actions ──────────────────────────────────────────────

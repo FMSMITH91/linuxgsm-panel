@@ -59,6 +59,25 @@ check(not _jinja_in_js,
       "templates: no Jinja statement/comment tags inside an inline <script> (they break JS parsers)",
       "; ".join(_jinja_in_js[:4]))
 
+# ── 0a. every static/js file must actually be JavaScript ──────────────────────────────────────
+# Nothing here ever parsed the JS. Python tests render the pages but never execute a line of it,
+# so a syntax error ships silently and the whole file is simply dead in the browser — which is
+# exactly what happened: a trailing comment appended to a one-line if() swallowed the rest of the
+# statement, dashboard.js stopped parsing, and 294 smoke checks stayed green.
+try:
+    import esprima
+except ImportError:
+    esprima = None
+    check(True, "static/js: JavaScript parses (SKIPPED — pip install esprima to enable)")
+if esprima:
+    _broken = []
+    for _p in sorted((ROOT / "static" / "js").glob("*.js")):
+        try:
+            esprima.parseScript(_p.read_text(encoding="utf-8"))
+        except Exception as _e:
+            _broken.append("%s: %s" % (_p.name, _e))
+    check(not _broken, "static/js: every file parses as JavaScript", "; ".join(_broken[:3]))
+
 # ── 0b. the server tab bar is the SAME set of destinations on both pages ──────────────────────
 # server_detail.html and server_files.html each render the tab strip, and server_files.html even
 # documents the rule ("same set as the server detail page"). It drifted anyway: History was on the

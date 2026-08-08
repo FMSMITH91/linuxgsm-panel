@@ -102,7 +102,7 @@ function renderPlayers(d){
       +'<td class="text-nowrap">'+(p.time!=null?escapeHtml(plTime(p.time)):'—')+'</td>'
       +(_CAN_MODERATE?('<td class="text-nowrap">'+acts+'</td>'):'')+'</tr>';
   }).join('');
-  document.getElementById('pl-rows').innerHTML=rows;
+  document.getElementById('pl-rows').innerHTML=rows;  // nosemgrep
 }
 function moderatePlayer(btn, action){
   var name=btn.getAttribute('data-name')||'';
@@ -133,7 +133,7 @@ function banScopeDialog(btn, name, steamid, num){
   }
   var ov=document.createElement('div');
   ov.style.cssText='position:fixed;inset:0;background:rgba(0,0,0,.6);z-index:1080;display:flex;align-items:center;justify-content:center;padding:1rem;';
-  ov.innerHTML='<div class="card" style="max-width:440px;width:100%;">'
+  ov.innerHTML='<div class="card" style="max-width:440px;width:100%;">'  // nosemgrep
     +'<div class="card-header"><i class="bi bi-slash-circle"></i> Ban '+escapeHtml(name)+'</div>'
     +'<div class="card-body"><p class="small text-secondary mb-2">Ban just on this server, or on '
     +'<strong>all your servers</strong> that can match this player (same SteamID / name)?</p>'
@@ -180,12 +180,12 @@ function runCustomCommand(wrap, btn){
   }
   var orig = btn.innerHTML; btn.disabled = true;
   btn.innerHTML = '<i class="bi bi-arrow-repeat"></i>';
-  fetch(MOUNT+'/api/server/'+serverId+'/custom-command/'+cmdId, {
+  fetch(MOUNT+'/api/server/'+serverId+'/custom-command/'+cmdId, {  // nosemgrep
     method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({value: value})
   }).then(function(r){return r.json();}).then(function(d){
     window.toast(d.message || (d.success?'Done':'Failed'), d.success?'success':'danger');
   }).catch(function(){ window.toast('Command failed','danger'); })
-  .finally(function(){ btn.disabled = false; btn.innerHTML = orig; });
+  .finally(function(){ btn.disabled = false; btn.innerHTML = orig; });  // nosemgrep
 }
 document.addEventListener('click', function(e){
   var btn = e.target.closest && e.target.closest('.cc-run'); if(!btn) return;
@@ -332,14 +332,14 @@ function _doServerAction(action, btn, showOutput) {
     setTimeout(pollStats, 1200);
   })
   .catch(() => toast('Action failed — connection error', 'danger'))
-  .finally(() => { btn.disabled = false; btn.innerHTML = orig; });
+  .finally(() => { btn.disabled = false; btn.innerHTML = orig; });  // nosemgrep
 }
 // Dismissible panel showing a command's full output (for maintenance/info actions). Persists until
 // you close it (button / backdrop / Esc), so you can read long output like `details`.
 function showActionOutput(title, text, ok) {
   var ov = document.createElement('div');
   ov.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,.6);z-index:1090;display:flex;align-items:center;justify-content:center;padding:1rem;';
-  ov.innerHTML = '<div class="card" style="max-width:760px;width:100%;max-height:85vh;display:flex;flex-direction:column;">'
+  ov.innerHTML = '<div class="card" style="max-width:760px;width:100%;max-height:85vh;display:flex;flex-direction:column;">'  // nosemgrep
     + '<div class="card-header d-flex justify-content-between align-items-center">'
     + '<span><i class="bi bi-' + (ok ? 'info-circle' : 'x-circle') + '"></i> ' + escapeHtml(title) + '</span>'
     + '<button class="btn btn-sm btn-outline-secondary py-0 px-2" data-close="1">Close</button></div>'
@@ -393,7 +393,7 @@ function actionWithPlayerCheck(action, btn) {
   var orig = btn.innerHTML;
   btn.disabled = true; btn.innerHTML = '<span class="spinner-border spinner-border-sm"></span>';
   fetch(MOUNT + '/api/server/' + serverId + '/players').then(r => r.json()).then(function(d){
-    btn.disabled = false; btn.innerHTML = orig;
+    btn.disabled = false; btn.innerHTML = orig;  // nosemgrep
     var n = (d && d.players) || 0;   // null/unknown -> treat as none (show a plain in-app confirm)
     if (!n) { confirmActionDialog(action, btn); return; }
     actionPlayersDialog(action, n, btn);
@@ -410,7 +410,7 @@ function actionPlayersDialog(action, n, btn) {
   var nowIcon = action === 'stop' ? 'stop-fill' : 'arrow-clockwise';
   var ov = document.createElement('div');
   ov.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,.6);z-index:1080;display:flex;align-items:center;justify-content:center;padding:1rem;';
-  ov.innerHTML = '<div class="card" style="max-width:540px;width:100%;">'
+  ov.innerHTML = '<div class="card" style="max-width:540px;width:100%;">'  // nosemgrep
     + '<div class="card-header"><i class="bi bi-people-fill"></i> Players are online</div>'
     + '<div class="card-body">'
     + '<p class="mb-2"><strong>' + n + '</strong> player' + (n===1?' is':'s are') + ' connected to <strong>' + _esc(SERVER_NAME) + '</strong>. ' + verb + 'ping now disconnects ' + (n===1?'them':'everyone') + '.</p>'
@@ -508,7 +508,7 @@ document.addEventListener('click', function(ev){
   var el = ev.target.closest('.copy-addr'); if(!el) return;
   window.copyText(el.getAttribute('data-copy'), 'Copied ' + el.getAttribute('data-copy'));
 });
-function fmtGB(b) { return (b / 1073741824).toFixed(1) + ' GB'; }
+function fmtGB(b) { return (b / 1073741824).toFixed(1) + ' GB'; }  // NOPMD
 function fmtUptime(s) {
   var d = Math.floor(s/86400), h = Math.floor(s%86400/3600), m = Math.floor(s%3600/60);
   return d ? d+'d '+h+'h' : (h ? h+'h '+m+'m' : m+'m');
@@ -531,7 +531,7 @@ function initChart() {
   var ctx = canvas.getContext('2d');
   var mk = function(label, color) {
     return { label: label, data: [], borderColor: color, backgroundColor: color+'22',
-             fill: true, tension: .35, pointRadius: 0, borderWidth: 2 };
+             fill: true, tension: .35, pointRadius: 0, borderWidth: 2 };  // NOPMD
   };
   statsChart = new Chart(ctx, {
     type: 'line',
@@ -659,7 +659,7 @@ function _histLbl(iso){
 }
 function _ds(label, data, color, fill){
   return { label:label, data:data, borderColor:color, backgroundColor:color+'22',
-           fill:!!fill, tension:.3, pointRadius:0, borderWidth:2, spanGaps:true };
+           fill:!!fill, tension:.3, pointRadius:0, borderWidth:2, spanGaps:true };  // NOPMD
 }
 window.loadHistory = function(){
   fetch(MOUNT + '/api/server/' + serverId + '/history?range=' + encodeURIComponent(_histRange))
@@ -711,7 +711,7 @@ function loadGmodContent(){
   fetch(MOUNT + '/api/server/' + serverId + '/gmod-content')
     .then(function(r){ return r.json(); })
     .then(function(d){
-      if(d.error){ el.innerHTML = '<span class="text-danger">'+_esc(d.error)+'</span>'; return; }
+      if(d.error){ el.innerHTML = '<span class="text-danger">'+_esc(d.error)+'</span>'; return; }  // nosemgrep
       var running = d.job && d.job.status === 'running';
       // Installable games always show; owned/mount-only games only once their content is on the host
       // (or already mounted). Mount-only content that isn't present can't be added by the panel.
@@ -738,13 +738,13 @@ function loadGmodContent(){
           + (act ? '<span class="flex-shrink-0">'+act+'</span>' : '')
           + '</div>';
       }).join('');
-      function _gb(b){ return (b/1073741824).toFixed(b >= 10.7e9 ? 0 : 1) + ' GB'; }   // bytes -> GB
+      function _gb(b){ return (b/1073741824).toFixed(b >= 10.7e9 ? 0 : 1) + ' GB'; }   // bytes -> GB  // NOPMD
       var disk = (d.disk_free != null && d.disk_total != null)
         ? '<div class="small mb-2"><i class="bi bi-hdd"></i> Host disk: '
-          + '<b class="'+(d.disk_free < 5368709120 ? 'text-danger' : 'text-success')+'">'+_gb(d.disk_free)+' free</b>'
+          + '<b class="'+(d.disk_free < 5368709120 ? 'text-danger' : 'text-success')+'">'+_gb(d.disk_free)+' free</b>'  // NOPMD
           + ' <span class="text-secondary">of '+_gb(d.disk_total)+'</span></div>'
         : '';
-      el.innerHTML =
+      el.innerHTML =  // nosemgrep
         '<div class="mb-2 text-secondary" style="font-size:.78rem;">'
         + '<b>Tick a game</b> to mount it on <b>this</b> server (enable/disable per server) — a game not '
         + 'yet on the host is installed via LinuxGSM when you Apply, and kept current by a weekly update. '

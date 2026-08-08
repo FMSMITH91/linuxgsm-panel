@@ -30,7 +30,9 @@ fi
 echo "== unit tests (pure logic; no network) =="
 "$PY" tests/unit_test.py
 
-echo "== template actions (every data-action button is wired) =="
+echo "== template actions (JS parses; every data-action button is wired) =="
+# esprima is optional locally (the test says so and skips); CI installs it so the JS parse
+# gate always runs there.
 "$PY" tests/template_actions_test.py
 
 echo "== smoke test (boots the app; routes must not 5xx) =="

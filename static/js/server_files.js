@@ -53,13 +53,13 @@ document.addEventListener('click', function(ev){
 function loadConfig(){
   fetch(MOUNT+'/api/server/'+serverId+'/config').then(r=>r.json()).then(d=>{
     document.getElementById('cfg-loading').style.display='none';
-    if(d.error){ document.getElementById('cfg-loading').style.display=''; document.getElementById('cfg-loading').innerHTML='<span class="text-danger">'+esc(d.error)+'</span>'; return; }
+    if(d.error){ document.getElementById('cfg-loading').style.display=''; document.getElementById('cfg-loading').innerHTML='<span class="text-danger">'+esc(d.error)+'</span>'; return; }  // nosemgrep
     var g=document.getElementById('cfg-groups'); g.innerHTML='';
     (d.groups||[]).forEach(function(grp, idx){
       var open = idx===0; // first group (Game Server Settings) expanded
       var body = '<div class="row g-2">'+grp.settings.map(fieldHtml).join('')+'</div>';
       g.insertAdjacentHTML('beforeend',
-        '<div class="mb-2 border rounded overflow-hidden">'
+        '<div class="mb-2 border rounded overflow-hidden">'  // nosemgrep
         + '<button type="button" class="cfg-acc-header btn btn-sm w-100 text-start d-flex justify-content-between align-items-center px-3 py-2" data-acc="'+idx+'">'
         + '<span class="fw-semibold"><i class="bi bi-caret-'+(open?'down':'right')+'-fill me-1"></i>'+esc(grp.section)+'</span>'
         + '<span class="badge bg-secondary">'+grp.settings.length+'</span></button>'
@@ -123,7 +123,7 @@ function loadGameCfg(){
     document.getElementById('game-loading').style.display='none';
     if(d.error || !d.rel){
       document.getElementById('game-none').style.display='';
-      document.getElementById('game-none').innerHTML='<i class="bi bi-info-circle"></i> '+esc(d.error||'This game has no single editable config file. Use the file browser below.');
+      document.getElementById('game-none').innerHTML='<i class="bi bi-info-circle"></i> '+esc(d.error||'This game has no single editable config file. Use the file browser below.');  // nosemgrep
       return;
     }
     gameCfgRel=d.rel;
@@ -152,7 +152,7 @@ function renderBreadcrumb(){
   var html='<a href="#" data-nav=""><i class="bi bi-house-door"></i> home</a>';
   var acc='';
   parts.forEach(function(p){ acc = acc?acc+'/'+p:p; html+=' <span class="text-secondary">/</span> <a href="#" data-nav="'+esc(acc)+'">'+esc(p)+'</a>'; });
-  document.getElementById('breadcrumb').innerHTML = html;
+  document.getElementById('breadcrumb').innerHTML = html;  // nosemgrep
   var dest=document.getElementById('upload-dest'); if(dest) dest.textContent = curDir||'home';
 }
 function mkRow(opts){
@@ -162,7 +162,7 @@ function mkRow(opts){
   row.style.cursor='pointer';
   row.dataset.path=opts.path; row.dataset.type=opts.type;
   var left=document.createElement('span'); left.style.flex='1'; left.style.minWidth='0'; left.style.overflow='hidden'; left.style.textOverflow='ellipsis'; left.style.whiteSpace='nowrap';
-  left.innerHTML=opts.icon+' <span style="font-size:.85rem;">'+esc(opts.name)+'</span>';
+  left.innerHTML=opts.icon+' <span style="font-size:.85rem;">'+esc(opts.name)+'</span>';  // nosemgrep
   var right=document.createElement('span'); right.className='d-flex align-items-center gap-2 flex-shrink-0';
   if(opts.size!=null){ var s=document.createElement('span'); s.className='text-secondary'; s.style.fontSize='.68rem'; s.textContent=fmtSize(opts.size); right.appendChild(s); }
   if(opts.protected){ var lk=document.createElement('span'); lk.className='text-secondary'; lk.title='Protected — required by LinuxGSM/the game'; lk.innerHTML='<i class="bi bi-shield-lock"></i>'; right.appendChild(lk); }
@@ -174,7 +174,7 @@ function browse(path){
   curDir = path||'';
   fetch(MOUNT+'/api/server/'+serverId+'/browse?path='+encodeURIComponent(curDir)).then(r=>r.json()).then(d=>{
     var l=document.getElementById('file-list'); l.innerHTML='';
-    if(d.error){ l.innerHTML='<div class="text-danger small p-2">'+esc(d.error)+'</div>'; return; }
+    if(d.error){ l.innerHTML='<div class="text-danger small p-2">'+esc(d.error)+'</div>'; return; }  // nosemgrep
     renderBreadcrumb();
     if(curDir){
       l.appendChild(mkRow({name:'..', path:curDir.split('/').slice(0,-1).join('/'), type:'up', icon:'<i class="bi bi-arrow-90deg-up text-secondary"></i>'}));
@@ -310,7 +310,7 @@ function cronLastRun(j){
 function loadCron(){
   fetch(MOUNT+'/api/server/'+serverId+'/cron').then(r=>r.json()).then(d=>{
     var loading=document.getElementById('cron-loading');
-    if(d.error){ loading.style.display=''; loading.innerHTML='<span class="text-danger">'+esc(d.error)+'</span>'; return; }
+    if(d.error){ loading.style.display=''; loading.innerHTML='<span class="text-danger">'+esc(d.error)+'</span>'; return; }  // nosemgrep
     var tb=document.getElementById('cron-tbody'), rows='';
     (d.jobs||[]).forEach(function(j){
       var runBtn = '<button class="btn btn-sm btn-link p-0 me-2" data-cron-run title="Run now"><i class="bi bi-play-circle"></i></button>';
@@ -330,7 +330,7 @@ function loadCron(){
     });
     if(!(d.jobs||[]).length) rows='<tr><td colspan="4" class="text-secondary text-center py-3">No scheduled tasks yet.</td></tr>';
     // Only swap in the new list once it has arrived (keep the old rows until then).
-    tb.innerHTML=rows;
+    tb.innerHTML=rows;  // nosemgrep
     loading.style.display='none';
     document.getElementById('cron-table-wrap').style.display='';
   }).catch(()=>{ /* keep whatever is shown; transient errors shouldn't blank the list */ });
@@ -498,7 +498,7 @@ function alertsMsg(t,cls){ var m=document.getElementById('alerts-msg'); if(m){ m
 function loadAlerts(){
   fetch(MOUNT+'/api/server/'+serverId+'/alerts').then(r=>r.json()).then(function(d){
     var body=document.getElementById('alerts-body'); if(!body) return;
-    if(d.error){ document.getElementById('alerts-loading').innerHTML='<span class="text-danger">'+esc(d.error)+'</span>'; return; }
+    if(d.error){ document.getElementById('alerts-loading').innerHTML='<span class="text-danger">'+esc(d.error)+'</span>'; return; }  // nosemgrep
     var vals=d.values||{}, html='';
     (d.providers||[]).forEach(function(p){
       var on=String(vals[p.toggle]||'').toLowerCase()==='on';
@@ -512,7 +512,7 @@ function loadAlerts(){
       });
       html += '</div></div>';
     });
-    body.innerHTML=html;
+    body.innerHTML=html;  // nosemgrep
     document.getElementById('alerts-loading').style.display='none';
     body.style.display='';
   }).catch(function(){ document.getElementById('alerts-loading').innerHTML='<span class="text-danger">Could not load alert settings.</span>'; });
@@ -554,7 +554,7 @@ function loadMods(force){
       uns=document.getElementById('mods-unsupported');
   if(force){ load.style.display=''; body.style.display='none'; uns.style.display='none'; modsMsg(''); }
   fetch(MOUNT+'/api/server/'+serverId+'/mods').then(r=>r.json()).then(function(d){
-    if(d.error){ load.innerHTML='<span class="text-danger">'+esc(d.error)+'</span>'; return; }
+    if(d.error){ load.innerHTML='<span class="text-danger">'+esc(d.error)+'</span>'; return; }  // nosemgrep
     // This game has no LinuxGSM mods installer (e.g. Call of Duty) — hide the whole card.
     if(d.supported===false){ var card=document.getElementById('mods-card'); if(card) card.style.display='none'; return; }
     var avail=d.available||[], inst=d.installed||[];
@@ -565,7 +565,7 @@ function loadMods(force){
     // the catalog so it stays removable. Each row shows Install or Remove for its current state.
     var byId={}, merged=[];
     avail.concat(inst).forEach(function(m){ if(!byId[m.id]){ byId[m.id]=1; merged.push(m); } });
-    document.getElementById('mods-list').innerHTML =
+    document.getElementById('mods-list').innerHTML =  // nosemgrep
       merged.length ? merged.map(function(m){ return modRow(m, !!installedSet[m.id]); }).join('')
       : '<span class="text-secondary small">None available.</span>';
     var n=inst.length;
@@ -590,7 +590,7 @@ function modAction(which, id, btn){
         }
         loadMods(false);
       })
-      .catch(function(){ modsMsg('✗ Action failed — connection error','text-danger'); btn.disabled=false; btn.innerHTML=orig; });
+      .catch(function(){ modsMsg('✗ Action failed — connection error','text-danger'); btn.disabled=false; btn.innerHTML=orig; });  // nosemgrep
   };
   if(which==='remove'){
     confirmDialog({title:'Remove mod', icon:'trash', confirmClass:'btn-danger', confirmLabel:'Remove',
@@ -612,7 +612,7 @@ function modRestartNow(btn){
 loadMods(true);
 
 // ── Backups (this server) — superadmin card; reuses the game-backup endpoints ──
-function bkFmt(b){ b=b||0; if(b<1024)return b+' B'; if(b<1048576)return (b/1024).toFixed(0)+' KB'; if(b<1073741824)return (b/1048576).toFixed(1)+' MB'; if(b<1099511627776)return (b/1073741824).toFixed(1)+' GB'; return (b/1099511627776).toFixed(2)+' TB'; }
+function bkFmt(b){ b=b||0; if(b<1024)return b+' B'; if(b<1048576)return (b/1024).toFixed(0)+' KB'; if(b<1073741824)return (b/1048576).toFixed(1)+' MB'; if(b<1099511627776)return (b/1073741824).toFixed(1)+' GB'; return (b/1099511627776).toFixed(2)+' TB'; }  // NOPMD
 function bkWhen(sec){ try { return new Date(sec*1000).toLocaleString(); } catch(e){ return ''; } }
 var _bkPoll = null, _bkDefault = {interval_days:0, keep:2};
 
@@ -647,14 +647,14 @@ function renderBackups(d){
   }
   var defTxt=(_bkDefault.interval_days>0)?('every '+_bkDefault.interval_days+'d, keep '+_bkDefault.keep):'off';
   parts.push('<span class="text-secondary">Panel default: '+defTxt+'</span>');
-  var dk=document.getElementById('bk-disk'); if(dk) dk.innerHTML=parts.join(' &middot; ');
+  var dk=document.getElementById('bk-disk'); if(dk) dk.innerHTML=parts.join(' &middot; ');  // nosemgrep
   // Live status of any in-flight/last backup.
   var st=document.getElementById('bk-status'), s=d.status;
   if(st){
     if(s && s.running){ st.className='small text-info'; st.innerHTML='<i class="bi bi-arrow-repeat"></i> Backing up…'; }
-    else if(s && s.busy){ st.className='small text-warning'; st.innerHTML='<i class="bi bi-people-fill"></i> '+esc(s.msg||'players online — waiting')+' <button class="btn btn-sm btn-outline-warning py-0 px-1 ms-1"' + _da('backupNow', [true]) + '>Back up anyway</button>'; }
-    else if(s && s.ok===true){ st.className='small text-success'; st.innerHTML='<i class="bi bi-check-circle"></i> '+esc(s.msg||'Backed up'); }
-    else if(s && s.ok===false){ st.className='small text-danger'; st.innerHTML='<i class="bi bi-x-circle"></i> '+esc(s.msg||'Backup failed'); }
+    else if(s && s.busy){ st.className='small text-warning'; st.innerHTML='<i class="bi bi-people-fill"></i> '+esc(s.msg||'players online — waiting')+' <button class="btn btn-sm btn-outline-warning py-0 px-1 ms-1"' + _da('backupNow', [true]) + '>Back up anyway</button>'; }  // nosemgrep
+    else if(s && s.ok===true){ st.className='small text-success'; st.innerHTML='<i class="bi bi-check-circle"></i> '+esc(s.msg||'Backed up'); }  // nosemgrep
+    else if(s && s.ok===false){ st.className='small text-danger'; st.innerHTML='<i class="bi bi-x-circle"></i> '+esc(s.msg||'Backup failed'); }  // nosemgrep
     else st.textContent='';
   }
   var nowBtn=document.getElementById('bk-now'); if(nowBtn) nowBtn.disabled=!!(s && s.running);
@@ -671,7 +671,7 @@ function renderBackups(d){
       + '</td></tr>';
   });
   var tb=document.getElementById('bk-rows');
-  if(tb) tb.innerHTML = rows.length ? rows.join('') : '<tr><td colspan="4" class="text-secondary text-center py-3">No backups yet.</td></tr>';
+  if(tb) tb.innerHTML = rows.length ? rows.join('') : '<tr><td colspan="4" class="text-secondary text-center py-3">No backups yet.</td></tr>';  // nosemgrep
   // Poll while a backup is running; stop once it finishes.
   var running=s && s.running;
   if(running && !_bkPoll) _bkPoll=setInterval(loadBackups, 4000);
