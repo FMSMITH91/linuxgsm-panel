@@ -870,9 +870,9 @@ function _enableAutoUpdates(){
     .then(function(r){return r.json();}).then(function(d){
       if(msg){
         msg.className='small';
-        msg.innerHTML = d.success
-          ? '<span class="text-success"><i class="bi bi-check-circle-fill"></i> '+(d.message||'Enabled.')+'</span>'
-          : '<span class="text-danger">'+(d.message||'Failed.')+'</span>';
+        msg.innerHTML = d.success  // nosemgrep
+          ? '<span class="text-success"><i class="bi bi-check-circle-fill"></i> '+escapeHtml(d.message||'Enabled.')+'</span>'
+          : '<span class="text-danger">'+escapeHtml(d.message||'Failed.')+'</span>';
       }
       loadAutoUpd();
     }).catch(function(){ if(msg) msg.innerHTML='<span class="text-danger">Request failed.</span>'; })
