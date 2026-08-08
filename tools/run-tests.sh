@@ -41,6 +41,9 @@ echo "== smoke test (boots the app; routes must not 5xx) =="
 echo "== rbac test (permissions/IDOR enforced server-side; self-seeds on an empty DB) =="
 "$PY" tests/rbac_test.py
 
+echo "== manage.py (the offline recovery CLI: lock-out guard, session revocation) =="
+"$PY" tests/manage_test.py
+
 if command -v shellcheck >/dev/null 2>&1; then
     echo "== shellcheck (shell scripts) =="
     shellcheck -S warning install.sh uninstall.sh tools/run-tests.sh reset-password.sh recover.sh

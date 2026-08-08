@@ -86,7 +86,7 @@ jobs:
         # --parallel-mode + combine: each suite is its own process, and smoke/rbac fork threads.
         # || true on the suites themselves — the gate job decides pass/fail, this one only measures.
         run: |
-          for suite in unit template_actions smoke rbac; do
+          for suite in unit template_actions smoke rbac manage; do
             rm -f data/panel.db data/panel.db-shm data/panel.db-wal data/panel.db.backup
             python -m coverage run --parallel-mode --source=. \
               --omit="./tests/*,./tools/*,./.venv/*" "tests/${suite}_test.py" >/dev/null 2>&1 || true
