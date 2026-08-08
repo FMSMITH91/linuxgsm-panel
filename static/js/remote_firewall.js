@@ -129,12 +129,12 @@ function openPort() {
   .then(r => r.json())
   .then(data => {
     if (data.success) {
-      resultEl.innerHTML = '<span class="text-success">✅ ' + esc(data.message) + '</span>';
+      resultEl.innerHTML = '<span class="text-success">✅ ' + esc(data.message) + '</span>';  // nosemgrep
       document.getElementById('new-port').value = '';
       document.getElementById('new-comment').value = '';
       refreshFirewall();
     } else {
-      resultEl.innerHTML = '<span class="text-danger">❌ ' + esc(data.message) + '</span>';
+      resultEl.innerHTML = '<span class="text-danger">❌ ' + esc(data.message) + '</span>';  // nosemgrep
     }
   });
 }

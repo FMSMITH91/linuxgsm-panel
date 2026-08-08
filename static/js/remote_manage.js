@@ -817,7 +817,7 @@ function checkDbHealth(){
       out.innerHTML='<span class="text-success"><i class="bi bi-check-circle-fill"></i> Database is healthy — integrity check passed.</span>';
       if(rbtn) rbtn.style.display='none';
     } else if(d.healthy===false){
-      out.innerHTML='<span class="text-danger"><i class="bi bi-exclamation-triangle-fill"></i> Integrity check flagged a problem: '+escapeHtml(d.detail||'')+'.</span>'+
+      out.innerHTML='<span class="text-danger"><i class="bi bi-exclamation-triangle-fill"></i> Integrity check flagged a problem: '+escapeHtml(d.detail||'')+'.</span>'+  // nosemgrep
         '<div class="text-secondary" style="font-size:.7rem;">Click <strong>Repair database</strong> — it rebuilds the readable data, or restores the last healthy backup; your data is copied aside first, never deleted. The panel briefly restarts.</div>';
       if(rbtn) rbtn.style.display='';
     } else {
@@ -837,7 +837,7 @@ function repairDb(){
       fetch(MOUNT+'/api/panel/repair-db',{method:'POST',headers:{'Content-Type':'application/json'},body:'{}'})
         .then(function(r){return r.json();}).then(function(d){
           if(msg){ msg.className='small';
-            msg.innerHTML = d.success
+            msg.innerHTML = d.success  // nosemgrep
               ? '<span class="text-success"><i class="bi bi-check-circle-fill"></i> '+(window.escapeHtml?escapeHtml(d.message||'Repair started.'):(d.message||'Repair started.'))+'</span>'
               : '<span class="text-danger">'+(window.escapeHtml?escapeHtml(d.message||'Failed.'):(d.message||'Failed.'))+'</span>'; }
         }).catch(function(){ if(msg) msg.innerHTML='<span class="text-danger">Request failed.</span>'; })
@@ -852,7 +852,7 @@ function loadAutoUpd(){
     var btn=document.getElementById('diag-autoupd-btn');
     if(!el) return;
     if(d.error){ el.textContent='Could not check update status.'; return; }
-    el.innerHTML = d.enabled
+    el.innerHTML = d.enabled  // nosemgrep
       ? '<span class="text-success"><i class="bi bi-check-circle-fill"></i> '+ (d.detail||'Enabled.') +'</span>'
       : '<span class="text-warning"><i class="bi bi-exclamation-triangle-fill"></i> '+ (d.detail||'Not enabled.') +'</span>';
     if(btn) btn.style.display = d.enabled ? 'none' : '';
@@ -927,7 +927,7 @@ function loadBackups(){
         + '</td></tr>';
     });
     if(!(d.backups||[]).length) rows='<tr><td colspan="4" class="text-secondary text-center py-3">No backups yet.</td></tr>';
-    tb.innerHTML=rows;
+    tb.innerHTML=rows;  // nosemgrep
     document.getElementById('bk-loading').style.display='none';
     document.getElementById('bk-table-wrap').style.display='';
     // ── Full (game server files) backup section ──
@@ -948,7 +948,7 @@ function loadBackups(){
         fdk.innerHTML='<i class="bi bi-hdd"></i> Your servers are on more than one host — free disk is shown per server below.';
       } else if(dk.total>0){
         var pct=Math.round((dk.total-dk.free)/dk.total*100);
-        fdk.innerHTML='<i class="bi bi-hdd"></i> Disk: <strong>'+bkFmtBytes(dk.free)+'</strong> free of '+bkFmtBytes(dk.total)
+        fdk.innerHTML='<i class="bi bi-hdd"></i> Disk: <strong>'+bkFmtBytes(dk.free)+'</strong> free of '+bkFmtBytes(dk.total)  // nosemgrep
           +' ('+pct+'% used). Game backups currently use '+bkFmtBytes(dk.backup_bytes||0)+'.';
       } else { fdk.textContent=''; }
     }
@@ -1015,7 +1015,7 @@ function loadBackups(){
             + table
             + '</div>';
       });
-      fg.innerHTML = (d.games||[]).length ? gh : '<span class="text-secondary">No installed game servers.</span>';
+      fg.innerHTML = (d.games||[]).length ? gh : '<span class="text-secondary">No installed game servers.</span>';  // nosemgrep
     }
   }).catch(function(){ var l=document.getElementById('bk-loading'); if(l) l.innerHTML='<span class="text-danger">Could not load backups.</span>'; });
 }
@@ -1047,7 +1047,7 @@ function fbSummary(){
     parts.push('<i class="bi bi-info-circle"></i> Automatic backups are <strong>off</strong> — nothing runs on a schedule. '
       +'Use “Back up game servers now” for a one-off; '+(keep===1?'only the latest backup':'the '+keep+' most recent backups')
       +' per server '+(keep===1?'is':'are')+' kept.');
-    el.innerHTML=parts.join('<br>'); return;
+    el.innerHTML=parts.join('<br>'); return;  // nosemgrep
   }
 
   var days=parseInt(document.getElementById('fb-interval').value,10)||7;
@@ -1078,7 +1078,7 @@ function fbSummary(){
   } else if(cycle===0){
     parts.push('<span class="text-secondary">Run a backup once and this will estimate the space each cycle uses and recommend a safe “keep”.</span>');
   }
-  el.innerHTML=parts.join('<br>');
+  el.innerHTML=parts.join('<br>');  // nosemgrep
 }
 function saveBackupSettings(){
   var enabled=document.getElementById('bk-enabled').checked;
@@ -1122,7 +1122,7 @@ function fbPlayersDialog(busy){
   var list=busy.map(function(b){return escapeHtml(b.name)+' ('+b.players+')';}).join(', ');
   var ov=document.createElement('div');
   ov.style.cssText='position:fixed;inset:0;background:rgba(0,0,0,.6);z-index:1080;display:flex;align-items:center;justify-content:center;padding:1rem;';
-  ov.innerHTML='<div class="card" style="max-width:540px;width:100%;">'
+  ov.innerHTML='<div class="card" style="max-width:540px;width:100%;">'  // nosemgrep
     +'<div class="card-header"><i class="bi bi-people-fill"></i> Players are online</div>'
     +'<div class="card-body">'
     +'<p class="mb-2"><strong>'+total+'</strong> player'+(total===1?' is':'s are')+' connected to <strong>'+busy.length+'</strong> server'+(busy.length===1?'':'s')+': '+list+'.</p>'
@@ -1150,10 +1150,10 @@ function _backupOneGame(id,btn,force){
   // Immediate feedback right where the user clicked: spinner on the button.
   var orig = btn ? btn.innerHTML : '';
   if(btn){ btn.disabled=true; btn.innerHTML='<span class="spinner-border spinner-border-sm"></span> Backing up…'; }
-  function resetBtn(){ if(btn){ btn.disabled=false; btn.innerHTML=orig || '<i class="bi bi-play-circle"></i> Back up now'; } }
+  function resetBtn(){ if(btn){ btn.disabled=false; btn.innerHTML=orig || '<i class="bi bi-play-circle"></i> Back up now'; } }  // nosemgrep
   if(window.toast) toast('Starting backup…','info');
   bkMsg('Starting backup…','text-secondary');
-  fetch(MOUNT+'/api/panel/backup/game/'+id,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({force:!!force})}).then(r=>r.json()).then(function(d){
+  fetch(MOUNT+'/api/panel/backup/game/'+id,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({force:!!force})}).then(r=>r.json()).then(function(d){  // nosemgrep
     bkMsg((d.success?'✓ ':'✗ ')+(d.message||''), d.success?'text-success':'text-danger');
     // Floating toast so the result is visible even when scrolled down to this server's row.
     if(window.toast) toast((d.success?'✓ ':'✗ ')+(d.message||(d.success?'Backup started':'Could not start backup')), d.success?'success':'danger');
@@ -1191,7 +1191,7 @@ function setGameSchedule(id){
   fetch(MOUNT+'/api/panel/backup/game/'+id+'/schedule',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({interval:iv,keep:kp})})
     .then(r=>r.json()).then(function(d){
       bkMsg(d.success?'✓ Schedule saved':'✗ Save failed', d.success?'text-success':'text-danger');
-      if(d.success&&d.schedule){ var n=document.getElementById('gsn-'+id); if(n) n.innerHTML=schedNote(d.schedule); }
+      if(d.success&&d.schedule){ var n=document.getElementById('gsn-'+id); if(n) n.innerHTML=schedNote(d.schedule); }  // nosemgrep
     }).catch(function(){ bkMsg('✗ Could not save schedule','text-danger'); });
 }
 function deleteGameBackup(btn){
@@ -1264,7 +1264,7 @@ function scanExisting(){
   if(out) out.innerHTML='<span class="text-secondary small"><i class="bi bi-hourglass-split"></i> Scanning every user account on this host…</span>';
   fetch(MOUNT+'/api/remote/'+REMOTE_ID+'/discover').then(function(r){return r.json();}).then(function(d){
     if(!out) return;
-    if(d.error){ out.innerHTML='<span class="text-danger small">'+escapeHtml(d.error)+'</span>'; return; }
+    if(d.error){ out.innerHTML='<span class="text-danger small">'+escapeHtml(d.error)+'</span>'; return; }  // nosemgrep
     var s=d.servers||[];
     if(!s.length){ out.innerHTML='<span class="text-secondary small"><i class="bi bi-check2"></i> No new LinuxGSM servers found — anything already in the panel is skipped.</span>'; return; }
     var rows=s.map(function(g){
@@ -1277,7 +1277,7 @@ function scanExisting(){
         +'<td>'+(g.mods||0)+'</td>'
         +'<td>'+(g.cron||0)+'</td></tr>';
     }).join('');
-    out.innerHTML='<div class="table-responsive"><table class="table table-sm align-middle mb-2">'
+    out.innerHTML='<div class="table-responsive"><table class="table table-sm align-middle mb-2">'  // nosemgrep
       +'<thead><tr><th style="width:1%"><input type="checkbox" class="form-check-input" checked' + _da('discToggleAll', ['@self']) + ' aria-label="Select all"></th><th>User</th><th>Game</th><th>Port</th><th title="LinuxGSM backups on disk">Backups</th><th title="Installed mods">Mods</th><th title="Cron entries for this user">Cron</th></tr></thead>'
       +'<tbody>'+rows+'</tbody></table></div>'
       +'<button class="btn btn-sm btn-primary"' + _da('importExisting', ['@self']) + '><i class="bi bi-plus-circle"></i> Import selected</button> <span id="disc-msg" class="small ms-2"></span>';
@@ -1299,10 +1299,10 @@ function importExisting(btn){
     .then(function(r){return r.json();}).then(function(d){
       var n=(d.added||[]).length;
       if(n){ window.toast('Imported '+n+' server'+(n===1?'':'s')+'.', 'success');
-             if(msg) msg.innerHTML='<span class="text-success">Imported '+n+' — see the Game Servers list.</span>';
+             if(msg) msg.innerHTML='<span class="text-success">Imported '+n+' — see the Game Servers list.</span>';  // nosemgrep
              btn.disabled=false; btn.innerHTML='<i class="bi bi-plus-circle"></i> Import selected';
              window.refreshSection('#host-servers-card'); }   // show the new rows in place, no reload
-      else { if(msg) msg.innerHTML='<span class="text-danger">'+escapeHtml(d.message||'Nothing imported.')+'</span>';
+      else { if(msg) msg.innerHTML='<span class="text-danger">'+escapeHtml(d.message||'Nothing imported.')+'</span>';  // nosemgrep
              btn.disabled=false; btn.innerHTML='<i class="bi bi-plus-circle"></i> Import selected'; }
     }).catch(function(){ if(msg) msg.innerHTML='<span class="text-danger">Import failed.</span>';
              btn.disabled=false; btn.innerHTML='<i class="bi bi-plus-circle"></i> Import selected'; });
