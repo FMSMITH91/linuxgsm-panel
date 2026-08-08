@@ -1396,11 +1396,13 @@ try:
             # force-update"). That takes the server down without telling the panel, so the monitor
             # alerted "went offline unexpectedly" every single night at the same minute.
             _saved_maint = _am._lgsm_maintenance_running
+            _key_notify = lambda key, title, body="": _rec.append(key)          # noqa: E731
+            _probes = []
             try:
                 _reset_mon()
                 _am._monitor_state["servers"][_mon_id] = True
                 _am._remote_listening_ports = lambda r: set()
-                _am._lgsm_maintenance_running = lambda remote, gs: True
+                _am._lgsm_maintenance_running = lambda remote, gs: _probes.append(gs.id) or True
                 _rec.clear(); _am._monitor_pass()
                 check("maintenance: a scheduled update does not alert as a crash",
                       "server_down" not in _rec, str(_rec))
@@ -1412,12 +1414,29 @@ try:
                 _am.notifications.notify = lambda k, t, b="": (_rec.append(k), _bodies.append((k, b)))[0]
                 _am._remote_listening_ports = lambda r: {27100}
                 _am._monitor_pass()
+                _am.notifications.notify = _key_notify
                 check("maintenance: coming back from an update is silent too",
                       not [b for k, b in _bodies if k == "server_up" and "mon-srv" in b],
                       str([b for k, b in _bodies if k == "server_up"])[:120])
-                _am.notifications.notify = lambda key, title, body="": _rec.append(key)
+                # The probe is an SSH round trip: it must fire ONLY on a down transition, never on a
+                # baseline pass, a steady-state pass, or a recovery — otherwise every monitor tick
+                # pays for it once per server.
+                _reset_mon()
+                _probes.clear()
+                _am._remote_listening_ports = lambda r: {27100}
+                _am._monitor_pass(); _am._monitor_pass()     # baseline, then steady-state up
+                check("maintenance: no SSH probe unless a server actually went down", not _probes,
+                      "probed %s" % _probes)
+                # A stop the PANEL issued is already known locally — that must not cost a probe either.
+                _am._remote_listening_ports = lambda r: set()
+                _am._mark_expected_offline(_mon_id)
+                _probes.clear(); _rec.clear(); _am._monitor_pass()
+                check("maintenance: a panel-issued stop is handled locally, with no probe",
+                      _mon_id not in _probes and "server_down" not in _rec,
+                      "probed %s / fired %s" % (_probes, _rec))
                 # ...and a REAL crash still alerts: same down transition, no maintenance running.
                 _reset_mon()
+                _am._expected_offline.pop(_mon_id, None)
                 _am._monitor_state["servers"][_mon_id] = True
                 _am._remote_listening_ports = lambda r: set()
                 _am._lgsm_maintenance_running = lambda remote, gs: False
@@ -1425,6 +1444,8 @@ try:
                 check("maintenance: a genuine crash still alerts", "server_down" in _rec, str(_rec))
             finally:
                 _am._lgsm_maintenance_running = _saved_maint
+                _am.notifications.notify = _key_notify
+                _am._expected_offline.pop(_mon_id, None)
 
             # ── A tag with notify=False silences that server's alerts ──────────────────────────
             # This is the only user-visible behaviour tags add beyond decoration, and it is wired
