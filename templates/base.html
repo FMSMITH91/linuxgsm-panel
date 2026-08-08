@@ -297,10 +297,12 @@
 
 <script nonce="{{ csp_nonce }}" src="{{ url_for('static', filename='vendor/bootstrap/bootstrap.bundle.min.js') }}"></script>
 <script nonce="{{ csp_nonce }}" src="{{ url_for('static', filename='vendor/socketio/socket.io.min.js') }}"></script>
+{# The only two values in panel.js the SERVER has to fill in. Kept inline so the 38KB of behaviour
+   below can be a cacheable static file; assigned before it loads, which is the order the code there
+   already assumes. This note sits outside the script element on purpose: Jinja strips it either
+   way, but static analysers read the TEMPLATE, and a Jinja comment is not valid JavaScript —
+   CodeQL raised two js/syntax-error alerts when it lived inside. #}
 <script nonce="{{ csp_nonce }}">
-{# The only two values in panel.js the SERVER has to fill in. Kept inline so the 38KB of
-   behaviour below can be a cacheable static file; assigned before it loads, which is the
-   order the code there already assumes. #}
 // Mount prefix (e.g. "/lgsm" when served behind Tailscale Serve). Every client-side
 // fetch()/socket.io URL must include it, or the request hits the site root — a
 // different app. Server-rendered links use url_for and already include it.

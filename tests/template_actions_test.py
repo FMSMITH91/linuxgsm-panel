@@ -41,6 +41,24 @@ STATIC_JS = ROOT / "static" / "js"
 srcs = {p.name: p.read_text(encoding="utf-8") for p in sorted(TEMPLATES.glob("*.html"))}
 srcs.update({p.name: p.read_text(encoding="utf-8") for p in sorted(STATIC_JS.glob("*.js"))})
 
+# ── 0. inline <script> blocks must still be JavaScript ────────────────────────────────────────
+# Jinja strips {# … #} before the browser ever sees it, so a comment inside a <script> renders
+# fine and looks harmless. Static analysers read the TEMPLATE, though, and to a JS parser "{#" is
+# a private-field sigil: CodeQL raised two js/syntax-error alerts on exactly this. A whole file
+# that fails to parse is a file nothing is checking, which is the real cost.
+_INLINE_SCRIPT = re.compile(r"<script\b(?![^>]*\bsrc=)[^>]*>(.*?)</script>", re.S)
+_jinja_in_js = []
+for _name, _src in srcs.items():
+    if not _name.endswith(".html"):
+        continue
+    for _m in _INLINE_SCRIPT.finditer(_src):
+        for _c in re.finditer(r"\{#.*?#\}|\{%.*?%\}", _m.group(1), re.S):
+            _line = _src[:_m.start(1) + _c.start()].count("\n") + 1
+            _jinja_in_js.append("%s:%d %s" % (_name, _line, " ".join(_c.group(0).split())[:48]))
+check(not _jinja_in_js,
+      "templates: no Jinja statement/comment tags inside an inline <script> (they break JS parsers)",
+      "; ".join(_jinja_in_js[:4]))
+
 # ── 1. gather every global function definition: name -> (params, body) ──
 _DEFS = [
     re.compile(r"function\s+([A-Za-z_$][\w$]*)\s*\(([^)]*)\)\s*\{"),
