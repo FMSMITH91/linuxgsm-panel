@@ -3033,6 +3033,101 @@ try:
 finally:
     _mapp.run_command = _orig_rc
 
+# ── API tokens: only a HASH is ever stored ────────────────────────────────────────────────────
+# Bearer tokens authenticate scripts as their owner and inherit that user's full RBAC, and app.py
+# exempts Bearer requests from CSRF — yet nothing exercised any of it. These are the pure half; the
+# lookup half (a disabled owner, a replayed hash) is asserted against the real DB in smoke_test.
+import hashlib as _hl
+from models import User as _U, RemoteServer as _RS
+
+_tu = _U(username="tok", password_hash="x")
+_plain = _tu.generate_api_token()
+check("api token: the minted token is handed back in plaintext, once",
+      isinstance(_plain, str) and _plain.startswith("lgsm_") and len(_plain) >= 32, _plain[:12])
+check("api token: the plaintext is NOT what gets stored", _tu.api_token != _plain)
+check("api token: what IS stored is its sha256 — a leaked DB yields no usable token",
+      _tu.api_token == _hl.sha256(_plain.encode()).hexdigest())
+_plain2 = _tu.generate_api_token()
+check("api token: minting again replaces the old one", _plain2 != _plain and
+      _tu.api_token == _hl.sha256(_plain2.encode()).hexdigest())
+check("api token: has_api_token reports the stored state", _tu.has_api_token is True)
+_tu.revoke_api_token()
+check("api token: revoking clears it", _tu.api_token is None and _tu.has_api_token is False)
+
+# ── Pinned SSH host key: the fingerprint an operator eyeballs before trusting a host ───────────
+import base64 as _b64
+_blob = b"\x00\x00\x00\x07ssh-rsa" + bytes(range(256)) * 2
+_key = "ssh-rsa " + _b64.b64encode(_blob).decode()
+_want = "ssh-rsa SHA256:" + _b64.b64encode(_hl.sha256(_blob).digest()).decode().rstrip("=")
+eq("host key: the fingerprint is sha256 of the DECODED key, in OpenSSH form",
+   _RS(host_key=_key).host_key_fingerprint, _want)
+check("host key: it is the base64 digest, not hex, and unpadded",
+      ":" in _want and "=" not in _want.split(":")[1] and len(_want.split(":")[1]) == 43, _want)
+eq("host key: nothing pinned yet reads as empty, not as an error",
+   _RS(host_key="").host_key_fingerprint, "")
+for _bad in ("not base64 !!!", "ssh-rsa", "ssh-rsa ***", "\x00\xff"):
+    eq("host key: malformed pin %r degrades to empty rather than raising" % _bad[:14],
+       _RS(host_key=_bad).host_key_fingerprint, "")
+
+# ── File manager: the protected-path guard on `rm -rf` ────────────────────────────────────────
+# delete_path deletes the RESOLVED absolute path, so the guard has to judge the resolved path too.
+# It used to read the raw string: "./lgsm" and "x/../serverfiles" looked like ordinary sub-paths
+# while resolving onto the LinuxGSM control tree and the entire game install.
+_SELF = "csgoserver"
+for _p in ("lgsm", "lgsm/data", "/lgsm", "lgsm/", "serverfiles", "linuxgsm.sh", _SELF,
+           ".ssh", ".bashrc", "", "/", ".", "..", "../..", "a/../.."):
+    check("file guard: %r is protected from deletion" % _p,
+          sm._is_protected_path(_p, _SELF) is True)
+# The bypasses. Each of these resolves onto something whose loss is unrecoverable.
+for _p, _what in (("./lgsm", "the LinuxGSM control tree"),
+                  (".//lgsm", "the LinuxGSM control tree"),
+                  ("./serverfiles", "the game install"),
+                  ("x/../serverfiles", "the game install"),
+                  ("a/b/../../.ssh", "the host's SSH keys"),
+                  ("./linuxgsm.sh", "the LinuxGSM launcher"),
+                  ("./%s" % _SELF, "the server's own script")):
+    check("file guard: %r cannot sneak past and take %s" % (_p, _what),
+          sm._is_protected_path(_p, _SELF) is True)
+# ...and ordinary content is still deletable, or the file manager is useless.
+for _p in ("addons/mymap.bsp", "./addons/mymap.bsp", "cfg/server.cfg", "logs", "lgsm2",
+           "serverfiles-old", "my lgsm notes.txt"):
+    check("file guard: ordinary path %r stays deletable" % _p,
+          sm._is_protected_path(_p, _SELF) is False)
+
+# End-to-end through delete_path itself: the guard is worth nothing if the caller skips it, so
+# assert no shell command is issued at all for a protected path.
+_sent_rm = []
+_orig_rc2 = sm.run_command
+try:
+    sm.run_command = lambda server, cmd, timeout=30, sudo=None: (_sent_rm.append(cmd), ("__OK__", "", 0))[1]
+    _ok, _msg = sm.delete_path(object(), _SELF, "./lgsm", selfname=_SELF)
+    check("file guard: delete_path refuses './lgsm' and runs NOTHING",
+          _ok is False and not _sent_rm, "ran: %s" % _sent_rm[:1])
+    check("file guard: the refusal explains itself", "protected" in (_msg or "").lower(), _msg)
+    _sent_rm.clear()
+    _ok2, _ = sm.delete_path(object(), _SELF, "x/../serverfiles", selfname=_SELF)
+    check("file guard: delete_path refuses a traversal onto serverfiles",
+          _ok2 is False and not _sent_rm, "ran: %s" % _sent_rm[:1])
+    _sent_rm.clear()
+    _ok3, _ = sm.delete_path(object(), _SELF, "addons/junk.txt", selfname=_SELF)
+    check("file guard: a real file still gets deleted, at its resolved path",
+          _ok3 is True and len(_sent_rm) == 1
+          and "/home/%s/addons/junk.txt" % _SELF in _sent_rm[0], "ran: %s" % _sent_rm[:1])
+finally:
+    sm.run_command = _orig_rc2
+
+# ── The renderer's one guarantee: no control byte reaches the page ────────────────────────────
+# Console text carries player names and chat, so these bytes are AUTHORED, not just accidental.
+# A sequence that never completes matched none of the three grammars and used to survive.
+import terminal as _term
+for _src in ("player \x1b", "chat: \x1b\t hi", "x\x1b\x00y", "\x1b[38;5;", "\x1b\x9b"):
+    check("terminal: an incomplete escape %r leaves no ESC behind" % _src,
+          "\x1b" not in _term.render(_src), repr(_term.render(_src)))
+for _src, _want in (("\x1b[32mgreen\x1b[0m", "green"), ("a\x1b[Kb", "ab"), ("x\x1b>y", "xy"),
+                    ("\x1b]0;title\x07hi", "hi"), ("ssa\b\b\bsay hi", "say hi"),
+                    ("abcdef\rXY", "XYcdef"), ("done\r\nnext", "done\nnext")):
+    eq("terminal: %r still renders as a terminal would" % _src, _term.render(_src), _want)
+
 passed = sum(1 for ok, _, _ in results if ok)
 for ok, name, detail in results:
     line = ("PASS" if ok else "FAIL") + "  " + name

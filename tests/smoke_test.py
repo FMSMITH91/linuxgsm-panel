@@ -33,7 +33,7 @@ _cfg["setup_complete"] = True
 save_config(_cfg)
 
 from app import create_app
-from models import db, User, Group, RemoteServer, GameServer, SetupState
+from models import db, User, Group, RemoteServer, GameServer, SetupState, CustomCommand
 import auth
 
 app = create_app()
@@ -1648,6 +1648,107 @@ try:
         check("telegram: resolve a server by short_name", _g2 is not None)
         _g3, _e3 = _tg_find_server("no-such-server-xyz")   # unknown
         check("telegram: an unknown server name returns a helpful error", _g3 is None and "No server" in (_e3 or ""))
+
+    # ── Bearer API tokens: the other way into every route ─────────────────────────────────────────
+    # A token authenticates AS its owner and inherits exactly that user's RBAC, and app.py exempts
+    # Bearer requests from CSRF — so this is a full authentication path that had no test at all.
+    def _bearer(tok):
+        return app.test_client().get("/api/servers", headers={"Authorization": "Bearer %s" % tok})
+
+    with app.app_context():
+        _au = db.session.get(User, admin_id)
+        _admin_tok = _au.generate_api_token()
+        _stored = _au.api_token
+        db.session.commit()
+    _ok = _bearer(_admin_tok)
+    check("api token: a valid token authenticates with no session cookie",
+          _ok.status_code == 200, "got %d" % _ok.status_code)
+    check("api token: an unknown token does not authenticate",
+          _bearer("lgsm_" + "0" * 48).status_code != 200)
+    # The property that makes storing only a hash worth anything: whoever reads the DB holds the
+    # hash, and replaying it must NOT authenticate.
+    check("api token: replaying the STORED hash does not authenticate",
+          _bearer(_stored).status_code != 200, "the stored value logged in")
+    check("api token: an empty bearer does not authenticate", _bearer("").status_code != 200)
+
+    # A token inherits its owner's scope — no more. mru can see host #1 only.
+    with app.app_context():
+        _mu = db.session.get(User, mru_id)
+        _mru_tok = _mu.generate_api_token()
+        db.session.commit()
+    _mine = _bearer(_mru_tok)
+    check("api token: a restricted user's token sees only that user's servers",
+          _mine.status_code == 200
+          and 0 < len(_mine.get_json() or []) < len(_ok.get_json() or []),
+          "restricted=%s admin=%s" % (len(_mine.get_json() or []), len(_ok.get_json() or [])))
+
+    # Deactivating the owner must kill the token — by_api_token filters on is_active, and an
+    # offboarded account keeping API access is exactly the failure nobody would notice.
+    with app.app_context():
+        db.session.get(User, mru_id).is_active = False
+        db.session.commit()
+    check("api token: deactivating the owner kills their token",
+          _bearer(_mru_tok).status_code != 200, "a disabled user's token still worked")
+    with app.app_context():
+        _mu2 = db.session.get(User, mru_id)
+        _mu2.is_active = True
+        _mu2.revoke_api_token()
+        db.session.commit()
+    check("api token: a revoked token stops working", _bearer(_mru_tok).status_code != 200)
+
+    # ── can_run_custom_command: who may press a superadmin-authored console button ────────────────
+    # Every branch of this decides whether a non-superadmin gets to run a console command on a
+    # server, and none of it was asserted.
+    from auth import can_run_custom_command as _crcc
+    with app.app_context():
+        _gs = db.session.get(GameServer, gs_id)          # game_type "csgo" on host #1
+        _cmd = CustomCommand(name="Say", command_template="say {}", scope_type="all", enabled=True)
+        db.session.add(_cmd)
+        _grp = Group(name="smoke_cc", description="", is_default=False)
+        _grp.set_permissions([auth.VIEW_SERVERS])
+        _grp.servers.append(db.session.get(RemoteServer, remote_id))
+        db.session.add(_grp)
+        db.session.flush()
+        _cu = User(username="smoke_cc_user", password_hash=auth.hash_password("Str0ng!passw0rd"),
+                   display_name="CC", is_superadmin=False, is_active=True)
+        _cu.groups.append(_grp)
+        db.session.add(_cu)
+        db.session.commit()
+        _adm = db.session.get(User, admin_id)
+
+        check("custom command: a superadmin may run an enabled, in-scope command",
+              _crcc(_adm, _cmd, _gs) is True)
+        # The core rule: having ACCESS to the server is not having the COMMAND.
+        check("custom command: a user whose groups lack the command may NOT run it",
+              _crcc(_cu, _cmd, _gs) is False, "access to the server leaked the command")
+        _grp.custom_commands.append(_cmd)
+        db.session.commit()
+        check("custom command: granting it to the user's group lets them run it",
+              _crcc(_cu, _cmd, _gs) is True)
+
+        _cmd.enabled = False
+        db.session.commit()
+        check("custom command: a disabled command is refused even to a superadmin",
+              _crcc(_adm, _cmd, _gs) is False)
+        _cmd.enabled = True
+        # Scope: this command is for a different game, so it must not appear on this server.
+        _cmd.scope_type, _cmd.scope_value = "game", "minecraft"
+        db.session.commit()
+        check("custom command: a command scoped to another game is refused",
+              _crcc(_adm, _cmd, _gs) is False)
+        _cmd.scope_value = _gs.game_type
+        db.session.commit()
+        check("custom command: scoping it to THIS game allows it again",
+              _crcc(_adm, _cmd, _gs) is True)
+
+        # A user with no groups has no access to the host, so the access check must refuse first.
+        _nu = User(username="smoke_cc_none", password_hash=auth.hash_password("Str0ng!passw0rd"),
+                   display_name="None", is_superadmin=False, is_active=True)
+        db.session.add(_nu)
+        db.session.commit()
+        check("custom command: a user with no groups is refused", _crcc(_nu, _cmd, _gs) is False)
+        check("custom command: a missing command is refused, not an exception",
+              _crcc(_adm, None, _gs) is False)
 
 finally:
     passed = sum(1 for ok, _, _ in results if ok)

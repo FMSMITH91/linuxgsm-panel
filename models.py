@@ -331,7 +331,13 @@ class RemoteServer(db.Model):
             import base64
             import hashlib
             parts = self.host_key.split()
-            raw = base64.b64decode(parts[1] if len(parts) > 1 else parts[0])
+            # validate=True: the lenient default DISCARDS characters outside the base64 alphabet, so
+            # a corrupted pin like "ssh-rsa ***" decoded to b"" and printed the sha256 of nothing —
+            # a confident-looking fingerprint for a key that isn't there, which is the opposite of
+            # what an operator eyeballing this needs.
+            raw = base64.b64decode(parts[1] if len(parts) > 1 else parts[0], validate=True)
+            if not raw:
+                return ""
             digest = base64.b64encode(hashlib.sha256(raw).digest()).decode().rstrip("=")
             keytype = parts[0] if len(parts) > 1 else "key"
             return "%s SHA256:%s" % (keytype, digest)
