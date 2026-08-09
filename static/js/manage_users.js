@@ -20,9 +20,15 @@ window.openEditUser = function (id) {
   }
   if (!u) return;
 
+  // Coerce the id to a number before it reaches the form action. It is always an integer from our
+  // own database, but it arrives here as text read out of the DOM, and a form action is a URL sink
+  // — CodeQL flags that flow (js/xss-through-dom) and is right to. parseInt both proves the value
+  // cannot carry meta-characters and rejects a tampered island outright.
+  var uid = parseInt(u.id, 10);
+  if (!(uid > 0)) return;
+
   var form = document.getElementById('edit-user-form');
-  // The action is per-user, so it is set here rather than rendered N times.
-  form.setAttribute('action', (window.MOUNT || '') + '/users/' + u.id + '/edit');
+  form.setAttribute('action', (window.MOUNT || '') + '/users/' + uid + '/edit');
 
   document.getElementById('eu-name').textContent = u.username;   // textContent: never HTML
   document.getElementById('eu-display').value = u.display_name || '';
