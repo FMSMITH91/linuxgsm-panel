@@ -8,6 +8,7 @@ deleting the last SSH rule, a non-numeric port 500).
 
     python tests/unit_test.py      # exits 0 if all pass, 1 otherwise
 """
+import json
 import os
 import sys
 from types import SimpleNamespace as NS
@@ -3164,6 +3165,64 @@ for _m in _re_fl.finditer(r"flash\(\s*f?[\"'][^\"']*\{\s*(e|exc|err|ex)\b[^}]*\}
     _leaky.append("app.py:%d" % (_app_src[:_m.start()].count("\n") + 1))
 check("no route flashes an exception's text to the browser (py/stack-trace-exposure)",
       not _leaky, ", ".join(_leaky))
+
+# ── Alert delivery: Discord ────────────────────────────────────────────────────────────────────
+# send_discord had never been executed by a test. It is the path a "server went offline" alert
+# takes, and a broken one fails the same way as no alert at all — silence. The SSRF barrier around
+# it matters too: the URL is rebuilt onto a constant host from regex-captured id/token, so no
+# admin-supplied string can steer the request. Both properties are asserted here with the socket
+# layer replaced, so nothing leaves the machine.
+_sent = []
+
+
+def _fake_post(url, data, headers):
+    _sent.append((url, json.loads(data.decode()), headers))
+    return True, "sent"
+
+
+_sv_post = N._post
+try:
+    N._post = _fake_post
+    _WH = "https://discord.com/api/webhooks/123456789012345678/AbCdEf-_0123456789abcdefGHIJKLMNOPQRSTUVWXYZ0123456789abcdefghij"
+    _ok, _detail = N.send_discord(_WH, "codserver went offline unexpectedly.")
+    check("discord: a valid webhook sends", _ok is True and _detail == "", repr(_detail))
+    _url, _body, _hdr = _sent[-1]
+    check("discord: the request goes to discord.com and nowhere else",
+          _url.startswith("https://discord.com/api/webhooks/"), _url)
+    check("discord: the message is the payload's content", _body.get("content", "").startswith("codserver went offline"))
+    check("discord: it is sent as JSON", _hdr.get("Content-Type") == "application/json")
+
+    # 1900 chars: Discord rejects over 2000, and a rejected alert is a missed alert.
+    _sent.clear()
+    N.send_discord(_WH, "x" * 5000)
+    check("discord: an over-long message is truncated rather than rejected",
+          len(_sent[-1][1]["content"]) == 1900, len(_sent[-1][1]["content"]))
+
+    # Anything that is not a real discord webhook must not even reach _post.
+    for _bad in ("https://evil.example/api/webhooks/1/x", "http://discord.com/api/webhooks/1/x",
+                 "https://discord.com.evil.example/api/webhooks/1/x", "not a url", "", None,
+                 "https://discord.com/api/webhooks/abc/xyz"):
+        _sent.clear()
+        _ok2, _d2 = N.send_discord(_bad, "hi")
+        check("discord: %r is refused before any request" % (str(_bad)[:34],),
+              _ok2 is False and not _sent, "sent=%s detail=%r" % (len(_sent), _d2))
+
+    # The failure reasons must be distinguishable — "can't reach Discord" and "Discord said no" are
+    # different problems for whoever is debugging why an alert never arrived.
+    N._post = lambda u, d, h: (False, "unreachable")
+    _ok3, _d3 = N.send_discord(_WH, "hi")
+    check("discord: an unreachable host says so", _ok3 is False and "couldn't reach" in _d3, _d3)
+    N._post = lambda u, d, h: (False, "rejected")
+    _ok4, _d4 = N.send_discord(_WH, "hi")
+    check("discord: a rejected webhook says so instead", _ok4 is False and "rejected it" in _d4, _d4)
+finally:
+    N._post = _sv_post
+
+# The SSRF barrier itself: _post refuses anything outside the provider allow-list, before opening
+# a socket. Passing a non-allow-listed URL must return 'blocked', not attempt a connection.
+_blocked_ok, _blocked_reason = N._post("https://169.254.169.254/latest/meta-data/", b"{}", {})
+check("alerts: _post blocks a URL outside the provider allow-list (SSRF barrier)",
+      _blocked_ok is False and _blocked_reason == "blocked", _blocked_reason)
 
 passed = sum(1 for ok, _, _ in results if ok)
 for ok, name, detail in results:
