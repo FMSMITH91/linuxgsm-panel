@@ -1,0 +1,1 @@
+*/5 * * * * /usr/bin/flock -n /tmp/x /home/gm/.lgsm-cron-rec 3f2a /home/gm/gmserver update

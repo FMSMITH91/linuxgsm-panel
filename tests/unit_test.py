@@ -3289,6 +3289,40 @@ try:
 finally:
     N._cfg = _sv_cfg2
 
+# ── Tailscale address recognition ──────────────────────────────────────────────────────────────
+# is_tailscale_ip decides whether the panel treats a host as being on the tailnet, which changes
+# how it connects and what it exempts from fail2ban/UFW. A false positive would exempt a PUBLIC
+# address from the security rules, so the near-misses matter as much as the hits.
+import tailscale_integration as TS
+
+for _h in ("100.64.0.1", "100.115.92.7", "fd7a:115c:a1e0::1",
+           "ns106051.taile87e07.ts.net", "box.tail1234.ts.net", "host.taile87e07.example"):
+    check("tailnet: %r is recognised" % _h, TS.is_tailscale_ip(_h) is True)
+for _h in ("10.0.0.1", "192.168.1.5", "1.100.0.1", "203.0.113.9", "example.ts.net.evil.com",
+           "fd7b:115c::1", "", None, "100abc.example.com"):
+    check("tailnet: %r is NOT taken for a tailnet address" % (_h,), TS.is_tailscale_ip(_h) is False)
+
+# get_magic_url: the port is omitted for the standard ones and appended otherwise, and there is no
+# URL at all when the node has no MagicDNS name (rather than a broken "https://None").
+_sv_info = TS.get_tailscale_info
+try:
+    class _Info(object):
+        def __init__(self, dns): self.dns_name, self.tailscale_ips, self.peers = dns, [], []
+    TS.get_tailscale_info = lambda *a, **k: _Info("box.taile87e07.ts.net")
+    eq("magic url: no port for https", TS.get_magic_url(), "https://box.taile87e07.ts.net")
+    eq("magic url: 443 is left off", TS.get_magic_url(443), "https://box.taile87e07.ts.net")
+    eq("magic url: 80 is left off too", TS.get_magic_url(80), "https://box.taile87e07.ts.net")
+    eq("magic url: any other port is appended", TS.get_magic_url(5000),
+       "https://box.taile87e07.ts.net:5000")
+    eq("magic url: the protocol is honoured", TS.get_magic_url(8080, "http"),
+       "http://box.taile87e07.ts.net:8080")
+    TS.get_tailscale_info = lambda *a, **k: _Info("")
+    eq("magic url: no MagicDNS name means no URL, not a broken one", TS.get_magic_url(), None)
+finally:
+    TS.get_tailscale_info = _sv_info
+
+check("tailnet: the panel can name the OS user it runs as", bool(TS._current_os_user()))
+
 passed = sum(1 for ok, _, _ in results if ok)
 for ok, name, detail in results:
     line = ("PASS" if ok else "FAIL") + "  " + name
