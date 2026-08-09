@@ -287,36 +287,21 @@
 <div class="row" data-mtab="details">
   <div class="col-lg-4 mb-3">
     <div class="card h-100">
-      <div class="card-header"><i class="bi bi-info-circle-fill"></i> Server Info</div>
+      <div class="card-header"><i class="bi bi-toggles"></i> Server Settings</div>
       <div class="card-body">
         <table class="table table-borderless table-sm mb-0">
+          {# Name, Game Type, Port and Status all live in the page header a few lines up, and the
+             header's badge is the one the poll keeps current — this table's copy of Status went
+             stale the moment the server changed state while you were looking at it. "Installed"
+             could only ever say Yes: the route redirects a server that is still installing. What is
+             left is the part you cannot read anywhere else — the switches. #}
+          {% if server.short_name != server.name %}
           <tr>
-            <td class="text-secondary">Name</td>
-            <td class="text-end">{{ server.name }}</td>
+            <td class="text-secondary">Short Name
+              <span class="text-muted" style="font-size:.7rem;">(the Linux user)</span></td>
+            <td class="text-end"><code>{{ server.short_name }}</code></td>
           </tr>
-          <tr>
-            <td class="text-secondary">Short Name</td>
-            <td class="text-end">{{ server.short_name }}</td>
-          </tr>
-          <tr>
-            <td class="text-secondary">Game Type</td>
-            <td class="text-end">{{ server.game_display or server.game_type }}</td>
-          </tr>
-          <tr>
-            <td class="text-secondary">Port</td>
-            <td class="text-end">{{ server.port }}</td>
-          </tr>
-          <tr>
-            <td class="text-secondary">Status</td>
-            <td class="text-end">
-              <span class="status-dot status-{{ server.status if server.status in ['online','offline'] else 'unknown' }}"></span>
-              {{ server.status|title }}
-            </td>
-          </tr>
-          <tr>
-            <td class="text-secondary">Installed</td>
-            <td class="text-end">{{ "Yes" if server.installed else "No" }}</td>
-          </tr>
+          {% endif %}
           <tr>
             <td class="text-secondary">Auto-start &amp; recover
               <span class="text-muted" style="font-size:.7rem;">(monitor, every 5 min)</span></td>
@@ -373,10 +358,14 @@
             <td class="text-secondary">Machine</td>
             <td class="text-end">{{ remote.name }}{% if remote.is_local %} <span class="badge bg-secondary" style="font-size:.6rem;">this panel</span>{% endif %}</td>
           </tr>
+          {# Only while there is nothing to connect to yet. Once resolved, the Connect row below is
+             the same address plus the port — and it is the one you can click to copy. #}
+          {% if not public_host %}
           <tr>
             <td class="text-secondary">Public IP</td>
-            <td class="text-end">{{ public_host or 'resolving…' }}</td>
+            <td class="text-end text-secondary">resolving…</td>
           </tr>
+          {% endif %}
           <tr>
             <td class="text-secondary">Connect</td>
             <td class="text-end">{% set caddr = (public_host ~ ':' ~ server.port) if public_host else (':' ~ server.port) %}
