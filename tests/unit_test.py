@@ -3183,7 +3183,7 @@ def _fake_post(url, data, headers):
 _sv_post = N._post
 try:
     N._post = _fake_post
-    _WH = "https://discord.com/api/webhooks/123456789012345678/AbCdEf-_0123456789abcdefGHIJKLMNOPQRSTUVWXYZ0123456789abcdefghij"
+    _WH = "https://discord.com/api/webhooks/12345/TESTONLY-not-a-real-webhook"
     _ok, _detail = N.send_discord(_WH, "codserver went offline unexpectedly.")
     check("discord: a valid webhook sends", _ok is True and _detail == "", repr(_detail))
     _url, _body, _hdr = _sent[-1]
@@ -3233,7 +3233,7 @@ _saved_cfg = {}
 _sv_cfgfn, _sv_update = N._cfg, N.update_config
 try:
     N.update_config = lambda fn: fn(_saved_cfg)
-    _existing_tok = N.encrypt_secret("123456789:AAtokenAAtokenAAtokenAAtokenAAtoken")
+    _existing_tok = N.encrypt_secret("12345:TESTONLYnotarealtoken00")
     _existing_wh = N.encrypt_secret("https://discord.com/api/webhooks/1/x")
     N._cfg = lambda: {"telegram": {"token": _existing_tok, "chat_id": "42"},
                       "discord": {"webhook": _existing_wh}}
@@ -3246,13 +3246,13 @@ try:
           _n["discord"]["webhook"] == _existing_wh)
 
     _saved_cfg.clear()
-    N.save_settings(telegram={"enabled": True, "chat_id": "42", "token": "999:NEWTOKEN"},
+    N.save_settings(telegram={"enabled": True, "chat_id": "42", "token": "67890:TESTONLYreplacementvalue"},
                     discord={"enabled": False, "webhook": ""}, events={})
     _n = _saved_cfg["notifications"]
     check("notify save: a new token replaces it", _n["telegram"]["token"] != _existing_tok)
     check("notify save: and is stored ENCRYPTED, not in the clear",
-          "999:NEWTOKEN" not in _n["telegram"]["token"]
-          and N.decrypt_secret(_n["telegram"]["token"]) == "999:NEWTOKEN")
+          "67890:TESTONLYreplacementvalue" not in _n["telegram"]["token"]
+          and N.decrypt_secret(_n["telegram"]["token"]) == "67890:TESTONLYreplacementvalue")
 
     # Thresholds are clamped, and junk must not overwrite a good value.
     _saved_cfg.clear()
@@ -3280,7 +3280,7 @@ try:
     N._cfg = lambda: {}
     for _kind, _kw, _want in (("telegram", {}, "bot token"),
                               ("telegram", {"token": "nope"}, "expected format"),
-                              ("telegram", {"token": "123456789:AAtokenAAtokenAAtokenAAtokenAAtoken"}, "chat ID"),
+                              ("telegram", {"token": "12345:TESTONLYnotarealtoken00"}, "chat ID"),
                               ("discord", {}, "webhook URL"),
                               ("discord", {"webhook": "https://evil.example/x"}, "Discord webhook URL")):
         _ok, _msg = N.test_send(_kind, **_kw)
@@ -3322,6 +3322,24 @@ finally:
     TS.get_tailscale_info = _sv_info
 
 check("tailnet: the panel can name the OS user it runs as", bool(TS._current_os_user()))
+
+# ── Test fixtures must not be shaped like real credentials ────────────────────────────────────
+# A synthetic Telegram token written in the EXACT real shape (9 digits : 35 chars) tripped GitHub
+# secret scanning and opened an alert against this repo. A false positive there is not harmless:
+# it trains whoever reads that dashboard to wave the next one through. The panel's own patterns
+# are far looser than the real formats, so a fixture can stay valid AND be obviously fake.
+import re as _re_fx
+_fixture_shapes = [
+    ("Telegram bot token", r"\b\d{8,10}:[A-Za-z0-9_-]{35}\b"),
+    ("Discord webhook", r"https://discord\.com/api/webhooks/\d{17,19}/[A-Za-z0-9_-]{60,}"),
+    ("GitHub token", r"\bgh[pousr]_[A-Za-z0-9]{36}\b"),
+]
+_own = open(os.path.join(os.path.dirname(os.path.abspath(__file__)), "unit_test.py"),
+            encoding="utf-8").read()
+for _label, _pat in _fixture_shapes:
+    _hits = _re_fx.findall(_pat, _own)
+    check("fixtures: no test value is shaped like a real %s" % _label, not _hits,
+          "%s" % (_hits[:1],))
 
 passed = sum(1 for ok, _, _ in results if ok)
 for ok, name, detail in results:
