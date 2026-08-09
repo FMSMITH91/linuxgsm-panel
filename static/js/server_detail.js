@@ -1,6 +1,3 @@
-// ── Section tabs (Console / Details): show only the selected group's cards. Actions and the
-// pending banner are untagged, so they stay visible on both. The chart + console live in the
-// default Console tab, so they initialise visible (no hidden-canvas sizing issues). ──
 (function(){
   var nav = document.getElementById('sdtab-nav'); if(!nav) return;
   var TABS = ['console','history','details'];
@@ -26,30 +23,29 @@
 })();
 
 var consoleEl = document.getElementById('console-output');
+
 var wsStatus = document.getElementById('ws-status');
 
-// ── Players + in-game moderation ──────────────────────────────
 function plTime(t){
   var n = Number(t); if(!isFinite(n)) return String(t);
   n = Math.floor(n); var h=Math.floor(n/3600), m=Math.floor((n%3600)/60), s=n%60;
   return h>0 ? (h+':'+String(m).padStart(2,'0')) : (m+':'+String(s).padStart(2,'0'));
 }
-// The automatic poll asks gamedig only (never the console). refreshPlayers() (the button, and the
-// re-read after a kick/ban) passes console=1 so a single `status` runs on your explicit action.
+
 function loadPlayers(useConsole){
   if(!document.getElementById('players-card')) return;
   var url = MOUNT+'/api/server/'+serverId+'/playerlist' + (useConsole ? '?console=1' : '');
   fetch(url).then(function(r){return r.json();})
     .then(renderPlayers).catch(function(){ /* transient: keep what's shown */ });
 }
+
 function refreshPlayers(){ loadPlayers(true); }
-// The players card belongs to the Console tab AND is content-driven (moderators always see it; others
-// only when the server is queryable). Keep those two concerns from fighting: renderPlayers records
-// whether the content WANTS the card, and applyPlayersVisibility() combines that with the active tab.
+
 window.applyPlayersVisibility = function(){
   var card=document.getElementById('players-card'); if(!card) return;
   card.style.display = (window._sdTab==='console' && window._playersWanted) ? '' : 'none';
 };
+
 function renderPlayers(d){
   var card=document.getElementById('players-card'); if(!card||!d) return;
   var caps=d.caps||{}, players=d.players||[], queryable=!!d.queryable;
@@ -104,6 +100,7 @@ function renderPlayers(d){
   }).join('');
   document.getElementById('pl-rows').innerHTML=rows;  // nosemgrep
 }
+
 function moderatePlayer(btn, action){
   var name=btn.getAttribute('data-name')||'';
   var steamid=btn.getAttribute('data-steamid')||'';
@@ -111,6 +108,7 @@ function moderatePlayer(btn, action){
   if(action==='ban'){ banScopeDialog(btn, name, steamid, num); return; }   // ban asks scope first
   _doModerate(btn, action, name, steamid, num, 'this');
 }
+
 function _doModerate(btn, action, name, steamid, num, scope, reason){
   btn.disabled=true;
   fetch(MOUNT+'/api/server/'+serverId+'/moderate',{method:'POST',headers:{'Content-Type':'application/json'},
@@ -120,8 +118,7 @@ function _doModerate(btn, action, name, steamid, num, scope, reason){
       setTimeout(function(){ loadPlayers(true); }, 1200);   // you just moderated — re-read (console ok)
     }).catch(function(){ window.toast('Moderation failed','danger'); btn.disabled=false; });
 }
-// When banning, ASK: this server only, or all my servers. "All servers" is only offered where the
-// identifier ports across servers (SteamID on Valve, name on Minecraft); idTech3 slot bans can't.
+
 function banScopeDialog(btn, name, steamid, num){
   if(window._plEngine!=='valve' && window._plEngine!=='minecraft'){
     confirmDialog({
@@ -155,6 +152,7 @@ function banScopeDialog(btn, name, steamid, num){
   });
   document.body.appendChild(ov);
 }
+
 function announceSay(){
   var inp=document.getElementById('pl-say'); if(!inp) return;
   var msg=(inp.value||'').trim(); if(!msg) return;
@@ -166,9 +164,6 @@ function announceSay(){
     }).catch(function(){ window.toast('Announce failed','danger'); });
 }
 
-// ── Custom commands (superadmin-defined, handed to this user's group) ──────────
-// Delegated so it also covers the argument-input Enter key. The server re-checks every run
-// (group assignment + scope + argument validation) — the button list is only a convenience.
 function runCustomCommand(wrap, btn){
   var cmdId = wrap.getAttribute('data-cmd-id');
   var hasArg = wrap.getAttribute('data-has-arg')==='1';
@@ -187,10 +182,12 @@ function runCustomCommand(wrap, btn){
   }).catch(function(){ window.toast('Command failed','danger'); })
   .finally(function(){ btn.disabled = false; btn.innerHTML = orig; });  // nosemgrep
 }
+
 document.addEventListener('click', function(e){
   var btn = e.target.closest && e.target.closest('.cc-run'); if(!btn) return;
   var wrap = btn.closest('.custom-cmd'); if(wrap) runCustomCommand(wrap, btn);
 });
+
 document.addEventListener('keydown', function(e){
   if(e.key!=='Enter') return;
   var inp = e.target.closest && e.target.closest('.cc-arg'); if(!inp) return;
@@ -198,22 +195,17 @@ document.addEventListener('keydown', function(e){
   var wrap = inp.closest('.custom-cmd'); var btn = wrap && wrap.querySelector('.cc-run');
   if(wrap && btn) runCustomCommand(wrap, btn);
 });
+
 loadPlayers();
+
 if(window.pollWhenVisible) pollWhenVisible(loadPlayers, 15000);
 
-// "Follow the tail" only while the user is already at the bottom. If they've
-// scrolled up to read history, new output must NOT yank them back down.
 function consoleAtBottom() {
   return consoleEl.scrollHeight - consoleEl.scrollTop - consoleEl.clientHeight < 48;
 }
+
 function stickConsole() { consoleEl.scrollTop = consoleEl.scrollHeight; }
 
-// Mount prefix (e.g. "/lgsm" when served behind Tailscale Serve). All client-side
-// URLs must include it, otherwise requests hit the site root (a different app).
-
-// WebSocket connection for live console streaming. Use the shared window.socket so the
-// base-layout pagehide/pageshow handlers close it for bfcache and reconnect it on return —
-// the 'connect' handler below re-joins the console room automatically after a reconnect.
 var socket = (window.ensureSocket && window.ensureSocket())
   || io({ path: MOUNT + '/socket.io', transports: ['websocket', 'polling'] });
 
@@ -253,6 +245,7 @@ function appendConsole(text) {
 }
 
 var _consoleSig = null;
+
 function refreshConsole(forceScroll) {
   // The periodic backup refresh wipes + rebuilds the console; don't yank the user
   // to the bottom unless they were already there (or it's the initial load).
@@ -306,146 +299,6 @@ function sendCommand(ev) {
   return false;
 }
 
-// Uses the global window.toast (base.html) — one implementation, consistent independent timing.
-
-// Delegates — the old fallback returned the raw string, and String(null) rendered "null".
-function _esc(s){ return window.escapeHtml(s); }
-
-// Fire a server action against the JSON endpoint (spinner + toast + banner handling).
-function _doServerAction(action, btn, showOutput) {
-  var orig = btn.innerHTML;
-  btn.disabled = true; btn.innerHTML = '<span class="spinner-border spinner-border-sm"></span>';
-  fetch(MOUNT + '/api/server/' + serverId + '/action', {
-    method: 'POST', headers: {'Content-Type': 'application/json'},
-    body: JSON.stringify({ action: action })
-  })
-  .then(r => r.json())
-  .then(d => {
-    // Maintenance/info actions (details, postdetails, monitor, …) return text you want to READ —
-    // show it in a dismissible panel, not a toast that disappears before you see it.
-    if (showOutput) showActionOutput(action, d.message || (d.success ? 'Done — no output' : 'Failed'), d.success);
-    else toast(d.message || (action + ' done'), d.success ? 'success' : 'danger');
-    if (d.success && (action === 'restart' || action === 'start' || action === 'stop')) {
-      var b = document.getElementById('restart-pending-banner');
-      if (b) b.classList.add('d-none');
-    }
-    setTimeout(pollStats, 1200);
-  })
-  .catch(() => toast('Action failed — connection error', 'danger'))
-  .finally(() => { btn.disabled = false; btn.innerHTML = orig; });  // nosemgrep
-}
-// Dismissible panel showing a command's full output (for maintenance/info actions). Persists until
-// you close it (button / backdrop / Esc), so you can read long output like `details`.
-function showActionOutput(title, text, ok) {
-  var ov = document.createElement('div');
-  ov.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,.6);z-index:1090;display:flex;align-items:center;justify-content:center;padding:1rem;';
-  ov.innerHTML = '<div class="card" style="max-width:760px;width:100%;max-height:85vh;display:flex;flex-direction:column;">'  // nosemgrep
-    + '<div class="card-header d-flex justify-content-between align-items-center">'
-    + '<span><i class="bi bi-' + (ok ? 'info-circle' : 'x-circle') + '"></i> ' + escapeHtml(title) + '</span>'
-    + '<button class="btn btn-sm btn-outline-secondary py-0 px-2" data-close="1">Close</button></div>'
-    + '<div class="card-body" style="flex:1 1 auto;min-height:0;overflow-y:auto;">'
-    + '<pre style="white-space:pre-wrap;word-break:break-word;margin:0;font-size:.8rem;">' + escapeHtml(text) + '</pre>'
-    + '</div></div>';
-  function close(){ ov.remove(); document.removeEventListener('keydown', onEsc); }
-  function onEsc(e){ if (e.key === 'Escape') close(); }
-  ov.addEventListener('click', function(ev){
-    if (ev.target === ov || (ev.target.closest && ev.target.closest('[data-close]'))) close();
-  });
-  document.addEventListener('keydown', onEsc);
-  document.body.appendChild(ov);
-}
-
-function serverAction(action, btn, confirmFirst, showOutput) {
-  // Restart AND stop get a player check first — warn, and offer "when empty".
-  if (action === 'restart' || action === 'stop') { return actionWithPlayerCheck(action, btn); }
-  if (confirmFirst) {
-    var body = _esc(_cap(action)) + ' <strong>' + _esc(SERVER_NAME) + '</strong>?';
-    if (action === 'fastdl') {
-      body = 'Generate FastDL files for <strong>' + _esc(SERVER_NAME) + '</strong>? '
-           + 'This overwrites the existing FastDL directory and can take a while.';
-    }
-    confirmDialog({ title: _cap(action), body: body, confirmLabel: _cap(action),
-                    onConfirm: function(){ _doServerAction(action, btn, showOutput); } });
-    return;
-  }
-  _doServerAction(action, btn, showOutput);
-}
-
-function _cap(s){ return s.charAt(0).toUpperCase() + s.slice(1); }
-
-// confirmDialog() is a shared global defined in base.html (window.confirmDialog).
-
-// Restart/Stop confirm for an EMPTY server (or when the player count is unknown) — the
-// in-app equivalent of the old native confirm, matching the players-online dialog's look.
-function confirmActionDialog(action, btn, note){
-  confirmDialog({
-    title: _cap(action) + ' server',
-    icon: action === 'stop' ? 'stop-fill' : 'arrow-clockwise',
-    body: _esc(_cap(action)) + ' <strong>' + _esc(SERVER_NAME) + '</strong>?'
-          + (note ? ' <span class="text-secondary">' + _esc(note) + '</span>' : ''),
-    confirmLabel: _cap(action),
-    confirmClass: action === 'stop' ? 'btn-danger' : 'btn-warning',
-    onConfirm: function(){ _doServerAction(action, btn); }
-  });
-}
-
-function actionWithPlayerCheck(action, btn) {
-  var orig = btn.innerHTML;
-  btn.disabled = true; btn.innerHTML = '<span class="spinner-border spinner-border-sm"></span>';
-  fetch(MOUNT + '/api/server/' + serverId + '/players').then(r => r.json()).then(function(d){
-    btn.disabled = false; btn.innerHTML = orig;  // nosemgrep
-    var n = (d && d.players) || 0;   // null/unknown -> treat as none (show a plain in-app confirm)
-    if (!n) { confirmActionDialog(action, btn); return; }
-    actionPlayersDialog(action, n, btn);
-  }).catch(function(){
-    btn.disabled = false; btn.innerHTML = orig;  // nosemgrep
-    confirmActionDialog(action, btn, "(couldn't check who's online)");
-  });
-}
-
-function actionPlayersDialog(action, n, btn) {
-  var verb = _cap(action);                                   // Restart / Stop
-  var lower = action;                                        // restart / stop
-  var endpoint = action === 'stop' ? 'stop-when-empty' : 'restart-when-empty';
-  var nowIcon = action === 'stop' ? 'stop-fill' : 'arrow-clockwise';
-  var ov = document.createElement('div');
-  ov.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,.6);z-index:1080;display:flex;align-items:center;justify-content:center;padding:1rem;';
-  ov.innerHTML = '<div class="card" style="max-width:540px;width:100%;">'  // nosemgrep
-    + '<div class="card-header"><i class="bi bi-people-fill"></i> Players are online</div>'
-    + '<div class="card-body">'
-    + '<p class="mb-2"><strong>' + n + '</strong> player' + (n===1?' is':'s are') + ' connected to <strong>' + _esc(SERVER_NAME) + '</strong>. ' + verb + 'ping now disconnects ' + (n===1?'them':'everyone') + '.</p>'
-    + '<p class="small text-secondary mb-3">Are you sure you want to ' + lower + ' with players on?</p>'
-    + '<div class="d-flex flex-column gap-2">'
-    + '<button class="btn btn-warning" id="rd-now"><i class="bi bi-' + nowIcon + '"></i> Yes, ' + lower + ' now (disconnect ' + n + ' player' + (n===1?'':'s') + ')</button>'
-    + '<button class="btn btn-success" id="rd-wait"><i class="bi bi-hourglass-split"></i> No — ' + lower + ' when the server is empty</button>'
-    + '<button class="btn btn-outline-secondary" id="rd-cancel">Cancel</button>'
-    + '</div></div></div>';
-  document.body.appendChild(ov);
-  function close(){ ov.remove(); }
-  ov.querySelector('#rd-now').onclick = function(){ close(); _doServerAction(action, btn); };
-  ov.querySelector('#rd-wait').onclick = function(){
-    close();
-    fetch(MOUNT + '/api/server/' + serverId + '/' + endpoint, {method:'POST', headers:{'Content-Type':'application/json'}})
-      .then(r => r.json()).then(function(d){
-        toast(d.message || ('Queued — will ' + lower + ' once empty.'), d.success ? 'success' : 'danger');
-        if (d.success) { showPendingBanner(action); }
-      }).catch(function(){ toast('Could not queue the ' + lower, 'danger'); });
-  };
-  ov.querySelector('#rd-cancel').onclick = close;
-  ov.addEventListener('click', function(e){ if (e.target === ov) close(); });
-}
-
-// Reflect a queued 'when empty' action (restart|stop) in the banner and show it.
-function showPendingBanner(action){
-  var b = document.getElementById('restart-pending-banner');
-  if (!b) return;
-  b.dataset.action = action;
-  var v = document.getElementById('rpb-verb'); if (v) v.textContent = action;
-  var bt = document.getElementById('rpb-btn'); if (bt) bt.textContent = _cap(action) + ' now';
-  b.classList.remove('d-none');
-}
-
-// The banner's "do it now" button — runs whichever action is queued (restart|stop).
 function bannerDoNow(btn){
   var b = document.getElementById('restart-pending-banner');
   serverAction((b && b.dataset.action) || 'restart', btn);
@@ -496,23 +349,26 @@ function toggleNotifyEmpty(el) {
   .finally(() => { el.disabled = false; });
 }
 
-// ── Live stats + chart ───────────────────────────────────────
 var connectAddr = '';
+
 function copyConnect() {
   var addr = connectAddr || (document.getElementById('connect-addr') || {}).textContent || '';
   addr = addr.trim();
   if (addr && addr !== 'resolving…' && addr !== 'unknown') window.copyText(addr, 'Copied ' + addr);
 }
-// Sidebar "Connect" code cell — click anywhere on it to copy ip:port.
+
 document.addEventListener('click', function(ev){
   var el = ev.target.closest('.copy-addr'); if(!el) return;
   window.copyText(el.getAttribute('data-copy'), 'Copied ' + el.getAttribute('data-copy'));
 });
-function fmtGB(b) { return (b / 1073741824).toFixed(1) + ' GB'; }  // NOPMD
+
+function fmtGB(b) { return (b / 1073741824).toFixed(1) + ' GB'; }
+
 function fmtUptime(s) {
   var d = Math.floor(s/86400), h = Math.floor(s%86400/3600), m = Math.floor(s%3600/60);
   return d ? d+'d '+h+'h' : (h ? h+'h '+m+'m' : m+'m');
 }
+
 function setStatus(status) {
   var badge = document.getElementById('status-badge'), text = document.getElementById('status-text');
   if (!text) return;
@@ -521,6 +377,7 @@ function setStatus(status) {
 }
 
 var statsChart = null;
+
 function initChart() {
   if (typeof Chart === 'undefined') return;
   // The canvas lives inside the Controls panel, which a user can now HIDE. Without this guard the
@@ -548,16 +405,16 @@ function initChart() {
   });
 }
 
-// Self-scheduling stats poll. A live server gets a snappy refresh so the CPU/RAM graph moves;
-// an offline/unreachable one barely changes, so we poll it lazily instead of SSH-ing every few
-// seconds. Paused entirely while the tab is hidden (see the visibilitychange catch-up below).
 var _lastStatus = '';
+
 var _statsTimer = null;
+
 function _scheduleStats() {
   if (_statsTimer) { clearTimeout(_statsTimer); }
   var delay = (_lastStatus === 'online') ? 8000 : 20000;
   _statsTimer = setTimeout(pollStats, delay);
 }
+
 function pollStats() {
   if (document.hidden) { _scheduleStats(); return; }   // don't poll a backgrounded tab; re-check later
   fetch(MOUNT + '/api/server/' + serverId + '/stats')
@@ -597,20 +454,14 @@ function pollStats() {
     .finally(_scheduleStats);
 }
 
-// ── History charts (persisted CPU/RAM/player trends, lazy-loaded when the History tab opens) ──
 var _histRange = '24h';
+
 var _histCharts = {};
-var _histTimes = {};   // chart id -> Date[] (one per data point, by category index); refreshed each load
+
+var _histTimes = {};
+
 var _histX = { ticks:{color:'#8b98a5', maxTicksLimit:6, maxRotation:0}, grid:{display:false} };
-// Date-aware x-axis for the 24h view: a 24h window crosses midnight, so time-only ticks are
-// ambiguous about which day they belong to. Chart.js generates labels over the FULL tick set before
-// auto-skipping, so a per-point "is this a new day?" check lands the date on the midnight point,
-// which auto-skip usually then hides. Instead: the tick callback returns a 2-line [time, date] for
-// EVERY tick (so fit() reserves height for the date row), then afterFit — which runs on the actual
-// post-auto-skip rendered ticks — demotes repeated dates to time-only. Net: the date shows on the
-// first tick and wherever the day changes among the *shown* ticks. Reads _histTimes[id] live so the
-// 30s in-place refresh tracks the new timestamps. (If a build ignored the afterFit demotion it would
-// harmlessly fall back to date-on-every-tick — never clipped, since fit already reserved two lines.)
+
 function _histXScale(id){
   var fmtT = function(t){ return t.toLocaleTimeString([], {hour:'2-digit', minute:'2-digit'}); };
   var fmtD = function(t){ return t.toLocaleDateString([], {month:'short', day:'numeric'}); };
@@ -627,6 +478,7 @@ function _histXScale(id){
     ticks:{ color:'#8b98a5', maxTicksLimit:6, maxRotation:0, autoSkip:true,
       callback: function(value){ var t=(_histTimes[id]||[])[value]; return t ? [fmtT(t), fmtD(t)] : ''; } } };
 }
+
 function _histChart(id, labels, datasets, yScales, xScale){
   var el = document.getElementById(id); if(!el || typeof Chart==='undefined') return;
   var existing = _histCharts[id];
@@ -650,6 +502,7 @@ function _histChart(id, labels, datasets, yScales, xScale){
       plugins:{ legend:{ labels:{color:'#c9d1d9', boxWidth:12, boxHeight:12} } } }
   });
 }
+
 function _histLbl(iso){
   // Tooltip title (per point). Both ranges carry the date so a hovered point is never ambiguous
   // about which day it is; the compact date-at-change lives on the x-axis ticks (_histXScale).
@@ -657,10 +510,12 @@ function _histLbl(iso){
   return _histRange==='7d' ? d.toLocaleString([], {month:'short', day:'numeric', hour:'2-digit'})
                            : d.toLocaleString([], {month:'short', day:'numeric', hour:'2-digit', minute:'2-digit'});
 }
+
 function _ds(label, data, color, fill){
   return { label:label, data:data, borderColor:color, backgroundColor:color+'22',
            fill:!!fill, tension:.3, pointRadius:0, borderWidth:2, spanGaps:true };  // NOPMD
 }
+
 window.loadHistory = function(){
   fetch(MOUNT + '/api/server/' + serverId + '/history?range=' + encodeURIComponent(_histRange))
     .then(function(r){ return r.json(); })
@@ -690,6 +545,7 @@ window.loadHistory = function(){
       ], pctY, _xs('hist-host'));
     }).catch(function(){});
 };
+
 document.addEventListener('click', function(e){
   var b = e.target.closest && e.target.closest('[data-hist-range]'); if(!b) return;
   var rng = b.getAttribute('data-hist-range'); if(rng === _histRange) return;
@@ -700,11 +556,9 @@ document.addEventListener('click', function(e){
   Object.keys(_histCharts).forEach(function(id){ try{ _histCharts[id].destroy(); }catch(err){} delete _histCharts[id]; });
   window.loadHistory();
 });
-// Keep the History charts live — refresh while its tab is open and the page is visible (a new sample
-// lands every minute server-side). Updates in place, so it never flashes or steals focus.
+
 if(window.pollWhenVisible) pollWhenVisible(function(){ if(window._sdTab==='history') window.loadHistory(); }, 30000);
 
-// ── GMod game content: per-server mount (enable/disable) + host install/uninstall ──
 function loadGmodContent(){
   var el = document.getElementById('gmod-content-body');
   if(!el) return;
@@ -766,6 +620,7 @@ function loadGmodContent(){
     })
     .catch(function(){ el.innerHTML = '<span class="text-danger">Could not load content status.</span>'; });
 }
+
 function _gmcPost(bodyObj, okMsg){
   fetch(MOUNT + '/api/server/' + serverId + '/gmod-content', {
     method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify(bodyObj)
@@ -774,11 +629,13 @@ function _gmcPost(bodyObj, okMsg){
     setTimeout(loadGmodContent, 1500);
   }).catch(function(){ if(window.toast) toast('Request failed','danger'); });
 }
+
 function applyGmodContent(btn){
   var sel = Array.prototype.map.call(document.querySelectorAll('.gmc-box:checked'), function(b){ return b.value; });
   if(btn){ btn.disabled = true; btn.innerHTML = '<span class="spinner-border spinner-border-sm"></span> Applying…'; }
   _gmcPost({action:'mount', games: sel}, 'Applying…');
 }
+
 function uninstallGmodContent(key, label){
   window.confirmDialog({
     title:'Uninstall '+label+' content', icon:'trash', confirmClass:'btn-danger', confirmLabel:'Uninstall',
@@ -786,18 +643,11 @@ function uninstallGmodContent(key, label){
     onConfirm:function(){ _gmcPost({action:'uninstall', games:[key]}, 'Removing…'); }
   });
 }
+
 loadGmodContent();
 
-// Populate console immediately via AJAX (page render no longer waits on SSH),
-// then let the websocket stream take over.
-refreshConsole(true);   // initial load: jump to the latest output
-// Layout handlers are defined BEFORE the bootstrap calls below on purpose: initChart/pollStats
-// touch elements that a user can now hide, and a throw there would otherwise leave movePanel,
-// hidePanel and showDetailPanel undefined — i.e. no way to undo the hide that caused it.
-// ── Per-user panel order for this page's Console tab ─────────────────────────────────────────────
-// Same shape as the dashboard: the SERVER renders the saved order, and these controls move the node
-// for instant feedback and persist the result. Scoped to one region, because the tab switcher drives
-// display on every [data-mtab] node and mixing tabs into one order would fight it.
+refreshConsole(true);
+
 function saveDetailLayout(then){
   var region = document.getElementById('detail-console');
   if (!region) return;
@@ -822,8 +672,6 @@ function saveDetailLayout(then){
     });
 }
 
-// This page reuses the dashboard's action NAMES, so the handlers have to exist here too — they are
-// per-page by design (each page knows its own regions and save payload).
 window.movePanel = function(dir, btn){
   var panel = btn.closest('[data-panel]');
   var region = panel && panel.closest('[data-region]');
@@ -867,8 +715,6 @@ window.hidePanel = function(btn){
   saveDetailLayout();
 };
 
-// A hidden panel is not rendered at all, so restoring needs markup only the server has: save first,
-// reload on the acknowledgement.
 window.showDetailPanel = function(region, key, btn){
   btn.remove();
   saveDetailLayout(function(){ location.reload(); });
@@ -880,8 +726,9 @@ if (window.makeSortable) {
 }
 
 initChart();
-pollStats();   // self-schedules: ~8s while online, ~20s while offline, paused while the tab is hidden
-// Refocusing the tab catches up immediately (the poll pauses while hidden).
+
+pollStats();
+
 document.addEventListener('visibilitychange', function(){ if (!document.hidden) pollStats(); });
-// Backup console refresh (websocket is primary) — respects your scroll position
+
 pollWhenVisible(function(){ refreshConsole(); }, 30000);

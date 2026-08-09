@@ -42,9 +42,11 @@
     "fmtBytes",
     "specEsc"
   ],
-  "server_detail.js": [
-    "disk,rows",
+  "server_actions.js": [
     "lower,n,nowIcon,verb"
+  ],
+  "server_detail.js": [
+    "disk,rows"
   ],
   "server_files.js": [
     "_da",
