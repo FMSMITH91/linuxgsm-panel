@@ -3224,6 +3224,71 @@ _blocked_ok, _blocked_reason = N._post("https://169.254.169.254/latest/meta-data
 check("alerts: _post blocks a URL outside the provider allow-list (SSRF barrier)",
       _blocked_ok is False and _blocked_reason == "blocked", _blocked_reason)
 
+# ── Saving notification settings must not destroy the secrets ─────────────────────────────────
+# The settings form never round-trips a real token back to the server — it posts None to mean
+# "leave it alone". If save_settings took that literally it would wipe the bot token every time
+# anyone touched an unrelated checkbox, and alerts would stop with nothing on screen to say why.
+# update_config is stubbed throughout, so the real data/config.json is never written.
+_saved_cfg = {}
+_sv_cfgfn, _sv_update = N._cfg, N.update_config
+try:
+    N.update_config = lambda fn: fn(_saved_cfg)
+    _existing_tok = N.encrypt_secret("123456789:AAtokenAAtokenAAtokenAAtokenAAtoken")
+    _existing_wh = N.encrypt_secret("https://discord.com/api/webhooks/1/x")
+    N._cfg = lambda: {"telegram": {"token": _existing_tok, "chat_id": "42"},
+                      "discord": {"webhook": _existing_wh}}
+    N.save_settings(telegram={"enabled": True, "chat_id": "42", "token": None},
+                    discord={"enabled": True, "webhook": None}, events={})
+    _n = _saved_cfg["notifications"]
+    check("notify save: a None token KEEPS the stored one (the form never sends it back)",
+          _n["telegram"]["token"] == _existing_tok)
+    check("notify save: a None webhook keeps the stored one too",
+          _n["discord"]["webhook"] == _existing_wh)
+
+    _saved_cfg.clear()
+    N.save_settings(telegram={"enabled": True, "chat_id": "42", "token": "999:NEWTOKEN"},
+                    discord={"enabled": False, "webhook": ""}, events={})
+    _n = _saved_cfg["notifications"]
+    check("notify save: a new token replaces it", _n["telegram"]["token"] != _existing_tok)
+    check("notify save: and is stored ENCRYPTED, not in the clear",
+          "999:NEWTOKEN" not in _n["telegram"]["token"]
+          and N.decrypt_secret(_n["telegram"]["token"]) == "999:NEWTOKEN")
+
+    # Thresholds are clamped, and junk must not overwrite a good value.
+    _saved_cfg.clear()
+    _k = sorted(N._DEFAULT_THRESHOLDS)[0]
+    _lo, _hi = N._THRESHOLD_BOUNDS[_k]
+    N.save_settings(telegram={}, discord={}, events={}, thresholds={_k: _hi + 10_000})
+    check("notify save: an out-of-range threshold is clamped to its bound",
+          _saved_cfg["notifications"]["thresholds"][_k] == _hi,
+          "%s -> %s" % (_k, _saved_cfg["notifications"]["thresholds"][_k]))
+    _saved_cfg.clear()
+    N.save_settings(telegram={}, discord={}, events={}, thresholds={_k: "not a number"})
+    check("notify save: junk in a threshold is ignored, not written",
+          isinstance(_saved_cfg["notifications"]["thresholds"][_k], int))
+finally:
+    N._cfg, N.update_config = _sv_cfgfn, _sv_update
+
+# ── The Telegram poller ────────────────────────────────────────────────────────────────────────
+check("telegram poll: a malformed token returns None without building a URL",
+      N.telegram_get_updates("not-a-token") is None)
+check("telegram poll: so does an empty one", N.telegram_get_updates("") is None)
+
+# ── "Send test" must explain itself rather than fail silently ─────────────────────────────────
+_sv_cfg2 = N._cfg
+try:
+    N._cfg = lambda: {}
+    for _kind, _kw, _want in (("telegram", {}, "bot token"),
+                              ("telegram", {"token": "nope"}, "expected format"),
+                              ("telegram", {"token": "123456789:AAtokenAAtokenAAtokenAAtokenAAtoken"}, "chat ID"),
+                              ("discord", {}, "webhook URL"),
+                              ("discord", {"webhook": "https://evil.example/x"}, "Discord webhook URL")):
+        _ok, _msg = N.test_send(_kind, **_kw)
+        check("test send: %s with %s explains what is missing" % (_kind, list(_kw) or "nothing"),
+              _ok is False and _want.lower() in _msg.lower(), _msg[:70])
+finally:
+    N._cfg = _sv_cfg2
+
 passed = sum(1 for ok, _, _ in results if ok)
 for ok, name, detail in results:
     line = ("PASS" if ok else "FAIL") + "  " + name
