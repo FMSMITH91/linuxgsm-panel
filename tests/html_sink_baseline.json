@@ -20,23 +20,26 @@
   ],
   "panel.js": [
     "_da,head,rows",
-    "attachForm",
     "icon",
     "inputHtml"
   ],
   "remote_manage.js": [
     "_da,body,head,j.banned_ips.map,j.currently_banned,j.total_banned,j.total_failed,return",
     "_da,return",
+    "d.rc",
+    "head,rows",
+    "i",
+    "rows"
+  ],
+  "remote_manage_backups.js": [
     "_da,rows",
     "bkFmtBytes,pct",
     "busy.length,list,total",
+    "n"
+  ],
+  "remote_manage_host.js": [
     "d.behind",
-    "d.rc",
     "fmtBytes",
-    "head,rows",
-    "i",
-    "n",
-    "rows",
     "specEsc"
   ],
   "server_detail.js": [

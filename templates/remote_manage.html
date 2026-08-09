@@ -740,6 +740,10 @@ var IS_LOCAL = {{ 'true' if remote.is_local else 'false' }};
 var REMOTE_NAME = {{ remote.name|tojson }};
 </script>
 <script nonce="{{ csp_nonce }}" src="{{ asset_url('js/remote_manage.js') }}"></script>
+{# Loaded in this order on purpose: together they are the one script this page used to have,
+   and later parts define functions the earlier ones call (always deferred and guarded). #}
+<script nonce="{{ csp_nonce }}" src="{{ asset_url('js/remote_manage_host.js') }}"></script>
+<script nonce="{{ csp_nonce }}" src="{{ asset_url('js/remote_manage_backups.js') }}"></script>
 <script nonce="{{ csp_nonce }}">
 UPro.load(REMOTE_ID, 'ubuntu-pro-body', {{ (remote.cached_pro.data if remote.cached_pro else None) | tojson }});
 </script>
