@@ -1,0 +1,69 @@
+name: ClusterFuzzLite prune and coverage
+
+# Corpus pruning and a coverage report for the fuzz targets. Both need the corpus that
+# cflite_batch.yml accumulates, so both self-disable without CFL_STORAGE_REPO — see that file for
+# what to create. Inert until then; live the moment the secret exists.
+on:
+  schedule:
+    - cron: '43 4 * * 0'     # weekly, after a few nightly batch runs have fed the corpus
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  CFL_STORAGE_REPO: ${{ secrets.CFL_STORAGE_REPO }}
+
+jobs:
+  prune:
+    name: prune the corpus
+    runs-on: ubuntu-latest
+    if: github.repository == 'FMSMITH91/linuxgsm-panel'
+    steps:
+      - name: Build fuzzers
+        id: build
+        if: env.CFL_STORAGE_REPO != ''
+        uses: google/clusterfuzzlite/actions/build_fuzzers@884713a6c30a92e5e8544c39945cd7cb630abcd1 # v1
+        with:
+          language: python
+
+      - name: Prune
+        # Drops inputs that no longer reach anything new, so the corpus stays fast to replay.
+        if: env.CFL_STORAGE_REPO != '' && steps.build.outcome == 'success'
+        uses: google/clusterfuzzlite/actions/run_fuzzers@884713a6c30a92e5e8544c39945cd7cb630abcd1 # v1
+        with:
+          language: python
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          fuzz-seconds: 600
+          mode: prune
+          storage-repo: ${{ secrets.CFL_STORAGE_REPO }}
+          storage-repo-branch: main
+          storage-repo-branch-coverage: gh-pages
+
+  coverage:
+    name: fuzzing coverage report
+    runs-on: ubuntu-latest
+    if: github.repository == 'FMSMITH91/linuxgsm-panel'
+    steps:
+      - name: Build fuzzers (coverage)
+        id: build
+        if: env.CFL_STORAGE_REPO != ''
+        uses: google/clusterfuzzlite/actions/build_fuzzers@884713a6c30a92e5e8544c39945cd7cb630abcd1 # v1
+        with:
+          language: python
+          sanitizer: coverage
+
+      - name: Report
+        # Which lines the fuzzers actually reach — a different question from tests/ coverage, and
+        # the honest way to tell whether a target is exercising the parser or bouncing off a guard.
+        if: env.CFL_STORAGE_REPO != '' && steps.build.outcome == 'success'
+        uses: google/clusterfuzzlite/actions/run_fuzzers@884713a6c30a92e5e8544c39945cd7cb630abcd1 # v1
+        with:
+          language: python
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          fuzz-seconds: 600
+          mode: coverage
+          sanitizer: coverage
+          storage-repo: ${{ secrets.CFL_STORAGE_REPO }}
+          storage-repo-branch: main
+          storage-repo-branch-coverage: gh-pages
