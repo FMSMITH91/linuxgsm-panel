@@ -1478,26 +1478,52 @@ try:
             # one unreachable host (an SSH connect timeout) held up the checks for all the others.
             import time as _mt
             _sv_probes = (_am._host_reachable, _am._host_disk_pct, _am._host_load_mem,
-                          _am._remote_listening_ports)
+                          _am._remote_listening_ports, _am._host_restart_flags)
             try:
                 _DWELL = 0.05
                 _am._host_reachable = lambda r: (_mt.sleep(_DWELL), True)[1]
                 _am._host_disk_pct = lambda r: (_mt.sleep(_DWELL), 40)[1]
                 _am._host_load_mem = lambda r: (_mt.sleep(_DWELL), (10, 10))[1]
                 _am._remote_listening_ports = lambda r: (_mt.sleep(_DWELL), set())[1]
+                _am._host_restart_flags = lambda r: (_mt.sleep(_DWELL), set())[1]
                 with app.app_context():
                     _nhosts = RemoteServer.query.count()
                 _reset_mon()
                 _t0 = _mt.time(); _am._monitor_pass(); _elapsed = _mt.time() - _t0
                 # Serial would be hosts x 4 probes x dwell; concurrent is ~4 x dwell regardless of
                 # how many hosts there are. Half of serial is a wide margin either way.
-                _serial = _nhosts * 4 * _DWELL
+                _serial = _nhosts * 5 * _DWELL
                 check("monitor: hosts are probed concurrently, so one slow host holds up no others",
                       _nhosts >= 3 and _elapsed < _serial / 2,
                       "%d hosts: %.2fs elapsed vs %.2fs if serial" % (_nhosts, _elapsed, _serial))
             finally:
                 (_am._host_reachable, _am._host_disk_pct, _am._host_load_mem,
-                 _am._remote_listening_ports) = _sv_probes
+                 _am._remote_listening_ports, _am._host_restart_flags) = _sv_probes
+
+            # ── The sweep records which servers the BOX has queued for restart ────────────────
+            # One `ls /home/*/.restart-pending` per host, mapped back to the game user. Without
+            # this the banner test above would pass while nothing ever populated the dict.
+            _sv_rf = _am._host_restart_flags
+            try:
+                with app.app_context():
+                    _mon_user = db.session.get(GameServer, _mon_id).short_name
+                _am._host_restart_flags = lambda r: {_mon_user}
+                _am._cron_restart_pending.clear()
+                _reset_mon()
+                _am._monitor_pass()
+                check("monitor: a server whose box has the restart flag is recorded",
+                      _am._cron_restart_pending.get(_mon_id) is True,
+                      str(dict(list(_am._cron_restart_pending.items())[:3])))
+                _others = [v for k, v in _am._cron_restart_pending.items() if k != _mon_id]
+                check("monitor: and servers without the flag are recorded as not pending",
+                      _others and not any(_others), str(_others[:5]))
+                _am._host_restart_flags = lambda r: set()
+                _am._monitor_pass()
+                check("monitor: clearing the flag on the box clears it here too",
+                      _am._cron_restart_pending.get(_mon_id) is False)
+            finally:
+                _am._host_restart_flags = _sv_rf
+                _am._cron_restart_pending.clear()
 
             # ── A scheduled LinuxGSM update must not read as a crash ───────────────────────────
             # Stock LinuxGSM installs carry their own cron (e.g. "30 4 * * * ./gmodserver
@@ -1860,6 +1886,38 @@ try:
             _am.delete_cron_job = _sv_del
     finally:
         _am.list_cron_jobs = _sv_lcj
+
+    # ── The pending banner must know about the DAILY-RESTART cron too ─────────────────────────────
+    # Two mechanisms queue a restart-when-empty: the panel's column, and the cron set_daily_restart
+    # writes, which touches ~/.restart-pending on the box and restarts from there. The panel wrote
+    # the second one and then could not see it, so the banner stayed hidden while a restart really
+    # was queued. This is display-only — the column is never written from the flag, so the two
+    # queues stay independent and nothing gets restarted twice.
+    with app.app_context():
+        _g = db.session.get(GameServer, gs_id)
+        _g.restart_pending = _g.stop_pending = False
+        db.session.commit()
+    _am._cron_restart_pending.pop(gs_id, None)
+    def _banner_tag(html):
+        # By id — the first alert-warning on the page may be an unrelated flash message.
+        m = _re_ab.search(r'<div[^>]*id="restart-pending-banner"[^>]*>', html)
+        return m.group(0) if m else ""
+
+    check("pending banner: hidden when neither the panel nor the box has one queued",
+          "d-none" in _banner_tag(c.get("/server/%d" % gs_id).get_data(as_text=True)))
+    _am._cron_restart_pending[gs_id] = True
+    try:
+        _bh = c.get("/server/%d" % gs_id).get_data(as_text=True)
+        _banner = _banner_tag(_bh)
+        check("pending banner: shown when the BOX has one queued, not just the panel",
+              "d-none" not in _banner, _banner[:80])
+        check("pending banner: and it says which schedule queued it",
+              "by the daily-restart schedule" in _bh)
+        with app.app_context():
+            check("pending banner: the column is left alone, so the panel's own queue is untouched",
+                  db.session.get(GameServer, gs_id).restart_pending is False)
+    finally:
+        _am._cron_restart_pending.pop(gs_id, None)
 
     # ── Bearer API tokens: the other way into every route ─────────────────────────────────────────
     # A token authenticates AS its owner and inherits exactly that user's RBAC, and app.py exempts
