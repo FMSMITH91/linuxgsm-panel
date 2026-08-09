@@ -4628,7 +4628,14 @@ def register_routes(app):
                         if cmds:
                             gs.set_commands(cmds); db.session.commit()
                             try:
-                                install_game_cron(remote, short_name, gs.lgsm_name, {c["cmd"] for c in cmds})
+                                supported = {c["cmd"] for c in cmds}
+                                install_game_cron(remote, short_name, gs.lgsm_name, supported)
+                                # install_game_cron schedules `monitor` when the game has it, and
+                                # that line IS the Autostart switch — record it, or the Details
+                                # page shows Off while monitor is scheduled and running.
+                                if "monitor" in supported and not gs.autostart:
+                                    gs.autostart = True
+                                    db.session.commit()
                             except Exception:
                                 _log.debug("_run: ignored non-fatal error", exc_info=True)
                     except Exception:
@@ -8284,6 +8291,27 @@ def register_routes(app):
     # editable here too — nothing is locked in the generic editor any more (see
     # ssh_manager._cron_managed_patterns, which now returns []). This comment previously claimed
     # they were read-only, which read as a security guarantee that the code does not make.
+    def _sync_toggles_from_cron(gs, jobs):
+        """Make the crontab the source of truth for the Autostart / Daily-restart switches.
+
+        Both switches are stored as columns, but what they really mean is "is this line in the
+        crontab". Three paths wrote the line without touching the column — install_game_cron() at
+        install time, an import that adopted an existing setup, and deleting the line by hand in
+        Scheduled Tasks (whose own help text promised that deleting `monitor` turns Autostart off).
+        So the Details page could show Off while `*/5 * * * * ... monitor` was scheduled and
+        running. Reconciles on every read or write of the cron list; returns True if it changed
+        anything."""
+        roles = {j.get("role") for j in (jobs or [])}
+        changed = False
+        for field, role in (("autostart", "autostart"), ("daily_restart", "daily-restart")):
+            live = role in roles
+            if bool(getattr(gs, field)) != live:
+                setattr(gs, field, live)
+                changed = True
+        if changed:
+            db.session.commit()
+        return changed
+
     @app.route("/api/server/<int:server_id>/cron", methods=["GET", "POST"])
     @login_required
     @server_access_required
@@ -8299,13 +8327,17 @@ def register_routes(app):
                     upgrade_managed_cron_tracking(gs.remote, gs.short_name, gs.lgsm_name)
                 except Exception:
                     app.logger.debug("cron tracking upgrade skipped", exc_info=True)
-                return jsonify({"jobs": list_cron_jobs(gs.remote, gs.short_name, gs.lgsm_name)})
+                jobs = list_cron_jobs(gs.remote, gs.short_name, gs.lgsm_name)
+                _sync_toggles_from_cron(gs, jobs)
+                return jsonify({"jobs": jobs})
             except Exception:
                 return jsonify({"error": _log_and_generic("list_cron_jobs failed")}), 500
         data = _json_body()
         try:
             ok, msg = add_cron_job(gs.remote, gs.short_name, data.get("schedule"),
                                    data.get("command"), gs.lgsm_name)
+            if ok:
+                _sync_toggles_from_cron(gs, list_cron_jobs(gs.remote, gs.short_name, gs.lgsm_name))
             log_action(current_user, "cron_add", target=gs.name, success=ok,
                        detail=(data.get("schedule") or "")[:120])
             return jsonify({"success": ok, "message": msg or ("Added" if ok else "Failed")})
@@ -8339,6 +8371,9 @@ def register_routes(app):
         data = _json_body()
         try:
             ok, msg = delete_cron_job(gs.remote, gs.short_name, data.get("raw") or "", gs.lgsm_name)
+            if ok:
+                # The card's own help text promises that deleting `monitor` turns Autostart off.
+                _sync_toggles_from_cron(gs, list_cron_jobs(gs.remote, gs.short_name, gs.lgsm_name))
             log_action(current_user, "cron_delete", target=gs.name, success=ok)
             return jsonify({"success": ok, "message": msg or ("Deleted" if ok else "Failed")})
         except Exception:

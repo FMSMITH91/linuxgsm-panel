@@ -1817,6 +1817,50 @@ try:
           'data-action="clearConsole"' in _det_html
           and 'data-action="clearConsole"' not in _fil_html)
 
+    # ── The Autostart switch must follow the crontab, not a stale column ──────────────────────────
+    # What "Autostart" MEANS is "is `*/5 * * * * ./server monitor` scheduled". It was stored as a
+    # column that three paths never updated — install, import, and deleting the line by hand — so
+    # the Details page could read Off while monitor was scheduled and running every 5 minutes.
+    _sv_lcj = _am.list_cron_jobs
+    try:
+        _mon = {"raw": "*/5 * * * * /home/csgoserver/csgoserver monitor", "schedule": "*/5 * * * *",
+                "command": "/home/csgoserver/csgoserver monitor", "managed": False,
+                "role": "autostart", "last_run": None, "ok": None, "error": ""}
+        with app.app_context():
+            db.session.get(GameServer, gs_id).autostart = False      # the stale column
+            db.session.commit()
+        _am.list_cron_jobs = lambda *a, **k: [_mon]
+        c.get("/api/server/%d/cron" % gs_id)
+        with app.app_context():
+            _now = db.session.get(GameServer, gs_id).autostart
+        check("autostart: reading the cron corrects a switch that said Off while monitor is scheduled",
+              _now is True, "still %r" % _now)
+
+        _am.list_cron_jobs = lambda *a, **k: []                       # monitor line gone
+        c.get("/api/server/%d/cron" % gs_id)
+        with app.app_context():
+            _now = db.session.get(GameServer, gs_id).autostart
+        check("autostart: and turns it back Off once the line is no longer there", _now is False,
+              "still %r" % _now)
+
+        # The card's help text promises this; now it is true.
+        _sv_del = _am.delete_cron_job
+        try:
+            with app.app_context():
+                db.session.get(GameServer, gs_id).autostart = True
+                db.session.commit()
+            _am.delete_cron_job = lambda *a, **k: (True, "Deleted")
+            _am.list_cron_jobs = lambda *a, **k: []
+            c.post("/api/server/%d/cron/delete" % gs_id, json={"raw": _mon["raw"]})
+            with app.app_context():
+                _now = db.session.get(GameServer, gs_id).autostart
+            check("autostart: deleting the monitor line turns the switch off, as the card promises",
+                  _now is False, "still %r" % _now)
+        finally:
+            _am.delete_cron_job = _sv_del
+    finally:
+        _am.list_cron_jobs = _sv_lcj
+
     # ── Bearer API tokens: the other way into every route ─────────────────────────────────────────
     # A token authenticates AS its owner and inherits exactly that user's RBAC, and app.py exempts
     # Bearer requests from CSRF — so this is a full authentication path that had no test at all.
