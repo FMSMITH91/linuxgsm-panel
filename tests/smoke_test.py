@@ -1795,6 +1795,28 @@ try:
         from app import _LOGIN_FAILS as _LF
         _LF.clear()   # those logins were all successful, but keep the throttle clean for later tests
 
+    # ── Files & Config carries the same control bar as the detail page ────────────────────────────
+    # It tells you to "restart the server to apply" a config change, and for a long time offered no
+    # way to do it. Both pages include _server_actions.html now, so this asserts they really render
+    # the same buttons — a shared include is only shared until someone edits one copy.
+    import re as _re_ab
+
+    def _act_btns(html):
+        # No trailing quote in the pattern — the capture group stops at it anyway, and including
+        # it makes the Python literal ambiguous.
+        return _re_ab.findall(r'''data-action="serverAction" data-args='\["([\w-]+)''', html)
+
+    _det_html = c.get("/server/%d" % gs_id).get_data(as_text=True)
+    _fil_html = c.get("/server/%d/files" % gs_id).get_data(as_text=True)
+    check("actions: Files & Config offers the same server actions as the detail page",
+          _act_btns(_fil_html) == _act_btns(_det_html) and len(_act_btns(_det_html)) > 0,
+          "detail=%s files=%s" % (_act_btns(_det_html), _act_btns(_fil_html)))
+    check("actions: ...and the handler for them is actually served to that page",
+          "server_actions.js" in _fil_html and "var SERVER_NAME" in _fil_html)
+    check("actions: Clear Console stays on the console page only",
+          'data-action="clearConsole"' in _det_html
+          and 'data-action="clearConsole"' not in _fil_html)
+
     # ── Bearer API tokens: the other way into every route ─────────────────────────────────────────
     # A token authenticates AS its owner and inherits exactly that user's RBAC, and app.py exempts
     # Bearer requests from CSRF — so this is a full authentication path that had no test at all.

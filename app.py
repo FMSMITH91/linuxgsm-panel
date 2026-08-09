@@ -3588,6 +3588,53 @@ def register_routes(app):
 
     _pubip_resolve_attempts = {}  # remote_id -> last background public-IP resolve time
 
+    def _server_action_buttons(gs):
+        """(actions, maintenance) for the control bar, filtered by what the game supports and what the
+        CURRENT user may run.
+
+        Shared by the server detail page and Files & Config, which renders the same bar — the two used
+        to differ only because Files & Config had no bar at all, and it told you to "restart the server
+        to apply" without offering a way to do it."""
+        user_perms = get_user_permissions(current_user)
+        is_sa = current_user.is_superadmin
+
+        def _can(perm):
+            return is_sa or perm in user_perms
+
+        all_commands = gs.get_commands()
+        if not all_commands:
+            _maybe_cache_commands(gs.id)
+        cmd_set = {c["cmd"] for c in all_commands}
+        # Some games aren't SteamCMD-based (the Call of Duty family) and have NO `update` command.
+        # An empty list means it hasn't been fetched yet — fail open rather than hide the button.
+        supports_update = (not cmd_set) or ("update" in cmd_set)
+
+        # Order matters — this is the on-screen button order (lifecycle order reads most naturally).
+        actions = []
+        if _can(START_SERVER):
+            actions.append(("start", "Start"))
+        if _can(STOP_SERVER):
+            actions.append(("stop", "Stop"))
+        if _can(RESTART_SERVER):
+            actions.append(("restart", "Restart"))
+        if _can(UPDATE_SERVER) and supports_update:
+            actions.append(("update", "Update"))
+
+        maint_perm = {
+            "monitor": VIEW_CONSOLE, "details": VIEW_CONSOLE, "check-update": VIEW_CONSOLE,
+            "postdetails": VIEW_CONSOLE, "test-alert": VIEW_CONSOLE,
+            "validate": UPDATE_SERVER, "backup": UPDATE_SERVER, "force-update": UPDATE_SERVER,
+            "update-lgsm": UPDATE_SERVER, "mods-update": UPDATE_SERVER, "fastdl": UPDATE_SERVER,
+        }
+        core = {"start", "stop", "restart", "update"}
+        maintenance = [
+            {"cmd": c["cmd"], "desc": c["desc"]}
+            for c in all_commands
+            if c["cmd"] in maint_perm and c["cmd"] not in core and _can(maint_perm[c["cmd"]])
+        ]
+        return actions, maintenance, all_commands, supports_update
+
+
     def _maybe_resolve_public_ip(remote_id):
         """Resolve + cache a remote's public IP in the BACKGROUND (one SSH), rate-limited per
         remote. Request/render paths use remote.host as the immediate connect-address fallback and
@@ -3637,45 +3684,9 @@ def register_routes(app):
         def _can(perm):
             return is_sa or perm in user_perms
 
-        # Use the cached LinuxGSM command list (populated at install/import time). If it's
-        # empty (e.g. a server imported before auto-caching existed), kick off a background
-        # fetch so it fills in for the next load — we never block the page render on SSH.
-        all_commands = gs.get_commands()
-        if not all_commands:
-            _maybe_cache_commands(gs.id)
-        cmd_set = {c["cmd"] for c in all_commands}
-        # Some games aren't SteamCMD-based (e.g. the Call of Duty family) and have NO `update`
-        # command — LinuxGSM omits it from their menu. Only offer Update when the game actually
-        # supports it. If the command list hasn't been fetched yet (empty), fail open and show it
-        # — the sidebar's refresh button repopulates the list.
-        supports_update = (not cmd_set) or ("update" in cmd_set)
-
-        # Order matters — this is the on-screen button order. Start, Stop, Restart,
-        # Update reads most naturally (lifecycle order).
-        actions = []
-        if _can(START_SERVER):
-            actions.append(("start", "Start"))
-        if _can(STOP_SERVER):
-            actions.append(("stop", "Stop"))
-        if _can(RESTART_SERVER):
-            actions.append(("restart", "Restart"))
-        if _can(UPDATE_SERVER) and supports_update:
-            actions.append(("update", "Update"))
-
-        # Extra maintenance commands (beyond start/stop/restart/update) this game
-        # supports and the user is allowed to run.
-        maint_perm = {
-            "monitor": VIEW_CONSOLE, "details": VIEW_CONSOLE, "check-update": VIEW_CONSOLE,
-            "postdetails": VIEW_CONSOLE, "test-alert": VIEW_CONSOLE,
-            "validate": UPDATE_SERVER, "backup": UPDATE_SERVER, "force-update": UPDATE_SERVER,
-            "update-lgsm": UPDATE_SERVER, "mods-update": UPDATE_SERVER, "fastdl": UPDATE_SERVER,
-        }
-        core = {"start", "stop", "restart", "update"}
-        maintenance = [
-            {"cmd": c["cmd"], "desc": c["desc"]}
-            for c in all_commands
-            if c["cmd"] in maint_perm and c["cmd"] not in core and _can(maint_perm[c["cmd"]])
-        ]
+        # The control bar (start/stop/restart/update + maintenance), built once and shared with
+        # Files & Config so the two pages cannot drift apart again.
+        actions, maintenance, all_commands, supports_update = _server_action_buttons(gs)
 
         can_send_command = _can(SEND_COMMAND)
         can_autostart = _can(RESTART_SERVER)
@@ -8089,7 +8100,11 @@ def register_routes(app):
         if not _can_manage_files():
             flash("You don't have permission to manage server files.", "danger")
             return redirect(url_for("server_detail", server_id=server_id))
-        return render_template("server_files.html", server=gs, remote=gs.remote)
+        # Same control bar as the detail page — this page tells you to restart to apply a
+        # change, so it has to offer the button.
+        actions, maintenance, _all_cmds, _sup = _server_action_buttons(gs)
+        return render_template("server_files.html", server=gs, remote=gs.remote,
+                               actions=actions, maintenance=maintenance)
 
     @app.route("/api/server/<int:server_id>/config", methods=["GET", "POST"])
     @login_required
