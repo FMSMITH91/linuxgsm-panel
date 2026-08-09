@@ -1293,6 +1293,25 @@ def _host_load_mem(remote):
 _MONITOR_HOST_WORKERS = 8
 
 
+# Game users whose ~/.restart-pending flag is set, per host id. The DAILY-RESTART cron sets that
+# flag on the box at 05:00 and its hourly partner restarts once the server empties — a mechanism the
+# panel writes but then cannot see, because the panel's own "restart when empty" is a DB column and
+# nothing connects the two. The banner therefore stayed hidden while a restart really was queued.
+# Display only: the column is never written from this, so the panel's own queue is untouched and
+# nothing can be restarted twice.
+_cron_restart_pending = {}
+
+
+def _host_restart_flags(remote):
+    """The set of game users on `remote` whose ~/.restart-pending flag exists. One cheap ls."""
+    try:
+        out, _, _ = run_command(
+            remote, "ls -1d /home/*/.restart-pending 2>/dev/null || true", timeout=10)
+        return {ln.split("/")[2] for ln in (out or "").splitlines() if ln.startswith("/home/")}
+    except Exception:
+        return set()
+
+
 def _probe_host(remote):
     """Every network probe for one host, gathered off the database.
 
@@ -1307,7 +1326,8 @@ def _probe_host(remote):
         except Exception:
             ports = None
         return remote.id, {"reachable": True, "disk": _host_disk_pct(remote),
-                           "load_mem": _host_load_mem(remote), "ports": ports}
+                           "load_mem": _host_load_mem(remote), "ports": ports,
+                           "restart_flagged": _host_restart_flags(remote)}
     except Exception:
         _log.debug("host probe failed for %s", getattr(remote, "name", "?"), exc_info=True)
         return remote.id, {"reachable": False}
@@ -1376,6 +1396,8 @@ def _monitor_pass():
             if gs.status in ("installing", "configuring"):
                 continue
             up = gs.port in ports
+            # Display-only: does the BOX think a restart is queued for this server?
+            _cron_restart_pending[gs.id] = gs.short_name in (probe.get("restart_flagged") or set())
             prev_up = _monitor_state["servers"].get(gs.id)
             # State is tracked either way — only the ALERT is muted by a tag, so a server that goes
             # down while muted still reports "back online" correctly once it is unmuted.
@@ -3712,7 +3734,8 @@ def register_routes(app):
                                can_send_command=can_send_command, can_moderate=can_moderate,
                                can_kick=can_kick, can_ban=can_ban, can_say=can_say,
                                custom_commands=custom_commands,
-                               can_autostart=can_autostart, public_host=public_host)
+                               can_autostart=can_autostart, public_host=public_host,
+                               cron_restart_pending=_cron_restart_pending.get(gs.id, False))
 
     def _perm_for_action(action):
         """Which permission an action requires (core actions have specific perms;
