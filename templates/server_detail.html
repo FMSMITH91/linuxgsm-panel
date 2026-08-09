@@ -318,12 +318,14 @@
             <td class="text-end">{{ "Yes" if server.installed else "No" }}</td>
           </tr>
           <tr>
-            <td class="text-secondary">Auto-start on boot</td>
+            <td class="text-secondary">Auto-start &amp; recover
+              <span class="text-muted" style="font-size:.7rem;">(monitor, every 5 min)</span></td>
             <td class="text-end">
               {% if can_autostart %}
               <div class="form-check form-switch d-inline-block m-0">
                 <input class="form-check-input" type="checkbox" role="switch" id="autostart-toggle"
-                       aria-label="Auto-start on boot"
+                       aria-label="Auto-start and crash recovery, via the monitor cron"
+                       title="Runs LinuxGSM monitor every 5 minutes: it starts the server again after a reboot or a crash, and leaves it alone if you stopped it deliberately."
                        {% if server.autostart %}checked{% endif %} data-action="toggleAutostart" data-args='["@self"]' data-on="change">
               </div>
               {% else %}
@@ -394,7 +396,10 @@
           </button>
         </form>
       </div>
-      <div class="card-body p-0" style="max-height:340px;overflow-y:auto;">
+      {# No fixed height: a 340px cap made this scroll inside a card with room to spare next
+         to it. The list is ~20 rows for a typical game, so let it size to its content and
+         let the PAGE scroll, which is what every other card here does. #}
+      <div class="card-body p-0">
         {% if all_commands %}
         <table class="table table-sm table-borderless mb-0 small">
           {% for c in all_commands %}
