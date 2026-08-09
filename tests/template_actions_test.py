@@ -46,7 +46,12 @@ srcs.update({p.name: p.read_text(encoding="utf-8") for p in sorted(STATIC_JS.glo
 # fine and looks harmless. Static analysers read the TEMPLATE, though, and to a JS parser "{#" is
 # a private-field sigil: CodeQL raised two js/syntax-error alerts on exactly this. A whole file
 # that fails to parse is a file nothing is checking, which is the real cost.
-_INLINE_SCRIPT = re.compile(r"<script\b(?![^>]*\bsrc=)[^>]*>(.*?)</script>", re.S)
+# Only script elements a JS parser actually reads: no src=, and either no type or a JS one.
+# A <script type="application/json"> data island is not JavaScript — nothing parses it as JS,
+# so Jinja inside it cannot produce the syntax error this check exists to prevent.
+_INLINE_SCRIPT = re.compile(
+    r"<script\b(?![^>]*\bsrc=)(?![^>]*\btype=\"(?:application|text)/(?!javascript)[\w.+-]+\")"
+    r"[^>]*>(.*?)</script>", re.S)
 _jinja_in_js = []
 for _name, _src in srcs.items():
     if not _name.endswith(".html"):

@@ -55,8 +55,8 @@
           </td>
           <td class="text-secondary small">{{ user.last_login|datetime if user.last_login else 'Never' }}</td>
           <td class="text-end">
-            <button class="btn btn-outline-secondary btn-sm" data-bs-toggle="modal"
-                    data-bs-target="#editUserModal-{{ user.id }}"
+            <button class="btn btn-outline-secondary btn-sm"
+                    data-action="openEditUser" data-args='[{{ user.id }}]'
                     aria-label="Edit {{ user.username }}" title="Edit {{ user.username }}">
               <i class="bi bi-pencil"></i>
             </button>
@@ -148,29 +148,44 @@
   </div>
 </div>
 
-<!-- Edit User Modals -->
-{% for user in users %}
-<div class="modal fade" id="editUserModal-{{ user.id }}" tabindex="-1">
+{# One row of JSON per user instead of one 2KB edit modal per user: at 100 accounts that was
+   ~210KB of duplicated markup in the page. The single modal below is populated from this. It lives
+   INSIDE #users-list so an ajax refresh after a save keeps it current. #}
+<script type="application/json" id="users-data" nonce="{{ csp_nonce }}">
+[{% for user in users %}{"id": {{ user.id }},
+  "username": {{ user.username|tojson }},
+  "display_name": {{ (user.display_name or '')|tojson }},
+  "email": {{ (user.email_display or '')|tojson }},
+  "groups": {{ (user.groups|map(attribute='id')|list)|tojson }},
+  "is_superadmin": {{ 'true' if user.is_superadmin else 'false' }},
+  "is_active": {{ 'true' if user.is_active else 'false' }},
+  "totp_enabled": {{ 'true' if user.totp_enabled else 'false' }}}{{ "," if not loop.last }}{% endfor %}]
+</script>
+</div><!-- /#users-list -->
+
+{# The single edit modal. Outside #users-list on purpose: an ajax refresh replaces that region, and
+   replacing a modal while it is open leaves Bootstrap's backdrop behind. #}
+<div class="modal fade" id="editUserModal" tabindex="-1">
   <div class="modal-dialog">
     <div class="modal-content">
-      <form method="POST" action="{{ url_for('edit_user', user_id=user.id) }}"
+      <form method="POST" action="" id="edit-user-form"
             class="ajax-form" data-ajax-refresh="#users-list" data-ajax-reset="off">
         <div class="modal-header">
-          <h5 class="modal-title"><i class="bi bi-pencil"></i> Edit User: {{ user.username }}</h5>
+          <h5 class="modal-title"><i class="bi bi-pencil"></i> Edit User: <span id="eu-name"></span></h5>
           <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal"></button>
         </div>
         <div class="modal-body">
           <div class="mb-3">
-            <label class="form-label">Display Name</label>
-            <input type="text" name="display_name" class="form-control" value="{{ user.display_name }}">
+            <label class="form-label" for="eu-display">Display Name</label>
+            <input type="text" name="display_name" id="eu-display" class="form-control">
           </div>
           <div class="mb-3">
-            <label class="form-label">Email</label>
-            <input type="email" name="email" class="form-control" value="{{ user.email_display }}">
+            <label class="form-label" for="eu-email">Email</label>
+            <input type="email" name="email" id="eu-email" class="form-control">
           </div>
           <div class="mb-3">
-            <label class="form-label">New Password (leave blank to keep current)</label>
-            <input type="password" name="password" class="form-control" minlength="10">
+            <label class="form-label" for="eu-password">New Password (leave blank to keep current)</label>
+            <input type="password" name="password" id="eu-password" class="form-control" minlength="10">
             <div class="form-text">At least 10 characters with upper &amp; lowercase, a number, and a symbol.</div>
           </div>
           <hr class="border-secondary">
@@ -182,10 +197,9 @@
             </div>
             {% for g in groups %}
             <div class="form-check">
-              <input type="checkbox" name="groups" value="{{ g.id }}" class="form-check-input"
-                     id="edit-group-{{ user.id }}-{{ g.id }}"
-                     {% if g in user.groups %}checked{% endif %}>
-              <label class="form-check-label" for="edit-group-{{ user.id }}-{{ g.id }}">{{ g.name }}</label>
+              <input type="checkbox" name="groups" value="{{ g.id }}" class="form-check-input eu-group"
+                     id="eu-group-{{ g.id }}">
+              <label class="form-check-label" for="eu-group-{{ g.id }}">{{ g.name }}</label>
             </div>
             {% endfor %}
           </div>
@@ -193,9 +207,8 @@
           <div class="mb-3">
             <label class="form-label mb-1">Account type</label>
             <div class="form-check form-switch">
-              <input type="checkbox" name="is_superadmin" class="form-check-input" role="switch"
-                     id="edit-superadmin-{{ user.id }}" {% if user.is_superadmin %}checked{% endif %}>
-              <label class="form-check-label" for="edit-superadmin-{{ user.id }}">Super Administrator</label>
+              <input type="checkbox" name="is_superadmin" class="form-check-input" role="switch" id="eu-superadmin">
+              <label class="form-check-label" for="eu-superadmin">Super Administrator</label>
             </div>
             <div class="form-text mt-0">
               Ignores groups entirely — full control of everything. Leave off for a standard user.
@@ -205,27 +218,24 @@
           <div>
             <label class="form-label mb-1">Status</label>
             <div class="form-check form-switch">
-              <input type="checkbox" name="is_active" class="form-check-input" role="switch"
-                     id="edit-active-{{ user.id }}" {% if user.is_active %}checked{% endif %}>
-              <label class="form-check-label" for="edit-active-{{ user.id }}">Active</label>
+              <input type="checkbox" name="is_active" class="form-check-input" role="switch" id="eu-active">
+              <label class="form-check-label" for="eu-active">Active</label>
             </div>
             <div class="form-text mt-0">
               Uncheck to block this user from logging in, without deleting the account.
             </div>
           </div>
-          {% if user.totp_enabled %}
-          <hr class="border-secondary">
-          <div>
+          <div id="eu-2fa-block" style="display:none;">
+            <hr class="border-secondary">
             <label class="form-label mb-1"><i class="bi bi-shield-lock"></i> Two-Factor Auth</label>
             <div class="form-check form-switch">
-              <input type="checkbox" name="reset_2fa" class="form-check-input" role="switch" id="edit-reset2fa-{{ user.id }}">
-              <label class="form-check-label" for="edit-reset2fa-{{ user.id }}">Reset (disable) this user's 2FA</label>
+              <input type="checkbox" name="reset_2fa" class="form-check-input" role="switch" id="eu-reset2fa">
+              <label class="form-check-label" for="eu-reset2fa">Reset (disable) this user's 2FA</label>
             </div>
             <div class="form-text mt-0">
               Use this if they've lost their authenticator. They can re-enable it from their Account page.
             </div>
           </div>
-          {% endif %}
         </div>
         <div class="modal-footer">
           <button type="button" class="btn btn-outline-secondary" data-bs-dismiss="modal">Cancel</button>
@@ -235,7 +245,7 @@
     </div>
   </div>
 </div>
-{% endfor %}
-</div><!-- /#users-list -->
+
+<script nonce="{{ csp_nonce }}" src="{{ asset_url('js/manage_users.js') }}"></script>
 
 {% endblock %}
