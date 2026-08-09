@@ -1919,6 +1919,38 @@ try:
     finally:
         _am._cron_restart_pending.pop(gs_id, None)
 
+    # ── The users page renders ONE edit modal, not one per user ───────────────────────────────────
+    # It used to emit a full 2KB modal per row — 670KB of HTML at 100 accounts, all of it for a
+    # dialog you can only have open once. The rows now carry an id and the data comes from a single
+    # JSON island. These assert the shape holds AND that the data is actually right, because a
+    # smaller page that opens the wrong user's details would be a much worse bug than a big one.
+    import json as _json_u
+    _uh = c.get("/users").get_data(as_text=True)
+    check("users page: exactly one edit modal, however many accounts exist",
+          _uh.count('id="editUserModal"') == 1 and 'id="editUserModal-' not in _uh,
+          "found %d" % _uh.count('id="editUserModal'))
+    _isl = _re_ab.search(r'<script type="application/json" id="users-data"[^>]*>(.*?)</script>',
+                         _uh, _re_ab.S)
+    check("users page: the JSON island is present", _isl is not None)
+    if _isl:
+        _rows = _json_u.loads(_isl.group(1))     # must be VALID json, not just present
+        with app.app_context():
+            # Materialise inside the context: .groups is a lazy relationship and reading it after
+            # the context closes raises DetachedInstanceError.
+            _want = {u.username: (bool(u.is_superadmin), bool(u.is_active),
+                                  sorted(g.id for g in u.groups)) for u in User.query.all()}
+        check("users page: one island entry per account", len(_rows) == len(_want),
+              "%d rows vs %d users" % (len(_rows), len(_want)))
+        _bad = [r["username"] for r in _rows
+                if (r["is_superadmin"], r["is_active"], sorted(r["groups"])) != _want[r["username"]]]
+        check("users page: each entry matches that account's real flags and groups", not _bad,
+              "wrong: %s" % _bad[:3])
+        check("users page: every row's Edit button opens the shared modal by id",
+              _uh.count('data-action="openEditUser"') == len(_rows),
+              "%d buttons for %d users" % (_uh.count('data-action="openEditUser"'), len(_rows)))
+        check("users page: no password is ever put in the island",
+              not any("password" in r for r in _rows))
+
     # ── Bearer API tokens: the other way into every route ─────────────────────────────────────────
     # A token authenticates AS its owner and inherits exactly that user's RBAC, and app.py exempts
     # Bearer requests from CSRF — so this is a full authentication path that had no test at all.
@@ -2020,6 +2052,12 @@ try:
         check("custom command: a missing command is refused, not an exception",
               _crcc(_adm, None, _gs) is False)
 
+except Exception:
+    # A crash part-way through otherwise just prints fewer checks and still reads as green-ish.
+    # That has hidden three separate mistakes while writing these; a crash is a FAILURE.
+    import traceback as _tb
+    _tb.print_exc()
+    results.append((False, "suite crashed before finishing — see the traceback above", ""))
 finally:
     passed = sum(1 for ok, _, _ in results if ok)
     for ok, name, detail in results:
