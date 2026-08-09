@@ -362,7 +362,7 @@ document.addEventListener('click', function(ev){
   window.copyText(el.getAttribute('data-copy'), 'Copied ' + el.getAttribute('data-copy'));
 });
 
-function fmtGB(b) { return (b / 1073741824).toFixed(1) + ' GB'; }
+function fmtGB(b) { return (b / 1073741824).toFixed(1) + ' GB'; }  // NOPMD - 2**30 is exact in a double; this is the GiB divisor, not a precision bug
 
 function fmtUptime(s) {
   var d = Math.floor(s/86400), h = Math.floor(s%86400/3600), m = Math.floor(s%3600/60);
