@@ -3080,11 +3080,14 @@ def _parse_upgradable(out):
         if not parts:
             continue
         name = parts[0].split("/")[0]
+        # The bit after the slash is the apt suite ("jammy-security"), the only thing in this output
+        # that says an update is a SECURITY one. Kept so alerts can call those out.
+        suite = parts[0].split("/", 1)[1] if "/" in parts[0] else ""
         new_ver = parts[1] if len(parts) > 1 else ""
         old_ver = ""
         if "upgradable from:" in line:
             old_ver = line.split("upgradable from:", 1)[1].strip().rstrip("]").strip()
-        pkgs.append({"name": name, "version": new_ver, "from": old_ver})
+        pkgs.append({"name": name, "version": new_ver, "from": old_ver, "suite": suite})
     pkgs.sort(key=lambda p: p["name"])
     return pkgs
 
