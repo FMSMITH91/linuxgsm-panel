@@ -8831,6 +8831,58 @@ def register_routes(app):
     # first client-side check. Each tick does a `git fetch` (+ a CI-state lookup only when actually
     # behind), and it logs once when a newly verified update first appears — a server-side record
     # even with nobody watching. Half-hourly is plenty for a code update.
+    # ── OS package updates, per host ───────────────────────────────────────────────────────────
+    # Checked once a day, not on the monitor's 60s tick: each check runs `apt update`, which is a
+    # network fetch on every host. It rides the existing update-check ticker rather than adding
+    # another thread.
+    #
+    # Alerts on the TRANSITION (nothing waiting -> something waiting) and re-arms once the host is
+    # clean again, the same shape as the disk-low alert. Telling you every day that the same twelve
+    # packages are still there is how an alert becomes noise you filter out.
+    _os_update_state = {"last_run": 0.0, "hosts": {}}
+    _OS_UPDATE_EVERY = 24 * 3600
+
+    def _os_updates_for(remote):
+        """(count, security_count, sample_names) for one host, or None if it could not be checked."""
+        try:
+            if remote.is_local:
+                res = so.os_update_available(refresh=True)
+                pkgs = res.get("packages") or []
+            else:
+                pkgs = (remote_os_check_updates(remote) or {}).get("packages") or []
+            sec = [p for p in pkgs if "-security" in (p.get("suite") or "")]
+            return len(pkgs), len(sec), [p.get("name", "?") for p in (sec or pkgs)][:5]
+        except Exception:
+            _log.debug("os-update check failed for %s", getattr(remote, "name", "?"), exc_info=True)
+            return None
+
+    def _maybe_alert_os_updates(force=False):
+        """Check every reachable host once a day and alert when updates appear. Never raises."""
+        now = time.time()
+        if not force and now - _os_update_state["last_run"] < _OS_UPDATE_EVERY:
+            return
+        _os_update_state["last_run"] = now
+        for remote in RemoteServer.query.all():
+            if not _host_reachable(remote):
+                continue          # an unreachable host is the monitor's problem, not this one
+            got = _os_updates_for(remote)
+            if got is None:
+                continue          # couldn't tell — say nothing rather than guess
+            count, sec, names = got
+            had = _os_update_state["hosts"].get(remote.id, 0)
+            _os_update_state["hosts"][remote.id] = count
+            if count and not had:
+                what = ("%d security update%s of %d waiting"
+                        % (sec, "" if sec == 1 else "s", count)) if sec else \
+                       ("%d update%s waiting" % (count, "" if count == 1 else "s"))
+                notifications.notify(
+                    "os_updates",
+                    "Security updates on %s" % remote.display_name if sec
+                    else "Updates available on %s" % remote.display_name,
+                    "%s on %s: %s%s"
+                    % (what, remote.display_name, ", ".join(names),
+                       ", …" if count > len(names) else ""))
+
     def update_check_ticker():
         time.sleep(30)   # let boot settle before the first network fetch
         last_logged_sha = None
@@ -8855,6 +8907,7 @@ def register_routes(app):
                 else:
                     last_logged_sha = None   # up to date — let a future update log again
                 _maybe_alert_cert_expiring()   # piggyback the periodic TLS-cert expiry check here
+                _maybe_alert_os_updates()      # ...and the once-a-day OS package check
             except Exception:
                 app.logger.debug("update-check tick failed", exc_info=True)
             time.sleep(1800)
@@ -8866,6 +8919,9 @@ def register_routes(app):
     # server through the exact same path as the web controls (permission already implied by the bot
     # being locked to the configured chat).
     app._run_action = _run_action
+    # Same reason: the daily OS-update check is nested in here, and the tests drive the real
+    # function rather than a copy of its logic.
+    app._maybe_alert_os_updates = _maybe_alert_os_updates
     return app
 
 

@@ -1951,6 +1951,85 @@ try:
         check("users page: no password is ever put in the island",
               not any("password" in r for r in _rows))
 
+    # ── OS updates: tell me once, not every day ───────────────────────────────────────────────────
+    # The panel checks each host daily and messages the chat bots when packages appear. The alert
+    # fires on the TRANSITION and re-arms when the host is clean, because "the same 12 packages are
+    # still waiting" every morning is how an alert becomes something you filter out.
+    _sv_reach, _sv_loc, _sv_rem = _am._host_reachable, _am.so.os_update_available, _am.remote_os_check_updates
+    try:
+        def _osu(**kw):
+            # It queries RemoteServer, so it needs a context — the ticker calls it inside one.
+            with app.app_context():
+                app._maybe_alert_os_updates(**kw)
+
+        _am._host_reachable = lambda r: True
+        _pkgs = {"n": []}
+        _am.so.os_update_available = lambda refresh=True: {"packages": _pkgs["n"]}
+        _am.remote_os_check_updates = lambda r: {"packages": _pkgs["n"]}
+
+        _rec.clear()
+        _osu(force=True)
+        check("os updates: a host with nothing waiting says nothing", "os_updates" not in _rec, str(_rec))
+
+        _pkgs["n"] = [{"name": "openssl", "suite": "jammy-security"},
+                      {"name": "curl", "suite": "jammy-security"},
+                      {"name": "vim", "suite": "jammy-updates"}]
+        _bodies2 = []
+        _am.notifications.notify = lambda k, t, b="": (_rec.append(k), _bodies2.append((k, t, b)))[0]
+        _osu(force=True)
+        check("os updates: packages appearing raises the alert", "os_updates" in _rec, str(_rec))
+        _hit = [x for x in _bodies2 if x[0] == "os_updates"]
+        check("os updates: security ones are called out in the title and the count",
+              _hit and "Security" in _hit[0][1] and "2 security updates of 3" in _hit[0][2],
+              str(_hit[:1])[:130])
+        check("os updates: the message names the packages", _hit and "openssl" in _hit[0][2])
+
+        _rec.clear(); _bodies2.clear()
+        _osu(force=True)
+        check("os updates: the SAME packages next day do not alert again", "os_updates" not in _rec,
+              str(_rec))
+
+        _pkgs["n"] = []
+        _osu(force=True)     # host cleaned -> re-arm
+        _pkgs["n"] = [{"name": "bash", "suite": "jammy-updates"}]
+        _rec.clear()
+        _osu(force=True)
+        check("os updates: after the host is patched, a NEW batch alerts again", "os_updates" in _rec)
+        _hit = [x for x in _bodies2 if x[0] == "os_updates"]
+        check("os updates: a non-security batch is not announced as security",
+              _hit and "Security" not in _hit[-1][1], str(_hit[-1:])[:110])
+
+        # The daily throttle. This has to be set up so that a re-check WOULD alert: leave the host
+        # clean (so the transition guard is armed), then make packages appear and call WITHOUT
+        # force. Throttled means no check and no alert; unthrottled means an immediate one. The
+        # first version of this check ran with the host already alerted, so the transition guard
+        # hid the throttle and removing it changed nothing.
+        _pkgs["n"] = []
+        _osu(force=True)                     # host clean, and last_run is now
+        _pkgs["n"] = [{"name": "sudo", "suite": "jammy-security"}]
+        _rec.clear()
+        _osu()                               # no force — must be skipped by the throttle
+        check("os updates: the check is throttled to once a day, not once a tick",
+              "os_updates" not in _rec, str(_rec))
+        _osu(force=True)                     # and force still works, proving the setup was live
+        check("os updates: ...but a forced check still sees them", "os_updates" in _rec, str(_rec))
+
+        # An unreachable host is the monitor's problem — this must not even probe it. Assert on the
+        # PROBE, not on silence: _os_updates_for swallows exceptions by design, so a stub that
+        # raises proves nothing — the check would pass with the guard deleted.
+        _probed = []
+        _am._host_reachable = lambda r: False
+        _am.so.os_update_available = lambda refresh=True: (_probed.append("local"), {"packages": []})[1]
+        _am.remote_os_check_updates = lambda r: (_probed.append("remote"), {"packages": []})[1]
+        _rec.clear()
+        _osu(force=True)
+        check("os updates: an unreachable host is skipped, not probed",
+              not _probed and "os_updates" not in _rec, "probed %s" % _probed)
+    finally:
+        _am._host_reachable, _am.so.os_update_available = _sv_reach, _sv_loc
+        _am.remote_os_check_updates = _sv_rem
+        _am.notifications.notify = lambda key, title, body="": _rec.append(key)
+
     # ── Bearer API tokens: the other way into every route ─────────────────────────────────────────
     # A token authenticates AS its owner and inherits exactly that user's RBAC, and app.py exempts
     # Bearer requests from CSRF — so this is a full authentication path that had no test at all.

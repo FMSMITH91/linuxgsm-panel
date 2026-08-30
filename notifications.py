@@ -35,6 +35,7 @@ EVENTS = {
     "auto_reboot":        ("A host auto-reboots once empty (reboot-when-empty)", True),
     "backup_failed":      ("A backup fails", True),
     "update_available":   ("A panel update is available", True),
+    "os_updates":         ("A host has OS package updates waiting (security ones called out)", True),
     "cert_expiring":      ("The panel's TLS certificate is expiring soon", True),
     "admin_login":        ("A super admin signs in", True),
     "admin_bruteforce":   ("A super admin account is being brute-forced", True),

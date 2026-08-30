@@ -339,7 +339,9 @@ def os_update_available(refresh=True):
             old = ""
             if "upgradable from:" in line:
                 old = line.split("upgradable from:", 1)[1].strip().rstrip("]").strip()
-            packages.append({"name": name, "version": version, "from": old})
+            # Keep the apt suite ("jammy-security") — see _parse_upgradable in ssh_manager.
+            suite = parts[0].split("/", 1)[1] if "/" in parts[0] else ""
+            packages.append({"name": name, "version": version, "from": old, "suite": suite})
 
     return {"updates_available": len(packages) > 0, "count": len(packages), "packages": packages}
 
