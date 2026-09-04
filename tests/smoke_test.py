@@ -1956,16 +1956,22 @@ try:
     # fires on the TRANSITION and re-arms when the host is clean, because "the same 12 packages are
     # still waiting" every morning is how an alert becomes something you filter out.
     _sv_reach, _sv_loc, _sv_rem = _am._host_reachable, _am.so.os_update_available, _am.remote_os_check_updates
+    _sv_notify2 = _am.notifications.notify
     try:
-        def _osu(**kw):
-            # It queries RemoteServer, so it needs a context — the ticker calls it inside one.
-            with app.app_context():
-                app._maybe_alert_os_updates(**kw)
+        # Called with NO app context, exactly as the update-check ticker calls it — that thread has
+        # none. Wrapping this in app.app_context() would hide a RuntimeError the real caller hits.
+        _osu = app._maybe_alert_os_updates
 
+        _bodies2 = []
+        _am.notifications.notify = lambda k, t, b="": (_rec.append(k), _bodies2.append((k, t, b)))[0]
         _am._host_reachable = lambda r: True
-        _pkgs = {"n": []}
-        _am.so.os_update_available = lambda refresh=True: {"packages": _pkgs["n"]}
-        _am.remote_os_check_updates = lambda r: {"packages": _pkgs["n"]}
+        _pkgs = {"n": [], "ok": True}
+        # A failed check yields no output, which is indistinguishable from a clean host — that is
+        # the whole reason "ok" exists, so the stub has to fail that way too. Returning the packages
+        # alongside ok=False makes the check unfalsifiable (mutation testing said so).
+        _res = lambda: {"ok": True, "packages": _pkgs["n"]} if _pkgs["ok"] else {"ok": False, "packages": []}  # noqa: E731
+        _am.so.os_update_available = lambda refresh=True: _res()
+        _am.remote_os_check_updates = lambda r: _res()
 
         _rec.clear()
         _osu(force=True)
@@ -1974,8 +1980,6 @@ try:
         _pkgs["n"] = [{"name": "openssl", "suite": "jammy-security"},
                       {"name": "curl", "suite": "jammy-security"},
                       {"name": "vim", "suite": "jammy-updates"}]
-        _bodies2 = []
-        _am.notifications.notify = lambda k, t, b="": (_rec.append(k), _bodies2.append((k, t, b)))[0]
         _osu(force=True)
         check("os updates: packages appearing raises the alert", "os_updates" in _rec, str(_rec))
         _hit = [x for x in _bodies2 if x[0] == "os_updates"]
@@ -1989,6 +1993,27 @@ try:
         check("os updates: the SAME packages next day do not alert again", "os_updates" not in _rec,
               str(_rec))
 
+        # Security updates routinely land on a host that ALREADY has ordinary ones pending. Keying
+        # the transition on the total count alone swallows them — 2 waiting -> 3 waiting is not a
+        # 0 -> N edge — so a host's first security update would never be announced. Start from a
+        # host carrying only routine updates, then land one security package on top.
+        _pkgs["n"] = []
+        _osu(force=True)
+        _pkgs["n"] = [{"name": "vim", "suite": "jammy-updates"},
+                      {"name": "nano", "suite": "jammy-updates"}]
+        _rec.clear(); _bodies2.clear()
+        _osu(force=True)
+        _hit = [x for x in _bodies2 if x[0] == "os_updates"]
+        check("os updates: a routine batch is announced without the security wording",
+              "os_updates" in _rec and _hit and "Security" not in _hit[0][1], str(_hit[:1])[:120])
+        _pkgs["n"] = _pkgs["n"] + [{"name": "openssl", "suite": "jammy-security"}]
+        _rec.clear(); _bodies2.clear()
+        _osu(force=True)
+        _hit = [x for x in _bodies2 if x[0] == "os_updates"]
+        check("os updates: security ones alert even when updates were already pending",
+              "os_updates" in _rec and _hit and "Security" in _hit[0][1]
+              and "1 security update of 3" in _hit[0][2], str(_hit[:1])[:150])
+
         _pkgs["n"] = []
         _osu(force=True)     # host cleaned -> re-arm
         _pkgs["n"] = [{"name": "bash", "suite": "jammy-updates"}]
@@ -1998,6 +2023,17 @@ try:
         _hit = [x for x in _bodies2 if x[0] == "os_updates"]
         check("os updates: a non-security batch is not announced as security",
               _hit and "Security" not in _hit[-1][1], str(_hit[-1:])[:110])
+
+        # A check that FAILED returns no packages, exactly like a clean host. If that re-armed the
+        # transition guard, the next successful check would re-announce the identical list — the
+        # repeat-alert this whole event exists to avoid. ok=False must leave the state alone.
+        _pkgs["ok"] = False
+        _osu(force=True)                     # apt lock held, say — no output, reads as zero packages
+        _pkgs["ok"] = True
+        _rec.clear()
+        _osu(force=True)                     # same single package as before
+        check("os updates: a FAILED check does not re-arm the alert", "os_updates" not in _rec,
+              str(_rec))
 
         # The daily throttle. This has to be set up so that a re-check WOULD alert: leave the host
         # clean (so the transition guard is armed), then make packages appear and call WITHOUT
@@ -2014,13 +2050,25 @@ try:
         _osu(force=True)                     # and force still works, proving the setup was live
         check("os updates: ...but a forced check still sees them", "os_updates" in _rec, str(_rec))
 
+        # A remote that is deleted must not leave its count behind: SQLite hands the freed row id to
+        # the next host added, which would inherit "already told you about 1 package" and go silent
+        # on its own first batch. Nothing outward can see that leak, so read the sweep's own state
+        # out of its closure and plant a dead host's id in it.
+        _cells = dict(zip(_osu.__code__.co_freevars,
+                          [c.cell_contents for c in (_osu.__closure__ or ())]))
+        _st_hosts = _cells["_os_update_state"]["hosts"]
+        _st_hosts[999999] = (7, 7)
+        _osu(force=True)
+        check("os updates: a deleted host's count is not left behind for the next one",
+              999999 not in _st_hosts, str(sorted(_st_hosts))[:80])
+
         # An unreachable host is the monitor's problem — this must not even probe it. Assert on the
         # PROBE, not on silence: _os_updates_for swallows exceptions by design, so a stub that
         # raises proves nothing — the check would pass with the guard deleted.
         _probed = []
         _am._host_reachable = lambda r: False
-        _am.so.os_update_available = lambda refresh=True: (_probed.append("local"), {"packages": []})[1]
-        _am.remote_os_check_updates = lambda r: (_probed.append("remote"), {"packages": []})[1]
+        _am.so.os_update_available = lambda refresh=True: (_probed.append("local"), {"ok": True, "packages": []})[1]
+        _am.remote_os_check_updates = lambda r: (_probed.append("remote"), {"ok": True, "packages": []})[1]
         _rec.clear()
         _osu(force=True)
         check("os updates: an unreachable host is skipped, not probed",
@@ -2028,7 +2076,7 @@ try:
     finally:
         _am._host_reachable, _am.so.os_update_available = _sv_reach, _sv_loc
         _am.remote_os_check_updates = _sv_rem
-        _am.notifications.notify = lambda key, title, body="": _rec.append(key)
+        _am.notifications.notify = _sv_notify2
 
     # ── Bearer API tokens: the other way into every route ─────────────────────────────────────────
     # A token authenticates AS its owner and inherits exactly that user's RBAC, and app.py exempts
