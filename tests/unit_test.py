@@ -1886,6 +1886,24 @@ eq("apt parse: new version", _pu[1]["name"] == "libssl3" and _pu[1]["version"], 
 eq("apt parse: old (from) version", _pu[1]["from"], "3.0.2-0ubuntu1.12")
 _pu2 = sm._parse_upgradable("")
 eq("apt parse: empty -> no packages", len(_pu2), 0)
+# The suite is the ONLY field distinguishing a security update from a routine one, and the OS-update
+# alert titles itself off it. Without this, dropping the field is invisible: the smoke test feeds the
+# alert ready-made dicts, so nothing else exercises the parse.
+eq("apt parse: suite kept (this is what marks a security update)", _pu[1]["suite"], "jammy-security")
+eq("apt parse: a non-security suite is kept as-is", _pu[0]["suite"], "jammy-updates")
+check("apt parse: -security is detectable from the suite",
+      "-security" in _pu[1]["suite"] and "-security" not in _pu[0]["suite"])
+# apt writes "N: ..." notices to stdout, and the pipeline no longer greps them out (its exit status
+# was masking apt's own — see remote_os_check_updates). They must not parse as packages.
+_pu3 = sm._parse_upgradable("\n".join([
+    "Listing...",
+    "N: There is 1 additional version. Please use the '-a' switch to see it",
+    "bash/jammy-security 5.1-6ubuntu1.1 amd64 [upgradable from: 5.1-6ubuntu1]",
+]))
+eq("apt parse: apt notices are not packages", [p["name"] for p in _pu3], ["bash"])
+# Both hosts parse the same apt output, so they go through one parser.
+check("apt parse: local and remote share one implementation",
+      SO.parse_upgradable(_APT_OUT) == _pu)
 
 # ── config save/load round-trips (guards the atomic-write path) ─
 _cfg_backup = config.CONFIG_FILE.read_text() if config.CONFIG_FILE.exists() else None

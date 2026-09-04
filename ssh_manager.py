@@ -3068,39 +3068,25 @@ def check_port_open(server, port):
 
 
 def _parse_upgradable(out):
-    """Parse `apt list --upgradable` output into [{name, version, from}]. Each line looks like
-    'pkg/repo 1.2.3 amd64 [upgradable from: 1.2.2]' — we pull the package name, the NEW version,
-    and the currently-installed version so the UI can show 'name  old → new'."""
-    pkgs = []
-    for line in (out or "").splitlines():
-        line = line.strip()
-        if not line or line.startswith("Listing"):
-            continue
-        parts = line.split()
-        if not parts:
-            continue
-        name = parts[0].split("/")[0]
-        # The bit after the slash is the apt suite ("jammy-security"), the only thing in this output
-        # that says an update is a SECURITY one. Kept so alerts can call those out.
-        suite = parts[0].split("/", 1)[1] if "/" in parts[0] else ""
-        new_ver = parts[1] if len(parts) > 1 else ""
-        old_ver = ""
-        if "upgradable from:" in line:
-            old_ver = line.split("upgradable from:", 1)[1].strip().rstrip("]").strip()
-        pkgs.append({"name": name, "version": new_ver, "from": old_ver, "suite": suite})
-    pkgs.sort(key=lambda p: p["name"])
-    return pkgs
+    """Parse `apt list --upgradable` output — the local check parses the identical format, so both
+    go through system_ops.parse_upgradable rather than keeping two copies in step by hand."""
+    import system_ops
+    return system_ops.parse_upgradable(out)
 
 
 def remote_os_check_updates(server):
-    """Check for OS updates on the remote server. Returns {count, packages:[{name,version,from}]}."""
+    """Check for OS updates on the remote server.
+    Returns {ok, count, packages:[{name,version,from,suite}]}.
+
+    "ok" is apt's own exit status, and it matters: a check that FAILED (the apt lock held by
+    unattended-upgrades, the host mid-reboot) produces no output, which reads exactly like a clean
+    host. A caller that takes that for "nothing waiting" will re-announce the same package list the
+    next time the check succeeds. The filtering greps this pipeline used to end with are gone for
+    the same reason — grep exits 1 when a clean host matches nothing, so its status masked apt's."""
     run_command(server, "apt update -qq 2>/dev/null", timeout=60, sudo=True)
-    out, _, _ = run_command(server,
-        "apt list --upgradable 2>/dev/null | grep -v 'Listing...' | grep -v '^$'",
-        timeout=30
-    )
+    out, _, rc = run_command(server, "apt list --upgradable 2>/dev/null", timeout=30)
     pkgs = _parse_upgradable(out)
-    return {"count": len(pkgs), "packages": pkgs}
+    return {"ok": rc == 0, "count": len(pkgs), "packages": pkgs}
 
 
 def remote_os_run_updates(server):

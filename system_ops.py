@@ -314,36 +314,60 @@ def tailscale_ssh_disable():
 
 # ─── OS Updates ───────────────────────────────────────────────
 
+def parse_upgradable(out):
+    """Parse `apt list --upgradable` output into [{name, version, from, suite}], sorted by name.
+
+    Each line looks like 'pkg/repo 1.2.3 amd64 [upgradable from: 1.2.2]' — we pull the package name,
+    the NEW version, the currently-installed version (so the UI can show 'name  old → new'), and the
+    suite. The suite is the only thing in this output that says an update is a SECURITY one
+    ("jammy-security"), which is what lets the alerts call those out separately.
+
+    Shared by the local check here and ssh_manager's remote one so the two can't drift: it also has
+    to skip apt's header, blank lines, and the "N: ..." notices apt sometimes writes to stdout.
+    """
+    pkgs = []
+    for line in (out or "").splitlines():
+        line = line.strip()
+        if not line or line.startswith("Listing"):
+            continue
+        parts = line.split()
+        if not parts:
+            continue
+        # partition, not split: a line with no slash is apt's "N: ..." notice or some other
+        # non-package output, and this parser reads a remote host's stdout — it must skip that
+        # line, not raise on it.
+        name, _slash, suite = parts[0].partition("/")
+        if not suite:
+            continue
+        old_ver = ""
+        if "upgradable from:" in line:
+            old_ver = line.split("upgradable from:", 1)[1].strip().rstrip("]").strip()
+        pkgs.append({"name": name, "version": parts[1] if len(parts) > 1 else "",
+                     "from": old_ver, "suite": suite})
+    pkgs.sort(key=lambda p: p["name"])
+    return pkgs
+
+
 def os_update_available(refresh=True):
     """Check if OS updates are available (apt list --upgradable).
     refresh=False skips the network `apt update` (uses the cached package lists),
     which keeps page loads fast — the dedicated "check for updates" action passes
-    refresh=True to force a fresh sync."""
+    refresh=True to force a fresh sync.
+
+    "ok" is apt's own exit status. A failed check produces no output, which is
+    indistinguishable from a clean host unless the caller can see that the check
+    itself did not run — and a caller that reads a failure as "nothing waiting"
+    will re-announce the same packages later."""
     if refresh:
         _run("apt update -qq 2>/dev/null", timeout=60, sudo=True)
 
-    out, _, rc = _run(
-        "apt list --upgradable 2>/dev/null | grep -v 'Listing...' | grep -v '^$'",
-        timeout=30
-    )
-    if not out.strip():
-        return {"updates_available": False, "count": 0, "packages": []}
-
-    packages = []
-    for line in out.strip().split("\n"):
-        # Format: pkg-name/stable 1.2.3 amd64 [upgradable from: 1.2.2]
-        parts = line.split()
-        if parts:
-            name = parts[0].split("/")[0] if "/" in parts[0] else parts[0]
-            version = parts[1] if len(parts) > 1 else ""
-            old = ""
-            if "upgradable from:" in line:
-                old = line.split("upgradable from:", 1)[1].strip().rstrip("]").strip()
-            # Keep the apt suite ("jammy-security") — see _parse_upgradable in ssh_manager.
-            suite = parts[0].split("/", 1)[1] if "/" in parts[0] else ""
-            packages.append({"name": name, "version": version, "from": old, "suite": suite})
-
-    return {"updates_available": len(packages) > 0, "count": len(packages), "packages": packages}
+    # No filtering greps in the pipeline: their exit status would mask apt's own, and a clean host
+    # (grep matches nothing → exit 1) would be indistinguishable from a failed check. parse_upgradable
+    # drops the header and any non-package line itself, so `rc` here is apt's.
+    out, _, rc = _run("apt list --upgradable 2>/dev/null", timeout=30)
+    packages = parse_upgradable(out)
+    return {"ok": rc == 0, "updates_available": len(packages) > 0,
+            "count": len(packages), "packages": packages}
 
 
 def os_run_update():
