@@ -10,7 +10,7 @@
   ],
   "manage_remotes.js": [
     "_da",
-    "_da,d.url,remoteId",
+    "_da,remoteId",
     "body,title",
     "data.cpu_percent,data.disk,data.memory,data.uptime"
   ],

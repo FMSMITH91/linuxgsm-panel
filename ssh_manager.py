@@ -3598,6 +3598,11 @@ def remote_install_tailscale(server):
     return True, "Tailscale installed successfully", "\n".join(log)
 
 
+# The login URL `tailscale up` prints. Same charset the remote-side grep looks for, re-checked on
+# THIS side because the remote's output is not something we control.
+_TS_LOGIN_URL_RE = re.compile(r"https://login\.tailscale\.com/[A-Za-z0-9/]+")
+
+
 def remote_tailscale_up_url(server, enable_ssh=True, advertise_routes=""):
     """Run `tailscale up` (no auth key) in the background and return the browser
     login URL — the user just pastes it into their browser to authorize the node,
@@ -3623,7 +3628,11 @@ def remote_tailscale_up_url(server, enable_ssh=True, advertise_routes=""):
     )
     out, err, rc = run_command(server, cmd, timeout=40, sudo=True)
     line = (out or "").strip().split("\n")[-1].strip() if out else ""
-    if line.startswith("https://login.tailscale.com/"):
+    # fullmatch, not startswith: the charset above is enforced by a grep running ON the remote host,
+    # so a compromised host simply ignores it and can return anything after the trusted prefix. This
+    # URL is rendered into the panel's HTML, so the whole string has to be pinned here, once, rather
+    # than left for each consumer to escape.
+    if _TS_LOGIN_URL_RE.fullmatch(line):
         return True, line
     status = remote_check_tailscale(server)
     if status.get("running") or line == "ALREADY_CONNECTED":

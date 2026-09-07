@@ -8867,9 +8867,12 @@ def register_routes(app):
             now = time.time()
             if not force and now - _os_update_state["last_run"] < _OS_UPDATE_EVERY:
                 return
-            _os_update_state["last_run"] = now
             with app.app_context():
                 remotes = RemoteServer.query.all()
+                # Armed only once the host list is actually in hand: a failure before this point
+                # (a locked DB, no context) must retry on the next tick rather than burn the whole
+                # day's throttle window on an attempt that did no work.
+                _os_update_state["last_run"] = now
                 if not remotes:
                     return
                 # `apt update` is a network fetch with a 60s timeout, on top of a reachability

@@ -220,6 +220,11 @@ def restore_backup(name):
     lines += [
         'rm -f %s %s' % (_sh(str(DB_PATH) + "-wal"), _sh(str(DB_PATH) + "-shm")),
         "systemctl %sstart linuxgsm-panel.service || true" % ufl,
+        # The staging dir holds a plaintext copy of the DB *and* both encryption keys — the pair that
+        # decrypts every stored SSH credential. It cannot be removed before this point (the copies
+        # above read from it), so the script deletes it as its last act rather than leaving it in
+        # /tmp forever, one directory per restore, outside the hardened 0700 data/ dir.
+        'rm -rf %s' % _sh(stage),
     ]
     script = os.path.join(str(DATA_DIR), "restore.sh")
     try:
@@ -231,6 +236,8 @@ def restore_backup(name):
         return True, "Restoring from %s — the panel will restart in a few seconds." % name
     except Exception:
         _log.exception("restore dispatch failed")
+        # Nothing will run the script's cleanup, so don't leave the keys staged either.
+        shutil.rmtree(stage, ignore_errors=True)
         return False, "Could not start the restore."
 
 

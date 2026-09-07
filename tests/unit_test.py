@@ -1905,6 +1905,30 @@ eq("apt parse: apt notices are not packages", [p["name"] for p in _pu3], ["bash"
 check("apt parse: local and remote share one implementation",
       SO.parse_upgradable(_APT_OUT) == _pu)
 
+# Two more shapes main's checks above don't reach. A package in BOTH pockets is listed with a
+# comma, which is the real shape of most security updates — "-security" has to still be found in it.
+_pu_comma = sm._parse_upgradable(
+    "libc6/jammy-updates,jammy-security 2.35-0ubuntu3.8 amd64 [upgradable from: 2.35-0ubuntu3.6]")
+eq("apt parse: comma-joined suites kept whole", _pu_comma[0]["suite"], "jammy-updates,jammy-security")
+check("apt parse: a comma-joined suite still reads as security",
+      "-security" in _pu_comma[0]["suite"])
+# And the local path end to end, through the same parser, with apt's exit status carried out as
+# `ok` — a failed check must not be readable as "nothing waiting". Stub _run so this stays offline.
+_sv_run = SO._run
+try:
+    SO._run = lambda cmd, **kw: (_APT_OUT, "", 0)
+    _loc = SO.os_update_available(refresh=False)
+    eq("os_update_available: count matches the shared parser", _loc["count"], 2)
+    eq("os_update_available: keeps the suite too",
+       [p["suite"] for p in _loc["packages"]], ["jammy-updates", "jammy-security"])
+    check("os_update_available: a good check reports ok", _loc["ok"] is True)
+    SO._run = lambda cmd, **kw: ("", "E: Could not get lock", 100)
+    _bad = SO.os_update_available(refresh=False)
+    check("os_update_available: a FAILED check is not silently 'nothing waiting'",
+          _bad["ok"] is False and _bad["count"] == 0)
+finally:
+    SO._run = _sv_run
+
 # ── config save/load round-trips (guards the atomic-write path) ─
 _cfg_backup = config.CONFIG_FILE.read_text() if config.CONFIG_FILE.exists() else None
 try:

@@ -1266,7 +1266,9 @@ def _panel_f2b_jail_ignoreip():
     try:
         with open(_F2B_PANEL_JAIL) as f:
             for line in f:
-                if line.strip().startswith("ignoreip"):
+                # Require the '=' too: a bare "ignoreip" line (hand-edited, or a truncated write)
+                # would otherwise IndexError past the OSError handler below.
+                if line.strip().startswith("ignoreip") and "=" in line:
                     return line.split("=", 1)[1].split()
     except OSError:
         _log.debug("f2b: could not read jail ignoreip", exc_info=True)
