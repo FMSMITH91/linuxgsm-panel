@@ -329,20 +329,13 @@ def os_update_available(refresh=True):
     if not out.strip():
         return {"updates_available": False, "count": 0, "packages": []}
 
-    packages = []
-    for line in out.strip().split("\n"):
-        # Format: pkg-name/stable 1.2.3 amd64 [upgradable from: 1.2.2]
-        parts = line.split()
-        if parts:
-            name = parts[0].split("/")[0] if "/" in parts[0] else parts[0]
-            version = parts[1] if len(parts) > 1 else ""
-            old = ""
-            if "upgradable from:" in line:
-                old = line.split("upgradable from:", 1)[1].strip().rstrip("]").strip()
-            # Keep the apt suite ("jammy-security") — see _parse_upgradable in ssh_manager.
-            suite = parts[0].split("/", 1)[1] if "/" in parts[0] else ""
-            packages.append({"name": name, "version": version, "from": old, "suite": suite})
-
+    # The local host and a remote host run the SAME apt command, so they get the same output and
+    # deserve the same parser. This used to be a second hand-rolled copy that drifted (no 'Listing'
+    # skip, no sort) and had to be patched in lockstep — adding the security `suite` field meant
+    # editing both files. Imported lazily: ssh_manager pulls in paramiko, and this module is also
+    # used in contexts that have no reason to.
+    from ssh_manager import _parse_upgradable
+    packages = _parse_upgradable(out)
     return {"updates_available": len(packages) > 0, "count": len(packages), "packages": packages}
 
 
@@ -1242,7 +1235,9 @@ def _panel_f2b_jail_ignoreip():
     try:
         with open(_F2B_PANEL_JAIL) as f:
             for line in f:
-                if line.strip().startswith("ignoreip"):
+                # Require the '=' too: a bare "ignoreip" line (hand-edited, or a truncated write)
+                # would otherwise IndexError past the OSError handler below.
+                if line.strip().startswith("ignoreip") and "=" in line:
                     return line.split("=", 1)[1].split()
     except OSError:
         _log.debug("f2b: could not read jail ignoreip", exc_info=True)

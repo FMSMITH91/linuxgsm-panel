@@ -8824,13 +8824,6 @@ def register_routes(app):
             time.sleep(120)
     _supervise("priority-keeper", priority_keeper)
 
-    # Refresh the panel's "update available" status on the SERVER, on its own schedule — so the
-    # check happens whether or not anyone has the panel open. The browser badge only polls while a
-    # tab is looking at it; this keeps the server's own knowledge current (warms the shared cache in
-    # system_ops), so the badge is correct the INSTANT someone loads a page instead of waiting on a
-    # first client-side check. Each tick does a `git fetch` (+ a CI-state lookup only when actually
-    # behind), and it logs once when a newly verified update first appears — a server-side record
-    # even with nobody watching. Half-hourly is plenty for a code update.
     # ── OS package updates, per host ───────────────────────────────────────────────────────────
     # Checked once a day, not on the monitor's 60s tick: each check runs `apt update`, which is a
     # network fetch on every host. It rides the existing update-check ticker rather than adding
@@ -8857,32 +8850,48 @@ def register_routes(app):
             return None
 
     def _maybe_alert_os_updates(force=False):
-        """Check every reachable host once a day and alert when updates appear. Never raises."""
+        """Check every reachable host once a day and alert when updates appear. Never raises.
+
+        Pushes its OWN app context. Unlike the monitor, update_check_ticker runs without one, and
+        RemoteServer.query outside a context raises — which the ticker's blanket `except` would
+        swallow at debug level, so the check would silently never run on a real install. Nesting is
+        harmless for the callers that already hold a context (the tests do)."""
         now = time.time()
         if not force and now - _os_update_state["last_run"] < _OS_UPDATE_EVERY:
             return
-        _os_update_state["last_run"] = now
-        for remote in RemoteServer.query.all():
-            if not _host_reachable(remote):
-                continue          # an unreachable host is the monitor's problem, not this one
-            got = _os_updates_for(remote)
-            if got is None:
-                continue          # couldn't tell — say nothing rather than guess
-            count, sec, names = got
-            had = _os_update_state["hosts"].get(remote.id, 0)
-            _os_update_state["hosts"][remote.id] = count
-            if count and not had:
-                what = ("%d security update%s of %d waiting"
-                        % (sec, "" if sec == 1 else "s", count)) if sec else \
-                       ("%d update%s waiting" % (count, "" if count == 1 else "s"))
-                notifications.notify(
-                    "os_updates",
-                    "Security updates on %s" % remote.display_name if sec
-                    else "Updates available on %s" % remote.display_name,
-                    "%s on %s: %s%s"
-                    % (what, remote.display_name, ", ".join(names),
-                       ", …" if count > len(names) else ""))
+        with app.app_context():
+            remotes = RemoteServer.query.all()
+            # Only once the host list is actually in hand: a failure before this point must retry on
+            # the next tick rather than burn the whole day's throttle window.
+            _os_update_state["last_run"] = now
+            for remote in remotes:
+                if not _host_reachable(remote):
+                    continue      # an unreachable host is the monitor's problem, not this one
+                got = _os_updates_for(remote)
+                if got is None:
+                    continue      # couldn't tell — say nothing rather than guess
+                count, sec, names = got
+                had = _os_update_state["hosts"].get(remote.id, 0)
+                _os_update_state["hosts"][remote.id] = count
+                if count and not had:
+                    what = ("%d security update%s of %d waiting"
+                            % (sec, "" if sec == 1 else "s", count)) if sec else \
+                           ("%d update%s waiting" % (count, "" if count == 1 else "s"))
+                    notifications.notify(
+                        "os_updates",
+                        "Security updates on %s" % remote.display_name if sec
+                        else "Updates available on %s" % remote.display_name,
+                        "%s on %s: %s%s"
+                        % (what, remote.display_name, ", ".join(names),
+                           ", …" if count > len(names) else ""))
 
+    # Refresh the panel's "update available" status on the SERVER, on its own schedule — so the
+    # check happens whether or not anyone has the panel open. The browser badge only polls while a
+    # tab is looking at it; this keeps the server's own knowledge current (warms the shared cache in
+    # system_ops), so the badge is correct the INSTANT someone loads a page instead of waiting on a
+    # first client-side check. Each tick does a `git fetch` (+ a CI-state lookup only when actually
+    # behind), and it logs once when a newly verified update first appears — a server-side record
+    # even with nobody watching. Half-hourly is plenty for a code update.
     def update_check_ticker():
         time.sleep(30)   # let boot settle before the first network fetch
         last_logged_sha = None

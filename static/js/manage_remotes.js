@@ -259,11 +259,13 @@ function tailscaleUp(remoteId) {
   })
   .then(r => r.json())
   .then(d => {
-    if (!d.success) { el.innerHTML = '<span class="text-danger">' + (d.message || 'Failed') + '</span>'; return; }  // nosemgrep
+    // escapeHtml: both message and url come from a command run ON THE REMOTE HOST, so they are that
+    // host's output, not ours. tailscale.html / setup_tailscale.html escape the same value (tsEsc).
+    if (!d.success) { el.innerHTML = '<span class="text-danger">' + escapeHtml(d.message || 'Failed') + '</span>'; return; }  // nosemgrep
     if (d.connected) { el.innerHTML = '<span class="text-success"><i class="bi bi-check-circle"></i> Already connected to your tailnet.</span>'; return; }
     el.innerHTML = '<div class="alert alert-info py-2 small mb-2">'  // nosemgrep
       + '<strong>1.</strong> Open this link in your browser and approve the machine:<br>'
-      + '<a href="' + d.url + '" target="_blank" class="d-inline-block my-1" style="word-break:break-all;">' + d.url + '</a>'
+      + '<a href="' + escapeHtml(d.url) + '" target="_blank" rel="noopener" class="d-inline-block my-1" style="word-break:break-all;">' + escapeHtml(d.url) + '</a>'
       + ' <button class="btn btn-sm btn-outline-secondary py-0"' + _da('copyText', [d.url]) + '><i class="bi bi-clipboard"></i></button>'
       + '<br><strong>2.</strong> <span id="ts-wait-' + remoteId + '"><i class="bi bi-hourglass-split"></i> Waiting for you to authorize…</span></div>';
     // poll for connection

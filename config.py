@@ -1,4 +1,5 @@
 """Configuration management for LinuxGSM Panel."""
+import copy
 import json
 import logging
 import os
@@ -50,8 +51,11 @@ DEFAULT_CONFIG = {
 # Cache the parsed config keyed by the file's (mtime, size). load_config() is called
 # a few times per request; this avoids re-reading + re-parsing the JSON every time,
 # while an mtime/size change (from save_config or an external edit) transparently
-# refreshes it. Values are scalars and each call returns a fresh dict, so callers
-# can't mutate the cache.
+# refreshes it. Each call returns a DEEP copy, so a caller that edits a nested section
+# in place (notifications._drop_master_switch does exactly that) mutates its own copy
+# and not the shared cache — a plain dict.update() only copies the top level, which
+# left an unsaved edit visible to every later reader if the subsequent write failed.
+# The config is a few dozen small keys, so the copy is not worth optimising away.
 _cfg_cache = {"key": None, "data": {}}
 # Serialises config writes (and read-modify-write via update_config) so concurrent writers can't
 # lose each other's updates or race on the temp file. Re-entrant so update_config can call save.
@@ -67,7 +71,7 @@ def load_config():
             with open(CONFIG_FILE) as f:
                 _cfg_cache["data"] = json.load(f)
             _cfg_cache["key"] = key
-        config.update(_cfg_cache["data"])
+        config.update(copy.deepcopy(_cfg_cache["data"]))
     except (json.JSONDecodeError, OSError):
         _cfg_cache["key"] = None   # missing/unreadable → defaults, and drop stale cache
     return config

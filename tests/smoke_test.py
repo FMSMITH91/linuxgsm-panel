@@ -1958,9 +1958,12 @@ try:
     _sv_reach, _sv_loc, _sv_rem = _am._host_reachable, _am.so.os_update_available, _am.remote_os_check_updates
     try:
         def _osu(**kw):
-            # It queries RemoteServer, so it needs a context — the ticker calls it inside one.
-            with app.app_context():
-                app._maybe_alert_os_updates(**kw)
+            # No context pushed here ON PURPOSE. It queries RemoteServer, and update_check_ticker
+            # (unlike the monitor) runs with no app context, so the function has to push its own —
+            # it did not, and the ticker's blanket `except` swallowed the RuntimeError at debug
+            # level, meaning the alert never fired on a real install while this test passed.
+            # Calling it bare is what keeps that honest.
+            app._maybe_alert_os_updates(**kw)
 
         _am._host_reachable = lambda r: True
         _pkgs = {"n": []}
