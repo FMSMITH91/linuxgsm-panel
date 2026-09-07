@@ -1886,26 +1886,34 @@ eq("apt parse: new version", _pu[1]["name"] == "libssl3" and _pu[1]["version"], 
 eq("apt parse: old (from) version", _pu[1]["from"], "3.0.2-0ubuntu1.12")
 _pu2 = sm._parse_upgradable("")
 eq("apt parse: empty -> no packages", len(_pu2), 0)
+# The suite is the ONLY field distinguishing a security update from a routine one, and the OS-update
+# alert titles itself off it. Without this, dropping the field is invisible: the smoke test feeds the
+# alert ready-made dicts, so nothing else exercises the parse.
+eq("apt parse: suite kept (this is what marks a security update)", _pu[1]["suite"], "jammy-security")
+eq("apt parse: a non-security suite is kept as-is", _pu[0]["suite"], "jammy-updates")
+check("apt parse: -security is detectable from the suite",
+      "-security" in _pu[1]["suite"] and "-security" not in _pu[0]["suite"])
+# apt writes "N: ..." notices to stdout, and the pipeline no longer greps them out (its exit status
+# was masking apt's own — see remote_os_check_updates). They must not parse as packages.
+_pu3 = sm._parse_upgradable("\n".join([
+    "Listing...",
+    "N: There is 1 additional version. Please use the '-a' switch to see it",
+    "bash/jammy-security 5.1-6ubuntu1.1 amd64 [upgradable from: 5.1-6ubuntu1]",
+]))
+eq("apt parse: apt notices are not packages", [p["name"] for p in _pu3], ["bash"])
+# Both hosts parse the same apt output, so they go through one parser.
+check("apt parse: local and remote share one implementation",
+      SO.parse_upgradable(_APT_OUT) == _pu)
 
-# ── apt suite: the ONE field that says an update is a security update ──
-# The os_updates alert calls a package a security update purely by '-security' in its suite
-# (app.py _os_updates_for). Nothing else in apt's output carries that, so if the parser stops
-# keeping the suite, every security alert silently degrades to a generic "N updates waiting"
-# with no other test noticing. Assert the extraction itself, not just the classification.
-eq("apt parse: suite kept (security)", _pu[1]["suite"], "jammy-security")
-eq("apt parse: suite kept (plain update)", _pu[0]["suite"], "jammy-updates")
-# A package in BOTH pockets is listed with a comma — the real shape of most security updates.
-_pu3 = sm._parse_upgradable(
+# Two more shapes main's checks above don't reach. A package in BOTH pockets is listed with a
+# comma, which is the real shape of most security updates — "-security" has to still be found in it.
+_pu_comma = sm._parse_upgradable(
     "libc6/jammy-updates,jammy-security 2.35-0ubuntu3.8 amd64 [upgradable from: 2.35-0ubuntu3.6]")
-eq("apt parse: comma-joined suites kept whole", _pu3[0]["suite"], "jammy-updates,jammy-security")
-check("apt parse: comma-joined suite still reads as security",
-      "-security" in _pu3[0]["suite"])
-# No slash at all (some third-party lines) must not crash and must not look like a security update.
-_pu4 = sm._parse_upgradable("bash 5.1-6ubuntu1 amd64 [upgradable from: 5.1-6ubuntu0]")
-eq("apt parse: missing suite -> empty, not an error", _pu4[0]["suite"], "")
-check("apt parse: missing suite is not a security update", "-security" not in _pu4[0]["suite"])
-# The local-host path parses the SAME output through the SAME parser (it used to hand-roll a
-# second copy that had to be patched in lockstep). Stub _run so this stays offline.
+eq("apt parse: comma-joined suites kept whole", _pu_comma[0]["suite"], "jammy-updates,jammy-security")
+check("apt parse: a comma-joined suite still reads as security",
+      "-security" in _pu_comma[0]["suite"])
+# And the local path end to end, through the same parser, with apt's exit status carried out as
+# `ok` — a failed check must not be readable as "nothing waiting". Stub _run so this stays offline.
 _sv_run = SO._run
 try:
     SO._run = lambda cmd, **kw: (_APT_OUT, "", 0)
@@ -1913,7 +1921,11 @@ try:
     eq("os_update_available: count matches the shared parser", _loc["count"], 2)
     eq("os_update_available: keeps the suite too",
        [p["suite"] for p in _loc["packages"]], ["jammy-updates", "jammy-security"])
-    check("os_update_available: reports updates available", _loc["updates_available"] is True)
+    check("os_update_available: a good check reports ok", _loc["ok"] is True)
+    SO._run = lambda cmd, **kw: ("", "E: Could not get lock", 100)
+    _bad = SO.os_update_available(refresh=False)
+    check("os_update_available: a FAILED check is not silently 'nothing waiting'",
+          _bad["ok"] is False and _bad["count"] == 0)
 finally:
     SO._run = _sv_run
 
