@@ -2062,6 +2062,47 @@ try:
         check("os updates: a deleted host's count is not left behind for the next one",
               999999 not in _st_hosts, str(sorted(_st_hosts))[:80])
 
+        # ── ...and the same fact IN THE PANEL, not only in the chat ───────────────────────────
+        # The sweep is the only thing that asks every host, so the login banner and the OS Updates
+        # card read its answer. Before this they read nothing: the card sat blank until you pressed
+        # Check, and there was no banner at all. The sweep above just ran with one security package
+        # waiting on every host.
+        _sum = c.get("/api/os-updates/summary")
+        _sj = _sum.get_json() or {}
+        _mine = [h for h in (_sj.get("hosts") or []) if h["id"] == remote_id]
+        check("os updates: the sweep's answer is what the login banner reads",
+              _sum.status_code == 200 and _mine, str(_sj)[:160])
+        check("os updates: the banner is told the count and the security count",
+              _mine and _mine[0]["count"] == 1 and _mine[0]["security"] == 1, str(_mine[:1])[:120])
+
+        # The summary names hosts, so it is scoped like every other remote route: MANAGE_REMOTES
+        # grants the hosts in your groups, not all of them. smoke_mr holds it for remote #1 only.
+        _mrj = client_as(mru_id).get("/api/os-updates/summary").get_json() or {}
+        _mrids = [h["id"] for h in (_mrj.get("hosts") or [])]
+        check("os updates: the banner only names hosts you can actually manage",
+              remote_id in _mrids and remote2_id not in _mrids, str(_mrids)[:80])
+
+        # The card fills from that same memory — the whole point is that a PAGE LOAD costs nothing.
+        # Assert on the probe: a version that just re-ran the check would also return the right
+        # numbers, so numbers alone cannot tell the two apart.
+        _probed0 = []
+        _am.so.os_update_available = lambda refresh=True: (_probed0.append("local"), _res())[1]
+        _am.remote_os_check_updates = lambda r: (_probed0.append("remote"), _res())[1]
+        _cj = c.get("/api/remote/%d/updates-cached" % remote_id).get_json() or {}
+        check("os updates: the card is filled on page load, without running apt",
+              _cj.get("known") and _cj.get("count") == 1 and not _probed0,
+              "%s probed=%s" % (str(_cj)[:100], _probed0))
+        check("os updates: and it carries the package list the card lists",
+              [p.get("name") for p in (_cj.get("packages") or [])] == ["sudo"], str(_cj)[:120])
+
+        # Installing the updates has to take the banner down. A clean check does that; the throttle
+        # must not leave a stale count sitting in the banner for the rest of the day.
+        _pkgs["n"] = []
+        _osu(force=True)
+        _sj2 = c.get("/api/os-updates/summary").get_json() or {}
+        check("os updates: a patched host drops out of the banner",
+              not [h for h in (_sj2.get("hosts") or []) if h["id"] == remote_id], str(_sj2)[:120])
+
         # An unreachable host is the monitor's problem — this must not even probe it. Assert on the
         # PROBE, not on silence: _os_updates_for swallows exceptions by design, so a stub that
         # raises proves nothing — the check would pass with the guard deleted.

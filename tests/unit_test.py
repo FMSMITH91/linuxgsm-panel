@@ -1929,6 +1929,48 @@ try:
 finally:
     SO._run = _sv_run
 
+# ── The snapshot the login banner and the OS Updates card read ────────────────────────
+# Both used to show nothing until someone pressed "Check": the panel knew what each host had
+# waiting (the daily sweep asks) but never kept the answer anywhere a page could read it. This is
+# that store. What it must NOT do is record a failed check — apt emits nothing when it fails, which
+# is byte-for-byte what a clean host emits, so storing it would clear a real banner and state that
+# the host is up to date when in fact nobody managed to ask it.
+from app import _os_update_note as _oun, _os_update_seen as _seen, _is_security_pkg as _isec
+
+check("security pkg: the -security suite is what marks one",
+      _isec({"suite": "jammy-security"}) and not _isec({"suite": "jammy-updates"}))
+check("security pkg: a comma-joined suite still reads as security",
+      _isec({"suite": "jammy-updates,jammy-security"}))
+check("security pkg: a package with no suite at all is not a security update",
+      not _isec({"name": "vim"}) and not _isec({}) and not _isec(None))
+
+_host = NS(id=4242, display_name="Panel Server")
+_seen.pop(_host.id, None)
+try:
+    _oun(_host, {"ok": True, "packages": [{"name": "vim", "suite": "jammy-updates"},
+                                          {"name": "openssl", "suite": "jammy-security"}]})
+    eq("os-update snapshot: records what the host has waiting", _seen[_host.id]["count"], 2)
+    eq("os-update snapshot: counts the security ones separately", _seen[_host.id]["security"], 1)
+    eq("os-update snapshot: keeps the package list for the card",
+       [p["name"] for p in _seen[_host.id]["packages"]], ["vim", "openssl"])
+    eq("os-update snapshot: names the host for the banner", _seen[_host.id]["name"], "Panel Server")
+
+    # The guarantee: a check that FAILED leaves the last real answer standing.
+    _oun(_host, {"ok": False, "packages": []})
+    eq("os-update snapshot: a FAILED check does not erase what we knew",
+       _seen[_host.id]["count"], 2)
+    _oun(_host, None)
+    eq("os-update snapshot: no result at all does not erase it either",
+       _seen[_host.id]["count"], 2)
+
+    # ...but a check that SUCCEEDS and finds nothing does clear it, which is how installing the
+    # updates from the panel takes the banner down instead of leaving it up until tomorrow.
+    _oun(_host, {"ok": True, "packages": []})
+    eq("os-update snapshot: a clean host clears the count", _seen[_host.id]["count"], 0)
+    eq("os-update snapshot: and its security count", _seen[_host.id]["security"], 0)
+finally:
+    _seen.pop(_host.id, None)
+
 # ── config save/load round-trips (guards the atomic-write path) ─
 _cfg_backup = config.CONFIG_FILE.read_text() if config.CONFIG_FILE.exists() else None
 try:
