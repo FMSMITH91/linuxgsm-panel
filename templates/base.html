@@ -291,6 +291,8 @@
     {% endif %}
     {# Reboot-required banners (one per host that needs a reboot) — filled in by rebootNagCheck(). #}
     <div id="reboot-nag"></div>
+    {# "Hosts have OS updates waiting" — filled in by osUpdatesNagCheck(). #}
+    <div id="os-updates-nag"></div>
     {% block content %}{% endblock %}
   </div>
 </main>
@@ -376,6 +378,61 @@ window.rebootNagCancel = function(hostId, label){
   function chk(){ window.rebootNagCheck(window.LOCAL_HOST_ID, 'the panel host'); }
   chk();
   if (window.pollWhenVisible) window.pollWhenVisible(chk, 10*60*1000);
+})();
+
+// ── "Updates are waiting" banner ──────────────────────────────────────────────────────
+// The panel checks every host's OS packages daily and chats you about it; this is the same fact on
+// the page, so you see it when you log in rather than only if a chat message survived being
+// scrolled past. Served from the panel's memory (/api/os-updates/summary) — it never probes a host,
+// so it costs a page load nothing.
+//
+// Dismissal is per BROWSER SESSION and keyed on what is waiting: close it and it stays closed while
+// you work, comes back at your next login, and comes back immediately if a host's list changes
+// (a security update landing is not something a dismissal from an hour ago should hide).
+function _osNagClear(box){ box.className = ''; box.innerHTML = ''; }   // className too: a stray
+//                        mb-2 on an emptied container leaves 8px of blank space where the banner was
+window.osUpdatesNagDismiss = function(sig){
+  try { sessionStorage.setItem('osUpdatesNagOff', sig); } catch(e){}
+  var box = document.getElementById('os-updates-nag'); if(box) _osNagClear(box);
+};
+window.osUpdatesNagCheck = function(){
+  var box = document.getElementById('os-updates-nag'); if(!box) return;
+  fetch(MOUNT+'/api/os-updates/summary',{cache:'no-store'})
+    .then(function(r){ return r.ok ? r.json() : null; })
+    .then(function(d){
+      var hosts = (d && d.hosts) || [];
+      if(!hosts.length){ _osNagClear(box); return; }
+      var sig = hosts.map(function(h){ return h.id+':'+h.count+':'+h.security; }).join('|');
+      var off = null; try { off = sessionStorage.getItem('osUpdatesNagOff'); } catch(e){}
+      if(off === sig){ _osNagClear(box); return; }
+      var sec = hosts.reduce(function(a,h){ return a + (h.security||0); }, 0);
+      // One line per host, so a narrow screen breaks between hosts rather than mid-sentence.
+      var rows = hosts.map(function(h){
+        // inline-block + padding: a bare inline link is only as tall as its text (16px), which is
+        // an unfair target on a phone. This lifts each one to a 24px row without padding the banner.
+        return '<div><a class="alert-link" style="display:inline-block;padding:.25rem 0;"'
+             + ' href="' + escapeHtml(h.url) + '#os-updates">'
+             + escapeHtml(h.name) + '</a> — ' + h.count + ' update' + (h.count===1?'':'s')
+             + (h.security ? ' <span class="badge bg-danger" style="font-weight:normal;">'
+                             + h.security + ' security</span>' : '') + '</div>';
+      }).join('');
+      // alert-dismissible parks the close button in the corner and reserves room for it; laying it
+      // out in the flow instead drops it onto a line of its own at 375px.
+      box.className = 'mb-2';
+      box.innerHTML = '<div class="alert ' + (sec ? 'alert-warning' : 'alert-info')   // nosemgrep
+        + ' alert-dismissible mb-0" role="alert">'
+        + '<div class="mb-1"><i class="bi bi-box-arrow-down"></i> <strong>System updates waiting</strong></div>'
+        + '<div style="font-size:.9rem;">' + rows + '</div>'
+        + '<button type="button" class="btn-close" aria-label="Dismiss updates notice"'
+        + _da('osUpdatesNagDismiss', [sig]) + '></button></div>';
+    }).catch(function(){});
+};
+(function(){
+  if (window.LOCAL_HOST_ID == null) return;   // same audience as the reboot banner: hosts you manage
+  window.osUpdatesNagCheck();
+  // Hourly: the underlying check is daily, and the panel's own page actions (a forced check, an
+  // install) call osUpdatesNagCheck() directly rather than waiting for this.
+  if (window.pollWhenVisible) window.pollWhenVisible(window.osUpdatesNagCheck, 60*60*1000);
 })();
 </script>
 {% if current_user.is_authenticated and current_user.is_superadmin %}

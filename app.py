@@ -521,6 +521,38 @@ def _host_reachable(remote):
         return False
 
 
+# ── What each host's last OS-update check found ─────────────
+# The daily sweep already asks every host what it has waiting; this is that answer, kept so the
+# login banner and the OS Updates card can SHOW it without re-running `apt update` on a page load.
+# Distinct from the sweep's own arming state (_os_update_state in create_app), which exists only to
+# decide whether to send a chat alert and must keep its exact shape.
+#
+# Written by the sweep AND by every explicit check, so installing updates from the panel clears the
+# banner right away instead of leaving it up until tomorrow's sweep.
+_os_update_seen = {}         # remote.id -> {name, count, security, packages, at}
+
+
+def _is_security_pkg(p):
+    """An apt suite ending in "-security" ("jammy-security") is what marks a security update."""
+    return "-security" in ((p or {}).get("suite") or "")
+
+
+def _os_update_note(remote, result):
+    """Record one host's check result. A check that FAILED is dropped rather than stored: apt
+    produces no output when it fails, which is exactly what a clean host produces, so recording it
+    would clear a real banner and tell you the host is up to date when nobody ever asked it."""
+    if not result or not result.get("ok"):
+        return
+    pkgs = result.get("packages") or []
+    _os_update_seen[remote.id] = {
+        "name": remote.display_name,
+        "count": len(pkgs),
+        "security": sum(1 for p in pkgs if _is_security_pkg(p)),
+        "packages": pkgs,
+        "at": time.time(),
+    }
+
+
 # ── Live player-count cache ────────────────────────────────
 # A gamedig query per server is far too slow to run on every dashboard status poll (every 8s), so a
 # background poller refreshes the counts on a slower cadence and the request path just reads this
@@ -5861,6 +5893,10 @@ def register_routes(app):
             db.session.add(local)
             db.session.commit()
         status = so.get_server_status()
+        # get_server_status already read the panel host's pending packages off the cached apt lists
+        # (no network) — hand that to the shared snapshot so the banner reflects it immediately
+        # rather than waiting for the next daily sweep.
+        _os_update_note(local, status.get("updates") or {})
         return render_template("remote_manage.html", remote=local, status=status,
                                config=load_config())
 
@@ -7281,9 +7317,63 @@ def register_routes(app):
     @login_required
     @permission_required(MANAGE_REMOTES)
     def api_remote_check_updates(remote_id):
+        """Force a fresh check on one host. The panel host runs it locally rather than over SSH to
+        itself, which is what the daily sweep does too."""
         remote = get_remote(remote_id)
-        result = remote_os_check_updates(remote)
-        return jsonify({"count": result["count"], "packages": result["packages"]})
+        result = (so.os_update_available(refresh=True) if remote.is_local
+                  else remote_os_check_updates(remote))
+        # "ok" travels to the UI: a check that failed (apt locked by unattended-upgrades, host mid
+        # reboot) returns an empty list, and without this the card would report "System is up to
+        # date" for a host nobody managed to ask.
+        _os_update_note(remote, result)
+        return jsonify({"ok": bool(result.get("ok")), "count": result["count"],
+                        "packages": result["packages"]})
+
+    @app.route("/api/os-updates/summary")
+    @login_required
+    @permission_required(MANAGE_REMOTES)
+    def api_os_updates_summary():
+        """What every host had waiting as of its last check — served from memory, never probing.
+
+        This is what the login banner and the OS Updates card render. Page loads must not trigger
+        `apt update` (a network fetch per host, 60s timeout each), so they read the daily sweep's
+        answer instead; the Check button is there for anyone who wants it re-asked now."""
+        # .copy() rather than iterating the live dict: the daily sweep writes to it from its own
+        # thread, and a resize mid-iteration would 500 the page this banner sits on.
+        snapshot = _os_update_seen.copy()
+        if not snapshot:
+            return jsonify({"hosts": []})     # nothing known yet — don't spend a query finding out
+        hosts = []
+        local_id = _local_remote_id()
+        for rid, seen in sorted(snapshot.items()):
+            if not seen.get("count"):
+                continue
+            # MANAGE_REMOTES is scoped per host (see get_remote): a user who can manage one remote
+            # must not learn the name or patch state of another's from this summary.
+            if not can_access_remote(current_user, rid):
+                continue
+            hosts.append({"id": rid, "name": seen["name"], "count": seen["count"],
+                          "security": seen["security"], "at": seen["at"],
+                          # The panel host has a dedicated page, but it is superadmin-only — anyone
+                          # else reaching it through the banner would land on a 403, so send them
+                          # to the same host's ordinary manage page (it is just a remote row).
+                          "url": url_for("server_management")
+                                 if rid == local_id and current_user.is_superadmin
+                                 else url_for("remote_manage", remote_id=rid)})
+        return jsonify({"hosts": hosts})
+
+    @app.route("/api/remote/<int:remote_id>/updates-cached")
+    @login_required
+    @permission_required(MANAGE_REMOTES)
+    def api_remote_updates_cached(remote_id):
+        """One host's last-known package list, for filling the OS Updates card on page load without
+        making the page wait on apt. {known:false} when nothing has checked this host yet."""
+        remote = get_remote(remote_id)
+        seen = _os_update_seen.get(remote.id)
+        if not seen:
+            return jsonify({"known": False})
+        return jsonify({"known": True, "count": seen["count"], "security": seen["security"],
+                        "at": seen["at"], "packages": seen["packages"]})
 
     @app.route("/api/remote/<int:remote_id>/run-updates", methods=["POST"])
     @login_required
@@ -8836,7 +8926,7 @@ def register_routes(app):
     _OS_UPDATE_EVERY = 24 * 3600
 
     def _os_updates_for(remote):
-        """(count, security_count, sample_names) for one host, or None if it could not be checked.
+        """One host's check result dict, or None if it could not be checked.
 
         Runs on a pool thread, so it touches no session and reads only already-loaded columns of
         `remote` — the same contract as _probe_host. Never raises."""
@@ -8851,9 +8941,7 @@ def register_routes(app):
             # would re-arm on the failure and re-announce the identical list on the next success.
             if not res.get("ok"):
                 return None
-            pkgs = res.get("packages") or []
-            sec = [p for p in pkgs if "-security" in (p.get("suite") or "")]
-            return len(pkgs), len(sec), [p.get("name", "?") for p in (sec or pkgs)][:5]
+            return res
         except Exception:
             _log.debug("os-update check failed for %s", getattr(remote, "name", "?"), exc_info=True)
             return None
@@ -8887,7 +8975,14 @@ def register_routes(app):
                     got = checks.get(remote.id)
                     if got is None:
                         continue          # couldn't tell — say nothing rather than guess
-                    count, sec, names = got
+                    # The banner and the OS Updates card read this: the sweep is the only thing that
+                    # asks every host, and its answer is what they show until someone forces a check.
+                    _os_update_note(remote, got)
+                    pkgs = got.get("packages") or []
+                    count = len(pkgs)
+                    sec = sum(1 for p in pkgs if _is_security_pkg(p))
+                    names = [p.get("name", "?") for p in
+                             ([p for p in pkgs if _is_security_pkg(p)] or pkgs)][:5]
                     had_count, had_sec = _os_update_state["hosts"].get(remote.id) or (0, 0)
                     _os_update_state["hosts"][remote.id] = (count, sec)
                     # Security updates get their own arm: they routinely land on a host that already
@@ -8909,6 +9004,8 @@ def register_routes(app):
                 ids = {r.id for r in remotes}
                 for gone in [i for i in _os_update_state["hosts"] if i not in ids]:
                     del _os_update_state["hosts"][gone]
+                for gone in [i for i in _os_update_seen.copy() if i not in ids]:
+                    _os_update_seen.pop(gone, None)   # same reason: a freed row id gets reused
         except Exception:
             _log.debug("os-update sweep failed", exc_info=True)
 

@@ -395,10 +395,16 @@
     }
     .alert {
       border: 1px solid var(--border); border-radius: var(--radius-sm);
-      font-size: .85rem; padding: .7rem 1rem;
+      font-size: .85rem;
+      /* Longhands, NOT the `padding` shorthand: this file loads after bootstrap.min.css and
+         `.alert` has the same specificity as `.alert-dismissible`, so a shorthand here silently
+         reset that rule's `padding-right: 3rem` — the gap it reserves for the absolutely-positioned
+         close button — and long text ran underneath the button in every dismissible alert. */
+      padding-top: .7rem; padding-right: 1rem; padding-bottom: .7rem; padding-left: 1rem;
       box-shadow: 0 4px 20px rgba(0,0,0,.5);
       margin-bottom: .5rem;
     }
+    .alert-dismissible { padding-right: 3rem; }
 
     /* ── TYPOGRAPHY ── */
     a { color: var(--accent); text-decoration: none; }
