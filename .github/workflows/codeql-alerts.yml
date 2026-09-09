@@ -1,0 +1,75 @@
+name: Code-scanning alerts
+
+# Fail main when it carries an open code-scanning alert.
+#
+# WHY THIS RUNS ON workflow_run AND NOT ON push
+#   It used to be a job in security.yml, triggered by the same push as CodeQL — so the two ran
+#   CONCURRENTLY, and this one asked the alerts API whether main was clean before CodeQL had
+#   finished deciding. Measured on the commit that exposed it:
+#
+#       open-alerts gate   19:41:31 -> 19:41:35   (queried the API after four seconds)
+#       CodeQL analyse     19:41:31 -> 19:42:57
+#       the alert closed   19:42:44
+#
+#   The gate reported main as dirty 69 seconds before CodeQL closed the very alert that the pushed
+#   commit had fixed. Both directions of that race are wrong, and the second one is worse:
+#
+#     * a push that FIXES an alert fails this gate, for nothing;
+#     * a push that INTRODUCES one PASSES it, because CodeQL has not reported yet — and the alert
+#       is then blamed on whatever lands next. That is the "an alert sits open across green
+#       builds" failure this gate exists to prevent, moved along by one commit rather than fixed.
+#
+#   Waiting for CodeQL to complete on the same commit is the only way to read a settled answer, so
+#   the trigger is CodeQL's completion. Same pattern deploy.yml uses to wait for CI.
+#
+#   CodeQL is path-filtered and skips docs-only pushes, so this skips them too — correctly: with no
+#   code change there is nothing for the alert set to have become.
+on:
+  workflow_run:
+    workflows: [ "CodeQL" ]
+    types: [ completed ]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: codeql-alerts
+  cancel-in-progress: false
+
+jobs:
+  open-alerts:
+    name: Open code-scanning alerts (main)
+    if: >-
+      github.event.workflow_run.head_branch == 'main' &&
+      github.event.workflow_run.conclusion == 'success'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      security-events: read
+    steps:
+      - name: Fail if main has open code-scanning alerts
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          # ?state=open is server-side; ask for the count rather than paging every alert.
+          alerts="$(gh api "repos/${GITHUB_REPOSITORY}/code-scanning/alerts?state=open&per_page=100" \
+                     --jq '[.[] | {rule: .rule.id, sev: (.rule.security_severity_level // .rule.severity // "-"), path: .most_recent_instance.location.path, line: .most_recent_instance.location.start_line}]')"
+          n="$(printf '%s' "$alerts" | jq 'length')"
+          {
+            echo "### Open code-scanning alerts on \`main\`"
+            echo ""
+            if [ "$n" -eq 0 ]; then
+              echo "None. :white_check_mark:"
+            else
+              echo "| severity | rule | location |"
+              echo "| --- | --- | --- |"
+              printf '%s' "$alerts" | jq -r '.[] | "| \(.sev) | `\(.rule)` | \(.path):\(.line) |"'
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"
+          if [ "$n" -ne 0 ]; then
+            echo "::error::main has $n open code-scanning alert(s) — see the job summary." >&2
+            exit 1
+          fi
+          echo "No open code-scanning alerts."

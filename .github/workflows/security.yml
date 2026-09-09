@@ -1,15 +1,12 @@
 name: Security scan
 
-# The two checks here are the ones that must see EVERY commit, so this workflow is deliberately
-# NOT path-filtered:
+# Gitleaks scans the whole commit for an accidentally-committed secret, and a secret can land in
+# ANY file — a README, a doc, a .gitignore — so this workflow is deliberately NOT path-filtered.
+# Filtering it by path is how one slips through.
 #
-#   * Gitleaks scans the whole commit for an accidentally-committed secret, and a secret can land
-#     in ANY file — a README, a doc, a .gitignore. Filtering it by path is how one slips through.
-#   * The open-alerts gate reports on the state of main, which is independent of what the pushed
-#     commit happened to touch.
-#
-# The scanners that only read code (pip-audit, Bandit, Semgrep) moved to security-code.yml, which
-# IS path-filtered — they cannot report anything new about a docs-only change.
+# The scanners that only read code (pip-audit, Bandit, Semgrep) live in security-code.yml, which IS
+# path-filtered. The open-alerts gate moved to codeql-alerts.yml, which runs AFTER CodeQL rather
+# than beside it — see the note there.
 on:
   push:
     branches: [ main ]
@@ -40,40 +37,6 @@ jobs:
   # So: don't gate PRs on the scanners, but make main's real state loud. This runs on main only,
   # reports what is open, and fails if anything is — a red build on main after a merge, which is
   # exactly when someone should look.
-  open-alerts:
-    name: Open code-scanning alerts (main)
-    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
-    runs-on: ubuntu-latest
-    permissions:
-      contents: read
-      security-events: read
-    steps:
-      - name: Fail if main has open code-scanning alerts
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: |
-          set -euo pipefail
-          # ?state=open is server-side; ask for the count rather than paging every alert.
-          alerts="$(gh api "repos/${GITHUB_REPOSITORY}/code-scanning/alerts?state=open&per_page=100" \
-                     --jq '[.[] | {rule: .rule.id, sev: (.rule.security_severity_level // .rule.severity // "-"), path: .most_recent_instance.location.path, line: .most_recent_instance.location.start_line}]')"
-          n="$(printf '%s' "$alerts" | jq 'length')"
-          {
-            echo "### Open code-scanning alerts on \`main\`"
-            echo ""
-            if [ "$n" -eq 0 ]; then
-              echo "None. :white_check_mark:"
-            else
-              echo "| severity | rule | location |"
-              echo "| --- | --- | --- |"
-              printf '%s' "$alerts" | jq -r '.[] | "| \(.sev) | `\(.rule)` | \(.path):\(.line) |"'
-            fi
-          } >> "$GITHUB_STEP_SUMMARY"
-          if [ "$n" -ne 0 ]; then
-            echo "::error::main has $n open code-scanning alert(s) — see the job summary." >&2
-            exit 1
-          fi
-          echo "No open code-scanning alerts."
-
   secret-scan:
     name: Secret scanning (Gitleaks)
     runs-on: ubuntu-latest
