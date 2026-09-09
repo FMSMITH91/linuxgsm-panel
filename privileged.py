@@ -58,6 +58,21 @@ APT_CONFOLD = ["-o", "Dpkg::Options::=--force-confdef", "-o", "Dpkg::Options::=-
 NONINTERACTIVE = {"apt-full-upgrade", "apt-upgrade", "apt-install"}
 REPOS = ("universe",)
 
+# Log sources. The panel reads exactly these, so they are named here and the caller passes a NAME —
+# never a unit and never a path.
+JOURNAL_UNITS = {
+    "ssh": ("ssh", "sshd"),       # Debian/Ubuntu call it ssh, others sshd; the panel wants both
+    "fail2ban": ("fail2ban",),
+    "panel": ("linuxgsm-panel",),
+}
+JOURNAL_SOURCES = tuple(sorted(JOURNAL_UNITS))
+LOG_FILES = {
+    "fail2ban": "/var/log/fail2ban.log",
+    "auth": "/var/log/auth.log",
+}
+OS_UPDATE_LOG = "/run/panel-os-update.log"
+
+
 
 class VerbError(ValueError):
     """An argument did not pass validation. Never contains the rejected value: this text can reach
@@ -104,6 +119,13 @@ def _comment(s):
 def _jail(s):
     if not re.fullmatch(r"[A-Za-z0-9_.-]{1,64}", str(s)):
         raise VerbError("not a jail name")
+    return str(s)
+
+
+def _linecount(s):
+    """A number of log lines, bounded so a caller cannot ask for the whole journal."""
+    if not re.fullmatch(r"[1-9][0-9]{0,4}", str(s)) or int(s) > 20000:
+        raise VerbError("not a line count in 1..20000")
     return str(s)
 
 
@@ -165,6 +187,17 @@ _ARGV = {
     "service-reload": ([_choice(*UNITS)], lambda a: [SYSTEMCTL, "reload", a[0]], None),
     "service-enable-now": ([_choice(*UNITS)], lambda a: [SYSTEMCTL, "enable", "--now", a[0]], None),
     "service-disable-now": ([_choice(*UNITS)], lambda a: [SYSTEMCTL, "disable", "--now", a[0]], None),
+
+    # ── log reads ──
+    # Neither journalctl nor tail is ever handed a caller's target: the SOURCE is a name from a
+    # fixed set and this table maps it to units or to a path, so no path crosses the boundary.
+    "journal": ([_choice(*JOURNAL_SOURCES), _linecount],
+                lambda a: ["journalctl"]
+                + [x for u in JOURNAL_UNITS[a[0]] for x in ("-u", u)]
+                + ["--no-pager", "-n", a[1]], None),
+    "log-tail": ([_choice(*LOG_FILES), _linecount],
+                 lambda a: ["tail", "-n", a[1], LOG_FILES[a[0]]], None),
+    "os-update-log": ([], lambda a: ["tail", "-c", "20000", OS_UPDATE_LOG], None),
 
     # ── apt / dpkg ──
     "apt-update": ([], lambda a: [APT, "update", "-qq"], None),

@@ -3259,7 +3259,9 @@ def remote_os_run_updates(server):
 # Host-side log the detached OS-update job streams to, so the popup can watch it live. Kept in /run
 # (root-owned, not world-writable) rather than /tmp so a local user can't pre-plant a symlink there
 # and redirect root's write — and it's cleared on reboot, which is fine for an ephemeral update log.
-_OS_UPDATE_LOG = "/run/panel-os-update.log"
+# Must match privileged.OS_UPDATE_LOG and the helper's copy — the os-update-log verb reads
+# it, and the detached runner below still writes to it by name.
+_OS_UPDATE_LOG = _priv.OS_UPDATE_LOG
 _OS_UPDATE_DONE = "PANEL_OS_UPDATE_DONE:"   # sentinel line the job appends with the exit code
 
 
@@ -3302,8 +3304,7 @@ def remote_os_update_start(server):
 def remote_os_update_status(server):
     """Live status of the running/last OS update: {running, done, rc, log}. `done` is set once the
     detached job appends its sentinel; `running` reflects whether apt is still working."""
-    out, _, _ = run_command(server, "tail -c 20000 {} 2>/dev/null".format(_OS_UPDATE_LOG),
-                            timeout=15, sudo=True)
+    out, _, _ = run_privileged(server, "os-update-log", [], timeout=15, merge_stderr=False)
     log = out or ""
     m = re.search(re.escape(_OS_UPDATE_DONE) + r"(-?\d+)", log)
     done = m is not None
@@ -4141,19 +4142,25 @@ def remote_security_log(server, which, lines=200, jail=None):
     if which == "fail2ban":
         # /var/log/fail2ban.log holds the real Ban/Unban/Found activity (journalctl only has the
         # unit's start/stop noise), so read the file first and fall back to the journal.
-        out, _, _ = run_command(server, "tail -n 4000 /var/log/fail2ban.log 2>/dev/null", timeout=20, sudo=True)
+        out, _, _ = run_privileged(server, "log-tail", ["fail2ban", "4000"], timeout=20,
+                                   merge_stderr=False)
         if not out:
-            out, _, _ = run_command(server, "journalctl -u fail2ban --no-pager -n 4000 2>/dev/null",
-                                    timeout=20, sudo=True)
+            out, _, _ = run_privileged(server, "journal", ["fail2ban", "4000"], timeout=20,
+                                       merge_stderr=False)
         rows = (out or "").splitlines()
         if jail and _F2B_JAIL_RE.match(jail):   # charset-only guard; used solely for in-Python filtering
             tag = "[%s]" % jail
             rows = [ln for ln in rows if tag in ln]
         return "\n".join(rows[-lines:])
     if which == "ssh":
-        out, _, _ = run_command(server, "journalctl -u ssh -u sshd --no-pager -n %d 2>/dev/null || "
-                                "tail -n %d /var/log/auth.log 2>/dev/null" % (lines * 2, lines),
-                                timeout=20, sudo=True)
+        # journalctl first, auth.log as the fallback — that was `journalctl ... || tail ...`, where
+        # the `||` fired on journalctl's exit status. Systemd exits 0 with no output on a host that
+        # keeps no journal, so checking the OUTPUT is what the fallback was actually for.
+        out, _, _ = run_privileged(server, "journal", ["ssh", str(lines * 2)], timeout=20,
+                                   merge_stderr=False)
+        if not (out or "").strip():
+            out, _, _ = run_privileged(server, "log-tail", ["auth", str(lines)], timeout=20,
+                                       merge_stderr=False)
         return "\n".join((out or "").splitlines()[-lines:])
     return ""
 
