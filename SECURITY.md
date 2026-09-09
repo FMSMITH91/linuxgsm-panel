@@ -86,9 +86,9 @@ of going unnoticed. Current state:
 
 | route | sites remaining |
 |---|---|
-| `run_command(..., sudo=True)` | 17 |
+| `run_command(..., sudo=True)` | 10 |
 | `_sudo_sh(...)` | 1 |
-| **root total** | **18** (from 131) |
+| **root total** | **11** (from 131) |
 
 (Those counts exclude six calls that ARE the verb layer's own transport — the `run_command` /
 `_run_local` / `_run` at the end of `run_privileged`, `write_root_file`, `write_content_cron` and
@@ -124,6 +124,14 @@ types rather than in the command names:
   passes *names* and the helper assembles the paths — `content_path()` re-checks the assembled
   result, and is tested directly rather than only through the verbs, because the verbs' own
   validators would otherwise reject every probe before it got that far.
+- **The sshd hardening** set four directives with `sed -i 's/^#\?Key.*/Key value/'` in a joined
+  root shell. Both halves are closed sets now: the panel may set exactly those four directives, to
+  exactly the values it hardens them to. `PermitRootLogin yes` is individually well-formed and
+  still refused, which is a property a per-argument check cannot express.
+- **The fail2ban top-IPs report** was a five-stage `zcat | awk | grep | awk | sort | head` running
+  as root, with the cutoff date and the row limit interpolated into it. The verb does the read half
+  only — a fixed log glob, gzip handled in Python — and the tallying is Python. Both halves are
+  asserted against real plain and gzipped logs rather than by comparing command strings.
 - **The deferred reboot** was `( sleep 2 ; reboot ) &` — a subshell, a background job and a
   redirect. The helper double-forks instead: the grandchild detaches, waits, and execs the reboot
   binary. It returns immediately, which is the whole reason the subshell existed.
@@ -135,6 +143,13 @@ types rather than in the command names:
   an option (`--reinstall`), and the list cannot be made arbitrarily long. dpkg's conflict
   answers (`--force-confdef`, `--force-confold`) are fixed in the helper rather than passed
   in, so an unattended upgrade can never be talked into clobbering a config file you edited.
+
+**One operation cannot be narrowed, and is named rather than left unremarked.** The VPS bootstrap
+installs Node.js by piping NodeSource's setup script into a root shell. That IS the operation: a
+verb could pin the URL, but only by giving the helper the ability to execute a downloaded script —
+exactly the capability its tool allowlist exists to deny. Wrapping it would move the risk, not
+reduce it. If that trade is not one you want, the bootstrap's Node step is the thing to change, not
+the helper.
 
 Still to convert that go through `echo … | base64 -d >`, and the two multi-line shell
 scripts (the detached OS-update runner and the NodeSource installer).

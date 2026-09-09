@@ -32,7 +32,9 @@ USAGE
     panel-helper <verb> [arg ...]      exit 2 = unknown verb / bad argument, else the tool's own rc
     panel-helper --list-verbs          print the verb table (used by the panel's tests)
 """
+import glob
 import grp
+import gzip
 import ipaddress
 import os
 import pwd
@@ -68,6 +70,10 @@ TOOLS = {
     "timedatectl": ("/usr/bin/timedatectl", "/bin/timedatectl"),
     "df": ("/usr/bin/df", "/bin/df"),
     "usermod": ("/usr/sbin/usermod", "/sbin/usermod"),
+    "fallocate": ("/usr/bin/fallocate", "/bin/fallocate"),
+    "mkswap": ("/usr/sbin/mkswap", "/sbin/mkswap"),
+    "swapon": ("/usr/sbin/swapon", "/sbin/swapon"),
+    "npm": ("/usr/bin/npm", "/usr/local/bin/npm"),
     "ss": ("/usr/bin/ss", "/usr/sbin/ss", "/sbin/ss", "/bin/ss"),
     "sysctl": ("/usr/sbin/sysctl", "/sbin/sysctl"),
     "journalctl": ("/usr/bin/journalctl", "/bin/journalctl"),
@@ -129,6 +135,35 @@ SSHD_DROPIN_BAK = SSHD_DROPIN + ".bak"
 # every path this script touches is declared in one place — and so a test can point it
 # at a sandbox without rewriting the source.
 F2B_JAIL_LOCAL = "/etc/fail2ban/jail.local"
+# The fail2ban log family, current plus rotated. Fixed here — no part of it is ever
+# supplied by a caller, which is what makes reading them safe to do as root.
+F2B_LOG_GLOB = "/var/log/fail2ban.log*"
+
+# sshd_config directives the panel is allowed to set, and the values it may set them to. The panel
+# hardens exactly these four; anything else is not something it has ever needed to write, so the
+# helper will not write it. The VALUE set is closed too — this is a hardening step, not a general
+# "edit sshd_config" primitive.
+SSHD_DIRECTIVES = {
+    "ClientAliveInterval": ("300",),
+    "ClientAliveCountMax": ("2",),
+    "PermitRootLogin": ("prohibit-password", "no"),
+    "PasswordAuthentication": ("no", "yes"),
+}
+SSHD_CONFIG = "/etc/ssh/sshd_config"
+
+SWAPFILE = "/swapfile"
+SWAP_FSTAB_LINE = "/swapfile none swap sw 0 0"
+FSTAB = "/etc/fstab"
+
+# The one remote script the panel runs, pinned. Piping a downloaded script into a root shell cannot
+# be made safe by wrapping it — but the URL can stop being something a caller chooses, which is the
+# difference between "run NodeSource's installer" and "run anything".
+NODESOURCE_URL = "https://deb.nodesource.com/setup_lts.x"
+
+# npm packages the panel installs globally.
+NPM_GLOBAL_PACKAGES = ("gamedig", "npm")
+
+F2B_EVENT_RE = re.compile(r"\[[A-Za-z0-9._-]+\] (?:Ban|Found) [0-9a-fA-F:.]+")
 
 # The GMod shared-content box: one user whose home holds game content that other servers mount
 # read-only. Every path below is BUILT from a validated user name and a validated game/script
@@ -218,6 +253,27 @@ def v_comment(s):
     re-checking here is the point — the helper trusts nothing it is told."""
     if not re.fullmatch(r"[A-Za-z0-9 _.-]{0,60}", s):
         raise ValueError("comment has characters outside [A-Za-z0-9 _.-] or is over 60 chars")
+    return s
+
+
+def v_ident_free(s):
+    """A directive VALUE. Validated against the key's allowed set in validate(), which is where
+    both arguments are visible at once — this only rules out anything that isn't a bare word."""
+    if not re.fullmatch(r"[A-Za-z0-9_-]{1,32}", s):
+        raise ValueError("not a directive value")
+    return s
+
+
+def v_sshd_key(s):
+    if s not in SSHD_DIRECTIVES:
+        raise ValueError("not a directive the panel hardens")
+    return s
+
+
+def v_logdate(s):
+    """A cutoff date the log's first field is compared against: "2026-09-02" or with a time."""
+    if not re.fullmatch(r"\d{4}-\d{2}-\d{2}(?:[ T]\d{2}:\d{2}(?::\d{2})?)?", s):
+        raise ValueError("not a log cutoff date")
     return s
 
 
@@ -385,6 +441,7 @@ VERBS = {
         lambda a: [UFW, "delete", "allow", "proto", a[0], "to", "any", "port", a[1]],
         None),
     # ── fail2ban ──
+    "f2b-log-lines": ([v_logdate], lambda a: [], None),
     "f2b-status": ([], lambda a: [F2B, "status"], None),
     "f2b-status-jail": ([v_jail], lambda a: [F2B, "status", a[0]], None),
     "f2b-unban": ([v_jail, v_cidr], lambda a: [F2B, "set", a[0], "unbanip", a[1]], None),
@@ -438,6 +495,14 @@ VERBS = {
     # the panel parses it, so no awk program is built from anything.
     "sshd-effective-config": ([], lambda a: ["sshd", "-T"], None),
     "disk-free": ([v_dfpath], lambda a: ["df", "-PB1", a[0]], None),
+
+    # ── host hardening ──
+    # The value is checked against the key's own allowed set, so a directive can only be set to
+    # something the panel actually hardens it to.
+    "sshd-set-directive": ([v_sshd_key, v_ident_free], lambda a: [], None),
+    "create-swapfile": ([], lambda a: [], None),
+    "npm-install-global": ([v_choice(*NPM_GLOBAL_PACKAGES)],
+                           lambda a: ["npm", "install", "-g", a[0]], None),
 
     # ── sshd port changes ──
     # Every step of the panel's port change, so the sequence that protects the operator — snapshot,
@@ -655,6 +720,96 @@ def do_reboot_delayed(args, content):
 REBOOT_DELAY_SECONDS = 2
 
 
+def do_sshd_set_directive(args, content):
+    """Set one sshd_config directive to one of its allowed values.
+
+    Was `sed -i 's/^#\\?<Key>.*/<Key> <value>/' /etc/ssh/sshd_config` — a regex substitution
+    running as root, once per directive. Same edit here: replace the first line that sets the
+    directive (commented or not), or append it if there is none. Both the key and the value come
+    from SSHD_DIRECTIVES, so this cannot write a directive the panel does not harden."""
+    key, value = args[0], args[1]
+    try:
+        with open(SSHD_CONFIG, encoding="utf-8", errors="replace") as fh:
+            lines = fh.readlines()
+    except OSError:
+        return 1
+    pattern = re.compile(r"^\s*#?\s*%s\b" % re.escape(key))
+    out, replaced = [], False
+    for line in lines:
+        if not replaced and pattern.match(line):
+            out.append("%s %s\n" % (key, value))
+            replaced = True
+        else:
+            out.append(line)
+    if not replaced:
+        if out and not out[-1].endswith("\n"):
+            out[-1] += "\n"
+        out.append("%s %s\n" % (key, value))
+    fd, tmp = tempfile.mkstemp(dir=os.path.dirname(SSHD_CONFIG), prefix=".panel-", suffix=".tmp")
+    with os.fdopen(fd, "w") as fh:
+        fh.writelines(out)
+    os.chmod(tmp, stat.S_IMODE(os.stat(SSHD_CONFIG).st_mode))   # keep sshd_config's own mode
+    os.replace(tmp, SSHD_CONFIG)
+    return 0
+
+
+def do_create_swapfile(args, content):
+    """Create, enable and persist a 2G swap file, if there isn't one already.
+
+    Was `fallocate && chmod && mkswap && swapon && grep -q /etc/fstab || echo >> /etc/fstab`. Note
+    the shell version's precedence bug: `a && b && c || d` means the fstab line was appended
+    whenever ANY earlier step failed, not only when grep found nothing. Here the steps are
+    sequential and the fstab append happens only when the swap is actually on and the line is
+    absent."""
+    if os.path.exists(SWAPFILE):
+        return 0
+    for argv in ([resolve("fallocate"), "-l", "2G", SWAPFILE],):
+        r = subprocess.run(argv, shell=False, capture_output=True, timeout=120)  # nosec B603
+        if r.returncode != 0:
+            return r.returncode
+    os.chmod(SWAPFILE, stat.S_IRUSR | stat.S_IWUSR)
+    for argv in ([resolve("mkswap"), SWAPFILE], [resolve("swapon"), SWAPFILE]):
+        r = subprocess.run(argv, shell=False, capture_output=True, timeout=120)  # nosec B603
+        if r.returncode != 0:
+            return r.returncode
+    try:
+        with open(FSTAB, encoding="utf-8", errors="replace") as fh:
+            already = any(SWAPFILE in ln for ln in fh)
+    except OSError:
+        already = True                     # no fstab to persist into; the swap is still on
+    if not already:
+        with open(FSTAB, "a", encoding="utf-8") as fh:
+            fh.write(SWAP_FSTAB_LINE + "\n")
+    return 0
+
+
+def do_f2b_log_lines(args, content):
+    """Print fail2ban Ban/Found lines at or after a cutoff date, across the rotated logs.
+
+    Replaces the read half of a `zcat -f /var/log/fail2ban.log* | awk -v c=<date> '$1 >= c' | grep
+    -oE '...'` pipeline that ran as root with the cutoff interpolated into it. The tallying half is
+    the caller's job now; this only reads and filters.
+
+    Gzip is handled here rather than by zcat, so the only thing this verb can open is the fail2ban
+    log family — the glob is fixed, and nothing about the path comes from the caller."""
+    cutoff = args[0]
+    out = []
+    for path in sorted(glob.glob(F2B_LOG_GLOB)):
+        try:
+            opener = gzip.open if path.endswith(".gz") else open
+            with opener(path, "rt", encoding="utf-8", errors="replace") as fh:
+                for line in fh:
+                    # The awk compared field one — the date — as a string, which works because the
+                    # format is ISO-ish and fixed-width. Same comparison, same reason.
+                    first = line.split(" ", 1)[0]
+                    if first >= cutoff and F2B_EVENT_RE.search(line):
+                        out.append(line.rstrip("\n"))
+        except OSError:
+            continue          # a rotated file that vanished mid-read; the others still count
+    sys.stdout.write("\n".join(out))
+    return 0
+
+
 def do_content_dir_create(args, content):
     """Create <content user>/serverfiles, owned by that user and PRIVATE to it.
 
@@ -832,6 +987,9 @@ ACTIONS = {
     "content-cron-remove": do_content_cron_remove,
     "content-grant-read": do_content_grant_read,
     "gmod-mount-read": do_gmod_mount_read,
+    "f2b-log-lines": do_f2b_log_lines,
+    "sshd-set-directive": do_sshd_set_directive,
+    "create-swapfile": do_create_swapfile,
 }
 
 
@@ -858,6 +1016,12 @@ def validate(verb, args):
             out.append(check(value))
         except ValueError as e:
             raise ValueError("%s argument %d rejected (%s)" % (verb, i + 1, e))
+    # Cross-argument checks, once every argument is individually valid. sshd-set-directive is the
+    # only verb where one argument constrains another: a directive may only be set to a value from
+    # its OWN allowed set, so the pair is checked, not just each half.
+    if verb == "sshd-set-directive":
+        if out[1] not in SSHD_DIRECTIVES[out[0]]:
+            raise ValueError("sshd-set-directive: %s may not be set to that value" % out[0])
     return out
 
 

@@ -87,6 +87,24 @@ SSHD_DROPIN = "/etc/ssh/sshd_config.d/99-panel-sshport.conf"
 SSHD_DROPIN_BAK = SSHD_DROPIN + ".bak"
 # fail2ban's operator-owned jail file — see tools/panel-helper.
 F2B_JAIL_LOCAL = "/etc/fail2ban/jail.local"
+# The fail2ban log family, current plus rotated — see tools/panel-helper.
+F2B_LOG_GLOB = "/var/log/fail2ban.log*"
+
+# sshd_config directives the panel may set, and the values it may set them to — see
+# tools/panel-helper. Both halves are closed sets; this is a hardening step, not an editor.
+SSHD_DIRECTIVES = {
+    "ClientAliveInterval": ("300",),
+    "ClientAliveCountMax": ("2",),
+    "PermitRootLogin": ("prohibit-password", "no"),
+    "PasswordAuthentication": ("no", "yes"),
+}
+SSHD_CONFIG = "/etc/ssh/sshd_config"
+SWAPFILE = "/swapfile"
+SWAP_FSTAB_LINE = "/swapfile none swap sw 0 0"
+FSTAB = "/etc/fstab"
+NODESOURCE_URL = "https://deb.nodesource.com/setup_lts.x"
+NPM_GLOBAL_PACKAGES = ("gamedig", "npm")
+
 
 # The GMod shared-content box — see tools/panel-helper. Every path is BUILT from a validated user
 # name and identifier; three of the verbs below end in `rm -rf` as root.
@@ -164,6 +182,26 @@ def _comment(s):
     if not re.fullmatch(r"[A-Za-z0-9 _.-]{0,60}", s):
         raise VerbError("comment outside [A-Za-z0-9 _.-] or over 60 characters")
     return s
+
+
+def _sshd_key(s):
+    if str(s) not in SSHD_DIRECTIVES:
+        raise VerbError("not a directive the panel hardens")
+    return str(s)
+
+
+def _directive_value(s):
+    """A directive value's shape; the key's own allowed set is checked in check_args()."""
+    if not re.fullmatch(r"[A-Za-z0-9_-]{1,32}", str(s)):
+        raise VerbError("not a directive value")
+    return str(s)
+
+
+def _logdate(s):
+    """A cutoff date for the fail2ban log read — see tools/panel-helper."""
+    if not re.fullmatch(r"\d{4}-\d{2}-\d{2}(?:[ T]\d{2}:\d{2}(?::\d{2})?)?", str(s)):
+        raise VerbError("not a log cutoff date")
+    return str(s)
 
 
 def _jail(s):
@@ -305,6 +343,7 @@ _ARGV = {
                                     lambda a: [UFW, "delete", "allow", "proto", a[0], "to", "any",
                                                "port", a[1]], None),
     # ── fail2ban ──
+    "f2b-log-lines": ([_logdate], lambda a: [], None),
     "f2b-status": ([], lambda a: [F2B, "status"], None),
     "f2b-status-jail": ([_jail], lambda a: [F2B, "status", a[0]], None),
     "f2b-unban": ([_jail, _cidr], lambda a: [F2B, "set", a[0], "unbanip", a[1]], None),
@@ -354,6 +393,12 @@ _ARGV = {
     # the panel parses it, so no awk program is built from anything.
     "sshd-effective-config": ([], lambda a: ["sshd", "-T"], None),
     "disk-free": ([_dfpath], lambda a: ["df", "-PB1", a[0]], None),
+
+    # ── host hardening ──
+    "sshd-set-directive": ([_sshd_key, _directive_value], lambda a: [], None),
+    "create-swapfile": ([], lambda a: [], None),
+    "npm-install-global": ([_choice(*NPM_GLOBAL_PACKAGES)],
+                           lambda a: ["npm", "install", "-g", a[0]], None),
 
     # ── sshd port changes ──
     "sshd-backup-dropin": ([], lambda a: [], None),
@@ -453,6 +498,13 @@ _REMOTE_ACTIONS = {
     "reboot-delayed": lambda a: "( sleep 2 ; reboot ) >/dev/null 2>&1 & echo scheduled",
     # 700, not the 750 the shell form used: the group bits are added by content-grant-read when
     # access is actually granted, so both transports share nothing until then.
+    "sshd-set-directive": lambda a: (
+        "sed -i 's/^#\\?%s.*/%s %s/' %s" % (a[0], a[0], a[1], shlex.quote(SSHD_CONFIG))),
+    "create-swapfile": lambda a: (
+        "fallocate -l 2G %s && chmod 600 %s && mkswap %s && swapon %s && "
+        "{ grep -q %s %s || echo %s >> %s ; }"
+        % (SWAPFILE, SWAPFILE, SWAPFILE, SWAPFILE, shlex.quote(SWAPFILE), FSTAB,
+           shlex.quote(SWAP_FSTAB_LINE), FSTAB)),
     "content-dir-create": lambda a: "install -d -o %s -g %s -m 700 %s"
                           % (a[0], a[0], shlex.quote(content_path(a[0], CONTENT_SUBDIR))),
     "content-game-present": lambda a: "test -d %s/. && echo Y || echo N"
@@ -466,6 +518,12 @@ _REMOTE_ACTIONS = {
           content_path(a[0], "lgsm", "config-lgsm", a[2])])),
     "content-cron-remove": lambda a: "rm -f %s"
                            % shlex.quote("%s-%s" % (CONTENT_CRON_PREFIX, _username(a[0]))),
+    # A remote has no helper, so it keeps the zcat|awk|grep read — but only the READ half; the
+    # tallying awk is gone from both transports.
+    "f2b-log-lines": lambda a: (
+        "zcat -f %s 2>/dev/null | awk -v c=%s '$1 >= c' | "
+        "grep -E '\\[[A-Za-z0-9._-]+\\] (Ban|Found) [0-9a-fA-F:.]+'"
+        % (F2B_LOG_GLOB, shlex.quote(a[0]))),
     "gmod-mount-read": lambda a: "cat %s 2>/dev/null || true"
                        % shlex.quote(home_of(a[0]) + "/" + GMOD_CFG_SUBPATH + "/mount.cfg"),
     "content-grant-read": _content_grant_remote,
@@ -495,7 +553,12 @@ def check_args(verb, args):
         if not low <= len(args) <= high:
             raise VerbError("%s takes %d..%d argument(s), got %d" % (verb, low, high, len(args)))
         checks = list(fixed) + [rest.check] * (len(args) - len(fixed))
-    return [check(v) for v, check in zip(args, checks)]
+    out = [check(v) for v, check in zip(args, checks)]
+    # The one verb where an argument constrains another: a directive may only be set to a value
+    # from its own allowed set, so the PAIR is checked, not just each half.
+    if verb == "sshd-set-directive" and out[1] not in SSHD_DIRECTIVES[out[0]]:
+        raise VerbError("%s may not be set to that value" % out[0])
+    return out
 
 
 def tool_argv(verb, args):
