@@ -697,8 +697,8 @@ def set_game_priority(server, user, nice=GAME_PRIORITY_NICE):
     spawned game process gets the boost; the periodic keeper (set_game_priority_bulk) then holds it
     there even for servers the LinuxGSM monitor cron restarts as the game user."""
     try:
-        run_command(server, _sudo_sh("renice -n %d -u %s" % (int(nice), user)),
-                    timeout=15, sudo=False)
+        run_privileged(server, "renice-users", [str(int(nice)), user], timeout=15,
+                       merge_stderr=False)
     except Exception:
         _log.debug("set_game_priority failed (non-fatal)", exc_info=True)
 
@@ -714,8 +714,8 @@ def set_game_priority_bulk(server, users, nice=GAME_PRIORITY_NICE):
     if not users:
         return
     try:
-        run_command(server, _sudo_sh("renice -n %d -u %s" % (int(nice), " ".join(users))),
-                    timeout=20, sudo=False)
+        run_privileged(server, "renice-users", [str(int(nice))] + list(users), timeout=20,
+                       merge_stderr=False)
     except Exception:
         _log.debug("set_game_priority_bulk failed (non-fatal)", exc_info=True)
 
@@ -2884,10 +2884,9 @@ def _compute_pro_status(server):
     """Run `pro status` and shape the result. Returns installed/attached plus the featured
     security services and their enabled/disabled state."""
     import json
-    out, _, _ = run_command(
-        server, _sudo_sh("pro status --format json 2>/dev/null || true"),
-        timeout=25, sudo=False,
-    )
+    # `|| true` swallowed a non-zero exit so the caller always got a string; the check below
+    # already treats anything that is not JSON as "not installed", so the rc can just be ignored.
+    out, _, _ = run_privileged(server, "pro-status", [], timeout=25, merge_stderr=False)
     if not out.strip() or not out.strip().startswith("{"):
         return {"installed": False, "attached": False, "services": []}
     try:
@@ -2929,10 +2928,14 @@ def pro_attach(server, token):
     if not token:
         return False, "No token provided"
     _pro_cache_invalidate(server)   # state is about to change; next status read must be fresh
-    inner = ("(command -v pro >/dev/null 2>&1 || (apt-get update -qq && "
-             "DEBIAN_FRONTEND=noninteractive apt-get install -y ubuntu-advantage-tools)) ; "
-             f"pro attach {_quote(token)} 2>&1")
-    out, err, rc = run_command(server, _sudo_sh(inner), timeout=240, sudo=False)
+    # Was one root shell: `(command -v pro || (apt-get update && apt-get install …)) ; pro attach`.
+    # The presence test is now the pro-status verb's own exit code — rc 127 is "not installed" on
+    # both transports — and the install is two verbs that already exist.
+    _, _, pro_rc = run_privileged(server, "pro-status", [], timeout=30, merge_stderr=False)
+    if pro_rc == 127:
+        run_privileged(server, "apt-update", [], timeout=120, merge_stderr=False)
+        run_privileged(server, "apt-install", ["ubuntu-advantage-tools"], timeout=300)
+    out, err, rc = run_privileged(server, "pro-attach", [token], timeout=240)
     blob = ((out or "") + " " + (err or "")).replace(token, "<token>")
     low = blob.lower()
     if rc == 0 or "this machine is now attached" in low or "already attached" in low:
@@ -2947,8 +2950,7 @@ def pro_service(server, service, action):
     if action not in ("enable", "disable"):
         return False, "Unknown action"
     _pro_cache_invalidate(server)
-    out, err, rc = run_command(server, _sudo_sh(f"pro {action} {service} --assume-yes 2>&1"),
-                               timeout=300, sudo=False)
+    out, err, rc = run_privileged(server, "pro-service", [action, service], timeout=300)
     blob = (out or "") + " " + (err or "")
     low = blob.lower()
     if rc == 0 or "is already enabled" in low or "is already disabled" in low \
@@ -2960,7 +2962,7 @@ def pro_service(server, service, action):
 def pro_detach(server):
     """Detach a host from Ubuntu Pro."""
     _pro_cache_invalidate(server)
-    out, err, rc = run_command(server, _sudo_sh("pro detach --assume-yes 2>&1"), timeout=120, sudo=False)
+    out, err, rc = run_privileged(server, "pro-detach", [], timeout=120)
     blob = (out or "") + " " + (err or "")
     if rc == 0 or "detach" in blob.lower():
         return True, "Detached from Ubuntu Pro."
@@ -3575,7 +3577,7 @@ def remote_bootstrap_vps(server, set_timezone="UTC", enable_ufw=True, install_lg
     if set_timezone:
         emit(f"Setting timezone to {set_timezone}")
         # set_timezone is user-supplied and runs as root — quote it against injection.
-        run_command(server, f"timedatectl set-timezone {_quote(set_timezone)} 2>&1", timeout=10, sudo=True)
+        run_privileged(server, "set-timezone", [set_timezone], timeout=10)
 
     # ── 5. Configure UFW ──
     if enable_ufw:
@@ -3902,9 +3904,15 @@ def remote_ufw_close_port_22(server):
 
 def _sshd_current_ports(server):
     """The ports sshd currently listens on (from its *effective* config). Empty on failure."""
-    out, _, _ = run_command(server, "sshd -T 2>/dev/null | awk 'tolower($1)==\"port\"{print $2}'",
-                            timeout=15, sudo=True)
-    return [p for p in (out or "").split() if p.isdigit()]
+    # Was `sshd -T | awk 'tolower($1)=="port"{print $2}'` — an awk program running as root to do
+    # what a list comprehension does. The verb returns the effective config; the parsing is here.
+    out, _, _ = run_privileged(server, "sshd-effective-config", [], timeout=15, merge_stderr=False)
+    ports = []
+    for line in (out or "").splitlines():
+        parts = line.split()
+        if len(parts) >= 2 and parts[0].lower() == "port" and parts[1].isdigit():
+            ports.append(parts[1])
+    return ports
 
 
 def _canonical_ip(s):
@@ -5092,12 +5100,15 @@ def path_disk_free(server, path="/home"):
     """Free + total bytes of the filesystem holding `path` (where game content is stored). Returns
     (free_bytes, total_bytes) or (None, None). Best-effort; falls back to /home for a bad path."""
     p = path if _DF_PATH_RE.match(path or "") else "/home"
-    out, _, _ = run_command(
-        server, _sudo_sh("df -PB1 %s 2>/dev/null | awk 'NR==2{print $2, $4}'" % p), timeout=10)
+    # Was `df -PB1 <path> | awk 'NR==2{print $2, $4}'`. Same two fields, read in Python.
+    out, _, _ = run_privileged(server, "disk-free", [p], timeout=10, merge_stderr=False)
+    rows = (out or "").splitlines()
+    if len(rows) < 2:
+        return None, None
+    fields = rows[1].split()
     try:
-        total, free = (out or "").split()
-        return int(free), int(total)
-    except (ValueError, AttributeError):
+        return int(fields[3]), int(fields[1])      # available, total
+    except (IndexError, ValueError):
         return None, None
 
 
