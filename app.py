@@ -67,7 +67,9 @@ from flask_wtf.csrf import CSRFProtect
 from sqlalchemy import desc, or_, text
 
 from auth import (
-    ALL_PERMISSIONS, ACTION_PERMISSION_MAP, can_access_server,
+    ALL_PERMISSIONS, READONLY_ACTIONS, can_access_server,
+    get_remote, get_game, _can_edit_tags, _can_manage_files,
+    _perm_for_action, _grantable_perms,
     can_access_remote, accessible_remote_ids, check_password,
     client_ip, dummy_password_check, generate_backup_codes,
     generate_totp_secret, totp_provisioning_uri,
@@ -78,7 +80,7 @@ from auth import (
     INSTALL_SERVER,
     UNINSTALL_SERVER, MANAGE_SERVERS,
     MANAGE_REMOTES, MANAGE_USERS, MANAGE_GROUPS,
-    VIEW_LOGS, SUPER_ADMIN, VIEW_CONSOLE, SEND_COMMAND, MODERATE_SERVER,
+    VIEW_LOGS, VIEW_CONSOLE, SEND_COMMAND, MODERATE_SERVER,
     can_moderate_action, can_run_custom_command, allowed_custom_commands,
     RESTART_SERVER, START_SERVER, STOP_SERVER, UPDATE_SERVER,
 )
@@ -1815,7 +1817,6 @@ RUNNABLE_ACTIONS = {
 # Long-running ones run in the background so the HTTP request returns immediately.
 LONG_ACTIONS = {"update", "validate", "backup", "force-update", "mods-update", "fastdl"}
 # Read-only ones: show their output back to the user.
-READONLY_ACTIONS = {"monitor", "details", "check-update", "postdetails", "test-alert"}
 
 # LinuxGSM alert providers: a toggle key (on/off) + the fields each needs. Exposed as a
 # friendly per-server "Alerts" editor that writes straight into the LinuxGSM config.
@@ -2681,15 +2682,6 @@ def register_context_processors(app):
 def register_routes(app):
 
     # ── Helpers ─────────────────────────────────────────────
-    def get_remote(remote_id):
-        """Fetch a remote AND enforce per-host access. MANAGE_REMOTES grants the
-        ability to manage remotes, but only the ones in the user's groups — the same
-        per-host scoping game servers get. Superadmin sees all. Every remote-scoped
-        route goes through here, so a direct API call to another remote's id is a 403."""
-        r = RemoteServer.query.get_or_404(remote_id)
-        if not can_access_remote(current_user, remote_id):
-            abort(403)
-        return r
 
     def resolve_free_port(remote, remote_id, desired, game_type):
         """Find a free contiguous port block at/after `desired` on a remote for a `game_type`
@@ -2712,8 +2704,6 @@ def register_routes(app):
         p = _first_free_block(desired, span, occupied)
         return p, (p != desired)
 
-    def get_game(server_id):
-        return GameServer.query.get_or_404(server_id)
 
     # ── Setup Wizard ────────────────────────────────────────
     def is_setup_complete():
@@ -3313,11 +3303,6 @@ def register_routes(app):
         return jsonify({"success": True, "current": is_current})
 
     # ── Server tags: install-wide labels for grouping, bulk actions and alert routing ──────────
-    def _can_edit_tags():
-        """Tag writes need MANAGE_SERVERS. Checked INLINE rather than with @permission_required,
-        because that decorator flashes and redirects — which a fetch().then(r => r.json()) can only
-        see as unparseable HTML."""
-        return current_user.is_superadmin or has_permission(current_user, MANAGE_SERVERS)
 
     def _tag_json(tag):
         return {"id": tag.id, "name": tag.name, "color": tag.color or "", "notify": bool(tag.notify),
@@ -3855,13 +3840,6 @@ def register_routes(app):
                                can_autostart=can_autostart, public_host=public_host,
                                cron_restart_pending=_cron_restart_pending.get(gs.id, False))
 
-    def _perm_for_action(action):
-        """Which permission an action requires (core actions have specific perms;
-        read-only commands need VIEW_CONSOLE; the rest need UPDATE_SERVER)."""
-        p = ACTION_PERMISSION_MAP.get(action)
-        if p is None:
-            p = VIEW_CONSOLE if action in READONLY_ACTIONS else UPDATE_SERVER
-        return p
 
     def _apply_mod_restart(gs, remote):
         """A mod install/remove/update only takes effect after the server restarts — but we NEVER
@@ -5521,17 +5499,6 @@ def register_routes(app):
                                all_perms=all_perms, all_servers=all_servers,
                                all_remotes=all_remotes)
 
-    def _grantable_perms(requested, existing=()):
-        """Compute a group's permission set after an edit, safely. A superadmin can set any
-        real permission. Anyone else (a delegated MANAGE_GROUPS user) can only toggle the
-        permissions they themselves hold — and never SUPER_ADMIN — so they can't escalate
-        their own privileges by editing a group they belong to. Permissions already on the
-        group that they can't grant are PRESERVED (so an edit can't silently strip them)."""
-        requested = set(requested) & set(ALL_PERMISSIONS.keys())
-        if current_user.is_superadmin:
-            return list(requested)
-        grantable = get_user_permissions(current_user) - {SUPER_ADMIN}
-        return list((set(existing) - grantable) | (requested & grantable))
 
     def _selected_remotes(server_ids):
         """Resolve submitted remote ids to RemoteServer rows, skipping anything
@@ -8280,8 +8247,6 @@ def register_routes(app):
         return jsonify({"success": True})
 
     # ── Config editor + file browser (per game server) ─────────
-    def _can_manage_files():
-        return current_user.is_superadmin or has_permission(current_user, MANAGE_SERVERS)
 
     def _log_and_generic(context):
         """Record the real exception in the server log and return a generic string,
