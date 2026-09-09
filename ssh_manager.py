@@ -270,6 +270,19 @@ def write_root_file(server, target, content, timeout=15):
     return _run_local(_priv.remote_write_command(target, content), timeout=timeout, sudo=True)
 
 
+def write_content_cron(server, content_user, body, timeout=15):
+    """Write one content user's weekly update cron. Per-user destination, so it cannot be a
+    WRITE_TARGETS name — the path is still built from the validated user name, never passed in."""
+    if not is_local_server(server):
+        return run_command(server, _priv.remote_content_cron_command(content_user, body),
+                           timeout=timeout, sudo=True)
+    if helper_present():
+        return _exec_local_argv(_priv.helper_argv("content-cron-write", [content_user]),
+                                timeout=timeout, stdin_text=body)
+    return _run_local(_priv.remote_content_cron_command(content_user, body),
+                      timeout=timeout, sudo=True)
+
+
 def run_privileged(server, verb, args=(), timeout=30, merge_stderr=True, sudo=True):
     """Run a privileged VERB (see privileged.py) against `server`.
 
@@ -650,7 +663,7 @@ def discover_linuxgsm_servers(server):
 
     def _n(x):
         x = (x or "").strip()
-        return int(x) if x.isdigit() else 0
+        return int(x) if x.isdecimal() else 0
 
     found = []
     for line in (out or "").splitlines():
@@ -823,9 +836,9 @@ def server_live_metrics(server, short_name=None, game_port=None, force=False):
         if f[0] == "cpu" and len(f) >= 8:
             cpu_lines.append([int(x) for x in f[1:8]])
         elif f[0] == "GJA" and len(f) >= 2:
-            gja = int(f[1]) if f[1].lstrip("-").isdigit() else 0
+            gja = int(f[1]) if f[1].lstrip("-").isdecimal() else 0
         elif f[0] == "GJB" and len(f) >= 2:
-            gjb = int(f[1]) if f[1].lstrip("-").isdigit() else 0
+            gjb = int(f[1]) if f[1].lstrip("-").isdecimal() else 0
         elif f[0] == "MEM" and len(f) >= 3:
             m["ram_total"], m["ram_used"] = int(f[1]), int(f[2])
         elif f[0] == "LOAD" and len(f) >= 4:
@@ -833,15 +846,15 @@ def server_live_metrics(server, short_name=None, game_port=None, force=False):
         elif f[0] == "DISK" and len(f) >= 3:
             m["disk_total"], m["disk_used"] = int(f[1]), int(f[2])
         elif f[0] == "CORES":
-            m["cores"] = int(f[1]) if len(f) > 1 and f[1].isdigit() else 1
+            m["cores"] = int(f[1]) if len(f) > 1 and f[1].isdecimal() else 1
         elif f[0] == "UPTIME":
-            m["uptime_secs"] = int(f[1]) if len(f) > 1 and f[1].isdigit() else 0
+            m["uptime_secs"] = int(f[1]) if len(f) > 1 and f[1].isdecimal() else 0
         elif f[0] == "GAMERAM" and len(f) >= 3:
             m["game_ram_mb"] = int(int(f[1]) / 1024); m["game_procs"] = int(f[2])
         elif f[0] == "GUP":
-            m["game_uptime_secs"] = int(f[1]) if len(f) > 1 and f[1].isdigit() else 0
+            m["game_uptime_secs"] = int(f[1]) if len(f) > 1 and f[1].isdecimal() else 0
         elif f[0] == "PORT":
-            m["port_open"] = len(f) > 1 and f[1].isdigit() and int(f[1]) > 0
+            m["port_open"] = len(f) > 1 and f[1].isdecimal() and int(f[1]) > 0
     total_delta = 0
     if len(cpu_lines) >= 2:
         a, b = cpu_lines[0], cpu_lines[1]
@@ -892,7 +905,7 @@ def remote_live_metrics(server):
                 mem[parts[0].rstrip(":")] = int(parts[1]) * 1024  # kB → bytes
             except ValueError:
                 _log.debug("remote_live_metrics: ignored non-fatal error", exc_info=True)
-        elif section == "DISK" and len(parts) >= 4 and parts[1].isdigit():
+        elif section == "DISK" and len(parts) >= 4 and parts[1].isdecimal():
             # df -PB1 data row: Filesystem 1B-blocks Used Available Use% Mounted (skip the header)
             disk_total, disk_used = int(parts[1]), int(parts[2])
 
@@ -904,7 +917,7 @@ def remote_live_metrics(server):
         return round((1 - idle / total) * 100, 1) if total > 0 else 0.0
 
     core_names = sorted((n for n in A if n != "cpu" and n.startswith("cpu")),
-                        key=lambda x: int(x[3:]) if x[3:].isdigit() else 0)
+                        key=lambda x: int(x[3:]) if x[3:].isdecimal() else 0)
     cores = [_pct(n) for n in core_names]
     ram_total = mem.get("MemTotal", 0)
     ram_used = ram_total - mem.get("MemAvailable", 0)
@@ -1718,7 +1731,7 @@ def player_count(server, user, game_type=None, port=None, query_type=None):
     except Exception:
         return None
     s = (out or "").strip().splitlines()[-1].strip() if (out or "").strip() else ""
-    if not s or s == "null" or not s.isdigit():
+    if not s or s == "null" or not s.isdecimal():
         return None
     return int(s)
 
@@ -1807,7 +1820,7 @@ def player_count_via_lgsm_query(server, user, selfname, fallback_port=None):
     qtype = re.sub(r"[^A-Za-z0-9_-]", "", (vals.get("querytype") or "").strip())[:40]
     qport = ((vals.get("queryport") or "").strip() or (vals.get("port") or "").strip()
              or str(fallback_port or "").strip())
-    if not qtype or not qport.isdigit():
+    if not qtype or not qport.isdecimal():
         return None
     cmd = ("gamedig --type %s %s:%d 2>/dev/null | jq -r '.players|length' 2>/dev/null"
            % (qtype, _gamedig_host(server), int(qport)))
@@ -1816,7 +1829,7 @@ def player_count_via_lgsm_query(server, user, selfname, fallback_port=None):
     except Exception:
         return None
     s = (out or "").strip().splitlines()[-1].strip() if (out or "").strip() else ""
-    return int(s) if s.isdigit() else None
+    return int(s) if s.isdecimal() else None
 
 
 # ── Engine families ──────────────────────────────────────────────────────────
@@ -2610,7 +2623,7 @@ def _annotate_firewall_protection(server, enabled, groups):
         # your only SSH access.
         inbound = g.get("direction", "IN") != "OUT"
         g["is_ssh"] = (not g.get("is_iface") and g.get("action") in ("ALLOW", "LIMIT") and inbound
-                       and pn.isdigit() and int(pn) in ssh_ports)
+                       and pn.isdecimal() and int(pn) in ssh_ports)
         g["is_tailscale"] = (bool(g.get("is_iface")) and g.get("action") == "ALLOW" and inbound
                              and str(g.get("iface", "")).startswith("tailscale"))
         g["is_access"] = g["is_ssh"] or g["is_tailscale"]
@@ -2635,7 +2648,7 @@ def _annotate_firewall_protection(server, enabled, groups):
         g["protect_reason"] = ""
         g["is_panel"] = (panel_port is not None and not g.get("is_iface")
                          and g.get("action") == "ALLOW"
-                         and str(g.get("port_num", "")).isdigit()
+                         and str(g.get("port_num", "")).isdecimal()
                          and int(g["port_num"]) == panel_port)
         if not enabled:
             continue
@@ -3223,7 +3236,7 @@ def port_in_use(server, port):
         out, _, _ = run_command(
             server, f"ss -Hlntu 'sport = :{port}' 2>/dev/null | wc -l", timeout=8
         )
-        return out.strip().isdigit() and int(out.strip()) > 0
+        return out.strip().isdecimal() and int(out.strip()) > 0
     except Exception:
         return False
 
@@ -3413,7 +3426,7 @@ def remote_uptime(server, force=False):
         total = sum(b) - sum(a)
         if total > 0:
             d["cpu_percent"] = f"{round((1 - idle / total) * 100, 1)}"
-    if d["cpu_percent"] not in ("?", "") and d["cpu_cores"].isdigit():
+    if d["cpu_percent"] not in ("?", "") and d["cpu_cores"].isdecimal():
         try:
             d["cpu_per_core"] = f"{float(d['cpu_percent']) / int(d['cpu_cores']):.1f}"
         except (ValueError, ZeroDivisionError):
@@ -3910,7 +3923,7 @@ def _sshd_current_ports(server):
     ports = []
     for line in (out or "").splitlines():
         parts = line.split()
-        if len(parts) >= 2 and parts[0].lower() == "port" and parts[1].isdigit():
+        if len(parts) >= 2 and parts[0].lower() == "port" and parts[1].isdecimal():
             ports.append(parts[1])
     return ports
 
@@ -4062,8 +4075,8 @@ def remote_fail2ban_top_ips(server, limit=20, days=7):
             ip = p[2].strip()
             jails = [j for j in (p[3].split(",") if len(p) > 3 and p[3] else []) if j]
             rows.append({"ip": ip,
-                         "attempts": int(p[0]) if p[0].isdigit() else 0,
-                         "bans": int(p[1]) if p[1].isdigit() else 0,
+                         "attempts": int(p[0]) if p[0].isdecimal() else 0,
+                         "bans": int(p[1]) if p[1].isdecimal() else 0,
                          "banned_now": ip in banned,
                          "blocked": ip in blocked,
                          "jails": jails})
@@ -4846,7 +4859,7 @@ def browse_dir(server, user, relpath="", selfname=None):
             name = "\t".join(parts[2:])
             rel = f"{base}/{name}" if base else name
             entries.append({"name": name, "is_dir": typ == "d",
-                            "size": int(size) if size.isdigit() else 0,
+                            "size": int(size) if size.isdecimal() else 0,
                             "protected": _is_protected_path(rel, selfname)})
     entries.sort(key=lambda e: (not e["is_dir"], e["name"].lower()))
     return {"path": base, "entries": entries}
@@ -4921,7 +4934,7 @@ def stat_upload_targets(server, user, reldir, names):
         except (TypeError, ValueError):
             mt = 0
         present[nm] = {"is_dir": typ == "d",
-                       "size": int(size) if size.isdigit() else 0, "mtime": mt}
+                       "size": int(size) if size.isdecimal() else 0, "mtime": mt}
     hits = []
     seen = set()
     for n in (names or []):
@@ -5084,9 +5097,12 @@ def ensure_content_user(server):
     u = _CONTENT_USER
     exists, _, _ = run_command(server, f"id {_quote(u)} >/dev/null 2>&1 && echo Y || echo N", timeout=10)
     if "Y" not in (exists or ""):
-        _, err, rc = run_command(server, _sudo_sh(
-            f"useradd -m -s /bin/bash {_quote(u)} && passwd -l {_quote(u)} >/dev/null 2>&1; "
-            f"install -d -o {u} -g {u} -m 750 /home/{u}/serverfiles"), timeout=30, sudo=False)
+        # Was one root shell: useradd && passwd -l ; install -d. Three verbs, and the
+        # serverfiles path is built by the helper from the validated name.
+        _, err, rc = run_privileged(server, "user-create", [u], timeout=30)
+        if rc == 0:
+            run_privileged(server, "user-lock-password", [u], timeout=10, merge_stderr=False)
+            _, err, rc = run_privileged(server, "content-dir-create", [u], timeout=30)
         if rc != 0:
             _log.warning("ensure_content_user: could not create %s: %s", u, (err or "")[:200])
             return None
@@ -5116,10 +5132,11 @@ def content_present(server, content_user, game):
     """True if <content_user>/serverfiles/<game> already exists on the host."""
     if not (_CU_NAME_RE.match(content_user or "") and game in GMOD_CONTENT_GAMES):
         return False
-    out, _, _ = run_command(
-        server, _sudo_sh(f"test -d /home/{content_user}/serverfiles/{game}/. && echo Y || echo N"),
-        timeout=10)
-    return "Y" in (out or "")
+    # `test -d … && echo Y || echo N` only turned an exit status into text so this could match a
+    # substring. The verb's own rc says the same thing.
+    _out, _err, rc = run_privileged(server, "content-game-present", [content_user, game],
+                                    timeout=10, merge_stderr=False)
+    return rc == 0 or "Y" in (_out or "")
 
 
 _CONTENT_UPDATE_CRON_PATH = "/etc/cron.d/lgsm-gmod-content"
@@ -5180,9 +5197,9 @@ def _installed_content_lgsm_names(server, content_user):
     names = []
     for g, (_lbl, lgsm) in GMOD_CONTENT_GAMES.items():
         if lgsm and content_present(server, content_user, g):
-            out, _, _ = run_command(
-                server, _sudo_sh(f"test -x /home/{content_user}/{lgsm} && echo Y || echo N"), timeout=10)
-            if "Y" in (out or ""):
+            _o, _e, _rc = run_privileged(server, "content-script-present", [content_user, lgsm],
+                                         timeout=10, merge_stderr=False)
+            if _rc == 0 or "Y" in (_o or ""):
                 names.append(lgsm)
     return names
 
@@ -5195,8 +5212,6 @@ def ensure_content_update_cron(server, content_user):
     the whole file to match whatever is currently installed. Removes the file when nothing's left."""
     if not _CU_NAME_RE.match(content_user or ""):
         return False
-    import base64
-    path = "%s-%s" % (_CONTENT_UPDATE_CRON_PATH, content_user)
     # If the content user already automates updates in its OWN crontab (e.g. a hand-rolled content box
     # like an existing srcds), leave it alone — never add duplicate update jobs on top of the admin's.
     ct, _, _ = run_privileged(server, "crontab-list", [content_user], timeout=10,
@@ -5207,11 +5222,11 @@ def ensure_content_update_cron(server, content_user):
             return True   # the user already updates its content; don't manage a second cron
     names = _installed_content_lgsm_names(server, content_user)
     if not names:
-        run_command(server, _sudo_sh("rm -f %s" % path), timeout=10, sudo=False)
+        run_privileged(server, "content-cron-remove", [content_user], timeout=10,
+                       merge_stderr=False)
         return True
-    b64 = base64.b64encode(_content_update_cron_body(content_user, names).encode()).decode()
-    _, _, rc = run_command(server, _sudo_sh(
-        "echo %s | base64 -d > %s && chmod 644 %s" % (b64, path, path)), timeout=15, sudo=False)
+    _, _, rc = write_content_cron(server, content_user,
+                                  _content_update_cron_body(content_user, names), timeout=15)
     return rc == 0
 
 
@@ -5229,12 +5244,10 @@ def uninstall_gmod_content(server, content_user, games):
         # g is a constant folder key and content_user is validated (no '/'/'..'/metachars), so every
         # path is a fixed subpath of the content home — safe to rm as root, which also sidesteps any
         # parent-dir ownership quirk. The shared lgsm/ framework dir is left for the other games.
-        paths = ["/home/%s/serverfiles/%s" % (content_user, g)]
-        if lgsm:
-            paths += ["/home/%s/%s" % (content_user, lgsm),
-                      "/home/%s/lgsm/config-lgsm/%s" % (content_user, lgsm)]
-        inner = " ; ".join("rm -rf %s" % p for p in paths)
-        run_command(server, _sudo_sh(inner), timeout=120, sudo=False)
+        # Three `rm -rf`s that used to be built from an interpolated user name and game key.
+        # The verb takes the NAMES; the helper builds the paths.
+        run_privileged(server, "content-game-remove", [content_user, g, lgsm or "-"],
+                       timeout=120, merge_stderr=False)
         if not content_present(server, content_user, g):
             removed.append(g)
     try:
@@ -5269,9 +5282,9 @@ def gmod_mount_setup(server, gmod_user, content_user, games):
         group = _user_primary_group(server, content_user)
         # Read access: add the GMod user to the content group, and make the content group-traversable
         # (home) + group-readable (each game tree). Best-effort per command.
-        perms = ("usermod -aG %s %s; chmod g+x /home/%s; " % (_quote(group), _quote(gmod_user), content_user)
-                 + "; ".join("chmod -R g+rX /home/%s/serverfiles/%s" % (content_user, g) for g in games))
-        run_command(server, _sudo_sh(perms), timeout=180, sudo=False)
+        run_privileged(server, "content-grant-read",
+                       [content_user, group, gmod_user] + list(games), timeout=180,
+                       merge_stderr=False)
     # Write mount.cfg + mountdepots.txt AS the GMod user (base64 so no quoting/interpolation risk).
     mountcfg, depots = _gmod_mount_files(content_user or "", games)
     cfgdir = f"/home/{gmod_user}/serverfiles/garrysmod/cfg"
@@ -5296,8 +5309,8 @@ def gmod_current_mounts(server, gmod_user):
     Returns a list of known game keys (order as written). [] if no file / none. Read-only."""
     if not _CU_NAME_RE.match(gmod_user or ""):
         return []
-    path = f"/home/{gmod_user}/serverfiles/garrysmod/cfg/mount.cfg"
-    out, _, _ = run_command(server, _sudo_sh("cat %s 2>/dev/null || true" % path), timeout=10)
+    out, _, _ = run_privileged(server, "gmod-mount-read", [gmod_user], timeout=10,
+                               merge_stderr=False)
     found = []
     for line in (out or "").splitlines():
         s = line.strip()
@@ -5346,7 +5359,7 @@ def _remote_listening_ports(remote):
     for addr in (out or "").split():
         if ":" in addr:
             p = addr.rsplit(":", 1)[1]
-            if p.isdigit():
+            if p.isdecimal():
                 ports.add(int(p))
     if out:   # cache only a scan that returned something (empty output == SSH blip)
         _port_scan_cache[remote.id] = (now + _PORT_SCAN_TTL, ports)

@@ -88,6 +88,14 @@ SSHD_DROPIN_BAK = SSHD_DROPIN + ".bak"
 # fail2ban's operator-owned jail file — see tools/panel-helper.
 F2B_JAIL_LOCAL = "/etc/fail2ban/jail.local"
 
+# The GMod shared-content box — see tools/panel-helper. Every path is BUILT from a validated user
+# name and identifier; three of the verbs below end in `rm -rf` as root.
+CONTENT_HOME_ROOT = "/home"
+CONTENT_SUBDIR = "serverfiles"
+CONTENT_CRON_PREFIX = "/etc/cron.d/lgsm-gmod-content"
+GMOD_CFG_SUBPATH = "serverfiles/garrysmod/cfg"
+
+
 # Ubuntu Pro services the panel offers. `pro` will happily take any service name; this is the set
 # the UI actually exposes, so it is the set the helper accepts.
 PRO_SERVICES = ("esm-infra", "esm-apps", "livepatch", "fips", "fips-updates", "fips-preview",
@@ -177,6 +185,28 @@ def home_of(user):
     if not path.startswith(HOME_ROOT + "/") or len(path) <= len(HOME_ROOT) + 1 or ".." in path:
         raise VerbError("refusing to build that home path")
     return path
+
+
+def _ident(s):
+    """A game key or LinuxGSM script name — see tools/panel-helper."""
+    if not re.fullmatch(r"[a-z0-9][a-z0-9_-]{0,31}", str(s)):
+        raise VerbError("not an identifier")
+    return str(s)
+
+
+def _ident_or_dash(s):
+    """An identifier, or "-" for "this game has no LinuxGSM script"."""
+    return "-" if str(s) == "-" else _ident(s)
+
+
+def content_path(user, *parts):
+    """A path under a content user's home, assembled from validated pieces — never accepted."""
+    base = home_of(user)
+    for part in parts:
+        base = base + "/" + _ident(part)
+    if not base.startswith(HOME_ROOT + "/") or ".." in base:
+        raise VerbError("refusing to build that path")
+    return base
 
 
 def _linecount(s):
@@ -297,6 +327,17 @@ _ARGV = {
     # helper — but the path comes from this table rather than from a call site either way.
     "write-file": ([_choice(*sorted(WRITE_TARGETS))], lambda a: [], None),
 
+    # ── the GMod shared-content box ──
+    "content-dir-create": ([_username], lambda a: [], None),
+    "content-game-present": ([_username, _ident], lambda a: [], None),
+    "content-script-present": ([_username, _ident], lambda a: [], None),
+    "content-game-remove": ([_username, _ident, _ident_or_dash], lambda a: [], None),
+    "content-cron-write": ([_username], lambda a: [], None),
+    "content-cron-remove": ([_username], lambda a: [], None),
+    "content-grant-read": ([_username, _username, _username, Rest(_ident)],
+                           lambda a: [], None),
+    "gmod-mount-read": ([_username], lambda a: [], None),
+
     # ── Ubuntu Pro ──
     "pro-status": ([], lambda a: ["pro", "status", "--format", "json"], None),
     "pro-attach": ([_pro_token], lambda a: ["pro", "attach", a[0]], None),
@@ -378,6 +419,19 @@ _ARGV = {
 
 
 
+def _content_grant_remote(a):
+    """The remote form of content-grant-read: usermod, then the traversal and read bits."""
+    content_user, group, gmod_user, games = a[0], a[1], a[2], a[3:]
+    parts = ["usermod -aG %s %s" % (shlex.quote(group), shlex.quote(gmod_user)),
+             # Traversal outermost-first: the home, then serverfiles. The shell form skipped
+             # serverfiles because it was created group-readable; it is created private now.
+             "chmod g+x %s" % shlex.quote(home_of(content_user)),
+             "chmod g+x %s" % shlex.quote(content_path(content_user, CONTENT_SUBDIR))]
+    parts += ["chmod -R g+rX %s" % shlex.quote(content_path(content_user, CONTENT_SUBDIR, g))
+              for g in games]
+    return "; ".join(parts)
+
+
 # Verbs the helper implements itself, with no tool to run. A REMOTE host has no helper, so each one
 # needs the shell form it has always been sent — kept here, beside the verb, so the two renderings
 # cannot drift. These are byte-identical to what the call sites used to build inline.
@@ -397,6 +451,24 @@ _REMOTE_ACTIONS = {
     # The subshell is the point: it backgrounds the sleep so this command returns and the SSH
     # connection can close before the host goes down.
     "reboot-delayed": lambda a: "( sleep 2 ; reboot ) >/dev/null 2>&1 & echo scheduled",
+    # 700, not the 750 the shell form used: the group bits are added by content-grant-read when
+    # access is actually granted, so both transports share nothing until then.
+    "content-dir-create": lambda a: "install -d -o %s -g %s -m 700 %s"
+                          % (a[0], a[0], shlex.quote(content_path(a[0], CONTENT_SUBDIR))),
+    "content-game-present": lambda a: "test -d %s/. && echo Y || echo N"
+                            % shlex.quote(content_path(a[0], CONTENT_SUBDIR, a[1])),
+    "content-script-present": lambda a: "test -x %s && echo Y || echo N"
+                              % shlex.quote(content_path(a[0], a[1])),
+    "content-game-remove": lambda a: " ; ".join(
+        "rm -rf %s" % shlex.quote(p) for p in
+        ([content_path(a[0], CONTENT_SUBDIR, a[1])] if a[2] == "-" else
+         [content_path(a[0], CONTENT_SUBDIR, a[1]), content_path(a[0], a[2]),
+          content_path(a[0], "lgsm", "config-lgsm", a[2])])),
+    "content-cron-remove": lambda a: "rm -f %s"
+                           % shlex.quote("%s-%s" % (CONTENT_CRON_PREFIX, _username(a[0]))),
+    "gmod-mount-read": lambda a: "cat %s 2>/dev/null || true"
+                       % shlex.quote(home_of(a[0]) + "/" + GMOD_CFG_SUBPATH + "/mount.cfg"),
+    "content-grant-read": _content_grant_remote,
 }
 
 
@@ -481,6 +553,18 @@ def remote_write_command(name, content):
     b64 = base64.b64encode(content.encode()).decode()
     return ("echo %s | base64 -d > %s && chmod %o %s"
             % (shlex.quote(b64), shlex.quote(path), mode, shlex.quote(path)))
+
+
+def remote_content_cron_command(user, content):
+    """The shell command that writes one content user's update cron on a REMOTE host.
+
+    Same shape as remote_write_command, but the destination is per-user so it cannot live in
+    WRITE_TARGETS — the path is still built here from a validated name, not passed in."""
+    import base64
+    path = "%s-%s" % (CONTENT_CRON_PREFIX, _username(user))
+    b64 = base64.b64encode(content.encode()).decode()
+    return ("echo %s | base64 -d > %s && chmod 644 %s"
+            % (shlex.quote(b64), shlex.quote(path), shlex.quote(path)))
 
 
 def verbs():

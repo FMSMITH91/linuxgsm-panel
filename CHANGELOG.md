@@ -8,6 +8,12 @@ regardless of this file — this changelog is for humans.
 ## [Unreleased]
 
 ### Fixed
+- **A parser could crash on a superscript digit.** `str.isdigit()` is true for characters like `¹`
+  that `int()` refuses, and the panel used that pairing in 35 places — including the query port read
+  from a game server's own config, and the session-cookie user loader. Found by the fuzzer, fixed
+  everywhere with `isdecimal()`, which is exactly the predicate `int()` accepts.
+
+### Fixed
 - **The "main has open code-scanning alerts" gate raced CodeQL and reported the wrong answer.** It
   ran on the same push as the analysis rather than after it, so a commit that *fixed* an alert
   failed the gate, and — worse — a commit that *introduced* one passed it, with the alert then
@@ -20,9 +26,9 @@ regardless of this file — this changelog is for humans.
   a verb and separated arguments, re-validates each one, and runs a fixed command — no shell, and
   `bash` is not a program it can reach. The `ufw`, `fail2ban-client`, `systemctl` and `apt`/`dpkg`
   families now use it, plus the log reads, user/cron management and the root-owned config writes —
-  60 verbs, including the sshd port change, the deferred reboot, Ubuntu Pro and the host
-  controls. Root-escalating call
-  sites that still build a shell string are down from 131 to 26, and a ratcheting test now counts
+  68 verbs, including the sshd port change, the deferred reboot, Ubuntu Pro, the host controls and
+  the GMod shared-content box. Root-escalating call
+  sites that still build a shell string are down from 131 to 18, and a ratcheting test now counts
   BOTH escalation routes (an earlier count missed `_sudo_sh`, which had 18 sites of its own). **This does not reduce your exposure yet**: the grant stays `NOPASSWD:ALL` until
   every privileged call site is converted, because a boundary with a hole in it is not a boundary.
   See SECURITY.md.

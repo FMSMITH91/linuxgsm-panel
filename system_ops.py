@@ -89,7 +89,7 @@ def live_metrics():
 
     core_names = sorted(
         (n for n in a if n != "cpu" and n.startswith("cpu")),
-        key=lambda x: int(x[3:]) if x[3:].isdigit() else 0,
+        key=lambda x: int(x[3:]) if x[3:].isdecimal() else 0,
     )
     cores = [_pct(n) for n in core_names]
     overall = _pct("cpu")
@@ -255,7 +255,7 @@ def ufw_status():
             continue  # Skip header lines like (v6)
 
         parts = line.split()
-        if len(parts) >= 3 and parts[0][0].isdigit():
+        if len(parts) >= 3 and parts[0][0].isdecimal():
             # Numbered rule
             num = parts[0]
             action = parts[1] if len(parts) > 1 else ""
@@ -511,7 +511,7 @@ def server_uptime():
     # CPU load / core count
     cpu_cores, _, _ = _run("nproc", timeout=3)
     cpu_per_core = ""
-    if cpu_percent and cpu_cores and cpu_cores.strip().isdigit():
+    if cpu_percent and cpu_cores and cpu_cores.strip().isdecimal():
         try:
             cpu_per_core = f"{float(cpu_percent)/int(cpu_cores):.1f}"
         except ValueError:
@@ -770,7 +770,7 @@ def _compute_update_status():
                 "current_version": cur_ver, "current_sha": cur_sha.strip(), "branch": branch,
                 "message": "Couldn't reach the update source — it may be private or offline."}
     behind, _, _ = _git(["rev-list", "--count", "HEAD.." + ref])
-    behind_n = int(behind.strip()) if behind.strip().isdigit() else 0
+    behind_n = int(behind.strip()) if behind.strip().isdecimal() else 0
     rem_sha, _, _ = _git(["rev-parse", "--short", ref])
 
     base = {"git": True, "fetched": True, "current_version": cur_ver,
@@ -1511,8 +1511,8 @@ def _parse_top_ips(out, banned_now, blocked):
             jails = [j for j in (parts[3].split(",") if len(parts) > 3 and parts[3] else []) if j]
             rows.append({
                 "ip": ip,
-                "attempts": int(parts[0]) if parts[0].isdigit() else 0,
-                "bans": int(parts[1]) if parts[1].isdigit() else 0,
+                "attempts": int(parts[0]) if parts[0].isdecimal() else 0,
+                "bans": int(parts[1]) if parts[1].isdecimal() else 0,
                 "banned_now": ip in banned_now,
                 "blocked": ip in blocked,
                 "jails": jails,

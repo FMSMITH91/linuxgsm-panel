@@ -103,7 +103,7 @@ def _pick_user_interactive(prompt="Which user?"):
             sel = input("Enter a number (or username): ").strip()
         except (EOFError, KeyboardInterrupt):
             sys.exit("\nCancelled.")
-        if sel.isdigit() and 1 <= int(sel) <= len(users):
+        if sel.isdecimal() and 1 <= int(sel) <= len(users):
             return users[int(sel) - 1].username
         if any(u.username == sel for u in users):
             return sel

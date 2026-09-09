@@ -32,8 +32,10 @@ USAGE
     panel-helper <verb> [arg ...]      exit 2 = unknown verb / bad argument, else the tool's own rc
     panel-helper --list-verbs          print the verb table (used by the panel's tests)
 """
+import grp
 import ipaddress
 import os
+import pwd
 import re
 import shutil
 import stat
@@ -65,6 +67,7 @@ TOOLS = {
     "renice": ("/usr/bin/renice", "/bin/renice"),
     "timedatectl": ("/usr/bin/timedatectl", "/bin/timedatectl"),
     "df": ("/usr/bin/df", "/bin/df"),
+    "usermod": ("/usr/sbin/usermod", "/sbin/usermod"),
     "ss": ("/usr/bin/ss", "/usr/sbin/ss", "/sbin/ss", "/bin/ss"),
     "sysctl": ("/usr/sbin/sysctl", "/sbin/sysctl"),
     "journalctl": ("/usr/bin/journalctl", "/bin/journalctl"),
@@ -126,6 +129,16 @@ SSHD_DROPIN_BAK = SSHD_DROPIN + ".bak"
 # every path this script touches is declared in one place — and so a test can point it
 # at a sandbox without rewriting the source.
 F2B_JAIL_LOCAL = "/etc/fail2ban/jail.local"
+
+# The GMod shared-content box: one user whose home holds game content that other servers mount
+# read-only. Every path below is BUILT from a validated user name and a validated game/script
+# identifier — three of these end in `rm -rf` running as root, so none of them is ever accepted
+# as a path from the caller.
+CONTENT_HOME_ROOT = "/home"
+CONTENT_SUBDIR = "serverfiles"
+CONTENT_CRON_PREFIX = "/etc/cron.d/lgsm-gmod-content"
+GMOD_CFG_SUBPATH = "serverfiles/garrysmod/cfg"
+
 
 # Ubuntu Pro services the panel offers. `pro` will happily take any service name; this is the set
 # the UI actually exposes, so it is the set the helper accepts.
@@ -233,6 +246,33 @@ def home_of(user):
     if not path.startswith(HOME_ROOT + "/") or len(path) <= len(HOME_ROOT) + 1 or ".." in path:
         raise ValueError("refusing to build that home path")
     return path
+
+
+def v_ident(s):
+    """A game key or LinuxGSM script name: lowercase, no separators, no dots. The panel checks
+    these against its own tables first; this is the second check, and the one that runs as root."""
+    if not re.fullmatch(r"[a-z0-9][a-z0-9_-]{0,31}", s):
+        raise ValueError("not an identifier")
+    return s
+
+
+def v_choice_or_ident(s):
+    """An identifier, or "-" for "there isn't one". Used where the LinuxGSM script is optional."""
+    return s if s == "-" else v_ident(s)
+
+
+def content_path(user, *parts):
+    """A path under a content user's home, assembled from validated pieces.
+
+    Built here, never accepted. v_username and v_ident between them rule out "", ".", "..", a
+    leading dash and every separator, and the result is re-checked below — three callers of this
+    end in `rm -rf` as root."""
+    base = home_of(user)
+    for part in parts:
+        base = base + "/" + v_ident(part)
+    if not base.startswith(HOME_ROOT + "/") or ".." in base:
+        raise ValueError("refusing to build that path")
+    return base
 
 
 def v_linecount(s):
@@ -366,6 +406,21 @@ VERBS = {
     # The build function is never called for this verb: ACTIONS handles it, because the write is
     # done in Python rather than by running a tool. It is here so the verb has one home.
     "write-file": ([v_choice(*sorted(WRITE_TARGETS))], lambda a: [], None),
+
+    # ── the GMod shared-content box ──
+    "content-dir-create": ([v_username], lambda a: [], None),
+    "content-game-present": ([v_username, v_ident], lambda a: [], None),
+    "content-script-present": ([v_username, v_ident], lambda a: [], None),
+    # script "-" means "this game has no LinuxGSM script"; anything else is validated.
+    "content-game-remove": ([v_username, v_ident, v_choice_or_ident], lambda a: [], None),
+    "content-cron-write": ([v_username], lambda a: [], None),
+    "content-cron-remove": ([v_username], lambda a: [], None),
+    # The group is passed rather than looked up, so the local and remote forms take the same
+    # arguments — the caller already knows it. It is still checked against the content user's real
+    # primary group below before anything is granted.
+    "content-grant-read": ([v_username, v_username, v_username, Rest(v_ident)],
+                           lambda a: [], None),
+    "gmod-mount-read": ([v_username], lambda a: [], None),
 
     # ── Ubuntu Pro ──
     "pro-status": ([], lambda a: ["pro", "status", "--format", "json"], None),
@@ -600,6 +655,136 @@ def do_reboot_delayed(args, content):
 REBOOT_DELAY_SECONDS = 2
 
 
+def do_content_dir_create(args, content):
+    """Create <content user>/serverfiles, owned by that user and PRIVATE to it.
+
+    The shell form created this group-readable (`install -m 750`) whether or not any GMod user had
+    been granted access — the group bits were there from the moment the directory existed. They are
+    added by content-grant-read now, when access is actually granted, so an ungranted content box
+    shares nothing."""
+    user = args[0]
+    path = home_of(user) + "/" + CONTENT_SUBDIR
+    os.makedirs(path, mode=stat.S_IRWXU, exist_ok=True)
+    info = pwd.getpwnam(user)
+    os.chown(path, info.pw_uid, info.pw_gid)
+    os.chmod(path, stat.S_IRWXU)
+    return 0
+
+
+def do_content_game_present(args, content):
+    """Exit 0 when <content user>/serverfiles/<game> is a directory — `test -d`, without a shell."""
+    return 0 if os.path.isdir(content_path(args[0], CONTENT_SUBDIR, args[1])) else 1
+
+
+def do_content_script_present(args, content):
+    """Exit 0 when <content user>/<script> is executable — `test -x`, without a shell."""
+    path = content_path(args[0], args[1])
+    return 0 if (os.path.isfile(path) and os.access(path, os.X_OK)) else 1
+
+
+def do_content_game_remove(args, content):
+    """Remove one game's content and, if it has one, its LinuxGSM script and config.
+
+    Three `rm -rf`s as root. Every path comes from content_path(), so the only inputs are a
+    validated user name and a validated identifier — a caller cannot name what gets deleted."""
+    user, game, script = args[0], args[1], args[2]
+    targets = [content_path(user, CONTENT_SUBDIR, game)]
+    if script != "-":
+        targets.append(content_path(user, script))
+        targets.append(content_path(user, "lgsm", "config-lgsm", script))
+    for path in targets:
+        shutil.rmtree(path, ignore_errors=True)
+        if os.path.isfile(path):
+            try:
+                os.unlink(path)
+            except OSError:
+                # Best effort, as the shell form was: a game whose files are already gone, or a
+                # path the filesystem will not let go of, must not abort the other removals.
+                pass
+    return 0
+
+
+def do_content_cron_write(args, content):
+    """Write the weekly content-update cron for one content user."""
+    path = "%s-%s" % (CONTENT_CRON_PREFIX, v_username(args[0]))
+    fd, tmp = tempfile.mkstemp(dir=os.path.dirname(path), prefix=".panel-", suffix=".tmp")
+    with os.fdopen(fd, "w") as fh:
+        fh.write(content)
+    # Root is the only thing that reads /etc/cron.d. The shell form used 644 because that is what
+    # the distro ships, but nothing here needs to be world-readable.
+    os.chmod(tmp, stat.S_IRUSR | stat.S_IWUSR)
+    os.replace(tmp, path)
+    return 0
+
+
+def do_content_cron_remove(args, content):
+    """Drop that cron file — the user has no content games left."""
+    try:
+        os.unlink("%s-%s" % (CONTENT_CRON_PREFIX, v_username(args[0])))
+    except FileNotFoundError:
+        pass                      # already absent; the shell form used `rm -f` for the same reason
+    return 0
+
+
+def do_gmod_mount_read(args, content):
+    """Print a GMod server's mount.cfg, or nothing. Was `cat <path> 2>/dev/null || true`."""
+    path = home_of(args[0]) + "/" + GMOD_CFG_SUBPATH + "/mount.cfg"
+    try:
+        with open(path, encoding="utf-8", errors="replace") as fh:
+            sys.stdout.write(fh.read())
+    except OSError:
+        pass                      # no file, or unreadable: the caller treats empty as "no mounts"
+    return 0
+
+
+def do_content_grant_read(args, content):
+    """Let a GMod user read a content user's game trees.
+
+    Was `usermod -aG <grp> <gmod>; chmod g+x /home/<content>; chmod -R g+rX …` in one root shell.
+    Each step is best-effort here exactly as it was there — a host where one of them fails should
+    still get the others."""
+    content_user, group, gmod_user, games = args[0], args[1], args[2], args[3:]
+    actual = grp.getgrgid(pwd.getpwnam(content_user).pw_gid).gr_name
+    if group != actual:
+        # The caller named a group that is not this content user's. Adding the GMod user to an
+        # arbitrary group is exactly the kind of thing this boundary exists to refuse.
+        print("panel-helper: content-grant-read group does not match the content user",
+              file=sys.stderr)
+        return 2
+    subprocess.run([resolve("usermod"), "-aG", group, gmod_user],  # nosec B603 - validated argv
+                   shell=False, capture_output=True, timeout=60)
+    # Traversal, outermost first: the home, then serverfiles, then each granted game tree. The
+    # shell form skipped serverfiles because content-dir-create had already made it group-readable;
+    # it does not any more, so the grant is what opens the path.
+    for _dir in (home_of(content_user), content_path(content_user, CONTENT_SUBDIR)):
+        try:
+            os.chmod(_dir, stat.S_IMODE(os.stat(_dir).st_mode) | stat.S_IXGRP)
+        except OSError:
+            pass                  # traversal bit is best-effort, as it was in the shell form
+    for game in games:
+        path = content_path(content_user, CONTENT_SUBDIR, game)
+        for root, dirs, files in os.walk(path):
+            for name in dirs + files:
+                target = os.path.join(root, name)
+                try:
+                    mode = stat.S_IMODE(os.lstat(target).st_mode)
+                    # g+rX: read for everything, execute only where a user already has it. That is
+                    # what `chmod -R g+rX` means, and why it is not a blanket g+rx.
+                    mode |= stat.S_IRGRP
+                    if mode & stat.S_IXUSR:
+                        mode |= stat.S_IXGRP
+                    os.chmod(target, mode)
+                except OSError:
+                    continue
+        try:
+            os.chmod(path, stat.S_IMODE(os.stat(path).st_mode) | stat.S_IRGRP | stat.S_IXGRP)
+        except OSError:
+            # This game's tree is missing or not ours to chmod. The shell form was per-command
+            # best-effort for the same reason, and the other granted games must still be done.
+            pass
+    return 0
+
+
 def do_write_file(args, content):
     """Write `content` to a named root-owned destination.
 
@@ -639,6 +824,14 @@ ACTIONS = {
     "sshd-discard-backup": do_sshd_discard_backup,
     "f2b-set-sshd-ports": do_f2b_sshd_ports,
     "reboot-delayed": do_reboot_delayed,
+    "content-dir-create": do_content_dir_create,
+    "content-game-present": do_content_game_present,
+    "content-script-present": do_content_script_present,
+    "content-game-remove": do_content_game_remove,
+    "content-cron-write": do_content_cron_write,
+    "content-cron-remove": do_content_cron_remove,
+    "content-grant-read": do_content_grant_read,
+    "gmod-mount-read": do_gmod_mount_read,
 }
 
 

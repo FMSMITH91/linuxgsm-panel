@@ -365,7 +365,7 @@ def _server_max_config(gs):
         vals = lgsm_get_values(gs.remote, gs.short_name, gs.lgsm_name, ["maxplayers", "slots"])
         for key in ("maxplayers", "slots"):
             v = (vals.get(key) or "").strip()
-            if v.isdigit():
+            if v.isdecimal():
                 mx = int(v)
                 break
     except Exception:
@@ -466,7 +466,7 @@ def _resolve_source_aux_ports(remote, remote_id, short_name, lgsm_name, main_por
     except Exception:
         return {}
     have = {k: int(str(cur.get(k, "")).strip())
-            for k in _SOURCE_AUX_PORT_KEYS if str(cur.get(k, "")).strip().isdigit()}
+            for k in _SOURCE_AUX_PORT_KEYS if str(cur.get(k, "")).strip().isdecimal()}
     if not have:
         return {}                        # game has no SourceTV/client ports — nothing to do
     occupied = set(_remote_listening_ports(remote))
@@ -479,7 +479,7 @@ def _resolve_source_aux_ports(remote, remote_id, short_name, lgsm_name, main_por
         try:
             sib = lgsm_get_values(remote, e.short_name, e.lgsm_name, _SOURCE_AUX_PORT_KEYS)
             for v in sib.values():
-                if str(v).strip().isdigit():
+                if str(v).strip().isdecimal():
                     occupied.add(int(str(v).strip()))
         except Exception:
             _log.debug("aux-port: sibling servercfg read failed", exc_info=True)
@@ -2045,7 +2045,7 @@ def password_problem(pw):
         return "Password must include a lowercase letter."
     if not any(c.isupper() for c in pw):
         return "Password must include an uppercase letter."
-    if not any(c.isdigit() for c in pw):
+    if not any(c.isdecimal() for c in pw):
         return "Password must include a number."
     if not any(c in _PW_SYMBOLS for c in pw):
         return "Password must include a symbol (e.g. !@#$%)."
