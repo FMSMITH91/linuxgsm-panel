@@ -7,10 +7,10 @@ from datetime import datetime
 from functools import wraps
 
 import bcrypt
-from flask import flash, jsonify, redirect, request, url_for
+from flask import abort, flash, jsonify, redirect, request, url_for
 from flask_login import LoginManager, current_user
 
-from models import AuditLog, User, db
+from models import AuditLog, GameServer, RemoteServer, User, db
 
 login_manager = LoginManager()
 login_manager.login_view = "login"
@@ -565,3 +565,63 @@ def strip_legacy_superadmin_grants():
     except Exception:
         db.session.rollback()
     return cleaned
+
+
+# ── Route-level access helpers ───────────────────────────────────────────────────────────────
+# These lived as closures inside app.register_routes, which put the panel's access checks in the
+# web layer while every function they call — has_permission, can_access_remote,
+# get_user_permissions, ALL_PERMISSIONS — already lived here. They are the rules, not the
+# routing, so they belong beside their siblings.
+#
+# The underscore-prefixed names are kept exactly as they were on purpose: renaming them to a
+# public form would touch 137 call sites in app.py and bury a pure move inside a rename. That
+# is a separate, mechanical follow-up.
+READONLY_ACTIONS = {"monitor", "details", "check-update", "postdetails", "test-alert"}
+
+
+def get_remote(remote_id):
+    """Fetch a remote AND enforce per-host access. MANAGE_REMOTES grants the
+    ability to manage remotes, but only the ones in the user's groups — the same
+    per-host scoping game servers get. Superadmin sees all. Every remote-scoped
+    route goes through here, so a direct API call to another remote's id is a 403."""
+    r = RemoteServer.query.get_or_404(remote_id)
+    if not can_access_remote(current_user, remote_id):
+        abort(403)
+    return r
+
+
+def get_game(server_id):
+    return GameServer.query.get_or_404(server_id)
+
+
+def _can_edit_tags():
+    """Tag writes need MANAGE_SERVERS. Checked INLINE rather than with @permission_required,
+    because that decorator flashes and redirects — which a fetch().then(r => r.json()) can only
+    see as unparseable HTML."""
+    return current_user.is_superadmin or has_permission(current_user, MANAGE_SERVERS)
+
+
+def _can_manage_files():
+    return current_user.is_superadmin or has_permission(current_user, MANAGE_SERVERS)
+
+
+def _perm_for_action(action):
+    """Which permission an action requires (core actions have specific perms;
+    read-only commands need VIEW_CONSOLE; the rest need UPDATE_SERVER)."""
+    p = ACTION_PERMISSION_MAP.get(action)
+    if p is None:
+        p = VIEW_CONSOLE if action in READONLY_ACTIONS else UPDATE_SERVER
+    return p
+
+
+def _grantable_perms(requested, existing=()):
+    """Compute a group's permission set after an edit, safely. A superadmin can set any
+    real permission. Anyone else (a delegated MANAGE_GROUPS user) can only toggle the
+    permissions they themselves hold — and never SUPER_ADMIN — so they can't escalate
+    their own privileges by editing a group they belong to. Permissions already on the
+    group that they can't grant are PRESERVED (so an edit can't silently strip them)."""
+    requested = set(requested) & set(ALL_PERMISSIONS.keys())
+    if current_user.is_superadmin:
+        return list(requested)
+    grantable = get_user_permissions(current_user) - {SUPER_ADMIN}
+    return list((set(existing) - grantable) | (requested & grantable))
