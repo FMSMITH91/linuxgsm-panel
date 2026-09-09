@@ -983,6 +983,7 @@ try:
     # ever comes back. run_command is stubbed so the port scan does no real SSH.
     from sqlalchemy import event as _sa_event
     _appmod = sys.modules["app"]
+    import ssh_manager as _sm_mod   # the port-scan cache lives here now
     with app.app_context():
         for _r in range(5):
             # 192.0.2.0/24 is RFC 5737 TEST-NET-1: reserved for documentation and guaranteed never
@@ -1014,7 +1015,7 @@ try:
     _sa_event.listen(_engine, "after_cursor_execute", _count_query)
     try:
         def _qcount(path, client=None):
-            _appmod._port_scan_cache.clear()   # force the (stubbed) scan each time, for consistency
+            _sm_mod._port_scan_cache.clear()   # force the (stubbed) scan each time, for consistency
             _Q["n"] = 0
             resp = (client or c).get(path)
             return _Q["n"], resp.status_code
@@ -1103,7 +1104,7 @@ try:
             db.session.add(_inst)
             db.session.commit()
             _inst_id = _inst.id
-        _appmod._port_scan_cache.clear()
+        _sm_mod._port_scan_cache.clear()
         c.get("/api/servers")   # the poll that reconcileServerList / the dashboard fires
         with app.app_context():
             _after_status = db.session.get(GameServer, _inst_id).status
