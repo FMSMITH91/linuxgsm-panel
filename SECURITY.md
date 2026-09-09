@@ -86,9 +86,9 @@ of going unnoticed. Current state:
 
 | route | sites remaining |
 |---|---|
-| `run_command(..., sudo=True)` | 10 |
+| `run_command(..., sudo=True)` | 7 |
 | `_sudo_sh(...)` | 1 |
-| **root total** | **11** (from 131) |
+| **root total** | **8** (from 131) |
 
 (Those counts exclude six calls that ARE the verb layer's own transport — the `run_command` /
 `_run_local` / `_run` at the end of `run_privileged`, `write_root_file`, `write_content_cron` and
@@ -143,6 +143,13 @@ types rather than in the command names:
   an option (`--reinstall`), and the list cannot be made arbitrarily long. dpkg's conflict
   answers (`--force-confdef`, `--force-confold`) are fixed in the helper rather than passed
   in, so an unattended upgrade can never be talked into clobbering a config file you edited.
+
+**What the last eight are.** Two are large read-only shell programs that gather host state — the
+LinuxGSM server discovery scan and the per-server metrics probe. Both are reads, both have their
+interpolated values (`short_name`, `game_port`) validated upstream, and converting either means
+reimplementing a working multi-stage scan in the helper. They are the least valuable and highest
+risk of what is left, which is why they are last. The rest are the Tailscale bootstrap's `tailscale
+up` composition and the detached OS-update runner.
 
 **One operation cannot be narrowed, and is named rather than left unremarked.** The VPS bootstrap
 installs Node.js by piping NodeSource's setup script into a root shell. That IS the operation: a
