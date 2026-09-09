@@ -10,7 +10,7 @@ on:
   push:
     branches: [ main ]
     paths-ignore:
-      - '**.md'
+      - '**/*.md'
       - 'docs/**'
       - 'LICENSE'
       - '.gitignore'
@@ -19,7 +19,7 @@ on:
   pull_request:
     branches: [ main ]
     paths-ignore:
-      - '**.md'
+      - '**/*.md'
       - 'docs/**'
       - 'LICENSE'
       - '.gitignore'
