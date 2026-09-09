@@ -70,9 +70,29 @@ verb and already-separated arguments, re-validates every argument against its ow
 execs a fixed argument vector. There is no shell in it, and the only program it can run is
 one it names: `bash` does not resolve.
 
-Converted so far: **`ufw`, `fail2ban-client`, `systemctl`, `apt`/`dpkg`, and the log reads
-(`journalctl` / `tail`)** — 36 verbs, and the count of privileged call sites still composing a
-shell string is down from 113 to 42.
+Converted so far: **`ufw`, `fail2ban-client`, `systemctl`, `apt`/`dpkg`, the log reads
+(`journalctl` / `tail`), and cron plus user management** — 43 verbs.
+
+**A correction to the numbers previously reported here.** Earlier revisions of this section
+said the panel had "113" privileged call sites and tracked them down to 42. That counted only
+`run_command(..., sudo=True)`. There is a second escalation route — a helper named `_sudo_sh`
+that builds `sudo bash -c '<pipeline>'` itself and then passes `sudo=False`, so it is invisible
+to a search for `sudo=True`. It had 18 call sites the whole time. The real starting figure was
+**131 root-escalating sites, not 113**.
+
+Both routes are now counted by a test that ratchets: the ceilings may be lowered as call sites
+convert and never raised, so a new escalation written as a shell string fails the build instead
+of going unnoticed. Current state:
+
+| route | sites remaining |
+|---|---|
+| `run_command(..., sudo=True)` | 33 |
+| `_sudo_sh(...)` | 17 |
+| **root total** | **50** (from 131) |
+
+Separately there are ~46 `sudo -u <gameuser>` sites. Those run as the game user rather than
+root, so they are a smaller problem — but they still depend on the same unrestricted grant,
+and they are not yet counted in the conversion.
 
 Two of those verb families are worth describing, because the narrowing is in the argument
 types rather than in the command names:
@@ -89,7 +109,7 @@ types rather than in the command names:
   answers (`--force-confdef`, `--force-confold`) are fixed in the helper rather than passed
   in, so an unattended upgrade can never be talked into clobbering a config file you edited.
 
-Still to convert: cron, user management (`useradd`/`userdel`/`passwd`), the file writes that go through `echo … | base64 -d >`, the two multi-line shell
+Still to convert: the file writes that go through `echo … | base64 -d >`, the two multi-line shell
 scripts (the detached OS-update runner and the NodeSource installer), and the **deferred
 reboot** — `( sleep 2 ; reboot ) &`, deliberately left for its own change, because getting a
 reboot verb wrong is the most expensive mistake available here.

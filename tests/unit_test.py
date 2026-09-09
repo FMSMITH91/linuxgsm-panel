@@ -3767,6 +3767,13 @@ _VERB_SAMPLES = {
     "journal": ["ssh", "400"],
     "log-tail": ["fail2ban", "4000"],
     "os-update-log": [],
+    "crontab-list": ["codserver"],
+    "user-create": ["codserver"],
+    "user-lock-password": ["codserver"],
+    "user-delete": ["codserver"],
+    "user-delete-force": ["codserver"],
+    "user-kill-processes": ["codserver"],
+    "user-remove-home": ["codserver"],
 }
 check("privileged: every verb has a sample (new verbs cannot skip the parity check)",
       set(_VERB_SAMPLES) == set(_priv.verbs()),
@@ -3794,9 +3801,10 @@ check("privileged: helper and panel build an identical argv for every verb",
 # would be decorative.
 check("helper: resolves ufw", _helper.resolve("ufw").endswith("/ufw") if os.path.exists("/usr/sbin/ufw") else True)
 check("helper: knows exactly the tools its verbs need, and no more",
-      sorted(_helper.TOOLS) == ["add-apt-repository", "apt-get", "dpkg", "fail2ban-client",
-                                "fuser", "journalctl", "pgrep", "reboot", "systemctl", "tail",
-                                "ufw"],
+      sorted(_helper.TOOLS) == ["add-apt-repository", "apt-get", "crontab", "dpkg",
+                                "fail2ban-client", "fuser", "journalctl", "passwd", "pgrep",
+                                "pkill", "reboot", "rm", "systemctl", "tail", "ufw", "useradd",
+                                "userdel"],
       sorted(_helper.TOOLS))
 for _prog in ("bash", "sh", "python3", "env"):
     check("helper: refuses to resolve %s" % _prog, _ufw_raises_fnf(_helper.resolve, _prog))
@@ -3823,6 +3831,9 @@ _BAD = {
     # a filter, it is simply not expressible.
     "log-tail": ["/etc/shadow", "../../etc/shadow", "syslog", "auth; id", ""],
     "journal": ["nginx", "ssh; id", "linuxgsm-panel", ""],
+    # user-remove-home runs `rm -rf` as root. These are the names that must never become a path.
+    "user-remove-home": ["..", ".", "", "-rf", "/home/x", "root; rm -rf /", "a" * 33, "1abc"],
+    "user-create": ["-o root", "a b", "$(id)", ""],
 }
 _leaked = []
 for _v, _bads in _BAD.items():
@@ -3890,6 +3901,12 @@ _REMOTE_EXPECTED = {
     ("log-tail", ("fail2ban", "4000")): "tail -n 4000 /var/log/fail2ban.log 2>&1",
     ("log-tail", ("auth", "200")): "tail -n 200 /var/log/auth.log 2>&1",
     ("os-update-log", ()): "tail -c 20000 /run/panel-os-update.log 2>&1",
+    ("crontab-list", ("codserver",)): "crontab -u codserver -l 2>&1",
+    ("user-create", ("codserver",)): "useradd -m -s /bin/bash codserver 2>&1",
+    ("user-lock-password", ("codserver",)): "passwd -l codserver 2>&1",
+    ("user-delete-force", ("codserver",)): "userdel -r -f codserver 2>&1",
+    ("user-kill-processes", ("codserver",)): "pkill -9 -u codserver 2>&1",
+    ("user-remove-home", ("codserver",)): "rm -rf -- /home/codserver 2>&1",
 }
 _wrong = []
 for (_v, _a), _want in _REMOTE_EXPECTED.items():
@@ -3929,6 +3946,14 @@ check("privileged: apt-install refuses an absurdly long package list",
 check("privileged: one bad name rejects the whole apt-install list",
       _ufw_raises_verb(lambda: _priv.check_args("apt-install", ["good", "also-good", "bad;name"])))
 
+# home_of() is the only place a path is built from a name, and it feeds an `rm -rf` running as
+# root. Both copies must agree, and neither may ever produce /home itself or escape it.
+eq("home_of builds the obvious path", _priv.home_of("codserver"), "/home/codserver")
+check("home_of agrees between the panel and the helper",
+      _priv.home_of("codserver") == _helper.home_of("codserver"))
+for _bad in ("..", ".", "", "/", "../root", "x/../.."):
+    check("home_of refuses %r" % _bad, _ufw_raises_verb(lambda b=_bad: _priv.home_of(b)))
+
 # The line count is bounded at both ends: 0 is not a count, and an unbounded one would let a caller
 # ask for the entire journal through a root command.
 for _n in ("0", "99999", "5; id", "-1", ""):
@@ -3952,6 +3977,37 @@ check("ufw: _ufw_is_active is false for inactive", sm._ufw_is_active("Status: in
 check("ufw: _ufw_is_active is false for empty output", sm._ufw_is_active("") is False)
 check("ufw: _ufw_is_active is not fooled by the word active elsewhere",
       sm._ufw_is_active("To    Action\n22    ALLOW  # keep this rule active") is False)
+
+# ── The escalation census: a ratchet, and a correction ────────────────────────────────────────
+# I reported the conversion's progress for four PRs as "113 sites -> N" while counting only ONE of
+# the two ways the panel escalates on its own host. run_command(..., sudo=True) is the obvious one.
+# _sudo_sh() is the other: it builds `sudo bash -c '<pipeline>'` itself and then passes sudo=False,
+# so it is invisible to a search for sudo=True — and there were 18 of them the whole time.
+#
+# This counts both, and ratchets: the ceilings below may be lowered as call sites convert, never
+# raised. A new escalation written as a shell string fails this test instead of going unnoticed.
+import ast as _ast
+
+_ESCALATION_FILES = ["app.py", "auth.py", "ssh_manager.py", "system_ops.py", "notifications.py",
+                     "backup.py", "db_maintenance.py", "tailscale_integration.py", "manage.py"]
+_CEILING = {"sudo=True": 33, "_sudo_sh": 17}   # measured at the time of writing; lower only
+
+_census = {"sudo=True": 0, "_sudo_sh": 0}
+for _f in _ESCALATION_FILES:
+    _tree = _ast.parse(open(os.path.join(_root, _f), encoding="utf-8").read())
+    for _n in _ast.walk(_tree):
+        if not isinstance(_n, _ast.Call):
+            continue
+        if getattr(_n.func, "attr", getattr(_n.func, "id", "")) == "_sudo_sh":
+            _census["_sudo_sh"] += 1
+        for _k in _n.keywords:
+            if _k.arg == "sudo" and isinstance(_k.value, _ast.Constant) and _k.value.value is True:
+                _census["sudo=True"] += 1
+
+for _kind, _limit in _CEILING.items():
+    check("escalation census: %s sites <= %d (currently %d) — ratchet, never raise"
+          % (_kind, _limit, _census[_kind]),
+          _census[_kind] <= _limit, "found %d" % _census[_kind])
 
 passed = sum(1 for ok, _, _ in results if ok)
 for ok, name, detail in results:

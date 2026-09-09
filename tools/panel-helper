@@ -50,6 +50,12 @@ TOOLS = {
     "pgrep": ("/usr/bin/pgrep", "/bin/pgrep"),
     "fuser": ("/usr/bin/fuser", "/bin/fuser"),
     "reboot": ("/usr/sbin/reboot", "/sbin/reboot"),
+    "crontab": ("/usr/bin/crontab", "/bin/crontab"),
+    "useradd": ("/usr/sbin/useradd", "/sbin/useradd"),
+    "userdel": ("/usr/sbin/userdel", "/sbin/userdel"),
+    "passwd": ("/usr/bin/passwd", "/bin/passwd"),
+    "pkill": ("/usr/bin/pkill", "/bin/pkill"),
+    "rm": ("/usr/bin/rm", "/bin/rm"),
     "journalctl": ("/usr/bin/journalctl", "/bin/journalctl"),
     "tail": ("/usr/bin/tail", "/bin/tail"),
 }
@@ -91,6 +97,14 @@ LOG_FILES = {
     "auth": "/var/log/auth.log",
 }
 OS_UPDATE_LOG = "/run/panel-os-update.log"
+
+# Linux user names the panel may act on. Deliberately narrower than useradd itself accepts: it must
+# start with a letter or underscore and hold only [A-Za-z0-9._-], so it can never be an option
+# (-o, --system), a path fragment (., ..), or empty. This one validator is what makes the home
+# directory safe to CONSTRUCT below rather than accept.
+USERNAME_RE = r"[A-Za-z_][A-Za-z0-9._-]{0,31}"
+HOME_ROOT = "/home"
+
 
 
 
@@ -149,6 +163,26 @@ def v_jail(s):
     if not re.fullmatch(r"[A-Za-z0-9_.-]{1,64}", s):
         raise ValueError("not a jail name")
     return s
+
+
+def v_username(s):
+    """A Linux user name the panel is allowed to manage."""
+    if not re.fullmatch(USERNAME_RE, s):
+        raise ValueError("not a user name")
+    return s
+
+
+def home_of(user):
+    """The home directory for a validated user name.
+
+    Built here, never accepted from a caller — the one verb that removes it runs `rm -rf` as root,
+    and the difference between /home/codserver and /home is a typo. v_username already rules out
+    "", "." and ".."; this re-checks the assembled path anyway, because the cost of being wrong
+    once is the whole /home directory."""
+    path = HOME_ROOT + "/" + v_username(user)
+    if not path.startswith(HOME_ROOT + "/") or len(path) <= len(HOME_ROOT) + 1 or ".." in path:
+        raise ValueError("refusing to build that home path")
+    return path
 
 
 def v_linecount(s):
@@ -231,6 +265,19 @@ VERBS = {
     "service-enable-now": ([v_choice(*UNITS)], lambda a: [SYSTEMCTL, "enable", "--now", a[0]], None),
     "service-disable-now": ([v_choice(*UNITS)],
                             lambda a: [SYSTEMCTL, "disable", "--now", a[0]], None),
+
+    # ── cron and user accounts ──
+    "crontab-list": ([v_username], lambda a: ["crontab", "-u", a[0], "-l"], None),
+    "user-create": ([v_username],
+                    lambda a: ["useradd", "-m", "-s", "/bin/bash", a[0]], None),
+    "user-lock-password": ([v_username], lambda a: ["passwd", "-l", a[0]], None),
+    "user-delete": ([v_username], lambda a: ["userdel", "-r", a[0]], None),
+    "user-delete-force": ([v_username], lambda a: ["userdel", "-r", "-f", a[0]], None),
+    "user-kill-processes": ([v_username], lambda a: ["pkill", "-9", "-u", a[0]], None),
+    # rm -rf as root. The path is CONSTRUCTED from a validated user name (home_of), never passed
+    # in, so the argument this verb receives is a name and the thing it deletes can only ever be a
+    # direct child of /home.
+    "user-remove-home": ([v_username], lambda a: ["rm", "-rf", "--", home_of(a[0])], None),
 
     # ── log reads ──
     # journalctl and tail both take a target. Neither target ever comes from a caller: the SOURCE

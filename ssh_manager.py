@@ -1069,10 +1069,10 @@ def get_autostart(server, user, selfname=None):
     crashes and reboots."""
     selfname = selfname or user
     marker = f"/home/{user}/{selfname} monitor"
-    out, _, _ = run_command(
-        server, f"crontab -u {user} -l 2>/dev/null | grep -cF {_quote(marker)}",
-        timeout=10, sudo=True,
-    )
+    # Was `crontab -u U -l | grep -cF <marker>` — a fixed-string count done by grep, under root.
+    # Counting the lines here keeps the marker out of a root command line entirely.
+    out, _, _ = run_privileged(server, "crontab-list", [user], timeout=10, merge_stderr=False)
+    out = str(sum(1 for ln in (out or "").splitlines() if marker in ln))
     try:
         return int((out or "0").strip()) > 0
     except ValueError:
@@ -1369,7 +1369,7 @@ def upgrade_managed_cron_tracking(server, user, selfname=None):
     simple_cores = {f"{base} {c}" for c in ("start", "monitor", "mods-update", "update", "update-lgsm")}
     simple_cores.add(f"touch {flag}")
     suffix = " > /dev/null 2>&1"
-    out, _, _ = run_command(server, f"crontab -u {user} -l 2>/dev/null", timeout=10, sudo=True)
+    out, _, _ = run_privileged(server, "crontab-list", [user], timeout=10, merge_stderr=False)
     new_lines, changed = [], False
     for raw in (out or "").splitlines():
         s = raw.strip()
@@ -1413,7 +1413,7 @@ def list_cron_jobs(server, user, selfname=None):
     Run history comes from the recorder for user-added jobs (time + ok/error) and from cron's
     own log for managed/legacy jobs (time only — ok stays None, cron doesn't log exit status)."""
     selfname = selfname or user
-    out, _, _ = run_command(server, f"crontab -u {user} -l 2>/dev/null", timeout=10, sudo=True)
+    out, _, _ = run_privileged(server, "crontab-list", [user], timeout=10, merge_stderr=False)
     status = _read_cron_status(server, user)
     run_times = _read_cron_run_times(server, user)
     jobs = []
@@ -3632,8 +3632,8 @@ def remote_bootstrap_vps(server, set_timezone="UTC", enable_ufw=True, install_lg
         if "NOTEXISTS" not in out:
             note(f"User {username} already exists")
         else:
-            run_command(server, f"useradd -m -s /bin/bash {_quote(username)} 2>&1", timeout=15, sudo=True)
-            run_command(server, f"passwd -l {_quote(username)} 2>&1", timeout=10, sudo=True)
+            run_privileged(server, "user-create", [username], timeout=15)
+            run_privileged(server, "user-lock-password", [username], timeout=10)
             note(f"User {username} created (login password locked)")
 
     # ── 10. Configure fail2ban ──
@@ -5194,7 +5194,8 @@ def ensure_content_update_cron(server, content_user):
     path = "%s-%s" % (_CONTENT_UPDATE_CRON_PATH, content_user)
     # If the content user already automates updates in its OWN crontab (e.g. a hand-rolled content box
     # like an existing srcds), leave it alone — never add duplicate update jobs on top of the admin's.
-    ct, _, _ = run_command(server, _sudo_sh("crontab -u %s -l 2>/dev/null" % content_user), timeout=10)
+    ct, _, _ = run_privileged(server, "crontab-list", [content_user], timeout=10,
+                              merge_stderr=False)
     for line in (ct or "").splitlines():
         s = line.strip()
         if s and not s.startswith("#") and re.search(r"\bupdate(-lgsm)?\b", s):
