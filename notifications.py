@@ -510,3 +510,24 @@ def test_send(kind, token=None, chat_id=None, webhook=None):
         return (True, "Test message sent — check the Discord channel.") if ok \
             else (False, "Discord error: %s" % (detail or "unknown"))
     return False, "Unknown channel."
+
+
+def alerts_muted(gs):
+    """True when one of this server's tags is marked "don't alert" (ServerTag.notify=False) — how a
+    tag like "test" or "staging" keeps a noisy box out of the alert channel without turning the
+    event off globally for the real servers. Any muting tag wins: opting a server out is the
+    conservative outcome, and being wrong the other way means paging someone at 3am.
+
+    Fails OPEN (returns False) on any error: an alert we can't decide about should still be sent.
+    Runs in poller threads, so it must never raise.
+
+    Lives here rather than in app.py because it is an alerting decision, and because app.py is not
+    importable from the modules that need it: the background jobs being pulled out of
+    register_routes use it, and a jobs module importing app would be a cycle. This module imports
+    nothing but config, so everything can reach it.
+    """
+    try:
+        return any(not tag.notify for tag in (gs.tags or []))
+    except Exception:
+        _log.debug("tag mute check failed for %s", getattr(gs, "short_name", "?"), exc_info=True)
+        return False

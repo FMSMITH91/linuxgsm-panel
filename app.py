@@ -89,6 +89,7 @@ from config import (
     encrypt_secret, decrypt_secret, is_encrypted, harden_data_permissions,
 )
 import notifications
+from notifications import alerts_muted as _alerts_muted
 from models import (
     AuditLog, GameServer, Group, RemoteServer, SetupState, User, db, init_db,
     CustomCommand, CUSTOM_ARG_DEFAULT_PATTERN, CUSTOM_ARG_PLACEHOLDER, GlobalBan,
@@ -587,21 +588,6 @@ _PLAYER_POLL_SECONDS = 45
 _server_full_alerted = {}    # server_id -> bool (currently at cap; re-arms when it drops below)
 _server_peak_notified = {}   # server_id -> ts of the last new-record alert (rate-limit)
 _PEAK_NOTIFY_INTERVAL = 3600  # at most one "new record" alert per server per hour
-
-
-def _alerts_muted(gs):
-    """True when one of this server's tags is marked "don't alert" (ServerTag.notify=False) — how a
-    tag like "test" or "staging" keeps a noisy box out of the alert channel without turning the
-    event off globally for the real servers. Any muting tag wins: opting a server out is the
-    conservative outcome, and being wrong the other way means paging someone at 3am.
-
-    Fails OPEN (returns False) on any error: an alert we can't decide about should still be sent.
-    Runs in poller threads, so it must never raise."""
-    try:
-        return any(not tag.notify for tag in (gs.tags or []))
-    except Exception:
-        _log.debug("tag mute check failed for %s", getattr(gs, "short_name", "?"), exc_info=True)
-        return False
 
 
 def _cached_player_count(server_id):
