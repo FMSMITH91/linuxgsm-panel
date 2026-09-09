@@ -21,7 +21,10 @@ function loadBackups(){
         + '<td>'+kind+'</td>'
         + '<td>'+bkFmtBytes(b.size)+'</td>'
         + '<td class="text-end text-nowrap">'
-        + '<a class="btn btn-sm btn-outline-secondary py-0 px-1" href="'+MOUNT+'/api/panel/backup/download/'+encodeURIComponent(b.name)+'" title="Download"><i class="bi bi-download"></i></a> '
+        // The archive is panel.db PLUS secret_key and cred_key — the pair that decrypts every
+        // stored SSH credential. Downloading it moves that off the 0700 data dir onto whatever
+        // machine the browser is on, so the title says so rather than just "Download".
+        + '<a class="btn btn-sm btn-outline-secondary py-0 px-1" href="'+MOUNT+'/api/panel/backup/download/'+encodeURIComponent(b.name)+'" title="Download — contains the database AND the encryption keys for every stored SSH credential. Keep it somewhere you would keep those keys."><i class="bi bi-download"></i></a> '
         + '<button class="btn btn-sm btn-outline-warning py-0 px-1" title="Restore"' + _da('restoreBackup', [b.name, '@self']) + '><i class="bi bi-arrow-counterclockwise"></i></button> '
         + '<button class="btn btn-sm btn-outline-danger py-0 px-1" title="Delete"' + _da('deleteBackup', [b.name, '@self']) + '><i class="bi bi-trash"></i></button>'
         + '</td></tr>';

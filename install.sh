@@ -34,9 +34,25 @@ export XDG_RUNTIME_DIR="${XDG_RUNTIME_DIR:-/run/user/$(id -u)}"
 #   • Run as ROOT → does NOT run the panel as root. Creates a dedicated
 #     non-login service user, installs under it, and runs it as a systemd
 #     SYSTEM service (User=<that user>). The panel needs passwordless sudo to
-#     manage the local host (create game-server users, apt, ufw…), so a scoped
-#     NOPASSWD sudoers entry is added for it — remove it if you only ever manage
-#     *remote* servers from this panel.
+#     manage the local host (create game-server users, apt, ufw…), so a NOPASSWD
+#     sudoers entry is added for it.
+#
+#     BE CLEAR ABOUT WHAT THAT GRANT IS: it is `ALL=(ALL) NOPASSWD:ALL` — full,
+#     unrestricted, passwordless root for the service user. It is NOT scoped, and
+#     this comment used to claim it was. Anyone auditing the trust model deserves
+#     the real answer: there is currently no privilege boundary between "the web
+#     panel is compromised" and "the host is root-owned".
+#
+#     It cannot be narrowed by editing this file alone. ssh_manager._run_local
+#     escalates as `sudo bash -c '<command>'`, and a sudoers rule permitting
+#     /bin/bash is exactly equivalent to NOPASSWD:ALL — so a "scoped" list that
+#     includes bash would look narrower while granting identical power. Narrowing
+#     it for real needs a privileged helper: one script granted sudo, accepting a
+#     fixed set of verbs, with the privileged call sites routed through it.
+#
+#     If you only manage REMOTE servers from this panel, delete
+#     /etc/sudoers.d/linuxgsm-panel — the panel keeps working and the grant goes
+#     away entirely.
 # ─────────────────────────────────────────────────────────
 
 REPO_URL="https://github.com/FMSMITH91/linuxgsm-panel.git"
@@ -734,7 +750,9 @@ if [ "${RUN_AS_ROOT}" -eq 1 ]; then
     chown -R "${PANEL_USER}:${PANEL_USER}" "${PANEL_DIR}"
 
     # Passwordless sudo so the panel can manage the local host (game-server users,
-    # apt, ufw). Remove /etc/sudoers.d/linuxgsm-panel if you only manage remotes.
+    # apt, ufw). This is UNRESTRICTED root for the service user — see the trust-model
+    # note at the top of this file for why it cannot currently be scoped, and delete
+    # /etc/sudoers.d/linuxgsm-panel if you only manage remotes.
     echo "${PANEL_USER} ALL=(ALL) NOPASSWD:ALL" > /etc/sudoers.d/linuxgsm-panel
     chmod 440 /etc/sudoers.d/linuxgsm-panel
     visudo -cf /etc/sudoers.d/linuxgsm-panel >/dev/null || { rm -f /etc/sudoers.d/linuxgsm-panel; die "sudoers entry invalid"; }
