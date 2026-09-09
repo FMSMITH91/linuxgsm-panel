@@ -749,26 +749,39 @@ check("gmod content cron: per-game update + update-lgsm as the content user, Sun
       and "0 2 * * 0 srcds /home/srcds/cssserver update >" in _cron_body
       and "10 2 * * 0 srcds /home/srcds/tf2server update >" in _cron_body)
 # uninstall removes the content dir + the LinuxGSM install (host-wide), and rejects a bad user.
-_orig_un_rc = sm.run_command
+_orig_un_rc, _orig_un_rp = sm.run_command, sm.run_privileged
 try:
+    # These used to assert on the three `rm -rf` strings the call site built. It builds NAMES now
+    # and the helper builds the paths, so the assertion moves to the verb — and the paths those
+    # names produce are checked once, here, against privileged.content_path().
     _un = []
-    sm.run_command = lambda s, c, **k: (_un.append(c), ("N", "", 0))[1]   # content_present -> not present
+    sm.run_command = lambda s, c, **k: (_un.append(("cmd", c)), ("N", "", 0))[1]
+    sm.run_privileged = lambda s, v, a=(), **k: (_un.append((v, list(a))), ("N", "", 1))[1]
     _uok, _urem, _ = sm.uninstall_gmod_content(object(), "gmodcontent", ["cstrike"])
-    _uj = " ".join(_un)
-    check("gmod content uninstall: removes content dir + LinuxGSM script + config for the game",
-          "rm -rf /home/gmodcontent/serverfiles/cstrike" in _uj
-          and "rm -rf /home/gmodcontent/cssserver" in _uj
-          and "rm -rf /home/gmodcontent/lgsm/config-lgsm/cssserver" in _uj and _urem == ["cstrike"])
+    check("gmod content uninstall: asks to remove the game, its script and its config",
+          ("content-game-remove", ["gmodcontent", "cstrike", "cssserver"]) in _un
+          and _urem == ["cstrike"], str(_un))
     _un[:] = []
-    _uok3, _urem3, _ = sm.uninstall_gmod_content(object(), "srcds", ["hl2"])   # mount-only: no LinuxGSM script
-    check("gmod content uninstall: a mount-only (owned) game removes its content dir",
-          "rm -rf /home/srcds/serverfiles/hl2" in " ".join(_un) and _urem3 == ["hl2"])
+    _uok3, _urem3, _ = sm.uninstall_gmod_content(object(), "srcds", ["hl2"])   # mount-only game
+    check("gmod content uninstall: a mount-only (owned) game passes '-' for 'no script'",
+          ("content-game-remove", ["srcds", "hl2", "-"]) in _un and _urem3 == ["hl2"], str(_un))
     _un[:] = []
     _uok2, _, _ = sm.uninstall_gmod_content(object(), "bad;user", ["cstrike"])
     check("gmod content uninstall: rejects an invalid content user, runs nothing",
           _uok2 is False and not _un)
 finally:
-    sm.run_command = _orig_un_rc
+    sm.run_command, sm.run_privileged = _orig_un_rc, _orig_un_rp
+
+# And the names really do resolve to the three paths the shell form removed — asserted against the
+# path builder rather than against a command string, so it holds for both transports.
+eq("gmod content uninstall: the game's content dir",
+   _privmod.content_path("gmodcontent", "serverfiles", "cstrike"),
+   "/home/gmodcontent/serverfiles/cstrike")
+eq("gmod content uninstall: the LinuxGSM script",
+   _privmod.content_path("gmodcontent", "cssserver"), "/home/gmodcontent/cssserver")
+eq("gmod content uninstall: the LinuxGSM config",
+   _privmod.content_path("gmodcontent", "lgsm", "config-lgsm", "cssserver"),
+   "/home/gmodcontent/lgsm/config-lgsm/cssserver")
 # free disk on the content filesystem (shown on the card so nobody starts a 13GB install without room)
 _orig_df_rp = sm.run_privileged
 try:
@@ -3818,6 +3831,14 @@ _VERB_SAMPLES = {
     "set-timezone": ["America/Chicago"],
     "sshd-effective-config": [],
     "disk-free": ["/home"],
+    "content-dir-create": ["gmodcontent"],
+    "content-game-present": ["gmodcontent", "cstrike"],
+    "content-script-present": ["gmodcontent", "cssserver"],
+    "content-game-remove": ["gmodcontent", "cstrike", "cssserver"],
+    "content-cron-write": ["gmodcontent"],
+    "content-cron-remove": ["gmodcontent"],
+    "content-grant-read": ["gmodcontent", "gmodcontent", "gmodserver", "cstrike"],
+    "gmod-mount-read": ["gmodserver"],
 }
 check("privileged: every verb has a sample (new verbs cannot skip the parity check)",
       set(_VERB_SAMPLES) == set(_priv.verbs()),
@@ -3848,7 +3869,8 @@ check("helper: knows exactly the tools its verbs need, and no more",
       sorted(_helper.TOOLS) == ["add-apt-repository", "apt-get", "crontab", "df", "dpkg",
                                 "fail2ban-client", "fuser", "journalctl", "passwd", "pgrep",
                                 "pkill", "pro", "reboot", "renice", "rm", "ss", "sshd", "sysctl",
-                                "systemctl", "tail", "timedatectl", "ufw", "useradd", "userdel"],
+                                "systemctl", "tail", "timedatectl", "ufw", "useradd",
+                                "userdel", "usermod"],
       sorted(_helper.TOOLS))
 for _prog in ("bash", "sh", "python3", "env"):
     check("helper: refuses to resolve %s" % _prog, _ufw_raises_fnf(_helper.resolve, _prog))
@@ -3919,6 +3941,17 @@ _BAD_VECTORS = [
     ("ufw-default", ["allow", "sideways"]),
     ("apt-install", ["curl", "--reinstall"]),
     ("write-file", ["/etc/shadow"]),
+    # The content box: three of these verbs end in `rm -rf` as root, so the identifiers must be
+    # refused in every position, not just the first.
+    ("content-game-remove", ["gmodcontent", "../../etc", "cssserver"]),
+    ("content-game-remove", ["gmodcontent", "cstrike", "../../etc"]),
+    ("content-game-remove", ["..", "cstrike", "cssserver"]),
+    ("content-game-remove", ["gmodcontent", "", "cssserver"]),
+    ("content-game-present", ["gmodcontent", "a;b"]),
+    ("content-grant-read", ["gmodcontent", "root; id", "gmodserver", "cstrike"]),
+    ("content-grant-read", ["gmodcontent", "gmodcontent", "gmodserver", "../../etc"]),
+    ("gmod-mount-read", ["../../etc"]),
+    ("content-cron-remove", [".."]),
 ]
 _leaked2 = ["%s %r" % (v, a) for v, a in _BAD_VECTORS
             if not _ufw_raises_verb(lambda v=v, a=a: _priv.check_args(v, a))]
@@ -3978,6 +4011,14 @@ _REMOTE_EXPECTED = {
     ("log-tail", ("fail2ban", "4000")): "tail -n 4000 /var/log/fail2ban.log 2>&1",
     ("log-tail", ("auth", "200")): "tail -n 200 /var/log/auth.log 2>&1",
     ("os-update-log", ()): "tail -c 20000 /run/panel-os-update.log 2>&1",
+    ("content-game-remove", ("gmodcontent", "cstrike", "cssserver")):
+        "rm -rf /home/gmodcontent/serverfiles/cstrike ; rm -rf /home/gmodcontent/cssserver"
+        " ; rm -rf /home/gmodcontent/lgsm/config-lgsm/cssserver",
+    ("content-game-remove", ("srcds", "hl2", "-")): "rm -rf /home/srcds/serverfiles/hl2",
+    ("content-cron-remove", ("gmodcontent",)):
+        "rm -f /etc/cron.d/lgsm-gmod-content-gmodcontent",
+    ("gmod-mount-read", ("gmodserver",)):
+        "cat /home/gmodserver/serverfiles/garrysmod/cfg/mount.cfg 2>/dev/null || true",
     ("crontab-list", ("codserver",)): "crontab -u codserver -l 2>&1",
     ("user-create", ("codserver",)): "useradd -m -s /bin/bash codserver 2>&1",
     ("user-lock-password", ("codserver",)): "passwd -l codserver 2>&1",
@@ -4068,6 +4109,36 @@ check("privileged: remote write round-trips content containing shell metacharact
       _b64t.b64decode(_rc.split()[1]).decode() == _tricky)
 check("privileged: remote write targets the table's path, not a caller's",
       "/etc/fail2ban/jail.d/zz-panel-whitelist.local" in _rc)
+
+# content_path() is the second line of defence and the vector tests above never reach it: they go
+# through check_args, whose per-verb validators reject a bad identifier first. So it is exercised
+# DIRECTLY here — mutation showed that removing its validation left the whole suite green.
+eq("content_path builds the expected path",
+   _priv.content_path("gmodcontent", "serverfiles", "cstrike"),
+   "/home/gmodcontent/serverfiles/cstrike")
+check("content_path agrees between the panel and the helper",
+      _priv.content_path("gmodcontent", "serverfiles", "cstrike")
+      == _helper.content_path("gmodcontent", "serverfiles", "cstrike"))
+for _bad in (("gmodcontent", "../../etc"), ("gmodcontent", ".."), ("gmodcontent", ""),
+             ("gmodcontent", "a;b"), ("gmodcontent", "/etc"), ("..", "serverfiles"),
+             ("gmodcontent", "serverfiles", "../.."), ("", "serverfiles")):
+    check("content_path refuses %r" % (_bad,),
+          _ufw_raises_verb(lambda b=_bad: _priv.content_path(*b)))
+
+# The helper's own group check: content-grant-read adds a user to a GROUP, and the group named by
+# the caller must actually be the content user's. Mutation showed this was untested — the suite
+# exercises argv building, not the action bodies.
+import getpass as _getpass
+import grp as _grp
+import pwd as _pwd
+try:
+    _me = _getpass.getuser()
+    _my_group = _grp.getgrgid(_pwd.getpwnam(_me).pw_gid).gr_name
+    check("content-grant-read refuses a group that is not the content user's",
+          _helper.do_content_grant_read([_me, "root" if _my_group != "root" else "daemon",
+                                         _me], None) == 2)
+except (KeyError, OSError) as _e:
+    check("content-grant-read group check exercised", True, "skipped: %s" % _e)
 
 # home_of() is the only place a path is built from a name, and it feeds an `rm -rf` running as
 # root. Both copies must agree, and neither may ever produce /home itself or escape it.
@@ -4297,7 +4368,7 @@ import ast as _ast
 
 _ESCALATION_FILES = ["app.py", "auth.py", "ssh_manager.py", "system_ops.py", "notifications.py",
                      "backup.py", "db_maintenance.py", "tailscale_integration.py", "manage.py"]
-_CEILING = {"sudo=True": 17, "_sudo_sh": 9}   # measured at the time of writing; lower only
+_CEILING = {"sudo=True": 17, "_sudo_sh": 1}   # measured at the time of writing; lower only
 
 def _is_dispatch(call):
     """True when this escalation IS the verb layer's transport rather than a call site.
@@ -4311,7 +4382,8 @@ def _is_dispatch(call):
             if (isinstance(_sub, _ast.Call)
                     and isinstance(_sub.func, _ast.Attribute)
                     and getattr(_sub.func.value, "id", "") == "_priv"
-                    and _sub.func.attr in ("remote_command", "remote_write_command")):
+                    and _sub.func.attr in ("remote_command", "remote_write_command",
+                                           "remote_content_cron_command")):
                 return True
     return False
 
@@ -4333,7 +4405,8 @@ for _f in _ESCALATION_FILES:
 # _is_dispatch() that returned True for everything would report zero remaining work and still pass.
 # So count what it excludes and pin that: there are exactly four transports (run_privileged and
 # write_root_file in ssh_manager, twice each for the helper-present and no-helper paths, plus
-# _run_verb in system_ops). Raise this only when the verb layer genuinely gains another one.
+# _run_verb in system_ops), plus two for write_content_cron, whose destination is per-user and so
+# cannot live in WRITE_TARGETS. Raise this only when the verb layer genuinely gains another one.
 _excluded = 0
 for _f in _ESCALATION_FILES:
     _tree = _ast.parse(open(os.path.join(_root, _f), encoding="utf-8").read())
@@ -4344,8 +4417,8 @@ for _f in _ESCALATION_FILES:
             if (_k.arg == "sudo" and isinstance(_k.value, _ast.Constant)
                     and _k.value.value is True and _is_dispatch(_n)):
                 _excluded += 1
-check("escalation census: the dispatcher exclusion covers exactly the 4 known transports",
-      _excluded == 4, "excluded %d" % _excluded)
+check("escalation census: the dispatcher exclusion covers exactly the 6 known transports",
+      _excluded == 6, "excluded %d" % _excluded)
 
 for _kind, _limit in _CEILING.items():
     check("escalation census: %s sites <= %d (currently %d) — ratchet, never raise"

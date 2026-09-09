@@ -87,14 +87,15 @@ of going unnoticed. Current state:
 | route | sites remaining |
 |---|---|
 | `run_command(..., sudo=True)` | 17 |
-| `_sudo_sh(...)` | 9 |
-| **root total** | **26** (from 131) |
+| `_sudo_sh(...)` | 1 |
+| **root total** | **18** (from 131) |
 
-(Those counts exclude four calls that ARE the verb layer's own transport — the `run_command` /
-`_run_local` / `_run` at the end of `run_privileged`, `write_root_file` and `_run_verb`, which pass
+(Those counts exclude six calls that ARE the verb layer's own transport — the `run_command` /
+`_run_local` / `_run` at the end of `run_privileged`, `write_root_file`, `write_content_cron` and
+`_run_verb`, which pass
 a command built from the verb table rather than composed at a call site. Earlier revisions counted
-them, overstating the remaining work by four. A test pins the exclusion at exactly those four, so
-it cannot quietly widen and make the number flattering.)
+them, overstating the remaining work. A test pins the exclusion at exactly those six, so it cannot
+quietly widen and make the number flattering.)
 
 Separately there are ~46 `sudo -u <gameuser>` sites. Those run as the game user rather than
 root, so they are a smaller problem — but they still depend on the same unrestricted grant,
@@ -116,6 +117,11 @@ types rather than in the command names:
   sequence exists, and the rollback is exercised against a sandboxed filesystem rather than by
   inspecting the commands: a host that had no drop-in ends with none, and a host that had one gets
   it back byte for byte.
+- **The GMod shared-content box** builds every path from a validated user name plus a validated
+  game or script identifier. Three of its verbs end in `rm -rf` running as root, so the caller
+  passes *names* and the helper assembles the paths — `content_path()` re-checks the assembled
+  result, and is tested directly rather than only through the verbs, because the verbs' own
+  validators would otherwise reject every probe before it got that far.
 - **The deferred reboot** was `( sleep 2 ; reboot ) &` — a subshell, a background job and a
   redirect. The helper double-forks instead: the grandchild detaches, waits, and execs the reboot
   binary. It returns immediately, which is the whole reason the subshell existed.
@@ -128,7 +134,7 @@ types rather than in the command names:
   answers (`--force-confdef`, `--force-confold`) are fixed in the helper rather than passed
   in, so an unattended upgrade can never be talked into clobbering a config file you edited.
 
-Still to convert: Ubuntu Pro's remaining plumbing, the per-user content cron that go through `echo … | base64 -d >`, and the two multi-line shell
+Still to convert that go through `echo … | base64 -d >`, and the two multi-line shell
 scripts (the detached OS-update runner and the NodeSource installer).
 
 **Until that list is empty the grant stays `NOPASSWD:ALL` and nothing above has reduced your
