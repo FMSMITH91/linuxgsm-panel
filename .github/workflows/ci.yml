@@ -38,16 +38,27 @@ jobs:
     name: checks (${{ matrix.os }} · py${{ matrix.python }})
     runs-on: ${{ matrix.os }}
     strategy:
-      fail-fast: false   # report BOTH LTS results even if one fails, so a version-specific break is obvious
+      fail-fast: false   # report EVERY LTS result even if one fails, so a version-specific break is obvious
       matrix:
         include:
-          # The Ubuntu LTS releases LinuxGSM supports, each paired with the Python it ships, so the
-          # suite is proven on the versions the panel will actually run on — not just ubuntu-latest.
-          # (20.04 is EOL and its Python 3.8 is below the dependency floor, so it isn't targeted.)
+          # Each Ubuntu LTS the panel is expected to run on, paired with the Python that release
+          # actually ships, so the suite is proven on the real combination rather than on
+          # ubuntu-latest. (20.04 is EOL and its Python 3.8 is below the dependency floor.)
+          #
+          # 22.04: its runner image begins deprecation on 2026-09-17 and is fully unsupported from
+          # 2027-04-17 (actions/runner-images#14254). Kept while it still runs, because Ubuntu
+          # 22.04 itself has standard support until April 2027 and someone will install onto it.
+          # When the image goes, keep the 3.10 column by running it on ubuntu-24.04 rather than
+          # dropping it — the floor that matters is the Python version, not the image.
           - os: ubuntu-22.04
             python: "3.10"
           - os: ubuntu-24.04
             python: "3.12"
+          # 26.04 ships Python 3.14. The runner image is still a public preview
+          # (actions/runner-images#14226), so treat a failure here as information about the image
+          # as much as about the panel — fail-fast is off precisely so it cannot mask the others.
+          - os: ubuntu-26.04
+            python: "3.14"
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
 

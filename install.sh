@@ -345,8 +345,27 @@ ensure_gamedig() {
         nmaj="$(node -v 2>/dev/null | grep -oE '[0-9]+' | head -1 || true)"
         nmaj="${nmaj:-0}"
     fi
+    # Prefer the distro's own nodejs when it is new enough. NodeSource publishes ONE repo per
+    # distro codename, so in the weeks after a new LTS lands that codename can be missing — which
+    # is exactly when people are installing onto it. Ubuntu 24.04 ships Node 18 and 26.04 ships
+    # newer still, so on a current release this needs no third-party repo at all. 22.04 ships
+    # Node 12, which is why the NodeSource fallback below stays.
     if [ "${nmaj:-0}" -lt 18 ] 2>/dev/null; then
-        info "Installing Node.js LTS (gamedig needs it for player queries)…"
+        local cand=0
+        cand="$(apt-cache policy nodejs 2>/dev/null | awk '/Candidate:/{print $2}' \
+                | grep -oE '^[0-9]+' | head -1 || true)"
+        cand="${cand:-0}"
+        if [ "${cand:-0}" -ge 18 ] 2>/dev/null; then
+            info "Installing Node.js ${cand} from the distro (gamedig needs it for player queries)…"
+            ${S} apt-get install -y nodejs >/dev/null 2>&1 || true
+            if command -v node >/dev/null 2>&1; then
+                nmaj="$(node -v 2>/dev/null | grep -oE '[0-9]+' | head -1 || true)"
+                nmaj="${nmaj:-0}"
+            fi
+        fi
+    fi
+    if [ "${nmaj:-0}" -lt 18 ] 2>/dev/null; then
+        info "Installing Node.js LTS from NodeSource (gamedig needs it for player queries)…"
         # Download the NodeSource setup script to a file and run it, rather than piping curl
         # straight into a shell — one less way for a hijacked fetch to run unseen code inline.
         local ns

@@ -1,0 +1,14 @@
+# actionlint ships a hardcoded list of GitHub-hosted runner labels and rejects anything outside
+# it. Its list currently ends at ubuntu-24.04, so the ubuntu-26.04 runner — real, and a public
+# preview since actions/runner-images#14226 — is reported as an unknown label and fails the lint.
+#
+# `self-hosted-runner.labels` is the only mechanism actionlint offers for teaching it a label, so
+# it is used here despite ubuntu-26.04 being GitHub-hosted rather than self-hosted. That is the
+# remedy actionlint's own error message points at.
+#
+# Remove this file once the pinned actionlint (reviewdog/action-actionlint, currently v1.73.4)
+# ships a release that knows ubuntu-26.04 — at that point it validates the label properly again,
+# and keeping the override would silently accept genuine typos like "ubuntu-26.4".
+self-hosted-runner:
+  labels:
+    - ubuntu-26.04

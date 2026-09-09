@@ -3506,6 +3506,32 @@ for _label, _pat in _fixture_shapes:
     check("fixtures: no test value is shaped like a real %s" % _label, not _hits,
           "%s" % (_hits[:1],))
 
+# ── Supported-release claim vs what CI actually proves ──────────────────────────────────────────
+# The README tells people which Ubuntu releases the panel runs on; the CI matrix is the only thing
+# that proves it. These drift apart silently — a release added to one and not the other is
+# invisible until somebody installs onto it and finds out. Assert the claim and the proof agree.
+# Parsed with regex rather than PyYAML so this gate needs no dependency CI doesn't already install.
+_repo = _pl.Path(__file__).resolve().parent.parent
+_ci_yml = (_repo / ".github" / "workflows" / "ci.yml").read_text(encoding="utf-8")
+_readme = (_repo / "README.md").read_text(encoding="utf-8")
+_ci_pairs = set(zip(
+    [m for m in _re_fx.findall(r"- os: ubuntu-([0-9]{2}\.[0-9]{2})", _ci_yml)],
+    [m for m in _re_fx.findall(r"\n\s+python: \"([0-9]+\.[0-9]+)\"", _ci_yml)],
+))
+_ci_releases = {r for r, _ in _ci_pairs}
+_readme_line = next((ln for ln in _readme.splitlines() if "LTS** for the panel" in ln), "")
+_readme_releases = set(_re_fx.findall(r"([0-9]{2}\.[0-9]{2})", _readme_line))
+check("supported releases: CI matrix has at least one entry", bool(_ci_releases), str(_ci_pairs))
+eq("supported releases: README lists exactly what CI tests",
+   sorted(_readme_releases), sorted(_ci_releases))
+# Each release must be paired with the Python IT ships — testing 26.04 on 3.12 would prove nothing
+# about the interpreter people will actually run the panel under.
+_EXPECTED_PY = {"22.04": "3.10", "24.04": "3.12", "26.04": "3.14"}
+_wrong = sorted("%s->py%s (ships %s)" % (r, py, _EXPECTED_PY[r])
+                for r, py in _ci_pairs if r in _EXPECTED_PY and _EXPECTED_PY[r] != py)
+check("supported releases: each is tested on the Python that release ships", not _wrong, str(_wrong))
+
+
 passed = sum(1 for ok, _, _ in results if ok)
 for ok, name, detail in results:
     line = ("PASS" if ok else "FAIL") + "  " + name

@@ -14,7 +14,7 @@ A self-hosted web panel for managing **[LinuxGSM](https://linuxgsm.com)** game s
 
 ## Requirements
 
-- A host running **Ubuntu 22.04 or 24.04 LTS** for the panel (CI tests both; other distros may work but aren't supported).
+- A host running **Ubuntu 22.04, 24.04 or 26.04 LTS** for the panel (CI tests all three, each on the Python that release ships — 3.10, 3.12 and 3.14; other distros may work but aren't supported).
 - One or more game-server machines on the same, reachable over SSH (key, password, or Tailscale SSH). The panel host can also manage itself.
 - **LinuxGSM** on those machines, or let the panel install it.
 - *Optional:* **[Tailscale](https://tailscale.com)** for private HTTPS with no open ports.
