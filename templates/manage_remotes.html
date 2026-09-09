@@ -88,8 +88,11 @@
           {% if remote.is_local %}
             <span class="badge bg-info text-dark ms-2">This Machine</span>
           {% else %}
-            <span class="badge {% if remote.is_online %}bg-success{% else %}bg-danger{% endif %} ms-2">
-              {{ "Online" if remote.is_online else "Offline" }}
+            {# Same wording as the dashboard host card: on a HOST this is SSH reachability, not
+               the online/offline a game server reports. #}
+            <span class="badge {% if remote.is_online %}bg-success{% else %}bg-danger{% endif %} ms-2"
+                  title="{% if remote.is_online %}The panel can reach this host over SSH{% else %}The panel cannot reach this host over SSH{% endif %}">
+              {{ "Reachable" if remote.is_online else "Unreachable" }}
             </span>
           {% endif %}
         </h2>

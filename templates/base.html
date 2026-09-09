@@ -260,15 +260,19 @@
 <main class="main-content{% if not current_user.is_authenticated %} main-content-full{% endif %}">
   <div class="content-wrap">
     {% if current_user.is_authenticated and current_user.is_superadmin and not current_user.totp_enabled and not current_user.otp_nag_dismissed %}
-    <div class="alert alert-warning d-flex flex-wrap align-items-center gap-2" id="otp-nag" role="alert" style="display:none;">
+    <!-- Sits on EVERY page, so its height is a tax on every screen. Measured at 375x812 it was
+         243px — 30% of the viewport — and pushed the first page-specific content to y=987, past
+         the fold. The rationale text and the long dismiss label are therefore shown from `sm` up
+         only; on a phone the headline plus Enable/Not now says the same thing in one strip. -->
+    <div class="alert alert-warning d-flex flex-wrap align-items-center gap-2 py-2" id="otp-nag" role="alert" style="display:none;">
       <i class="bi bi-shield-exclamation fs-5"></i>
-      <div class="flex-grow-1" style="min-width:220px;">
-        <strong>Two-factor authentication is off on your admin account.</strong>
-        <div class="small">You have full control of the panel — add an authenticator code to your sign-in so a stolen password alone can't get in.</div>
+      <div class="flex-grow-1" style="min-width:0;">
+        <strong>Two-factor authentication is off<span class="d-none d-sm-inline"> on your admin account</span>.</strong>
+        <div class="small d-none d-sm-block">You have full control of the panel — add an authenticator code to your sign-in so a stolen password alone can't get in.</div>
       </div>
       <a href="{{ url_for('account_2fa_enable') }}" class="btn btn-primary btn-sm text-nowrap"><i class="bi bi-shield-plus"></i> Enable 2FA</a>
-      <button type="button" class="btn btn-outline-secondary btn-sm" data-action="hideOtpNag" data-args='[true]'>Not now</button>
-      <button type="button" class="btn btn-link btn-sm text-secondary px-1" data-action="dismissOtpNagForever">Don't remind me again</button>
+      <button type="button" class="btn btn-outline-secondary btn-sm text-nowrap" data-action="hideOtpNag" data-args='[true]'>Not now</button>
+      <button type="button" class="btn btn-link btn-sm text-secondary px-1 text-nowrap" data-action="dismissOtpNagForever"><span class="d-none d-sm-inline">Don't remind me again</span><span class="d-sm-none">Never</span></button>
     </div>
     <script nonce="{{ csp_nonce }}">
       // Show unless suppressed for this browser session ("Not now"). Permanent dismissal is stored
