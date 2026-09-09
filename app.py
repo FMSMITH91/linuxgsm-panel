@@ -873,7 +873,7 @@ def _telegram_command_watch(app):
                 if chat != authorized:
                     _log.info("telegram: ignoring a command from unauthorised chat %s", chat[:32])
                     continue
-                _handle_telegram_command(app, token, authorized, text)
+                _handle_telegram_command(app, token, authorized, text, msg.get("from"))
         except Exception:
             _log.debug("telegram command-watch tick failed", exc_info=True)
             time.sleep(_TG_CMD_BACKOFF)
@@ -919,7 +919,7 @@ def _tg_find_server(arg):
     return None, "No server matches '%s'. Send /servers for the list." % arg[:40]
 
 
-def _tg_server_action(app, token, chat_id, action, arg):
+def _tg_server_action(app, token, chat_id, action, arg, sender=None):
     run_action = getattr(app, "_run_action", None)
     with app.app_context():
         gs, err = _tg_find_server(arg)
@@ -930,7 +930,10 @@ def _tg_server_action(app, token, chat_id, action, arg):
             _tg_reply(token, chat_id, "That action isn't available right now.")
             return
         try:
-            ok, msg = run_action(gs, gs.remote, action, None)   # actor None → logged as a system action
+            # origin, not actor=None: this is attributable to a chat message, and the audit
+            # log should say so rather than filing it under "system".
+            ok, msg = run_action(gs, gs.remote, action, None,
+                                 origin=_bot_origin("telegram", sender))
         except Exception:
             _log.debug("telegram server action failed", exc_info=True)
             ok, msg = False, "the action failed"
@@ -968,7 +971,20 @@ def _tg_hosts_text(app):
     return "\n".join(rows) if rows else "No hosts configured."
 
 
-def _handle_telegram_command(app, token, chat_id, text):
+def _bot_origin(platform, sender):
+    """Audit-log actor string for a command that arrived over a chat bot.
+
+    A bot command can stop a game server or update the panel, and until now every one was recorded
+    with actor=None — i.e. as "system". The log showed that a server restarted but not that a chat
+    message caused it, let alone which account sent it. Chat bots have no panel identity to map to,
+    so the next best thing is to record the origin verbatim and let a human follow it up.
+    """
+    sender = sender or {}
+    who = str(sender.get("username") or sender.get("id") or "unknown")
+    return ("%s:%s" % (platform, who))[:64]
+
+
+def _handle_telegram_command(app, token, chat_id, text, sender=None):
     cmd = _parse_tg_command(text)
     arg = _tg_command_arg(text)
     if cmd in ("help", "start"):
@@ -982,7 +998,7 @@ def _handle_telegram_command(app, token, chat_id, text):
     elif cmd == "players":
         _tg_reply(token, chat_id, _tg_players_text(app, arg))
     elif cmd in ("restart", "start", "stop"):
-        _tg_server_action(app, token, chat_id, cmd, arg)
+        _tg_server_action(app, token, chat_id, cmd, arg, sender)
     elif cmd in ("update", "upgrade"):
         _telegram_do_update(app, token, chat_id)
     else:
@@ -1106,13 +1122,13 @@ def _discord_command_watch(app):
                 time.sleep(_DC_CMD_BACKOFF)
                 continue
 
-            def _on_message(msg_channel, author_is_bot, content, _tok=bot_token, _chan=channel):
+            def _on_message(msg_channel, author_is_bot, content, author=None, _tok=bot_token, _chan=channel):
                 # Ignore our own (and every other bot's) messages; only the configured channel counts.
                 if author_is_bot or msg_channel != _chan:
                     return
                 if (content or "")[:1] not in ("!", "/"):
                     return
-                _handle_discord_command(app, _tok, _chan, content.strip())
+                _handle_discord_command(app, _tok, _chan, content.strip(), author)
 
             notifications.discord_gateway_run(bot_token, _on_message)   # returns when the socket drops
         except Exception:
@@ -1133,7 +1149,7 @@ def _dc_help_text():
             "`!help` — this message")
 
 
-def _dc_server_action(app, bot_token, channel_id, action, arg):
+def _dc_server_action(app, bot_token, channel_id, action, arg, sender=None):
     run_action = getattr(app, "_run_action", None)
     with app.app_context():
         gs, err = _tg_find_server(arg)
@@ -1144,14 +1160,17 @@ def _dc_server_action(app, bot_token, channel_id, action, arg):
             _dc_reply(bot_token, channel_id, "That action isn't available right now.")
             return
         try:
-            ok, msg = run_action(gs, gs.remote, action, None)   # actor None → logged as a system action
+            # origin, not actor=None: this is attributable to a chat message, and the audit
+            # log should say so rather than filing it under "system".
+            ok, msg = run_action(gs, gs.remote, action, None,
+                                 origin=_bot_origin("discord", sender))
         except Exception:
             _log.debug("discord server action failed", exc_info=True)
             ok, msg = False, "the action failed"
         _dc_reply(bot_token, channel_id, "%s %s — %s" % ("✅" if ok else "⚠️", gs.name, msg))
 
 
-def _handle_discord_command(app, bot_token, channel_id, text):
+def _handle_discord_command(app, bot_token, channel_id, text, sender=None):
     cmd = _parse_dc_command(text)
     arg = _tg_command_arg(text)
     if cmd == "help":
@@ -1165,7 +1184,7 @@ def _handle_discord_command(app, bot_token, channel_id, text):
     elif cmd == "players":
         _dc_reply(bot_token, channel_id, _tg_players_text(app, arg))
     elif cmd in ("restart", "start", "stop"):
-        _dc_server_action(app, bot_token, channel_id, cmd, arg)
+        _dc_server_action(app, bot_token, channel_id, cmd, arg, sender)
     elif cmd in ("update", "upgrade"):
         _discord_do_update(app, bot_token, channel_id)
     elif cmd:
@@ -3838,21 +3857,25 @@ def register_routes(app):
         return "needed", ("Restart the server to load the change — use Restart now when you're ready "
                           "(nobody is disconnected until you do).")
 
-    def _run_action(gs, remote, action, actor):
+    def _run_action(gs, remote, action, actor, origin=None):
         """Execute a whitelisted action (permission already checked).
-        Returns (ok, message). Long actions run in the background."""
+        Returns (ok, message). Long actions run in the background.
+
+        `origin` names a non-user caller for the audit log — currently the chat bots, which have
+        no panel account to attribute to. Without it their actions were recorded as "system", so
+        the log showed a server restarting with nothing to say a chat message caused it."""
         if action in ("stop", "restart"):
             _mark_expected_offline(gs.id)   # so the monitor doesn't alert on an intentional stop
         if action in LONG_ACTIONS:
             _bg_action(gs.id, remote.id, gs.short_name, action, gs.lgsm_name)
-            log_action(actor, f"{action}_server", target=gs.name)
+            log_action(actor, f"{action}_server", target=gs.name, actor=origin)
             return True, f"'{action}' started — watch the live console for progress."
         if action in ("start", "stop", "restart"):
             # These block for ~8-17s (srcds Steam/VAC init on start, a graceful `quit` wait on stop,
             # plus LinuxGSM confirming the outcome). Run them in the background so the click returns
             # immediately and the status poll reflects the result, instead of hanging the button.
             _bg_power_action(gs.id, remote.id, gs.short_name, action, gs.lgsm_name,
-                             actor.id if actor else None)
+                             actor.id if actor else None, origin=origin)
             return True, f"'{action}' issued — status updates in a few seconds."
         timeout = 90 if action == "restart" else 60
         out, err, rc = run_as_game_user(remote, gs.short_name, f"{action} 2>&1", timeout=timeout, selfname=gs.lgsm_name)
@@ -3861,7 +3884,8 @@ def register_routes(app):
         def _clean(s):
             s = terminal.strip_escapes(s or "")
             return re.sub(r"[ \t]{2,}", " ", s)
-        log_action(actor, f"{action}_server", target=gs.name, success=(rc == 0), detail=_clean(out)[-400:])
+        log_action(actor, f"{action}_server", target=gs.name, success=(rc == 0),
+                   detail=_clean(out)[-400:], actor=origin)
         clean = _clean((out or "") + "\n" + (err or "")).strip()
         # This changed what's listening on the host — drop the cached port scan so the dashboard
         # reflects the new state on its next poll instead of up to a TTL of stale "offline/online".
@@ -4288,7 +4312,7 @@ def register_routes(app):
         log_action(current_user, "set_notify_when_empty", target=gs.name, detail=str(enabled))
         return jsonify({"success": True, "enabled": enabled})
 
-    def _bg_power_action(server_id, remote_id, short_name, action, selfname, actor_id):
+    def _bg_power_action(server_id, remote_id, short_name, action, selfname, actor_id, origin=None):
         """Run a start/stop/restart in the background so the click returns immediately (the command
         is slow — srcds Steam/VAC init on start, a graceful shutdown wait on stop, plus LinuxGSM's
         confirm step). The dashboard/list status poll reflects the outcome. Mirrors the synchronous
@@ -4309,7 +4333,7 @@ def register_routes(app):
                                                   timeout=timeout, selfname=selfname)
                     clean = terminal.strip_escapes(out or "")
                     log_action(actor, f"{action}_server", target=gs.name, success=(rc == 0),
-                               detail=clean[-400:])
+                               detail=clean[-400:], actor=origin)
                     if rc == 0:
                         _invalidate_port_scan(remote_id)
                         if gs.restart_pending or gs.stop_pending:
