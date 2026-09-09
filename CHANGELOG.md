@@ -7,6 +7,12 @@ regardless of this file — this changelog is for humans.
 
 ## [Unreleased]
 
+### Fixed
+- **The "main has open code-scanning alerts" gate raced CodeQL and reported the wrong answer.** It
+  ran on the same push as the analysis rather than after it, so a commit that *fixed* an alert
+  failed the gate, and — worse — a commit that *introduced* one passed it, with the alert then
+  blamed on whatever landed next. It now runs when CodeQL completes.
+
 ### Security
 - **The privileged helper has landed, and the firewall now goes through it.** The panel escalates
   local work as `sudo bash -c '<command>'`, which is why its sudoers grant could never be narrowed:
