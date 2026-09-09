@@ -50,6 +50,14 @@ SYSTEMCTL = "systemctl"
 # The services the panel is allowed to touch, named exhaustively — see tools/panel-helper.
 UNITS = ("ssh", "sshd", "fail2ban", "whoopsie", "cups", "modemmanager")
 
+APT = "apt-get"
+# dpkg's conflict answers, fixed rather than passed in: keep a config file the operator has edited,
+# take the package default for one they have not — see tools/panel-helper.
+APT_CONFOLD = ["-o", "Dpkg::Options::=--force-confdef", "-o", "Dpkg::Options::=--force-confold"]
+# Verbs that need DEBIAN_FRONTEND=noninteractive so apt never blocks on a prompt nobody can answer.
+NONINTERACTIVE = {"apt-full-upgrade", "apt-upgrade", "apt-install"}
+REPOS = ("universe",)
+
 
 class VerbError(ValueError):
     """An argument did not pass validation. Never contains the rejected value: this text can reach
@@ -99,6 +107,19 @@ def _jail(s):
     return str(s)
 
 
+def _package(s):
+    if not re.fullmatch(r"[a-z0-9][a-z0-9+.-]{0,60}(?::[a-z0-9]{1,10})?", str(s)):
+        raise VerbError("not a package name")
+    return str(s)
+
+
+class Rest:
+    """A validator that consumes every remaining argument — see tools/panel-helper."""
+
+    def __init__(self, check, minimum=1, maximum=64):
+        self.check, self.minimum, self.maximum = check, minimum, maximum
+
+
 def _rulenum(s):
     if not re.fullmatch(r"[1-9]\d{0,3}", str(s)):
         raise VerbError("not a rule number")
@@ -145,6 +166,24 @@ _ARGV = {
     "service-enable-now": ([_choice(*UNITS)], lambda a: [SYSTEMCTL, "enable", "--now", a[0]], None),
     "service-disable-now": ([_choice(*UNITS)], lambda a: [SYSTEMCTL, "disable", "--now", a[0]], None),
 
+    # ── apt / dpkg ──
+    "apt-update": ([], lambda a: [APT, "update", "-qq"], None),
+    "apt-full-upgrade": ([_choice("phased", "standard")],
+                         lambda a: [APT, "full-upgrade", "-y"]
+                         + (["-o", "APT::Get::Always-Include-Phased-Updates=true"]
+                            if a[0] == "phased" else []) + APT_CONFOLD, None),
+    "apt-upgrade": ([], lambda a: [APT, "upgrade", "-y"] + APT_CONFOLD, None),
+    "apt-autoremove": ([], lambda a: [APT, "autoremove", "-y"], None),
+    "apt-install": ([Rest(_package)], lambda a: [APT, "install", "-y"] + a, None),
+    "apt-add-repo": ([_choice(*REPOS)], lambda a: ["add-apt-repository", "-y", a[0]], None),
+    "dpkg-add-arch": ([_choice("i386")], lambda a: ["dpkg", "--add-architecture", a[0]], None),
+    # Fixed pgrep patterns: pgrep takes a regex, so it is written here and never comes from a caller.
+    "apt-any-running": ([], lambda a: ["pgrep", "-f", "apt-get"], None),
+    "apt-upgrade-running": ([], lambda a: ["pgrep", "-f",
+                                           "apt-get (upgrade|dist-upgrade|full-upgrade)"], None),
+    "dpkg-lock-held": ([], lambda a: ["fuser", "/var/lib/dpkg/lock-frontend"], None),
+    "reboot": ([], lambda a: ["reboot"], None),
+
     "ufw-delete-limit-port": ([_portspec], lambda a: [UFW, "delete", "limit", a[0]], None),
     # Only OpenSSH: the panel deletes exactly this one UFW application profile, so the validator is
     # the literal rather than an app-name pattern — the narrowest thing that still works.
@@ -166,9 +205,19 @@ def check_args(verb, args):
     if spec is None:
         raise VerbError("unknown verb")
     validators = spec[0]
-    if len(args) != len(validators):
-        raise VerbError("%s takes %d argument(s), got %d" % (verb, len(validators), len(args)))
-    return [check(v) for v, check in zip(args, validators)]
+    args = list(args)
+    rest = validators[-1] if validators and isinstance(validators[-1], Rest) else None
+    fixed = validators[:-1] if rest else validators
+    if rest is None:
+        if len(args) != len(fixed):
+            raise VerbError("%s takes %d argument(s), got %d" % (verb, len(fixed), len(args)))
+        checks = list(fixed)
+    else:
+        low, high = len(fixed) + rest.minimum, len(fixed) + rest.maximum
+        if not low <= len(args) <= high:
+            raise VerbError("%s takes %d..%d argument(s), got %d" % (verb, low, high, len(args)))
+        checks = list(fixed) + [rest.check] * (len(args) - len(fixed))
+    return [check(v) for v, check in zip(args, checks)]
 
 
 def tool_argv(verb, args):
@@ -194,6 +243,10 @@ def remote_command(verb, args, merge_stderr=True):
     rather than a separately-maintained command. `2>&1` is kept because the existing callers read
     tool errors out of stdout; dropping it would silently change which stream messages land in."""
     cmd = shlex.join(tool_argv(verb, args))
+    if verb in NONINTERACTIVE:
+        # The helper sets this on the child's environment; over SSH there is a shell, so the
+        # familiar prefix is what goes on the wire — the same thing these commands always sent.
+        cmd = "DEBIAN_FRONTEND=noninteractive " + cmd
     if stdin_for(verb) is not None:
         # No helper on the far side to feed stdin, so the prompt is answered the old way.
         cmd = "yes | " + cmd

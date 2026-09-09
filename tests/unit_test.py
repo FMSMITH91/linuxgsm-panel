@@ -498,6 +498,15 @@ check("ufw: unknown protocol rejected", sm._ufw_proto("sctp") is None)
 eq("ufw: valid port coerced to int", sm._ufw_port_int("27015"), 27015)
 
 
+def _ufw_raises_verb(fn):
+    import privileged as _p
+    try:
+        fn()
+        return False
+    except _p.VerbError:
+        return True
+
+
 def _ufw_raises_fnf(fn, *a):
     try:
         fn(*a)
@@ -3744,6 +3753,17 @@ _VERB_SAMPLES = {
     "service-reload": ["fail2ban"],
     "service-enable-now": ["fail2ban"],
     "service-disable-now": ["cups"],
+    "apt-update": [],
+    "apt-full-upgrade": ["phased"],
+    "apt-upgrade": [],
+    "apt-autoremove": [],
+    "apt-install": ["curl", "lib32gcc-s1", "libsdl2-2.0-0:i386"],
+    "apt-add-repo": ["universe"],
+    "dpkg-add-arch": ["i386"],
+    "apt-any-running": [],
+    "apt-upgrade-running": [],
+    "dpkg-lock-held": [],
+    "reboot": [],
 }
 check("privileged: every verb has a sample (new verbs cannot skip the parity check)",
       set(_VERB_SAMPLES) == set(_priv.verbs()),
@@ -3760,7 +3780,7 @@ _drift = []
 for _v, _a in _VERB_SAMPLES.items():
     if _v not in _helper.VERBS or _v not in _priv.verbs():
         continue
-    _hv = _helper.VERBS[_v][1]([c(x) for x, c in zip(_a, _helper.VERBS[_v][0])])
+    _hv = _helper.VERBS[_v][1](_helper.validate(_v, _a))
     _pv = _priv.tool_argv(_v, _a)
     if _hv != _pv:
         _drift.append("%s: helper=%r panel=%r" % (_v, _hv, _pv))
@@ -3771,7 +3791,9 @@ check("privileged: helper and panel build an identical argv for every verb",
 # would be decorative.
 check("helper: resolves ufw", _helper.resolve("ufw").endswith("/ufw") if os.path.exists("/usr/sbin/ufw") else True)
 check("helper: knows exactly the tools its verbs need, and no more",
-      sorted(_helper.TOOLS) == ["fail2ban-client", "systemctl", "ufw"], sorted(_helper.TOOLS))
+      sorted(_helper.TOOLS) == ["add-apt-repository", "apt-get", "dpkg", "fail2ban-client",
+                                "fuser", "pgrep", "reboot", "systemctl", "ufw"],
+      sorted(_helper.TOOLS))
 for _prog in ("bash", "sh", "python3", "env"):
     check("helper: refuses to resolve %s" % _prog, _ufw_raises_fnf(_helper.resolve, _prog))
 
@@ -3787,6 +3809,12 @@ _BAD = {
     # else, so a real service name it was never meant to touch is refused like an injection is.
     "service-restart": ["nginx", "docker", "ssh; id", "ssh.service", ""],
     "f2b-status-jail": ["sshd; id", "$(id)", "a" * 65, ""],
+    # Package names reach `apt-get install` as separate argv entries, but a name is still the one
+    # place an attacker-supplied string gets to be a whole argument — so it is charset-checked.
+    "apt-install": ["curl; id", "$(id)", "--reinstall", "-o", "Curl", "pkg name", ""],
+    "dpkg-add-arch": ["amd64", "i386; id", ""],
+    "apt-add-repo": ["ppa:someone/ppa", "universe; id", "multiverse"],
+    "apt-full-upgrade": ["phased; id", "everything", ""],
 }
 _leaked = []
 for _v, _bads in _BAD.items():
@@ -3830,6 +3858,24 @@ _REMOTE_EXPECTED = {
     ("service-restart", ("ssh",)): "systemctl restart ssh 2>&1",
     ("service-enable-now", ("fail2ban",)): "systemctl enable --now fail2ban 2>&1",
     ("service-disable-now", ("cups",)): "systemctl disable --now cups 2>&1",
+    ("apt-update", ()): "apt-get update -qq 2>&1",
+    ("apt-autoremove", ()): "apt-get autoremove -y 2>&1",
+    ("apt-install", ("curl",)):
+        "DEBIAN_FRONTEND=noninteractive apt-get install -y curl 2>&1",
+    ("apt-install", ("python3", "libsdl2-2.0-0:i386")):
+        "DEBIAN_FRONTEND=noninteractive apt-get install -y python3 libsdl2-2.0-0:i386 2>&1",
+    ("apt-full-upgrade", ("phased",)):
+        "DEBIAN_FRONTEND=noninteractive apt-get full-upgrade -y "
+        "-o APT::Get::Always-Include-Phased-Updates=true "
+        "-o Dpkg::Options::=--force-confdef -o Dpkg::Options::=--force-confold 2>&1",
+    ("apt-full-upgrade", ("standard",)):
+        "DEBIAN_FRONTEND=noninteractive apt-get full-upgrade -y "
+        "-o Dpkg::Options::=--force-confdef -o Dpkg::Options::=--force-confold 2>&1",
+    ("dpkg-add-arch", ("i386",)): "dpkg --add-architecture i386 2>&1",
+    ("apt-add-repo", ("universe",)): "add-apt-repository -y universe 2>&1",
+    ("apt-upgrade-running", ()):
+        "pgrep -f 'apt-get (upgrade|dist-upgrade|full-upgrade)' 2>&1",
+    ("reboot", ()): "reboot 2>&1",
 }
 _wrong = []
 for (_v, _a), _want in _REMOTE_EXPECTED.items():
@@ -3857,6 +3903,23 @@ _hp = _sp.run([sys.executable, _helper_path, "ufw-deny-ip", "1.2.3.4; id", "tag"
 check("helper: a rejected argument exits 2", _hp.returncode == 2, _hp.stderr.strip()[:80])
 check("helper: the rejected value is NOT echoed back (this runs as root, its stderr reaches the UI)",
       "1.2.3.4; id" not in _hp.stderr, _hp.stderr.strip()[:100])
+
+# apt-install is the one variadic verb: a package LIST, each element validated, with a floor and a
+# ceiling on how many. An unbounded list would be a way to make one command arbitrarily large.
+check("privileged: apt-install accepts a list of packages",
+      _priv.tool_argv("apt-install", ["a", "b-c", "d:i386"])[-3:] == ["a", "b-c", "d:i386"])
+check("privileged: apt-install refuses an empty package list",
+      _ufw_raises_verb(lambda: _priv.check_args("apt-install", [])))
+check("privileged: apt-install refuses an absurdly long package list",
+      _ufw_raises_verb(lambda: _priv.check_args("apt-install", ["pkg"] * 65)))
+check("privileged: one bad name rejects the whole apt-install list",
+      _ufw_raises_verb(lambda: _priv.check_args("apt-install", ["good", "also-good", "bad;name"])))
+
+# `| tail -n` became Python.
+eq("_last_lines keeps the tail", sm._last_lines("a\nb\nc\nd", 2), "c\nd")
+eq("_last_lines is fine with fewer lines than asked", sm._last_lines("a", 5), "a")
+eq("_last_lines handles empty output", sm._last_lines("", 3), "")
+eq("_last_lines handles None", sm._last_lines(None, 3), "")
 
 # ufw status parsing that used to be a `grep` running under root.
 check("ufw: _ufw_is_active reads the Status line", sm._ufw_is_active("Status: active") is True)

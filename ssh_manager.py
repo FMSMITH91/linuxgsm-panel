@@ -184,6 +184,26 @@ def _exec_local_argv(argv, timeout=30, stdin_text=None):
     return _in_tpool(_do)
 
 
+def _last_lines(text, n):
+    """The last `n` lines of `text` — what `| tail -n` did, without needing a shell to do it."""
+    return "\n".join((text or "").splitlines()[-n:])
+
+
+def _wait_for_dpkg_lock(server, timeout=180):
+    """Block until apt/dpkg has released its frontend lock, or `timeout` passes.
+
+    Was `while fuser /var/lib/dpkg/lock-frontend; do sleep 1; done` — a loop running as root, whose
+    only exit was the outer command timeout. The Python version has an explicit deadline, so a host
+    whose lock never clears stops waiting instead of holding the connection open to the last second."""
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        _, _, rc = run_privileged(server, "dpkg-lock-held", [], timeout=10, merge_stderr=False)
+        if rc != 0:          # fuser exits non-zero when nothing holds the file
+            return True
+        time.sleep(1)
+    return False
+
+
 def _restart_sshd(server, timeout=20):
     """Restart the SSH daemon. Debian/Ubuntu call the unit `ssh`, others `sshd`, and the panel has
     always tried both — that was `systemctl restart ssh || systemctl restart sshd`, one shell
@@ -3221,7 +3241,7 @@ def remote_os_check_updates(server):
     host. A caller that takes that for "nothing waiting" will re-announce the same package list the
     next time the check succeeds. The filtering greps this pipeline used to end with are gone for
     the same reason — grep exits 1 when a clean host matches nothing, so its status masked apt's."""
-    run_command(server, "apt update -qq 2>/dev/null", timeout=60, sudo=True)
+    run_privileged(server, "apt-update", [], timeout=60, merge_stderr=False)
     out, _, rc = run_command(server, "apt list --upgradable 2>/dev/null", timeout=30)
     pkgs = _parse_upgradable(out)
     return {"ok": rc == 0, "count": len(pkgs), "packages": pkgs}
@@ -3230,10 +3250,7 @@ def remote_os_check_updates(server):
 def remote_os_run_updates(server):
     """Run apt upgrade on the remote server (blocking; kept for callers that want a one-shot).
     The UI uses the streaming remote_os_update_start/_status pair instead."""
-    out, err, rc = run_command(server,
-        "DEBIAN_FRONTEND=noninteractive apt-get full-upgrade -y "
-        "-o APT::Get::Always-Include-Phased-Updates=true "
-        "-o Dpkg::Options::='--force-confdef' -o Dpkg::Options::='--force-confold' 2>&1",
+    out, err, rc = run_privileged(server, "apt-full-upgrade", ["phased"],
         timeout=600, sudo=True
     )
     return rc == 0, out[-300:] if out else err[:300]
@@ -3252,10 +3269,10 @@ def remote_os_update_start(server):
     config file on a conflict (never clobber your edits) and assume-yes — so it can't hang waiting on
     a prompt; the log records what it decided. Returns (ok, message)."""
     # Don't launch a second run on top of one already going.
-    chk, _, _ = run_command(
-        server, "pgrep -f 'apt-get (upgrade|dist-upgrade|full-upgrade)' >/dev/null 2>&1 && echo RUN || echo IDLE",
-        timeout=10, sudo=True)
-    if "RUN" in (chk or ""):
+    # pgrep exits 0 when it matched something, 1 when it did not — the `&& echo RUN || echo IDLE`
+    # only translated that into text for a string check.
+    _, _, chk_rc = run_privileged(server, "apt-upgrade-running", [], timeout=10, merge_stderr=False)
+    if chk_rc == 0:
         return True, "An update is already running — watching it."
     log = _OS_UPDATE_LOG
     inner = (
@@ -3295,14 +3312,13 @@ def remote_os_update_status(server):
         log = re.sub(r"\n?" + re.escape(_OS_UPDATE_DONE) + r"-?\d+\s*$", "", log)
         return {"running": False, "done": True, "rc": rc, "log": log}
     # No sentinel yet — is apt still working?
-    alive, _, _ = run_command(server, "pgrep -f apt-get >/dev/null 2>&1 && echo Y || echo N",
-                              timeout=10, sudo=True)
-    return {"running": "Y" in (alive or ""), "done": False, "rc": None, "log": log}
+    _, _, alive_rc = run_privileged(server, "apt-any-running", [], timeout=10, merge_stderr=False)
+    return {"running": alive_rc == 0, "done": False, "rc": None, "log": log}
 
 
 def remote_reboot(server):
     """Reboot the remote server."""
-    run_command(server, "reboot 2>&1", timeout=10, sudo=True)
+    run_privileged(server, "reboot", [], timeout=10)
     return True, "Reboot command sent to remote"
 
 
@@ -3477,23 +3493,19 @@ def remote_bootstrap_vps(server, set_timezone="UTC", enable_ufw=True, install_lg
 
     # ── 1. Wait for cloud-init / apt to settle ──
     emit("Waiting for package manager to be free")
-    run_command(server, "while fuser /var/lib/dpkg/lock-frontend >/dev/null 2>&1; do sleep 1; done", timeout=180, sudo=True)
+    _wait_for_dpkg_lock(server, timeout=180)
 
     # ── 2. Update apt cache + full upgrade ──
     emit("Updating package lists (apt update)")
-    run_command(server, "apt-get update 2>&1 | tail -5", timeout=180, sudo=True)
+    run_privileged(server, "apt-update", [], timeout=180)
 
     emit("Full-upgrading all packages (apt full-upgrade — may take several minutes)")
-    out, _, _ = run_command(server,
-        "DEBIAN_FRONTEND=noninteractive apt-get full-upgrade -y "
-        "-o Dpkg::Options::='--force-confdef' "
-        "-o Dpkg::Options::='--force-confold' 2>&1 | tail -8",
-        timeout=1800, sudo=True
-    )
+    out, _, _ = run_privileged(server, "apt-full-upgrade", ["standard"], timeout=1800)
+    out = _last_lines(out, 8)
     note(out or "OK")
 
     emit("Removing unused packages (autoremove)")
-    run_command(server, "apt-get autoremove -y 2>&1 | tail -3", timeout=180, sudo=True)
+    run_privileged(server, "apt-autoremove", [], timeout=180)
 
     # ── 3. Install essential packages (jq parses gamedig's JSON output) ──
     emit("Installing essential packages")
@@ -3504,9 +3516,12 @@ def remote_bootstrap_vps(server, set_timezone="UTC", enable_ufw=True, install_lg
         pkgs += " python3 python3-pip bc lib32gcc-s1 lib32stdc++6 libsdl2-2.0-0:i386"
     if install_fail2ban:
         pkgs += " fail2ban"
-    run_command(server, "dpkg --add-architecture i386 2>/dev/null; add-apt-repository -y universe 2>/dev/null; apt-get update -qq 2>/dev/null", timeout=120, sudo=True)
-    out, _, _ = run_command(server, f"DEBIAN_FRONTEND=noninteractive apt-get install -y {pkgs} 2>&1 | tail -6", timeout=600, sudo=True)
-    note(out or "OK")
+    # Three statements joined with ';' in one root shell — three verbs now.
+    run_privileged(server, "dpkg-add-arch", ["i386"], timeout=120, merge_stderr=False)
+    run_privileged(server, "apt-add-repo", ["universe"], timeout=120, merge_stderr=False)
+    run_privileged(server, "apt-update", [], timeout=120, merge_stderr=False)
+    out, _, _ = run_privileged(server, "apt-install", pkgs.split(), timeout=600)
+    note(_last_lines(out, 6) or "OK")
 
     # ── 3a. Node.js LTS via NodeSource — apt's own nodejs is too old for current gamedig
     # (gamedig v5 needs Node >=18; e.g. Ubuntu 22.04's apt ships Node 12). Idempotent. ──
@@ -3715,7 +3730,8 @@ def remote_install_tailscale(server):
     log.append(f"OS: {os_out[:200]}")
 
     # 2. Install curl if missing
-    out, _, _ = run_command(server, "apt install -y curl 2>&1 | tail -3", timeout=60, sudo=True)
+    out, _, _ = run_privileged(server, "apt-install", ["curl"], timeout=60)
+    out = _last_lines(out, 3)
     log.append(f"curl: {out}")
 
     # 3. Add Tailscale repo and install
