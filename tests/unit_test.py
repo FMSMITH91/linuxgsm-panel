@@ -3579,6 +3579,31 @@ check("bot origin: capped so a hostile display name can't flood the audit column
       len(_bot_origin("discord", {"username": "x" * 500})) <= 64)
 
 
+# ── API-token brute-force throttle ──────────────────────────────────────────────────────────────
+# /login has been throttled for years; the bearer path — the panel's OTHER way in — had nothing.
+import auth as _authmod
+_authmod._TOKEN_FAILS.clear()
+for _i in range(_authmod.TOKEN_MAX_FAILS - 1):
+    _authmod._token_auth_record("10.0.0.9", ok=False)
+check("token throttle: under the limit an IP is still allowed to try",
+      not _authmod._token_auth_blocked("10.0.0.9"))
+_authmod._token_auth_record("10.0.0.9", ok=False)
+check("token throttle: the limit blocks further attempts",
+      _authmod._token_auth_blocked("10.0.0.9"))
+check("token throttle: a DIFFERENT IP is unaffected",
+      not _authmod._token_auth_blocked("10.0.0.10"))
+# A success must clear the counter, or one bad script would lock out the good token behind it.
+_authmod._token_auth_record("10.0.0.9", ok=True)
+check("token throttle: a successful auth clears the counter",
+      not _authmod._token_auth_blocked("10.0.0.9"))
+# Entries must age out, or the map grows one row per IP that ever mistyped a token.
+_authmod._TOKEN_FAILS["10.0.0.11"] = [_time.time() - (_authmod.TOKEN_WINDOW + 5)] * 50
+_authmod._token_auth_blocked("10.0.0.12")          # any call prunes
+check("token throttle: stale IPs are pruned, so the map cannot grow forever",
+      "10.0.0.11" not in _authmod._TOKEN_FAILS, str(list(_authmod._TOKEN_FAILS))[:60])
+_authmod._TOKEN_FAILS.clear()
+
+
 passed = sum(1 for ok, _, _ in results if ok)
 for ok, name, detail in results:
     line = ("PASS" if ok else "FAIL") + "  " + name
