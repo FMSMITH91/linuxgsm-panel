@@ -2344,6 +2344,7 @@ try:
     def _bearer(tok):
         return app.test_client().get("/api/servers", headers={"Authorization": "Bearer %s" % tok})
 
+
     with app.app_context():
         _au = db.session.get(User, admin_id)
         _admin_tok = _au.generate_api_token()
@@ -2359,6 +2360,26 @@ try:
     check("api token: replaying the STORED hash does not authenticate",
           _bearer(_stored).status_code != 200, "the stored value logged in")
     check("api token: an empty bearer does not authenticate", _bearer("").status_code != 200)
+
+    # The bearer path is the panel's other way in and had no throttle at all, so an attacker could
+    # try tokens as fast as the network allowed. Exercise it end-to-end through a real request,
+    # not just the helper: a valid token must keep working, a blocked IP must lose its token
+    # identity, and — importantly — a browser session from that same IP must still work, because
+    # the loader returns None rather than aborting the request.
+    import auth as _auth_mod
+    _auth_mod._TOKEN_FAILS.clear()
+    try:
+        for _i in range(_auth_mod.TOKEN_MAX_FAILS):
+            app.test_client().get("/api/servers", headers={"Authorization": "Bearer lgsm_deadbeef"})
+        _blocked = _bearer(_admin_tok)
+        check("token throttle: a valid token is refused once its IP is blocked",
+              _blocked.status_code != 200, "got %d" % _blocked.status_code)
+        check("token throttle: ...but a SESSION from the same IP still works",
+              c.get("/api/servers").status_code == 200)
+    finally:
+        _auth_mod._TOKEN_FAILS.clear()
+    check("token throttle: clearing the block restores token access",
+          _bearer(_admin_tok).status_code == 200)
 
     # A token inherits its owner's scope — no more. mru can see host #1 only.
     with app.app_context():

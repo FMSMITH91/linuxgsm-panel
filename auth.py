@@ -496,11 +496,61 @@ def init_auth(app):
         """Authenticate an API client via `Authorization: Bearer <token>` (for scripts/bots), so the
         REST API is usable without a browser session. The token authenticates AS its owner and
         inherits exactly that user's RBAC permissions — nothing more. Returns None for a normal
-        request so flask-login falls back to the session cookie (user_loader)."""
+        request so flask-login falls back to the session cookie (user_loader).
+
+        Failed attempts are throttled per IP. /login has had a throttle for a long time; this
+        path — the panel's OTHER way in — had none, so an attacker could try tokens as fast as
+        the network allowed, and nothing anywhere recorded that it was happening."""
         header = req.headers.get("Authorization", "")
-        if header.startswith("Bearer "):
-            return User.by_api_token(header[7:].strip())
-        return None
+        if not header.startswith("Bearer "):
+            return None
+        ip = client_ip() or "unknown"
+        if _token_auth_blocked(ip):
+            # Return None rather than aborting: a blocked IP simply gets no token identity, and
+            # flask-login still falls back to the session cookie — so throttling the token path
+            # never locks a logged-in human out of the UI from the same address.
+            return None
+        user = User.by_api_token(header[7:].strip())
+        _token_auth_record(ip, ok=user is not None)
+        return user
+
+
+# ─── API-token brute-force throttle ───────────────────────────────────────────────────────────
+# /login has been throttled for a long time; the bearer-token path had nothing, and it is the
+# panel's other way in. Tokens are 192 bits, so guessing one is not realistic — but that is a
+# property of the token length, not of this code, and an unthrottled authentication endpoint is
+# still one. It also stops the panel being a free CPU sink: every attempt costs a SHA-256 and a
+# database lookup.
+#
+# Deliberately more generous than the login limit (20 vs 8): a legitimate script with a stale
+# token retries in a loop, and locking it out after 8 would turn a config mistake into an outage.
+_TOKEN_FAILS = {}
+_TOKEN_FAILS_LOCK = threading.Lock()
+TOKEN_MAX_FAILS = 20
+TOKEN_WINDOW = 300      # seconds
+
+
+def _token_auth_blocked(ip):
+    """True when this IP has failed too many token authentications recently."""
+    now = time.time()
+    with _TOKEN_FAILS_LOCK:
+        # Prune whole IPs whose failures have aged out. Without this the map grows one entry per
+        # IP that ever mistyped a token — the same leak the login throttle had to fix.
+        for k in [k for k, v in _TOKEN_FAILS.items() if not v or now - v[-1] >= TOKEN_WINDOW]:
+            del _TOKEN_FAILS[k]
+        recent = [t for t in _TOKEN_FAILS.get(ip, []) if now - t < TOKEN_WINDOW]
+        if recent:
+            _TOKEN_FAILS[ip] = recent
+        return len(recent) >= TOKEN_MAX_FAILS
+
+
+def _token_auth_record(ip, ok):
+    """Record the outcome of a token authentication: clear the counter on success, count a miss."""
+    with _TOKEN_FAILS_LOCK:
+        if ok:
+            _TOKEN_FAILS.pop(ip, None)
+        else:
+            _TOKEN_FAILS.setdefault(ip, []).append(time.time())
 
 
 # ─── Audit Logging ─────────────────────────────────────────────
