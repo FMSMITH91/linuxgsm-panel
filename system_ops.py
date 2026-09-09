@@ -416,7 +416,7 @@ def os_update_available(refresh=True):
     itself did not run — and a caller that reads a failure as "nothing waiting"
     will re-announce the same packages later."""
     if refresh:
-        _run("apt update -qq 2>/dev/null", timeout=60, sudo=True)
+        _run_verb("apt-update", [], timeout=60, merge_stderr=False)
 
     # No filtering greps in the pipeline: their exit status would mask apt's own, and a clean host
     # (grep matches nothing → exit 1) would be indistinguishable from a failed check. parse_upgradable
@@ -435,8 +435,7 @@ def os_run_update():
 
     # Run in background thread
     def _bg_update():
-        _run("apt upgrade -y -o Dpkg::Options::='--force-confdef' -o Dpkg::Options::='--force-confold' 2>&1",
-             timeout=600, sudo=True)
+        _run_verb("apt-upgrade", [], timeout=600)
 
     thread = threading.Thread(target=_bg_update, daemon=True)
     thread.start()
@@ -1258,8 +1257,7 @@ def enable_unattended_upgrades():
     """Install + enable automatic security updates. Needs sudo (NOPASSWD, same path
     as the OS-update actions). Returns (ok, message)."""
     # 1) install the package (no-op if already present); noninteractive avoids prompts.
-    _run("DEBIAN_FRONTEND=noninteractive apt-get install -y unattended-upgrades 2>&1",
-         timeout=300, sudo=True)
+    _run_verb("apt-install", ["unattended-upgrades"], timeout=300)
     # 2) write the APT periodic config that actually turns it on. printf is
     # unprivileged; only the file write (via `sudo tee`) needs root.
     conf = ('APT::Periodic::Update-Package-Lists "1";\n'
@@ -1638,8 +1636,8 @@ def configure_panel_fail2ban(auth_log, web_port, ignore_ips=None):
 
     have, _, _ = _run("command -v fail2ban-client >/dev/null 2>&1 && echo yes || echo no", timeout=10)
     if "yes" not in (have or ""):
-        _run("DEBIAN_FRONTEND=noninteractive apt-get update -qq 2>/dev/null", timeout=120, sudo=True)
-        _run("DEBIAN_FRONTEND=noninteractive apt-get install -y fail2ban 2>&1", timeout=300, sudo=True)
+        _run_verb("apt-update", [], timeout=120, merge_stderr=False)
+        _run_verb("apt-install", ["fail2ban"], timeout=300)
         have2, _, _ = _run("command -v fail2ban-client >/dev/null 2>&1 && echo yes || echo no", timeout=10)
         if "yes" not in (have2 or ""):
             return False, "Couldn't install fail2ban on this host."

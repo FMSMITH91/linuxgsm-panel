@@ -70,13 +70,26 @@ verb and already-separated arguments, re-validates every argument against its ow
 execs a fixed argument vector. There is no shell in it, and the only program it can run is
 one it names: `bash` does not resolve.
 
-Converted so far: **`ufw`, `fail2ban-client` and `systemctl`** — 22 verbs covering every
-firewall read and write, every fail2ban query and unban, and the service control the panel
-performs. The systemd verbs take a unit from an **exhaustive list** (`ssh`, `sshd`,
-`fail2ban`, `whoopsie`, `cups`, `modemmanager`) rather than a name pattern: those are the only
-services the panel ever touches, so a pattern would only buy the ability to control units
-nobody asked it to. Still to convert: `apt`/`dpkg`, `journalctl`, cron, user management, the
-file writes that go through `echo … | base64 -d >`, and the reboot path.
+Converted so far: **`ufw`, `fail2ban-client`, `systemctl` and `apt`/`dpkg`** — 33 verbs, and
+the count of privileged call sites still composing a shell string is down from 113 to 52.
+
+Two of those verb families are worth describing, because the narrowing is in the argument
+types rather than in the command names:
+
+- The systemd verbs take a unit from an **exhaustive list** (`ssh`, `sshd`, `fail2ban`,
+  `whoopsie`, `cups`, `modemmanager`). Those are the only services the panel ever touches, so
+  a unit-name *pattern* would only buy the ability to control units nobody asked it to.
+- `apt-install` is the one verb taking a variable-length list. Every package name is
+  charset-checked individually, and the list has a floor and a ceiling — so a name cannot be
+  an option (`--reinstall`), and the list cannot be made arbitrarily long. dpkg's conflict
+  answers (`--force-confdef`, `--force-confold`) are fixed in the helper rather than passed
+  in, so an unattended upgrade can never be talked into clobbering a config file you edited.
+
+Still to convert: `journalctl`, cron, user management (`useradd`/`userdel`/`passwd`), log
+tails, the file writes that go through `echo … | base64 -d >`, the two multi-line shell
+scripts (the detached OS-update runner and the NodeSource installer), and the **deferred
+reboot** — `( sleep 2 ; reboot ) &`, deliberately left for its own change, because getting a
+reboot verb wrong is the most expensive mistake available here.
 
 **Until that list is empty the grant stays `NOPASSWD:ALL` and nothing above has reduced your
 exposure.** A privilege boundary with a hole in it is not a boundary, and it would be worse

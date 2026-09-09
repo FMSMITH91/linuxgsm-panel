@@ -44,6 +44,12 @@ TOOLS = {
     "ufw": ("/usr/sbin/ufw", "/sbin/ufw", "/usr/bin/ufw"),
     "fail2ban-client": ("/usr/bin/fail2ban-client", "/bin/fail2ban-client"),
     "systemctl": ("/usr/bin/systemctl", "/bin/systemctl"),
+    "apt-get": ("/usr/bin/apt-get",),
+    "dpkg": ("/usr/bin/dpkg",),
+    "add-apt-repository": ("/usr/bin/add-apt-repository",),
+    "pgrep": ("/usr/bin/pgrep", "/bin/pgrep"),
+    "fuser": ("/usr/bin/fuser", "/bin/fuser"),
+    "reboot": ("/usr/sbin/reboot", "/sbin/reboot"),
 }
 UFW = "ufw"
 F2B = "fail2ban-client"
@@ -54,6 +60,21 @@ SYSTEMCTL = "systemctl"
 # asked it to control. sshd is here because the ssh unit is called ssh on Debian/Ubuntu and sshd
 # elsewhere, and the panel tries both.
 UNITS = ("ssh", "sshd", "fail2ban", "whoopsie", "cups", "modemmanager")
+
+APT = "apt-get"
+
+# dpkg's conflict answers, fixed here rather than passed in: keep any config file the operator has
+# edited, and take the package default for one they have not. An unattended upgrade that clobbered
+# a hand-edited sshd_config would be a very expensive surprise.
+APT_CONFOLD = ["-o", "Dpkg::Options::=--force-confdef", "-o", "Dpkg::Options::=--force-confold"]
+
+# Verbs that must run with DEBIAN_FRONTEND=noninteractive, so apt never blocks on a prompt nobody
+# can answer. Set as an environment variable on the child rather than as a `VAR=value cmd` prefix,
+# which would need a shell.
+NONINTERACTIVE = {"apt-full-upgrade", "apt-upgrade", "apt-install"}
+
+# The only extra apt sources the panel adds.
+REPOS = ("universe",)
 
 
 def resolve(prog):
@@ -111,6 +132,21 @@ def v_jail(s):
     if not re.fullmatch(r"[A-Za-z0-9_.-]{1,64}", s):
         raise ValueError("not a jail name")
     return s
+
+
+def v_package(s):
+    """A Debian package name, optionally with an architecture qualifier (gcc:i386)."""
+    if not re.fullmatch(r"[a-z0-9][a-z0-9+.-]{0,60}(?::[a-z0-9]{1,10})?", s):
+        raise ValueError("not a package name")
+    return s
+
+
+class Rest:
+    """A validator that consumes every REMAINING argument — apt-install takes a package list, and
+    the count is not known here. Each element is still checked individually."""
+
+    def __init__(self, check, minimum=1, maximum=64):
+        self.check, self.minimum, self.maximum = check, minimum, maximum
 
 
 def v_rulenum(s):
@@ -172,6 +208,32 @@ VERBS = {
     "service-disable-now": ([v_choice(*UNITS)],
                             lambda a: [SYSTEMCTL, "disable", "--now", a[0]], None),
 
+    # ── apt / dpkg ──
+    "apt-update": ([], lambda a: [APT, "update", "-qq"], None),
+    # Two upgrade shapes, because the panel really does want two. "phased" includes Ubuntu's
+    # phased rollouts so an explicit "install updates" applies everything the Check list showed;
+    # "standard" is apt's default set, used when bootstrapping a host.
+    "apt-full-upgrade": (
+        [v_choice("phased", "standard")],
+        lambda a: [APT, "full-upgrade", "-y"]
+        + (["-o", "APT::Get::Always-Include-Phased-Updates=true"] if a[0] == "phased" else [])
+        + APT_CONFOLD,
+        None),
+    "apt-upgrade": ([], lambda a: [APT, "upgrade", "-y"] + APT_CONFOLD, None),
+    "apt-autoremove": ([], lambda a: [APT, "autoremove", "-y"], None),
+    "apt-install": ([Rest(v_package)], lambda a: [APT, "install", "-y"] + a, None),
+    "apt-add-repo": ([v_choice(*REPOS)], lambda a: ["add-apt-repository", "-y", a[0]], None),
+    "dpkg-add-arch": ([v_choice("i386")], lambda a: ["dpkg", "--add-architecture", a[0]], None),
+
+    # Two process probes with FIXED patterns. pgrep takes a regex, so the pattern is written here
+    # and never comes from a caller.
+    "apt-any-running": ([], lambda a: ["pgrep", "-f", "apt-get"], None),
+    "apt-upgrade-running": (
+        [], lambda a: ["pgrep", "-f", "apt-get (upgrade|dist-upgrade|full-upgrade)"], None),
+    "dpkg-lock-held": ([], lambda a: ["fuser", "/var/lib/dpkg/lock-frontend"], None),
+
+    "reboot": ([], lambda a: ["reboot"], None),
+
     "ufw-delete-limit-port": (
         [v_portspec],
         lambda a: [UFW, "delete", "limit", a[0]],
@@ -211,6 +273,32 @@ VERBS = {
 }
 
 
+def validate(verb, args):
+    """The checked arguments for `verb`, or ValueError. Shared by main() and by the panel's unit
+    test, which compares this table's argv against privileged.py's for every verb — the two copies
+    exist so that root never imports panel code, and only a test keeps them honest."""
+    validators = VERBS[verb][0]
+    args = list(args)
+    rest = validators[-1] if validators and isinstance(validators[-1], Rest) else None
+    fixed = validators[:-1] if rest else validators
+    if rest is None:
+        if len(args) != len(fixed):
+            raise ValueError("%s takes %d argument(s), got %d" % (verb, len(fixed), len(args)))
+        checks = list(fixed)
+    else:
+        low, high = len(fixed) + rest.minimum, len(fixed) + rest.maximum
+        if not low <= len(args) <= high:
+            raise ValueError("%s takes %d..%d argument(s), got %d" % (verb, low, high, len(args)))
+        checks = list(fixed) + [rest.check] * (len(args) - len(fixed))
+    out = []
+    for i, (value, check) in enumerate(zip(args, checks)):
+        try:
+            out.append(check(value))
+        except ValueError as e:
+            raise ValueError("%s argument %d rejected (%s)" % (verb, i + 1, e))
+    return out
+
+
 def main(argv):
     if len(argv) >= 2 and argv[1] == "--list-verbs":
         for verb in sorted(VERBS):
@@ -224,25 +312,23 @@ def main(argv):
     if spec is None:
         print("panel-helper: unknown verb %r" % verb, file=sys.stderr)
         return 2
-    validators, build, stdin_text = spec
-    if len(args) != len(validators):
-        print("panel-helper: %s takes %d argument(s), got %d"
-              % (verb, len(validators), len(args)), file=sys.stderr)
+    _, build, stdin_text = spec
+    try:
+        checked = validate(verb, args)
+    except ValueError as e:
+        # The rejected value is NOT echoed back: this runs as root and its stderr is surfaced in
+        # the panel UI, so repeating attacker-controlled text here would be a reflection.
+        print("panel-helper: %s" % e, file=sys.stderr)
         return 2
-    checked = []
-    for i, (value, check) in enumerate(zip(args, validators)):
-        try:
-            checked.append(check(value))
-        except ValueError as e:
-            # The rejected value is NOT echoed back: this runs as root and its stderr is surfaced
-            # in the panel UI, so repeating attacker-controlled text here would be a reflection.
-            print("panel-helper: %s argument %d rejected (%s)" % (verb, i + 1, e), file=sys.stderr)
-            return 2
     argv = build(checked)
+    env = dict(os.environ)
+    if verb in NONINTERACTIVE:
+        env["DEBIAN_FRONTEND"] = "noninteractive"
     try:
         argv[0] = resolve(argv[0])
         p = subprocess.run(argv, shell=False,  # nosec B603 - argv is built from literals
-                           input=stdin_text, capture_output=True, text=True, timeout=120)
+                           input=stdin_text, env=env, capture_output=True, text=True,
+                           timeout=1800)
     except FileNotFoundError:
         print("panel-helper: the tool for %s is not installed" % verb, file=sys.stderr)
         return 127
