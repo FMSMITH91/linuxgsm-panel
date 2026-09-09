@@ -18,7 +18,6 @@ against the developer's own machine.
 
 Prefer tools/smoke-local.sh, which also gives the suite a throwaway data dir.
 """
-import importlib
 import os
 import runpy
 import sys
@@ -71,15 +70,16 @@ def _install():
     # `app`, which pulls it) builds the database as a side effect, which trips smoke_test's own
     # "refuse to run against an existing DB" guard and silently turns the whole run into a SKIP.
     # Neither of those two calls subprocess anyway.
-    for name in ("system_ops", "ssh_manager", "backup", "db_maintenance", "tailscale_integration"):
-        mod = sys.modules.get(name)
-        if mod is None:
-            try:
-                mod = importlib.import_module(name)
-            except Exception:
-                continue
+    # Imported by name, explicitly: the set is fixed, and a module that fails to import must be a
+    # loud error rather than a skipped shim. Skipping one silently is precisely how real sudo got
+    # through before — the run reports "0 refused" while the unshimmed module escalates for real.
+    import backup
+    import db_maintenance
+    import tailscale_integration
+
+    for mod in (system_ops, ssh_manager, backup, db_maintenance, tailscale_integration):
         if getattr(mod, "subprocess", None) is not None:
-            mod.subprocess = _shim_for(name)
+            mod.subprocess = _shim_for(mod.__name__)
     # ssh_manager keeps a SEPARATE unpatched handle for use inside eventlet's thread pool.
     if getattr(ssh_manager, "_real_subprocess", None) is not None:
         ssh_manager._real_subprocess = _shim_for("ssh_manager._real_subprocess")
@@ -87,7 +87,7 @@ def _install():
 
 def _shim_for(label):
     """A stand-in subprocess module that refuses anything invoking sudo and passes the rest on."""
-    import subprocess as _sp
+    import subprocess as _sp  # nosec B404 - this IS the subprocess wrapper; it refuses sudo
 
     class _Shim:
         def __getattr__(self, name):
@@ -96,16 +96,17 @@ def _shim_for(label):
         def run(self, cmd, *a, **kw):
             if _is_sudo(cmd):
                 BLOCKED.append(("%s.run" % label, str(cmd)[:120]))
-                return _sp.CompletedProcess(cmd, 1, "", "sudo: a password is required")
-            return _sp.run(cmd, *a, **kw)
+                return _sp.CompletedProcess(cmd, 1, "", "sudo: a password is required")  # nosemgrep
+            # Passthrough: exactly the command the app would have run unwrapped, minus sudo.
+            return _sp.run(cmd, *a, **kw)  # nosec B603  # nosemgrep
 
         def Popen(self, cmd, *a, **kw):
             if _is_sudo(cmd):
                 BLOCKED.append(("%s.Popen" % label, str(cmd)[:120]))
                 # Still hand back a real process object: callers poll/wait on it. /bin/false is
                 # the cheapest thing that exits non-zero and honours the stdout/stderr kwargs.
-                return _sp.Popen(["/bin/false"], *a, **kw)
-            return _sp.Popen(cmd, *a, **kw)
+                return _sp.Popen(["/bin/false"], *a, **kw)  # nosec B603  # nosemgrep - fixed literal
+            return _sp.Popen(cmd, *a, **kw)  # nosec B603  # nosemgrep - passthrough, see run()
 
     return _Shim()
 
@@ -141,7 +142,9 @@ def _install_egress_guard():
         if not isinstance(addr, tuple) or not addr:
             return True          # AF_UNIX and friends: not egress
         host = str(addr[0])
-        return host.startswith("127.") or host in ("::1", "localhost", "0.0.0.0", "")
+        # "0.0.0.0" is a DESTINATION here, not a bind address: connecting to it reaches this
+        # host, so it belongs with loopback in the allowlist. B104 is about binding a listener.
+        return host.startswith("127.") or host in ("::1", "localhost", "0.0.0.0", "")  # nosec B104
 
     def connect(self, addr):
         if not _local(addr):
