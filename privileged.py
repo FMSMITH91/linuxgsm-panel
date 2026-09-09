@@ -419,6 +419,19 @@ _ARGV = {
 
 
 
+def _content_grant_remote(a):
+    """The remote form of content-grant-read: usermod, then the traversal and read bits."""
+    content_user, group, gmod_user, games = a[0], a[1], a[2], a[3:]
+    parts = ["usermod -aG %s %s" % (shlex.quote(group), shlex.quote(gmod_user)),
+             # Traversal outermost-first: the home, then serverfiles. The shell form skipped
+             # serverfiles because it was created group-readable; it is created private now.
+             "chmod g+x %s" % shlex.quote(home_of(content_user)),
+             "chmod g+x %s" % shlex.quote(content_path(content_user, CONTENT_SUBDIR))]
+    parts += ["chmod -R g+rX %s" % shlex.quote(content_path(content_user, CONTENT_SUBDIR, g))
+              for g in games]
+    return "; ".join(parts)
+
+
 # Verbs the helper implements itself, with no tool to run. A REMOTE host has no helper, so each one
 # needs the shell form it has always been sent — kept here, beside the verb, so the two renderings
 # cannot drift. These are byte-identical to what the call sites used to build inline.
@@ -438,7 +451,9 @@ _REMOTE_ACTIONS = {
     # The subshell is the point: it backgrounds the sleep so this command returns and the SSH
     # connection can close before the host goes down.
     "reboot-delayed": lambda a: "( sleep 2 ; reboot ) >/dev/null 2>&1 & echo scheduled",
-    "content-dir-create": lambda a: "install -d -o %s -g %s -m 750 %s"
+    # 700, not the 750 the shell form used: the group bits are added by content-grant-read when
+    # access is actually granted, so both transports share nothing until then.
+    "content-dir-create": lambda a: "install -d -o %s -g %s -m 700 %s"
                           % (a[0], a[0], shlex.quote(content_path(a[0], CONTENT_SUBDIR))),
     "content-game-present": lambda a: "test -d %s/. && echo Y || echo N"
                             % shlex.quote(content_path(a[0], CONTENT_SUBDIR, a[1])),
@@ -453,18 +468,8 @@ _REMOTE_ACTIONS = {
                            % shlex.quote("%s-%s" % (CONTENT_CRON_PREFIX, _username(a[0]))),
     "gmod-mount-read": lambda a: "cat %s 2>/dev/null || true"
                        % shlex.quote(home_of(a[0]) + "/" + GMOD_CFG_SUBPATH + "/mount.cfg"),
-    "content-grant-read": lambda a: _content_grant_remote(a),
+    "content-grant-read": _content_grant_remote,
 }
-
-
-def _content_grant_remote(a):
-    """The remote form of content-grant-read: usermod, then the traversal and read bits."""
-    content_user, group, gmod_user, games = a[0], a[1], a[2], a[3:]
-    parts = ["usermod -aG %s %s" % (shlex.quote(group), shlex.quote(gmod_user)),
-             "chmod g+x %s" % shlex.quote(home_of(content_user))]
-    parts += ["chmod -R g+rX %s" % shlex.quote(content_path(content_user, CONTENT_SUBDIR, g))
-              for g in games]
-    return "; ".join(parts)
 
 
 def is_action(verb):

@@ -4110,6 +4110,48 @@ check("privileged: remote write round-trips content containing shell metacharact
 check("privileged: remote write targets the table's path, not a caller's",
       "/etc/fail2ban/jail.d/zz-panel-whitelist.local" in _rc)
 
+# The content box shares nothing until access is granted. The shell form created serverfiles with
+# `install -m 750`, so the group bits existed from the moment the directory did, whether or not any
+# GMod user had been granted anything. Creation is private now and the grant is what opens it.
+import getpass as _gp2
+import grp as _grp2
+import pwd as _pwd2
+import stat as _st2
+try:
+    _me2 = _gp2.getuser()
+    _mygrp2 = _grp2.getgrgid(_pwd2.getpwnam(_me2).pw_gid).gr_name
+    _cbox = _tempfile.mkdtemp(prefix="panel-content-")
+    # A fresh copy of the helper module, so redirecting its home root cannot leak into any other
+    # test — _sandboxed_helper() is defined further down, after the sshd block.
+    _spec_c = _ilu.spec_from_loader("ph_content",
+                                    _machinery.SourceFileLoader("ph_content", _helper_path))
+    _hc = _ilu.module_from_spec(_spec_c)
+    _spec_c.loader.exec_module(_hc)
+    _hc.HOME_ROOT = _cbox
+    _hc.home_of = lambda u, _r=_cbox: _r + "/" + _hc.v_username(u)
+    os.makedirs(_cbox + "/" + _me2, exist_ok=True)
+    _hc.do_content_dir_create([_me2], None)
+    _sf = _cbox + "/" + _me2 + "/serverfiles"
+    check("content box: serverfiles is created PRIVATE, not group-readable",
+          _st2.S_IMODE(os.stat(_sf).st_mode) == 0o700,
+          oct(_st2.S_IMODE(os.stat(_sf).st_mode)))
+    os.makedirs(_sf + "/cstrike/sub", exist_ok=True)
+    open(_sf + "/cstrike/plain", "w").write("x")
+    os.chmod(_sf + "/cstrike/plain", 0o600)
+    _hc.do_content_grant_read([_me2, _mygrp2, _me2, "cstrike"], None)
+    check("content box: the grant makes serverfiles traversable by the group",
+          _st2.S_IMODE(os.stat(_sf).st_mode) & _st2.S_IXGRP,
+          oct(_st2.S_IMODE(os.stat(_sf).st_mode)))
+    _pm = _st2.S_IMODE(os.stat(_sf + "/cstrike/plain").st_mode)
+    check("content box: g+rX gives a plain file g+r and NOT g+x",
+          (_pm & _st2.S_IRGRP) and not (_pm & _st2.S_IXGRP), oct(_pm))
+    _dm = _st2.S_IMODE(os.stat(_sf + "/cstrike/sub").st_mode)
+    check("content box: g+rX gives a directory both bits, because it was already u+x",
+          (_dm & _st2.S_IRGRP) and (_dm & _st2.S_IXGRP), oct(_dm))
+    _shutil.rmtree(_cbox, ignore_errors=True)
+except (KeyError, OSError) as _e:
+    check("content box: grant semantics exercised", True, "skipped: %s" % _e)
+
 # content_path() is the second line of defence and the vector tests above never reach it: they go
 # through check_args, whose per-verb validators reject a bad identifier first. So it is exercised
 # DIRECTLY here — mutation showed that removing its validation left the whole suite green.

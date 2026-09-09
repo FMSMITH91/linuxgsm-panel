@@ -656,13 +656,18 @@ REBOOT_DELAY_SECONDS = 2
 
 
 def do_content_dir_create(args, content):
-    """Create <content user>/serverfiles, owned by that user, group-traversable but not world."""
+    """Create <content user>/serverfiles, owned by that user and PRIVATE to it.
+
+    The shell form created this group-readable (`install -m 750`) whether or not any GMod user had
+    been granted access — the group bits were there from the moment the directory existed. They are
+    added by content-grant-read now, when access is actually granted, so an ungranted content box
+    shares nothing."""
     user = args[0]
     path = home_of(user) + "/" + CONTENT_SUBDIR
-    os.makedirs(path, mode=0o750, exist_ok=True)
+    os.makedirs(path, mode=stat.S_IRWXU, exist_ok=True)
     info = pwd.getpwnam(user)
     os.chown(path, info.pw_uid, info.pw_gid)
-    os.chmod(path, 0o750)
+    os.chmod(path, stat.S_IRWXU)
     return 0
 
 
@@ -705,7 +710,9 @@ def do_content_cron_write(args, content):
     fd, tmp = tempfile.mkstemp(dir=os.path.dirname(path), prefix=".panel-", suffix=".tmp")
     with os.fdopen(fd, "w") as fh:
         fh.write(content)
-    os.chmod(tmp, 0o644)          # cron.d entries are read by root; 644 matches the distro's own
+    # Root is the only thing that reads /etc/cron.d. The shell form used 644 because that is what
+    # the distro ships, but nothing here needs to be world-readable.
+    os.chmod(tmp, stat.S_IRUSR | stat.S_IWUSR)
     os.replace(tmp, path)
     return 0
 
@@ -746,11 +753,14 @@ def do_content_grant_read(args, content):
         return 2
     subprocess.run([resolve("usermod"), "-aG", group, gmod_user],  # nosec B603 - validated argv
                    shell=False, capture_output=True, timeout=60)
-    home = home_of(content_user)
-    try:
-        os.chmod(home, stat.S_IMODE(os.stat(home).st_mode) | stat.S_IXGRP)
-    except OSError:
-        pass                      # traversal bit is best-effort, as it was in the shell form
+    # Traversal, outermost first: the home, then serverfiles, then each granted game tree. The
+    # shell form skipped serverfiles because content-dir-create had already made it group-readable;
+    # it does not any more, so the grant is what opens the path.
+    for _dir in (home_of(content_user), content_path(content_user, CONTENT_SUBDIR)):
+        try:
+            os.chmod(_dir, stat.S_IMODE(os.stat(_dir).st_mode) | stat.S_IXGRP)
+        except OSError:
+            pass                  # traversal bit is best-effort, as it was in the shell form
     for game in games:
         path = content_path(content_user, CONTENT_SUBDIR, game)
         for root, dirs, files in os.walk(path):
@@ -769,6 +779,8 @@ def do_content_grant_read(args, content):
         try:
             os.chmod(path, stat.S_IMODE(os.stat(path).st_mode) | stat.S_IRGRP | stat.S_IXGRP)
         except OSError:
+            # This game's tree is missing or not ours to chmod. The shell form was per-command
+            # best-effort for the same reason, and the other granted games must still be done.
             pass
     return 0
 

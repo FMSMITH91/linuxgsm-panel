@@ -117,8 +117,10 @@ types rather than in the command names:
   sequence exists, and the rollback is exercised against a sandboxed filesystem rather than by
   inspecting the commands: a host that had no drop-in ends with none, and a host that had one gets
   it back byte for byte.
-- **The GMod shared-content box** builds every path from a validated user name plus a validated
-  game or script identifier. Three of its verbs end in `rm -rf` running as root, so the caller
+- **The GMod shared-content box** shares nothing until access is granted: `serverfiles` is created
+  private (`0700`) and the group bits are added by the grant verb, where the shell form created it
+  group-readable from the moment it existed. It builds every path from a validated user name plus a
+  validated game or script identifier. Three of its verbs end in `rm -rf` running as root, so the caller
   passes *names* and the helper assembles the paths — `content_path()` re-checks the assembled
   result, and is tested directly rather than only through the verbs, because the verbs' own
   validators would otherwise reject every probe before it got that far.
