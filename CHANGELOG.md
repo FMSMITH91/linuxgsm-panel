@@ -20,8 +20,8 @@ regardless of this file — this changelog is for humans.
   a verb and separated arguments, re-validates each one, and runs a fixed command — no shell, and
   `bash` is not a program it can reach. The `ufw`, `fail2ban-client`, `systemctl` and `apt`/`dpkg`
   families now use it, plus the log reads, user/cron management and the root-owned config writes —
-  45 verbs. Root-escalating call
-  sites that still build a shell string are down from 131 to 47, and a ratcheting test now counts
+  52 verbs, including the sshd port change and the deferred reboot. Root-escalating call
+  sites that still build a shell string are down from 131 to 39, and a ratcheting test now counts
   BOTH escalation routes (an earlier count missed `_sudo_sh`, which had 18 sites of its own). **This does not reduce your exposure yet**: the grant stays `NOPASSWD:ALL` until
   every privileged call site is converted, because a boundary with a hole in it is not a boundary.
   See SECURITY.md.

@@ -80,6 +80,14 @@ OS_UPDATE_LOG = "/run/panel-os-update.log"
 USERNAME_RE = r"[A-Za-z_][A-Za-z0-9._-]{0,31}"
 HOME_ROOT = "/home"
 
+# The sshd drop-in the panel manages, and the snapshot kept beside it during a port change. The
+# snapshot deliberately does not end in ".conf" — sshd_config.d is included as "*.conf", so a
+# "….conf.bak" sitting next to it is inert.
+SSHD_DROPIN = "/etc/ssh/sshd_config.d/99-panel-sshport.conf"
+SSHD_DROPIN_BAK = SSHD_DROPIN + ".bak"
+# fail2ban's operator-owned jail file — see tools/panel-helper.
+F2B_JAIL_LOCAL = "/etc/fail2ban/jail.local"
+
 # Root-owned files the panel writes, by NAME. The content arrives on stdin and the path is looked
 # up here — so a caller names a destination, it never supplies one. This is the whole reason the
 # write verb is safe: there is no argument that could become a path.
@@ -94,6 +102,8 @@ WRITE_TARGETS = {
     "fail2ban-panel-jail": ("/etc/fail2ban/jail.d/linuxgsm-panel.conf", 0o644),
     "node-tools-cron": ("/etc/cron.d/lgsm-node-tools", 0o644),
     "sysctl-tailscale": ("/etc/sysctl.d/99-tailscale.conf", 0o644),
+    # Added deliberately alongside the sshd verbs — see tools/panel-helper.
+    "sshd-port-dropin": (SSHD_DROPIN, 0o644),
 }
 
 
@@ -170,6 +180,17 @@ def _linecount(s):
     return str(s)
 
 
+def _portlist(s):
+    """A comma-separated port list for a fail2ban jail — see tools/panel-helper."""
+    parts = str(s).split(",")
+    if not (1 <= len(parts) <= 10):
+        raise VerbError("expected 1..10 ports")
+    for p in parts:
+        if not re.fullmatch(r"[1-9][0-9]{0,4}", p) or not (1 <= int(p) <= 65535):
+            raise VerbError("not a port list")
+    return str(s)
+
+
 def _package(s):
     if not re.fullmatch(r"[a-z0-9][a-z0-9+.-]{0,60}(?::[a-z0-9]{1,10})?", str(s)):
         raise VerbError("not a package name")
@@ -240,6 +261,15 @@ _ARGV = {
     # helper — but the path comes from this table rather than from a call site either way.
     "write-file": ([_choice(*sorted(WRITE_TARGETS))], lambda a: [], None),
 
+    # ── sshd port changes ──
+    "sshd-backup-dropin": ([], lambda a: [], None),
+    "sshd-restore-dropin": ([], lambda a: [], None),
+    "sshd-discard-backup": ([], lambda a: [], None),
+    "f2b-set-sshd-ports": ([_portlist], lambda a: [], None),
+    "sshd-validate": ([], lambda a: ["sshd", "-t"], None),
+    "listening-sockets": ([], lambda a: ["ss", "-lnt"], None),
+    "reboot-delayed": ([], lambda a: [], None),
+
     # ── cron and user accounts ──
     "crontab-list": ([_username], lambda a: ["crontab", "-u", a[0], "-l"], None),
     "user-create": ([_username], lambda a: ["useradd", "-m", "-s", "/bin/bash", a[0]], None),
@@ -294,6 +324,34 @@ _ARGV = {
 }
 
 
+
+# Verbs the helper implements itself, with no tool to run. A REMOTE host has no helper, so each one
+# needs the shell form it has always been sent — kept here, beside the verb, so the two renderings
+# cannot drift. These are byte-identical to what the call sites used to build inline.
+_REMOTE_ACTIONS = {
+    "sshd-backup-dropin": lambda a: "[ -f %s ] && cp -f %s %s || true"
+                          % (shlex.quote(SSHD_DROPIN), shlex.quote(SSHD_DROPIN),
+                             shlex.quote(SSHD_DROPIN_BAK)),
+    "sshd-restore-dropin": lambda a: "if [ -f %s ]; then mv -f %s %s; else rm -f %s; fi"
+                           % (shlex.quote(SSHD_DROPIN_BAK), shlex.quote(SSHD_DROPIN_BAK),
+                              shlex.quote(SSHD_DROPIN), shlex.quote(SSHD_DROPIN)),
+    "sshd-discard-backup": lambda a: "rm -f %s" % shlex.quote(SSHD_DROPIN_BAK),
+    "f2b-set-sshd-ports": lambda a: (
+        "if [ -f %s ]; then "
+        "sed -i '/^\\[sshd\\]/,/^\\[/{s/^port *=.*/port = %s/}' %s; "
+        "systemctl restart fail2ban 2>&1 || true; fi"
+        % (F2B_JAIL_LOCAL, a[0], F2B_JAIL_LOCAL)),
+    # The subshell is the point: it backgrounds the sleep so this command returns and the SSH
+    # connection can close before the host goes down.
+    "reboot-delayed": lambda a: "( sleep 2 ; reboot ) >/dev/null 2>&1 & echo scheduled",
+}
+
+
+def is_action(verb):
+    """True when the helper performs this verb itself rather than running a tool."""
+    return verb in _REMOTE_ACTIONS or verb == "write-file"
+
+
 def check_args(verb, args):
     """Validated arguments for `verb`, as strings. Raises VerbError on anything unexpected."""
     spec = _ARGV.get(verb)
@@ -337,6 +395,10 @@ def remote_command(verb, args, merge_stderr=True):
     Shell-quoted from the same validated argv, so the remote string is a rendering of the verb
     rather than a separately-maintained command. `2>&1` is kept because the existing callers read
     tool errors out of stdout; dropping it would silently change which stream messages land in."""
+    checked = check_args(verb, args)
+    if verb in _REMOTE_ACTIONS:
+        # No tool to run — the helper does this one itself. A remote gets the shell form.
+        return _REMOTE_ACTIONS[verb](checked)
     cmd = shlex.join(tool_argv(verb, args))
     if verb in NONINTERACTIVE:
         # The helper sets this on the child's environment; over SSH there is a shell, so the

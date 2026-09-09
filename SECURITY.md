@@ -86,9 +86,9 @@ of going unnoticed. Current state:
 
 | route | sites remaining |
 |---|---|
-| `run_command(..., sudo=True)` | 31 |
+| `run_command(..., sudo=True)` | 23 |
 | `_sudo_sh(...)` | 16 |
-| **root total** | **47** (from 131) |
+| **root total** | **39** (from 131) |
 
 Separately there are ~46 `sudo -u <gameuser>` sites. Those run as the game user rather than
 root, so they are a smaller problem — but they still depend on the same unrestricted grant,
@@ -102,8 +102,17 @@ types rather than in the command names:
   a unit-name *pattern* would only buy the ability to control units nobody asked it to.
 - The write verb takes a **destination name** and the content on **stdin**. Locally the helper
   does the write itself in Python — the content is never an argument, and the path is looked up,
-  so `write-file /etc/shadow` fails on the *name*, not on a filter. The sshd drop-in is
-  deliberately absent from that table, and a test asserts it stays absent.
+  so `write-file /etc/shadow` fails on the *name*, not on a filter.
+- **The sshd port change** is the one sequence whose failure mode is "you can no longer reach the
+  machine", so every step of it is a verb: snapshot the drop-in, write the new one, run `sshd -t`
+  against the whole config, restart, confirm the port is actually listening, and restore the
+  snapshot on any failure. A test asserts the drop-in may be written *only* while that entire
+  sequence exists, and the rollback is exercised against a sandboxed filesystem rather than by
+  inspecting the commands: a host that had no drop-in ends with none, and a host that had one gets
+  it back byte for byte.
+- **The deferred reboot** was `( sleep 2 ; reboot ) &` — a subshell, a background job and a
+  redirect. The helper double-forks instead: the grandchild detaches, waits, and execs the reboot
+  binary. It returns immediately, which is the whole reason the subshell existed.
 - The log verbs take a **source name**, never a path or a unit: `log-tail auth`, not
   `tail /var/log/auth.log`. The table turns the name into the path, so reading `/etc/shadow`
   through the helper is not something a filter rejects — it is not expressible.
@@ -113,10 +122,8 @@ types rather than in the command names:
   answers (`--force-confdef`, `--force-confold`) are fixed in the helper rather than passed
   in, so an unattended upgrade can never be talked into clobbering a config file you edited.
 
-Still to convert: the remaining file writes (the sshd drop-in and the per-user content cron) that go through `echo … | base64 -d >`, the two multi-line shell
-scripts (the detached OS-update runner and the NodeSource installer), and the **deferred
-reboot** — `( sleep 2 ; reboot ) &`, deliberately left for its own change, because getting a
-reboot verb wrong is the most expensive mistake available here.
+Still to convert: the per-user content cron that go through `echo … | base64 -d >`, and the two multi-line shell
+scripts (the detached OS-update runner and the NodeSource installer).
 
 **Until that list is empty the grant stays `NOPASSWD:ALL` and nothing above has reduced your
 exposure.** A privilege boundary with a hole in it is not a boundary, and it would be worse
