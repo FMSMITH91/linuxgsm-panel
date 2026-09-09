@@ -1361,6 +1361,10 @@ def _write_root_file(path, content):
         target = _WRITE_TARGET_BY_PATH.get(path)
         if target:
             try:
+                # Same audit rule, same answer as _run_verb above: the first argument is not a
+                # literal string because it comes from privileged.py's fixed verb table, which is
+                # the point. shell=False, and `content` is stdin rather than argv.
+                # nosemgrep: python.lang.security.audit.dangerous-subprocess-use-audit.dangerous-subprocess-use-audit
                 r = subprocess.run(  # nosec B603 - argv from privileged.py's fixed table
                     _priv.helper_argv("write-file", [target]), shell=False, input=content,
                     capture_output=True, text=True, timeout=15)
