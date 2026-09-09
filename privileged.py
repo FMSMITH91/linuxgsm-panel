@@ -87,6 +87,8 @@ SSHD_DROPIN = "/etc/ssh/sshd_config.d/99-panel-sshport.conf"
 SSHD_DROPIN_BAK = SSHD_DROPIN + ".bak"
 # fail2ban's operator-owned jail file — see tools/panel-helper.
 F2B_JAIL_LOCAL = "/etc/fail2ban/jail.local"
+# The fail2ban log family, current plus rotated — see tools/panel-helper.
+F2B_LOG_GLOB = "/var/log/fail2ban.log*"
 
 # The GMod shared-content box — see tools/panel-helper. Every path is BUILT from a validated user
 # name and identifier; three of the verbs below end in `rm -rf` as root.
@@ -164,6 +166,13 @@ def _comment(s):
     if not re.fullmatch(r"[A-Za-z0-9 _.-]{0,60}", s):
         raise VerbError("comment outside [A-Za-z0-9 _.-] or over 60 characters")
     return s
+
+
+def _logdate(s):
+    """A cutoff date for the fail2ban log read — see tools/panel-helper."""
+    if not re.fullmatch(r"\d{4}-\d{2}-\d{2}(?:[ T]\d{2}:\d{2}(?::\d{2})?)?", str(s)):
+        raise VerbError("not a log cutoff date")
+    return str(s)
 
 
 def _jail(s):
@@ -305,6 +314,7 @@ _ARGV = {
                                     lambda a: [UFW, "delete", "allow", "proto", a[0], "to", "any",
                                                "port", a[1]], None),
     # ── fail2ban ──
+    "f2b-log-lines": ([_logdate], lambda a: [], None),
     "f2b-status": ([], lambda a: [F2B, "status"], None),
     "f2b-status-jail": ([_jail], lambda a: [F2B, "status", a[0]], None),
     "f2b-unban": ([_jail, _cidr], lambda a: [F2B, "set", a[0], "unbanip", a[1]], None),
@@ -466,6 +476,12 @@ _REMOTE_ACTIONS = {
           content_path(a[0], "lgsm", "config-lgsm", a[2])])),
     "content-cron-remove": lambda a: "rm -f %s"
                            % shlex.quote("%s-%s" % (CONTENT_CRON_PREFIX, _username(a[0]))),
+    # A remote has no helper, so it keeps the zcat|awk|grep read — but only the READ half; the
+    # tallying awk is gone from both transports.
+    "f2b-log-lines": lambda a: (
+        "zcat -f %s 2>/dev/null | awk -v c=%s '$1 >= c' | "
+        "grep -E '\\[[A-Za-z0-9._-]+\\] (Ban|Found) [0-9a-fA-F:.]+'"
+        % (F2B_LOG_GLOB, shlex.quote(a[0]))),
     "gmod-mount-read": lambda a: "cat %s 2>/dev/null || true"
                        % shlex.quote(home_of(a[0]) + "/" + GMOD_CFG_SUBPATH + "/mount.cfg"),
     "content-grant-read": _content_grant_remote,

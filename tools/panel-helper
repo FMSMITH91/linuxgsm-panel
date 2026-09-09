@@ -32,7 +32,9 @@ USAGE
     panel-helper <verb> [arg ...]      exit 2 = unknown verb / bad argument, else the tool's own rc
     panel-helper --list-verbs          print the verb table (used by the panel's tests)
 """
+import glob
 import grp
+import gzip
 import ipaddress
 import os
 import pwd
@@ -129,6 +131,10 @@ SSHD_DROPIN_BAK = SSHD_DROPIN + ".bak"
 # every path this script touches is declared in one place — and so a test can point it
 # at a sandbox without rewriting the source.
 F2B_JAIL_LOCAL = "/etc/fail2ban/jail.local"
+# The fail2ban log family, current plus rotated. Fixed here — no part of it is ever
+# supplied by a caller, which is what makes reading them safe to do as root.
+F2B_LOG_GLOB = "/var/log/fail2ban.log*"
+F2B_EVENT_RE = re.compile(r"\[[A-Za-z0-9._-]+\] (?:Ban|Found) [0-9a-fA-F:.]+")
 
 # The GMod shared-content box: one user whose home holds game content that other servers mount
 # read-only. Every path below is BUILT from a validated user name and a validated game/script
@@ -218,6 +224,13 @@ def v_comment(s):
     re-checking here is the point — the helper trusts nothing it is told."""
     if not re.fullmatch(r"[A-Za-z0-9 _.-]{0,60}", s):
         raise ValueError("comment has characters outside [A-Za-z0-9 _.-] or is over 60 chars")
+    return s
+
+
+def v_logdate(s):
+    """A cutoff date the log's first field is compared against: "2026-09-02" or with a time."""
+    if not re.fullmatch(r"\d{4}-\d{2}-\d{2}(?:[ T]\d{2}:\d{2}(?::\d{2})?)?", s):
+        raise ValueError("not a log cutoff date")
     return s
 
 
@@ -385,6 +398,7 @@ VERBS = {
         lambda a: [UFW, "delete", "allow", "proto", a[0], "to", "any", "port", a[1]],
         None),
     # ── fail2ban ──
+    "f2b-log-lines": ([v_logdate], lambda a: [], None),
     "f2b-status": ([], lambda a: [F2B, "status"], None),
     "f2b-status-jail": ([v_jail], lambda a: [F2B, "status", a[0]], None),
     "f2b-unban": ([v_jail, v_cidr], lambda a: [F2B, "set", a[0], "unbanip", a[1]], None),
@@ -655,6 +669,33 @@ def do_reboot_delayed(args, content):
 REBOOT_DELAY_SECONDS = 2
 
 
+def do_f2b_log_lines(args, content):
+    """Print fail2ban Ban/Found lines at or after a cutoff date, across the rotated logs.
+
+    Replaces the read half of a `zcat -f /var/log/fail2ban.log* | awk -v c=<date> '$1 >= c' | grep
+    -oE '...'` pipeline that ran as root with the cutoff interpolated into it. The tallying half is
+    the caller's job now; this only reads and filters.
+
+    Gzip is handled here rather than by zcat, so the only thing this verb can open is the fail2ban
+    log family — the glob is fixed, and nothing about the path comes from the caller."""
+    cutoff = args[0]
+    out = []
+    for path in sorted(glob.glob(F2B_LOG_GLOB)):
+        try:
+            opener = gzip.open if path.endswith(".gz") else open
+            with opener(path, "rt", encoding="utf-8", errors="replace") as fh:
+                for line in fh:
+                    # The awk compared field one — the date — as a string, which works because the
+                    # format is ISO-ish and fixed-width. Same comparison, same reason.
+                    first = line.split(" ", 1)[0]
+                    if first >= cutoff and F2B_EVENT_RE.search(line):
+                        out.append(line.rstrip("\n"))
+        except OSError:
+            continue          # a rotated file that vanished mid-read; the others still count
+    sys.stdout.write("\n".join(out))
+    return 0
+
+
 def do_content_dir_create(args, content):
     """Create <content user>/serverfiles, owned by that user and PRIVATE to it.
 
@@ -832,6 +873,7 @@ ACTIONS = {
     "content-cron-remove": do_content_cron_remove,
     "content-grant-read": do_content_grant_read,
     "gmod-mount-read": do_gmod_mount_read,
+    "f2b-log-lines": do_f2b_log_lines,
 }
 
 

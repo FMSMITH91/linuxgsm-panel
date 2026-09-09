@@ -3833,12 +3833,10 @@ def remote_bootstrap_tailscale(server, auth_key="", enable_ssh=True, advertise_r
 
     # 1. Enable IP forwarding for subnet routing
     if advertise_routes:
-        run_command(server,
-            "echo 'net.ipv4.ip_forward = 1' > /etc/sysctl.d/99-tailscale.conf && "
-            "echo 'net.ipv6.conf.all.forwarding = 1' >> /etc/sysctl.d/99-tailscale.conf && "
-            "sysctl -p /etc/sysctl.d/99-tailscale.conf 2>&1",
-            timeout=15, sudo=True
-        )
+        write_root_file(server, "sysctl-tailscale",
+                        "net.ipv4.ip_forward = 1\nnet.ipv6.conf.all.forwarding = 1\n",
+                        timeout=15)
+        run_privileged(server, "sysctl-reload", ["tailscale"], timeout=15)
         log.append("IP forwarding enabled")
 
     # 2. Build the up command. auth_key / advertise_routes / tags are user-supplied and run

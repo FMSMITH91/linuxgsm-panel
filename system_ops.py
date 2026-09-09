@@ -477,7 +477,7 @@ def server_reboot(delay_seconds=5):
     def _do_reboot():
         import time
         time.sleep(delay_seconds)
-        _run("reboot", timeout=30, sudo=True)
+        _run_verb("reboot", [], timeout=30)
 
     thread = threading.Thread(target=_do_reboot, daemon=True)
     thread.start()
@@ -1502,6 +1502,35 @@ def ufw_undeny_ip(ip):
     return True, "Unblocked %s." % ip
 
 
+_F2B_EVENT_RE = re.compile(r"\[([A-Za-z0-9._-]+)\] (Ban|Found) ([0-9a-fA-F:.]+)")
+
+
+def _tally_f2b_lines(text, limit):
+    """Tally Ban/Found events per IP from raw fail2ban log lines.
+
+    This is what the awk half of _F2B_TOP_PIPELINE did: for each `[jail] Ban|Found <ip>` match,
+    count Founds and Bans per IP and collect the distinct jails, then rank by attempts and take the
+    top `limit`. Emitted in the same tab-separated shape _parse_top_ips already reads."""
+    found, bans, jails = {}, {}, {}
+    for line in (text or "").splitlines():
+        m = _F2B_EVENT_RE.search(line)
+        if not m:
+            continue
+        jail, action, ip = m.group(1), m.group(2), m.group(3)
+        if action == "Found":
+            found[ip] = found.get(ip, 0) + 1
+        else:
+            bans[ip] = bans.get(ip, 0) + 1
+        seen = jails.setdefault(ip, [])
+        if jail not in seen:
+            seen.append(jail)
+    rows = sorted(found.keys() | bans.keys(),
+                  key=lambda ip: (found.get(ip, 0), bans.get(ip, 0)), reverse=True)
+    return "\n".join("%d\t%d\t%s\t%s" % (found.get(ip, 0), bans.get(ip, 0), ip,
+                                           ",".join(jails.get(ip, [])))
+                     for ip in rows[:max(1, int(limit))])
+
+
 def _parse_top_ips(out, banned_now, blocked):
     rows = []
     for line in (out or "").splitlines():
@@ -1531,7 +1560,11 @@ def fail2ban_top_ips(limit=20, days=7):
     except (TypeError, ValueError):
         days = 7
     cutoff = (datetime.now() - timedelta(days=days)).strftime("%Y-%m-%d")
-    out, _, _ = _run(_F2B_TOP_PIPELINE % (cutoff, limit), timeout=25, sudo=True)
+    # Was a five-stage zcat|awk|grep|awk|sort|head pipeline running as root, with the cutoff date
+    # and the limit interpolated into it. The verb reads the rotated logs and returns the lines;
+    # everything the awk did — filter by date, extract Ban/Found, tally per IP — is Python now.
+    out, _, _ = _run_verb("f2b-log-lines", [cutoff], timeout=25, merge_stderr=False)
+    out = _tally_f2b_lines(out, limit)
     banned_now = set()
     try:
         for j in fail2ban_overview().get("jails", []):

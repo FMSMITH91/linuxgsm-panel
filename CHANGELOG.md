@@ -26,9 +26,9 @@ regardless of this file — this changelog is for humans.
   a verb and separated arguments, re-validates each one, and runs a fixed command — no shell, and
   `bash` is not a program it can reach. The `ufw`, `fail2ban-client`, `systemctl` and `apt`/`dpkg`
   families now use it, plus the log reads, user/cron management and the root-owned config writes —
-  68 verbs, including the sshd port change, the deferred reboot, Ubuntu Pro, the host controls and
-  the GMod shared-content box. Root-escalating call
-  sites that still build a shell string are down from 131 to 18, and a ratcheting test now counts
+  69 verbs, including the sshd port change, the deferred reboot, Ubuntu Pro, the host controls, the
+  GMod shared-content box and the fail2ban activity report. Root-escalating call
+  sites that still build a shell string are down from 131 to 15, and a ratcheting test now counts
   BOTH escalation routes (an earlier count missed `_sudo_sh`, which had 18 sites of its own). **This does not reduce your exposure yet**: the grant stays `NOPASSWD:ALL` until
   every privileged call site is converted, because a boundary with a hole in it is not a boundary.
   See SECURITY.md.

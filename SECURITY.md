@@ -86,9 +86,9 @@ of going unnoticed. Current state:
 
 | route | sites remaining |
 |---|---|
-| `run_command(..., sudo=True)` | 17 |
+| `run_command(..., sudo=True)` | 14 |
 | `_sudo_sh(...)` | 1 |
-| **root total** | **18** (from 131) |
+| **root total** | **15** (from 131) |
 
 (Those counts exclude six calls that ARE the verb layer's own transport — the `run_command` /
 `_run_local` / `_run` at the end of `run_privileged`, `write_root_file`, `write_content_cron` and
@@ -124,6 +124,10 @@ types rather than in the command names:
   passes *names* and the helper assembles the paths — `content_path()` re-checks the assembled
   result, and is tested directly rather than only through the verbs, because the verbs' own
   validators would otherwise reject every probe before it got that far.
+- **The fail2ban top-IPs report** was a five-stage `zcat | awk | grep | awk | sort | head` running
+  as root, with the cutoff date and the row limit interpolated into it. The verb does the read half
+  only — a fixed log glob, gzip handled in Python — and the tallying is Python. Both halves are
+  asserted against real plain and gzipped logs rather than by comparing command strings.
 - **The deferred reboot** was `( sleep 2 ; reboot ) &` — a subshell, a background job and a
   redirect. The helper double-forks instead: the grandchild detaches, waits, and execs the reboot
   binary. It returns immediately, which is the whole reason the subshell existed.
