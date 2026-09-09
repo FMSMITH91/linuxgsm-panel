@@ -86,9 +86,15 @@ of going unnoticed. Current state:
 
 | route | sites remaining |
 |---|---|
-| `run_command(..., sudo=True)` | 23 |
-| `_sudo_sh(...)` | 16 |
-| **root total** | **39** (from 131) |
+| `run_command(..., sudo=True)` | 17 |
+| `_sudo_sh(...)` | 9 |
+| **root total** | **26** (from 131) |
+
+(Those counts exclude four calls that ARE the verb layer's own transport — the `run_command` /
+`_run_local` / `_run` at the end of `run_privileged`, `write_root_file` and `_run_verb`, which pass
+a command built from the verb table rather than composed at a call site. Earlier revisions counted
+them, overstating the remaining work by four. A test pins the exclusion at exactly those four, so
+it cannot quietly widen and make the number flattering.)
 
 Separately there are ~46 `sudo -u <gameuser>` sites. Those run as the game user rather than
 root, so they are a smaller problem — but they still depend on the same unrestricted grant,
@@ -122,7 +128,7 @@ types rather than in the command names:
   answers (`--force-confdef`, `--force-confold`) are fixed in the helper rather than passed
   in, so an unattended upgrade can never be talked into clobbering a config file you edited.
 
-Still to convert: the per-user content cron that go through `echo … | base64 -d >`, and the two multi-line shell
+Still to convert: Ubuntu Pro's remaining plumbing, the per-user content cron that go through `echo … | base64 -d >`, and the two multi-line shell
 scripts (the detached OS-update runner and the NodeSource installer).
 
 **Until that list is empty the grant stays `NOPASSWD:ALL` and nothing above has reduced your

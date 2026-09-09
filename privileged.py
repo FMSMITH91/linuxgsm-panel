@@ -88,6 +88,12 @@ SSHD_DROPIN_BAK = SSHD_DROPIN + ".bak"
 # fail2ban's operator-owned jail file — see tools/panel-helper.
 F2B_JAIL_LOCAL = "/etc/fail2ban/jail.local"
 
+# Ubuntu Pro services the panel offers. `pro` will happily take any service name; this is the set
+# the UI actually exposes, so it is the set the helper accepts.
+PRO_SERVICES = ("esm-infra", "esm-apps", "livepatch", "fips", "fips-updates", "fips-preview",
+                "cis", "usg", "realtime-kernel", "landscape", "anbox-cloud", "ros", "ros-updates")
+
+
 # Root-owned files the panel writes, by NAME. The content arrives on stdin and the path is looked
 # up here — so a caller names a destination, it never supplies one. This is the whole reason the
 # write verb is safe: there is no argument that could become a path.
@@ -191,6 +197,36 @@ def _portlist(s):
     return str(s)
 
 
+def _nice(s):
+    """A nice value. renice's range is -20..19; anything else is a typo or an attempt."""
+    if not re.fullmatch(r"-?(?:[0-9]|1[0-9]|20)", s) or not (-20 <= int(s) <= 19):
+        raise VerbError("not a nice value in -20..19")
+    return s
+
+
+def _timezone(s):
+    """An IANA timezone name: Etc/UTC, America/Chicago, America/Argentina/Buenos_Aires."""
+    if not re.fullmatch(r"[A-Za-z][A-Za-z0-9_+-]{0,29}(?:/[A-Za-z0-9_+-]{1,30}){0,2}", s):
+        raise VerbError("not a timezone name")
+    return s
+
+
+def _pro_token(s):
+    """An Ubuntu Pro subscription token. Charset-checked only — its VALUE is a secret, so it is
+    never echoed back in an error, and callers redact it from any output they log."""
+    if not re.fullmatch(r"[A-Za-z0-9]{16,64}", s):
+        raise VerbError("not a subscription token")
+    return s
+
+
+def _dfpath(s):
+    """A filesystem path to ask df about. Absolute, no traversal, no metacharacters — and it is
+    only ever used as df's argument, which reads nothing but the mount table."""
+    if not re.fullmatch(r"/[A-Za-z0-9._/-]{0,120}", s) or ".." in s:
+        raise VerbError("not a path df may be asked about")
+    return s
+
+
 def _package(s):
     if not re.fullmatch(r"[a-z0-9][a-z0-9+.-]{0,60}(?::[a-z0-9]{1,10})?", str(s)):
         raise VerbError("not a package name")
@@ -260,6 +296,23 @@ _ARGV = {
     # does the write itself; remotely it is still `base64 -d > path`, because a remote host has no
     # helper — but the path comes from this table rather than from a call site either way.
     "write-file": ([_choice(*sorted(WRITE_TARGETS))], lambda a: [], None),
+
+    # ── Ubuntu Pro ──
+    "pro-status": ([], lambda a: ["pro", "status", "--format", "json"], None),
+    "pro-attach": ([_pro_token], lambda a: ["pro", "attach", a[0]], None),
+    "pro-service": ([_choice("enable", "disable"), _choice(*PRO_SERVICES)],
+                    lambda a: ["pro", a[0], a[1], "--assume-yes"], None),
+    "pro-detach": ([], lambda a: ["pro", "detach", "--assume-yes"], None),
+
+    # ── misc host controls ──
+    # renice takes a LIST of users, so the game servers can all be re-niced in one call.
+    "renice-users": ([_nice, Rest(_username)],
+                     lambda a: ["renice", "-n", a[0], "-u"] + a[1:], None),
+    "set-timezone": ([_timezone], lambda a: ["timedatectl", "set-timezone", a[0]], None),
+    # Both of these used to end in `| awk '…'` running as root. The verb returns the raw output and
+    # the panel parses it, so no awk program is built from anything.
+    "sshd-effective-config": ([], lambda a: ["sshd", "-T"], None),
+    "disk-free": ([_dfpath], lambda a: ["df", "-PB1", a[0]], None),
 
     # ── sshd port changes ──
     "sshd-backup-dropin": ([], lambda a: [], None),

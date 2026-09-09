@@ -770,15 +770,22 @@ try:
 finally:
     sm.run_command = _orig_un_rc
 # free disk on the content filesystem (shown on the card so nobody starts a 13GB install without room)
-_orig_df_rc = sm.run_command
+_orig_df_rp = sm.run_privileged
 try:
-    sm.run_command = lambda s, c, **k: ("500107862016 123456789012", "", 0)   # df awk: total free
-    eq("path_disk_free: parses (free, total) from df",
+    # The fixture is now REAL `df -PB1` output, header and all, because the awk that used to
+    # reduce it to two fields (under root) is gone and the parsing happens in Python. That makes
+    # this a stronger test than it was: it exercises the column indices, not awk's answer.
+    _DF_OUT = ("Filesystem       1B-blocks         Used    Available Use% Mounted on\n"
+               "/dev/sda1     500107862016 376651072004 123456789012  76% /home\n")
+    sm.run_privileged = lambda s, v, a=(), **k: (_DF_OUT, "", 0)
+    eq("path_disk_free: parses (free, total) from real df output",
        sm.path_disk_free(object(), "/home/gmodcontent/serverfiles"), (123456789012, 500107862016))
-    sm.run_command = lambda s, c, **k: ("garbage", "", 0)
+    sm.run_privileged = lambda s, v, a=(), **k: ("garbage", "", 0)
     eq("path_disk_free: junk output -> (None, None)", sm.path_disk_free(object(), "/home"), (None, None))
+    sm.run_privileged = lambda s, v, a=(), **k: ("", "", 0)
+    eq("path_disk_free: empty output -> (None, None)", sm.path_disk_free(object(), "/home"), (None, None))
 finally:
-    sm.run_command = _orig_df_rc
+    sm.run_privileged = _orig_df_rp
 # gmod_current_mounts: parse a real mount.cfg, keep only known games, ignore the header + unknowns.
 _orig_gm_rc2 = sm.run_command
 try:
@@ -1973,22 +1980,24 @@ finally:
     sm._specs_cache.clear()
 
 # ── set_game_priority renices the game user's processes as ROOT (negative nice needs root) ──
-_gp_cmds = []
-_orig_gp = sm.run_command
+_gp_calls = []
+_orig_gp = sm.run_privileged
 try:
-    sm.run_command = lambda s, c, **k: (_gp_cmds.append(c), ("", "", 0))[1]
+    # Asserts the VERB and its arguments now, not a "sudo bash -c" substring. Same guarantee, and
+    # it no longer passes just because the string happened to contain the right words.
+    sm.run_privileged = lambda s, v, a=(), **k: (_gp_calls.append((v, list(a))), ("", "", 0))[1]
     sm.set_game_priority(None, "codserver")
-    check("set_game_priority: renices the game user via sudo (root)",
-          any("renice -n -1 -u codserver" in c and "sudo bash -c" in c for c in _gp_cmds))
-    _gp_cmds.clear()
+    check("set_game_priority: renices the game user as root, via the verb",
+          _gp_calls == [("renice-users", ["-1", "codserver"])], str(_gp_calls))
+    _gp_calls.clear()
     sm.set_game_priority_bulk(None, ["codserver", "gmodserver"])
-    check("set_game_priority_bulk: renices every game user in one sudo renice (keeper for cron restarts)",
-          any("renice -n -1 -u codserver gmodserver" in c and "sudo bash -c" in c for c in _gp_cmds))
-    _gp_cmds.clear()
+    check("set_game_priority_bulk: renices every game user in ONE call (keeper for cron restarts)",
+          _gp_calls == [("renice-users", ["-1", "codserver", "gmodserver"])], str(_gp_calls))
+    _gp_calls.clear()
     sm.set_game_priority_bulk(None, [])
-    check("set_game_priority_bulk: no users -> no command", _gp_cmds == [])
+    check("set_game_priority_bulk: no users -> no call", _gp_calls == [])
 finally:
-    sm.run_command = _orig_gp
+    sm.run_privileged = _orig_gp
 
 # ── remote_uptime is ONE ssh round-trip (was eight) + parses the composite output + caches ──
 _orig_ru = sm.run_command
@@ -3801,6 +3810,14 @@ _VERB_SAMPLES = {
     "listening-sockets": [],
     "f2b-set-sshd-ports": ["2222,22"],
     "reboot-delayed": [],
+    "pro-status": [],
+    "pro-attach": ["A1b2C3d4E5f6G7h8"],
+    "pro-service": ["enable", "esm-infra"],
+    "pro-detach": [],
+    "renice-users": ["-1", "codserver"],
+    "set-timezone": ["America/Chicago"],
+    "sshd-effective-config": [],
+    "disk-free": ["/home"],
 }
 check("privileged: every verb has a sample (new verbs cannot skip the parity check)",
       set(_VERB_SAMPLES) == set(_priv.verbs()),
@@ -3828,10 +3845,10 @@ check("privileged: helper and panel build an identical argv for every verb",
 # would be decorative.
 check("helper: resolves ufw", _helper.resolve("ufw").endswith("/ufw") if os.path.exists("/usr/sbin/ufw") else True)
 check("helper: knows exactly the tools its verbs need, and no more",
-      sorted(_helper.TOOLS) == ["add-apt-repository", "apt-get", "crontab", "dpkg",
+      sorted(_helper.TOOLS) == ["add-apt-repository", "apt-get", "crontab", "df", "dpkg",
                                 "fail2ban-client", "fuser", "journalctl", "passwd", "pgrep",
-                                "pkill", "reboot", "rm", "ss", "sshd", "sysctl", "systemctl",
-                                "tail", "ufw", "useradd", "userdel"],
+                                "pkill", "pro", "reboot", "renice", "rm", "ss", "sshd", "sysctl",
+                                "systemctl", "tail", "timedatectl", "ufw", "useradd", "userdel"],
       sorted(_helper.TOOLS))
 for _prog in ("bash", "sh", "python3", "env"):
     check("helper: refuses to resolve %s" % _prog, _ufw_raises_fnf(_helper.resolve, _prog))
@@ -3865,6 +3882,10 @@ _BAD = {
     "write-file": ["/etc/shadow", "/etc/passwd", "../../etc/shadow", "fail2ban-jail-local; id", ""],
     "sysctl-reload": ["../../etc", "tailscale; id", ""],
     "f2b-set-sshd-ports": ["22; id", "0", "99999", "a,b", "", "1,2,3,4,5,6,7,8,9,10,11"],
+    "set-timezone": ["../../etc/passwd", "UTC; id", "$(id)", "", "A" * 40],
+    "disk-free": ["relative", "/home/../etc", "/home; id", "", "/home/$(id)"],
+    "pro-attach": ["short", "tok en", "tok;id", ""],
+    "renice-users": ["-99", "20", "abc", ""],
 }
 _leaked = []
 for _v, _bads in _BAD.items():
@@ -3878,6 +3899,31 @@ for _v, _bads in _BAD.items():
             pass
 check("privileged: injection and out-of-range arguments are refused, not quoted",
       not _leaked, "; ".join(_leaked[:3]))
+
+# _BAD above only ever puts the bad value in argument ONE, which silently leaves later arguments
+# untested: widening PRO_SERVICES to accept any string passed the whole suite, because
+# pro-service's first argument is the action and its own _choice rejected the probe first. These
+# are full argument vectors, so a validator in any position is actually exercised.
+_BAD_VECTORS = [
+    ("pro-service", ["enable", "nginx"]),
+    ("pro-service", ["enable", "esm-infra; id"]),
+    ("pro-service", ["enable", ""]),
+    ("pro-service", ["restart", "esm-infra"]),
+    ("renice-users", ["-1", "root; id"]),
+    ("renice-users", ["-1", "-oProxyCommand=x"]),
+    ("renice-users", ["-1", "codserver", "bad;user"]),
+    ("ufw-allow-port", ["27015", "comment; id"]),
+    ("ufw-deny-ip", ["203.0.113.5", "tag$(id)"]),
+    ("f2b-unban", ["sshd", "not-an-ip"]),
+    ("ufw-allow-proto-port", ["tcp", "22", "a;b"]),
+    ("ufw-default", ["allow", "sideways"]),
+    ("apt-install", ["curl", "--reinstall"]),
+    ("write-file", ["/etc/shadow"]),
+]
+_leaked2 = ["%s %r" % (v, a) for v, a in _BAD_VECTORS
+            if not _ufw_raises_verb(lambda v=v, a=a: _priv.check_args(v, a))]
+check("privileged: a bad argument is refused wherever it sits in the vector, not just first",
+      not _leaked2, "; ".join(_leaked2[:3]))
 
 # Arguments stay ARGUMENTS. The local transport never produces a string for a shell to parse, so a
 # metacharacter is inert rather than escaped-and-hoped-for.
@@ -4251,7 +4297,24 @@ import ast as _ast
 
 _ESCALATION_FILES = ["app.py", "auth.py", "ssh_manager.py", "system_ops.py", "notifications.py",
                      "backup.py", "db_maintenance.py", "tailscale_integration.py", "manage.py"]
-_CEILING = {"sudo=True": 23, "_sudo_sh": 16}   # measured at the time of writing; lower only
+_CEILING = {"sudo=True": 17, "_sudo_sh": 9}   # measured at the time of writing; lower only
+
+def _is_dispatch(call):
+    """True when this escalation IS the verb layer's transport rather than a call site.
+
+    run_privileged(), write_root_file() and _run_verb() each end in a run_command/_run_local/_run
+    with sudo=True, passing a command built by privileged.py. Counting those as "call sites still
+    composing a shell string" overstates the work left by four — the number below is quoted in
+    SECURITY.md, so it should mean what it says."""
+    for _arg in list(call.args) + [k.value for k in call.keywords]:
+        for _sub in _ast.walk(_arg):
+            if (isinstance(_sub, _ast.Call)
+                    and isinstance(_sub.func, _ast.Attribute)
+                    and getattr(_sub.func.value, "id", "") == "_priv"
+                    and _sub.func.attr in ("remote_command", "remote_write_command")):
+                return True
+    return False
+
 
 _census = {"sudo=True": 0, "_sudo_sh": 0}
 for _f in _ESCALATION_FILES:
@@ -4262,8 +4325,27 @@ for _f in _ESCALATION_FILES:
         if getattr(_n.func, "attr", getattr(_n.func, "id", "")) == "_sudo_sh":
             _census["_sudo_sh"] += 1
         for _k in _n.keywords:
-            if _k.arg == "sudo" and isinstance(_k.value, _ast.Constant) and _k.value.value is True:
+            if (_k.arg == "sudo" and isinstance(_k.value, _ast.Constant)
+                    and _k.value.value is True and not _is_dispatch(_n)):
                 _census["sudo=True"] += 1
+
+# The exclusion above could go over-broad and quietly shrink the number the ratchet guards — a
+# _is_dispatch() that returned True for everything would report zero remaining work and still pass.
+# So count what it excludes and pin that: there are exactly four transports (run_privileged and
+# write_root_file in ssh_manager, twice each for the helper-present and no-helper paths, plus
+# _run_verb in system_ops). Raise this only when the verb layer genuinely gains another one.
+_excluded = 0
+for _f in _ESCALATION_FILES:
+    _tree = _ast.parse(open(os.path.join(_root, _f), encoding="utf-8").read())
+    for _n in _ast.walk(_tree):
+        if not isinstance(_n, _ast.Call):
+            continue
+        for _k in _n.keywords:
+            if (_k.arg == "sudo" and isinstance(_k.value, _ast.Constant)
+                    and _k.value.value is True and _is_dispatch(_n)):
+                _excluded += 1
+check("escalation census: the dispatcher exclusion covers exactly the 4 known transports",
+      _excluded == 4, "excluded %d" % _excluded)
 
 for _kind, _limit in _CEILING.items():
     check("escalation census: %s sites <= %d (currently %d) — ratchet, never raise"
