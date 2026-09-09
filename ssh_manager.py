@@ -4670,8 +4670,57 @@ def write_file(server, user, relpath, content):
     return _write_file_as_user(server, user, ap, (content or "").encode())
 
 
-def upload_file(server, user, reldir, filename, data_bytes):
-    """Upload a file into a directory in the game user's home."""
+# upload_file returns this as its message when the target exists and overwrite wasn't granted.
+# A sentinel rather than prose so the route can answer with a machine-readable conflict instead of
+# the UI having to pattern-match an error string.
+UPLOAD_EXISTS = "__EXISTS__"
+
+
+def stat_upload_targets(server, user, reldir, names):
+    """For each requested filename, the existing entry's size + mtime — omitted if the name is free.
+
+    Lists the directory ONCE and filters locally rather than stat-ing each name: the names come
+    straight from a browser file picker, so this keeps them out of the remote shell command
+    entirely. Returns None on a path-traversal attempt, matching browse_dir.
+    """
+    apdir = _safe_abspath(user, reldir)
+    if apdir is None:
+        return None
+    inner = (f"find {_quote(apdir)} -maxdepth 1 -mindepth 1 "
+             f"-printf '%y\\t%s\\t%T@\\t%f\\n' 2>/dev/null")
+    out, _, _ = run_command(server, f"sudo -u {user} bash -c {_quote(inner)}", timeout=20, sudo=False)
+    present = {}
+    for line in (out or "").splitlines():
+        parts = line.split("\t")
+        if len(parts) < 4:
+            continue
+        typ, size, mtime = parts[0], parts[1], parts[2]
+        # Name last and re-joined: a filename may legitimately contain a tab.
+        nm = "\t".join(parts[3:])
+        try:
+            mt = int(float(mtime))
+        except (TypeError, ValueError):
+            mt = 0
+        present[nm] = {"is_dir": typ == "d",
+                       "size": int(size) if size.isdigit() else 0, "mtime": mt}
+    hits = []
+    seen = set()
+    for n in (names or []):
+        # Same normalisation upload_file applies, so the check and the write agree on the name.
+        base = _pp.basename(str(n or "").replace("\x00", ""))
+        if base and base not in seen and base in present:
+            seen.add(base)
+            hits.append(dict(present[base], name=base))
+    return hits
+
+
+def upload_file(server, user, reldir, filename, data_bytes, overwrite=True):
+    """Upload a file into a directory in the game user's home.
+
+    overwrite=False refuses when the target already exists, returning UPLOAD_EXISTS. The UI asks
+    first, but the check and the write are two round trips — without a server-side refusal a file
+    created in between is silently clobbered, and a caller that never checks never asks at all.
+    """
     apdir = _safe_abspath(user, reldir)
     if apdir is None:
         return False, "Invalid path"
@@ -4681,6 +4730,12 @@ def upload_file(server, user, reldir, filename, data_bytes):
     target = _pp.join(apdir, fn)
     if not (target.startswith(f"/home/{user}/")):
         return False, "Invalid path"
+    if not overwrite:
+        chk = f"test -e {_quote(target)} && echo __YES__ || true"
+        out, _, _ = run_command(server, f"sudo -u {user} bash -c {_quote(chk)}",
+                                timeout=15, sudo=False)
+        if "__YES__" in (out or ""):
+            return False, UPLOAD_EXISTS
     return _write_file_as_user(server, user, target, data_bytes)
 
 

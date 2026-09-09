@@ -254,6 +254,9 @@ function checkUpdates(){
   var el=document.getElementById('update-info'); el.textContent='Checking…';
   fetch(MOUNT+'/api/remote/'+REMOTE_ID+'/check-updates').then(r=>r.json())
     .then(d=>{
+      // ok===false means apt itself could not run, which looks exactly like a clean host from
+      // the package list alone. Saying "up to date" there is a lie the user acts on.
+      if(d.ok===false){ el.textContent='Could not check for updates — apt was busy or unreachable. Try again shortly.'; return; }
       var n=d.count||0, pkgs=d.packages||[];
       if(!n){ el.textContent='System is up to date.'; return; }
       var head='<div class="mb-1 text-secondary">'+n+' update'+(n===1?'':'s')+' available:</div>';

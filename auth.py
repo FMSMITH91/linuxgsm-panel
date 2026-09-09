@@ -1,6 +1,8 @@
 """Authentication and permission management."""
+import hmac
 import secrets
 import threading
+import time
 from datetime import datetime
 from functools import wraps
 
@@ -147,6 +149,33 @@ def verify_totp(secret, code):
         return pyotp.TOTP(secret).verify(str(code).strip().replace(" ", ""), valid_window=1)
     except Exception:
         return False
+
+
+def verify_totp_step(secret, code):
+    """The TOTP timestep `code` matches for `secret` (this step, or one either side for clock
+    skew) — or None if it matches none of them.
+
+    verify_totp() answers only yes/no, which is not enough to stop a replay: the same code stays
+    valid for ~90 seconds, so a code observed once (a phishing proxy, a shoulder-surf, a leaked
+    log) works again for the rest of its window. Returning WHICH step matched gives the caller
+    something to record, so it can refuse a step it has already accepted.
+
+    compare_digest rather than ==: the comparison is against a freshly derived code, so a timing
+    difference here leaks digits of a code that is still live."""
+    import pyotp
+    entered = str(code or "").strip().replace(" ", "")
+    if not secret or not entered:
+        return None
+    try:
+        totp = pyotp.TOTP(secret)
+        now = int(time.time())
+        for delta in (0, -1, 1):
+            t = now + delta * totp.interval
+            if hmac.compare_digest(str(totp.at(t)), entered):
+                return t // totp.interval
+    except Exception:
+        return None
+    return None
 
 
 def get_user_permissions(user):
