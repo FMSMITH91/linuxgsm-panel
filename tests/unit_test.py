@@ -3117,7 +3117,7 @@ _fake_ws = _FakeWS([
     '{"op":10,"d":{"heartbeat_interval":600000}}',
     '{"op":0,"s":1,"t":"MESSAGE_CREATE","d":{"channel_id":"999","author":{"bot":false},"content":"!status"}}',
 ])
-N.discord_gateway_run("A" * 50, lambda ch, is_bot, content: _dc_seen.append((ch, is_bot, content)),
+N.discord_gateway_run("A" * 50, lambda ch, is_bot, content, author=None: _dc_seen.append((ch, is_bot, content)),
                       _connect=lambda: _fake_ws)
 check("discord: the gateway IDENTIFYs with the message-content intent",
       any('"op": 2' in s and str(N._DISCORD_INTENTS) in s for s in _fake_ws.sent))
@@ -3564,6 +3564,19 @@ _EXPECTED_PY = {"22.04": "3.10", "24.04": "3.12", "26.04": "3.14"}
 _wrong = sorted("%s->py%s (ships %s)" % (r, py, _EXPECTED_PY[r])
                 for r, py in _ci_pairs if r in _EXPECTED_PY and _EXPECTED_PY[r] != py)
 check("supported releases: each is tested on the Python that release ships", not _wrong, str(_wrong))
+
+
+# A chat-bot command can stop a game server or update the panel. Every one used to be recorded
+# with actor=None — i.e. "system" — so the audit log showed the effect and nothing about the
+# cause. The origin string is what makes a bot-initiated action attributable.
+from app import _bot_origin
+eq("bot origin: telegram sender by username", _bot_origin("telegram", {"username": "fred", "id": 7}), "telegram:fred")
+eq("bot origin: falls back to the numeric id", _bot_origin("telegram", {"id": 4242}), "telegram:4242")
+eq("bot origin: discord is labelled as discord", _bot_origin("discord", {"username": "ann"}), "discord:ann")
+eq("bot origin: an absent sender is still recorded, not blank",
+   _bot_origin("telegram", None), "telegram:unknown")
+check("bot origin: capped so a hostile display name can't flood the audit column",
+      len(_bot_origin("discord", {"username": "x" * 500})) <= 64)
 
 
 passed = sum(1 for ok, _, _ in results if ok)

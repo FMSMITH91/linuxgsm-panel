@@ -360,7 +360,7 @@ def discord_bot_send(bot_token, channel_id, text):
 
 def discord_gateway_run(bot_token, on_message, _connect=None):
     """Open ONE Discord Gateway session and pump MESSAGE_CREATE events to `on_message(channel_id,
-    author_is_bot, content)` until the socket drops; then return so the caller can reconnect after a
+    author_is_bot, content, author)` until the socket drops; then return so the caller can reconnect after a
     backoff. A fresh IDENTIFY each time (no RESUME) means anything sent while we were down is skipped —
     the same 'no backlog replay' the Telegram poller gets, so the /update that restarted us is never
     re-run. Degrades to a no-op (logged) if websocket-client isn't installed. Never raises.
@@ -429,7 +429,11 @@ def discord_gateway_run(bot_token, on_message, _connect=None):
                 d = data.get("d") or {}
                 author = d.get("author") or {}
                 try:
-                    on_message(str(d.get("channel_id") or ""), bool(author.get("bot")), d.get("content") or "")
+                    # `author` is passed through, not just its bot flag: a command that stops a
+                    # game server or updates the panel needs to be attributable to whoever sent it,
+                    # and the audit log had no way to record that.
+                    on_message(str(d.get("channel_id") or ""), bool(author.get("bot")),
+                               d.get("content") or "", author)
                 except Exception:
                     _log.debug("discord on_message handler failed", exc_info=True)
     except Exception:
