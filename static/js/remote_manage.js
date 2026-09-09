@@ -174,7 +174,10 @@ function loadSecurityLog(which, jail){
 (function(){
   var nav = document.getElementById('mtab-nav'); if(!nav) return;
   var TABS = ['overview','controls','maintenance','security'];
-  var CARD_TAB = {updates:'maintenance', backups:'maintenance', diagnostics:'maintenance'};
+  // 'updates' is the PANEL's self-update card; 'os-updates' is the host's apt packages — the login
+  // banner links straight at the latter.
+  var CARD_TAB = {updates:'maintenance', backups:'maintenance', diagnostics:'maintenance',
+                  'os-updates':'controls'};
   var _secLoaded = false;
   function show(tab){
     document.querySelectorAll('[data-mtab]').forEach(function(el){
@@ -189,10 +192,16 @@ function loadSecurityLog(which, jail){
   nav.addEventListener('click', function(e){
     var b = e.target.closest('[data-mtab-btn]'); if(b) show(b.getAttribute('data-mtab-btn'));
   });
-  var h = (location.hash || '').replace('#','');
-  if (TABS.indexOf(h) >= 0) { show(h); }
-  else if (CARD_TAB[h]) { show(CARD_TAB[h]); var el = document.getElementById(h); if(el) el.scrollIntoView(); }
-  else { show('overview'); }
+  function openHash(fallback){
+    var h = (location.hash || '').replace('#','');
+    if (TABS.indexOf(h) >= 0) { show(h); }
+    else if (CARD_TAB[h]) { show(CARD_TAB[h]); var el = document.getElementById(h); if(el) el.scrollIntoView(); }
+    else if (fallback) { show('overview'); }
+  }
+  openHash(true);
+  // Following a #card link while ALREADY on this page changes the hash without reloading, so the
+  // banner's link would otherwise do nothing for the host you happen to be looking at.
+  window.addEventListener('hashchange', function(){ openHash(false); });
   // Added as an "existing" remote → land on Host Controls and auto-run the LinuxGSM scan.
   try {
     if (new URLSearchParams(location.search).get('scan') === '1') {
@@ -250,26 +259,59 @@ function pollLive(){
     document.getElementById('disk-detail').textContent=d.disk_total?(fmtGB(d.disk_used||0)+' / '+fmtGB(d.disk_total)+' used'):'—';
   }).catch(function(){});
 }
+function isSecurityPkg(p){ return ((p.suite||'').indexOf('-security') >= 0); }
+// Render one check result into the OS Updates card. `note` is the provenance line — a forced check
+// says nothing (you just ran it), a cached one says when it was last asked — so the card can show
+// what the host has waiting on page load WITHOUT making the load wait on `apt update`.
+function renderUpdates(d, note){
+  var el=document.getElementById('update-info'); if(!el) return;
+  var n=d.count||0, pkgs=d.packages||[];
+  var sec=pkgs.filter(isSecurityPkg).length;
+  var head=(n ? '<div class="mb-1"><span class="text-warning"><i class="bi bi-exclamation-triangle-fill"></i> '
+                + n + ' update' + (n===1?'':'s') + ' available</span>'
+                + (sec ? ' <span class="badge bg-danger" style="font-weight:normal;">'+sec+' security</span>' : '')
+                + '</div>'
+              : '<div class="text-success"><i class="bi bi-check-circle"></i> System is up to date.</div>')
+         + (note ? '<div class="text-secondary" style="font-size:.68rem;">'+escapeHtml(note)+'</div>' : '');
+  var rows=!n ? '' : '<div style="max-height:200px;overflow:auto;">' + pkgs.map(function(p){
+    var ver = p.from ? (escapeHtml(p.from)+' → <span class="text-success">'+escapeHtml(p.version)+'</span>')
+                     : escapeHtml(p.version||'');
+    return '<div style="font-family:monospace;font-size:.72rem;line-height:1.5;">'
+         + '<span class="'+(isSecurityPkg(p)?'text-danger':'text-info')+'">'
+         + escapeHtml(p.name)+'</span> '+ver+'</div>';
+  }).join('') + '</div>';
+  el.innerHTML=head+rows;   // nosemgrep — head/rows are composed above from escapeHtml()'d values
+}
+// Force a fresh check (the Check button): runs `apt update` on the host, so it's the slow path.
+var _updatesAsked = false;   // a forced check outranks the cached fill, whichever lands first
 function checkUpdates(){
   var el=document.getElementById('update-info'); el.textContent='Checking…';
+  _updatesAsked = true;
   fetch(MOUNT+'/api/remote/'+REMOTE_ID+'/check-updates').then(r=>r.json())
     .then(d=>{
-      // ok===false means apt itself could not run, which looks exactly like a clean host from
-      // the package list alone. Saying "up to date" there is a lie the user acts on.
-      if(d.ok===false){ el.textContent='Could not check for updates — apt was busy or unreachable. Try again shortly.'; return; }
-      var n=d.count||0, pkgs=d.packages||[];
-      if(!n){ el.textContent='System is up to date.'; return; }
-      var head='<div class="mb-1 text-secondary">'+n+' update'+(n===1?'':'s')+' available:</div>';
-      var rows=pkgs.map(function(p){
-        var ver = p.from ? (escapeHtml(p.from)+' → <span class="text-success">'+escapeHtml(p.version)+'</span>')
-                         : escapeHtml(p.version||'');
-        return '<div style="font-family:monospace;font-size:.72rem;line-height:1.5;">'
-             + '<span class="text-info">'+escapeHtml(p.name)+'</span> '+ver+'</div>';
-      }).join('');
-      el.innerHTML=head+'<div style="max-height:200px;overflow:auto;">'+rows+'</div>';  // nosemgrep
+      // A check that FAILED returns an empty list, exactly like a clean host — saying "up to date"
+      // there would report a state nobody actually managed to read.
+      if(d.ok===false){ el.innerHTML='<span class="text-warning"><i class="bi bi-exclamation-triangle"></i> '  // nosemgrep
+        + "Couldn't read the package list — apt may be busy. Try again in a minute.</span>"; return; }
+      renderUpdates(d, '');
+      if(window.osUpdatesNagCheck) window.osUpdatesNagCheck();   // the banner reflects this too
     })
     .catch(()=>el.textContent='Check failed');
 }
+// Page load: show what the last check found, from the panel's own memory. No apt, no SSH — the
+// daily sweep already asked, and an empty card until you press Check is not an answer.
+(function(){
+  if(!document.getElementById('update-info')) return;
+  fetch(MOUNT+'/api/remote/'+REMOTE_ID+'/updates-cached').then(function(r){ return r.json(); })
+    .then(function(d){
+      var el=document.getElementById('update-info'); if(!el || _updatesAsked) return;
+      if(!d || !d.known){
+        el.innerHTML='<span class="text-secondary">Not checked yet — press Check.</span>';  // nosemgrep
+        return;
+      }
+      renderUpdates(d, 'Last checked '+window.agoText(d.at));
+    }).catch(function(){});
+})();
 var _osuTimer=null, _osuStale=0;
 function runUpdates(){
   confirmDialog({title:'Install updates', icon:'arrow-up-circle', confirmClass:'btn-primary', confirmLabel:'Install updates',

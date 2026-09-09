@@ -2,7 +2,7 @@
 // Split out of one 86KB file; these load in order and behave as one script.
 // ── Backups (panel host only) ──
 function bkFmtBytes(b){ b=b||0; if(b<1024)return b+' B'; if(b<1048576)return (b/1024).toFixed(0)+' KB'; if(b<1073741824)return (b/1048576).toFixed(1)+' MB'; if(b<1099511627776)return (b/1073741824).toFixed(1)+' GB'; return (b/1099511627776).toFixed(2)+' TB'; }  // NOPMD
-function bkAgo(epoch){ var s=Math.max(0,Math.floor(Date.now()/1000-epoch)); if(s<60)return 'just now'; if(s<3600)return Math.floor(s/60)+'m ago'; if(s<86400)return Math.floor(s/3600)+'h ago'; return Math.floor(s/86400)+'d ago'; }
+function bkAgo(epoch){ return window.agoText(epoch); }   // panel.js owns the formatting
 function bkMsg(t,cls){ var m=document.getElementById('bk-msg'); if(m){ m.textContent=t||''; m.className='small '+(cls||'text-secondary'); } }
 function loadBackups(){
   fetch(MOUNT+'/api/panel/backups').then(r=>r.json()).then(function(d){

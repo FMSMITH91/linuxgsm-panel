@@ -98,6 +98,16 @@ window.pollWhenVisible = function(fn, intervalMs){
   return id;
 };
 
+// "3h ago" for a unix timestamp. Shared: the backups list and the OS Updates card both say when
+// something last happened, and a second copy of this would drift from the first.
+window.agoText = function(epoch){
+  var s = Math.max(0, Math.floor(Date.now()/1000 - epoch));
+  if(s < 60) return 'just now';
+  if(s < 3600) return Math.floor(s/60)+'m ago';
+  if(s < 86400) return Math.floor(s/3600)+'h ago';
+  return Math.floor(s/86400)+'d ago';
+};
+
 // Render server timestamps (stored UTC, emitted as <span class="localtime" data-utc="…Z">)
 // in the VIEWER's own timezone, with the exact UTC value on hover. Idempotent, so it's
 // safe to call again after AJAX inserts more. Runs on load.
