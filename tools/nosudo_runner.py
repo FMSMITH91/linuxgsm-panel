@@ -121,6 +121,8 @@ def _greenify_first():
         import eventlet
         eventlet.monkey_patch()
     except ImportError:
+        # No eventlet installed: nothing has replaced socket.socket, so the egress guard the
+        # caller installs next is already in the right place and there is no ordering to fix.
         pass
 
 
