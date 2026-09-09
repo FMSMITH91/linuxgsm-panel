@@ -215,3 +215,5 @@ Issues and pull requests are welcome — this is a solo, AI-assisted project, so
 ## License
 
 MIT
+
+<!-- glob probe B -->
