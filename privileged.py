@@ -48,7 +48,8 @@ F2B = "fail2ban-client"
 SYSTEMCTL = "systemctl"
 
 # The services the panel is allowed to touch, named exhaustively — see tools/panel-helper.
-UNITS = ("ssh", "sshd", "fail2ban", "whoopsie", "cups", "modemmanager")
+UNITS = ("ssh", "sshd", "fail2ban", "whoopsie", "cups", "modemmanager",
+         "unattended-upgrades")
 
 APT = "apt-get"
 # dpkg's conflict answers, fixed rather than passed in: keep a config file the operator has edited,
@@ -78,6 +79,23 @@ OS_UPDATE_LOG = "/run/panel-os-update.log"
 # directory safe to CONSTRUCT below rather than accept.
 USERNAME_RE = r"[A-Za-z_][A-Za-z0-9._-]{0,31}"
 HOME_ROOT = "/home"
+
+# Root-owned files the panel writes, by NAME. The content arrives on stdin and the path is looked
+# up here — so a caller names a destination, it never supplies one. This is the whole reason the
+# write verb is safe: there is no argument that could become a path.
+#
+# The sshd drop-in is deliberately NOT here. Getting an sshd config write wrong locks the operator
+# out of their own host, so it keeps its current path until it gets a change of its own.
+WRITE_TARGETS = {
+    "apt-auto-upgrades": ("/etc/apt/apt.conf.d/20auto-upgrades", 0o644),
+    "fail2ban-jail-local": ("/etc/fail2ban/jail.local", 0o644),
+    "fail2ban-panel-whitelist": ("/etc/fail2ban/jail.d/zz-panel-whitelist.local", 0o644),
+    "fail2ban-panel-filter": ("/etc/fail2ban/filter.d/linuxgsm-panel.conf", 0o644),
+    "fail2ban-panel-jail": ("/etc/fail2ban/jail.d/linuxgsm-panel.conf", 0o644),
+    "node-tools-cron": ("/etc/cron.d/lgsm-node-tools", 0o644),
+    "sysctl-tailscale": ("/etc/sysctl.d/99-tailscale.conf", 0o644),
+}
+
 
 
 
@@ -211,6 +229,17 @@ _ARGV = {
     "service-enable-now": ([_choice(*UNITS)], lambda a: [SYSTEMCTL, "enable", "--now", a[0]], None),
     "service-disable-now": ([_choice(*UNITS)], lambda a: [SYSTEMCTL, "disable", "--now", a[0]], None),
 
+    # sysctl -p on one of the panel's own drop-ins. The NAME maps to the same path the write verb
+    # uses, so the two cannot point at different files.
+    "sysctl-reload": ([_choice("tailscale")],
+                      lambda a: ["sysctl", "-p", WRITE_TARGETS["sysctl-" + a[0]][0]], None),
+
+    # ── root-owned file writes ──
+    # The content travels on stdin, so the argv is only the destination NAME. Locally the helper
+    # does the write itself; remotely it is still `base64 -d > path`, because a remote host has no
+    # helper — but the path comes from this table rather than from a call site either way.
+    "write-file": ([_choice(*sorted(WRITE_TARGETS))], lambda a: [], None),
+
     # ── cron and user accounts ──
     "crontab-list": ([_username], lambda a: ["crontab", "-u", a[0], "-l"], None),
     "user-create": ([_username], lambda a: ["useradd", "-m", "-s", "/bin/bash", a[0]], None),
@@ -317,6 +346,26 @@ def remote_command(verb, args, merge_stderr=True):
         # No helper on the far side to feed stdin, so the prompt is answered the old way.
         cmd = "yes | " + cmd
     return cmd + (" 2>&1" if merge_stderr else "")
+
+
+def write_target(name):
+    """(path, mode) for a named root-owned destination. Raises VerbError on an unknown name."""
+    if name not in WRITE_TARGETS:
+        raise VerbError("unknown write target")
+    return WRITE_TARGETS[name]
+
+
+def remote_write_command(name, content):
+    """The shell command that writes `content` to a named destination on a REMOTE host.
+
+    A remote has no helper, so this is still `base64 -d > path` — but the path comes from
+    WRITE_TARGETS rather than from a call site, and base64 keeps every byte of the content inert on
+    the way through the shell."""
+    import base64
+    path, mode = write_target(name)
+    b64 = base64.b64encode(content.encode()).decode()
+    return ("echo %s | base64 -d > %s && chmod %o %s"
+            % (shlex.quote(b64), shlex.quote(path), mode, shlex.quote(path)))
 
 
 def verbs():

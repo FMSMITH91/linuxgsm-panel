@@ -13,8 +13,9 @@ regardless of this file — this changelog is for humans.
   permitting `/bin/bash` *is* `NOPASSWD:ALL`. `tools/panel-helper` is a root-owned script that takes
   a verb and separated arguments, re-validates each one, and runs a fixed command — no shell, and
   `bash` is not a program it can reach. The `ufw`, `fail2ban-client`, `systemctl` and `apt`/`dpkg`
-  families now use it, plus the log reads and user/cron management — 43 verbs. Root-escalating call
-  sites that still build a shell string are down from 131 to 50, and a ratcheting test now counts
+  families now use it, plus the log reads, user/cron management and the root-owned config writes —
+  45 verbs. Root-escalating call
+  sites that still build a shell string are down from 131 to 47, and a ratcheting test now counts
   BOTH escalation routes (an earlier count missed `_sudo_sh`, which had 18 sites of its own). **This does not reduce your exposure yet**: the grant stays `NOPASSWD:ALL` until
   every privileged call site is converted, because a boundary with a hole in it is not a boundary.
   See SECURITY.md.

@@ -16,6 +16,7 @@ from types import SimpleNamespace as NS
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import config
+import privileged as _privmod
 import ssh_manager as sm
 import notifications as N
 import system_ops as SO
@@ -473,17 +474,22 @@ check("node-tools: the cron updates npm + gamedig weekly and logs it",
       "npm install -g npm gamedig" in sm._NODE_TOOLS_CRON
       and sm._NODE_TOOLS_CRON.lstrip().startswith("#")
       and "/var/log/lgsm-node-tools.log" in sm._NODE_TOOLS_CRON
-      and sm._NODE_TOOLS_CRON_PATH == "/etc/cron.d/lgsm-node-tools")
+      and _privmod.WRITE_TARGETS["node-tools-cron"][0] == "/etc/cron.d/lgsm-node-tools")
 _ntc = {}
 _orig_ntc_rc = sm.run_command
 try:
+    # This used to assert the command started with "sudo bash -c". It now goes through the
+    # write-file verb, so what matters is the DESTINATION NAME and the content — the path is the
+    # table's, not the call site's, and on a remote host the base64 form is still what is sent.
     sm.run_command = lambda s, c, **k: (_ntc.__setitem__("cmd", c), ("", "", 0))[1]
     _ntc_ok = sm.ensure_node_tools_cron(object())
-    check("node-tools: ensure writes the cron.d file as ROOT (sudo bash -c)",
-          _ntc_ok is True and _ntc["cmd"].startswith("sudo bash -c")
-          and "/etc/cron.d/lgsm-node-tools" in _ntc["cmd"])
+    check("node-tools: ensure writes the cron.d file as root, at the table's path",
+          _ntc_ok is True and "/etc/cron.d/lgsm-node-tools" in _ntc["cmd"], _ntc.get("cmd", "")[:80])
     check("node-tools: the cron body is base64-piped + chmod 644 (no quoting/`%` hazards)",
           "base64 -d" in _ntc["cmd"] and "chmod 644" in _ntc["cmd"])
+    check("node-tools: the cron path has ONE definition — the write target",
+          not hasattr(sm, "_NODE_TOOLS_CRON_PATH"),
+          "ssh_manager still keeps a second copy of the path")
 finally:
     sm.run_command = _orig_ntc_rc
 
@@ -1342,11 +1348,20 @@ eq("udp suffix -> UDP", by_port["27015"]["proto_label"], "UDP")
 
 # ── firewall lock-out protection ──────────────────────────────
 def protect(server, rules, enabled=True, cfg=None, is_local=False, tailscale=(False, False)):
-    sm.is_local_server = lambda s: is_local
-    sm._tailscale_conn_state = lambda s: tailscale   # (running, ssh_enabled) — deterministic in tests
-    if cfg is not None:
-        config.load_config = lambda: cfg
-    return sm._annotate_firewall_protection(server, enabled, sm._group_ufw_rules(_rules(rules)))
+    # Restores what it replaces. It used to leave sm.is_local_server stubbed for the REST of the
+    # suite — every later test saw whatever the last protect() call happened to pass, which is how
+    # a stub stops being scaffolding and starts being a silent global. Nothing depended on the leak
+    # (this fix changed no other result), but the transport tests further down do read the real
+    # is_local_server, and would have been testing the wrong branch.
+    _saved = (sm.is_local_server, sm._tailscale_conn_state, config.load_config)
+    try:
+        sm.is_local_server = lambda s: is_local
+        sm._tailscale_conn_state = lambda s: tailscale   # (running, ssh_enabled) — deterministic
+        if cfg is not None:
+            config.load_config = lambda: cfg
+        return sm._annotate_firewall_protection(server, enabled, sm._group_ufw_rules(_rules(rules)))
+    finally:
+        sm.is_local_server, sm._tailscale_conn_state, config.load_config = _saved
 
 
 # SSH-only: port 22 is the last way in -> protected.
@@ -3774,6 +3789,8 @@ _VERB_SAMPLES = {
     "user-delete-force": ["codserver"],
     "user-kill-processes": ["codserver"],
     "user-remove-home": ["codserver"],
+    "write-file": ["fail2ban-jail-local"],
+    "sysctl-reload": ["tailscale"],
 }
 check("privileged: every verb has a sample (new verbs cannot skip the parity check)",
       set(_VERB_SAMPLES) == set(_priv.verbs()),
@@ -3803,8 +3820,8 @@ check("helper: resolves ufw", _helper.resolve("ufw").endswith("/ufw") if os.path
 check("helper: knows exactly the tools its verbs need, and no more",
       sorted(_helper.TOOLS) == ["add-apt-repository", "apt-get", "crontab", "dpkg",
                                 "fail2ban-client", "fuser", "journalctl", "passwd", "pgrep",
-                                "pkill", "reboot", "rm", "systemctl", "tail", "ufw", "useradd",
-                                "userdel"],
+                                "pkill", "reboot", "rm", "sysctl", "systemctl", "tail", "ufw",
+                                "useradd", "userdel"],
       sorted(_helper.TOOLS))
 for _prog in ("bash", "sh", "python3", "env"):
     check("helper: refuses to resolve %s" % _prog, _ufw_raises_fnf(_helper.resolve, _prog))
@@ -3834,6 +3851,9 @@ _BAD = {
     # user-remove-home runs `rm -rf` as root. These are the names that must never become a path.
     "user-remove-home": ["..", ".", "", "-rf", "/home/x", "root; rm -rf /", "a" * 33, "1abc"],
     "user-create": ["-o root", "a b", "$(id)", ""],
+    # write-file takes a destination NAME. A path is not "escaped" here, it is not accepted.
+    "write-file": ["/etc/shadow", "/etc/passwd", "../../etc/shadow", "fail2ban-jail-local; id", ""],
+    "sysctl-reload": ["../../etc", "tailscale; id", ""],
 }
 _leaked = []
 for _v, _bads in _BAD.items():
@@ -3946,6 +3966,29 @@ check("privileged: apt-install refuses an absurdly long package list",
 check("privileged: one bad name rejects the whole apt-install list",
       _ufw_raises_verb(lambda: _priv.check_args("apt-install", ["good", "also-good", "bad;name"])))
 
+# The write verb: content goes on stdin and the destination is a name, so neither ever becomes
+# part of a command line. The two copies of the table must agree on every path AND every mode — a
+# world-writable /etc/fail2ban/jail.local would be a quiet disaster.
+check("privileged: the two copies agree on every write target, path and mode",
+      _priv.WRITE_TARGETS == _helper.WRITE_TARGETS)
+check("privileged: every write target is an absolute path under /etc",
+      all(p.startswith("/etc/") and ".." not in p for p, _m in _priv.WRITE_TARGETS.values()),
+      str(sorted(p for p, _m in _priv.WRITE_TARGETS.values()))[:120])
+check("privileged: no write target is group- or world-writable",
+      all(m & 0o022 == 0 for _p, m in _priv.WRITE_TARGETS.values()),
+      str({p: oct(m) for p, m in _priv.WRITE_TARGETS.values()})[:120])
+check("privileged: the sshd drop-in is deliberately NOT a write target yet",
+      not any("sshd" in p for p, _m in _priv.WRITE_TARGETS.values()))
+# The remote transport still base64s the content through a shell, so the content must survive
+# every byte a config file can legitimately contain.
+_tricky = "a'b\"c$d`e\\f\n[DEFAULT]\nignoreip = 10.0.0.1/8\n"
+import base64 as _b64t
+_rc = _priv.remote_write_command("fail2ban-panel-whitelist", _tricky)
+check("privileged: remote write round-trips content containing shell metacharacters",
+      _b64t.b64decode(_rc.split()[1]).decode() == _tricky)
+check("privileged: remote write targets the table's path, not a caller's",
+      "/etc/fail2ban/jail.d/zz-panel-whitelist.local" in _rc)
+
 # home_of() is the only place a path is built from a name, and it feeds an `rm -rf` running as
 # root. Both copies must agree, and neither may ever produce /home itself or escape it.
 eq("home_of builds the obvious path", _priv.home_of("codserver"), "/home/codserver")
@@ -3978,6 +4021,67 @@ check("ufw: _ufw_is_active is false for empty output", sm._ufw_is_active("") is 
 check("ufw: _ufw_is_active is not fooled by the word active elsewhere",
       sm._ufw_is_active("To    Action\n22    ALLOW  # keep this rule active") is False)
 
+# ── The three transports, including the one every existing install is actually on ──────────────
+# run_privileged() has three paths and until now the suite exercised none of them. That matters
+# most for the middle one: a host only gains the helper when install.sh is next run as ROOT, and
+# the panel cannot place a root-owned file outside its own checkout — so every already-deployed
+# install is running the fallback right now. If it were wrong, the firewall, fail2ban, apt and user
+# management would all be broken on exactly the hosts that upgraded.
+_T_LOCAL = NS(is_local=True, auth_method="local", sudo_enabled=True, linuxgsm_user="")
+_T_REMOTE = NS(is_local=False, auth_method="key", sudo_enabled=True, linuxgsm_user="", host="h")
+_T_SAMPLE = [
+    ("ufw-allow-port", ["27015", "codserver"], "ufw allow 27015 comment codserver 2>&1"),
+    ("f2b-unban", ["sshd", "203.0.113.5"], "fail2ban-client set sshd unbanip 203.0.113.5 2>&1"),
+    ("service-restart", ["fail2ban"], "systemctl restart fail2ban 2>&1"),
+    ("apt-install", ["curl"], "DEBIAN_FRONTEND=noninteractive apt-get install -y curl 2>&1"),
+    ("journal", ["ssh", "400"], "journalctl -u ssh -u sshd --no-pager -n 400 2>&1"),
+    ("user-remove-home", ["codserver"], "rm -rf -- /home/codserver 2>&1"),
+]
+
+_orig_rl, _orig_rc2, _orig_argv = sm._run_local, sm.run_command, sm._exec_local_argv
+_orig_helper_state = dict(sm._HELPER_STATE)
+try:
+    # (a) local, helper NOT installed -> the pre-helper shell string, unchanged.
+    _seen = []
+    sm._run_local = lambda cmd, timeout=30, sudo=False: (_seen.append((cmd, sudo)), ("", "", 0))[1]
+    sm._HELPER_STATE["present"] = False
+    for _v, _a, _want in _T_SAMPLE:
+        sm.run_privileged(_T_LOCAL, _v, _a, timeout=5)
+    check("transport: with no helper installed, the local path runs the pre-helper command",
+          [c for c, _s in _seen] == [w for _v, _a, w in _T_SAMPLE],
+          str([c for c, _s in _seen][:2]))
+    check("transport: and it still escalates (sudo=True), or nothing privileged would work",
+          all(_s is True for _c, _s in _seen))
+
+    # (b) local, helper installed -> argv through the helper, and no shell anywhere.
+    _argvs = []
+    sm._exec_local_argv = lambda argv, timeout=30, stdin_text=None: (
+        _argvs.append(argv), ("", "", 0))[1]
+    sm._HELPER_STATE["present"] = True
+    for _v, _a, _w in _T_SAMPLE:
+        sm.run_privileged(_T_LOCAL, _v, _a, timeout=5)
+    check("transport: with the helper installed, the local path invokes it with argv",
+          all(a[:3] == ["sudo", "-n", _priv.HELPER_PATH] for a in _argvs), str(_argvs[:1]))
+    check("transport: the helper path never builds a shell command",
+          not any("bash" in x or "2>&1" in x for a in _argvs for x in a), str(_argvs[:1]))
+    check("transport: the verb and its arguments arrive as separate argv elements",
+          _argvs[0][3:] == ["ufw-allow-port", "27015", "codserver"], str(_argvs[0]))
+
+    # (c) remote -> the shell string over SSH, whatever the local helper situation is.
+    _rem = []
+    sm.run_command = lambda s_, c, **k: (_rem.append((c, k.get("sudo"))), ("", "", 0))[1]
+    for _v, _a, _w in _T_SAMPLE:
+        sm.run_privileged(_T_REMOTE, _v, _a, timeout=5)
+    check("transport: a remote host gets the same command it always got",
+          [c for c, _s in _rem] == [w for _v, _a, w in _T_SAMPLE], str([c for c, _s in _rem][:2]))
+    check("transport: the local helper being present does not change what a remote receives",
+          all(_s is True for _c, _s in _rem))
+finally:
+    sm._run_local, sm.run_command, sm._exec_local_argv = _orig_rl, _orig_rc2, _orig_argv
+    sm._HELPER_STATE.clear()
+    sm._HELPER_STATE.update(_orig_helper_state)
+
+
 # ── The escalation census: a ratchet, and a correction ────────────────────────────────────────
 # I reported the conversion's progress for four PRs as "113 sites -> N" while counting only ONE of
 # the two ways the panel escalates on its own host. run_command(..., sudo=True) is the obvious one.
@@ -3990,7 +4094,7 @@ import ast as _ast
 
 _ESCALATION_FILES = ["app.py", "auth.py", "ssh_manager.py", "system_ops.py", "notifications.py",
                      "backup.py", "db_maintenance.py", "tailscale_integration.py", "manage.py"]
-_CEILING = {"sudo=True": 33, "_sudo_sh": 17}   # measured at the time of writing; lower only
+_CEILING = {"sudo=True": 31, "_sudo_sh": 16}   # measured at the time of writing; lower only
 
 _census = {"sudo=True": 0, "_sudo_sh": 0}
 for _f in _ESCALATION_FILES:
