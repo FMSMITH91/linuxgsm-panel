@@ -2829,9 +2829,6 @@ def _sudo_sh(inner):
 # silently break as games and gamedig evolve. This weekly ROOT cron refreshes npm + gamedig alongside
 # the host's other automatic updates (unattended-upgrades). Written to /etc/cron.d as root, idempotent;
 # the `command -v npm` guard makes it a harmless no-op on a host that never got node.
-# The write verb owns this path now; keep the name here pointing at the same entry so the two
-# can never disagree about where the cron file lives.
-_NODE_TOOLS_CRON_PATH = _priv.WRITE_TARGETS["node-tools-cron"][0]
 _NODE_TOOLS_CRON = (
     "# LinuxGSM Panel - keep npm + gamedig current for player queries (managed by the panel).\n"
     "PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin\n"

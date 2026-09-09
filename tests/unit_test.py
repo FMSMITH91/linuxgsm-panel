@@ -474,7 +474,7 @@ check("node-tools: the cron updates npm + gamedig weekly and logs it",
       "npm install -g npm gamedig" in sm._NODE_TOOLS_CRON
       and sm._NODE_TOOLS_CRON.lstrip().startswith("#")
       and "/var/log/lgsm-node-tools.log" in sm._NODE_TOOLS_CRON
-      and sm._NODE_TOOLS_CRON_PATH == "/etc/cron.d/lgsm-node-tools")
+      and _privmod.WRITE_TARGETS["node-tools-cron"][0] == "/etc/cron.d/lgsm-node-tools")
 _ntc = {}
 _orig_ntc_rc = sm.run_command
 try:
@@ -487,8 +487,9 @@ try:
           _ntc_ok is True and "/etc/cron.d/lgsm-node-tools" in _ntc["cmd"], _ntc.get("cmd", "")[:80])
     check("node-tools: the cron body is base64-piped + chmod 644 (no quoting/`%` hazards)",
           "base64 -d" in _ntc["cmd"] and "chmod 644" in _ntc["cmd"])
-    check("node-tools: the path constant and the write target are the same string",
-          sm._NODE_TOOLS_CRON_PATH == _privmod.WRITE_TARGETS["node-tools-cron"][0])
+    check("node-tools: the cron path has ONE definition — the write target",
+          not hasattr(sm, "_NODE_TOOLS_CRON_PATH"),
+          "ssh_manager still keeps a second copy of the path")
 finally:
     sm.run_command = _orig_ntc_rc
 

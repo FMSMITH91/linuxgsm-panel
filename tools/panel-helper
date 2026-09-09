@@ -414,6 +414,9 @@ def do_write_file(args, content):
         try:
             os.unlink(tmp)
         except OSError:
+            # The temp file may already be gone (a partial os.replace, or the directory removed
+            # under us). Either way the original error below is the one worth reporting, so a
+            # failure to clean up must not replace it.
             pass
         raise
     return 0
