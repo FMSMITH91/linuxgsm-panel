@@ -17,28 +17,28 @@
 
         <div class="row">
           <div class="col">
-            <label class="form-label">VPS Name</label>
-            <input type="text" name="name" class="form-control" placeholder="e.g. Main Gaming VPS" autocomplete="off">
+            <label class="form-label" for="setup-remote-name">VPS Name</label>
+            <input id="setup-remote-name" type="text" name="name" class="form-control" placeholder="e.g. Main Gaming VPS" autocomplete="off">
           </div>
           <div class="col">
-            <label class="form-label">Host / IP</label>
-            <input type="text" name="host" class="form-control" placeholder="e.g. 192.168.1.100" autocomplete="off">
+            <label class="form-label" for="setup-remote-host">Host / IP</label>
+            <input id="setup-remote-host" type="text" name="host" class="form-control" placeholder="e.g. 192.168.1.100" autocomplete="off">
           </div>
         </div>
 
         <div class="row mt-2">
           <div class="col">
-            <label class="form-label">SSH User</label>
-            <input type="text" name="ssh_user" class="form-control" value="root">
+            <label class="form-label" for="setup-remote-ssh_user">SSH User</label>
+            <input id="setup-remote-ssh_user" type="text" name="ssh_user" class="form-control" value="root">
           </div>
           <div class="col-3">
-            <label class="form-label">SSH Port</label>
-            <input type="number" name="ssh_port" class="form-control" value="22">
+            <label class="form-label" for="setup-remote-ssh_port">SSH Port</label>
+            <input id="setup-remote-ssh_port" type="number" name="ssh_port" class="form-control" value="22">
           </div>
         </div>
 
         <div class="mt-2">
-          <label class="form-label">Auth Method</label>
+          <label class="form-label" for="setup-remote-credential">Auth Method</label>
           <select name="auth_method" class="form-select" id="auth-method" data-action="toggleSetupCreds" data-on="change">
             <option value="key">SSH Key</option>
             <option value="password">Password</option>
@@ -51,7 +51,7 @@
 
         <div class="mb-2" id="credential-field">
           <label class="form-label" id="credential-label">SSH Key Path</label>
-          <input type="text" name="credential" class="form-control" value="~/.ssh/id_rsa"
+          <input id="setup-remote-credential" type="text" name="credential" class="form-control" value="~/.ssh/id_rsa"
                  placeholder="~/.ssh/id_rsa or password">
           <div class="form-text">Path to private key, password, or leave empty for Tailscale SSH.</div>
         </div>
@@ -64,8 +64,8 @@
             </div>
           </div>
           <div class="col-6">
-            <label class="form-label" style="font-size: .8rem;">LinuxGSM User (optional)</label>
-            <input type="text" name="lgsm_user" class="form-control" placeholder="e.g. gmodserver">
+            <label class="form-label" style="font-size: .8rem;" for="setup-remote-lgsm_user">LinuxGSM User (optional)</label>
+            <input id="setup-remote-lgsm_user" type="text" name="lgsm_user" class="form-control" placeholder="e.g. gmodserver">
             <div class="form-text">Leave blank to use the SSH user</div>
           </div>
         </div>
