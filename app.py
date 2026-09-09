@@ -341,6 +341,29 @@ _rwe_lock = threading.Lock()
 _max_players_cache = {}   # server_id -> int  (capacity is ~static, so read it once and reuse)
 
 
+# ── State that used to live inside register_routes() ──────────────────────────────────────────
+# These were assigned in the body of register_routes, which made them closure cells: reachable
+# only from the functions defined alongside them. Nothing outside could see them — including the
+# tests, which had to dig state out of `_maybe_alert_os_updates.__code__.co_freevars` and
+# `__closure__` to assert on it. Module level is where module state belongs; every one of these is
+# process-wide anyway, none is per-app, and no nested function rebinds any of them (they are read,
+# or mutated in place), so hoisting needs no `global` anywhere.
+#
+# `socketio` deliberately stays inside register_routes: it is constructed FROM the app and is the
+# one genuinely per-app object in that set.
+_cmd_fetch_attempts = {}       # server_id -> last background command-fetch time (rate-limits lazy refetch)
+_pubip_resolve_attempts = {}   # remote_id -> last background public-IP resolve time
+_gmod_content_apply_state = {}  # server_id -> {"status": running|done|error, "msg", "ts"}
+_console_viewers = {}          # server_id -> set of socket session ids
+_viewers_lock = threading.Lock()
+_os_update_state = {"last_run": 0.0, "hosts": {}}   # remote.id -> (count, security_count)
+_OS_UPDATE_EVERY = 24 * 3600
+_PRO_MAX_AGE = 86400   # only auto-run the slow `pro status` client if the stored value is >1 day old
+_CUSTOM_CMD_ENGINES = {"valve": "Valve / Source & GoldSrc",
+                       "idtech3": "idTech3 / Quake3 (CoD family)",
+                       "minecraft": "Minecraft"}
+
+
 def _server_max_config(gs):
     """Server capacity from the LinuxGSM config (maxplayers, else slots), cached — capacity is
     essentially static, so a successful read is kept for the panel's lifetime and reused. Readable
@@ -3668,7 +3691,6 @@ def register_routes(app):
                                total_players=total_players, total_max=total_max)
 
     # ── Server Detail + Console ────────────────────────────
-    _cmd_fetch_attempts = {}  # server_id -> last background command-fetch time (rate-limits lazy refetch)
 
     def _bg_cache_commands(server_ids):
         """Fetch + cache each server's LinuxGSM command list in the background so the
@@ -3705,7 +3727,6 @@ def register_routes(app):
         _cmd_fetch_attempts[server_id] = now
         _bg_cache_commands([server_id])
 
-    _pubip_resolve_attempts = {}  # remote_id -> last background public-IP resolve time
 
     def _server_action_buttons(gs):
         """(actions, maintenance) for the control bar, filtered by what the game supports and what the
@@ -5612,9 +5633,6 @@ def register_routes(app):
     # ── Custom Commands (superadmin-defined game commands handed to groups) ──
     # A dict of engine value -> label for the scope selector. Kept here (not a new ssh_manager
     # export) so the admin UI stays self-contained.
-    _CUSTOM_CMD_ENGINES = {"valve": "Valve / Source & GoldSrc",
-                           "idtech3": "idTech3 / Quake3 (CoD family)",
-                           "minecraft": "Minecraft"}
 
     def _custom_cmd_form(cmd=None):
         """Read + validate the custom-command form. Returns (fields, error). `fields` is a dict
@@ -7575,7 +7593,6 @@ def register_routes(app):
         return jsonify(host_specs(remote))
 
     # ── Ubuntu Pro (works for the panel host too, via its local remote id) ──
-    _PRO_MAX_AGE = 86400   # only auto-run the slow `pro status` client if the stored value is >1 day old
 
     def _pro_status_cached(remote, force=False):
         """Ubuntu Pro status, served from the persisted value so a page visit (even right after a
@@ -8573,7 +8590,6 @@ def register_routes(app):
         except Exception:
             return jsonify({"success": False, "message": _log_and_generic("cron run failed")}), 200
 
-    _gmod_content_apply_state = {}   # server_id -> {"status": running|done|error, "msg", "ts"}
 
     def _bg_gmod_content_apply(server_id, remote_id, gmod_user, games):
         """Apply a GMod content selection in the background (a download can take many minutes): ensure
@@ -8808,8 +8824,6 @@ def register_routes(app):
 
     # Track which sockets are viewing which server console, so the poller only
     # polls consoles that someone is actually watching (idle = ~0% CPU).
-    _console_viewers = {}  # server_id -> set of socket session ids
-    _viewers_lock = threading.Lock()
 
     @socketio.on("connect")
     def on_socket_connect():
@@ -9027,8 +9041,6 @@ def register_routes(app):
     # Alerts on the TRANSITION (nothing waiting -> something waiting) and re-arms once the host is
     # clean again, the same shape as the disk-low alert. Telling you every day that the same twelve
     # packages are still there is how an alert becomes noise you filter out.
-    _os_update_state = {"last_run": 0.0, "hosts": {}}   # remote.id -> (count, security_count)
-    _OS_UPDATE_EVERY = 24 * 3600
 
     def _os_updates_for(remote):
         """One host's check result dict, or None if it could not be checked.
