@@ -20,7 +20,10 @@ _log = logging.getLogger("panel.models")
 # Must start with a letter/digit/underscore — never a dash or dot. A leading dash would let
 # a stored identifier be mis-parsed as an option by tools it's passed to (e.g. `ssh user@host`
 # → `-oProxyCommand=…`); a leading dot risks hidden-file/relative-path confusion.
-_SHELL_IDENT_RE = re.compile(r"^[A-Za-z0-9_][A-Za-z0-9._-]*$")
+# Bounded at 64 to match the column width. SQLite does NOT enforce VARCHAR length, so without
+# the {0,63} here a 10KB "username" stores happily and then gets interpolated into every
+# remote command built for that server.
+_SHELL_IDENT_RE = re.compile(r"^[A-Za-z0-9_][A-Za-z0-9._-]{0,63}$")
 
 
 def _validate_shell_ident(key, value):

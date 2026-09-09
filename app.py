@@ -2610,6 +2610,13 @@ def _asset_url(app, filename):
 
 def register_context_processors(app):
     app.jinja_env.globals["asset_url"] = lambda filename: _asset_url(app, filename)
+    # RemoteServer.is_online defaults to False, so between a fresh install (or a panel restart)
+    # and the first monitor pass, EVERY host reads as unreachable although nothing has been asked
+    # yet. Rendering that as "Unreachable" states something false; "Checking…" states what is
+    # actually true. _monitor_state["remotes"] holds an entry only once a host has really been
+    # probed, so it is the exact signal — not a proxy like last_seen, which stays null for a host
+    # that has been probed and genuinely never answered.
+    app.jinja_env.globals["host_probed"] = lambda rid: rid in _monitor_state["remotes"]
 
     @app.context_processor
     def inject_globals():
@@ -3041,8 +3048,18 @@ def register_routes(app):
             def _succeed(user, remember):
                 with _LOGIN_FAILS_LOCK:
                     _LOGIN_FAILS.pop(ip, None)   # clear on success
-                for k in ("_2fa_pending", "_2fa_at", "_2fa_remember"):
-                    session.pop(k, None)
+                # Drop everything the pre-login session carried before establishing the
+                # authenticated one. Session fixation: an attacker who can get a victim to browse
+                # with a cookie value of the attacker's choosing otherwise ends up holding a
+                # cookie that is now authenticated as the victim. SESSION_PROTECTION="strong" and
+                # the per-login server-side sid already make that hard; starting from an empty
+                # session makes the whole class impossible rather than merely difficult.
+                # The chosen UI language is deliberately carried across — it is set before login
+                # on the login page itself, and losing it on sign-in is a visible bug.
+                _lang = session.get("lang")
+                session.clear()
+                if _lang:
+                    session["lang"] = _lang
                 session.permanent = True   # so PERMANENT_SESSION_LIFETIME applies
                 _register_session(user)    # server-side row (sets user._sid) BEFORE login_user, so
                 login_user(user, remember=remember)   # get_id embeds the sid in the cookie

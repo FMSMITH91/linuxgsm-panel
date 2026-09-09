@@ -592,6 +592,34 @@ try:
        ["server.cfg"])
     check("stat_upload_targets: a traversal attempt returns None, not a listing",
           sm.stat_upload_targets(_FakeSrv(), "u", "../../etc", ["passwd"]) is None)
+
+    # The host-side symlink guard. _safe_abspath is lexical and cannot see a symlink planted under
+    # the game user's home, so every file operation now carries a realpath check that runs WHERE
+    # THE PATH IS. Assert the guard is actually attached and that its sentinel is honoured.
+    _cmds = []
+    sm.run_command = lambda s, c, **k: (_cmds.append(c), ("", "", 0))[1]
+    sm.browse_dir(_FakeSrv(), "csgoserver", "cfg")
+    check("symlink guard: browse_dir resolves the path on the host before listing it",
+          _cmds and "realpath -m" in _cmds[0] and "__OUTSIDE_HOME__" in _cmds[0], str(_cmds)[:150])
+    sm.run_command = lambda s, c, **k: ("__OUTSIDE_HOME__", "", 9)
+    check("symlink guard: a path that escapes home is refused by browse_dir",
+          sm.browse_dir(_FakeSrv(), "csgoserver", "escape") is None)
+    check("symlink guard: ...and by read_file",
+          sm.read_file(_FakeSrv(), "csgoserver", "escape/x")[1] == "Invalid path")
+    check("symlink guard: ...and by delete_path",
+          sm.delete_path(_FakeSrv(), "csgoserver", "escape/x")[0] is False)
+    check("symlink guard: ...and by stat_upload_targets",
+          sm.stat_upload_targets(_FakeSrv(), "csgoserver", "escape", ["x"]) is None)
+    check("symlink guard: ...and no bytes are written through one",
+          sm.upload_file(_FakeSrv(), "csgoserver", "escape", "x", b"d", overwrite=True)[0] is False)
+
+    # models' @validates fires on ASSIGNMENT only, so a row written before it existed reaches the
+    # shell unchecked. _safe_abspath is the choke point every file op goes through, so it re-checks.
+    for _bad in ("a b", "a;rm -rf /", "$(id)", "-oProxyCommand=x", "", "x" * 65):
+        check("unix user %r is refused at the point of use" % _bad[:14],
+              sm._safe_abspath(_bad, "cfg") is None)
+    check("a legitimate unix user still resolves",
+          sm._safe_abspath("csgoserver", "cfg") == "/home/csgoserver/cfg")
     sm.run_command = lambda *a, **k: ("", "", 0)
     eq("stat_upload_targets: no output means nothing exists",
        sm.stat_upload_targets(_FakeSrv(), "u", "", ["server.cfg"]), [])
@@ -604,8 +632,11 @@ try:
     _ok, _msg = sm.upload_file(_FakeSrv(), "csgoserver", "", "server.cfg", b"data", overwrite=False)
     check("upload_file: refuses an existing target when overwrite was not granted",
           _ok is False and _msg == sm.UPLOAD_EXISTS, "%r %r" % (_ok, _msg))
+    # ".paneltmp", not "printf": the symlink guard's realpath fallback legitimately uses printf,
+    # so that word no longer means "a write happened". The staging file name only ever appears on
+    # the write path.
     check("upload_file: and writes nothing on that path",
-          not any("base64 -d" in c or "printf" in c for c in _calls), str(_calls)[:160])
+          not any("base64 -d" in c or ".paneltmp" in c for c in _calls), str(_calls)[:160])
     _calls.clear()
     sm.run_command = lambda s, c, **k: (_calls.append(c), ("", "", 0))[1]
     _ok2, _ = sm.upload_file(_FakeSrv(), "csgoserver", "", "server.cfg", b"data", overwrite=False)

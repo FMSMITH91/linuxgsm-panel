@@ -180,9 +180,10 @@
          same red. On a host it means something different — the panel cannot reach the machine —
          and a host card reading "Offline" above a row of servers reading "Offline" invites the
          reader to think they are the same fact. Reachability gets its own words. #}
-      <span class="badge {% if remote.is_online %}bg-success{% else %}bg-danger{% endif %}"
-            title="{% if remote.is_online %}The panel can reach this host over SSH{% else %}The panel cannot reach this host over SSH — the servers below show their last known state{% endif %}">
-        {{ "Reachable" if remote.is_online else "Unreachable" }}
+      {% set _probed = host_probed(remote.id) %}
+      <span class="badge {% if remote.is_online %}bg-success{% elif not _probed %}bg-secondary{% else %}bg-danger{% endif %}"
+            title="{% if remote.is_online %}The panel can reach this host over SSH{% elif not _probed %}The panel has not checked this host yet — the first check runs shortly after startup{% else %}The panel cannot reach this host over SSH — the servers below show their last known state{% endif %}">
+        {% if remote.is_online %}Reachable{% elif not _probed %}Checking…{% else %}Unreachable{% endif %}
       </span>
     </span>
   </div>

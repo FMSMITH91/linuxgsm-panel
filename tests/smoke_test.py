@@ -504,6 +504,28 @@ try:
     check("deleted rows: state for a LIVE server is kept",
           gs_id in _am2._monitor_state["servers"])
 
+    # Session fixation: the authenticated session must not inherit whatever the pre-login one
+    # carried. An attacker who can get a victim to browse with a cookie value of the attacker's
+    # choosing would otherwise end up holding a cookie that is now authenticated as the victim.
+    _fx = app.test_client()
+    with _fx.session_transaction() as _sess:
+        _sess["planted"] = "attacker-value"
+        _sess["lang"] = "fr"
+    _fx.post("/login", data={"username": "smoke_admin", "password": "Str0ng!passw0rd"})
+    with _fx.session_transaction() as _sess:
+        check("login clears pre-login session state (session fixation)",
+              "planted" not in _sess, "leftover keys: %s" % sorted(_sess.keys()))
+        check("login is established (the clear did not break sign-in)",
+              "_user_id" in _sess, sorted(_sess.keys()))
+        # The language is chosen ON the login page, so it is the one thing that must survive.
+        check("login keeps the language chosen before signing in",
+              _sess.get("lang") == "fr", "lang=%r" % _sess.get("lang"))
+    # Log this client out again. It signed in as smoke_admin, and the session-management checks
+    # further down count that account's registry rows and expect an exact number — an extra
+    # logged-in client left behind here fails them from a distance. logout deletes just this
+    # device's row, which is precisely the cleanup wanted.
+    _fx.post("/logout")
+
     # ── Security headers present on every response ────────────────
     hr = app.test_client().get("/login")
     check("security header: X-Frame-Options=SAMEORIGIN",

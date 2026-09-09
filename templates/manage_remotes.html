@@ -90,9 +90,10 @@
           {% else %}
             {# Same wording as the dashboard host card: on a HOST this is SSH reachability, not
                the online/offline a game server reports. #}
-            <span class="badge {% if remote.is_online %}bg-success{% else %}bg-danger{% endif %} ms-2"
-                  title="{% if remote.is_online %}The panel can reach this host over SSH{% else %}The panel cannot reach this host over SSH{% endif %}">
-              {{ "Reachable" if remote.is_online else "Unreachable" }}
+            {% set _probed = host_probed(remote.id) %}
+            <span class="badge {% if remote.is_online %}bg-success{% elif not _probed %}bg-secondary{% else %}bg-danger{% endif %} ms-2"
+                  title="{% if remote.is_online %}The panel can reach this host over SSH{% elif not _probed %}The panel has not checked this host yet{% else %}The panel cannot reach this host over SSH{% endif %}">
+              {% if remote.is_online %}Reachable{% elif not _probed %}Checking…{% else %}Unreachable{% endif %}
             </span>
           {% endif %}
         </h2>
