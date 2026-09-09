@@ -365,7 +365,7 @@ for _bad in ("<script>", "drop; table", "tag'name", 'tag"name', " leading", "", 
         _rej = True
     check("tag name rejected: %r" % _bad, _rej)
 # _alerts_muted: any tag saying "don't alert" wins, and it must never raise inside a poller thread.
-from app import _alerts_muted as _am
+from notifications import alerts_muted as _am   # moved out of app.py in #93
 _tg = lambda n: NS(notify=n)
 check("mute: no tags -> not muted", _am(NS(tags=[], short_name="s")) is False)
 check("mute: all tags notify -> not muted", _am(NS(tags=[_tg(True), _tg(True)], short_name="s")) is False)

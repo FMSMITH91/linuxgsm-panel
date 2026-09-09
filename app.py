@@ -89,7 +89,6 @@ from config import (
     encrypt_secret, decrypt_secret, is_encrypted, harden_data_permissions,
 )
 import notifications
-from notifications import alerts_muted as _alerts_muted
 from models import (
     AuditLog, GameServer, Group, RemoteServer, SetupState, User, db, init_db,
     CustomCommand, CUSTOM_ARG_DEFAULT_PATTERN, CUSTOM_ARG_PLACEHOLDER, GlobalBan,
@@ -668,7 +667,7 @@ def _refresh_player_counts(app):
             # A muting tag skips the whole block, flag included: the request stays ARMED, so it
             # fires the next time the server empties after the tag comes off — rather than being
             # silently consumed while nobody could be told.
-            if gs.notify_when_empty and count == 0 and not _alerts_muted(gs):
+            if gs.notify_when_empty and count == 0 and not notifications.alerts_muted(gs):
                 try:
                     notifications.notify("server_empty", "Server is empty",
                                          "%s on %s now has 0 players — safe to make changes."
@@ -681,7 +680,7 @@ def _refresh_player_counts(app):
             # Server full — alert on the transition INTO full, re-arm when it drops below the cap.
             if isinstance(count, int) and isinstance(mx, int) and mx > 0:
                 if count >= mx and not _server_full_alerted.get(gs.id):
-                    if not _alerts_muted(gs):
+                    if not notifications.alerts_muted(gs):
                         notifications.notify("server_full", "Server full",
                                              "%s on %s is full (%d/%d players)."
                                              % (gs.name, gs.remote.display_name, count, mx))
@@ -700,7 +699,7 @@ def _refresh_player_counts(app):
                 except Exception:
                     db.session.rollback()
                 if (prev > 0 and (time.time() - _server_peak_notified.get(gs.id, 0)) > _PEAK_NOTIFY_INTERVAL
-                        and not _alerts_muted(gs)):
+                        and not notifications.alerts_muted(gs)):
                     _server_peak_notified[gs.id] = time.time()
                     notifications.notify("server_peak", "New player record",
                                          "%s on %s just hit %d players — a new record."
@@ -1418,7 +1417,7 @@ def _monitor_pass():
             prev_up = _monitor_state["servers"].get(gs.id)
             # State is tracked either way — only the ALERT is muted by a tag, so a server that goes
             # down while muted still reports "back online" correctly once it is unmuted.
-            muted = _alerts_muted(gs)
+            muted = notifications.alerts_muted(gs)
             if prev_up is True and not up:
                 # The panel's own stop/restart is already accounted for locally — check that FIRST so
                 # an intentional stop keeps its existing semantics and costs no SSH round trip.
@@ -6553,12 +6552,12 @@ def register_routes(app):
                             else:
                                 fail_n += 1
                                 failures.append("%s: %s" % (gs.name, reason or "failed"))
-                                if not _alerts_muted(gs):
+                                if not notifications.alerts_muted(gs):
                                     alertable.append(failures[-1])
                     except Exception as e:
                         fail_n += 1
                         failures.append("%s: backup error (%s)" % (gs.name, type(e).__name__))
-                        if not _alerts_muted(gs):
+                        if not notifications.alerts_muted(gs):
                             alertable.append(failures[-1])
                         app.logger.warning("full backup of %s failed", gs.name, exc_info=True)
             summary = "%d server(s) backed up%s%s" % (
@@ -6661,7 +6660,7 @@ def register_routes(app):
                         # Server-scoped, so a muting tag applies here too — the Tags UI promises
                         # muting keeps a server out of the alert channel, without qualification.
                         _bk_gs = db.session.get(GameServer, sid)
-                        if not (_bk_gs is not None and _alerts_muted(_bk_gs)):
+                        if not (_bk_gs is not None and notifications.alerts_muted(_bk_gs)):
                             notifications.notify("backup_failed", "Scheduled backup failed",
                                                  "The scheduled backup of %s failed." % gname)
         finally:
