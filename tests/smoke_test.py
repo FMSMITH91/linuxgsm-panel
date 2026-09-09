@@ -2183,11 +2183,11 @@ try:
 
         # A remote that is deleted must not leave its count behind: SQLite hands the freed row id to
         # the next host added, which would inherit "already told you about 1 package" and go silent
-        # on its own first batch. Nothing outward can see that leak, so read the sweep's own state
-        # out of its closure and plant a dead host's id in it.
-        _cells = dict(zip(_osu.__code__.co_freevars,
-                          [c.cell_contents for c in (_osu.__closure__ or ())]))
-        _st_hosts = _cells["_os_update_state"]["hosts"]
+        # on its own first batch. Nothing outward can see that leak, so plant a dead host's id in
+        # the sweep's own state. (This used to have to reach through
+        # _osu.__code__.co_freevars/__closure__ because the state was a closure cell inside
+        # register_routes; it is module-level now, so it is simply an attribute.)
+        _st_hosts = _am._os_update_state["hosts"]
         _st_hosts[999999] = (7, 7)
         _osu(force=True)
         check("os updates: a deleted host's count is not left behind for the next one",
@@ -2250,7 +2250,7 @@ try:
         # host list FIRST; if that fails (a locked DB), arming last_run anyway buys a full day of
         # silence for a tick that checked nothing — a transient error becomes 24h of it. Nothing
         # outward can see the window, so drive it through the closure like the pruning check above.
-        _osu_state = _cells["_os_update_state"]
+        _osu_state = _am._os_update_state
 
         class _RaisingQuery:
             @staticmethod
