@@ -72,12 +72,14 @@ _F2B_JAIL = ("Status for the jail: sshd\n   |- Currently banned: 1\n   |- Total 
 
 
 def _f2b_fake_run(server, cmd, **kw):
+    # These are the commands privileged.py renders for the SSH transport, so match on the argv
+    # shape rather than on a `2>` suffix that the verb rendering no longer always adds.
+    parts = cmd.split()
+    if parts[:2] == ["fail2ban-client", "status"]:
+        return ((_F2B_JAIL if len(parts) > 2 and not parts[2].startswith("2>") else _F2B_STATUS),
+                "", 0)
     if "command -v fail2ban-client" in cmd:
         return ("yes", "", 0)
-    if cmd.startswith("fail2ban-client status 2>"):
-        return (_F2B_STATUS, "", 0)
-    if "fail2ban-client status" in cmd:
-        return (_F2B_JAIL, "", 0)
     return ("1", "", 0)
 
 
@@ -3734,6 +3736,14 @@ _VERB_SAMPLES = {
     "ufw-deny-ip": ["203.0.113.5", "panel-autoblock"],
     "ufw-delete-deny-ip": ["203.0.113.5"],
     "ufw-delete-num": ["3"],
+    "f2b-status": [],
+    "f2b-status-jail": ["sshd"],
+    "f2b-unban": ["sshd", "203.0.113.5"],
+    "f2b-reload": [],
+    "service-restart": ["ssh"],
+    "service-reload": ["fail2ban"],
+    "service-enable-now": ["fail2ban"],
+    "service-disable-now": ["cups"],
 }
 check("privileged: every verb has a sample (new verbs cannot skip the parity check)",
       set(_VERB_SAMPLES) == set(_priv.verbs()),
@@ -3760,6 +3770,8 @@ check("privileged: helper and panel build an identical argv for every verb",
 # The helper can only ever run tools it names. bash is the whole point: if it resolved, the boundary
 # would be decorative.
 check("helper: resolves ufw", _helper.resolve("ufw").endswith("/ufw") if os.path.exists("/usr/sbin/ufw") else True)
+check("helper: knows exactly the tools its verbs need, and no more",
+      sorted(_helper.TOOLS) == ["fail2ban-client", "systemctl", "ufw"], sorted(_helper.TOOLS))
 for _prog in ("bash", "sh", "python3", "env"):
     check("helper: refuses to resolve %s" % _prog, _ufw_raises_fnf(_helper.resolve, _prog))
 
@@ -3771,6 +3783,10 @@ _BAD = {
     "ufw-delete-allow-app": ["OpenSSH; id", "Nginx", "openssh"],
     "ufw-default": ["allow; id", "drop"],
     "ufw-delete-num": ["0", "1; id", "-1", "abc"],
+    # The unit list is exhaustive on purpose: the panel may restart these six services and nothing
+    # else, so a real service name it was never meant to touch is refused like an injection is.
+    "service-restart": ["nginx", "docker", "ssh; id", "ssh.service", ""],
+    "f2b-status-jail": ["sshd; id", "$(id)", "a" * 65, ""],
 }
 _leaked = []
 for _v, _bads in _BAD.items():
@@ -3807,6 +3823,13 @@ _REMOTE_EXPECTED = {
     ("ufw-delete-num", ("3",)): "yes | ufw delete 3 2>&1",
     ("ufw-deny-ip", ("203.0.113.5", "panel-autoblock")):
         "ufw insert 1 deny from 203.0.113.5 comment panel-autoblock 2>&1",
+    ("f2b-status", ()): "fail2ban-client status 2>&1",
+    ("f2b-status-jail", ("sshd",)): "fail2ban-client status sshd 2>&1",
+    ("f2b-unban", ("sshd", "203.0.113.5")): "fail2ban-client set sshd unbanip 203.0.113.5 2>&1",
+    ("f2b-reload", ()): "fail2ban-client reload 2>&1",
+    ("service-restart", ("ssh",)): "systemctl restart ssh 2>&1",
+    ("service-enable-now", ("fail2ban",)): "systemctl enable --now fail2ban 2>&1",
+    ("service-disable-now", ("cups",)): "systemctl disable --now cups 2>&1",
 }
 _wrong = []
 for (_v, _a), _want in _REMOTE_EXPECTED.items():

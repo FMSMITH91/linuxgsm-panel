@@ -1367,7 +1367,7 @@ def panel_fail2ban_status():
     have, _, _ = _run("command -v fail2ban-client >/dev/null 2>&1 && echo yes || echo no", timeout=10)
     if "yes" not in (have or ""):
         return {"installed": False, "enabled": False, "banned": 0}
-    out, _, rc = _run("fail2ban-client status linuxgsm-panel 2>/dev/null", timeout=10, sudo=True)
+    out, _, rc = _run_verb("f2b-status-jail", ["linuxgsm-panel"], timeout=10, merge_stderr=False)
     if rc != 0 or not out:
         return {"installed": True, "enabled": False, "banned": 0}
     m = re.search(r"Currently banned:\s*(\d+)", out)
@@ -1377,7 +1377,7 @@ def panel_fail2ban_status():
 def panel_fail2ban_banned_ips():
     """The set of IPs the panel-login jail is currently banning (empty if the jail isn't up).
     Used by the ban-watcher to record new bans/unbans in the audit log."""
-    out, _, rc = _run("fail2ban-client status linuxgsm-panel 2>/dev/null", timeout=10, sudo=True)
+    out, _, rc = _run_verb("f2b-status-jail", ["linuxgsm-panel"], timeout=10, merge_stderr=False)
     if rc != 0 or not out:
         return set()
     m = re.search(r"Banned IP list:\s*(.*)", out)
@@ -1389,7 +1389,7 @@ _JAIL_RE = re.compile(r"^[A-Za-z0-9._-]{1,64}$")
 
 def _fail2ban_jails():
     """Names of all configured fail2ban jails on this host ([] if fail2ban isn't up)."""
-    out, _, rc = _run("fail2ban-client status 2>/dev/null", timeout=10, sudo=True)
+    out, _, rc = _run_verb("f2b-status", [], timeout=10, merge_stderr=False)
     if rc != 0 or not out:
         return []
     m = re.search(r"Jail list:\s*(.*)", out)
@@ -1401,7 +1401,7 @@ def fail2ban_jail_detail(jail):
     or None. Jail name is validated before it reaches the command."""
     if not _JAIL_RE.match(jail or ""):
         return None
-    out, _, rc = _run("fail2ban-client status %s 2>/dev/null" % shlex.quote(jail), timeout=10, sudo=True)
+    out, _, rc = _run_verb("f2b-status-jail", [jail], timeout=10, merge_stderr=False)
     if rc != 0 or not out:
         return None
 
@@ -1552,8 +1552,7 @@ def fail2ban_unban(jail, ip):
         return False, "Invalid IP address."
     if not re.fullmatch(r"[0-9A-Fa-f:.]{1,45}", ip):   # metacharacter-free guard (a barrier CodeQL recognises)
         return False, "Invalid IP address."
-    out, err, rc = _run("fail2ban-client set %s unbanip %s 2>&1" % (shlex.quote(jail), shlex.quote(ip)),
-                        timeout=15, sudo=True)
+    out, err, rc = _run_verb("f2b-unban", [jail, ip], timeout=15)
     if rc == 0:
         return True, "Unbanned %s from %s." % (ip, jail)
     return False, ((out or err or "Unban failed").replace("\n", " ")[:200])
@@ -1648,8 +1647,10 @@ def configure_panel_fail2ban(auth_log, web_port, ignore_ips=None):
     _write_root_file(_F2B_PANEL_FILTER, _panel_f2b_filter_body())
     _write_root_file(_F2B_PANEL_JAIL, _panel_f2b_jail_body(auth_log, web_port, ignore_ips))
 
-    _run("systemctl enable --now fail2ban 2>&1", timeout=45, sudo=True)
-    _run("fail2ban-client reload 2>&1 || systemctl restart fail2ban 2>&1", timeout=45, sudo=True)
+    _run_verb("service-enable-now", ["fail2ban"], timeout=45)
+    # Was `fail2ban-client reload || systemctl restart fail2ban` in one root shell.
+    if _run_verb("f2b-reload", [], timeout=45)[2] != 0:
+        _run_verb("service-restart", ["fail2ban"], timeout=45)
 
     _f2b_ok_msg = ("fail2ban is now protecting the panel login — 5 failed logins from an IP in "
                    "10 minutes get it banned for an hour.")
@@ -1660,12 +1661,12 @@ def configure_panel_fail2ban(auth_log, web_port, ignore_ips=None):
             return True, _f2b_ok_msg
         time.sleep(1)
     # Still down after a reload: one hard restart, then a final look.
-    _run("systemctl restart fail2ban 2>&1", timeout=45, sudo=True)
+    _run_verb("service-restart", ["fail2ban"], timeout=45)
     time.sleep(2)
     if panel_fail2ban_status().get("enabled"):
         return True, _f2b_ok_msg
     # Give up — but surface the REAL reason instead of a generic message.
-    detail, derr, _ = _run("fail2ban-client status linuxgsm-panel 2>&1", timeout=10, sudo=True)
+    detail, derr, _ = _run_verb("f2b-status-jail", ["linuxgsm-panel"], timeout=10)
     reason = (detail or derr or "").strip()
     if not reason:
         reason, _, _ = _run("journalctl -u fail2ban --no-pager -n 25 2>/dev/null | "
