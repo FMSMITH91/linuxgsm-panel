@@ -12,6 +12,12 @@ name: Dependency Review
 on:
   pull_request:
     branches: [ main ]
+    # This action diffs the dependency manifest for newly-introduced vulnerable or
+    # incompatibly-licensed packages. With no manifest change there is no diff to review, so the
+    # run can only ever report "nothing changed".
+    paths:
+      - 'requirements.txt'
+      - '.github/workflows/dependency-review.yml'
 
 # Least-privilege: this only needs to read the repo + its dependency graph.
 permissions:

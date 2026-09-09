@@ -17,6 +17,14 @@ on:
       - '.gitignore'
       - '.gitattributes'
       - '.editorconfig'
+      # Lighthouse boots the panel and audits RENDERED pages, so only things that can change what
+      # a page looks like matter to it. Test files, the shell installers, the fuzzing harness and
+      # the bundled LinuxGSM data cannot — a tests-only PR was paying for a full app boot and
+      # audit to measure something it could not have altered.
+      - 'tests/**'
+      - '.clusterfuzzlite/**'
+      - 'lgsm/**'
+      - '*.sh'
   pull_request:
     branches: [ main ]
     paths-ignore:
@@ -26,6 +34,14 @@ on:
       - '.gitignore'
       - '.gitattributes'
       - '.editorconfig'
+      # Lighthouse boots the panel and audits RENDERED pages, so only things that can change what
+      # a page looks like matter to it. Test files, the shell installers, the fuzzing harness and
+      # the bundled LinuxGSM data cannot — a tests-only PR was paying for a full app boot and
+      # audit to measure something it could not have altered.
+      - 'tests/**'
+      - '.clusterfuzzlite/**'
+      - 'lgsm/**'
+      - '*.sh'
   workflow_dispatch:
 
 permissions:
