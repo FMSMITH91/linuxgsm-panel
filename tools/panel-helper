@@ -35,7 +35,9 @@ USAGE
 import ipaddress
 import os
 import re
+import shutil
 import tempfile
+import time
 import subprocess  # nosec B404 - fixed argv, shell=False, no untrusted text reaches a shell
 import sys
 
@@ -57,6 +59,8 @@ TOOLS = {
     "passwd": ("/usr/bin/passwd", "/bin/passwd"),
     "pkill": ("/usr/bin/pkill", "/bin/pkill"),
     "rm": ("/usr/bin/rm", "/bin/rm"),
+    "sshd": ("/usr/sbin/sshd", "/sbin/sshd"),
+    "ss": ("/usr/bin/ss", "/usr/sbin/ss", "/sbin/ss", "/bin/ss"),
     "sysctl": ("/usr/sbin/sysctl", "/sbin/sysctl"),
     "journalctl": ("/usr/bin/journalctl", "/bin/journalctl"),
     "tail": ("/usr/bin/tail", "/bin/tail"),
@@ -108,6 +112,13 @@ OS_UPDATE_LOG = "/run/panel-os-update.log"
 USERNAME_RE = r"[A-Za-z_][A-Za-z0-9._-]{0,31}"
 HOME_ROOT = "/home"
 
+# The sshd drop-in the panel manages, and the snapshot it keeps beside it while changing the port.
+# The snapshot deliberately does NOT end in ".conf": sshd_config.d is included as "*.conf", so a
+# file named "….conf.bak" is inert there — which is why the backup can live next to the original.
+SSHD_DROPIN = "/etc/ssh/sshd_config.d/99-panel-sshport.conf"
+SSHD_DROPIN_BAK = SSHD_DROPIN + ".bak"
+
+
 # Root-owned files the panel writes, by NAME. The content arrives on stdin and the path is looked
 # up here — so a caller names a destination, it never supplies one. This is the whole reason the
 # write verb is safe: there is no argument that could become a path.
@@ -122,6 +133,10 @@ WRITE_TARGETS = {
     "fail2ban-panel-jail": ("/etc/fail2ban/jail.d/linuxgsm-panel.conf", 0o644),
     "node-tools-cron": ("/etc/cron.d/lgsm-node-tools", 0o644),
     "sysctl-tailscale": ("/etc/sysctl.d/99-tailscale.conf", 0o644),
+    # Added deliberately, with the sshd verbs below. Every other write here is a config the panel
+    # owns outright; this one changes how the operator reaches the machine, which is why it was
+    # held back until the backup/validate/restore verbs existed to go with it.
+    "sshd-port-dropin": (SSHD_DROPIN, 0o644),
 }
 
 
@@ -212,6 +227,17 @@ def v_linecount(s):
     return s
 
 
+def v_portlist(s):
+    """A comma-separated port list for a fail2ban jail: "2222,22"."""
+    parts = s.split(",")
+    if not (1 <= len(parts) <= 10):
+        raise ValueError("expected 1..10 ports")
+    for p in parts:
+        if not re.fullmatch(r"[1-9][0-9]{0,4}", p) or not (1 <= int(p) <= 65535):
+            raise ValueError("not a port list")
+    return s
+
+
 def v_package(s):
     """A Debian package name, optionally with an architecture qualifier (gcc:i386)."""
     if not re.fullmatch(r"[a-z0-9][a-z0-9+.-]{0,60}(?::[a-z0-9]{1,10})?", s):
@@ -295,6 +321,22 @@ VERBS = {
     # The build function is never called for this verb: ACTIONS handles it, because the write is
     # done in Python rather than by running a tool. It is here so the verb has one home.
     "write-file": ([v_choice(*sorted(WRITE_TARGETS))], lambda a: [], None),
+
+    # ── sshd port changes ──
+    # Every step of the panel's port change, so the sequence that protects the operator — snapshot,
+    # write, VALIDATE, restart, verify, restore on any failure — survives intact without a shell.
+    "sshd-backup-dropin": ([], lambda a: [], None),
+    "sshd-restore-dropin": ([], lambda a: [], None),
+    "sshd-discard-backup": ([], lambda a: [], None),
+    "f2b-set-sshd-ports": ([v_portlist], lambda a: [], None),
+    # `sshd -t` parses the WHOLE config and exits non-zero if anything in it is invalid. It is the
+    # step that stops a bad drop-in from ever reaching a restart.
+    "sshd-validate": ([], lambda a: ["sshd", "-t"], None),
+    # Listening sockets, so the caller can confirm sshd actually bound the new port. The panel
+    # greps the output in Python; no port reaches a command line.
+    "listening-sockets": ([], lambda a: ["ss", "-lnt"], None),
+    # Reboot, a couple of seconds out, so the command asking for it can return first.
+    "reboot-delayed": ([], lambda a: [], None),
 
     # ── cron and user accounts ──
     "crontab-list": ([v_username], lambda a: ["crontab", "-u", a[0], "-l"], None),
@@ -392,6 +434,99 @@ VERBS = {
 
 
 
+def do_sshd_backup(args, content):
+    """Snapshot the panel's sshd drop-in, if it exists. A missing file is success, not an error —
+    the restore below treats "no snapshot" as "there was no drop-in before us"."""
+    if os.path.isfile(SSHD_DROPIN):
+        shutil.copyfile(SSHD_DROPIN, SSHD_DROPIN_BAK)
+        os.chmod(SSHD_DROPIN_BAK, 0o600)
+    return 0
+
+
+def do_sshd_restore(args, content):
+    """Put the snapshot back, or remove the drop-in if there was no snapshot.
+
+    This is the rollback for a port change that did not work, so it has to be the exact inverse of
+    do_sshd_backup: a host that had no drop-in before ends with no drop-in, not with an empty one."""
+    if os.path.isfile(SSHD_DROPIN_BAK):
+        os.replace(SSHD_DROPIN_BAK, SSHD_DROPIN)
+        os.chmod(SSHD_DROPIN, 0o644)
+    else:
+        try:
+            os.unlink(SSHD_DROPIN)
+        except FileNotFoundError:
+            # Nothing to undo. The caller reverts unconditionally on any failure, including ones
+            # that happen before the drop-in is written, so this is a normal path.
+            pass
+    return 0
+
+
+def do_sshd_discard_backup(args, content):
+    """Drop the snapshot after a successful change."""
+    try:
+        os.unlink(SSHD_DROPIN_BAK)
+    except FileNotFoundError:
+        pass          # there was no drop-in to snapshot; nothing to clean up
+    return 0
+
+
+def do_f2b_sshd_ports(args, content):
+    r"""Point fail2ban's [sshd] jail at a new port list.
+
+    Was an in-place `sed -i '/^\[sshd\]/,/^\[/{s/^port *=.*/port = …/}'` running as root. The
+    same edit in Python: walk jail.local, and inside the [sshd] section only, replace the port line.
+    No jail.local, or no [sshd] section, means nothing to do — fail2ban keeps its default."""
+    ports = args[0]
+    path = "/etc/fail2ban/jail.local"
+    if not os.path.isfile(path):
+        return 0
+    with open(path) as fh:
+        lines = fh.readlines()
+    out, in_sshd, changed = [], False, False
+    for line in lines:
+        stripped = line.strip()
+        if stripped.startswith("["):
+            in_sshd = stripped == "[sshd]"
+        elif in_sshd and re.match(r"\s*port\s*=", line):
+            line = "port = %s\n" % ports
+            changed = True
+        out.append(line)
+    if changed:
+        fd, tmp = tempfile.mkstemp(dir=os.path.dirname(path), prefix=".panel-", suffix=".tmp")
+        with os.fdopen(fd, "w") as fh:
+            fh.writelines(out)
+        os.chmod(tmp, 0o644)
+        os.replace(tmp, path)
+    return 0
+
+
+def do_reboot_delayed(args, content):
+    """Reboot a couple of seconds from now, so the command that asked for it can return first.
+
+    Was `( sleep 2 ; reboot ) >/dev/null 2>&1 & echo scheduled` — a subshell, a background job and
+    a redirect, all needing a shell. The double fork does the same thing: the grandchild is
+    re-parented to init, survives this process exiting, waits, and execs reboot. No shell, and the
+    only thing it can exec is the reboot binary this table resolves."""
+    pid = os.fork()
+    if pid == 0:                       # child
+        os.setsid()                    # detach from the session, so our exit cannot kill it
+        if os.fork() == 0:             # grandchild — re-parented to init
+            try:
+                devnull = os.open(os.devnull, os.O_RDWR)
+                for fd in (0, 1, 2):
+                    os.dup2(devnull, fd)
+                time.sleep(REBOOT_DELAY_SECONDS)
+                os.execv(resolve("reboot"), ["reboot"])
+            except BaseException:
+                os._exit(1)
+        os._exit(0)
+    os.waitpid(pid, 0)                 # reap the middle process immediately
+    return 0
+
+
+REBOOT_DELAY_SECONDS = 2
+
+
 def do_write_file(args, content):
     """Write `content` to a named root-owned destination.
 
@@ -424,7 +559,14 @@ def do_write_file(args, content):
 
 # Verbs implemented by a function here instead of by running a tool. Each takes the validated
 # arguments and the content read from this process's stdin.
-ACTIONS = {"write-file": do_write_file}
+ACTIONS = {
+    "write-file": do_write_file,
+    "sshd-backup-dropin": do_sshd_backup,
+    "sshd-restore-dropin": do_sshd_restore,
+    "sshd-discard-backup": do_sshd_discard_backup,
+    "f2b-set-sshd-ports": do_f2b_sshd_ports,
+    "reboot-delayed": do_reboot_delayed,
+}
 
 
 def validate(verb, args):

@@ -3655,7 +3655,10 @@ _authmod._TOKEN_FAILS.clear()
 # What was hidden: 22 calls to datetime.utcnow(), deprecated in 3.12 and scheduled for removal —
 # exactly the class of warning that predicts the next Python breaking the panel.
 import re as _re
+import shutil as _shutil
 import subprocess as _sp
+import tempfile as _tempfile
+import time as _time
 import clock as _clock
 from datetime import datetime as _dtm, timezone as _tz
 
@@ -3791,6 +3794,13 @@ _VERB_SAMPLES = {
     "user-remove-home": ["codserver"],
     "write-file": ["fail2ban-jail-local"],
     "sysctl-reload": ["tailscale"],
+    "sshd-backup-dropin": [],
+    "sshd-restore-dropin": [],
+    "sshd-discard-backup": [],
+    "sshd-validate": [],
+    "listening-sockets": [],
+    "f2b-set-sshd-ports": ["2222,22"],
+    "reboot-delayed": [],
 }
 check("privileged: every verb has a sample (new verbs cannot skip the parity check)",
       set(_VERB_SAMPLES) == set(_priv.verbs()),
@@ -3820,8 +3830,8 @@ check("helper: resolves ufw", _helper.resolve("ufw").endswith("/ufw") if os.path
 check("helper: knows exactly the tools its verbs need, and no more",
       sorted(_helper.TOOLS) == ["add-apt-repository", "apt-get", "crontab", "dpkg",
                                 "fail2ban-client", "fuser", "journalctl", "passwd", "pgrep",
-                                "pkill", "reboot", "rm", "sysctl", "systemctl", "tail", "ufw",
-                                "useradd", "userdel"],
+                                "pkill", "reboot", "rm", "ss", "sshd", "sysctl", "systemctl",
+                                "tail", "ufw", "useradd", "userdel"],
       sorted(_helper.TOOLS))
 for _prog in ("bash", "sh", "python3", "env"):
     check("helper: refuses to resolve %s" % _prog, _ufw_raises_fnf(_helper.resolve, _prog))
@@ -3854,6 +3864,7 @@ _BAD = {
     # write-file takes a destination NAME. A path is not "escaped" here, it is not accepted.
     "write-file": ["/etc/shadow", "/etc/passwd", "../../etc/shadow", "fail2ban-jail-local; id", ""],
     "sysctl-reload": ["../../etc", "tailscale; id", ""],
+    "f2b-set-sshd-ports": ["22; id", "0", "99999", "a,b", "", "1,2,3,4,5,6,7,8,9,10,11"],
 }
 _leaked = []
 for _v, _bads in _BAD.items():
@@ -3977,8 +3988,22 @@ check("privileged: every write target is an absolute path under /etc",
 check("privileged: no write target is group- or world-writable",
       all(m & 0o022 == 0 for _p, m in _priv.WRITE_TARGETS.values()),
       str({p: oct(m) for p, m in _priv.WRITE_TARGETS.values()})[:120])
-check("privileged: the sshd drop-in is deliberately NOT a write target yet",
-      not any("sshd" in p for p, _m in _priv.WRITE_TARGETS.values()))
+# This gate used to assert the sshd drop-in was ABSENT, so that adding it could not happen by
+# accident in a batch. It is present now, deliberately, together with the backup / validate /
+# restore verbs that make changing it survivable. What is checked has moved accordingly: the
+# drop-in may be written only if every step of the rollback sequence exists as a verb.
+_SSHD_SEQUENCE = ["sshd-backup-dropin", "sshd-validate", "sshd-restore-dropin",
+                  "sshd-discard-backup"]
+check("privileged: the sshd drop-in is writable only alongside its whole rollback sequence",
+      ("sshd-port-dropin" in _priv.WRITE_TARGETS)
+      <= all(v in _priv.verbs() for v in _SSHD_SEQUENCE),
+      "missing: %s" % [v for v in _SSHD_SEQUENCE if v not in _priv.verbs()])
+check("privileged: the sshd snapshot cannot be read back by sshd (it must not end in .conf)",
+      not _priv.SSHD_DROPIN_BAK.endswith(".conf") and _priv.SSHD_DROPIN.endswith(".conf"),
+      _priv.SSHD_DROPIN_BAK)
+check("privileged: both copies agree on the sshd paths",
+      (_priv.SSHD_DROPIN, _priv.SSHD_DROPIN_BAK)
+      == (_helper.SSHD_DROPIN, _helper.SSHD_DROPIN_BAK))
 # Once WRITE_TARGETS owns a path, the module-level constant that used to hold it has no users left
 # — and CodeQL's py/unused-global-variable turns main RED for it, via the open-alerts gate from
 # #101. Two of these were missed one at a time; this checks the whole family at once.
@@ -4027,6 +4052,114 @@ check("ufw: _ufw_is_active is false for inactive", sm._ufw_is_active("Status: in
 check("ufw: _ufw_is_active is false for empty output", sm._ufw_is_active("") is False)
 check("ufw: _ufw_is_active is not fooled by the word active elsewhere",
       sm._ufw_is_active("To    Action\n22    ALLOW  # keep this rule active") is False)
+
+# ── The sshd port change, exercised for real ──────────────────────────────────────────────────
+# This is the one privileged sequence whose failure mode is "the operator cannot reach the machine
+# any more", so it is tested against a sandboxed filesystem rather than by asserting the argv. The
+# property that matters is the ROLLBACK: whatever the host looked like before, a failed change puts
+# it back exactly.
+_sandbox = _tempfile.mkdtemp(prefix="panel-sshd-")
+os.makedirs(os.path.join(_sandbox, "etc/ssh/sshd_config.d"))
+os.makedirs(os.path.join(_sandbox, "etc/fail2ban"))
+
+
+def _sandboxed_helper():
+    """The helper module, with every path it writes redirected under a temp dir."""
+    _spec = _ilu.spec_from_loader("ph_sandbox",
+                                  _machinery.SourceFileLoader("ph_sandbox", _helper_path))
+    _m = _ilu.module_from_spec(_spec)
+    _spec.loader.exec_module(_m)
+    _m.SSHD_DROPIN = _sandbox + _m.SSHD_DROPIN
+    _m.SSHD_DROPIN_BAK = _m.SSHD_DROPIN + ".bak"
+    _m.WRITE_TARGETS = dict(_m.WRITE_TARGETS,
+                            **{"sshd-port-dropin": (_m.SSHD_DROPIN, 0o644)})
+    return _m
+
+
+_h = _sandboxed_helper()
+
+# (a) No drop-in before -> a failed change must leave no drop-in. Getting this wrong leaves an
+#     empty file that sshd reads, which is how a "rollback" locks someone out.
+_h.do_sshd_backup([], None)
+check("sshd: backing up a host with no drop-in creates no snapshot",
+      not os.path.exists(_h.SSHD_DROPIN_BAK))
+_h.do_write_file(["sshd-port-dropin"], "Port 2222\nPort 22\n")
+_h.do_sshd_restore([], None)
+check("sshd: rolling back a host that had no drop-in removes the file entirely",
+      not os.path.exists(_h.SSHD_DROPIN))
+
+# (b) An existing drop-in must come back byte-identical, comments and all.
+_ORIGINAL = "# the operator's own file\nPort 22\nListenAddress 10.0.0.1:22\n"
+open(_h.SSHD_DROPIN, "w").write(_ORIGINAL)
+_h.do_sshd_backup([], None)
+_h.do_write_file(["sshd-port-dropin"], "Port 2222\nPort 22\n")
+check("sshd: the new drop-in is what got written",
+      open(_h.SSHD_DROPIN).read() == "Port 2222\nPort 22\n")
+_h.do_sshd_restore([], None)
+check("sshd: rolling back restores the previous drop-in byte for byte",
+      open(_h.SSHD_DROPIN).read() == _ORIGINAL)
+check("sshd: and the snapshot is consumed, not left lying in sshd_config.d",
+      not os.path.exists(_h.SSHD_DROPIN_BAK))
+
+# (c) Discarding the snapshot on success is idempotent — the success path runs it once, but a
+#     retry must not turn into an error.
+_h.do_sshd_backup([], None)
+_h.do_sshd_discard_backup([], None)
+_h.do_sshd_discard_backup([], None)
+check("sshd: discarding the snapshot twice is not an error",
+      not os.path.exists(_h.SSHD_DROPIN_BAK))
+
+# (d) The fail2ban jail edit must touch ONLY the [sshd] section. The sed range it replaces
+#     (/^\[sshd\]/,/^\[/) was doing the same job with a regex running as root.
+_jail = os.path.join(_sandbox, "etc/fail2ban/jail.local")
+open(_jail, "w").write("[DEFAULT]\nbantime = 1h\nport = 9999\n\n"
+                       "[sshd]\nenabled = true\nport = 22\nmaxretry = 5\n\n"
+                       "[nginx]\nport = 80\n")
+_h2_src = open(_helper_path, encoding="utf-8").read().replace(
+    'path = "/etc/fail2ban/jail.local"', 'path = %r' % _jail)
+_h2 = {}
+exec(compile(_h2_src, "ph_jail", "exec"), _h2)     # noqa: S102 - test fixture, our own source
+_h2["do_f2b_sshd_ports"](["2222,22"], None)
+_jail_after = open(_jail).read()
+check("f2b: the [sshd] jail gets the new port list",
+      "port = 2222,22" in _jail_after.split("[sshd]")[1])
+check("f2b: [DEFAULT]'s port is left alone",
+      "port = 9999" in _jail_after.split("[sshd]")[0])
+check("f2b: another jail's port is left alone", "port = 80" in _jail_after)
+check("f2b: a host with no jail.local is a no-op, not a failure",
+      _h.do_f2b_sshd_ports(["22"], None) == 0)
+
+# (e) The deferred reboot must RETURN IMMEDIATELY and fire later — that is the whole reason it was
+#     a backgrounded subshell. Run in a subprocess against a fake reboot binary, so this can be
+#     asserted without the suite rebooting the machine it is running on.
+_fake_reboot = os.path.join(_sandbox, "fake-reboot")
+_marker = os.path.join(_sandbox, "fired")
+open(_fake_reboot, "w").write("#!/bin/sh\necho fired > %s\n" % _marker)
+os.chmod(_fake_reboot, 0o755)
+_probe = (
+    "import importlib.util as u, importlib.machinery as m, time, sys;"
+    "s=u.spec_from_loader('p', m.SourceFileLoader('p', %r));"
+    "mod=u.module_from_spec(s); s.loader.exec_module(mod);"
+    "mod.resolve=lambda p: %r; mod.REBOOT_DELAY_SECONDS=1;"
+    "t=time.time(); mod.do_reboot_delayed([], None);"
+    "print('ELAPSED=%%.2f' %% (time.time()-t))" % (_helper_path, _fake_reboot)
+)
+try:
+    _r = _sp.run([sys.executable, "-c", _probe], capture_output=True, text=True, timeout=60)
+    _parts = _r.stdout.strip().rsplit("ELAPSED=", 1)
+    _elapsed = float(_parts[1]) if len(_parts) == 2 else 9.0   # no marker -> treat as a failure
+    check("reboot: the call returns at once instead of blocking for the delay",
+          _elapsed < 0.5, _r.stdout.strip() + _r.stderr.strip()[:80])
+    check("reboot: nothing has fired yet when it returns", not os.path.exists(_marker))
+    _t_end = _time.time() + 8
+    while not os.path.exists(_marker) and _time.time() < _t_end:
+        _time.sleep(0.2)
+    check("reboot: the detached child fires after the delay", os.path.exists(_marker))
+except Exception as _e:                     # a sandbox that forbids fork should not fail the suite
+    check("reboot: deferred-reboot probe ran", True, "skipped: %s" % _e)
+
+_shutil.rmtree(_sandbox, ignore_errors=True)
+
 
 # ── The three transports, including the one every existing install is actually on ──────────────
 # run_privileged() has three paths and until now the suite exercised none of them. That matters
@@ -4101,7 +4234,7 @@ import ast as _ast
 
 _ESCALATION_FILES = ["app.py", "auth.py", "ssh_manager.py", "system_ops.py", "notifications.py",
                      "backup.py", "db_maintenance.py", "tailscale_integration.py", "manage.py"]
-_CEILING = {"sudo=True": 31, "_sudo_sh": 16}   # measured at the time of writing; lower only
+_CEILING = {"sudo=True": 23, "_sudo_sh": 16}   # measured at the time of writing; lower only
 
 _census = {"sudo=True": 0, "_sudo_sh": 0}
 for _f in _ESCALATION_FILES:

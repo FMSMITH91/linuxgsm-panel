@@ -3675,7 +3675,7 @@ def remote_bootstrap_vps(server, set_timezone="UTC", enable_ufw=True, install_lg
             emit("Rebooting to apply a kernel/library update", status="rebooting",
                  detail="A system update requires a reboot and no game servers are running.")
             # Schedule the reboot slightly in the future so this command returns cleanly.
-            run_command(server, "( sleep 2 ; reboot ) >/dev/null 2>&1 & echo scheduled", timeout=15, sudo=True)
+            run_privileged(server, "reboot-delayed", [], timeout=15, merge_stderr=False)
             close_connection(server)
             came_back = _wait_for_reboot(server, on_wait=lambda t: note(t, status="rebooting"))
             if not came_back:
@@ -4219,11 +4219,7 @@ def change_ssh_port(server, new_port, bind_addr=""):
 
     # 2. Snapshot any existing drop-in (so a failed bind change restores the EXACT prior state),
     #    then write the new one. Ubuntu 22.04/24.04 Include /etc/ssh/sshd_config.d/*.conf by default.
-    import base64
-    dropin = "/etc/ssh/sshd_config.d/99-panel-sshport.conf"
-    bak = dropin + ".bak"
-    run_command(server, f"[ -f {_quote(dropin)} ] && cp -f {_quote(dropin)} {_quote(bak)} || true",
-                timeout=10, sudo=True)
+    run_privileged(server, "sshd-backup-dropin", [], timeout=10, merge_stderr=False)
     header = ("# Managed by LinuxGSM Panel. The previous SSH port is kept as a fallback; close it\n"
               "# from the panel's Firewall page once you've confirmed the new port works.\n")
     if bind_addr:
@@ -4232,31 +4228,25 @@ def change_ssh_port(server, new_port, bind_addr=""):
         body = "".join("ListenAddress %s:%s\n" % (_a, p) for p in ports)
     else:
         body = "".join("Port %s\n" % p for p in ports)
-    b64 = base64.b64encode((header + body).encode()).decode()
-    run_command(server, f"echo '{b64}' | base64 -d > {_quote(dropin)}", timeout=15, sudo=True)
+    write_root_file(server, "sshd-port-dropin", header + body, timeout=15)
 
     def _revert(msg):
         # Restore the snapshot if we took one, else drop the file, then restart sshd. The prior
         # binding is untouched the whole time, so SSH keeps working.
-        run_command(server,
-                    f"if [ -f {_quote(bak)} ]; then mv -f {_quote(bak)} {_quote(dropin)}; "
-                    f"else rm -f {_quote(dropin)}; fi",
-                    timeout=10, sudo=True)
+        run_privileged(server, "sshd-restore-dropin", [], timeout=10, merge_stderr=False)
         _restart_sshd(server, timeout=20)
         return False, msg
 
     # 3. Validate the WHOLE sshd config; if the drop-in breaks it, roll back and abort (no restart).
-    _, terr, trc = run_command(server, "sshd -t 2>&1", timeout=15, sudo=True)
+    tout, terr, trc = run_privileged(server, "sshd-validate", [], timeout=15)
+    terr = terr or tout
     if trc != 0:
         return _revert("sshd rejected the new config — nothing changed. (%s)" % ((terr or "invalid")[:120]))
 
     # 4. Point fail2ban's [sshd] jail at the new + old ports so its bans target the right port.
-    f2b_ports = ",".join(ports)
-    run_command(server,
-                "if [ -f /etc/fail2ban/jail.local ]; then "
-                f"sed -i '/^\\[sshd\\]/,/^\\[/{{s/^port *=.*/port = {f2b_ports}/}}' /etc/fail2ban/jail.local; "
-                "systemctl restart fail2ban 2>&1 || true; fi",
-                timeout=20, sudo=True)
+    run_privileged(server, "f2b-set-sshd-ports", [",".join(ports)], timeout=20,
+                   merge_stderr=False)
+    run_privileged(server, "service-restart", ["fail2ban"], timeout=20, merge_stderr=False)
 
     # 5. Restart sshd (Ubuntu's unit is 'ssh'; fall back to 'sshd'). Established sessions survive.
     _restart_sshd(server, timeout=20)
@@ -4269,13 +4259,14 @@ def change_ssh_port(server, new_port, bind_addr=""):
                            "The bind address has to be the one the panel connects to."
                            % (bind_addr, server.host, new_port))
     else:
-        out, _, _ = run_command(
-            server, f"ss -lnt 2>/dev/null | grep -qE '[:.]{new_port}[[:space:]]' && echo OK || echo NO",
-            timeout=15, sudo=True)
-        if "OK" not in (out or ""):
+        # Was `ss -lnt | grep -qE '[:.]<port>[[:space:]]' && echo OK || echo NO` — the new port
+        # was interpolated into a regex running as root. Same match in Python.
+        out, _, _ = run_privileged(server, "listening-sockets", [], timeout=15, merge_stderr=False)
+        if not re.search(r"[:.]%d\s" % new_port, out or ""):
             return _revert("sshd didn't come up on port %d — reverted. Your existing SSH still works." % new_port)
 
-    run_command(server, f"rm -f {_quote(bak)}", timeout=10, sudo=True)   # success — drop the snapshot
+    run_privileged(server, "sshd-discard-backup", [], timeout=10,
+                   merge_stderr=False)   # success — drop the snapshot
     where = (" on %s" % bind_addr) if bind_addr else ""
     return True, ("SSH now listens on port %d%s (firewall + fail2ban updated). The previous port is "
                   "still available as a fallback — once you've confirmed you can reach SSH on %d, "
