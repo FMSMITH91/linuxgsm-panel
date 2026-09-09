@@ -134,6 +134,56 @@ def live_metrics():
 
 # ─── Helpers ──────────────────────────────────────────────────
 
+import privileged as _priv
+
+_HELPER_STATE = {"present": None}
+
+
+def _helper_present():
+    """Whether the root-owned privileged helper is installed on this machine (cached)."""
+    if _HELPER_STATE["present"] is None:
+        try:
+            _HELPER_STATE["present"] = (os.path.isfile(_priv.HELPER_PATH)
+                                        and os.access(_priv.HELPER_PATH, os.X_OK))
+        except Exception:
+            _HELPER_STATE["present"] = False
+    return _HELPER_STATE["present"]
+
+
+def _run_verb(verb, args=(), timeout=30, merge_stderr=True):
+    """Run a privileged VERB (privileged.py) on this host. system_ops is always the panel's own
+    machine, so there is no remote transport here — just the helper when it is installed, the tool
+    directly when we are already root, and the pre-helper shell form otherwise.
+
+    That last branch is why this is not yet a privilege boundary: see run_privileged() in
+    ssh_manager for the same caveat. It exists so a host that has the new code but has not had
+    install.sh re-run as root keeps working."""
+    if _helper_present():
+        argv = _priv.helper_argv(verb, args)
+    elif hasattr(os, "geteuid") and os.geteuid() == 0:
+        argv = _priv.tool_argv(verb, args)
+    else:
+        return _run(_priv.remote_command(verb, args, merge_stderr=merge_stderr),
+                    timeout=timeout, sudo=True)
+    try:
+        r = subprocess.run(argv, shell=False,  # nosec B603 - argv from privileged.py's fixed table
+                           input=_priv.stdin_for(verb), capture_output=True, text=True,
+                           timeout=timeout)
+    except subprocess.TimeoutExpired:
+        return "", "Command timed out", -1
+    except FileNotFoundError:
+        return "", "Command not found", -1
+    except Exception:
+        _log.debug("privileged verb failed", exc_info=True)
+        return "", "command execution error", -1
+    out, err = (r.stdout or "").strip(), (r.stderr or "").strip()
+    if merge_stderr:
+        # The shell form ended in `2>&1` and callers read tool errors out of stdout; merging keeps
+        # a message on the stream its caller already reads.
+        return ("\n".join(x for x in (out, err) if x)).strip(), "", r.returncode
+    return out, err, r.returncode
+
+
 def _run(cmd, timeout=30, sudo=False, text=True):
     """Run a shell command. Returns (stdout, stderr, exit_code)."""
     # os.geteuid() is Unix-only; guard it so callers don't crash off-Linux (tests).
@@ -180,7 +230,7 @@ def _check_sudo(force=False):
 
 def ufw_status():
     """Get UFW status and rules."""
-    out, err, rc = _run("ufw status verbose 2>&1", timeout=15, sudo=True)
+    out, err, rc = _run_verb("ufw-status", ["verbose"], timeout=15)
     if rc != 0:
         return {"enabled": False, "status_text": "not_installed" if "not found" in err or "not installed" in err else "inactive", "rules": []}
 
@@ -226,7 +276,7 @@ def ufw_allow_tailscale(ts_interface=None):
     # redundant, and a second rule just shows up as a confusing duplicate `tailscale0` row
     # in the firewall list. (This matches the remote bootstrap, which adds `in` only.)
     out1, err1, rc1 = _run(
-        f"ufw allow in on {ts_interface} 2>&1", timeout=15, sudo=True
+        "ufw-allow-iface", [ts_interface], timeout=15
     )
     if rc1 == 0:
         return True, f"UFW rule added for interface '{ts_interface}'"
@@ -501,8 +551,10 @@ def get_server_status(force=False):
     # Check if tailscale interface is already allowed in UFW
     tailscale_ufw_allowed = False
     if ts_iface and ufw["enabled"]:
-        out, _, _ = _run(f"ufw status verbose 2>&1 | grep -i '{ts_iface}'", timeout=10, sudo=True)
-        tailscale_ufw_allowed = bool(out.strip())
+        out, _, _ = _run_verb("ufw-status", ["verbose"], timeout=10)
+        # The grep interpolated an interface name into a root command line; matching in Python is
+        # the same answer without that.
+        tailscale_ufw_allowed = any(ts_iface.lower() in ln.lower() for ln in (out or "").splitlines())
 
     result = {
         "has_sudo": has_sudo,
@@ -1385,7 +1437,7 @@ _UFW_BLOCK_TAG = "panel-block"          # one-off manual block
 
 def ufw_blocked_ips():
     """{ip: tag} for the panel host's own UFW deny rules (tag from the rule comment). Best-effort."""
-    out, _, _ = _run("ufw status 2>/dev/null", timeout=15, sudo=True)
+    out, _, _ = _run_verb("ufw-status", ["plain"], timeout=15)
     blocked = {}
     for line in (out or "").splitlines():
         if "DENY" not in line or "panel-" not in line:
@@ -1408,9 +1460,8 @@ def ufw_deny_ip(ip, tag=_UFW_BLOCK_TAG):
     tag = re.sub(r"[^a-z0-9-]", "", (tag or ""))[:32] or _UFW_BLOCK_TAG
     # Two separate sudo'd commands: _run prepends `sudo` to the FIRST command only, so a "a; b"
     # compound would run `b` unprivileged. Drop any existing rule first (harmless if none), then add.
-    _run("ufw delete deny from %s" % shlex.quote(ip), timeout=15, sudo=True)
-    out, err, rc = _run("ufw insert 1 deny from %s comment %s 2>&1"
-                        % (shlex.quote(ip), shlex.quote(tag)), timeout=15, sudo=True)
+    _run_verb("ufw-delete-deny-ip", [ip], timeout=15)
+    out, err, rc = _run_verb("ufw-deny-ip", [ip, tag], timeout=15)
     if rc == 0:
         return True, "Blocked %s (all ports)." % ip
     return False, ((out or err or "Block failed").replace("\n", " ")[:200])
@@ -1423,7 +1474,7 @@ def ufw_undeny_ip(ip):
         ip = str(ipaddress.ip_address((ip or "").strip()))
     except (ValueError, TypeError):
         return False, "Invalid IP address."
-    _run("ufw delete deny from %s 2>&1" % shlex.quote(ip), timeout=15, sudo=True)
+    _run_verb("ufw-delete-deny-ip", [ip], timeout=15)
     return True, "Unblocked %s." % ip
 
 

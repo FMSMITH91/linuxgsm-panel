@@ -56,12 +56,30 @@ The practical consequence, stated plainly: **there is no privilege boundary betw
 web panel is compromised" and "the host is root-owned."** Any remote-code-execution or
 command-injection flaw in the panel is immediately unconditional root on that machine.
 
-This is not currently narrowable by editing the sudoers file. The panel escalates local
-work as `sudo bash -c '<command>'`, and a sudoers rule that permits `/bin/bash` is exactly
-as powerful as `NOPASSWD:ALL` — a "scoped" list containing bash would read as narrower
-while granting identical power. A real reduction needs a privileged helper: a single
-script granted sudo, accepting a fixed set of verbs, with every privileged call routed
-through it. That work is tracked and not yet done.
+This is not narrowable by editing the sudoers file. The panel escalates local work as
+`sudo bash -c '<command>'`, and a sudoers rule that permits `/bin/bash` is exactly as
+powerful as `NOPASSWD:ALL` — a "scoped" list containing bash would read as narrower while
+granting identical power. A real reduction needs a privileged helper: a single script
+granted sudo, accepting a fixed set of verbs, with every privileged call routed through it.
+
+**That work has started, and is not finished.** `tools/panel-helper` is that script. It is
+installed root-owned at `/usr/local/lib/linuxgsm-panel/panel-helper`, deliberately outside
+the panel's own checkout — the checkout belongs to the panel user and `git pull` rewrites it
+on every self-update, so a helper living there would be panel-writable by design. It takes a
+verb and already-separated arguments, re-validates every argument against its own table, and
+execs a fixed argument vector. There is no shell in it, and the only program it can run is
+one it names: `bash` does not resolve.
+
+Converted so far: **the `ufw` family** — 14 verbs covering every firewall read and write the
+panel performs. Still to convert: `apt`/`dpkg`, `systemctl`, `fail2ban-client`, `journalctl`,
+cron, user management, and the reboot path.
+
+**Until that list is empty the grant stays `NOPASSWD:ALL` and nothing above has reduced your
+exposure.** A privilege boundary with a hole in it is not a boundary, and it would be worse
+than useless to describe it as one. Two holes remain by construction: call sites that still
+compose shell strings, and a fallback in `run_privileged()` that uses the old path when the
+helper is not installed (an upgraded host has the new code before it has the helper). Both go
+away in the same change that narrows the sudoers line.
 
 What you can do today:
 

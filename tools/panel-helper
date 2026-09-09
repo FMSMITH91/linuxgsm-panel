@@ -1,0 +1,228 @@
+#!/usr/bin/env python3
+"""The panel's privileged helper — the only thing on this host that should be granted sudo.
+
+WHY THIS EXISTS
+    The panel escalates local work as `sudo bash -c '<command>'`. A sudoers rule that permits
+    /bin/bash is exactly as powerful as NOPASSWD:ALL, so the grant could not be narrowed by editing
+    sudoers: any list containing bash reads as scoped while granting identical power. The only way
+    to narrow it for real is to stop passing shell strings across the privilege boundary.
+
+    This script is that boundary. It takes a VERB and already-separated ARGUMENTS on argv, checks
+    every argument against a pattern fixed here, and execs a fixed argument vector. There is no
+    shell anywhere in it: no shell=True, no os.system, no string interpolation into a command. A
+    caller cannot ask it to run something that is not in the table below, and cannot smuggle a
+    second command through an argument, because arguments never become shell text.
+
+INTEGRITY
+    This file must be owned by root and NOT writable by the panel user — otherwise the panel could
+    rewrite the table and the boundary is theatre. install.sh copies it to
+    /usr/local/lib/linuxgsm-panel/panel-helper as root:root 0755, deliberately OUTSIDE the panel's
+    git checkout: the checkout is owned by the panel user and rewritten by `git pull` on every
+    self-update, so a helper living there would be panel-writable by design.
+
+    A consequence worth stating plainly: updating this helper requires root. The panel's own
+    self-update cannot do it. When the verb table changes, the operator re-runs install.sh as root.
+
+STATUS
+    Conversion is in progress. Until EVERY privileged call site in the panel routes through a verb
+    here, /etc/sudoers.d/linuxgsm-panel still grants NOPASSWD:ALL and this helper reduces nothing —
+    a boundary with a hole in it is not a boundary. See SECURITY.md.
+
+USAGE
+    panel-helper <verb> [arg ...]      exit 2 = unknown verb / bad argument, else the tool's own rc
+    panel-helper --list-verbs          print the verb table (used by the panel's tests)
+"""
+import ipaddress
+import os
+import re
+import subprocess  # nosec B404 - fixed argv, shell=False, no untrusted text reaches a shell
+import sys
+
+# Tool name -> the absolute paths it is allowed to be. PATH is never consulted: sudo sanitises it,
+# but "never" is easier to audit than "sanitised". A name that is not a key here cannot be run.
+TOOLS = {
+    "ufw": ("/usr/sbin/ufw", "/sbin/ufw", "/usr/bin/ufw"),
+}
+UFW = "ufw"
+
+
+def resolve(prog):
+    """The absolute path for a tool name, or FileNotFoundError. Only names in TOOLS resolve."""
+    for cand in TOOLS.get(prog, ()):
+        if os.path.isfile(cand) and os.access(cand, os.X_OK):
+            return cand
+    raise FileNotFoundError(prog)
+
+# ── Argument validators ───────────────────────────────────────────────────────────────────────
+# Each returns the value to place in argv, or raises ValueError. They are deliberately strict:
+# a rejected argument is a bug report, not a fallback to something looser.
+
+
+def v_portspec(s):
+    """A UFW port specification: 27015, 27015/tcp, 27000:27100, 27000:27100/udp."""
+    m = re.fullmatch(r"(\d{1,5})(?::(\d{1,5}))?(?:/(tcp|udp))?", s)
+    if not m:
+        raise ValueError("not a port specification")
+    for p in (m.group(1), m.group(2)):
+        if p is not None and not (1 <= int(p) <= 65535):
+            raise ValueError("port out of range")
+    if m.group(2) is not None and int(m.group(2)) < int(m.group(1)):
+        raise ValueError("reversed port range")
+    return s
+
+
+def v_iface(s):
+    """A network interface name. Linux caps these at 15 characters (IFNAMSIZ)."""
+    if not re.fullmatch(r"[A-Za-z0-9_.-]{1,15}", s):
+        raise ValueError("not an interface name")
+    return s
+
+
+def v_cidr(s):
+    """An IPv4/IPv6 address or network. Parsed, not pattern-matched, so 'any' and
+    '1.2.3.4 || rm -rf /' are both rejected for the same reason: they are not addresses."""
+    try:
+        ipaddress.ip_network(s, strict=False)
+    except ValueError:
+        raise ValueError("not an IP address or network")
+    return s
+
+
+def v_comment(s):
+    """A UFW rule comment. The panel already strips these to this charset before storing them;
+    re-checking here is the point — the helper trusts nothing it is told."""
+    if not re.fullmatch(r"[A-Za-z0-9 _.-]{0,60}", s):
+        raise ValueError("comment has characters outside [A-Za-z0-9 _.-] or is over 60 chars")
+    return s
+
+
+def v_rulenum(s):
+    if not re.fullmatch(r"[1-9]\d{0,3}", s):
+        raise ValueError("not a rule number")
+    return s
+
+
+def v_choice(*allowed):
+    def check(s):
+        if s not in allowed:
+            raise ValueError("expected one of: " + ", ".join(allowed))
+        return s
+    return check
+
+
+# ── The verb table ────────────────────────────────────────────────────────────────────────────
+# verb -> (validators, build(args) -> argv, stdin or None)
+#
+# `build` returns a complete argument vector. Every element is either a literal written here or a
+# value that has passed the matching validator; nothing else can reach it.
+
+VERBS = {
+    "ufw-status": (
+        [v_choice("plain", "numbered", "verbose")],
+        lambda a: [UFW, "status"] if a[0] == "plain" else [UFW, "status", a[0]],
+        None),
+    "ufw-enable": (
+        [],
+        lambda a: [UFW, "--force", "enable"],
+        None),
+    "ufw-default": (
+        [v_choice("allow", "deny", "reject"), v_choice("incoming", "outgoing")],
+        lambda a: [UFW, "default", a[0], a[1]],
+        None),
+    "ufw-allow-port": (
+        [v_portspec, v_comment],
+        lambda a: [UFW, "allow", a[0]] + (["comment", a[1]] if a[1] else []),
+        None),
+    "ufw-allow-proto-port": (
+        [v_choice("tcp", "udp"), v_portspec, v_comment],
+        lambda a: [UFW, "allow", "proto", a[0], "to", "any", "port", a[1]]
+        + (["comment", a[2]] if a[2] else []),
+        None),
+    "ufw-delete-allow-proto-port": (
+        [v_choice("tcp", "udp"), v_portspec],
+        lambda a: [UFW, "delete", "allow", "proto", a[0], "to", "any", "port", a[1]],
+        None),
+    "ufw-delete-limit-port": (
+        [v_portspec],
+        lambda a: [UFW, "delete", "limit", a[0]],
+        None),
+    # Only OpenSSH. The panel deletes exactly this one UFW application profile, so the validator is
+    # the literal rather than an app-name pattern — the narrowest thing that still works.
+    "ufw-delete-allow-app": (
+        [v_choice("OpenSSH")],
+        lambda a: [UFW, "delete", "allow", a[0]],
+        None),
+    "ufw-limit-port": (
+        [v_portspec],
+        lambda a: [UFW, "limit", a[0]],
+        None),
+    "ufw-allow-iface": (
+        [v_iface],
+        lambda a: [UFW, "allow", "in", "on", a[0]],
+        None),
+    "ufw-delete-allow-port": (
+        [v_portspec],
+        lambda a: [UFW, "delete", "allow", a[0]],
+        None),
+    "ufw-deny-ip": (
+        [v_cidr, v_comment],
+        lambda a: [UFW, "insert", "1", "deny", "from", a[0]] + (["comment", a[1]] if a[1] else []),
+        None),
+    "ufw-delete-deny-ip": (
+        [v_cidr],
+        lambda a: [UFW, "delete", "deny", "from", a[0]],
+        None),
+    # `ufw delete <n>` asks "Proceed (y|n)?". The panel used to answer it with `yes | ufw delete n`,
+    # which needs a shell for the pipe. Feeding stdin directly removes the pipe and the shell.
+    "ufw-delete-num": (
+        [v_rulenum],
+        lambda a: [UFW, "delete", a[0]],
+        "y\n"),
+}
+
+
+def main(argv):
+    if len(argv) >= 2 and argv[1] == "--list-verbs":
+        for verb in sorted(VERBS):
+            print("%s\t%d" % (verb, len(VERBS[verb][0])))
+        return 0
+    if len(argv) < 2:
+        print("panel-helper: a verb is required", file=sys.stderr)
+        return 2
+    verb, args = argv[1], argv[2:]
+    spec = VERBS.get(verb)
+    if spec is None:
+        print("panel-helper: unknown verb %r" % verb, file=sys.stderr)
+        return 2
+    validators, build, stdin_text = spec
+    if len(args) != len(validators):
+        print("panel-helper: %s takes %d argument(s), got %d"
+              % (verb, len(validators), len(args)), file=sys.stderr)
+        return 2
+    checked = []
+    for i, (value, check) in enumerate(zip(args, validators)):
+        try:
+            checked.append(check(value))
+        except ValueError as e:
+            # The rejected value is NOT echoed back: this runs as root and its stderr is surfaced
+            # in the panel UI, so repeating attacker-controlled text here would be a reflection.
+            print("panel-helper: %s argument %d rejected (%s)" % (verb, i + 1, e), file=sys.stderr)
+            return 2
+    argv = build(checked)
+    try:
+        argv[0] = resolve(argv[0])
+        p = subprocess.run(argv, shell=False,  # nosec B603 - argv is built from literals
+                           input=stdin_text, capture_output=True, text=True, timeout=120)
+    except FileNotFoundError:
+        print("panel-helper: the tool for %s is not installed" % verb, file=sys.stderr)
+        return 127
+    except subprocess.TimeoutExpired:
+        print("panel-helper: %s timed out" % verb, file=sys.stderr)
+        return 124
+    sys.stdout.write(p.stdout or "")
+    sys.stderr.write(p.stderr or "")
+    return p.returncode
+
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv))
