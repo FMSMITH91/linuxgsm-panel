@@ -3,7 +3,7 @@ import hmac
 import secrets
 import threading
 import time
-from datetime import datetime
+from clock import utcnow
 from functools import wraps
 
 import bcrypt
@@ -483,7 +483,7 @@ def init_auth(app):
                 if sess is None:
                     return None                       # this device's session was revoked
                 user._sid = sid                       # keep it so get_id re-embeds it on cookie refresh
-                now = datetime.utcnow()
+                now = utcnow()
                 if not sess.last_seen or (now - sess.last_seen).total_seconds() > 300:
                     sess.last_seen = now              # throttled "last active" update (~5 min)
                     db.session.commit()

@@ -5,6 +5,18 @@ README disclaimer. Versioning is loosely [semantic](https://semver.org). Note: t
 "update available" check compares git commits, so you always get the newest CI-verified commit
 regardless of this file — this changelog is for humans.
 
+## [Unreleased]
+
+### Fixed
+- **The panel could not hear its own deprecation warnings.** A filter installed at import time
+  silenced every `DeprecationWarning` in the process, permanently — and did not silence the one it
+  named, because eventlet's banner is not a `DeprecationWarning` at all, so it printed on every start
+  regardless. Running the panel under `-W always::DeprecationWarning` heard nothing. Now only
+  eventlet's banner is silenced, and `-W` / `PYTHONWARNINGS` work again.
+- **`datetime.utcnow()`, which Python has scheduled for removal, is gone** from all 22 call sites
+  (including twelve database column defaults). Stored timestamps are unchanged — still naive UTC, to
+  the microsecond — they now come from `clock.utcnow()`.
+
 ## [0.10.0-alpha] — 2026-09-09
 
 Two months of work that had accumulated on `main` unreleased. The headline items are OS-update

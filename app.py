@@ -43,14 +43,27 @@ import time
 import gzip as _gzip
 from types import SimpleNamespace
 from datetime import datetime, timedelta
+from clock import utcnow, aware_utcnow
 from pathlib import Path
 
-# Suppress eventlet deprecation (cosmetic only, panel works fine)
+# eventlet announces its own deprecation on import — upstream's words, not a nit: "Eventlet is
+# deprecated ... we strongly recommend against using it for new projects ... we recommend migrating
+# to a different framework." Migrating off it is tracked separately; the banner is silenced here so
+# it does not print on every start.
+#
+# Silenced by MESSAGE, and only around the import. What used to be here was
+# `filterwarnings("ignore", category=DeprecationWarning)` — process-wide, permanent, and it never
+# matched this warning at all, because EventletDeprecationWarning subclasses Warning rather than
+# DeprecationWarning. So the banner printed anyway while every REAL DeprecationWarning in the panel
+# was silenced for the life of the process. `datetime.utcnow()` was deprecated in 3.12 and scheduled
+# for removal, and the panel called it 22 times without ever saying so.
+#
+# catch_warnings() restores the previous filter state on exit, so nothing leaks past this block.
 import warnings as _w
-_w.filterwarnings("ignore", category=DeprecationWarning)
-
-import eventlet
-eventlet.monkey_patch()
+with _w.catch_warnings():
+    _w.filterwarnings("ignore", message=r"\s*Eventlet is deprecated")
+    import eventlet
+    eventlet.monkey_patch()
 
 del _w
 
@@ -186,7 +199,7 @@ def _register_session(user):
     from models import UserSession
     sid = secrets.token_urlsafe(24)
     try:
-        cutoff = datetime.utcnow() - timedelta(days=45)   # forget sessions untouched for ~6 weeks
+        cutoff = utcnow() - timedelta(days=45)   # forget sessions untouched for ~6 weeks
         UserSession.query.filter(UserSession.user_id == user.id,
                                  UserSession.last_seen < cutoff).delete(synchronize_session=False)
         db.session.add(UserSession(user_id=user.id, sid=sid,
@@ -733,7 +746,7 @@ def _record_metric_samples(app):
                              .filter_by(installed=True).all())
         if not work:
             return
-        now = datetime.utcnow()
+        now = utcnow()
         rows, hosts_seen = [], set()
         with concurrent.futures.ThreadPoolExecutor(max_workers=min(_PLAYER_POLL_WORKERS, len(work))) as ex:
             for sid, m, rid, _mp in ex.map(_query_server_metrics, work):
@@ -761,7 +774,7 @@ def _prune_metric_samples(app):
         return
     _last_sample_prune[0] = time.time()
     with app.app_context():
-        cutoff = datetime.utcnow() - timedelta(days=_METRIC_RETENTION_DAYS)
+        cutoff = utcnow() - timedelta(days=_METRIC_RETENTION_DAYS)
         MetricSample.query.filter(MetricSample.ts < cutoff).delete(synchronize_session=False)
         HostSample.query.filter(HostSample.ts < cutoff).delete(synchronize_session=False)
         db.session.commit()
@@ -1969,7 +1982,7 @@ def _maybe_alert_admin_bruteforce(who, ip, now):
         target = User.query.filter_by(username=who).first()
         if not target or not target.is_superadmin:
             return
-        since = datetime.utcnow() - timedelta(seconds=LOGIN_WINDOW)
+        since = utcnow() - timedelta(seconds=LOGIN_WINDOW)
         fails = AuditLog.query.filter(AuditLog.action == "login_failed",
                                       AuditLog.username == who,
                                       AuditLog.timestamp >= since).count()
@@ -2322,7 +2335,7 @@ def create_app():
             days = int(cfg.get("audit_log_retention_days", 0) or 0)
             if days > 0:
                 from models import AuditLog
-                cutoff = datetime.utcnow() - timedelta(days=days)
+                cutoff = utcnow() - timedelta(days=days)
                 deleted = AuditLog.query.filter(AuditLog.timestamp < cutoff).delete()
                 if deleted:
                     db.session.commit()
@@ -2641,7 +2654,7 @@ def register_context_processors(app):
             # Whether a superadmin has published a house layout — the Account page's controls need it,
             # and it is rendered from two routes, so it belongs here rather than in either of them.
             "install_default_layout": bool(cfg.get("default_ui_prefs")),
-            "current_year": datetime.utcnow().year,
+            "current_year": utcnow().year,
             "tailscale_url": tailscale_url,
             "mount_prefix": app.config.get("_MOUNT_PREFIX", "/"),
             "panel_version": PANEL_VERSION,
@@ -2843,7 +2856,7 @@ def register_routes(app):
                                 sudo_enabled=sudo_enabled,
                                 linuxgsm_user=lgsm_user,
                                 is_online=True,
-                                last_seen=datetime.utcnow(),
+                                last_seen=utcnow(),
                             )
                             db.session.add(remote)
                             db.session.commit()
@@ -3011,7 +3024,7 @@ def register_routes(app):
                 try:
                     from models import AuditLog
                     from datetime import timedelta
-                    _since = datetime.utcnow() - timedelta(seconds=LOGIN_WINDOW)
+                    _since = utcnow() - timedelta(seconds=LOGIN_WINDOW)
                     _cnt = 1 + AuditLog.query.filter(AuditLog.action == "login_failed",
                                                      AuditLog.ip_address == ip,
                                                      AuditLog.timestamp >= _since).count()
@@ -3041,7 +3054,7 @@ def register_routes(app):
                 session.permanent = True   # so PERMANENT_SESSION_LIFETIME applies
                 _register_session(user)    # server-side row (sets user._sid) BEFORE login_user, so
                 login_user(user, remember=remember)   # get_id embeds the sid in the cookie
-                user.last_login = datetime.utcnow()
+                user.last_login = utcnow()
                 db.session.commit()
                 log_action(user, "login", detail=f"User logged in from {ip}")
                 if user.is_superadmin:
@@ -5020,7 +5033,7 @@ def register_routes(app):
                 auth_credential="", sudo_enabled=True,
                 linuxgsm_user=lgsm_user,
                 is_local=True, is_online=True,
-                last_seen=datetime.utcnow(),
+                last_seen=utcnow(),
             )
             db.session.add(remote)
             db.session.commit()
@@ -5038,7 +5051,7 @@ def register_routes(app):
             username=ssh_user, auth_method=auth_method,
             auth_credential=encrypt_secret(credential),
             sudo_enabled=sudo_enabled, linuxgsm_user=lgsm_user,
-            is_online=True, last_seen=datetime.utcnow(),
+            is_online=True, last_seen=utcnow(),
         )
         db.session.add(remote)
         db.session.commit()
@@ -5161,7 +5174,7 @@ def register_routes(app):
             remote.auth_method, decrypt_secret(remote.auth_credential)
         )
         remote.is_online = bool(success)
-        remote.last_seen = datetime.utcnow()
+        remote.last_seen = utcnow()
         db.session.commit()
         if success:
             return _form_ok(f"Connection to {remote.name} successful!", "manage_remotes")
@@ -5938,7 +5951,7 @@ def register_routes(app):
                 name="Panel Server", host="127.0.0.1", port=22, username="local",
                 auth_method="local", auth_credential="", sudo_enabled=True,
                 linuxgsm_user="", is_local=True, is_online=True,
-                last_seen=datetime.utcnow(),
+                last_seen=utcnow(),
             )
             db.session.add(local)
             db.session.commit()
@@ -7861,7 +7874,7 @@ def register_routes(app):
                     success, msg, log = remote_bootstrap_vps(remote, progress=_progress, **opts)
                     if success:
                         remote.is_online = True
-                        remote.last_seen = datetime.utcnow()
+                        remote.last_seen = utcnow()
                         db.session.commit()
                     log_action(None, "remote_vps_bootstrap", target=remote.name, detail=msg, success=success)
                     with _bootstrap_lock:
@@ -7945,7 +7958,7 @@ def register_routes(app):
         host's CPU/RAM/disk over the same window. Capped to ~240 points so the chart stays light."""
         gs = get_game(server_id)
         rng = "7d" if request.args.get("range") == "7d" else "24h"
-        since = datetime.utcnow() - timedelta(hours=(168 if rng == "7d" else 24))
+        since = utcnow() - timedelta(hours=(168 if rng == "7d" else 24))
         # with_entities, not the mapped class: the 7-day window is ~10k samples, of which at most
         # 240 survive down-sampling. Building a full ORM instance (and an identity-map entry) for
         # every discarded row was ~80% of this endpoint's time. Rows are plain named tuples.
@@ -9187,7 +9200,7 @@ def _ensure_self_signed_cert(cert_path, key_path, hostname):
         try:
             with open(cert_path, "rb") as f:
                 existing = x509.load_pem_x509_certificate(f.read())
-            if existing.not_valid_after > _dt.datetime.utcnow() + _dt.timedelta(days=30):
+            if existing.not_valid_after_utc > aware_utcnow() + _dt.timedelta(days=30):
                 return cert_path, key_path
         except Exception:
             _log.debug("_ensure_self_signed_cert: ignored non-fatal error", exc_info=True)
@@ -9198,8 +9211,8 @@ def _ensure_self_signed_cert(cert_path, key_path, hostname):
             .subject_name(name).issuer_name(name)
             .public_key(key.public_key())
             .serial_number(x509.random_serial_number())
-            .not_valid_before(_dt.datetime.utcnow() - _dt.timedelta(days=1))
-            .not_valid_after(_dt.datetime.utcnow() + _dt.timedelta(days=3650))
+            .not_valid_before(aware_utcnow() - _dt.timedelta(days=1))
+            .not_valid_after(aware_utcnow() + _dt.timedelta(days=3650))
             .add_extension(x509.SubjectAlternativeName([x509.DNSName(hostname or "localhost")]), critical=False)
             .sign(key, hashes.SHA256()))
     os.makedirs(os.path.dirname(cert_path), exist_ok=True)
@@ -9214,8 +9227,6 @@ def _ensure_self_signed_cert(cert_path, key_path, hostname):
 
 
 if __name__ == "__main__":
-    import warnings
-    warnings.filterwarnings("ignore", category=DeprecationWarning, module="eventlet")
     app = create_app()
     cfg = load_config()
     port = cfg.get("port", 5000)

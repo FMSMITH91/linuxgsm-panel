@@ -3604,6 +3604,93 @@ check("token throttle: stale IPs are pruned, so the map cannot grow forever",
 _authmod._TOKEN_FAILS.clear()
 
 
+# ── Deprecations the panel must be able to hear ────────────────────────────────────────────────
+# app.py used to open with `filterwarnings("ignore", category=DeprecationWarning)` — no module, no
+# message, never lifted. Two consequences, both proven before this was changed:
+#
+#   1. It did NOT silence what its comment claimed. EventletDeprecationWarning subclasses Warning,
+#      not DeprecationWarning, so eventlet's banner printed on every single start regardless.
+#   2. It DID silence everything else, and it won the race against the operator: running the panel
+#      under `-W always::DeprecationWarning` heard nothing, because a filterwarnings() call inserts
+#      at the FRONT of the filter list and so overrides -W and PYTHONWARNINGS.
+#
+# What was hidden: 22 calls to datetime.utcnow(), deprecated in 3.12 and scheduled for removal —
+# exactly the class of warning that predicts the next Python breaking the panel.
+import re as _re
+import subprocess as _sp
+import clock as _clock
+from datetime import datetime as _dtm, timezone as _tz
+
+_n = _clock.utcnow()
+check("clock.utcnow() is naive, so it can go straight into a db.DateTime column",
+      _n.tzinfo is None, repr(_n.tzinfo))
+check("clock.utcnow() still reads UTC, like datetime.utcnow() did",
+      abs((_dtm.now(_tz.utc).replace(tzinfo=None) - _n).total_seconds()) < 5)
+_a = _clock.aware_utcnow()
+check("clock.aware_utcnow() is timezone-aware, for libraries that require it",
+      _a.tzinfo is not None and _a.utcoffset().total_seconds() == 0, repr(_a.tzinfo))
+
+# Source gate: the deprecated spellings must not come back. A single `datetime.utcnow()` reintroduced
+# in a later PR would be invisible again the day CPython removes it.
+_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+# Split so these patterns do not match their own source line — this file is inside the walk.
+_BAD_NOW = r"\.utc" + r"now\s*\("
+_BAD_TS = r"\.utc" + r"fromtimestamp\s*\("
+_offenders = []
+for _dirpath, _dirnames, _files in os.walk(_root):
+    _dirnames[:] = [d for d in _dirnames
+                    if d not in {".git", ".venv", "venv", "__pycache__", "node_modules", "data"}]
+    for _f in _files:
+        if not _f.endswith(".py") or _f == "clock.py":
+            continue
+        _fp = os.path.join(_dirpath, _f)
+        for _i, _line in enumerate(open(_fp, encoding="utf-8", errors="replace"), 1):
+            _code = _line.split("#", 1)[0]          # a comment may legitimately name the old spelling
+            if "clock" in _code:                    # clock.utcnow() is the replacement, not the target
+                continue
+            # The deprecated spellings are attribute access on datetime: datetime.utcnow(),
+            # _dt.utcnow(), datetime.datetime.utcfromtimestamp(). A bare utcnow() is clock's.
+            if _re.search(_BAD_NOW, _code) or _re.search(_BAD_TS, _code):
+                _offenders.append("%s:%d" % (os.path.relpath(_fp, _root), _i))
+check("no module calls the datetime UTC helpers that are scheduled for removal",
+      not _offenders, ", ".join(_offenders[:5]))
+
+# Source gate: no unscoped DeprecationWarning suppression anywhere. `module=` or `message=` is fine;
+# a bare category filter silences the whole process.
+_blanket = []
+for _f in ("app.py", "auth.py", "models.py", "ssh_manager.py", "system_ops.py", "notifications.py"):
+    for _i, _line in enumerate(open(os.path.join(_root, _f), encoding="utf-8"), 1):
+        if "filterwarnings" in _line and "DeprecationWarning" in _line \
+                and "module=" not in _line and "message=" not in _line and not _line.lstrip().startswith("#"):
+            _blanket.append("%s:%d" % (_f, _i))
+check("no module installs a process-wide DeprecationWarning filter",
+      not _blanket, ", ".join(_blanket))
+
+# Behavioural proof, not just a grep: with the operator asking for DeprecationWarnings on the command
+# line, importing app must leave them audible. This is the check that actually failed before the fix.
+_probe = (
+    "import sys, warnings; sys.path.insert(0, %r);"
+    "import app;"
+    "heard=[];"
+    "warnings.showwarning=lambda m,c,f,l,file=None,line=None: heard.append(c.__name__);"
+    "warnings.warn('probe', DeprecationWarning);"
+    "print('HEARD' if heard else 'DEAF')" % _root
+)
+try:
+    _out = _sp.run([sys.executable, "-W", "always::DeprecationWarning", "-c", _probe],
+                   capture_output=True, text=True, timeout=120, cwd=_root)
+    _heard = "HEARD" in _out.stdout
+    _detail = (_out.stdout.strip()[-60:] + " " + _out.stderr.strip()[-120:])
+except Exception as _e:            # a sandbox that forbids subprocess shouldn't fail the suite
+    _heard, _detail = True, "skipped: %s" % _e
+check("importing app leaves -W always::DeprecationWarning working", _heard, _detail)
+
+# eventlet's own banner IS silenced now — by message, since it is not a DeprecationWarning at all.
+_quiet = _sp.run([sys.executable, "-c", "import sys; sys.path.insert(0, %r); import app" % _root],
+                 capture_output=True, text=True, timeout=120, cwd=_root)
+check("eventlet's deprecation banner no longer prints on every start",
+      "Eventlet is deprecated" not in _quiet.stderr, _quiet.stderr.strip()[:120])
+
 passed = sum(1 for ok, _, _ in results if ok)
 for ok, name, detail in results:
     line = ("PASS" if ok else "FAIL") + "  " + name

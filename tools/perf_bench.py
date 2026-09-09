@@ -91,9 +91,10 @@ METRIC_ROWS = 14 * 24 * 60
 
 
 def seed_history(app, gs_id):
-    from datetime import datetime, timedelta
+    from datetime import timedelta
+    from clock import utcnow
     from models import AuditLog, MetricSample
-    now = datetime.utcnow()
+    now = utcnow()
     with app.app_context():
         db.session.bulk_save_objects([
             AuditLog(user_id=None, username="bench%d" % (i % 20), action="server_start",
