@@ -3554,6 +3554,10 @@ def remote_bootstrap_vps(server, set_timezone="UTC", enable_ufw=True, install_lg
     # ── 3a. Node.js LTS via NodeSource — apt's own nodejs is too old for current gamedig
     # (gamedig v5 needs Node >=18; e.g. Ubuntu 22.04's apt ships Node 12). Idempotent. ──
     emit("Installing Node.js LTS")
+    # NOT converted to a verb, deliberately. This pipes a downloaded script into a root shell, and
+    # that IS the operation — a verb could pin the URL, but only by giving the helper the ability to
+    # execute a downloaded script, which is exactly the capability its tool allowlist exists to
+    # deny. Wrapping it would move the risk, not reduce it. Named in SECURITY.md instead.
     node_cmd = (
         'n=$(node -v 2>/dev/null | grep -oE "[0-9]+" | head -1); '
         'if [ "${n:-0}" -lt 18 ]; then '
@@ -3566,12 +3570,10 @@ def remote_bootstrap_vps(server, set_timezone="UTC", enable_ufw=True, install_lg
 
     # ── 3b. gamedig (game-server query tool) via npm — idempotent (skip if already present) ──
     emit("Installing gamedig (game server query tool)")
-    gd_out, _, _ = run_command(
-        server,
-        "if command -v gamedig >/dev/null 2>&1; then echo 'gamedig already installed'; "
-        "else npm install -g gamedig 2>&1 | tail -3; fi",
-        timeout=300, sudo=True)
-    note(gd_out or "gamedig installed")
+    # `command -v gamedig || npm install -g gamedig` was a shell builtin guarding an install.
+    # npm install -g is idempotent, so the guard only saved time — and it cost a root shell.
+    gd_out, _, _ = run_privileged(server, "npm-install-global", ["gamedig"], timeout=300)
+    note(_last_lines(gd_out, 3) or "gamedig installed")
     ensure_node_tools_cron(server)   # weekly auto-update for npm + gamedig, alongside apt auto-updates
     note("weekly npm/gamedig auto-update scheduled")
 
@@ -3607,32 +3609,27 @@ def remote_bootstrap_vps(server, set_timezone="UTC", enable_ufw=True, install_lg
     # ── 6. Basic SSH hardening ──
     emit("Hardening SSH configuration")
     # These keepalive tweaks are always safe (they never affect how you log in).
-    hardening = [
-        "sed -i 's/^#\\?ClientAliveInterval.*/ClientAliveInterval 300/' /etc/ssh/sshd_config",
-        "sed -i 's/^#\\?ClientAliveCountMax.*/ClientAliveCountMax 2/' /etc/ssh/sshd_config",
-    ]
+    # Each of these was a `sed -i 's/^#\\?Key.*/Key value/'` in a joined root shell. They are
+    # verbs now, and both the directive and the value come from a closed set — the panel can set
+    # exactly the four it hardens, to exactly the values it hardens them to.
+    hardening = [("ClientAliveInterval", "300"), ("ClientAliveCountMax", "2")]
     if server.auth_method != "password":
         # Only lock down root-password + password login when we authenticate with a
         # key or Tailscale. NEVER touch these on a password-auth remote or the reboot
         # would lock everyone (including you via PuTTY) out of the box.
-        hardening.append("sed -i 's/^#\\?PermitRootLogin.*/PermitRootLogin prohibit-password/' /etc/ssh/sshd_config")
-        hardening.append("sed -i 's/^#\\?PasswordAuthentication.*/PasswordAuthentication no/' /etc/ssh/sshd_config")
-        run_command(server, "; ".join(hardening), timeout=20, sudo=True)
+        hardening += [("PermitRootLogin", "prohibit-password"), ("PasswordAuthentication", "no")]
+    for _key, _val in hardening:
+        run_privileged(server, "sshd-set-directive", [_key, _val], timeout=20, merge_stderr=False)
+    if server.auth_method != "password":
         _restart_sshd(server, timeout=15)
     else:
-        run_command(server, "; ".join(hardening), timeout=20, sudo=True)
         note("Password + root-password SSH login left ENABLED — this remote authenticates with a password, so SSH access was not restricted.")
 
     # ── 7. Create swap if none exists ──
     emit("Ensuring swap space exists")
     swap_out, _, _ = run_command(server, "swapon --show | wc -l", timeout=10)
     if swap_out.strip() == "0":
-        run_command(server,
-            "fallocate -l 2G /swapfile && chmod 600 /swapfile && "
-            "mkswap /swapfile && swapon /swapfile && "
-            "grep -q '/swapfile' /etc/fstab || echo '/swapfile none swap sw 0 0' >> /etc/fstab",
-            timeout=60, sudo=True
-        )
+        run_privileged(server, "create-swapfile", [], timeout=60, merge_stderr=False)
         note("2G swap file created")
     else:
         note("Swap already present")

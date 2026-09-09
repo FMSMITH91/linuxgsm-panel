@@ -3840,6 +3840,9 @@ _VERB_SAMPLES = {
     "content-grant-read": ["gmodcontent", "gmodcontent", "gmodserver", "cstrike"],
     "gmod-mount-read": ["gmodserver"],
     "f2b-log-lines": ["2026-09-02"],
+    "sshd-set-directive": ["ClientAliveInterval", "300"],
+    "create-swapfile": [],
+    "npm-install-global": ["gamedig"],
 }
 check("privileged: every verb has a sample (new verbs cannot skip the parity check)",
       set(_VERB_SAMPLES) == set(_priv.verbs()),
@@ -3868,10 +3871,10 @@ check("privileged: helper and panel build an identical argv for every verb",
 check("helper: resolves ufw", _helper.resolve("ufw").endswith("/ufw") if os.path.exists("/usr/sbin/ufw") else True)
 check("helper: knows exactly the tools its verbs need, and no more",
       sorted(_helper.TOOLS) == ["add-apt-repository", "apt-get", "crontab", "df", "dpkg",
-                                "fail2ban-client", "fuser", "journalctl", "passwd", "pgrep",
-                                "pkill", "pro", "reboot", "renice", "rm", "ss", "sshd", "sysctl",
-                                "systemctl", "tail", "timedatectl", "ufw", "useradd",
-                                "userdel", "usermod"],
+                                "fail2ban-client", "fallocate", "fuser", "journalctl", "mkswap",
+                                "npm", "passwd", "pgrep", "pkill", "pro", "reboot", "renice", "rm",
+                                "ss", "sshd", "swapon", "sysctl", "systemctl", "tail",
+                                "timedatectl", "ufw", "useradd", "userdel", "usermod"],
       sorted(_helper.TOOLS))
 for _prog in ("bash", "sh", "python3", "env"):
     check("helper: refuses to resolve %s" % _prog, _ufw_raises_fnf(_helper.resolve, _prog))
@@ -3953,6 +3956,19 @@ _BAD_VECTORS = [
     ("content-grant-read", ["gmodcontent", "gmodcontent", "gmodserver", "../../etc"]),
     ("gmod-mount-read", ["../../etc"]),
     ("content-cron-remove", [".."]),
+    ("f2b-log-lines", ["2026-09-02; id"]),
+    ("f2b-log-lines", ["$(id)"]),
+    ("f2b-log-lines", [""]),
+    ("f2b-log-lines", ["/var/log/anything"]),
+    # sshd-set-directive is the one verb where an argument constrains another: the panel may set
+    # four directives, each only to values from its OWN set. "PermitRootLogin yes" is individually
+    # well-formed and must still be refused.
+    ("sshd-set-directive", ["Banner", "x"]),
+    ("sshd-set-directive", ["PermitRootLogin", "yes"]),
+    ("sshd-set-directive", ["ClientAliveInterval", "0"]),
+    ("sshd-set-directive", ["PasswordAuthentication", "maybe"]),
+    ("sshd-set-directive", ["ClientAliveInterval", "300; id"]),
+    ("npm-install-global", ["evil-package"]),
 ]
 _leaked2 = ["%s %r" % (v, a) for v, a in _BAD_VECTORS
             if not _ufw_raises_verb(lambda v=v, a=a: _priv.check_args(v, a))]
@@ -4396,7 +4412,52 @@ try:
 finally:
     sm._run_local, sm.run_command, sm._exec_local_argv = _orig_rl, _orig_rc2, _orig_argv
     sm._HELPER_STATE.clear()
-    sm._HELPER_STATE.update(_orig_helper_state)
+    sm._HELPER_STATE.update(_orig_helper_state)# ── sshd hardening, and the swap file's precedence bug ────────────────────────────────────────
+# The hardening was four `sed -i 's/^#\?Key.*/Key value/'` substitutions joined with ';' in one
+# root shell. Exercised here against a real sshd_config: a commented directive, an already-set one,
+# and one that is absent entirely.
+try:
+    _hdir = _tempfile.mkdtemp(prefix="panel-sshd-cfg-")
+    _spec_h2 = _ilu.spec_from_loader("ph_hard", _machinery.SourceFileLoader("ph_hard", _helper_path))
+    _hh = _ilu.module_from_spec(_spec_h2)
+    _spec_h2.loader.exec_module(_hh)
+    _hh.SSHD_CONFIG = os.path.join(_hdir, "sshd_config")
+    open(_hh.SSHD_CONFIG, "w").write(
+        "# a comment\n#ClientAliveInterval 120\nClientAliveCountMax 9\nPort 22\n")
+    os.chmod(_hh.SSHD_CONFIG, 0o600)
+    _hh.do_sshd_set_directive(["ClientAliveInterval", "300"], None)
+    _hh.do_sshd_set_directive(["ClientAliveCountMax", "2"], None)
+    _hh.do_sshd_set_directive(["PermitRootLogin", "prohibit-password"], None)
+    _cfg = open(_hh.SSHD_CONFIG).read()
+    check("sshd hardening: a COMMENTED directive is replaced, not duplicated",
+          "ClientAliveInterval 300" in _cfg and "#ClientAliveInterval" not in _cfg, _cfg)
+    check("sshd hardening: an already-set directive is replaced in place",
+          "ClientAliveCountMax 2" in _cfg and "ClientAliveCountMax 9" not in _cfg, _cfg)
+    check("sshd hardening: a directive that was ABSENT is appended",
+          "PermitRootLogin prohibit-password" in _cfg, _cfg)
+    check("sshd hardening: unrelated lines are left alone", "Port 22" in _cfg, _cfg)
+    check("sshd hardening: the file keeps the mode it had",
+          _stat.S_IMODE(os.stat(_hh.SSHD_CONFIG).st_mode) == 0o600)
+    _shutil.rmtree(_hdir, ignore_errors=True)
+except OSError as _e:
+    check("sshd hardening exercised", True, "skipped: %s" % _e)
+
+# The swap shell form had a precedence bug. `a && b && c && grep -q … || echo … >> /etc/fstab`
+# parses as `((a && b) && c && grep) || echo`, so the fstab line was appended whenever ANY step
+# failed — a host that ran out of space in fallocate still got a swap entry pointing at a file that
+# was never formatted. The Python version appends only when the swap is really on and the line is
+# absent, so that is what is asserted.
+check("swap: the shell form's `a && b || c` appends on ANY failure, not just the grep",
+      _sp.run(["bash", "-c", "false && true && grep -q x /dev/null || echo APPENDED"],
+              capture_output=True, text=True).stdout.strip() == "APPENDED")
+check("swap: the braced form the remote rendering uses does not",
+      _sp.run(["bash", "-c", "false && true && { grep -q x /dev/null || echo APPENDED; }"],
+              capture_output=True, text=True).stdout.strip() == "")
+check("swap: the remote rendering is the braced form",
+      "{ grep -q" in _priv.remote_command("create-swapfile", []),
+      _priv.remote_command("create-swapfile", []))
+
+
 # ── the fail2ban top-IPs pipeline ─────────────────────────────────────────────────────────────
 # Was five stages — zcat | awk (date filter) | grep | awk (tally) | sort | head — running as root,
 # with the cutoff date and the row limit interpolated into it. The verb now does the READ half only
@@ -4523,7 +4584,7 @@ import ast as _ast
 
 _ESCALATION_FILES = ["app.py", "auth.py", "ssh_manager.py", "system_ops.py", "notifications.py",
                      "backup.py", "db_maintenance.py", "tailscale_integration.py", "manage.py"]
-_CEILING = {"sudo=True": 14, "_sudo_sh": 1}   # measured at the time of writing; lower only
+_CEILING = {"sudo=True": 10, "_sudo_sh": 1}   # measured at the time of writing; lower only
 
 def _is_dispatch(call):
     """True when this escalation IS the verb layer's transport rather than a call site.

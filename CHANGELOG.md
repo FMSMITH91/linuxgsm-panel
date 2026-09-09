@@ -8,6 +8,11 @@ regardless of this file — this changelog is for humans.
 ## [Unreleased]
 
 ### Fixed
+- **A failed swap-file setup still wrote a swap entry to `/etc/fstab`.** The shell form was
+  `fallocate && chmod && mkswap && swapon && grep -q … || echo … >> /etc/fstab`, and `&&`/`||` are
+  left-associative with equal precedence — so the append ran whenever *any* earlier step failed,
+  not only when the grep found nothing. A host that ran out of space got an fstab entry pointing at
+  a file that was never formatted.
 - **A parser could crash on a superscript digit.** `str.isdigit()` is true for characters like `¹`
   that `int()` refuses, and the panel used that pairing in 35 places — including the query port read
   from a game server's own config, and the session-cookie user loader. Found by the fuzzer, fixed
@@ -26,9 +31,9 @@ regardless of this file — this changelog is for humans.
   a verb and separated arguments, re-validates each one, and runs a fixed command — no shell, and
   `bash` is not a program it can reach. The `ufw`, `fail2ban-client`, `systemctl` and `apt`/`dpkg`
   families now use it, plus the log reads, user/cron management and the root-owned config writes —
-  69 verbs, including the sshd port change, the deferred reboot, Ubuntu Pro, the host controls, the
-  GMod shared-content box and the fail2ban activity report. Root-escalating call
-  sites that still build a shell string are down from 131 to 15, and a ratcheting test now counts
+  72 verbs, including the sshd port change, the deferred reboot, Ubuntu Pro, the host controls, the
+  GMod shared-content box, the fail2ban activity report and the VPS hardening steps. Root-escalating call
+  sites that still build a shell string are down from 131 to 11, and a ratcheting test now counts
   BOTH escalation routes (an earlier count missed `_sudo_sh`, which had 18 sites of its own). **This does not reduce your exposure yet**: the grant stays `NOPASSWD:ALL` until
   every privileged call site is converted, because a boundary with a hole in it is not a boundary.
   See SECURITY.md.

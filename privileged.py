@@ -90,6 +90,22 @@ F2B_JAIL_LOCAL = "/etc/fail2ban/jail.local"
 # The fail2ban log family, current plus rotated — see tools/panel-helper.
 F2B_LOG_GLOB = "/var/log/fail2ban.log*"
 
+# sshd_config directives the panel may set, and the values it may set them to — see
+# tools/panel-helper. Both halves are closed sets; this is a hardening step, not an editor.
+SSHD_DIRECTIVES = {
+    "ClientAliveInterval": ("300",),
+    "ClientAliveCountMax": ("2",),
+    "PermitRootLogin": ("prohibit-password", "no"),
+    "PasswordAuthentication": ("no", "yes"),
+}
+SSHD_CONFIG = "/etc/ssh/sshd_config"
+SWAPFILE = "/swapfile"
+SWAP_FSTAB_LINE = "/swapfile none swap sw 0 0"
+FSTAB = "/etc/fstab"
+NODESOURCE_URL = "https://deb.nodesource.com/setup_lts.x"
+NPM_GLOBAL_PACKAGES = ("gamedig", "npm")
+
+
 # The GMod shared-content box — see tools/panel-helper. Every path is BUILT from a validated user
 # name and identifier; three of the verbs below end in `rm -rf` as root.
 CONTENT_HOME_ROOT = "/home"
@@ -166,6 +182,19 @@ def _comment(s):
     if not re.fullmatch(r"[A-Za-z0-9 _.-]{0,60}", s):
         raise VerbError("comment outside [A-Za-z0-9 _.-] or over 60 characters")
     return s
+
+
+def _sshd_key(s):
+    if str(s) not in SSHD_DIRECTIVES:
+        raise VerbError("not a directive the panel hardens")
+    return str(s)
+
+
+def _directive_value(s):
+    """A directive value's shape; the key's own allowed set is checked in check_args()."""
+    if not re.fullmatch(r"[A-Za-z0-9_-]{1,32}", str(s)):
+        raise VerbError("not a directive value")
+    return str(s)
 
 
 def _logdate(s):
@@ -365,6 +394,12 @@ _ARGV = {
     "sshd-effective-config": ([], lambda a: ["sshd", "-T"], None),
     "disk-free": ([_dfpath], lambda a: ["df", "-PB1", a[0]], None),
 
+    # ── host hardening ──
+    "sshd-set-directive": ([_sshd_key, _directive_value], lambda a: [], None),
+    "create-swapfile": ([], lambda a: [], None),
+    "npm-install-global": ([_choice(*NPM_GLOBAL_PACKAGES)],
+                           lambda a: ["npm", "install", "-g", a[0]], None),
+
     # ── sshd port changes ──
     "sshd-backup-dropin": ([], lambda a: [], None),
     "sshd-restore-dropin": ([], lambda a: [], None),
@@ -463,6 +498,13 @@ _REMOTE_ACTIONS = {
     "reboot-delayed": lambda a: "( sleep 2 ; reboot ) >/dev/null 2>&1 & echo scheduled",
     # 700, not the 750 the shell form used: the group bits are added by content-grant-read when
     # access is actually granted, so both transports share nothing until then.
+    "sshd-set-directive": lambda a: (
+        "sed -i 's/^#\\?%s.*/%s %s/' %s" % (a[0], a[0], a[1], shlex.quote(SSHD_CONFIG))),
+    "create-swapfile": lambda a: (
+        "fallocate -l 2G %s && chmod 600 %s && mkswap %s && swapon %s && "
+        "{ grep -q %s %s || echo %s >> %s ; }"
+        % (SWAPFILE, SWAPFILE, SWAPFILE, SWAPFILE, shlex.quote(SWAPFILE), FSTAB,
+           shlex.quote(SWAP_FSTAB_LINE), FSTAB)),
     "content-dir-create": lambda a: "install -d -o %s -g %s -m 700 %s"
                           % (a[0], a[0], shlex.quote(content_path(a[0], CONTENT_SUBDIR))),
     "content-game-present": lambda a: "test -d %s/. && echo Y || echo N"
@@ -511,7 +553,12 @@ def check_args(verb, args):
         if not low <= len(args) <= high:
             raise VerbError("%s takes %d..%d argument(s), got %d" % (verb, low, high, len(args)))
         checks = list(fixed) + [rest.check] * (len(args) - len(fixed))
-    return [check(v) for v, check in zip(args, checks)]
+    out = [check(v) for v, check in zip(args, checks)]
+    # The one verb where an argument constrains another: a directive may only be set to a value
+    # from its own allowed set, so the PAIR is checked, not just each half.
+    if verb == "sshd-set-directive" and out[1] not in SSHD_DIRECTIVES[out[0]]:
+        raise VerbError("%s may not be set to that value" % out[0])
+    return out
 
 
 def tool_argv(verb, args):
