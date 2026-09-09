@@ -3,7 +3,7 @@ import json
 import logging
 import re
 import bcrypt
-from datetime import datetime
+from clock import utcnow
 from flask_login import UserMixin
 from flask_sqlalchemy import SQLAlchemy
 from sqlalchemy import text
@@ -80,7 +80,7 @@ class User(UserMixin, db.Model):
     display_name = db.Column(db.String(120), default="")
     is_superadmin = db.Column(db.Boolean, default=False)
     is_active = db.Column(db.Boolean, default=True)
-    created_at = db.Column(db.DateTime, default=datetime.utcnow)
+    created_at = db.Column(db.DateTime, default=utcnow)
     last_login = db.Column(db.DateTime, nullable=True)
     api_token = db.Column(db.String(64), unique=True, nullable=True)
     totp_secret = db.Column(db.Text, nullable=True)      # TOTP secret, encrypted at rest
@@ -226,7 +226,7 @@ class Group(db.Model):
     name = db.Column(db.String(80), unique=True, nullable=False)
     description = db.Column(db.String(256), default="")
     is_default = db.Column(db.Boolean, default=False)
-    created_at = db.Column(db.DateTime, default=datetime.utcnow)
+    created_at = db.Column(db.DateTime, default=utcnow)
     users = db.relationship("User", secondary=user_groups, back_populates="groups")
     servers = db.relationship("RemoteServer", secondary=group_servers, back_populates="groups")
     game_servers = db.relationship("GameServer", secondary=group_game_servers,
@@ -267,7 +267,7 @@ class RemoteServer(db.Model):
     host_key = db.Column(db.Text, default="")     # pinned SSH host key ("keytype base64"); TOFU
     stats_cache = db.Column(db.Text, default="")  # last live stats (JSON: cpu_percent/memory/disk/uptime)
     pro_cache = db.Column(db.Text, default="")    # last Ubuntu Pro status (JSON: {data, ts}); rarely changes
-    created_at = db.Column(db.DateTime, default=datetime.utcnow)
+    created_at = db.Column(db.DateTime, default=utcnow)
     groups = db.relationship("Group", secondary=group_servers, back_populates="servers")
     games = db.relationship("GameServer", back_populates="remote", cascade="all, delete-orphan")
 
@@ -325,8 +325,7 @@ class RemoteServer(db.Model):
 
     def update_pro_cache(self, data):
         """Persist a fresh Ubuntu Pro status dict with a timestamp (survives restarts)."""
-        from datetime import datetime as _dt
-        self.pro_cache = json.dumps({"data": data, "ts": int(_dt.utcnow().timestamp())})
+        self.pro_cache = json.dumps({"data": data, "ts": int(utcnow().timestamp())})
 
     @property
     def host_key_fingerprint(self):
@@ -391,7 +390,7 @@ class GameServer(db.Model):
     backup_pending = db.Column(db.Boolean, default=False)   # queued to back up once players leave
     stop_pending = db.Column(db.Boolean, default=False)     # queued to stop once players leave
     commands = db.Column(db.Text, default="[]")  # JSON list of {cmd, short, desc} from LinuxGSM
-    created_at = db.Column(db.DateTime, default=datetime.utcnow)
+    created_at = db.Column(db.DateTime, default=utcnow)
     remote = db.relationship("RemoteServer", back_populates="games")
     groups = db.relationship("Group", secondary=group_game_servers, back_populates="game_servers")
     # Install-wide labels. Eager-loaded where it's rendered in a loop (see get_user_servers) —
@@ -491,7 +490,7 @@ class CustomCommand(db.Model):
     scope_value = db.Column(db.String(64), default="")        # engine name or game_type when scoped
     enabled = db.Column(db.Boolean, default=True)
     created_by = db.Column(db.String(80), default="")
-    created_at = db.Column(db.DateTime, default=datetime.utcnow)
+    created_at = db.Column(db.DateTime, default=utcnow)
     groups = db.relationship("Group", secondary=group_custom_commands,
                              back_populates="custom_commands")
 
@@ -525,7 +524,7 @@ class ServerTag(db.Model):
     color = db.Column(db.String(7), default="")   # "#rrggbb", or "" for the default chip colour
     notify = db.Column(db.Boolean, default=True)  # False = suppress alerts for servers with this tag
     created_by = db.Column(db.String(80), default="")
-    created_at = db.Column(db.DateTime, default=datetime.utcnow)
+    created_at = db.Column(db.DateTime, default=utcnow)
     servers = db.relationship("GameServer", secondary="game_server_tags", back_populates="tags")
 
     @validates("name")
@@ -554,7 +553,7 @@ class GlobalBan(db.Model):
     player_name = db.Column(db.String(80), default="")               # optional label, for reference
     reason = db.Column(db.String(200), default="")
     created_by = db.Column(db.String(80), default="")
-    created_at = db.Column(db.DateTime, default=datetime.utcnow)
+    created_at = db.Column(db.DateTime, default=utcnow)
 
 
 class AuditLog(db.Model):
@@ -565,7 +564,7 @@ class AuditLog(db.Model):
     target = db.Column(db.String(255), default="")
     detail = db.Column(db.Text, default="")
     ip_address = db.Column(db.String(45), default="")
-    timestamp = db.Column(db.DateTime, default=datetime.utcnow, index=True)
+    timestamp = db.Column(db.DateTime, default=utcnow, index=True)
     success = db.Column(db.Boolean, default=True)
 
 
@@ -583,7 +582,7 @@ class MetricSample(db.Model):
     orphans from an uninstalled server just age out — so it stays cheap to write."""
     id = db.Column(db.Integer, primary_key=True)
     server_id = db.Column(db.Integer, index=True, nullable=False)
-    ts = db.Column(db.DateTime, default=datetime.utcnow, index=True)
+    ts = db.Column(db.DateTime, default=utcnow, index=True)
     cpu = db.Column(db.Float, default=0.0)          # game CPU %
     ram_mb = db.Column(db.Integer, default=0)       # game RAM MB
     players = db.Column(db.Integer, nullable=True)  # None = unknown at sample time
@@ -593,7 +592,7 @@ class HostSample(db.Model):
     """A periodic snapshot of one host's whole-VPS figures (CPU%, RAM%, disk%) for the history charts."""
     id = db.Column(db.Integer, primary_key=True)
     remote_id = db.Column(db.Integer, index=True, nullable=False)
-    ts = db.Column(db.DateTime, default=datetime.utcnow, index=True)
+    ts = db.Column(db.DateTime, default=utcnow, index=True)
     cpu = db.Column(db.Float, default=0.0)
     ram_pct = db.Column(db.Float, default=0.0)
     disk_pct = db.Column(db.Float, default=0.0)
@@ -608,8 +607,8 @@ class UserSession(db.Model):
     id = db.Column(db.Integer, primary_key=True)
     user_id = db.Column(db.Integer, db.ForeignKey("user.id"), index=True, nullable=False)
     sid = db.Column(db.String(64), unique=True, index=True, nullable=False)
-    created_at = db.Column(db.DateTime, default=datetime.utcnow, nullable=False)
-    last_seen = db.Column(db.DateTime, default=datetime.utcnow, nullable=False)
+    created_at = db.Column(db.DateTime, default=utcnow, nullable=False)
+    last_seen = db.Column(db.DateTime, default=utcnow, nullable=False)
     ip = db.Column(db.String(64), default="")
     user_agent = db.Column(db.String(300), default="")
     user = db.relationship("User", backref=db.backref(

@@ -922,9 +922,10 @@ try:
 
     # ── History endpoint: a player peak must survive down-sampling (not be decimated away) ──
     from models import MetricSample
-    from datetime import datetime as _dt, timedelta as _td
+    from datetime import timedelta as _td
+    from clock import utcnow as _utcnow
     with app.app_context():
-        _base = _dt.utcnow() - _td(hours=6)
+        _base = _utcnow() - _td(hours=6)
         # 500 samples so sstep = 500//240 = 2; players is 0 everywhere except a single spike of 5 at an
         # ODD index — which plain srows[::2] decimation skips. The max-over-window fix must keep it.
         db.session.add_all([
