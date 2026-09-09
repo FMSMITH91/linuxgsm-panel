@@ -36,6 +36,7 @@ import ipaddress
 import os
 import re
 import shutil
+import stat
 import tempfile
 import time
 import subprocess  # nosec B404 - fixed argv, shell=False, no untrusted text reaches a shell
@@ -438,8 +439,9 @@ def do_sshd_backup(args, content):
     """Snapshot the panel's sshd drop-in, if it exists. A missing file is success, not an error —
     the restore below treats "no snapshot" as "there was no drop-in before us"."""
     if os.path.isfile(SSHD_DROPIN):
-        shutil.copyfile(SSHD_DROPIN, SSHD_DROPIN_BAK)
-        os.chmod(SSHD_DROPIN_BAK, 0o600)
+        # copy2, not copyfile: it carries the mode across, so the restore below can be an exact
+        # inverse. The snapshot is no more exposed than the file it copies, by construction.
+        shutil.copy2(SSHD_DROPIN, SSHD_DROPIN_BAK)
     return 0
 
 
@@ -449,8 +451,11 @@ def do_sshd_restore(args, content):
     This is the rollback for a port change that did not work, so it has to be the exact inverse of
     do_sshd_backup: a host that had no drop-in before ends with no drop-in, not with an empty one."""
     if os.path.isfile(SSHD_DROPIN_BAK):
+        # os.replace moves the inode, so the snapshot's mode comes with it. There was a chmod 0o644
+        # here, which was wrong twice over: it widened the file to world-readable, and it IMPOSED a
+        # mode rather than restoring the one the host had. A rollback that changes permissions is
+        # not a rollback.
         os.replace(SSHD_DROPIN_BAK, SSHD_DROPIN)
-        os.chmod(SSHD_DROPIN, 0o644)
     else:
         try:
             os.unlink(SSHD_DROPIN)
@@ -495,7 +500,9 @@ def do_f2b_sshd_ports(args, content):
         fd, tmp = tempfile.mkstemp(dir=os.path.dirname(path), prefix=".panel-", suffix=".tmp")
         with os.fdopen(fd, "w") as fh:
             fh.writelines(out)
-        os.chmod(tmp, 0o644)
+        # Keep jail.local's existing mode instead of imposing 0o644 — this edits a file the
+        # distro (or the operator) created, and rewriting its permissions is not part of the edit.
+        os.chmod(tmp, stat.S_IMODE(os.stat(path).st_mode))
         os.replace(tmp, path)
     return 0
 
@@ -511,13 +518,18 @@ def do_reboot_delayed(args, content):
     if pid == 0:                       # child
         os.setsid()                    # detach from the session, so our exit cannot kill it
         if os.fork() == 0:             # grandchild — re-parented to init
+            # finally, not except: os.execv does not return on success, so this only runs when the
+            # exec failed. It guarantees the grandchild can never fall back into the caller's code
+            # — for any exception, without catching BaseException to do it.
             try:
                 devnull = os.open(os.devnull, os.O_RDWR)
                 for fd in (0, 1, 2):
                     os.dup2(devnull, fd)
+                if devnull > 2:
+                    os.close(devnull)        # dup2 kept the copies; this one would leak
                 time.sleep(REBOOT_DELAY_SECONDS)
                 os.execv(resolve("reboot"), ["reboot"])
-            except BaseException:
+            finally:
                 os._exit(1)
         os._exit(0)
     os.waitpid(pid, 0)                 # reap the middle process immediately

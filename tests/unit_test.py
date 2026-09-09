@@ -4101,6 +4101,19 @@ check("sshd: rolling back restores the previous drop-in byte for byte",
 check("sshd: and the snapshot is consumed, not left lying in sshd_config.d",
       not os.path.exists(_h.SSHD_DROPIN_BAK))
 
+# A rollback that changes permissions is not a rollback. There was a chmod 0o644 on the restore
+# path, which both widened the file and threw away whatever mode the operator had set.
+import stat as _stat
+os.chmod(_h.SSHD_DROPIN, 0o600)
+_hardened = open(_h.SSHD_DROPIN).read()
+_h.do_sshd_backup([], None)
+_h.do_write_file(["sshd-port-dropin"], "Port 2222\n")
+_h.do_sshd_restore([], None)
+check("sshd: rolling back restores the file's MODE, not just its content",
+      _stat.S_IMODE(os.stat(_h.SSHD_DROPIN).st_mode) == 0o600
+      and open(_h.SSHD_DROPIN).read() == _hardened,
+      oct(_stat.S_IMODE(os.stat(_h.SSHD_DROPIN).st_mode)))
+
 # (c) Discarding the snapshot on success is idempotent — the success path runs it once, but a
 #     retry must not turn into an error.
 _h.do_sshd_backup([], None)
@@ -4126,6 +4139,11 @@ check("f2b: the [sshd] jail gets the new port list",
 check("f2b: [DEFAULT]'s port is left alone",
       "port = 9999" in _jail_after.split("[sshd]")[0])
 check("f2b: another jail's port is left alone", "port = 80" in _jail_after)
+os.chmod(_jail, 0o640)
+_h2["do_f2b_sshd_ports"](["22"], None)
+check("f2b: editing jail.local keeps the mode it already had",
+      _stat.S_IMODE(os.stat(_jail).st_mode) == 0o640,
+      oct(_stat.S_IMODE(os.stat(_jail).st_mode)))
 check("f2b: a host with no jail.local is a no-op, not a failure",
       _h.do_f2b_sshd_ports(["22"], None) == 0)
 
