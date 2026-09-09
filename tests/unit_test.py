@@ -3979,6 +3979,13 @@ check("privileged: no write target is group- or world-writable",
       str({p: oct(m) for p, m in _priv.WRITE_TARGETS.values()})[:120])
 check("privileged: the sshd drop-in is deliberately NOT a write target yet",
       not any("sshd" in p for p, _m in _priv.WRITE_TARGETS.values()))
+# Once WRITE_TARGETS owns a path, the module-level constant that used to hold it has no users left
+# — and CodeQL's py/unused-global-variable turns main RED for it, via the open-alerts gate from
+# #101. Two of these were missed one at a time; this checks the whole family at once.
+_orphans = [n for n in ("_F2B_PANEL_WHITELIST_DROPIN", "_NODE_TOOLS_CRON_PATH")
+            if hasattr(sm, n)]
+check("privileged: no ssh_manager constant duplicates a write-target path",
+      not _orphans, ", ".join(_orphans))
 # The remote transport still base64s the content through a shell, so the content must survive
 # every byte a config file can legitimately contain.
 _tricky = "a'b\"c$d`e\\f\n[DEFAULT]\nignoreip = 10.0.0.1/8\n"
