@@ -217,3 +217,4 @@ Issues and pull requests are welcome — this is a solo, AI-assisted project, so
 MIT
 
 <!-- glob probe A -->
+<!-- probe re-run against merged main -->
