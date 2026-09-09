@@ -50,6 +50,11 @@ export XDG_RUNTIME_DIR="${XDG_RUNTIME_DIR:-/run/user/$(id -u)}"
 #     it for real needs a privileged helper: one script granted sudo, accepting a
 #     fixed set of verbs, with the privileged call sites routed through it.
 #
+#     THAT WORK HAS STARTED. tools/panel-helper is that script, and it is installed
+#     below; the ufw family already routes through it. The grant stays NOPASSWD:ALL
+#     until EVERY privileged call site does, because a boundary with a hole in it is
+#     not a boundary — see SECURITY.md for what is converted so far.
+#
 #     If you only manage REMOTE servers from this panel, delete
 #     /etc/sudoers.d/linuxgsm-panel — the panel keeps working and the grant goes
 #     away entirely.
@@ -742,6 +747,31 @@ if [ "${PANEL_PORT}" != "${DESIRED_PORT}" ]; then
     warn "Port ${DESIRED_PORT} is already in use — the panel will use port ${PANEL_PORT} instead."
 else
     ok "Port ${PANEL_PORT} is free for the panel"
+fi
+
+# ── The privileged helper ──────────────────────────────────────────────────────────────────
+# tools/panel-helper is copied to a root-owned location OUTSIDE the panel's checkout. That
+# placement is the entire point: the checkout belongs to the panel user and is rewritten by
+# `git pull` on every self-update, so a helper living there would be panel-writable by design —
+# and a privilege boundary the untrusted side can edit is not a boundary.
+#
+# The consequence, stated plainly: updating the helper needs root. The panel's own self-update
+# cannot do it. Today the NOPASSWD:ALL grant still exists, so the update path can place it with
+# sudo; once that grant is narrowed, changing the verb table means re-running this script as root.
+HELPER_SRC="${PANEL_DIR}/tools/panel-helper"
+HELPER_DIR="/usr/local/lib/linuxgsm-panel"
+HELPER_DST="${HELPER_DIR}/panel-helper"
+H_SUDO=""; [ "$(id -u)" -ne 0 ] && H_SUDO="sudo"
+if [ -f "${HELPER_SRC}" ]; then
+    if ${H_SUDO} install -d -o root -g root -m 0755 "${HELPER_DIR}" 2>/dev/null \
+       && ${H_SUDO} install -o root -g root -m 0755 "${HELPER_SRC}" "${HELPER_DST}" 2>/dev/null; then
+        ok "Privileged helper installed at ${HELPER_DST}"
+    else
+        # Not fatal. ssh_manager.run_privileged falls back to the pre-helper path when the helper
+        # is absent, so the panel keeps working — it just does not get the narrower call path yet.
+        warn "Could not install the privileged helper (needs root). The panel still works;"
+        warn "re-run this installer as root to place it."
+    fi
 fi
 
 info "[3/4] Registering the service…"

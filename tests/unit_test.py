@@ -496,6 +496,14 @@ check("ufw: unknown protocol rejected", sm._ufw_proto("sctp") is None)
 eq("ufw: valid port coerced to int", sm._ufw_port_int("27015"), 27015)
 
 
+def _ufw_raises_fnf(fn, *a):
+    try:
+        fn(*a)
+        return False
+    except FileNotFoundError:
+        return True
+
+
 def _ufw_raises(fn):
     try:
         fn()
@@ -508,16 +516,17 @@ check("ufw: non-numeric port rejected", _ufw_raises(lambda: sm._ufw_port_int("22
 check("ufw: port 0 rejected", _ufw_raises(lambda: sm._ufw_port_int(0)))
 check("ufw: port 70000 rejected", _ufw_raises(lambda: sm._ufw_port_int(70000)))
 # End-to-end: a malicious protocol/port must NOT reach run_command (no shell runs).
-_orig_ufw_rc = sm.run_command
+_orig_ufw_rc, _orig_ufw_rp = sm.run_command, sm.run_privileged
 try:
     _ufw_calls = []
     sm.run_command = lambda *a, **k: (_ufw_calls.append(a), ("", "", 0))[1]
+    sm.run_privileged = lambda *a, **k: (_ufw_calls.append(a), ("", "", 0))[1]
     _ok, _m = sm.remote_ufw_open_port(None, 27015, "tcp; touch /tmp/x #")
     check("ufw: open rejects injection proto, runs nothing", _ok is False and not _ufw_calls)
     _ok, _m = sm.remote_ufw_close_port(None, "22; reboot", "tcp")
     check("ufw: close rejects injection port, runs nothing", _ok is False and not _ufw_calls)
 finally:
-    sm.run_command = _orig_ufw_rc
+    sm.run_command, sm.run_privileged = _orig_ufw_rc, _orig_ufw_rp
 
 # ── shell-identifier validation (usernames/short_names reach ssh + shell) ──
 from models import _validate_shell_ident as _vsi
@@ -530,10 +539,13 @@ check("ident: leading dot rejected", _ufw_raises(lambda: _vsi("k", ".hidden")))
 check("ident: shell metachar rejected", _ufw_raises(lambda: _vsi("k", "a;b")))
 
 # ── Tailscale bootstrap quotes user-supplied auth_key/routes/tags (root shell) ──
-_orig_ts_rc = sm.run_command
+_orig_ts_rc, _orig_ts_rp = sm.run_command, sm.run_privileged
 try:
     _ts_cmds = []
     sm.run_command = lambda s, c, **k: (_ts_cmds.append(c), ("ok", "", 0))[1]
+    # The ufw half of this path no longer builds a command string at all — it is a verb now — so
+    # stub it separately and report an inactive firewall so the rest of the function runs.
+    sm.run_privileged = lambda s, v, a=(), **k: ("Status: inactive", "", 0)
     sm.remote_bootstrap_tailscale(None, auth_key="tskey; touch /tmp/x",
                                   advertise_routes="1.2.3.0/24; reboot", tags="tag:x; rm -rf /")
     _joined = " ".join(_ts_cmds)
@@ -541,7 +553,7 @@ try:
     check("tailscale: routes are shell-quoted", sm._quote("1.2.3.0/24; reboot") in _joined)
     check("tailscale: tags are shell-quoted", sm._quote("tag:x; rm -rf /") in _joined)
 finally:
-    sm.run_command = _orig_ts_rc
+    sm.run_command, sm.run_privileged = _orig_ts_rc, _orig_ts_rp
 
 # ── apt dependency names parsed from LinuxGSM output get interpolated into
 #    `apt-get install <pkgs>`, so parse_missing_deps is a security filter, not just a parser. ──
@@ -3690,6 +3702,145 @@ _quiet = _sp.run([sys.executable, "-c", "import sys; sys.path.insert(0, %r); imp
                  capture_output=True, text=True, timeout=120, cwd=_root)
 check("eventlet's deprecation banner no longer prints on every start",
       "Eventlet is deprecated" not in _quiet.stderr, _quiet.stderr.strip()[:120])
+
+# ── The privileged helper: verbs instead of shell strings ──────────────────────────────────────
+# The panel escalates local work as `sudo bash -c '<command>'`, and a sudoers rule permitting
+# /bin/bash is exactly NOPASSWD:ALL — so the grant cannot be narrowed while a shell string crosses
+# the boundary. privileged.py names each operation as a verb with separated arguments;
+# tools/panel-helper is the root-owned end that re-validates them and execs a fixed argv.
+import importlib.machinery as _machinery
+import importlib.util as _ilu
+import privileged as _priv
+
+_helper_path = os.path.join(_root, "tools", "panel-helper")
+_spec = _ilu.spec_from_loader("panel_helper", _machinery.SourceFileLoader("panel_helper", _helper_path))
+_helper = _ilu.module_from_spec(_spec)
+_spec.loader.exec_module(_helper)
+
+# Sample arguments per verb. Every verb must appear here — a new verb with no sample is a gap in
+# the parity check below, so the test fails rather than silently skipping it.
+_VERB_SAMPLES = {
+    "ufw-status": ["numbered"],
+    "ufw-enable": [],
+    "ufw-default": ["deny", "incoming"],
+    "ufw-allow-port": ["27015", "Game"],
+    "ufw-allow-proto-port": ["tcp", "27015", "Game"],
+    "ufw-limit-port": ["22/tcp"],
+    "ufw-allow-iface": ["tailscale0"],
+    "ufw-delete-allow-port": ["22/tcp"],
+    "ufw-delete-allow-proto-port": ["udp", "27015"],
+    "ufw-delete-limit-port": ["22/tcp"],
+    "ufw-delete-allow-app": ["OpenSSH"],
+    "ufw-deny-ip": ["203.0.113.5", "panel-autoblock"],
+    "ufw-delete-deny-ip": ["203.0.113.5"],
+    "ufw-delete-num": ["3"],
+}
+check("privileged: every verb has a sample (new verbs cannot skip the parity check)",
+      set(_VERB_SAMPLES) == set(_priv.verbs()),
+      "panel-only=%s helper-only=%s" % (sorted(set(_priv.verbs()) - set(_VERB_SAMPLES)),
+                                        sorted(set(_VERB_SAMPLES) - set(_priv.verbs()))))
+check("privileged: the helper knows exactly the same verbs as the panel",
+      sorted(_helper.VERBS) == _priv.verbs(),
+      "helper=%s panel=%s" % (sorted(_helper.VERBS)[:3], _priv.verbs()[:3]))
+
+# THE anti-drift gate. The helper deliberately keeps its own copy of the table — it must not import
+# panel code, because root running panel-writable code is the thing this is trying to prevent. The
+# copies are only safe while something checks they agree.
+_drift = []
+for _v, _a in _VERB_SAMPLES.items():
+    if _v not in _helper.VERBS or _v not in _priv.verbs():
+        continue
+    _hv = _helper.VERBS[_v][1]([c(x) for x, c in zip(_a, _helper.VERBS[_v][0])])
+    _pv = _priv.tool_argv(_v, _a)
+    if _hv != _pv:
+        _drift.append("%s: helper=%r panel=%r" % (_v, _hv, _pv))
+check("privileged: helper and panel build an identical argv for every verb",
+      not _drift, "; ".join(_drift[:2]))
+
+# The helper can only ever run tools it names. bash is the whole point: if it resolved, the boundary
+# would be decorative.
+check("helper: resolves ufw", _helper.resolve("ufw").endswith("/ufw") if os.path.exists("/usr/sbin/ufw") else True)
+for _prog in ("bash", "sh", "python3", "env"):
+    check("helper: refuses to resolve %s" % _prog, _ufw_raises_fnf(_helper.resolve, _prog))
+
+# Validators. Each of these reached a root shell as text before; now they are rejected outright.
+_BAD = {
+    "ufw-delete-deny-ip": ["1.2.3.4; rm -rf /", "$(id)", "any", "", "1.2.3.4 -x", "0"],
+    "ufw-limit-port": ["22; reboot", "0", "65536", "22/sctp", "-1", "$(id)"],
+    "ufw-allow-iface": ["eth0; id", "../../etc", "a" * 16, "$(id)"],
+    "ufw-delete-allow-app": ["OpenSSH; id", "Nginx", "openssh"],
+    "ufw-default": ["allow; id", "drop"],
+    "ufw-delete-num": ["0", "1; id", "-1", "abc"],
+}
+_leaked = []
+for _v, _bads in _BAD.items():
+    _nargs = len(_VERB_SAMPLES[_v])
+    for _b in _bads:
+        _args = [_b] + ["x"] * (_nargs - 1) if _nargs else [_b]
+        try:
+            _priv.check_args(_v, _args[:_nargs] if _nargs else [])
+            _leaked.append("%s <- %r" % (_v, _b))
+        except _priv.VerbError:
+            pass
+check("privileged: injection and out-of-range arguments are refused, not quoted",
+      not _leaked, "; ".join(_leaked[:3]))
+
+# Arguments stay ARGUMENTS. The local transport never produces a string for a shell to parse, so a
+# metacharacter is inert rather than escaped-and-hoped-for.
+_argv = _priv.helper_argv("ufw-allow-port", ["27015", "cod server"])
+check("privileged: local transport passes argv, with the comment as ONE element",
+      "cod server" in _argv and not any(" -c" == x for x in _argv), repr(_argv))
+check("privileged: local transport invokes the helper, never a shell",
+      _argv[:3] == ["sudo", "-n", _priv.HELPER_PATH] and "bash" not in " ".join(_argv), repr(_argv))
+
+# The remote transport must keep sending what it always sent — a host upgrading to this code should
+# not see its firewall commands change shape.
+_REMOTE_EXPECTED = {
+    ("ufw-status", ("numbered",)): "ufw status numbered 2>&1",
+    ("ufw-status", ("plain",)): "ufw status 2>&1",
+    ("ufw-enable", ()): "ufw --force enable 2>&1",
+    ("ufw-default", ("deny", "incoming")): "ufw default deny incoming 2>&1",
+    ("ufw-allow-port", ("27015", "Game")): "ufw allow 27015 comment Game 2>&1",
+    ("ufw-allow-proto-port", ("tcp", "27015", "")): "ufw allow proto tcp to any port 27015 2>&1",
+    ("ufw-limit-port", ("22/tcp",)): "ufw limit 22/tcp 2>&1",
+    ("ufw-allow-iface", ("tailscale0",)): "ufw allow in on tailscale0 2>&1",
+    ("ufw-delete-num", ("3",)): "yes | ufw delete 3 2>&1",
+    ("ufw-deny-ip", ("203.0.113.5", "panel-autoblock")):
+        "ufw insert 1 deny from 203.0.113.5 comment panel-autoblock 2>&1",
+}
+_wrong = []
+for (_v, _a), _want in _REMOTE_EXPECTED.items():
+    _got = _priv.remote_command(_v, list(_a))
+    if _got != _want:
+        _wrong.append("%s: %r != %r" % (_v, _got, _want))
+check("privileged: the remote transport renders the same commands the SSH path always sent",
+      not _wrong, "; ".join(_wrong[:2]))
+
+# A comment with a space must survive shell-quoting on the remote side.
+check("privileged: remote rendering quotes a comment containing a space",
+      _priv.remote_command("ufw-allow-port", ["27015", "cod server"])
+      == "ufw allow 27015 comment 'cod server' 2>&1",
+      _priv.remote_command("ufw-allow-port", ["27015", "cod server"]))
+
+# End-to-end through the real script: unknown verbs and wrong arity are refused before anything runs.
+_hp = _sp.run([sys.executable, _helper_path, "definitely-not-a-verb"],
+              capture_output=True, text=True, timeout=60)
+check("helper: an unknown verb exits 2 and runs nothing", _hp.returncode == 2, _hp.stderr.strip()[:80])
+_hp = _sp.run([sys.executable, _helper_path, "ufw-status", "numbered", "extra"],
+              capture_output=True, text=True, timeout=60)
+check("helper: the wrong number of arguments exits 2", _hp.returncode == 2, _hp.stderr.strip()[:80])
+_hp = _sp.run([sys.executable, _helper_path, "ufw-deny-ip", "1.2.3.4; id", "tag"],
+              capture_output=True, text=True, timeout=60)
+check("helper: a rejected argument exits 2", _hp.returncode == 2, _hp.stderr.strip()[:80])
+check("helper: the rejected value is NOT echoed back (this runs as root, its stderr reaches the UI)",
+      "1.2.3.4; id" not in _hp.stderr, _hp.stderr.strip()[:100])
+
+# ufw status parsing that used to be a `grep` running under root.
+check("ufw: _ufw_is_active reads the Status line", sm._ufw_is_active("Status: active") is True)
+check("ufw: _ufw_is_active is false for inactive", sm._ufw_is_active("Status: inactive") is False)
+check("ufw: _ufw_is_active is false for empty output", sm._ufw_is_active("") is False)
+check("ufw: _ufw_is_active is not fooled by the word active elsewhere",
+      sm._ufw_is_active("To    Action\n22    ALLOW  # keep this rule active") is False)
 
 passed = sum(1 for ok, _, _ in results if ok)
 for ok, name, detail in results:

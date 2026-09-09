@@ -63,6 +63,8 @@ except Exception:
     _tpool = None
     _real_subprocess = subprocess
 
+import privileged as _priv
+
 # In-memory SSH connection cache
 _connections = {}
 _conn_lock = threading.Lock()
@@ -107,29 +109,49 @@ def _run_local(cmd, timeout=30, sudo=False):
         # be root").
         full_cmd = f"sudo bash -c {_quote(cmd)}"
 
+    return _exec_local_shell(full_cmd, timeout=timeout)
+
+
+# Popen options shared by both local paths. start_new_session puts the child in a NEW process group
+# so that on timeout we can kill the whole group — subprocess's own timeout kills only the direct
+# child, and grandchildren (a stuck LinuxGSM command) are orphaned and run forever, burning CPU.
+# (Observed: mods commands stuck at ~100% CPU for hours.) errors="replace" matches the paramiko
+# path: command output is game-server output (player names, mod chatter, latin-1 logs) and is NOT
+# guaranteed valid UTF-8; a strict decode would raise, get swallowed, and return rc=-1 with empty
+# output — indistinguishable from "the command printed nothing".
+_POPEN_KW = dict(stdout=_real_subprocess.PIPE, stderr=_real_subprocess.PIPE, text=True,
+                 encoding="utf-8", errors="replace", start_new_session=True)
+
+
+def _finish(p, timeout, stdin_text=None):
+    """Collect a started process: (stdout, stderr, rc), killing the whole group on timeout."""
+    try:
+        out, err = p.communicate(input=stdin_text, timeout=timeout)
+        return (out or "").strip(), (err or "").strip(), p.returncode
+    except _real_subprocess.TimeoutExpired:
+        _kill_process_tree(p)
+        return "", "Command timed out", -1
+
+
+def _in_tpool(fn):
+    """Run `fn` in eventlet's native thread pool when eventlet is active — see _run_local()."""
+    if _tpool is not None:
+        return _tpool.execute(fn)
+    return fn()
+
+
+def _exec_local_shell(shell_cmd, timeout=30):
+    """Run a composed SHELL command on the panel's own machine.
+
+    The literal ["/bin/bash", "-c", ...] is written out here rather than passed in: an argv that
+    arrives as a variable reads to CodeQL as an arbitrary command line, and this is the path where
+    a composed string genuinely does reach a shell. Keeping the list literal at the call keeps the
+    two local paths distinguishable — this one interprets a command, _exec_local_argv() does not."""
     def _do():
         p = None
         try:
-            # Run in a NEW process group (start_new_session) so that on timeout we can kill the
-            # whole group — otherwise subprocess's timeout only kills the direct `sh -c` child and
-            # any grandchildren (e.g. a stuck LinuxGSM command) get orphaned and run forever,
-            # burning CPU. (Observed: mods commands stuck at ~100% CPU for hours.)
-            # Explicit ["/bin/bash","-c",cmd] instead of shell=True — identical behaviour (a shell
-            # interprets the composed command, with the panel's own _quote-escaping upstream) but
-            # not the subprocess-shell-injection sink shape.
-            # errors="replace" to match the paramiko path: command output is game-server output
-            # (player names, mod chatter, latin-1 logs), so it is NOT guaranteed valid UTF-8. A
-            # strict decode would raise, get swallowed below, and return rc=-1 with empty output —
-            # indistinguishable from "the command printed nothing".
-            p = _real_subprocess.Popen(["/bin/bash", "-c", full_cmd], stdout=_real_subprocess.PIPE,
-                                       stderr=_real_subprocess.PIPE, text=True, encoding="utf-8",
-                                       errors="replace", start_new_session=True)
-            try:
-                out, err = p.communicate(timeout=timeout)
-                return (out or "").strip(), (err or "").strip(), p.returncode
-            except _real_subprocess.TimeoutExpired:
-                _kill_process_tree(p)
-                return "", "Command timed out", -1
+            p = _real_subprocess.Popen(["/bin/bash", "-c", shell_cmd], **_POPEN_KW)
+            return _finish(p, timeout)
         except Exception:
             # Never surface raw exception text — it can flow into API responses
             # (CodeQL py/stack-trace-exposure). Log it; callers act on rc == -1.
@@ -138,14 +160,94 @@ def _run_local(cmd, timeout=30, sudo=False):
                 _kill_process_tree(p)
             return "", "command execution error", -1
 
-    if _tpool is not None:
-        return _tpool.execute(_do)
-    return _do()
+    return _in_tpool(_do)
+
+
+def _exec_local_argv(argv, timeout=30, stdin_text=None):
+    """Run an ARGUMENT VECTOR on the panel's own machine — no shell involved at any point.
+
+    Only privileged.py builds the vectors that reach here, from its fixed verb table, so every
+    element is either a literal or a value that passed a validator."""
+    def _do():
+        p = None
+        try:
+            p = _real_subprocess.Popen(
+                argv, stdin=(_real_subprocess.PIPE if stdin_text is not None else None),
+                **_POPEN_KW)
+            return _finish(p, timeout, stdin_text=stdin_text)
+        except Exception:
+            _log.debug("local command failed", exc_info=True)
+            if p is not None:
+                _kill_process_tree(p)
+            return "", "command execution error", -1
+
+    return _in_tpool(_do)
 
 
 def is_local_server(server):
-    """Check if a server record represents the local machine."""
-    return getattr(server, 'is_local', False) or server.auth_method == "local"
+    """Check if a server record represents the local machine.
+
+    Total on purpose: getattr for both attributes, so a partial record (or None) answers "not
+    local" instead of raising. This is consulted before every command now, including from
+    run_privileged, and an AttributeError here would surface as a failed firewall action rather
+    than as the malformed record it actually is."""
+    return bool(getattr(server, "is_local", False)
+                or getattr(server, "auth_method", None) == "local")
+
+
+_HELPER_STATE = {"present": None}
+
+
+def helper_present(recheck=False):
+    """Whether the root-owned privileged helper is installed on THIS machine.
+
+    Cached: this is consulted on every privileged call and the answer only changes when the
+    operator re-runs install.sh."""
+    if recheck or _HELPER_STATE["present"] is None:
+        try:
+            _HELPER_STATE["present"] = (os.path.isfile(_priv.HELPER_PATH)
+                                        and os.access(_priv.HELPER_PATH, os.X_OK))
+        except Exception:
+            _HELPER_STATE["present"] = False
+    return _HELPER_STATE["present"]
+
+
+def run_privileged(server, verb, args=(), timeout=30, merge_stderr=True, sudo=True):
+    """Run a privileged VERB (see privileged.py) against `server`.
+
+    Local, helper installed:  sudo -n <helper> <verb> <args...>   — argv, no shell anywhere.
+    Local, helper missing:    the old `sudo bash -c '<command>'` path.
+    Remote:                   the same verb rendered as a command over SSH.
+
+    The fallback is not decoration. An existing install only gains the helper when install.sh is
+    next run, and the panel's own self-update cannot place a root-owned file outside its checkout —
+    so between an upgrade and that run, a host has the new code and no helper. Without the fallback
+    every firewall action on that host would fail. It also means the helper is not yet a privilege
+    BOUNDARY: while a fallback exists, and while call sites outside the ufw family still compose
+    shell strings, the sudoers grant stays NOPASSWD:ALL. Removing both is what finishes the job."""
+    if not is_local_server(server):
+        return run_command(server, _priv.remote_command(verb, args, merge_stderr=merge_stderr),
+                           timeout=timeout, sudo=sudo)
+
+    # sudo=None means "whatever this host is configured for", the same defaulting run_command does.
+    # A host with sudo disabled runs the tool directly — still argv, still no shell, just no root.
+    use_sudo = sudo if sudo is not None else getattr(server, "sudo_enabled", False)
+    if not use_sudo:
+        return _exec_local_argv(_priv.tool_argv(verb, args), timeout=timeout,
+                                stdin_text=_priv.stdin_for(verb))
+
+    if helper_present():
+        out, err, rc = _exec_local_argv(_priv.helper_argv(verb, args), timeout=timeout,
+                                        stdin_text=_priv.stdin_for(verb))
+        if merge_stderr:
+            # The shell form used `2>&1`, and callers read tool errors out of stdout. Merge here so
+            # switching transport does not move a message from one stream to the other.
+            return ("\n".join(x for x in (out, err) if x)).strip(), "", rc
+        return out, err, rc
+
+    # No helper on this host yet: the pre-helper path, byte-for-byte.
+    return _run_local(_priv.remote_command(verb, args, merge_stderr=merge_stderr),
+                      timeout=timeout, sudo=True)
 
 
 
@@ -2526,10 +2628,25 @@ def _annotate_firewall_protection(server, enabled, groups):
     return groups
 
 
+def _ufw_is_active(status_out):
+    """True when `ufw status` reports an active firewall.
+
+    Was `ufw status | grep -q active && echo ACTIVE || echo INACTIVE`, read back with
+    `"INACTIVE" not in out` — which needed a comment explaining that ACTIVE is a substring of
+    INACTIVE. Reading the Status: line directly needs no such warning."""
+    for line in (status_out or "").splitlines():
+        if line.strip().lower().startswith("status:"):
+            return line.split(":", 1)[1].strip().lower() == "active"
+    return False
+
+
 def remote_ufw_status(server):
     """Get UFW status and rules from the remote server."""
-    out, err, rc = run_command(server, "ufw status numbered 2>&1 || echo 'NOTINSTALLED'", timeout=15)
-    if "NOTINSTALLED" in out or "not found" in err or "not installed" in err:
+    # sudo=None keeps this host's own setting, as it always did — this is the one ufw read that
+    # never forced escalation. `|| echo NOTINSTALLED` is gone with the shell; a missing tool is
+    # rc 127 from both transports, which is what the check below now leads with.
+    out, err, rc = run_privileged(server, "ufw-status", ["numbered"], timeout=15, sudo=None)
+    if rc == 127 or "NOTINSTALLED" in out or "not found" in (out + err) or "not installed" in (out + err):
         return {"installed": False, "enabled": False, "rules": [], "groups": []}
     # `ufw status` always prints a "Status:" line when it actually runs. If it's missing (or the
     # command failed), the host is unreachable / the command errored — don't claim UFW is installed
@@ -2828,14 +2945,12 @@ def remote_ufw_open_port(server, port, protocol="tcp", comment=""):
     proto = _ufw_proto(protocol)
     if proto is None:
         return False, "Invalid protocol"
-    cmt = f" comment {_quote(comment)}" if comment else ""
+    cmt = re.sub(r"[^A-Za-z0-9 _.-]", "", comment or "")[:60]
     if proto == "both":
-        cmd = f"ufw allow {port}{cmt} 2>&1"
-        label = f"{port} (TCP+UDP)"
+        verb, vargs, label = "ufw-allow-port", [str(port), cmt], f"{port} (TCP+UDP)"
     else:
-        cmd = f"ufw allow proto {proto} to any port {port}{cmt} 2>&1"
-        label = f"{port}/{proto}"
-    out, err, rc = run_command(server, cmd, timeout=15, sudo=True)
+        verb, vargs, label = "ufw-allow-proto-port", [proto, str(port), cmt], f"{port}/{proto}"
+    out, err, rc = run_privileged(server, verb, vargs, timeout=15)
     if rc == 0:
         return True, f"Port {label} opened on remote"
     return False, err or out or "Unknown error"
@@ -2852,10 +2967,10 @@ def remote_ufw_close_port(server, port, protocol=None):
     if proto is None:
         return False, "Invalid protocol"
     if proto in ("tcp", "udp"):
-        cmd = f"ufw delete allow proto {proto} to any port {port} 2>&1"
+        verb, vargs = "ufw-delete-allow-proto-port", [proto, str(port)]
     else:
-        cmd = f"ufw delete allow {port} 2>&1"
-    out, err, rc = run_command(server, cmd, timeout=15, sudo=True)
+        verb, vargs = "ufw-delete-allow-port", [str(port)]
+    out, err, rc = run_privileged(server, verb, vargs, timeout=15)
     if rc == 0:
         return True, f"Port {port}{('/' + proto) if proto in ('tcp', 'udp') else ''} closed on remote"
     return False, err or out or "Unknown error"
@@ -2881,7 +2996,7 @@ def remote_ufw_delete_rule(server, num, force=False):
                         "This rule protects your access to the host and can't be removed here."
         except Exception:
             _log.debug("don't let the safety check itself block a legitimate delete on error", exc_info=True)
-    out, err, rc = run_command(server, f"yes | ufw delete {n} 2>&1", timeout=15, sudo=True)
+    out, err, rc = run_privileged(server, "ufw-delete-num", [n], timeout=15)
     if rc == 0:
         return True, f"Rule {n} deleted"
     return False, err or out or "Failed to delete rule"
@@ -2892,7 +3007,7 @@ def remote_ufw_allow_game_port(server, port, name="Game"):
     rule with the game server's name (its LinuxGSM username) so the firewall list
     shows which server each port belongs to. A bare `ufw allow <port>` covers tcp+udp."""
     comment = re.sub(r"[^A-Za-z0-9 _.-]", "", name or "Game")[:60] or "Game"
-    out, err, rc = run_command(server, f"ufw allow {port} comment {_quote(comment)} 2>&1", timeout=15, sudo=True)
+    out, err, rc = run_privileged(server, "ufw-allow-port", [port, comment], timeout=15)
     ok = rc == 0
     return (1 if ok else 0), f"Port {port}: {'opened (TCP+UDP)' if ok else (err or out or 'failed')}"
 
@@ -2916,7 +3031,7 @@ def remote_ufw_close_by_name(server, name):
     comment = re.sub(r"[^A-Za-z0-9 _.-]", "", name or "")[:60]
     if not comment:
         return 0, "no name"
-    out, _, _ = run_command(server, "ufw status numbered 2>&1", timeout=15, sudo=True)
+    out, _, _ = run_privileged(server, "ufw-status", ["numbered"], timeout=15)
     nums = []
     for line in (out or "").splitlines():
         m = re.match(r"^\s*\[\s*(\d+)\]\s*(.*)$", line)
@@ -3060,8 +3175,10 @@ def port_in_use(server, port):
 
 def check_port_open(server, port):
     """Check if a port is allowed through UFW on the remote."""
-    out, _, rc = run_command(server, f"ufw status verbose 2>&1 | grep -E '\\b{port}\\b'", timeout=10, sudo=True)
-    return bool(out.strip())
+    out, _, _ = run_privileged(server, "ufw-status", ["verbose"], timeout=10)
+    # The word-boundary match used to be a grep -E built from `port` and run as root. It is the same
+    # answer in Python, and the port no longer reaches a command line as pattern text.
+    return bool(re.search(r"\b%d\b" % int(port), out or ""))
 
 
 # ─── Remote OS Commands ───────────────────────────────────────
@@ -3422,10 +3539,10 @@ def remote_bootstrap_vps(server, set_timezone="UTC", enable_ufw=True, install_lg
         # out) while throttling brute-force sources. We do NOT add a plain `allow 22`:
         # a lower-numbered allow rule would match first and shadow the limit, leaving SSH
         # effectively unthrottled.
-        run_command(server, "ufw limit 22/tcp 2>&1", timeout=15, sudo=True)
-        run_command(server, "ufw default deny incoming 2>&1", timeout=15, sudo=True)
-        run_command(server, "ufw default allow outgoing 2>&1", timeout=15, sudo=True)
-        run_command(server, "ufw --force enable 2>&1", timeout=15, sudo=True)
+        run_privileged(server, "ufw-limit-port", ["22/tcp"], timeout=15)
+        run_privileged(server, "ufw-default", ["deny", "incoming"], timeout=15)
+        run_privileged(server, "ufw-default", ["allow", "outgoing"], timeout=15)
+        run_privileged(server, "ufw-enable", [], timeout=15)
 
     # ── 6. Basic SSH hardening ──
     emit("Hardening SSH configuration")
@@ -3681,9 +3798,9 @@ def remote_bootstrap_tailscale(server, auth_key="", enable_ssh=True, advertise_r
         return False, f"Tailscale auth failed: {err or out[-200:]}", "\n".join(log)
 
     # 3. Enable UFW for Tailscale if UFW is active
-    ufw_out, _, ufw_rc = run_command(server, "ufw status 2>&1 | grep -q active && echo 'ACTIVE' || echo 'INACTIVE'", timeout=10, sudo=True)
-    if "INACTIVE" not in ufw_out:  # "ACTIVE" is a substring of "INACTIVE"
-        run_command(server, "ufw allow in on tailscale0 2>&1", timeout=15, sudo=True)
+    ufw_out, _, _ = run_privileged(server, "ufw-status", ["plain"], timeout=10)
+    if _ufw_is_active(ufw_out):
+        run_privileged(server, "ufw-allow-iface", ["tailscale0"], timeout=15)
         log.append("UFW: allowed tailscale0 interface")
 
     # 4. Get status
@@ -3723,12 +3840,9 @@ def remote_tailscale_finalize(server):
     tailscale0 interface is allowed through UFW so tailnet traffic and Tailscale
     SSH are never blocked. Idempotent. Returns (status_dict, log)."""
     log = []
-    ufw_out, _, _ = run_command(
-        server, "ufw status 2>&1 | grep -q active && echo ACTIVE || echo INACTIVE",
-        timeout=10, sudo=True,
-    )
-    if "INACTIVE" not in ufw_out:  # "ACTIVE" is a substring of "INACTIVE"
-        run_command(server, "ufw allow in on tailscale0 2>&1", timeout=15, sudo=True)
+    ufw_out, _, _ = run_privileged(server, "ufw-status", ["plain"], timeout=10)
+    if _ufw_is_active(ufw_out):
+        run_privileged(server, "ufw-allow-iface", ["tailscale0"], timeout=15)
         log.append("UFW: allowed tailscale0 interface (in)")
     status = remote_check_tailscale(server)
     return status, "\n".join(log)
@@ -3736,7 +3850,7 @@ def remote_tailscale_finalize(server):
 
 def remote_ufw_close_port_22(server):
     """Remove port 22/tcp UFW rule (safe if Tailscale SSH is active)."""
-    out, err, rc = run_command(server, "ufw delete allow 22/tcp 2>&1", timeout=15, sudo=True)
+    out, err, rc = run_privileged(server, "ufw-delete-allow-port", ["22/tcp"], timeout=15)
     if rc == 0:
         return True, "Port 22 rule removed from UFW"
     return False, err or out or "Failed to remove port 22"
@@ -3817,9 +3931,11 @@ def remote_ufw_deny_ip(server, ip, tag=_UFW_BLOCK_TAG):
     # Drop any existing deny for this IP first (no duplicate rules), then insert at position 1.
     # run_command wraps the whole compound in `sudo bash -c`, so both parts run as root and rc is
     # the insert's exit status.
-    out, err, rc = run_command(server, "ufw delete deny from %s >/dev/null 2>&1; "
-                        "ufw insert 1 deny from %s comment %s 2>&1"
-                % (_quote(ip), _quote(ip), _quote(tag)), timeout=20, sudo=True)
+    # Two statements used to be joined with ';' inside one `sudo bash -c`. They are two verbs now;
+    # the delete's result is discarded exactly as `>/dev/null 2>&1` discarded it, and rc still comes
+    # from the insert.
+    run_privileged(server, "ufw-delete-deny-ip", [ip], timeout=20)
+    out, err, rc = run_privileged(server, "ufw-deny-ip", [ip, tag], timeout=20)
     if rc == 0:
         return True, "Blocked %s (all ports)." % ip
     return False, ((out or err or "Block failed").replace("\n", " ")[:200])
@@ -3832,13 +3948,13 @@ def remote_ufw_undeny_ip(server, ip):
         ip = str(ipaddress.ip_address((ip or "").strip()))
     except (ValueError, TypeError):
         return False, "Invalid IP address."
-    run_command(server, "ufw delete deny from %s 2>&1" % _quote(ip), timeout=15, sudo=True)
+    run_privileged(server, "ufw-delete-deny-ip", [ip], timeout=15)
     return True, "Unblocked %s." % ip
 
 
 def remote_ufw_blocked_ips(server):
     """{ip: tag} for the panel's own UFW deny rules — tag read from the rule comment. Best-effort."""
-    out, _, _ = run_command(server, "ufw status 2>/dev/null", timeout=15, sudo=True)
+    out, _, _ = run_privileged(server, "ufw-status", ["plain"], timeout=15)
     blocked = {}
     for line in (out or "").splitlines():
         if "DENY" not in line or "panel-" not in line:
@@ -4122,7 +4238,7 @@ def remote_public_ssh_status(server, panel_port=None):
     `panel_port` is given, also report whether that port has a public ALLOW rule
     (`panel_port_open`) so the UI can disable "Close public panel port" once it's
     already closed."""
-    out, _, _ = run_command(server, "ufw status 2>&1", timeout=12, sudo=True)
+    out, _, _ = run_privileged(server, "ufw-status", ["plain"], timeout=12)
     active = "Status: active" in (out or "")
     mode = "off"
     panel_open = False
@@ -4207,9 +4323,8 @@ def _tailnet_ssh_state(server):
     iface_allowed = False
     if running:
         try:  # tailscale interface allowed in UFW → sshd is reachable over the tailnet
-            out, _, _ = run_command(server, "ufw status verbose 2>/dev/null | grep -i tailscale || true",
-                                    timeout=12, sudo=True)
-            iface_allowed = bool((out or "").strip())
+            out, _, _ = run_privileged(server, "ufw-status", ["verbose"], timeout=12)
+            iface_allowed = any("tailscale" in ln.lower() for ln in (out or "").splitlines())
         except Exception:
             iface_allowed = False   # fail safe
     return running, ssh_enabled, iface_allowed
@@ -4225,20 +4340,21 @@ def remote_set_public_ssh(server, mode):
     allowed in UFW) — otherwise it would strand you with no way to reach the host."""
     mode = (mode or "").lower()
     if mode == "allow":
-        cmds = ["ufw delete limit 22/tcp", "ufw allow 22/tcp"]
+        steps = [("ufw-delete-limit-port", ["22/tcp"]), ("ufw-allow-port", ["22/tcp", ""])]
     elif mode == "limit":
-        cmds = ["ufw delete allow 22/tcp", "ufw limit 22/tcp"]
+        steps = [("ufw-delete-allow-port", ["22/tcp"]), ("ufw-limit-port", ["22/tcp"])]
     elif mode == "off":
         running, ssh_enabled, iface_allowed = _tailnet_ssh_state(server)
         if not (running and (ssh_enabled or iface_allowed)):
             return False, ("Refused — there's no Tailscale way back into this host, so disabling "
                            "public SSH would lock you out. Enable Tailscale SSH, or make sure "
                            "Tailscale is running and the tailscale0 interface is allowed in UFW, first.")
-        cmds = ["ufw delete allow 22/tcp", "ufw delete limit 22/tcp", "ufw delete allow OpenSSH"]
+        steps = [("ufw-delete-allow-port", ["22/tcp"]), ("ufw-delete-limit-port", ["22/tcp"]),
+                 ("ufw-delete-allow-app", ["OpenSSH"])]
     else:
         return False, "Invalid mode"
-    for c in cmds:
-        run_command(server, f"{c} 2>&1", timeout=15, sudo=True)  # deletes of absent rules are harmless
+    for verb, vargs in steps:
+        run_privileged(server, verb, vargs, timeout=15)  # deletes of absent rules are harmless
     labels = {"allow": "open (allow)", "limit": "rate-limited", "off": "disabled (tailnet-only)"}
     return True, f"Public SSH is now {labels[mode]}"
 

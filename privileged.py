@@ -1,0 +1,182 @@
+"""Privileged operations, expressed as verbs instead of shell strings.
+
+THE PROBLEM THIS IS SOLVING
+    The panel escalates local work as `sudo bash -c '<command>'`. A sudoers rule that permits
+    /bin/bash is exactly as powerful as NOPASSWD:ALL, so the grant on the panel's own host could
+    not be narrowed by editing sudoers — any list containing bash reads as scoped while granting
+    identical power. Narrowing it for real means the shell string has to stop crossing the
+    privilege boundary at all.
+
+    So each privileged operation is named here, once, as a verb plus already-separated arguments.
+    Nothing composes a command string from user input any more; the arguments are passed as argv.
+
+TWO TRANSPORTS, ONE DEFINITION
+    A verb has to work against the panel's own host AND against a remote host over SSH, because the
+    same call sites serve both:
+
+      local   ->  sudo -n /usr/local/lib/linuxgsm-panel/panel-helper <verb> <args...>
+                  No shell. The helper is root-owned, re-validates every argument against its own
+                  table, and execs a fixed argv. See tools/panel-helper.
+
+      remote  ->  the same argv, shell-quoted, run over the existing SSH path. A remote host has no
+                  helper installed and its sudoers is the operator's business, not the panel's —
+                  what this buys there is that the command is built from validated pieces rather
+                  than interpolated text.
+
+    The argv is built once, in `_ARGV`, and used for both. The helper keeps its own independent copy
+    of the same table on purpose: it must not import panel code (root running panel-writable code
+    would defeat the point). tests/unit_test.py asserts the two agree, so they cannot drift.
+
+STATUS
+    Conversion is in progress — the ufw family first. Until EVERY privileged call site routes
+    through a verb, /etc/sudoers.d/linuxgsm-panel still grants NOPASSWD:ALL and this reduces
+    nothing: a boundary with a hole in it is not a boundary. SECURITY.md says so too.
+"""
+import ipaddress
+import re
+import shlex
+
+# Root-owned, outside the panel's git checkout. The checkout belongs to the panel user and is
+# rewritten by `git pull` on every self-update, so a helper living there would be panel-writable
+# by design — and a boundary the untrusted side can edit is not a boundary.
+HELPER_PATH = "/usr/local/lib/linuxgsm-panel/panel-helper"
+
+# The bare tool NAME. The helper resolves it to an absolute path from its own fixed
+# list; the remote rendering leaves it bare, exactly as the SSH path has always sent it.
+UFW = "ufw"
+
+
+class VerbError(ValueError):
+    """An argument did not pass validation. Never contains the rejected value: this text can reach
+    the panel UI, and echoing attacker-controlled input back into a page is a reflection."""
+
+
+# ── Validators ────────────────────────────────────────────────────────────────────────────────
+# Deliberately strict. A rejected argument is a bug to fix at the call site, not a reason to fall
+# back to something looser.
+
+def _portspec(s):
+    m = re.fullmatch(r"(\d{1,5})(?::(\d{1,5}))?(?:/(tcp|udp))?", str(s))
+    if not m:
+        raise VerbError("not a port specification")
+    for p in (m.group(1), m.group(2)):
+        if p is not None and not (1 <= int(p) <= 65535):
+            raise VerbError("port out of range")
+    if m.group(2) is not None and int(m.group(2)) < int(m.group(1)):
+        raise VerbError("reversed port range")
+    return str(s)
+
+
+def _iface(s):
+    if not re.fullmatch(r"[A-Za-z0-9_.-]{1,15}", str(s)):
+        raise VerbError("not an interface name")
+    return str(s)
+
+
+def _cidr(s):
+    try:
+        ipaddress.ip_network(str(s), strict=False)
+    except ValueError:
+        raise VerbError("not an IP address or network")
+    return str(s)
+
+
+def _comment(s):
+    s = "" if s is None else str(s)
+    if not re.fullmatch(r"[A-Za-z0-9 _.-]{0,60}", s):
+        raise VerbError("comment outside [A-Za-z0-9 _.-] or over 60 characters")
+    return s
+
+
+def _rulenum(s):
+    if not re.fullmatch(r"[1-9]\d{0,3}", str(s)):
+        raise VerbError("not a rule number")
+    return str(s)
+
+
+def _choice(*allowed):
+    def check(s):
+        if str(s) not in allowed:
+            raise VerbError("expected one of: " + ", ".join(allowed))
+        return str(s)
+    return check
+
+
+# ── The verb table ────────────────────────────────────────────────────────────────────────────
+# verb -> (validators, build(args) -> argv of the real tool, stdin or None)
+#
+# This mirrors tools/panel-helper's VERBS. Keep them identical — a unit test compares every verb's
+# argv for a set of sample arguments and fails if they disagree.
+
+_ARGV = {
+    "ufw-status": ([_choice("plain", "numbered", "verbose")],
+                   lambda a: [UFW, "status"] if a[0] == "plain" else [UFW, "status", a[0]], None),
+    "ufw-enable": ([], lambda a: [UFW, "--force", "enable"], None),
+    "ufw-default": ([_choice("allow", "deny", "reject"), _choice("incoming", "outgoing")],
+                    lambda a: [UFW, "default", a[0], a[1]], None),
+    "ufw-allow-port": ([_portspec, _comment],
+                       lambda a: [UFW, "allow", a[0]] + (["comment", a[1]] if a[1] else []), None),
+    "ufw-allow-proto-port": ([_choice("tcp", "udp"), _portspec, _comment],
+                             lambda a: [UFW, "allow", "proto", a[0], "to", "any", "port", a[1]]
+                             + (["comment", a[2]] if a[2] else []), None),
+    "ufw-delete-allow-proto-port": ([_choice("tcp", "udp"), _portspec],
+                                    lambda a: [UFW, "delete", "allow", "proto", a[0], "to", "any",
+                                               "port", a[1]], None),
+    "ufw-delete-limit-port": ([_portspec], lambda a: [UFW, "delete", "limit", a[0]], None),
+    # Only OpenSSH: the panel deletes exactly this one UFW application profile, so the validator is
+    # the literal rather than an app-name pattern — the narrowest thing that still works.
+    "ufw-delete-allow-app": ([_choice("OpenSSH")], lambda a: [UFW, "delete", "allow", a[0]], None),
+    "ufw-limit-port": ([_portspec], lambda a: [UFW, "limit", a[0]], None),
+    "ufw-allow-iface": ([_iface], lambda a: [UFW, "allow", "in", "on", a[0]], None),
+    "ufw-delete-allow-port": ([_portspec], lambda a: [UFW, "delete", "allow", a[0]], None),
+    "ufw-deny-ip": ([_cidr, _comment],
+                    lambda a: [UFW, "insert", "1", "deny", "from", a[0]]
+                    + (["comment", a[1]] if a[1] else []), None),
+    "ufw-delete-deny-ip": ([_cidr], lambda a: [UFW, "delete", "deny", "from", a[0]], None),
+    "ufw-delete-num": ([_rulenum], lambda a: [UFW, "delete", a[0]], "y\n"),
+}
+
+
+def check_args(verb, args):
+    """Validated arguments for `verb`, as strings. Raises VerbError on anything unexpected."""
+    spec = _ARGV.get(verb)
+    if spec is None:
+        raise VerbError("unknown verb")
+    validators = spec[0]
+    if len(args) != len(validators):
+        raise VerbError("%s takes %d argument(s), got %d" % (verb, len(validators), len(args)))
+    return [check(v) for v, check in zip(args, validators)]
+
+
+def tool_argv(verb, args):
+    """The real tool's argument vector for `verb` — e.g. ['/usr/sbin/ufw', 'status', 'numbered']."""
+    return _ARGV[verb][1](check_args(verb, args))
+
+
+def stdin_for(verb):
+    """Text to feed the tool on stdin, or None. `ufw delete <n>` prompts; answering it here is what
+    replaces the old `yes | ufw delete n`, and with it the pipe and the shell."""
+    return _ARGV[verb][2]
+
+
+def helper_argv(verb, args):
+    """The argv that runs `verb` locally through the root-owned helper."""
+    return ["sudo", "-n", HELPER_PATH, verb] + list(check_args(verb, args))
+
+
+def remote_command(verb, args, merge_stderr=True):
+    """The shell command that runs `verb` on a REMOTE host over SSH.
+
+    Shell-quoted from the same validated argv, so the remote string is a rendering of the verb
+    rather than a separately-maintained command. `2>&1` is kept because the existing callers read
+    tool errors out of stdout; dropping it would silently change which stream messages land in."""
+    cmd = shlex.join(tool_argv(verb, args))
+    if stdin_for(verb) is not None:
+        # No helper on the far side to feed stdin, so the prompt is answered the old way.
+        cmd = "yes | " + cmd
+    return cmd + (" 2>&1" if merge_stderr else "")
+
+
+def verbs():
+    """Every verb this module knows, for tests and for the operator-facing docs."""
+    return sorted(_ARGV)
