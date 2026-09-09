@@ -85,6 +85,8 @@ HOME_ROOT = "/home"
 # "….conf.bak" sitting next to it is inert.
 SSHD_DROPIN = "/etc/ssh/sshd_config.d/99-panel-sshport.conf"
 SSHD_DROPIN_BAK = SSHD_DROPIN + ".bak"
+# fail2ban's operator-owned jail file — see tools/panel-helper.
+F2B_JAIL_LOCAL = "/etc/fail2ban/jail.local"
 
 # Root-owned files the panel writes, by NAME. The content arrives on stdin and the path is looked
 # up here — so a caller names a destination, it never supplies one. This is the whole reason the
@@ -335,9 +337,10 @@ _REMOTE_ACTIONS = {
                               shlex.quote(SSHD_DROPIN), shlex.quote(SSHD_DROPIN)),
     "sshd-discard-backup": lambda a: "rm -f %s" % shlex.quote(SSHD_DROPIN_BAK),
     "f2b-set-sshd-ports": lambda a: (
-        "if [ -f /etc/fail2ban/jail.local ]; then "
-        "sed -i '/^\\[sshd\\]/,/^\\[/{s/^port *=.*/port = %s/}' /etc/fail2ban/jail.local; "
-        "systemctl restart fail2ban 2>&1 || true; fi" % a[0]),
+        "if [ -f %s ]; then "
+        "sed -i '/^\\[sshd\\]/,/^\\[/{s/^port *=.*/port = %s/}' %s; "
+        "systemctl restart fail2ban 2>&1 || true; fi"
+        % (F2B_JAIL_LOCAL, a[0], F2B_JAIL_LOCAL)),
     # The subshell is the point: it backgrounds the sleep so this command returns and the SSH
     # connection can close before the host goes down.
     "reboot-delayed": lambda a: "( sleep 2 ; reboot ) >/dev/null 2>&1 & echo scheduled",

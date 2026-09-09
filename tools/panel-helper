@@ -118,6 +118,10 @@ HOME_ROOT = "/home"
 # file named "….conf.bak" is inert there — which is why the backup can live next to the original.
 SSHD_DROPIN = "/etc/ssh/sshd_config.d/99-panel-sshport.conf"
 SSHD_DROPIN_BAK = SSHD_DROPIN + ".bak"
+# fail2ban's operator-owned jail file. Named here rather than inline in the verb so
+# every path this script touches is declared in one place — and so a test can point it
+# at a sandbox without rewriting the source.
+F2B_JAIL_LOCAL = "/etc/fail2ban/jail.local"
 
 
 # Root-owned files the panel writes, by NAME. The content arrives on stdin and the path is looked
@@ -482,7 +486,7 @@ def do_f2b_sshd_ports(args, content):
     same edit in Python: walk jail.local, and inside the [sshd] section only, replace the port line.
     No jail.local, or no [sshd] section, means nothing to do — fail2ban keeps its default."""
     ports = args[0]
-    path = "/etc/fail2ban/jail.local"
+    path = F2B_JAIL_LOCAL
     if not os.path.isfile(path):
         return 0
     with open(path) as fh:

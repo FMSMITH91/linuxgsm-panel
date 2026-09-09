@@ -4004,6 +4004,8 @@ check("privileged: the sshd snapshot cannot be read back by sshd (it must not en
 check("privileged: both copies agree on the sshd paths",
       (_priv.SSHD_DROPIN, _priv.SSHD_DROPIN_BAK)
       == (_helper.SSHD_DROPIN, _helper.SSHD_DROPIN_BAK))
+check("privileged: both copies agree on fail2ban's jail.local path",
+      _priv.F2B_JAIL_LOCAL == _helper.F2B_JAIL_LOCAL)
 # Once WRITE_TARGETS owns a path, the module-level constant that used to hold it has no users left
 # — and CodeQL's py/unused-global-variable turns main RED for it, via the open-alerts gate from
 # #101. Two of these were missed one at a time; this checks the whole family at once.
@@ -4073,6 +4075,7 @@ def _sandboxed_helper():
     _m.SSHD_DROPIN_BAK = _m.SSHD_DROPIN + ".bak"
     _m.WRITE_TARGETS = dict(_m.WRITE_TARGETS,
                             **{"sshd-port-dropin": (_m.SSHD_DROPIN, 0o644)})
+    _m.F2B_JAIL_LOCAL = os.path.join(_sandbox, "etc/fail2ban/jail.local")
     return _m
 
 
@@ -4124,15 +4127,11 @@ check("sshd: discarding the snapshot twice is not an error",
 
 # (d) The fail2ban jail edit must touch ONLY the [sshd] section. The sed range it replaces
 #     (/^\[sshd\]/,/^\[/) was doing the same job with a regex running as root.
-_jail = os.path.join(_sandbox, "etc/fail2ban/jail.local")
+_jail = _h.F2B_JAIL_LOCAL
 open(_jail, "w").write("[DEFAULT]\nbantime = 1h\nport = 9999\n\n"
                        "[sshd]\nenabled = true\nport = 22\nmaxretry = 5\n\n"
                        "[nginx]\nport = 80\n")
-_h2_src = open(_helper_path, encoding="utf-8").read().replace(
-    'path = "/etc/fail2ban/jail.local"', 'path = %r' % _jail)
-_h2 = {}
-exec(compile(_h2_src, "ph_jail", "exec"), _h2)     # noqa: S102 - test fixture, our own source
-_h2["do_f2b_sshd_ports"](["2222,22"], None)
+_h.do_f2b_sshd_ports(["2222,22"], None)
 _jail_after = open(_jail).read()
 check("f2b: the [sshd] jail gets the new port list",
       "port = 2222,22" in _jail_after.split("[sshd]")[1])
@@ -4140,7 +4139,7 @@ check("f2b: [DEFAULT]'s port is left alone",
       "port = 9999" in _jail_after.split("[sshd]")[0])
 check("f2b: another jail's port is left alone", "port = 80" in _jail_after)
 os.chmod(_jail, 0o640)
-_h2["do_f2b_sshd_ports"](["22"], None)
+_h.do_f2b_sshd_ports(["22"], None)
 check("f2b: editing jail.local keeps the mode it already had",
       _stat.S_IMODE(os.stat(_jail).st_mode) == 0o640,
       oct(_stat.S_IMODE(os.stat(_jail).st_mode)))
