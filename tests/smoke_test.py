@@ -1023,6 +1023,41 @@ try:
             # Every budget above is measured as a SUPERADMIN, and is_superadmin short-circuits
             # get_user_servers — so the permission-resolution path that every ORDINARY account goes
             # through was never once counted. Measure it as one.
+            # The OS-updates banner calls /api/os-updates/summary on EVERY page load, and the
+            # endpoint loops can_access_remote over each host it knows about. That is the shape
+            # that turns into an N+1 the moment someone makes the access check hit the database
+            # per host — and unlike /api/servers and /, it had no budget guarding it. It returns
+            # early (0 queries) while its snapshot is empty, so the snapshot has to be populated
+            # for the measurement to mean anything.
+            _sv_seen = dict(_appmod._os_update_seen)
+            try:
+                with app.app_context():
+                    for _r in RemoteServer.query.all():
+                        _appmod._os_update_seen[_r.id] = {
+                            "name": _r.name, "count": 3, "security": 1,
+                            "packages": [{"name": "openssl", "suite": "noble-security"}],
+                            "at": 1.0}
+                _sum_q, _sum_code = _qcount("/api/os-updates/summary")
+                check("perf: the OS-updates banner endpoint renders", _sum_code == 200,
+                      "got %d" % _sum_code)
+                # 5 and 8, not 10 and 15: it really costs 3 and 5, and there are 5 hosts in
+                # the snapshot, so a per-host query would add 5. A looser budget would leave the
+                # N+1 this guards against comfortably inside it — a gate with too much headroom
+                # passes exactly when it matters.
+                check("perf: the banner endpoint does NOT query per host",
+                      _sum_q <= 5, "%d queries for %d hosts"
+                      % (_sum_q, len(_appmod._os_update_seen)))
+                _usum_q, _usum_code = _qcount("/api/os-updates/summary", client_as(mru_id))
+                # Weaker than the superadmin check by nature, and worth saying so: this user is
+                # scoped to one host, so the loop skips the rest and a per-host regression only
+                # costs it one query. The superadmin budget above is the one that bites.
+                check("perf: ...and stays in budget for a NON-superadmin, whose access check is real",
+                      _usum_code == 200 and _usum_q <= 8,
+                      "%d queries (status %d)" % (_usum_q, _usum_code))
+            finally:
+                _appmod._os_update_seen.clear()
+                _appmod._os_update_seen.update(_sv_seen)
+
             _uc = client_as(mru_id)
             _uapi_q, _uapi_code = _qcount("/api/servers", _uc)
             _umet_q, _umet_code = _qcount("/api/dashboard/metrics", _uc)
