@@ -84,6 +84,10 @@ class User(UserMixin, db.Model):
     totp_enabled = db.Column(db.Boolean, default=False)  # 2FA active for this user
     auth_epoch = db.Column(db.Integer, default=0, nullable=False)  # bump to revoke all sessions
     backup_codes = db.Column(db.Text, default="")   # JSON list of bcrypt-hashed one-time 2FA backup codes
+    # Highest TOTP timestep already accepted for this user. A code stays valid for ~90s (the step
+    # plus one either side for clock skew), so "is this code valid" alone lets an observed code be
+    # replayed for the rest of that window. Recording the step makes each one single-use.
+    last_totp_step = db.Column(db.Integer, default=0, nullable=False)
     language = db.Column(db.String(5), default="en")  # UI language: en / es / fr
     # A superadmin without 2FA sees a nag banner; this remembers a permanent "don't remind me".
     otp_nag_dismissed = db.Column(db.Boolean, default=False, nullable=False)
@@ -636,6 +640,7 @@ def _run_light_migrations():
         ("user", "otp_nag_dismissed"): "ALTER TABLE user ADD COLUMN otp_nag_dismissed BOOLEAN DEFAULT 0",
         ("user", "api_token"): "ALTER TABLE user ADD COLUMN api_token VARCHAR(64)",
         ("user", "ui_prefs"): "ALTER TABLE user ADD COLUMN ui_prefs TEXT DEFAULT '{}'",
+        ("user", "last_totp_step"): "ALTER TABLE user ADD COLUMN last_totp_step INTEGER DEFAULT 0",
     }
     for (table, col), ddl in wanted.items():
         if table in existing and col not in existing[table]:

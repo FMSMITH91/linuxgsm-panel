@@ -232,8 +232,14 @@ for _p in sorted((ROOT / "static" / "js").glob("*.js")):
         _bare = re.sub(r"'(?:[^'\\]|\\.)*'|\"(?:[^\"\\]|\\.)*\"|`(?:[^`\\]|\\.)*`", "", _expr_nc)
         for _fn in _ESCAPERS:
             _bare = re.sub(r"\b%s\s*\((?:[^()]|\([^()]*\))*\)" % _fn, "", _bare)
-        _dyn = sorted(set(re.findall(r"\+\s*([A-Za-z_$][\w$.]*)", _bare)
-                          + re.findall(r"([A-Za-z_$][\w$.]*)\s*\+", _bare)))
+        # The \(* / \)* matter: `'…' + (d.url || '') + '…'` is the single most common way a value
+        # is interpolated here, and without them the identifier is never adjacent to the `+` —
+        # the whole expression reads as "nothing dynamic". That blind spot hid a real unescaped
+        # remote-host value (s.tailscale_ip, manage_remotes.js) through a review that was
+        # explicitly looking for it. Cheap to allow; it costs some ternary CONDITIONS showing up
+        # as names, which is the safe direction for a gate that only has to notice a NEW one.
+        _dyn = sorted(set(re.findall(r"\+\s*\(*\s*([A-Za-z_$][\w$.]*)", _bare)
+                          + re.findall(r"([A-Za-z_$][\w$.]*)\s*\)*\s*\+", _bare)))
         if _dyn:
             _found.setdefault(_p.name, set()).add(",".join(_dyn))
 

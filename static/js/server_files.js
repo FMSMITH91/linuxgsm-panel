@@ -228,20 +228,134 @@ function deletePath(path, isDir){
         }).catch(()=>{ if(window.toast) toast('Delete failed','danger'); });
     }});
 }
-// Upload one or more files to the current dir (used by button + drag-drop).
+// The year is dropped for dates in the current year: at 375px the label and value have to share
+// one line, and "Sep 5, 7:10 PM" fits where "Sep 5, 2026, 07:10 PM" wraps. An older file still
+// shows its year, which is exactly when you need it.
+function fmtWhen(ms){
+  try {
+    var d=new Date(ms), o={month:'short', day:'numeric', hour:'numeric', minute:'2-digit'};
+    if(d.getFullYear()!==new Date().getFullYear()) o.year='numeric';
+    return d.toLocaleString([], o);
+  } catch(e){ return '\u2014'; }
+}
+// One "on server vs uploading" row. Built with DOM nodes, not innerHTML: the only dynamic values
+// here are a filename and a directory name, both user-authored.
+function _cmpLine(label, sizeText, whenText, muted){
+  var row=document.createElement('div');
+  row.className='d-flex align-items-baseline gap-2'+(muted?' text-secondary':'');
+  var l=document.createElement('span');
+  l.className='text-secondary flex-shrink-0 text-uppercase';
+  l.style.cssText='font-size:.62rem;letter-spacing:.04em;min-width:4.2rem;';
+  l.textContent=label;
+  var v=document.createElement('span');
+  v.style.fontSize='.78rem';
+  v.textContent=sizeText+'  \u00b7  '+whenText;
+  row.appendChild(l); row.appendChild(v);
+  return row;
+}
+// The overwrite prompt: one block per colliding name, each showing the file already on the server
+// against the one being uploaded, with a checkbox to replace it.
+function _conflictNode(conflicts, otherCount){
+  var wrap=document.createElement('div');
+  var intro=document.createElement('p'); intro.className='mb-2 small';
+  intro.textContent = (conflicts.length===1
+      ? 'This file already exists in \u201c'+(curDir||'home')+'\u201d.'
+      : conflicts.length+' of these files already exist in \u201c'+(curDir||'home')+'\u201d.')
+    + ' Tick the ones to replace \u2014 anything unticked is skipped.';
+  wrap.appendChild(intro);
+  conflicts.forEach(function(c, idx){
+    var box=document.createElement('div'); box.className='border rounded px-2 py-1 mb-2';
+    var head=document.createElement('div'); head.className='form-check mb-1';
+    var cb=document.createElement('input');
+    cb.type='checkbox'; cb.className='form-check-input'; cb.id='ovw-'+idx;
+    cb.checked=!c.entry.is_dir; cb.disabled=!!c.entry.is_dir;
+    cb.setAttribute('data-ovw', c.file.name);
+    var lab=document.createElement('label');
+    lab.className='form-check-label fw-semibold text-break'; lab.htmlFor='ovw-'+idx;
+    lab.style.fontSize='.85rem';
+    // A file can legitimately be called "Status" or "Online" — both are i18n catalog keys, and the
+    // MutationObserver would happily translate the name out from under the user.
+    lab.setAttribute('data-no-i18n','');
+    lab.textContent=c.file.name;
+    head.appendChild(cb); head.appendChild(lab); box.appendChild(head);
+    if(c.entry.is_dir){
+      var warn=document.createElement('div'); warn.className='small text-warning';
+      warn.textContent='A folder with this name already exists, so this file cannot replace it. It will be skipped.';
+      box.appendChild(warn);
+    } else {
+      box.appendChild(_cmpLine('On server', fmtSize(c.entry.size), fmtWhen(c.entry.mtime*1000), true));
+      box.appendChild(_cmpLine('Uploading', fmtSize(c.file.size), fmtWhen(c.file.lastModified)));
+    }
+    wrap.appendChild(box);
+  });
+  if(otherCount>0){
+    var foot=document.createElement('div'); foot.className='small text-secondary';
+    foot.textContent=otherCount+' other file'+(otherCount===1?'':'s')+' in this drop '
+      +(otherCount===1?'does':'do')+' not clash and will upload either way.';
+    wrap.appendChild(foot);
+  }
+  return wrap;
+}
+// Upload one or more files to the current dir (used by button + drag-drop). Anything that would
+// replace an existing file is confirmed first, with both files' size and date shown.
 function uploadFiles(files){
   if(!files || !files.length) return;
   var st=document.getElementById('upload-status');
-  var arr=Array.prototype.slice.call(files); var failed=0;
-  st.textContent='Uploading '+arr.length+' file(s)…'; st.className='small mt-2 text-secondary';
+  var arr=Array.prototype.slice.call(files);
+  st.textContent='Checking '+arr.length+' file(s)\u2026'; st.className='small mt-2 text-secondary';
+  fetch(MOUNT+'/api/server/'+serverId+'/upload-check',{
+      method:'POST', headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({path:curDir, names:arr.map(function(f){ return f.name; })})
+    })
+    .then(r=>r.json()).then(function(d){ _uploadChecked = d.checked !== false; return d.existing||[]; })
+    // A failed check must not become a silent overwrite: fall through with no known conflicts and
+    // let the server refuse (409), which surfaces as "already exists" rather than a clobbered file.
+    .catch(function(){ _uploadChecked = false; return []; })
+    .then(function(existing){
+      var byName={}; existing.forEach(function(e){ byName[e.name]=e; });
+      var conflicts=[];
+      arr.forEach(function(f){ if(byName[f.name]) conflicts.push({file:f, entry:byName[f.name]}); });
+      if(!conflicts.length){ _doUpload(arr, {}); return; }
+      st.textContent=''; 
+      confirmDialog({
+        title: conflicts.length===1 ? 'Replace existing file?' : 'Replace existing files?',
+        icon:'exclamation-triangle', confirmClass:'btn-warning', confirmLabel:'Upload',
+        bodyNode:_conflictNode(conflicts, arr.length-conflicts.length),
+        onConfirm:function(){
+          var ovw={};
+          document.querySelectorAll('[data-ovw]').forEach(function(cb){
+            if(cb.checked) ovw[cb.getAttribute('data-ovw')]=true;
+          });
+          // Unticked collisions are dropped here rather than sent and refused: skipping is the
+          // user's answer, not a failure to report back at them.
+          var send=arr.filter(function(f){ return !byName[f.name] || ovw[f.name]; });
+          if(!send.length){ st.textContent='Nothing uploaded \u2014 all files skipped.'; st.className='small mt-2 text-secondary'; setTimeout(function(){ st.textContent=''; },4000); return; }
+          _doUpload(send, ovw);
+        }
+      });
+    });
+}
+var _uploadChecked = true;   // did the pre-flight actually reach the host?
+function _doUpload(arr, ovw){
+  var st=document.getElementById('upload-status');
+  var failed=0, clashed=0;
+  st.textContent='Uploading '+arr.length+' file(s)\u2026'; st.className='small mt-2 text-secondary';
   function next(i){
     if(i>=arr.length){
-      st.textContent=(failed?'⚠ '+failed+' failed, ':'✓ ')+(arr.length-failed)+' uploaded to '+(curDir||'home');
-      st.className='small mt-2 '+(failed?'text-warning':'text-success');
-      browse(curDir); setTimeout(function(){ st.textContent=''; },4000); return;
+      var okCount=arr.length-failed-clashed;
+      var bits=[];
+      if(okCount) bits.push('\u2713 '+okCount+' uploaded to '+(curDir||'home'));
+      if(clashed) bits.push(clashed+' already existed'+(_uploadChecked?'':' (the host could not be checked first)')+' \u2014 re-drop to replace');
+      if(failed) bits.push(failed+' failed');
+      st.textContent=bits.join(', ');
+      st.className='small mt-2 '+((failed||clashed)?'text-warning':'text-success');
+      browse(curDir); setTimeout(function(){ st.textContent=''; },5000); return;
     }
     var fd=new FormData(); fd.append('file', arr[i]); fd.append('path', curDir);
-    fetch(MOUNT+'/api/server/'+serverId+'/upload',{method:'POST',body:fd}).then(r=>r.json()).then(d=>{ if(!d.success) failed++; }).catch(()=>{failed++;}).finally(()=>{ next(i+1); });
+    if(ovw[arr[i].name]) fd.append('overwrite','1');
+    fetch(MOUNT+'/api/server/'+serverId+'/upload',{method:'POST',body:fd}).then(r=>r.json())
+      .then(d=>{ if(d.conflict) clashed++; else if(!d.success) failed++; })
+      .catch(()=>{failed++;}).finally(()=>{ next(i+1); });
   }
   next(0);
 }

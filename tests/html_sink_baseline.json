@@ -1,10 +1,10 @@
 {
   "dashboard.js": [
-    "_fmtUptimeShort,s.cpu,s.ram_mb",
+    "_fmtUptimeShort,s.cpu,s.ram_mb,s.uptime",
     "cls,titleCase",
     "offline",
     "online",
-    "s.max_players,s.players",
+    "s.max_players,s.players,typeof",
     "summary.cpu,summary.ram_pct",
     "totalMax,totalPlayers"
   ],
@@ -12,16 +12,18 @@
     "_da",
     "_da,remoteId",
     "body,title",
-    "data.cpu_percent,data.disk,data.memory,data.uptime"
+    "data.cpu_percent,data.disk,data.memory,data.uptime",
+    "data.log"
   ],
   "manage_servers.js": [
-    "_fmtUptimeShort,s.cpu,s.ram_mb",
-    "s.max_players,s.players"
+    "_fmtUptimeShort,s.cpu,s.ram_mb,s.uptime",
+    "s.max_players,s.players,typeof",
+    "warn"
   ],
   "panel.js": [
     "_da,head,rows",
     "icon",
-    "inputHtml"
+    "inputHtml,opts.body"
   ],
   "remote_manage.js": [
     "_da,body,head,j.banned_ips.map,j.currently_banned,j.total_banned,j.total_failed,return",
@@ -33,24 +35,32 @@
   ],
   "remote_manage_backups.js": [
     "_da,rows",
-    "bkFmtBytes,pct",
+    "bkFmtBytes,dk.free,dk.total,pct",
     "busy.length,list,total",
     "n"
   ],
   "remote_manage_host.js": [
+    "d,specEsc",
     "d.behind",
-    "fmtBytes",
-    "specEsc"
+    "d.current_sha",
+    "d.message",
+    "d.new_bind,window.escapeHtml",
+    "d.success",
+    "d.success,window.escapeHtml",
+    "fmtBytes,freed",
+    "location.port",
+    "window.escapeHtml"
   ],
   "server_actions.js": [
-    "lower,n,nowIcon,verb"
+    "lower,n,nowIcon,verb",
+    "ok"
   ],
   "server_detail.js": [
-    "disk,rows"
+    "disk,rows,running"
   ],
   "server_files.js": [
     "_da",
-    "body,grp.settings.length,idx",
+    "body,grp.settings.length,idx,open",
     "opts.icon"
   ]
 }

@@ -71,7 +71,7 @@ from auth import (
     can_access_remote, accessible_remote_ids, check_password,
     client_ip, dummy_password_check, generate_backup_codes,
     generate_totp_secret, totp_provisioning_uri,
-    verify_totp, get_user_permissions, get_user_servers,
+    verify_totp, verify_totp_step, get_user_permissions, get_user_servers,
     hash_password, has_permission, init_auth,
     log_action, permission_required, server_access_required, superadmin_required,
     strip_legacy_superadmin_grants,
@@ -115,7 +115,7 @@ from ssh_manager import (
     gmod_mount_setup, gmod_current_mounts, detect_content_user, uninstall_gmod_content,
     path_disk_free,
     lgsm_write_config, lgsm_game_config, lgsm_get_values, browse_dir, read_file,
-    write_file, upload_file, delete_path,
+    write_file, upload_file, stat_upload_targets, UPLOAD_EXISTS, delete_path,
     remote_ufw_delete_rule, remote_set_public_ssh, remote_public_ssh_status, remote_ufw_status, remote_ufw_open_port,
     remote_ufw_close_port, remote_ufw_allow_game_port, remote_ufw_close_game_port,
     remote_ufw_allow_game_ports, remote_ufw_close_by_name,
@@ -1450,6 +1450,43 @@ def _monitor_pass():
                 notifications.notify("server_up", "Server back online",
                                      "%s on %s is back online." % (gs.name, remote.display_name))
             _monitor_state["servers"][gs.id] = up
+    _forget_deleted_rows({r.id for r in remotes},
+                         {row[0] for row in db.session.query(GameServer.id).all()})
+
+
+def _forget_deleted_rows(remote_ids, server_ids):
+    """Drop per-row state for hosts/servers that no longer exist.
+
+    Every map below is keyed by a database row id, and SQLite hands a deleted row's id straight to
+    the next INSERT (plain INTEGER PRIMARY KEY = rowid, no AUTOINCREMENT). Without this a newly
+    added server inherits the deleted one's flags: _server_full_alerted swallows its first "server
+    full", _server_peak_notified suppresses its first peak for an hour, _expected_offline hides a
+    genuine outage, and _monitor_state["disk"] eats a new host's first disk-low alert. Worse,
+    _max_players_cache is not a flag at all — it hands the new server the OLD one's capacity, which
+    is the number the "full" logic then compares the live player count against.
+
+    #81 fixed exactly this for the OS-update sweep's own map and pruned only that one; these are
+    its siblings. Driven off the live id sets rather than the delete routes on purpose: deleting a
+    RemoteServer cascades to its GameServers (delete-orphan), so rows disappear without any
+    per-server route running.
+    """
+    for m in (_monitor_state["remotes"], _monitor_state["disk"], _monitor_state["load"],
+              # #85's snapshot prunes itself inside the daily OS-update sweep, which is the right
+              # place for the alert state it guards. It is ALSO read on every page load by
+              # /api/os-updates/summary, so a deleted host lingers in the login banner for up to a
+              # day — under a row id a newly added host may already own, which means its name and
+              # package count show to whoever can access the NEW host. Pruning here as well makes
+              # that prompt instead of daily; both are idempotent.
+              _os_update_seen):
+        for gone in [k for k in m if k not in remote_ids]:
+            m.pop(gone, None)
+    for m in (_monitor_state["servers"], _server_full_alerted, _server_peak_notified,
+              _expected_offline, _cron_restart_pending, _max_players_cache, _player_counts):
+        for gone in [k for k in m if k not in server_ids]:
+            m.pop(gone, None)
+    with _rwe_lock:
+        for gone in [k for k in _reboot_when_empty if k not in remote_ids]:
+            _reboot_when_empty.pop(gone, None)
 
 
 def _monitor_watch(app):
@@ -2685,7 +2722,22 @@ def register_routes(app):
         # PERMANENTLY LOCKED for both GET and POST. Previously only GET was blocked, so
         # an unauthenticated POST /setup with step=admin_user could create a brand-new
         # superadmin (or step=welcome could rewrite bind_host/port). Lock everything.
-        if is_setup_complete():
+        # The LOCK deliberately checks the DB row alone, not is_setup_complete().
+        #
+        # is_setup_complete() is (DB row AND config flag), which is right for deciding whether to
+        # SHOW the wizard — a restored or blank DB must be able to run setup again. It is wrong for
+        # the lock: load_config() falls back to DEFAULT_CONFIG on any JSONDecodeError/OSError, and
+        # DEFAULT_CONFIG has setup_complete=False. So a config.json that is deleted, or merely
+        # hand-edited into invalid JSON, reopened this UNAUTHENTICATED wizard on a fully configured
+        # install — where step=welcome rewrites bind_host/port (turning a loopback-only panel into
+        # 0.0.0.0 on the next restart) and step=remote_server makes the panel SSH to an
+        # attacker-supplied host. The admin_user step's own guard stopped account creation, but
+        # nothing stopped the rest.
+        #
+        # Gating on "a superadmin exists" instead would break the wizard: it creates one at step 2
+        # and then continues through tailscale/remote_server. state.complete is the one signal that
+        # is false for the whole wizard and true only once it has finished.
+        if SetupState.query.filter_by(complete=True).first() is not None:
             return redirect(url_for("login"))
 
         state = SetupState.query.first()
@@ -3006,7 +3058,20 @@ def register_routes(app):
                 u = db.session.get(User, pending_id)
                 entered = request.form.get("totp_code", "")
                 if u and u.is_active and u.totp_enabled:
-                    if verify_totp(u.totp_secret_plain, entered):
+                    _step = verify_totp_step(u.totp_secret_plain, entered)
+                    if _step is not None:
+                        # Single-use: a TOTP code is valid for ~90s (its step plus one either side
+                        # for skew), so accepting it on "is it valid" alone lets a code that was
+                        # observed once be replayed for the rest of that window. Refuse any step
+                        # already spent — committed BEFORE the session is granted so a crash
+                        # between the two can't leave the step unspent.
+                        if _step <= (u.last_totp_step or 0):
+                            return _fail("That code has already been used — wait for your "
+                                         "authenticator to show the next one.",
+                                         attempted=u.username, reason="replayed 2FA code",
+                                         two_factor=True)
+                        u.last_totp_step = _step
+                        db.session.commit()
                         return _succeed(u, bool(session.get("_2fa_remember")))
                     # Fall back to a one-time backup code (for a lost authenticator).
                     if u.use_backup_code(entered):
@@ -8636,12 +8701,52 @@ def register_routes(app):
         data = f.read(_MAX_UPLOAD_BYTES + 1)   # bounded read: never pull more than the limit into memory
         if len(data) > _MAX_UPLOAD_BYTES:
             return jsonify({"success": False, "message": "File too large (max 50 MB)"}), 400
+        # Overwriting is opt-in per request: the browser asks the user first (showing both files'
+        # size and date), and only then sends overwrite=1. Anything else — an older client, a
+        # direct API call, or a file that appeared between the check and this write — gets a 409
+        # conflict rather than silently replacing someone's config.
+        overwrite = request.form.get("overwrite") == "1"
         try:
-            ok, msg = upload_file(gs.remote, gs.short_name, reldir, f.filename, data)
-            log_action(current_user, "upload_file", target=gs.name, detail=f"{reldir}/{f.filename}", success=ok)
+            ok, msg = upload_file(gs.remote, gs.short_name, reldir, f.filename, data,
+                                  overwrite=overwrite)
+            if not ok and msg == UPLOAD_EXISTS:
+                return jsonify({"success": False, "conflict": True, "name": f.filename,
+                                "message": "A file with that name already exists."}), 409
+            log_action(current_user, "upload_file", target=gs.name,
+                       detail="%s/%s%s" % (reldir, f.filename, " (overwrote)" if overwrite else ""),
+                       success=ok)
             return jsonify({"success": ok, "message": msg or ("Uploaded" if ok else "Failed"), "name": f.filename})
         except Exception:
             return jsonify({"success": False, "message": _log_and_generic("request failed")}), 500
+
+    @app.route("/api/server/<int:server_id>/upload-check", methods=["POST"])
+    @login_required
+    @server_access_required
+    def api_server_upload_check(server_id):
+        """Which of these names already exist in the target directory, with size + mtime.
+
+        Lets the browser show old-vs-new and ask before overwriting, without uploading the bytes
+        twice. Advisory only — the upload route re-checks, so a file that appears in between is
+        still refused rather than clobbered."""
+        gs = get_game(server_id)
+        if not _can_manage_files():
+            return jsonify({"error": "Permission denied"}), 403
+        body = _json_body()
+        names = body.get("names")
+        if not isinstance(names, list) or len(names) > 500:
+            return jsonify({"error": "Invalid request"}), 400
+        try:
+            hits = stat_upload_targets(gs.remote, gs.short_name, body.get("path", ""), names)
+            if hits is None:
+                return jsonify({"error": "Invalid path"}), 400
+            return jsonify({"existing": hits, "checked": True})
+        except Exception:
+            # An unreachable host is the ordinary case here, not a bug, and it must not answer
+            # "nothing exists" — that reads as "no conflicts" and is exactly the false clear this
+            # endpoint exists to prevent. checked=false lets the UI say it could not look; the
+            # upload route's own refusal stays the backstop either way.
+            _log.debug("upload-check: could not list the target directory", exc_info=True)
+            return jsonify({"existing": [], "checked": False})
 
     @app.route("/api/console/<int:server_id>")
     @login_required
@@ -9039,10 +9144,16 @@ def register_routes(app):
                             % (st.get("remote_version", "?"), tgt[:7], st.get("behind", "?"), change_lines))
                 else:
                     last_logged_sha = None   # up to date — let a future update log again
-                _maybe_alert_cert_expiring()   # piggyback the periodic TLS-cert expiry check here
-                _maybe_alert_os_updates()      # ...and the once-a-day OS package check
             except Exception:
                 app.logger.debug("update-check tick failed", exc_info=True)
+            # Deliberately OUTSIDE that try. These two only ride this thread for its cadence and
+            # have nothing to do with the panel-update check — but sharing its `try` meant any
+            # raise above skipped them, and panel_update_status shells out to git (`_git` catches
+            # only TimeoutExpired, so a checkout on a host with no `git` binary raises straight
+            # through). A persistent failure there would have silently disabled both alerts, which
+            # is the exact way the OS-update alert was dead before. Each swallows its own errors.
+            _maybe_alert_cert_expiring()   # periodic TLS-cert expiry check
+            _maybe_alert_os_updates()      # ...and the once-a-day OS package check
             time.sleep(1800)
     _supervise("update-check", update_check_ticker)
 

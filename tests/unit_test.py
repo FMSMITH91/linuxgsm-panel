@@ -553,6 +553,68 @@ eq("parse_missing_deps: drops shell-metachar tokens (injection guard)",
    ["good", "also-good"])
 eq("parse_missing_deps: no marker -> []", sm.parse_missing_deps("nothing to see here"), [])
 
+# ── upload collisions: the browser must be able to ask "replace this?" with real facts ──────────
+# stat_upload_targets lists the directory ONCE and filters locally, so the parsing is where this
+# can go wrong: tab-separated fields, an epoch mtime that find prints as a float, and a filename
+# that may itself contain a tab (which is why the name is last and re-joined).
+class _FakeSrv:
+    is_local, auth_method, sudo_enabled = True, "local", False
+    host, port, username, linuxgsm_user = "127.0.0.1", 22, "u", ""
+
+
+_orig_up_rc = sm.run_command
+try:
+    _FIND_OUT = "\n".join([
+        "f\t1234\t1700000000.1234567890\tserver.cfg",
+        "d\t4096\t1700000100.0000000000\taddons",
+        "f\t0\t1700000200.5000000000\tempty.txt",
+        "f\t77\t1700000300.0000000000\ttab\tname.cfg",   # a filename containing a tab
+    ])
+    sm.run_command = lambda *a, **k: (_FIND_OUT, "", 0)
+    _hits = sm.stat_upload_targets(_FakeSrv(), "csgoserver", "", ["server.cfg", "nope.txt", "addons"])
+    eq("stat_upload_targets: only names that exist come back",
+       [h["name"] for h in _hits], ["server.cfg", "addons"])
+    _byname = {h["name"]: h for h in _hits}
+    eq("stat_upload_targets: size is parsed", _byname["server.cfg"]["size"], 1234)
+    eq("stat_upload_targets: a float epoch mtime becomes an int",
+       _byname["server.cfg"]["mtime"], 1700000000)
+    check("stat_upload_targets: a directory is flagged, so the UI can refuse to replace it",
+          _byname["addons"]["is_dir"] is True and _byname["server.cfg"]["is_dir"] is False)
+    eq("stat_upload_targets: a zero-byte file still counts as existing",
+       [h["name"] for h in sm.stat_upload_targets(_FakeSrv(), "u", "", ["empty.txt"])], ["empty.txt"])
+    eq("stat_upload_targets: a filename containing a tab survives the split",
+       [h["name"] for h in sm.stat_upload_targets(_FakeSrv(), "u", "", ["tab\tname.cfg"])],
+       ["tab\tname.cfg"])
+    eq("stat_upload_targets: a duplicate name is reported once",
+       len(sm.stat_upload_targets(_FakeSrv(), "u", "", ["server.cfg", "server.cfg"])), 1)
+    eq("stat_upload_targets: the name is basename'd, matching what upload_file writes",
+       [h["name"] for h in sm.stat_upload_targets(_FakeSrv(), "u", "", ["sub/server.cfg"])],
+       ["server.cfg"])
+    check("stat_upload_targets: a traversal attempt returns None, not a listing",
+          sm.stat_upload_targets(_FakeSrv(), "u", "../../etc", ["passwd"]) is None)
+    sm.run_command = lambda *a, **k: ("", "", 0)
+    eq("stat_upload_targets: no output means nothing exists",
+       sm.stat_upload_targets(_FakeSrv(), "u", "", ["server.cfg"]), [])
+    sm.run_command = lambda *a, **k: (_FIND_OUT, "", 0)
+
+    # The server-side half: overwrite is opt-in. The UI asks first, but check and write are two
+    # round trips, so a file that appears in between must be refused rather than clobbered.
+    _calls = []
+    sm.run_command = lambda s, c, **k: (_calls.append(c), ("__YES__", "", 0))[1]
+    _ok, _msg = sm.upload_file(_FakeSrv(), "csgoserver", "", "server.cfg", b"data", overwrite=False)
+    check("upload_file: refuses an existing target when overwrite was not granted",
+          _ok is False and _msg == sm.UPLOAD_EXISTS, "%r %r" % (_ok, _msg))
+    check("upload_file: and writes nothing on that path",
+          not any("base64 -d" in c or "printf" in c for c in _calls), str(_calls)[:160])
+    _calls.clear()
+    sm.run_command = lambda s, c, **k: (_calls.append(c), ("", "", 0))[1]
+    _ok2, _ = sm.upload_file(_FakeSrv(), "csgoserver", "", "server.cfg", b"data", overwrite=False)
+    check("upload_file: a free name still uploads with overwrite=False",
+          _ok2 is True and any("base64 -d" in c for c in _calls), "%r" % _ok2)
+finally:
+    sm.run_command = _orig_up_rc
+
+
 # ── local-host injection defenses: system_ops runs commands on THIS machine (shell=True), so its
 #    request-fed values (block/unban IPs, jail names) must be neutralised before reaching _run. ──
 _orig_so_run = SO._run
@@ -1387,6 +1449,7 @@ with _app.test_request_context(headers={"X-Forwarded-For": "1.2.3.4"},
     eq("direct connection: ignore spoofed XFF, use socket", client_ip(), "203.0.113.9")
 
 # ── TOTP (2FA) ────────────────────────────────────────────────
+import time as _time
 from auth import generate_totp_secret, verify_totp
 import pyotp as _pyotp
 _sec = generate_totp_secret()
@@ -1394,6 +1457,24 @@ check("verify_totp accepts the current code", verify_totp(_sec, _pyotp.TOTP(_sec
 check("verify_totp accepts a spaced code", verify_totp(_sec, " " + _pyotp.TOTP(_sec).now() + " "))
 check("verify_totp rejects a wrong code", not verify_totp(_sec, "000000"))
 check("verify_totp rejects empty", not verify_totp(_sec, ""))
+
+# A TOTP code stays valid for ~90s (its own step plus one either side for clock skew), so
+# "is it valid" alone lets an observed code be replayed for the rest of that window. The login
+# path records WHICH step was spent, so it needs the step back, not a boolean.
+from auth import verify_totp_step
+_step = verify_totp_step(_sec, _pyotp.TOTP(_sec).now())
+check("verify_totp_step returns the step for a valid code", isinstance(_step, int) and _step > 0)
+eq("verify_totp_step is stable for the same code", verify_totp_step(_sec, _pyotp.TOTP(_sec).now()), _step)
+eq("verify_totp_step: the step matches the clock", _step, int(_time.time()) // 30)
+check("verify_totp_step rejects a wrong code", verify_totp_step(_sec, "000000") is None)
+check("verify_totp_step rejects empty", verify_totp_step(_sec, "") is None)
+check("verify_totp_step tolerates a junk secret", verify_totp_step("not-base32!", "123456") is None)
+# The previous step must still verify (clock skew) and report ITS step, not the current one —
+# otherwise a code accepted near a boundary would look like a replay of the newer step.
+_prev = _pyotp.TOTP(_sec).at(int(_time.time()) - 30)
+_prev_step = verify_totp_step(_sec, _prev)
+check("verify_totp_step accepts the previous step and reports it as older",
+      _prev_step is not None and _prev_step == _step - 1, "%r vs %r" % (_prev_step, _step))
 
 # ── password check robustness (a bad stored hash must never raise) ───
 from auth import check_password, hash_password, dummy_password_check

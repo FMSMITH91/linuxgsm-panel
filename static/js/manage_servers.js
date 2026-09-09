@@ -87,19 +87,19 @@ function watchInstall(id) {
           // start. Show that as a yellow warning with the reason, not a clean green success.
           var warn = !!s.warn;
           bar.className = 'progress-bar ' + (warn ? 'bg-warning' : 'bg-success'); bar.style.width = '100%';
-          step.innerHTML = '<i class="bi bi-' + (warn ? 'exclamation-triangle-fill text-warning' : 'check-circle-fill text-success') + '"></i> ' + (s.message || 'Installed');  // nosemgrep
+          step.innerHTML = '<i class="bi bi-' + (warn ? 'exclamation-triangle-fill text-warning' : 'check-circle-fill text-success') + '"></i> ' + escapeHtml(s.message || 'Installed');  // nosemgrep
           if (badge) { badge.className = 'badge ' + (warn ? 'bg-warning text-dark' : 'bg-success'); badge.textContent = 'Installed'; }
           var dz = document.getElementById('inst-dismiss-' + id); if (dz) dz.style.display = 'inline';
           stopInstall(id);
         } else if (s.status === 'failed') {
           bar.className = 'progress-bar bg-danger';
-          step.innerHTML = '<i class="bi bi-x-circle-fill text-danger"></i> ' + (s.message || 'Install failed');  // nosemgrep
+          step.innerHTML = '<i class="bi bi-x-circle-fill text-danger"></i> ' + escapeHtml(s.message || 'Install failed');  // nosemgrep
           if (badge) { badge.className = 'badge bg-danger'; badge.textContent = 'Failed'; }
           var df = document.getElementById('inst-dismiss-' + id); if (df) df.style.display = 'inline';
           stopInstall(id);
         } else if (s.status === 'interrupted') {
           if (bar) bar.className = 'progress-bar bg-warning';
-          step.innerHTML = '<i class="bi bi-exclamation-triangle-fill text-warning"></i> ' + (s.message || 'Install status unknown');  // nosemgrep
+          step.innerHTML = '<i class="bi bi-exclamation-triangle-fill text-warning"></i> ' + escapeHtml(s.message || 'Install status unknown');  // nosemgrep
           if (badge) { badge.className = 'badge bg-warning text-dark'; badge.textContent = 'Unknown'; }
           var di = document.getElementById('inst-dismiss-' + id); if (di) di.style.display = 'inline';
           stopInstall(id);

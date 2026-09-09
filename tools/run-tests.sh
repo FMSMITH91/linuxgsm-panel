@@ -36,6 +36,10 @@ echo "== template actions (JS parses; every data-action button is wired) =="
 "$PY" tests/template_actions_test.py
 
 echo "== smoke test (boots the app; routes must not 5xx) =="
+# CI runs this bare, which is right there. On a DEVELOPER machine use ./tools/smoke-local.sh
+# instead of this script: booting the app fires real `sudo -n` probes (pam_faillock counts each
+# one and will lock you out of your own sudo) and real outbound SSH to the fixture hosts. That
+# wrapper runs the same suite with both refused. See its header.
 "$PY" tests/smoke_test.py
 
 echo "== rbac test (permissions/IDOR enforced server-side; self-seeds on an empty DB) =="

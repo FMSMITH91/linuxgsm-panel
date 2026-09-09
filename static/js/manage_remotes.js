@@ -36,14 +36,14 @@ function watchBootstrap(remoteId) {
           step.innerHTML = '<i class="bi bi-arrow-clockwise"></i> ' + escapeHtml(s.step_name);  // nosemgrep
         } else if (s.status === 'done') {
           bar.className = 'progress-bar bg-success'; bar.style.width = '100%';
-          step.innerHTML = '<i class="bi bi-check-circle-fill text-success"></i> ' + (s.message || 'Prepared & secured!');  // nosemgrep
+          step.innerHTML = '<i class="bi bi-check-circle-fill text-success"></i> ' + escapeHtml(s.message || 'Prepared & secured!');  // nosemgrep
           var dz = document.getElementById('bs-dismiss-' + remoteId); if (dz) dz.style.display = 'inline';
           stopWatch(remoteId);
           // Update just this remote's live figures instead of reloading the whole page.
           if (typeof loadLiveStats === 'function') loadLiveStats(remoteId);
         } else if (s.status === 'failed') {
           bar.className = 'progress-bar bg-danger';
-          step.innerHTML = '<i class="bi bi-x-circle-fill text-danger"></i> ' + (s.message || 'Bootstrap failed');  // nosemgrep
+          step.innerHTML = '<i class="bi bi-x-circle-fill text-danger"></i> ' + escapeHtml(s.message || 'Bootstrap failed');  // nosemgrep
           var df = document.getElementById('bs-dismiss-' + remoteId); if (df) df.style.display = 'inline';
           stopWatch(remoteId);
         } else {
@@ -285,7 +285,10 @@ function tailscaleUp(remoteId) {
                 + '<div class="mt-2"><button class="btn btn-success btn-sm"' + _da('migrateToTailscale', [remoteId]) + '>'
                 + '<i class="bi bi-arrow-repeat"></i> Migrate to Tailscale SSH</button></div>';
             })
-            .catch(function(){ if (w) w.innerHTML = '<span class="text-success"><i class="bi bi-check-circle"></i> Connected! IP: ' + (s.tailscale_ip || '') + '</span>'; });  // nosemgrep
+            // escapeHtml here too: the success path above escapes this exact value, and it is the
+            // remote host's `tailscale status --json` output either way — a finalize failure does
+            // not make it any more trustworthy.
+            .catch(function(){ if (w) w.innerHTML = '<span class="text-success"><i class="bi bi-check-circle"></i> Connected! IP: ' + escapeHtml(s.tailscale_ip || '') + '</span>'; });  // nosemgrep
         }
       }).catch(function(){});
     }, 4000);
@@ -462,7 +465,7 @@ function runBootstrap(remoteId) {
   .then(r => r.json())
   .then(data => {
     if (!data.success) {
-      document.getElementById('bootstrap-step').innerHTML = '<span class="text-danger">' + (data.message || 'Failed to start') + '</span>';  // nosemgrep
+      document.getElementById('bootstrap-step').innerHTML = '<span class="text-danger">' + escapeHtml(data.message || 'Failed to start') + '</span>';  // nosemgrep
       if (btn) { btn.disabled = false; btn.innerHTML = '<i class="bi bi-rocket-takeoff"></i> Prepare &amp; Secure Server'; }
       return;
     }
@@ -501,13 +504,13 @@ function pollBootstrap(remoteId, btn) {
         } else if (s.status === 'done') {
           clearInterval(_bootstrapPoll); _bootstrapPoll = null;
           barEl.className = 'progress-bar bg-success'; barEl.style.width = '100%';
-          stepEl.innerHTML = '<i class="bi bi-check-circle-fill text-success"></i> ' + (s.message || 'Server prepared & secured!');  // nosemgrep
+          stepEl.innerHTML = '<i class="bi bi-check-circle-fill text-success"></i> ' + escapeHtml(s.message || 'Server prepared & secured!');  // nosemgrep
           pctEl.textContent = '100%';
           if (btn) { btn.disabled = false; btn.innerHTML = '<i class="bi bi-check2"></i> Done — Run Again'; }
         } else if (s.status === 'failed') {
           clearInterval(_bootstrapPoll); _bootstrapPoll = null;
           barEl.className = 'progress-bar bg-danger';
-          stepEl.innerHTML = '<i class="bi bi-x-circle-fill text-danger"></i> ' + (s.message || 'Bootstrap failed');  // nosemgrep
+          stepEl.innerHTML = '<i class="bi bi-x-circle-fill text-danger"></i> ' + escapeHtml(s.message || 'Bootstrap failed');  // nosemgrep
           if (btn) { btn.disabled = false; btn.innerHTML = '<i class="bi bi-rocket-takeoff"></i> Retry'; }
         } else {
           stepEl.innerHTML = '<i class="bi bi-gear-fill"></i> ' + escapeHtml(s.step_name);  // nosemgrep

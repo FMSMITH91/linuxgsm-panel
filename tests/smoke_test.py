@@ -407,6 +407,103 @@ try:
     check("2FA backup code is one-time (reuse rejected, not 302)", s3.status_code != 302,
           "got %d" % s3.status_code)
 
+    # A TOTP code is valid for ~90s (its step plus one either side for skew). Accepting it on
+    # "is it valid" alone lets a code observed once — a phishing proxy, a shoulder-surf, a leaked
+    # log — be replayed for the rest of that window. Each step must be spendable exactly once.
+    import pyotp as _po
+    with app.app_context():
+        _u2 = User.query.filter_by(username="smoke_2fa").first()
+        _sec2 = _u2.totp_secret_plain
+    _code = _po.TOTP(_sec2).now()
+    t1 = app.test_client()
+    t1.post("/login", data={"username": "smoke_2fa", "password": "Str0ng!passw0rd"})
+    r1 = t1.post("/login", data={"totp_code": _code})
+    check("2FA: a valid TOTP code signs the user in (302)", r1.status_code == 302,
+          "got %d" % r1.status_code)
+    t2 = app.test_client()
+    t2.post("/login", data={"username": "smoke_2fa", "password": "Str0ng!passw0rd"})
+    r2 = t2.post("/login", data={"totp_code": _code})
+    check("2FA: the SAME TOTP code cannot be replayed while still in its window",
+          r2.status_code != 302, "got %d" % r2.status_code)
+    with app.app_context():
+        _u2 = User.query.filter_by(username="smoke_2fa").first()
+        check("2FA: the spent timestep is recorded", (_u2.last_totp_step or 0) > 0,
+              "last_totp_step=%r" % _u2.last_totp_step)
+
+    # The setup wizard is UNAUTHENTICATED by necessity. Its lock must not depend on config.json:
+    # load_config() falls back to DEFAULT_CONFIG (setup_complete=False) on any unreadable/invalid
+    # file, so gating on is_setup_complete() reopened the wizard on a configured install, where
+    # step=welcome rewrites bind_host/port and step=remote_server makes the panel SSH out.
+    _cfg_backup = CONFIG_FILE.read_bytes()
+    try:
+        CONFIG_FILE.write_text("{ not valid json")
+        from config import load_config as _lc
+        check("setup lock: the corrupt-config precondition really does hold",
+              _lc().get("setup_complete") is False, "config still reads as complete")
+        _sw = app.test_client().post("/setup", data={"step": "welcome", "site_title": "pwned",
+                                                     "bind_host": "0.0.0.0", "port": "9999"})
+        check("setup lock: a completed install refuses step=welcome even with config.json unreadable",
+              _lc().get("bind_host") != "0.0.0.0" and _lc().get("site_title") != "pwned",
+              "bind_host=%r title=%r" % (_lc().get("bind_host"), _lc().get("site_title")))
+        _sw2 = app.test_client().post("/setup", data={"step": "remote_server", "action": "add",
+                                                      "name": "evil-smoke", "host": "192.0.2.66"})
+        with app.app_context():
+            check("setup lock: ...and refuses step=remote_server too",
+                  RemoteServer.query.filter_by(name="evil-smoke").first() is None)
+        check("setup lock: both are redirects, not 5xx",
+              _sw.status_code < 500 and _sw2.status_code < 500,
+              "%d/%d" % (_sw.status_code, _sw2.status_code))
+    finally:
+        CONFIG_FILE.write_bytes(_cfg_backup)
+
+    # Every one of these maps is keyed by a database row id, and SQLite hands a deleted row's id
+    # to the next INSERT — so a new server inherits the old one's alert flags and, via
+    # _max_players_cache, its CAPACITY. #81 pruned one such map; these are its siblings.
+    _am2 = sys.modules["app"]
+    _dead_r, _dead_s = 987654, 876543
+    _am2._monitor_state["remotes"][_dead_r] = True
+    _am2._monitor_state["disk"][_dead_r] = True
+    _am2._monitor_state["load"][_dead_r] = {"cpu_alerted": True}
+    _am2._monitor_state["servers"][_dead_s] = True
+    _am2._server_full_alerted[_dead_s] = True
+    _am2._server_peak_notified[_dead_s] = 1.0
+    _am2._expected_offline[_dead_s] = 1.0
+    _am2._cron_restart_pending[_dead_s] = True
+    _am2._max_players_cache[_dead_s] = 64
+    _am2._player_counts[_dead_s] = {"count": 7, "ts": 1.0}
+    _am2._reboot_when_empty[_dead_r] = {"by": "x", "since": 1.0}
+    # #85's snapshot: pruned by its own sweep once a day, but it is read on every page load by
+    # /api/os-updates/summary, so it is pruned here too.
+    _am2._os_update_seen[_dead_r] = {"name": "ghost-host", "count": 3, "security": 1,
+                                     "packages": [], "at": 1.0}
+    with app.app_context():
+        _live_r = {r.id for r in RemoteServer.query.all()}
+        _live_s = {row[0] for row in db.session.query(GameServer.id).all()}
+        _am2._forget_deleted_rows(_live_r, _live_s)
+    _leftover = [n for n, m, k in (
+        ("_monitor_state[remotes]", _am2._monitor_state["remotes"], _dead_r),
+        ("_monitor_state[disk]", _am2._monitor_state["disk"], _dead_r),
+        ("_monitor_state[load]", _am2._monitor_state["load"], _dead_r),
+        ("_monitor_state[servers]", _am2._monitor_state["servers"], _dead_s),
+        ("_server_full_alerted", _am2._server_full_alerted, _dead_s),
+        ("_server_peak_notified", _am2._server_peak_notified, _dead_s),
+        ("_expected_offline", _am2._expected_offline, _dead_s),
+        ("_cron_restart_pending", _am2._cron_restart_pending, _dead_s),
+        ("_max_players_cache", _am2._max_players_cache, _dead_s),
+        ("_player_counts", _am2._player_counts, _dead_s),
+        ("_reboot_when_empty", _am2._reboot_when_empty, _dead_r),
+        ("_os_update_seen", _am2._os_update_seen, _dead_r),
+    ) if k in m]
+    check("deleted rows: no per-row state survives for an id that no longer exists",
+          not _leftover, "still holding: %s" % _leftover)
+    # ...and it must not evict LIVE rows, which would silently reset every alert each sweep.
+    _am2._monitor_state["servers"][gs_id] = True
+    with app.app_context():
+        _am2._forget_deleted_rows({r.id for r in RemoteServer.query.all()},
+                                  {row[0] for row in db.session.query(GameServer.id).all()})
+    check("deleted rows: state for a LIVE server is kept",
+          gs_id in _am2._monitor_state["servers"])
+
     # ── Security headers present on every response ────────────────
     hr = app.test_client().get("/login")
     check("security header: X-Frame-Options=SAMEORIGIN",
@@ -637,6 +734,34 @@ try:
           "got %d %s" % (plr.status_code, sorted(_pl)))
     check("playerlist: caps reflect the game (csgo -> kick + say)",
           _pl.get("caps", {}).get("kick") is True and _pl.get("caps", {}).get("say") is True)
+    # ── Upload collisions: ask before replacing ──────────────────────────────────────────────────
+    # The browser pre-flights the filenames it is about to send so it can show old-vs-new and ask.
+    # The remote here is unreachable, so this asserts the CONTRACT (shape, gating, validation) —
+    # the parsing and the overwrite refusal are unit-tested against canned `find` output.
+    _uc = c.post("/api/server/%d/upload-check" % gs_id, json={"path": "", "names": ["server.cfg"]})
+    check("upload-check: returns an 'existing' list", _uc.status_code == 200
+          and isinstance(_uc.get_json().get("existing"), list),
+          "%d %s" % (_uc.status_code, _uc.get_data(as_text=True)[:90]))
+    # This remote is unreachable, which is the ordinary case for this endpoint — and it must not
+    # answer "nothing exists", because the UI would read that as "no conflicts" and upload straight
+    # over a file it never looked at.
+    check("upload-check: an unreachable host reports checked=false, not a false all-clear",
+          _uc.get_json().get("checked") is False, str(_uc.get_json())[:110])
+    _uc_bad = c.post("/api/server/%d/upload-check" % gs_id, json={"path": "", "names": "notalist"})
+    check("upload-check: a non-list 'names' is rejected, not iterated as a string",
+          _uc_bad.status_code == 400, "got %d" % _uc_bad.status_code)
+    _uc_big = c.post("/api/server/%d/upload-check" % gs_id,
+                     json={"path": "", "names": ["f%d" % i for i in range(501)]})
+    check("upload-check: an absurd batch is refused", _uc_big.status_code == 400,
+          "got %d" % _uc_big.status_code)
+    _uc_empty = c.post("/api/server/%d/upload-check" % gs_id, json={})
+    check("upload-check: a missing 'names' is a 400, not a 500", _uc_empty.status_code == 400,
+          "got %d" % _uc_empty.status_code)
+    _uc_anon = app.test_client().post("/api/server/%d/upload-check" % gs_id,
+                                      json={"path": "", "names": ["x"]})
+    check("upload-check: it is not reachable without a session",
+          _uc_anon.status_code in (302, 401, 403), "got %d" % _uc_anon.status_code)
+
     mod_bad = c.post("/api/server/%d/moderate" % gs_id, json={"action": "nope"})
     check("moderate: unknown action -> 400", mod_bad.status_code == 400)
     # A user with server access but no moderate/console permission is refused (mru can reach the
@@ -838,7 +963,13 @@ try:
     _appmod = sys.modules["app"]
     with app.app_context():
         for _r in range(5):
-            _rem = RemoteServer(name="qc-host%d" % _r, host="10.20.0.%d" % _r, port=22,
+            # 192.0.2.0/24 is RFC 5737 TEST-NET-1: reserved for documentation and guaranteed never
+            # routed, like the public_ip below it. 10.20.0.0/24 is ordinary RFC 1918 space that is a
+            # LIVE network on plenty of developer machines — the stub on the next line covers the
+            # port scan, but the background threads create_app() starts do not go through it, and
+            # they opened real SSH connections to a developer's own hosts. Repeated failed auth is
+            # exactly what the fail2ban this panel installs on remotes exists to ban.
+            _rem = RemoteServer(name="qc-host%d" % _r, host="192.0.2.%d" % _r, port=22,
                                 username="root", auth_method="key", auth_credential="",
                                 public_ip="203.0.113.%d" % _r)
             db.session.add(_rem)
@@ -2114,6 +2245,36 @@ try:
         _osu(force=True)
         check("os updates: an unreachable host is skipped, not probed",
               not _probed and "os_updates" not in _rec, "probed %s" % _probed)
+
+        # The daily throttle must not be spent by an attempt that did no work. The sweep reads its
+        # host list FIRST; if that fails (a locked DB), arming last_run anyway buys a full day of
+        # silence for a tick that checked nothing — a transient error becomes 24h of it. Nothing
+        # outward can see the window, so drive it through the closure like the pruning check above.
+        _osu_state = _cells["_os_update_state"]
+
+        class _RaisingQuery:
+            @staticmethod
+            def all():
+                raise RuntimeError("database is locked")
+
+        class _RaisingRemoteServer:
+            query = _RaisingQuery
+
+        _sv_rs = _am.RemoteServer
+        _osu_state["last_run"] = 0.0
+        try:
+            _am.RemoteServer = _RaisingRemoteServer
+            _osu()          # a real (unforced) tick whose host-list lookup fails
+        finally:
+            _am.RemoteServer = _sv_rs
+        check("os updates: a sweep that could not read the host list leaves the throttle open",
+              _osu_state["last_run"] == 0.0, "last_run=%r" % _osu_state["last_run"])
+
+        # ...and one that DOES get the list arms it. Without this the check above would also pass
+        # with the throttle deleted outright, which is the opposite bug.
+        _osu()
+        check("os updates: a sweep that ran does arm the throttle",
+              _osu_state["last_run"] > 0.0, "last_run=%r" % _osu_state["last_run"])
     finally:
         _am._host_reachable, _am.so.os_update_available = _sv_reach, _sv_loc
         _am.remote_os_check_updates = _sv_rem

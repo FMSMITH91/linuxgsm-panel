@@ -7,7 +7,7 @@ function retrustHostKey(){
     onConfirm:function(){
       var m=document.getElementById('hostkey-msg'); m.innerHTML='<span class="text-secondary"><i class="bi bi-arrow-repeat"></i> Clearing…</span>';
       fetch(MOUNT+'/api/remote/'+REMOTE_ID+'/retrust-hostkey',{method:'POST'}).then(r=>r.json())
-        .then(d=>{ m.innerHTML='<span class="text-'+(d.success?'success':'danger')+'">'+(d.message||(d.success?'Done — the next connection re-pins the key':'Failed'))+'</span>'; })  // nosemgrep
+        .then(d=>{ m.innerHTML='<span class="text-'+(d.success?'success':'danger')+'">'+escapeHtml(d.message||(d.success?'Done — the next connection re-pins the key':'Failed'))+'</span>'; })  // nosemgrep
         .catch(()=>{ m.innerHTML='<span class="text-danger">Request failed.</span>'; });
     }});
 }
@@ -200,10 +200,10 @@ function renderUpdate(d){
   var st=document.getElementById('pu-status'); if(!st) return;
   var btn=document.getElementById('pu-update-btn'); var changes=document.getElementById('pu-changes');
   var cur=document.getElementById('pu-current'); if(cur) cur.textContent='v'+(d.current_version||'?');
-  if(d.git===false){ st.innerHTML='<i class="bi bi-info-circle"></i> '+(d.message||'Self-update unavailable (not a git checkout).'); btn.style.display='none'; changes.style.display='none'; return; }  // nosemgrep
-  if(d.fetched===false){ st.innerHTML='<span class="text-secondary"><i class="bi bi-cloud-slash"></i> '+(d.message||'Couldn\'t reach the update source.')+'</span>'; btn.style.display='none'; changes.style.display='none'; return; }  // nosemgrep
+  if(d.git===false){ st.innerHTML='<i class="bi bi-info-circle"></i> '+escapeHtml(d.message||'Self-update unavailable (not a git checkout).'); btn.style.display='none'; changes.style.display='none'; return; }  // nosemgrep
+  if(d.fetched===false){ st.innerHTML='<span class="text-secondary"><i class="bi bi-cloud-slash"></i> '+escapeHtml(d.message||'Couldn\'t reach the update source.')+'</span>'; btn.style.display='none'; changes.style.display='none'; return; }  // nosemgrep
   if(d.update_available){
-    st.innerHTML='<span class="text-warning"><i class="bi bi-arrow-up-circle-fill"></i> Update available: <strong>v'+(d.remote_version||'?')+'</strong> ('+d.behind+' commit'+(d.behind===1?'':'s')+' behind).</span>';  // nosemgrep
+    st.innerHTML='<span class="text-warning"><i class="bi bi-arrow-up-circle-fill"></i> Update available: <strong>v'+escapeHtml(d.remote_version||'?')+'</strong> ('+escapeHtml(String(d.behind))+' commit'+(d.behind===1?'':'s')+' behind).</span>';  // nosemgrep
     btn.style.display='';
     var ul=document.getElementById('pu-changes-list'); ul.innerHTML='';
     (d.changes||[]).forEach(function(c){ var li=document.createElement('li'); li.textContent=c; ul.appendChild(li); });
@@ -400,8 +400,8 @@ function _repairPanel(){
       if(msg){
         msg.className='small';
         msg.innerHTML = d.success  // nosemgrep
-          ? '<span class="text-success"><i class="bi bi-check-circle-fill"></i> '+ (d.message||'Restored.') +'</span>'
-          : '<span class="text-danger">'+ (d.message||'Repair failed.') +'</span>';
+          ? '<span class="text-success"><i class="bi bi-check-circle-fill"></i> '+ escapeHtml(d.message||'Restored.') +'</span>'
+          : '<span class="text-danger">'+ escapeHtml(d.message||'Repair failed.') +'</span>';
       }
       loadIntegrity();
       if(d.success) runDiagnostics();
@@ -443,7 +443,7 @@ function optimizeDb(){
           msg.innerHTML='<span class="text-success"><i class="bi bi-check-circle-fill"></i> Optimized'+  // nosemgrep
             (freed>0?(' — reclaimed '+fmtBytes(freed)):'')+'.</span>';
         } else {
-          msg.innerHTML='<span class="text-danger">'+(d.message||'Optimize failed.')+'</span>';  // nosemgrep
+          msg.innerHTML='<span class="text-danger">'+escapeHtml(d.message||'Optimize failed.')+'</span>';  // nosemgrep
         }
       }
       loadDbStats();
@@ -497,8 +497,8 @@ function loadAutoUpd(){
     if(!el) return;
     if(d.error){ el.textContent='Could not check update status.'; return; }
     el.innerHTML = d.enabled  // nosemgrep
-      ? '<span class="text-success"><i class="bi bi-check-circle-fill"></i> '+ (d.detail||'Enabled.') +'</span>'
-      : '<span class="text-warning"><i class="bi bi-exclamation-triangle-fill"></i> '+ (d.detail||'Not enabled.') +'</span>';
+      ? '<span class="text-success"><i class="bi bi-check-circle-fill"></i> '+ escapeHtml(d.detail||'Enabled.') +'</span>'
+      : '<span class="text-warning"><i class="bi bi-exclamation-triangle-fill"></i> '+ escapeHtml(d.detail||'Not enabled.') +'</span>';
     if(btn) btn.style.display = d.enabled ? 'none' : '';
   }).catch(function(){});
 }
