@@ -10,6 +10,17 @@ name: ClusterFuzzLite
 on:
   pull_request:
     branches: [ main ]
+    # Same targets as fuzz.yml: this builds and runs the fuzzers in tests/fuzz against the two
+    # modules they exercise. A PR that touches only templates, CSS, docs or workflows cannot change
+    # what those harnesses reach, and this is the slowest job in the repo — so scope it to the code
+    # it actually fuzzes rather than paying for it on every PR.
+    paths:
+      - 'ssh_manager.py'
+      - 'system_ops.py'
+      - 'tests/fuzz/**'
+      - '.github/workflows/cflite_pr.yml'
+      - '.clusterfuzzlite/**'
+      - 'requirements.txt'
 
 permissions:
   contents: read
