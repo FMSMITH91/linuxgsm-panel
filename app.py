@@ -109,7 +109,7 @@ from models import (
 )
 from ssh_manager import (
     _remote_listening_ports, _invalidate_port_scan,
-    close_connection, run_command, ssh_test_connection,
+    close_connection, run_command, run_privileged, ssh_test_connection,
     get_server_status, run_as_game_user, send_console_command,
     list_server_commands, server_live_metrics, game_map, remote_public_ip,
     discover_linuxgsm_servers, player_list, moderation_caps, moderate, is_player_queryable,
@@ -4659,10 +4659,16 @@ def register_routes(app):
                     _p(1, "Preparing user account")
                     chk, _, _ = run_command(remote, f"test -x /home/{short_name}/linuxgsm.sh && echo EXISTS || echo NOTEXISTS", timeout=10)
                     if "NOTEXISTS" in chk:
-                        run_command(remote, f"userdel -r {short_name} 2>/dev/null; rm -rf /home/{short_name} 2>/dev/null; echo done", timeout=15, sudo=True)
+                        # Was one root shell running `userdel -r X; rm -rf /home/X`. Two verbs
+                        # now, and the home path is built by the helper from the validated name
+                        # rather than interpolated into an `rm -rf`.
+                        run_privileged(remote, "user-delete", [short_name], timeout=15,
+                                       merge_stderr=False)
+                        run_privileged(remote, "user-remove-home", [short_name], timeout=15,
+                                       merge_stderr=False)
                     idout, _, _ = run_command(remote, f"id {short_name} 2>/dev/null && echo EXISTS || echo NOTEXISTS", timeout=10)
                     if "NOTEXISTS" in idout:
-                        run_command(remote, f"useradd -m -s /bin/bash {short_name} 2>&1", timeout=15, sudo=True)
+                        run_privileged(remote, "user-create", [short_name], timeout=15)
                         time.sleep(0.3)
 
                     # 2. Download & set up LinuxGSM (canonical script name).
@@ -4925,8 +4931,9 @@ def register_routes(app):
             except Exception:
                 _log.debug("uninstall: graceful stop failed; force-killing next", exc_info=True)
             try:
-                run_command(remote, f"pkill -9 -u {short_name} 2>/dev/null; sleep 1; echo done",
-                            timeout=20, sudo=True)
+                run_privileged(remote, "user-kill-processes", [short_name], timeout=20,
+                               merge_stderr=False)
+                time.sleep(1)   # the `; sleep 1` that used to ride along inside the root shell
             except Exception:
                 _log.debug("uninstall: pkill failed; proceeding to userdel", exc_info=True)
 
@@ -4942,9 +4949,7 @@ def register_routes(app):
                 _log.debug("uninstall_server: ignored non-fatal error", exc_info=True)
 
             # Remove LinuxGSM user and home
-            out, err, rc = run_command(
-                remote, f"userdel -r -f {short_name} 2>&1; echo 'DONE'", timeout=30, sudo=True
-            )
+            out, err, rc = run_privileged(remote, "user-delete-force", [short_name], timeout=30)
             log_action(current_user, "uninstall_server", target=gs.name, success=(rc == 0))
 
             # Remove from DB

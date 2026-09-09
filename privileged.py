@@ -72,6 +72,14 @@ LOG_FILES = {
 }
 OS_UPDATE_LOG = "/run/panel-os-update.log"
 
+# Linux user names the panel may act on. Deliberately narrower than useradd itself accepts: it must
+# start with a letter or underscore and hold only [A-Za-z0-9._-], so it can never be an option
+# (-o, --system), a path fragment (., ..), or empty. This one validator is what makes the home
+# directory safe to CONSTRUCT below rather than accept.
+USERNAME_RE = r"[A-Za-z_][A-Za-z0-9._-]{0,31}"
+HOME_ROOT = "/home"
+
+
 
 
 class VerbError(ValueError):
@@ -120,6 +128,21 @@ def _jail(s):
     if not re.fullmatch(r"[A-Za-z0-9_.-]{1,64}", str(s)):
         raise VerbError("not a jail name")
     return str(s)
+
+
+def _username(s):
+    """A Linux user name the panel is allowed to manage — see tools/panel-helper."""
+    if not re.fullmatch(USERNAME_RE, str(s)):
+        raise VerbError("not a user name")
+    return str(s)
+
+
+def home_of(user):
+    """The home directory for a validated user name — built, never accepted. See the helper."""
+    path = HOME_ROOT + "/" + _username(user)
+    if not path.startswith(HOME_ROOT + "/") or len(path) <= len(HOME_ROOT) + 1 or ".." in path:
+        raise VerbError("refusing to build that home path")
+    return path
 
 
 def _linecount(s):
@@ -187,6 +210,16 @@ _ARGV = {
     "service-reload": ([_choice(*UNITS)], lambda a: [SYSTEMCTL, "reload", a[0]], None),
     "service-enable-now": ([_choice(*UNITS)], lambda a: [SYSTEMCTL, "enable", "--now", a[0]], None),
     "service-disable-now": ([_choice(*UNITS)], lambda a: [SYSTEMCTL, "disable", "--now", a[0]], None),
+
+    # ── cron and user accounts ──
+    "crontab-list": ([_username], lambda a: ["crontab", "-u", a[0], "-l"], None),
+    "user-create": ([_username], lambda a: ["useradd", "-m", "-s", "/bin/bash", a[0]], None),
+    "user-lock-password": ([_username], lambda a: ["passwd", "-l", a[0]], None),
+    "user-delete": ([_username], lambda a: ["userdel", "-r", a[0]], None),
+    "user-delete-force": ([_username], lambda a: ["userdel", "-r", "-f", a[0]], None),
+    "user-kill-processes": ([_username], lambda a: ["pkill", "-9", "-u", a[0]], None),
+    # rm -rf as root: the path is CONSTRUCTED from a validated name, never passed in.
+    "user-remove-home": ([_username], lambda a: ["rm", "-rf", "--", home_of(a[0])], None),
 
     # ── log reads ──
     # Neither journalctl nor tail is ever handed a caller's target: the SOURCE is a name from a
