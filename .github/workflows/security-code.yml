@@ -1,0 +1,118 @@
+name: Security scan (code)
+
+# The half of the security suite that only reads CODE: pip-audit (declared dependencies), Bandit
+# (Python security lint) and Semgrep (deep SAST). Split out of security.yml so it can be
+# path-filtered, which that workflow deliberately is not — see the note at the top of it.
+#
+# A docs-only or workflow-only change cannot alter what any of these three report, and together
+# they are ~105s of runner time per pull request. The exclusion list is a paths-IGNORE rather than
+# an allowlist on purpose: an unrecognised new path should fail OPEN and be scanned, never skipped.
+#
+# The weekly cron is the reason pip-audit still catches things on a quiet week — a newly-DISCLOSED
+# CVE changes the answer without changing requirements.txt, and schedule triggers ignore path
+# filters entirely.
+on:
+  push:
+    branches: [ main ]
+    paths-ignore:
+      - '**/*.md'
+      - 'docs/**'
+      - 'LICENSE'
+      - '.gitignore'
+      - '.gitattributes'
+      - '.editorconfig'
+  pull_request:
+    branches: [ main ]
+    paths-ignore:
+      - '**/*.md'
+      - 'docs/**'
+      - 'LICENSE'
+      - '.gitignore'
+      - '.gitattributes'
+      - '.editorconfig'
+  schedule:
+    - cron: "0 6 * * 1"   # weekly, Monday 06:00 UTC — catches newly-disclosed CVEs
+
+# Cancel an in-progress run when a newer commit is pushed to the same ref, so rapid
+# pushes don't queue up and waste runner minutes.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  dependency-audit:
+    name: Dependency vulnerabilities (pip-audit)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.11"
+      - run: python -m pip install --quiet pip-audit
+      # FAILS the run if any declared dependency has a known vulnerability — this
+      # is actionable (bump the version), so it's a hard gate.
+      - run: pip-audit -r requirements.txt
+
+  sast-bandit:
+    name: Python security lint (Bandit)
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      security-events: write   # upload SARIF to the Security tab (code scanning)
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.11"
+      - run: python -m pip install --quiet bandit bandit-sarif-formatter
+      # Emit SARIF and publish it to GitHub code scanning (the Security tab), alongside
+      # CodeQL. The skips drop checks that don't apply to this app by design: assert,
+      # bind-all, the subprocess/shell + paramiko command family (commands are _quote()'d
+      # and shell identifiers are @validates-guarded), the auto-add host-key policy, and
+      # the intentional best-effort try/except pattern. B105 (hardcoded secrets), eval,
+      # unsafe deserialization, weak crypto, etc. stay ON — so real signal surfaces.
+      # tests/ is excluded (its fixture passwords are not secrets; Gitleaks scans the
+      # whole repo for real ones). Non-blocking: findings are tracked as alerts, not gates.
+      - name: Bandit (SARIF)
+        run: |
+          bandit -r . -x ./venv,./.github,./tests \
+            --skip B101,B104,B404,B601,B602,B603,B604,B607,B507,B110,B112 \
+            -f sarif -o bandit.sarif || true
+      - name: Upload Bandit results to code scanning
+        uses: github/codeql-action/upload-sarif@cdf488f595d80d6e07e03d4674febd5ab45fa938 # v4
+        with:
+          sarif_file: bandit.sarif
+          category: bandit
+
+  sast-semgrep:
+    name: Deep SAST (Semgrep)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.11"
+      - run: python -m pip install --quiet semgrep
+      # Registry rulesets, fetched anonymously (no Semgrep account/token needed):
+      # general security-audit + Python + Flask + command-injection + secrets. This
+      # catches real code vulns (injection, SSRF, path traversal, unsafe redirects,
+      # weak crypto, template XSS, etc.). Informational — the findings go to the job
+      # summary so a false positive never blocks an alpha build, but they're surfaced
+      # on every push/PR and weekly.
+      - name: Semgrep scan
+        run: |
+          semgrep scan \
+            --config p/security-audit --config p/python --config p/flask \
+            --config p/command-injection --config p/secrets \
+            --exclude venv --exclude .github --exclude data --exclude tests \
+            --metrics=off > semgrep.txt 2>&1 || true
+          {
+            echo '### 🛡️ Semgrep SAST';
+            echo '';
+            echo '```';
+            tail -c 12000 semgrep.txt 2>/dev/null || echo '(no findings)';
+            echo '```';
+          } >> "$GITHUB_STEP_SUMMARY"
