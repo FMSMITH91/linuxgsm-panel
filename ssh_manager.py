@@ -4109,7 +4109,6 @@ def _f2b_dropin_ignoreip_body(ignore_ips):
     return "[DEFAULT]\nignoreip = %s\n" % " ".join(uniq)
 
 
-_F2B_PANEL_WHITELIST_DROPIN = "/etc/fail2ban/jail.d/zz-panel-whitelist.local"
 
 
 def remote_set_fail2ban_ignoreip(server, ignore_ips, unban_ip=None):
