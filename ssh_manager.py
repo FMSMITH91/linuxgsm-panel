@@ -109,40 +109,49 @@ def _run_local(cmd, timeout=30, sudo=False):
         # be root").
         full_cmd = f"sudo bash -c {_quote(cmd)}"
 
-    return _exec_local_argv(["/bin/bash", "-c", full_cmd], timeout=timeout)
+    return _exec_local_shell(full_cmd, timeout=timeout)
 
 
-def _exec_local_argv(argv, timeout=30, stdin_text=None):
-    """Run an argument vector on the panel's own machine and return (stdout, stderr, rc).
+# Popen options shared by both local paths. start_new_session puts the child in a NEW process group
+# so that on timeout we can kill the whole group — subprocess's own timeout kills only the direct
+# child, and grandchildren (a stuck LinuxGSM command) are orphaned and run forever, burning CPU.
+# (Observed: mods commands stuck at ~100% CPU for hours.) errors="replace" matches the paramiko
+# path: command output is game-server output (player names, mod chatter, latin-1 logs) and is NOT
+# guaranteed valid UTF-8; a strict decode would raise, get swallowed, and return rc=-1 with empty
+# output — indistinguishable from "the command printed nothing".
+_POPEN_KW = dict(stdout=_real_subprocess.PIPE, stderr=_real_subprocess.PIPE, text=True,
+                 encoding="utf-8", errors="replace", start_new_session=True)
 
-    The shared body of every local execution. _run_local() passes ["/bin/bash", "-c", cmd] because
-    its callers hand it a composed shell command; run_privileged() passes the helper's argv and no
-    shell is involved at all."""
+
+def _finish(p, timeout, stdin_text=None):
+    """Collect a started process: (stdout, stderr, rc), killing the whole group on timeout."""
+    try:
+        out, err = p.communicate(input=stdin_text, timeout=timeout)
+        return (out or "").strip(), (err or "").strip(), p.returncode
+    except _real_subprocess.TimeoutExpired:
+        _kill_process_tree(p)
+        return "", "Command timed out", -1
+
+
+def _in_tpool(fn):
+    """Run `fn` in eventlet's native thread pool when eventlet is active — see _run_local()."""
+    if _tpool is not None:
+        return _tpool.execute(fn)
+    return fn()
+
+
+def _exec_local_shell(shell_cmd, timeout=30):
+    """Run a composed SHELL command on the panel's own machine.
+
+    The literal ["/bin/bash", "-c", ...] is written out here rather than passed in: an argv that
+    arrives as a variable reads to CodeQL as an arbitrary command line, and this is the path where
+    a composed string genuinely does reach a shell. Keeping the list literal at the call keeps the
+    two local paths distinguishable — this one interprets a command, _exec_local_argv() does not."""
     def _do():
         p = None
         try:
-            # Run in a NEW process group (start_new_session) so that on timeout we can kill the
-            # whole group — otherwise subprocess's timeout only kills the direct `sh -c` child and
-            # any grandchildren (e.g. a stuck LinuxGSM command) get orphaned and run forever,
-            # burning CPU. (Observed: mods commands stuck at ~100% CPU for hours.)
-            # Explicit ["/bin/bash","-c",cmd] instead of shell=True — identical behaviour (a shell
-            # interprets the composed command, with the panel's own _quote-escaping upstream) but
-            # not the subprocess-shell-injection sink shape.
-            # errors="replace" to match the paramiko path: command output is game-server output
-            # (player names, mod chatter, latin-1 logs), so it is NOT guaranteed valid UTF-8. A
-            # strict decode would raise, get swallowed below, and return rc=-1 with empty output —
-            # indistinguishable from "the command printed nothing".
-            p = _real_subprocess.Popen(argv,
-                                       stdin=(_real_subprocess.PIPE if stdin_text is not None else None),
-                                       stdout=_real_subprocess.PIPE,
-                                       stderr=_real_subprocess.PIPE, text=True, encoding="utf-8",
-                                       errors="replace", start_new_session=True)
-            try:
-                out, err = p.communicate(input=stdin_text, timeout=timeout)
-                return (out or "").strip(), (err or "").strip(), p.returncode
-            except _real_subprocess.TimeoutExpired:
-                _kill_process_tree(p)
-                return "", "Command timed out", -1
+            p = _real_subprocess.Popen(["/bin/bash", "-c", shell_cmd], **_POPEN_KW)
+            return _finish(p, timeout)
         except Exception:
             # Never surface raw exception text — it can flow into API responses
             # (CodeQL py/stack-trace-exposure). Log it; callers act on rc == -1.
@@ -151,9 +160,28 @@ def _exec_local_argv(argv, timeout=30, stdin_text=None):
                 _kill_process_tree(p)
             return "", "command execution error", -1
 
-    if _tpool is not None:
-        return _tpool.execute(_do)
-    return _do()
+    return _in_tpool(_do)
+
+
+def _exec_local_argv(argv, timeout=30, stdin_text=None):
+    """Run an ARGUMENT VECTOR on the panel's own machine — no shell involved at any point.
+
+    Only privileged.py builds the vectors that reach here, from its fixed verb table, so every
+    element is either a literal or a value that passed a validator."""
+    def _do():
+        p = None
+        try:
+            p = _real_subprocess.Popen(
+                argv, stdin=(_real_subprocess.PIPE if stdin_text is not None else None),
+                **_POPEN_KW)
+            return _finish(p, timeout, stdin_text=stdin_text)
+        except Exception:
+            _log.debug("local command failed", exc_info=True)
+            if p is not None:
+                _kill_process_tree(p)
+            return "", "command execution error", -1
+
+    return _in_tpool(_do)
 
 
 def is_local_server(server):

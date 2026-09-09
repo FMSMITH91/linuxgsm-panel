@@ -166,6 +166,13 @@ def _run_verb(verb, args=(), timeout=30, merge_stderr=True):
         return _run(_priv.remote_command(verb, args, merge_stderr=merge_stderr),
                     timeout=timeout, sudo=True)
     try:
+        # Semgrep's dangerous-subprocess-use-audit flags any subprocess call whose first argument is
+        # not a literal string. That is the shape here and it is the point of the change: `argv`
+        # comes from privileged.py's fixed verb table, where every element is a literal or a value
+        # that passed a validator, and shell=False means no element is ever interpreted. Replacing
+        # it with a literal string would mean going back to composing a command, which is the thing
+        # being removed. Reviewed and suppressed rather than silently left red.
+        # nosemgrep: python.lang.security.audit.dangerous-subprocess-use-audit.dangerous-subprocess-use-audit
         r = subprocess.run(argv, shell=False,  # nosec B603 - argv from privileged.py's fixed table
                            input=_priv.stdin_for(verb), capture_output=True, text=True,
                            timeout=timeout)

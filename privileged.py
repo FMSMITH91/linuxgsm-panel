@@ -33,11 +33,8 @@ STATUS
     nothing: a boundary with a hole in it is not a boundary. SECURITY.md says so too.
 """
 import ipaddress
-import logging
 import re
 import shlex
-
-_log = logging.getLogger(__name__)
 
 # Root-owned, outside the panel's git checkout. The checkout belongs to the panel user and is
 # rewritten by `git pull` on every self-update, so a helper living there would be panel-writable
