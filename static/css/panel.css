@@ -304,6 +304,24 @@
     tr.sort-dragging > td { background: color-mix(in srgb, var(--accent) 12%, transparent); }
 
     /* ── TABS ── (underline style that fits the dark theme, not Bootstrap's pale card tab) */
+    /* A tab strip marked `flex-nowrap overflow-auto` is asking to scroll sideways when it runs
+       out of room. It didn't: flex-nowrap stops the STRIP wrapping, but the items still shrink
+       (flex-shrink defaults to 1), so the labels wrapped inside their own pills instead — at
+       375px "Files & Config" became three lines and made the whole row three times taller than
+       its neighbours. Stop the items shrinking and it scrolls as intended. */
+    /* Checkboxes rendered 32x16. Even WCAG 2.2 AA's relaxed 24x24 target minimum is above that,
+       and a 16px-tall box is genuinely fiddly with a thumb. Only the checkboxes are touched:
+       buttons here measure 31px, which already clears that bar, and growing every control to the
+       44px AAA target would give back the vertical space reclaimed elsewhere on these pages. */
+    @media (pointer: coarse) {
+      .form-check-input { width: 1.5rem; height: 1.5rem; margin-top: .1rem; }
+      .form-check { padding-left: 2rem; }
+      .form-check .form-check-input { margin-left: -2rem; }
+    }
+
+    .nav.flex-nowrap.overflow-auto > .nav-item { flex: 0 0 auto; }
+    .nav.flex-nowrap.overflow-auto .nav-link { white-space: nowrap; }
+
     .nav-tabs { border-bottom: 1px solid var(--border); gap: .15rem; }
     .nav-tabs .nav-link {
       color: var(--text-muted);
@@ -467,6 +485,21 @@
       .card-footer { padding: .7rem 1rem; }
       .table thead th { font-size: .65rem; padding: .45rem .5rem; }
       .table td { font-size: .8rem; padding: .45rem .5rem; }
+      /* Start/Stop/Restart/Console are the point of this table, and they live in the last column.
+         Measured at 375px the table is 578px wide inside a 341px viewport, putting that column's
+         right edge at x=595 — reachable only by horizontally scrolling a table that gives no hint
+         there is anything to the right of it. Pin it to the row instead: the data columns scroll
+         underneath and the controls stay in reach. */
+      .table-responsive .table th.col-actions,
+      .table-responsive .table td.col-actions {
+        position: sticky;
+        right: 0;
+        z-index: 2;
+        background: var(--bg-card);
+        box-shadow: -10px 0 10px -10px rgba(0, 0, 0, .7);
+      }
+      .table-responsive .table thead th.col-actions { background: var(--bg-elevated); }
+      .table-responsive .table-hover tbody tr:hover td.col-actions { background: var(--bg-elevated); }
       .stat-value { font-size: 1.4rem; }
       .row { --bs-gutter-x: .75rem; }
       .btn { font-size: .8rem; padding: .45rem .8rem; }

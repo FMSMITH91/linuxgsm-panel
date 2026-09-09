@@ -90,11 +90,18 @@
   <div class="text-secondary small">Online</div>
 {% endmacro %}
 {% macro tile_offline() %}
+  {# Online + Offline only equals Total when nothing is mid-install or failed. With 5 servers,
+     1 online and 2 offline, the row silently failed to account for the other 2 — so say where
+     they went rather than leaving the reader to notice the arithmetic doesn't close. #}
+  {% set n_online = servers|selectattr('status', 'equalto', 'online')|list|length %}
+  {% set n_offline = servers|selectattr('status', 'equalto', 'offline')|list|length %}
+  {% set n_other = servers|length - n_online - n_offline %}
   <div class="h3 mb-0" id="offline-count">
     <span class="status-dot status-offline"></span>
-    {{ servers|selectattr('status', 'equalto', 'offline')|list|length }}
+    {{ n_offline }}
   </div>
   <div class="text-secondary small">Offline</div>
+  {% if n_other %}<div class="small text-warning mt-1" id="offline-other">+{{ n_other }} installing or failed</div>{% endif %}
 {% endmacro %}
 {% macro tile_players() %}
   <div class="h3 mb-0" id="total-players"><i class="bi bi-people-fill text-info"></i> {{ total_players }}{% if total_max %} / {{ total_max }}{% endif %}</div>
@@ -169,8 +176,13 @@
                 title="Move this host down" aria-label="Move {{ remote.display_name }} down"><i class="bi bi-arrow-down"></i></button>
       </span>
       <span class="text-secondary small d-none d-md-inline" id="host-metrics-{{ remote.id }}"></span>
-      <span class="badge {% if remote.is_online %}bg-success{% else %}bg-danger{% endif %}">
-        {{ "Online" if remote.is_online else "Offline" }}
+      {# "Offline" already means "this game server is stopped" three columns to the right, in the
+         same red. On a host it means something different — the panel cannot reach the machine —
+         and a host card reading "Offline" above a row of servers reading "Offline" invites the
+         reader to think they are the same fact. Reachability gets its own words. #}
+      <span class="badge {% if remote.is_online %}bg-success{% else %}bg-danger{% endif %}"
+            title="{% if remote.is_online %}The panel can reach this host over SSH{% else %}The panel cannot reach this host over SSH — the servers below show their last known state{% endif %}">
+        {{ "Reachable" if remote.is_online else "Unreachable" }}
       </span>
     </span>
   </div>
@@ -186,7 +198,7 @@
             <th class="dash-sort" data-sortkey="players" style="cursor:pointer;" data-action="sortDashCol" data-args='["players","@self"]'>Players<span class="dash-caret"></span></th>
             <th class="d-none d-lg-table-cell">Resources</th>
             <th>Connect</th>
-            <th class="text-end">Actions</th>
+            <th class="text-end col-actions">Actions</th>
           </tr>
         </thead>
         <tbody>
@@ -229,7 +241,7 @@
               </span>
             </td>
             {% set busy = (not srv.installed) or srv.status in ('installing', 'configuring') %}
-            <td class="text-end text-nowrap">
+            <td class="text-end text-nowrap col-actions">
               {% if can_control %}
               <button class="btn btn-outline-success btn-sm srv-ctl" title="Start" aria-label="Start {{ srv.name }}" data-action="doAction" data-args='[{{ srv.id }}, "start", "@self"]'{% if busy %} disabled{% endif %}><i class="bi bi-play-fill"></i></button>
               <button class="btn btn-outline-warning btn-sm srv-ctl" title="Restart" aria-label="Restart {{ srv.name }}" data-action="doAction" data-args='[{{ srv.id }}, "restart", "@self"]'{% if busy %} disabled{% endif %}><i class="bi bi-arrow-repeat"></i></button>
