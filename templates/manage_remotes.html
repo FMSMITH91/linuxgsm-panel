@@ -21,33 +21,33 @@
     <form method="POST" action="{{ url_for('add_remote') }}" class="row g-2 ajax-form"
           data-ajax-refresh="#remotes-list" data-ajax-after="afterRemotesRefresh">
       <div class="col-md-3">
-        <label class="form-label">Name</label>
-        <input type="text" name="name" class="form-control" required placeholder="e.g. Main VPS">
+        <label class="form-label" for="manage-remotes-name">Name</label>
+        <input id="manage-remotes-name" type="text" name="name" class="form-control" required placeholder="e.g. Main VPS">
       </div>
       <div class="col-md-3">
-        <label class="form-label">Host / IP</label>
-        <input type="text" name="host" class="form-control" required placeholder="e.g. 192.168.1.100">
+        <label class="form-label" for="manage-remotes-host">Host / IP</label>
+        <input id="manage-remotes-host" type="text" name="host" class="form-control" required placeholder="e.g. 192.168.1.100">
         <div class="form-text" id="host-hint">Tailscale hostname, IP, or MagicDNS name</div>
       </div>
       <div class="col-md-1">
-        <label class="form-label">Port</label>
-        <input type="number" name="ssh_port" class="form-control" value="22">
+        <label class="form-label" for="manage-remotes-ssh_port">Port</label>
+        <input id="manage-remotes-ssh_port" type="number" name="ssh_port" class="form-control" value="22">
       </div>
       <div class="col-md-1">
-        <label class="form-label">User</label>
-        <input type="text" name="ssh_user" class="form-control" value="root">
+        <label class="form-label" for="manage-remotes-ssh_user">User</label>
+        <input id="manage-remotes-ssh_user" type="text" name="ssh_user" class="form-control" value="root">
       </div>
       <div class="col-md-1">
-        <label class="form-label">Auth</label>
-        <select name="auth_method" class="form-select" data-action="toggleCreds" data-args='["@self"]' data-on="change">
+        <label class="form-label" for="manage-remotes-auth_method">Auth</label>
+        <select id="manage-remotes-auth_method" name="auth_method" class="form-select" data-action="toggleCreds" data-args='["@self"]' data-on="change">
           <option value="key">SSH Key</option>
           <option value="password">Password</option>
           {% if tailscale_installed %}<option value="tailscale">Tailscale SSH</option>{% endif %}
         </select>
       </div>
       <div class="col-md-3" id="credential-group">
-        <label class="form-label" id="cred-label">SSH Key Path</label>
-        <input type="text" name="credential" class="form-control" value="~/.ssh/id_rsa" placeholder="~/.ssh/id_rsa">
+        <label class="form-label" id="cred-label" for="manage-remotes-credential">SSH Key Path</label>
+        <input id="manage-remotes-credential" type="text" name="credential" class="form-control" value="~/.ssh/id_rsa" placeholder="~/.ssh/id_rsa">
       </div>
       <div class="col-md-2 d-flex align-items-center">
         <div class="form-check pt-3">
@@ -56,8 +56,8 @@
         </div>
       </div>
       <div class="col-md-2">
-        <label class="form-label">LinuxGSM User</label>
-        <input type="text" name="lgsm_user" class="form-control" placeholder="(optional)">
+        <label class="form-label" for="manage-remotes-lgsm_user">LinuxGSM User</label>
+        <input id="manage-remotes-lgsm_user" type="text" name="lgsm_user" class="form-control" placeholder="(optional)">
       </div>
       <div class="col-md-3">
         <label class="form-label" for="setup-type">Setup</label>
@@ -193,32 +193,32 @@
               data-ajax-after="afterRemotesRefresh" data-ajax-reset="off">
           <input type="hidden" name="remote_id" value="{{ remote.id }}">
           <div class="col-md-3">
-            <label class="form-label">Name</label>
-            <input type="text" name="name" class="form-control" value="{{ remote.name }}">
+            <label class="form-label" for="manage-remotes-name-2">Name</label>
+            <input id="manage-remotes-name-2" type="text" name="name" class="form-control" value="{{ remote.name }}">
           </div>
           <div class="col-md-3">
-            <label class="form-label">Host</label>
-            <input type="text" name="host" class="form-control" value="{{ remote.host }}">
+            <label class="form-label" for="manage-remotes-host-2">Host</label>
+            <input id="manage-remotes-host-2" type="text" name="host" class="form-control" value="{{ remote.host }}">
           </div>
           <div class="col-md-1">
-            <label class="form-label">Port</label>
-            <input type="number" name="ssh_port" class="form-control" value="{{ remote.port }}">
+            <label class="form-label" for="manage-remotes-ssh_port-2">Port</label>
+            <input id="manage-remotes-ssh_port-2" type="number" name="ssh_port" class="form-control" value="{{ remote.port }}">
           </div>
           <div class="col-md-1">
-            <label class="form-label">User</label>
-            <input type="text" name="ssh_user" class="form-control" value="{{ remote.username }}">
+            <label class="form-label" for="manage-remotes-ssh_user-2">User</label>
+            <input id="manage-remotes-ssh_user-2" type="text" name="ssh_user" class="form-control" value="{{ remote.username }}">
           </div>
           <div class="col-md-2">
-            <label class="form-label">Auth method</label>
-            <select name="auth_method" class="form-select" data-action="toggleEditCreds" data-args='["@self", {{ remote.id }}]' data-on="change">
+            <label class="form-label" for="manage-remotes-auth_method-2">Auth method</label>
+            <select id="manage-remotes-auth_method-2" name="auth_method" class="form-select" data-action="toggleEditCreds" data-args='["@self", {{ remote.id }}]' data-on="change">
               <option value="key" {% if remote.auth_method == 'key' %}selected{% endif %}>SSH Key</option>
               <option value="password" {% if remote.auth_method == 'password' %}selected{% endif %}>Password</option>
               <option value="tailscale" {% if remote.auth_method == 'tailscale' %}selected{% endif %}>Tailscale SSH</option>
             </select>
           </div>
           <div class="col-md-2" id="edit-cred-group-{{ remote.id }}">
-            <label class="form-label">Credential</label>
-            <input type="password" name="credential" class="form-control" value=""
+            <label class="form-label" for="manage-remotes-credential-2">Credential</label>
+            <input id="manage-remotes-credential-2" type="password" name="credential" class="form-control" value=""
                    autocomplete="off" placeholder="Leave blank to keep current">
           </div>
           <div class="col-md-2 d-flex align-items-center">
@@ -229,8 +229,8 @@
             </div>
           </div>
           <div class="col-md-2">
-            <label class="form-label">LGSM User</label>
-            <input type="text" name="lgsm_user" class="form-control" value="{{ remote.linuxgsm_user }}">
+            <label class="form-label" for="manage-remotes-lgsm_user-2">LGSM User</label>
+            <input id="manage-remotes-lgsm_user-2" type="text" name="lgsm_user" class="form-control" value="{{ remote.linuxgsm_user }}">
           </div>
           <div class="col-md-1 d-flex align-items-end">
             <button type="submit" class="btn btn-primary btn-sm w-100">

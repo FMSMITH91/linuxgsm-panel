@@ -2,7 +2,7 @@
 {% block title %}Groups & Permissions{% endblock %}
 
 {% macro game_server_access(all_remotes, all_servers, selected_ids, idprefix) %}
-<label class="form-label fw-bold mt-3">Individual game servers</label>
+<label class="form-label fw-bold mt-3" for="manage-groups-name">Individual game servers</label>
 <div class="form-text mt-0 mb-2">Optional — grant specific servers (adds to any whole-host access above).</div>
 <div style="max-height: 180px; overflow-y: auto;">
   {% for r in all_remotes %}
@@ -124,15 +124,15 @@
           <div class="col-md-4">
             <div class="mb-3">
               <label class="form-label">Group Name</label>
-              <input type="text" name="name" class="form-control" value="{{ group.name }}" required>
+              <input id="manage-groups-name" type="text" name="name" class="form-control" value="{{ group.name }}" required>
             </div>
             <div class="mb-3">
-              <label class="form-label">Description</label>
-              <input type="text" name="description" class="form-control" value="{{ group.description }}">
+              <label class="form-label" for="manage-groups-description">Description</label>
+              <input id="manage-groups-description" type="text" name="description" class="form-control" value="{{ group.description }}">
             </div>
           </div>
           <div class="col-md-4">
-            <label class="form-label fw-bold">Permissions</label>
+            <label class="form-label fw-bold" for="manage-groups-name-2">Permissions</label>
             {{ role_presets() }}
             <div style="max-height: 300px; overflow-y: auto;">
               {% for perm_key, perm_desc in all_perms.items() %}
@@ -192,18 +192,18 @@
             class="ajax-form" data-ajax-refresh="#groups-list">
         <div class="modal-header">
           <h5 class="modal-title"><i class="bi bi-shield-plus"></i> Add Group</h5>
-          <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal"></button>
+          <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal" aria-label="Close"></button>
         </div>
         <div class="modal-body">
           <div class="row">
             <div class="col-md-4">
               <div class="mb-3">
                 <label class="form-label">Group Name</label>
-                <input type="text" name="name" class="form-control" required>
+                <input id="manage-groups-name-2" type="text" name="name" class="form-control" required>
               </div>
               <div class="mb-3">
-                <label class="form-label">Description</label>
-                <input type="text" name="description" class="form-control" placeholder="e.g. Server moderators">
+                <label class="form-label" for="manage-groups-description-2">Description</label>
+                <input id="manage-groups-description-2" type="text" name="description" class="form-control" placeholder="e.g. Server moderators">
               </div>
             </div>
             <div class="col-md-4">

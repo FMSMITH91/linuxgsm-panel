@@ -24,11 +24,11 @@
           </div>
         </div>
         <div class="card-body">
-          <label class="form-label small mb-1">Bot token</label>
-          <input type="password" name="telegram_token" class="form-control form-control-sm" autocomplete="off"
+          <label class="form-label small mb-1" for="notifications-telegram_token">Bot token</label>
+          <input id="notifications-telegram_token" type="password" name="telegram_token" class="form-control form-control-sm" autocomplete="off"
                  placeholder="{{ '•••••••••• (leave blank to keep)' if settings.telegram.has_token else '123456:ABC-DEF…' }}">
-          <label class="form-label small mb-1 mt-2">Chat ID</label>
-          <input type="text" name="telegram_chat_id" class="form-control form-control-sm" autocomplete="off"
+          <label class="form-label small mb-1 mt-2" for="notifications-telegram_chat_id">Chat ID</label>
+          <input id="notifications-telegram_chat_id" type="text" name="telegram_chat_id" class="form-control form-control-sm" autocomplete="off"
                  value="{{ settings.telegram.chat_id }}" placeholder="e.g. 123456789 or -100123…">
           <div class="small text-secondary mt-2">
             Create a bot with <code>@BotFather</code>, then get your chat ID from <code>@userinfobot</code>
@@ -68,8 +68,8 @@
           </div>
         </div>
         <div class="card-body">
-          <label class="form-label small mb-1">Webhook URL</label>
-          <input type="password" name="discord_webhook" class="form-control form-control-sm" autocomplete="off"
+          <label class="form-label small mb-1" for="notifications-discord_webhook">Webhook URL</label>
+          <input id="notifications-discord_webhook" type="password" name="discord_webhook" class="form-control form-control-sm" autocomplete="off"
                  placeholder="{{ '•••••••••• (leave blank to keep)' if settings.discord.has_webhook else 'https://discord.com/api/webhooks/…' }}">
           <div class="small text-secondary mt-2">
             In your Discord channel: <em>Edit Channel → Integrations → Webhooks → New Webhook → Copy URL</em>.
@@ -80,11 +80,11 @@
           </button>
           <hr class="my-3">
           <div class="fw-semibold small mb-2"><i class="bi bi-robot"></i> Two-way command bot <span class="text-secondary fw-normal">(optional)</span></div>
-          <label class="form-label small mb-1">Bot token</label>
-          <input type="password" name="discord_bot_token" class="form-control form-control-sm" autocomplete="off"
+          <label class="form-label small mb-1" for="notifications-discord_bot_token">Bot token</label>
+          <input id="notifications-discord_bot_token" type="password" name="discord_bot_token" class="form-control form-control-sm" autocomplete="off"
                  placeholder="{{ '•••••••••• (leave blank to keep)' if settings.discord.has_bot_token else 'the bot token from the Developer Portal' }}">
-          <label class="form-label small mb-1 mt-2">Channel ID</label>
-          <input type="text" name="discord_channel_id" class="form-control form-control-sm" autocomplete="off"
+          <label class="form-label small mb-1 mt-2" for="notifications-discord_channel_id">Channel ID</label>
+          <input id="notifications-discord_channel_id" type="text" name="discord_channel_id" class="form-control form-control-sm" autocomplete="off"
                  value="{{ settings.discord.channel_id }}" placeholder="e.g. 112233445566778899">
           <div class="form-check form-switch mt-2">
             <input type="checkbox" name="discord_accept_commands" class="form-check-input" role="switch" id="dc-cmd"

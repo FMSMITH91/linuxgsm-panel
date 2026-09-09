@@ -314,6 +314,19 @@
        buttons here measure 31px, which already clears that bar, and growing every control to the
        44px AAA target would give back the vertical space reclaimed elsewhere on these pages. */
     @media (pointer: coarse) {
+      /* WCAG 2.2 AA sets the target minimum at 24x24. Most controls here are ~31px and clear it
+         comfortably; the compact "Join" link renders at 19px and the small selects at 22px, so
+         they do not. Raise only the ones actually under the floor — inflating every control to
+         the 44px AAA figure would give back the vertical space reclaimed elsewhere. inline-flex
+         keeps the label centred once a min-height is forced on an inline-block control. */
+      a.btn, .btn-sm, .btn-group-sm > .btn {
+        min-height: 24px;
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+      }
+      .form-select-sm, .form-control-sm { min-height: 24px; }
+
       .form-check-input { width: 1.5rem; height: 1.5rem; margin-top: .1rem; }
       .form-check { padding-left: 2rem; }
       .form-check .form-check-input { margin-left: -2rem; }

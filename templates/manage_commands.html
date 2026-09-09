@@ -22,24 +22,24 @@
 {% macro command_fields(cmd, idp) %}
 <div class="row g-2">
   <div class="col-md-4">
-    <label class="form-label small mb-0">Button label</label>
-    <input type="text" name="name" class="form-control form-control-sm" required
+    <label class="form-label small mb-0" for="manage-commands-name">Button label</label>
+    <input id="manage-commands-name" type="text" name="name" class="form-control form-control-sm" required
            value="{{ cmd.name if cmd else '' }}" placeholder="e.g. Change map">
   </div>
   <div class="col-md-8">
-    <label class="form-label small mb-0">Console command</label>
-    <input type="text" name="command_template" class="form-control form-control-sm" required
+    <label class="form-label small mb-0" for="manage-commands-command_template">Console command</label>
+    <input id="manage-commands-command_template" type="text" name="command_template" class="form-control form-control-sm" required
            value="{{ cmd.command_template if cmd else '' }}" placeholder="e.g. map {} — or a fixed line like: say Server restarting">
     <div class="form-text mt-0">Use <code>{}</code> once where the operator fills in a value. No <code>{}</code> = one-click.</div>
   </div>
   <div class="col-md-4">
-    <label class="form-label small mb-0">Value label</label>
-    <input type="text" name="argument_label" class="form-control form-control-sm"
+    <label class="form-label small mb-0" for="manage-commands-argument_label">Value label</label>
+    <input id="manage-commands-argument_label" type="text" name="argument_label" class="form-control form-control-sm"
            value="{{ cmd.argument_label if cmd else '' }}" placeholder="e.g. Map name (only if using {})">
   </div>
   <div class="col-md-4">
-    <label class="form-label small mb-0">Value validation (regex, optional)</label>
-    <input type="text" name="argument_pattern" class="form-control form-control-sm"
+    <label class="form-label small mb-0" for="manage-commands-argument_pattern">Value validation (regex, optional)</label>
+    <input id="manage-commands-argument_pattern" type="text" name="argument_pattern" class="form-control form-control-sm"
            value="{{ cmd.argument_pattern if cmd else '' }}" placeholder="{{ default_pattern }}">
     <div class="form-text mt-0">Blank = safe default (letters, digits, <code>_ . -</code>).</div>
   </div>
@@ -150,7 +150,7 @@
             class="ajax-form" data-ajax-refresh="#commands-list">
         <div class="modal-header">
           <h5 class="modal-title"><i class="bi bi-terminal-plus"></i> Add Custom Command</h5>
-          <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal"></button>
+          <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal" aria-label="Close"></button>
         </div>
         <div class="modal-body">
           {{ command_fields(none, 'new') }}
