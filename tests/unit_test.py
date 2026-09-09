@@ -3764,6 +3764,9 @@ _VERB_SAMPLES = {
     "apt-upgrade-running": [],
     "dpkg-lock-held": [],
     "reboot": [],
+    "journal": ["ssh", "400"],
+    "log-tail": ["fail2ban", "4000"],
+    "os-update-log": [],
 }
 check("privileged: every verb has a sample (new verbs cannot skip the parity check)",
       set(_VERB_SAMPLES) == set(_priv.verbs()),
@@ -3792,7 +3795,8 @@ check("privileged: helper and panel build an identical argv for every verb",
 check("helper: resolves ufw", _helper.resolve("ufw").endswith("/ufw") if os.path.exists("/usr/sbin/ufw") else True)
 check("helper: knows exactly the tools its verbs need, and no more",
       sorted(_helper.TOOLS) == ["add-apt-repository", "apt-get", "dpkg", "fail2ban-client",
-                                "fuser", "pgrep", "reboot", "systemctl", "ufw"],
+                                "fuser", "journalctl", "pgrep", "reboot", "systemctl", "tail",
+                                "ufw"],
       sorted(_helper.TOOLS))
 for _prog in ("bash", "sh", "python3", "env"):
     check("helper: refuses to resolve %s" % _prog, _ufw_raises_fnf(_helper.resolve, _prog))
@@ -3815,6 +3819,10 @@ _BAD = {
     "dpkg-add-arch": ["amd64", "i386; id", ""],
     "apt-add-repo": ["ppa:someone/ppa", "universe; id", "multiverse"],
     "apt-full-upgrade": ["phased; id", "everything", ""],
+    # The log verbs take a SOURCE NAME, never a path or a unit — so a traversal is not rejected by
+    # a filter, it is simply not expressible.
+    "log-tail": ["/etc/shadow", "../../etc/shadow", "syslog", "auth; id", ""],
+    "journal": ["nginx", "ssh; id", "linuxgsm-panel", ""],
 }
 _leaked = []
 for _v, _bads in _BAD.items():
@@ -3876,6 +3884,12 @@ _REMOTE_EXPECTED = {
     ("apt-upgrade-running", ()):
         "pgrep -f 'apt-get (upgrade|dist-upgrade|full-upgrade)' 2>&1",
     ("reboot", ()): "reboot 2>&1",
+    ("journal", ("ssh", "400")): "journalctl -u ssh -u sshd --no-pager -n 400 2>&1",
+    ("journal", ("fail2ban", "4000")): "journalctl -u fail2ban --no-pager -n 4000 2>&1",
+    ("journal", ("panel", "400")): "journalctl -u linuxgsm-panel --no-pager -n 400 2>&1",
+    ("log-tail", ("fail2ban", "4000")): "tail -n 4000 /var/log/fail2ban.log 2>&1",
+    ("log-tail", ("auth", "200")): "tail -n 200 /var/log/auth.log 2>&1",
+    ("os-update-log", ()): "tail -c 20000 /run/panel-os-update.log 2>&1",
 }
 _wrong = []
 for (_v, _a), _want in _REMOTE_EXPECTED.items():
@@ -3914,6 +3928,17 @@ check("privileged: apt-install refuses an absurdly long package list",
       _ufw_raises_verb(lambda: _priv.check_args("apt-install", ["pkg"] * 65)))
 check("privileged: one bad name rejects the whole apt-install list",
       _ufw_raises_verb(lambda: _priv.check_args("apt-install", ["good", "also-good", "bad;name"])))
+
+# The line count is bounded at both ends: 0 is not a count, and an unbounded one would let a caller
+# ask for the entire journal through a root command.
+for _n in ("0", "99999", "5; id", "-1", ""):
+    check("privileged: journal refuses line count %r" % _n,
+          _ufw_raises_verb(lambda n=_n: _priv.check_args("journal", ["ssh", n])))
+check("privileged: the panel's OS-update log path is the one the helper reads",
+      _priv.OS_UPDATE_LOG == _helper.OS_UPDATE_LOG == sm._OS_UPDATE_LOG,
+      "%s / %s / %s" % (_priv.OS_UPDATE_LOG, _helper.OS_UPDATE_LOG, sm._OS_UPDATE_LOG))
+check("privileged: the two copies agree on every log path and journal unit",
+      _priv.LOG_FILES == _helper.LOG_FILES and _priv.JOURNAL_UNITS == _helper.JOURNAL_UNITS)
 
 # `| tail -n` became Python.
 eq("_last_lines keeps the tail", sm._last_lines("a\nb\nc\nd", 2), "c\nd")

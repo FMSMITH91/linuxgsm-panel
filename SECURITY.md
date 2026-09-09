@@ -70,8 +70,9 @@ verb and already-separated arguments, re-validates every argument against its ow
 execs a fixed argument vector. There is no shell in it, and the only program it can run is
 one it names: `bash` does not resolve.
 
-Converted so far: **`ufw`, `fail2ban-client`, `systemctl` and `apt`/`dpkg`** — 33 verbs, and
-the count of privileged call sites still composing a shell string is down from 113 to 52.
+Converted so far: **`ufw`, `fail2ban-client`, `systemctl`, `apt`/`dpkg`, and the log reads
+(`journalctl` / `tail`)** — 36 verbs, and the count of privileged call sites still composing a
+shell string is down from 113 to 42.
 
 Two of those verb families are worth describing, because the narrowing is in the argument
 types rather than in the command names:
@@ -79,14 +80,16 @@ types rather than in the command names:
 - The systemd verbs take a unit from an **exhaustive list** (`ssh`, `sshd`, `fail2ban`,
   `whoopsie`, `cups`, `modemmanager`). Those are the only services the panel ever touches, so
   a unit-name *pattern* would only buy the ability to control units nobody asked it to.
+- The log verbs take a **source name**, never a path or a unit: `log-tail auth`, not
+  `tail /var/log/auth.log`. The table turns the name into the path, so reading `/etc/shadow`
+  through the helper is not something a filter rejects — it is not expressible.
 - `apt-install` is the one verb taking a variable-length list. Every package name is
   charset-checked individually, and the list has a floor and a ceiling — so a name cannot be
   an option (`--reinstall`), and the list cannot be made arbitrarily long. dpkg's conflict
   answers (`--force-confdef`, `--force-confold`) are fixed in the helper rather than passed
   in, so an unattended upgrade can never be talked into clobbering a config file you edited.
 
-Still to convert: `journalctl`, cron, user management (`useradd`/`userdel`/`passwd`), log
-tails, the file writes that go through `echo … | base64 -d >`, the two multi-line shell
+Still to convert: cron, user management (`useradd`/`userdel`/`passwd`), the file writes that go through `echo … | base64 -d >`, the two multi-line shell
 scripts (the detached OS-update runner and the NodeSource installer), and the **deferred
 reboot** — `( sleep 2 ; reboot ) &`, deliberately left for its own change, because getting a
 reboot verb wrong is the most expensive mistake available here.

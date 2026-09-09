@@ -1594,18 +1594,18 @@ def security_log_tail(which, lines=200, jail=None):
         # jail — lives in /var/log/fail2ban.log (fail2ban's default logtarget). `journalctl -u
         # fail2ban` only carries the systemd unit's start/stop noise, so read the file first and
         # fall back to the journal only if it isn't there.
-        out, _, _ = _run("tail -n 4000 /var/log/fail2ban.log 2>/dev/null", timeout=15, sudo=True)
+        out, _, _ = _run_verb("log-tail", ["fail2ban", "4000"], timeout=15, merge_stderr=False)
         if not out:
-            out, _, _ = _run("journalctl -u fail2ban --no-pager -n 4000 2>/dev/null", timeout=15, sudo=True)
+            out, _, _ = _run_verb("journal", ["fail2ban", "4000"], timeout=15, merge_stderr=False)
         rows = (out or "").splitlines()
         if jail and jail in _fail2ban_jails():   # allowlist; used only for in-Python filtering, never a command
             tag = "[%s]" % jail
             rows = [ln for ln in rows if tag in ln]
         return "\n".join(rows[-lines:])
     if which == "ssh":
-        out, _, _ = _run("journalctl -u ssh -u sshd --no-pager -n %d 2>/dev/null" % (lines * 2), timeout=15, sudo=True)
+        out, _, _ = _run_verb("journal", ["ssh", str(lines * 2)], timeout=15, merge_stderr=False)
         if not out:
-            out, _, _ = _run("tail -n %d /var/log/auth.log 2>/dev/null" % lines, timeout=15, sudo=True)
+            out, _, _ = _run_verb("log-tail", ["auth", str(lines)], timeout=15, merge_stderr=False)
         return "\n".join((out or "").splitlines()[-lines:])
     return ""
 
@@ -1667,9 +1667,12 @@ def configure_panel_fail2ban(auth_log, web_port, ignore_ips=None):
     detail, derr, _ = _run_verb("f2b-status-jail", ["linuxgsm-panel"], timeout=10)
     reason = (detail or derr or "").strip()
     if not reason:
-        reason, _, _ = _run("journalctl -u fail2ban --no-pager -n 25 2>/dev/null | "
-                            "grep -iE 'linuxgsm-panel|have not found|log file|error' | tail -2",
-                            timeout=10, sudo=True)
+        # Was `journalctl … | grep -iE '…' | tail -2` in a root shell. The filtering is the same
+        # in Python, and the pattern stops being something a root command line has to carry.
+        _j, _, _ = _run_verb("journal", ["fail2ban", "25"], timeout=10, merge_stderr=False)
+        _hits = [ln for ln in (_j or "").splitlines()
+                 if re.search(r"linuxgsm-panel|have not found|log file|error", ln, re.I)]
+        reason = "\n".join(_hits[-2:])
     reason = (reason or "").replace("\n", " ").strip()[:200]
     return False, ("Configured fail2ban, but the jail didn't come up. %s"
                    % (reason or "Check `fail2ban-client status linuxgsm-panel` and the panel logs."))
@@ -2000,7 +2003,7 @@ def generate_debug_report():
     # the report — that "before + after it came back up" context is usually what's needed.
     log, _, _ = _run("journalctl --user -u linuxgsm-panel -n 400 --no-pager 2>/dev/null", timeout=10)
     if not log.strip():
-        log, _, _ = _run("journalctl -u linuxgsm-panel -n 400 --no-pager 2>/dev/null", timeout=10, sudo=True)
+        log, _, _ = _run_verb("journal", ["panel", "400"], timeout=10, merge_stderr=False)
     if log.strip():
         log_block = _redact(_dedupe_log_tracebacks(log))
         if len(log_block) > 8000:                       # keep the tail, but never start mid-line
