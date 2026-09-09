@@ -45,4 +45,35 @@ The panel manages game-server hosts over SSH, so treat it as sensitive infrastru
 - Keep **two-factor authentication** enabled on admin accounts.
 - Keep the install **up to date** — re-running the installer applies the latest fixes.
 
+## Known trust-model limitation: the panel has root on its own host
+
+When the installer is run as **root**, it creates a dedicated service user and grants it
+`ALL=(ALL) NOPASSWD:ALL` in `/etc/sudoers.d/linuxgsm-panel` — **full, unrestricted,
+passwordless root**. The panel itself does not run as root, but it can become root at any
+time without a password.
+
+The practical consequence, stated plainly: **there is no privilege boundary between "the
+web panel is compromised" and "the host is root-owned."** Any remote-code-execution or
+command-injection flaw in the panel is immediately unconditional root on that machine.
+
+This is not currently narrowable by editing the sudoers file. The panel escalates local
+work as `sudo bash -c '<command>'`, and a sudoers rule that permits `/bin/bash` is exactly
+as powerful as `NOPASSWD:ALL` — a "scoped" list containing bash would read as narrower
+while granting identical power. A real reduction needs a privileged helper: a single
+script granted sudo, accepting a fixed set of verbs, with every privileged call routed
+through it. That work is tracked and not yet done.
+
+What you can do today:
+
+- **If you only manage remote servers from this panel**, delete
+  `/etc/sudoers.d/linuxgsm-panel`. The panel keeps working; the grant disappears. Only
+  local-host management (panel-host OS updates, its firewall, its game-server users)
+  stops working.
+- **If you do manage the local host**, treat the panel host as you would any machine
+  where a network service can become root: keep it off the public internet, keep 2FA on,
+  and keep it updated.
+
+Installs run as a **normal user** (the non-root path) get no sudoers entry at all and are
+not affected.
+
 Thank you for helping keep the project and its users safe.
