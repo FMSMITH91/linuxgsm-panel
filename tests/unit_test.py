@@ -1347,11 +1347,20 @@ eq("udp suffix -> UDP", by_port["27015"]["proto_label"], "UDP")
 
 # ── firewall lock-out protection ──────────────────────────────
 def protect(server, rules, enabled=True, cfg=None, is_local=False, tailscale=(False, False)):
-    sm.is_local_server = lambda s: is_local
-    sm._tailscale_conn_state = lambda s: tailscale   # (running, ssh_enabled) — deterministic in tests
-    if cfg is not None:
-        config.load_config = lambda: cfg
-    return sm._annotate_firewall_protection(server, enabled, sm._group_ufw_rules(_rules(rules)))
+    # Restores what it replaces. It used to leave sm.is_local_server stubbed for the REST of the
+    # suite — every later test saw whatever the last protect() call happened to pass, which is how
+    # a stub stops being scaffolding and starts being a silent global. Nothing depended on the leak
+    # (this fix changed no other result), but the transport tests further down do read the real
+    # is_local_server, and would have been testing the wrong branch.
+    _saved = (sm.is_local_server, sm._tailscale_conn_state, config.load_config)
+    try:
+        sm.is_local_server = lambda s: is_local
+        sm._tailscale_conn_state = lambda s: tailscale   # (running, ssh_enabled) — deterministic
+        if cfg is not None:
+            config.load_config = lambda: cfg
+        return sm._annotate_firewall_protection(server, enabled, sm._group_ufw_rules(_rules(rules)))
+    finally:
+        sm.is_local_server, sm._tailscale_conn_state, config.load_config = _saved
 
 
 # SSH-only: port 22 is the last way in -> protected.
@@ -4010,6 +4019,67 @@ check("ufw: _ufw_is_active is false for inactive", sm._ufw_is_active("Status: in
 check("ufw: _ufw_is_active is false for empty output", sm._ufw_is_active("") is False)
 check("ufw: _ufw_is_active is not fooled by the word active elsewhere",
       sm._ufw_is_active("To    Action\n22    ALLOW  # keep this rule active") is False)
+
+# ── The three transports, including the one every existing install is actually on ──────────────
+# run_privileged() has three paths and until now the suite exercised none of them. That matters
+# most for the middle one: a host only gains the helper when install.sh is next run as ROOT, and
+# the panel cannot place a root-owned file outside its own checkout — so every already-deployed
+# install is running the fallback right now. If it were wrong, the firewall, fail2ban, apt and user
+# management would all be broken on exactly the hosts that upgraded.
+_T_LOCAL = NS(is_local=True, auth_method="local", sudo_enabled=True, linuxgsm_user="")
+_T_REMOTE = NS(is_local=False, auth_method="key", sudo_enabled=True, linuxgsm_user="", host="h")
+_T_SAMPLE = [
+    ("ufw-allow-port", ["27015", "codserver"], "ufw allow 27015 comment codserver 2>&1"),
+    ("f2b-unban", ["sshd", "203.0.113.5"], "fail2ban-client set sshd unbanip 203.0.113.5 2>&1"),
+    ("service-restart", ["fail2ban"], "systemctl restart fail2ban 2>&1"),
+    ("apt-install", ["curl"], "DEBIAN_FRONTEND=noninteractive apt-get install -y curl 2>&1"),
+    ("journal", ["ssh", "400"], "journalctl -u ssh -u sshd --no-pager -n 400 2>&1"),
+    ("user-remove-home", ["codserver"], "rm -rf -- /home/codserver 2>&1"),
+]
+
+_orig_rl, _orig_rc2, _orig_argv = sm._run_local, sm.run_command, sm._exec_local_argv
+_orig_helper_state = dict(sm._HELPER_STATE)
+try:
+    # (a) local, helper NOT installed -> the pre-helper shell string, unchanged.
+    _seen = []
+    sm._run_local = lambda cmd, timeout=30, sudo=False: (_seen.append((cmd, sudo)), ("", "", 0))[1]
+    sm._HELPER_STATE["present"] = False
+    for _v, _a, _want in _T_SAMPLE:
+        sm.run_privileged(_T_LOCAL, _v, _a, timeout=5)
+    check("transport: with no helper installed, the local path runs the pre-helper command",
+          [c for c, _s in _seen] == [w for _v, _a, w in _T_SAMPLE],
+          str([c for c, _s in _seen][:2]))
+    check("transport: and it still escalates (sudo=True), or nothing privileged would work",
+          all(_s is True for _c, _s in _seen))
+
+    # (b) local, helper installed -> argv through the helper, and no shell anywhere.
+    _argvs = []
+    sm._exec_local_argv = lambda argv, timeout=30, stdin_text=None: (
+        _argvs.append(argv), ("", "", 0))[1]
+    sm._HELPER_STATE["present"] = True
+    for _v, _a, _w in _T_SAMPLE:
+        sm.run_privileged(_T_LOCAL, _v, _a, timeout=5)
+    check("transport: with the helper installed, the local path invokes it with argv",
+          all(a[:3] == ["sudo", "-n", _priv.HELPER_PATH] for a in _argvs), str(_argvs[:1]))
+    check("transport: the helper path never builds a shell command",
+          not any("bash" in x or "2>&1" in x for a in _argvs for x in a), str(_argvs[:1]))
+    check("transport: the verb and its arguments arrive as separate argv elements",
+          _argvs[0][3:] == ["ufw-allow-port", "27015", "codserver"], str(_argvs[0]))
+
+    # (c) remote -> the shell string over SSH, whatever the local helper situation is.
+    _rem = []
+    sm.run_command = lambda s_, c, **k: (_rem.append((c, k.get("sudo"))), ("", "", 0))[1]
+    for _v, _a, _w in _T_SAMPLE:
+        sm.run_privileged(_T_REMOTE, _v, _a, timeout=5)
+    check("transport: a remote host gets the same command it always got",
+          [c for c, _s in _rem] == [w for _v, _a, w in _T_SAMPLE], str([c for c, _s in _rem][:2]))
+    check("transport: the local helper being present does not change what a remote receives",
+          all(_s is True for _c, _s in _rem))
+finally:
+    sm._run_local, sm.run_command, sm._exec_local_argv = _orig_rl, _orig_rc2, _orig_argv
+    sm._HELPER_STATE.clear()
+    sm._HELPER_STATE.update(_orig_helper_state)
+
 
 # ── The escalation census: a ratchet, and a correction ────────────────────────────────────────
 # I reported the conversion's progress for four PRs as "113 sites -> N" while counting only ONE of
