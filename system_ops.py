@@ -1271,8 +1271,11 @@ def enable_unattended_upgrades():
 
 
 # ─── fail2ban jail for the panel's own web login ──────────────────────────────
-_F2B_PANEL_FILTER = "/etc/fail2ban/filter.d/linuxgsm-panel.conf"
-_F2B_PANEL_JAIL = "/etc/fail2ban/jail.d/linuxgsm-panel.conf"
+# Both paths come from privileged.WRITE_TARGETS so the write verb and these constants cannot
+# drift apart, and _WRITE_TARGET_BY_PATH lets _write_root_file find the verb for a path it is given.
+_F2B_PANEL_FILTER = _priv.WRITE_TARGETS["fail2ban-panel-filter"][0]
+_F2B_PANEL_JAIL = _priv.WRITE_TARGETS["fail2ban-panel-jail"][0]
+_WRITE_TARGET_BY_PATH = {p: name for name, (p, _m) in _priv.WRITE_TARGETS.items()}
 
 
 def _panel_f2b_filter_body():
@@ -1352,6 +1355,18 @@ def _write_root_file(path, content):
     which fails on a root-owned dir, because the panel runs as a non-root systemd --user service.
     Pipe into `sudo tee` so the write lands as root. base64 keeps any shell metacharacter in
     `content` inert; the path is shell-quoted. Returns the _run tuple."""
+    if _helper_present():
+        # The content goes on the helper's stdin and the destination is a NAME, so neither the
+        # content nor the path is ever part of a command line.
+        target = _WRITE_TARGET_BY_PATH.get(path)
+        if target:
+            try:
+                r = subprocess.run(  # nosec B603 - argv from privileged.py's fixed table
+                    _priv.helper_argv("write-file", [target]), shell=False, input=content,
+                    capture_output=True, text=True, timeout=15)
+                return (r.stdout or "").strip(), (r.stderr or "").strip(), r.returncode
+            except Exception:
+                _log.debug("helper write failed; falling back", exc_info=True)
     import base64
     b64 = base64.b64encode(content.encode()).decode()
     tee = "tee" if (hasattr(os, "geteuid") and os.geteuid() == 0) else "sudo tee"

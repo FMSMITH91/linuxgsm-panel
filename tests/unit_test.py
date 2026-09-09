@@ -16,6 +16,7 @@ from types import SimpleNamespace as NS
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import config
+import privileged as _privmod
 import ssh_manager as sm
 import notifications as N
 import system_ops as SO
@@ -477,13 +478,17 @@ check("node-tools: the cron updates npm + gamedig weekly and logs it",
 _ntc = {}
 _orig_ntc_rc = sm.run_command
 try:
+    # This used to assert the command started with "sudo bash -c". It now goes through the
+    # write-file verb, so what matters is the DESTINATION NAME and the content — the path is the
+    # table's, not the call site's, and on a remote host the base64 form is still what is sent.
     sm.run_command = lambda s, c, **k: (_ntc.__setitem__("cmd", c), ("", "", 0))[1]
     _ntc_ok = sm.ensure_node_tools_cron(object())
-    check("node-tools: ensure writes the cron.d file as ROOT (sudo bash -c)",
-          _ntc_ok is True and _ntc["cmd"].startswith("sudo bash -c")
-          and "/etc/cron.d/lgsm-node-tools" in _ntc["cmd"])
+    check("node-tools: ensure writes the cron.d file as root, at the table's path",
+          _ntc_ok is True and "/etc/cron.d/lgsm-node-tools" in _ntc["cmd"], _ntc.get("cmd", "")[:80])
     check("node-tools: the cron body is base64-piped + chmod 644 (no quoting/`%` hazards)",
           "base64 -d" in _ntc["cmd"] and "chmod 644" in _ntc["cmd"])
+    check("node-tools: the path constant and the write target are the same string",
+          sm._NODE_TOOLS_CRON_PATH == _privmod.WRITE_TARGETS["node-tools-cron"][0])
 finally:
     sm.run_command = _orig_ntc_rc
 
@@ -3774,6 +3779,8 @@ _VERB_SAMPLES = {
     "user-delete-force": ["codserver"],
     "user-kill-processes": ["codserver"],
     "user-remove-home": ["codserver"],
+    "write-file": ["fail2ban-jail-local"],
+    "sysctl-reload": ["tailscale"],
 }
 check("privileged: every verb has a sample (new verbs cannot skip the parity check)",
       set(_VERB_SAMPLES) == set(_priv.verbs()),
@@ -3803,8 +3810,8 @@ check("helper: resolves ufw", _helper.resolve("ufw").endswith("/ufw") if os.path
 check("helper: knows exactly the tools its verbs need, and no more",
       sorted(_helper.TOOLS) == ["add-apt-repository", "apt-get", "crontab", "dpkg",
                                 "fail2ban-client", "fuser", "journalctl", "passwd", "pgrep",
-                                "pkill", "reboot", "rm", "systemctl", "tail", "ufw", "useradd",
-                                "userdel"],
+                                "pkill", "reboot", "rm", "sysctl", "systemctl", "tail", "ufw",
+                                "useradd", "userdel"],
       sorted(_helper.TOOLS))
 for _prog in ("bash", "sh", "python3", "env"):
     check("helper: refuses to resolve %s" % _prog, _ufw_raises_fnf(_helper.resolve, _prog))
@@ -3834,6 +3841,9 @@ _BAD = {
     # user-remove-home runs `rm -rf` as root. These are the names that must never become a path.
     "user-remove-home": ["..", ".", "", "-rf", "/home/x", "root; rm -rf /", "a" * 33, "1abc"],
     "user-create": ["-o root", "a b", "$(id)", ""],
+    # write-file takes a destination NAME. A path is not "escaped" here, it is not accepted.
+    "write-file": ["/etc/shadow", "/etc/passwd", "../../etc/shadow", "fail2ban-jail-local; id", ""],
+    "sysctl-reload": ["../../etc", "tailscale; id", ""],
 }
 _leaked = []
 for _v, _bads in _BAD.items():
@@ -3946,6 +3956,29 @@ check("privileged: apt-install refuses an absurdly long package list",
 check("privileged: one bad name rejects the whole apt-install list",
       _ufw_raises_verb(lambda: _priv.check_args("apt-install", ["good", "also-good", "bad;name"])))
 
+# The write verb: content goes on stdin and the destination is a name, so neither ever becomes
+# part of a command line. The two copies of the table must agree on every path AND every mode — a
+# world-writable /etc/fail2ban/jail.local would be a quiet disaster.
+check("privileged: the two copies agree on every write target, path and mode",
+      _priv.WRITE_TARGETS == _helper.WRITE_TARGETS)
+check("privileged: every write target is an absolute path under /etc",
+      all(p.startswith("/etc/") and ".." not in p for p, _m in _priv.WRITE_TARGETS.values()),
+      str(sorted(p for p, _m in _priv.WRITE_TARGETS.values()))[:120])
+check("privileged: no write target is group- or world-writable",
+      all(m & 0o022 == 0 for _p, m in _priv.WRITE_TARGETS.values()),
+      str({p: oct(m) for p, m in _priv.WRITE_TARGETS.values()})[:120])
+check("privileged: the sshd drop-in is deliberately NOT a write target yet",
+      not any("sshd" in p for p, _m in _priv.WRITE_TARGETS.values()))
+# The remote transport still base64s the content through a shell, so the content must survive
+# every byte a config file can legitimately contain.
+_tricky = "a'b\"c$d`e\\f\n[DEFAULT]\nignoreip = 10.0.0.1/8\n"
+import base64 as _b64t
+_rc = _priv.remote_write_command("fail2ban-panel-whitelist", _tricky)
+check("privileged: remote write round-trips content containing shell metacharacters",
+      _b64t.b64decode(_rc.split()[1]).decode() == _tricky)
+check("privileged: remote write targets the table's path, not a caller's",
+      "/etc/fail2ban/jail.d/zz-panel-whitelist.local" in _rc)
+
 # home_of() is the only place a path is built from a name, and it feeds an `rm -rf` running as
 # root. Both copies must agree, and neither may ever produce /home itself or escape it.
 eq("home_of builds the obvious path", _priv.home_of("codserver"), "/home/codserver")
@@ -3990,7 +4023,7 @@ import ast as _ast
 
 _ESCALATION_FILES = ["app.py", "auth.py", "ssh_manager.py", "system_ops.py", "notifications.py",
                      "backup.py", "db_maintenance.py", "tailscale_integration.py", "manage.py"]
-_CEILING = {"sudo=True": 33, "_sudo_sh": 17}   # measured at the time of writing; lower only
+_CEILING = {"sudo=True": 31, "_sudo_sh": 16}   # measured at the time of writing; lower only
 
 _census = {"sudo=True": 0, "_sudo_sh": 0}
 for _f in _ESCALATION_FILES:

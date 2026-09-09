@@ -35,6 +35,7 @@ USAGE
 import ipaddress
 import os
 import re
+import tempfile
 import subprocess  # nosec B404 - fixed argv, shell=False, no untrusted text reaches a shell
 import sys
 
@@ -56,6 +57,7 @@ TOOLS = {
     "passwd": ("/usr/bin/passwd", "/bin/passwd"),
     "pkill": ("/usr/bin/pkill", "/bin/pkill"),
     "rm": ("/usr/bin/rm", "/bin/rm"),
+    "sysctl": ("/usr/sbin/sysctl", "/sbin/sysctl"),
     "journalctl": ("/usr/bin/journalctl", "/bin/journalctl"),
     "tail": ("/usr/bin/tail", "/bin/tail"),
 }
@@ -67,7 +69,8 @@ SYSTEMCTL = "systemctl"
 # does is in this list, so a unit-name PATTERN would only buy the ability to control units nobody
 # asked it to control. sshd is here because the ssh unit is called ssh on Debian/Ubuntu and sshd
 # elsewhere, and the panel tries both.
-UNITS = ("ssh", "sshd", "fail2ban", "whoopsie", "cups", "modemmanager")
+UNITS = ("ssh", "sshd", "fail2ban", "whoopsie", "cups", "modemmanager",
+         "unattended-upgrades")
 
 APT = "apt-get"
 
@@ -104,6 +107,23 @@ OS_UPDATE_LOG = "/run/panel-os-update.log"
 # directory safe to CONSTRUCT below rather than accept.
 USERNAME_RE = r"[A-Za-z_][A-Za-z0-9._-]{0,31}"
 HOME_ROOT = "/home"
+
+# Root-owned files the panel writes, by NAME. The content arrives on stdin and the path is looked
+# up here — so a caller names a destination, it never supplies one. This is the whole reason the
+# write verb is safe: there is no argument that could become a path.
+#
+# The sshd drop-in is deliberately NOT here. Getting an sshd config write wrong locks the operator
+# out of their own host, so it keeps its current path until it gets a change of its own.
+WRITE_TARGETS = {
+    "apt-auto-upgrades": ("/etc/apt/apt.conf.d/20auto-upgrades", 0o644),
+    "fail2ban-jail-local": ("/etc/fail2ban/jail.local", 0o644),
+    "fail2ban-panel-whitelist": ("/etc/fail2ban/jail.d/zz-panel-whitelist.local", 0o644),
+    "fail2ban-panel-filter": ("/etc/fail2ban/filter.d/linuxgsm-panel.conf", 0o644),
+    "fail2ban-panel-jail": ("/etc/fail2ban/jail.d/linuxgsm-panel.conf", 0o644),
+    "node-tools-cron": ("/etc/cron.d/lgsm-node-tools", 0o644),
+    "sysctl-tailscale": ("/etc/sysctl.d/99-tailscale.conf", 0o644),
+}
+
 
 
 
@@ -266,6 +286,16 @@ VERBS = {
     "service-disable-now": ([v_choice(*UNITS)],
                             lambda a: [SYSTEMCTL, "disable", "--now", a[0]], None),
 
+    # sysctl -p on one of the panel's own drop-ins. The NAME maps to the same path the write verb
+    # uses, so the two cannot point at different files.
+    "sysctl-reload": ([v_choice("tailscale")],
+                      lambda a: ["sysctl", "-p", WRITE_TARGETS["sysctl-" + a[0]][0]], None),
+
+    # ── root-owned file writes ──
+    # The build function is never called for this verb: ACTIONS handles it, because the write is
+    # done in Python rather than by running a tool. It is here so the verb has one home.
+    "write-file": ([v_choice(*sorted(WRITE_TARGETS))], lambda a: [], None),
+
     # ── cron and user accounts ──
     "crontab-list": ([v_username], lambda a: ["crontab", "-u", a[0], "-l"], None),
     "user-create": ([v_username],
@@ -361,6 +391,39 @@ VERBS = {
 }
 
 
+
+def do_write_file(args, content):
+    """Write `content` to a named root-owned destination.
+
+    Done here in Python rather than by shelling out to tee or `base64 -d > path`, which is what the
+    panel used to do: the content was base64'd onto a ROOT COMMAND LINE, and the redirect needed a
+    shell. Here the content arrives on this process's stdin and never becomes an argument at all.
+
+    Written to a temporary file in the same directory and renamed, so a reader never sees a
+    half-written config — fail2ban and sshd both read these while the panel is editing them."""
+    path, mode = WRITE_TARGETS[args[0]]
+    directory = os.path.dirname(path)
+    os.makedirs(directory, mode=0o755, exist_ok=True)
+    fd, tmp = tempfile.mkstemp(dir=directory, prefix=".panel-", suffix=".tmp")
+    try:
+        with os.fdopen(fd, "w") as fh:
+            fh.write(content)
+        os.chmod(tmp, mode)
+        os.replace(tmp, path)          # atomic within the same filesystem
+    except BaseException:
+        try:
+            os.unlink(tmp)
+        except OSError:
+            pass
+        raise
+    return 0
+
+
+# Verbs implemented by a function here instead of by running a tool. Each takes the validated
+# arguments and the content read from this process's stdin.
+ACTIONS = {"write-file": do_write_file}
+
+
 def validate(verb, args):
     """The checked arguments for `verb`, or ValueError. Shared by main() and by the panel's unit
     test, which compares this table's argv against privileged.py's for every verb — the two copies
@@ -408,6 +471,16 @@ def main(argv):
         # the panel UI, so repeating attacker-controlled text here would be a reflection.
         print("panel-helper: %s" % e, file=sys.stderr)
         return 2
+    action = ACTIONS.get(verb)
+    if action is not None:
+        # The payload is this process's stdin. It is never an argument, so no amount of it can
+        # change what runs.
+        try:
+            return action(checked, sys.stdin.read())
+        except OSError as e:
+            print("panel-helper: %s failed (%s)" % (verb, e.__class__.__name__), file=sys.stderr)
+            return 1
+
     argv = build(checked)
     env = dict(os.environ)
     if verb in NONINTERACTIVE:

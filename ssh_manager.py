@@ -253,6 +253,23 @@ def helper_present(recheck=False):
     return _HELPER_STATE["present"]
 
 
+def write_root_file(server, target, content, timeout=15):
+    """Write `content` to a NAMED root-owned destination (see privileged.WRITE_TARGETS).
+
+    The name is the only argument. Locally the helper does the write itself, reading the content
+    from its stdin — so the content never becomes part of a command at all, which is what the old
+    `echo '<base64>' | base64 -d > <path>` did to it. Remotely there is no helper, so the base64
+    form remains, but the path is looked up rather than interpolated from a call site."""
+    if not is_local_server(server):
+        return run_command(server, _priv.remote_write_command(target, content),
+                           timeout=timeout, sudo=True)
+    if helper_present():
+        return _exec_local_argv(_priv.helper_argv("write-file", [target]), timeout=timeout,
+                                stdin_text=content)
+    # Pre-helper hosts: the path still comes from the table, not from the caller.
+    return _run_local(_priv.remote_write_command(target, content), timeout=timeout, sudo=True)
+
+
 def run_privileged(server, verb, args=(), timeout=30, merge_stderr=True, sudo=True):
     """Run a privileged VERB (see privileged.py) against `server`.
 
@@ -2812,7 +2829,9 @@ def _sudo_sh(inner):
 # silently break as games and gamedig evolve. This weekly ROOT cron refreshes npm + gamedig alongside
 # the host's other automatic updates (unattended-upgrades). Written to /etc/cron.d as root, idempotent;
 # the `command -v npm` guard makes it a harmless no-op on a host that never got node.
-_NODE_TOOLS_CRON_PATH = "/etc/cron.d/lgsm-node-tools"
+# The write verb owns this path now; keep the name here pointing at the same entry so the two
+# can never disagree about where the cron file lives.
+_NODE_TOOLS_CRON_PATH = _priv.WRITE_TARGETS["node-tools-cron"][0]
 _NODE_TOOLS_CRON = (
     "# LinuxGSM Panel - keep npm + gamedig current for player queries (managed by the panel).\n"
     "PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin\n"
@@ -2827,11 +2846,7 @@ def ensure_node_tools_cron(server):
     The cron file is written under `sudo bash -c` (root) so it lands root-owned regardless of any
     per-remote linuxgsm_user, and base64-piped so no quoting/`%` can mangle it."""
     try:
-        import base64
-        b64 = base64.b64encode(_NODE_TOOLS_CRON.encode()).decode()
-        inner = "printf %s {b} | base64 -d > {f} && chmod 644 {f}".format(
-            b=_quote(b64), f=_quote(_NODE_TOOLS_CRON_PATH))
-        _out, _err, rc = run_command(server, _sudo_sh(inner), timeout=20, sudo=False)
+        _out, _err, rc = write_root_file(server, "node-tools-cron", _NODE_TOOLS_CRON, timeout=20)
         return rc == 0
     except Exception:
         _log.debug("ensure_node_tools_cron failed", exc_info=True)
@@ -3550,18 +3565,14 @@ def remote_bootstrap_vps(server, set_timezone="UTC", enable_ufw=True, install_lg
 
     # ── 3c. Enable + configure unattended-upgrades (auto security updates) ──
     emit("Enabling automatic security updates (unattended-upgrades)")
-    import base64 as _b64
     au_conf = (
         'APT::Periodic::Update-Package-Lists "1";\n'
         'APT::Periodic::Unattended-Upgrade "1";\n'
         'APT::Periodic::AutocleanInterval "7";\n'
         'APT::Periodic::Download-Upgradeable-Packages "1";\n'
     )
-    b64 = _b64.b64encode(au_conf.encode()).decode()
-    run_command(server,
-        f"echo '{b64}' | base64 -d > /etc/apt/apt.conf.d/20auto-upgrades ; "
-        "systemctl enable --now unattended-upgrades 2>&1 | tail -1",
-        timeout=30, sudo=True)
+    write_root_file(server, "apt-auto-upgrades", au_conf, timeout=30)
+    run_privileged(server, "service-enable-now", ["unattended-upgrades"], timeout=30)
 
     # ── 4. Set timezone ──
     if set_timezone:
@@ -3639,13 +3650,11 @@ def remote_bootstrap_vps(server, set_timezone="UTC", enable_ufw=True, install_lg
     # ── 10. Configure fail2ban ──
     if install_fail2ban:
         emit("Configuring fail2ban (SSH brute-force protection)")
-        import base64
         jail_content = (
             "[DEFAULT]\nbantime = 1h\nfindtime = 10m\nmaxretry = 5\n\n"
             "[sshd]\nenabled = true\nport = 22\n"
         )
-        b64 = base64.b64encode(jail_content.encode()).decode()
-        run_command(server, f"echo '{b64}' | base64 -d > /etc/fail2ban/jail.local", timeout=15, sudo=True)
+        write_root_file(server, "fail2ban-jail-local", jail_content, timeout=15)
         run_privileged(server, "service-enable-now", ["fail2ban"], timeout=20)
         run_privileged(server, "service-restart", ["fail2ban"], timeout=20)
 
@@ -3769,9 +3778,8 @@ def remote_tailscale_up_url(server, enable_ssh=True, advertise_routes=""):
     if advertise_routes:
         up += f" --advertise-routes={_quote(advertise_routes)}"
     if advertise_routes:
-        run_command(server,
-            "echo 'net.ipv4.ip_forward = 1' > /etc/sysctl.d/99-tailscale.conf && "
-            "sysctl -p /etc/sysctl.d/99-tailscale.conf 2>&1", timeout=15, sudo=True)
+        write_root_file(server, "sysctl-tailscale", "net.ipv4.ip_forward = 1\n", timeout=15)
+        run_privileged(server, "sysctl-reload", ["tailscale"], timeout=15)
     # Start tailscale up detached; poll its log for the login URL (appears quickly).
     cmd = (
         "rm -f /tmp/tsup.log ; "
@@ -4117,9 +4125,8 @@ def remote_set_fail2ban_ignoreip(server, ignore_ips, unban_ip=None):
                                                     merge_stderr=False)
     if jails_rc == 127 or "not found" in (jails_out + jails_err).lower():
         return False, "fail2ban not installed on this host"
-    import base64
-    b64 = base64.b64encode(_f2b_dropin_ignoreip_body(ignore_ips).encode()).decode()
-    run_command(server, f"echo '{b64}' | base64 -d > {_quote(_F2B_PANEL_WHITELIST_DROPIN)}", timeout=15, sudo=True)
+    write_root_file(server, "fail2ban-panel-whitelist",
+                    _f2b_dropin_ignoreip_body(ignore_ips), timeout=15)
     _f2b_reload(server)
     # ignoreip only stops FUTURE bans; lift a current ban across every jail so a just-whitelisted
     # admin isn't left banned until it expires. `$J` is a jail name from fail2ban's own output.

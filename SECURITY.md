@@ -86,9 +86,9 @@ of going unnoticed. Current state:
 
 | route | sites remaining |
 |---|---|
-| `run_command(..., sudo=True)` | 33 |
-| `_sudo_sh(...)` | 17 |
-| **root total** | **50** (from 131) |
+| `run_command(..., sudo=True)` | 31 |
+| `_sudo_sh(...)` | 16 |
+| **root total** | **47** (from 131) |
 
 Separately there are ~46 `sudo -u <gameuser>` sites. Those run as the game user rather than
 root, so they are a smaller problem — but they still depend on the same unrestricted grant,
@@ -100,6 +100,10 @@ types rather than in the command names:
 - The systemd verbs take a unit from an **exhaustive list** (`ssh`, `sshd`, `fail2ban`,
   `whoopsie`, `cups`, `modemmanager`). Those are the only services the panel ever touches, so
   a unit-name *pattern* would only buy the ability to control units nobody asked it to.
+- The write verb takes a **destination name** and the content on **stdin**. Locally the helper
+  does the write itself in Python — the content is never an argument, and the path is looked up,
+  so `write-file /etc/shadow` fails on the *name*, not on a filter. The sshd drop-in is
+  deliberately absent from that table, and a test asserts it stays absent.
 - The log verbs take a **source name**, never a path or a unit: `log-tail auth`, not
   `tail /var/log/auth.log`. The table turns the name into the path, so reading `/etc/shadow`
   through the helper is not something a filter rejects — it is not expressible.
@@ -109,7 +113,7 @@ types rather than in the command names:
   answers (`--force-confdef`, `--force-confold`) are fixed in the helper rather than passed
   in, so an unattended upgrade can never be talked into clobbering a config file you edited.
 
-Still to convert: the file writes that go through `echo … | base64 -d >`, the two multi-line shell
+Still to convert: the remaining file writes (the sshd drop-in and the per-user content cron) that go through `echo … | base64 -d >`, the two multi-line shell
 scripts (the detached OS-update runner and the NodeSource installer), and the **deferred
 reboot** — `( sleep 2 ; reboot ) &`, deliberately left for its own change, because getting a
 reboot verb wrong is the most expensive mistake available here.
