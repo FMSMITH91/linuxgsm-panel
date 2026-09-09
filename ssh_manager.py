@@ -663,7 +663,7 @@ def discover_linuxgsm_servers(server):
 
     def _n(x):
         x = (x or "").strip()
-        return int(x) if x.isdigit() else 0
+        return int(x) if x.isdecimal() else 0
 
     found = []
     for line in (out or "").splitlines():
@@ -836,9 +836,9 @@ def server_live_metrics(server, short_name=None, game_port=None, force=False):
         if f[0] == "cpu" and len(f) >= 8:
             cpu_lines.append([int(x) for x in f[1:8]])
         elif f[0] == "GJA" and len(f) >= 2:
-            gja = int(f[1]) if f[1].lstrip("-").isdigit() else 0
+            gja = int(f[1]) if f[1].lstrip("-").isdecimal() else 0
         elif f[0] == "GJB" and len(f) >= 2:
-            gjb = int(f[1]) if f[1].lstrip("-").isdigit() else 0
+            gjb = int(f[1]) if f[1].lstrip("-").isdecimal() else 0
         elif f[0] == "MEM" and len(f) >= 3:
             m["ram_total"], m["ram_used"] = int(f[1]), int(f[2])
         elif f[0] == "LOAD" and len(f) >= 4:
@@ -846,15 +846,15 @@ def server_live_metrics(server, short_name=None, game_port=None, force=False):
         elif f[0] == "DISK" and len(f) >= 3:
             m["disk_total"], m["disk_used"] = int(f[1]), int(f[2])
         elif f[0] == "CORES":
-            m["cores"] = int(f[1]) if len(f) > 1 and f[1].isdigit() else 1
+            m["cores"] = int(f[1]) if len(f) > 1 and f[1].isdecimal() else 1
         elif f[0] == "UPTIME":
-            m["uptime_secs"] = int(f[1]) if len(f) > 1 and f[1].isdigit() else 0
+            m["uptime_secs"] = int(f[1]) if len(f) > 1 and f[1].isdecimal() else 0
         elif f[0] == "GAMERAM" and len(f) >= 3:
             m["game_ram_mb"] = int(int(f[1]) / 1024); m["game_procs"] = int(f[2])
         elif f[0] == "GUP":
-            m["game_uptime_secs"] = int(f[1]) if len(f) > 1 and f[1].isdigit() else 0
+            m["game_uptime_secs"] = int(f[1]) if len(f) > 1 and f[1].isdecimal() else 0
         elif f[0] == "PORT":
-            m["port_open"] = len(f) > 1 and f[1].isdigit() and int(f[1]) > 0
+            m["port_open"] = len(f) > 1 and f[1].isdecimal() and int(f[1]) > 0
     total_delta = 0
     if len(cpu_lines) >= 2:
         a, b = cpu_lines[0], cpu_lines[1]
@@ -905,7 +905,7 @@ def remote_live_metrics(server):
                 mem[parts[0].rstrip(":")] = int(parts[1]) * 1024  # kB → bytes
             except ValueError:
                 _log.debug("remote_live_metrics: ignored non-fatal error", exc_info=True)
-        elif section == "DISK" and len(parts) >= 4 and parts[1].isdigit():
+        elif section == "DISK" and len(parts) >= 4 and parts[1].isdecimal():
             # df -PB1 data row: Filesystem 1B-blocks Used Available Use% Mounted (skip the header)
             disk_total, disk_used = int(parts[1]), int(parts[2])
 
@@ -917,7 +917,7 @@ def remote_live_metrics(server):
         return round((1 - idle / total) * 100, 1) if total > 0 else 0.0
 
     core_names = sorted((n for n in A if n != "cpu" and n.startswith("cpu")),
-                        key=lambda x: int(x[3:]) if x[3:].isdigit() else 0)
+                        key=lambda x: int(x[3:]) if x[3:].isdecimal() else 0)
     cores = [_pct(n) for n in core_names]
     ram_total = mem.get("MemTotal", 0)
     ram_used = ram_total - mem.get("MemAvailable", 0)
@@ -1731,7 +1731,7 @@ def player_count(server, user, game_type=None, port=None, query_type=None):
     except Exception:
         return None
     s = (out or "").strip().splitlines()[-1].strip() if (out or "").strip() else ""
-    if not s or s == "null" or not s.isdigit():
+    if not s or s == "null" or not s.isdecimal():
         return None
     return int(s)
 
@@ -1820,7 +1820,7 @@ def player_count_via_lgsm_query(server, user, selfname, fallback_port=None):
     qtype = re.sub(r"[^A-Za-z0-9_-]", "", (vals.get("querytype") or "").strip())[:40]
     qport = ((vals.get("queryport") or "").strip() or (vals.get("port") or "").strip()
              or str(fallback_port or "").strip())
-    if not qtype or not qport.isdigit():
+    if not qtype or not qport.isdecimal():
         return None
     cmd = ("gamedig --type %s %s:%d 2>/dev/null | jq -r '.players|length' 2>/dev/null"
            % (qtype, _gamedig_host(server), int(qport)))
@@ -1829,7 +1829,7 @@ def player_count_via_lgsm_query(server, user, selfname, fallback_port=None):
     except Exception:
         return None
     s = (out or "").strip().splitlines()[-1].strip() if (out or "").strip() else ""
-    return int(s) if s.isdigit() else None
+    return int(s) if s.isdecimal() else None
 
 
 # ── Engine families ──────────────────────────────────────────────────────────
@@ -2623,7 +2623,7 @@ def _annotate_firewall_protection(server, enabled, groups):
         # your only SSH access.
         inbound = g.get("direction", "IN") != "OUT"
         g["is_ssh"] = (not g.get("is_iface") and g.get("action") in ("ALLOW", "LIMIT") and inbound
-                       and pn.isdigit() and int(pn) in ssh_ports)
+                       and pn.isdecimal() and int(pn) in ssh_ports)
         g["is_tailscale"] = (bool(g.get("is_iface")) and g.get("action") == "ALLOW" and inbound
                              and str(g.get("iface", "")).startswith("tailscale"))
         g["is_access"] = g["is_ssh"] or g["is_tailscale"]
@@ -2648,7 +2648,7 @@ def _annotate_firewall_protection(server, enabled, groups):
         g["protect_reason"] = ""
         g["is_panel"] = (panel_port is not None and not g.get("is_iface")
                          and g.get("action") == "ALLOW"
-                         and str(g.get("port_num", "")).isdigit()
+                         and str(g.get("port_num", "")).isdecimal()
                          and int(g["port_num"]) == panel_port)
         if not enabled:
             continue
@@ -3236,7 +3236,7 @@ def port_in_use(server, port):
         out, _, _ = run_command(
             server, f"ss -Hlntu 'sport = :{port}' 2>/dev/null | wc -l", timeout=8
         )
-        return out.strip().isdigit() and int(out.strip()) > 0
+        return out.strip().isdecimal() and int(out.strip()) > 0
     except Exception:
         return False
 
@@ -3426,7 +3426,7 @@ def remote_uptime(server, force=False):
         total = sum(b) - sum(a)
         if total > 0:
             d["cpu_percent"] = f"{round((1 - idle / total) * 100, 1)}"
-    if d["cpu_percent"] not in ("?", "") and d["cpu_cores"].isdigit():
+    if d["cpu_percent"] not in ("?", "") and d["cpu_cores"].isdecimal():
         try:
             d["cpu_per_core"] = f"{float(d['cpu_percent']) / int(d['cpu_cores']):.1f}"
         except (ValueError, ZeroDivisionError):
@@ -3923,7 +3923,7 @@ def _sshd_current_ports(server):
     ports = []
     for line in (out or "").splitlines():
         parts = line.split()
-        if len(parts) >= 2 and parts[0].lower() == "port" and parts[1].isdigit():
+        if len(parts) >= 2 and parts[0].lower() == "port" and parts[1].isdecimal():
             ports.append(parts[1])
     return ports
 
@@ -4075,8 +4075,8 @@ def remote_fail2ban_top_ips(server, limit=20, days=7):
             ip = p[2].strip()
             jails = [j for j in (p[3].split(",") if len(p) > 3 and p[3] else []) if j]
             rows.append({"ip": ip,
-                         "attempts": int(p[0]) if p[0].isdigit() else 0,
-                         "bans": int(p[1]) if p[1].isdigit() else 0,
+                         "attempts": int(p[0]) if p[0].isdecimal() else 0,
+                         "bans": int(p[1]) if p[1].isdecimal() else 0,
                          "banned_now": ip in banned,
                          "blocked": ip in blocked,
                          "jails": jails})
@@ -4859,7 +4859,7 @@ def browse_dir(server, user, relpath="", selfname=None):
             name = "\t".join(parts[2:])
             rel = f"{base}/{name}" if base else name
             entries.append({"name": name, "is_dir": typ == "d",
-                            "size": int(size) if size.isdigit() else 0,
+                            "size": int(size) if size.isdecimal() else 0,
                             "protected": _is_protected_path(rel, selfname)})
     entries.sort(key=lambda e: (not e["is_dir"], e["name"].lower()))
     return {"path": base, "entries": entries}
@@ -4934,7 +4934,7 @@ def stat_upload_targets(server, user, reldir, names):
         except (TypeError, ValueError):
             mt = 0
         present[nm] = {"is_dir": typ == "d",
-                       "size": int(size) if size.isdigit() else 0, "mtime": mt}
+                       "size": int(size) if size.isdecimal() else 0, "mtime": mt}
     hits = []
     seen = set()
     for n in (names or []):
@@ -5359,7 +5359,7 @@ def _remote_listening_ports(remote):
     for addr in (out or "").split():
         if ":" in addr:
             p = addr.rsplit(":", 1)[1]
-            if p.isdigit():
+            if p.isdecimal():
                 ports.add(int(p))
     if out:   # cache only a scan that returned something (empty output == SSH blip)
         _port_scan_cache[remote.id] = (now + _PORT_SCAN_TTL, ports)

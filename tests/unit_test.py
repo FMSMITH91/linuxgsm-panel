@@ -4355,6 +4355,52 @@ finally:
     sm._HELPER_STATE.clear()
     sm._HELPER_STATE.update(_orig_helper_state)
 
+# ── isdigit() is not "int() will accept this" ─────────────────────────────────────────────────
+# Fuzzing found this, in _parse_top_ips: `int(parts[0]) if parts[0].isdigit() else 0` raised
+# ValueError on "¹". str.isdigit() is True for Unicode No characters — superscripts — while int()
+# only accepts Nd. So the guard passed and the conversion blew up, one line later.
+#
+# It was never one site. The same `.isdigit()` immediately before `int()` appeared 35 times across
+# app, auth, manage, system_ops and ssh_manager, including two reachable from data the panel reads
+# off a game server (a queryport from its config, a player count from command output) and two in
+# the Flask-Login user loader. isdecimal() is exactly the predicate that was wanted: True iff every
+# character is Nd, which is precisely what int() accepts.
+check("unicode: isdigit() accepts a superscript, isdecimal() does not — that gap IS the bug",
+      "\u00b9".isdigit() and not "\u00b9".isdecimal())
+_int_raised = False
+try:
+    int("\u00b9")
+except ValueError:
+    _int_raised = True
+check("unicode: int() rejects it, so isdecimal() is the guard that matches int()", _int_raised)
+check("unicode: isdecimal() still accepts a non-ASCII DECIMAL digit, so nothing legitimate is lost",
+      "٥".isdecimal() and int("٥") == 5)
+
+# No module may guard an int() with isdigit() again.
+_isdigit_users = []
+for _f in ("app.py", "auth.py", "manage.py", "models.py", "system_ops.py", "ssh_manager.py",
+           "notifications.py", "backup.py", "db_maintenance.py", "tailscale_integration.py",
+           "config.py", "i18n.py", "privileged.py", "clock.py"):
+    _fp = os.path.join(_root, _f)
+    if not os.path.exists(_fp):
+        continue
+    for _i, _line in enumerate(open(_fp, encoding="utf-8"), 1):
+        if ".isdigit()" in _line.split("#", 1)[0]:
+            _isdigit_users.append("%s:%d" % (_f, _i))
+check("unicode: no module uses .isdigit() — isdecimal() is the one that matches int()",
+      not _isdigit_users, ", ".join(_isdigit_users[:4]))
+
+# The crashing input itself, replayed.
+import system_ops as _so_top
+_CRASH = "¹\t²\t203.0.113.5\tsshd\n5\t2\t198.51.100.9\tsshd,panel\n"
+try:
+    _rows = _so_top._parse_top_ips(_CRASH, set(), {})
+    check("fail2ban top-IPs: the fuzz crash input parses instead of raising",
+          len(_rows) == 2 and _rows[0]["attempts"] == 0 and _rows[1]["attempts"] == 5,
+          str(_rows))
+except Exception as _e:
+    check("fail2ban top-IPs: the fuzz crash input parses instead of raising", False, repr(_e))
+
 
 # ── The escalation census: a ratchet, and a correction ────────────────────────────────────────
 # I reported the conversion's progress for four PRs as "113 sites -> N" while counting only ONE of

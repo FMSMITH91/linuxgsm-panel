@@ -8,6 +8,12 @@ regardless of this file — this changelog is for humans.
 ## [Unreleased]
 
 ### Fixed
+- **A parser could crash on a superscript digit.** `str.isdigit()` is true for characters like `¹`
+  that `int()` refuses, and the panel used that pairing in 35 places — including the query port read
+  from a game server's own config, and the session-cookie user loader. Found by the fuzzer, fixed
+  everywhere with `isdecimal()`, which is exactly the predicate `int()` accepts.
+
+### Fixed
 - **The "main has open code-scanning alerts" gate raced CodeQL and reported the wrong answer.** It
   ran on the same push as the analysis rather than after it, so a commit that *fixed* an alert
   failed the gate, and — worse — a commit that *introduced* one passed it, with the alert then

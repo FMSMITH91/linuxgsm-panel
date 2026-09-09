@@ -467,11 +467,11 @@ def init_auth(app):
         if ":" not in s:
             # Legacy cookie issued before epochs existed — accept by plain id (one-time, until they
             # next log in and get an epoch-tagged cookie).
-            return db.session.get(User, int(s)) if s.isdigit() else None
+            return db.session.get(User, int(s)) if s.isdecimal() else None
         parts = s.split(":")
         uid, epoch = parts[0], parts[1]
         sid = parts[2] if len(parts) > 2 and parts[2] else None
-        if not uid.isdigit():
+        if not uid.isdecimal():
             return None
         user = db.session.get(User, int(uid))
         if user is None or str(user.auth_epoch or 0) != epoch:
