@@ -5,6 +5,76 @@ README disclaimer. Versioning is loosely [semantic](https://semver.org). Note: t
 "update available" check compares git commits, so you always get the newest CI-verified commit
 regardless of this file — this changelog is for humans.
 
+## [0.10.0-alpha] — 2026-09-09
+
+Two months of work that had accumulated on `main` unreleased. The headline items are OS-update
+visibility, Ubuntu 26.04 support, a mobile pass, and a run of security fixes.
+
+### Added
+- **OS updates, surfaced in the panel** — a login banner listing hosts with packages waiting, and a
+  per-host card filled from the daily sweep's answer rather than by running `apt` on page load.
+  Security updates are called out separately from ordinary ones.
+- **OS-update alerts to Telegram/Discord** when a host first has updates waiting, on the transition
+  rather than daily, so it stays an alert instead of noise you filter out.
+- **Ubuntu 26.04 support.** CI now runs the suite on 22.04, 24.04 and 26.04, each paired with the
+  Python that release actually ships (3.10 / 3.12 / 3.14). 22.04 and 24.04 remain supported.
+- **Overwrite prompt on file upload** — dropping a file whose name already exists asks first, showing
+  the size and modified date of both the file on the server and the one being uploaded, with a
+  tickbox per file. Unticked files are skipped.
+- **Start / Stop / Restart on Files & Config**, which previously told you to restart the server
+  without offering a way to do it, plus its missing History tab.
+
+### Changed
+- **The mobile layout reclaims most of the first screen.** Measured at 375x812, page content used to
+  begin below the fold; the two-factor reminder alone took 30% of the viewport. It is now a single
+  strip, the server table's action buttons stay pinned in view instead of sitting off-screen behind
+  a horizontal scroll, and tab strips scroll rather than wrapping their labels onto three lines.
+- **Host status says what it means.** "Offline" described both a host the panel cannot reach and a
+  stopped game server, in the same red, on the same screen. Hosts now read Reachable / Unreachable,
+  and a host that has not been checked yet reads "Checking…" rather than asserting it is unreachable.
+- **The dashboard tiles add up.** Servers that were installing or failed appeared in no tile, so the
+  numbers visibly disagreed with the total.
+- **Accessibility**: every form label is now associated with its input, modal close buttons have
+  accessible names, and controls that fell under WCAG 2.2 AA's 24px target size were raised.
+- The **Autostart switch follows the crontab** instead of a database column that could go stale.
+- The **users page renders one edit modal** rather than one per user.
+
+### Fixed
+- **The OS-update alert never actually ran.** It was the one database-touching background task
+  without a Flask app context, so every tick raised and was swallowed at debug level.
+- **A failed `apt` check no longer reads as "System is up to date."** apt produces no output when it
+  fails, which is exactly what a clean host produces; the check's exit status is now carried through
+  to the UI and the alert.
+- **Deleted hosts and servers no longer leave state behind.** SQLite reuses a deleted row's id, so a
+  newly added server could inherit "already alerted" flags — and, worse, the previous server's player
+  capacity — from the one that used to hold that id.
+- The **pending-restart banner** now accounts for the daily-restart schedule.
+- Console output rendering: Minecraft commands no longer display as `ssasay  hi` or `>=>`.
+
+### Security
+- **Cross-site scripting from a compromised remote host.** A host's own output — its Tailscale login
+  URL and IP — was rendered into the panel admin's browser unescaped in several places.
+- **Symlink escape in the file browser.** The path check was lexical and could not see symlinks,
+  because the path lives on the remote machine; every file operation now resolves the path where it
+  actually is before acting on it.
+- **TOTP codes are single-use.** A code stays valid for about 90 seconds, so one observed once could
+  be replayed for the rest of that window.
+- **Session fixation.** The authenticated session is now established on a clean session rather than
+  inheriting whatever the pre-login one carried.
+- **The setup wizard is locked by database state**, not by a config flag. An unreadable `config.json`
+  reopened the unauthenticated wizard on a configured install, where it could rewrite the panel's
+  bind address and port.
+- **Failed API-token authentication is throttled.** `/login` had a brute-force limit; the bearer-token
+  path — the panel's other way in — had none.
+- **Chat-bot actions are attributable.** A `/restart` or `/update` from Telegram or Discord was logged
+  as a "system" action, with nothing recording that a chat message caused it or who sent it.
+- **A panel restore no longer leaves the database and both encryption keys in `/tmp`** after it runs.
+- Shell identifiers are re-validated where they are used, not only when assigned, and are length-bounded.
+- `SECURITY.md` now documents an important limitation honestly: a root install grants the panel's
+  service user unrestricted passwordless sudo, so there is currently no privilege boundary between a
+  compromised panel and a rooted host. It explains why this cannot be narrowed by editing sudoers
+  alone, and that remote-only installs can remove the grant entirely.
+
 ## [0.9.0-alpha] — 2026-07-13
 
 ### Added
