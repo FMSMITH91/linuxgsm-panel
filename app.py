@@ -96,6 +96,7 @@ from models import (
     MetricSample, HostSample, UI_PREF_KEYS,
 )
 from ssh_manager import (
+    _remote_listening_ports, _invalidate_port_scan,
     close_connection, run_command, ssh_test_connection,
     get_server_status, run_as_game_user, send_console_command,
     list_server_commands, server_live_metrics, game_map, remote_public_ip,
@@ -263,8 +264,6 @@ _game_backup_status = {}
 # broadcast makes EVERY open dashboard call /api/servers at once, and without this each one
 # would run its own `ss` scan per remote. Invalidated on start/stop/restart so status stays
 # accurate right after an action. TTL is short — status only ever lags by a couple of seconds.
-_port_scan_cache = {}
-_PORT_SCAN_TTL = 5
 
 # How many CONTIGUOUS ports one server of a game occupies, for auto-picking a non-colliding
 # port at install. Most LinuxGSM games answer queries on the game port itself, so a server needs
@@ -299,33 +298,8 @@ def _first_free_block(desired, span, occupied, limit=400):
     return p
 
 
-def _remote_listening_ports(remote):
-    """Set of ports currently listening on `remote`, cached for _PORT_SCAN_TTL seconds so
-    concurrent dashboard polls (multiple tabs/users, or a servers_changed broadcast) share one
-    SSH scan instead of each running their own. A failed/empty scan isn't cached, so a transient
-    SSH blip retries next poll instead of pinning every server 'offline' for the whole TTL."""
-    now = time.time()
-    hit = _port_scan_cache.get(remote.id)
-    if hit and hit[0] > now:
-        return hit[1]
-    # No sudo: listing listening-socket *addresses* (no -p process info) is unprivileged, so this
-    # frequent poll doesn't need root — avoids a sudo session per remote on every refresh.
-    out, _, _ = run_command(remote, "ss -H -lntu 2>/dev/null | awk '{print $5}'", timeout=8)
-    ports = set()
-    for addr in (out or "").split():
-        if ":" in addr:
-            p = addr.rsplit(":", 1)[1]
-            if p.isdigit():
-                ports.add(int(p))
-    if out:   # cache only a scan that returned something (empty output == SSH blip)
-        _port_scan_cache[remote.id] = (now + _PORT_SCAN_TTL, ports)
-    return ports
 
 
-def _invalidate_port_scan(remote_id):
-    """Drop a remote's cached port scan so the next status poll re-reads it — call after any
-    action that changes what's listening (start/stop/restart), so status is fresh immediately."""
-    _port_scan_cache.pop(remote_id, None)
 
 
 # A token unique to THIS panel process — it changes only when the panel actually restarts.

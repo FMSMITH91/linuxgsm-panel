@@ -2174,7 +2174,10 @@ check("pro-cache: malformed stored value -> None (never raises)", _pr.cached_pro
 
 # ── dashboard port-scan cache: concurrent polls share ONE ssh scan per remote ──
 _app = sys.modules["app"]   # already imported via `from app import ...` above
-_o_ps_rc = _app.run_command
+# The scan and its cache live in ssh_manager now, so the stub has to replace THAT module's
+# run_command — patching app's would leave the real one in place and make every assertion below
+# measure nothing.
+_o_ps_rc = sm.run_command
 try:
     _scan_n = {"n": 0}
 
@@ -2182,8 +2185,8 @@ try:
         _scan_n["n"] += 1
         return ("127.0.0.1:22\n*:27015\n[::]:27016", "", 0)
 
-    _app.run_command = _fake_ss
-    _app._port_scan_cache.clear()
+    sm.run_command = _fake_ss
+    sm._port_scan_cache.clear()
     _rem = NS(id=99)
     _p1 = _app._remote_listening_ports(_rem)
     _app._remote_listening_ports(_rem)   # within TTL → cache hit, no 2nd ssh
@@ -2193,13 +2196,13 @@ try:
     _app._remote_listening_ports(_rem)   # invalidated → re-scans
     check("portscan: invalidate forces a fresh scan", _scan_n["n"] == 2)
     # A failed scan (empty output) must NOT be cached, so a blip doesn't pin servers offline.
-    _app.run_command = lambda remote, cmd, **k: ("", "err", -1)
-    _app._port_scan_cache.clear()
+    sm.run_command = lambda remote, cmd, **k: ("", "err", -1)
+    sm._port_scan_cache.clear()
     _app._remote_listening_ports(_rem)
-    check("portscan: an empty/failed scan is not cached", 99 not in _app._port_scan_cache)
+    check("portscan: an empty/failed scan is not cached", 99 not in sm._port_scan_cache)
 finally:
-    _app.run_command = _o_ps_rc
-    _app._port_scan_cache.clear()
+    sm.run_command = _o_ps_rc
+    sm._port_scan_cache.clear()
 
 # ── debug report: redaction + secret-key whitelist (must not leak) ─
 _rd = _so._redact
