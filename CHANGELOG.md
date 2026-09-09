@@ -12,9 +12,10 @@ regardless of this file — this changelog is for humans.
   local work as `sudo bash -c '<command>'`, which is why its sudoers grant could never be narrowed:
   permitting `/bin/bash` *is* `NOPASSWD:ALL`. `tools/panel-helper` is a root-owned script that takes
   a verb and separated arguments, re-validates each one, and runs a fixed command — no shell, and
-  `bash` is not a program it can reach. All 24 `ufw` call sites now use it. **This does not reduce
-  your exposure yet**: the grant stays `NOPASSWD:ALL` until every privileged call site is converted,
-  because a boundary with a hole in it is not a boundary. See SECURITY.md for what is left.
+  `bash` is not a program it can reach. The `ufw`, `fail2ban-client` and `systemctl` families now
+  use it — 22 verbs, and the service verbs accept only the six units the panel actually manages.
+  **This does not reduce your exposure yet**: the grant stays `NOPASSWD:ALL` until every privileged
+  call site is converted, because a boundary with a hole in it is not a boundary. See SECURITY.md.
 
 ### Fixed
 - **The panel could not hear its own deprecation warnings.** A filter installed at import time

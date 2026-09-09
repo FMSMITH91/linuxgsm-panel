@@ -184,6 +184,27 @@ def _exec_local_argv(argv, timeout=30, stdin_text=None):
     return _in_tpool(_do)
 
 
+def _restart_sshd(server, timeout=20):
+    """Restart the SSH daemon. Debian/Ubuntu call the unit `ssh`, others `sshd`, and the panel has
+    always tried both — that was `systemctl restart ssh || systemctl restart sshd`, one shell
+    string. Two verbs and an `if` say the same thing without one."""
+    out, err, rc = run_privileged(server, "service-restart", ["ssh"], timeout=timeout)
+    if rc != 0:
+        out, err, rc = run_privileged(server, "service-restart", ["sshd"], timeout=timeout)
+    return out, err, rc
+
+
+def _f2b_reload(server, timeout=30):
+    """Make fail2ban pick up a changed config: ask it to reload, then fall back to the unit's own
+    reload and finally a restart. Was a `a || b || c` chain in one root shell."""
+    for verb, args in (("f2b-reload", []), ("service-reload", ["fail2ban"]),
+                       ("service-restart", ["fail2ban"])):
+        out, err, rc = run_privileged(server, verb, args, timeout=timeout)
+        if rc == 0:
+            return out, err, rc
+    return out, err, rc
+
+
 def is_local_server(server):
     """Check if a server record represents the local machine.
 
@@ -3558,7 +3579,7 @@ def remote_bootstrap_vps(server, set_timezone="UTC", enable_ufw=True, install_lg
         hardening.append("sed -i 's/^#\\?PermitRootLogin.*/PermitRootLogin prohibit-password/' /etc/ssh/sshd_config")
         hardening.append("sed -i 's/^#\\?PasswordAuthentication.*/PasswordAuthentication no/' /etc/ssh/sshd_config")
         run_command(server, "; ".join(hardening), timeout=20, sudo=True)
-        run_command(server, "systemctl restart ssh 2>&1 || systemctl restart sshd 2>&1", timeout=15, sudo=True)
+        _restart_sshd(server, timeout=15)
     else:
         run_command(server, "; ".join(hardening), timeout=20, sudo=True)
         note("Password + root-password SSH login left ENABLED — this remote authenticates with a password, so SSH access was not restricted.")
@@ -3580,7 +3601,7 @@ def remote_bootstrap_vps(server, set_timezone="UTC", enable_ufw=True, install_lg
     # ── 8. Disable unnecessary services ──
     emit("Disabling unnecessary services")
     for svc in ["whoopsie", "cups", "modemmanager"]:
-        run_command(server, f"systemctl disable --now {svc} 2>/dev/null; echo done", timeout=10, sudo=True)
+        run_privileged(server, "service-disable-now", [svc], timeout=10, merge_stderr=False)
 
     # ── 9. Create linuxgsm user if username provided ──
     # `username` arrives raw from the bootstrap request (it doesn't pass through the model's
@@ -3609,7 +3630,8 @@ def remote_bootstrap_vps(server, set_timezone="UTC", enable_ufw=True, install_lg
         )
         b64 = base64.b64encode(jail_content.encode()).decode()
         run_command(server, f"echo '{b64}' | base64 -d > /etc/fail2ban/jail.local", timeout=15, sudo=True)
-        run_command(server, "systemctl enable --now fail2ban 2>&1; systemctl restart fail2ban 2>&1", timeout=20, sudo=True)
+        run_privileged(server, "service-enable-now", ["fail2ban"], timeout=20)
+        run_privileged(server, "service-restart", ["fail2ban"], timeout=20)
 
     # ── 11. Reboot ONLY if an update actually requires one, and NEVER out from under running game
     #        servers (a reboot would drop the players). We check /var/run/reboot-required and, before
@@ -3888,17 +3910,18 @@ _F2B_JAIL_RE = re.compile(r"^[A-Za-z0-9._-]{1,64}$")
 def remote_fail2ban_overview(server):
     """fail2ban jails + their current bans on a REMOTE host, over SSH. Mirrors the panel-host version
     but runs fail2ban-client on the remote. {'installed': bool, 'jails': [detail,...]}."""
-    import shlex
-    have, _, _ = run_command(server, "command -v fail2ban-client >/dev/null 2>&1 && echo yes || echo no", timeout=15)
-    if "yes" not in (have or ""):
+    # `command -v fail2ban-client` was a shell builtin probe, and it escalated on any host with
+    # sudo enabled. Asking fail2ban for its status answers the same question: a missing tool is
+    # rc 127 from the helper and from the SSH path alike.
+    out, err, rc = run_privileged(server, "f2b-status", [], timeout=15, merge_stderr=False)
+    if rc == 127 or "not found" in (out + err).lower():
         return {"installed": False, "jails": []}
-    out, _, _ = run_command(server, "fail2ban-client status 2>/dev/null", timeout=15, sudo=True)
     m = re.search(r"Jail list:\s*(.*)", out or "")
     jails = [j.strip() for j in (m.group(1).split(",") if m else []) if _F2B_JAIL_RE.match(j.strip())]
     details = []
     for jail in jails:
-        jo, _, jrc = run_command(server, "fail2ban-client status %s 2>/dev/null" % shlex.quote(jail),
-                                 timeout=15, sudo=True)
+        jo, _, jrc = run_privileged(server, "f2b-status-jail", [jail], timeout=15,
+                                    merge_stderr=False)
         if jrc != 0 or not jo:
             continue
 
@@ -4019,7 +4042,6 @@ def remote_fail2ban_top_ips(server, limit=20, days=7):
 
 def remote_fail2ban_unban(server, jail, ip):
     """Lift a fail2ban ban on a REMOTE host (jail + IP validated). (ok, msg)."""
-    import shlex
     # fullmatch, not match: with a "^…$" pattern, .match accepts a TRAILING NEWLINE ("sshd\n"
     # passes), which the panel-host version rejects. It is shell-quoted below so this was never an
     # injection, but the two validators disagreeing is exactly what this audit was looking for.
@@ -4038,8 +4060,7 @@ def remote_fail2ban_unban(server, jail, ip):
     ip = _canonical_ip(ip)
     if not ip:
         return False, "Invalid IP address."
-    out, err, rc = run_command(server, "fail2ban-client set %s unbanip %s 2>&1"
-                               % (shlex.quote(jail), shlex.quote(ip)), timeout=20, sudo=True)
+    out, err, rc = run_privileged(server, "f2b-unban", [jail, ip], timeout=20)
     if rc == 0:
         return True, "Unbanned %s from %s." % (ip, jail)
     return False, ((out or err or "Unban failed").replace("\n", " ")[:200])
@@ -4075,21 +4096,24 @@ def remote_set_fail2ban_ignoreip(server, ignore_ips, unban_ip=None):
     ignoreip. Writes a dedicated panel-owned drop-in (`jail.d/zz-panel-whitelist.local`) — its own
     file, so it never clobbers the host's existing config — and reloads. Optionally lifts one IP that
     is already banned (used when whitelisting). No-op if fail2ban isn't installed. (ok, msg)."""
-    have, _, _ = run_command(server, "command -v fail2ban-client >/dev/null 2>&1 && echo yes || echo no", timeout=10)
-    if "yes" not in (have or ""):
+    jails_out, jails_err, jails_rc = run_privileged(server, "f2b-status", [], timeout=10,
+                                                    merge_stderr=False)
+    if jails_rc == 127 or "not found" in (jails_out + jails_err).lower():
         return False, "fail2ban not installed on this host"
     import base64
     b64 = base64.b64encode(_f2b_dropin_ignoreip_body(ignore_ips).encode()).decode()
     run_command(server, f"echo '{b64}' | base64 -d > {_quote(_F2B_PANEL_WHITELIST_DROPIN)}", timeout=15, sudo=True)
-    run_command(server, "fail2ban-client reload 2>&1 || systemctl reload fail2ban 2>&1 || "
-                        "systemctl restart fail2ban 2>&1", timeout=30, sudo=True)
+    _f2b_reload(server)
     # ignoreip only stops FUTURE bans; lift a current ban across every jail so a just-whitelisted
     # admin isn't left banned until it expires. `$J` is a jail name from fail2ban's own output.
     if unban_ip and _valid_ip(unban_ip):
-        run_command(server, "for J in $(fail2ban-client status 2>/dev/null | "
-                            "sed -n 's/.*Jail list:[[:space:]]*//p' | tr ',' ' '); do "
-                            "fail2ban-client set \"$J\" unbanip %s 2>/dev/null; done" % _quote(unban_ip),
-                    timeout=30, sudo=True)
+        # Was a `for J in $(… | sed | tr)` loop in one root shell. The jail list is already in
+        # hand from the status read above; iterate it here and unban per jail, skipping anything
+        # that does not look like a jail name (the loop fed fail2ban's own output straight back).
+        _m = re.search(r"Jail list:\s*(.*)", jails_out or "")
+        for _j in [x.strip() for x in (_m.group(1).split(",") if _m else []) if x.strip()]:
+            if _F2B_JAIL_RE.match(_j):
+                run_privileged(server, "f2b-unban", [_j, unban_ip], timeout=30, merge_stderr=False)
     return True, "ignoreip applied on %s" % getattr(server, "name", "remote")
 
 
@@ -4192,7 +4216,7 @@ def change_ssh_port(server, new_port, bind_addr=""):
                     f"if [ -f {_quote(bak)} ]; then mv -f {_quote(bak)} {_quote(dropin)}; "
                     f"else rm -f {_quote(dropin)}; fi",
                     timeout=10, sudo=True)
-        run_command(server, "systemctl restart ssh 2>&1 || systemctl restart sshd 2>&1", timeout=20, sudo=True)
+        _restart_sshd(server, timeout=20)
         return False, msg
 
     # 3. Validate the WHOLE sshd config; if the drop-in breaks it, roll back and abort (no restart).
@@ -4209,7 +4233,7 @@ def change_ssh_port(server, new_port, bind_addr=""):
                 timeout=20, sudo=True)
 
     # 5. Restart sshd (Ubuntu's unit is 'ssh'; fall back to 'sshd'). Established sessions survive.
-    run_command(server, "systemctl restart ssh 2>&1 || systemctl restart sshd 2>&1", timeout=20, sudo=True)
+    _restart_sshd(server, timeout=20)
 
     # 6. Verify. A bind change must confirm the panel can still REACH the host (no all-interfaces
     #    fallback); a port-only change just confirms sshd bound the new port.

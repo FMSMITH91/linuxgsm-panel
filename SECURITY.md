@@ -70,9 +70,13 @@ verb and already-separated arguments, re-validates every argument against its ow
 execs a fixed argument vector. There is no shell in it, and the only program it can run is
 one it names: `bash` does not resolve.
 
-Converted so far: **the `ufw` family** — 14 verbs covering every firewall read and write the
-panel performs. Still to convert: `apt`/`dpkg`, `systemctl`, `fail2ban-client`, `journalctl`,
-cron, user management, and the reboot path.
+Converted so far: **`ufw`, `fail2ban-client` and `systemctl`** — 22 verbs covering every
+firewall read and write, every fail2ban query and unban, and the service control the panel
+performs. The systemd verbs take a unit from an **exhaustive list** (`ssh`, `sshd`,
+`fail2ban`, `whoopsie`, `cups`, `modemmanager`) rather than a name pattern: those are the only
+services the panel ever touches, so a pattern would only buy the ability to control units
+nobody asked it to. Still to convert: `apt`/`dpkg`, `journalctl`, cron, user management, the
+file writes that go through `echo … | base64 -d >`, and the reboot path.
 
 **Until that list is empty the grant stays `NOPASSWD:ALL` and nothing above has reduced your
 exposure.** A privilege boundary with a hole in it is not a boundary, and it would be worse

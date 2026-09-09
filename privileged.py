@@ -44,6 +44,11 @@ HELPER_PATH = "/usr/local/lib/linuxgsm-panel/panel-helper"
 # The bare tool NAME. The helper resolves it to an absolute path from its own fixed
 # list; the remote rendering leaves it bare, exactly as the SSH path has always sent it.
 UFW = "ufw"
+F2B = "fail2ban-client"
+SYSTEMCTL = "systemctl"
+
+# The services the panel is allowed to touch, named exhaustively — see tools/panel-helper.
+UNITS = ("ssh", "sshd", "fail2ban", "whoopsie", "cups", "modemmanager")
 
 
 class VerbError(ValueError):
@@ -88,6 +93,12 @@ def _comment(s):
     return s
 
 
+def _jail(s):
+    if not re.fullmatch(r"[A-Za-z0-9_.-]{1,64}", str(s)):
+        raise VerbError("not a jail name")
+    return str(s)
+
+
 def _rulenum(s):
     if not re.fullmatch(r"[1-9]\d{0,3}", str(s)):
         raise VerbError("not a rule number")
@@ -122,6 +133,18 @@ _ARGV = {
     "ufw-delete-allow-proto-port": ([_choice("tcp", "udp"), _portspec],
                                     lambda a: [UFW, "delete", "allow", "proto", a[0], "to", "any",
                                                "port", a[1]], None),
+    # ── fail2ban ──
+    "f2b-status": ([], lambda a: [F2B, "status"], None),
+    "f2b-status-jail": ([_jail], lambda a: [F2B, "status", a[0]], None),
+    "f2b-unban": ([_jail, _cidr], lambda a: [F2B, "set", a[0], "unbanip", a[1]], None),
+    "f2b-reload": ([], lambda a: [F2B, "reload"], None),
+
+    # ── systemd units, from a fixed list ──
+    "service-restart": ([_choice(*UNITS)], lambda a: [SYSTEMCTL, "restart", a[0]], None),
+    "service-reload": ([_choice(*UNITS)], lambda a: [SYSTEMCTL, "reload", a[0]], None),
+    "service-enable-now": ([_choice(*UNITS)], lambda a: [SYSTEMCTL, "enable", "--now", a[0]], None),
+    "service-disable-now": ([_choice(*UNITS)], lambda a: [SYSTEMCTL, "disable", "--now", a[0]], None),
+
     "ufw-delete-limit-port": ([_portspec], lambda a: [UFW, "delete", "limit", a[0]], None),
     # Only OpenSSH: the panel deletes exactly this one UFW application profile, so the validator is
     # the literal rather than an app-name pattern — the narrowest thing that still works.

@@ -42,8 +42,18 @@ import sys
 # but "never" is easier to audit than "sanitised". A name that is not a key here cannot be run.
 TOOLS = {
     "ufw": ("/usr/sbin/ufw", "/sbin/ufw", "/usr/bin/ufw"),
+    "fail2ban-client": ("/usr/bin/fail2ban-client", "/bin/fail2ban-client"),
+    "systemctl": ("/usr/bin/systemctl", "/bin/systemctl"),
 }
 UFW = "ufw"
+F2B = "fail2ban-client"
+SYSTEMCTL = "systemctl"
+
+# The services the panel is allowed to touch, named exhaustively. Everything the panel actually
+# does is in this list, so a unit-name PATTERN would only buy the ability to control units nobody
+# asked it to control. sshd is here because the ssh unit is called ssh on Debian/Ubuntu and sshd
+# elsewhere, and the panel tries both.
+UNITS = ("ssh", "sshd", "fail2ban", "whoopsie", "cups", "modemmanager")
 
 
 def resolve(prog):
@@ -96,6 +106,13 @@ def v_comment(s):
     return s
 
 
+def v_jail(s):
+    """A fail2ban jail name."""
+    if not re.fullmatch(r"[A-Za-z0-9_.-]{1,64}", s):
+        raise ValueError("not a jail name")
+    return s
+
+
 def v_rulenum(s):
     if not re.fullmatch(r"[1-9]\d{0,3}", s):
         raise ValueError("not a rule number")
@@ -142,6 +159,19 @@ VERBS = {
         [v_choice("tcp", "udp"), v_portspec],
         lambda a: [UFW, "delete", "allow", "proto", a[0], "to", "any", "port", a[1]],
         None),
+    # ── fail2ban ──
+    "f2b-status": ([], lambda a: [F2B, "status"], None),
+    "f2b-status-jail": ([v_jail], lambda a: [F2B, "status", a[0]], None),
+    "f2b-unban": ([v_jail, v_cidr], lambda a: [F2B, "set", a[0], "unbanip", a[1]], None),
+    "f2b-reload": ([], lambda a: [F2B, "reload"], None),
+
+    # ── systemd units, from a fixed list ──
+    "service-restart": ([v_choice(*UNITS)], lambda a: [SYSTEMCTL, "restart", a[0]], None),
+    "service-reload": ([v_choice(*UNITS)], lambda a: [SYSTEMCTL, "reload", a[0]], None),
+    "service-enable-now": ([v_choice(*UNITS)], lambda a: [SYSTEMCTL, "enable", "--now", a[0]], None),
+    "service-disable-now": ([v_choice(*UNITS)],
+                            lambda a: [SYSTEMCTL, "disable", "--now", a[0]], None),
+
     "ufw-delete-limit-port": (
         [v_portspec],
         lambda a: [UFW, "delete", "limit", a[0]],
