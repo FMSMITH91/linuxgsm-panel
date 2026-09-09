@@ -4331,15 +4331,54 @@ def _parse_cfg(text):
     return out
 
 
+# Same charset models._validate_shell_ident enforces. Repeated here because that validator is a
+# SQLAlchemy @validates hook: it fires on ASSIGNMENT, and never on rows loaded from the database.
+# A row written before the validator existed, or restored from a tampered backup, reaches this
+# code unchecked — and `user` is interpolated into `sudo -u {user}` and into /home/{user}.
+_SAFE_UNIX_USER_RE = re.compile(r"^[A-Za-z0-9_][A-Za-z0-9._-]{0,63}$")
+
+
 def _safe_abspath(user, relpath):
     """Resolve a user-supplied relative path under /home/<user>, rejecting any
-    traversal outside it. Returns the absolute path or None."""
+    traversal outside it. Returns the absolute path or None.
+
+    Also rejects an unsafe `user`: every file operation funnels through here, so this is the one
+    place that can refuse a malformed identifier before it reaches a shell command."""
+    if not _SAFE_UNIX_USER_RE.match(str(user or "")):
+        return None
     home = f"/home/{user}"
     rel = str(relpath) if relpath else ""   # tolerate non-str input without crashing
     ap = _pp.normpath(_pp.join(home, rel.lstrip("/")))
     if ap == home or ap.startswith(home + "/"):
         return ap
     return None
+
+
+# Sentinel a guarded command prints when the path escaped the home dir on the HOST.
+_OUTSIDE_HOME = "__OUTSIDE_HOME__"
+
+
+def _guarded(user, abspath, inner):
+    """Prefix `inner` with a check that `abspath` still resolves inside /home/<user> ON THE HOST.
+
+    _safe_abspath is lexical. normpath collapses '..' correctly, but it cannot see symlinks,
+    because the path lives on the remote machine and Python is not there. A symlink planted under
+    the game user's home — by a malicious mod, by the game itself, or by anyone with shell as that
+    user — therefore passes the Python check and resolves somewhere else entirely by the time the
+    command runs. The only place that can be settled is where the path actually exists.
+
+    Folded into the existing command rather than run as its own probe: the file browser issues one
+    of these per navigation, and a second SSH round trip per keystroke-ish action is a real cost.
+
+    `realpath -m` resolves a path whose last component does not exist yet, which uploads to a new
+    filename need. If realpath is absent the check falls back to the unresolved path and the guard
+    degrades to the lexical answer — no worse than before this existed, and never a hard failure on
+    a minimal image.
+    """
+    home = f"/home/{user}"
+    hq = _quote(home)
+    return (f"p=$(realpath -m {_quote(abspath)} 2>/dev/null || printf %s {_quote(abspath)}); "
+            f'case "$p" in {hq}|{hq}/*) : ;; *) echo {_OUTSIDE_HOME}; exit 9 ;; esac; ' + inner)
 
 
 def _write_file_as_user(server, user, abspath, data_bytes):
@@ -4350,7 +4389,13 @@ def _write_file_as_user(server, user, abspath, data_bytes):
     tmp = abspath + ".paneltmp"
     # Ensure the parent directory exists (uploads to a fresh folder, new files).
     parent = _pp.dirname(abspath)
-    run_command(server, f"sudo -u {user} bash -c {_quote('mkdir -p ' + _quote(parent))}", timeout=15, sudo=False)
+    # The guard rides the mkdir: it is the first thing this does, so a target that resolves outside
+    # the home dir is refused before any byte is written. write_file and upload_file both land here.
+    _mk, _, _ = run_command(
+        server, f"sudo -u {user} bash -c {_quote(_guarded(user, abspath, 'mkdir -p ' + _quote(parent)))}",
+        timeout=15, sudo=False)
+    if _OUTSIDE_HOME in (_mk or ""):
+        return False, "Invalid path"
     CH = 50000
     op = ">"
     for i in range(0, max(len(b64), 1), CH):
@@ -4623,7 +4668,10 @@ def browse_dir(server, user, relpath="", selfname=None):
     if ap is None:
         return None
     inner = f"find {_quote(ap)} -maxdepth 1 -mindepth 1 -printf '%y\\t%s\\t%f\\n' 2>/dev/null"
-    out, _, _ = run_command(server, f"sudo -u {user} bash -c {_quote(inner)}", timeout=20, sudo=False)
+    out, _, _ = run_command(server, f"sudo -u {user} bash -c {_quote(_guarded(user, ap, inner))}",
+                            timeout=20, sudo=False)
+    if _OUTSIDE_HOME in (out or ""):
+        return None
     base = (relpath or "").strip("/")
     entries = []
     for line in (out or "").splitlines():
@@ -4651,7 +4699,10 @@ def read_file(server, user, relpath, max_bytes=1048576):
         f"if [ \"$sz\" -gt {int(max_bytes)} ]; then echo __TOOBIG__; exit 0; fi; "
         f"if [ ! -s {_quote(ap)} ] || grep -qI . {_quote(ap)} 2>/dev/null; then cat {_quote(ap)}; else echo __BINARY__; fi"
     )
-    out, _, _ = run_command(server, f"sudo -u {user} bash -c {_quote(inner)}", timeout=20, sudo=False)
+    out, _, _ = run_command(server, f"sudo -u {user} bash -c {_quote(_guarded(user, ap, inner))}",
+                            timeout=20, sudo=False)
+    if _OUTSIDE_HOME in (out or ""):
+        return None, "Invalid path"
     stripped = (out or "").strip()
     if stripped == "__NOFILE__":
         return None, "File not found"
@@ -4688,7 +4739,10 @@ def stat_upload_targets(server, user, reldir, names):
         return None
     inner = (f"find {_quote(apdir)} -maxdepth 1 -mindepth 1 "
              f"-printf '%y\\t%s\\t%T@\\t%f\\n' 2>/dev/null")
-    out, _, _ = run_command(server, f"sudo -u {user} bash -c {_quote(inner)}", timeout=20, sudo=False)
+    out, _, _ = run_command(server, f"sudo -u {user} bash -c {_quote(_guarded(user, apdir, inner))}",
+                            timeout=20, sudo=False)
+    if _OUTSIDE_HOME in (out or ""):
+        return None
     present = {}
     for line in (out or "").splitlines():
         parts = line.split("\t")
@@ -4732,8 +4786,10 @@ def upload_file(server, user, reldir, filename, data_bytes, overwrite=True):
         return False, "Invalid path"
     if not overwrite:
         chk = f"test -e {_quote(target)} && echo __YES__ || true"
-        out, _, _ = run_command(server, f"sudo -u {user} bash -c {_quote(chk)}",
+        out, _, _ = run_command(server, f"sudo -u {user} bash -c {_quote(_guarded(user, target, chk))}",
                                 timeout=15, sudo=False)
+        if _OUTSIDE_HOME in (out or ""):
+            return False, "Invalid path"
         if "__YES__" in (out or ""):
             return False, UPLOAD_EXISTS
     return _write_file_as_user(server, user, target, data_bytes)
@@ -4749,7 +4805,12 @@ def delete_path(server, user, relpath, selfname=None):
     if _is_protected_path(relpath, selfname):
         return False, "This file/folder is protected — deleting it would break the server."
     inner = f"rm -rf -- {_quote(ap)} && echo __OK__"
-    out, e, rc = run_command(server, f"sudo -u {user} bash -c {_quote(inner)}", timeout=30, sudo=False)
+    # The most destructive of the six, so it gets the same host-side resolution check: a symlink
+    # under the home dir must not turn `rm -rf` loose on whatever it points at.
+    out, e, rc = run_command(server, f"sudo -u {user} bash -c {_quote(_guarded(user, ap, inner))}",
+                             timeout=30, sudo=False)
+    if _OUTSIDE_HOME in (out or ""):
+        return False, "Refusing to delete this path"
     if rc == 0 and "__OK__" in (out or ""):
         return True, "Deleted"
     return False, e or out or "Delete failed"
