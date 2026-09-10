@@ -3824,6 +3824,7 @@ _VERB_SAMPLES = {
     "f2b-unban": ["sshd", "203.0.113.5"],
     "f2b-reload": [],
     "service-restart": ["ssh"],
+    "panel-restart": ["2"],
     "service-reload": ["fail2ban"],
     "service-enable-now": ["fail2ban"],
     "service-disable-now": ["cups"],
@@ -3912,8 +3913,8 @@ check("helper: knows exactly the tools its verbs need, and no more",
       sorted(_helper.TOOLS) == ["add-apt-repository", "apt-get", "crontab", "df", "dpkg",
                                 "fail2ban-client", "fallocate", "fuser", "journalctl", "mkswap",
                                 "npm", "passwd", "pgrep", "pkill", "pro", "reboot", "renice", "rm",
-                                "ss", "sshd", "swapon", "sysctl", "systemctl", "tail",
-                                "tailscale", "timedatectl", "ufw", "useradd", "userdel",
+                                "ss", "sshd", "swapon", "sysctl", "systemctl", "systemd-run",
+                                "tail", "tailscale", "timedatectl", "ufw", "useradd", "userdel",
                                 "usermod"],
       sorted(_helper.TOOLS))
 for _prog in ("bash", "sh", "python3", "env"):
@@ -3930,6 +3931,8 @@ _BAD = {
     # The unit list is exhaustive on purpose: the panel may restart these six services and nothing
     # else, so a real service name it was never meant to touch is refused like an injection is.
     "service-restart": ["nginx", "docker", "ssh; id", "ssh.service", ""],
+    # The delay is the ONLY caller input to a verb that restarts the panel itself.
+    "panel-restart": ["0", "301", "-1", "2; reboot", "", "abc", "1e3"],
     "f2b-status-jail": ["sshd; id", "$(id)", "a" * 65, ""],
     # Package names reach `apt-get install` as separate argv entries, but a name is still the one
     # place an attacker-supplied string gets to be a whole argument — so it is charset-checked.
@@ -4264,6 +4267,34 @@ _SUDO_SHELL_CEILING = 1   # tailscale_integration.install_tailscale_local — th
 check("escalation census: ['sudo', <shell>] sites <= %d (currently %d) — ratchet, never raise"
       % (_SUDO_SHELL_CEILING, len(_sudo_shell)),
       len(_sudo_shell) <= _SUDO_SHELL_CEILING, "; ".join(sorted(_sudo_shell)))
+
+# ── Census: EVERY direct ["sudo", ...] argv that is not the helper ─────────────────────────────
+# This is the number that decides whether /etc/sudoers.d/linuxgsm-panel can shrink to a single
+# line permitting only panel-helper. While any of these exist the grant has to stay NOPASSWD:ALL,
+# because each one runs something the sudoers file would have to permit separately — and the two
+# worst (a shell, and systemd-run, which runs whatever you hand it) cannot be scoped at all.
+#
+# Ratchet: convert a site to a verb and lower the ceiling. Never raise it.
+_direct_sudo = []
+for _f in _SCAN_MODULES:
+    _fp = os.path.join(_root, _f)
+    if not os.path.exists(_fp):
+        continue
+    for _n in _ast_scan.walk(_ast_scan.parse(open(_fp, encoding="utf-8").read())):
+        if isinstance(_n, (_ast_scan.List, _ast_scan.Tuple)) and _n.elts:
+            _e0 = _n.elts[0]
+            if not (isinstance(_e0, _ast_scan.Constant) and _e0.value == "sudo"):
+                continue
+            # privileged.helper_argv builds ["sudo", "-n", HELPER_PATH, verb, ...] — that IS the
+            # boundary, not a bypass of it.
+            _second = _n.elts[1] if len(_n.elts) > 1 else None
+            if isinstance(_second, _ast_scan.Constant) and _second.value == "-n":
+                continue
+            _direct_sudo.append("%s:%d" % (_f, _n.lineno))
+_DIRECT_SUDO_CEILING = 6   # backup restore, sudo -u cat, self-update, db repair, ts install, ts cli
+check("escalation census: direct ['sudo', ...] sites (not the helper) <= %d (currently %d)"
+      % (_DIRECT_SUDO_CEILING, len(_direct_sudo)),
+      len(_direct_sudo) <= _DIRECT_SUDO_CEILING, "; ".join(sorted(_direct_sudo)))
 
 # ── panel_state's one rule: mutate in place, never rebind ──────────────────────────────────────
 # monitoring.py and app.py both do `from panel_state import _player_counts`, which binds the OBJECT.

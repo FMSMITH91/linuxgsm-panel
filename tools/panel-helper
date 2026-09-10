@@ -79,6 +79,7 @@ TOOLS = {
     "sysctl": ("/usr/sbin/sysctl", "/sbin/sysctl"),
     "journalctl": ("/usr/bin/journalctl", "/bin/journalctl"),
     "tail": ("/usr/bin/tail", "/bin/tail"),
+    "systemd-run": ("/usr/bin/systemd-run", "/bin/systemd-run"),
 }
 UFW = "ufw"
 F2B = "fail2ban-client"
@@ -90,6 +91,13 @@ SYSTEMCTL = "systemctl"
 # elsewhere, and the panel tries both.
 UNITS = ("ssh", "sshd", "fail2ban", "whoopsie", "cups", "modemmanager",
          "unattended-upgrades")
+
+# The panel's OWN systemd unit, and the transient-unit runner used to restart it. Deliberately a
+# separate constant from UNITS: UNITS is what the panel may start/stop/reload on the host (ssh,
+# fail2ban…), and nothing in that set should ever be able to name the panel's own service. This one
+# is reachable through exactly one verb, panel-restart, which takes a bounded delay and nothing else.
+PANEL_UNIT = "linuxgsm-panel.service"
+SYSTEMD_RUN = "systemd-run"
 
 APT = "apt-get"
 
@@ -346,6 +354,15 @@ def v_logdate(s):
     return s
 
 
+def v_restart_delay(s):
+    """Seconds to wait before restarting the panel's own service. Bounded: the delay exists only so
+    the triggering HTTP response can flush to the browser before the server goes down, so anything
+    past a couple of minutes is a caller bug rather than a longer wait."""
+    if not re.fullmatch(r"[1-9][0-9]{0,2}", s) or int(s) > 300:
+        raise ValueError("not a restart delay in 1..300")
+    return s
+
+
 def v_jail(s):
     """A fail2ban jail name."""
     if not re.fullmatch(r"[A-Za-z0-9_.-]{1,64}", s):
@@ -518,6 +535,11 @@ VERBS = {
 
     # ── systemd units, from a fixed list ──
     "service-restart": ([v_choice(*UNITS)], lambda a: [SYSTEMCTL, "restart", a[0]], None),
+    # The panel restarting ITSELF — see privileged.py. A detached transient timer, because the
+    # panel's unit is KillMode=control-group and a normal child would be killed with it.
+    "panel-restart": ([v_restart_delay],
+                      lambda a: [SYSTEMD_RUN, "--on-active=%s" % a[0], "--collect",
+                                 SYSTEMCTL, "restart", PANEL_UNIT], None),
     "service-reload": ([v_choice(*UNITS)], lambda a: [SYSTEMCTL, "reload", a[0]], None),
     "service-enable-now": ([v_choice(*UNITS)], lambda a: [SYSTEMCTL, "enable", "--now", a[0]], None),
     "service-disable-now": ([v_choice(*UNITS)],

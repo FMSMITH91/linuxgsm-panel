@@ -51,6 +51,13 @@ SYSTEMCTL = "systemctl"
 UNITS = ("ssh", "sshd", "fail2ban", "whoopsie", "cups", "modemmanager",
          "unattended-upgrades")
 
+# The panel's OWN systemd unit, and the transient-unit runner used to restart it. Deliberately a
+# separate constant from UNITS: UNITS is what the panel may start/stop/reload on the host (ssh,
+# fail2ban…), and nothing in that set should ever be able to name the panel's own service. This one
+# is reachable through exactly one verb, panel-restart, which takes a bounded delay and nothing else.
+PANEL_UNIT = "linuxgsm-panel.service"
+SYSTEMD_RUN = "systemd-run"
+
 APT = "apt-get"
 # dpkg's conflict answers, fixed rather than passed in: keep a config file the operator has edited,
 # take the package default for one they have not — see tools/panel-helper.
@@ -269,6 +276,15 @@ def _logdate(s):
     return str(s)
 
 
+def _restart_delay(s):
+    """Seconds to wait before restarting the panel's own service. Bounded: the delay exists only so
+    the triggering HTTP response can flush to the browser before the server goes down, so anything
+    past a couple of minutes is a caller bug rather than a longer wait."""
+    if not re.fullmatch(r"[1-9][0-9]{0,2}", str(s)) or int(s) > 300:
+        raise VerbError("not a restart delay in 1..300")
+    return str(s)
+
+
 def _jail(s):
     if not re.fullmatch(r"[A-Za-z0-9_.-]{1,64}", str(s)):
         raise VerbError("not a jail name")
@@ -416,6 +432,12 @@ _ARGV = {
 
     # ── systemd units, from a fixed list ──
     "service-restart": ([_choice(*UNITS)], lambda a: [SYSTEMCTL, "restart", a[0]], None),
+    # The panel restarting ITSELF. A detached transient timer, because the panel's unit is
+    # KillMode=control-group: a normal child would be killed along with the process performing the
+    # restart. Everything here is fixed but the delay, which is bounded to 1..300.
+    "panel-restart": ([_restart_delay],
+                      lambda a: [SYSTEMD_RUN, "--on-active=%s" % a[0], "--collect",
+                                 SYSTEMCTL, "restart", PANEL_UNIT], None),
     "service-reload": ([_choice(*UNITS)], lambda a: [SYSTEMCTL, "reload", a[0]], None),
     "service-enable-now": ([_choice(*UNITS)], lambda a: [SYSTEMCTL, "enable", "--now", a[0]], None),
     "service-disable-now": ([_choice(*UNITS)], lambda a: [SYSTEMCTL, "disable", "--now", a[0]], None),

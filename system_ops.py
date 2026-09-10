@@ -1042,19 +1042,34 @@ def restart_panel(delay_seconds=2):
     a rebind — notably the listen port. The `--on-active` delay lets the triggering HTTP
     response flush to the browser before the server goes down. Mirrors the self-update
     launcher's service-model detection. Best-effort; returns (ok, msg)."""
-    delay = "--on-active=%d" % max(1, int(delay_seconds))
+    delay = str(max(1, min(300, int(delay_seconds))))
     user_unit = os.path.expanduser("~/.config/systemd/user/linuxgsm-panel.service")
     system_unit = "/etc/systemd/system/linuxgsm-panel.service"
     if os.path.exists(user_unit) or not os.path.exists(system_unit):
-        launcher = ["systemd-run", "--user", delay, "--collect",
-                    "systemctl", "--user", "restart", "linuxgsm-panel.service"]
-    else:
-        launcher = ["sudo", "systemd-run", delay, "--collect",
-                    "systemctl", "restart", "linuxgsm-panel.service"]
+        # A per-user unit needs no root at all, so there is nothing to escalate and nothing to
+        # scope — this branch keeps building its own argv.
+        try:
+            subprocess.Popen(["systemd-run", "--user", "--on-active=%s" % delay, "--collect",
+                              "systemctl", "--user", "restart", "linuxgsm-panel.service"],
+                             stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                             env=os.environ.copy())
+            return True, "Panel restart scheduled."
+        except Exception:
+            _log.exception("panel restart failed to dispatch")
+            return False, "Could not restart the panel — check the panel logs."
+    # The system-unit branch needs root. It used to be `sudo systemd-run …`, and a sudoers rule
+    # permitting systemd-run is equivalent to NOPASSWD:ALL — systemd-run will run anything you hand
+    # it. Through the verb the only thing the caller supplies is the delay, bounded 1..300; the unit
+    # name and every flag are fixed on the far side of the boundary.
+    #
+    # `--on-active` means systemd-run schedules a timer and returns immediately, so waiting for it
+    # (as _run_verb does) does not block on the restart itself.
     try:
-        subprocess.Popen(launcher, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
-                         env=os.environ.copy())
-        return True, "Panel restart scheduled."
+        _out, _err, rc = _run_verb("panel-restart", [delay], timeout=15)
+        if rc == 0:
+            return True, "Panel restart scheduled."
+        _log.error("panel restart verb failed: rc=%s %s", rc, (_err or _out or "")[:200])
+        return False, "Could not restart the panel — check the panel logs."
     except Exception:
         _log.exception("panel restart failed to dispatch")
         return False, "Could not restart the panel — check the panel logs."
