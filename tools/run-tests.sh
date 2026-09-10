@@ -45,6 +45,12 @@ echo "== smoke test (boots the app; routes must not 5xx) =="
 echo "== rbac test (permissions/IDOR enforced server-side; self-seeds on an empty DB) =="
 "$PY" tests/rbac_test.py
 
+echo "== url map (every rule, endpoint, method and guard, vs the committed baseline) =="
+# The safety net for splitting register_routes() up. A route that silently loses a method, an
+# endpoint that gets renamed out from under url_for(), a decorator dropped during a copy-paste —
+# none of those raise at import. Regenerate deliberately with --update and read the diff.
+"$PY" tests/url_map_test.py
+
 echo "== manage.py (the offline recovery CLI: lock-out guard, session revocation) =="
 "$PY" tests/manage_test.py
 
