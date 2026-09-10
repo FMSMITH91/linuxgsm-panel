@@ -3825,6 +3825,8 @@ _VERB_SAMPLES = {
     "f2b-reload": [],
     "service-restart": ["ssh"],
     "panel-restart": ["2"],
+    "tailscale-set-operator": ["ubuntu"],
+    "tailscale-serve": ["serve", "modern", "/", "http", "5000"],
     "service-reload": ["fail2ban"],
     "service-enable-now": ["fail2ban"],
     "service-disable-now": ["cups"],
@@ -3933,6 +3935,8 @@ _BAD = {
     "service-restart": ["nginx", "docker", "ssh; id", "ssh.service", ""],
     # The delay is the ONLY caller input to a verb that restarts the panel itself.
     "panel-restart": ["0", "301", "-1", "2; reboot", "", "abc", "1e3"],
+    # The operator is a Linux user name; anything shaped like a flag or a shell fragment is out.
+    "tailscale-set-operator": ["root; id", "--operator=x", "", "a" * 40, "has space"],
     "f2b-status-jail": ["sshd; id", "$(id)", "a" * 65, ""],
     # Package names reach `apt-get install` as separate argv entries, but a name is still the one
     # place an attacker-supplied string gets to be a whole argument — so it is charset-checked.
@@ -4291,7 +4295,7 @@ for _f in _SCAN_MODULES:
             if isinstance(_second, _ast_scan.Constant) and _second.value == "-n":
                 continue
             _direct_sudo.append("%s:%d" % (_f, _n.lineno))
-_DIRECT_SUDO_CEILING = 6   # backup restore, sudo -u cat, self-update, db repair, ts install, ts cli
+_DIRECT_SUDO_CEILING = 5   # backup restore, sudo -u cat, self-update, db repair, ts curl|sh installer
 check("escalation census: direct ['sudo', ...] sites (not the helper) <= %d (currently %d)"
       % (_DIRECT_SUDO_CEILING, len(_direct_sudo)),
       len(_direct_sudo) <= _DIRECT_SUDO_CEILING, "; ".join(sorted(_direct_sudo)))
@@ -5065,6 +5069,25 @@ for _kind, _limit in _CEILING.items():
     check("escalation census: %s sites <= %d (currently %d) — ratchet, never raise"
           % (_kind, _limit, _census[_kind]),
           _census[_kind] <= _limit, "found %d" % _census[_kind])
+
+# tailscale-serve is the only verb whose upstream URL is ASSEMBLED on the far side rather than
+# handed in. These prove a caller cannot aim Tailscale Serve at anything but loopback on this box —
+# which is a guarantee the old `sudo tailscale <args>` form could not make at all.
+check("privileged: tailscale-serve builds a loopback upstream, modern grammar",
+      _priv.tool_argv("tailscale-serve", ["serve", "modern", "/", "http", "5000"])
+      == ["tailscale", "serve", "--bg", "--https=443", "http://127.0.0.1:5000"])
+check("privileged: tailscale-serve builds a loopback upstream, legacy grammar",
+      _priv.tool_argv("tailscale-serve", ["funnel", "legacy", "/panel", "https+insecure", "8443"])
+      == ["tailscale", "funnel", "--bg", "--https", "443", "/panel",
+          "https+insecure://127.0.0.1:8443"])
+for _bad in (["serve", "modern", "../../etc", "http", "5000"],
+             ["serve", "modern", "//evil.example.com", "http", "5000"],
+             ["serve", "modern", "/", "ftp", "5000"],
+             ["logout", "modern", "/", "http", "5000"],
+             ["serve", "modern", "/", "http", "0"],
+             ["serve", "sneaky", "/", "http", "5000"]):
+    check("privileged: tailscale-serve refuses %r" % (_bad,),
+          _ufw_raises_verb(lambda b=_bad: _priv.check_args("tailscale-serve", b)))
 
 passed = sum(1 for ok, _, _ in results if ok)
 for ok, name, detail in results:

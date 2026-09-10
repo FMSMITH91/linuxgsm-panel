@@ -242,6 +242,21 @@ def _authkey(s):
     return str(s)
 
 
+def ts_serve_argv(verb, grammar, mount, scheme, port):
+    """`tailscale serve|funnel` argv for both CLI grammars — see tools/panel-helper.
+
+    The upstream is BUILT HERE from a validated scheme and port, never accepted as a URL. That is
+    the point: the caller cannot aim Tailscale Serve at anything but loopback on this machine."""
+    upstream = "%s://127.0.0.1:%s" % (scheme, port)
+    if grammar == "modern":
+        argv = ["tailscale", verb, "--bg", "--https=443"]
+        if mount != "/":
+            argv.append("--set-path=%s" % mount)
+        argv.append(upstream)
+        return argv
+    return ["tailscale", verb, "--bg", "--https", "443", mount, upstream]
+
+
 def ts_up_argv(ssh, routes, tags=None, auth_key=None):
     """The `tailscale up` argument vector — see tools/panel-helper."""
     argv = ["tailscale", "up", "--accept-routes"]
@@ -283,6 +298,26 @@ def _restart_delay(s):
     if not re.fullmatch(r"[1-9][0-9]{0,2}", str(s)) or int(s) > 300:
         raise VerbError("not a restart delay in 1..300")
     return str(s)
+
+
+def _port(s):
+    """A single TCP port number, 1..65535. Distinct from _portspec, which also accepts ranges and
+    a /proto suffix — this one is for "the port the panel listens on", where a range is meaningless."""
+    if not re.fullmatch(r"[1-9][0-9]{0,4}", str(s)) or not (1 <= int(s) <= 65535):
+        raise VerbError("not a port")
+    return str(s)
+
+
+def _ts_mount(s):
+    """A Tailscale Serve mount point: "/" or "/name" with a couple of safe segments. Not a general
+    path — no traversal, no scheme, no host, nothing that could turn the proxy target into
+    something other than a path on this node."""
+    s = str(s)
+    if s == "/":
+        return s
+    if not re.fullmatch(r"(?:/[A-Za-z0-9][A-Za-z0-9._-]{0,31}){1,3}", s):
+        raise VerbError("not a mount point")
+    return s
 
 
 def _jail(s):
@@ -438,12 +473,26 @@ _ARGV = {
     "panel-restart": ([_restart_delay],
                       lambda a: [SYSTEMD_RUN, "--on-active=%s" % a[0], "--collect",
                                  SYSTEMCTL, "restart", PANEL_UNIT], None),
+    # `tailscale set --operator=<user>` — makes the panel's own user Tailscale's operator so
+    # `serve` and `serve status` work without root afterwards. One caller (ensure_operator), one
+    # argument, validated as a Linux user name. The flag is fixed here so a caller cannot turn
+    # `set` into any other tailscale subcommand.
+    "tailscale-set-operator": ([_username],
+                               lambda a: ["tailscale", "set", "--operator=%s" % a[0]], None),
     "service-reload": ([_choice(*UNITS)], lambda a: [SYSTEMCTL, "reload", a[0]], None),
     "service-enable-now": ([_choice(*UNITS)], lambda a: [SYSTEMCTL, "enable", "--now", a[0]], None),
     "service-disable-now": ([_choice(*UNITS)], lambda a: [SYSTEMCTL, "disable", "--now", a[0]], None),
 
     # sysctl -p on one of the panel's own drop-ins. The NAME maps to the same path the write verb
     # uses, so the two cannot point at different files.
+    # `tailscale serve|funnel` — proxies the panel onto the tailnet. Five validated arguments and
+    # nothing else: which subcommand, which CLI grammar (the flag spelling changed around 1.58, so
+    # the caller tries both), the mount point, and the loopback scheme + port. The upstream URL is
+    # assembled inside ts_serve_argv from the last two, so it is always 127.0.0.1 — a caller cannot
+    # point Serve at another host.
+    "tailscale-serve": ([_choice("serve", "funnel"), _choice("modern", "legacy"), _ts_mount,
+                         _choice("http", "https+insecure"), _port],
+                        lambda a: ts_serve_argv(a[0], a[1], a[2], a[3], a[4]), None),
     "sysctl-reload": ([_choice("tailscale")],
                       lambda a: ["sysctl", "-p", WRITE_TARGETS["sysctl-" + a[0]][0]], None),
 
