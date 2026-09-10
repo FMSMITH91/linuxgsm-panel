@@ -3843,6 +3843,7 @@ _VERB_SAMPLES = {
     "sshd-set-directive": ["ClientAliveInterval", "300"],
     "create-swapfile": [],
     "npm-install-global": ["gamedig"],
+    "journal-cron": [],
 }
 check("privileged: every verb has a sample (new verbs cannot skip the parity check)",
       set(_VERB_SAMPLES) == set(_priv.verbs()),
@@ -4028,6 +4029,8 @@ _REMOTE_EXPECTED = {
     ("log-tail", ("fail2ban", "4000")): "tail -n 4000 /var/log/fail2ban.log 2>&1",
     ("log-tail", ("auth", "200")): "tail -n 200 /var/log/auth.log 2>&1",
     ("os-update-log", ()): "tail -c 20000 /run/panel-os-update.log 2>&1",
+    ("journal-cron", ()):
+        "journalctl _COMM=cron --since '-14 days' -o short-unix --no-pager 2>&1",
     ("content-game-remove", ("gmodcontent", "cstrike", "cssserver")):
         "rm -rf /home/gmodcontent/serverfiles/cstrike ; rm -rf /home/gmodcontent/cssserver"
         " ; rm -rf /home/gmodcontent/lgsm/config-lgsm/cssserver",
@@ -4412,7 +4415,79 @@ try:
 finally:
     sm._run_local, sm.run_command, sm._exec_local_argv = _orig_rl, _orig_rc2, _orig_argv
     sm._HELPER_STATE.clear()
-    sm._HELPER_STATE.update(_orig_helper_state)# ── sshd hardening, and the swap file's precedence bug ────────────────────────────────────────
+    sm._HELPER_STATE.update(_orig_helper_state)
+
+
+# ── the REMOTE fail2ban top-IPs report ────────────────────────────────────────────────────────
+# The remote twin of system_ops.fail2ban_top_ips. #118 converted the local one; this copy still
+# carried the five-stage root pipeline, which is how two copies of one behaviour drift. It shares
+# the tally now — and a mutation that skipped the tally entirely left the suite green until this
+# test existed, because nothing exercised the remote path end to end.
+_orig_rt_rp, _orig_rt_ov = sm.run_privileged, sm.remote_fail2ban_overview
+try:
+    _RAW = "\n".join([
+        "2026-09-03 10:00:00 x [sshd] Found 203.0.113.5",
+        "2026-09-03 10:00:01 x [sshd] Found 203.0.113.5",
+        "2026-09-03 10:00:02 x [sshd] Ban 203.0.113.5",
+        "2026-09-03 10:00:03 x [sshd] Found 198.51.100.9",
+    ])
+    _rt_args = []
+    sm.run_privileged = lambda s_, v, a=(), **k: (_rt_args.append((v, list(a))), (_RAW, "", 0))[1]
+    sm.remote_fail2ban_overview = lambda s_: {"jails": [{"banned_ips": ["203.0.113.5"]}]}
+    _rt = sm.remote_fail2ban_top_ips(object(), limit=20, days=7)
+    _rt_by = {r["ip"]: r for r in _rt}
+    check("remote top-IPs: the raw log lines are tallied, not passed through",
+          "203.0.113.5" in _rt_by and _rt_by["203.0.113.5"]["attempts"] == 2
+          and _rt_by["203.0.113.5"]["bans"] == 1, str(_rt))
+    check("remote top-IPs: a second IP is counted separately",
+          _rt_by.get("198.51.100.9", {}).get("attempts") == 1, str(_rt))
+    check("remote top-IPs: currently-banned IPs are marked from the jail overview",
+          _rt_by["203.0.113.5"]["banned_now"] is True
+          and _rt_by["198.51.100.9"]["banned_now"] is False, str(_rt))
+    check("remote top-IPs: the verb is asked for the log lines, with a bare date as its cutoff",
+          _rt_args and _rt_args[0][0] == "f2b-log-lines"
+          and _re.fullmatch(r"\d{4}-\d{2}-\d{2}", _rt_args[0][1][0]) is not None,
+          str(_rt_args[:1]))
+    check("remote top-IPs: that cutoff is one privileged.py would accept",
+          _priv.check_args("f2b-log-lines", _rt_args[0][1]) == _rt_args[0][1], str(_rt_args[:1]))
+finally:
+    sm.run_privileged, sm.remote_fail2ban_overview = _orig_rt_rp, _orig_rt_ov
+
+
+# ── cron run times, read from cron's own journal ──────────────────────────────────────────────
+# Was `journalctl _COMM=cron … | grep -F '(<user>) CMD ' | tail -n 800` — the user name went into a
+# grep pattern running as root. The verb reads the window; the filtering is Python. The per-user
+# filter is the part that matters: without it one game user's cron history is attributed to
+# another, and a mutation that dropped it left the suite green until this test existed.
+_CRON_JOURNAL = "\n".join([
+    "1788000000 host CRON[1]: (codserver) CMD (/home/codserver/codserver monitor)",
+    "1788000060 host CRON[2]: (gmodserver) CMD (/home/gmodserver/gmodserver update)",
+    "1788000120 host CRON[3]: (codserver) CMD (/home/codserver/codserver update-lgsm)",
+    "1788000180 host CRON[4]: (codserver) CMD (/home/codserver/codserver monitor)",
+    "not-an-epoch host CRON[5]: (codserver) CMD (/home/codserver/codserver bogus)",
+])
+_orig_cron_rp = sm.run_privileged
+try:
+    sm.run_privileged = lambda s_, v, a=(), **k: (_CRON_JOURNAL, "", 0)
+    _times = sm._read_cron_run_times(object(), "codserver")
+    check("cron times: only THIS user's lines are counted",
+          "/home/gmodserver/gmodserver update" not in _times, str(sorted(_times)))
+    check("cron times: this user's commands are all present",
+          "/home/codserver/codserver monitor" in _times
+          and "/home/codserver/codserver update-lgsm" in _times, str(sorted(_times)))
+    check("cron times: a repeated command keeps the LATEST run",
+          _times.get("/home/codserver/codserver monitor") == 1788000180,
+          str(_times.get("/home/codserver/codserver monitor")))
+    check("cron times: a line whose first field is not an epoch is skipped",
+          "/home/codserver/codserver bogus" not in _times, str(sorted(_times)))
+    sm.run_privileged = lambda s_, v, a=(), **k: ("", "", 0)
+    eq("cron times: no journal output is no times",
+       sm._read_cron_run_times(object(), "codserver"), {})
+finally:
+    sm.run_privileged = _orig_cron_rp
+
+
+# ── sshd hardening, and the swap file's precedence bug ────────────────────────────────────────
 # The hardening was four `sed -i 's/^#\?Key.*/Key value/'` substitutions joined with ';' in one
 # root shell. Exercised here against a real sshd_config: a commented directive, an already-set one,
 # and one that is absent entirely.
@@ -4584,15 +4659,22 @@ import ast as _ast
 
 _ESCALATION_FILES = ["app.py", "auth.py", "ssh_manager.py", "system_ops.py", "notifications.py",
                      "backup.py", "db_maintenance.py", "tailscale_integration.py", "manage.py"]
-_CEILING = {"sudo=True": 10, "_sudo_sh": 1}   # measured at the time of writing; lower only
+_CEILING = {"sudo=True": 7, "_sudo_sh": 1}   # measured at the time of writing; lower only
 
 def _is_dispatch(call):
-    """True when this escalation IS the verb layer's transport rather than a call site.
+    """True when this escalation is NOT a call site composing a shell string.
+
+    Two shapes qualify. run_privileged() itself takes a `sudo` keyword — passing it explicitly is
+    still a VERB call, not a shell string, and counting those overstated the work by one until it
+    was noticed. And run_privileged / write_root_file / _run_verb each end in a
+    run_command/_run_local/_run with sudo=True, passing a command built by privileged.py.
 
     run_privileged(), write_root_file() and _run_verb() each end in a run_command/_run_local/_run
     with sudo=True, passing a command built by privileged.py. Counting those as "call sites still
     composing a shell string" overstates the work left by four — the number below is quoted in
     SECURITY.md, so it should mean what it says."""
+    if getattr(call.func, "attr", getattr(call.func, "id", "")) in ("run_privileged", "_run_verb"):
+        return True                       # a verb call, however it spells its sudo argument
     for _arg in list(call.args) + [k.value for k in call.keywords]:
         for _sub in _ast.walk(_arg):
             if (isinstance(_sub, _ast.Call)
@@ -4633,7 +4715,7 @@ for _f in _ESCALATION_FILES:
             if (_k.arg == "sudo" and isinstance(_k.value, _ast.Constant)
                     and _k.value.value is True and _is_dispatch(_n)):
                 _excluded += 1
-check("escalation census: the dispatcher exclusion covers exactly the 6 known transports",
+check("escalation census: the exclusion covers exactly the 6 known transports",
       _excluded == 6, "excluded %d" % _excluded)
 
 for _kind, _limit in _CEILING.items():

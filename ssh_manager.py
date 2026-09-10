@@ -1368,9 +1368,11 @@ def _read_cron_run_times(server, user):
     panel-managed and legacy entries — which the recorder doesn't wrap — still show WHEN they
     last ran. Cron logs the command it ran but not its exit status, so this is time-only.
     Best-effort (empty if cron logging is off/unavailable)."""
-    q = ("journalctl _COMM=cron --since '-14 days' -o short-unix --no-pager 2>/dev/null "
-         f"| grep -F '({user}) CMD ' | tail -n 800")
-    out, _, _ = run_command(server, q, timeout=12, sudo=True)
+    # Was `journalctl _COMM=cron … | grep -F '(<user>) CMD ' | tail -n 800` — the user name went
+    # into a grep pattern running as root. The verb reads the window; the filtering is here.
+    out, _, _ = run_privileged(server, "journal-cron", [], timeout=12, merge_stderr=False)
+    marker = "(%s) CMD " % user
+    out = "\n".join([ln for ln in (out or "").splitlines() if marker in ln][-800:])
     times = {}
     for line in (out or "").splitlines():
         head = line.split(None, 1)
@@ -3277,9 +3279,7 @@ def remote_os_check_updates(server):
 def remote_os_run_updates(server):
     """Run apt upgrade on the remote server (blocking; kept for callers that want a one-shot).
     The UI uses the streaming remote_os_update_start/_status pair instead."""
-    out, err, rc = run_privileged(server, "apt-full-upgrade", ["phased"],
-        timeout=600, sudo=True
-    )
+    out, err, rc = run_privileged(server, "apt-full-upgrade", ["phased"], timeout=600)
     return rc == 0, out[-300:] if out else err[:300]
 
 
@@ -4041,17 +4041,11 @@ def remote_fail2ban_top_ips(server, limit=20, days=7):
     except (TypeError, ValueError):
         days = 7
     cutoff = (datetime.now() - timedelta(days=days)).strftime("%Y-%m-%d")   # panel clock; no shell input
-    pipeline = (
-        "zcat -f /var/log/fail2ban.log* 2>/dev/null | "
-        "awk -v c='%s' '$1 >= c' | "
-        "grep -oE '\\[[A-Za-z0-9._-]+\\] (Ban|Found) [0-9a-fA-F:.]+' | "
-        "awk '{jail=$1; gsub(/[][]/,\"\",jail); a=$(NF-1); ip=$NF; "
-        "if(a==\"Found\") f[ip]++; else if(a==\"Ban\") b[ip]++; s[ip]=1; "
-        "k=ip\"|\"jail; if(!(k in js)){js[k]=1; jl[ip]=jl[ip](jl[ip]==\"\"?\"\":\",\")jail}} "
-        "END{for(ip in s) print (f[ip]+0)\"\\t\"(b[ip]+0)\"\\t\"ip\"\\t\"jl[ip]}' | "
-        "sort -rn | head -%d" % (cutoff, limit)
-    )
-    out, _, _ = run_command(server, pipeline, timeout=25, sudo=True)
+    # The remote twin of system_ops.fail2ban_top_ips, which #118 converted. Same split: the verb
+    # reads and filters the rotated logs, and the tally — the second awk — is the shared Python.
+    import system_ops as _so
+    out, _, _ = run_privileged(server, "f2b-log-lines", [cutoff], timeout=25, merge_stderr=False)
+    out = _so._tally_f2b_lines(out, limit)
     banned = set()
     try:
         for j in remote_fail2ban_overview(server).get("jails", []):

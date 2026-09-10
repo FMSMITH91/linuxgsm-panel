@@ -113,6 +113,9 @@ JOURNAL_UNITS = {
     "panel": ("linuxgsm-panel",),
 }
 JOURNAL_SOURCES = tuple(sorted(JOURNAL_UNITS))
+# cron's own execution log is matched by COMM, not by unit, so it needs its own verb rather than a
+# JOURNAL_UNITS entry. The window is fixed here; the caller passes nothing.
+CRON_JOURNAL_SINCE = "-14 days"
 LOG_FILES = {
     "fail2ban": "/var/log/fail2ban.log",
     "auth": "/var/log/auth.log",
@@ -542,6 +545,10 @@ VERBS = {
         lambda a: ["journalctl"] + [x for u in JOURNAL_UNITS[a[0]] for x in ("-u", u)]
         + ["--no-pager", "-n", a[1]],
         None),
+    # cron logs the command it ran, matched by _COMM rather than by unit. Fixed matcher, fixed
+    # window, no argument — the caller filters the result.
+    "journal-cron": ([], lambda a: ["journalctl", "_COMM=cron", "--since", CRON_JOURNAL_SINCE,
+                                    "-o", "short-unix", "--no-pager"], None),
     "log-tail": (
         [v_choice(*LOG_FILES), v_linecount],
         lambda a: ["tail", "-n", a[1], LOG_FILES[a[0]]],

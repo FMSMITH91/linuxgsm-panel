@@ -67,6 +67,8 @@ JOURNAL_UNITS = {
     "panel": ("linuxgsm-panel",),
 }
 JOURNAL_SOURCES = tuple(sorted(JOURNAL_UNITS))
+# cron's execution log is matched by COMM, not by unit — see tools/panel-helper.
+CRON_JOURNAL_SINCE = "-14 days"
 LOG_FILES = {
     "fail2ban": "/var/log/fail2ban.log",
     "auth": "/var/log/auth.log",
@@ -426,6 +428,8 @@ _ARGV = {
                 lambda a: ["journalctl"]
                 + [x for u in JOURNAL_UNITS[a[0]] for x in ("-u", u)]
                 + ["--no-pager", "-n", a[1]], None),
+    "journal-cron": ([], lambda a: ["journalctl", "_COMM=cron", "--since", CRON_JOURNAL_SINCE,
+                                    "-o", "short-unix", "--no-pager"], None),
     "log-tail": ([_choice(*LOG_FILES), _linecount],
                  lambda a: ["tail", "-n", a[1], LOG_FILES[a[0]]], None),
     "os-update-log": ([], lambda a: ["tail", "-c", "20000", OS_UPDATE_LOG], None),
