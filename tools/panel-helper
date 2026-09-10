@@ -183,6 +183,9 @@ def panel_conf():
                 k, v = line.split("=", 1)
                 out[k.strip()] = v.strip()
     except OSError:
+        # No panel.conf, or it is unreadable. Deliberately not fatal HERE: the callers below decide
+        # what a missing key means for them, and every one of them refuses rather than guessing at a
+        # path. Raising instead would turn "not installed yet" into a crash on an unrelated verb.
         pass
     return out
 
@@ -1036,6 +1039,8 @@ def _db_repair_detached(db_path):
         if devnull > 2:
             os.close(devnull)
     except OSError:
+        # Detaching stdio is best-effort. If /dev/null cannot be opened the repair should still run;
+        # the worst case is that output goes nowhere useful, which is where it was headed anyway.
         pass
     try:
         systemctl = resolve("systemctl")
@@ -1049,6 +1054,9 @@ def _db_repair_detached(db_path):
         subprocess.run([python, DBM_PATH, "repair", db_path],  # nosec B603 - root-owned script
                        check=False, timeout=900)
     except Exception:
+        # Swallowed so the finally below ALWAYS runs. This is a detached grandchild with no stderr
+        # anyone reads, and the only thing that matters after a failed repair is that the panel is
+        # started again — which the finally does. A raise here would skip it and leave it down.
         pass
     finally:
         # Start it again WHATEVER happened above. A panel left down by a failed repair is worse
@@ -1057,6 +1065,8 @@ def _db_repair_detached(db_path):
             subprocess.run([resolve("systemctl"), "start", PANEL_UNIT],  # nosec B603 - fixed argv
                            check=False, timeout=120)
         except Exception:
+            # Last resort in a finally, in a detached grandchild: there is nobody to report to and
+            # nothing further to try. Falling through to os._exit is the only remaining behaviour.
             pass
     os._exit(0)
 
