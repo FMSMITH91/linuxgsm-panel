@@ -133,6 +133,49 @@ fi
 # ─────────────────────────────────────────────────────────
 # Decide the install user + directory + service model.
 # ─────────────────────────────────────────────────────────
+# BEFORE choosing a mode, look for an install belonging to the OTHER one.
+#
+# The update check further down asks "is there an app.py and a unit file where I am about to
+# install?" — but where that is has already been decided by how this script was invoked. Run as
+# root it looks under the service user's home; run as yourself it looks under yours. Neither sees
+# the other, so `sudo ./install.sh` on a host with a working per-user install found nothing,
+# declared a fresh install, created the service user and built a SECOND panel beside the first:
+# two services, two databases, both wanting the same port.
+#
+# Refuse instead, and say exactly what was found. Adopting the other install automatically would
+# mean moving a running service between systemd scopes (--user to system or back) and re-owning
+# its data directory, which is a bigger and more dangerous operation than this script should
+# perform without being asked.
+_other_install=""
+if [ "$(id -u)" -eq 0 ]; then
+    # Running as root: is there a per-user install under some human's home?
+    for _h in /home/*; do
+        [ -f "${_h}/linuxgsm-panel/app.py" ] || continue
+        _u="$(basename "${_h}")"
+        [ "${_u}" = "${SERVICE_USER}" ] && continue      # that IS the root-install location
+        [ -f "${_h}/.config/systemd/user/linuxgsm-panel.service" ] || continue
+        _other_install="${_h}/linuxgsm-panel (per-user service, owned by '${_u}')"
+        break
+    done
+elif [ -f "/etc/systemd/system/linuxgsm-panel.service" ]; then
+    # Running as a normal user: is there already a system-service install?
+    _other_install="a system service (/etc/systemd/system/linuxgsm-panel.service)"
+fi
+if [ -n "${_other_install}" ]; then
+    warn "This host already has a LinuxGSM Panel installed in the OTHER service model:"
+    warn "    ${_other_install}"
+    warn "Installing the way you just invoked this script would create a SECOND, separate panel —"
+    warn "its own user, service, database and port — rather than updating the one you have."
+    if [ "$(id -u)" -eq 0 ]; then
+        warn "To update the existing install, run it AS THAT USER, without sudo:"
+        warn "    sudo -u <that-user> -i bash ~/linuxgsm-panel/install.sh"
+    else
+        warn "To update the existing install, run this script as root:"
+        warn "    sudo bash install.sh"
+    fi
+    die "Refusing to build a parallel install."
+fi
+
 if [ "$(id -u)" -eq 0 ]; then
     RUN_AS_ROOT=1
     PANEL_USER="${SERVICE_USER}"

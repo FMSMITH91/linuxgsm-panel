@@ -8,6 +8,16 @@ regardless of this file — this changelog is for humans.
 ## [Unreleased]
 
 ### Fixed
+- **Running the installer the "other" way built a second panel instead of updating the first.** The
+  update check asks whether there is an `app.py` and a unit file *where it is about to install* —
+  but that location has already been decided by how the script was invoked: as root it looks under
+  the service user's home, as yourself it looks under yours. Neither sees the other. So
+  `sudo ./install.sh` on a host with a working per-user install found nothing, declared a fresh
+  install, created the service user and would have stood up a **parallel** panel: its own user,
+  service, database, and the same port as the one already running. It now looks for an install in
+  the other service model first and refuses, naming what it found and how to update it. Adopting it
+  automatically would mean moving a running service between systemd scopes and re-owning its data
+  directory, which is not something an installer should do unasked.
 - **Six endpoints answered HTTP 500 when a remote host was simply unreachable.** A host that is
   powered off, rebooting, or behind a broken link is a normal condition for a panel that manages
   remote machines — not a fault in the panel. `live`, `pro-status`, `uptime`, `firewall`,
