@@ -4247,8 +4247,12 @@ for _f in _SCAN_MODULES:
 # while splitting monitoring out: a test reset `_monitor_state` by assignment and the monitor kept
 # reading the pre-reset dict. A docstring did not prevent it; this does.
 _ps_src = open(os.path.join(_root, "panel_state.py"), encoding="utf-8").read()
+# Dunders are module machinery, not shared state: panel_state declares __all__, and so does
+# monitoring — without this exclusion the gate reads monitoring's own __all__ as a rebind of
+# panel_state's. (It did, the first time.)
 _PS_NAMES = {_t.id for _n in _ast_scan.parse(_ps_src).body if isinstance(_n, _ast_scan.Assign)
-             for _t in _n.targets if isinstance(_t, _ast_scan.Name)}
+             for _t in _n.targets
+             if isinstance(_t, _ast_scan.Name) and not _t.id.startswith("__")}
 _rebinds = []
 for _f in ["app.py", "monitoring.py"] + [f for f in _SCAN_TEST_USERS]:
     _fp = os.path.join(_root, _f)

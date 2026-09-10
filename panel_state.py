@@ -12,6 +12,26 @@ one — clear it with `.clear()` instead.
 """
 import threading   # noqa: F401  (locks below are constructed from it)
 
+# This module exists ONLY to hold these; every one is read and written by importers
+# (app.py, monitoring.py) and none is used here, which is exactly what CodeQL's
+# py/unused-global-variable flags — it analyses a module in isolation and cannot see the
+# `from panel_state import ...` on the other side. __all__ is not a suppression: it is the
+# idiomatic way to declare an export-only module's surface, and it makes the intent
+# explicit for readers too.
+__all__ = [
+    "_reboot_when_empty",
+    "_rwe_lock",
+    "_max_players_cache",
+    "_os_update_seen",
+    "_player_counts",
+    "_server_full_alerted",
+    "_server_peak_notified",
+    "_last_sample_prune",
+    "_monitor_state",
+    "_expected_offline",
+    "_cron_restart_pending",
+]
+
 # Hosts the operator asked to "reboot when empty" — reboot once every game server on them is idle.
 # remote_id -> {"by": username, "since": epoch}. In-memory on purpose: a panel restart clears any
 # pending request, so no surprise reboot ever survives a restart.

@@ -39,6 +39,31 @@ from ssh_manager import (
 
 _log = logging.getLogger("panel.monitoring")
 
+# What app.py imports from here. CodeQL analyses a module in isolation, so the three tuning
+# constants below — read only by the ticker loops in app.py — read as unused globals to it.
+# Declaring the surface is the idiomatic fix rather than a suppression, and it stays true
+# when those loops move next to the code they drive.
+__all__ = [
+    "_AUTOBLOCK_DEFAULT_THRESHOLD",
+    "_METRIC_RETENTION_DAYS",
+    "_METRIC_SAMPLE_SECONDS",
+    "_MONITOR_HOST_WORKERS",
+    "_MONITOR_SECONDS",
+    "_PLAYER_POLL_SECONDS",
+    "_PLAYER_POLL_WORKERS",
+    "_autoblock_reconcile",
+    "_autoblock_threshold",
+    "_cached_player_count",
+    "_host_reachable",
+    "_metrics_work",
+    "_monitor_pass",
+    "_query_server_metrics",
+    "_reboot_when_empty_watch",
+    "_record_metric_samples",
+    "_refresh_player_counts",
+    "_whitelisted",
+]
+
 def _host_idle_state(remote):
     """'idle' (no players on any game server, confidently), 'busy' (someone is connected), or
     'unknown' (at least one server couldn't be read). The reboot-when-empty poller only acts on
