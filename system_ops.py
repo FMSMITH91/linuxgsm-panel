@@ -1094,12 +1094,33 @@ def panel_repair_database():
         return False, "The repair tool isn't available on this install."
     user_unit = os.path.expanduser("~/.config/systemd/user/linuxgsm-panel.service")
     system_unit = "/etc/systemd/system/linuxgsm-panel.service"
-    if os.path.exists(user_unit) or not os.path.exists(system_unit):
-        sc = "systemctl --user"
-        run = ["systemd-run", "--user", "--collect", "--on-active=2"]
-    else:
+    system_service = not (os.path.exists(user_unit) or not os.path.exists(system_unit))
+
+    if system_service and _helper_present():
+        # The helper does the whole stop -> repair -> start itself, detached, as three argv calls
+        # with no shell between them. It reads the database path from the root-owned panel.conf and
+        # runs a root-owned copy of db_maintenance.py with the SYSTEM interpreter.
+        #
+        # That last part is the reason this conversion exists. The fallback below composes a script
+        # naming THIS directory's venv python and THIS directory's db_maintenance.py, and hands it
+        # to `sudo systemd-run` — so root executes the panel user's interpreter running the panel
+        # user's script, out of a checkout `git pull` rewrites on every self-update. Narrowing the
+        # sudoers grant would not have fixed that; only moving the executed code out of the
+        # checkout does.
+        out, err, rc = _run_verb("panel-db-repair", [], timeout=20)
+        if rc == 0:
+            return True, ("Repairing the database — the panel stops, repairs it offline (your data "
+                          "is copied aside first), and restarts. Give it about a minute, then "
+                          "reload the page.")
+        _log.error("db repair verb failed: rc=%s %s", rc, (err or out or "")[:200])
+        return False, "Couldn't start the repair job — check the panel logs."
+
+    if system_service:
         sc = "sudo systemctl"
         run = ["sudo", "systemd-run", "--collect", "--on-active=2"]
+    else:
+        sc = "systemctl --user"
+        run = ["systemd-run", "--user", "--collect", "--on-active=2"]
     # ONE detached unit (survives the panel going down): stop → repair offline → start.
     script = ("%s stop linuxgsm-panel.service; ( cd %s && %s %s update ); %s start linuxgsm-panel.service"
               % (sc, shlex.quote(base), shlex.quote(py), shlex.quote(dbm), sc))

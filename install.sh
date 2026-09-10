@@ -774,6 +774,32 @@ if [ -f "${HELPER_SRC}" ]; then
     fi
 fi
 
+# db_maintenance.py is installed ROOT-OWNED beside the helper, and panel.conf records the one path
+# it needs. Both are placed HERE and nowhere else — there is deliberately no verb that copies them,
+# because "install this file from the panel's directory and run it as root later" is the same hole
+# the helper exists to close.
+#
+# Why a second copy at all: the offline database repair runs as root, and the version in the
+# checkout is owned by the panel user and rewritten by `git pull` on every self-update. Root
+# executing it — or the checkout's venv interpreter — would make the boundary decorative. The
+# helper runs THIS copy with the SYSTEM python instead. Updating it needs root, exactly as
+# updating the helper does.
+DBM_SRC="${PANEL_DIR}/db_maintenance.py"
+DBM_DST="${HELPER_DIR}/db_maintenance.py"
+PANEL_CONF="${HELPER_DIR}/panel.conf"
+if [ -f "${DBM_SRC}" ] && [ -d "${HELPER_DIR}" ]; then
+    if ${H_SUDO} install -o root -g root -m 0755 "${DBM_SRC}" "${DBM_DST}" 2>/dev/null; then
+        printf 'db_path=%s\n' "${PANEL_DIR}/data/panel.db" \
+            | ${H_SUDO} tee "${PANEL_CONF}" >/dev/null 2>&1 \
+            && ${H_SUDO} chmod 0644 "${PANEL_CONF}" 2>/dev/null \
+            && ${H_SUDO} chown root:root "${PANEL_CONF}" 2>/dev/null
+        ok "Offline DB repair installed root-owned at ${DBM_DST}"
+    else
+        warn "Could not install the root-owned db_maintenance copy (needs root)."
+        warn "The panel falls back to the pre-helper repair path until you re-run this as root."
+    fi
+fi
+
 info "[3/4] Registering the service…"
 if [ "${RUN_AS_ROOT}" -eq 1 ]; then
     # Own everything as the service user, then run a system service AS that user.
