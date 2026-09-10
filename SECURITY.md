@@ -166,6 +166,11 @@ types rather than in the command names:
   answers (`--force-confdef`, `--force-confold`) are fixed in the helper rather than passed
   in, so an unattended upgrade can never be talked into clobbering a config file you edited.
 
+Those two installer steps are also now **unreachable on the panel's own host**: the routes that
+run them (VPS bootstrap, Tailscale install, Tailscale join) refuse the local host outright. The
+remotes page had always hidden them for it; the routes had not, so a direct POST could aim a full
+VPS preparation — including a reboot — at the machine the panel runs on.
+
 **Two operations cannot be narrowed, and are named rather than left unremarked.** The VPS
 bootstrap installs Node.js by piping NodeSource's setup script into a root shell, and installs
 Tailscale the same way. That IS the operation in both cases: a verb could pin the URL, but only by
