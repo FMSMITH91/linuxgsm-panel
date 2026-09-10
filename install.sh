@@ -37,23 +37,33 @@ export XDG_RUNTIME_DIR="${XDG_RUNTIME_DIR:-/run/user/$(id -u)}"
 #     manage the local host (create game-server users, apt, ufw…), so a NOPASSWD
 #     sudoers entry is added for it.
 #
-#     BE CLEAR ABOUT WHAT THAT GRANT IS: it is `ALL=(ALL) NOPASSWD:ALL` — full,
-#     unrestricted, passwordless root for the service user. It is NOT scoped, and
-#     this comment used to claim it was. Anyone auditing the trust model deserves
-#     the real answer: there is currently no privilege boundary between "the web
-#     panel is compromised" and "the host is root-owned".
+#     WHAT THAT GRANT IS, precisely. On a fresh root install where all three
+#     root-owned pieces below land, it is now:
 #
-#     It cannot be narrowed by editing this file alone. ssh_manager._run_local
-#     escalates as `sudo bash -c '<command>'`, and a sudoers rule permitting
-#     /bin/bash is exactly equivalent to NOPASSWD:ALL — so a "scoped" list that
-#     includes bash would look narrower while granting identical power. Narrowing
-#     it for real needs a privileged helper: one script granted sudo, accepting a
-#     fixed set of verbs, with the privileged call sites routed through it.
+#         <user> ALL=(root) NOPASSWD: /usr/local/lib/linuxgsm-panel/panel-helper
 #
-#     THAT WORK HAS STARTED. tools/panel-helper is that script, and it is installed
-#     below; the ufw family already routes through it. The grant stays NOPASSWD:ALL
-#     until EVERY privileged call site does, because a boundary with a hole in it is
-#     not a boundary — see SECURITY.md for what is converted so far.
+#     One command. The helper accepts a fixed verb table, validates every argument,
+#     builds argv itself, and can reach no shell — resolve("bash") raises by design.
+#
+#     For years this said `ALL=(ALL) NOPASSWD:ALL`, and it was honest about it: there
+#     was no privilege boundary between "the web panel is compromised" and "the host
+#     is root-owned". Narrowing needed every privileged call site routed through the
+#     helper first, because a sudoers rule permitting /bin/bash — or systemd-run, or
+#     the tailscale binary, each of which runs whatever you hand it — is exactly
+#     equivalent to NOPASSWD:ALL. A "scoped" list containing any of them would read
+#     as narrower while granting identical power. None of them is in the narrow grant.
+#
+#     It also needed root to stop executing code out of the panel's own checkout.
+#     PANEL_DIR is chown'd to the service user and rewritten by `git pull` on every
+#     self-update, so a boundary that let root run files from it would have been
+#     decorative. db_maintenance.py and this installer are therefore installed
+#     root-owned beside the helper, and placed ONLY here — never by a verb.
+#
+#     THE GRANT STAYS WIDE if any of those pieces is missing, which is what happens
+#     when this script has not been re-run as root since the update: the panel falls
+#     back to `sudo bash -c '<verb rendered as text>'`, and narrowing under that
+#     would break every privileged action rather than secure anything. Re-run this
+#     installer as root to get the narrow grant. It prints which one it wrote.
 #
 #     If you only manage REMOTE servers from this panel, delete
 #     /etc/sudoers.d/linuxgsm-panel — the panel keeps working and the grant goes
@@ -758,6 +768,8 @@ fi
 # The consequence, stated plainly: updating the helper needs root. The panel's own self-update
 # cannot do it. Today the NOPASSWD:ALL grant still exists, so the update path can place it with
 # sudo; once that grant is narrowed, changing the verb table means re-running this script as root.
+HELPER_OK=0
+ROOT_TOOLS_OK=0
 HELPER_SRC="${PANEL_DIR}/tools/panel-helper"
 HELPER_DIR="/usr/local/lib/linuxgsm-panel"
 HELPER_DST="${HELPER_DIR}/panel-helper"
@@ -765,6 +777,7 @@ H_SUDO=""; [ "$(id -u)" -ne 0 ] && H_SUDO="sudo"
 if [ -f "${HELPER_SRC}" ]; then
     if ${H_SUDO} install -d -o root -g root -m 0755 "${HELPER_DIR}" 2>/dev/null \
        && ${H_SUDO} install -o root -g root -m 0755 "${HELPER_SRC}" "${HELPER_DST}" 2>/dev/null; then
+        HELPER_OK=1
         ok "Privileged helper installed at ${HELPER_DST}"
     else
         # Not fatal. ssh_manager.run_privileged falls back to the pre-helper path when the helper
@@ -784,15 +797,21 @@ fi
 # executing it — or the checkout's venv interpreter — would make the boundary decorative. The
 # helper runs THIS copy with the SYSTEM python instead. Updating it needs root, exactly as
 # updating the helper does.
+INSTALLER_DST="${HELPER_DIR}/install.sh"
 DBM_SRC="${PANEL_DIR}/db_maintenance.py"
 DBM_DST="${HELPER_DIR}/db_maintenance.py"
 PANEL_CONF="${HELPER_DIR}/panel.conf"
 if [ -f "${DBM_SRC}" ] && [ -d "${HELPER_DIR}" ]; then
     if ${H_SUDO} install -o root -g root -m 0755 "${DBM_SRC}" "${DBM_DST}" 2>/dev/null; then
-        printf 'db_path=%s\n' "${PANEL_DIR}/data/panel.db" \
+        printf 'db_path=%s\ndata_dir=%s\npanel_dir=%s\n' \
+            "${PANEL_DIR}/data/panel.db" "${PANEL_DIR}/data" "${PANEL_DIR}" \
             | ${H_SUDO} tee "${PANEL_CONF}" >/dev/null 2>&1 \
             && ${H_SUDO} chmod 0644 "${PANEL_CONF}" 2>/dev/null \
             && ${H_SUDO} chown root:root "${PANEL_CONF}" 2>/dev/null
+        # The installer itself, root-owned, for the same reason: the self-update runs it as root,
+        # and the copy in the checkout is panel-writable.
+        ${H_SUDO} install -o root -g root -m 0755 "$0" "${INSTALLER_DST}" 2>/dev/null || true
+        ROOT_TOOLS_OK=1
         ok "Offline DB repair installed root-owned at ${DBM_DST}"
     else
         warn "Could not install the root-owned db_maintenance copy (needs root)."
@@ -809,9 +828,29 @@ if [ "${RUN_AS_ROOT}" -eq 1 ]; then
     # apt, ufw). This is UNRESTRICTED root for the service user — see the trust-model
     # note at the top of this file for why it cannot currently be scoped, and delete
     # /etc/sudoers.d/linuxgsm-panel if you only manage remotes.
-    echo "${PANEL_USER} ALL=(ALL) NOPASSWD:ALL" > /etc/sudoers.d/linuxgsm-panel
+    # ── The grant ────────────────────────────────────────────────────────────────────────────
+    # NARROW when every root-owned piece is in place, because only then does the panel have a way
+    # to do its privileged work without a general shell: the helper for the verb table, the
+    # root-owned db_maintenance for the offline repair, and the root-owned installer for
+    # self-update. All three are placed above, by this script, as root — never by the panel.
+    #
+    # WIDE otherwise. A host that has the new code but has not had this script re-run as root still
+    # falls back to `sudo bash -c '<verb rendered as text>'`, and narrowing under it would break
+    # every privileged action rather than secure anything.
+    #
+    # Note what is NOT permitted even in the narrow form: no systemd-run, no bash, no tailscale, no
+    # sudo -u. Each of those was a call site once, and each is a verb now — a sudoers rule for any
+    # of them would be equivalent to NOPASSWD:ALL, because they all run whatever you hand them.
+    if [ "${HELPER_OK}" -eq 1 ] && [ "${ROOT_TOOLS_OK}" -eq 1 ]; then
+        echo "${PANEL_USER} ALL=(root) NOPASSWD: ${HELPER_DST}" > /etc/sudoers.d/linuxgsm-panel
+        SUDO_SCOPE="narrow (panel-helper only)"
+    else
+        echo "${PANEL_USER} ALL=(ALL) NOPASSWD:ALL" > /etc/sudoers.d/linuxgsm-panel
+        SUDO_SCOPE="WIDE (NOPASSWD:ALL) — the root-owned helper pieces are not all installed"
+    fi
     chmod 440 /etc/sudoers.d/linuxgsm-panel
     visudo -cf /etc/sudoers.d/linuxgsm-panel >/dev/null || { rm -f /etc/sudoers.d/linuxgsm-panel; die "sudoers entry invalid"; }
+    ok "sudo grant: ${SUDO_SCOPE}"
 
     cat > "${UNIT_FILE}" <<SERVICEEOF
 [Unit]

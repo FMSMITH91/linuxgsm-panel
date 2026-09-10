@@ -26,6 +26,18 @@ _DEFAULT_BRANCH = "main"
 _BRANCH_RE = r"^[A-Za-z0-9._/-]{1,100}$"
 
 
+def _is_system_service():
+    """True when the panel runs as a SYSTEM systemd unit (root install), False for a per-user one.
+
+    Five copies of this three-line test had accumulated. Extracting it is worth doing on its own,
+    but there is a second reason: CodeQL's py/uninitialized-local-variable reported the `if` after
+    the inline form as reading a possibly-uninitialized local, on an assignment that is plainly
+    unconditional. The report was wrong; the duplication that produced the shape was not. One
+    function, one answer, and nothing for the analysis to be confused by."""
+    user_unit = os.path.expanduser("~/.config/systemd/user/linuxgsm-panel.service")
+    return (not os.path.exists(user_unit)) and os.path.exists("/etc/systemd/system/linuxgsm-panel.service")
+
+
 def _valid_branch(name):
     name = (name or "").strip()
     return bool(name) and bool(re.match(_BRANCH_RE, name)) and not name.startswith("-") and ".." not in name
@@ -950,12 +962,32 @@ def _launch_installer(target_ref="", branch="", started_msg=None):
         'echo "=== installer exit $? ===" >> "$LOG"\n'
     )
     path = os.path.join(_upd_dir, "self-update.sh")
-    user_unit = os.path.expanduser("~/.config/systemd/user/linuxgsm-panel.service")
-    system_unit = "/etc/systemd/system/linuxgsm-panel.service"
-    if os.path.exists(user_unit) or not os.path.exists(system_unit):
-        launcher = ["systemd-run", "--user"]
-    else:
+
+    if _is_system_service() and _helper_present():
+        # The helper runs the ROOT-OWNED installer with the three variables in its environment,
+        # detached. The wrapper script below — written by the panel, into a directory the panel
+        # owns, then executed by root — is what this replaces.
+        #
+        # Being clear about what this does and does not buy: self-update means "fetch new code and
+        # run it", and no argv discipline makes that untrusted-safe. What changes is that the
+        # ROOT-run part is now fixed and small. The code the installer pulls goes on to run as the
+        # panel user, and its trustworthiness rests on the signed, CI-verified commit — which
+        # panel_update_status() has already checked before we get here.
+        out, err, rc = _run_verb("panel-self-update",
+                                 [target_ref or "-", branch or "-"], timeout=20)
+        if rc == 0:
+            _update_cache["ts"] = 0.0
+            return True, (started_msg or
+                          ("Update started — the panel is backing up, updating, and verifying it "
+                           "restarts cleanly. If the new version fails to come up it rolls back "
+                           "automatically. This takes up to a minute."))
+        _log.error("self-update verb failed: rc=%s %s", rc, (err or out or "")[:200])
+        return False, "Could not start the updater — check the panel logs."
+
+    if _is_system_service():
         launcher = ["sudo", "systemd-run"]
+    else:
+        launcher = ["systemd-run", "--user"]
     launcher += ["--no-block", "--collect", "--unit", "panel-selfupdate", "/bin/bash", path]
     try:
         with open(path, "w") as f:
@@ -1043,9 +1075,7 @@ def restart_panel(delay_seconds=2):
     response flush to the browser before the server goes down. Mirrors the self-update
     launcher's service-model detection. Best-effort; returns (ok, msg)."""
     delay = str(max(1, min(300, int(delay_seconds))))
-    user_unit = os.path.expanduser("~/.config/systemd/user/linuxgsm-panel.service")
-    system_unit = "/etc/systemd/system/linuxgsm-panel.service"
-    if os.path.exists(user_unit) or not os.path.exists(system_unit):
+    if not _is_system_service():
         # A per-user unit needs no root at all, so there is nothing to escalate and nothing to
         # scope — this branch keeps building its own argv.
         try:
@@ -1092,11 +1122,8 @@ def panel_repair_database():
     dbm = os.path.join(base, "db_maintenance.py")
     if not os.path.exists(py) or not os.path.exists(dbm):
         return False, "The repair tool isn't available on this install."
-    user_unit = os.path.expanduser("~/.config/systemd/user/linuxgsm-panel.service")
-    system_unit = "/etc/systemd/system/linuxgsm-panel.service"
-    system_service = not (os.path.exists(user_unit) or not os.path.exists(system_unit))
 
-    if system_service and _helper_present():
+    if _is_system_service() and _helper_present():
         # The helper does the whole stop -> repair -> start itself, detached, as three argv calls
         # with no shell between them. It reads the database path from the root-owned panel.conf and
         # runs a root-owned copy of db_maintenance.py with the SYSTEM interpreter.
@@ -1115,7 +1142,7 @@ def panel_repair_database():
         _log.error("db repair verb failed: rc=%s %s", rc, (err or out or "")[:200])
         return False, "Couldn't start the repair job — check the panel logs."
 
-    if system_service:
+    if _is_system_service():
         sc = "sudo systemctl"
         run = ["sudo", "systemd-run", "--collect", "--on-active=2"]
     else:

@@ -47,22 +47,28 @@ The panel manages game-server hosts over SSH, so treat it as sensitive infrastru
 
 ## Known trust-model limitation: the panel has root on its own host
 
-When the installer is run as **root**, it creates a dedicated service user and grants it
-`ALL=(ALL) NOPASSWD:ALL` in `/etc/sudoers.d/linuxgsm-panel` — **full, unrestricted,
-passwordless root**. The panel itself does not run as root, but it can become root at any
-time without a password.
+When the installer is run as **root** it creates a dedicated service user and grants it
+passwordless sudo. **What that grant permits now depends on whether the root-owned helper
+pieces are installed**, and the installer tells you which one it wrote:
 
-The practical consequence, stated plainly: **there is no privilege boundary between "the
-web panel is compromised" and "the host is root-owned."** Any remote-code-execution or
-command-injection flaw in the panel is immediately unconditional root on that machine.
+| condition | grant |
+|---|---|
+| helper + root-owned `db_maintenance.py` + root-owned installer all present | `ALL=(root) NOPASSWD: /usr/local/lib/linuxgsm-panel/panel-helper` |
+| any of them missing | `ALL=(ALL) NOPASSWD:ALL` — unchanged, and the panel falls back to the pre-helper path |
 
-This is not narrowable by editing the sudoers file. The panel escalates local work as
-`sudo bash -c '<command>'`, and a sudoers rule that permits `/bin/bash` is exactly as
-powerful as `NOPASSWD:ALL` — a "scoped" list containing bash would read as narrower while
-granting identical power. A real reduction needs a privileged helper: a single script
-granted sudo, accepting a fixed set of verbs, with every privileged call routed through it.
+For most of this project's life it was unconditionally the second row, and this document said
+so in these words: *there is no privilege boundary between "the web panel is compromised" and
+"the host is root-owned."* On an install with the narrow grant that is no longer true. On one
+without it, it still is — **re-run `install.sh` as root to get the narrow grant**.
 
-**That work has started, and is not finished.** `tools/panel-helper` is that script. It is
+Why it could not simply be edited into place earlier: the panel escalated local work as
+`sudo bash -c '<command>'`, and a sudoers rule permitting `/bin/bash` is exactly as powerful as
+`NOPASSWD:ALL`. The same is true of `systemd-run` and of the `tailscale` binary — each runs
+whatever you hand it. A "scoped" list containing any of them reads as narrower while granting
+identical power. Every one of those was a call site; every one is a verb now, and none appears
+in the narrow grant.
+
+**The helper.** `tools/panel-helper` is that script. It is
 installed root-owned at `/usr/local/lib/linuxgsm-panel/panel-helper`, deliberately outside
 the panel's own checkout — the checkout belongs to the panel user and `git pull` rewrites it
 on every self-update, so a helper living there would be panel-writable by design. It takes a
@@ -181,12 +187,35 @@ one you want, those two bootstrap steps are the thing to change, not the helper.
 Still to convert that go through `echo … | base64 -d >`, and the two multi-line shell
 scripts (the detached OS-update runner and the NodeSource installer).
 
-**Until that list is empty the grant stays `NOPASSWD:ALL` and nothing above has reduced your
-exposure.** A privilege boundary with a hole in it is not a boundary, and it would be worse
-than useless to describe it as one. Two holes remain by construction: call sites that still
-compose shell strings, and a fallback in `run_privileged()` that uses the old path when the
-helper is not installed (an upgraded host has the new code before it has the helper). Both go
-away in the same change that narrows the sudoers line.
+**That list is now empty, and the grant has narrowed.** On an install where the three
+root-owned pieces are present, `/etc/sudoers.d/linuxgsm-panel` contains one line:
+
+```
+<panel-user> ALL=(root) NOPASSWD: /usr/local/lib/linuxgsm-panel/panel-helper
+```
+
+Nothing else. In particular **not** `/bin/bash`, `/bin/sh`, `systemd-run`, the `tailscale`
+binary, or `sudo -u` — each of those runs whatever argv you hand it, so permitting any one of
+them would be `NOPASSWD:ALL` wearing a disguise. Each was a call site once; each is a verb now.
+
+Two conditions bound that claim, and both are enforced rather than asserted:
+
+* **The grant only narrows when all three root-owned pieces landed** — the helper, the
+  root-owned `db_maintenance.py`, and the root-owned installer. A host running new code that
+  has not had `install.sh` re-run as root keeps the wide grant, because it still falls back to
+  `sudo bash -c '<verb rendered as text>'` and narrowing under that would break every
+  privileged action rather than secure anything. The installer prints which grant it wrote.
+
+* **Root no longer executes anything out of the panel's checkout.** `PANEL_DIR` is owned by the
+  service user and rewritten by `git pull` on every self-update, so a boundary that let root run
+  files from there would have been decorative — the panel could take root by writing to its own
+  files. The offline DB repair and the self-update now run root-owned copies placed only by
+  `install.sh`, never by a verb. This mattered more than the sudoers line itself: narrowing
+  without it would have produced something that looked locked down and was not.
+
+The remaining `sudo` call sites in the source are the pre-helper fallbacks described above. They
+are counted by a ratchet in the test suite (`direct ['sudo', ...] sites`) that can fall but never
+rise, so the boundary cannot quietly erode.
 
 What you can do today:
 

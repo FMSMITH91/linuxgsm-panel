@@ -628,7 +628,13 @@ def discover_linuxgsm_servers(server):
         'done'
     )
     try:
-        out, _, rc = run_command(server, script, timeout=45, sudo=True)
+        # On the panel's OWN host with the helper installed, this is a verb: the helper walks /home
+        # itself and reads the crontabs, which is the only part that ever needed root. Remote hosts
+        # keep the shell form — it travels over SSH and never touches the local sudoers file.
+        if is_local_server(server) and helper_present():
+            out, _, rc = _exec_local_argv(_priv.helper_argv("lgsm-discover", []), timeout=45)
+        else:
+            out, _, rc = run_command(server, script, timeout=45, sudo=True)
     except Exception:
         _log.debug("discover_linuxgsm_servers: scan command failed", exc_info=True)
         return []
@@ -795,7 +801,10 @@ def server_live_metrics(server, short_name=None, game_port=None, force=False):
         parts.append(f"echo GUP $(ps -u {short_name} -o etimes= --no-headers 2>/dev/null | sort -rn | head -1)")
     if game_port:
         parts.append(f"echo PORT $(ss -H -ltnu 'sport = :{game_port}' 2>/dev/null | wc -l)")
-    out, _, _ = run_command(server, " ; ".join(parts), timeout=15, sudo=True)
+    # No sudo: every part of this reads world-readable state — /proc/stat, /proc/loadavg,
+    # /proc/uptime, free, df, nproc, `ps -u <user>` and a listening-socket count. It was asking for
+    # root it never needed, and on the panel's own host that was a local sudo call on every poll.
+    out, _, _ = run_command(server, " ; ".join(parts), timeout=15, sudo=False)
 
     m = {"cpu_percent": 0.0, "ram_used": 0, "ram_total": 0, "ram_percent": 0.0,
          "disk_used": 0, "disk_total": 0, "disk_percent": 0.0, "load": [0, 0, 0],
@@ -1602,7 +1611,12 @@ def stream_game_backup(server, user, name, chunk=262144):
 
     if is_local_server(server) or getattr(server, "auth_method", "") == "tailscale":
         if is_local_server(server):
-            argv = ["sudo", "-u", user, "cat", path]
+            # Was `sudo -u <user> cat <path>`. The verb keeps the property that mattered — the read
+            # happens AS THE GAME USER, so a symlink planted at that path reaches only what that
+            # user could already read. The helper drops supplementary groups, gid then uid before
+            # opening; reading as root would have turned this into "hand me any file on the box".
+            argv = (_priv.helper_argv("game-backup-read", [user, name])
+                    if helper_present() else ["sudo", "-u", user, "cat", path])
         else:
             host = _resolve_ts_host(server)
             argv = ["ssh", "-T", "-o", "StrictHostKeyChecking=accept-new", "-o", "BatchMode=yes",

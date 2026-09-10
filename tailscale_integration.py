@@ -371,15 +371,18 @@ class _SimpleResult:
 
 
 def install_tailscale_local():
-    """Install Tailscale on THIS host (needs sudo). Returns (success, log tail)."""
+    """Install Tailscale on THIS host (needs root). Returns (success, log tail).
+
+    Was `sudo bash -c "curl -fsSL … | sh"`. A sudoers rule permitting bash is exactly NOPASSWD:ALL,
+    so this one line was on its own enough to keep the grant wide open. The verb has no pipe and no
+    shell string: curl writes the installer to a root-owned 0600 file under /run and sh runs that
+    file. Still remote code as root — that is what installing Tailscale is — but the URL is fixed
+    on the far side and the caller supplies nothing."""
     try:
-        r = subprocess.run(
-            ["sudo", "bash", "-c", "curl -fsSL https://tailscale.com/install.sh | sh"],
-            capture_output=True, text=True, timeout=180,
-        )
+        out, err, rc = _so._run_verb("tailscale-install", [], timeout=180, merge_stderr=False)
         with _cache_lock:
             _cache["info"] = None
-        return r.returncode == 0, ((r.stdout or "") + (r.stderr or ""))[-1500:]
+        return rc == 0, ((out or "") + (err or ""))[-1500:]
     except Exception:
         # This message is echoed back to /api/tailscale/install — keep the raw
         # exception text out of the response (stack-trace-exposure); log it instead.

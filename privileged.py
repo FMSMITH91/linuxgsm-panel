@@ -291,6 +291,37 @@ def _logdate(s):
     return str(s)
 
 
+def _backup_name(s):
+    """A LinuxGSM backup archive file name. No slashes, no traversal: this becomes one path segment
+    under the game user's own backup directory and nothing else."""
+    s = str(s)
+    if "/" in s or ".." in s or not re.fullmatch(r"[A-Za-z0-9._-]{1,200}\.tar\.[A-Za-z0-9.]{1,20}", s):
+        raise VerbError("not a backup file name")
+    return s
+
+
+def _git_ref(s):
+    """A git commit SHA, or "-" for none. Hex only: this value is exported into the environment of
+    a root-run installer, so anything that could carry a flag, a path or a shell fragment is out."""
+    s = str(s)
+    if s == "-":
+        return s
+    if not re.fullmatch(r"[0-9a-f]{7,40}", s):
+        raise VerbError("not a commit sha")
+    return s
+
+
+def _branch_name(s):
+    """A git branch name, or "-" for none. No leading dash (it would read as a flag), no "..",
+    and a conservative character set."""
+    s = str(s)
+    if s == "-":
+        return s
+    if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._/-]{0,99}", s) or ".." in s:
+        raise VerbError("not a branch name")
+    return s
+
+
 def _restart_delay(s):
     """Seconds to wait before restarting the panel's own service. Bounded: the delay exists only so
     the triggering HTTP response can flush to the browser before the server goes down, so anything
@@ -580,6 +611,24 @@ _ARGV = {
     # Offline database repair. Zero arguments on purpose: the database path comes from the
     # root-owned panel.conf that install.sh wrote, never from the caller. See tools/panel-helper.
     "panel-db-repair": ([], lambda a: [], None),
+    # Swap a staged backup into place. Zero arguments: both the staging directory and the
+    # destinations come from the root-owned panel.conf, so a caller picks neither the source nor
+    # the target of a root-run copy. See tools/panel-helper.
+    "panel-restore": ([], lambda a: [], None),
+    # Panel self-update. Two validated arguments — a commit sha and a branch, each of which may be
+    # "-" for none — exported into the environment of a ROOT-OWNED installer. See tools/panel-helper
+    # for what this deliberately does not claim to make safe.
+    "panel-self-update": ([_git_ref, _branch_name], lambda a: [], None),
+    # Install Tailscale on this host. Zero arguments; the URL is fixed in the helper. See there
+    # for what this does and does not claim about running a downloaded installer as root.
+    "tailscale-install": ([], lambda a: [], None),
+    # Stream a game server backup for download. The helper drops to the GAME user before opening
+    # the file — reading it as root would turn a download button into "hand me any file on the
+    # box". See tools/panel-helper.
+    "game-backup-read": ([_username, _backup_name], lambda a: [], None),
+    # Find LinuxGSM instances already installed on this host. Zero arguments; the helper walks
+    # /home itself. It needed root for one thing only — reading another user's crontab.
+    "lgsm-discover": ([], lambda a: [], None),
     "apt-full-upgrade": ([_choice("phased", "standard")],
                          lambda a: [APT, "full-upgrade", "-y"]
                          + (["-o", "APT::Get::Always-Include-Phased-Updates=true"]

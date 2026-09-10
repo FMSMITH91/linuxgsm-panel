@@ -3885,6 +3885,11 @@ _VERB_SAMPLES = {
     "tailscale-up-login": ["yes", "-"],
     "os-update-run": [],
     "panel-db-repair": [],
+    "panel-restore": [],
+    "panel-self-update": ["-", "-"],
+    "tailscale-install": [],
+    "game-backup-read": ["ubuntu", "csgoserver-2026-01-01.tar.gz"],
+    "lgsm-discover": [],
     "content-scan": ["cstrike", "hl2"],
 }
 check("privileged: every verb has a sample (new verbs cannot skip the parity check)",
@@ -3913,13 +3918,19 @@ check("privileged: helper and panel build an identical argv for every verb",
 # would be decorative.
 check("helper: resolves ufw", _helper.resolve("ufw").endswith("/ufw") if os.path.exists("/usr/sbin/ufw") else True)
 check("helper: knows exactly the tools its verbs need, and no more",
-      sorted(_helper.TOOLS) == ["add-apt-repository", "apt-get", "crontab", "df", "dpkg",
+      sorted(_helper.TOOLS) == ["add-apt-repository", "apt-get", "bash_installer", "crontab",
+                                "curl", "df", "dpkg",
                                 "fail2ban-client", "fallocate", "fuser", "journalctl", "mkswap",
                                 "npm", "passwd", "pgrep", "pkill", "pro", "reboot", "renice", "rm",
-                                "ss", "sshd", "swapon", "sysctl", "systemctl", "systemd-run",
+                                "sh_installer", "ss", "sshd", "swapon", "sysctl",
+                                "systemctl", "systemd-run",
                                 "tail", "tailscale", "timedatectl", "ufw", "useradd", "userdel",
                                 "usermod"],
       sorted(_helper.TOOLS))
+# bash_installer exists so the self-update can run ONE fixed root-owned file. The general shell
+# must stay unresolvable under its own name, or any future verb could build ["bash", "-c", ...].
+check("helper: bash_installer points at a real shell, and only INSTALLER_PATH uses it",
+      _helper.TOOLS["bash_installer"] == ("/bin/bash", "/usr/bin/bash"))
 for _prog in ("bash", "sh", "python3", "env"):
     check("helper: refuses to resolve %s" % _prog, _ufw_raises_fnf(_helper.resolve, _prog))
 
@@ -3936,6 +3947,8 @@ _BAD = {
     "service-restart": ["nginx", "docker", "ssh; id", "ssh.service", ""],
     # The delay is the ONLY caller input to a verb that restarts the panel itself.
     "panel-restart": ["0", "301", "-1", "2; reboot", "", "abc", "1e3"],
+    # These two are exported into a ROOT-run installer's environment.
+    "panel-self-update": ["--upload-pack=x", "main; id", "a/../b", "HEAD~1", "'"],
     # The operator is a Linux user name; anything shaped like a flag or a shell fragment is out.
     "tailscale-set-operator": ["root; id", "--operator=x", "", "a" * 40, "has space"],
     "f2b-status-jail": ["sshd; id", "$(id)", "a" * 65, ""],
@@ -3993,6 +4006,17 @@ _BAD_VECTORS = [
     ("ufw-default", ["allow", "sideways"]),
     ("apt-install", ["curl", "--reinstall"]),
     ("write-file", ["/etc/shadow"]),
+    # The backup NAME is argument two, so _BAD above never reaches it — it pads position two
+    # with "x". These aim at the validator that actually guards the path segment.
+    ("game-backup-read", ["ubuntu", "../../etc/shadow"]),
+    ("game-backup-read", ["ubuntu", "a/b.tar.gz"]),
+    ("game-backup-read", ["ubuntu", "x.tar.gz; id"]),
+    ("game-backup-read", ["ubuntu", "plain.txt"]),
+    ("game-backup-read", ["ubuntu", ""]),
+    ("panel-self-update", ["-", "main; id"]),
+    ("panel-self-update", ["-", "--upload-pack=x"]),
+    ("panel-self-update", ["-", "a/../b"]),
+    ("panel-self-update", ["nothex", "-"]),
     # The content box: three of these verbs end in `rm -rf` as root, so the identifiers must be
     # refused in every position, not just the first.
     ("content-game-remove", ["gmodcontent", "../../etc", "cssserver"]),
@@ -5135,6 +5159,137 @@ try:
 finally:
     _helper.PANEL_CONF = _dbr_conf
     _helper.DBM_PATH = _dbr_dbm
+
+# ── The sudoers grant itself ──────────────────────────────────────────────────────────────────
+# The whole point of the verb table. install.sh writes a NARROW grant when every root-owned piece
+# is in place, and the wide one otherwise — because a host that has the new code but has not had
+# install.sh re-run as root still falls back to `sudo bash -c '<verb as text>'`, and narrowing
+# under it would break every privileged action rather than secure anything.
+_inst = open(os.path.join(_root, "install.sh"), encoding="utf-8").read()
+check("install.sh: writes a narrow grant permitting only the helper",
+      'NOPASSWD: ${HELPER_DST}" > /etc/sudoers.d/linuxgsm-panel' in _inst)
+check("install.sh: the narrow grant is conditional on the root-owned pieces being installed",
+      '[ "${HELPER_OK}" -eq 1 ] && [ "${ROOT_TOOLS_OK}" -eq 1 ]' in _inst)
+check("install.sh: still validates whichever grant it wrote with visudo",
+      "visudo -cf /etc/sudoers.d/linuxgsm-panel" in _inst)
+# The narrow grant must not quietly re-admit any of the things that were call sites. Each of these
+# runs whatever argv you hand it, so permitting one is permitting everything.
+_narrow = _inst[_inst.index('if [ "${HELPER_OK}"'):_inst.index("chmod 440 /etc/sudoers.d")]
+for _never in ("systemd-run", "/bin/bash", "/bin/sh", "tailscale", "sudo -u"):
+    check("install.sh: the narrow grant does not permit %s" % _never, _never not in _narrow)
+
+# ── The discovery scan, reimplemented in the helper, must speak the parser's dialect ───────────
+# discover_linuxgsm_servers used to be a twenty-line shell program run under `sudo bash -c`. It
+# needed root for exactly one thing — reading another user's crontab — and everything else was
+# ordinary file reading. The helper now does it in Python, so the output contract is the ONLY thing
+# holding the two halves together: FOUND|user|instance|port|backups|mods|cronlines|autostart, which
+# ssh_manager splits and requires at least 8 fields of.
+import tempfile as _tf_disc
+_disc_home = _tf_disc.mkdtemp()
+_disc_out = []
+_sv_home_root, _sv_disc_stdout = _helper.HOME_ROOT, _helper.sys.stdout
+try:
+    _u = os.path.join(_disc_home, "csgoserver")
+    os.makedirs(os.path.join(_u, "lgsm", "config-lgsm", "csgoserver"))
+    os.makedirs(os.path.join(_u, "lgsm", "backup"))
+    os.makedirs(os.path.join(_u, "lgsm", "mods"))
+    with open(os.path.join(_u, "lgsm", "config-lgsm", "csgoserver", "csgoserver.cfg"), "w") as _fh:
+        _fh.write("port=27015\n")
+    for _b in ("a.tar.gz", "b.tgz", "notes.txt"):
+        open(os.path.join(_u, "lgsm", "backup", _b), "w").close()
+    with open(os.path.join(_u, "lgsm", "mods", "installed-mods.txt"), "w") as _fh:
+        _fh.write("metamod\nsourcemod\n")
+    _launcher = os.path.join(_u, "csgoserver")
+    open(_launcher, "w").close()
+    os.chmod(_launcher, 0o755)
+
+    class _DiscCap:
+        def write(self, t):
+            _disc_out.append(t)
+
+        def flush(self):
+            pass
+
+    _helper.HOME_ROOT = _disc_home
+    _helper.sys.stdout = _DiscCap()
+    _rc_disc = _helper.do_lgsm_discover([], None)
+finally:
+    _helper.HOME_ROOT, _helper.sys.stdout = _sv_home_root, _sv_disc_stdout
+    import shutil as _sh_disc
+    _sh_disc.rmtree(_disc_home, ignore_errors=True)
+
+_disc_line = "".join(_disc_out).strip()
+check("helper: lgsm-discover emits a FOUND line for an installed instance",
+      _disc_line.startswith("FOUND|"), repr(_disc_line[:120]))
+_disc_parts = _disc_line.split("|")
+check("helper: lgsm-discover emits the 8 fields ssh_manager splits on",
+      len(_disc_parts) >= 8, "%d fields: %r" % (len(_disc_parts), _disc_line[:120]))
+if len(_disc_parts) >= 8:
+    eq("helper: lgsm-discover reports the user", _disc_parts[1], "csgoserver")
+    eq("helper: lgsm-discover reports the instance", _disc_parts[2], "csgoserver")
+    eq("helper: lgsm-discover reads the port out of the .cfg", _disc_parts[3], "27015")
+    eq("helper: lgsm-discover counts only archive backups, not notes.txt", _disc_parts[4], "2")
+    eq("helper: lgsm-discover counts installed mods", _disc_parts[5], "2")
+
+# ── The backup download DROPS privilege; it must never read as root ────────────────────────────
+# `sudo -u <user> cat` got one thing exactly right: the read happened as the GAME user, so a
+# symlink planted at that path could only reach what that user could already read. Moving it behind
+# a root helper is a privilege reduction ONLY if that property survives — read it as root instead
+# and a download button becomes "hand me any file on the box".
+_gbr = open(os.path.join(_root, "tools", "panel-helper"), encoding="utf-8").read()
+_gbr_fn = _gbr[_gbr.index("def do_game_backup_read"):]
+_gbr_fn = _gbr_fn[:_gbr_fn.index("\ndef ", 1)]
+for _need, _why in (("os.setgroups([])", "supplementary groups are cleared"),
+                    ("os.setgid(pw.pw_gid)", "gid is dropped"),
+                    ("os.setuid(pw.pw_uid)", "uid is dropped")):
+    check("helper: game-backup-read %s" % _why, _need in _gbr_fn, _need)
+check("helper: game-backup-read drops the gid BEFORE the uid (the reverse cannot work)",
+      _gbr_fn.index("os.setgid(") < _gbr_fn.index("os.setuid("))
+check("helper: game-backup-read verifies the drop took before opening anything",
+      "os.getuid() != pw.pw_uid" in _gbr_fn
+      and _gbr_fn.index("os.getuid() != pw.pw_uid") < _gbr_fn.index("open(path"))
+check("helper: game-backup-read opens the file only in the CHILD, after the drop",
+      _gbr_fn.index("os.fork()") < _gbr_fn.index("open(path"))
+
+# ── The restore swap: staging location and destinations both come from root's config ──────────
+# do_panel_restore takes ZERO arguments for the same reason do_panel_db_repair does, but the stakes
+# are higher here: the copy targets are the panel's database AND both encryption keys. A verb that
+# accepted a staging path would let a caller name a directory it cannot itself read (say
+# /etc/ssl/private) and have root copy the contents somewhere it can.
+_rst_conf = _helper.PANEL_CONF
+try:
+    import tempfile as _tf_rst
+    _rst_dir = _tf_rst.mkdtemp()
+    _rst_cfg = os.path.join(_rst_dir, "panel.conf")
+
+    _helper.PANEL_CONF = os.path.join(_rst_dir, "absent.conf")
+    check("helper: restore refuses with no data_dir configured",
+          _helper.do_panel_restore([], None) == 1)
+
+    for _bad in ("relative/data", os.path.join(_rst_dir, "not-a-dir")):
+        with open(_rst_cfg, "w", encoding="utf-8") as _fh:
+            _fh.write("data_dir=%s\n" % _bad)
+        _helper.PANEL_CONF = _rst_cfg
+        check("helper: restore refuses data_dir %r" % _bad,
+              _helper.do_panel_restore([], None) == 1)
+
+    # A real data_dir but nothing staged must refuse too — otherwise a stray call would stop the
+    # panel, copy nothing, and start it again for no reason.
+    _real = os.path.join(_rst_dir, "data")
+    os.makedirs(_real, exist_ok=True)
+    with open(_rst_cfg, "w", encoding="utf-8") as _fh:
+        _fh.write("data_dir=%s\n" % _real)
+    _helper.PANEL_CONF = _rst_cfg
+    check("helper: restore refuses when nothing is staged",
+          _helper.do_panel_restore([], None) == 1)
+finally:
+    _helper.PANEL_CONF = _rst_conf
+
+check("helper: the restore staging directory is a fixed NAME, not a caller argument",
+      _helper.RESTORE_STAGE == ".restore-stage"
+      and _helper.VERBS["panel-restore"][0] == [])
+check("helper: restore copies exactly the four known members",
+      _helper.RESTORE_MEMBERS == ("panel.db", "config.json", "secret_key", "cred_key"))
 
 # db_maintenance.repair must work from an explicit path — that is what lets a ROOT-OWNED copy run
 # under the system interpreter without importing the panel's config out of the checkout.
