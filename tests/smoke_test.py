@@ -460,49 +460,51 @@ try:
     # to the next INSERT — so a new server inherits the old one's alert flags and, via
     # _max_players_cache, its CAPACITY. #81 pruned one such map; these are its siblings.
     _am2 = sys.modules["app"]
+    _monmod = sys.modules["monitoring"]   # functions moved here resolve their deps HERE
+    _ps = sys.modules["panel_state"]      # the shared caches now live here
     _dead_r, _dead_s = 987654, 876543
-    _am2._monitor_state["remotes"][_dead_r] = True
-    _am2._monitor_state["disk"][_dead_r] = True
-    _am2._monitor_state["load"][_dead_r] = {"cpu_alerted": True}
-    _am2._monitor_state["servers"][_dead_s] = True
-    _am2._server_full_alerted[_dead_s] = True
-    _am2._server_peak_notified[_dead_s] = 1.0
-    _am2._expected_offline[_dead_s] = 1.0
-    _am2._cron_restart_pending[_dead_s] = True
-    _am2._max_players_cache[_dead_s] = 64
-    _am2._player_counts[_dead_s] = {"count": 7, "ts": 1.0}
-    _am2._reboot_when_empty[_dead_r] = {"by": "x", "since": 1.0}
+    _ps._monitor_state["remotes"][_dead_r] = True
+    _ps._monitor_state["disk"][_dead_r] = True
+    _ps._monitor_state["load"][_dead_r] = {"cpu_alerted": True}
+    _ps._monitor_state["servers"][_dead_s] = True
+    _ps._server_full_alerted[_dead_s] = True
+    _ps._server_peak_notified[_dead_s] = 1.0
+    _ps._expected_offline[_dead_s] = 1.0
+    _ps._cron_restart_pending[_dead_s] = True
+    _ps._max_players_cache[_dead_s] = 64
+    _ps._player_counts[_dead_s] = {"count": 7, "ts": 1.0}
+    _ps._reboot_when_empty[_dead_r] = {"by": "x", "since": 1.0}
     # #85's snapshot: pruned by its own sweep once a day, but it is read on every page load by
     # /api/os-updates/summary, so it is pruned here too.
-    _am2._os_update_seen[_dead_r] = {"name": "ghost-host", "count": 3, "security": 1,
+    _ps._os_update_seen[_dead_r] = {"name": "ghost-host", "count": 3, "security": 1,
                                      "packages": [], "at": 1.0}
     with app.app_context():
         _live_r = {r.id for r in RemoteServer.query.all()}
         _live_s = {row[0] for row in db.session.query(GameServer.id).all()}
-        _am2._forget_deleted_rows(_live_r, _live_s)
+        _monmod._forget_deleted_rows(_live_r, _live_s)
     _leftover = [n for n, m, k in (
-        ("_monitor_state[remotes]", _am2._monitor_state["remotes"], _dead_r),
-        ("_monitor_state[disk]", _am2._monitor_state["disk"], _dead_r),
-        ("_monitor_state[load]", _am2._monitor_state["load"], _dead_r),
-        ("_monitor_state[servers]", _am2._monitor_state["servers"], _dead_s),
-        ("_server_full_alerted", _am2._server_full_alerted, _dead_s),
-        ("_server_peak_notified", _am2._server_peak_notified, _dead_s),
-        ("_expected_offline", _am2._expected_offline, _dead_s),
-        ("_cron_restart_pending", _am2._cron_restart_pending, _dead_s),
-        ("_max_players_cache", _am2._max_players_cache, _dead_s),
-        ("_player_counts", _am2._player_counts, _dead_s),
-        ("_reboot_when_empty", _am2._reboot_when_empty, _dead_r),
-        ("_os_update_seen", _am2._os_update_seen, _dead_r),
+        ("_monitor_state[remotes]", _ps._monitor_state["remotes"], _dead_r),
+        ("_monitor_state[disk]", _ps._monitor_state["disk"], _dead_r),
+        ("_monitor_state[load]", _ps._monitor_state["load"], _dead_r),
+        ("_monitor_state[servers]", _ps._monitor_state["servers"], _dead_s),
+        ("_server_full_alerted", _ps._server_full_alerted, _dead_s),
+        ("_server_peak_notified", _ps._server_peak_notified, _dead_s),
+        ("_expected_offline", _ps._expected_offline, _dead_s),
+        ("_cron_restart_pending", _ps._cron_restart_pending, _dead_s),
+        ("_max_players_cache", _ps._max_players_cache, _dead_s),
+        ("_player_counts", _ps._player_counts, _dead_s),
+        ("_reboot_when_empty", _ps._reboot_when_empty, _dead_r),
+        ("_os_update_seen", _ps._os_update_seen, _dead_r),
     ) if k in m]
     check("deleted rows: no per-row state survives for an id that no longer exists",
           not _leftover, "still holding: %s" % _leftover)
     # ...and it must not evict LIVE rows, which would silently reset every alert each sweep.
-    _am2._monitor_state["servers"][gs_id] = True
+    _ps._monitor_state["servers"][gs_id] = True
     with app.app_context():
-        _am2._forget_deleted_rows({r.id for r in RemoteServer.query.all()},
+        _monmod._forget_deleted_rows({r.id for r in RemoteServer.query.all()},
                                   {row[0] for row in db.session.query(GameServer.id).all()})
     check("deleted rows: state for a LIVE server is kept",
-          gs_id in _am2._monitor_state["servers"])
+          gs_id in _ps._monitor_state["servers"])
 
     # Session fixation: the authenticated session must not inherit whatever the pre-login one
     # carried. An attacker who can get a victim to browse with a cookie value of the attacker's
@@ -947,7 +949,10 @@ try:
     # per server, every few seconds, on a page that polls. It now reads frozen values from rows the
     # request already loaded, so this asserts the data still ARRIVES — per-server figures keyed by
     # id, and the host block named from the same rows rather than a fresh lookup.
-    _dmapp = sys.modules["app"]        # defined here: the shared _appmod alias comes later
+    # The route calls _metrics_work -> _query_server_metrics, both of which live in monitoring.py
+    # and resolve these two names in THAT module. Patching app's copies would no-op and the stubs
+    # would never run — the poll would try to reach the fixture host for real.
+    _dmapp = sys.modules["monitoring"]
     _sv_slm, _sv_map = _dmapp.server_live_metrics, _dmapp.game_map
     try:
         _dmapp.server_live_metrics = lambda remote, short=None, port=None, force=False: {
@@ -1581,65 +1586,76 @@ try:
     with app.app_context():
         import time as _time_mon
         _am = sys.modules["app"]
+        # _monitor_pass lives in monitoring.py now and looks its helpers up in THAT module's
+        # namespace, so stubbing app's copy would silently no-op and the probes would run for
+        # real. Patch where the function actually resolves the name.
+        _monmod = sys.modules["monitoring"]
+        _ps = sys.modules["panel_state"]
         _r1 = RemoteServer.query.filter_by(name="smoke-host").first()
         _mon = GameServer(remote_id=_r1.id, name="mon-srv", short_name="monserver",
                           game_type="csgo", port=27100, installed=True, status="online")
         db.session.add(_mon); db.session.commit()
         _mon_id, _r1_id = _mon.id, _r1.id
         _rec = []
-        _saved = {n: getattr(_am, n) for n in ("_host_reachable", "_remote_listening_ports",
+        _saved = {n: getattr(_monmod, n) for n in ("_host_reachable", "_remote_listening_ports",
                   "_host_disk_pct", "_host_load_mem", "_server_slots", "_server_max_config")}
         _saved_notify = _am.notifications.notify
-        _saved_mstate = _am._monitor_state
-        _saved_exp = dict(_am._expected_offline)
-        _saved_full = dict(_am._server_full_alerted)
-        _saved_peak = dict(_am._server_peak_notified)
-        _saved_pc = dict(_am._player_counts)
+        _saved_mstate = {k: dict(v) for k, v in _ps._monitor_state.items()}
+        _saved_exp = dict(_ps._expected_offline)
+        _saved_full = dict(_ps._server_full_alerted)
+        _saved_peak = dict(_ps._server_peak_notified)
+        _saved_pc = dict(_ps._player_counts)
         try:
             _am.notifications.notify = lambda key, title, body="": _rec.append(key)
-            _am._host_reachable = lambda r: True
-            _am._host_disk_pct = lambda r: 40
-            _am._host_load_mem = lambda r: (10, 10)
-            _am._server_max_config = lambda gs: 16
+            _monmod._host_reachable = lambda r: True
+            _monmod._host_disk_pct = lambda r: 40
+            _monmod._host_load_mem = lambda r: (10, 10)
+            _monmod._server_max_config = lambda gs: 16
 
             def _reset_mon():
-                _am._monitor_state = {"remotes": {}, "servers": {}, "disk": {}, "load": {}}
+                # Cleared IN PLACE, never rebound: monitoring.py holds a direct reference to
+                # this dict (`from panel_state import _monitor_state`), so assigning a fresh one
+                # here would leave the monitor reading the old object and the reset would silently
+                # do nothing. See the contract in panel_state's docstring.
+                for _bucket in _ps._monitor_state.values():
+                    _bucket.clear()
 
             # The very first pass only records a baseline — nothing alerts on startup.
             _reset_mon()
-            _am._remote_listening_ports = lambda r: {27100}
-            _rec.clear(); _am._monitor_pass()
+            _monmod._remote_listening_ports = lambda r: {27100}
+            _rec.clear(); _monmod._monitor_pass()
             check("monitor: the first pass is a silent baseline (no startup alerts)",
                   not any(k in _rec for k in ("server_down", "server_up", "remote_unreachable")),
                   "fired: %s" % _rec)
 
             # A server that was up and is no longer listening -> server_down.
-            _am._remote_listening_ports = lambda r: set()
-            _rec.clear(); _am._monitor_pass()
+            _monmod._remote_listening_ports = lambda r: set()
+            _rec.clear(); _monmod._monitor_pass()
             check("monitor: server_down fires on an up->down transition", "server_down" in _rec)
 
             # ...but a panel-issued stop (inside the expected-offline window) suppresses it.
             _reset_mon()
-            _am._monitor_state["servers"][_mon_id] = True
-            _am._expected_offline[_mon_id] = _time_mon.time()
-            _am._remote_listening_ports = lambda r: set()
-            _rec.clear(); _am._monitor_pass()
+            _ps._monitor_state["servers"][_mon_id] = True
+            _ps._expected_offline[_mon_id] = _time_mon.time()
+            _monmod._remote_listening_ports = lambda r: set()
+            _rec.clear(); _monmod._monitor_pass()
             check("monitor: a panel-issued stop suppresses server_down", "server_down" not in _rec)
-            _am._expected_offline.pop(_mon_id, None)
+            _ps._expected_offline.pop(_mon_id, None)
 
             # A reachable host that stops responding -> remote_unreachable.
             _reset_mon()
-            _am._monitor_state["remotes"] = {_r1_id: True}
-            _am._host_reachable = lambda r: r.id != _r1_id
-            _rec.clear(); _am._monitor_pass()
+            _ps._monitor_state["remotes"].clear()
+            _ps._monitor_state["remotes"][_r1_id] = True
+            _monmod._host_reachable = lambda r: r.id != _r1_id
+            _rec.clear(); _monmod._monitor_pass()
             check("monitor: remote_unreachable fires when a host stops responding",
                   "remote_unreachable" in _rec)
-            _am._host_reachable = lambda r: True
+            _monmod._host_reachable = lambda r: True
 
             # Poller: notify_when_empty is a one-shot on a CONFIRMED 0 that then disarms itself.
             _mon.notify_when_empty = True; db.session.commit()
-            _am._server_slots = lambda gs: (0, 16, None)
-            _rec.clear(); _am._refresh_player_counts(app)
+            _monmod._server_slots = lambda gs: (0, 16, None)
+            _rec.clear(); _monmod._refresh_player_counts(app)
             db.session.refresh(_mon)
             check("poller: notify_when_empty fires server_empty at a confirmed 0", "server_empty" in _rec)
             check("poller: notify_when_empty is one-shot (clears its own flag)",
@@ -1650,36 +1666,36 @@ try:
 
             def _unreadable(gs):
                 raise RuntimeError("count unavailable")
-            _am._server_slots = _unreadable
-            _rec.clear(); _am._refresh_player_counts(app)
+            _monmod._server_slots = _unreadable
+            _rec.clear(); _monmod._refresh_player_counts(app)
             db.session.refresh(_mon)
             check("poller: notify_when_empty does NOT fire on an unknown count", "server_empty" not in _rec)
             check("poller: notify_when_empty stays armed when the count is unknown",
                   _mon.notify_when_empty is True)
 
             # server_full fires when a server reaches its cap.
-            _am._server_full_alerted.pop(_mon_id, None)
-            _am._server_slots = lambda gs: (16, 16, None)
-            _rec.clear(); _am._refresh_player_counts(app)
+            _ps._server_full_alerted.pop(_mon_id, None)
+            _monmod._server_slots = lambda gs: (16, 16, None)
+            _rec.clear(); _monmod._refresh_player_counts(app)
             check("poller: server_full fires when a server hits its cap", "server_full" in _rec)
 
             # ── The sweep probes hosts concurrently, not one after another ────────────────────
             # It used to walk them serially, so its duration was the SUM of every host's latency and
             # one unreachable host (an SSH connect timeout) held up the checks for all the others.
             import time as _mt
-            _sv_probes = (_am._host_reachable, _am._host_disk_pct, _am._host_load_mem,
-                          _am._remote_listening_ports, _am._host_restart_flags)
+            _sv_probes = (_monmod._host_reachable, _monmod._host_disk_pct, _monmod._host_load_mem,
+                          _monmod._remote_listening_ports, _monmod._host_restart_flags)
             try:
                 _DWELL = 0.05
-                _am._host_reachable = lambda r: (_mt.sleep(_DWELL), True)[1]
-                _am._host_disk_pct = lambda r: (_mt.sleep(_DWELL), 40)[1]
-                _am._host_load_mem = lambda r: (_mt.sleep(_DWELL), (10, 10))[1]
-                _am._remote_listening_ports = lambda r: (_mt.sleep(_DWELL), set())[1]
-                _am._host_restart_flags = lambda r: (_mt.sleep(_DWELL), set())[1]
+                _monmod._host_reachable = lambda r: (_mt.sleep(_DWELL), True)[1]
+                _monmod._host_disk_pct = lambda r: (_mt.sleep(_DWELL), 40)[1]
+                _monmod._host_load_mem = lambda r: (_mt.sleep(_DWELL), (10, 10))[1]
+                _monmod._remote_listening_ports = lambda r: (_mt.sleep(_DWELL), set())[1]
+                _monmod._host_restart_flags = lambda r: (_mt.sleep(_DWELL), set())[1]
                 with app.app_context():
                     _nhosts = RemoteServer.query.count()
                 _reset_mon()
-                _t0 = _mt.time(); _am._monitor_pass(); _elapsed = _mt.time() - _t0
+                _t0 = _mt.time(); _monmod._monitor_pass(); _elapsed = _mt.time() - _t0
                 # Serial would be hosts x 4 probes x dwell; concurrent is ~4 x dwell regardless of
                 # how many hosts there are. Half of serial is a wide margin either way.
                 _serial = _nhosts * 5 * _DWELL
@@ -1687,57 +1703,57 @@ try:
                       _nhosts >= 3 and _elapsed < _serial / 2,
                       "%d hosts: %.2fs elapsed vs %.2fs if serial" % (_nhosts, _elapsed, _serial))
             finally:
-                (_am._host_reachable, _am._host_disk_pct, _am._host_load_mem,
-                 _am._remote_listening_ports, _am._host_restart_flags) = _sv_probes
+                (_monmod._host_reachable, _monmod._host_disk_pct, _monmod._host_load_mem,
+                 _monmod._remote_listening_ports, _monmod._host_restart_flags) = _sv_probes
 
             # ── The sweep records which servers the BOX has queued for restart ────────────────
             # One `ls /home/*/.restart-pending` per host, mapped back to the game user. Without
             # this the banner test above would pass while nothing ever populated the dict.
-            _sv_rf = _am._host_restart_flags
+            _sv_rf = _monmod._host_restart_flags
             try:
                 with app.app_context():
                     _mon_user = db.session.get(GameServer, _mon_id).short_name
-                _am._host_restart_flags = lambda r: {_mon_user}
-                _am._cron_restart_pending.clear()
+                _monmod._host_restart_flags = lambda r: {_mon_user}
+                _ps._cron_restart_pending.clear()
                 _reset_mon()
-                _am._monitor_pass()
+                _monmod._monitor_pass()
                 check("monitor: a server whose box has the restart flag is recorded",
-                      _am._cron_restart_pending.get(_mon_id) is True,
-                      str(dict(list(_am._cron_restart_pending.items())[:3])))
-                _others = [v for k, v in _am._cron_restart_pending.items() if k != _mon_id]
+                      _ps._cron_restart_pending.get(_mon_id) is True,
+                      str(dict(list(_ps._cron_restart_pending.items())[:3])))
+                _others = [v for k, v in _ps._cron_restart_pending.items() if k != _mon_id]
                 check("monitor: and servers without the flag are recorded as not pending",
                       _others and not any(_others), str(_others[:5]))
-                _am._host_restart_flags = lambda r: set()
-                _am._monitor_pass()
+                _monmod._host_restart_flags = lambda r: set()
+                _monmod._monitor_pass()
                 check("monitor: clearing the flag on the box clears it here too",
-                      _am._cron_restart_pending.get(_mon_id) is False)
+                      _ps._cron_restart_pending.get(_mon_id) is False)
             finally:
-                _am._host_restart_flags = _sv_rf
-                _am._cron_restart_pending.clear()
+                _monmod._host_restart_flags = _sv_rf
+                _ps._cron_restart_pending.clear()
 
             # ── A scheduled LinuxGSM update must not read as a crash ───────────────────────────
             # Stock LinuxGSM installs carry their own cron (e.g. "30 4 * * * ./gmodserver
             # force-update"). That takes the server down without telling the panel, so the monitor
             # alerted "went offline unexpectedly" every single night at the same minute.
-            _saved_maint = _am._lgsm_maintenance_running
+            _saved_maint = _monmod._lgsm_maintenance_running
             _key_notify = lambda key, title, body="": _rec.append(key)          # noqa: E731
             _probes = []
             try:
                 _reset_mon()
-                _am._monitor_state["servers"][_mon_id] = True
-                _am._remote_listening_ports = lambda r: set()
-                _am._lgsm_maintenance_running = lambda remote, gs: _probes.append(gs.id) or True
-                _rec.clear(); _am._monitor_pass()
+                _ps._monitor_state["servers"][_mon_id] = True
+                _monmod._remote_listening_ports = lambda r: set()
+                _monmod._lgsm_maintenance_running = lambda remote, gs: _probes.append(gs.id) or True
+                _rec.clear(); _monmod._monitor_pass()
                 check("maintenance: a scheduled update does not alert as a crash",
                       "server_down" not in _rec, str(_rec))
                 check("maintenance: the recorded state is left alone, so recovery is not an 'up' alert",
-                      _am._monitor_state["servers"].get(_mon_id) is True)
+                      _ps._monitor_state["servers"].get(_mon_id) is True)
                 # Record bodies too: _rec holds only event KEYS, and the fixture has other servers
                 # whose own transitions would otherwise be read as this one's.
                 _bodies = []
                 _am.notifications.notify = lambda k, t, b="": (_rec.append(k), _bodies.append((k, b)))[0]
-                _am._remote_listening_ports = lambda r: {27100}
-                _am._monitor_pass()
+                _monmod._remote_listening_ports = lambda r: {27100}
+                _monmod._monitor_pass()
                 _am.notifications.notify = _key_notify
                 check("maintenance: coming back from an update is silent too",
                       not [b for k, b in _bodies if k == "server_up" and "mon-srv" in b],
@@ -1747,29 +1763,29 @@ try:
                 # pays for it once per server.
                 _reset_mon()
                 _probes.clear()
-                _am._remote_listening_ports = lambda r: {27100}
-                _am._monitor_pass(); _am._monitor_pass()     # baseline, then steady-state up
+                _monmod._remote_listening_ports = lambda r: {27100}
+                _monmod._monitor_pass(); _monmod._monitor_pass()     # baseline, then steady-state up
                 check("maintenance: no SSH probe unless a server actually went down", not _probes,
                       "probed %s" % _probes)
                 # A stop the PANEL issued is already known locally — that must not cost a probe either.
-                _am._remote_listening_ports = lambda r: set()
+                _monmod._remote_listening_ports = lambda r: set()
                 _am._mark_expected_offline(_mon_id)
-                _probes.clear(); _rec.clear(); _am._monitor_pass()
+                _probes.clear(); _rec.clear(); _monmod._monitor_pass()
                 check("maintenance: a panel-issued stop is handled locally, with no probe",
                       _mon_id not in _probes and "server_down" not in _rec,
                       "probed %s / fired %s" % (_probes, _rec))
                 # ...and a REAL crash still alerts: same down transition, no maintenance running.
                 _reset_mon()
-                _am._expected_offline.pop(_mon_id, None)
-                _am._monitor_state["servers"][_mon_id] = True
-                _am._remote_listening_ports = lambda r: set()
-                _am._lgsm_maintenance_running = lambda remote, gs: False
-                _rec.clear(); _am._monitor_pass()
+                _ps._expected_offline.pop(_mon_id, None)
+                _ps._monitor_state["servers"][_mon_id] = True
+                _monmod._remote_listening_ports = lambda r: set()
+                _monmod._lgsm_maintenance_running = lambda remote, gs: False
+                _rec.clear(); _monmod._monitor_pass()
                 check("maintenance: a genuine crash still alerts", "server_down" in _rec, str(_rec))
             finally:
-                _am._lgsm_maintenance_running = _saved_maint
+                _monmod._lgsm_maintenance_running = _saved_maint
                 _am.notifications.notify = _key_notify
-                _am._expected_offline.pop(_mon_id, None)
+                _ps._expected_offline.pop(_mon_id, None)
 
             # ── A tag with notify=False silences that server's alerts ──────────────────────────
             # This is the only user-visible behaviour tags add beyond decoration, and it is wired
@@ -1782,38 +1798,38 @@ try:
             db.session.commit()
 
             _reset_mon()
-            _am._monitor_state["servers"][_mon_id] = True
-            _am._remote_listening_ports = lambda r: set()
-            _rec.clear(); _am._monitor_pass()
+            _ps._monitor_state["servers"][_mon_id] = True
+            _monmod._remote_listening_ports = lambda r: set()
+            _rec.clear(); _monmod._monitor_pass()
             check("mute: a muted tag suppresses server_down", "server_down" not in _rec, str(_rec))
             _reset_mon()
-            _am._monitor_state["servers"][_mon_id] = False
-            _am._remote_listening_ports = lambda r: {27100}
-            _rec.clear(); _am._monitor_pass()
+            _ps._monitor_state["servers"][_mon_id] = False
+            _monmod._remote_listening_ports = lambda r: {27100}
+            _rec.clear(); _monmod._monitor_pass()
             check("mute: a muted tag suppresses server_up", "server_up" not in _rec, str(_rec))
 
             _mon.notify_when_empty = True; db.session.commit()
-            _am._server_slots = lambda gs: (0, 16, None)
-            _rec.clear(); _am._refresh_player_counts(app)
+            _monmod._server_slots = lambda gs: (0, 16, None)
+            _rec.clear(); _monmod._refresh_player_counts(app)
             db.session.refresh(_mon)
             check("mute: a muted tag suppresses server_empty", "server_empty" not in _rec, str(_rec))
             # The request must stay ARMED: muting hides the alert, it does not consume the ask, so
             # it still fires the first time the server empties after the tag comes off.
             check("mute: notify_when_empty stays armed while muted", _mon.notify_when_empty is True)
 
-            _am._server_full_alerted.pop(_mon_id, None)
-            _am._server_slots = lambda gs: (16, 16, None)
-            _rec.clear(); _am._refresh_player_counts(app)
+            _ps._server_full_alerted.pop(_mon_id, None)
+            _monmod._server_slots = lambda gs: (16, 16, None)
+            _rec.clear(); _monmod._refresh_player_counts(app)
             check("mute: a muted tag suppresses server_full", "server_full" not in _rec, str(_rec))
             # ...but it IS marked alerted, so unmuting later doesn't fire retroactively about a
             # server that has been sitting at its cap the whole time.
             check("mute: server_full is still marked alerted while muted",
-                  _am._server_full_alerted.get(_mon_id) is True)
+                  _ps._server_full_alerted.get(_mon_id) is True)
 
-            _am._server_peak_notified.pop(_mon_id, None)
+            _ps._server_peak_notified.pop(_mon_id, None)
             _mon.peak_players = 1; db.session.commit()
-            _am._server_slots = lambda gs: (9, 16, None)
-            _rec.clear(); _am._refresh_player_counts(app)
+            _monmod._server_slots = lambda gs: (9, 16, None)
+            _rec.clear(); _monmod._refresh_player_counts(app)
             db.session.refresh(_mon)
             check("mute: a muted tag suppresses server_peak", "server_peak" not in _rec, str(_rec))
             check("mute: the peak is still RECORDED while muted (data, not an alert)",
@@ -1824,20 +1840,21 @@ try:
             _mon.tags = []
             db.session.commit()
             _reset_mon()
-            _am._monitor_state["servers"][_mon_id] = True
-            _am._remote_listening_ports = lambda r: set()
-            _rec.clear(); _am._monitor_pass()
+            _ps._monitor_state["servers"][_mon_id] = True
+            _monmod._remote_listening_ports = lambda r: set()
+            _rec.clear(); _monmod._monitor_pass()
             check("mute: removing the tag restores server_down", "server_down" in _rec, str(_rec))
             db.session.delete(_mute_tag); db.session.commit()
         finally:
             _am.notifications.notify = _saved_notify
             for _n, _v in _saved.items():
-                setattr(_am, _n, _v)
-            _am._monitor_state = _saved_mstate
-            _am._expected_offline.clear(); _am._expected_offline.update(_saved_exp)
-            _am._server_full_alerted.clear(); _am._server_full_alerted.update(_saved_full)
-            _am._server_peak_notified.clear(); _am._server_peak_notified.update(_saved_peak)
-            _am._player_counts.clear(); _am._player_counts.update(_saved_pc)
+                setattr(_monmod, _n, _v)
+            for _k, _v in _saved_mstate.items():
+                _ps._monitor_state[_k].clear(); _ps._monitor_state[_k].update(_v)
+            _ps._expected_offline.clear(); _ps._expected_offline.update(_saved_exp)
+            _ps._server_full_alerted.clear(); _ps._server_full_alerted.update(_saved_full)
+            _ps._server_peak_notified.clear(); _ps._server_peak_notified.update(_saved_peak)
+            _ps._player_counts.clear(); _ps._player_counts.update(_saved_pc)
             db.session.delete(_mon); db.session.commit()
 
     # ── Auto-block reconcile: attempts-threshold selection + whitelist exemption ───────────────────
@@ -1847,6 +1864,7 @@ try:
     with app.app_context():
         import ipaddress as _ipa_ab
         _am = sys.modules["app"]
+        _monmod = sys.modules["monitoring"]   # _autoblock_reconcile resolves these here
         _r = RemoteServer.query.filter_by(name="smoke-host").first()
         _was_local = _r.is_local
         _r.is_local = True          # exercise the local (so.*) branch — no SSH
@@ -1854,7 +1872,7 @@ try:
         _denied, _undenied = [], []
         _sv = {n: getattr(_am.so, n) for n in ("fail2ban_top_ips", "ufw_blocked_ips",
                "ufw_deny_ip", "ufw_undeny_ip")}
-        _sv_tn, _sv_th, _sv_wl = _am.tailnet_exempt_ips, _am._autoblock_threshold, _am._whitelist_networks
+        _sv_tn, _sv_th, _sv_wl = _monmod.tailnet_exempt_ips, _monmod._autoblock_threshold, _monmod._whitelist_networks
         try:
             _am.so.fail2ban_top_ips = lambda limit=100, days=7: [
                 {"ip": "203.0.113.10", "attempts": 80, "bans": 0},   # over threshold  -> block
@@ -1864,10 +1882,10 @@ try:
             _am.so.ufw_blocked_ips = lambda: {"203.0.113.99": "panel-autoblock"}   # our stale block
             _am.so.ufw_deny_ip = lambda ip, tag=None: (_denied.append(ip), (True, "ok"))[1]
             _am.so.ufw_undeny_ip = lambda ip: (_undenied.append(ip), (True, "ok"))[1]
-            _am.tailnet_exempt_ips = lambda remote, ips: set()
-            _am._autoblock_threshold = lambda: 20
-            _am._whitelist_networks = lambda: [_ipa_ab.ip_network("10.0.0.0/8")]
-            _added, _removed = _am._autoblock_reconcile(_r)
+            _monmod.tailnet_exempt_ips = lambda remote, ips: set()
+            _monmod._autoblock_threshold = lambda: 20
+            _monmod._whitelist_networks = lambda: [_ipa_ab.ip_network("10.0.0.0/8")]
+            _added, _removed = _monmod._autoblock_reconcile(_r)
             check("autoblock: an IP at/above the 7-day attempt threshold is blocked", "203.0.113.10" in _denied)
             check("autoblock: an IP below the threshold is NOT blocked", "203.0.113.11" not in _denied)
             check("autoblock: a whitelisted IP is never blocked even far over threshold", "10.9.9.9" not in _denied)
@@ -1875,7 +1893,7 @@ try:
         finally:
             for _n, _v in _sv.items():
                 setattr(_am.so, _n, _v)
-            _am.tailnet_exempt_ips, _am._autoblock_threshold, _am._whitelist_networks = _sv_tn, _sv_th, _sv_wl
+            _monmod.tailnet_exempt_ips, _monmod._autoblock_threshold, _monmod._whitelist_networks = _sv_tn, _sv_th, _sv_wl
             _r.is_local = _was_local
             db.session.commit()
 
@@ -1954,7 +1972,9 @@ try:
     with app.app_context():
         _eng = db.engine          # captured in a context; the pool object itself needs none, which
                                   # is what lets the stub below read it from a worker thread safely
-    _sv_slots2, _sv_max2 = _am._server_slots, _am._server_max_config
+    # _refresh_player_counts and both slot helpers live in monitoring.py; the stubs must be
+    # installed where the function looks them up, not on app's re-export.
+    _sv_slots2, _sv_max2 = _monmod._server_slots, _monmod._server_max_config
     _held = []
     try:
         # The stub has to DWELL. A real gamedig/SSH call takes hundreds of ms, which is what makes
@@ -1973,15 +1993,15 @@ try:
             # one instead of _server_slots — same thread, same question, so measure in both.
             _dwell()
             return 16
-        _am._server_slots = _slots_probe
-        _am._server_max_config = _max_probe
-        _am._refresh_player_counts(app)
+        _monmod._server_slots = _slots_probe
+        _monmod._server_max_config = _max_probe
+        _monmod._refresh_player_counts(app)
         check("player poll: every installed server is still queried",
               len(_held) >= 1, "workers ran: %d" % len(_held))
         check("player poll: no DB connection is held while the network call runs",
               _held and max(_held) <= 2, "peak checked-out during the call: %s" % (max(_held) if _held else "n/a"))
     finally:
-        _am._server_slots, _am._server_max_config = _sv_slots2, _sv_max2
+        _monmod._server_slots, _monmod._server_max_config = _sv_slots2, _sv_max2
 
     # ── Login redirect: ?next= must stay on this site ─────────────────────────────────────────────
     # The guard rejects absolute URLs, protocol-relative "//host", an embedded scheme and the

@@ -3264,8 +3264,12 @@ check("remote-f2b: drop-in drops non-IP tokens (no shell metachars in the file)"
 # ── The maintenance probe that keeps a scheduled LinuxGSM update from reading as a crash. The
 # monitor tests stub this function out wholesale, so the shell command it builds — the one place a
 # real bug can hide — is only ever asserted here.
-import app as _mapp
-from app import _lgsm_maintenance_running as _lmr
+# Patch the module the function actually RESOLVES run_command from. _lgsm_maintenance_running
+# used to live in app.py, so patching app.run_command intercepted it; it lives in monitoring now
+# and looks the name up in monitoring's namespace, so patching app's would silently no-op and the
+# stub would never be called. (That is exactly how this test failed during the move.)
+import monitoring as _mapp
+from monitoring import _lgsm_maintenance_running as _lmr
 
 _sent = []
 
@@ -4235,6 +4239,38 @@ for _f in _SCAN_MODULES:
                 _orphans.append("%s:%d %s%s" % (
                     _f, _node.lineno, _t.id,
                     " (only its tests mention it)" if _t.id in _referenced else ""))
+# ── panel_state's one rule: mutate in place, never rebind ──────────────────────────────────────
+# monitoring.py and app.py both do `from panel_state import _player_counts`, which binds the OBJECT.
+# Mutating it (`.clear()`, `[k] = v`) is seen by every importer; REBINDING it (`_player_counts = {}`)
+# gives the rebinding module a private copy and strands everyone else on the old one — silently, with
+# no error, and the symptom shows up as a monitor that reads stale state. That exact break happened
+# while splitting monitoring out: a test reset `_monitor_state` by assignment and the monitor kept
+# reading the pre-reset dict. A docstring did not prevent it; this does.
+_ps_src = open(os.path.join(_root, "panel_state.py"), encoding="utf-8").read()
+# Dunders are module machinery, not shared state: panel_state declares __all__, and so does
+# monitoring — without this exclusion the gate reads monitoring's own __all__ as a rebind of
+# panel_state's. (It did, the first time.)
+_PS_NAMES = {_t.id for _n in _ast_scan.parse(_ps_src).body if isinstance(_n, _ast_scan.Assign)
+             for _t in _n.targets
+             if isinstance(_t, _ast_scan.Name) and not _t.id.startswith("__")}
+_rebinds = []
+for _f in ["app.py", "monitoring.py"] + [f for f in _SCAN_TEST_USERS]:
+    _fp = os.path.join(_root, _f)
+    if not os.path.exists(_fp):
+        continue
+    for _node in _ast_scan.walk(_ast_scan.parse(open(_fp, encoding="utf-8").read())):
+        # `x = ...` and `x, y = ...` rebind; `x.attr = ...` and `x[k] = ...` do not.
+        if isinstance(_node, _ast_scan.Assign):
+            for _t in _node.targets:
+                _flat = _t.elts if isinstance(_t, (_ast_scan.Tuple, _ast_scan.List)) else [_t]
+                for _e in _flat:
+                    if isinstance(_e, _ast_scan.Name) and _e.id in _PS_NAMES:
+                        _rebinds.append("%s:%d %s" % (_f, _e.lineno, _e.id))
+                    elif isinstance(_e, _ast_scan.Attribute) and _e.attr in _PS_NAMES:
+                        _rebinds.append("%s:%d <mod>.%s" % (_f, _e.lineno, _e.attr))
+check("panel_state names are mutated in place, never rebound by an importer",
+      not _rebinds, "; ".join(sorted(set(_rebinds))[:5]))
+
 check("no module-level constant is defined and then never referenced by production code",
       not _orphans, "; ".join(_orphans[:4]))
 # The remote transport still base64s the content through a shell, so the content must survive
