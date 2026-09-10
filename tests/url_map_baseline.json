@@ -1,0 +1,2236 @@
+{
+  "/": {
+    "endpoint": "index",
+    "guards": [
+      "utils.py:decorated_view",
+      "view:index"
+    ],
+    "methods": [
+      "GET"
+    ]
+  },
+  "/account": {
+    "endpoint": "account",
+    "guards": [
+      "utils.py:decorated_view",
+      "view:account"
+    ],
+    "methods": [
+      "GET"
+    ]
+  },
+  "/account/2fa/disable": {
+    "endpoint": "account_2fa_disable",
+    "guards": [
+      "utils.py:decorated_view",
+      "view:account_2fa_disable"
+    ],
+    "methods": [
+      "POST"
+    ]
+  },
+  "/account/2fa/dismiss-nag": {
+    "endpoint": "account_dismiss_otp_nag",
+    "guards": [
+      "utils.py:decorated_view",
+      "view:account_dismiss_otp_nag"
+    ],
+    "methods": [
+      "POST"
+    ]
+  },
+  "/account/2fa/enable": {
+    "endpoint": "account_2fa_enable",
+    "guards": [
+      "utils.py:decorated_view",
+      "view:account_2fa_enable"
+    ],
+    "methods": [
+      "GET",
+      "POST"
+    ]
+  },
+  "/account/api-token/generate": {
+    "endpoint": "account_api_token_generate",
+    "guards": [
+      "utils.py:decorated_view",
+      "view:account_api_token_generate"
+    ],
+    "methods": [
+      "POST"
+    ]
+  },
+  "/account/api-token/revoke": {
+    "endpoint": "account_api_token_revoke",
+    "guards": [
+      "utils.py:decorated_view",
+      "view:account_api_token_revoke"
+    ],
+    "methods": [
+      "POST"
+    ]
+  },
+  "/account/password": {
+    "endpoint": "account_change_password",
+    "guards": [
+      "utils.py:decorated_view",
+      "view:account_change_password"
+    ],
+    "methods": [
+      "POST"
+    ]
+  },
+  "/account/sessions/revoke": {
+    "endpoint": "account_revoke_sessions",
+    "guards": [
+      "utils.py:decorated_view",
+      "view:account_revoke_sessions"
+    ],
+    "methods": [
+      "POST"
+    ]
+  },
+  "/api/account/sessions": {
+    "endpoint": "api_account_sessions",
+    "guards": [
+      "utils.py:decorated_view",
+      "view:api_account_sessions"
+    ],
+    "methods": [
+      "GET"
+    ]
+  },
+  "/api/account/sessions/<int:sess_id>/revoke": {
+    "endpoint": "api_account_session_revoke",
+    "guards": [
+      "utils.py:decorated_view",
+      "view:api_account_session_revoke"
+    ],
+    "methods": [
+      "POST"
+    ]
+  },
+  "/api/account/ui-order": {
+    "endpoint": "api_account_ui_order",
+    "guards": [
+      "utils.py:decorated_view",
+      "view:api_account_ui_order"
+    ],
+    "methods": [
+      "POST"
+    ]
+  },
+  "/api/account/ui-order/reset": {
+    "endpoint": "api_account_ui_order_reset",
+    "guards": [
+      "utils.py:decorated_view",
+      "view:api_account_ui_order_reset"
+    ],
+    "methods": [
+      "POST"
+    ]
+  },
+  "/api/command/<int:server_id>": {
+    "endpoint": "api_send_command",
+    "guards": [
+      "utils.py:decorated_view[server_access]",
+      "auth.py:decorated_function[server_access]",
+      "view:api_send_command"
+    ],
+    "methods": [
+      "POST"
+    ]
+  },
+  "/api/console/<int:server_id>": {
+    "endpoint": "api_console",
+    "guards": [
+      "utils.py:decorated_view[server_access]",
+      "auth.py:decorated_function[server_access]",
+      "view:api_console"
+    ],
+    "methods": [
+      "GET"
+    ]
+  },
+  "/api/dashboard/metrics": {
+    "endpoint": "api_dashboard_metrics",
+    "guards": [
+      "utils.py:decorated_view",
+      "view:api_dashboard_metrics"
+    ],
+    "methods": [
+      "GET"
+    ]
+  },
+  "/api/free-port": {
+    "endpoint": "api_free_port",
+    "guards": [
+      "utils.py:decorated_view(install_server,manage_servers)",
+      "auth.py:decorated_function(install_server,manage_servers)",
+      "view:api_free_port"
+    ],
+    "methods": [
+      "GET"
+    ]
+  },
+  "/api/i18n/<lang>": {
+    "endpoint": "api_i18n_catalog",
+    "guards": [
+      "view:api_i18n_catalog"
+    ],
+    "methods": [
+      "GET"
+    ]
+  },
+  "/api/notifications/test": {
+    "endpoint": "notifications_test",
+    "guards": [
+      "utils.py:decorated_view(super_admin)",
+      "auth.py:decorated_function(super_admin)",
+      "view:notifications_test"
+    ],
+    "methods": [
+      "POST"
+    ]
+  },
+  "/api/os-updates/summary": {
+    "endpoint": "api_os_updates_summary",
+    "guards": [
+      "utils.py:decorated_view(manage_remotes)",
+      "auth.py:decorated_function(manage_remotes)",
+      "view:api_os_updates_summary"
+    ],
+    "methods": [
+      "GET"
+    ]
+  },
+  "/api/panel/auto-updates": {
+    "endpoint": "api_panel_auto_updates",
+    "guards": [
+      "utils.py:decorated_view(super_admin)",
+      "auth.py:decorated_function(super_admin)",
+      "view:api_panel_auto_updates"
+    ],
+    "methods": [
+      "GET"
+    ]
+  },
+  "/api/panel/backup": {
+    "endpoint": "api_panel_backup_create",
+    "guards": [
+      "utils.py:decorated_view(super_admin)",
+      "auth.py:decorated_function(super_admin)",
+      "view:api_panel_backup_create"
+    ],
+    "methods": [
+      "POST"
+    ]
+  },
+  "/api/panel/backup/delete": {
+    "endpoint": "api_panel_backup_delete",
+    "guards": [
+      "utils.py:decorated_view(super_admin)",
+      "auth.py:decorated_function(super_admin)",
+      "view:api_panel_backup_delete"
+    ],
+    "methods": [
+      "POST"
+    ]
+  },
+  "/api/panel/backup/download/<path:name>": {
+    "endpoint": "api_panel_backup_download",
+    "guards": [
+      "utils.py:decorated_view(super_admin)",
+      "auth.py:decorated_function(super_admin)",
+      "view:api_panel_backup_download"
+    ],
+    "methods": [
+      "GET"
+    ]
+  },
+  "/api/panel/backup/full": {
+    "endpoint": "api_panel_backup_full",
+    "guards": [
+      "utils.py:decorated_view(super_admin)",
+      "auth.py:decorated_function(super_admin)",
+      "view:api_panel_backup_full"
+    ],
+    "methods": [
+      "POST"
+    ]
+  },
+  "/api/panel/backup/full/precheck": {
+    "endpoint": "api_panel_backup_full_precheck",
+    "guards": [
+      "utils.py:decorated_view(super_admin)",
+      "auth.py:decorated_function(super_admin)",
+      "view:api_panel_backup_full_precheck"
+    ],
+    "methods": [
+      "GET"
+    ]
+  },
+  "/api/panel/backup/game/<int:server_id>": {
+    "endpoint": "api_panel_backup_game",
+    "guards": [
+      "utils.py:decorated_view(super_admin)",
+      "auth.py:decorated_function(super_admin)",
+      "view:api_panel_backup_game"
+    ],
+    "methods": [
+      "POST"
+    ]
+  },
+  "/api/panel/backup/game/<int:server_id>/delete": {
+    "endpoint": "api_panel_backup_game_delete",
+    "guards": [
+      "utils.py:decorated_view(super_admin)",
+      "auth.py:decorated_function(super_admin)",
+      "view:api_panel_backup_game_delete"
+    ],
+    "methods": [
+      "POST"
+    ]
+  },
+  "/api/panel/backup/game/<int:server_id>/info": {
+    "endpoint": "api_panel_backup_game_info",
+    "guards": [
+      "utils.py:decorated_view(super_admin)",
+      "auth.py:decorated_function(super_admin)",
+      "view:api_panel_backup_game_info"
+    ],
+    "methods": [
+      "GET"
+    ]
+  },
+  "/api/panel/backup/game/<int:server_id>/schedule": {
+    "endpoint": "api_panel_backup_game_schedule",
+    "guards": [
+      "utils.py:decorated_view(super_admin)",
+      "auth.py:decorated_function(super_admin)",
+      "view:api_panel_backup_game_schedule"
+    ],
+    "methods": [
+      "POST"
+    ]
+  },
+  "/api/panel/backup/restore": {
+    "endpoint": "api_panel_backup_restore",
+    "guards": [
+      "utils.py:decorated_view(super_admin)",
+      "auth.py:decorated_function(super_admin)",
+      "view:api_panel_backup_restore"
+    ],
+    "methods": [
+      "POST"
+    ]
+  },
+  "/api/panel/backup/settings": {
+    "endpoint": "api_panel_backup_settings",
+    "guards": [
+      "utils.py:decorated_view(super_admin)",
+      "auth.py:decorated_function(super_admin)",
+      "view:api_panel_backup_settings"
+    ],
+    "methods": [
+      "POST"
+    ]
+  },
+  "/api/panel/backups": {
+    "endpoint": "api_panel_backups",
+    "guards": [
+      "utils.py:decorated_view(super_admin)",
+      "auth.py:decorated_function(super_admin)",
+      "view:api_panel_backups"
+    ],
+    "methods": [
+      "GET"
+    ]
+  },
+  "/api/panel/branches": {
+    "endpoint": "api_panel_branches",
+    "guards": [
+      "utils.py:decorated_view(super_admin)",
+      "auth.py:decorated_function(super_admin)",
+      "view:api_panel_branches"
+    ],
+    "methods": [
+      "GET"
+    ]
+  },
+  "/api/panel/change-port": {
+    "endpoint": "api_panel_change_port",
+    "guards": [
+      "utils.py:decorated_view(super_admin)",
+      "auth.py:decorated_function(super_admin)",
+      "view:api_panel_change_port"
+    ],
+    "methods": [
+      "POST"
+    ]
+  },
+  "/api/panel/db-health": {
+    "endpoint": "api_panel_db_health",
+    "guards": [
+      "utils.py:decorated_view(super_admin)",
+      "auth.py:decorated_function(super_admin)",
+      "view:api_panel_db_health"
+    ],
+    "methods": [
+      "GET"
+    ]
+  },
+  "/api/panel/db-stats": {
+    "endpoint": "api_panel_db_stats",
+    "guards": [
+      "utils.py:decorated_view(super_admin)",
+      "auth.py:decorated_function(super_admin)",
+      "view:api_panel_db_stats"
+    ],
+    "methods": [
+      "GET"
+    ]
+  },
+  "/api/panel/debug-report": {
+    "endpoint": "api_panel_debug_report",
+    "guards": [
+      "utils.py:decorated_view(super_admin)",
+      "auth.py:decorated_function(super_admin)",
+      "view:api_panel_debug_report"
+    ],
+    "methods": [
+      "GET"
+    ]
+  },
+  "/api/panel/diagnostics": {
+    "endpoint": "api_panel_diagnostics",
+    "guards": [
+      "utils.py:decorated_view(super_admin)",
+      "auth.py:decorated_function(super_admin)",
+      "view:api_panel_diagnostics"
+    ],
+    "methods": [
+      "GET"
+    ]
+  },
+  "/api/panel/enable-auto-updates": {
+    "endpoint": "api_panel_enable_auto_updates",
+    "guards": [
+      "utils.py:decorated_view(super_admin)",
+      "auth.py:decorated_function(super_admin)",
+      "view:api_panel_enable_auto_updates"
+    ],
+    "methods": [
+      "POST"
+    ]
+  },
+  "/api/panel/integrity": {
+    "endpoint": "api_panel_integrity",
+    "guards": [
+      "utils.py:decorated_view(super_admin)",
+      "auth.py:decorated_function(super_admin)",
+      "view:api_panel_integrity"
+    ],
+    "methods": [
+      "GET"
+    ]
+  },
+  "/api/panel/optimize-db": {
+    "endpoint": "api_panel_optimize_db",
+    "guards": [
+      "utils.py:decorated_view(super_admin)",
+      "auth.py:decorated_function(super_admin)",
+      "view:api_panel_optimize_db"
+    ],
+    "methods": [
+      "POST"
+    ]
+  },
+  "/api/panel/repair": {
+    "endpoint": "api_panel_repair",
+    "guards": [
+      "utils.py:decorated_view(super_admin)",
+      "auth.py:decorated_function(super_admin)",
+      "view:api_panel_repair"
+    ],
+    "methods": [
+      "POST"
+    ]
+  },
+  "/api/panel/repair-db": {
+    "endpoint": "api_panel_repair_db",
+    "guards": [
+      "utils.py:decorated_view(super_admin)",
+      "auth.py:decorated_function(super_admin)",
+      "view:api_panel_repair_db"
+    ],
+    "methods": [
+      "POST"
+    ]
+  },
+  "/api/panel/security/autoblock": {
+    "endpoint": "api_panel_security_autoblock",
+    "guards": [
+      "utils.py:decorated_view(super_admin)",
+      "auth.py:decorated_function(super_admin)",
+      "view:api_panel_security_autoblock"
+    ],
+    "methods": [
+      "POST"
+    ]
+  },
+  "/api/panel/security/bans": {
+    "endpoint": "api_panel_security_bans",
+    "guards": [
+      "utils.py:decorated_view(super_admin)",
+      "auth.py:decorated_function(super_admin)",
+      "view:api_panel_security_bans"
+    ],
+    "methods": [
+      "GET"
+    ]
+  },
+  "/api/panel/security/block": {
+    "endpoint": "api_panel_security_block",
+    "guards": [
+      "utils.py:decorated_view(super_admin)",
+      "auth.py:decorated_function(super_admin)",
+      "view:api_panel_security_block"
+    ],
+    "methods": [
+      "POST"
+    ]
+  },
+  "/api/panel/security/events": {
+    "endpoint": "api_panel_security_events",
+    "guards": [
+      "utils.py:decorated_view(super_admin)",
+      "auth.py:decorated_function(super_admin)",
+      "view:api_panel_security_events"
+    ],
+    "methods": [
+      "GET"
+    ]
+  },
+  "/api/panel/security/log": {
+    "endpoint": "api_panel_security_log",
+    "guards": [
+      "utils.py:decorated_view(super_admin)",
+      "auth.py:decorated_function(super_admin)",
+      "view:api_panel_security_log"
+    ],
+    "methods": [
+      "GET"
+    ]
+  },
+  "/api/panel/security/top-ips": {
+    "endpoint": "api_panel_security_top_ips",
+    "guards": [
+      "utils.py:decorated_view(super_admin)",
+      "auth.py:decorated_function(super_admin)",
+      "view:api_panel_security_top_ips"
+    ],
+    "methods": [
+      "GET"
+    ]
+  },
+  "/api/panel/security/unban": {
+    "endpoint": "api_panel_security_unban",
+    "guards": [
+      "utils.py:decorated_view(super_admin)",
+      "auth.py:decorated_function(super_admin)",
+      "view:api_panel_security_unban"
+    ],
+    "methods": [
+      "POST"
+    ]
+  },
+  "/api/panel/security/whitelist": {
+    "endpoint": "api_panel_security_whitelist",
+    "guards": [
+      "utils.py:decorated_view(super_admin)",
+      "auth.py:decorated_function(super_admin)",
+      "view:api_panel_security_whitelist"
+    ],
+    "methods": [
+      "POST"
+    ]
+  },
+  "/api/panel/switch-branch": {
+    "endpoint": "api_panel_switch_branch",
+    "guards": [
+      "utils.py:decorated_view(super_admin)",
+      "auth.py:decorated_function(super_admin)",
+      "view:api_panel_switch_branch"
+    ],
+    "methods": [
+      "POST"
+    ]
+  },
+  "/api/panel/update": {
+    "endpoint": "api_panel_update",
+    "guards": [
+      "utils.py:decorated_view(super_admin)",
+      "auth.py:decorated_function(super_admin)",
+      "view:api_panel_update"
+    ],
+    "methods": [
+      "POST"
+    ]
+  },
+  "/api/panel/update-log": {
+    "endpoint": "api_panel_update_log",
+    "guards": [
+      "utils.py:decorated_view(super_admin)",
+      "auth.py:decorated_function(super_admin)",
+      "view:api_panel_update_log"
+    ],
+    "methods": [
+      "GET"
+    ]
+  },
+  "/api/panel/update-status": {
+    "endpoint": "api_panel_update_status",
+    "guards": [
+      "utils.py:decorated_view(super_admin)",
+      "auth.py:decorated_function(super_admin)",
+      "view:api_panel_update_status"
+    ],
+    "methods": [
+      "GET"
+    ]
+  },
+  "/api/remote/<int:remote_id>/bootstrap": {
+    "endpoint": "api_remote_bootstrap",
+    "guards": [
+      "utils.py:decorated_view(manage_remotes)",
+      "auth.py:decorated_function(manage_remotes)",
+      "view:api_remote_bootstrap"
+    ],
+    "methods": [
+      "POST"
+    ]
+  },
+  "/api/remote/<int:remote_id>/bootstrap-dismiss": {
+    "endpoint": "api_remote_bootstrap_dismiss",
+    "guards": [
+      "utils.py:decorated_view(manage_remotes)",
+      "auth.py:decorated_function(manage_remotes)",
+      "view:api_remote_bootstrap_dismiss"
+    ],
+    "methods": [
+      "POST"
+    ]
+  },
+  "/api/remote/<int:remote_id>/bootstrap-status": {
+    "endpoint": "api_remote_bootstrap_status",
+    "guards": [
+      "utils.py:decorated_view(manage_remotes)",
+      "auth.py:decorated_function(manage_remotes)",
+      "view:api_remote_bootstrap_status"
+    ],
+    "methods": [
+      "GET"
+    ]
+  },
+  "/api/remote/<int:remote_id>/check-updates": {
+    "endpoint": "api_remote_check_updates",
+    "guards": [
+      "utils.py:decorated_view(manage_remotes)",
+      "auth.py:decorated_function(manage_remotes)",
+      "view:api_remote_check_updates"
+    ],
+    "methods": [
+      "GET"
+    ]
+  },
+  "/api/remote/<int:remote_id>/close-panel-port": {
+    "endpoint": "api_remote_close_panel_port",
+    "guards": [
+      "utils.py:decorated_view(manage_remotes)",
+      "auth.py:decorated_function(manage_remotes)",
+      "view:api_remote_close_panel_port"
+    ],
+    "methods": [
+      "POST"
+    ]
+  },
+  "/api/remote/<int:remote_id>/close-port-22": {
+    "endpoint": "api_remote_close_port_22",
+    "guards": [
+      "utils.py:decorated_view(manage_remotes)",
+      "auth.py:decorated_function(manage_remotes)",
+      "view:api_remote_close_port_22"
+    ],
+    "methods": [
+      "POST"
+    ]
+  },
+  "/api/remote/<int:remote_id>/discover": {
+    "endpoint": "api_remote_discover",
+    "guards": [
+      "utils.py:decorated_view(manage_servers)",
+      "auth.py:decorated_function(manage_servers)",
+      "view:api_remote_discover"
+    ],
+    "methods": [
+      "GET"
+    ]
+  },
+  "/api/remote/<int:remote_id>/firewall": {
+    "endpoint": "api_remote_firewall",
+    "guards": [
+      "utils.py:decorated_view(manage_remotes)",
+      "auth.py:decorated_function(manage_remotes)",
+      "view:api_remote_firewall"
+    ],
+    "methods": [
+      "GET"
+    ]
+  },
+  "/api/remote/<int:remote_id>/firewall/close": {
+    "endpoint": "api_remote_firewall_close",
+    "guards": [
+      "utils.py:decorated_view(manage_remotes)",
+      "auth.py:decorated_function(manage_remotes)",
+      "view:api_remote_firewall_close"
+    ],
+    "methods": [
+      "POST"
+    ]
+  },
+  "/api/remote/<int:remote_id>/firewall/delete-rule": {
+    "endpoint": "api_remote_firewall_delete_rule",
+    "guards": [
+      "utils.py:decorated_view(manage_remotes)",
+      "auth.py:decorated_function(manage_remotes)",
+      "view:api_remote_firewall_delete_rule"
+    ],
+    "methods": [
+      "POST"
+    ]
+  },
+  "/api/remote/<int:remote_id>/firewall/open": {
+    "endpoint": "api_remote_firewall_open",
+    "guards": [
+      "utils.py:decorated_view(manage_remotes)",
+      "auth.py:decorated_function(manage_remotes)",
+      "view:api_remote_firewall_open"
+    ],
+    "methods": [
+      "POST"
+    ]
+  },
+  "/api/remote/<int:remote_id>/game-port/<int:port>/open": {
+    "endpoint": "api_remote_game_port_open",
+    "guards": [
+      "utils.py:decorated_view(install_server,manage_remotes)",
+      "auth.py:decorated_function(install_server,manage_remotes)",
+      "view:api_remote_game_port_open"
+    ],
+    "methods": [
+      "POST"
+    ]
+  },
+  "/api/remote/<int:remote_id>/import": {
+    "endpoint": "api_remote_import",
+    "guards": [
+      "utils.py:decorated_view(manage_servers)",
+      "auth.py:decorated_function(manage_servers)",
+      "view:api_remote_import"
+    ],
+    "methods": [
+      "POST"
+    ]
+  },
+  "/api/remote/<int:remote_id>/live": {
+    "endpoint": "api_remote_live",
+    "guards": [
+      "utils.py:decorated_view(manage_remotes)",
+      "auth.py:decorated_function(manage_remotes)",
+      "view:api_remote_live"
+    ],
+    "methods": [
+      "GET"
+    ]
+  },
+  "/api/remote/<int:remote_id>/live-stats": {
+    "endpoint": "api_remote_live_stats",
+    "guards": [
+      "utils.py:decorated_view(manage_remotes)",
+      "auth.py:decorated_function(manage_remotes)",
+      "view:api_remote_live_stats"
+    ],
+    "methods": [
+      "GET"
+    ]
+  },
+  "/api/remote/<int:remote_id>/os-update/start": {
+    "endpoint": "api_remote_os_update_start",
+    "guards": [
+      "utils.py:decorated_view(manage_remotes)",
+      "auth.py:decorated_function(manage_remotes)",
+      "view:api_remote_os_update_start"
+    ],
+    "methods": [
+      "POST"
+    ]
+  },
+  "/api/remote/<int:remote_id>/os-update/status": {
+    "endpoint": "api_remote_os_update_status",
+    "guards": [
+      "utils.py:decorated_view(manage_remotes)",
+      "auth.py:decorated_function(manage_remotes)",
+      "view:api_remote_os_update_status"
+    ],
+    "methods": [
+      "GET"
+    ]
+  },
+  "/api/remote/<int:remote_id>/players": {
+    "endpoint": "api_remote_players",
+    "guards": [
+      "utils.py:decorated_view(manage_remotes)",
+      "auth.py:decorated_function(manage_remotes)",
+      "view:api_remote_players"
+    ],
+    "methods": [
+      "GET"
+    ]
+  },
+  "/api/remote/<int:remote_id>/pro-attach": {
+    "endpoint": "api_remote_pro_attach",
+    "guards": [
+      "utils.py:decorated_view(manage_remotes)",
+      "auth.py:decorated_function(manage_remotes)",
+      "view:api_remote_pro_attach"
+    ],
+    "methods": [
+      "POST"
+    ]
+  },
+  "/api/remote/<int:remote_id>/pro-detach": {
+    "endpoint": "api_remote_pro_detach",
+    "guards": [
+      "utils.py:decorated_view(manage_remotes)",
+      "auth.py:decorated_function(manage_remotes)",
+      "view:api_remote_pro_detach"
+    ],
+    "methods": [
+      "POST"
+    ]
+  },
+  "/api/remote/<int:remote_id>/pro-service": {
+    "endpoint": "api_remote_pro_service",
+    "guards": [
+      "utils.py:decorated_view(manage_remotes)",
+      "auth.py:decorated_function(manage_remotes)",
+      "view:api_remote_pro_service"
+    ],
+    "methods": [
+      "POST"
+    ]
+  },
+  "/api/remote/<int:remote_id>/pro-status": {
+    "endpoint": "api_remote_pro_status",
+    "guards": [
+      "utils.py:decorated_view(manage_remotes)",
+      "auth.py:decorated_function(manage_remotes)",
+      "view:api_remote_pro_status"
+    ],
+    "methods": [
+      "GET"
+    ]
+  },
+  "/api/remote/<int:remote_id>/reboot": {
+    "endpoint": "api_remote_reboot",
+    "guards": [
+      "utils.py:decorated_view(manage_remotes)",
+      "auth.py:decorated_function(manage_remotes)",
+      "view:api_remote_reboot"
+    ],
+    "methods": [
+      "POST"
+    ]
+  },
+  "/api/remote/<int:remote_id>/reboot-cancel": {
+    "endpoint": "api_remote_reboot_cancel",
+    "guards": [
+      "utils.py:decorated_view(manage_remotes)",
+      "auth.py:decorated_function(manage_remotes)",
+      "view:api_remote_reboot_cancel"
+    ],
+    "methods": [
+      "POST"
+    ]
+  },
+  "/api/remote/<int:remote_id>/reboot-required": {
+    "endpoint": "api_remote_reboot_required",
+    "guards": [
+      "utils.py:decorated_view(manage_remotes)",
+      "auth.py:decorated_function(manage_remotes)",
+      "view:api_remote_reboot_required"
+    ],
+    "methods": [
+      "GET"
+    ]
+  },
+  "/api/remote/<int:remote_id>/retrust-hostkey": {
+    "endpoint": "api_remote_retrust_hostkey",
+    "guards": [
+      "utils.py:decorated_view(manage_remotes)",
+      "auth.py:decorated_function(manage_remotes)",
+      "view:api_remote_retrust_hostkey"
+    ],
+    "methods": [
+      "POST"
+    ]
+  },
+  "/api/remote/<int:remote_id>/run-updates": {
+    "endpoint": "api_remote_run_updates",
+    "guards": [
+      "utils.py:decorated_view(manage_remotes)",
+      "auth.py:decorated_function(manage_remotes)",
+      "view:api_remote_run_updates"
+    ],
+    "methods": [
+      "POST"
+    ]
+  },
+  "/api/remote/<int:remote_id>/security/autoblock": {
+    "endpoint": "api_remote_security_autoblock",
+    "guards": [
+      "utils.py:decorated_view(manage_remotes)",
+      "auth.py:decorated_function(manage_remotes)",
+      "view:api_remote_security_autoblock"
+    ],
+    "methods": [
+      "POST"
+    ]
+  },
+  "/api/remote/<int:remote_id>/security/bans": {
+    "endpoint": "api_remote_security_bans",
+    "guards": [
+      "utils.py:decorated_view(manage_remotes)",
+      "auth.py:decorated_function(manage_remotes)",
+      "view:api_remote_security_bans"
+    ],
+    "methods": [
+      "GET"
+    ]
+  },
+  "/api/remote/<int:remote_id>/security/block": {
+    "endpoint": "api_remote_security_block",
+    "guards": [
+      "utils.py:decorated_view(manage_remotes)",
+      "auth.py:decorated_function(manage_remotes)",
+      "view:api_remote_security_block"
+    ],
+    "methods": [
+      "POST"
+    ]
+  },
+  "/api/remote/<int:remote_id>/security/log": {
+    "endpoint": "api_remote_security_log",
+    "guards": [
+      "utils.py:decorated_view(manage_remotes)",
+      "auth.py:decorated_function(manage_remotes)",
+      "view:api_remote_security_log"
+    ],
+    "methods": [
+      "GET"
+    ]
+  },
+  "/api/remote/<int:remote_id>/security/top-ips": {
+    "endpoint": "api_remote_security_top_ips",
+    "guards": [
+      "utils.py:decorated_view(manage_remotes)",
+      "auth.py:decorated_function(manage_remotes)",
+      "view:api_remote_security_top_ips"
+    ],
+    "methods": [
+      "GET"
+    ]
+  },
+  "/api/remote/<int:remote_id>/security/unban": {
+    "endpoint": "api_remote_security_unban",
+    "guards": [
+      "utils.py:decorated_view(manage_remotes)",
+      "auth.py:decorated_function(manage_remotes)",
+      "view:api_remote_security_unban"
+    ],
+    "methods": [
+      "POST"
+    ]
+  },
+  "/api/remote/<int:remote_id>/security/whitelist": {
+    "endpoint": "api_remote_security_whitelist",
+    "guards": [
+      "utils.py:decorated_view(manage_remotes)",
+      "auth.py:decorated_function(manage_remotes)",
+      "view:api_remote_security_whitelist"
+    ],
+    "methods": [
+      "POST"
+    ]
+  },
+  "/api/remote/<int:remote_id>/specs": {
+    "endpoint": "api_remote_specs",
+    "guards": [
+      "utils.py:decorated_view(manage_remotes)",
+      "auth.py:decorated_function(manage_remotes)",
+      "view:api_remote_specs"
+    ],
+    "methods": [
+      "GET"
+    ]
+  },
+  "/api/remote/<int:remote_id>/ssh-mode": {
+    "endpoint": "api_remote_ssh_mode",
+    "guards": [
+      "utils.py:decorated_view(manage_remotes)",
+      "auth.py:decorated_function(manage_remotes)",
+      "view:api_remote_ssh_mode"
+    ],
+    "methods": [
+      "POST"
+    ]
+  },
+  "/api/remote/<int:remote_id>/ssh-port": {
+    "endpoint": "api_remote_ssh_port",
+    "guards": [
+      "utils.py:decorated_view(manage_remotes)",
+      "auth.py:decorated_function(manage_remotes)",
+      "view:api_remote_ssh_port"
+    ],
+    "methods": [
+      "POST"
+    ]
+  },
+  "/api/remote/<int:remote_id>/ssh-status": {
+    "endpoint": "api_remote_ssh_status",
+    "guards": [
+      "utils.py:decorated_view(manage_remotes)",
+      "auth.py:decorated_function(manage_remotes)",
+      "view:api_remote_ssh_status"
+    ],
+    "methods": [
+      "GET"
+    ]
+  },
+  "/api/remote/<int:remote_id>/tailscale-bootstrap": {
+    "endpoint": "api_remote_tailscale_bootstrap",
+    "guards": [
+      "utils.py:decorated_view(manage_remotes)",
+      "auth.py:decorated_function(manage_remotes)",
+      "view:api_remote_tailscale_bootstrap"
+    ],
+    "methods": [
+      "POST"
+    ]
+  },
+  "/api/remote/<int:remote_id>/tailscale-check": {
+    "endpoint": "api_remote_tailscale_check",
+    "guards": [
+      "utils.py:decorated_view(manage_remotes)",
+      "auth.py:decorated_function(manage_remotes)",
+      "view:api_remote_tailscale_check"
+    ],
+    "methods": [
+      "GET"
+    ]
+  },
+  "/api/remote/<int:remote_id>/tailscale-finalize": {
+    "endpoint": "api_remote_tailscale_finalize",
+    "guards": [
+      "utils.py:decorated_view(manage_remotes)",
+      "auth.py:decorated_function(manage_remotes)",
+      "view:api_remote_tailscale_finalize"
+    ],
+    "methods": [
+      "POST"
+    ]
+  },
+  "/api/remote/<int:remote_id>/tailscale-install": {
+    "endpoint": "api_remote_tailscale_install",
+    "guards": [
+      "utils.py:decorated_view(manage_remotes)",
+      "auth.py:decorated_function(manage_remotes)",
+      "view:api_remote_tailscale_install"
+    ],
+    "methods": [
+      "POST"
+    ]
+  },
+  "/api/remote/<int:remote_id>/tailscale-migrate": {
+    "endpoint": "api_remote_tailscale_migrate",
+    "guards": [
+      "utils.py:decorated_view(manage_remotes)",
+      "auth.py:decorated_function(manage_remotes)",
+      "view:api_remote_tailscale_migrate"
+    ],
+    "methods": [
+      "POST"
+    ]
+  },
+  "/api/remote/<int:remote_id>/tailscale-up": {
+    "endpoint": "api_remote_tailscale_up",
+    "guards": [
+      "utils.py:decorated_view(manage_remotes)",
+      "auth.py:decorated_function(manage_remotes)",
+      "view:api_remote_tailscale_up"
+    ],
+    "methods": [
+      "POST"
+    ]
+  },
+  "/api/remote/<int:remote_id>/updates-cached": {
+    "endpoint": "api_remote_updates_cached",
+    "guards": [
+      "utils.py:decorated_view(manage_remotes)",
+      "auth.py:decorated_function(manage_remotes)",
+      "view:api_remote_updates_cached"
+    ],
+    "methods": [
+      "GET"
+    ]
+  },
+  "/api/remote/<int:remote_id>/uptime": {
+    "endpoint": "api_remote_uptime",
+    "guards": [
+      "utils.py:decorated_view(manage_remotes)",
+      "auth.py:decorated_function(manage_remotes)",
+      "view:api_remote_uptime"
+    ],
+    "methods": [
+      "GET"
+    ]
+  },
+  "/api/server-management": {
+    "endpoint": "api_server_management",
+    "guards": [
+      "utils.py:decorated_view(super_admin)",
+      "auth.py:decorated_function(super_admin)",
+      "view:api_server_management"
+    ],
+    "methods": [
+      "GET"
+    ]
+  },
+  "/api/server-management/live": {
+    "endpoint": "api_server_management_live",
+    "guards": [
+      "utils.py:decorated_view(super_admin)",
+      "auth.py:decorated_function(super_admin)",
+      "view:api_server_management_live"
+    ],
+    "methods": [
+      "GET"
+    ]
+  },
+  "/api/server-management/os-update-check": {
+    "endpoint": "api_os_update_check",
+    "guards": [
+      "utils.py:decorated_view(super_admin)",
+      "auth.py:decorated_function(super_admin)",
+      "view:api_os_update_check"
+    ],
+    "methods": [
+      "GET"
+    ]
+  },
+  "/api/server-management/os-update-log": {
+    "endpoint": "api_os_update_log",
+    "guards": [
+      "utils.py:decorated_view(super_admin)",
+      "auth.py:decorated_function(super_admin)",
+      "view:api_os_update_log"
+    ],
+    "methods": [
+      "GET"
+    ]
+  },
+  "/api/server-management/os-update-run": {
+    "endpoint": "api_os_update_run",
+    "guards": [
+      "utils.py:decorated_view(super_admin)",
+      "auth.py:decorated_function(super_admin)",
+      "view:api_os_update_run"
+    ],
+    "methods": [
+      "POST"
+    ]
+  },
+  "/api/server-management/reboot": {
+    "endpoint": "api_server_reboot",
+    "guards": [
+      "utils.py:decorated_view(super_admin)",
+      "auth.py:decorated_function(super_admin)",
+      "view:api_server_reboot"
+    ],
+    "methods": [
+      "POST"
+    ]
+  },
+  "/api/server-management/specs": {
+    "endpoint": "api_server_management_specs",
+    "guards": [
+      "utils.py:decorated_view(super_admin)",
+      "auth.py:decorated_function(super_admin)",
+      "view:api_server_management_specs"
+    ],
+    "methods": [
+      "GET"
+    ]
+  },
+  "/api/server-management/ts-ssh-disable": {
+    "endpoint": "api_ts_ssh_disable",
+    "guards": [
+      "utils.py:decorated_view(super_admin)",
+      "auth.py:decorated_function(super_admin)",
+      "view:api_ts_ssh_disable"
+    ],
+    "methods": [
+      "POST"
+    ]
+  },
+  "/api/server-management/ts-ssh-enable": {
+    "endpoint": "api_ts_ssh_enable",
+    "guards": [
+      "utils.py:decorated_view(super_admin)",
+      "auth.py:decorated_function(super_admin)",
+      "view:api_ts_ssh_enable"
+    ],
+    "methods": [
+      "POST"
+    ]
+  },
+  "/api/server-management/ufw-allow-tailscale": {
+    "endpoint": "api_ufw_allow_tailscale",
+    "guards": [
+      "utils.py:decorated_view(super_admin)",
+      "auth.py:decorated_function(super_admin)",
+      "view:api_ufw_allow_tailscale"
+    ],
+    "methods": [
+      "POST"
+    ]
+  },
+  "/api/server/<int:server_id>": {
+    "endpoint": "api_server_status",
+    "guards": [
+      "utils.py:decorated_view[server_access]",
+      "auth.py:decorated_function[server_access]",
+      "view:api_server_status"
+    ],
+    "methods": [
+      "GET"
+    ]
+  },
+  "/api/server/<int:server_id>/action": {
+    "endpoint": "api_server_action",
+    "guards": [
+      "utils.py:decorated_view[server_access]",
+      "auth.py:decorated_function[server_access]",
+      "view:api_server_action"
+    ],
+    "methods": [
+      "POST"
+    ]
+  },
+  "/api/server/<int:server_id>/alerts": {
+    "endpoint": "api_server_alerts",
+    "guards": [
+      "utils.py:decorated_view[server_access]",
+      "auth.py:decorated_function[server_access]",
+      "view:api_server_alerts"
+    ],
+    "methods": [
+      "GET",
+      "POST"
+    ]
+  },
+  "/api/server/<int:server_id>/autostart": {
+    "endpoint": "api_server_autostart",
+    "guards": [
+      "utils.py:decorated_view[server_access]",
+      "auth.py:decorated_function[server_access]",
+      "view:api_server_autostart"
+    ],
+    "methods": [
+      "POST"
+    ]
+  },
+  "/api/server/<int:server_id>/browse": {
+    "endpoint": "api_server_browse",
+    "guards": [
+      "utils.py:decorated_view[server_access]",
+      "auth.py:decorated_function[server_access]",
+      "view:api_server_browse"
+    ],
+    "methods": [
+      "GET"
+    ]
+  },
+  "/api/server/<int:server_id>/config": {
+    "endpoint": "api_server_config",
+    "guards": [
+      "utils.py:decorated_view[server_access]",
+      "auth.py:decorated_function[server_access]",
+      "view:api_server_config"
+    ],
+    "methods": [
+      "GET",
+      "POST"
+    ]
+  },
+  "/api/server/<int:server_id>/cron": {
+    "endpoint": "api_server_cron",
+    "guards": [
+      "utils.py:decorated_view[server_access]",
+      "auth.py:decorated_function[server_access]",
+      "view:api_server_cron"
+    ],
+    "methods": [
+      "GET",
+      "POST"
+    ]
+  },
+  "/api/server/<int:server_id>/cron/delete": {
+    "endpoint": "api_server_cron_delete",
+    "guards": [
+      "utils.py:decorated_view[server_access]",
+      "auth.py:decorated_function[server_access]",
+      "view:api_server_cron_delete"
+    ],
+    "methods": [
+      "POST"
+    ]
+  },
+  "/api/server/<int:server_id>/cron/run": {
+    "endpoint": "api_server_cron_run",
+    "guards": [
+      "utils.py:decorated_view[server_access]",
+      "auth.py:decorated_function[server_access]",
+      "view:api_server_cron_run"
+    ],
+    "methods": [
+      "POST"
+    ]
+  },
+  "/api/server/<int:server_id>/cron/update": {
+    "endpoint": "api_server_cron_update",
+    "guards": [
+      "utils.py:decorated_view[server_access]",
+      "auth.py:decorated_function[server_access]",
+      "view:api_server_cron_update"
+    ],
+    "methods": [
+      "POST"
+    ]
+  },
+  "/api/server/<int:server_id>/custom-command/<int:cmd_id>": {
+    "endpoint": "api_server_custom_command",
+    "guards": [
+      "utils.py:decorated_view[server_access]",
+      "auth.py:decorated_function[server_access]",
+      "view:api_server_custom_command"
+    ],
+    "methods": [
+      "POST"
+    ]
+  },
+  "/api/server/<int:server_id>/daily-restart": {
+    "endpoint": "api_server_daily_restart",
+    "guards": [
+      "utils.py:decorated_view[server_access]",
+      "auth.py:decorated_function[server_access]",
+      "view:api_server_daily_restart"
+    ],
+    "methods": [
+      "POST"
+    ]
+  },
+  "/api/server/<int:server_id>/delete-path": {
+    "endpoint": "api_server_delete_path",
+    "guards": [
+      "utils.py:decorated_view[server_access]",
+      "auth.py:decorated_function[server_access]",
+      "view:api_server_delete_path"
+    ],
+    "methods": [
+      "POST"
+    ]
+  },
+  "/api/server/<int:server_id>/file": {
+    "endpoint": "api_server_file",
+    "guards": [
+      "utils.py:decorated_view[server_access]",
+      "auth.py:decorated_function[server_access]",
+      "view:api_server_file"
+    ],
+    "methods": [
+      "GET",
+      "POST"
+    ]
+  },
+  "/api/server/<int:server_id>/game-config": {
+    "endpoint": "api_server_game_config",
+    "guards": [
+      "utils.py:decorated_view[server_access]",
+      "auth.py:decorated_function[server_access]",
+      "view:api_server_game_config"
+    ],
+    "methods": [
+      "GET"
+    ]
+  },
+  "/api/server/<int:server_id>/gmod-content": {
+    "endpoint": "api_gmod_content",
+    "guards": [
+      "utils.py:decorated_view[server_access]",
+      "auth.py:decorated_function[server_access]",
+      "view:api_gmod_content"
+    ],
+    "methods": [
+      "GET",
+      "POST"
+    ]
+  },
+  "/api/server/<int:server_id>/history": {
+    "endpoint": "api_server_history",
+    "guards": [
+      "utils.py:decorated_view[server_access]",
+      "auth.py:decorated_function[server_access]",
+      "view:api_server_history"
+    ],
+    "methods": [
+      "GET"
+    ]
+  },
+  "/api/server/<int:server_id>/install-dismiss": {
+    "endpoint": "api_server_install_dismiss",
+    "guards": [
+      "utils.py:decorated_view[server_access]",
+      "auth.py:decorated_function[server_access]",
+      "view:api_server_install_dismiss"
+    ],
+    "methods": [
+      "POST"
+    ]
+  },
+  "/api/server/<int:server_id>/install-status": {
+    "endpoint": "api_server_install_status",
+    "guards": [
+      "utils.py:decorated_view[server_access]",
+      "auth.py:decorated_function[server_access]",
+      "view:api_server_install_status"
+    ],
+    "methods": [
+      "GET"
+    ]
+  },
+  "/api/server/<int:server_id>/moderate": {
+    "endpoint": "api_server_moderate",
+    "guards": [
+      "utils.py:decorated_view[server_access]",
+      "auth.py:decorated_function[server_access]",
+      "view:api_server_moderate"
+    ],
+    "methods": [
+      "POST"
+    ]
+  },
+  "/api/server/<int:server_id>/mods": {
+    "endpoint": "api_server_mods",
+    "guards": [
+      "utils.py:decorated_view[server_access]",
+      "auth.py:decorated_function[server_access]",
+      "view:api_server_mods"
+    ],
+    "methods": [
+      "GET",
+      "POST"
+    ]
+  },
+  "/api/server/<int:server_id>/notify-empty": {
+    "endpoint": "api_server_notify_empty",
+    "guards": [
+      "utils.py:decorated_view[server_access]",
+      "auth.py:decorated_function[server_access]",
+      "view:api_server_notify_empty"
+    ],
+    "methods": [
+      "POST"
+    ]
+  },
+  "/api/server/<int:server_id>/playerlist": {
+    "endpoint": "api_server_playerlist",
+    "guards": [
+      "utils.py:decorated_view[server_access]",
+      "auth.py:decorated_function[server_access]",
+      "view:api_server_playerlist"
+    ],
+    "methods": [
+      "GET"
+    ]
+  },
+  "/api/server/<int:server_id>/players": {
+    "endpoint": "api_server_players",
+    "guards": [
+      "utils.py:decorated_view[server_access]",
+      "auth.py:decorated_function[server_access]",
+      "view:api_server_players"
+    ],
+    "methods": [
+      "GET"
+    ]
+  },
+  "/api/server/<int:server_id>/query-type": {
+    "endpoint": "api_server_query_type",
+    "guards": [
+      "utils.py:decorated_view[server_access]",
+      "auth.py:decorated_function[server_access]",
+      "view:api_server_query_type"
+    ],
+    "methods": [
+      "POST"
+    ]
+  },
+  "/api/server/<int:server_id>/restart-when-empty": {
+    "endpoint": "api_server_restart_when_empty",
+    "guards": [
+      "utils.py:decorated_view[server_access]",
+      "auth.py:decorated_function[server_access]",
+      "view:api_server_restart_when_empty"
+    ],
+    "methods": [
+      "POST"
+    ]
+  },
+  "/api/server/<int:server_id>/stats": {
+    "endpoint": "api_server_stats",
+    "guards": [
+      "utils.py:decorated_view[server_access]",
+      "auth.py:decorated_function[server_access]",
+      "view:api_server_stats"
+    ],
+    "methods": [
+      "GET"
+    ]
+  },
+  "/api/server/<int:server_id>/stop-when-empty": {
+    "endpoint": "api_server_stop_when_empty",
+    "guards": [
+      "utils.py:decorated_view[server_access]",
+      "auth.py:decorated_function[server_access]",
+      "view:api_server_stop_when_empty"
+    ],
+    "methods": [
+      "POST"
+    ]
+  },
+  "/api/server/<int:server_id>/sync-ports": {
+    "endpoint": "api_server_sync_ports",
+    "guards": [
+      "utils.py:decorated_view[server_access]",
+      "auth.py:decorated_function[server_access]",
+      "view:api_server_sync_ports"
+    ],
+    "methods": [
+      "POST"
+    ]
+  },
+  "/api/server/<int:server_id>/tags": {
+    "endpoint": "api_server_tags_set",
+    "guards": [
+      "utils.py:decorated_view[server_access]",
+      "auth.py:decorated_function[server_access]",
+      "view:api_server_tags_set"
+    ],
+    "methods": [
+      "POST"
+    ]
+  },
+  "/api/server/<int:server_id>/upload": {
+    "endpoint": "api_server_upload",
+    "guards": [
+      "utils.py:decorated_view[server_access]",
+      "auth.py:decorated_function[server_access]",
+      "view:api_server_upload"
+    ],
+    "methods": [
+      "POST"
+    ]
+  },
+  "/api/server/<int:server_id>/upload-check": {
+    "endpoint": "api_server_upload_check",
+    "guards": [
+      "utils.py:decorated_view[server_access]",
+      "auth.py:decorated_function[server_access]",
+      "view:api_server_upload_check"
+    ],
+    "methods": [
+      "POST"
+    ]
+  },
+  "/api/servers": {
+    "endpoint": "api_servers",
+    "guards": [
+      "utils.py:decorated_view",
+      "view:api_servers"
+    ],
+    "methods": [
+      "GET"
+    ]
+  },
+  "/api/servers/bulk-action": {
+    "endpoint": "api_bulk_action",
+    "guards": [
+      "utils.py:decorated_view",
+      "view:api_bulk_action"
+    ],
+    "methods": [
+      "POST"
+    ]
+  },
+  "/api/settings/ui-default": {
+    "endpoint": "api_ui_default_publish",
+    "guards": [
+      "utils.py:decorated_view",
+      "view:api_ui_default_publish"
+    ],
+    "methods": [
+      "POST"
+    ]
+  },
+  "/api/settings/ui-default/clear": {
+    "endpoint": "api_ui_default_clear",
+    "guards": [
+      "utils.py:decorated_view",
+      "view:api_ui_default_clear"
+    ],
+    "methods": [
+      "POST"
+    ]
+  },
+  "/api/setup/tailscale/install": {
+    "endpoint": "api_setup_ts_install",
+    "guards": [
+      "view:api_setup_ts_install"
+    ],
+    "methods": [
+      "POST"
+    ]
+  },
+  "/api/setup/tailscale/serve": {
+    "endpoint": "api_setup_ts_serve",
+    "guards": [
+      "view:api_setup_ts_serve"
+    ],
+    "methods": [
+      "POST"
+    ]
+  },
+  "/api/setup/tailscale/status": {
+    "endpoint": "api_setup_ts_status",
+    "guards": [
+      "view:api_setup_ts_status"
+    ],
+    "methods": [
+      "GET"
+    ]
+  },
+  "/api/setup/tailscale/up": {
+    "endpoint": "api_setup_ts_up",
+    "guards": [
+      "view:api_setup_ts_up"
+    ],
+    "methods": [
+      "POST"
+    ]
+  },
+  "/api/tags": {
+    "endpoint": "api_tags_create",
+    "guards": [
+      "utils.py:decorated_view",
+      "view:api_tags_create"
+    ],
+    "methods": [
+      "POST"
+    ]
+  },
+  "/api/tags/<int:tag_id>/delete": {
+    "endpoint": "api_tags_delete",
+    "guards": [
+      "utils.py:decorated_view",
+      "view:api_tags_delete"
+    ],
+    "methods": [
+      "POST"
+    ]
+  },
+  "/api/tailscale": {
+    "endpoint": "api_tailscale",
+    "guards": [
+      "utils.py:decorated_view(manage_remotes)",
+      "auth.py:decorated_function(manage_remotes)",
+      "view:api_tailscale"
+    ],
+    "methods": [
+      "GET"
+    ]
+  },
+  "/api/tailscale/check-peer": {
+    "endpoint": "api_tailscale_check_peer",
+    "guards": [
+      "utils.py:decorated_view(manage_remotes)",
+      "auth.py:decorated_function(manage_remotes)",
+      "view:api_tailscale_check_peer"
+    ],
+    "methods": [
+      "POST"
+    ]
+  },
+  "/api/tailscale/install": {
+    "endpoint": "api_tailscale_install",
+    "guards": [
+      "utils.py:decorated_view(manage_remotes)",
+      "auth.py:decorated_function(manage_remotes)",
+      "view:api_tailscale_install"
+    ],
+    "methods": [
+      "POST"
+    ]
+  },
+  "/api/tailscale/serve": {
+    "endpoint": "api_tailscale_serve",
+    "guards": [
+      "utils.py:decorated_view(manage_remotes)",
+      "auth.py:decorated_function(manage_remotes)",
+      "view:api_tailscale_serve"
+    ],
+    "methods": [
+      "POST"
+    ]
+  },
+  "/api/tailscale/up": {
+    "endpoint": "api_tailscale_up",
+    "guards": [
+      "utils.py:decorated_view(manage_remotes)",
+      "auth.py:decorated_function(manage_remotes)",
+      "view:api_tailscale_up"
+    ],
+    "methods": [
+      "POST"
+    ]
+  },
+  "/backup/game/<int:server_id>/download": {
+    "endpoint": "panel_backup_game_download",
+    "guards": [
+      "utils.py:decorated_view(super_admin)",
+      "auth.py:decorated_function(super_admin)",
+      "view:panel_backup_game_download"
+    ],
+    "methods": [
+      "GET"
+    ]
+  },
+  "/commands": {
+    "endpoint": "manage_commands",
+    "guards": [
+      "utils.py:decorated_view(super_admin)",
+      "auth.py:decorated_function(super_admin)",
+      "view:manage_commands"
+    ],
+    "methods": [
+      "GET"
+    ]
+  },
+  "/commands/<int:cmd_id>/delete": {
+    "endpoint": "delete_command",
+    "guards": [
+      "utils.py:decorated_view(super_admin)",
+      "auth.py:decorated_function(super_admin)",
+      "view:delete_command"
+    ],
+    "methods": [
+      "POST"
+    ]
+  },
+  "/commands/<int:cmd_id>/edit": {
+    "endpoint": "edit_command",
+    "guards": [
+      "utils.py:decorated_view(super_admin)",
+      "auth.py:decorated_function(super_admin)",
+      "view:edit_command"
+    ],
+    "methods": [
+      "POST"
+    ]
+  },
+  "/commands/add": {
+    "endpoint": "add_command",
+    "guards": [
+      "utils.py:decorated_view(super_admin)",
+      "auth.py:decorated_function(super_admin)",
+      "view:add_command"
+    ],
+    "methods": [
+      "POST"
+    ]
+  },
+  "/global-bans": {
+    "endpoint": "global_bans_page",
+    "guards": [
+      "utils.py:decorated_view(super_admin)",
+      "auth.py:decorated_function(super_admin)",
+      "view:global_bans_page"
+    ],
+    "methods": [
+      "GET"
+    ]
+  },
+  "/global-bans/<int:ban_id>/delete": {
+    "endpoint": "global_bans_delete",
+    "guards": [
+      "utils.py:decorated_view(super_admin)",
+      "auth.py:decorated_function(super_admin)",
+      "view:global_bans_delete"
+    ],
+    "methods": [
+      "POST"
+    ]
+  },
+  "/global-bans/add": {
+    "endpoint": "global_bans_add",
+    "guards": [
+      "utils.py:decorated_view(super_admin)",
+      "auth.py:decorated_function(super_admin)",
+      "view:global_bans_add"
+    ],
+    "methods": [
+      "POST"
+    ]
+  },
+  "/global-bans/sync": {
+    "endpoint": "global_bans_sync",
+    "guards": [
+      "utils.py:decorated_view(super_admin)",
+      "auth.py:decorated_function(super_admin)",
+      "view:global_bans_sync"
+    ],
+    "methods": [
+      "POST"
+    ]
+  },
+  "/groups": {
+    "endpoint": "manage_groups",
+    "guards": [
+      "utils.py:decorated_view(manage_groups)",
+      "auth.py:decorated_function(manage_groups)",
+      "view:manage_groups"
+    ],
+    "methods": [
+      "GET"
+    ]
+  },
+  "/groups/<int:group_id>/delete": {
+    "endpoint": "delete_group",
+    "guards": [
+      "utils.py:decorated_view(manage_groups)",
+      "auth.py:decorated_function(manage_groups)",
+      "view:delete_group"
+    ],
+    "methods": [
+      "POST"
+    ]
+  },
+  "/groups/<int:group_id>/edit": {
+    "endpoint": "edit_group",
+    "guards": [
+      "utils.py:decorated_view(manage_groups)",
+      "auth.py:decorated_function(manage_groups)",
+      "view:edit_group"
+    ],
+    "methods": [
+      "POST"
+    ]
+  },
+  "/groups/add": {
+    "endpoint": "add_group",
+    "guards": [
+      "utils.py:decorated_view(manage_groups)",
+      "auth.py:decorated_function(manage_groups)",
+      "view:add_group"
+    ],
+    "methods": [
+      "POST"
+    ]
+  },
+  "/healthz": {
+    "endpoint": "healthz",
+    "guards": [
+      "view:healthz"
+    ],
+    "methods": [
+      "GET"
+    ]
+  },
+  "/login": {
+    "endpoint": "login",
+    "guards": [
+      "view:login"
+    ],
+    "methods": [
+      "GET",
+      "POST"
+    ]
+  },
+  "/logout": {
+    "endpoint": "logout",
+    "guards": [
+      "utils.py:decorated_view",
+      "view:logout"
+    ],
+    "methods": [
+      "POST"
+    ]
+  },
+  "/logs": {
+    "endpoint": "view_logs",
+    "guards": [
+      "utils.py:decorated_view(view_logs)",
+      "auth.py:decorated_function(view_logs)",
+      "view:view_logs"
+    ],
+    "methods": [
+      "GET"
+    ]
+  },
+  "/notifications": {
+    "endpoint": "notifications_settings",
+    "guards": [
+      "utils.py:decorated_view(super_admin)",
+      "auth.py:decorated_function(super_admin)",
+      "view:notifications_settings"
+    ],
+    "methods": [
+      "GET"
+    ]
+  },
+  "/notifications/save": {
+    "endpoint": "notifications_save",
+    "guards": [
+      "utils.py:decorated_view(super_admin)",
+      "auth.py:decorated_function(super_admin)",
+      "view:notifications_save"
+    ],
+    "methods": [
+      "POST"
+    ]
+  },
+  "/remote/<int:remote_id>/firewall": {
+    "endpoint": "remote_firewall",
+    "guards": [
+      "utils.py:decorated_view(manage_remotes)",
+      "auth.py:decorated_function(manage_remotes)",
+      "view:remote_firewall"
+    ],
+    "methods": [
+      "GET"
+    ]
+  },
+  "/remote/<int:remote_id>/manage": {
+    "endpoint": "remote_manage",
+    "guards": [
+      "utils.py:decorated_view(manage_remotes)",
+      "auth.py:decorated_function(manage_remotes)",
+      "view:remote_manage"
+    ],
+    "methods": [
+      "GET"
+    ]
+  },
+  "/remotes": {
+    "endpoint": "manage_remotes",
+    "guards": [
+      "utils.py:decorated_view(manage_remotes)",
+      "auth.py:decorated_function(manage_remotes)",
+      "view:manage_remotes"
+    ],
+    "methods": [
+      "GET"
+    ]
+  },
+  "/remotes/<int:remote_id>/delete": {
+    "endpoint": "delete_remote",
+    "guards": [
+      "utils.py:decorated_view(manage_remotes)",
+      "auth.py:decorated_function(manage_remotes)",
+      "view:delete_remote"
+    ],
+    "methods": [
+      "POST"
+    ]
+  },
+  "/remotes/<int:remote_id>/edit": {
+    "endpoint": "edit_remote",
+    "guards": [
+      "utils.py:decorated_view(manage_remotes)",
+      "auth.py:decorated_function(manage_remotes)",
+      "view:edit_remote"
+    ],
+    "methods": [
+      "POST"
+    ]
+  },
+  "/remotes/<int:remote_id>/test": {
+    "endpoint": "test_remote",
+    "guards": [
+      "utils.py:decorated_view(manage_remotes)",
+      "auth.py:decorated_function(manage_remotes)",
+      "view:test_remote"
+    ],
+    "methods": [
+      "POST"
+    ]
+  },
+  "/remotes/add": {
+    "endpoint": "add_remote",
+    "guards": [
+      "utils.py:decorated_view(manage_remotes)",
+      "auth.py:decorated_function(manage_remotes)",
+      "view:add_remote"
+    ],
+    "methods": [
+      "POST"
+    ]
+  },
+  "/robots.txt": {
+    "endpoint": "robots_txt",
+    "guards": [
+      "view:robots_txt"
+    ],
+    "methods": [
+      "GET"
+    ]
+  },
+  "/server-management": {
+    "endpoint": "server_management",
+    "guards": [
+      "utils.py:decorated_view(super_admin)",
+      "auth.py:decorated_function(super_admin)",
+      "view:server_management"
+    ],
+    "methods": [
+      "GET"
+    ]
+  },
+  "/server/<int:server_id>": {
+    "endpoint": "server_detail",
+    "guards": [
+      "utils.py:decorated_view[server_access]",
+      "auth.py:decorated_function[server_access]",
+      "view:server_detail"
+    ],
+    "methods": [
+      "GET"
+    ]
+  },
+  "/server/<int:server_id>/action": {
+    "endpoint": "server_action",
+    "guards": [
+      "utils.py:decorated_view[server_access]",
+      "auth.py:decorated_function[server_access]",
+      "view:server_action"
+    ],
+    "methods": [
+      "POST"
+    ]
+  },
+  "/server/<int:server_id>/command": {
+    "endpoint": "server_command",
+    "guards": [
+      "utils.py:decorated_view[server_access]",
+      "auth.py:decorated_function[server_access]",
+      "view:server_command"
+    ],
+    "methods": [
+      "POST"
+    ]
+  },
+  "/server/<int:server_id>/files": {
+    "endpoint": "server_files",
+    "guards": [
+      "utils.py:decorated_view[server_access]",
+      "auth.py:decorated_function[server_access]",
+      "view:server_files"
+    ],
+    "methods": [
+      "GET"
+    ]
+  },
+  "/server/<int:server_id>/refresh-commands": {
+    "endpoint": "refresh_server_commands",
+    "guards": [
+      "utils.py:decorated_view[server_access]",
+      "auth.py:decorated_function[server_access]",
+      "view:refresh_server_commands"
+    ],
+    "methods": [
+      "POST"
+    ]
+  },
+  "/servers/<int:server_id>/delete": {
+    "endpoint": "uninstall_server",
+    "guards": [
+      "utils.py:decorated_view(uninstall_server)[server_access]",
+      "auth.py:decorated_function(uninstall_server)[server_access]",
+      "auth.py:decorated_function[server_access]",
+      "view:uninstall_server"
+    ],
+    "methods": [
+      "POST"
+    ]
+  },
+  "/servers/<int:server_id>/edit": {
+    "endpoint": "edit_server",
+    "guards": [
+      "utils.py:decorated_view(manage_servers)[server_access]",
+      "auth.py:decorated_function(manage_servers)[server_access]",
+      "auth.py:decorated_function[server_access]",
+      "view:edit_server"
+    ],
+    "methods": [
+      "POST"
+    ]
+  },
+  "/servers/add": {
+    "endpoint": "install_game_server",
+    "guards": [
+      "utils.py:decorated_view(install_server,manage_servers)",
+      "auth.py:decorated_function(install_server,manage_servers)",
+      "view:install_game_server"
+    ],
+    "methods": [
+      "POST"
+    ]
+  },
+  "/servers/manage": {
+    "endpoint": "manage_servers",
+    "guards": [
+      "utils.py:decorated_view(install_server,manage_servers)",
+      "auth.py:decorated_function(install_server,manage_servers)",
+      "view:manage_servers"
+    ],
+    "methods": [
+      "GET"
+    ]
+  },
+  "/set-language/<lang>": {
+    "endpoint": "set_language",
+    "guards": [
+      "view:set_language"
+    ],
+    "methods": [
+      "GET"
+    ]
+  },
+  "/settings": {
+    "endpoint": "panel_settings",
+    "guards": [
+      "utils.py:decorated_view(super_admin)",
+      "auth.py:decorated_function(super_admin)",
+      "view:panel_settings"
+    ],
+    "methods": [
+      "GET"
+    ]
+  },
+  "/settings/save": {
+    "endpoint": "panel_settings_save",
+    "guards": [
+      "utils.py:decorated_view(super_admin)",
+      "auth.py:decorated_function(super_admin)",
+      "view:panel_settings_save"
+    ],
+    "methods": [
+      "POST"
+    ]
+  },
+  "/setup": {
+    "endpoint": "setup_wizard",
+    "guards": [
+      "view:setup_wizard"
+    ],
+    "methods": [
+      "GET",
+      "POST"
+    ]
+  },
+  "/static/<path:filename>": {
+    "endpoint": "static",
+    "guards": [
+      "view:<lambda>"
+    ],
+    "methods": [
+      "GET"
+    ]
+  },
+  "/tailscale": {
+    "endpoint": "tailscale_page",
+    "guards": [
+      "utils.py:decorated_view(manage_remotes)",
+      "auth.py:decorated_function(manage_remotes)",
+      "view:tailscale_page"
+    ],
+    "methods": [
+      "GET"
+    ]
+  },
+  "/users": {
+    "endpoint": "manage_users",
+    "guards": [
+      "utils.py:decorated_view(manage_users)",
+      "auth.py:decorated_function(manage_users)",
+      "view:manage_users"
+    ],
+    "methods": [
+      "GET"
+    ]
+  },
+  "/users/<int:user_id>/delete": {
+    "endpoint": "delete_user",
+    "guards": [
+      "utils.py:decorated_view(manage_users)",
+      "auth.py:decorated_function(manage_users)",
+      "view:delete_user"
+    ],
+    "methods": [
+      "POST"
+    ]
+  },
+  "/users/<int:user_id>/edit": {
+    "endpoint": "edit_user",
+    "guards": [
+      "utils.py:decorated_view(manage_users)",
+      "auth.py:decorated_function(manage_users)",
+      "view:edit_user"
+    ],
+    "methods": [
+      "POST"
+    ]
+  },
+  "/users/add": {
+    "endpoint": "add_user",
+    "guards": [
+      "utils.py:decorated_view(manage_users)",
+      "auth.py:decorated_function(manage_users)",
+      "view:add_user"
+    ],
+    "methods": [
+      "POST"
+    ]
+  }
+}
