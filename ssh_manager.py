@@ -3275,12 +3275,12 @@ def remote_os_run_updates(server):
     return rc == 0, out[-300:] if out else err[:300]
 
 
-# Host-side log the detached OS-update job streams to, so the popup can watch it live. Kept in /run
-# (root-owned, not world-writable) rather than /tmp so a local user can't pre-plant a symlink there
-# and redirect root's write — and it's cleared on reboot, which is fine for an ephemeral update log.
-# Must match privileged.OS_UPDATE_LOG and the helper's copy — the os-update-log verb reads
-# it, and the detached runner below still writes to it by name.
-_OS_UPDATE_LOG = _priv.OS_UPDATE_LOG
+# The panel no longer names the OS-update log at all. Until #122 the detached runner lived here and
+# wrote the file by name, so this module needed its own alias for the path; now the helper owns both
+# the writing and the reading (the os-update-log verb hands back the contents), and the only copies
+# that must agree are privileged.OS_UPDATE_LOG and the helper's. The alias outlived that move as an
+# unused global — CodeQL alert #352 — and is gone rather than left to imply a coupling that ended.
+#
 # The sentinel the detached job ends with; the verb table owns it so the writer and this
 # reader cannot disagree about what "finished" looks like.
 _OS_UPDATE_DONE = _priv.OS_UPDATE_DONE

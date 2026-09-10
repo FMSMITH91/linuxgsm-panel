@@ -4183,24 +4183,38 @@ import ast as _ast_scan
 _SCAN_MODULES = ["app.py", "auth.py", "backup.py", "clock.py", "config.py", "db_maintenance.py",
                  "i18n.py", "manage.py", "models.py", "notifications.py", "privileged.py",
                  "ssh_manager.py", "system_ops.py", "tailscale_integration.py", "terminal.py"]
-_SCAN_USERS = _SCAN_MODULES + ["tools/panel-helper", "tools/perf_bench.py", "tools/lhci_serve.py",
-                               "tests/unit_test.py", "tests/smoke_test.py", "tests/rbac_test.py",
-                               "tests/manage_test.py", "tests/template_actions_test.py"]
+# The two lists are kept APART on purpose, and which one the orphan check consults is the whole
+# point. _OS_UPDATE_LOG survived this gate all the way onto main and turned the branch red via
+# CodeQL alert #352: it was dead production code, but a test asserted it equalled the helper's
+# copy, and a test reference used to count as "referenced". A constant that only its own test
+# mentions is exactly the thing this gate exists to find, so the orphan check below reads
+# production references only. Tests are still parsed — other checks walk _parsed — they just
+# no longer vouch for a name's aliveness.
+_SCAN_PROD_USERS = _SCAN_MODULES + ["tools/panel-helper", "tools/perf_bench.py",
+                                    "tools/lhci_serve.py"]
+_SCAN_TEST_USERS = ["tests/unit_test.py", "tests/smoke_test.py", "tests/rbac_test.py",
+                    "tests/manage_test.py", "tests/template_actions_test.py"]
+_SCAN_USERS = _SCAN_PROD_USERS + _SCAN_TEST_USERS
 _referenced = set()
+_referenced_prod = set()
 _parsed = {}
 for _f in _SCAN_USERS:
     _fp = os.path.join(_root, _f)
     if not os.path.exists(_fp):
         continue
     _parsed[_f] = _ast_scan.parse(open(_fp, encoding="utf-8").read())
+    _here = set()
     for _n in _ast_scan.walk(_parsed[_f]):
         if isinstance(_n, _ast_scan.Name) and isinstance(_n.ctx, _ast_scan.Load):
-            _referenced.add(_n.id)
+            _here.add(_n.id)
         elif isinstance(_n, _ast_scan.Attribute):
-            _referenced.add(_n.attr)               # sm._FOO / _priv.BAR
+            _here.add(_n.attr)                     # sm._FOO / _priv.BAR
         elif isinstance(_n, _ast_scan.ImportFrom):
             for _a in _n.names:
-                _referenced.add(_a.name)
+                _here.add(_a.name)
+    _referenced |= _here
+    if _f in _SCAN_PROD_USERS:
+        _referenced_prod |= _here
 _orphans = []
 for _f in _SCAN_MODULES:
     if _f not in _parsed:
@@ -4210,9 +4224,11 @@ for _f in _SCAN_MODULES:
             continue
         for _t in _node.targets:
             if isinstance(_t, _ast_scan.Name) and not _t.id.startswith("__") \
-                    and _t.id not in _referenced:
-                _orphans.append("%s:%d %s" % (_f, _node.lineno, _t.id))
-check("no module-level constant is defined and then never referenced anywhere",
+                    and _t.id not in _referenced_prod:
+                _orphans.append("%s:%d %s%s" % (
+                    _f, _node.lineno, _t.id,
+                    " (only its tests mention it)" if _t.id in _referenced else ""))
+check("no module-level constant is defined and then never referenced by production code",
       not _orphans, "; ".join(_orphans[:4]))
 # The remote transport still base64s the content through a shell, so the content must survive
 # every byte a config file can legitimately contain.
@@ -4310,8 +4326,13 @@ for _n in ("0", "99999", "5; id", "-1", ""):
     check("privileged: journal refuses line count %r" % _n,
           _ufw_raises_verb(lambda n=_n: _priv.check_args("journal", ["ssh", n])))
 check("privileged: the panel's OS-update log path is the one the helper reads",
-      _priv.OS_UPDATE_LOG == _helper.OS_UPDATE_LOG == sm._OS_UPDATE_LOG,
-      "%s / %s / %s" % (_priv.OS_UPDATE_LOG, _helper.OS_UPDATE_LOG, sm._OS_UPDATE_LOG))
+      _priv.OS_UPDATE_LOG == _helper.OS_UPDATE_LOG,
+      "%s / %s" % (_priv.OS_UPDATE_LOG, _helper.OS_UPDATE_LOG))
+# ssh_manager deliberately has NO copy of this path: the helper both writes the log and reads it
+# back through the os-update-log verb, so a third alias could only ever drift. Assert its absence,
+# or the next person "restoring symmetry" reintroduces the dead global this test used to check.
+check("privileged: ssh_manager keeps no copy of the OS-update log path",
+      not hasattr(sm, "_OS_UPDATE_LOG"))
 check("privileged: the two copies agree on every log path and journal unit",
       _priv.LOG_FILES == _helper.LOG_FILES and _priv.JOURNAL_UNITS == _helper.JOURNAL_UNITS)
 
