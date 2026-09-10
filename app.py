@@ -2926,7 +2926,24 @@ def register_routes(app):
     # while setup is unfinished (they're a no-op/forbidden once complete, same as the
     # wizard itself). They operate on THIS host only.
     def _setup_open():
-        return not is_setup_complete()
+        # The SAME DB-row-only lock the wizard uses, and for the same reason — see the long
+        # comment on setup_wizard() above, which describes this exact failure and then only
+        # defended /setup with it.
+        #
+        # These four were gated on `not is_setup_complete()`, which is (DB row AND config flag).
+        # The config half fails OPEN: load_config() swallows JSONDecodeError/OSError and returns
+        # DEFAULT_CONFIG, where setup_complete is False. So on a fully configured install, a
+        # data/config.json that was deleted, truncated by a full disk, or hand-edited into invalid
+        # JSON made is_setup_complete() False and reopened all four to unauthenticated callers:
+        # /install runs the Tailscale installer as root; /up returns an auth URL that joins THIS
+        # HOST to whoever called it, with Tailscale SSH enabled; /serve rewrites bind_host and
+        # site_domain. A missing config file should degrade the panel, not hand it over.
+        #
+        # state.complete is the one signal that is false for the whole wizard and true only once
+        # it has finished, and it lives in the DB rather than in a file that falls back to
+        # defaults. Gating on it is strictly more restrictive than what was here: during a genuine
+        # first run no completed row exists, so the wizard's own endpoints behave identically.
+        return SetupState.query.filter_by(complete=True).first() is None
 
     @app.route("/api/setup/tailscale/status")
     def api_setup_ts_status():
