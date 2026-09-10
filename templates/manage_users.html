@@ -246,6 +246,9 @@
   </div>
 </div>
 
-<script nonce="{{ csp_nonce }}" src="{{ asset_url('js/manage_users.js') }}"></script>
 
+{% endblock %}
+
+{% block scripts %}
+<script nonce="{{ csp_nonce }}" src="{{ asset_url('js/manage_users.js') }}"></script>
 {% endblock %}

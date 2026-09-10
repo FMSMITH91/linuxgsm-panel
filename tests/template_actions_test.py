@@ -330,6 +330,36 @@ for name, args, where in uses:
                               % (name, where, p, i, got))
 check(not mismatches, "element-arg handlers receive @self", "; ".join(mismatches))
 
+# ── Check 3: no page script is loaded BEFORE panel.js ──────────────────────────────────────────
+# base.html renders {% block content %} at line ~300 and loads panel.js at ~324, so a <script src>
+# placed inside a page's content block executes FIRST — before panel.js has defined window.toast,
+# escapeHtml, confirmDialog, pollWhenVisible and the rest.
+#
+# This is not theoretical. manage_remotes.html loaded its script that way, and the top-level
+# `pollWhenVisible(...)` call at manage_remotes.js:95 threw ReferenceError during evaluation. Every
+# top-level STATEMENT after it was skipped — including the delegated click handler that wires the
+# Tailscale check / bootstrap / install and Delete-remote buttons. Those four controls silently did
+# nothing on /remotes. (Function DECLARATIONS are hoisted, so the page looked fine and the console
+# showed one error most people would scroll past.)
+#
+# Page scripts belong in {% block scripts %}, which base.html renders after panel.js.
+_early = []
+for _tpl in sorted(TEMPLATES.glob("*.html")):
+    if _tpl.name == "base.html":
+        continue                     # base owns the ordering; it is the thing being ordered around
+    _src = _tpl.read_text(encoding="utf-8")
+    if "{% block content %}" not in _src:
+        continue
+    _seg = _src[_src.index("{% block content %}"):]
+    _cut = _seg.find("{% block scripts %}")
+    if _cut != -1:
+        _seg = _seg[:_cut]           # only what precedes the scripts block can be early
+    for _m in re.finditer(r"<script[^>]*\ssrc=", _seg):
+        _ln = _src[:_src.index("{% block content %}") + _m.start()].count("\n") + 1
+        _early.append("%s:%d" % (_tpl.name, _ln))
+check(not _early, "no page loads a script before panel.js (must use {% block scripts %})",
+      "; ".join(_early))
+
 # ── report ──
 passed = sum(1 for c, _, _ in results if c)
 for c, name, detail in results:
