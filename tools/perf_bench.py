@@ -38,9 +38,21 @@ _PREEXISTING = {p for p in (SECRET_FILE, CRED_KEY_FILE, CONFIG_FILE) if p.exists
 _CFG_BACKUP = CONFIG_FILE.read_bytes() if CONFIG_FILE in _PREEXISTING else None
 
 from config import load_config, save_config  # noqa: E402
-_cfg = load_config()
-_cfg["setup_complete"] = True
-save_config(_cfg)
+
+
+def mark_setup_complete():
+    """Flip setup_complete so the panel serves pages instead of the first-run wizard.
+
+    Called after EVERY cleanup(), not once at import. cleanup() deletes config.json to give each
+    size a virgin install, which silently undid the flip — so from the first cleanup() onward every
+    request 302'd to /setup and the benchmark timed a 199-byte redirect. The table looked plausible
+    (sub-millisecond, one query, flat across sizes) precisely because it was measuring nothing."""
+    cfg = load_config()
+    cfg["setup_complete"] = True
+    save_config(cfg)
+
+
+mark_setup_complete()
 
 import system_ops as so                                    # noqa: E402
 so._check_sudo = lambda force=False: False                 # never probe real sudo (pam_faillock)
@@ -52,18 +64,29 @@ import auth                                                # noqa: E402
 # The I/O boundary the panel does not own: every remote call is stubbed to return promptly, so the
 # numbers below are panel CPU + DB only. _host_reachable/_remote_listening_ports keep the monitor
 # and the status poll on their "everything is fine" path, which is the common case in production.
+import monitoring as monmod                                # noqa: E402
+import panel_state as pstate                               # noqa: E402
+import ssh_manager as smmod                                # noqa: E402
+
+# Each stub goes on the module that RESOLVES the name, not on app. That distinction did not exist
+# while everything lived in app.py, and four of these silently stopped taking effect when the
+# monitor moved to monitoring.py: the stub landed on app's re-export while _monitor_pass kept
+# looking the name up in its own namespace, so the benchmark measured un-stubbed code.
 appmod.run_command = lambda *a, **k: ("", "", 0)
-appmod._host_reachable = lambda r: True
-appmod._host_disk_pct = lambda r: 40
-appmod._host_load_mem = lambda r: (10, 10)
-appmod._remote_listening_ports = lambda r: set()
-appmod._lgsm_maintenance_running = lambda remote, gs: False
-appmod.server_live_metrics = lambda *a, **k: {}
 appmod.get_server_status = lambda *a, **k: "offline"
 appmod.player_list = lambda *a, **k: []
-appmod.game_map = lambda *a, **k: ""
 appmod.list_server_commands = lambda *a, **k: []
 appmod.remote_public_ip = lambda *a, **k: ""
+
+monmod.run_command = lambda *a, **k: ("", "", 0)
+monmod._host_reachable = lambda r: True
+monmod._host_disk_pct = lambda r: 40
+monmod._host_load_mem = lambda r: (10, 10)
+monmod._host_restart_flags = lambda r: set()
+monmod._remote_listening_ports = lambda r: set()
+monmod._lgsm_maintenance_running = lambda remote, gs: False
+monmod.server_live_metrics = lambda *a, **k: {}
+monmod.game_map = lambda *a, **k: ''
 
 
 def build_app():
@@ -207,17 +230,22 @@ GZIP = {"Accept-Encoding": "gzip"}
 
 def measure(c, counter, path, iterations):
     """Hit `path` `iterations` times. Returns a dict of timings, query count and payload size."""
-    appmod._port_scan_cache.clear()
+    smmod._port_scan_cache.clear()
     r = c.get(path, headers=GZIP)         # warm: fills one-time caches so the numbers are steady
-    if r.status_code >= 400:
-        return {"path": path, "status": r.status_code, "error": True}
+    # Anything that is not 200 is a measurement of the wrong thing. This used to accept a 3xx,
+    # which is how the whole table came to be timings of a 199-byte redirect to /setup: fast,
+    # consistent, one query, flat across every size — and completely meaningless.
+    if r.status_code != 200:
+        return {"path": path, "status": r.status_code, "error": True,
+                "note": "redirect to %s" % r.headers.get("Location") if r.status_code in (301, 302)
+                        else ""}
     wire = len(r.data)
     raw = len(c.get(path).data)           # same page uncompressed, for the compression ratio
     times = []
     counter.reset()
     first_q = None
     for _ in range(iterations):
-        appmod._port_scan_cache.clear()
+        smmod._port_scan_cache.clear()
         counter.reset()
         t0 = time.perf_counter()
         r = c.get(path, headers=GZIP)
@@ -257,8 +285,12 @@ def run_size(total_servers, hosts, iterations, paths):
     # The monitor sweep is a background cost, not a request: time it separately.
     t0 = time.perf_counter()
     with app.app_context():
-        appmod._monitor_state = {"remotes": {}, "servers": {}, "disk": {}, "load": {}}
-        appmod._monitor_pass()
+        # Cleared IN PLACE: monitoring.py holds a direct reference from
+        # `from panel_state import _monitor_state`, so rebinding it here would strand the
+        # monitor on the old dict. Same contract the unit suite gates.
+        for _bucket in pstate._monitor_state.values():
+            _bucket.clear()
+        monmod._monitor_pass()
     mon = (time.perf_counter() - t0) * 1000.0
 
     try:
@@ -326,6 +358,7 @@ def main():
     runs = []
     for n in sizes:
         cleanup()                        # each size gets a virgin database
+        mark_setup_complete()            # ...which also removed config.json, flip included
         print("seeding %d servers across %d hosts…" % (n, args.hosts), flush=True)
         runs.append(run_size(n, args.hosts, args.iterations, PATHS))
 
