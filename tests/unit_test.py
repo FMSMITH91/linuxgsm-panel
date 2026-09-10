@@ -9,6 +9,7 @@ deleting the last SSH rule, a non-numeric port 500).
     python tests/unit_test.py      # exits 0 if all pass, 1 otherwise
 """
 import json
+import glob
 import os
 import sys
 from types import SimpleNamespace as NS
@@ -5159,6 +5160,92 @@ try:
 finally:
     _helper.PANEL_CONF = _dbr_conf
     _helper.DBM_PATH = _dbr_dbm
+
+def _module_toplevel_names(path):
+    """Every name a module defines or imports at top level, by AST — no importing.
+
+    Importing a panel module to ask `dir()` would boot eventlet, threads and a Flask app; this only
+    needs to know what names EXIST, which the syntax tells us."""
+    out = set()
+    try:
+        _t = _ast_scan.parse(open(path, encoding="utf-8").read())
+    except (SyntaxError, OSError):
+        return out
+    for _n in _t.body:
+        if isinstance(_n, (_ast_scan.FunctionDef, _ast_scan.AsyncFunctionDef, _ast_scan.ClassDef)):
+            out.add(_n.name)
+        elif isinstance(_n, _ast_scan.Assign):
+            for _t2 in _n.targets:
+                if isinstance(_t2, _ast_scan.Name):
+                    out.add(_t2.id)
+                elif isinstance(_t2, (_ast_scan.Tuple, _ast_scan.List)):
+                    for _e in _t2.elts:
+                        if isinstance(_e, _ast_scan.Name):
+                            out.add(_e.id)
+        elif isinstance(_n, _ast_scan.ImportFrom):
+            for _a in _n.names:
+                out.add(_a.asname or _a.name)
+        elif isinstance(_n, _ast_scan.Import):
+            for _a in _n.names:
+                out.add((_a.asname or _a.name).split(".")[0])
+    return out
+
+
+# ── A stub must land on the module that RESOLVES the name ─────────────────────────────────────
+# `mod.name = fake` on a module that has no `name` creates a NEW attribute and returns quietly. If
+# the real function lives elsewhere, the stub never takes effect and the harness measures — or
+# tests — un-stubbed code while looking like it worked.
+#
+# This is not hypothetical. Splitting monitoring out of app.py left four stubs in tools/perf_bench.py
+# pointing at app's re-exports while _monitor_pass resolved the names in its own namespace; combined
+# with a lost setup_complete flag, the benchmark spent every run timing a 199-byte redirect to
+# /setup and printing a table that looked entirely plausible.
+#
+# READS of a missing attribute already fail loudly with AttributeError. Assignments do not, so
+# those are what this checks.
+_stub_mods = {}
+for _f in sorted(os.listdir(_root)):
+    if _f.endswith(".py"):
+        _stub_mods[_f[:-3]] = _module_toplevel_names(os.path.join(_root, _f))
+_stub_bad = []
+for _f in sorted(glob.glob(os.path.join(_root, "tests", "*.py"))
+                 + glob.glob(os.path.join(_root, "tools", "*.py"))):
+    _src = open(_f, encoding="utf-8").read()
+    try:
+        _tree = _ast_scan.parse(_src)
+    except SyntaxError:
+        continue
+    _alias = {}
+    for _n in _ast_scan.walk(_tree):
+        if isinstance(_n, _ast_scan.Import):
+            for _a in _n.names:
+                _base = _a.name.split(".")[0]
+                if _base in _stub_mods:
+                    _alias[_a.asname or _base] = _base
+        elif isinstance(_n, _ast_scan.Assign) and isinstance(_n.value, _ast_scan.Subscript):
+            if (getattr(getattr(_n.value, "value", None), "attr", "") == "modules"
+                    and isinstance(_n.value.slice, _ast_scan.Constant)
+                    and _n.value.slice.value in _stub_mods):
+                for _t in _n.targets:
+                    if isinstance(_t, _ast_scan.Name):
+                        _alias[_t.id] = _n.value.slice.value
+    for _n in _ast_scan.walk(_tree):
+        if not (isinstance(_n, _ast_scan.Attribute) and isinstance(_n.ctx, _ast_scan.Store)):
+            continue
+        if not isinstance(_n.value, _ast_scan.Name):
+            continue
+        _mod = _alias.get(_n.value.id)
+        if not _mod or _n.attr.startswith("__"):
+            continue
+        # nosudo_runner plants _real_subprocess as a MARKER the module is meant not to have; it is
+        # read back with getattr(..., None). That is the one legitimate case.
+        if _n.attr == "_real_subprocess":
+            continue
+        if _n.attr not in _stub_mods[_mod]:
+            _stub_bad.append("%s:%d %s.%s (%s has no such name)"
+                             % (os.path.basename(_f), _n.lineno, _n.value.id, _n.attr, _mod))
+check("every stub is installed on a module that actually defines the name",
+      not _stub_bad, "; ".join(sorted(set(_stub_bad))[:4]))
 
 # ── The installer must not build a SECOND panel beside an existing one ────────────────────────
 # IS_UPDATE asks "is there an app.py and a unit file where I am about to install?" — but where that
