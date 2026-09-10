@@ -87,12 +87,20 @@ of going unnoticed. Current state:
 | route | sites remaining |
 |---|---|
 | `run_command(..., sudo=True)` | 4 |
-| `_sudo_sh(...)` | 1 |
-| **root total** | **5** (from 131) |
+| `_sudo_sh(...)` | **0 — the route is gone** |
+| **root total** | **4** (from 131) |
 
-Two of those five are the downloaded-installer steps named below, which a verb cannot narrow. The
-other three are the GMod content install script and two large read-only shell programs that gather
-host state.
+`_sudo_sh()` built `sudo bash -c '<pipeline>'` itself and passed `sudo=False`, which is why a
+search for `sudo=True` never saw it and why its 18 call sites went uncounted for half this work.
+It has no callers left and the function itself has been deleted, so that route cannot come back by
+accident.
+
+**Two of the four that remain cannot be narrowed by a verb at all** — they are the downloaded-script
+installers named below. The other two are large read-only shell programs that gather host state (the
+LinuxGSM server discovery scan and the per-server metrics probe): both are reads, both have their
+interpolated values validated upstream, and converting either means reimplementing a working
+multi-stage scan inside the helper. They are the least valuable and highest risk of what is left,
+which is why they are last.
 
 (Those counts exclude six calls that ARE the verb layer's own transport — the `run_command` /
 `_run_local` / `_run` at the end of `run_privileged`, `write_root_file`, `write_content_cron` and
@@ -157,13 +165,6 @@ types rather than in the command names:
   an option (`--reinstall`), and the list cannot be made arbitrarily long. dpkg's conflict
   answers (`--force-confdef`, `--force-confold`) are fixed in the helper rather than passed
   in, so an unattended upgrade can never be talked into clobbering a config file you edited.
-
-**What the last eight are.** Two are large read-only shell programs that gather host state — the
-LinuxGSM server discovery scan and the per-server metrics probe. Both are reads, both have their
-interpolated values (`short_name`, `game_port`) validated upstream, and converting either means
-reimplementing a working multi-stage scan in the helper. They are the least valuable and highest
-risk of what is left, which is why they are last. The rest are the Tailscale bootstrap's `tailscale
-up` composition and the detached OS-update runner.
 
 **Two operations cannot be narrowed, and are named rather than left unremarked.** The VPS
 bootstrap installs Node.js by piping NodeSource's setup script into a root shell, and installs

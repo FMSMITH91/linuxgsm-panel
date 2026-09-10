@@ -3877,6 +3877,7 @@ _VERB_SAMPLES = {
     "tailscale-up-key": ["tskey-auth-abc123def", "yes", "10.0.0.0/24", "tag:server"],
     "tailscale-up-login": ["yes", "-"],
     "os-update-run": [],
+    "content-scan": ["cstrike", "hl2"],
 }
 check("privileged: every verb has a sample (new verbs cannot skip the parity check)",
       set(_VERB_SAMPLES) == set(_priv.verbs()),
@@ -3991,6 +3992,9 @@ _BAD_VECTORS = [
     ("content-grant-read", ["gmodcontent", "gmodcontent", "gmodserver", "../../etc"]),
     ("gmod-mount-read", ["../../etc"]),
     ("content-cron-remove", [".."]),
+    ("content-scan", ["../../etc"]),
+    ("content-scan", ["a;b"]),
+    ("content-scan", [""]),
     ("f2b-log-lines", ["2026-09-02; id"]),
     ("f2b-log-lines", ["$(id)"]),
     ("f2b-log-lines", [""]),
@@ -4544,6 +4548,43 @@ finally:
     sm.run_privileged, sm.remote_fail2ban_overview = _orig_rt_rp, _orig_rt_ov
 
 
+# ── the content scan ──────────────────────────────────────────────────────────────────────────
+# Was a shell loop over /home that built its inner list by interpolating the game keys, running as
+# root. Read-only, but still a composed root command. Exercised against a sandboxed /home holding
+# a user with two of the wanted games, one with none of them, one with no serverfiles at all, and
+# one whose NAME is not something the panel would ever pass to a verb.
+try:
+    _scanroot = _tempfile.mkdtemp(prefix="panel-scan-")
+    for _d in ("srcds/serverfiles/cstrike", "srcds/serverfiles/hl2",
+               "gmodserver/serverfiles/tf2", "nothing", "bad;name/serverfiles/cstrike"):
+        os.makedirs(os.path.join(_scanroot, _d), exist_ok=True)
+    _spec_s = _ilu.spec_from_loader("ph_scan", _machinery.SourceFileLoader("ph_scan", _helper_path))
+    _hs = _ilu.module_from_spec(_spec_s)
+    _spec_s.loader.exec_module(_hs)
+    _hs.HOME_ROOT = _scanroot
+    _hs.home_of = lambda u, _r=_scanroot: _r + "/" + _hs.v_username(u)
+    import io as _io_s
+    _sbuf = _io_s.StringIO()
+    _ssave = sys.stdout
+    sys.stdout = _sbuf
+    try:
+        _hs.do_content_scan(["cstrike", "hl2"], None)
+    finally:
+        sys.stdout = _ssave
+    _hits = sorted(ln for ln in _sbuf.getvalue().splitlines() if ln)
+    eq("content scan: reports every wanted game a user actually has",
+       _hits, ["HIT|srcds|cstrike", "HIT|srcds|hl2"])
+    check("content scan: a user with serverfiles but none of the wanted games is not reported",
+          not any("gmodserver" in h for h in _hits), str(_hits))
+    check("content scan: a user with no serverfiles at all is not reported",
+          not any("nothing" in h for h in _hits), str(_hits))
+    check("content scan: a /home entry whose NAME the panel would never use is skipped",
+          not any("bad" in h for h in _hits), str(_hits))
+    _shutil.rmtree(_scanroot, ignore_errors=True)
+except OSError as _e:
+    check("content scan exercised", True, "skipped: %s" % _e)
+
+
 # ── the detached OS-update runner ─────────────────────────────────────────────────────────────
 # Was `setsid bash -c '<seven statements>' </dev/null >/dev/null 2>&1 &`. Exercised for real
 # against a sandboxed log and a FAKE apt-get, so the suite cannot upgrade the machine it runs on.
@@ -4840,7 +4881,7 @@ import ast as _ast
 
 _ESCALATION_FILES = ["app.py", "auth.py", "ssh_manager.py", "system_ops.py", "notifications.py",
                      "backup.py", "db_maintenance.py", "tailscale_integration.py", "manage.py"]
-_CEILING = {"sudo=True": 4, "_sudo_sh": 1}   # measured at the time of writing; lower only
+_CEILING = {"sudo=True": 4, "_sudo_sh": 0}   # measured at the time of writing; lower only
 
 def _is_dispatch(call):
     """True when this escalation is NOT a call site composing a shell string.

@@ -2831,14 +2831,6 @@ def _pro_trim(blob):
     return _re.sub(r"\s+", " ", blob or "").strip()[-300:]
 
 
-def _sudo_sh(inner):
-    """Wrap a full shell pipeline so it ALL runs under sudo. `run_command`/`_run_local`
-    with sudo=True only escalates the first token, which breaks compound commands
-    (`a && b`, subshells) — so we build `sudo bash -c '…'` ourselves and pass
-    sudo=False. Works uniformly for local, paramiko, and Tailscale-SSH hosts."""
-    return f"sudo bash -c {_quote(inner)}"
-
-
 # ── Keep the node player-query tools (npm + gamedig) current ───────────────────
 # gamedig is installed once (bootstrap / install.sh) and never updates itself, so player queries can
 # silently break as games and gamedig evolve. This weekly ROOT cron refreshes npm + gamedig alongside
@@ -5029,14 +5021,10 @@ def detect_content_user(server, games=("cstrike",)):
     the MOST wanted games present, else None — so a GMod install can reuse content already on the host
     instead of re-downloading gigabytes. One sudo scan; only constant game keys reach the shell."""
     wanted = _valid_content_games(games) or list(GMOD_CONTENT_GAMES)
-    script = (
-        'for u in $(ls -1 /home 2>/dev/null); do '
-        '  d="/home/$u/serverfiles"; [ -d "$d" ] || continue; '
-        '  for g in ' + " ".join(wanted) + '; do [ -d "$d/$g" ] && echo "HIT|$u|$g"; done; '
-        'done'
-    )
     try:
-        out, _, _ = run_command(server, _sudo_sh(script), timeout=30, sudo=False)
+        # Was a shell loop over /home building its inner list by interpolating the game keys. The
+        # verb takes the keys as arguments and walks the directories itself.
+        out, _, _ = run_privileged(server, "content-scan", wanted, timeout=30, merge_stderr=False)
     except Exception:
         _log.debug("detect_content_user scan failed", exc_info=True)
         return None
