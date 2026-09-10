@@ -4113,13 +4113,53 @@ check("privileged: both copies agree on the sshd paths",
       == (_helper.SSHD_DROPIN, _helper.SSHD_DROPIN_BAK))
 check("privileged: both copies agree on fail2ban's jail.local path",
       _priv.F2B_JAIL_LOCAL == _helper.F2B_JAIL_LOCAL)
-# Once WRITE_TARGETS owns a path, the module-level constant that used to hold it has no users left
-# — and CodeQL's py/unused-global-variable turns main RED for it, via the open-alerts gate from
-# #101. Two of these were missed one at a time; this checks the whole family at once.
-_orphans = [n for n in ("_F2B_PANEL_WHITELIST_DROPIN", "_NODE_TOOLS_CRON_PATH")
-            if hasattr(sm, n)]
-check("privileged: no ssh_manager constant duplicates a write-target path",
-      not _orphans, ", ".join(_orphans))
+# Every time a verb takes over an operation, the module-level constant that used to hold its path
+# or its command is left behind with no users — and CodeQL's py/unused-global-variable turns main
+# RED for it through the open-alerts gate from #101. That has now happened four times.
+#
+# The gate that used to be here named two constants explicitly, which is why it caught neither of
+# the next two. This finds them by structure instead: every module-level `NAME = …`, checked
+# against every Name/Attribute reference across the panel, its tools and its tests.
+#
+# Assignments whose value is a CALL are skipped, and that carve-out is load-bearing:
+# `group_permissions = db.Table("group_permissions", …)` is referenced nowhere by name, but the
+# call registers the table in SQLAlchemy's metadata, so create_all() builds it. Deleting it as
+# "unused" would drop a table from the schema.
+import ast as _ast_scan
+_SCAN_MODULES = ["app.py", "auth.py", "backup.py", "clock.py", "config.py", "db_maintenance.py",
+                 "i18n.py", "manage.py", "models.py", "notifications.py", "privileged.py",
+                 "ssh_manager.py", "system_ops.py", "tailscale_integration.py", "terminal.py"]
+_SCAN_USERS = _SCAN_MODULES + ["tools/panel-helper", "tools/perf_bench.py", "tools/lhci_serve.py",
+                               "tests/unit_test.py", "tests/smoke_test.py", "tests/rbac_test.py",
+                               "tests/manage_test.py", "tests/template_actions_test.py"]
+_referenced = set()
+_parsed = {}
+for _f in _SCAN_USERS:
+    _fp = os.path.join(_root, _f)
+    if not os.path.exists(_fp):
+        continue
+    _parsed[_f] = _ast_scan.parse(open(_fp, encoding="utf-8").read())
+    for _n in _ast_scan.walk(_parsed[_f]):
+        if isinstance(_n, _ast_scan.Name) and isinstance(_n.ctx, _ast_scan.Load):
+            _referenced.add(_n.id)
+        elif isinstance(_n, _ast_scan.Attribute):
+            _referenced.add(_n.attr)               # sm._FOO / _priv.BAR
+        elif isinstance(_n, _ast_scan.ImportFrom):
+            for _a in _n.names:
+                _referenced.add(_a.name)
+_orphans = []
+for _f in _SCAN_MODULES:
+    if _f not in _parsed:
+        continue
+    for _node in _parsed[_f].body:
+        if not isinstance(_node, _ast_scan.Assign) or isinstance(_node.value, _ast_scan.Call):
+            continue
+        for _t in _node.targets:
+            if isinstance(_t, _ast_scan.Name) and not _t.id.startswith("__") \
+                    and _t.id not in _referenced:
+                _orphans.append("%s:%d %s" % (_f, _node.lineno, _t.id))
+check("no module-level constant is defined and then never referenced anywhere",
+      not _orphans, "; ".join(_orphans[:4]))
 # The remote transport still base64s the content through a shell, so the content must survive
 # every byte a config file can legitimately contain.
 _tricky = "a'b\"c$d`e\\f\n[DEFAULT]\nignoreip = 10.0.0.1/8\n"

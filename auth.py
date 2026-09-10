@@ -61,7 +61,6 @@ ALL_PERMISSIONS = {
     VIEW_LOGS: "View audit logs",
 }
 
-SERVER_ACTIONS = ["restart", "start", "stop", "update", "install", "uninstall"]
 ACTION_PERMISSION_MAP = {
     "restart": RESTART_SERVER,
     "start": START_SERVER,

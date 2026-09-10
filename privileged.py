@@ -104,13 +104,11 @@ SSHD_CONFIG = "/etc/ssh/sshd_config"
 SWAPFILE = "/swapfile"
 SWAP_FSTAB_LINE = "/swapfile none swap sw 0 0"
 FSTAB = "/etc/fstab"
-NODESOURCE_URL = "https://deb.nodesource.com/setup_lts.x"
 NPM_GLOBAL_PACKAGES = ("gamedig", "npm")
 
 
 # The GMod shared-content box — see tools/panel-helper. Every path is BUILT from a validated user
 # name and identifier; three of the verbs below end in `rm -rf` as root.
-CONTENT_HOME_ROOT = "/home"
 CONTENT_SUBDIR = "serverfiles"
 CONTENT_CRON_PREFIX = "/etc/cron.d/lgsm-gmod-content"
 GMOD_CFG_SUBPATH = "serverfiles/garrysmod/cfg"

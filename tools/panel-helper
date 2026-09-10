@@ -158,10 +158,6 @@ SWAPFILE = "/swapfile"
 SWAP_FSTAB_LINE = "/swapfile none swap sw 0 0"
 FSTAB = "/etc/fstab"
 
-# The one remote script the panel runs, pinned. Piping a downloaded script into a root shell cannot
-# be made safe by wrapping it — but the URL can stop being something a caller chooses, which is the
-# difference between "run NodeSource's installer" and "run anything".
-NODESOURCE_URL = "https://deb.nodesource.com/setup_lts.x"
 
 # npm packages the panel installs globally.
 NPM_GLOBAL_PACKAGES = ("gamedig", "npm")
@@ -172,7 +168,6 @@ F2B_EVENT_RE = re.compile(r"\[[A-Za-z0-9._-]+\] (?:Ban|Found) [0-9a-fA-F:.]+")
 # read-only. Every path below is BUILT from a validated user name and a validated game/script
 # identifier — three of these end in `rm -rf` running as root, so none of them is ever accepted
 # as a path from the caller.
-CONTENT_HOME_ROOT = "/home"
 CONTENT_SUBDIR = "serverfiles"
 CONTENT_CRON_PREFIX = "/etc/cron.d/lgsm-gmod-content"
 GMOD_CFG_SUBPATH = "serverfiles/garrysmod/cfg"
