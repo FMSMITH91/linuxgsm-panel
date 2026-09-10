@@ -252,5 +252,8 @@
 {% endfor %}
 </div><!-- /#remotes-list -->
 
+{% endblock %}
+
+{% block scripts %}
 <script nonce="{{ csp_nonce }}" src="{{ asset_url('js/manage_remotes.js') }}"></script>
 {% endblock %}

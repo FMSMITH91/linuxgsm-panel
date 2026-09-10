@@ -8,6 +8,15 @@ regardless of this file — this changelog is for humans.
 ## [Unreleased]
 
 ### Fixed
+- **Four buttons on the Remote Servers page did nothing.** `manage_remotes.html` loaded its script
+  from inside the content block, which `base.html` renders *before* `panel.js`. The top-level
+  `pollWhenVisible(...)` call in `manage_remotes.js` therefore threw `ReferenceError` while the file
+  was still evaluating, and every top-level statement after it was skipped — including the delegated
+  click handler wiring **Tailscale check, Tailscale bootstrap, Install Tailscale and Delete remote**.
+  Function *declarations* are hoisted, so the page looked normal and the only symptom was one line in
+  the browser console. The live-stats auto-refresh on that page never started either. Both page
+  scripts now load from `{% block scripts %}`, and a template gate fails the build if any page loads
+  a script before `panel.js` again.
 - **A failed swap-file setup still wrote a swap entry to `/etc/fstab`.** The shell form was
   `fallocate && chmod && mkswap && swapon && grep -q … || echo … >> /etc/fstab`, and `&&`/`||` are
   left-associative with equal precedence — so the append ran whenever *any* earlier step failed,
