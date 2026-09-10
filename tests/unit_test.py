@@ -4180,9 +4180,16 @@ check("privileged: the tailscale login log is in /run, not /tmp",
 # call registers the table in SQLAlchemy's metadata, so create_all() builds it. Deleting it as
 # "unused" would drop a table from the schema.
 import ast as _ast_scan
-_SCAN_MODULES = ["app.py", "auth.py", "backup.py", "clock.py", "config.py", "db_maintenance.py",
-                 "i18n.py", "manage.py", "models.py", "notifications.py", "privileged.py",
-                 "ssh_manager.py", "system_ops.py", "tailscale_integration.py", "terminal.py"]
+# DERIVED, not hardcoded. This list used to name all fifteen modules by hand, which meant a new
+# panel module was silently exempt from the gate until someone remembered to add it — and the
+# whole point of a structural check is that it covers what actually exists. Splitting app.py up
+# creates modules steadily, so the list reads the repo root instead.
+_SCAN_MODULES = sorted(
+    f for f in os.listdir(_root)
+    if f.endswith(".py") and not f.startswith((".", "_")) and f != "setup.py"
+)
+assert "app.py" in _SCAN_MODULES and "ssh_manager.py" in _SCAN_MODULES, \
+    "module discovery is looking at the wrong directory: %s" % _SCAN_MODULES[:5]
 # The two lists are kept APART on purpose, and which one the orphan check consults is the whole
 # point. _OS_UPDATE_LOG survived this gate all the way onto main and turned the branch red via
 # CodeQL alert #352: it was dead production code, but a test asserted it equalled the helper's
