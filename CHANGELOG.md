@@ -30,6 +30,19 @@ regardless of this file — this changelog is for humans.
   blamed on whatever landed next. It now runs when CodeQL completes.
 
 ### Security
+- **A missing `data/config.json` reopened four unauthenticated setup endpoints.** The setup wizard's
+  Tailscale endpoints (`/api/setup/tailscale/{status,install,up,serve}`) have no login — during a
+  fresh install there is no user yet — so they are safe only for as long as their "setup is still
+  open" test is. That test was `is_setup_complete()`, which is *DB row AND config flag*, and the
+  config half fails open: `load_config()` returns `DEFAULT_CONFIG` (where `setup_complete` is
+  `False`) on any `JSONDecodeError`/`OSError`. On a fully configured panel, a `config.json` that was
+  deleted, truncated by a full disk, or hand-edited into invalid JSON therefore unlocked all four to
+  anyone who could reach the port: `install` runs the Tailscale installer as root, `up` returns an
+  auth URL that joins **the panel's host** to the caller's tailnet with SSH enabled, and `serve`
+  rewrites `bind_host` and `site_domain`. They now use the same DB-row-only lock the wizard itself
+  has used since the equivalent hole was closed there — the reasoning was already written down in
+  `setup_wizard()`, just never applied to these four. A lost config file should degrade the panel,
+  not hand it over.
 - **Three VPS-preparation actions could be aimed at the panel's own host.** The remotes page hides
   *Prepare* and *Tailscale* for the local host, but the API routes behind them accepted a POST
   carrying its id — so anyone with "manage remotes" could apt full-upgrade the panel's own machine,

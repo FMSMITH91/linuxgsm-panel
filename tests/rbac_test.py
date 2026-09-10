@@ -424,6 +424,63 @@ try:
         finally:
             _appmod.run_as_game_user = _sv_rag
 
+    # ── The setup-only endpoints must stay shut when config.json is LOST ───────────────────────────
+    # /api/setup/tailscale/{status,install,up,serve} are deliberately unauthenticated — during a fresh
+    # install there is no user to authenticate. They are safe only for as long as their "setup is still
+    # open" test is. That test used to be is_setup_complete(), which is (DB row AND config flag), and
+    # the config half fails open: load_config() swallows JSONDecodeError/OSError and hands back
+    # DEFAULT_CONFIG, where setup_complete is False.
+    #
+    # So this is the scenario: a fully configured panel whose data/config.json is deleted, truncated by
+    # a full disk, or hand-edited into invalid JSON. Setup is unambiguously finished — the DB says so —
+    # but the config flag reads False, and all four unlocked to anyone who could reach the port.
+    # /install runs the Tailscale installer as root, and /up hands the caller an auth URL that joins
+    # THIS HOST to their tailnet with SSH enabled.
+    #
+    # The config file is never touched here: CONFIG_FILE is pointed at a path that does not exist,
+    # which is precisely the OSError branch, and restored in the finally.
+    #
+    # WARNING if you verify this by mutation (removing the guard to watch these fail): with the
+    # guard gone these four requests REALLY RUN. tools/nosudo_runner.py will not save you — it
+    # refuses sudo, but `tailscale up` and `tailscale serve` run as the operator user without it,
+    # so /up and /serve reconfigure the tailnet of whatever machine you are sitting at, and /serve
+    # writes a config file through the redirected CONFIG_FILE path. Mutate this one on a throwaway
+    # host, or read the 403 and take it on faith.
+    import config as _cfg_mod
+
+    with app.app_context():
+        # Either the suite seeded one (empty DB) or the install has a real one. If neither, the
+        # scenario doesn't exist and there is nothing to assert — say so rather than pass silently.
+        _have_complete_row = SetupState.query.filter_by(complete=True).first() is not None
+    check("probe: a completed setup row exists to test against", _have_complete_row)
+
+    _real_config_file = _cfg_mod.CONFIG_FILE
+    _real_cache = dict(_cfg_mod._cfg_cache)
+    try:
+        _cfg_mod.CONFIG_FILE = _real_config_file.parent / "does-not-exist-rbac-probe.json"
+        _cfg_mod._cfg_cache["key"] = None
+        # The precondition itself is worth asserting — without it the four checks below could pass
+        # because the config was fine all along, which would prove nothing.
+        check("probe: a missing config.json really does read back as setup_complete=False",
+              _cfg_mod.load_config().get("setup_complete") is False)
+
+        _anon = app.test_client()
+        for _p, _m, _label in (("/api/setup/tailscale/status", "get", "status"),
+                               ("/api/setup/tailscale/install", "post", "install (runs an installer as root)"),
+                               ("/api/setup/tailscale/up", "post", "up (returns a tailnet auth URL)"),
+                               ("/api/setup/tailscale/serve", "post", "serve (rewrites bind_host)")):
+            _r = getattr(_anon, _m)(_p)
+            check("setup endpoint stays SHUT with config.json gone: %s" % _label,
+                  _r.status_code == 403, "%s -> %d %s" % (_p, _r.status_code, _r.data[:80]))
+        # ...and the wizard it shares a lock with stays shut too, so the two agree.
+        _rw = _anon.get("/setup")
+        check("the setup wizard stays locked with config.json gone",
+              _rw.status_code in (301, 302), "/setup -> %d" % _rw.status_code)
+    finally:
+        _cfg_mod.CONFIG_FILE = _real_config_file
+        _cfg_mod._cfg_cache.clear()
+        _cfg_mod._cfg_cache.update(_real_cache)
+
     # ── Superadmin sanity: still full access ──
     ca = client_as(admin_id)
     for p in ["/users", "/groups", "/logs", "/remotes", "/server-management", "/tailscale",
