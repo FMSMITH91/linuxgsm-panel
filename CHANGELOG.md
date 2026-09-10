@@ -39,6 +39,16 @@ regardless of this file — this changelog is for humans.
   blamed on whatever landed next. It now runs when CodeQL completes.
 
 ### Security
+- **`tailscale up` on the panel's own host wrote root's output to `/tmp`.** The local flow built its
+  own `sudo bash -c` script — a backgrounded `tailscale up`, a redirect to `/tmp/tsup.log`, and a
+  poll loop. `/tmp` is world-writable, so any local user could pre-create or symlink that path and
+  redirect what root wrote there. The equivalent REMOTE flow was converted to the
+  `tailscale-up-login` verb some time ago — which writes to `/run/panel-tailscale-up.log`
+  (root-owned, `0600`, cleared on reboot) — but the local twin was never switched over. It is now,
+  on every path: the helper when installed, the tool directly when already root, and the verb's own
+  rendered shell form otherwise, which uses the `/run` path too. `tailscale up` on this host also
+  stops needing `sudo bash`, which is one of the call sites blocking the sudoers grant from being
+  narrowed; a new census ratchet holds the remaining count at 1.
 - **A missing `data/config.json` reopened four unauthenticated setup endpoints.** The setup wizard's
   Tailscale endpoints (`/api/setup/tailscale/{status,install,up,serve}`) have no login — during a
   fresh install there is no user yet — so they are safe only for as long as their "setup is still

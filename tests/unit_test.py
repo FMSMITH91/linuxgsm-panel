@@ -4239,6 +4239,32 @@ for _f in _SCAN_MODULES:
                 _orphans.append("%s:%d %s%s" % (
                     _f, _node.lineno, _t.id,
                     " (only its tests mention it)" if _t.id in _referenced else ""))
+# ── Census: argv of the form ["sudo", <shell>, ...] ────────────────────────────────────────────
+# This is the measure of how far the sudoers grant is from being narrowable. A sudoers rule that
+# permits /bin/bash or /bin/sh is EXACTLY equivalent to NOPASSWD:ALL — the caller just runs
+# `sudo bash -c '<anything>'` — so every one of these sites has to become a verb before the grant
+# can shrink to the helper alone. install.sh's header says the same thing.
+#
+# A ratchet, like the sudo=True one: it may fall, never rise. Lower the ceiling when you convert
+# one; do not raise it to make a new call site pass.
+_SHELLS = {"bash", "sh", "/bin/bash", "/bin/sh"}
+_sudo_shell = []
+for _f in _SCAN_MODULES:
+    _fp = os.path.join(_root, _f)
+    if not os.path.exists(_fp):
+        continue
+    for _n in _ast_scan.walk(_ast_scan.parse(open(_fp, encoding="utf-8").read())):
+        if isinstance(_n, (_ast_scan.List, _ast_scan.Tuple)) and _n.elts:
+            _first = _n.elts[0]
+            if isinstance(_first, _ast_scan.Constant) and _first.value == "sudo":
+                _rest = [_e.value for _e in _n.elts[1:3] if isinstance(_e, _ast_scan.Constant)]
+                if any(_r in _SHELLS for _r in _rest):
+                    _sudo_shell.append("%s:%d" % (_f, _n.lineno))
+_SUDO_SHELL_CEILING = 1   # tailscale_integration.install_tailscale_local — the curl|sh installer
+check("escalation census: ['sudo', <shell>] sites <= %d (currently %d) — ratchet, never raise"
+      % (_SUDO_SHELL_CEILING, len(_sudo_shell)),
+      len(_sudo_shell) <= _SUDO_SHELL_CEILING, "; ".join(sorted(_sudo_shell)))
+
 # ── panel_state's one rule: mutate in place, never rebind ──────────────────────────────────────
 # monitoring.py and app.py both do `from panel_state import _player_counts`, which binds the OBJECT.
 # Mutating it (`.clear()`, `[k] = v`) is seen by every importer; REBINDING it (`_player_counts = {}`)

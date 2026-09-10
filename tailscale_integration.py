@@ -13,6 +13,8 @@ import time
 from dataclasses import dataclass, field
 from typing import Optional
 
+import system_ops as _so
+
 _log = logging.getLogger(__name__)
 
 
@@ -359,6 +361,18 @@ def setup_tailscale_serve(port=5000, mount="/", funnel=False, backend_scheme="ht
     return False, f"Failed to configure Tailscale Serve: {err or 'Unknown error'}"
 
 
+@dataclass
+class _SimpleResult:
+    """The three fields of subprocess.CompletedProcess that this module reads.
+
+    _run_verb returns (out, err, rc); the callers below were written against a
+    CompletedProcess. Rather than rewrite every read, adapt the shape — the point of the
+    change is WHICH path runs the command, not how its result is spelled."""
+    stdout: str
+    stderr: str
+    returncode: int
+
+
 def install_tailscale_local():
     """Install Tailscale on THIS host (needs sudo). Returns (success, log tail)."""
     try:
@@ -379,25 +393,28 @@ def install_tailscale_local():
 def tailscale_up_local(enable_ssh=True):
     """Run `tailscale up` on THIS host detached and return the browser login URL to
     paste in (mirrors the remote flow). Returns (True, url) | (True, 'ALREADY_CONNECTED')
-    | (False, message)."""
-    up = "tailscale up --accept-routes --timeout=600s"
-    if enable_ssh:
-        up += " --ssh"
-    cmd = (
-        "rm -f /tmp/tsup.log ; "
-        f"nohup {up} > /tmp/tsup.log 2>&1 & "
-        "for i in $(seq 1 20); do "
-        "u=$(grep -oE 'https://login\\.tailscale\\.com/[A-Za-z0-9/]+' /tmp/tsup.log | head -1) ; "
-        "[ -n \"$u\" ] && { echo \"$u\" ; break ; } ; "
-        "grep -qi 'success' /tmp/tsup.log && { echo ALREADY_CONNECTED ; break ; } ; "
-        "sleep 1 ; done"
-    )
-    try:
-        r = subprocess.run(["sudo", "bash", "-c", cmd], capture_output=True, text=True, timeout=40)
-    except Exception:
-        # Echoed back to /api/tailscale/up — no raw exception text in the response.
-        _log.exception("tailscale up failed")
-        return False, "Could not start Tailscale — see panel logs for details."
+    | (False, message).
+
+    This used to build its own `sudo bash -c` script — a backgrounded `tailscale up`, a redirect,
+    a poll loop and a grep, all needing a shell. The REMOTE flow was converted to the
+    `tailscale-up-login` verb some time ago; this local twin was simply never switched over, so
+    two things stayed true of it that are no longer true anywhere else:
+
+      1. It wrote root's output to /tmp/tsup.log. /tmp is world-writable, so any local user could
+         pre-create or symlink that path and redirect what root wrote. The verb writes to
+         /run/panel-tailscale-up.log instead — root-owned, 0600, tmpfs, cleared on reboot.
+      2. It needed `sudo bash`, and a sudoers rule permitting /bin/bash is exactly equivalent to
+         NOPASSWD:ALL. That is one of the handful of call sites blocking the grant from being
+         narrowed to the helper alone.
+
+    Every path below now goes through the verb table: the helper when it is installed, the tool
+    directly when already root, and the verb's own rendered shell form otherwise — and that
+    rendering uses the /run path too, so the /tmp hazard is gone even on a host that has not had
+    install.sh re-run as root."""
+    out, err, rc = _so._run_verb("tailscale-up-login",
+                                 ["yes" if enable_ssh else "no", "-"],
+                                 timeout=40, merge_stderr=False)
+    r = _SimpleResult(stdout=out, stderr=err, returncode=rc)
     line = (r.stdout or "").strip().split("\n")[-1].strip()
     if line.startswith("https://login.tailscale.com/"):
         with _cache_lock:
