@@ -5160,6 +5160,26 @@ finally:
     _helper.PANEL_CONF = _dbr_conf
     _helper.DBM_PATH = _dbr_dbm
 
+# ── The installer must not build a SECOND panel beside an existing one ────────────────────────
+# IS_UPDATE asks "is there an app.py and a unit file where I am about to install?" — but where that
+# is has already been decided by how the script was invoked. Run as root it looks under the service
+# user's home; run as yourself, under yours. Neither sees the other, so `sudo ./install.sh` on a
+# host with a working per-user install found nothing, called it a fresh install, and would have
+# built a parallel panel: its own user, service, database and port.
+_inst_guard = open(os.path.join(_root, "install.sh"), encoding="utf-8").read()
+check("install.sh: looks for an install in the OTHER service model before choosing one",
+      "_other_install" in _inst_guard)
+check("install.sh: that check runs BEFORE the mode decision, not after",
+      _inst_guard.index("_other_install=") < _inst_guard.index('    RUN_AS_ROOT=1'))
+check("install.sh: refuses rather than adopting the other install",
+      "Refusing to build a parallel install." in _inst_guard)
+# The service user's OWN directory must not trip it, or a root install could never update itself.
+check("install.sh: skips the service user's own home when scanning for a per-user install",
+      '[ "${_u}" = "${SERVICE_USER}" ] && continue' in _inst_guard)
+# A stray checkout is not an install; requiring the unit file keeps the check specific.
+check("install.sh: requires a user UNIT file, not just an app.py, to call it an install",
+      ".config/systemd/user/linuxgsm-panel.service" in _inst_guard)
+
 # ── The sudoers grant itself ──────────────────────────────────────────────────────────────────
 # The whole point of the verb table. install.sh writes a NARROW grant when every root-owned piece
 # is in place, and the wide one otherwise — because a host that has the new code but has not had
