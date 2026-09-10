@@ -17,8 +17,13 @@ regardless of this file — this changelog is for humans.
   that `int()` refuses, and the panel used that pairing in 35 places — including the query port read
   from a game server's own config, and the session-cookie user loader. Found by the fuzzer, fixed
   everywhere with `isdecimal()`, which is exactly the predicate `int()` accepts.
-
-### Fixed
+- **A dead constant in `ssh_manager` turned main red.** `_OS_UPDATE_LOG` stopped being used when the
+  detached OS-update job moved into the privileged helper — the helper writes that log and hands it
+  back through the `os-update-log` verb, so the panel never names the path any more. The alias, and
+  a comment still claiming the runner "writes to it by name", are gone. The reason it reached main
+  at all is the more useful half: the local orphaned-constant gate counted a *test* reference as
+  proof a name was alive, and the only thing left mentioning this one was its own parity test. The
+  gate now requires a reference from production code and says so when a name is test-only.
 - **The "main has open code-scanning alerts" gate raced CodeQL and reported the wrong answer.** It
   ran on the same push as the analysis rather than after it, so a commit that *fixed* an alert
   failed the gate, and — worse — a commit that *introduced* one passed it, with the alert then
