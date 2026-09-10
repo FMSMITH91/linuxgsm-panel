@@ -86,9 +86,13 @@ of going unnoticed. Current state:
 
 | route | sites remaining |
 |---|---|
-| `run_command(..., sudo=True)` | 5 |
+| `run_command(..., sudo=True)` | 4 |
 | `_sudo_sh(...)` | 1 |
-| **root total** | **6** (from 131) |
+| **root total** | **5** (from 131) |
+
+Two of those five are the downloaded-installer steps named below, which a verb cannot narrow. The
+other three are the GMod content install script and two large read-only shell programs that gather
+host state.
 
 (Those counts exclude six calls that ARE the verb layer's own transport — the `run_command` /
 `_run_local` / `_run` at the end of `run_privileged`, `write_root_file`, `write_content_cron` and
@@ -124,6 +128,10 @@ types rather than in the command names:
   passes *names* and the helper assembles the paths — `content_path()` re-checks the assembled
   result, and is tested directly rather than only through the verbs, because the verbs' own
   validators would otherwise reject every probe before it got that far.
+- **The detached OS-update job** was `setsid bash -c '<seven statements>' &` — truncate, header,
+  `export`, `apt-get update`, `full-upgrade` with four `-o` flags, `autoremove`, and a sentinel
+  carrying the exit code. It took no caller input at all, which is what lets it be a zero-argument
+  verb rather than a command the panel composes.
 - **Tailscale's join** took the auth key, the advertised routes and the tags straight from the
   request and shell-quoted them into a root command. They are validated arguments now: routes are
   *parsed* as networks, each tag must be `tag:name`, and the auth key is charset-checked and never

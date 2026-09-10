@@ -97,6 +97,11 @@ F2B_LOG_GLOB = "/var/log/fail2ban.log*"
 TS_UP_LOG = "/run/panel-tailscale-up.log"
 TS_UP_POLL_SECONDS = 20
 
+# The detached OS-update job — see tools/panel-helper. OS_UPDATE_LOG is the same file
+# the os-update-log verb tails.
+OS_UPDATE_DONE = "PANEL_OS_UPDATE_DONE:"
+OS_UPDATE_STARTED = "__STARTED__"
+
 
 # sshd_config directives the panel may set, and the values it may set them to — see
 # tools/panel-helper. Both halves are closed sets; this is a hardening step, not an editor.
@@ -499,6 +504,7 @@ _ARGV = {
 
     # ── apt / dpkg ──
     "apt-update": ([], lambda a: [APT, "update", "-qq"], None),
+    "os-update-run": ([], lambda a: [], None),
     "apt-full-upgrade": ([_choice("phased", "standard")],
                          lambda a: [APT, "full-upgrade", "-y"]
                          + (["-o", "APT::Get::Always-Include-Phased-Updates=true"]
@@ -574,6 +580,20 @@ _REMOTE_ACTIONS = {
         "sleep 1 ; done"
         % (TS_UP_LOG, shlex.join(ts_up_argv(a[0], a[1])), TS_UP_LOG, TS_UP_POLL_SECONDS,
            TS_UP_LOG, TS_UP_LOG)),
+    "os-update-run": lambda a: (
+        "setsid bash -c %s </dev/null >/dev/null 2>&1 & echo %s"
+        % (shlex.quote(
+            ": > {L} 2>/dev/null || true; "
+            "echo \"=== OS update started $(date) ===\" >> {L} 2>&1; "
+            "export DEBIAN_FRONTEND=noninteractive; "
+            "apt-get update >> {L} 2>&1; "
+            "apt-get -y -o APT::Get::Always-Include-Phased-Updates=true "
+            "-o Dpkg::Options::=--force-confold -o Dpkg::Options::=--force-confdef "
+            "full-upgrade >> {L} 2>&1; "
+            "rc=$?; "
+            "apt-get -y autoremove >> {L} 2>&1 || true; "
+            "echo \"{S}$rc\" >> {L} 2>&1".format(L=OS_UPDATE_LOG, S=OS_UPDATE_DONE)),
+           OS_UPDATE_STARTED)),
     "sshd-set-directive": lambda a: (
         "sed -i 's/^#\\?%s.*/%s %s/' %s" % (a[0], a[0], a[1], shlex.quote(SSHD_CONFIG))),
     "create-swapfile": lambda a: (

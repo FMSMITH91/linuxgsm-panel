@@ -3289,7 +3289,9 @@ def remote_os_run_updates(server):
 # Must match privileged.OS_UPDATE_LOG and the helper's copy — the os-update-log verb reads
 # it, and the detached runner below still writes to it by name.
 _OS_UPDATE_LOG = _priv.OS_UPDATE_LOG
-_OS_UPDATE_DONE = "PANEL_OS_UPDATE_DONE:"   # sentinel line the job appends with the exit code
+# The sentinel the detached job ends with; the verb table owns it so the writer and this
+# reader cannot disagree about what "finished" looks like.
+_OS_UPDATE_DONE = _priv.OS_UPDATE_DONE
 
 
 def remote_os_update_start(server):
@@ -3303,27 +3305,11 @@ def remote_os_update_start(server):
     _, _, chk_rc = run_privileged(server, "apt-upgrade-running", [], timeout=10, merge_stderr=False)
     if chk_rc == 0:
         return True, "An update is already running — watching it."
-    log = _OS_UPDATE_LOG
-    inner = (
-        ": > {L} 2>/dev/null || true; "
-        "echo \"=== OS update started $(date) ===\" >> {L} 2>&1; "
-        "export DEBIAN_FRONTEND=noninteractive; "
-        "apt-get update >> {L} 2>&1; "
-        # An explicit "Install updates" should apply everything the Check list shows. Two things
-        # otherwise leave "N still available" after a run: plain `upgrade` holds back packages needing
-        # a new dependency/removal (so use full-upgrade), and BOTH defer Ubuntu "phased" updates (a
-        # gradual rollout) — Always-Include-Phased-Updates=true installs those too, so the re-check
-        # actually reaches 0.
-        "apt-get -y -o APT::Get::Always-Include-Phased-Updates=true "
-        "-o Dpkg::Options::='--force-confold' -o Dpkg::Options::='--force-confdef' full-upgrade >> {L} 2>&1; "
-        "rc=$?; "
-        "apt-get -y autoremove >> {L} 2>&1 || true; "
-        "echo \"{S}$rc\" >> {L} 2>&1"
-    ).format(L=log, S=_OS_UPDATE_DONE)
-    # setsid + detached stdio + & so it outlives the SSH channel / this request.
-    cmd = "setsid bash -c {} </dev/null >/dev/null 2>&1 & echo __STARTED__".format(_quote(inner))
-    out, _, _ = run_command(server, cmd, timeout=20, sudo=True)
-    if "__STARTED__" in (out or ""):
+    # Was one `setsid bash -c '<script>'` wrapping seven shell statements. It took no caller input
+    # at all — the only variables in it were two constants — which is what lets it be a
+    # zero-argument verb rather than a command the panel composes.
+    out, _, _ = run_privileged(server, "os-update-run", [], timeout=20)
+    if _priv.OS_UPDATE_STARTED in (out or ""):
         return True, "Update started."
     return False, "Couldn't start the update."
 

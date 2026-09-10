@@ -149,6 +149,13 @@ TS_UP_LOG = "/run/panel-tailscale-up.log"
 TS_LOGIN_RE = re.compile(r"https://login\.tailscale\.com/[A-Za-z0-9/]+")
 TS_UP_POLL_SECONDS = 20
 
+# The detached OS-update job: where it streams, the sentinel it ends with, and what the
+# verb prints so the caller knows the job launched. All fixed — the verb takes no
+# arguments, because the shell script it replaces took no caller input either.
+OS_UPDATE_LOG = "/run/panel-os-update.log"
+OS_UPDATE_DONE = "PANEL_OS_UPDATE_DONE:"
+OS_UPDATE_STARTED = "__STARTED__"
+
 
 # sshd_config directives the panel is allowed to set, and the values it may set them to. The panel
 # hardens exactly these four; anything else is not something it has ever needed to write, so the
@@ -627,6 +634,7 @@ VERBS = {
 
     # ── apt / dpkg ──
     "apt-update": ([], lambda a: [APT, "update", "-qq"], None),
+    "os-update-run": ([], lambda a: [], None),
     # Two upgrade shapes, because the panel really does want two. "phased" includes Ubuntu's
     # phased rollouts so an explicit "install updates" applies everything the Check list showed;
     # "standard" is apt's default set, used when bootstrapping a host.
@@ -856,6 +864,61 @@ def do_create_swapfile(args, content):
         with open(FSTAB, "a", encoding="utf-8") as fh:
             fh.write(SWAP_FSTAB_LINE + "\n")
     return 0
+
+
+def do_os_update_run(args, content):
+    """Run the OS update detached, streaming to the log the UI polls.
+
+    Was one `setsid bash -c '<script>' </dev/null >/dev/null 2>&1 &` wrapping a seven-statement
+    shell program: truncate, header, export, apt-get update, apt-get full-upgrade with four -o
+    flags, autoremove, and a sentinel carrying the exit code. It took no caller input at all — the
+    only variables in it were two constants — which is what makes it a zero-argument verb.
+
+    The same sequence in Python, in a double-forked grandchild so it outlives the request. The apt
+    flags are the same ones apt-full-upgrade uses, and for the same reasons: include phased updates
+    so an explicit "install updates" actually reaches zero, and keep any config file the operator
+    has edited."""
+    pid = os.fork()
+    if pid != 0:
+        os.waitpid(pid, 0)
+        sys.stdout.write(OS_UPDATE_STARTED)
+        return 0
+    os.setsid()
+    if os.fork() != 0:
+        os._exit(0)
+    # Grandchild: re-parented to init, stdio detached, log opened once and appended to throughout.
+    try:
+        devnull = os.open(os.devnull, os.O_RDWR)
+        for fd in (0, 1, 2):
+            os.dup2(devnull, fd)
+        if devnull > 2:
+            os.close(devnull)
+        log = open(OS_UPDATE_LOG, "w", encoding="utf-8")
+        log.write("=== OS update started %s ===\n"
+                  % time.strftime("%a %d %b %H:%M:%S %Z %Y"))
+        log.flush()
+        env = dict(os.environ, DEBIAN_FRONTEND="noninteractive")
+        apt = resolve("apt-get")
+        subprocess.run([apt, "update"], shell=False, env=env,  # nosec B603 - fixed argv
+                       stdout=log, stderr=subprocess.STDOUT, timeout=1800)
+        rc = subprocess.run([apt, "-y", "-o", "APT::Get::Always-Include-Phased-Updates=true"]
+                            + APT_CONFOLD + ["full-upgrade"], shell=False, env=env,  # nosec B603
+                            stdout=log, stderr=subprocess.STDOUT, timeout=7200).returncode
+        subprocess.run([apt, "-y", "autoremove"], shell=False, env=env,  # nosec B603
+                       stdout=log, stderr=subprocess.STDOUT, timeout=1800)
+        log.write("%s%d\n" % (OS_UPDATE_DONE, rc))
+        log.flush()
+        log.close()
+    except BaseException:
+        # The sentinel is how the UI knows the job ended; without it the popup waits forever. -1
+        # says "it ended, badly" rather than leaving the reader to guess.
+        try:
+            with open(OS_UPDATE_LOG, "a", encoding="utf-8") as fh:
+                fh.write("%s-1\n" % OS_UPDATE_DONE)
+        except OSError:
+            pass
+        os._exit(1)
+    os._exit(0)
 
 
 def do_tailscale_up_login(args, content):
@@ -1105,6 +1168,7 @@ ACTIONS = {
     "gmod-mount-read": do_gmod_mount_read,
     "f2b-log-lines": do_f2b_log_lines,
     "tailscale-up-login": do_tailscale_up_login,
+    "os-update-run": do_os_update_run,
     "sshd-set-directive": do_sshd_set_directive,
     "create-swapfile": do_create_swapfile,
 }
