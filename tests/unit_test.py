@@ -4604,6 +4604,34 @@ if _osu:
           (_ho_done_marker + "7") in _olog, _olog[-80:])
     check("os update: the writer and the reader agree on the sentinel",
           _helper.OS_UPDATE_DONE == _priv.OS_UPDATE_DONE == sm._OS_UPDATE_DONE)
+
+    # A job that dies before writing its own sentinel must still write one. Without it the UI's
+    # popup polls forever, which looks exactly like "the update is taking a long time". Provoked
+    # by making apt unresolvable, so the run fails at its first step.
+    _osfail = os.path.join(_osu, "failed.log")
+    _osfprobe = (
+        "import importlib.util as u, importlib.machinery as m;"
+        "s=u.spec_from_loader('p', m.SourceFileLoader('p', %r));"
+        "mod=u.module_from_spec(s); s.loader.exec_module(mod);"
+        "mod.OS_UPDATE_LOG=%r;"
+        "mod.resolve=lambda p: (_ for _ in ()).throw(FileNotFoundError('apt-get'));"
+        "mod.do_os_update_run([], None)" % (_helper_path, _osfail)
+    )
+    _osfr = _sp.run([sys.executable, "-c", _osfprobe], capture_output=True, text=True, timeout=60)
+    check("os update: a job that cannot start still reports STARTED to its caller",
+          _priv.OS_UPDATE_STARTED in _osfr.stdout, repr(_osfr.stdout))
+    _osfdeadline = _time.time() + 10
+    _osftxt = ""
+    while _time.time() < _osfdeadline:
+        try:
+            _osftxt = open(_osfail).read()
+            if _ho_done_marker in _osftxt:
+                break
+        except OSError:
+            pass
+        _time.sleep(0.2)
+    check("os update: and it writes a FAILURE sentinel, so the popup stops waiting",
+          (_ho_done_marker + "-1") in _osftxt, repr(_osftxt))
     _shutil.rmtree(_osu, ignore_errors=True)
 
 

@@ -866,60 +866,72 @@ def do_create_swapfile(args, content):
     return 0
 
 
+def _os_update_detached():
+    """The OS update itself, in the grandchild. NEVER RETURNS — every path ends in os._exit, which
+    is why it is a separate function: its caller can then have exactly one return, and a reader is
+    not left working out which branch falls off the end."""
+    os.setsid()                       # detach from the session so the caller's exit cannot kill us
+    if os.fork() != 0:
+        os._exit(0)                   # middle process: hand the work to the grandchild and go
+    try:
+        devnull = os.open(os.devnull, os.O_RDWR)
+        for fd in (0, 1, 2):
+            os.dup2(devnull, fd)
+        if devnull > 2:
+            os.close(devnull)         # dup2 kept the copies; this one would leak
+        env = dict(os.environ, DEBIAN_FRONTEND="noninteractive")
+        apt = resolve("apt-get")
+        with open(OS_UPDATE_LOG, "w", encoding="utf-8") as log:
+            log.write("=== OS update started %s ===\n"
+                      % time.strftime("%a %d %b %H:%M:%S %Z %Y"))
+            log.flush()
+            subprocess.run([apt, "update"], shell=False, env=env,  # nosec B603 - fixed argv
+                           stdout=log, stderr=subprocess.STDOUT, timeout=1800)
+            # The same flags apt-full-upgrade uses, for the same reasons: include Ubuntu's phased
+            # rollouts so an explicit "install updates" actually reaches zero, and keep any config
+            # file the operator has edited.
+            rc = subprocess.run([apt, "-y", "-o", "APT::Get::Always-Include-Phased-Updates=true"]
+                                + APT_CONFOLD + ["full-upgrade"], shell=False, env=env,  # nosec B603
+                                stdout=log, stderr=subprocess.STDOUT, timeout=7200).returncode
+            subprocess.run([apt, "-y", "autoremove"], shell=False, env=env,  # nosec B603
+                           stdout=log, stderr=subprocess.STDOUT, timeout=1800)
+            log.write("%s%d\n" % (OS_UPDATE_DONE, rc))
+    except Exception:
+        # Fall through to the failure sentinel below. Caught rather than allowed to propagate
+        # because this is a forked child: an unhandled traceback here would unwind into whatever
+        # the parent was doing.
+        pass
+    else:
+        os._exit(0)
+    # Only here when the run above died before writing its own sentinel. The sentinel is how the
+    # UI knows the job ended at all — without one the popup waits forever — so -1 says "it ended,
+    # badly" rather than leaving the reader to guess.
+    try:
+        with open(OS_UPDATE_LOG, "a", encoding="utf-8") as fh:
+            fh.write("%s-1\n" % OS_UPDATE_DONE)
+    except OSError:
+        # The log is unwritable (a full or read-only /run). Nothing further to try, and the caller
+        # has long since returned — the exit status below is all that is left to say.
+        pass
+    os._exit(1)
+
+
 def do_os_update_run(args, content):
-    """Run the OS update detached, streaming to the log the UI polls.
+    """Start the OS update detached and report that it launched.
 
     Was one `setsid bash -c '<script>' </dev/null >/dev/null 2>&1 &` wrapping a seven-statement
     shell program: truncate, header, export, apt-get update, apt-get full-upgrade with four -o
     flags, autoremove, and a sentinel carrying the exit code. It took no caller input at all — the
     only variables in it were two constants — which is what makes it a zero-argument verb.
 
-    The same sequence in Python, in a double-forked grandchild so it outlives the request. The apt
-    flags are the same ones apt-full-upgrade uses, and for the same reasons: include phased updates
-    so an explicit "install updates" actually reaches zero, and keep any config file the operator
-    has edited."""
+    One return, and it is the parent's: the child branch calls _os_update_detached(), which never
+    comes back."""
     pid = os.fork()
-    if pid != 0:
-        os.waitpid(pid, 0)
-        sys.stdout.write(OS_UPDATE_STARTED)
-        return 0
-    os.setsid()
-    if os.fork() != 0:
-        os._exit(0)
-    # Grandchild: re-parented to init, stdio detached, log opened once and appended to throughout.
-    try:
-        devnull = os.open(os.devnull, os.O_RDWR)
-        for fd in (0, 1, 2):
-            os.dup2(devnull, fd)
-        if devnull > 2:
-            os.close(devnull)
-        log = open(OS_UPDATE_LOG, "w", encoding="utf-8")
-        log.write("=== OS update started %s ===\n"
-                  % time.strftime("%a %d %b %H:%M:%S %Z %Y"))
-        log.flush()
-        env = dict(os.environ, DEBIAN_FRONTEND="noninteractive")
-        apt = resolve("apt-get")
-        subprocess.run([apt, "update"], shell=False, env=env,  # nosec B603 - fixed argv
-                       stdout=log, stderr=subprocess.STDOUT, timeout=1800)
-        rc = subprocess.run([apt, "-y", "-o", "APT::Get::Always-Include-Phased-Updates=true"]
-                            + APT_CONFOLD + ["full-upgrade"], shell=False, env=env,  # nosec B603
-                            stdout=log, stderr=subprocess.STDOUT, timeout=7200).returncode
-        subprocess.run([apt, "-y", "autoremove"], shell=False, env=env,  # nosec B603
-                       stdout=log, stderr=subprocess.STDOUT, timeout=1800)
-        log.write("%s%d\n" % (OS_UPDATE_DONE, rc))
-        log.flush()
-        log.close()
-    except BaseException:
-        # The sentinel is how the UI knows the job ended; without it the popup waits forever. -1
-        # says "it ended, badly" rather than leaving the reader to guess.
-        try:
-            with open(OS_UPDATE_LOG, "a", encoding="utf-8") as fh:
-                fh.write("%s-1\n" % OS_UPDATE_DONE)
-        except OSError:
-            pass
-        os._exit(1)
-    os._exit(0)
-
+    if pid == 0:
+        _os_update_detached()         # never returns
+    os.waitpid(pid, 0)                # reap the middle process immediately
+    sys.stdout.write(OS_UPDATE_STARTED)
+    return 0
 
 def do_tailscale_up_login(args, content):
     """Start `tailscale up` detached and print its login URL once it appears.
