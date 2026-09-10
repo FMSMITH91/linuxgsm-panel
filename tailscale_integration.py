@@ -13,6 +13,7 @@ import time
 from dataclasses import dataclass, field
 from typing import Optional
 
+import privileged as _priv
 import system_ops as _so
 
 _log = logging.getLogger(__name__)
@@ -60,24 +61,6 @@ def _run_ts(args, timeout=5):
         return "", "tailscale command failed", -1
 
 
-def _run_ts_sudo(args, timeout=10):
-    """Run a *privileged* tailscale command (serve/funnel/set) with sudo."""
-    try:
-        r = subprocess.run(
-            ["sudo", "tailscale"] + args,
-            capture_output=True, text=True, timeout=timeout,
-        )
-        return r.stdout.strip(), r.stderr.strip(), r.returncode
-    except FileNotFoundError:
-        return "", "tailscale binary not found", -1
-    except subprocess.TimeoutExpired:
-        return "", "tailscale command timed out", -1
-    except Exception:
-        # See _run_ts: keep the raw exception text out of any caller-facing string.
-        _log.exception("privileged tailscale command failed")
-        return "", "tailscale command failed", -1
-
-
 def _current_os_user():
     """The OS user the panel runs as (the one that should own Tailscale management)."""
     try:
@@ -96,7 +79,11 @@ def ensure_operator():
     user = _current_os_user()
     if not user or user == "root":
         return True, "root"
-    _run_ts_sudo(["set", "--operator=" + user], timeout=10)
+    # Was `sudo tailscale set --operator=<user>`. A sudoers rule permitting the tailscale binary
+    # would cover every tailscale subcommand — `up`, `logout`, `set --exit-node`, the lot — so this
+    # goes through the verb table, where the subcommand and flag are fixed and the user name is
+    # validated on the far side.
+    _so._run_verb("tailscale-set-operator", [user], timeout=10)
     return True, user
 
 
@@ -313,6 +300,14 @@ def check_peer_reachability(host) -> dict:
     return {"reachable": reachable, "latency_ms": latency_ms}
 
 
+def _ts_serve_args(verb, grammar, mount, scheme, port):
+    """The `tailscale serve|funnel` arguments, WITHOUT the leading binary name.
+
+    Deliberately delegates to privileged.ts_serve_argv and drops argv[0], so the unprivileged path
+    and the root path cannot drift: one definition of what the command is, used by both."""
+    return _priv.ts_serve_argv(verb, grammar, mount, scheme, str(port))[1:]
+
+
 def setup_tailscale_serve(port=5000, mount="/", funnel=False, backend_scheme="http"):
     """Configure Tailscale Serve to proxy this panel.
 
@@ -328,7 +323,6 @@ def setup_tailscale_serve(port=5000, mount="/", funnel=False, backend_scheme="ht
     Returns:
         (success, message)
     """
-    upstream = f"{backend_scheme}://127.0.0.1:{port}"
     verb = "funnel" if funnel else "serve"
     mount = mount or "/"
 
@@ -343,21 +337,24 @@ def setup_tailscale_serve(port=5000, mount="/", funnel=False, backend_scheme="ht
     # the mount as a positional ("... 443 / URL"); (2) privilege — usually the operator set
     # above is enough, but fall back to sudo if not. Try each combination and use the first
     # that succeeds, so it works across Tailscale versions and permission setups.
-    modern = [verb, "--bg", "--https=443"]
-    if mount != "/":
-        modern.append("--set-path=" + mount)
-    modern.append(upstream)
-    legacy = [verb, "--bg", "--https", "443", mount, upstream]
-
     err = ""
-    for runner in (_run_ts, _run_ts_sudo):          # non-root (operator) first, then sudo
-        for args in (modern, legacy):               # modern grammar first, then legacy
-            out, e, rc = runner(args, timeout=10)
-            if rc == 0:
-                with _cache_lock:
-                    _cache["info"] = None
-                return True, "Tailscale Serve enabled" + (" (with Funnel)" if funnel else "")
-            err = e or out or err
+    for grammar in ("modern", "legacy"):
+        # Unprivileged first: ensure_operator() above normally makes this work as the panel user,
+        # and a command that needs no root should not ask for it.
+        out, e, rc = _run_ts(_ts_serve_args(verb, grammar, mount, backend_scheme, port), timeout=10)
+        if rc != 0:
+            # Root fallback, for a host where the operator setting did not take. This used to be
+            # `sudo tailscale <args>`; a sudoers rule permitting the tailscale binary would cover
+            # every subcommand it has — up, logout, set --exit-node — so it goes through the verb
+            # table, which fixes the subcommand and validates the rest.
+            out, e, rc = _so._run_verb(
+                "tailscale-serve", [verb, grammar, mount, backend_scheme, str(port)],
+                timeout=10, merge_stderr=False)
+        if rc == 0:
+            with _cache_lock:
+                _cache["info"] = None
+            return True, "Tailscale Serve enabled" + (" (with Funnel)" if funnel else "")
+        err = e or out or err
     return False, f"Failed to configure Tailscale Serve: {err or 'Unknown error'}"
 
 
