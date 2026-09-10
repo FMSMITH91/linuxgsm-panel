@@ -42,8 +42,8 @@ import threading
 import time
 import gzip as _gzip
 from types import SimpleNamespace
-from datetime import datetime, timedelta
-from clock import utcnow, aware_utcnow
+from datetime import timedelta
+from clock import utcnow
 from pathlib import Path
 
 # eventlet announces its own deprecation on import — upstream's words, not a nit: "Eventlet is
@@ -102,10 +102,15 @@ from config import (
     encrypt_secret, decrypt_secret, is_encrypted, harden_data_permissions,
 )
 import notifications
+from certs import _ensure_self_signed_cert, _maybe_alert_cert_expiring
+from prefs import (
+    _apply_user_order, _apply_user_server_order, _clean_panel_map, _effective_prefs, _panel_layout,
+)
+from middleware import PrefixMiddleware
 from models import (
     AuditLog, GameServer, Group, RemoteServer, SetupState, User, db, init_db,
     CustomCommand, CUSTOM_ARG_DEFAULT_PATTERN, CUSTOM_ARG_PLACEHOLDER, GlobalBan,
-    MetricSample, HostSample, UI_PREF_KEYS,
+    MetricSample, HostSample,
 )
 from ssh_manager import (
     _remote_listening_ports, _invalidate_port_scan,
@@ -308,10 +313,6 @@ def _first_free_block(desired, span, occupied, limit=400):
             return p
         p += 1
     return p
-
-
-
-
 
 
 # A token unique to THIS panel process — it changes only when the panel actually restarts.
@@ -1890,43 +1891,6 @@ def lgsm_name_to_game_type(lgsm_name):
 
 # ─── App Factory ──────────────────────────────────────────────
 
-class PrefixMiddleware:
-    """WSGI middleware that handles sub-path mounts (Tailscale Serve, reverse proxy).
-    Fixes both incoming PATH_INFO and outgoing Location redirect headers."""
-    def __init__(self, app, prefix=""):
-        self.app = app
-        self.prefix = prefix.rstrip("/")
-
-    def __call__(self, environ, start_response):
-        cfg = load_config()
-        # Priority: X-Forwarded-Prefix header (Tailscale Serve), then config
-        prefix = environ.get("HTTP_X_FORWARDED_PREFIX", "")
-        if not prefix:
-            mount = cfg.get("tailscale_mount", "")
-            if mount and mount != "/":
-                prefix = mount
-            else:
-                prefix = self.prefix
-
-        prefix = prefix.rstrip("/")
-
-        if prefix:
-            environ["SCRIPT_NAME"] = prefix
-            path_info = environ.get("PATH_INFO", "")
-            if path_info.startswith(prefix):
-                environ["PATH_INFO"] = path_info[len(prefix):]
-
-        def _start_response(status, headers, *args):
-            # Rewrite outgoing Location headers so redirects include the prefix
-            if prefix:
-                for i, (k, v) in enumerate(headers):
-                    if k.lower() == "location" and v.startswith("/") and not v.startswith(prefix):
-                        headers[i] = (k, prefix + v)
-            return start_response(status, headers, *args)
-
-        return self.app(environ, _start_response)
-
-
 # ── Strict input validation ───────────────────────────────────────────────
 # These values become LinuxGSM shortnames, Linux usernames, home-directory paths and
 # arguments to shell commands run as root during install. LinuxGSM shortnames are
@@ -2003,32 +1967,6 @@ def _maybe_alert_admin_bruteforce(who, ip, now):
 
 # A burst of this many NEW fail2ban bans in one watch cycle looks like an active attack wave.
 _BAN_SPIKE_THRESHOLD = 3
-_CERT_ALERTED = {"at": 0}   # last time we alerted about the TLS cert (weekly dedup)
-
-
-def _maybe_alert_cert_expiring():
-    """Alert when the panel's own TLS certificate is within 14 days of expiry, at most once a week.
-    No-op if the cert file isn't present (e.g. Tailscale Serve / a reverse proxy terminates TLS).
-    Best-effort — never raises."""
-    try:
-        from datetime import timezone
-        from cryptography import x509
-        cert_path = DATA_DIR / "ssl" / "cert.pem"
-        if not cert_path.exists():
-            return
-        with open(cert_path, "rb") as f:
-            cert = x509.load_pem_x509_certificate(f.read())
-        try:
-            not_after = cert.not_valid_after_utc              # cryptography >= 42
-        except AttributeError:
-            not_after = cert.not_valid_after.replace(tzinfo=timezone.utc)
-        days = (not_after - datetime.now(timezone.utc)).days
-        if days <= 14 and (time.time() - _CERT_ALERTED["at"]) > 7 * 86400:
-            _CERT_ALERTED["at"] = time.time()
-            notifications.notify("cert_expiring", "TLS certificate expiring",
-                                 "The panel's TLS certificate expires in %d day(s) — renew it." % max(days, 0))
-    except Exception:
-        _log.debug("cert-expiry check failed", exc_info=True)
 
 
 MIN_PASSWORD_LEN = 10
@@ -2426,122 +2364,7 @@ def _form_err(message, endpoint, code=400, category="danger", **values):
     return redirect(url_for(endpoint, **values))
 
 
-def _apply_user_order(items, order, key=lambda o: o.id):
-    """`items` in a user's saved order: saved ids first in their saved order, then everything else
-    in the order it arrived. Ids that no longer exist and items missing from the order are both
-    NORMAL (a host was deleted; a server was just added), so neither is an error. An empty or junk
-    order returns `items` untouched — that is what makes "no saved layout" mean "ship default".
 
-    The sort is stable, so items the user never ordered keep their relative default order instead of
-    being shuffled. Pure and module-level so it is unit-testable with no app context."""
-    pos = {}
-    for ident in (order or []):
-        try:
-            num = int(ident)
-        except (TypeError, ValueError):
-            continue                           # hand-edited blob: skip the junk, keep the rest
-        # len(pos), NOT the loop index: positions must stay dense, or a skipped junk entry leaves a
-        # gap and the len(pos) fallback below sorts un-ordered items AHEAD of ordered ones.
-        pos.setdefault(num, len(pos))          # first occurrence wins; a dupe can't displace it
-    if not pos:
-        return list(items)
-    return sorted(items, key=lambda o: pos.get(key(o), len(pos)))
-
-
-_PANEL_KEY_RE = re.compile(r"^[a-z0-9_-]{1,32}$")
-
-
-def _effective_prefs(user, cfg=None):
-    """The layout a page should render for `user`: their own saved keys over the install default a
-    superadmin published, over the code default (no keys at all).
-
-    Per-KEY, not whole-object: someone who has only ever reordered their stat tiles still gets the
-    house host order, instead of the admin default being all-or-nothing. Falling back this way also
-    makes "reset" mean "back to the house layout" rather than "back to bare defaults", which is what
-    an admin publishing one would expect."""
-    try:
-        default = (cfg if cfg is not None else load_config()).get("default_ui_prefs") or {}
-    except Exception:
-        default = {}
-    if not isinstance(default, dict):
-        default = {}
-    prefs = {k: v for k, v in default.items() if k in UI_PREF_KEYS}
-    try:
-        prefs.update(user.get_ui_prefs() if getattr(user, "is_authenticated", False) else {})
-    except Exception:
-        _log.debug("reading user ui_prefs failed; using the install default", exc_info=True)
-    return prefs
-
-
-def _panel_layout(prefs, region, default_keys):
-    """(visible, hidden) panel keys for one reorderable region, in this user's saved order.
-
-    Only keys the CALLER declares are ever returned. That is the safety property: a saved key can
-    never conjure a panel the page did not offer (several are permission-gated), and a panel retired
-    in a later version stops appearing the moment it leaves default_keys. Saved-but-unknown keys are
-    dropped; known-but-unsaved keys are appended in their default order, so a panel added by a future
-    version shows up for existing users instead of silently vanishing.
-
-    Pure, so the ordering rules are unit-testable with no app context."""
-    saved = hidden_saved = None
-    if isinstance(prefs, dict):
-        panels, hidden = prefs.get("panels"), prefs.get("hidden")
-        if isinstance(panels, dict):
-            saved = panels.get(region)
-        if isinstance(hidden, dict):
-            hidden_saved = hidden.get(region)
-    known = [k for k in (default_keys or [])]
-    hidden = [k for k in known if isinstance(hidden_saved, list) and k in hidden_saved]
-    order = []
-    if isinstance(saved, list):
-        for key in saved:
-            if key in known and key not in order:
-                order.append(key)
-    order += [k for k in known if k not in order]
-    return [k for k in order if k not in hidden], hidden
-
-
-def _clean_panel_map(raw):
-    """A {region: [panel key]} map from a request body, charset- and size-capped. Anything that is
-    not a plain lowercase key is dropped rather than rejected: the layout is cosmetic, and a hostile
-    or stale body should still leave the user with a sane one."""
-    out = {}
-    if not isinstance(raw, dict):
-        return out
-    for region, keys in list(raw.items())[:20]:
-        if not (isinstance(region, str) and _PANEL_KEY_RE.match(region) and isinstance(keys, list)):
-            continue
-        seen = []
-        for key in keys[:60]:
-            if isinstance(key, str) and _PANEL_KEY_RE.match(key) and key not in seen:
-                seen.append(key)
-        out[region] = seen
-    return out
-
-
-def _apply_user_server_order(servers, prefs):
-    """`servers` with each host's rows in that user's saved order. The dashboard slices this one
-    list per host (`servers|selectattr('remote_id', ...)`), so ordering it per host in a single pass
-    is enough — no need to know the host order here, since the slice preserves whatever we produce.
-
-    Hosts with no saved order keep their default order because _apply_user_order is stable and only
-    the ids it knows about move. Pure, so it is unit-testable without an app context."""
-    per_host = prefs.get("server_order") if isinstance(prefs, dict) else None
-    if not isinstance(per_host, dict) or not per_host:
-        return list(servers)
-    out = list(servers)
-    slots = {}                                   # host id -> the positions its servers occupy
-    for i, gs in enumerate(out):
-        slots.setdefault(gs.remote_id or 0, []).append(i)
-    for host_id, idxs in slots.items():
-        order = per_host.get(str(host_id))
-        if not order:
-            continue                             # this host has no saved order: leave it alone
-        # Permute a host's members among the slots they ALREADY occupy, so nothing about the
-        # surrounding list — including the caller's host ordering — can shift underneath us.
-        for slot, gs in zip(idxs, _apply_user_order([out[i] for i in idxs], order)):
-            out[slot] = gs
-    return out
 
 
 def _new_user_language(cfg, known):
@@ -9237,46 +9060,6 @@ def _ts_backend_scheme(cfg):
     is actually listening right now, or Serve 502s. When we're terminating self-signed
     TLS ourselves, Serve talks https+insecure to us; otherwise plain http."""
     return "https+insecure" if _effective_https(cfg) else "http"
-
-
-def _ensure_self_signed_cert(cert_path, key_path, hostname):
-    """Create a long-lived (10-year) self-signed cert/key if one isn't already present
-    or has (nearly) expired. Used when use_https is on and there's no reverse proxy.
-    Returns (cert_path, key_path). Uses cryptography (already a dependency)."""
-    import datetime as _dt
-    from cryptography import x509
-    from cryptography.x509.oid import NameOID
-    from cryptography.hazmat.primitives import hashes, serialization
-    from cryptography.hazmat.primitives.asymmetric import rsa
-
-    if os.path.exists(cert_path) and os.path.exists(key_path):
-        try:
-            with open(cert_path, "rb") as f:
-                existing = x509.load_pem_x509_certificate(f.read())
-            if existing.not_valid_after_utc > aware_utcnow() + _dt.timedelta(days=30):
-                return cert_path, key_path
-        except Exception:
-            _log.debug("_ensure_self_signed_cert: ignored non-fatal error", exc_info=True)
-
-    key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
-    name = x509.Name([x509.NameAttribute(NameOID.COMMON_NAME, hostname or "linuxgsm-panel")])
-    cert = (x509.CertificateBuilder()
-            .subject_name(name).issuer_name(name)
-            .public_key(key.public_key())
-            .serial_number(x509.random_serial_number())
-            .not_valid_before(aware_utcnow() - _dt.timedelta(days=1))
-            .not_valid_after(aware_utcnow() + _dt.timedelta(days=3650))
-            .add_extension(x509.SubjectAlternativeName([x509.DNSName(hostname or "localhost")]), critical=False)
-            .sign(key, hashes.SHA256()))
-    os.makedirs(os.path.dirname(cert_path), exist_ok=True)
-    with open(key_path, "wb") as f:
-        f.write(key.private_bytes(serialization.Encoding.PEM,
-                                  serialization.PrivateFormat.TraditionalOpenSSL,
-                                  serialization.NoEncryption()))
-    os.chmod(key_path, 0o600)
-    with open(cert_path, "wb") as f:
-        f.write(cert.public_bytes(serialization.Encoding.PEM))
-    return cert_path, key_path
 
 
 if __name__ == "__main__":
