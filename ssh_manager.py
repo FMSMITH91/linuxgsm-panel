@@ -1602,7 +1602,12 @@ def stream_game_backup(server, user, name, chunk=262144):
 
     if is_local_server(server) or getattr(server, "auth_method", "") == "tailscale":
         if is_local_server(server):
-            argv = ["sudo", "-u", user, "cat", path]
+            # Was `sudo -u <user> cat <path>`. The verb keeps the property that mattered — the read
+            # happens AS THE GAME USER, so a symlink planted at that path reaches only what that
+            # user could already read. The helper drops supplementary groups, gid then uid before
+            # opening; reading as root would have turned this into "hand me any file on the box".
+            argv = (_priv.helper_argv("game-backup-read", [user, name])
+                    if helper_present() else ["sudo", "-u", user, "cat", path])
         else:
             host = _resolve_ts_host(server)
             argv = ["ssh", "-T", "-o", "StrictHostKeyChecking=accept-new", "-o", "BatchMode=yes",

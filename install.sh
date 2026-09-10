@@ -784,15 +784,20 @@ fi
 # executing it — or the checkout's venv interpreter — would make the boundary decorative. The
 # helper runs THIS copy with the SYSTEM python instead. Updating it needs root, exactly as
 # updating the helper does.
+INSTALLER_DST="${HELPER_DIR}/install.sh"
 DBM_SRC="${PANEL_DIR}/db_maintenance.py"
 DBM_DST="${HELPER_DIR}/db_maintenance.py"
 PANEL_CONF="${HELPER_DIR}/panel.conf"
 if [ -f "${DBM_SRC}" ] && [ -d "${HELPER_DIR}" ]; then
     if ${H_SUDO} install -o root -g root -m 0755 "${DBM_SRC}" "${DBM_DST}" 2>/dev/null; then
-        printf 'db_path=%s\n' "${PANEL_DIR}/data/panel.db" \
+        printf 'db_path=%s\ndata_dir=%s\npanel_dir=%s\n' \
+            "${PANEL_DIR}/data/panel.db" "${PANEL_DIR}/data" "${PANEL_DIR}" \
             | ${H_SUDO} tee "${PANEL_CONF}" >/dev/null 2>&1 \
             && ${H_SUDO} chmod 0644 "${PANEL_CONF}" 2>/dev/null \
             && ${H_SUDO} chown root:root "${PANEL_CONF}" 2>/dev/null
+        # The installer itself, root-owned, for the same reason: the self-update runs it as root,
+        # and the copy in the checkout is panel-writable.
+        ${H_SUDO} install -o root -g root -m 0755 "$0" "${INSTALLER_DST}" 2>/dev/null || true
         ok "Offline DB repair installed root-owned at ${DBM_DST}"
     else
         warn "Could not install the root-owned db_maintenance copy (needs root)."

@@ -3885,6 +3885,10 @@ _VERB_SAMPLES = {
     "tailscale-up-login": ["yes", "-"],
     "os-update-run": [],
     "panel-db-repair": [],
+    "panel-restore": [],
+    "panel-self-update": ["-", "-"],
+    "tailscale-install": [],
+    "game-backup-read": ["ubuntu", "csgoserver-2026-01-01.tar.gz"],
     "content-scan": ["cstrike", "hl2"],
 }
 check("privileged: every verb has a sample (new verbs cannot skip the parity check)",
@@ -3913,13 +3917,19 @@ check("privileged: helper and panel build an identical argv for every verb",
 # would be decorative.
 check("helper: resolves ufw", _helper.resolve("ufw").endswith("/ufw") if os.path.exists("/usr/sbin/ufw") else True)
 check("helper: knows exactly the tools its verbs need, and no more",
-      sorted(_helper.TOOLS) == ["add-apt-repository", "apt-get", "crontab", "df", "dpkg",
+      sorted(_helper.TOOLS) == ["add-apt-repository", "apt-get", "bash_installer", "crontab",
+                                "curl", "df", "dpkg",
                                 "fail2ban-client", "fallocate", "fuser", "journalctl", "mkswap",
                                 "npm", "passwd", "pgrep", "pkill", "pro", "reboot", "renice", "rm",
-                                "ss", "sshd", "swapon", "sysctl", "systemctl", "systemd-run",
+                                "sh_installer", "ss", "sshd", "swapon", "sysctl",
+                                "systemctl", "systemd-run",
                                 "tail", "tailscale", "timedatectl", "ufw", "useradd", "userdel",
                                 "usermod"],
       sorted(_helper.TOOLS))
+# bash_installer exists so the self-update can run ONE fixed root-owned file. The general shell
+# must stay unresolvable under its own name, or any future verb could build ["bash", "-c", ...].
+check("helper: bash_installer points at a real shell, and only INSTALLER_PATH uses it",
+      _helper.TOOLS["bash_installer"] == ("/bin/bash", "/usr/bin/bash"))
 for _prog in ("bash", "sh", "python3", "env"):
     check("helper: refuses to resolve %s" % _prog, _ufw_raises_fnf(_helper.resolve, _prog))
 
@@ -3936,6 +3946,8 @@ _BAD = {
     "service-restart": ["nginx", "docker", "ssh; id", "ssh.service", ""],
     # The delay is the ONLY caller input to a verb that restarts the panel itself.
     "panel-restart": ["0", "301", "-1", "2; reboot", "", "abc", "1e3"],
+    # These two are exported into a ROOT-run installer's environment.
+    "panel-self-update": ["--upload-pack=x", "main; id", "a/../b", "HEAD~1", "'"],
     # The operator is a Linux user name; anything shaped like a flag or a shell fragment is out.
     "tailscale-set-operator": ["root; id", "--operator=x", "", "a" * 40, "has space"],
     "f2b-status-jail": ["sshd; id", "$(id)", "a" * 65, ""],
@@ -3993,6 +4005,17 @@ _BAD_VECTORS = [
     ("ufw-default", ["allow", "sideways"]),
     ("apt-install", ["curl", "--reinstall"]),
     ("write-file", ["/etc/shadow"]),
+    # The backup NAME is argument two, so _BAD above never reaches it — it pads position two
+    # with "x". These aim at the validator that actually guards the path segment.
+    ("game-backup-read", ["ubuntu", "../../etc/shadow"]),
+    ("game-backup-read", ["ubuntu", "a/b.tar.gz"]),
+    ("game-backup-read", ["ubuntu", "x.tar.gz; id"]),
+    ("game-backup-read", ["ubuntu", "plain.txt"]),
+    ("game-backup-read", ["ubuntu", ""]),
+    ("panel-self-update", ["-", "main; id"]),
+    ("panel-self-update", ["-", "--upload-pack=x"]),
+    ("panel-self-update", ["-", "a/../b"]),
+    ("panel-self-update", ["nothex", "-"]),
     # The content box: three of these verbs end in `rm -rf` as root, so the identifiers must be
     # refused in every position, not just the first.
     ("content-game-remove", ["gmodcontent", "../../etc", "cssserver"]),
@@ -5135,6 +5158,66 @@ try:
 finally:
     _helper.PANEL_CONF = _dbr_conf
     _helper.DBM_PATH = _dbr_dbm
+
+# ── The backup download DROPS privilege; it must never read as root ────────────────────────────
+# `sudo -u <user> cat` got one thing exactly right: the read happened as the GAME user, so a
+# symlink planted at that path could only reach what that user could already read. Moving it behind
+# a root helper is a privilege reduction ONLY if that property survives — read it as root instead
+# and a download button becomes "hand me any file on the box".
+_gbr = open(os.path.join(_root, "tools", "panel-helper"), encoding="utf-8").read()
+_gbr_fn = _gbr[_gbr.index("def do_game_backup_read"):]
+_gbr_fn = _gbr_fn[:_gbr_fn.index("\ndef ", 1)]
+for _need, _why in (("os.setgroups([])", "supplementary groups are cleared"),
+                    ("os.setgid(pw.pw_gid)", "gid is dropped"),
+                    ("os.setuid(pw.pw_uid)", "uid is dropped")):
+    check("helper: game-backup-read %s" % _why, _need in _gbr_fn, _need)
+check("helper: game-backup-read drops the gid BEFORE the uid (the reverse cannot work)",
+      _gbr_fn.index("os.setgid(") < _gbr_fn.index("os.setuid("))
+check("helper: game-backup-read verifies the drop took before opening anything",
+      "os.getuid() != pw.pw_uid" in _gbr_fn
+      and _gbr_fn.index("os.getuid() != pw.pw_uid") < _gbr_fn.index("open(path"))
+check("helper: game-backup-read opens the file only in the CHILD, after the drop",
+      _gbr_fn.index("os.fork()") < _gbr_fn.index("open(path"))
+
+# ── The restore swap: staging location and destinations both come from root's config ──────────
+# do_panel_restore takes ZERO arguments for the same reason do_panel_db_repair does, but the stakes
+# are higher here: the copy targets are the panel's database AND both encryption keys. A verb that
+# accepted a staging path would let a caller name a directory it cannot itself read (say
+# /etc/ssl/private) and have root copy the contents somewhere it can.
+_rst_conf = _helper.PANEL_CONF
+try:
+    import tempfile as _tf_rst
+    _rst_dir = _tf_rst.mkdtemp()
+    _rst_cfg = os.path.join(_rst_dir, "panel.conf")
+
+    _helper.PANEL_CONF = os.path.join(_rst_dir, "absent.conf")
+    check("helper: restore refuses with no data_dir configured",
+          _helper.do_panel_restore([], None) == 1)
+
+    for _bad in ("relative/data", os.path.join(_rst_dir, "not-a-dir")):
+        with open(_rst_cfg, "w", encoding="utf-8") as _fh:
+            _fh.write("data_dir=%s\n" % _bad)
+        _helper.PANEL_CONF = _rst_cfg
+        check("helper: restore refuses data_dir %r" % _bad,
+              _helper.do_panel_restore([], None) == 1)
+
+    # A real data_dir but nothing staged must refuse too — otherwise a stray call would stop the
+    # panel, copy nothing, and start it again for no reason.
+    _real = os.path.join(_rst_dir, "data")
+    os.makedirs(_real, exist_ok=True)
+    with open(_rst_cfg, "w", encoding="utf-8") as _fh:
+        _fh.write("data_dir=%s\n" % _real)
+    _helper.PANEL_CONF = _rst_cfg
+    check("helper: restore refuses when nothing is staged",
+          _helper.do_panel_restore([], None) == 1)
+finally:
+    _helper.PANEL_CONF = _rst_conf
+
+check("helper: the restore staging directory is a fixed NAME, not a caller argument",
+      _helper.RESTORE_STAGE == ".restore-stage"
+      and _helper.VERBS["panel-restore"][0] == [])
+check("helper: restore copies exactly the four known members",
+      _helper.RESTORE_MEMBERS == ("panel.db", "config.json", "secret_key", "cred_key"))
 
 # db_maintenance.repair must work from an explicit path — that is what lets a ROOT-OWNED copy run
 # under the system interpreter without importing the panel's config out of the checkout.

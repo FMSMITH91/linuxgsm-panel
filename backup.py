@@ -18,6 +18,10 @@ import sqlite3
 import subprocess
 import tarfile
 import tempfile
+
+# Imported for the restore's privileged step only. system_ops does not import
+# backup, so this direction is safe.
+from system_ops import _helper_present, _run_verb
 import time
 
 from config import (DATA_DIR, DB_PATH, CONFIG_FILE, SECRET_FILE, CRED_KEY_FILE,
@@ -195,7 +199,13 @@ def restore_backup(name):
 
     create_backup("prerestore")     # safety net before we overwrite the live data
 
-    stage = tempfile.mkdtemp(prefix="lgsm-restore-")
+    # A FIXED staging directory inside data/, not a fresh mkdtemp. The helper's restore verb takes
+    # no path argument — root copying "whatever is in the directory you name" over the panel's keys
+    # would let a caller stage a directory it cannot read and have root hand its contents back — so
+    # both sides agree on this one location instead.
+    stage = os.path.join(str(DATA_DIR), ".restore-stage")
+    shutil.rmtree(stage, ignore_errors=True)
+    os.makedirs(stage, mode=0o700, exist_ok=True)
     try:
         with tarfile.open(src, "r:gz") as tar:
             for m in tar.getmembers():
@@ -209,6 +219,37 @@ def restore_backup(name):
     # STOP the panel first (releases the SQLite file), swap the files, clear the WAL/SHM
     # sidecars (the restored DB is authoritative), then START it again. No `set -e`: even if a
     # copy fails, we must always try to bring the panel back up rather than leave it stopped.
+    # The swap itself — stop, copy the four members over the live files, drop the stale WAL/SHM
+    # pair, start again, wipe the staging directory. It has to outlive the panel process, so it
+    # runs detached.
+    #
+    # This used to be a bash script the panel WROTE into its own data dir and then handed to
+    # `sudo systemd-run`: root executing a file the panel user had just created, out of a directory
+    # the panel user owns. Narrowing the sudoers grant would not have touched that. The helper now
+    # performs the sequence itself, in root-owned code, reading only the fixed staging path.
+    try:
+        if _helper_present():
+            out, err, rc = _run_verb("panel-restore", [], timeout=20)
+            if rc == 0:
+                return True, "Restoring from %s — the panel will restart in a few seconds." % name
+            _log.error("restore verb failed: rc=%s %s", rc, (err or out or "")[:200])
+            shutil.rmtree(stage, ignore_errors=True)
+            return False, "Could not start the restore."
+        # Pre-helper fallback, unchanged in shape: a host that has not re-run install.sh as root
+        # still needs to be able to restore.
+        return _legacy_restore_dispatch(stage, name)
+    except Exception:
+        _log.exception("restore dispatch failed")
+        # Nothing will run the cleanup, so don't leave the keys staged either.
+        shutil.rmtree(stage, ignore_errors=True)
+        return False, "Could not start the restore."
+
+
+def _legacy_restore_dispatch(stage, name):
+    """The pre-helper restore: write a script and run it under `sudo systemd-run`.
+
+    Kept ONLY for a host that has the new code but has not had install.sh re-run as root, which is
+    also the reason the sudoers grant cannot narrow yet — see the escalation census in the tests."""
     ufl = "--user " if os.path.exists(os.path.expanduser("~/.config/systemd/user/linuxgsm-panel.service")) else ""
     lines = ["#!/bin/bash", "sleep 1",
              "systemctl %sstop linuxgsm-panel.service || true" % ufl, "sleep 1"]
@@ -220,25 +261,15 @@ def restore_backup(name):
     lines += [
         'rm -f %s %s' % (_sh(str(DB_PATH) + "-wal"), _sh(str(DB_PATH) + "-shm")),
         "systemctl %sstart linuxgsm-panel.service || true" % ufl,
-        # The staging dir holds a plaintext copy of the DB *and* both encryption keys — the pair that
-        # decrypts every stored SSH credential. It cannot be removed before this point (the copies
-        # above read from it), so the script deletes it as its last act rather than leaving it in
-        # /tmp forever, one directory per restore, outside the hardened 0700 data/ dir.
         'rm -rf %s' % _sh(stage),
     ]
     script = os.path.join(str(DATA_DIR), "restore.sh")
-    try:
-        with open(script, "w") as f:
-            f.write("\n".join(lines) + "\n")
-        os.chmod(script, 0o700)
-        subprocess.Popen(_service_restart_launcher(script),
-                         stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, env=os.environ.copy())
-        return True, "Restoring from %s — the panel will restart in a few seconds." % name
-    except Exception:
-        _log.exception("restore dispatch failed")
-        # Nothing will run the script's cleanup, so don't leave the keys staged either.
-        shutil.rmtree(stage, ignore_errors=True)
-        return False, "Could not start the restore."
+    with open(script, "w") as f:
+        f.write("\n".join(lines) + "\n")
+    os.chmod(script, 0o700)
+    subprocess.Popen(_service_restart_launcher(script),
+                     stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, env=os.environ.copy())
+    return True, "Restoring from %s — the panel will restart in a few seconds." % name
 
 
 def _sh(s):

@@ -80,6 +80,14 @@ TOOLS = {
     "journalctl": ("/usr/bin/journalctl", "/bin/journalctl"),
     "tail": ("/usr/bin/tail", "/bin/tail"),
     "systemd-run": ("/usr/bin/systemd-run", "/bin/systemd-run"),
+    # NOT "bash". resolve("bash") must keep raising — a general shell in TOOLS would
+    # let any future verb build ["bash", "-c", ...] and undo the whole boundary. This
+    # entry exists solely to run INSTALLER_PATH, a fixed root-owned file.
+    "bash_installer": ("/bin/bash", "/usr/bin/bash"),
+    # Same reasoning as bash_installer: sh is reachable only to run the single
+    # root-owned file the tailscale-install verb just wrote under /run.
+    "sh_installer": ("/bin/sh", "/usr/bin/sh"),
+    "curl": ("/usr/bin/curl", "/bin/curl"),
 }
 UFW = "ufw"
 F2B = "fail2ban-client"
@@ -167,6 +175,12 @@ TS_UP_LOG = "/run/panel-tailscale-up.log"
 # make the boundary decorative. Updating this copy needs root, exactly as updating the helper does.
 PANEL_CONF = "/usr/local/lib/linuxgsm-panel/panel.conf"
 DBM_PATH = "/usr/local/lib/linuxgsm-panel/db_maintenance.py"
+# The one directory a restore may read from. FIXED, so the verb takes no path: root
+# copying "whatever is in the directory you name" over the panel's keys would let a
+# caller stage /etc/ssl/private and have root hand back files it cannot otherwise read.
+INSTALLER_PATH = "/usr/local/lib/linuxgsm-panel/install.sh"
+RESTORE_STAGE = ".restore-stage"
+RESTORE_MEMBERS = ("panel.db", "config.json", "secret_key", "cred_key")
 SYSTEM_PYTHON = ("/usr/bin/python3", "/usr/local/bin/python3")
 
 
@@ -402,6 +416,37 @@ def v_logdate(s):
     """A cutoff date the log's first field is compared against: "2026-09-02" or with a time."""
     if not re.fullmatch(r"\d{4}-\d{2}-\d{2}(?:[ T]\d{2}:\d{2}(?::\d{2})?)?", s):
         raise ValueError("not a log cutoff date")
+    return s
+
+
+def v_backup_name(s):
+    """A LinuxGSM backup archive file name. No slashes, no traversal: this becomes one path segment
+    under the game user's own backup directory and nothing else."""
+    s = str(s)
+    if "/" in s or ".." in s or not re.fullmatch(r"[A-Za-z0-9._-]{1,200}\.tar\.[A-Za-z0-9.]{1,20}", s):
+        raise ValueError("not a backup file name")
+    return s
+
+
+def v_git_ref(s):
+    """A git commit SHA, or "-" for none. Hex only: this value is exported into the environment of
+    a root-run installer, so anything that could carry a flag, a path or a shell fragment is out."""
+    s = str(s)
+    if s == "-":
+        return s
+    if not re.fullmatch(r"[0-9a-f]{7,40}", s):
+        raise ValueError("not a commit sha")
+    return s
+
+
+def v_branch_name(s):
+    """A git branch name, or "-" for none. No leading dash (it would read as a flag), no "..",
+    and a conservative character set."""
+    s = str(s)
+    if s == "-":
+        return s
+    if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._/-]{0,99}", s) or ".." in s:
+        raise ValueError("not a branch name")
     return s
 
 
@@ -740,6 +785,10 @@ VERBS = {
     "apt-update": ([], lambda a: [APT, "update", "-qq"], None),
     "os-update-run": ([], lambda a: [], None),
     "panel-db-repair": ([], lambda a: [], None),
+    "panel-restore": ([], lambda a: [], None),
+    "panel-self-update": ([v_git_ref, v_branch_name], lambda a: [], None),
+    "tailscale-install": ([], lambda a: [], None),
+    "game-backup-read": ([v_username, v_backup_name], lambda a: [], None),
     # Two upgrade shapes, because the panel really does want two. "phased" includes Ubuntu's
     # phased rollouts so an explicit "install updates" applies everything the Check list showed;
     # "standard" is apt's default set, used when bootstrapping a host.
@@ -1071,6 +1120,226 @@ def _db_repair_detached(db_path):
     os._exit(0)
 
 
+def _restore_detached(data_dir):
+    """The restore swap itself, in the grandchild. NEVER RETURNS — every path ends in os._exit.
+
+    stop -> copy the staged files over the live ones -> drop the WAL/SHM sidecars -> start -> wipe
+    the staging directory. The panel used to write this as a bash script into its own data dir and
+    hand the path to `sudo systemd-run`; root then executed a file the panel user had just written.
+    Here the sequence is fixed in root-owned code and the only thing that varies is which of the
+    four known members happen to be present."""
+    os.setsid()
+    if os.fork() != 0:
+        os._exit(0)
+    try:
+        devnull = os.open(os.devnull, os.O_RDWR)
+        for fd in (0, 1, 2):
+            os.dup2(devnull, fd)
+        if devnull > 2:
+            os.close(devnull)
+    except OSError:
+        # Best-effort detach; the restore matters more than where its (unread) output goes.
+        pass
+    stage = os.path.join(data_dir, RESTORE_STAGE)
+    try:
+        systemctl = resolve("systemctl")
+        subprocess.run([systemctl, "stop", PANEL_UNIT],  # nosec B603 - fixed argv
+                       check=False, timeout=120)
+        for member in RESTORE_MEMBERS:
+            src = os.path.join(stage, member)
+            dst = os.path.join(data_dir, "panel.db" if member == "panel.db" else member)
+            if os.path.isfile(src):
+                shutil.copyfile(src, dst)
+                shutil.copymode(src, dst)
+        # The restored database is authoritative; a stale WAL/SHM pair beside it is not.
+        for side in ("-wal", "-shm"):
+            try:
+                os.unlink(os.path.join(data_dir, "panel.db" + side))
+            except FileNotFoundError:
+                # Nothing to drop — the panel was shut down cleanly. Not a problem.
+                pass
+    except Exception:
+        # Swallowed so the finally below ALWAYS runs: after a half-finished restore the one thing
+        # that matters is that the panel comes back up. A raise here would skip that.
+        pass
+    finally:
+        try:
+            subprocess.run([resolve("systemctl"), "start", PANEL_UNIT],  # nosec B603 - fixed argv
+                           check=False, timeout=120)
+        except Exception:
+            # Detached grandchild in a finally: nobody to tell, nothing left to try.
+            pass
+        # The staging dir holds a plaintext database AND both encryption keys — the pair that
+        # decrypts every stored SSH credential. Remove it whatever happened above.
+        shutil.rmtree(stage, ignore_errors=True)
+    os._exit(0)
+
+
+def do_panel_restore(args, content):
+    """Swap a staged backup into place, detached, and report that it started.
+
+    Zero arguments. Both the staging directory and the destinations come from panel.conf's
+    data_dir, so a caller chooses neither the source nor the target of a root-run copy."""
+    data_dir = panel_conf().get("data_dir", "")
+    if not data_dir or not os.path.isabs(data_dir) or not os.path.isdir(data_dir):
+        sys.stderr.write("panel.conf has no usable data_dir\n")
+        return 1
+    stage = os.path.join(data_dir, RESTORE_STAGE)
+    if not os.path.isdir(stage):
+        sys.stderr.write("nothing staged to restore\n")
+        return 1
+    pid = os.fork()
+    if pid == 0:
+        _restore_detached(data_dir)   # never returns
+    os.waitpid(pid, 0)
+    sys.stdout.write("RESTORE_STARTED")
+    return 0
+
+
+def _self_update_detached(panel_dir, log_path, ref, branch):
+    """The self-update, in the grandchild. NEVER RETURNS — every path ends in os._exit.
+
+    Runs the ROOT-OWNED installer, not the one in the panel's checkout. The panel used to write a
+    wrapper script into its own data dir that exported three variables and then ran
+    `bash <panel_dir>/install.sh`, and hand that wrapper to `sudo systemd-run` — so root executed
+    two files the panel user could rewrite.
+
+    Note what this does NOT try to be: self-update inherently means "fetch new code and run it".
+    No amount of argv discipline makes that untrusted-safe. What it buys is that the ROOT-run part
+    is fixed and small; the code the installer pulls goes on to run as the PANEL user, and its
+    trustworthiness rests on the signed, CI-verified commit — which is checked before we get here.
+    """
+    os.setsid()
+    if os.fork() != 0:
+        os._exit(0)
+    try:
+        devnull = os.open(os.devnull, os.O_RDWR)
+        for fd in (0, 1, 2):
+            os.dup2(devnull, fd)
+        if devnull > 2:
+            os.close(devnull)
+    except OSError:
+        # Best-effort detach; the installer writes its own log either way.
+        pass
+    env = dict(os.environ)
+    env["PANEL_UPDATE_REF"] = "" if ref == "-" else ref
+    env["PANEL_BRANCH"] = "" if branch == "-" else branch
+    # A panel update must never apply host OS packages or reboot the box — that would take every
+    # game server down mid-update. OS updates stay a separate, explicit action.
+    env["PANEL_NO_UPGRADE"] = "1"
+    try:
+        with open(log_path, "w", encoding="utf-8") as log:
+            log.write("=== panel self-update ===\n")
+            log.flush()
+            subprocess.run([resolve("bash_installer"), INSTALLER_PATH],  # nosec B603 - fixed path
+                           cwd=panel_dir, env=env, stdout=log, stderr=subprocess.STDOUT,
+                           check=False, timeout=1800)
+    except Exception:
+        # Nobody reads this process's stderr; the installer's own log is the record. Falling
+        # through to os._exit is all that is left.
+        pass
+    os._exit(0)
+
+
+def do_panel_self_update(args, content):
+    """Start the panel self-update detached, and report that it launched."""
+    ref, branch = args[0], args[1]
+    conf = panel_conf()
+    panel_dir, data_dir = conf.get("panel_dir", ""), conf.get("data_dir", "")
+    if not panel_dir or not os.path.isdir(panel_dir) or not data_dir or not os.path.isdir(data_dir):
+        sys.stderr.write("panel.conf has no usable panel_dir/data_dir\n")
+        return 1
+    if not os.path.isfile(INSTALLER_PATH):
+        sys.stderr.write("installer is not installed root-owned; re-run install.sh as root\n")
+        return 1
+    pid = os.fork()
+    if pid == 0:
+        _self_update_detached(panel_dir, os.path.join(data_dir, "self-update.log"), ref, branch)
+    os.waitpid(pid, 0)
+    sys.stdout.write("UPDATE_STARTED")
+    return 0
+
+
+def do_game_backup_read(args, content):
+    """Stream a game server's backup archive to stdout, reading it AS THE GAME USER.
+
+    The panel ran `sudo -u <user> cat /home/<user>/lgsm/backup/<name>`. Note what that form gets
+    right and this must not lose: the read happens as the GAME user, so a symlink planted at that
+    path can only reach files that user could already read. Reading it as root instead would turn a
+    download button into "hand me any file on the box" — a privilege INCREASE, from a change meant
+    to reduce privilege.
+
+    So the child drops credentials completely — supplementary groups, gid, then uid, in that order,
+    because setuid first would make the rest impossible — and only then opens the file."""
+    user, name = args[0], args[1]
+    try:
+        pw = pwd.getpwnam(user)
+    except KeyError:
+        sys.stderr.write("no such user\n")
+        return 1
+    path = os.path.join(pw.pw_dir, "lgsm", "backup", name)
+    pid = os.fork()
+    if pid == 0:
+        try:
+            os.setgroups([])
+            os.setgid(pw.pw_gid)
+            os.setuid(pw.pw_uid)
+            if os.getuid() != pw.pw_uid or os.geteuid() != pw.pw_uid:
+                os._exit(1)          # refuse to read anything if the drop did not take
+            with open(path, "rb") as fh:
+                buf = sys.stdout.buffer
+                while True:
+                    chunk = fh.read(262144)
+                    if not chunk:
+                        break
+                    buf.write(chunk)
+                buf.flush()
+        except Exception:
+            os._exit(1)
+        os._exit(0)
+    _pid, status = os.waitpid(pid, 0)
+    return 0 if os.WIFEXITED(status) and os.WEXITSTATUS(status) == 0 else 1
+
+
+def do_tailscale_install(args, content):
+    """Install Tailscale on this host, from Tailscale's own installer.
+
+    The panel ran `sudo bash -c "curl -fsSL https://tailscale.com/install.sh | sh"`. A sudoers rule
+    permitting bash IS NOPASSWD:ALL, so that one line was on its own enough to keep the grant wide.
+
+    There is no pipe here, and no shell string. curl writes the script to a root-owned file under
+    /run (tmpfs, cleared on reboot, 0600) and sh runs THAT file. The download is still remote code
+    executed as root — that is what installing Tailscale is, and pretending otherwise would be
+    theatre — but the URL is fixed here, the caller supplies nothing, and no shell is reachable to
+    build anything else with."""
+    url = "https://tailscale.com/install.sh"
+    path = "/run/panel-tailscale-install.sh"
+    try:
+        os.unlink(path)
+    except FileNotFoundError:
+        # First install on this host, or /run was cleared by a reboot. Nothing to remove.
+        pass
+    fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+    try:
+        with os.fdopen(fd, "wb") as fh:
+            r = subprocess.run([resolve("curl"), "-fsSL", url],  # nosec B603 - fixed argv
+                               stdout=fh, stderr=subprocess.PIPE, check=False, timeout=120)
+        if r.returncode != 0:
+            sys.stderr.write("download failed\n")
+            return 1
+        r = subprocess.run([resolve("sh_installer"), path],  # nosec B603 - fixed root-owned path
+                           check=False, timeout=600,
+                           stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
+        sys.stdout.write((r.stdout or b"").decode("utf-8", "replace")[-1500:])
+        return r.returncode
+    finally:
+        try:
+            os.unlink(path)
+        except OSError:
+            # /run is tmpfs and this is 0600 root-owned; a leftover is harmless if unlink fails.
+            pass
+
+
 def do_panel_db_repair(args, content):
     """Repair the panel database offline, detached, and report that it started.
 
@@ -1389,6 +1658,10 @@ ACTIONS = {
     "tailscale-up-login": do_tailscale_up_login,
     "os-update-run": do_os_update_run,
     "panel-db-repair": do_panel_db_repair,
+    "panel-restore": do_panel_restore,
+    "panel-self-update": do_panel_self_update,
+    "tailscale-install": do_tailscale_install,
+    "game-backup-read": do_game_backup_read,
     "sshd-set-directive": do_sshd_set_directive,
     "create-swapfile": do_create_swapfile,
 }
