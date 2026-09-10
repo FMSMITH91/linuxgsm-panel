@@ -74,6 +74,7 @@ TOOLS = {
     "mkswap": ("/usr/sbin/mkswap", "/sbin/mkswap"),
     "swapon": ("/usr/sbin/swapon", "/sbin/swapon"),
     "npm": ("/usr/bin/npm", "/usr/local/bin/npm"),
+    "tailscale": ("/usr/bin/tailscale", "/usr/sbin/tailscale"),
     "ss": ("/usr/bin/ss", "/usr/sbin/ss", "/sbin/ss", "/bin/ss"),
     "sysctl": ("/usr/sbin/sysctl", "/sbin/sysctl"),
     "journalctl": ("/usr/bin/journalctl", "/bin/journalctl"),
@@ -141,6 +142,13 @@ F2B_JAIL_LOCAL = "/etc/fail2ban/jail.local"
 # The fail2ban log family, current plus rotated. Fixed here — no part of it is ever
 # supplied by a caller, which is what makes reading them safe to do as root.
 F2B_LOG_GLOB = "/var/log/fail2ban.log*"
+
+# Where `tailscale up` streams while it waits for the operator to authorise the node. Fixed here so
+# the login-URL poll reads a path no caller chose.
+TS_UP_LOG = "/run/panel-tailscale-up.log"
+TS_LOGIN_RE = re.compile(r"https://login\.tailscale\.com/[A-Za-z0-9/]+")
+TS_UP_POLL_SECONDS = 20
+
 
 # sshd_config directives the panel is allowed to set, and the values it may set them to. The panel
 # hardens exactly these four; anything else is not something it has ever needed to write, so the
@@ -260,6 +268,62 @@ def v_ident_free(s):
     if not re.fullmatch(r"[A-Za-z0-9_-]{1,32}", s):
         raise ValueError("not a directive value")
     return s
+
+
+def v_yesno(s):
+    if s not in ("yes", "no"):
+        raise ValueError("expected yes or no")
+    return s
+
+
+def v_routes(s):
+    """A comma-separated CIDR list to advertise, or "-" for none. Parsed, not pattern-matched."""
+    if s == "-":
+        return s
+    parts = s.split(",")
+    if not (1 <= len(parts) <= 16):
+        raise ValueError("expected 1..16 routes")
+    for part in parts:
+        try:
+            ipaddress.ip_network(part, strict=False)
+        except ValueError:
+            raise ValueError("not a route list")
+    return s
+
+
+def v_tags(s):
+    """A comma-separated tailscale tag list, or "-". Each is `tag:` plus a lowercase name."""
+    if s == "-":
+        return s
+    parts = s.split(",")
+    if not (1 <= len(parts) <= 16):
+        raise ValueError("expected 1..16 tags")
+    for part in parts:
+        if not re.fullmatch(r"tag:[a-z0-9][a-z0-9-]{0,30}", part):
+            raise ValueError("not a tag list")
+    return s
+
+
+def v_authkey(s):
+    """A tailnet auth key. Charset only — its VALUE is a secret, so it is never echoed back, not
+    even in a rejection."""
+    if not re.fullmatch(r"[A-Za-z0-9_-]{10,200}", s):
+        raise ValueError("not an auth key")
+    return s
+
+
+def ts_up_argv(ssh, routes, tags=None, auth_key=None):
+    """The `tailscale up` argument vector, assembled from validated pieces."""
+    argv = ["tailscale", "up", "--accept-routes"]
+    if auth_key is not None:
+        argv += ["--auth-key", auth_key]
+    if ssh == "yes":
+        argv.append("--ssh")
+    if routes != "-":
+        argv.append("--advertise-routes=%s" % routes)
+    if tags not in (None, "-"):
+        argv.append("--advertise-tags=%s" % tags)
+    return argv
 
 
 def v_sshd_key(s):
@@ -493,6 +557,15 @@ VERBS = {
     # the panel parses it, so no awk program is built from anything.
     "sshd-effective-config": ([], lambda a: ["sshd", "-T"], None),
     "disk-free": ([v_dfpath], lambda a: ["df", "-PB1", a[0]], None),
+
+    # ── tailscale ──
+    # Two shapes, because the panel really has two: an unattended join with an auth key, and an
+    # interactive one that prints a login URL for the operator to open. Every flag is assembled
+    # from a validated piece — routes are PARSED as networks, tags must be `tag:name`, and the auth
+    # key is charset-checked and never echoed back, not even in a rejection.
+    "tailscale-up-key": ([v_authkey, v_yesno, v_routes, v_tags],
+                         lambda a: ts_up_argv(a[1], a[2], a[3], auth_key=a[0]), None),
+    "tailscale-up-login": ([v_yesno, v_routes], lambda a: [], None),
 
     # ── host hardening ──
     # The value is checked against the key's own allowed set, so a directive can only be set to
@@ -785,6 +858,47 @@ def do_create_swapfile(args, content):
     return 0
 
 
+def do_tailscale_up_login(args, content):
+    """Start `tailscale up` detached and print its login URL once it appears.
+
+    Was a shell one-liner: `rm -f /tmp/tsup.log ; nohup tailscale up … > /tmp/tsup.log 2>&1 & for i
+    in $(seq 1 20); do u=$(grep -oE '…' /tmp/tsup.log | head -1); [ -n "$u" ] && …; sleep 1; done`.
+    A backgrounded process, a redirect, a loop and a grep, all needing a shell.
+
+    The log path is fixed here, so the poll cannot be pointed at a file a caller names, and it
+    lives in /run — tmpfs, cleared on reboot, root-owned — rather than /tmp, where any local user
+    could have pre-created or replaced it."""
+    ssh, routes = args[0], args[1]
+    try:
+        os.unlink(TS_UP_LOG)
+    except FileNotFoundError:
+        pass                      # first run on this host, or /run was cleared by a reboot
+    argv = ts_up_argv(ssh, routes)
+    argv[0] = resolve("tailscale")
+    fd = os.open(TS_UP_LOG, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    try:
+        subprocess.Popen(argv, shell=False,  # nosec B603 - argv from validated pieces
+                         stdin=subprocess.DEVNULL, stdout=fd, stderr=subprocess.STDOUT,
+                         start_new_session=True)
+    finally:
+        os.close(fd)
+    for _ in range(TS_UP_POLL_SECONDS):
+        time.sleep(1)
+        try:
+            with open(TS_UP_LOG, encoding="utf-8", errors="replace") as fh:
+                text = fh.read()
+        except OSError:
+            continue
+        m = TS_LOGIN_RE.search(text)
+        if m:
+            sys.stdout.write(m.group(0))
+            return 0
+        if "success" in text.lower():
+            sys.stdout.write("ALREADY_CONNECTED")
+            return 0
+    return 0                      # still waiting; the caller polls status separately
+
+
 def do_f2b_log_lines(args, content):
     """Print fail2ban Ban/Found lines at or after a cutoff date, across the rotated logs.
 
@@ -990,6 +1104,7 @@ ACTIONS = {
     "content-grant-read": do_content_grant_read,
     "gmod-mount-read": do_gmod_mount_read,
     "f2b-log-lines": do_f2b_log_lines,
+    "tailscale-up-login": do_tailscale_up_login,
     "sshd-set-directive": do_sshd_set_directive,
     "create-swapfile": do_create_swapfile,
 }

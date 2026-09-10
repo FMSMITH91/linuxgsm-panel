@@ -3753,7 +3753,10 @@ def remote_install_tailscale(server):
     out = _last_lines(out, 3)
     log.append(f"curl: {out}")
 
-    # 3. Add Tailscale repo and install
+    # 3. Add Tailscale repo and install.
+    # NOT a verb, for the same reason as the NodeSource step: this pipes a downloaded script into a
+    # root shell, and that IS the operation. A verb could pin the URL, but only by giving the helper
+    # the ability to execute a downloaded script — the capability its tool allowlist exists to deny.
     cmds = [
         "curl -fsSL https://tailscale.com/install.sh | sh 2>&1",
     ]
@@ -3781,25 +3784,15 @@ def remote_tailscale_up_url(server, enable_ssh=True, advertise_routes=""):
     """Run `tailscale up` (no auth key) in the background and return the browser
     login URL — the user just pastes it into their browser to authorize the node,
     exactly like `tailscale up` on the CLI. tailscale up keeps waiting for auth."""
-    up = "tailscale up --accept-routes --timeout=600s"
-    if enable_ssh:
-        up += " --ssh"
-    if advertise_routes:
-        up += f" --advertise-routes={_quote(advertise_routes)}"
     if advertise_routes:
         write_root_file(server, "sysctl-tailscale", "net.ipv4.ip_forward = 1\n", timeout=15)
         run_privileged(server, "sysctl-reload", ["tailscale"], timeout=15)
-    # Start tailscale up detached; poll its log for the login URL (appears quickly).
-    cmd = (
-        "rm -f /tmp/tsup.log ; "
-        f"nohup {up} > /tmp/tsup.log 2>&1 & "
-        "for i in $(seq 1 20); do "
-        "u=$(grep -oE 'https://login\\.tailscale\\.com/[A-Za-z0-9/]+' /tmp/tsup.log | head -1) ; "
-        "[ -n \"$u\" ] && { echo \"$u\" ; break ; } ; "
-        "grep -qi 'success' /tmp/tsup.log && { echo ALREADY_CONNECTED ; break ; } ; "
-        "sleep 1 ; done"
-    )
-    out, err, rc = run_command(server, cmd, timeout=40, sudo=True)
+    # Was a shell one-liner: rm, nohup, a redirect, a background job, a seq loop and a grep. The
+    # verb starts `tailscale up` detached and polls its OWN log — whose path is fixed in the verb
+    # table and lives in /run rather than /tmp, where any local user could have pre-created it.
+    out, err, rc = run_privileged(server, "tailscale-up-login",
+                                  ["yes" if enable_ssh else "no", advertise_routes or "-"],
+                                  timeout=40)
     line = (out or "").strip().split("\n")[-1].strip() if out else ""
     # fullmatch, not startswith: the charset above is enforced by a grep running ON the remote host,
     # so a compromised host simply ignores it and can return anything after the trusted prefix. This
@@ -3838,15 +3831,12 @@ def remote_bootstrap_tailscale(server, auth_key="", enable_ssh=True, advertise_r
 
     # 2. Build the up command. auth_key / advertise_routes / tags are user-supplied and run
     # in a root shell, so every one is shell-quoted to prevent command injection.
-    up_cmd = f"tailscale up --auth-key {_quote(auth_key)} --accept-routes"
-    if enable_ssh:
-        up_cmd += " --ssh"
-    if advertise_routes:
-        up_cmd += f" --advertise-routes={_quote(advertise_routes)}"
-    if tags:
-        up_cmd += f" --advertise-tags={_quote(tags)}"
-
-    out, err, rc = run_command(server, up_cmd, timeout=60, sudo=True)
+    # Every flag was shell-quoted into a root command. They are validated arguments now: routes are
+    # PARSED as networks, tags must each be `tag:name`, and the auth key is charset-checked and
+    # never echoed back — not even in a rejection message.
+    out, err, rc = run_privileged(server, "tailscale-up-key",
+                                  [auth_key, "yes" if enable_ssh else "no",
+                                   advertise_routes or "-", tags or "-"], timeout=60)
     log.append(f"tailscale up: {out[-300:] if out else ''}")
     if rc != 0:
         return False, f"Tailscale auth failed: {err or out[-200:]}", "\n".join(log)

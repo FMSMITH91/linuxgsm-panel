@@ -92,6 +92,12 @@ F2B_JAIL_LOCAL = "/etc/fail2ban/jail.local"
 # The fail2ban log family, current plus rotated — see tools/panel-helper.
 F2B_LOG_GLOB = "/var/log/fail2ban.log*"
 
+# Where `tailscale up` streams while it waits for authorisation — see tools/panel-helper. In /run
+# (tmpfs, root-owned) rather than /tmp, where any local user could pre-create the file.
+TS_UP_LOG = "/run/panel-tailscale-up.log"
+TS_UP_POLL_SECONDS = 20
+
+
 # sshd_config directives the panel may set, and the values it may set them to — see
 # tools/panel-helper. Both halves are closed sets; this is a hardening step, not an editor.
 SSHD_DIRECTIVES = {
@@ -182,6 +188,60 @@ def _comment(s):
     if not re.fullmatch(r"[A-Za-z0-9 _.-]{0,60}", s):
         raise VerbError("comment outside [A-Za-z0-9 _.-] or over 60 characters")
     return s
+
+
+def _yesno(s):
+    if str(s) not in ("yes", "no"):
+        raise VerbError("expected yes or no")
+    return str(s)
+
+
+def _routes(s):
+    """A comma-separated CIDR list, or "-" — see tools/panel-helper."""
+    if str(s) == "-":
+        return "-"
+    parts = str(s).split(",")
+    if not (1 <= len(parts) <= 16):
+        raise VerbError("expected 1..16 routes")
+    for part in parts:
+        try:
+            ipaddress.ip_network(part, strict=False)
+        except ValueError:
+            raise VerbError("not a route list")
+    return str(s)
+
+
+def _tags(s):
+    if str(s) == "-":
+        return "-"
+    parts = str(s).split(",")
+    if not (1 <= len(parts) <= 16):
+        raise VerbError("expected 1..16 tags")
+    for part in parts:
+        if not re.fullmatch(r"tag:[a-z0-9][a-z0-9-]{0,30}", part):
+            raise VerbError("not a tag list")
+    return str(s)
+
+
+def _authkey(s):
+    """A tailnet auth key. Charset only — its value is a secret and is never echoed back."""
+    if not re.fullmatch(r"[A-Za-z0-9_-]{10,200}", str(s)):
+        raise VerbError("not an auth key")
+    return str(s)
+
+
+def ts_up_argv(ssh, routes, tags=None, auth_key=None):
+    """The `tailscale up` argument vector — see tools/panel-helper."""
+    argv = ["tailscale", "up", "--accept-routes"]
+    if auth_key is not None:
+        argv += ["--auth-key", auth_key]
+    if ssh == "yes":
+        argv.append("--ssh")
+    if routes != "-":
+        argv.append("--advertise-routes=%s" % routes)
+    if tags not in (None, "-"):
+        argv.append("--advertise-tags=%s" % tags)
+    return argv
 
 
 def _sshd_key(s):
@@ -394,6 +454,11 @@ _ARGV = {
     "sshd-effective-config": ([], lambda a: ["sshd", "-T"], None),
     "disk-free": ([_dfpath], lambda a: ["df", "-PB1", a[0]], None),
 
+    # ── tailscale ──
+    "tailscale-up-key": ([_authkey, _yesno, _routes, _tags],
+                         lambda a: ts_up_argv(a[1], a[2], a[3], auth_key=a[0]), None),
+    "tailscale-up-login": ([_yesno, _routes], lambda a: [], None),
+
     # ── host hardening ──
     "sshd-set-directive": ([_sshd_key, _directive_value], lambda a: [], None),
     "create-swapfile": ([], lambda a: [], None),
@@ -500,6 +565,15 @@ _REMOTE_ACTIONS = {
     "reboot-delayed": lambda a: "( sleep 2 ; reboot ) >/dev/null 2>&1 & echo scheduled",
     # 700, not the 750 the shell form used: the group bits are added by content-grant-read when
     # access is actually granted, so both transports share nothing until then.
+    "tailscale-up-login": lambda a: (
+        "rm -f %s ; nohup %s > %s 2>&1 & "
+        "for i in $(seq 1 %d); do "
+        "u=$(grep -oE 'https://login\\.tailscale\\.com/[A-Za-z0-9/]+' %s | head -1) ; "
+        "[ -n \"$u\" ] && { echo \"$u\" ; break ; } ; "
+        "grep -qi 'success' %s && { echo ALREADY_CONNECTED ; break ; } ; "
+        "sleep 1 ; done"
+        % (TS_UP_LOG, shlex.join(ts_up_argv(a[0], a[1])), TS_UP_LOG, TS_UP_POLL_SECONDS,
+           TS_UP_LOG, TS_UP_LOG)),
     "sshd-set-directive": lambda a: (
         "sed -i 's/^#\\?%s.*/%s %s/' %s" % (a[0], a[0], a[1], shlex.quote(SSHD_CONFIG))),
     "create-swapfile": lambda a: (

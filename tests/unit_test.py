@@ -504,6 +504,16 @@ check("ufw: unknown protocol rejected", sm._ufw_proto("sctp") is None)
 eq("ufw: valid port coerced to int", sm._ufw_port_int("27015"), 27015)
 
 
+def _priv_err_for(verb, args):
+    """The VerbError text privileged.py produces for these arguments, or "" if it accepts them."""
+    import privileged as _p
+    try:
+        _p.check_args(verb, args)
+        return ""
+    except _p.VerbError as e:
+        return str(e)
+
+
 def _ufw_raises_verb(fn):
     import privileged as _p
     try:
@@ -555,20 +565,40 @@ check("ident: leading dash rejected (ssh option-injection guard)",
 check("ident: leading dot rejected", _ufw_raises(lambda: _vsi("k", ".hidden")))
 check("ident: shell metachar rejected", _ufw_raises(lambda: _vsi("k", "a;b")))
 
-# ── Tailscale bootstrap quotes user-supplied auth_key/routes/tags (root shell) ──
+# ── Tailscale bootstrap: user-supplied auth_key/routes/tags are REFUSED, not quoted ────────────
+# These three used to assert that each value was shell-quoted into a root command — the best you
+# can do when the value has to reach a shell. It does not any more: they are validated arguments,
+# so the assertion is now the stronger one. A route that is not a network and a tag that is not
+# `tag:name` never become part of anything.
 _orig_ts_rc, _orig_ts_rp = sm.run_command, sm.run_privileged
 try:
-    _ts_cmds = []
-    sm.run_command = lambda s, c, **k: (_ts_cmds.append(c), ("ok", "", 0))[1]
-    # The ufw half of this path no longer builds a command string at all — it is a verb now — so
-    # stub it separately and report an inactive firewall so the rest of the function runs.
-    sm.run_privileged = lambda s, v, a=(), **k: ("Status: inactive", "", 0)
+    _ts_calls = []
+    sm.run_command = lambda s, c, **k: ("ok", "", 0)
+    sm.run_privileged = lambda s, v, a=(), **k: (_ts_calls.append((v, list(a))),
+                                                 ("Status: inactive", "", 0))[1]
     sm.remote_bootstrap_tailscale(None, auth_key="tskey; touch /tmp/x",
                                   advertise_routes="1.2.3.0/24; reboot", tags="tag:x; rm -rf /")
-    _joined = " ".join(_ts_cmds)
-    check("tailscale: auth_key is shell-quoted", sm._quote("tskey; touch /tmp/x") in _joined)
-    check("tailscale: routes are shell-quoted", sm._quote("1.2.3.0/24; reboot") in _joined)
-    check("tailscale: tags are shell-quoted", sm._quote("tag:x; rm -rf /") in _joined)
+    _ts_up = [a for v, a in _ts_calls if v == "tailscale-up-key"]
+    check("tailscale: the join goes through the verb, not a composed command", _ts_up, str(_ts_calls))
+    for _i, _label in ((0, "auth_key"), (2, "routes"), (3, "tags")):
+        check("tailscale: an injected %s is refused by privileged.py, not quoted into a command"
+              % _label,
+              _ts_up and _ufw_raises_verb(
+                  lambda a=_ts_up[0]: _privmod.check_args("tailscale-up-key", a)),
+              str(_ts_up[:1]))
+    # And the clean case is accepted, so the validators are not simply refusing everything.
+    check("tailscale: a well-formed key, route and tag ARE accepted",
+          _privmod.check_args("tailscale-up-key",
+                           ["tskey-auth-abc123def", "yes", "10.0.0.0/24", "tag:server"])
+          == ["tskey-auth-abc123def", "yes", "10.0.0.0/24", "tag:server"])
+    # The probe must CONTAIN the secret-shaped text, or "the secret is absent from the error" is
+    # true for the boring reason. A previous version used "bad key!", which contains no key at all
+    # — so a mutation that echoed the value back passed.
+    _SECRET = "tskey-auth-SUPERSECRET!"          # the "!" is what makes it invalid
+    _err = _priv_err_for("tailscale-up-key", [_SECRET, "no", "-", "-"])
+    check("tailscale: the rejection actually fires for this probe", _err != "", _err)
+    check("tailscale: a rejected auth key is never echoed back — it is a secret",
+          "SUPERSECRET" not in _err and "tskey" not in _err, _err)
 finally:
     sm.run_command, sm.run_privileged = _orig_ts_rc, _orig_ts_rp
 
@@ -3844,6 +3874,8 @@ _VERB_SAMPLES = {
     "create-swapfile": [],
     "npm-install-global": ["gamedig"],
     "journal-cron": [],
+    "tailscale-up-key": ["tskey-auth-abc123def", "yes", "10.0.0.0/24", "tag:server"],
+    "tailscale-up-login": ["yes", "-"],
 }
 check("privileged: every verb has a sample (new verbs cannot skip the parity check)",
       set(_VERB_SAMPLES) == set(_priv.verbs()),
@@ -3875,7 +3907,8 @@ check("helper: knows exactly the tools its verbs need, and no more",
                                 "fail2ban-client", "fallocate", "fuser", "journalctl", "mkswap",
                                 "npm", "passwd", "pgrep", "pkill", "pro", "reboot", "renice", "rm",
                                 "ss", "sshd", "swapon", "sysctl", "systemctl", "tail",
-                                "timedatectl", "ufw", "useradd", "userdel", "usermod"],
+                                "tailscale", "timedatectl", "ufw", "useradd", "userdel",
+                                "usermod"],
       sorted(_helper.TOOLS))
 for _prog in ("bash", "sh", "python3", "env"):
     check("helper: refuses to resolve %s" % _prog, _ufw_raises_fnf(_helper.resolve, _prog))
@@ -3970,6 +4003,15 @@ _BAD_VECTORS = [
     ("sshd-set-directive", ["PasswordAuthentication", "maybe"]),
     ("sshd-set-directive", ["ClientAliveInterval", "300; id"]),
     ("npm-install-global", ["evil-package"]),
+    # tailscale: routes are PARSED as networks and tags must be `tag:name`, so a shell
+    # metacharacter in either is refused rather than quoted.
+    ("tailscale-up-key", ["tskey-abc123def45", "yes", "1.2.3.0/24; reboot", "-"]),
+    ("tailscale-up-key", ["tskey-abc123def45", "yes", "-", "tag:x; rm -rf /"]),
+    ("tailscale-up-key", ["tskey; touch /tmp/x", "yes", "-", "-"]),
+    ("tailscale-up-key", ["tskey-abc123def45", "maybe", "-", "-"]),
+    ("tailscale-up-key", ["short", "yes", "-", "-"]),
+    ("tailscale-up-login", ["yes", "notacidr"]),
+    ("tailscale-up-login", ["sure", "-"]),
 ]
 _leaked2 = ["%s %r" % (v, a) for v, a in _BAD_VECTORS
             if not _ufw_raises_verb(lambda v=v, a=a: _priv.check_args(v, a))]
@@ -4113,6 +4155,13 @@ check("privileged: both copies agree on the sshd paths",
       == (_helper.SSHD_DROPIN, _helper.SSHD_DROPIN_BAK))
 check("privileged: both copies agree on fail2ban's jail.local path",
       _priv.F2B_JAIL_LOCAL == _helper.F2B_JAIL_LOCAL)
+# The tailscale login log is read by a poll loop running as root. Both copies must name the same
+# file, and it must live in /run: in /tmp any local user could pre-create or replace it, and the
+# poll would then be reading a file it does not own.
+check("privileged: both copies agree on the tailscale login log",
+      _priv.TS_UP_LOG == _helper.TS_UP_LOG, "%s / %s" % (_priv.TS_UP_LOG, _helper.TS_UP_LOG))
+check("privileged: the tailscale login log is in /run, not /tmp",
+      _priv.TS_UP_LOG.startswith("/run/"), _priv.TS_UP_LOG)
 # Every time a verb takes over an operation, the module-level constant that used to hold its path
 # or its command is left behind with no users — and CodeQL's py/unused-global-variable turns main
 # RED for it through the open-alerts gate from #101. That has now happened four times.
@@ -4699,7 +4748,7 @@ import ast as _ast
 
 _ESCALATION_FILES = ["app.py", "auth.py", "ssh_manager.py", "system_ops.py", "notifications.py",
                      "backup.py", "db_maintenance.py", "tailscale_integration.py", "manage.py"]
-_CEILING = {"sudo=True": 7, "_sudo_sh": 1}   # measured at the time of writing; lower only
+_CEILING = {"sudo=True": 5, "_sudo_sh": 1}   # measured at the time of writing; lower only
 
 def _is_dispatch(call):
     """True when this escalation is NOT a call site composing a shell string.

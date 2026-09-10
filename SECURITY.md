@@ -86,9 +86,9 @@ of going unnoticed. Current state:
 
 | route | sites remaining |
 |---|---|
-| `run_command(..., sudo=True)` | 7 |
+| `run_command(..., sudo=True)` | 5 |
 | `_sudo_sh(...)` | 1 |
-| **root total** | **8** (from 131) |
+| **root total** | **6** (from 131) |
 
 (Those counts exclude six calls that ARE the verb layer's own transport — the `run_command` /
 `_run_local` / `_run` at the end of `run_privileged`, `write_root_file`, `write_content_cron` and
@@ -124,6 +124,12 @@ types rather than in the command names:
   passes *names* and the helper assembles the paths — `content_path()` re-checks the assembled
   result, and is tested directly rather than only through the verbs, because the verbs' own
   validators would otherwise reject every probe before it got that far.
+- **Tailscale's join** took the auth key, the advertised routes and the tags straight from the
+  request and shell-quoted them into a root command. They are validated arguments now: routes are
+  *parsed* as networks, each tag must be `tag:name`, and the auth key is charset-checked and never
+  echoed back — not even in a rejection, since the value is a secret. The interactive login flow's
+  poll log also moved from `/tmp` to `/run`: in `/tmp` any local user could pre-create the file the
+  root poll then reads.
 - **The sshd hardening** set four directives with `sed -i 's/^#\?Key.*/Key value/'` in a joined
   root shell. Both halves are closed sets now: the panel may set exactly those four directives, to
   exactly the values it hardens them to. `PermitRootLogin yes` is individually well-formed and
@@ -151,12 +157,12 @@ reimplementing a working multi-stage scan in the helper. They are the least valu
 risk of what is left, which is why they are last. The rest are the Tailscale bootstrap's `tailscale
 up` composition and the detached OS-update runner.
 
-**One operation cannot be narrowed, and is named rather than left unremarked.** The VPS bootstrap
-installs Node.js by piping NodeSource's setup script into a root shell. That IS the operation: a
-verb could pin the URL, but only by giving the helper the ability to execute a downloaded script —
-exactly the capability its tool allowlist exists to deny. Wrapping it would move the risk, not
-reduce it. If that trade is not one you want, the bootstrap's Node step is the thing to change, not
-the helper.
+**Two operations cannot be narrowed, and are named rather than left unremarked.** The VPS
+bootstrap installs Node.js by piping NodeSource's setup script into a root shell, and installs
+Tailscale the same way. That IS the operation in both cases: a verb could pin the URL, but only by
+giving the helper the ability to execute a downloaded script — exactly the capability its tool
+allowlist exists to deny. Wrapping either would move the risk, not reduce it. If that trade is not
+one you want, those two bootstrap steps are the thing to change, not the helper.
 
 Still to convert that go through `echo … | base64 -d >`, and the two multi-line shell
 scripts (the detached OS-update runner and the NodeSource installer).
