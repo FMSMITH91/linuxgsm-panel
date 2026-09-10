@@ -1443,16 +1443,6 @@ def fail2ban_overview():
 
 # The fail2ban aggregation is a pure counting pipeline over the (root-owned) fail2ban logs — no input
 # from the request reaches the shell, so it's a fixed command. Panel-host only. ssh_manager.remote_fail2ban_top_ips inlines its own copy of this pipeline and of the row parsing below — keep the two in step by hand.
-_F2B_TOP_PIPELINE = (
-    "zcat -f /var/log/fail2ban.log* 2>/dev/null | "
-    "awk -v c='%s' '$1 >= c' | "
-    "grep -oE '\\[[A-Za-z0-9._-]+\\] (Ban|Found) [0-9a-fA-F:.]+' | "
-    "awk '{jail=$1; gsub(/[][]/,\"\",jail); a=$(NF-1); ip=$NF; "
-    "if(a==\"Found\") f[ip]++; else if(a==\"Ban\") b[ip]++; s[ip]=1; "
-    "k=ip\"|\"jail; if(!(k in js)){js[k]=1; jl[ip]=jl[ip](jl[ip]==\"\"?\"\":\",\")jail}} "
-    "END{for(ip in s) print (f[ip]+0)\"\\t\"(b[ip]+0)\"\\t\"ip\"\\t\"jl[ip]}' | "
-    "sort -rn | head -%d"
-)
 
 # Default UFW comment tag so the panel manages only its OWN deny rules. The rolling-auto-block tag
 # ("panel-autoblock") is passed in by app.py's reconcile.
@@ -1508,7 +1498,7 @@ _F2B_EVENT_RE = re.compile(r"\[([A-Za-z0-9._-]+)\] (Ban|Found) ([0-9a-fA-F:.]+)"
 def _tally_f2b_lines(text, limit):
     """Tally Ban/Found events per IP from raw fail2ban log lines.
 
-    This is what the awk half of _F2B_TOP_PIPELINE did: for each `[jail] Ban|Found <ip>` match,
+    This is what the awk half of the old shell pipeline did: for each `[jail] Ban|Found <ip>` match,
     count Founds and Bans per IP and collect the distinct jails, then rank by attempts and take the
     top `limit`. Emitted in the same tab-separated shape _parse_top_ips already reads."""
     found, bans, jails = {}, {}, {}

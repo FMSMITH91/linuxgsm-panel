@@ -5128,7 +5128,6 @@ def content_present(server, content_user, game):
     return rc == 0 or "Y" in (_out or "")
 
 
-_CONTENT_UPDATE_CRON_PATH = "/etc/cron.d/lgsm-gmod-content"
 
 
 def _content_update_cron_body(content_user, lgsm_names):
