@@ -789,6 +789,7 @@ VERBS = {
     "panel-self-update": ([v_git_ref, v_branch_name], lambda a: [], None),
     "tailscale-install": ([], lambda a: [], None),
     "game-backup-read": ([v_username, v_backup_name], lambda a: [], None),
+    "lgsm-discover": ([], lambda a: [], None),
     # Two upgrade shapes, because the panel really does want two. "phased" includes Ubuntu's
     # phased rollouts so an explicit "install updates" applies everything the Check list showed;
     # "standard" is apt's default set, used when bootstrapping a host.
@@ -1260,6 +1261,81 @@ def do_panel_self_update(args, content):
     return 0
 
 
+def do_lgsm_discover(args, content):
+    """List the LinuxGSM instances already installed on this host, one FOUND| line each.
+
+    Reimplemented here rather than shelled out. The panel's version is a twenty-line shell program
+    (nested loops, greps, a crontab read per user) and it needed root for exactly ONE thing:
+    `crontab -u <someone-else> -l`. Everything else it does — reading config files under /home and
+    counting backups — is ordinary file reading.
+
+    Same output contract as the shell form, so the panel's parser is unchanged:
+        FOUND|user|instance|port|backups|mods|cronlines|autostart
+    """
+    # crontab is OPTIONAL here. The shell form sent its errors to /dev/null, so a host without a
+    # cron implementation still listed its instances with zero cron counts; resolving it eagerly
+    # would turn "no crontab installed" into "no game servers found", which is a worse answer than
+    # the one it replaced.
+    try:
+        crontab = resolve("crontab")
+    except FileNotFoundError:
+        crontab = None
+    try:
+        users = sorted(os.listdir(HOME_ROOT))
+    except OSError:
+        return 0                       # no /home is not an error, just nothing to find
+    for user in users:
+        cfg_dir = os.path.join(HOME_ROOT, user, "lgsm", "config-lgsm")
+        if not os.path.isdir(cfg_dir):
+            continue
+        cron = ""
+        try:
+            if crontab is not None:
+                r = subprocess.run([crontab, "-u", user, "-l"],  # nosec B603 - argv, user from /home
+                                   check=False, timeout=15,
+                                   stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
+                cron = (r.stdout or b"").decode("utf-8", "replace")
+        except Exception:
+            # A user with no crontab exits non-zero; anything else here is equally non-fatal —
+            # the instance still counts, it just reports zero cron lines.
+            cron = ""
+        cron_lines = [ln for ln in cron.splitlines()
+                      if ln.strip() and not ln.strip().startswith("#")]
+        autostart = sum(1 for ln in cron_lines if "@reboot" in ln or "monitor" in ln)
+        try:
+            instances = sorted(os.listdir(cfg_dir))
+        except OSError:
+            continue
+        for inst in instances:
+            if not os.access(os.path.join(HOME_ROOT, user, inst), os.X_OK):
+                continue               # the launcher script is what makes it a real instance
+            port = 0
+            for cand in ("%s.cfg" % inst, "common.cfg", "_default.cfg"):
+                try:
+                    with open(os.path.join(cfg_dir, inst, cand), encoding="utf-8",
+                              errors="replace") as fh:
+                        m = re.search(r"^\s*port=\D*(\d+)", fh.read(), re.M)
+                    if m:
+                        port = int(m.group(1))
+                        break
+                except OSError:
+                    continue
+            try:
+                backups = sum(1 for f in os.listdir(os.path.join(HOME_ROOT, user, "lgsm", "backup"))
+                              if re.search(r"\.(tar|tgz|zip)", f))
+            except OSError:
+                backups = 0
+            try:
+                with open(os.path.join(HOME_ROOT, user, "lgsm", "mods", "installed-mods.txt"),
+                          encoding="utf-8", errors="replace") as fh:
+                    mods = sum(1 for ln in fh if ln.strip())
+            except OSError:
+                mods = 0
+            sys.stdout.write("FOUND|%s|%s|%d|%d|%d|%d|%d\n"
+                             % (user, inst, port, backups, mods, len(cron_lines), autostart))
+    return 0
+
+
 def do_game_backup_read(args, content):
     """Stream a game server's backup archive to stdout, reading it AS THE GAME USER.
 
@@ -1662,6 +1738,7 @@ ACTIONS = {
     "panel-self-update": do_panel_self_update,
     "tailscale-install": do_tailscale_install,
     "game-backup-read": do_game_backup_read,
+    "lgsm-discover": do_lgsm_discover,
     "sshd-set-directive": do_sshd_set_directive,
     "create-swapfile": do_create_swapfile,
 }

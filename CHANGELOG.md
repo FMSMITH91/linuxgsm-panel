@@ -48,6 +48,20 @@ regardless of this file — this changelog is for humans.
   blamed on whatever landed next. It now runs when CodeQL completes.
 
 ### Security
+- **The sudoers grant is no longer `NOPASSWD:ALL`.** On an install where the root-owned pieces are
+  present, `/etc/sudoers.d/linuxgsm-panel` now contains a single line permitting one command — the
+  privileged helper — and nothing else. Not `/bin/bash`, not `systemd-run`, not the `tailscale`
+  binary, not `sudo -u`: each of those runs whatever argv you hand it, so permitting any one would
+  be `NOPASSWD:ALL` in disguise. Each was a call site once; each is a verb now.
+
+  Getting there needed two things beyond the verb conversions. First, **root had to stop executing
+  code out of the panel's own checkout** — that directory is owned by the service user and rewritten
+  by `git pull`, so a boundary that let root run files from it would have been decorative; the
+  offline DB repair and the self-update now run root-owned copies placed only by `install.sh`.
+  Second, the grant **only narrows when all three root-owned pieces landed**; a host running new
+  code that has not had `install.sh` re-run as root keeps the wide grant, because it still falls
+  back to the pre-helper path and narrowing under that would break every privileged action rather
+  than secure anything. The installer prints which grant it wrote.
 - **`tailscale up` on the panel's own host wrote root's output to `/tmp`.** The local flow built its
   own `sudo bash -c` script — a backgrounded `tailscale up`, a redirect to `/tmp/tsup.log`, and a
   poll loop. `/tmp` is world-writable, so any local user could pre-create or symlink that path and

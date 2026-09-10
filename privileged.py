@@ -626,6 +626,9 @@ _ARGV = {
     # the file — reading it as root would turn a download button into "hand me any file on the
     # box". See tools/panel-helper.
     "game-backup-read": ([_username, _backup_name], lambda a: [], None),
+    # Find LinuxGSM instances already installed on this host. Zero arguments; the helper walks
+    # /home itself. It needed root for one thing only — reading another user's crontab.
+    "lgsm-discover": ([], lambda a: [], None),
     "apt-full-upgrade": ([_choice("phased", "standard")],
                          lambda a: [APT, "full-upgrade", "-y"]
                          + (["-o", "APT::Get::Always-Include-Phased-Updates=true"]

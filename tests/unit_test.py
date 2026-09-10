@@ -3889,6 +3889,7 @@ _VERB_SAMPLES = {
     "panel-self-update": ["-", "-"],
     "tailscale-install": [],
     "game-backup-read": ["ubuntu", "csgoserver-2026-01-01.tar.gz"],
+    "lgsm-discover": [],
     "content-scan": ["cstrike", "hl2"],
 }
 check("privileged: every verb has a sample (new verbs cannot skip the parity check)",
@@ -5158,6 +5159,77 @@ try:
 finally:
     _helper.PANEL_CONF = _dbr_conf
     _helper.DBM_PATH = _dbr_dbm
+
+# ── The sudoers grant itself ──────────────────────────────────────────────────────────────────
+# The whole point of the verb table. install.sh writes a NARROW grant when every root-owned piece
+# is in place, and the wide one otherwise — because a host that has the new code but has not had
+# install.sh re-run as root still falls back to `sudo bash -c '<verb as text>'`, and narrowing
+# under it would break every privileged action rather than secure anything.
+_inst = open(os.path.join(_root, "install.sh"), encoding="utf-8").read()
+check("install.sh: writes a narrow grant permitting only the helper",
+      'NOPASSWD: ${HELPER_DST}" > /etc/sudoers.d/linuxgsm-panel' in _inst)
+check("install.sh: the narrow grant is conditional on the root-owned pieces being installed",
+      '[ "${HELPER_OK}" -eq 1 ] && [ "${ROOT_TOOLS_OK}" -eq 1 ]' in _inst)
+check("install.sh: still validates whichever grant it wrote with visudo",
+      "visudo -cf /etc/sudoers.d/linuxgsm-panel" in _inst)
+# The narrow grant must not quietly re-admit any of the things that were call sites. Each of these
+# runs whatever argv you hand it, so permitting one is permitting everything.
+_narrow = _inst[_inst.index('if [ "${HELPER_OK}"'):_inst.index("chmod 440 /etc/sudoers.d")]
+for _never in ("systemd-run", "/bin/bash", "/bin/sh", "tailscale", "sudo -u"):
+    check("install.sh: the narrow grant does not permit %s" % _never, _never not in _narrow)
+
+# ── The discovery scan, reimplemented in the helper, must speak the parser's dialect ───────────
+# discover_linuxgsm_servers used to be a twenty-line shell program run under `sudo bash -c`. It
+# needed root for exactly one thing — reading another user's crontab — and everything else was
+# ordinary file reading. The helper now does it in Python, so the output contract is the ONLY thing
+# holding the two halves together: FOUND|user|instance|port|backups|mods|cronlines|autostart, which
+# ssh_manager splits and requires at least 8 fields of.
+import tempfile as _tf_disc
+_disc_home = _tf_disc.mkdtemp()
+_disc_out = []
+_sv_home_root, _sv_disc_stdout = _helper.HOME_ROOT, _helper.sys.stdout
+try:
+    _u = os.path.join(_disc_home, "csgoserver")
+    os.makedirs(os.path.join(_u, "lgsm", "config-lgsm", "csgoserver"))
+    os.makedirs(os.path.join(_u, "lgsm", "backup"))
+    os.makedirs(os.path.join(_u, "lgsm", "mods"))
+    with open(os.path.join(_u, "lgsm", "config-lgsm", "csgoserver", "csgoserver.cfg"), "w") as _fh:
+        _fh.write("port=27015\n")
+    for _b in ("a.tar.gz", "b.tgz", "notes.txt"):
+        open(os.path.join(_u, "lgsm", "backup", _b), "w").close()
+    with open(os.path.join(_u, "lgsm", "mods", "installed-mods.txt"), "w") as _fh:
+        _fh.write("metamod\nsourcemod\n")
+    _launcher = os.path.join(_u, "csgoserver")
+    open(_launcher, "w").close()
+    os.chmod(_launcher, 0o755)
+
+    class _DiscCap:
+        def write(self, t):
+            _disc_out.append(t)
+
+        def flush(self):
+            pass
+
+    _helper.HOME_ROOT = _disc_home
+    _helper.sys.stdout = _DiscCap()
+    _rc_disc = _helper.do_lgsm_discover([], None)
+finally:
+    _helper.HOME_ROOT, _helper.sys.stdout = _sv_home_root, _sv_disc_stdout
+    import shutil as _sh_disc
+    _sh_disc.rmtree(_disc_home, ignore_errors=True)
+
+_disc_line = "".join(_disc_out).strip()
+check("helper: lgsm-discover emits a FOUND line for an installed instance",
+      _disc_line.startswith("FOUND|"), repr(_disc_line[:120]))
+_disc_parts = _disc_line.split("|")
+check("helper: lgsm-discover emits the 8 fields ssh_manager splits on",
+      len(_disc_parts) >= 8, "%d fields: %r" % (len(_disc_parts), _disc_line[:120]))
+if len(_disc_parts) >= 8:
+    eq("helper: lgsm-discover reports the user", _disc_parts[1], "csgoserver")
+    eq("helper: lgsm-discover reports the instance", _disc_parts[2], "csgoserver")
+    eq("helper: lgsm-discover reads the port out of the .cfg", _disc_parts[3], "27015")
+    eq("helper: lgsm-discover counts only archive backups, not notes.txt", _disc_parts[4], "2")
+    eq("helper: lgsm-discover counts installed mods", _disc_parts[5], "2")
 
 # ── The backup download DROPS privilege; it must never read as root ────────────────────────────
 # `sudo -u <user> cat` got one thing exactly right: the read happened as the GAME user, so a
