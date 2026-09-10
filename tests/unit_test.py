@@ -3884,6 +3884,7 @@ _VERB_SAMPLES = {
     "tailscale-up-key": ["tskey-auth-abc123def", "yes", "10.0.0.0/24", "tag:server"],
     "tailscale-up-login": ["yes", "-"],
     "os-update-run": [],
+    "panel-db-repair": [],
     "content-scan": ["cstrike", "hl2"],
 }
 check("privileged: every verb has a sample (new verbs cannot skip the parity check)",
@@ -5088,6 +5089,57 @@ for _bad in (["serve", "modern", "../../etc", "http", "5000"],
              ["serve", "sneaky", "/", "http", "5000"]):
     check("privileged: tailscale-serve refuses %r" % (_bad,),
           _ufw_raises_verb(lambda b=_bad: _priv.check_args("tailscale-serve", b)))
+# ── The offline DB repair: the path comes from root's config, never from the caller ────────────
+# do_panel_db_repair takes ZERO arguments. That is the security property, not a convenience: the
+# old form composed `sudo systemd-run ... bash -c "<panel venv python> <panel dir>/db_maintenance.py"`,
+# so root ran the panel user's interpreter on the panel user's script out of a checkout that
+# `git pull` rewrites. A verb that accepted a path would be the same hole with validation bolted on.
+_dbr_conf = _helper.PANEL_CONF
+_dbr_dbm = _helper.DBM_PATH
+try:
+    import tempfile as _tf_dbr
+    _dbr_dir = _tf_dbr.mkdtemp()
+
+    # panel.conf parsing: comments, blank lines and stray whitespace are all tolerated.
+    _cfgp = os.path.join(_dbr_dir, "panel.conf")
+    with open(_cfgp, "w", encoding="utf-8") as _fh:
+        _fh.write("# written by install.sh\n\n  db_path = /var/lib/panel/panel.db  \n")
+    _helper.PANEL_CONF = _cfgp
+    eq("helper: panel.conf parses key=value, ignoring comments and blanks",
+       _helper.panel_conf().get("db_path"), "/var/lib/panel/panel.db")
+
+    # A missing conf is an empty dict, not a crash and not a guess.
+    _helper.PANEL_CONF = os.path.join(_dbr_dir, "absent.conf")
+    eq("helper: a missing panel.conf reads as empty, not a guessed path", _helper.panel_conf(), {})
+    check("helper: db-repair refuses to run with no db_path configured",
+          _helper.do_panel_db_repair([], None) == 1)
+
+    # A relative path, or one that does not exist, is refused rather than "repaired".
+    for _bad in ("relative/panel.db", os.path.join(_dbr_dir, "does-not-exist.db")):
+        with open(_cfgp, "w", encoding="utf-8") as _fh:
+            _fh.write("db_path=%s\n" % _bad)
+        _helper.PANEL_CONF = _cfgp
+        check("helper: db-repair refuses db_path %r" % _bad,
+              _helper.do_panel_db_repair([], None) == 1)
+
+    # With a real database configured but NO root-owned db_maintenance beside the helper, it must
+    # still refuse — running the checkout's copy is precisely what this verb exists to avoid.
+    _realdb = os.path.join(_dbr_dir, "panel.db")
+    open(_realdb, "wb").close()
+    with open(_cfgp, "w", encoding="utf-8") as _fh:
+        _fh.write("db_path=%s\n" % _realdb)
+    _helper.PANEL_CONF = _cfgp
+    _helper.DBM_PATH = os.path.join(_dbr_dir, "not-installed.py")
+    check("helper: db-repair refuses when db_maintenance is not installed root-owned",
+          _helper.do_panel_db_repair([], None) == 1)
+finally:
+    _helper.PANEL_CONF = _dbr_conf
+    _helper.DBM_PATH = _dbr_dbm
+
+# db_maintenance.repair must work from an explicit path — that is what lets a ROOT-OWNED copy run
+# under the system interpreter without importing the panel's config out of the checkout.
+check("db_maintenance: repair runs from an explicit path, no config import",
+      "argv[2]" in open(os.path.join(_root, "db_maintenance.py"), encoding="utf-8").read())
 
 passed = sum(1 for ok, _, _ in results if ok)
 for ok, name, detail in results:

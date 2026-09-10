@@ -251,7 +251,12 @@ def main(argv):
         print(msg)
         return 0 if ok else 1
     if cmd == "repair":
-        ok, msg = repair()
+        # An explicit DB path makes this runnable WITHOUT importing config — which is what lets the
+        # privileged helper run a root-owned copy of this file with the system interpreter, instead
+        # of root executing the panel's own checkout. _paths() (and therefore config) is only
+        # touched when no path is given, i.e. when a human runs it from the panel directory.
+        path = argv[2] if len(argv) > 2 else None
+        ok, msg = repair(path, (path + ".backup") if path else None)
         print(msg)
         return 0 if ok else 1
     print("usage: db_maintenance.py [update|check|optimize|repair]")

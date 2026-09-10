@@ -577,6 +577,9 @@ _ARGV = {
     # ── apt / dpkg ──
     "apt-update": ([], lambda a: [APT, "update", "-qq"], None),
     "os-update-run": ([], lambda a: [], None),
+    # Offline database repair. Zero arguments on purpose: the database path comes from the
+    # root-owned panel.conf that install.sh wrote, never from the caller. See tools/panel-helper.
+    "panel-db-repair": ([], lambda a: [], None),
     "apt-full-upgrade": ([_choice("phased", "standard")],
                          lambda a: [APT, "full-upgrade", "-y"]
                          + (["-o", "APT::Get::Always-Include-Phased-Updates=true"]

@@ -154,6 +154,42 @@ F2B_LOG_GLOB = "/var/log/fail2ban.log*"
 # Where `tailscale up` streams while it waits for the operator to authorise the node. Fixed here so
 # the login-URL poll reads a path no caller chose.
 TS_UP_LOG = "/run/panel-tailscale-up.log"
+
+# ── Where the panel lives, as ROOT understands it ─────────────────────────────────────────────
+# Written by install.sh, root-owned, 0644. The helper reads the panel's location from HERE rather
+# than accepting it as a verb argument, because a path argument is the whole hole: "run this file
+# as root" with a caller-chosen path is arbitrary root execution however tightly the rest of the
+# verb is validated.
+#
+# db_maintenance.py is likewise installed root-owned NEXT TO the helper and run with the SYSTEM
+# interpreter. The panel's own checkout is chown'd to the panel user and rewritten by `git pull`
+# on every self-update, so root executing anything from it — the venv's python included — would
+# make the boundary decorative. Updating this copy needs root, exactly as updating the helper does.
+PANEL_CONF = "/usr/local/lib/linuxgsm-panel/panel.conf"
+DBM_PATH = "/usr/local/lib/linuxgsm-panel/db_maintenance.py"
+SYSTEM_PYTHON = ("/usr/bin/python3", "/usr/local/bin/python3")
+
+
+def panel_conf():
+    """The install's fixed facts: {"db_path": ...}. Missing or unreadable is an empty dict, and the
+    verbs that need it fail cleanly rather than guessing at a path."""
+    out = {}
+    try:
+        with open(PANEL_CONF, encoding="utf-8") as fh:
+            for line in fh:
+                line = line.strip()
+                if not line or line.startswith("#") or "=" not in line:
+                    continue
+                k, v = line.split("=", 1)
+                out[k.strip()] = v.strip()
+    except OSError:
+        # No panel.conf, or it is unreadable. Deliberately not fatal HERE: the callers below decide
+        # what a missing key means for them, and every one of them refuses rather than guessing at a
+        # path. Raising instead would turn "not installed yet" into a crash on an unrelated verb.
+        pass
+    return out
+
+
 TS_LOGIN_RE = re.compile(r"https://login\.tailscale\.com/[A-Za-z0-9/]+")
 TS_UP_POLL_SECONDS = 20
 
@@ -703,6 +739,7 @@ VERBS = {
     # ── apt / dpkg ──
     "apt-update": ([], lambda a: [APT, "update", "-qq"], None),
     "os-update-run": ([], lambda a: [], None),
+    "panel-db-repair": ([], lambda a: [], None),
     # Two upgrade shapes, because the panel really does want two. "phased" includes Ubuntu's
     # phased rollouts so an explicit "install updates" applies everything the Check list showed;
     # "standard" is apt's default set, used when bootstrapping a host.
@@ -982,6 +1019,77 @@ def _os_update_detached():
         # has long since returned — the exit status below is all that is left to say.
         pass
     os._exit(1)
+
+
+def _db_repair_detached(db_path):
+    """The offline repair itself, in the grandchild. NEVER RETURNS — every path ends in os._exit.
+
+    stop -> repair -> start, as three argv calls with no shell between them. The panel used to
+    compose this as a `bash -c` string and hand it to `sudo systemd-run`; the string was built from
+    the panel's OWN directory, so root ran the panel user's interpreter on the panel user's script.
+    Here the interpreter is the system one and the script is the root-owned copy beside this file.
+    """
+    os.setsid()
+    if os.fork() != 0:
+        os._exit(0)
+    try:
+        devnull = os.open(os.devnull, os.O_RDWR)
+        for fd in (0, 1, 2):
+            os.dup2(devnull, fd)
+        if devnull > 2:
+            os.close(devnull)
+    except OSError:
+        # Detaching stdio is best-effort. If /dev/null cannot be opened the repair should still run;
+        # the worst case is that output goes nowhere useful, which is where it was headed anyway.
+        pass
+    try:
+        systemctl = resolve("systemctl")
+        python = next((p for p in SYSTEM_PYTHON if os.path.isfile(p) and os.access(p, os.X_OK)),
+                      None)
+        if python is None:
+            os._exit(1)
+        # The panel is holding the database open; it has to go down before the file can be rebuilt.
+        subprocess.run([systemctl, "stop", PANEL_UNIT],  # nosec B603 - fixed argv
+                       check=False, timeout=120)
+        subprocess.run([python, DBM_PATH, "repair", db_path],  # nosec B603 - root-owned script
+                       check=False, timeout=900)
+    except Exception:
+        # Swallowed so the finally below ALWAYS runs. This is a detached grandchild with no stderr
+        # anyone reads, and the only thing that matters after a failed repair is that the panel is
+        # started again — which the finally does. A raise here would skip it and leave it down.
+        pass
+    finally:
+        # Start it again WHATEVER happened above. A panel left down by a failed repair is worse
+        # than a panel up with a database it will complain about.
+        try:
+            subprocess.run([resolve("systemctl"), "start", PANEL_UNIT],  # nosec B603 - fixed argv
+                           check=False, timeout=120)
+        except Exception:
+            # Last resort in a finally, in a detached grandchild: there is nobody to report to and
+            # nothing further to try. Falling through to os._exit is the only remaining behaviour.
+            pass
+    os._exit(0)
+
+
+def do_panel_db_repair(args, content):
+    """Repair the panel database offline, detached, and report that it started.
+
+    Zero arguments. The database path comes from panel.conf, which install.sh wrote as root — not
+    from the caller, because "run the repair on THIS file" with a caller-chosen path is a way to
+    make root clobber any file on the box."""
+    db_path = panel_conf().get("db_path", "")
+    if not db_path or not os.path.isabs(db_path) or not os.path.exists(db_path):
+        sys.stderr.write("panel.conf has no usable db_path\n")
+        return 1
+    if not os.path.isfile(DBM_PATH):
+        sys.stderr.write("db_maintenance is not installed root-owned; re-run install.sh as root\n")
+        return 1
+    pid = os.fork()
+    if pid == 0:
+        _db_repair_detached(db_path)   # never returns
+    os.waitpid(pid, 0)
+    sys.stdout.write("REPAIR_STARTED")
+    return 0
 
 
 def do_os_update_run(args, content):
@@ -1280,6 +1388,7 @@ ACTIONS = {
     "f2b-log-lines": do_f2b_log_lines,
     "tailscale-up-login": do_tailscale_up_login,
     "os-update-run": do_os_update_run,
+    "panel-db-repair": do_panel_db_repair,
     "sshd-set-directive": do_sshd_set_directive,
     "create-swapfile": do_create_swapfile,
 }
