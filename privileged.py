@@ -632,9 +632,6 @@ _REMOTE_ACTIONS = {
 }
 
 
-def is_action(verb):
-    """True when the helper performs this verb itself rather than running a tool."""
-    return verb in _REMOTE_ACTIONS or verb == "write-file"
 
 
 def check_args(verb, args):
