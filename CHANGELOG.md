@@ -8,6 +8,15 @@ regardless of this file — this changelog is for humans.
 ## [Unreleased]
 
 ### Fixed
+- **Six endpoints answered HTTP 500 when a remote host was simply unreachable.** A host that is
+  powered off, rebooting, or behind a broken link is a normal condition for a panel that manages
+  remote machines — not a fault in the panel. `live`, `pro-status`, `uptime`, `firewall`,
+  `check-updates` and `tailscale-check` all raised straight through, so opening a host's Manage page
+  while it was down filled the browser console with 500s, and any alerting on the panel's own 5xx
+  rate fired for someone else's downtime. `live-stats` already answered `200` with an error field
+  and explained why in a comment; its siblings never followed. They do now, keyed on the
+  `ConnectionError` that `ssh_manager` raises specifically for unreachable — anything that is *not*
+  a connection failure still returns 500, deliberately, because those are the panel's own bugs.
 - **Four buttons on the Remote Servers page did nothing.** `manage_remotes.html` loaded its script
   from inside the content block, which `base.html` renders *before* `panel.js`. The top-level
   `pollWhenVisible(...)` call in `manage_remotes.js` therefore threw `ReferenceError` while the file
