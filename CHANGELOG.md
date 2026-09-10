@@ -25,6 +25,11 @@ regardless of this file — this changelog is for humans.
   blamed on whatever landed next. It now runs when CodeQL completes.
 
 ### Security
+- **Three VPS-preparation actions could be aimed at the panel's own host.** The remotes page hides
+  *Prepare* and *Tailscale* for the local host, but the API routes behind them accepted a POST
+  carrying its id — so anyone with "manage remotes" could apt full-upgrade the panel's own machine,
+  rewrite its `sshd_config`, pipe an installer into a root shell, and reboot it out from under the
+  request. The routes refuse the local host now, with a JSON 400 that says why.
 - **The privileged helper has landed, and the firewall now goes through it.** The panel escalates
   local work as `sudo bash -c '<command>'`, which is why its sudoers grant could never be narrowed:
   permitting `/bin/bash` *is* `NOPASSWD:ALL`. `tools/panel-helper` is a root-owned script that takes

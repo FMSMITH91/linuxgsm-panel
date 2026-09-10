@@ -194,6 +194,45 @@ try:
         code = c.get(p).status_code
         check("limited user DENIED %s" % p, code != 200, "got %d" % code)
 
+    # ── VPS-preparation routes must refuse the panel's OWN host ────────────────────────────────
+    # manage_remotes.html hides Prepare / Tailscale for the local host, but the ROUTES accepted a
+    # POST carrying its id. Those actions apt full-upgrade the machine, rewrite its sshd config,
+    # pipe an installer into a root shell and reboot it — aimed at the panel's own host, that
+    # reboots the panel out from under the request. A UI-only restriction on a destructive
+    # privileged action is not a restriction, so this drives the real routes as a superadmin.
+    with app.app_context():
+        _local = RemoteServer.query.filter_by(auth_method="local").first()
+        _local_made = _local is None
+        if _local_made:
+            _local = RemoteServer(name="rbac-local-probe", host="127.0.0.1", port=22,
+                                  username="root", auth_method="local", auth_credential="")
+            db.session.add(_local)
+            db.session.commit()
+        _local_id = _local.id
+        _rem = RemoteServer.query.filter(RemoteServer.auth_method != "local").first()
+        _rem_id = _rem.id if _rem else None
+    _ac = client_as(admin_id)
+    for _path, _label in (("/api/remote/%d/bootstrap" % _local_id, "VPS bootstrap"),
+                          ("/api/remote/%d/tailscale-install" % _local_id, "Tailscale install"),
+                          ("/api/remote/%d/tailscale-bootstrap" % _local_id, "Tailscale join")):
+        _r = _ac.post(_path, json={"auth_key": "tskey-auth-abcdefghij"})
+        check("%s is REFUSED on the panel's own host" % _label,
+              _r.status_code == 400, "%s -> %d" % (_path, _r.status_code))
+        check("%s refusal says why, in JSON" % _label,
+              b"panel's own host" in _r.data, _r.data[:120])
+    # A remote host must NOT be refused by that guard — refusing everything is the easy way to make
+    # the assertions above pass for the wrong reason.
+    if _rem_id is not None:
+        _r2 = _ac.post("/api/remote/%d/tailscale-install" % _rem_id)
+        check("a REMOTE host is not refused by that guard",
+              b"panel's own host" not in _r2.data, "%d %s" % (_r2.status_code, _r2.data[:80]))
+    if _local_made:
+        with app.app_context():
+            _l = db.session.get(RemoteServer, _local_id)
+            if _l is not None:
+                db.session.delete(_l)
+                db.session.commit()
+
     if other_id:
         check("IDOR: console of non-granted server BLOCKED",
               c.get("/api/console/%d" % other_id).status_code != 200)
@@ -443,7 +482,6 @@ with app.app_context():
             _unguarded.append("%s %s" % (sorted(_rule.methods & {"GET", "POST", "PUT", "DELETE"}), _rule))
     check("every <server_id> route enforces server access (not just a permission)",
           not _unguarded, "; ".join(sorted(_unguarded)[:6]))
-
 passed = sum(1 for ok, _, _ in results if ok)
 for ok, name, detail in results:
     line = ("PASS" if ok else "FAIL") + "  " + name

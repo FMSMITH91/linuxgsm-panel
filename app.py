@@ -109,7 +109,7 @@ from models import (
 )
 from ssh_manager import (
     _remote_listening_ports, _invalidate_port_scan,
-    close_connection, run_command, run_privileged, ssh_test_connection,
+    close_connection, is_local_server, run_command, run_privileged, ssh_test_connection,
     get_server_status, run_as_game_user, send_console_command,
     list_server_commands, server_live_metrics, game_map, remote_public_ip,
     discover_linuxgsm_servers, player_list, moderation_caps, moderate, is_player_queryable,
@@ -7703,12 +7703,38 @@ def register_routes(app):
         except Exception:
             return jsonify({"success": False, "message": _log_and_generic("request failed")}), 500
 
+    def _refuse_on_panel_host(remote, what):
+        """A JSON 400 when a VPS-PREPARATION action is aimed at the panel's own host, else None.
+
+        get_remote() already enforces WHICH hosts a user may touch. This is the other axis: WHICH
+        KIND. Bootstrap, Tailscale-install and Tailscale-join prepare a fresh VPS — they apt
+        full-upgrade the machine, rewrite its sshd config, pipe an installer into a root shell, and
+        reboot it. Aimed at the host the panel runs on, that reboots the panel out from under the
+        request, and can change the tailnet identity of the very machine the operator is reaching
+        it through.
+
+        manage_remotes.html already hides all three for the local host. This is the server-side
+        half of that: a UI-only restriction on a destructive privileged action is not a
+        restriction — the route still accepted a POST with the local host's id."""
+        if not is_local_server(remote):
+            return None
+        _log.warning("refused %s aimed at the panel's own host (remote_id=%s)", what, remote.id)
+        return jsonify({
+            "success": False,
+            "message": ("%s prepares a REMOTE VPS and can't target the panel's own host — it "
+                        "would reboot the panel mid-request. Use the panel's own pages for "
+                        "updates, firewall and Tailscale." % what),
+        }), 400
+
     @app.route("/api/remote/<int:remote_id>/tailscale-install", methods=["POST"])
     @login_required
     @permission_required(MANAGE_REMOTES)
     def api_remote_tailscale_install(remote_id):
         """Install Tailscale on the remote VPS."""
         remote = get_remote(remote_id)
+        refused = _refuse_on_panel_host(remote, "Tailscale install")
+        if refused:
+            return refused
         try:
             success, msg, log = remote_install_tailscale(remote)
             log_action(current_user, "remote_tailscale_install", target=remote.name, detail=msg, success=success)
@@ -7724,6 +7750,9 @@ def register_routes(app):
         Requires a Tailscale pre-auth key.
         """
         remote = get_remote(remote_id)
+        refused = _refuse_on_panel_host(remote, "Tailscale join")
+        if refused:
+            return refused
         data = _json_body()
         auth_key = data.get("auth_key", "").strip()
         enable_ssh = data.get("enable_ssh", True)
@@ -7797,7 +7826,9 @@ def register_routes(app):
         """Kick off a fresh-VPS bootstrap in the background: updates, essential
         packages, UFW, SSH hardening, swap, fail2ban, LinuxGSM user, then reboot.
         Returns immediately; poll /bootstrap-status for live progress."""
-        get_remote(remote_id)   # enforce access (403 if not permitted); bootstrap uses remote_id
+        refused = _refuse_on_panel_host(get_remote(remote_id), "VPS bootstrap")
+        if refused:
+            return refused
         data = _json_body()
         opts = {
             "set_timezone": data.get("timezone", "UTC"),
