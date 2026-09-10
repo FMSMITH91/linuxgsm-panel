@@ -6374,7 +6374,10 @@ def register_routes(app):
     @permission_required(MANAGE_REMOTES)
     def api_remote_firewall(remote_id):
         remote = get_remote(remote_id)
-        return jsonify(remote_ufw_status(remote))
+        try:
+            return jsonify(remote_ufw_status(remote))
+        except ConnectionError:
+            return _unreachable("remote firewall status")
 
     @app.route("/api/remote/<int:remote_id>/retrust-hostkey", methods=["POST"])
     @login_required
@@ -6593,7 +6596,10 @@ def register_routes(app):
     @permission_required(MANAGE_REMOTES)
     def api_remote_uptime(remote_id):
         remote = get_remote(remote_id)
-        return jsonify(remote_uptime(remote))
+        try:
+            return jsonify(remote_uptime(remote))
+        except ConnectionError:
+            return _unreachable("remote uptime")
 
     @app.route("/api/remote/<int:remote_id>/check-updates")
     @login_required
@@ -6602,8 +6608,13 @@ def register_routes(app):
         """Force a fresh check on one host. The panel host runs it locally rather than over SSH to
         itself, which is what the daily sweep does too."""
         remote = get_remote(remote_id)
-        result = (so.os_update_available(refresh=True) if remote.is_local
-                  else remote_os_check_updates(remote))
+        try:
+            result = (so.os_update_available(refresh=True) if remote.is_local
+                      else remote_os_check_updates(remote))
+        except ConnectionError:
+            # Same reasoning as the "ok" flag below — a host we could not ask is not a host that is
+            # up to date. The difference is that this one could not be asked at all.
+            return _unreachable("remote check-updates")
         # "ok" travels to the UI: a check that failed (apt locked by unattended-upgrades, host mid
         # reboot) returns an empty list, and without this the card would report "System is up to
         # date" for a host nobody managed to ask.
@@ -6814,7 +6825,10 @@ def register_routes(app):
     @permission_required(MANAGE_REMOTES)
     def api_remote_pro_status(remote_id):
         force = request.args.get("force") in ("1", "true", "yes")
-        return jsonify(_pro_status_cached(get_remote(remote_id), force=force))
+        try:
+            return jsonify(_pro_status_cached(get_remote(remote_id), force=force))
+        except ConnectionError:
+            return _unreachable("remote pro-status")
 
     @app.route("/api/remote/<int:remote_id>/pro-attach", methods=["POST"])
     @login_required
@@ -6863,6 +6877,8 @@ def register_routes(app):
         remote = get_remote(remote_id)
         try:
             return jsonify(remote_live_metrics(remote))
+        except ConnectionError:
+            return _unreachable("remote live metrics")
         except Exception:
             return jsonify({"error": _log_and_generic("request failed")}), 500
 
@@ -6876,6 +6892,8 @@ def register_routes(app):
         try:
             status = remote_check_tailscale(remote)
             return jsonify({"success": True, **status})
+        except ConnectionError:
+            return _unreachable("remote tailscale-check")
         except Exception:
             return jsonify({"success": False, "error": _log_and_generic("request failed")}), 500
 
@@ -7517,6 +7535,22 @@ def register_routes(app):
         py/stack-trace-exposure). Admins read the detail in the panel logs."""
         app.logger.exception(context)
         return "Internal server error"
+
+    def _unreachable(context):
+        """A remote host that cannot be reached is a NORMAL condition for this panel, not a fault
+        in it — hosts go down, networks blip, a VPS reboots. Answer 200 with an error field so the
+        UI can say "host unreachable" instead of the browser logging a 500, and so 5xx alerting
+        stays a signal that the PANEL is broken.
+
+        ssh_manager raises ConnectionError for exactly this (auth failed / timed out / cannot
+        resolve), which is what makes it separable from a genuine bug. Anything that is not a
+        ConnectionError still returns 500, deliberately: those are ours.
+
+        api_remote_live_stats already did this and said why in a comment; six sibling endpoints
+        did not, and every one of them 500s on a host that is simply switched off."""
+        app.logger.warning("%s: host unreachable", context)
+        return jsonify({"success": False, "unreachable": True,
+                        "error": "Host unreachable"}), 200
 
     @app.route("/server/<int:server_id>/files")
     @login_required

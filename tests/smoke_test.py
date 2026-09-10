@@ -1857,6 +1857,26 @@ try:
             _ps._player_counts.clear(); _ps._player_counts.update(_saved_pc)
             db.session.delete(_mon); db.session.commit()
 
+    # ── An unreachable host is a normal condition, not a panel fault ──────────────────────────────
+    # The fixture hosts point at 127.0.0.1:22 with nothing listening, so every endpoint below has to
+    # reach a host it cannot open a connection to — exactly what happens when a real VPS is powered
+    # off, rebooting, or behind a broken link.
+    #
+    # Six of these used to answer 500. That is wrong twice over: the browser console fills with
+    # errors on a page nobody broke, and any 5xx alerting on the panel fires for someone else's
+    # downtime. api_remote_live_stats already answered 200-with-an-error-field and said why in a
+    # comment; its siblings just never followed. ssh_manager raises ConnectionError specifically for
+    # unreachable, which is what lets these stay separable from a genuine bug — anything that is NOT
+    # a ConnectionError still returns 500 on purpose.
+    with app.app_context():
+        _ur_id = RemoteServer.query.filter_by(name="smoke-host").first().id
+    _urc = client_as(admin_id)
+    for _ep in ("live", "live-stats", "pro-status", "uptime", "firewall",
+                "check-updates", "tailscale-check", "specs", "ssh-status"):
+        _r = _urc.get("/api/remote/%d/%s" % (_ur_id, _ep))
+        check("unreachable host: /api/remote/<id>/%s does not 5xx" % _ep,
+              _r.status_code < 500, "%s -> %d" % (_ep, _r.status_code))
+
     # ── Auto-block reconcile: attempts-threshold selection + whitelist exemption ───────────────────
     # Drive _autoblock_reconcile against a stubbed offender list / UFW so no SSH or real firewall is
     # touched, proving it blocks by 7-day attempt count (not rank), skips whitelisted IPs, and
