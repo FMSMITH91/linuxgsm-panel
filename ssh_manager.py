@@ -589,32 +589,6 @@ def run_command(server, command, timeout=30, sudo=None):
         raise ConnectionError(f"Command failed: {e}")
 
 
-def run_interactive(server, command, timeout=60, sudo=None):
-    """Run a command and get output as it streams.
-    For local servers, falls back to regular run_command."""
-    if is_local_server(server):
-        return run_command(server, command, timeout=timeout, sudo=sudo)
-
-    client = get_connection(server)
-    use_sudo = sudo if sudo is not None else server.sudo_enabled
-
-    if use_sudo and server.linuxgsm_user:
-        full_cmd = f"sudo -u {server.linuxgsm_user} bash -c {_quote(command)}"
-    elif use_sudo:
-        full_cmd = f"sudo bash -c {_quote(command)}"
-    else:
-        full_cmd = command
-
-    try:
-        stdin, stdout, stderr = client.exec_command(full_cmd, timeout=timeout)
-        output = []
-        for line in iter(stdout.readline, ""):
-            output.append(line.rstrip())
-        exit_code = stdout.channel.recv_exit_status()
-        err = stderr.read().decode("utf-8", errors="replace")
-        return "\n".join(output), err.strip(), exit_code
-    except Exception as e:
-        raise ConnectionError(f"Command failed: {e}")
 
 
 def _quote(s):
@@ -1093,20 +1067,6 @@ def set_daily_restart(server, user, selfname=None, game_type=None, port=None, en
     return _rewrite_crontab(server, user, grep_args, [], extra_pre=f"rm -f {flag}; ")
 
 
-def get_autostart(server, user, selfname=None):
-    """Return True if autostart is on — i.e. the LinuxGSM `monitor` cron exists for the game
-    user. monitor (not a @reboot line) is what keeps the server in its intended state across
-    crashes and reboots."""
-    selfname = selfname or user
-    marker = f"/home/{user}/{selfname} monitor"
-    # Was `crontab -u U -l | grep -cF <marker>` — a fixed-string count done by grep, under root.
-    # Counting the lines here keeps the marker out of a root command line entirely.
-    out, _, _ = run_privileged(server, "crontab-list", [user], timeout=10, merge_stderr=False)
-    out = str(sum(1 for ln in (out or "").splitlines() if marker in ln))
-    try:
-        return int((out or "0").strip()) > 0
-    except ValueError:
-        return False
 
 
 # ── Generic per-server cron manager ──────────────────────────────────────────
@@ -2361,19 +2321,6 @@ def list_server_commands(server, user, selfname=None):
     return cmds
 
 
-def detect_game_port(server, user, selfname=None):
-    """Read a game server's ACTUAL port from LinuxGSM `details` (which reports the
-    configured port, e.g. "Server IP: 0.0.0.0:27015"). The panel's stored port must
-    match LinuxGSM's real port or status/firewall/connect are all wrong. Returns int
-    or None."""
-    out, _, _ = run_as_game_user(server, user, "details 2>&1", timeout=30, selfname=selfname)
-    text = terminal.strip_escapes(out or "")
-    for line in text.splitlines():
-        if re.search(r"(server|internet)\s+ip:", line, re.I):
-            m = re.search(r":(\d{2,5})\b", line)
-            if m:
-                return int(m.group(1))
-    return None
 
 
 # Port descriptions we DON'T open by default — only the ports players actually need
@@ -3235,12 +3182,6 @@ def port_in_use(server, port):
         return False
 
 
-def check_port_open(server, port):
-    """Check if a port is allowed through UFW on the remote."""
-    out, _, _ = run_privileged(server, "ufw-status", ["verbose"], timeout=10)
-    # The word-boundary match used to be a grep -E built from `port` and run as root. It is the same
-    # answer in Python, and the port no longer reaches a command line as pattern text.
-    return bool(re.search(r"\b%d\b" % int(port), out or ""))
 
 
 # ─── Remote OS Commands ───────────────────────────────────────
@@ -5274,15 +5215,6 @@ def gmod_current_mounts(server, gmod_user):
     return found
 
 
-def gmod_content_options(server):
-    """The content picker for the UI: every known game with its label, size hint, whether it's
-    already downloaded on the host's content user (mountable now), and its steamcmd app id. Used by
-    both the install form and the per-server content manager."""
-    cu = detect_content_user(server, tuple(GMOD_CONTENT_GAMES))
-    present = set((cu or {}).get("present", {}))
-    return [{"key": k, "label": GMOD_CONTENT_GAMES[k][0], "size": GMOD_CONTENT_SIZES.get(k, ""),
-             "present": k in present, "downloadable": GMOD_CONTENT_GAMES[k][1] is not None}
-            for k in GMOD_CONTENT_GAMES]
 
 
 # ── Listening-port scan, cached ──────────────────────────────────────────────────────────────
