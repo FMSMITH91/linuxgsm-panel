@@ -3876,6 +3876,7 @@ _VERB_SAMPLES = {
     "journal-cron": [],
     "tailscale-up-key": ["tskey-auth-abc123def", "yes", "10.0.0.0/24", "tag:server"],
     "tailscale-up-login": ["yes", "-"],
+    "os-update-run": [],
 }
 check("privileged: every verb has a sample (new verbs cannot skip the parity check)",
       set(_VERB_SAMPLES) == set(_priv.verbs()),
@@ -4543,6 +4544,97 @@ finally:
     sm.run_privileged, sm.remote_fail2ban_overview = _orig_rt_rp, _orig_rt_ov
 
 
+# ── the detached OS-update runner ─────────────────────────────────────────────────────────────
+# Was `setsid bash -c '<seven statements>' </dev/null >/dev/null 2>&1 &`. Exercised for real
+# against a sandboxed log and a FAKE apt-get, so the suite cannot upgrade the machine it runs on.
+#
+# Run in a SUBPROCESS, and that is not tidiness. do_os_update_run ends its grandchild with
+# os._exit(): if the fork ever goes missing, that _exit runs in the CALLER's process — which, in
+# process, means this suite terminates mid-run with status 0. No failures printed, no summary, a
+# green exit code. A mutation that removed the fork did exactly that and "passed". Out of process,
+# the same mutation shows up as missing output and a wrong elapsed time.
+_ho_done_marker = _helper.OS_UPDATE_DONE
+_osu = None
+try:
+    _osu = _tempfile.mkdtemp(prefix="panel-osupd-")
+except OSError as _e:
+    check("os update: detached runner exercised", True, "skipped: %s" % _e)
+if _osu:
+    _fake_apt = os.path.join(_osu, "fake-apt")
+    open(_fake_apt, "w").write("#!/bin/sh\necho \"fake apt: $*\"\n"
+                               "case \"$*\" in *full-upgrade*) exit 7 ;; esac\nexit 0\n")
+    os.chmod(_fake_apt, 0o755)
+    _oslog = os.path.join(_osu, "os-update.log")
+    _osprobe = (
+        "import importlib.util as u, importlib.machinery as m, time, sys;"
+        "s=u.spec_from_loader('p', m.SourceFileLoader('p', %r));"
+        "mod=u.module_from_spec(s); s.loader.exec_module(mod);"
+        "mod.OS_UPDATE_LOG=%r; mod.resolve=lambda p, f=%r: f;"
+        "t=time.time(); mod.do_os_update_run([], None);"
+        "sys.stderr.write('ELAPSED=%%.2f' %% (time.time()-t))"
+        % (_helper_path, _oslog, _fake_apt)
+    )
+    _osr = _sp.run([sys.executable, "-c", _osprobe], capture_output=True, text=True, timeout=90)
+    _osparts = _osr.stderr.rsplit("ELAPSED=", 1)
+    _oselapsed = float(_osparts[1]) if len(_osparts) == 2 else 99.0
+    check("os update: the call returns at once — the UI polls the log, it does not wait",
+          _oselapsed < 1.0, "%.2f (stderr=%r)" % (_oselapsed, _osr.stderr[-60:]))
+    check("os update: it reports that the job launched, and RETURNS to its caller",
+          _priv.OS_UPDATE_STARTED in _osr.stdout and len(_osparts) == 2,
+          "stdout=%r stderr=%r" % (_osr.stdout[-40:], _osr.stderr[-40:]))
+    _osdeadline = _time.time() + 15
+    _olog = ""
+    while _time.time() < _osdeadline:
+        try:
+            _olog = open(_oslog).read()
+            if _ho_done_marker in _olog:
+                break
+        except OSError:
+            pass
+        _time.sleep(0.2)
+    check("os update: the log opens with a dated header", _olog.startswith("=== OS update started"),
+          _olog[:60])
+    check("os update: apt update, full-upgrade and autoremove all ran",
+          "fake apt: update" in _olog and "full-upgrade" in _olog and "autoremove" in _olog, _olog)
+    check("os update: phased updates are included, so a re-check actually reaches zero",
+          "Always-Include-Phased-Updates=true" in _olog, _olog)
+    check("os update: a config file the operator edited is kept",
+          "--force-confold" in _olog and "--force-confdef" in _olog, _olog)
+    check("os update: the sentinel carries the REAL exit code, not a fixed one",
+          (_ho_done_marker + "7") in _olog, _olog[-80:])
+    check("os update: the writer and the reader agree on the sentinel",
+          _helper.OS_UPDATE_DONE == _priv.OS_UPDATE_DONE == sm._OS_UPDATE_DONE)
+
+    # A job that dies before writing its own sentinel must still write one. Without it the UI's
+    # popup polls forever, which looks exactly like "the update is taking a long time". Provoked
+    # by making apt unresolvable, so the run fails at its first step.
+    _osfail = os.path.join(_osu, "failed.log")
+    _osfprobe = (
+        "import importlib.util as u, importlib.machinery as m;"
+        "s=u.spec_from_loader('p', m.SourceFileLoader('p', %r));"
+        "mod=u.module_from_spec(s); s.loader.exec_module(mod);"
+        "mod.OS_UPDATE_LOG=%r;"
+        "mod.resolve=lambda p: (_ for _ in ()).throw(FileNotFoundError('apt-get'));"
+        "mod.do_os_update_run([], None)" % (_helper_path, _osfail)
+    )
+    _osfr = _sp.run([sys.executable, "-c", _osfprobe], capture_output=True, text=True, timeout=60)
+    check("os update: a job that cannot start still reports STARTED to its caller",
+          _priv.OS_UPDATE_STARTED in _osfr.stdout, repr(_osfr.stdout))
+    _osfdeadline = _time.time() + 10
+    _osftxt = ""
+    while _time.time() < _osfdeadline:
+        try:
+            _osftxt = open(_osfail).read()
+            if _ho_done_marker in _osftxt:
+                break
+        except OSError:
+            pass
+        _time.sleep(0.2)
+    check("os update: and it writes a FAILURE sentinel, so the popup stops waiting",
+          (_ho_done_marker + "-1") in _osftxt, repr(_osftxt))
+    _shutil.rmtree(_osu, ignore_errors=True)
+
+
 # ── cron run times, read from cron's own journal ──────────────────────────────────────────────
 # Was `journalctl _COMM=cron … | grep -F '(<user>) CMD ' | tail -n 800` — the user name went into a
 # grep pattern running as root. The verb reads the window; the filtering is Python. The per-user
@@ -4748,7 +4840,7 @@ import ast as _ast
 
 _ESCALATION_FILES = ["app.py", "auth.py", "ssh_manager.py", "system_ops.py", "notifications.py",
                      "backup.py", "db_maintenance.py", "tailscale_integration.py", "manage.py"]
-_CEILING = {"sudo=True": 5, "_sudo_sh": 1}   # measured at the time of writing; lower only
+_CEILING = {"sudo=True": 4, "_sudo_sh": 1}   # measured at the time of writing; lower only
 
 def _is_dispatch(call):
     """True when this escalation is NOT a call site composing a shell string.
