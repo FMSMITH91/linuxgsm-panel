@@ -1049,10 +1049,14 @@ def restart_panel(delay_seconds=2):
         # A per-user unit needs no root at all, so there is nothing to escalate and nothing to
         # scope — this branch keeps building its own argv.
         try:
-            subprocess.Popen(["systemd-run", "--user", "--on-active=%s" % delay, "--collect",
-                              "systemctl", "--user", "restart", "linuxgsm-panel.service"],
-                             stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
-                             env=os.environ.copy())
+            # B603/B607: the argv is a literal and `delay` is int-clamped to 1..300 before it gets
+            # here. B607 (partial path) is deliberate — systemd-run is found on PATH, exactly as
+            # this branch has always done; it runs as the panel user with no escalation at all.
+            subprocess.Popen(  # nosec B603 B607  # nosemgrep
+                ["systemd-run", "--user", "--on-active=%s" % delay, "--collect",
+                 "systemctl", "--user", "restart", "linuxgsm-panel.service"],
+                stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                env=os.environ.copy())
             return True, "Panel restart scheduled."
         except Exception:
             _log.exception("panel restart failed to dispatch")
