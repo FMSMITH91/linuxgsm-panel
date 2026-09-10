@@ -534,6 +534,7 @@ VERBS = {
     "write-file": ([v_choice(*sorted(WRITE_TARGETS))], lambda a: [], None),
 
     # ── the GMod shared-content box ──
+    "content-scan": ([Rest(v_ident)], lambda a: [], None),
     "content-dir-create": ([v_username], lambda a: [], None),
     "content-game-present": ([v_username, v_ident], lambda a: [], None),
     "content-script-present": ([v_username, v_ident], lambda a: [], None),
@@ -1001,6 +1002,36 @@ def do_f2b_log_lines(args, content):
     return 0
 
 
+def do_content_scan(args, content):
+    """Print `HIT|user|game` for every /home user whose serverfiles already hold a wanted game.
+
+    Was a shell loop: `for u in $(ls -1 /home); do d="/home/$u/serverfiles"; [ -d "$d" ] || continue;
+    for g in <games>; do [ -d "$d/$g" ] && echo "HIT|$u|$g"; done; done`. Read-only, but it ran as
+    root and built its inner list by interpolating the game keys.
+
+    A user name that would not survive v_username is skipped rather than reported: the caller acts
+    on what comes back, and a directory in /home whose name is not a name we would ever pass to a
+    verb is not a candidate."""
+    try:
+        entries = sorted(os.listdir(HOME_ROOT))
+    except OSError:
+        return 0                      # no /home to scan; no hits, not an error
+    hits = []
+    for entry in entries:
+        try:
+            user = v_username(entry)
+        except ValueError:
+            continue
+        base = home_of(user) + "/" + CONTENT_SUBDIR
+        if not os.path.isdir(base):
+            continue
+        for game in args:
+            if os.path.isdir(os.path.join(base, game)):
+                hits.append("HIT|%s|%s" % (user, game))
+    sys.stdout.write("\n".join(hits))
+    return 0
+
+
 def do_content_dir_create(args, content):
     """Create <content user>/serverfiles, owned by that user and PRIVATE to it.
 
@@ -1170,6 +1201,7 @@ ACTIONS = {
     "sshd-discard-backup": do_sshd_discard_backup,
     "f2b-set-sshd-ports": do_f2b_sshd_ports,
     "reboot-delayed": do_reboot_delayed,
+    "content-scan": do_content_scan,
     "content-dir-create": do_content_dir_create,
     "content-game-present": do_content_game_present,
     "content-script-present": do_content_script_present,

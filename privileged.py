@@ -432,6 +432,7 @@ _ARGV = {
     "write-file": ([_choice(*sorted(WRITE_TARGETS))], lambda a: [], None),
 
     # ── the GMod shared-content box ──
+    "content-scan": ([Rest(_ident)], lambda a: [], None),
     "content-dir-create": ([_username], lambda a: [], None),
     "content-game-present": ([_username, _ident], lambda a: [], None),
     "content-script-present": ([_username, _ident], lambda a: [], None),
@@ -601,6 +602,11 @@ _REMOTE_ACTIONS = {
         "{ grep -q %s %s || echo %s >> %s ; }"
         % (SWAPFILE, SWAPFILE, SWAPFILE, SWAPFILE, shlex.quote(SWAPFILE), FSTAB,
            shlex.quote(SWAP_FSTAB_LINE), FSTAB)),
+    "content-scan": lambda a: (
+        'for u in $(ls -1 %s 2>/dev/null); do '
+        '  d="%s/$u/%s"; [ -d "$d" ] || continue; '
+        '  for g in %s; do [ -d "$d/$g" ] && echo "HIT|$u|$g"; done; '
+        'done' % (HOME_ROOT, HOME_ROOT, CONTENT_SUBDIR, " ".join(a))),
     "content-dir-create": lambda a: "install -d -o %s -g %s -m 700 %s"
                           % (a[0], a[0], shlex.quote(content_path(a[0], CONTENT_SUBDIR))),
     "content-game-present": lambda a: "test -d %s/. && echo Y || echo N"
