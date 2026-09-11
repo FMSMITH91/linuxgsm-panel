@@ -969,6 +969,28 @@ def _report_dc_pending_update():
                                       "it rolled back). Still on %s." % _panel_ver_label())
 
 
+# ── Power actions: is this game actually running? ──────────────
+
+
+def _live_run_state(gs, remote):
+    """Is this game genuinely running right now? True/False, or None when that can't be read.
+
+    Deliberately the SAME predicate /api/server/<id>/stats uses to set gs.status — a listening game
+    port OR a live process owned by the game user — so a refusal built on this always agrees with
+    what the dashboard and the chat bots' /servers are showing. Reads through server_live_metrics'
+    2s cache, which an open dashboard is usually filling anyway. An SSH blip returns the all-zero
+    default dict; ram_total is 0 only in that case (`free -b` never fails on a reachable host), so
+    it is the sentinel for "don't claim to know"."""
+    try:
+        m = server_live_metrics(remote, gs.short_name, gs.port)
+    except Exception:
+        _log.debug("live run-state check failed", exc_info=True)
+        return None
+    if not m or not m.get("ram_total"):
+        return None
+    return bool(m.get("port_open") or m.get("game_procs"))
+
+
 # ── Proactive monitor → admin notifications ────────────────────
 
 
@@ -3364,6 +3386,23 @@ def register_routes(app):
         `origin` names a non-user caller for the audit log — currently the chat bots, which have
         no panel account to attribute to. Without it their actions were recorded as "system", so
         the log showed a server restarting with nothing to say a chat message caused it."""
+        # Don't fire a power action that is already a no-op. LinuxGSM answers "Server already
+        # started" and exits, but start/stop run in the background here and their output is
+        # discarded, so the panel reported "'start' issued — status updates in a few seconds" as a
+        # success for a server it had listed as online moments earlier. It had the answer and
+        # wasn't using it.
+        #
+        # Two-step on purpose: the cached status column decides whether to LOOK (so the normal case
+        # costs nothing), and the host decides whether to REFUSE. A stale "online" must never be
+        # what stops someone starting a server that has actually died. 'restart' is never guarded —
+        # it is correct from either state, and so is the way out if this ever refuses wrongly.
+        # The message deliberately doesn't repeat the server's name: the two callers that show it
+        # (both chat bots) already prefix every reply with it, and the background branch below
+        # doesn't name it either.
+        if action == "start" and gs.status == "online" and _live_run_state(gs, remote):
+            return False, "already running. Use 'restart' if you want it bounced."
+        if action == "stop" and gs.status == "offline" and _live_run_state(gs, remote) is False:
+            return False, "already stopped."
         if action in ("stop", "restart"):
             _mark_expected_offline(gs.id)   # so the monitor doesn't alert on an intentional stop
         if action in LONG_ACTIONS:
