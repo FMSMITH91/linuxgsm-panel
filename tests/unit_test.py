@@ -5457,6 +5457,40 @@ try:
 finally:
     _sh.rmtree(_ck_tmp, ignore_errors=True)
 
+# ── The Codacy accepted-errors list is a reviewable list, not a dumping ground ────────────────
+# .github/codacy-accepted-errors.json is what stops the "Error-level Codacy issues on main" gate
+# failing — so an entry added without a reason is a silent permanent suppression, which is the
+# state that gate exists to end. Every entry needs all four fields and a real reason.
+_acc_path = os.path.join(_root, ".github", "codacy-accepted-errors.json")
+check("codacy: the accepted-errors list exists", os.path.isfile(_acc_path))
+if os.path.isfile(_acc_path):
+    _acc = json.load(open(_acc_path, encoding="utf-8"))
+    _entries = _acc.get("accepted", [])
+    _bad = []
+    for _e in _entries:
+        _missing = [_k for _k in ("filePath", "patternId", "lineText", "reason", "acceptedOn")
+                    if not (_e.get(_k) or "").strip()]
+        if _missing:
+            _bad.append("%s: missing %s" % (_e.get("filePath", "?"), ",".join(_missing)))
+        elif len((_e.get("reason") or "").split()) < 12:
+            # A one-liner like "false positive" is not a review. Make the bar explicit.
+            _bad.append("%s: reason is too short to be a review" % _e.get("filePath"))
+    check("codacy: every accepted Error carries a full key and a real reason", not _bad,
+          "; ".join(_bad))
+    check("codacy: the accepted list is short enough to actually read",
+          len(_entries) <= 5, "%d entries — it is meant to shrink" % len(_entries))
+    # Keyed on the source LINE, never the line number: a number moves with every edit above it,
+    # and one (file, rule) pair covers every hit of that rule in the file — which is how the first
+    # draft of this list silently accepted a second, unrelated finding in system_ops.py.
+    check("codacy: entries are keyed on the source line, not a line number",
+          all("lineNumber" not in _e for _e in _entries) and all("lineText" in _e for _e in _entries))
+    _gate = os.path.join(_root, ".github", "scripts", "codacy_open_errors.py")
+    check("codacy: the gate script is present and referenced by its workflow",
+          os.path.isfile(_gate)
+          and "codacy_open_errors.py" in open(
+              os.path.join(_root, ".github", "workflows", "codacy-alerts.yml"),
+              encoding="utf-8").read())
+
 # ── The docs state numbers that the code owns — pin them ──────────────────────────────────────
 # Every one of these was wrong at the time of writing, and none of them could be. SECURITY.md said
 # "43 verbs" against 86; the CHANGELOG said 77 in the same release; README advertised 18 alert
