@@ -282,7 +282,7 @@ TG_COMMANDS = [
     ("start", "Start a server: /start <name>"),
     ("stop", "Stop a server: /stop <name>"),
     ("restart", "Restart a server: /restart <name>"),
-    ("update", "Update the panel to the latest version"),
+    ("update", "Update a server: /update <name> — or the panel, with no name"),
     ("help", "Show the command list"),
 ]
 

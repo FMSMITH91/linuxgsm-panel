@@ -391,6 +391,7 @@ def _monitor_pass():
         for rid, data in ex.map(_probe_host, remotes):
             probes[rid] = data
     _th = notifications.get_thresholds()   # user-configurable disk_pct / load_pct; once per sweep
+    status_changed = False
     for remote in remotes:
         probe = probes.get(remote.id) or {"reachable": False}
         reachable = probe["reachable"]
@@ -460,6 +461,24 @@ def _monitor_pass():
                 notifications.notify("server_up", "Server back online",
                                      "%s on %s is back online." % (gs.name, remote.display_name))
             _monitor_state["servers"][gs.id] = up
+            # Persist what this pass just measured. Nothing else writes gs.status for a
+            # running/stopped transition except the three browser-polled endpoints (/api/servers,
+            # /api/server/<id>, /api/server/<id>/stats), so with nobody on the dashboard the column
+            # froze at whatever the last poll saw — while this loop recomputed the truth every 60s
+            # and threw it away. Two things read that column and were wrong for as long as it was
+            # stale: the chat bots' /servers and /status, and _query_server_slots, which short-
+            # circuits a server it believes offline to 0 players WITHOUT querying it — so a server
+            # that came back up while nobody was looking reported "offline (0/24)" indefinitely.
+            st = "online" if up else "offline"
+            if gs.status != st:
+                gs.status = st
+                status_changed = True
+    if status_changed:
+        try:
+            db.session.commit()
+        except Exception:
+            db.session.rollback()
+            _log.debug("monitor: persisting server status failed", exc_info=True)
     _forget_deleted_rows({r.id for r in remotes},
                          {row[0] for row in db.session.query(GameServer.id).all()})
 

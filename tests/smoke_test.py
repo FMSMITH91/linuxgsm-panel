@@ -1642,6 +1642,46 @@ try:
             check("monitor: a panel-issued stop suppresses server_down", "server_down" not in _rec)
             _ps._expected_offline.pop(_mon_id, None)
 
+            # ── The sweep must WRITE DOWN what it measured ────────────────────────────────────
+            # It computed `up` from a live port scan every 60s and kept it only in an in-memory
+            # dict. gs.status — what the chat bots' /servers and /status render, and what
+            # _query_server_slots uses to decide whether a server is worth querying at all — was
+            # written only by the three browser-polled endpoints. With nobody on the dashboard the
+            # column froze, so a server that died (or came back) while no one was looking kept
+            # reporting its last browser-observed state indefinitely.
+            def _status_after_pass(start_status):
+                """gs.status as it survives a sweep — COMMITTED, not merely assigned.
+
+                The monitor shares this session, so a plain refresh would autoflush its pending
+                write and read it straight back: the check would pass with the commit deleted. The
+                rollback discards anything the sweep left uncommitted, so only a real commit shows
+                up here."""
+                _mon.status = start_status
+                db.session.commit()
+                _monmod._monitor_pass()
+                db.session.rollback()
+                db.session.refresh(_mon)
+                return _mon.status
+
+            _reset_mon()
+            _monmod._remote_listening_ports = lambda r: set()
+            _st_down = _status_after_pass("online")
+            check("monitor: a sweep persists a server that has gone down",
+                  _st_down == "offline", "status=%r" % _st_down)
+            # Start from "offline" so this can only pass on an actual write, not on the value the
+            # previous case left behind.
+            _monmod._remote_listening_ports = lambda r: {27100}
+            _st_up = _status_after_pass("offline")
+            check("monitor: ...and persists it coming back up", _st_up == "online",
+                  "status=%r" % _st_up)
+            # An in-progress install must never be flipped to online/offline by a port scan — it
+            # isn't listening yet, and that would erase the progress row.
+            _monmod._remote_listening_ports = lambda r: set()
+            _st_inst = _status_after_pass("installing")
+            check("monitor: an installing server's status is left alone",
+                  _st_inst == "installing", "status=%r" % _st_inst)
+            _mon.status = "online"; db.session.commit()
+
             # A reachable host that stops responding -> remote_unreachable.
             _reset_mon()
             _ps._monitor_state["remotes"].clear()
@@ -1652,9 +1692,23 @@ try:
                   "remote_unreachable" in _rec)
             _monmod._host_reachable = lambda r: True
 
+            # gs.status is an INPUT to the poller: _query_server_slots answers a server it believes
+            # offline with a confident 0 players and never queries it. The monitor now keeps that
+            # column honest instead of leaving it to whatever a browser last polled, so these cases
+            # have to state which state they mean rather than inherit the last pass's measurement.
+            def _mon_running():
+                _mon.status = "online"
+                db.session.commit()
+
+            # ...and _rec only records the alert KEY, so scope the stub to this server: a second
+            # server going empty or full would otherwise satisfy (or break) a check about this one.
+            def _slots_for_mon(mon):
+                """`mon` is (count, max, name) for THIS server; every other reports a quiet 1/16."""
+                return lambda gs: mon if gs.id == _mon_id else (1, 16, None)
+
             # Poller: notify_when_empty is a one-shot on a CONFIRMED 0 that then disarms itself.
-            _mon.notify_when_empty = True; db.session.commit()
-            _monmod._server_slots = lambda gs: (0, 16, None)
+            _mon.notify_when_empty = True; _mon_running()
+            _monmod._server_slots = _slots_for_mon((0, 16, None))
             _rec.clear(); _monmod._refresh_player_counts(app)
             db.session.refresh(_mon)
             check("poller: notify_when_empty fires server_empty at a confirmed 0", "server_empty" in _rec)
@@ -1662,10 +1716,12 @@ try:
                   _mon.notify_when_empty is False)
 
             # ...but it must NEVER fire on an unknown count (a running server the panel can't read).
-            _mon.notify_when_empty = True; db.session.commit()
+            _mon.notify_when_empty = True; _mon_running()
 
             def _unreadable(gs):
-                raise RuntimeError("count unavailable")
+                if gs.id == _mon_id:
+                    raise RuntimeError("count unavailable")
+                return (1, 16, None)
             _monmod._server_slots = _unreadable
             _rec.clear(); _monmod._refresh_player_counts(app)
             db.session.refresh(_mon)
@@ -1675,7 +1731,8 @@ try:
 
             # server_full fires when a server reaches its cap.
             _ps._server_full_alerted.pop(_mon_id, None)
-            _monmod._server_slots = lambda gs: (16, 16, None)
+            _mon_running()
+            _monmod._server_slots = _slots_for_mon((16, 16, None))
             _rec.clear(); _monmod._refresh_player_counts(app)
             check("poller: server_full fires when a server hits its cap", "server_full" in _rec)
 
@@ -1808,8 +1865,8 @@ try:
             _rec.clear(); _monmod._monitor_pass()
             check("mute: a muted tag suppresses server_up", "server_up" not in _rec, str(_rec))
 
-            _mon.notify_when_empty = True; db.session.commit()
-            _monmod._server_slots = lambda gs: (0, 16, None)
+            _mon.notify_when_empty = True; _mon_running()
+            _monmod._server_slots = _slots_for_mon((0, 16, None))
             _rec.clear(); _monmod._refresh_player_counts(app)
             db.session.refresh(_mon)
             check("mute: a muted tag suppresses server_empty", "server_empty" not in _rec, str(_rec))
@@ -1818,7 +1875,8 @@ try:
             check("mute: notify_when_empty stays armed while muted", _mon.notify_when_empty is True)
 
             _ps._server_full_alerted.pop(_mon_id, None)
-            _monmod._server_slots = lambda gs: (16, 16, None)
+            _mon_running()
+            _monmod._server_slots = _slots_for_mon((16, 16, None))
             _rec.clear(); _monmod._refresh_player_counts(app)
             check("mute: a muted tag suppresses server_full", "server_full" not in _rec, str(_rec))
             # ...but it IS marked alerted, so unmuting later doesn't fire retroactively about a
@@ -1827,8 +1885,8 @@ try:
                   _ps._server_full_alerted.get(_mon_id) is True)
 
             _ps._server_peak_notified.pop(_mon_id, None)
-            _mon.peak_players = 1; db.session.commit()
-            _monmod._server_slots = lambda gs: (9, 16, None)
+            _mon.peak_players = 1; _mon_running()
+            _monmod._server_slots = _slots_for_mon((9, 16, None))
             _rec.clear(); _monmod._refresh_player_counts(app)
             db.session.refresh(_mon)
             check("mute: a muted tag suppresses server_peak", "server_peak" not in _rec, str(_rec))
@@ -2530,6 +2588,26 @@ try:
         _tg_acted.clear(); _tg_sent.clear()
         _appmod._handle_telegram_command(app, "1:tok", "1", "/stop smoke-cs")
         check("telegram: /stop <name> still works", _tg_acted == [("stop", "smoke-cs")])
+
+        # `/update <name>` parsed the argument and then threw it away, so asking to update ONE game
+        # server updated the panel and restarted it instead. An argument names a server here, the
+        # way it does for every other command that takes one.
+        _tg_upd = []
+        _tg_saved_upd = _appmod._telegram_do_update
+        try:
+            _appmod._telegram_do_update = lambda a, tok, chat: _tg_upd.append("panel")
+            _tg_acted.clear(); _tg_sent.clear()
+            _appmod._handle_telegram_command(app, "1:tok", "1", "/update smoke-cs")
+            check("telegram: /update <name> updates THAT SERVER, not the panel",
+                  _tg_acted == [("update", "smoke-cs")] and not _tg_upd,
+                  "acted=%s panel=%s" % (_tg_acted, _tg_upd))
+            _tg_acted.clear(); _tg_upd.clear()
+            _appmod._handle_telegram_command(app, "1:tok", "1", "/update")
+            check("telegram: a bare /update still updates the panel",
+                  _tg_upd == ["panel"] and not _tg_acted,
+                  "acted=%s panel=%s" % (_tg_acted, _tg_upd))
+        finally:
+            _appmod._telegram_do_update = _tg_saved_upd
     finally:
         _appmod._tg_reply, _appmod._tg_server_action = _tg_saved
     # Every command the bot advertises must be one it handles — that menu is what made the /start
@@ -2543,6 +2621,54 @@ try:
                   if ('"%s"' % _cmd) not in _tg_handler]
     check("telegram: every command in the '/' menu is handled by the router",
           not _unhandled, "unhandled: %s" % _unhandled)
+
+    # ── The Discord router, which had no coverage at all ──────────────────────────────────────
+    # The two bots are twins by design and drift is how the /start bug survived: one router grew a
+    # branch the other didn't. Both are asserted from here on, and the parity gate below is the
+    # part that catches the next one.
+    _dc_sent, _dc_acted, _dc_upd = [], [], []
+    _dc_saved = (_appmod._dc_reply, _appmod._dc_server_action, _appmod._discord_do_update)
+    try:
+        _appmod._dc_reply = lambda tok, chan, text: _dc_sent.append(text)
+        _appmod._dc_server_action = lambda a, tok, chan, action, arg, sender=None: _dc_acted.append(
+            (action, arg))
+        _appmod._discord_do_update = lambda a, tok, chan: _dc_upd.append("panel")
+        _appmod._handle_discord_command(app, "tok", "1", "!start smoke-cs")
+        check("discord: !start <name> runs the start action", _dc_acted == [("start", "smoke-cs")],
+              "acted=%s" % _dc_acted)
+        _dc_acted.clear(); _dc_sent.clear()
+        _appmod._handle_discord_command(app, "tok", "1", "!update smoke-cs")
+        check("discord: !update <name> updates THAT SERVER, not the panel",
+              _dc_acted == [("update", "smoke-cs")] and not _dc_upd,
+              "acted=%s panel=%s" % (_dc_acted, _dc_upd))
+        _dc_acted.clear(); _dc_upd.clear()
+        _appmod._handle_discord_command(app, "tok", "1", "!update")
+        check("discord: a bare !update still updates the panel",
+              _dc_upd == ["panel"] and not _dc_acted, "acted=%s panel=%s" % (_dc_acted, _dc_upd))
+        _dc_sent.clear()
+        _appmod._handle_discord_command(app, "tok", "1", "!help")
+        check("discord: !help answers with the command list",
+              _dc_sent and "Commands" in _dc_sent[0], "sent=%s" % _dc_sent[:1])
+        _dc_sent.clear()
+        _appmod._handle_discord_command(app, "tok", "1", "!nonsense")
+        check("discord: an unknown command is refused, not silently dropped",
+              _dc_sent and "Unknown command" in _dc_sent[0], "sent=%s" % _dc_sent[:1])
+    finally:
+        (_appmod._dc_reply, _appmod._dc_server_action,
+         _appmod._discord_do_update) = _dc_saved
+
+    # Both routers must handle the same verbs. Neither is the source of truth, so compare the
+    # quoted command words in each router body — a branch added to one and not the other is
+    # exactly the shape of the /start and /update bugs.
+    _dc_handler = _tg_src[_tg_src.index("def _handle_discord_command"):]
+    _dc_handler = _dc_handler[:_dc_handler.index("\ndef ", 10)]
+    _verbs = set(_nre.findall(r'"([a-z][a-z-]{1,15})"', _tg_handler))
+    _dc_verbs = set(_nre.findall(r'"([a-z][a-z-]{1,15})"', _dc_handler))
+    _only_tg = sorted(_verbs - _dc_verbs - {"help"})      # a bare /start is Telegram-only, by design
+    _only_dc = sorted(_dc_verbs - _verbs)
+    check("bots: the Telegram and Discord routers handle the same commands",
+          not _only_tg and not _only_dc,
+          "telegram-only: %s  discord-only: %s" % (_only_tg, _only_dc))
 
     # ── A power action the panel already knows is a no-op must say so, not report success ────
     # /servers listed a server as online and the very next /start answered
