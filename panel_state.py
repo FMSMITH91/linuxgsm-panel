@@ -30,6 +30,11 @@ __all__ = [
     "_monitor_state",
     "_expected_offline",
     "_cron_restart_pending",
+    "_install_jobs",
+    "_install_lock",
+    "_full_backup_lock",
+    "_game_backup_status",
+    "_os_update_state",
 ]
 
 # Hosts the operator asked to "reboot when empty" — reboot once every game server on them is idle.
@@ -74,3 +79,26 @@ _expected_offline = {}          # server_id -> ts the panel last stopped/restart
 # nothing can be restarted twice.
 _cron_restart_pending = {}
 
+# ── Background-job state ─────────────────────────────────────────────────────────────────────
+# These lived at module level in app.py, which was fine while the only readers were app.py's own
+# routes and the workers nested inside register_routes(). Extracting those workers into their own
+# module makes app.py the wrong home: a jobs module importing app.py — which imports the jobs
+# module — is a cycle. They are process-wide shared state, which is exactly what this module is
+# for, so they move here alongside the monitor's own maps and follow the same contract: MUTATED IN
+# PLACE, never rebound.
+
+# Live game-server install progress, keyed by GameServer id (same process, so a plain dict + lock
+# is fine). Written by the install job runner, read by /api/server/<id>/install-status.
+_install_jobs = {}
+_install_lock = threading.Lock()
+
+# Only one game-file backup at a time (full OR single-server) — they are slow and space-heavy.
+_full_backup_lock = threading.Lock()
+# Last on-demand per-server backup outcome, keyed by server id (transient, in-memory).
+_game_backup_status = {}
+
+# The daily OS-update sweep's ARMING state: when it last ran, and the per-host counts it alerted
+# on. Distinct from _os_update_seen above, which is what the login banner and the OS Updates card
+# read — this one exists only to decide whether to send a chat alert, and must keep its exact
+# shape (see the transition tests in smoke_test.py).
+_os_update_state = {"last_run": 0.0, "hosts": {}}   # remote.id -> (count, security_count)

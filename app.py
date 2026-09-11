@@ -114,8 +114,9 @@ from monitoring import (
     _record_metric_samples, _refresh_player_counts, _whitelisted,
 )
 from panel_state import (
-    _cron_restart_pending, _expected_offline, _last_sample_prune, _monitor_state, _os_update_seen,
-    _player_counts, _reboot_when_empty, _rwe_lock,
+    _cron_restart_pending, _expected_offline, _full_backup_lock, _game_backup_status,
+    _install_jobs, _install_lock, _last_sample_prune, _monitor_state, _os_update_seen,
+    _os_update_state, _player_counts, _reboot_when_empty, _rwe_lock,
 )
 from models import (
     AuditLog, GameServer, Group, RemoteServer, SetupState, User, db, init_db,
@@ -266,10 +267,6 @@ except Exception:
 _bootstrap_jobs = {}
 _bootstrap_lock = threading.Lock()
 
-# Live game-server install progress, keyed by GameServer id (same process, so a
-# plain dict + lock is fine). Read by /api/server/<id>/install-status.
-_install_jobs = {}
-_install_lock = threading.Lock()
 # Serializes the install "slot" allocation (pick a free port → reject a duplicate name → create the
 # row). resolve_free_port yields on an SSH scan, so without this two concurrent installs on the same
 # remote could both pick the same port or both pass the duplicate-name check before either commits.
@@ -278,11 +275,6 @@ _install_alloc_lock = threading.Lock()
 # Largest file the browser upload accepts (enforced in the upload route AND as the app-wide
 # MAX_CONTENT_LENGTH, so an oversized body is rejected before it's read).
 _MAX_UPLOAD_BYTES = 50 * 1024 * 1024
-
-# Only one game-file backup at a time (full OR single-server) — they're slow and space-heavy.
-_full_backup_lock = threading.Lock()
-# Last on-demand per-server backup outcome, keyed by server id (transient, in-memory).
-_game_backup_status = {}
 
 # Short-lived cache of each remote's listening ports (the dashboard status poll). Keyed by
 # remote id -> (expiry_epoch, set_of_ports). Collapses the thundering herd: a servers_changed
@@ -345,7 +337,6 @@ _pubip_resolve_attempts = {}   # remote_id -> last background public-IP resolve 
 _gmod_content_apply_state = {}  # server_id -> {"status": running|done|error, "msg", "ts"}
 _console_viewers = {}          # server_id -> set of socket session ids
 _viewers_lock = threading.Lock()
-_os_update_state = {"last_run": 0.0, "hosts": {}}   # remote.id -> (count, security_count)
 _OS_UPDATE_EVERY = 24 * 3600
 _PRO_MAX_AGE = 86400   # only auto-run the slow `pro status` client if the stored value is >1 day old
 _CUSTOM_CMD_ENGINES = {"valve": "Valve / Source & GoldSrc",
