@@ -279,10 +279,14 @@ TG_COMMANDS = [
     ("servers", "List servers with player counts"),
     ("hosts", "List hosts and their status"),
     ("players", "Who's on a server: /players <name>"),
+    ("console", "Last 20 console lines: /console <name>"),
+    ("connect", "The address to give players: /connect <name>"),
+    ("say", "Announce in-game: /say <name> <message>"),
     ("start", "Start a server: /start <name>"),
     ("stop", "Stop a server: /stop <name>"),
     ("restart", "Restart a server: /restart <name>"),
-    ("update", "Update a server: /update <name> — or the panel, with no name"),
+    ("backup", "Back a server up: /backup <name>"),
+    ("update", "Update the panel — or one server: /update <name>"),
     ("help", "Show the command list"),
 ]
 

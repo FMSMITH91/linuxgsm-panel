@@ -2608,6 +2608,50 @@ try:
                   "acted=%s panel=%s" % (_tg_acted, _tg_upd))
         finally:
             _appmod._telegram_do_update = _tg_saved_upd
+
+        # ── The four commands added alongside the /update fix ────────────────────────────────
+        # /console is the missing half of the power commands: start/stop/restart run in the
+        # background and discard their output, so a failed start could be reported but never
+        # explained without opening the panel.
+        _tg_cap, _tg_mod = [], []
+        _tg_saved_new = (_appmod.capture_console, _appmod.moderate)
+        try:
+            _appmod.capture_console = lambda r, u, selfname=None, lines=180: (
+                _tg_cap.append(lines), ("\x1b[32mAlready up to date\x1b[0m\nServer started\n", "", 0))[1]
+            _appmod.moderate = lambda r, u, gt, action, target="", message="", selfname=None, \
+                steamid="", num="": (_tg_mod.append((action, message)), (True, "announced"))[1]
+
+            _tg_sent.clear()
+            _appmod._handle_telegram_command(app, "1:tok", "1", "/console smoke-cs")
+            check("telegram: /console tails the game console",
+                  _tg_sent and "Server started" in _tg_sent[0], "sent=%s" % _tg_sent[:1])
+            check("telegram: ...with the ANSI escapes stripped",
+                  _tg_sent and "\x1b[" not in _tg_sent[0], "sent=%r" % (_tg_sent[:1],))
+            _tg_sent.clear()
+            _appmod._handle_telegram_command(app, "1:tok", "1", "/console no-such-server-xyz")
+            check("telegram: /console on an unknown server explains itself",
+                  _tg_sent and "No server" in _tg_sent[0], "sent=%s" % _tg_sent[:1])
+
+            _tg_sent.clear(); _tg_mod.clear()
+            _appmod._handle_telegram_command(app, "1:tok", "1", "/say csgoserver restarting in 5")
+            check("telegram: /say announces the whole message, not just the first word",
+                  _tg_mod == [("say", "restarting in 5")], "moderate=%s" % _tg_mod)
+            _tg_sent.clear(); _tg_mod.clear()
+            _appmod._handle_telegram_command(app, "1:tok", "1", "/say csgoserver")
+            check("telegram: /say with no message asks for one instead of announcing nothing",
+                  not _tg_mod and _tg_sent and "announce" in _tg_sent[0], "sent=%s" % _tg_sent[:1])
+
+            _tg_sent.clear()
+            _appmod._handle_telegram_command(app, "1:tok", "1", "/connect smoke-cs")
+            check("telegram: /connect gives the joinable address",
+                  _tg_sent and ":27015" in _tg_sent[0], "sent=%s" % _tg_sent[:1])
+
+            _tg_acted.clear()
+            _appmod._handle_telegram_command(app, "1:tok", "1", "/backup smoke-cs")
+            check("telegram: /backup runs the backup action", _tg_acted == [("backup", "smoke-cs")],
+                  "acted=%s" % _tg_acted)
+        finally:
+            _appmod.capture_console, _appmod.moderate = _tg_saved_new
     finally:
         _appmod._tg_reply, _appmod._tg_server_action = _tg_saved
     # Every command the bot advertises must be one it handles — that menu is what made the /start

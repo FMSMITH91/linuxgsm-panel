@@ -126,7 +126,7 @@ from models import (
 from ssh_manager import (
     _remote_listening_ports, _invalidate_port_scan,
     close_connection, is_local_server, run_command, run_privileged, ssh_test_connection,
-    get_server_status, run_as_game_user, send_console_command,
+    get_server_status, run_as_game_user, send_console_command, capture_console,
     list_server_commands, server_live_metrics, remote_public_ip,
     discover_linuxgsm_servers, player_list, moderation_caps, moderate, is_player_queryable,
     game_engine, console_steamid_ban, ensure_persistent_bans, _sanitize_steamid, _resolve_from_console,
@@ -616,11 +616,15 @@ def _tg_help_text():
             "/servers — servers with player counts\n"
             "/hosts — hosts and their status\n"
             "/players <name> — who's on a server\n"
+            "/console <name> — the last 20 console lines\n"
+            "/connect <name> — the address to give players\n"
+            "/say <name> <message> — announce it in-game\n"
             "/start <name> — start a server\n"
             "/stop <name> — stop a server\n"
             "/restart <name> — restart a server\n"
-            "/update <name> — update that game server (LinuxGSM)\n"
+            "/backup <name> — back a server up\n"
             "/update — update the panel itself\n"
+            "/update <name> — update that ONE game server instead\n"
             "/help — this message")
 
 
@@ -686,6 +690,77 @@ def _tg_players_text(app, arg):
         return "%s — %d player(s):\n%s" % (gs.name, len(names), "\n".join("• " + n for n in names[:40]))
 
 
+# A chat reply has to fit in one message on BOTH transports — Telegram truncates at 4000 chars,
+# Discord's bot REST send at 1900. Cap the variable-length bodies below that so the label and the
+# last line of a console tail are never the part that gets cut.
+_BOT_BODY_MAX = 1500
+
+
+def _tg_console_text(app, arg, lines=20):
+    """The tail of a server's live console.
+
+    The missing half of the power commands: start/stop/restart run in the background and their
+    output is discarded, so when a start fails the bot can say that it failed but never why. This
+    is that answer, without opening the panel."""
+    with app.app_context():
+        gs, err = _tg_find_server(arg)
+        if err:
+            return err
+        try:
+            out, _, rc = capture_console(gs.remote, gs.short_name, selfname=gs.lgsm_name, lines=lines)
+        except Exception:
+            _log.debug("telegram console tail failed", exc_info=True)
+            return "%s — couldn't read the console." % gs.name
+        # rc 3 + NO_SESSION is capture_console's "the server isn't running", not an error.
+        text = terminal.strip_escapes(out or "")
+        rows = [r.rstrip() for r in text.splitlines() if r.strip()][-lines:]
+        if not rows:
+            return "%s — no console output (is it running?)." % gs.name
+        body = "\n".join(rows)
+        if len(body) > _BOT_BODY_MAX:      # keep the END: the newest lines are the useful ones
+            body = "…" + body[-_BOT_BODY_MAX:]
+        return "%s — last %d console line(s):\n%s" % (gs.name, len(rows), body)
+
+
+def _tg_say_text(app, arg):
+    """Announce a message in a server's chat: '<server> <message>'.
+
+    The server is the FIRST word (a short name never contains a space), everything after it is the
+    message — otherwise there is no way to tell where one ends and the other begins. moderate()
+    sanitizes the text, so a message can't smuggle a second console command."""
+    name, _, message = (arg or "").strip().partition(" ")
+    if not name:
+        return "Usage: say <server> <message>"
+    with app.app_context():
+        gs, err = _tg_find_server(name)
+        if err:
+            return err
+        if not message.strip():
+            return "%s — what should I announce? Usage: say <server> <message>" % gs.name
+        try:
+            ok, msg = moderate(gs.remote, gs.short_name, gs.game_type, "say",
+                               message=message, selfname=gs.lgsm_name)
+        except Exception:
+            _log.debug("telegram say failed", exc_info=True)
+            ok, msg = False, "the announcement failed"
+        return "%s %s — %s" % ("✅" if ok else "⚠️", gs.name, msg or ("announced" if ok else "failed"))
+
+
+def _tg_connect_text(app, arg):
+    """A server's joinable address, ready to paste to players."""
+    with app.app_context():
+        gs, err = _tg_find_server(arg)
+        if err:
+            return err
+        r = gs.remote
+        host = (r.public_ip if r else "") or (r.host if (r and not r.is_local) else "")
+        if not host:
+            return ("%s — no public address known for its host yet. Open the panel once so it can "
+                    "resolve one." % gs.name)
+        uri = gs.connect_uri(host)
+        return "%s\n%s:%s%s" % (gs.name, host, gs.port, ("\n" + uri) if uri else "")
+
+
 def _tg_hosts_text(app):
     with app.app_context():
         rows = []
@@ -728,7 +803,13 @@ def _handle_telegram_command(app, token, chat_id, text, sender=None):
         _tg_reply(token, chat_id, _tg_hosts_text(app))
     elif cmd == "players":
         _tg_reply(token, chat_id, _tg_players_text(app, arg))
-    elif cmd in ("restart", "start", "stop"):
+    elif cmd == "console":
+        _tg_reply(token, chat_id, _tg_console_text(app, arg))
+    elif cmd == "say":
+        _tg_reply(token, chat_id, _tg_say_text(app, arg))
+    elif cmd == "connect":
+        _tg_reply(token, chat_id, _tg_connect_text(app, arg))
+    elif cmd in ("restart", "start", "stop", "backup"):
         _tg_server_action(app, token, chat_id, cmd, arg, sender)
     elif cmd in ("update", "upgrade"):
         # An argument names a SERVER here, the way it does for every other command that takes one
@@ -880,11 +961,15 @@ def _dc_help_text():
             "`!servers` — servers with player counts\n"
             "`!hosts` — hosts and their status\n"
             "`!players <name>` — who's on a server\n"
+            "`!console <name>` — the last 20 console lines\n"
+            "`!connect <name>` — the address to give players\n"
+            "`!say <name> <message>` — announce it in-game\n"
             "`!start <name>` — start a server\n"
             "`!stop <name>` — stop a server\n"
             "`!restart <name>` — restart a server\n"
-            "`!update <name>` — update that game server (LinuxGSM)\n"
+            "`!backup <name>` — back a server up\n"
             "`!update` — update the panel itself\n"
+            "`!update <name>` — update that ONE game server instead\n"
             "`!help` — this message")
 
 
@@ -922,7 +1007,13 @@ def _handle_discord_command(app, bot_token, channel_id, text, sender=None):
         _dc_reply(bot_token, channel_id, _tg_hosts_text(app))
     elif cmd == "players":
         _dc_reply(bot_token, channel_id, _tg_players_text(app, arg))
-    elif cmd in ("restart", "start", "stop"):
+    elif cmd == "console":
+        _dc_reply(bot_token, channel_id, _tg_console_text(app, arg))
+    elif cmd == "say":
+        _dc_reply(bot_token, channel_id, _tg_say_text(app, arg))
+    elif cmd == "connect":
+        _dc_reply(bot_token, channel_id, _tg_connect_text(app, arg))
+    elif cmd in ("restart", "start", "stop", "backup"):
         _dc_server_action(app, bot_token, channel_id, cmd, arg, sender)
     elif cmd in ("update", "upgrade"):
         # Same rule as Telegram: an argument names a server, not the panel. (See the note there.)
