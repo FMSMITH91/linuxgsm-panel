@@ -294,9 +294,10 @@ def ufw_allow_tailscale(ts_interface=None):
     # NOT add a separate `allow out` rule: UFW's default outgoing policy is allow, so it's
     # redundant, and a second rule just shows up as a confusing duplicate `tailscale0` row
     # in the firewall list. (This matches the remote bootstrap, which adds `in` only.)
-    out1, err1, rc1 = _run(
-        "ufw-allow-iface", [ts_interface], timeout=15
-    )
+    # _run_verb, not _run: this is a VERB plus its argument list, not a shell string. Written as
+    # `_run(...)` it passed [ts_interface] as the positional `timeout` AND timeout=15 by keyword,
+    # so every call raised TypeError before reaching UFW — see the regression test in unit_test.py.
+    out1, err1, rc1 = _run_verb("ufw-allow-iface", [ts_interface], timeout=15)
     if rc1 == 0:
         return True, f"UFW rule added for interface '{ts_interface}'"
     return False, err1 or out1 or "Failed to add UFW rule"
@@ -1881,6 +1882,46 @@ def panel_diagnostics():
             "saved password/credential needs it.")
     else:
         add("Encryption keys", "ok", "Session + credential keys present.")
+
+    # 4b. the INSTALLED privileged helper matches this version's verb table.
+    #
+    # The helper lives outside the checkout and is placed only by install.sh as root, so the panel
+    # cannot refresh it. Nothing surfaced a mismatch: _helper_present() checks the file exists and
+    # is executable, and an unknown verb comes back as rc 2 with `unknown verb` on stderr and no
+    # fallback — so a stale helper made the feature behind each new verb fail silently. Compare the
+    # two tables here so the Diagnostics card says which verbs are missing and what to run.
+    if _helper_present():
+        try:
+            # Same suppression, and the same reasoning, as the subprocess.run in _run_verb above —
+            # which is the only other place the panel executes the helper. This argv is narrower
+            # still: BOTH elements are module constants (privileged.HELPER_PATH and the literal
+            # "--list-verbs"), nothing here is derived from a request, and shell=False means no
+            # element is ever interpreted. The scanners flag any call whose first argument is not a
+            # literal string; making it one would mean composing a command, which is the thing the
+            # verb table exists to remove. Reviewed and suppressed rather than silently left red.
+            # nosemgrep: python.lang.security.audit.dangerous-subprocess-use-audit.dangerous-subprocess-use-audit
+            _hv = subprocess.run([_priv.HELPER_PATH, "--list-verbs"], shell=False,  # nosec B603
+                                 capture_output=True, text=True, timeout=10)
+            _installed = {ln.split("\t")[0] for ln in (_hv.stdout or "").splitlines() if ln.strip()}
+            _missing = sorted(set(_priv.verbs()) - _installed)
+            if _hv.returncode != 0 or not _installed:
+                add("Privileged helper", "warn",
+                    "Installed, but its verb table could not be read.")
+            elif _missing:
+                add("Privileged helper", "fail",
+                    "Out of date — %d verb(s) this version needs are missing (%s%s). "
+                    "Re-run install.sh as root on this host to refresh it."
+                    % (len(_missing), ", ".join(_missing[:4]),
+                       ", …" if len(_missing) > 4 else ""))
+            else:
+                add("Privileged helper", "ok",
+                    "Installed and current (%d verbs)." % len(_installed))
+        except Exception:
+            add("Privileged helper", "warn", "Installed, but could not be queried.")
+    else:
+        add("Privileged helper", "warn",
+            "Not installed — privileged actions fall back to the pre-helper path and the "
+            "sudoers grant cannot be narrowed. Re-run install.sh as root to place it.")
 
     # 5. config loads
     try:

@@ -77,7 +77,11 @@ execs a fixed argument vector. There is no shell in it, and the only program it 
 one it names: `bash` does not resolve.
 
 Converted so far: **`ufw`, `fail2ban-client`, `systemctl`, `apt`/`dpkg`, the log reads
-(`journalctl` / `tail`), and cron plus user management** — 43 verbs.
+(`journalctl` / `tail`), cron and user management, the sshd port change, the deferred reboot,
+Ubuntu Pro, the host controls, the GMod shared-content box, the fail2ban activity report, the
+detached OS update, Tailscale's join, the panel's own restore/self-update and the VPS hardening
+steps** — 86 verbs. (`tests/unit_test.py` asserts this number against `privileged.verbs()`, so it
+cannot drift from the table again.)
 
 **A correction to the numbers previously reported here.** Earlier revisions of this section
 said the panel had "113" privileged call sites and tracked them down to 42. That counted only
@@ -123,8 +127,10 @@ Two of those verb families are worth describing, because the narrowing is in the
 types rather than in the command names:
 
 - The systemd verbs take a unit from an **exhaustive list** (`ssh`, `sshd`, `fail2ban`,
-  `whoopsie`, `cups`, `modemmanager`). Those are the only services the panel ever touches, so
-  a unit-name *pattern* would only buy the ability to control units nobody asked it to.
+  `whoopsie`, `cups`, `modemmanager`, `unattended-upgrades`). Those are the only services the panel
+  ever touches, so a unit-name *pattern* would only buy the ability to control units nobody asked it
+  to. The panel's OWN unit is deliberately not in that list — it is reachable through exactly one
+  verb, `panel-restart`, which takes a bounded delay and nothing else.
 - The write verb takes a **destination name** and the content on **stdin**. Locally the helper
   does the write itself in Python — the content is never an argument, and the path is looked up,
   so `write-file /etc/shadow` fails on the *name*, not on a filter.
@@ -184,10 +190,7 @@ giving the helper the ability to execute a downloaded script — exactly the cap
 allowlist exists to deny. Wrapping either would move the risk, not reduce it. If that trade is not
 one you want, those two bootstrap steps are the thing to change, not the helper.
 
-Still to convert that go through `echo … | base64 -d >`, and the two multi-line shell
-scripts (the detached OS-update runner and the NodeSource installer).
-
-**That list is now empty, and the grant has narrowed.** On an install where the three
+**Every one of those is converted, and the grant has narrowed.** On an install where the three
 root-owned pieces are present, `/etc/sudoers.d/linuxgsm-panel` contains one line:
 
 ```
@@ -198,7 +201,7 @@ Nothing else. In particular **not** `/bin/bash`, `/bin/sh`, `systemd-run`, the `
 binary, or `sudo -u` — each of those runs whatever argv you hand it, so permitting any one of
 them would be `NOPASSWD:ALL` wearing a disguise. Each was a call site once; each is a verb now.
 
-Two conditions bound that claim, and both are enforced rather than asserted:
+Three conditions bound that claim, and all are enforced rather than asserted:
 
 * **The grant only narrows when all three root-owned pieces landed** — the helper, the
   root-owned `db_maintenance.py`, and the root-owned installer. A host running new code that
@@ -212,6 +215,15 @@ Two conditions bound that claim, and both are enforced rather than asserted:
   files. The offline DB repair and the self-update now run root-owned copies placed only by
   `install.sh`, never by a verb. This mattered more than the sudoers line itself: narrowing
   without it would have produced something that looked locked down and was not.
+
+* **The installed helper has to stay in step with the panel's code.** It lives outside the
+  checkout, so the panel cannot refresh it — only `install.sh` can, as root. The verb table grows
+  most releases, and a helper left behind answers a new verb with `unknown verb` and rc 2, with no
+  fallback: the feature behind it simply stops working, silently. `install.sh` therefore refreshes
+  the helper (and `db_maintenance.py`, `panel.conf` and its own root-owned copy) on the **update**
+  path as well as a fresh install, and re-evaluates the sudoers grant there — which is also the
+  only way a host that first installed before the helper existed ever gets narrowed. The panel's
+  Diagnostics card compares the two verb tables and says which verbs are missing if they differ.
 
 The remaining `sudo` call sites in the source are the pre-helper fallbacks described above. They
 are counted by a ratchet in the test suite (`direct ['sudo', ...] sites`) that can fall but never

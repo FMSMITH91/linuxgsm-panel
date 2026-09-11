@@ -11,6 +11,7 @@ deleting the last SSH rule, a non-numeric port 500).
 import json
 import glob
 import os
+import re
 import sys
 from types import SimpleNamespace as NS
 
@@ -5402,6 +5403,244 @@ check("helper: restore copies exactly the four known members",
 # under the system interpreter without importing the panel's config out of the checkout.
 check("db_maintenance: repair runs from an explicit path, no config import",
       "argv[2]" in open(os.path.join(_root, "db_maintenance.py"), encoding="utf-8").read())
+
+# ── Every file in data/ that holds DB rows or keys is hardened ───────────────────────────────
+# harden_data_permissions() covered the DB, its WAL/SHM pair, the config and both keys — but not
+# data/panel.db.backup, the rolling known-good copy models._ensure_db_healthy refreshes on every
+# healthy start, nor the panel.db.corrupt-* copies it moves aside. Both hold every password hash
+# and every encrypted credential the live database does, and sqlite3.connect / shutil.copy2 create
+# them at the process umask (0644 on a stock box). data/ is 0700 so this was defence in depth
+# rather than exposure, but it was the one gap in a function whose whole job is not having one.
+import tempfile as _tf
+import stat as _st
+import config as _cfgm
+_hd_tmp = _tf.mkdtemp()
+_hd_saved = (_cfgm.DATA_DIR, _cfgm.DB_PATH, _cfgm.CONFIG_FILE, _cfgm.SECRET_FILE, _cfgm.CRED_KEY_FILE)
+try:
+    from pathlib import Path as _P
+    _cfgm.DATA_DIR = _P(_hd_tmp)
+    _cfgm.DB_PATH = _P(_hd_tmp) / "panel.db"
+    _cfgm.CONFIG_FILE = _P(_hd_tmp) / "config.json"
+    _cfgm.SECRET_FILE = _P(_hd_tmp) / "secret_key"
+    _cfgm.CRED_KEY_FILE = _P(_hd_tmp) / "cred_key"
+    _hd_files = ("panel.db", "panel.db-wal", "panel.db-shm", "panel.db.backup",
+                 "panel.db.corrupt-1700000000", "config.json", "secret_key", "cred_key")
+    for _n in _hd_files:
+        _fp = _P(_hd_tmp) / _n
+        _fp.write_bytes(b"x")
+        os.chmod(_fp, 0o644)
+    _cfgm.harden_data_permissions()
+    _hd_bad = [_n for _n in _hd_files
+               if _st.S_IMODE(os.stat(os.path.join(_hd_tmp, _n)).st_mode) != 0o600]
+    check("data perms: every sensitive file in data/ ends up 0600", not _hd_bad,
+          "left readable: %s" % _hd_bad)
+finally:
+    (_cfgm.DATA_DIR, _cfgm.DB_PATH, _cfgm.CONFIG_FILE,
+     _cfgm.SECRET_FILE, _cfgm.CRED_KEY_FILE) = _hd_saved
+    import shutil as _sh
+    _sh.rmtree(_hd_tmp, ignore_errors=True)
+
+# ── The self-signed TLS key is created 0600, never written then chmod'd ──────────────────────
+# The old order wrote the unencrypted private key at the process umask and tightened it after,
+# leaving a window in which it was world-readable.
+import certs as _certs
+_ck_tmp = _tf.mkdtemp()
+try:
+    _ck_cert = os.path.join(_ck_tmp, "ssl", "cert.pem")
+    _ck_key = os.path.join(_ck_tmp, "ssl", "key.pem")
+    _certs._ensure_self_signed_cert(_ck_cert, _ck_key, "probe.invalid")
+    check("tls: the generated private key is 0600",
+          _st.S_IMODE(os.stat(_ck_key).st_mode) == 0o600,
+          "mode %o" % _st.S_IMODE(os.stat(_ck_key).st_mode))
+    check("tls: ...and it is created that way, not chmod'd afterwards",
+          "os.open(key_path" in open(os.path.join(_root, "certs.py"), encoding="utf-8").read())
+finally:
+    _sh.rmtree(_ck_tmp, ignore_errors=True)
+
+# ── The docs state numbers that the code owns — pin them ──────────────────────────────────────
+# Every one of these was wrong at the time of writing, and none of them could be. SECURITY.md said
+# "43 verbs" against 86; the CHANGELOG said 77 in the same release; README advertised 18 alert
+# events against 19, and listed `super_admin` as a grantable permission two years after it stopped
+# being one. Prose does not enforce itself, so the numbers get gates like everything else.
+_sec = open(os.path.join(_root, "SECURITY.md"), encoding="utf-8").read()
+_readme = open(os.path.join(_root, "README.md"), encoding="utf-8").read()
+
+check("docs: SECURITY.md states the real verb count",
+      "%d verbs" % len(_privmod.verbs()) in _sec,
+      "table has %d; SECURITY.md says %s"
+      % (len(_privmod.verbs()),
+         (re.search(r"(\d+) verbs", _sec) or ["?", "?"])[1]))
+check("docs: README states the real number of alert events",
+      "%d events" % len(N.EVENTS) in _readme,
+      "EVENTS has %d; README says %s"
+      % (len(N.EVENTS), (re.search(r"for (\d+) events", _readme) or ["?", "?"])[1]))
+# The systemd unit list in SECURITY.md must name every unit the verb table actually accepts.
+check("docs: SECURITY.md's systemd unit list matches privileged.UNITS",
+      all(("`%s`" % _u) in _sec for _u in _privmod.UNITS),
+      "missing from the doc: %s" % [_u for _u in _privmod.UNITS if ("`%s`" % _u) not in _sec])
+# super_admin is the is_superadmin FLAG, not a permission. Documenting it as grantable sends an
+# operator looking for a tickbox that was deliberately removed.
+import auth as _authmod
+check("docs: README does not offer super_admin as a grantable permission",
+      "| `super_admin` |" not in _readme)
+check("docs: ...and it really is not one", "super_admin" not in _authmod.ALL_PERMISSIONS)
+
+# Every fuzz harness must be listed in its README and run by the workflow matrix. The README
+# documented 4 of 6 (console and cron were missing), which is how a target quietly stops being
+# maintained.
+_fuzz_dir = os.path.join(_root, "tests", "fuzz")
+_harnesses = sorted(os.path.basename(f)[len("fuzz_"):-len(".py")]
+                    for f in glob.glob(os.path.join(_fuzz_dir, "fuzz_*.py")))
+_fuzz_readme = open(os.path.join(_fuzz_dir, "README.md"), encoding="utf-8").read()
+check("docs: every fuzz harness is listed in tests/fuzz/README.md",
+      all(("fuzz_%s.py" % t) in _fuzz_readme for t in _harnesses),
+      "missing: %s" % [t for t in _harnesses if ("fuzz_%s.py" % t) not in _fuzz_readme])
+_fuzz_wf = open(os.path.join(_root, ".github", "workflows", "fuzz.yml"), encoding="utf-8").read()
+_matrix = re.search(r"target:\s*\[([^\]]+)\]", _fuzz_wf)
+_matrix_targets = sorted(t.strip() for t in _matrix.group(1).split(",")) if _matrix else []
+check("docs: the fuzz workflow matrix runs every harness", _matrix_targets == _harnesses,
+      "matrix=%s harnesses=%s" % (_matrix_targets, _harnesses))
+# ...and each harness's own module must be in the workflow's path filter, or a change to the code
+# it tests does not trigger it. terminal.py (fuzz_console's target) was missing for exactly that
+# reason.
+for _mod in ("ssh_manager.py", "system_ops.py", "terminal.py"):
+    check("docs: the fuzz workflow watches %s" % _mod, ("'%s'" % _mod) in _fuzz_wf)
+
+# ── ufw_allow_tailscale builds a VERB, and does not raise ─────────────────────────────────────
+# It read `_run("ufw-allow-iface", [iface], timeout=15)` — _run's signature is
+# (cmd, timeout=30, sudo=False, text=True), so the list went in as the positional `timeout` AND
+# timeout=15 came in by keyword: TypeError on every single call, 100% of the time. The route
+# answered 500, and the two automatic callers in tailscale_integration (after `tailscale up`, and
+# during Serve setup) swallow exceptions — so the guard whose whole purpose is "don't let UFW lock
+# you out of your own tailnet" had silently not run since the verb conversion.
+_uat_calls = []
+_uat_saved = (SO._run_verb, SO.detect_tailscale_interface)
+try:
+    SO.detect_tailscale_interface = lambda: "tailscale0"
+    SO._run_verb = lambda verb, args=(), timeout=30, merge_stderr=True: (
+        _uat_calls.append((verb, list(args))), ("", "", 0))[1]
+    _uat_ok, _uat_msg = SO.ufw_allow_tailscale()
+    check("ufw_allow_tailscale: does not raise (it used to TypeError on every call)", _uat_ok is True,
+          str(_uat_msg))
+    check("ufw_allow_tailscale: goes through the verb table, not a shell string",
+          _uat_calls == [("ufw-allow-iface", ["tailscale0"])], str(_uat_calls))
+finally:
+    SO._run_verb, SO.detect_tailscale_interface = _uat_saved
+# ...and the verb it names really exists, so a rename cannot leave it calling a dead one.
+check("ufw_allow_tailscale: the verb it calls is in the table",
+      "ufw-allow-iface" in _privmod.verbs())
+
+# ── X-Forwarded-Prefix is only believed from a proxy we have reason to trust ──────────────────
+# PrefixMiddleware read the header unconditionally, on every request, with the panel able to bind
+# 0.0.0.0. SCRIPT_NAME is what every url_for() and every outgoing Location is built from, so any
+# client could rewrite the links in its own response — including to a protocol-relative "//host".
+# auth.client_ip() has always applied exactly this rule to X-Forwarded-For; this brings the other
+# forwarded header in line.
+import middleware as _mw
+# ...and the middleware must actually CONSULT it — the helper passing on its own proves nothing
+# if __call__ still reads the header unconditionally.
+_mw_src = open(os.path.join(_root, "middleware.py"), encoding="utf-8").read()
+_mw_call = _mw_src[_mw_src.index("def __call__"):]
+check("prefix header: __call__ gates the header read on _may_trust_header",
+      "_may_trust_header" in _mw_call
+      and _mw_call.index("_may_trust_header") < _mw_call.index("if not prefix"))
+for _ra, _cfg, _want in (("127.0.0.1", {}, True), ("::1", {}, True),
+                         ("203.0.113.7", {}, False), ("10.1.2.3", {}, False),
+                         ("", {}, False),
+                         ("203.0.113.7", {"trust_proxy": True}, True)):
+    check("prefix header: REMOTE_ADDR=%r trust_proxy=%s -> trusted=%s"
+          % (_ra, bool(_cfg.get("trust_proxy")), _want),
+          _mw.PrefixMiddleware._may_trust_header({"REMOTE_ADDR": _ra}, _cfg) is _want)
+
+# ── The installer refreshes the root-owned helper on an UPDATE, not only a fresh install ──────
+# The helper/db_maintenance/panel.conf/installer block used to sit AFTER the update path's
+# `exit 0`, so every update — in-panel self-update, the CI auto-deploy, a plain re-run — shipped
+# new code against whatever helper first landed on the host. The verb table grows most releases and
+# a stale helper answers a new verb with `unknown verb` + rc 2 and no fallback, so the feature
+# behind it stopped working with no message anywhere. The grant was never re-evaluated either.
+_inst = open(os.path.join(_root, "install.sh"), encoding="utf-8").read()
+check("install.sh: the root-owned tools are installed by a FUNCTION, callable from both paths",
+      "install_root_tools() {" in _inst and "write_sudoers_grant() {" in _inst)
+_upd = _inst[_inst.index("if [ \"${IS_UPDATE}\" -eq 1 ]; then"):]
+_upd_body = _upd[:_upd.index("    # ── Health check FAILED")]
+check("install.sh: the UPDATE path refreshes the root-owned helper before restarting the service",
+      "install_root_tools" in _upd_body
+      and _upd_body.index("install_root_tools") < _upd_body.index('info "[5/6] Starting the service'))
+check("install.sh: the UPDATE path also re-evaluates the sudoers grant",
+      "write_sudoers_grant" in _upd_body)
+check("install.sh: the update path still exits before the fresh-install steps",
+      "    exit 0\n" in _upd_body)
+# The root-owned installer copy must come from the CHECKOUT: the documented quick install is
+# `curl … | bash`, where "$0" is the shell — the old form copied /usr/bin/bash into place.
+check("install.sh: the root-owned installer copy is sourced from the checkout, not \"$0\"",
+      'INSTALLER_SRC="${PANEL_DIR}/install.sh"' in _inst)
+
+# ── Disabling Tailscale Serve removes the mount it is actually ON ─────────────────────────────
+# disableServe() hardcoded mount:'/'. `tailscale serve --remove /` exits 0 on a node whose mapping
+# is at /lgsm-panel, so the panel reported success, cleared tailscale_setup_done and
+# tailscale_mount, and left Serve running — with PrefixMiddleware then no longer prefixing URLs
+# for a panel still served under the prefix.
+_ts_tpl = open(os.path.join(_root, "templates", "tailscale.html"), encoding="utf-8").read()
+check("tailscale.html: disableServe does not hardcode the mount",
+      "action: 'disable', mount: '/'" not in _ts_tpl)
+check("tailscale.html: the Disable button carries the configured mount",
+      'data-mount="{{ config.tailscale_mount' in _ts_tpl)
+check("tailscale.html: the Mount Point field shows the configured mount, not a fixed /",
+      "value=\"{{ config.tailscale_mount or '/' }}\"" in _ts_tpl)
+# Both serve handlers take the clicked button; enableServe used the implicit global `event`.
+check("tailscale.html: enableServe/disableServe receive @self rather than reading global event",
+      "var btn = event.target" not in _ts_tpl
+      and _ts_tpl.count("""data-args='["@self"]'""") >= 2)
+
+# ── Vendored front-end libraries match their manifest ─────────────────────────────────────────
+# static/vendor/ holds ~650KB of third-party browser code: Bootstrap, its icons, Chart.js and the
+# Socket.IO client. Nothing was managing any of it — Dependabot reads pip and github-actions, there
+# is no package.json, and no scanner looks inside a minified bundle. The result was that Bootstrap's
+# JS sat at 5.3.0 while its CSS was 5.3.3 for months with nothing able to notice.
+#
+# static/vendor/VERSIONS.md is the manifest. This asserts it is true: every listed file exists, and
+# the version recorded for it is the version in that file's own banner comment. A bump is then a
+# deliberate edit to both, and a silent swap fails the build.
+_vendor_dir = os.path.join(_root, "static", "vendor")
+_manifest = os.path.join(_vendor_dir, "VERSIONS.md")
+check("vendor: the manifest exists", os.path.isfile(_manifest))
+if os.path.isfile(_manifest):
+    _rows = re.findall(r"^\|\s*([^|]+?)\s*\|\s*([0-9][0-9.]*)\s*\|\s*`([^`]+)`\s*\|",
+                       open(_manifest, encoding="utf-8").read(), re.M)
+    check("vendor: the manifest lists every vendored library", len(_rows) >= 5,
+          "found %d rows" % len(_rows))
+    # Every vendored .js/.css must appear in the manifest — a new one cannot be added unlisted.
+    _on_disk = set()
+    for _dirpath, _dirnames, _filenames in os.walk(_vendor_dir):
+        for _fn in _filenames:
+            if _fn.endswith((".js", ".css")):
+                _on_disk.add(os.path.relpath(os.path.join(_dirpath, _fn), _vendor_dir))
+    _listed = {r[2] for r in _rows}
+    check("vendor: no vendored file is missing from the manifest",
+          not (_on_disk - _listed), "unlisted: %s" % sorted(_on_disk - _listed))
+    _bad = []
+    for _name, _ver, _rel in _rows:
+        _path = os.path.join(_vendor_dir, _rel)
+        if not os.path.isfile(_path):
+            _bad.append("%s: file missing (%s)" % (_name, _rel))
+            continue
+        # The banner comment is in the first few hundred bytes of every one of these builds.
+        with open(_path, encoding="utf-8", errors="replace") as _fh:
+            _head = _fh.read(600)
+        if _ver not in _head:
+            _found = re.search(r"v?(\d+\.\d+\.\d+)", _head)
+            _bad.append("%s: manifest says %s, file says %s"
+                        % (_name, _ver, _found.group(1) if _found else "?"))
+    check("vendor: every file is the version the manifest records", not _bad, "; ".join(_bad))
+    # Bootstrap ships its JS and CSS as one release but they are vendored as two files, so they
+    # can drift — and did, 5.3.0 JS against 5.3.3 CSS, for months. They were API-compatible so
+    # nothing looked broken, which is exactly why nobody caught it. Require them to agree.
+    _js = [r for r in _rows if r[0].strip() == "Bootstrap (JS)"]
+    _css = [r for r in _rows if r[0].strip() == "Bootstrap (CSS)"]
+    check("vendor: Bootstrap's JS and CSS are the same release",
+          _js and _css and _js[0][1] == _css[0][1],
+          "JS %s vs CSS %s — they ship together and must be vendored together"
+          % (_js[0][1] if _js else "?", _css[0][1] if _css else "?"))
 
 passed = sum(1 for ok, _, _ in results if ok)
 for ok, name, detail in results:

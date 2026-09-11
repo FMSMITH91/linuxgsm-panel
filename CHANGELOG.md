@@ -56,8 +56,65 @@ regardless of this file — this changelog is for humans.
   ran on the same push as the analysis rather than after it, so a commit that *fixed* an alert
   failed the gate, and — worse — a commit that *introduced* one passed it, with the alert then
   blamed on whatever landed next. It now runs when CodeQL completes.
+- **`tailscale0` was never actually allowed through UFW.** `ufw_allow_tailscale()` passed its
+  argument list as `_run`'s positional `timeout` *and* a `timeout=` keyword, so every call raised
+  `TypeError` before reaching UFW — 100% of the time, since the verb conversion. The
+  "Allow Tailscale Interface" button answered HTTP 500, and the two automatic callers (after
+  `tailscale up`, and during Serve setup) swallow exceptions, so the guard that exists to stop
+  exactly the "UFW is up but tailscale0 is not allowed" lockout had silently never run.
+- **The installer's update path never refreshed the root-owned helper.** The block that installs
+  `panel-helper`, `db_maintenance.py`, `panel.conf` and the root-owned installer sat *after* the
+  update path's `exit 0`. So every update — in-panel self-update, the CI auto-deploy, a plain
+  re-run — shipped new code against whatever helper first landed on the host. The verb table grows
+  most releases, and a stale helper answers a new verb with `unknown verb` and no fallback, so the
+  feature behind it stopped working with no message anywhere. The sudoers grant was never
+  re-evaluated either, which left a host that first installed pre-helper on `NOPASSWD:ALL`
+  indefinitely. Both are now done on update as well, and the Diagnostics card compares the panel's
+  verb table against the installed helper's and names the missing verbs.
+- **The "Repair database" button could never appear.** `remote_manage.html` carried
+  `id="diag-repair-btn"` on both the panel-file restore button and the database repair button, in
+  the same block — and `getElementById` returns the first. So a healthy DB check *hid the
+  file-restore button*, an unhealthy one told you to click a button that stayed hidden, and
+  `repairDb()` relabelled the wrong control. A template gate now fails on any id rendered twice in
+  the same page (ids in mutually exclusive Jinja branches are still fine).
+- **Disabling Tailscale Serve on a sub-path mount did not disable it.** The handler hardcoded
+  `mount: '/'`, and `tailscale serve --remove /` exits 0 on a node whose mapping is at
+  `/lgsm-panel` — so the panel reported success, cleared `tailscale_setup_done` and
+  `tailscale_mount`, and left Serve running, with the panel no longer prefixing its own URLs. The
+  Disable button now carries the configured mount. The Mount Point field also shows the configured
+  mount instead of always `/`.
+- **Changing the panel's port dropped the fail2ban whitelist.** The port change rewrites the
+  panel-login jail, and that call omitted the whitelist — so `ignoreip` came back as localhost only
+  and every whitelisted IP/CIDR silently lost its exemption until the next boot re-applied it (or
+  indefinitely, if the restart that follows failed). Its two sibling call sites always passed it.
+
+- **`datetime.utcnow()`, which Python has scheduled for removal, is gone** from all 22 call sites
+  (including twelve database column defaults). Stored timestamps are unchanged — still naive UTC, to
+  the microsecond — they now come from `clock.utcnow()`.
 
 ### Security
+- **A compromised remote host could inject markup into the panel.** A host's own
+  `tailscale status --json` output — its tailnet IP and MagicDNS name — plus the addresses returned
+  by the migrate endpoint and its live CPU figures went into the admin's page unescaped. The strict
+  CSP (no `unsafe-inline` for scripts) stops that becoming script execution, so this was HTML
+  injection rather than XSS, but it is the same class the 0.10.0 release fixed elsewhere and it
+  survived in `manage_remotes.js`. The regression gate written to catch the next one could not see
+  these: it only read the expression sitting at the sink, and this markup is accumulated into a
+  variable first. It now follows a variable to its sink, understands helpers that assign their own
+  parameter to `innerHTML`, and is verified by mutation against all seven values.
+- **`X-Forwarded-Prefix` was trusted from any client.** `PrefixMiddleware` read it unconditionally
+  while the panel can bind `0.0.0.0`. `SCRIPT_NAME` is what every `url_for()` and outgoing
+  `Location` is built from, so a caller could rewrite the links in its own response — including to a
+  protocol-relative `//host`. It is now believed only from loopback (where Tailscale Serve sits) or
+  when `trust_proxy` is set, which is the rule `client_ip()` has always applied to
+  `X-Forwarded-For`.
+- **The rolling database backup was left world-readable.** `data/panel.db.backup` and any
+  `panel.db.corrupt-*` copy hold every password hash and encrypted credential the live database
+  does, and were created at the process umask — the one set of files in `data/` that
+  `harden_data_permissions()` did not cover. (`data/` itself is `0700`, so this was defence in
+  depth, not exposure.)
+- **The self-signed TLS private key was written at the process umask, then chmodded.** It is now
+  created `0600` by `os.open`, so there is no window in which an unencrypted key is readable.
 - **The sudoers grant is no longer `NOPASSWD:ALL`.** On an install where the root-owned pieces are
   present, `/etc/sudoers.d/linuxgsm-panel` now contains a single line permitting one command — the
   privileged helper — and nothing else. Not `/bin/bash`, not `systemd-run`, not the `tailscale`
@@ -100,29 +157,22 @@ regardless of this file — this changelog is for humans.
   carrying its id — so anyone with "manage remotes" could apt full-upgrade the panel's own machine,
   rewrite its `sshd_config`, pipe an installer into a root shell, and reboot it out from under the
   request. The routes refuse the local host now, with a JSON 400 that says why.
-- **The privileged helper has landed, and the firewall now goes through it.** The panel escalates
-  local work as `sudo bash -c '<command>'`, which is why its sudoers grant could never be narrowed:
-  permitting `/bin/bash` *is* `NOPASSWD:ALL`. `tools/panel-helper` is a root-owned script that takes
-  a verb and separated arguments, re-validates each one, and runs a fixed command — no shell, and
-  `bash` is not a program it can reach. The `ufw`, `fail2ban-client`, `systemctl` and `apt`/`dpkg`
-  families now use it, plus the log reads, user/cron management and the root-owned config writes —
-  77 verbs, including the sshd port change, the deferred reboot, Ubuntu Pro, the host controls, the
-  GMod shared-content box, the fail2ban activity report and the VPS hardening steps. Root-escalating call
-  sites that still build a shell string are down from 131 to 4, and the `_sudo_sh` escalation
-  route is gone entirely, and a ratcheting test now counts
-  BOTH escalation routes (an earlier count missed `_sudo_sh`, which had 18 sites of its own). **This does not reduce your exposure yet**: the grant stays `NOPASSWD:ALL` until
-  every privileged call site is converted, because a boundary with a hole in it is not a boundary.
-  See SECURITY.md.
+- **The privileged helper carries every local escalation.** The panel escalated local work as
+  `sudo bash -c '<command>'`, which is why its sudoers grant could never be narrowed: permitting
+  `/bin/bash` *is* `NOPASSWD:ALL`. `tools/panel-helper` is a root-owned script that takes a verb and
+  separated arguments, re-validates each one, and runs a fixed command — no shell, and `bash` is not
+  a program it can reach. 86 verbs cover the `ufw`, `fail2ban-client`, `systemctl` and `apt`/`dpkg`
+  families, the log reads, user/cron management, the root-owned config writes, the sshd port change,
+  the deferred reboot, Ubuntu Pro, the host controls, the GMod shared-content box, the fail2ban
+  activity report and the VPS hardening steps. Root-escalating call sites that still build a shell
+  string are down from 131 to 4, the `_sudo_sh` route is gone entirely, and a ratcheting test counts
+  BOTH routes (an earlier count missed `_sudo_sh`, which had 18 sites of its own). See SECURITY.md.
 
-### Fixed
 - **The panel could not hear its own deprecation warnings.** A filter installed at import time
   silenced every `DeprecationWarning` in the process, permanently — and did not silence the one it
   named, because eventlet's banner is not a `DeprecationWarning` at all, so it printed on every start
   regardless. Running the panel under `-W always::DeprecationWarning` heard nothing. Now only
   eventlet's banner is silenced, and `-W` / `PYTHONWARNINGS` work again.
-- **`datetime.utcnow()`, which Python has scheduled for removal, is gone** from all 22 call sites
-  (including twelve database column defaults). Stored timestamps are unchanged — still naive UTC, to
-  the microsecond — they now come from `clock.utcnow()`.
 
 ## [0.10.0-alpha] — 2026-09-09
 
@@ -274,5 +324,7 @@ so this re-baselines it and starts the changelog. Notable changes since then:
   id/token).
 - The Telegram `/update` completion check compares the **git commit**, not the static VERSION.
 
+[Unreleased]: https://github.com/FMSMITH91/linuxgsm-panel/compare/v0.10.0-alpha...main
+[0.10.0-alpha]: https://github.com/FMSMITH91/linuxgsm-panel/releases/tag/v0.10.0-alpha
 [0.9.0-alpha]: https://github.com/FMSMITH91/linuxgsm-panel/releases/tag/v0.9.0-alpha
 [0.8.0-alpha]: https://github.com/FMSMITH91/linuxgsm-panel/releases/tag/v0.8.0-alpha

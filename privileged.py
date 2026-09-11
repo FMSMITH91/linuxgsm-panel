@@ -28,9 +28,20 @@ TWO TRANSPORTS, ONE DEFINITION
     would defeat the point). tests/unit_test.py asserts the two agree, so they cannot drift.
 
 STATUS
-    Conversion is in progress — the ufw family first. Until EVERY privileged call site routes
-    through a verb, /etc/sudoers.d/linuxgsm-panel still grants NOPASSWD:ALL and this reduces
-    nothing: a boundary with a hole in it is not a boundary. SECURITY.md says so too.
+    Every local escalation routes through a verb. On a host where install.sh has placed the three
+    root-owned pieces (the helper, db_maintenance.py and the installer itself),
+    /etc/sudoers.d/linuxgsm-panel grants exactly one command — the helper — and nothing else.
+
+    Two caveats that are the operator's to know about, not bugs to fix here:
+
+      * A host that has NOT had install.sh run as root since the helper landed keeps the wide grant
+        and falls back to `sudo bash -c '<verb rendered as text>'`. Narrowing under that fallback
+        would break every privileged action rather than secure anything.
+      * The installed helper is refreshed only by install.sh — including on its UPDATE path, which
+        is what keeps the verb table in step with the code. The panel cannot refresh it, by design;
+        its Diagnostics card reports a mismatch instead.
+
+    SECURITY.md carries the full account, including what deliberately is not narrowed.
 """
 import ipaddress
 import re
@@ -693,8 +704,6 @@ _REMOTE_ACTIONS = {
     # The subshell is the point: it backgrounds the sleep so this command returns and the SSH
     # connection can close before the host goes down.
     "reboot-delayed": lambda a: "( sleep 2 ; reboot ) >/dev/null 2>&1 & echo scheduled",
-    # 700, not the 750 the shell form used: the group bits are added by content-grant-read when
-    # access is actually granted, so both transports share nothing until then.
     "tailscale-up-login": lambda a: (
         "rm -f %s ; nohup %s > %s 2>&1 & "
         "for i in $(seq 1 %d); do "
@@ -730,6 +739,8 @@ _REMOTE_ACTIONS = {
         '  d="%s/$u/%s"; [ -d "$d" ] || continue; '
         '  for g in %s; do [ -d "$d/$g" ] && echo "HIT|$u|$g"; done; '
         'done' % (HOME_ROOT, HOME_ROOT, CONTENT_SUBDIR, " ".join(a))),
+    # 700, not the 750 the shell form used: the group bits are added by content-grant-read when
+    # access is actually granted, so both transports share nothing until then.
     "content-dir-create": lambda a: "install -d -o %s -g %s -m 700 %s"
                           % (a[0], a[0], shlex.quote(content_path(a[0], CONTENT_SUBDIR))),
     "content-game-present": lambda a: "test -d %s/. && echo Y || echo N"

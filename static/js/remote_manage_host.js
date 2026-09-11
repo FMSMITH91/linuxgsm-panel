@@ -456,7 +456,7 @@ function checkDbHealth(){
   if(btn){ btn.disabled=true; btn.innerHTML='<span class="spinner-border spinner-border-sm"></span> Checking…'; }
   fetch(MOUNT+'/api/panel/db-health').then(function(r){return r.json();}).then(function(d){
     if(!out) return;
-    var rbtn=document.getElementById('diag-repair-btn');
+    var rbtn=document.getElementById('diag-db-repair-btn');
     if(d.healthy===true){
       out.innerHTML='<span class="text-success"><i class="bi bi-check-circle-fill"></i> Database is healthy — integrity check passed.</span>';
       if(rbtn) rbtn.style.display='none';
@@ -476,7 +476,7 @@ function repairDb(){
   confirmDialog({title:'Repair database', icon:'wrench-adjustable', confirmClass:'btn-warning', confirmLabel:'Repair & restart',
     bodyText:'The panel will stop, repair the database offline (your data is copied aside first — never deleted), then restart. This takes about a minute. Continue?',
     onConfirm:function(){
-      var rb=document.getElementById('diag-repair-btn'), msg=document.getElementById('diag-db-msg');
+      var rb=document.getElementById('diag-db-repair-btn'), msg=document.getElementById('diag-db-msg');
       if(rb){ rb.disabled=true; rb.innerHTML='<span class="spinner-border spinner-border-sm"></span> Repairing…'; }
       fetch(MOUNT+'/api/panel/repair-db',{method:'POST',headers:{'Content-Type':'application/json'},body:'{}'})
         .then(function(r){return r.json();}).then(function(d){

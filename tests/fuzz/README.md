@@ -5,12 +5,18 @@ consume **untrusted external input**. Each parser is best-effort: it must degrad
 on malformed input, never raise. The harnesses assert exactly that — any uncaught exception is a
 finding to fix in the parser (not to suppress in the harness).
 
+`fuzz_console.py` additionally asserts an OUTPUT property, because `terminal.py` exists to produce
+one: no input may leave an ESC or a bare CR in the rendered result, since those are exactly the
+bytes it strips before the text reaches a browser.
+
 | Harness | Parses | Source of untrusted input |
 |---|---|---|
 | `fuzz_game_status.py` | `_parse_valve_status`, `_parse_idtech3_status`, `_parse_minecraft_list` | a remote game server's `status`/`list` reply |
 | `fuzz_firewall.py` | `_parse_ufw_rule`, `_group_ufw_rules` | `ufw status numbered` output |
 | `fuzz_config.py` | `_parse_cfg`, `_parse_upgradable`, `_parse_mods_available`, `_parse_mods_installed` | LinuxGSM config / `apt list` / mod listings |
 | `fuzz_fail2ban.py` | `_parse_top_ips` | the fail2ban log counting pipeline |
+| `fuzz_console.py` | `strip_escapes`, `apply_carriage_returns`, `apply_backspaces`, `render` (`terminal.py`) | a game console's output — player names, chat and RCON replies, so partly attacker-*authored* |
+| `fuzz_cron.py` | `_split_cron_line`, `_unwrap_cron_command`, `_cron_role`, `_cron_line_managed`, `_cron_log_text`, `_clean_cron_error` | a remote host's crontab, and the base64 status blob the panel's cron wrapper writes |
 
 ## Run locally
 

@@ -504,16 +504,23 @@ finally:
                 pass
     else:
         # Live/configured install: remove ONLY our throwaway users/groups, never real data.
+        #
+        # EVERY fixture, not just the first three. uid4 (the delegated group-admin) and the groups
+        # for the escalation tests were created but never cleaned up, so running this suite against
+        # a configured install left a real user account — in a group holding MANAGE_GROUPS — plus
+        # three groups sitting in the operator's panel. Driven off the `tag` prefix rather than a
+        # hand-kept list, so a fixture added later is cleaned up by construction.
         with app.app_context():
-            for _uid in (uid, locals().get("uid2"), locals().get("uid3")):
+            for _uid in (uid, locals().get("uid2"), locals().get("uid3"), locals().get("uid4")):
                 if _uid:
                     _u = User.query.get(_uid)
                     if _u:
                         db.session.delete(_u)
-            for _tag in (tag, tag + "_mr", tag + "_legacy_sa"):
-                _g = Group.query.filter_by(name=_tag).first()
-                if _g:
-                    db.session.delete(_g)
+            # Belt and braces: anything whose name starts with this run's unique tag is ours.
+            for _u in User.query.filter(User.username.like(tag + "%")).all():
+                db.session.delete(_u)
+            for _g in Group.query.filter(Group.name.like(tag + "%")).all():
+                db.session.delete(_g)
             db.session.commit()
     print("Fixtures cleaned up.\n")
 

@@ -93,7 +93,7 @@ bash ~/linuxgsm-panel/uninstall.sh                 # per-user install
 - Fine-grained moderation (**kick / ban / announce** individually) and superadmin-defined **custom console commands** with a charset-validated argument, granted per group.
 - One host page for the panel and every remote: specs, live per-core resources, OS updates, UFW firewall, power controls, Ubuntu Pro, SSH lockdown, and lockout-safe port/bind changes.
 - **Brute-force defense** — fail2ban integration with per-jail logs, top offenders, one-click UFW blocking, and an optional rolling **auto-block** that firewalls every IP over a failed-attempt threshold (default 20 / 7 days) and releases it once its count drops back below. A whitelist (IP/CIDR) and your Tailscale peers are never banned or blocked.
-- **Proactive admin alerts** to Telegram/Discord for 18 events — server down, host unreachable, disk low, sustained high CPU/RAM load, brute-force, backup failed, update available, cert expiring, and more — with tunable thresholds (disk %, CPU-load %, memory %, and how long load must stay high before it pages you).
+- **Proactive admin alerts** to Telegram/Discord for 19 events — server down, host unreachable, disk low, sustained high CPU/RAM load, brute-force, backup failed, update available, cert expiring, and more — with tunable thresholds (disk %, CPU-load %, memory %, and how long load must stay high before it pages you).
 - **Two-way command bot** (Telegram *or* Discord) — drive the panel from chat: `/status`, `/servers`, `/hosts`, `/players <name>`, `/update`, and `/start` / `/stop` / `/restart <name>`. Opt-in and locked to the configured chat/channel.
 - Tailscale integration (private Serve, MagicDNS, SSH-over-tailnet), multiple SSH remotes with host-key pinning, diagnostics with file-integrity self-heal, and audit logging.
 
@@ -119,7 +119,7 @@ Stored in `data/config.json` after the setup wizard. Key settings:
 | Setting | Default | Description |
 |---------|---------|-------------|
 | `port` | 5000 | Web server port |
-| `bind_host` | 0.0.0.0 | Bind address (`127.0.0.1` behind a proxy) |
+| `bind_host` | *(auto)* | Bind address — empty picks `127.0.0.1` when Tailscale Serve can proxy, else `0.0.0.0`. Set `127.0.0.1` explicitly behind a proxy |
 | `trust_proxy` | false | Trust `X-Forwarded-*` from a reverse proxy |
 | `session_lifetime_hours` | 8 | Idle session timeout (sliding) |
 | `remember_days` | 3 | "Remember me" cookie lifetime |
@@ -129,7 +129,11 @@ Branding (site name, accent colour, login tagline), the default UI language for 
 
 ## Permissions
 
-Groups grant any mix of these, scoped to specific servers/hosts. `super_admin` bypasses all checks.
+Groups grant any mix of these, scoped to specific servers/hosts. Super Admin is **not** one of
+them — it is the `is_superadmin` flag on the account, set on the Users page, and it bypasses every
+check. (It used to be grantable as a `super_admin` permission; that was removed because a group
+holding it passed the route decorators while every flag-based gate and the whole nav still refused
+the account. Any leftover grant is stripped at startup.)
 
 | Permission | Grants |
 |------------|--------|
@@ -139,7 +143,6 @@ Groups grant any mix of these, scoped to specific servers/hosts. `super_admin` b
 | `start_server` / `stop_server` / `restart_server` / `update_server` | Power & update controls |
 | `install_server` / `uninstall_server` / `manage_servers` | Add, remove, and define game servers |
 | `manage_remotes` / `manage_users` / `manage_groups` | Manage hosts / users / groups |
-| `super_admin` | Full administrator access |
 
 **Typical groups:** *Admins* — view + power + `manage_servers`; *Moderators* — view + `kick/ban/say` on specific servers; *Viewers* — `view_servers` only. Super Admin is auto-granted via `is_superadmin` (no group needed).
 
