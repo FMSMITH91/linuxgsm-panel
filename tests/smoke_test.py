@@ -2544,6 +2544,95 @@ try:
     check("telegram: every command in the '/' menu is handled by the router",
           not _unhandled, "unhandled: %s" % _unhandled)
 
+    # ── A power action the panel already knows is a no-op must say so, not report success ────
+    # /servers listed a server as online and the very next /start answered
+    # "✅ 'start' issued — status updates in a few seconds". _run_action never consulted the status
+    # it had just rendered, and start/stop run in the background with their output discarded, so
+    # LinuxGSM's own "Server already started" never reached anyone either. Both halves matter, so
+    # both are asserted: the refusal AND the cases that must still go through — a stale "online"
+    # (the server actually died), a hung server the column calls offline, an unreadable host, and
+    # 'restart', which is deliberately never guarded because it is the way out of a wrong refusal.
+    import time as _pt
+    _pa_saved = (_appmod.server_live_metrics, _appmod.run_as_game_user, _appmod.set_game_priority)
+    _pa_ran, _pa_prio = [], []
+
+    def _pa_rag(remote, short, cmd, *a, **k):
+        _pa_ran.append(cmd)
+        return ("", "", 0)
+
+    def _pa_metrics(up, readable=True):
+        """The live-metrics shape _live_run_state reads. ram_total==0 is its 'SSH blip' sentinel."""
+        return lambda *a, **k: {"ram_total": (8 << 30) if readable else 0,
+                                "port_open": up, "game_procs": 1 if up else 0}
+
+    def _pa_status(st):
+        with app.app_context():
+            db.session.get(GameServer, gs_id).status = st
+            db.session.commit()
+
+    def _pa_wait(bucket, secs=5.0):
+        """Block until the background power-action thread records its call — so the stubs are never
+        restored out from under it (a real run_as_game_user here would SSH to 127.0.0.1)."""
+        _dl = _pt.time() + secs
+        while _pt.time() < _dl and not bucket:
+            _pt.sleep(0.02)
+        return bool(bucket)
+
+    def _pa_post(action):
+        _pa_ran.clear(); _pa_prio.clear()
+        return c.post("/api/server/%d/action" % gs_id, json={"action": action}).get_json() or {}
+
+    try:
+        _appmod.run_as_game_user = _pa_rag
+        _appmod.set_game_priority = lambda *a, **k: _pa_prio.append(1)
+
+        # Online in the column AND confirmed running on the host: refuse, and don't touch the host.
+        _pa_status("online"); _appmod.server_live_metrics = _pa_metrics(True)
+        _j = _pa_post("start")
+        check("power: start on a running server is refused, not reported as issued",
+              _j.get("success") is False and "already running" in (_j.get("message") or ""),
+              "got %s" % _j)
+        check("power: the refused start never reached the host", not _pa_ran, "ran %s" % _pa_ran)
+        # The same lie in the other direction.
+        _pa_status("offline"); _appmod.server_live_metrics = _pa_metrics(False)
+        _j = _pa_post("stop")
+        check("power: stop on a stopped server is refused, not reported as issued",
+              _j.get("success") is False and "already stopped" in (_j.get("message") or ""),
+              "got %s" % _j)
+        check("power: the refused stop never reached the host", not _pa_ran, "ran %s" % _pa_ran)
+
+        # A STALE "online" — the column says up, the host says down — must not block the recovery.
+        _pa_status("online"); _appmod.server_live_metrics = _pa_metrics(False)
+        _j = _pa_post("start")
+        check("power: a stale 'online' does not block starting a server that has died",
+              _j.get("success") is True and "issued" in (_j.get("message") or ""), "got %s" % _j)
+        check("power: that start really ran on the host", _pa_wait(_pa_ran) and _pa_wait(_pa_prio),
+              "ran %s" % _pa_ran)
+        # A hung server: nothing listening, but processes alive. The column calls that offline —
+        # refusing the stop would leave the one command that fixes it unreachable.
+        _pa_status("offline")
+        _appmod.server_live_metrics = lambda *a, **k: {"ram_total": 8 << 30, "port_open": False,
+                                                       "game_procs": 3}
+        _j = _pa_post("stop")
+        check("power: a hung server (offline column, live processes) can still be stopped",
+              _j.get("success") is True and _pa_wait(_pa_ran), "got %s ran %s" % (_j, _pa_ran))
+        # An unreadable host proves nothing, so it can never be grounds for a refusal. Checked on
+        # the stop side: start is trivially safe (a falsy read lets it through either way), while
+        # losing the "couldn't read" sentinel would turn an SSH blip into "already stopped".
+        _pa_status("offline"); _appmod.server_live_metrics = _pa_metrics(False, readable=False)
+        _j = _pa_post("stop")
+        check("power: an unreadable host fails open — the stop is not refused",
+              _j.get("success") is True and _pa_wait(_pa_ran), "got %s" % _j)
+        # restart is the escape hatch; it is correct from either state and must never be guarded.
+        _pa_status("online"); _appmod.server_live_metrics = _pa_metrics(True)
+        _j = _pa_post("restart")
+        check("power: restart is never refused, whatever the status says",
+              _j.get("success") is True and _pa_wait(_pa_ran) and _pa_wait(_pa_prio), "got %s" % _j)
+    finally:
+        (_appmod.server_live_metrics, _appmod.run_as_game_user,
+         _appmod.set_game_priority) = _pa_saved
+        _pa_status("offline")
+
     # ── /api/server/<id> reports the player count the rest of the panel uses ────────────────
     # It used to run `cat <console_log> | grep -c '...'` over SSH and then look for a line holding
     # both "players" and "has". grep -c prints a bare number, so the match was impossible: 0/0 for
