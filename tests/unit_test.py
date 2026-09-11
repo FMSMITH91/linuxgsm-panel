@@ -5782,9 +5782,13 @@ check("peer check: an invalid host is refused before ping runs, not pinged",
 _panel_js = open(os.path.join(_root, "static", "js", "panel.js"), encoding="utf-8").read()
 _da_src = _panel_js[_panel_js.index("window._da = function"):]
 _da_src = _da_src[:_da_src.index("\n};")]
-check("_da: ampersands are escaped in data-args", "replace(/&/g, '&amp;')" in _da_src)
+_da_amp, _da_quote = _da_src.find("replace(/&/g, '&amp;')"), _da_src.find("replace(/'/g")
+check("_da: ampersands are escaped in data-args", _da_amp >= 0)
+# .find, not .index: a missing escape is the thing being tested for, and raising here would take
+# the whole suite down with a ValueError instead of reporting one FAIL.
 check("_da: ...before the single quotes, or & would re-escape the & of &#39;",
-      _da_src.index("replace(/&/g") < _da_src.index("replace(/'/g"))
+      _da_amp >= 0 and _da_quote >= 0 and _da_amp < _da_quote,
+      "amp at %d, quote at %d" % (_da_amp, _da_quote))
 
 # ── The uninstaller removes everything the installer put OUTSIDE the panel directory ──────────
 # install.sh writes in five places beyond PANEL_DIR. uninstall.sh removed two of them, so a host
@@ -5792,23 +5796,46 @@ check("_da: ...before the single quotes, or & would re-escape the & of &#39;",
 # `npm install -g` every Sunday, and a host-wide vm.swappiness change — while the script's own
 # header and the README both described the removal as complete.
 _uninst = open(os.path.join(_root, "uninstall.sh"), encoding="utf-8").read()
+# Mentioning a path is not removing it — the `if [ -f <path> ]` guard mentions it too. Collect the
+# paths that actually appear as an argument to rm, so deleting the `rm` and keeping the guard (a
+# very easy edit to make by accident) reads as the regression it is.
+#
+# The systemd unit is rm'd through "${UNIT_FILE}", which uninstall.sh sets from its own SYSTEM_UNIT
+# literal — resolve that one variable rather than special-casing the two paths it stands for.
+_sys_unit = re.search(r'SYSTEM_UNIT="([^"]+)"', _uninst)
+_uninst_rm = set()
+for _line in _uninst.splitlines():
+    _cmd = _line.strip()
+    if not _cmd.startswith("rm "):
+        continue
+    if _sys_unit:
+        _cmd = _cmd.replace('"${UNIT_FILE}"', _sys_unit.group(1)).replace(
+            '"${UNIT_FILE}.d"', _sys_unit.group(1) + ".d")
+    _uninst_rm |= set(re.findall(r"/(?:etc|usr/local)/[A-Za-z0-9._/${}-]+", _cmd))
+
+
+def _is_removed(path):
+    """True when uninstall.sh rm's `path`, or a directory containing it."""
+    return any(path == r or path.startswith(r.rstrip("/") + "/") for r in _uninst_rm)
+
+
 for _path, _why in (
         ("/usr/local/lib/linuxgsm-panel", "the root-owned helper, db_maintenance, panel.conf and installer"),
         ("/etc/cron.d/lgsm-node-tools", "the weekly npm/gamedig root cron"),
         ("/etc/sysctl.d/99-linuxgsm-panel.conf", "the host-wide sysctl tuning"),
         ("/etc/sudoers.d/linuxgsm-panel", "the sudoers grant"),
         ("/usr/local/bin/linuxgsm-panel-recover", "the recovery command")):
-    check("uninstall.sh removes %s (%s)" % (_path, _why), _path in _uninst)
+    check("uninstall.sh rm's %s (%s)" % (_path, _why), _is_removed(_path),
+          "rm targets: %s" % sorted(_uninst_rm))
 check("uninstall.sh removes the systemd priority drop-in too", '"${UNIT_FILE}.d"' in _uninst)
-# Whatever install.sh writes under /etc or /usr/local, the uninstaller has to name. This is the
-# gate that makes the next one impossible to forget rather than a list somebody has to remember.
+# ...and the list above is derived, not remembered: whatever install.sh writes under /etc or
+# /usr/local, the uninstaller has to rm. This is what makes the NEXT one impossible to forget.
 _inst_src = open(os.path.join(_root, "install.sh"), encoding="utf-8").read()
 _inst_paths = set(re.findall(r"/(?:etc|usr/local)/[A-Za-z0-9._/-]*linuxgsm[A-Za-z0-9._/-]*",
                              _inst_src))
 _inst_paths |= set(re.findall(r"/etc/cron\.d/[A-Za-z0-9._-]+", _inst_src))
-_unremoved = sorted(p for p in _inst_paths
-                    if not any(p.startswith(u) or u.startswith(p)
-                               for u in re.findall(r"/(?:etc|usr/local)/[A-Za-z0-9._/-]+", _uninst)))
+_inst_paths = {_p.rstrip("/") for _p in _inst_paths if _p.count("/") > 2}
+_unremoved = sorted(_p for _p in _inst_paths if not _is_removed(_p))
 check("uninstall.sh accounts for every panel path install.sh writes outside PANEL_DIR",
       not _unremoved, "not removed: %s" % _unremoved)
 
