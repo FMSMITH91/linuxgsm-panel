@@ -5457,6 +5457,37 @@ try:
 finally:
     _sh.rmtree(_ck_tmp, ignore_errors=True)
 
+# ── register_routes is shrinking, and helpers do not drift back into it ──────────────────────
+# register_routes() was 6,570 lines holding 206 views AND 54 helper functions the views closed
+# over. Those closures are the reason the route table could not be split into modules: no view can
+# move out while a helper it calls is trapped in that scope. Hoisting them is the precondition, so
+# this RATCHETS — the helper count inside may fall and never rise, exactly like the escalation
+# census. tests/url_map_baseline.json is what proves a move changed no route.
+import ast as _ast_rr
+_MOVED_VIEWS = 0   # bump as views relocate into routes/*.py; views + moved must stay 206
+_app_ast = _ast_rr.parse(open(os.path.join(_root, "app.py"), encoding="utf-8").read())
+_rr = next(n for n in _ast_rr.walk(_app_ast)
+           if isinstance(n, _ast_rr.FunctionDef) and n.name == "register_routes")
+_rr_defs = [n for n in _rr.body if isinstance(n, _ast_rr.FunctionDef)]
+_rr_views = [n for n in _rr_defs
+             if any(isinstance(d, _ast_rr.Call) and getattr(d.func, "attr", "") == "route"
+                    for d in n.decorator_list)]
+_rr_helpers = len(_rr_defs) - len(_rr_views)
+_HELPER_CEILING = 35
+check("register_routes: helper closures inside it <= %d (currently %d)"
+      % (_HELPER_CEILING, _rr_helpers),
+      _rr_helpers <= _HELPER_CEILING,
+      "it went UP — a new helper belongs at module level, not nested in the route table")
+check("register_routes: every one of the 206 views is still accounted for",
+      len(_rr_views) + _MOVED_VIEWS == 206,
+      "views inside=%d, moved out=%d" % (len(_rr_views), _MOVED_VIEWS))
+# These two use current_app, which only equals the closed-over `app` inside a request — every
+# caller is a view, so that holds. If they drift back inside, the reasoning stops being checked.
+for _h in ("_log_and_generic", "_unreachable"):
+    check("register_routes: %s is module-level, not nested" % _h,
+          any(isinstance(n, _ast_rr.FunctionDef) and n.name == _h for n in _app_ast.body),
+          "it moved back inside register_routes")
+
 # ── The docs state numbers that the code owns — pin them ──────────────────────────────────────
 # Every one of these was wrong at the time of writing, and none of them could be. SECURITY.md said
 # "43 verbs" against 86; the CHANGELOG said 77 in the same release; README advertised 18 alert

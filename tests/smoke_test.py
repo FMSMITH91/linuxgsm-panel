@@ -2379,6 +2379,27 @@ try:
         _am.remote_os_check_updates = _sv_rem
         _am.notifications.notify = _sv_notify2
 
+    # ── The hoisted error helpers still work where they are actually called ──────────────────────
+    # _log_and_generic and _unreachable moved out of register_routes to module level, and their
+    # `app.logger` became `current_app.logger`. That is only equivalent inside a request context —
+    # outside one it raises "Working outside of application context", which would turn the panel's
+    # generic-error path into a 500 with a traceback: the exact leak _log_and_generic exists to
+    # prevent. Every caller is a route view, so the context is guaranteed; assert it rather than
+    # assume it, in a REQUEST context (not merely an app context, which is weaker).
+    with app.test_request_context("/api/servers"):
+        _lg = _am._log_and_generic("smoke probe — expected, not a real failure")
+        check("hoisted helpers: _log_and_generic returns the generic string, not the exception",
+              _lg == "Internal server error", repr(_lg))
+        _ur_resp, _ur_code = _am._unreachable("smoke probe")
+        _ur_body = _ur_resp.get_json() or {}
+        check("hoisted helpers: _unreachable answers 200 with an unreachable flag",
+              _ur_code == 200 and _ur_body.get("unreachable") is True
+              and _ur_body.get("success") is False, "%s %s" % (_ur_code, _ur_body))
+    # ...and they really are module level now, reachable without going through register_routes.
+    check("hoisted helpers: both are module-level attributes of app.py",
+          callable(getattr(_am, "_log_and_generic", None))
+          and callable(getattr(_am, "_unreachable", None)))
+
     # ── Changing the panel port must not drop the fail2ban whitelist ─────────────────────────────
     # ensure_panel_fail2ban REWRITES the jail whenever the port changes, and its ignore_ips argument
     # is what becomes `ignoreip`. The port-change route called it without one, so the jail came back
