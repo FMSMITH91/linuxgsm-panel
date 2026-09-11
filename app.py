@@ -619,7 +619,8 @@ def _tg_help_text():
             "/start <name> — start a server\n"
             "/stop <name> — stop a server\n"
             "/restart <name> — restart a server\n"
-            "/update — update the panel\n"
+            "/update <name> — update that game server (LinuxGSM)\n"
+            "/update — update the panel itself\n"
             "/help — this message")
 
 
@@ -730,7 +731,14 @@ def _handle_telegram_command(app, token, chat_id, text, sender=None):
     elif cmd in ("restart", "start", "stop"):
         _tg_server_action(app, token, chat_id, cmd, arg, sender)
     elif cmd in ("update", "upgrade"):
-        _telegram_do_update(app, token, chat_id)
+        # An argument names a SERVER here, the way it does for every other command that takes one
+        # (/start, /stop, /restart, /players). The argument used to be parsed and then dropped, so
+        # "/update codserver" — asking for a LinuxGSM update of one game server — silently updated
+        # the panel itself and restarted it instead.
+        if arg:
+            _tg_server_action(app, token, chat_id, "update", arg, sender)
+        else:
+            _telegram_do_update(app, token, chat_id)
     else:
         _tg_reply(token, chat_id, "Unknown command '%s'. Send /help." % cmd[:24])
 
@@ -875,7 +883,8 @@ def _dc_help_text():
             "`!start <name>` — start a server\n"
             "`!stop <name>` — stop a server\n"
             "`!restart <name>` — restart a server\n"
-            "`!update` — update the panel\n"
+            "`!update <name>` — update that game server (LinuxGSM)\n"
+            "`!update` — update the panel itself\n"
             "`!help` — this message")
 
 
@@ -916,7 +925,11 @@ def _handle_discord_command(app, bot_token, channel_id, text, sender=None):
     elif cmd in ("restart", "start", "stop"):
         _dc_server_action(app, bot_token, channel_id, cmd, arg, sender)
     elif cmd in ("update", "upgrade"):
-        _discord_do_update(app, bot_token, channel_id)
+        # Same rule as Telegram: an argument names a server, not the panel. (See the note there.)
+        if arg:
+            _dc_server_action(app, bot_token, channel_id, "update", arg, sender)
+        else:
+            _discord_do_update(app, bot_token, channel_id)
     elif cmd:
         _dc_reply(bot_token, channel_id, "Unknown command '%s'. Send !help." % cmd[:24])
 
