@@ -1892,6 +1892,14 @@ def panel_diagnostics():
     # two tables here so the Diagnostics card says which verbs are missing and what to run.
     if _helper_present():
         try:
+            # Same suppression, and the same reasoning, as the subprocess.run in _run_verb above —
+            # which is the only other place the panel executes the helper. This argv is narrower
+            # still: BOTH elements are module constants (privileged.HELPER_PATH and the literal
+            # "--list-verbs"), nothing here is derived from a request, and shell=False means no
+            # element is ever interpreted. The scanners flag any call whose first argument is not a
+            # literal string; making it one would mean composing a command, which is the thing the
+            # verb table exists to remove. Reviewed and suppressed rather than silently left red.
+            # nosemgrep: python.lang.security.audit.dangerous-subprocess-use-audit.dangerous-subprocess-use-audit
             _hv = subprocess.run([_priv.HELPER_PATH, "--list-verbs"], shell=False,  # nosec B603
                                  capture_output=True, text=True, timeout=10)
             _installed = {ln.split("\t")[0] for ln in (_hv.stdout or "").splitlines() if ln.strip()}
