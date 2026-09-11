@@ -114,6 +114,12 @@ F2B_LOG_GLOB = "/var/log/fail2ban.log*"
 # (tmpfs, root-owned) rather than /tmp, where any local user could pre-create the file.
 TS_UP_LOG = "/run/panel-tailscale-up.log"
 TS_UP_POLL_SECONDS = 20
+# The login URL `tailscale up` prints, pinned to the same charset the helper's own grep looks for.
+# It lives here because BOTH callers need it and must agree: the remote flow (ssh_manager) and the
+# panel-host flow (tailscale_integration) each read this line back off a host and render it into the
+# panel's HTML. Whoever checks it must FULLMATCH — a prefix test accepts anything after the trusted
+# part, and the far side's grep is running on a host whose output is exactly what is in question.
+TS_LOGIN_URL_RE = re.compile(r"https://login\.tailscale\.com/[A-Za-z0-9/]+")
 
 # The detached OS-update job — see tools/panel-helper. OS_UPDATE_LOG is the same file
 # the os-update-log verb tails.

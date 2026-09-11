@@ -712,7 +712,12 @@ def _bot_origin(platform, sender):
 def _handle_telegram_command(app, token, chat_id, text, sender=None):
     cmd = _parse_tg_command(text)
     arg = _tg_command_arg(text)
-    if cmd in ("help", "start"):
+    # A BARE /start is Telegram's own "open the chat" command and should answer with help — but
+    # `/start <server>` is the documented way to start a server (it is in TG_COMMANDS, so Telegram
+    # puts it in the '/' menu, and _tg_help_text lists it). Matching on the word alone swallowed
+    # every one of those: the branch below never saw "start", so the bot answered a start request
+    # with its help text. Discord's equivalent matches "help" only and has always worked.
+    if cmd == "help" or (cmd == "start" and not arg):
         _tg_reply(token, chat_id, _tg_help_text())
     elif cmd == "status":
         _tg_reply(token, chat_id, _tg_status_text(app))
@@ -3068,7 +3073,13 @@ def register_routes(app):
         backup code). On success the new password is set and every OTHER session is signed out
         (auth_epoch bump); this session is refreshed so the user stays logged in here.
         (Superadmins change other people's passwords on the Users page, which needs neither.)"""
-        u = current_user
+        # The real User row, NOT the current_user proxy. login_user() below re-logs this same user
+        # in to refresh the session, and handing it the proxy makes flask-login store the proxy as
+        # the logged-in user — every later `current_user` then resolves through it, recurses, and
+        # the request dies with a RecursionError. The password change itself had already been
+        # committed by then, so the symptom was a 500 page (and no audit entry) after a change that
+        # actually worked, which is the worst way for this particular action to fail.
+        u = current_user._get_current_object()
         old = request.form.get("current_password", "")
         new = request.form.get("new_password", "")
         confirm = request.form.get("confirm_password", "")
@@ -3089,9 +3100,23 @@ def register_routes(app):
             return redirect(url_for("account"))
         # 2FA is checked LAST so a one-time backup code is never spent on an otherwise-invalid
         # request. A matching authenticator code passes; otherwise a valid backup code is consumed.
+        #
+        # verify_totp_STEP, not verify_totp: a code stays valid for ~90 seconds (its step plus one
+        # either side for skew), so accepting it on "is it valid" alone lets one that was observed
+        # once be replayed for the rest of that window. The login path has recorded the spent step
+        # since single-use was introduced; this — the panel's other route that accepts a live code —
+        # was still asking the yes/no question. The step is committed below with the new password.
         if u.totp_enabled:
-            ok_2fa = bool(u.totp_secret_plain and verify_totp(u.totp_secret_plain, code))
-            if not ok_2fa and u.use_backup_code(code):
+            ok_2fa = False
+            _step = verify_totp_step(u.totp_secret_plain, code) if u.totp_secret_plain else None
+            if _step is not None:
+                if _step <= (u.last_totp_step or 0):
+                    flash("That code has already been used — wait for your authenticator to show "
+                          "the next one.", "danger")
+                    return redirect(url_for("account"))
+                u.last_totp_step = _step
+                ok_2fa = True
+            elif u.use_backup_code(code):
                 ok_2fa = True                    # committed below alongside the new password
             if not ok_2fa:
                 flash("That authenticator code didn't match — password not changed.", "danger")
@@ -4444,11 +4469,40 @@ def register_routes(app):
     @permission_required(MANAGE_SERVERS)
     @server_access_required   # same: MANAGE_SERVERS is not a grant for EVERY server
     def edit_server(server_id):
+        """Rename a game server's DISPLAY labels. Nothing here touches the host.
+
+        Two things were wrong with the previous version, and both only ever showed up through a
+        direct API call — no template or script references this route.
+
+        `name` and `game_display` were written straight from the form. Every other label the panel
+        stores goes through SAFE_LABEL_RE first (add_remote / edit_remote do), and SQLite does not
+        enforce VARCHAR length, so this was the one write that accepted any bytes at any size.
+
+        `port` was worse: it moved the panel's RECORD of the port and nothing else. The firewall
+        rule stays on the old port, LinuxGSM keeps listening there, and the monitor — which decides
+        a server is up by `gs.port in <listening ports>` — then reports it permanently offline. A
+        port really does change in three places at once, which is what the install flow and the
+        Firewall page's "Open all ports" (sync-ports) do together. So this refuses rather than
+        silently desyncing: a refusal names the right mechanism, a silent write hides it.
+        """
         gs = get_game(server_id)
-        gs.name = request.form.get("name", gs.name)
-        gs.port = _int_or(request.form.get("port"), gs.port)
-        gs.game_display = request.form.get("game_display", gs.game_display)
+        new_port = (request.form.get("port") or "").strip()
+        if new_port and _int_or(new_port, gs.port) != gs.port:
+            return _form_err(
+                "The port can't be changed here — it would only move the panel's record, leaving "
+                "the game server and the firewall on the old port. Change it in the server's "
+                "LinuxGSM config, then use 'Open all ports' on the Firewall page.",
+                "manage_servers")
+        name = (request.form.get("name") or gs.name or "").strip() or gs.name
+        game_display = (request.form.get("game_display") or gs.game_display or "").strip()
+        for _label, _value in (("Name", name), ("Game", game_display)):
+            if _value and not SAFE_LABEL_RE.match(_value):
+                return _form_err("%s can't be empty, longer than 120 characters, or contain "
+                                 "< > \" ' ` or backslashes." % _label, "manage_servers")
+        gs.name = name
+        gs.game_display = game_display
         db.session.commit()
+        log_action(current_user, "edit_server", target=gs.name)
         return _form_ok(f"Server '{gs.name}' updated.", "manage_servers")
 
     # ── Remote Server Management ───────────────────────────
@@ -5012,7 +5066,13 @@ def register_routes(app):
     @permission_required(MANAGE_GROUPS)
     def edit_group(group_id):
         group = Group.query.get_or_404(group_id)
-        group.name = (request.form.get("name") or group.name or "").strip() or group.name
+        new_name = (request.form.get("name") or group.name or "").strip() or group.name
+        # Group.name is unique=True, so a rename onto an existing name raises IntegrityError at
+        # commit — a 500 for what is just a typo. add_group has always checked this; the edit path
+        # never did.
+        if new_name != group.name and Group.query.filter_by(name=new_name).first():
+            return _form_err(f"Group '{new_name}' already exists.", "manage_groups")
+        group.name = new_name
         group.description = (request.form.get("description") or group.description or "").strip()
         group.set_permissions(_grantable_perms(request.form.getlist("permissions"),
                                                group.get_permissions()))
@@ -5306,9 +5366,13 @@ def register_routes(app):
     def api_tailscale_check_peer():
         """Check if a host is reachable on the tailnet."""
         data = _json_body()
-        host = data.get("host", "")
+        host = (data.get("host") or "").strip()
         if not host:
             return jsonify({"success": False, "message": "Host required"}), 400
+        # It becomes ping's last argv element, where a leading dash reads as an option.
+        if not ts.valid_peer_host(host):
+            return jsonify({"success": False,
+                            "message": "Enter a hostname or IP address."}), 400
         result = ts.check_peer_reachability(host)
         is_ts = ts.is_tailscale_ip(host)
         return jsonify({
@@ -7469,26 +7533,17 @@ def register_routes(app):
         except Exception:
             status = "error"
 
-        # Try to get player counts
-        player_count = 0
-        max_players = 0
-        try:
-            out, err, rc = run_command(
-                remote,
-                f"cat {gs.console_log} 2>/dev/null "
-                f"| grep -c 'ClientConnect\\|Player connected' || echo '0'",
-                timeout=10
-            )
-            # Simple player count heuristic
-            for line in reversed(out.split("\n") if out else []):
-                if "players" in line.lower() and "has" in line.lower():
-                    m = re.search(r'(\d+)\s+of\s+(\d+)', line)
-                    if m:
-                        player_count = int(m.group(1))
-                        max_players = int(m.group(2))
-                        break
-        except Exception:
-            _log.debug("api_server_status: ignored non-fatal error", exc_info=True)
+        # The player counts come from the SAME cache /api/servers reads, kept fresh by the
+        # background poller (gamedig, with the console and LinuxGSM-query fallbacks).
+        #
+        # This used to run `cat <console_log> | grep -c '...'` over SSH and then scan the result for
+        # a line containing both "players" and "has". `grep -c` prints a bare number, so that loop
+        # could never match: the endpoint reported 0/0 for every server, always — while paying for a
+        # round trip that `cat`s the whole console log across the network on each call. None (not 0)
+        # is what "we could not read it" means everywhere else in the API, so it is what this
+        # answers now too.
+        player_count = _cached_player_count(gs.id)
+        max_players = _cached_player_max(gs.id)
 
         return jsonify({
             "id": gs.id,

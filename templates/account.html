@@ -30,8 +30,9 @@
     <div class="card-header"><i class="bi bi-grid-1x2-fill"></i> Dashboard layout</div>
     <div class="card-body">
       <p class="text-secondary small mb-2">Reorder the host panels on your dashboard with the arrow buttons in each panel's header. Your order is saved to your account and follows you across devices.</p>
-      {# Read the preference straight off current_user so this card needs no route change — account.html
-         is rendered from two places (account() and the api-token mint), which would otherwise diverge. #}
+      {# Read the preference straight off current_user so this card needs no route change: account.html
+         is rendered from two places (account() and the api-token mint), and only one of them passes
+         anything but `languages`. #}
       {% set has_custom_layout = current_user.get_ui_prefs() %}
       <p class="text-secondary small mb-2">{% if has_custom_layout %}You're using your own order.{% else %}You're using the default order.{% endif %}</p>
       <button class="btn btn-outline-secondary btn-sm" data-action="resetDashLayout" data-args='["@self"]'
@@ -131,6 +132,49 @@
           <i class="bi bi-box-arrow-right"></i> Sign out everywhere
         </button>
       </form>
+    </div>
+  </div>
+
+  {# API access. This card was dropped in c1f63e5 while the routes and the Bearer auth path stayed,
+     which left a live way into every endpoint that nobody could see, mint or revoke — and made
+     /account/api-token/generate store a credential whose plaintext it then threw away, because
+     `new_token` had no reader. A second authentication path has to be manageable from the UI that
+     owns it. #}
+  <div class="card">
+    <div class="card-header"><i class="bi bi-code-slash"></i> API access</div>
+    <div class="card-body">
+      <p class="text-secondary small mb-2">
+        A personal API token lets scripts and bots call the panel's API without a browser session,
+        using an <code>Authorization: Bearer &lt;token&gt;</code> header. It acts as
+        <strong>you</strong> — exactly your permissions and your server access, no more. Only a
+        hash of it is stored, so it can never be read back.
+      </p>
+
+      {% if new_token %}
+      <div class="alert alert-success py-2">
+        <div class="small mb-1"><strong>Copy your new token now</strong> — it won't be shown again.</div>
+        <code class="user-select-all d-block p-2" style="word-break:break-all; background:rgba(0,0,0,.2); border-radius:6px;">{{ new_token }}</code>
+        <div class="small text-secondary mt-2">Example:</div>
+        <code class="d-block p-2 small" style="word-break:break-all; background:rgba(0,0,0,.2); border-radius:6px;">curl -H "Authorization: Bearer {{ new_token }}" https://your-panel:5000/api/servers</code>
+      </div>
+      {% endif %}
+
+      <p class="small mb-2">
+        Status:
+        {% if current_user.has_api_token %}<span class="badge bg-success">A token is active</span>
+        {% else %}<span class="badge bg-secondary">No token</span>{% endif %}
+      </p>
+      <form method="POST" action="{{ url_for('account_api_token_generate') }}" style="display:inline;">
+        <button class="btn btn-primary btn-sm" type="submit">
+          <i class="bi bi-key"></i> {{ 'Regenerate token' if current_user.has_api_token else 'Generate token' }}
+        </button>
+      </form>
+      {% if current_user.has_api_token %}
+      <form method="POST" action="{{ url_for('account_api_token_revoke') }}" style="display:inline;">
+        <button class="btn btn-outline-danger btn-sm" type="submit"><i class="bi bi-x-circle"></i> Revoke</button>
+      </form>
+      {% endif %}
+      <div class="small text-secondary mt-2">Regenerating or revoking immediately invalidates the old token.</div>
     </div>
   </div>
 </div>

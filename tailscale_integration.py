@@ -281,10 +281,27 @@ def get_tailscale_ip(version=4) -> Optional[str]:
     return info.tailscale_ips[0] if info.tailscale_ips else None
 
 
+# A host name / IP the panel may hand to `ping`. Same charset as app.HOST_RE (hostname, IPv4,
+# bracketed IPv6, MagicDNS), with the first character pinned to alphanumeric: `ping` takes options,
+# and this value is argv[-1], so a leading dash is read as one. There is no shell here, so this is
+# option injection rather than command injection — but "the argument cannot be an option" is the
+# same rule privileged.USERNAME_RE and models._SHELL_IDENT_RE already apply for the same reason.
+_PEER_HOST_RE = re.compile(r"^[A-Za-z0-9\[][A-Za-z0-9._:\[\]-]{0,254}$")
+
+
+def valid_peer_host(host):
+    """True if `host` is something the panel may ping. Checked at the route (for a clear 400) and
+    again here, so a future caller cannot skip it."""
+    return bool(_PEER_HOST_RE.match(str(host or "").strip()))
+
+
 def check_peer_reachability(host) -> dict:
     """Check if a host (IP or hostname) responds on the tailnet via ping."""
     reachable = False
     latency_ms = 0
+    if not valid_peer_host(host):
+        return {"reachable": False, "latency_ms": 0}
+    host = str(host).strip()
     try:
         r = subprocess.run(
             ["ping", "-c", "1", "-W", "3", host],
@@ -416,7 +433,12 @@ def tailscale_up_local(enable_ssh=True):
                                  timeout=40, merge_stderr=False)
     r = _SimpleResult(stdout=out, stderr=err, returncode=rc)
     line = (r.stdout or "").strip().split("\n")[-1].strip()
-    if line.startswith("https://login.tailscale.com/"):
+    # FULLMATCH, not startswith. This URL is rendered into the panel's HTML (tailscale.html and
+    # setup_tailscale.html both put it in an href AND in the link text), and the charset is enforced
+    # by a grep running on the host being joined — so a prefix test accepts anything at all after
+    # "https://login.tailscale.com/". The REMOTE twin in ssh_manager has pinned the whole string for
+    # a while and says why; this panel-host copy was never switched over. Same regex, one definition.
+    if _priv.TS_LOGIN_URL_RE.fullmatch(line):
         with _cache_lock:
             _cache["info"] = None
         return True, line

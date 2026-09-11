@@ -14,7 +14,7 @@ bytes it strips before the text reaches a browser.
 | `fuzz_game_status.py` | `_parse_valve_status`, `_parse_idtech3_status`, `_parse_minecraft_list` | a remote game server's `status`/`list` reply |
 | `fuzz_firewall.py` | `_parse_ufw_rule`, `_group_ufw_rules` | `ufw status numbered` output |
 | `fuzz_config.py` | `_parse_cfg`, `_parse_upgradable`, `_parse_mods_available`, `_parse_mods_installed` | LinuxGSM config / `apt list` / mod listings |
-| `fuzz_fail2ban.py` | `_parse_top_ips` | the fail2ban log counting pipeline |
+| `fuzz_fail2ban.py` | `_tally_f2b_lines`, `_parse_top_ips` | the fail2ban log counting pipeline — the raw log lines *and* the tallied rows |
 | `fuzz_console.py` | `strip_escapes`, `apply_carriage_returns`, `apply_backspaces`, `render` (`terminal.py`) | a game console's output — player names, chat and RCON replies, so partly attacker-*authored* |
 | `fuzz_cron.py` | `_split_cron_line`, `_unwrap_cron_command`, `_cron_role`, `_cron_line_managed`, `_cron_log_text`, `_clean_cron_error` | a remote host's crontab, and the base64 status blob the panel's cron wrapper writes |
 
