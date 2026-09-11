@@ -243,6 +243,207 @@ for _p in sorted((ROOT / "static" / "js").glob("*.js")):
         if _dyn:
             _found.setdefault(_p.name, set()).add(",".join(_dyn))
 
+# ── 0d-ii. ...including markup ACCUMULATED into a variable first ───────────────────────────────
+# The scan above only reads the expression sitting directly at a sink. That is a real blind spot,
+# and it hid a real bug: manage_remotes.js builds `html` across a dozen `html += '<…>' + value`
+# lines and then hands it to setModalBody(), which does `el.innerHTML = html`. At the sink the
+# expression is the bare identifier `html` — nothing dynamic, nothing to report — so four
+# remote-host-controlled values (tailscale_ip, dns_name, old_host, new_host) walked straight past
+# the gate that exists to catch exactly them.
+#
+# This does the one extra hop, and ONLY for the shape that shipped that bug:
+#
+#   1. find the variables handed to a sink as a bare name — `x.innerHTML = name`,
+#      `insertAdjacentHTML(…, name)`, or a call to a helper that assigns its own parameter to
+#      innerHTML (setModalBody is the one here; detected, not hardcoded);
+#   2. of those, keep the ones BUILT BY APPENDING MARKUP (`name += '…<tag…'`) — that is what makes
+#      the variable an HTML buffer rather than a coincidence of naming;
+#   3. report a dynamic value only where it is interpolated DIRECTLY ADJACENT to a markup literal,
+#      which is the thing that actually injects.
+#
+# Deliberately narrow. A wider version (any `+` anywhere in any statement building any sink-bound
+# name) was tried first and produced a long tail of false positives — reused local names across
+# functions, ternary CONDITIONS, helpers that escape internally — which would have had to be
+# absorbed into the baseline, and a baseline that large stops being a reviewable list of
+# exceptions. Catching the shipped bug shape with no noise beats catching everything with 8.
+# Deliberately NOT anchored to the start of a statement. The line that shipped the bug is
+#   `if (status.tailscale_ip) html += '<code>' + status.tailscale_ip + '</code>';`
+# — the append sits after an `if (…)`, so a start-of-line anchor misses it entirely. Precision
+# comes from the `_bound` filter below (the name must actually reach a sink), not from position.
+_ACCUM_MARKUP = re.compile(r"""\b([A-Za-z_$][\w$]*)\s*\+=""")
+
+# A dynamic name interpolated straight onto a markup literal: `'…<b>' + value` / `value + '</b>…'`.
+# The trailing (?!\s*\?) matters: in `'<td>' + (g.protected ? '<button…' : '<button…')` the name
+# is the ternary's CONDITION — it decides which literal is used, it is never itself interpolated.
+_ADJACENT = (r"""'[^'\n]*<[A-Za-z/][^'\n]*'\s*\+\s*\(*\s*([A-Za-z_$][\w$.]*)(?![\w$.])(?!\s*\?)""",
+             r"""([A-Za-z_$][\w$.]*)\s*\)*\s*\+\s*'[^'\n]*<[A-Za-z/][^'\n]*'""")
+
+
+def _html_sink_helpers(src):
+    """Function names whose single parameter is assigned to .innerHTML/.outerHTML inside them."""
+    out = set()
+    for name, params, body in _fn_bodies(src):
+        param = params.strip()
+        if not re.fullmatch(r"[A-Za-z_$][\w$]*", param):
+            continue
+        if re.search(r"\.(?:inner|outer)HTML\s*=\s*%s\b" % re.escape(param), body):
+            out.add(name)
+    return out
+
+
+def _sink_bound_names(src, helpers):
+    """Identifiers handed to an HTML sink as a bare name — the ones worth tracing back."""
+    names = set()
+    for m in re.finditer(r"\.(?:inner|outer)HTML\s*=\s*([A-Za-z_$][\w$]*)\s*;", src):
+        names.add(m.group(1))
+    for m in re.finditer(r"insertAdjacentHTML\s*\([^,]+,\s*([A-Za-z_$][\w$]*)\s*\)", src):
+        names.add(m.group(1))
+    for fn in helpers:
+        for m in re.finditer(r"\b%s\s*\(\s*([A-Za-z_$][\w$]*)\s*\)" % re.escape(fn), src):
+            names.add(m.group(1))
+    return names
+
+
+# Calls that neutralise their argument for the context they land in: the escapers, plus
+# encodeURIComponent (a URL-context escaper, and the only thing in an href here) and the byte/date
+# formatters, which return digits and units from a number.
+# NOT String(): it is a cast, not an escaper — String('<img>') is still '<img>'. Number/parseInt/
+# parseFloat are here because they can only ever produce digits, '.', '-', 'e', NaN or Infinity.
+_NEUTRAL = _ESCAPERS + ("tsEsc", "specEsc", "escA", "_da", "Number", "parseInt",
+                        "parseFloat", "encodeURIComponent", "bkFmtBytes", "bkFmt", "bkAgo",
+                        "fmtBytes", "plTime")
+# Panel-authored globals rendered into the page by base.html — the mount prefix, the CSRF token,
+# the current language, the ids of the thing being viewed. Not request input, and interpolated
+# into nearly every URL the JS builds.
+_PANEL_GLOBALS = {"MOUNT", "CSRF", "LANG", "I18N", "LOCAL_HOST_ID", "REMOTE_ID", "SERVER_ID",
+                  "SERVER_NAME", "IS_LOCAL"}
+
+
+def _strip_neutral(expr, extra=()):
+    """`expr` with every neutralising call replaced by a blank literal."""
+    out = re.sub(r"//[^\n]*", "", expr)
+    for fn in tuple(_NEUTRAL) + tuple(extra):
+        out = re.sub(r"\b%s\s*\((?:[^()]|\([^()]*\))*\)" % fn, "''", out)
+    return out
+
+
+_FN_HEAD = re.compile(r"function\s+([A-Za-z_$][\w$]*)\s*\(([^)]*)\)\s*\{")
+
+
+def _fn_bodies(src):
+    """(name, params, body) for every `function name(...) {…}`, bodies brace-balanced.
+
+    A lazy brace-to-newline-brace pattern looks equivalent and is not: re.finditer is
+    non-overlapping, so one long
+    function whose body has no closing brace in column 0 until much later swallows every definition
+    after it. That silently hid protoBadge and cronLastRun from the helper detection below."""
+    for m in _FN_HEAD.finditer(src):
+        i, depth = m.end(), 1
+        while i < len(src) and depth:
+            c = src[i]
+            if c in "'\"`":
+                q, i = c, i + 1
+                while i < len(src) and src[i] != q:
+                    i += 2 if src[i] == "\\" else 1
+            elif c == "{":
+                depth += 1
+            elif c == "}":
+                depth -= 1
+            i += 1
+        yield m.group(1), m.group(2), src[m.end():i - 1]
+
+
+def _safe_markup_helpers(src):
+    """Local functions whose every `return` is a string built without an unescaped dynamic value.
+
+    Two shapes, both common here and both safe to call from inside markup:
+      * markup fragments — `protoBadge(p)` returns one of four static badges, `blockBadge(c)`
+        escapes its argument on the one path that interpolates it, `cronLastRun(j)` formats a date;
+      * plain values — `fileIcon(name)` maps a filename to a fixed Bootstrap icon class and never
+        puts the name in its output at all.
+
+    The second kind has no '<' in it, which is why "returns markup" was the wrong test: it left
+    `'<i class="bi '+fileIcon(e.name)+'">'` reading as an unescaped e.name."""
+    out = set()
+    for name, _params, body in _fn_bodies(src):
+        rets = re.findall(r"\breturn\s+([^\n;]+)", body)
+        if not rets or not any("'" in r or '"' in r for r in rets):
+            continue
+        if all(not {d for pat in _ADJACENT for d in re.findall(pat, _strip_neutral(r))}
+               for r in rets):
+            out.add(name)
+    return out
+
+
+def _safe_locals(src):
+    """Locals that hold markup which is already safe, to a fixed point.
+
+    Two kinds, and both are used constantly in this codebase:
+      * escaper output — `var safe = escapeHtml(name)`;
+      * a markup FRAGMENT built from literals and other safe locals — `var kind = cond ? '<span
+        class="badge">daily</span>' : '<span class="badge">manual</span>'`.
+
+    Without this the scan reports the safe variable exactly as if it were the raw value. Iterated
+    rather than done in one pass because fragments nest: server_files.js builds `actions` out of
+    `runBtn`, which is itself literal-only."""
+    safe = set()
+    for fn in _ESCAPERS + ("tsEsc", "specEsc", "escA"):
+        for m in re.finditer(
+                r"(?:var|let|const)\s+([A-Za-z_$][\w$]*)\s*=\s*%s\s*\(" % re.escape(fn), src):
+            safe.add(m.group(1))
+    decls = [(m.group(1), _js_expr_at(src, m.end()))
+             for m in re.finditer(r"(?:var|let|const)\s+([A-Za-z_$][\w$]*)\s*=\s*", src)]
+    for _ in range(6):                      # a fixed point; 6 is far more nesting than exists here
+        grew = False
+        for name, expr in decls:
+            if name in safe:
+                continue
+            clean = _strip_neutral(expr)
+            dyn = {d for pat in _ADJACENT for d in re.findall(pat, clean)}
+            # Also anything concatenated with a safe fragment, not just with a literal.
+            if dyn - safe:
+                continue
+            if "<" in expr:                 # it is markup, and nothing unescaped reaches it
+                safe.add(name)
+                grew = True
+        if not grew:
+            break
+    return safe
+
+
+for _p in sorted((ROOT / "static" / "js").glob("*.js")):
+    _src = _p.read_text(encoding="utf-8")
+    _bound = _sink_bound_names(_src, _html_sink_helpers(_src))
+    _helpers = _safe_markup_helpers(_src)
+    _safe = _safe_locals(_src)
+    # Case A: the markup is passed straight to a sink helper as an EXPRESSION, not via a
+    # variable — `setModalBody('<p>Old host: <code>' + data.old_host + '</code>' + …)`. The bare-name
+    # scan above cannot see this one, and it is where two of the four shipped values lived.
+    for _fn in sorted(_html_sink_helpers(_src)):
+        for _m in re.finditer(r"\b%s\s*\(" % re.escape(_fn), _src):
+            _expr = _js_expr_at(_src, _m.end())
+            if not re.search(r"'[^'\n]*<[A-Za-z/]", _expr):
+                continue
+            _clean = _strip_neutral(_expr, _helpers)
+            _dyn = sorted({d for pat in _ADJACENT for d in re.findall(pat, _clean)}
+                          - set(_safe) - _PANEL_GLOBALS)
+            if _dyn:
+                _found.setdefault(_p.name, set()).add(",".join(_dyn))
+
+    # Case B: the markup is accumulated into a variable that later reaches a sink.
+    for _m in _ACCUM_MARKUP.finditer(_src):
+        _name = _m.group(1)
+        if _name not in _bound:
+            continue                     # not an HTML buffer that reaches a sink
+        _expr = _js_expr_at(_src, _m.end())
+        _clean = _strip_neutral(_expr, _helpers)
+        _pats = _ADJACENT + (r"\+\s*\(*\s*([A-Za-z_$][\w$.]*)(?![\w$.])(?!\s*\?)",
+                             r"([A-Za-z_$][\w$.]*)\s*\)*\s*\+")
+        _dyn = sorted({d for pat in _pats for d in re.findall(pat, _clean)}
+                      - set(_safe) - _PANEL_GLOBALS)
+        if _dyn:
+            _found.setdefault(_p.name, set()).add(",".join(_dyn))
+
 _baseline = json.loads((ROOT / "tests" / "html_sink_baseline.json").read_text(encoding="utf-8"))
 _new = sorted("%s: %s" % (f, sig) for f, sigs in _found.items()
               for sig in sigs if sig not in _baseline.get(f, []))
@@ -250,6 +451,78 @@ check(not _new,
       "static/js: no NEW unescaped value reaches innerHTML (wrap it in escapeHtml, or explain it "
       "in tests/html_sink_baseline.json)",
       "; ".join(_new[:3]))
+
+# ── 0e. no template renders the same id= twice ────────────────────────────────────────────────
+# getElementById returns the FIRST match, so a duplicate id does not fail loudly — it silently
+# points every handler at the wrong element. remote_manage.html carried id="diag-repair-btn" on
+# BOTH the panel-file restore button and the database repair button, inside the same
+# {% if remote.is_local %} block, so checkDbHealth() hid the file-restore button, repairDb()
+# relabelled it, and the real "Repair database" button could never be shown at all.
+#
+# Ids in MUTUALLY EXCLUSIVE Jinja branches are fine and common here (the local-host and remote-host
+# variants of the SSH panel use the same ids on purpose), so a flat count over-reports. Track the
+# branch path instead: two occurrences collide only when one's branch path is a prefix of the
+# other's — i.e. they can both be rendered by the same request.
+_ID_ATTR = re.compile(r'\sid="([A-Za-z][\w:.-]*)"')
+_JINJA_TAG = re.compile(r"\{%-?\s*(if|elif|else|endif|for|endfor)\b")
+
+
+def _branch_paths(src):
+    """(id, branch-path) for every id= in `src`, where the path identifies the Jinja arm it sits in.
+
+    A new arm at the same depth gets a fresh serial, so `if`-arm 1 and `else`-arm 2 differ at that
+    position and can never both render; nesting deeper appends, so an outer arm is a PREFIX of the
+    arms inside it — which is exactly the "can both render" relation."""
+    out, stack, serial = [], [], [0]
+    pos = 0
+    for m in _JINJA_TAG.finditer(src):
+        for im in _ID_ATTR.finditer(src, pos, m.start()):
+            out.append((im.group(1), tuple(stack)))
+        kw = m.group(1)
+        if kw in ("if", "for"):
+            serial.append(0)
+            stack.append((len(stack), serial[-1]))
+        elif kw in ("elif", "else"):
+            if stack:
+                serial[-1] += 1
+                stack[-1] = (len(stack) - 1, serial[-1])
+        elif kw in ("endif", "endfor"):
+            if stack:
+                stack.pop()
+            if len(serial) > 1:
+                serial.pop()
+        pos = m.end()
+    for im in _ID_ATTR.finditer(src, pos):
+        out.append((im.group(1), tuple(stack)))
+    return out
+
+
+# Ids that only ever exist inside an inline <script> are built at RUNTIME, and which of them is
+# in the DOM is decided by JavaScript control flow this gate cannot model — setup_tailscale.html
+# emits id="ts-out" in three branches of one function, each of which returns. Blank the script
+# bodies out (keeping the byte count, so offsets and the Jinja scan stay aligned) and judge only
+# the markup the template actually renders.
+_SCRIPT_BODY = re.compile(r"(<script\b[^>]*>)(.*?)(</script>)", re.S)
+
+
+def _without_scripts(src):
+    return _SCRIPT_BODY.sub(lambda m: m.group(1) + (" " * len(m.group(2))) + m.group(3), src)
+
+
+_dupe_ids = []
+for _tpl in sorted(TEMPLATES.glob("*.html")):
+    _seen = {}
+    for _id, _path in _branch_paths(_without_scripts(_tpl.read_text(encoding="utf-8"))):
+        for _other in _seen.get(_id, []):
+            # Both can render iff neither branch path excludes the other.
+            _n = min(len(_other), len(_path))
+            if _other[:_n] == _path[:_n]:
+                _dupe_ids.append("%s: id=%s" % (_tpl.name, _id))
+                break
+        _seen.setdefault(_id, []).append(_path)
+check(not _dupe_ids,
+      "templates: no id= is rendered twice in the same page (getElementById takes the first)",
+      "; ".join(sorted(set(_dupe_ids))[:5]))
 
 # ── 1. gather every global function definition: name -> (params, body) ──
 _DEFS = [

@@ -5751,7 +5751,11 @@ def register_routes(app):
         # follows the move. Idempotent + best-effort; a no-op if the jail isn't set up.
         if new_port != cur_port:
             try:
-                so.ensure_panel_fail2ban(AUTH_LOG_PATH, new_port)
+                # _security_whitelist() is NOT optional here: ensure_panel_fail2ban REWRITES the
+                # jail whenever the port changes, and an omitted ignore_ips writes an ignoreip of
+                # localhost only — silently dropping every whitelisted IP/CIDR until the next boot
+                # re-applies it (or indefinitely, if the restart below fails).
+                so.ensure_panel_fail2ban(AUTH_LOG_PATH, new_port, _security_whitelist())
             except Exception:
                 app.logger.warning("change-port: fail2ban port update failed", exc_info=True)
 

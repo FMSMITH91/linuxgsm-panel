@@ -25,18 +25,10 @@ permissions:
   contents: read
 
 jobs:
-  # CodeQL, Bandit and Semgrep all POST their findings to the Security tab rather than failing a
-  # PR — the Deep SAST job in security-code.yml literally ends in `|| true`. That is a deliberate
-  # choice: a false positive from a scanner should not block a merge. The cost is that "all checks
-  # passed" says nothing about whether the security tools are happy, and an open alert can sit on
-  # main indefinitely with every badge green.
-  #
-  # That is not hypothetical. An alert introduced by #93 stayed open across four subsequent green
-  # PRs and was only found by querying the code-scanning API by hand.
-  #
-  # So: don't gate PRs on the scanners, but make main's real state loud. This runs on main only,
-  # reports what is open, and fails if anything is — a red build on main after a merge, which is
-  # exactly when someone should look.
+  # NOTE: the "fail main when it has an open code-scanning alert" gate this comment used to
+  # introduce now lives in codeql-alerts.yml, because it has to run AFTER CodeQL rather than beside
+  # it — see the long note at the top of that file for the race it was losing. What remains here is
+  # secret scanning, which is unconditional and unfiltered by design.
   secret-scan:
     name: Secret scanning (Gitleaks)
     runs-on: ubuntu-latest

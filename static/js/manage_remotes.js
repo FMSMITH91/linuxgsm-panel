@@ -130,9 +130,10 @@ function refreshLocalStats() {
       if (memBar) memBar.style.width = parseFloat(u.memory_percent) + '%';
       var cpuDetail = document.getElementById('cpu-detail');
       if (cpuDetail) {
+        // escapeHtml: both figures are read off the REMOTE host and land in innerHTML below.
         var txt = '';
-        if (u.cpu_per_core) txt += u.cpu_per_core + '%/core &middot; ';
-        txt += u.cpu_cores + ' cores';
+        if (u.cpu_per_core) txt += escapeHtml(String(u.cpu_per_core)) + '%/core &middot; ';
+        txt += escapeHtml(String(u.cpu_cores)) + ' cores';
         cpuDetail.innerHTML = txt;  // nosemgrep
       }
     })
@@ -192,7 +193,7 @@ function checkTailscale(remoteId, name) {
       if (data.success) {
         renderTailscaleStatus(remoteId, name, data);
       } else {
-        setModalBody('<div class="text-danger">Error: ' + (data.error || 'Unknown') + '</div>');
+        setModalBody('<div class="text-danger">Error: ' + escapeHtml(data.error || 'Unknown') + '</div>');  // nosemgrep
       }
     })
     .catch(function() {
@@ -210,8 +211,11 @@ function renderTailscaleStatus(remoteId, name, status) {
   // Status badge
   if (installed && running) {
     html += '<div class="alert alert-success py-2 small"><i class="bi bi-check-circle"></i> Tailscale is <strong>installed</strong> and <strong>running</strong> on ' + safe + '.</div>';
-    if (status.tailscale_ip) html += '<p class="small mb-1"><strong>IP:</strong> <code>' + status.tailscale_ip + '</code></p>';
-    if (status.dns_name) html += '<p class="small mb-1"><strong>DNS:</strong> <code>' + status.dns_name + '</code></p>';
+    // escapeHtml: tailscale_ip and dns_name are parsed out of `tailscale status --json` run on
+    // the REMOTE host, so a compromised or hostile host picks these bytes. They land in innerHTML
+    // via setModalBody below.
+    if (status.tailscale_ip) html += '<p class="small mb-1"><strong>IP:</strong> <code>' + escapeHtml(status.tailscale_ip) + '</code></p>';
+    if (status.dns_name) html += '<p class="small mb-1"><strong>DNS:</strong> <code>' + escapeHtml(status.dns_name) + '</code></p>';
     html += '<hr><button class="btn btn-success btn-sm"' + _da('migrateToTailscale', [remoteId]) + '><i class="bi bi-arrow-repeat"></i> Migrate to Tailscale SSH</button>';
   } else if (installed) {
     html += '<div class="alert alert-warning py-2 small"><i class="bi bi-exclamation-triangle"></i> Tailscale is <strong>installed</strong> but <strong>not running</strong>.</div>';
@@ -363,10 +367,11 @@ function _migrateToTailscale(remoteId) {
     .then(data => {
       if (data.success) {
         setModalBody('<div class="text-success"><i class="bi bi-check-circle"></i> ' + escapeHtml(data.message) + '</div>'
-          + '<p class="small mt-2">Old host: <code>' + data.old_host + '</code><br>'
-          + 'New host: <code>' + data.new_host + '</code><br>'
-          + (data.tailscale_ip ? 'Tailscale IP: <code>' + data.tailscale_ip + '</code><br>' : '')
-          + (data.dns_name ? 'DNS: <code>' + data.dns_name + '</code>' : '')
+          // Same provenance as renderTailscaleStatus: the addresses come back from the remote.
+          + '<p class="small mt-2">Old host: <code>' + escapeHtml(data.old_host || '') + '</code><br>'
+          + 'New host: <code>' + escapeHtml(data.new_host || '') + '</code><br>'
+          + (data.tailscale_ip ? 'Tailscale IP: <code>' + escapeHtml(data.tailscale_ip) + '</code><br>' : '')
+          + (data.dns_name ? 'DNS: <code>' + escapeHtml(data.dns_name) + '</code>' : '')
           + '</p>'
           + '<div class="d-flex gap-2 mt-2">'
           + '<button class="btn btn-primary btn-sm"' + _da('refreshRemotesAndClose') + '><i class="bi bi-check-lg"></i> Done</button>'

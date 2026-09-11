@@ -17,6 +17,7 @@ on:
     paths:
       - 'ssh_manager.py'
       - 'system_ops.py'
+      - 'terminal.py'
       - 'tests/fuzz/**'
       - '.github/workflows/cflite_pr.yml'
       - '.clusterfuzzlite/**'

@@ -199,7 +199,14 @@ def harden_data_permissions():
     targets = [(DATA_DIR, 0o700), (DB_PATH, 0o600), (CONFIG_FILE, 0o600),
                (SECRET_FILE, 0o600), (CRED_KEY_FILE, 0o600),
                # SQLite's WAL/SHM side files carry the same rows as the DB.
-               (Path(str(DB_PATH) + "-wal"), 0o600), (Path(str(DB_PATH) + "-shm"), 0o600)]
+               (Path(str(DB_PATH) + "-wal"), 0o600), (Path(str(DB_PATH) + "-shm"), 0o600),
+               # ...and so do the rolling known-good backup and any copy moved aside after
+               # corruption. models._ensure_db_healthy creates both with sqlite3.connect / copy2,
+               # i.e. at the process umask (0644 on a stock box) — every password hash and every
+               # encrypted credential in the panel, in a file nothing was tightening.
+               (Path(str(DB_PATH) + ".backup"), 0o600)]
+    # The aside copies are timestamped, so they need a glob rather than a fixed name.
+    targets += [(p, 0o600) for p in DATA_DIR.glob("panel.db.corrupt-*")]
     for path, mode in targets:
         try:
             if path.exists():

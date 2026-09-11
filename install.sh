@@ -1,6 +1,10 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+# Absolute path to THIS script — install_root_tools copies it to the root-owned location, and
+# "$0" inside a function is fragile to read. Captured once, before any cd.
+SCRIPT_PATH="$(cd "$(dirname "$0")" && pwd)/$(basename "$0")"
+
 # Never block on a git credential prompt (private/unreachable remote) — fail fast.
 export GIT_TERMINAL_PROMPT=0
 export GIT_ASKPASS=true
@@ -530,6 +534,128 @@ SYSCTLEOF
     sysctl --system >/dev/null 2>&1 || true
 }
 
+# ── The privileged helper and its root-owned siblings ──────────────────────────────────────
+# tools/panel-helper is copied to a root-owned location OUTSIDE the panel's checkout, together
+# with db_maintenance.py, panel.conf and this installer. That placement is the entire point: the
+# checkout belongs to the panel user and is rewritten by `git pull` on every self-update, so a
+# helper living there would be panel-writable by design — and a privilege boundary the untrusted
+# side can edit is not a boundary.
+#
+# THIS IS A FUNCTION, AND THE UPDATE PATH CALLS IT TOO. It used to be a straight-line block that
+# sat AFTER the update path's `exit 0`, so an update — in-panel self-update, the CI auto-deploy,
+# or a plain re-run of this script — refreshed the panel's code and left the installed helper at
+# whatever version first placed it. The verb table grows nearly every release, and a stale helper
+# answers a new verb with `unknown verb` + rc 2 and no fallback, so the feature behind it simply
+# stopped working with no message anywhere. The grant was never re-evaluated either, which meant a
+# host that first installed pre-helper kept NOPASSWD:ALL forever.
+#
+# Sets HELPER_OK / ROOT_TOOLS_OK, which write_sudoers_grant reads.
+install_root_tools() {
+    HELPER_OK=0
+    ROOT_TOOLS_OK=0
+    HELPER_SRC="${PANEL_DIR}/tools/panel-helper"
+    HELPER_DIR="/usr/local/lib/linuxgsm-panel"
+    HELPER_DST="${HELPER_DIR}/panel-helper"
+    H_SUDO=""; [ "$(id -u)" -ne 0 ] && H_SUDO="sudo"
+    if [ -f "${HELPER_SRC}" ]; then
+        if ${H_SUDO} install -d -o root -g root -m 0755 "${HELPER_DIR}" 2>/dev/null \
+           && ${H_SUDO} install -o root -g root -m 0755 "${HELPER_SRC}" "${HELPER_DST}" 2>/dev/null; then
+            HELPER_OK=1
+            ok "Privileged helper installed at ${HELPER_DST}"
+        else
+            # Not fatal. ssh_manager.run_privileged falls back to the pre-helper path when the
+            # helper is absent, so the panel keeps working — it just does not get the narrower
+            # call path yet.
+            warn "Could not install/refresh the privileged helper (needs root). The panel still"
+            warn "works; re-run this installer as root to place the current one."
+        fi
+    fi
+
+    # db_maintenance.py is installed ROOT-OWNED beside the helper, and panel.conf records the one
+    # path it needs. Both are placed HERE and nowhere else — there is deliberately no verb that
+    # copies them, because "install this file from the panel's directory and run it as root later"
+    # is the same hole the helper exists to close.
+    #
+    # Why a second copy at all: the offline database repair runs as root, and the version in the
+    # checkout is owned by the panel user and rewritten by `git pull` on every self-update. Root
+    # executing it — or the checkout's venv interpreter — would make the boundary decorative. The
+    # helper runs THIS copy with the SYSTEM python instead.
+    INSTALLER_DST="${HELPER_DIR}/install.sh"
+    DBM_SRC="${PANEL_DIR}/db_maintenance.py"
+    DBM_DST="${HELPER_DIR}/db_maintenance.py"
+    PANEL_CONF="${HELPER_DIR}/panel.conf"
+    if [ -f "${DBM_SRC}" ] && [ -d "${HELPER_DIR}" ]; then
+        if ${H_SUDO} install -o root -g root -m 0755 "${DBM_SRC}" "${DBM_DST}" 2>/dev/null; then
+            printf 'db_path=%s\ndata_dir=%s\npanel_dir=%s\n' \
+                "${PANEL_DIR}/data/panel.db" "${PANEL_DIR}/data" "${PANEL_DIR}" \
+                | ${H_SUDO} tee "${PANEL_CONF}" >/dev/null 2>&1 \
+                && ${H_SUDO} chmod 0644 "${PANEL_CONF}" 2>/dev/null \
+                && ${H_SUDO} chown root:root "${PANEL_CONF}" 2>/dev/null
+            # The installer itself, root-owned, for the same reason: the self-update runs it as
+            # root, and the copy in the checkout is panel-writable.
+            #
+            # Source it from the CHECKOUT, not from "$0"/SCRIPT_PATH. The documented quick install
+            # is `curl -fsSL … | bash`, where "$0" is the shell — so the old form happily copied
+            # /usr/bin/bash to ${INSTALLER_DST} and the self-update then "ran the installer" by
+            # executing bash with no script. ${PANEL_DIR}/install.sh is always present and always
+            # the version that matches the code; SCRIPT_PATH is the fallback for a local run from
+            # somewhere else.
+            INSTALLER_SRC="${PANEL_DIR}/install.sh"
+            [ -f "${INSTALLER_SRC}" ] || INSTALLER_SRC="${SCRIPT_PATH}"
+            if [ -f "${INSTALLER_SRC}" ] && head -n1 "${INSTALLER_SRC}" | grep -q '^#!.*sh'; then
+                ${H_SUDO} install -o root -g root -m 0755 "${INSTALLER_SRC}" "${INSTALLER_DST}" 2>/dev/null || true
+            else
+                warn "Could not find this installer on disk to copy root-owned — skipping."
+            fi
+            ROOT_TOOLS_OK=1
+            ok "Offline DB repair installed root-owned at ${DBM_DST}"
+        else
+            warn "Could not install the root-owned db_maintenance copy (needs root)."
+            warn "The panel falls back to the pre-helper repair path until you re-run this as root."
+        fi
+    fi
+}
+
+# ── The sudoers grant ──────────────────────────────────────────────────────────────────────
+# NARROW when every root-owned piece is in place, because only then does the panel have a way to
+# do its privileged work without a general shell: the helper for the verb table, the root-owned
+# db_maintenance for the offline repair, and the root-owned installer for self-update. All three
+# are placed by install_root_tools, as root — never by the panel.
+#
+# WIDE otherwise. A host that has the new code but could not place those still falls back to
+# `sudo bash -c '<verb rendered as text>'`, and narrowing under it would break every privileged
+# action rather than secure anything.
+#
+# Note what is NOT permitted even in the narrow form: no systemd-run, no bash, no tailscale, no
+# sudo -u. Each of those was a call site once, and each is a verb now — a sudoers rule for any of
+# them would be equivalent to NOPASSWD:ALL, because they all run whatever you hand them.
+#
+# Called from the update path as well as the fresh one, so a host that has now received the
+# root-owned pieces actually gets its grant narrowed instead of keeping the wide one forever.
+write_sudoers_grant() {
+    [ "${RUN_AS_ROOT}" -eq 1 ] || return 0
+    if [ "${HELPER_OK}" -eq 1 ] && [ "${ROOT_TOOLS_OK}" -eq 1 ]; then
+        echo "${PANEL_USER} ALL=(root) NOPASSWD: ${HELPER_DST}" > /etc/sudoers.d/linuxgsm-panel
+        SUDO_SCOPE="narrow (panel-helper only)"
+    else
+        echo "${PANEL_USER} ALL=(ALL) NOPASSWD:ALL" > /etc/sudoers.d/linuxgsm-panel
+        SUDO_SCOPE="WIDE (NOPASSWD:ALL) — the root-owned helper pieces are not all installed"
+    fi
+    chmod 440 /etc/sudoers.d/linuxgsm-panel
+    visudo -cf /etc/sudoers.d/linuxgsm-panel >/dev/null \
+        || { rm -f /etc/sudoers.d/linuxgsm-panel; die "sudoers entry invalid"; }
+    # Say which one loudly when it is the wide one. This runs on updates now, so a host that was
+    # narrow and could not place the helper this time gets its grant widened again — a real
+    # security downgrade, and it should not slide past in a wall of green ticks.
+    if [ "${SUDO_SCOPE}" = "narrow (panel-helper only)" ]; then
+        ok "sudo grant: ${SUDO_SCOPE}"
+    else
+        warn "sudo grant: ${SUDO_SCOPE}"
+        warn "  The panel falls back to the pre-helper path, which needs the wide grant to work."
+        warn "  Re-run this installer as root once the helper can be placed to narrow it again."
+    fi
+}
+
 # ── Is this a fresh install or an update of an existing one? ──
 IS_UPDATE=0
 if [ -f "${PANEL_DIR}/app.py" ] && [ -f "${UNIT_FILE}" ]; then
@@ -631,6 +757,14 @@ if [ "${IS_UPDATE}" -eq 1 ]; then
         ok "Dependencies installed"
     fi
     [ "${RUN_AS_ROOT}" -eq 1 ] && chown -R "${PANEL_USER}:${PANEL_USER}" "${PANEL_DIR}"
+
+    # Refresh the ROOT-OWNED copies to match the code we just fetched, BEFORE the service comes
+    # back up — the new code may call verbs the installed helper does not know yet, and a stale
+    # helper answers those with `unknown verb` and no fallback. This is also the only place an
+    # existing install's sudoers grant is ever re-evaluated, so a host that first installed before
+    # the helper existed gets narrowed here instead of keeping NOPASSWD:ALL indefinitely.
+    install_root_tools
+    write_sudoers_grant
 
     info "[5/6] Starting the service…"
     ensure_service_tuning   # refresh the low-priority drop-in (existing installs get it on update)
@@ -802,65 +936,7 @@ else
     ok "Port ${PANEL_PORT} is free for the panel"
 fi
 
-# ── The privileged helper ──────────────────────────────────────────────────────────────────
-# tools/panel-helper is copied to a root-owned location OUTSIDE the panel's checkout. That
-# placement is the entire point: the checkout belongs to the panel user and is rewritten by
-# `git pull` on every self-update, so a helper living there would be panel-writable by design —
-# and a privilege boundary the untrusted side can edit is not a boundary.
-#
-# The consequence, stated plainly: updating the helper needs root. The panel's own self-update
-# cannot do it. Today the NOPASSWD:ALL grant still exists, so the update path can place it with
-# sudo; once that grant is narrowed, changing the verb table means re-running this script as root.
-HELPER_OK=0
-ROOT_TOOLS_OK=0
-HELPER_SRC="${PANEL_DIR}/tools/panel-helper"
-HELPER_DIR="/usr/local/lib/linuxgsm-panel"
-HELPER_DST="${HELPER_DIR}/panel-helper"
-H_SUDO=""; [ "$(id -u)" -ne 0 ] && H_SUDO="sudo"
-if [ -f "${HELPER_SRC}" ]; then
-    if ${H_SUDO} install -d -o root -g root -m 0755 "${HELPER_DIR}" 2>/dev/null \
-       && ${H_SUDO} install -o root -g root -m 0755 "${HELPER_SRC}" "${HELPER_DST}" 2>/dev/null; then
-        HELPER_OK=1
-        ok "Privileged helper installed at ${HELPER_DST}"
-    else
-        # Not fatal. ssh_manager.run_privileged falls back to the pre-helper path when the helper
-        # is absent, so the panel keeps working — it just does not get the narrower call path yet.
-        warn "Could not install the privileged helper (needs root). The panel still works;"
-        warn "re-run this installer as root to place it."
-    fi
-fi
-
-# db_maintenance.py is installed ROOT-OWNED beside the helper, and panel.conf records the one path
-# it needs. Both are placed HERE and nowhere else — there is deliberately no verb that copies them,
-# because "install this file from the panel's directory and run it as root later" is the same hole
-# the helper exists to close.
-#
-# Why a second copy at all: the offline database repair runs as root, and the version in the
-# checkout is owned by the panel user and rewritten by `git pull` on every self-update. Root
-# executing it — or the checkout's venv interpreter — would make the boundary decorative. The
-# helper runs THIS copy with the SYSTEM python instead. Updating it needs root, exactly as
-# updating the helper does.
-INSTALLER_DST="${HELPER_DIR}/install.sh"
-DBM_SRC="${PANEL_DIR}/db_maintenance.py"
-DBM_DST="${HELPER_DIR}/db_maintenance.py"
-PANEL_CONF="${HELPER_DIR}/panel.conf"
-if [ -f "${DBM_SRC}" ] && [ -d "${HELPER_DIR}" ]; then
-    if ${H_SUDO} install -o root -g root -m 0755 "${DBM_SRC}" "${DBM_DST}" 2>/dev/null; then
-        printf 'db_path=%s\ndata_dir=%s\npanel_dir=%s\n' \
-            "${PANEL_DIR}/data/panel.db" "${PANEL_DIR}/data" "${PANEL_DIR}" \
-            | ${H_SUDO} tee "${PANEL_CONF}" >/dev/null 2>&1 \
-            && ${H_SUDO} chmod 0644 "${PANEL_CONF}" 2>/dev/null \
-            && ${H_SUDO} chown root:root "${PANEL_CONF}" 2>/dev/null
-        # The installer itself, root-owned, for the same reason: the self-update runs it as root,
-        # and the copy in the checkout is panel-writable.
-        ${H_SUDO} install -o root -g root -m 0755 "$0" "${INSTALLER_DST}" 2>/dev/null || true
-        ROOT_TOOLS_OK=1
-        ok "Offline DB repair installed root-owned at ${DBM_DST}"
-    else
-        warn "Could not install the root-owned db_maintenance copy (needs root)."
-        warn "The panel falls back to the pre-helper repair path until you re-run this as root."
-    fi
-fi
+install_root_tools
 
 info "[3/4] Registering the service…"
 if [ "${RUN_AS_ROOT}" -eq 1 ]; then
@@ -871,29 +947,7 @@ if [ "${RUN_AS_ROOT}" -eq 1 ]; then
     # apt, ufw). This is UNRESTRICTED root for the service user — see the trust-model
     # note at the top of this file for why it cannot currently be scoped, and delete
     # /etc/sudoers.d/linuxgsm-panel if you only manage remotes.
-    # ── The grant ────────────────────────────────────────────────────────────────────────────
-    # NARROW when every root-owned piece is in place, because only then does the panel have a way
-    # to do its privileged work without a general shell: the helper for the verb table, the
-    # root-owned db_maintenance for the offline repair, and the root-owned installer for
-    # self-update. All three are placed above, by this script, as root — never by the panel.
-    #
-    # WIDE otherwise. A host that has the new code but has not had this script re-run as root still
-    # falls back to `sudo bash -c '<verb rendered as text>'`, and narrowing under it would break
-    # every privileged action rather than secure anything.
-    #
-    # Note what is NOT permitted even in the narrow form: no systemd-run, no bash, no tailscale, no
-    # sudo -u. Each of those was a call site once, and each is a verb now — a sudoers rule for any
-    # of them would be equivalent to NOPASSWD:ALL, because they all run whatever you hand them.
-    if [ "${HELPER_OK}" -eq 1 ] && [ "${ROOT_TOOLS_OK}" -eq 1 ]; then
-        echo "${PANEL_USER} ALL=(root) NOPASSWD: ${HELPER_DST}" > /etc/sudoers.d/linuxgsm-panel
-        SUDO_SCOPE="narrow (panel-helper only)"
-    else
-        echo "${PANEL_USER} ALL=(ALL) NOPASSWD:ALL" > /etc/sudoers.d/linuxgsm-panel
-        SUDO_SCOPE="WIDE (NOPASSWD:ALL) — the root-owned helper pieces are not all installed"
-    fi
-    chmod 440 /etc/sudoers.d/linuxgsm-panel
-    visudo -cf /etc/sudoers.d/linuxgsm-panel >/dev/null || { rm -f /etc/sudoers.d/linuxgsm-panel; die "sudoers entry invalid"; }
-    ok "sudo grant: ${SUDO_SCOPE}"
+    write_sudoers_grant
 
     cat > "${UNIT_FILE}" <<SERVICEEOF
 [Unit]

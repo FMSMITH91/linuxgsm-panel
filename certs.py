@@ -76,11 +76,20 @@ def _ensure_self_signed_cert(cert_path, key_path, hostname):
             .add_extension(x509.SubjectAlternativeName([x509.DNSName(hostname or "localhost")]), critical=False)
             .sign(key, hashes.SHA256()))
     os.makedirs(os.path.dirname(cert_path), exist_ok=True)
-    with open(key_path, "wb") as f:
+    # Create the key file 0600 FROM THE START rather than writing it at the process umask and
+    # chmod'ing after: the old order left an unencrypted TLS private key world-readable for the
+    # length of the write. O_EXCL would refuse an existing file, so remove a stale one first —
+    # we only reach here when the cert is missing or has (nearly) expired.
+    try:
+        os.remove(key_path)
+    except OSError:
+        pass   # not there, or not removable — the open below reports anything that matters
+    fd = os.open(key_path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    with os.fdopen(fd, "wb") as f:
         f.write(key.private_bytes(serialization.Encoding.PEM,
                                   serialization.PrivateFormat.TraditionalOpenSSL,
                                   serialization.NoEncryption()))
-    os.chmod(key_path, 0o600)
+    os.chmod(key_path, 0o600)   # belt and braces on a pre-existing file / odd umask
     with open(cert_path, "wb") as f:
         f.write(cert.public_bytes(serialization.Encoding.PEM))
     return cert_path, key_path

@@ -2379,6 +2379,45 @@ try:
         _am.remote_os_check_updates = _sv_rem
         _am.notifications.notify = _sv_notify2
 
+    # ── Changing the panel port must not drop the fail2ban whitelist ─────────────────────────────
+    # ensure_panel_fail2ban REWRITES the jail whenever the port changes, and its ignore_ips argument
+    # is what becomes `ignoreip`. The port-change route called it without one, so the jail came back
+    # with localhost only and every whitelisted IP/CIDR silently lost its exemption — until the next
+    # boot re-applied it, or indefinitely if the restart that follows failed. Its two sibling call
+    # sites (startup, and the whitelist editor) always passed the whitelist; this one did not.
+    #
+    # Asserted on the ARGUMENTS, not the outcome: the jail write needs fail2ban on the host, so a
+    # result-based check would just skip on a dev box and prove nothing.
+    _f2b_calls = []
+    _sv_f2b = _am.so.ensure_panel_fail2ban
+    _sv_restart = _am.so.restart_panel
+    _sv_wl = _am._security_whitelist
+    try:
+        _am.so.ensure_panel_fail2ban = lambda log, port, ignore=None: (
+            _f2b_calls.append((port, list(ignore) if ignore is not None else None)), (True, "ok"))[1]
+        _am.so.restart_panel = lambda *a, **k: (True, "stubbed")
+        _am._security_whitelist = lambda: ["203.0.113.8", "10.0.0.0/8"]
+        with app.app_context():
+            _cp_cfg = _am.load_config()
+            _cp_port = _cp_cfg.get("port", 5000)
+        _cpr = c.post("/api/panel/change-port",
+                      json={"port": _cp_port + 1, "bind": _cp_cfg.get("bind_host", "")})
+        check("change-port: the route answered", _cpr.status_code in (200, 400, 409),
+              "got %d" % _cpr.status_code)
+        check("change-port: the fail2ban jail is rewritten for the new port",
+              any(p == _cp_port + 1 for p, _ in _f2b_calls), str(_f2b_calls))
+        check("change-port: ...and it is rewritten WITH the security whitelist, not without",
+              all(ig and "203.0.113.8" in ig for _p, ig in _f2b_calls), str(_f2b_calls))
+    finally:
+        _am.so.ensure_panel_fail2ban = _sv_f2b
+        _am.so.restart_panel = _sv_restart
+        _am._security_whitelist = _sv_wl
+        # Put the port back: the route saved the bumped one to config.json.
+        try:
+            _am.update_config(lambda cfg: cfg.update({"port": _cp_port}))
+        except Exception:
+            pass
+
     # ── Bearer API tokens: the other way into every route ─────────────────────────────────────────
     # A token authenticates AS its owner and inherits exactly that user's RBAC, and app.py exempts
     # Bearer requests from CSRF — so this is a full authentication path that had no test at all.

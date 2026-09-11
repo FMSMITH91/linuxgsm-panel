@@ -24,9 +24,15 @@ INTEGRITY
     self-update cannot do it. When the verb table changes, the operator re-runs install.sh as root.
 
 STATUS
-    Conversion is in progress. Until EVERY privileged call site in the panel routes through a verb
-    here, /etc/sudoers.d/linuxgsm-panel still grants NOPASSWD:ALL and this helper reduces nothing —
-    a boundary with a hole in it is not a boundary. See SECURITY.md.
+    Every local escalation in the panel routes through a verb here. Where install.sh has been run
+    as root, /etc/sudoers.d/linuxgsm-panel permits exactly one command: this file.
+
+    KEEPING THIS FILE CURRENT IS PART OF THE CONTRACT. It lives outside the panel's checkout, so
+    the panel cannot update it — only install.sh can, as root, on both its fresh-install and its
+    update path. A helper left behind while the panel moves on answers a verb it does not know with
+    rc 2 and no fallback, which makes the feature behind that verb fail silently. The panel's
+    Diagnostics card compares its own verb table against `--list-verbs` here and names the gap.
+    See SECURITY.md.
 
 USAGE
     panel-helper <verb> [arg ...]      exit 2 = unknown verb / bad argument, else the tool's own rc
@@ -210,7 +216,6 @@ TS_UP_POLL_SECONDS = 20
 # The detached OS-update job: where it streams, the sentinel it ends with, and what the
 # verb prints so the caller knows the job launched. All fixed — the verb takes no
 # arguments, because the shell script it replaces took no caller input either.
-OS_UPDATE_LOG = "/run/panel-os-update.log"
 OS_UPDATE_DONE = "PANEL_OS_UPDATE_DONE:"
 OS_UPDATE_STARTED = "__STARTED__"
 

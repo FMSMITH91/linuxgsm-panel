@@ -14,10 +14,28 @@ class PrefixMiddleware:
         self.app = app
         self.prefix = prefix.rstrip("/")
 
+    @staticmethod
+    def _may_trust_header(environ, cfg):
+        """Whether X-Forwarded-Prefix is believable on this request.
+
+        Same rule auth.client_ip() applies to X-Forwarded-For, and for the same reason: on a direct
+        bind (the panel supports 0.0.0.0) the header is fully client-controlled. Trusting it there
+        let any caller set SCRIPT_NAME for its own response, which is what every url_for() and every
+        outgoing Location header is built from — so a request could rewrite each link on the page it
+        got back, including to a protocol-relative "//host" that resolves off-site.
+
+        Trusted when the request actually arrived from the local proxy (Tailscale Serve runs on
+        loopback, which is the case this header exists for), or when the operator has declared a
+        reverse proxy in front with trust_proxy.
+        """
+        if cfg.get("trust_proxy"):
+            return True
+        return (environ.get("REMOTE_ADDR") or "") in ("127.0.0.1", "::1")
+
     def __call__(self, environ, start_response):
         cfg = load_config()
         # Priority: X-Forwarded-Prefix header (Tailscale Serve), then config
-        prefix = environ.get("HTTP_X_FORWARDED_PREFIX", "")
+        prefix = environ.get("HTTP_X_FORWARDED_PREFIX", "") if self._may_trust_header(environ, cfg) else ""
         if not prefix:
             mount = cfg.get("tailscale_mount", "")
             if mount and mount != "/":

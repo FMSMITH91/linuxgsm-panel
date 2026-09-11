@@ -206,9 +206,10 @@
           <div class="d-flex gap-2 align-items-end mb-2">
             <div class="flex-grow-1">
               <label class="form-label small" for="tailscale-mount">Mount Point</label>
-              <input id="tailscale-mount" type="text" name="mount" class="form-control form-control-sm" value="/">
+              <input id="tailscale-mount" type="text" name="mount" class="form-control form-control-sm"
+                     value="{{ config.tailscale_mount or '/' }}">
             </div>
-            <button type="button" class="btn btn-success btn-sm" data-action="enableServe">
+            <button type="button" class="btn btn-success btn-sm" data-action="enableServe" data-args='["@self"]'>
               <i class="bi bi-wifi"></i> Enable Serve <span class="text-uppercase" style="font-size:.65em;opacity:.8;">(private)</span>
             </button>
           </div>
@@ -232,7 +233,11 @@
       <div class="card-header d-flex justify-content-between align-items-center">
         <span><i class="bi bi-hdd-stack"></i> Serve Configuration</span>
         {% if info.running and info.serve_config and info.serve_config.get('services') %}
-        <button class="btn btn-outline-danger btn-sm" data-action="disableServe">
+        {# The mount is carried on the button, not hardcoded in the handler: `tailscale serve
+           --remove /` exits 0 on a node whose mapping is at /lgsm-panel, so the panel would report
+           success, clear tailscale_setup_done and tailscale_mount, and leave Serve running. #}
+        <button class="btn btn-outline-danger btn-sm" data-action="disableServe" data-args='["@self"]'
+                data-mount="{{ config.tailscale_mount or '/' }}">
           <i class="bi bi-x-circle"></i> Disable
         </button>
         {% endif %}
@@ -438,10 +443,12 @@ function checkPeer() {
   });
 }
 
-function enableServe() {
+function enableServe(btn) {
   var mount = document.querySelector('[name="mount"]').value || '/';
   var funnel = document.getElementById('funnel-check').checked;
-  var btn = event.target;
+  // `btn` arrives via data-args "@self". It used to be `event.target` off the implicit global,
+  // which is the element actually clicked — the <i> icon inside the button as often as the button
+  // itself, so `btn.disabled = true` did nothing and the label rewrite ate the icon instead.
   btn.disabled = true;
   btn.innerHTML = '<i class="bi bi-arrow-repeat"></i> Configuring...';
 
@@ -468,14 +475,16 @@ function enableServe() {
   });
 }
 
-function disableServe() {
+function disableServe(btn) {
+  // The mount comes from the button's data-mount (what enable persisted), NOT a hardcoded '/'.
+  var mount = (btn && btn.dataset && btn.dataset.mount) || '/';
   confirmDialog({title:'Disable Tailscale Serve', icon:'exclamation-triangle', confirmClass:'btn-danger', confirmLabel:'Disable',
     bodyText:'Disable Tailscale Serve? The panel will no longer be accessible via the Tailscale URL.',
     onConfirm:function(){
       fetch(MOUNT + '/api/tailscale/serve', {
         method: 'POST',
         headers: {'Content-Type': 'application/json'},
-        body: JSON.stringify({action: 'disable', mount: '/'}),
+        body: JSON.stringify({action: 'disable', mount: mount}),
       })
       .then(r => r.json())
       .then(data => {

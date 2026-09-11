@@ -8,8 +8,10 @@ __pycache__/
 .pytest_cache/
 
 # ── Panel runtime data & SECRETS — NEVER COMMIT ──
-# Contains the SQLite DB (bcrypt password hashes + PLAINTEXT remote SSH
-# credentials), the session secret key, and per-install config.
+# Contains the SQLite DB (bcrypt password hashes, plus remote SSH credentials,
+# emails and TOTP secrets Fernet-encrypted at rest), the session secret key, the
+# credential key that decrypts those secrets, and per-install config. The key sits
+# beside the data it protects, so committing this directory hands over both.
 # NOTE: anchored to the repo root with a leading slash so the bundled
 # `lgsm/data/*.csv` reference files are NOT ignored.
 /data/
