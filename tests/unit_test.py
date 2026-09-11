@@ -5632,15 +5632,15 @@ if os.path.isfile(_manifest):
             _bad.append("%s: manifest says %s, file says %s"
                         % (_name, _ver, _found.group(1) if _found else "?"))
     check("vendor: every file is the version the manifest records", not _bad, "; ".join(_bad))
-    # The one KNOWN mismatch is documented rather than silently tolerated: assert the manifest
-    # still says so, so nobody deletes the note without fixing the drift.
-    _mtext = open(_manifest, encoding="utf-8").read()
-    _js = [r for r in _rows if "JS" in r[0]]
-    _css = [r for r in _rows if "CSS" in r[0] and "Bootstrap (CSS)" in r[0]]
-    if _js and _css and _js[0][1] != _css[0][1]:
-        check("vendor: a Bootstrap JS/CSS version split is documented in the manifest",
-              "Known drift" in _mtext,
-              "the two disagree (%s vs %s) with no note explaining it" % (_js[0][1], _css[0][1]))
+    # Bootstrap ships its JS and CSS as one release but they are vendored as two files, so they
+    # can drift — and did, 5.3.0 JS against 5.3.3 CSS, for months. They were API-compatible so
+    # nothing looked broken, which is exactly why nobody caught it. Require them to agree.
+    _js = [r for r in _rows if r[0].strip() == "Bootstrap (JS)"]
+    _css = [r for r in _rows if r[0].strip() == "Bootstrap (CSS)"]
+    check("vendor: Bootstrap's JS and CSS are the same release",
+          _js and _css and _js[0][1] == _css[0][1],
+          "JS %s vs CSS %s — they ship together and must be vendored together"
+          % (_js[0][1] if _js else "?", _css[0][1] if _css else "?"))
 
 passed = sum(1 for ok, _, _ in results if ok)
 for ok, name, detail in results:
