@@ -89,8 +89,9 @@ def main():
             summary.append("| `%s` | %s | %s | `%s` | %s |"
                            % (i.get("filePath"), i.get("lineNumber"), ti.get("name"),
                               (pi.get("id") or "").split(".")[-1], (i.get("message") or "")[:90]))
-        summary += ["", "Fix it, or — if it is deliberate — add it to "
-                    "`.github/codacy-accepted-errors.json` **with a reason**."]
+        _fix_hint = ("Fix it, or — if it is deliberate — add it to "
+                     "`.github/codacy-accepted-errors.json` **with a reason**.")
+        summary += ["", _fix_hint]
     else:
         summary.append("Nothing unreviewed. :white_check_mark:")
 
