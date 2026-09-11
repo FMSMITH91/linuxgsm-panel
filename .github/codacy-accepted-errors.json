@@ -1,0 +1,23 @@
+{
+  "_README": [
+    "Error-level Codacy issues on main that are reviewed and accepted.",
+    "",
+    "The gate in .github/workflows/codacy-alerts.yml fails when main carries an Error-level",
+    "issue that is NOT listed here. Anything listed needs a reason, and the list is meant to",
+    "shrink: this is the same contract as tests/html_sink_baseline.json.",
+    "",
+    "Match is on (filePath, patternId, lineText) with whitespace collapsed. The line NUMBER is",
+    "deliberately not part of the key -- it moves with every edit above it. The line TEXT is,",
+    "because one entry must not cover every hit of the same rule in a file, and because editing",
+    "an accepted line should re-open it for review rather than silently carry the exception."
+  ],
+  "accepted": [
+    {
+      "filePath": "system_ops.py",
+      "patternId": "Semgrep_python.lang.security.audit.dangerous-subprocess-use-tainted-env-args.dangerous-subprocess-use-tainted-env-args",
+      "reason": "_run() is the PRE-HELPER FALLBACK: subprocess.run(cmd, shell=True) on a composed string. It is the documented remaining hole in the privilege boundary (SECURITY.md, 'Known trust-model limitation'), kept so a host that has not had install.sh re-run as root keeps working. Suppressing it in the source would hide the one thing the docs say is still open, so it is accepted HERE instead \u2014 visible, named, and deleted the day that fallback goes.",
+      "acceptedOn": "2026-09-11",
+      "lineText": "cmd, shell=True, capture_output=True, text=text, timeout=timeout,"
+    }
+  ]
+}

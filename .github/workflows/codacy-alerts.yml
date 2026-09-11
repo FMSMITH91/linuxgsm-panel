@@ -1,0 +1,55 @@
+name: Codacy alerts
+
+# Fail when main carries an Error-level Codacy issue that has not been reviewed.
+#
+# WHY THIS EXISTS
+#   Codacy's PR check only gates issues a PR ADDS. An Error already sitting on main is reported in
+#   the dashboard and blocks nothing — so nobody sees it. That is not hypothetical: Codacy's Pylint
+#   had flagged system_ops.py's ufw_allow_tailscale as E1124 ("argument 'timeout' passed by position
+#   and keyword") on 2026-09-09. It was a real, 100%-reproducible TypeError that made the panel's
+#   anti-lockout guard dead code, and it sat there with every badge green until a human read the
+#   file two days later. This is the same shape of gap codeql-alerts.yml closed for code scanning.
+#
+# WHY IT IS SCHEDULED RATHER THAN TRIGGERED BY A PUSH
+#   codeql-alerts.yml learned this the hard way: a gate that runs on the same push as the analysis
+#   races it and reports whichever answer happened to be ready. CodeQL at least emits a
+#   workflow_run to wait for; Codacy does not. So instead of guessing at a settling delay, this
+#   reads SETTLED state on a schedule — which cannot race, at the cost of catching a regression
+#   within a day rather than within a minute. Against "never", that is the trade worth taking.
+#   workflow_dispatch is there for when you want the answer now.
+#
+# THE ACCEPTED LIST
+#   .github/codacy-accepted-errors.json names the Error-level issues that are reviewed and
+#   deliberate, keyed on (filePath, patternId) — never line number, which moves with every edit
+#   above it. Anything not on that list fails the run.
+
+on:
+  schedule:
+    - cron: "40 6 * * *"   # daily, after the weekly security scans have had their slot
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: codacy-alerts
+  cancel-in-progress: false
+
+jobs:
+  open-errors:
+    name: Error-level Codacy issues (main)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.12"
+
+      - name: Fail if main has unreviewed Error-level issues
+        env:
+          # A repository API token is optional. The endpoint answers anonymously for a PUBLIC repo,
+          # which this is; the token is read if present so the gate keeps working should the repo
+          # ever go private. It is NOT required for the job to run.
+          CODACY_API_TOKEN: ${{ secrets.CODACY_API_TOKEN }}
+        run: python .github/scripts/codacy_open_errors.py
