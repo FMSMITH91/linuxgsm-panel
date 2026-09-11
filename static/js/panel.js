@@ -335,9 +335,21 @@ document.addEventListener('submit', function(e){
 // The call mirrors inline-handler semantics — foo() runs as foo(), foo(this) as foo(element).
 // If the function returns false, the default is prevented too (like `onclick="…;return false"`).
 window._noop = function(){};                    // for handlers that were only `return false`
+// `action` and `on` are literals written in our own templates/scripts; `args` carries VALUES —
+// a host name, an IP, a jail, a filename — so it is the half that needs escaping.
+//
+// & BEFORE ': the attribute is single-quoted, so a literal ' has to become &#39; — but the HTML
+// parser decodes entities in attribute values, so a value containing the TEXT "&#39;" decoded to a
+// real quote and closed the attribute early, injecting whatever followed as further attributes on
+// the tag. Escaping & first (and only then ') means an ampersand in a value round-trips as data
+// instead of as the start of an entity. Order matters: & last would re-escape the & of &#39;.
 window._da = function(action, args, on){        // build the attributes from JS that generates HTML
   var s = ' data-action="' + action + '"';
-  if (args && args.length){ s += " data-args='" + JSON.stringify(args).replace(/'/g, '&#39;') + "'"; }
+  if (args && args.length){
+    s += " data-args='"
+       + JSON.stringify(args).replace(/&/g, '&amp;').replace(/'/g, '&#39;')
+       + "'";
+  }
   if (on){ s += ' data-on="' + on + '"'; }
   return s;
 };

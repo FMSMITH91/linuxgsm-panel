@@ -5707,6 +5707,191 @@ if os.path.isfile(_manifest):
           "JS %s vs CSS %s — they ship together and must be vendored together"
           % (_js[0][1] if _js else "?", _css[0][1] if _css else "?"))
 
+# ── One key, one section file ─────────────────────────────────────────────────────────────────
+# i18n.catalog() merges translations/<lang>/*.json in sorted FILENAME order, last write wins. That
+# order is alphabetical accident, not a decision — so a key present in two files has its translation
+# chosen by which file happens to sort later. Three dashboard tile labels were in two files each,
+# and two of those pairs DISAGREED: "Players Online" was both "Jugadores conectados" (common.json)
+# and "Jugadores en línea" (servers.json), with servers.json winning purely on the "s".
+#
+# Duplicates are banned outright rather than only conflicting ones: an identical duplicate is the
+# state a conflicting one starts from, and the fix for both is the same — put the key in one file.
+_i18n_dir = os.path.join(_root, "translations")
+for _lang in ("es", "fr"):
+    _homes = {}
+    for _f in sorted(glob.glob(os.path.join(_i18n_dir, _lang, "*.json"))):
+        for _k in json.load(open(_f, encoding="utf-8")):
+            _homes.setdefault(_k, []).append(os.path.basename(_f))
+    _dupes = {_k: _v for _k, _v in _homes.items() if len(_v) > 1}
+    check("i18n (%s): every key lives in exactly one section file" % _lang, not _dupes,
+          "; ".join("%r in %s" % (_k, _v) for _k, _v in list(_dupes.items())[:3]))
+# ...and the two languages must cover the same keys, or one of them silently falls back to English
+# for a phrase the other translates.
+_i18n_keys = {}
+for _lang in ("es", "fr"):
+    _ks = set()
+    for _f in glob.glob(os.path.join(_i18n_dir, _lang, "*.json")):
+        _ks |= set(json.load(open(_f, encoding="utf-8")))
+    _i18n_keys[_lang] = _ks
+check("i18n: es and fr translate the same set of keys",
+      _i18n_keys["es"] == _i18n_keys["fr"],
+      "es-only=%s fr-only=%s" % (sorted(_i18n_keys["es"] - _i18n_keys["fr"])[:3],
+                                 sorted(_i18n_keys["fr"] - _i18n_keys["es"])[:3]))
+
+# ── The Tailscale login URL is pinned the same way on both paths ──────────────────────────────
+# `tailscale up` prints a login link that the panel renders into an href AND into the link text, on
+# two pages. The charset is enforced by a grep running ON THE HOST BEING JOINED, so the panel has to
+# re-check the whole string itself. ssh_manager's remote flow did (fullmatch); the panel-host twin in
+# tailscale_integration tested only startswith, which accepts anything after the trusted prefix.
+import tailscale_integration as _tsi
+_tsi_src = open(os.path.join(_root, "tailscale_integration.py"), encoding="utf-8").read()
+check("tailscale: the panel-host login-URL check is a fullmatch, not a prefix test",
+      'startswith("https://login.tailscale.com/")' not in _tsi_src
+      and "TS_LOGIN_URL_RE.fullmatch" in _tsi_src)
+check("tailscale: both flows share ONE definition of the URL",
+      sm._TS_LOGIN_URL_RE is _privmod.TS_LOGIN_URL_RE)
+_ts_good = "https://login.tailscale.com/a/0123456789abcdef"
+check("tailscale: a real login URL is accepted",
+      _privmod.TS_LOGIN_URL_RE.fullmatch(_ts_good) is not None)
+for _ts_bad in (_ts_good + '"><img src=x>',            # the prefix test accepted this
+                _ts_good + " and more",
+                _ts_good + "?next=https://evil.example",
+                "https://login.tailscale.com.evil.example/x",
+                "https://login.tailscale.com/"):        # the path is required, not optional
+    check("tailscale: %r is refused" % _ts_bad[:46],
+          _privmod.TS_LOGIN_URL_RE.fullmatch(_ts_bad) is None)
+
+# ── The peer check may not hand `ping` an option ──────────────────────────────────────────────
+# `host` went straight from the request into ["ping", "-c", "1", "-W", "3", host]. There is no
+# shell, so this is option injection rather than command injection — but argv[-1] starting with a
+# dash is read by ping as a flag, and "the argument cannot be an option" is the rule
+# privileged.USERNAME_RE and models._SHELL_IDENT_RE already apply for exactly this reason.
+for _ph in ("100.64.1.2", "host.example.ts.net", "[fd7a:115c::1]", "192.168.1.10", "a-b.example"):
+    check("peer host: %r accepted" % _ph, _tsi.valid_peer_host(_ph))
+for _ph in ("-f", "--help", "-I eth0", "", "   ", "a;reboot", "$(id)", "a b", "x" * 300):
+    check("peer host: %r refused" % _ph, not _tsi.valid_peer_host(_ph))
+check("peer check: an invalid host is refused before ping runs, not pinged",
+      _tsi.check_peer_reachability("-f") == {"reachable": False, "latency_ms": 0})
+
+# ── _da() escapes the values it puts in a single-quoted attribute ─────────────────────────────
+# _da builds `data-args='<json>'` for the delegated dispatcher. It escaped ' -> &#39; but left &
+# alone, so a value containing the TEXT "&#39;" was decoded by the HTML parser into a real quote,
+# closing the attribute early and turning the rest into further attributes on the tag. Reachable
+# through a remote's name (SAFE_LABEL_RE blocks < > " ' ` \ but not &) -> REMOTE_NAME ->
+# rebootNagRender. The CSP blocks the payload that would make it an XSS; the escaping is still wrong.
+_panel_js = open(os.path.join(_root, "static", "js", "panel.js"), encoding="utf-8").read()
+_da_src = _panel_js[_panel_js.index("window._da = function"):]
+_da_src = _da_src[:_da_src.index("\n};")]
+_da_amp, _da_quote = _da_src.find("replace(/&/g, '&amp;')"), _da_src.find("replace(/'/g")
+check("_da: ampersands are escaped in data-args", _da_amp >= 0)
+# .find, not .index: a missing escape is the thing being tested for, and raising here would take
+# the whole suite down with a ValueError instead of reporting one FAIL.
+check("_da: ...before the single quotes, or & would re-escape the & of &#39;",
+      _da_amp >= 0 and _da_quote >= 0 and _da_amp < _da_quote,
+      "amp at %d, quote at %d" % (_da_amp, _da_quote))
+
+# ── The uninstaller removes everything the installer put OUTSIDE the panel directory ──────────
+# install.sh writes in five places beyond PANEL_DIR. uninstall.sh removed two of them, so a host
+# that had "removed the panel" kept a root-owned helper tree, a weekly root cron still running
+# `npm install -g` every Sunday, and a host-wide vm.swappiness change — while the script's own
+# header and the README both described the removal as complete.
+_uninst = open(os.path.join(_root, "uninstall.sh"), encoding="utf-8").read()
+# Mentioning a path is not removing it — the `if [ -f <path> ]` guard mentions it too. Collect the
+# paths that actually appear as an argument to rm, so deleting the `rm` and keeping the guard (a
+# very easy edit to make by accident) reads as the regression it is.
+#
+# The systemd unit is rm'd through "${UNIT_FILE}", which uninstall.sh sets from its own SYSTEM_UNIT
+# literal — resolve that one variable rather than special-casing the two paths it stands for.
+_sys_unit = re.search(r'SYSTEM_UNIT="([^"]+)"', _uninst)
+_uninst_rm = set()
+for _line in _uninst.splitlines():
+    _cmd = _line.strip()
+    if not _cmd.startswith("rm "):
+        continue
+    if _sys_unit:
+        _cmd = _cmd.replace('"${UNIT_FILE}"', _sys_unit.group(1)).replace(
+            '"${UNIT_FILE}.d"', _sys_unit.group(1) + ".d")
+    _uninst_rm |= set(re.findall(r"/(?:etc|usr/local)/[A-Za-z0-9._/${}-]+", _cmd))
+
+
+def _is_removed(path):
+    """True when uninstall.sh rm's `path`, or a directory containing it."""
+    return any(path == r or path.startswith(r.rstrip("/") + "/") for r in _uninst_rm)
+
+
+for _path, _why in (
+        ("/usr/local/lib/linuxgsm-panel", "the root-owned helper, db_maintenance, panel.conf and installer"),
+        ("/etc/cron.d/lgsm-node-tools", "the weekly npm/gamedig root cron"),
+        ("/etc/sysctl.d/99-linuxgsm-panel.conf", "the host-wide sysctl tuning"),
+        ("/etc/sudoers.d/linuxgsm-panel", "the sudoers grant"),
+        ("/usr/local/bin/linuxgsm-panel-recover", "the recovery command")):
+    check("uninstall.sh rm's %s (%s)" % (_path, _why), _is_removed(_path),
+          "rm targets: %s" % sorted(_uninst_rm))
+check("uninstall.sh removes the systemd priority drop-in too", '"${UNIT_FILE}.d"' in _uninst)
+# ...and the list above is derived, not remembered: whatever install.sh writes under /etc or
+# /usr/local, the uninstaller has to rm. This is what makes the NEXT one impossible to forget.
+_inst_src = open(os.path.join(_root, "install.sh"), encoding="utf-8").read()
+_inst_paths = set(re.findall(r"/(?:etc|usr/local)/[A-Za-z0-9._/-]*linuxgsm[A-Za-z0-9._/-]*",
+                             _inst_src))
+_inst_paths |= set(re.findall(r"/etc/cron\.d/[A-Za-z0-9._-]+", _inst_src))
+_inst_paths = {_p.rstrip("/") for _p in _inst_paths if _p.count("/") > 2}
+_unremoved = sorted(_p for _p in _inst_paths if not _is_removed(_p))
+check("uninstall.sh accounts for every panel path install.sh writes outside PANEL_DIR",
+      not _unremoved, "not removed: %s" % _unremoved)
+
+# ── Dead CSS must not out-specify live CSS ────────────────────────────────────────────
+# A "STAT CARDS" block held .stat-card / .stat-value / .empty-state* — used by no template and no
+# script — and a SECOND .stat-label. Equal specificity, later in the file, so the dead rule beat the
+# live .stat-label under "LIVE STAT TILES" and every stat tile rendered at .75rem/--text-muted
+# instead of the .66rem/#8b98a5 that rule asks for. Unused rules are only harmless when they do not
+# collide, which is why this checks the collision and not just the disuse.
+_css_raw = open(os.path.join(_root, "static", "css", "panel.css"), encoding="utf-8").read()
+_css = re.sub(r"/\*.*?\*/", "", _css_raw, flags=re.S)      # comments describe rules; they are not rules
+
+
+def _toplevel_class_rules(css):
+    """Single-class selectors declared at the TOP level, i.e. outside any @media block.
+
+    Media-query overrides re-declare .btn, .card-body and friends on purpose, so counting those as
+    duplicates would flag the whole responsive section. Depth tracking is what separates the two."""
+    out, depth, i = [], 0, 0
+    while i < len(css):
+        c = css[i]
+        if c == "{":
+            if depth == 0:
+                head = css[:i].rsplit("}", 1)[-1].rsplit("{", 1)[-1].strip()
+                m = re.fullmatch(r"(\.[A-Za-z][\w-]*)", head)
+                if m:
+                    out.append(m.group(1))
+            depth += 1
+        elif c == "}":
+            depth = max(0, depth - 1)
+        i += 1
+    return out
+
+
+_css_rules = _toplevel_class_rules(_css)
+_dupe_rules = sorted({r for r in _css_rules if _css_rules.count(r) > 1})
+check("panel.css: no single-class rule is declared twice at the top level",
+      not _dupe_rules, "declared twice: %s" % _dupe_rules)
+# The gate above only means something if it can see a duplicate at all — prove it counts the rules
+# it is meant to (.stat-label is the one that was doubled, and is still there exactly once).
+check("panel.css: ...and the scan really reads the file's rules",
+      _css_rules.count(".stat-label") == 1 and len(_css_rules) > 60,
+      "found %d top-level class rules" % len(_css_rules))
+# ...and the dead selectors themselves are gone, with nothing in the UI asking for them.
+_markup = "".join(open(_p, encoding="utf-8").read()
+                  for _p in sorted(glob.glob(os.path.join(_root, "templates", "*.html")))
+                  + sorted(glob.glob(os.path.join(_root, "static", "js", "*.js"))))
+# Comments talk ABOUT class names ("shows an empty-state when nothing matches") without using them,
+# so strip them first or the prose answers for the markup.
+_markup = re.sub(r"<!--.*?-->|\{#.*?#\}|/\*.*?\*/", "", _markup, flags=re.S)
+_markup = re.sub(r"^\s*//.*$", "", _markup, flags=re.M)
+for _dead in ("stat-card", "stat-value", "empty-state"):
+    check("panel.css: .%s is gone" % _dead,
+          not re.search(r"\.%s[\w-]*\s*\{" % _dead, _css))
+    check("...and nothing in the UI asks for .%s" % _dead, _dead not in _markup)
+
 passed = sum(1 for ok, _, _ in results if ok)
 for ok, name, detail in results:
     line = ("PASS" if ok else "FAIL") + "  " + name

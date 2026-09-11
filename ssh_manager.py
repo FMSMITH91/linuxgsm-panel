@@ -293,9 +293,14 @@ def run_privileged(server, verb, args=(), timeout=30, merge_stderr=True, sudo=Tr
     The fallback is not decoration. An existing install only gains the helper when install.sh is
     next run, and the panel's own self-update cannot place a root-owned file outside its checkout —
     so between an upgrade and that run, a host has the new code and no helper. Without the fallback
-    every firewall action on that host would fail. It also means the helper is not yet a privilege
-    BOUNDARY: while a fallback exists, and while call sites outside the ufw family still compose
-    shell strings, the sudoers grant stays NOPASSWD:ALL. Removing both is what finishes the job."""
+    every privileged action on that host would fail.
+
+    What that means for the sudoers grant depends on the host, and install.sh decides per host:
+    where the three root-owned pieces landed (the helper, db_maintenance.py and the installer
+    itself) it writes a grant permitting exactly one command, the helper, and the boundary is real.
+    Where they did not, the host keeps NOPASSWD:ALL, because it still falls back to the line below
+    and narrowing under that would break every privileged action rather than secure anything. The
+    installer prints which one it wrote; SECURITY.md carries the full account."""
     if not is_local_server(server):
         return run_command(server, _priv.remote_command(verb, args, merge_stderr=merge_stderr),
                            timeout=timeout, sudo=sudo)
@@ -3709,8 +3714,9 @@ def remote_install_tailscale(server):
 
 
 # The login URL `tailscale up` prints. Same charset the remote-side grep looks for, re-checked on
-# THIS side because the remote's output is not something we control.
-_TS_LOGIN_URL_RE = re.compile(r"https://login\.tailscale\.com/[A-Za-z0-9/]+")
+# THIS side because the remote's output is not something we control. Defined in privileged.py so
+# this and tailscale_integration's panel-host twin cannot check it differently — they did.
+_TS_LOGIN_URL_RE = _priv.TS_LOGIN_URL_RE
 
 
 def remote_tailscale_up_url(server, enable_ssh=True, advertise_routes=""):

@@ -1,9 +1,15 @@
 #!/usr/bin/env bash
 # LinuxGSM Panel — uninstaller.
 #
-# Removes the panel and everything its installer created: the systemd service, the panel
-# files + its data (DB / config / encryption keys), the sudoers entry, and — for a root
-# install — the dedicated 'lgsmpanel' service user.
+# Removes the panel and everything its installer created: the systemd service and its
+# priority drop-in, the panel files + its data (DB / config / encryption keys), and — for a
+# root install — the sudoers entry, the root-owned helper directory
+# (/usr/local/lib/linuxgsm-panel: panel-helper, db_maintenance.py, panel.conf, install.sh),
+# the weekly npm/gamedig cron, the panel's sysctl tuning, and the dedicated 'lgsmpanel' user.
+#
+# That list is the point: install.sh writes in five places OUTSIDE the panel directory, and
+# an uninstaller that only removes the obvious one leaves a root cron running weekly and a
+# host-wide swappiness change in place on a machine the panel no longer lives on.
 #
 # It DELIBERATELY LEAVES YOUR GAME SERVERS ALONE. Their Linux users, home directories,
 # LinuxGSM installs, and @reboot autostart crontabs are never touched, so every game
@@ -87,6 +93,9 @@ fi
 info "Stopping and removing the service…"
 svc disable --now linuxgsm-panel.service >/dev/null 2>&1 || true
 rm -f "${UNIT_FILE}"
+# ...and the low-priority drop-in ensure_service_tuning() writes beside it. Leaving the .d
+# directory behind means a later reinstall silently inherits the old Nice/CPUWeight.
+rm -rf "${UNIT_FILE}.d"
 svc daemon-reload >/dev/null 2>&1 || true
 if [ "${MODE}" = "system" ]; then systemctl reset-failed linuxgsm-panel.service >/dev/null 2>&1 || true; fi
 ok "Service stopped and removed"
@@ -116,6 +125,30 @@ if [ "${MODE}" = "system" ]; then
     rm -f /etc/sudoers.d/linuxgsm-panel
     rm -f /usr/local/bin/linuxgsm-panel-recover
     ok "Removed the sudoers entry"
+
+    # The root-owned pieces install_root_tools() places OUTSIDE the panel directory. They are the
+    # whole reason PANEL_DIR is not the full footprint: the helper, the offline DB-repair copy,
+    # panel.conf (which records the install's paths) and the root-owned installer.
+    if [ -d /usr/local/lib/linuxgsm-panel ]; then
+        rm -rf /usr/local/lib/linuxgsm-panel
+        ok "Removed the root-owned helper, DB-repair tool, panel.conf and installer copy"
+    fi
+
+    # A weekly ROOT cron that keeps npm + gamedig current for player queries. With the panel gone
+    # it has nothing to serve, and it would otherwise keep running `npm install -g` as root every
+    # Sunday forever.
+    if [ -f /etc/cron.d/lgsm-node-tools ]; then
+        rm -f /etc/cron.d/lgsm-node-tools
+        ok "Removed the weekly npm/gamedig update cron"
+    fi
+
+    # Host-wide kernel tuning the installer applied for the panel's sake (vm.swappiness). Re-apply
+    # the remaining sysctl config so the host goes back to its own values now, not at next boot.
+    if [ -f /etc/sysctl.d/99-linuxgsm-panel.conf ]; then
+        rm -f /etc/sysctl.d/99-linuxgsm-panel.conf
+        sysctl --system >/dev/null 2>&1 || true
+        ok "Removed the panel's sysctl tuning (swappiness back to this host's own setting)"
+    fi
     # SAFETY: only ever remove the dedicated panel service user — NEVER a game-server user.
     if [ "${PANEL_USER}" = "${SERVICE_USER}" ] && id "${PANEL_USER}" >/dev/null 2>&1; then
         loginctl disable-linger "${PANEL_USER}" >/dev/null 2>&1 || true

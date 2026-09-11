@@ -67,10 +67,10 @@ bash ~/linuxgsm-panel/uninstall.sh                 # per-user install
 
 1. **Detects** whether it's a root/system install or a per-user one (and refuses to run without `sudo` on a root install).
 2. **Asks you to confirm** — type `yes` (or pass `--yes`); anything else aborts with nothing changed.
-3. **Stops, disables, and removes** the systemd service.
+3. **Stops, disables, and removes** the systemd service and its priority drop-in.
 4. **(Root install)** Removes the panel's **own** UFW port rule and resets its Tailscale Serve binding — never a game-server port.
 5. **Deletes the panel files and its `data/`** — accounts, config, and encryption keys.
-6. **(Root install)** Removes the sudoers entry, the `linuxgsm-panel-recover` command, and the dedicated `lgsmpanel` user.
+6. **(Root install)** Removes everything the installer put outside the panel directory: the sudoers entry, the root-owned helper directory (`/usr/local/lib/linuxgsm-panel`), the `linuxgsm-panel-recover` command, the weekly npm/gamedig cron, the panel's sysctl tuning, and the dedicated `lgsmpanel` user.
 
 **Your game servers are left completely alone** — their Linux users, home directories, LinuxGSM installs, `@reboot` autostart crontabs, and game-port firewall rules are never touched, so every server keeps running exactly as before once the panel is gone.
 

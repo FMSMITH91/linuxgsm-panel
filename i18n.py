@@ -7,6 +7,12 @@ added to a language file. Each non-English catalog is a FOLDER of section files
 A single flat translations/<lang>.json is legacy and merged LAST if present — so following the old
 layout would silently override every section file. The merged catalog is also handed to the browser
 (window.I18N) so the panel's JavaScript can translate the strings it renders too.
+
+ONE KEY, ONE FILE. The merge below is last-write-wins in sorted FILENAME order, which is not a
+decision anybody made — it is alphabetical accident. Three dashboard tile labels had drifted into
+two files each, two of them with DIFFERENT translations, so which Spanish string a user saw was
+decided by "servers.json sorts after common.json". A key living in exactly one section file is what
+makes the merge order stop mattering, and tests/unit_test.py enforces it.
 """
 import json
 import threading

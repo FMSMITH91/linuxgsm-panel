@@ -202,16 +202,18 @@
     .btn-outline-danger  { color: #f87171; border-color: #f87171; }
     .btn-outline-warning { color: #fbbf24; border-color: #fbbf24; }
     .btn-outline-primary { color: #93c5fd; border-color: #93c5fd; }
-    .btn-danger  { color: #0a0f1a; }
-    .btn-warning { color: #0a0f1a; }
     .btn-primary:hover { background: var(--accent-hover); border-color: var(--accent-hover); box-shadow: 0 0 0 3px var(--accent-glow); }
     .btn-outline-secondary {
       border-color: var(--border); color: var(--text); background: transparent;
     }
     .btn-outline-secondary:hover { background: var(--bg-elevated); border-color: var(--text-muted); color: var(--text-heading); }
-    .btn-danger { background: var(--danger); border-color: var(--danger); }
+    /* One declaration each, dark text included — .btn-danger and .btn-warning used to be declared
+       twice: once in the contrast block above for `color`, then again here for `background`. The
+       warning pair disagreed (#0a0f1a vs a later #000), so the value the contrast fix chose was the
+       one that lost. Same near-black either way, which is exactly why nobody noticed. */
+    .btn-danger { background: var(--danger); border-color: var(--danger); color: #0a0f1a; }
     .btn-danger:hover { background: #dc2626; border-color: #dc2626; }
-    .btn-warning { background: var(--warning); border-color: var(--warning); color: #000; }
+    .btn-warning { background: var(--warning); border-color: var(--warning); color: #0a0f1a; }
 
     /* ── TABLES ── */
     .table { color: var(--text); margin-bottom: 0; }
@@ -460,19 +462,16 @@
       border-radius: var(--radius-sm); padding: .3rem .55rem;
     }
     .setup-lang i { color: var(--text-muted); }
-    .empty-state { text-align: center; padding: 4rem 1.5rem; }
-    .empty-state-icon { font-size: 3rem; margin-bottom: 1rem; opacity: .4; }
-    .empty-state h5 { color: var(--text-heading); font-size: 1.15rem; margin-bottom: .5rem; }
-    .empty-state p { color: var(--text-muted); font-size: .9rem; max-width: 420px; margin: 0 auto; }
 
     /* ── PAGINATION ── */
     .pagination .page-link { background: var(--bg-card); border-color: var(--border); color: var(--text); padding: .4rem .8rem; font-size: .85rem; }
     .pagination .page-item.active .page-link { background: var(--accent); border-color: var(--accent); }
 
-    /* ── STAT CARDS ── */
-    .stat-card { text-align: center; padding: 1.35rem .75rem; }
-    .stat-value { font-size: 1.75rem; font-weight: 700; color: var(--text-heading); line-height: 1.2; }
-    .stat-label { font-size: .75rem; color: var(--text-muted); margin-top: .25rem; font-weight: 500; }
+    /* NOTE: a "STAT CARDS" block used to sit here — .stat-card, .stat-value, .empty-state* and a
+       SECOND .stat-label. No template or script has used any of them for a long time, but the
+       duplicate .stat-label was still live CSS: equal specificity, later in the file, so it beat
+       the real one under "LIVE STAT TILES" above and every stat tile rendered at .75rem/--text-muted
+       instead of the .66rem/#8b98a5 that rule asks for. Dead rules are not inert when they collide. */
 
     /* ── RESPONSIVE ── */
     @media (max-width: 991.98px) {
@@ -513,14 +512,11 @@
       }
       .table-responsive .table thead th.col-actions { background: var(--bg-elevated); }
       .table-responsive .table-hover tbody tr:hover td.col-actions { background: var(--bg-elevated); }
-      .stat-value { font-size: 1.4rem; }
       .row { --bs-gutter-x: .75rem; }
       .btn { font-size: .8rem; padding: .45rem .8rem; }
       .btn-sm { font-size: .75rem; padding: .35rem .6rem; }
       .setup-card { margin: 2rem auto; }
       .flash-container { top: 60px; right: .5rem; width: 280px; }
-      .empty-state { padding: 3rem 1rem; }
-      .empty-state-icon { font-size: 2.5rem; }
       .modal-body { padding: 1rem; }
       .form-control, .form-select { font-size: .85rem; padding: .5rem .7rem; }
     }

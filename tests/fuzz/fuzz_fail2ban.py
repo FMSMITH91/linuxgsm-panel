@@ -23,6 +23,14 @@ with atheris.instrument_imports():
 def TestOneInput(data):
     fdp = atheris.FuzzedDataProvider(data)
     text = fdp.ConsumeUnicodeNoSurrogates(fdp.remaining_bytes())
+    # The pipeline has two halves and both parse untrusted text. _tally_f2b_lines reads the RAW
+    # fail2ban log (from a remote host, over SSH, for the remote report) and regex-matches
+    # `[jail] Ban|Found <ip>` out of it; _parse_top_ips reads the tab-separated rows that produces.
+    # Only the second was fuzzed, which left the half doing the actual matching — and the half that
+    # moved into Python most recently, when the awk came out of the root pipeline — uncovered.
+    system_ops._tally_f2b_lines(text, 20)
+    # ...and feed the real tally through, so the two halves are also exercised as a pair.
+    system_ops._parse_top_ips(system_ops._tally_f2b_lines(text, 5), set(), {})
     # banned_now (a set of IPs) and blocked (ip -> tag) come from other trusted calls; keep them
     # simple so the fuzzer explores the untrusted `out` text, which is the real parse surface.
     system_ops._parse_top_ips(text, set(), {})

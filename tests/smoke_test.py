@@ -2507,6 +2507,179 @@ try:
         db.session.commit()
     check("api token: a revoked token stops working", _bearer(_mru_tok).status_code != 200)
 
+    # ── The Telegram bot's /start must reach the server action, not the help text ────────────
+    # `if cmd in ("help", "start")` matched the word alone, so `/start codserver` — which
+    # TG_COMMANDS puts in Telegram's own '/' menu and _tg_help_text documents — answered with help
+    # and never started anything. A BARE /start is Telegram's open-the-chat command and must still
+    # answer with help, so both shapes are asserted; Discord's twin has always matched "help" only.
+    import app as _appmod
+    _tg_sent, _tg_acted = [], []
+    _tg_saved = (_appmod._tg_reply, _appmod._tg_server_action)
+    try:
+        _appmod._tg_reply = lambda tok, chat, text: _tg_sent.append(text)
+        _appmod._tg_server_action = lambda a, tok, chat, action, arg, sender=None: _tg_acted.append(
+            (action, arg))
+        _appmod._handle_telegram_command(app, "1:tok", "1", "/start smoke-cs")
+        check("telegram: /start <name> runs the start action",
+              _tg_acted == [("start", "smoke-cs")], "acted=%s sent=%s" % (_tg_acted, _tg_sent[:1]))
+        _tg_acted.clear(); _tg_sent.clear()
+        _appmod._handle_telegram_command(app, "1:tok", "1", "/start")
+        check("telegram: a bare /start still answers with help",
+              not _tg_acted and _tg_sent and "Commands" in _tg_sent[0],
+              "acted=%s sent=%s" % (_tg_acted, _tg_sent[:1]))
+        _tg_acted.clear(); _tg_sent.clear()
+        _appmod._handle_telegram_command(app, "1:tok", "1", "/stop smoke-cs")
+        check("telegram: /stop <name> still works", _tg_acted == [("stop", "smoke-cs")])
+    finally:
+        _appmod._tg_reply, _appmod._tg_server_action = _tg_saved
+    # Every command the bot advertises must be one it handles — that menu is what made the /start
+    # bug reachable in the first place.
+    import notifications as _notif
+    _repo_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    _tg_src = open(os.path.join(_repo_root, "app.py"), encoding="utf-8").read()
+    _tg_handler = _tg_src[_tg_src.index("def _handle_telegram_command"):]
+    _tg_handler = _tg_handler[:_tg_handler.index("\ndef ", 10)]
+    _unhandled = [_cmd for _cmd, _ in _notif.TG_COMMANDS
+                  if ('"%s"' % _cmd) not in _tg_handler]
+    check("telegram: every command in the '/' menu is handled by the router",
+          not _unhandled, "unhandled: %s" % _unhandled)
+
+    # ── /api/server/<id> reports the player count the rest of the panel uses ────────────────
+    # It used to run `cat <console_log> | grep -c '...'` over SSH and then look for a line holding
+    # both "players" and "has". grep -c prints a bare number, so the match was impossible: 0/0 for
+    # every server, forever, at the cost of a round trip that cats the whole console log.
+    from panel_state import _player_counts as _pc_cache
+    _pc_cache[gs_id] = {"count": 7, "max": 24, "name": None, "ts": 9e9}
+    try:
+        _ss = c.get("/api/server/%d" % gs_id)
+        _ssj = _ss.get_json() or {}
+        check("server status api: reports the cached player count, not 0",
+              _ssj.get("player_count") == 7 and _ssj.get("max_players") == 24,
+              "got %s/%s" % (_ssj.get("player_count"), _ssj.get("max_players")))
+        _pc_cache.pop(gs_id, None)
+        _ssj2 = (c.get("/api/server/%d" % gs_id).get_json() or {})
+        check("server status api: an unknown count is null, not a confident 0",
+              _ssj2.get("player_count") is None, "got %r" % _ssj2.get("player_count"))
+    finally:
+        _pc_cache.pop(gs_id, None)
+    check("server status api: no longer cats the console log to count players",
+          "grep -c 'ClientConnect" not in _tg_src)
+
+    # ── Editing a game server validates, and refuses a port change it cannot honour ────────
+    # /servers/<id>/edit wrote name, game_display and PORT straight from the form. The port write
+    # moved only the panel's record: the firewall rule and LinuxGSM stayed on the old port, and the
+    # monitor (`gs.port in <listening ports>`) then reported the server offline forever.
+    _es = c.post("/servers/%d/edit" % gs_id, data={"name": "renamed-cs", "game_display": "CS:GO"},
+                 headers={"X-Requested-With": "XMLHttpRequest"})
+    check("edit server: a valid rename succeeds", (_es.get_json() or {}).get("success") is True,
+          _es.get_data(as_text=True)[:120])
+    with app.app_context():
+        _g = db.session.get(GameServer, gs_id)
+        check("edit server: ...and is persisted", _g.name == "renamed-cs" and _g.game_display == "CS:GO")
+        _port_before = _g.port
+    _esb = c.post("/servers/%d/edit" % gs_id, data={"name": '<img src=x>', "game_display": ""},
+                  headers={"X-Requested-With": "XMLHttpRequest"})
+    check("edit server: a name with HTML metacharacters is refused",
+          _esb.status_code == 400 and (_esb.get_json() or {}).get("success") is False)
+    _esp = c.post("/servers/%d/edit" % gs_id,
+                  data={"name": "renamed-cs", "port": str(_port_before + 1)},
+                  headers={"X-Requested-With": "XMLHttpRequest"})
+    check("edit server: a port change is refused rather than silently desyncing",
+          _esp.status_code == 400 and "port can't be changed" in (_esp.get_json() or {}).get("message", ""),
+          _esp.get_data(as_text=True)[:160])
+    with app.app_context():
+        _g = db.session.get(GameServer, gs_id)
+        check("edit server: ...and the stored port is untouched", _g.port == _port_before)
+        _g.name = "smoke-cs"          # put the fixture back for the checks that follow
+        db.session.commit()
+
+    # ── Renaming a group onto an existing name is a 400, not a 500 ─────────────────────
+    # Group.name is unique=True. add_group has always checked for the collision; edit_group did not,
+    # so a typo raised IntegrityError at commit.
+    with app.app_context():
+        _ga = Group(name="smoke_dupe_a", description="", is_default=False)
+        _gb = Group(name="smoke_dupe_b", description="", is_default=False)
+        db.session.add_all([_ga, _gb])
+        db.session.commit()
+        _ga_id, _gb_id = _ga.id, _gb.id
+    _gd = c.post("/groups/%d/edit" % _gb_id, data={"name": "smoke_dupe_a", "description": ""},
+                 headers={"X-Requested-With": "XMLHttpRequest"})
+    check("edit group: a duplicate name is refused with a 400, not a 500",
+          _gd.status_code == 400 and "already exists" in (_gd.get_json() or {}).get("message", ""),
+          "status=%d" % _gd.status_code)
+    _gk = c.post("/groups/%d/edit" % _gb_id, data={"name": "smoke_dupe_b", "description": "same"},
+                 headers={"X-Requested-With": "XMLHttpRequest"})
+    check("edit group: keeping its OWN name is not a collision",
+          (_gk.get_json() or {}).get("success") is True, _gk.get_data(as_text=True)[:120])
+    with app.app_context():
+        for _gid in (_ga_id, _gb_id):
+            _gg = db.session.get(Group, _gid)
+            if _gg:
+                db.session.delete(_gg)
+        db.session.commit()
+
+    # ── A TOTP code is single-use on the password-change path too ────────────────────
+    # The login path has recorded the spent step since single-use was introduced; this — the panel's
+    # other route that accepts a live authenticator code — still asked the yes/no question, so an
+    # observed code stayed usable here for the rest of its ~90s window.
+    import pyotp as _pyotp
+    with app.app_context():
+        _t = db.session.get(User, admin2_id)
+        _t.last_totp_step = 0
+        _t.password_hash = auth.hash_password("Str0ng!passw0rd")
+        db.session.commit()
+        _secret = _t.totp_secret_plain
+    _tc = client_as(admin2_id)
+    _code = _pyotp.TOTP(_secret).now()
+    _r1 = _tc.post("/account/password", data={"current_password": "Str0ng!passw0rd",
+                                              "new_password": "Str0ng!passw0rd-2",
+                                              "confirm_password": "Str0ng!passw0rd-2",
+                                              "totp_code": _code})
+    # The status matters as much as the result. `u = current_user` kept the LocalProxy, and
+    # login_user(proxy) made flask-login store it as the session user — so the next current_user
+    # resolution recursed and the request died with a RecursionError, AFTER the new password was
+    # committed. A 500 on a password change that actually worked, with no audit entry.
+    check("password change: succeeds with a redirect, not a 500",
+          _r1.status_code in (301, 302, 303), "status=%d" % _r1.status_code)
+    with app.app_context():
+        _t = db.session.get(User, admin2_id)
+        check("password change: a valid authenticator code is accepted",
+              auth.check_password("Str0ng!passw0rd-2", _t.password_hash), "status=%d" % _r1.status_code)
+        check("password change: ...and the step it used is recorded",
+              (_t.last_totp_step or 0) > 0, "last_totp_step=%s" % _t.last_totp_step)
+    _tc2 = client_as(admin2_id)   # the change revoked the old session
+    _r2 = _tc2.post("/account/password", data={"current_password": "Str0ng!passw0rd-2",
+                                               "new_password": "Str0ng!passw0rd-3",
+                                               "confirm_password": "Str0ng!passw0rd-3",
+                                               "totp_code": _code})
+    with app.app_context():
+        _t = db.session.get(User, admin2_id)
+        check("password change: REPLAYING that same code is refused",
+              auth.check_password("Str0ng!passw0rd-2", _t.password_hash),
+              "the replayed code changed the password again")
+
+    # ── The API-token card is reachable, and the mint actually shows the token ────────────
+    # The Bearer path authenticates as its owner on every route (see the token checks above), but
+    # the account page had no way to mint or revoke one — and the mint route rendered a template
+    # that ignored `new_token`, so it stored a credential and threw the plaintext away.
+    _acct = c.get("/account").get_data(as_text=True)
+    check("account page: offers the API-token control", "api-token/generate" in _acct)
+    _mint = c.post("/account/api-token/generate")
+    _mint_body = _mint.get_data(as_text=True)
+    _shown = _re_as.search(r"(lgsm_[0-9a-f]{48})", _mint_body)
+    check("api token: minting one SHOWS it (once)", _shown is not None, "status=%d" % _mint.status_code)
+    if _shown:
+        check("api token: the token it showed actually authenticates",
+              app.test_client().get("/api/servers", headers={
+                  "Authorization": "Bearer %s" % _shown.group(1)}).status_code == 200)
+    check("account page: offers Revoke once a token exists", "api-token/revoke" in _mint_body)
+    _rev = c.post("/account/api-token/revoke", follow_redirects=True)
+    check("api token: revoking it works", _rev.status_code == 200)
+    if _shown:
+        check("api token: ...and the revoked token stops authenticating",
+              app.test_client().get("/api/servers", headers={
+                  "Authorization": "Bearer %s" % _shown.group(1)}).status_code != 200)
+
     # ── can_run_custom_command: who may press a superadmin-authored console button ────────────────
     # Every branch of this decides whether a non-superadmin gets to run a console command on a
     # server, and none of it was asserted.

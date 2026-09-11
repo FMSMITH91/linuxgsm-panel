@@ -267,6 +267,7 @@
  "The UI language a newly-created account starts in.": "La langue de l'interface avec laquelle démarre un compte nouvellement créé.",
  "This Machine": "Cette machine",
  "This host's public IP isn't known yet": "L'IP publique de cet hôte n'est pas encore connue",
+ "Total Servers": "Serveurs au total",
  "Two-factor authentication is off on your admin account.": "L'authentification à deux facteurs est désactivée sur votre compte administrateur.",
  "Two-way command bot": "Bot de commandes bidirectionnel",
  "Type": "Type",
