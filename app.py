@@ -68,7 +68,7 @@ del _w
 
 import secrets
 from flask import (
-    Flask, Response, abort, flash, g, jsonify, redirect, render_template, request,
+    Flask, Response, abort, current_app, flash, g, jsonify, redirect, render_template, request,
     send_file, session, url_for,
 )
 from markupsafe import Markup
@@ -1874,38 +1874,353 @@ def register_context_processors(app):
 
 # ─── Routes ───────────────────────────────────────────────────
 
+
+# ─── Route helpers ────────────────────────────────────────────────────────────────────
+# These were defined INSIDE register_routes(), which made them closures over its scope and
+# meant no view using one could be moved out of that 6,570-line function. None of them
+# actually needed anything from that scope — they are plain helpers — so they live at module
+# level now. Behaviour is unchanged: a view calling one resolves it as a global instead of a
+# closure cell, which is the same function. Hoisting them is the precondition for splitting
+# the route table into modules, and it makes them directly testable and stubbable besides.
+
+def resolve_free_port(remote, remote_id, desired, game_type):
+    """Find a free contiguous port block at/after `desired` on a remote for a `game_type`
+    server. A block of _port_span(game_type) ports must clear both (a) the ports other panel
+    game servers on this remote reserve — each per its own game's span — and (b) whatever is
+    actually listening on the host right now. Returns (start_port, changed).
+
+    The span makes the increment game-correct: single-port games (most, incl. Call of Duty and
+    Source) pack sequentially (28960, 28961, …) instead of wastefully skipping every other
+    port, while multi-port games (Rust, Valheim, …) still reserve their whole adjacent block."""
+    span = _port_span(game_type)
+    # Whatever is currently listening on the host (cached scan) — covers running servers'
+    # FULL real footprint (game + query + rcon + …) and any non-panel service, so we never
+    # land on one even if a game's span table entry is imperfect.
+    occupied = set(_remote_listening_ports(remote))
+    # Plus every panel server's reserved block (covers STOPPED servers, which aren't listening).
+    for e in GameServer.query.filter_by(remote_id=remote_id).all():
+        for k in range(_port_span(e.game_type)):
+            occupied.add(e.port + k)
+    p = _first_free_block(desired, span, occupied)
+    return p, (p != desired)
+
+# ── Setup Wizard ────────────────────────────────────────
+def is_setup_complete():
+    """Check if setup wizard has been completed."""
+    state = SetupState.query.filter_by(complete=True).first()
+    cfg = load_config()
+    return state is not None and cfg.get("setup_complete", False)
+
+# ── Setup-only Tailscale endpoints ─────────────────────────
+# No login exists yet during setup, so these are unauthenticated BUT usable ONLY
+# while setup is unfinished (they're a no-op/forbidden once complete, same as the
+# wizard itself). They operate on THIS host only.
+def _setup_open():
+    # The SAME DB-row-only lock the wizard uses, and for the same reason — see the long
+    # comment on setup_wizard() above, which describes this exact failure and then only
+    # defended /setup with it.
+    #
+    # These four were gated on `not is_setup_complete()`, which is (DB row AND config flag).
+    # The config half fails OPEN: load_config() swallows JSONDecodeError/OSError and returns
+    # DEFAULT_CONFIG, where setup_complete is False. So on a fully configured install, a
+    # data/config.json that was deleted, truncated by a full disk, or hand-edited into invalid
+    # JSON made is_setup_complete() False and reopened all four to unauthenticated callers:
+    # /install runs the Tailscale installer as root; /up returns an auth URL that joins THIS
+    # HOST to whoever called it, with Tailscale SSH enabled; /serve rewrites bind_host and
+    # site_domain. A missing config file should degrade the panel, not hand it over.
+    #
+    # state.complete is the one signal that is false for the whole wizard and true only once
+    # it has finished, and it lives in the DB rather than in a file that falls back to
+    # defaults. Gating on it is strictly more restrictive than what was here: during a genuine
+    # first run no completed row exists, so the wizard's own endpoints behave identically.
+    return SetupState.query.filter_by(complete=True).first() is None
+
+# ── Account / Two-factor auth ───────────────────────────
+def _qr_svg(data):
+    """Render `data` as an inline SVG QR code (no PIL needed)."""
+    import io
+    import qrcode
+    import qrcode.image.svg
+    qr = qrcode.QRCode(box_size=9, border=2, image_factory=qrcode.image.svg.SvgPathImage)
+    qr.add_data(data)
+    qr.make(fit=True)
+    buf = io.BytesIO()
+    qr.make_image().save(buf)
+    return buf.getvalue().decode()
+
+def _tag_json(tag):
+    return {"id": tag.id, "name": tag.name, "color": tag.color or "", "notify": bool(tag.notify),
+            "server_ids": sorted(gs.id for gs in tag.servers)}
+
+def _apply_mod_restart(gs, remote):
+    """A mod install/remove/update only takes effect after the server restarts — but we NEVER
+    restart automatically. Auto-restarting would disconnect whoever's playing out from under the
+    admin, so instead we just report whether a manual restart is needed and let them press
+    'Restart now' when they're ready. A stopped server needs nothing (the change loads on next
+    start). Returns (state, message) with state in {'needed','idle'}."""
+    try:
+        status = get_server_status(remote, gs)
+    except Exception:
+        status = "unknown"
+    if status == "offline":
+        if gs.restart_pending:              # clear any stale flag; nothing auto-restarts it now
+            gs.restart_pending = False
+            db.session.commit()
+        return "idle", "The server is stopped — the change will load when you next start it."
+    # Running: a restart is needed to load the change, but we do NOT do it or queue it — the admin
+    # decides. (We deliberately don't set restart_pending, so the empty-ticker won't restart it
+    # either — no surprise restarts from installing a mod.)
+    return "needed", ("Restart the server to load the change — use Restart now when you're ready "
+                      "(nobody is disconnected until you do).")
+
+def _selected_remotes(server_ids):
+    """Resolve submitted remote ids to RemoteServer rows, skipping anything
+    malformed or unknown. A group grants access per *remote* (host), which
+    covers every game server on it — see auth.can_access_server."""
+    out = []
+    seen = set()
+    for sid in server_ids:
+        try:
+            rid = int(sid)
+        except (TypeError, ValueError):
+            continue
+        if rid in seen:
+            continue
+        rs = db.session.get(RemoteServer, rid)
+        if rs:
+            seen.add(rid)
+            out.append(rs)
+    return out
+
+def _selected_game_servers(ids):
+    """Resolve submitted game-server ids to GameServer rows (individual per-server grants,
+    finer than the whole-host grants from _selected_remotes). Skips malformed/unknown ids."""
+    out = []
+    seen = set()
+    for sid in ids:
+        try:
+            gid = int(sid)
+        except (TypeError, ValueError):
+            continue
+        if gid in seen:
+            continue
+        g = db.session.get(GameServer, gid)
+        if g:
+            seen.add(gid)
+            out.append(g)
+    return out
+
+def _custom_cmd_form(cmd=None):
+    """Read + validate the custom-command form. Returns (fields, error). `fields` is a dict
+    ready to assign onto a CustomCommand; `error` is a user-facing string or None."""
+    name = (request.form.get("name") or "").strip()
+    template = (request.form.get("command_template") or "").strip()
+    arg_label = (request.form.get("argument_label") or "").strip()
+    arg_pattern = (request.form.get("argument_pattern") or "").strip()
+    # Scope arrives as a single "<type>|<value>" field (e.g. "all|", "engine|idtech3", "game|cod2").
+    scope_raw = (request.form.get("scope") or "all").strip()
+    scope_type, _, scope_value = scope_raw.partition("|")
+    scope_type = scope_type.strip()
+    scope_value = scope_value.strip()
+    enabled = request.form.get("enabled") is not None
+    if not name or not template:
+        return None, "A label and a command template are required."
+    if template.count(CUSTOM_ARG_PLACEHOLDER) > 1:
+        return None, "The template may contain at most one {} placeholder."
+    # The template is sent to tmux as a console line — forbid control chars / newlines so it
+    # can't smuggle a second keystroke sequence. Normal console punctuation is allowed.
+    if any(ord(c) < 32 for c in template):
+        return None, "The command template can't contain control characters or newlines."
+    if scope_type not in ("all", "engine", "game"):
+        scope_type = "all"
+    if scope_type == "engine" and scope_value not in _CUSTOM_CMD_ENGINES:
+        return None, "Pick a valid engine for the engine scope."
+    if scope_type == "game" and scope_value not in {g["shortname"] for g in load_game_list()}:
+        return None, "Pick a valid game for the game scope."
+    if scope_type == "all":
+        scope_value = ""
+    # A custom pattern must compile; otherwise fall back to the safe default (blank stores default).
+    if arg_pattern:
+        try:
+            re.compile(arg_pattern)
+        except re.error:
+            return None, "The argument validation pattern isn't a valid regular expression."
+    return {"name": name[:80], "command_template": template[:500],
+            "argument_label": arg_label[:80], "argument_pattern": arg_pattern[:200],
+            "scope_type": scope_type, "scope_value": scope_value[:64],
+            "enabled": enabled}, None
+
+def _assign_command_groups(cmd):
+    """Set which groups may run this command from the submitted checkboxes."""
+    ids = set()
+    for gid in request.form.getlist("groups"):
+        try:
+            ids.add(int(gid))
+        except (TypeError, ValueError):
+            continue
+    cmd.groups = Group.query.filter(Group.id.in_(list(ids))).all() if ids else []
+
+# ── Security tab (panel host): fail2ban bans, recent security events, raw logs ──
+def _maybe_set_threshold(body):
+    """If the request carries a 'threshold', validate + persist it. Returns the effective value."""
+    if body.get("threshold") is not None:
+        try:
+            val = max(1, min(int(body.get("threshold")), 100000))
+            update_config(lambda cfg: cfg.update({"autoblock_threshold": val}))
+            log_action(current_user, "autoblock_threshold", target="all hosts", detail="%d attempts / 7d" % val)
+        except (TypeError, ValueError):
+            _log.debug("ignoring a non-numeric autoblock threshold", exc_info=True)
+    return _autoblock_threshold()
+
+def _find_game_backup(gs, name):
+    """Return the backup dict whose name matches `name` from the server's real backup list, or
+    None. Validating against the listing (not building a path from user input) keeps this
+    path-injection safe."""
+    for b in list_game_backups(gs.remote, gs.short_name):
+        if b["name"] == name:
+            return b
+    return None
+
+def _pro_status_cached(remote, force=False):
+    """Ubuntu Pro status, served from the persisted value so a page visit (even right after a
+    panel restart) never re-spawns the slow client. Only refreshes on an explicit force or when
+    the stored value is genuinely stale — the attach/detach/service actions refresh it directly,
+    so it's otherwise set-and-forget. Returns the status dict."""
+    cached = remote.cached_pro
+    if cached and not force and (time.time() - cached.get("ts", 0)) < _PRO_MAX_AGE:
+        return cached["data"]
+    data = pro_status(remote, force=force)
+    try:
+        remote.update_pro_cache(data)
+        db.session.commit()
+    except Exception:
+        db.session.rollback()
+    return data
+
+def _refuse_on_panel_host(remote, what):
+    """A JSON 400 when a VPS-PREPARATION action is aimed at the panel's own host, else None.
+
+    get_remote() already enforces WHICH hosts a user may touch. This is the other axis: WHICH
+    KIND. Bootstrap, Tailscale-install and Tailscale-join prepare a fresh VPS — they apt
+    full-upgrade the machine, rewrite its sshd config, pipe an installer into a root shell, and
+    reboot it. Aimed at the host the panel runs on, that reboots the panel out from under the
+    request, and can change the tailnet identity of the very machine the operator is reaching
+    it through.
+
+    manage_remotes.html already hides all three for the local host. This is the server-side
+    half of that: a UI-only restriction on a destructive privileged action is not a
+    restriction — the route still accepted a POST with the local host's id."""
+    if not is_local_server(remote):
+        return None
+    _log.warning("refused %s aimed at the panel's own host (remote_id=%s)", what, remote.id)
+    return jsonify({
+        "success": False,
+        "message": ("%s prepares a REMOTE VPS and can't target the panel's own host — it "
+                    "would reboot the panel mid-request. Use the panel's own pages for "
+                    "updates, firewall and Tailscale." % what),
+    }), 400
+
+# ── Scheduled tasks (cron) for the game user ──
+# Same privilege gate as the file editor: a cron entry runs an arbitrary command
+# as the (unprivileged) game user, exactly as file editing writes arbitrary
+# content. The panel's own managed entries (autostart / maintenance / daily restart) are
+# editable here too — nothing is locked in the generic editor any more (see
+# ssh_manager._cron_managed_patterns, which now returns []). This comment previously claimed
+# they were read-only, which read as a security guarantee that the code does not make.
+def _sync_toggles_from_cron(gs, jobs):
+    """Make the crontab the source of truth for the Autostart / Daily-restart switches.
+
+    Both switches are stored as columns, but what they really mean is "is this line in the
+    crontab". Three paths wrote the line without touching the column — install_game_cron() at
+    install time, an import that adopted an existing setup, and deleting the line by hand in
+    Scheduled Tasks (whose own help text promised that deleting `monitor` turns Autostart off).
+    So the Details page could show Off while `*/5 * * * * ... monitor` was scheduled and
+    running. Reconciles on every read or write of the cron list; returns True if it changed
+    anything."""
+    roles = {j.get("role") for j in (jobs or [])}
+    changed = False
+    for field, role in (("autostart", "autostart"), ("daily_restart", "daily-restart")):
+        live = role in roles
+        if bool(getattr(gs, field)) != live:
+            setattr(gs, field, live)
+            changed = True
+    if changed:
+        db.session.commit()
+    return changed
+
+# ── WebSocket Console ───────────────────────────────────
+def _socketio_cors():
+    """Origins allowed to open the console WebSocket. Explicit config wins; else,
+    once the panel has a domain (served via Tailscale Serve/nginx), lock to that
+    origin instead of "*". Falls back to "*" only for plain IP:port access, where
+    there's no fixed origin to pin to. (join_console also requires an authenticated
+    session, and the SameSite=Lax cookie stops a cross-site page carrying it.)"""
+    cfg = load_config()
+    explicit = cfg.get("socketio_cors_origins")
+    if explicit:
+        return explicit
+    dom = (cfg.get("site_domain") or "").strip()
+    if dom:
+        return ["https://%s" % dom, "http://%s" % dom]
+    return "*"
+
+def _os_updates_for(remote):
+    """One host's check result dict, or None if it could not be checked.
+
+    Runs on a pool thread, so it touches no session and reads only already-loaded columns of
+    `remote` — the same contract as _probe_host. Never raises."""
+    try:
+        if not _host_reachable(remote):
+            return None       # an unreachable host is the monitor's alert to raise, not this one's
+        if remote.is_local:
+            res = so.os_update_available(refresh=True)
+        else:
+            res = remote_os_check_updates(remote) or {}
+        # A failed check returns no packages, exactly like a clean host. Without this the state
+        # would re-arm on the failure and re-announce the identical list on the next success.
+        if not res.get("ok"):
+            return None
+        return res
+    except Exception:
+        _log.debug("os-update check failed for %s", getattr(remote, "name", "?"), exc_info=True)
+        return None
+
+
+# ─── Error responses shared by the route table ───────────────────────────────────────
+# Hoisted out of register_routes for the same reason as the helpers above. `app.logger`
+# becomes `current_app.logger`, which inside a request is the SAME logger object on the SAME
+# channel — so no log line changes and not one of the 79 call sites needed touching. Every
+# caller of both is a route view, so the request context they need is guaranteed.
+
+def _log_and_generic(context):
+    """Record the real exception in the server log and return a generic string,
+    so raw exception text is never sent to the client (CodeQL
+    py/stack-trace-exposure). Admins read the detail in the panel logs."""
+    current_app.logger.exception(context)
+    return "Internal server error"
+
+def _unreachable(context):
+    """A remote host that cannot be reached is a NORMAL condition for this panel, not a fault
+    in it — hosts go down, networks blip, a VPS reboots. Answer 200 with an error field so the
+    UI can say "host unreachable" instead of the browser logging a 500, and so 5xx alerting
+    stays a signal that the PANEL is broken.
+
+    ssh_manager raises ConnectionError for exactly this (auth failed / timed out / cannot
+    resolve), which is what makes it separable from a genuine bug. Anything that is not a
+    ConnectionError still returns 500, deliberately: those are ours.
+
+    api_remote_live_stats already did this and said why in a comment; six sibling endpoints
+    did not, and every one of them 500s on a host that is simply switched off."""
+    current_app.logger.warning("%s: host unreachable", context)
+    return jsonify({"success": False, "unreachable": True,
+                    "error": "Host unreachable"}), 200
+
 def register_routes(app):
 
     # ── Helpers ─────────────────────────────────────────────
 
-    def resolve_free_port(remote, remote_id, desired, game_type):
-        """Find a free contiguous port block at/after `desired` on a remote for a `game_type`
-        server. A block of _port_span(game_type) ports must clear both (a) the ports other panel
-        game servers on this remote reserve — each per its own game's span — and (b) whatever is
-        actually listening on the host right now. Returns (start_port, changed).
-
-        The span makes the increment game-correct: single-port games (most, incl. Call of Duty and
-        Source) pack sequentially (28960, 28961, …) instead of wastefully skipping every other
-        port, while multi-port games (Rust, Valheim, …) still reserve their whole adjacent block."""
-        span = _port_span(game_type)
-        # Whatever is currently listening on the host (cached scan) — covers running servers'
-        # FULL real footprint (game + query + rcon + …) and any non-panel service, so we never
-        # land on one even if a game's span table entry is imperfect.
-        occupied = set(_remote_listening_ports(remote))
-        # Plus every panel server's reserved block (covers STOPPED servers, which aren't listening).
-        for e in GameServer.query.filter_by(remote_id=remote_id).all():
-            for k in range(_port_span(e.game_type)):
-                occupied.add(e.port + k)
-        p = _first_free_block(desired, span, occupied)
-        return p, (p != desired)
 
 
-    # ── Setup Wizard ────────────────────────────────────────
-    def is_setup_complete():
-        """Check if setup wizard has been completed."""
-        state = SetupState.query.filter_by(complete=True).first()
-        cfg = load_config()
-        return state is not None and cfg.get("setup_complete", False)
 
     @app.before_request
     def check_setup():
@@ -2118,29 +2433,6 @@ def register_routes(app):
         return render_template(tmpl, step=state.step, data=data, config=cfg, ts=ts_info,
                                setup_mode=True)
 
-    # ── Setup-only Tailscale endpoints ─────────────────────────
-    # No login exists yet during setup, so these are unauthenticated BUT usable ONLY
-    # while setup is unfinished (they're a no-op/forbidden once complete, same as the
-    # wizard itself). They operate on THIS host only.
-    def _setup_open():
-        # The SAME DB-row-only lock the wizard uses, and for the same reason — see the long
-        # comment on setup_wizard() above, which describes this exact failure and then only
-        # defended /setup with it.
-        #
-        # These four were gated on `not is_setup_complete()`, which is (DB row AND config flag).
-        # The config half fails OPEN: load_config() swallows JSONDecodeError/OSError and returns
-        # DEFAULT_CONFIG, where setup_complete is False. So on a fully configured install, a
-        # data/config.json that was deleted, truncated by a full disk, or hand-edited into invalid
-        # JSON made is_setup_complete() False and reopened all four to unauthenticated callers:
-        # /install runs the Tailscale installer as root; /up returns an auth URL that joins THIS
-        # HOST to whoever called it, with Tailscale SSH enabled; /serve rewrites bind_host and
-        # site_domain. A missing config file should degrade the panel, not hand it over.
-        #
-        # state.complete is the one signal that is false for the whole wizard and true only once
-        # it has finished, and it lives in the DB rather than in a file that falls back to
-        # defaults. Gating on it is strictly more restrictive than what was here: during a genuine
-        # first run no completed row exists, so the wizard's own endpoints behave identically.
-        return SetupState.query.filter_by(complete=True).first() is None
 
     @app.route("/api/setup/tailscale/status")
     def api_setup_ts_status():
@@ -2369,18 +2661,6 @@ def register_routes(app):
         flash("You have been logged out.", "info")
         return redirect("/login")
 
-    # ── Account / Two-factor auth ───────────────────────────
-    def _qr_svg(data):
-        """Render `data` as an inline SVG QR code (no PIL needed)."""
-        import io
-        import qrcode
-        import qrcode.image.svg
-        qr = qrcode.QRCode(box_size=9, border=2, image_factory=qrcode.image.svg.SvgPathImage)
-        qr.add_data(data)
-        qr.make(fit=True)
-        buf = io.BytesIO()
-        qr.make_image().save(buf)
-        return buf.getvalue().decode()
 
     @app.route("/account")
     @login_required
@@ -2526,9 +2806,6 @@ def register_routes(app):
 
     # ── Server tags: install-wide labels for grouping, bulk actions and alert routing ──────────
 
-    def _tag_json(tag):
-        return {"id": tag.id, "name": tag.name, "color": tag.color or "", "notify": bool(tag.notify),
-                "server_ids": sorted(gs.id for gs in tag.servers)}
 
     @app.route("/api/tags")
     @login_required
@@ -3063,26 +3340,6 @@ def register_routes(app):
                                cron_restart_pending=_cron_restart_pending.get(gs.id, False))
 
 
-    def _apply_mod_restart(gs, remote):
-        """A mod install/remove/update only takes effect after the server restarts — but we NEVER
-        restart automatically. Auto-restarting would disconnect whoever's playing out from under the
-        admin, so instead we just report whether a manual restart is needed and let them press
-        'Restart now' when they're ready. A stopped server needs nothing (the change loads on next
-        start). Returns (state, message) with state in {'needed','idle'}."""
-        try:
-            status = get_server_status(remote, gs)
-        except Exception:
-            status = "unknown"
-        if status == "offline":
-            if gs.restart_pending:              # clear any stale flag; nothing auto-restarts it now
-                gs.restart_pending = False
-                db.session.commit()
-            return "idle", "The server is stopped — the change will load when you next start it."
-        # Running: a restart is needed to load the change, but we do NOT do it or queue it — the admin
-        # decides. (We deliberately don't set restart_pending, so the empty-ticker won't restart it
-        # either — no surprise restarts from installing a mod.)
-        return "needed", ("Restart the server to load the change — use Restart now when you're ready "
-                          "(nobody is disconnected until you do).")
 
     def _run_action(gs, remote, action, actor, origin=None):
         """Execute a whitelisted action (permission already checked).
@@ -4732,42 +4989,7 @@ def register_routes(app):
                                all_remotes=all_remotes)
 
 
-    def _selected_remotes(server_ids):
-        """Resolve submitted remote ids to RemoteServer rows, skipping anything
-        malformed or unknown. A group grants access per *remote* (host), which
-        covers every game server on it — see auth.can_access_server."""
-        out = []
-        seen = set()
-        for sid in server_ids:
-            try:
-                rid = int(sid)
-            except (TypeError, ValueError):
-                continue
-            if rid in seen:
-                continue
-            rs = db.session.get(RemoteServer, rid)
-            if rs:
-                seen.add(rid)
-                out.append(rs)
-        return out
 
-    def _selected_game_servers(ids):
-        """Resolve submitted game-server ids to GameServer rows (individual per-server grants,
-        finer than the whole-host grants from _selected_remotes). Skips malformed/unknown ids."""
-        out = []
-        seen = set()
-        for sid in ids:
-            try:
-                gid = int(sid)
-            except (TypeError, ValueError):
-                continue
-            if gid in seen:
-                continue
-            g = db.session.get(GameServer, gid)
-            if g:
-                seen.add(gid)
-                out.append(g)
-        return out
 
     @app.route("/groups/add", methods=["POST"])
     @login_required
@@ -4833,55 +5055,7 @@ def register_routes(app):
     # A dict of engine value -> label for the scope selector. Kept here (not a new ssh_manager
     # export) so the admin UI stays self-contained.
 
-    def _custom_cmd_form(cmd=None):
-        """Read + validate the custom-command form. Returns (fields, error). `fields` is a dict
-        ready to assign onto a CustomCommand; `error` is a user-facing string or None."""
-        name = (request.form.get("name") or "").strip()
-        template = (request.form.get("command_template") or "").strip()
-        arg_label = (request.form.get("argument_label") or "").strip()
-        arg_pattern = (request.form.get("argument_pattern") or "").strip()
-        # Scope arrives as a single "<type>|<value>" field (e.g. "all|", "engine|idtech3", "game|cod2").
-        scope_raw = (request.form.get("scope") or "all").strip()
-        scope_type, _, scope_value = scope_raw.partition("|")
-        scope_type = scope_type.strip()
-        scope_value = scope_value.strip()
-        enabled = request.form.get("enabled") is not None
-        if not name or not template:
-            return None, "A label and a command template are required."
-        if template.count(CUSTOM_ARG_PLACEHOLDER) > 1:
-            return None, "The template may contain at most one {} placeholder."
-        # The template is sent to tmux as a console line — forbid control chars / newlines so it
-        # can't smuggle a second keystroke sequence. Normal console punctuation is allowed.
-        if any(ord(c) < 32 for c in template):
-            return None, "The command template can't contain control characters or newlines."
-        if scope_type not in ("all", "engine", "game"):
-            scope_type = "all"
-        if scope_type == "engine" and scope_value not in _CUSTOM_CMD_ENGINES:
-            return None, "Pick a valid engine for the engine scope."
-        if scope_type == "game" and scope_value not in {g["shortname"] for g in load_game_list()}:
-            return None, "Pick a valid game for the game scope."
-        if scope_type == "all":
-            scope_value = ""
-        # A custom pattern must compile; otherwise fall back to the safe default (blank stores default).
-        if arg_pattern:
-            try:
-                re.compile(arg_pattern)
-            except re.error:
-                return None, "The argument validation pattern isn't a valid regular expression."
-        return {"name": name[:80], "command_template": template[:500],
-                "argument_label": arg_label[:80], "argument_pattern": arg_pattern[:200],
-                "scope_type": scope_type, "scope_value": scope_value[:64],
-                "enabled": enabled}, None
 
-    def _assign_command_groups(cmd):
-        """Set which groups may run this command from the submitted checkboxes."""
-        ids = set()
-        for gid in request.form.getlist("groups"):
-            try:
-                ids.add(int(gid))
-            except (TypeError, ValueError):
-                continue
-        cmd.groups = Group.query.filter(Group.id.in_(list(ids))).all() if ids else []
 
     @app.route("/global-bans")
     @login_required
@@ -5404,17 +5578,6 @@ def register_routes(app):
         except Exception:
             return jsonify({"success": False, "message": _log_and_generic("db repair failed")}), 500
 
-    # ── Security tab (panel host): fail2ban bans, recent security events, raw logs ──
-    def _maybe_set_threshold(body):
-        """If the request carries a 'threshold', validate + persist it. Returns the effective value."""
-        if body.get("threshold") is not None:
-            try:
-                val = max(1, min(int(body.get("threshold")), 100000))
-                update_config(lambda cfg: cfg.update({"autoblock_threshold": val}))
-                log_action(current_user, "autoblock_threshold", target="all hosts", detail="%d attempts / 7d" % val)
-            except (TypeError, ValueError):
-                _log.debug("ignoring a non-numeric autoblock threshold", exc_info=True)
-        return _autoblock_threshold()
 
     def _whitelist_mutate(body):
         """Shared add/remove for the global security whitelist. On add: persist, push the new
@@ -6069,14 +6232,6 @@ def register_routes(app):
 
         threading.Thread(target=_worker, daemon=True).start()
 
-    def _find_game_backup(gs, name):
-        """Return the backup dict whose name matches `name` from the server's real backup list, or
-        None. Validating against the listing (not building a path from user input) keeps this
-        path-injection safe."""
-        for b in list_game_backups(gs.remote, gs.short_name):
-            if b["name"] == name:
-                return b
-        return None
 
     @app.route("/api/panel/backup/game/<int:server_id>/delete", methods=["POST"])
     @login_required
@@ -6808,21 +6963,6 @@ def register_routes(app):
 
     # ── Ubuntu Pro (works for the panel host too, via its local remote id) ──
 
-    def _pro_status_cached(remote, force=False):
-        """Ubuntu Pro status, served from the persisted value so a page visit (even right after a
-        panel restart) never re-spawns the slow client. Only refreshes on an explicit force or when
-        the stored value is genuinely stale — the attach/detach/service actions refresh it directly,
-        so it's otherwise set-and-forget. Returns the status dict."""
-        cached = remote.cached_pro
-        if cached and not force and (time.time() - cached.get("ts", 0)) < _PRO_MAX_AGE:
-            return cached["data"]
-        data = pro_status(remote, force=force)
-        try:
-            remote.update_pro_cache(data)
-            db.session.commit()
-        except Exception:
-            db.session.rollback()
-        return data
 
     @app.route("/api/remote/<int:remote_id>/pro-status")
     @login_required
@@ -6939,28 +7079,6 @@ def register_routes(app):
         except Exception:
             return jsonify({"success": False, "message": _log_and_generic("request failed")}), 500
 
-    def _refuse_on_panel_host(remote, what):
-        """A JSON 400 when a VPS-PREPARATION action is aimed at the panel's own host, else None.
-
-        get_remote() already enforces WHICH hosts a user may touch. This is the other axis: WHICH
-        KIND. Bootstrap, Tailscale-install and Tailscale-join prepare a fresh VPS — they apt
-        full-upgrade the machine, rewrite its sshd config, pipe an installer into a root shell, and
-        reboot it. Aimed at the host the panel runs on, that reboots the panel out from under the
-        request, and can change the tailnet identity of the very machine the operator is reaching
-        it through.
-
-        manage_remotes.html already hides all three for the local host. This is the server-side
-        half of that: a UI-only restriction on a destructive privileged action is not a
-        restriction — the route still accepted a POST with the local host's id."""
-        if not is_local_server(remote):
-            return None
-        _log.warning("refused %s aimed at the panel's own host (remote_id=%s)", what, remote.id)
-        return jsonify({
-            "success": False,
-            "message": ("%s prepares a REMOTE VPS and can't target the panel's own host — it "
-                        "would reboot the panel mid-request. Use the panel's own pages for "
-                        "updates, firewall and Tailscale." % what),
-        }), 400
 
     @app.route("/api/remote/<int:remote_id>/tailscale-install", methods=["POST"])
     @login_required
@@ -7533,28 +7651,7 @@ def register_routes(app):
 
     # ── Config editor + file browser (per game server) ─────────
 
-    def _log_and_generic(context):
-        """Record the real exception in the server log and return a generic string,
-        so raw exception text is never sent to the client (CodeQL
-        py/stack-trace-exposure). Admins read the detail in the panel logs."""
-        app.logger.exception(context)
-        return "Internal server error"
 
-    def _unreachable(context):
-        """A remote host that cannot be reached is a NORMAL condition for this panel, not a fault
-        in it — hosts go down, networks blip, a VPS reboots. Answer 200 with an error field so the
-        UI can say "host unreachable" instead of the browser logging a 500, and so 5xx alerting
-        stays a signal that the PANEL is broken.
-
-        ssh_manager raises ConnectionError for exactly this (auth failed / timed out / cannot
-        resolve), which is what makes it separable from a genuine bug. Anything that is not a
-        ConnectionError still returns 500, deliberately: those are ours.
-
-        api_remote_live_stats already did this and said why in a comment; six sibling endpoints
-        did not, and every one of them 500s on a host that is simply switched off."""
-        app.logger.warning("%s: host unreachable", context)
-        return jsonify({"success": False, "unreachable": True,
-                        "error": "Host unreachable"}), 200
 
     @app.route("/server/<int:server_id>/files")
     @login_required
@@ -7745,33 +7842,6 @@ def register_routes(app):
         except Exception:
             return jsonify({"success": False, "message": _log_and_generic("delete_path failed")}), 500
 
-    # ── Scheduled tasks (cron) for the game user ──
-    # Same privilege gate as the file editor: a cron entry runs an arbitrary command
-    # as the (unprivileged) game user, exactly as file editing writes arbitrary
-    # content. The panel's own managed entries (autostart / maintenance / daily restart) are
-    # editable here too — nothing is locked in the generic editor any more (see
-    # ssh_manager._cron_managed_patterns, which now returns []). This comment previously claimed
-    # they were read-only, which read as a security guarantee that the code does not make.
-    def _sync_toggles_from_cron(gs, jobs):
-        """Make the crontab the source of truth for the Autostart / Daily-restart switches.
-
-        Both switches are stored as columns, but what they really mean is "is this line in the
-        crontab". Three paths wrote the line without touching the column — install_game_cron() at
-        install time, an import that adopted an existing setup, and deleting the line by hand in
-        Scheduled Tasks (whose own help text promised that deleting `monitor` turns Autostart off).
-        So the Details page could show Off while `*/5 * * * * ... monitor` was scheduled and
-        running. Reconciles on every read or write of the cron list; returns True if it changed
-        anything."""
-        roles = {j.get("role") for j in (jobs or [])}
-        changed = False
-        for field, role in (("autostart", "autostart"), ("daily_restart", "daily-restart")):
-            live = role in roles
-            if bool(getattr(gs, field)) != live:
-                setattr(gs, field, live)
-                changed = True
-        if changed:
-            db.session.commit()
-        return changed
 
     @app.route("/api/server/<int:server_id>/cron", methods=["GET", "POST"])
     @login_required
@@ -8070,21 +8140,6 @@ def register_routes(app):
         except Exception:
             return jsonify({"error": _log_and_generic("request failed")}), 500
 
-    # ── WebSocket Console ───────────────────────────────────
-    def _socketio_cors():
-        """Origins allowed to open the console WebSocket. Explicit config wins; else,
-        once the panel has a domain (served via Tailscale Serve/nginx), lock to that
-        origin instead of "*". Falls back to "*" only for plain IP:port access, where
-        there's no fixed origin to pin to. (join_console also requires an authenticated
-        session, and the SameSite=Lax cookie stops a cross-site page carrying it.)"""
-        cfg = load_config()
-        explicit = cfg.get("socketio_cors_origins")
-        if explicit:
-            return explicit
-        dom = (cfg.get("site_domain") or "").strip()
-        if dom:
-            return ["https://%s" % dom, "http://%s" % dom]
-        return "*"
 
     socketio = SocketIO(app, cors_allowed_origins=_socketio_cors(), async_mode="eventlet")
 
@@ -8308,26 +8363,6 @@ def register_routes(app):
     # clean again, the same shape as the disk-low alert. Telling you every day that the same twelve
     # packages are still there is how an alert becomes noise you filter out.
 
-    def _os_updates_for(remote):
-        """One host's check result dict, or None if it could not be checked.
-
-        Runs on a pool thread, so it touches no session and reads only already-loaded columns of
-        `remote` — the same contract as _probe_host. Never raises."""
-        try:
-            if not _host_reachable(remote):
-                return None       # an unreachable host is the monitor's alert to raise, not this one's
-            if remote.is_local:
-                res = so.os_update_available(refresh=True)
-            else:
-                res = remote_os_check_updates(remote) or {}
-            # A failed check returns no packages, exactly like a clean host. Without this the state
-            # would re-arm on the failure and re-announce the identical list on the next success.
-            if not res.get("ok"):
-                return None
-            return res
-        except Exception:
-            _log.debug("os-update check failed for %s", getattr(remote, "name", "?"), exc_info=True)
-            return None
 
     def _maybe_alert_os_updates(force=False):
         """Check every reachable host once a day and alert when updates appear. Never raises.
