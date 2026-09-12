@@ -4969,6 +4969,36 @@ def stat_path(server, user, relpath):
             "rel": _pp.relpath(ap, f"/home/{user}")}
 
 
+def _remote_read_command(user, as_tar):
+    """The remote command that reads a download over SSH. It takes the PATH ON STDIN.
+
+    Everywhere else in this module a path is shell-quoted into the command. That is correct, but a
+    download over SSH parses the string TWICE — once when the local `ssh` argv is assembled, again
+    by the remote shell — and two-level quoting is exactly where this kind of bug hides. So no part
+    of what the caller chose appears in the command at all: the text below is fixed, the relative
+    path arrives on stdin as data, and the shell only ever handles it as a variable.
+
+    `user` is still interpolated. It is a game-server account name from the panel's own database,
+    not request input, and `_safe_abspath` has already refused anything that is not a plain Unix
+    user name — and the home directory is BUILT from it here rather than taken from `$HOME`, which
+    sudo may or may not reset.
+
+    The containment check is the same one `_guarded` makes, against the resolved path: a relative
+    path cannot climb out with `..` (the panel sends a canonical one), but a symlink under the home
+    directory can still point anywhere, and only the host can resolve that.
+    """
+    home = "/home/%s" % user
+    hq = _quote(home)
+    # `rel=$(cat)` rather than `read -r`: command substitution strips only TRAILING newlines, so a
+    # filename containing one survives. -- everywhere, so a name can never be read as an option.
+    body = (f"rel=$(cat); home={hq}; "
+            'p=$(realpath -m "$home/$rel" 2>/dev/null || printf %s "$home/$rel"); '
+            f'case "$p" in {hq}|{hq}/*) : ;; *) echo {_OUTSIDE_HOME}; exit 9 ;; esac; ')
+    body += ('tar czf - -C "$(dirname "$p")" -- "$(basename "$p")"' if as_tar
+             else 'cat -- "$p"')
+    return f"sudo -u {user} bash -c {_quote(body)}"
+
+
 def stream_path(server, user, relpath, as_tar=False, limit=None, chunk=262144):
     """Yield the bytes of a file under the game user's home — or of a .tar.gz of a directory.
 
@@ -5002,13 +5032,7 @@ def stream_path(server, user, relpath, as_tar=False, limit=None, chunk=262144):
     rel = _pp.relpath(ap, f"/home/{user}")
     if rel in (".", "", "/"):
         return   # the home directory itself: archiving a whole game install is not a download
-    if as_tar:
-        # -C the parent and name the directory, so the archive contains "addons/..." rather than
-        # the whole path from / down. The remote form matches what the helper's tarfile writes.
-        inner = f"tar czf - -C {_quote(_pp.dirname(ap))} -- {_quote(_pp.basename(ap))}"
-    else:
-        inner = f"cat -- {_quote(ap)}"
-    shell = f"sudo -u {user} bash -c {_quote(_guarded(user, ap, inner))}"
+    shell = _remote_read_command(user, as_tar)
 
     def _raw():
         if is_local_server(server) or getattr(server, "auth_method", "") == "tailscale":
@@ -5039,7 +5063,21 @@ def stream_path(server, user, relpath, as_tar=False, limit=None, chunk=262144):
                 host = _resolve_ts_host(server)
                 argv = ["ssh", "-T", "-o", "StrictHostKeyChecking=accept-new", "-o", "BatchMode=yes",
                         "-p", str(server.port or 22), f"{server.username}@{host}", shell]
-            p = subprocess.Popen(argv, stdout=subprocess.PIPE)
+            # stdin is a pipe only for the SSH form, which expects the path there. The local forms
+            # take it in argv (helper) or already resolved (the pre-helper fallback), and inherit
+            # stdin as before.
+            feed = rel.encode() if argv[0] == "ssh" else None
+            p = subprocess.Popen(argv, stdout=subprocess.PIPE,
+                                 stdin=subprocess.PIPE if feed is not None else None)
+            if feed is not None:
+                try:
+                    p.stdin.write(feed)
+                    p.stdin.close()
+                except OSError:
+                    # ssh died before it could take the path — a dead host, a refused key. The
+                    # read below then sees EOF and the download ends empty, which is what every
+                    # other unreachable-host path in this module does.
+                    _log.debug("download: could not hand the path to ssh", exc_info=True)
             try:
                 while True:
                     b = p.stdout.read(chunk)
@@ -5053,9 +5091,15 @@ def stream_path(server, user, relpath, as_tar=False, limit=None, chunk=262144):
                     pass
                 p.wait()
             return
-        # paramiko remote
+        # paramiko remote — same fixed command, same path-on-stdin.
         client = get_connection(server)
         _in, out, _err = client.exec_command(shell)
+        try:
+            _in.write(rel)
+            _in.flush()
+            _in.channel.shutdown_write()   # the remote `cat` needs EOF before it will return
+        except Exception:
+            _log.debug("download: could not hand the path to the remote shell", exc_info=True)
         while True:
             b = out.read(chunk)
             if not b:

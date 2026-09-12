@@ -184,6 +184,11 @@ types rather than in the command names:
   folder download is Python's `tarfile` writing to the pipe, not the `tar` binary: an archiver that
   takes a path and reads whatever it finds is a general file-reader under another name, and the
   helper resolves only the tools its verbs name. Symlinks are stored as links, never followed.
+  Over **SSH** the path is not in the command at all: a download there is parsed twice — once
+  assembling the local `ssh` argv, again by the remote shell — and two-level quoting is where this
+  class of bug lives, so the remote command is FIXED TEXT and the relative path arrives on stdin as
+  data. A hostile filename and a benign one produce byte-identical commands, which is what the test
+  asserts; the containment check rides in that fixed text and judges the resolved path on the host.
 - The log verbs take a **source name**, never a path or a unit: `log-tail auth`, not
   `tail /var/log/auth.log`. The table turns the name into the path, so reading `/etc/shadow`
   through the helper is not something a filter rejects — it is not expressible.

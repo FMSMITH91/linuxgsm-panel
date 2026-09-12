@@ -827,6 +827,59 @@ try:
            b"".join(sm.stream_path(_FakeSrv(), "csgoserver", "empty.log", limit=0)), b"")
         eq("stream_path: a limit larger than the file does not pad it",
            b"".join(sm.stream_path(_FakeSrv(), "csgoserver", "small.cfg", limit=999)), b"abcdef")
+        # ── The SSH transports take the path on STDIN, and their command is a CONSTANT ────────
+        # A download over SSH is parsed twice — once assembling the local `ssh` argv, again by the
+        # remote shell — and two-level quoting is where this class of bug lives. So the command
+        # text contains nothing the caller chose. The test for that is not "is it quoted" but "is
+        # it the same text regardless": a hostile path and a benign one must produce byte-identical
+        # commands, with the path appearing only in what is written to stdin.
+        class _TsSrv:
+            is_local, auth_method, sudo_enabled = False, "tailscale", False
+            host, port, username, linuxgsm_user = "ts-host", 22, "ubuntu", ""
+
+        _fed, _cmds2 = [], []
+
+        class _FakeTsProc(_FakeProc):
+            def __init__(self, chunks):
+                super().__init__(chunks)
+                self.stdin = self
+            def write(self, b):
+                _fed.append(b)
+            def flush(self):
+                pass
+
+        def _fake_ts_popen(argv, **_kw):
+            _cmds2.append(argv[-1])
+            return _FakeTsProc([b"abc"])
+
+        _orig_ts_host = sm._resolve_ts_host
+        try:
+            sm._resolve_ts_host = lambda s: "ts-host"
+            sm.subprocess.Popen = _fake_ts_popen
+            _fed.clear(); _cmds2.clear()
+            _HOSTILE = "addons/'; id; echo $(whoami) \"x\".cfg"
+            eq("stream_path (ssh): the bytes still come through",
+               b"".join(sm.stream_path(_TsSrv(), "csgoserver", "cfg/server.cfg")), b"abc")
+            list(sm.stream_path(_TsSrv(), "csgoserver", _HOSTILE))
+            eq("stream_path (ssh): a hostile path produces the IDENTICAL remote command",
+               _cmds2[0], _cmds2[1])
+            check("stream_path (ssh): the path is nowhere in the command — it went to stdin",
+                  "server.cfg" not in _cmds2[0] and "whoami" not in _cmds2[1],
+                  _cmds2[1][:120])
+            eq("stream_path (ssh): ...and stdin carried it verbatim, canonicalised",
+               [b.decode() for b in _fed], ["cfg/server.cfg", _HOSTILE])
+            # The two shapes differ only in the verb, which is a literal either way.
+            _cmds2.clear()
+            list(sm.stream_path(_TsSrv(), "csgoserver", "addons", as_tar=True))
+            check("stream_path (ssh): the folder form is the tar verb, still constant",
+                  "tar czf -" in _cmds2[0] and "addons" not in _cmds2[0], _cmds2[0][-80:])
+            # And the guard is in that constant text, judging the resolved path on the host.
+            check("stream_path (ssh): the command carries the host-side containment guard",
+                  "realpath -m" in _cmds2[0] and "__OUTSIDE_HOME__" in _cmds2[0], _cmds2[0][:90])
+        finally:
+            sm._resolve_ts_host = _orig_ts_host
+            sm.subprocess.Popen = _fake_popen
+
         # The SSH transports DO use a shell, so the guard rides along there — and its sentinel must
         # not be handed to the browser as if it were the file.
         sm.subprocess.Popen = lambda argv, **_kw: _FakeProc([b"__OUTSIDE_HOME__\n"])

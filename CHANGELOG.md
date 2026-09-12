@@ -16,7 +16,9 @@ regardless of this file — this changelog is for humans.
   is not knowable up front. Protected files (the `lgsm` tree, `serverfiles`) are downloadable —
   protection is about deleting them. Needs the same permission as the rest of the file browser.
   Reads happen **as the game user**, never as root: a symlink under that home reaches only what that
-  user could already read, and the path is re-checked on the host after the privilege drop.
+  user could already read, and the path is re-checked on the host after the privilege drop. Over SSH
+  the filename never appears in the command — the remote command is fixed text and the path travels
+  on stdin, because a download over SSH gets parsed twice and that is where quoting bugs hide.
 
 ### Changed
 - **`ssh_manager`'s shell quoting is now `shlex.quote`** rather than a hand-rolled `'`-and-escape.
