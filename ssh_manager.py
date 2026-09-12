@@ -3,6 +3,7 @@ Also supports local execution for running on the panel's own machine."""
 import logging
 import os
 import re
+import shlex
 import signal
 import socket
 import subprocess
@@ -597,9 +598,15 @@ def run_command(server, command, timeout=30, sudo=None):
 
 
 def _quote(s):
-    """Shell-quote a string for safe use in remote commands."""
-    escaped = s.replace("'", "'\\''")
-    return f"'{escaped}'"
+    """Shell-quote a string for safe use in remote commands.
+
+    `shlex.quote` rather than the hand-rolled `'` + escape this used to be. The two produce
+    equivalent shell words — shlex leaves a string that needs no quoting unquoted, and quotes the
+    rest identically — but this is the STANDARD LIBRARY's implementation of the one thing every
+    command in this module depends on being right, and static analysis recognises it as a
+    sanitiser where it cannot know anything about a local function that returns an f-string.
+    """
+    return shlex.quote(s)
 
 
 def discover_linuxgsm_servers(server):

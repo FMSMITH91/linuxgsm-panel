@@ -18,6 +18,15 @@ regardless of this file — this changelog is for humans.
   Reads happen **as the game user**, never as root: a symlink under that home reaches only what that
   user could already read, and the path is re-checked on the host after the privilege drop.
 
+### Changed
+- **`ssh_manager`'s shell quoting is now `shlex.quote`** rather than a hand-rolled `'`-and-escape.
+  The two produce equivalent shell words, so no command changes; the point is that the one thing
+  every remote command depends on being right is the standard library's implementation, and static
+  analysis recognises it as a sanitiser where it can know nothing about a local function returning
+  an f-string. Its test changed with it: it asserted the old *spelling* (`_quote("abc") ==
+  "'abc'"`), and now round-trips a dozen payloads — quotes, `$(id)`, backticks, tabs, newlines,
+  non-ASCII — through a real shell and requires each to come back verbatim as a single argument.
+
 ### Fixed
 - **Running the installer the "other" way built a second panel instead of updating the first.** The
   update check asks whether there is an `app.py` and a unit file *where it is about to install* —

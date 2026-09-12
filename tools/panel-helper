@@ -1495,6 +1495,10 @@ def _emit_dir_tar(path, buf):
         try:
             tf.add(path, arcname=base, recursive=False)
         except OSError:
+            # The directory's OWN entry — its mode and mtime. Losing it costs the archive nothing
+            # a caller notices: tar recreates a missing parent when the members below are
+            # extracted. Refusing to build the archive because its top entry could not be stat'd
+            # would turn a readable folder into a failed download, so carry on to the walk.
             pass
         for root, dirs, files in os.walk(path, onerror=lambda _e: None):
             for name in dirs + files:

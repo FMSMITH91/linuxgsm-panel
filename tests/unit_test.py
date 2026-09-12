@@ -2045,13 +2045,34 @@ for _good in ("gmodserver", "cod", "my-server_1", "a.b", ""):
         _acc = False
     check("shell-ident accepts %r" % _good, _acc)
 
-# ── _quote() single-quoting neutralizes shell metacharacters ──
-eq("_quote wraps a plain string in single quotes", sm._quote("abc"), "'abc'")
-eq("_quote escapes an embedded single quote", sm._quote("a'b"), "'a'\\''b'")
-_q = sm._quote("; rm -rf / #")
-check("_quote fully single-quotes a metachar payload", _q[0] == "'" and _q[-1] == "'")
-check("_quote leaves no unescaped quote to break out",
-      _q.count("'") % 2 == 0)  # every quote is balanced/escaped
+# ── _quote() must yield ONE shell word that reads back as the original string ──────────────────
+# This used to assert the SPELLING — `_quote("abc") == "'abc'"` — which pinned the old hand-rolled
+# implementation rather than the property anything depends on. shlex.quote leaves a string that
+# needs no quoting unquoted, which is equally correct and broke those assertions while changing
+# nothing a shell parses. So ask a real shell instead: whatever the quoting looks like, printf has
+# to hand back the original bytes, nothing else may run, and it must stay a single argument. That
+# is strictly stronger — it fails for a BROKEN quoter, which the spelling test only caught by
+# accident. Every payload here is a real shape: game filenames carry brackets, quotes, spaces and
+# non-ASCII, and `a\nb` is legal in a Linux filename.
+import subprocess as _qsp
+_QUOTE_PAYLOADS = ["abc", "a'b", "; rm -rf / #", "$(id)", "`id`", "a b\tc", "--flag", "-rf",
+                   '/home/u/de_dust2 [final] "v2".bsp', "x\\y", "ñ", "*", "~root", "a\nb", ""]
+_qbad = []
+for _p in _QUOTE_PAYLOADS:
+    _r = _qsp.run(["/bin/bash", "-c", "printf %s " + sm._quote(_p)],
+                  capture_output=True, text=True, timeout=30)
+    if _r.stdout != _p or _r.returncode != 0 or _r.stderr:
+        _qbad.append("%r -> %r rc=%d err=%r" % (_p, _r.stdout, _r.returncode, _r.stderr[:40]))
+check("_quote: a real shell reads every payload back as the original string, verbatim",
+      not _qbad, "; ".join(_qbad[:2]))
+_qwords = []
+for _p in ("a b; id", "$(id) x", "'", ""):
+    _r = _qsp.run(["/bin/bash", "-c", "set -- " + sm._quote(_p) + "; echo $#"],
+                  capture_output=True, text=True, timeout=30)
+    if _r.stdout.strip() != "1":
+        _qwords.append("%r -> %s args" % (_p, _r.stdout.strip()))
+check("_quote: ...and it stays ONE word — the shell never sees a second argument",
+      not _qwords, "; ".join(_qwords[:2]))
 
 # ── cron builders generate correct + safe crontab lines ───────
 # Capture what would be written instead of touching a real crontab.
