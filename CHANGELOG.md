@@ -53,6 +53,15 @@ regardless of this file — this changelog is for humans.
   unknown it claims nothing either way). Bulk **Restart** joined bulk Stop and Update in confirming
   too — it was the one bulk action that skipped the prompt. Start is unchanged: it is not
   destructive and does not ask.
+- **The live console kept throwing away its history.** Three separate limits, and fixing any one
+  alone would not have been noticeable. The API only ever tailed **100 lines**; the poll **rebuilt**
+  the console from that window on every refresh, discarding whatever was on screen; and the
+  websocket handler — the path that actually runs on a busy server — had its own **500-line cap**
+  and its own rendering. The console now keeps a real scrollback: each poll contributes only the
+  lines that are new (found by overlapping its window with what is already shown), both append
+  paths share one buffer and one 5,000-line cap, and the default window is 250 lines rather than
+  100. A **Load older** button pulls a much deeper slice of the log when you need to look further
+  back than the page has been open.
 - **"Replace existing file" never replaced anything.** Ticking the overwrite box on an upload
   conflict did nothing: the file uploaded, hit the server's existence check, and came back as
   "already existed". `confirmDialog` removes its overlay *before* it calls `onConfirm`, so both
