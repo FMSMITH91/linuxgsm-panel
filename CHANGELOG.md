@@ -51,6 +51,15 @@ regardless of this file — this changelog is for humans.
   paths share one buffer and one 5,000-line cap, and the default window is 250 lines rather than
   100. A **Load older** button pulls a much deeper slice of the log when you need to look further
   back than the page has been open.
+- **"Replace existing file" never replaced anything.** Ticking the overwrite box on an upload
+  conflict did nothing: the file uploaded, hit the server's existence check, and came back as
+  "already existed". `confirmDialog` removes its overlay *before* it calls `onConfirm`, so both
+  upload dialogs were reading their checkboxes out of a document that no longer contained them —
+  `document.querySelectorAll('[data-ovw]')` matched nothing and `getElementById` returned null,
+  both of which read as "unticked". They read the node they passed in as `bodyNode` now, which a
+  detached element still answers for. This affected the per-file ticks (shipped earlier, so they
+  have never worked) as well as the folder dialog's replace-all. `confirmDialog` now documents the
+  ordering, and two static guards refuse either spelling.
 - **Running the installer the "other" way built a second panel instead of updating the first.** The
   update check asks whether there is an `app.py` and a unit file *where it is about to install* —
   but that location has already been decided by how the script was invoked: as root it looks under

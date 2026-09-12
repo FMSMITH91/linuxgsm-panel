@@ -666,6 +666,18 @@ check("getElementById('file-browser')" in _dropwire,
 check(_sf.count("readEntries") >= 1 and "kids = kids.concat" in _sf,
       "uploads: directory reads loop until the batch is empty (readEntries caps at 100)",
       "the recursive folder walk no longer accumulates batches")
+# confirmDialog REMOVES its overlay before calling onConfirm, so any state the dialog collected has
+# to be read out of the node the caller passed as bodyNode — a document-wide query matches nothing
+# by then and silently reads as "unticked". Both upload dialogs got this wrong: the per-file
+# "Replace existing file?" ticks never replaced anything, and neither did the folder dialog's
+# "Replace files that already exist". Reported as "i check overwrite files...it doesnt overrite
+# them". The tags dialog in manage_servers.html had it right all along (body.querySelectorAll).
+for _bad, _what in (("document.querySelectorAll('[data-ovw]')", "per-file conflict state"),
+                    ("getElementById('fb-ovw-all')", "folder replace-all state")):
+    check(_bad not in _sf,
+          "uploads: %s comes from the dialog node, not the document" % _what,
+          "confirmDialog has already removed the overlay when onConfirm runs, so %r finds nothing "
+          "and every tick is silently discarded" % _bad)
 check("webkitGetAsEntry" in _sf and "webkitRelativePath" in _sf,
       "uploads: folders arrive by both routes — dropped (webkitGetAsEntry) and picked (webkitRelativePath)",
       "one of the two folder-upload paths is gone")
