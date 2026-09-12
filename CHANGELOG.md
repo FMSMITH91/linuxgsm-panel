@@ -46,6 +46,13 @@ regardless of this file — this changelog is for humans.
   non-ASCII — through a real shell and requires each to come back verbatim as a single argument.
 
 ### Fixed
+- **Restart and Stop on the dashboard fired with no confirmation.** The server detail page has
+  always asked before either — the dashboard did not, so a mis-click on a row restarted or stopped
+  a populated server instantly. Both now confirm, naming the server and saying how many players are
+  connected (read from the row's live player count, so it costs no extra request; when the count is
+  unknown it claims nothing either way). Bulk **Restart** joined bulk Stop and Update in confirming
+  too — it was the one bulk action that skipped the prompt. Start is unchanged: it is not
+  destructive and does not ask.
 - **The live console kept throwing away its history.** Three separate limits, and fixing any one
   alone would not have been noticeable. The API only ever tailed **100 lines**; the poll **rebuilt**
   the console from that window on every refresh, discarding whatever was on screen; and the
