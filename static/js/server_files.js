@@ -329,6 +329,143 @@ function _conflictNode(conflicts, otherCount){
 }
 // Upload one or more files to the current dir (used by button + drag-drop). Anything that would
 // replace an existing file is confirmed first, with both files' size and date shown.
+function _flat(f){ return {file:f, dir:''}; }
+
+// ── Folder-aware drag & drop ───────────────────────────────────────────────────────────────────
+// A drop gives `dataTransfer.files` for loose files and nothing usable for a FOLDER: the folder
+// arrives as a single File with no size and no contents, which is why dropping one used to appear
+// to do nothing. Contents are only reachable through webkitGetAsEntry() — still the prefixed
+// spelling everywhere, in Chromium, Firefox and WebKit alike — so that is what this walks.
+//
+// Two things here are easy to get wrong and both fail silently:
+//   * readEntries() returns AT MOST 100 children per call and signals the end with an empty
+//     batch, so each directory has to be read in a loop. Reading once truncates any real addon
+//     tree to its first 100 entries.
+//   * webkitGetAsEntry() must be called while the drop event is still being handled; the items
+//     list is emptied as soon as it returns. So the roots are taken synchronously below and only
+//     the walk is async.
+function _walkEntry(entry, prefix, out){
+  return new Promise(function(resolve){
+    if(!entry){ resolve(); return; }
+    if(entry.isFile){
+      entry.file(function(f){ out.push({file:f, dir:prefix}); resolve(); },
+                 function(){ resolve(); });   // unreadable file: skip it, keep the rest of the tree
+      return;
+    }
+    if(!entry.isDirectory){ resolve(); return; }
+    var dir = prefix ? prefix+'/'+entry.name : entry.name;
+    var reader = entry.createReader(), kids = [];
+    (function read(){
+      reader.readEntries(function(batch){
+        if(!batch.length){
+          Promise.all(kids.map(function(k){ return _walkEntry(k, dir, out); })).then(resolve);
+          return;
+        }
+        kids = kids.concat(Array.prototype.slice.call(batch));
+        read();
+      }, function(){ resolve(); });
+    })();
+  });
+}
+
+// The dropped roots, taken synchronously (see above). Returns [] when the browser gives no items,
+// in which case the caller falls back to dataTransfer.files.
+function _dropRoots(dt){
+  var out=[], items=dt.items;
+  if(!items) return out;
+  for(var i=0;i<items.length;i++){
+    var it=items[i];
+    if(it.kind==='file' && it.webkitGetAsEntry){
+      var e=it.webkitGetAsEntry();
+      if(e) out.push(e);
+    }
+  }
+  return out;
+}
+
+function _uploadStatus(text, cls){
+  var st=document.getElementById('upload-status');
+  st.textContent=text; st.className='small mt-2 '+(cls||'text-secondary');
+  return st;
+}
+
+// Entry point for anything that produced a {file, dir} list. A flat set keeps the existing
+// per-file conflict dialog (it shows each clash's size and date, which is worth keeping); a set
+// with folders in it gets one summary dialog instead, because pre-checking every subdirectory
+// would be a round trip per directory and the server refuses individual clashes anyway.
+function uploadEntries(list){
+  if(!list || !list.length){
+    _uploadStatus('Nothing to upload \u2014 no files in what you dropped.');
+    setTimeout(function(){ _uploadStatus(''); },5000);
+    return;
+  }
+  if(!list.some(function(e){ return !!e.dir; })){
+    uploadFiles(list.map(function(e){ return e.file; }));
+    return;
+  }
+  var tops={}, bytes=0, oversize=0;
+  list.forEach(function(e){
+    bytes += e.file.size||0;
+    if((e.file.size||0) > 50*1024*1024) oversize++;
+    if(e.dir) tops[e.dir.split('/')[0]]=1;
+  });
+  var names=Object.keys(tops);
+  var body=document.createElement('div');
+  var p=document.createElement('div');
+  p.className='small';
+  p.textContent='Upload '+list.length+' file'+(list.length===1?'':'s')+' ('+fmtSize(bytes)+') into '
+    +(curDir||'home')+'? Subfolders are recreated on the server.';
+  body.appendChild(p);
+  var ul=document.createElement('div');
+  ul.className='font-monospace mt-2';
+  ul.style.fontSize='.72rem';
+  ul.textContent = names.slice(0,8).map(function(n){ return n+'/'; }).join('\n')
+    + (names.length>8 ? '\n\u2026and '+(names.length-8)+' more' : '');
+  ul.style.whiteSpace='pre-wrap';
+  body.appendChild(ul);
+  var note=document.createElement('div');
+  note.className='text-secondary mt-2';
+  note.style.fontSize='.7rem';
+  note.textContent='Files upload one at a time, so a large tree takes a while \u2014 leave the page open.'
+    + (oversize ? ' '+oversize+' file'+(oversize===1?'':'s')+' are over the 50 MB per-file limit and will be refused.' : '');
+  body.appendChild(note);
+  var lbl=document.createElement('label');
+  lbl.className='d-flex align-items-center gap-2 mt-2 small';
+  var cb=document.createElement('input');
+  cb.type='checkbox'; cb.id='fb-ovw-all'; cb.className='form-check-input mt-0';
+  lbl.appendChild(cb);
+  lbl.appendChild(document.createTextNode('Replace files that already exist'));
+  body.appendChild(lbl);
+  confirmDialog({
+    title: names.length>1 ? 'Upload folders' : 'Upload folder',
+    icon:'folder-plus', confirmLabel:'Upload '+list.length+' file'+(list.length===1?'':'s'),
+    bodyNode: body,
+    onConfirm: function(){
+      var all=document.getElementById('fb-ovw-all');
+      _uploadChecked = true;   // the folder path asks once instead of pre-checking each directory
+      _doUpload(list, (all && all.checked) ? true : {});
+    }
+  });
+}
+
+// The folder picker (<input webkitdirectory>). The click path, which works regardless of whether
+// dragging between the desktop and the browser behaves — on Linux it often does not.
+function doUploadDir(ev){
+  if(ev) ev.preventDefault();
+  var inp=document.getElementById('upload-dir-input');
+  if(!inp || !inp.files.length) return false;
+  // webkitRelativePath is "<folder>/<subdir>/<name>"; everything but the name is the destination.
+  var list=Array.prototype.slice.call(inp.files).map(function(f){
+    var rel=f.webkitRelativePath || '';
+    var cut=rel.lastIndexOf('/');
+    return {file:f, dir: cut>0 ? rel.slice(0,cut) : ''};
+  });
+  inp.value='';
+  uploadEntries(list);
+  return false;
+}
+window._clickUploadDir = function(){ var i=document.getElementById('upload-dir-input'); if(i) i.click(); };
+
 function uploadFiles(files){
   if(!files || !files.length) return;
   var st=document.getElementById('upload-status');
@@ -346,7 +483,7 @@ function uploadFiles(files){
       var byName={}; existing.forEach(function(e){ byName[e.name]=e; });
       var conflicts=[];
       arr.forEach(function(f){ if(byName[f.name]) conflicts.push({file:f, entry:byName[f.name]}); });
-      if(!conflicts.length){ _doUpload(arr, {}); return; }
+      if(!conflicts.length){ _doUpload(arr.map(_flat), {}); return; }
       st.textContent=''; 
       confirmDialog({
         title: conflicts.length===1 ? 'Replace existing file?' : 'Replace existing files?',
@@ -361,29 +498,40 @@ function uploadFiles(files){
           // user's answer, not a failure to report back at them.
           var send=arr.filter(function(f){ return !byName[f.name] || ovw[f.name]; });
           if(!send.length){ st.textContent='Nothing uploaded \u2014 all files skipped.'; st.className='small mt-2 text-secondary'; setTimeout(function(){ st.textContent=''; },4000); return; }
-          _doUpload(send, ovw);
+          _doUpload(send.map(_flat), ovw);
         }
       });
     });
 }
 var _uploadChecked = true;   // did the pre-flight actually reach the host?
-function _doUpload(arr, ovw){
+// `entries` are {file, dir} — dir is the file's subdirectory RELATIVE to curDir, "" for a loose
+// file. The server creates missing parents itself (upload_file mkdir -p's the target's parent), so
+// a whole tree needs no directory-creation round trips of its own.
+// `ovw` is either a per-name map (the loose-file dialog ticks them individually) or the literal
+// `true` (the folder dialog asks once for the whole tree).
+function _doUpload(entries, ovw){
   var st=document.getElementById('upload-status');
-  var failed=0, clashed=0;
-  st.textContent='Uploading '+arr.length+' file(s)\u2026'; st.className='small mt-2 text-secondary';
+  var failed=0, clashed=0, all=ovw===true;
+  var many=entries.length>1;
   function next(i){
-    if(i>=arr.length){
-      var okCount=arr.length-failed-clashed;
+    if(i>=entries.length){
+      var okCount=entries.length-failed-clashed;
       var bits=[];
       if(okCount) bits.push('\u2713 '+okCount+' uploaded to '+(curDir||'home'));
       if(clashed) bits.push(clashed+' already existed'+(_uploadChecked?'':' (the host could not be checked first)')+' \u2014 re-drop to replace');
       if(failed) bits.push(failed+' failed');
       st.textContent=bits.join(', ');
       st.className='small mt-2 '+((failed||clashed)?'text-warning':'text-success');
-      browse(curDir); setTimeout(function(){ st.textContent=''; },5000); return;
+      browse(curDir); setTimeout(function(){ st.textContent=''; },8000); return;
     }
-    var fd=new FormData(); fd.append('file', arr[i]); fd.append('path', curDir);
-    if(ovw[arr[i].name]) fd.append('overwrite','1');
+    // A tree uploads one file per request, so the count is the only honest progress there is.
+    st.textContent = many ? ('Uploading '+(i+1)+' of '+entries.length+'\u2026 '+entries[i].file.name)
+                          : ('Uploading '+entries[i].file.name+'\u2026');
+    st.className='small mt-2 text-secondary';
+    var e=entries[i];
+    var dest = e.dir ? (curDir ? curDir+'/'+e.dir : e.dir) : curDir;
+    var fd=new FormData(); fd.append('file', e.file); fd.append('path', dest);
+    if(all || ovw[e.file.name]) fd.append('overwrite','1');
     fetch(MOUNT+'/api/server/'+serverId+'/upload',{method:'POST',body:fd}).then(r=>r.json())
       .then(d=>{ if(d.conflict) clashed++; else if(!d.success) failed++; })
       .catch(()=>{failed++;}).finally(()=>{ next(i+1); });
@@ -422,12 +570,45 @@ document.getElementById('file-list').addEventListener('click', function(ev){
 document.getElementById('breadcrumb').addEventListener('click', function(ev){
   var a=ev.target.closest('[data-nav]'); if(a){ ev.preventDefault(); browse(a.getAttribute('data-nav')); }
 });
-// Drag & drop upload onto the browser (overlay shows while dragging).
+// Drag & drop upload — files AND folders, onto the whole File Browser card.
 (function(){
-  var dz=document.getElementById('drop-zone');
-  ['dragenter','dragover'].forEach(function(e){ dz.addEventListener(e,function(ev){ ev.preventDefault(); ev.stopPropagation(); dz.classList.add('dragging'); }); });
-  ['dragleave','drop'].forEach(function(e){ dz.addEventListener(e,function(ev){ ev.preventDefault(); ev.stopPropagation(); if(e==='drop' || !dz.contains(ev.relatedTarget)) dz.classList.remove('dragging'); }); });
-  dz.addEventListener('drop', function(ev){ if(ev.dataTransfer && ev.dataTransfer.files) uploadFiles(ev.dataTransfer.files); });
+  var card=document.getElementById('file-browser');
+  if(!card) return;
+
+  // THE BROWSER'S OWN DROP HANDLER IS THE ENEMY HERE. Anything dropped on a page that has not
+  // called preventDefault() on dragover is handled by the browser: it navigates the tab to the
+  // dropped file. The target used to be the file-list panel alone — a few centimetres tall when
+  // the listing is short — so a near miss opened the file in the tab, which is indistinguishable
+  // from "drag and drop does not work on Linux". Suppressing it document-wide means a miss does
+  // nothing at all, and the card below is a target the size of the whole card.
+  ['dragenter','dragover','drop'].forEach(function(t){
+    document.addEventListener(t, function(ev){ ev.preventDefault(); }, false);
+  });
+
+  ['dragenter','dragover'].forEach(function(t){
+    card.addEventListener(t, function(ev){ ev.preventDefault(); ev.stopPropagation(); card.classList.add('dragging'); });
+  });
+  ['dragleave','drop'].forEach(function(t){
+    card.addEventListener(t, function(ev){
+      ev.preventDefault(); ev.stopPropagation();
+      if(t==='drop' || !card.contains(ev.relatedTarget)) card.classList.remove('dragging');
+    });
+  });
+
+  card.addEventListener('drop', function(ev){
+    var dt=ev.dataTransfer; if(!dt) return;
+    var roots=_dropRoots(dt);          // synchronous: the items list is emptied after this tick
+    if(roots.length){
+      _uploadStatus('Reading what you dropped\u2026');
+      var out=[];
+      Promise.all(roots.map(function(r){ return _walkEntry(r, '', out); }))
+        .then(function(){ uploadEntries(out); })
+        .catch(function(){ _uploadStatus('Could not read the dropped folder.','text-danger'); });
+      return;
+    }
+    // No entries API (or a drag that carried plain files only) — the original path.
+    if(dt.files && dt.files.length) uploadFiles(dt.files);
+  });
 })();
 
 // ── Scheduled tasks (cron) ──

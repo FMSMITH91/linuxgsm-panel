@@ -633,6 +633,43 @@ for _tpl in sorted(TEMPLATES.glob("*.html")):
 check(not _early, "no page loads a script before panel.js (must use {% block scripts %})",
       "; ".join(_early))
 
+# ── upload drop zone: the browser's own drop handler must stay suppressed ─────────────────────
+# THE bug this guards: anything dropped on a page that has not called preventDefault() on dragover
+# is handled by the BROWSER, which navigates the tab to the dropped file. The drop target used to
+# be the file-list panel alone — a few centimetres tall when the listing is short — so a near miss
+# opened the file in a new tab and the panel looked like it did not support drag and drop at all.
+# It was reported as "on linux i cant drag and drop my files into the file browser", and the Linux
+# part was a red herring: it behaves the same everywhere.
+#
+# Static, because the real proof is a browser dropping a real folder, and there is no JS test
+# runner here. This only refuses the specific silent regression: losing the document-level
+# suppression, or shrinking the target back to the list.
+_sf = (STATIC_JS / "server_files.js").read_text(encoding="utf-8")
+# Scope the assertions to the drop-wiring block. `document.addEventListener` appears elsewhere in
+# this file, so a whole-file substring test passed even with the suppression deleted — it has to be
+# THIS block that registers it.
+_dropwire = ""
+_dw_start = _sf.find("// Drag & drop upload")
+if _dw_start != -1:
+    _dw_end = _sf.find("\n})();", _dw_start)
+    _dropwire = _sf[_dw_start:_dw_end if _dw_end != -1 else len(_sf)]
+check(bool(_dropwire), "uploads: the drag & drop wiring block is still identifiable",
+      "the '// Drag & drop upload' block is gone or was renamed")
+check("document.addEventListener" in _dropwire and "dragover" in _dropwire,
+      "uploads: the page suppresses the browser's default drop (a near miss must not navigate)",
+      "the drop wiring no longer registers a DOCUMENT-level dragover/drop handler")
+check("getElementById('file-browser')" in _dropwire,
+      "uploads: the drop target is the whole File Browser card, not just the file list",
+      "the drop wiring no longer resolves #file-browser")
+# readEntries() returns at most 100 children per call and ends with an empty batch, so it has to be
+# called in a loop. Reading once truncates any real addon tree to its first 100 files, silently.
+check(_sf.count("readEntries") >= 1 and "kids = kids.concat" in _sf,
+      "uploads: directory reads loop until the batch is empty (readEntries caps at 100)",
+      "the recursive folder walk no longer accumulates batches")
+check("webkitGetAsEntry" in _sf and "webkitRelativePath" in _sf,
+      "uploads: folders arrive by both routes — dropped (webkitGetAsEntry) and picked (webkitRelativePath)",
+      "one of the two folder-upload paths is gone")
+
 # ── report ──
 passed = sum(1 for c, _, _ in results if c)
 for c, name, detail in results:

@@ -88,6 +88,18 @@ The unit suite covers the path checks and the argv; what it cannot cover is a re
   - Expected: back on Files & Config with "isn't there any more" — **not** a bare 404 page.
 - [ ] As a user **without** MANAGE_SERVERS, request `/server/<id>/download?path=.ssh/id_rsa` by hand.
   - Expected: bounced to the server page with a permission message; no file.
+- [ ] Drag a **folder with subfolders** (a GMod gamemode, an addon) onto the File Browser card.
+  - Expected: a summary dialog naming the folder and the file count; on confirm, the tree appears
+    on the server with its subdirectories recreated. Browser-only logic, so no local test reaches it.
+- [ ] Drop a file on the card but **outside the file list** — the header, the editor pane, the tip text.
+  - Expected: it uploads. It must NOT open the file in a browser tab; that was the original bug.
+- [ ] Drop a file on the page but **outside the card** entirely.
+  - Expected: nothing happens — no upload, and no navigation away from the page.
+- [ ] **Upload folder** button → pick a folder with subfolders.
+  - Expected: identical result to the drag. This is the path that works when Wayland drag-and-drop does not.
+- [ ] A folder with **more than 100 files in one subdirectory**.
+  - Expected: all of them upload. `readEntries` caps each batch at 100, so a truncating bug here
+    silently drops everything past the first 100 — count what lands.
 - [ ] On a host where the helper is installed (`/usr/local/lib/linuxgsm-panel/panel-helper`), confirm
   a download still works after `sudo -u <game-user>` is NOT in the sudoers grant — that is the whole
   point of the `game-file-read` / `game-dir-tar` verbs.
