@@ -464,7 +464,7 @@ function uploadEntries(list){
   var lbl=document.createElement('label');
   lbl.className='d-flex align-items-center gap-2 mt-2 small';
   var cb=document.createElement('input');
-  cb.type='checkbox'; cb.id='fb-ovw-all'; cb.className='form-check-input mt-0';
+  cb.type='checkbox'; cb.className='form-check-input mt-0';
   lbl.appendChild(cb);
   lbl.appendChild(document.createTextNode('Replace files that already exist'));
   body.appendChild(lbl);
@@ -473,9 +473,12 @@ function uploadEntries(list){
     icon:'folder-plus', confirmLabel:'Upload '+list.length+' file'+(list.length===1?'':'s'),
     bodyNode: body,
     onConfirm: function(){
-      var all=document.getElementById('fb-ovw-all');
+      // `cb` is the CAPTURED element, not a document lookup. confirmDialog removes the overlay
+      // BEFORE it calls onConfirm, so by this point the checkbox is detached and
+      // document.getElementById() returns null — which read as "not ticked" and silently made
+      // Replace do nothing. A detached node keeps its .checked, so the reference still answers.
       _uploadChecked = true;   // the folder path asks once instead of pre-checking each directory
-      _doUpload(list, (all && all.checked) ? true : {});
+      _doUpload(list, cb.checked ? true : {});
     }
   });
 }
@@ -517,13 +520,17 @@ function uploadFiles(files){
       arr.forEach(function(f){ if(byName[f.name]) conflicts.push({file:f, entry:byName[f.name]}); });
       if(!conflicts.length){ _doUpload(arr.map(_flat), {}); return; }
       st.textContent=''; 
+      // Held in a variable so onConfirm can query THIS node rather than the document: the overlay
+      // is gone by the time it runs (see the folder dialog above), so a document-wide query found
+      // nothing and every tick was discarded — the per-file Replace has never actually replaced.
+      var cnode=_conflictNode(conflicts, arr.length-conflicts.length);
       confirmDialog({
         title: conflicts.length===1 ? 'Replace existing file?' : 'Replace existing files?',
         icon:'exclamation-triangle', confirmClass:'btn-warning', confirmLabel:'Upload',
-        bodyNode:_conflictNode(conflicts, arr.length-conflicts.length),
+        bodyNode:cnode,
         onConfirm:function(){
           var ovw={};
-          document.querySelectorAll('[data-ovw]').forEach(function(cb){
+          cnode.querySelectorAll('[data-ovw]').forEach(function(cb){
             if(cb.checked) ovw[cb.getAttribute('data-ovw')]=true;
           });
           // Unticked collisions are dropped here rather than sent and refused: skipping is the
