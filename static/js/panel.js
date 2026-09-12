@@ -159,6 +159,11 @@ window.toast = function(msg, kind){
 //                    on success or api.error('…') to re-prompt. onConfirm(value, api).
 //   requireLabel: label shown above the input.
 //   bodyNode:     a DOM node to place in the body instead of text (interactive dialog content).
+//                 NOTE: the overlay is REMOVED before onConfirm runs (see submit() below), so read
+//                 any state out of the node you passed in — `body.querySelector(...)` — never via
+//                 document.getElementById/querySelectorAll, which by then match nothing. Two
+//                 upload dialogs got this wrong and their "Replace existing file" ticks silently
+//                 did nothing. A detached node keeps its .checked, so the reference still works.
 // Dismiss via Cancel / backdrop / Esc; only Confirm runs onConfirm.
 window.confirmDialog = function(opts){
   opts = opts || {};
