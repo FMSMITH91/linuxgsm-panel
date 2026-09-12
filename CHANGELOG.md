@@ -7,6 +7,28 @@ regardless of this file — this changelog is for humans.
 
 ## [Unreleased]
 
+### Added
+- **Downloads in the file browser** — a download button on every row of Files & Config, plus one in
+  the editor header for the file you have open. A file streams as-is: any type, any size, no 1 MB
+  cap and no "binary file" refusal, because the editor's read and a download are different jobs. A
+  folder downloads as a `.tar.gz` built while it streams, so pulling a whole `addons/` or `cfg/`
+  directory is one click rather than a file at a time; it asks first, since a folder's finished size
+  is not knowable up front. Protected files (the `lgsm` tree, `serverfiles`) are downloadable —
+  protection is about deleting them. Needs the same permission as the rest of the file browser.
+  Reads happen **as the game user**, never as root: a symlink under that home reaches only what that
+  user could already read, and the path is re-checked on the host after the privilege drop. Over SSH
+  the filename never appears in the command — the remote command is fixed text and the path travels
+  on stdin, because a download over SSH gets parsed twice and that is where quoting bugs hide.
+
+### Changed
+- **`ssh_manager`'s shell quoting is now `shlex.quote`** rather than a hand-rolled `'`-and-escape.
+  The two produce equivalent shell words, so no command changes; the point is that the one thing
+  every remote command depends on being right is the standard library's implementation, and static
+  analysis recognises it as a sanitiser where it can know nothing about a local function returning
+  an f-string. Its test changed with it: it asserted the old *spelling* (`_quote("abc") ==
+  "'abc'"`), and now round-trips a dozen payloads — quotes, `$(id)`, backticks, tabs, newlines,
+  non-ASCII — through a real shell and requires each to come back verbatim as a single argument.
+
 ### Fixed
 - **Running the installer the "other" way built a second panel instead of updating the first.** The
   update check asks whether there is an `app.py` and a unit file *where it is about to install* —

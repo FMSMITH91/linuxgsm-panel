@@ -11,6 +11,10 @@
   #file-list .list-group-item { background: transparent; border-color: var(--border); padding: .4rem .7rem; }
   #file-list .list-group-item:hover { background: var(--bg-elevated); }
   #file-list .list-group-item.active { background: var(--accent-glow); box-shadow: inset 2px 0 0 var(--accent); }
+  /* Download now sits immediately left of Delete, and a bare icon is ~14px wide — on a phone that
+     is a mis-tap away from the trash. Padding grows the hit area to ~30x28 without changing the
+     icon or the row height (the row is already taller than the icon, so this fits inside it). */
+  #file-list .fb-dl, #file-list [data-action="delete"] { padding: .15rem .35rem !important; line-height: 1; }
   #drop-overlay {
     position: absolute; inset: 0; z-index: 5; pointer-events: none;
     display: none; align-items: center; justify-content: center; text-align: center;
@@ -119,7 +123,7 @@
           <div id="drop-overlay"><span><i class="bi bi-cloud-upload" style="font-size:1.4rem;"></i><br>Drop to upload to <code id="upload-dest">home</code></span></div>
         </div>
         <div id="upload-status" class="small mt-2"></div>
-        <div class="text-secondary mt-1" style="font-size:.66rem;"><i class="bi bi-info-circle"></i> Tip: drag files onto the list to upload. <i class="bi bi-shield-lock"></i> marks files protected from deletion.</div>
+        <div class="text-secondary mt-1" style="font-size:.66rem;"><i class="bi bi-info-circle"></i> Tip: drag files onto the list to upload. <i class="bi bi-shield-lock"></i> marks files protected from deletion. <i class="bi bi-download"></i> downloads a file, or a folder as .tar.gz.</div>
       </div>
       <div class="col-lg-7">
         <div id="editor-wrap" style="display:none;">
@@ -127,6 +131,8 @@
             <code class="small text-info" id="editor-path"></code>
             <div class="d-flex align-items-center gap-2">
               <span id="file-save-msg" class="small"></span>
+              <a class="btn btn-outline-secondary btn-sm" id="editor-download" href="#"
+                 title="Download this file" aria-label="Download this file"><i class="bi bi-download"></i></a>
               <button class="btn btn-primary btn-sm" data-action="saveFile"><i class="bi bi-save"></i> Save</button>
               <button class="btn btn-outline-secondary btn-sm" data-action="closeEditor" title="Close"><i class="bi bi-x-lg"></i></button>
             </div>

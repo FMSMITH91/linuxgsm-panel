@@ -247,6 +247,23 @@ try:
           c.post("/api/command/%d" % accessible_id, json={"command": "status"}).status_code == 403)
     check("read file without MANAGE_SERVERS -> 403",
           c.get("/api/server/%d/file?path=.bashrc" % accessible_id).status_code == 403)
+    # The download is the one file-browser route that hands bytes OUT, and it is a plain link
+    # rather than an /api/ route — so its refusal is a redirect, not a 403 body.
+    #
+    # "is a redirect" alone is NOT enough to prove the guard is there. Every other failure in that
+    # route also redirects, so deleting the permission check entirely still produced a 302 — the
+    # host is unreachable from a test run — and the check passed anyway. Reading the flash does not
+    # separate them either: the /files page it redirects to refuses with the SAME message.
+    #
+    # WHERE it sends you does separate them. A permission refusal goes back to the server page,
+    # exactly as /server/<id>/files itself does; every in-route failure goes back to /files.
+    _dl = c.get("/server/%d/download?path=.bashrc" % accessible_id)
+    check("download file without MANAGE_SERVERS -> refused, and no file is sent",
+          _dl.status_code in (301, 302, 303) and "Content-Disposition" not in _dl.headers,
+          "got %d %s" % (_dl.status_code, dict(_dl.headers)))
+    check("download denial is the PERMISSION refusal, not an incidental failure",
+          _dl.headers.get("Location", "").rstrip("/").endswith("/server/%d" % accessible_id),
+          _dl.headers.get("Location", ""))
     check("list cron without MANAGE_SERVERS -> 403",
           c.get("/api/server/%d/cron" % accessible_id).status_code == 403)
     check("add cron without MANAGE_SERVERS -> 403",

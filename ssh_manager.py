@@ -3,6 +3,7 @@ Also supports local execution for running on the panel's own machine."""
 import logging
 import os
 import re
+import shlex
 import signal
 import socket
 import subprocess
@@ -597,9 +598,15 @@ def run_command(server, command, timeout=30, sudo=None):
 
 
 def _quote(s):
-    """Shell-quote a string for safe use in remote commands."""
-    escaped = s.replace("'", "'\\''")
-    return f"'{escaped}'"
+    """Shell-quote a string for safe use in remote commands.
+
+    `shlex.quote` rather than the hand-rolled `'` + escape this used to be. The two produce
+    equivalent shell words — shlex leaves a string that needs no quoting unquoted, and quotes the
+    rest identically — but this is the STANDARD LIBRARY's implementation of the one thing every
+    command in this module depends on being right, and static analysis recognises it as a
+    sanitiser where it cannot know anything about a local function that returns an f-string.
+    """
+    return shlex.quote(s)
 
 
 def discover_linuxgsm_servers(server):
@@ -1605,6 +1612,20 @@ def delete_game_backup(server, user, name):
     return rc == 0
 
 
+def _as_user_argv(user, *args):
+    """`sudo -u <user> <args…>` — the pre-helper fallback for reading a game user's own files.
+
+    ONE call site on purpose. The unit suite counts direct ["sudo", …] argv sites as the measure of
+    how far /etc/sudoers.d/linuxgsm-panel is from narrowing to the helper alone, and that count is a
+    ratchet that may fall and never rise. The backup download and both download shapes of the file
+    browser want the same escalation, so they share this rather than each growing another site.
+
+    Only reached where `helper_present()` is False, which is also where the grant is still
+    NOPASSWD:ALL — so this permits nothing the host does not already permit.
+    """
+    return ["sudo", "-u", user] + list(args)
+
+
 def stream_game_backup(server, user, name, chunk=262144):
     """Yield the bytes of ~/lgsm/backup/<name> as the game user, for a browser download. Works for
     local, paramiko and Tailscale-CLI remotes. `name` MUST already be validated by the caller
@@ -1621,7 +1642,7 @@ def stream_game_backup(server, user, name, chunk=262144):
             # user could already read. The helper drops supplementary groups, gid then uid before
             # opening; reading as root would have turned this into "hand me any file on the box".
             argv = (_priv.helper_argv("game-backup-read", [user, name])
-                    if helper_present() else ["sudo", "-u", user, "cat", path])
+                    if helper_present() else _as_user_argv(user, "cat", path))
         else:
             host = _resolve_ts_host(server)
             argv = ["ssh", "-T", "-o", "StrictHostKeyChecking=accept-new", "-o", "BatchMode=yes",
@@ -4910,6 +4931,196 @@ def delete_path(server, user, relpath, selfname=None):
     if rc == 0 and "__OK__" in (out or ""):
         return True, "Deleted"
     return False, e or out or "Delete failed"
+
+
+# ── Downloads: the read side of the file browser ───────────────────────────────────────────────
+# read_file() serves the EDITOR — text only, 1 MB cap, whole body in memory — and deliberately
+# refuses a binary. A download is the opposite shape: any file the game user can read, at any size,
+# so the bytes are streamed rather than buffered, exactly as a backup download already is.
+
+def stat_path(server, user, relpath):
+    """Type and size of one entry under the game user's home, for a download.
+
+    Returns {"type": "f"|"d", "size": int, "name": str, "rel": str}, or None when the path escapes
+    the home directory, does not exist, or is neither a regular file nor a directory. The route
+    needs all four: the type picks file-vs-archive, the size becomes a Content-Length so the
+    browser can show real progress instead of a spinner, the name is what the file is saved as,
+    and `rel` is the CANONICAL relative path — "." for the home directory itself, which is the
+    one thing the route has to recognise and turn down with an explanation.
+    """
+    ap = _safe_abspath(user, relpath)
+    if ap is None:
+        return None
+    # `[ -d ]` / `[ -f ]` rather than `stat -c %F`: both dereference symlinks (which the guard has
+    # already confirmed stay inside the home dir), and neither depends on coreutils' locale — %F
+    # prints a TRANSLATED string, so parsing it would work on an English host and fail elsewhere.
+    inner = (f"if [ -d {_quote(ap)} ]; then echo d 0; "
+             f"elif [ -f {_quote(ap)} ]; then echo f $(stat -Lc %s {_quote(ap)} 2>/dev/null); "
+             f"else echo __NOFILE__; fi")
+    out, _, _ = run_command(server, f"sudo -u {user} bash -c {_quote(_guarded(user, ap, inner))}",
+                            timeout=20, sudo=False)
+    if _OUTSIDE_HOME in (out or ""):
+        return None
+    parts = (out or "").strip().split()
+    if not parts or parts[0] not in ("d", "f"):
+        return None
+    size = int(parts[1]) if len(parts) > 1 and parts[1].isdecimal() else 0
+    return {"type": parts[0], "size": size, "name": _pp.basename(ap),
+            "rel": _pp.relpath(ap, f"/home/{user}")}
+
+
+def _remote_read_command(user, as_tar):
+    """The remote command that reads a download over SSH. It takes the PATH ON STDIN.
+
+    Everywhere else in this module a path is shell-quoted into the command. That is correct, but a
+    download over SSH parses the string TWICE — once when the local `ssh` argv is assembled, again
+    by the remote shell — and two-level quoting is exactly where this kind of bug hides. So no part
+    of what the caller chose appears in the command at all: the text below is fixed, the relative
+    path arrives on stdin as data, and the shell only ever handles it as a variable.
+
+    `user` is still interpolated. It is a game-server account name from the panel's own database,
+    not request input, and `_safe_abspath` has already refused anything that is not a plain Unix
+    user name — and the home directory is BUILT from it here rather than taken from `$HOME`, which
+    sudo may or may not reset.
+
+    The containment check is the same one `_guarded` makes, against the resolved path: a relative
+    path cannot climb out with `..` (the panel sends a canonical one), but a symlink under the home
+    directory can still point anywhere, and only the host can resolve that.
+    """
+    home = "/home/%s" % user
+    hq = _quote(home)
+    # `rel=$(cat)` rather than `read -r`: command substitution strips only TRAILING newlines, so a
+    # filename containing one survives. -- everywhere, so a name can never be read as an option.
+    body = (f"rel=$(cat); home={hq}; "
+            'p=$(realpath -m "$home/$rel" 2>/dev/null || printf %s "$home/$rel"); '
+            f'case "$p" in {hq}|{hq}/*) : ;; *) echo {_OUTSIDE_HOME}; exit 9 ;; esac; ')
+    body += ('tar czf - -C "$(dirname "$p")" -- "$(basename "$p")"' if as_tar
+             else 'cat -- "$p"')
+    return f"sudo -u {user} bash -c {_quote(body)}"
+
+
+def stream_path(server, user, relpath, as_tar=False, limit=None, chunk=262144):
+    """Yield the bytes of a file under the game user's home — or of a .tar.gz of a directory.
+
+    Works for local, paramiko and Tailscale-CLI remotes, and reads AS THE GAME USER on every one
+    of them: a symlink planted under that home can then only reach what that user could already
+    read. Uses the (green, eventlet-patched) subprocess/paramiko IO so a multi-gigabyte download
+    does not block the event hub.
+
+    The caller stat_path's the path first — that is what decides `as_tar` and supplies the
+    Content-Length — and stat_path is where the host-side symlink guard runs for this download.
+    Every transport then re-checks containment in its own way: the SSH forms carry `_guarded`, and
+    the helper redoes it after dropping credentials, which is the only place the answer accounts
+    for a symlink. A shell stream that comes back carrying the guard's sentinel yields nothing at
+    all, rather than handing the browser a small file whose contents are an error message.
+
+    `limit` caps the bytes yielded, and the route passes the size stat_path measured. A game server
+    writes to its console log CONSTANTLY, so "stat, then read" is a real race here rather than a
+    theoretical one: without the cap a growing file yields more than the declared Content-Length,
+    and a response longer than its own header desynchronises a keep-alive connection. Capped, the
+    download is a snapshot of the file as it was measured. A file that SHRANK (log rotation) still
+    ends short — the browser reports an incomplete download, which is the honest answer.
+    """
+    ap = _safe_abspath(user, relpath)
+    if ap is None:
+        return
+    # The CANONICAL relative path, recomputed from the resolved absolute one. Two reasons it is not
+    # the caller's string: "cfg/../server.cfg" is a legitimate request that _safe_abspath collapses
+    # to "cfg/server.cfg", and the helper's validator refuses a ".." component outright — so
+    # forwarding the raw string would turn a valid download into a VerbError mid-stream. And ".."
+    # aside, it keeps what crosses the boundary in one shape.
+    rel = _pp.relpath(ap, f"/home/{user}")
+    if rel in (".", "", "/"):
+        return   # the home directory itself: archiving a whole game install is not a download
+    shell = _remote_read_command(user, as_tar)
+
+    def _raw():
+        if is_local_server(server) or getattr(server, "auth_method", "") == "tailscale":
+            if is_local_server(server):
+                # The helper opens the file only after dropping supplementary groups, gid and uid
+                # to the game user, and redoes the containment check there — the same reasoning as
+                # game-backup-read. The fallback for a host that has no helper yet keeps the one
+                # property that matters, reading AS THE GAME USER, and stays an argv: no shell is
+                # involved on either branch, so the caller's path is never text anything parses.
+                if helper_present():
+                    try:
+                        argv = _priv.helper_argv("game-dir-tar" if as_tar else "game-file-read",
+                                                 [user, rel])
+                    except _priv.VerbError:
+                        # Unreachable while `rel` is canonical and non-root, which the lines above
+                        # guarantee — but this is a GENERATOR, and an exception raised in one comes
+                        # out of the middle of a streaming response, where Flask can no longer turn
+                        # it into an error page. The browser would get a truncated file and a 200.
+                        # A refusal has to end the stream, not corrupt it.
+                        _log.debug("download: the helper refused the path", exc_info=True)
+                        return
+                elif as_tar:
+                    argv = _as_user_argv(user, "tar", "czf", "-",
+                                         "-C", _pp.dirname(ap), "--", _pp.basename(ap))
+                else:
+                    argv = _as_user_argv(user, "cat", "--", ap)
+            else:
+                host = _resolve_ts_host(server)
+                argv = ["ssh", "-T", "-o", "StrictHostKeyChecking=accept-new", "-o", "BatchMode=yes",
+                        "-p", str(server.port or 22), f"{server.username}@{host}", shell]
+            # stdin is a pipe only for the SSH form, which expects the path there. The local forms
+            # take it in argv (helper) or already resolved (the pre-helper fallback), and inherit
+            # stdin as before.
+            feed = rel.encode() if argv[0] == "ssh" else None
+            p = subprocess.Popen(argv, stdout=subprocess.PIPE,
+                                 stdin=subprocess.PIPE if feed is not None else None)
+            if feed is not None:
+                try:
+                    p.stdin.write(feed)
+                    p.stdin.close()
+                except OSError:
+                    # ssh died before it could take the path — a dead host, a refused key. The
+                    # read below then sees EOF and the download ends empty, which is what every
+                    # other unreachable-host path in this module does.
+                    _log.debug("download: could not hand the path to ssh", exc_info=True)
+            try:
+                while True:
+                    b = p.stdout.read(chunk)
+                    if not b:
+                        break
+                    yield b
+            finally:
+                try:
+                    p.stdout.close()
+                except Exception:  # nosec B110
+                    pass
+                p.wait()
+            return
+        # paramiko remote — same fixed command, same path-on-stdin.
+        client = get_connection(server)
+        _in, out, _err = client.exec_command(shell)
+        try:
+            _in.write(rel)
+            _in.flush()
+            _in.channel.shutdown_write()   # the remote `cat` needs EOF before it will return
+        except Exception:
+            _log.debug("download: could not hand the path to the remote shell", exc_info=True)
+        while True:
+            b = out.read(chunk)
+            if not b:
+                break
+            yield b
+
+    first, sent = True, 0
+    for block in _raw():
+        if first:
+            first = False
+            # The guard prints its sentinel and exits 9. On the shell paths that text IS the body,
+            # so without this the browser would save a small file containing __OUTSIDE_HOME__ and
+            # call it a download. Nothing was read either way — this only stops the pretence.
+            if block.startswith(_OUTSIDE_HOME.encode()):
+                return
+        if limit is not None:
+            if sent >= limit:
+                return
+            block = block[:limit - sent]
+            sent += len(block)
+        yield block
 
 
 # ── GMod mountable game content ────────────────────────────────────────────────────────────────

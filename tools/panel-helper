@@ -47,6 +47,7 @@ import pwd
 import re
 import shutil
 import stat
+import tarfile
 import tempfile
 import time
 import subprocess  # nosec B404 - fixed argv, shell=False, no untrusted text reaches a shell
@@ -433,6 +434,35 @@ def v_backup_name(s):
     return s
 
 
+# The longest relative path a download verb accepts. Deep game-server trees (addons, workshop
+# content, map packs) are genuinely nested, so this is generous; it bounds the argument rather than
+# second-guessing a real layout. Mirrors privileged.MAX_RELPATH.
+MAX_RELPATH = 1024
+
+
+def v_relpath(s):
+    """A path RELATIVE to a game user's home directory, for a download.
+
+    Deliberately permissive about CHARACTERS: these files are named by mod authors, map packers and
+    Windows tooling, so spaces, brackets, apostrophes and non-ASCII are ordinary, and a charset
+    whitelist would refuse real files. Nothing here reaches a shell — the download verbs open the
+    path with Python, after dropping to the game user — so what is checked is SHAPE: non-empty,
+    relative, no NUL or newline, and no ".." component.
+
+    This is NOT the containment check. The path is joined onto the home directory this process
+    looks up from the passwd entry, and re-checked with realpath by the child AFTER it drops
+    credentials. That ordering is the point: only a resolution done there can see a symlink.
+    """
+    s = str(s)
+    if not s or len(s) > MAX_RELPATH:
+        raise ValueError("not a relative path")
+    if "\x00" in s or "\n" in s or s.startswith("/"):
+        raise ValueError("not a relative path")
+    if s == "." or any(part == ".." for part in s.split("/")):
+        raise ValueError("path may not climb out of the home directory")
+    return s
+
+
 def v_git_ref(s):
     """A git commit SHA, or "-" for none. Hex only: this value is exported into the environment of
     a root-run installer, so anything that could carry a flag, a path or a shell fragment is out."""
@@ -794,6 +824,10 @@ VERBS = {
     "panel-self-update": ([v_git_ref, v_branch_name], lambda a: [], None),
     "tailscale-install": ([], lambda a: [], None),
     "game-backup-read": ([v_username, v_backup_name], lambda a: [], None),
+    # The file browser's download buttons: one file, or a .tar.gz of one directory, from under a
+    # game user's home. Both read AS THAT USER — see do_game_file_read.
+    "game-file-read": ([v_username, v_relpath], lambda a: [], None),
+    "game-dir-tar": ([v_username, v_relpath], lambda a: [], None),
     "lgsm-discover": ([], lambda a: [], None),
     # Two upgrade shapes, because the panel really does want two. "phased" includes Ubuntu's
     # phased rollouts so an explicit "install updates" applies everything the Check list showed;
@@ -1382,6 +1416,133 @@ def do_game_backup_read(args, content):
     return 0 if os.WIFEXITED(status) and os.WEXITSTATUS(status) == 0 else 1
 
 
+def _game_home_path(user, relpath):
+    """(passwd entry, absolute path) for `relpath` under a game user's home — or (None, None).
+
+    The home directory comes from the PASSWD ENTRY, never from the caller, and the joined path is
+    normalised and re-checked lexically here. Symlinks are deliberately NOT settled at this point:
+    that answer is only honest after the credential drop, so _as_game_user redoes it there."""
+    try:
+        pw = pwd.getpwnam(user)
+    except KeyError:
+        return None, None
+    home = os.path.realpath(pw.pw_dir)
+    abspath = os.path.normpath(os.path.join(home, relpath))
+    if abspath != home and not abspath.startswith(home + "/"):
+        return None, None
+    return pw, abspath
+
+
+def _as_game_user(pw, abspath, emit):
+    """Fork, drop to `pw`, re-resolve `abspath` inside that user's home, then emit(resolved).
+
+    The credential drop is the whole security story of the download verbs, and it is the same one
+    do_game_backup_read tells: the read must happen AS THE GAME USER. Reading as root would mean a
+    symlink anywhere under that home — planted by a mod, by the game, or by anyone with a shell as
+    that user — could hand the panel any file on the box, turning a privilege-reducing change into
+    a privilege-increasing one.
+
+    Order matters twice. Supplementary groups, then gid, then uid, because setuid first makes the
+    rest impossible. And realpath AFTER the drop, because a check done before it is a check against
+    a path nobody is going to open."""
+    home = os.path.realpath(pw.pw_dir)
+    pid = os.fork()
+    if pid == 0:
+        try:
+            os.setgroups([])
+            os.setgid(pw.pw_gid)
+            os.setuid(pw.pw_uid)
+            if os.getuid() != pw.pw_uid or os.geteuid() != pw.pw_uid:
+                os._exit(1)          # refuse to read anything if the drop did not take
+            resolved = os.path.realpath(abspath)
+            if resolved != home and not resolved.startswith(home + "/"):
+                os._exit(1)          # a symlink pointing out of the home directory
+            emit(resolved)
+            sys.stdout.buffer.flush()
+        except Exception:
+            os._exit(1)
+        os._exit(0)
+    _pid, status = os.waitpid(pid, 0)
+    return 0 if os.WIFEXITED(status) and os.WEXITSTATUS(status) == 0 else 1
+
+
+def _emit_file(path, buf):
+    """Copy a regular file to `buf` in chunks. Raises on anything that is not a regular file."""
+    if not os.path.isfile(path):
+        raise ValueError("not a regular file")   # a directory, a device, a socket, a FIFO
+    with open(path, "rb") as fh:
+        while True:
+            chunk = fh.read(262144)
+            if not chunk:
+                break
+            buf.write(chunk)
+
+
+def _emit_dir_tar(path, buf):
+    """Write a streaming .tar.gz of the directory `path` to `buf`. Raises if it is not a directory.
+
+    Entries are added ONE AT A TIME so that a single unreadable entry — permissions, a temp file
+    that vanished mid-walk, a unix socket the game left behind — skips instead of truncating the
+    archive half-way through somebody's download. Symlinks are stored as symlinks (tarfile's
+    default), so the archive never carries out the contents of something the walk did not follow.
+    """
+    if not os.path.isdir(path):
+        raise ValueError("not a directory")
+    base = os.path.basename(path.rstrip("/")) or "download"
+    # "w|gz" is the STREAMING writer: it never seeks, which is what makes a pipe a valid
+    # destination. "w:gz" seeks, and would fail on one.
+    with tarfile.open(fileobj=buf, mode="w|gz") as tf:
+        try:
+            tf.add(path, arcname=base, recursive=False)
+        except OSError:
+            # The directory's OWN entry — its mode and mtime. Losing it costs the archive nothing
+            # a caller notices: tar recreates a missing parent when the members below are
+            # extracted. Refusing to build the archive because its top entry could not be stat'd
+            # would turn a readable folder into a failed download, so carry on to the walk.
+            pass
+        for root, dirs, files in os.walk(path, onerror=lambda _e: None):
+            for name in dirs + files:
+                full = os.path.join(root, name)
+                try:
+                    tf.add(full, arcname=os.path.join(base, os.path.relpath(full, path)),
+                           recursive=False)
+                except OSError:
+                    continue
+
+
+def do_game_file_read(args, content):
+    """Stream one file from under a game user's home to stdout, reading it AS THAT USER.
+
+    The download side of the panel's file browser. Unlike the editor's read — text only, size
+    capped, whole body in memory — a download has to work for a 4 GB map pack, so the bytes go
+    straight to stdout in chunks and the panel streams them on to the browser."""
+    user, relpath = args[0], args[1]
+    pw, abspath = _game_home_path(user, relpath)
+    if pw is None:
+        sys.stderr.write("no such user, or path outside the home directory\n")
+        return 1
+
+    return _as_game_user(pw, abspath, lambda path: _emit_file(path, sys.stdout.buffer))
+
+
+def do_game_dir_tar(args, content):
+    """Stream a .tar.gz of one directory under a game user's home, built AS THAT USER.
+
+    Python's tarfile rather than the tar binary, for two reasons. The helper resolves only the
+    tools its verbs name, and an archiver that takes a path argument and reads whatever it finds
+    is a general file-reader by another name. And tarfile can write to a pipe as it walks, so a
+    multi-gigabyte addons/ directory streams instead of being staged on disk first.
+
+    See _emit_dir_tar for how the walk tolerates an unreadable entry."""
+    user, relpath = args[0], args[1]
+    pw, abspath = _game_home_path(user, relpath)
+    if pw is None:
+        sys.stderr.write("no such user, or path outside the home directory\n")
+        return 1
+
+    return _as_game_user(pw, abspath, lambda path: _emit_dir_tar(path, sys.stdout.buffer))
+
+
 def do_tailscale_install(args, content):
     """Install Tailscale on this host, from Tailscale's own installer.
 
@@ -1743,6 +1904,8 @@ ACTIONS = {
     "panel-self-update": do_panel_self_update,
     "tailscale-install": do_tailscale_install,
     "game-backup-read": do_game_backup_read,
+    "game-file-read": do_game_file_read,
+    "game-dir-tar": do_game_dir_tar,
     "lgsm-discover": do_lgsm_discover,
     "sshd-set-directive": do_sshd_set_directive,
     "create-swapfile": do_create_swapfile,
