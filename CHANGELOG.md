@@ -8,6 +8,10 @@ regardless of this file — this changelog is for humans.
 ## [Unreleased]
 
 ### Added
+- **Line numbers in the file editor.** A gutter beside the editor, kept in step with the text as
+  you type and scroll. The editor no longer soft-wraps (a wrapped line occupies several rows, which
+  would push every number below it out of alignment) — long lines scroll sideways instead, as they
+  do in any code editor. Drag the bottom edge to make the whole editor taller; the numbers follow.
 - **Drag and drop now takes folders, and actually works.** Two separate problems. Dropping a
   *folder* never worked: the handler read `dataTransfer.files`, which for a folder is a single
   contentless entry — folder contents are only reachable through `webkitGetAsEntry()`, which is now
