@@ -44,6 +44,7 @@ from types import SimpleNamespace
 from datetime import timedelta
 from clock import utcnow
 from pathlib import Path
+from urllib.parse import quote
 
 # eventlet announces its own deprecation on import — upstream's words, not a nit: "Eventlet is
 # deprecated ... we strongly recommend against using it for new projects ... we recommend migrating
@@ -146,6 +147,7 @@ from ssh_manager import (
     path_disk_free,
     lgsm_write_config, lgsm_game_config, lgsm_get_values, browse_dir, read_file,
     write_file, upload_file, stat_upload_targets, UPLOAD_EXISTS, delete_path,
+    stat_path, stream_path,
     remote_ufw_delete_rule, remote_set_public_ssh, remote_public_ssh_status, remote_ufw_status, remote_ufw_open_port,
     remote_ufw_close_port, remote_ufw_allow_game_port, remote_ufw_close_game_port,
     remote_ufw_allow_game_ports, remote_ufw_close_by_name,
@@ -298,6 +300,28 @@ _PORT_SPAN = {
     "squad": 2,                      # game 7787 + query 7788
     "unturned": 2,                   # game 27015 + steam query 27016
 }
+
+
+# Characters a filename may keep in the plain `filename=` parameter: everything else is replaced.
+# Quotes and backslashes would end the quoted string early, and CR/LF would split the header.
+_ASCII_FILENAME_STRIP = re.compile(r"[^A-Za-z0-9._ ()+,\[\]-]")
+
+
+def _attachment_header(name):
+    """A Content-Disposition value that survives a real game-server filename.
+
+    These names are written by mod authors, map packers and Windows tooling — spaces, brackets,
+    apostrophes, accents and the occasional control character are all ordinary. WSGI header values
+    are latin-1, so a UTF-8 name cannot go in `filename=` at all: the exact name goes in RFC 5987's
+    `filename*` (percent-encoded, which every current browser prefers), and a scrubbed ASCII
+    version stays in `filename=` for anything that ignores it. Scrubbed, not just quoted, because
+    a name is attacker-influenceable — anyone who can upload a file picks it — and a raw CR here
+    would be header injection.
+    """
+    base = os.path.basename(name or "") or "download"
+    ascii_name = _ASCII_FILENAME_STRIP.sub("_", base).strip() or "download"
+    return "attachment; filename=\"%s\"; filename*=UTF-8''%s" % (
+        ascii_name, quote(base, safe=""))
 
 
 def _port_span(game_type):
@@ -8031,6 +8055,62 @@ def register_routes(app):
         except Exception:
             return jsonify({"success": False, "message": _log_and_generic("delete_path failed")}), 500
 
+
+    @app.route("/server/<int:server_id>/download")
+    @login_required
+    @server_access_required
+    def server_file_download(server_id):
+        """Download one file from the game server, or a .tar.gz of one directory.
+
+        Not an /api route and not JSON: this is a plain GET the browser navigates to, so the file
+        lands in the download manager with a name and a progress bar instead of being buffered
+        through fetch() as a blob. A 4 GB map pack would not survive that.
+
+        The editor's read (api_server_file) is text-only, capped at 1 MB and refuses a binary —
+        which is right for an editor and useless for a download, so this streams instead. Same
+        permission as the rest of the file browser: if you may edit and delete these files, you
+        may take a copy of one.
+        """
+        gs = get_game(server_id)
+        if not _can_manage_files():
+            flash("You don't have permission to manage server files.", "danger")
+            return redirect(url_for("server_detail", server_id=server_id))
+        rel = request.args.get("path", "")
+        # Every failure below ends in a flash and a redirect rather than an abort(), because this
+        # is a LINK the browser follows: an error page would replace the file browser with a bare
+        # 404, whereas a redirect back to the page says what went wrong and leaves the admin where
+        # they were. A download that succeeds never navigates at all.
+        def _refuse(message, category="warning"):
+            flash(message, category)
+            return redirect(url_for("server_files", server_id=server_id))
+
+        try:
+            info = stat_path(gs.remote, gs.short_name, rel)
+        except Exception:
+            _log.debug("download: could not stat the path", exc_info=True)
+            return _refuse("Couldn't reach %s to read that file." % gs.name, "danger")
+        if not info:
+            return _refuse("That file or folder isn't there any more.")
+        if info["rel"] in (".", ""):
+            # The home directory itself — by an empty ?path=, or by any spelling that resolves
+            # back to it ("." , "/", "cfg/.."). stream_path refuses it too; this is the half that
+            # can still explain why, instead of sending a 0-byte archive named after the user.
+            return _refuse("Pick a file or a folder to download, not the whole home directory.")
+        is_dir = info["type"] == "d"
+        name = info["name"] + (".tar.gz" if is_dir else "")
+        log_action(current_user, "download_file", target=gs.name,
+                   detail=rel + (" (as .tar.gz)" if is_dir else ""))
+        resp = Response(stream_path(gs.remote, gs.short_name, rel, as_tar=is_dir,
+                                    limit=None if is_dir else info["size"]),
+                        mimetype="application/gzip" if is_dir else "application/octet-stream")
+        if not is_dir:
+            # A directory archive is generated as it streams, so its length is not knowable in
+            # advance — the browser shows an indeterminate download for those. A file's is, and
+            # the same number caps the stream: a console log the game is still writing to would
+            # otherwise hand back more bytes than this header promises.
+            resp.headers["Content-Length"] = str(info["size"])
+        resp.headers["Content-Disposition"] = _attachment_header(name)
+        return resp
 
     @app.route("/api/server/<int:server_id>/cron", methods=["GET", "POST"])
     @login_required

@@ -2060,6 +2060,17 @@
       "POST"
     ]
   },
+  "/server/<int:server_id>/download": {
+    "endpoint": "server_file_download",
+    "guards": [
+      "utils.py:decorated_view[server_access]",
+      "auth.py:decorated_function[server_access]",
+      "view:server_file_download"
+    ],
+    "methods": [
+      "GET"
+    ]
+  },
   "/server/<int:server_id>/files": {
     "endpoint": "server_files",
     "guards": [

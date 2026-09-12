@@ -707,6 +707,155 @@ finally:
     sm.run_command = _orig_up_rc
 
 
+# ── downloads: stat_path decides file-vs-archive and the Content-Length, stream_path moves bytes ──
+# The editor's read is text-only, 1 MB-capped and refuses a binary. A download is the opposite
+# shape, so it is a separate pair of functions — and the pair is where a path could escape the
+# game user's home, so the guard and the transport choice are both pinned here.
+_orig_dl_rc = sm.run_command
+try:
+    sm.run_command = lambda *a, **k: ("f 4096", "", 0)
+    eq("stat_path: a file reports its type and size",
+       sm.stat_path(_FakeSrv(), "csgoserver", "cfg/server.cfg"),
+       {"type": "f", "size": 4096, "name": "server.cfg", "rel": "cfg/server.cfg"})
+    sm.run_command = lambda *a, **k: ("d 0", "", 0)
+    eq("stat_path: a directory is flagged, so the route knows to build an archive",
+       sm.stat_path(_FakeSrv(), "csgoserver", "addons")["type"], "d")
+    # "." is how the route recognises the home directory itself, whatever spelling asked for it.
+    for _spelling in ("", ".", "/", "cfg/.."):
+        eq("stat_path: %r canonicalises to the home directory" % _spelling,
+           sm.stat_path(_FakeSrv(), "csgoserver", _spelling)["rel"], ".")
+    sm.run_command = lambda *a, **k: ("__NOFILE__", "", 0)
+    check("stat_path: a missing path is None, not a zero-byte file",
+          sm.stat_path(_FakeSrv(), "csgoserver", "gone.cfg") is None)
+    # An unreadable size must not silently become a Content-Length of 0: a wrong Content-Length
+    # truncates the download at that many bytes, which is worse than no progress bar.
+    sm.run_command = lambda *a, **k: ("f", "", 0)
+    eq("stat_path: an unreadable size falls back to 0 rather than garbage",
+       sm.stat_path(_FakeSrv(), "csgoserver", "odd")["size"], 0)
+    _stat_cmds = []
+    sm.run_command = lambda s, c, **k: (_stat_cmds.append(c), ("f 1", "", 0))[1]
+    sm.stat_path(_FakeSrv(), "csgoserver", "cfg/server.cfg")
+    check("stat_path: carries the host-side symlink guard, like every other file op",
+          _stat_cmds and "realpath -m" in _stat_cmds[0] and "__OUTSIDE_HOME__" in _stat_cmds[0],
+          str(_stat_cmds)[:150])
+    sm.run_command = lambda *a, **k: ("__OUTSIDE_HOME__", "", 9)
+    check("stat_path: a path that escapes home is refused",
+          sm.stat_path(_FakeSrv(), "csgoserver", "escape") is None)
+    check("stat_path: a traversal is refused before any command runs",
+          sm.stat_path(_FakeSrv(), "csgoserver", "../../etc/passwd") is None)
+
+    class _FakeProc:
+        """A Popen stand-in whose stdout hands back a fixed list of chunks."""
+        def __init__(self, chunks):
+            self._chunks = list(chunks)
+            self.stdout = self
+        def read(self, _n):
+            return self._chunks.pop(0) if self._chunks else b""
+        def close(self):
+            pass
+        def wait(self):
+            return 0
+
+    _argvs = []
+
+    def _fake_popen(argv, **_kw):
+        _argvs.append(argv)
+        return _FakeProc([b"abc", b"def"])
+
+    _orig_popen, _orig_helper = sm.subprocess.Popen, sm.helper_present
+    try:
+        sm.subprocess.Popen = _fake_popen
+        sm.helper_present = lambda: True
+        # A refusal has to mean NOTHING RAN, not just "no bytes came back": with the byte source
+        # faked, an empty result would otherwise be indistinguishable from a command that ran and
+        # returned nothing. So these assert the argv list stayed empty.
+        check("stream_path: a traversal runs no command at all",
+              list(sm.stream_path(_FakeSrv(), "csgoserver", "../../etc/passwd")) == []
+              and _argvs == [], str(_argvs))
+        check("stream_path: an unsafe game user is refused the same way",
+              list(sm.stream_path(_FakeSrv(), "a;id", "server.cfg")) == []
+              and _argvs == [], str(_argvs))
+        # A collapsible ".." is a legitimate request — _safe_abspath normalises it — but the
+        # helper's validator refuses a ".." component, so the raw string must not be what crosses.
+        # Forwarding it raised VerbError out of the middle of a download.
+        _argvs.clear()
+        eq("stream_path: a collapsible '..' is normalised before it reaches the verb",
+           b"".join(sm.stream_path(_FakeSrv(), "csgoserver", "cfg/../server.cfg")), b"abcdef")
+        eq("stream_path: ...and what crosses the boundary is the canonical path",
+           _argvs[-1][5], "server.cfg")
+        # The home directory itself is not a download: "tar up this whole game install" is never
+        # what someone meant to click, and it is reachable by hand-editing ?path=.
+        _argvs.clear()
+        for _root_path in ("", ".", "/", "cfg/.."):
+            check("stream_path: %r is not a download target" % _root_path,
+                  list(sm.stream_path(_FakeSrv(), "csgoserver", _root_path, as_tar=True)) == []
+                  and _argvs == [], str(_argvs))
+        eq("stream_path: the bytes come through in order",
+           b"".join(sm.stream_path(_FakeSrv(), "csgoserver", "cfg/server.cfg")), b"abcdef")
+        eq("stream_path: a local file download goes through the helper verb, as argv",
+           [_argvs[-1][3], _argvs[-1][4], _argvs[-1][5]],
+           ["game-file-read", "csgoserver", "cfg/server.cfg"])
+        list(sm.stream_path(_FakeSrv(), "csgoserver", "addons", as_tar=True))
+        eq("stream_path: a local folder download asks for the tar verb instead",
+           _argvs[-1][3], "game-dir-tar")
+        check("stream_path: no shell is involved on the helper path",
+              not any(x in ("bash", "/bin/bash", "sh") for x in _argvs[-1]), str(_argvs[-1]))
+        # No helper yet (a host between `git pull` and the next install.sh run): still argv, and
+        # still read AS THE GAME USER — that is the property the whole design rests on.
+        sm.helper_present = lambda: False
+        list(sm.stream_path(_FakeSrv(), "csgoserver", "cfg/server.cfg"))
+        eq("stream_path: the no-helper fallback reads as the game user, without a shell",
+           _argvs[-1], ["sudo", "-u", "csgoserver", "cat", "--", "/home/csgoserver/cfg/server.cfg"])
+        list(sm.stream_path(_FakeSrv(), "csgoserver", "addons", as_tar=True))
+        eq("stream_path: ...and tars the directory from its parent, so the archive has one root",
+           _argvs[-1], ["sudo", "-u", "csgoserver", "tar", "czf", "-",
+                        "-C", "/home/csgoserver", "--", "addons"])
+        # The home-root refusal has to hold on THIS transport in particular. On the helper path
+        # the verb's own validator would refuse "." anyway; here nothing else would, so a host with
+        # the wide grant and no helper is where "tar up the whole game install" could actually run.
+        _argvs.clear()
+        for _root_path in ("", ".", "/", "cfg/.."):
+            check("stream_path: %r is refused without the helper too" % _root_path,
+                  list(sm.stream_path(_FakeSrv(), "csgoserver", _root_path, as_tar=True)) == []
+                  and _argvs == [], str(_argvs))
+        # A game server writes to its console log constantly, so the file can be bigger by the time
+        # it is read than when it was measured. A response longer than its own Content-Length
+        # desynchronises a keep-alive connection, so the stream is capped at what was measured.
+        eq("stream_path: the stream is capped at the size the route promised",
+           b"".join(sm.stream_path(_FakeSrv(), "csgoserver", "cod-console.log", limit=4)), b"abcd")
+        eq("stream_path: a limit of 0 sends nothing at all",
+           b"".join(sm.stream_path(_FakeSrv(), "csgoserver", "empty.log", limit=0)), b"")
+        eq("stream_path: a limit larger than the file does not pad it",
+           b"".join(sm.stream_path(_FakeSrv(), "csgoserver", "small.cfg", limit=999)), b"abcdef")
+        # The SSH transports DO use a shell, so the guard rides along there — and its sentinel must
+        # not be handed to the browser as if it were the file.
+        sm.subprocess.Popen = lambda argv, **_kw: _FakeProc([b"__OUTSIDE_HOME__\n"])
+        eq("stream_path: a stream carrying the guard's sentinel yields nothing",
+           list(sm.stream_path(_FakeSrv(), "csgoserver", "link")), [])
+    finally:
+        sm.subprocess.Popen, sm.helper_present = _orig_popen, _orig_helper
+finally:
+    sm.run_command = _orig_dl_rc
+
+# The download's filename reaches the browser in a header, and whoever uploaded the file chose it.
+# (`_app` is the Flask test app further down this file; the module itself is the one wanted here.)
+_appmod = sys.modules["app"]
+check("download header: a CR/LF in a filename cannot split the header",
+      "\r" not in _appmod._attachment_header("x\r\nX-Evil: 1")
+      and "\n" not in _appmod._attachment_header("x\r\nX-Evil: 1"),
+      _appmod._attachment_header("x\r\nX-Evil: 1"))
+check("download header: a quote cannot end the quoted filename early",
+      '"' not in _appmod._attachment_header('a"b.cfg').split("filename=")[1].split(";")[0][1:-1],
+      _appmod._attachment_header('a"b.cfg'))
+check("download header: the exact name survives in filename*, percent-encoded",
+      "filename*=UTF-8''mapa%20%C3%B1.bsp" in _appmod._attachment_header("mapa ñ.bsp"),
+      _appmod._attachment_header("mapa ñ.bsp"))
+check("download header: every value is latin-1 clean, as WSGI headers must be",
+      _appmod._attachment_header("día ñ [v2].bsp").encode("latin-1"))
+eq("download header: an empty name still has something to save as",
+   _appmod._attachment_header(""), "attachment; filename=\"download\"; filename*=UTF-8''download")
+
+
 # ── local-host injection defenses: system_ops runs commands on THIS machine (shell=True), so its
 #    request-fed values (block/unban IPs, jail names) must be neutralised before reaching _run. ──
 _orig_so_run = SO._run
@@ -3798,6 +3947,10 @@ check("eventlet's deprecation banner no longer prints on every start",
 import importlib.machinery as _machinery
 import importlib.util as _ilu
 import privileged as _priv
+import io as _io
+import shutil as _shutil
+import tarfile as _tarfile
+import tempfile as _tempfile
 
 _helper_path = os.path.join(_root, "tools", "panel-helper")
 _spec = _ilu.spec_from_loader("panel_helper", _machinery.SourceFileLoader("panel_helper", _helper_path))
@@ -3891,6 +4044,8 @@ _VERB_SAMPLES = {
     "panel-self-update": ["-", "-"],
     "tailscale-install": [],
     "game-backup-read": ["ubuntu", "csgoserver-2026-01-01.tar.gz"],
+    "game-file-read": ["codserver", "serverfiles/cfg/server.cfg"],
+    "game-dir-tar": ["codserver", "serverfiles/addons"],
     "lgsm-discover": [],
     "content-scan": ["cstrike", "hl2"],
 }
@@ -3915,6 +4070,64 @@ for _v, _a in _VERB_SAMPLES.items():
         _drift.append("%s: helper=%r panel=%r" % (_v, _hv, _pv))
 check("privileged: helper and panel build an identical argv for every verb",
       not _drift, "; ".join(_drift[:2]))
+
+# ── The download verbs' own halves, exercised directly ────────────────────────────────────────
+# _as_game_user forks and drops credentials, which needs root and so cannot run here. The two
+# halves that CAN be checked without it are the ones that decide what gets opened: the lexical
+# containment check, and the two emitters.
+_dl_root = _tempfile.mkdtemp()
+try:
+    _fake_home = os.path.join(_dl_root, "home", "codserver")
+    os.makedirs(os.path.join(_fake_home, "addons", "sub"))
+    open(os.path.join(_fake_home, "server.cfg"), "w").write("hostname x\n")
+    open(os.path.join(_fake_home, "addons", "a.vpk"), "wb").write(b"\x00\x01binary")
+    open(os.path.join(_fake_home, "addons", "sub", "b.txt"), "w").write("deep\n")
+    os.symlink("/etc/passwd", os.path.join(_fake_home, "addons", "escape"))
+
+    _pw = NS(pw_dir=_fake_home, pw_uid=os.getuid(), pw_gid=os.getgid())
+    _orig_getpwnam = _helper.pwd.getpwnam
+    try:
+        _helper.pwd.getpwnam = lambda u: _pw if u == "codserver" else _orig_getpwnam(u)
+        eq("helper: a relative path resolves under the game user's home",
+           _helper._game_home_path("codserver", "addons/a.vpk")[1],
+           os.path.join(_fake_home, "addons", "a.vpk"))
+        # The home directory comes from the PASSWD ENTRY, so these are refused by the join itself
+        # and not by string-matching what the caller sent.
+        for _esc in ("../../etc/passwd", "addons/../../../etc/shadow"):
+            check("helper: %r does not resolve into the home dir" % _esc,
+                  _helper._game_home_path("codserver", _esc) == (None, None))
+        check("helper: an unknown user resolves to nothing",
+              _helper._game_home_path("nosuchuser-zz", "server.cfg") == (None, None))
+
+        _buf = _io.BytesIO()
+        _helper._emit_file(os.path.join(_fake_home, "addons", "a.vpk"), _buf)
+        eq("helper: _emit_file copies bytes verbatim, binary included",
+           _buf.getvalue(), b"\x00\x01binary")
+        check("helper: _emit_file refuses a directory rather than emitting something odd",
+              _ufw_raises(lambda: _helper._emit_file(_fake_home, _io.BytesIO())))
+
+        _tarbuf = _io.BytesIO()
+        _helper._emit_dir_tar(os.path.join(_fake_home, "addons"), _tarbuf)
+        _tarbuf.seek(0)
+        with _tarfile.open(fileobj=_tarbuf, mode="r|gz") as _tf:
+            _members = {m.name: m for m in _tf}
+        check("helper: the archive has ONE root named after the folder, not the whole host path",
+              all(n == "addons" or n.startswith("addons/") for n in _members), str(sorted(_members)))
+        eq("helper: nested files keep their relative layout",
+           sorted(n for n in _members if n.endswith((".vpk", ".txt"))),
+           ["addons/a.vpk", "addons/sub/b.txt"])
+        # A symlink is STORED as a symlink. If it were followed, an archive of any folder would be
+        # a way to read files the walk never entered — /etc/passwd here.
+        _link = _members.get("addons/escape")
+        check("helper: a symlink is stored as a link, never followed into its target",
+              _link is not None and _link.issym() and _link.size == 0, str(_link))
+        check("helper: _emit_dir_tar refuses a plain file",
+              _ufw_raises(lambda: _helper._emit_dir_tar(
+                  os.path.join(_fake_home, "server.cfg"), _io.BytesIO())))
+    finally:
+        _helper.pwd.getpwnam = _orig_getpwnam
+finally:
+    _shutil.rmtree(_dl_root, ignore_errors=True)
 
 # The helper can only ever run tools it names. bash is the whole point: if it resolved, the boundary
 # would be decorative.
@@ -3998,6 +4211,20 @@ _BAD_VECTORS = [
     ("pro-service", ["enable", "esm-infra; id"]),
     ("pro-service", ["enable", ""]),
     ("pro-service", ["restart", "esm-infra"]),
+    # The download verbs' path is argument TWO, and it is the only caller-chosen path in the whole
+    # table that is not built from an identifier — so every shape that could leave the game user's
+    # home, or split a line for something reading the value later, is probed here.
+    ("game-file-read", ["codserver", ""]),
+    ("game-file-read", ["codserver", "/etc/passwd"]),
+    ("game-file-read", ["codserver", "../../etc/passwd"]),
+    ("game-file-read", ["codserver", "cfg/../../../etc/passwd"]),
+    ("game-file-read", ["codserver", ".."]),
+    ("game-file-read", ["codserver", "cfg/x\nX: 1"]),
+    ("game-file-read", ["codserver", "cfg/x\x00.cfg"]),
+    ("game-file-read", ["codserver", "a" * 1025]),
+    ("game-dir-tar", ["codserver", ""]),
+    ("game-dir-tar", ["codserver", "../.ssh"]),
+    ("game-dir-tar", ["codserver", "/root"]),
     ("renice-users", ["-1", "root; id"]),
     ("renice-users", ["-1", "-oProxyCommand=x"]),
     ("renice-users", ["-1", "codserver", "bad;user"]),
@@ -5411,7 +5638,7 @@ check("db_maintenance: repair runs from an explicit path, no config import",
 # this RATCHETS — the helper count inside may fall and never rise, exactly like the escalation
 # census. tests/url_map_baseline.json is what proves a move changed no route.
 import ast as _ast_rr
-_MOVED_VIEWS = 0   # bump as views relocate into routes/*.py; views + moved must stay 206
+_MOVED_VIEWS = 0   # bump as views relocate into routes/*.py; views + moved must stay 207
 _app_ast = _ast_rr.parse(open(os.path.join(_root, "app.py"), encoding="utf-8").read())
 _rr = next(n for n in _ast_rr.walk(_app_ast)
            if isinstance(n, _ast_rr.FunctionDef) and n.name == "register_routes")
@@ -5425,8 +5652,8 @@ check("register_routes: helper closures inside it <= %d (currently %d)"
       % (_HELPER_CEILING, _rr_helpers),
       _rr_helpers <= _HELPER_CEILING,
       "it went UP — a new helper belongs at module level, not nested in the route table")
-check("register_routes: every one of the 206 views is still accounted for",
-      len(_rr_views) + _MOVED_VIEWS == 206,
+check("register_routes: every one of the 207 views is still accounted for",
+      len(_rr_views) + _MOVED_VIEWS == 207,
       "views inside=%d, moved out=%d" % (len(_rr_views), _MOVED_VIEWS))
 # These two use current_app, which only equals the closed-over `app` inside a request — every
 # caller is a view, so that holds. If they drift back inside, the reasoning stops being checked.

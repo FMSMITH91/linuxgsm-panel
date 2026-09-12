@@ -317,6 +317,38 @@ def _backup_name(s):
     return s
 
 
+# The longest relative path the panel may ask the helper to read. Deep game-server trees (addons,
+# workshop content, map packs) are genuinely nested, so this is generous; it exists to bound the
+# argument, not to second-guess a real layout.
+MAX_RELPATH = 1024
+
+
+def _relpath(s):
+    """A path RELATIVE to a game user's home directory, for a download.
+
+    Deliberately permissive about CHARACTERS. These files are named by mod authors, map packers and
+    Windows tooling — spaces, brackets, apostrophes and non-ASCII are all ordinary — and a charset
+    whitelist here would refuse real files that the browser is happily listing. That is affordable
+    because the value never reaches a shell: it crosses as its own argv element, the helper joins it
+    onto the home directory IT looks up from the passwd entry, and the containment check is redone
+    with realpath after dropping to the game user. So what is checked here is SHAPE.
+
+    Empty and "." are both refused, which is what keeps the home directory itself from being a
+    download target — an accidental "archive everything" over a 13 GB game install is not a
+    request worth honouring.
+    """
+    s = str(s)
+    if not s or len(s) > MAX_RELPATH:
+        raise VerbError("not a relative path")
+    # NUL and newline would end the path early for anything that later reads it line-wise; an
+    # absolute path would ignore the home directory entirely.
+    if "\x00" in s or "\n" in s or s.startswith("/"):
+        raise VerbError("not a relative path")
+    if s == "." or any(part == ".." for part in s.split("/")):
+        raise VerbError("path may not climb out of the home directory")
+    return s
+
+
 def _git_ref(s):
     """A git commit SHA, or "-" for none. Hex only: this value is exported into the environment of
     a root-run installer, so anything that could carry a flag, a path or a shell fragment is out."""
@@ -643,6 +675,12 @@ _ARGV = {
     # the file — reading it as root would turn a download button into "hand me any file on the
     # box". See tools/panel-helper.
     "game-backup-read": ([_username, _backup_name], lambda a: [], None),
+    # Download one file, or a .tar.gz of one directory, from under a game user's home — the read
+    # side of the panel's file browser. Both drop to the GAME user before opening anything, for
+    # the same reason game-backup-read does: reading as root would turn a download button into
+    # "hand me any file on the box". See tools/panel-helper.
+    "game-file-read": ([_username, _relpath], lambda a: [], None),
+    "game-dir-tar": ([_username, _relpath], lambda a: [], None),
     # Find LinuxGSM instances already installed on this host. Zero arguments; the helper walks
     # /home itself. It needed root for one thing only — reading another user's crontab.
     "lgsm-discover": ([], lambda a: [], None),

@@ -165,6 +165,18 @@ function mkRow(opts){
   left.innerHTML=opts.icon+' <span style="font-size:.85rem;">'+esc(opts.name)+'</span>';  // nosemgrep
   var right=document.createElement('span'); right.className='d-flex align-items-center gap-2 flex-shrink-0';
   if(opts.size!=null){ var s=document.createElement('span'); s.className='text-secondary'; s.style.fontSize='.68rem'; s.textContent=fmtSize(opts.size); right.appendChild(s); }
+  // A real <a href>, not a button: the browser downloads it natively, "Save link as" and
+  // middle-click work, and it still works if the page's JS never loads. Protection is about
+  // DELETING a file, so a protected file is downloadable like any other.
+  if(opts.type!=='up'){
+    var dl=document.createElement('a'); dl.className='btn btn-sm btn-link p-0 text-secondary fb-dl';
+    dl.href=MOUNT+'/server/'+serverId+'/download?path='+encodeURIComponent(opts.path);
+    dl.dataset.action='download';
+    var dlTitle=(opts.type==='dir'?'Download folder as .tar.gz':'Download');
+    dl.title=dlTitle; dl.setAttribute('aria-label', dlTitle+': '+opts.name);
+    dl.innerHTML='<i class="bi bi-download"></i>';
+    right.appendChild(dl);
+  }
   if(opts.protected){ var lk=document.createElement('span'); lk.className='text-secondary'; lk.title='Protected — required by LinuxGSM/the game'; lk.innerHTML='<i class="bi bi-shield-lock"></i>'; right.appendChild(lk); }
   else if(opts.deletable){ var b=document.createElement('button'); b.type='button'; b.className='btn btn-sm btn-link text-danger p-0'; b.title='Delete'; b.dataset.action='delete'; b.innerHTML='<i class="bi bi-trash"></i>'; right.appendChild(b); }
   row.appendChild(left); row.appendChild(right);
@@ -201,6 +213,8 @@ function openFile(path){
     document.getElementById('editor-wrap').style.display='';
     document.getElementById('editor-path').textContent=path;
     document.getElementById('editor').value=d.content||'';
+    var edl=document.getElementById('editor-download');
+    if(edl) edl.href=MOUNT+'/server/'+serverId+'/download?path='+encodeURIComponent(path);
   }).catch(()=>{});
 }
 function closeEditor(){
@@ -215,6 +229,23 @@ function saveFile(){
   fetch(MOUNT+'/api/server/'+serverId+'/file',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({path:curFile,content:document.getElementById('editor').value})})
     .then(r=>r.json()).then(d=>{ msg.textContent=d.success?'✓ Saved':'✗ '+(d.message||'Failed'); msg.className='small '+(d.success?'text-success':'text-danger'); })
     .catch(()=>{ msg.textContent='✗ Failed'; msg.className='small text-danger'; });
+}
+// A folder download is a tar.gz built AS IT STREAMS, so nothing knows its size up front — not the
+// panel, not the browser's progress bar. Point serverfiles at a home connection and you have asked
+// for a multi-gigabyte transfer with no way to tell how far along it is, so the folder case asks
+// first while a single file downloads on one click.
+function confirmFolderDownload(path, href){
+  confirmDialog({title:'Download folder', icon:'file-earmark-zip', confirmLabel:'Download .tar.gz',
+    bodyText:'Download this folder as a .tar.gz archive?\n'+path+'\n\n'
+      +'The archive is built while it downloads, so the total size is not known in advance — a big '
+      +'folder like serverfiles can run to many gigabytes.',
+    onConfirm:function(){
+      // A temporary anchor rather than location=href: navigating away from the page would tear
+      // down the file browser if the server answers with anything but the file.
+      var a=document.createElement('a'); a.href=href; a.style.display='none';
+      document.body.appendChild(a); a.click();
+      setTimeout(function(){ a.remove(); }, 0);
+    }});
 }
 function deletePath(path, isDir){
   confirmDialog({title:'Delete '+(isDir?'directory':'file'), icon:'trash', confirmClass:'btn-danger', confirmLabel:'Delete',
@@ -370,6 +401,15 @@ function doUpload(ev){
 document.getElementById('file-list').addEventListener('click', function(ev){
   var del = ev.target.closest('[data-action="delete"]');
   if(del){ ev.stopPropagation(); var r=del.closest('[data-path]'); deletePath(r.dataset.path, r.dataset.type==='dir'); return; }
+  var dl = ev.target.closest('[data-action="download"]');
+  if(dl){
+    // stopPropagation, not preventDefault: the row underneath must not also open the file in the
+    // editor, but the link's own navigation IS the download and has to go ahead.
+    ev.stopPropagation();
+    var dr=dl.closest('[data-path]');
+    if(dr && dr.dataset.type==='dir'){ ev.preventDefault(); confirmFolderDownload(dr.dataset.path, dl.href); }
+    return;
+  }
   var row = ev.target.closest('[data-path]');
   if(!row) return;
   if(row.dataset.type==='file'){

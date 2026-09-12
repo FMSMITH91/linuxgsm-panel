@@ -80,7 +80,7 @@ bash ~/linuxgsm-panel/uninstall.sh                 # per-user install
 - One-click install of any LinuxGSM game (Garry's Mod, Minecraft, CS2/CS:Source, TF2, ARMA 3, Rust, and 130+ more), including LinuxGSM itself and the ports it needs.
 - Real-time WebSocket console, command sending, per-game CPU/RAM/uptime tiles, and live current/max player counts (gamedig, with console + LinuxGSM-query fallbacks).
 - Player-aware control — start/stop/restart/update/validate and more; restart, stop, backups, mod changes, and host reboots can wait until a server is empty.
-- Mods & addons (SourceMod, MetaMod, Oxide, ULX…), FastDL generation, per-server cron with autostart and daily-restart-when-empty, and a config/file browser with upload and in-browser editing.
+- Mods & addons (SourceMod, MetaMod, Oxide, ULX…), FastDL generation, per-server cron with autostart and daily-restart-when-empty, and a config/file browser with upload, download (a folder comes down as a `.tar.gz`) and in-browser editing.
 - **Garry's Mod content mounting** — install Counter-Strike: Source and other Source-engine games' content (via LinuxGSM) so GMod maps and props render instead of showing missing-texture errors. One shared copy per host, mounted read-only into each GMod server, with per-server enable/disable, one-click uninstall, a free-disk readout, and a weekly content auto-update cron.
 - Per-server LinuxGSM alerts (Discord, Telegram, email, Pushover, Slack, Gotify…).
 

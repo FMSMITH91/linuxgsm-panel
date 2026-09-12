@@ -80,7 +80,7 @@ Converted so far: **`ufw`, `fail2ban-client`, `systemctl`, `apt`/`dpkg`, the log
 (`journalctl` / `tail`), cron and user management, the sshd port change, the deferred reboot,
 Ubuntu Pro, the host controls, the GMod shared-content box, the fail2ban activity report, the
 detached OS update, Tailscale's join, the panel's own restore/self-update and the VPS hardening
-steps** — 86 verbs. (`tests/unit_test.py` asserts this number against `privileged.verbs()`, so it
+steps** — 88 verbs. (`tests/unit_test.py` asserts this number against `privileged.verbs()`, so it
 cannot drift from the table again.)
 
 **A correction to the numbers previously reported here.** Earlier revisions of this section
@@ -169,6 +169,21 @@ types rather than in the command names:
 - **The deferred reboot** was `( sleep 2 ; reboot ) &` — a subshell, a background job and a
   redirect. The helper double-forks instead: the grandchild detaches, waits, and execs the reboot
   binary. It returns immediately, which is the whole reason the subshell existed.
+- **The file browser's downloads** are the one place a caller-chosen *path* crosses the boundary —
+  everywhere else a path is assembled from a validated identifier. It could not be an identifier
+  here: these files are named by mod authors, map packers and Windows tooling, so a charset filter
+  would refuse real files the browser is already listing. So the argument is checked for SHAPE
+  (non-empty, relative, no `..` component, no NUL or newline, bounded length) and the containment
+  question is answered where it can be answered honestly. The helper looks the home directory up
+  from the **passwd entry**, never from the caller; then it forks, drops supplementary groups, gid
+  and uid to the **game user**, and only then resolves the path with `realpath` and opens it. Both
+  halves of that order matter: a check before the drop is a check against a path nobody will open,
+  and a read as *root* would turn a download button into "hand me any file on the box" — a
+  privilege increase out of a change meant to reduce privilege. The panel passes the canonical
+  relative path rather than the string it received, and refuses the home directory itself. The
+  folder download is Python's `tarfile` writing to the pipe, not the `tar` binary: an archiver that
+  takes a path and reads whatever it finds is a general file-reader under another name, and the
+  helper resolves only the tools its verbs name. Symlinks are stored as links, never followed.
 - The log verbs take a **source name**, never a path or a unit: `log-tail auth`, not
   `tail /var/log/auth.log`. The table turns the name into the path, so reading `/etc/shadow`
   through the helper is not something a filter rejects — it is not expressible.

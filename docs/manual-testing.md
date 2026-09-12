@@ -70,6 +70,28 @@ Only bind to an IP the panel **already connects to**. Second session still open.
   - Expected: the command button appears on matching servers for that group; a bad argument (e.g. with `;` or a space) is rejected; a valid one runs.
 - [ ] Confirm a server **outside** the group's scope does **not** show the command / denies it.
 
+## 7. File-browser downloads (needs a real game server — the bytes come off the host)
+The unit suite covers the path checks and the argv; what it cannot cover is a real read through
+`sudo`/SSH as the game user, or a browser actually saving the file.
+- [ ] Files & Config → File Browser → the download icon on a **text** file (e.g. `server.cfg`).
+  - Expected: the file saves with its own name and the page **stays put** — no navigation, no reload.
+- [ ] The download icon on a **binary** file (a `.vpk`, a `.bsp`, a `.tar.gz` in `lgsm/backup/`).
+  - Expected: it saves and is byte-identical — `sha256sum` it against the file on the host. This is
+    the case the editor's read refuses outright, so it is the one worth checking.
+- [ ] The download icon on a **folder** (pick a small one, e.g. `lgsm/config-lgsm`).
+  - Expected: it asks first, then saves `<folder>.tar.gz`; `tar tzf` it and the paths start with the
+    folder's own name, not `/home/<user>/…`.
+- [ ] Open a file in the editor, then use the **download button in the editor header**.
+  - Expected: it downloads the file that is open, not the last one you clicked.
+- [ ] A file that is gone: download it, delete it on the host, click the link again (browser Back,
+  then the icon).
+  - Expected: back on Files & Config with "isn't there any more" — **not** a bare 404 page.
+- [ ] As a user **without** MANAGE_SERVERS, request `/server/<id>/download?path=.ssh/id_rsa` by hand.
+  - Expected: bounced to the server page with a permission message; no file.
+- [ ] On a host where the helper is installed (`/usr/local/lib/linuxgsm-panel/panel-helper`), confirm
+  a download still works after `sudo -u <game-user>` is NOT in the sudoers grant — that is the whole
+  point of the `game-file-read` / `game-dir-tar` verbs.
+
 ---
 
 ### If something fails

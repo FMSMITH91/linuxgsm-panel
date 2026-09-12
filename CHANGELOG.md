@@ -7,6 +7,17 @@ regardless of this file — this changelog is for humans.
 
 ## [Unreleased]
 
+### Added
+- **Downloads in the file browser** — a download button on every row of Files & Config, plus one in
+  the editor header for the file you have open. A file streams as-is: any type, any size, no 1 MB
+  cap and no "binary file" refusal, because the editor's read and a download are different jobs. A
+  folder downloads as a `.tar.gz` built while it streams, so pulling a whole `addons/` or `cfg/`
+  directory is one click rather than a file at a time; it asks first, since a folder's finished size
+  is not knowable up front. Protected files (the `lgsm` tree, `serverfiles`) are downloadable —
+  protection is about deleting them. Needs the same permission as the rest of the file browser.
+  Reads happen **as the game user**, never as root: a symlink under that home reaches only what that
+  user could already read, and the path is re-checked on the host after the privilege drop.
+
 ### Fixed
 - **Running the installer the "other" way built a second panel instead of updating the first.** The
   update check asks whether there is an `app.py` and a unit file *where it is about to install* —
