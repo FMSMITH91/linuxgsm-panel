@@ -704,6 +704,24 @@ check("_newConsoleLines(_consoleLines, lines)" in _rc and "_consolePrimed" in _r
       "console: a poll appends what is new instead of rebuilding from its window",
       "refreshConsole no longer diffs against the scrollback — it is back to wiping every poll")
 
+# ── editor line numbers: the two halves must stay metrically identical ────────────────────────
+# The gutter is a separate element beside the textarea, so alignment depends entirely on both
+# having the same font, size and line-height — and on the textarea not soft-wrapping, since a
+# wrapped line occupies several rows and every number below it drifts. Both facts are easy to
+# break from a distance (a tweak to one selector, or dropping wrap="off"), and the failure is
+# visual and gradual rather than an error.
+_sfh = (TEMPLATES / "server_files.html").read_text(encoding="utf-8")
+check(".editor-wrap #editor, .editor-gutter" in _sfh,
+      "editor: the gutter and the textarea take their metrics from ONE shared rule",
+      "they are styled separately now, so the line numbers will drift from their lines")
+check('wrap="off"' in _sfh,
+      "editor: the textarea does not soft-wrap, so one line is one row",
+      'wrap="off" is gone — a wrapped long line pushes every number below it out of alignment')
+check("translateY" in _sf and "g.scrollTop = ta.scrollTop" not in _sf,
+      "editor: the gutter is translated, not scrolled",
+      "scrolling the gutter clamps at its own maximum, which is a line short of the textarea's "
+      "whenever a horizontal scrollbar is present")
+
 # ── report ──
 passed = sum(1 for c, _, _ in results if c)
 for c, name, detail in results:

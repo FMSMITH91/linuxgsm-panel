@@ -31,6 +31,44 @@
     border: 1px dashed var(--border); border-radius: 8px; color: var(--text-muted);
   }
   .fb-toolbar code { background: transparent; padding: 0; }
+  /* Editor + line-number gutter. Both sides MUST share font, size and line-height exactly or the
+     numbers drift from their lines further down the file — so the shared values live here once
+     rather than on each element. */
+  /* The WRAPPER owns the height and the resize handle, not the textarea. Left to itself the flex
+     row is as tall as its tallest child, and the gutter is as tall as the file — so a 400-line
+     config stretched the editor to 7,000px and nothing scrolled internally. Fixing the wrapper's
+     height makes both children scroll inside it, and moving `resize` here means dragging the
+     editor taller still keeps the numbers attached. */
+  .editor-wrap {
+    display: flex; align-items: stretch;
+    height: 26rem; min-height: 8rem; resize: vertical; overflow: hidden;
+    border: 1px solid var(--border); border-radius: 8px;
+    background: var(--bg-elevated);
+  }
+  /* Font, size and line-height must be IDENTICAL on both sides or the numbers drift from their
+     lines further down the file. --bs-font-monospace because Bootstrap's .font-monospace sets it
+     with !important on the textarea; naming a different stack here would silently lose. */
+  .editor-wrap #editor, .editor-gutter {
+    font-size: .78rem; line-height: 1.45;
+    font-family: var(--bs-font-monospace);
+    padding-top: .5rem; padding-bottom: .5rem; margin: 0;
+  }
+  .editor-gutter {
+    flex: 0 0 auto; min-width: 2.6rem; height: 100%; text-align: right;
+    padding-right: .45rem; padding-left: .45rem;
+    color: var(--text-muted); background: var(--bg-elevated);
+    border-right: 1px solid var(--border);
+    overflow: hidden; white-space: pre; user-select: none;
+    -webkit-user-select: none;   /* the numbers must not land in a copied selection */
+  }
+  /* The numbers live in an inner box that is TRANSLATED to follow the textarea — see syncGutter
+     for why scrolling the gutter itself lands a line out at the bottom of a file. */
+  .editor-gutter > div { will-change: transform; }
+  .editor-wrap #editor {
+    flex: 1 1 auto; height: 100%; border: 0; border-radius: 0; resize: none;
+    white-space: pre; overflow: auto; background: transparent;
+  }
+  .editor-wrap #editor:focus { box-shadow: none; background: transparent; }
   /* Command cells wrap at word/token boundaries (not between every character). */
   .cron-cmd { overflow-wrap: anywhere; white-space: pre-wrap; word-break: normal; }
   /* On phones the 4-column cron table can't fit, so stack each entry as a card — the command
@@ -147,7 +185,15 @@
               <button class="btn btn-outline-secondary btn-sm" data-action="closeEditor" title="Close"><i class="bi bi-x-lg"></i></button>
             </div>
           </div>
-          <textarea id="editor" class="form-control font-monospace" rows="20" style="font-size:.78rem;" spellcheck="false"></textarea>
+          {# Gutter + textarea share one scroll box. wrap="off" is what makes the numbers line up:
+             with soft wrap a single logical line can occupy several visual rows and every number
+             below it drifts. Config files are line-oriented, so scrolling sideways is the right
+             trade — and it is what every code editor does. #}
+          <div class="editor-wrap">
+            <div id="editor-gutter" class="editor-gutter" aria-hidden="true"></div>
+            <textarea id="editor" class="form-control font-monospace" rows="20" spellcheck="false"
+                      wrap="off" data-action="syncGutter" data-on="input"></textarea>
+          </div>
         </div>
         <div id="editor-empty">
           <i class="bi bi-file-earmark-text" style="font-size:2rem;opacity:.5;"></i>

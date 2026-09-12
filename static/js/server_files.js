@@ -213,10 +213,42 @@ function openFile(path){
     document.getElementById('editor-wrap').style.display='';
     document.getElementById('editor-path').textContent=path;
     document.getElementById('editor').value=d.content||'';
+    syncGutter();
     var edl=document.getElementById('editor-download');
     if(edl) edl.href=MOUNT+'/server/'+serverId+'/download?path='+encodeURIComponent(path);
   }).catch(()=>{});
 }
+// ── Editor line numbers ───────────────────────────────────────────────────────────────────────
+// A textarea cannot draw its own line numbers, so a gutter sits beside it and is kept in step by
+// hand: rebuilt when the line COUNT changes, and scrolled with the textarea. The two share font,
+// size and line-height from one CSS rule, and the textarea has wrap="off" — with soft wrap a long
+// line occupies several visual rows and every number below it drifts out of alignment.
+var _gutterLines = -1;
+function syncGutter(){
+  var ta = document.getElementById('editor'), g = document.getElementById('editor-gutter');
+  if (!ta || !g) return;
+  var inner = g.firstElementChild;
+  if (!inner) { inner = document.createElement('div'); g.appendChild(inner); }
+  // A trailing newline means an empty last line you can still type on, so it gets a number too.
+  var n = ta.value.split('\n').length;
+  if (n !== _gutterLines) {
+    _gutterLines = n;
+    var out = new Array(n);
+    for (var i = 0; i < n; i++) out[i] = i + 1;
+    inner.textContent = out.join('\n');
+  }
+  // TRANSLATE the numbers rather than scrolling the gutter. Scrolling clamps at the gutter's own
+  // maximum, and the two maxima are not the same: the textarea carries a horizontal scrollbar
+  // (wrap is off, and config files have long lines) which eats ~15px of ITS height, so at the very
+  // bottom of a file the gutter stopped a line short and every number sat off by one row. A
+  // transform has no maximum to clamp against, so it tracks exactly.
+  inner.style.transform = 'translateY(' + (-ta.scrollTop) + 'px)';
+}
+(function(){
+  var ta = document.getElementById('editor');
+  if (ta) ta.addEventListener('scroll', syncGutter);
+})();
+
 function closeEditor(){
   curFile=null;
   document.getElementById('editor-wrap').style.display='none';
