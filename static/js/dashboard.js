@@ -408,7 +408,44 @@ function copyAddr(addr) {
 }
 
 // Inline server actions (no page reload).
+// Restart and Stop disconnect whoever is playing, so they ask first. The server DETAIL page has
+// always confirmed them; the dashboard did not — and an inconsistency that points this way is the
+// dangerous one, because the dashboard is where you click fastest and the rows sit next to each
+// other. Stop had no confirmation here at all, which was worse than the reported Restart.
+//
+// No extra request: the row already carries data-name, and refreshStatus keeps data-players
+// current (-1 when the count is unknown), so the warning can say who is online from the DOM.
+function _actionRow(id) {
+  var row = document.querySelector('tr[data-server-id="' + id + '"]');
+  var n = row ? parseInt(row.getAttribute('data-players'), 10) : NaN;
+  return {
+    name: (row && row.getAttribute('data-name')) || ('server #' + id),
+    players: (isFinite(n) && n >= 0) ? n : null      // null = not known, so do not claim either way
+  };
+}
+function _playerNote(n) {
+  if (n === null) return '';                          // unknown: say nothing rather than guess
+  if (!n) return ' Nobody is connected right now.';
+  return ' ' + n + ' player' + (n === 1 ? '' : 's') + ' connected right now — they will be disconnected.';
+}
 function doAction(id, action, btn) {
+  if (action === 'restart' || action === 'stop') {
+    var info = _actionRow(id);
+    confirmDialog({
+      title: titleCase(action) + ' server',
+      icon: action === 'stop' ? 'stop-fill' : 'arrow-repeat',
+      confirmClass: action === 'stop' ? 'btn-danger' : 'btn-warning',
+      confirmLabel: titleCase(action),
+      // bodyText, not body: it is set with textContent, so a server named with an apostrophe or a
+      // stray < is shown literally and cannot reach the markup.
+      bodyText: titleCase(action) + ' "' + info.name + '"?' + _playerNote(info.players),
+      onConfirm: function () { _runAction(id, action, btn); }
+    });
+    return;
+  }
+  _runAction(id, action, btn);   // start is not destructive — no prompt
+}
+function _runAction(id, action, btn) {
   var original = btn.innerHTML;
   btn.disabled = true; btn.innerHTML = '<span class="spinner-border spinner-border-sm"></span>';
   fetch(MOUNT + '/api/server/' + id + '/action', {  // nosemgrep
@@ -487,11 +524,25 @@ function bulkAction(action) {
       .catch(() => toast('Bulk action failed', 'danger'))
       .finally(() => { btns.forEach(function (b) { b.disabled = false; }); });
   };
-  if (action === 'stop' || action === 'update') {
+  // Restart joined stop and update here: it disconnects every player on every selected server, so
+  // the one action that skipped the prompt was also the easiest to fire by accident.
+  if (action === 'stop' || action === 'update' || action === 'restart') {
+    // Total players across the selection, from the same live row attribute the per-row confirm
+    // uses. Summed only over rows that actually know their count.
+    var known = checks.map(function (c) {
+      var row = c.closest('tr');
+      var n = row ? parseInt(row.getAttribute('data-players'), 10) : NaN;
+      return (isFinite(n) && n >= 0) ? n : null;
+    }).filter(function (n) { return n !== null; });
+    var online = known.reduce(function (a, n) { return a + n; }, 0);
+    var note = (action === 'update' || !known.length || !online) ? ''
+      : ' ' + online + ' player' + (online === 1 ? '' : 's') + ' connected across them will be disconnected.';
     confirmDialog({
       title: titleCase(action) + ' ' + ids.length + ' server' + (ids.length === 1 ? '' : 's'),
-      icon: 'exclamation-triangle', confirmClass: 'btn-warning', confirmLabel: titleCase(action),
-      bodyText: 'Run "' + action + '" on ' + ids.length + ' server' + (ids.length === 1 ? '' : 's') + '?',
+      icon: 'exclamation-triangle',
+      confirmClass: action === 'stop' ? 'btn-danger' : 'btn-warning',
+      confirmLabel: titleCase(action),
+      bodyText: 'Run "' + action + '" on ' + ids.length + ' server' + (ids.length === 1 ? '' : 's') + '?' + note,
       onConfirm: run
     });
   } else {

@@ -670,6 +670,27 @@ check("webkitGetAsEntry" in _sf and "webkitRelativePath" in _sf,
       "uploads: folders arrive by both routes — dropped (webkitGetAsEntry) and picked (webkitRelativePath)",
       "one of the two folder-upload paths is gone")
 
+# ── dashboard: destructive actions must confirm, as the detail page has always done ────────────
+# Restart and Stop disconnect players. The server detail page confirms them; the dashboard did not,
+# which is the dangerous direction for the inconsistency to point — the dashboard is where the rows
+# sit side by side and you click fastest. Reported as "on the game server page ... restart ... showed
+# me a confirm box ... on the overall gameservers dashboard ... there was no confirm box". Stop had
+# none either, and bulk restart skipped it while bulk stop did not.
+_dash = (STATIC_JS / "dashboard.js").read_text(encoding="utf-8")
+_da_start = _dash.find("function doAction(")
+_da = _dash[_da_start:_dash.find("function _runAction(", _da_start)] if _da_start != -1 else ""
+check(bool(_da) and "confirmDialog" in _da and "'restart'" in _da and "'stop'" in _da,
+      "dashboard: per-row restart/stop ask before firing",
+      "doAction no longer confirms — a row click would stop a populated server with no prompt")
+check("_runAction" in _dash and _dash.count("function _runAction(") == 1,
+      "dashboard: the unconfirmed request path is reachable only through doAction",
+      "_runAction is missing or duplicated")
+_bulk_start = _dash.find("function bulkAction(")
+_bulk = _dash[_bulk_start:] if _bulk_start != -1 else ""
+check("action === 'restart'" in _bulk and "confirmDialog" in _bulk,
+      "dashboard: bulk restart confirms too (bulk stop always did)",
+      "bulk restart no longer joins stop/update in the confirm branch")
+
 # ── report ──
 passed = sum(1 for c, _, _ in results if c)
 for c, name, detail in results:
