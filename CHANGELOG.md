@@ -42,6 +42,15 @@ regardless of this file — this changelog is for humans.
   non-ASCII — through a real shell and requires each to come back verbatim as a single argument.
 
 ### Fixed
+- **The live console kept throwing away its history.** Three separate limits, and fixing any one
+  alone would not have been noticeable. The API only ever tailed **100 lines**; the poll **rebuilt**
+  the console from that window on every refresh, discarding whatever was on screen; and the
+  websocket handler — the path that actually runs on a busy server — had its own **500-line cap**
+  and its own rendering. The console now keeps a real scrollback: each poll contributes only the
+  lines that are new (found by overlapping its window with what is already shown), both append
+  paths share one buffer and one 5,000-line cap, and the default window is 250 lines rather than
+  100. A **Load older** button pulls a much deeper slice of the log when you need to look further
+  back than the page has been open.
 - **Running the installer the "other" way built a second panel instead of updating the first.** The
   update check asks whether there is an `app.py` and a unit file *where it is about to install* —
   but that location has already been decided by how the script was invoked: as root it looks under

@@ -670,6 +670,28 @@ check("webkitGetAsEntry" in _sf and "webkitRelativePath" in _sf,
       "uploads: folders arrive by both routes — dropped (webkitGetAsEntry) and picked (webkitRelativePath)",
       "one of the two folder-upload paths is gone")
 
+# ── console scrollback: three separate limits used to throw history away ───────────────────────
+# Reported as "the console sometimes clears out a lot of the old console". There were three causes,
+# and fixing any one alone would not have been noticeable: the API only tailed 100 lines, the poll
+# REBUILT the console from that window every time (innerHTML = ''), and the websocket handler —
+# the path that actually runs on a busy server — carried its own 500-line cap and its own
+# rendering. Both append paths share one buffer and one cap now.
+_sd = (STATIC_JS / "server_detail.js").read_text(encoding="utf-8")
+check("consoleEl.children.length > 500" not in _sd and "> 500" not in _sd,
+      "console: the websocket path no longer caps the scrollback at 500 lines",
+      "a second, smaller cap is back in server_detail.js — it silently truncates the history")
+check("_appendConsole" in _sd and _sd.count("function _appendConsole(") == 1,
+      "console: one append path, so the buffer and the DOM cannot drift",
+      "_appendConsole is missing or duplicated")
+# refreshConsole DOES wipe once, deliberately: the first poll adopts its (deeper) window in place
+# of the server-rendered seed. What must not come back is wiping on EVERY poll, so the assertion is
+# that the steady-state path goes through the overlap check and that the wipe stays behind the
+# one-shot primed flag.
+_rc = _sd[_sd.find("function refreshConsole("):_sd.find("function loadMoreConsole(")]
+check("_newConsoleLines(_consoleLines, lines)" in _rc and "_consolePrimed" in _rc,
+      "console: a poll appends what is new instead of rebuilding from its window",
+      "refreshConsole no longer diffs against the scrollback — it is back to wiping every poll")
+
 # ── report ──
 passed = sum(1 for c, _, _ in results if c)
 for c, name, detail in results:
