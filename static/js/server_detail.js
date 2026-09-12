@@ -226,53 +226,157 @@ socket.on('console_output', function(data) {
   }
 });
 
+// Live output pushed over the websocket. This is the path that actually runs on a busy server, and
+// it used to carry its OWN 500-line cap and its own rendering — so however much history the poll
+// provided, the next chat message trimmed the console back to 500 lines. It also appended without
+// telling the scrollback buffer, which would then let the next poll re-append the same lines as if
+// they were new. Both paths go through _appendConsole now: one cap, one buffer, no duplicates.
 function appendConsole(text) {
   var stick = consoleAtBottom();   // capture BEFORE appending
-  var lines = text.split('\n');
-  for (var i = 0; i < lines.length; i++) {
-    if (lines[i].trim()) {
-      var div = document.createElement('div');
-      div.className = 'console-line';
-      div.textContent = lines[i];
-      consoleEl.appendChild(div);
-    }
-  }
-  // Keep console from growing too large
-  while (consoleEl.children.length > 500) {
-    consoleEl.removeChild(consoleEl.firstChild);
-  }
+  _appendConsole(String(text).split('\n').filter(function(l){ return l.trim(); }));
   if (stick) stickConsole();       // only auto-follow if they were at the bottom
 }
 
 var _consoleSig = null;
+// Every line currently on screen, oldest first. The console used to be rebuilt from each poll's
+// response — `innerHTML = ''` then re-render — so what you could see was never more than the
+// server's tail window, and everything older was dropped on every refresh. This is the scrollback
+// instead: each poll only CONTRIBUTES the lines that are new, so history accumulates in the
+// browser and the poll stays small.
+var _consoleLines = [];
+// False until the first poll has replaced the server-rendered seed with its deeper window.
+var _consolePrimed = false;
+// Beyond this the oldest lines are dropped. A console-line div each, so this is a real DOM cost —
+// 5000 is roughly an evening of a busy server and still scrolls smoothly.
+var CONSOLE_MAX_LINES = 5000;
 
-function refreshConsole(forceScroll) {
-  // The periodic backup refresh wipes + rebuilds the console; don't yank the user
-  // to the bottom unless they were already there (or it's the initial load).
+// Seed the buffer from what the SERVER already rendered into the page. Without this the first poll
+// sees an empty buffer, finds no overlap, and appends its whole window on top of the identical
+// lines already on screen — the console would open showing everything twice.
+(function seedConsoleBuffer(){
+  if (!consoleEl) return;
+  _consoleLines = Array.prototype.map.call(consoleEl.querySelectorAll('.console-line'),
+                                           function(el){ return el.textContent; });
+})();
+
+// How much of `incoming` is genuinely new, given what is already on screen.
+//
+// The poll returns a SLIDING WINDOW of the log's tail, so consecutive responses overlap heavily —
+// appending all of it would duplicate almost everything. Find the longest suffix of what we have
+// that is also a prefix of what arrived, and keep only the remainder. When nothing matches, the
+// log moved further than one window between polls (a very busy server, a long pause, a rotation),
+// and the whole batch is new.
+function _eqRange(a, ai, b, bi, n) {
+  for (var i = 0; i < n; i++) if (a[ai + i] !== b[bi + i]) return false;
+  return true;
+}
+function _newConsoleLines(have, incoming) {
+  if (!incoming.length) return [];
+  if (!have.length) return incoming;
+  // Find where our last line sits in the incoming window, searching from ITS end so the most
+  // recent occurrence wins (log lines repeat — "Player connected" a hundred times a night), then
+  // verify the run leading up to it matches what we have. Everything after that point is new.
+  //
+  // Searching this way covers both shapes in one pass. The window usually CONTINUES from where we
+  // are, and our last line lands near the window's start. But it can also reach FURTHER BACK than
+  // we do and contain everything we hold — which is what happens on first load, where the page is
+  // server-rendered with a short tail and the first poll then asks for a much longer one. Handling
+  // only the first shape duplicated every server-rendered line on every page load.
+  var lastHave = have[have.length - 1];
+  for (var k = incoming.length - 1; k >= 0; k--) {
+    if (incoming[k] !== lastHave) continue;
+    var n = Math.min(have.length, k + 1);
+    if (_eqRange(have, have.length - n, incoming, k + 1 - n, n)) return incoming.slice(k + 1);
+  }
+  // Nothing in common: the log moved further than a whole window between polls, or it rotated.
+  return incoming;
+}
+
+function _appendConsole(lines) {
+  if (!lines.length) return;
+  var frag = document.createDocumentFragment();
+  lines.forEach(function(line) {
+    var div = document.createElement('div');
+    div.className = 'console-line';
+    div.textContent = line;
+    frag.appendChild(div);
+  });
+  consoleEl.appendChild(frag);
+  _consoleLines = _consoleLines.concat(lines);
+  // Trim the DOM and the buffer INDEPENDENTLY, each against its own length. They are deliberately
+  // not assumed to be in step: sendCommand echoes the typed command straight into the console as a
+  // line that was never in the log, so a shared counter would remove the wrong number of nodes.
+  // The buffer is only ever consulted for its tail (overlap detection), so dropping from its front
+  // is always safe.
+  if (_consoleLines.length > CONSOLE_MAX_LINES) {
+    _consoleLines.splice(0, _consoleLines.length - CONSOLE_MAX_LINES);
+  }
+  while (consoleEl.childElementCount > CONSOLE_MAX_LINES && consoleEl.firstChild) {
+    consoleEl.removeChild(consoleEl.firstChild);
+  }
+}
+
+function refreshConsole(forceScroll, wantLines) {
+  // Don't yank the user to the bottom unless they were already there (or it's the initial load).
   var stick = forceScroll || consoleAtBottom();
-  fetch(MOUNT + '/api/console/' + serverId)
+  fetch(MOUNT + '/api/console/' + serverId + (wantLines ? '?lines=' + wantLines : ''))
     .then(r => r.json())
     .then(data => {
       var lines = (data.lines || []).filter(function(l) { return l.trim(); });
-      // Only rebuild when the log actually changed — otherwise leave the console exactly as
-      // it is (no 30s wipe-and-rebuild flicker while a server sits idle).
+      // Nothing changed since last time — leave the console exactly as it is (no flicker while a
+      // server sits idle).
       var sig = lines.length + ' ' + (lines[lines.length - 1] || '');
       if (sig === _consoleSig && !forceScroll) return;
       _consoleSig = sig;
-      consoleEl.innerHTML = '';
-      lines.forEach(function(line) {
-        var div = document.createElement('div');
-        div.className = 'console-line';
-        div.textContent = line;
-        consoleEl.appendChild(div);
-      });
+      if (!_consolePrimed) {
+        // FIRST poll after page load. The page was server-rendered with a short tail, and this
+        // window reaches much further back — that extra history is exactly what we want on screen,
+        // and appending only "what is newer than the seed" would throw it away (the first version
+        // of this did, and opened the console showing three lines). The window is the tail of the
+        // same file, so it is a superset of the seed: adopt it whole, once.
+        _consolePrimed = true;
+        _consoleLines = [];
+        consoleEl.innerHTML = '';
+        _appendConsole(lines);
+      } else {
+        _appendConsole(_newConsoleLines(_consoleLines, lines));
+      }
       if (stick) stickConsole();
     })
     .catch(() => {});
 }
 
+// "Load older" — ask for a much bigger tail of the log and show that.
+//
+// It REPLACES the scrollback rather than trying to splice the deeper window in around what is
+// already there. Splicing was the first attempt and it was wrong: the on-screen buffer starts with
+// lines the deeper window does not contain (the server-rendered seed, the local command echo), so
+// no overlap matched and every line was appended twice — 1022 duplicates in the first test of it.
+// A deeper window of the same file is simply a superset of the tail, so showing it as-is is both
+// correct and what the button says. The only thing this can drop is a websocket line not yet
+// flushed to the log file, which the next poll brings back.
+function loadMoreConsole(btn) {
+  var orig = btn ? btn.innerHTML : '';
+  if (btn) { btn.disabled = true; btn.innerHTML = '<span class="spinner-border spinner-border-sm"></span>'; }
+  fetch(MOUNT + '/api/console/' + serverId + '?lines=2000')
+    .then(r => r.json())
+    .then(function(data) {
+      var older = (data.lines || []).filter(function(l) { return l.trim(); });
+      _consoleLines = [];
+      consoleEl.innerHTML = '';
+      _appendConsole(older);
+      _consoleSig = null;   // let the next poll re-evaluate against the new buffer
+      if (window.toast) toast('Loaded ' + older.length + ' lines from the log', 'success');
+    })
+    .catch(function(){ if (window.toast) toast('Could not load more console output', 'danger'); })
+    .finally(function(){ if (btn) { btn.disabled = false; btn.innerHTML = orig; } });  // nosemgrep
+}
+
 function clearConsole() {
   consoleEl.innerHTML = '';
+  _consoleLines = [];
+  _consoleSig = null;      // so the next poll repaints rather than deciding nothing changed
+  _consolePrimed = false;  // and repaints with a full window, not just what arrived since
 }
 
 function sendCommand(ev) {

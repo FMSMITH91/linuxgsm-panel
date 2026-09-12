@@ -278,6 +278,13 @@ _install_alloc_lock = threading.Lock()
 # MAX_CONTENT_LENGTH, so an oversized body is rejected before it's read).
 _MAX_UPLOAD_BYTES = 50 * 1024 * 1024
 
+# Console log window. The default is what each poll pulls back; the browser stitches successive
+# windows into a much longer scrollback of its own, so this is sized to cover the gap between two
+# polls rather than to be the whole history. The ceiling bounds an explicit ?lines= request — the
+# "load more" control asks for it once, and it is still only a `tail`.
+_CONSOLE_LINES = 250
+_CONSOLE_LINES_MAX = 2000
+
 # Short-lived cache of each remote's listening ports (the dashboard status poll). Keyed by
 # remote id -> (expiry_epoch, set_of_ports). Collapses the thundering herd: a servers_changed
 # broadcast makes EVERY open dashboard call /api/servers at once, and without this each one
@@ -8377,9 +8384,21 @@ def register_routes(app):
         if not current_user.is_superadmin and not has_permission(current_user, VIEW_CONSOLE):
             return jsonify({"error": "Permission denied", "lines": []}), 403
         remote = gs.remote
+        # How much of the log to return. This was a hard `tail -100`, which is where "the console
+        # clears out a lot of the old console" came from: 100 lines is a minute or two of chat and
+        # connects on a busy server, and the poll returns a SLIDING WINDOW, so anything older had
+        # already fallen off before the browser ever saw it. The browser keeps its own scrollback
+        # now (it appends what is new instead of re-rendering), so this window only has to be big
+        # enough that a gap between two polls is still covered — and the FIRST load has some
+        # history to show. Clamped because it is a caller-supplied number that sizes a read.
+        try:
+            want = int(request.args.get("lines") or _CONSOLE_LINES)
+        except (TypeError, ValueError):
+            want = _CONSOLE_LINES
+        want = max(50, min(want, _CONSOLE_LINES_MAX))
         try:
             log_path = gs.console_log
-            out, err, rc = run_command(remote, f"tail -100 {log_path} 2>/dev/null", timeout=15)
+            out, err, rc = run_command(remote, f"tail -{want} {log_path} 2>/dev/null", timeout=15)
             lines = _clean_console_text(out).split("\n") if rc == 0 else []
         except Exception:
             lines = []
