@@ -8,6 +8,18 @@ regardless of this file — this changelog is for humans.
 ## [Unreleased]
 
 ### Added
+- **Drag and drop now takes folders, and actually works.** Two separate problems. Dropping a
+  *folder* never worked: the handler read `dataTransfer.files`, which for a folder is a single
+  contentless entry — folder contents are only reachable through `webkitGetAsEntry()`, which is now
+  walked recursively, so nested subfolders upload with their structure intact (the server already
+  created missing parent directories, so nothing changed behind the API). And dropping a *file*
+  often appeared broken: the drop target was the file-list panel alone, a couple of centimetres
+  tall when the listing is short, and nothing suppressed the browser's own drop behaviour — so a
+  near miss made the browser navigate the tab to the dropped file. The whole File Browser card is
+  the target now, the page suppresses the default everywhere, and a miss does nothing instead of
+  navigating away. Reported on Linux, but it behaved the same in every browser.
+- **An "Upload folder" button**, for when dragging between the desktop and the browser misbehaves
+  (common on Wayland). Same recursive upload, via the file picker instead of a drag.
 - **Downloads in the file browser** — a download button on every row of Files & Config, plus one in
   the editor header for the file you have open. A file streams as-is: any type, any size, no 1 MB
   cap and no "binary file" refusal, because the editor's read and a download are different jobs. A

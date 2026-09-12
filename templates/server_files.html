@@ -6,7 +6,10 @@
   .fb-key { font-family: ui-monospace, 'JetBrains Mono', monospace; font-size: .72rem; color: var(--text-muted); }
   .cfg-acc-header { background: var(--bg-elevated); color: var(--text-heading); cursor: pointer; border: none; }
   .cfg-acc-header:hover { background: var(--border); }
-  .fb-panel { position: relative; border: 1px solid var(--border); border-radius: 8px; overflow: hidden; }
+  .fb-panel { border: 1px solid var(--border); border-radius: 8px; overflow: hidden; }
+  /* The drop target is the whole card, not just the file list — see the drop wiring in
+     server_files.js for why a small target was the actual "drag and drop is broken" bug. */
+  #file-browser { position: relative; }
   #file-list { max-height: 460px; overflow-y: auto; }
   #file-list .list-group-item { background: transparent; border-color: var(--border); padding: .4rem .7rem; }
   #file-list .list-group-item:hover { background: var(--bg-elevated); }
@@ -21,7 +24,7 @@
     background: rgba(16,185,129,.14); border: 2px dashed var(--accent); border-radius: 8px;
     color: var(--text-heading); font-weight: 600; font-size: .85rem;
   }
-  #drop-zone.dragging #drop-overlay { display: flex; }
+  #file-browser.dragging #drop-overlay { display: flex; }
   #editor-empty {
     height: 100%; min-height: 340px; display: flex; flex-direction: column;
     align-items: center; justify-content: center; text-align: center;
@@ -113,17 +116,24 @@
         <i class="bi bi-upload"></i> Upload
       </button>
       <input type="file" id="upload-input" multiple style="display:none;" data-action="doUpload" data-args='["@event"]' data-on="change">
+      {# The click path for a whole folder. Dragging between the desktop and the browser is not
+         always reliable (notably on Linux/Wayland), so the picker is the dependable route. #}
+      <button class="btn btn-sm btn-outline-secondary" data-action="_clickUploadDir"
+              title="Upload a whole folder, including its subfolders">
+        <i class="bi bi-folder-plus"></i> Upload folder
+      </button>
+      <input type="file" id="upload-dir-input" webkitdirectory directory multiple style="display:none;" data-action="doUploadDir" data-args='["@event"]' data-on="change">
     </div>
   </div>
   <div class="card-body">
+    <div id="drop-overlay"><span><i class="bi bi-cloud-upload" style="font-size:1.4rem;"></i><br>Drop files or folders to upload to <code id="upload-dest">home</code></span></div>
     <div class="row g-3">
       <div class="col-lg-5">
         <div id="drop-zone" class="fb-panel">
           <div id="file-list" class="list-group list-group-flush"></div>
-          <div id="drop-overlay"><span><i class="bi bi-cloud-upload" style="font-size:1.4rem;"></i><br>Drop to upload to <code id="upload-dest">home</code></span></div>
         </div>
         <div id="upload-status" class="small mt-2"></div>
-        <div class="text-secondary mt-1" style="font-size:.66rem;"><i class="bi bi-info-circle"></i> Tip: drag files onto the list to upload. <i class="bi bi-shield-lock"></i> marks files protected from deletion. <i class="bi bi-download"></i> downloads a file, or a folder as .tar.gz.</div>
+        <div class="text-secondary mt-1" style="font-size:.66rem;"><i class="bi bi-info-circle"></i> Tip: drag files <em>or folders</em> anywhere onto this card to upload (subfolders included), or use the buttons above. <i class="bi bi-shield-lock"></i> marks files protected from deletion. <i class="bi bi-download"></i> downloads a file, or a folder as .tar.gz.</div>
       </div>
       <div class="col-lg-7">
         <div id="editor-wrap" style="display:none;">
