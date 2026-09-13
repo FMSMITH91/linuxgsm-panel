@@ -11,7 +11,6 @@ import terminal
 import tempfile
 import threading
 import time
-from pathlib import Path
 
 import paramiko
 
@@ -3114,34 +3113,59 @@ LGSM_COMMON_DEPS = (
 )
 
 
-_DEPS_CSV_CACHE = {"data": None}
+_DEPS_CSV_CACHE = {}
 
 
-def _load_deps_csv():
-    """Parse LinuxGSM's bundled ubuntu-24.04.csv into {key: [packages]}.
-    Keys are 'all', 'steamcmd', and each game shortname."""
-    if _DEPS_CSV_CACHE["data"] is not None:
-        return _DEPS_CSV_CACHE["data"]
-    data = {}
-    path = Path(__file__).parent / "lgsm" / "data" / "ubuntu-24.04.csv"
+# Per-distro package lists, keyed by slug — one host may be 22.04 and another 24.04.
+_OS_SLUG_CACHE = {}
+
+
+def host_os_slug(server):
+    """The host's '<id>-<version>' from /etc/os-release ('ubuntu-22.04', 'debian-12'), or None.
+
+    LinuxGSM names its package lists exactly this way, so the slug IS the filename. Cached per
+    host: a box does not change release between two package installs, and this would otherwise be
+    an extra SSH round trip on every install.
+    """
+    key = id(server) if not hasattr(server, "id") else ("srv", getattr(server, "id", None))
+    if key in _OS_SLUG_CACHE:
+        return _OS_SLUG_CACHE[key]
+    slug = None
     try:
-        with open(path) as f:
-            for line in f:
-                parts = [p.strip() for p in line.strip().split(",") if p.strip()]
-                if parts:
-                    data[parts[0]] = parts[1:]
+        out, _, rc = run_command(
+            server,
+            '. /etc/os-release 2>/dev/null; printf %s "${ID}-${VERSION_ID}"',
+            timeout=10)
+        cand = (out or "").strip().lower()
+        # Validated by lgsm_data before it can reach a URL; this is just the cheap early reject.
+        if rc == 0 and 3 < len(cand) < 24:
+            slug = cand
     except Exception:
-        data = {}
-    _DEPS_CSV_CACHE["data"] = data
+        _log.debug("could not read the host's os-release", exc_info=True)
+    _OS_SLUG_CACHE[key] = slug
+    return slug
+
+
+def _load_deps_csv(os_slug=None):
+    """LinuxGSM's package list for this host's distro, as {key: [packages]}; keys are 'all',
+    'steamcmd', and each game shortname. Fetched and cached rather than committed here — see
+    lgsm_data — and chosen per distro rather than always Ubuntu 24.04."""
+    import lgsm_data
+    name = lgsm_data.deps_name(os_slug)
+    if _DEPS_CSV_CACHE.get(name) is not None:
+        return _DEPS_CSV_CACHE[name]
+    data = lgsm_data.deps(os_slug)
+    if data:                       # never memoise a failed fetch — a retry must be able to win
+        _DEPS_CSV_CACHE[name] = data
     return data
 
 
-def deps_for_game(game_type):
-    """Exact packages LinuxGSM needs for a game on Ubuntu 24.04: the 'all' base
+def deps_for_game(game_type, os_slug=None):
+    """Exact packages LinuxGSM needs for a game on THIS HOST'S distro: the 'all' base
     deps + steamcmd deps + the game's own extra deps (e.g. cod → libstdc++5:i386,
     mc → openjdk). Returns (packages, needs_steamcmd) — steamcmd is handled
     separately because it lives in `multiverse` and needs its EULA pre-accepted."""
-    csv = _load_deps_csv()
+    csv = _load_deps_csv(os_slug)
     pkgs = []
     needs_steamcmd = False
     for key in ("all", "steamcmd", game_type or ""):
@@ -3157,7 +3181,8 @@ def deps_for_game(game_type):
 
 
 def install_game_dependencies(server, game_type=None, extra=""):
-    """Install the exact LinuxGSM dependencies for a game (from ubuntu-24.04.csv),
+    """Install the exact LinuxGSM dependencies for a game (from LinuxGSM's list for this host's
+    distro — a 22.04 box gets 22.04's packages, not 24.04's),
     plus any extras, as root. Falls back to the common set if the CSV is missing.
     Enables i386 + universe + multiverse first, then installs the batch, and if that
     fails (apt-get install is atomic — one unavailable package aborts everything)
@@ -3166,7 +3191,7 @@ def install_game_dependencies(server, game_type=None, extra=""):
     specially: it's in `multiverse` and its Steam license must be pre-accepted via
     debconf or apt hangs waiting for interactive input."""
     if game_type:
-        per_game, needs_steamcmd = deps_for_game(game_type)
+        per_game, needs_steamcmd = deps_for_game(game_type, host_os_slug(server))
     else:
         per_game, needs_steamcmd = [], True  # unknown game → make sure steamcmd is present
     # A retry may pass "steamcmd" back via `extra` (LinuxGSM lists it as missing).

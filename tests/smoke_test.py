@@ -32,6 +32,24 @@ _cfg = load_config()
 _cfg["setup_complete"] = True
 save_config(_cfg)
 
+# LinuxGSM's serverlist is fetched at runtime rather than committed (see lgsm_data), and this
+# suite runs with outbound access BLOCKED — as it should, since it must not depend on GitHub. Seed
+# the cache so the game list is populated, otherwise every game_type validation below fails and the
+# install/import assertions fail for a reason that has nothing to do with what they test.
+import lgsm_data as _lgsm_data
+import tempfile as _lgsm_tempfile
+_lgsm_data._CACHE_DIR = _lgsm_data.Path(_lgsm_tempfile.mkdtemp())
+_lgsm_data._CACHE_DIR.mkdir(parents=True, exist_ok=True)
+(_lgsm_data._CACHE_DIR / _lgsm_data.SERVERLIST).write_text(
+    "shortname,gameservername,gamename,os\n"
+    "csgo,csgoserver,Counter-Strike: Global Offensive,ubuntu-24.04\n"
+    "gmod,gmodserver,Garry's Mod,ubuntu-24.04\n"
+    "cod,codserver,Call of Duty,ubuntu-24.04\n"
+    "rust,rustserver,Rust,ubuntu-24.04\n", encoding="utf-8")
+(_lgsm_data._CACHE_DIR / _lgsm_data.DEPS).write_text(
+    "all,bc,binutils,curl\nsteamcmd,lib32gcc-s1,steamcmd\ncsgo,lib32tinfo6\n", encoding="utf-8")
+_lgsm_data._mem.clear()
+
 from app import create_app
 from models import db, User, Group, RemoteServer, GameServer, SetupState, CustomCommand
 import auth

@@ -182,6 +182,17 @@
       "GET"
     ]
   },
+  "/api/lgsm-data/refresh": {
+    "endpoint": "api_lgsm_data_refresh",
+    "guards": [
+      "utils.py:decorated_view(super_admin)",
+      "auth.py:decorated_function(super_admin)",
+      "view:api_lgsm_data_refresh"
+    ],
+    "methods": [
+      "POST"
+    ]
+  },
   "/api/notifications/test": {
     "endpoint": "notifications_test",
     "guards": [

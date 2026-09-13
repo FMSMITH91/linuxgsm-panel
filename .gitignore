@@ -38,3 +38,7 @@ Thumbs.db
 *~
 .idea/
 .vscode/
+
+# LinuxGSM's own data files, fetched at runtime and cached here rather than vendored
+# (see lgsm_data.py). They belong to LinuxGSM and go stale the moment they are committed.
+data/lgsm/

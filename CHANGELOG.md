@@ -41,6 +41,15 @@ regardless of this file — this changelog is for humans.
   on stdin, because a download over SSH gets parsed twice and that is where quoting bugs hide.
 
 ### Changed
+- **LinuxGSM's data files are no longer committed here.** `lgsm/data/serverlist.csv` (every
+  supported game) and `lgsm/data/ubuntu-24.04.csv` (each game's apt packages) belong to LinuxGSM,
+  and vendoring them froze the panel's game list at whatever upstream shipped the day the copy was
+  taken — it was already **two games behind** by the time this replaced it, and the only way to add
+  a newly-supported game was a panel release. They are fetched from LinuxGSM's repository and
+  cached under `data/` (git-ignored, survives updates, refreshed weekly), so new games appear on
+  their own. A response that is not the file we asked for — a captive portal's login page, a
+  truncated body — is never cached, a stale copy is served when a refresh fails, and if there is no
+  copy at all the install page says so and offers a Retry instead of rendering an empty menu.
 - **Uploads are roughly an order of magnitude faster**, which matters most for a folder of many
   small files. Two things were wrong, and both were latency rather than bandwidth. Writing one file
   took at least **three SSH round trips** (create the directory, send a base64 chunk, decode it) —
@@ -59,6 +68,15 @@ regardless of this file — this changelog is for humans.
   non-ASCII — through a real shell and requires each to come back verbatim as a single argument.
 
 ### Fixed
+- **Every host was given Ubuntu 24.04's package list, whatever it was actually running.** LinuxGSM
+  publishes a dependency list per distro release — `ubuntu-22.04.csv`, `ubuntu-26.04.csv`,
+  `debian-12.csv` and twenty more — and the panel hard-coded the 24.04 one. The panel supports
+  22.04, 24.04 and 26.04, so this was not hypothetical: on **22.04**, Garry's Mod silently missed
+  `libtinfo5:i386`, and Minecraft asked for `openjdk-25-jre`, which does not exist on that release
+  — and `apt-get install` is atomic, so one unavailable package takes the whole batch down. The
+  panel now reads the host's own `/etc/os-release` and fetches that distro's list, falling back to
+  the default for a distro LinuxGSM does not publish. The slug comes from the remote host and is
+  interpolated into a URL, so it is validated against LinuxGSM's exact filename shape first.
 - **Start/Stop/Restart on Files & Config reported a failure right after reporting success.** The
   action had actually worked. `server_actions.js` is shared by the server detail page and Files &
   Config, but it called `pollStats`, which is defined only in `server_detail.js` — a script Files &
