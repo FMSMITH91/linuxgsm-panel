@@ -16,6 +16,7 @@ import sys
 from types import SimpleNamespace as NS
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+from panel.ops import ssh_manager as _smmod   # stub seam: reached by module, not bound
 
 # ── Where a panel module's SOURCE lives ────────────────────────────────────────────────────────
 # Several gates below read module source as text (grep-style checks, AST scans). They used to
@@ -53,8 +54,10 @@ from panel.security import privileged as _privmod
 from panel.ops import ssh_manager as sm
 from panel.services import notifications as N
 from panel.ops import system_ops as SO
-from app import (password_problem, _int_or, _valid_ip_or_cidr, _whitelisted, _parse_tg_command,
-    _tg_command_arg, _valid_hex_color, _clean_console_text, _apply_user_server_order)
+from app import (password_problem, _int_or, _valid_ip_or_cidr, _parse_tg_command,
+    _tg_command_arg, _valid_hex_color, _clean_console_text)
+from panel.db.prefs import (_apply_user_server_order)
+from panel.services.monitoring import (_whitelisted)
 from panel.db.prefs import (_apply_user_order)
 from panel.security.auth import can_access_remote, client_ip
 
@@ -2672,7 +2675,7 @@ try:
     _app._remote_listening_ports(_rem)   # within TTL → cache hit, no 2nd ssh
     check("portscan: parses listening ports", 27015 in _p1 and 22 in _p1 and 27016 in _p1)
     check("portscan: second concurrent poll served from cache (one ssh)", _scan_n["n"] == 1)
-    _app._invalidate_port_scan(99)
+    _smmod._invalidate_port_scan(99)
     _app._remote_listening_ports(_rem)   # invalidated → re-scans
     check("portscan: invalidate forces a fresh scan", _scan_n["n"] == 2)
     # A failed scan (empty output) must NOT be cached, so a blip doesn't pin servers offline.
@@ -3513,7 +3516,6 @@ for p in (config.CRED_KEY_FILE, config.SECRET_FILE, config.CONFIG_FILE):
 
 # ── Notifications: SSRF guards, provider validation, and event-key wiring ──
 import pathlib as _pl   # noqa: E402
-import re as _re        # noqa: E402
 
 # Discord webhook is rebuilt onto a CONSTANT host from a validated id/token (no user-controlled host).
 check("notify: valid discord webhook is accepted + kept on discord.com",
@@ -4306,7 +4308,6 @@ check("eventlet's deprecation banner no longer prints on every start",
 import importlib.machinery as _machinery
 import importlib.util as _ilu
 from panel.security import privileged as _priv
-import io as _io
 import shutil as _shutil
 import tarfile as _tarfile
 import tempfile as _tempfile

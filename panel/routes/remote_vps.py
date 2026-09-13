@@ -10,11 +10,15 @@ from panel.db.models import (GameServer, db)
 from panel.ops import (system_ops as so)
 from panel.ops.ssh_manager import (change_ssh_port, close_connection, detect_game_ports,
     host_specs, is_player_queryable as sm_is_player_queryable, player_count as sm_player_count,
-    remote_os_check_updates, remote_os_run_updates, remote_os_update_start,
-    remote_os_update_status, remote_public_ssh_status, remote_reboot, remote_reboot_required,
-    remote_set_public_ssh, remote_ufw_allow_game_port, remote_ufw_allow_game_ports,
-    remote_ufw_close_port, remote_ufw_delete_rule, remote_ufw_open_port, remote_ufw_status,
-    remote_uptime)
+    remote_os_run_updates, remote_os_update_start, remote_os_update_status,
+    remote_public_ssh_status, remote_reboot, remote_reboot_required, remote_set_public_ssh,
+    remote_ufw_allow_game_port, remote_ufw_allow_game_ports, remote_ufw_close_port,
+    remote_ufw_delete_rule, remote_ufw_open_port, remote_ufw_status, remote_uptime)
+# Reached through the MODULE, not bound by name: these are the seams the test suite
+# monkeypatches. `from x import f` copies the function object, so a stub on the source
+# module would never be seen — attribute access resolves at call time and is stable
+# however the handler moves.
+from panel.ops import ssh_manager as _sm
 from panel.security.auth import (INSTALL_SERVER, MANAGE_REMOTES, can_access_remote, get_game,
     get_remote, has_permission, log_action, permission_required, server_access_required)
 import time
@@ -278,7 +282,7 @@ def register(app):
         remote = get_remote(remote_id)
         try:
             result = (so.os_update_available(refresh=True) if remote.is_local
-                      else remote_os_check_updates(remote))
+                      else _sm.remote_os_check_updates(remote))
         except ConnectionError:
             # Same reasoning as the "ok" flag below — a host we could not ask is not a host that is
             # up to date. The difference is that this one could not be asked at all.

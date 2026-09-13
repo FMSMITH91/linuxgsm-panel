@@ -15,6 +15,8 @@ import os
 import sys
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+from panel.ops import ssh_manager as _smmod   # the stub seam: stubbed by MODULE,
+# because every caller now reaches these through the module rather than binding them.
 
 from panel.core.config import DATA_DIR, DB_PATH, SECRET_FILE, CRED_KEY_FILE, CONFIG_FILE
 
@@ -260,7 +262,7 @@ try:
     # was in the branch AFTER the call, not in the call.
     from panel.db.models import GameServer as _UGS
     _uapp = sys.modules["app"]      # _appmod is not bound until later in this file
-    _u_orig = _uapp.run_privileged
+    _u_orig = _smmod.run_privileged
     try:
         for _rc, _expect_gone, _label in ((1, False, "generic failure"),
                                           (4, False, "unexpected code"),
@@ -273,7 +275,7 @@ try:
                             game_type="gmod", port=28900 + _rc, installed=True, status="offline")
                 db.session.add(_tmp); db.session.commit()
                 _tid = _tmp.id
-            _uapp.run_privileged = (lambda rc: (lambda *a, **k: ("", "userdel: boom", rc)))(_rc)
+            _smmod.run_privileged = (lambda rc: (lambda *a, **k: ("", "userdel: boom", rc)))(_rc)
             # X-Requested-With is what the page's fetch wrapper sends, and what _wants_json()
             # keys on — without it this endpoint answers with a flash+redirect instead.
             _resp = c.post("/servers/%d/delete" % _tid, json={},
@@ -290,7 +292,7 @@ try:
                 _left = _UGS.query.get(_tid)
                 if _left: db.session.delete(_left); db.session.commit()
     finally:
-        _uapp.run_privileged = _u_orig
+        _smmod.run_privileged = _u_orig
 
     # Liveness probe: unauthenticated, returns 200 + {"status":"ok"}, works pre-login.
     hz = app.test_client().get("/healthz")
@@ -1064,7 +1066,6 @@ try:
     # ever comes back. run_command is stubbed so the port scan does no real SSH.
     from sqlalchemy import event as _sa_event
     _appmod = sys.modules["app"]
-    from panel.routes import server_detail as _sd_mod
     from panel.ops import ssh_manager as _sm_mod   # the port-scan cache lives here now
     with app.app_context():
         for _r in range(5):
@@ -1092,8 +1093,8 @@ try:
     def _count_query(*_a, **_k):
         _Q["n"] += 1
 
-    _orig_rc = _appmod.run_command
-    _appmod.run_command = lambda *a, **k: ("", "", 0)   # port scan: no real SSH, no matches
+    _orig_rc = _smmod.run_command
+    _smmod.run_command = lambda *a, **k: ("", "", 0)   # port scan: no real SSH, no matches
     _sa_event.listen(_engine, "after_cursor_execute", _count_query)
     try:
         def _qcount(path, client=None):
@@ -1116,8 +1117,8 @@ try:
         # and re-fetch the server + host, so it cost 2 queries PER SERVER — 104 at 50 servers, and
         # ~1000 on a big install, every poll. It is the most expensive thing to get wrong here
         # because nobody has to click anything for it to run.
-        _sv_slm2 = _appmod.server_live_metrics
-        _appmod.server_live_metrics = lambda *a, **k: {"game_procs": 0, "cpu_percent": 1.0}
+        _sv_slm2 = _smmod.server_live_metrics
+        _smmod.server_live_metrics = lambda *a, **k: {"game_procs": 0, "cpu_percent": 1.0}
         try:
             _met_q, _met_code = _qcount("/api/dashboard/metrics")
             check("perf: /api/dashboard/metrics renders with 50 servers", _met_code == 200,
@@ -1173,7 +1174,7 @@ try:
                   _umet_code == 200 and _umet_q <= 20,
                   "%d queries (status %d)" % (_umet_q, _umet_code))
         finally:
-            _appmod.server_live_metrics = _sv_slm2
+            _smmod.server_live_metrics = _sv_slm2
 
         # Regression: the /api/servers status poll must NOT clobber an in-progress install's
         # status. The port scan (stubbed empty here) finds nothing listening for a still-installing
@@ -1194,7 +1195,7 @@ try:
               _after_status == "installing", "status became %r after the poll" % _after_status)
     finally:
         _sa_event.remove(_engine, "after_cursor_execute", _count_query)
-        _appmod.run_command = _orig_rc
+        _smmod.run_command = _orig_rc
 
     # escapeHtml must exist BEFORE a page's own scripts run — five templates had grown local copies
     # because it did not, and two of those returned the RAW string when the global was missing,
@@ -2219,7 +2220,7 @@ try:
     # What "Autostart" MEANS is "is `*/5 * * * * ./server monitor` scheduled". It was stored as a
     # column that three paths never updated — install, import, and deleting the line by hand — so
     # the Details page could read Off while monitor was scheduled and running every 5 minutes.
-    _sv_lcj = _am.list_cron_jobs
+    _sv_lcj = _smmod.list_cron_jobs
     try:
         _mon = {"raw": "*/5 * * * * /home/csgoserver/csgoserver monitor", "schedule": "*/5 * * * *",
                 "command": "/home/csgoserver/csgoserver monitor", "managed": False,
@@ -2227,14 +2228,14 @@ try:
         with app.app_context():
             db.session.get(GameServer, gs_id).autostart = False      # the stale column
             db.session.commit()
-        _am.list_cron_jobs = lambda *a, **k: [_mon]
+        _smmod.list_cron_jobs = lambda *a, **k: [_mon]
         c.get("/api/server/%d/cron" % gs_id)
         with app.app_context():
             _now = db.session.get(GameServer, gs_id).autostart
         check("autostart: reading the cron corrects a switch that said Off while monitor is scheduled",
               _now is True, "still %r" % _now)
 
-        _am.list_cron_jobs = lambda *a, **k: []                       # monitor line gone
+        _smmod.list_cron_jobs = lambda *a, **k: []                       # monitor line gone
         c.get("/api/server/%d/cron" % gs_id)
         with app.app_context():
             _now = db.session.get(GameServer, gs_id).autostart
@@ -2242,22 +2243,22 @@ try:
               "still %r" % _now)
 
         # The card's help text promises this; now it is true.
-        _sv_del = _am.delete_cron_job
+        _sv_del = _smmod.delete_cron_job
         try:
             with app.app_context():
                 db.session.get(GameServer, gs_id).autostart = True
                 db.session.commit()
-            _am.delete_cron_job = lambda *a, **k: (True, "Deleted")
-            _am.list_cron_jobs = lambda *a, **k: []
+            _smmod.delete_cron_job = lambda *a, **k: (True, "Deleted")
+            _smmod.list_cron_jobs = lambda *a, **k: []
             c.post("/api/server/%d/cron/delete" % gs_id, json={"raw": _mon["raw"]})
             with app.app_context():
                 _now = db.session.get(GameServer, gs_id).autostart
             check("autostart: deleting the monitor line turns the switch off, as the card promises",
                   _now is False, "still %r" % _now)
         finally:
-            _am.delete_cron_job = _sv_del
+            _smmod.delete_cron_job = _sv_del
     finally:
-        _am.list_cron_jobs = _sv_lcj
+        _smmod.list_cron_jobs = _sv_lcj
 
     # ── The pending banner must know about the DAILY-RESTART cron too ─────────────────────────────
     # Two mechanisms queue a restart-when-empty: the panel's column, and the cron set_daily_restart
@@ -2327,7 +2328,7 @@ try:
     # The panel checks each host daily and messages the chat bots when packages appear. The alert
     # fires on the TRANSITION and re-arms when the host is clean, because "the same 12 packages are
     # still waiting" every morning is how an alert becomes something you filter out.
-    _sv_reach, _sv_loc, _sv_rem = _am._host_reachable, _am.so.os_update_available, _am.remote_os_check_updates
+    _sv_reach, _sv_loc, _sv_rem = _am._host_reachable, _am.so.os_update_available, _smmod.remote_os_check_updates
     _sv_notify2 = _am.notifications.notify
     try:
         # Called with NO app context, exactly as the update-check ticker calls it — that thread has
@@ -2343,7 +2344,7 @@ try:
         # alongside ok=False makes the check unfalsifiable (mutation testing said so).
         _res = lambda: {"ok": True, "packages": _pkgs["n"]} if _pkgs["ok"] else {"ok": False, "packages": []}  # noqa: E731
         _am.so.os_update_available = lambda refresh=True: _res()
-        _am.remote_os_check_updates = lambda r: _res()
+        _smmod.remote_os_check_updates = lambda r: _res()
 
         _rec.clear()
         _osu(force=True)
@@ -2459,7 +2460,7 @@ try:
         # numbers, so numbers alone cannot tell the two apart.
         _probed0 = []
         _am.so.os_update_available = lambda refresh=True: (_probed0.append("local"), _res())[1]
-        _am.remote_os_check_updates = lambda r: (_probed0.append("remote"), _res())[1]
+        _smmod.remote_os_check_updates = lambda r: (_probed0.append("remote"), _res())[1]
         _cj = c.get("/api/remote/%d/updates-cached" % remote_id).get_json() or {}
         check("os updates: the card is filled on page load, without running apt",
               _cj.get("known") and _cj.get("count") == 1 and not _probed0,
@@ -2481,7 +2482,7 @@ try:
         _probed = []
         _am._host_reachable = lambda r: False
         _am.so.os_update_available = lambda refresh=True: (_probed.append("local"), {"ok": True, "packages": []})[1]
-        _am.remote_os_check_updates = lambda r: (_probed.append("remote"), {"ok": True, "packages": []})[1]
+        _smmod.remote_os_check_updates = lambda r: (_probed.append("remote"), {"ok": True, "packages": []})[1]
         _rec.clear()
         _osu(force=True)
         check("os updates: an unreachable host is skipped, not probed",
@@ -2523,7 +2524,7 @@ try:
               _osu_state["last_run"] > 0.0, "last_run=%r" % _osu_state["last_run"])
     finally:
         _am._host_reachable, _am.so.os_update_available = _sv_reach, _sv_loc
-        _am.remote_os_check_updates = _sv_rem
+        _smmod.remote_os_check_updates = _sv_rem
         _am.notifications.notify = _sv_notify2
 
     # ── The hoisted error helpers still work where they are actually called ──────────────────────
@@ -2559,16 +2560,20 @@ try:
     _f2b_calls = []
     _sv_f2b = _am.so.ensure_panel_fail2ban
     _sv_restart = _am.so.restart_panel
-    _sv_wl = _am._security_whitelist
+    # api_panel_change_port now lives in panel/routes/remote_security, which binds
+    # _security_whitelist by name — so that is where the stub goes. This target moved once
+    # already during the split; it follows the HANDLER, not the name.
+    from panel.routes import remote_security as _rs_mod
+    _sv_wl = _rs_mod._security_whitelist
     try:
         _am.so.ensure_panel_fail2ban = lambda log, port, ignore=None: (
             _f2b_calls.append((port, list(ignore) if ignore is not None else None)), (True, "ok"))[1]
         _am.so.restart_panel = lambda *a, **k: (True, "stubbed")
-        # Stays on `app`: api_panel_change_port is one of the handlers still IN app.py, so it
-        # resolves _security_whitelist from app's own scope. host_local and _shared bind the same
-        # name for their own handlers — which is the point: the right stub target is decided by
-        # WHICH handler the test drives, not by the name.
-        _am._security_whitelist = lambda: ["203.0.113.8", "10.0.0.0/8"]
+        # remote_security, not app: api_panel_change_port lives there now and resolves
+        # _security_whitelist from THAT module's scope. app, host_local and _shared each bind the
+        # same name for their own handlers — which is the point: the right stub target is decided
+        # by WHICH handler the test drives, not by the name.
+        _rs_mod._security_whitelist = lambda: ["203.0.113.8", "10.0.0.0/8"]
         with app.app_context():
             _cp_cfg = _am.load_config()
             _cp_port = _cp_cfg.get("port", 5000)
@@ -2583,7 +2588,7 @@ try:
     finally:
         _am.so.ensure_panel_fail2ban = _sv_f2b
         _am.so.restart_panel = _sv_restart
-        _am._security_whitelist = _sv_wl
+        _rs_mod._security_whitelist = _sv_wl
         # Put the port back: the route saved the bumped one to config.json.
         try:
             _am.update_config(lambda cfg: cfg.update({"port": _cp_port}))
@@ -2707,11 +2712,11 @@ try:
         # background and discard their output, so a failed start could be reported but never
         # explained without opening the panel.
         _tg_cap, _tg_mod = [], []
-        _tg_saved_new = (_appmod.capture_console, _appmod.moderate)
+        _tg_saved_new = (_smmod.capture_console, _smmod.moderate)
         try:
-            _appmod.capture_console = lambda r, u, selfname=None, lines=180: (
+            _smmod.capture_console = lambda r, u, selfname=None, lines=180: (
                 _tg_cap.append(lines), ("\x1b[32mAlready up to date\x1b[0m\nServer started\n", "", 0))[1]
-            _appmod.moderate = lambda r, u, gt, action, target="", message="", selfname=None, \
+            _smmod.moderate = lambda r, u, gt, action, target="", message="", selfname=None, \
                 steamid="", num="": (_tg_mod.append((action, message)), (True, "announced"))[1]
 
             _tg_sent.clear()
@@ -2744,7 +2749,7 @@ try:
             check("telegram: /backup runs the backup action", _tg_acted == [("backup", "smoke-cs")],
                   "acted=%s" % _tg_acted)
         finally:
-            _appmod.capture_console, _appmod.moderate = _tg_saved_new
+            _smmod.capture_console, _smmod.moderate = _tg_saved_new
     finally:
         _appmod._tg_reply, _appmod._tg_server_action = _tg_saved
     # Every command the bot advertises must be one it handles — that menu is what made the /start
@@ -2821,7 +2826,7 @@ try:
     # while server_live_metrics is still read by _live_run_state in app.py. Stubbing the wrong
     # module does not error — the assignment succeeds and simply intercepts nothing, turning these
     # power checks into proof that a stub was never called. unit_test's stub-target gate names it.
-    _pa_saved = (_appmod.server_live_metrics, _sd_mod.run_as_game_user, _sd_mod.set_game_priority)
+    _pa_saved = (_smmod.server_live_metrics, _smmod.run_as_game_user, _smmod.set_game_priority)
     _pa_ran, _pa_prio = [], []
 
     def _pa_rag(remote, short, cmd, *a, **k):
@@ -2851,20 +2856,20 @@ try:
         return c.post("/api/server/%d/action" % gs_id, json={"action": action}).get_json() or {}
 
     try:
-        _sd_mod.run_as_game_user = _pa_rag
+        _smmod.run_as_game_user = _pa_rag
         # set_game_priority resolves in panel/routes/server_detail now, not app — a stub on app
         # would be installed on a name nothing reads.
-        _sd_mod.set_game_priority = lambda *a, **k: _pa_prio.append(1)
+        _smmod.set_game_priority = lambda *a, **k: _pa_prio.append(1)
 
         # Online in the column AND confirmed running on the host: refuse, and don't touch the host.
-        _pa_status("online"); _appmod.server_live_metrics = _pa_metrics(True)
+        _pa_status("online"); _smmod.server_live_metrics = _pa_metrics(True)
         _j = _pa_post("start")
         check("power: start on a running server is refused, not reported as issued",
               _j.get("success") is False and "already running" in (_j.get("message") or ""),
               "got %s" % _j)
         check("power: the refused start never reached the host", not _pa_ran, "ran %s" % _pa_ran)
         # The same lie in the other direction.
-        _pa_status("offline"); _appmod.server_live_metrics = _pa_metrics(False)
+        _pa_status("offline"); _smmod.server_live_metrics = _pa_metrics(False)
         _j = _pa_post("stop")
         check("power: stop on a stopped server is refused, not reported as issued",
               _j.get("success") is False and "already stopped" in (_j.get("message") or ""),
@@ -2872,7 +2877,7 @@ try:
         check("power: the refused stop never reached the host", not _pa_ran, "ran %s" % _pa_ran)
 
         # A STALE "online" — the column says up, the host says down — must not block the recovery.
-        _pa_status("online"); _appmod.server_live_metrics = _pa_metrics(False)
+        _pa_status("online"); _smmod.server_live_metrics = _pa_metrics(False)
         _j = _pa_post("start")
         check("power: a stale 'online' does not block starting a server that has died",
               _j.get("success") is True and "issued" in (_j.get("message") or ""), "got %s" % _j)
@@ -2881,7 +2886,7 @@ try:
         # A hung server: nothing listening, but processes alive. The column calls that offline —
         # refusing the stop would leave the one command that fixes it unreachable.
         _pa_status("offline")
-        _appmod.server_live_metrics = lambda *a, **k: {"ram_total": 8 << 30, "port_open": False,
+        _smmod.server_live_metrics = lambda *a, **k: {"ram_total": 8 << 30, "port_open": False,
                                                        "game_procs": 3}
         _j = _pa_post("stop")
         check("power: a hung server (offline column, live processes) can still be stopped",
@@ -2889,18 +2894,18 @@ try:
         # An unreadable host proves nothing, so it can never be grounds for a refusal. Checked on
         # the stop side: start is trivially safe (a falsy read lets it through either way), while
         # losing the "couldn't read" sentinel would turn an SSH blip into "already stopped".
-        _pa_status("offline"); _appmod.server_live_metrics = _pa_metrics(False, readable=False)
+        _pa_status("offline"); _smmod.server_live_metrics = _pa_metrics(False, readable=False)
         _j = _pa_post("stop")
         check("power: an unreadable host fails open — the stop is not refused",
               _j.get("success") is True and _pa_wait(_pa_ran), "got %s" % _j)
         # restart is the escape hatch; it is correct from either state and must never be guarded.
-        _pa_status("online"); _appmod.server_live_metrics = _pa_metrics(True)
+        _pa_status("online"); _smmod.server_live_metrics = _pa_metrics(True)
         _j = _pa_post("restart")
         check("power: restart is never refused, whatever the status says",
               _j.get("success") is True and _pa_wait(_pa_ran) and _pa_wait(_pa_prio), "got %s" % _j)
     finally:
-        (_appmod.server_live_metrics, _sd_mod.run_as_game_user,
-         _sd_mod.set_game_priority) = _pa_saved
+        (_smmod.server_live_metrics, _smmod.run_as_game_user,
+         _smmod.set_game_priority) = _pa_saved
         _pa_status("offline")
 
     # ── /api/server/<id> reports the player count the rest of the panel uses ────────────────

@@ -8,11 +8,14 @@ from panel.core import (terminal)
 from panel.core.panel_state import (_cron_restart_pending)
 from panel.db.models import (CUSTOM_ARG_DEFAULT_PATTERN, CUSTOM_ARG_PLACEHOLDER, CustomCommand,
     GameServer, GlobalBan, RemoteServer, User, db)
-from panel.ops.ssh_manager import (GAMEDIG_TYPE as GAMEDIG_TYPE_MAP, _invalidate_port_scan,
-    _resolve_from_console, _sanitize_steamid, game_engine, is_player_queryable,
-    list_server_commands, moderate, moderation_caps, player_count as sm_player_count,
-    player_list, run_as_game_user, send_console_command, set_autostart, set_daily_restart,
-    set_game_priority)
+from panel.ops.ssh_manager import (GAMEDIG_TYPE as GAMEDIG_TYPE_MAP, _resolve_from_console,
+    _sanitize_steamid, game_engine, is_player_queryable, moderation_caps, player_count as
+    sm_player_count, player_list, send_console_command, set_autostart, set_daily_restart)
+# Reached through the MODULE, not bound by name: these are the seams the test suite
+# monkeypatches. `from x import f` copies the function object, so a stub on the source
+# module would never be seen — attribute access resolves at call time and is stable
+# however the handler moves.
+from panel.ops import ssh_manager as _sm
 from panel.security.auth import (MANAGE_SERVERS, MODERATE_SERVER, READONLY_ACTIONS,
     RESTART_SERVER, SEND_COMMAND, _can_manage_files, _perm_for_action, allowed_custom_commands,
     can_access_server, can_moderate_action, can_run_custom_command, get_game,
@@ -133,7 +136,7 @@ def register(app):
                              actor.id if actor else None, origin=origin)
             return True, f"'{action}' issued — status updates in a few seconds."
         timeout = 90 if action == "restart" else 60
-        out, err, rc = run_as_game_user(remote, gs.short_name, f"{action} 2>&1", timeout=timeout, selfname=gs.lgsm_name)
+        out, err, rc = _sm.run_as_game_user(remote, gs.short_name, f"{action} 2>&1", timeout=timeout, selfname=gs.lgsm_name)
         # Strip ALL ANSI/CSI escape sequences (colors end in 'm', but LinuxGSM also
         # emits erase-line "\x1b[K" etc.), plus collapse whitespace for a clean message.
         def _clean(s):
@@ -145,7 +148,7 @@ def register(app):
         # This changed what's listening on the host — drop the cached port scan so the dashboard
         # reflects the new state on its next poll instead of up to a TTL of stale "offline/online".
         if rc == 0 and action in ("restart", "start", "stop"):
-            _invalidate_port_scan(remote.id)
+            _sm._invalidate_port_scan(remote.id)
         # A manual start/stop/restart makes any queued 'when empty' restart/stop moot — clear both.
         if rc == 0 and action in ("restart", "start", "stop") and (gs.restart_pending or gs.stop_pending):
             gs.restart_pending = False
@@ -154,7 +157,7 @@ def register(app):
         # Give the freshly-(re)started game a small CPU-priority edge over background work.
         if rc == 0 and action in ("restart", "start"):
             try:
-                set_game_priority(remote, gs.short_name)
+                _sm.set_game_priority(remote, gs.short_name)
             except Exception:
                 app.logger.debug("game priority boost failed (non-fatal)", exc_info=True)
         if action in READONLY_ACTIONS:
@@ -380,7 +383,7 @@ def register(app):
             except Exception:
                 _log.debug("moderate: steamid pre-resolve failed", exc_info=True)
         try:
-            ok, msg = moderate(gs.remote, gs.short_name, gs.game_type, action,
+            ok, msg = _sm.moderate(gs.remote, gs.short_name, gs.game_type, action,
                                target=target, message=data.get("message", ""),
                                selfname=gs.lgsm_name, steamid=steamid, num=num)
             log_action(current_user, "moderate_%s" % action, target=gs.name,
@@ -409,7 +412,7 @@ def register(app):
                             return False
                         try:
                             kw = {"steamid": steamid} if origin_eng == "valve" else {"target": target}
-                            ok2, _m = moderate(o.remote, o.short_name, o.game_type, "ban",
+                            ok2, _m = _sm.moderate(o.remote, o.short_name, o.game_type, "ban",
                                                selfname=o.lgsm_name, **kw)
                             return bool(ok2)
                         except Exception:
@@ -584,20 +587,20 @@ def register(app):
                     if not remote or not gs:
                         return
                     timeout = 90 if action == "restart" else 60
-                    out, _, rc = run_as_game_user(remote, short_name, f"{action} 2>&1",
+                    out, _, rc = _sm.run_as_game_user(remote, short_name, f"{action} 2>&1",
                                                   timeout=timeout, selfname=selfname)
                     clean = terminal.strip_escapes(out or "")
                     log_action(actor, f"{action}_server", target=gs.name, success=(rc == 0),
                                detail=clean[-400:], actor=origin)
                     if rc == 0:
-                        _invalidate_port_scan(remote_id)
+                        _sm._invalidate_port_scan(remote_id)
                         if gs.restart_pending or gs.stop_pending:
                             gs.restart_pending = False
                             gs.stop_pending = False
                             db.session.commit()
                         if action in ("restart", "start"):
                             try:
-                                set_game_priority(remote, short_name)
+                                _sm.set_game_priority(remote, short_name)
                             except Exception:
                                 app.logger.debug("game priority boost failed (non-fatal)", exc_info=True)
             except Exception:
@@ -620,13 +623,13 @@ def register(app):
                         # fastdl asks a few yes/no questions (overwrite / force-download / continue),
                         # all default Y, and loops forever on EOF — feed Y's so it runs unattended.
                         act_cmd = "fastdl <<< $'Y\\nY\\nY\\nY\\nY\\nY\\nY\\nY' 2>&1"
-                    out, err, rc = run_as_game_user(remote, short_name, act_cmd, timeout=1800, selfname=selfname)
+                    out, err, rc = _sm.run_as_game_user(remote, short_name, act_cmd, timeout=1800, selfname=selfname)
                     gs = db.session.get(GameServer, server_id)
                     log_action(None, f"{action}_complete", target=gs.name if gs else short_name,
                                success=(rc == 0), detail=(out or err or "")[-300:])
                     # An update/validate/fastdl can restart the server (port cycles) — drop the
                     # cached port scan so the dashboard shows the real state on its next poll.
-                    _invalidate_port_scan(remote_id)
+                    _sm._invalidate_port_scan(remote_id)
                     # Updated mods only load after a restart — apply it when empty, else flag pending.
                     if action == "mods-update" and rc == 0 and gs:
                         try:
@@ -645,7 +648,7 @@ def register(app):
     def refresh_server_commands(server_id):
         gs = get_game(server_id)
         try:
-            cmds = list_server_commands(gs.remote, gs.short_name, gs.lgsm_name)
+            cmds = _sm.list_server_commands(gs.remote, gs.short_name, gs.lgsm_name)
             gs.set_commands(cmds)
             db.session.commit()
             flash(f"Loaded {len(cmds)} commands for '{gs.name}'.", "success")

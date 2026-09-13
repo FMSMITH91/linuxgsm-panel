@@ -60,11 +60,17 @@ echo "== byte-compile (syntax errors) =="
 # could see. Named explicitly here and below for the same reason.
 "$PY" -m py_compile tools/panel-helper
 
-echo "== lint: real bugs + unused imports/vars (undefined names, bad syntax, F401, F841) =="
+echo "== lint: real bugs + unused imports/vars (undefined names, bad syntax, F401, F811, F841) =="
 if "$PY" -m flake8 --version >/dev/null 2>&1; then
     # F401 (unused import) + F841 (unused local var) are included so dead code is caught
     # here rather than later by CodeQL / Codacy in the Security tab.
-    "$PY" -m flake8 --select=E9,F63,F7,F82,F401,F841 --show-source --statistics \
+    #
+    # F811 (redefinition of an unused name) was NOT in this list, and Codacy's pyflakes caught
+    # what it missed: splitting register_routes() left server_files.py importing flask_socketio
+    # twice, the second shadowing the first. Harmless there, but the same rule fires when a
+    # def or a name is genuinely clobbered by a later one — a silent wrong-function bug. It is
+    # the cheapest possible check for that, so it runs here rather than only in a cloud tool.
+    "$PY" -m flake8 --select=E9,F63,F7,F82,F401,F811,F841 --show-source --statistics \
         --extend-exclude=venv,.venv . tools/panel-helper
 else
     echo "  (flake8 not installed — skipping)"
