@@ -24,7 +24,7 @@ import sys
 # Allow running as `python tests/rbac_test.py` from the repo root.
 _ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, _ROOT)
-from panel.ops import ssh_manager as _smmod   # the stub seam: stubbed by MODULE,
+from panel.ops.ssh_manager import _core as _sm_core   # the stub seam: stubbed by MODULE,
 # because every caller now reaches these through the module rather than binding them.
 
 from app import create_app
@@ -409,9 +409,9 @@ try:
     # loop. A break here fans a power action out over SSH to every server in the install.
     if other_id:
         _ran = []
-        _sv_rag = _smmod.run_as_game_user
+        _sv_rag = _sm_core.run_as_game_user
         try:
-            _smmod.run_as_game_user = lambda *a, **k: (_ran.append(a), ("", "", 0))[1]
+            _sm_core.run_as_game_user = lambda *a, **k: (_ran.append(a), ("", "", 0))[1]
             grpb = None
             with app.app_context():
                 grpb = Group(name=tag + "_bulk", description="RBAC bulk (auto)", is_default=False)
@@ -440,7 +440,7 @@ try:
                 db.session.delete(Group.query.get(gidb))
                 db.session.commit()
         finally:
-            _smmod.run_as_game_user = _sv_rag
+            _sm_core.run_as_game_user = _sv_rag
 
     # ── The setup-only endpoints must stay shut when config.json is LOST ───────────────────────────
     # /api/setup/tailscale/{status,install,up,serve} are deliberately unauthenticated — during a fresh

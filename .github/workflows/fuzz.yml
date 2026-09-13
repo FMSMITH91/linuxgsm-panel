@@ -20,7 +20,7 @@ on:
   pull_request:
     branches: [ main ]
     paths:
-      - 'panel/ops/ssh_manager.py'
+      - 'panel/ops/ssh_manager/**'
       - 'panel/ops/system_ops.py'
       - 'panel/core/terminal.py'
       - 'tests/fuzz/**'

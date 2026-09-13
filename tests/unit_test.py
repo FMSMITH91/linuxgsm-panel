@@ -16,7 +16,14 @@ import sys
 from types import SimpleNamespace as NS
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-from panel.ops import ssh_manager as _smmod   # stub seam: reached by module, not bound
+from panel.ops.ssh_manager import _core as _sm_core
+from panel.ops.ssh_manager import cron as _sm_cron
+from panel.ops.ssh_manager import files as _sm_files
+from panel.ops.ssh_manager import firewall as _sm_firewall
+from panel.ops.ssh_manager import game as _sm_game
+from panel.ops.ssh_manager import gmod as _sm_gmod
+from panel.ops.ssh_manager import hosts as _sm_hosts
+from panel.ops.ssh_manager import portscan as _sm_portscan
 
 # ── Where a panel module's SOURCE lives ────────────────────────────────────────────────────────
 # Several gates below read module source as text (grep-style checks, AST scans). They used to
@@ -32,22 +39,48 @@ _PKG_DIRS = ("panel",)
 
 
 def _modpath(name):
-    """Absolute path to panel module `name` ("ssh_manager.py" or "ssh_manager"). Raises if absent."""
+    """Absolute path to panel module `name` ("ssh_manager.py" or "ssh_manager"). Raises if absent.
+
+    A name may resolve to a PACKAGE directory rather than a file: ssh_manager became one. Every
+    source gate below asks a question about "that module's source", and the honest answer for a
+    package is all of it — so this returns the directory and _modsrc concatenates it. Resolving to
+    a single file inside would make each gate silently scan one eighth of what it used to."""
     leaf = name if name.endswith(".py") else name + ".py"
+    stem = leaf[:-3]
     cand = os.path.join(_root, leaf)
     if os.path.exists(cand):
         return cand
     for pkg in _PKG_DIRS:
-        for dirpath, _dirnames, files in os.walk(os.path.join(_root, pkg)):
+        for dirpath, dirnames, files in os.walk(os.path.join(_root, pkg)):
             if leaf in files:
                 return os.path.join(dirpath, leaf)
+            if stem in dirnames and os.path.exists(os.path.join(dirpath, stem, "__init__.py")):
+                return os.path.join(dirpath, stem)
     raise FileNotFoundError(
         "no panel module named %r — a source gate is pointed at a file that no longer exists" % leaf)
 
 
+def _modfiles(name):
+    """Every source FILE for panel module `name` — one for a module, all of them for a package.
+
+    Source gates that scan line-by-line or parse an AST need real files, not concatenated text
+    (line numbers have to mean something, and two files concatenated is not valid to attribute to
+    either). Gates that only search for a string can use _modsrc instead."""
+    path = _modpath(name)
+    if os.path.isdir(path):
+        return [os.path.join(path, f) for f in sorted(os.listdir(path)) if f.endswith(".py")]
+    return [path]
+
+
 def _modsrc(name):
-    """Source text of panel module `name`. Raises if the module is gone (see _modpath)."""
-    return open(_modpath(name), encoding="utf-8").read()
+    """Source text of panel module `name`. For a package, every .py in it, concatenated.
+
+    Raises if the module is gone (see _modpath)."""
+    path = _modpath(name)
+    if os.path.isdir(path):
+        return "\n".join(open(os.path.join(path, f), encoding="utf-8").read()
+                         for f in sorted(os.listdir(path)) if f.endswith(".py"))
+    return open(path, encoding="utf-8").read()
 
 from panel.core import config
 from panel.security import privileged as _privmod
@@ -122,30 +155,29 @@ def _f2b_fake_run(server, cmd, **kw):
     return ("1", "", 0)
 
 
-_orig_f2b = sm.run_command
+_orig_f2b = _sm_core.run_command
 try:
-    sm.run_command = _f2b_fake_run
+    _sm_core.run_command = _f2b_fake_run
     eq("f2b remote: a non-canonical IPv6 is normalised before unbanning",
-       sm.remote_fail2ban_unban(None, "sshd", "2001:0DB8::0001"),
+       _sm_hosts.remote_fail2ban_unban(None, "sshd", "2001:0DB8::0001"),
        (True, "Unbanned 2001:db8::1 from sshd."))
     check("f2b remote: an unknown jail is refused against the host's own list",
-          sm.remote_fail2ban_unban(None, "nosuch", "10.0.0.9")[0] is False)
+          _sm_hosts.remote_fail2ban_unban(None, "nosuch", "10.0.0.9")[0] is False)
     check("f2b remote: a non-IP is refused",
-          sm.remote_fail2ban_unban(None, "sshd", "not-an-ip")[0] is False)
+          _sm_hosts.remote_fail2ban_unban(None, "sshd", "not-an-ip")[0] is False)
     check("f2b remote: a trailing newline in the jail name is stripped, not accepted raw",
-          sm.remote_fail2ban_unban(None, "sshd\n", "10.0.0.9") == (True, "Unbanned 10.0.0.9 from sshd."))
+          _sm_hosts.remote_fail2ban_unban(None, "sshd\n", "10.0.0.9") == (True, "Unbanned 10.0.0.9 from sshd."))
 finally:
-    sm.run_command = _orig_f2b
-eq("f2b: _canonical_ip normalises", sm._canonical_ip(" 2001:0DB8::0001 "), "2001:db8::1")
-eq("f2b: _canonical_ip rejects junk", sm._canonical_ip("nope"), None)
-check("f2b: _valid_ip still answers a bool", sm._valid_ip("10.0.0.1") is True)
+    _sm_core.run_command = _orig_f2b
+eq("f2b: _canonical_ip normalises", _sm_hosts._canonical_ip(" 2001:0DB8::0001 "), "2001:db8::1")
+eq("f2b: _canonical_ip rejects junk", _sm_hosts._canonical_ip("nope"), None)
+check("f2b: _valid_ip still answers a bool", _sm_hosts._valid_ip("10.0.0.1") is True)
 
 # ── config keys must agree with the code that reads them ────────────────────────────────────────
 # Each of these was a real divergence: a documented ssh_timeout nothing read (the two SSH paths
 # hardcoded 15 and 12), and an autoblock threshold that defaulted to 20 when read and 100 when
 # saved — so saving Settings once made the panel five times more permissive than documented.
 from panel.core import config as _cfgmod
-from panel.ops import ssh_manager as _smod
 _CFG_READERS = "".join(_modsrc(m) for m in
                        ("app", "ssh_manager", "system_ops", "notifications", "backup"))
 check("config: every DEFAULT_CONFIG key has a reader",
@@ -163,7 +195,7 @@ try:
         _c["ssh_timeout"] = _want
         _cfgmod.save_config(_c)
         eq("config: ssh_timeout=%d is what the SSH layer uses" % _want,
-           _smod._ssh_connect_timeout(), _want)
+           _sm_core._ssh_connect_timeout(), _want)
     # ...and the clamp holds at both ends, so a hostile or fat-fingered value cannot make the
     # panel hang forever or busy-fail.
     for _set, _want in ((0, 1), (-5, 1), (9999, 120)):
@@ -171,7 +203,7 @@ try:
         _c["ssh_timeout"] = _set
         _cfgmod.save_config(_c)
         eq("config: ssh_timeout=%r clamps to %d" % (_set, _want),
-           _smod._ssh_connect_timeout(), _want)
+           _sm_core._ssh_connect_timeout(), _want)
 finally:
     _c = _cfgmod.load_config()
     if _sshto_saved is None:
@@ -180,7 +212,7 @@ finally:
         _c["ssh_timeout"] = _sshto_saved
     _cfgmod.save_config(_c)
 eq("config: with no override the SSH layer uses the documented default",
-   _smod._ssh_connect_timeout(), _cfgmod.DEFAULT_CONFIG["ssh_timeout"])
+   _sm_core._ssh_connect_timeout(), _cfgmod.DEFAULT_CONFIG["ssh_timeout"])
 # Reads app.py AND the route modules: the line moved out with its section when register_routes
 # was split, and pinning it to one file would have made this gate quietly stop checking anything.
 _autoblock_src = _modsrc("app") + "".join(
@@ -533,12 +565,12 @@ check("mute: a failure fails OPEN (alert still sent, no raise)", _am(_BoomTags()
 # subprocess, gets swallowed by the generic handler, and returns ("", ..., -1) — a caller then
 # cannot tell "printed nothing" from "could not be decoded". The paramiko path already used
 # errors="replace"; these two did not.
-_bad_out, _bad_err, _bad_rc = sm._run_local(r"printf 'caf\351: cannot start\n'", timeout=10, sudo=False)
+_bad_out, _bad_err, _bad_rc = _sm_core._run_local(r"printf 'caf\351: cannot start\n'", timeout=10, sudo=False)
 check("transport (local): invalid UTF-8 in stdout still returns the text",
       _bad_rc == 0 and _bad_out.startswith("caf") and "cannot start" in _bad_out)
 check("transport (local): the undecodable byte becomes U+FFFD, not a lost result",
       "�" in _bad_out and _bad_out != "")
-_bad2_out, _bad2_err, _bad2_rc = sm._run_local(r"printf 'x\200y\n' >&2; printf 'ok\n'",
+_bad2_out, _bad2_err, _bad2_rc = _sm_core._run_local(r"printf 'x\200y\n' >&2; printf 'ok\n'",
                                                timeout=10, sudo=False)
 check("transport (local): invalid UTF-8 on stderr does not blank stdout",
       _bad2_rc == 0 and _bad2_out == "ok" and _bad2_err.startswith("x"))
@@ -551,80 +583,80 @@ class _FakeCompleted:
     returncode = 0
 
 
-_orig_sprun = sm.subprocess.run
+_orig_sprun = _sm_core.subprocess.run
 try:
-    sm.subprocess.run = lambda cmd, **kw: (_sshkw.update(kw), _FakeCompleted())[1]
-    sm._run_via_ssh_cli(type("S", (), {"sudo_enabled": False, "linuxgsm_user": None, "port": 22,
+    _sm_core.subprocess.run = lambda cmd, **kw: (_sshkw.update(kw), _FakeCompleted())[1]
+    _sm_core._run_via_ssh_cli(type("S", (), {"sudo_enabled": False, "linuxgsm_user": None, "port": 22,
                                        "username": "u", "host": "h", "auth_method": "tailscale"})(),
                         "echo hi", timeout=5, sudo=False)
 finally:
-    sm.subprocess.run = _orig_sprun
+    _sm_core.subprocess.run = _orig_sprun
 check("transport (ssh cli): decodes with errors='replace' like the other two",
       _sshkw.get("errors") == "replace" and _sshkw.get("encoding") == "utf-8"
       and _sshkw.get("text") is True)
 
 # ── cron manager (pure logic; no crontab touched) ─────────────
 # schedule validation
-check("cron: 5-field ok", sm._validate_cron("*/5 * * * *", "/bin/true")[0])
-check("cron: @daily ok", sm._validate_cron("@daily", "/home/gm/backup.sh")[0])
-check("cron: @reboot ok", sm._validate_cron("@reboot", "echo hi")[0])
-check("cron: ranges/steps ok", sm._validate_cron("0-30/2 1,3 * * mon-fri", "x")[0])
-check("cron: normalises inner ws", sm._validate_cron("0   5  *  *  *", "x")[2] == "0 5 * * * x")
-check("cron: 4 fields rejected", not sm._validate_cron("* * * *", "x")[0])
-check("cron: bad @shortcut rejected", not sm._validate_cron("@sometimes", "x")[0])
-check("cron: empty command rejected", not sm._validate_cron("@daily", "")[0])
-check("cron: newline in command rejected", not sm._validate_cron("@daily", "a\nb")[0])
-check("cron: embedded CR rejected", not sm._validate_cron("@daily", "a\rb")[0])
-check("cron: embedded CR in schedule rejected", not sm._validate_cron("0 5 *\r* *", "x")[0])
-check("cron: shell metachars allowed in command", sm._validate_cron("@daily", "a && b | c")[0])
+check("cron: 5-field ok", _sm_cron._validate_cron("*/5 * * * *", "/bin/true")[0])
+check("cron: @daily ok", _sm_cron._validate_cron("@daily", "/home/gm/backup.sh")[0])
+check("cron: @reboot ok", _sm_cron._validate_cron("@reboot", "echo hi")[0])
+check("cron: ranges/steps ok", _sm_cron._validate_cron("0-30/2 1,3 * * mon-fri", "x")[0])
+check("cron: normalises inner ws", _sm_cron._validate_cron("0   5  *  *  *", "x")[2] == "0 5 * * * x")
+check("cron: 4 fields rejected", not _sm_cron._validate_cron("* * * *", "x")[0])
+check("cron: bad @shortcut rejected", not _sm_cron._validate_cron("@sometimes", "x")[0])
+check("cron: empty command rejected", not _sm_cron._validate_cron("@daily", "")[0])
+check("cron: newline in command rejected", not _sm_cron._validate_cron("@daily", "a\nb")[0])
+check("cron: embedded CR rejected", not _sm_cron._validate_cron("@daily", "a\rb")[0])
+check("cron: embedded CR in schedule rejected", not _sm_cron._validate_cron("0 5 *\r* *", "x")[0])
+check("cron: shell metachars allowed in command", _sm_cron._validate_cron("@daily", "a && b | c")[0])
 # NOTHING is locked any more — every line is editable/deletable, including the panel-installed ones.
 check("cron: monitor is NOT managed (editable/deletable)",
-      not sm._cron_line_managed("*/5 * * * * /home/gm/gmodserver monitor > /dev/null 2>&1", "gm", "gmodserver"))
+      not _sm_cron._cron_line_managed("*/5 * * * * /home/gm/gmodserver monitor > /dev/null 2>&1", "gm", "gmodserver"))
 check("cron: daily-restart flag is NOT managed (editable/deletable)",
-      not sm._cron_line_managed("0 5 * * * touch /home/gm/.restart-pending", "gm", "gmodserver"))
+      not _sm_cron._cron_line_managed("0 5 * * * touch /home/gm/.restart-pending", "gm", "gmodserver"))
 check("cron: legacy @reboot start is NOT managed (deletable)",
-      not sm._cron_line_managed("@reboot /home/gm/gmodserver start > /dev/null 2>&1", "gm", "gmodserver"))
+      not _sm_cron._cron_line_managed("@reboot /home/gm/gmodserver start > /dev/null 2>&1", "gm", "gmodserver"))
 check("cron: user backup line is NOT managed",
-      not sm._cron_line_managed("0 3 * * * /home/gm/backup.sh", "gm", "gmodserver"))
+      not _sm_cron._cron_line_managed("0 3 * * * /home/gm/backup.sh", "gm", "gmodserver"))
 # _cron_role gives panel lines a non-blocking LABEL so the admin knows what they are.
 check("cron role: monitor is labelled 'autostart'",
-      sm._cron_role("/home/gm/gmodserver monitor", "gm", "gmodserver") == "autostart")
+      _sm_cron._cron_role("/home/gm/gmodserver monitor", "gm", "gmodserver") == "autostart")
 check("cron role: a .restart-pending line is labelled 'daily-restart'",
-      sm._cron_role("[ -f /home/gm/.restart-pending ] && /home/gm/gmodserver restart", "gm", "gmodserver") == "daily-restart")
+      _sm_cron._cron_role("[ -f /home/gm/.restart-pending ] && /home/gm/gmodserver restart", "gm", "gmodserver") == "daily-restart")
 check("cron role: update / user jobs carry no label",
-      sm._cron_role("/home/gm/gmodserver update", "gm", "gmodserver") == ""
-      and sm._cron_role("/home/gm/backup.sh", "gm", "gmodserver") == "")
+      _sm_cron._cron_role("/home/gm/gmodserver update", "gm", "gmodserver") == ""
+      and _sm_cron._cron_role("/home/gm/backup.sh", "gm", "gmodserver") == "")
 # _wrap_cron_command keeps the monitor marker VISIBLE (inline recorder) so a reschedule doesn't hide it
 # from the Autostart detection; the .restart-pending line stays verbatim; a `%` command uses base64.
-_wmon = sm._wrap_cron_command(None, "gm", "/home/gm/gmodserver monitor")
+_wmon = _sm_cron._wrap_cron_command(None, "gm", "/home/gm/gmodserver monitor")
 check("cron wrap: a plain command (monitor) stays visible, not base64-hidden",
       "/home/gm/gmodserver monitor" in _wmon and ".lgsm-cron/run " not in _wmon)
 check("cron wrap: the .restart-pending flag line is kept verbatim",
-      sm._wrap_cron_command(None, "gm", "[ -f /home/gm/.restart-pending ] && x")
+      _sm_cron._wrap_cron_command(None, "gm", "[ -f /home/gm/.restart-pending ] && x")
       == "[ -f /home/gm/.restart-pending ] && x")
-_orig_wrap_rc = sm.run_command
+_orig_wrap_rc = _sm_core.run_command
 try:
-    sm.run_command = lambda *a, **k: ("", "", 0)   # _install_cron_runner touches SSH on the base64 path
-    _wpct = sm._wrap_cron_command(None, "gm", "echo %H")
+    _sm_core.run_command = lambda *a, **k: ("", "", 0)   # _install_cron_runner touches SSH on the base64 path
+    _wpct = _sm_cron._wrap_cron_command(None, "gm", "echo %H")
     check("cron wrap: a '%' command uses the base64 runner (cron-safe)",
           ".lgsm-cron/run " in _wpct and "%H" not in _wpct)
 finally:
-    sm.run_command = _orig_wrap_rc
+    _sm_core.run_command = _orig_wrap_rc
 
 # node-tools auto-update: a weekly ROOT cron keeps npm + gamedig (player-query tools) current.
 check("node-tools: the cron updates npm + gamedig weekly and logs it",
-      "npm install -g npm gamedig" in sm._NODE_TOOLS_CRON
-      and sm._NODE_TOOLS_CRON.lstrip().startswith("#")
-      and "/var/log/lgsm-node-tools.log" in sm._NODE_TOOLS_CRON
+      "npm install -g npm gamedig" in _sm_hosts._NODE_TOOLS_CRON
+      and _sm_hosts._NODE_TOOLS_CRON.lstrip().startswith("#")
+      and "/var/log/lgsm-node-tools.log" in _sm_hosts._NODE_TOOLS_CRON
       and _privmod.WRITE_TARGETS["node-tools-cron"][0] == "/etc/cron.d/lgsm-node-tools")
 _ntc = {}
-_orig_ntc_rc = sm.run_command
+_orig_ntc_rc = _sm_core.run_command
 try:
     # This used to assert the command started with "sudo bash -c". It now goes through the
     # write-file verb, so what matters is the DESTINATION NAME and the content — the path is the
     # table's, not the call site's, and on a remote host the base64 form is still what is sent.
-    sm.run_command = lambda s, c, **k: (_ntc.__setitem__("cmd", c), ("", "", 0))[1]
-    _ntc_ok = sm.ensure_node_tools_cron(object())
+    _sm_core.run_command = lambda s, c, **k: (_ntc.__setitem__("cmd", c), ("", "", 0))[1]
+    _ntc_ok = _sm_hosts.ensure_node_tools_cron(object())
     check("node-tools: ensure writes the cron.d file as root, at the table's path",
           _ntc_ok is True and "/etc/cron.d/lgsm-node-tools" in _ntc["cmd"], _ntc.get("cmd", "")[:80])
     check("node-tools: the cron body is base64-piped + chmod 644 (no quoting/`%` hazards)",
@@ -633,17 +665,17 @@ try:
           not hasattr(sm, "_NODE_TOOLS_CRON_PATH"),
           "ssh_manager still keeps a second copy of the path")
 finally:
-    sm.run_command = _orig_ntc_rc
+    _sm_core.run_command = _orig_ntc_rc
 
 # ── UFW port/protocol validation (both interpolate into a ROOT shell command) ──
-eq("ufw: tcp normalises", sm._ufw_proto("tcp"), "tcp")
-eq("ufw: UDP case-folds", sm._ufw_proto("UDP"), "udp")
-eq("ufw: blank -> both", sm._ufw_proto(""), "both")
-eq("ufw: None -> both", sm._ufw_proto(None), "both")
-eq("ufw: 'any' -> both", sm._ufw_proto("any"), "both")
-check("ufw: injection protocol rejected", sm._ufw_proto("tcp; rm -rf /") is None)
-check("ufw: unknown protocol rejected", sm._ufw_proto("sctp") is None)
-eq("ufw: valid port coerced to int", sm._ufw_port_int("27015"), 27015)
+eq("ufw: tcp normalises", _sm_hosts._ufw_proto("tcp"), "tcp")
+eq("ufw: UDP case-folds", _sm_hosts._ufw_proto("UDP"), "udp")
+eq("ufw: blank -> both", _sm_hosts._ufw_proto(""), "both")
+eq("ufw: None -> both", _sm_hosts._ufw_proto(None), "both")
+eq("ufw: 'any' -> both", _sm_hosts._ufw_proto("any"), "both")
+check("ufw: injection protocol rejected", _sm_hosts._ufw_proto("tcp; rm -rf /") is None)
+check("ufw: unknown protocol rejected", _sm_hosts._ufw_proto("sctp") is None)
+eq("ufw: valid port coerced to int", _sm_hosts._ufw_port_int("27015"), 27015)
 
 
 def _priv_err_for(verb, args):
@@ -681,21 +713,21 @@ def _ufw_raises(fn):
         return True
 
 
-check("ufw: non-numeric port rejected", _ufw_raises(lambda: sm._ufw_port_int("22; reboot")))
-check("ufw: port 0 rejected", _ufw_raises(lambda: sm._ufw_port_int(0)))
-check("ufw: port 70000 rejected", _ufw_raises(lambda: sm._ufw_port_int(70000)))
+check("ufw: non-numeric port rejected", _ufw_raises(lambda: _sm_hosts._ufw_port_int("22; reboot")))
+check("ufw: port 0 rejected", _ufw_raises(lambda: _sm_hosts._ufw_port_int(0)))
+check("ufw: port 70000 rejected", _ufw_raises(lambda: _sm_hosts._ufw_port_int(70000)))
 # End-to-end: a malicious protocol/port must NOT reach run_command (no shell runs).
-_orig_ufw_rc, _orig_ufw_rp = sm.run_command, sm.run_privileged
+_orig_ufw_rc, _orig_ufw_rp = _sm_core.run_command, _sm_core.run_privileged
 try:
     _ufw_calls = []
-    sm.run_command = lambda *a, **k: (_ufw_calls.append(a), ("", "", 0))[1]
-    sm.run_privileged = lambda *a, **k: (_ufw_calls.append(a), ("", "", 0))[1]
-    _ok, _m = sm.remote_ufw_open_port(None, 27015, "tcp; touch /tmp/x #")
+    _sm_core.run_command = lambda *a, **k: (_ufw_calls.append(a), ("", "", 0))[1]
+    _sm_core.run_privileged = lambda *a, **k: (_ufw_calls.append(a), ("", "", 0))[1]
+    _ok, _m = _sm_hosts.remote_ufw_open_port(None, 27015, "tcp; touch /tmp/x #")
     check("ufw: open rejects injection proto, runs nothing", _ok is False and not _ufw_calls)
-    _ok, _m = sm.remote_ufw_close_port(None, "22; reboot", "tcp")
+    _ok, _m = _sm_hosts.remote_ufw_close_port(None, "22; reboot", "tcp")
     check("ufw: close rejects injection port, runs nothing", _ok is False and not _ufw_calls)
 finally:
-    sm.run_command, sm.run_privileged = _orig_ufw_rc, _orig_ufw_rp
+    _sm_core.run_command, _sm_core.run_privileged = _orig_ufw_rc, _orig_ufw_rp
 
 # ── shell-identifier validation (usernames/short_names reach ssh + shell) ──
 from panel.db.models import _validate_shell_ident as _vsi
@@ -712,13 +744,13 @@ check("ident: shell metachar rejected", _ufw_raises(lambda: _vsi("k", "a;b")))
 # can do when the value has to reach a shell. It does not any more: they are validated arguments,
 # so the assertion is now the stronger one. A route that is not a network and a tag that is not
 # `tag:name` never become part of anything.
-_orig_ts_rc, _orig_ts_rp = sm.run_command, sm.run_privileged
+_orig_ts_rc, _orig_ts_rp = _sm_core.run_command, _sm_core.run_privileged
 try:
     _ts_calls = []
-    sm.run_command = lambda s, c, **k: ("ok", "", 0)
-    sm.run_privileged = lambda s, v, a=(), **k: (_ts_calls.append((v, list(a))),
+    _sm_core.run_command = lambda s, c, **k: ("ok", "", 0)
+    _sm_core.run_privileged = lambda s, v, a=(), **k: (_ts_calls.append((v, list(a))),
                                                  ("Status: inactive", "", 0))[1]
-    sm.remote_bootstrap_tailscale(None, auth_key="tskey; touch /tmp/x",
+    _sm_hosts.remote_bootstrap_tailscale(None, auth_key="tskey; touch /tmp/x",
                                   advertise_routes="1.2.3.0/24; reboot", tags="tag:x; rm -rf /")
     _ts_up = [a for v, a in _ts_calls if v == "tailscale-up-key"]
     check("tailscale: the join goes through the verb, not a composed command", _ts_up, str(_ts_calls))
@@ -742,17 +774,17 @@ try:
     check("tailscale: a rejected auth key is never echoed back — it is a secret",
           "SUPERSECRET" not in _err and "tskey" not in _err, _err)
 finally:
-    sm.run_command, sm.run_privileged = _orig_ts_rc, _orig_ts_rp
+    _sm_core.run_command, _sm_core.run_privileged = _orig_ts_rc, _orig_ts_rp
 
 # ── apt dependency names parsed from LinuxGSM output get interpolated into
 #    `apt-get install <pkgs>`, so parse_missing_deps is a security filter, not just a parser. ──
 eq("parse_missing_deps: extracts valid package names",
-   sm.parse_missing_deps("log line\nMissing dependencies: libssl-dev lib32gcc-s1 gcc:i386  Run: x\n"),
+   _sm_hosts.parse_missing_deps("log line\nMissing dependencies: libssl-dev lib32gcc-s1 gcc:i386  Run: x\n"),
    ["libssl-dev", "lib32gcc-s1", "gcc:i386"])
 eq("parse_missing_deps: drops shell-metachar tokens (injection guard)",
-   sm.parse_missing_deps("Missing dependencies: good $(reboot) a;b `id` also-good\n"),
+   _sm_hosts.parse_missing_deps("Missing dependencies: good $(reboot) a;b `id` also-good\n"),
    ["good", "also-good"])
-eq("parse_missing_deps: no marker -> []", sm.parse_missing_deps("nothing to see here"), [])
+eq("parse_missing_deps: no marker -> []", _sm_hosts.parse_missing_deps("nothing to see here"), [])
 
 # ── upload collisions: the browser must be able to ask "replace this?" with real facts ──────────
 # stat_upload_targets lists the directory ONCE and filters locally, so the parsing is where this
@@ -763,7 +795,7 @@ class _FakeSrv:
     host, port, username, linuxgsm_user = "127.0.0.1", 22, "u", ""
 
 
-_orig_up_rc = sm.run_command
+_orig_up_rc = _sm_core.run_command
 try:
     _FIND_OUT = "\n".join([
         "f\t1234\t1700000000.1234567890\tserver.cfg",
@@ -771,8 +803,8 @@ try:
         "f\t0\t1700000200.5000000000\tempty.txt",
         "f\t77\t1700000300.0000000000\ttab\tname.cfg",   # a filename containing a tab
     ])
-    sm.run_command = lambda *a, **k: (_FIND_OUT, "", 0)
-    _hits = sm.stat_upload_targets(_FakeSrv(), "csgoserver", "", ["server.cfg", "nope.txt", "addons"])
+    _sm_core.run_command = lambda *a, **k: (_FIND_OUT, "", 0)
+    _hits = _sm_files.stat_upload_targets(_FakeSrv(), "csgoserver", "", ["server.cfg", "nope.txt", "addons"])
     eq("stat_upload_targets: only names that exist come back",
        [h["name"] for h in _hits], ["server.cfg", "addons"])
     _byname = {h["name"]: h for h in _hits}
@@ -782,49 +814,49 @@ try:
     check("stat_upload_targets: a directory is flagged, so the UI can refuse to replace it",
           _byname["addons"]["is_dir"] is True and _byname["server.cfg"]["is_dir"] is False)
     eq("stat_upload_targets: a zero-byte file still counts as existing",
-       [h["name"] for h in sm.stat_upload_targets(_FakeSrv(), "u", "", ["empty.txt"])], ["empty.txt"])
+       [h["name"] for h in _sm_files.stat_upload_targets(_FakeSrv(), "u", "", ["empty.txt"])], ["empty.txt"])
     eq("stat_upload_targets: a filename containing a tab survives the split",
-       [h["name"] for h in sm.stat_upload_targets(_FakeSrv(), "u", "", ["tab\tname.cfg"])],
+       [h["name"] for h in _sm_files.stat_upload_targets(_FakeSrv(), "u", "", ["tab\tname.cfg"])],
        ["tab\tname.cfg"])
     eq("stat_upload_targets: a duplicate name is reported once",
-       len(sm.stat_upload_targets(_FakeSrv(), "u", "", ["server.cfg", "server.cfg"])), 1)
+       len(_sm_files.stat_upload_targets(_FakeSrv(), "u", "", ["server.cfg", "server.cfg"])), 1)
     eq("stat_upload_targets: the name is basename'd, matching what upload_file writes",
-       [h["name"] for h in sm.stat_upload_targets(_FakeSrv(), "u", "", ["sub/server.cfg"])],
+       [h["name"] for h in _sm_files.stat_upload_targets(_FakeSrv(), "u", "", ["sub/server.cfg"])],
        ["server.cfg"])
     check("stat_upload_targets: a traversal attempt returns None, not a listing",
-          sm.stat_upload_targets(_FakeSrv(), "u", "../../etc", ["passwd"]) is None)
+          _sm_files.stat_upload_targets(_FakeSrv(), "u", "../../etc", ["passwd"]) is None)
 
     # The host-side symlink guard. _safe_abspath is lexical and cannot see a symlink planted under
     # the game user's home, so every file operation now carries a realpath check that runs WHERE
     # THE PATH IS. Assert the guard is actually attached and that its sentinel is honoured.
     _cmds = []
-    sm.run_command = lambda s, c, **k: (_cmds.append(c), ("", "", 0))[1]
-    sm.browse_dir(_FakeSrv(), "csgoserver", "cfg")
+    _sm_core.run_command = lambda s, c, **k: (_cmds.append(c), ("", "", 0))[1]
+    _sm_files.browse_dir(_FakeSrv(), "csgoserver", "cfg")
     check("symlink guard: browse_dir resolves the path on the host before listing it",
           _cmds and "realpath -m" in _cmds[0] and "__OUTSIDE_HOME__" in _cmds[0], str(_cmds)[:150])
-    sm.run_command = lambda s, c, **k: ("__OUTSIDE_HOME__", "", 9)
+    _sm_core.run_command = lambda s, c, **k: ("__OUTSIDE_HOME__", "", 9)
     check("symlink guard: a path that escapes home is refused by browse_dir",
-          sm.browse_dir(_FakeSrv(), "csgoserver", "escape") is None)
+          _sm_files.browse_dir(_FakeSrv(), "csgoserver", "escape") is None)
     check("symlink guard: ...and by read_file",
-          sm.read_file(_FakeSrv(), "csgoserver", "escape/x")[1] == "Invalid path")
+          _sm_files.read_file(_FakeSrv(), "csgoserver", "escape/x")[1] == "Invalid path")
     check("symlink guard: ...and by delete_path",
-          sm.delete_path(_FakeSrv(), "csgoserver", "escape/x")[0] is False)
+          _sm_files.delete_path(_FakeSrv(), "csgoserver", "escape/x")[0] is False)
     check("symlink guard: ...and by stat_upload_targets",
-          sm.stat_upload_targets(_FakeSrv(), "csgoserver", "escape", ["x"]) is None)
+          _sm_files.stat_upload_targets(_FakeSrv(), "csgoserver", "escape", ["x"]) is None)
     check("symlink guard: ...and no bytes are written through one",
-          sm.upload_file(_FakeSrv(), "csgoserver", "escape", "x", b"d", overwrite=True)[0] is False)
+          _sm_files.upload_file(_FakeSrv(), "csgoserver", "escape", "x", b"d", overwrite=True)[0] is False)
 
     # models' @validates fires on ASSIGNMENT only, so a row written before it existed reaches the
     # shell unchecked. _safe_abspath is the choke point every file op goes through, so it re-checks.
     for _bad in ("a b", "a;rm -rf /", "$(id)", "-oProxyCommand=x", "", "x" * 65):
         check("unix user %r is refused at the point of use" % _bad[:14],
-              sm._safe_abspath(_bad, "cfg") is None)
+              _sm_files._safe_abspath(_bad, "cfg") is None)
     check("a legitimate unix user still resolves",
-          sm._safe_abspath("csgoserver", "cfg") == "/home/csgoserver/cfg")
-    sm.run_command = lambda *a, **k: ("", "", 0)
+          _sm_files._safe_abspath("csgoserver", "cfg") == "/home/csgoserver/cfg")
+    _sm_core.run_command = lambda *a, **k: ("", "", 0)
     eq("stat_upload_targets: no output means nothing exists",
-       sm.stat_upload_targets(_FakeSrv(), "u", "", ["server.cfg"]), [])
-    sm.run_command = lambda *a, **k: (_FIND_OUT, "", 0)
+       _sm_files.stat_upload_targets(_FakeSrv(), "u", "", ["server.cfg"]), [])
+    _sm_core.run_command = lambda *a, **k: (_FIND_OUT, "", 0)
 
     # ── upload cost is ROUND TRIPS, not bytes ─────────────────────────────────────────────────
     # Every run_command is a separate SSH exec, and writing one file used to take at least three:
@@ -833,8 +865,8 @@ try:
     # time seems kinda slow". A file small enough for one command now takes exactly one, which is
     # essentially every config, script and Lua file a game server holds.
     _wcalls = []
-    sm.run_command = lambda s, c, **k: (_wcalls.append(c), ("", "", 0))[1]
-    sm._write_file_as_user(_FakeSrv(), "csgoserver", "/home/csgoserver/addons/gm/init.lua", b"L" * 2048)
+    _sm_core.run_command = lambda s, c, **k: (_wcalls.append(c), ("", "", 0))[1]
+    _sm_files._write_file_as_user(_FakeSrv(), "csgoserver", "/home/csgoserver/addons/gm/init.lua", b"L" * 2048)
     eq("upload: a small file costs ONE ssh round trip (was three)", len(_wcalls), 1)
     _one = _wcalls[0] if _wcalls else ""
     check("upload: ...and that single command still carries the home-dir guard",
@@ -849,7 +881,7 @@ try:
           len(_one) < 120000, "%d bytes" % len(_one))
     # A file too big for one command still streams in chunks rather than being refused.
     _wcalls.clear()
-    _ok_big, _ = sm._write_file_as_user(_FakeSrv(), "csgoserver", "/home/csgoserver/big.vpk", b"B" * (200 * 1024))
+    _ok_big, _ = _sm_files._write_file_as_user(_FakeSrv(), "csgoserver", "/home/csgoserver/big.vpk", b"B" * (200 * 1024))
     check("upload: a large file still chunks (and is not refused)",
           _ok_big is True and len(_wcalls) > 1, "%r %d calls" % (_ok_big, len(_wcalls)))
     check("upload: the large path guards its FIRST command, before any byte is written",
@@ -858,60 +890,60 @@ try:
     # The server-side half: overwrite is opt-in. The UI asks first, but check and write are two
     # round trips, so a file that appears in between must be refused rather than clobbered.
     _calls = []
-    sm.run_command = lambda s, c, **k: (_calls.append(c), ("__YES__", "", 0))[1]
-    _ok, _msg = sm.upload_file(_FakeSrv(), "csgoserver", "", "server.cfg", b"data", overwrite=False)
+    _sm_core.run_command = lambda s, c, **k: (_calls.append(c), ("__YES__", "", 0))[1]
+    _ok, _msg = _sm_files.upload_file(_FakeSrv(), "csgoserver", "", "server.cfg", b"data", overwrite=False)
     check("upload_file: refuses an existing target when overwrite was not granted",
-          _ok is False and _msg == sm.UPLOAD_EXISTS, "%r %r" % (_ok, _msg))
+          _ok is False and _msg == _sm_files.UPLOAD_EXISTS, "%r %r" % (_ok, _msg))
     # ".paneltmp", not "printf": the symlink guard's realpath fallback legitimately uses printf,
     # so that word no longer means "a write happened". The staging file name only ever appears on
     # the write path.
     check("upload_file: and writes nothing on that path",
           not any("base64 -d" in c or ".paneltmp" in c for c in _calls), str(_calls)[:160])
     _calls.clear()
-    sm.run_command = lambda s, c, **k: (_calls.append(c), ("", "", 0))[1]
-    _ok2, _ = sm.upload_file(_FakeSrv(), "csgoserver", "", "server.cfg", b"data", overwrite=False)
+    _sm_core.run_command = lambda s, c, **k: (_calls.append(c), ("", "", 0))[1]
+    _ok2, _ = _sm_files.upload_file(_FakeSrv(), "csgoserver", "", "server.cfg", b"data", overwrite=False)
     check("upload_file: a free name still uploads with overwrite=False",
           _ok2 is True and any("base64 -d" in c for c in _calls), "%r" % _ok2)
 finally:
-    sm.run_command = _orig_up_rc
+    _sm_core.run_command = _orig_up_rc
 
 
 # ── downloads: stat_path decides file-vs-archive and the Content-Length, stream_path moves bytes ──
 # The editor's read is text-only, 1 MB-capped and refuses a binary. A download is the opposite
 # shape, so it is a separate pair of functions — and the pair is where a path could escape the
 # game user's home, so the guard and the transport choice are both pinned here.
-_orig_dl_rc = sm.run_command
+_orig_dl_rc = _sm_core.run_command
 try:
-    sm.run_command = lambda *a, **k: ("f 4096", "", 0)
+    _sm_core.run_command = lambda *a, **k: ("f 4096", "", 0)
     eq("stat_path: a file reports its type and size",
-       sm.stat_path(_FakeSrv(), "csgoserver", "cfg/server.cfg"),
+       _sm_files.stat_path(_FakeSrv(), "csgoserver", "cfg/server.cfg"),
        {"type": "f", "size": 4096, "name": "server.cfg", "rel": "cfg/server.cfg"})
-    sm.run_command = lambda *a, **k: ("d 0", "", 0)
+    _sm_core.run_command = lambda *a, **k: ("d 0", "", 0)
     eq("stat_path: a directory is flagged, so the route knows to build an archive",
-       sm.stat_path(_FakeSrv(), "csgoserver", "addons")["type"], "d")
+       _sm_files.stat_path(_FakeSrv(), "csgoserver", "addons")["type"], "d")
     # "." is how the route recognises the home directory itself, whatever spelling asked for it.
     for _spelling in ("", ".", "/", "cfg/.."):
         eq("stat_path: %r canonicalises to the home directory" % _spelling,
-           sm.stat_path(_FakeSrv(), "csgoserver", _spelling)["rel"], ".")
-    sm.run_command = lambda *a, **k: ("__NOFILE__", "", 0)
+           _sm_files.stat_path(_FakeSrv(), "csgoserver", _spelling)["rel"], ".")
+    _sm_core.run_command = lambda *a, **k: ("__NOFILE__", "", 0)
     check("stat_path: a missing path is None, not a zero-byte file",
-          sm.stat_path(_FakeSrv(), "csgoserver", "gone.cfg") is None)
+          _sm_files.stat_path(_FakeSrv(), "csgoserver", "gone.cfg") is None)
     # An unreadable size must not silently become a Content-Length of 0: a wrong Content-Length
     # truncates the download at that many bytes, which is worse than no progress bar.
-    sm.run_command = lambda *a, **k: ("f", "", 0)
+    _sm_core.run_command = lambda *a, **k: ("f", "", 0)
     eq("stat_path: an unreadable size falls back to 0 rather than garbage",
-       sm.stat_path(_FakeSrv(), "csgoserver", "odd")["size"], 0)
+       _sm_files.stat_path(_FakeSrv(), "csgoserver", "odd")["size"], 0)
     _stat_cmds = []
-    sm.run_command = lambda s, c, **k: (_stat_cmds.append(c), ("f 1", "", 0))[1]
-    sm.stat_path(_FakeSrv(), "csgoserver", "cfg/server.cfg")
+    _sm_core.run_command = lambda s, c, **k: (_stat_cmds.append(c), ("f 1", "", 0))[1]
+    _sm_files.stat_path(_FakeSrv(), "csgoserver", "cfg/server.cfg")
     check("stat_path: carries the host-side symlink guard, like every other file op",
           _stat_cmds and "realpath -m" in _stat_cmds[0] and "__OUTSIDE_HOME__" in _stat_cmds[0],
           str(_stat_cmds)[:150])
-    sm.run_command = lambda *a, **k: ("__OUTSIDE_HOME__", "", 9)
+    _sm_core.run_command = lambda *a, **k: ("__OUTSIDE_HOME__", "", 9)
     check("stat_path: a path that escapes home is refused",
-          sm.stat_path(_FakeSrv(), "csgoserver", "escape") is None)
+          _sm_files.stat_path(_FakeSrv(), "csgoserver", "escape") is None)
     check("stat_path: a traversal is refused before any command runs",
-          sm.stat_path(_FakeSrv(), "csgoserver", "../../etc/passwd") is None)
+          _sm_files.stat_path(_FakeSrv(), "csgoserver", "../../etc/passwd") is None)
 
     class _FakeProc:
         """A Popen stand-in whose stdout hands back a fixed list of chunks."""
@@ -931,25 +963,25 @@ try:
         _argvs.append(argv)
         return _FakeProc([b"abc", b"def"])
 
-    _orig_popen, _orig_helper = sm.subprocess.Popen, sm.helper_present
+    _orig_popen, _orig_helper = _sm_core.subprocess.Popen, _sm_core.helper_present
     try:
-        sm.subprocess.Popen = _fake_popen
-        sm.helper_present = lambda: True
+        _sm_core.subprocess.Popen = _fake_popen
+        _sm_core.helper_present = lambda: True
         # A refusal has to mean NOTHING RAN, not just "no bytes came back": with the byte source
         # faked, an empty result would otherwise be indistinguishable from a command that ran and
         # returned nothing. So these assert the argv list stayed empty.
         check("stream_path: a traversal runs no command at all",
-              list(sm.stream_path(_FakeSrv(), "csgoserver", "../../etc/passwd")) == []
+              list(_sm_files.stream_path(_FakeSrv(), "csgoserver", "../../etc/passwd")) == []
               and _argvs == [], str(_argvs))
         check("stream_path: an unsafe game user is refused the same way",
-              list(sm.stream_path(_FakeSrv(), "a;id", "server.cfg")) == []
+              list(_sm_files.stream_path(_FakeSrv(), "a;id", "server.cfg")) == []
               and _argvs == [], str(_argvs))
         # A collapsible ".." is a legitimate request — _safe_abspath normalises it — but the
         # helper's validator refuses a ".." component, so the raw string must not be what crosses.
         # Forwarding it raised VerbError out of the middle of a download.
         _argvs.clear()
         eq("stream_path: a collapsible '..' is normalised before it reaches the verb",
-           b"".join(sm.stream_path(_FakeSrv(), "csgoserver", "cfg/../server.cfg")), b"abcdef")
+           b"".join(_sm_files.stream_path(_FakeSrv(), "csgoserver", "cfg/../server.cfg")), b"abcdef")
         eq("stream_path: ...and what crosses the boundary is the canonical path",
            _argvs[-1][5], "server.cfg")
         # The home directory itself is not a download: "tar up this whole game install" is never
@@ -957,25 +989,25 @@ try:
         _argvs.clear()
         for _root_path in ("", ".", "/", "cfg/.."):
             check("stream_path: %r is not a download target" % _root_path,
-                  list(sm.stream_path(_FakeSrv(), "csgoserver", _root_path, as_tar=True)) == []
+                  list(_sm_files.stream_path(_FakeSrv(), "csgoserver", _root_path, as_tar=True)) == []
                   and _argvs == [], str(_argvs))
         eq("stream_path: the bytes come through in order",
-           b"".join(sm.stream_path(_FakeSrv(), "csgoserver", "cfg/server.cfg")), b"abcdef")
+           b"".join(_sm_files.stream_path(_FakeSrv(), "csgoserver", "cfg/server.cfg")), b"abcdef")
         eq("stream_path: a local file download goes through the helper verb, as argv",
            [_argvs[-1][3], _argvs[-1][4], _argvs[-1][5]],
            ["game-file-read", "csgoserver", "cfg/server.cfg"])
-        list(sm.stream_path(_FakeSrv(), "csgoserver", "addons", as_tar=True))
+        list(_sm_files.stream_path(_FakeSrv(), "csgoserver", "addons", as_tar=True))
         eq("stream_path: a local folder download asks for the tar verb instead",
            _argvs[-1][3], "game-dir-tar")
         check("stream_path: no shell is involved on the helper path",
               not any(x in ("bash", "/bin/bash", "sh") for x in _argvs[-1]), str(_argvs[-1]))
         # No helper yet (a host between `git pull` and the next install.sh run): still argv, and
         # still read AS THE GAME USER — that is the property the whole design rests on.
-        sm.helper_present = lambda: False
-        list(sm.stream_path(_FakeSrv(), "csgoserver", "cfg/server.cfg"))
+        _sm_core.helper_present = lambda: False
+        list(_sm_files.stream_path(_FakeSrv(), "csgoserver", "cfg/server.cfg"))
         eq("stream_path: the no-helper fallback reads as the game user, without a shell",
            _argvs[-1], ["sudo", "-u", "csgoserver", "cat", "--", "/home/csgoserver/cfg/server.cfg"])
-        list(sm.stream_path(_FakeSrv(), "csgoserver", "addons", as_tar=True))
+        list(_sm_files.stream_path(_FakeSrv(), "csgoserver", "addons", as_tar=True))
         eq("stream_path: ...and tars the directory from its parent, so the archive has one root",
            _argvs[-1], ["sudo", "-u", "csgoserver", "tar", "czf", "-",
                         "-C", "/home/csgoserver", "--", "addons"])
@@ -985,17 +1017,17 @@ try:
         _argvs.clear()
         for _root_path in ("", ".", "/", "cfg/.."):
             check("stream_path: %r is refused without the helper too" % _root_path,
-                  list(sm.stream_path(_FakeSrv(), "csgoserver", _root_path, as_tar=True)) == []
+                  list(_sm_files.stream_path(_FakeSrv(), "csgoserver", _root_path, as_tar=True)) == []
                   and _argvs == [], str(_argvs))
         # A game server writes to its console log constantly, so the file can be bigger by the time
         # it is read than when it was measured. A response longer than its own Content-Length
         # desynchronises a keep-alive connection, so the stream is capped at what was measured.
         eq("stream_path: the stream is capped at the size the route promised",
-           b"".join(sm.stream_path(_FakeSrv(), "csgoserver", "cod-console.log", limit=4)), b"abcd")
+           b"".join(_sm_files.stream_path(_FakeSrv(), "csgoserver", "cod-console.log", limit=4)), b"abcd")
         eq("stream_path: a limit of 0 sends nothing at all",
-           b"".join(sm.stream_path(_FakeSrv(), "csgoserver", "empty.log", limit=0)), b"")
+           b"".join(_sm_files.stream_path(_FakeSrv(), "csgoserver", "empty.log", limit=0)), b"")
         eq("stream_path: a limit larger than the file does not pad it",
-           b"".join(sm.stream_path(_FakeSrv(), "csgoserver", "small.cfg", limit=999)), b"abcdef")
+           b"".join(_sm_files.stream_path(_FakeSrv(), "csgoserver", "small.cfg", limit=999)), b"abcdef")
         # ── The SSH transports take the path on STDIN, and their command is a CONSTANT ────────
         # A download over SSH is parsed twice — once assembling the local `ssh` argv, again by the
         # remote shell — and two-level quoting is where this class of bug lives. So the command
@@ -1021,15 +1053,15 @@ try:
             _cmds2.append(argv[-1])
             return _FakeTsProc([b"abc"])
 
-        _orig_ts_host = sm._resolve_ts_host
+        _orig_ts_host = _sm_core._resolve_ts_host
         try:
-            sm._resolve_ts_host = lambda s: "ts-host"
-            sm.subprocess.Popen = _fake_ts_popen
+            _sm_core._resolve_ts_host = lambda s: "ts-host"
+            _sm_core.subprocess.Popen = _fake_ts_popen
             _fed.clear(); _cmds2.clear()
             _HOSTILE = "addons/'; id; echo $(whoami) \"x\".cfg"
             eq("stream_path (ssh): the bytes still come through",
-               b"".join(sm.stream_path(_TsSrv(), "csgoserver", "cfg/server.cfg")), b"abc")
-            list(sm.stream_path(_TsSrv(), "csgoserver", _HOSTILE))
+               b"".join(_sm_files.stream_path(_TsSrv(), "csgoserver", "cfg/server.cfg")), b"abc")
+            list(_sm_files.stream_path(_TsSrv(), "csgoserver", _HOSTILE))
             eq("stream_path (ssh): a hostile path produces the IDENTICAL remote command",
                _cmds2[0], _cmds2[1])
             check("stream_path (ssh): the path is nowhere in the command — it went to stdin",
@@ -1039,25 +1071,25 @@ try:
                [b.decode() for b in _fed], ["cfg/server.cfg", _HOSTILE])
             # The two shapes differ only in the verb, which is a literal either way.
             _cmds2.clear()
-            list(sm.stream_path(_TsSrv(), "csgoserver", "addons", as_tar=True))
+            list(_sm_files.stream_path(_TsSrv(), "csgoserver", "addons", as_tar=True))
             check("stream_path (ssh): the folder form is the tar verb, still constant",
                   "tar czf -" in _cmds2[0] and "addons" not in _cmds2[0], _cmds2[0][-80:])
             # And the guard is in that constant text, judging the resolved path on the host.
             check("stream_path (ssh): the command carries the host-side containment guard",
                   "realpath -m" in _cmds2[0] and "__OUTSIDE_HOME__" in _cmds2[0], _cmds2[0][:90])
         finally:
-            sm._resolve_ts_host = _orig_ts_host
-            sm.subprocess.Popen = _fake_popen
+            _sm_core._resolve_ts_host = _orig_ts_host
+            _sm_core.subprocess.Popen = _fake_popen
 
         # The SSH transports DO use a shell, so the guard rides along there — and its sentinel must
         # not be handed to the browser as if it were the file.
-        sm.subprocess.Popen = lambda argv, **_kw: _FakeProc([b"__OUTSIDE_HOME__\n"])
+        _sm_core.subprocess.Popen = lambda argv, **_kw: _FakeProc([b"__OUTSIDE_HOME__\n"])
         eq("stream_path: a stream carrying the guard's sentinel yields nothing",
-           list(sm.stream_path(_FakeSrv(), "csgoserver", "link")), [])
+           list(_sm_files.stream_path(_FakeSrv(), "csgoserver", "link")), [])
     finally:
-        sm.subprocess.Popen, sm.helper_present = _orig_popen, _orig_helper
+        _sm_core.subprocess.Popen, _sm_core.helper_present = _orig_popen, _orig_helper
 finally:
-    sm.run_command = _orig_dl_rc
+    _sm_core.run_command = _orig_dl_rc
 
 # The download's filename reaches the browser in a header, and whoever uploaded the file chose it.
 # (`_app` is the Flask test app further down this file; the module itself is the one wanted here.)
@@ -1127,53 +1159,53 @@ finally:
 # ── GMod mountable content: the game picker is allow-listed, and the mount config is generated from a
 #    validated content username + constant game keys (so it's safe to write verbatim). ──
 eq("gmod content: unknown games filtered, order + dedupe preserved",
-   sm._valid_content_games(["cstrike", "tf", "doom", "cstrike"]), ["cstrike", "tf"])
-eq("gmod content: empty -> []", sm._valid_content_games([]), [])
-_gmc, _gmd = sm._gmod_mount_files("srcds", ["cstrike", "tf"])
+   _sm_gmod._valid_content_games(["cstrike", "tf", "doom", "cstrike"]), ["cstrike", "tf"])
+eq("gmod content: empty -> []", _sm_gmod._valid_content_games([]), [])
+_gmc, _gmd = _sm_gmod._gmod_mount_files("srcds", ["cstrike", "tf"])
 check("gmod content: mount.cfg points each game at the content user's serverfiles",
       _gmc.startswith('"mountcfg"') and '"cstrike"\t"/home/srcds/serverfiles/cstrike"' in _gmc
       and '"tf"\t"/home/srcds/serverfiles/tf"' in _gmc)
 check("gmod content: mountdepots enables hl2 + each game",
       _gmd.startswith('"gamedepotsystem"') and '"hl2"' in _gmd and '"cstrike"' in _gmd and '"tf"' in _gmd)
 check("gmod content: installable games map to a LinuxGSM name, mount-only map to None",
-      all(isinstance(v[1], str) for v in sm.GMOD_CONTENT_GAMES.values() if v[1] is not None)
-      and sm.GMOD_CONTENT_GAMES["cstrike"][1] == "cssserver"
-      and sm.GMOD_CONTENT_GAMES["hl1mp"][1] == "hldmsserver"     # free via LinuxGSM, not owned-only
-      and sm.GMOD_CONTENT_GAMES["zps"][1] == "zpsserver"         # extra free Source game
-      and sm.GMOD_CONTENT_GAMES["hl2"][1] is None                # owned single-player -> mount-only
-      and "csgo" not in sm.GMOD_CONTENT_GAMES                    # dropped (CS2 now, unmountable)
-      and sum(1 for v in sm.GMOD_CONTENT_GAMES.values() if v[1] is not None) == 16)
+      all(isinstance(v[1], str) for v in _sm_gmod.GMOD_CONTENT_GAMES.values() if v[1] is not None)
+      and _sm_gmod.GMOD_CONTENT_GAMES["cstrike"][1] == "cssserver"
+      and _sm_gmod.GMOD_CONTENT_GAMES["hl1mp"][1] == "hldmsserver"     # free via LinuxGSM, not owned-only
+      and _sm_gmod.GMOD_CONTENT_GAMES["zps"][1] == "zpsserver"         # extra free Source game
+      and _sm_gmod.GMOD_CONTENT_GAMES["hl2"][1] is None                # owned single-player -> mount-only
+      and "csgo" not in _sm_gmod.GMOD_CONTENT_GAMES                    # dropped (CS2 now, unmountable)
+      and sum(1 for v in _sm_gmod.GMOD_CONTENT_GAMES.values() if v[1] is not None) == 16)
 # Weekly content-update cron: update-lgsm (scripts) then update (content), Sunday, staggered, as the
 # content user — so mounted content stays current (Source games get content updates).
-_cron_body = sm._content_update_cron_body("srcds", ["cssserver", "tf2server"])
+_cron_body = _sm_gmod._content_update_cron_body("srcds", ["cssserver", "tf2server"])
 check("gmod content cron: per-game update + update-lgsm as the content user, Sunday, staggered",
       "0 1 * * 0 srcds /home/srcds/cssserver update-lgsm" in _cron_body
       and "2 1 * * 0 srcds /home/srcds/tf2server update-lgsm" in _cron_body
       and "0 2 * * 0 srcds /home/srcds/cssserver update >" in _cron_body
       and "10 2 * * 0 srcds /home/srcds/tf2server update >" in _cron_body)
 # uninstall removes the content dir + the LinuxGSM install (host-wide), and rejects a bad user.
-_orig_un_rc, _orig_un_rp = sm.run_command, sm.run_privileged
+_orig_un_rc, _orig_un_rp = _sm_core.run_command, _sm_core.run_privileged
 try:
     # These used to assert on the three `rm -rf` strings the call site built. It builds NAMES now
     # and the helper builds the paths, so the assertion moves to the verb — and the paths those
     # names produce are checked once, here, against privileged.content_path().
     _un = []
-    sm.run_command = lambda s, c, **k: (_un.append(("cmd", c)), ("N", "", 0))[1]
-    sm.run_privileged = lambda s, v, a=(), **k: (_un.append((v, list(a))), ("N", "", 1))[1]
-    _uok, _urem, _ = sm.uninstall_gmod_content(object(), "gmodcontent", ["cstrike"])
+    _sm_core.run_command = lambda s, c, **k: (_un.append(("cmd", c)), ("N", "", 0))[1]
+    _sm_core.run_privileged = lambda s, v, a=(), **k: (_un.append((v, list(a))), ("N", "", 1))[1]
+    _uok, _urem, _ = _sm_gmod.uninstall_gmod_content(object(), "gmodcontent", ["cstrike"])
     check("gmod content uninstall: asks to remove the game, its script and its config",
           ("content-game-remove", ["gmodcontent", "cstrike", "cssserver"]) in _un
           and _urem == ["cstrike"], str(_un))
     _un[:] = []
-    _uok3, _urem3, _ = sm.uninstall_gmod_content(object(), "srcds", ["hl2"])   # mount-only game
+    _uok3, _urem3, _ = _sm_gmod.uninstall_gmod_content(object(), "srcds", ["hl2"])   # mount-only game
     check("gmod content uninstall: a mount-only (owned) game passes '-' for 'no script'",
           ("content-game-remove", ["srcds", "hl2", "-"]) in _un and _urem3 == ["hl2"], str(_un))
     _un[:] = []
-    _uok2, _, _ = sm.uninstall_gmod_content(object(), "bad;user", ["cstrike"])
+    _uok2, _, _ = _sm_gmod.uninstall_gmod_content(object(), "bad;user", ["cstrike"])
     check("gmod content uninstall: rejects an invalid content user, runs nothing",
           _uok2 is False and not _un)
 finally:
-    sm.run_command, sm.run_privileged = _orig_un_rc, _orig_un_rp
+    _sm_core.run_command, _sm_core.run_privileged = _orig_un_rc, _orig_un_rp
 
 # And the names really do resolve to the three paths the shell form removed — asserted against the
 # path builder rather than against a command string, so it holds for both transports.
@@ -1186,36 +1218,36 @@ eq("gmod content uninstall: the LinuxGSM config",
    _privmod.content_path("gmodcontent", "lgsm", "config-lgsm", "cssserver"),
    "/home/gmodcontent/lgsm/config-lgsm/cssserver")
 # free disk on the content filesystem (shown on the card so nobody starts a 13GB install without room)
-_orig_df_rp = sm.run_privileged
+_orig_df_rp = _sm_core.run_privileged
 try:
     # The fixture is now REAL `df -PB1` output, header and all, because the awk that used to
     # reduce it to two fields (under root) is gone and the parsing happens in Python. That makes
     # this a stronger test than it was: it exercises the column indices, not awk's answer.
     _DF_OUT = ("Filesystem       1B-blocks         Used    Available Use% Mounted on\n"
                "/dev/sda1     500107862016 376651072004 123456789012  76% /home\n")
-    sm.run_privileged = lambda s, v, a=(), **k: (_DF_OUT, "", 0)
+    _sm_core.run_privileged = lambda s, v, a=(), **k: (_DF_OUT, "", 0)
     eq("path_disk_free: parses (free, total) from real df output",
-       sm.path_disk_free(object(), "/home/gmodcontent/serverfiles"), (123456789012, 500107862016))
-    sm.run_privileged = lambda s, v, a=(), **k: ("garbage", "", 0)
-    eq("path_disk_free: junk output -> (None, None)", sm.path_disk_free(object(), "/home"), (None, None))
-    sm.run_privileged = lambda s, v, a=(), **k: ("", "", 0)
-    eq("path_disk_free: empty output -> (None, None)", sm.path_disk_free(object(), "/home"), (None, None))
+       _sm_gmod.path_disk_free(object(), "/home/gmodcontent/serverfiles"), (123456789012, 500107862016))
+    _sm_core.run_privileged = lambda s, v, a=(), **k: ("garbage", "", 0)
+    eq("path_disk_free: junk output -> (None, None)", _sm_gmod.path_disk_free(object(), "/home"), (None, None))
+    _sm_core.run_privileged = lambda s, v, a=(), **k: ("", "", 0)
+    eq("path_disk_free: empty output -> (None, None)", _sm_gmod.path_disk_free(object(), "/home"), (None, None))
 finally:
-    sm.run_privileged = _orig_df_rp
+    _sm_core.run_privileged = _orig_df_rp
 # gmod_current_mounts: parse a real mount.cfg, keep only known games, ignore the header + unknowns.
-_orig_gm_rc2 = sm.run_command
+_orig_gm_rc2 = _sm_core.run_command
 try:
-    sm.run_command = lambda s, c, **k: (
+    _sm_core.run_command = lambda s, c, **k: (
         '"mountcfg"\n{\n\t"cstrike"\t"/home/srcds/serverfiles/cstrike"\n'
         '\t"tf"\t"/home/srcds/serverfiles/tf"\n'
         '//\t"csgo"\t"/home/srcds/serverfiles/csgo"\n'      # commented-out mount must NOT count
         '\t"notagame"\t"/x"\n}\n', "", 0)
     eq("gmod content: current mounts skip commented (//) lines + header + unknowns",
-       sm.gmod_current_mounts(object(), "gmodserver"), ["cstrike", "tf"])
+       _sm_gmod.gmod_current_mounts(object(), "gmodserver"), ["cstrike", "tf"])
 finally:
-    sm.run_command = _orig_gm_rc2
+    _sm_core.run_command = _orig_gm_rc2
 # detect_content_user: parse a host scan, reject non-username tokens, resolve the primary group.
-_orig_gm_rc = sm.run_command
+_orig_gm_rc = _sm_core.run_command
 try:
     def _gm_fake(server, cmd, **k):
         if "for u in" in cmd:
@@ -1223,57 +1255,57 @@ try:
         if "id -gn" in cmd:
             return "srcds", "", 0
         return "", "", 0
-    sm.run_command = _gm_fake
-    _det = sm.detect_content_user(object(), ("cstrike",))
+    _sm_core.run_command = _gm_fake
+    _det = _sm_gmod.detect_content_user(object(), ("cstrike",))
     check("gmod content: detect reuses a valid content user, rejects bad usernames",
           bool(_det) and _det["user"] == "srcds" and _det["group"] == "srcds"
           and _det["present"].get("cstrike") == "/home/srcds/serverfiles/cstrike")
 finally:
-    sm.run_command = _orig_gm_rc
+    _sm_core.run_command = _orig_gm_rc
 
 # a bad schedule is rejected by update before any SSH
-_bad = sm.update_cron_job(None, "gm", "0 3 * * * /home/gm/backup.sh", "not-a-schedule", "x", "gmodserver")
+_bad = _sm_cron.update_cron_job(None, "gm", "0 3 * * * /home/gm/backup.sh", "not-a-schedule", "x", "gmodserver")
 check("cron: update rejects a bad schedule (no SSH)", _bad[0] is False)
 # cron run-history: the recorder wrap/unwrap round-trips, and status files parse.
 import base64 as _b64
 _ccmd = "/home/gm/backup.sh --full && echo done"
-_cjid = sm._cron_job_id(_ccmd)
+_cjid = _sm_cron._cron_job_id(_ccmd)
 check("cron: job id is a stable 12-hex hash",
-      _cjid == sm._cron_job_id(_ccmd) and len(_cjid) == 12
+      _cjid == _sm_cron._cron_job_id(_ccmd) and len(_cjid) == 12
       and all(c in "0123456789abcdef" for c in _cjid))
 _wrapped = "/home/gm/.lgsm-cron/run %s %s" % (_cjid, _b64.b64encode(_ccmd.encode()).decode())
 check("cron: unwrap recovers the original command",
-      sm._unwrap_cron_command(_wrapped) == (_ccmd, _cjid))
+      _sm_cron._unwrap_cron_command(_wrapped) == (_ccmd, _cjid))
 check("cron: unwrap leaves a plain command untouched",
-      sm._unwrap_cron_command("/home/gm/x.sh") == ("/home/gm/x.sh", None))
+      _sm_cron._unwrap_cron_command("/home/gm/x.sh") == ("/home/gm/x.sh", None))
 # Maintenance + autostart jobs use the INLINE recorder: the command stays visible (so the grep-based
 # dedup/removal + last-run detection still work) and unwraps to the core command + a job id.
-_mrec = sm._record_managed_cmd("gm", "/home/gm/gmodserver update")
+_mrec = _sm_cron._record_managed_cmd("gm", "/home/gm/gmodserver update")
 check("managed cron: inline-recorded maintenance line still matches the dedup remove-regex",
       bool(__import__("re").search(r"/home/gm/gmodserver (monitor|mods-update|update|update-lgsm) ", _mrec)))
 check("managed cron: unwrap recovers the core command + id",
-      sm._unwrap_cron_command(_mrec)
-      == ("/home/gm/gmodserver update", sm._cron_job_id("/home/gm/gmodserver update")))
+      _sm_cron._unwrap_cron_command(_mrec)
+      == ("/home/gm/gmodserver update", _sm_cron._cron_job_id("/home/gm/gmodserver update")))
 # Nothing is managed now: an inline-recorded line (even monitor) is editable/deletable — the role
 # label is all that distinguishes a panel line.
 check("cron: an inline-recorded maintenance line is not managed (editable/deletable)",
-      not sm._cron_line_managed(_mrec, "gm", "gmodserver"))
+      not _sm_cron._cron_line_managed(_mrec, "gm", "gmodserver"))
 check("cron: an inline-recorded monitor line is not managed either — just role-labelled 'autostart'",
-      not sm._cron_line_managed(sm._record_managed_cmd("gm", "/home/gm/gmodserver monitor"), "gm", "gmodserver")
-      and sm._cron_role("/home/gm/gmodserver monitor", "gm", "gmodserver") == "autostart")
+      not _sm_cron._cron_line_managed(_sm_cron._record_managed_cmd("gm", "/home/gm/gmodserver monitor"), "gm", "gmodserver")
+      and _sm_cron._cron_role("/home/gm/gmodserver monitor", "gm", "gmodserver") == "autostart")
 # upgrade_managed_cron_tracking rewraps EXISTING managed lines in place, leaving user jobs and
 # the compound restart-check untouched (so old installs get success/error without a reinstall).
 _upcap = {}
-_orig_rw_u = sm._rewrite_crontab
-_orig_run_u = sm.run_command
+_orig_rw_u = _sm_core._rewrite_crontab
+_orig_run_u = _sm_core.run_command
 try:
-    sm.run_command = lambda s, c, **k: (
+    _sm_core.run_command = lambda s, c, **k: (
         "*/5 * * * * /home/gm/gmodserver monitor > /dev/null 2>&1\n"
         "@reboot /home/gm/gmodserver start > /dev/null 2>&1\n"
         "0 3 * * * /home/gm/backup.sh\n"
         "10 * * * * [ -f /home/gm/.restart-pending ] && { /home/gm/gmodserver restart; }\n", "", 0)
-    sm._rewrite_crontab = lambda s, u, grep, add, extra_pre="": (_upcap.update(add=list(add)) or (True, "ok"))
-    _ures = sm.upgrade_managed_cron_tracking(None, "gm", "gmodserver")
+    _sm_core._rewrite_crontab = lambda s, u, grep, add, extra_pre="": (_upcap.update(add=list(add)) or (True, "ok"))
+    _ures = _sm_cron.upgrade_managed_cron_tracking(None, "gm", "gmodserver")
     _uadd = _upcap.get("add", [])
     check("cron upgrade: reports a change", _ures is True)
     check("cron upgrade: monitor line wrapped in place", any(
@@ -1284,8 +1316,8 @@ try:
     check("cron upgrade: compound restart-check left untouched", any(
         ln.startswith("10 * * * * [ -f") and ".status" not in ln for ln in _uadd))
 finally:
-    sm._rewrite_crontab = _orig_rw_u
-    sm.run_command = _orig_run_u
+    _sm_core._rewrite_crontab = _orig_rw_u
+    _sm_core.run_command = _orig_run_u
 import base64 as _b64cr
 
 
@@ -1296,18 +1328,18 @@ def _cron_wire(jobs):
                    for jid, rc, st, en, log in jobs)
 
 
-_orig_run3 = sm.run_command
+_orig_run3 = _sm_core.run_command
 try:
-    sm.run_command = lambda s, c, **k: (_cron_wire([("aaaaaaaaaaaa", 0, 100, 142, ""),
+    _sm_core.run_command = lambda s, c, **k: (_cron_wire([("aaaaaaaaaaaa", 0, 100, 142, ""),
                                                     ("bbbbbbbbbbbb", 1, 200, 205, "boom: exit 1")]),
                                         "", 0)
-    _cst = sm._read_cron_status(None, "gm")
+    _cst = _sm_cron._read_cron_status(None, "gm")
     check("cron status: a successful run parses (ok + last_run)",
           _cst["aaaaaaaaaaaa"]["ok"] is True and _cst["aaaaaaaaaaaa"]["last_run"] == 142)
     check("cron status: a failed run parses with its error tail",
           _cst["bbbbbbbbbbbb"]["ok"] is False and _cst["bbbbbbbbbbbb"]["error"] == "boom: exit 1")
 finally:
-    sm.run_command = _orig_run3
+    _sm_core.run_command = _orig_run3
 # A FAITHFUL aborted `update-lgsm` log, byte-for-byte in the shape LinuxGSM writes one: fn_print_dots
 # repaints the first line with \r, the reason arrives mid-log, and fn_print_*_eol_nl appends its
 # verdict as a separate " ... FAIL" line. The \r is the whole point — it used to end the wire record
@@ -1322,12 +1354,12 @@ _lgsm_log = ("\x1b[1m\r\x1b[K[\x1b[0m .... \x1b[0m]\x1b[0m Updating LinuxGSM pmc
              "fetching Bitbucket [ \x1b[3mubuntu-24.04.csv\x1b[0m ]"
              "curl: (22) The requested URL returned error: 404\n"
              " ... \x1b[31mFAIL\x1b[0m\n")
-_orig_run3r = sm.run_command
+_orig_run3r = _sm_core.run_command
 try:
-    sm.run_command = lambda s, c, **k: (_cron_wire([("cc33dd44ee55", 1, 100, 106, _lgsm_log)]), "", 0)
-    _rerr = sm._read_cron_status(None, "gm")["cc33dd44ee55"]["error"]
+    _sm_core.run_command = lambda s, c, **k: (_cron_wire([("cc33dd44ee55", 1, 100, 106, _lgsm_log)]), "", 0)
+    _rerr = _sm_cron._read_cron_status(None, "gm")["cc33dd44ee55"]["error"]
 finally:
-    sm.run_command = _orig_run3r
+    _sm_core.run_command = _orig_run3r
 # These go THROUGH the reader, not straight to the helper: that is the link the fix is about, and a
 # revert of either half (the base64 wire or the _clean_cron_error call) fails them.
 check("cron error (via reader): the reason survives a \\r-repainted log",
@@ -1339,13 +1371,13 @@ check("cron error (via reader): fits the UI cell", 0 < len(_rerr) <= 240)
 check("cron error (via reader): both mirror attempts are shown (they are different lines)",
       "fetching GitHub" in _rerr and "fetching Bitbucket" in _rerr)
 check("cron error: an IDENTICAL repeated line is not shown twice",
-      sm._clean_cron_error("fetching GitHub [ x.csv ]curl: (22) 404\n ... ERROR\n"
+      _sm_cron._clean_cron_error("fetching GitHub [ x.csv ]curl: (22) 404\n ... ERROR\n"
                            "fetching GitHub [ x.csv ]curl: (22) 404\n ... FAIL\n")
       == "fetching GitHub [ x.csv ]curl: (22) 404")
 check("cron error (via reader): undecodable payload costs only that job's reason",
-      sm._cron_log_text("not valid base64 !!") == ""
-      and sm._cron_log_text(_b64cr.b64encode(b"caf\xe9: cannot start").decode()).startswith("caf"))
-_lgsm_err = sm._clean_cron_error(_lgsm_log)
+      _sm_cron._cron_log_text("not valid base64 !!") == ""
+      and _sm_cron._cron_log_text(_b64cr.b64encode(b"caf\xe9: cannot start").decode()).startswith("caf"))
+_lgsm_err = _sm_cron._clean_cron_error(_lgsm_log)
 check("cron error: ANSI colour codes stripped", "\x1b" not in _lgsm_err and "[31m" not in _lgsm_err)
 check("cron error: keeps the line that says why",
       "curl: (22) The requested URL returned error: 404" in _lgsm_err
@@ -1353,18 +1385,18 @@ check("cron error: keeps the line that says why",
 check("cron error: bare ' ... FAIL' verdict lines dropped",
       "FAIL" not in _lgsm_err and "ERROR" not in _lgsm_err)
 check("cron error: only a line's final \\r repaint is kept",
-      sm._clean_cron_error("checking....\rchecking [ done ] failed to start") ==
+      _sm_cron._clean_cron_error("checking....\rchecking [ done ] failed to start") ==
       "checking [ done ] failed to start")
 check("cron error: informative lines win over surrounding chatter",
-      sm._clean_cron_error("step 1 ok\nstep 2 ok\nstep 3 ok\nstep 4 ok\n"
+      _sm_cron._clean_cron_error("step 1 ok\nstep 2 ok\nstep 3 ok\nstep 4 ok\n"
                            "cannot write /home/gm/x: permission denied\n ... FAIL")
       == "cannot write /home/gm/x: permission denied")
 check("cron error: falls back to the tail when nothing looks like a reason",
-      sm._clean_cron_error("aaa\nbbb\nccc\nddd") == "bbb ccc ddd")
-check("cron error: capped for the UI cell", len(sm._clean_cron_error("error " + "x" * 900)) <= 240)
+      _sm_cron._clean_cron_error("aaa\nbbb\nccc\nddd") == "bbb ccc ddd")
+check("cron error: capped for the UI cell", len(_sm_cron._clean_cron_error("error " + "x" * 900)) <= 240)
 check("cron error: a line too long for the budget is not dropped entirely",
-      sm._clean_cron_error("error " + "x" * 900).startswith("error x"))
-_pack = sm._clean_cron_error("\n".join("failed step %d %s" % (i, "y" * 70) for i in range(4)))
+      _sm_cron._clean_cron_error("error " + "x" * 900).startswith("error x"))
+_pack = _sm_cron._clean_cron_error("\n".join("failed step %d %s" % (i, "y" * 70) for i in range(4)))
 check("cron error: the budget packs whole lines and never cuts mid-line",
       len(_pack) <= 240 and _pack.endswith("y" * 70)
       and "failed step 2" in _pack and "failed step 3" in _pack
@@ -1373,57 +1405,57 @@ check("cron error: the budget packs whole lines and never cuts mid-line",
 # so the "last repaint" was "" and the failure reason vanished — the blank red "Failed" badge again,
 # in the module the console fix did not touch.
 eq("cron error: a CRLF log still yields its reason",
-   sm._clean_cron_error("checking config\r\ncurl: (22) The requested URL returned error: 404\r\n"),
+   _sm_cron._clean_cron_error("checking config\r\ncurl: (22) The requested URL returned error: 404\r\n"),
    "curl: (22) The requested URL returned error: 404")
 check("cron error: a mid-line repaint keeps what is on screen",
-      sm._clean_cron_error("working...\rdone: permission denied") == "done: permission denied")
-check("cron error: empty output stays empty", sm._clean_cron_error("") == ""
-      and sm._clean_cron_error(None) == "")
+      _sm_cron._clean_cron_error("working...\rdone: permission denied") == "done: permission denied")
+check("cron error: empty output stays empty", _sm_cron._clean_cron_error("") == ""
+      and _sm_cron._clean_cron_error(None) == "")
 # The reader must base64 the tail (so no log byte can break the record) and cap it BEFORE encoding.
 _cronrd = {}
-_orig_run3b = sm.run_command
+_orig_run3b = _sm_core.run_command
 try:
-    sm.run_command = lambda s, c, **k: (_cronrd.update(cmd=c), ("", "", 0))[1]
-    sm._read_cron_status(None, "gm")
+    _sm_core.run_command = lambda s, c, **k: (_cronrd.update(cmd=c), ("", "", 0))[1]
+    _sm_cron._read_cron_status(None, "gm")
     check("cron status: reads a wide tail, base64-framed, byte-capped before encoding",
           "tail -n 40" in _cronrd["cmd"] and "base64" in _cronrd["cmd"]
           and _cronrd["cmd"].index("tail -c 3000") < _cronrd["cmd"].index("base64"))
 finally:
-    sm.run_command = _orig_run3b
+    _sm_core.run_command = _orig_run3b
 # cron run-times from the journald cron log (last-run TIME for managed/legacy jobs)
-_orig_run4 = sm.run_command
+_orig_run4 = _sm_core.run_command
 try:
-    sm.run_command = lambda s, c, **k: (
+    _sm_core.run_command = lambda s, c, **k: (
         "1720000000 host CRON[11]: (gm) CMD (/home/gm/gmodserver monitor > /dev/null 2>&1)\n"
         "1720003600 host CRON[12]: (gm) CMD (/home/gm/gmodserver monitor > /dev/null 2>&1)\n"
         "1720007200 host CRON[13]: (gm) CMD (touch /home/gm/.restart-pending)\n", "", 0)
-    _rt = sm._read_cron_run_times(None, "gm")
+    _rt = _sm_cron._read_cron_run_times(None, "gm")
     check("cron run-times: newest run wins for a repeated command",
           _rt["/home/gm/gmodserver monitor > /dev/null 2>&1"] == 1720003600)
     check("cron run-times: parses a second distinct command",
           _rt["touch /home/gm/.restart-pending"] == 1720007200)
 finally:
-    sm.run_command = _orig_run4
+    _sm_core.run_command = _orig_run4
 # _match_run_time: a wrapped job's CORE command matches its logged line (old or wrapped form),
 # so a freshly-upgraded job shows its run time instead of "—" until the recorder status lands.
 _rtm = {"/home/gm/gmodserver monitor > /dev/null 2>&1": 100,
         "mkdir -p /home/gm/.lgsm-cron && /home/gm/gmodserver monitor > /home/gm/.lgsm-cron/ab.log 2>&1": 200}
 check("run-time match: core command matches wrapped/old log line (newest wins)",
-      sm._match_run_time(_rtm, "/home/gm/gmodserver monitor") == 200)
+      _sm_cron._match_run_time(_rtm, "/home/gm/gmodserver monitor") == 200)
 check("run-time match: exact command matches",
-      sm._match_run_time({"touch /home/gm/.restart-pending": 50}, "touch /home/gm/.restart-pending") == 50)
+      _sm_cron._match_run_time({"touch /home/gm/.restart-pending": 50}, "touch /home/gm/.restart-pending") == 50)
 check("run-time match: no match returns None",
-      sm._match_run_time({"a b c": 1}, "/home/gm/nothing") is None)
+      _sm_cron._match_run_time({"a b c": 1}, "/home/gm/nothing") is None)
 # run_cron_job_now: runs the job's UNWRAPPED core command, detached, as the game user, and
 # records to the job's own status file (so Last-run updates).
 import base64 as _b64rn, re as _rern
-_wl = ("*/5 * * * * /home/gm/.lgsm-cron/run " + sm._cron_job_id("/home/gm/backup.sh --full")
+_wl = ("*/5 * * * * /home/gm/.lgsm-cron/run " + _sm_cron._cron_job_id("/home/gm/backup.sh --full")
        + " " + _b64rn.b64encode(b"/home/gm/backup.sh --full").decode())
 _rncap = {}
-_orig_run6 = sm.run_command
+_orig_run6 = _sm_core.run_command
 try:
-    sm.run_command = lambda s, c, **k: (_rncap.update(cmd=c), ("", "", 0))[1]
-    _rok, _ = sm.run_cron_job_now(None, "gm", _wl, "gmodserver")
+    _sm_core.run_command = lambda s, c, **k: (_rncap.update(cmd=c), ("", "", 0))[1]
+    _rok, _ = _sm_cron.run_cron_job_now(None, "gm", _wl, "gmodserver")
     _c = _rncap["cmd"]
     check("run now: dispatched ok", _rok is True)
     check("run now: detached run as the game user",
@@ -1432,9 +1464,9 @@ try:
     _rec = _b64rn.b64decode(_m.group(1)).decode() if _m else ""
     check("run now: runs the unwrapped core command", "/home/gm/backup.sh --full >" in _rec)
     check("run now: records to the job's own status file",
-          ("/home/gm/.lgsm-cron/" + sm._cron_job_id("/home/gm/backup.sh --full") + ".status") in _rec)
+          ("/home/gm/.lgsm-cron/" + _sm_cron._cron_job_id("/home/gm/backup.sh --full") + ".status") in _rec)
 finally:
-    sm.run_command = _orig_run6
+    _sm_core.run_command = _orig_run6
 
 # ── backup module: create / list / prune + path-traversal guard ──
 from panel.ops import backup as _bk
@@ -1514,47 +1546,47 @@ finally:
     _bk.load_config, _bk.update_config = _sched_load, _sched_update
 
 # ── full (game-file) backups: per-server LinuxGSM backup + settings/due ──
-_orig_run7 = sm.run_command
+_orig_run7 = _sm_core.run_command
 try:
-    sm.run_command = lambda s, c, **k: (
+    _sm_core.run_command = lambda s, c, **k: (
         "F\tgmodserver-2026.tar.gz\t1048576\t1720000000\nF\told.tar.gz\t500\t1719000000\n", "", 0)
-    _gbl = sm.list_game_backups(None, "gm")
+    _gbl = _sm_cron.list_game_backups(None, "gm")
     check("game backups: parsed newest-first with sizes",
           len(_gbl) == 2 and _gbl[0]["name"] == "gmodserver-2026.tar.gz" and _gbl[0]["size"] == 1048576)
     check("game backups: no lock -> nothing marked in-progress",
           not any(b.get("in_progress") for b in _gbl))
     # Lock present + a NEW archive written after the backup started (lock mtime 1720000050) -> that
     # new one is in-progress; the pre-existing older backup is not.
-    sm.run_command = lambda s, c, **k: (
+    _sm_core.run_command = lambda s, c, **k: (
         "F\tgmodserver-new.tar.zst\t2000\t1720000100\nF\tgmodserver-old.tar.zst\t1048576\t1720000000\n"
         "LOCK\t1720000050.5\n", "", 0)
-    _gbl2 = sm.list_game_backups(None, "gm")
+    _gbl2 = _sm_cron.list_game_backups(None, "gm")
     check("game backups: active lock flags the new archive in-progress only",
           _gbl2[0]["name"] == "gmodserver-new.tar.zst" and _gbl2[0].get("in_progress") is True
           and not _gbl2[1].get("in_progress"))
     # Early in a backup (lock present, new archive not created yet): the existing backup predates the
     # lock, so it must NOT be flagged/hidden — this is the "existing backup disappears" regression.
-    sm.run_command = lambda s, c, **k: (
+    _sm_core.run_command = lambda s, c, **k: (
         "F\tgmodserver-old.tar.zst\t1048576\t1720000000\nLOCK\t1720000050.5\n", "", 0)
-    _gbl3 = sm.list_game_backups(None, "gm")
+    _gbl3 = _sm_cron.list_game_backups(None, "gm")
     check("game backups: a pre-existing backup isn't hidden while a new one is starting",
           len(_gbl3) == 1 and not _gbl3[0].get("in_progress"))
 finally:
-    sm.run_command = _orig_run7
+    _sm_core.run_command = _orig_run7
 _cap7 = {"cmds": []}
-_orig_run8 = sm.run_command
+_orig_run8 = _sm_core.run_command
 try:
-    sm.run_command = lambda s, c, **k: (_cap7["cmds"].append(c), ("", "", 0))[1]
-    _gok, _, _gskip = sm.run_game_backup(None, "gm", "gmodserver", 2)
+    _sm_core.run_command = lambda s, c, **k: (_cap7["cmds"].append(c), ("", "", 0))[1]
+    _gok, _, _gskip = _sm_game.run_game_backup(None, "gm", "gmodserver", 2)
     _joined = " ".join(_cap7["cmds"])
     check("run_game_backup: runs LinuxGSM backup as the game user",
           _gok is True and _gskip is False and "sudo -u gm bash -c" in _joined and "./gmodserver backup" in _joined)
     check("run_game_backup: prunes to keep N (keep=2 -> tail +3)", "tail -n +3" in _joined)
 finally:
-    sm.run_command = _orig_run8
+    _sm_core.run_command = _orig_run8
 
 # ── players-online guard: don't kick players for a backup unless forced ──
-_orig_run8b = sm.run_command
+_orig_run8b = _sm_core.run_command
 try:
     # gamedig query reports 2 players; the LinuxGSM backup command must NOT run.
     def _run_busy(s, c, **k):
@@ -1562,113 +1594,113 @@ try:
             return ("2", "", 0)
         return ("", "", 0)
     _cap_busy = {"cmds": []}
-    sm.run_command = lambda s, c, **k: (_cap_busy["cmds"].append(c), _run_busy(s, c, **k))[1]
-    _pc = sm.player_count(None, "gm", "gmod", 27015)
+    _sm_core.run_command = lambda s, c, **k: (_cap_busy["cmds"].append(c), _run_busy(s, c, **k))[1]
+    _pc = _sm_cron.player_count(None, "gm", "gmod", 27015)
     check("player_count: parses gamedig player count", _pc == 2)
-    _bok, _bmsg, _bskip = sm.run_game_backup(None, "gm", "gmodserver", 2, game_type="gmod", port=27015)
+    _bok, _bmsg, _bskip = _sm_game.run_game_backup(None, "gm", "gmodserver", 2, game_type="gmod", port=27015)
     check("run_game_backup: skips (no backup) when players are online",
           _bok is False and _bskip is True and "backup" not in " ".join(c for c in _cap_busy["cmds"] if "gamedig" not in c))
     # force=True backs up anyway even with players on
     _cap_busy["cmds"] = []
-    _fok, _fmsg, _fskip = sm.run_game_backup(None, "gm", "gmodserver", 2, game_type="gmod", port=27015, force=True)
+    _fok, _fmsg, _fskip = _sm_game.run_game_backup(None, "gm", "gmodserver", 2, game_type="gmod", port=27015, force=True)
     check("run_game_backup: force=True backs up even with players online",
           _fok is True and _fskip is False and "./gmodserver backup" in " ".join(_cap_busy["cmds"]))
 finally:
-    sm.run_command = _orig_run8b
+    _sm_core.run_command = _orig_run8b
 
 # ── empty/unqueryable server: player_count None, backup proceeds ──
-_orig_run8c = sm.run_command
+_orig_run8c = _sm_core.run_command
 try:
-    sm.run_command = lambda s, c, **k: ("0", "", 0) if "gamedig" in c else ("", "", 0)
-    check("player_count: 0 players -> 0", sm.player_count(None, "gm", "gmod", 27015) == 0)
-    check("player_count: unmapped game -> None (unknown)", sm.player_count(None, "gm", "nosuchgame", 27015) is None)
-    check("player_count: no port -> None", sm.player_count(None, "gm", "gmod", None) is None)
-    _eok, _emsg, _eskip = sm.run_game_backup(None, "gm", "gmodserver", 2, game_type="gmod", port=27015)
+    _sm_core.run_command = lambda s, c, **k: ("0", "", 0) if "gamedig" in c else ("", "", 0)
+    check("player_count: 0 players -> 0", _sm_cron.player_count(None, "gm", "gmod", 27015) == 0)
+    check("player_count: unmapped game -> None (unknown)", _sm_cron.player_count(None, "gm", "nosuchgame", 27015) is None)
+    check("player_count: no port -> None", _sm_cron.player_count(None, "gm", "gmod", None) is None)
+    _eok, _emsg, _eskip = _sm_game.run_game_backup(None, "gm", "gmodserver", 2, game_type="gmod", port=27015)
     check("run_game_backup: empty server backs up normally", _eok is True and _eskip is False)
 finally:
-    sm.run_command = _orig_run8c
+    _sm_core.run_command = _orig_run8c
 
 # ── 'Lockfile found' (LinuxGSM exits 0 but made no backup) must NOT read as success ──
-_orig_lock = sm.run_command
+_orig_lock = _sm_core.run_command
 try:
-    sm.run_command = lambda s, c, **k: ("[ INFO ] Backup gmodserver: Lockfile found: Backup is currently running", "", 0)
-    _lok, _lmsg, _lskip = sm.run_game_backup(None, "gm", "gmodserver", 2)
+    _sm_core.run_command = lambda s, c, **k: ("[ INFO ] Backup gmodserver: Lockfile found: Backup is currently running", "", 0)
+    _lok, _lmsg, _lskip = _sm_game.run_game_backup(None, "gm", "gmodserver", 2)
     check("run_game_backup: 'Lockfile found' at exit 0 is treated as failure",
           _lok is False and _lskip is False and "lock" in _lmsg.lower())
 finally:
-    sm.run_command = _orig_lock
+    _sm_core.run_command = _orig_lock
 
 # ── pre-flight disk guard: don't start a doomed backup when the disk is full ──
 check("_fmt_size: bytes/MB/GB readable",
-      sm._fmt_size(0) == "0 B" and sm._fmt_size(512) == "512 B"
-      and sm._fmt_size(5 * 1024 * 1024) == "5.0 MB" and sm._fmt_size(2 * 1024 ** 3) == "2.0 GB")
-_hs_saved = (sm._ensure_backup_headroom, sm.list_game_backups, sm.backup_disk_info, sm.run_command)
+      _sm_cron._fmt_size(0) == "0 B" and _sm_cron._fmt_size(512) == "512 B"
+      and _sm_cron._fmt_size(5 * 1024 * 1024) == "5.0 MB" and _sm_cron._fmt_size(2 * 1024 ** 3) == "2.0 GB")
+_hs_saved = (_sm_cron._ensure_backup_headroom, _sm_cron.list_game_backups, _sm_cron.backup_disk_info, _sm_core.run_command)
 try:
     _GB2 = 1024 ** 3
-    sm._ensure_backup_headroom = lambda s, u, k: ""       # nothing left to free
-    sm.list_game_backups = lambda s, u: [{"name": "b-1", "size": int(1.2 * _GB2), "created": 1}]
-    sm.backup_disk_info = lambda s, u: {"free": 22 * 1024 * 1024, "total": 23 * _GB2}   # ~22 MB free
+    _sm_cron._ensure_backup_headroom = lambda s, u, k: ""       # nothing left to free
+    _sm_cron.list_game_backups = lambda s, u: [{"name": "b-1", "size": int(1.2 * _GB2), "created": 1}]
+    _sm_cron.backup_disk_info = lambda s, u: {"free": 22 * 1024 * 1024, "total": 23 * _GB2}   # ~22 MB free
     _pf_cmds = []
-    sm.run_command = lambda s, c, **k: (_pf_cmds.append(c), ("", "", 0))[1]
-    _pok, _pmsg, _pskip = sm.run_game_backup(None, "cs", "codserver", 2)
+    _sm_core.run_command = lambda s, c, **k: (_pf_cmds.append(c), ("", "", 0))[1]
+    _pok, _pmsg, _pskip = _sm_game.run_game_backup(None, "cs", "codserver", 2)
     check("run_game_backup: full disk -> clear 'Not enough disk space' failure, no backup run",
           _pok is False and _pskip is False and "Not enough disk space" in _pmsg
           and not any("./codserver backup" in c for c in _pf_cmds))
 finally:
-    (sm._ensure_backup_headroom, sm.list_game_backups, sm.backup_disk_info, sm.run_command) = _hs_saved
+    (_sm_cron._ensure_backup_headroom, _sm_cron.list_game_backups, _sm_cron.backup_disk_info, _sm_core.run_command) = _hs_saved
 
 # ── mod-restart decision (pure): restart when empty, defer when busy/unknown, force wins ──
 check("mod_restart_decision: stopped server -> idle (loads on next start)",
-      sm.mod_restart_decision("offline", None) == "idle")
+      _sm_game.mod_restart_decision("offline", None) == "idle")
 check("mod_restart_decision: online + empty -> restart now",
-      sm.mod_restart_decision("online", 0) == "restart")
+      _sm_game.mod_restart_decision("online", 0) == "restart")
 check("mod_restart_decision: online + players -> pending (don't kick)",
-      sm.mod_restart_decision("online", 3) == "pending")
+      _sm_game.mod_restart_decision("online", 3) == "pending")
 check("mod_restart_decision: online + unknown count -> pending (can't confirm empty)",
-      sm.mod_restart_decision("online", None) == "pending")
+      _sm_game.mod_restart_decision("online", None) == "pending")
 check("mod_restart_decision: unknown status -> pending",
-      sm.mod_restart_decision("unknown", None) == "pending")
+      _sm_game.mod_restart_decision("unknown", None) == "pending")
 check("mod_restart_decision: force restarts even with players online",
-      sm.mod_restart_decision("online", 5, force=True) == "restart")
+      _sm_game.mod_restart_decision("online", 5, force=True) == "restart")
 check("mod_restart_decision: force on a stopped server stays idle (nothing to restart)",
-      sm.mod_restart_decision("offline", 5, force=True) == "idle")
+      _sm_game.mod_restart_decision("offline", 5, force=True) == "idle")
 
 # ── smart headroom: free space before a backup only when the disk is tight ──
-_hr_saved = (sm.list_game_backups, sm.backup_disk_info, sm.delete_game_backup)
+_hr_saved = (_sm_cron.list_game_backups, _sm_cron.backup_disk_info, _sm_cron.delete_game_backup)
 try:
     _GB = 1024 ** 3
     _hr_deleted = []
-    sm.delete_game_backup = lambda s, u, name: (_hr_deleted.append(name), True)[1]
+    _sm_cron.delete_game_backup = lambda s, u, name: (_hr_deleted.append(name), True)[1]
     _three = [{"name": "g-3", "size": 4 * _GB, "created": 300},
               {"name": "g-2", "size": 4 * _GB, "created": 200},
               {"name": "g-1", "size": 4 * _GB, "created": 100}]
-    sm.list_game_backups = lambda s, u: list(_three)
+    _sm_cron.list_game_backups = lambda s, u: list(_three)
     # plenty of room -> no deletion
-    sm.backup_disk_info = lambda s, u: {"free": 57 * _GB, "total": 60 * _GB}
+    _sm_cron.backup_disk_info = lambda s, u: {"free": 57 * _GB, "total": 60 * _GB}
     _hr_deleted[:] = []
-    _n1 = sm._ensure_backup_headroom(None, "gm", 2)
+    _n1 = _sm_cron._ensure_backup_headroom(None, "gm", 2)
     check("headroom: with free disk, nothing is deleted", _hr_deleted == [] and _n1 == "")
     # tight -> delete oldest first, protect the newest (keep-1)
-    sm.backup_disk_info = lambda s, u: {"free": 1 * _GB, "total": 60 * _GB}
+    _sm_cron.backup_disk_info = lambda s, u: {"free": 1 * _GB, "total": 60 * _GB}
     _hr_deleted[:] = []
-    _n2 = sm._ensure_backup_headroom(None, "gm", 2)
+    _n2 = _sm_cron._ensure_backup_headroom(None, "gm", 2)
     check("headroom: tight disk frees the OLDEST backup first, protects newest",
           _hr_deleted[:1] == ["g-1"] and "g-3" not in _hr_deleted and _n2)
     # no backups yet -> nothing to free
-    sm.list_game_backups = lambda s, u: []
+    _sm_cron.list_game_backups = lambda s, u: []
     _hr_deleted[:] = []
-    check("headroom: no backups yet -> no deletion", sm._ensure_backup_headroom(None, "gm", 2) == "" and _hr_deleted == [])
+    check("headroom: no backups yet -> no deletion", _sm_cron._ensure_backup_headroom(None, "gm", 2) == "" and _hr_deleted == [])
     # 0-byte newest is a failed backup (junk): delete it first, protect the good older one, and
     # estimate from the LARGEST (so a 0-byte newest doesn't make it skip on a full disk).
-    sm.list_game_backups = lambda s, u: [{"name": "junk", "size": 0, "created": 300},
+    _sm_cron.list_game_backups = lambda s, u: [{"name": "junk", "size": 0, "created": 300},
                                          {"name": "good", "size": 226 * _GB, "created": 200}]
-    sm.backup_disk_info = lambda s, u: {"free": 50 * 1024 * 1024, "total": 25 * _GB}
+    _sm_cron.backup_disk_info = lambda s, u: {"free": 50 * 1024 * 1024, "total": 25 * _GB}
     _hr_deleted[:] = []
-    sm._ensure_backup_headroom(None, "pmc", 2)
+    _sm_cron._ensure_backup_headroom(None, "pmc", 2)
     check("headroom: deletes 0-byte junk first, protects the valid backup",
           _hr_deleted == ["junk"])
 finally:
-    sm.list_game_backups, sm.backup_disk_info, sm.delete_game_backup = _hr_saved
+    _sm_cron.list_game_backups, _sm_cron.backup_disk_info, _sm_cron.delete_game_backup = _hr_saved
 
 _fake_cfg = {}
 _orig_bkload, _orig_bkupdate = _bk.load_config, _bk.update_config
@@ -1686,33 +1718,33 @@ finally:
     _bk.load_config, _bk.update_config = _orig_bkload, _orig_bkupdate
 
 # ── alerts: lgsm_get_values reads merged config, instance overrides win ──
-_orig_run9 = sm.run_command
+_orig_run9 = _sm_core.run_command
 try:
-    sm.run_command = lambda s, c, **k: (
+    _sm_core.run_command = lambda s, c, **k: (
         'discordalert="off"\ndiscordwebhook="default"\nemailalert="on"\n'
         'discordalert="on"\ndiscordwebhook="https://x/hook"\n', "", 0)
-    _av = sm.lgsm_get_values(None, "gm", "gmodserver",
+    _av = _sm_files.lgsm_get_values(None, "gm", "gmodserver",
                              ["discordalert", "discordwebhook", "emailalert", "missingkey"])
     check("lgsm_get_values: later (instance) value wins",
           _av["discordwebhook"] == "https://x/hook" and _av["discordalert"] == "on")
     check("lgsm_get_values: reads other toggles; missing key -> empty",
           _av["emailalert"] == "on" and _av["missingkey"] == "")
 finally:
-    sm.run_command = _orig_run9
+    _sm_core.run_command = _orig_run9
 
 # line splitting
-eq("cron: split 5-field", sm._split_cron_line("0 3 * * * /home/gm/b.sh a"), ("0 3 * * *", "/home/gm/b.sh a"))
-eq("cron: split @shortcut", sm._split_cron_line("@reboot /home/gm/x start"), ("@reboot", "/home/gm/x start"))
-eq("cron: split rejects short line", sm._split_cron_line("0 3 * *"), (None, None))
+eq("cron: split 5-field", _sm_cron._split_cron_line("0 3 * * * /home/gm/b.sh a"), ("0 3 * * *", "/home/gm/b.sh a"))
+eq("cron: split @shortcut", _sm_cron._split_cron_line("@reboot /home/gm/x start"), ("@reboot", "/home/gm/x start"))
+eq("cron: split rejects short line", _sm_cron._split_cron_line("0 3 * *"), (None, None))
 
 # ── anti-lockout: disabling public SSH must be refused with no Tailscale path back in ──
-_orig_rc = sm.run_command
+_orig_rc = _sm_core.run_command
 def _rc_no_tailnet(server, cmd, **kw):
     if "status --json" in cmd:
         return ('{"BackendState":"Stopped"}', "", 0)   # Tailscale not running
     return ("", "", 0)
-sm.run_command = _rc_no_tailnet
-_ok, _msg = sm.remote_set_public_ssh(object(), "off")
+_sm_core.run_command = _rc_no_tailnet
+_ok, _msg = _sm_hosts.remote_set_public_ssh(object(), "off")
 check("ssh off REFUSED when no Tailscale path (anti-lockout)", _ok is False and "lock you out" in _msg.lower())
 
 def _rc_ts_ssh(server, cmd, **kw):
@@ -1721,8 +1753,8 @@ def _rc_ts_ssh(server, cmd, **kw):
     if "debug prefs" in cmd:
         return ('{"RunSSH": true}', "", 0)                # Tailscale SSH enabled
     return ("", "", 0)
-sm.run_command = _rc_ts_ssh
-check("ssh off ALLOWED when Tailscale SSH enabled", sm.remote_set_public_ssh(object(), "off")[0] is True)
+_sm_core.run_command = _rc_ts_ssh
+check("ssh off ALLOWED when Tailscale SSH enabled", _sm_hosts.remote_set_public_ssh(object(), "off")[0] is True)
 
 def _rc_iface(server, cmd, **kw):
     if "status --json" in cmd:
@@ -1732,13 +1764,13 @@ def _rc_iface(server, cmd, **kw):
     if "ufw status" in cmd:
         return ("Anywhere on tailscale0     ALLOW IN    Anywhere", "", 0)  # tailscale0 allowed
     return ("", "", 0)
-sm.run_command = _rc_iface
-check("ssh off ALLOWED when tailscale0 allowed in UFW", sm.remote_set_public_ssh(object(), "off")[0] is True)
+_sm_core.run_command = _rc_iface
+check("ssh off ALLOWED when tailscale0 allowed in UFW", _sm_hosts.remote_set_public_ssh(object(), "off")[0] is True)
 
-sm.run_command = lambda *a, **k: ("", "", 0)
-check("ssh allow is never lockout-guarded", sm.remote_set_public_ssh(object(), "allow")[0] is True)
-check("ssh limit is never lockout-guarded", sm.remote_set_public_ssh(object(), "limit")[0] is True)
-sm.run_command = _orig_rc
+_sm_core.run_command = lambda *a, **k: ("", "", 0)
+check("ssh allow is never lockout-guarded", _sm_hosts.remote_set_public_ssh(object(), "allow")[0] is True)
+check("ssh limit is never lockout-guarded", _sm_hosts.remote_set_public_ssh(object(), "limit")[0] is True)
+_sm_core.run_command = _orig_rc
 
 # ── secret encryption round-trip ──────────────────────────────
 _pre = {p for p in (config.CRED_KEY_FILE, config.SECRET_FILE, config.CONFIG_FILE)
@@ -1755,7 +1787,7 @@ def _rules(rs):
     return [{"num": str(i + 1), "detail": d} for i, d in enumerate(rs)]
 
 
-groups = sm._group_ufw_rules(_rules([
+groups = _sm_firewall._group_ufw_rules(_rules([
     "22/tcp  ALLOW IN  Anywhere",
     "22/tcp (v6)  ALLOW IN  Anywhere (v6)",
     "5000/tcp  ALLOW IN  Anywhere",
@@ -1776,15 +1808,15 @@ def protect(server, rules, enabled=True, cfg=None, is_local=False, tailscale=(Fa
     # a stub stops being scaffolding and starts being a silent global. Nothing depended on the leak
     # (this fix changed no other result), but the transport tests further down do read the real
     # is_local_server, and would have been testing the wrong branch.
-    _saved = (sm.is_local_server, sm._tailscale_conn_state, config.load_config)
+    _saved = (_sm_core.is_local_server, _sm_hosts._tailscale_conn_state, config.load_config)
     try:
-        sm.is_local_server = lambda s: is_local
-        sm._tailscale_conn_state = lambda s: tailscale   # (running, ssh_enabled) — deterministic
+        _sm_core.is_local_server = lambda s: is_local
+        _sm_hosts._tailscale_conn_state = lambda s: tailscale   # (running, ssh_enabled) — deterministic
         if cfg is not None:
             config.load_config = lambda: cfg
-        return sm._annotate_firewall_protection(server, enabled, sm._group_ufw_rules(_rules(rules)))
+        return _sm_firewall._annotate_firewall_protection(server, enabled, _sm_firewall._group_ufw_rules(_rules(rules)))
     finally:
-        sm.is_local_server, sm._tailscale_conn_state, config.load_config = _saved
+        _sm_core.is_local_server, _sm_hosts._tailscale_conn_state, config.load_config = _saved
 
 
 # SSH-only: port 22 is the last way in -> protected.
@@ -1875,23 +1907,23 @@ gp = {x["port_num"]: x for x in g}
 check("remote host: panel 5000 not protected", not gp["5000"]["protected"])
 
 # ── ssh-status: panel_port_open (gates the "Close public panel port" button) ──
-_orig_run = sm.run_command
+_orig_run = _sm_core.run_command
 try:
-    sm.run_command = lambda s, c, **k: ("Status: active\n5000/tcp  ALLOW  Anywhere\n"
+    _sm_core.run_command = lambda s, c, **k: ("Status: active\n5000/tcp  ALLOW  Anywhere\n"
                                         "22/tcp  ALLOW  Anywhere\n", "", 0)
     check("ssh-status: panel port open detected",
-          sm.remote_public_ssh_status(NS(), panel_port=5000).get("panel_port_open") is True)
+          _sm_hosts.remote_public_ssh_status(NS(), panel_port=5000).get("panel_port_open") is True)
     # Closed: only a tailscale0 rule and a *different* port — must read as closed, and 27015
     # must not word-boundary-match 5000.
-    sm.run_command = lambda s, c, **k: ("Status: active\nAnywhere  ALLOW  Anywhere on tailscale0\n"
+    _sm_core.run_command = lambda s, c, **k: ("Status: active\nAnywhere  ALLOW  Anywhere on tailscale0\n"
                                         "27015  ALLOW  Anywhere\n", "", 0)
     check("ssh-status: panel port closed detected (no false match on 27015)",
-          sm.remote_public_ssh_status(NS(), panel_port=5000).get("panel_port_open") is False)
+          _sm_hosts.remote_public_ssh_status(NS(), panel_port=5000).get("panel_port_open") is False)
     # Without panel_port the key is omitted entirely (remote hosts don't report it).
     check("ssh-status: panel_port_open omitted when not asked",
-          "panel_port_open" not in sm.remote_public_ssh_status(NS()))
+          "panel_port_open" not in _sm_hosts.remote_public_ssh_status(NS()))
 finally:
-    sm.run_command = _orig_run
+    _sm_core.run_command = _orig_run
 
 # ── game-port selection: open only what's needed ──────────────
 _GMOD_DETAILS = """\
@@ -1901,8 +1933,8 @@ Game 27015 udp
 Client 27005 udp
 SourceTV 27020 udp
 """
-sm.run_as_game_user = lambda *a, **k: (_GMOD_DETAILS, "", 0)
-res = sm.detect_game_ports(NS(), "gmodserver")
+_sm_core.run_as_game_user = lambda *a, **k: (_GMOD_DETAILS, "", 0)
+res = _sm_game.detect_game_ports(NS(), "gmodserver")
 eq("gmod game_port", res["game_port"], 27015)
 eq("gmod opens ONLY 27015 (no SourceTV/Client)", res["open_ports"], [27015])
 
@@ -1914,8 +1946,8 @@ RCON 27015 tcp
 SourceTV 27020 udp
 Client 27005 udp
 """
-sm.run_as_game_user = lambda *a, **k: (_SRC_DETAILS, "", 0)
-res = sm.detect_game_ports(NS(), "srv")
+_sm_core.run_as_game_user = lambda *a, **k: (_SRC_DETAILS, "", 0)
+res = _sm_game.detect_game_ports(NS(), "srv")
 eq("source: opens game + query only", res["open_ports"], [27015, 27016])
 
 # ── per-remote access control (fix: MANAGE_REMOTES alone must NOT grant every host) ──
@@ -2281,7 +2313,7 @@ _QUOTE_PAYLOADS = ["abc", "a'b", "; rm -rf / #", "$(id)", "`id`", "a b\tc", "--f
                    '/home/u/de_dust2 [final] "v2".bsp', "x\\y", "ñ", "*", "~root", "a\nb", ""]
 _qbad = []
 for _p in _QUOTE_PAYLOADS:
-    _r = _qsp.run(["/bin/bash", "-c", "printf %s " + sm._quote(_p)],
+    _r = _qsp.run(["/bin/bash", "-c", "printf %s " + _sm_core._quote(_p)],
                   capture_output=True, text=True, timeout=30)
     if _r.stdout != _p or _r.returncode != 0 or _r.stderr:
         _qbad.append("%r -> %r rc=%d err=%r" % (_p, _r.stdout, _r.returncode, _r.stderr[:40]))
@@ -2289,7 +2321,7 @@ check("_quote: a real shell reads every payload back as the original string, ver
       not _qbad, "; ".join(_qbad[:2]))
 _qwords = []
 for _p in ("a b; id", "$(id) x", "'", ""):
-    _r = _qsp.run(["/bin/bash", "-c", "set -- " + sm._quote(_p) + "; echo $#"],
+    _r = _qsp.run(["/bin/bash", "-c", "set -- " + _sm_core._quote(_p) + "; echo $#"],
                   capture_output=True, text=True, timeout=30)
     if _r.stdout.strip() != "1":
         _qwords.append("%r -> %s args" % (_p, _r.stdout.strip()))
@@ -2302,9 +2334,9 @@ _cron = {}
 def _cap_rewrite(server, user, grep_args, add_lines, extra_pre=""):
     _cron.update(grep=grep_args, add=list(add_lines), pre=extra_pre)
     return True, "ok"
-sm._rewrite_crontab = _cap_rewrite
+_sm_core._rewrite_crontab = _cap_rewrite
 
-sm.set_autostart(None, "gmodserver", True)
+_sm_core.set_autostart(None, "gmodserver", True)
 # Autostart is now the LinuxGSM monitor cron (every 5 min), NOT a @reboot start line — monitor
 # respects the server's intended state via the lockfile. The managed line runs through the inline
 # recorder so the command stays VISIBLE (grep-based detection/removal still works).
@@ -2314,10 +2346,10 @@ check("autostart(on): adds the */5 monitor line, recorder-wrapped",
       and ".lgsm-cron/" in _cron["add"][0] and ".status" in _cron["add"][0])
 check("autostart(on): also strips any legacy @reboot start line",
       "@reboot" in _cron["grep"] and "monitor" in _cron["grep"])
-sm.set_autostart(None, "gmodserver", False)
+_sm_core.set_autostart(None, "gmodserver", False)
 eq("autostart(off): removes line, adds none", _cron["add"], [])
 
-sm.install_game_cron(None, "gmodserver", supported={"monitor", "update-lgsm"})
+_sm_core.install_game_cron(None, "gmodserver", supported={"monitor", "update-lgsm"})
 check("install_game_cron: monitor every 5 min (recorder-wrapped, command visible)",
       any(ln.startswith("*/5 * * * * ") and "/home/gmodserver/gmodserver monitor" in ln
           and ".status" in ln for ln in _cron["add"]))
@@ -2326,17 +2358,17 @@ check("install_game_cron: weekly update-lgsm (recorder-wrapped)",
           and ".status" in ln for ln in _cron["add"]))
 eq("install_game_cron: only supported commands scheduled", len(_cron["add"]), 2)
 
-sm.set_daily_restart(None, "gmodserver", game_type="gmod", port=27015, enabled=True)
+_sm_core.set_daily_restart(None, "gmodserver", game_type="gmod", port=27015, enabled=True)
 check("daily_restart(mapped): sets pending flag at 05:00 (recorder-wrapped)",
       _cron["add"][0].startswith("0 5 * * * ")
       and "touch /home/gmodserver/.restart-pending" in _cron["add"][0]
       and ".status" in _cron["add"][0])
 check("daily_restart(mapped): queries gamedig for player count",
       "gamedig --type garrysmod 127.0.0.1:27015" in _cron["add"][1])
-sm.set_daily_restart(None, "noqueryserver", game_type="noquerygame", port=28960, enabled=True)
+_sm_core.set_daily_restart(None, "noqueryserver", game_type="noquerygame", port=28960, enabled=True)
 check("daily_restart(unmapped game): skips gamedig, no player query",
       "gamedig" not in _cron["add"][1] and "P=; " in _cron["add"][1])
-sm.set_daily_restart(None, "gmodserver", enabled=False)
+_sm_core.set_daily_restart(None, "gmodserver", enabled=False)
 check("daily_restart(disable): adds nothing and clears the flag",
       _cron["add"] == [] and "rm -f" in _cron["pre"])
 
@@ -2348,8 +2380,8 @@ _METRICS_OUT = "\n".join([
     "DISK 100000000000 33000000000", "CORES 4", "UPTIME 123456",
     "GAMERAM 524288 3", "GUP 3600", "PORT 1",
 ])
-sm.run_command = lambda server, cmd, timeout=30, sudo=None: (_METRICS_OUT, "", 0)
-_m = sm.server_live_metrics(None, "gmodserver", 27015)
+_sm_core.run_command = lambda server, cmd, timeout=30, sudo=None: (_METRICS_OUT, "", 0)
+_m = _sm_core.server_live_metrics(None, "gmodserver", 27015)
 eq("metrics: ram_total parsed", _m["ram_total"], 8000000000)
 eq("metrics: ram_percent computed", _m["ram_percent"], 50.0)
 eq("metrics: disk_percent computed", _m["disk_percent"], 33.0)
@@ -2370,8 +2402,8 @@ _RLM_OUT = "\n".join([
     "===DISK", "Filesystem 1B-blocks Used Available Use% Mounted on",
     "/dev/vda2 100000000000 40000000000 60000000000 40% /",
 ])
-sm.run_command = lambda server, cmd, timeout=12, **k: (_RLM_OUT, "", 0)
-_rlm = sm.remote_live_metrics(NS(is_local=False, auth_method="tailscale", host="x", name="x"))
+_sm_core.run_command = lambda server, cmd, timeout=12, **k: (_RLM_OUT, "", 0)
+_rlm = _sm_core.remote_live_metrics(NS(is_local=False, auth_method="tailscale", host="x", name="x"))
 eq("remote metrics: disk_total parsed", _rlm["disk_total"], 100000000000)
 eq("remote metrics: disk_used parsed", _rlm["disk_used"], 40000000000)
 eq("remote metrics: disk_percent computed", _rlm["disk_percent"], 40.0)
@@ -2379,65 +2411,65 @@ eq("remote metrics: swap 0 -> no divide-by-zero", _rlm["swap_percent"], 0)
 
 # ── pro_status is cached (don't respawn the heavy Ubuntu Pro client every page load) ──
 _pro_n = {"n": 0}
-_orig_pro_run = sm.run_command
+_orig_pro_run = _sm_core.run_command
 try:
     def _procount(s, c, **k):
         _pro_n["n"] += 1
         return ('{"attached": true, "services": []}', "", 0)
-    sm.run_command = _procount
-    sm._pro_status_cache.clear()
+    _sm_core.run_command = _procount
+    _sm_hosts._pro_status_cache.clear()
     _psrv = NS(id=42, host="h")
-    sm.pro_status(_psrv)         # primes the cache; return value isn't checked
-    _r2 = sm.pro_status(_psrv)   # served from cache — no second run_command
+    _sm_hosts.pro_status(_psrv)         # primes the cache; return value isn't checked
+    _r2 = _sm_hosts.pro_status(_psrv)   # served from cache — no second run_command
     check("pro_status: cached (one run_command for two reads)", _pro_n["n"] == 1 and _r2["attached"] is True)
-    sm.pro_status(_psrv, force=True)
+    _sm_hosts.pro_status(_psrv, force=True)
     check("pro_status: force=True bypasses cache", _pro_n["n"] == 2)
-    sm._pro_cache_invalidate(_psrv)
-    sm.pro_status(_psrv)
+    _sm_hosts._pro_cache_invalidate(_psrv)
+    _sm_hosts.pro_status(_psrv)
     check("pro_status: invalidate forces a refetch", _pro_n["n"] == 3)
 finally:
-    sm.run_command = _orig_pro_run
-    sm._pro_status_cache.clear()
+    _sm_core.run_command = _orig_pro_run
+    _sm_hosts._pro_status_cache.clear()
 
 # ── host_specs is cached (static hardware — don't re-run lscpu every page load) ──
 _hs_n = {"n": 0}
-_orig_hs_run = sm.run_command
+_orig_hs_run = _sm_core.run_command
 try:
     def _hscount(s, c, **k):
         _hs_n["n"] += 1
         return ("OS\tUbuntu\nCORES\t1\nMEM\t0.9\n", "", 0)
-    sm.run_command = _hscount
-    sm._specs_cache.clear()
+    _sm_core.run_command = _hscount
+    _sm_firewall._specs_cache.clear()
     _hsrv = NS(id=7, host="h")
-    sm.host_specs(_hsrv)
-    sm.host_specs(_hsrv)   # cached
+    _sm_firewall.host_specs(_hsrv)
+    _sm_firewall.host_specs(_hsrv)   # cached
     check("host_specs: cached (one run_command for two reads)", _hs_n["n"] == 1)
 finally:
-    sm.run_command = _orig_hs_run
-    sm._specs_cache.clear()
+    _sm_core.run_command = _orig_hs_run
+    _sm_firewall._specs_cache.clear()
 
 # ── set_game_priority renices the game user's processes as ROOT (negative nice needs root) ──
 _gp_calls = []
-_orig_gp = sm.run_privileged
+_orig_gp = _sm_core.run_privileged
 try:
     # Asserts the VERB and its arguments now, not a "sudo bash -c" substring. Same guarantee, and
     # it no longer passes just because the string happened to contain the right words.
-    sm.run_privileged = lambda s, v, a=(), **k: (_gp_calls.append((v, list(a))), ("", "", 0))[1]
-    sm.set_game_priority(None, "codserver")
+    _sm_core.run_privileged = lambda s, v, a=(), **k: (_gp_calls.append((v, list(a))), ("", "", 0))[1]
+    _sm_core.set_game_priority(None, "codserver")
     check("set_game_priority: renices the game user as root, via the verb",
           _gp_calls == [("renice-users", ["-1", "codserver"])], str(_gp_calls))
     _gp_calls.clear()
-    sm.set_game_priority_bulk(None, ["codserver", "gmodserver"])
+    _sm_core.set_game_priority_bulk(None, ["codserver", "gmodserver"])
     check("set_game_priority_bulk: renices every game user in ONE call (keeper for cron restarts)",
           _gp_calls == [("renice-users", ["-1", "codserver", "gmodserver"])], str(_gp_calls))
     _gp_calls.clear()
-    sm.set_game_priority_bulk(None, [])
+    _sm_core.set_game_priority_bulk(None, [])
     check("set_game_priority_bulk: no users -> no call", _gp_calls == [])
 finally:
-    sm.run_privileged = _orig_gp
+    _sm_core.run_privileged = _orig_gp
 
 # ── remote_uptime is ONE ssh round-trip (was eight) + parses the composite output + caches ──
-_orig_ru = sm.run_command
+_orig_ru = _sm_core.run_command
 try:
     _ru_n = {"n": 0}
     _ru_out = "\n".join([
@@ -2450,23 +2482,23 @@ try:
     def _ru_fake(server, cmd, **k):
         _ru_n["n"] += 1
         return (_ru_out, "", 0)
-    sm.run_command = _ru_fake
-    sm._uptime_cache.clear()
+    _sm_core.run_command = _ru_fake
+    _sm_hosts._uptime_cache.clear()
     _usrv = NS(id=7)
-    _ru = sm.remote_uptime(_usrv)
+    _ru = _sm_hosts.remote_uptime(_usrv)
     check("uptime: a SINGLE ssh round-trip (was 8 separate commands)", _ru_n["n"] == 1)
     eq("uptime: parses the uptime string", _ru["uptime"], "3 days, 4 hours")
     eq("uptime: parses cores", _ru["cpu_cores"], "2")
     eq("uptime: parses memory", _ru["memory"], "1.2G/4.0G")
     eq("uptime: cpu% from /proc/stat delta", _ru["cpu_percent"], "50.0")
     eq("uptime: cpu per-core derived", _ru["cpu_per_core"], "25.0")
-    sm.remote_uptime(_usrv)   # within TTL → served from cache, no 2nd ssh
+    _sm_hosts.remote_uptime(_usrv)   # within TTL → served from cache, no 2nd ssh
     check("uptime: second call served from cache", _ru_n["n"] == 1)
-    sm.remote_uptime(_usrv, force=True)   # force bypasses cache
+    _sm_hosts.remote_uptime(_usrv, force=True)   # force bypasses cache
     check("uptime: force=True re-reads", _ru_n["n"] == 2)
 finally:
-    sm.run_command = _orig_ru
-    sm._uptime_cache.clear()
+    _sm_core.run_command = _orig_ru
+    _sm_hosts._uptime_cache.clear()
 
 # ── apt upgradable parsing: name + old→new version ──
 _APT_OUT = "\n".join([
@@ -2475,12 +2507,12 @@ _APT_OUT = "\n".join([
     "curl/jammy-updates 7.81.0-1ubuntu1.16 amd64 [upgradable from: 7.81.0-1ubuntu1.15]",
     "",
 ])
-_pu = sm._parse_upgradable(_APT_OUT)
+_pu = _sm_hosts._parse_upgradable(_APT_OUT)
 eq("apt parse: count (Listing/blank skipped)", len(_pu), 2)
 eq("apt parse: sorted by name (curl first)", _pu[0]["name"], "curl")
 eq("apt parse: new version", _pu[1]["name"] == "libssl3" and _pu[1]["version"], "3.0.2-0ubuntu1.15")
 eq("apt parse: old (from) version", _pu[1]["from"], "3.0.2-0ubuntu1.12")
-_pu2 = sm._parse_upgradable("")
+_pu2 = _sm_hosts._parse_upgradable("")
 eq("apt parse: empty -> no packages", len(_pu2), 0)
 # The suite is the ONLY field distinguishing a security update from a routine one, and the OS-update
 # alert titles itself off it. Without this, dropping the field is invisible: the smoke test feeds the
@@ -2491,7 +2523,7 @@ check("apt parse: -security is detectable from the suite",
       "-security" in _pu[1]["suite"] and "-security" not in _pu[0]["suite"])
 # apt writes "N: ..." notices to stdout, and the pipeline no longer greps them out (its exit status
 # was masking apt's own — see remote_os_check_updates). They must not parse as packages.
-_pu3 = sm._parse_upgradable("\n".join([
+_pu3 = _sm_hosts._parse_upgradable("\n".join([
     "Listing...",
     "N: There is 1 additional version. Please use the '-a' switch to see it",
     "bash/jammy-security 5.1-6ubuntu1.1 amd64 [upgradable from: 5.1-6ubuntu1]",
@@ -2503,7 +2535,7 @@ check("apt parse: local and remote share one implementation",
 
 # Two more shapes main's checks above don't reach. A package in BOTH pockets is listed with a
 # comma, which is the real shape of most security updates — "-security" has to still be found in it.
-_pu_comma = sm._parse_upgradable(
+_pu_comma = _sm_hosts._parse_upgradable(
     "libc6/jammy-updates,jammy-security 2.35-0ubuntu3.8 amd64 [upgradable from: 2.35-0ubuntu3.6]")
 eq("apt parse: comma-joined suites kept whole", _pu_comma[0]["suite"], "jammy-updates,jammy-security")
 check("apt parse: a comma-joined suite still reads as security",
@@ -2662,7 +2694,7 @@ _app = sys.modules["app"]   # already imported via `from app import ...` above
 # The scan and its cache live in ssh_manager now, so the stub has to replace THAT module's
 # run_command — patching app's would leave the real one in place and make every assertion below
 # measure nothing.
-_o_ps_rc = sm.run_command
+_o_ps_rc = _sm_core.run_command
 try:
     _scan_n = {"n": 0}
 
@@ -2670,24 +2702,24 @@ try:
         _scan_n["n"] += 1
         return ("127.0.0.1:22\n*:27015\n[::]:27016", "", 0)
 
-    sm.run_command = _fake_ss
-    sm._port_scan_cache.clear()
+    _sm_core.run_command = _fake_ss
+    _sm_portscan._port_scan_cache.clear()
     _rem = NS(id=99)
     _p1 = _app._remote_listening_ports(_rem)
     _app._remote_listening_ports(_rem)   # within TTL → cache hit, no 2nd ssh
     check("portscan: parses listening ports", 27015 in _p1 and 22 in _p1 and 27016 in _p1)
     check("portscan: second concurrent poll served from cache (one ssh)", _scan_n["n"] == 1)
-    _smmod._invalidate_port_scan(99)
+    _sm_portscan._invalidate_port_scan(99)
     _app._remote_listening_ports(_rem)   # invalidated → re-scans
     check("portscan: invalidate forces a fresh scan", _scan_n["n"] == 2)
     # A failed scan (empty output) must NOT be cached, so a blip doesn't pin servers offline.
-    sm.run_command = lambda remote, cmd, **k: ("", "err", -1)
-    sm._port_scan_cache.clear()
+    _sm_core.run_command = lambda remote, cmd, **k: ("", "err", -1)
+    _sm_portscan._port_scan_cache.clear()
     _app._remote_listening_ports(_rem)
-    check("portscan: an empty/failed scan is not cached", 99 not in sm._port_scan_cache)
+    check("portscan: an empty/failed scan is not cached", 99 not in _sm_portscan._port_scan_cache)
 finally:
-    sm.run_command = _o_ps_rc
-    sm._port_scan_cache.clear()
+    _sm_core.run_command = _o_ps_rc
+    _sm_portscan._port_scan_cache.clear()
 
 # ── debug report: redaction + secret-key whitelist (must not leak) ─
 _rd = _so._redact
@@ -2933,7 +2965,7 @@ _mods_avail_out = (
     "Wiremod Extras - Addition to Wiremod - https://github.com/wiremod/wire-extras/\n"
     " * \x1b[36mwiremod-extras\x1b[0m\n"
 )
-_av = sm._parse_mods_available(_mods_avail_out)
+_av = _sm_files._parse_mods_available(_mods_avail_out)
 check("mods: available parses id + name from ' * <id>' format",
       [m["id"] for m in _av] == ["metamodsource", "sourcemod", "wiremod-extras"]
       and _av[0]["name"] == "Metamod: Source")
@@ -2958,7 +2990,7 @@ _mods_avail_full = (
     " * ulx\n"
     "Enter an addon/mod to install (or exit to abort):\n"
 )
-_avf = sm._parse_mods_available(_mods_avail_full)
+_avf = _sm_files._parse_mods_available(_mods_avail_full)
 _avf_ids = [m["id"] for m in _avf]
 check("mods: the 'Installed addons/mods' section is not emitted as phantom entries",
       not any(m["name"].lower() == "installed addons/mods" for m in _avf))
@@ -2975,45 +3007,45 @@ _mods_inst_out = (
     "metamodsource - Metamod: Source - Plugins Framework\n"
     "Enter an addon/mod to remove (or exit to abort): "
 )
-_in = sm._parse_mods_installed(_mods_inst_out)
+_in = _sm_files._parse_mods_installed(_mods_inst_out)
 check("mods: installed parses '<id> - <name>' format",
       len(_in) == 1 and _in[0]["id"] == "metamodsource" and _in[0]["name"] == "Metamod: Source")
 check("mods: 'No installed mods' output yields empty list",
-      sm._parse_mods_installed("Failure! No installed mods or addons were found") == [])
+      _sm_files._parse_mods_installed("Failure! No installed mods or addons were found") == [])
 # A game with no mods installer (cod) prints 'Unknown command' + a 'LinuxGSM - <Game> - Version …'
 # banner — that banner must NOT be parsed as an installed mod.
 _cod_out = ("Error! Unknown command: ./codserver mods-remove\n"
             "LinuxGSM - Call of Duty - Version v26.1.0\nstart st | Start the server.")
-check("mods: 'Unknown command' output -> game not supported", sm._game_supports_mods(_cod_out) is False)
+check("mods: 'Unknown command' output -> game not supported", _sm_files._game_supports_mods(_cod_out) is False)
 check("mods: version banner isn't parsed as an installed mod",
-      not any(m["id"] == "LinuxGSM" for m in sm._parse_mods_installed(_cod_out)))
+      not any(m["id"] == "LinuxGSM" for m in _sm_files._parse_mods_installed(_cod_out)))
 check("mods: a real mods list is still 'supported'",
-      sm._game_supports_mods("metamodsource - Metamod: Source - desc") is True)
+      _sm_files._game_supports_mods("metamodsource - Metamod: Source - desc") is True)
 # mods_action rejects unsafe ids before ever building a shell command (injection guard)
 check("mods: mods_action rejects an unsafe id",
-      sm.mods_action(None, "u", "u", "install", "foo; rm -rf x")[1] == "invalid mod id")
+      _sm_files.mods_action(None, "u", "u", "install", "foo; rm -rf x")[1] == "invalid mod id")
 
 # game-backup download/delete validate the file name before touching any path (server=None here,
 # so a passing regex would crash — proving rejection happens purely on the name)
 check("game backup: delete rejects an unsafe name",
-      sm.delete_game_backup(None, "u", "x; rm -rf y") is False)
+      _sm_cron.delete_game_backup(None, "u", "x; rm -rf y") is False)
 check("game backup: delete rejects a path-traversal name",
-      sm.delete_game_backup(None, "u", "../../etc/passwd") is False)
+      _sm_cron.delete_game_backup(None, "u", "../../etc/passwd") is False)
 check("game backup: stream yields nothing for an unsafe name",
-      list(sm.stream_game_backup(None, "u", "../../etc/passwd")) == [])
+      list(_sm_cron.stream_game_backup(None, "u", "../../etc/passwd")) == [])
 check("game backup: name shape accepts a real archive",
-      bool(sm._GAME_BACKUP_NAME.match("gmodserver-2026-07-06-141117.tar.zst")))
+      bool(_sm_cron._GAME_BACKUP_NAME.match("gmodserver-2026-07-06-141117.tar.zst")))
 
 # ── discover_linuxgsm_servers: parse the one-shot host scan output ──
-_orig_disc_rc = sm.run_command
+_orig_disc_rc = _sm_core.run_command
 try:
-    sm.run_command = lambda *a, **k: (
+    _sm_core.run_command = lambda *a, **k: (
         "FOUND|gmodserver|gmodserver|27015|3|2|4|1\n"
         "FOUND|myrust|rustserver|28015|0|0|0|0\n"
         "some unrelated line\n"
         "FOUND|shortline|gmodserver|0\n"          # missing the count fields -> skipped
         "FOUND|zeroport|csgoserver|0|0|0|0|0\n", "", 0)
-    _disc = sm.discover_linuxgsm_servers(None)
+    _disc = _sm_core.discover_linuxgsm_servers(None)
     eq("discover: keeps only well-formed (8-field) FOUND lines", len(_disc), 3)
     check("discover: parses user / lgsm_name / port + backup/mod/cron counts + autostart",
           _disc[0] == {"user": "gmodserver", "lgsm_name": "gmodserver", "port": 27015,
@@ -3021,10 +3053,10 @@ try:
     check("discover: a 0/blank port becomes None and autostart is False",
           _disc[2]["user"] == "zeroport" and _disc[2]["port"] is None
           and _disc[2]["autostart"] is False)
-    sm.run_command = lambda *a, **k: ("", "err", 1)
-    check("discover: returns [] when the scan command fails", sm.discover_linuxgsm_servers(None) == [])
+    _sm_core.run_command = lambda *a, **k: ("", "err", 1)
+    check("discover: returns [] when the scan command fails", _sm_core.discover_linuxgsm_servers(None) == [])
 finally:
-    sm.run_command = _orig_disc_rc
+    _sm_core.run_command = _orig_disc_rc
 
 # ── LinuxGSM's data files: fetched and cached, not vendored ───────────────────────────────────
 # serverlist.csv and ubuntu-24.04.csv are LinuxGSM's. They used to be committed here, which froze
@@ -3172,12 +3204,12 @@ _LGSM_MENU = (
     "some banner line without a pipe here\n"
     "details       dt   | Display server information.\n"
 )
-_saved_run = sm.run_command
+_saved_run = _sm_core.run_command
 try:
-    sm.run_command = lambda *a, **k: (_LGSM_MENU, "", 0)
-    _parsed = sm.list_server_commands(NS(), "gmodserver")
+    _sm_core.run_command = lambda *a, **k: (_LGSM_MENU, "", 0)
+    _parsed = _sm_game.list_server_commands(NS(), "gmodserver")
 finally:
-    sm.run_command = _saved_run
+    _sm_core.run_command = _saved_run
 _pc = {c["cmd"]: c for c in _parsed}
 check("list_server_commands: parses start (with short code)",
       _pc.get("start", {}).get("short") == "st")
@@ -3189,20 +3221,20 @@ check("list_server_commands: ignores the ./script header + no-pipe banner lines"
 
 # ── player moderation: engine-aware caps, status/list parsers + injection-safe commands ──
 check("moderation: gmod (valve) supports kick + ban + say",
-      sm.moderation_caps("gmod") == {"kick": True, "ban": True, "say": True})
+      _sm_game.moderation_caps("gmod") == {"kick": True, "ban": True, "say": True})
 check("moderation: minecraft supports kick + ban + say",
-      sm.moderation_caps("mc") == {"kick": True, "ban": True, "say": True})
+      _sm_game.moderation_caps("mc") == {"kick": True, "ban": True, "say": True})
 check("moderation: cod (idTech3) supports kick + ban + say",
-      sm.moderation_caps("cod") == {"kick": True, "ban": True, "say": True})
+      _sm_game.moderation_caps("cod") == {"kick": True, "ban": True, "say": True})
 check("moderation: a non-console game (rust) supports nothing",
-      sm.moderation_caps("rust") == {"kick": False, "ban": False, "say": False})
+      _sm_game.moderation_caps("rust") == {"kick": False, "ban": False, "say": False})
 check("engine: gmod->valve, cod->idtech3, mc->minecraft, rust->''",
-      (sm.game_engine("gmod"), sm.game_engine("cod"), sm.game_engine("mc"), sm.game_engine("rust"))
+      (_sm_game.game_engine("gmod"), _sm_game.game_engine("cod"), _sm_game.game_engine("mc"), _sm_game.game_engine("rust"))
       == ("valve", "idtech3", "minecraft", ""))
 check("moderation: cod is now queryable (via console); a game with neither engine nor gamedig is not",
-      sm.is_player_queryable("cod") is True and sm.is_player_queryable("nosuchgame") is False)
+      _sm_game.is_player_queryable("cod") is True and _sm_game.is_player_queryable("nosuchgame") is False)
 check("moderation: console metacharacters are stripped from a name (no injection)",
-      sm._mod_sanitize('a;b"c`d\ne') == "abcde")
+      _sm_game._mod_sanitize('a;b"c`d\ne') == "abcde")
 
 # per-engine status/list parsers (sample output — I can't live-fire each engine)
 _SRC = ('# userid name uniqueid connected ping loss state adr\n'
@@ -3210,52 +3242,52 @@ _SRC = ('# userid name uniqueid connected ping loss state adr\n'
         '#  5 "Bob ^S" [U:1:99] 02:11 67 0 active 9.9.9.9:27005\n'
         '#  7 "aBot" BOT 00:00 0 0 active\n')
 check("parser(valve): names + steamids (legacy / modern / bot-empty)",
-      [(p["name"], p["steamid"]) for p in sm._parse_valve_status(_SRC)]
+      [(p["name"], p["steamid"]) for p in _sm_game._parse_valve_status(_SRC)]
       == [("Alice", "STEAM_0:1:12345"), ("Bob ^S", "[U:1:99]"), ("aBot", "")])
 _COD = ('num score ping guid                             name            lastmsg address       qport rate\n'
         '--- ----- ---- -------------------------------- --------------- ------- ------------- ----- ----\n'
         '  0     5   45 1100001aaaaaaaaaaaaaaaaaaaaaaaaa ^1Alice^7             0 5.6.7.8:28960 12345 25000\n'
         '  1     0   67 1100001bbbbbbbbbbbbbbbbbbbbbbbbb Bob Smith            50 9.9.9.9:28961 54321 25000\n')
 check("parser(idtech3): slot numbers + names (colours stripped, spaces kept)",
-      [(p["num"], p["name"]) for p in sm._parse_idtech3_status(_COD)] == [(0, "Alice"), (1, "Bob Smith")])
+      [(p["num"], p["name"]) for p in _sm_game._parse_idtech3_status(_COD)] == [(0, "Alice"), (1, "Bob Smith")])
 _MC = "[12:34:56] [Server thread/INFO]: There are 2 of a max of 20 players online: Alice, Bob_1"
 check("parser(minecraft): names from a prefixed log line",
-      [p["name"] for p in sm._parse_minecraft_list(_MC)] == ["Alice", "Bob_1"])
+      [p["name"] for p in _sm_game._parse_minecraft_list(_MC)] == ["Alice", "Bob_1"])
 check("parser(minecraft): empty server -> no players",
-      sm._parse_minecraft_list("There are 0 of a max of 20 players online: ") == [])
+      _sm_game._parse_minecraft_list("There are 0 of a max of 20 players online: ") == [])
 
 # _gamedig_host: Source servers reply to A2S from the host's real IP, so a 127.0.0.1 query is
 # silently dropped — the panel must query the host's primary IP. (run_command runs the awk pipeline
 # remotely, so the stub returns what awk WOULD emit: just the IP, or nothing.)
 class _FakeRemote:
     def __init__(self, rid): self.id = rid
-_orig_rc = sm.run_command
+_orig_rc = _sm_core.run_command
 try:
-    sm._gamedig_host_cache.clear()
-    sm.run_command = lambda *a, **k: ("45.76.63.211\n", "", 0)
+    _sm_core._gamedig_host_cache.clear()
+    _sm_core.run_command = lambda *a, **k: ("45.76.63.211\n", "", 0)
     check("gamedig-host: uses the host's primary IP, not 127.0.0.1",
-          sm._gamedig_host(_FakeRemote(9001)) == "45.76.63.211")
-    sm._gamedig_host_cache.clear()
-    sm.run_command = lambda *a, **k: ("", "", 0)          # no default route / no output
+          _sm_core._gamedig_host(_FakeRemote(9001)) == "45.76.63.211")
+    _sm_core._gamedig_host_cache.clear()
+    _sm_core.run_command = lambda *a, **k: ("", "", 0)          # no default route / no output
     check("gamedig-host: falls back to 127.0.0.1 when the IP can't be resolved",
-          sm._gamedig_host(_FakeRemote(9002)) == "127.0.0.1")
-    sm._gamedig_host_cache.clear()
+          _sm_core._gamedig_host(_FakeRemote(9002)) == "127.0.0.1")
+    _sm_core._gamedig_host_cache.clear()
     _calls = {"n": 0}
     def _counting_rc(*a, **k):
         _calls["n"] += 1
         return ("10.0.0.5\n", "", 0)
-    sm.run_command = _counting_rc
+    _sm_core.run_command = _counting_rc
     _r = _FakeRemote(9003)
-    sm._gamedig_host(_r); sm._gamedig_host(_r)
+    _sm_core._gamedig_host(_r); _sm_core._gamedig_host(_r)
     check("gamedig-host: caches per remote (one lookup, not one per query)", _calls["n"] == 1)
 finally:
-    sm.run_command = _orig_rc
-    sm._gamedig_host_cache.clear()
+    _sm_core.run_command = _orig_rc
+    _sm_core._gamedig_host_cache.clear()
 
 # _tmux_live_socket_sh: LinuxGSM leaves a stale <selfname>-<random> socket behind on every restart,
 # so the console targeting must pick the socket with a LIVE session (via has-session) rather than the
 # first match — otherwise send-keys/capture-pane hit a dead socket and kick/ban/say/status all no-op.
-_snip = sm._tmux_live_socket_sh("gmodserver")
+_snip = _sm_core._tmux_live_socket_sh("gmodserver")
 check("tmux-socket: verifies a live session instead of grabbing the first socket",
       "has-session -t gmodserver" in _snip and "grep -m1" not in _snip)
 check("tmux-socket: still signals NO_SESSION when nothing is live",
@@ -3263,118 +3295,118 @@ check("tmux-socket: still signals NO_SESSION when nothing is live",
 
 # ensure_persistent_bans: a banid ban only survives a restart if the server config execs
 # banned_user.cfg — this appends that (idempotently) to the resolved servercfg (${selfname}.cfg).
-_orig_lgv2, _orig_rc3 = sm.lgsm_get_values, sm.run_command
+_orig_lgv2, _orig_rc3 = _sm_files.lgsm_get_values, _sm_core.run_command
 try:
-    sm.lgsm_get_values = lambda *a, **k: {"servercfg": "${selfname}.cfg"}
+    _sm_files.lgsm_get_values = lambda *a, **k: {"servercfg": "${selfname}.cfg"}
     _pb = {}
-    sm.run_command = lambda server, cmd, timeout=15, sudo=False: (_pb.__setitem__("cmd", cmd), ("", "", 0))[1]
-    _ok_pb = sm.ensure_persistent_bans(object(), "gmodserver2", "gmodserver")
+    _sm_core.run_command = lambda server, cmd, timeout=15, sudo=False: (_pb.__setitem__("cmd", cmd), ("", "", 0))[1]
+    _ok_pb = _sm_game.ensure_persistent_bans(object(), "gmodserver2", "gmodserver")
     check("persistent-bans: targets the resolved servercfg, adds the exec, guards duplicates",
           _ok_pb is True and "*/cfg/gmodserver.cfg" in _pb["cmd"]
           and "exec banned_user.cfg" in _pb["cmd"] and "grep -qiE" in _pb["cmd"])
 finally:
-    sm.lgsm_get_values, sm.run_command = _orig_lgv2, _orig_rc3
+    _sm_files.lgsm_get_values, _sm_core.run_command = _orig_lgv2, _orig_rc3
 
 # game_map: a separate cached gamedig read for the current map, kept out of the player-count path.
-_orig_rc5 = sm.run_command
+_orig_rc5 = _sm_core.run_command
 try:
-    sm._game_map_cache.clear(); sm.run_command = lambda *a, **k: ("de_dust2\n", "", 0)
-    check("game-map: parses the map name from gamedig", sm.game_map(object(), "u", "css", 27015) == "de_dust2")
-    sm._game_map_cache.clear(); sm.run_command = lambda *a, **k: ("null\n", "", 0)
-    check("game-map: 'null'/empty gamedig output -> ''", sm.game_map(object(), "u", "css", 27015) == "")
-    sm._game_map_cache.clear(); sm.run_command = lambda *a, **k: ("<b>gm_x\n", "", 0)
+    _sm_cron._game_map_cache.clear(); _sm_core.run_command = lambda *a, **k: ("de_dust2\n", "", 0)
+    check("game-map: parses the map name from gamedig", _sm_cron.game_map(object(), "u", "css", 27015) == "de_dust2")
+    _sm_cron._game_map_cache.clear(); _sm_core.run_command = lambda *a, **k: ("null\n", "", 0)
+    check("game-map: 'null'/empty gamedig output -> ''", _sm_cron.game_map(object(), "u", "css", 27015) == "")
+    _sm_cron._game_map_cache.clear(); _sm_core.run_command = lambda *a, **k: ("<b>gm_x\n", "", 0)
     check("game-map: strips angle brackets from game-supplied text",
-          "<" not in sm.game_map(object(), "u", "css", 27015) and ">" not in sm.game_map(object(), "u", "css", 27015))
-    check("game-map: no gamedig type/port -> '' (no query)", sm.game_map(object(), "u", "css", None) == "")
+          "<" not in _sm_cron.game_map(object(), "u", "css", 27015) and ">" not in _sm_cron.game_map(object(), "u", "css", 27015))
+    check("game-map: no gamedig type/port -> '' (no query)", _sm_cron.game_map(object(), "u", "css", None) == "")
 finally:
-    sm.run_command = _orig_rc5; sm._game_map_cache.clear()
+    _sm_core.run_command = _orig_rc5; _sm_cron._game_map_cache.clear()
 
 # player_list: gamedig is PRIMARY (no console spam). The console is a backup used ONLY when the
 # caller explicitly passes allow_console=True (a user action) — the automatic path (default) never
 # touches the console: it returns None ('unknown') so the UI shows a GSLT hint instead of querying.
-_orig_cpl, _orig_gpl = sm.console_player_list, sm._gamedig_player_list
+_orig_cpl, _orig_gpl = _sm_game.console_player_list, _sm_game._gamedig_player_list
 try:
-    sm.console_player_list = lambda *a, **k: [{"name": "Ace"}]
-    sm._gamedig_player_list = lambda *a, **k: [{"name": "Zed", "steamid": "", "num": None,
+    _sm_game.console_player_list = lambda *a, **k: [{"name": "Ace"}]
+    _sm_game._gamedig_player_list = lambda *a, **k: [{"name": "Zed", "steamid": "", "num": None,
                                                 "score": None, "time": None}]
     check("player_list: gamedig is primary — the console isn't touched when gamedig answers",
-          [p["name"] for p in sm.player_list(None, "u", "cod", 28960, None, "codserver")] == ["Zed"])
-    sm._gamedig_player_list = lambda *a, **k: []   # gamedig says the server is empty
+          [p["name"] for p in _sm_game.player_list(None, "u", "cod", 28960, None, "codserver")] == ["Zed"])
+    _sm_game._gamedig_player_list = lambda *a, **k: []   # gamedig says the server is empty
     check("player_list: a gamedig-confirmed empty server does NOT fall back to the console",
-          sm.player_list(None, "u", "cod", 28960, None, "codserver") == [])
-    sm._gamedig_player_list = lambda *a, **k: None  # gamedig couldn't query at all
+          _sm_game.player_list(None, "u", "cod", 28960, None, "codserver") == [])
+    _sm_game._gamedig_player_list = lambda *a, **k: None  # gamedig couldn't query at all
     check("player_list: the automatic path is gamedig-only — no console, returns None when unread",
-          sm.player_list(None, "u", "cod", 28960, None, "codserver") is None)
+          _sm_game.player_list(None, "u", "cod", 28960, None, "codserver") is None)
     check("player_list: the console backup runs ONLY when allow_console=True (an explicit action)",
-          [p["name"] for p in sm.player_list(None, "u", "cod", 28960, None, "codserver",
+          [p["name"] for p in _sm_game.player_list(None, "u", "cod", 28960, None, "codserver",
                                              allow_console=True)] == ["Ace"])
 finally:
-    sm.console_player_list, sm._gamedig_player_list = _orig_cpl, _orig_gpl
+    _sm_game.console_player_list, _sm_game._gamedig_player_list = _orig_cpl, _orig_gpl
 
 # injection-safe command building, dispatched by engine
 _msent = {}
-_orig_scc = sm.send_console_command
-_orig_cpl_m = sm.console_player_list
+_orig_scc = _sm_core.send_console_command
+_orig_cpl_m = _sm_game.console_player_list
 try:
-    sm.send_console_command = lambda *a, **k: (_msent.__setitem__("cmd", a[2]), ("", "", 0))[1]
-    sm.moderate(None, "u", "gmod", "kick", target='Bad;Guy"x')
+    _sm_core.send_console_command = lambda *a, **k: (_msent.__setitem__("cmd", a[2]), ("", "", 0))[1]
+    _sm_game.moderate(None, "u", "gmod", "kick", target='Bad;Guy"x')
     check("moderation: valve kick quotes the sanitized name (injection neutralised)",
           _msent.get("cmd") == 'kick "BadGuyx"')
-    sm.moderate(None, "u", "gmod", "ban", steamid="STEAM_0:1:5; rcon x")
+    _sm_game.moderate(None, "u", "gmod", "ban", steamid="STEAM_0:1:5; rcon x")
     check("moderation: valve ban bans + kicks the re-validated SteamID only (injection stripped)",
           _msent.get("cmd") == "banid 0 STEAM_0:1:5 kick; writeid")
     check("moderation: valve ban with no SteamID and no name is refused",
-          sm.moderate(None, "u", "gmod", "ban", steamid="")[0] is False)
-    sm.moderate(None, "u", "cod", "kick", num="3")
+          _sm_game.moderate(None, "u", "gmod", "ban", steamid="")[0] is False)
+    _sm_game.moderate(None, "u", "cod", "kick", num="3")
     check("moderation: idTech3 kick is clientkick <slot>", _msent.get("cmd") == "clientkick 3")
-    sm.moderate(None, "u", "cod", "ban", num="3")
+    _sm_game.moderate(None, "u", "cod", "ban", num="3")
     check("moderation: idTech3 ban is banclient <slot>", _msent.get("cmd") == "banclient 3")
     check("moderation: idTech3 with a junk slot and no name is refused",
-          sm.moderate(None, "u", "cod", "ban", num="3; quit")[0] is False)
-    sm.moderate(None, "u", "mc", "ban", target="Steve")
+          _sm_game.moderate(None, "u", "cod", "ban", num="3; quit")[0] is False)
+    _sm_game.moderate(None, "u", "mc", "ban", target="Steve")
     check("moderation: minecraft ban is a bare name command", _msent.get("cmd") == "ban Steve")
     check("moderation: a non-console game (rust) refuses moderation",
-          sm.moderate(None, "u", "rust", "ban", target="x")[0] is False)
+          _sm_game.moderate(None, "u", "rust", "ban", target="x")[0] is False)
     # on-demand id resolution: a gamedig-sourced list carries no ids, so kick/ban looks the player
     # up on the console by name and uses the slot / SteamID it finds there.
-    sm.console_player_list = lambda *a, **k: [{"name": "Ace", "num": 4, "steamid": "STEAM_0:1:9"}]
+    _sm_game.console_player_list = lambda *a, **k: [{"name": "Ace", "num": 4, "steamid": "STEAM_0:1:9"}]
     _msent.clear()
-    sm.moderate(None, "u", "cod", "kick", target="Ace")   # no num supplied
+    _sm_game.moderate(None, "u", "cod", "kick", target="Ace")   # no num supplied
     check("moderation: idTech3 kick resolves the slot from the console when given only a name",
           _msent.get("cmd") == "clientkick 4")
     _msent.clear()
-    sm.moderate(None, "u", "gmod", "ban", target="Ace")   # no steamid supplied
+    _sm_game.moderate(None, "u", "gmod", "ban", target="Ace")   # no steamid supplied
     check("moderation: valve ban resolves the SteamID from the console when given only a name",
           _msent.get("cmd") == "banid 0 STEAM_0:1:9 kick; writeid")
 finally:
-    sm.send_console_command = _orig_scc
-    sm.console_player_list = _orig_cpl_m
+    _sm_core.send_console_command = _orig_scc
+    _sm_game.console_player_list = _orig_cpl_m
 
 # ── gamedig query type: per-server override wins over the built-in map, sanitized ──
 check("query-type: an explicit override wins over the built-in map",
-      sm._gamedig_type("gmod", "customtype") == "customtype")
+      _sm_cron._gamedig_type("gmod", "customtype") == "customtype")
 check("query-type: unmapped game with no override -> '' (no gamedig type)",
-      sm._gamedig_type("noquerygame", None) == "")
+      _sm_cron._gamedig_type("noquerygame", None) == "")
 check("query-type: a mapped game with no override uses the map",
-      sm._gamedig_type("gmod", None) == "garrysmod")
+      _sm_cron._gamedig_type("gmod", None) == "garrysmod")
 check("query-type: the override is sanitized to a gamedig-safe charset",
-      sm._gamedig_type("cod", "co d;rm -rf") == "codrm-rf")
+      _sm_cron._gamedig_type("cod", "co d;rm -rf") == "codrm-rf")
 check("query-type: the Call of Duty family is mapped, so its player count (restart/backup) works",
-      sm._gamedig_type("cod", None) == "cod" and sm._gamedig_type("cod4", None) == "cod4")
+      _sm_cron._gamedig_type("cod", None) == "cod" and _sm_cron._gamedig_type("cod4", None) == "cod4")
 check("query-type: a game with neither engine nor map becomes queryable once an override is set",
-      sm.is_player_queryable("nosuchgame", None) is False
-      and sm.is_player_queryable("nosuchgame", "quake3") is True)
+      _sm_game.is_player_queryable("nosuchgame", None) is False
+      and _sm_game.is_player_queryable("nosuchgame", "quake3") is True)
 
 # ── change_ssh_port: input validation rejects bad ports BEFORE touching the host ──
-check("ssh-port: non-numeric rejected", sm.change_ssh_port(None, "abc")[0] is False)
-check("ssh-port: port 0 rejected", sm.change_ssh_port(None, 0)[0] is False)
-check("ssh-port: port 70000 (out of range) rejected", sm.change_ssh_port(None, 70000)[0] is False)
-check("ssh-port: negative port rejected", sm.change_ssh_port(None, -5)[0] is False)
-check("ssh-port: invalid bind IP rejected", sm.change_ssh_port(None, 2222, "not-an-ip")[0] is False)
-check("valid-ip: accepts IPv4", sm._valid_ip("192.168.1.5") is True)
-check("valid-ip: accepts IPv6", sm._valid_ip("::1") is True)
-check("valid-ip: rejects junk", sm._valid_ip("nope") is False)
-check("valid-ip: rejects host:port form", sm._valid_ip("1.2.3.4:22") is False)
+check("ssh-port: non-numeric rejected", _sm_hosts.change_ssh_port(None, "abc")[0] is False)
+check("ssh-port: port 0 rejected", _sm_hosts.change_ssh_port(None, 0)[0] is False)
+check("ssh-port: port 70000 (out of range) rejected", _sm_hosts.change_ssh_port(None, 70000)[0] is False)
+check("ssh-port: negative port rejected", _sm_hosts.change_ssh_port(None, -5)[0] is False)
+check("ssh-port: invalid bind IP rejected", _sm_hosts.change_ssh_port(None, 2222, "not-an-ip")[0] is False)
+check("valid-ip: accepts IPv4", _sm_hosts._valid_ip("192.168.1.5") is True)
+check("valid-ip: accepts IPv6", _sm_hosts._valid_ip("::1") is True)
+check("valid-ip: rejects junk", _sm_hosts._valid_ip("nope") is False)
+check("valid-ip: rejects host:port form", _sm_hosts._valid_ip("1.2.3.4:22") is False)
 
 # ── db_maintenance: offline SQLite check / repair / optimize (updater + health card) ──
 import db_maintenance as _dbm
@@ -3731,44 +3763,44 @@ check("discord: the message-content intent bit (1<<15) is set", N._DISCORD_INTEN
 
 # player_slots parses gamedig's compact JSON into (count, max, name); a name with spaces/quotes
 # round-trips and junk output is rejected. run_command is stubbed so no SSH/gamedig is needed.
-_orig_rc = sm.run_command
+_orig_rc = _sm_core.run_command
 try:
-    sm.run_command = lambda *a, **k: ('{"c":7,"m":24,"n":"[EU] Bob\'s \\"Fun\\" Server","ok":true}', "", 0)
+    _sm_core.run_command = lambda *a, **k: ('{"c":7,"m":24,"n":"[EU] Bob\'s \\"Fun\\" Server","ok":true}', "", 0)
     check("player_slots: parses count/max/name from gamedig JSON",
-          sm.player_slots(object(), "u", game_type="csgo", port=27015, query_type="csgo")
+          _sm_cron.player_slots(object(), "u", game_type="csgo", port=27015, query_type="csgo")
           == (7, 24, "[EU] Bob's \"Fun\" Server"))
-    sm.run_command = lambda *a, **k: ('{"c":0,"m":null,"n":"","ok":true}', "", 0)
+    _sm_core.run_command = lambda *a, **k: ('{"c":0,"m":null,"n":"","ok":true}', "", 0)
     check("player_slots: null max + empty name -> (0, None, None)",
-          sm.player_slots(object(), "u", game_type="csgo", port=27015, query_type="csgo") == (0, None, None))
+          _sm_cron.player_slots(object(), "u", game_type="csgo", port=27015, query_type="csgo") == (0, None, None))
     # A gamedig FAILURE ({"error":...} -> ok=false) is 'unknown', NOT 0 players, so the caller can
     # fall back to the console instead of showing a bogus 0.
-    sm.run_command = lambda *a, **k: ('{"c":0,"m":null,"n":"","ok":false}', "", 0)
+    _sm_core.run_command = lambda *a, **k: ('{"c":0,"m":null,"n":"","ok":false}', "", 0)
     check("player_slots: a failed query (ok=false) -> (None, None, None), not a fake 0",
-          sm.player_slots(object(), "u", game_type="csgo", port=27015, query_type="csgo") == (None, None, None))
-    sm.run_command = lambda *a, **k: ("not json", "", 0)
+          _sm_cron.player_slots(object(), "u", game_type="csgo", port=27015, query_type="csgo") == (None, None, None))
+    _sm_core.run_command = lambda *a, **k: ("not json", "", 0)
     check("player_slots: junk output -> (None, None, None)",
-          sm.player_slots(object(), "u", game_type="csgo", port=27015, query_type="csgo") == (None, None, None))
+          _sm_cron.player_slots(object(), "u", game_type="csgo", port=27015, query_type="csgo") == (None, None, None))
 finally:
-    sm.run_command = _orig_rc
+    _sm_core.run_command = _orig_rc
 
 # Global ban: console_steamid_ban builds the right native ban/unban command from a VALIDATED SteamID,
 # and refuses junk before anything reaches the console (send_console_command is stubbed to record it).
 _gb_cmds = []
-_orig_scc = sm.send_console_command
+_orig_scc = _sm_core.send_console_command
 try:
-    sm.send_console_command = lambda server, user, command, timeout=20, selfname=None: (_gb_cmds.append(command), ("", "", 0))[1]
-    _ok, _reason = sm.console_steamid_ban(object(), "u", "csgoserver", "STEAM_0:1:5")
+    _sm_core.send_console_command = lambda server, user, command, timeout=20, selfname=None: (_gb_cmds.append(command), ("", "", 0))[1]
+    _ok, _reason = _sm_game.console_steamid_ban(object(), "u", "csgoserver", "STEAM_0:1:5")
     check("global-ban: ban builds 'banid 0 <id> kick; writeid'",
           _ok and _gb_cmds[-1] == "banid 0 STEAM_0:1:5 kick; writeid")
-    sm.console_steamid_ban(object(), "u", "csgoserver", "[U:1:11]", unban=True)
+    _sm_game.console_steamid_ban(object(), "u", "csgoserver", "[U:1:11]", unban=True)
     check("global-ban: unban builds 'removeid <id>; writeid'", _gb_cmds[-1] == "removeid [U:1:11]; writeid")
     check("global-ban: an invalid SteamID is rejected before the console",
-          sm.console_steamid_ban(object(), "u", "s", "garbage; rm -rf") == (False, "invalid"))
+          _sm_game.console_steamid_ban(object(), "u", "s", "garbage; rm -rf") == (False, "invalid"))
 finally:
-    sm.send_console_command = _orig_scc
+    _sm_core.send_console_command = _orig_scc
 
 # The REMOTE ignoreip drop-in (pushed to remotes over SSH) is built from the same validated entries.
-_dropin = sm._f2b_dropin_ignoreip_body(["9.9.9.9", "10.0.0.0/8", "bad; rm -rf /"])
+_dropin = _sm_hosts._f2b_dropin_ignoreip_body(["9.9.9.9", "10.0.0.0/8", "bad; rm -rf /"])
 check("remote-f2b: drop-in is a [DEFAULT] ignoreip block including localhost",
       "[DEFAULT]" in _dropin and "ignoreip = " in _dropin and "127.0.0.1/8" in _dropin)
 check("remote-f2b: drop-in keeps the valid IP + CIDR entries", "9.9.9.9" in _dropin and "10.0.0.0/8" in _dropin)
@@ -3885,7 +3917,7 @@ _SELF = "csgoserver"
 for _p in ("lgsm", "lgsm/data", "/lgsm", "lgsm/", "serverfiles", "linuxgsm.sh", _SELF,
            ".ssh", ".bashrc", "", "/", ".", "..", "../..", "a/../.."):
     check("file guard: %r is protected from deletion" % _p,
-          sm._is_protected_path(_p, _SELF) is True)
+          _sm_files._is_protected_path(_p, _SELF) is True)
 # The bypasses. Each of these resolves onto something whose loss is unrecoverable.
 for _p, _what in (("./lgsm", "the LinuxGSM control tree"),
                   (".//lgsm", "the LinuxGSM control tree"),
@@ -3895,34 +3927,34 @@ for _p, _what in (("./lgsm", "the LinuxGSM control tree"),
                   ("./linuxgsm.sh", "the LinuxGSM launcher"),
                   ("./%s" % _SELF, "the server's own script")):
     check("file guard: %r cannot sneak past and take %s" % (_p, _what),
-          sm._is_protected_path(_p, _SELF) is True)
+          _sm_files._is_protected_path(_p, _SELF) is True)
 # ...and ordinary content is still deletable, or the file manager is useless.
 for _p in ("addons/mymap.bsp", "./addons/mymap.bsp", "cfg/server.cfg", "logs", "lgsm2",
            "serverfiles-old", "my lgsm notes.txt"):
     check("file guard: ordinary path %r stays deletable" % _p,
-          sm._is_protected_path(_p, _SELF) is False)
+          _sm_files._is_protected_path(_p, _SELF) is False)
 
 # End-to-end through delete_path itself: the guard is worth nothing if the caller skips it, so
 # assert no shell command is issued at all for a protected path.
 _sent_rm = []
-_orig_rc2 = sm.run_command
+_orig_rc2 = _sm_core.run_command
 try:
-    sm.run_command = lambda server, cmd, timeout=30, sudo=None: (_sent_rm.append(cmd), ("__OK__", "", 0))[1]
-    _ok, _msg = sm.delete_path(object(), _SELF, "./lgsm", selfname=_SELF)
+    _sm_core.run_command = lambda server, cmd, timeout=30, sudo=None: (_sent_rm.append(cmd), ("__OK__", "", 0))[1]
+    _ok, _msg = _sm_files.delete_path(object(), _SELF, "./lgsm", selfname=_SELF)
     check("file guard: delete_path refuses './lgsm' and runs NOTHING",
           _ok is False and not _sent_rm, "ran: %s" % _sent_rm[:1])
     check("file guard: the refusal explains itself", "protected" in (_msg or "").lower(), _msg)
     _sent_rm.clear()
-    _ok2, _ = sm.delete_path(object(), _SELF, "x/../serverfiles", selfname=_SELF)
+    _ok2, _ = _sm_files.delete_path(object(), _SELF, "x/../serverfiles", selfname=_SELF)
     check("file guard: delete_path refuses a traversal onto serverfiles",
           _ok2 is False and not _sent_rm, "ran: %s" % _sent_rm[:1])
     _sent_rm.clear()
-    _ok3, _ = sm.delete_path(object(), _SELF, "addons/junk.txt", selfname=_SELF)
+    _ok3, _ = _sm_files.delete_path(object(), _SELF, "addons/junk.txt", selfname=_SELF)
     check("file guard: a real file still gets deleted, at its resolved path",
           _ok3 is True and len(_sent_rm) == 1
           and "/home/%s/addons/junk.txt" % _SELF in _sent_rm[0], "ran: %s" % _sent_rm[:1])
 finally:
-    sm.run_command = _orig_rc2
+    _sm_core.run_command = _orig_rc2
 
 # ── The renderer's one guarantee: no control byte reaches the page ────────────────────────────
 # Console text carries player names and chat, so these bytes are AUTHORED, not just accidental.
@@ -3943,20 +3975,20 @@ _HOME = "/home/csgoserver"
 for _p in ("../etc/passwd", "..", "a/../../etc", "../../root/.ssh/id_rsa", "../csgoserver2/secrets",
            "cfg/../../../etc/shadow"):
     eq("path resolver: %r cannot escape the home dir" % _p,
-       sm._safe_abspath("csgoserver", _p), None)
+       _sm_files._safe_abspath("csgoserver", _p), None)
 # A leading slash is treated as home-relative, not as the filesystem root: "/etc/passwd" must land
 # inside the home, never at the real /etc/passwd.
 eq("path resolver: an absolute-looking path is clamped into the home dir",
-   sm._safe_abspath("csgoserver", "/etc/passwd"), _HOME + "/etc/passwd")
+   _sm_files._safe_abspath("csgoserver", "/etc/passwd"), _HOME + "/etc/passwd")
 for _p, _want in (("cfg/server.cfg", _HOME + "/cfg/server.cfg"),
                   ("./cfg/server.cfg", _HOME + "/cfg/server.cfg"),
                   ("a//b", _HOME + "/a/b"),
                   ("cfg/./x/../y", _HOME + "/cfg/y"),
                   ("", _HOME)):
-    eq("path resolver: %r resolves under the home dir" % _p, sm._safe_abspath("csgoserver", _p), _want)
+    eq("path resolver: %r resolves under the home dir" % _p, _sm_files._safe_abspath("csgoserver", _p), _want)
 # Non-str input must not crash the file manager.
 for _junk in (None, 0, 12, [], {}):
-    _r = sm._safe_abspath("csgoserver", _junk)
+    _r = _sm_files._safe_abspath("csgoserver", _junk)
     check("path resolver: %r is handled, not raised on" % (_junk,),
           _r is None or _r.startswith(_HOME), repr(_r))
 
@@ -4193,6 +4225,53 @@ check("telegram watch: the '/' menu is registered while commands are on",
       False in _sc, str(_sc))
 check("telegram watch: turning commands off CLEARS the '/' menu, not leaving it advertising them",
       True in _sc, str(_sc))
+
+# ── The ssh_manager package must keep resolving names at CALL time ────────────────────────────
+# The whole split rests on one property: nothing inside the package binds another submodule's
+# function by name. `from panel.ops.ssh_manager import run_command` inside, say, hosts.py would copy
+# the object at import, and every stub on it would then assign cleanly and intercept nothing — the
+# suites would make real SSH connections and still report green. It is the exact failure this repo
+# has hit more than any other, and it leaves no trace, so it gets a gate rather than a comment.
+import ast as _smg_ast                                                             # noqa: E402
+_SMPKG = os.path.join(_root, "panel", "ops", "ssh_manager")
+_smg_mods = {f[:-3] for f in os.listdir(_SMPKG) if f.endswith(".py") and f != "__init__.py"}
+_smg_bad = []
+for _f in sorted(os.listdir(_SMPKG)):
+    if not _f.endswith(".py"):
+        continue
+    _tree = _smg_ast.parse(open(os.path.join(_SMPKG, _f), encoding="utf-8").read())
+    for _n in _smg_ast.walk(_tree):
+        if isinstance(_n, _smg_ast.ImportFrom) and (_n.module or "").startswith("panel.ops.ssh_manager"):
+            for _a in _n.names:
+                if _a.name not in _smg_mods:
+                    _smg_bad.append("%s imports %s by NAME (must go through the module)"
+                                    % (_f, _a.name))
+check("ssh_manager: no submodule binds another's function by name (the stub seam)",
+      not _smg_bad, "; ".join(_smg_bad[:4]))
+
+# And the mirror of it on the test side: a stub assigned onto the PACKAGE shadows its __getattr__,
+# so attribute-access callers would see it while the package's own 163 internal call sites would
+# not. Half a stub, no error. Stubs belong on the defining submodule.
+_smg_pkg_stubs = []
+# Built here rather than reusing _STUB_FILES: that is defined further down the file, and a gate
+# that silently depends on statement order is the kind of thing that starts passing vacuously.
+_SMG_STUB_FILES = ["tests/unit_test.py", "tests/smoke_test.py", "tests/rbac_test.py",
+                   "tests/setup_wizard_test.py", "tools/perf_bench.py"]
+for _f in _SMG_STUB_FILES:
+    _src = open(os.path.join(_root, _f), encoding="utf-8").read()
+    _tree = _smg_ast.parse(_src)
+    _pkg_aliases = {a.asname or a.name.split(".")[-1]
+                    for n in _smg_ast.walk(_tree) if isinstance(n, _smg_ast.Import)
+                    for a in n.names if a.name == "panel.ops.ssh_manager"}
+    _pkg_aliases |= {a.asname or a.name
+                     for n in _smg_ast.walk(_tree) if isinstance(n, _smg_ast.ImportFrom)
+                     and n.module == "panel.ops" for a in n.names if a.name == "ssh_manager"}
+    for _n in _smg_ast.walk(_tree):
+        if (isinstance(_n, _smg_ast.Attribute) and isinstance(_n.ctx, _smg_ast.Store)
+                and isinstance(_n.value, _smg_ast.Name) and _n.value.id in _pkg_aliases):
+            _smg_pkg_stubs.append("%s:%d %s.%s" % (_f, _n.lineno, _n.value.id, _n.attr))
+check("ssh_manager: no test stubs onto the PACKAGE (it would shadow __getattr__)",
+      not _smg_pkg_stubs, "; ".join(_smg_pkg_stubs[:4]))
 
 # ── Every test suite must actually be WIRED IN ────────────────────────────────────────────────
 # Both places that run the suites keep a hand-written list: tools/run-tests.sh (which CI runs) and
@@ -4528,7 +4607,8 @@ check("no module calls the datetime UTC helpers that are scheduled for removal",
 # a bare category filter silences the whole process.
 _blanket = []
 for _f in ("app.py", "auth.py", "models.py", "ssh_manager.py", "system_ops.py", "notifications.py"):
-    for _i, _line in enumerate(open(_modpath(_f), encoding="utf-8"), 1):
+    for _fp1 in _modfiles(_f):
+     for _i, _line in enumerate(open(_fp1, encoding="utf-8"), 1):
         if "filterwarnings" in _line and "DeprecationWarning" in _line \
                 and "module=" not in _line and "message=" not in _line and not _line.lstrip().startswith("#"):
             _blanket.append("%s:%d" % (_f, _i))
@@ -5085,7 +5165,7 @@ _SCAN_MODULES = sorted(
        if "__pycache__" not in _dp
        for f in _fs if f.endswith(".py") and not f.startswith("__")]
 )
-assert "app.py" in _SCAN_MODULES and os.path.join("panel", "ops", "ssh_manager.py") in _SCAN_MODULES, \
+assert "app.py" in _SCAN_MODULES and os.path.join("panel", "ops", "ssh_manager", "_core.py") in _SCAN_MODULES, \
     "module discovery is looking at the wrong directory: %s" % _SCAN_MODULES[:5]
 # The two lists are kept APART on purpose, and which one the orphan check consults is the whole
 # point. _OS_UPDATE_LOG survived this gate all the way onto main and turned the branch red via
@@ -5204,8 +5284,9 @@ _rebinds = []
 for _f in ["app.py", "monitoring.py"] + [f for f in _SCAN_TEST_USERS]:
     # _modpath for the panel modules (they live under panel/ now), plain join for the
     # tests/ paths. No exists() skip: a name that resolves to nothing must raise, not pass.
-    _fp = os.path.join(_root, _f) if _f.startswith("tests/") else _modpath(_f)
-    for _node in _ast_scan.walk(_ast_scan.parse(open(_fp, encoding="utf-8").read())):
+    _fps = [os.path.join(_root, _f)] if _f.startswith("tests/") else _modfiles(_f)
+    for _node in _ast_scan.walk(_ast_scan.parse(
+            "\n".join(open(_p, encoding="utf-8").read() for _p in _fps))):
         # `x = ...` and `x, y = ...` rebind; `x.attr = ...` and `x[k] = ...` do not.
         if isinstance(_node, _ast_scan.Assign):
             for _t in _node.targets:
@@ -5327,17 +5408,17 @@ check("privileged: the two copies agree on every log path and journal unit",
       _priv.LOG_FILES == _helper.LOG_FILES and _priv.JOURNAL_UNITS == _helper.JOURNAL_UNITS)
 
 # `| tail -n` became Python.
-eq("_last_lines keeps the tail", sm._last_lines("a\nb\nc\nd", 2), "c\nd")
-eq("_last_lines is fine with fewer lines than asked", sm._last_lines("a", 5), "a")
-eq("_last_lines handles empty output", sm._last_lines("", 3), "")
-eq("_last_lines handles None", sm._last_lines(None, 3), "")
+eq("_last_lines keeps the tail", _sm_core._last_lines("a\nb\nc\nd", 2), "c\nd")
+eq("_last_lines is fine with fewer lines than asked", _sm_core._last_lines("a", 5), "a")
+eq("_last_lines handles empty output", _sm_core._last_lines("", 3), "")
+eq("_last_lines handles None", _sm_core._last_lines(None, 3), "")
 
 # ufw status parsing that used to be a `grep` running under root.
-check("ufw: _ufw_is_active reads the Status line", sm._ufw_is_active("Status: active") is True)
-check("ufw: _ufw_is_active is false for inactive", sm._ufw_is_active("Status: inactive") is False)
-check("ufw: _ufw_is_active is false for empty output", sm._ufw_is_active("") is False)
+check("ufw: _ufw_is_active reads the Status line", _sm_firewall._ufw_is_active("Status: active") is True)
+check("ufw: _ufw_is_active is false for inactive", _sm_firewall._ufw_is_active("Status: inactive") is False)
+check("ufw: _ufw_is_active is false for empty output", _sm_firewall._ufw_is_active("") is False)
 check("ufw: _ufw_is_active is not fooled by the word active elsewhere",
-      sm._ufw_is_active("To    Action\n22    ALLOW  # keep this rule active") is False)
+      _sm_firewall._ufw_is_active("To    Action\n22    ALLOW  # keep this rule active") is False)
 
 # ── The sshd port change, exercised for real ──────────────────────────────────────────────────
 # This is the one privileged sequence whose failure mode is "the operator cannot reach the machine
@@ -5479,15 +5560,15 @@ _T_SAMPLE = [
     ("user-remove-home", ["codserver"], "rm -rf -- /home/codserver 2>&1"),
 ]
 
-_orig_rl, _orig_rc2, _orig_argv = sm._run_local, sm.run_command, sm._exec_local_argv
-_orig_helper_state = dict(sm._HELPER_STATE)
+_orig_rl, _orig_rc2, _orig_argv = _sm_core._run_local, _sm_core.run_command, _sm_core._exec_local_argv
+_orig_helper_state = dict(_sm_core._HELPER_STATE)
 try:
     # (a) local, helper NOT installed -> the pre-helper shell string, unchanged.
     _seen = []
-    sm._run_local = lambda cmd, timeout=30, sudo=False: (_seen.append((cmd, sudo)), ("", "", 0))[1]
-    sm._HELPER_STATE["present"] = False
+    _sm_core._run_local = lambda cmd, timeout=30, sudo=False: (_seen.append((cmd, sudo)), ("", "", 0))[1]
+    _sm_core._HELPER_STATE["present"] = False
     for _v, _a, _want in _T_SAMPLE:
-        sm.run_privileged(_T_LOCAL, _v, _a, timeout=5)
+        _sm_core.run_privileged(_T_LOCAL, _v, _a, timeout=5)
     check("transport: with no helper installed, the local path runs the pre-helper command",
           [c for c, _s in _seen] == [w for _v, _a, w in _T_SAMPLE],
           str([c for c, _s in _seen][:2]))
@@ -5496,11 +5577,11 @@ try:
 
     # (b) local, helper installed -> argv through the helper, and no shell anywhere.
     _argvs = []
-    sm._exec_local_argv = lambda argv, timeout=30, stdin_text=None: (
+    _sm_core._exec_local_argv = lambda argv, timeout=30, stdin_text=None: (
         _argvs.append(argv), ("", "", 0))[1]
-    sm._HELPER_STATE["present"] = True
+    _sm_core._HELPER_STATE["present"] = True
     for _v, _a, _w in _T_SAMPLE:
-        sm.run_privileged(_T_LOCAL, _v, _a, timeout=5)
+        _sm_core.run_privileged(_T_LOCAL, _v, _a, timeout=5)
     check("transport: with the helper installed, the local path invokes it with argv",
           all(a[:3] == ["sudo", "-n", _priv.HELPER_PATH] for a in _argvs), str(_argvs[:1]))
     check("transport: the helper path never builds a shell command",
@@ -5510,17 +5591,17 @@ try:
 
     # (c) remote -> the shell string over SSH, whatever the local helper situation is.
     _rem = []
-    sm.run_command = lambda s_, c, **k: (_rem.append((c, k.get("sudo"))), ("", "", 0))[1]
+    _sm_core.run_command = lambda s_, c, **k: (_rem.append((c, k.get("sudo"))), ("", "", 0))[1]
     for _v, _a, _w in _T_SAMPLE:
-        sm.run_privileged(_T_REMOTE, _v, _a, timeout=5)
+        _sm_core.run_privileged(_T_REMOTE, _v, _a, timeout=5)
     check("transport: a remote host gets the same command it always got",
           [c for c, _s in _rem] == [w for _v, _a, w in _T_SAMPLE], str([c for c, _s in _rem][:2]))
     check("transport: the local helper being present does not change what a remote receives",
           all(_s is True for _c, _s in _rem))
 finally:
-    sm._run_local, sm.run_command, sm._exec_local_argv = _orig_rl, _orig_rc2, _orig_argv
-    sm._HELPER_STATE.clear()
-    sm._HELPER_STATE.update(_orig_helper_state)
+    _sm_core._run_local, _sm_core.run_command, _sm_core._exec_local_argv = _orig_rl, _orig_rc2, _orig_argv
+    _sm_core._HELPER_STATE.clear()
+    _sm_core._HELPER_STATE.update(_orig_helper_state)
 
 
 # ── the REMOTE fail2ban top-IPs report ────────────────────────────────────────────────────────
@@ -5528,7 +5609,7 @@ finally:
 # carried the five-stage root pipeline, which is how two copies of one behaviour drift. It shares
 # the tally now — and a mutation that skipped the tally entirely left the suite green until this
 # test existed, because nothing exercised the remote path end to end.
-_orig_rt_rp, _orig_rt_ov = sm.run_privileged, sm.remote_fail2ban_overview
+_orig_rt_rp, _orig_rt_ov = _sm_core.run_privileged, _sm_hosts.remote_fail2ban_overview
 try:
     _RAW = "\n".join([
         "2026-09-03 10:00:00 x [sshd] Found 203.0.113.5",
@@ -5537,9 +5618,9 @@ try:
         "2026-09-03 10:00:03 x [sshd] Found 198.51.100.9",
     ])
     _rt_args = []
-    sm.run_privileged = lambda s_, v, a=(), **k: (_rt_args.append((v, list(a))), (_RAW, "", 0))[1]
-    sm.remote_fail2ban_overview = lambda s_: {"jails": [{"banned_ips": ["203.0.113.5"]}]}
-    _rt = sm.remote_fail2ban_top_ips(object(), limit=20, days=7)
+    _sm_core.run_privileged = lambda s_, v, a=(), **k: (_rt_args.append((v, list(a))), (_RAW, "", 0))[1]
+    _sm_hosts.remote_fail2ban_overview = lambda s_: {"jails": [{"banned_ips": ["203.0.113.5"]}]}
+    _rt = _sm_hosts.remote_fail2ban_top_ips(object(), limit=20, days=7)
     _rt_by = {r["ip"]: r for r in _rt}
     check("remote top-IPs: the raw log lines are tallied, not passed through",
           "203.0.113.5" in _rt_by and _rt_by["203.0.113.5"]["attempts"] == 2
@@ -5556,7 +5637,7 @@ try:
     check("remote top-IPs: that cutoff is one privileged.py would accept",
           _priv.check_args("f2b-log-lines", _rt_args[0][1]) == _rt_args[0][1], str(_rt_args[:1]))
 finally:
-    sm.run_privileged, sm.remote_fail2ban_overview = _orig_rt_rp, _orig_rt_ov
+    _sm_core.run_privileged, _sm_hosts.remote_fail2ban_overview = _orig_rt_rp, _orig_rt_ov
 
 
 # ── the content scan ──────────────────────────────────────────────────────────────────────────
@@ -5655,7 +5736,7 @@ if _osu:
     check("os update: the sentinel carries the REAL exit code, not a fixed one",
           (_ho_done_marker + "7") in _olog, _olog[-80:])
     check("os update: the writer and the reader agree on the sentinel",
-          _helper.OS_UPDATE_DONE == _priv.OS_UPDATE_DONE == sm._OS_UPDATE_DONE)
+          _helper.OS_UPDATE_DONE == _priv.OS_UPDATE_DONE == _sm_hosts._OS_UPDATE_DONE)
 
     # A job that dies before writing its own sentinel must still write one. Without it the UI's
     # popup polls forever, which looks exactly like "the update is taking a long time". Provoked
@@ -5699,10 +5780,10 @@ _CRON_JOURNAL = "\n".join([
     "1788000180 host CRON[4]: (codserver) CMD (/home/codserver/codserver monitor)",
     "not-an-epoch host CRON[5]: (codserver) CMD (/home/codserver/codserver bogus)",
 ])
-_orig_cron_rp = sm.run_privileged
+_orig_cron_rp = _sm_core.run_privileged
 try:
-    sm.run_privileged = lambda s_, v, a=(), **k: (_CRON_JOURNAL, "", 0)
-    _times = sm._read_cron_run_times(object(), "codserver")
+    _sm_core.run_privileged = lambda s_, v, a=(), **k: (_CRON_JOURNAL, "", 0)
+    _times = _sm_cron._read_cron_run_times(object(), "codserver")
     check("cron times: only THIS user's lines are counted",
           "/home/gmodserver/gmodserver update" not in _times, str(sorted(_times)))
     check("cron times: this user's commands are all present",
@@ -5713,11 +5794,11 @@ try:
           str(_times.get("/home/codserver/codserver monitor")))
     check("cron times: a line whose first field is not an epoch is skipped",
           "/home/codserver/codserver bogus" not in _times, str(sorted(_times)))
-    sm.run_privileged = lambda s_, v, a=(), **k: ("", "", 0)
+    _sm_core.run_privileged = lambda s_, v, a=(), **k: ("", "", 0)
     eq("cron times: no journal output is no times",
-       sm._read_cron_run_times(object(), "codserver"), {})
+       _sm_cron._read_cron_run_times(object(), "codserver"), {})
 finally:
-    sm.run_privileged = _orig_cron_rp
+    _sm_core.run_privileged = _orig_cron_rp
 
 
 # ── sshd hardening, and the swap file's precedence bug ────────────────────────────────────────
@@ -5861,7 +5942,8 @@ for _f in ("app.py", "auth.py", "manage.py", "models.py", "system_ops.py", "ssh_
            "config.py", "i18n.py", "privileged.py", "clock.py"):
     # _modpath, not a root join with an exists() skip: when these modules moved under panel/
     # the old form silently matched nothing and still reported green.
-    for _i, _line in enumerate(open(_modpath(_f), encoding="utf-8"), 1):
+    for _fp2 in _modfiles(_f):
+     for _i, _line in enumerate(open(_fp2, encoding="utf-8"), 1):
         if ".isdigit()" in _line.split("#", 1)[0]:
             _isdigit_users.append("%s:%d" % (_f, _i))
 check("unicode: no module uses .isdigit() — isdecimal() is the one that matches int()",
@@ -5920,7 +6002,7 @@ def _is_dispatch(call):
 
 _census = {"sudo=True": 0, "_sudo_sh": 0}
 for _f in _ESCALATION_FILES:
-    _tree = _ast.parse(open(_modpath(_f), encoding="utf-8").read())
+    _tree = _ast.parse("\n".join(open(_p, encoding="utf-8").read() for _p in _modfiles(_f)))
     for _n in _ast.walk(_tree):
         if not isinstance(_n, _ast.Call):
             continue
@@ -5939,7 +6021,7 @@ for _f in _ESCALATION_FILES:
 # cannot live in WRITE_TARGETS. Raise this only when the verb layer genuinely gains another one.
 _excluded = 0
 for _f in _ESCALATION_FILES:
-    _tree = _ast.parse(open(_modpath(_f), encoding="utf-8").read())
+    _tree = _ast.parse("\n".join(open(_p, encoding="utf-8").read() for _p in _modfiles(_f)))
     for _n in _ast.walk(_tree):
         if not isinstance(_n, _ast.Call):
             continue
@@ -6548,7 +6630,8 @@ check("docs: the fuzz workflow matrix runs every harness", _matrix_targets == _h
 # triggering it, which is the same "quietly stops being maintained" failure this block exists to
 # catch. Moving a module now either updates the filter or turns this red.
 for _mod in ("ssh_manager.py", "system_ops.py", "terminal.py"):
-    _want = os.path.relpath(_modpath(_mod), _root).replace(os.sep, "/")
+    _p = _modpath(_mod)
+    _want = os.path.relpath(_p, _root).replace(os.sep, "/") + ("/**" if os.path.isdir(_p) else "")
     check("docs: the fuzz workflow watches %s (as '%s')" % (_mod, _want),
           ("'%s'" % _want) in _fuzz_wf, "not in fuzz.yml paths:")
 
@@ -6730,7 +6813,7 @@ check("tailscale: the panel-host login-URL check is a fullmatch, not a prefix te
       'startswith("https://login.tailscale.com/")' not in _tsi_src
       and "TS_LOGIN_URL_RE.fullmatch" in _tsi_src)
 check("tailscale: both flows share ONE definition of the URL",
-      sm._TS_LOGIN_URL_RE is _privmod.TS_LOGIN_URL_RE)
+      _sm_hosts._TS_LOGIN_URL_RE is _privmod.TS_LOGIN_URL_RE)
 _ts_good = "https://login.tailscale.com/a/0123456789abcdef"
 check("tailscale: a real login URL is accepted",
       _privmod.TS_LOGIN_URL_RE.fullmatch(_ts_good) is not None)
