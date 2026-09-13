@@ -267,6 +267,11 @@ def _legacy_restore_dispatch(stage, name):
     with open(script, "w") as f:
         f.write("\n".join(lines) + "\n")
     os.chmod(script, 0o700)
+    # argv names a fixed script path under DATA_DIR, written at 0700 immediately above, and
+    # there is no shell here. The script's CONTENT is composed — every value interpolated into
+    # it goes through _sh() (shlex.quote), which is where the scrutiny belongs and is not what
+    # this rule inspects.
+    # nosemgrep: python.lang.security.audit.dangerous-subprocess-use-audit.dangerous-subprocess-use-audit
     subprocess.Popen(_service_restart_launcher(script),
                      stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, env=os.environ.copy())
     return True, "Restoring from %s — the panel will restart in a few seconds." % name

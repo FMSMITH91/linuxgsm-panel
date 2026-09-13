@@ -187,12 +187,13 @@ def _run_verb(verb, args=(), timeout=30, merge_stderr=True):
         # it with a literal string would mean going back to composing a command, which is the thing
         # being removed. Reviewed and suppressed rather than silently left red.
         #
-        # BOTH rule ids, because they are separate rules with separate suppressions and only one of
-        # them was named here: -audit fires on "not a static string", -tainted-env-args on "user
-        # controlled data". Codacy's Opengrep reports the second, so naming only the first left this
-        # line as a standing Error on main that nothing was gating.
-        # nosemgrep: python.lang.security.audit.dangerous-subprocess-use-audit.dangerous-subprocess-use-audit
-        # nosemgrep: python.lang.security.audit.dangerous-subprocess-use-tainted-env-args.dangerous-subprocess-use-tainted-env-args
+        # BOTH rule ids, ON ONE LINE. They are separate rules with separate suppressions, and
+        # semgrep reads only the comment IMMEDIATELY above a finding — so when these were two
+        # stacked nosemgrep lines, the upper one (-audit) was inert and Codacy reported it as a
+        # standing Error while the lower one worked. Comma-separated on a single line is what
+        # actually suppresses both. -audit fires on "not a static string", -tainted-env-args on
+        # "user controlled data".
+        # nosemgrep: python.lang.security.audit.dangerous-subprocess-use-audit.dangerous-subprocess-use-audit,python.lang.security.audit.dangerous-subprocess-use-tainted-env-args.dangerous-subprocess-use-tainted-env-args
         r = subprocess.run(argv, shell=False,  # nosec B603 - argv from privileged.py's fixed table
                            input=_priv.stdin_for(verb), capture_output=True, text=True,
                            timeout=timeout)
@@ -1002,6 +1003,10 @@ def _launch_installer(target_ref="", branch="", started_msg=None):
         with open(path, "w") as f:
             f.write(script)
         os.chmod(path, 0o700)  # owner-only; root (sudo path) can still read it
+        # argv is literals (systemd-run, --no-block, --collect, --unit, /bin/bash) plus `path`,
+        # a fixed location under DATA_DIR written at 0700 just above. No shell. Not a static
+        # string only because the sudo/--user prefix varies with whether the panel runs as root.
+        # nosemgrep: python.lang.security.audit.dangerous-subprocess-use-audit.dangerous-subprocess-use-audit
         subprocess.Popen(
             launcher,
             stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, env=os.environ.copy(),

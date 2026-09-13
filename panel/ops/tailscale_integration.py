@@ -44,6 +44,11 @@ _cache_lock = threading.Lock()
 def _run_ts(args, timeout=5):
     """Run a tailscale CLI command. Returns (stdout, stderr, exit_code)."""
     try:
+        # The program name is a literal and there is no shell, so only the ARGUMENTS vary —
+        # which is this function's whole job. They are built by privileged.ts_serve_argv /
+        # tool_argv, which validate every input and rebuild the mount from a literal alphabet
+        # (CodeQL #375 closed on that change). Not a static string by design.
+        # nosemgrep: python.lang.security.audit.dangerous-subprocess-use-audit.dangerous-subprocess-use-audit
         r = subprocess.run(
             ["tailscale"] + args,
             capture_output=True, text=True, timeout=timeout,
