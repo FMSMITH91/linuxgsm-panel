@@ -30,6 +30,18 @@ _PREEXISTING = {p for p in (SECRET_FILE, CRED_KEY_FILE, CONFIG_FILE) if p.exists
 from panel.core.config import load_config, save_config
 _cfg = load_config()
 _cfg["setup_complete"] = True
+# Fixture hosts are 192.0.2.0/24 (TEST-NET-1) — reserved, and therefore BLACKHOLED rather than
+# refused. Every connection to one costs the full ssh_timeout instead of returning instantly,
+# and this suite makes 175 of them (5 hosts x 35 probes from the background watchers). At the
+# 10s default that was the entire cost of CI: the "run all checks" step took 729s on a runner
+# against ~21s locally, where tools/smoke-local.sh refuses egress and the same connects fail at
+# once. Three matrix jobs made it ~37 minutes a push, spent waiting on addresses that are
+# guaranteed unreachable BY DESIGN.
+#
+# Nothing here asserts on how LONG a host takes to be unreachable, only that it is — so 1s (the
+# floor _ssh_connect_timeout() clamps to) buys the identical outcome. Set before the app loads,
+# beside setup_complete, because the background watchers start inside create_app().
+_cfg["ssh_timeout"] = 1
 save_config(_cfg)
 
 # LinuxGSM's serverlist is fetched at runtime rather than committed (see lgsm_data), and this

@@ -27,6 +27,7 @@ jobs:
   analysis:
     name: Scorecard analysis
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     permissions:
       id-token: write   # publish results to the OpenSSF API (this is what powers the badge)
     steps:

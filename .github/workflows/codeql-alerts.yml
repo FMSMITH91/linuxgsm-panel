@@ -1,6 +1,7 @@
 name: Code-scanning alerts
 
-# Fail main when it carries an open code-scanning alert.
+# Fail a ref when it carries an open code-scanning alert — main AFTER a merge, and a pull
+# request BEFORE one. See the note on the job for why the PR half exists.
 #
 # WHY THIS RUNS ON workflow_run AND NOT ON push
 #   It used to be a job in security.yml, triggered by the same push as CodeQL — so the two ran
@@ -34,42 +35,106 @@ permissions:
   contents: read
 
 concurrency:
-  group: codeql-alerts
+  # Keyed by the ref being judged, so a PR check and the main gate never cancel one another.
+  group: codeql-alerts-${{ github.event.workflow_run.head_branch || github.ref }}
   cancel-in-progress: false
 
 jobs:
   open-alerts:
-    name: Open code-scanning alerts (main)
+    # WHY THIS ALSO RUNS FOR PULL REQUESTS
+    #   It used to gate main only, and the failure mode of that is the one thing a gate must not
+    #   do: report a problem no earlier than the moment it is too late. A PR went green, merged,
+    #   and THIS turned main red seconds later — every time, for a class of problem the PR had no
+    #   way to show, because the question asked here ("are there open alerts?") is about repo
+    #   state and a PR's alerts are not yet main's.
+    #
+    #   The real case: a file was renamed. GitHub keys an alert dismissal partly on path, so the
+    #   rename closed a two-month-old dismissed false positive as "fixed" and opened an identical,
+    #   UNDISMISSED alert at the new path. Byte-identical code, no new finding, main red.
+    #
+    #   CodeQL analysing a pull_request uploads its results under refs/pull/<n>/merge, and the
+    #   alerts API takes a ?ref=. So the same question can be asked of the MERGE COMMIT before it
+    #   is a merge commit, which is exactly the thing a PR check should be. A PR that would turn
+    #   main red now turns itself red instead.
+    name: Open code-scanning alerts
     if: >-
-      github.event.workflow_run.head_branch == 'main' &&
-      github.event.workflow_run.conclusion == 'success'
+      github.event.workflow_run.conclusion == 'success' &&
+      (github.event.workflow_run.head_branch == 'main' ||
+       github.event.workflow_run.event == 'pull_request')
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     permissions:
       contents: read
       security-events: read
+      pull-requests: read
     steps:
-      - name: Fail if main has open code-scanning alerts
+      - name: Resolve which ref to judge
+        id: ref
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          WR_EVENT: ${{ github.event.workflow_run.event }}
+          WR_BRANCH: ${{ github.event.workflow_run.head_branch }}
+          WR_SHA: ${{ github.event.workflow_run.head_sha }}
         run: |
           set -euo pipefail
-          # ?state=open is server-side; ask for the count rather than paging every alert.
-          alerts="$(gh api "repos/${GITHUB_REPOSITORY}/code-scanning/alerts?state=open&per_page=100" \
+          if [ "${WR_EVENT}" = "pull_request" ]; then
+            # workflow_run carries no PR number, so find the PR by its head SHA. A SHA can belong
+            # to more than one open PR (same branch, retargeted); judging the first is right —
+            # they share the head, so they share the alerts.
+            num="$(gh api "repos/${GITHUB_REPOSITORY}/commits/${WR_SHA}/pulls" \
+                     --jq '[.[] | select(.state == "open") | .number] | first // empty')"
+            if [ -z "${num}" ]; then
+              # The PR closed between CodeQL finishing and this starting. Nothing to gate.
+              echo "skip=true" >> "$GITHUB_OUTPUT"
+              echo "No open PR for ${WR_SHA}; nothing to judge."
+              exit 0
+            fi
+            echo "ref=refs/pull/${num}/merge" >> "$GITHUB_OUTPUT"
+            echo "label=PR #${num}" >> "$GITHUB_OUTPUT"
+          else
+            echo "ref=refs/heads/${WR_BRANCH}" >> "$GITHUB_OUTPUT"
+            echo "label=\`${WR_BRANCH}\`" >> "$GITHUB_OUTPUT"
+          fi
+          echo "skip=false" >> "$GITHUB_OUTPUT"
+
+      - name: Fail if that ref has open code-scanning alerts
+        if: steps.ref.outputs.skip != 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REF: ${{ steps.ref.outputs.ref }}
+          LABEL: ${{ steps.ref.outputs.label }}
+        run: |
+          set -euo pipefail
+          # ?state=open and ?ref= are both server-side; ask for the rows rather than paging all.
+          # A ref CodeQL has not uploaded results for returns [], which reads as "clean" — so the
+          # guard below refuses to pass on an answer that could equally mean "not analysed".
+          alerts="$(gh api "repos/${GITHUB_REPOSITORY}/code-scanning/alerts?state=open&ref=${REF}&per_page=100" \
                      --jq '[.[] | {rule: .rule.id, sev: (.rule.security_severity_level // .rule.severity // "-"), path: .most_recent_instance.location.path, line: .most_recent_instance.location.start_line}]')"
           n="$(printf '%s' "$alerts" | jq 'length')"
+          total="$(gh api "repos/${GITHUB_REPOSITORY}/code-scanning/analyses?ref=${REF}&per_page=1" --jq 'length' || echo 0)"
           {
-            echo "### Open code-scanning alerts on \`main\`"
+            echo "### Open code-scanning alerts on ${LABEL}"
             echo ""
-            if [ "$n" -eq 0 ]; then
+            if [ "${total}" -eq 0 ]; then
+              echo ":warning: CodeQL has uploaded no analysis for \`${REF}\`, so this proves nothing."
+            elif [ "$n" -eq 0 ]; then
               echo "None. :white_check_mark:"
             else
               echo "| severity | rule | location |"
               echo "| --- | --- | --- |"
               printf '%s' "$alerts" | jq -r '.[] | "| \(.sev) | `\(.rule)` | \(.path):\(.line) |"'
+              echo ""
+              echo "A dismissed alert can reappear here UNDISMISSED if its file moved — GitHub keys"
+              echo "dismissals partly on path. Check the Security tab for the same rule at the old"
+              echo "path before treating it as a new finding."
             fi
           } >> "$GITHUB_STEP_SUMMARY"
-          if [ "$n" -ne 0 ]; then
-            echo "::error::main has $n open code-scanning alert(s) — see the job summary." >&2
+          if [ "${total}" -eq 0 ]; then
+            echo "::error::no CodeQL analysis for ${REF} — refusing to report it clean." >&2
             exit 1
           fi
-          echo "No open code-scanning alerts."
+          if [ "$n" -ne 0 ]; then
+            echo "::error::${LABEL} has $n open code-scanning alert(s) — see the job summary." >&2
+            exit 1
+          fi
+          echo "No open code-scanning alerts on ${LABEL}."

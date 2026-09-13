@@ -19,6 +19,11 @@ on:
       - '.github/workflows/**'
 
 # Least-privilege default; the job below escalates only to post its check-run annotations.
+# Supersede rather than stack: Only the newest push's workflow lint is of any interest.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 permissions:
   contents: read
 
@@ -26,6 +31,7 @@ jobs:
   actionlint:
     name: actionlint
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     permissions:
       contents: read
       checks: write   # reviewdog posts actionlint findings as a check run

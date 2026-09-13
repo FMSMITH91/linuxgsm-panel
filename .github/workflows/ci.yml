@@ -37,6 +37,7 @@ jobs:
   checks:
     name: checks (${{ matrix.os }} · py${{ matrix.python }})
     runs-on: ${{ matrix.os }}
+    timeout-minutes: 20
     strategy:
       fail-fast: false   # report EVERY LTS result even if one fails, so a version-specific break is obvious
       matrix:
@@ -78,6 +79,13 @@ jobs:
   coverage:
     name: coverage
     runs-on: ubuntu-latest
+    timeout-minutes: 20
+    # Gated on the suites actually passing. This job is a FOURTH full execution of all five of
+    # them (under tracing, so the slowest of the four), and measuring the coverage of a suite that
+    # just failed tells you nothing — the number is meaningless and the minutes are spent anyway.
+    # `needs` costs nothing on a green run, because this was never on the critical path: it
+    # publishes a report, it does not gate the merge.
+    needs: checks
     env:
       CODACY_PROJECT_TOKEN: ${{ secrets.CODACY_PROJECT_TOKEN }}
     # Informational, and deliberately a SEPARATE job: it re-runs the suites under tracing, which is

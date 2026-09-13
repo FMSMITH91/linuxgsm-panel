@@ -146,9 +146,36 @@ _CFG_READERS = "".join(_modsrc(m) for m in
 check("config: every DEFAULT_CONFIG key has a reader",
       all(k in _CFG_READERS for k in _cfgmod.DEFAULT_CONFIG),
       str([k for k in _cfgmod.DEFAULT_CONFIG if k not in _CFG_READERS]))
-check("config: ssh_timeout is actually used by the SSH layer",
-      _smod._ssh_connect_timeout() == _cfgmod.DEFAULT_CONFIG["ssh_timeout"],
-      "helper returned %r" % _smod._ssh_connect_timeout())
+# Prove the helper READS the knob, rather than that it happens to return the default. The old
+# form compared against DEFAULT_CONFIG, which only holds while no config on disk overrides it —
+# and tests/smoke_test.py now writes ssh_timeout=1 (see the note there), so the assertion
+# depended on suite ORDER for its truth. Driving the value directly is both stronger and
+# order-independent: a helper that ignored config would fail this, where it passed before.
+_sshto_saved = _cfgmod.load_config().get("ssh_timeout")
+try:
+    for _want in (7, 30):
+        _c = _cfgmod.load_config()
+        _c["ssh_timeout"] = _want
+        _cfgmod.save_config(_c)
+        eq("config: ssh_timeout=%d is what the SSH layer uses" % _want,
+           _smod._ssh_connect_timeout(), _want)
+    # ...and the clamp holds at both ends, so a hostile or fat-fingered value cannot make the
+    # panel hang forever or busy-fail.
+    for _set, _want in ((0, 1), (-5, 1), (9999, 120)):
+        _c = _cfgmod.load_config()
+        _c["ssh_timeout"] = _set
+        _cfgmod.save_config(_c)
+        eq("config: ssh_timeout=%r clamps to %d" % (_set, _want),
+           _smod._ssh_connect_timeout(), _want)
+finally:
+    _c = _cfgmod.load_config()
+    if _sshto_saved is None:
+        _c.pop("ssh_timeout", None)
+    else:
+        _c["ssh_timeout"] = _sshto_saved
+    _cfgmod.save_config(_c)
+eq("config: with no override the SSH layer uses the documented default",
+   _smod._ssh_connect_timeout(), _cfgmod.DEFAULT_CONFIG["ssh_timeout"])
 check("config: the autoblock default is one constant, not two",
       "_AUTOBLOCK_DEFAULT_THRESHOLD), 100000)" in _modsrc("app"))
 
@@ -5668,6 +5695,49 @@ check("privileged: tailscale-serve builds a loopback upstream, legacy grammar",
       _priv.tool_argv("tailscale-serve", ["funnel", "legacy", "/panel", "https+insecure", "8443"])
       == ["tailscale", "funnel", "--bg", "--https", "443", "/panel",
           "https+insecure://127.0.0.1:8443"])
+
+# ── ts_serve_argv validates its OWN arguments, not just the verb table's ───────────────────────
+# Everything above goes through tool_argv, which runs the verb table's validators first. But
+# tailscale_integration._ts_serve_args() calls ts_serve_argv() DIRECTLY to build the unprivileged
+# command — and that path is tried FIRST, with the root verb only as a fallback. So the verb table
+# was guarding the branch that was least likely to run.
+#
+# `mount` comes straight from the JSON body of POST /api/tailscale/serve. In the legacy grammar it
+# is a BARE POSITIONAL, so before this was fixed, "--exit-node=evil" went into the tailscale argv
+# as an OPTION rather than a path — argv form stops shell injection, not argument injection. CodeQL
+# py/command-line-injection #375 traced exactly that, request body to subprocess, and was right; an
+# older dismissal of the same alert had called it a false positive on the grounds that there is no
+# shell, which is true and does not address this.
+#
+# These call the function DIRECTLY, the way the unprivileged path does. Going through tool_argv
+# here would test the wrong door.
+for _m in ("--exit-node=evil", "-T", "--set-path=/x", "../../etc", "//evil.example.com",
+           "/a b", "/x\ty", "-"):
+    _raised = False
+    try:
+        _priv.ts_serve_argv("serve", "legacy", _m, "http", "5000")
+    except _priv.VerbError:
+        _raised = True
+    check("privileged: ts_serve_argv itself rejects mount %r (direct call, no verb table)" % _m,
+          _raised)
+check("privileged: ts_serve_argv still builds the legitimate modern argv",
+      _priv.ts_serve_argv("serve", "modern", "/panel", "http", "5000")
+      == ["tailscale", "serve", "--bg", "--https=443", "--set-path=/panel",
+          "http://127.0.0.1:5000"])
+check("privileged: ts_serve_argv still builds the legitimate legacy argv",
+      _priv.ts_serve_argv("funnel", "legacy", "/", "https+insecure", "8443")
+      == ["tailscale", "funnel", "--bg", "--https", "443", "/",
+          "https+insecure://127.0.0.1:8443"])
+for _bad_verb, _bad_gram, _bad_scheme, _bad_port in (
+        ("logout", "legacy", "http", "5000"), ("serve", "sneaky", "http", "5000"),
+        ("serve", "legacy", "ftp", "5000"), ("serve", "legacy", "http", "99999")):
+    _raised = False
+    try:
+        _priv.ts_serve_argv(_bad_verb, _bad_gram, "/", _bad_scheme, _bad_port)
+    except _priv.VerbError:
+        _raised = True
+    check("privileged: ts_serve_argv rejects (%s,%s,%s,%s) on a direct call"
+          % (_bad_verb, _bad_gram, _bad_scheme, _bad_port), _raised)
 for _bad in (["serve", "modern", "../../etc", "http", "5000"],
              ["serve", "modern", "//evil.example.com", "http", "5000"],
              ["serve", "modern", "/", "ftp", "5000"],
@@ -5905,6 +5975,34 @@ if len(_disc_parts) >= 8:
 # symlink planted at that path could only reach what that user could already read. Moving it behind
 # a root helper is a privilege reduction ONLY if that property survives — read it as root instead
 # and a download button becomes "hand me any file on the box".
+# ── Every shell script is shellchecked, and panel-helper is linted at all ──────────────────────
+# Two blind spots, found by auditing coverage BY FILE TYPE rather than by tool:
+#
+#   1. shellcheck was given a hand-kept list of five scripts. tools/smoke-local.sh and
+#      .clusterfuzzlite/build.sh were never in it. run-tests.sh now derives the list from
+#      `git ls-files '*.sh'`; this proves the two lists agree.
+#   2. tools/panel-helper is Python with a shebang and NO .py extension, so compileall, flake8 and
+#      `bandit -r .` — all of which glob *.py — skipped it entirely. It is the ROOT-OWNED end of
+#      the sudo boundary. The most security-critical file in the repo was the one file no static
+#      analyser looked at. It is now named explicitly in all three.
+_rt_src = open(os.path.join(_root, "tools", "run-tests.sh"), encoding="utf-8").read()
+_bandit_src = open(os.path.join(_root, ".github", "workflows", "security-code.yml"),
+                   encoding="utf-8").read()
+check("coverage: shellcheck's file list is derived from git, not hand-kept",
+      "git ls-files '*.sh'" in _rt_src)
+check("coverage: panel-helper is byte-compiled (compileall globs *.py and would miss it)",
+      "py_compile tools/panel-helper" in _rt_src)
+# The flake8 invocation is line-continued, so match the argument list rather than a single line.
+_flake_inv = " ".join(l.strip().rstrip("\\") for l in _rt_src.splitlines()
+                      if "flake8 --select" in l or "--extend-exclude" in l)
+check("coverage: panel-helper is flake8'd (its default glob would miss it)",
+      "tools/panel-helper" in _flake_inv, _flake_inv[:120])
+check("coverage: panel-helper is bandit-scanned (bandit -r . globs *.py and would miss it)",
+      "bandit -r . tools/panel-helper" in _bandit_src)
+# ...and the file really is Python, so those three tools have something to say about it.
+check("coverage: panel-helper is a python script (shebang), justifying the above",
+      open(os.path.join(_root, 'tools', 'panel-helper'), encoding='utf-8').readline().startswith("#!") and "python" in open(os.path.join(_root, 'tools', 'panel-helper'), encoding='utf-8').readline())
+
 _gbr = open(os.path.join(_root, "tools", "panel-helper"), encoding="utf-8").read()
 _gbr_fn = _gbr[_gbr.index("def do_game_backup_read"):]
 _gbr_fn = _gbr_fn[:_gbr_fn.index("\ndef ", 1)]

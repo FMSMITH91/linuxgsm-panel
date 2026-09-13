@@ -20,6 +20,11 @@ on:
       - '.github/workflows/dependency-review.yml'
 
 # Least-privilege: this only needs to read the repo + its dependency graph.
+# Supersede rather than stack: Only the newest push's dependency diff is of any interest.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 permissions:
   contents: read
 
@@ -27,6 +32,7 @@ jobs:
   dependency-review:
     name: Dependency Review
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     if: ${{ github.event.repository.private == false }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7

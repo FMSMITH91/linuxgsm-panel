@@ -23,6 +23,12 @@ on:
       - '.clusterfuzzlite/**'
       - 'requirements.txt'
 
+# Supersede rather than stack: ClusterFuzzLite fuzzes the DIFF, and is capped at 30m. Without this, pushing
+# three times to a PR leaves three of them running at once on superseded code.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 permissions:
   contents: read
 
@@ -30,6 +36,7 @@ jobs:
   code-change:
     name: fuzz the diff (${{ matrix.sanitizer }})
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     permissions:
       contents: read
       security-events: write   # upload-sarif writes the crash into code scanning
