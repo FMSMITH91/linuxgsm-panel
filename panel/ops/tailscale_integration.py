@@ -13,8 +13,8 @@ import time
 from dataclasses import dataclass, field
 from typing import Optional
 
-import privileged as _priv
-import system_ops as _so
+from panel.security import privileged as _priv
+from panel.ops import system_ops as _so
 
 _log = logging.getLogger(__name__)
 
@@ -92,7 +92,7 @@ def allow_tailscale_ufw():
     stays reachable over the tailnet. A common lockout is UFW active but tailscale0 not
     allowed — then Serve/SSH over the tailnet silently can't reach the node. Idempotent."""
     try:
-        import system_ops
+        from panel.ops import system_ops
         return system_ops.ufw_allow_tailscale()
     except Exception as e:
         return False, str(e)

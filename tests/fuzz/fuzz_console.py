@@ -26,7 +26,7 @@ import atheris
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
 
 with atheris.instrument_imports():
-    import terminal
+    from panel.core import terminal
 
 
 def TestOneInput(data):

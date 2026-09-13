@@ -21,10 +21,10 @@ import tempfile
 
 # Imported for the restore's privileged step only. system_ops does not import
 # backup, so this direction is safe.
-from system_ops import _helper_present, _run_verb
+from panel.ops.system_ops import _helper_present, _run_verb
 import time
 
-from config import (DATA_DIR, DB_PATH, CONFIG_FILE, SECRET_FILE, CRED_KEY_FILE,
+from panel.core.config import (DATA_DIR, DB_PATH, CONFIG_FILE, SECRET_FILE, CRED_KEY_FILE,
                     load_config, update_config)
 
 _log = logging.getLogger("panel.backup")

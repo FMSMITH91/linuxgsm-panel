@@ -17,15 +17,46 @@ from types import SimpleNamespace as NS
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-import config
-import privileged as _privmod
-import ssh_manager as sm
-import notifications as N
-import system_ops as SO
+# ── Where a panel module's SOURCE lives ────────────────────────────────────────────────────────
+# Several gates below read module source as text (grep-style checks, AST scans). They used to
+# name files as bare root-relative basenames — open("ssh_manager.py") — which stopped being true
+# the moment the modules moved into panel/. Two of those sites had an os.path.exists() guard and
+# would have skipped silently, still reporting green while checking nothing at all.
+#
+# So resolve a module to its real file ONCE, here, by walking the tree. A future move needs no
+# edit, and a NAME THAT NO LONGER EXISTS RAISES rather than being quietly skipped — a gate that
+# can't find its subject is a broken gate, not a passing one.
+_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+_PKG_DIRS = ("panel",)
+
+
+def _modpath(name):
+    """Absolute path to panel module `name` ("ssh_manager.py" or "ssh_manager"). Raises if absent."""
+    leaf = name if name.endswith(".py") else name + ".py"
+    cand = os.path.join(_root, leaf)
+    if os.path.exists(cand):
+        return cand
+    for pkg in _PKG_DIRS:
+        for dirpath, _dirnames, files in os.walk(os.path.join(_root, pkg)):
+            if leaf in files:
+                return os.path.join(dirpath, leaf)
+    raise FileNotFoundError(
+        "no panel module named %r — a source gate is pointed at a file that no longer exists" % leaf)
+
+
+def _modsrc(name):
+    """Source text of panel module `name`. Raises if the module is gone (see _modpath)."""
+    return open(_modpath(name), encoding="utf-8").read()
+
+from panel.core import config
+from panel.security import privileged as _privmod
+from panel.ops import ssh_manager as sm
+from panel.services import notifications as N
+from panel.ops import system_ops as SO
 from app import (password_problem, _int_or, _valid_ip_or_cidr, _whitelisted, _parse_tg_command,
                  _tg_command_arg, _valid_hex_color, _clean_console_text, _apply_user_order,
                  _apply_user_server_order)
-from auth import can_access_remote, client_ip
+from panel.security.auth import can_access_remote, client_ip
 
 results = []
 
@@ -44,7 +75,7 @@ def eq(name, got, want):
 #    runs BEFORE the dummy_password_check() call later in this file, which is what
 #    actually populates it. ──
 check("perf: auth import does no bcrypt work (dummy hash stays lazy)",
-      sys.modules["auth"]._DUMMY_BCRYPT_HASH is None)
+      sys.modules["panel.security.auth"]._DUMMY_BCRYPT_HASH is None)
 
 # ── password policy ───────────────────────────────────────────
 check("weak: too short", password_problem("Ab1!") is not None)
@@ -108,24 +139,96 @@ check("f2b: _valid_ip still answers a bool", sm._valid_ip("10.0.0.1") is True)
 # Each of these was a real divergence: a documented ssh_timeout nothing read (the two SSH paths
 # hardcoded 15 and 12), and an autoblock threshold that defaulted to 20 when read and 100 when
 # saved — so saving Settings once made the panel five times more permissive than documented.
-import config as _cfgmod
-import ssh_manager as _smod
+from panel.core import config as _cfgmod
+from panel.ops import ssh_manager as _smod
+_CFG_READERS = "".join(_modsrc(m) for m in
+                       ("app", "ssh_manager", "system_ops", "notifications", "backup"))
 check("config: every DEFAULT_CONFIG key has a reader",
-      all(k in open("app.py").read() + open("ssh_manager.py").read() + open("system_ops.py").read()
-          + open("notifications.py").read() + open("backup.py").read()
-          for k in _cfgmod.DEFAULT_CONFIG),
-      str([k for k in _cfgmod.DEFAULT_CONFIG
-           if k not in open("app.py").read() + open("ssh_manager.py").read()
-           + open("system_ops.py").read() + open("notifications.py").read() + open("backup.py").read()]))
+      all(k in _CFG_READERS for k in _cfgmod.DEFAULT_CONFIG),
+      str([k for k in _cfgmod.DEFAULT_CONFIG if k not in _CFG_READERS]))
 check("config: ssh_timeout is actually used by the SSH layer",
       _smod._ssh_connect_timeout() == _cfgmod.DEFAULT_CONFIG["ssh_timeout"],
       "helper returned %r" % _smod._ssh_connect_timeout())
 check("config: the autoblock default is one constant, not two",
-      "_AUTOBLOCK_DEFAULT_THRESHOLD), 100000)" in open("app.py").read())
+      "_AUTOBLOCK_DEFAULT_THRESHOLD), 100000)" in _modsrc("app"))
+
+# ── On-disk paths must resolve to the CHECKOUT ROOT, not to the module's own directory ──────────
+# Every one of these used to be `Path(__file__).parent / …` in a module that sat at the repo root,
+# where the two were the same thing. Moving the modules into panel/ silently redefined all five:
+# DATA_DIR became panel/core/data/, translations/ became panel/core/translations/, and the LinuxGSM
+# cache landed outside the gitignore rule written for it.
+#
+# The DATA_DIR one is the reason this gate exists. It raises NOTHING — the panel boots, finds no
+# database where it is now looking, creates an empty one beside the code, and presents a fresh
+# install while the real data/ (database, secret key, credential key, TLS certs) sits untouched one
+# directory up. A factory reset with no error. It happened to a test run here before the fix.
+#
+# So: resolved, absolute, and compared against the repo root. Anchoring is in panel/__init__.py.
+import panel as _panelpkg
+from pathlib import Path as _Path
+from panel.services import lgsm_data as _lgd
+from panel.core import i18n as _i18n
+
+_CHECKOUT = _Path(_root).resolve()
+eq("paths: panel.REPO_ROOT is the checkout root", _panelpkg.REPO_ROOT.resolve(), _CHECKOUT)
+for _label, _got, _want in (
+        ("config.DATA_DIR", _cfgmod.DATA_DIR, "data"),
+        ("config.DB_PATH", _cfgmod.DB_PATH, "data/panel.db"),
+        ("config.SECRET_FILE", _cfgmod.SECRET_FILE, "data/secret_key"),
+        ("config.CRED_KEY_FILE", _cfgmod.CRED_KEY_FILE, "data/cred_key"),
+        ("config.CONFIG_FILE", _cfgmod.CONFIG_FILE, "data/config.json"),
+        ("i18n translations dir", _i18n._DIR, "translations"),
+        ("lgsm_data cache dir", _lgd._CACHE_DIR, "data/lgsm"),
+        ("system_ops.PANEL_DIR", SO.PANEL_DIR, "."),
+):
+    eq("paths: %s resolves under the checkout root, not the module's own dir" % _label,
+       str(_Path(_got).resolve()), str((_CHECKOUT / _want).resolve()))
+# ── The package layering is one-directional, and stays that way ────────────────────────────────
+# panel/ is core -> db -> security -> ops -> services. That ordering is the whole reason the
+# package split is worth anything: it is what makes "where does this go?" answerable, and what
+# keeps the import graph acyclic. Nothing enforces it but this.
+#
+# MODULE-LEVEL imports only. Two function-local imports deliberately cross the grain — auth wants
+# ssh_manager.game_engine, ssh_manager wants lgsm_data's dependency list — and they are written
+# lazily for exactly that reason (auth's carries the comment). A lazy import inside a function
+# body costs nothing at import time and cannot make a load-order cycle, so the rule is about where
+# an import SITS, not merely which module it names.
+import ast as _ast_layer
+_LAYERS = ["core", "db", "security", "ops", "services"]
+_layer_bad = []
+for _dp, _dns, _fs in os.walk(os.path.join(_root, "panel")):
+    _dns[:] = [_d for _d in _dns if _d != "__pycache__"]
+    _sub = os.path.basename(_dp)
+    if _sub not in _LAYERS:
+        continue
+    for _f in _fs:
+        if not _f.endswith(".py") or _f == "__init__.py":
+            continue
+        _tree = _ast_layer.parse(open(os.path.join(_dp, _f), encoding="utf-8").read())
+        for _node in _tree.body:          # .body, not .walk: top level only, so lazy imports pass
+            _names = []
+            if isinstance(_node, _ast_layer.ImportFrom) and (_node.module or "").startswith("panel."):
+                _names = [_node.module]
+            elif isinstance(_node, _ast_layer.Import):
+                _names = [_a.name for _a in _node.names if _a.name.startswith("panel.")]
+            for _nm in _names:
+                _target = _nm.split(".")[1]
+                if _target in _LAYERS and _LAYERS.index(_target) > _LAYERS.index(_sub):
+                    _layer_bad.append("panel/%s/%s imports panel.%s at module level"
+                                      % (_sub, _f, _target))
+check("layering: no panel package imports DOWN the stack at module level",
+      not _layer_bad, "; ".join(sorted(set(_layer_bad))))
+
+# ...and the module directories must hold no data dir of their own — the shape the bug leaves behind.
+_stray = [os.path.relpath(os.path.join(_dp, _d), _root)
+          for _dp, _dns, _ in os.walk(os.path.join(_root, "panel"))
+          for _d in _dns if _d in ("data", "translations")]
+check("paths: no stray data/ or translations/ dir was created inside panel/",
+      not _stray, ", ".join(_stray))
 
 # ── terminal.py: ONE renderer, because this had drifted into four incompatible ANSI regexes and two
 # carriage-return rules that contradicted each other (each docstring calling the other wrong).
-import terminal as _term
+from panel.core import terminal as _term
 eq("terminal: SGR colour stripped", _term.strip_escapes("\x1b[31mred\x1b[0m"), "red")
 eq("terminal: erase-line stripped (an SGR-only regex left a literal '[K')",
    _term.strip_escapes("a\x1b[Kb"), "ab")
@@ -250,7 +353,7 @@ check("server order: the input list is not mutated",
       and _sids(_mixed) == [10, 11, 12, 13, 14])
 # ui_prefs accessors: a corrupt or NULL blob must degrade to the default layout, never raise into a
 # page render, and only whitelisted keys may take effect (a retired key stops working on upgrade).
-_UsrP = __import__("models").User
+_UsrP = __import__("panel.db.models", fromlist=["User"]).User
 _up = _UsrP()
 check("ui_prefs: unset column reads as no preferences", _up.get_ui_prefs() == {})
 _up.ui_prefs = "not json at all"
@@ -353,7 +456,7 @@ check("panels: region count is capped", len(_cpm({"r%d" % i: ["a"] for i in rang
 
 # ── tags: the name charset is pinned at the DATA layer, so no route can store one that would need
 # escaping to be safe in HTML, in a filter key, or in alert text.
-_TagM = __import__("models").ServerTag
+_TagM = __import__("panel.db.models", fromlist=["ServerTag"]).ServerTag
 for _good in ("production", "PvE", "source games", "cs-1.6", "v2.0_beta", "A"):
     try:
         _TagM(name=_good)
@@ -370,7 +473,7 @@ for _bad in ("<script>", "drop; table", "tag'name", 'tag"name', " leading", "", 
         _rej = True
     check("tag name rejected: %r" % _bad, _rej)
 # _alerts_muted: any tag saying "don't alert" wins, and it must never raise inside a poller thread.
-from notifications import alerts_muted as _am   # moved out of app.py in #93
+from panel.services.notifications import alerts_muted as _am   # moved out of app.py in #93
 _tg = lambda n: NS(notify=n)
 check("mute: no tags -> not muted", _am(NS(tags=[], short_name="s")) is False)
 check("mute: all tags notify -> not muted", _am(NS(tags=[_tg(True), _tg(True)], short_name="s")) is False)
@@ -508,7 +611,7 @@ eq("ufw: valid port coerced to int", sm._ufw_port_int("27015"), 27015)
 
 def _priv_err_for(verb, args):
     """The VerbError text privileged.py produces for these arguments, or "" if it accepts them."""
-    import privileged as _p
+    from panel.security import privileged as _p
     try:
         _p.check_args(verb, args)
         return ""
@@ -517,7 +620,7 @@ def _priv_err_for(verb, args):
 
 
 def _ufw_raises_verb(fn):
-    import privileged as _p
+    from panel.security import privileged as _p
     try:
         fn()
         return False
@@ -558,7 +661,7 @@ finally:
     sm.run_command, sm.run_privileged = _orig_ufw_rc, _orig_ufw_rp
 
 # ── shell-identifier validation (usernames/short_names reach ssh + shell) ──
-from models import _validate_shell_ident as _vsi
+from panel.db.models import _validate_shell_ident as _vsi
 check("ident: normal value accepted", _vsi("k", "gmodserver") == "gmodserver")
 check("ident: internal dash/dot/underscore ok", _vsi("k", "game-1.beta_2") == "game-1.beta_2")
 check("ident: empty allowed (optional field)", _vsi("k", "") == "")
@@ -1297,7 +1400,7 @@ finally:
     sm.run_command = _orig_run6
 
 # ── backup module: create / list / prune + path-traversal guard ──
-import backup as _bk
+from panel.ops import backup as _bk
 import tempfile as _tf, sqlite3 as _sq, pathlib as _pl, os as _osb, tarfile as _tar, shutil as _sh2
 _bktmp = _pl.Path(_tf.mkdtemp())
 _bk.BACKUP_DIR = _bktmp / "backups"; _bk.DATA_DIR = _bktmp; _bk.DB_PATH = _bktmp / "panel.db"
@@ -1802,7 +1905,7 @@ with _app.test_request_context(headers={"X-Forwarded-For": "1.2.3.4"},
 
 # ── TOTP (2FA) ────────────────────────────────────────────────
 import time as _time
-from auth import generate_totp_secret, verify_totp
+from panel.security.auth import generate_totp_secret, verify_totp
 import pyotp as _pyotp
 _sec = generate_totp_secret()
 check("verify_totp accepts the current code", verify_totp(_sec, _pyotp.TOTP(_sec).now()))
@@ -1813,7 +1916,7 @@ check("verify_totp rejects empty", not verify_totp(_sec, ""))
 # A TOTP code stays valid for ~90s (its own step plus one either side for clock skew), so
 # "is it valid" alone lets an observed code be replayed for the rest of that window. The login
 # path records WHICH step was spent, so it needs the step back, not a boolean.
-from auth import verify_totp_step
+from panel.security.auth import verify_totp_step
 _step = verify_totp_step(_sec, _pyotp.TOTP(_sec).now())
 check("verify_totp_step returns the step for a valid code", isinstance(_step, int) and _step > 0)
 eq("verify_totp_step is stable for the same code", verify_totp_step(_sec, _pyotp.TOTP(_sec).now()), _step)
@@ -1829,7 +1932,7 @@ check("verify_totp_step accepts the previous step and reports it as older",
       _prev_step is not None and _prev_step == _step - 1, "%r vs %r" % (_prev_step, _step))
 
 # ── password check robustness (a bad stored hash must never raise) ───
-from auth import check_password, hash_password, dummy_password_check
+from panel.security.auth import check_password, hash_password, dummy_password_check
 _h = hash_password("Test1234!@")
 check("check_password: correct password -> True", check_password("Test1234!@", _h))
 check("check_password: wrong password -> False", not check_password("nope", _h))
@@ -1854,8 +1957,8 @@ check("login-throttle prune drops an empty bucket", "empty" not in _LOGIN_FAILS)
 _LOGIN_FAILS.clear()
 
 # ── 2FA backup codes ──────────────────────────────────────────
-from auth import generate_backup_codes
-from models import User as _User
+from panel.security.auth import generate_backup_codes
+from panel.db.models import User as _User
 _codes = generate_backup_codes()
 check("backup: generates 8 codes", len(_codes) == 8)
 check("backup: codes are unique", len(set(_codes)) == 8)
@@ -1874,7 +1977,7 @@ check("backup: a different code still works", _u.use_backup_code(_codes[1]))
 check("backup: no codes set is handled", not _User().use_backup_code("whatever"))
 
 # ── one-click connect URI (steam://connect for Source/GoldSrc) ─
-from models import GameServer as _GS
+from panel.db.models import GameServer as _GS
 _steam = _GS(game_type="gmod", port=27015)
 eq("connect: steam game -> steam://connect", _steam.connect_uri("1.2.3.4"),
    "steam://connect/1.2.3.4:27015")
@@ -1951,7 +2054,7 @@ eq("port-block: multi-port block steps past a partial overlap",
    _first_free_block(28015, 2, {28016}), 28017)
 
 # ── panel file integrity + repair (git-based) ─────────────────
-import system_ops as _so
+from panel.ops import system_ops as _so
 _so._is_git_checkout = lambda: True
 _so._git = lambda args, timeout=45: (
     ("abc1234\n", "", 0) if list(args) == ["rev-parse", "--short", "HEAD"]
@@ -2111,7 +2214,7 @@ _au = _so.unattended_upgrades_status()
 check("auto-updates: not installed detected", not _au["installed"] and not _au["enabled"])
 
 # ── shell-identifier validation (the core injection defense) ──
-from models import _validate_shell_ident as _vsi
+from panel.db.models import _validate_shell_ident as _vsi
 for _bad in ("a;b", "a b", "a`b", "a$(x)", "a|b", "../x", "a&b", "a>b", "x'y", 'x"y', "a\nb", "a/b"):
     _rej = False
     try:
@@ -2444,7 +2547,7 @@ finally:
 import sqlite3 as _sqlite
 import tempfile as _tempfile
 import shutil as _shutil
-from models import _db_quick_check, _ensure_db_healthy
+from panel.db.models import _db_quick_check, _ensure_db_healthy
 _dbdir = _tempfile.mkdtemp()
 _dbp = os.path.join(_dbdir, "t.db")
 try:
@@ -2506,7 +2609,7 @@ finally:
     _shutil.rmtree(_kd, ignore_errors=True)
 
 # ── Ubuntu Pro status persists (set-and-forget: no re-running the slow client every visit) ──
-from models import RemoteServer as _RS
+from panel.db.models import RemoteServer as _RS
 _pr = _RS()
 check("pro-cache: empty -> None", _pr.cached_pro is None)
 _pr.update_pro_cache({"attached": True, "installed": True, "services": []})
@@ -2703,7 +2806,7 @@ finally:
     _so._remote_ci_state = _cus_ci
 
 # ── Tailscale: installed-but-not-authenticated (NeedsLogin) must not 500 ─
-import tailscale_integration as _tsi
+from panel.ops import tailscale_integration as _tsi
 _tsi._run_ts = lambda args, timeout=5: (("1.0", "", 0) if args and args[0] in ("version", "--version")
                                         else ("", "", 0))
 # After `tailscale up` prints a login URL the user hasn't clicked, status --json has
@@ -2725,7 +2828,7 @@ _tsi._cache["info"] = None
 
 # REGRESSION: Tailscale up WITH a MagicDNS name but Serve NOT configured must NOT bind to loopback
 # (that hid the panel on 127.0.0.1 with nothing proxying to it — a fresh install was unreachable).
-from tailscale_integration import TailscaleInfo   # noqa: E402
+from panel.ops.tailscale_integration import TailscaleInfo   # noqa: E402
 _orig_gti = _tsi.get_tailscale_info
 try:
     _tsi.get_tailscale_info = lambda *a, **k: TailscaleInfo(
@@ -2891,10 +2994,10 @@ finally:
 # this replaced it. Everything below points the cache at a TEMP DIRECTORY and seeds it, so this
 # suite never touches the network and the assertions are about the panel's parsing rather than
 # about whatever upstream happens to contain today.
-import lgsm_data as _lgd
+from panel.services import lgsm_data as _lgd
 import tempfile as _lgd_tempfile
 _lgd_dir = _lgd_tempfile.mkdtemp()
-_lgd._CACHE_DIR = _lgd.Path(_lgd_dir)
+_lgd._CACHE_DIR = _Path(_lgd_dir)   # pathlib via this file, not reached through the module
 _lgd._mem.clear()
 (_lgd._CACHE_DIR).mkdir(parents=True, exist_ok=True)
 _SERVERLIST_FIXTURE = ("shortname,gameservername,gamename,os\n"
@@ -3297,8 +3400,8 @@ finally:
 # ── granular moderation permissions + custom-command scope/argument safety ──
 import re as _re
 from types import SimpleNamespace as _NS
-from auth import can_moderate_action, _custom_command_scope_matches
-from models import CUSTOM_ARG_DEFAULT_PATTERN
+from panel.security.auth import can_moderate_action, _custom_command_scope_matches
+from panel.db.models import CUSTOM_ARG_DEFAULT_PATTERN
 
 
 class _FakeGroup:
@@ -3642,8 +3745,8 @@ check("remote-f2b: drop-in drops non-IP tokens (no shell metachars in the file)"
 # used to live in app.py, so patching app.run_command intercepted it; it lives in monitoring now
 # and looks the name up in monitoring's namespace, so patching app's would silently no-op and the
 # stub would never be called. (That is exactly how this test failed during the move.)
-import monitoring as _mapp
-from monitoring import _lgsm_maintenance_running as _lmr
+from panel.services import monitoring as _mapp
+from panel.services.monitoring import _lgsm_maintenance_running as _lmr
 
 _sent = []
 
@@ -3706,7 +3809,7 @@ finally:
 # exempts Bearer requests from CSRF — yet nothing exercised any of it. These are the pure half; the
 # lookup half (a disabled owner, a replayed hash) is asserted against the real DB in smoke_test.
 import hashlib as _hl
-from models import User as _U, RemoteServer as _RS
+from panel.db.models import User as _U, RemoteServer as _RS
 
 _tu = _U(username="tok", password_hash="x")
 _plain = _tu.generate_api_token()
@@ -3787,7 +3890,7 @@ finally:
 # ── The renderer's one guarantee: no control byte reaches the page ────────────────────────────
 # Console text carries player names and chat, so these bytes are AUTHORED, not just accidental.
 # A sequence that never completes matched none of the three grammars and used to survive.
-import terminal as _term
+from panel.core import terminal as _term
 for _src in ("player \x1b", "chat: \x1b\t hi", "x\x1b\x00y", "\x1b[38;5;", "\x1b\x9b"):
     check("terminal: an incomplete escape %r leaves no ESC behind" % _src,
           "\x1b" not in _term.render(_src), repr(_term.render(_src)))
@@ -3960,7 +4063,7 @@ finally:
 # is_tailscale_ip decides whether the panel treats a host as being on the tailnet, which changes
 # how it connects and what it exempts from fail2ban/UFW. A false positive would exempt a PUBLIC
 # address from the security rules, so the near-misses matter as much as the hits.
-import tailscale_integration as TS
+from panel.ops import tailscale_integration as TS
 
 for _h in ("100.64.0.1", "100.115.92.7", "fd7a:115c:a1e0::1",
            "ns106051.taile87e07.ts.net", "box.tail1234.ts.net", "host.taile87e07.example"):
@@ -4049,7 +4152,7 @@ check("bot origin: capped so a hostile display name can't flood the audit column
 
 # ── API-token brute-force throttle ──────────────────────────────────────────────────────────────
 # /login has been throttled for years; the bearer path — the panel's OTHER way in — had nothing.
-import auth as _authmod
+from panel.security import auth as _authmod
 _authmod._TOKEN_FAILS.clear()
 for _i in range(_authmod.TOKEN_MAX_FAILS - 1):
     _authmod._token_auth_record("10.0.0.9", ok=False)
@@ -4089,7 +4192,7 @@ import shutil as _shutil
 import subprocess as _sp
 import tempfile as _tempfile
 import time as _time
-import clock as _clock
+from panel.core import clock as _clock
 from datetime import datetime as _dtm, timezone as _tz
 
 _n = _clock.utcnow()
@@ -4130,7 +4233,7 @@ check("no module calls the datetime UTC helpers that are scheduled for removal",
 # a bare category filter silences the whole process.
 _blanket = []
 for _f in ("app.py", "auth.py", "models.py", "ssh_manager.py", "system_ops.py", "notifications.py"):
-    for _i, _line in enumerate(open(os.path.join(_root, _f), encoding="utf-8"), 1):
+    for _i, _line in enumerate(open(_modpath(_f), encoding="utf-8"), 1):
         if "filterwarnings" in _line and "DeprecationWarning" in _line \
                 and "module=" not in _line and "message=" not in _line and not _line.lstrip().startswith("#"):
             _blanket.append("%s:%d" % (_f, _i))
@@ -4169,7 +4272,7 @@ check("eventlet's deprecation banner no longer prints on every start",
 # tools/panel-helper is the root-owned end that re-validates them and execs a fixed argv.
 import importlib.machinery as _machinery
 import importlib.util as _ilu
-import privileged as _priv
+from panel.security import privileged as _priv
 import io as _io
 import shutil as _shutil
 import tarfile as _tarfile
@@ -4671,12 +4774,21 @@ import ast as _ast_scan
 # DERIVED, not hardcoded. This list used to name all fifteen modules by hand, which meant a new
 # panel module was silently exempt from the gate until someone remembered to add it — and the
 # whole point of a structural check is that it covers what actually exists. Splitting app.py up
-# creates modules steadily, so the list reads the repo root instead.
+# creates modules steadily, so the list reads the tree instead.
+#
+# It reads the root AND panel/: most modules moved into the package, while app.py, manage.py and
+# db_maintenance.py stay at the root because the systemd unit, recover.sh and the installer each
+# address them by path. A root-only listdir would now cover three modules and exempt eighteen —
+# which is why the assert below names one of each and is deliberately load-bearing.
 _SCAN_MODULES = sorted(
-    f for f in os.listdir(_root)
-    if f.endswith(".py") and not f.startswith((".", "_")) and f != "setup.py"
+    [f for f in os.listdir(_root)
+     if f.endswith(".py") and not f.startswith((".", "_")) and f != "setup.py"]
+    + [os.path.relpath(os.path.join(_dp, f), _root)
+       for _dp, _dn, _fs in os.walk(os.path.join(_root, "panel"))
+       if "__pycache__" not in _dp
+       for f in _fs if f.endswith(".py") and not f.startswith("_")]
 )
-assert "app.py" in _SCAN_MODULES and "ssh_manager.py" in _SCAN_MODULES, \
+assert "app.py" in _SCAN_MODULES and os.path.join("panel", "ops", "ssh_manager.py") in _SCAN_MODULES, \
     "module discovery is looking at the wrong directory: %s" % _SCAN_MODULES[:5]
 # The two lists are kept APART on purpose, and which one the orphan check consults is the whole
 # point. _OS_UPDATE_LOG survived this gate all the way onto main and turned the branch red via
@@ -4784,7 +4896,7 @@ check("escalation census: direct ['sudo', ...] sites (not the helper) <= %d (cur
 # no error, and the symptom shows up as a monitor that reads stale state. That exact break happened
 # while splitting monitoring out: a test reset `_monitor_state` by assignment and the monitor kept
 # reading the pre-reset dict. A docstring did not prevent it; this does.
-_ps_src = open(os.path.join(_root, "panel_state.py"), encoding="utf-8").read()
+_ps_src = _modsrc("panel_state")
 # Dunders are module machinery, not shared state: panel_state declares __all__, and so does
 # monitoring — without this exclusion the gate reads monitoring's own __all__ as a rebind of
 # panel_state's. (It did, the first time.)
@@ -4793,9 +4905,9 @@ _PS_NAMES = {_t.id for _n in _ast_scan.parse(_ps_src).body if isinstance(_n, _as
              if isinstance(_t, _ast_scan.Name) and not _t.id.startswith("__")}
 _rebinds = []
 for _f in ["app.py", "monitoring.py"] + [f for f in _SCAN_TEST_USERS]:
-    _fp = os.path.join(_root, _f)
-    if not os.path.exists(_fp):
-        continue
+    # _modpath for the panel modules (they live under panel/ now), plain join for the
+    # tests/ paths. No exists() skip: a name that resolves to nothing must raise, not pass.
+    _fp = os.path.join(_root, _f) if _f.startswith("tests/") else _modpath(_f)
     for _node in _ast_scan.walk(_ast_scan.parse(open(_fp, encoding="utf-8").read())):
         # `x = ...` and `x, y = ...` rebind; `x.attr = ...` and `x[k] = ...` do not.
         if isinstance(_node, _ast_scan.Assign):
@@ -5362,7 +5474,7 @@ check("swap: the remote rendering is the braced form",
 # with the cutoff date and the row limit interpolated into it. The verb now does the READ half only
 # (fixed glob, gzip handled in Python) and the tally is _tally_f2b_lines. These assert the Python
 # reproduces what the awk produced, because "it looks equivalent" is how a rewrite loses a case.
-import system_ops as _so_f2b
+from panel.ops import system_ops as _so_f2b
 _F2B_LINES = "\n".join([
     "2026-09-03 10:00:00 x [sshd] Found 203.0.113.5",
     "2026-09-03 10:00:01 x [sshd] Found 203.0.113.5",
@@ -5450,17 +5562,16 @@ _isdigit_users = []
 for _f in ("app.py", "auth.py", "manage.py", "models.py", "system_ops.py", "ssh_manager.py",
            "notifications.py", "backup.py", "db_maintenance.py", "tailscale_integration.py",
            "config.py", "i18n.py", "privileged.py", "clock.py"):
-    _fp = os.path.join(_root, _f)
-    if not os.path.exists(_fp):
-        continue
-    for _i, _line in enumerate(open(_fp, encoding="utf-8"), 1):
+    # _modpath, not a root join with an exists() skip: when these modules moved under panel/
+    # the old form silently matched nothing and still reported green.
+    for _i, _line in enumerate(open(_modpath(_f), encoding="utf-8"), 1):
         if ".isdigit()" in _line.split("#", 1)[0]:
             _isdigit_users.append("%s:%d" % (_f, _i))
 check("unicode: no module uses .isdigit() — isdecimal() is the one that matches int()",
       not _isdigit_users, ", ".join(_isdigit_users[:4]))
 
 # The crashing input itself, replayed.
-import system_ops as _so_top
+from panel.ops import system_ops as _so_top
 _CRASH = "¹\t²\t203.0.113.5\tsshd\n5\t2\t198.51.100.9\tsshd,panel\n"
 try:
     _rows = _so_top._parse_top_ips(_CRASH, set(), {})
@@ -5512,7 +5623,7 @@ def _is_dispatch(call):
 
 _census = {"sudo=True": 0, "_sudo_sh": 0}
 for _f in _ESCALATION_FILES:
-    _tree = _ast.parse(open(os.path.join(_root, _f), encoding="utf-8").read())
+    _tree = _ast.parse(open(_modpath(_f), encoding="utf-8").read())
     for _n in _ast.walk(_tree):
         if not isinstance(_n, _ast.Call):
             continue
@@ -5531,7 +5642,7 @@ for _f in _ESCALATION_FILES:
 # cannot live in WRITE_TARGETS. Raise this only when the verb layer genuinely gains another one.
 _excluded = 0
 for _f in _ESCALATION_FILES:
-    _tree = _ast.parse(open(os.path.join(_root, _f), encoding="utf-8").read())
+    _tree = _ast.parse(open(_modpath(_f), encoding="utf-8").read())
     for _n in _ast.walk(_tree):
         if not isinstance(_n, _ast.Call):
             continue
@@ -5894,7 +6005,7 @@ for _h in ("_log_and_generic", "_unreachable"):
 # rather than exposure, but it was the one gap in a function whose whole job is not having one.
 import tempfile as _tf
 import stat as _st
-import config as _cfgm
+from panel.core import config as _cfgm
 _hd_tmp = _tf.mkdtemp()
 _hd_saved = (_cfgm.DATA_DIR, _cfgm.DB_PATH, _cfgm.CONFIG_FILE, _cfgm.SECRET_FILE, _cfgm.CRED_KEY_FILE)
 try:
@@ -5924,7 +6035,7 @@ finally:
 # ── The self-signed TLS key is created 0600, never written then chmod'd ──────────────────────
 # The old order wrote the unencrypted private key at the process umask and tightened it after,
 # leaving a window in which it was world-readable.
-import certs as _certs
+from panel.services import certs as _certs
 _ck_tmp = _tf.mkdtemp()
 try:
     _ck_cert = os.path.join(_ck_tmp, "ssl", "cert.pem")
@@ -5934,7 +6045,7 @@ try:
           _st.S_IMODE(os.stat(_ck_key).st_mode) == 0o600,
           "mode %o" % _st.S_IMODE(os.stat(_ck_key).st_mode))
     check("tls: ...and it is created that way, not chmod'd afterwards",
-          "os.open(key_path" in open(os.path.join(_root, "certs.py"), encoding="utf-8").read())
+          "os.open(key_path" in _modsrc("certs"))
 finally:
     _sh.rmtree(_ck_tmp, ignore_errors=True)
 
@@ -5995,7 +6106,7 @@ check("docs: SECURITY.md's systemd unit list matches privileged.UNITS",
       "missing from the doc: %s" % [_u for _u in _privmod.UNITS if ("`%s`" % _u) not in _sec])
 # super_admin is the is_superadmin FLAG, not a permission. Documenting it as grantable sends an
 # operator looking for a tickbox that was deliberately removed.
-import auth as _authmod
+from panel.security import auth as _authmod
 check("docs: README does not offer super_admin as a grantable permission",
       "| `super_admin` |" not in _readme)
 check("docs: ...and it really is not one", "super_admin" not in _authmod.ALL_PERMISSIONS)
@@ -6018,8 +6129,15 @@ check("docs: the fuzz workflow matrix runs every harness", _matrix_targets == _h
 # ...and each harness's own module must be in the workflow's path filter, or a change to the code
 # it tests does not trigger it. terminal.py (fuzz_console's target) was missing for exactly that
 # reason.
+#
+# The expected path is DERIVED from where the module actually is, not written out here. These are
+# inclusive `paths:` filters, so a stale entry doesn't fail the workflow — it silently stops
+# triggering it, which is the same "quietly stops being maintained" failure this block exists to
+# catch. Moving a module now either updates the filter or turns this red.
 for _mod in ("ssh_manager.py", "system_ops.py", "terminal.py"):
-    check("docs: the fuzz workflow watches %s" % _mod, ("'%s'" % _mod) in _fuzz_wf)
+    _want = os.path.relpath(_modpath(_mod), _root).replace(os.sep, "/")
+    check("docs: the fuzz workflow watches %s (as '%s')" % (_mod, _want),
+          ("'%s'" % _want) in _fuzz_wf, "not in fuzz.yml paths:")
 
 # ── ufw_allow_tailscale builds a VERB, and does not raise ─────────────────────────────────────
 # It read `_run("ufw-allow-iface", [iface], timeout=15)` — _run's signature is
@@ -6051,10 +6169,10 @@ check("ufw_allow_tailscale: the verb it calls is in the table",
 # client could rewrite the links in its own response — including to a protocol-relative "//host".
 # auth.client_ip() has always applied exactly this rule to X-Forwarded-For; this brings the other
 # forwarded header in line.
-import middleware as _mw
+from panel.core import middleware as _mw
 # ...and the middleware must actually CONSULT it — the helper passing on its own proves nothing
 # if __call__ still reads the header unconditionally.
-_mw_src = open(os.path.join(_root, "middleware.py"), encoding="utf-8").read()
+_mw_src = _modsrc("middleware")
 _mw_call = _mw_src[_mw_src.index("def __call__"):]
 check("prefix header: __call__ gates the header read on _may_trust_header",
       "_may_trust_header" in _mw_call
@@ -6193,8 +6311,8 @@ check("i18n: es and fr translate the same set of keys",
 # two pages. The charset is enforced by a grep running ON THE HOST BEING JOINED, so the panel has to
 # re-check the whole string itself. ssh_manager's remote flow did (fullmatch); the panel-host twin in
 # tailscale_integration tested only startswith, which accepts anything after the trusted prefix.
-import tailscale_integration as _tsi
-_tsi_src = open(os.path.join(_root, "tailscale_integration.py"), encoding="utf-8").read()
+from panel.ops import tailscale_integration as _tsi
+_tsi_src = _modsrc("tailscale_integration")
 check("tailscale: the panel-host login-URL check is a fullmatch, not a prefix test",
       'startswith("https://login.tailscale.com/")' not in _tsi_src
       and "TS_LOGIN_URL_RE.fullmatch" in _tsi_src)

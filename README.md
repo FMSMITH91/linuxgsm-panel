@@ -211,6 +211,35 @@ bash tools/run-tests.sh    # compile, flake8, unit + smoke tests, shellcheck
 
 CI runs the same suite on every push and PR, plus CodeQL, Bandit, Semgrep, a dependency audit, and coverage-guided fuzzing (`tests/fuzz/`).
 
+### Layout
+
+The application lives in `panel/`, layered so that each package's **module-level** imports
+only reach packages above it in this list:
+
+| Package | Holds | Imports from |
+|---|---|---|
+| `panel/core/` | `clock` `config` `i18n` `middleware` `panel_state` `terminal` | — |
+| `panel/db/` | `models` `prefs` | core |
+| `panel/security/` | `auth` `privileged` | core, db |
+| `panel/ops/` | `ssh_manager` `system_ops` `tailscale_integration` `backup` | core, db, security |
+| `panel/services/` | `monitoring` `notifications` `certs` `lgsm_data` | core, db, security, ops |
+
+Two *function-local* imports cross that grain on purpose, and only at call time —
+`security/auth.py` reaches `ops.ssh_manager` for `game_engine`, and `ops/ssh_manager.py`
+reaches `services.lgsm_data` for the dependency list. Both are lazy precisely so the module
+graph stays acyclic at import; `tests/unit_test.py` enforces the rule and knows about these two.
+
+Three modules deliberately stay at the repo root, because something outside the checkout
+addresses them by path: **`app.py`** (the systemd unit's `ExecStart`, and the installer's
+"is there a panel here?" probe), **`manage.py`** (`recover.sh` locates an install by it and
+execs it), and **`db_maintenance.py`** (installed root-owned beside the privileged helper,
+with its path recorded in `panel.conf`). The shell scripts stay for the same reason — the
+documented install and recovery one-liners fetch them from the repo root by raw URL.
+
+Anything needing an on-disk path (`data/`, `translations/`, the git tree) takes it from
+`panel.REPO_ROOT` rather than recomputing it from `__file__`; `tests/unit_test.py` has a gate
+that fails if any of them drifts back to being module-relative.
+
 ## Contributing
 
 Issues and pull requests are welcome — this is a solo, AI-assisted project, so extra eyes genuinely help. Report security issues privately via [SECURITY.md](SECURITY.md), not a public issue. For code, fork and open a PR against `main`, run `bash tools/run-tests.sh` first, and keep CI green.

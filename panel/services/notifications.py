@@ -17,7 +17,7 @@ import urllib.error
 import urllib.parse
 import urllib.request
 
-from config import load_config, update_config, encrypt_secret, decrypt_secret
+from panel.core.config import load_config, update_config, encrypt_secret, decrypt_secret
 
 _log = logging.getLogger("notifications")
 

@@ -26,7 +26,7 @@ import time
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from config import DATA_DIR, DB_PATH, SECRET_FILE, CRED_KEY_FILE, CONFIG_FILE  # noqa: E402
+from panel.core.config import DATA_DIR, DB_PATH, SECRET_FILE, CRED_KEY_FILE, CONFIG_FILE  # noqa: E402
 
 if DB_PATH.exists():
     print("REFUSING: %s exists — the benchmark only runs against a throwaway DB." % DB_PATH)
@@ -37,7 +37,7 @@ _PREEXISTING = {p for p in (SECRET_FILE, CRED_KEY_FILE, CONFIG_FILE) if p.exists
 # Keep a verbatim copy of a pre-existing one and put it back on the way out.
 _CFG_BACKUP = CONFIG_FILE.read_bytes() if CONFIG_FILE in _PREEXISTING else None
 
-from config import load_config, save_config  # noqa: E402
+from panel.core.config import load_config, save_config  # noqa: E402
 
 
 def mark_setup_complete():
@@ -54,19 +54,19 @@ def mark_setup_complete():
 
 mark_setup_complete()
 
-import system_ops as so                                    # noqa: E402
+from panel.ops import system_ops as so                                    # noqa: E402
 so._check_sudo = lambda force=False: False                 # never probe real sudo (pam_faillock)
 
 import app as appmod                                       # noqa: E402
-from models import db, User, Group, RemoteServer, GameServer, ServerTag, SetupState  # noqa: E402
-import auth                                                # noqa: E402
+from panel.db.models import db, User, Group, RemoteServer, GameServer, ServerTag, SetupState  # noqa: E402
+from panel.security import auth                                                # noqa: E402
 
 # The I/O boundary the panel does not own: every remote call is stubbed to return promptly, so the
 # numbers below are panel CPU + DB only. _host_reachable/_remote_listening_ports keep the monitor
 # and the status poll on their "everything is fine" path, which is the common case in production.
-import monitoring as monmod                                # noqa: E402
-import panel_state as pstate                               # noqa: E402
-import ssh_manager as smmod                                # noqa: E402
+from panel.services import monitoring as monmod                                # noqa: E402
+from panel.core import panel_state as pstate                               # noqa: E402
+from panel.ops import ssh_manager as smmod                                # noqa: E402
 
 # Each stub goes on the module that RESOLVES the name, not on app. That distinction did not exist
 # while everything lived in app.py, and four of these silently stopped taking effect when the
@@ -115,8 +115,8 @@ METRIC_ROWS = 14 * 24 * 60
 
 def seed_history(app, gs_id):
     from datetime import timedelta
-    from clock import utcnow
-    from models import AuditLog, MetricSample
+    from panel.core.clock import utcnow
+    from panel.db.models import AuditLog, MetricSample
     now = utcnow()
     with app.app_context():
         db.session.bulk_save_objects([

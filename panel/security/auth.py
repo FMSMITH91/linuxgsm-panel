@@ -3,14 +3,14 @@ import hmac
 import secrets
 import threading
 import time
-from clock import utcnow
+from panel.core.clock import utcnow
 from functools import wraps
 
 import bcrypt
 from flask import abort, flash, jsonify, redirect, request, url_for
 from flask_login import LoginManager, current_user
 
-from models import AuditLog, GameServer, RemoteServer, User, db
+from panel.db.models import AuditLog, GameServer, RemoteServer, User, db
 
 login_manager = LoginManager()
 login_manager.login_view = "login"
@@ -190,7 +190,7 @@ def get_user_permissions(user):
 
 def get_user_servers(user):
     """Get game servers a user has access to (superadmin = all)."""
-    from models import GameServer
+    from panel.db.models import GameServer
     from sqlalchemy.orm import joinedload, selectinload
     # Eager-load each server's remote in the SAME query. Callers (dashboard, /api/servers) all
     # read gs.remote per server; without this, accessing it lazily fires one query per remote
@@ -231,7 +231,7 @@ def can_access_server(user, game_server_id):
     level (the server itself is assigned to one of the user's groups). Superadmin = all."""
     if user.is_superadmin:
         return True
-    from models import GameServer
+    from panel.db.models import GameServer
     gs = db.session.get(GameServer, game_server_id)
     if not gs:
         return False
@@ -271,7 +271,7 @@ def _custom_command_scope_matches(cmd, game_server):
     if scope == "game":
         return game_server.game_type == cmd.scope_value
     if scope == "engine":
-        from ssh_manager import game_engine   # lazy: avoid import cycle at module load
+        from panel.ops.ssh_manager import game_engine   # lazy: avoid import cycle at module load
         return game_engine(game_server.game_type) == cmd.scope_value
     return False
 
@@ -299,7 +299,7 @@ def can_run_custom_command(user, cmd, game_server):
 def allowed_custom_commands(user, game_server):
     """The list of CustomCommand rows `user` may run on `game_server` (superadmin sees every
     enabled, in-scope command; others see only those assigned to their groups)."""
-    from models import CustomCommand
+    from panel.db.models import CustomCommand
     out = []
     seen = set()
     if user.is_superadmin:
@@ -337,7 +337,7 @@ def can_access_remote(user, remote_id):
 
 def accessible_remote_ids(user):
     """Set of remote-host ids the user may manage (all of them for a superadmin)."""
-    from models import RemoteServer
+    from panel.db.models import RemoteServer
     if user.is_superadmin:
         return {r.id for r in RemoteServer.query.all()}
     ids = set()
@@ -477,7 +477,7 @@ def init_auth(app):
             return None
         if sid:
             try:
-                from models import UserSession
+                from panel.db.models import UserSession
                 sess = UserSession.query.filter_by(sid=sid, user_id=user.id).first()
                 if sess is None:
                     return None                       # this device's session was revoked
@@ -601,7 +601,7 @@ def strip_legacy_superadmin_grants():
     permissions JSON where the Groups UI can no longer show or untick it, and where a future
     has_permission(user, SUPER_ADMIN) would silently start honouring it again. Returns how many
     groups were cleaned; best-effort and never fatal at startup."""
-    from models import Group
+    from panel.db.models import Group
     cleaned = 0
     try:
         for group in Group.query.all():

@@ -16,9 +16,9 @@ makes the merge order stop mattering, and tests/unit_test.py enforces it.
 """
 import json
 import threading
-from pathlib import Path
 
-_DIR = Path(__file__).resolve().parent / "translations"
+from panel import REPO_ROOT as _ROOT   # translations/ is at the checkout root, not beside this file
+_DIR = _ROOT / "translations"
 
 # Supported languages: code -> native name (shown in the switcher).
 LANGUAGES = {"en": "English", "es": "Español", "fr": "Français"}

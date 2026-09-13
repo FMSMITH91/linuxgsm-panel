@@ -16,17 +16,17 @@ import re
 import shlex
 import time
 
-import notifications
-import system_ops as so
-from auth import log_action
-from clock import utcnow
-from config import load_config
-from models import GameServer, HostSample, MetricSample, RemoteServer, db
-from panel_state import (
+from panel.services import notifications
+from panel.ops import system_ops as so
+from panel.security.auth import log_action
+from panel.core.clock import utcnow
+from panel.core.config import load_config
+from panel.db.models import GameServer, HostSample, MetricSample, RemoteServer, db
+from panel.core.panel_state import (
     _cron_restart_pending, _expected_offline, _max_players_cache, _monitor_state, _os_update_seen,
     _player_counts, _reboot_when_empty, _rwe_lock, _server_full_alerted, _server_peak_notified,
 )
-from ssh_manager import (
+from panel.ops.ssh_manager import (
     _remote_listening_ports, game_map, lgsm_get_values, remote_fail2ban_top_ips, remote_reboot,
     remote_ufw_blocked_ips, remote_ufw_deny_ip, remote_ufw_undeny_ip, run_command,
     server_live_metrics, tailnet_exempt_ips,

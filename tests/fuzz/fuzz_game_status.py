@@ -23,11 +23,11 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspa
 # Pre-load ssh_manager's heavy dependencies UNINSTRUMENTED so instrument_imports() below instruments
 # only the parser module (not paramiko / eventlet) — faster, and coverage stays on target. importlib
 # (rather than a static `import`) loads them purely for effect without an unused-import.
-for _dep in ("paramiko", "eventlet.tpool", "config"):
+for _dep in ("paramiko", "eventlet.tpool", "panel.core.config"):
     importlib.import_module(_dep)
 
 with atheris.instrument_imports():
-    import ssh_manager
+    from panel.ops import ssh_manager
 
 
 def TestOneInput(data):

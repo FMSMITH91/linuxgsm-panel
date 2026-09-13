@@ -9,7 +9,10 @@ from pathlib import Path
 
 _log = logging.getLogger("panel.config")
 
-HERE = Path(__file__).parent
+# The panel checkout, NOT this file's directory: config.py lives in panel/core/ now, so
+# Path(__file__).parent would put data/ (database, secret key, credential key, TLS certs)
+# under panel/core/ and quietly abandon the real one. See panel/__init__.py.
+from panel import REPO_ROOT as HERE
 DATA_DIR = HERE / "data"
 CONFIG_FILE = DATA_DIR / "config.json"
 DB_PATH = DATA_DIR / "panel.db"

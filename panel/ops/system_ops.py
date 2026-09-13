@@ -5,7 +5,7 @@ import os
 import re
 import shlex
 import subprocess
-import terminal
+from panel.core import terminal
 import threading
 import time
 import urllib.error
@@ -13,9 +13,11 @@ import urllib.request
 
 _log = logging.getLogger("panel.system_ops")
 
-# The panel's own install directory (this module lives inside it) — used for the
-# git-based self-update feature.
-PANEL_DIR = os.path.dirname(os.path.abspath(__file__))
+# The panel's own install directory — used for the git-based self-update feature. Taken from
+# panel/__init__.py rather than this file's dirname: this module lives in panel/ops/ now, and
+# self-update, integrity-repair and the db_maintenance lookup all need the CHECKOUT root.
+from panel import REPO_ROOT as _REPO_ROOT
+PANEL_DIR = str(_REPO_ROOT)
 
 # The branch the panel tracks out of the box. Switching to any other branch is opt-in
 # (panel_switch_branch) and stored in config as "panel_branch".
@@ -47,7 +49,7 @@ def _tracked_branch():
     """Branch the panel follows for updates/self-update. Defaults to 'main'; a superadmin can
     point it at another branch via panel_switch_branch (stored in config as 'panel_branch')."""
     try:
-        import config as _cfg
+        from panel.core import config as _cfg
         b = (_cfg.load_config().get("panel_branch") or _DEFAULT_BRANCH).strip()
     except Exception:
         b = _DEFAULT_BRANCH
@@ -146,7 +148,7 @@ def live_metrics():
 
 # ─── Helpers ──────────────────────────────────────────────────
 
-import privileged as _priv
+from panel.security import privileged as _priv
 
 _HELPER_STATE = {"present": None}
 
@@ -1063,7 +1065,7 @@ def panel_switch_branch(branch):
     if rc != 0:
         return False, "Branch '%s' doesn't exist on the remote." % branch
     try:
-        import config as _cfg
+        from panel.core import config as _cfg
         _cfg.update_config(lambda cfg: cfg.update({"panel_branch": branch}))
     except Exception:
         _log.exception("switch-branch: could not save tracked branch")
@@ -1122,7 +1124,7 @@ def panel_repair_database():
     db_maintenance (health-check → rebuild readable data via SQLite .recover, else restore the last
     healthy backup → optimize → re-check), then starts the service again — the flagged database is
     copied aside first and never deleted. Same stop/repair/start the auto-updater uses. (ok, msg)."""
-    base = os.path.dirname(os.path.abspath(__file__))
+    base = PANEL_DIR          # the checkout root: venv/ and db_maintenance.py both live there
     py = os.path.join(base, "venv", "bin", "python3")
     if not os.path.exists(py):
         py = os.path.join(base, "venv", "bin", "python")
@@ -1698,7 +1700,7 @@ def security_log_tail(which, lines=200, jail=None):
     (may be empty)."""
     lines = max(20, min(int(lines or 200), 1000))
     if which == "panel":
-        import config as _cfg
+        from panel.core import config as _cfg
         p = os.path.join(str(_cfg.DATA_DIR), "auth.log")
         try:
             with open(p, encoding="utf-8", errors="replace") as f:
@@ -1819,7 +1821,7 @@ def panel_diagnostics():
     dir, database, encryption keys, config, disk space, TLS cert and service
     unit. No SSH/network. Returns {checks:[{name,level,detail}], summary, counts}."""
     import shutil
-    import config as _cfg
+    from panel.core import config as _cfg
     from datetime import datetime, timezone
     checks = []
 
@@ -2081,7 +2083,7 @@ def generate_debug_report():
     import sys
     import time as _t
     import platform
-    import config as _cfg
+    from panel.core import config as _cfg
     diag = panel_diagnostics()
     ver = panel_version()
     integ = panel_integrity()
@@ -2121,7 +2123,7 @@ def generate_debug_report():
         _log.debug("config unreadable — omit the config section, non-fatal", exc_info=True)
     counts = {}
     try:
-        from models import RemoteServer, GameServer
+        from panel.db.models import RemoteServer, GameServer
         counts = {"remotes": RemoteServer.query.count(), "game_servers": GameServer.query.count()}
     except Exception:
         _log.debug("DB not queryable here — omit counts, non-fatal", exc_info=True)
@@ -2135,7 +2137,7 @@ def generate_debug_report():
     except Exception:
         _log.debug("db integrity_check unavailable for debug report, non-fatal", exc_info=True)
     try:
-        from models import database_stats
+        from panel.db.models import database_stats
         dbs.update(database_stats())
     except Exception:
         _log.debug("database_stats unavailable for debug report, non-fatal", exc_info=True)

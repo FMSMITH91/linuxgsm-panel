@@ -38,8 +38,8 @@ def _is_sudo(cmd, sudo_flag=False):
 
 
 def _install():
-    import ssh_manager
-    import system_ops
+    from panel.ops import ssh_manager
+    from panel.ops import system_ops
 
     _real_so_run = system_ops._run
     _real_sm_local = ssh_manager._run_local
@@ -73,9 +73,9 @@ def _install():
     # Imported by name, explicitly: the set is fixed, and a module that fails to import must be a
     # loud error rather than a skipped shim. Skipping one silently is precisely how real sudo got
     # through before — the run reports "0 refused" while the unshimmed module escalates for real.
-    import backup
+    from panel.ops import backup
     import db_maintenance
-    import tailscale_integration
+    from panel.ops import tailscale_integration
 
     for mod in (system_ops, ssh_manager, backup, db_maintenance, tailscale_integration):
         if getattr(mod, "subprocess", None) is not None:

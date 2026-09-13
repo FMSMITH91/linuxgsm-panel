@@ -21,7 +21,6 @@ import os
 import threading
 import time
 import urllib.request
-from pathlib import Path
 
 # LinuxGSM's canonical copies. Fixed host, fixed paths — nothing here is caller-supplied.
 _BASE = "https://raw.githubusercontent.com/GameServerManagers/LinuxGSM/master/lgsm/data/"
@@ -49,7 +48,8 @@ def deps_name(os_slug):
 MAX_AGE_SECONDS = 7 * 24 * 3600
 _TIMEOUT = 10
 
-_CACHE_DIR = Path(__file__).parent / "data" / "lgsm"
+from panel import REPO_ROOT as _ROOT   # the cache belongs in the gitignored data/, at the root
+_CACHE_DIR = _ROOT / "data" / "lgsm"
 _lock = threading.Lock()
 _mem = {}          # name -> parsed value, so repeated reads do not re-open the file
 _last_error = {}   # name -> str, for status()
