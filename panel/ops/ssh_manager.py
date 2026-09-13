@@ -80,8 +80,8 @@ def _kill_process_tree(p):
     except Exception:
         try:
             p.kill()
-        except Exception:  # nosec B110
-            pass
+        except Exception:  # nosec B110 - killing an already-dead process is the expected race
+            pass           # here, and there is nothing left to do about it either way.
     try:
         p.communicate(timeout=5)   # reap it so it doesn't linger as a zombie
     except Exception:  # nosec B110
@@ -1657,8 +1657,8 @@ def stream_game_backup(server, user, name, chunk=262144):
         finally:
             try:
                 p.stdout.close()
-            except Exception:  # nosec B110
-                pass
+            except Exception:  # nosec B110 - the pipe is already closed when the child exited
+                pass           # first; closing it twice is the normal path, not a failure.
             p.wait()
         return
 

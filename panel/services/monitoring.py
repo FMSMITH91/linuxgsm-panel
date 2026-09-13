@@ -391,6 +391,13 @@ def _monitor_pass():
         for rid, data in ex.map(_probe_host, remotes):
             probes[rid] = data
     _th = notifications.get_thresholds()   # user-configurable disk_pct / load_pct; once per sweep
+    # Every installed server for every host, in ONE query, grouped by host. The per-host fetch used
+    # to sit inside the loop below, so the monitor's query count grew with the number of hosts —
+    # once a minute, forever. The route budgets in smoke_test cover the PAGES, not this sweep, so
+    # nothing was watching it.
+    _by_remote = {}
+    for _gs in GameServer.query.filter_by(installed=True).all():
+        _by_remote.setdefault(_gs.remote_id, []).append(_gs)
     status_changed = False
     for remote in remotes:
         probe = probes.get(remote.id) or {"reachable": False}
@@ -435,7 +442,7 @@ def _monitor_pass():
         ports = probe["ports"]
         if ports is None:
             continue
-        for gs in GameServer.query.filter_by(remote_id=remote.id, installed=True).all():
+        for gs in _by_remote.get(remote.id, ()):
             if gs.status in ("installing", "configuring"):
                 continue
             up = gs.port in ports
