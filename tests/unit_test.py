@@ -54,8 +54,10 @@ from panel.security import privileged as _privmod
 from panel.ops import ssh_manager as sm
 from panel.services import notifications as N
 from panel.ops import system_ops as SO
-from app import (password_problem, _int_or, _valid_ip_or_cidr, _parse_tg_command,
-    _tg_command_arg, _valid_hex_color, _clean_console_text)
+from app import (password_problem, _int_or, _valid_ip_or_cidr, _valid_hex_color,
+    _clean_console_text)
+from panel.services.bots.telegram import (_parse_tg_command)
+from panel.services.bots.commands import (_command_arg)
 from panel.db.prefs import (_apply_user_server_order)
 from panel.services.monitoring import (_whitelisted)
 from panel.db.prefs import (_apply_user_order)
@@ -3629,8 +3631,8 @@ check("telegram: /update parses to 'update'", _parse_tg_command("/update") == "u
 check("telegram: a bot-mention + args is stripped", _parse_tg_command("/Update@MyBot now") == "update")
 check("telegram: /STATUS is lowercased", _parse_tg_command("/STATUS") == "status")
 check("telegram: a non-command is empty", _parse_tg_command("hello there") == "" and _parse_tg_command("") == "")
-check("telegram: /restart <name> extracts the argument", _tg_command_arg("/restart my server") == "my server")
-check("telegram: a bare command has no argument", _tg_command_arg("/status") == "")
+check("telegram: /restart <name> extracts the argument", _command_arg("/restart my server") == "my server")
+check("telegram: a bare command has no argument", _command_arg("/status") == "")
 
 # telegram_set_commands registers the '/' autocomplete menu via setMyCommands (through _post).
 import json as _json_tg  # noqa: E402
@@ -3651,7 +3653,7 @@ finally:
     N._post = _orig_post
 
 # ── Discord command bot (Gateway): parsing, SSRF-safe reply path, and the message pump ──
-from app import _parse_dc_command  # noqa: E402
+from panel.services.bots.discord import _parse_dc_command  # noqa: E402
 
 # Command parsing accepts either '!' (types cleanly — Discord reserves '/') or '/'; mention + args stripped.
 check("discord: !status parses to 'status'", _parse_dc_command("!status") == "status")
@@ -4175,7 +4177,7 @@ check("supported releases: each is tested on the Python that release ships", not
 # A chat-bot command can stop a game server or update the panel. Every one used to be recorded
 # with actor=None — i.e. "system" — so the audit log showed the effect and nothing about the
 # cause. The origin string is what makes a bot-initiated action attributable.
-from app import _bot_origin
+from panel.services.bots.commands import _bot_origin
 eq("bot origin: telegram sender by username", _bot_origin("telegram", {"username": "fred", "id": 7}), "telegram:fred")
 eq("bot origin: falls back to the numeric id", _bot_origin("telegram", {"id": 4242}), "telegram:4242")
 eq("bot origin: discord is labelled as discord", _bot_origin("discord", {"username": "ann"}), "discord:ann")

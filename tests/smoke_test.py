@@ -2085,12 +2085,12 @@ try:
 
     # ── Telegram command bot: server-name resolution for /start /stop /restart /players ────────────
     with app.app_context():
-        from app import _tg_find_server
-        _g, _e = _tg_find_server("smoke-cs")               # by display name
+        from panel.services.bots.commands import _find_server
+        _g, _e = _find_server("smoke-cs")               # by display name
         check("telegram: resolve a server by name", _g is not None and _e is None)
-        _g2, _e2 = _tg_find_server("csgoserver")           # by short_name
+        _g2, _e2 = _find_server("csgoserver")           # by short_name
         check("telegram: resolve a server by short_name", _g2 is not None)
-        _g3, _e3 = _tg_find_server("no-such-server-xyz")   # unknown
+        _g3, _e3 = _find_server("no-such-server-xyz")   # unknown
         check("telegram: an unknown server name returns a helpful error", _g3 is None and "No server" in (_e3 or ""))
 
     # ── The panel's own CSS/JS are cacheable files, not 64KB re-sent on every navigation ──────────
@@ -2668,44 +2668,48 @@ try:
     # TG_COMMANDS puts in Telegram's own '/' menu and _tg_help_text documents — answered with help
     # and never started anything. A BARE /start is Telegram's open-the-chat command and must still
     # answer with help, so both shapes are asserted; Discord's twin has always matched "help" only.
-    import app as _appmod
+    # The bots moved to panel/services/bots/. The stub seam follows the HANDLER: every name
+    # stubbed below is resolved by the module that defines it, so stubbing that module is
+    # what the routers actually see.
+    from panel.services.bots import telegram as _tgmod
+    from panel.services.bots import discord as _dcmod
     _tg_sent, _tg_acted = [], []
-    _tg_saved = (_appmod._tg_reply, _appmod._tg_server_action)
+    _tg_saved = (_tgmod._tg_reply, _tgmod._tg_server_action)
     try:
-        _appmod._tg_reply = lambda tok, chat, text: _tg_sent.append(text)
-        _appmod._tg_server_action = lambda a, tok, chat, action, arg, sender=None: _tg_acted.append(
+        _tgmod._tg_reply = lambda tok, chat, text: _tg_sent.append(text)
+        _tgmod._tg_server_action = lambda a, tok, chat, action, arg, sender=None: _tg_acted.append(
             (action, arg))
-        _appmod._handle_telegram_command(app, "1:tok", "1", "/start smoke-cs")
+        _tgmod._handle_telegram_command(app, "1:tok", "1", "/start smoke-cs")
         check("telegram: /start <name> runs the start action",
               _tg_acted == [("start", "smoke-cs")], "acted=%s sent=%s" % (_tg_acted, _tg_sent[:1]))
         _tg_acted.clear(); _tg_sent.clear()
-        _appmod._handle_telegram_command(app, "1:tok", "1", "/start")
+        _tgmod._handle_telegram_command(app, "1:tok", "1", "/start")
         check("telegram: a bare /start still answers with help",
               not _tg_acted and _tg_sent and "Commands" in _tg_sent[0],
               "acted=%s sent=%s" % (_tg_acted, _tg_sent[:1]))
         _tg_acted.clear(); _tg_sent.clear()
-        _appmod._handle_telegram_command(app, "1:tok", "1", "/stop smoke-cs")
+        _tgmod._handle_telegram_command(app, "1:tok", "1", "/stop smoke-cs")
         check("telegram: /stop <name> still works", _tg_acted == [("stop", "smoke-cs")])
 
         # `/update <name>` parsed the argument and then threw it away, so asking to update ONE game
         # server updated the panel and restarted it instead. An argument names a server here, the
         # way it does for every other command that takes one.
         _tg_upd = []
-        _tg_saved_upd = _appmod._telegram_do_update
+        _tg_saved_upd = _tgmod._telegram_do_update
         try:
-            _appmod._telegram_do_update = lambda a, tok, chat: _tg_upd.append("panel")
+            _tgmod._telegram_do_update = lambda a, tok, chat: _tg_upd.append("panel")
             _tg_acted.clear(); _tg_sent.clear()
-            _appmod._handle_telegram_command(app, "1:tok", "1", "/update smoke-cs")
+            _tgmod._handle_telegram_command(app, "1:tok", "1", "/update smoke-cs")
             check("telegram: /update <name> updates THAT SERVER, not the panel",
                   _tg_acted == [("update", "smoke-cs")] and not _tg_upd,
                   "acted=%s panel=%s" % (_tg_acted, _tg_upd))
             _tg_acted.clear(); _tg_upd.clear()
-            _appmod._handle_telegram_command(app, "1:tok", "1", "/update")
+            _tgmod._handle_telegram_command(app, "1:tok", "1", "/update")
             check("telegram: a bare /update still updates the panel",
                   _tg_upd == ["panel"] and not _tg_acted,
                   "acted=%s panel=%s" % (_tg_acted, _tg_upd))
         finally:
-            _appmod._telegram_do_update = _tg_saved_upd
+            _tgmod._telegram_do_update = _tg_saved_upd
 
         # ── The four commands added alongside the /update fix ────────────────────────────────
         # /console is the missing half of the power commands: start/stop/restart run in the
@@ -2720,43 +2724,48 @@ try:
                 steamid="", num="": (_tg_mod.append((action, message)), (True, "announced"))[1]
 
             _tg_sent.clear()
-            _appmod._handle_telegram_command(app, "1:tok", "1", "/console smoke-cs")
+            _tgmod._handle_telegram_command(app, "1:tok", "1", "/console smoke-cs")
             check("telegram: /console tails the game console",
                   _tg_sent and "Server started" in _tg_sent[0], "sent=%s" % _tg_sent[:1])
             check("telegram: ...with the ANSI escapes stripped",
                   _tg_sent and "\x1b[" not in _tg_sent[0], "sent=%r" % (_tg_sent[:1],))
             _tg_sent.clear()
-            _appmod._handle_telegram_command(app, "1:tok", "1", "/console no-such-server-xyz")
+            _tgmod._handle_telegram_command(app, "1:tok", "1", "/console no-such-server-xyz")
             check("telegram: /console on an unknown server explains itself",
                   _tg_sent and "No server" in _tg_sent[0], "sent=%s" % _tg_sent[:1])
 
             _tg_sent.clear(); _tg_mod.clear()
-            _appmod._handle_telegram_command(app, "1:tok", "1", "/say csgoserver restarting in 5")
+            _tgmod._handle_telegram_command(app, "1:tok", "1", "/say csgoserver restarting in 5")
             check("telegram: /say announces the whole message, not just the first word",
                   _tg_mod == [("say", "restarting in 5")], "moderate=%s" % _tg_mod)
             _tg_sent.clear(); _tg_mod.clear()
-            _appmod._handle_telegram_command(app, "1:tok", "1", "/say csgoserver")
+            _tgmod._handle_telegram_command(app, "1:tok", "1", "/say csgoserver")
             check("telegram: /say with no message asks for one instead of announcing nothing",
                   not _tg_mod and _tg_sent and "announce" in _tg_sent[0], "sent=%s" % _tg_sent[:1])
 
             _tg_sent.clear()
-            _appmod._handle_telegram_command(app, "1:tok", "1", "/connect smoke-cs")
+            _tgmod._handle_telegram_command(app, "1:tok", "1", "/connect smoke-cs")
             check("telegram: /connect gives the joinable address",
                   _tg_sent and ":27015" in _tg_sent[0], "sent=%s" % _tg_sent[:1])
 
             _tg_acted.clear()
-            _appmod._handle_telegram_command(app, "1:tok", "1", "/backup smoke-cs")
+            _tgmod._handle_telegram_command(app, "1:tok", "1", "/backup smoke-cs")
             check("telegram: /backup runs the backup action", _tg_acted == [("backup", "smoke-cs")],
                   "acted=%s" % _tg_acted)
         finally:
             _smmod.capture_console, _smmod.moderate = _tg_saved_new
     finally:
-        _appmod._tg_reply, _appmod._tg_server_action = _tg_saved
+        _tgmod._tg_reply, _tgmod._tg_server_action = _tg_saved
     # Every command the bot advertises must be one it handles — that menu is what made the /start
     # bug reachable in the first place.
     from panel.services import notifications as _notif
     _repo_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-    _tg_src = open(os.path.join(_repo_root, "app.py"), encoding="utf-8").read()
+    # Each router now lives in its own module, so read the file that actually holds it — pointing
+    # this at app.py would make both gates below pass vacuously on a string that is never there.
+    _tg_src = open(os.path.join(_repo_root, "panel", "services", "bots", "telegram.py"),
+                   encoding="utf-8").read()
+    _dc_src = open(os.path.join(_repo_root, "panel", "services", "bots", "discord.py"),
+                   encoding="utf-8").read()
     _tg_handler = _tg_src[_tg_src.index("def _handle_telegram_command"):]
     _tg_handler = _tg_handler[:_tg_handler.index("\ndef ", 10)]
     _unhandled = [_cmd for _cmd, _ in _notif.TG_COMMANDS
@@ -2769,40 +2778,40 @@ try:
     # branch the other didn't. Both are asserted from here on, and the parity gate below is the
     # part that catches the next one.
     _dc_sent, _dc_acted, _dc_upd = [], [], []
-    _dc_saved = (_appmod._dc_reply, _appmod._dc_server_action, _appmod._discord_do_update)
+    _dc_saved = (_dcmod._dc_reply, _dcmod._dc_server_action, _dcmod._discord_do_update)
     try:
-        _appmod._dc_reply = lambda tok, chan, text: _dc_sent.append(text)
-        _appmod._dc_server_action = lambda a, tok, chan, action, arg, sender=None: _dc_acted.append(
+        _dcmod._dc_reply = lambda tok, chan, text: _dc_sent.append(text)
+        _dcmod._dc_server_action = lambda a, tok, chan, action, arg, sender=None: _dc_acted.append(
             (action, arg))
-        _appmod._discord_do_update = lambda a, tok, chan: _dc_upd.append("panel")
-        _appmod._handle_discord_command(app, "tok", "1", "!start smoke-cs")
+        _dcmod._discord_do_update = lambda a, tok, chan: _dc_upd.append("panel")
+        _dcmod._handle_discord_command(app, "tok", "1", "!start smoke-cs")
         check("discord: !start <name> runs the start action", _dc_acted == [("start", "smoke-cs")],
               "acted=%s" % _dc_acted)
         _dc_acted.clear(); _dc_sent.clear()
-        _appmod._handle_discord_command(app, "tok", "1", "!update smoke-cs")
+        _dcmod._handle_discord_command(app, "tok", "1", "!update smoke-cs")
         check("discord: !update <name> updates THAT SERVER, not the panel",
               _dc_acted == [("update", "smoke-cs")] and not _dc_upd,
               "acted=%s panel=%s" % (_dc_acted, _dc_upd))
         _dc_acted.clear(); _dc_upd.clear()
-        _appmod._handle_discord_command(app, "tok", "1", "!update")
+        _dcmod._handle_discord_command(app, "tok", "1", "!update")
         check("discord: a bare !update still updates the panel",
               _dc_upd == ["panel"] and not _dc_acted, "acted=%s panel=%s" % (_dc_acted, _dc_upd))
         _dc_sent.clear()
-        _appmod._handle_discord_command(app, "tok", "1", "!help")
+        _dcmod._handle_discord_command(app, "tok", "1", "!help")
         check("discord: !help answers with the command list",
               _dc_sent and "Commands" in _dc_sent[0], "sent=%s" % _dc_sent[:1])
         _dc_sent.clear()
-        _appmod._handle_discord_command(app, "tok", "1", "!nonsense")
+        _dcmod._handle_discord_command(app, "tok", "1", "!nonsense")
         check("discord: an unknown command is refused, not silently dropped",
               _dc_sent and "Unknown command" in _dc_sent[0], "sent=%s" % _dc_sent[:1])
     finally:
-        (_appmod._dc_reply, _appmod._dc_server_action,
-         _appmod._discord_do_update) = _dc_saved
+        (_dcmod._dc_reply, _dcmod._dc_server_action,
+         _dcmod._discord_do_update) = _dc_saved
 
     # Both routers must handle the same verbs. Neither is the source of truth, so compare the
     # quoted command words in each router body — a branch added to one and not the other is
     # exactly the shape of the /start and /update bugs.
-    _dc_handler = _tg_src[_tg_src.index("def _handle_discord_command"):]
+    _dc_handler = _dc_src[_dc_src.index("def _handle_discord_command"):]
     _dc_handler = _dc_handler[:_dc_handler.index("\ndef ", 10)]
     _verbs = set(_nre.findall(r'"([a-z][a-z-]{1,15})"', _tg_handler))
     _dc_verbs = set(_nre.findall(r'"([a-z][a-z-]{1,15})"', _dc_handler))
@@ -2926,8 +2935,21 @@ try:
               _ssj2.get("player_count") is None, "got %r" % _ssj2.get("player_count"))
     finally:
         _pc_cache.pop(gs_id, None)
+    # Scanned across the whole source tree, not one file. This used to read app.py, and the code
+    # it guards against has not lived there for a long time — an absence assertion pointed at the
+    # wrong file passes no matter what the panel actually does.
+    _all_src = []
+    for _d, _, _fs in os.walk(_repo_root):
+        if any(_x in _d for _x in (".git", ".venv", "venv", "node_modules", "__pycache__", "/data")):
+            continue
+        for _f in _fs:
+            if _f.endswith(".py") and not _f.endswith("_test.py"):
+                try:
+                    _all_src.append(open(os.path.join(_d, _f), encoding="utf-8").read())
+                except OSError:
+                    pass
     check("server status api: no longer cats the console log to count players",
-          "grep -c 'ClientConnect" not in _tg_src)
+          not any("grep -c 'ClientConnect" in _x for _x in _all_src))
 
     # ── Editing a game server validates, and refuses a port change it cannot honour ────────
     # /servers/<id>/edit wrote name, game_display and PORT straight from the form. The port write
