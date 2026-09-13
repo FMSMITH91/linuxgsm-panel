@@ -795,8 +795,12 @@ def _tg_connect_text(app, arg):
 def _tg_hosts_text(app):
     with app.app_context():
         rows = []
+        # One grouped COUNT for every host, rather than one COUNT per host inside the loop. The
+        # /hosts command is not hot, but the shape was N+1 and the fix is a single query.
+        _counts = dict(db.session.query(GameServer.remote_id, db.func.count(GameServer.id))
+                       .filter_by(installed=True).group_by(GameServer.remote_id).all())
         for r in RemoteServer.query.order_by(RemoteServer.name).all():
-            n_srv = GameServer.query.filter_by(remote_id=r.id, installed=True).count()
+            n_srv = _counts.get(r.id, 0)
             dot = "🟢" if r.is_online else "🔴"
             local = " (this panel)" if r.is_local else ""
             rows.append("%s %s%s — %d server%s" % (dot, r.display_name, local, n_srv, "" if n_srv == 1 else "s"))
@@ -1746,8 +1750,8 @@ def create_app():
         try:
             if request.path.startswith(_static_prefix):
                 resp.headers["Cache-Control"] = "public, max-age=604800"   # 1 week
-        except Exception:  # nosec B110
-            pass
+        except Exception:  # nosec B110 - a cache header is an optimisation, never correctness:
+            pass           # if request.path is unavailable the response still goes out, unchanged.
         # 2) gzip text responses (HTML ~10x, JSON ~17x smaller) when the client accepts it — the
         #    biggest win for page loads and the every-few-seconds status polls, especially remote.
         try:
@@ -4614,9 +4618,35 @@ def register_routes(app):
             except Exception:
                 _log.debug("uninstall_server: ignored non-fatal error", exc_info=True)
 
-            # Remove LinuxGSM user and home
+            # Remove LinuxGSM user and home.
+            #
+            # THE EXIT CODE DECIDES WHETHER THE ROW GOES. run_privileged RETURNS rc rather than
+            # raising, and this used to feed it to log_action and nothing else — so a userdel that
+            # FAILED still deleted the panel's row and still answered "Server 'x' uninstalled."
+            # The account, its home and every game file stayed on the host, now with no row to
+            # manage them from, the firewall rules already removed, and the next install of that
+            # game colliding with the surviving user. The audit log was the only trace.
+            #
+            # userdel's codes, which is why this is not a bare `rc == 0`:
+            #   0   removed
+            #   6   no such user — already gone, so there is nothing to orphan and the row SHOULD go
+            #   12  the account was removed but its home could not be — partial, worth saying out loud
+            #   *   the account is still there; keeping the row is what lets the operator retry
             out, err, rc = run_privileged(remote, "user-delete-force", [short_name], timeout=30)
-            log_action(current_user, "uninstall_server", target=gs.name, success=(rc == 0))
+            _gone = rc in (0, 6, 12)
+            log_action(current_user, "uninstall_server", target=gs.name, success=_gone)
+            if not _gone:
+                _em = ("Could not remove the '%s' account on %s, so '%s' has been left in place — "
+                       "nothing was deleted from the panel. %s"
+                       % (short_name, remote.display_name, name,
+                          (err or out or "userdel exited %d" % rc).strip()[:200]))
+                if _wants_json():
+                    return jsonify({"success": False, "message": _em}), 500
+                flash(_em, "danger")
+                return redirect(url_for("manage_servers"))
+            if rc == 12:
+                fw_note += (" The account was removed but its home directory could not be — "
+                            "check /home/%s on the host." % short_name)
 
             # Remove from DB
             db.session.delete(gs)

@@ -248,6 +248,50 @@ try:
     alp = c.post("/api/server/%d/alerts" % gs_id, json={"values": {"discordalert": "on", "notakey": "x"}})
     check("alerts: POST returns a JSON result (no 500)", "success" in (alp.get_json() or {}))
 
+    # ── uninstall: a FAILED userdel must not delete the panel's row ───────────────────────────
+    # This endpoint used to capture run_privileged's rc, hand it to log_action, and then delete the
+    # row and answer {"success": true} no matter what it was. A userdel that failed therefore left
+    # the account, its home and every game file on the host with no row left to manage them from —
+    # firewall rules already removed, next install of that game colliding with the surviving user,
+    # and the operator told it had worked. run_privileged RETURNS rc; it never raises, so nothing
+    # else caught it.
+    #
+    # Driven through the real endpoint with run_privileged stubbed per exit code, because the bug
+    # was in the branch AFTER the call, not in the call.
+    from panel.db.models import GameServer as _UGS
+    _uapp = sys.modules["app"]      # _appmod is not bound until later in this file
+    _u_orig = _uapp.run_privileged
+    try:
+        for _rc, _expect_gone, _label in ((1, False, "generic failure"),
+                                          (4, False, "unexpected code"),
+                                          (0, True, "removed"),
+                                          (6, True, "no such user"),
+                                          (12, True, "removed, home left")):
+            with app.app_context():
+                _rm = RemoteServer.query.first()
+                _tmp = _UGS(remote_id=_rm.id, name="uninst%d" % _rc, short_name="uninst%d" % _rc,
+                            game_type="gmod", port=28900 + _rc, installed=True, status="offline")
+                db.session.add(_tmp); db.session.commit()
+                _tid = _tmp.id
+            _uapp.run_privileged = (lambda rc: (lambda *a, **k: ("", "userdel: boom", rc)))(_rc)
+            # X-Requested-With is what the page's fetch wrapper sends, and what _wants_json()
+            # keys on — without it this endpoint answers with a flash+redirect instead.
+            _resp = c.post("/servers/%d/delete" % _tid, json={},
+                           headers={"X-Requested-With": "XMLHttpRequest"})
+            with app.app_context():
+                _still = _UGS.query.get(_tid) is not None
+            check("uninstall: rc=%d (%s) -> row %s" % (_rc, _label, "deleted" if _expect_gone else "KEPT"),
+                  _still != _expect_gone, "row %s" % ("survived" if _still else "was deleted"))
+            if not _expect_gone:
+                check("uninstall: rc=%d reports failure, not success" % _rc,
+                      (_resp.get_json() or {}).get("success") is False,
+                      "got %r" % ((_resp.get_json() or {}).get("success"),))
+            with app.app_context():   # clean up whatever survived
+                _left = _UGS.query.get(_tid)
+                if _left: db.session.delete(_left); db.session.commit()
+    finally:
+        _uapp.run_privileged = _u_orig
+
     # Liveness probe: unauthenticated, returns 200 + {"status":"ok"}, works pre-login.
     hz = app.test_client().get("/healthz")
     check("GET /healthz -> 200 ok (unauthenticated)",
