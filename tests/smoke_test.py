@@ -2569,10 +2569,10 @@ try:
         _am.so.ensure_panel_fail2ban = lambda log, port, ignore=None: (
             _f2b_calls.append((port, list(ignore) if ignore is not None else None)), (True, "ok"))[1]
         _am.so.restart_panel = lambda *a, **k: (True, "stubbed")
-        # Stays on `app`: api_panel_change_port is one of the handlers still IN app.py, so it
-        # resolves _security_whitelist from app's own scope. host_local and _shared bind the same
-        # name for their own handlers — which is the point: the right stub target is decided by
-        # WHICH handler the test drives, not by the name.
+        # remote_security, not app: api_panel_change_port lives there now and resolves
+        # _security_whitelist from THAT module's scope. app, host_local and _shared each bind the
+        # same name for their own handlers — which is the point: the right stub target is decided
+        # by WHICH handler the test drives, not by the name.
         _rs_mod._security_whitelist = lambda: ["203.0.113.8", "10.0.0.0/8"]
         with app.app_context():
             _cp_cfg = _am.load_config()
