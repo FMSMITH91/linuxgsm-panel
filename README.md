@@ -6,6 +6,8 @@
 
 A self-hosted web panel for managing **[LinuxGSM](https://linuxgsm.com)** game servers across one or more Ubuntu machines, with role-based access for super admins, server admins, and moderators.
 
+📓 [Changelog](docs/CHANGELOG.md) · 🔒 [Security policy](.github/SECURITY.md) · 🔐 [HTTPS setup](docs/https.md)
+
 > ## ⚠️ Disclaimer — please read first
 >
 > - **Not an official LinuxGSM product** — an independent third-party panel, not affiliated with or endorsed by LinuxGSM. Trademarks belong to their owners.
@@ -242,7 +244,7 @@ that fails if any of them drifts back to being module-relative.
 
 ## Contributing
 
-Issues and pull requests are welcome — this is a solo, AI-assisted project, so extra eyes genuinely help. Report security issues privately via [SECURITY.md](SECURITY.md), not a public issue. For code, fork and open a PR against `main`, run `bash tools/run-tests.sh` first, and keep CI green.
+Issues and pull requests are welcome — this is a solo, AI-assisted project, so extra eyes genuinely help. Report security issues privately via [SECURITY.md](.github/SECURITY.md), not a public issue. For code, fork and open a PR against `main`, run `bash tools/run-tests.sh` first, and keep CI green.
 
 ## License
 

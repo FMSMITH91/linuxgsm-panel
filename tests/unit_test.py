@@ -6088,7 +6088,19 @@ if os.path.isfile(_acc_path):
 # "43 verbs" against 86; the CHANGELOG said 77 in the same release; README advertised 18 alert
 # events against 19, and listed `super_admin` as a grantable permission two years after it stopped
 # being one. Prose does not enforce itself, so the numbers get gates like everything else.
-_sec = open(os.path.join(_root, "SECURITY.md"), encoding="utf-8").read()
+# SECURITY.md lives in .github/ (one of the three locations GitHub reads a security policy
+# from — root, docs/, .github/). Resolved rather than hardcoded, and RAISING when no copy is
+# found, so moving it between those three turns this red instead of skipping the gate.
+def _docsrc(leaf):
+    """Source text of a repo doc, wherever GitHub allows it to live. Raises if absent."""
+    for _cand in (leaf, os.path.join(".github", leaf), os.path.join("docs", leaf)):
+        _fp = os.path.join(_root, _cand)
+        if os.path.exists(_fp):
+            return open(_fp, encoding="utf-8").read()
+    raise FileNotFoundError("no %s in ./, .github/ or docs/ — a docs gate lost its subject" % leaf)
+
+
+_sec = _docsrc("SECURITY.md")
 _readme = open(os.path.join(_root, "README.md"), encoding="utf-8").read()
 
 check("docs: SECURITY.md states the real verb count",
