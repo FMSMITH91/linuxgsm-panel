@@ -12,10 +12,12 @@ players/console/connect string, act on it), and each bot is a thin transport wra
 Splitting on that line is what makes `discord.py` short: it is a Gateway socket plus argument
 parsing, not a second implementation of the commands.
 
-WHY THEY ARE STILL CALLED `_tg_*`. Because this commit MOVES code and does not rewrite it — the
-bodies are byte-for-byte what app.py had, so the diff is reviewable as a relocation. The prefix is
-a leftover from when Telegram was the only bot and is actively misleading now that
-`commands.py` serves both; renaming is a separate, mechanical change.
+THE `_tg_*` PREFIX IS GONE FROM `commands.py`. It was a leftover from when Telegram was the only
+bot, and it actively lied once Discord ran on the same functions — `_tg_find_server` called from
+the Discord router reads like a bug. The move landed first as a byte-for-byte relocation so that
+diff stayed reviewable, and the rename followed as its own commit. Names that really are
+transport-specific keep their prefix (`_tg_reply`, `_dc_reply`, `_parse_tg_command`, …); only the
+shared layer was renamed.
 
 NO DEPENDENCY ON app.py. Everything these need comes from the real module that owns it
 (panel.db.models, panel.ops.ssh_manager, panel.core.config, panel.services.notifications, …).

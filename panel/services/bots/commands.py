@@ -16,7 +16,7 @@ import logging
 _log = logging.getLogger("panel.app")
 
 
-def _tg_panel_label():
+def _reply_header():
     """A short identifier for THIS panel so replies are unambiguous when someone runs several panels:
     '<site title> (<hostname>)'."""
     import socket
@@ -28,13 +28,13 @@ def _tg_panel_label():
     return "🎮 %s (%s)" % (title, host) if host else "🎮 %s" % title
 
 
-def _tg_command_arg(text):
+def _command_arg(text):
     """The text after the command word: '/restart my server' -> 'my server'."""
     parts = (text or "").strip().split(None, 1)
     return parts[1].strip() if len(parts) > 1 else ""
 
 
-def _tg_find_server(arg):
+def _find_server(arg):
     """Resolve a GameServer from a name/short_name argument (case-insensitive). Returns (gs, error):
     an exact short_name/name match wins, else a unique partial name match, else (None, message)."""
     arg = (arg or "").strip()
@@ -55,9 +55,9 @@ def _tg_find_server(arg):
     return None, "No server matches '%s'. Send /servers for the list." % arg[:40]
 
 
-def _tg_players_text(app, arg):
+def _players_text(app, arg):
     with app.app_context():
-        gs, err = _tg_find_server(arg)
+        gs, err = _find_server(arg)
         if err:
             return err
         try:
@@ -81,14 +81,14 @@ def _tg_players_text(app, arg):
 _BOT_BODY_MAX = 1500
 
 
-def _tg_console_text(app, arg, lines=20):
+def _console_text(app, arg, lines=20):
     """The tail of a server's live console.
 
     The missing half of the power commands: start/stop/restart run in the background and their
     output is discarded, so when a start fails the bot can say that it failed but never why. This
     is that answer, without opening the panel."""
     with app.app_context():
-        gs, err = _tg_find_server(arg)
+        gs, err = _find_server(arg)
         if err:
             return err
         try:
@@ -107,7 +107,7 @@ def _tg_console_text(app, arg, lines=20):
         return "%s — last %d console line(s):\n%s" % (gs.name, len(rows), body)
 
 
-def _tg_say_text(app, arg):
+def _say_text(app, arg):
     """Announce a message in a server's chat: '<server> <message>'.
 
     The server is the FIRST word (a short name never contains a space), everything after it is the
@@ -117,7 +117,7 @@ def _tg_say_text(app, arg):
     if not name:
         return "Usage: say <server> <message>"
     with app.app_context():
-        gs, err = _tg_find_server(name)
+        gs, err = _find_server(name)
         if err:
             return err
         if not message.strip():
@@ -131,10 +131,10 @@ def _tg_say_text(app, arg):
         return "%s %s — %s" % ("✅" if ok else "⚠️", gs.name, msg or ("announced" if ok else "failed"))
 
 
-def _tg_connect_text(app, arg):
+def _connect_text(app, arg):
     """A server's joinable address, ready to paste to players."""
     with app.app_context():
-        gs, err = _tg_find_server(arg)
+        gs, err = _find_server(arg)
         if err:
             return err
         r = gs.remote
@@ -146,7 +146,7 @@ def _tg_connect_text(app, arg):
         return "%s\n%s:%s%s" % (gs.name, host, gs.port, ("\n" + uri) if uri else "")
 
 
-def _tg_hosts_text(app):
+def _hosts_text(app):
     with app.app_context():
         rows = []
         # One grouped COUNT for every host, rather than one COUNT per host inside the loop. The
@@ -174,7 +174,7 @@ def _bot_origin(platform, sender):
     return ("%s:%s" % (platform, who))[:64]
 
 
-def _tg_status_text(app):
+def _status_text(app):
     with app.app_context():
         installed = GameServer.query.filter_by(installed=True).all()
         online = sum(1 for gs in installed if gs.status == "online")
@@ -184,7 +184,7 @@ def _tg_status_text(app):
             % (_panel_ver_label(), online, len(installed), players))
 
 
-def _tg_servers_text(app):
+def _servers_text(app):
     with app.app_context():
         rows = []
         for gs in GameServer.query.filter_by(installed=True).order_by(GameServer.name).all():

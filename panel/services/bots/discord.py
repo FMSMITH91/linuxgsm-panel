@@ -6,9 +6,9 @@ from panel.core.config import (decrypt_secret, load_config, update_config)
 from panel.ops import system_ops as so
 from panel.services import (notifications)
 from panel.services.bots.commands import (_bot_origin, _panel_ver_label,
-    _tg_command_arg, _tg_connect_text, _tg_console_text, _tg_find_server,
-    _tg_hosts_text, _tg_panel_label, _tg_players_text, _tg_say_text,
-    _tg_servers_text, _tg_status_text)
+    _command_arg, _connect_text, _console_text, _find_server,
+    _hosts_text, _reply_header, _players_text, _say_text,
+    _servers_text, _status_text)
 import logging
 import time
 
@@ -25,7 +25,7 @@ _DC_CMD_BACKOFF = 15
 
 
 def _dc_reply(bot_token, channel_id, text):
-    notifications.discord_bot_send(bot_token, channel_id, "%s\n%s" % (_tg_panel_label(), text))
+    notifications.discord_bot_send(bot_token, channel_id, "%s\n%s" % (_reply_header(), text))
 
 
 def _parse_dc_command(text):
@@ -89,7 +89,7 @@ def _dc_help_text():
 def _dc_server_action(app, bot_token, channel_id, action, arg, sender=None):
     run_action = getattr(app, "_run_action", None)
     with app.app_context():
-        gs, err = _tg_find_server(arg)
+        gs, err = _find_server(arg)
         if err:
             _dc_reply(bot_token, channel_id, err)
             return
@@ -109,23 +109,23 @@ def _dc_server_action(app, bot_token, channel_id, action, arg, sender=None):
 
 def _handle_discord_command(app, bot_token, channel_id, text, sender=None):
     cmd = _parse_dc_command(text)
-    arg = _tg_command_arg(text)
+    arg = _command_arg(text)
     if cmd == "help":
         _dc_reply(bot_token, channel_id, _dc_help_text())
     elif cmd == "status":
-        _dc_reply(bot_token, channel_id, _tg_status_text(app))
+        _dc_reply(bot_token, channel_id, _status_text(app))
     elif cmd == "servers":
-        _dc_reply(bot_token, channel_id, _tg_servers_text(app))
+        _dc_reply(bot_token, channel_id, _servers_text(app))
     elif cmd == "hosts":
-        _dc_reply(bot_token, channel_id, _tg_hosts_text(app))
+        _dc_reply(bot_token, channel_id, _hosts_text(app))
     elif cmd == "players":
-        _dc_reply(bot_token, channel_id, _tg_players_text(app, arg))
+        _dc_reply(bot_token, channel_id, _players_text(app, arg))
     elif cmd == "console":
-        _dc_reply(bot_token, channel_id, _tg_console_text(app, arg))
+        _dc_reply(bot_token, channel_id, _console_text(app, arg))
     elif cmd == "say":
-        _dc_reply(bot_token, channel_id, _tg_say_text(app, arg))
+        _dc_reply(bot_token, channel_id, _say_text(app, arg))
     elif cmd == "connect":
-        _dc_reply(bot_token, channel_id, _tg_connect_text(app, arg))
+        _dc_reply(bot_token, channel_id, _connect_text(app, arg))
     elif cmd in ("restart", "start", "stop", "backup"):
         _dc_server_action(app, bot_token, channel_id, cmd, arg, sender)
     elif cmd in ("update", "upgrade"):

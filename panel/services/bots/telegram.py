@@ -6,9 +6,9 @@ from panel.core.config import (decrypt_secret, load_config, update_config)
 from panel.ops import system_ops as so
 from panel.services import (notifications)
 from panel.services.bots.commands import (_bot_origin, _panel_ver_label,
-    _tg_command_arg, _tg_connect_text, _tg_console_text, _tg_find_server,
-    _tg_hosts_text, _tg_panel_label, _tg_players_text, _tg_say_text,
-    _tg_servers_text, _tg_status_text)
+    _command_arg, _connect_text, _console_text, _find_server,
+    _hosts_text, _reply_header, _players_text, _say_text,
+    _servers_text, _status_text)
 import logging
 import time
 
@@ -22,7 +22,7 @@ _TG_CMD_BACKOFF = 15
 
 
 def _tg_reply(token, chat_id, text):
-    notifications.send_telegram(token, chat_id, "%s\n%s" % (_tg_panel_label(), text))
+    notifications.send_telegram(token, chat_id, "%s\n%s" % (_reply_header(), text))
 
 
 def _parse_tg_command(text):
@@ -104,7 +104,7 @@ def _tg_help_text():
 def _tg_server_action(app, token, chat_id, action, arg, sender=None):
     run_action = getattr(app, "_run_action", None)
     with app.app_context():
-        gs, err = _tg_find_server(arg)
+        gs, err = _find_server(arg)
         if err:
             _tg_reply(token, chat_id, err)
             return
@@ -124,7 +124,7 @@ def _tg_server_action(app, token, chat_id, action, arg, sender=None):
 
 def _handle_telegram_command(app, token, chat_id, text, sender=None):
     cmd = _parse_tg_command(text)
-    arg = _tg_command_arg(text)
+    arg = _command_arg(text)
     # A BARE /start is Telegram's own "open the chat" command and should answer with help — but
     # `/start <server>` is the documented way to start a server (it is in TG_COMMANDS, so Telegram
     # puts it in the '/' menu, and _tg_help_text lists it). Matching on the word alone swallowed
@@ -133,19 +133,19 @@ def _handle_telegram_command(app, token, chat_id, text, sender=None):
     if cmd == "help" or (cmd == "start" and not arg):
         _tg_reply(token, chat_id, _tg_help_text())
     elif cmd == "status":
-        _tg_reply(token, chat_id, _tg_status_text(app))
+        _tg_reply(token, chat_id, _status_text(app))
     elif cmd == "servers":
-        _tg_reply(token, chat_id, _tg_servers_text(app))
+        _tg_reply(token, chat_id, _servers_text(app))
     elif cmd == "hosts":
-        _tg_reply(token, chat_id, _tg_hosts_text(app))
+        _tg_reply(token, chat_id, _hosts_text(app))
     elif cmd == "players":
-        _tg_reply(token, chat_id, _tg_players_text(app, arg))
+        _tg_reply(token, chat_id, _players_text(app, arg))
     elif cmd == "console":
-        _tg_reply(token, chat_id, _tg_console_text(app, arg))
+        _tg_reply(token, chat_id, _console_text(app, arg))
     elif cmd == "say":
-        _tg_reply(token, chat_id, _tg_say_text(app, arg))
+        _tg_reply(token, chat_id, _say_text(app, arg))
     elif cmd == "connect":
-        _tg_reply(token, chat_id, _tg_connect_text(app, arg))
+        _tg_reply(token, chat_id, _connect_text(app, arg))
     elif cmd in ("restart", "start", "stop", "backup"):
         _tg_server_action(app, token, chat_id, cmd, arg, sender)
     elif cmd in ("update", "upgrade"):

@@ -57,7 +57,7 @@ from panel.ops import system_ops as SO
 from app import (password_problem, _int_or, _valid_ip_or_cidr, _valid_hex_color,
     _clean_console_text)
 from panel.services.bots.telegram import (_parse_tg_command)
-from panel.services.bots.commands import (_tg_command_arg)
+from panel.services.bots.commands import (_command_arg)
 from panel.db.prefs import (_apply_user_server_order)
 from panel.services.monitoring import (_whitelisted)
 from panel.db.prefs import (_apply_user_order)
@@ -3631,8 +3631,8 @@ check("telegram: /update parses to 'update'", _parse_tg_command("/update") == "u
 check("telegram: a bot-mention + args is stripped", _parse_tg_command("/Update@MyBot now") == "update")
 check("telegram: /STATUS is lowercased", _parse_tg_command("/STATUS") == "status")
 check("telegram: a non-command is empty", _parse_tg_command("hello there") == "" and _parse_tg_command("") == "")
-check("telegram: /restart <name> extracts the argument", _tg_command_arg("/restart my server") == "my server")
-check("telegram: a bare command has no argument", _tg_command_arg("/status") == "")
+check("telegram: /restart <name> extracts the argument", _command_arg("/restart my server") == "my server")
+check("telegram: a bare command has no argument", _command_arg("/status") == "")
 
 # telegram_set_commands registers the '/' autocomplete menu via setMyCommands (through _post).
 import json as _json_tg  # noqa: E402

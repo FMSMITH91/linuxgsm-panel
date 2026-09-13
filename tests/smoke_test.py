@@ -2085,12 +2085,12 @@ try:
 
     # ── Telegram command bot: server-name resolution for /start /stop /restart /players ────────────
     with app.app_context():
-        from panel.services.bots.commands import _tg_find_server
-        _g, _e = _tg_find_server("smoke-cs")               # by display name
+        from panel.services.bots.commands import _find_server
+        _g, _e = _find_server("smoke-cs")               # by display name
         check("telegram: resolve a server by name", _g is not None and _e is None)
-        _g2, _e2 = _tg_find_server("csgoserver")           # by short_name
+        _g2, _e2 = _find_server("csgoserver")           # by short_name
         check("telegram: resolve a server by short_name", _g2 is not None)
-        _g3, _e3 = _tg_find_server("no-such-server-xyz")   # unknown
+        _g3, _e3 = _find_server("no-such-server-xyz")   # unknown
         check("telegram: an unknown server name returns a helpful error", _g3 is None and "No server" in (_e3 or ""))
 
     # ── The panel's own CSS/JS are cacheable files, not 64KB re-sent on every navigation ──────────
