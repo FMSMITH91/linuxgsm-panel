@@ -6,7 +6,8 @@ from flask import (jsonify)
 from flask_login import (current_user, login_required)
 from panel.security.auth import (MANAGE_REMOTES, get_remote, permission_required)
 import time
-from app import (_bootstrap_jobs, _bootstrap_lock, _json_body, _refuse_on_panel_host)
+from app import (_json_body, _refuse_on_panel_host)
+from panel.routes._shared import (_bootstrap_jobs, _bootstrap_lock)
 from panel.routes._shared import (_begin_bootstrap)
 
 

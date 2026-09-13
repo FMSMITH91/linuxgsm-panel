@@ -2056,8 +2056,15 @@ try:
     with app.app_context():
         from panel.db.models import GlobalBan
         _am = sys.modules["app"]
-        _saved_fan = _am._fan_out_global_ban
-        _am._fan_out_global_ban = lambda a, sid, unban=False: None
+        # Stub the ROUTE MODULE's binding, not app's. `from app import _fan_out_global_ban`
+        # copies the function object at import time, so rebinding app's name afterwards leaves
+        # the handler still calling the original — the stub assigns cleanly and intercepts
+        # nothing. Here that meant the real fan-out ran, spawned SSH threads against the fixture
+        # hosts, and held two pooled DB connections for the rest of the suite; the player-poll
+        # check three hundred lines later is what noticed, as a peak of 4 against a ceiling of 2.
+        from panel.routes import custom_commands as _cc_mod
+        _saved_fan = _cc_mod._fan_out_global_ban
+        _cc_mod._fan_out_global_ban = lambda a, sid, unban=False: None
         try:
             _gc = client_as(admin_id)
             _r1 = _gc.post("/global-bans/add", data={"steamid": "STEAM_0:1:99", "reason": "cheating"})
@@ -2073,7 +2080,7 @@ try:
             check("global-ban: delete removes it",
                   _del.status_code in (302, 303) and db.session.get(GlobalBan, _gb.id) is None)
         finally:
-            _am._fan_out_global_ban = _saved_fan
+            _cc_mod._fan_out_global_ban = _saved_fan
 
     # ── Telegram command bot: server-name resolution for /start /stop /restart /players ────────────
     with app.app_context():
@@ -2557,6 +2564,10 @@ try:
         _am.so.ensure_panel_fail2ban = lambda log, port, ignore=None: (
             _f2b_calls.append((port, list(ignore) if ignore is not None else None)), (True, "ok"))[1]
         _am.so.restart_panel = lambda *a, **k: (True, "stubbed")
+        # Stays on `app`: api_panel_change_port is one of the handlers still IN app.py, so it
+        # resolves _security_whitelist from app's own scope. host_local and _shared bind the same
+        # name for their own handlers — which is the point: the right stub target is decided by
+        # WHICH handler the test drives, not by the name.
         _am._security_whitelist = lambda: ["203.0.113.8", "10.0.0.0/8"]
         with app.app_context():
             _cp_cfg = _am.load_config()

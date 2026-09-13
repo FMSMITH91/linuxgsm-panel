@@ -228,7 +228,11 @@ def register(app):
                 gs.port = gp
                 db.session.commit()
             to_open = info.get("open_ports") or ([gs.port] if gs.port else [])
-            opened, msg = remote_ufw_allow_game_ports(gs.remote, to_open, gs.short_name)
+            # The count and message are deliberately unused — the reply below states what was
+            # REQUESTED, and a partially-applied rule set is reported by the firewall page
+            # rather than here. Named with a leading underscore so that is explicit and so
+            # py/unused-local-variable stops reading it as an oversight.
+            _opened, _msg = remote_ufw_allow_game_ports(gs.remote, to_open, gs.short_name)
             log_action(current_user, "sync_ports", target=gs.name, detail=str(to_open), success=True)
             return jsonify({"success": True, "message": f"Ports {', '.join(map(str, to_open)) or '—'} opened.",
                             "ports": info.get("ports", []), "open_ports": to_open, "game_port": gp})

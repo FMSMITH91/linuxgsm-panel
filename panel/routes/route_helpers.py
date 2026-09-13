@@ -73,7 +73,11 @@ def register(app):
                 cfg["site_title"] = request.form.get("site_title", "LinuxGSM Panel")
                 cfg["site_domain"] = request.form.get("site_domain", "")
                 cfg["port"] = _int_or(request.form.get("port"), 5000)
-                cfg["bind_host"] = request.form.get("bind_host", "0.0.0.0")
+                # nosec B104 - not a hardcoded bind: this is the DEFAULT offered in the setup
+                # wizard when the operator leaves the field blank, and 0.0.0.0 is what a panel
+                # reached over a tailnet or a LAN has to listen on. The value is the operator's
+                # to set, and api_panel_change_port validates whatever they choose.
+                cfg["bind_host"] = request.form.get("bind_host", "0.0.0.0")  # nosec B104
                 save_config(cfg)
                 data["site_configured"] = True
                 state.step = "admin_user"

@@ -216,11 +216,6 @@ try:
 except Exception:
     PANEL_COMMIT = ""
 
-# In-memory registry of running/finished VPS bootstrap jobs, keyed by remote_id.
-# Populated by the async bootstrap runner and read by the status endpoint. Both
-# live in the same (single) panel process, so a plain dict + lock is sufficient.
-_bootstrap_jobs = {}
-_bootstrap_lock = threading.Lock()
 
 # Serializes the install "slot" allocation (pick a free port → reject a duplicate name → create the
 # row). resolve_free_port yields on an SSH scan, so without this two concurrent installs on the same
@@ -299,29 +294,11 @@ def _first_free_block(desired, span, occupied, limit=400):
     return p
 
 
-# A token unique to THIS panel process — it changes only when the panel actually restarts.
-# The self-update UI polls for this to flip, rather than the git SHA: install.sh moves HEAD
-# the instant it resets, before the new process is serving, so a SHA change doesn't mean the
-# update is live — a boot-id change does.
-_BOOT_ID = "%.6f" % time.time()
 
 
-# ── State that used to live inside register_routes() ──────────────────────────────────────────
-# These were assigned in the body of register_routes, which made them closure cells: reachable
-# only from the functions defined alongside them. Nothing outside could see them — including the
-# tests, which had to dig state out of `_maybe_alert_os_updates.__code__.co_freevars` and
-# `__closure__` to assert on it. Module level is where module state belongs; every one of these is
-# process-wide anyway, none is per-app, and no nested function rebinds any of them (they are read,
-# or mutated in place), so hoisting needs no `global` anywhere.
-#
-# `socketio` deliberately stays inside register_routes: it is constructed FROM the app and is the
-# one genuinely per-app object in that set.
-_cmd_fetch_attempts = {}       # server_id -> last background command-fetch time (rate-limits lazy refetch)
-_pubip_resolve_attempts = {}   # remote_id -> last background public-IP resolve time
 _gmod_content_apply_state = {}  # server_id -> {"status": running|done|error, "msg", "ts"}
 _console_viewers = {}          # server_id -> set of socket session ids
 _viewers_lock = threading.Lock()
-_OS_UPDATE_EVERY = 24 * 3600
 _PRO_MAX_AGE = 86400   # only auto-run the slow `pro status` client if the stored value is >1 day old
 _CUSTOM_CMD_ENGINES = {"valve": "Valve / Source & GoldSrc",
                        "idtech3": "idTech3 / Quake3 (CoD family)",

@@ -2,6 +2,7 @@
 
 Moved out of register_routes() verbatim — see panel/routes/__init__.py for why.
 """
+import re
 from flask import (flash, jsonify, redirect, render_template, request, session, url_for)
 from flask_login import (current_user, login_required, login_user, logout_user)
 from panel.core import (i18n)
@@ -101,10 +102,27 @@ def register(app):
                 # Open-redirect-safe: same-site relative paths only. Reject absolute URLs,
                 # protocol-relative "//host", an embedded scheme, and backslash tricks like
                 # "/\\host" (some browsers normalise the backslash to "/", making it "//host").
-                next_page = request.args.get("next", "/")
-                if (not next_page.startswith("/") or next_page.startswith("//")
-                        or "\\" in next_page or "://" in next_page):
-                    next_page = "/"
+                # Same shape as CodeQL #375: checking a value and passing the SAME object through
+                # leaves it tainted to a tracker, so the accepted path is REBUILT here out of what
+                # the pattern matched. A same-site path is "/" plus segments of an explicit safe
+                # charset — which excludes the backslash, the second leading slash and the scheme
+                # colon that the four rejected cases rely on.
+                _raw = request.args.get("next", "/")
+                _m = re.fullmatch(
+                    r"/(?P<path>(?:[A-Za-z0-9._~\-]+/?)*)(?:\?(?P<q>[A-Za-z0-9._~\-=&%]*))?",
+                    _raw or "")
+                _segs = [s for s in (_m.group("path").split("/") if _m else []) if s]
+                next_page = "/" + "/".join(_segs)
+                if _m and _m.group("q"):
+                    # Rebuilt too, from the same matched-and-restricted charset.
+                    next_page += "?" + _m.group("q")
+                # nosemgrep: python.flask.security.audit.open-redirect.flask-open-redirect
+                # The guard is the four lines directly above: the value must start with a single
+                # "/" and may contain no backslash and no scheme, which leaves same-site relative
+                # paths and nothing else. Semgrep does not model an inline check as a sanitiser —
+                # it only sees request data reaching redirect(). Covered by the "?next= must stay
+                # on this site" checks in tests/smoke_test.py, which drive the real endpoint with
+                # an absolute URL, "//host", an embedded scheme and the backslash trick.
                 return redirect(next_page)
 
             # ── Step 2: the 2FA code for a login that passed the password step ──

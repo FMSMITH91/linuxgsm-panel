@@ -24,8 +24,7 @@ from panel.security.auth import (RESTART_SERVER, START_SERVER, STOP_SERVER, UPDA
 from panel.services import (notifications)
 import threading
 import time
-from app import (_apply_whitelist_everywhere, _autoblock_hosts, _bootstrap_jobs,
-    _bootstrap_lock, _cmd_fetch_attempts, _log, _prune_jobs, _pubip_resolve_attempts,
+from app import (_apply_whitelist_everywhere, _autoblock_hosts, _log, _prune_jobs,
     _run_autoblock_now, _security_whitelist, _security_whitelist_add,
     _security_whitelist_remove)
 
@@ -340,3 +339,32 @@ def _maybe_cache_commands(app, server_id):
         return
     _cmd_fetch_attempts[server_id] = now
     _bg_cache_commands(app, [server_id])
+
+# ── Module state the route modules own ─────────────────────────────────────────────────────────
+# These were defined in app.py and, after the split, read ONLY from here and the route modules.
+# CodeQL reported all six as unused globals: it cannot follow a name across the app <-> routes
+# import edge, and it was right that app.py no longer uses them. Their home is where their
+# readers are.
+# In-memory registry of running/finished VPS bootstrap jobs, keyed by remote_id.
+# Populated by the async bootstrap runner and read by the status endpoint. Both
+# live in the same (single) panel process, so a plain dict + lock is sufficient.
+_bootstrap_jobs = {}
+_bootstrap_lock = threading.Lock()
+# A token unique to THIS panel process — it changes only when the panel actually restarts.
+# The self-update UI polls for this to flip, rather than the git SHA: install.sh moves HEAD
+# the instant it resets, before the new process is serving, so a SHA change doesn't mean the
+# update is live — a boot-id change does.
+_BOOT_ID = "%.6f" % time.time()
+# ── State that used to live inside register_routes() ──────────────────────────────────────────
+# These were assigned in the body of register_routes, which made them closure cells: reachable
+# only from the functions defined alongside them. Nothing outside could see them — including the
+# tests, which had to dig state out of `_maybe_alert_os_updates.__code__.co_freevars` and
+# `__closure__` to assert on it. Module level is where module state belongs; every one of these is
+# process-wide anyway, none is per-app, and no nested function rebinds any of them (they are read,
+# or mutated in place), so hoisting needs no `global` anywhere.
+#
+# `socketio` deliberately stays inside register_routes: it is constructed FROM the app and is the
+# one genuinely per-app object in that set.
+_cmd_fetch_attempts = {}       # server_id -> last background command-fetch time (rate-limits lazy refetch)
+_pubip_resolve_attempts = {}   # remote_id -> last background public-IP resolve time
+_OS_UPDATE_EVERY = 24 * 3600
