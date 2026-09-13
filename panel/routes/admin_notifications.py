@@ -88,6 +88,7 @@ def register(app):
         tg_token = f.get("telegram_token", "").strip()
         dc_webhook = f.get("discord_webhook", "").strip()
         dc_bot_token = f.get("discord_bot_token", "").strip()
+        nt_token = f.get("ntfy_token", "").strip()
         notifications.save_settings(
             telegram={"enabled": bool(f.get("telegram_enabled")),
                       "chat_id": f.get("telegram_chat_id", ""),
@@ -98,6 +99,10 @@ def register(app):
                      "bot_token": (dc_bot_token or None),
                      "channel_id": f.get("discord_channel_id", ""),
                      "accept_commands": bool(f.get("discord_accept_commands"))},
+            ntfy={"enabled": bool(f.get("ntfy_enabled")),
+                  "server": f.get("ntfy_server", ""),
+                  "topic": f.get("ntfy_topic", ""),
+                  "token": (nt_token or None)},
             events={k: bool(f.get("event_" + k)) for k in notifications.EVENTS},
             thresholds={"disk_pct": f.get("threshold_disk"), "load_pct": f.get("threshold_load"),
                         "mem_pct": f.get("threshold_mem"), "load_mins": f.get("threshold_mins")},
@@ -118,6 +123,8 @@ def register(app):
             token=(b.get("token") or "").strip() or None,
             chat_id=(b.get("chat_id") or "").strip() or None,
             webhook=(b.get("webhook") or "").strip() or None,
+            server=(b.get("server") or "").strip() or None,
+            topic=(b.get("topic") or "").strip() or None,
         )
         return jsonify({"success": ok, "message": msg})
 

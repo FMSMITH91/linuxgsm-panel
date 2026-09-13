@@ -4076,6 +4076,86 @@ try:
 finally:
     N._cfg, N.update_config = _sv_cfgfn, _sv_update
 
+# ── ntfy: the one provider whose server the operator picks ────────────────────────────────────
+# Telegram and Discord URLs are rebuilt on a CONSTANT host, so _post's allow-list is the whole
+# story for them. ntfy cannot work that way — a self-hosted instance is the normal case — so the
+# exception is validated at the sink by _NTFY_URL_RE. These assert the shape of that hole: what it
+# lets through, and that it is not wide enough to carry a path, credentials or a scheme change.
+check("ntfy: the public server + a plain topic builds a URL",
+      N._ntfy_url("https://ntfy.sh", "my-topic") == "https://ntfy.sh/my-topic")
+check("ntfy: a trailing slash on the server is tolerated (operators type it)",
+      N._ntfy_url("https://ntfy.sh/", "my-topic") == "https://ntfy.sh/my-topic")
+check("ntfy: a self-hosted host and port is allowed \u2014 that is the point of the exception",
+      N._ntfy_url("https://ntfy.example.com:8443", "alerts") == "https://ntfy.example.com:8443/alerts")
+for _srv, _top, _why in (
+        ("http://ntfy.sh", "t", "plain http"),
+        ("https://ntfy.sh/extra", "t", "a path on the server"),
+        ("https://user:pw@ntfy.sh", "t", "credentials in the URL"),
+        ("https://ntfy.sh?x=1", "t", "a query string"),
+        ("https://ntfy.sh#f", "t", "a fragment"),
+        ("file:///etc/passwd", "t", "a non-http scheme"),
+        ("https://ntfy.sh", "../../etc", "a traversing topic"),
+        ("https://ntfy.sh", "two words", "a topic with a space"),
+        ("https://ntfy.sh", "a/b", "a topic with a slash"),
+        ("https://ntfy.sh", "", "an empty topic")):
+    check("ntfy: refuses %s" % _why, N._ntfy_url(_srv, _top) is None,
+          "%r + %r built a URL" % (_srv, _top))
+
+# The sink must refuse the same things even if a caller hands it a raw URL directly \u2014 the check
+# lives in _post precisely so it does not depend on the caller having been careful.
+_nt_ok, _nt_reason = N._post("https://169.254.169.254/latest/meta-data/", b"x", {},
+                             allow_configured_host=True)
+check("ntfy: the metadata endpoint is still blocked at the sink with the ntfy exception ON",
+      _nt_ok is False and _nt_reason == "blocked", _nt_reason)
+_nt_ok2, _nt_reason2 = N._post("https://ntfy.sh/a/b/c", b"x", {}, allow_configured_host=True)
+check("ntfy: a multi-segment path is blocked at the sink too",
+      _nt_ok2 is False and _nt_reason2 == "blocked", _nt_reason2)
+
+# A token with a newline would split the request headers; send_ntfy must refuse rather than send.
+_sv_post = N._post
+try:
+    _nt_calls = []
+    N._post = lambda *a, **k: (_nt_calls.append(a) or (True, "sent"))
+    _tok_ok, _tok_msg = N.send_ntfy("https://ntfy.sh", "topic", "bad\r\nX-Injected: 1", "hi")
+    check("ntfy: a token containing CRLF is refused, and nothing is sent",
+          _tok_ok is False and not _nt_calls, "%s / calls=%d" % (_tok_msg[:40], len(_nt_calls)))
+    _hdr_ok, _ = N.send_ntfy("https://ntfy.sh", "topic", "GoodToken_123", "hi")
+    check("ntfy: a well-formed token IS sent, as an Authorization header not in the URL",
+          _hdr_ok and _nt_calls and "Bearer GoodToken_123" == _nt_calls[0][2].get("Authorization")
+          and "GoodToken_123" not in _nt_calls[0][0], str(_nt_calls[:1])[:90])
+finally:
+    N._post = _sv_post
+
+# save_settings must not wipe a configured ntfy channel just because a caller omitted the argument.
+_sv_cfg3, _sv_upd3 = N._cfg, N.update_config
+try:
+    _nt_saved = {}
+    N.update_config = lambda fn: fn(_nt_saved)
+    _nt_tok = N.encrypt_secret("TESTONLYntfytoken")
+    N._cfg = lambda: {"ntfy": {"enabled": True, "server": "https://ntfy.example.com",
+                               "topic": "keepme", "token": _nt_tok}}
+    N.save_settings(telegram={}, discord={}, events={})          # an older caller: no ntfy kwarg
+    check("ntfy save: omitting the ntfy argument KEEPS the configured channel",
+          _nt_saved["notifications"]["ntfy"]["topic"] == "keepme"
+          and _nt_saved["notifications"]["ntfy"]["token"] == _nt_tok,
+          str(_nt_saved["notifications"]["ntfy"]))
+    _nt_saved.clear()
+    N.save_settings(telegram={}, discord={}, events={},
+                    ntfy={"enabled": True, "server": "", "topic": "t", "token": None})
+    check("ntfy save: a blank server falls back to the public default",
+          _nt_saved["notifications"]["ntfy"]["server"] == N.NTFY_DEFAULT_SERVER)
+    check("ntfy save: a None token keeps the stored one",
+          _nt_saved["notifications"]["ntfy"]["token"] == _nt_tok)
+    _nt_saved.clear()
+    N.save_settings(telegram={}, discord={}, events={},
+                    ntfy={"enabled": True, "server": "https://n.example", "topic": "t",
+                          "token": "TESTONLYnewntfytoken"})
+    check("ntfy save: a new token is stored ENCRYPTED, not in the clear",
+          "TESTONLYnewntfytoken" not in _nt_saved["notifications"]["ntfy"]["token"]
+          and N.decrypt_secret(_nt_saved["notifications"]["ntfy"]["token"]) == "TESTONLYnewntfytoken")
+finally:
+    N._cfg, N.update_config = _sv_cfg3, _sv_upd3
+
 # ── The Telegram poller ────────────────────────────────────────────────────────────────────────
 check("telegram poll: a malformed token returns None without building a URL",
       N.telegram_get_updates("not-a-token") is None)
@@ -4089,7 +4169,10 @@ try:
                               ("telegram", {"token": "nope"}, "expected format"),
                               ("telegram", {"token": "12345:TESTONLYnotarealtoken00"}, "chat ID"),
                               ("discord", {}, "webhook URL"),
-                              ("discord", {"webhook": "https://evil.example/x"}, "Discord webhook URL")):
+                              ("discord", {"webhook": "https://evil.example/x"}, "Discord webhook URL"),
+                              ("ntfy", {}, "topic"),
+                              ("ntfy", {"topic": "has space"}, "letters, digits"),
+                              ("ntfy", {"topic": "ok", "server": "http://insecure.example"}, "https")):
         _ok, _msg = N.test_send(_kind, **_kw)
         check("test send: %s with %s explains what is missing" % (_kind, list(_kw) or "nothing"),
               _ok is False and _want.lower() in _msg.lower(), _msg[:70])
