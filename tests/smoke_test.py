@@ -11,12 +11,12 @@ data files it created, so it never touches a live install's data.
 
     python tests/smoke_test.py     # exits 0 if all checks pass, 1 otherwise
 """
-from panel.ops import ssh_manager as _smmod   # the stub seam: stubbed by MODULE,
-# because every caller now reaches these through the module rather than binding them.
 import os
 import sys
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+from panel.ops import ssh_manager as _smmod   # the stub seam: stubbed by MODULE,
+# because every caller now reaches these through the module rather than binding them.
 
 from panel.core.config import DATA_DIR, DB_PATH, SECRET_FILE, CRED_KEY_FILE, CONFIG_FILE
 

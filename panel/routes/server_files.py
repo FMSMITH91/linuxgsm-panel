@@ -29,9 +29,9 @@ import time
 from app import (ALERT_PROVIDERS, _ALERT_KEYS, _ALERT_KEY_SET, _CONSOLE_LINES,
     _CONSOLE_LINES_MAX, _GAME_LIST_CACHE, _LGSM_NAME_MAP, _MAX_UPLOAD_BYTES, _apply_mod_restart,
     _attachment_header, _clean_console_text, _console_viewers, _gmod_content_apply_state,
-    _json_body, _log, _log_and_generic, _sync_toggles_from_cron, _viewers_lock, load_game_list)
+    _json_body, _log, _log_and_generic, _socketio_cors, _sync_toggles_from_cron, _viewers_lock,
+    load_game_list)
 from flask_socketio import (SocketIO, emit, join_room, leave_room)
-from app import (_socketio_cors)
 from panel.routes._shared import (_server_action_buttons)
 
 
@@ -723,8 +723,11 @@ def register(app, supervise):
                                                       {"server_id": server_id, "data": out},
                                                       room=f"console_{server_id}")
                                     last_positions[server_id] = current_size
-                            except Exception:
-                                continue   # skip this server; keep polling the rest
+                            except Exception:  # nosec B112 - try/except/continue is the point:
+                                # one unreadable console must not stop the poll for every OTHER
+                                # server. The next tick retries this one; the failure is visible
+                                # as a console that stops updating, not as a dead poller.
+                                continue
             except Exception:
                 app.logger.debug("console poller iteration failed", exc_info=True)
             time.sleep(2)

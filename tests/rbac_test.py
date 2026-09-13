@@ -16,8 +16,6 @@ first authenticated user's identity into every later test client. Each test_clie
 request pushes its own context, so we keep DB work in short, separate app_context
 blocks and never hold one open across HTTP calls.
 """
-from panel.ops import ssh_manager as _smmod   # the stub seam: stubbed by MODULE,
-# because every caller now reaches these through the module rather than binding them.
 import glob
 import os
 import secrets
@@ -26,6 +24,8 @@ import sys
 # Allow running as `python tests/rbac_test.py` from the repo root.
 _ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, _ROOT)
+from panel.ops import ssh_manager as _smmod   # the stub seam: stubbed by MODULE,
+# because every caller now reaches these through the module rather than binding them.
 
 from app import create_app
 from panel.db.models import db, User, Group, RemoteServer, GameServer, SetupState

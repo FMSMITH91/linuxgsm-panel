@@ -16,8 +16,6 @@ controls. Network latency to a game host is not the panel's to optimise.
 
 SAFETY: refuses to run if a real database already exists, and removes what it created.
 """
-from panel.ops import ssh_manager as _smmod   # the stub seam: stubbed by MODULE,
-# because every caller now reaches these through the module rather than binding them.
 import argparse
 import json
 import os
@@ -27,6 +25,8 @@ import sys
 import time
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+from panel.ops import ssh_manager as _smmod   # the stub seam: stubbed by MODULE,
+# because every caller now reaches these through the module rather than binding them.
 
 from panel.core.config import DATA_DIR, DB_PATH, SECRET_FILE, CRED_KEY_FILE, CONFIG_FILE  # noqa: E402
 

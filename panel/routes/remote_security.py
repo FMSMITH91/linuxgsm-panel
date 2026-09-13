@@ -133,12 +133,17 @@ def register(app):
         data = _json_body()
         cfg = load_config()
         cur_port = int(cfg.get("port", 5000))
-        cur_bind = (cfg.get("bind_host") or "0.0.0.0").strip()
+        # nosec B104 - not a bind: the stored value, defaulted for a config written
+        # before bind_host existed. The operator chooses it; this only reads it back.
+        cur_bind = (cfg.get("bind_host") or "0.0.0.0").strip()  # nosec B104
         new_port = _int_or(data.get("port"), cur_port)
         new_bind = str(data.get("bind_host") or cur_bind).strip()
 
         local = RemoteServer.query.filter_by(is_local=True).first()
-        wildcard = {"0.0.0.0", "::"}
+        # nosec B104 - the set of wildcard addresses to RECOGNISE, so the code below
+        # can tell "listening everywhere" from loopback. Detecting a value is not
+        # binding to it.
+        wildcard = {"0.0.0.0", "::"}  # nosec B104
         loopback = {"127.0.0.1", "::1", "localhost"}
 
         # ── Validate the port ──
