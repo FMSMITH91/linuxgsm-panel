@@ -41,6 +41,15 @@ regardless of this file — this changelog is for humans.
   on stdin, because a download over SSH gets parsed twice and that is where quoting bugs hide.
 
 ### Changed
+- **LinuxGSM's data files are no longer committed here.** `lgsm/data/serverlist.csv` (every
+  supported game) and `lgsm/data/ubuntu-24.04.csv` (each game's apt packages) belong to LinuxGSM,
+  and vendoring them froze the panel's game list at whatever upstream shipped the day the copy was
+  taken — it was already **two games behind** by the time this replaced it, and the only way to add
+  a newly-supported game was a panel release. They are fetched from LinuxGSM's repository and
+  cached under `data/` (git-ignored, survives updates, refreshed weekly), so new games appear on
+  their own. A response that is not the file we asked for — a captive portal's login page, a
+  truncated body — is never cached, a stale copy is served when a refresh fails, and if there is no
+  copy at all the install page says so and offers a Retry instead of rendering an empty menu.
 - **Uploads are roughly an order of magnitude faster**, which matters most for a folder of many
   small files. Two things were wrong, and both were latency rather than bandwidth. Writing one file
   took at least **three SSH round trips** (create the directory, send a base64 chunk, decode it) —

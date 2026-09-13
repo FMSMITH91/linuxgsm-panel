@@ -308,3 +308,26 @@ window.afterServerRefresh = function(){
   // "Group by host" switch is on, so they survive another user adding a server.
   if (window.regroupAfterRefresh) window.regroupAfterRefresh();
 };
+
+// Retry fetching LinuxGSM's game list when the install form had none to show. The list is
+// fetched from LinuxGSM rather than committed to this repo, so "no games" means the fetch failed
+// and nothing was cached — usually no outbound access to GitHub from this host.
+function refreshGameList(btn){
+  var orig = btn.innerHTML;
+  btn.disabled = true; btn.innerHTML = 'Retrying\u2026';
+  fetch(MOUNT + '/api/lgsm-data/refresh', {method: 'POST', headers: {'Content-Type': 'application/json'}})
+    .then(function(r){ return r.json(); })
+    .then(function(d){
+      if (d && d.success && d.games) {
+        if (window.toast) toast('Loaded ' + d.games + ' games from LinuxGSM — reloading…', 'success');
+        setTimeout(function(){ location.reload(); }, 900);
+        return;
+      }
+      if (window.toast) toast((d && d.message) || 'Still could not reach LinuxGSM', 'danger');
+      btn.disabled = false; btn.innerHTML = orig;   // nosemgrep
+    })
+    .catch(function(){
+      if (window.toast) toast('Still could not reach LinuxGSM', 'danger');
+      btn.disabled = false; btn.innerHTML = orig;   // nosemgrep
+    });
+}

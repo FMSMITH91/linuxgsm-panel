@@ -11,7 +11,6 @@ import terminal
 import tempfile
 import threading
 import time
-from pathlib import Path
 
 import paramiko
 
@@ -3118,21 +3117,14 @@ _DEPS_CSV_CACHE = {"data": None}
 
 
 def _load_deps_csv():
-    """Parse LinuxGSM's bundled ubuntu-24.04.csv into {key: [packages]}.
-    Keys are 'all', 'steamcmd', and each game shortname."""
+    """LinuxGSM's ubuntu-24.04.csv as {key: [packages]}; keys are 'all', 'steamcmd', and each game
+    shortname. Fetched and cached rather than committed here — see lgsm_data."""
     if _DEPS_CSV_CACHE["data"] is not None:
         return _DEPS_CSV_CACHE["data"]
-    data = {}
-    path = Path(__file__).parent / "lgsm" / "data" / "ubuntu-24.04.csv"
-    try:
-        with open(path) as f:
-            for line in f:
-                parts = [p.strip() for p in line.strip().split(",") if p.strip()]
-                if parts:
-                    data[parts[0]] = parts[1:]
-    except Exception:
-        data = {}
-    _DEPS_CSV_CACHE["data"] = data
+    import lgsm_data
+    data = lgsm_data.deps()
+    if data:                       # never memoise a failed fetch — a retry must be able to win
+        _DEPS_CSV_CACHE["data"] = data
     return data
 
 

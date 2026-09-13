@@ -2885,7 +2885,105 @@ try:
 finally:
     sm.run_command = _orig_disc_rc
 
-# ── lgsm_name_to_game_type: gameservername -> panel game_type, from serverlist.csv ──
+# ── LinuxGSM's data files: fetched and cached, not vendored ───────────────────────────────────
+# serverlist.csv and ubuntu-24.04.csv are LinuxGSM's. They used to be committed here, which froze
+# the panel's game list at whatever upstream shipped that day — it was two games behind by the time
+# this replaced it. Everything below points the cache at a TEMP DIRECTORY and seeds it, so this
+# suite never touches the network and the assertions are about the panel's parsing rather than
+# about whatever upstream happens to contain today.
+import lgsm_data as _lgd
+import tempfile as _lgd_tempfile
+_lgd_dir = _lgd_tempfile.mkdtemp()
+_lgd._CACHE_DIR = _lgd.Path(_lgd_dir)
+_lgd._mem.clear()
+(_lgd._CACHE_DIR).mkdir(parents=True, exist_ok=True)
+_SERVERLIST_FIXTURE = ("shortname,gameservername,gamename,os\n"
+                       "gmod,gmodserver,Garry's Mod,ubuntu-24.04\n"
+                       "rust,rustserver,Rust,ubuntu-24.04\n"
+                       "cod,codserver,Call of Duty,ubuntu-24.04\n")
+_DEPS_FIXTURE = "all,bc,binutils,curl\nsteamcmd,lib32gcc-s1,steamcmd\ngmod,lib32tinfo6\n"
+(_lgd._CACHE_DIR / _lgd.SERVERLIST).write_text(_SERVERLIST_FIXTURE, encoding="utf-8")
+(_lgd._CACHE_DIR / _lgd.DEPS).write_text(_DEPS_FIXTURE, encoding="utf-8")
+# Reading must NOT reach the network when a fresh cache is on disk.
+_lgd_fetches = []
+_lgd_real_fetch = _lgd._fetch          # the tests below put this back to exercise it for real
+_lgd._fetch = lambda name: (_lgd_fetches.append(name), None)[1]
+_lgd._mem.clear()
+eq("lgsm data: a fresh cache is read without fetching", len(_lgd.serverlist()), 3)
+eq("lgsm data: ...and no network call was made", _lgd_fetches, [])
+eq("lgsm data: the deps csv parses into {key: [packages]}", _lgd.deps().get("steamcmd"),
+   ["lib32gcc-s1", "steamcmd"])
+
+# A fetch that "succeeds" but returns something else — a captive portal, an error page, a truncated
+# body — must never be cached. Replacing the game list with an HTML login page would leave the
+# panel with no games and no clue why.
+_html = "<!doctype html><html><head><title>Sign in</title></head><body>" + ("x" * 400) + "</body></html>"
+check("lgsm data: an HTML page is not accepted as the serverlist",
+      _lgd._looks_like(_lgd.SERVERLIST, _html) is False)
+check("lgsm data: a truncated body is not accepted", _lgd._looks_like(_lgd.SERVERLIST, "shortname,") is False)
+check("lgsm data: the real shape IS accepted",
+      _lgd._looks_like(_lgd.SERVERLIST, "shortname,gameservername,gamename,os\n" + ("a,b,c,d\n" * 30)) is True)
+# 200 bytes minimum, so the fixture has to be a realistic size — a few short lines would be
+# rejected by the length check before the shape check ever ran.
+check("lgsm data: the deps file has its own shape check",
+      _lgd._looks_like(_lgd.DEPS, "all,bc,binutils,curl,file,tar\n" + ("gameserver,libfoo,libbar\n" * 30)) is True
+      and _lgd._looks_like(_lgd.DEPS, _html) is False)
+
+# The shape check has to be WIRED IN, not merely correct. Testing _looks_like on its own passed
+# happily with the call removed from _fetch, which would have cached a captive portal's login page
+# as the game list.
+_lgd._mem.clear()
+_lgd._fetch = _lgd_real_fetch          # the stub above would make both checks below meaningless
+_orig_urlopen_lgd = _lgd.urllib.request.urlopen
+
+
+class _FakeResp:
+    def __init__(self, body):
+        self._b = body.encode()
+        self.status = 200
+    def read(self, _n=None):
+        return self._b
+    def __enter__(self):
+        return self
+    def __exit__(self, *a):
+        return False
+
+
+_lgd.urllib.request.urlopen = lambda req, timeout=None: _FakeResp(_html)
+check("lgsm data: _fetch REJECTS a body that is not the file it asked for",
+      _lgd._fetch(_lgd.SERVERLIST) is None)
+_good_csv = "shortname,gameservername,gamename,os\n" + ("a%d,a%dserver,Game %d,ubuntu-24.04\n" % (1, 1, 1)) * 40
+_lgd.urllib.request.urlopen = lambda req, timeout=None: _FakeResp(_good_csv)
+check("lgsm data: ...and accepts a real one", _lgd._fetch(_lgd.SERVERLIST) is not None)
+_lgd.urllib.request.urlopen = _orig_urlopen_lgd
+_lgd._fetch = lambda name: (_lgd_fetches.append(name), None)[1]   # back to "the network is down"
+
+# A failed fetch must stay retryable. Memoising [] would make one bad moment permanent for the
+# life of the process, so the Retry button and the background warm could never recover.
+_app._GAME_LIST_CACHE["games"] = None
+_app._LGSM_NAME_MAP["data"] = None
+_lgd._mem.clear()
+_lgd_saved = _lgd.serverlist
+_lgd.serverlist = lambda *a, **k: []
+eq("lgsm data: a failed fetch yields an empty game list", _app.load_game_list(), [])
+check("lgsm data: ...and is NOT memoised, so a retry can still succeed",
+      _app._GAME_LIST_CACHE["games"] is None)
+_lgd.serverlist = _lgd_saved
+_lgd._mem.clear()
+_app._GAME_LIST_CACHE["games"] = None
+check("lgsm data: ...and the retry does succeed once the data is back",
+      len(_app.load_game_list()) == 3, len(_app.load_game_list()))
+
+# A stale cache with no network beats no list at all.
+import os as _os_lgd
+_os_lgd.utime(_lgd._CACHE_DIR / _lgd.SERVERLIST, (0, 0))   # ancient
+_lgd._mem.clear(); _lgd_fetches.clear()
+eq("lgsm data: a stale cache is still served when the refetch fails", len(_lgd.serverlist()), 3)
+check("lgsm data: ...and it did try to refresh first", _lgd_fetches == [_lgd.SERVERLIST], _lgd_fetches)
+
+# ── lgsm_name_to_game_type: gameservername -> panel game_type, from LinuxGSM's serverlist ──
+_app._LGSM_NAME_MAP["data"] = None
+_app._GAME_LIST_CACHE["games"] = None
 check("lgsm-name map: gmodserver -> gmod", _app.lgsm_name_to_game_type("gmodserver") == "gmod")
 check("lgsm-name map: rustserver -> rust", _app.lgsm_name_to_game_type("rustserver") == "rust")
 check("lgsm-name map: an unknown script -> None", _app.lgsm_name_to_game_type("notagameserver") is None)
@@ -5741,7 +5839,7 @@ check("db_maintenance: repair runs from an explicit path, no config import",
 # this RATCHETS — the helper count inside may fall and never rise, exactly like the escalation
 # census. tests/url_map_baseline.json is what proves a move changed no route.
 import ast as _ast_rr
-_MOVED_VIEWS = 0   # bump as views relocate into routes/*.py; views + moved must stay 207
+_MOVED_VIEWS = 0   # bump as views relocate into routes/*.py; views + moved must stay 208
 _app_ast = _ast_rr.parse(open(os.path.join(_root, "app.py"), encoding="utf-8").read())
 _rr = next(n for n in _ast_rr.walk(_app_ast)
            if isinstance(n, _ast_rr.FunctionDef) and n.name == "register_routes")
@@ -5755,8 +5853,8 @@ check("register_routes: helper closures inside it <= %d (currently %d)"
       % (_HELPER_CEILING, _rr_helpers),
       _rr_helpers <= _HELPER_CEILING,
       "it went UP — a new helper belongs at module level, not nested in the route table")
-check("register_routes: every one of the 207 views is still accounted for",
-      len(_rr_views) + _MOVED_VIEWS == 207,
+check("register_routes: every one of the 208 views is still accounted for",
+      len(_rr_views) + _MOVED_VIEWS == 208,
       "views inside=%d, moved out=%d" % (len(_rr_views), _MOVED_VIEWS))
 # These two use current_app, which only equals the closed-over `app` inside a request — every
 # caller is a view, so that holds. If they drift back inside, the reasoning stops being checked.

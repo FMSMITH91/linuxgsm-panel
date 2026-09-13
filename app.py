@@ -43,7 +43,6 @@ import gzip as _gzip
 from types import SimpleNamespace
 from datetime import timedelta
 from clock import utcnow
-from pathlib import Path
 from urllib.parse import quote
 
 # eventlet announces its own deprecation on import — upstream's words, not a nit: "Eventlet is
@@ -166,6 +165,7 @@ from ssh_manager import (
 import tailscale_integration as ts
 import system_ops as so
 import backup as bk
+import lgsm_data
 
 _log = logging.getLogger("panel.app")
 
@@ -1375,24 +1375,26 @@ _GAME_LIST_CACHE = {"games": None}
 
 
 def load_game_list():
-    """All LinuxGSM-supported games, from the bundled lgsm/data/serverlist.csv.
-    Returns a sorted list of {"shortname", "name"}."""
+    """All LinuxGSM-supported games, from LinuxGSM's own serverlist.csv.
+
+    That file is fetched and cached rather than committed here — see lgsm_data — so a game
+    LinuxGSM adds shows up without waiting for a panel release. An empty list means the data
+    could not be had; `lgsm_data.status()` says why, and the install page surfaces it rather than
+    rendering an empty menu.
+    """
     if _GAME_LIST_CACHE["games"] is not None:
         return _GAME_LIST_CACHE["games"]
-    import csv
     games = []
-    path = Path(__file__).parent / "lgsm" / "data" / "serverlist.csv"
-    try:
-        with open(path, newline="") as f:
-            for row in csv.DictReader(f):
-                sn = (row.get("shortname") or "").strip()
-                name = (row.get("gamename") or "").strip()
-                if sn and name:
-                    games.append({"shortname": sn, "name": name})
-        games.sort(key=lambda g: g["name"].lower())
-    except Exception:
-        games = []
-    _GAME_LIST_CACHE["games"] = games
+    for row in lgsm_data.serverlist():
+        sn = (row.get("shortname") or "").strip()
+        name = (row.get("gamename") or "").strip()
+        if sn and name:
+            games.append({"shortname": sn, "name": name})
+    games.sort(key=lambda g: g["name"].lower())
+    # Only memoise a real answer: caching [] would make one failed fetch permanent for the life
+    # of the process, so a later retry (or the background warm) could never take effect.
+    if games:
+        _GAME_LIST_CACHE["games"] = games
     return games
 
 
@@ -1401,22 +1403,18 @@ _LGSM_NAME_MAP = {"data": None}
 
 def lgsm_name_to_game_type(lgsm_name):
     """Map a LinuxGSM 'gameservername' (e.g. 'gmodserver') to the panel's game_type / shortname
-    (e.g. 'gmod'), from the bundled serverlist. Used when importing servers discovered on a host.
+    (e.g. 'gmod'), from LinuxGSM's serverlist. Used when importing servers discovered on a host.
     Returns None for a game the panel doesn't know."""
     if _LGSM_NAME_MAP["data"] is None:
-        import csv
         m = {}
-        path = Path(__file__).parent / "lgsm" / "data" / "serverlist.csv"
-        try:
-            with open(path, newline="") as f:
-                for row in csv.DictReader(f):
-                    gsn = (row.get("gameservername") or "").strip()
-                    sn = (row.get("shortname") or "").strip()
-                    if gsn and sn:
-                        m[gsn] = sn
-        except Exception:
-            m = {}
-        _LGSM_NAME_MAP["data"] = m
+        for row in lgsm_data.serverlist():
+            gsn = (row.get("gameservername") or "").strip()
+            sn = (row.get("shortname") or "").strip()
+            if gsn and sn:
+                m[gsn] = sn
+        if m:                      # same reasoning as load_game_list: never memoise a failure
+            _LGSM_NAME_MAP["data"] = m
+        return m.get(lgsm_name)
     return _LGSM_NAME_MAP["data"].get(lgsm_name)
 
 # ─── App Factory ──────────────────────────────────────────────
@@ -8125,6 +8123,29 @@ def register_routes(app):
             resp.headers["Content-Length"] = str(info["size"])
         resp.headers["Content-Disposition"] = _attachment_header(name)
         return resp
+
+    @app.route("/api/lgsm-data/refresh", methods=["POST"])
+    @login_required
+    @superadmin_required
+    def api_lgsm_data_refresh():
+        """Re-fetch LinuxGSM's serverlist/deps now.
+
+        The install form offers this when it has no games to show, which means the fetch failed and
+        nothing was cached — almost always a host with no outbound access to GitHub. Superadmin
+        because it makes an outbound request and replaces install-wide data.
+        """
+        try:
+            ok = lgsm_data.refresh()
+        except Exception:
+            return jsonify({"success": False, "message": _log_and_generic("lgsm data refresh failed")}), 200
+        # Drop the module-level memos too, or the page would re-render the old (empty) answer.
+        _GAME_LIST_CACHE["games"] = None
+        _LGSM_NAME_MAP["data"] = None
+        games = len(load_game_list())
+        log_action(current_user, "lgsm_data_refresh", success=ok, detail="%d games" % games)
+        return jsonify({"success": bool(ok and games), "games": games,
+                        "message": ("Loaded %d games." % games) if games
+                                   else "Could not reach LinuxGSM — check this host's outbound access."})
 
     @app.route("/api/server/<int:server_id>/cron", methods=["GET", "POST"])
     @login_required

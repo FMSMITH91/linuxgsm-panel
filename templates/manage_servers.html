@@ -46,7 +46,18 @@
           <option value="{{ g.shortname }}">{{ g.name }}</option>
           {% endfor %}
         </select>
+        {% if games %}
         <div class="form-text">All {{ games|length }} LinuxGSM games — everything is downloaded automatically.</div>
+        {% else %}
+        {# The list comes from LinuxGSM at runtime (see lgsm_data). If it could not be fetched and
+           nothing is cached, say so — an empty menu with no explanation is the worst outcome. #}
+        <div class="form-text text-warning">
+          <i class="bi bi-exclamation-triangle"></i>
+          Couldn't load LinuxGSM's game list, and there's no cached copy yet.
+          <button type="button" class="btn btn-link btn-sm p-0 align-baseline" data-action="refreshGameList" data-args='["@self"]'>Retry</button>
+          <span class="d-block text-secondary" style="font-size:.72rem;">The panel fetches it from LinuxGSM's repository; this host may have no outbound access to GitHub.</span>
+        </div>
+        {% endif %}
       </div>
       <div class="col-md-3">
         <label class="form-label" for="server-name-input">Server Name <span class="text-secondary">(optional)</span></label>
