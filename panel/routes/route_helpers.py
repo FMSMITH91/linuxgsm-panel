@@ -27,9 +27,14 @@ def register(app):
         if request.path.startswith("/static/") or request.path == "/setup" \
                 or request.path.startswith("/setup/") or request.path.startswith("/api/setup/") \
                 or request.path == "/robots.txt":
-            return None   # explicit: this function's other exit returns a redirect
+            return None          # exempt path: let the request through untouched
         if not is_setup_complete():
             return redirect("/setup")
+        # Setup IS complete and the path is not exempt: fall through to the request. Spelled out
+        # rather than dropping off the end, because a before_request handler returning None means
+        # "carry on" while returning a response means "stop here" — the difference is the whole
+        # contract, and an implicit None leaves a reader checking whether it was intended.
+        return None
 
     @app.route("/setup", methods=["GET", "POST"])
     def setup_wizard():
