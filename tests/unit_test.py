@@ -4076,6 +4076,124 @@ try:
 finally:
     N._cfg, N.update_config = _sv_cfgfn, _sv_update
 
+# ── The Telegram command-watch loop ───────────────────────────────────────────────────────────
+# Two properties, both load-bearing and neither previously executed by a test (telegram.py was at
+# 31%). The loop is `while True`, so it is driven here by a scripted telegram_get_updates that
+# raises a non-Exception sentinel when its script runs out — non-Exception on purpose, because the
+# loop's own `except Exception` would otherwise swallow the thing ending it.
+from panel.services.bots import telegram as _TG                                   # noqa: E402
+
+
+class _StopWatch(BaseException):        # NOT an Exception: the watch loop catches those
+    pass
+
+
+class _FakeTime:
+    """Records sleeps, and is ALSO the loop-breaker of last resort. The scripted get_updates can
+    only end a run that reaches a poll — and the accept_commands-off path deliberately never polls,
+    it just clears the menu and sleeps. Without a bound here that case runs forever (it did: the
+    first version of this hung the suite until it was killed)."""
+    def __init__(self, max_sleeps=4):
+        self.slept, self._max = [], max_sleeps
+    def sleep(self, n):
+        self.slept.append(n)
+        if len(self.slept) >= self._max:
+            raise _StopWatch()
+
+
+def _run_watch(scripted, cfg=None):
+    """Drive _telegram_command_watch over a scripted list of telegram_get_updates return values.
+    Returns (handled_commands, get_updates_calls, fake_time, set_commands_clear_flags).
+
+    set_commands is stubbed HERE rather than by the caller: this helper installs its own, so an
+    outer stub would be silently overwritten and record nothing. (It was, and did.)"""
+    handled, calls, script, setcmds = [], [], list(scripted), []
+    saved = (_TG.notifications._cfg, _TG.notifications.telegram_get_updates,
+             _TG.notifications.telegram_set_commands, _TG.decrypt_secret,
+             _TG._handle_telegram_command, _TG.time)
+    ft = _FakeTime()
+    try:
+        _default_cfg = {"telegram": {"enabled": True, "accept_commands": True,
+                                     "token": "tok", "chat_id": "555"}}
+        # A list means "one config per tick, last one repeats" — needed to model the operator
+        # turning commands OFF while the poller is already running, which is the only path that
+        # reaches the menu-clear branch (it is guarded on having registered the menu first).
+        _cfgs = list(cfg) if isinstance(cfg, list) else [cfg if cfg is not None else _default_cfg]
+
+        def _cfg_fn():
+            return _cfgs[0] if len(_cfgs) == 1 else _cfgs.pop(0)
+        _TG.notifications._cfg = _cfg_fn
+        _TG.decrypt_secret = lambda v: v
+        _TG.notifications.telegram_set_commands = \
+            lambda tok, clear=False: (setcmds.append(clear), True)[1]
+        _TG._handle_telegram_command = lambda app, tok, chat, text, sender=None: handled.append(text)
+        _TG.time = ft
+
+        def _get(token, offset=None, timeout=25):
+            calls.append({"offset": offset, "timeout": timeout})
+            if not script:
+                raise _StopWatch()
+            return script.pop(0)
+        _TG.notifications.telegram_get_updates = _get
+        try:
+            _TG._telegram_command_watch(None)
+        except _StopWatch:
+            pass
+    finally:
+        (_TG.notifications._cfg, _TG.notifications.telegram_get_updates,
+         _TG.notifications.telegram_set_commands, _TG.decrypt_secret,
+         _TG._handle_telegram_command, _TG.time) = saved
+    return handled, calls, ft, setcmds
+
+
+# 1. THE BACKLOG IS NEVER REPLAYED. A /update sent to the bot restarts the panel; if the poller
+#    came back up and re-read that same update, it would update and restart again, forever. The
+#    first poll is a priming read (offset=-1, timeout=0) whose results are DISCARDED.
+_backlog = [{"update_id": 41, "message": {"text": "/update", "chat": {"id": "555"}}}]
+_handled, _calls, _, _sc = _run_watch([_backlog])
+check("telegram watch: the first poll primes with offset=-1 and timeout=0",
+      _calls and _calls[0]["offset"] == -1 and _calls[0]["timeout"] == 0, str(_calls[:1]))
+check("telegram watch: a backlog command is NOT replayed on (re)start",
+      _handled == [], str(_handled))
+check("telegram watch: and polling resumes PAST the backlog, not at it",
+      len(_calls) > 1 and _calls[1]["offset"] == 42, str(_calls[:2]))
+
+# 2. ONLY THE AUTHORISED CHAT DRIVES THE BOT. /stop and /restart are in the command set, so this
+#    check is the whole access boundary for anyone who finds the bot.
+_live = [{"update_id": 50, "message": {"text": "/stop prod", "chat": {"id": "999"}}},
+         {"update_id": 51, "message": {"text": "/status", "chat": {"id": "555"}}},
+         {"update_id": 52, "message": {"text": "not a command", "chat": {"id": "555"}}}]
+_handled, _calls, _, _sc = _run_watch([[], _live])
+check("telegram watch: a command from an UNAUTHORISED chat is ignored",
+      "/stop prod" not in _handled, str(_handled))
+check("telegram watch: a command from the authorised chat is handled",
+      _handled == ["/status"], str(_handled))
+check("telegram watch: plain text in the authorised chat is not treated as a command",
+      "not a command" not in _handled, str(_handled))
+
+# 3. A poll ERROR (None — a 409 from a second poller, or a network failure) backs off instead of
+#    spinning the loop at full speed.
+_handled, _calls, _ft, _sc = _run_watch([[], None])
+check("telegram watch: a failed poll backs off rather than busy-looping",
+      _ft.slept and _ft.slept[-1] == _TG._TG_CMD_BACKOFF, str(_ft.slept))
+
+# 4. Commands switched OFF. Two separate behaviours, and they differ by whether the '/' menu was
+#    ever registered — on a cold start there is nothing to clear, so only the running-then-disabled
+#    case reaches that branch. Asserting the cold-start case alone would have looked like coverage
+#    of the clear and tested the opposite.
+_off = {"telegram": {"enabled": True, "accept_commands": False, "token": "tok", "chat_id": "555"}}
+_handled, _calls, _ft, _sc = _run_watch([], cfg=_off)
+check("telegram watch: with accept_commands off, no update poll happens at all",
+      _calls == [], str(_calls))
+
+_on = {"telegram": {"enabled": True, "accept_commands": True, "token": "tok", "chat_id": "555"}}
+# Tick 1 registers the menu and primes; from tick 2 commands are off.
+_handled, _calls, _ft, _sc = _run_watch([[]], cfg=[_on, _off])
+check("telegram watch: the '/' menu is registered while commands are on",
+      False in _sc, str(_sc))
+check("telegram watch: turning commands off CLEARS the '/' menu, not leaving it advertising them",
+      True in _sc, str(_sc))
+
 # ── Every test suite must actually be WIRED IN ────────────────────────────────────────────────
 # Both places that run the suites keep a hand-written list: tools/run-tests.sh (which CI runs) and
 # the `for suite in ...` loop in the coverage job. A suite added to tests/ and forgotten in either
