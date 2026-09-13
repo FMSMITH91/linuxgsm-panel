@@ -4076,6 +4076,30 @@ try:
 finally:
     N._cfg, N.update_config = _sv_cfgfn, _sv_update
 
+# ── Every test suite must actually be WIRED IN ────────────────────────────────────────────────
+# Both places that run the suites keep a hand-written list: tools/run-tests.sh (which CI runs) and
+# the `for suite in ...` loop in the coverage job. A suite added to tests/ and forgotten in either
+# one is the quietest possible failure — the file exists, it passes when you run it by hand, and
+# nothing ever runs it again. That is the same shape as manage_test silently skipping in CI for as
+# long as it had been in the script. These two checks are cheap and make the lists self-policing.
+import pathlib as _tp                                                              # noqa: E402
+_repo = _tp.Path(__file__).resolve().parent.parent
+_suites = sorted(p.name for p in (_repo / "tests").glob("*_test.py"))
+_runner = (_repo / "tools" / "run-tests.sh").read_text(encoding="utf-8")
+_missing_runner = [s for s in _suites if s not in _runner]
+check("test wiring: every tests/*_test.py is referenced by tools/run-tests.sh",
+      not _missing_runner, "not run by CI: %s" % _missing_runner)
+
+_ci = (_repo / ".github" / "workflows" / "ci.yml").read_text(encoding="utf-8")
+_cov_line = [ln for ln in _ci.split("\n") if "for suite in" in ln]
+_cov_names = set(_cov_line[0].split("for suite in", 1)[1].split(";")[0].split()) if _cov_line else set()
+# url_map is deliberately out of the coverage loop (it only reads the URL map), so compare against
+# the suites the runner treats as DB-owning plus the pure-logic ones — i.e. everything but url_map.
+_want_cov = {s[:-len("_test.py")] for s in _suites} - {"url_map"}
+_missing_cov = sorted(_want_cov - _cov_names)
+check("test wiring: every suite is measured by the coverage job",
+      not _missing_cov, "unmeasured: %s" % _missing_cov)
+
 # ── Per-server LinuxGSM alert providers ───────────────────────────────────────────────────────
 # These key names are LinuxGSM's, not the panel's: the values are written straight into the game
 # server's own config file, where LinuxGSM reads them by exact name. A key we invented would be
