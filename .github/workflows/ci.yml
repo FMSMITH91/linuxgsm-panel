@@ -80,12 +80,15 @@ jobs:
     name: coverage
     runs-on: ubuntu-latest
     timeout-minutes: 20
-    # Gated on the suites actually passing. This job is a FOURTH full execution of all five of
-    # them (under tracing, so the slowest of the four), and measuring the coverage of a suite that
-    # just failed tells you nothing — the number is meaningless and the minutes are spent anyway.
-    # `needs` costs nothing on a green run, because this was never on the critical path: it
-    # publishes a report, it does not gate the merge.
-    needs: checks
+    # DELIBERATELY NOT `needs: checks`. Gating this on the matrix was a mistake worth recording:
+    # it saved runner-minutes on the rare red run by adding this job's full duration to the WALL
+    # CLOCK of every green one, because `needs` serialises. Measured: the matrix finished at
+    # 18:02:15 and this started at 18:02:17, where it used to overlap.
+    #
+    # This repository is PUBLIC, so Actions minutes are free. There is nothing to save on the red
+    # path, and the only cost that is actually paid is how long a green PR takes to report — which
+    # `needs` roughly doubled. Running in parallel is strictly better here. Re-add `needs` only if
+    # this repo ever goes private and minutes start being billed.
     env:
       CODACY_PROJECT_TOKEN: ${{ secrets.CODACY_PROJECT_TOKEN }}
     # Informational, and deliberately a SEPARATE job: it re-runs the suites under tracing, which is
