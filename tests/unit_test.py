@@ -686,6 +686,35 @@ try:
        sm.stat_upload_targets(_FakeSrv(), "u", "", ["server.cfg"]), [])
     sm.run_command = lambda *a, **k: (_FIND_OUT, "", 0)
 
+    # ── upload cost is ROUND TRIPS, not bytes ─────────────────────────────────────────────────
+    # Every run_command is a separate SSH exec, and writing one file used to take at least three:
+    # mkdir, a base64 chunk, then the decode. Uploading a folder of several hundred small Lua files
+    # is then minutes of pure latency doing almost no work — reported as "it only uploads 1 at a
+    # time seems kinda slow". A file small enough for one command now takes exactly one, which is
+    # essentially every config, script and Lua file a game server holds.
+    _wcalls = []
+    sm.run_command = lambda s, c, **k: (_wcalls.append(c), ("", "", 0))[1]
+    sm._write_file_as_user(_FakeSrv(), "csgoserver", "/home/csgoserver/addons/gm/init.lua", b"L" * 2048)
+    eq("upload: a small file costs ONE ssh round trip (was three)", len(_wcalls), 1)
+    _one = _wcalls[0] if _wcalls else ""
+    check("upload: ...and that single command still carries the home-dir guard",
+          "realpath -m" in _one and "__OUTSIDE_HOME__" in _one, _one[:110])
+    check("upload: ...still creates the parent directory", "mkdir -p" in _one, _one[:110])
+    # The old form decoded straight over the destination, so a failure part-way left the real file
+    # truncated. A rename inside the same directory is atomic: old file, or whole new file.
+    check("upload: ...and lands the file with an atomic rename, never a partial overwrite",
+          "mv -f" in _one and "base64 -d > '/home/csgoserver/addons/gm/init.lua'" not in _one,
+          _one[-90:])
+    check("upload: the single command stays well inside the 128 KB limit on one argv entry",
+          len(_one) < 120000, "%d bytes" % len(_one))
+    # A file too big for one command still streams in chunks rather than being refused.
+    _wcalls.clear()
+    _ok_big, _ = sm._write_file_as_user(_FakeSrv(), "csgoserver", "/home/csgoserver/big.vpk", b"B" * (200 * 1024))
+    check("upload: a large file still chunks (and is not refused)",
+          _ok_big is True and len(_wcalls) > 1, "%r %d calls" % (_ok_big, len(_wcalls)))
+    check("upload: the large path guards its FIRST command, before any byte is written",
+          "realpath -m" in _wcalls[0], _wcalls[0][:110])
+
     # The server-side half: overwrite is opt-in. The UI asks first, but check and write are two
     # round trips, so a file that appears in between must be refused rather than clobbered.
     _calls = []
