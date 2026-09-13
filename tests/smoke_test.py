@@ -1064,6 +1064,7 @@ try:
     # ever comes back. run_command is stubbed so the port scan does no real SSH.
     from sqlalchemy import event as _sa_event
     _appmod = sys.modules["app"]
+    from panel.routes import server_detail as _sd_mod
     from panel.ops import ssh_manager as _sm_mod   # the port-scan cache lives here now
     with app.app_context():
         for _r in range(5):
@@ -2182,7 +2183,7 @@ try:
           "%d %r" % (_okr.status_code, _okr.headers.get("Location")))
     _okc.get("/logout")
     with app.app_context():
-        from app import _LOGIN_FAILS as _LF
+        from app import (_LOGIN_FAILS as _LF)
         _LF.clear()   # those logins were all successful, but keep the throttle clean for later tests
 
     # ── Files & Config carries the same control bar as the detail page ────────────────────────────
@@ -2261,7 +2262,7 @@ try:
         _g = db.session.get(GameServer, gs_id)
         _g.restart_pending = _g.stop_pending = False
         db.session.commit()
-    _am._cron_restart_pending.pop(gs_id, None)
+    _ps._cron_restart_pending.pop(gs_id, None)
     def _banner_tag(html):
         # By id — the first alert-warning on the page may be an unrelated flash message.
         m = _re_ab.search(r'<div[^>]*id="restart-pending-banner"[^>]*>', html)
@@ -2269,7 +2270,7 @@ try:
 
     check("pending banner: hidden when neither the panel nor the box has one queued",
           "d-none" in _banner_tag(c.get("/server/%d" % gs_id).get_data(as_text=True)))
-    _am._cron_restart_pending[gs_id] = True
+    _ps._cron_restart_pending[gs_id] = True
     try:
         _bh = c.get("/server/%d" % gs_id).get_data(as_text=True)
         _banner = _banner_tag(_bh)
@@ -2281,7 +2282,7 @@ try:
             check("pending banner: the column is left alone, so the panel's own queue is untouched",
                   db.session.get(GameServer, gs_id).restart_pending is False)
     finally:
-        _am._cron_restart_pending.pop(gs_id, None)
+        _ps._cron_restart_pending.pop(gs_id, None)
 
     # ── The users page renders ONE edit modal, not one per user ───────────────────────────────────
     # It used to emit a full 2KB modal per row — 670KB of HTML at 100 accounts, all of it for a
@@ -2420,7 +2421,7 @@ try:
         # the sweep's own state. (This used to have to reach through
         # _osu.__code__.co_freevars/__closure__ because the state was a closure cell inside
         # register_routes; it is module-level now, so it is simply an attribute.)
-        _st_hosts = _am._os_update_state["hosts"]
+        _st_hosts = _ps._os_update_state["hosts"]
         _st_hosts[999999] = (7, 7)
         _osu(force=True)
         check("os updates: a deleted host's count is not left behind for the next one",
@@ -2483,7 +2484,7 @@ try:
         # host list FIRST; if that fails (a locked DB), arming last_run anyway buys a full day of
         # silence for a tick that checked nothing — a transient error becomes 24h of it. Nothing
         # outward can see the window, so drive it through the closure like the pruning check above.
-        _osu_state = _am._os_update_state
+        _osu_state = _ps._os_update_state
 
         class _RaisingQuery:
             @staticmethod
@@ -2493,13 +2494,18 @@ try:
         class _RaisingRemoteServer:
             query = _RaisingQuery
 
-        _sv_rs = _am.RemoteServer
+        # _maybe_alert_os_updates moved to panel/routes/os_updates with its section, and that
+        # module imports RemoteServer straight from panel.db.models — so the raising stub has to
+        # go THERE. On `app` it would assign cleanly and intercept nothing, leaving this check
+        # asserting that a sweep which never failed did not set the throttle.
+        from panel.routes import os_updates as _osu_mod
+        _sv_rs = _osu_mod.RemoteServer
         _osu_state["last_run"] = 0.0
         try:
-            _am.RemoteServer = _RaisingRemoteServer
+            _osu_mod.RemoteServer = _RaisingRemoteServer
             _osu()          # a real (unforced) tick whose host-list lookup fails
         finally:
-            _am.RemoteServer = _sv_rs
+            _osu_mod.RemoteServer = _sv_rs
         check("os updates: a sweep that could not read the host list leaves the throttle open",
               _osu_state["last_run"] == 0.0, "last_run=%r" % _osu_state["last_run"])
 
@@ -2799,7 +2805,12 @@ try:
     # (the server actually died), a hung server the column calls offline, an unreadable host, and
     # 'restart', which is deliberately never guarded because it is the way out of a wrong refusal.
     import time as _pt
-    _pa_saved = (_appmod.server_live_metrics, _appmod.run_as_game_user, _appmod.set_game_priority)
+    # Each stub goes where its NAME resolves, which the split made different per name:
+    # run_as_game_user and set_game_priority moved to panel/routes/server_detail with _run_action,
+    # while server_live_metrics is still read by _live_run_state in app.py. Stubbing the wrong
+    # module does not error — the assignment succeeds and simply intercepts nothing, turning these
+    # power checks into proof that a stub was never called. unit_test's stub-target gate names it.
+    _pa_saved = (_appmod.server_live_metrics, _sd_mod.run_as_game_user, _sd_mod.set_game_priority)
     _pa_ran, _pa_prio = [], []
 
     def _pa_rag(remote, short, cmd, *a, **k):
@@ -2829,8 +2840,10 @@ try:
         return c.post("/api/server/%d/action" % gs_id, json={"action": action}).get_json() or {}
 
     try:
-        _appmod.run_as_game_user = _pa_rag
-        _appmod.set_game_priority = lambda *a, **k: _pa_prio.append(1)
+        _sd_mod.run_as_game_user = _pa_rag
+        # set_game_priority resolves in panel/routes/server_detail now, not app — a stub on app
+        # would be installed on a name nothing reads.
+        _sd_mod.set_game_priority = lambda *a, **k: _pa_prio.append(1)
 
         # Online in the column AND confirmed running on the host: refuse, and don't touch the host.
         _pa_status("online"); _appmod.server_live_metrics = _pa_metrics(True)
@@ -2875,8 +2888,8 @@ try:
         check("power: restart is never refused, whatever the status says",
               _j.get("success") is True and _pa_wait(_pa_ran) and _pa_wait(_pa_prio), "got %s" % _j)
     finally:
-        (_appmod.server_live_metrics, _appmod.run_as_game_user,
-         _appmod.set_game_priority) = _pa_saved
+        (_appmod.server_live_metrics, _sd_mod.run_as_game_user,
+         _sd_mod.set_game_priority) = _pa_saved
         _pa_status("offline")
 
     # ── /api/server/<id> reports the player count the rest of the panel uses ────────────────

@@ -76,7 +76,10 @@ appmod.run_command = lambda *a, **k: ("", "", 0)
 appmod.get_server_status = lambda *a, **k: "offline"
 appmod.player_list = lambda *a, **k: []
 appmod.list_server_commands = lambda *a, **k: []
-appmod.remote_public_ip = lambda *a, **k: ""
+# remote_public_ip moved to panel/routes/_shared with the section that calls it, so the stub
+# has to go where the NAME now resolves — stubbing app would no longer intercept anything.
+from panel.routes import _shared as _sharedmod
+_sharedmod.remote_public_ip = lambda *a, **k: ""
 
 monmod.run_command = lambda *a, **k: ("", "", 0)
 monmod._host_reachable = lambda r: True
