@@ -26,7 +26,23 @@ from pathlib import Path
 # LinuxGSM's canonical copies. Fixed host, fixed paths — nothing here is caller-supplied.
 _BASE = "https://raw.githubusercontent.com/GameServerManagers/LinuxGSM/master/lgsm/data/"
 SERVERLIST = "serverlist.csv"
+# LinuxGSM ships a package list PER DISTRO RELEASE — ubuntu-22.04.csv, ubuntu-26.04.csv,
+# debian-12.csv, rocky-9.csv and twenty more. This is only the fallback for a host whose own file
+# LinuxGSM does not publish; `deps()` is given the host's real one.
 DEPS = "ubuntu-24.04.csv"
+# A distro slug is interpolated into the URL above, and it comes from the REMOTE host's
+# /etc/os-release — which is attacker-influenceable if that host is compromised. So it has to match
+# LinuxGSM's own filename shape exactly and nothing else: no slashes, no dots beyond a version, no
+# traversal, nothing that could address a different path on the server.
+_OS_SLUG_RE = __import__("re").compile(r"^[a-z][a-z0-9]{1,15}-[0-9]{1,2}(?:\.[0-9]{1,2})?$")
+
+
+def deps_name(os_slug):
+    """The data file for a distro slug ('ubuntu-22.04' -> 'ubuntu-22.04.csv'), or the default when
+    the slug is missing or not the shape LinuxGSM uses."""
+    if os_slug and _OS_SLUG_RE.match(os_slug):
+        return os_slug + ".csv"
+    return DEPS
 
 # Refetch once a week. LinuxGSM adds games steadily but not daily, and a stale-by-days list is a
 # far smaller problem than hammering GitHub from every panel on every boot.
@@ -55,9 +71,9 @@ def _looks_like(name, text):
     head = text.lstrip()[:200].lower()
     if name == SERVERLIST:
         return head.startswith("shortname,") and "gameservername" in head and text.count("\n") > 20
-    if name == DEPS:
-        return head.startswith("all,") and text.count("\n") > 20
-    return False
+    # Every other file we ask for is a per-distro package list, and they all start with the 'all'
+    # row. Keyed on the shape rather than on one filename, since there are two dozen of them.
+    return head.startswith("all,") and text.count("\n") > 20
 
 
 def _fetch(name):
@@ -136,19 +152,31 @@ def serverlist(allow_fetch=True):
         return rows
 
 
-def deps(allow_fetch=True):
-    """ubuntu-24.04.csv as {key: [packages]}, or {} when it cannot be had."""
+def deps(os_slug=None, allow_fetch=True):
+    """The package list for a distro, as {key: [packages]}, or {} when it cannot be had.
+
+    `os_slug` is the host's own '<id>-<version>' from /etc/os-release. A host running Ubuntu 22.04
+    was previously given 24.04's package list, because the filename was hard-coded — which is the
+    sort of thing that installs a package that does not exist on that release and takes the whole
+    apt transaction down with it.
+
+    A distro LinuxGSM does not publish simply 404s, and the caller falls back to the default.
+    """
+    name = deps_name(os_slug)
+    key = "deps:" + name
     with _lock:
-        if "deps" in _mem:
-            return _mem["deps"]
-        text = _text(DEPS, allow_fetch)
+        if key in _mem:
+            return _mem[key]
+        text = _text(name, allow_fetch)
+        if text is None and name != DEPS:
+            text = _text(DEPS, allow_fetch)      # this distro is not one LinuxGSM ships a list for
         out = {}
         for line in (text or "").splitlines():
             parts = [p.strip() for p in line.strip().split(",") if p.strip()]
             if parts:
                 out[parts[0]] = parts[1:]
         if out:
-            _mem["deps"] = out
+            _mem[key] = out
         return out
 
 
@@ -183,7 +211,7 @@ def warm():
     def _run():
         try:
             serverlist()
-            deps()
+            deps()          # the default list; a host's own is fetched when it is first needed
         except Exception:   # nosec B110 - warming is best-effort; status() reports the failure
             pass
     threading.Thread(target=_run, daemon=True, name="lgsm-data-warm").start()

@@ -68,6 +68,15 @@ regardless of this file — this changelog is for humans.
   non-ASCII — through a real shell and requires each to come back verbatim as a single argument.
 
 ### Fixed
+- **Every host was given Ubuntu 24.04's package list, whatever it was actually running.** LinuxGSM
+  publishes a dependency list per distro release — `ubuntu-22.04.csv`, `ubuntu-26.04.csv`,
+  `debian-12.csv` and twenty more — and the panel hard-coded the 24.04 one. The panel supports
+  22.04, 24.04 and 26.04, so this was not hypothetical: on **22.04**, Garry's Mod silently missed
+  `libtinfo5:i386`, and Minecraft asked for `openjdk-25-jre`, which does not exist on that release
+  — and `apt-get install` is atomic, so one unavailable package takes the whole batch down. The
+  panel now reads the host's own `/etc/os-release` and fetches that distro's list, falling back to
+  the default for a distro LinuxGSM does not publish. The slug comes from the remote host and is
+  interpolated into a URL, so it is validated against LinuxGSM's exact filename shape first.
 - **Start/Stop/Restart on Files & Config reported a failure right after reporting success.** The
   action had actually worked. `server_actions.js` is shared by the server detail page and Files &
   Config, but it called `pollStats`, which is defined only in `server_detail.js` — a script Files &

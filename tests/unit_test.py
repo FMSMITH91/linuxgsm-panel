@@ -2974,6 +2974,28 @@ _app._GAME_LIST_CACHE["games"] = None
 check("lgsm data: ...and the retry does succeed once the data is back",
       len(_app.load_game_list()) == 3, len(_app.load_game_list()))
 
+# ── the package list is PER DISTRO ────────────────────────────────────────────────────────────
+# LinuxGSM publishes ubuntu-22.04.csv, ubuntu-26.04.csv, debian-12.csv and twenty more. The panel
+# used to hard-code ubuntu-24.04 for every host, so a 22.04 box was handed 24.04's packages — and
+# one package that does not exist on that release takes the whole apt transaction down with it.
+# This panel officially supports 22.04, 24.04 and 26.04, so that was not hypothetical.
+eq("deps: a host's own distro picks its own file", _lgd.deps_name("ubuntu-22.04"), "ubuntu-22.04.csv")
+eq("deps: another distro entirely", _lgd.deps_name("debian-12"), "debian-12.csv")
+eq("deps: no slug falls back to the default", _lgd.deps_name(None), "ubuntu-24.04.csv")
+# The slug comes from the REMOTE host's /etc/os-release and is interpolated into a URL, so a
+# compromised host must not be able to steer that request anywhere.
+for _bad in ("../../etc/passwd", "ubuntu-24.04/../x", "http://evil.example/x", "UBUNTU-24.04",
+             "a" * 40 + "-1", "ubuntu-24.04;id", "", "/absolute-1"):
+    eq("deps: %r cannot steer the fetch" % _bad[:18], _lgd.deps_name(_bad), "ubuntu-24.04.csv")
+# Per-distro results must not collide in the cache.
+_lgd._mem.clear()
+(_lgd._CACHE_DIR / "ubuntu-22.04.csv").write_text(
+    "all,bc,jammy-only-pkg\n" + ("g%d,p%d\n" % (1, 1)) * 30, encoding="utf-8")
+eq("deps: the 22.04 list is its own, not the default one",
+   _lgd.deps("ubuntu-22.04").get("all"), ["bc", "jammy-only-pkg"])
+eq("deps: ...and the default is still the default",
+   _lgd.deps(None).get("all"), ["bc", "binutils", "curl"])
+
 # A stale cache with no network beats no list at all.
 import os as _os_lgd
 _os_lgd.utime(_lgd._CACHE_DIR / _lgd.SERVERLIST, (0, 0))   # ancient
