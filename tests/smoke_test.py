@@ -262,6 +262,23 @@ try:
     alp = c.post("/api/server/%d/alerts" % gs_id, json={"values": {"discordalert": "on", "notakey": "x"}})
     check("alerts: POST returns a JSON result (no 500)", "success" in (alp.get_json() or {}))
 
+    # Every provider the endpoint advertises must be one the WRITE path will actually store. A
+    # provider present in the GET but filtered out of the POST would render, accept input and
+    # silently drop it \u2014 the read and write sides derive from the same list, and this is what
+    # holds them together end to end.
+    _al_provs = (al.get_json() or {}).get("providers") or []
+    check("alerts: ntfy is offered to the per-server UI",
+          any(_p.get("id") == "ntfy" for _p in _al_provs),
+          str(sorted(_p.get("id") for _p in _al_provs)))
+    # Asserted against the write path's OWN key set, not against the response: this endpoint
+    # answers {"success": ...} whether or not it silently dropped a key, so a status-only check
+    # would pass for a provider whose fields never get written.
+    from panel.routes.server_files import _ALERT_KEY_SET as _AKS_SMOKE
+    _al_keys = [k for _p in _al_provs for k in [_p["toggle"]] + [f["key"] for f in _p["fields"]]]
+    _al_dropped = [k for k in _al_keys if k not in _AKS_SMOKE]
+    check("alerts: POST accepts every key the GET advertises (no provider is write-only-in-name)",
+          not _al_dropped, "the write path would silently drop: %s" % _al_dropped)
+
     # ── uninstall: a FAILED userdel must not delete the panel's row ───────────────────────────
     # This endpoint used to capture run_privileged's rc, hand it to log_action, and then delete the
     # row and answer {"success": true} no matter what it was. A userdel that failed therefore left
