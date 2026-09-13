@@ -113,6 +113,15 @@
                 data-args='["@self"]' title="Fetch a deeper slice of the log file">
           <i class="bi bi-arrow-up-circle"></i> Load older
         </button>
+        {% if can_download_log %}
+        {# LinuxGSM writes the real console log under the game user's home, so this is just the file
+           browser's download route pointed at it — the whole file, not the slice on screen. #}
+        <a class="btn btn-sm btn-outline-secondary"
+           href="{{ url_for('server_file_download', server_id=server.id, path=console_log_rel) }}"
+           title="Download the full LinuxGSM console log for this server">
+          <i class="bi bi-download"></i> Log
+        </a>
+        {% endif %}
       </div>
       <div class="card-body p-0">
         <div class="console-output" id="console-output">

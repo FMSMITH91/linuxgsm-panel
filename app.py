@@ -3510,6 +3510,13 @@ def register_routes(app):
                                can_kick=can_kick, can_ban=can_ban, can_say=can_say,
                                custom_commands=custom_commands,
                                can_autostart=can_autostart, public_host=public_host,
+                               # The console log lives under the game user's home, so the file
+                               # browser's download route already serves it — no second endpoint.
+                               # It needs MANAGE_SERVERS though, where the console itself only
+                               # needs VIEW_CONSOLE, so the button is hidden for anyone who would
+                               # just be bounced by it.
+                               console_log_rel="log/console/%s-console.log" % gs.lgsm_name,
+                               can_download_log=_can_manage_files(),
                                cron_restart_pending=_cron_restart_pending.get(gs.id, False))
 
 

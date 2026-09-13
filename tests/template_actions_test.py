@@ -725,6 +725,31 @@ check("_newConsoleLines(_consoleLines, lines)" in _rc and "_consolePrimed" in _r
       "console: a poll appends what is new instead of rebuilding from its window",
       "refreshConsole no longer diffs against the scrollback — it is back to wiping every poll")
 
+# ── console: select-all is scoped, and the log is downloadable ────────────────────────────────
+# Ctrl+A in the console used to select the WHOLE PAGE, because the console is a plain <div> and the
+# browser hands select-all to the document. Reported as "i try to do ctrl + a in the console it
+# tries to copy the entire page when i just want to copy the console". Scoping it needs BOTH parts:
+# the element has to be focusable for a keydown handler to reach it at all.
+# Scoped to the select-all block: "tabindex" appears elsewhere in this file, so a whole-file
+# substring test passed even with the console's own setAttribute deleted.
+_sa = _sd[_sd.find("// Ctrl/Cmd+A inside the console"):_sd.find("function clearConsole(")]
+check(bool(_sa) and "setAttribute('tabindex'" in _sa and "selectNodeContents" in _sa,
+      "console: Ctrl+A is scoped to the console (focusable element + its own handler)",
+      "the console is no longer focusable or no longer scopes the selection — Ctrl+A will take "
+      "the whole page again")
+check("metaKey" in _sd,
+      "console: ...on a Mac too (Cmd+A, not just Ctrl+A)",
+      "only ctrlKey is handled, so Cmd+A still selects the page on macOS")
+# api_console answers an unreachable host with an empty list. Priming on that blanks the
+# server-rendered console the moment you open the page of a server that is down.
+check("!_consolePrimed && lines.length" in _sd,
+      "console: an empty response does not wipe the server-rendered console",
+      "the first-poll prime no longer checks it got any lines")
+_sdh = (TEMPLATES / "server_detail.html").read_text(encoding="utf-8")
+check("server_file_download" in _sdh and "console_log_rel" in _sdh,
+      "console: the log download reuses the file browser's download route",
+      "the console log download button is gone, or no longer points at the shared route")
+
 # ── editor line numbers: the two halves must stay metrically identical ────────────────────────
 # The gutter is a separate element beside the textarea, so alignment depends entirely on both
 # having the same font, size and line-height — and on the textarea not soft-wrapping, since a

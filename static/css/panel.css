@@ -380,6 +380,13 @@
       color: #9caec9;
       line-height: 1.5;
     }
+
+/* The console takes focus so Ctrl+A can be scoped to it (see server_detail.js). Focus is shown as
+   a soft ring rather than the browser default, which draws a hard box around the whole pane. */
+.console-output:focus, .console-output:focus-visible {
+  outline: none;
+  box-shadow: inset 0 0 0 1px var(--accent);
+}
     .console-line { white-space: pre-wrap; word-break: break-all; }
     .console-line:empty { display: none; }
 
