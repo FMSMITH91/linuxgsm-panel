@@ -146,9 +146,36 @@ _CFG_READERS = "".join(_modsrc(m) for m in
 check("config: every DEFAULT_CONFIG key has a reader",
       all(k in _CFG_READERS for k in _cfgmod.DEFAULT_CONFIG),
       str([k for k in _cfgmod.DEFAULT_CONFIG if k not in _CFG_READERS]))
-check("config: ssh_timeout is actually used by the SSH layer",
-      _smod._ssh_connect_timeout() == _cfgmod.DEFAULT_CONFIG["ssh_timeout"],
-      "helper returned %r" % _smod._ssh_connect_timeout())
+# Prove the helper READS the knob, rather than that it happens to return the default. The old
+# form compared against DEFAULT_CONFIG, which only holds while no config on disk overrides it —
+# and tests/smoke_test.py now writes ssh_timeout=1 (see the note there), so the assertion
+# depended on suite ORDER for its truth. Driving the value directly is both stronger and
+# order-independent: a helper that ignored config would fail this, where it passed before.
+_sshto_saved = _cfgmod.load_config().get("ssh_timeout")
+try:
+    for _want in (7, 30):
+        _c = _cfgmod.load_config()
+        _c["ssh_timeout"] = _want
+        _cfgmod.save_config(_c)
+        eq("config: ssh_timeout=%d is what the SSH layer uses" % _want,
+           _smod._ssh_connect_timeout(), _want)
+    # ...and the clamp holds at both ends, so a hostile or fat-fingered value cannot make the
+    # panel hang forever or busy-fail.
+    for _set, _want in ((0, 1), (-5, 1), (9999, 120)):
+        _c = _cfgmod.load_config()
+        _c["ssh_timeout"] = _set
+        _cfgmod.save_config(_c)
+        eq("config: ssh_timeout=%r clamps to %d" % (_set, _want),
+           _smod._ssh_connect_timeout(), _want)
+finally:
+    _c = _cfgmod.load_config()
+    if _sshto_saved is None:
+        _c.pop("ssh_timeout", None)
+    else:
+        _c["ssh_timeout"] = _sshto_saved
+    _cfgmod.save_config(_c)
+eq("config: with no override the SSH layer uses the documented default",
+   _smod._ssh_connect_timeout(), _cfgmod.DEFAULT_CONFIG["ssh_timeout"])
 check("config: the autoblock default is one constant, not two",
       "_AUTOBLOCK_DEFAULT_THRESHOLD), 100000)" in _modsrc("app"))
 
