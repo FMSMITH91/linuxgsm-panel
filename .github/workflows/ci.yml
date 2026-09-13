@@ -128,9 +128,17 @@ jobs:
             # API — which is the one way I needed to read them.
             echo "| \`${suite}\` | $((SECONDS - _t0)) |" | tee -a /tmp/suite_times.md
           done
-          python -m coverage combine
-          python -m coverage xml -o coverage.xml
-          python -m coverage report --sort=miss > coverage.txt
+          # Timed as well, and separately from the suites. Locally the five suites total 94s
+          # (measured plain AND under coverage — identical, tracing costs nothing here) while this
+          # job takes 697s on a runner. If the suites are not where it goes, it is in these three,
+          # and combine/xml/report over 13k statements with several parallel data files is the
+          # obvious candidate. Guessing which has been wrong twice today; measure it.
+          _c0=$SECONDS; python -m coverage combine
+          echo "| \`combine\` | $((SECONDS - _c0)) |" | tee -a /tmp/suite_times.md
+          _c0=$SECONDS; python -m coverage xml -o coverage.xml
+          echo "| \`xml\` | $((SECONDS - _c0)) |" | tee -a /tmp/suite_times.md
+          _c0=$SECONDS; python -m coverage report --sort=miss > coverage.txt
+          echo "| \`report\` | $((SECONDS - _c0)) |" | tee -a /tmp/suite_times.md
           {
             echo '### Coverage'
             echo ''
