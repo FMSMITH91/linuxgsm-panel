@@ -15,8 +15,22 @@
     {
       "filePath": "panel/ops/system_ops.py",
       "patternId": "Semgrep_python.lang.security.audit.dangerous-subprocess-use-tainted-env-args.dangerous-subprocess-use-tainted-env-args",
-      "reason": "_run() is the PRE-HELPER FALLBACK: subprocess.run(cmd, shell=True) on a composed string. It is the documented remaining hole in the privilege boundary (SECURITY.md, 'Known trust-model limitation'), kept so a host that has not had install.sh re-run as root keeps working. Suppressing it in the source would hide the one thing the docs say is still open, so it is accepted HERE instead \u2014 visible, named, and deleted the day that fallback goes.",
+      "reason": "_run() is the PRE-HELPER FALLBACK: subprocess.run(cmd, shell=True) on a composed string. It is the documented remaining hole in the privilege boundary (SECURITY.md, 'Known trust-model limitation'), kept so a host that has not had install.sh re-run as root keeps working. Suppressing it in the source would hide the one thing the docs say is still open, so it is accepted HERE instead — visible, named, and deleted the day that fallback goes.",
       "acceptedOn": "2026-09-11",
+      "lineText": "cmd, shell=True, capture_output=True, text=text, timeout=timeout,"
+    },
+    {
+      "filePath": "panel/ops/system_ops.py",
+      "patternId": "Semgrep_python.lang.security.audit.dangerous-subprocess-use-audit.dangerous-subprocess-use-audit",
+      "reason": "The same _run() pre-helper fallback already accepted for -tainted-env-args on the line below. Two rules fire on one call site: -audit on 'the first argument is not a static string', -shell-true on shell=True itself. Accepting one never covered the others — the gate keys on (file, pattern, line) precisely so it cannot. Same reason as that entry: it is the documented remaining hole in the privilege boundary (SECURITY.md, 'Known trust-model limitation'), kept so a host that has not had install.sh re-run as root keeps working, and it goes the day that fallback does.",
+      "acceptedOn": "2026-09-13",
+      "lineText": "r = subprocess.run("
+    },
+    {
+      "filePath": "panel/ops/system_ops.py",
+      "patternId": "Semgrep_python.lang.security.audit.subprocess-shell-true.subprocess-shell-true",
+      "reason": "The third rule on the _run() pre-helper fallback, and the most on-the-nose of them: shell=True on a composed string is exactly what SECURITY.md documents as the known trust-model limitation. Accepted rather than suppressed in source for the reason given on the -tainted-env-args entry: hiding it at the call site would hide the one thing the docs say is still open.",
+      "acceptedOn": "2026-09-13",
       "lineText": "cmd, shell=True, capture_output=True, text=text, timeout=timeout,"
     }
   ]
