@@ -54,8 +54,8 @@ from panel.ops import ssh_manager as sm
 from panel.services import notifications as N
 from panel.ops import system_ops as SO
 from app import (password_problem, _int_or, _valid_ip_or_cidr, _whitelisted, _parse_tg_command,
-                 _tg_command_arg, _valid_hex_color, _clean_console_text, _apply_user_order,
-                 _apply_user_server_order)
+    _tg_command_arg, _valid_hex_color, _clean_console_text, _apply_user_server_order)
+from panel.db.prefs import (_apply_user_order)
 from panel.security.auth import can_access_remote, client_ip
 
 results = []
@@ -176,8 +176,13 @@ finally:
     _cfgmod.save_config(_c)
 eq("config: with no override the SSH layer uses the documented default",
    _smod._ssh_connect_timeout(), _cfgmod.DEFAULT_CONFIG["ssh_timeout"])
+# Reads app.py AND the route modules: the line moved out with its section when register_routes
+# was split, and pinning it to one file would have made this gate quietly stop checking anything.
+_autoblock_src = _modsrc("app") + "".join(
+    open(os.path.join(_root, "panel", "routes", _f), encoding="utf-8").read()
+    for _f in sorted(os.listdir(os.path.join(_root, "panel", "routes"))) if _f.endswith(".py"))
 check("config: the autoblock default is one constant, not two",
-      "_AUTOBLOCK_DEFAULT_THRESHOLD), 100000)" in _modsrc("app"))
+      "_AUTOBLOCK_DEFAULT_THRESHOLD), 100000)" in _autoblock_src)
 
 # ── On-disk paths must resolve to the CHECKOUT ROOT, not to the module's own directory ──────────
 # Every one of these used to be `Path(__file__).parent / …` in a module that sat at the repo root,
@@ -400,7 +405,7 @@ check("ui_prefs: clearing a key restores the default (absent, not empty)",
 
 # ── new-user language: Settings holds a concrete language code. It used to allow a blank
 # "creator's language" value which read as English anyway — confusing on the page, so it is gone.
-from app import _new_user_language as _nul
+from app import (_new_user_language as _nul)
 _LANGS = {"en": "English", "es": "Espanol", "fr": "Francais"}
 eq("new-user lang: the configured language is used", _nul({"default_language": "fr"}, _LANGS), "fr")
 eq("new-user lang: English when configured so", _nul({"default_language": "en"}, _LANGS), "en")
@@ -413,7 +418,7 @@ eq("new-user lang: junk in the config cannot be assigned", _nul({"default_langua
 
 # ── the install default layout: a superadmin's published arrangement sits UNDER each user's own, and
 # the merge is per-KEY so someone who only reordered their tiles still gets the house host order.
-from app import _effective_prefs as _ep
+from panel.db.prefs import (_effective_prefs as _ep)
 _U = lambda prefs: NS(is_authenticated=True, get_ui_prefs=lambda: prefs)
 eq("default: no default and no user prefs -> nothing", _ep(_U({}), {}), {})
 eq("default: the install default applies when the user has none",
@@ -445,7 +450,7 @@ eq("default: a failure reading user prefs falls back to the house layout, no rai
 # ── movable panels: _panel_layout decides what a page renders and in what order. The safety property
 # is that it can only ever return keys the PAGE declared — several panels are permission-gated, so a
 # stored key must never be able to conjure one.
-from app import _panel_layout as _pl, _clean_panel_map as _cpm
+from panel.db.prefs import (_clean_panel_map as _cpm, _panel_layout as _pl)
 _KEYS = ["total", "online", "offline", "players", "host"]
 eq("panels: no prefs -> the page's own default order", _pl({}, "dash_tiles", _KEYS), (_KEYS, []))
 eq("panels: a saved order is applied",
@@ -2521,7 +2526,8 @@ finally:
 # that store. What it must NOT do is record a failed check — apt emits nothing when it fails, which
 # is byte-for-byte what a clean host emits, so storing it would clear a real banner and state that
 # the host is up to date when in fact nobody managed to ask it.
-from app import _os_update_note as _oun, _os_update_seen as _seen, _is_security_pkg as _isec
+from app import (_os_update_note as _oun, _is_security_pkg as _isec)
+from panel.core.panel_state import (_os_update_seen as _seen)
 
 check("security pkg: the -security suite is what marks one",
       _isec({"suite": "jammy-security"}) and not _isec({"suite": "jammy-updates"}))
@@ -4810,10 +4816,13 @@ import ast as _ast_scan
 _SCAN_MODULES = sorted(
     [f for f in os.listdir(_root)
      if f.endswith(".py") and not f.startswith((".", "_")) and f != "setup.py"]
+    # `not f.startswith("__")`, not `"_"`: panel/routes/_shared.py is ordinary private code and
+    # holds the helpers the split made cross-module. Skipping it exempted every constant only it
+    # uses, which is how _cmd_fetch_attempts and _pubip_resolve_attempts read as orphans.
     + [os.path.relpath(os.path.join(_dp, f), _root)
        for _dp, _dn, _fs in os.walk(os.path.join(_root, "panel"))
        if "__pycache__" not in _dp
-       for f in _fs if f.endswith(".py") and not f.startswith("_")]
+       for f in _fs if f.endswith(".py") and not f.startswith("__")]
 )
 assert "app.py" in _SCAN_MODULES and os.path.join("panel", "ops", "ssh_manager.py") in _SCAN_MODULES, \
     "module discovery is looking at the wrong directory: %s" % _SCAN_MODULES[:5]
@@ -6088,7 +6097,22 @@ check("db_maintenance: repair runs from an explicit path, no config import",
 # this RATCHETS — the helper count inside may fall and never rise, exactly like the escalation
 # census. tests/url_map_baseline.json is what proves a move changed no route.
 import ast as _ast_rr
-_MOVED_VIEWS = 0   # bump as views relocate into routes/*.py; views + moved must stay 208
+# DERIVED, not a number to remember to bump. Counting the views that actually live in
+# panel/routes/*.py means the sum can only be wrong if a view really went missing — a hand-kept
+# constant would drift the first time someone moved a section and forgot, which is exactly the
+# bookkeeping this check exists to replace.
+_MOVED_VIEWS = 0
+_routes_dir = os.path.join(_root, "panel", "routes")
+if os.path.isdir(_routes_dir):
+    for _rf in sorted(os.listdir(_routes_dir)):
+        if not _rf.endswith(".py") or _rf == "__init__.py":
+            continue
+        _rt = _ast_rr.parse(open(os.path.join(_routes_dir, _rf), encoding="utf-8").read())
+        _MOVED_VIEWS += sum(
+            1 for _n in _ast_rr.walk(_rt)
+            if isinstance(_n, _ast_rr.FunctionDef)
+            and any(isinstance(_d, _ast_rr.Call) and getattr(_d.func, "attr", "") == "route"
+                    for _d in _n.decorator_list))
 _app_ast = _ast_rr.parse(open(os.path.join(_root, "app.py"), encoding="utf-8").read())
 _rr = next(n for n in _ast_rr.walk(_app_ast)
            if isinstance(n, _ast_rr.FunctionDef) and n.name == "register_routes")
@@ -6097,7 +6121,7 @@ _rr_views = [n for n in _rr_defs
              if any(isinstance(d, _ast_rr.Call) and getattr(d.func, "attr", "") == "route"
                     for d in n.decorator_list)]
 _rr_helpers = len(_rr_defs) - len(_rr_views)
-_HELPER_CEILING = 35
+_HELPER_CEILING = 20   # ratcheted down as sections moved to panel/routes/
 check("register_routes: helper closures inside it <= %d (currently %d)"
       % (_HELPER_CEILING, _rr_helpers),
       _rr_helpers <= _HELPER_CEILING,
