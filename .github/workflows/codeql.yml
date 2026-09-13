@@ -41,6 +41,7 @@ jobs:
   analyze:
     name: Analyze (${{ matrix.name }})
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     # Code scanning uploads only work on public repos (or private w/ GitHub Advanced
     # Security). While the repo is private these jobs are SKIPPED (grey), not failed; they
     # activate automatically once the repo is made public.

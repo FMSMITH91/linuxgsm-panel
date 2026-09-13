@@ -37,6 +37,7 @@ jobs:
   checks:
     name: checks (${{ matrix.os }} · py${{ matrix.python }})
     runs-on: ${{ matrix.os }}
+    timeout-minutes: 20
     strategy:
       fail-fast: false   # report EVERY LTS result even if one fails, so a version-specific break is obvious
       matrix:
@@ -78,6 +79,7 @@ jobs:
   coverage:
     name: coverage
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     # Gated on the suites actually passing. This job is a FOURTH full execution of all five of
     # them (under tracing, so the slowest of the four), and measuring the coverage of a suite that
     # just failed tells you nothing — the number is meaningless and the minutes are spent anyway.

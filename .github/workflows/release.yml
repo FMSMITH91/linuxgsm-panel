@@ -23,6 +23,7 @@ concurrency:
 jobs:
   release:
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     permissions:
       contents: write   # push the v<VERSION> tag + create the Release
     steps:
