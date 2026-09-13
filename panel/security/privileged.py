@@ -405,16 +405,42 @@ def _port(s):
     return str(s)
 
 
+# The only characters a mount point may contain. A LITERAL, and the returned mount is rebuilt out
+# of it rather than handed back as the caller's own string — see _ts_mount.
+_MOUNT_ALPHABET = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789._-/"
+
+
 def _ts_mount(s):
     """A Tailscale Serve mount point: "/" or "/name" with a couple of safe segments. Not a general
     path — no traversal, no scheme, no host, nothing that could turn the proxy target into
-    something other than a path on this node."""
+    something other than a path on this node.
+
+    The value is REBUILT from _MOUNT_ALPHABET instead of being returned as-is, and that is not
+    ceremony. Two reasons, in order of how much they matter:
+
+      1. It enforces the character set independently of the regex. The regex is the thing that has
+         to be right today; the rebuild is what holds if it is ever edited wrong. A character that
+         is not in the alphabet cannot survive this function no matter what the pattern says.
+      2. It is what a taint tracker can see. Validate-and-return-the-same-object reads as
+         pass-through to CodeQL — this is alert #375, py/command-line-injection, which stayed open
+         after the validation was added because the flow ran straight THROUGH this function
+         (privileged.py:281 -> 408 -> 412 -> 417). The same engine declines to treat shlex.quote as
+         a barrier, for the same reason. Every character of the result now comes from a module-level
+         literal, so the returned string carries no data from the request.
+
+    Behaviour is unchanged: the accepted set is exactly what the regex accepted before."""
     s = str(s)
     if s == "/":
-        return s
+        return "/"
     if not re.fullmatch(r"(?:/[A-Za-z0-9][A-Za-z0-9._-]{0,31}){1,3}", s):
         raise VerbError("not a mount point")
-    return s
+    out = []
+    for ch in s:
+        i = _MOUNT_ALPHABET.find(ch)
+        if i < 0:                      # unreachable via the regex above; the belt to its braces
+            raise VerbError("not a mount point")
+        out.append(_MOUNT_ALPHABET[i])
+    return "".join(out)
 
 
 def _jail(s):

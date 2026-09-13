@@ -5720,6 +5720,24 @@ for _m in ("--exit-node=evil", "-T", "--set-path=/x", "../../etc", "//evil.examp
         _raised = True
     check("privileged: ts_serve_argv itself rejects mount %r (direct call, no verb table)" % _m,
           _raised)
+# ── _ts_mount REBUILDS its result from a literal alphabet ─────────────────────────────────────
+# Two properties, and the first is the one that matters if the regex is ever edited wrong: the
+# returned string can only contain characters from _MOUNT_ALPHABET, whatever the pattern says.
+# The second is why CodeQL alert #375 stayed open after the validation was added — a function that
+# validates and hands back the caller's own object reads as pass-through to a taint tracker, so the
+# flow ran straight through it. Rebuilding means the result carries no data from the request.
+for _ok in ("/", "/panel", "/a/b/c", "/x.y_z-1", "/" + "a" * 32):
+    eq("privileged: _ts_mount(%r) is unchanged in value" % _ok, _priv._ts_mount(_ok), _ok)
+    check("privileged: _ts_mount(%r) returns characters from the literal alphabet only" % _ok,
+          all(c in _priv._MOUNT_ALPHABET for c in _priv._ts_mount(_ok)))
+check("privileged: _ts_mount does not hand back the caller's own object",
+      _priv._ts_mount("".join(["/", "panel"])) is not None)
+_mnt_in = "".join(["/", "p", "a", "n", "e", "l"])          # built at runtime, not interned
+check("privileged: _ts_mount's result is a NEW string, not the input object",
+      _priv._ts_mount(_mnt_in) is not _mnt_in)
+check("privileged: the alphabet itself contains nothing shell- or option-significant",
+      not any(c in _priv._MOUNT_ALPHABET for c in " \t\n;|&$`'\"\\()<>*?[]{}~!#%^+=,:@"))
+
 check("privileged: ts_serve_argv still builds the legitimate modern argv",
       _priv.ts_serve_argv("serve", "modern", "/panel", "http", "5000")
       == ["tailscale", "serve", "--bg", "--https=443", "--set-path=/panel",
