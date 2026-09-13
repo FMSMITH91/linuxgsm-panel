@@ -4076,6 +4076,39 @@ try:
 finally:
     N._cfg, N.update_config = _sv_cfgfn, _sv_update
 
+# ── Per-server LinuxGSM alert providers ───────────────────────────────────────────────────────
+# These key names are LinuxGSM's, not the panel's: the values are written straight into the game
+# server's own config file, where LinuxGSM reads them by exact name. A key we invented would be
+# written, saved, shown back in the UI as if it had taken effect — and ignored by every alert run.
+# That is a silent failure with no error anywhere, so the names are pinned here against
+# lgsm/config-default/config-lgsm/*/_default.cfg upstream. This surface had no test at all.
+from app import ALERT_PROVIDERS as _AP                                            # noqa: E402
+from panel.routes.server_files import _ALERT_KEYS as _AK, _ALERT_KEY_SET as _AKS   # noqa: E402
+
+check("alert providers: every entry has id, label, toggle and fields",
+      all(p.get("id") and p.get("label") and p.get("toggle") and p.get("fields") for p in _AP))
+check("alert providers: every toggle is a LinuxGSM <name>alert flag",
+      all(p["toggle"].endswith("alert") for p in _AP),
+      str([p["toggle"] for p in _AP if not p["toggle"].endswith("alert")]))
+_dupe = [k for k in _AK if _AK.count(k) > 1]
+check("alert providers: no key is claimed by two providers", not _dupe, str(sorted(set(_dupe))))
+check("alert providers: ids are unique", len({p["id"] for p in _AP}) == len(_AP))
+check("alert providers: every declared key is accepted by the write path",
+      all(k in _AKS for k in _AK))
+# Keys are LinuxGSM config identifiers — they end up in a shell-sourced file, so anything outside
+# this charset would be a config-injection question rather than a typo.
+check("alert providers: keys are plain lowercase config identifiers",
+      all(_re.fullmatch(r"[a-z][a-z0-9_]*", k) for k in _AK),
+      str([k for k in _AK if not _re.fullmatch(r"[a-z][a-z0-9_]*", k)]))
+
+_ntfy = [p for p in _AP if p["id"] == "ntfy"]
+check("alert providers: ntfy is offered", len(_ntfy) == 1)
+if _ntfy:
+    _nk = [_ntfy[0]["toggle"]] + [f["key"] for f in _ntfy[0]["fields"]]
+    # Verbatim from LinuxGSM's _default.cfg: ntfyalert / ntfytopic / ntfyserver / ntfytoken.
+    check("alert providers: ntfy uses LinuxGSM's real key names, not invented ones",
+          _nk == ["ntfyalert", "ntfytopic", "ntfyserver", "ntfytoken"], str(_nk))
+
 # ── ntfy: the one provider whose server the operator picks ────────────────────────────────────
 # Telegram and Discord URLs are rebuilt on a CONSTANT host, so _post's allow-list is the whole
 # story for them. ntfy cannot work that way — a self-hosted instance is the normal case — so the

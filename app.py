@@ -712,6 +712,15 @@ ALERT_PROVIDERS = [
     {"id": "gotify", "label": "Gotify", "toggle": "gotifyalert",
      "fields": [{"key": "gotifywebhook", "label": "Server URL"},
                 {"key": "gotifytoken", "label": "App token"}]},
+    # Key names are LinuxGSM's own (lgsm/config-default/config-lgsm/*/_default.cfg), not ours — the
+    # panel writes them straight into the server's config, so a name we invented would be written
+    # and then silently ignored by every alert run. ntfy's server is exposed because self-hosting is
+    # the common case; blank means LinuxGSM's own default of https://ntfy.sh. The token is only
+    # needed for a reserved or private topic.
+    {"id": "ntfy", "label": "ntfy", "toggle": "ntfyalert",
+     "fields": [{"key": "ntfytopic", "label": "Topic"},
+                {"key": "ntfyserver", "label": "Server (blank = ntfy.sh)"},
+                {"key": "ntfytoken", "label": "Access token (optional)"}]},
     {"id": "ifttt", "label": "IFTTT", "toggle": "iftttalert",
      "fields": [{"key": "iftttmakerapi", "label": "Maker API key"},
                 {"key": "iftttevent", "label": "Event name"}]},
