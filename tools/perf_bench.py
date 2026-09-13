@@ -76,7 +76,13 @@ from panel.ops import ssh_manager as smmod                                # noqa
 # looking the name up in its own namespace, so the benchmark measured un-stubbed code.
 _smmod.run_command = lambda *a, **k: ("", "", 0)
 appmod.get_server_status = lambda *a, **k: "offline"
-appmod.player_list = lambda *a, **k: []
+# player_list is bound BY NAME in panel/routes/server_detail (`from ... import player_list`), so
+# this stub only ever worked if it landed there. It was on `appmod`, which re-exported the name
+# but is not what the handler resolves — so it intercepted nothing, the same silent no-op the
+# note above describes. app.py stopped importing the name at all when the chat bots moved out,
+# and unit_test's stub-seam gate failed on it, which is how it was found.
+from panel.routes import server_detail as _sdmod
+_sdmod.player_list = lambda *a, **k: []
 _smmod.list_server_commands = lambda *a, **k: []
 # remote_public_ip moved to panel/routes/_shared with the section that calls it, so the stub
 # has to go where the NAME now resolves — stubbing app would no longer intercept anything.
