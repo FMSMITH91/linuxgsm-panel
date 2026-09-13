@@ -38,7 +38,7 @@ jobs:
           fetch-depth: 0   # scan the FULL git history, not just the tip
       # Blocking gate: a committed credential is always actionable. --redact keeps the
       # secret out of the public log. Uses the OSS binary directly (free on any repo;
-      # the marketplace action needs a licence for orgs). The .gitleaks.toml allowlist
+      # the marketplace action needs a licence for orgs). The .github/gitleaks.toml allowlist
       # excludes the UI's token *placeholders* so they don't trip a false positive.
       - name: Gitleaks
         env:
@@ -51,5 +51,5 @@ jobs:
                      https://api.github.com/repos/gitleaks/gitleaks/releases/latest \
                 | grep -o 'https://[^"]*linux_x64\.tar\.gz' | head -1)
           curl -sSfL "$URL" | tar -xz -C /tmp gitleaks
-          /tmp/gitleaks detect --source . --config .gitleaks.toml \
+          /tmp/gitleaks detect --source . --config .github/gitleaks.toml \
             --redact --verbose --exit-code 1

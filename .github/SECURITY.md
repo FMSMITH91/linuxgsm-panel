@@ -41,7 +41,7 @@ fixes are applied to the **latest** version only, so please update before report
 The panel manages game-server hosts over SSH, so treat it as sensitive infrastructure:
 
 - Keep it behind **Tailscale** (or a reverse proxy with a real certificate) rather than
-  exposing the panel port to the public internet. See [docs/https.md](docs/https.md).
+  exposing the panel port to the public internet. See [docs/https.md](../docs/https.md).
 - Keep **two-factor authentication** enabled on admin accounts.
 - Keep the install **up to date** — re-running the installer applies the latest fixes.
 
