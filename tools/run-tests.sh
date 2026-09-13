@@ -8,6 +8,14 @@ set -euo pipefail
 cd "$(dirname "$0")/.."   # repo root (this script lives in tools/)
 PY="${PYTHON:-python3}"
 
+# ORDER IS CHEAPEST-FIRST, and deliberately so. Every step aborts the run (set -e), so whatever
+# runs first decides how long a BROKEN tree takes to tell you. The static checks and the sub-second
+# suites therefore come before anything that boots the app: url_map and manage_test each take well
+# under a second and catch a whole class of mechanical breakage (a route that lost a method, an
+# endpoint renamed out from under url_for), but they used to run AFTER smoke and rbac — so a
+# one-second failure was reported two minutes late, three times over in the CI matrix.
+# Keep new suites in their place on that scale rather than appending them to the end.
+
 # A local virtualenv usually lives in the repo (see the PYTHON= example above, and venv/ + .venv/
 # in .gitignore), so both scanners have to skip it — third-party site-packages code is not ours to
 # compile or lint, and flake8's defaults don't exclude it. CI installs deps globally and never has
@@ -27,6 +35,13 @@ else
     echo "  (flake8 not installed — skipping)"
 fi
 
+if command -v shellcheck >/dev/null 2>&1; then
+    echo "== shellcheck (shell scripts) =="
+    shellcheck -S warning install.sh uninstall.sh tools/run-tests.sh reset-password.sh recover.sh
+else
+    echo "== shellcheck (not installed — skipping) =="
+fi
+
 echo "== unit tests (pure logic; no network) =="
 "$PY" tests/unit_test.py
 
@@ -34,16 +49,6 @@ echo "== template actions (JS parses; every data-action button is wired) =="
 # esprima is optional locally (the test says so and skips); CI installs it so the JS parse
 # gate always runs there.
 "$PY" tests/template_actions_test.py
-
-echo "== smoke test (boots the app; routes must not 5xx) =="
-# CI runs this bare, which is right there. On a DEVELOPER machine use ./tools/smoke-local.sh
-# instead of this script: booting the app fires real `sudo -n` probes (pam_faillock counts each
-# one and will lock you out of your own sudo) and real outbound SSH to the fixture hosts. That
-# wrapper runs the same suite with both refused. See its header.
-"$PY" tests/smoke_test.py
-
-echo "== rbac test (permissions/IDOR enforced server-side; self-seeds on an empty DB) =="
-"$PY" tests/rbac_test.py
 
 echo "== url map (every rule, endpoint, method and guard, vs the committed baseline) =="
 # The safety net for splitting register_routes() up. A route that silently loses a method, an
@@ -54,12 +59,15 @@ echo "== url map (every rule, endpoint, method and guard, vs the committed basel
 echo "== manage.py (the offline recovery CLI: lock-out guard, session revocation) =="
 "$PY" tests/manage_test.py
 
-if command -v shellcheck >/dev/null 2>&1; then
-    echo "== shellcheck (shell scripts) =="
-    shellcheck -S warning install.sh uninstall.sh tools/run-tests.sh reset-password.sh recover.sh
-else
-    echo "== shellcheck (not installed — skipping) =="
-fi
+echo "== smoke test (boots the app; routes must not 5xx) =="
+# CI runs this bare, which is right there. On a DEVELOPER machine use ./tools/smoke-local.sh
+# instead of this script: booting the app fires real `sudo -n` probes (pam_faillock counts each
+# one and will lock you out of your own sudo) and real outbound SSH to the fixture hosts. That
+# wrapper runs the same suite with both refused. See its header.
+"$PY" tests/smoke_test.py
+
+echo "== rbac test (permissions/IDOR enforced server-side; self-seeds on an empty DB) =="
+"$PY" tests/rbac_test.py
 
 echo ""
 echo "All checks passed."

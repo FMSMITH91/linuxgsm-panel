@@ -6,16 +6,17 @@ name: Fuzz
 # they are best-effort and must degrade to an empty result, not crash the player-list / firewall /
 # security paths that call them. Time is bounded so PR runs stay short; the nightly schedule soaks
 # longer over the committed seed corpus.
+# NO `push` TRIGGER, deliberately.
+#   Every push to main here is a squash of a PR that already ran this exact matrix over this exact
+#   code, seconds earlier. Re-running it on the merge commit is six jobs (~460s) re-covering the
+#   same ground — and it cannot even find more by luck, because the corpus is NOT persisted between
+#   runs: each job starts from the committed seeds in tests/fuzz/corpus and throws away what it
+#   generates (new units go to an artifact, not back into the repo). So the second run explores the
+#   same seeds for the same bounded time.
+#   Coverage is unchanged: a PR still fuzzes before merge, and the nightly soak runs longer over
+#   the same seeds than any per-push run does. A direct push to main that bypassed a PR is covered
+#   by that nightly, within the day.
 on:
-  push:
-    branches: [ main ]
-    paths:
-      - 'panel/ops/ssh_manager.py'
-      - 'panel/ops/system_ops.py'
-      - 'panel/core/terminal.py'
-      - 'tests/fuzz/**'
-      - '.github/workflows/fuzz.yml'
-      - 'requirements.txt'
   pull_request:
     branches: [ main ]
     paths:
