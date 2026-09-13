@@ -986,7 +986,12 @@ def do_reboot_delayed(args, content):
                 if devnull > 2:
                     os.close(devnull)        # dup2 kept the copies; this one would leak
                 time.sleep(REBOOT_DELAY_SECONDS)
-                os.execv(resolve("reboot"), ["reboot"])
+                # nosec B606 - start_process_with_no_shell. No shell is exactly the point:
+                # resolve() returns an absolute path from the fixed TOOLS table or raises,
+                # "reboot" is a literal, and argv is a literal list. Nothing here is
+                # user-influenced. Bandit flags the exec family on sight; the shell-using
+                # members of it (B602/B604/B607) are what would matter, and this is not one.
+                os.execv(resolve("reboot"), ["reboot"])  # nosec B606
             finally:
                 os._exit(1)
         os._exit(0)
