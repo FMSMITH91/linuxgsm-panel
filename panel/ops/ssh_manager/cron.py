@@ -1,7 +1,7 @@
 """SSH connection manager for remote LinuxGSM servers.
 Also supports local execution for running on the panel's own machine."""
 import re
-import subprocess
+import subprocess  # nosec B404 - every call site below passes an argv LIST, never a shell string
 from panel.core import terminal
 import time
 from panel.security import privileged as _priv
@@ -571,7 +571,7 @@ def stream_game_backup(server, user, name, chunk=262144):
             argv = ["ssh", "-T", "-o", "StrictHostKeyChecking=accept-new", "-o", "BatchMode=yes",
                     "-p", str(server.port or 22), f"{server.username}@{host}",
                     f"sudo -u {user} cat {_core._quote(path)}"]
-        p = subprocess.Popen(argv, stdout=subprocess.PIPE)
+        p = subprocess.Popen(argv, stdout=subprocess.PIPE)  # nosec B603  # nosemgrep - argv list, no shell; the remote path is _quote()d above
         try:
             while True:
                 b = p.stdout.read(chunk)

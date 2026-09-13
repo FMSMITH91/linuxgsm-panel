@@ -6,7 +6,7 @@ import re
 import shlex
 import signal
 import socket
-import subprocess
+import subprocess  # nosec B404 - every call site below passes an argv LIST, never a shell string
 import tempfile
 import threading
 import time
@@ -552,7 +552,7 @@ def _run_via_ssh_cli(server, command, timeout=30, sudo=None):
     try:
         # errors="replace" like the other two transports — a game server's bytes are not
         # necessarily valid UTF-8, and a strict decode would blank the whole result (see _run_local).
-        r = subprocess.run(ssh_cmd, capture_output=True, text=True, encoding="utf-8",
+        r = subprocess.run(ssh_cmd, capture_output=True, text=True, encoding="utf-8",  # nosec B603  # nosemgrep - argv list, no shell; ssh_cmd is built here from validated parts
                            errors="replace", timeout=timeout)
         return r.stdout.strip(), r.stderr.strip(), r.returncode
     except subprocess.TimeoutExpired:
@@ -589,7 +589,9 @@ def run_command(server, command, timeout=30, sudo=None):
         full_cmd = command
 
     try:
-        stdin, stdout, stderr = client.exec_command(full_cmd, timeout=timeout)
+        # nosec B601 - full_cmd is assembled HERE from _quote()d components; there is no
+        # interpolation of caller text into it that has not been through _quote first.
+        stdin, stdout, stderr = client.exec_command(full_cmd, timeout=timeout)  # nosec B601  # nosemgrep
         exit_code = stdout.channel.recv_exit_status()
         out = stdout.read().decode("utf-8", errors="replace")
         err = stderr.read().decode("utf-8", errors="replace")

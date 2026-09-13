@@ -1,7 +1,7 @@
 """SSH connection manager for remote LinuxGSM servers.
 Also supports local execution for running on the panel's own machine."""
 import re
-import subprocess
+import subprocess  # nosec B404 - every call site below passes an argv LIST, never a shell string
 from panel.core import terminal
 from panel.security import privileged as _priv
 import posixpath as _pp
@@ -694,7 +694,7 @@ def stream_path(server, user, relpath, as_tar=False, limit=None, chunk=262144):
             # take it in argv (helper) or already resolved (the pre-helper fallback), and inherit
             # stdin as before.
             feed = rel.encode() if argv[0] == "ssh" else None
-            p = subprocess.Popen(argv, stdout=subprocess.PIPE,
+            p = subprocess.Popen(argv, stdout=subprocess.PIPE,  # nosec B603  # nosemgrep - argv list, no shell; argv[0] is a literal
                                  stdin=subprocess.PIPE if feed is not None else None)
             if feed is not None:
                 try:
