@@ -16,6 +16,8 @@ first authenticated user's identity into every later test client. Each test_clie
 request pushes its own context, so we keep DB work in short, separate app_context
 blocks and never hold one open across HTTP calls.
 """
+from panel.ops import ssh_manager as _smmod   # the stub seam: stubbed by MODULE,
+# because every caller now reaches these through the module rather than binding them.
 import glob
 import os
 import secrets
@@ -406,11 +408,10 @@ try:
     # never sees it, and it carries no @server_access_required — the check is hand-written in the
     # loop. A break here fans a power action out over SSH to every server in the install.
     if other_id:
-        import app as _appmod
         _ran = []
-        _sv_rag = _appmod.run_as_game_user
+        _sv_rag = _smmod.run_as_game_user
         try:
-            _appmod.run_as_game_user = lambda *a, **k: (_ran.append(a), ("", "", 0))[1]
+            _smmod.run_as_game_user = lambda *a, **k: (_ran.append(a), ("", "", 0))[1]
             grpb = None
             with app.app_context():
                 grpb = Group(name=tag + "_bulk", description="RBAC bulk (auto)", is_default=False)
@@ -439,7 +440,7 @@ try:
                 db.session.delete(Group.query.get(gidb))
                 db.session.commit()
         finally:
-            _appmod.run_as_game_user = _sv_rag
+            _smmod.run_as_game_user = _sv_rag
 
     # ── The setup-only endpoints must stay shut when config.json is LOST ───────────────────────────
     # /api/setup/tailscale/{status,install,up,serve} are deliberately unauthenticated — during a fresh

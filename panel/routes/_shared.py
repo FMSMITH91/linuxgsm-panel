@@ -16,9 +16,13 @@ from panel.core.clock import (utcnow)
 from panel.core.panel_state import (_full_backup_lock, _game_backup_status)
 from panel.db.models import (GameServer, RemoteServer, db)
 from panel.ops import (backup as bk)
-from panel.ops.ssh_manager import (get_server_status, list_server_commands,
-    mod_restart_decision, player_count as sm_player_count, remote_bootstrap_vps,
-    remote_public_ip, run_as_game_user, run_game_backup, set_game_priority)
+from panel.ops.ssh_manager import (get_server_status, mod_restart_decision, player_count as
+    sm_player_count, remote_bootstrap_vps, remote_public_ip, run_game_backup)
+# Reached through the MODULE, not bound by name: these are the seams the test suite
+# monkeypatches. `from x import f` copies the function object, so a stub on the source
+# module would never be seen — attribute access resolves at call time and is stable
+# however the handler moves.
+from panel.ops import ssh_manager as _sm
 from panel.security.auth import (RESTART_SERVER, START_SERVER, STOP_SERVER, UPDATE_SERVER,
     VIEW_CONSOLE, get_user_permissions, log_action)
 from panel.services import (notifications)
@@ -27,6 +31,9 @@ import time
 from app import (_apply_whitelist_everywhere, _autoblock_hosts, _log, _prune_jobs,
     _run_autoblock_now, _security_whitelist, _security_whitelist_add,
     _security_whitelist_remove)
+import re
+from panel.core import (terminal)
+from panel.ops.ssh_manager import (run_command)
 
 def _begin_bootstrap(app, remote_id, opts, actor_id):
     """Seed the job registry and start the background bootstrap. Returns
@@ -59,7 +66,7 @@ def _bg_cache_commands(app, server_ids):
                     gs = db.session.get(GameServer, sid)
                     if not gs:
                         continue
-                    cmds = list_server_commands(gs.remote, gs.short_name, gs.lgsm_name)
+                    cmds = _sm.list_server_commands(gs.remote, gs.short_name, gs.lgsm_name)
                     if cmds:
                         gs.set_commands(cmds)
                         db.session.commit()
@@ -267,11 +274,11 @@ def _run_due_restarts(app):
                     db.session.commit()
                 elif decision == "restart":
                     act = "stop" if gs.stop_pending else "restart"
-                    run_as_game_user(gs.remote, gs.short_name, act + " 2>&1",
+                    _sm.run_as_game_user(gs.remote, gs.short_name, act + " 2>&1",
                                      timeout=90, selfname=gs.lgsm_name)
                     if act == "restart":
                         try:
-                            set_game_priority(gs.remote, gs.short_name)
+                            _sm.set_game_priority(gs.remote, gs.short_name)
                         except Exception:
                             app.logger.debug("priority boost failed", exc_info=True)
                     gs.restart_pending = gs.stop_pending = False
@@ -362,3 +369,46 @@ _bootstrap_lock = threading.Lock()
 # one genuinely per-app object in that set.
 _cmd_fetch_attempts = {}       # server_id -> last background command-fetch time (rate-limits lazy refetch)
 _pubip_resolve_attempts = {}   # remote_id -> last background public-IP resolve time
+
+# Hoisted for the second wave of sections: the file browser and the API routes both call
+# these, and "Manage Game Servers" defines neither. Same rule as the first ten — each closed
+# over `app` and nothing else, so each takes it explicitly.
+
+def _looks_installed(app, remote, short_name, lgsm_name):
+    """Best-effort check of whether a game server is actually installed on the remote — used
+    to reconcile an install whose live progress was lost (e.g. the panel restarted mid-install).
+    Returns True (installed), False (clearly not), or None (couldn't tell)."""
+    try:
+        out, err, _ = run_command(
+            remote,
+            f"sudo -u {short_name} bash -c 'cd /home/{short_name} && ./{lgsm_name} details 2>&1'",
+            timeout=30, sudo=False)
+        low = terminal.strip_escapes((out or "") + "\n" + (err or "")).lower()
+        if re.search(r"not installed|please run .*install|serverfiles.*(missing|not found)|no such file", low):
+            return False
+        if "status:" in low or "server ip:" in low:
+            return True
+        # Fallback: real content in serverfiles means the download completed.
+        out2, _, _ = run_command(
+            remote,
+            f"sudo -u {short_name} bash -c 'du -sm /home/{short_name}/serverfiles 2>/dev/null | cut -f1'",
+            timeout=20, sudo=False)
+        try:
+            return int((out2 or "0").strip() or "0") > 50
+        except ValueError:
+            return None
+    except Exception:
+        app.logger.debug("install reconcile check failed", exc_info=True)
+        return None
+
+def _notify_servers_changed(app):
+    """Best-effort broadcast to every connected browser that the game-server set
+    changed (one was added or removed), so open dashboards / Game Servers pages
+    reconcile live instead of waiting for a manual refresh. A dropped broadcast must
+    never affect the actual install/uninstall, so this is fully swallowed."""
+    try:
+        sio = getattr(app, "socketio", None)
+        if sio is not None:
+            sio.emit("servers_changed", {})
+    except Exception:
+        _log.debug("UI-nicety broadcast only — never let it affect the install/uninstall", exc_info=True)

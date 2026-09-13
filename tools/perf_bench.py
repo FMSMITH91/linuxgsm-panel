@@ -16,6 +16,8 @@ controls. Network latency to a game host is not the panel's to optimise.
 
 SAFETY: refuses to run if a real database already exists, and removes what it created.
 """
+from panel.ops import ssh_manager as _smmod   # the stub seam: stubbed by MODULE,
+# because every caller now reaches these through the module rather than binding them.
 import argparse
 import json
 import os
@@ -72,10 +74,10 @@ from panel.ops import ssh_manager as smmod                                # noqa
 # while everything lived in app.py, and four of these silently stopped taking effect when the
 # monitor moved to monitoring.py: the stub landed on app's re-export while _monitor_pass kept
 # looking the name up in its own namespace, so the benchmark measured un-stubbed code.
-appmod.run_command = lambda *a, **k: ("", "", 0)
+_smmod.run_command = lambda *a, **k: ("", "", 0)
 appmod.get_server_status = lambda *a, **k: "offline"
 appmod.player_list = lambda *a, **k: []
-appmod.list_server_commands = lambda *a, **k: []
+_smmod.list_server_commands = lambda *a, **k: []
 # remote_public_ip moved to panel/routes/_shared with the section that calls it, so the stub
 # has to go where the NAME now resolves — stubbing app would no longer intercept anything.
 from panel.routes import _shared as _sharedmod
