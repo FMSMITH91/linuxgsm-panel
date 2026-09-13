@@ -27,7 +27,7 @@ def register(app):
         if request.path.startswith("/static/") or request.path == "/setup" \
                 or request.path.startswith("/setup/") or request.path.startswith("/api/setup/") \
                 or request.path == "/robots.txt":
-            return
+            return None   # explicit: this function's other exit returns a redirect
         if not is_setup_complete():
             return redirect("/setup")
 

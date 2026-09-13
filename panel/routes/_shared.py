@@ -350,11 +350,6 @@ def _maybe_cache_commands(app, server_id):
 # live in the same (single) panel process, so a plain dict + lock is sufficient.
 _bootstrap_jobs = {}
 _bootstrap_lock = threading.Lock()
-# A token unique to THIS panel process — it changes only when the panel actually restarts.
-# The self-update UI polls for this to flip, rather than the git SHA: install.sh moves HEAD
-# the instant it resets, before the new process is serving, so a SHA change doesn't mean the
-# update is live — a boot-id change does.
-_BOOT_ID = "%.6f" % time.time()
 # ── State that used to live inside register_routes() ──────────────────────────────────────────
 # These were assigned in the body of register_routes, which made them closure cells: reachable
 # only from the functions defined alongside them. Nothing outside could see them — including the
@@ -367,4 +362,3 @@ _BOOT_ID = "%.6f" % time.time()
 # one genuinely per-app object in that set.
 _cmd_fetch_attempts = {}       # server_id -> last background command-fetch time (rate-limits lazy refetch)
 _pubip_resolve_attempts = {}   # remote_id -> last background public-IP resolve time
-_OS_UPDATE_EVERY = 24 * 3600

@@ -11,7 +11,8 @@ from panel.services.monitoring import (_MONITOR_HOST_WORKERS)
 import concurrent.futures
 import time
 from app import (_is_security_pkg, _log, _os_update_note, _os_updates_for)
-from panel.routes._shared import (_OS_UPDATE_EVERY)
+
+_OS_UPDATE_EVERY = 24 * 3600
 
 
 def register(app, supervise):

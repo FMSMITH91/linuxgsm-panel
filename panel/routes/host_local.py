@@ -2,6 +2,7 @@
 
 Moved out of register_routes() verbatim — see panel/routes/__init__.py for why.
 """
+import time
 from flask import (jsonify, render_template, request)
 from flask_login import (current_user, login_required)
 from panel.core.clock import (utcnow)
@@ -13,8 +14,13 @@ from panel.security.auth import (log_action, superadmin_required)
 from panel.services.monitoring import (_autoblock_threshold, _whitelisted)
 from types import (SimpleNamespace)
 from app import (_autoblock_hosts, _json_body, _local_remote_id, _log_and_generic, _maybe_set_threshold, _os_update_note, _run_autoblock_now, _security_whitelist, _set_autoblock_host)
-from panel.routes._shared import (_BOOT_ID)
 from panel.routes._shared import (_whitelist_mutate)
+
+# A token unique to THIS panel process — it changes only when the panel actually restarts.
+# The self-update UI polls for this to flip, rather than the git SHA: install.sh moves HEAD
+# the instant it resets, before the new process is serving, so a SHA change doesn't mean the
+# update is live — a boot-id change does.
+_BOOT_ID = "%.6f" % time.time()
 
 
 def register(app):
