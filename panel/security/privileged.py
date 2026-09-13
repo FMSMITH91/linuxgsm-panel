@@ -263,7 +263,24 @@ def ts_serve_argv(verb, grammar, mount, scheme, port):
     """`tailscale serve|funnel` argv for both CLI grammars — see tools/panel-helper.
 
     The upstream is BUILT HERE from a validated scheme and port, never accepted as a URL. That is
-    the point: the caller cannot aim Tailscale Serve at anything but loopback on this machine."""
+    the point: the caller cannot aim Tailscale Serve at anything but loopback on this machine.
+
+    EVERY ARGUMENT IS VALIDATED HERE, not only by the verb table that wraps this.
+    tool_argv() runs the same validators before calling this — but that covers only callers who go
+    through a verb. tailscale_integration._ts_serve_args() calls this function DIRECTLY to build
+    the UNPRIVILEGED command, and that path is tried FIRST, so the verb-table validation was
+    guarding the root fallback alone. `mount` arrives from the JSON body of
+    POST /api/tailscale/serve and reached the argv unchecked: in the legacy grammar it is a BARE
+    POSITIONAL, so a value beginning with "-" is parsed by the tailscale CLI as an option rather
+    than as a path. CodeQL alert py/command-line-injection #375 named that flow, source to sink,
+    and it was right — the older dismissal of the same alert described the argv form (no shell,
+    so no shell interpolation) which was true and beside the point.
+    Re-validating is idempotent: each validator returns its input unchanged when it passes."""
+    verb = _choice("serve", "funnel")(verb)
+    grammar = _choice("modern", "legacy")(grammar)
+    mount = _ts_mount(mount)
+    scheme = _choice("http", "https+insecure")(scheme)
+    port = _port(port)
     upstream = "%s://127.0.0.1:%s" % (scheme, port)
     if grammar == "modern":
         argv = ["tailscale", verb, "--bg", "--https=443"]

@@ -5695,6 +5695,49 @@ check("privileged: tailscale-serve builds a loopback upstream, legacy grammar",
       _priv.tool_argv("tailscale-serve", ["funnel", "legacy", "/panel", "https+insecure", "8443"])
       == ["tailscale", "funnel", "--bg", "--https", "443", "/panel",
           "https+insecure://127.0.0.1:8443"])
+
+# ── ts_serve_argv validates its OWN arguments, not just the verb table's ───────────────────────
+# Everything above goes through tool_argv, which runs the verb table's validators first. But
+# tailscale_integration._ts_serve_args() calls ts_serve_argv() DIRECTLY to build the unprivileged
+# command — and that path is tried FIRST, with the root verb only as a fallback. So the verb table
+# was guarding the branch that was least likely to run.
+#
+# `mount` comes straight from the JSON body of POST /api/tailscale/serve. In the legacy grammar it
+# is a BARE POSITIONAL, so before this was fixed, "--exit-node=evil" went into the tailscale argv
+# as an OPTION rather than a path — argv form stops shell injection, not argument injection. CodeQL
+# py/command-line-injection #375 traced exactly that, request body to subprocess, and was right; an
+# older dismissal of the same alert had called it a false positive on the grounds that there is no
+# shell, which is true and does not address this.
+#
+# These call the function DIRECTLY, the way the unprivileged path does. Going through tool_argv
+# here would test the wrong door.
+for _m in ("--exit-node=evil", "-T", "--set-path=/x", "../../etc", "//evil.example.com",
+           "/a b", "/x\ty", "-"):
+    _raised = False
+    try:
+        _priv.ts_serve_argv("serve", "legacy", _m, "http", "5000")
+    except _priv.VerbError:
+        _raised = True
+    check("privileged: ts_serve_argv itself rejects mount %r (direct call, no verb table)" % _m,
+          _raised)
+check("privileged: ts_serve_argv still builds the legitimate modern argv",
+      _priv.ts_serve_argv("serve", "modern", "/panel", "http", "5000")
+      == ["tailscale", "serve", "--bg", "--https=443", "--set-path=/panel",
+          "http://127.0.0.1:5000"])
+check("privileged: ts_serve_argv still builds the legitimate legacy argv",
+      _priv.ts_serve_argv("funnel", "legacy", "/", "https+insecure", "8443")
+      == ["tailscale", "funnel", "--bg", "--https", "443", "/",
+          "https+insecure://127.0.0.1:8443"])
+for _bad_verb, _bad_gram, _bad_scheme, _bad_port in (
+        ("logout", "legacy", "http", "5000"), ("serve", "sneaky", "http", "5000"),
+        ("serve", "legacy", "ftp", "5000"), ("serve", "legacy", "http", "99999")):
+    _raised = False
+    try:
+        _priv.ts_serve_argv(_bad_verb, _bad_gram, "/", _bad_scheme, _bad_port)
+    except _priv.VerbError:
+        _raised = True
+    check("privileged: ts_serve_argv rejects (%s,%s,%s,%s) on a direct call"
+          % (_bad_verb, _bad_gram, _bad_scheme, _bad_port), _raised)
 for _bad in (["serve", "modern", "../../etc", "http", "5000"],
              ["serve", "modern", "//evil.example.com", "http", "5000"],
              ["serve", "modern", "/", "ftp", "5000"],
