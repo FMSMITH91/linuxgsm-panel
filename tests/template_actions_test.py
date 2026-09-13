@@ -725,6 +725,25 @@ check("_newConsoleLines(_consoleLines, lines)" in _rc and "_consolePrimed" in _r
       "console: a poll appends what is new instead of rebuilding from its window",
       "refreshConsole no longer diffs against the scrollback — it is back to wiping every poll")
 
+# ── the shared control bar must not assume the detail page's globals ──────────────────────────
+# server_actions.js is loaded by BOTH the server detail page and Files & Config, but pollStats is
+# defined only in server_detail.js — which Files & Config does not load. `setTimeout(pollStats, …)`
+# evaluates the identifier immediately, so on that page a successful restart threw ReferenceError
+# inside the .then, the trailing .catch reported it as "Action failed — connection error", and the
+# operator saw a success toast and a failure toast for one restart that had actually worked.
+_sa_js = (STATIC_JS / "server_actions.js").read_text(encoding="utf-8")
+check("typeof pollStats === 'function'" in _sa_js,
+      "control bar: pollStats is guarded, since Files & Config never loads it",
+      "server_actions.js references pollStats unguarded again — a successful action on Files & "
+      "Config will throw and be reported as a connection error")
+# The structural half. A trailing .catch also catches whatever the SUCCESS handler threw, which is
+# what let a missing function masquerade as a network failure. The connection-error toast belongs
+# to .then's second argument, where only upstream failures reach it.
+check(".catch(() => toast('Action failed" not in _sa_js and ".catch(()=>toast('Action failed" not in _sa_js,
+      "control bar: a handler bug cannot be reported as a connection error",
+      "the connection-error toast is back in a trailing .catch, so any bug in the success handler "
+      "will tell the operator their action failed when it succeeded")
+
 # ── console: select-all is scoped, and the log is downloadable ────────────────────────────────
 # Ctrl+A in the console used to select the WHOLE PAGE, because the console is a plain <div> and the
 # browser hands select-all to the document. Reported as "i try to do ctrl + a in the console it

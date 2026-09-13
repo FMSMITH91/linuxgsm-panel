@@ -59,6 +59,15 @@ regardless of this file — this changelog is for humans.
   non-ASCII — through a real shell and requires each to come back verbatim as a single argument.
 
 ### Fixed
+- **Start/Stop/Restart on Files & Config reported a failure right after reporting success.** The
+  action had actually worked. `server_actions.js` is shared by the server detail page and Files &
+  Config, but it called `pollStats`, which is defined only in `server_detail.js` — a script Files &
+  Config does not load. `setTimeout(pollStats, …)` evaluates the identifier immediately, so the
+  success handler threw `ReferenceError` the moment the toast was shown, and the trailing `.catch`
+  reported that as "Action failed — connection error". The call is guarded now; more importantly,
+  the connection-error toast moved out of the trailing `.catch` and into the handler that only sees
+  upstream failures, so a bug in the success path can never again tell you an action failed when it
+  succeeded — which invites running a restart a second time.
 - **Ctrl+A in the console selected the whole page.** The console is a plain `div`, so the browser
   handed select-all to the document and you got the nav, the cards and the forms along with the
   log. Click into the console and Ctrl/Cmd+A now selects exactly the console. Ctrl+A anywhere else

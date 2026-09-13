@@ -10,7 +10,7 @@ function _doServerAction(action, btn, showOutput) {
     body: JSON.stringify({ action: action })
   })
   .then(r => r.json())
-  .then(d => {
+  .then(function (d) {
     // Maintenance/info actions (details, postdetails, monitor, …) return text you want to READ —
     // show it in a dismissible panel, not a toast that disappears before you see it.
     if (showOutput) showActionOutput(action, d.message || (d.success ? 'Done — no output' : 'Failed'), d.success);
@@ -19,9 +19,24 @@ function _doServerAction(action, btn, showOutput) {
       var b = document.getElementById('restart-pending-banner');
       if (b) b.classList.add('d-none');
     }
-    setTimeout(pollStats, 1200);
+    // pollStats lives in server_detail.js. This file is ALSO loaded by Files & Config, which does
+    // not load that script — and `setTimeout(pollStats, …)` evaluates the identifier immediately,
+    // so on that page it threw ReferenceError before any timer was set. The throw landed in the
+    // trailing .catch and was reported as "Action failed — connection error", right after the
+    // success toast: two contradictory toasts for one restart that had actually worked.
+    if (typeof pollStats === 'function') setTimeout(pollStats, 1200);
+  }, function () {
+    // Upstream only — the request did not land, or the response was not JSON. Handing this as
+    // .then's SECOND argument rather than a trailing .catch is the point: a trailing one also
+    // catches whatever the success handler throws, which is how a missing function turned into a
+    // connection error the operator had no way to diagnose.
+    toast('Action failed — connection error', 'danger');
   })
-  .catch(() => toast('Action failed — connection error', 'danger'))
+  .catch(function (err) {
+    // A bug in the success handler above. Never reported as a failed action: the request already
+    // succeeded, and telling someone their restart failed invites them to run it a second time.
+    if (window.console && console.error) console.error('server action: handler error', err);
+  })
   .finally(() => { btn.disabled = false; btn.innerHTML = orig; });  // nosemgrep
 }
 
