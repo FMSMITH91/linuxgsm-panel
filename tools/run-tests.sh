@@ -22,6 +22,37 @@ PY="${PYTHON:-python3}"
 # one, which is why this only ever bites a developer machine.
 VENVS='(^|/)(\.?venv)/'
 
+# ── Running a suite that owns the database ─────────────────────────────────────────────────────
+# smoke, rbac and manage each REFUSE to run when data/panel.db exists — they will not touch a real
+# install — and they say so and exit 0. A skip that exits 0 reads exactly like a pass.
+#
+# That is not hypothetical. url_map_test calls create_app(), which CREATES data/panel.db, so every
+# DB-owning suite ordered after it silently skipped. manage_test had been skipping in CI for as
+# long as it has been in this script: 21 checks reporting green without running. Reordering the
+# script to put the fast suites first then did the same thing to smoke and rbac, which is how it
+# was found — three suites "passing" in 30s when they take minutes.
+#
+# So the database is cleared BEFORE each of them (what the coverage job in ci.yml already does,
+# which is why that job is the only one that has really been running all five), and a SKIP is
+# treated as a FAILURE. Order is now a free choice rather than a hidden dependency.
+run_suite() {
+    local label="$1" path="$2" out rc
+    echo "== ${label} =="
+    rm -f data/panel.db data/panel.db-shm data/panel.db-wal data/panel.db.backup
+    set +e
+    out="$("$PY" "$path" 2>&1)"; rc=$?
+    set -e
+    printf '%s\n' "$out"
+    if [ "$rc" -ne 0 ]; then
+        echo "  !! ${path} exited ${rc}" >&2
+        return "$rc"
+    fi
+    if printf '%s' "$out" | grep -qiE '^SKIP:'; then
+        echo "  !! ${path} SKIPPED — that is a gap, not a pass. See the note in $0." >&2
+        return 1
+    fi
+}
+
 echo "== byte-compile (syntax errors) =="
 "$PY" -m compileall -q -x "$VENVS" .
 
@@ -56,18 +87,15 @@ echo "== url map (every rule, endpoint, method and guard, vs the committed basel
 # none of those raise at import. Regenerate deliberately with --update and read the diff.
 "$PY" tests/url_map_test.py
 
-echo "== manage.py (the offline recovery CLI: lock-out guard, session revocation) =="
-"$PY" tests/manage_test.py
+run_suite "manage.py (the offline recovery CLI: lock-out guard, session revocation)" tests/manage_test.py
 
-echo "== smoke test (boots the app; routes must not 5xx) =="
 # CI runs this bare, which is right there. On a DEVELOPER machine use ./tools/smoke-local.sh
 # instead of this script: booting the app fires real `sudo -n` probes (pam_faillock counts each
 # one and will lock you out of your own sudo) and real outbound SSH to the fixture hosts. That
 # wrapper runs the same suite with both refused. See its header.
-"$PY" tests/smoke_test.py
+run_suite "smoke test (boots the app; routes must not 5xx)" tests/smoke_test.py
 
-echo "== rbac test (permissions/IDOR enforced server-side; self-seeds on an empty DB) =="
-"$PY" tests/rbac_test.py
+run_suite "rbac test (permissions/IDOR enforced server-side; self-seeds on an empty DB)" tests/rbac_test.py
 
 echo ""
 echo "All checks passed."
