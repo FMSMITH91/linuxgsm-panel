@@ -102,6 +102,12 @@ echo "== url map (every rule, endpoint, method and guard, vs the committed basel
 
 run_suite "manage.py (the offline recovery CLI: lock-out guard, session revocation)" tests/manage_test.py
 
+# Ordered beside manage_test because it is the other sub-second, DB-owning suite. It is the one
+# suite that must NOT pre-complete setup — every other one does, which is exactly why the wizard
+# (the only unauthenticated flow in the panel) sat at 21% coverage with its POST path never run.
+run_suite "setup wizard (the unauthenticated first-run flow, and the lock that closes it)" \
+    tests/setup_wizard_test.py
+
 # CI runs this bare, which is right there. On a DEVELOPER machine use ./tools/smoke-local.sh
 # instead of this script: booting the app fires real `sudo -n` probes (pam_faillock counts each
 # one and will lock you out of your own sudo) and real outbound SSH to the fixture hosts. That
