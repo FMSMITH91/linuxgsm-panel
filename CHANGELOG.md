@@ -37,6 +37,15 @@ regardless of this file — this changelog is for humans.
   on stdin, because a download over SSH gets parsed twice and that is where quoting bugs hide.
 
 ### Changed
+- **Uploads are roughly an order of magnitude faster**, which matters most for a folder of many
+  small files. Two things were wrong, and both were latency rather than bandwidth. Writing one file
+  took at least **three SSH round trips** (create the directory, send a base64 chunk, decode it) —
+  a file small enough for one command now takes **one**, and that is essentially every config,
+  script and Lua file a game server holds. And the browser sent files **strictly one at a time**,
+  leaving the link idle between them; up to four now upload at once. A 400-file gamemode was
+  ~1,600 serialised round trips. Large files still stream in chunks. Both paths also write to a
+  temp file and rename it into place, so a failure part-way can no longer leave a half-written file
+  where the original was.
 - **`ssh_manager`'s shell quoting is now `shlex.quote`** rather than a hand-rolled `'`-and-escape.
   The two produce equivalent shell words, so no command changes; the point is that the one thing
   every remote command depends on being right is the standard library's implementation, and static

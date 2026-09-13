@@ -4498,32 +4498,61 @@ def _guarded(user, abspath, inner):
             f'case "$p" in {hq}|{hq}/*) : ;; *) echo {_OUTSIDE_HOME}; exit 9 ;; esac; ' + inner)
 
 
+# Biggest base64 payload we will put in a single command. The whole `bash -c '<script>'` is ONE
+# argv entry, and Linux caps a single argument at MAX_ARG_STRLEN (131072 bytes) — so this stays
+# comfortably below that with room for the surrounding script. 80k of base64 is ~60 KB of file,
+# which covers essentially every config, script and Lua file a game server holds.
+_ONE_SHOT_B64 = 80000
+_CHUNK_B64 = 50000
+
+
 def _write_file_as_user(server, user, abspath, data_bytes):
-    """Write bytes to a file as the game user, via chunked base64 (each command
-    stays well under the shell's per-arg limit, so large uploads work too)."""
+    """Write bytes to a file as the game user, via base64.
+
+    Round trips are the whole cost here. Every run_command is a separate SSH exec, and this used to
+    make at least THREE per file — mkdir, one per base64 chunk, then the decode — which is what made
+    uploading a folder of several hundred small Lua files take minutes: the work is nothing, the
+    latency is everything. A file small enough to fit one command now takes ONE, and that is almost
+    every file anyone uploads. Large files still stream in chunks, with the mkdir folded into the
+    first one.
+
+    Both paths write to a temp file and `mv` it into place. The previous form decoded straight over
+    the destination, so a failure part-way left the real file truncated; a rename within the same
+    directory is atomic, so the destination is either the old file or the whole new one.
+    """
     import base64 as _b64
     b64 = _b64.b64encode(data_bytes).decode()
     tmp = abspath + ".paneltmp"
-    # Ensure the parent directory exists (uploads to a fresh folder, new files).
     parent = _pp.dirname(abspath)
-    # The guard rides the mkdir: it is the first thing this does, so a target that resolves outside
-    # the home dir is refused before any byte is written. write_file and upload_file both land here.
-    _mk, _, _ = run_command(
-        server, f"sudo -u {user} bash -c {_quote(_guarded(user, abspath, 'mkdir -p ' + _quote(parent)))}",
-        timeout=15, sudo=False)
-    if _OUTSIDE_HOME in (_mk or ""):
-        return False, "Invalid path"
-    CH = 50000
+    mk = "mkdir -p " + _quote(parent)
+    # The guard rides whichever command goes first, so a target that resolves outside the home dir
+    # is refused before any byte is written.
+    if len(b64) <= _ONE_SHOT_B64:
+        inner = (f"{mk} && printf %s {_quote(b64)} | base64 -d > {_quote(tmp)} "
+                 f"&& mv -f {_quote(tmp)} {_quote(abspath)}")
+        out, e, rc = run_command(server, f"sudo -u {user} bash -c {_quote(_guarded(user, abspath, inner))}",
+                                 timeout=60, sudo=False)
+        if _OUTSIDE_HOME in (out or ""):
+            return False, "Invalid path"
+        return (rc == 0), (e or out or "")
+
     op = ">"
-    for i in range(0, max(len(b64), 1), CH):
-        chunk = b64[i:i + CH]
+    first = True
+    for i in range(0, max(len(b64), 1), _CHUNK_B64):
+        chunk = b64[i:i + _CHUNK_B64]
         inner = f"printf %s {_quote(chunk)} {op} {_quote(tmp)}"
-        _, e, rc = run_command(server, f"sudo -u {user} bash -c {_quote(inner)}", timeout=30, sudo=False)
+        if first:
+            inner = f"{mk} && {inner}"
+            inner = _guarded(user, abspath, inner)
+        out, e, rc = run_command(server, f"sudo -u {user} bash -c {_quote(inner)}", timeout=60, sudo=False)
+        if first and _OUTSIDE_HOME in (out or ""):
+            return False, "Invalid path"
         if rc != 0:
             return False, e or "write failed"
         op = ">>"
-    fin = f"base64 -d {_quote(tmp)} > {_quote(abspath)} && rm -f {_quote(tmp)}"
-    o, e, rc = run_command(server, f"sudo -u {user} bash -c {_quote(fin)}", timeout=30, sudo=False)
+        first = False
+    fin = f"base64 -d {_quote(tmp)} > {_quote(abspath)}.new && mv -f {_quote(abspath)}.new {_quote(abspath)} && rm -f {_quote(tmp)}"
+    o, e, rc = run_command(server, f"sudo -u {user} bash -c {_quote(fin)}", timeout=60, sudo=False)
     return (rc == 0), (e or o or "")
 
 

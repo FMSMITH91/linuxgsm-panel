@@ -548,34 +548,59 @@ var _uploadChecked = true;   // did the pre-flight actually reach the host?
 // a whole tree needs no directory-creation round trips of its own.
 // `ovw` is either a per-name map (the loose-file dialog ticks them individually) or the literal
 // `true` (the folder dialog asks once for the whole tree).
+// How many uploads are in flight at once. Each one is a separate HTTP request that ends in an SSH
+// write, and the cost is almost entirely LATENCY rather than bytes — so sending them strictly one
+// after another left the link idle most of the time. Four is deliberately modest: the server does
+// real work per request (sudo, base64, a write as the game user) and a game host is usually a small
+// VPS, so this is meant to fill the pipe, not to flood the box.
+var UPLOAD_CONCURRENCY = 4;
+
 function _doUpload(entries, ovw){
   var st=document.getElementById('upload-status');
-  var failed=0, clashed=0, all=ovw===true;
-  var many=entries.length>1;
-  function next(i){
-    if(i>=entries.length){
-      var okCount=entries.length-failed-clashed;
-      var bits=[];
-      if(okCount) bits.push('\u2713 '+okCount+' uploaded to '+(curDir||'home'));
-      if(clashed) bits.push(clashed+' already existed'+(_uploadChecked?'':' (the host could not be checked first)')+' \u2014 re-drop to replace');
-      if(failed) bits.push(failed+' failed');
-      st.textContent=bits.join(', ');
-      st.className='small mt-2 '+((failed||clashed)?'text-warning':'text-success');
-      browse(curDir); setTimeout(function(){ st.textContent=''; },8000); return;
-    }
-    // A tree uploads one file per request, so the count is the only honest progress there is.
-    st.textContent = many ? ('Uploading '+(i+1)+' of '+entries.length+'\u2026 '+entries[i].file.name)
-                          : ('Uploading '+entries[i].file.name+'\u2026');
-    st.className='small mt-2 text-secondary';
-    var e=entries[i];
-    var dest = e.dir ? (curDir ? curDir+'/'+e.dir : e.dir) : curDir;
-    var fd=new FormData(); fd.append('file', e.file); fd.append('path', dest);
-    if(all || ovw[e.file.name]) fd.append('overwrite','1');
-    fetch(MOUNT+'/api/server/'+serverId+'/upload',{method:'POST',body:fd}).then(r=>r.json())
-      .then(d=>{ if(d.conflict) clashed++; else if(!d.success) failed++; })
-      .catch(()=>{failed++;}).finally(()=>{ next(i+1); });
+  var failed=0, clashed=0, done=0, all=ovw===true;
+  var total=entries.length, many=total>1, next=0, active=0, finished=false;
+
+  function report(){
+    var okCount=total-failed-clashed;
+    var bits=[];
+    if(okCount) bits.push('\u2713 '+okCount+' uploaded to '+(curDir||'home'));
+    if(clashed) bits.push(clashed+' already existed'+(_uploadChecked?'':' (the host could not be checked first)')+' \u2014 re-drop to replace');
+    if(failed) bits.push(failed+' failed');
+    st.textContent=bits.join(', ');
+    st.className='small mt-2 '+((failed||clashed)?'text-warning':'text-success');
+    browse(curDir); setTimeout(function(){ st.textContent=''; },8000);
   }
-  next(0);
+
+  function pump(){
+    // Completion is counted, not inferred from the index: with several in flight the LAST request
+    // to start is not the last to finish, so finishing on "index === total" would report while
+    // uploads were still running.
+    if(done >= total){
+      if(!finished){ finished = true; report(); }
+      return;
+    }
+    while(active < UPLOAD_CONCURRENCY && next < total){
+      (function(e){
+        active++; next++;
+        var dest = e.dir ? (curDir ? curDir+'/'+e.dir : e.dir) : curDir;
+        var fd=new FormData(); fd.append('file', e.file); fd.append('path', dest);
+        if(all || ovw[e.file.name]) fd.append('overwrite','1');
+        fetch(MOUNT+'/api/server/'+serverId+'/upload',{method:'POST',body:fd}).then(r=>r.json())
+          .then(d=>{ if(d.conflict) clashed++; else if(!d.success) failed++; })
+          .catch(()=>{failed++;})
+          .finally(function(){
+            active--; done++;
+            st.textContent = many ? ('Uploading '+done+' of '+total+'\u2026')
+                                  : ('Uploading '+e.file.name+'\u2026');
+            st.className='small mt-2 text-secondary';
+            pump();
+          });
+      })(entries[next]);
+    }
+  }
+  st.textContent = many ? ('Uploading 0 of '+total+'\u2026') : ('Uploading '+entries[0].file.name+'\u2026');
+  st.className='small mt-2 text-secondary';
+  pump();
 }
 function doUpload(ev){
   ev.preventDefault();
