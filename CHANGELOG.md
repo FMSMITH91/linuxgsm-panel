@@ -8,6 +8,10 @@ regardless of this file — this changelog is for humans.
 ## [Unreleased]
 
 ### Added
+- **Download the console log** from the Live Console header — the full LinuxGSM log file, not just
+  the slice on screen. It reuses the file browser's download route (the log lives under the game
+  user's home), so it needs the same permission; the button is hidden for anyone who would only be
+  bounced by it.
 - **Line numbers in the file editor.** A gutter beside the editor, kept in step with the text as
   you type and scroll. The editor no longer soft-wraps (a wrapped line occupies several rows, which
   would push every number below it out of alignment) — long lines scroll sideways instead, as they
@@ -55,6 +59,13 @@ regardless of this file — this changelog is for humans.
   non-ASCII — through a real shell and requires each to come back verbatim as a single argument.
 
 ### Fixed
+- **Ctrl+A in the console selected the whole page.** The console is a plain `div`, so the browser
+  handed select-all to the document and you got the nav, the cards and the forms along with the
+  log. Click into the console and Ctrl/Cmd+A now selects exactly the console. Ctrl+A anywhere else
+  on the page is untouched, as are Ctrl+C and Ctrl+Alt+A.
+- **An unreachable host blanked the console on page load.** `api_console` answers one with an empty
+  list, and the first poll adopted that over the server-rendered content. It keeps what is on
+  screen and adopts the next poll that actually returns something.
 - **Restart and Stop on the dashboard fired with no confirmation.** The server detail page has
   always asked before either — the dashboard did not, so a mis-click on a row restarted or stopped
   a populated server instantly. Both now confirm, naming the server and saying how many players are

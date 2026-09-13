@@ -328,12 +328,18 @@ function refreshConsole(forceScroll, wantLines) {
       var sig = lines.length + ' ' + (lines[lines.length - 1] || '');
       if (sig === _consoleSig && !forceScroll) return;
       _consoleSig = sig;
-      if (!_consolePrimed) {
-        // FIRST poll after page load. The page was server-rendered with a short tail, and this
-        // window reaches much further back — that extra history is exactly what we want on screen,
-        // and appending only "what is newer than the seed" would throw it away (the first version
-        // of this did, and opened the console showing three lines). The window is the tail of the
-        // same file, so it is a superset of the seed: adopt it whole, once.
+      if (!_consolePrimed && lines.length) {
+        // FIRST poll after page load, and it actually returned something. The page was
+        // server-rendered with a short tail, and this window reaches much further back — that
+        // extra history is exactly what we want on screen, and appending only "what is newer than
+        // the seed" would throw it away (the first version of this did, and opened the console
+        // showing three lines). The window is the tail of the same file, so it is a superset of
+        // the seed: adopt it whole, once.
+        //
+        // `lines.length` guards the wipe: api_console answers an unreachable host with an EMPTY
+        // list, and priming on that would blank the server-rendered console the moment you opened
+        // the page of a server that happens to be down. Staying unprimed means the next poll that
+        // does return something adopts it instead.
         _consolePrimed = true;
         _consoleLines = [];
         consoleEl.innerHTML = '';
@@ -371,6 +377,28 @@ function loadMoreConsole(btn) {
     .catch(function(){ if (window.toast) toast('Could not load more console output', 'danger'); })
     .finally(function(){ if (btn) { btn.disabled = false; btn.innerHTML = orig; } });  // nosemgrep
 }
+
+// Ctrl/Cmd+A inside the console selects the CONSOLE, not the whole page.
+//
+// The console is a plain <div>, so it is not a selection context of its own: the browser hands
+// Ctrl+A to the document and you get the entire page — nav, cards, forms — when all you wanted was
+// the log. Making it focusable (tabindex) means clicking into it gives it focus, and a keydown
+// handler there can scope the selection to its own contents. Native selection with the mouse is
+// unaffected; this only redefines "select all" while the console is the thing you are working in.
+(function(){
+  if (!consoleEl) return;
+  consoleEl.setAttribute('tabindex', '0');
+  consoleEl.addEventListener('keydown', function(e){
+    if ((e.ctrlKey || e.metaKey) && !e.altKey && (e.key === 'a' || e.key === 'A')) {
+      e.preventDefault();
+      var range = document.createRange();
+      range.selectNodeContents(consoleEl);
+      var sel = window.getSelection();
+      sel.removeAllRanges();
+      sel.addRange(range);
+    }
+  });
+})();
 
 function clearConsole() {
   consoleEl.innerHTML = '';
