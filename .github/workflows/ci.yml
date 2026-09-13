@@ -122,7 +122,11 @@ jobs:
             rm -f data/panel.db data/panel.db-shm data/panel.db-wal data/panel.db.backup
             python -m coverage run --parallel-mode --source=. \
               --omit="./tests/*,./tools/*,./.venv/*" "tests/${suite}_test.py" >/dev/null 2>&1 || true
-            echo "| \`${suite}\` | $((SECONDS - _t0)) |" >> /tmp/suite_times.md
+            # Both places on purpose: the step summary is for a human skimming the run, the
+            # stdout copy is what `gh run view --log` can actually retrieve. The first version of
+            # this wrote only the summary, and the numbers turned out to be unreadable from the
+            # API — which is the one way I needed to read them.
+            echo "| \`${suite}\` | $((SECONDS - _t0)) |" | tee -a /tmp/suite_times.md
           done
           python -m coverage combine
           python -m coverage xml -o coverage.xml
