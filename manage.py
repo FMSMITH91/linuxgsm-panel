@@ -33,8 +33,8 @@ import warnings
 with warnings.catch_warnings():
     warnings.simplefilter("ignore")
     from app import create_app, password_problem   # noqa: E402  (inside the warnings guard)
-    from models import db, User                     # noqa: E402
-    import auth                                      # noqa: E402
+    from panel.db.models import db, User                     # noqa: E402
+    from panel.security import auth                                      # noqa: E402
 
 app = create_app()
 

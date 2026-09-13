@@ -25,7 +25,7 @@ import sys
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from config import DB_PATH, SECRET_FILE, CRED_KEY_FILE, CONFIG_FILE  # noqa: E402
+from panel.core.config import DB_PATH, SECRET_FILE, CRED_KEY_FILE, CONFIG_FILE  # noqa: E402
 
 if DB_PATH.exists():
     print("SKIP: %s already exists — this only runs against a throwaway DB." % DB_PATH)
@@ -34,17 +34,17 @@ if DB_PATH.exists():
 _PREEXISTING = {p for p in (SECRET_FILE, CRED_KEY_FILE, CONFIG_FILE) if p.exists()}
 _CFG_BACKUP = CONFIG_FILE.read_bytes() if CONFIG_FILE in _PREEXISTING else None
 
-from config import load_config, save_config  # noqa: E402
+from panel.core.config import load_config, save_config  # noqa: E402
 _cfg = load_config()
 _cfg["setup_complete"] = True
 save_config(_cfg)
 
-import system_ops as _so  # noqa: E402
+from panel.ops import system_ops as _so  # noqa: E402
 _so._check_sudo = lambda force=False: False   # never probe real sudo (pam_faillock)
 
 import manage  # noqa: E402   (creates its own app at import, exactly as the CLI does)
-from models import db, User  # noqa: E402
-import auth  # noqa: E402
+from panel.db.models import db, User  # noqa: E402
+from panel.security import auth  # noqa: E402
 
 results = []
 

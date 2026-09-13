@@ -3,7 +3,7 @@ import json
 import logging
 import re
 import bcrypt
-from clock import utcnow
+from panel.core.clock import utcnow
 from flask_login import UserMixin
 from flask_sqlalchemy import SQLAlchemy
 from sqlalchemy import text
@@ -177,13 +177,13 @@ class User(UserMixin, db.Model):
     @property
     def email_display(self):
         """Decrypted email for display (stored encrypted at rest)."""
-        from config import decrypt_secret
+        from panel.core.config import decrypt_secret
         return decrypt_secret(self.email) if self.email else ""
 
     @property
     def totp_secret_plain(self):
         """The decrypted TOTP secret (stored encrypted at rest), or ''."""
-        from config import decrypt_secret
+        from panel.core.config import decrypt_secret
         return decrypt_secret(self.totp_secret) if self.totp_secret else ""
 
     # ── API token (Bearer auth for scripts/bots; inherits the user's RBAC) ──
@@ -667,7 +667,7 @@ def database_stats():
     """Size of the DB file + its WAL sidecar (bytes) and the audit_log row count —
     the numbers that tell you whether the DB is growing and worth optimizing."""
     import os
-    from config import DB_PATH
+    from panel.core.config import DB_PATH
 
     def _sz(p):
         try:
@@ -709,7 +709,7 @@ def optimize_database():
     best-effort VACUUM. Returns (ok, message, {"before","after","freed"} bytes).
     Never raises — any failure yields (False, friendly message)."""
     import os
-    from config import DB_PATH
+    from panel.core.config import DB_PATH
     path = str(DB_PATH)
 
     def _size():
@@ -797,7 +797,7 @@ def _ensure_db_healthy(path=None):
     import shutil
     import sqlite3
     import time as _t
-    from config import DB_PATH
+    from panel.core.config import DB_PATH
     path = path or str(DB_PATH)
     backup = path + ".backup"
     try:

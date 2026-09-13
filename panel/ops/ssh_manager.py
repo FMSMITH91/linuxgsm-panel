@@ -7,14 +7,14 @@ import shlex
 import signal
 import socket
 import subprocess
-import terminal
+from panel.core import terminal
 import tempfile
 import threading
 import time
 
 import paramiko
 
-from config import decrypt_secret
+from panel.core.config import decrypt_secret
 
 _log = logging.getLogger("panel.ssh")
 
@@ -63,7 +63,7 @@ except Exception:
     _tpool = None
     _real_subprocess = subprocess
 
-import privileged as _priv
+from panel.security import privileged as _priv
 
 # In-memory SSH connection cache
 _connections = {}
@@ -332,7 +332,7 @@ def _ssh_connect_timeout():
     and has always been declared in DEFAULT_CONFIG, but nothing read it: the paramiko path hardcoded
     15 and the ssh-CLI path 12, so the documented knob did nothing and the two disagreed."""
     try:
-        from config import load_config
+        from panel.core.config import load_config
         return max(1, min(int(load_config().get("ssh_timeout", 10)), 120))
     except Exception:
         return 10
@@ -388,7 +388,7 @@ def get_connection(server, force_new=False):
             resolved_host = server.host
             # If the host is a plain name, try resolving via MagicDNS
             if "." not in server.host and not server.host.startswith("100."):
-                import tailscale_integration as ts
+                from panel.ops import tailscale_integration as ts
                 ts_info = ts.get_tailscale_info()
                 if ts_info.dns_name:
                     domain = ts_info.dns_name.split(".", 1)[1] if "." in ts_info.dns_name else "ts.net"
@@ -455,12 +455,12 @@ def _persist_host_key(server, keystr):
     """Store the pinned host key on the server row (best-effort; if there's no DB session
     in scope it simply pins on the next connection instead)."""
     try:
-        from models import db
+        from panel.db.models import db
         server.host_key = keystr
         db.session.commit()
     except Exception:
         try:
-            from models import db
+            from panel.db.models import db
             db.session.rollback()
         except Exception:
             # no usable session; the key just pins on the next connection instead
@@ -486,7 +486,7 @@ def _resolve_ts_host(server):
     host = server.host
     if "." not in host and not host.startswith("100."):
         try:
-            import tailscale_integration as ts
+            from panel.ops import tailscale_integration as ts
             info = ts.get_tailscale_info()
             if info.dns_name:
                 domain = info.dns_name.split(".", 1)[1] if "." in info.dns_name else "ts.net"
@@ -874,7 +874,7 @@ def remote_live_metrics(server):
     apart + /proc/meminfo). For the local machine, delegates to system_ops."""
     if is_local_server(server):
         try:
-            import system_ops
+            from panel.ops import system_ops
             return system_ops.live_metrics()
         except Exception:
             _log.debug("remote_live_metrics: ignored non-fatal error", exc_info=True)
@@ -2566,7 +2566,7 @@ def _panel_web_port(server):
     if not is_local_server(server):
         return None
     try:
-        from config import load_config
+        from panel.core.config import load_config
         cfg = load_config()
     except Exception:
         return None
@@ -2588,7 +2588,7 @@ def _panel_served_over_tailscale(server):
     try:
         if not is_local_server(server):
             return False
-        from config import load_config
+        from panel.core.config import load_config
         return bool(load_config().get("tailscale_setup_done"))
     except Exception:
         return False
@@ -3150,7 +3150,7 @@ def _load_deps_csv(os_slug=None):
     """LinuxGSM's package list for this host's distro, as {key: [packages]}; keys are 'all',
     'steamcmd', and each game shortname. Fetched and cached rather than committed here — see
     lgsm_data — and chosen per distro rather than always Ubuntu 24.04."""
-    import lgsm_data
+    from panel.services import lgsm_data
     name = lgsm_data.deps_name(os_slug)
     if _DEPS_CSV_CACHE.get(name) is not None:
         return _DEPS_CSV_CACHE[name]
@@ -3255,7 +3255,7 @@ def port_in_use(server, port):
 def _parse_upgradable(out):
     """Parse `apt list --upgradable` output — the local check parses the identical format, so both
     go through system_ops.parse_upgradable rather than keeping two copies in step by hand."""
-    import system_ops
+    from panel.ops import system_ops
     return system_ops.parse_upgradable(out)
 
 
@@ -4018,7 +4018,7 @@ def remote_fail2ban_top_ips(server, limit=20, days=7):
     cutoff = (datetime.now() - timedelta(days=days)).strftime("%Y-%m-%d")   # panel clock; no shell input
     # The remote twin of system_ops.fail2ban_top_ips, which #118 converted. Same split: the verb
     # reads and filters the rotated logs, and the tally — the second awk — is the shared Python.
-    import system_ops as _so
+    from panel.ops import system_ops as _so
     out, _, _ = run_privileged(server, "f2b-log-lines", [cutoff], timeout=25, merge_stderr=False)
     out = _so._tally_f2b_lines(out, limit)
     banned = set()

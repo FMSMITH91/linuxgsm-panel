@@ -15,9 +15,9 @@ on:
     # what those harnesses reach, and this is the slowest job in the repo — so scope it to the code
     # it actually fuzzes rather than paying for it on every PR.
     paths:
-      - 'ssh_manager.py'
-      - 'system_ops.py'
-      - 'terminal.py'
+      - 'panel/ops/ssh_manager.py'
+      - 'panel/ops/system_ops.py'
+      - 'panel/core/terminal.py'
       - 'tests/fuzz/**'
       - '.github/workflows/cflite_pr.yml'
       - '.clusterfuzzlite/**'

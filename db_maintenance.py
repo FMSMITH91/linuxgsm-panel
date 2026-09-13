@@ -28,7 +28,7 @@ _log = logging.getLogger("panel.db_maintenance")
 def _paths():
     """(db_path, rolling_backup_path) from the panel config. Imported lazily so the module
     stays usable in tests that pass explicit paths without a config on disk."""
-    from config import DB_PATH
+    from panel.core.config import DB_PATH
     p = str(DB_PATH)
     return p, p + ".backup"
 

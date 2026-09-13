@@ -10,18 +10,18 @@ on:
   push:
     branches: [ main ]
     paths:
-      - 'ssh_manager.py'
-      - 'system_ops.py'
-      - 'terminal.py'
+      - 'panel/ops/ssh_manager.py'
+      - 'panel/ops/system_ops.py'
+      - 'panel/core/terminal.py'
       - 'tests/fuzz/**'
       - '.github/workflows/fuzz.yml'
       - 'requirements.txt'
   pull_request:
     branches: [ main ]
     paths:
-      - 'ssh_manager.py'
-      - 'system_ops.py'
-      - 'terminal.py'
+      - 'panel/ops/ssh_manager.py'
+      - 'panel/ops/system_ops.py'
+      - 'panel/core/terminal.py'
       - 'tests/fuzz/**'
       - '.github/workflows/fuzz.yml'
       - 'requirements.txt'

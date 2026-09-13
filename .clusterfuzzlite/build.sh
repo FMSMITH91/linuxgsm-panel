@@ -26,7 +26,7 @@ COMPILE_ARGS=(
   --collect-submodules eventlet
   --collect-submodules paramiko
   --collect-submodules dns
-  --hidden-import config
+  --hidden-import panel.core.config
 )
 
 for fuzzer in "$SRC_DIR"/tests/fuzz/fuzz_*.py; do

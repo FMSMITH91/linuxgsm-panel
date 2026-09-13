@@ -41,6 +41,18 @@ regardless of this file — this changelog is for humans.
   on stdin, because a download over SSH gets parsed twice and that is where quoting bugs hide.
 
 ### Changed
+- **The application modules now live in a `panel/` package.** Eighteen of the twenty-one Python
+  modules that sat loose in the repo root moved into `panel/{core,db,security,ops,services}/`,
+  grouped by the layering the import graph already had — root drops from 37 tracked files to 19.
+  Nothing a user sees changes, and no route, endpoint, method or guard moved: the URL-map snapshot
+  matches its baseline byte for byte across all 208 rules. `app.py`, `manage.py` and
+  `db_maintenance.py` deliberately stay at the root, because the systemd unit, `recover.sh` and the
+  installer each address them by path, as do the shell scripts behind the documented install and
+  recovery one-liners. `README.md` has the map. Two new gates keep it honest: one fails if a
+  package imports *down* the stack at module level, the other if an on-disk path (`data/`,
+  `translations/`, the git tree) goes back to being derived from a module's own `__file__` instead
+  of `panel.REPO_ROOT` — which, during this move, silently pointed the database, secret key and
+  credential key at `panel/core/data/` and would have presented a live install as a fresh one.
 - **LinuxGSM's data files are no longer committed here.** `lgsm/data/serverlist.csv` (every
   supported game) and `lgsm/data/ubuntu-24.04.csv` (each game's apt packages) belong to LinuxGSM,
   and vendoring them froze the panel's game list at whatever upstream shipped the day the copy was

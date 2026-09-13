@@ -13,7 +13,7 @@
   ],
   "accepted": [
     {
-      "filePath": "system_ops.py",
+      "filePath": "panel/ops/system_ops.py",
       "patternId": "Semgrep_python.lang.security.audit.dangerous-subprocess-use-tainted-env-args.dangerous-subprocess-use-tainted-env-args",
       "reason": "_run() is the PRE-HELPER FALLBACK: subprocess.run(cmd, shell=True) on a composed string. It is the documented remaining hole in the privilege boundary (SECURITY.md, 'Known trust-model limitation'), kept so a host that has not had install.sh re-run as root keeps working. Suppressing it in the source would hide the one thing the docs say is still open, so it is accepted HERE instead \u2014 visible, named, and deleted the day that fallback goes.",
       "acceptedOn": "2026-09-11",

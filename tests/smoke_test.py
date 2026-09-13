@@ -16,7 +16,7 @@ import sys
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from config import DATA_DIR, DB_PATH, SECRET_FILE, CRED_KEY_FILE, CONFIG_FILE
+from panel.core.config import DATA_DIR, DB_PATH, SECRET_FILE, CRED_KEY_FILE, CONFIG_FILE
 
 # Never clobber a real install: only run against a fresh, throwaway data dir.
 if DB_PATH.exists():
@@ -27,7 +27,7 @@ _PREEXISTING = {p for p in (SECRET_FILE, CRED_KEY_FILE, CONFIG_FILE) if p.exists
 
 # Mark setup complete in config BEFORE the app loads it — is_setup_complete()
 # requires both this flag and a SetupState(complete=True) row (added below).
-from config import load_config, save_config
+from panel.core.config import load_config, save_config
 _cfg = load_config()
 _cfg["setup_complete"] = True
 save_config(_cfg)
@@ -36,9 +36,10 @@ save_config(_cfg)
 # suite runs with outbound access BLOCKED — as it should, since it must not depend on GitHub. Seed
 # the cache so the game list is populated, otherwise every game_type validation below fails and the
 # install/import assertions fail for a reason that has nothing to do with what they test.
-import lgsm_data as _lgsm_data
+from panel.services import lgsm_data as _lgsm_data
 import tempfile as _lgsm_tempfile
-_lgsm_data._CACHE_DIR = _lgsm_data.Path(_lgsm_tempfile.mkdtemp())
+import pathlib as _lgsm_pathlib
+_lgsm_data._CACHE_DIR = _lgsm_pathlib.Path(_lgsm_tempfile.mkdtemp())
 _lgsm_data._CACHE_DIR.mkdir(parents=True, exist_ok=True)
 (_lgsm_data._CACHE_DIR / _lgsm_data.SERVERLIST).write_text(
     "shortname,gameservername,gamename,os\n"
@@ -51,8 +52,8 @@ _lgsm_data._CACHE_DIR.mkdir(parents=True, exist_ok=True)
 _lgsm_data._mem.clear()
 
 from app import create_app
-from models import db, User, Group, RemoteServer, GameServer, SetupState, CustomCommand
-import auth
+from panel.db.models import db, User, Group, RemoteServer, GameServer, SetupState, CustomCommand
+from panel.security import auth
 
 app = create_app()
 app.config["WTF_CSRF_ENABLED"] = False   # test client posts without a browser-issued token
@@ -156,7 +157,7 @@ try:
         mru.groups.append(mrg)
         db.session.add(mru)
         # A 2FA-enabled user with known backup codes, to exercise backup-code login.
-        from config import encrypt_secret
+        from panel.core.config import encrypt_secret
         tfa = User(username="smoke_2fa", password_hash=auth.hash_password("Str0ng!passw0rd"),
                    display_name="2FA", is_superadmin=True, is_active=True, totp_enabled=True,
                    totp_secret=encrypt_secret(auth.generate_totp_secret()))
@@ -455,7 +456,7 @@ try:
     _cfg_backup = CONFIG_FILE.read_bytes()
     try:
         CONFIG_FILE.write_text("{ not valid json")
-        from config import load_config as _lc
+        from panel.core.config import load_config as _lc
         check("setup lock: the corrupt-config precondition really does hold",
               _lc().get("setup_complete") is False, "config still reads as complete")
         _sw = app.test_client().post("/setup", data={"step": "welcome", "site_title": "pwned",
@@ -478,8 +479,8 @@ try:
     # to the next INSERT — so a new server inherits the old one's alert flags and, via
     # _max_players_cache, its CAPACITY. #81 pruned one such map; these are its siblings.
     _am2 = sys.modules["app"]
-    _monmod = sys.modules["monitoring"]   # functions moved here resolve their deps HERE
-    _ps = sys.modules["panel_state"]      # the shared caches now live here
+    _monmod = sys.modules["panel.services.monitoring"]   # functions moved here resolve their deps HERE
+    _ps = sys.modules["panel.core.panel_state"]      # the shared caches now live here
     _dead_r, _dead_s = 987654, 876543
     _ps._monitor_state["remotes"][_dead_r] = True
     _ps._monitor_state["disk"][_dead_r] = True
@@ -608,7 +609,7 @@ try:
 
     # ── Database maintenance: stats + VACUUM/ANALYZE optimize ─────
     with app.app_context():
-        from models import database_stats, optimize_database
+        from panel.db.models import database_stats, optimize_database
         _st = database_stats()
         check("db-stats: reports a positive DB size", _st["size"] > 0,
               "got %r" % _st.get("size"))
@@ -619,7 +620,7 @@ try:
               "before" in _info and _info.get("after", 0) > 0)
 
         # ── Debug report: generates, and never leaks the session/credential secrets ──
-        from system_ops import generate_debug_report
+        from panel.ops.system_ops import generate_debug_report
         _dr = generate_debug_report()
         check("debug report: returns report/summary/issues_url/filename",
               all(k in _dr for k in ("report", "summary", "issues_url", "filename")))
@@ -688,7 +689,7 @@ try:
     # forward any number of versions without breaking.
     with app.app_context():
         from sqlalchemy import text as _t, inspect as _inspect
-        from models import _run_light_migrations
+        from panel.db.models import _run_light_migrations
 
         def _ucols():
             return {col["name"] for col in _inspect(db.engine).get_columns("user")}
@@ -848,7 +849,7 @@ try:
           imp_denied.status_code in (301, 302, 303, 403), "got %d" % imp_denied.status_code)
 
     # ── Session management: per-device login sessions + individual revoke ──
-    from models import UserSession
+    from panel.db.models import UserSession
 
     def _real_login(username="smoke_admin", pw="Str0ng!passw0rd"):
         cc = app.test_client()
@@ -941,9 +942,9 @@ try:
     check("session: adoption created a row for the legacy login", n_leg == 1, "rows=%d" % n_leg)
 
     # ── History endpoint: a player peak must survive down-sampling (not be decimated away) ──
-    from models import MetricSample
+    from panel.db.models import MetricSample
     from datetime import timedelta as _td
-    from clock import utcnow as _utcnow
+    from panel.core.clock import utcnow as _utcnow
     with app.app_context():
         _base = _utcnow() - _td(hours=6)
         # 500 samples so sstep = 500//240 = 2; players is 0 everywhere except a single spike of 5 at an
@@ -970,7 +971,7 @@ try:
     # The route calls _metrics_work -> _query_server_metrics, both of which live in monitoring.py
     # and resolve these two names in THAT module. Patching app's copies would no-op and the stubs
     # would never run — the poll would try to reach the fixture host for real.
-    _dmapp = sys.modules["monitoring"]
+    _dmapp = sys.modules["panel.services.monitoring"]
     _sv_slm, _sv_map = _dmapp.server_live_metrics, _dmapp.game_map
     try:
         _dmapp.server_live_metrics = lambda remote, short=None, port=None, force=False: {
@@ -1007,7 +1008,7 @@ try:
     # ever comes back. run_command is stubbed so the port scan does no real SSH.
     from sqlalchemy import event as _sa_event
     _appmod = sys.modules["app"]
-    import ssh_manager as _sm_mod   # the port-scan cache lives here now
+    from panel.ops import ssh_manager as _sm_mod   # the port-scan cache lives here now
     with app.app_context():
         for _r in range(5):
             # 192.0.2.0/24 is RFC 5737 TEST-NET-1: reserved for documentation and guaranteed never
@@ -1210,20 +1211,20 @@ try:
           gs_id in next((t["server_ids"] for t in (c.get("/api/tags").get_json() or {})["tags"]
                          if t["id"] == _tag_id), []))
     with app.app_context():
-        from models import game_server_tags as _gst
+        from panel.db.models import game_server_tags as _gst
         _n_assoc = len(db.session.execute(_gst.select()).fetchall())
     check("tags: exactly one association row exists for that pair", _n_assoc == 1, "rows=%d" % _n_assoc)
     # Deleting a tag must take its association rows with it: FKs are never enforced here and SQLite
     # reuses rowids, so an orphan would later be inherited by an unrelated server.
     check("tags: delete succeeds", c.post("/api/tags/%d/delete" % _tag_id).status_code == 200)
     with app.app_context():
-        from models import game_server_tags as _gst2
+        from panel.db.models import game_server_tags as _gst2
         _left = [r for r in db.session.execute(_gst2.select()).fetchall() if r.tag_id == _tag_id]
     check("tags: deleting a tag leaves no orphan association rows", not _left, str(_left))
     check("tags: deleting a tag that does not exist is a 404",
           c.post("/api/tags/999999/delete").status_code == 404)
     with app.app_context():
-        from models import ServerTag as _ST
+        from panel.db.models import ServerTag as _ST
         db.session.delete(db.session.get(_ST, _mute_id))
         for _t in _ST.query.filter_by(name="nocolor").all():
             db.session.delete(_t)
@@ -1543,8 +1544,9 @@ try:
         import pathlib as _pl_mig
         import sqlite3 as _sqlite_mig
         from sqlalchemy import inspect as _sa_inspect, text as _sa_text
-        from models import _run_light_migrations as _rlm
-        _models_src = (_pl_mig.Path(__file__).resolve().parent.parent / "models.py").read_text(encoding="utf-8")
+        from panel.db.models import _run_light_migrations as _rlm
+        _models_src = (_pl_mig.Path(__file__).resolve().parent.parent
+               / "panel" / "db" / "models.py").read_text(encoding="utf-8")
         _mig = _re_mig.findall(r'\(\s*"(\w+)"\s*,\s*"(\w+)"\s*\)\s*:\s*"(ALTER TABLE [^"]+)"', _models_src)
         check("migration: the light-migration list parses out of models.py", len(_mig) > 5)
         _cols = {t: {c["name"] for c in _sa_inspect(db.engine).get_columns(t)}
@@ -1607,8 +1609,8 @@ try:
         # _monitor_pass lives in monitoring.py now and looks its helpers up in THAT module's
         # namespace, so stubbing app's copy would silently no-op and the probes would run for
         # real. Patch where the function actually resolves the name.
-        _monmod = sys.modules["monitoring"]
-        _ps = sys.modules["panel_state"]
+        _monmod = sys.modules["panel.services.monitoring"]
+        _ps = sys.modules["panel.core.panel_state"]
         _r1 = RemoteServer.query.filter_by(name="smoke-host").first()
         _mon = GameServer(remote_id=_r1.id, name="mon-srv", short_name="monserver",
                           game_type="csgo", port=27100, installed=True, status="online")
@@ -1866,7 +1868,7 @@ try:
             # This is the only user-visible behaviour tags add beyond decoration, and it is wired
             # into five separate notify() sites — so it is asserted through the REAL passes here.
             # (Verified by mutation: with the _alerts_muted guards removed, every check below fails.)
-            from models import ServerTag as _STm
+            from panel.db.models import ServerTag as _STm
             _mute_tag = _STm(name="muted-smoke", notify=False)
             db.session.add(_mute_tag)
             _mon.tags = [_mute_tag]
@@ -1960,7 +1962,7 @@ try:
     with app.app_context():
         import ipaddress as _ipa_ab
         _am = sys.modules["app"]
-        _monmod = sys.modules["monitoring"]   # _autoblock_reconcile resolves these here
+        _monmod = sys.modules["panel.services.monitoring"]   # _autoblock_reconcile resolves these here
         _r = RemoteServer.query.filter_by(name="smoke-host").first()
         _was_local = _r.is_local
         _r.is_local = True          # exercise the local (so.*) branch — no SSH
@@ -1995,7 +1997,7 @@ try:
 
     # ── Global ban list endpoints (fan-out to servers stubbed, so no SSH) ──────────────────────────
     with app.app_context():
-        from models import GlobalBan
+        from panel.db.models import GlobalBan
         _am = sys.modules["app"]
         _saved_fan = _am._fan_out_global_ban
         _am._fan_out_global_ban = lambda a, sid, unban=False: None
@@ -2543,7 +2545,7 @@ try:
     # not just the helper: a valid token must keep working, a blocked IP must lose its token
     # identity, and — importantly — a browser session from that same IP must still work, because
     # the loader returns None rather than aborting the request.
-    import auth as _auth_mod
+    from panel.security import auth as _auth_mod
     _auth_mod._TOKEN_FAILS.clear()
     try:
         for _i in range(_auth_mod.TOKEN_MAX_FAILS):
@@ -2674,7 +2676,7 @@ try:
         _appmod._tg_reply, _appmod._tg_server_action = _tg_saved
     # Every command the bot advertises must be one it handles — that menu is what made the /start
     # bug reachable in the first place.
-    import notifications as _notif
+    from panel.services import notifications as _notif
     _repo_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
     _tg_src = open(os.path.join(_repo_root, "app.py"), encoding="utf-8").read()
     _tg_handler = _tg_src[_tg_src.index("def _handle_telegram_command"):]
@@ -2825,7 +2827,7 @@ try:
     # It used to run `cat <console_log> | grep -c '...'` over SSH and then look for a line holding
     # both "players" and "has". grep -c prints a bare number, so the match was impossible: 0/0 for
     # every server, forever, at the cost of a round trip that cats the whole console log.
-    from panel_state import _player_counts as _pc_cache
+    from panel.core.panel_state import _player_counts as _pc_cache
     _pc_cache[gs_id] = {"count": 7, "max": 24, "name": None, "ts": 9e9}
     try:
         _ss = c.get("/api/server/%d" % gs_id)
@@ -2960,7 +2962,7 @@ try:
     # ── can_run_custom_command: who may press a superadmin-authored console button ────────────────
     # Every branch of this decides whether a non-superadmin gets to run a console command on a
     # server, and none of it was asserted.
-    from auth import can_run_custom_command as _crcc
+    from panel.security.auth import can_run_custom_command as _crcc
     with app.app_context():
         _gs = db.session.get(GameServer, gs_id)          # game_type "csgo" on host #1
         _cmd = CustomCommand(name="Say", command_template="say {}", scope_type="all", enabled=True)

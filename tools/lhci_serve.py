@@ -10,7 +10,7 @@ import sys
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from config import DB_PATH, load_config, save_config
+from panel.core.config import DB_PATH, load_config, save_config
 
 if DB_PATH.exists():
     print("refusing: a real database exists at %s" % DB_PATH)
@@ -23,8 +23,8 @@ cfg["setup_complete"] = True
 save_config(cfg)
 
 from app import create_app
-from models import db, User, SetupState, RemoteServer, GameServer
-import auth
+from panel.db.models import db, User, SetupState, RemoteServer, GameServer
+from panel.security import auth
 
 app = create_app()
 with app.app_context():

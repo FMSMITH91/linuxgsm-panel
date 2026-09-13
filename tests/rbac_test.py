@@ -26,8 +26,8 @@ _ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, _ROOT)
 
 from app import create_app
-from models import db, User, Group, RemoteServer, GameServer, SetupState
-import auth
+from panel.db.models import db, User, Group, RemoteServer, GameServer, SetupState
+from panel.security import auth
 
 # Snapshot the data files BEFORE create_app() opens/creates them — so if we seed a fresh (empty) DB
 # we can delete exactly what we created and leave a dev's real data/ untouched.
@@ -86,7 +86,7 @@ with app.app_context():
         db.session.commit()
         # is_setup_complete() = SetupState(complete) AND cfg["setup_complete"]; set the config flag too
         # (like smoke_test does) or every request 302s to /setup.
-        from config import load_config, save_config
+        from panel.core.config import load_config, save_config
         _cfg = load_config()
         _cfg["setup_complete"] = True
         save_config(_cfg)
@@ -463,7 +463,7 @@ try:
     # so /up and /serve reconfigure the tailnet of whatever machine you are sitting at, and /serve
     # writes a config file through the redirected CONFIG_FILE path. Mutate this one on a throwaway
     # host, or read the 403 and take it on faith.
-    import config as _cfg_mod
+    from panel.core import config as _cfg_mod
 
     with app.app_context():
         # Either the suite seeded one (empty DB) or the install has a real one. If neither, the

@@ -36,13 +36,13 @@ import logging
 import concurrent.futures
 import os
 import re
-import terminal
+from panel.core import terminal
 import threading
 import time
 import gzip as _gzip
 from types import SimpleNamespace
 from datetime import timedelta
-from clock import utcnow
+from panel.core.clock import utcnow
 from urllib.parse import quote
 
 # eventlet announces its own deprecation on import — upstream's words, not a nit: "Eventlet is
@@ -72,13 +72,13 @@ from flask import (
     send_file, session, url_for,
 )
 from markupsafe import Markup
-import i18n
+from panel.core import i18n
 from flask_login import current_user, login_required, login_user, logout_user
 from flask_socketio import SocketIO, emit, join_room, leave_room
 from flask_wtf.csrf import CSRFProtect
 from sqlalchemy import desc, or_, text
 
-from auth import (
+from panel.security.auth import (
     ALL_PERMISSIONS, READONLY_ACTIONS, can_access_server,
     get_remote, get_game, _can_edit_tags, _can_manage_files,
     _perm_for_action, _grantable_perms,
@@ -96,34 +96,34 @@ from auth import (
     can_moderate_action, can_run_custom_command, allowed_custom_commands,
     RESTART_SERVER, START_SERVER, STOP_SERVER, UPDATE_SERVER,
 )
-from config import (
+from panel.core.config import (
     DATA_DIR, DB_PATH, get_secret_key, load_config, save_config, update_config,
     encrypt_secret, decrypt_secret, is_encrypted, harden_data_permissions,
 )
-import notifications
-from certs import _ensure_self_signed_cert, _maybe_alert_cert_expiring
-from prefs import (
+from panel.services import notifications
+from panel.services.certs import _ensure_self_signed_cert, _maybe_alert_cert_expiring
+from panel.db.prefs import (
     _apply_user_order, _apply_user_server_order, _clean_panel_map, _effective_prefs, _panel_layout,
 )
-from middleware import PrefixMiddleware
-from monitoring import (
+from panel.core.middleware import PrefixMiddleware
+from panel.services.monitoring import (
     _AUTOBLOCK_DEFAULT_THRESHOLD, _METRIC_RETENTION_DAYS, _METRIC_SAMPLE_SECONDS,
     _MONITOR_HOST_WORKERS, _MONITOR_SECONDS, _PLAYER_POLL_SECONDS, _PLAYER_POLL_WORKERS,
     _autoblock_reconcile, _autoblock_threshold, _cached_player_count, _host_reachable,
     _metrics_work, _monitor_pass, _query_server_metrics, _reboot_when_empty_watch,
     _record_metric_samples, _refresh_player_counts, _whitelisted,
 )
-from panel_state import (
+from panel.core.panel_state import (
     _cron_restart_pending, _expected_offline, _full_backup_lock, _game_backup_status,
     _install_jobs, _install_lock, _last_sample_prune, _monitor_state, _os_update_seen,
     _os_update_state, _player_counts, _reboot_when_empty, _rwe_lock,
 )
-from models import (
+from panel.db.models import (
     AuditLog, GameServer, Group, RemoteServer, SetupState, User, db, init_db,
     CustomCommand, CUSTOM_ARG_DEFAULT_PATTERN, CUSTOM_ARG_PLACEHOLDER, GlobalBan,
     MetricSample, HostSample,
 )
-from ssh_manager import (
+from panel.ops.ssh_manager import (
     _remote_listening_ports, _invalidate_port_scan,
     close_connection, is_local_server, run_command, run_privileged, ssh_test_connection,
     get_server_status, run_as_game_user, send_console_command, capture_console,
@@ -162,10 +162,10 @@ from ssh_manager import (
     remote_tailscale_finalize,
     remote_ufw_close_port_22, change_ssh_port,
 )
-import tailscale_integration as ts
-import system_ops as so
-import backup as bk
-import lgsm_data
+from panel.ops import tailscale_integration as ts
+from panel.ops import system_ops as so
+from panel.ops import backup as bk
+from panel.services import lgsm_data
 
 _log = logging.getLogger("panel.app")
 
@@ -212,7 +212,7 @@ def _register_session(user):
     user's long-dead sessions. Returns the sid, or None on failure — login still proceeds either way,
     the cookie just falls back to epoch-only (not individually revocable)."""
     from datetime import timedelta
-    from models import UserSession
+    from panel.db.models import UserSession
     sid = secrets.token_urlsafe(24)
     try:
         cutoff = utcnow() - timedelta(days=45)   # forget sessions untouched for ~6 weeks
@@ -1777,7 +1777,7 @@ def create_app():
     # (remote SSH credentials, and user email addresses).
     with app.app_context():
         try:
-            from models import RemoteServer, User
+            from panel.db.models import RemoteServer, User
             changed = False
             for r in RemoteServer.query.all():
                 if r.auth_credential and not is_encrypted(r.auth_credential) \
@@ -1800,7 +1800,7 @@ def create_app():
         try:
             days = int(cfg.get("audit_log_retention_days", 0) or 0)
             if days > 0:
-                from models import AuditLog
+                from panel.db.models import AuditLog
                 cutoff = utcnow() - timedelta(days=days)
                 deleted = AuditLog.query.filter(AuditLog.timestamp < cutoff).delete()
                 if deleted:
@@ -1809,7 +1809,7 @@ def create_app():
                     # meaningful prune, reclaim the space + refresh stats so enabling
                     # retention actually shrinks the DB (cheap on a small file).
                     if deleted >= 100:
-                        from models import optimize_database
+                        from panel.db.models import optimize_database
                         optimize_database()
         except Exception:
             db.session.rollback()
@@ -2679,7 +2679,7 @@ def register_routes(app):
                 # audit log — so it keeps climbing per IP (across different usernames) and, unlike the
                 # in-memory throttle counter, isn't reset by a successful login or a panel restart.
                 try:
-                    from models import AuditLog
+                    from panel.db.models import AuditLog
                     from datetime import timedelta
                     _since = utcnow() - timedelta(seconds=LOGIN_WINDOW)
                     _cnt = 1 + AuditLog.query.filter(AuditLog.action == "login_failed",
@@ -2801,7 +2801,7 @@ def register_routes(app):
         try:
             sid = getattr(current_user, "_sid", None)
             if sid:
-                from models import UserSession
+                from panel.db.models import UserSession
                 UserSession.query.filter_by(sid=sid, user_id=current_user.id).delete()
             else:
                 current_user.auth_epoch = (current_user.auth_epoch or 0) + 1
@@ -2901,7 +2901,7 @@ def register_routes(app):
         # Bump the epoch so every session/remember cookie for this account (including this one) stops
         # matching, and clear the whole session registry — instantly signs out everywhere.
         current_user.auth_epoch = (current_user.auth_epoch or 0) + 1
-        from models import UserSession
+        from panel.db.models import UserSession
         UserSession.query.filter_by(user_id=current_user.id).delete()
         db.session.commit()
         log_action(current_user, "revoke_sessions", target=current_user.username)
@@ -2914,7 +2914,7 @@ def register_routes(app):
     def api_account_sessions():
         """This user's active login sessions (devices), newest-active first, with the current one
         flagged. Scoped to current_user — a user only ever sees or manages their own sessions."""
-        from models import UserSession
+        from panel.db.models import UserSession
         cur = getattr(current_user, "_sid", None)
         # Adopt a legacy login: a cookie issued before per-session tracking has no sid, so there's no
         # row for it — which would show a confusing empty list while you're clearly logged in. Create
@@ -2942,7 +2942,7 @@ def register_routes(app):
     def api_account_session_revoke(sess_id):
         """Revoke ONE login session by deleting its registry row (scoped to current_user, so you can
         never revoke another account's session). If it's the current device, log out too."""
-        from models import UserSession
+        from panel.db.models import UserSession
         row = UserSession.query.filter_by(id=sess_id, user_id=current_user.id).first()
         if not row:
             return jsonify({"success": False, "message": "Session not found."}), 404
@@ -2964,7 +2964,7 @@ def register_routes(app):
         """Every tag, with the servers carrying it. Readable by any signed-in user — tags are how
         the UI groups and filters, and the server ids here are only ever used to decorate rows the
         caller can already see."""
-        from models import ServerTag
+        from panel.db.models import ServerTag
         from sqlalchemy.orm import selectinload
         tags = ServerTag.query.options(selectinload(ServerTag.servers)).order_by(ServerTag.name).all()
         return jsonify({"success": True, "tags": [_tag_json(t) for t in tags]})
@@ -2974,10 +2974,10 @@ def register_routes(app):
     def api_tags_create():
         """Create a tag. The name's charset is enforced by the model (@validates), so a bad one
         raises before it can be stored — caught here and returned as a 400 rather than a 500."""
-        from models import ServerTag
+        from panel.db.models import ServerTag
         if not _can_edit_tags():
             return jsonify({"success": False, "message": "Permission denied"}), 403
-        from models import TAG_NAME_RE, TAG_NAME_HELP
+        from panel.db.models import TAG_NAME_RE, TAG_NAME_HELP
         data = _json_body()
         name = (data.get("name") or "").strip()
         if not name:
@@ -3013,7 +3013,7 @@ def register_routes(app):
         deleted parent, and nothing here relies on database FK enforcement (this app never sets
         PRAGMA foreign_keys, so an orphan would otherwise outlive the tag and get inherited by a
         future server reusing the rowid)."""
-        from models import ServerTag
+        from panel.db.models import ServerTag
         if not _can_edit_tags():
             return jsonify({"success": False, "message": "Permission denied"}), 403
         tag = db.session.get(ServerTag, tag_id)
@@ -3036,7 +3036,7 @@ def register_routes(app):
     def api_server_tags_set(server_id):
         """Replace one server's tag set. @server_access_required covers visibility (server_id is a
         URL kwarg here, so the decorator applies), and MANAGE_SERVERS is still required to write."""
-        from models import ServerTag
+        from panel.db.models import ServerTag
         if not _can_edit_tags():
             return jsonify({"success": False, "message": "Permission denied"}), 403
         gs = get_game(server_id)
@@ -3279,7 +3279,7 @@ def register_routes(app):
 
         u.password_hash = hash_password(new)
         u.auth_epoch = (u.auth_epoch or 0) + 1   # sign out every other session/remember cookie
-        from models import UserSession
+        from panel.db.models import UserSession
         UserSession.query.filter_by(user_id=u.id).delete()   # epoch bump killed them all; clear rows
         db.session.commit()
         _register_session(u)                     # fresh session row for THIS device
@@ -4118,7 +4118,7 @@ def register_routes(app):
         remotes = RemoteServer.query.all()
         # Default to grouped-by-host order (host name, then server name); the page also lets you
         # re-sort by any column and toggle a grouped view client-side.
-        from models import ServerTag
+        from panel.db.models import ServerTag
         from sqlalchemy.orm import selectinload
         # selectinload the tags: they render per row, and this page has no per-server query budget
         # only because nothing here is lazy — keep it that way.
@@ -4308,7 +4308,7 @@ def register_routes(app):
 
         def _run():
             try:
-                from models import db, RemoteServer, GameServer
+                from panel.db.models import db, RemoteServer, GameServer
                 with _app.app_context():
                     remote = db.session.get(RemoteServer, remote_id)
                     gs = db.session.get(GameServer, gs_id)
@@ -4839,7 +4839,7 @@ def register_routes(app):
                        .filter_by(remote_id=remote_id).all()]
         GameServer.query.filter_by(remote_id=remote_id).delete()
         if _doomed_ids:
-            from models import game_server_tags
+            from panel.db.models import game_server_tags
             db.session.execute(game_server_tags.delete()
                                .where(game_server_tags.c.game_server_id.in_(_doomed_ids)))
             # Same shape of orphan, pre-existing: per-server group grants are keyed the same way.
@@ -5760,7 +5760,7 @@ def register_routes(app):
     def api_panel_db_stats():
         """DB + WAL size and audit-log row count (so growth is visible)."""
         try:
-            from models import database_stats
+            from panel.db.models import database_stats
             return jsonify(database_stats())
         except Exception:
             return jsonify({"error": _log_and_generic("db-stats failed")}), 500
@@ -5771,7 +5771,7 @@ def register_routes(app):
     def api_panel_optimize_db():
         """VACUUM + ANALYZE + WAL checkpoint — reclaim space, refresh stats."""
         try:
-            from models import optimize_database
+            from panel.db.models import optimize_database
             ok, msg, info = optimize_database()
             if ok:
                 try:
@@ -5929,7 +5929,7 @@ def register_routes(app):
     def api_panel_security_events():
         """Recent security-relevant audit entries (failed/blocked logins, fail2ban bans)."""
         try:
-            from models import AuditLog
+            from panel.db.models import AuditLog
             acts = ["login_failed", "login_blocked", "fail2ban_ban", "fail2ban_unban"]
             rows = (AuditLog.query.filter(AuditLog.action.in_(acts))
                     .order_by(AuditLog.id.desc()).limit(50).all())

@@ -13,9 +13,9 @@ import os
 import time
 from datetime import datetime, timezone
 
-import notifications
-from clock import aware_utcnow
-from config import DATA_DIR
+from panel.services import notifications
+from panel.core.clock import aware_utcnow
+from panel.core.config import DATA_DIR
 
 _log = logging.getLogger("panel.certs")
 

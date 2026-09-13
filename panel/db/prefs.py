@@ -8,8 +8,8 @@ globals, and are pure enough to test directly — which they could not be while 
 import logging
 import re
 
-from config import load_config
-from models import UI_PREF_KEYS
+from panel.core.config import load_config
+from panel.db.models import UI_PREF_KEYS
 
 _log = logging.getLogger("panel.prefs")
 

@@ -19,11 +19,11 @@ import atheris
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
 
-for _dep in ("paramiko", "eventlet.tpool", "config"):   # pre-load uninstrumented (see fuzz_game_status)
+for _dep in ("paramiko", "eventlet.tpool", "panel.core.config"):   # pre-load uninstrumented (see fuzz_game_status)
     importlib.import_module(_dep)
 
 with atheris.instrument_imports():
-    import ssh_manager
+    from panel.ops import ssh_manager
 
 # The exact line regex remote_ufw_status uses to pull "[ N] <detail>" numbered rules.
 _RULE_RE = re.compile(r"^\s*\[\s*(\d+)\]\s*(.*)$")

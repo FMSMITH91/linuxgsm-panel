@@ -17,7 +17,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspa
 
 # system_ops imports only the standard library, so it can be instrumented directly.
 with atheris.instrument_imports():
-    import system_ops
+    from panel.ops import system_ops
 
 
 def TestOneInput(data):

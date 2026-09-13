@@ -4,7 +4,7 @@ Moved out of app.py, where it sat between the game-list loader and the app facto
 relation to either. It closes over nothing from app.py — it reads the mount point from
 config.load_config() on each call — so it moved verbatim.
 """
-from config import load_config
+from panel.core.config import load_config
 
 
 class PrefixMiddleware:
