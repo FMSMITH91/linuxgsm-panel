@@ -55,20 +55,27 @@ run_suite() {
 
 echo "== byte-compile (syntax errors) =="
 "$PY" -m compileall -q -x "$VENVS" .
+# compileall walks *.py ONLY. tools/panel-helper is Python with a shebang and no extension — it is
+# the root-owned end of the sudo boundary, and it was the one file in the repo no static check
+# could see. Named explicitly here and below for the same reason.
+"$PY" -m py_compile tools/panel-helper
 
 echo "== lint: real bugs + unused imports/vars (undefined names, bad syntax, F401, F841) =="
 if "$PY" -m flake8 --version >/dev/null 2>&1; then
     # F401 (unused import) + F841 (unused local var) are included so dead code is caught
     # here rather than later by CodeQL / Codacy in the Security tab.
     "$PY" -m flake8 --select=E9,F63,F7,F82,F401,F841 --show-source --statistics \
-        --extend-exclude=venv,.venv .
+        --extend-exclude=venv,.venv . tools/panel-helper
 else
     echo "  (flake8 not installed — skipping)"
 fi
 
 if command -v shellcheck >/dev/null 2>&1; then
     echo "== shellcheck (shell scripts) =="
-    shellcheck -S warning install.sh uninstall.sh tools/run-tests.sh reset-password.sh recover.sh
+    # Every tracked *.sh, not a hand-kept list: smoke-local.sh and .clusterfuzzlite/build.sh had
+    # been missing from it. `git ls-files` so a new script is covered the day it is committed.
+    # shellcheck disable=SC2046  # word-splitting is what we want here; no shell script has a space
+    shellcheck -S warning $(git ls-files '*.sh')
 else
     echo "== shellcheck (not installed — skipping) =="
 fi

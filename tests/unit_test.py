@@ -5975,6 +5975,34 @@ if len(_disc_parts) >= 8:
 # symlink planted at that path could only reach what that user could already read. Moving it behind
 # a root helper is a privilege reduction ONLY if that property survives — read it as root instead
 # and a download button becomes "hand me any file on the box".
+# ── Every shell script is shellchecked, and panel-helper is linted at all ──────────────────────
+# Two blind spots, found by auditing coverage BY FILE TYPE rather than by tool:
+#
+#   1. shellcheck was given a hand-kept list of five scripts. tools/smoke-local.sh and
+#      .clusterfuzzlite/build.sh were never in it. run-tests.sh now derives the list from
+#      `git ls-files '*.sh'`; this proves the two lists agree.
+#   2. tools/panel-helper is Python with a shebang and NO .py extension, so compileall, flake8 and
+#      `bandit -r .` — all of which glob *.py — skipped it entirely. It is the ROOT-OWNED end of
+#      the sudo boundary. The most security-critical file in the repo was the one file no static
+#      analyser looked at. It is now named explicitly in all three.
+_rt_src = open(os.path.join(_root, "tools", "run-tests.sh"), encoding="utf-8").read()
+_bandit_src = open(os.path.join(_root, ".github", "workflows", "security-code.yml"),
+                   encoding="utf-8").read()
+check("coverage: shellcheck's file list is derived from git, not hand-kept",
+      "git ls-files '*.sh'" in _rt_src)
+check("coverage: panel-helper is byte-compiled (compileall globs *.py and would miss it)",
+      "py_compile tools/panel-helper" in _rt_src)
+# The flake8 invocation is line-continued, so match the argument list rather than a single line.
+_flake_inv = " ".join(l.strip().rstrip("\\") for l in _rt_src.splitlines()
+                      if "flake8 --select" in l or "--extend-exclude" in l)
+check("coverage: panel-helper is flake8'd (its default glob would miss it)",
+      "tools/panel-helper" in _flake_inv, _flake_inv[:120])
+check("coverage: panel-helper is bandit-scanned (bandit -r . globs *.py and would miss it)",
+      "bandit -r . tools/panel-helper" in _bandit_src)
+# ...and the file really is Python, so those three tools have something to say about it.
+check("coverage: panel-helper is a python script (shebang), justifying the above",
+      open(os.path.join(_root, 'tools', 'panel-helper'), encoding='utf-8').readline().startswith("#!") and "python" in open(os.path.join(_root, 'tools', 'panel-helper'), encoding='utf-8').readline())
+
 _gbr = open(os.path.join(_root, "tools", "panel-helper"), encoding="utf-8").read()
 _gbr_fn = _gbr[_gbr.index("def do_game_backup_read"):]
 _gbr_fn = _gbr_fn[:_gbr_fn.index("\ndef ", 1)]
