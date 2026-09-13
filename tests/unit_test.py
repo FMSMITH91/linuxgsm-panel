@@ -3516,7 +3516,6 @@ for p in (config.CRED_KEY_FILE, config.SECRET_FILE, config.CONFIG_FILE):
 
 # ── Notifications: SSRF guards, provider validation, and event-key wiring ──
 import pathlib as _pl   # noqa: E402
-import re as _re        # noqa: E402
 
 # Discord webhook is rebuilt onto a CONSTANT host from a validated id/token (no user-controlled host).
 check("notify: valid discord webhook is accepted + kept on discord.com",
@@ -4309,7 +4308,6 @@ check("eventlet's deprecation banner no longer prints on every start",
 import importlib.machinery as _machinery
 import importlib.util as _ilu
 from panel.security import privileged as _priv
-import io as _io
 import shutil as _shutil
 import tarfile as _tarfile
 import tempfile as _tempfile

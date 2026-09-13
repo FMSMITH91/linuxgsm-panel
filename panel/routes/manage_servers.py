@@ -25,10 +25,20 @@ from panel.services.monitoring import (_cached_player_count)
 import threading
 import time
 from app import (GAME_TYPE_RE, INSTANCE_NAME_RE, SAFE_LABEL_RE, _cached_player_max,
-    _cached_player_name, _extract_start_error, _form_err, _form_ok, _install_alloc_lock,
+    _cached_player_name, _extract_start_error, _form_err, _form_ok,
     _int_or, _log, _log_and_generic, _prune_jobs, _resolve_source_aux_ports, _wants_json,
     load_game_list, resolve_free_port)
 from panel.routes._shared import (_looks_installed, _notify_servers_changed)
+
+# Serializes the install "slot" allocation (pick a free port → reject a duplicate name → create the
+# row). resolve_free_port yields on an SSH scan, so without this two concurrent installs on the same
+# remote could both pick the same port or both pass the duplicate-name check before either commits.
+#
+# Defined here, not in app.py: this module is the only thing that takes it, and a module-private
+# name with no use inside its OWN module reads as dead to CodeQL however many other modules import
+# it (py/unused-global-variable). The lock is only correct as a single shared object, so there is
+# exactly one definition and no one else may make another.
+_install_alloc_lock = threading.Lock()
 
 
 def register(app):

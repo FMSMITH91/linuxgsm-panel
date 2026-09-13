@@ -199,21 +199,9 @@ except Exception:
     PANEL_COMMIT = ""
 
 
-# Serializes the install "slot" allocation (pick a free port → reject a duplicate name → create the
-# row). resolve_free_port yields on an SSH scan, so without this two concurrent installs on the same
-# remote could both pick the same port or both pass the duplicate-name check before either commits.
-_install_alloc_lock = threading.Lock()
-
 # Largest file the browser upload accepts (enforced in the upload route AND as the app-wide
 # MAX_CONTENT_LENGTH, so an oversized body is rejected before it's read).
 _MAX_UPLOAD_BYTES = 50 * 1024 * 1024
-
-# Console log window. The default is what each poll pulls back; the browser stitches successive
-# windows into a much longer scrollback of its own, so this is sized to cover the gap between two
-# polls rather than to be the whole history. The ceiling bounds an explicit ?lines= request — the
-# "load more" control asks for it once, and it is still only a `tail`.
-_CONSOLE_LINES = 250
-_CONSOLE_LINES_MAX = 2000
 
 # Short-lived cache of each remote's listening ports (the dashboard status poll). Keyed by
 # remote id -> (expiry_epoch, set_of_ports). Collapses the thundering herd: a servers_changed
@@ -278,9 +266,6 @@ def _first_free_block(desired, span, occupied, limit=400):
 
 
 
-_gmod_content_apply_state = {}  # server_id -> {"status": running|done|error, "msg", "ts"}
-_console_viewers = {}          # server_id -> set of socket session ids
-_viewers_lock = threading.Lock()
 _PRO_MAX_AGE = 86400   # only auto-run the slow `pro status` client if the stored value is >1 day old
 _CUSTOM_CMD_ENGINES = {"valve": "Valve / Source & GoldSrc",
                        "idtech3": "idTech3 / Quake3 (CoD family)",
@@ -1281,8 +1266,6 @@ ALERT_PROVIDERS = [
      "fields": [{"key": "iftttmakerapi", "label": "Maker API key"},
                 {"key": "iftttevent", "label": "Event name"}]},
 ]
-_ALERT_KEYS = [p["toggle"] for p in ALERT_PROVIDERS] + [f["key"] for p in ALERT_PROVIDERS for f in p["fields"]]
-_ALERT_KEY_SET = set(_ALERT_KEYS)
 
 # The game dropdown is built from LinuxGSM's own serverlist.csv (every supported
 # game). For all entries the server name is exactly "{shortname}server", so the

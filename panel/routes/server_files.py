@@ -4,7 +4,7 @@ Moved out of register_routes() verbatim — see panel/routes/__init__.py for why
 """
 from flask import (Response, flash, jsonify, redirect, render_template, request, url_for)
 from flask_login import (current_user, login_required)
-from flask_socketio import (emit, join_room, leave_room)
+from flask_socketio import (SocketIO, emit, join_room, leave_room)
 from panel.core import (terminal)
 from panel.db.models import (GameServer, RemoteServer, db)
 from panel.ops.ssh_manager import (GMOD_CONTENT_GAMES, GMOD_CONTENT_SIZES, UPLOAD_EXISTS,
@@ -26,13 +26,33 @@ from panel.services import (lgsm_data)
 import re
 import threading
 import time
-from app import (ALERT_PROVIDERS, _ALERT_KEYS, _ALERT_KEY_SET, _CONSOLE_LINES,
-    _CONSOLE_LINES_MAX, _GAME_LIST_CACHE, _LGSM_NAME_MAP, _MAX_UPLOAD_BYTES, _apply_mod_restart,
-    _attachment_header, _clean_console_text, _console_viewers, _gmod_content_apply_state,
-    _json_body, _log, _log_and_generic, _socketio_cors, _sync_toggles_from_cron, _viewers_lock,
-    load_game_list)
-from flask_socketio import (SocketIO, emit, join_room, leave_room)
+from app import (ALERT_PROVIDERS, _GAME_LIST_CACHE, _LGSM_NAME_MAP, _MAX_UPLOAD_BYTES,
+    _apply_mod_restart, _attachment_header, _clean_console_text, _json_body, _log,
+    _log_and_generic, _socketio_cors, _sync_toggles_from_cron, load_game_list)
 from panel.routes._shared import (_server_action_buttons)
+
+# ── State and constants this module OWNS ───────────────────────────────────────────────────────
+# These lived in app.py until the split left it as their only definition and this file as their
+# only reader. A module-private name (leading underscore) that nothing in its own module touches
+# is dead code as far as CodeQL is concerned — `from app import _x` does not count as a use — so
+# seven of them came back as py/unused-global-variable. Keeping mutable state next to the single
+# module that mutates it is the right shape anyway; the alert was just what pointed at it.
+
+# Every LinuxGSM alert config key, flattened from the provider table, plus a set for membership
+# tests. Derived here rather than imported so ALERT_PROVIDERS stays the single source of truth.
+_ALERT_KEYS = [p["toggle"] for p in ALERT_PROVIDERS] + [f["key"] for p in ALERT_PROVIDERS for f in p["fields"]]
+_ALERT_KEY_SET = set(_ALERT_KEYS)
+
+# Console log window. The default is what each poll pulls back; the browser stitches successive
+# windows into a much longer scrollback of its own, so this is sized to cover the gap between two
+# polls rather than to be the whole history. The ceiling bounds an explicit ?lines= request — the
+# "load more" control asks for it once, and it is still only a `tail`.
+_CONSOLE_LINES = 250
+_CONSOLE_LINES_MAX = 2000
+
+_gmod_content_apply_state = {}  # server_id -> {"status": running|done|error, "msg", "ts"}
+_console_viewers = {}          # server_id -> set of socket session ids
+_viewers_lock = threading.Lock()
 
 
 def register(app, supervise):
