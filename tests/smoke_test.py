@@ -206,6 +206,18 @@ try:
         code = c.get(path).status_code
         check("GET %s renders (200)" % path, code == 200, "got %d" % code)
 
+    # ── The notifications page must actually OFFER each channel ───────────────────────────────
+    # "/notifications renders 200" passes just as well with a channel's whole card missing, which
+    # is how a half-wired provider ships: the backend supports it and nobody can reach it.
+    _nt_html = c.get("/notifications").get_data(as_text=True)
+    for _field in ("ntfy_enabled", "ntfy_topic", "ntfy_server", "ntfy_token"):
+        check("notifications page: the ntfy form offers %s" % _field,
+              ('name="%s"' % _field) in _nt_html)
+    check("notifications page: ntfy has a Send test button wired to the dispatcher",
+          'data-args=\'["ntfy", "@self"]\'' in _nt_html)
+    check("notifications page: the stored ntfy token is NOT sent to the browser",
+          "TESTONLY" not in _nt_html)
+
     # ── Sidebar active-state must use request.endpoint, NOT request.path == url_for(...) — the
     #    latter breaks under a URL mount prefix (e.g. /lgsm), where url_for includes the prefix but
     #    request.path doesn't, so nothing highlights. Exactly the current page's link is active. ──

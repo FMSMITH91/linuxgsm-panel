@@ -1,4 +1,4 @@
-"""Proactive admin notifications to Telegram and/or Discord.
+"""Proactive admin notifications to Telegram, Discord and/or ntfy.
 
 The panel already lets you configure a game's own LinuxGSM alerts; this is the panel telling YOU, the
 admin, when something needs attention — a server dropped, a host went unreachable, a backup failed, a
@@ -6,7 +6,8 @@ super admin signed in, an IP was banned, a disk is filling up.
 
 Best-effort and non-blocking: a send happens on a background thread and a failure is logged and
 swallowed, never propagated to the caller (an alert must never break the action that triggered it).
-Secrets (the bot token, the webhook URL) are Fernet-encrypted at rest via config.encrypt_secret.
+Secrets (the bot token, the webhook URL, an ntfy access token) are Fernet-encrypted at rest via
+config.encrypt_secret.
 """
 import json
 import logging
@@ -60,6 +61,25 @@ _TG_TOKEN_RE = re.compile(r"^(\d{5,}):([A-Za-z0-9_-]{20,})$")   # (bot id):(secr
 _DISCORD_BOT_TOKEN_RE = re.compile(r"^[A-Za-z0-9_.\-]{40,120}$")
 _DISCORD_CHANNEL_RE = re.compile(r"^\d{5,25}$")
 
+# ── ntfy ───────────────────────────────────────────────────────────────────────────────────────
+# ntfy is the one provider whose SERVER is chosen by the operator: the public ntfy.sh, or their own
+# instance — and a self-hosted one is typically on a LAN or tailnet address, which is exactly what
+# the allow-list in _post() exists to refuse. Supporting only ntfy.sh would exclude most of ntfy's
+# users, so this is a DELIBERATE, NARROW exception, and it is enforced at the sink rather than by
+# trusting the caller (see _post's allow_configured_host).
+#
+# What keeps it narrow: https only (no http, no other scheme), a hostname charset that cannot
+# express userinfo (`@`), a query, a fragment or a second path segment, and exactly one path
+# component which must be a valid topic. So the most an operator can do is point the panel at a
+# host of their choosing — which, on a panel that already SSHes into hosts they nominate, is a
+# power they hold several times over. What they cannot do is smuggle a path, a redirect target or
+# credentials through it, and _post still returns only fixed reason words, so nothing read back
+# from the response can be exfiltrated.
+_NTFY_TOPIC_RE = re.compile(r"^[A-Za-z0-9_-]{1,64}$")
+_NTFY_URL_RE = re.compile(r"^https://[A-Za-z0-9](?:[A-Za-z0-9.-]{0,251}[A-Za-z0-9])?"
+                          r"(?::\d{1,5})?/[A-Za-z0-9_-]{1,64}$")
+NTFY_DEFAULT_SERVER = "https://ntfy.sh"
+
 
 # ── config read/write ──────────────────────────────────────────
 def _cfg():
@@ -99,28 +119,37 @@ def settings_for_form():
     cfg = _cfg()
     tg = cfg.get("telegram") or {}
     dc = cfg.get("discord") or {}
+    nt = cfg.get("ntfy") or {}
     return {
         "telegram": {"enabled": bool(tg.get("enabled")), "chat_id": tg.get("chat_id") or "",
                      "has_token": bool(tg.get("token")), "accept_commands": bool(tg.get("accept_commands"))},
         "discord": {"enabled": bool(dc.get("enabled")), "has_webhook": bool(dc.get("webhook")),
                     "has_bot_token": bool(dc.get("bot_token")), "channel_id": dc.get("channel_id") or "",
                     "accept_commands": bool(dc.get("accept_commands"))},
+        "ntfy": {"enabled": bool(nt.get("enabled")),
+                 "server": nt.get("server") or NTFY_DEFAULT_SERVER,
+                 "topic": nt.get("topic") or "", "has_token": bool(nt.get("token"))},
         "events": {k: event_enabled(cfg, k) for k in EVENTS},
         "thresholds": get_thresholds(),
     }
 
 
-def save_settings(*, telegram, discord, events, thresholds=None):
+def save_settings(*, telegram, discord, events, thresholds=None, ntfy=None):
     """Persist settings, encrypting secrets. `telegram`/`discord` secrets that come in as None mean
     'keep the stored value' (the form never round-trips the real secret back). There is no global
     master switch — a channel's own enable toggle is what turns its alerts on/off."""
     cur = _cfg()
     cur_tg = cur.get("telegram") or {}
     cur_dc = cur.get("discord") or {}
+    cur_nt = cur.get("ntfy") or {}
     tg_token = cur_tg.get("token") if telegram.get("token") is None else encrypt_secret(telegram["token"])
     dc_webhook = cur_dc.get("webhook") if discord.get("webhook") is None else encrypt_secret(discord["webhook"])
     dc_bot_token = cur_dc.get("bot_token") if discord.get("bot_token") is None \
         else encrypt_secret(discord["bot_token"])
+    # ntfy=None means "this caller doesn't manage ntfy" — keep whatever is stored, rather than
+    # wiping a configured channel because an older caller omitted the argument.
+    ntfy = cur_nt if ntfy is None else ntfy
+    nt_token = cur_nt.get("token") if ntfy.get("token") is None else encrypt_secret(ntfy["token"])
     th = get_thresholds()   # start from current/defaults; only overwrite fields that were submitted
     for k in _DEFAULT_THRESHOLDS:
         if thresholds and thresholds.get(k) not in (None, ""):
@@ -137,6 +166,9 @@ def save_settings(*, telegram, discord, events, thresholds=None):
                     "bot_token": dc_bot_token or "",
                     "channel_id": (discord.get("channel_id") or "").strip()[:32],
                     "accept_commands": bool(discord.get("accept_commands"))},
+        "ntfy": {"enabled": bool(ntfy.get("enabled")),
+                 "server": (ntfy.get("server") or "").strip()[:253] or NTFY_DEFAULT_SERVER,
+                 "topic": (ntfy.get("topic") or "").strip()[:64], "token": nt_token or ""},
         "events": {k: bool(events.get(k, EVENTS[k][1])) for k in EVENTS},
         "thresholds": th,
     }
@@ -206,7 +238,26 @@ def _tg_api_url(token, method):
     return "https://api.telegram.org/bot%s:%s/%s" % (m.group(1), m.group(2), method)
 
 
-def _post(url, data, headers):
+def _ntfy_url(server, topic):
+    """https://<host>[:port]/<topic> for a configured ntfy server, or None if either part is
+    unusable. The topic is charset-checked and the whole result must satisfy _NTFY_URL_RE, so a
+    server value carrying a path, query, credentials or a non-https scheme yields None rather than
+    a request. A trailing slash on the server is tolerated because operators type it."""
+    topic = (topic or "").strip()
+    server = (server or "").strip().rstrip("/") or NTFY_DEFAULT_SERVER
+    if not _NTFY_TOPIC_RE.match(topic):
+        return None
+    url = "%s/%s" % (server, topic)
+    return url if _NTFY_URL_RE.match(url) else None
+
+
+def _valid_ntfy_server(server):
+    """Whether `server` can host a topic at all — used by the form so a bad server is reported
+    when it is typed, not silently as a failed send later."""
+    return _ntfy_url(server, "probe") is not None
+
+
+def _post(url, data, headers, allow_configured_host=False):
     """POST to a validated https URL. Returns (ok, reason): ok is True on a 2xx. `reason` is a FIXED
     word describing the outcome — 'sent' / 'rejected' (the provider answered with an error status) /
     'unreachable' (couldn't connect) / 'blocked' (host not allow-listed). It carries no data read
@@ -215,7 +266,14 @@ def _post(url, data, headers):
     # user/admin-supplied URL can never make this request hit an internal or arbitrary host. Every
     # caller builds `url` on a CONSTANT host with the id/token rebuilt from regex-captured groups
     # (_tg_api_url / _discord_api_url), so no request-tainted value reaches the host OR the path.
-    if not (url or "").startswith(_ALLOWED_PREFIXES):
+    # allow_configured_host is ONLY for ntfy, whose server the operator chooses. The check stays
+    # HERE rather than in the caller: a sink that trusts "my caller already validated it" is one
+    # refactor away from trusting a caller that doesn't. _NTFY_URL_RE admits nothing but
+    # https://<host>[:port]/<single-topic-segment>.
+    if allow_configured_host:
+        if not _NTFY_URL_RE.match(url or ""):
+            return False, "blocked"
+    elif not (url or "").startswith(_ALLOWED_PREFIXES):
         return False, "blocked"
     req = urllib.request.Request(url, data=data, method="POST",
                                  headers={"User-Agent": "linuxgsm-panel", **headers})
@@ -317,6 +375,37 @@ def send_discord(webhook, text):
     if reason == "unreachable":
         return False, "couldn't reach discord.com — check the host's outbound network."
     return False, "Discord rejected it — the webhook URL is wrong or was deleted."
+
+
+
+def send_ntfy(server, topic, token, text):
+    """Publish a message to an ntfy topic. Returns (ok, detail).
+
+    The body is the message; the title goes in an X-Title header because ntfy renders it as the
+    notification's heading. An access token is optional — ntfy.sh topics are public by default,
+    but a self-hosted instance (or a reserved topic) can require one, and it travels in an
+    Authorization header, never in the URL, so it cannot leak via a redirect or a proxy log."""
+    url = _ntfy_url(server, topic)
+    if not url:
+        return False, ("that isn't a usable ntfy server + topic — the server must be https with no "
+                       "path, and the topic may use letters, digits, - and _ only.")
+    headers = {"Content-Type": "text/plain; charset=utf-8",
+               "X-Title": "LinuxGSM Panel"}
+    token = (token or "").strip()
+    if token:
+        # Charset-bounded so a pasted value carrying a newline can never split the header.
+        if not re.match(r"^[A-Za-z0-9_.\-]{1,256}$", token):
+            return False, "that access token has characters ntfy tokens don't use."
+        headers["Authorization"] = "Bearer %s" % token
+    ok, reason = _post(url, text[:3800].encode("utf-8"), headers, allow_configured_host=True)
+    if ok:
+        return True, ""
+    if reason == "unreachable":
+        return False, "couldn't reach that ntfy server — check the URL and the host's outbound network."
+    if reason == "blocked":
+        return False, "that ntfy URL was refused before sending — https and a plain topic only."
+    return False, ("ntfy rejected it — the topic may be reserved, or the access token is wrong "
+                   "or missing.")
 
 
 # ── Discord command bot (Gateway) ──────────────────────────────
@@ -462,6 +551,7 @@ def notify(event_key, title, body=""):
         text = "🎮 LinuxGSM Panel — %s" % title + (("\n%s" % body) if body else "")
         tg = cfg.get("telegram") or {}
         dc = cfg.get("discord") or {}
+        nt = cfg.get("ntfy") or {}
 
         def _go():
             try:
@@ -469,6 +559,9 @@ def notify(event_key, title, body=""):
                     send_telegram(decrypt_secret(tg.get("token") or ""), (tg.get("chat_id") or "").strip(), text)
                 if dc.get("enabled"):
                     send_discord(decrypt_secret(dc.get("webhook") or ""), text)
+                if nt.get("enabled"):
+                    send_ntfy(nt.get("server") or NTFY_DEFAULT_SERVER, nt.get("topic") or "",
+                              decrypt_secret(nt.get("token") or ""), text)
             except Exception:
                 _log.debug("notify send failed", exc_info=True)
         threading.Thread(target=_go, daemon=True).start()
@@ -476,7 +569,7 @@ def notify(event_key, title, body=""):
         _log.debug("notify failed to dispatch", exc_info=True)
 
 
-def test_send(kind, token=None, chat_id=None, webhook=None):
+def test_send(kind, token=None, chat_id=None, webhook=None, server=None, topic=None):
     """Synchronously send a test message to one channel. Uses the values passed from the form when
     given (so you can test BEFORE saving), else the saved config. (ok, message) — message carries the
     provider's actual error on failure."""
@@ -517,6 +610,21 @@ def test_send(kind, token=None, chat_id=None, webhook=None):
         ok, detail = discord_bot_send(tok, chan, text)
         return (True, "Test message sent — check the Discord channel.") if ok \
             else (False, "Discord error: %s" % (detail or "unknown"))
+    if kind == "ntfy":
+        nt = cfg.get("ntfy") or {}
+        srv = (server or "").strip() or (nt.get("server") or NTFY_DEFAULT_SERVER)
+        top = (topic or "").strip() or (nt.get("topic") or "")
+        tok = (token or "").strip() or decrypt_secret(nt.get("token") or "")
+        if not top:
+            return False, "Enter the topic first — it is the name you subscribed to in the ntfy app."
+        if not _NTFY_TOPIC_RE.match(top):
+            return False, "A topic may use letters, digits, - and _ only (no spaces or slashes)."
+        if not _valid_ntfy_server(srv):
+            return False, ("That server isn't usable — give the base URL only, https and no path "
+                           "(for example https://ntfy.sh).")
+        ok, detail = send_ntfy(srv, top, tok, text)
+        return (True, "Test message sent — check the ntfy app.") if ok \
+            else (False, "ntfy error: %s" % (detail or "unknown"))
     return False, "Unknown channel."
 
 

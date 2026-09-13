@@ -111,6 +111,43 @@
         </div>
       </div>
     </div>
+
+    <!-- ntfy -->
+    <div class="col-lg-6 mb-3">
+      <div class="card h-100">
+        <div class="card-header d-flex justify-content-between align-items-center">
+          <span><i class="bi bi-bell"></i> ntfy</span>
+          <div class="form-check form-switch mb-0">
+            <input type="checkbox" name="ntfy_enabled" class="form-check-input" role="switch" id="nt-en"
+                   {% if settings.ntfy.enabled %}checked{% endif %}>
+          </div>
+        </div>
+        <div class="card-body">
+          <label class="form-label small mb-1" for="notifications-ntfy_topic">Topic</label>
+          <input id="notifications-ntfy_topic" type="text" name="ntfy_topic" class="form-control form-control-sm" autocomplete="off"
+                 value="{{ settings.ntfy.topic }}" placeholder="e.g. my-gameservers">
+          <label class="form-label small mb-1 mt-2" for="notifications-ntfy_server">Server</label>
+          <input id="notifications-ntfy_server" type="text" name="ntfy_server" class="form-control form-control-sm" autocomplete="off"
+                 value="{{ settings.ntfy.server }}" placeholder="https://ntfy.sh">
+          <label class="form-label small mb-1 mt-2" for="notifications-ntfy_token">Access token <span class="text-secondary fw-normal">(optional)</span></label>
+          <input id="notifications-ntfy_token" type="password" name="ntfy_token" class="form-control form-control-sm" autocomplete="off"
+                 placeholder="{{ '\u2022\u2022\u2022\u2022\u2022\u2022\u2022\u2022\u2022\u2022 (leave blank to keep)' if settings.ntfy.has_token else 'only for reserved or private topics' }}">
+          <div class="small text-secondary mt-2">
+            Install the ntfy app, subscribe to your topic, and alerts arrive on your phone — no account
+            needed. Leave the server at <code>https://ntfy.sh</code> for the public service, or point it
+            at your own instance (<code>https://ntfy.example.com</code>). Base URL only: https, no path.
+          </div>
+          <div class="small text-warning mt-1">
+            <i class="bi bi-exclamation-triangle"></i> On ntfy.sh a topic is a <em>public</em> address —
+            anyone who guesses the name receives your alerts. Pick something long and unguessable, or
+            use a reserved topic with an access token.
+          </div>
+          <button type="button" class="btn btn-outline-secondary btn-sm mt-2" data-action="testChannel" data-args='["ntfy", "@self"]'>
+            <i class="bi bi-send"></i> Send test
+          </button>
+        </div>
+      </div>
+    </div>
   </div>
 
   <!-- Events -->
@@ -185,6 +222,7 @@ function testChannel(channel, btn) {
   if (channel === 'telegram') { payload.token = _val('telegram_token'); payload.chat_id = _val('telegram_chat_id'); }
   else if (channel === 'discord') { payload.webhook = _val('discord_webhook'); }
   else if (channel === 'discord_bot') { payload.token = _val('discord_bot_token'); payload.chat_id = _val('discord_channel_id'); }
+  else if (channel === 'ntfy') { payload.token = _val('ntfy_token'); payload.server = _val('ntfy_server'); payload.topic = _val('ntfy_topic'); }
   fetch(MOUNT + '/api/notifications/test', {
     method: 'POST', headers: {'Content-Type': 'application/json'},
     body: JSON.stringify(payload)
