@@ -238,6 +238,7 @@
  "Target Server": "Servidor de destino",
  "The busiest attacking IPs on this host by failed attempts over the last 7 days (current + rotated logs).": "Las IP atacantes más activas en este host por intentos fallidos en los últimos 7 días (registros actuales y rotados).",
  "The latest commit didn't pass its checks; holding off on this update.": "El último commit no superó sus comprobaciones; se pospone esta actualización.",
+ "The panel can't reach this host right now, so its firewall can't be read. Rules below are unavailable until it's back.": "El panel no puede contactar con este host ahora mismo, así que no se puede leer su cortafuegos. Las reglas de abajo no estarán disponibles hasta que vuelva.",
  "The panel isn't a git checkout, so it can't self-update.": "El panel no es una copia de git, así que no puede autoactualizarse.",
  "The panel restarts to apply — your Tailscale URL stays the same.": "El panel se reinicia para aplicarlo: tu URL de Tailscale no cambia.",
  "The panel restarts to apply; reconnect on the new address or port.": "El panel se reinicia para aplicarlo; vuelve a conectarte en la nueva dirección o puerto.",

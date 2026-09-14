@@ -443,6 +443,27 @@ try:
     check("MANAGE_REMOTES user: non-granted remote reboot -> 403",
           mrc.post("/api/remote/%d/reboot" % remote2_id).status_code == 403)
 
+    # ── The firewall PAGE survives a host it cannot reach ────────────────────────────────────
+    # A down / rebooting host makes remote_ufw_status() raise ConnectionError. The API route has
+    # always caught that and answered "unreachable"; the page route called the same function bare
+    # and rendered a 500 — so the one page whose job is managing a remote broke precisely when
+    # that remote had a problem. Stub the raise rather than depending on a host being down, and
+    # restore it in finally: this file is a flat script, so a leaked stub changes every later check.
+    import panel.routes.remote_vps as _rvps
+    _real_ufw = _rvps.remote_ufw_status
+    try:
+        def _refuse(_server):
+            raise ConnectionError("smoke: host is down")
+        _rvps.remote_ufw_status = _refuse
+        _fw = client_as(admin_id).get("/remote/%d/firewall" % remote_id)
+        check("firewall page: an unreachable host renders, not 500",
+              _fw.status_code == 200, "got %d" % _fw.status_code)
+        check("firewall page: ...and says it couldn't read the firewall, not that UFW is missing",
+              b"can't reach this host" in _fw.data and b"UFW is not installed" not in _fw.data,
+              "the unreachable banner is what should render")
+    finally:
+        _rvps.remote_ufw_status = _real_ufw
+
     # ── Scheduled-tasks (cron) endpoints need MANAGE_SERVERS (same gate as the file
     #    editor). The MANAGE_REMOTES user CAN reach this server (its group grants the
     #    host) but lacks MANAGE_SERVERS, so every cron verb is refused with 403 — and

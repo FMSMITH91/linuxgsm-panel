@@ -33,7 +33,23 @@ def register(app):
     def remote_firewall(remote_id):
         """Remote VPS firewall management page."""
         remote = get_remote(remote_id)
-        status = remote_ufw_status(remote)
+        try:
+            status = remote_ufw_status(remote)
+        except ConnectionError:
+            # A host that is down, rebooting or behind a dropped tunnel raises here, and this
+            # view rendered a 500 for it — while the API twin below, calling the same function,
+            # has always caught ConnectionError and answered "unreachable". A page whose whole
+            # job is managing a remote must survive that remote being off.
+            #
+            # This is the same shape remote_ufw_status() returns when the command runs but fails,
+            # so the template has one unreachable state to render rather than two.
+            # remote.id, not the raw remote_id path segment: get_remote() has already looked the
+            # host up and enforced access, so this is the integer primary key off the row rather
+            # than request input reaching a log sink (py/log-injection). Same shape as the other
+            # id-logging sites in panel/routes/_shared.py.
+            _log.info("remote firewall page: remote %s unreachable", remote.id, exc_info=True)
+            status = {"installed": False, "enabled": False, "rules": [], "groups": [],
+                      "unreachable": True}
         games = GameServer.query.filter_by(remote_id=remote_id).all()
         return render_template("remote_firewall.html", remote=remote, status=status, games=games)
 

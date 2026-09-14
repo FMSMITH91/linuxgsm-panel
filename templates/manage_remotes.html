@@ -81,7 +81,10 @@
 {% for remote in remotes %}
 <div class="card mb-2" id="remote-card-{{ remote.id }}">
   <div class="card-body">
-    <div class="d-flex justify-content-between align-items-start">
+    {# Both levels wrap. A host card carries up to seven actions (Manage, Test, Tailscale, Prepare,
+       Firewall, Edit, Delete); as a single nowrap row they ran 333px past a 375px viewport, so
+       everything from Tailscale rightwards — including Delete — was off-screen. #}
+    <div class="d-flex justify-content-between align-items-start flex-wrap gap-2">
       <div>
         <h2 class="h6 mb-1">
           <i class="bi {% if remote.is_local %}bi-laptop{% else %}bi-hdd-network-fill{% endif %}"></i> {{ remote.name }}
@@ -149,7 +152,10 @@
         </div>
         {% endif %}
       </div>
-      <div class="d-flex gap-1">
+      {# ms-auto matters only once the row WRAPS: alone on its own line, justify-content-between
+         has nothing to space against and would left-align the actions, so a card with a long host
+         name put its buttons on the left while its neighbours kept theirs on the right. #}
+      <div class="d-flex gap-1 flex-wrap ms-auto">
         <a href="{{ url_for('remote_manage', remote_id=remote.id) }}" class="btn btn-primary btn-sm" title="Manage — live resources, updates, reboot">
           <i class="bi bi-sliders2"></i> Manage
         </a>
