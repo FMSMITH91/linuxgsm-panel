@@ -77,3 +77,64 @@ jobs:
         uses: github/codeql-action/analyze@b96794f015dfd88f77b49b1c93e0fa7110f94c63 # v4
         with:
           category: "/language:${{ matrix.language }}"
+
+  # ── The PR half of the alert gate ────────────────────────────────────────────────────────────
+  # codeql-alerts.yml already asks "does this ref carry an open alert?", and its `if:` reads as
+  # though it covers pull requests. It does not: it is a workflow_run job, and a workflow_run
+  # result is not posted as a check on the PR's head commit, so the check is absent from every PR.
+  # Measured across #171, #175, #177 and #179 — zero of them carried it.
+  #
+  # That is not theoretical. #177 merged 27/27 green and turned main red minutes later on two
+  # py/unused-global-variable alerts that were ALREADY on refs/pull/177/merge, uploaded before the
+  # merge. The information was there; nothing on the PR asked for it.
+  #
+  # This job asks on the PR itself, in the same workflow as the analysis, so it lands as an
+  # ordinary PR check. The main gate in codeql-alerts.yml stays as the backstop.
+  pr-alerts:
+    name: Open code-scanning alerts (PR)
+    if: github.event_name == 'pull_request'
+    needs: analyze
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      security-events: read
+    steps:
+      - name: Judge refs/pull/<n>/merge
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REF: refs/pull/${{ github.event.pull_request.number }}/merge
+        run: |
+          set -euo pipefail
+          # `needs: analyze` means every language finished, but the SARIF is ingested
+          # asynchronously — poll briefly rather than race it and report a clean ref that simply
+          # has not been indexed yet. "No analysis" is never treated as "no alerts": that is the
+          # failure mode this whole gate exists to avoid.
+          for _ in $(seq 1 12); do
+            total="$(gh api "repos/${GITHUB_REPOSITORY}/code-scanning/analyses?ref=${REF}&per_page=1" --jq 'length' 2>/dev/null || echo 0)"
+            [ "${total}" != "0" ] && break
+            sleep 10
+          done
+          if [ "${total}" = "0" ]; then
+            echo "::error::no CodeQL analysis for ${REF} — refusing to report it clean." >&2
+            exit 1
+          fi
+          alerts="$(gh api "repos/${GITHUB_REPOSITORY}/code-scanning/alerts?ref=${REF}&state=open&per_page=100" \
+                     --jq '[.[] | {rule: .rule.id, sev: (.rule.security_severity_level // .rule.severity // "-"), path: .most_recent_instance.location.path, line: .most_recent_instance.location.start_line}]')"
+          n="$(printf '%s' "$alerts" | jq 'length')"
+          {
+            echo "### CodeQL alerts on \`${REF}\`"
+            echo ""
+            if [ "${n}" = "0" ]; then
+              echo "No open alerts."
+            else
+              echo "| severity | rule | location |"
+              echo "| --- | --- | --- |"
+              printf '%s' "$alerts" | jq -r '.[] | "| \(.sev) | `\(.rule)` | \(.path):\(.line) |"'
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"
+          if [ "${n}" != "0" ]; then
+            echo "::error::this pull request carries ${n} open code-scanning alert(s) — see the job summary." >&2
+            exit 1
+          fi
+          echo "clean: ${REF} carries no open code-scanning alerts."
