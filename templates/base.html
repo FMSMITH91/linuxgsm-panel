@@ -135,6 +135,10 @@
     <i class="bi bi-list"></i>
   </button>
   <a href="{{ url_for('index') }}" class="topbar-title" data-no-i18n>LinuxGSM</a>
+  <button class="hamburger ms-auto" data-action="openPalette" aria-label="{{ t('Search the panel') }}"
+          title="{{ t('Search the panel') }}">
+    <i class="bi bi-search" aria-hidden="true"></i>
+  </button>
 </div>
 
 <!-- Sidebar backdrop -->
@@ -149,6 +153,14 @@
       <small>Server Panel</small>
     </div>
   </a>
+
+  {# The palette's own entry point. A keyboard shortcut nobody is told about is not a shortcut, so
+     it sits at the top of the nav where it is both visible and tappable. #}
+  <button type="button" class="cmdk-trigger" data-action="openPalette">
+    <i class="bi bi-search" aria-hidden="true"></i>
+    <span>Search…</span>
+    <kbd data-no-i18n>Ctrl K</kbd>
+  </button>
 
   <div class="sidebar-section">Overview</div>
   <ul class="sidebar-nav">
@@ -180,7 +192,10 @@
     {% endif %}
     {% for r in nav_remotes %}
     <li><a href="{{ url_for('remote_manage', remote_id=r.id) }}" class="{% if request.endpoint in ('remote_manage', 'remote_firewall') and request.view_args and request.view_args.get('remote_id') == r.id %}active{% endif %}" style="padding-left:1.6rem;">
-      <i class="bi bi-hdd-network-fill"></i> {{ r.name }}</a></li>
+      {# The host's name is whatever its owner typed. Without this the i18n walker translates any
+         text node matching a catalog key, so a remote called "Settings" or "Online" would be
+         renamed in the nav — see the same marker on tag and server names elsewhere. #}
+      <i class="bi bi-hdd-network-fill"></i> <span data-no-i18n>{{ r.name }}</span></a></li>
     {% endfor %}
     <li><a href="{{ url_for('tailscale_page') }}" class="{% if request.endpoint == 'tailscale_page' %}active{% endif %}">
       <i class="bi bi-wifi"></i> Tailscale</a></li>
@@ -241,6 +256,27 @@
   </div>
 </nav>
 {% endif %}
+
+<!-- Command palette (Ctrl/⌘+K). `hidden` until opened — it is a fixed overlay and must never
+     take part in layout, or every page pays a layout shift for a box nobody opened. -->
+<div class="cmdk-backdrop" id="cmdk" hidden>
+  <div class="cmdk" role="dialog" aria-modal="true" aria-label="{{ t('Search the panel') }}">
+    <div class="cmdk-search">
+      <i class="bi bi-search" aria-hidden="true"></i>
+      <input id="cmdk-input" type="text" role="combobox" aria-expanded="true"
+             aria-controls="cmdk-list" aria-autocomplete="list"
+             autocomplete="off" spellcheck="false"
+             aria-label="{{ t('Search the panel') }}"
+             placeholder="Jump to a page or a game server…">
+    </div>
+    <ul class="cmdk-list" id="cmdk-list" role="listbox" aria-label="{{ t('Search results') }}"></ul>
+    <div class="cmdk-foot">
+      <span><kbd data-no-i18n>↑↓</kbd>to move</span>
+      <span><kbd data-no-i18n>↵</kbd>to open</span>
+      <span><kbd data-no-i18n>Esc</kbd>to close</span>
+    </div>
+  </div>
+</div>
 
 <!-- Flash messages -->
 <div class="flash-container">
@@ -325,6 +361,8 @@ window.MOUNT = "{{ mount_prefix if mount_prefix and mount_prefix != '/' else '' 
 window.CSRF = "{{ csrf_token() }}";
 </script>
 <script nonce="{{ csp_nonce }}" src="{{ asset_url('js/panel.js') }}"></script>
+{# After panel.js: the palette calls t() and reads window.MOUNT, both set above it. #}
+<script nonce="{{ csp_nonce }}" src="{{ asset_url('js/palette.js') }}"></script>
 <script nonce="{{ csp_nonce }}">
 // ── "This host needs a reboot" banners ────────────────────────────────────────────
 // After an OS update that needs a reboot, Debian/Ubuntu drop /var/run/reboot-required. Show a

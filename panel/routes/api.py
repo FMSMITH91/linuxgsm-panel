@@ -128,6 +128,28 @@ def register(app):
             return jsonify({"port": None})
         return jsonify({"port": port, "changed": bool(changed)})
 
+    @app.route("/api/palette")
+    @login_required
+    def api_palette():
+        """The game servers the command palette can jump to — names only, and no probing.
+
+        DELIBERATELY not /api/servers. That endpoint refreshes live status, which costs one
+        listening-port scan per remote over SSH; opening a search box must not reach out to every
+        host the user owns. Everything here comes from rows already in hand: get_user_servers()
+        joinedloads the remote, so naming each server's host adds no query, and the palette fetches
+        this once per page load and keeps it.
+
+        Access is get_user_servers(), the same filter the dashboard uses, so the palette can never
+        surface a server the user cannot already see.
+        """
+        return jsonify([{
+            "id": gs.id,
+            "name": gs.name,
+            "game": gs.game_type or "",
+            "host": gs.remote.name if gs.remote else "",
+            "installed": bool(gs.installed),
+        } for gs in get_user_servers(current_user)])
+
     @app.route("/api/servers")
     @login_required
     def api_servers():
