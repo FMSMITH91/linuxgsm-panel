@@ -14,10 +14,12 @@
 <div class="card mb-3">
   <div class="card-body">
     <p class="small text-secondary mb-3">
-      A SteamID added here is banned on <strong>every Source / GoldSrc server</strong> across all your hosts —
-      ban a cheater once and they're gone everywhere. It's applied through each server's own console
-      (<code>banid</code> + <code>writeid</code>), so it uses the game's native ban list and survives restarts.
-      Currently propagates to <strong>{{ valve_count }}</strong> Source server{{ '' if valve_count == 1 else 's' }}.
+      <span class="d-block">A SteamID added here is banned on every Source / GoldSrc server across all
+        your hosts — ban a cheater once and they're gone everywhere.</span>
+      <span class="d-block mt-1">It's applied through each server's own console, using the game's native
+        banid and writeid commands, so it uses the game's own ban list and survives restarts.</span>
+      <span class="d-block mt-1">Currently propagates to
+        <strong>{{ valve_count }}</strong> Source server{{ '' if valve_count == 1 else 's' }}.</span>
       <span class="d-block mt-1 text-secondary">Other engines (Minecraft bans by name, Call of Duty by slot) don't use SteamIDs, so they aren't covered here.</span>
     </p>
     <form method="POST" action="{{ url_for('global_bans_add') }}" class="row g-2 align-items-end">
@@ -42,7 +44,10 @@
 </div>
 
 <div class="card">
-  <div class="card-header"><i class="bi bi-list-ul"></i> Banned SteamIDs ({{ bans|length }})</div>
+  {# The count in its own node: "Banned SteamIDs ({{ n }})" renders as ONE text node whose text
+     changes with the count, so it can never equal a catalog key. Splitting the label out is what
+     makes the words translatable while the number stays a number. #}
+  <div class="card-header"><i class="bi bi-list-ul"></i> <span>Banned SteamIDs</span> ({{ bans|length }})</div>
   <div class="card-body p-0">
     {% if bans %}
     <div class="table-responsive">

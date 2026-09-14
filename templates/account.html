@@ -59,7 +59,7 @@
   <div class="card">
     <div class="card-header"><i class="bi bi-key-fill"></i> Password</div>
     <div class="card-body">
-      <p class="text-secondary small mb-3">Change your account password. You'll need your current password{% if current_user.totp_enabled %} and an authenticator code{% endif %} to confirm it's you.</p>
+      <p class="text-secondary small mb-3">{% if current_user.totp_enabled %}Change your account password. You'll need your current password and an authenticator code to confirm it's you.{% else %}Change your account password. You'll need your current password to confirm it's you.{% endif %}</p>
       <form method="POST" action="{{ url_for('account_change_password') }}" autocomplete="off">
         <div class="mb-2" style="max-width: 420px;">
           <label class="form-label small mb-1" for="account-current_password">Current password</label>
@@ -125,8 +125,8 @@
         don't recognise — the one you're using now is marked <span class="badge bg-success">This device</span>.</p>
       <div id="sessions-list" class="mb-2"><div class="text-secondary small">Loading…</div></div>
       <hr class="my-3">
-      <p class="text-secondary small mb-2">Think a device was compromised? Sign out of
-        <strong>every</strong> session at once (including this one) — you'll log back in fresh.</p>
+      <p class="text-secondary small mb-2">Think a device was compromised? Sign out of every session
+        at once, including this one — you'll log back in fresh.</p>
       <form method="POST" action="{{ url_for('account_revoke_sessions') }}" id="revoke-sessions-form">
         <button class="btn btn-outline-danger btn-sm" type="button" data-action="_acctSignOutAll">
           <i class="bi bi-box-arrow-right"></i> Sign out everywhere
@@ -145,14 +145,13 @@
     <div class="card-body">
       <p class="text-secondary small mb-2">
         A personal API token lets scripts and bots call the panel's API without a browser session,
-        using an <code>Authorization: Bearer &lt;token&gt;</code> header. It acts as
-        <strong>you</strong> — exactly your permissions and your server access, no more. Only a
-        hash of it is stored, so it can never be read back.
+        using an Authorization: Bearer header. It acts as you — exactly your permissions and your
+        server access, no more. Only a hash of it is stored, so it can never be read back.
       </p>
 
       {% if new_token %}
       <div class="alert alert-success py-2">
-        <div class="small mb-1"><strong>Copy your new token now</strong> — it won't be shown again.</div>
+        <div class="small mb-1"><strong>Copy your new token now — it won't be shown again.</strong></div>
         <code class="user-select-all d-block p-2" style="word-break:break-all; background:rgba(0,0,0,.2); border-radius:6px;">{{ new_token }}</code>
         <div class="small text-secondary mt-2">Example:</div>
         <code class="d-block p-2 small" style="word-break:break-all; background:rgba(0,0,0,.2); border-radius:6px;">curl -H "Authorization: Bearer {{ new_token }}" https://your-panel:5000/api/servers</code>

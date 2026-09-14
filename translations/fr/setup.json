@@ -1,7 +1,12 @@
 {
  "Choose Installation Target": "Choisissez la cible d'installation",
+ "LinuxGSM and the game servers are installed for you — nothing to pre-install.": "LinuxGSM et les serveurs de jeu sont installés pour vous — rien à préinstaller.",
  "Setup Complete!": "Configuration terminée !",
  "This wizard will guide you through the initial setup.": "Cet assistant vous guidera dans la configuration initiale.",
  "Welcome to LinuxGSM Panel!": "Bienvenue sur LinuxGSM Panel !",
- "What you'll need:": "Ce dont vous aurez besoin :"
+ "What you'll need:": "Ce dont vous aurez besoin :",
+ "e.g. Main Gaming VPS": "p. ex. VPS de jeu principal",
+ "e.g. gmodserver": "p. ex. gmodserver",
+ "e.g. panel.example.com": "p. ex. panel.example.com",
+ "~/.ssh/id_rsa or password": "~/.ssh/id_rsa ou mot de passe"
 }

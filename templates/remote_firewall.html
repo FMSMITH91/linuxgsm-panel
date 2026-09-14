@@ -16,7 +16,7 @@
     </a>
     {% endif %}
     <h1 class="page-title mb-0 mt-1">
-      <i class="bi bi-shield-fill-check"></i> Firewall: {{ remote.display_name }}
+      <i class="bi bi-shield-fill-check"></i> <span>Firewall:</span> {{ remote.display_name }}
     </h1>
     <span class="text-secondary small"><code>{{ remote.display_host or 'this host' }}</code></span>
   </div>
@@ -187,8 +187,9 @@
       </div>
       <div class="card-body">
         <p class="small text-secondary mb-2">
-          Blocking an IP denies it on <strong>every port</strong> — SSH, the panel and all game servers.
-          <span class="badge bg-info text-dark">Auto</span> entries are managed by the rolling auto-block; the rest are manual.
+          Blocking an IP denies it on every port — SSH, the panel and all game servers.
+          <span class="badge bg-info text-dark">Auto</span>
+          <span>Entries marked Auto are managed by the rolling auto-block; the rest are manual.</span>
         </p>
         <div class="row g-2 mb-2">
           <div class="col-sm">

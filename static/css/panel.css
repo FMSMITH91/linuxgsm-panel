@@ -532,3 +532,86 @@
       .topbar { display: none; }
       .hamburger { display: none; }
     }
+
+    /* ── COMMAND PALETTE (Ctrl/⌘+K) ── */
+    /* Fixed overlay, and `hidden` until opened: it must never occupy layout, or every page pays
+       a Cumulative Layout Shift for a box nobody has opened yet (Lighthouse gates CLS <= 0.1). */
+    .cmdk-trigger {
+      display: flex; align-items: center; gap: .6rem;
+      width: calc(100% - 1.3rem);
+      margin: 0 .65rem .5rem;
+      padding: .5rem .75rem;
+      background: var(--bg); border: 1px solid var(--border);
+      border-radius: var(--radius-sm);
+      color: var(--text-muted); font-size: .82rem; text-align: left;
+      cursor: pointer; transition: all .15s;
+    }
+    .cmdk-trigger:hover { color: var(--text); border-color: var(--accent); }
+    .cmdk-trigger kbd {
+      margin-left: auto; font-size: .62rem; padding: .1rem .3rem;
+      background: var(--bg-elevated); border: 1px solid var(--border);
+      border-radius: 4px; color: var(--text-muted); font-family: inherit;
+    }
+    .cmdk-backdrop {
+      position: fixed; inset: 0; z-index: 1080;
+      background: rgba(0, 0, 0, .62);
+      display: flex; justify-content: center;
+      padding: 12vh 1rem 1rem;
+    }
+    .cmdk {
+      width: 100%; max-width: 560px;
+      max-height: 70vh;
+      background: var(--bg-card);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      box-shadow: 0 18px 50px rgba(0, 0, 0, .55);
+      display: flex; flex-direction: column; overflow: hidden;
+    }
+    .cmdk-search {
+      display: flex; align-items: center; gap: .6rem;
+      padding: .8rem 1rem;
+      border-bottom: 1px solid var(--border);
+      color: var(--text-muted);
+    }
+    .cmdk-search input {
+      flex: 1; min-width: 0;
+      background: none; border: none; outline: none;
+      color: var(--text-heading); font-size: .95rem; font-family: inherit;
+    }
+    .cmdk-list { list-style: none; margin: 0; padding: .35rem; overflow-y: auto; }
+    .cmdk-group {
+      padding: .5rem .65rem .25rem;
+      font-size: .6rem; font-weight: 700; letter-spacing: .1em;
+      text-transform: uppercase; color: var(--text-muted);
+    }
+    .cmdk-item {
+      display: flex; align-items: center; gap: .7rem;
+      padding: .5rem .65rem;
+      border-radius: var(--radius-sm);
+      color: var(--text); font-size: .88rem;
+      cursor: pointer;
+    }
+    /* aria-selected drives the highlight, so the pointer and the arrow keys cannot disagree
+       about which row Enter will open. */
+    .cmdk-item[aria-selected="true"] { background: var(--accent-glow); color: var(--text-heading); }
+    .cmdk-item i { width: 20px; text-align: center; flex-shrink: 0; color: var(--text-muted); }
+    .cmdk-item[aria-selected="true"] i { color: var(--accent); }
+    .cmdk-label { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .cmdk-meta { font-size: .7rem; color: var(--text-muted); flex-shrink: 0; }
+    .cmdk-empty { padding: 1.25rem 1rem; text-align: center; color: var(--text-muted); font-size: .85rem; }
+    .cmdk-foot {
+      display: flex; gap: 1rem; flex-wrap: wrap;
+      padding: .5rem .9rem;
+      border-top: 1px solid var(--border);
+      font-size: .68rem; color: var(--text-muted);
+    }
+    .cmdk-foot kbd {
+      font-size: .62rem; padding: .05rem .28rem; margin-right: .2rem;
+      background: var(--bg-elevated); border: 1px solid var(--border);
+      border-radius: 4px; color: var(--text-muted); font-family: inherit;
+    }
+    @media (max-width: 767px) {
+      .cmdk-backdrop { padding: 0; }
+      .cmdk { max-width: none; max-height: 100%; height: 100%; border: none; border-radius: 0; }
+      .cmdk-foot { display: none; }   /* no physical keyboard to hint at */
+    }

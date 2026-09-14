@@ -215,6 +215,16 @@
       "GET"
     ]
   },
+  "/api/palette": {
+    "endpoint": "api_palette",
+    "guards": [
+      "utils.py:decorated_view",
+      "view:api_palette"
+    ],
+    "methods": [
+      "GET"
+    ]
+  },
   "/api/panel/auto-updates": {
     "endpoint": "api_panel_auto_updates",
     "guards": [

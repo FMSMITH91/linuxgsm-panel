@@ -30,7 +30,7 @@
     <label class="form-label small mb-0" for="manage-commands-command_template">Console command</label>
     <input id="manage-commands-command_template" type="text" name="command_template" class="form-control form-control-sm" required
            value="{{ cmd.command_template if cmd else '' }}" placeholder="e.g. map {} — or a fixed line like: say Server restarting">
-    <div class="form-text mt-0">Use <code>{}</code> once where the operator fills in a value. No <code>{}</code> = one-click.</div>
+    <div class="form-text mt-0">Use a {} placeholder once, where the operator fills in a value. A command with no placeholder is one-click.</div>
   </div>
   <div class="col-md-4">
     <label class="form-label small mb-0" for="manage-commands-argument_label">Value label</label>
@@ -41,7 +41,7 @@
     <label class="form-label small mb-0" for="manage-commands-argument_pattern">Value validation (regex, optional)</label>
     <input id="manage-commands-argument_pattern" type="text" name="argument_pattern" class="form-control form-control-sm"
            value="{{ cmd.argument_pattern if cmd else '' }}" placeholder="{{ default_pattern }}">
-    <div class="form-text mt-0">Blank = safe default (letters, digits, <code>_ . -</code>).</div>
+    <div class="form-text mt-0">Blank = safe default (letters, digits, and the characters _ . -).</div>
   </div>
   <div class="col-md-4">
     <label class="form-label small mb-0">Applies to</label>
@@ -80,11 +80,14 @@
 </div>
 
 <p class="text-secondary small mb-3" style="max-width:75ch;">
-  Define game-console commands here and hand specific ones to specific
-  <a href="{{ url_for('manage_groups') }}">groups</a>. A member of an allowed group sees the command as a
-  button on any server it applies to — without needing full console access. The command line you write is
-  trusted; if it contains a <code>{}</code>, the value the operator types is validated before it's substituted,
-  so it can't smuggle in extra commands. (Only Super Administrators can manage this page.)
+  Define game-console commands here and hand specific ones to specific groups. A member of an allowed
+  group sees the command as a button on any server it applies to — without needing full console access.
+  <a href="{{ url_for('manage_groups') }}">Manage groups</a>
+</p>
+<p class="text-secondary small mb-3" style="max-width:75ch;">
+  The command line you write is trusted. If it contains a placeholder, the value the operator types is
+  validated before it is substituted, so it cannot smuggle in extra commands. (Only Super Administrators
+  can manage this page.)
 </p>
 
 <div id="commands-list">
@@ -97,8 +100,8 @@
       <code class="ms-2 small">{{ cmd.command_template }}</code>
       <span class="badge bg-dark border ms-2">
         {% if cmd.scope_type == 'all' %}All games
-        {% elif cmd.scope_type == 'engine' %}Engine: {{ cmd.scope_value }}
-        {% else %}Game: {{ cmd.scope_value }}{% endif %}
+        {% elif cmd.scope_type == 'engine' %}<span>Engine:</span> {{ cmd.scope_value }}
+        {% else %}<span>Game:</span> {{ cmd.scope_value }}{% endif %}
       </span>
       {% if cmd.has_argument %}<span class="badge bg-info text-dark ms-1">takes a value</span>{% endif %}
     </div>

@@ -56,6 +56,7 @@
     "movePanel": "writable",
     "moveServerRow": "writable",
     "onServersChanged": "writable",
+    "openPalette": "writable",
     "pollWhenVisible": "writable",
     "publishDashLayout": "writable",
     "rebootNagCancel": "writable",

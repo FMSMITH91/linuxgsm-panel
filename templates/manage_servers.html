@@ -41,13 +41,16 @@
       <div class="col-md-3">
         <label class="form-label" for="game-type-select">Game</label>
         <select name="game_type" class="form-select" required id="game-type-select" data-action="updatePort" data-on="change">
-          <option value="">Choose game… ({{ games|length }} supported)</option>
+          {# No count in the option label: <option> holds a single text node, so "Choose game…
+             ({{ n }} supported)" is per-request text that no catalog key can match. The count is
+             already shown in the help line below. #}
+          <option value="">Choose game…</option>
           {% for g in games %}
           <option value="{{ g.shortname }}">{{ g.name }}</option>
           {% endfor %}
         </select>
         {% if games %}
-        <div class="form-text">All {{ games|length }} LinuxGSM games — everything is downloaded automatically.</div>
+        <div class="form-text"><span>All LinuxGSM games are supported</span> ({{ games|length }}) <span>— everything is downloaded automatically.</span></div>
         {% else %}
         {# The list comes from LinuxGSM at runtime (see lgsm_data). If it could not be fetched and
            nothing is cached, say so — an empty menu with no explanation is the worst outcome. #}
@@ -77,9 +80,9 @@
       </div>
       <div class="col-12 mt-1" id="gmod-content-opt" style="display:none;">
         <div class="border rounded p-2" style="border-color:var(--border)!important;">
-          <div class="small mb-1"><strong><i class="bi bi-hdd-stack"></i> Mount game content</strong>
-            — GMod needs another game's content to draw its maps &amp; props (without it you get
-            missing-texture <em>ERROR</em> signs). The panel reuses content already on the host, else
+          <div class="small mb-1"><strong><i class="bi bi-hdd-stack"></i> Mount game content</strong></div>
+          <div class="small mb-1">GMod needs another game's content to draw its maps and props — without
+            it you get missing-texture ERROR signs. The panel reuses content already on the host, else
             downloads it into a shared content user.</div>
           <div class="d-flex flex-wrap gap-3">
             {% for g in gmod_games %}
