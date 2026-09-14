@@ -22,8 +22,8 @@ from panel.ops import ssh_manager as _sm
 from panel.security.auth import (INSTALL_SERVER, MANAGE_REMOTES, can_access_remote, get_game,
     get_remote, has_permission, log_action, permission_required, server_access_required)
 import time
-from app import (_json_body, _local_remote_id, _log, _log_and_generic, _os_update_note,
-    _unreachable)
+from panel.core.http import (_json_body, _log_and_generic, _unreachable)
+from app import (_local_remote_id, _log, _os_update_note)
 
 
 def register(app):

@@ -114,6 +114,14 @@ run_suite "setup wizard (the unauthenticated first-run flow, and the lock that c
 run_suite "perf budget (no page's query count scales with the number of game servers)" \
     tests/perf_budget_test.py
 
+# Drives the numeric form fields with the values a browser never sends (0, 65536, "abc", a
+# newline, Arabic-Indic digits) and asserts a refusal with NO row written — plus a positive control
+# per field, so it cannot pass against a route that refuses everything. Ordered here because it
+# boots the app like smoke but exercises far fewer pages. Same developer-machine caveat as smoke:
+# use ./tools/smoke-local.sh tests/input_validation_test.py.
+run_suite "input validation (numeric fields refuse hostile values, and still accept good ones)" \
+    tests/input_validation_test.py
+
 # CI runs this bare, which is right there. On a DEVELOPER machine use ./tools/smoke-local.sh
 # instead of this script: booting the app fires real `sudo -n` probes (pam_faillock counts each
 # one and will lock you out of your own sudo) and real outbound SSH to the fixture hosts. That

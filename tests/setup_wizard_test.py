@@ -40,6 +40,15 @@ if DB_PATH.exists():
     sys.exit(0)
 
 _PREEXISTING = {p for p in (SECRET_FILE, CRED_KEY_FILE, CONFIG_FILE) if p.exists()}
+
+# A config that was already on disk is RESTORED BYTE-FOR-BYTE at the end. Every DB-owning suite
+# has to edit config.json to boot the app, and deleting it only when the suite CREATED it is not
+# enough: on a developer's tree the file is theirs and the edits stay behind. That is not
+# hypothetical — a leftover ssh_timeout=1 makes the UNIT suite's "no override -> the documented
+# default" check fail, in a different suite, pointing at config rather than at whoever wrote it.
+# tools/smoke-local.sh sidesteps this by copying to a throwaway tree; running a suite in-tree
+# (which CI does, where no config pre-exists) should not behave differently.
+_CONFIG_SNAPSHOT = CONFIG_FILE.read_bytes() if CONFIG_FILE in _PREEXISTING else None
 _CFG_BACKUP = CONFIG_FILE.read_bytes() if CONFIG_FILE in _PREEXISTING else None
 
 # NOTE: no `setup_complete = True` here, unlike every other suite. The wizard must be OPEN when the
@@ -81,8 +90,11 @@ def cleanup():
                 p.unlink()
             except OSError:
                 pass
-
-
+    if _CONFIG_SNAPSHOT is not None:
+        try:
+            CONFIG_FILE.write_bytes(_CONFIG_SNAPSHOT)   # undo our edits to someone else's config
+        except OSError:
+            pass
 def superadmins():
     with app.app_context():
         return [u.username for u in User.query.filter_by(is_superadmin=True).all()]
@@ -123,6 +135,27 @@ try:
     check("open: step=welcome saves the site settings",
           _cfg_after.get("site_title") == "Test Panel" and _cfg_after.get("port") == 5051
           and _cfg_after.get("bind_host") == "127.0.0.1", str(_cfg_after.get("port")))
+
+    # The port this step writes is the address the panel BINDS TO on its next boot, and nothing
+    # downstream re-checks it — app.py reads cfg["port"] and hands it straight to socketio.run().
+    # It was parsed with _int_or, which carries no range, so a typo of 0 or 99999 was saved and the
+    # panel would not come back up: recoverable only with linuxgsm-panel-recover or by editing
+    # config.json by hand. (The comment here used to say api_panel_change_port validated it. That
+    # is a different route, and the wizard never calls it.) Same bounds as that route.
+    _port_before = load_config().get("port")
+    for _bad in ("0", "80", "1023", "65536", "99999", "-1", "abc", "", "5051.5", "\u0665\u0660\u0665\u0661"):
+        r = c.post("/setup", data={"step": "welcome", "site_title": "Should Not Save",
+                                   "port": _bad, "bind_host": "127.0.0.1"})
+        check("open: step=welcome refuses port=%r" % _bad,
+              r.status_code < 500 and load_config().get("port") == _port_before,
+              "status %d, config port is now %s" % (r.status_code, load_config().get("port")))
+    check("open: a refused port leaves the rest of step 1 unsaved too",
+          load_config().get("site_title") == "Test Panel", load_config().get("site_title"))
+    # Positive control: a valid port still saves, so the block above cannot pass by refusing all.
+    r = c.post("/setup", data={"step": "welcome", "site_title": "Test Panel",
+                               "port": "5052", "bind_host": "127.0.0.1"})
+    check("open: step=welcome still accepts a valid port (positive control)",
+          load_config().get("port") == 5052, str(load_config().get("port")))
 
     # ── Step 2 validation: none of these may create an account ────────────────────────────────
     for _name, _form, _why in (

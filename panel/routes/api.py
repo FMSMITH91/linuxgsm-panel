@@ -22,8 +22,8 @@ from panel.services.monitoring import (_PLAYER_POLL_WORKERS, _cached_player_coun
 import concurrent.futures
 import re
 import time
-from app import (_cached_player_max, _cached_player_name, _log, _log_and_generic,
-    resolve_free_port)
+from panel.core.http import (_log_and_generic)
+from app import (_cached_player_max, _cached_player_name, _log, resolve_free_port)
 from panel.routes._shared import (_looks_installed, _maybe_resolve_public_ip,
     _notify_servers_changed)
 
@@ -126,6 +126,8 @@ def register(app):
             port, changed = resolve_free_port(remote, remote_id, desired, game)
         except Exception:
             return jsonify({"port": None})
+        # port is None when nothing near `desired` is free. The form reads this as "no suggestion"
+        # and leaves the field alone, which is the same shape as the failure branches above.
         return jsonify({"port": port, "changed": bool(changed)})
 
     @app.route("/api/palette")

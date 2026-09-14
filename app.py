@@ -40,7 +40,6 @@ import time
 import gzip as _gzip
 from datetime import timedelta
 from panel.core.clock import utcnow
-from urllib.parse import quote
 
 # eventlet announces its own deprecation on import — upstream's words, not a nit: "Eventlet is
 # deprecated ... we strongly recommend against using it for new projects ... we recommend migrating
@@ -64,7 +63,7 @@ with _w.catch_warnings():
 del _w
 
 import secrets
-from flask import (Flask, current_app, flash, g, jsonify, redirect, request, session, url_for)
+from flask import (Flask, g, jsonify, request, session, url_for)
 from markupsafe import Markup
 from panel.core import i18n
 from flask_login import (current_user)
@@ -84,6 +83,14 @@ from panel.services.bots.telegram import (_report_tg_pending_update, _telegram_c
 from panel.services.certs import (_ensure_self_signed_cert)
 from panel.db.prefs import (_effective_prefs, _panel_layout)
 from panel.core.middleware import PrefixMiddleware
+# The pure layers, now that they live outside this module. app.py used to DEFINE these and every
+# route module imported them back out of it — app.py imports the route modules, so the arrow went
+# both ways. It points one way now: panel.core knows nothing about app.py, and app.py and the route
+# modules each import what they use. Deliberately NOT a re-export of the whole surface: a name
+# app.py does not use has no reason to be reachable through app.py, and leaving it importable from
+# here is what let the cycle grow in the first place. See the docstrings in panel/core/validation.py
+# and panel/core/http.py.
+from panel.core.validation import MAX_PORT, MIN_PORT, _valid_hex_color
 from panel.services.monitoring import (_METRIC_RETENTION_DAYS, _METRIC_SAMPLE_SECONDS,
     _MONITOR_SECONDS, _PLAYER_POLL_SECONDS, _autoblock_reconcile, _autoblock_threshold,
     _host_reachable, _monitor_pass, _reboot_when_empty_watch, _record_metric_samples,
@@ -233,24 +240,8 @@ _PORT_SPAN = {
 
 # Characters a filename may keep in the plain `filename=` parameter: everything else is replaced.
 # Quotes and backslashes would end the quoted string early, and CR/LF would split the header.
-_ASCII_FILENAME_STRIP = re.compile(r"[^A-Za-z0-9._ ()+,\[\]-]")
 
 
-def _attachment_header(name):
-    """A Content-Disposition value that survives a real game-server filename.
-
-    These names are written by mod authors, map packers and Windows tooling — spaces, brackets,
-    apostrophes, accents and the occasional control character are all ordinary. WSGI header values
-    are latin-1, so a UTF-8 name cannot go in `filename=` at all: the exact name goes in RFC 5987's
-    `filename*` (percent-encoded, which every current browser prefers), and a scrubbed ASCII
-    version stays in `filename=` for anything that ignores it. Scrubbed, not just quoted, because
-    a name is attacker-influenceable — anyone who can upload a file picks it — and a raw CR here
-    would be header injection.
-    """
-    base = os.path.basename(name or "") or "download"
-    ascii_name = _ASCII_FILENAME_STRIP.sub("_", base).strip() or "download"
-    return "attachment; filename=\"%s\"; filename*=UTF-8''%s" % (
-        ascii_name, quote(base, safe=""))
 
 
 def _port_span(game_type):
@@ -259,13 +250,23 @@ def _port_span(game_type):
 
 
 def _first_free_block(desired, span, occupied, limit=400):
-    """Lowest start port >= `desired` whose `span` contiguous ports are all clear of `occupied`."""
-    p = desired
+    """Lowest start port >= `desired` whose `span` contiguous ports are all clear of `occupied`,
+    or None when there is no such block within `limit` tries or before the port range runs out.
+
+    RETURNS None RATHER THAN A BEST GUESS. It used to return the last candidate after exhausting
+    `limit` — a port that is occupied by definition — so the caller was handed a colliding port
+    AND told the search had succeeded. The install then died on the host with srcds's own
+    "Port N was unavailable", which points at the game rather than at the allocator. The same walk
+    could also run past 65535 and hand back a port that does not exist. A caller that cannot be
+    given a free block has to be told so; there is no useful port to invent here."""
+    p = max(int(desired), MIN_PORT)
     for _ in range(limit):
+        if p + span - 1 > MAX_PORT:
+            return None
         if all((p + k) not in occupied for k in range(span)):
             return p
         p += 1
-    return p
+    return None
 
 
 
@@ -777,23 +778,6 @@ def lgsm_name_to_game_type(lgsm_name):
 
 # ─── App Factory ──────────────────────────────────────────────
 
-# ── Strict input validation ───────────────────────────────────────────────
-# These values become LinuxGSM shortnames, Linux usernames, home-directory paths and
-# arguments to shell commands run as root during install. LinuxGSM shortnames are
-# lowercase alphanumeric; a game-server instance name becomes a Linux user. Rejecting
-# anything outside a safe charset here is what prevents shell/command injection into
-# the install pipeline (a user with INSTALL_SERVER must NOT be able to run arbitrary
-# root commands on a host).
-GAME_TYPE_RE = re.compile(r"^[a-z0-9]{1,32}$")
-INSTANCE_NAME_RE = re.compile(r"^[a-z][a-z0-9_-]{0,30}$")   # valid Linux username shape
-LINUX_USER_RE = re.compile(r"^[a-z_][a-z0-9_-]{0,31}$")     # for linuxgsm_user / ssh user
-# Hostname / IPv4 / IPv6 / Tailscale MagicDNS — no HTML or shell metacharacters, so a
-# stored host can't inject markup where it's shown (e.g. the dashboard connect address).
-HOST_RE = re.compile(r"^[A-Za-z0-9._:\[\]-]{1,255}$")
-# Free-text display labels (e.g. a remote's name): allow spaces/punctuation but reject the
-# characters that would let a stored label break out of HTML or a JS string when it's shown
-# in the UI's client-side rendering. Defense-in-depth alongside output encoding.
-SAFE_LABEL_RE = re.compile(r"""^[^<>"'`\r\n\\]{1,120}$""")
 
 # Lightweight in-memory login throttle (single-process eventlet app). Blocks an IP
 # after too many failed logins within the window — a basic brute-force speed bump.
@@ -855,47 +839,10 @@ def _maybe_alert_admin_bruteforce(who, ip, now):
 _BAN_SPIKE_THRESHOLD = 3
 
 
-MIN_PASSWORD_LEN = 10
-import string as _string
-_PW_SYMBOLS = set(_string.punctuation)
 
 
-def password_problem(pw):
-    """Return a human error if the password is too weak, else None.
-    Requires: length, lower, upper, digit, and a symbol."""
-    if not pw or len(pw) < MIN_PASSWORD_LEN:
-        return f"Password must be at least {MIN_PASSWORD_LEN} characters."
-    if not any(c.islower() for c in pw):
-        return "Password must include a lowercase letter."
-    if not any(c.isupper() for c in pw):
-        return "Password must include an uppercase letter."
-    if not any(c.isdecimal() for c in pw):
-        return "Password must include a number."
-    if not any(c in _PW_SYMBOLS for c in pw):
-        return "Password must include a symbol (e.g. !@#$%)."
-    return None
 
 
-def _int_or(value, default):
-    """Parse an int from untrusted form input, falling back to default instead of
-    raising (a bad value like an empty or non-numeric port must not 500 the page)."""
-    try:
-        return int(str(value).strip())
-    except (TypeError, ValueError):
-        return default
-
-
-_HEX_COLOR_RE = re.compile(r"^#[0-9A-Fa-f]{6}$")
-
-
-def _valid_hex_color(value):
-    """Return a normalised #rrggbb string if `value` is a 6-digit hex colour, else "".
-    The accent colour is emitted into a CSS custom property, so it must be a strict
-    colour literal — never arbitrary text that could carry `}` / `<` and break out."""
-    v = (value or "").strip()
-    if not v.startswith("#"):
-        v = "#" + v
-    return v.lower() if _HEX_COLOR_RE.match(v) else ""
 
 
 # Terminal control noise that "fancy" game consoles write into their log. Minecraft/Paper run a
@@ -1023,8 +970,17 @@ def create_app():
         # off — so replicate it here (tests set WTF_CSRF_ENABLED=False).
         if not app.config.get("WTF_CSRF_ENABLED", True):
             return
-        if request.headers.get("Authorization", "").startswith("Bearer "):
-            return   # API-token request: no cookie to forge, so CSRF doesn't apply
+        # The Bearer exemption is justified by "an API-token request carries no cookie, so there is
+        # nothing for a cross-site page to ride" — so TEST THAT, rather than testing only for the
+        # header. Exempting on the header alone meant a request that sent BOTH a Bearer header and
+        # a session cookie skipped CSRF while flask-login authenticated it from the cookie: the
+        # stated reason no longer held, and the code could not tell. Not reachable from a browser
+        # today (a custom header forces a CORS preflight, and the SameSite=Lax cookie is not sent
+        # cross-site anyway), which is why this is a narrowing and not a patch — but an exemption
+        # should rest on the condition it claims.
+        if (request.headers.get("Authorization", "").startswith("Bearer ")
+                and not request.cookies.get(app.config["SESSION_COOKIE_NAME"])):
+            return   # genuinely cookie-less API-token request: CSRF cannot apply
         csrf.protect()   # session/cookie request: full CSRF enforcement (no-op on safe methods)
 
     # Cap the total request body so an oversized upload can't be spooled to disk / read into memory
@@ -1218,36 +1174,12 @@ def register_template_filters(app):
 
 # ─── Context Processors ───────────────────────────────────────
 
-def _json_body():
-    """Request JSON coerced to a dict — {} for a missing, non-object (array/scalar), or malformed
-    body. Guards every endpoint's `.get(...)` from crashing on a hostile/buggy request body."""
-    d = request.get_json(silent=True)
-    return d if isinstance(d, dict) else {}
 
 
-def _wants_json():
-    """True when the caller is an in-page fetch() (so form-POST endpoints can answer with JSON and
-    let the page update in place instead of doing a full redirect+reload). The global fetch wrapper
-    in base.html sets X-Requested-With; a real browser form navigation does not."""
-    return (request.headers.get("X-Requested-With") == "XMLHttpRequest"
-            or "application/json" in (request.headers.get("Accept") or ""))
 
 
-def _form_ok(message, endpoint, **values):
-    """Success result for an action form: JSON for an in-page fetch (so the page updates in place),
-    else the classic flash + redirect for a plain browser submit."""
-    if _wants_json():
-        return jsonify({"success": True, "message": message})
-    flash(message, "success")
-    return redirect(url_for(endpoint, **values))
 
 
-def _form_err(message, endpoint, code=400, category="danger", **values):
-    """Failure result for an action form: JSON (+ status) for a fetch, else flash + redirect."""
-    if _wants_json():
-        return jsonify({"success": False, "message": message}), code
-    flash(message, category)
-    return redirect(url_for(endpoint, **values))
 
 
 def _new_user_language(cfg, known):
@@ -1396,7 +1328,8 @@ def resolve_free_port(remote, remote_id, desired, game_type):
     """Find a free contiguous port block at/after `desired` on a remote for a `game_type`
     server. A block of _port_span(game_type) ports must clear both (a) the ports other panel
     game servers on this remote reserve — each per its own game's span — and (b) whatever is
-    actually listening on the host right now. Returns (start_port, changed).
+    actually listening on the host right now. Returns (start_port, changed), or (None, False)
+    when no free block exists near `desired` — see _first_free_block on why that is not a port.
 
     The span makes the increment game-correct: single-port games (most, incl. Call of Duty and
     Source) pack sequentially (28960, 28961, …) instead of wastefully skipping every other
@@ -1411,6 +1344,8 @@ def resolve_free_port(remote, remote_id, desired, game_type):
         for k in range(_port_span(e.game_type)):
             occupied.add(e.port + k)
     p = _first_free_block(desired, span, occupied)
+    if p is None:
+        return None, False      # nothing free nearby — the caller must refuse, not guess
     return p, (p != desired)
 
 # ── Setup Wizard ────────────────────────────────────────
@@ -1701,28 +1636,7 @@ def _os_updates_for(remote):
 # channel — so no log line changes and not one of the 79 call sites needed touching. Every
 # caller of both is a route view, so the request context they need is guaranteed.
 
-def _log_and_generic(context):
-    """Record the real exception in the server log and return a generic string,
-    so raw exception text is never sent to the client (CodeQL
-    py/stack-trace-exposure). Admins read the detail in the panel logs."""
-    current_app.logger.exception(context)
-    return "Internal server error"
 
-def _unreachable(context):
-    """A remote host that cannot be reached is a NORMAL condition for this panel, not a fault
-    in it — hosts go down, networks blip, a VPS reboots. Answer 200 with an error field so the
-    UI can say "host unreachable" instead of the browser logging a 500, and so 5xx alerting
-    stays a signal that the PANEL is broken.
-
-    ssh_manager raises ConnectionError for exactly this (auth failed / timed out / cannot
-    resolve), which is what makes it separable from a genuine bug. Anything that is not a
-    ConnectionError still returns 500, deliberately: those are ours.
-
-    api_remote_live_stats already did this and said why in a comment; six sibling endpoints
-    did not, and every one of them 500s on a host that is simply switched off."""
-    current_app.logger.warning("%s: host unreachable", context)
-    return jsonify({"success": False, "unreachable": True,
-                    "error": "Host unreachable"}), 200
 
 def register_routes(app):
     # Lazy, like every other panel.routes import here: those modules do

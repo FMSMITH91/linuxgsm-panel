@@ -1404,6 +1404,36 @@ for _f in ["app.py", "monitoring.py"] + [f for f in _SCAN_TEST_USERS]:
 check("panel_state names are mutated in place, never rebound by an importer",
       not _rebinds, "; ".join(sorted(set(_rebinds))[:5]))
 
+# ── Row-keyed state is pruned when its row is deleted ─────────────────────────────────────────
+# SQLite hands a deleted row's id straight to the next INSERT, so a map keyed by row id must forget
+# a deleted id or the NEXT server to take that id inherits it. _forget_deleted_rows used to name
+# every map by hand, which made each new one an edit somebody had to remember somewhere else — and
+# two were missed for as long as they existed (_game_backup_status and the GMod content-apply
+# state, both read to RENDER a server's page). They register at their declaration now, so this
+# asserts the REGISTRY is what gets pruned rather than re-listing the same names the code lists.
+from panel.core import panel_state as _ps_reg
+from panel.services.monitoring import _forget_deleted_rows as _fdr
+import panel.routes.server_files as _sf_reg   # noqa: F401 - imported so its map registers
+_reg_maps = _ps_reg.server_keyed_state() + _ps_reg.remote_keyed_state()
+check("panel_state: every row-keyed map is registered for pruning (>= 12)", len(_reg_maps) >= 12,
+      "only %d registered" % len(_reg_maps))
+_saved = [dict(_m) for _m in _reg_maps]
+for _m in _reg_maps:
+    _m[1] = "live"
+    _m[99] = "left behind by a deleted row"
+_fdr(remote_ids={1}, server_ids={1})
+check("state pruning: no registered map keeps a deleted row's id",
+      not [1 for _m in _reg_maps if 99 in _m],
+      "%d map(s) still hold id 99" % len([1 for _m in _reg_maps if 99 in _m]))
+check("state pruning: a LIVE id is untouched (it does not just clear everything)",
+      all(1 in _m for _m in _reg_maps))
+check("state pruning: the two maps that were missed are registered",
+      any(_m is _ps_reg._game_backup_status for _m in _ps_reg.server_keyed_state())
+      and any(_m is _sf_reg._gmod_content_apply_state for _m in _ps_reg.server_keyed_state()))
+for _m, _orig in zip(_reg_maps, _saved):          # leave the process state as we found it
+    _m.clear()
+    _m.update(_orig)
+
 check("no module-level constant is defined and then never referenced by production code",
       not _orphans, "; ".join(_orphans[:4]))
 # The remote transport still base64s the content through a shell, so the content must survive

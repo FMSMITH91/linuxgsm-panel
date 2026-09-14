@@ -10,8 +10,9 @@ from panel.ops import (tailscale_integration as ts)
 from panel.ops.ssh_manager import (ssh_test_connection)
 from panel.security.auth import (hash_password)
 import json
-from app import (_current_lang, _int_or, _log, _setup_open, _ts_backend_scheme,
-    is_setup_complete, password_problem)
+from panel.core.validation import (MAX_PORT, MIN_PORT, MIN_UNPRIVILEGED_PORT, _port_or,
+    password_problem)
+from app import (_current_lang, _log, _setup_open, _ts_backend_scheme, is_setup_complete)
 
 
 def register(app):
@@ -75,9 +76,21 @@ def register(app):
 
             if step == "welcome":
                 # Step 1: Site settings
+                # The port is VALIDATED here, not merely parsed. This value is written straight to
+                # config.json and read back by the entry point as the address to bind — so an
+                # out-of-range one (a typo of 0, or 99999) produced a panel that would not start on
+                # its next boot, recoverable only with linuxgsm-panel-recover or by hand-editing
+                # the file. The comment that used to sit here said api_panel_change_port validated
+                # it; that is a different route, and the wizard never calls it. Same bounds as that
+                # route, so the panel's port means one thing wherever it is set.
+                _wiz_port = _port_or(request.form.get("port"), None, lo=MIN_UNPRIVILEGED_PORT)
+                if _wiz_port is None:
+                    flash("Pick a port between %d and %d." % (MIN_UNPRIVILEGED_PORT, MAX_PORT),
+                          "danger")
+                    return redirect("/setup")
                 cfg["site_title"] = request.form.get("site_title", "LinuxGSM Panel")
                 cfg["site_domain"] = request.form.get("site_domain", "")
-                cfg["port"] = _int_or(request.form.get("port"), 5000)
+                cfg["port"] = _wiz_port
                 # nosec B104 - not a hardcoded bind: this is the DEFAULT offered in the setup
                 # wizard when the operator leaves the field blank, and 0.0.0.0 is what a panel
                 # reached over a tailnet or a LAN has to listen on. The value is the operator's
@@ -150,7 +163,7 @@ def register(app):
                     name = request.form.get("name", "").strip()
                     host = request.form.get("host", "").strip()
                     ssh_user = request.form.get("ssh_user", "root").strip()
-                    ssh_port = _int_or(request.form.get("ssh_port"), 22)
+                    ssh_port = _port_or(request.form.get("ssh_port"), None)
                     auth_method = request.form.get("auth_method", "key")
                     credential = request.form.get("credential", "").strip()
                     sudo_enabled = request.form.get("sudo_enabled") == "on"
@@ -158,6 +171,8 @@ def register(app):
 
                     if not name or not host:
                         flash("Name and host are required.", "danger")
+                    elif ssh_port is None:
+                        flash("SSH port must be between %d and %d." % (MIN_PORT, MAX_PORT), "danger")
                     else:
                         success, msg = ssh_test_connection(host, ssh_port, ssh_user, auth_method, credential)
                         if not success:

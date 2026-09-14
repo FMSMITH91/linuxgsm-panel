@@ -640,7 +640,9 @@ def get_remote(remote_id):
 
 
 def get_game(server_id):
-    return GameServer.query.get_or_404(server_id)
+    # db.get_or_404, not Model.query.get_or_404: the Query.get* family is the legacy API and is
+    # deprecated in Flask-SQLAlchemy 3.1 / SQLAlchemy 2.0. Same behaviour, same 404.
+    return db.get_or_404(GameServer, server_id)
 
 
 def _can_edit_tags():

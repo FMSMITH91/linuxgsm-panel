@@ -51,6 +51,21 @@ eq("port-pack: 2 valheim servers keep a 3-port block each",
    _pack(["valheim", "valheim"], {"valheim": 2456}), [2456, 2459])
 eq("port-block: a live listening port is skipped",
    _first_free_block(28960, 1, {28960, 28961}), 28962)
+# NO FREE BLOCK -> None, never a best guess. It used to return the last candidate it tried after
+# exhausting its limit — a port that is occupied by definition — and report `changed=True`, so the
+# caller stored a colliding port and the install failed later as the GAME's "Port N was unavailable".
+check("port-block: exhausting the search returns None, not an occupied port",
+      _first_free_block(30000, 1, set(range(30000, 30500))) is None)
+check("port-block: the walk never runs past 65535",
+      _first_free_block(65400, 1, set(range(65400, 66000))) is None)
+check("port-block: a span that would cross the ceiling is refused",
+      _first_free_block(65535, 2, set()) is None)
+check("port-block: a free block at the very top is still found",
+      _first_free_block(65535, 1, set()) == 65535)
+from app import resolve_free_port as _rfp  # noqa: F401 - imported to assert the contract below
+import inspect as _rfp_inspect
+check("resolve_free_port: propagates the None rather than inventing a port",
+      "if p is None" in _rfp_inspect.getsource(_rfp))
 
 # _dedupe_aux_ports: a 2nd Source server must move its SourceTV/client ports off any already taken,
 # so -strictportbind doesn't quit it. Free ports keep their value (and are omitted from the result).
@@ -103,6 +118,18 @@ check("runtime-path: README is noise", _so._is_runtime_path("README.md") is Fals
 check("runtime-path: any .md is noise", _so._is_runtime_path("docs/SECURITY.md") is False)
 check("runtime-path: .github workflow is noise", _so._is_runtime_path(".github/workflows/ci.yml") is False)
 check("runtime-path: tests are noise", _so._is_runtime_path("tests/unit_test.py") is False)
+# tools/ IS noise — except for the one file in it that runs as root on the host. The helper is the
+# sudo boundary, it lives outside the checkout once installed, and ONLY install.sh (as root) can
+# refresh it; the update badge is what tells the operator to do that. Classified as noise, a commit
+# that changed only the helper raised no badge, so the panel moved on while the installed helper
+# did not — and an unknown verb then fails silently with rc 2. See the helper's own docstring.
+check("runtime-path: tools/panel-helper COUNTS (it is the root-owned sudo boundary)",
+      _so._is_runtime_path("tools/panel-helper") is True)
+check("runtime-path: the rest of tools/ is still noise",
+      _so._is_runtime_path("tools/run-tests.sh") is False
+      and _so._is_runtime_path("tools/perf_bench.py") is False)
+check("runtime-path: the exception list names a file that exists",
+      all((_os_p3 := __import__("os")).path.exists(f) for f in _so._RUNTIME_EXCEPTIONS))
 check("runtime-path: LICENSE is noise", _so._is_runtime_path("LICENSE") is False)
 check("runtime-path: dotfiles are noise", _so._is_runtime_path(".gitignore") is False)
 _orig_utr_git = _so._git
@@ -707,6 +734,7 @@ finally:
 # _remote_ci_state maps GitHub's Actions API response to passing/pending/failing, and
 # never raises on a network/parse error (returns 'unknown', treated leniently).
 import io as _io
+import json
 _orig_ci_slug = _so._repo_slug
 _orig_urlopen = _so.urllib.request.urlopen
 try:
@@ -745,6 +773,42 @@ try:
         raise _so.urllib.error.URLError("offline")
     _so.urllib.request.urlopen = _boom
     eq("ci-gate: network error -> unknown (never raises)", _so._remote_ci_state("a"*40), "unknown")
+
+    # PAGINATION. The call asked for per_page=100 and read exactly one page. That was enough for
+    # the workflows that exist today, but the failure mode if it ever stopped being enough is the
+    # wrong one: a check that did not fit on page 1 is simply not seen, so a commit whose only
+    # FAILURE sits on page 2 reads as 'passing' and the panel offers the update — which is the one
+    # thing this gate exists to prevent. A full page must be followed.
+    _pages_fetched = []
+
+    def _paged(req, timeout=8):
+        _pages_fetched.append(req.full_url)
+        full = [{"name": "c%d" % i, "status": "completed", "conclusion": "success"}
+                for i in range(100)]
+        # endswith, NOT `"page=1" in url` — the query also carries per_page=100, whose "page=100"
+        # contains "page=1". The first version of this mock matched every page because of it.
+        if req.full_url.endswith("page=1"):
+            return _io.BytesIO(json.dumps({"check_runs": full}).encode())
+        return _io.BytesIO(json.dumps({"check_runs": [
+            {"name": "the-one-that-failed", "status": "completed", "conclusion": "failure"}]}).encode())
+
+    _so.urllib.request.urlopen = _paged
+    _paged_state = _so._remote_ci_state("a" * 40)
+    eq("ci-gate: a failure on page 2 is seen, not truncated away", _paged_state, "failing")
+    check("ci-gate: a full first page is followed by a second request", len(_pages_fetched) >= 2,
+          "fetched %d page(s)" % len(_pages_fetched))
+
+    _pages_fetched.clear()
+
+    def _short(req, timeout=8):
+        _pages_fetched.append(req.full_url)
+        return _io.BytesIO(json.dumps({"check_runs": [
+            {"name": "checks", "status": "completed", "conclusion": "success"}]}).encode())
+
+    _so.urllib.request.urlopen = _short
+    eq("ci-gate: a short page still means 'passing'", _so._remote_ci_state("a" * 40), "passing")
+    check("ci-gate: ...and a short page stops the paging (one request, not five)",
+          len(_pages_fetched) == 1, "fetched %d page(s)" % len(_pages_fetched))
 finally:
     _so._repo_slug = _orig_ci_slug
     _so.urllib.request.urlopen = _orig_urlopen

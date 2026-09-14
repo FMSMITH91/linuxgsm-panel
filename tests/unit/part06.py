@@ -1063,11 +1063,20 @@ check("register_routes: every one of the 209 views is still accounted for",
       len(_rr_views) + _MOVED_VIEWS == 209,
       "views inside=%d, moved out=%d" % (len(_rr_views), _MOVED_VIEWS))
 # These two use current_app, which only equals the closed-over `app` inside a request — every
-# caller is a view, so that holds. If they drift back inside, the reasoning stops being checked.
+# caller is a view, so that holds. If they drift back inside a closure, the reasoning stops being
+# checked. They are no longer app.py's at all: they moved to panel/core/http.py with the rest of
+# the pure layer, so the assertion follows them there AND still refuses to see them nested in
+# register_routes — which is the half that actually guards the current_app reasoning.
+_http_ast = _ast_rr.parse(
+    open(os.path.join(_root, "panel", "core", "http.py"), encoding="utf-8").read())
 for _h in ("_log_and_generic", "_unreachable"):
-    check("register_routes: %s is module-level, not nested" % _h,
-          any(isinstance(n, _ast_rr.FunctionDef) and n.name == _h for n in _app_ast.body),
-          "it moved back inside register_routes")
+    check("panel/core/http.py: %s is module-level" % _h,
+          any(isinstance(n, _ast_rr.FunctionDef) and n.name == _h for n in _http_ast.body),
+          "it is not a top-level def there")
+    check("register_routes: %s did not drift back into a closure" % _h,
+          not any(isinstance(n, _ast_rr.FunctionDef) and n.name == _h
+                  for n in _ast_rr.walk(_rr)),
+          "it reappeared inside register_routes")
 
 # ── Every file in data/ that holds DB rows or keys is hardened ───────────────────────────────
 # harden_data_permissions() covered the DB, its WAL/SHM pair, the config and both keys — but not

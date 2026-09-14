@@ -26,9 +26,12 @@ from panel.services import (lgsm_data)
 import re
 import threading
 import time
+from panel.core.http import (_json_body, _log_and_generic)
+from panel.core.validation import (_attachment_header)
 from app import (ALERT_PROVIDERS, _GAME_LIST_CACHE, _LGSM_NAME_MAP, _MAX_UPLOAD_BYTES,
-    _apply_mod_restart, _attachment_header, _clean_console_text, _json_body, _log,
-    _log_and_generic, _socketio_cors, _sync_toggles_from_cron, load_game_list)
+    _apply_mod_restart, _clean_console_text, _log, _socketio_cors, _sync_toggles_from_cron,
+    load_game_list)
+from panel.core.panel_state import (register_server_state)
 from panel.routes._shared import (_server_action_buttons)
 
 # ── State and constants this module OWNS ───────────────────────────────────────────────────────
@@ -50,7 +53,10 @@ _ALERT_KEY_SET = set(_ALERT_KEYS)
 _CONSOLE_LINES = 250
 _CONSOLE_LINES_MAX = 2000
 
-_gmod_content_apply_state = {}  # server_id -> {"status": running|done|error, "msg", "ts"}
+# Registered, not a bare dict: it is keyed by GameServer.id and read to render the server's page,
+# so a deleted server's id — which SQLite hands straight to the next INSERT — would show the NEW
+# server a content install frozen at "running". See panel_state.register_server_state.
+_gmod_content_apply_state = register_server_state({})   # server_id -> {"status", "msg", "ts"}
 _console_viewers = {}          # server_id -> set of socket session ids
 _viewers_lock = threading.Lock()
 
@@ -663,8 +669,15 @@ def register(app, supervise):
 
     @socketio.on("join_console")
     def on_join_console(data):
-        server_id = data.get("server_id")
-        if not server_id:
+        # int(), because the ROOM NAME is built from this value and the console poller emits to
+        # f"console_{gs.id}" with a real int. A client that sent "3" passed the access check
+        # (SQLAlchemy coerces the lookup) and then joined "console_3" as a string-derived room the
+        # poller never pushes to — an authorised viewer with a permanently silent console.
+        try:
+            server_id = int(data.get("server_id"))
+        except (TypeError, ValueError):
+            return
+        if server_id <= 0:
             return
         # Enforce the SAME access control as the HTTP console routes: the socket must
         # belong to a logged-in user who has access to this specific server AND holds

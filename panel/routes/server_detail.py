@@ -24,8 +24,9 @@ from panel.services.monitoring import (_PLAYER_POLL_WORKERS)
 import concurrent.futures
 import re
 import threading
-from app import (LONG_ACTIONS, RUNNABLE_ACTIONS, _apply_mod_restart, _json_body,
-    _live_run_state, _log, _log_and_generic, _mark_expected_offline)
+from panel.core.http import (_json_body, _log_and_generic)
+from app import (LONG_ACTIONS, RUNNABLE_ACTIONS, _apply_mod_restart, _live_run_state, _log,
+    _mark_expected_offline)
 from panel.routes._shared import (_maybe_resolve_public_ip, _server_action_buttons)
 
 

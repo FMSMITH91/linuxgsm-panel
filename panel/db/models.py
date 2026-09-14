@@ -32,6 +32,32 @@ def _validate_shell_ident(key, value):
                          % (key, value))
     return value
 
+
+# TCP/UDP's actual range. Enforced HERE, at the data layer, for the same reason the shell charset
+# above is: a port stored on a row is later opened in the firewall, written into a LinuxGSM config,
+# compared against the host's listening ports, and bound by the panel's own listener. Route-level
+# checks are what the panel already had, and two of the four route-level checks were missing — the
+# game-server install form took `int(port)` from a request with no bounds at all, and the setup
+# wizard wrote its result straight to config.json. A @validates hook cannot be forgotten by the
+# next route that assigns a port.
+#
+# The same caveat as _validate_shell_ident applies: this fires on ASSIGNMENT, never on rows loaded
+# from the database, so a row written before it existed still reaches the code that uses it. It
+# closes the door going forward; it does not retro-clean an old database.
+_MIN_PORT, _MAX_PORT = 1, 65535
+
+
+def _validate_port(key, value):
+    if value is None or value == "":
+        return value                    # optional columns (query_port) may legitimately be unset
+    try:
+        n = int(value)
+    except (TypeError, ValueError):
+        raise ValueError("%s must be a number, got %r" % (key, value))
+    if not (_MIN_PORT <= n <= _MAX_PORT):
+        raise ValueError("%s must be between %d and %d, got %d" % (key, _MIN_PORT, _MAX_PORT, n))
+    return n
+
 # Association table: group -> permission strings
 group_permissions = db.Table(
     "group_permissions",
@@ -262,6 +288,10 @@ class RemoteServer(db.Model):
     @validates("username", "linuxgsm_user")
     def _validate_ident(self, key, value):
         return _validate_shell_ident(key, value)
+
+    @validates("port")
+    def _validate_ssh_port(self, key, value):
+        return _validate_port(key, value)
     is_online = db.Column(db.Boolean, default=False)
     last_seen = db.Column(db.DateTime, nullable=True)
     host_key = db.Column(db.Text, default="")     # pinned SSH host key ("keytype base64"); TOFU
@@ -402,6 +432,10 @@ class GameServer(db.Model):
         # short_name -> the Linux user; game_type -> the LinuxGSM script name (lgsm_name).
         # Both are interpolated into remote shell commands, so pin them to a safe charset.
         return _validate_shell_ident(key, value)
+
+    @validates("port", "query_port")
+    def _validate_ports(self, key, value):
+        return _validate_port(key, value)
 
     def get_commands(self):
         try:

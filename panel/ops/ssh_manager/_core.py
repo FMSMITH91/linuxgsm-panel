@@ -69,9 +69,92 @@ except Exception:
     _real_subprocess = subprocess
 
 
-# In-memory SSH connection cache
+# In-memory SSH connection cache, keyed by _conn_key() below.
 _connections = {}
 _conn_lock = threading.Lock()
+
+# Row attributes a pooled client DEPENDS ON. The first three spell its cache key; the last two
+# decide what it authenticated with. A change to any of them means the cached client is answering
+# for a remote that no longer exists as described — see _register_remote_invalidation().
+_CONN_IDENTITY_ATTRS = ("username", "host", "port")
+_CONN_AUTH_ATTRS = ("auth_method", "auth_credential")
+
+# remote row id -> the pool key its client was opened under. The pool is keyed by user@host:port
+# because that is what identifies a connection; this remembers which key each ROW is currently
+# holding, so a row whose host or user has just been rewritten can still name the entry it opened.
+#
+# Reconstructing the old key from SQLAlchemy attribute history does NOT work here, and the way it
+# fails is quiet: after a commit every attribute is expired, so assigning to one of them leaves the
+# others with no history at all — `deleted` and `unchanged` both empty. The changed attribute reads
+# back correctly and the untouched ones come back None, which builds a key like "None@10.0.0.1:22"
+# that matches nothing. Recording the key when it is used needs no inference.
+_remote_conn_keys = {}
+
+
+def _conn_key(username, host, port):
+    """The pool key for a remote. One definition, because the bug below was that two call sites
+    could disagree about which connection they were naming."""
+    return "%s@%s:%s" % (username, host, port)
+
+
+def _close_key(key):
+    """Close and drop one cached client BY KEY. Returns whether there was one.
+
+    close_connection() can only address the key its argument CURRENTLY spells, so it cannot reach
+    a client whose row has since been repointed at a different host, port or user — that entry
+    stays in the pool, with its socket and keepalive, for the life of the process. Addressing the
+    pool by key is what makes the old entry reachable at all."""
+    if key is None:
+        return False
+    with _conn_lock:
+        client = _connections.pop(key, None)
+        for rid in [r for r, k in _remote_conn_keys.items() if k == key]:
+            del _remote_conn_keys[rid]
+    if client is None:
+        return False
+    try:
+        client.close()
+    except Exception:
+        _log.debug("_close_key: closing a stale SSH client failed", exc_info=True)
+    return True
+
+
+def _register_remote_invalidation():
+    """Drop a remote's pooled SSH client whenever its row changes in a way the pool cannot see.
+
+    WHY AN EVENT AND NOT ANOTHER CALL IN THE ROUTE. edit_remote rewrote username, host, port,
+    auth_method and auth_credential and committed without closing anything. Two consequences, both
+    silent: a ROTATED CREDENTIAL kept authenticating with the old one for as long as the 30-second
+    keepalive held the socket open — so "I changed the key on that host" did not take effect — and
+    a REPOINTED host orphaned its cache entry permanently, because close_connection builds the key
+    from the row's current values and the old key was no longer spellable.
+
+    Fixing edit_remote would have fixed edit_remote. The invariant is that a pooled client is valid
+    only while the row it was opened from still names the same host and the same credential, and
+    that belongs where the row changes rather than at each of the places that change it. Both old
+    and new keys are closed: the old one is the orphan, the new one is the case where only the
+    credential moved and the key did not.
+
+    Never raises: a pool that failed to prune must not turn into a failed commit."""
+    from sqlalchemy import event, inspect as _sa_inspect
+    from panel.db.models import RemoteServer
+
+    @event.listens_for(RemoteServer, "after_update")
+    def _drop_stale_connection(_mapper, _connection, target):
+        try:
+            state = _sa_inspect(target)
+            if not any(state.attrs[a].history.has_changes()
+                       for a in _CONN_IDENTITY_ATTRS + _CONN_AUTH_ATTRS):
+                return      # a rename or a stats-cache write must not churn the pool
+            # The key this ROW opened (correct even when host/user/port have just been rewritten),
+            # and the key it spells NOW (the case where only the credential moved).
+            _close_key(_remote_conn_keys.get(target.id))
+            _close_key(_conn_key(target.username, target.host, target.port))
+        except Exception:
+            _log.debug("SSH pool invalidation failed for a remote update", exc_info=True)
+
+
+_register_remote_invalidation()
 
 
 def _kill_process_tree(p):
@@ -348,7 +431,7 @@ def get_connection(server, force_new=False):
     if is_local_server(server):
         return None
 
-    key = f"{server.username}@{server.host}:{server.port}"
+    key = _conn_key(server.username, server.host, server.port)
     with _conn_lock:
         if not force_new and key in _connections:
             conn = _connections[key]
@@ -449,8 +532,12 @@ def get_connection(server, force_new=False):
                 client.close()
             except Exception:  # nosec B110
                 _log.debug("closing redundant duplicate connection", exc_info=True)
+            if getattr(server, "id", None) is not None:
+                _remote_conn_keys[server.id] = key   # this row is holding THEIR client now
             return existing
         _connections[key] = client
+        if getattr(server, "id", None) is not None:
+            _remote_conn_keys[server.id] = key
 
     return client
 
@@ -475,14 +562,7 @@ def close_connection(server):
     """Close and remove a cached connection. No-op for local servers."""
     if is_local_server(server):
         return
-    key = f"{server.username}@{server.host}:{server.port}"
-    with _conn_lock:
-        if key in _connections:
-            try:
-                _connections[key].close()
-            except Exception:
-                _log.debug("close_connection: closing a stale SSH client failed", exc_info=True)
-            del _connections[key]
+    _close_key(_conn_key(server.username, server.host, server.port))
 
 
 def _resolve_ts_host(server):

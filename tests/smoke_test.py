@@ -30,6 +30,15 @@ if DB_PATH.exists():
 
 _PREEXISTING = {p for p in (SECRET_FILE, CRED_KEY_FILE, CONFIG_FILE) if p.exists()}
 
+# A config that was already on disk is RESTORED BYTE-FOR-BYTE at the end. Every DB-owning suite
+# has to edit config.json to boot the app, and deleting it only when the suite CREATED it is not
+# enough: on a developer's tree the file is theirs and the edits stay behind. That is not
+# hypothetical — a leftover ssh_timeout=1 makes the UNIT suite's "no override -> the documented
+# default" check fail, in a different suite, pointing at config rather than at whoever wrote it.
+# tools/smoke-local.sh sidesteps this by copying to a throwaway tree; running a suite in-tree
+# (which CI does, where no config pre-exists) should not behave differently.
+_CONFIG_SNAPSHOT = CONFIG_FILE.read_bytes() if CONFIG_FILE in _PREEXISTING else None
+
 # Mark setup complete in config BEFORE the app loads it — is_setup_complete()
 # requires both this flag and a SetupState(complete=True) row (added below).
 from panel.core.config import load_config, save_config
@@ -143,8 +152,11 @@ def cleanup():
                 p.unlink()
             except OSError:
                 pass
-
-
+    if _CONFIG_SNAPSHOT is not None:
+        try:
+            CONFIG_FILE.write_bytes(_CONFIG_SNAPSHOT)   # undo our edits to someone else's config
+        except OSError:
+            pass
 try:
     # ── Fixtures: a superadmin, one remote host, one game server on it ──
     with app.app_context():
@@ -432,6 +444,55 @@ try:
     check("POST /remotes/<id>/edit with non-numeric port -> not 5xx",
           r.status_code < 500, "got %d" % r.status_code)
 
+    # ── Editing a host must drop its pooled SSH client ────────────────────────────────────────
+    # A pooled client is valid only while the row it was opened from still names the same host and
+    # the same credential. edit_remote rewrote username/host/port/auth_method/auth_credential and
+    # committed without closing anything, so: a ROTATED CREDENTIAL kept authenticating with the old
+    # one for as long as the 30s keepalive held the socket open, and a REPOINTED host orphaned its
+    # cache entry for the life of the process (close_connection builds the key from the row's
+    # CURRENT values, so the old key was no longer spellable). Asserted through the real route, not
+    # the listener, because the route is what regressed.
+    class _FakePooled:
+        def __init__(self):
+            self.closed = False
+
+        def close(self):
+            self.closed = True
+
+    def _pool_one(rid):
+        """Put a fake client in the pool under the key that host currently spells."""
+        with app.app_context():
+            _r = db.session.get(RemoteServer, rid)
+            _k = _sm_core._conn_key(_r.username, _r.host, _r.port)
+        _c = _FakePooled()
+        _sm_core._connections[_k] = _c
+        _sm_core._remote_conn_keys[rid] = _k
+        return _k, _c
+
+    _ek, _ec = _pool_one(remote2_id)
+    c.post("/remotes/%d/edit" % remote2_id,
+           data={"name": "smoke-host-2", "host": "127.0.0.1", "ssh_port": "22",
+                 "ssh_user": "root", "auth_method": "password", "credential": "rotated-secret"})
+    check("edit_remote: rotating the credential closes the pooled SSH client", _ec.closed)
+    check("edit_remote: ...and drops it from the pool", _ek not in _sm_core._connections)
+
+    _ek2, _ec2 = _pool_one(remote2_id)
+    c.post("/remotes/%d/edit" % remote2_id,
+           data={"name": "smoke-host-2", "host": "127.0.0.2", "ssh_port": "22",
+                 "ssh_user": "root", "auth_method": "password"})
+    check("edit_remote: repointing the host closes the client opened under the OLD key", _ec2.closed)
+    check("edit_remote: ...leaving no entry under a key nothing can name again",
+          _ek2 not in _sm_core._connections)
+
+    _ek3, _ec3 = _pool_one(remote2_id)
+    c.post("/remotes/%d/edit" % remote2_id,
+           data={"name": "renamed-only", "host": "127.0.0.2", "ssh_port": "22",
+                 "ssh_user": "root", "auth_method": "password"})
+    check("edit_remote: a rename alone does NOT churn the pool",
+          not _ec3.closed and _ek3 in _sm_core._connections)
+    _sm_core._connections.pop(_ek3, None)
+    _sm_core._remote_conn_keys.pop(remote2_id, None)
+
     # ── Remote management is scoped per host: a MANAGE_REMOTES user can reach the
     #    remote their group grants, but a NON-granted remote id returns 403 (no
     #    remote-level IDOR). The 403 is enforced in get_remote before any SSH. ──
@@ -702,6 +763,24 @@ try:
         cr = app.test_client().post("/api/server/1/action", json={"action": "start"})
         check("CSRF: tokenless mutating POST is rejected (400)", cr.status_code == 400,
               "got %d" % cr.status_code)
+
+        # The Bearer exemption is justified by "an API-token request carries no cookie, so there is
+        # nothing for a cross-site page to ride". Exempting on the HEADER alone did not test that:
+        # a request sending both a Bearer header and a session cookie skipped CSRF while flask-login
+        # authenticated it from the COOKIE — the stated reason no longer held and the code could not
+        # tell. (Not reachable from a browser today: a custom header forces a CORS preflight and a
+        # SameSite=Lax cookie is not sent cross-site. This is the exemption resting on the condition
+        # it claims, which is what makes the reasoning above check out.)
+        _cookieless = app.test_client().post("/api/server/1/action", json={"action": "start"},
+                                             headers={"Authorization": "Bearer not-a-real-token"})
+        check("CSRF: a genuinely cookie-less Bearer POST is exempt (not a 400)",
+              _cookieless.status_code != 400, "got %d" % _cookieless.status_code)
+
+        _with_cookie = client_as(admin_id)
+        _both = _with_cookie.post("/api/server/1/action", json={"action": "start"},
+                                  headers={"Authorization": "Bearer not-a-real-token"})
+        check("CSRF: a Bearer header alongside a SESSION COOKIE is still protected",
+              _both.status_code == 400, "got %d" % _both.status_code)
     finally:
         app.config["WTF_CSRF_ENABLED"] = False
 
@@ -2587,19 +2666,27 @@ try:
     # generic-error path into a 500 with a traceback: the exact leak _log_and_generic exists to
     # prevent. Every caller is a route view, so the context is guaranteed; assert it rather than
     # assume it, in a REQUEST context (not merely an app context, which is weaker).
+    # They now live in panel/core/http.py — they were app.py's when this check was written, and
+    # moved out with the rest of the pure layer. The reasoning above is unchanged by the move.
+    from panel.core import http as _am_http
     with app.test_request_context("/api/servers"):
-        _lg = _am._log_and_generic("smoke probe — expected, not a real failure")
+        _lg = _am_http._log_and_generic("smoke probe — expected, not a real failure")
         check("hoisted helpers: _log_and_generic returns the generic string, not the exception",
               _lg == "Internal server error", repr(_lg))
-        _ur_resp, _ur_code = _am._unreachable("smoke probe")
+        _ur_resp, _ur_code = _am_http._unreachable("smoke probe")
         _ur_body = _ur_resp.get_json() or {}
         check("hoisted helpers: _unreachable answers 200 with an unreachable flag",
               _ur_code == 200 and _ur_body.get("unreachable") is True
               and _ur_body.get("success") is False, "%s %s" % (_ur_code, _ur_body))
     # ...and they really are module level now, reachable without going through register_routes.
-    check("hoisted helpers: both are module-level attributes of app.py",
-          callable(getattr(_am, "_log_and_generic", None))
-          and callable(getattr(_am, "_unreachable", None)))
+    check("hoisted helpers: both are module-level attributes of panel/core/http.py",
+          callable(getattr(_am_http, "_log_and_generic", None))
+          and callable(getattr(_am_http, "_unreachable", None)))
+    # And NOT reachable through app.py any more. The cycle grew because app.py was a place other
+    # modules could import anything from; a name app.py does not itself use should not be re-exported
+    # from it. See the docstrings in panel/core/http.py and panel/core/validation.py.
+    check("hoisted helpers: app.py no longer re-exports them",
+          not hasattr(_am, "_log_and_generic") and not hasattr(_am, "_unreachable"))
 
     # ── Changing the panel port must not drop the fail2ban whitelist ─────────────────────────────
     # ensure_panel_fail2ban REWRITES the jail whenever the port changes, and its ignore_ips argument

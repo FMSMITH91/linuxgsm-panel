@@ -8,7 +8,8 @@ from panel.db.models import (GameServer, Group, RemoteServer, db)
 from panel.security.auth import (ALL_PERMISSIONS, MANAGE_GROUPS, _grantable_perms, log_action,
     permission_required)
 from panel.services import (notifications)
-from app import (_form_err, _form_ok, _selected_game_servers, _selected_remotes)
+from panel.core.http import (_form_err, _form_ok)
+from app import (_selected_game_servers, _selected_remotes)
 
 
 def register(app):

@@ -6,7 +6,7 @@ from flask import (jsonify)
 from flask_login import (current_user, login_required)
 from panel.ops.ssh_manager import (remote_ufw_close_port_22)
 from panel.security.auth import (MANAGE_REMOTES, get_remote, log_action, permission_required)
-from app import (_log_and_generic)
+from panel.core.http import (_log_and_generic)
 
 
 def register(app):

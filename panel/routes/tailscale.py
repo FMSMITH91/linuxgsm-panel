@@ -7,7 +7,8 @@ from flask_login import (current_user, login_required)
 from panel.core.config import (load_config, save_config)
 from panel.ops import (tailscale_integration as ts)
 from panel.security.auth import (MANAGE_REMOTES, log_action, permission_required)
-from app import (_json_body, _ts_backend_scheme)
+from panel.core.http import (_json_body)
+from app import (_ts_backend_scheme)
 
 
 def register(app):

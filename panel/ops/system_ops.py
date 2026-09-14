@@ -692,17 +692,28 @@ def _remote_ci_state(sha):
     slug = _repo_slug()
     if not slug:
         return "unknown"
-    url = ("https://api.github.com/repos/%s/commits/%s/check-runs?per_page=100" % (slug, sha))
-    req = urllib.request.Request(url, headers={
-        "Accept": "application/vnd.github+json",
-        "User-Agent": "linuxgsm-panel-update-check",
-    })
+    # PAGED. One page of 100 was "enough for now", and the failure mode if it ever stopped being
+    # enough is the wrong one: a check that did not fit on page 1 is simply not seen, so a commit
+    # whose only failure sits on page 2 reads as 'passing' and the panel offers the update. This
+    # gate exists to stop exactly that. 5 pages (500 checks) is far past any plausible matrix, and
+    # the cap is what keeps a malformed response from looping.
+    runs = []
     try:
-        with urllib.request.urlopen(req, timeout=8) as resp:  # nosec B310 - fixed https host
-            runs = json.loads(resp.read().decode("utf-8")).get("check_runs", [])
+        for page in range(1, 6):
+            url = ("https://api.github.com/repos/%s/commits/%s/check-runs?per_page=100&page=%d"
+                   % (slug, sha, page))
+            req = urllib.request.Request(url, headers={
+                "Accept": "application/vnd.github+json",
+                "User-Agent": "linuxgsm-panel-update-check",
+            })
+            with urllib.request.urlopen(req, timeout=8) as resp:  # nosec B310 - fixed https host
+                batch = json.loads(resp.read().decode("utf-8")).get("check_runs", [])
+            runs.extend(batch)
+            if len(batch) < 100:
+                break        # short page = last page
     except (urllib.error.URLError, ValueError, OSError):
         _log.debug("CI-gate: couldn't read check-runs for %s", sha, exc_info=True)
-        return "unknown"
+        return "unknown"     # a partial read must not be judged: 'unknown' is treated leniently
     runs = [r for r in runs if r.get("name") not in _CI_IGNORE]
     if not runs:
         return "pending"  # push landed but no checks have registered yet
@@ -719,6 +730,17 @@ def _remote_ci_state(sha):
 _NOISE_DIRS = (".github/", "docs/", "tests/", "tools/", ".vscode/")
 _NOISE_FILES = {".gitignore", ".gitattributes", ".editorconfig", ".dockerignore",
                 ".pre-commit-config.yaml", "codecov.yml", ".flake8", "mypy.ini"}
+# Files that live inside a noise directory but DO affect the running host, checked before the
+# directory rule. A denylist of directories cannot express "this one file matters".
+#
+# tools/panel-helper is the reason this exists. It is the root-owned end of the sudo boundary, it
+# lives outside the panel's checkout once installed, and only install.sh — run as root — can
+# refresh it. The update badge is what tells the operator to do that. Classified as noise, a
+# commit that changed ONLY the helper raised no badge and appeared in no changelog, so the panel
+# moved on while the installed helper did not: it then answers an unknown verb with rc 2 and no
+# fallback, and the feature behind that verb fails silently. That is precisely the drift the
+# helper's own docstring warns about, and the signal for it was suppressed.
+_RUNTIME_EXCEPTIONS = {"tools/panel-helper"}
 
 
 def _is_runtime_path(path):
@@ -729,6 +751,8 @@ def _is_runtime_path(path):
         p = p[2:]               # eat the leading dot of dotfiles/dotdirs (.github, .gitignore).
     if not p:
         return False
+    if p in _RUNTIME_EXCEPTIONS:
+        return True             # checked FIRST: it sits inside a noise directory by design
     low = p.lower()
     if low.endswith(".md") or low == "license" or low.startswith("license."):
         return False
