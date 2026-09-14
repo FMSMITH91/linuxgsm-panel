@@ -265,16 +265,27 @@ for _label, _got, _want in (
 # body costs nothing at import time and cannot make a load-order cycle, so the rule is about where
 # an import SITS, not merely which module it names.
 import ast as _ast_layer
-_LAYERS = ["core", "db", "security", "ops", "services"]
+# routes sits on top: it is allowed to import from everything below and nothing imports it back
+# (app.py reaches it lazily, inside register_routes).
+_LAYERS = ["core", "db", "security", "ops", "services", "routes"]
 _layer_bad = []
+_layer_seen = 0
 for _dp, _dns, _fs in os.walk(os.path.join(_root, "panel")):
     _dns[:] = [_d for _d in _dns if _d != "__pycache__"]
-    _sub = os.path.basename(_dp)
+    # The layer is the FIRST path component under panel/, not the directory's basename. Basename
+    # silently skipped every nested package: when panel/ops/ssh_manager.py became a PACKAGE its
+    # basename stopped being "ops", so its 8 modules dropped out of a gate that had been covering
+    # them — and panel/routes/ (26) and panel/services/bots/ (3) were never in it at all. The gate
+    # kept passing and kept saying "no panel package imports DOWN the stack" while looking at 17
+    # modules out of 54.
+    _rel = os.path.relpath(_dp, os.path.join(_root, "panel"))
+    _sub = _rel.split(os.sep)[0]
     if _sub not in _LAYERS:
         continue
     for _f in _fs:
         if not _f.endswith(".py") or _f == "__init__.py":
             continue
+        _layer_seen += 1
         _tree = _ast_layer.parse(open(os.path.join(_dp, _f), encoding="utf-8").read())
         for _node in _tree.body:          # .body, not .walk: top level only, so lazy imports pass
             _names = []
@@ -285,10 +296,18 @@ for _dp, _dns, _fs in os.walk(os.path.join(_root, "panel")):
             for _nm in _names:
                 _target = _nm.split(".")[1]
                 if _target in _LAYERS and _LAYERS.index(_target) > _LAYERS.index(_sub):
-                    _layer_bad.append("panel/%s/%s imports panel.%s at module level"
-                                      % (_sub, _f, _target))
+                    # The RELATIVE path, not "%s/%s" % (layer, file): with nested packages that
+                    # reported panel/ops/gmod.py for a file at panel/ops/ssh_manager/gmod.py.
+                    _layer_bad.append("panel/%s imports panel.%s at module level"
+                                      % (os.path.join(_rel, _f).replace(os.sep, "/"), _target))
 check("layering: no panel package imports DOWN the stack at module level",
       not _layer_bad, "; ".join(sorted(set(_layer_bad))))
+# A count, because the failure above is silence: a gate that walks into nothing reports clean.
+_layer_total = sum(1 for _d, _dn, _fl in os.walk(os.path.join(_root, "panel"))
+                   for _x in _fl if _x.endswith(".py") and _x != "__init__.py"
+                   and "__pycache__" not in _d)
+check("layering: the gate actually inspected every module under panel/",
+      _layer_seen == _layer_total, "inspected %d of %d" % (_layer_seen, _layer_total))
 
 # ...and the module directories must hold no data dir of their own — the shape the bug leaves behind.
 _stray = [os.path.relpath(os.path.join(_dp, _d), _root)
