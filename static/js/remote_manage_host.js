@@ -204,14 +204,59 @@ function renderUpdate(d){
   if(d.fetched===false){ st.innerHTML='<span class="text-secondary"><i class="bi bi-cloud-slash"></i> '+escapeHtml(d.message||'Couldn\'t reach the update source.')+'</span>'; btn.style.display='none'; changes.style.display='none'; return; }  // nosemgrep
   if(d.update_available){
     st.innerHTML='<span class="text-warning"><i class="bi bi-arrow-up-circle-fill"></i> Update available: <strong>v'+escapeHtml(d.remote_version||'?')+'</strong> ('+escapeHtml(String(d.behind))+' commit'+(d.behind===1?'':'s')+' behind).</span>';  // nosemgrep
+    // A verified target BELOW the tip carries a note saying so ("2 newer commits still being
+    // verified"). It used to be dropped, which made the offer look like the newest thing there is.
+    // Appended as a NODE rather than concatenated into the line above: adding an identifier to
+    // that expression changes what the HTML-sink check sees, and this text needs no markup.
+    if(d.message){
+      var note = document.createElement('span');
+      note.className = 'd-block text-secondary';
+      note.style.fontSize = '.85em';
+      note.textContent = d.message;
+      st.appendChild(note);
+    }
     btn.style.display='';
     var ul=document.getElementById('pu-changes-list'); ul.innerHTML='';
     (d.changes||[]).forEach(function(c){ var li=document.createElement('li'); li.textContent=c; ul.appendChild(li); });
     changes.style.display=(d.changes&&d.changes.length)?'':'none';
+  } else if(d.message){
+    // "Nothing to OFFER" is not the same fact as "you are on the newest commit", and this branch
+    // reported both as "You're up to date". That is a claim the operator can check, and when a
+    // commit was sitting in CI, or had failed it, or only touched docs, it was simply false —
+    // the panel WAS behind. _compute_update_status() already writes the honest sentence for each
+    // of those three states; all that was missing was showing it.
+    //
+    // Built with DOM calls, not innerHTML: the tone/icon pair varies per state, and concatenating
+    // even safe locals into a markup string is the shape the HTML-sink check exists to refuse.
+    var bad = d.ci_state === 'failing';
+    st.textContent = '';
+    var line = document.createElement('span');
+    line.className = bad ? 'text-warning' : (d.docs_only ? 'text-success' : 'text-secondary');
+    var ico = document.createElement('i');
+    ico.className = 'bi bi-' + (bad ? 'exclamation-triangle' : (d.docs_only ? 'check-circle' : 'hourglass-split'));
+    ico.setAttribute('aria-hidden', 'true');
+    line.appendChild(ico);
+    line.appendChild(document.createTextNode(' ' + d.message));
+    st.appendChild(line);
+    if(d.current_sha){
+      // "Running" and the sha in separate elements: welded together they are one text node whose
+      // text changes every commit, which no catalog key could ever match.
+      var sub = document.createElement('span');
+      sub.className = 'd-block text-secondary';
+      sub.style.fontSize = '.85em';
+      var word = document.createElement('span');
+      word.textContent = 'Running';
+      var sha = document.createElement('span');
+      sha.setAttribute('data-no-i18n', '');
+      sha.textContent = d.current_sha;
+      sub.appendChild(word);
+      sub.appendChild(document.createTextNode(' '));
+      sub.appendChild(sha);
+      st.appendChild(sub);
+    }
+    btn.style.display='none'; changes.style.display='none';
   } else {
-    // No VERIFIED update ahead — show it as up to date. If a newer commit exists but is still
-    // being verified (or failed a check), we deliberately DON'T surface a "being verified"
-    // state; the update only appears once a commit has fully passed every check.
+    // Genuinely nothing newer on the branch (behind === 0) — the only state that earns this line.
     st.innerHTML='<span class="text-success"><i class="bi bi-check-circle"></i> You\'re up to date'+(d.current_sha?' ('+escapeHtml(d.current_sha)+')':'')+'.</span>';  // nosemgrep
     btn.style.display='none'; changes.style.display='none';
   }
