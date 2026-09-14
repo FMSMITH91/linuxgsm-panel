@@ -369,19 +369,3 @@ def _compute_host_specs(server):
         "disk": d.get("DISK", ""),
         "virt": "" if virt in ("none", "") else virt,
     }
-
-
-# ── Ubuntu Pro (ubuntu-advantage-tools / `pro`) ────────────────────────────
-# The security-relevant services we surface (the rest — fips/cis/anbox/etc. —
-# aren't relevant to a game-server host and just add noise).
-_PRO_FEATURED = ["esm-infra", "esm-apps", "livepatch"]
-_PRO_SERVICES = {
-    "esm-infra", "esm-apps", "livepatch", "fips", "fips-updates", "fips-preview",
-    "cis", "usg", "realtime-kernel", "landscape", "anbox-cloud", "ros", "ros-updates",
-}
-
-
-def _pro_trim(blob):
-    """Collapse a pro CLI output blob to a short, single-line message."""
-    import re as _re
-    return _re.sub(r"\s+", " ", blob or "").strip()[-300:]

@@ -86,7 +86,7 @@ def _compute_pro_status(server):
                 "error": "Could not parse pro status"}
     by_name = {s.get("name"): s for s in (data.get("services") or [])}
     featured = []
-    for name in firewall._PRO_FEATURED:
+    for name in _PRO_FEATURED:
         s = by_name.get(name)
         if s:
             featured.append({
@@ -130,12 +130,12 @@ def pro_attach(server, token):
     low = blob.lower()
     if rc == 0 or "this machine is now attached" in low or "already attached" in low:
         return True, "Attached to Ubuntu Pro."
-    return False, firewall._pro_trim(blob) or "Attach failed"
+    return False, _pro_trim(blob) or "Attach failed"
 
 
 def pro_service(server, service, action):
     """Enable or disable an Ubuntu Pro service (esm-infra, esm-apps, livepatch, …)."""
-    if service not in firewall._PRO_SERVICES:
+    if service not in _PRO_SERVICES:
         return False, "Unknown service"
     if action not in ("enable", "disable"):
         return False, "Unknown action"
@@ -145,8 +145,8 @@ def pro_service(server, service, action):
     low = blob.lower()
     if rc == 0 or "is already enabled" in low or "is already disabled" in low \
             or "now enabled" in low or "updating package lists" in low:
-        return True, firewall._pro_trim(blob) or f"{service} {action}d"
-    return False, firewall._pro_trim(blob) or f"Could not {action} {service}"
+        return True, _pro_trim(blob) or f"{service} {action}d"
+    return False, _pro_trim(blob) or f"Could not {action} {service}"
 
 
 def pro_detach(server):
@@ -156,7 +156,7 @@ def pro_detach(server):
     blob = (out or "") + " " + (err or "")
     if rc == 0 or "detach" in blob.lower():
         return True, "Detached from Ubuntu Pro."
-    return False, firewall._pro_trim(blob) or "Detach failed"
+    return False, _pro_trim(blob) or "Detach failed"
 
 
 def _ufw_port_int(port):
@@ -1632,3 +1632,24 @@ def ssh_test_connection(host, port=22, username="root", auth_method="key", crede
         # in the message — exc_info already carries the detail), show a generic message.
         _core._log.warning("ssh_test_connection failed", exc_info=True)
         return False, "Connection failed. Check the host, port, credentials, and that SSH is reachable."
+
+
+# ── Ubuntu Pro (ubuntu-advantage-tools / `pro`) ────────────────────────────
+# Moved here from firewall.py, where the split's line boundary had landed mid-section. Every
+# consumer of these is in this module, and a module-private name read only from ANOTHER module
+# reads as dead to CodeQL (py/unused-global-variable) — which is how the misplacement announced
+# itself: two alerts on main, minutes after the split merged. See panel/routes/__init__.py for
+# the same finding and the same rule: move it to its consumer, do not annotate it.
+# The security-relevant services we surface (the rest — fips/cis/anbox/etc. —
+# aren't relevant to a game-server host and just add noise).
+_PRO_FEATURED = ["esm-infra", "esm-apps", "livepatch"]
+_PRO_SERVICES = {
+    "esm-infra", "esm-apps", "livepatch", "fips", "fips-updates", "fips-preview",
+    "cis", "usg", "realtime-kernel", "landscape", "anbox-cloud", "ros", "ros-updates",
+}
+
+
+def _pro_trim(blob):
+    """Collapse a pro CLI output blob to a short, single-line message."""
+    import re as _re
+    return _re.sub(r"\s+", " ", blob or "").strip()[-300:]
