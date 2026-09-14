@@ -12,8 +12,9 @@ from panel.security.auth import (MANAGE_USERS, hash_password, log_action, permis
 from panel.services import (notifications)
 from panel.services.monitoring import (_AUTOBLOCK_DEFAULT_THRESHOLD, _autoblock_threshold)
 from datetime import (timedelta)
-from app import (_form_err, _form_ok, _int_or, _json_body, _new_user_language, _valid_hex_color,
-    password_problem)
+from panel.core.http import (_form_err, _form_ok, _json_body)
+from panel.core.validation import (_int_or, _valid_hex_color, password_problem)
+from app import (_new_user_language)
 
 
 def register(app):

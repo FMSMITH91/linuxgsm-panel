@@ -24,10 +24,11 @@ from panel.security.auth import (INSTALL_SERVER, MANAGE_SERVERS, RESTART_SERVER,
 from panel.services.monitoring import (_cached_player_count)
 import threading
 import time
-from app import (GAME_TYPE_RE, INSTANCE_NAME_RE, SAFE_LABEL_RE, _cached_player_max,
-    _cached_player_name, _extract_start_error, _form_err, _form_ok,
-    _int_or, _log, _log_and_generic, _prune_jobs, _resolve_source_aux_ports, _wants_json,
-    load_game_list, resolve_free_port)
+from panel.core.http import (_form_err, _form_ok, _log_and_generic, _wants_json)
+from panel.core.validation import (GAME_TYPE_RE, INSTANCE_NAME_RE, MAX_PORT, MIN_PORT,
+    SAFE_LABEL_RE, _port_or)
+from app import (_cached_player_max, _cached_player_name, _extract_start_error, _log, _prune_jobs,
+    _resolve_source_aux_ports, load_game_list, resolve_free_port)
 from panel.routes._shared import (_looks_installed, _notify_servers_changed)
 
 # Serializes the install "slot" allocation (pick a free port → reject a duplicate name → create the
@@ -128,10 +129,15 @@ def register(app):
         }
         if not port or port == "27015":
             port = str(KNOWN_PORTS.get(game_type, 27015))
-        try:
-            desired_port = int(port)
-        except (TypeError, ValueError):
-            desired_port = KNOWN_PORTS.get(game_type, 27015)
+        # _port_or, not int(): a port has a RANGE, and `int(port)` carried none — so 0, -5 and
+        # 99999 all reached the row below, the firewall verbs that take it, and the LinuxGSM
+        # config written from it. A typo is corrected to the game's default; nothing out of range
+        # is stored. (/api/free-port next door has always range-checked its input; this is the
+        # endpoint that actually writes a server.)
+        desired_port = _port_or(port, None)
+        if desired_port is None:
+            return _form_err("Port must be a number between %d and %d." % (MIN_PORT, MAX_PORT),
+                             "manage_servers")
 
         # Allocate the install "slot" atomically: pick a free port, reject a duplicate name and
         # create the row under one lock. resolve_free_port yields on an SSH scan, so without the
@@ -139,7 +145,26 @@ def register(app):
         # duplicate-name check before either committed.
         with _install_alloc_lock:
             # Port-conflict handling: auto-pick the next free port if taken.
-            final_port, port_changed = resolve_free_port(remote, remote_id, desired_port, game_type)
+            # resolve_free_port SCANS the host's listening ports over SSH, so it raises when the
+            # host is simply switched off — and that propagated as a 500. A host being unreachable
+            # is a normal condition for this panel, not a fault in it (see _unreachable's docstring,
+            # which lists the sibling endpoints this was already true of); it just needs the form
+            # shape rather than the JSON one. Caught here, before any row exists.
+            try:
+                final_port, port_changed = resolve_free_port(remote, remote_id, desired_port,
+                                                             game_type)
+            except (ConnectionError, OSError):
+                _log.warning("install: host %s unreachable while picking a port", remote.name)
+                return _form_err("Can't reach %s right now, so the panel can't check which ports "
+                                 "are free. Check the host is up and try again." % remote.name,
+                                 "manage_servers")
+            # None = the allocator found nothing free near the requested port. Refusing names the
+            # real problem; storing its old best-guess handed the install a port already in use and
+            # let it fail later as the GAME's error.
+            if final_port is None:
+                return _form_err("No free port near %d on this host — every port in the search "
+                                 "range is taken. Pick a different port." % desired_port,
+                                 "manage_servers")
 
             # Name conflict: if the user TYPED the name it's a real conflict; if they left it blank
             # (using the "{game}server" default), auto-suffix a number so leaving it blank always
@@ -612,7 +637,10 @@ def register(app):
         """
         gs = get_game(server_id)
         new_port = (request.form.get("port") or "").strip()
-        if new_port and _int_or(new_port, gs.port) != gs.port:
+        # Compared as TEXT. Parsing it first meant an unparseable value read as "unchanged" and
+        # was silently ignored rather than refused — and it put a port through _int_or, the parser
+        # that carries no range. Any submitted port that is not exactly the stored one is refused.
+        if new_port and new_port != str(gs.port):
             return _form_err(
                 "The port can't be changed here — it would only move the panel's record, leaving "
                 "the game server and the firewall on the old port. Change it in the server's "

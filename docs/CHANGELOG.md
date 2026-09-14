@@ -41,6 +41,23 @@ regardless of this file — this changelog is for humans.
   on stdin, because a download over SSH gets parsed twice and that is where quoting bugs hide.
 
 ### Changed
+- **The pure helper layer moved out of `app.py`** into `panel/core/validation.py` (the input
+  patterns, the port and password rules) and `panel/core/http.py` (how a handler answers: JSON for
+  a fetch, flash-and-redirect for a form, and the two error shapes that keep exception text out of
+  a response). They were defined in `app.py` and imported back out of it by most of
+  `panel/routes/`, which every static analyser reads as a cycle even though the runtime imports are
+  lazy. Nothing about a route changed — same endpoints, methods and guard chains, asserted against
+  the committed URL-map baseline — and the names crossing that cycle dropped from 82 to 63.
+- **A new test suite, `tests/input_validation_test.py`,** drives every numeric form field with the
+  values a browser never sends — boundaries, blanks, non-numeric text, a newline, non-ASCII digits
+  — and asserts a refusal with no row written, plus a positive control per field so it cannot pass
+  against a route that refuses everything. The suites around it assert structure; none of them ever
+  sent a handler a bad value, which is why the port bugs above survived them.
+- **Running a test suite in-tree no longer edits your `data/config.json`.** Every suite that boots
+  the app has to set `setup_complete` and a short SSH timeout, and deleting the file only when the
+  suite created it left those edits behind on a developer's machine — where a leftover
+  `ssh_timeout: 1` then failed a check in a *different* suite, pointing at config rather than at
+  whoever wrote it. A pre-existing config is now restored byte-for-byte.
 - **The application modules now live in a `panel/` package.** Eighteen of the twenty-one Python
   modules that sat loose in the repo root moved into `panel/{core,db,security,ops,services}/`,
   grouped by the layering the import graph already had — root drops from 37 tracked files to 19.
@@ -80,6 +97,51 @@ regardless of this file — this changelog is for humans.
   non-ASCII — through a real shell and requires each to come back verbatim as a single argument.
 
 ### Fixed
+- **A game server could be installed on a port that does not exist.** The install form took
+  `int(port)` straight from the request with no range check at all, so `0`, `-5` and `99999` were
+  stored on the row, opened in the firewall and written into the LinuxGSM config. Three other port
+  fields in the panel each had their own bounds check — two of them with their own test — so the
+  rule was never in doubt; the endpoint that actually writes a server was just the one nobody drove
+  with a bad value. Ports are now parsed by one shared helper that carries the range with the parse,
+  and enforced again at the data layer (a `@validates` hook, like the shell-identifier one beside
+  it) so the next route to assign a port cannot skip it. Non-ASCII digits are refused too: Python's
+  `int()` reads `٢٧٠١٥` as 27015, which meant a port nobody typed could be stored.
+- **The port picker could hand back a port that was already in use.** After scanning 400 candidates
+  it returned the last one it had tried — occupied by definition — and reported the search as
+  successful, so the install went ahead and failed later on the host as the game's own
+  "Port N was unavailable". The same walk could also run past 65535. It now reports that it found
+  nothing and the caller refuses with a message that names the real problem.
+- **Installing to a host that was switched off returned a 500.** Picking a free port scans the
+  host's listening ports over SSH, and an unreachable host raised straight through the route. A
+  host being down is a normal condition for this panel, not a fault in it — the install form now
+  says so and writes no row.
+- **The setup wizard could save a panel port that the panel cannot bind.** Step 1 writes the
+  address the panel listens on, and nothing downstream re-checks it, so a typo of `0` or `99999`
+  produced a panel that would not come back up on its next boot — recoverable only with
+  `linuxgsm-panel-recover` or by editing `data/config.json` by hand. It is validated against the
+  same bounds as the in-panel port change, which is where the code had always assumed it happened.
+- **Rotating a remote's SSH credential did not take effect.** Editing a host rewrote its user, host,
+  port and credential and committed without dropping the pooled SSH connection, so the panel kept
+  authenticating with the OLD credential for as long as its 30-second keepalive held the socket
+  open. Repointing a host at a different address was worse: the pooled entry became unreachable for
+  the life of the process, because the only way to close a connection was to name the address the
+  row currently held. The pool is now invalidated from the row itself, so it cannot be missed by a
+  route added later.
+- **A new game server could inherit a deleted one's status.** SQLite hands a deleted row's id
+  straight to the next INSERT, and two id-keyed status maps — the last per-server backup outcome,
+  and the GMod content-install state — were not among those cleared when a row goes away. Both are
+  read to render a server's page, so a newly created server could show the previous one's failed
+  backup, or a content install frozen at "running". The maps register themselves for pruning now
+  rather than being listed by hand somewhere else, which is how these two were missed.
+- **An update that changed only the privileged helper raised no "update available" badge.**
+  `tools/panel-helper` is the root-owned end of the sudo boundary and only `install.sh`, run as
+  root, can refresh it — the badge is what tells the operator to do that. It was classified as
+  documentation-style noise along with the rest of `tools/`, so the panel could move on while the
+  installed helper did not, which makes the feature behind a new verb fail silently.
+- **The self-update's CI gate read only the first 100 checks on a commit.** Enough for the
+  workflows that exist today, but the failure mode was the wrong one: a check that did not fit was
+  simply not seen, so a commit whose only failure sat on the second page would have read as passing
+  and been offered as an update. It follows the pages now.
 - **Every host was given Ubuntu 24.04's package list, whatever it was actually running.** LinuxGSM
   publishes a dependency list per distro release — `ubuntu-22.04.csv`, `ubuntu-26.04.csv`,
   `debian-12.csv` and twenty more — and the panel hard-coded the 24.04 one. The panel supports
@@ -215,6 +277,12 @@ regardless of this file — this changelog is for humans.
   the microsecond — they now come from `clock.utcnow()`.
 
 ### Security
+- **CSRF could be skipped by sending an `Authorization: Bearer` header.** The exemption exists
+  because an API-token request carries no cookie, so there is nothing for a cross-site page to
+  ride — but it tested only for the header, so a request sending both a Bearer header and a session
+  cookie skipped CSRF while being authenticated from the cookie. Not reachable from a browser (a
+  custom header forces a CORS preflight, and the `SameSite=Lax` cookie is not sent cross-site), so
+  this is the exemption now resting on the condition it claims rather than a fix for a live hole.
 - **A compromised remote host could inject markup into the panel.** A host's own
   `tailscale status --json` output — its tailnet IP and MagicDNS name — plus the addresses returned
   by the migrate endpoint and its live CPU figures went into the admin's page unescaped. The strict

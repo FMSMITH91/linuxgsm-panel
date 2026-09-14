@@ -17,7 +17,8 @@ import concurrent.futures
 import os
 import threading
 import time
-from app import (_find_game_backup, _json_body, _log_and_generic)
+from panel.core.http import (_json_body, _log_and_generic)
+from app import (_find_game_backup)
 
 
 def register(app):

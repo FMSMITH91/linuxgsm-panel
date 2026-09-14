@@ -13,7 +13,9 @@ from panel.ops.ssh_manager import (host_specs, tailnet_exempt_ips)
 from panel.security.auth import (log_action, superadmin_required)
 from panel.services.monitoring import (_autoblock_threshold, _whitelisted)
 from types import (SimpleNamespace)
-from app import (_autoblock_hosts, _json_body, _local_remote_id, _log_and_generic, _maybe_set_threshold, _os_update_note, _run_autoblock_now, _security_whitelist, _set_autoblock_host)
+from panel.core.http import (_json_body, _log_and_generic)
+from app import (_autoblock_hosts, _local_remote_id, _maybe_set_threshold, _os_update_note,
+    _run_autoblock_now, _security_whitelist, _set_autoblock_host)
 from panel.routes._shared import (_whitelist_mutate)
 
 # A token unique to THIS panel process — it changes only when the panel actually restarts.

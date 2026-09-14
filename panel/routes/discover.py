@@ -8,8 +8,9 @@ from panel.db.models import (GameServer, db)
 from panel.ops.ssh_manager import (discover_linuxgsm_servers)
 from panel.security.auth import (MANAGE_SERVERS, can_access_remote, get_remote, log_action,
     permission_required)
-from app import (INSTANCE_NAME_RE, _json_body, _log_and_generic, lgsm_name_to_game_type,
-    load_game_list)
+from panel.core.http import (_json_body, _log_and_generic)
+from panel.core.validation import (INSTANCE_NAME_RE)
+from app import (lgsm_name_to_game_type, load_game_list)
 from panel.routes._shared import (_bg_cache_commands)
 
 

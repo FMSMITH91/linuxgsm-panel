@@ -35,7 +35,52 @@ __all__ = [
     "_full_backup_lock",
     "_game_backup_status",
     "_os_update_state",
+    "register_server_state",
+    "register_remote_state",
+    "server_keyed_state",
+    "remote_keyed_state",
 ]
+
+
+# ── Row-keyed state, registered where it is declared ──────────────────────────────────────────
+# Every map registered here is keyed by a database row id, and SQLite hands a deleted row's id
+# straight to the next INSERT (plain INTEGER PRIMARY KEY = rowid, no AUTOINCREMENT) — so a newly
+# added server or host inherits whatever the deleted one left behind unless the id is forgotten.
+# monitoring._forget_deleted_rows is what forgets it.
+#
+# THE LIST USED TO BE WRITTEN OUT BY HAND in that function, which made every new map an edit
+# somebody had to remember to make somewhere else. Two were missed: _game_backup_status and the
+# GMod content-apply state, both of which are read to RENDER a server's page, so a recycled id
+# showed the new server the PREVIOUS one's backup outcome or a content install stuck at "running".
+# Registering at the declaration means the pruner's list and the declarations are the same list,
+# and a map that is deliberately not pruned (see _os_update_state) is now visibly not registered
+# rather than indistinguishable from one that was forgotten.
+_server_keyed_state = []
+_remote_keyed_state = []
+
+
+def register_server_state(mapping):
+    """Mark `mapping` as keyed by GameServer.id so the pruner clears deleted ids from it.
+    Returns `mapping`, so a declaration can wrap itself: `_x = register_server_state({})`."""
+    _server_keyed_state.append(mapping)
+    return mapping
+
+
+def register_remote_state(mapping):
+    """Mark `mapping` as keyed by RemoteServer.id. Returns `mapping` — see above."""
+    _remote_keyed_state.append(mapping)
+    return mapping
+
+
+def server_keyed_state():
+    """Every registered GameServer.id-keyed map. A tuple: the registry is appended to at import
+    time and only read afterwards, and handing out the live list invites a caller to mutate it."""
+    return tuple(_server_keyed_state)
+
+
+def remote_keyed_state():
+    """Every registered RemoteServer.id-keyed map."""
+    return tuple(_remote_keyed_state)
 
 # Hosts the operator asked to "reboot when empty" — reboot once every game server on them is idle.
 # remote_id -> {"by": username, "since": epoch}. In-memory on purpose: a panel restart clears any
@@ -44,7 +89,7 @@ _reboot_when_empty = {}
 
 _rwe_lock = threading.Lock()
 
-_max_players_cache = {}   # server_id -> int  (capacity is ~static, so read it once and reuse)
+_max_players_cache = register_server_state({})   # server_id -> int  (capacity is ~static, so read it once and reuse)
 
 # The daily sweep already asks every host what it has waiting; this is that answer, kept so the
 # login banner and the OS Updates card can SHOW it without re-running `apt update` on a page load.
@@ -53,23 +98,24 @@ _max_players_cache = {}   # server_id -> int  (capacity is ~static, so read it o
 #
 # Written by the sweep AND by every explicit check, so installing updates from the panel clears the
 # banner right away instead of leaving it up until tomorrow's sweep.
-_os_update_seen = {}         # remote.id -> {name, count, security, packages, at}
+_os_update_seen = register_remote_state({})   # remote.id -> {name, count, security, packages, at}
 
 # A gamedig query per server is far too slow to run on every dashboard status poll (every 8s), so a
 # background poller refreshes the counts on a slower cadence and the request path just reads this
 # cache. count is an int, or None when the game genuinely can't be queried ("—" in the UI).
-_player_counts = {}          # server_id -> {"count": int|None, "ts": float}
+_player_counts = register_server_state({})   # server_id -> {"count": int|None, "ts": float}
 
-_server_full_alerted = {}    # server_id -> bool (currently at cap; re-arms when it drops below)
+_server_full_alerted = register_server_state({})   # server_id -> bool (currently at cap; re-arms when it drops below)
 
-_server_peak_notified = {}   # server_id -> ts of the last new-record alert (rate-limit)
+_server_peak_notified = register_server_state({})   # server_id -> ts of the last new-record alert (rate-limit)
 
 _last_sample_prune = [0.0]   # 1-element holder so _prune_metric_samples updates it without `global`
 
 # disk_pct / load_pct thresholds are user-configurable — see notifications.get_thresholds().
-_monitor_state = {"remotes": {}, "servers": {}, "disk": {}, "load": {}}   # id -> last-seen state
+_monitor_state = {"remotes": register_remote_state({}), "servers": register_server_state({}),
+                  "disk": register_remote_state({}), "load": register_remote_state({})}
 
-_expected_offline = {}          # server_id -> ts the panel last stopped/restarted it
+_expected_offline = register_server_state({})   # server_id -> ts the panel last stopped/restarted it
 
 # Game users whose ~/.restart-pending flag is set, per host id. The DAILY-RESTART cron sets that
 # flag on the box at 05:00 and its hourly partner restarts once the server empties — a mechanism the
@@ -77,7 +123,7 @@ _expected_offline = {}          # server_id -> ts the panel last stopped/restart
 # nothing connects the two. The banner therefore stayed hidden while a restart really was queued.
 # Display only: the column is never written from this, so the panel's own queue is untouched and
 # nothing can be restarted twice.
-_cron_restart_pending = {}
+_cron_restart_pending = register_server_state({})
 
 # ── Background-job state ─────────────────────────────────────────────────────────────────────
 # These lived at module level in app.py, which was fine while the only readers were app.py's own
@@ -95,7 +141,7 @@ _install_lock = threading.Lock()
 # Only one game-file backup at a time (full OR single-server) — they are slow and space-heavy.
 _full_backup_lock = threading.Lock()
 # Last on-demand per-server backup outcome, keyed by server id (transient, in-memory).
-_game_backup_status = {}
+_game_backup_status = register_server_state({})
 
 # The daily OS-update sweep's ARMING state: when it last ran, and the per-host counts it alerted
 # on. Distinct from _os_update_seen above, which is what the login banner and the OS Updates card

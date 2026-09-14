@@ -9,8 +9,9 @@ from panel.db.models import (db)
 from panel.db.prefs import (_clean_panel_map)
 from panel.security.auth import (_can_edit_tags, check_password, get_game, get_user_servers,
     hash_password, log_action, server_access_required, verify_totp_step)
-from app import (_json_body, _log, _log_and_generic, _register_session, _tag_json,
-    _valid_hex_color, password_problem)
+from panel.core.http import (_json_body, _log_and_generic)
+from panel.core.validation import (_valid_hex_color, password_problem)
+from app import (_log, _register_session, _tag_json)
 
 
 def register(app):

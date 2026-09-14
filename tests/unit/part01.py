@@ -89,8 +89,10 @@ from panel.security import privileged as _privmod
 from panel.ops import ssh_manager as sm
 from panel.services import notifications as N  # noqa: F401 - re-export: a later part imports this from here
 from panel.ops import system_ops as SO
-from app import (password_problem, _int_or, _valid_ip_or_cidr, _valid_hex_color,  # noqa: F401 - re-export: a later part imports this from here
-    _clean_console_text)
+# password_problem / _int_or / _valid_hex_color moved to panel.core.validation when the pure
+# layer came out of app.py; _valid_ip_or_cidr and _clean_console_text are still app.py's.
+from panel.core.validation import (password_problem, _int_or, _valid_hex_color)  # noqa: F401 - re-export: a later part imports this from here
+from app import (_valid_ip_or_cidr, _clean_console_text)  # noqa: F401 - re-export: a later part imports this from here
 from panel.services.bots.telegram import (_parse_tg_command)  # noqa: F401 - re-export: a later part imports this from here
 from panel.services.bots.commands import (_command_arg)  # noqa: F401 - re-export: a later part imports this from here
 from panel.db.prefs import (_apply_user_server_order)
@@ -1113,8 +1115,9 @@ finally:
     _sm_core.run_command = _orig_dl_rc
 
 # The download's filename reaches the browser in a header, and whoever uploaded the file chose it.
-# (`_app` is the Flask test app further down this file; the module itself is the one wanted here.)
-_appmod = sys.modules["app"]
+# It moved to panel.core.validation with the rest of the pure layer; the name `_appmod` is kept so
+# the checks below read unchanged.
+from panel.core import validation as _appmod
 check("download header: a CR/LF in a filename cannot split the header",
       "\r" not in _appmod._attachment_header("x\r\nX-Evil: 1")
       and "\n" not in _appmod._attachment_header("x\r\nX-Evil: 1"),

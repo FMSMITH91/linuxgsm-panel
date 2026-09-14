@@ -11,8 +11,9 @@ from panel.ops import (tailscale_integration as ts)
 from panel.ops.ssh_manager import (close_connection, ssh_test_connection)
 from panel.security.auth import (MANAGE_REMOTES, accessible_remote_ids, check_password,
     get_remote, log_action, permission_required)
-from app import (HOST_RE, LINUX_USER_RE, SAFE_LABEL_RE, _form_err, _form_ok, _int_or,
-    _json_body, _wants_json)
+from panel.core.http import (_form_err, _form_ok, _json_body, _wants_json)
+from panel.core.validation import (HOST_RE, LINUX_USER_RE, MAX_PORT, MIN_PORT, SAFE_LABEL_RE,
+    _port_or)
 from panel.routes._shared import (_begin_bootstrap)
 
 
@@ -38,7 +39,7 @@ def register(app):
         name = request.form.get("name", "").strip()
         host = request.form.get("host", "").strip()
         ssh_user = request.form.get("ssh_user", "root").strip()
-        ssh_port = _int_or(request.form.get("ssh_port"), 22)
+        ssh_port = _port_or(request.form.get("ssh_port"), None)
         auth_method = request.form.get("auth_method", "key")
         credential = request.form.get("credential", "").strip()
         sudo_enabled = request.form.get("sudo_enabled") == "on"
@@ -47,6 +48,9 @@ def register(app):
 
         if not name or not SAFE_LABEL_RE.match(name):
             return _form_err("Name is required and cannot contain < > \" ' ` or backslashes.", "manage_remotes")
+        if ssh_port is None:
+            return _form_err("SSH port must be a number between %d and %d." % (MIN_PORT, MAX_PORT),
+                             "manage_remotes")
 
         # SECURITY: these reach `sudo -u <user>` / SSH command construction — validate
         # to a safe Linux-username charset so they can't inject shell commands.
@@ -129,7 +133,10 @@ def register(app):
         new_host = request.form.get("host", remote.host)
         if not remote.is_local and new_host and not HOST_RE.match(new_host):
             return _form_err("Host must be a valid hostname or IP address.", "manage_remotes")
-        new_port = _int_or(request.form.get("ssh_port"), remote.port)
+        new_port = _port_or(request.form.get("ssh_port"), None)
+        if new_port is None:
+            return _form_err("SSH port must be a number between %d and %d." % (MIN_PORT, MAX_PORT),
+                             "manage_remotes")
         # Repointing to a different host/port means the pinned key no longer applies —
         # clear it so the new target is re-pinned (TOFU) instead of failing as a mismatch.
         if (new_host, new_port) != (remote.host, remote.port):

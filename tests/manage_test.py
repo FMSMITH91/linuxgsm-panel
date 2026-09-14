@@ -32,6 +32,15 @@ if DB_PATH.exists():
     sys.exit(0)
 
 _PREEXISTING = {p for p in (SECRET_FILE, CRED_KEY_FILE, CONFIG_FILE) if p.exists()}
+
+# A config that was already on disk is RESTORED BYTE-FOR-BYTE at the end. Every DB-owning suite
+# has to edit config.json to boot the app, and deleting it only when the suite CREATED it is not
+# enough: on a developer's tree the file is theirs and the edits stay behind. That is not
+# hypothetical — a leftover ssh_timeout=1 makes the UNIT suite's "no override -> the documented
+# default" check fail, in a different suite, pointing at config rather than at whoever wrote it.
+# tools/smoke-local.sh sidesteps this by copying to a throwaway tree; running a suite in-tree
+# (which CI does, where no config pre-exists) should not behave differently.
+_CONFIG_SNAPSHOT = CONFIG_FILE.read_bytes() if CONFIG_FILE in _PREEXISTING else None
 _CFG_BACKUP = CONFIG_FILE.read_bytes() if CONFIG_FILE in _PREEXISTING else None
 
 from panel.core.config import load_config, save_config  # noqa: E402
@@ -100,8 +109,11 @@ def cleanup():
                 p.unlink()
             except OSError:
                 pass
-
-
+    if _CONFIG_SNAPSHOT is not None:
+        try:
+            CONFIG_FILE.write_bytes(_CONFIG_SNAPSHOT)   # undo our edits to someone else's config
+        except OSError:
+            pass
 try:
     admin_id = seed(username="cli_admin", admin=True)
     seed(username="cli_user", admin=False)

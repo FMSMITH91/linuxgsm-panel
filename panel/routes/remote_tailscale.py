@@ -9,7 +9,8 @@ from panel.ops.ssh_manager import (close_connection, remote_bootstrap_tailscale,
     remote_check_tailscale, remote_install_tailscale, remote_migrate_to_tailscale,
     remote_tailscale_finalize, remote_tailscale_up_url)
 from panel.security.auth import (MANAGE_REMOTES, get_remote, log_action, permission_required)
-from app import (_json_body, _log_and_generic, _refuse_on_panel_host, _unreachable)
+from panel.core.http import (_json_body, _log_and_generic, _unreachable)
+from app import (_refuse_on_panel_host)
 
 
 def register(app):

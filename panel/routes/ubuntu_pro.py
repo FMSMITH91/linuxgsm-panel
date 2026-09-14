@@ -6,7 +6,8 @@ from flask import (jsonify, request)
 from flask_login import (current_user, login_required)
 from panel.ops.ssh_manager import (pro_attach, pro_detach, pro_service, remote_live_metrics)
 from panel.security.auth import (MANAGE_REMOTES, get_remote, log_action, permission_required)
-from app import (_json_body, _log_and_generic, _pro_status_cached, _unreachable)
+from panel.core.http import (_json_body, _log_and_generic, _unreachable)
+from app import (_pro_status_cached)
 
 
 def register(app):

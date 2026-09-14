@@ -23,8 +23,9 @@ from panel.core.clock import utcnow
 from panel.core.config import load_config
 from panel.db.models import GameServer, HostSample, MetricSample, RemoteServer, db
 from panel.core.panel_state import (
-    _cron_restart_pending, _expected_offline, _max_players_cache, _monitor_state, _os_update_seen,
+    _cron_restart_pending, _expected_offline, _max_players_cache, _monitor_state,
     _player_counts, _reboot_when_empty, _rwe_lock, _server_full_alerted, _server_peak_notified,
+    remote_keyed_state, server_keyed_state,
 )
 from panel.ops.ssh_manager import (
     _remote_listening_ports, game_map, lgsm_get_values, remote_fail2ban_top_ips, remote_reboot,
@@ -505,19 +506,25 @@ def _forget_deleted_rows(remote_ids, server_ids):
     its siblings. Driven off the live id sets rather than the delete routes on purpose: deleting a
     RemoteServer cascades to its GameServers (delete-orphan), so rows disappear without any
     per-server route running.
+
+    THE MAPS ARE NOT NAMED HERE ANY MORE. They used to be, and that made every new row-keyed map an
+    edit somebody had to remember to make in this function — which is how two of them were missed
+    for as long as they existed. _game_backup_status and the GMod content-apply state are both read
+    to RENDER a server's page, so a recycled id showed the new server the previous one's backup
+    outcome, or a content install frozen at "running". They are registered at their declarations
+    now (panel_state.register_server_state / register_remote_state), and this walks the registry.
+    A map that is deliberately NOT pruned here — _os_update_state, which prunes itself inside the
+    sweep — is now visibly unregistered rather than indistinguishable from one that was forgotten.
+
+    #85's snapshot (_os_update_seen) is registered even though the sweep also prunes it: it is read
+    on every page load by /api/os-updates/summary, so a deleted host would otherwise linger in the
+    login banner for up to a day — under a row id a newly added host may already own, which means
+    its name and package count show to whoever can access the NEW host. Both are idempotent.
     """
-    for m in (_monitor_state["remotes"], _monitor_state["disk"], _monitor_state["load"],
-              # #85's snapshot prunes itself inside the daily OS-update sweep, which is the right
-              # place for the alert state it guards. It is ALSO read on every page load by
-              # /api/os-updates/summary, so a deleted host lingers in the login banner for up to a
-              # day — under a row id a newly added host may already own, which means its name and
-              # package count show to whoever can access the NEW host. Pruning here as well makes
-              # that prompt instead of daily; both are idempotent.
-              _os_update_seen):
+    for m in remote_keyed_state():
         for gone in [k for k in m if k not in remote_ids]:
             m.pop(gone, None)
-    for m in (_monitor_state["servers"], _server_full_alerted, _server_peak_notified,
-              _expected_offline, _cron_restart_pending, _max_players_cache, _player_counts):
+    for m in server_keyed_state():
         for gone in [k for k in m if k not in server_ids]:
             m.pop(gone, None)
     with _rwe_lock:

@@ -13,8 +13,10 @@ from panel.ops.ssh_manager import (remote_fail2ban_overview, remote_fail2ban_top
 from panel.security.auth import (MANAGE_REMOTES, get_remote, log_action, permission_required,
     superadmin_required)
 from panel.services.monitoring import (_autoblock_threshold, _whitelisted)
-from app import (AUTH_LOG_PATH, _autoblock_hosts, _int_or, _json_body, _log_and_generic,
-    _maybe_set_threshold, _run_autoblock_now, _security_whitelist, _set_autoblock_host)
+from panel.core.http import (_json_body, _log_and_generic)
+from panel.core.validation import (MAX_PORT, MIN_UNPRIVILEGED_PORT, _port_or)
+from app import (AUTH_LOG_PATH, _autoblock_hosts, _maybe_set_threshold, _run_autoblock_now,
+    _security_whitelist, _set_autoblock_host)
 from panel.routes._shared import (_whitelist_mutate)
 
 
@@ -136,7 +138,7 @@ def register(app):
         # nosec B104 - not a bind: the stored value, defaulted for a config written
         # before bind_host existed. The operator chooses it; this only reads it back.
         cur_bind = (cfg.get("bind_host") or "0.0.0.0").strip()  # nosec B104
-        new_port = _int_or(data.get("port"), cur_port)
+        new_port = _port_or(data.get("port"), None, lo=MIN_UNPRIVILEGED_PORT)
         new_bind = str(data.get("bind_host") or cur_bind).strip()
 
         local = RemoteServer.query.filter_by(is_local=True).first()
@@ -147,8 +149,13 @@ def register(app):
         loopback = {"127.0.0.1", "::1", "localhost"}
 
         # ── Validate the port ──
-        if not (1024 <= new_port <= 65535):
-            return jsonify({"success": False, "message": "Pick a port between 1024 and 65535."}), 400
+        # The bound now lives in _port_or (shared with the setup wizard, which writes the SAME
+        # config key and used to write it unchecked). Kept as an explicit branch so the refusal
+        # still carries its own message.
+        if new_port is None:
+            return jsonify({"success": False,
+                            "message": "Pick a port between %d and %d."
+                                       % (MIN_UNPRIVILEGED_PORT, MAX_PORT)}), 400
         if new_port != cur_port:
             clash = GameServer.query.filter_by(remote_id=local.id, port=new_port).first() if local else None
             if clash:
