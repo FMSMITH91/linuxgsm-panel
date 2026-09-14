@@ -255,11 +255,13 @@
       </div>
       <div class="d-flex align-items-center gap-1">
         <label class="form-label small mb-0" for="bk-keep">Keep daily backups for</label>
-        <select id="bk-keep" class="form-select form-select-sm" style="width:auto;" data-action="saveBackupSettings" data-on="change">
-          <option value="7">7 days</option>
-          <option value="14">14 days</option>
-          <option value="30">30 days</option>
-        </select>
+        <!-- Typed, not picked. A fixed list of 7/14/30 could not express the number an operator
+             actually wants. min/max match the server's own clamp and are re-applied from
+             /api/panel/backups on load, so the two cannot drift. -->
+        <input type="number" id="bk-keep" class="form-control form-control-sm" style="width:5.5rem;"
+               min="1" max="365" step="1" inputmode="numeric"
+               data-action="saveBackupSettings" data-on="change">
+        <span class="form-label small mb-0 text-secondary">days</span>
       </div>
       <span id="bk-msg" class="small"></span>
     </div>
@@ -300,15 +302,11 @@
       </div>
       <div class="d-flex align-items-center gap-1">
         <label class="form-label small mb-0" for="fb-keep">Keep per server</label>
-        <select id="fb-keep" class="form-select form-select-sm" style="width:auto;" data-action="saveBackupSettings" data-on="change">
-          <option value="1">1</option>
-          <option value="2">2</option>
-          <option value="3">3</option>
-          <option value="5">5</option>
-          <option value="7">7</option>
-          <option value="14">14</option>
-          <option value="30">30</option>
-        </select>
+        <!-- Typed, not picked — see the note on bk-keep above. The ceiling is much lower here
+             because each of these is a whole game directory, often several GB. -->
+        <input type="number" id="fb-keep" class="form-control form-control-sm" style="width:5.5rem;"
+               min="1" max="30" step="1" inputmode="numeric"
+               data-action="saveBackupSettings" data-on="change">
       </div>
       <span id="fb-status" class="small text-secondary"></span>
     </div>

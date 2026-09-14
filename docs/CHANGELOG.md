@@ -41,6 +41,17 @@ regardless of this file — this changelog is for humans.
   on stdin, because a download over SSH gets parsed twice and that is where quoting bugs hide.
 
 ### Changed
+- **Backup retention is typed, not picked from a list.** "Keep daily backups for", "Keep per
+  server" and each server's own override were dropdowns offering a handful of values (1, 2, 3, 5,
+  7, 14, 30) — so the number you actually wanted was only available if it happened to be on the
+  list. All three are number fields now. A per-server override is set by typing a number and
+  cleared by emptying the box, which is what its "Default" placeholder says.
+  The server has always clamped these (1-30 game backups, 1-365 days), and it still does — but a
+  clamp you cannot see is worse on a field you type into than on one you pick from: entering 100
+  would have stored 30 while the page said "Saved". It now says **"Saved — 100 is out of range,
+  kept 30"** and shows the stored number. The bounds come from the server, so the field and the
+  clamp behind it cannot drift apart. Changing the global default also refreshes the rows that
+  inherit it, instead of leaving them showing the old number until the next page load.
 - **The pure helper layer moved out of `app.py`** into `panel/core/validation.py` (the input
   patterns, the port and password rules) and `panel/core/http.py` (how a handler answers: JSON for
   a fetch, flash-and-redirect for a form, and the two error shapes that keep exception text out of

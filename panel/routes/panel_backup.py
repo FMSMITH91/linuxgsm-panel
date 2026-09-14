@@ -255,7 +255,12 @@ def register(app):
         data = _json_body()
 
         def _field(v):
-            if v is None or v == "default":
+            # "" as well as "default". The per-server override is a number box now, and leaving it
+            # EMPTY is how you say "use the global default" — a <select> could carry a labelled
+            # "Default" option, a number input cannot. An empty string ALREADY landed here, via
+            # int("") raising below; this states the contract instead of leaving the UI's only way
+            # to clear an override resting on an exception nobody wrote down.
+            if v is None or v == "default" or (isinstance(v, str) and not v.strip()):
                 return None
             try:
                 return int(v)   # OverflowError guards against JSON infinity (e.g. 1e400)
@@ -368,6 +373,10 @@ def register(app):
             # Top-line disk uses the first host (kept for the summary); per-server disk is authoritative.
             first = next(iter(disk_by_remote.values()), {"free": 0, "total": 0})
             return jsonify({"backups": bk.list_backups(), "settings": bk.get_settings(),
+                            # The retention numbers are TYPED in the UI now, not picked from a list,
+                            # so the browser needs the same bounds the server clamps to — one
+                            # source, rather than the same two numbers written out in three places.
+                            "limits": bk.keep_limits(),
                             "full": bk.get_full_settings(), "full_running": _full_backup_lock.locked(),
                             "games": games, "multi_host": len(disk_by_remote) > 1,
                             "disk": {"free": first["free"], "total": first["total"],
