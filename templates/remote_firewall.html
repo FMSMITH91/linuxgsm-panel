@@ -33,12 +33,17 @@
     <div class="card mb-3">
       <div class="card-header d-flex justify-content-between align-items-center">
         <span><i class="bi bi-shield-fill-check"></i> UFW Status</span>
-        <span id="ufw-badge" class="badge {% if status.enabled %}bg-success{% else %}bg-secondary{% endif %}">
-          {{ "Active" if status.enabled else "Inactive" }}
+        <span id="ufw-badge" class="badge {% if status.unreachable %}bg-secondary{% elif status.enabled %}bg-success{% else %}bg-secondary{% endif %}">
+          {% if status.unreachable %}Unknown{% else %}{{ "Active" if status.enabled else "Inactive" }}{% endif %}
         </span>
       </div>
       <div class="card-body">
-        {% if not status.installed %}
+        {# "Unreachable" and "UFW isn't installed" are different facts, and only one of them is
+           something the operator can act on here. Reporting a host that is simply down as having
+           no firewall is the more alarming of the two, and it is the wrong one. #}
+        {% if status.unreachable %}
+        <p class="text-secondary small mb-0"><i class="bi bi-plug"></i> The panel can't reach this host right now, so its firewall can't be read. Rules below are unavailable until it's back.</p>
+        {% elif not status.installed %}
         <p class="text-warning small mb-0"><i class="bi bi-exclamation-triangle"></i> UFW is not installed on this remote.</p>
         {% endif %}
       </div>

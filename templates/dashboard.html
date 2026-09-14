@@ -21,9 +21,13 @@
 
 <div class="d-flex justify-content-between align-items-center mb-4 flex-wrap gap-2">
   <h1 class="page-title mb-0"><i class="bi bi-speedometer2"></i> Dashboard</h1>
-  <div class="d-flex align-items-center gap-3">
+  {# flex-wrap, and a filter box that may shrink: without both, this row is the filter input
+     (fixed 220px) + every tag + Select shown + Customise + Auto-refreshing on ONE line. At 375px
+     that ran 160px past the viewport, which put Customise and the refresh indicator off-screen —
+     reachable only by scrolling the whole page sideways. #}
+  <div class="d-flex align-items-center gap-3 flex-wrap">
     {% if servers and servers|length > 6 %}
-    <div class="input-group input-group-sm" style="width:220px;">
+    <div class="input-group input-group-sm" style="width:220px; max-width:100%;">
       <span class="input-group-text"><i class="bi bi-search"></i></span>
       <input type="text" id="srv-search" class="form-control" placeholder="Filter servers…"
              autocomplete="off" data-action="filterServers" data-on="input">
