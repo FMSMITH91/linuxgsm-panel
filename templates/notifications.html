@@ -7,8 +7,8 @@
 </div>
 <p class="text-secondary">
   Get alerted on Telegram or Discord when something needs your attention — a server drops, a host
-  goes unreachable, a backup fails, an admin signs in. This is the panel notifying <em>you</em>; a
-  game's own in-game alerts are still set per server on its Alerts tab.
+  goes unreachable, a backup fails, an admin signs in. These are the panel's own alerts to you; a
+  game's in-game alerts are still set per server on its Alerts tab.
 </p>
 
 <form method="POST" action="{{ url_for('notifications_save') }}">
@@ -31,8 +31,8 @@
           <input id="notifications-telegram_chat_id" type="text" name="telegram_chat_id" class="form-control form-control-sm" autocomplete="off"
                  value="{{ settings.telegram.chat_id }}" placeholder="e.g. 123456789 or -100123…">
           <div class="small text-secondary mt-2">
-            Create a bot with <code>@BotFather</code>, then get your chat ID from <code>@userinfobot</code>
-            (or a group's ID). Message the bot once so it can reply to you.
+            Create a bot with @BotFather, then get your chat ID from @userinfobot (or a group's ID).
+            Message the bot once so it can reply to you.
           </div>
           <button type="button" class="btn btn-outline-secondary btn-sm mt-2" data-action="testChannel" data-args='["telegram", "@self"]'>
             <i class="bi bi-send"></i> Send test
@@ -41,17 +41,16 @@
           <div class="form-check form-switch">
             <input type="checkbox" name="telegram_accept_commands" class="form-check-input" role="switch" id="tg-cmd"
                    {% if settings.telegram.accept_commands %}checked{% endif %}>
-            <label class="form-check-label small" for="tg-cmd">Accept commands from this chat
-              (<code>/update</code>, <code>/status</code>)</label>
+            <label class="form-check-label small" for="tg-cmd">Accept commands from this chat, such as /update and /status</label>
           </div>
           <div class="small text-secondary mt-1">
             Lets you run the panel from Telegram — only messages from the Chat ID above are honoured.
-            Send <code>/help</code> in the chat for the list.
+            Send /help in the chat for the list.
           </div>
           <div class="small text-warning mt-1">
-            <i class="bi bi-exclamation-triangle"></i> If that Chat ID is a <strong>group</strong>,
-            <em>every member</em> can run these commands — including <code>/start</code>,
-            <code>/stop</code>, and <code>/restart</code>. Use a private chat for server control.
+            <i class="bi bi-exclamation-triangle"></i>
+            If that Chat ID is a group, every member of it can run these commands — including /start,
+            /stop and /restart. Use a private chat for server control.
           </div>
         </div>
       </div>
@@ -72,8 +71,8 @@
           <input id="notifications-discord_webhook" type="password" name="discord_webhook" class="form-control form-control-sm" autocomplete="off"
                  placeholder="{{ '•••••••••• (leave blank to keep)' if settings.discord.has_webhook else 'https://discord.com/api/webhooks/…' }}">
           <div class="small text-secondary mt-2">
-            In your Discord channel: <em>Edit Channel → Integrations → Webhooks → New Webhook → Copy URL</em>.
-            Only <code>discord.com</code> webhook URLs are accepted.
+            In your Discord channel: Edit Channel → Integrations → Webhooks → New Webhook → Copy URL.
+            Only discord.com webhook URLs are accepted.
           </div>
           <button type="button" class="btn btn-outline-secondary btn-sm mt-2" data-action="testChannel" data-args='["discord", "@self"]'>
             <i class="bi bi-send"></i> Send test
@@ -89,21 +88,22 @@
           <div class="form-check form-switch mt-2">
             <input type="checkbox" name="discord_accept_commands" class="form-check-input" role="switch" id="dc-cmd"
                    {% if settings.discord.accept_commands %}checked{% endif %}>
-            <label class="form-check-label small" for="dc-cmd">Accept commands from this channel
-              (<code>!update</code>, <code>!status</code>)</label>
+            <label class="form-check-label small" for="dc-cmd">Accept commands from this channel, such as !update and !status</label>
           </div>
           <div class="small text-secondary mt-2">
-            Create a bot at <em>discord.com/developers → New Application → Bot</em>, copy its token, and
-            invite it to your server. Under <em>Bot → Privileged Gateway Intents</em> turn on
-            <strong>Message Content Intent</strong> so it can read commands. Get the Channel ID with
-            <em>User Settings → Advanced → Developer Mode</em>, then right-click the channel → Copy Channel ID.
-            Type <code>!help</code> in that channel for the command list (Discord reserves <code>/</code> for
-            its own menu, so <code>!</code> types cleanly).
+            Create a bot at discord.com/developers → New Application → Bot, copy its token, and invite
+            it to your server. Under Bot → Privileged Gateway Intents, turn on Message Content Intent
+            so it can read commands.
+          </div>
+          <div class="small text-secondary mt-1">
+            Get the Channel ID with User Settings → Advanced → Developer Mode, then right-click the
+            channel → Copy Channel ID. Type !help in that channel for the command list (Discord
+            reserves the slash prefix for its own menu, so the bot uses an exclamation mark).
           </div>
           <div class="small text-warning mt-1">
-            <i class="bi bi-exclamation-triangle"></i> <em>Everyone who can post in that channel</em> can run
-            these commands — including <code>!start</code>, <code>!stop</code>, and <code>!restart</code>.
-            Use a private, admin-only channel for server control.
+            <i class="bi bi-exclamation-triangle"></i>
+            Everyone who can post in that channel can run these commands — including !start, !stop
+            and !restart. Use a private, admin-only channel for server control.
           </div>
           <button type="button" class="btn btn-outline-secondary btn-sm mt-2" data-action="testChannel" data-args='["discord_bot", "@self"]'>
             <i class="bi bi-send"></i> Send test (bot)
@@ -116,7 +116,7 @@
     <div class="col-lg-6 mb-3">
       <div class="card h-100">
         <div class="card-header d-flex justify-content-between align-items-center">
-          <span><i class="bi bi-bell"></i> ntfy</span>
+          <span><i class="bi bi-bell"></i> <span data-no-i18n>ntfy</span></span>
           <div class="form-check form-switch mb-0">
             <input type="checkbox" name="ntfy_enabled" class="form-check-input" role="switch" id="nt-en"
                    {% if settings.ntfy.enabled %}checked{% endif %}>
@@ -128,19 +128,19 @@
                  value="{{ settings.ntfy.topic }}" placeholder="e.g. my-gameservers">
           <label class="form-label small mb-1 mt-2" for="notifications-ntfy_server">Server</label>
           <input id="notifications-ntfy_server" type="text" name="ntfy_server" class="form-control form-control-sm" autocomplete="off"
-                 value="{{ settings.ntfy.server }}" placeholder="https://ntfy.sh">
+                 value="{{ settings.ntfy.server }}" placeholder="https://ntfy.sh" data-no-i18n>
           <label class="form-label small mb-1 mt-2" for="notifications-ntfy_token">Access token <span class="text-secondary fw-normal">(optional)</span></label>
           <input id="notifications-ntfy_token" type="password" name="ntfy_token" class="form-control form-control-sm" autocomplete="off"
                  placeholder="{{ '\u2022\u2022\u2022\u2022\u2022\u2022\u2022\u2022\u2022\u2022 (leave blank to keep)' if settings.ntfy.has_token else 'only for reserved or private topics' }}">
           <div class="small text-secondary mt-2">
             Install the ntfy app, subscribe to your topic, and alerts arrive on your phone — no account
-            needed. Leave the server at <code>https://ntfy.sh</code> for the public service, or point it
-            at your own instance (<code>https://ntfy.example.com</code>). Base URL only: https, no path.
+            needed. Leave the server at https://ntfy.sh for the public service, or point it at your own
+            instance, for example https://ntfy.example.com. Base URL only: https, no path.
           </div>
           <div class="small text-warning mt-1">
-            <i class="bi bi-exclamation-triangle"></i> On ntfy.sh a topic is a <em>public</em> address —
-            anyone who guesses the name receives your alerts. Pick something long and unguessable, or
-            use a reserved topic with an access token.
+            <i class="bi bi-exclamation-triangle"></i>
+            On ntfy.sh a topic is a public address — anyone who guesses the name receives your alerts.
+            Pick something long and unguessable, or use a reserved topic with an access token.
           </div>
           <button type="button" class="btn btn-outline-secondary btn-sm mt-2" data-action="testChannel" data-args='["ntfy", "@self"]'>
             <i class="bi bi-send"></i> Send test

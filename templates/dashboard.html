@@ -68,7 +68,9 @@
     <p class="text-secondary">
       No game servers are configured yet.
       {% if current_user.is_superadmin or has_permission('manage_remotes') %}
-        <br>Start by adding a <a href="{{ url_for('manage_remotes') }}">remote server</a>, then install a game server from the <a href="{{ url_for('manage_servers') }}">Game Servers</a> page.
+        <br>Start by adding a remote server, then install a game server from the Game Servers page.
+        <br><a href="{{ url_for('manage_remotes') }}">Add a remote server</a>
+        <a href="{{ url_for('manage_servers') }}" class="ms-3">Go to Game Servers</a>
       {% endif %}
     </p>
   </div>

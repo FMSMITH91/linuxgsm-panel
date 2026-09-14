@@ -109,7 +109,7 @@
     <ul class="nav nav-tabs card-header-tabs mx-2 mt-2 border-0" id="cfg-tabs">
       <li class="nav-item"><button class="nav-link active" data-tab="lgsm"><i class="bi bi-sliders"></i> LinuxGSM Settings</button></li>
       <li class="nav-item"><button class="nav-link" data-tab="game"><i class="bi bi-controller"></i> Game Config File</button></li>
-      <li class="nav-item"><button class="nav-link" data-tab="raw"><i class="bi bi-file-earmark-code"></i> Raw {{ server.lgsm_name }}.cfg</button></li>
+      <li class="nav-item"><button class="nav-link" data-tab="raw"><i class="bi bi-file-earmark-code"></i> <span>Raw</span> <span data-no-i18n>{{ server.lgsm_name }}.cfg</span></button></li>
     </ul>
   </div>
   <div class="card-body">
@@ -127,7 +127,8 @@
     <div id="tab-game" class="cfg-tab" style="display:none;">
       <div id="game-loading" class="text-secondary small"><i class="bi bi-arrow-repeat"></i> Locating game config file…</div>
       <div id="game-wrap" style="display:none;">
-        <p class="small text-secondary mb-1">Game's own config file: <code id="game-path"></code> — where in-game settings (e.g. <code>sv_maxclients</code>) actually live for this game.</p>
+        <p class="small text-secondary mb-1">Game's own config file — where this game's in-game settings, such as the player limit, actually live.</p>
+        <p class="small text-secondary mb-1"><code id="game-path"></code></p>
         <textarea id="game-cfg" class="form-control font-monospace" rows="14" style="font-size:.8rem;" spellcheck="false"></textarea>
         <button class="btn btn-primary btn-sm mt-2" data-action="saveGameCfg"><i class="bi bi-save"></i> Save game config</button>
         <span id="game-msg" class="small ms-2"></span>
@@ -171,7 +172,14 @@
           <div id="file-list" class="list-group list-group-flush"></div>
         </div>
         <div id="upload-status" class="small mt-2"></div>
-        <div class="text-secondary mt-1" style="font-size:.66rem;"><i class="bi bi-info-circle"></i> Tip: drag files <em>or folders</em> anywhere onto this card to upload (subfolders included), or use the buttons above. <i class="bi bi-shield-lock"></i> marks files protected from deletion. <i class="bi bi-download"></i> downloads a file, or a folder as .tar.gz.</div>
+        <div class="text-secondary mt-1" style="font-size:.66rem;">
+          <i class="bi bi-info-circle"></i>
+          Tip: drag files or folders anywhere onto this card to upload (subfolders included), or use the buttons above.
+          <i class="bi bi-shield-lock"></i>
+          This marks files protected from deletion.
+          <i class="bi bi-download"></i>
+          This downloads a file, or a folder as .tar.gz.
+        </div>
       </div>
       <div class="col-lg-7">
         <div id="editor-wrap" style="display:none;">
@@ -209,7 +217,12 @@
 <div class="card mt-3" id="backup-card">
   <div class="card-header d-flex justify-content-between align-items-center flex-wrap gap-2">
     <span><i class="bi bi-archive"></i> Backups</span>
-    <span class="text-secondary" style="font-size:.66rem;"><i class="bi bi-info-circle"></i> LinuxGSM backups of this server's files, stored on the host. Automatic backups run on the schedule below; the newest <em>keep</em> are retained and older ones pruned. A backup skips itself if players are online.</span>
+    <span class="text-secondary" style="font-size:.66rem;">
+      <i class="bi bi-info-circle"></i>
+      LinuxGSM backups of this server's files, stored on the host. Automatic backups run on the schedule
+      below; the newest few are retained, as set by "keep", and older ones are pruned. A backup skips
+      itself if players are online.
+    </span>
   </div>
   <div class="card-body">
     <div id="bk-loading" class="text-secondary small"><i class="bi bi-arrow-repeat"></i> Loading backups…</div>
@@ -259,7 +272,11 @@
 <div class="card mt-3">
   <div class="card-header d-flex justify-content-between align-items-center flex-wrap gap-2">
     <span><i class="bi bi-clock-history"></i> Scheduled Tasks <span class="text-secondary small">(cron)</span></span>
-    <span class="text-secondary" style="font-size:.66rem;"><i class="bi bi-info-circle"></i> Runs as <code>{{ server.short_name }}</code>. Every task can be rescheduled or deleted here — including panel-installed ones. Lines tagged <span class="badge bg-secondary" style="font-size:.5rem;">autostart</span>/<span class="badge bg-secondary" style="font-size:.5rem;">daily-restart</span> also have a switch on the server page; deleting <code>monitor</code> turns Autostart off.</span>
+    <span class="text-secondary" style="font-size:.66rem;">
+      <i class="bi bi-info-circle"></i>
+      Runs as <code>{{ server.short_name }}</code>
+      <span class="d-block">Every task can be rescheduled or deleted here, including the ones the panel installed. Lines tagged autostart or daily-restart also have a switch on the server page, and deleting the monitor task turns Autostart off.</span>
+    </span>
   </div>
   <div class="card-body">
     <!-- Add / edit form -->
@@ -293,7 +310,15 @@
       <div id="cron-next" class="text-secondary mt-1" style="font-size:.66rem;"></div>
     </div>
     <div class="d-flex justify-content-between align-items-center flex-wrap gap-2 mb-3">
-      <span class="text-secondary" style="font-size:.62rem;">Fields: <code>min hour day month weekday</code>. Ranges <code>1-5</code>, lists <code>1,3,5</code>, steps <code>*/10</code>, names <code>mon</code>/<code>jan</code>.</span>
+      {# One <span> per term. Written as prose ("Ranges 1-5, lists 1,3,5") the only text nodes
+         between the <code> literals were ", lists" and ", steps" — comma-led scraps no catalog
+         can translate. Each label now stands alone as its own word. #}
+      <span class="text-secondary" style="font-size:.62rem;">Fields: <code>min hour day month weekday</code>
+        <span class="ms-2">Ranges <code>1-5</code></span>
+        <span class="ms-2">Lists <code>1,3,5</code></span>
+        <span class="ms-2">Steps <code>*/10</code></span>
+        <span class="ms-2">Names <code>mon</code> <code>jan</code></span>
+      </span>
       <span id="cron-msg" class="small"></span>
     </div>
     <!-- Existing entries -->

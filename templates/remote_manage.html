@@ -30,7 +30,8 @@
 {% if remote.is_local %}
 <div class="alert alert-info py-2 small mb-3" style="background: rgba(16,185,129,.08); border-color: var(--accent);">
   <i class="bi bi-info-circle"></i>
-  <strong>The server the panel runs on</strong> — managed like any remote host, with panel-only extras below.
+  <strong>The server the panel runs on.</strong>
+  It is managed like any remote host, with panel-only extras below.
 </div>
 {% endif %}
 
@@ -170,7 +171,7 @@
     <div class="card h-100">
       <div class="card-header"><i class="bi bi-power"></i> Power</div>
       <div class="card-body">
-        <p class="small text-secondary">{% if remote.is_local %}Takes down the panel <strong>and</strong> every game server on it.{% else %}Autostart servers come back on their own.{% endif %}</p>
+        <p class="small text-secondary">{% if remote.is_local %}Takes down the panel and every game server running on it.{% else %}Autostart servers come back on their own.{% endif %}</p>
         <div class="d-flex gap-2 flex-wrap">
           <button class="btn btn-sm btn-outline-warning" data-action="rebootRemote"><i class="bi bi-power"></i> Reboot now</button>
           <button class="btn btn-sm btn-outline-secondary" data-action="rebootRemoteWhenEmpty" title="Reboot once no players are connected to any game server on this host"><i class="bi bi-hourglass-split"></i> Reboot when empty</button>
@@ -226,7 +227,7 @@
           <button class="btn btn-sm btn-outline-warning" id="pu-branch-switch" data-action="switchPanelBranch"><i class="bi bi-shuffle"></i> Switch</button>
           <span id="pu-branch-msg" class="small"></span>
         </div>
-        <div class="form-text mt-1">Checks out that branch and restarts, with the same backup + auto-rollback. Non-<code>main</code> branches skip CI — for testing.</div>
+        <div class="form-text mt-1">Checks out that branch and restarts, with the same backup + auto-rollback. Branches other than main skip CI, so this is for testing.</div>
       </div>
     </div>
     <!-- Live update progress (the installer's [1/5]…[5/5] steps, streamed) -->
@@ -244,7 +245,8 @@
   </div>
   <div class="card-body">
     <p class="small text-secondary mb-2">
-      Database, settings and encryption keys in one file. <strong class="text-warning">Contains secrets</strong> — keep any downloads safe.
+      Database, settings and encryption keys in one file.
+      <strong class="text-warning">Contains secrets — keep any downloads safe.</strong>
     </p>
     <div class="d-flex gap-3 flex-wrap align-items-center mb-2">
       <div class="form-check form-switch mb-0">
@@ -278,8 +280,9 @@
       <button class="btn btn-sm btn-outline-success" id="fb-now" data-action="runFullBackup" data-args='["@self"]'><i class="bi bi-play-circle"></i> Back up game servers now</button>
     </div>
     <p class="small text-secondary mb-2">
-      LinuxGSM's own per-server backup (under <code>~/lgsm/backup</code>). These get large, so only the newest few are kept
-      and a running server is briefly restarted while archiving. Below are the <strong>default</strong> settings — each server can override.
+      LinuxGSM's own per-server backup, written to ~/lgsm/backup on the host. These get large, so only
+      the newest few are kept, and a running server is briefly restarted while archiving.
+      These are the defaults — each server can override them.
     </p>
     <div class="d-flex gap-3 flex-wrap align-items-center mb-2">
       <div class="form-check form-switch mb-0">
@@ -429,7 +432,7 @@
     <button class="btn btn-sm btn-outline-secondary" data-action="loadSecurityBans"><i class="bi bi-arrow-repeat"></i> Refresh</button>
   </div>
   <div class="card-body">
-    <p class="small text-secondary mb-2">IPs currently banned at the firewall across every fail2ban jail on this host{% if remote.is_local %} — the panel login and SSH{% endif %}.</p>
+    <p class="small text-secondary mb-2">{% if remote.is_local %}IPs currently banned at the firewall across every fail2ban jail on this host — the panel login and SSH.{% else %}IPs currently banned at the firewall across every fail2ban jail on this host.{% endif %}</p>
     <div id="sec-bans"><div class="text-secondary small"><i class="bi bi-arrow-repeat"></i> Loading…</div></div>
   </div>
 </div>
@@ -447,9 +450,15 @@
     </div>
   </div>
   <div class="card-body">
-    <p class="small text-secondary mb-2">The busiest attacking IPs on this host by failed attempts over the last 7 days (current + rotated logs). <strong>Block</strong> firewalls an IP on <em>all</em> ports (UFW) — stronger than a fail2ban ban, which only covers the attacked service. <strong>Auto-block</strong> firewalls every IP at or above the threshold and releases each once its 7-day count drops back below — a cumulative count a slow attacker who spaces attempts to dodge fail2ban's short window can't escape.</p>
+    <p class="small text-secondary mb-2">The busiest attacking IPs on this host by failed attempts over the last 7 days (current + rotated logs).</p>
+    <p class="small text-secondary mb-2">Block firewalls an IP on every port through UFW — stronger than a fail2ban ban, which only covers the attacked service.</p>
+    <p class="small text-secondary mb-2">Auto-block firewalls every IP at or above the threshold, and releases each one when its 7-day count drops back below. Because that count is cumulative, a slow attacker who spaces attempts out to dodge fail2ban's short window cannot escape it.</p>
     <p class="small mb-3" style="border-left:2px solid var(--border,#1f2937);padding-left:.65rem;color:#9ca3af;">
-      <i class="bi bi-shield-check text-success"></i> Reachable only over Tailscale? If SSH and the panel login aren't exposed to the public internet, there's nothing here for fail2ban to catch — you can leave auto-block <strong>off</strong>. It only earns its keep when <strong>SSH or the panel login</strong> is reachable from the public internet. (Game-server ports have no fail2ban jail, so this never covers those.)
+      <i class="bi bi-shield-check text-success"></i>
+      Reachable only over Tailscale? If SSH and the panel login aren't exposed to the public internet,
+      there's nothing here for fail2ban to catch, so you can leave auto-block off. It only earns its
+      keep when SSH or the panel login is reachable from the public internet. (Game-server ports have
+      no fail2ban jail, so this never covers those.)
     </p>
     <!-- align-items-START (not end): the whitelist column grows downward when its chips/"nothing
          whitelisted" text load, and bottom-aligning would then shove the threshold field down out of
@@ -463,7 +472,7 @@
         </div>
       </div>
       <div class="flex-grow-1" style="min-width:260px;">
-        <label class="form-label small mb-1" for="sec-wl-input">Whitelist <span class="text-secondary">— never banned or blocked (IP or CIDR)</span></label>
+        <label class="form-label small mb-1" for="sec-wl-input">Whitelist <span class="text-secondary">(never banned or blocked, IP or CIDR)</span></label>
         <div class="input-group input-group-sm mb-1" style="max-width:340px;">
           <input type="text" class="form-control" id="sec-wl-input" placeholder="e.g. 1.2.3.4 or 10.0.0.0/8">
           <button class="btn btn-outline-primary" data-action="addWhitelist" data-args='["@self"]'><i class="bi bi-plus-lg"></i> Add</button>
@@ -549,8 +558,18 @@
            Running) — `enabled` is just the RunSSH pref flag and stays true even when the
            node is installed-but-not-linked (NeedsLogin), which would strand the user. #}
         {% set ssh_lockdown_safe = ts_up and (status.tailscale_ssh.enabled or status.tailscale_ufw_allowed) %}
-        <div class="small text-secondary mb-1">Public SSH (port 22 from the internet) — current: <strong id="ssh-mode">…</strong></div>
-        <p class="small text-secondary mb-1">Tailscale SSH keeps working regardless — rate-limit or disable public SSH once you're on the tailnet.{% if not ssh_lockdown_safe %} <span class="text-warning">{% if not ts_up %}<a href="{{ url_for('tailscale_page') }}">Connect Tailscale (link this machine)</a> first{% else %}Enable Tailscale SSH or allow the <code>tailscale0</code> interface first{% endif %} to safely disable public SSH — otherwise you'd lock yourself out.</span>{% endif %}</p>
+        <div class="small text-secondary mb-1">Public SSH (port 22 from the internet) <span class="ms-1">Currently: <strong id="ssh-mode">…</strong></span></div>
+        <p class="small text-secondary mb-1">Tailscale SSH keeps working regardless — rate-limit or disable public SSH once you're on the tailnet.</p>
+        {% if not ssh_lockdown_safe %}
+        <p class="small text-warning mb-1">
+          {% if not ts_up %}
+          Connect Tailscale and link this machine before you disable public SSH, or you would lock yourself out.
+          <a href="{{ url_for('tailscale_page') }}">Open Tailscale settings</a>
+          {% else %}
+          Enable Tailscale SSH, or allow the tailscale0 interface, before you disable public SSH — otherwise you would lock yourself out.
+          {% endif %}
+        </p>
+        {% endif %}
         <div class="d-flex gap-2 flex-wrap">
           <button class="btn btn-sm btn-outline-secondary" data-ssh-btn="allow" data-action="sshMode" data-args='["allow"]' title="Open port 22 to the internet">Allow</button>
           <button class="btn btn-sm btn-outline-primary" data-ssh-btn="limit" data-action="sshMode" data-args='["limit"]' title="Rate-limit port 22 (brute-force protection)">Limit</button>
@@ -559,12 +578,13 @@
         <div id="ssh-msg" class="small mt-1"></div>
       </div>
       <div class="col-md-6">
-        <div class="small text-secondary mb-1">Public panel access (port {{ (config.port if config else 5000) }})</div>
+        <div class="small text-secondary mb-1"><span>Public panel access</span> (<span>port</span> {{ (config.port if config else 5000) }})</div>
         {% if config and config.tailscale_setup_done %}
-        <p class="small text-secondary mb-1">Close the public web port to make the panel <strong>tailnet-only</strong> — no open ports.</p>
+        <p class="small text-secondary mb-1">Close the public web port to make the panel tailnet-only, with no open ports at all.</p>
         <button class="btn btn-sm btn-outline-danger" id="close-panel-btn" data-action="closePanelPort"><i class="bi bi-shield-lock"></i> Close public panel port (tailnet-only)</button>
         {% else %}
-        <p class="small text-secondary mb-1">Set up <a href="{{ url_for('tailscale_page') }}">Tailscale Serve</a> first, then you can close the public port safely.</p>
+        <p class="small text-secondary mb-1">Set up Tailscale Serve first, then you can close the public port safely.
+          <a href="{{ url_for('tailscale_page') }}">Open Tailscale settings</a></p>
         <button class="btn btn-sm btn-outline-secondary" disabled title="Set up Tailscale Serve first"><i class="bi bi-shield-lock"></i> Close public panel port</button>
         {% endif %}
         <div id="panel-port-msg" class="small mt-1"></div>
@@ -574,7 +594,7 @@
       <div class="col-md-8">
         {% set _bind = (config.bind_host if config else '0.0.0.0') or '0.0.0.0' %}
         <div class="small text-secondary mb-1">Panel binding <span class="text-secondary">(where the panel web server listens)</span></div>
-        <p class="small text-secondary mb-1">The panel restarts to apply{% if config and config.tailscale_setup_done %} — your Tailscale URL stays the same.{% else %}; reconnect on the new address/port.{% endif %}</p>
+        <p class="small text-secondary mb-1">{% if config and config.tailscale_setup_done %}The panel restarts to apply — your Tailscale URL stays the same.{% else %}The panel restarts to apply; reconnect on the new address or port.{% endif %}</p>
         <div class="d-flex gap-2 flex-wrap align-items-end">
           <div>
             <label class="form-label small mb-1" for="panel-bind-select">Bind address</label>
@@ -590,7 +610,7 @@
           <div id="panel-bind-custom-wrap"{% if _bind in ('0.0.0.0', '::', '127.0.0.1', '::1', 'localhost') %} style="display:none;"{% endif %}>
             <label class="form-label small mb-1" for="panel-bind-custom">IP address</label>
             <input type="text" id="panel-bind-custom" class="form-control form-control-sm" style="width:150px;"
-                   placeholder="100.x.x.x" value="{{ _bind if _bind not in ('0.0.0.0', '::', '127.0.0.1', '::1', 'localhost') else '' }}">
+                   placeholder="100.x.x.x" data-no-i18n value="{{ _bind if _bind not in ('0.0.0.0', '::', '127.0.0.1', '::1', 'localhost') else '' }}">
           </div>
           <div>
             <label class="form-label small mb-1" for="panel-port-input">Port</label>
@@ -604,8 +624,9 @@
     </div>
     <div class="row g-3 mt-1">
       <div class="col-md-8">
-        <div class="small text-secondary mb-1"><i class="bi bi-door-closed"></i> SSH port <span class="text-secondary">(the port sshd listens on)</span> — current: <code>{{ remote.port }}</code></div>
-        <p class="small text-secondary mb-1">Moving SSH off port 22 stops most automated scanning and brute-force. This is lockout-safe — the current port stays open as a fallback, and the firewall and fail2ban are updated to the new port. Close the old port from the <a href="{{ url_for('remote_firewall', remote_id=remote.id) }}">Firewall</a> page once you've confirmed the new one.</p>
+        <div class="small text-secondary mb-1"><i class="bi bi-door-closed"></i> SSH port <span class="text-secondary">(the port sshd listens on)</span> <span class="ms-1">Currently: <code>{{ remote.port }}</code></span></div>
+        <p class="small text-secondary mb-1">Moving SSH off port 22 stops most automated scanning and brute-force. This is lockout-safe — the current port stays open as a fallback, and the firewall and fail2ban are updated to the new port. Close the old port once you've confirmed the new one.
+          <a href="{{ url_for('remote_firewall', remote_id=remote.id) }}">Open the Firewall page</a></p>
         <div class="d-flex gap-2 flex-wrap align-items-end">
           <div>
             <label class="form-label small mb-1" for="ssh-port-input">New SSH port</label>
@@ -626,8 +647,10 @@
     {% else %}
     <div class="row g-3">
       <div class="col-md-6">
+        {# The arrow, not the word "to": a bare " to " between two value elements is its own text
+           node, and a two-letter preposition is not a phrase any catalog can translate usefully. #}
         <div class="small text-secondary mb-1">Panel connects via
-          <strong id="conn-method">{{ remote.auth_method }}</strong> to <code>{{ remote.username }}@{{ remote.host }}:{{ remote.port }}</code>
+          <strong id="conn-method">{{ remote.auth_method }}</strong> → <code>{{ remote.username }}@{{ remote.host }}:{{ remote.port }}</code>
         </div>
         {% if remote.auth_method != 'tailscale' %}
         <p class="small text-secondary mb-1">Switch the panel to reach this server over the tailnet (Tailscale SSH) and use its Tailscale address — then you can safely lock down public SSH.</p>
@@ -638,7 +661,7 @@
         {% endif %}
       </div>
       <div class="col-md-6">
-        <div class="small text-secondary mb-1">Public SSH (port 22 from the internet) — current: <strong id="ssh-mode">…</strong></div>
+        <div class="small text-secondary mb-1">Public SSH (port 22 from the internet) <span class="ms-1">Currently: <strong id="ssh-mode">…</strong></span></div>
         <p class="small text-secondary mb-1">Tailscale SSH keeps working regardless — rate-limit or disable public SSH once you're on the tailnet.</p>
         <div class="d-flex gap-2 flex-wrap">
           <button class="btn btn-sm btn-outline-secondary" data-ssh-btn="allow" data-action="sshMode" data-args='["allow"]' title="Open port 22 to the internet">Allow</button>
@@ -650,8 +673,9 @@
     </div>
     <div class="row g-3 mt-1">
       <div class="col-12">
-        <div class="small text-secondary mb-1"><i class="bi bi-door-closed"></i> SSH port <span class="text-secondary">(the port sshd listens on)</span> — current: <code>{{ remote.port }}</code></div>
-        <p class="small text-secondary mb-1">Moving off port 22 stops most scanning. Lockout-safe — the old port stays open as a fallback and firewall + fail2ban follow. Close the old port from <a href="{{ url_for('remote_firewall', remote_id=remote.id) }}">Firewall</a> once you've confirmed the new one.</p>
+        <div class="small text-secondary mb-1"><i class="bi bi-door-closed"></i> SSH port <span class="text-secondary">(the port sshd listens on)</span> <span class="ms-1">Currently: <code>{{ remote.port }}</code></span></div>
+        <p class="small text-secondary mb-1">Moving off port 22 stops most scanning. Lockout-safe — the old port stays open as a fallback and firewall + fail2ban follow. Close the old port once you've confirmed the new one.
+          <a href="{{ url_for('remote_firewall', remote_id=remote.id) }}">Open the Firewall page</a></p>
         <div class="d-flex gap-2 flex-wrap align-items-end">
           <div>
             <label class="form-label small mb-1" for="ssh-port-input">New SSH port</label>

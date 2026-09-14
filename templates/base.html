@@ -134,7 +134,7 @@
   <button class="hamburger" id="hamburger" data-action="toggleSidebar" aria-label="Menu">
     <i class="bi bi-list"></i>
   </button>
-  <a href="{{ url_for('index') }}" class="topbar-title">LinuxGSM</a>
+  <a href="{{ url_for('index') }}" class="topbar-title" data-no-i18n>LinuxGSM</a>
 </div>
 
 <!-- Sidebar backdrop -->
@@ -145,7 +145,7 @@
   <a href="{{ url_for('index') }}" class="sidebar-brand">
     <div class="sidebar-brand-icon">🎮</div>
     <div class="sidebar-brand-text">
-      LinuxGSM
+      <span data-no-i18n>LinuxGSM</span>
       <small>Server Panel</small>
     </div>
   </a>
@@ -267,7 +267,10 @@
     <div class="alert alert-warning d-flex flex-wrap align-items-center gap-2 py-2" id="otp-nag" role="alert" style="display:none;">
       <i class="bi bi-shield-exclamation fs-5"></i>
       <div class="flex-grow-1" style="min-width:0;">
-        <strong>Two-factor authentication is off<span class="d-none d-sm-inline"> on your admin account</span>.</strong>
+        {# Two COMPLETE sentences, one per breakpoint, rather than one sentence with its tail in a
+           d-sm-inline span: that span left " on your admin account" as its own text node, which is
+           a phrase no catalog can translate and no language can necessarily place there. #}
+        <strong><span class="d-sm-none">Two-factor authentication is off.</span><span class="d-none d-sm-inline">Two-factor authentication is off on your admin account.</span></strong>
         <div class="small d-none d-sm-block">You have full control of the panel — add an authenticator code to your sign-in so a stolen password alone can't get in.</div>
       </div>
       <a href="{{ url_for('account_2fa_enable') }}" class="btn btn-primary btn-sm text-nowrap"><i class="bi bi-shield-plus"></i> Enable 2FA</a>

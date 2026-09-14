@@ -1389,6 +1389,46 @@ check("i18n: es and fr translate the same set of keys",
       "es-only=%s fr-only=%s" % (sorted(_i18n_keys["es"] - _i18n_keys["fr"])[:3],
                                  sorted(_i18n_keys["fr"] - _i18n_keys["es"])[:3]))
 
+# ── Every user-visible template string is actually IN the catalog ─────────────────────────────
+# Nothing in a template is wrapped in t(). base.html hands the browser the catalog and walks the
+# DOM, swapping any text node (and title/placeholder/aria-label) whose exact whitespace-collapsed
+# text is a key. So a string is translated if and only if it appears in the catalog VERBATIM — and
+# nothing failed, anywhere, when it didn't: the page just silently stayed English for a Spanish or
+# French user. 313 of 961 strings (33%) were in that state when this gate was written, including
+# every label on the Settings page and every Hide/Move control on server_detail.
+#
+# tools/i18n_scan reproduces the runtime walker's rules exactly rather than approximating them,
+# because the two ways of being wrong are both bad: <code> and <pre> ARE skipped at runtime, so
+# flagging `<code>sv_maxclients</code>` would demand a pointless translation, and an element's own
+# data-no-i18n exempts its placeholder too.
+#
+# To satisfy this gate, either translate the string in BOTH languages, or — for a technical literal
+# that must stay verbatim (a hostname, a hex colour, a brand name) — mark it data-no-i18n.
+sys.path.insert(0, os.path.join(_root, "tools"))
+import i18n_scan as _i18n_scan  # noqa: E402
+_i18n_gaps = _i18n_scan.missing("es",
+                                template_dir=os.path.join(_root, "templates"),
+                                translation_dir=_i18n_dir)
+check("i18n: every translatable template string is in the catalog",
+      not _i18n_gaps,
+      "%d untranslated: %s" % (len(_i18n_gaps),
+                               "; ".join("%r in %s" % (_k, ",".join(sorted(_v)))
+                                         for _k, _v in sorted(_i18n_gaps.items())[:4])))
+
+# ...and the same for the strings the JAVASCRIPT builds. Toasts, confirm dialogs and JS-rendered
+# labels go through the very same MutationObserver, so they are translated on identical terms —
+# which is how the host Specs card came to show "Memory" in Spanish next to "Operating System" in
+# English. The scanner only claims a literal that reads as whole prose and is not half of a
+# concatenation (that kind reaches the DOM welded to per-request text and no key can match it);
+# put `i18n-ignore` in a comment on the line to exempt one it gets wrong.
+_i18n_js_gaps = _i18n_scan.missing_js(
+    "es", js_dir=os.path.join(_root, "static", "js"), translation_dir=_i18n_dir)
+check("i18n: every user-visible string in the JS is in the catalog",
+      not _i18n_js_gaps,
+      "%d untranslated: %s" % (len(_i18n_js_gaps),
+                               "; ".join("%r in %s" % (_k, ",".join(sorted(_v)))
+                                         for _k, _v in sorted(_i18n_js_gaps.items())[:4])))
+
 # ── The Tailscale login URL is pinned the same way on both paths ──────────────────────────────
 # `tailscale up` prints a login link that the panel renders into an href AND into the link text, on
 # two pages. The charset is enforced by a grep running ON THE HOST BEING JOINED, so the panel has to

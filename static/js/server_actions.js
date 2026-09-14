@@ -139,7 +139,10 @@ function showPendingBanner(action){
   var b = document.getElementById('restart-pending-banner');
   if (!b) return;
   b.dataset.action = action;
-  var v = document.getElementById('rpb-verb'); if (v) v.textContent = action;
+  // A whole sentence, not the bare verb: #rpb-verb is one complete clause in the banner so that
+  // both halves of it can be translated (see the note on the banner in server_detail.html).
+  var v = document.getElementById('rpb-verb');
+  if (v) v.textContent = t(action === 'stop' ? 'A stop is queued.' : 'A restart is queued.');
   var bt = document.getElementById('rpb-btn'); if (bt) bt.textContent = _cap(action) + ' now';
   b.classList.remove('d-none');
 }

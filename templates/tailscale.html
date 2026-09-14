@@ -25,7 +25,7 @@
     </button>
     <div class="text-secondary small mt-2">
       Runs on the panel host (needs sudo). Prefer to do it by hand?
-      <a href="https://tailscale.com/download" target="_blank" rel="noopener">tailscale.com/download</a>.
+      <a href="https://tailscale.com/download" target="_blank" rel="noopener" data-no-i18n>tailscale.com/download</a>.
     </div>
     <div id="ts-install-out" class="small mt-3"></div>
   </div>
@@ -199,9 +199,9 @@
         {% if not config.tailscale_setup_done and info.running %}
         <form id="serve-form" class="mt-2">
           <p class="text-secondary small mb-2">
-            <strong>Tailscale Serve</strong> exposes the panel <strong>privately on your tailnet</strong> —
-            free on the Personal plan and the recommended setup. Only devices signed in to your
-            tailnet can reach it; no public ports are opened.
+            Tailscale Serve exposes the panel privately on your tailnet — free on the Personal plan, and
+            the recommended setup. Only devices signed in to your tailnet can reach it; no public ports
+            are opened.
           </p>
           <div class="d-flex gap-2 align-items-end mb-2">
             <div class="flex-grow-1">
@@ -215,12 +215,12 @@
           </div>
           <div class="form-check">
             <input type="checkbox" id="funnel-check" class="form-check-input">
-            <label class="form-check-label small" for="funnel-check">Also enable <strong>Funnel</strong> (advanced)</label>
+            <label class="form-check-label small" for="funnel-check">Also enable Funnel (advanced)</label>
             <div class="form-text text-warning" style="margin-top:.15rem;">
               <i class="bi bi-exclamation-triangle-fill"></i>
-              Funnel publishes the panel to the <strong>public internet</strong> — anyone with the URL reaches the
-              login page. Not recommended for an admin panel, and it may require a paid Tailscale plan. Leave this
-              off to keep access tailnet-only.
+              Funnel publishes the panel to the public internet — anyone with the URL reaches the login
+              page. Not recommended for an admin panel, and it may require a paid Tailscale plan. Leave
+              this off to keep access tailnet-only.
             </div>
           </div>
         </form>
@@ -290,7 +290,7 @@
 
     <!-- Peers List -->
     <div class="card mt-3">
-      <div class="card-header"><i class="bi bi-people-fill"></i> Tailnet Peers ({{ info.peers|length }})</div>
+      <div class="card-header"><i class="bi bi-people-fill"></i> <span>Tailnet Peers</span> ({{ info.peers|length }})</div>
       <div class="card-body p-0">
         {% if info.peers %}
         <div class="table-responsive">
@@ -335,7 +335,7 @@
         {% if info.peers|length > 20 %}
         {% set extra_peers = info.peers|length - 20 %}
         <div class="text-center small text-secondary py-2">
-          +{{ extra_peers }} more peers
+          +{{ extra_peers }} <span>more peers</span>
         </div>
         {% endif %}
         {% else %}

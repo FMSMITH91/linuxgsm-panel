@@ -47,7 +47,7 @@
       </div>
       <div class="col-md-3" id="credential-group">
         <label class="form-label" id="cred-label" for="manage-remotes-credential">SSH Key Path</label>
-        <input id="manage-remotes-credential" type="text" name="credential" class="form-control" value="~/.ssh/id_rsa" placeholder="~/.ssh/id_rsa">
+        <input id="manage-remotes-credential" type="text" name="credential" class="form-control" value="~/.ssh/id_rsa" placeholder="~/.ssh/id_rsa" data-no-i18n>
       </div>
       <div class="col-md-2 d-flex align-items-center">
         <div class="form-check pt-3">
@@ -111,13 +111,13 @@
             <span class="badge bg-warning text-dark" title="A reusable SSH password is stored (encrypted) in the panel. If this host's SSH port is reachable from the internet it can be brute-forced — an SSH key or Tailscale SSH is stronger.">
               <i class="bi bi-exclamation-triangle-fill"></i> Password</span>
           {% endif %}
-          {% if remote.linuxgsm_user %} &middot; LGSM User: {{ remote.linuxgsm_user }}{% endif %}
+          {% if remote.linuxgsm_user %} &middot; <span>LGSM User:</span> {{ remote.linuxgsm_user }}{% endif %}
           &middot; Sudo: {{ "Yes" if remote.sudo_enabled else "No" }}
         </span>
         {% else %}
         <span class="text-secondary small">
-          Runs locally on this server &middot; Sudo: {{ "Yes" if remote.sudo_enabled else "No" }}
-          {% if remote.linuxgsm_user %} &middot; LGSM User: {{ remote.linuxgsm_user }}{% endif %}
+          <span>Runs locally on this server</span> &middot; <span>Sudo:</span> {{ "Yes" if remote.sudo_enabled else "No" }}
+          {% if remote.linuxgsm_user %} &middot; <span>LGSM User:</span> {{ remote.linuxgsm_user }}{% endif %}
         </span>
         {% endif %}
         <!-- Live stats: last-known values rendered now, refreshed in place by JS -->
@@ -125,8 +125,8 @@
         <div id="live-stats-{{ remote.id }}" class="small text-secondary mt-1" style="font-size:.72rem;"
              {% if st %}data-loaded="1"{% endif %}>
           {% if st %}
-            <i class="bi bi-cpu"></i> CPU: {{ st.cpu_percent }}%
-            &middot; <i class="bi bi-memory"></i> RAM: {{ st.memory }}
+            <i class="bi bi-cpu"></i> <span>CPU:</span> {{ st.cpu_percent }}%
+            &middot; <i class="bi bi-memory"></i> <span>RAM:</span> {{ st.memory }}
             &middot; <i class="bi bi-hdd"></i> {{ st.disk }}
             &middot; {{ st.uptime }}
           {% else %}
