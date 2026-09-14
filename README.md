@@ -223,11 +223,12 @@ only reach packages above it in this list:
 | `panel/core/` | `clock` `config` `i18n` `middleware` `panel_state` `terminal` | — |
 | `panel/db/` | `models` `prefs` | core |
 | `panel/security/` | `auth` `privileged` | core, db |
-| `panel/ops/` | `ssh_manager` `system_ops` `tailscale_integration` `backup` | core, db, security |
-| `panel/services/` | `monitoring` `notifications` `certs` `lgsm_data` | core, db, security, ops |
+| `panel/ops/` | `ssh_manager/` (8 modules) `system_ops` `tailscale_integration` `backup` | core, db, security |
+| `panel/services/` | `monitoring` `notifications` `certs` `lgsm_data` `bots/` | core, db, security, ops |
+| `panel/routes/` | the 26 route modules `register(app)` is assembled from | everything above |
 
 Two *function-local* imports cross that grain on purpose, and only at call time —
-`security/auth.py` reaches `ops.ssh_manager` for `game_engine`, and `ops/ssh_manager.py`
+`security/auth.py` reaches `ops.ssh_manager` for `game_engine`, and `ops/ssh_manager/`
 reaches `services.lgsm_data` for the dependency list. Both are lazy precisely so the module
 graph stays acyclic at import; `tests/unit_test.py` enforces the rule and knows about these two.
 
