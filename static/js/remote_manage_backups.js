@@ -4,10 +4,34 @@
 function bkFmtBytes(b){ b=b||0; if(b<1024)return b+' B'; if(b<1048576)return (b/1024).toFixed(0)+' KB'; if(b<1073741824)return (b/1048576).toFixed(1)+' MB'; if(b<1099511627776)return (b/1073741824).toFixed(1)+' GB'; return (b/1099511627776).toFixed(2)+' TB'; }  // NOPMD
 function bkAgo(epoch){ return window.agoText(epoch); }   // panel.js owns the formatting
 function bkMsg(t,cls){ var m=document.getElementById('bk-msg'); if(m){ m.textContent=t||''; m.className='small '+(cls||'text-secondary'); } }
+// Retention is TYPED now rather than chosen from a list, so two things the dropdown gave for free
+// have to be done explicitly: the field has to carry the server's own bounds, and a value outside
+// them has to be reported rather than silently corrected. The server clamps regardless — that is
+// the safety net and it stays — but a box that accepts "100" and quietly stores 30 while saying
+// "Saved" is worse than the dropdown was.
+function bkApplyLimits(lim){
+  if(!lim) return;
+  [['bk-keep', lim.keep_days], ['fb-keep', lim.full_keep]].forEach(function(pair){
+    var el=document.getElementById(pair[0]), b=pair[1];
+    if(el && b){ el.min=String(b.min); el.max=String(b.max); el.title='Between '+b.min+' and '+b.max+'.'; }
+  });
+  window._bkLimits=lim;
+}
+// Write the value the server ACTUALLY stored back into the box, and say so when it differs from
+// what was typed. Returns a note for the status line, or '' when the two agree.
+function bkReconcile(id, saved){
+  var el=document.getElementById(id);
+  if(!el || saved===undefined || saved===null) return '';
+  var typed=el.value.trim();
+  el.value=String(saved);
+  return (typed!=='' && String(saved)!==typed) ? (' — ' + typed + ' is out of range, kept ' + saved) : '';
+}
 function loadBackups(){
   fetch(MOUNT+'/api/panel/backups').then(r=>r.json()).then(function(d){
     var s=d.settings||{};
     var en=document.getElementById('bk-enabled'); if(en) en.checked = s.enabled!==false;
+    // Bounds come from the server, so the number box and the clamp behind it cannot disagree.
+    bkApplyLimits(d.limits);
     var kp=document.getElementById('bk-keep'); if(kp && s.keep_days) kp.value = String(s.keep_days);
     var tb=document.getElementById('bk-tbody'); if(!tb) return;
     var rows='';
@@ -185,15 +209,27 @@ function fbSummary(){
 }
 function saveBackupSettings(){
   var enabled=document.getElementById('bk-enabled').checked;
+  // An EMPTY or non-numeric box must not be sent as NaN — JSON.stringify turns that into null,
+  // which the server reads as "don't change this field". That is the right outcome (the value on
+  // disk is left alone) and the box is refilled from the response, so a cleared field visibly
+  // snaps back to what is actually stored instead of appearing to have saved a blank.
   var keep=parseInt(document.getElementById('bk-keep').value,10);
+  if(isNaN(keep)) keep=null;
   // Automatic game backups off → send interval 0 (disabled); on → the chosen interval.
   var autoOn=document.getElementById('fb-auto-enabled').checked;
   var fi=autoOn ? (parseInt(document.getElementById('fb-interval').value,10)||7) : 0;
   var fk=parseInt(document.getElementById('fb-keep').value,10);
+  if(isNaN(fk)) fk=null;
   fbSummary();
   fetch(MOUNT+'/api/panel/backup/settings',{method:'POST',headers:{'Content-Type':'application/json'},
         body:JSON.stringify({enabled:enabled,keep_days:keep,full_interval_days:fi,full_keep:fk})})
-    .then(r=>r.json()).then(function(){ bkMsg('✓ Saved','text-success'); }).catch(function(){ bkMsg('✗ Could not save','text-danger'); });
+    .then(r=>r.json()).then(function(d){
+      var note = bkReconcile('bk-keep', (d.settings||{}).keep_days)
+               + bkReconcile('fb-keep', (d.full||{}).keep);
+      bkMsg('✓ Saved'+note, note?'text-warning':'text-success');
+      fbSummary();   // the disk projection is a function of "keep" — recompute from the SAVED value
+      bkRefreshDefaultNotes(d.full);   // ...and so is every row that inherits it
+    }).catch(function(){ bkMsg('✗ Could not save','text-danger'); });
 }
 function runFullBackup(btn){
   // First check who's online — if any server has players, ask before disconnecting them.
@@ -276,25 +312,61 @@ function schedNote(sc){
 }
 function gameSchedule(g){
   var sc=g.schedule||{interval_days:0,keep:2,interval_set:false,keep_set:false,last:0};
+  // Kept so a change to the GLOBAL default can re-render the rows that inherit it. Without this
+  // they keep showing the old number until the page is reloaded, so the screen contradicts itself:
+  // "Keep per server 4" above, "Using default — weekly, keep 3" on every row below. Re-rendering
+  // from the stored schedule costs nothing; reloading the list would be one SSH per server.
+  (window._bkSched || (window._bkSched = {}))[g.id] = sc;
   var ivVal=sc.interval_set?String(sc.interval_days):'default';
-  var kpVal=sc.keep_set?String(sc.keep):'default';
   function opt(v,label,cur){ return '<option value="'+v+'"'+(String(v)===cur?' selected':'')+'>'+label+'</option>'; }
   var ivSel='<select class="form-select form-select-sm py-0" style="width:auto;" id="gsi-'+g.id+'"' + _da('setGameSchedule', [g.id], 'change') + '>'
     +opt('default','Default',ivVal)+opt('0','Off',ivVal)+opt('1','Daily',ivVal)+opt('7','Weekly',ivVal)+opt('14','Every 2 weeks',ivVal)+opt('30','Monthly',ivVal)+'</select>';
-  var kpSel='<select class="form-select form-select-sm py-0" style="width:auto;" id="gsk-'+g.id+'"' + _da('setGameSchedule', [g.id], 'change') + '>'
-    +opt('default','Default',kpVal)+opt('1','1',kpVal)+opt('2','2',kpVal)+opt('3','3',kpVal)+opt('5','5',kpVal)+opt('7','7',kpVal)+opt('14','14',kpVal)+opt('30','30',kpVal)+'</select>';
+  // Typed, not picked — the same change as the two global boxes above. A <select> could carry a
+  // labelled "Default" option; a number box says it by being EMPTY, so the placeholder has to
+  // carry that meaning and the endpoint has to read "" as "inherit".
+  var kpLim=(window._bkLimits&&window._bkLimits.full_keep)||{min:1,max:30};
+  var kpSel='<input type="number" class="form-control form-control-sm py-0 d-inline-block"'
+    +' style="width:5.5rem;" min="'+kpLim.min+'" max="'+kpLim.max+'" step="1" inputmode="numeric"'
+    +' placeholder="Default" title="Blank = use the default above. Between '+kpLim.min+' and '+kpLim.max+'."'
+    +' value="'+(sc.keep_set?escapeHtml(String(sc.keep)):'')+'" id="gsk-'+g.id+'"'
+    + _da('setGameSchedule', [g.id], 'change') + '>';
   return '<div class="d-flex align-items-center gap-2 flex-wrap small my-1">'
     +'<span class="text-secondary"><i class="bi bi-calendar-event"></i> Schedule:</span>'+ivSel
     +'<span class="text-secondary">Keep</span>'+kpSel
     +'<span class="text-secondary" id="gsn-'+g.id+'">'+schedNote(sc)+'</span></div>';
 }
+// Re-render the note on every row that INHERITS the global schedule, after that global changed.
+// A row with its own override is left alone — its note is already correct.
+function bkRefreshDefaultNotes(full){
+  if(!full || !window._bkSched) return;
+  Object.keys(window._bkSched).forEach(function(id){
+    var sc=window._bkSched[id];
+    if(sc.interval_set && sc.keep_set) return;
+    if(!sc.interval_set) sc.interval_days=full.interval_days;
+    if(!sc.keep_set) sc.keep=full.keep;
+    var n=document.getElementById('gsn-'+id);
+    if(n) n.innerHTML=schedNote(sc);  // nosemgrep — schedNote composes from numbers, not user text
+  });
+}
 function setGameSchedule(id){
-  var iv=document.getElementById('gsi-'+id).value, kp=document.getElementById('gsk-'+id).value;
+  var kpEl=document.getElementById('gsk-'+id);
+  var iv=document.getElementById('gsi-'+id).value, kp=kpEl.value.trim();   // "" = inherit the default
   bkMsg('Saving schedule…','text-secondary');
   fetch(MOUNT+'/api/panel/backup/game/'+id+'/schedule',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({interval:iv,keep:kp})})
     .then(r=>r.json()).then(function(d){
-      bkMsg(d.success?'✓ Schedule saved':'✗ Save failed', d.success?'text-success':'text-danger');
-      if(d.success&&d.schedule){ var n=document.getElementById('gsn-'+id); if(n) n.innerHTML=schedNote(d.schedule); }  // nosemgrep
+      if(d.success&&d.schedule){
+        if(window._bkSched) window._bkSched[id]=d.schedule;
+        var n=document.getElementById('gsn-'+id); if(n) n.innerHTML=schedNote(d.schedule);  // nosemgrep
+        // Show what was really stored. A typed number outside the bounds is clamped server-side, and
+        // an override that was cleared has to empty the box rather than leave the old text sitting
+        // in it looking like it still applies.
+        var saved=d.schedule.keep_set?String(d.schedule.keep):'';
+        var note=(kp!=='' && d.schedule.keep_set && saved!==kp) ? (' — '+kp+' is out of range, kept '+saved) : '';
+        kpEl.value=saved;
+        bkMsg('✓ Schedule saved'+note, note?'text-warning':'text-success');
+      } else {
+        bkMsg('✗ Save failed','text-danger');
+      }
     }).catch(function(){ bkMsg('✗ Could not save schedule','text-danger'); });
 }
 function deleteGameBackup(btn){

@@ -36,6 +36,24 @@ _MEMBERS = ("panel.db", "config.json", "secret_key", "cred_key")
 
 DEFAULT_KEEP_DAYS = 14
 
+# How many panel backups may be retained, in days. Named rather than inlined into the clamp because
+# the UI now lets the number be TYPED rather than picked from a list, so the browser needs the same
+# bound the server enforces — /api/panel/backups hands these out (see keep_limits).
+MIN_KEEP_DAYS, MAX_KEEP_DAYS = 1, 365
+# Game-server backups are whole game directories — gigabytes each — so the ceiling is far lower
+# than the panel's own. This was already the effective maximum: it is what the clamp used, and the
+# dropdown it replaces stopped at 30.
+MIN_FULL_KEEP, MAX_FULL_KEEP = 1, 30
+# The backup INTERVAL shares the panel bound; 0 means "off" so it has no floor of its own.
+MAX_INTERVAL_DAYS = 365
+
+
+def keep_limits():
+    """The bounds the UI must not let a typed value exceed, so the number field and the clamp below
+    cannot disagree. A dropdown could not be wrong; a text box can, so it is told."""
+    return {"keep_days": {"min": MIN_KEEP_DAYS, "max": MAX_KEEP_DAYS},
+            "full_keep": {"min": MIN_FULL_KEEP, "max": MAX_FULL_KEEP}}
+
 
 def _ensure_dir():
     BACKUP_DIR.mkdir(parents=True, exist_ok=True)
@@ -288,7 +306,8 @@ def get_settings():
         keep = int(cfg.get("backup_keep_days", DEFAULT_KEEP_DAYS))
     except (TypeError, ValueError):
         keep = DEFAULT_KEEP_DAYS
-    return {"enabled": bool(cfg.get("backup_enabled", True)), "keep_days": max(1, min(365, keep))}
+    return {"enabled": bool(cfg.get("backup_enabled", True)),
+            "keep_days": max(MIN_KEEP_DAYS, min(MAX_KEEP_DAYS, keep))}
 
 
 def set_settings(enabled=None, keep_days=None):
@@ -297,7 +316,7 @@ def set_settings(enabled=None, keep_days=None):
             cfg["backup_enabled"] = bool(enabled)
         if keep_days is not None:
             try:
-                cfg["backup_keep_days"] = max(1, min(365, int(keep_days)))
+                cfg["backup_keep_days"] = max(MIN_KEEP_DAYS, min(MAX_KEEP_DAYS, int(keep_days)))
             except (TypeError, ValueError):
                 _log.debug("ignored invalid keep_days", exc_info=True)
     update_config(_mut)
@@ -319,8 +338,9 @@ def get_full_settings():
         except (TypeError, ValueError):
             return d
     return {
-        "interval_days": max(0, min(365, _int("full_backup_interval_days", DEFAULT_FULL_INTERVAL))),
-        "keep": max(1, min(30, _int("full_backup_keep", DEFAULT_FULL_KEEP))),
+        "interval_days": max(0, min(MAX_INTERVAL_DAYS,
+                                    _int("full_backup_interval_days", DEFAULT_FULL_INTERVAL))),
+        "keep": max(MIN_FULL_KEEP, min(MAX_FULL_KEEP, _int("full_backup_keep", DEFAULT_FULL_KEEP))),
         "last": _int("full_backup_last", 0),
         "summary": cfg.get("full_backup_summary", ""),
     }
@@ -330,12 +350,12 @@ def set_full_settings(interval_days=None, keep=None):
     def _mut(cfg):
         if interval_days is not None:
             try:
-                cfg["full_backup_interval_days"] = max(0, min(365, int(interval_days)))
+                cfg["full_backup_interval_days"] = max(0, min(MAX_INTERVAL_DAYS, int(interval_days)))
             except (TypeError, ValueError):
                 _log.debug("ignored invalid full interval", exc_info=True)
         if keep is not None:
             try:
-                cfg["full_backup_keep"] = max(1, min(30, int(keep)))
+                cfg["full_backup_keep"] = max(MIN_FULL_KEEP, min(MAX_FULL_KEEP, int(keep)))
             except (TypeError, ValueError):
                 _log.debug("ignored invalid full keep", exc_info=True)
     update_config(_mut)
@@ -376,8 +396,10 @@ def get_game_schedule(sid):
         except (TypeError, ValueError):
             return dflt
     return {
-        "interval_days": _clamp(entry["interval_days"], 0, 365, d["interval_days"]) if has_iv else d["interval_days"],
-        "keep": _clamp(entry["keep"], 1, 30, d["keep"]) if has_keep else d["keep"],
+        "interval_days": (_clamp(entry["interval_days"], 0, MAX_INTERVAL_DAYS, d["interval_days"])
+                          if has_iv else d["interval_days"]),
+        "keep": (_clamp(entry["keep"], MIN_FULL_KEEP, MAX_FULL_KEEP, d["keep"])
+                 if has_keep else d["keep"]),
         "last": _clamp(entry.get("last", 0), 0, 2 ** 63, 0),
         "overridden": has_iv or has_keep,
         "interval_set": has_iv,   # True → this server overrides the interval (else inherits default)
@@ -403,11 +425,11 @@ def set_game_schedule(sid, interval_days, keep):
         if interval_days is None:
             entry.pop("interval_days", None)
         else:
-            entry["interval_days"] = max(0, min(365, int(interval_days)))
+            entry["interval_days"] = max(0, min(MAX_INTERVAL_DAYS, int(interval_days)))
         if keep is None:
             entry.pop("keep", None)
         else:
-            entry["keep"] = max(1, min(30, int(keep)))
+            entry["keep"] = max(MIN_FULL_KEEP, min(MAX_FULL_KEEP, int(keep)))
         if entry:
             sched[str(sid)] = entry
         else:

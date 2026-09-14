@@ -80,6 +80,7 @@ _lgsm_data._mem.clear()
 from app import create_app
 from panel.db.models import db, User, Group, RemoteServer, GameServer, SetupState, CustomCommand
 from panel.security import auth
+from panel.ops import backup as bk
 
 app = create_app()
 app.config["WTF_CSRF_ENABLED"] = False   # test client posts without a browser-issued token
@@ -382,6 +383,42 @@ try:
     check("backups: settings save round-trips keep_days + full settings",
           (bset.get_json() or {}).get("settings", {}).get("keep_days") == 7
           and (bset.get_json() or {}).get("full", {}).get("interval_days") == 7)
+    # Retention is TYPED in the UI now rather than picked from a list, which changes two things the
+    # API has to hold up: the browser needs the server's own bounds (it cannot invent them and stay
+    # in step), and an out-of-range number has to come back CLAMPED in the response so the page can
+    # show what was really stored instead of echoing what was typed.
+    check("backups: the response carries the retention bounds the UI enforces",
+          isinstance(_blj.get("limits"), dict)
+          and _blj["limits"].get("full_keep", {}).get("max") == bk.MAX_FULL_KEEP
+          and _blj["limits"].get("keep_days", {}).get("max") == bk.MAX_KEEP_DAYS,
+          str(_blj.get("limits"))[:80])
+    _over = c.post("/api/panel/backup/settings",
+                   json={"enabled": True, "keep_days": 99999, "full_interval_days": 7,
+                         "full_keep": 999}).get_json() or {}
+    check("backups: an out-of-range keep comes back clamped, not echoed",
+          _over.get("settings", {}).get("keep_days") == bk.MAX_KEEP_DAYS
+          and _over.get("full", {}).get("keep") == bk.MAX_FULL_KEEP,
+          "%s / %s" % (_over.get("settings"), _over.get("full")))
+    c.post("/api/panel/backup/settings", json={"enabled": True, "keep_days": 7,
+                                               "full_interval_days": 7, "full_keep": 2})
+
+    # A per-server override is set by typing a number and CLEARED by emptying the box. A <select>
+    # could carry a labelled "Default" option; a number input says it by being empty, so "" has to
+    # mean the same thing to the endpoint as the old "default" did.
+    _sch = c.post("/api/panel/backup/game/%d/schedule" % gs_id,
+                  json={"interval": "default", "keep": "5"}).get_json() or {}
+    check("backups: a typed per-server keep sets an override",
+          _sch.get("schedule", {}).get("keep") == 5 and _sch["schedule"].get("keep_set") is True,
+          str(_sch.get("schedule")))
+    _sch = c.post("/api/panel/backup/game/%d/schedule" % gs_id,
+                  json={"interval": "default", "keep": "999"}).get_json() or {}
+    check("backups: a per-server keep over the maximum is clamped",
+          _sch.get("schedule", {}).get("keep") == bk.MAX_FULL_KEEP, str(_sch.get("schedule")))
+    _sch = c.post("/api/panel/backup/game/%d/schedule" % gs_id,
+                  json={"interval": "default", "keep": ""}).get_json() or {}
+    check("backups: an EMPTY per-server keep clears the override (inherits the default)",
+          _sch.get("schedule", {}).get("keep_set") is False, str(_sch.get("schedule")))
+
     bdel = c.post("/api/panel/backup/delete", json={"name": "../../etc/passwd"})
     check("backups: delete rejects a traversal name", not (bdel.get_json() or {}).get("success"))
     bres = c.post("/api/panel/backup/restore", json={"name": "nope.tar.gz"})

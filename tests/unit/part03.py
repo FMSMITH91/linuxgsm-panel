@@ -1,5 +1,5 @@
 """Part 3 of the unit suite. Imported for its side effects."""
-from unit.part01 import (NS, SO, _sm_core, _sm_cron, _sm_files, _sm_firewall, _sm_hosts, _sm_portscan, check, config, eq, os, sys)  # noqa: F401,E402
+from unit.part01 import (NS, SO, _root, _sm_core, _sm_cron, _sm_files, _sm_firewall, _sm_hosts, _sm_portscan, check, config, eq, os, sys)  # noqa: F401,E402
 from unit.part02 import (_User, _codes, _u)  # noqa: F401,E402
 check("backup: a different code still works", _u.use_backup_code(_codes[1]))
 check("backup: no codes set is handled", not _User().use_backup_code("whatever"))
@@ -107,6 +107,39 @@ _intg = _so.panel_integrity(force=True)   # force: each scenario mocks a differe
 check("integrity: reports git checkout", _intg["git"] is True)
 eq("integrity: counts tampered files", _intg["count"], 2)
 check("integrity: not clean when files differ", _intg["clean"] is False)
+
+# ── Backup retention: the bound the UI enforces IS the bound the server clamps to ─────────────
+# Retention is TYPED now rather than picked from a list, so the number box carries min/max. A
+# dropdown could not offer an out-of-range value; a text box can, which means the browser's bound
+# and the server's clamp are two statements of the same rule and can drift apart. keep_limits() is
+# the one the UI is handed, so drive the setters with values outside it and check they land on it.
+from panel.ops import backup as _bk_lim
+_lim = _bk_lim.keep_limits()
+eq("keep-limits: exposes both retention bounds", sorted(_lim), ["full_keep", "keep_days"])
+eq("keep-limits: panel keep_days bound", (_lim["keep_days"]["min"], _lim["keep_days"]["max"]),
+   (_bk_lim.MIN_KEEP_DAYS, _bk_lim.MAX_KEEP_DAYS))
+eq("keep-limits: game full_keep bound", (_lim["full_keep"]["min"], _lim["full_keep"]["max"]),
+   (_bk_lim.MIN_FULL_KEEP, _bk_lim.MAX_FULL_KEEP))
+check("keep-limits: a game backup ceiling well under the panel's (each one is a whole game dir)",
+      _lim["full_keep"]["max"] < _lim["keep_days"]["max"])
+
+# The controls in the template must BE number boxes carrying those bounds — the whole point of the
+# change is that the value is typed. A <select> here would silently take the feature back out.
+_rm_html = open(os.path.join(_root, "templates", "remote_manage.html"), encoding="utf-8").read()
+import re as _re_bk
+for _id, _b in (("bk-keep", _lim["keep_days"]), ("fb-keep", _lim["full_keep"])):
+    _tag = _re_bk.search(r'<(\w+)[^>]*\bid="%s"[^>]*>' % _id, _rm_html)
+    check("backup UI: %s is an <input>, not a <select>" % _id,
+          _tag is not None and _tag.group(1) == "input", _tag.group(1) if _tag else "not found")
+    _attrs = _tag.group(0) if _tag else ""
+    check("backup UI: %s is type=number" % _id, 'type="number"' in _attrs)
+    check("backup UI: %s carries the server's min/max" % _id,
+          'min="%d"' % _b["min"] in _attrs and 'max="%d"' % _b["max"] in _attrs, _attrs[:90])
+check("backup UI: the per-server override is a number box with a Default placeholder",
+      'placeholder="Default"' in open(os.path.join(_root, "static", "js",
+                                                   "remote_manage_backups.js"),
+                                      encoding="utf-8").read())
+
 
 # ── update-noise filter: only real runtime changes should raise the "update available" badge ──
 check("runtime-path: app.py counts", _so._is_runtime_path("app.py") is True)
