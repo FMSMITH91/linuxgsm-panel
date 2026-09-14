@@ -5,6 +5,7 @@ Moved out of register_routes() verbatim — see panel/routes/__init__.py for why
 from flask import (Response, abort, jsonify, request, send_file)
 from flask_login import (current_user, login_required)
 from panel.core.panel_state import (_full_backup_lock, _game_backup_status)
+from sqlalchemy.orm import (joinedload)
 from panel.db.models import (GameServer, RemoteServer, db)
 from panel.ops import (backup as bk, system_ops as so)
 from panel.ops.ssh_manager import (backup_disk_info, delete_game_backup, list_game_backups,
@@ -305,16 +306,26 @@ def register(app):
             backup_bytes = 0   # total size of all existing game backups
             est_cycle = 0      # estimated size of ONE full backup run (all servers), from newest each
             disk_by_remote = {}   # remote_id -> {free,total}; computed once per host
-            servers = [g for g in GameServer.query.filter_by(installed=True).all() if g.remote_id]
+            # joinedload the remote: the worker below needs it, and letting each worker lazy-load
+            # its own cost one SELECT per server on top of the one it already did to re-fetch the
+            # server. At 300 servers that was 644 queries for this endpoint; it is now host-bounded.
+            servers = [g for g in GameServer.query.options(joinedload(GameServer.remote))
+                       .filter_by(installed=True).all() if g.remote_id]
             # One SSH per server (LinuxGSM backup list) + one per host (disk) — fetched in PARALLEL so
             # the page doesn't load in N sequential round trips; the aggregation below touches no SSH.
-            def _bk_list(sid):
-                with app.app_context():
-                    g = db.session.get(GameServer, sid)
-                    try:
-                        return sid, (list_game_backups(g.remote, g.short_name) if g else [])
-                    except Exception:
-                        return sid, []
+            #
+            # The worker takes the remote and short_name it needs as ARGUMENTS rather than re-reading
+            # them from the database. It used to open its own app_context and re-fetch the
+            # GameServer by id — one query, plus a second when it touched g.remote — which is the
+            # whole N+1. Both objects are fully loaded above (joinedload), so the worker only reads
+            # attributes already in memory: no session is touched from the thread, which is the
+            # reason the re-fetch was there in the first place.
+            def _bk_list(item):
+                sid, remote, short = item
+                try:
+                    return sid, list_game_backups(remote, short)
+                except Exception:
+                    return sid, []
 
             def _bk_disk(item):
                 rid, short = item
@@ -330,7 +341,7 @@ def register(app):
                 remote_short.setdefault(g.remote_id, g.short_name)
             if servers:
                 with concurrent.futures.ThreadPoolExecutor(max_workers=min(_PLAYER_POLL_WORKERS, len(servers))) as ex:
-                    for sid, gb in ex.map(_bk_list, [g.id for g in servers]):
+                    for sid, gb in ex.map(_bk_list, [(g.id, g.remote, g.short_name) for g in servers]):
                         gb_by_sid[sid] = gb
             if remote_short:
                 with concurrent.futures.ThreadPoolExecutor(max_workers=min(_PLAYER_POLL_WORKERS, len(remote_short))) as ex:

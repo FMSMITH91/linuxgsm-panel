@@ -130,7 +130,7 @@ jobs:
         run: |
           echo "| suite | seconds |" > /tmp/suite_times.md
           echo "| --- | ---: |" >> /tmp/suite_times.md
-          for suite in unit template_actions smoke rbac manage setup_wizard; do
+          for suite in unit template_actions smoke rbac manage setup_wizard perf_budget; do
             _t0=$SECONDS
             rm -f data/panel.db data/panel.db-shm data/panel.db-wal data/panel.db.backup
             python -m coverage run --parallel-mode --source=. \

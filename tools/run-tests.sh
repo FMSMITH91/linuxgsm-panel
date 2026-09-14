@@ -108,6 +108,12 @@ run_suite "manage.py (the offline recovery CLI: lock-out guard, session revocati
 run_suite "setup wizard (the unauthenticated first-run flow, and the lock that closes it)" \
     tests/setup_wizard_test.py
 
+# Renders every GET page twice — same hosts, 5x the game servers — and fails if any page's query
+# count grows with the servers. smoke_test budgets two endpoints by number; this one asserts the
+# SHAPE, so a new page is covered the day it is added and nobody maintains a per-endpoint budget.
+run_suite "perf budget (no page's query count scales with the number of game servers)" \
+    tests/perf_budget_test.py
+
 # CI runs this bare, which is right there. On a DEVELOPER machine use ./tools/smoke-local.sh
 # instead of this script: booting the app fires real `sudo -n` probes (pam_faillock counts each
 # one and will lock you out of your own sudo) and real outbound SSH to the fixture hosts. That
