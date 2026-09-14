@@ -43,7 +43,11 @@ def register(app):
             #
             # This is the same shape remote_ufw_status() returns when the command runs but fails,
             # so the template has one unreachable state to render rather than two.
-            _log.info("remote firewall page: %s unreachable", remote_id, exc_info=True)
+            # remote.id, not the raw remote_id path segment: get_remote() has already looked the
+            # host up and enforced access, so this is the integer primary key off the row rather
+            # than request input reaching a log sink (py/log-injection). Same shape as the other
+            # id-logging sites in panel/routes/_shared.py.
+            _log.info("remote firewall page: remote %s unreachable", remote.id, exc_info=True)
             status = {"installed": False, "enabled": False, "rules": [], "groups": [],
                       "unreachable": True}
         games = GameServer.query.filter_by(remote_id=remote_id).all()
