@@ -4273,6 +4273,33 @@ for _f in _SMG_STUB_FILES:
 check("ssh_manager: no test stubs onto the PACKAGE (it would shadow __getattr__)",
       not _smg_pkg_stubs, "; ".join(_smg_pkg_stubs[:4]))
 
+# A module-level PRIVATE variable that nothing in its own module reads is dead code to CodeQL
+# (py/unused-global-variable) however many sibling modules import it — `from x import _y` is not a
+# use it can follow across an import cycle, and this package has cycles by construction
+# (firewall <-> hosts, cron <-> files). It announced itself the hard way: the split merged, and two
+# alerts opened on main within minutes, on Ubuntu Pro constants whose only consumers were in
+# hosts.py. The fix is to move the name to its consumer, not to annotate it — same rule as
+# panel/routes/__init__.py records for app.py. This keeps that from recurring silently.
+_smv_bad = []
+for _f in sorted(os.listdir(_SMPKG)):
+    if not _f.endswith(".py"):
+        continue
+    _tree = _smg_ast.parse(open(os.path.join(_SMPKG, _f), encoding="utf-8").read())
+    _defined = {}
+    for _n in _tree.body:
+        if isinstance(_n, _smg_ast.Assign):
+            for _x in _n.targets:
+                if isinstance(_x, _smg_ast.Name) and _x.id.startswith("_") \
+                        and not _x.id.startswith("__"):
+                    _defined[_x.id] = _n.lineno
+    _readnames = {_n.id for _n in _smg_ast.walk(_tree)
+                  if isinstance(_n, _smg_ast.Name) and isinstance(_n.ctx, _smg_ast.Load)}
+    for _k, _ln in _defined.items():
+        if _k not in _readnames:
+            _smv_bad.append("%s:%d %s" % (_f, _ln, _k))
+check("ssh_manager: every module-private variable is read in its OWN module (CodeQL counts it dead otherwise)",
+      not _smv_bad, "; ".join(_smv_bad[:4]))
+
 # ── Every test suite must actually be WIRED IN ────────────────────────────────────────────────
 # Both places that run the suites keep a hand-written list: tools/run-tests.sh (which CI runs) and
 # the `for suite in ...` loop in the coverage job. A suite added to tests/ and forgotten in either
