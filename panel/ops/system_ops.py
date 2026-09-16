@@ -526,7 +526,9 @@ def _read_cpu_jiffies():
                     # idle + iowait, exactly as the remote sampler counts it
                     return (f[3] + (f[4] if len(f) > 4 else 0)), sum(f)
     except (OSError, ValueError):
-        pass
+        # A missing or unparseable /proc/stat is not an error worth surfacing: the caller renders
+        # the "?" it already renders on any host that cannot answer, and this runs every 15s.
+        _log.debug("_read_cpu_jiffies: ignored non-fatal error", exc_info=True)
     return 0, 0
 
 
