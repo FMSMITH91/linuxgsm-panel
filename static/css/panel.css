@@ -528,6 +528,13 @@
       }
       /* The header has its own colour by design, and no accent state to track. */
       .table-responsive .table thead th.col-actions { background-color: var(--bg-elevated); }
+      /* The host tile is the only one carrying TWO values, and it did not fit. Measured at 375px:
+         "52.6% · 14.6%" needs 181px at the tile's 23px font while a half-width tile gives 132px,
+         so it broke after the separator and left a dangling "·" on the first line. A 3-digit
+         worst case ("100.0% · 100.0%") needs 207px. Shrinking the number to fit would mean ~14.6px
+         against every other tile's 23px, so it takes the whole row instead — which is where it
+         already sits in the default tile order anyway. */
+      #dash-tiles .col[data-panel="host"] { width: 100%; }
       .row { --bs-gutter-x: .75rem; }
       .btn { font-size: .8rem; padding: .45rem .8rem; }
       .btn-sm { font-size: .75rem; padding: .35rem .6rem; }
@@ -540,6 +547,27 @@
       .sidebar { transform: none !important; }
       .topbar { display: none; }
       .hamburger { display: none; }
+    }
+
+    /* The host tile carries TWO values where every other tile carries one, and at five tiles
+       across there is no width for them at heading size: measured at 1280px the tile gives 143px
+       of content and "52.6% · 14.6%" needs 220px at 28px (a 3-digit worst case, 251px). It broke
+       after the separator and left a dangling "·", and made that one card taller than its row.
+       Even dropping the decimals needs 173px, so this is a width problem, not a precision one.
+       The number therefore renders smaller HERE than in the single-value tiles — it is carrying
+       thirteen characters against their one. 0.95rem fits the worst case in 136px of the 143px.
+       Mobile does not need this: there the tile takes the whole row (see the media query above)
+       and keeps the full size — which is why this is a min-width query and not a max-width
+       override: `font-size: inherit` would take the CARD's 16px rather than reverting to the .h3
+       size, shrinking the number on mobile, the opposite of what the full-row rule is for. */
+    @media (min-width: 768px) {
+      #host-summary {
+        font-size: .95rem;
+        /* Keep the LINE BOX the size a .h3 would occupy (28px x 1.2 = 33.6px), or the smaller
+           number leaves this card 15px shorter than the four beside it — swapping a too-tall card
+           for a too-short one. 2.1rem is that 33.6px. */
+        line-height: 2.1rem;
+      }
     }
 
     /* ── COMMAND PALETTE (Ctrl/⌘+K) ── */
