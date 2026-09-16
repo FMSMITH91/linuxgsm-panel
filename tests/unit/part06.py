@@ -1,5 +1,5 @@
 """Part 6 of the unit suite. Imported for its side effects."""
-from unit.part01 import (N, NS, SO, _modfiles, _modpath, _modsrc, _privmod, _sm_core, _sm_cron, _sm_firewall, _sm_hosts, _sub, _ufw_raises_verb, check, eq, glob, json, os, re, sys)  # noqa: F401,E402
+from unit.part01 import (N, NS, SO, _modfiles, _modpath, _modsrc, _privmod, _sm_core, _sm_cron, _sm_firewall, _sm_hosts, _sub, _ufw_raises_verb, check, eq, skip, glob, json, os, re, sys)  # noqa: F401,E402
 from unit import REPO_ROOT as _UNIT_ROOT  # noqa: E402
 
 from unit.part05 import (_ast_scan, _helper, _helper_path, _ilu, _machinery, _priv, _re, _root, _shutil, _sp, _t, _tempfile, _time)  # noqa: F401,E402
@@ -125,7 +125,7 @@ try:
         _time.sleep(0.2)
     check("reboot: the detached child fires after the delay", os.path.exists(_marker))
 except Exception as _e:                     # a sandbox that forbids fork should not fail the suite
-    check("reboot: deferred-reboot probe ran", True, "skipped: %s" % _e)
+    skip("reboot: the detached child fires after the delay", _e)
 
 _shutil.rmtree(_sandbox, ignore_errors=True)
 
@@ -261,7 +261,7 @@ try:
           not any("bad" in h for h in _hits), str(_hits))
     _shutil.rmtree(_scanroot, ignore_errors=True)
 except OSError as _e:
-    check("content scan exercised", True, "skipped: %s" % _e)
+    skip("content scan", _e)
 
 
 # ── the detached OS-update runner ─────────────────────────────────────────────────────────────
@@ -278,7 +278,7 @@ _osu = None
 try:
     _osu = _tempfile.mkdtemp(prefix="panel-osupd-")
 except OSError as _e:
-    check("os update: detached runner exercised", True, "skipped: %s" % _e)
+    skip("os update: detached runner", _e)
 if _osu:
     _fake_apt = os.path.join(_osu, "fake-apt")
     open(_fake_apt, "w").write("#!/bin/sh\necho \"fake apt: $*\"\n"
@@ -416,7 +416,7 @@ try:
           _stat.S_IMODE(os.stat(_hh.SSHD_CONFIG).st_mode) == 0o600)
     _shutil.rmtree(_hdir, ignore_errors=True)
 except OSError as _e:
-    check("sshd hardening exercised", True, "skipped: %s" % _e)
+    skip("sshd hardening", _e)
 
 # The swap shell form had a precedence bug. `a && b && c && grep -q … || echo … >> /etc/fstab`
 # parses as `((a && b) && c && grep) || echo`, so the fstab line was appended whenever ANY step
@@ -498,7 +498,7 @@ try:
           not any("Unban" in ln for ln in _got), str(_got))
     _shutil.rmtree(_logdir, ignore_errors=True)
 except OSError as _e:
-    check("f2b log read exercised", True, "skipped: %s" % _e)
+    skip("f2b log read", _e)
 
 
 # ── isdigit() is not "int() will accept this" ─────────────────────────────────────────────────

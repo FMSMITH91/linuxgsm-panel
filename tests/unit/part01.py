@@ -107,6 +107,22 @@ def check(name, cond, detail=""):
     results.append((bool(cond), name, detail))
 
 
+def skip(name, reason):
+    """Record a check that did NOT run, as a SKIP — never as a pass.
+
+    Several blocks below need something the environment may not give them (fork, a writable temp
+    dir, a second group to test a permission against). Refusing to run is reasonable; reporting
+    `PASS` for it is not, and that is what `check(name, True, "skipped: …")` did — a green line for
+    a check that never executed, which is indistinguishable from one that did. tools/run-tests.sh
+    already refuses a suite-level SKIP for exactly this reason ("a skip that exits 0 reads exactly
+    like a pass"); this applies the same rule one level down, to a single check.
+
+    A skip does not fail the run — the environment is not the code's fault — but it is printed as
+    SKIP and counted separately, so a block that quietly stops running is visible rather than
+    absorbed into the pass count."""
+    results.append((None, name, "skipped: %s" % reason))
+
+
 def eq(name, got, want):
     check(name, got == want, "got %r want %r" % (got, want))
 

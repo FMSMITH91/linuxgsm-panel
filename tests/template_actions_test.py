@@ -34,6 +34,16 @@ def check(cond, name, detail=""):
     results.append((bool(cond), name, detail))
 
 
+def skip(name, reason):
+    """Record a check that did NOT run, as a SKIP — never as a pass.
+
+    The JS-parse gate needs esprima, which is optional locally and installed in CI. Recording that
+    as `check(True, "… (SKIPPED)")` printed PASS: a green line for a gate that parsed nothing, and
+    the one time it mattered would be the time someone trusted it. Counted apart and printed
+    loudly instead."""
+    results.append((None, name, reason))
+
+
 # base.html's dispatcher and most of its handlers now live in a cacheable static file rather than
 # inline, so the handler definitions this test resolves against are in static/js as well as in the
 # templates. Both are searched; the filename is only ever used for reporting.
@@ -73,7 +83,7 @@ try:
     import esprima
 except ImportError:
     esprima = None
-    check(True, "static/js: JavaScript parses (SKIPPED — pip install esprima to enable)")
+    skip("static/js: every file parses as JavaScript", "esprima not installed (pip install esprima)")
 if esprima:
     _broken = []
     for _p in sorted((ROOT / "static" / "js").glob("*.js")):
@@ -570,6 +580,67 @@ check(not _bad_targets,
       "templates: every data-bs-target names an element that exists",
       "; ".join(_bad_targets[:5]))
 
+# ── 0h. nothing the Content-Security-Policy silently kills ────────────────────────────────────
+# script-src is 'self' plus a per-request nonce, with NO 'unsafe-inline'. Two things therefore do
+# not run, and neither reports anything a user would see:
+#
+#   * an inline handler — onclick="foo()". A nonce does not help; inline handlers need
+#     'unsafe-inline' specifically. THE bug: the GMod "Apply mounts" button carried an inline
+#     onclick and clicking it did nothing (the Settings accent-colour picker's oninput too).
+#   * a <script> block with no nonce="{{ csp_nonce }}" — the browser refuses to execute it, so
+#     every handler and poller it defines is simply absent.
+#
+# Both are what a person writes by habit, both look completely normal in review, and both fail
+# silently at runtime. The codebase is clean of both today (0 inline handlers, 39/39 scripts
+# nonce'd), which is what makes this a gate rather than a baseline.
+_ON_ATTR = re.compile(r"""\son(?:click|change|submit|input|keydown|keyup|focus|blur|load|error|"""
+                      r"""mouseover|mouseout|dblclick|paste|drop|dragover)\s*=\s*["']""")
+_csp_dead = []
+for _tpl in sorted((ROOT / "templates").glob("*.html")):
+    _src = _tpl.read_text(encoding="utf-8")
+    for _m in _ON_ATTR.finditer(_src):
+        _csp_dead.append("%s:%d inline %s" % (_tpl.name, _src[:_m.start()].count("\n") + 1,
+                                              _m.group(0).strip()))
+# `el.onclick = fn` is a PROPERTY assignment and runs fine — the regex needs whitespace before
+# `on`, and a property access has a dot there, so those are not matched. Only the attribute shape
+# inside JS-built markup is.
+for _js in sorted((ROOT / "static" / "js").glob("*.js")):
+    _src = _js.read_text(encoding="utf-8")
+    for _m in _ON_ATTR.finditer(_src):
+        _csp_dead.append("%s:%d inline %s" % (_js.name, _src[:_m.start()].count("\n") + 1,
+                                              _m.group(0).strip()))
+check(not _csp_dead,
+      "CSP: no inline on*= handler anywhere (the policy blocks them; the click does nothing)",
+      "; ".join(_csp_dead[:5]))
+
+_SCRIPT_TAG = re.compile(r"<script\b[^>]*>")
+_unnonced = []
+for _tpl in sorted((ROOT / "templates").glob("*.html")):
+    _src = _tpl.read_text(encoding="utf-8")
+    for _m in _SCRIPT_TAG.finditer(_src):
+        if "nonce=" not in _m.group(0):
+            _unnonced.append("%s:%d %s" % (_tpl.name, _src[:_m.start()].count("\n") + 1,
+                                           " ".join(_m.group(0).split())[:70]))
+check(not _unnonced,
+      "CSP: every <script> in a template carries the nonce (without it the browser refuses it)",
+      "; ".join(_unnonced[:5]))
+
+# ── 0i. every in-page fetch goes through the mount prefix ─────────────────────────────────────
+# The panel can be served under a sub-path (Tailscale Serve at /lgsm), and window.MOUNT carries it.
+# A fetch written as '/api/...' instead of MOUNT + '/api/...' hits the site ROOT — a different
+# application — so the call 404s and whatever it fed shows nothing. It works perfectly on a direct
+# bind, which is where it gets written and reviewed, and only breaks for mount-prefixed installs.
+# 132 call sites use MOUNT today and none skip it.
+_ABS_FETCH = re.compile(r"""fetch\(\s*['"]/""")
+_unmounted = []
+for _f in sorted((ROOT / "static" / "js").glob("*.js")) + sorted((ROOT / "templates").glob("*.html")):
+    _src = _f.read_text(encoding="utf-8")
+    for _m in _ABS_FETCH.finditer(_src):
+        _unmounted.append("%s:%d" % (_f.name, _src[:_m.start()].count("\n") + 1))
+check(not _unmounted,
+      "every fetch() uses window.MOUNT, not a root-absolute path (breaks a sub-path install)",
+      "; ".join(_unmounted[:5]))
+
 # ── 1. gather every global function definition: name -> (params, body) ──
 _DEFS = [
     re.compile(r"function\s+([A-Za-z_$][\w$]*)\s*\(([^)]*)\)\s*\{"),
@@ -834,8 +905,16 @@ check("translateY" in _sf and "g.scrollTop = ta.scrollTop" not in _sf,
       "whenever a horizontal scrollbar is present")
 
 # ── report ──
-passed = sum(1 for c, _, _ in results if c)
+# c is True (pass), False (fail) or None (skipped — the check did not run; see skip()).
+passed = sum(1 for c, _, _ in results if c is True)
+failed = sum(1 for c, _, _ in results if c is False)
+skipped = [(name, detail) for c, name, detail in results if c is None]
 for c, name, detail in results:
-    print("%s  %s%s" % ("PASS" if c else "FAIL", name, "" if c else "  -> " + detail))
-print("\n%d / %d checks passed" % (passed, len(results)))
-sys.exit(0 if passed == len(results) else 1)
+    label = "PASS" if c is True else "FAIL" if c is False else "SKIP"
+    print("%s  %s%s" % (label, name, "" if c is True else "  -> " + detail))
+print("\n%d / %d checks passed" % (passed, len(results) - len(skipped)))
+if skipped:
+    print("\n%d CHECK(S) DID NOT RUN:" % len(skipped))
+    for name, detail in skipped:
+        print("  SKIP  %s   [%s]" % (name, detail))
+sys.exit(0 if failed == 0 else 1)

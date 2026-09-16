@@ -31,11 +31,21 @@ from unit import part01, part02, part03, part04, part05, part06  # noqa: F401,E4
 from unit.part01 import results  # noqa: E402
 
 
-passed = sum(1 for ok, _, _ in results if ok)
+# ok is True (pass), False (fail) or None (skipped — the check did not run; see part01.skip).
+passed = sum(1 for ok, _, _ in results if ok is True)
+failed = sum(1 for ok, _, _ in results if ok is False)
+skipped = [(name, detail) for ok, name, detail in results if ok is None]
 for ok, name, detail in results:
-    line = ("PASS" if ok else "FAIL") + "  " + name
-    if detail and not ok:
+    line = ("PASS" if ok is True else "FAIL" if ok is False else "SKIP") + "  " + name
+    if detail and ok is not True:
         line += "   [%s]" % detail
     print(line)
-print("\n%d / %d checks passed" % (passed, len(results)))
-sys.exit(0 if results and passed == len(results) else 1)
+print("\n%d / %d checks passed" % (passed, len(results) - len(skipped)))
+# Loud, and after the tally, because a skip is a hole in the run rather than a result in it. It
+# does not fail the suite (the environment is not the code's fault) but it must never be mistaken
+# for a pass — the whole point of counting it apart.
+if skipped:
+    print("\n%d CHECK(S) DID NOT RUN:" % len(skipped))
+    for name, detail in skipped:
+        print("  SKIP  %s   [%s]" % (name, detail))
+sys.exit(0 if results and failed == 0 else 1)
