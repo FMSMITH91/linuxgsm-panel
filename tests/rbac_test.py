@@ -164,6 +164,7 @@ with app.app_context():
     db.session.add(u4)
     db.session.commit()
     uid4 = u4.id
+    gid4_for_scope = grp4.id
 
     # A group that already holds a permission the delegated admin CANNOT grant, to prove an edit
     # by them preserves it instead of silently stripping it.
@@ -402,6 +403,71 @@ try:
         kept = set(Group.query.get(gid5).get_permissions())
     check("escalation: an edit PRESERVES a permission the editor cannot grant",
           auth.MANAGE_USERS in kept, "after edit: %s" % sorted(kept))
+
+    # ── …and the same escalation from the MEMBERSHIP side ────────────────────────────────────────
+    # _grantable_perms stops a delegated admin giving a GROUP a permission they lack. It said
+    # nothing about which groups a user may JOIN, and /users/<id>/edit set user.groups straight
+    # from the form — so a MANAGE_USERS holder edited their own account, ticked a privileged group,
+    # and held its permissions on the next request. is_superadmin was guarded; membership was not.
+    with app.app_context():
+        _mu_grp = Group(name=tag + "_mu_admin", description="RBAC test MU admin (auto)",
+                        is_default=False)
+        _mu_grp.set_permissions([auth.MANAGE_USERS])
+        db.session.add(_mu_grp)
+        db.session.flush()
+        _mu_user = User(username=tag + "_mu_admin",
+                        password_hash=auth.hash_password(secrets.token_hex(16)),
+                        display_name="MU admin", is_superadmin=False, is_active=True)
+        _mu_user.groups.append(_mu_grp)
+        db.session.add(_mu_user)
+        db.session.commit()
+        _mu_uid, _mu_gid = _mu_user.id, _mu_grp.id
+        # A group holding something they do NOT have — the prize.
+        _prize = Group(name=tag + "_prize", description="RBAC test prize (auto)", is_default=False)
+        _prize.set_permissions([auth.UNINSTALL_SERVER, auth.MANAGE_REMOTES])
+        db.session.add(_prize)
+        db.session.commit()
+        _prize_gid = _prize.id
+
+    cmu = client_as(_mu_uid)
+    cmu.post("/users/%d/edit" % _mu_uid,
+             data={"display_name": "MU admin", "is_active": "on",
+                   "groups": [str(_mu_gid), str(_prize_gid)]})
+    with app.app_context():
+        _now = auth.get_user_permissions(db.session.get(User, _mu_uid))
+    check("escalation: MANAGE_USERS cannot join a group holding permissions they lack",
+          auth.UNINSTALL_SERVER not in _now and auth.MANAGE_REMOTES not in _now,
+          "ended up with: %s" % sorted(_now))
+    check("escalation: ...and keeps the group they legitimately had",
+          auth.MANAGE_USERS in _now, "ended up with: %s" % sorted(_now))
+
+    # The same via /users/add — creating the account in the privileged group, then logging in as it
+    # (the generated password is handed straight back to the caller).
+    _new_name = tag + "_mu_made"
+    cmu.post("/users/add", data={"username": _new_name, "display_name": _new_name,
+                                 "groups": [str(_prize_gid)]})
+    with app.app_context():
+        _made = User.query.filter_by(username=_new_name).first()
+        _made_perms = auth.get_user_permissions(_made) if _made else set()
+    check("escalation: ...nor create a NEW user in that group",
+          _made is None or (auth.UNINSTALL_SERVER not in _made_perms
+                            and auth.MANAGE_REMOTES not in _made_perms),
+          "the new account holds: %s" % sorted(_made_perms))
+
+    # ── A delegated group admin must not widen a group's HOST/SERVER reach ───────────────────────
+    # The permission list was filtered; the object grants beside it were not, so the same admin
+    # could grant their own group every host in the install. Permissions unchanged — which is why
+    # the checks above still passed — while can_access_remote started returning True for all of it.
+    with app.app_context():
+        _all_remote_ids = [r.id for r in RemoteServer.query.all()]
+    c4.post("/groups/%d/edit" % gid4_for_scope,
+            data={"name": tag4, "description": "",
+                  "permissions": [auth.VIEW_SERVERS, auth.MANAGE_GROUPS],
+                  "servers": [str(i) for i in _all_remote_ids]})
+    with app.app_context():
+        _granted = {r.id for r in db.session.get(Group, gid4_for_scope).servers}
+    check("escalation: a MANAGE_GROUPS admin cannot grant hosts they cannot reach",
+          _granted <= {granted_remote}, "group now grants hosts: %s" % sorted(_granted))
 
     # ── Bulk actions are access-checked per id ────────────────────────────────────────────────────
     # /api/servers/bulk-action is not an /<int:server_id> route, so the structural sweep below
