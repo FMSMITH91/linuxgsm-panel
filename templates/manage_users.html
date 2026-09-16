@@ -4,9 +4,16 @@
 
 <div class="d-flex justify-content-between align-items-center mb-3">
   <h1 class="page-title mb-0"><i class="bi bi-people-fill"></i> User Management</h1>
-  <button class="btn btn-primary" data-bs-toggle="modal" data-bs-target="#addUserModal">
-    <i class="bi bi-person-plus-fill"></i> Add User
-  </button>
+  <div class="d-flex gap-2">
+    {% if current_user.is_superadmin %}
+    <button class="btn btn-outline-primary" data-bs-toggle="modal" data-bs-target="#inviteModal">
+      <i class="bi bi-link-45deg"></i> Invite Link
+    </button>
+    {% endif %}
+    <button class="btn btn-primary" data-bs-toggle="modal" data-bs-target="#addUserModal">
+      <i class="bi bi-person-plus-fill"></i> Add User
+    </button>
+  </div>
 </div>
 
 <div id="users-list">
@@ -80,6 +87,68 @@
     </div>
   </div>
 </div>
+
+{% if current_user.is_superadmin %}
+<!-- Invite Link Modal -->
+<div class="modal fade" id="inviteModal" tabindex="-1">
+  <div class="modal-dialog">
+    <div class="modal-content">
+      {# ajax-form, like Add User: the link comes back in the response and is shown ONCE in the
+         credential modal (which has a copy button). A plain submit would put it in a flash — i.e.
+         in the signed session cookie — which is the wrong place for a link that creates an
+         account. See _form_credential. #}
+      <form method="POST" action="{{ url_for('create_invite') }}"
+            class="ajax-form" data-ajax-refresh="#users-list">
+        <div class="modal-header">
+          <h5 class="modal-title"><i class="bi bi-link-45deg"></i> Create an invite link</h5>
+          <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+        </div>
+        <div class="modal-body">
+          <p class="text-secondary small">
+            Send this link instead of inventing a username and relaying a password. They open it
+            once, choose their own username and password, and the link stops working. You decide
+            here what the account gets; they decide only their name and password.
+          </p>
+          <div class="row g-2 mb-3">
+            <div class="col-6">
+              <label class="form-label" for="inv-hours">Valid for (hours)</label>
+              <input type="number" name="hours" id="inv-hours" class="form-control"
+                     value="48" min="1" max="720">
+            </div>
+            <div class="col-6">
+              <label class="form-label" for="inv-note">Note (optional)</label>
+              <input type="text" name="note" id="inv-note" class="form-control"
+                     maxlength="120" placeholder="Who is it for?">
+            </div>
+          </div>
+          <div class="mb-2">
+            <label class="form-label mb-1">Groups</label>
+            {% for g in groups %}
+            <div class="form-check">
+              <input type="checkbox" name="groups" value="{{ g.id }}" class="form-check-input"
+                     id="inv-group-{{ g.id }}" {% if g.is_default %}checked{% endif %}>
+              <label class="form-check-label" for="inv-group-{{ g.id }}">{{ g.name }}</label>
+            </div>
+            {% endfor %}
+          </div>
+          <hr class="border-secondary">
+          <div class="form-check form-switch">
+            <input type="checkbox" name="is_superadmin" class="form-check-input" role="switch"
+                   id="inv-superadmin">
+            <label class="form-check-label" for="inv-superadmin">Super Administrator</label>
+          </div>
+          <div class="form-text mt-0">Anyone who opens the link becomes a superadmin. Only send it
+            to someone you would grant that to directly.</div>
+        </div>
+        <div class="modal-footer">
+          <button type="button" class="btn btn-outline-secondary" data-bs-dismiss="modal">Cancel</button>
+          <button type="submit" class="btn btn-primary">Create link</button>
+        </div>
+      </form>
+    </div>
+  </div>
+</div>
+{% endif %}
 
 <!-- Add User Modal -->
 <div class="modal fade" id="addUserModal" tabindex="-1">
