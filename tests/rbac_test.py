@@ -20,6 +20,7 @@ import ast
 import glob
 import inspect
 import os
+import pathlib
 import secrets
 import sys
 import textwrap
@@ -674,6 +675,74 @@ for _rule in app.url_map.iter_rules():
         _remote_unguarded.append("%s %s" % (sorted(_rule.methods & {"GET", "POST", "PUT", "DELETE"}), _rule))
 check("every <remote_id> route enforces per-host access (not just MANAGE_REMOTES)",
       not _remote_unguarded, "; ".join(sorted(_remote_unguarded)[:6]))
+
+# ── every MUTATING endpoint leaves an audit trail ─────────────────────────────────────────────
+# The audit log is the only record of who changed what. api_remote_bootstrap had none at all —
+# and it is the most invasive thing the panel does to a machine: updates, UFW, SSH hardening,
+# swap, fail2ban, a new user, a reboot. remote_tailscale_finalize (opens tailscale0 in the
+# remote's UFW) had none either, while the four Tailscale actions beside it in the same file all
+# logged. Nothing failed in either case; the rows simply were not there.
+#
+# Resolved through HELPERS, because plenty of routes log via one — api_server_action looks silent
+# until you follow _run_action, and both whitelist endpoints log inside _whitelist_mutate. A
+# shallow check would accuse all three.
+#
+# The listed endpoints genuinely have nothing to audit; each says why, so a real gap cannot hide
+# among them.
+_NO_AUDIT_OK = {
+    "api_account_ui_order",          # the viewer's own dashboard tile order — a UI preference
+    "api_remote_bootstrap_dismiss",  # dismisses a banner
+    "api_server_install_dismiss",    # dismisses a banner
+    "api_server_upload_check",       # pre-flight check before an upload; changes nothing
+    "api_tailscale_check_peer",      # connectivity probe; changes nothing
+    "test_remote",                   # SSH reachability probe; changes nothing
+    "refresh_server_commands",       # refreshes a cached command list
+    "notifications_test",            # sends one test notification to the configured channel
+}
+_calls, _logs_direct = {}, set()
+for _f in pathlib.Path(_ROOT, "panel").rglob("*.py"):
+    try:
+        _tree = ast.parse(_f.read_text(encoding="utf-8"))
+    except (SyntaxError, OSError):
+        continue
+    _stack = []
+
+    class _V(ast.NodeVisitor):
+        def visit_FunctionDef(self, n):
+            _stack.append(n.name)
+            self.generic_visit(n)
+            _stack.pop()
+        visit_AsyncFunctionDef = visit_FunctionDef
+
+        def visit_Call(self, n):
+            _nm = getattr(n.func, "id", getattr(n.func, "attr", None))
+            if _stack and _nm:
+                if _nm == "log_action":
+                    _logs_direct.add(_stack[-1])
+                else:
+                    _calls.setdefault(_stack[-1], set()).add(_nm)
+            self.generic_visit(n)
+    _V().visit(_tree)
+_logs = set(_logs_direct)
+for _ in range(6):                       # transitive: a view logs if what it calls logs
+    _grew = False
+    for _fn, _callees in _calls.items():
+        if _fn not in _logs and (_callees & _logs):
+            _logs.add(_fn)
+            _grew = True
+    if not _grew:
+        break
+_unaudited, _seen_ep = [], set()
+for _rule in app.url_map.iter_rules():
+    if not (_rule.methods & {"POST", "PUT", "DELETE", "PATCH"}) or _rule.endpoint in _seen_ep:
+        continue
+    _seen_ep.add(_rule.endpoint)
+    if _rule.endpoint not in _logs and _rule.endpoint not in _NO_AUDIT_OK:
+        _unaudited.append("%s (%s)" % (_rule, _rule.endpoint))
+check("every mutating endpoint writes an audit entry (or is listed as having nothing to audit)",
+      not _unaudited,
+      "; ".join(sorted(_unaudited)[:5]) + " — call log_action(), or add the endpoint to "
+      "_NO_AUDIT_OK with the reason it has nothing to record")
 passed = sum(1 for ok, _, _ in results if ok)
 for ok, name, detail in results:
     line = ("PASS" if ok else "FAIL") + "  " + name

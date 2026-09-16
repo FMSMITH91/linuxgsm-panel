@@ -1758,3 +1758,51 @@ for _f in ("app.py", os.path.join("tools", "perf_bench.py")):
           _patch_at is not None and (_first_heavy is None or _patch_at < _first_heavy),
           "monkey_patch at line %s, first panel/flask import at line %s" % (_patch_at, _first_heavy))
 
+# ── every audited action names WHAT it acted on ───────────────────────────────────────────────
+# The audit log's Target column was blank for panel-host actions (panel_self_update, server_reboot,
+# the tailscale/ufw ones, ...) while the IDENTICAL action taken through remote management filled it
+# in from remote.name. On the /logs page that read as "some rows just don't have a target", and it
+# made those rows unsearchable — the q filter searches target, detail and username.
+#
+# A handful genuinely have nothing to name, and they are listed here WITH the reason rather than
+# left to look like oversights. Anything else must pass target=; a new action that forgets fails
+# this instead of quietly shipping another blank column.
+_NO_TARGET_OK = {
+    # The USER column already names the account and the detail carries the IP — a target here
+    # would just repeat the user column.
+    "login", "logout", "login_failed", "login_blocked",
+    # Refreshes the LinuxGSM game LIST (a cache), not a host or an object. Detail is "<n> games".
+    "lgsm_data_refresh",
+}
+import ast as _ast_log
+_missing_target = []
+for _dirpath, _dirnames, _filenames in os.walk(_root):
+    if any(_skip in _dirpath for _skip in (".venv", "venv", "/tests", "node_modules", "/.git")):
+        continue
+    for _fn in _filenames:
+        if not _fn.endswith(".py"):
+            continue
+        _fp = os.path.join(_dirpath, _fn)
+        try:
+            _tree = _ast_log.parse(open(_fp, encoding="utf-8").read())
+        except (SyntaxError, OSError):
+            continue
+        for _n in _ast_log.walk(_tree):
+            if not isinstance(_n, _ast_log.Call):
+                continue
+            if getattr(_n.func, "id", getattr(_n.func, "attr", None)) != "log_action":
+                continue
+            # log_action(user, action, target=..., ...) — target is the 3rd positional or a kwarg
+            if "target" in {_k.arg for _k in _n.keywords if _k.arg} or len(_n.args) >= 3:
+                continue
+            _act = (_n.args[1].value
+                    if len(_n.args) >= 2 and isinstance(_n.args[1], _ast_log.Constant) else None)
+            if _act in _NO_TARGET_OK:
+                continue
+            _missing_target.append("%s:%d %s" % (os.path.relpath(_fp, _root), _n.lineno, _act))
+check("audit: every logged action names a target (or is listed as having none)",
+      not _missing_target,
+      "; ".join(sorted(_missing_target)[:5]) +
+      " — pass target= (LOCAL_HOST_LABEL for panel-host actions), or add it to _NO_TARGET_OK "
+      "with a reason")
+

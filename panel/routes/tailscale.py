@@ -8,6 +8,7 @@ from panel.core.config import (load_config, save_config)
 from panel.ops import (tailscale_integration as ts)
 from panel.security.auth import (MANAGE_REMOTES, log_action, permission_required)
 from panel.core.http import (_json_body)
+from panel.db.models import LOCAL_HOST_LABEL
 from app import (_ts_backend_scheme)
 
 
@@ -53,7 +54,7 @@ def register(app):
         wizard and the remote-server bootstrap use, instead of sending the user off to
         tailscale.com to do it by hand."""
         ok, log = ts.install_tailscale_local()
-        log_action(current_user, "tailscale_install_local", success=ok)
+        log_action(current_user, "tailscale_install_local", target=LOCAL_HOST_LABEL, success=ok)
         return jsonify({"success": ok, "log": log})
 
     @app.route("/api/tailscale/up", methods=["POST"])
@@ -66,7 +67,7 @@ def register(app):
         if not ok:
             return jsonify({"success": False, "message": res})
         if res == "ALREADY_CONNECTED":
-            log_action(current_user, "tailscale_up_local", success=True)
+            log_action(current_user, "tailscale_up_local", target=LOCAL_HOST_LABEL, success=True)
             return jsonify({"success": True, "connected": True})
         return jsonify({"success": True, "connected": False, "auth_url": res})
 
@@ -90,7 +91,7 @@ def register(app):
                 cfg["tailscale_use_funnel"] = funnel
                 cfg["tailscale_mount"] = mount
                 save_config(cfg)
-                log_action(current_user, "tailscale_serve_enable", detail=msg)
+                log_action(current_user, "tailscale_serve_enable", target=LOCAL_HOST_LABEL, detail=msg)
                 return jsonify({"success": True, "message": msg})
             return jsonify({"success": False, "message": msg}), 500
 
@@ -106,7 +107,7 @@ def register(app):
                 cfg["tailscale_use_funnel"] = False
                 cfg["tailscale_mount"] = ""
                 save_config(cfg)
-                log_action(current_user, "tailscale_serve_disable", detail=msg)
+                log_action(current_user, "tailscale_serve_disable", target=LOCAL_HOST_LABEL, detail=msg)
                 return jsonify({"success": True, "message": msg})
             return jsonify({"success": False, "message": msg}), 500
 

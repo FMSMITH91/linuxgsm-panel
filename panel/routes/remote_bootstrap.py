@@ -4,7 +4,7 @@ Moved out of register_routes() verbatim — see panel/routes/__init__.py for why
 """
 from flask import (jsonify)
 from flask_login import (current_user, login_required)
-from panel.security.auth import (MANAGE_REMOTES, get_remote, permission_required)
+from panel.security.auth import (log_action, MANAGE_REMOTES, get_remote, permission_required)
 import time
 from panel.core.http import (_json_body)
 from app import (_refuse_on_panel_host)
@@ -20,7 +20,8 @@ def register(app):
         """Kick off a fresh-VPS bootstrap in the background: updates, essential
         packages, UFW, SSH hardening, swap, fail2ban, LinuxGSM user, then reboot.
         Returns immediately; poll /bootstrap-status for live progress."""
-        refused = _refuse_on_panel_host(get_remote(remote_id), "VPS bootstrap")
+        remote = get_remote(remote_id)
+        refused = _refuse_on_panel_host(remote, "VPS bootstrap")
         if refused:
             return refused
         data = _json_body()
@@ -35,6 +36,14 @@ def register(app):
         started, msg = _begin_bootstrap(app, remote_id, opts, current_user.id)
         if not started:
             return jsonify({"success": False, "message": msg}), 409
+        # Audited at KICK-OFF, like remote_os_update: the work runs in the background and the
+        # response returns immediately, so waiting for completion would mean a host could be
+        # hardened, given a new user and rebooted with nothing in the log until it finished — or
+        # nothing at all if it died partway. This is the most invasive thing the panel does to a
+        # machine (SSH hardening, UFW, fail2ban, a new user, a reboot) and it was not audited at
+        # all; the options are recorded because they decide what actually changed.
+        log_action(current_user, "remote_bootstrap", target=remote.name,
+                   detail="started — " + ", ".join("%s=%s" % (k, v) for k, v in sorted(opts.items())))
         return jsonify({"success": True, "started": True})
 
     @app.route("/api/remote/<int:remote_id>/bootstrap-status")

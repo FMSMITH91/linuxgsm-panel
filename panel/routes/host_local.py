@@ -7,7 +7,7 @@ from flask import (jsonify, render_template, request)
 from flask_login import (current_user, login_required)
 from panel.core.clock import (utcnow)
 from panel.core.config import (DB_PATH, load_config)
-from panel.db.models import (RemoteServer, db)
+from panel.db.models import (LOCAL_HOST_LABEL, RemoteServer, db)
 from panel.ops import (system_ops as so)
 from panel.ops.ssh_manager import (host_specs, tailnet_exempt_ips)
 from panel.security.auth import (log_action, superadmin_required)
@@ -88,7 +88,7 @@ def register(app):
         success, msg = so.ufw_allow_tailscale()
         if success:
             so.invalidate_server_status()   # firewall changed → next page load re-probes
-            log_action(current_user, "ufw_allow_tailscale", detail=msg)
+            log_action(current_user, "ufw_allow_tailscale", target=LOCAL_HOST_LABEL, detail=msg)
             return jsonify({"success": True, "message": msg})
         return jsonify({"success": False, "message": msg}), 500
 
@@ -100,7 +100,7 @@ def register(app):
         success, msg = so.tailscale_ssh_enable()
         if success:
             so.invalidate_server_status()   # tailscale-ssh state changed → next load re-probes
-            log_action(current_user, "tailscale_ssh_enable", detail=msg)
+            log_action(current_user, "tailscale_ssh_enable", target=LOCAL_HOST_LABEL, detail=msg)
             return jsonify({"success": True, "message": msg})
         return jsonify({"success": False, "message": msg}), 500
 
@@ -112,7 +112,7 @@ def register(app):
         success, msg = so.tailscale_ssh_disable()
         if success:
             so.invalidate_server_status()   # tailscale-ssh state changed → next load re-probes
-            log_action(current_user, "tailscale_ssh_disable", detail=msg)
+            log_action(current_user, "tailscale_ssh_disable", target=LOCAL_HOST_LABEL, detail=msg)
             return jsonify({"success": True, "message": msg})
         return jsonify({"success": False, "message": msg}), 500
 
@@ -137,7 +137,7 @@ def register(app):
     def api_panel_update():
         """Pull the latest panel code and restart (one-click self-update)."""
         success, msg = so.panel_self_update()
-        log_action(current_user, "panel_self_update", detail=msg, success=success)
+        log_action(current_user, "panel_self_update", target=LOCAL_HOST_LABEL, detail=msg, success=success)
         return jsonify({"success": success, "message": msg})
 
     @app.route("/api/panel/update-log")
@@ -238,7 +238,7 @@ def register(app):
             ok, msg, info = optimize_database()
             if ok:
                 try:
-                    log_action(current_user, "panel_db_optimize",
+                    log_action(current_user, "panel_db_optimize", target=LOCAL_HOST_LABEL,
                                detail="freed %d bytes" % info.get("freed", 0), success=True)
                 except Exception:
                     app.logger.warning("optimize: audit-log write failed", exc_info=True)

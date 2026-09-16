@@ -336,6 +336,13 @@ class Group(db.Model):
         return perm in self.get_permissions()
 
 
+# What the local host is called everywhere a person reads it — the nav, the management page, and
+# the audit log's Target column. Defined once so those cannot drift: the log used to leave Target
+# blank for panel-host actions while the identical action taken through remote management filled
+# it in, which read as "some rows just don't have a target".
+LOCAL_HOST_LABEL = "Panel Server"
+
+
 class RemoteServer(db.Model):
     """A remote VPS running LinuxGSM servers."""
     id = db.Column(db.Integer, primary_key=True)
@@ -371,7 +378,7 @@ class RemoteServer(db.Model):
         """User-facing name. The local host is always shown as 'Panel Server' so the
         label is consistent with the nav and the Panel Server management page,
         regardless of whatever name was typed when it was added."""
-        return "Panel Server" if self.is_local else self.name
+        return LOCAL_HOST_LABEL if self.is_local else self.name
 
     @property
     def display_host(self):
