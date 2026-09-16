@@ -1,6 +1,0 @@
-endpoint=remote_firewall  unwrap hops=2  resolved to remote_firewall in remote_vps.py
-first 3 source lines:
-        @app.route("/remote/<int:remote_id>/firewall")
-        @login_required
-        @permission_required(MANAGE_REMOTES)
-contains get_remote(: True
