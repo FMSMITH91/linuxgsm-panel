@@ -139,6 +139,64 @@ function openPort() {
   });
 }
 
+// ── Restrict a port: to one source, or by rate ────────────────────────────────────────────────
+// Both post to routes that validate every argument at the privileged boundary (ipaddress for the
+// source, a port/range grammar for the port, a fixed choice for the protocol), so nothing typed
+// here can reach a command line as anything but those three shapes.
+function _restrictPost(path, body, busy) {
+  var out = document.getElementById('restrict-result');
+  out.innerHTML = '<span class="text-secondary"><i class="bi bi-arrow-repeat"></i> ' + esc(busy) + '</span>';  // nosemgrep
+  fetch(MOUNT + '/api/remote/' + remoteId + path, {
+    method: 'POST',
+    headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify(body),
+  })
+  .then(r => r.json())
+  .then(data => {
+    out.innerHTML = data.success                                                     // nosemgrep
+      ? '<span class="text-success">✅ ' + esc(data.message) + '</span>'
+      : '<span class="text-danger">❌ ' + esc(data.message) + '</span>';
+    if (data.success) refreshFirewall();
+  })
+  .catch(function () {
+    out.innerHTML = '<span class="text-danger">❌ Request failed.</span>';           // nosemgrep
+  });
+}
+
+function _sourceArgs(allow) {
+  var src = document.getElementById('src-cidr').value.trim();
+  var port = document.getElementById('src-port').value.trim();
+  if (!src || !port) return null;
+  return {source: src, port: port, protocol: document.getElementById('src-proto').value,
+          allow: allow};
+}
+
+function allowFromSource() {
+  var a = _sourceArgs(true);
+  if (a) _restrictPost('/firewall/allow-from', a, 'Adding...');
+}
+
+function removeAllowFromSource() {
+  var a = _sourceArgs(false);
+  if (a) _restrictPost('/firewall/allow-from', a, 'Removing...');
+}
+
+function _limitArgs(on) {
+  var port = document.getElementById('limit-port').value.trim();
+  if (!port) return null;
+  return {port: port, protocol: document.getElementById('limit-proto').value, limit: on};
+}
+
+function limitPort() {
+  var a = _limitArgs(true);
+  if (a) _restrictPost('/firewall/limit', a, 'Applying...');
+}
+
+function unlimitPort() {
+  var a = _limitArgs(false);
+  if (a) _restrictPost('/firewall/limit', a, 'Removing...');
+}
+
 // Delete a whole rule group (its IPv4 + IPv6 entries). UFW renumbers rules above a
 // deleted one, so delete highest-number-first to keep the remaining indices valid.
 function deleteGroup(nums, btn, warn, reason) {

@@ -201,6 +201,72 @@ def remote_ufw_open_port(server, port, protocol="tcp", comment=""):
     return False, err or out or "Unknown error"
 
 
+def remote_ufw_allow_from(server, source, port, protocol="tcp", comment="", allow=True):
+    """Open a port only FROM one address or network (or remove that rule).
+
+    Every other allow path here opens a port to the whole internet — only DENY ever took an
+    address — so "SSH from my home IP" or "RCON from the LAN" could not be said at all: the choice
+    was world-open or closed. `source` is an IP or CIDR; the privileged verb validates it with
+    ipaddress and refuses anything that is not a network, so nothing composable reaches the
+    command line.
+
+    A port RANGE is fine (27015:27020), which Source-engine games need."""
+    src = (source or "").strip()
+    if not src:
+        return False, "Source address required"
+    proto = _ufw_proto(protocol)
+    if proto not in ("tcp", "udp"):
+        # ufw's extended `from ... to any port ... proto ...` form names ONE protocol.
+        return False, "A source rule needs a single protocol (tcp or udp)"
+    spec = str(port or "").strip()
+    if not spec:
+        return False, "Port required"
+    if allow:
+        cmt = re.sub(r"[^A-Za-z0-9 _.-]", "", comment or "")[:60]
+        verb, vargs = "ufw-allow-from-port", [src, spec, proto, cmt]
+    else:
+        verb, vargs = "ufw-delete-allow-from-port", [src, spec, proto]
+    out, err, rc = _core.run_privileged(server, verb, vargs, timeout=15)
+    if rc == 0:
+        return True, ("Port %s/%s open from %s" % (spec, proto, src) if allow
+                      else "Rule for %s/%s from %s removed" % (spec, proto, src))
+    return False, err or out or "Unknown error"
+
+
+def remote_ufw_limit_port(server, port, protocol="tcp", limit=True):
+    """Rate-limit (or stop rate-limiting) a port — UFW's own brute-force brake.
+
+    `ufw limit` refuses an address that opens more than 6 connections to the port in 30 seconds.
+    The panel has always used it when it hardens SSH on a bootstrap, and the privileged verb has
+    been there the whole time; there was simply no way to ask for it from the UI. It is the right
+    answer for any port where a person authenticates — SSH, RCON, a game's admin port — and the
+    wrong one for gameplay traffic, where six connections in half a minute is a quiet evening.
+
+    Rules are per (port, proto), so this deletes the plain `allow` first: leaving it in place would
+    keep matching first and the limit would never be reached."""
+    try:
+        port = _ufw_port_int(port)
+    except (TypeError, ValueError):
+        return False, "Invalid port"
+    proto = _ufw_proto(protocol)
+    if proto not in ("tcp", "udp"):
+        # `ufw limit` takes one rule; "both" would need two and they would report separately.
+        return False, "Rate limiting needs a single protocol (tcp or udp)"
+    spec = "%d/%s" % (port, proto)
+    if not limit:
+        out, err, rc = _core.run_privileged(server, "ufw-delete-limit-port", [spec], timeout=15)
+        if rc == 0:
+            return True, "Rate limit removed from %s" % spec
+        return False, err or out or "Unknown error"
+    # Drop the unlimited allow so the limit rule is the one that matches. A missing rule makes ufw
+    # exit non-zero ("Could not delete non-existent rule"), which is fine and not worth reporting.
+    _core.run_privileged(server, "ufw-delete-allow-proto-port", [proto, str(port)], timeout=15)
+    out, err, rc = _core.run_privileged(server, "ufw-limit-port", [spec], timeout=15)
+    if rc == 0:
+        return True, "%s is now rate limited (6 connections per 30s per address)" % spec
+    return False, err or out or "Unknown error"
+
+
 def remote_ufw_close_port(server, port, protocol=None):
     """Close a port on the remote server via UFW. With protocol=None (or 'both'/'any'),
     deletes the bare `allow <port>` rule (both protocols); otherwise the proto-specific rule."""

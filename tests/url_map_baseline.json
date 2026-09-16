@@ -719,6 +719,17 @@
       "GET"
     ]
   },
+  "/api/remote/<int:remote_id>/firewall/allow-from": {
+    "endpoint": "api_remote_firewall_allow_from",
+    "guards": [
+      "utils.py:decorated_view(manage_remotes)",
+      "auth.py:decorated_function(manage_remotes)",
+      "view:api_remote_firewall_allow_from"
+    ],
+    "methods": [
+      "POST"
+    ]
+  },
   "/api/remote/<int:remote_id>/firewall/close": {
     "endpoint": "api_remote_firewall_close",
     "guards": [
@@ -736,6 +747,17 @@
       "utils.py:decorated_view(manage_remotes)",
       "auth.py:decorated_function(manage_remotes)",
       "view:api_remote_firewall_delete_rule"
+    ],
+    "methods": [
+      "POST"
+    ]
+  },
+  "/api/remote/<int:remote_id>/firewall/limit": {
+    "endpoint": "api_remote_firewall_limit",
+    "guards": [
+      "utils.py:decorated_view(manage_remotes)",
+      "auth.py:decorated_function(manage_remotes)",
+      "view:api_remote_firewall_limit"
     ],
     "methods": [
       "POST"

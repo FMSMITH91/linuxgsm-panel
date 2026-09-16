@@ -13,7 +13,8 @@ from panel.ops.ssh_manager import (change_ssh_port, close_connection, detect_gam
     remote_os_run_updates, remote_os_update_start, remote_os_update_status,
     remote_public_ssh_status, remote_reboot, remote_reboot_required, remote_set_public_ssh,
     remote_ufw_allow_game_port, remote_ufw_allow_game_ports, remote_ufw_close_port,
-    remote_ufw_delete_rule, remote_ufw_open_port, remote_ufw_status, remote_uptime)
+    remote_ufw_allow_from, remote_ufw_delete_rule, remote_ufw_limit_port,
+    remote_ufw_open_port, remote_ufw_status, remote_uptime)
 # Reached through the MODULE, not bound by name: these are the seams the test suite
 # monkeypatches. `from x import f` copies the function object, so a stub on the source
 # module would never be seen — attribute access resolves at call time and is stable
@@ -96,6 +97,48 @@ def register(app):
             return jsonify({"success": False, "message": "Port required"}), 400
         success, msg = remote_ufw_open_port(remote, port, proto, data.get("comment", ""))
         log_action(current_user, "remote_port_open", target=f"{remote.name}:{port}/{proto}", success=success)
+        return jsonify({"success": success, "message": msg})
+
+    @app.route("/api/remote/<int:remote_id>/firewall/allow-from", methods=["POST"])
+    @login_required
+    @permission_required(MANAGE_REMOTES)
+    def api_remote_firewall_allow_from(remote_id):
+        """Open a port only from one address or network (`allow: false` removes the rule).
+
+        The gap this fills: every other allow here opens a port to the internet, so a port that
+        only you or only your LAN should reach had no way to say so."""
+        remote = get_remote(remote_id)
+        data = _json_body()
+        source = (data.get("source") or "").strip()
+        port = data.get("port", "")
+        proto = data.get("protocol", "tcp")
+        on = data.get("allow", True) is not False
+        if not source or not port:
+            return jsonify({"success": False, "message": "Source and port required"}), 400
+        success, msg = remote_ufw_allow_from(remote, source, port, proto,
+                                             data.get("comment", ""), allow=on)
+        log_action(current_user, "remote_port_allow_from" if on else "remote_port_allow_from_remove",
+                   target=f"{remote.name}:{port}/{proto}", detail="from %s" % source, success=success)
+        return jsonify({"success": success, "message": msg})
+
+    @app.route("/api/remote/<int:remote_id>/firewall/limit", methods=["POST"])
+    @login_required
+    @permission_required(MANAGE_REMOTES)
+    def api_remote_firewall_limit(remote_id):
+        """Rate-limit a port, or lift the limit (`limit: false`).
+
+        UFW has done this since forever and the panel has used it on every bootstrap to harden
+        SSH — it just had no way to ask for it on a port you choose."""
+        remote = get_remote(remote_id)
+        data = _json_body()
+        port = data.get("port", "")
+        proto = data.get("protocol", "tcp")
+        on = data.get("limit", True) is not False
+        if not port:
+            return jsonify({"success": False, "message": "Port required"}), 400
+        success, msg = remote_ufw_limit_port(remote, port, proto, limit=on)
+        log_action(current_user, "remote_port_limit" if on else "remote_port_unlimit",
+                   target=f"{remote.name}:{port}/{proto}", success=success)
         return jsonify({"success": success, "message": msg})
 
     @app.route("/api/remote/<int:remote_id>/firewall/close", methods=["POST"])
