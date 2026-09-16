@@ -858,6 +858,146 @@ _LIVE_METRICS_TTL = 2      # de-dups concurrent viewers of the SAME server (the 
 #                            every 4s, so a single viewer still gets a fresh read each poll)
 
 
+# /proc/<pid>/stat, after splitting on the LAST ')' (comm can contain spaces and parens):
+# b[1] is STATE, because awk's split(s, b, " ") drops the leading blank. That puts utime at 12 and
+# stime at 13. The samplers below summed b[13]+b[14] — stime + CUTIME — and cutime only counts
+# reaped children, so a game server burning a core reported ~0% CPU. Named here, and asserted
+# against a known stat line in the unit suite, because the off-by-one is invisible in review and
+# the symptom is a plausible-looking small number rather than an error.
+_STAT_UTIME_IDX, _STAT_STIME_IDX = 12, 13
+_STAT_JIFFIES_EXPR = "b[%d]+b[%d]" % (_STAT_UTIME_IDX, _STAT_STIME_IDX)
+
+
+# ── One sample per HOST, not per game ─────────────────────────────────────────────────────────
+# server_live_metrics takes ONE round trip per GAME, and the dashboard polls it for every game the
+# viewer can see. Measured against an 80ms link, /api/dashboard/metrics cost
+# ceil(servers / _PLAYER_POLL_WORKERS) x latency — 1.05s at 100 servers, ~5s at 500, every 10
+# seconds, per open dashboard. (Predicted 400ms at 40 servers; measured 408ms.) Most of that work
+# is redundant: each call returns the WHOLE HOST's figures alongside one game's share, so twenty
+# games on a host fetched the same host numbers twenty times.
+#
+# This asks once per host and gets everything. The per-game figures are all keyed on the game's
+# Linux user, so a single pass over `ps -eo user=,...` yields every user at once — which means the
+# command is a FIXED SIZE no matter how many games run there, rather than growing a fragment per
+# game until it stops fitting in a shell. Every game's CPU share is also measured across the same
+# 0.25s window as the host's, which the per-game version could not do.
+_host_metrics_cache = {}   # remote id -> (expiry_epoch, parsed dict)
+
+# Sum utime+stime per user in ONE awk pass: ps gives pid -> user, getline reads each
+# /proc/<pid>/stat. comm can contain spaces and ')', so split on the LAST ')' — the same rule the
+# per-game version uses, for the same reason.
+_JIFFIES_BY_USER = (
+    "ps -eo user:32=,pid= | awk -v TAG=%s '"
+    "{ gsub(/^ +| +$/, \"\", $1); u[$2] = $1 } "
+    "END { for (p in u) { f = \"/proc/\" p \"/stat\"; "
+    "if ((getline line < f) > 0) { n = split(line, a, \")\"); split(a[n], b, \" \"); "
+    "s[u[p]] += " + _STAT_JIFFIES_EXPR + " } close(f) } "
+    "for (x in s) print TAG, x, s[x] }'"
+)
+
+
+def host_live_metrics(server, force=False):
+    """Whole-host figures plus EVERY user's process figures, in one round trip.
+
+    Returns {"host": {...}, "users": {username: {...}}, "ports": set(int)} — the caller picks out
+    the users and ports it cares about. Cached for the same couple of seconds as the per-game
+    version, keyed on the host alone, so which games a particular viewer can see does not change
+    whether the sample is reusable.
+
+    No sudo, exactly as server_live_metrics established: every part reads world-readable state."""
+    now = time.time()
+    ck = getattr(server, "id", None)
+    if not force:
+        hit = _host_metrics_cache.get(ck)
+        if hit and hit[0] > now:
+            return hit[1]
+    parts = [
+        "grep '^cpu ' /proc/stat",
+        _JIFFIES_BY_USER % "GJA",
+        "sleep 0.25",
+        "grep '^cpu ' /proc/stat",
+        _JIFFIES_BY_USER % "GJB",
+        "free -b | awk '/Mem:/{print \"MEM\",$2,$3}'",
+        "awk '{print \"LOAD\",$1,$2,$3}' /proc/loadavg",
+        "df -B1 / | tail -1 | awk '{print \"DISK\",$2,$3}'",
+        "echo CORES $(nproc)",
+        "echo UPTIME $(awk '{print int($1)}' /proc/uptime)",
+        ("ps -eo user:32=,rss= --no-headers 2>/dev/null | awk '{gsub(/^ +| +$/,\"\",$1); "
+         "s[$1]+=$2; n[$1]++} END{for(u in s) print \"GAMERAM\", u, s[u], n[u]}'"),
+        ("ps -eo user:32=,etimes= --no-headers 2>/dev/null | awk '{gsub(/^ +| +$/,\"\",$1); "
+         "if($2>m[$1]) m[$1]=$2} END{for(u in m) print \"GUP\", u, m[u]}'"),
+        "ss -H -ltnu 2>/dev/null | awk '{n=split($5,a,\":\"); print \"PORT\", a[n]}' | sort -u",
+    ]
+    out, _, _ = run_command(server, " ; ".join(parts), timeout=20, sudo=False)
+
+    host = {"cpu_percent": 0.0, "ram_used": 0, "ram_total": 0, "ram_percent": 0.0,
+            "disk_used": 0, "disk_total": 0, "disk_percent": 0.0, "load": [0, 0, 0],
+            "cores": 1, "uptime_secs": 0}
+    gja, gjb, ram, procs, up, ports = {}, {}, {}, {}, {}, set()
+    cpu_lines = []
+    for line in (out or "").splitlines():
+        f = line.split()
+        if not f:
+            continue
+        tag = f[0]
+        if tag == "cpu" and len(f) >= 8:
+            cpu_lines.append([int(x) for x in f[1:8] if x.lstrip("-").isdecimal()])
+        elif tag in ("GJA", "GJB") and len(f) >= 3 and f[2].lstrip("-").isdecimal():
+            (gja if tag == "GJA" else gjb)[f[1]] = int(f[2])
+        elif tag == "MEM" and len(f) >= 3:
+            host["ram_total"], host["ram_used"] = int(f[1]), int(f[2])
+        elif tag == "LOAD" and len(f) >= 4:
+            host["load"] = [float(f[1]), float(f[2]), float(f[3])]
+        elif tag == "DISK" and len(f) >= 3:
+            host["disk_total"], host["disk_used"] = int(f[1]), int(f[2])
+        elif tag == "CORES" and len(f) > 1 and f[1].isdecimal():
+            host["cores"] = int(f[1])
+        elif tag == "UPTIME" and len(f) > 1 and f[1].isdecimal():
+            host["uptime_secs"] = int(f[1])
+        elif tag == "GAMERAM" and len(f) >= 4 and f[2].isdecimal() and f[3].isdecimal():
+            ram[f[1]], procs[f[1]] = int(f[2]), int(f[3])
+        elif tag == "GUP" and len(f) >= 3 and f[2].isdecimal():
+            up[f[1]] = int(f[2])
+        elif tag == "PORT" and len(f) >= 2 and f[1].isdecimal():
+            ports.add(int(f[1]))
+
+    total_delta = 0
+    if len(cpu_lines) >= 2 and len(cpu_lines[0]) >= 7 and len(cpu_lines[1]) >= 7:
+        a, b = cpu_lines[0], cpu_lines[1]
+        idle, total_delta = b[3] - a[3], sum(b) - sum(a)
+        if total_delta > 0:
+            host["cpu_percent"] = round((1 - idle / total_delta) * 100, 1)
+    if host["ram_total"]:
+        host["ram_percent"] = round(host["ram_used"] / host["ram_total"] * 100, 1)
+    if host["disk_total"]:
+        host["disk_percent"] = round(host["disk_used"] / host["disk_total"] * 100, 1)
+
+    users = {}
+    for name in set(gja) | set(gjb) | set(ram) | set(up):
+        ram_mb = int(ram.get(name, 0) / 1024)
+        cpu = 0.0
+        if name in gja and name in gjb and total_delta > 0:
+            cpu = round(max(0, gjb[name] - gja[name]) / total_delta * 100, 1)
+        users[name] = {"game_cpu_percent": cpu, "game_ram_mb": ram_mb,
+                       "game_procs": procs.get(name, 0), "game_uptime_secs": up.get(name, 0),
+                       "game_ram_percent": (round(ram_mb * 1024 * 1024 / host["ram_total"] * 100, 1)
+                                            if host["ram_total"] else 0.0)}
+    result = {"host": host, "users": users, "ports": ports}
+    if out:   # cache a real read only — an empty result is an SSH blip, not a host at 0%
+        _host_metrics_cache[ck] = (now + _LIVE_METRICS_TTL, result)
+    return result
+
+
+def metrics_for_game(sample, short_name, game_port):
+    """One game's slice of a host_live_metrics() sample, shaped like server_live_metrics()."""
+    m = dict(sample["host"])
+    m.update(sample["users"].get(short_name or "",
+                                 {"game_cpu_percent": 0.0, "game_ram_mb": 0, "game_procs": 0,
+                                  "game_uptime_secs": 0, "game_ram_percent": 0.0}))
+    m["port_open"] = bool(game_port) and int(game_port) in sample["ports"]
+    return m
+
+
 def server_live_metrics(server, short_name=None, game_port=None, force=False):
     """One-round-trip live metrics for polling. Reports both whole-VPS figures
     (CPU%% via /proc/stat delta, RAM, disk, load, uptime) AND — when a game user
@@ -876,8 +1016,14 @@ def server_live_metrics(server, short_name=None, game_port=None, force=False):
     # Robust per-process jiffie sum (utime+stime). /proc/pid/stat's comm field can
     # contain spaces/parens, so split on the LAST ')' before reading numeric fields.
     def _gjiffies(tag):
+        # b[12]+b[13], NOT b[13]+b[14]. awk's split(s, b, " ") drops the leading blank, so after the
+        # comm field b[1] is STATE — which puts utime at 12 and stime at 13. The old indices summed
+        # stime + CUTIME instead: cutime only counts reaped children, and a game server spends
+        # almost everything in user time, so this reported ~0% CPU per game no matter how hard a
+        # server was working. Verified against a process burning a known second of CPU: b[12]=99,
+        # b[13]=0, b[14]=0.
         return (f"for p in $(ps -u {short_name} -o pid= 2>/dev/null); do "
-                f"awk '{{n=split($0,a,\")\"); split(a[n],b,\" \"); print b[13]+b[14]}}' "
+                f"awk '{{n=split($0,a,\")\"); split(a[n],b,\" \"); print {_STAT_JIFFIES_EXPR}}}' "
                 f"/proc/$p/stat 2>/dev/null; done | awk '{{s+=$1}} END{{print \"{tag}\",s+0}}'")
 
     parts = ["grep '^cpu ' /proc/stat"]

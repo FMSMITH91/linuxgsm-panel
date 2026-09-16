@@ -18,8 +18,9 @@ from panel.ops import ssh_manager as _sm
 from panel.security.auth import (INSTALL_SERVER, MANAGE_SERVERS, get_game, get_remote,
     get_user_servers, permission_required, server_access_required)
 from panel.services.monitoring import (_PLAYER_POLL_WORKERS, _cached_player_count,
-    _metrics_work, _query_server_metrics)
+    _host_metrics_work, _query_host_metrics)
 import concurrent.futures
+import itertools
 import re
 import time
 from panel.core.http import (_log_and_generic)
@@ -39,11 +40,14 @@ def register(app):
         # One pass over the rows already in hand: the hosts are joinedloaded, so naming them and
         # answering "is this host local?" below costs no further queries.
         remote_by_id = {gs.remote_id: gs.remote for gs in servers if gs.remote_id and gs.remote}
-        work = _metrics_work(servers)
+        # One sample per HOST, not per game. Each sample already describes the whole machine, so
+        # asking once per game fetched the same host figures N times; the pool now spreads over
+        # hosts, which is what the SSH round trips actually cost.
+        work = _host_metrics_work(servers)
         out_servers, hosts = {}, {}
         if work:
             with concurrent.futures.ThreadPoolExecutor(max_workers=min(_PLAYER_POLL_WORKERS, len(work))) as ex:
-                for sid, m, rid, mp in ex.map(_query_server_metrics, work):
+                for sid, m, rid, mp in itertools.chain.from_iterable(ex.map(_query_host_metrics, work)):
                     if not m:
                         continue
                     out_servers[str(sid)] = {
