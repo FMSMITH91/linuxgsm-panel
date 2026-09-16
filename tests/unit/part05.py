@@ -910,11 +910,11 @@ _sys_name = next((_p.pw_name for _p in __import__("pwd").getpwall() if 0 < _p.pw
 if _sys_name:
     try:
         _helper.validate("tailscale-set-operator", [_sys_name])
-        _sys_ok = True
-    except Exception as _e:
-        _sys_ok = False
-    check("helper: a NON-root system account (uid<1000) is still accepted", _sys_ok,
-          "refused %s, which is the shape of the panel's own user" % _sys_name)
+        _sys_why = ""
+    except Exception as _sys_exc:
+        _sys_why = repr(_sys_exc)
+    check("helper: a NON-root system account (uid<1000) is still accepted", not _sys_why,
+          "refused %s, which is the shape of the panel's own user: %s" % (_sys_name, _sys_why))
 
 # ── What may be written into a root-owned file ────────────────────────────────────────────────
 # WRITE_TARGETS secures the path; the CONTENT was stdin, written verbatim, on the reasoning that
