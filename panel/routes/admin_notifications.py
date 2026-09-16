@@ -13,7 +13,7 @@ from panel.services import (notifications)
 from panel.services.monitoring import (_AUTOBLOCK_DEFAULT_THRESHOLD, _autoblock_threshold)
 from datetime import (timedelta)
 from panel.core.http import (_form_credential, _form_err, _form_ok, _json_body)
-from panel.core.validation import (_int_or, _valid_hex_color, generate_password)
+from panel.core.validation import (_int_or, _valid_hex_color, generate_password, username_problem)
 from app import (_new_user_language)
 
 
@@ -144,8 +144,9 @@ def register(app):
         if is_superadmin and not current_user.is_superadmin:
             return _form_err("Only a superadmin can grant superadmin.", "manage_users")
 
-        if not username or len(username) < 3:
-            return _form_err("Username must be at least 3 characters.", "manage_users")
+        _uerr = username_problem(username)
+        if _uerr:
+            return _form_err(_uerr, "manage_users")
 
         existing = User.query.filter_by(username=username).first()
         if existing:
@@ -197,6 +198,20 @@ def register(app):
             if want_superadmin != user.is_superadmin:
                 return _form_err("Only a superadmin can change superadmin status.", "manage_users")
 
+        # Renaming. Admins could change everything about an account EXCEPT the name it signs in
+        # with, so a typo at creation (or a person changing theirs) meant deleting the account and
+        # making a new one — losing its groups, its 2FA and its audit history. The field is
+        # optional: a form that omits it leaves the name alone.
+        _new_username = (request.form.get("username") or "").strip()
+        _old_username = user.username
+        if _new_username and _new_username != _old_username:
+            _uerr = username_problem(_new_username)
+            if _uerr:
+                return _form_err(_uerr, "manage_users")
+            if User.query.filter(User.username == _new_username, User.id != user.id).first():
+                return _form_err("Username already exists.", "manage_users")
+            user.username = _new_username
+
         user.display_name = (request.form.get("display_name") or user.display_name or "").strip()
         _new_email = request.form.get("email", "").strip()
         user.email = encrypt_secret(_new_email) if _new_email else None
@@ -243,6 +258,11 @@ def register(app):
             return _form_err("That change would leave no active superadmin — aborted.", "manage_users")
 
         db.session.commit()
+        if _new_username and _new_username != _old_username:
+            # Its own entry, and keyed on the OLD name: every earlier row for this account is filed
+            # under that, so this is the only line that connects the two.
+            log_action(current_user, "rename_user", target=_old_username,
+                       detail="renamed to '%s'" % user.username)
         log_action(current_user, "edit_user", target=user.username)
         if new_password:
             notifications.notify("account_change", "Password reset",
