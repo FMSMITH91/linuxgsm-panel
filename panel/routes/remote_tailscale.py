@@ -58,6 +58,10 @@ def register(app):
         remote = get_remote(remote_id)
         try:
             status, log = remote_tailscale_finalize(remote)
+            # Opens tailscale0 in the remote's UFW — a firewall change, and the only one of this
+            # file's five Tailscale actions that was not audited.
+            log_action(current_user, "remote_tailscale_finalize", target=remote.name,
+                       success=bool(status.get("running")))
             return jsonify({
                 "success": True, "running": status.get("running", False),
                 "tailscale_ip": status.get("tailscale_ip", ""),

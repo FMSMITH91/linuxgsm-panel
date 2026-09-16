@@ -5,7 +5,7 @@ Moved out of register_routes() verbatim — see panel/routes/__init__.py for why
 from flask import (jsonify, request)
 from flask_login import (current_user, login_required)
 from panel.core.config import (load_config, save_config)
-from panel.db.models import (GameServer, RemoteServer)
+from panel.db.models import (GameServer, LOCAL_HOST_LABEL, RemoteServer)
 from panel.ops import (system_ops as so)
 from panel.ops.ssh_manager import (remote_fail2ban_overview, remote_fail2ban_top_ips,
     remote_fail2ban_unban, remote_security_log, remote_ufw_close_port, remote_ufw_deny_ip,
@@ -232,7 +232,7 @@ def register(app):
             except Exception:
                 app.logger.warning("change-port: fail2ban port update failed", exc_info=True)
 
-        log_action(current_user, "panel_change_binding",
+        log_action(current_user, "panel_change_binding", target=LOCAL_HOST_LABEL,
                    detail=f"{cur_bind}:{cur_port} -> {new_bind}:{new_port}", success=True)
         ok, _ = so.restart_panel()
         if not ok:

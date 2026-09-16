@@ -6,7 +6,7 @@ from flask import (Response, abort, jsonify, request, send_file)
 from flask_login import (current_user, login_required)
 from panel.core.panel_state import (_full_backup_lock, _game_backup_status)
 from sqlalchemy.orm import (joinedload)
-from panel.db.models import (GameServer, RemoteServer, db)
+from panel.db.models import (GameServer, LOCAL_HOST_LABEL, RemoteServer, db)
 from panel.ops import (backup as bk, system_ops as so)
 from panel.ops.ssh_manager import (backup_disk_info, delete_game_backup, list_game_backups,
     run_game_backup, stream_game_backup)
@@ -133,7 +133,7 @@ def register(app):
         force = (mode == "now")
         defer = (mode == "wait")
         started = _trigger_full_backup(force=force, defer=defer)
-        log_action(current_user, "panel_full_backup", detail="mode=%s" % (mode or "default"), success=True)
+        log_action(current_user, "panel_full_backup", target=LOCAL_HOST_LABEL, detail="mode=%s" % (mode or "default"), success=True)
         if not started:
             return jsonify({"success": True, "running": True, "message": "A full backup is already running."})
         if defer:
@@ -391,7 +391,7 @@ def register(app):
         """Create a backup now (database + config + encryption keys)."""
         try:
             ok, res = bk.create_backup("manual")
-            log_action(current_user, "panel_backup_create", detail=res if ok else "", success=ok)
+            log_action(current_user, "panel_backup_create", target=LOCAL_HOST_LABEL, detail=res if ok else "", success=ok)
             return jsonify({"success": ok, "message": ("Backup created." if ok else res),
                             "name": res if ok else ""})
         except Exception:
@@ -436,7 +436,7 @@ def register(app):
         s = bk.set_settings(enabled=data.get("enabled"), keep_days=data.get("keep_days"))
         full = bk.set_full_settings(interval_days=data.get("full_interval_days"),
                                     keep=data.get("full_keep"))
-        log_action(current_user, "panel_backup_settings", detail=str(s))
+        log_action(current_user, "panel_backup_settings", target=LOCAL_HOST_LABEL, detail=str(s))
         return jsonify({"success": True, "settings": s, "full": full})
 
     @app.route("/api/panel/debug-report")
@@ -467,7 +467,7 @@ def register(app):
         """Install + enable unattended-upgrades so the OS patches itself."""
         try:
             ok, msg = so.enable_unattended_upgrades()
-            log_action(current_user, "enable_auto_updates", detail=msg, success=ok)
+            log_action(current_user, "enable_auto_updates", target=LOCAL_HOST_LABEL, detail=msg, success=ok)
             return jsonify({"success": ok, "message": msg})
         except Exception:
             return jsonify({"success": False,
@@ -488,7 +488,7 @@ def register(app):
         """Run apt upgrade."""
         success, msg = so.os_run_update()
         if success:
-            log_action(current_user, "os_update_run", detail=msg)
+            log_action(current_user, "os_update_run", target=LOCAL_HOST_LABEL, detail=msg)
             return jsonify({"success": True, "message": msg})
         return jsonify({"success": False, "message": msg}), 500
 
@@ -508,6 +508,6 @@ def register(app):
         delay = data.get("delay", 5)
         success, msg = so.server_reboot(delay)
         if success:
-            log_action(current_user, "server_reboot", detail=f"delay={delay}s")
+            log_action(current_user, "server_reboot", target=LOCAL_HOST_LABEL, detail=f"delay={delay}s")
             return jsonify({"success": True, "message": msg})
         return jsonify({"success": False, "message": msg}), 500
