@@ -63,7 +63,7 @@ with _w.catch_warnings():
 del _w
 
 import secrets
-from flask import (Flask, current_app, g, jsonify, request, session, url_for)
+from flask import (Flask, current_app, g, jsonify, redirect, request, session, url_for)
 from markupsafe import Markup
 from panel.core import i18n
 from flask_login import (current_user)
@@ -1017,6 +1017,44 @@ def create_app():
     def _make_csp_nonce():
         g.csp_nonce = secrets.token_urlsafe(16)
 
+    # ── Forced password change ───────────────────────────────────────────────────────────────
+    # An account whose password was set by an ADMIN (created, or reset) holds a credential two
+    # people know, that has been read off a screen and relayed through chat or spoken aloud. Until
+    # the holder replaces it with one only they know, it is a handover token, not a password — so
+    # the account can do exactly one thing: replace it.
+    #
+    # A before_request, not a decorator on each view. A decorator is a list of places to remember,
+    # and the one that gets forgotten is the hole: 200-odd routes, an API that authenticates with a
+    # bearer token, and any route added later would each have to opt in. This opts everything OUT by
+    # default and names the handful that must stay reachable.
+    _PW_GATE_OPEN = frozenset((
+        "force_password_change",     # the page itself
+        "account_change_password",   # …and the form it posts to
+        "logout",                    # never trap someone in a session they want to leave
+        "set_language", "api_i18n_catalog",   # the page's own language switcher
+        "healthz", "static",
+    ))
+
+    @app.before_request
+    def _require_password_change():
+        if not getattr(current_user, "is_authenticated", False):
+            return None
+        if not getattr(current_user, "must_change_password", False):
+            return None
+        if (request.endpoint or "") in _PW_GATE_OPEN:
+            return None
+        # An in-page fetch or an API client cannot be redirected — it would follow the redirect and
+        # try to read an HTML page as JSON. Same contract as the expired-session 401: a status the
+        # caller can act on, plus the header the page's fetch wrapper watches for.
+        from panel.security.auth import _denial_wants_json
+        if _denial_wants_json():
+            resp = jsonify({"success": False, "error": "password_change_required",
+                            "message": "Set your own password before using the panel."})
+            resp.status_code = 403
+            resp.headers["X-Password-Change-Required"] = "1"
+            return resp
+        return redirect(url_for("force_password_change"))
+
     # ── Security response headers ──
     # STRICT script-src: 'self' + a per-request nonce, NO 'unsafe-inline'. Every one of our own
     # <script> blocks carries nonce="{{ csp_nonce }}"; all event handlers are attached via the
@@ -1330,6 +1368,14 @@ def register_context_processors(app):
             "csp_nonce": getattr(g, "csp_nonce", ""),
             "nav_remotes": nav_remotes,
             "local_remote_id": local_remote_id,
+            # Whether to render the signed-in chrome — sidebar, topbar, nag banners and the
+            # background pollers that come with them. Normally "are they signed in", but an account
+            # that still has to replace a handed-over password is signed in and cannot use any of
+            # it: every one of those links and polls is refused by the gate in create_app. Deciding
+            # it HERE, once, means a page added to that chrome later is covered without anyone
+            # remembering to cover it.
+            "show_app_chrome": (getattr(current_user, "is_authenticated", False)
+                                and not getattr(current_user, "must_change_password", False)),
             # i18n: `t()` translates a string for the active language (falls back to English);
             # the catalog is also handed to the browser so client JS can translate too.
             "t": lambda s: i18n.translate(lang, s),

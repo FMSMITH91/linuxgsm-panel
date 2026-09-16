@@ -1961,6 +1961,16 @@
       "POST"
     ]
   },
+  "/password/change": {
+    "endpoint": "force_password_change",
+    "guards": [
+      "utils.py:decorated_view",
+      "view:force_password_change"
+    ],
+    "methods": [
+      "GET"
+    ]
+  },
   "/remote/<int:remote_id>/firewall": {
     "endpoint": "remote_firewall",
     "guards": [

@@ -16,6 +16,7 @@ The values themselves are MOVED VERBATIM from app.py, comments and all, so the d
 """
 import os
 import re
+import secrets as _secrets
 from urllib.parse import quote
 
 
@@ -80,6 +81,38 @@ def password_problem(pw):
     if not any(c in _PW_SYMBOLS for c in pw):
         return "Password must include a symbol (e.g. !@#$%)."
     return None
+
+
+# Characters a person has to read off one screen and type into another without getting it wrong, so
+# the pairs that look alike are gone: no O/0, no I/l/1, no S/5, no B/8, no Z/2. The symbols are the
+# ones that survive being pasted into a chat message or a terminal unquoted — no quotes, no
+# backslash, no backtick, nothing a shell would eat.
+_GEN_LOWER = "abcdefghijkmnpqrstuvwxyz"
+_GEN_UPPER = "ACDEFGHJKLMNPQRTUVWXY"
+_GEN_DIGIT = "34679"
+_GEN_SYMBOL = "!@#$%^&*+-=?"
+_GEN_ALL = _GEN_LOWER + _GEN_UPPER + _GEN_DIGIT + _GEN_SYMBOL
+GENERATED_PASSWORD_LEN = 16
+
+
+def generate_password(length=GENERATED_PASSWORD_LEN):
+    """A random password that always satisfies password_problem().
+
+    Built by construction rather than by rejection sampling: one character from each required class
+    first, the rest from the full alphabet, then shuffled. "Generate and retry until it passes" has
+    no bound on how long it runs, and a generator for a login credential is not the place to find
+    out how unlucky a machine can get.
+
+    16 characters from a ~62-character alphabet is ~95 bits — far past anything the login throttle
+    would ever let an attacker reach, and still short enough to read aloud. Uses secrets, not
+    random: this is a credential, and random's Mersenne Twister is reconstructible from its output.
+    """
+    length = max(MIN_PASSWORD_LEN, int(length))
+    pools = (_GEN_LOWER, _GEN_UPPER, _GEN_DIGIT, _GEN_SYMBOL)
+    chars = [_secrets.choice(p) for p in pools]
+    chars += [_secrets.choice(_GEN_ALL) for _ in range(length - len(pools))]
+    _secrets.SystemRandom().shuffle(chars)   # or the class of each position would be predictable
+    return "".join(chars)
 
 
 def _int_or(value, default):

@@ -120,6 +120,13 @@ class User(UserMixin, db.Model):
     language = db.Column(db.String(5), default="en")  # UI language: en / es / fr
     # A superadmin without 2FA sees a nag banner; this remembers a permanent "don't remind me".
     otp_nag_dismissed = db.Column(db.Boolean, default=False, nullable=False)
+    # This account's password was set by someone ELSE — an admin created the account, or reset its
+    # password — so it is a handover credential, not a secret. It has been read off one screen and
+    # relayed through chat or spoken aloud, and the admin who generated it still knows it. Set then,
+    # cleared the moment the account holder chooses their own; while it is set, every request but
+    # the change-password page is refused, so the window where a password two people know is a
+    # working login is as short as the user's first sign-in.
+    must_change_password = db.Column(db.Boolean, default=False, nullable=False)
     # This user's own UI layout (host/server order), JSON. Personal and never queried, so it rides
     # on the row instead of its own table — reading it costs no extra query. An ABSENT key means
     # "use the default layout", so there is exactly one fallback path in the renderer.
@@ -758,6 +765,11 @@ def _run_light_migrations():
         ("user", "api_token"): "ALTER TABLE user ADD COLUMN api_token VARCHAR(64)",
         ("user", "ui_prefs"): "ALTER TABLE user ADD COLUMN ui_prefs TEXT DEFAULT '{}'",
         ("user", "last_totp_step"): "ALTER TABLE user ADD COLUMN last_totp_step INTEGER DEFAULT 0",
+        # DEFAULT 0: every account that already exists chose its own password, or has been using
+        # whatever it was given for long enough that a forced change on upgrade would be a surprise
+        # rather than a protection. The flag only ever starts true for a password set from now on.
+        ("user", "must_change_password"):
+            "ALTER TABLE user ADD COLUMN must_change_password BOOLEAN DEFAULT 0 NOT NULL",
         # DEFAULT 1, unlike the model's default of False, and only here: this DDL runs once, on
         # an install that already has session rows, and its DEFAULT exists solely to backfill
         # them. Guessing "remembered" for those is the kind guess — the expiry sweep then gives

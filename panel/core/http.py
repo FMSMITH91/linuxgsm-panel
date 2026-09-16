@@ -36,6 +36,24 @@ def _form_ok(message, endpoint, **values):
     return redirect(url_for(endpoint, **values))
 
 
+def _form_credential(message, endpoint, username, password, **values):
+    """Success for an action that MINTED a credential: the plaintext rides back in the JSON so the
+    page can show it once, and is never put anywhere it would persist.
+
+    Not a flash and not the session — a flash is stored in the signed session cookie, so a generated
+    password would sit in the browser's cookie jar (and any proxy log that captured the Set-Cookie)
+    long after it was displayed. A non-fetch submit therefore gets the password in the redirect's
+    flash ONLY as a last resort, because there is nowhere else to put it and a password the admin
+    never sees is a locked-out user; every page in this panel submits these forms through fetch.
+    """
+    if _wants_json():
+        return jsonify({"success": True, "message": message,
+                        "credential": {"username": username, "password": password}})
+    flash("%s Temporary password for %s: %s — copy it now, it is not shown again."
+          % (message, username, password), "success")
+    return redirect(url_for(endpoint, **values))
+
+
 def _form_err(message, endpoint, code=400, category="danger", **values):
     """Failure result for an action form: JSON (+ status) for a fetch, else flash + redirect."""
     if _wants_json():

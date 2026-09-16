@@ -327,7 +327,18 @@ function _submitAjaxForm(form){
         if (form.getAttribute('data-ajax-reset') !== 'off' && form.reset) form.reset();
         var sel = form.getAttribute('data-ajax-refresh');
         var after = form.getAttribute('data-ajax-after');
-        var doRefresh = function(){ if (sel) window.refreshSection(sel, after); };
+        // A response can carry a freshly minted secret (a generated password) for the page to show
+        // once. It rides along with the refresh rather than being shown straight away: opening a
+        // second modal while the first is still hiding leaves Bootstrap stripping `modal-open` off
+        // the body and stranding both backdrops over the new one — the password is on the page,
+        // behind two grey sheets, which is the same as losing it.
+        var cred = res.d.credential;
+        var doRefresh = function(){
+          if (sel) window.refreshSection(sel, after);
+          if (cred && typeof window.showCredential === 'function'){
+            try { window.showCredential(cred); } catch(e){}
+          }
+        };
         var modal = form.closest('.modal');
         if (modal && window.bootstrap){
           // Wait for the modal to FULLY hide (Bootstrap removes its backdrop) before swapping the

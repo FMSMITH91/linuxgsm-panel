@@ -128,7 +128,7 @@
 </div>
 {% endif %}
 
-{% if current_user.is_authenticated %}
+{% if show_app_chrome %}
 <!-- Mobile topbar -->
 <div class="topbar">
   <button class="hamburger" id="hamburger" data-action="toggleSidebar" aria-label="Menu">
@@ -258,7 +258,10 @@
 {% endif %}
 
 <!-- Command palette (Ctrl/⌘+K). `hidden` until opened — it is a fixed overlay and must never
-     take part in layout, or every page pays a layout shift for a box nobody opened. -->
+     take part in layout, or every page pays a layout shift for a box nobody opened.
+     Under the same guard as the sidebar because it INDEXES the sidebar: without one it can only
+     ever open empty, which is what it did on the login page. -->
+{% if show_app_chrome %}
 <div class="cmdk-backdrop" id="cmdk" hidden>
   <div class="cmdk" role="dialog" aria-modal="true" aria-label="{{ t('Search the panel') }}">
     <div class="cmdk-search">
@@ -277,6 +280,7 @@
     </div>
   </div>
 </div>
+{% endif %}
 
 <!-- Flash messages -->
 <div class="flash-container">
@@ -293,9 +297,9 @@
 </div>
 
 <!-- Main content -->
-<main class="main-content{% if not current_user.is_authenticated %} main-content-full{% endif %}">
+<main class="main-content{% if not show_app_chrome %} main-content-full{% endif %}">
   <div class="content-wrap">
-    {% if current_user.is_authenticated and current_user.is_superadmin and not current_user.totp_enabled and not current_user.otp_nag_dismissed %}
+    {% if show_app_chrome and current_user.is_superadmin and not current_user.totp_enabled and not current_user.otp_nag_dismissed %}
     <!-- Sits on EVERY page, so its height is a tax on every screen. Measured at 375x812 it was
          243px — 30% of the viewport — and pushed the first page-specific content to y=987, past
          the fold. The rationale text and the long dismiss label are therefore shown from `sm` up
@@ -480,7 +484,7 @@ window.osUpdatesNagCheck = function(){
   if (window.pollWhenVisible) window.pollWhenVisible(window.osUpdatesNagCheck, 60*60*1000);
 })();
 </script>
-{% if current_user.is_authenticated and current_user.is_superadmin %}
+{% if show_app_chrome and current_user.is_superadmin %}
 <script nonce="{{ csp_nonce }}">
 // Panel update badge (super admins only). Quietly checks if the panel is behind
 // its GitHub repo and shows an "update" pill next to the version in the sidebar.

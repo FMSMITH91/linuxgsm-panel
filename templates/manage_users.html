@@ -96,10 +96,9 @@
             <label class="form-label" for="manage-users-username">Username</label>
             <input id="manage-users-username" type="text" name="username" class="form-control" required minlength="3">
           </div>
-          <div class="mb-3">
-            <label class="form-label" for="manage-users-password">Password</label>
-            <input id="manage-users-password" type="password" name="password" class="form-control" required minlength="10">
-            <div class="form-text">At least 10 characters with upper &amp; lowercase, a number, and a symbol.</div>
+          <div class="alert alert-secondary py-2 px-3 small mb-3" role="note">
+            <i class="bi bi-key"></i> The panel generates a one-time password and shows it once when
+            you save. Give it to them; they'll be asked to set their own the first time they sign in.
           </div>
           <div class="mb-3">
             <label class="form-label" for="manage-users-display_name">Display Name</label>
@@ -183,10 +182,11 @@
             <label class="form-label" for="eu-email">Email</label>
             <input type="email" name="email" id="eu-email" class="form-control">
           </div>
-          <div class="mb-3">
-            <label class="form-label" for="eu-password">New Password (leave blank to keep current)</label>
-            <input type="password" name="password" id="eu-password" class="form-control" minlength="10">
-            <div class="form-text">At least 10 characters with upper &amp; lowercase, a number, and a symbol.</div>
+          <div class="mb-3 form-check">
+            <input type="checkbox" name="reset_password" id="eu-reset-password" class="form-check-input">
+            <label class="form-check-label" for="eu-reset-password">Reset password</label>
+            <div class="form-text">Generates a one-time password, shown once when you save, and signs
+              this user out everywhere. They'll set their own the next time they sign in.</div>
           </div>
           <hr class="border-secondary">
           <div class="mb-2">
@@ -246,6 +246,42 @@
   </div>
 </div>
 
+
+{# Shown once, after the server mints a one-time password. There is no second chance to read it:
+   the panel stores only the bcrypt hash, so nothing anywhere can print it again. #}
+<div class="modal fade" id="credentialModal" tabindex="-1" data-bs-backdrop="static">
+  <div class="modal-dialog">
+    <div class="modal-content">
+      <div class="modal-header">
+        <h5 class="modal-title"><i class="bi bi-key"></i> One-time password</h5>
+      </div>
+      <div class="modal-body">
+        {# The username stands alone rather than sitting inside the sentence: the i18n walker
+           translates whole text nodes, and a name in the middle of one splits it into fragments
+           ("Give this to" … ". They'll be asked to") that no translator can word properly. #}
+        <div class="mb-2"><span class="font-monospace fw-semibold" id="cred-user"></span></div>
+        <p class="text-secondary small">
+          They'll be asked to set their own password the first time they sign in, and this one
+          stops working then.
+        </p>
+        <div class="input-group mb-2">
+          <input type="text" class="form-control font-monospace" id="cred-pw" readonly
+                 aria-label="One-time password" style="font-size:1.05rem; letter-spacing:.02em;">
+          <button class="btn btn-outline-secondary" type="button" data-action="copyCredential">
+            <i class="bi bi-clipboard"></i> Copy
+          </button>
+        </div>
+        <div class="alert alert-warning py-2 px-3 small mb-0" role="alert">
+          <i class="bi bi-exclamation-triangle"></i> Copy it now — it is not shown again, and the
+          panel cannot recover it. If you lose it, reset the password to issue a new one.
+        </div>
+      </div>
+      <div class="modal-footer">
+        <button type="button" class="btn btn-primary" data-bs-dismiss="modal">Done</button>
+      </div>
+    </div>
+  </div>
+</div>
 
 {% endblock %}
 

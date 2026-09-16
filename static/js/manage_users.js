@@ -49,5 +49,31 @@ window.openEditUser = function (id) {
   document.getElementById('eu-reset2fa').checked = false;
   tfa.style.display = u.totp_enabled ? '' : 'none';
 
+  // Same reasoning as the 2FA box: a password reset is destructive and must be chosen fresh each
+  // time the dialog opens, never inherited from the last user you edited.
+  var rp = document.getElementById('eu-reset-password');
+  if (rp) rp.checked = false;
+
   new bootstrap.Modal(document.getElementById('editUserModal')).show();
+};
+
+// Show a one-time password the server just minted. Called by the ajax-form handler the moment the
+// response lands (see _submitAjaxForm) — the panel keeps only the hash, so if this is missed the
+// password is gone and the account has to be reset again.
+//
+// Values go in through .value and .textContent, never innerHTML: a username is user-authored text,
+// and the generated password contains symbols that are markup if you treat them as markup.
+window.showCredential = function(cred){
+  if (!cred || !cred.password) return;
+  var who = document.getElementById('cred-user'), pw = document.getElementById('cred-pw');
+  if (!who || !pw) return;
+  who.textContent = cred.username || '';
+  pw.value = cred.password;
+  new bootstrap.Modal(document.getElementById('credentialModal')).show();
+};
+window.copyCredential = function(){
+  var pw = document.getElementById('cred-pw');
+  if (!pw) return;
+  if (window.copyText) copyText(pw.value, 'Password copied');
+  else if (navigator.clipboard) navigator.clipboard.writeText(pw.value);
 };

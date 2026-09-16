@@ -12,8 +12,8 @@ from panel.security.auth import (MANAGE_USERS, hash_password, log_action, permis
 from panel.services import (notifications)
 from panel.services.monitoring import (_AUTOBLOCK_DEFAULT_THRESHOLD, _autoblock_threshold)
 from datetime import (timedelta)
-from panel.core.http import (_form_err, _form_ok, _json_body)
-from panel.core.validation import (_int_or, _valid_hex_color, password_problem)
+from panel.core.http import (_form_credential, _form_err, _form_ok, _json_body)
+from panel.core.validation import (_int_or, _valid_hex_color, generate_password)
 from app import (_new_user_language)
 
 
@@ -134,7 +134,6 @@ def register(app):
     @permission_required(MANAGE_USERS)
     def add_user():
         username = request.form.get("username", "").strip()
-        password = request.form.get("password", "")
         email = request.form.get("email", "").strip()
         display_name = request.form.get("display_name", username).strip()
         is_superadmin = request.form.get("is_superadmin") == "on"
@@ -147,9 +146,6 @@ def register(app):
 
         if not username or len(username) < 3:
             return _form_err("Username must be at least 3 characters.", "manage_users")
-        pw_err = password_problem(password)
-        if pw_err:
-            return _form_err(pw_err, "manage_users")
 
         existing = User.query.filter_by(username=username).first()
         if existing:
@@ -158,6 +154,11 @@ def register(app):
         # New users start in the configured default UI language (Settings → Localization);
         # each user can change their own afterwards.
         new_lang = _new_user_language(load_config(), i18n.LANGUAGES)
+        # The panel picks the password, not the admin. A password one person invents for another is
+        # the one they will reuse for the next account, or a house pattern with the username in it;
+        # and it has to be relayed anyway, so it is a handover credential from the moment it exists.
+        # Generating it makes it random, and must_change_password makes it temporary.
+        password = generate_password()
         user = User(
             username=username,
             password_hash=hash_password(password),
@@ -165,6 +166,7 @@ def register(app):
             display_name=display_name,
             is_superadmin=is_superadmin,
             language=new_lang,   # already validated against i18n.LANGUAGES by _new_user_language
+            must_change_password=True,
         )
         # Add to selected groups
         for gid in group_ids:
@@ -178,7 +180,8 @@ def register(app):
         notifications.notify("account_change", "New user created",
                              "%s created the user '%s'%s."
                              % (current_user.username, username, " (SUPER ADMIN)" if is_superadmin else ""))
-        return _form_ok(f"User '{username}' created.", "manage_users")
+        return _form_credential(f"User '{username}' created.", "manage_users",
+                                username=username, password=password)
 
     @app.route("/users/<int:user_id>/edit", methods=["POST"])
     @login_required
@@ -201,14 +204,20 @@ def register(app):
         user.is_active = request.form.get("is_active") == "on"
         user.is_superadmin = want_superadmin
 
-        # Update password if provided
-        password = request.form.get("password", "")
-        if password:
-            pw_err = password_problem(password)
-            if pw_err:
-                return _form_err(pw_err, "manage_users")
-            user.password_hash = hash_password(password)
+        # Reset the password on request. Generated, never typed by the admin — same reasoning as
+        # add_user. Resetting is an explicit tick, not a blank field that means "keep": an edit that
+        # only renames someone must not quietly invalidate their login.
+        new_password = None
+        if request.form.get("reset_password") == "on":
+            new_password = generate_password()
+            user.password_hash = hash_password(new_password)
             user.auth_epoch = (user.auth_epoch or 0) + 1   # revoke existing sessions
+            # Only when the password now belongs to two people. An admin resetting their OWN
+            # password knows it because they chose to see it, and has nobody to take it back from;
+            # forcing them through a change screen would protect nothing.
+            if user.id != current_user.id:
+                user.must_change_password = True
+            log_action(current_user, "reset_user_password", target=user.username)
 
         # Admin reset of a user's 2FA (for when they lose their authenticator).
         if request.form.get("reset_2fa") == "on" and user.totp_enabled:
@@ -230,6 +239,12 @@ def register(app):
 
         db.session.commit()
         log_action(current_user, "edit_user", target=user.username)
+        if new_password:
+            notifications.notify("account_change", "Password reset",
+                                 "%s reset the password for '%s'."
+                                 % (current_user.username, user.username))
+            return _form_credential(f"User '{user.username}' updated.", "manage_users",
+                                    username=user.username, password=new_password)
         return _form_ok(f"User '{user.username}' updated.", "manage_users")
 
     @app.route("/users/<int:user_id>/delete", methods=["POST"])

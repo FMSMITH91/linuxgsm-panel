@@ -22,6 +22,7 @@ from panel.ops.ssh_manager import hosts as _sm_hosts   # the stub seam: stubbed 
 # because every caller now reaches these through the module rather than binding them.
 
 from panel.core.config import DATA_DIR, DB_PATH, SECRET_FILE, CRED_KEY_FILE, CONFIG_FILE
+from panel.core.validation import password_problem as auth_password_problem
 
 # Never clobber a real install: only run against a fresh, throwaway data dir.
 if DB_PATH.exists():
@@ -441,8 +442,10 @@ try:
     with app.app_context():
         eu = User.query.filter_by(username="esc_user").first()
         check("MANAGE_USERS user can't create a superadmin", eu is None or not eu.is_superadmin)
+    # reset_password=on is the real reset path now (the password is generated, never posted), so
+    # this has to drive THAT to still be testing the superadmin guard rather than an ignored field.
     dc.post("/users/%d/edit" % admin2_id,
-            data={"is_superadmin": "on", "is_active": "on", "password": "hijacked1!A"})
+            data={"is_superadmin": "on", "is_active": "on", "reset_password": "on"})
     with app.app_context():
         a2 = User.query.get(admin2_id)
         check("MANAGE_USERS user can't reset a superadmin's password",
@@ -1090,6 +1093,128 @@ try:
     qt_clear = c.post("/api/server/%d/query-type" % gs_id, json={"query_type": ""})
     check("query-type: blank clears the override",
           qt_clear.status_code == 200 and (qt_clear.get_json() or {}).get("query_type") == "")
+
+    # ── Admin-issued passwords: generated, shown once, and forced to be replaced ──────────────
+    # An admin creating an account, or resetting someone's password, hands over a credential TWO
+    # people know. The panel generates it (so it is not a house pattern), returns it exactly once,
+    # and refuses the account everything except replacing it.
+    _add = c.post("/users/add", data={"username": "handover", "display_name": "Handover"},
+                  headers={"X-Requested-With": "XMLHttpRequest"})
+    _aj = _add.get_json() or {}
+    _issued = (_aj.get("credential") or {}).get("password") or ""
+    check("add user: succeeds with NO password in the form",
+          _aj.get("success") is True, str(_aj)[:120])
+    check("add user: the response carries the generated password, once",
+          bool(_issued) and (_aj["credential"].get("username") == "handover"), str(_aj)[:160])
+    check("add user: what it generated satisfies the panel's own password policy",
+          auth_password_problem(_issued) is None, "%r -> %s" % (_issued, auth_password_problem(_issued)))
+    with app.app_context():
+        _hu = User.query.filter_by(username="handover").first()
+        _hu_id = _hu.id
+        check("add user: the issued password actually authenticates",
+              auth.check_password(_issued, _hu.password_hash))
+        check("add user: ...and the account is flagged to replace it", _hu.must_change_password is True)
+
+    # The gate: signed in, and able to reach exactly one page.
+    hc = app.test_client()
+    _lg = hc.post("/login", data={"username": "handover", "password": _issued},
+                  follow_redirects=False)
+    check("handover login: the issued password gets them in",
+          _lg.status_code in (301, 302, 303) and "/login" not in (_lg.headers.get("Location") or ""),
+          "status=%d loc=%s" % (_lg.status_code, _lg.headers.get("Location") or ""))
+    _dash = hc.get("/", follow_redirects=False)
+    check("gate: every page redirects to the change-password page",
+          _dash.status_code in (301, 302, 303)
+          and "/password/change" in (_dash.headers.get("Location") or ""),
+          "status=%d loc=%s" % (_dash.status_code, _dash.headers.get("Location") or ""))
+    _acct = hc.get("/account", follow_redirects=False)
+    check("gate: ...including the account page it would otherwise change it from",
+          "/password/change" in (_acct.headers.get("Location") or ""))
+    _api = hc.get("/api/servers", headers={"X-Requested-With": "XMLHttpRequest"})
+    check("gate: an in-page fetch gets a 403 it can act on, not a login page",
+          _api.status_code == 403 and _api.headers.get("X-Password-Change-Required") == "1",
+          "status=%d" % _api.status_code)
+    check("gate: ...in the standard envelope",
+          (_api.get_json() or {}).get("error") == "password_change_required",
+          _api.get_data(as_text=True)[:120])
+    _page = hc.get("/password/change")
+    check("gate: the change-password page itself is reachable", _page.status_code == 200,
+          "status=%d" % _page.status_code)
+    check("gate: ...and is rendered without the app chrome that would bounce them back",
+          b'class="sidebar"' not in _page.data and b"cmdk-backdrop" not in _page.data)
+
+    # Wrong current password must not clear the flag — the gate is not a formality.
+    hc.post("/account/password", data={"current_password": "not-the-one",
+                                       "new_password": "Ch0sen!pass1", "confirm_password": "Ch0sen!pass1"})
+    with app.app_context():
+        check("gate: a wrong current password leaves the account still flagged",
+              db.session.get(User, _hu_id).must_change_password is True)
+
+    _chg = hc.post("/account/password", data={"current_password": _issued,
+                                              "new_password": "Ch0sen!pass1",
+                                              "confirm_password": "Ch0sen!pass1"},
+                   follow_redirects=False)
+    with app.app_context():
+        _hu2 = db.session.get(User, _hu_id)
+        check("change: setting their own password clears the flag",
+              _hu2.must_change_password is False)
+        check("change: ...and it is really the new password",
+              auth.check_password("Ch0sen!pass1", _hu2.password_hash))
+    check("change: they are sent into the panel, not back to the form",
+          "/password/change" not in (_chg.headers.get("Location") or ""),
+          _chg.headers.get("Location") or "")
+    _after = hc.get("/", follow_redirects=False)
+    check("change: ...and the panel opens normally afterwards", _after.status_code == 200,
+          "status=%d" % _after.status_code)
+
+    # Admin reset of SOMEONE ELSE's password: generated, flagged, old password dead.
+    _rst = c.post("/users/%d/edit" % _hu_id,
+                  data={"display_name": "Handover", "is_active": "on", "reset_password": "on"},
+                  headers={"X-Requested-With": "XMLHttpRequest"})
+    _rj = _rst.get_json() or {}
+    _reissued = (_rj.get("credential") or {}).get("password") or ""
+    check("reset: the response carries a new generated password", bool(_reissued), str(_rj)[:140])
+    check("reset: it is not the one they had chosen", _reissued != "Ch0sen!pass1")
+    with app.app_context():
+        _hu3 = db.session.get(User, _hu_id)
+        check("reset: the account must replace it again", _hu3.must_change_password is True)
+        check("reset: their chosen password no longer works",
+              not auth.check_password("Ch0sen!pass1", _hu3.password_hash))
+        check("reset: the issued one does", auth.check_password(_reissued, _hu3.password_hash))
+
+    # An edit that does NOT tick reset must leave the password alone — renaming someone is not a
+    # reason to invalidate their login.
+    _noreset = c.post("/users/%d/edit" % _hu_id,
+                      data={"display_name": "Renamed", "is_active": "on"},
+                      headers={"X-Requested-With": "XMLHttpRequest"})
+    check("edit: an ordinary edit mints nothing",
+          (_noreset.get_json() or {}).get("credential") is None, str(_noreset.get_json())[:120])
+    with app.app_context():
+        check("edit: ...and leaves the password working",
+              auth.check_password(_reissued, db.session.get(User, _hu_id).password_hash))
+
+    # Resetting your OWN password from the Users page: you already know it, and there is nobody to
+    # take it back from, so it does not flag you out of your own panel. On a THROWAWAY superadmin —
+    # resetting the account the rest of this suite logs in with would break every later sign-in.
+    c.post("/users/add", data={"username": "selfrst", "display_name": "Self Reset",
+                               "is_superadmin": "on"},
+           headers={"X-Requested-With": "XMLHttpRequest"})
+    with app.app_context():
+        _sr = User.query.filter_by(username="selfrst").first()
+        _sr_id = _sr.id
+        _sr.must_change_password = False   # pretend they have already set their own
+        db.session.commit()
+    _selfrst = client_as(_sr_id).post(
+        "/users/%d/edit" % _sr_id,
+        data={"display_name": "Self Reset", "is_active": "on", "is_superadmin": "on",
+              "reset_password": "on"},
+        headers={"X-Requested-With": "XMLHttpRequest"})
+    _sj = _selfrst.get_json() or {}
+    check("self-reset: still issues a generated password",
+          bool((_sj.get("credential") or {}).get("password")), str(_sj)[:120])
+    with app.app_context():
+        check("self-reset: ...but does not force yourself through the change screen",
+              db.session.get(User, _sr_id).must_change_password is False)
 
     # ── Discover / import existing LinuxGSM servers on a host ──
     dsc = c.get("/api/remote/%d/discover" % remote_id)
