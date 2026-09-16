@@ -1,5 +1,5 @@
 """Part 4 of the unit suite. Imported for its side effects."""
-from unit.part01 import (N, NS, SO, _Path, _command_arg, _parse_tg_command, _sm_core, _sm_cron, _sm_files, _sm_game, _sm_hosts, _valid_ip_or_cidr, _whitelisted, check, config, eq, os)  # noqa: F401,E402
+from unit.part01 import (N, NS, SO, _Path, _command_arg, _parse_tg_command, _sm_core, _sm_cron, _sm_files, _sm_game, _sm_gmod, _sm_hosts, _valid_ip_or_cidr, _whitelisted, check, config, eq, os)  # noqa: F401,E402
 from unit.part02 import (_pre)  # noqa: F401,E402
 from unit.part03 import (_GS, _app, _orig_disc_rc, _so)  # noqa: F401,E402
 from unit import REPO_ROOT as _UNIT_ROOT  # noqa: E402
@@ -22,6 +22,43 @@ try:
     check("discover: returns [] when the scan command fails", _sm_core.discover_linuxgsm_servers(None) == [])
 finally:
     _sm_core.run_command = _orig_disc_rc
+
+# ── content_box_users: telling a GMod content box from real servers ──────────────────────────
+# A content box installs each mountable game through LinuxGSM, so every one of them carries the
+# exact signature discovery looks for. Seven of them under one account filled the import table with
+# seven "servers" that were nothing of the kind — and could not have been imported anyway, since a
+# host's servers are keyed on the Linux user. Classified by SHAPE, never by username: the content
+# user is whatever the host already had.
+_cb = _sm_gmod.content_box_users
+
+
+def _f(user, name):
+    return {"user": user, "lgsm_name": name}
+
+
+_box = [_f("srcds", n) for n in ("cssserver", "dodsserver", "hl2dmserver", "hldmsserver",
+                                 "l4dserver", "l4d2server", "tf2server")]
+check("content box: an account holding several mountable games is content, not servers",
+      _cb(_box) == {"srcds"}, repr(_cb(_box)))
+check("content box: ...whatever it is called — the name is never the test",
+      _cb([_f("steam", "cssserver"), _f("steam", "tf2server")]) == {"steam"})
+check("content box: a lone real server under its own user is NOT a content box",
+      _cb([_f("cssbox", "cssserver")]) == set())
+check("content box: ...so a one-game host still offers its server for import",
+      _cb([_f("mygmod", "gmodserver")]) == set())
+check("content box: the panel's own content account counts even with one game",
+      _cb([_f("gmodcontent", "cssserver")]) == {"gmodcontent"})
+check("content box: an account mixing content with a real server is left alone",
+      _cb([_f("mixed", "cssserver"), _f("mixed", "rustserver")]) == set())
+check("content box: a GMod server is not content, however many sit beside it",
+      _cb([_f("g", "gmodserver"), _f("g", "cssserver")]) == set())
+check("content box: several accounts are judged independently",
+      _cb(_box + [_f("realtf2", "tf2server")]) == {"srcds"})
+check("content box: empty / malformed scan output yields nothing",
+      _cb([]) == set() and _cb([{"user": "", "lgsm_name": ""}]) == set() and _cb(None) == set())
+check("content box: every installable content game is recognised",
+      _sm_gmod.CONTENT_LGSM_NAMES >= {"cssserver", "tf2server", "l4d2server"}
+      and "gmodserver" not in _sm_gmod.CONTENT_LGSM_NAMES)
 
 # ── LinuxGSM's data files: fetched and cached, not vendored ───────────────────────────────────
 # serverlist.csv and ubuntu-24.04.csv are LinuxGSM's. They used to be committed here, which froze

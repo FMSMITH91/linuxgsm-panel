@@ -72,7 +72,15 @@ _lgsm_data._CACHE_DIR.mkdir(parents=True, exist_ok=True)
     "csgo,csgoserver,Counter-Strike: Global Offensive,ubuntu-24.04\n"
     "gmod,gmodserver,Garry's Mod,ubuntu-24.04\n"
     "cod,codserver,Call of Duty,ubuntu-24.04\n"
-    "rust,rustserver,Rust,ubuntu-24.04\n", encoding="utf-8")
+    "rust,rustserver,Rust,ubuntu-24.04\n"
+    # The GMod-mountable Source games. A real panel supports all of these, and the discovery and
+    # import checks below are about telling mountable CONTENT from a server — with the list cut to
+    # four games those rows were dropped as "unsupported" instead, so the assertions passed
+    # whether or not the code under test did anything. Verified by mutation after adding them.
+    "css,cssserver,Counter-Strike: Source,ubuntu-24.04\n"
+    "tf2,tf2server,Team Fortress 2,ubuntu-24.04\n"
+    "dods,dodsserver,Day of Defeat: Source,ubuntu-24.04\n"
+    "l4d2,l4d2server,Left 4 Dead 2,ubuntu-24.04\n", encoding="utf-8")
 (_lgsm_data._CACHE_DIR / _lgsm_data.DEPS).write_text(
     "all,bc,binutils,curl\nsteamcmd,lib32gcc-s1,steamcmd\ncsgo,lib32tinfo6\n", encoding="utf-8")
 _lgsm_data._mem.clear()
@@ -1104,6 +1112,51 @@ try:
                                         json={"servers": [{"user": "x", "game_type": "csgo"}]})
     check("import: caller without manage_servers is denied",
           imp_denied.status_code in (301, 302, 303, 403), "got %d" % imp_denied.status_code)
+
+    # ── A host's servers are keyed on the Linux user, so one account can only ever be one server.
+    # Seven games under one account (what a GMod content box looks like) used to import the first
+    # and silently drop six as duplicates — a panel row for whichever game happened to sort first.
+    imp_multi = c.post("/api/remote/%d/import" % remote_id, json={"servers": [
+        {"user": "srcds", "game_type": "css", "port": 27015},
+        {"user": "srcds", "game_type": "tf2", "port": 27015},
+        {"user": "srcds", "game_type": "dods", "port": 27015}]})
+    _imm = imp_multi.get_json() or {}
+    check("import: one account claiming several games is refused outright, not partly applied",
+          _imm.get("added") == [] and len(_imm.get("skipped") or []) == 3, str(_imm)[:140])
+    with app.app_context():
+        _srcds_rows = GameServer.query.filter_by(remote_id=remote_id, short_name="srcds").count()
+    check("import: ...and no arbitrary winner was written to the database", _srcds_rows == 0,
+          "rows=%d" % _srcds_rows)
+
+    # ── GMod content is filtered out of discovery ──
+    # Each mountable game is installed through LinuxGSM, so the host scan cannot tell it from a
+    # server. The panel can: content_box_users classifies by shape, and the endpoint reports what
+    # it left out instead of listing one account once per game.
+    # discover.py binds discover_linuxgsm_servers by name at import, so the stub goes on THAT
+    # module — it follows the handler, not the name (same rule as remote_security below).
+    from panel.routes import discover as _disc_mod
+    _orig_disc = _disc_mod.discover_linuxgsm_servers
+    try:
+        def _fake_disc(_server):
+            rows = [{"user": "contentbox", "lgsm_name": n, "port": 27015, "backups": 0,
+                     "mods": 0, "cron": 14, "autostart": False}
+                    for n in ("cssserver", "tf2server", "dodsserver", "l4d2server")]
+            rows.append({"user": "realgmod", "lgsm_name": "gmodserver", "port": 27015,
+                         "backups": 1, "mods": 0, "cron": 2, "autostart": True})
+            return rows
+        _disc_mod.discover_linuxgsm_servers = _fake_disc
+        _d2 = (c.get("/api/remote/%d/discover" % remote_id).get_json() or {})
+        _users = [x["user"] for x in (_d2.get("servers") or [])]
+        check("discover: a content box is not offered as importable servers",
+              "contentbox" not in _users, "users=%s" % _users)
+        check("discover: ...while a real server on the same host still is",
+              _users == ["realgmod"], "users=%s" % _users)
+        _content = _d2.get("content") or []
+        check("discover: ...and the content it skipped is reported, not silently dropped",
+              len(_content) == 1 and _content[0]["user"] == "contentbox"
+              and len(_content[0]["games"]) == 4, str(_content)[:160])
+    finally:
+        _disc_mod.discover_linuxgsm_servers = _orig_disc
 
     # ── Session management: per-device login sessions + individual revoke ──
     from panel.db.models import UserSession

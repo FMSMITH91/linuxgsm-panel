@@ -55,6 +55,47 @@ GMOD_CONTENT_SIZES = {"cstrike": "~1.6 GB", "tf": "~13 GB", "dod": "~1.1 GB", "h
 _CONTENT_USER = "gmodcontent"                         # panel-managed content user, created if none exists
 _CU_NAME_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9._-]*$")   # Linux username charset (reaches root-run cmds)
 
+# The LinuxGSM script names that exist on a host purely as GMod mountable content.
+CONTENT_LGSM_NAMES = frozenset(n for _label, n in GMOD_CONTENT_GAMES.values() if n)
+
+
+def content_box_users(found):
+    """Which users in a discovery scan hold GMod CONTENT rather than game servers.
+
+    Content is installed "the same way a normal LinuxGSM content box does" (see the note on
+    GMOD_CONTENT_GAMES above): one shared user with each game installed through LinuxGSM, which
+    means each content game has exactly the things discovery looks for — an
+    `lgsm/config-lgsm/<game>server/` dir and an executable `~/<game>server`. So the host scan
+    reports every mounted game as an importable server. It is not one: nothing ever runs it, its
+    port is whatever LinuxGSM ships as the default, and importing it produces a panel row for a
+    server that does not exist.
+
+    Worse than cosmetic, because the panel keys a host's servers on the Linux user
+    (`short_name = user`, unique per host): seven content games under one user cannot import as
+    seven servers no matter what. Six are silently dropped as duplicates and the seventh becomes a
+    bogus row claiming to be whichever game sorted first.
+
+    Identified structurally, never by name. "Ignore the user called srcds" would be wrong twice
+    over: the content user is whatever the host already had (`detect_content_user` deliberately
+    reuses an existing srcds-style box, and the panel's own default is `gmodcontent`), and
+    somebody's real Source server may perfectly well run under an account called srcds.
+
+    A user is a content box when every LinuxGSM instance it holds is a mountable content game AND
+    either it holds more than one of them, or it is the account the panel creates for exactly this
+    purpose. The "more than one" is what keeps a genuine single-game server visible: one CS:S
+    install under its own user is a server, and is left alone. A hand-rolled content box holding
+    only CS:S is therefore still listed — there is nothing on the host that distinguishes it from
+    that real server, and listing an install you can decline beats hiding one you wanted.
+    """
+    by_user = {}
+    for f in (found or []):
+        user = (f.get("user") or "").strip()
+        name = (f.get("lgsm_name") or "").strip()
+        if user and name:
+            by_user.setdefault(user, set()).add(name)
+    return {u for u, names in by_user.items()
+            if names <= CONTENT_LGSM_NAMES and (len(names) > 1 or u == _CONTENT_USER)}
+
 
 def _valid_content_games(games):
     """Keep only known content keys (each a constant [a-z] folder name), de-duped, order preserved."""
