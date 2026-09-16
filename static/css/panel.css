@@ -514,11 +514,20 @@
         position: sticky;
         right: 0;
         z-index: 2;
-        background: var(--bg-card);
-        box-shadow: -10px 0 10px -10px rgba(0, 0, 0, .7);
+        /* A sticky cell is lifted out of the row's paint order, so it needs an opaque background
+           of its OWN and cannot inherit the row's. Take BOOTSTRAP'S table variables rather than a
+           fixed colour: --bs-table-bg is what every other cell paints, and --bs-table-accent-bg is
+           the overlay Bootstrap swaps in for :hover (and for striping). A hardcoded --bg-card left
+           this column a different shade from the rest of its row in EVERY state — #111827 against
+           the row's #212529 at rest, and unmissable on hover, where the row lightened and this
+           column stayed put. Reported as "the gray doesn't go all the way across" on mobile, which
+           is the only width the column is sticky at. */
+        background-color: var(--bs-table-bg);
+        box-shadow: inset 0 0 0 9999px var(--bs-table-accent-bg),
+                    -10px 0 10px -10px rgba(0, 0, 0, .7);
       }
-      .table-responsive .table thead th.col-actions { background: var(--bg-elevated); }
-      .table-responsive .table-hover tbody tr:hover td.col-actions { background: var(--bg-elevated); }
+      /* The header has its own colour by design, and no accent state to track. */
+      .table-responsive .table thead th.col-actions { background-color: var(--bg-elevated); }
       .row { --bs-gutter-x: .75rem; }
       .btn { font-size: .8rem; padding: .45rem .8rem; }
       .btn-sm { font-size: .75rem; padding: .35rem .6rem; }
