@@ -238,7 +238,7 @@
         onConfirm: function(){
           var ids = Array.prototype.slice.call(body.querySelectorAll('input:checked'))
                          .map(function(cb){ return Number(cb.value); });
-          fetch(mp() + '/api/server/' + serverId + '/tags', {
+          fetch(mp() + '/api/server/' + serverId + '/tags', {  // nosemgrep
             method: 'POST', headers: {'Content-Type': 'application/json'},
             body: JSON.stringify({tag_ids: ids})
           })

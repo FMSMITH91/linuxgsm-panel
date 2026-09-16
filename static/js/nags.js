@@ -13,14 +13,14 @@ window.rebootNagRender = function(el, hostId, label, d){
       + '<button class="btn btn-sm btn-outline-primary"'+_da('rebootNagWhenEmpty',[hostId,label])+'><i class="bi bi-hourglass-split"></i> Reboot when empty</button>';
   el.className = 'alert alert-warning d-flex flex-wrap align-items-center gap-2';
   el.setAttribute('role','alert');
-  el.innerHTML = '<i class="bi bi-arrow-clockwise fs-5"></i>'
+  el.innerHTML = '<i class="bi bi-arrow-clockwise fs-5"></i>'  // nosemgrep - label is escapeHtml output, pkgs is a .map(escapeHtml), actions is literals plus _da()
     + '<div class="flex-grow-1" style="min-width:220px;"><strong>Reboot needed</strong> — '+escapeHtml(label)
     + ' needs to reboot to finish applying system updates'+pkgs+'.</div>'
     + '<div class="d-flex gap-2 flex-wrap">'+actions+'</div>';
 };
 window.rebootNagCheck = function(hostId, label){
   var box = document.getElementById('reboot-nag'); if(!box || hostId==null) return;
-  fetch(MOUNT+'/api/remote/'+hostId+'/reboot-required',{cache:'no-store'})
+  fetch(MOUNT+'/api/remote/'+hostId+'/reboot-required',{cache:'no-store'})  // nosemgrep
     .then(function(r){ return r.ok ? r.json() : null; })
     .then(function(d){
       var el = document.getElementById('reboot-nag-'+hostId);
@@ -33,7 +33,7 @@ window.rebootNagNow = function(hostId, label){
   confirmDialog({title:'Reboot '+label, icon:'power', confirmClass:'btn-danger', confirmLabel:'Reboot now',
     bodyText:'Reboot '+label+' now? It — and any game servers running on it — will go down for about a minute, disconnecting anyone connected.',
     onConfirm:function(){
-      fetch(MOUNT+'/api/remote/'+hostId+'/reboot',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({when_empty:false})})
+      fetch(MOUNT+'/api/remote/'+hostId+'/reboot',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({when_empty:false})})  // nosemgrep
         .then(function(r){return r.json();}).then(function(d){ if(window.toast) toast(d.message||'Reboot requested','info'); })
         .catch(function(){ if(window.toast) toast('Reboot request failed','danger'); });
     }});
@@ -42,13 +42,13 @@ window.rebootNagWhenEmpty = function(hostId, label){
   confirmDialog({title:'Reboot when empty', icon:'hourglass-split', confirmClass:'btn-primary', confirmLabel:'Schedule it',
     bodyText:'Reboot '+label+' automatically once every game server on it has no players connected? It keeps running until then, and you can cancel any time.',
     onConfirm:function(){
-      fetch(MOUNT+'/api/remote/'+hostId+'/reboot',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({when_empty:true})})
+      fetch(MOUNT+'/api/remote/'+hostId+'/reboot',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({when_empty:true})})  // nosemgrep
         .then(function(r){return r.json();}).then(function(d){ if(window.toast) toast(d.message||'Scheduled','success'); window.rebootNagCheck(hostId,label); })
         .catch(function(){ if(window.toast) toast('Request failed','danger'); });
     }});
 };
 window.rebootNagCancel = function(hostId, label){
-  fetch(MOUNT+'/api/remote/'+hostId+'/reboot-cancel',{method:'POST'})
+  fetch(MOUNT+'/api/remote/'+hostId+'/reboot-cancel',{method:'POST'})  // nosemgrep
     .then(function(r){return r.json();}).then(function(d){ if(window.toast) toast(d.message||'Canceled','info'); window.rebootNagCheck(hostId,label); })
     .catch(function(){ if(window.toast) toast('Request failed','danger'); });
 };

@@ -8,9 +8,9 @@ function tsEsc(s){ return window.escapeHtml(s); }
 function tsUp(outEl, btn){
   outEl.innerHTML = '<i class="bi bi-arrow-repeat"></i> Starting Tailscale…';
   fetch(MOUNT + '/api/tailscale/up', {method:'POST'}).then(function(r){return r.json();}).then(function(d){
-    if(!d.success){ outEl.innerHTML = '<span class="text-danger">' + tsEsc(d.message || 'Failed') + '</span>'; if(btn) btn.disabled = false; return; }
+    if(!d.success){ outEl.innerHTML = '<span class="text-danger">' + tsEsc(d.message || 'Failed') + '</span>'; if(btn) btn.disabled = false; return; }  // nosemgrep - tsEsc is window.escapeHtml
     if(d.connected){ outEl.innerHTML = '<span class="text-success"><i class="bi bi-check-circle"></i> Connected!</span>'; setTimeout(function(){ window.refreshSection('#ts-page','wireTsButtons'); }, 900); return; }
-    outEl.innerHTML = '<div class="alert alert-info py-2 small mb-0 text-start">'
+    outEl.innerHTML = '<div class="alert alert-info py-2 small mb-0 text-start">'  // nosemgrep - literals plus auth_url, tsEsc-wrapped in both text places and _da()-encoded in the button
       + '<strong>1.</strong> Open this link and approve this machine in your Tailscale account:<br>'
       + '<a href="' + tsEsc(d.auth_url) + '" target="_blank" rel="noopener" style="word-break:break-all;">' + tsEsc(d.auth_url) + '</a>'
       + ' <button type="button" class="btn btn-sm btn-outline-secondary py-0"' + _da('_copyDataU', ['@self']) + ' data-u="' + tsEsc(d.auth_url) + '"><i class="bi bi-clipboard"></i></button><br>'
@@ -35,7 +35,7 @@ function wireTsButtons(){
       tsInstallBtn.disabled = true;
       tsInstallOut.innerHTML = '<i class="bi bi-arrow-repeat"></i> Installing Tailscale on the panel host… (up to a minute)';
       fetch(MOUNT + '/api/tailscale/install', {method:'POST'}).then(function(r){return r.json();}).then(function(d){
-        if(!d.success){ tsInstallOut.innerHTML = '<span class="text-danger">Install failed: ' + tsEsc((d.log || '').slice(-200)) + '</span>'; tsInstallBtn.disabled = false; return; }
+        if(!d.success){ tsInstallOut.innerHTML = '<span class="text-danger">Install failed: ' + tsEsc((d.log || '').slice(-200)) + '</span>'; tsInstallBtn.disabled = false; return; }  // nosemgrep - the log tail is tsEsc-wrapped
         tsInstallOut.innerHTML = '<span class="text-success">Installed.</span> Starting…';
         tsUp(tsInstallOut, tsInstallBtn);
       }).catch(function(){ tsInstallOut.innerHTML = '<span class="text-danger">Install request failed.</span>'; tsInstallBtn.disabled = false; });
@@ -74,12 +74,12 @@ function checkPeer() {
     // host comes from a text field — escape it before it goes into innerHTML (DOM XSS).
     var safeHost = escapeHtml(host);
     if (data.reachable) {
-      resultEl.innerHTML = '<span class="text-success">✓ ' + safeHost + ' is reachable'
+      resultEl.innerHTML = '<span class="text-success">✓ ' + safeHost + ' is reachable'  // nosemgrep - safeHost is escapeHtml output and the latency is a Number()
         + (data.latency_ms ? ' (' + Number(data.latency_ms) + 'ms)' : '')
         + '</span>';
     } else {
       var tsHint = data.is_tailscale_ip ? ' (Tailscale IP)' : '';
-      resultEl.innerHTML = '<span class="text-danger">✗ ' + safeHost + tsHint + ' is not responding</span>';
+      resultEl.innerHTML = '<span class="text-danger">✗ ' + safeHost + tsHint + ' is not responding</span>';  // nosemgrep - safeHost is escapeHtml output and tsHint is one of two literals
     }
   })
   .catch(function() {

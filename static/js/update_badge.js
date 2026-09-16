@@ -9,7 +9,7 @@
       .then(function(r){ return r.json(); })
       .then(function(d){
         if (d && d.update_available) {
-          badge.innerHTML = ' <a href="' + window.MOUNT + '/server-management#updates" '
+          badge.innerHTML = ' <a href="' + window.MOUNT + '/server-management#updates" '  // nosemgrep - MOUNT is server-rendered panel config and the version is escapeHtml output
             + 'style="color:#d29922;text-decoration:none;font-weight:600;" '
             + 'title="Version ' + escapeHtml(d.remote_version||'') + ' is available — click to update">'
             + '<i class="bi bi-arrow-up-circle-fill"></i> update</a>';

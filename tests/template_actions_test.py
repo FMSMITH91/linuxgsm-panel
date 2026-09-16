@@ -213,6 +213,21 @@ def _js_expr_at(src, i):
     out, depth = [], 0
     while i < len(src):
         c = src[i]
+        # Comments are SKIPPED, not read. A trailing `// …` on a sink line is prose, and prose
+        # contains semicolons and apostrophes — which this loop would otherwise treat as "the
+        # statement ended" and "a string opened". Both make the scanned expression SHORTER, i.e.
+        # fewer interpolated names flagged, which is the one direction a gate must never fail in.
+        # Demonstrated while annotating tailscale.js: a `// nosemgrep - …; the latency is Number()`
+        # cut the line-77 expression off at the semicolon and its signature silently lost two names.
+        if src[i:i + 2] == "//":
+            i = src.find("\n", i)
+            if i == -1:
+                break
+            continue
+        if src[i:i + 2] == "/*":
+            j = src.find("*/", i + 2)
+            i = len(src) if j == -1 else j + 2
+            continue
         if c in "'\"`":
             q = c; out.append(c); i += 1
             while i < len(src) and src[i] != q:

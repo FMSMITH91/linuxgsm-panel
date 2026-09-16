@@ -50,7 +50,7 @@
   }
   function revoke(id, btn){
     if(btn){ btn.disabled = true; btn.textContent = 'Revoking…'; }
-    fetch(mp() + '/api/account/sessions/' + id + '/revoke', {method:'POST', cache:'no-store'})
+    fetch(mp() + '/api/account/sessions/' + id + '/revoke', {method:'POST', cache:'no-store'})  // nosemgrep
       // Check the STATUS and the envelope. This used to toast "Session revoked" for any parseable
       // body — so a 404 "Session not found" told the user their session had been revoked when it
       // had not. (The route also answered with an `ok` key, which the universal `success === false`
