@@ -794,6 +794,25 @@ for _tpl in sorted(TEMPLATES.glob("*.html")):
 check(not _early, "no page loads a script before panel.js (must use {% block scripts %})",
       "; ".join(_early))
 
+# ── the host tile carries two values and must be sized so they fit on one line ───────────
+# Every other dashboard tile shows ONE number; #host-summary shows "52.6% · 14.6%". Measured, it
+# did not fit at either width: 181px needed against 132px at 375px, and 220px against 143px at
+# 1280px where five tiles share the row. It broke after the separator, leaving a dangling "·" and
+# a card taller than the four beside it. Dropping the decimals does not fix it (173px at 1280px)
+# — it is a width problem.
+#
+# Two rules carry the fix and BOTH must stay: mobile gives the tile the whole row (it already sits
+# alone there in the default order) so the number keeps full size, and ≥768px shrinks the number,
+# with a line-height that keeps the card the same height as its neighbours.
+_tile_css = (ROOT / "static" / "css" / "panel.css").read_text(encoding="utf-8")
+check('#dash-tiles .col[data-panel="host"]' in _tile_css,
+      "dashboard: the host tile takes the full row on mobile",
+      "without it the two values wrap mid-number in a half-width tile")
+check(re.search(r"#host-summary\s*\{[^}]*font-size[^}]*line-height", _tile_css, re.S) is not None,
+      "dashboard: the host tile's value is sized to fit, with the card height preserved",
+      "#host-summary needs BOTH a smaller font-size (to fit five-across) and a line-height "
+      "(or the smaller number leaves this card shorter than the others)")
+
 # ── the sticky Actions column must take its colour FROM the row, not a fixed value ────────
 # On mobile the Actions column is position:sticky so the controls stay reachable while the table
 # scrolls sideways. A sticky cell is lifted out of the row's paint order, so it needs an opaque
