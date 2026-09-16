@@ -1918,6 +1918,16 @@
       "GET"
     ]
   },
+  "/invite/<token>": {
+    "endpoint": "redeem_invite",
+    "guards": [
+      "view:redeem_invite"
+    ],
+    "methods": [
+      "GET",
+      "POST"
+    ]
+  },
   "/login": {
     "endpoint": "login",
     "guards": [
@@ -2290,6 +2300,17 @@
       "utils.py:decorated_view(manage_users)",
       "auth.py:decorated_function(manage_users)",
       "view:add_user"
+    ],
+    "methods": [
+      "POST"
+    ]
+  },
+  "/users/invite": {
+    "endpoint": "create_invite",
+    "guards": [
+      "utils.py:decorated_view(super_admin)",
+      "auth.py:decorated_function(super_admin)",
+      "view:create_invite"
     ],
     "methods": [
       "POST"

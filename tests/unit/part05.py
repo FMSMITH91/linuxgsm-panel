@@ -1854,3 +1854,48 @@ check("password: ...and that path still refuses a different long password",
 check("password: an empty or malformed stored hash returns False, never raises",
       not _auth_pw.check_password("x", "") and not _auth_pw.check_password("x", "not-a-hash"))
 
+# ── one-time invite links ─────────────────────────────────────────────────────────────────────
+# An invite is a credential-free way to onboard someone: they open it once, pick their own
+# username and password, and the link dies. The properties that matter are all here, because the
+# redemption route is the only one in the panel that is deliberately NOT login_required.
+from panel.db.models import Invite as _Inv
+from panel.core.clock import utcnow as _now_inv
+from datetime import timedelta as _td_inv
+
+_inv, _tok = _Inv.mint(None, hours=48, superadmin=False, group_ids=[3, 1, 3], note="x" * 200)
+check("invite: the token is long enough to be unguessable", len(_tok) >= 40, "len=%d" % len(_tok))
+check("invite: only the HASH is stored — the plaintext is not in the row",
+      _tok not in (_inv.token_hash or "") and len(_inv.token_hash) == 64)
+check("invite: a fresh one is usable", _inv.is_usable)
+check("invite: duplicate group ids are collapsed and sorted", _inv.groups_wanted == [1, 3],
+      str(_inv.groups_wanted))
+check("invite: the note is bounded to the column", len(_inv.note) <= 120)
+
+# Used and expired must BOTH close it — one without the other leaves a reusable or immortal link.
+_used, _ = _Inv.mint(None)
+_used.used_at = _now_inv()
+check("invite: a used one is not usable", not _used.is_usable)
+_old, _ = _Inv.mint(None)
+_old.expires_at = _now_inv() - _td_inv(hours=1)
+check("invite: an expired one is not usable", not _old.is_usable)
+
+# A malformed group list must not 500 the redemption page.
+_bad, _ = _Inv.mint(None)
+for _garbage in ("", "not json", "null", '{"not": "a list"}', "[1, null, \"two\"]"):
+    _bad.group_ids = _garbage
+    try:
+        _got = _bad.groups_wanted
+        _ok = isinstance(_got, list)
+    except Exception:
+        _ok = False
+    check("invite: a malformed group list is ignored, not fatal (%r)" % _garbage[:14], _ok)
+
+# Two invites must never collide, and the hash must be a pure function of the token.
+_a, _ta = _Inv.mint(None)
+_b, _tb = _Inv.mint(None)
+check("invite: two invites get different tokens and hashes",
+      _ta != _tb and _a.token_hash != _b.token_hash)
+import hashlib as _hl_inv
+check("invite: the stored hash is sha256 of the token",
+      _a.token_hash == _hl_inv.sha256(_ta.encode()).hexdigest())
+
