@@ -91,7 +91,7 @@ from panel.services import notifications as N  # noqa: F401 - re-export: a later
 from panel.ops import system_ops as SO
 # password_problem / _int_or / _valid_hex_color moved to panel.core.validation when the pure
 # layer came out of app.py; _valid_ip_or_cidr and _clean_console_text are still app.py's.
-from panel.core.validation import (password_problem, _int_or, _valid_hex_color)  # noqa: F401 - re-export: a later part imports this from here
+from panel.core.validation import (generate_password, password_problem, _int_or, _valid_hex_color)  # noqa: F401 - re-export: a later part imports this from here
 from app import (_valid_ip_or_cidr, _clean_console_text)  # noqa: F401 - re-export: a later part imports this from here
 from panel.services.bots.telegram import (_parse_tg_command)  # noqa: F401 - re-export: a later part imports this from here
 from panel.services.bots.commands import (_command_arg)  # noqa: F401 - re-export: a later part imports this from here
@@ -126,6 +126,32 @@ check("weak: no lower", password_problem("TEST1234!@") is not None)
 check("weak: no digit", password_problem("TestTest!@") is not None)
 check("weak: no symbol", password_problem("TestTest12") is not None)
 check("strong password accepted", password_problem("Test1234!@") is None)
+
+# ── generate_password: the panel issues these, so they must pass its own rules every time ──────
+# Admin-created accounts and admin password resets get a generated password. If one of them could
+# come out weak, the failure is a 400 on the "Add User" form with the account already half-made —
+# or worse, a password the panel accepted and its own validator would not.
+_gen = [generate_password() for _ in range(2000)]
+check("generated: every one satisfies password_problem",
+      not [p for p in _gen if password_problem(p)],
+      repr([p for p in _gen if password_problem(p)][:3]))
+check("generated: default length is 16", all(len(p) == 16 for p in _gen))
+check("generated: a shorter request is still floored at the policy minimum",
+      len(generate_password(4)) >= 10)
+# Read off one screen, typed into another — so the look-alikes are out. A password nobody can
+# transcribe gets "reset it again", which is the same failure as a weak one, slower.
+check("generated: no look-alike characters (O0 Il1 S5 B8 Z2)",
+      not [p for p in _gen if set(p) & set("O0Il1S5B8Z2")],
+      repr([p for p in _gen if set(p) & set("O0Il1S5B8Z2")][:2]))
+# It rides through a chat message and a shell now and then; a quote or a backslash turns it into a
+# support ticket.
+check("generated: no quote, backslash or backtick",
+      not [p for p in _gen if set(p) & set("'\"\\`")])
+check("generated: consecutive calls differ (it is not seeded per process)",
+      len(set(_gen)) > 1990, "distinct=%d/2000" % len(set(_gen)))
+# Built class-first then shuffled, so no position is reserved for a class.
+check("generated: the first character is not always the same class",
+      len({p[0].isalpha() and p[0].islower() for p in _gen}) > 1)
 
 # ── accent colour (Settings → Branding) is emitted into a CSS custom property, so it MUST be a
 #    strict #rrggbb literal — never arbitrary text that could carry `}`/`<` and break out. ──

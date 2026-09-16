@@ -217,6 +217,24 @@ def register(app):
     def account():
         return render_template("account.html", languages=i18n.LANGUAGES)
 
+    @app.route("/password/change")
+    @login_required
+    def force_password_change():
+        """The only page an account with a handed-over password can reach.
+
+        It asks for the password the admin gave them, then the one they choose — the same three
+        fields as the account page's own form, posting to the same handler, because this is not a
+        different operation. What it is not is a page you can decline: the gate in create_app sends
+        every other request back here until the flag clears.
+
+        Rendered without the app chrome (see show_app_chrome): the sidebar, the dashboard pollers
+        and the update badge all belong to a session that can use the panel, and this one cannot
+        yet — showing them would offer links that bounce straight back to this page.
+        """
+        if not current_user.must_change_password:
+            return redirect(url_for("account"))
+        return render_template("force_password.html", languages=i18n.LANGUAGES)
+
     @app.route("/account/api-token/generate", methods=["POST"])
     @login_required
     def account_api_token_generate():
