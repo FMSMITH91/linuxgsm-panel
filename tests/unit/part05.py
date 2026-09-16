@@ -1724,3 +1724,37 @@ check("cpu%: system_ops does not shell out to `top` for host CPU",
       not any("top -bn1" in ln for ln in _sysops_code),
       "a `top -bn1` is back — it costs ~208ms per status refresh; read /proc/stat instead")
 
+# ── eventlet.monkey_patch() must run BEFORE the first panel/flask import ──────────────────────
+# eventlet replaces the stdlib's threading primitives. Anything imported FIRST keeps the originals,
+# and eventlet's attempt to upgrade the objects that already exist walks into Flask's LocalProxy
+# ("Working outside of application context") and gives up partway through.
+#
+# tools/perf_bench.py did exactly that: it imported ssh_manager at the top and only reached
+# monkey_patch later, by way of `import app`. Every run printed five patcher tracebacks and then
+# carried on with threading primitives that were NOT cooperative — in the one tool whose numbers
+# get used to justify a perf change. app.py has always had the order right, and the smoke suite
+# boots it with zero patcher errors; nothing checked that it STAYS right, or that the next entry
+# point gets it right.
+import ast as _ast_mp
+_HEAVY = ("panel", "flask", "flask_login", "flask_sqlalchemy", "app")
+for _f in ("app.py", os.path.join("tools", "perf_bench.py")):
+    _mp_src = open(os.path.join(_root, _f), encoding="utf-8").read()
+    if "monkey_patch" not in _mp_src:
+        continue
+    _mp_tree = _ast_mp.parse(_mp_src)
+    _patch_at = min((_n.lineno for _n in _ast_mp.walk(_mp_tree)
+                     if isinstance(_n, _ast_mp.Call)
+                     and getattr(_n.func, "attr", None) == "monkey_patch"), default=None)
+    _first_heavy = None
+    for _n in _ast_mp.walk(_mp_tree):
+        _mod = None
+        if isinstance(_n, _ast_mp.Import):
+            _mod = sorted(_a.name for _a in _n.names)[0] if _n.names else None
+        elif isinstance(_n, _ast_mp.ImportFrom):
+            _mod = _n.module
+        if _mod and _mod.split(".")[0] in _HEAVY:
+            _first_heavy = _n.lineno if _first_heavy is None else min(_first_heavy, _n.lineno)
+    check("%s: eventlet.monkey_patch() runs before the first panel/flask import" % _f,
+          _patch_at is not None and (_first_heavy is None or _patch_at < _first_heavy),
+          "monkey_patch at line %s, first panel/flask import at line %s" % (_patch_at, _first_heavy))
+

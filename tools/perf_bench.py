@@ -25,7 +25,26 @@ import sys
 import time
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-from panel.ops.ssh_manager import _core as _sm_core
+
+# BEFORE any panel import, exactly as app.py does it. This file used to import ssh_manager (and so
+# eventlet, paramiko and Flask) first and only monkey_patch later, by way of `import app` — at which
+# point eventlet walks the objects that already exist to upgrade them, trips over Flask's
+# LocalProxy ("Working outside of application context") and gives up on some of them. The run then
+# printed five patcher tracebacks and "1 RLock(s) were not greened", and carried on with threading
+# primitives that were NOT cooperative.
+#
+# That matters more here than almost anywhere else: this file's whole job is producing timings that
+# a perf change gets justified by, and half-greened locks measure a concurrency model the real app
+# does not have. The real app is unaffected — app.py patches before it imports Flask, and the smoke
+# suite boots it with zero patcher errors.
+import warnings as _w
+with _w.catch_warnings():
+    _w.filterwarnings("ignore", message=r"\s*Eventlet is deprecated")
+    import eventlet
+    eventlet.monkey_patch()
+del _w
+
+from panel.ops.ssh_manager import _core as _sm_core   # noqa: E402
 from panel.ops.ssh_manager import game as _sm_game   # the stub seam: stubbed by MODULE,
 # because every caller now reaches these through the module rather than binding them.
 
