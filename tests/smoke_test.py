@@ -1341,6 +1341,81 @@ try:
         check("self-reset: ...but does not force yourself through the change screen",
               db.session.get(User, _sr_id).must_change_password is False)
 
+    # ── An install that predates the `sha256$` format signs in, and is upgraded in place ──
+    # Every existing installation hits this branch on its first login after the hash format
+    # changed, and it was covered only at the level of check_password()/needs_rehash(): the route
+    # that calls them had no test. Each property below is a distinct regression if it stops
+    # holding — locked out of an upgraded panel, re-upgraded on every login, signed out of every
+    # other device by a format change nobody asked for, or the quiet one: the legacy hash pushed
+    # into a 3-deep history, evicting the oldest entry and quietly freeing a real old password
+    # for reuse. That last one is what set_password() would do here, which is why the route
+    # assigns the hash directly.
+    import bcrypt as _lb
+    import json as _lj
+    _LEGACY_PW = "Ancient!pass1"
+    # Byte-for-byte what the pre-change code wrote: bcrypt over the raw password, no prefix.
+    _legacy_hash = _lb.hashpw(_LEGACY_PW.encode(), _lb.gensalt(4)).decode()
+    # A FULL history window (PASSWORD_HISTORY_LEN == 3), so nothing can be added without evicting.
+    _legacy_hist = [_lb.hashpw(("Ancient!pass%d" % _n).encode(), _lb.gensalt(4)).decode()
+                    for _n in (2, 3, 4)]
+    _legacy_hist_json = _lj.dumps(_legacy_hist)
+    with app.app_context():
+        _lu = User(username="legacyhash", password_hash=_legacy_hash,
+                   password_history=_legacy_hist_json, auth_epoch=7, is_active=True)
+        db.session.add(_lu)
+        db.session.commit()
+        _lu_id = _lu.id
+    check("legacy login: the fixture really is an old-format hash",
+          _legacy_hash.startswith("$2") and not _legacy_hash.startswith("sha256$"),
+          _legacy_hash[:12])
+
+    _lc2 = app.test_client()
+    _llogin = _lc2.post("/login", data={"username": "legacyhash", "password": _LEGACY_PW},
+                        follow_redirects=False)
+    check("legacy login: a pre-upgrade password still signs in",
+          _llogin.status_code in (301, 302, 303)
+          and "/login" not in (_llogin.headers.get("Location") or ""),
+          "status=%d loc=%s" % (_llogin.status_code, _llogin.headers.get("Location") or ""))
+    check("legacy login: ...and the session it just created is usable",
+          _lc2.get("/", follow_redirects=False).status_code == 200)
+
+    with app.app_context():
+        _lu2 = db.session.get(User, _lu_id)
+        check("legacy login: the stored hash was upgraded to the new format",
+              _lu2.password_hash.startswith("sha256$"), _lu2.password_hash[:14])
+        check("legacy login: ...and the same password verifies against it",
+              auth.check_password(_LEGACY_PW, _lu2.password_hash))
+        check("legacy login: ...so it is not flagged for upgrade a second time",
+              not auth.needs_rehash(_lu2.password_hash))
+        # The two things the upgrade must NOT touch.
+        check("legacy login: auth_epoch is untouched, so no device is signed out",
+              _lu2.auth_epoch == 7, "epoch=%r" % (_lu2.auth_epoch,))
+        check("legacy login: the reuse history is untouched, byte for byte",
+              (_lu2.password_history or "") == _legacy_hist_json,
+              "%r" % ((_lu2.password_history or "")[:80],))
+        # The consequence of that, stated as behaviour: the OLDEST remembered password is the one
+        # an extra history entry would have evicted, and it is still refused.
+        check("legacy login: ...so the oldest remembered password is still refused for reuse",
+              _lu2.password_reused("Ancient!pass4"))
+
+    # A second sign-in now runs entirely on the new format.
+    _lc3 = app.test_client()
+    check("legacy login: signing in again works against the upgraded hash",
+          _lc3.post("/login", data={"username": "legacyhash", "password": _LEGACY_PW},
+                    follow_redirects=False).status_code in (301, 302, 303))
+
+    # A WRONG password must not rewrite anything — the upgrade happens only once the plaintext has
+    # been proven correct, never on the way to rejecting it.
+    with app.app_context():
+        _lu3 = User(username="legacyhash2", password_hash=_legacy_hash, is_active=True)
+        db.session.add(_lu3)
+        db.session.commit()
+        _lu3_id = _lu3.id
+    app.test_client().post("/login", data={"username": "legacyhash2", "password": "wrong-one"})
+    with app.app_context():
+        check("legacy login: a failed attempt leaves the old hash exactly as it was",
+              db.session.get(User, _lu3_id).password_hash == _legacy_hash)
+
     # ── Discover / import existing LinuxGSM servers on a host ──
     dsc = c.get("/api/remote/%d/discover" % remote_id)
     check("discover: superadmin gets a servers list (SSH to the fixture host yields none)",
