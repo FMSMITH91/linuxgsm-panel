@@ -674,6 +674,74 @@ class AuditLog(db.Model):
     success = db.Column(db.Boolean, default=True)
 
 
+class Invite(db.Model):
+    """A one-time link that lets a person create their OWN account.
+
+    The alternative it replaces: an admin invents a username, the panel generates a password, and
+    that password gets relayed over chat or email — a credential that is in a third place from the
+    moment it exists. An invite carries no credential. The person opens it once, picks their own
+    username and password, and the link dies.
+
+    Only the SHA-256 of the token is stored, like the API token above, so a leaked database yields
+    no usable invite. What the invite GRANTS (groups, superadmin) is decided by the person who
+    created it and frozen here — the invitee chooses their name and password and nothing else,
+    because anything else would be a privilege they awarded themselves.
+    """
+    id = db.Column(db.Integer, primary_key=True)
+    token_hash = db.Column(db.String(64), unique=True, nullable=False, index=True)
+    created_by_id = db.Column(db.Integer, db.ForeignKey("user.id"), nullable=True)
+    created_at = db.Column(db.DateTime, default=utcnow)
+    expires_at = db.Column(db.DateTime, nullable=False)
+    used_at = db.Column(db.DateTime, nullable=True)
+    used_by_id = db.Column(db.Integer, db.ForeignKey("user.id"), nullable=True)
+    # What the account will get. Frozen at creation, never read from the invitee's form.
+    grants_superadmin = db.Column(db.Boolean, default=False)
+    group_ids = db.Column(db.Text, default="[]")
+    note = db.Column(db.String(120), default="")
+
+    INVITE_TTL_HOURS = 48
+
+    @staticmethod
+    def mint(creator, hours=None, superadmin=False, group_ids=(), note=""):
+        """Create an invite and return (invite, plaintext_token). The token is shown ONCE."""
+        import hashlib
+        import secrets
+        from datetime import timedelta      # module-level datetime import is `utcnow` only
+        token = secrets.token_urlsafe(32)          # 256 bits — not guessable, not enumerable
+        inv = Invite(
+            token_hash=hashlib.sha256(token.encode()).hexdigest(),
+            created_by_id=getattr(creator, "id", None),
+            expires_at=utcnow() + timedelta(hours=int(hours or Invite.INVITE_TTL_HOURS)),
+            grants_superadmin=bool(superadmin),
+            group_ids=json.dumps(sorted({int(g) for g in group_ids})),
+            note=(note or "")[:120],
+        )
+        return inv, token
+
+    @staticmethod
+    def by_token(token):
+        """The invite for `token`, used or not, or None. Callers must check is_usable."""
+        import hashlib
+        if not token:
+            return None
+        return Invite.query.filter_by(
+            token_hash=hashlib.sha256(token.encode()).hexdigest()).first()
+
+    @property
+    def is_usable(self):
+        """Unused and unexpired. Both halves matter: a used invite must not be reusable, and an
+        old one must not be usable forever if a link leaks out of someone's inbox."""
+        return self.used_at is None and (self.expires_at or utcnow()) > utcnow()
+
+    @property
+    def groups_wanted(self):
+        try:
+            v = json.loads(self.group_ids or "[]")
+            return [int(x) for x in v] if isinstance(v, list) else []
+        except (ValueError, TypeError):
+            return []
+
+
 class SetupState(db.Model):
     """Tracks multi-step setup progress."""
     id = db.Column(db.Integer, primary_key=True)
