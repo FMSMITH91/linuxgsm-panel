@@ -679,6 +679,12 @@ class MetricSample(db.Model):
     """A periodic snapshot of one game server's live figures (game CPU%, RAM MB, player count) for the
     history charts. Written by the metrics-history sampler (~1/min) and pruned after ~14 days. No FK —
     orphans from an uninstalled server just age out — so it stays cheap to write."""
+    # The history charts ask "one server, last 7 (or 1) days, in time order" — server_id AND ts
+    # together. With only the two single-column indexes SQLite picked server_id and then sorted
+    # the whole 14-day slice in a temp B-tree to satisfy ORDER BY. Measured on 806k rows (40
+    # servers x 14 days at the real 1/min cadence): 3.6ms -> 2.5ms, and the temp sort disappears.
+    # The single-column ts index STAYS — _prune_metric_samples deletes on `ts < cutoff` alone.
+    __table_args__ = (db.Index("ix_metric_sample_server_ts", "server_id", "ts"),)
     id = db.Column(db.Integer, primary_key=True)
     server_id = db.Column(db.Integer, index=True, nullable=False)
     ts = db.Column(db.DateTime, default=utcnow, index=True)
@@ -689,6 +695,11 @@ class MetricSample(db.Model):
 
 class HostSample(db.Model):
     """A periodic snapshot of one host's whole-VPS figures (CPU%, RAM%, disk%) for the history charts."""
+    # Same (id, ts) shape as MetricSample, and this one was worse: with far fewer distinct hosts
+    # than servers, SQLite preferred the ts index and scanned half the table before filtering
+    # remote_id. Measured on 100k rows: 7.7ms -> 2.7ms, a 2.8x improvement on the same query the
+    # history endpoint runs beside the metric one.
+    __table_args__ = (db.Index("ix_host_sample_remote_ts", "remote_id", "ts"),)
     id = db.Column(db.Integer, primary_key=True)
     remote_id = db.Column(db.Integer, index=True, nullable=False)
     ts = db.Column(db.DateTime, default=utcnow, index=True)
@@ -858,6 +869,12 @@ def _run_light_migrations():
     if "game_server" in existing:
         for ix in GameServer.__table__.indexes:
             ix.create(db.engine, checkfirst=True)
+    # The history tables' (id, ts) composites — same reason as above: create_all() adds them to a
+    # fresh DB only, so an upgraded install would keep the slow plans forever without this.
+    for _model in (MetricSample, HostSample):
+        if _model.__tablename__ in existing:
+            for ix in _model.__table__.indexes:
+                ix.create(db.engine, checkfirst=True)
     db.session.commit()
 
 

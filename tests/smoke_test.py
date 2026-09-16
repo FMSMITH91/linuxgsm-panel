@@ -951,6 +951,33 @@ try:
         check("migrate: repeated migrations stay a safe no-op",
               "backup_codes" in _ucols() and "totp_secret" in _ucols())
 
+        # ...and the same for INDEXES, which create_all() only ever puts on a FRESH database.
+        # The history charts query metric_sample/host_sample by (id, ts) together; without the
+        # composite index SQLite falls back to a single-column one and either sorts the whole
+        # slice in a temp B-tree or scans half the table. Measured at the real 1/min cadence over
+        # the 14-day retention window: metric_sample 3.6ms -> 2.5ms, host_sample 7.7ms -> 2.7ms.
+        # An upgraded install keeps the slow plans forever if the migration does not add these,
+        # and nothing else would ever say so — the pages still work, just slower as history grows.
+        def _idx(table):
+            return {ix["name"] for ix in _inspect(db.engine).get_indexes(table)}
+        _want = {"metric_sample": "ix_metric_sample_server_ts",
+                 "host_sample": "ix_host_sample_remote_ts"}
+        for _tbl, _name in _want.items():
+            db.session.execute(_t("DROP INDEX IF EXISTS %s" % _name))
+        db.session.commit()
+        check("migrate: a pre-feature DB really is missing the history composite indexes",
+              all(n not in _idx(t) for t, n in _want.items()),
+              "the drop did not take, so the re-add below would prove nothing")
+        _run_light_migrations()
+        for _tbl, _name in _want.items():
+            check("migrate: update adds %s.%s" % (_tbl, _name), _name in _idx(_tbl),
+                  "history charts fall back to a temp sort or a half-table scan without it")
+        # The single-column ts index must SURVIVE: the retention prune deletes on `ts < cutoff`
+        # alone and would go to a full scan without it.
+        check("migrate: the prune's single-column ts index is still there",
+              "ix_metric_sample_ts" in _idx("metric_sample"),
+              "_prune_metric_samples filters on ts alone")
+
         # user_session.remember decides when a login row expires, so an install that upgrades
         # into this feature must GET the column — and its existing rows must survive, backfilled
         # to the longer window rather than swept out from under whoever is signed in.
