@@ -1015,6 +1015,30 @@ check("translateY" in _sf and "g.scrollTop = ta.scrollTop" not in _sf,
       "scrolling the gutter clamps at its own maximum, which is a line short of the textarea's "
       "whenever a horizontal scrollbar is present")
 
+# ── a password field must not be capped in the markup ────────────────────────────────────────
+# The panel deliberately has no maximum password length: hash_password() SHA-256s the password to a
+# fixed 44 bytes before bcrypt, so any length works, and password_problem() sets no upper bound.
+# A `maxlength` on the input undoes all of that from the one place no test would look — the browser
+# silently stops accepting keystrokes, so a passphrase is truncated before it is ever submitted and
+# the person ends up with a different password than the one they typed. Worse on a CHANGE form:
+# they set a truncated password, and the manager that stored the full one can no longer sign in.
+#
+# Every `type="password"` input in every template, including ones added later.
+_PW_INPUT = re.compile(r'<input\b[^>]*\btype="password"[^>]*>', re.I)
+_pw_capped = []
+_pw_seen = 0
+for _tpl in sorted(TEMPLATES.glob("*.html")):
+    for _tag in _PW_INPUT.findall(_tpl.read_text(encoding="utf-8")):
+        _pw_seen += 1
+        if re.search(r'\bmaxlength\s*=', _tag, re.I):
+            _name = (re.search(r'\bname="([^"]*)"', _tag) or [None, "?"])[1]
+            _pw_capped.append("%s:%s" % (_tpl.name, _name))
+check(_pw_seen >= 10, "password: the scan actually found the password inputs",
+      "only %d matched — the regex stopped matching the markup, so the gate below proves nothing"
+      % _pw_seen)
+check(not _pw_capped, "password: no password field caps what can be typed into it",
+      "maxlength on " + ", ".join(_pw_capped))
+
 # ── report ──
 # c is True (pass), False (fail) or None (skipped — the check did not run; see skip()).
 passed = sum(1 for c, _, _ in results if c is True)

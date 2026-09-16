@@ -1416,6 +1416,56 @@ try:
         check("legacy login: a failed attempt leaves the old hash exactly as it was",
               db.session.get(User, _lu3_id).password_hash == _legacy_hash)
 
+    # ── a password longer than bcrypt's 72 bytes survives the whole stack ────────────────────
+    # The unit suite proves hash_password()/check_password() handle any length. This proves the
+    # PATH does: form -> validator -> set_password -> column -> login. Truncation anywhere in
+    # there is invisible until someone with a passphrase in a password manager cannot sign in,
+    # and the decoy below is what makes it visible — two passwords sharing their first 72 bytes
+    # must not be interchangeable.
+    _PW_PREFIX = "Str0ng!" + "a" * 70          # 77 bytes; already over bcrypt's limit
+    _LONG_PW = _PW_PREFIX + "ENDING1!"
+    _DECOY_PW = _PW_PREFIX + "OTHER2@"         # same first 77 bytes, different password
+    check("long password: the fixture is genuinely over bcrypt's 72-byte limit",
+          len(_LONG_PW.encode()) > 72 and _LONG_PW.encode()[:72] == _DECOY_PW.encode()[:72],
+          "%d bytes" % len(_LONG_PW.encode()))
+    check("long password: the panel's own validator sets no upper bound",
+          auth_password_problem(_LONG_PW) is None, str(auth_password_problem(_LONG_PW)))
+
+    _START_PW = "Start1ng!pw"
+    with app.app_context():
+        _lpu = User(username="longpw", password_hash=auth.hash_password(_START_PW),
+                    is_active=True, must_change_password=False)
+        db.session.add(_lpu)
+        db.session.commit()
+        _lpu_id = _lpu.id
+    _lpc = app.test_client()
+    _lpc.post("/login", data={"username": "longpw", "password": _START_PW})
+    _setlong = _lpc.post("/account/password",
+                         data={"current_password": _START_PW, "new_password": _LONG_PW,
+                               "confirm_password": _LONG_PW}, follow_redirects=True)
+    with app.app_context():
+        _lpu2 = db.session.get(User, _lpu_id)
+        check("long password: the change form accepts it",
+              auth.check_password(_LONG_PW, _lpu2.password_hash),
+              _setlong.data[-300:].decode("utf-8", "replace")[:160])
+        check("long password: ...and it was NOT stored truncated to 72 bytes",
+              not auth.check_password(_DECOY_PW, _lpu2.password_hash))
+
+    # The one that matters to the person: they can actually sign in with it afterwards.
+    _lpc2 = app.test_client()
+    _lpl = _lpc2.post("/login", data={"username": "longpw", "password": _LONG_PW},
+                      follow_redirects=False)
+    check("long password: signing in with the full passphrase works",
+          _lpl.status_code in (301, 302, 303)
+          and "/login" not in (_lpl.headers.get("Location") or ""),
+          "status=%d loc=%s" % (_lpl.status_code, _lpl.headers.get("Location") or ""))
+    _lpd = app.test_client().post("/login", data={"username": "longpw", "password": _DECOY_PW},
+                                  follow_redirects=False)
+    check("long password: a password sharing its first 72 bytes is refused at login",
+          not (_lpd.status_code in (301, 302, 303)
+               and "/login" not in (_lpd.headers.get("Location") or "")),
+          "status=%d loc=%s" % (_lpd.status_code, _lpd.headers.get("Location") or ""))
+
     # ── Discover / import existing LinuxGSM servers on a host ──
     dsc = c.get("/api/remote/%d/discover" % remote_id)
     check("discover: superadmin gets a servers list (SSH to the fixture host yields none)",
