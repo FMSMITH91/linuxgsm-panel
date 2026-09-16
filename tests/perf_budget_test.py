@@ -271,6 +271,41 @@ try:
     check("perf: no page's query count grows with the number of GROUPS a user is in",
           not grew_g, "; ".join(grew_g[:4]))
 
+    # ── /api/servers must scan the HOSTS concurrently, not one after another ──────────────────
+    # Query counts cannot see this one: the cost is SSH round trips, and they were serial. The
+    # dashboard polls this every 8 seconds, so with an 80ms link it cost hosts x 80ms — 404ms at
+    # 5 hosts and 1.61s at 20, measured. /api/dashboard/metrics already ran its per-host pass in a
+    # pool; this endpoint did not.
+    #
+    # Asserted as OVERLAP rather than wall-clock, so it states the property instead of a timing a
+    # loaded CI runner could fail on: each stubbed scan holds a counter up while it sleeps, and
+    # serial code can never drive that counter above 1.
+    import threading
+    from panel.routes import api as _apimod
+    _inflight, _peak, _lk = [0], [0], threading.Lock()
+
+    def _counting_scan(remote):
+        with _lk:
+            _inflight[0] += 1
+            _peak[0] = max(_peak[0], _inflight[0])
+        try:
+            time.sleep(0.05)      # long enough that genuine concurrency overlaps; eventlet-friendly
+            return set()
+        finally:
+            with _lk:
+                _inflight[0] -= 1
+
+    _saved_scan = _apimod._remote_listening_ports
+    try:
+        _apimod._remote_listening_ports = _counting_scan
+        c.get("/api/servers")
+    finally:
+        _apimod._remote_listening_ports = _saved_scan
+    check("perf: /api/servers scans the hosts concurrently (peak %d of %d in flight)"
+          % (_peak[0], HOSTS),
+          _peak[0] > 1,
+          "every host scanned in sequence — this endpoint costs hosts x SSH latency")
+
     worst = sorted(large.items(), key=lambda kv: -kv[1])[:5]
     print("busiest pages at %d hosts / %d servers: %s"
           % (HOSTS, SERVERS_LARGE, ", ".join("%s=%d" % (p, n) for p, n in worst)))

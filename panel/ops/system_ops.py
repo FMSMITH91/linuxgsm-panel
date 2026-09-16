@@ -506,6 +506,55 @@ def server_reboot(delay_seconds=5):
     return True, f"Server will reboot in {delay_seconds} seconds."
 
 
+# Host CPU% without shelling out to `top`. Measured: `top -bn1` was 208ms of /server-management's
+# 272ms cold render, because top takes its OWN delta and sleeps to do it. /proc/stat is the same
+# numbers for free, and get_server_status already runs on a 15s cache — so the previous call IS
+# the sample window, and the steady-state cost is zero processes and zero sleep.
+#
+# Same arithmetic the REMOTE path has used all along (ssh_manager/_core.host_live_metrics reads
+# `grep '^cpu ' /proc/stat`); only the local path was still paying for top.
+_CPU_SAMPLE = {"idle": 0, "total": 0}
+
+
+def _read_cpu_jiffies():
+    """(idle, total) from /proc/stat's aggregate `cpu` line, or (0, 0) if unreadable."""
+    try:
+        with open("/proc/stat", "r") as fh:
+            for line in fh:
+                if line.startswith("cpu "):
+                    f = [int(x) for x in line.split()[1:]]
+                    # idle + iowait, exactly as the remote sampler counts it
+                    return (f[3] + (f[4] if len(f) > 4 else 0)), sum(f)
+    except (OSError, ValueError):
+        # A missing or unparseable /proc/stat is not an error worth surfacing: the caller renders
+        # the "?" it already renders on any host that cannot answer, and this runs every 15s.
+        _log.debug("_read_cpu_jiffies: ignored non-fatal error", exc_info=True)
+    return 0, 0
+
+
+def _local_cpu_percent():
+    """Host CPU% as a delta against the previous call. "" when it cannot be read.
+
+    The first call after a restart has nothing to diff against, and rendering "?%" there would be
+    a visible regression from top — so it takes its own short delta once (100ms, still under half
+    of top's 208ms) and every later call is free."""
+    idle, total = _read_cpu_jiffies()
+    if not total:
+        return ""
+    prev_idle, prev_total = _CPU_SAMPLE["idle"], _CPU_SAMPLE["total"]
+    if not prev_total or total <= prev_total:
+        time.sleep(0.1)                      # cooperative under eventlet; only ever the first call
+        prev_idle, prev_total = idle, total
+        idle, total = _read_cpu_jiffies()
+        if not total or total <= prev_total:
+            return ""
+    _CPU_SAMPLE["idle"], _CPU_SAMPLE["total"] = idle, total
+    d_total = total - prev_total
+    if d_total <= 0:
+        return ""
+    return "%.1f" % max(0.0, min(100.0, (1 - (idle - prev_idle) / d_total) * 100))
+
+
 def server_uptime():
     """Get server uptime."""
     out, _, rc = _run("uptime -p", timeout=5)
@@ -525,13 +574,10 @@ def server_uptime():
     # Kernel
     kernel, _, _ = _run("uname -r", timeout=5)
 
-    # CPU
-    cpu_percent, _, _ = _run(
-        "top -bn1 | grep 'Cpu(s)' | awk '{print $2 + $4}'",
-        timeout=5
-    )
-    # CPU load / core count
-    cpu_cores, _, _ = _run("nproc", timeout=3)
+    # CPU — /proc/stat, not `top` (see _local_cpu_percent); no process, no sleep after the first.
+    cpu_percent = _local_cpu_percent()
+    # Core count from the kernel rather than a `nproc` process — same answer.
+    cpu_cores = str(os.cpu_count() or "")
     cpu_per_core = ""
     if cpu_percent and cpu_cores and cpu_cores.strip().isdecimal():
         try:
