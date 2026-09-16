@@ -2337,5 +2337,16 @@
     "methods": [
       "POST"
     ]
+  },
+  "/users/invite/<int:invite_id>/revoke": {
+    "endpoint": "revoke_invite",
+    "guards": [
+      "utils.py:decorated_view(super_admin)",
+      "auth.py:decorated_function(super_admin)",
+      "view:revoke_invite"
+    ],
+    "methods": [
+      "POST"
+    ]
   }
 }

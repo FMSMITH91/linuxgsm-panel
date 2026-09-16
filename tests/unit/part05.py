@@ -1892,6 +1892,28 @@ for _garbage in ("", "not json", "null", '{"not": "a list"}', "[1, null, \"two\"
         _ok = False
     check("invite: a malformed group list is ignored, not fatal (%r)" % _garbage[:14], _ok)
 
+# Revocation. An invite could be minted but not taken back, so a link sent to the wrong address
+# could only be waited out — and the TTL goes to 30 days. revoked_at is its OWN timestamp rather
+# than a reuse of used_at, because "somebody redeemed this" and "the sender took it back" are
+# different facts and the list must not confuse them.
+_rev, _ = _Inv.mint(None)
+check("invite: a fresh one reads as active", _rev.state == "active", _rev.state)
+_rev.revoked_at = _now_inv()
+check("invite: a revoked one is not usable", not _rev.is_usable)
+check("invite: ...and reads as revoked, not used", _rev.state == "revoked", _rev.state)
+
+_redeemed, _ = _Inv.mint(None)
+_redeemed.used_at = _now_inv()
+check("invite: a redeemed one reads as used", _redeemed.state == "used", _redeemed.state)
+# Order matters: redeemed-then-expired is still "used" — what happened to it is the fact that
+# matters, not the clock.
+_redeemed.expires_at = _now_inv() - _td_inv(hours=1)
+check("invite: redeemed AND expired still reads as used", _redeemed.state == "used", _redeemed.state)
+
+_gone, _ = _Inv.mint(None)
+_gone.expires_at = _now_inv() - _td_inv(hours=1)
+check("invite: an expired one reads as expired", _gone.state == "expired", _gone.state)
+
 # Two invites must never collide, and the hash must be a pure function of the token.
 _a, _ta = _Inv.mint(None)
 _b, _tb = _Inv.mint(None)

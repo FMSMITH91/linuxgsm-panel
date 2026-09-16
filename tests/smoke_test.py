@@ -951,6 +951,24 @@ try:
         check("migrate: repeated migrations stay a safe no-op",
               "backup_codes" in _ucols() and "totp_secret" in _ucols())
 
+        # invite.revoked_at: an install that upgrades INTO revocation must get the column, or every
+        # invite page 500s on a column the model expects and the table does not have.
+        def _icols():
+            return {col["name"] for col in _inspect(db.engine).get_columns("invite")}
+        try:
+            db.session.execute(_t("ALTER TABLE invite DROP COLUMN revoked_at"))
+            db.session.commit()
+            _idropped = True
+        except Exception:
+            db.session.rollback()
+            _idropped = False
+        if _idropped:
+            check("migrate: a pre-feature DB really is missing invite.revoked_at",
+                  "revoked_at" not in _icols())
+            _run_light_migrations()
+            check("migrate: update re-adds invite.revoked_at", "revoked_at" in _icols(),
+                  "an upgraded install would 500 on every invite page without it")
+
         # ...and the same for INDEXES, which create_all() only ever puts on a FRESH database.
         # The history charts query metric_sample/host_sample by (id, ts) together; without the
         # composite index SQLite falls back to a single-column one and either sorts the whole
