@@ -97,7 +97,18 @@ _SHA256_PREFIX = "sha256$"
 
 
 def _prehash(password):
-    """SHA-256 of the password, base64'd — a fixed 44 bytes for bcrypt, whatever came in."""
+    """SHA-256 of the password, base64'd — a fixed 44 bytes for bcrypt, whatever came in.
+
+    CodeQL flags this as py/weak-sensitive-data-hashing and it is a false positive: SHA-256 is not
+    the password hash here, it is a LENGTH NORMALISER. Its output has exactly two consumers,
+    bcrypt.hashpw and bcrypt.checkpw below — it is never stored, compared or returned — so the
+    credential at rest is bcrypt(sha256(pw)), salted, at cost 12. That is the standard bcrypt
+    pre-hash (Django and passlib's bcrypt_sha256 do the same thing for the same reason). The query
+    sees sha256(password) and stops before the bcrypt call.
+
+    Alert 441 is dismissed on that basis. Dismissals are keyed to the path, so if this function
+    ever moves the alert reopens at the new location — re-read this note, and the two call sites,
+    before dismissing it again."""
     return base64.b64encode(hashlib.sha256((password or "").encode("utf-8")).digest())
 
 
