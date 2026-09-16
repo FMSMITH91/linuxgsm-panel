@@ -204,6 +204,14 @@ def _groups_with_grants(user, commands=False):
     rows are fetched, never WHICH — the caller's logic is untouched, which matters because these
     two functions decide access.
     """
+    from flask import has_app_context
+    if not has_app_context():
+        # No app context means no session to query with — a unit test holding a plain User, or a
+        # worker outside one. `user.groups` is whatever the object already carries, which is
+        # exactly what this function read before it started issuing a query, so the callers see
+        # what they always saw. Missing this cost a CI cycle: the unit suite crashed on import at
+        # the first can_access_remote() against an in-memory User.
+        return list(user.groups or [])
     from panel.db.models import Group, user_groups
     from sqlalchemy.orm import selectinload
     # Memoised for the life of the app context. Both properties are needed and they pull opposite
