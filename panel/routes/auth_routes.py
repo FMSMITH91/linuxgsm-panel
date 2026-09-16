@@ -16,7 +16,7 @@ from panel.services import (notifications)
 import time
 from app import (LOGIN_MAX_FAILS, LOGIN_WINDOW, _LOGIN_BLOCK_LOGGED, _LOGIN_FAILS,
     _LOGIN_FAILS_LOCK, _authlog, _log, _log_ip, _maybe_alert_admin_bruteforce,
-    _prune_login_fails, _qr_svg, _register_session, _session_label)
+    _has_remember_cookie, _prune_login_fails, _qr_svg, _register_session, _session_label)
 
 
 def register(app):
@@ -313,8 +313,7 @@ def register(app):
         keep = UserSession.query.filter_by(sid=sid, user_id=user.id).first() if sid else None
         # A legacy cookie has no row to read it from, so ask the browser whether it is still
         # holding a remember token — otherwise re-issuing below quietly downgrades the login.
-        remember = bool(keep.remember) if keep is not None else bool(
-            request.cookies.get(app.config.get("REMEMBER_COOKIE_NAME", "remember_token")))
+        remember = bool(keep.remember) if keep is not None else _has_remember_cookie()
         others = UserSession.query.filter(UserSession.user_id == user.id)
         if keep is not None:
             others = others.filter(UserSession.id != keep.id)

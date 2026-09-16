@@ -1319,6 +1319,24 @@ try:
     with app.app_context():
         n_leg = UserSession.query.filter_by(user_id=deleg_id).count()
     check("session: adoption created a row for the legacy login", n_leg == 1, "rows=%d" % n_leg)
+    with app.app_context():
+        _leg_rem = UserSession.query.filter_by(user_id=deleg_id).first().remember
+    check("session: a legacy login with no remember cookie is adopted on the SHORT window",
+          _leg_rem is False or _leg_rem == 0, "remember=%r" % (_leg_rem,))
+
+    # …and one that IS still sending a remember cookie gets the long window. Guessing "plain" for
+    # it would delete the row — and sign the device out — hours into a three-day login. Presence of
+    # the cookie is the only signal available for a login issued before the column existed.
+    with app.app_context():
+        UserSession.query.filter_by(user_id=deleg_id).delete()
+        db.session.commit()
+    lc2 = client_as(deleg_id)
+    lc2.set_cookie(app.config.get("REMEMBER_COOKIE_NAME", "remember_token"), "anything-non-empty")
+    lc2.get("/api/account/sessions")
+    with app.app_context():
+        _row2 = UserSession.query.filter_by(user_id=deleg_id).first()
+    check("session: a legacy login that still holds a remember cookie is adopted on the LONG window",
+          _row2 is not None and bool(_row2.remember), "row=%r" % (_row2 and _row2.remember,))
 
     # ── History endpoint: a player peak must survive down-sampling (not be decimated away) ──
     from panel.db.models import MetricSample

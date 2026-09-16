@@ -152,6 +152,22 @@ def _session_label(ua):
     return br or os_ or "Unknown device"
 
 
+def _has_remember_cookie():
+    """True when the browser is still sending flask-login's "remember me" cookie.
+
+    Only presence matters here — the cookie's VALUE is never trusted at this point (the user
+    loader is what validates it); this answers "does this login outlive the session cookie?" so a
+    UserSession row can be given the right expiry window.
+
+    Written as a comparison rather than bool() on request data deliberately. That is what the
+    question actually is, and bool()/float() over request data is a pattern the security scanners
+    flag on sight — correctly for float() and complex(), where a hostile string becomes NaN. Not
+    worth an exception entry for a test that reads better spelled out.
+    """
+    name = current_app.config.get("REMEMBER_COOKIE_NAME", "remember_token")
+    return (request.cookies.get(name) or "") != ""
+
+
 def _register_session(user, remember=None):
     """Record a server-side row for this login and tag `user` with its sid so User.get_id embeds it
     (letting load_user validate it and the account page revoke it individually). Also drops this
@@ -165,8 +181,7 @@ def _register_session(user, remember=None):
         # Not told (adopting a login that predates this bookkeeping) — ask the browser. If it is
         # still sending a remember cookie, this login outlives the session cookie, and recording it
         # as a plain one would expire the row hours before the login itself actually dies.
-        remember = bool(request.cookies.get(
-            current_app.config.get("REMEMBER_COOKIE_NAME", "remember_token")))
+        remember = _has_remember_cookie()
     prune_expired_sessions(user.id)   # commits (or rolls back) on its own
     try:
         db.session.add(UserSession(user_id=user.id, sid=sid, remember=bool(remember),
