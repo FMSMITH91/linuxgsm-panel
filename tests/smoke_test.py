@@ -2720,10 +2720,13 @@ try:
               "max-age=" in _ar.headers.get("Cache-Control", ""),
               "Cache-Control: %r" % _ar.headers.get("Cache-Control"))
     # The shared bundle must be in the FILE and not in the page. Measuring total inline bytes would
-    # measure each page's own scripts too (the dashboard still inlines ~27KB of its own, a separate
-    # and much smaller win); these markers are specifically base.html's shared code.
-    _shared = c.get([a for a in _assets if ".js" in a][0]).get_data(as_text=True)
-    _shared_css = c.get([a for a in _assets if ".css" in a][0]).get_data(as_text=True)
+    # measure each page's own scripts too; these markers are specifically base.html's shared code.
+    # (Each page's own scripts are files now as well — what is left inline anywhere is the ~1.4KB of
+    # per-request config: the i18n catalog, MOUNT, the CSRF token and the ids of the thing shown.)
+    # BY NAME, not "the first .js on the page": base.html loads i18n.js above panel.js, and picking
+    # positionally made this assert that panel.js's markers live in the i18n bundle.
+    _shared = c.get(next(a for a in _assets if "panel.js" in a)).get_data(as_text=True)
+    _shared_css = c.get(next(a for a in _assets if "panel.css" in a)).get_data(as_text=True)
     for _marker, _where, _text in (("window.makeSortable = function", "panel.js", _shared),
                                    ("window.toggleLayoutEdit = function", "panel.js", _shared),
                                    ("body.layout-edit .panel-tools", "panel.css", _shared_css)):

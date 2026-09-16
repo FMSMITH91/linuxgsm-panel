@@ -1,6 +1,7 @@
 {
  "Choose Installation Target": "Elige el destino de instalación",
  "LinuxGSM and the game servers are installed for you — nothing to pre-install.": "LinuxGSM y los servidores de juego se instalan por ti: no hay que preinstalar nada.",
+ "SSH Password": "Contraseña SSH",
  "Setup Complete!": "¡Configuración completada!",
  "This wizard will guide you through the initial setup.": "Este asistente te guiará por la configuración inicial.",
  "Welcome to LinuxGSM Panel!": "¡Bienvenido a LinuxGSM Panel!",

@@ -232,6 +232,35 @@ def _js_expr_at(src, i):
     return "".join(out)
 
 
+_ESC_ALIAS_FN = (r"function\s+([A-Za-z_$][\w$]*)\s*\(\s*([A-Za-z_$][\w$]*)\s*\)\s*\{\s*"
+                 r"return\s+(?:window\.)?(?:%s)\s*\(\s*\2\s*\)\s*;?\s*\}")
+_ESC_ALIAS_VAR = r"(?:var|let|const)\s+([A-Za-z_$][\w$]*)\s*=\s*(?:window\.)?(?:%s)\s*;"
+
+
+def _escapers_in(src):
+    """_ESCAPERS plus this file's own one-line pass-through aliases.
+
+    `function tsEsc(s){ return window.escapeHtml(s); }` is an escaper by any reading, but the scan
+    below only knew the names in _ESCAPERS — so the moment the Tailscale pages' scripts moved out
+    of a <script> block and into static/js, four provably-escaped sinks read as unescaped and
+    wanted twelve baseline entries. Detecting the alias keeps the baseline a reviewable list.
+
+    Deliberately exact: same single parameter, handed straight back out, nothing else in the body.
+    Anything that transforms its argument is not a pass-through and does not count."""
+    names = set(_ESCAPERS)
+    for _ in range(3):                      # aliases of aliases; `var escA = esc` is one already
+        alt = "|".join(re.escape(n) for n in sorted(names))
+        grew = False
+        for pat in (_ESC_ALIAS_FN % alt, _ESC_ALIAS_VAR % alt):
+            for m in re.finditer(pat, src):
+                if m.group(1) not in names:
+                    names.add(m.group(1))
+                    grew = True
+        if not grew:
+            break
+    return tuple(sorted(names))
+
+
 _found = {}
 for _p in sorted((ROOT / "static" / "js").glob("*.js")):
     _src = _p.read_text(encoding="utf-8")
@@ -240,7 +269,7 @@ for _p in sorted((ROOT / "static" / "js").glob("*.js")):
         # Drop comments first: a trailing "// nosemgrep" would otherwise read as an interpolation.
         _expr_nc = re.sub(r"//[^\n]*|/\*.*?\*/", "", _expr, flags=re.S)
         _bare = re.sub(r"'(?:[^'\\]|\\.)*'|\"(?:[^\"\\]|\\.)*\"|`(?:[^`\\]|\\.)*`", "", _expr_nc)
-        for _fn in _ESCAPERS:
+        for _fn in _escapers_in(_src):
             _bare = re.sub(r"\b%s\s*\((?:[^()]|\([^()]*\))*\)" % _fn, "", _bare)
         # The \(* / \)* matter: `'…' + (d.url || '') + '…'` is the single most common way a value
         # is interpolated here, and without them the identifier is never adjacent to the `+` —
@@ -749,6 +778,26 @@ for _tpl in sorted(TEMPLATES.glob("*.html")):
         _early.append("%s:%d" % (_tpl.name, _ln))
 check(not _early, "no page loads a script before panel.js (must use {% block scripts %})",
       "; ".join(_early))
+
+# ── every asset_url()/static file a template names must actually exist ─────────────────────────
+# A <script src> pointing at a file that is not there fails SILENTLY: the browser logs one 404 and
+# the page renders perfectly, minus every behaviour that script was carrying. No route test, no
+# template test and no render notices, because each side is individually fine.
+#
+# This became a live risk when the pages' inline <script> blocks moved into static/js: a rename or
+# a dropped file is now a dead page rather than a syntax error. asset_url() also content-hashes
+# what it finds, so a missing file loses the cache-busting query too.
+_missing = []
+for _tpl in sorted(TEMPLATES.rglob("*.html")):
+    _src = _tpl.read_text(encoding="utf-8")
+    for _m in re.finditer(r"(?:asset_url|url_for)\s*\(\s*(?:'static'\s*,\s*filename\s*=\s*)?"
+                          r"['\"]([^'\"]+)['\"]", _src):
+        _rel = _m.group(1)
+        if "{" in _rel or not re.search(r"\.(js|css)$", _rel):
+            continue                     # a Jinja-built path, or not an asset this can resolve
+        if not (ROOT / "static" / _rel).is_file():
+            _missing.append("%s -> static/%s" % (_tpl.name, _rel))
+check(not _missing, "every js/css asset a template names exists in static/", "; ".join(_missing))
 
 # ── upload drop zone: the browser's own drop handler must stay suppressed ─────────────────────
 # THE bug this guards: anything dropped on a page that has not called preventDefault() on dragover
