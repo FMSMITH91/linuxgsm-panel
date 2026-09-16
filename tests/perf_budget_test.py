@@ -124,6 +124,24 @@ def seed_servers(first, count):
         db.session.commit()
 
 
+GROUPS_SMALL = 3
+GROUPS_LARGE = 24        # same servers, 8x the groups
+
+
+def seed_groups(user_id, first, count):
+    """Put `user_id` in `count` more groups, each granting one whole host."""
+    with app.app_context():
+        u = db.session.get(User, user_id)
+        remotes = RemoteServer.query.all()
+        for i in range(first, first + count):
+            g = Group(name="perfgrp%03d" % i, description="", is_default=False)
+            g.set_permissions([auth.VIEW_SERVERS, auth.VIEW_CONSOLE])
+            g.servers.append(remotes[i % len(remotes)])
+            db.session.add(g)
+            u.groups.append(g)
+        db.session.commit()
+
+
 def probe(client, paths):
     """{path: query_count} for one pass over every page."""
     from sqlalchemy import event as sa_event
@@ -215,6 +233,43 @@ try:
             grew.append("%s %d->%d (+%d)" % (p, small[p], large[p], delta))
     check("perf: no page's query count grows with the number of game servers (N+1)",
           not grew, "; ".join(grew[:4]))
+
+    # ── Second axis: GROUPS ───────────────────────────────────────────────────────────────────
+    # The sweep above varies servers and holds groups fixed, which is a blind spot rather than a
+    # choice — and something was hiding in it. Group.servers / Group.game_servers are lazy, so
+    # get_user_servers and accessible_remote_ids fired two queries PER GROUP: a user in 60 groups
+    # cost /api/dashboard/metrics — which the dashboard POLLS — 125 queries instead of 9, and
+    # /groups cost 190. Neither moved by a single query as the servers grew, so this file said
+    # nothing. Probed as a NON-superadmin, because is_superadmin short-circuits both functions
+    # and an admin never walks the path that had the bug.
+    with app.app_context():
+        _ru = User(username="perf_restricted",
+                   password_hash=auth.hash_password("Sufficient1!pass"),
+                   display_name="Perf restricted", is_superadmin=False, is_active=True)
+        db.session.add(_ru)
+        db.session.commit()
+        restricted_id = _ru.id
+    seed_groups(restricted_id, 0, GROUPS_SMALL)
+
+    cu = app.test_client()
+    with cu.session_transaction() as s2:
+        s2["_user_id"] = str(restricted_id)
+        s2["_fresh"] = True
+    few = probe(cu, paths)
+    seed_groups(restricted_id, GROUPS_SMALL, GROUPS_LARGE - GROUPS_SMALL)
+    many = probe(cu, paths)
+
+    check("perf: the group probe rendered pages too", len(few) >= 10 and len(many) >= 10,
+          "%d / %d pages" % (len(few), len(many)))
+    grew_g = []
+    for p in sorted(few):
+        if p not in many:
+            continue
+        delta = many[p] - few[p]
+        if delta > SLACK:
+            grew_g.append("%s %d->%d (+%d)" % (p, few[p], many[p], delta))
+    check("perf: no page's query count grows with the number of GROUPS a user is in",
+          not grew_g, "; ".join(grew_g[:4]))
 
     worst = sorted(large.items(), key=lambda kv: -kv[1])[:5]
     print("busiest pages at %d hosts / %d servers: %s"

@@ -19,7 +19,8 @@ from panel.ops.ssh_manager import (change_ssh_port, close_connection, detect_gam
 # module would never be seen — attribute access resolves at call time and is stable
 # however the handler moves.
 from panel.ops import ssh_manager as _sm
-from panel.security.auth import (INSTALL_SERVER, MANAGE_REMOTES, can_access_remote, get_game,
+from panel.security.auth import (INSTALL_SERVER, MANAGE_REMOTES, accessible_remote_ids,
+    can_access_remote, get_game,
     get_remote, has_permission, log_action, permission_required, server_access_required)
 import time
 from panel.core.http import (_json_body, _log_and_generic, _unreachable)
@@ -326,12 +327,17 @@ def register(app):
             return jsonify({"hosts": []})     # nothing known yet — don't spend a query finding out
         hosts = []
         local_id = _local_remote_id()
+        # The accessible set, resolved ONCE. can_access_remote per host is the same answer and
+        # costs a query set each time it is asked — fine when the grants were lazily cached on the
+        # user, and three queries per host now that they are eagerly loaded. Same check, same
+        # result, asked once instead of once per host in the snapshot.
+        _allowed = None if current_user.is_superadmin else accessible_remote_ids(current_user)
         for rid, seen in sorted(snapshot.items()):
             if not seen.get("count"):
                 continue
             # MANAGE_REMOTES is scoped per host (see get_remote): a user who can manage one remote
             # must not learn the name or patch state of another's from this summary.
-            if not can_access_remote(current_user, rid):
+            if _allowed is not None and rid not in _allowed:
                 continue
             hosts.append({"id": rid, "name": seen["name"], "count": seen["count"],
                           "security": seen["security"], "at": seen["at"],
