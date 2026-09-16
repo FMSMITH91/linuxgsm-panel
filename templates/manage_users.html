@@ -110,7 +110,9 @@
                text node whose exact content is a catalog key. #}
             <td data-no-i18n>{{ inv.note or "—" }}</td>
             <td>
-              {% if inv.state == 'active' %}<span class="badge bg-success">Active</span>
+              {% if inv.state == 'active' and not inv.authority_ok %}
+                <span class="badge bg-danger" title="The person who created it is no longer an active administrator, so the link will not work">Lapsed</span>
+              {% elif inv.state == 'active' %}<span class="badge bg-success">Active</span>
               {% elif inv.state == 'used' %}<span class="badge bg-secondary">Used</span>
               {% elif inv.state == 'revoked' %}<span class="badge bg-warning text-dark">Revoked</span>
               {% else %}<span class="badge bg-secondary">Expired</span>{% endif %}
@@ -122,7 +124,7 @@
               {% else %}{{ inv.groups_wanted | length }} group(s){% endif %}
             </td>
             <td class="text-end">
-              {% if inv.state == 'active' %}
+              {% if inv.state == 'active' and inv.authority_ok %}
               <form method="POST" action="{{ url_for('revoke_invite', invite_id=inv.id) }}"
                     class="ajax-form" data-ajax-refresh="#users-list" style="display:inline;">
                 <button type="submit" class="btn btn-sm btn-outline-warning"

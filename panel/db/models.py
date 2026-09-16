@@ -740,6 +740,26 @@ class Invite(db.Model):
         return (self.used_at is None and self.revoked_at is None
                 and (self.expires_at or utcnow()) > utcnow())
 
+    def authority_intact(self, creator):
+        """True if the person who minted this still holds the authority it encodes.
+
+        An invite is a delegation, and a delegation cannot outlive the authority behind it. Without
+        this, an admin who is offboarded — demoted, deactivated, deleted — leaves live invites
+        behind for up to the 30-day maximum TTL, and whoever holds one still gets the account they
+        promised, up to and including SUPERADMIN. Demonstrated before it was fixed.
+
+        `creator` is the User row (or None if the account is gone). A missing creator fails closed:
+        the row is deleted or the id dangles, and either way nobody is standing behind the invite.
+        An invite with no creator recorded at all (created_by_id NULL — only fixtures do that) is
+        left alone, because there is no authority to have lapsed."""
+        if self.created_by_id is None:
+            return True
+        if creator is None or not creator.is_active:
+            return False
+        # Granting superadmin needs the grantor to STILL be one. A demoted admin's outstanding
+        # invite must not keep handing out the rank they themselves lost.
+        return creator.is_superadmin if self.grants_superadmin else True
+
     @property
     def state(self):
         """One word for the list. Order matters: a link that was redeemed AND has since expired is
