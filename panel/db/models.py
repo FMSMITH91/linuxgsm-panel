@@ -12,6 +12,12 @@ from sqlalchemy.orm import validates
 db = SQLAlchemy()
 _log = logging.getLogger("panel.models")
 
+# How many previous passwords an account may not go straight back to. Each one costs a bcrypt
+# comparison (~0.2s at cost 12) on a password change, so this is a small number on purpose — it
+# stops the "change it, then change it back" cycle, which is what it is for, rather than trying to
+# be an archive.
+PASSWORD_HISTORY_LEN = 3
+
 # Identifiers that get interpolated into remote shell commands (Linux usernames, the
 # LinuxGSM instance/game name, paths like `/home/<user>/<selfname>`). They're validated
 # at the route layer on input, but enforcing the safe charset here — at the data layer —
@@ -113,6 +119,12 @@ class User(UserMixin, db.Model):
     totp_enabled = db.Column(db.Boolean, default=False)  # 2FA active for this user
     auth_epoch = db.Column(db.Integer, default=0, nullable=False)  # bump to revoke all sessions
     backup_codes = db.Column(db.Text, default="")   # JSON list of bcrypt-hashed one-time 2FA backup codes
+    # The last PASSWORD_HISTORY_LEN passwords this account has finished with, newest first, as
+    # bcrypt hashes — the same thing stored for the current one, so history reveals nothing the
+    # user table did not already hold. Kept so "change your password" cannot be satisfied by
+    # putting back the one you just left, which is what a person does when they are asked to
+    # change a password they did not want to change.
+    password_history = db.Column(db.Text, default="")
     # Highest TOTP timestep already accepted for this user. A code stays valid for ~90s (the step
     # plus one either side for clock skew), so "is this code valid" alone lets an observed code be
     # replayed for the rest of that window. Recording the step makes each one single-use.
@@ -188,6 +200,52 @@ class User(UserMixin, db.Model):
                     return True
             except (ValueError, TypeError):
                 continue
+        return False
+
+    def set_password(self, new_hash):
+        """Replace the password hash, remembering the one being replaced.
+
+        Every caller that changes an EXISTING account's password goes through here, so the history
+        cannot be maintained in one place and forgotten in another — that is the whole reason this
+        is a method and not two lines at each call site. Caller still commits."""
+        old_hash = (self.password_hash or "").strip()
+        if old_hash:
+            try:
+                history = json.loads(self.password_history or "[]")
+                if not isinstance(history, list):
+                    history = []
+            except (ValueError, TypeError):
+                history = []
+            # Newest first, de-duped, then trimmed. A hash that is already in the list would
+            # otherwise push a genuinely older one out without adding anything.
+            history = [old_hash] + [h for h in history if isinstance(h, str) and h != old_hash]
+            self.password_history = json.dumps(history[:PASSWORD_HISTORY_LEN])
+        self.password_hash = new_hash
+
+    def password_reused(self, candidate):
+        """True if `candidate` is this account's current password or one of its last few.
+
+        EXPENSIVE — up to PASSWORD_HISTORY_LEN + 1 bcrypt comparisons at cost 12, which is a few
+        hundred milliseconds each. Call it LAST, after every free check has already rejected what
+        it can, and only where a human picked the password: a generated one is random, and paying
+        a second of hashing to rule out a collision that will not happen is not a trade worth
+        making."""
+        if not candidate:
+            return False
+        try:
+            history = json.loads(self.password_history or "[]")
+            if not isinstance(history, list):
+                history = []
+        except (ValueError, TypeError):
+            history = []
+        for h in [self.password_hash] + history:
+            if not isinstance(h, str) or not h:
+                continue
+            try:
+                if bcrypt.checkpw(candidate.encode(), h.encode()):
+                    return True
+            except (ValueError, TypeError):
+                continue      # a malformed row is not a match, and must not 500 a password change
         return False
 
     @property
@@ -770,6 +828,9 @@ def _run_light_migrations():
         # rather than a protection. The flag only ever starts true for a password set from now on.
         ("user", "must_change_password"):
             "ALTER TABLE user ADD COLUMN must_change_password BOOLEAN DEFAULT 0 NOT NULL",
+        # Empty on upgrade: the panel never stored past passwords, so there is no history to
+        # backfill. It starts filling on the next change each account makes.
+        ("user", "password_history"): "ALTER TABLE user ADD COLUMN password_history TEXT DEFAULT ''",
         # DEFAULT 1, unlike the model's default of False, and only here: this DDL runs once, on
         # an install that already has session rows, and its DEFAULT exists solely to backfill
         # them. Guessing "remembered" for those is the kind guess — the expiry sweep then gives

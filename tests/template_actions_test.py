@@ -524,6 +524,52 @@ check(not _dupe_ids,
       "templates: no id= is rendered twice in the same page (getElementById takes the first)",
       "; ".join(sorted(set(_dupe_ids))[:5]))
 
+# ── 0f. no JS dereferences an element id that no template renders ─────────────────────────────
+# getElementById returns NULL for an id that is not on the page, and `null.value = ''` throws —
+# which kills the rest of the handler silently. Removing the password field from the Edit User
+# form left manage_users.js still clearing it by id, so opening the edit dialog threw before it
+# reached `.show()` and the pencil icon simply did nothing. No test noticed: the route was fine,
+# the template was fine, and the two were only wrong about each other.
+#
+# Deliberately narrow: only the UNGUARDED form, `getElementById('x').something`. The guarded
+# `var el = getElementById('x'); if (el) …` is how a script written for several pages checks
+# whether it is on the right one — manage_remotes.js does exactly that for four ids belonging to
+# a page that no longer has them. Dead, but it cannot crash, and flagging it would push people to
+# delete a null check rather than a stale id.
+_TPL_IDS = set()
+for _tpl in sorted((ROOT / "templates").glob("*.html")):
+    _TPL_IDS |= set(re.findall(r'\sid="([A-Za-z][\w:.-]*)"', _tpl.read_text(encoding="utf-8")))
+_JS_MADE_IDS = set()
+for _js in sorted((ROOT / "static" / "js").glob("*.js")):
+    _jsrc = _js.read_text(encoding="utf-8")
+    _JS_MADE_IDS |= set(re.findall(r"""\.id\s*=\s*['"]([A-Za-z][\w:.-]*)['"]""", _jsrc))
+    _JS_MADE_IDS |= set(re.findall(r"""id=["']([A-Za-z][\w:.-]*)["']""", _jsrc))
+_KNOWN_IDS = _TPL_IDS | _JS_MADE_IDS
+_DEREF_ID = re.compile(
+    r"""(?:getElementById\(\s*['"]|querySelector\(\s*['"]#)([A-Za-z][\w:.-]*)['"]\s*\)\s*[.\[]""")
+_dangling = []
+for _js in sorted((ROOT / "static" / "js").glob("*.js")):
+    for _id in sorted(set(_DEREF_ID.findall(_js.read_text(encoding="utf-8")))):
+        if _id not in _KNOWN_IDS:
+            _dangling.append("%s: #%s" % (_js.name, _id))
+check(not _dangling,
+      "static/js: no unguarded getElementById()/querySelector('#id') names an id no template renders",
+      "; ".join(_dangling[:5]))
+
+# ── 0g. every Bootstrap toggle points at something that exists ────────────────────────────────
+# data-bs-target="#x" with no #x on the page is the other way a button does nothing: Bootstrap
+# finds no element, opens no modal, and raises nothing. Same failure the user sees — a click that
+# goes nowhere — from the opposite direction to the dangling-id check above.
+_bad_targets = []
+for _tpl in sorted((ROOT / "templates").glob("*.html")):
+    _src = _tpl.read_text(encoding="utf-8")
+    for _m in re.finditer(r'data-bs-target="#([A-Za-z][\w:.-]*)"', _src):
+        if _m.group(1) not in _KNOWN_IDS:
+            _bad_targets.append("%s: #%s" % (_tpl.name, _m.group(1)))
+check(not _bad_targets,
+      "templates: every data-bs-target names an element that exists",
+      "; ".join(_bad_targets[:5]))
+
 # ── 1. gather every global function definition: name -> (params, body) ──
 _DEFS = [
     re.compile(r"function\s+([A-Za-z_$][\w$]*)\s*\(([^)]*)\)\s*\{"),
