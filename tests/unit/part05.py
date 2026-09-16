@@ -1,5 +1,5 @@
 """Part 5 of the unit suite. Imported for its side effects."""
-from unit.part01 import (N, NS, _modfiles, _modsrc, _root, _sm_core, _sm_files, _sm_firewall, _ufw_raises, _ufw_raises_fnf, _ufw_raises_verb, check, eq, json, os, sm, sys)  # noqa: F401,E402
+from unit.part01 import (N, NS, _modfiles, _modsrc, _root, _sm_core, _sm_files, _sm_firewall, _ufw_raises, _ufw_raises_fnf, _ufw_raises_verb, check, eq, skip, json, os, sm, sys)  # noqa: F401,E402
 from unit.part02 import (_time)  # noqa: F401,E402
 from unit.part03 import (_io)  # noqa: F401,E402
 from unit.part04 import (_SELF, _pl, _re)  # noqa: F401,E402
@@ -1486,7 +1486,7 @@ try:
           (_dm & _st2.S_IRGRP) and (_dm & _st2.S_IXGRP), oct(_dm))
     _shutil.rmtree(_cbox, ignore_errors=True)
 except (KeyError, OSError) as _e:
-    check("content box: grant semantics exercised", True, "skipped: %s" % _e)
+    skip("content box: grant semantics", _e)
 
 # content_path() is the second line of defence and the vector tests above never reach it: they go
 # through check_args, whose per-verb validators reject a bad identifier first. So it is exercised
@@ -1516,7 +1516,7 @@ try:
           _helper.do_content_grant_read([_me, "root" if _my_group != "root" else "daemon",
                                          _me], None) == 2)
 except (KeyError, OSError) as _e:
-    check("content-grant-read group check exercised", True, "skipped: %s" % _e)
+    skip("content-grant-read group check", _e)
 
 # home_of() is the only place a path is built from a name, and it feeds an `rm -rf` running as
 # root. Both copies must agree, and neither may ever produce /home itself or escape it.

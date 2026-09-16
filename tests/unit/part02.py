@@ -432,8 +432,15 @@ try:
     check("schedule: remove_game_schedule drops the entry",
           "77" not in _fakecfg.get("game_schedules", {}))
     _fakecfg.clear(); _fakecfg.update({"game_schedules": "corrupt"})
-    _bk.remove_game_schedule(77)   # must not raise on a corrupted map
-    check("schedule: remove_game_schedule is a safe no-op on junk", True)
+    # check(..., True) after the call could only ever CRASH the suite, never fail it — a raise
+    # here took the whole run down with a traceback instead of reporting one red line. Catch it,
+    # so the assertion is about the behaviour rather than about the interpreter surviving.
+    try:
+        _bk.remove_game_schedule(77)
+        _junk_ok, _junk_err = True, ""
+    except Exception as _je:
+        _junk_ok, _junk_err = False, repr(_je)
+    check("schedule: remove_game_schedule is a safe no-op on junk", _junk_ok, _junk_err)
 finally:
     _bk.load_config, _bk.update_config = _sched_load, _sched_update
 
