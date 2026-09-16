@@ -8,7 +8,9 @@ from panel.core.clock import utcnow
 from functools import wraps
 from urllib.parse import quote
 
+import base64
 import bcrypt
+import hashlib
 from flask import abort, flash, jsonify, redirect, request, url_for
 from flask_login import LoginManager, current_user
 
@@ -76,17 +78,61 @@ ACTION_PERMISSION_MAP = {
 
 # ─── Helpers ──────────────────────────────────────────────────
 
+# bcrypt takes at most 72 BYTES and ignores the rest. That is not a policy we chose and not one a
+# person can see: it is a property of the algorithm. Left alone it produced two bad outcomes here.
+#
+#   * Setting a longer password 500'd. password_problem() has a minimum and no maximum, so a
+#     104-character password passed every strength rule and then bcrypt 5.0 raised ValueError out
+#     of hash_password, uncaught.
+#   * Anyone who set one while bcrypt 4.x was installed is locked out NOW. 4.x truncated silently,
+#     so the stored hash is of the first 72 bytes; 5.0 raises instead, check_password catches it
+#     and returns False, and a correct password reads as "wrong password" with nothing to explain
+#     it. requirements.txt asked for >=4.1 before it pinned 5.0.0, so that window was real.
+#
+# Hashing the password with SHA-256 first makes bcrypt's input a fixed 44 bytes whatever the
+# password is, so length stops being a limit at all — the only bound left is the request body,
+# which MAX_CONTENT_LENGTH already caps. base64, not raw digest: a raw digest can contain a NUL,
+# and bcrypt stops at one.
+_SHA256_PREFIX = "sha256$"
+
+
+def _prehash(password):
+    """SHA-256 of the password, base64'd — a fixed 44 bytes for bcrypt, whatever came in."""
+    return base64.b64encode(hashlib.sha256((password or "").encode("utf-8")).digest())
+
+
 def hash_password(password):
-    return bcrypt.hashpw(password.encode(), bcrypt.gensalt()).decode()
+    """Hash a password of ANY length. Stored as `sha256$<bcrypt>` so check_password can tell the
+    two schemes apart — a bare `$2b$...` row is a legacy hash of the raw password."""
+    return _SHA256_PREFIX + bcrypt.hashpw(_prehash(password), bcrypt.gensalt()).decode()
 
 
 def check_password(password, password_hash):
-    """Verify a password against a bcrypt hash. Returns False (never raises) if the
-    stored hash is missing or malformed, so a bad DB row can't 500 the login."""
+    """Verify a password against either hash format. Returns False (never raises) if the stored
+    hash is missing or malformed, so a bad DB row can't 500 the login."""
+    stored = (password_hash or "").strip()
+    if not stored:
+        return False
     try:
-        return bcrypt.checkpw(password.encode(), (password_hash or "").encode())
+        if stored.startswith(_SHA256_PREFIX):
+            return bcrypt.checkpw(_prehash(password), stored[len(_SHA256_PREFIX):].encode())
+        # Legacy: bcrypt over the raw password.
+        raw = (password or "").encode("utf-8")
+        if len(raw) <= 72:
+            return bcrypt.checkpw(raw, stored.encode())
+        # Over 72 bytes against a legacy hash: whatever wrote it truncated to 72 (that is what
+        # bcrypt 4.x did), so compare the same 72 bytes rather than refusing. This is the line
+        # that lets an account stranded by the 4.x -> 5.0 upgrade sign in again — and it accepts
+        # nothing a 4.x panel would not have accepted from the same person.
+        return bcrypt.checkpw(raw[:72], stored.encode())
     except (ValueError, TypeError):
         return False
+
+
+def needs_rehash(password_hash):
+    """True if the stored hash is the legacy format, so a caller can quietly upgrade it after a
+    successful sign-in. The password is unchanged, so this is a re-encoding, not a reset."""
+    return not (password_hash or "").startswith(_SHA256_PREFIX)
 
 
 # A bcrypt hash of a random throwaway value. Comparing against it when a login's
@@ -103,7 +149,9 @@ _DUMMY_BCRYPT_HASH = None
 def _dummy_hash():
     global _DUMMY_BCRYPT_HASH
     if _DUMMY_BCRYPT_HASH is None:
-        _DUMMY_BCRYPT_HASH = bcrypt.hashpw(secrets.token_bytes(16), bcrypt.gensalt()).decode()
+        # hash_password, not a bare bcrypt call: the timing this exists to equalise must be the
+        # timing of the REAL path, prehash included.
+        _DUMMY_BCRYPT_HASH = hash_password(secrets.token_hex(16))
     return _DUMMY_BCRYPT_HASH
 
 
