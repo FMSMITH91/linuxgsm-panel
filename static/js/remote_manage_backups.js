@@ -441,7 +441,7 @@ function scanExisting(){
     if(!out) return;
     if(d.error){ out.innerHTML='<span class="text-danger small">'+escapeHtml(d.error)+'</span>'; return; }  // nosemgrep
     var s=d.servers||[];
-    if(!s.length){ out.innerHTML='<span class="text-secondary small"><i class="bi bi-check2"></i> No new LinuxGSM servers found — anything already in the panel is skipped.</span>'; return; }
+    if(!s.length){ out.innerHTML='<span class="text-secondary small"><i class="bi bi-check2"></i> No new LinuxGSM servers found — anything already in the panel is skipped.</span>'; prependContentNotes(out, d.content); return; }
     var rows=s.map(function(g){
       return '<tr>'
         +'<td><input type="checkbox" class="form-check-input disc-chk" checked data-user="'+escapeHtml(g.user)+'" data-game="'+escapeHtml(g.game_type)+'" data-port="'+(g.port||0)+'" data-autostart="'+(g.autostart?1:0)+'"></td>'
@@ -456,8 +456,45 @@ function scanExisting(){
       +'<thead><tr><th style="width:1%"><input type="checkbox" class="form-check-input" checked' + _da('discToggleAll', ['@self']) + ' aria-label="Select all"></th><th>User</th><th>Game</th><th>Port</th><th title="LinuxGSM backups on disk">Backups</th><th title="Installed mods">Mods</th><th title="Cron entries for this user">Cron</th></tr></thead>'
       +'<tbody>'+rows+'</tbody></table></div>'
       +'<button class="btn btn-sm btn-primary"' + _da('importExisting', ['@self']) + '><i class="bi bi-plus-circle"></i> Import selected</button> <span id="disc-msg" class="small ms-2"></span>';
+    prependContentNotes(out, d.content);
   }).catch(function(){ if(out) out.innerHTML='<span class="text-danger small">Scan failed.</span>'; })
   .finally(function(){ if(btn){ btn.disabled=false; btn.innerHTML='<i class="bi bi-search"></i> Scan'; } });
+}
+// Say what the scan left out, and why. A GMod content box installs each mountable game through
+// LinuxGSM, so the host scan sees every one of them as a server — this table used to show one
+// account repeated once per game, none of which could actually be imported. Dropping them
+// silently would only move the confusion, so name the account and the games.
+//
+// Built as DOM nodes rather than concatenated markup: the account name comes off the host's /home
+// listing, and textContent cannot be talked into being markup, however it got there. Also keeps
+// this out of tests/html_sink_baseline.json, which is meant to shrink.
+// Say when something was asked for and not created. The server refuses an account that would
+// produce more than one server — a host keys its servers on the Linux user — and reporting only
+// the successes made a partial import read as a clean one. Appended as a node for the same reason
+// as prependContentNotes: these names came off the host.
+function appendSkippedNote(msg, skipped){
+  var sk=(skipped||[]).filter(function(u,i,a){ return a.indexOf(u)===i; });
+  if(!msg || !sk.length) return;
+  var span=document.createElement('span');
+  span.className='text-warning ms-1';
+  span.textContent='Skipped '+sk.length+': '+sk.join(', ')+'.';
+  msg.appendChild(span);
+}
+function prependContentNotes(out, content){
+  if(!out || !content || !content.length) return;
+  var frag=document.createDocumentFragment();
+  content.forEach(function(c){
+    var games=c.games||[], n=games.length;
+    var div=document.createElement('div'); div.className='text-secondary small mb-2';
+    var icon=document.createElement('i'); icon.className='bi bi-info-circle';
+    div.appendChild(icon);
+    div.appendChild(document.createTextNode(' Skipped '+n+' GMod content install'+(n===1?'':'s')+' under '));
+    var who=document.createElement('span'); who.className='font-monospace'; who.textContent=c.user||'?';
+    div.appendChild(who);
+    div.appendChild(document.createTextNode(' ('+games.join(', ')+') — mountable content, not servers.'));
+    frag.appendChild(div);
+  });
+  out.insertBefore(frag, out.firstChild);
 }
 function discToggleAll(cb){ document.querySelectorAll('.disc-chk').forEach(function(c){ c.checked=cb.checked; }); }
 function importExisting(btn){
@@ -479,6 +516,7 @@ function importExisting(btn){
              window.refreshSection('#host-servers-card'); }   // show the new rows in place, no reload
       else { if(msg) msg.innerHTML='<span class="text-danger">'+escapeHtml(d.message||'Nothing imported.')+'</span>';  // nosemgrep
              btn.disabled=false; btn.innerHTML='<i class="bi bi-plus-circle"></i> Import selected'; }
+      appendSkippedNote(msg, d.skipped);
     }).catch(function(){ if(msg) msg.innerHTML='<span class="text-danger">Import failed.</span>';
              btn.disabled=false; btn.innerHTML='<i class="bi bi-plus-circle"></i> Import selected'; });
 }
