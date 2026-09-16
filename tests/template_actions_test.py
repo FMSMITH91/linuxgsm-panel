@@ -794,6 +794,34 @@ for _tpl in sorted(TEMPLATES.glob("*.html")):
 check(not _early, "no page loads a script before panel.js (must use {% block scripts %})",
       "; ".join(_early))
 
+# ── the sticky Actions column must take its colour FROM the row, not a fixed value ────────
+# On mobile the Actions column is position:sticky so the controls stay reachable while the table
+# scrolls sideways. A sticky cell is lifted out of the row's paint order, so it needs an opaque
+# background of its own and cannot inherit one — and it was given a hardcoded var(--bg-card).
+#
+# That is the CARD's colour, not the ROW's: Bootstrap paints cells --bs-table-bg (#212529), which
+# is LIGHTER than the card (#111827). So on every row the highlight visibly stopped where the
+# Actions column began. Reported from a phone as "the gray doesn't go all the way across".
+#
+# The fix is to read Bootstrap's own variables, so the column tracks the row through hover and
+# striping without this file knowing what those states look like. Anything hardcoded here is the
+# bug coming back, so the gate is "derives from the table variables", not "is some colour".
+_css = (ROOT / "static" / "css" / "panel.css").read_text(encoding="utf-8")
+_m = re.search(r"\.table-responsive\s+\.table\s+th\.col-actions\s*,\s*"
+               r"\.table-responsive\s+\.table\s+td\.col-actions\s*\{(.*?)\}", _css, re.S)
+check(_m is not None, "mobile: the sticky Actions column rule is still there to check",
+      "the .col-actions sticky block was renamed — re-point this gate at it")
+if _m:
+    # Strip /* ... */ as a BLOCK, not per line. The rule's own comment names the variables it
+    # uses, and a per-line strip left those words in — so the gate read its own explanation as the
+    # declaration and passed with the hardcoded colour restored. Verified by mutation after fixing.
+    _code = re.sub(r"/\*.*?\*/", "", _m.group(1), flags=re.S)
+    check("var(--bs-table-bg)" in _code and "var(--bs-table-accent-bg)" in _code
+          and "--bg-card" not in _code,
+          "mobile: the sticky Actions column paints the ROW's background, not a fixed colour",
+          "it must use var(--bs-table-bg) + var(--bs-table-accent-bg) so it tracks the row; "
+          "a hardcoded colour leaves the column a different shade from the row it sits in")
+
 # ── every asset_url()/static file a template names must actually exist ─────────────────────────
 # A <script src> pointing at a file that is not there fails SILENTLY: the browser logs one 404 and
 # the page renders perfectly, minus every behaviour that script was carrying. No route test, no
