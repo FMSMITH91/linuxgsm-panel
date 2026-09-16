@@ -170,29 +170,52 @@ def register(app):
         for gs in servers:
             if gs.remote_id:
                 by_remote.setdefault(gs.remote_id, []).append(gs)
-        changed = False
-        for gslist in by_remote.values():
-            remote = gslist[0].remote
+        # Scan the hosts CONCURRENTLY, then apply what came back. Each scan is one SSH round trip
+        # and they do not depend on each other, so doing them in sequence made this endpoint cost
+        # hosts x latency: measured against an 80ms link, 404ms at 5 hosts and 1.61s at 20 — re-paid
+        # every 8 seconds by the dashboard's status poll, on top of /api/dashboard/metrics doing its
+        # own (already parallel) pass. Same shape as _query_host_metrics.
+        #
+        # `remote` is resolved HERE, not in the worker: get_user_servers joinedloads it, and reading
+        # a lazy relationship from a pool thread would emit a query on a session this greenthread
+        # owns. Only the scan runs in the pool for the same reason — the status writes below stay
+        # on this greenthread.
+        work = [(gslist[0].remote, gslist) for gslist in by_remote.values() if gslist[0].remote]
+
+        def _scan(item):
+            remote, gslist = item
             try:
-                ports = _remote_listening_ports(remote)
-                for gs in gslist:
-                    # NEVER overwrite an in-progress install's status. This poller only reflects
-                    # running/stopped, and a not-yet-running install would otherwise get flipped
-                    # "installing" -> "offline" (it isn't listening on its port yet) — which made the
-                    # progress row vanish and show "Not installed" the moment you navigated back.
-                    if not gs.installed or gs.status in ("installing", "configuring"):
-                        continue
-                    st = "online" if gs.port in ports else "offline"
-                    if gs.status != st:
-                        gs.status = st
-                        changed = True
-                # Resolve+cache the remote's public IP for the connect address in the background
-                # (non-blocking) — the connect address falls back to remote.host until it's cached,
-                # so a slow/unreachable remote never stalls this polled endpoint.
-                if not remote.public_ip:
-                    _maybe_resolve_public_ip(app, remote.id)
+                return gslist, remote, _remote_listening_ports(remote)
             except Exception:
-                _log.debug("api_servers: ignored non-fatal error", exc_info=True)
+                _log.debug("api_servers: port scan failed", exc_info=True)
+                return gslist, remote, None
+
+        scanned = []
+        if work:
+            with concurrent.futures.ThreadPoolExecutor(
+                    max_workers=min(_PLAYER_POLL_WORKERS, len(work))) as ex:
+                scanned = list(ex.map(_scan, work))
+
+        changed = False
+        for gslist, remote, ports in scanned:
+            if ports is None:
+                continue                      # this host's scan failed; leave its statuses alone
+            for gs in gslist:
+                # NEVER overwrite an in-progress install's status. This poller only reflects
+                # running/stopped, and a not-yet-running install would otherwise get flipped
+                # "installing" -> "offline" (it isn't listening on its port yet) — which made the
+                # progress row vanish and show "Not installed" the moment you navigated back.
+                if not gs.installed or gs.status in ("installing", "configuring"):
+                    continue
+                st = "online" if gs.port in ports else "offline"
+                if gs.status != st:
+                    gs.status = st
+                    changed = True
+            # Resolve+cache the remote's public IP for the connect address in the background
+            # (non-blocking) — the connect address falls back to remote.host until it's cached,
+            # so a slow/unreachable remote never stalls this polled endpoint.
+            if not remote.public_ip:
+                _maybe_resolve_public_ip(app, remote.id)
         if changed:
             db.session.commit()
 

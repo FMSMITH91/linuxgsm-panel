@@ -1,0 +1,7 @@
+/api/servers vs host count, 80 ms per SSH round trip (dashboard polls it every 8s)
+ hosts  servers   median ms   hosts x 80ms
+     1        4          83             80
+     2        8          83            160
+     5       20          83            400
+    10       40         164            800
+    20       80         245           1600

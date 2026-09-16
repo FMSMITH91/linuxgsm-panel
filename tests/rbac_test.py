@@ -16,10 +16,13 @@ first authenticated user's identity into every later test client. Each test_clie
 request pushes its own context, so we keep DB work in short, separate app_context
 blocks and never hold one open across HTTP calls.
 """
+import ast
 import glob
+import inspect
 import os
 import secrets
 import sys
+import textwrap
 
 # Allow running as `python tests/rbac_test.py` from the repo root.
 _ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -630,6 +633,47 @@ with app.app_context():
             _unguarded.append("%s %s" % (sorted(_rule.methods & {"GET", "POST", "PUT", "DELETE"}), _rule))
     check("every <server_id> route enforces server access (not just a permission)",
           not _unguarded, "; ".join(sorted(_unguarded)[:6]))
+
+# ── ...and the same for <int:remote_id>, which is the BIGGER family ────────────────────────────
+# get_remote()'s docstring says "Every remote-scoped route goes through here, so a direct API call
+# to another remote's id is a 403". That was true when checked by hand (51 of 51) — but it was
+# only a docstring: nothing failed if the next route skipped it, which is exactly the state
+# <server_id> was in before the gate above was written. MANAGE_REMOTES is a global permission, so
+# a route that reads remote_id without get_remote() hands every holder every OTHER host's name,
+# patch state and firewall config.
+#
+# Read from the SOURCE rather than an attribute: there is no decorator to mark, the enforcement is
+# a get_remote() call in the body. Accepting accessible_remote_ids()/can_access_remote() too,
+# because the list endpoints filter by the allowed set instead of fetching one row.
+#
+# Matched as an AST CALL, not as text. A substring search passed on a route whose check had been
+# removed, because a COMMENT four lines down still said the words "get_remote() has already looked
+# the host up" — the gate read the explanation as the thing it explains. Verified by mutation:
+# swapping one route's get_remote() for a bare query now fails this.
+_remote_unguarded = []
+for _rule in app.url_map.iter_rules():
+    if "<int:remote_id>" not in str(_rule):
+        continue
+    _fn, _perms = app.view_functions.get(_rule.endpoint), ()
+    while _fn is not None:
+        _perms = _perms or getattr(_fn, "_required_perms", ())
+        _nxt = getattr(_fn, "__wrapped__", None)
+        if _nxt is None:
+            break
+        _fn = _nxt
+    _GUARDS = {"get_remote", "can_access_remote", "accessible_remote_ids"}
+    try:
+        _tree = ast.parse(textwrap.dedent(inspect.getsource(_fn)))
+    except (OSError, TypeError, SyntaxError):
+        _tree = None
+    _guarded = bool(_tree) and any(
+        isinstance(_n, ast.Call)
+        and (getattr(_n.func, "id", None) in _GUARDS or getattr(_n.func, "attr", None) in _GUARDS)
+        for _n in ast.walk(_tree))
+    if not (_guarded or _perms == (auth.SUPER_ADMIN,)):
+        _remote_unguarded.append("%s %s" % (sorted(_rule.methods & {"GET", "POST", "PUT", "DELETE"}), _rule))
+check("every <remote_id> route enforces per-host access (not just MANAGE_REMOTES)",
+      not _remote_unguarded, "; ".join(sorted(_remote_unguarded)[:6]))
 passed = sum(1 for ok, _, _ in results if ok)
 for ok, name, detail in results:
     line = ("PASS" if ok else "FAIL") + "  " + name

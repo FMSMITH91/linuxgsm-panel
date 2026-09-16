@@ -1684,3 +1684,43 @@ eq("_last_lines handles None", _sm_core._last_lines(None, 3), "")
 # ufw status parsing that used to be a `grep` running under root.
 check("ufw: _ufw_is_active reads the Status line", _sm_firewall._ufw_is_active("Status: active") is True)
 check("ufw: _ufw_is_active is false for inactive", _sm_firewall._ufw_is_active("Status: inactive") is False)
+
+# ── Host CPU% comes from /proc/stat, not from a `top` process ─────────────────────────────────
+# `top -bn1` was 208ms of /server-management's 272ms cold render — top sleeps to take its own
+# delta. get_server_status already runs behind a 15s cache, so the PREVIOUS call is the sample
+# window and the steady-state cost is zero processes: the page's recurring refresh went 272ms ->
+# 19ms. The remote path (ssh_manager/_core.host_live_metrics) has always read /proc/stat this way;
+# only the local one was still paying for top.
+from panel.ops import system_ops as _so_cpu
+
+# The arithmetic, against a fixed pair of samples so it cannot depend on the machine's real load.
+_saved_read, _saved_sample = _so_cpu._read_cpu_jiffies, dict(_so_cpu._CPU_SAMPLE)
+try:
+    # 200 jiffies passed, 50 of them idle -> 75% busy.
+    _so_cpu._CPU_SAMPLE["idle"], _so_cpu._CPU_SAMPLE["total"] = 1000, 2000
+    _so_cpu._read_cpu_jiffies = lambda: (1050, 2200)
+    eq("cpu%: a 50/200 idle share reads as 75% busy", _so_cpu._local_cpu_percent(), "75.0")
+
+    # A fully idle window is 0%, not a negative number.
+    _so_cpu._CPU_SAMPLE["idle"], _so_cpu._CPU_SAMPLE["total"] = 1000, 2000
+    _so_cpu._read_cpu_jiffies = lambda: (1200, 2200)
+    eq("cpu%: an entirely idle window reads as 0", _so_cpu._local_cpu_percent(), "0.0")
+
+    # A counter that did not move yields "", which every caller already renders as "?".
+    _so_cpu._CPU_SAMPLE["idle"], _so_cpu._CPU_SAMPLE["total"] = 1000, 2000
+    _so_cpu._read_cpu_jiffies = lambda: (0, 0)
+    eq("cpu%: an unreadable /proc/stat yields empty, not a crash", _so_cpu._local_cpu_percent(), "")
+finally:
+    _so_cpu._read_cpu_jiffies = _saved_read
+    _so_cpu._CPU_SAMPLE.clear()
+    _so_cpu._CPU_SAMPLE.update(_saved_sample)
+
+# The regression itself: shelling out to `top` for this number is what made the page slow.
+_sysops_src = open(os.path.join(_root, "panel", "ops", "system_ops.py"), encoding="utf-8").read()
+# CODE lines only: the comment above _local_cpu_percent names the command it replaced, and a
+# whole-file substring match flagged that explanation as the defect.
+_sysops_code = [ln.split("#", 1)[0] for ln in _sysops_src.splitlines()]
+check("cpu%: system_ops does not shell out to `top` for host CPU",
+      not any("top -bn1" in ln for ln in _sysops_code),
+      "a `top -bn1` is back — it costs ~208ms per status refresh; read /proc/stat instead")
+
