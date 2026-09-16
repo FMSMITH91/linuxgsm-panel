@@ -1143,6 +1143,20 @@ try:
     check("gate: ...and is rendered without the app chrome that would bounce them back",
           b'class="sidebar"' not in _page.data and b"cmdk-backdrop" not in _page.data)
 
+    # The handed-over password is not an acceptable choice for the password that replaces it.
+    # Otherwise the forced change is theatre: you type the admin's password into all three boxes
+    # and the account is still secured by a credential two people know.
+    _same = hc.post("/account/password", data={"current_password": _issued,
+                                               "new_password": _issued, "confirm_password": _issued},
+                    follow_redirects=True)
+    check("reuse: the generated password cannot be kept as the new one",
+          b"used before" in _same.data, _same.data[-400:].decode("utf-8", "replace")[:200])
+    with app.app_context():
+        _hu_r = db.session.get(User, _hu_id)
+        check("reuse: ...the account is still flagged", _hu_r.must_change_password is True)
+        check("reuse: ...and the password is unchanged",
+              auth.check_password(_issued, _hu_r.password_hash))
+
     # Wrong current password must not clear the flag — the gate is not a formality.
     hc.post("/account/password", data={"current_password": "not-the-one",
                                        "new_password": "Ch0sen!pass1", "confirm_password": "Ch0sen!pass1"})
@@ -1166,6 +1180,38 @@ try:
     _after = hc.get("/", follow_redirects=False)
     check("change: ...and the panel opens normally afterwards", _after.status_code == 200,
           "status=%d" % _after.status_code)
+
+    # History, end to end: the password they just left cannot come straight back. Without this,
+    # "change your password" is satisfied by changing it and changing it back, which is what
+    # someone does when made to replace a password they were happy with.
+    _back1 = hc.post("/account/password", data={"current_password": "Ch0sen!pass1",
+                                                "new_password": _issued, "confirm_password": _issued},
+                     follow_redirects=True)
+    check("history: the admin-issued password cannot be returned to later",
+          b"used before" in _back1.data)
+    hc.post("/account/password", data={"current_password": "Ch0sen!pass1",
+                                       "new_password": "Ch0sen!pass2", "confirm_password": "Ch0sen!pass2"})
+    _back2 = hc.post("/account/password", data={"current_password": "Ch0sen!pass2",
+                                                "new_password": "Ch0sen!pass1",
+                                                "confirm_password": "Ch0sen!pass1"},
+                     follow_redirects=True)
+    check("history: nor the one before this one", b"used before" in _back2.data)
+    with app.app_context():
+        check("history: ...and none of those refusals changed the password",
+              auth.check_password("Ch0sen!pass2", db.session.get(User, _hu_id).password_hash))
+    # Far enough back and it is allowed again — the window is a window, not an archive.
+    for _n in (3, 4, 5):
+        hc.post("/account/password", data={"current_password": "Ch0sen!pass%d" % (_n - 1),
+                                           "new_password": "Ch0sen!pass%d" % _n,
+                                           "confirm_password": "Ch0sen!pass%d" % _n})
+    _old_ok = hc.post("/account/password", data={"current_password": "Ch0sen!pass5",
+                                                 "new_password": "Ch0sen!pass1",
+                                                 "confirm_password": "Ch0sen!pass1"},
+                      follow_redirects=True)
+    with app.app_context():
+        check("history: a password older than the window can be used again",
+              auth.check_password("Ch0sen!pass1", db.session.get(User, _hu_id).password_hash),
+              _old_ok.data[-300:].decode("utf-8", "replace")[:160])
 
     # Admin reset of SOMEONE ELSE's password: generated, flagged, old password dead.
     _rst = c.post("/users/%d/edit" % _hu_id,

@@ -312,8 +312,12 @@ def register(app):
         if pw_err:
             flash(pw_err, "danger")
             return redirect(_back)
-        if check_password(new, u.password_hash):
-            flash("Your new password must be different from your current one.", "danger")
+        # LAST of the free-ish checks, and deliberately after password_problem: this is up to four
+        # bcrypt comparisons, so a password that fails the cheap rules never pays for it. Covers the
+        # current password — which on the forced-change page is the one the admin handed over, so
+        # "set it to the password you were given" is refused here — and the last few before it.
+        if u.password_reused(new):
+            flash("That is a password you have used before — please choose a new one.", "danger")
             return redirect(_back)
         # 2FA is checked LAST so a one-time backup code is never spent on an otherwise-invalid
         # request. A matching authenticator code passes; otherwise a valid backup code is consumed.
@@ -339,7 +343,7 @@ def register(app):
                 flash("That authenticator code didn't match — password not changed.", "danger")
                 return redirect(_back)
 
-        u.password_hash = hash_password(new)
+        u.set_password(hash_password(new))   # remembers the outgoing one; see password_reused
         # Whatever it was before, the password is now the account holder's own and nobody else's —
         # which is the entire condition the forced-change gate is waiting on.
         _was_forced = bool(u.must_change_password)

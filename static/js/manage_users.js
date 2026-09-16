@@ -33,7 +33,6 @@ window.openEditUser = function (id) {
   document.getElementById('eu-name').textContent = u.username;   // textContent: never HTML
   document.getElementById('eu-display').value = u.display_name || '';
   document.getElementById('eu-email').value = u.email || '';
-  document.getElementById('eu-password').value = '';             // never prefill a password
 
   var groups = u.groups || [];
   document.querySelectorAll('.eu-group').forEach(function (cb) {
@@ -51,8 +50,7 @@ window.openEditUser = function (id) {
 
   // Same reasoning as the 2FA box: a password reset is destructive and must be chosen fresh each
   // time the dialog opens, never inherited from the last user you edited.
-  var rp = document.getElementById('eu-reset-password');
-  if (rp) rp.checked = false;
+  document.getElementById('eu-reset-password').checked = false;
 
   new bootstrap.Modal(document.getElementById('editUserModal')).show();
 };

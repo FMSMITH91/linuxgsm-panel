@@ -135,7 +135,10 @@ def cmd_reset_password(args):
     with app.app_context():
         username = _resolve_username(args.username, default_sole_admin=True)
         u = _require_user(username)
-        u.password_hash = auth.hash_password(_read_password(args))
+        # Through set_password so the outgoing one joins the history the web UI enforces. The
+        # reuse CHECK is deliberately not applied here: this is the locked-out-of-your-own-panel
+        # recovery path, and a recovery tool that can refuse you is not one.
+        u.set_password(auth.hash_password(_read_password(args)))
         u.auth_epoch = (u.auth_epoch or 0) + 1   # revoke existing sessions
         db.session.commit()
         print("Password reset for '%s' (existing sessions revoked)." % username)

@@ -934,3 +934,72 @@ check("backup: valid code accepted (ignores case + dashes)",
       _u.use_backup_code(_codes[0].upper().replace("-", "")))
 check("backup: remaining drops to 7 after use", _u.backup_codes_remaining == 7)
 check("backup: a used code can't be reused (one-time)", not _u.use_backup_code(_codes[0]))
+
+# ── Password history ──────────────────────────────────────────
+# "Change your password" is satisfiable by putting back the one you just left, which is exactly
+# what someone does when made to change a password they were happy with. set_password remembers
+# the outgoing one; password_reused refuses it coming back.
+import json
+from panel.db.models import PASSWORD_HISTORY_LEN as _PHL
+
+
+def _hist(u):
+    """The stored history as a list, whatever is actually in the column.
+
+    Tolerant on purpose: several checks below assert that set_password REPAIRS a malformed value,
+    and a bare json.loads would crash on the un-repaired column instead of failing the check —
+    turning "this assertion caught the bug" into "the whole suite stopped at import"."""
+    try:
+        parsed = json.loads(u.password_history or "[]")
+        return parsed if isinstance(parsed, list) else []
+    except (ValueError, TypeError):
+        return []
+from panel.security.auth import hash_password as _hp
+_pu = _User()
+_pu.password_hash = _hp("First1!pass")
+check("history: the CURRENT password counts as reused", _pu.password_reused("First1!pass"))
+check("history: an unrelated password does not", not _pu.password_reused("Totally2@other"))
+_pu.set_password(_hp("Second2@pass"))
+check("history: after a change, the new one is current", _pu.password_reused("Second2@pass"))
+check("history: ...and the one it replaced is remembered", _pu.password_reused("First1!pass"))
+# Walk past the window: the oldest must fall out, or "history" would grow without bound and every
+# change would cost another bcrypt comparison.
+_chain = ["Third3#pass", "Fourth4$pass", "Fifth5%pass", "Sixth6^pass"]
+for _p in _chain:
+    _pu.set_password(_hp(_p))
+_pu_hist = _hist(_pu)
+check("history: the window holds exactly PASSWORD_HISTORY_LEN previous passwords",
+      len(_pu_hist) == _PHL, "len=%d want=%d" % (len(_pu_hist), _PHL))
+check("history: the last few are all still refused",
+      all(_pu.password_reused(p) for p in _chain[-_PHL:]))
+check("history: one older than the window is allowed again",
+      not _pu.password_reused("First1!pass"))
+# A repeat inside the window must not consume a second slot — it would silently shorten the
+# window by pushing a genuinely older password out and remembering the same one twice.
+_du = _User()
+_du.password_hash = _hp("Alpha1!pass")
+_du.set_password(_hp("Beta2@pass"))
+_du.set_password(_hp("Alpha1!pass"))
+_du.set_password(_hp("Gamma3#pass"))
+_du_hist = _hist(_du)
+check("history: a repeated password is de-duped, not stored twice",
+      _du_hist and len(_du_hist) == len(set(_du_hist)), repr(_du_hist)[:80])
+check("history: ...and everything in the window is still refused",
+      _du.password_reused("Alpha1!pass") and _du.password_reused("Beta2@pass")
+      and _du.password_reused("Gamma3#pass"))
+# A row written by an older version, or corrupted, must not 500 a password change.
+_bu = _User()
+_bu.password_hash = _hp("Only1!pass")
+for _bad in ("", "not json", "null", '{"not": "a list"}', '[123, null]'):
+    _bu.password_history = _bad
+    check("history: a malformed history column is ignored, not fatal (%r)" % _bad[:12],
+          _bu.password_reused("Only1!pass") and not _bu.password_reused("Other2@pass"))
+_bu.password_history = "not json"
+_bu.set_password(_hp("Next2@pass"))
+check("history: ...and set_password replaces the garbage with a real one-entry history",
+      len(_hist(_bu)) == 1 and _bu.password_reused("Only1!pass"),
+      repr(_bu.password_history)[:80])
+# A brand-new account has nothing to remember.
+_nu = _User()
+_nu.set_password(_hp("Brand1!new"))
+check("history: a first password records no history", not _hist(_nu))

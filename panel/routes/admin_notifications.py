@@ -210,7 +210,10 @@ def register(app):
         new_password = None
         if request.form.get("reset_password") == "on":
             new_password = generate_password()
-            user.password_hash = hash_password(new_password)
+            # set_password, not a bare assignment: the outgoing password joins the history, so a
+            # user handed a reset cannot answer the forced change by typing back the password the
+            # reset just took away from them.
+            user.set_password(hash_password(new_password))
             user.auth_epoch = (user.auth_epoch or 0) + 1   # revoke existing sessions
             # Only when the password now belongs to two people. An admin resetting their OWN
             # password knows it because they chose to see it, and has nobody to take it back from;
