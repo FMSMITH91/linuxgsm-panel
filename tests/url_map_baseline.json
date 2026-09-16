@@ -130,6 +130,16 @@
       "POST"
     ]
   },
+  "/api/auth/ping": {
+    "endpoint": "api_auth_ping",
+    "guards": [
+      "utils.py:decorated_view",
+      "view:api_auth_ping"
+    ],
+    "methods": [
+      "GET"
+    ]
+  },
   "/api/command/<int:server_id>": {
     "endpoint": "api_send_command",
     "guards": [

@@ -1,10 +1,12 @@
 """Authentication and permission management."""
 import hmac
+import re
 import secrets
 import threading
 import time
 from panel.core.clock import utcnow
 from functools import wraps
+from urllib.parse import quote
 
 import bcrypt
 from flask import abort, flash, jsonify, redirect, request, url_for
@@ -360,15 +362,23 @@ def _denial_wants_json():
     if (request.path or "").startswith("/api/"):
         return True
     if request.headers.get("X-Requested-With") == "XMLHttpRequest":
-        return True            # base.html's fetch wrapper sets this on every non-GET
+        return True            # base.html's fetch wrapper sets this on every in-page fetch
+    if request.headers.get("Authorization", "").startswith("Bearer "):
+        return True            # an API client with a stale token; a login page means nothing to it
     return "application/json" in (request.headers.get("Accept") or "")
 
 
 def _deny(message, code):
     """A denial in the shape the caller can read: JSON for fetch/API, flash + redirect for a real
-    browser navigation."""
+    browser navigation. A 401 also carries X-Auth-Required, the flag the page's fetch wrapper
+    watches for — "not signed in" is the one denial the whole tab has to react to, not just the
+    one widget that asked."""
     if _denial_wants_json():
-        return jsonify({"success": False, "message": message}), code
+        resp = jsonify({"success": False, "message": message})
+        resp.status_code = code
+        if code == 401:
+            resp.headers["X-Auth-Required"] = "1"
+        return resp
     flash(message, "danger")
     return redirect(url_for("login") if code == 401 else url_for("index"))
 
@@ -481,14 +491,57 @@ def init_auth(app):
                 sess = UserSession.query.filter_by(sid=sid, user_id=user.id).first()
                 if sess is None:
                     return None                       # this device's session was revoked
-                user._sid = sid                       # keep it so get_id re-embeds it on cookie refresh
                 now = utcnow()
+                if sess.is_expired(now):
+                    # The login has been idle past its cookie's life. The Flask session cookie is
+                    # already rejected by its own signed max_age, but flask-login's "remember me"
+                    # cookie carries no timestamp at all — so without this check a remember cookie
+                    # captured months ago still logged straight in. Drop the row as well: an expired
+                    # session is not a session, and leaving it listed on the account page as active
+                    # is exactly the wrong thing to tell someone checking for intruders.
+                    try:
+                        db.session.delete(sess)
+                        db.session.commit()
+                    except Exception:
+                        db.session.rollback()   # the sweep can wait; the rejection cannot
+                    return None
+                user._sid = sid                       # keep it so get_id re-embeds it on cookie refresh
                 if not sess.last_seen or (now - sess.last_seen).total_seconds() > 300:
                     sess.last_seen = now              # throttled "last active" update (~5 min)
                     db.session.commit()
             except Exception:
                 db.session.rollback()                 # a DB hiccup must never lock a valid user out
         return user
+
+    @login_manager.unauthorized_handler
+    def _unauthorized():
+        """What an unauthenticated request gets back.
+
+        flask-login's default is always a redirect to /login. For a browser navigation that is
+        right. For the panel's in-page fetches it is not: the redirect is followed, the login
+        PAGE comes back with status 200, and the caller then tries to parse a chunk of HTML as
+        JSON — which is why, once a cookie expired, a page left open didn't bounce to the login
+        screen, it just threw errors on every click. Answer those callers with a machine-readable
+        401 instead, flagged by a header so the client can redirect the whole tab in one place.
+        """
+        if _denial_wants_json():
+            resp = jsonify({"success": False, "error": "auth_required",
+                            "message": "Your session has expired — please log in again."})
+            resp.status_code = 401
+            resp.headers["X-Auth-Required"] = "1"
+            resp.headers["Cache-Control"] = "no-store"
+            return resp
+        flash(login_manager.login_message, "info")
+        target = url_for(login_manager.login_view)
+        # Come back to the page they were on. Only a same-site path, rebuilt from what matched —
+        # never the raw value — so this can't become an open redirect (same shape as /login's).
+        nxt = request.full_path if request.method == "GET" else ""
+        nxt = nxt[:-1] if nxt.endswith("?") else nxt
+        # Same charset /login itself will accept back, so the round trip actually survives.
+        m = re.fullmatch(r"/(?:[A-Za-z0-9._~\-]+/?)*(?:\?[A-Za-z0-9._~\-=&%]*)?", nxt or "")
+        if m and not nxt.startswith(target):
+            target += "?next=" + quote(m.group(0), safe="")
+        return redirect(target)
 
     @login_manager.request_loader
     def load_user_from_request(req):

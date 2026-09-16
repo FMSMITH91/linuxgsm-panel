@@ -91,8 +91,8 @@ def register(app):
                 if _lang:
                     session["lang"] = _lang
                 session.permanent = True   # so PERMANENT_SESSION_LIFETIME applies
-                _register_session(user)    # server-side row (sets user._sid) BEFORE login_user, so
-                login_user(user, remember=remember)   # get_id embeds the sid in the cookie
+                _register_session(user, remember)   # server-side row (sets user._sid) BEFORE
+                login_user(user, remember=remember)   # login_user, so get_id embeds the sid
                 user.last_login = utcnow()
                 db.session.commit()
                 log_action(user, "login", detail=f"User logged in from {ip}")
@@ -297,23 +297,70 @@ def register(app):
     @app.route("/account/sessions/revoke", methods=["POST"])
     @login_required
     def account_revoke_sessions():
-        # Bump the epoch so every session/remember cookie for this account (including this one) stops
-        # matching, and clear the whole session registry — instantly signs out everywhere.
-        current_user.auth_epoch = (current_user.auth_epoch or 0) + 1
+        """Sign out every OTHER device, and leave this one signed in.
+
+        The point of the button is to get an intruder out. Logging the person pressing it out too
+        was pure collateral damage: it dumped them on the login page, and on a phone — where the
+        password is long and the 2FA app is a tab away — that is the expensive half of the action.
+        The epoch bump is still what does the work (it is the only thing that can kill a legacy
+        cookie that carries no sid, and it invalidates every remember cookie ever issued); this
+        device is then re-admitted with a cookie carrying the NEW epoch, same as a password change
+        already does.
+        """
         from panel.db.models import UserSession
-        UserSession.query.filter_by(user_id=current_user.id).delete()
+        user = current_user._get_current_object()
+        sid = getattr(current_user, "_sid", None)
+        keep = UserSession.query.filter_by(sid=sid, user_id=user.id).first() if sid else None
+        # A legacy cookie has no row to read it from, so ask the browser whether it is still
+        # holding a remember token — otherwise re-issuing below quietly downgrades the login.
+        remember = bool(keep.remember) if keep is not None else bool(
+            request.cookies.get(app.config.get("REMEMBER_COOKIE_NAME", "remember_token")))
+        others = UserSession.query.filter(UserSession.user_id == user.id)
+        if keep is not None:
+            others = others.filter(UserSession.id != keep.id)
+        n = others.delete(synchronize_session=False)
+        user.auth_epoch = (user.auth_epoch or 0) + 1
         db.session.commit()
-        log_action(current_user, "revoke_sessions", target=current_user.username)
-        logout_user()
-        flash("Signed out of all sessions. Please log in again.", "success")
-        return redirect(url_for("login"))
+        if keep is None:
+            # A legacy login (cookie from before per-session tracking) has no row to keep, so give
+            # this device one now — otherwise the epoch bump signs it out, the exact thing this
+            # route promises not to do.
+            _register_session(user, remember)
+        else:
+            user._sid = keep.sid
+        # Re-issue THIS device's cookie against the new epoch. login_user also rewrites the
+        # remember cookie when remember=True, so a "remember me" login stays remembered.
+        login_user(user, remember=remember)
+        plural = "" if n == 1 else "s"
+        log_action(current_user, "revoke_sessions", target=user.username,
+                   detail="signed out %d other session%s" % (n, plural))
+        if n:
+            flash("Signed out of %d other session%s. This device is still signed in."
+                  % (n, plural), "success")
+        else:
+            flash("No other sessions were signed in.", "info")
+        return redirect(url_for("account"))
+
+    @app.route("/api/auth/ping")
+    @login_required
+    def api_auth_ping():
+        """Cheapest possible "am I still signed in?" — no DB work beyond the loader that already
+        ran. Pages ask on wake-up (tab refocused, restored from the back/forward cache), because a
+        page restored from that cache is a photograph of a signed-in panel and cannot know on its
+        own that the cookie died while it was away. When it has, @login_required answers 401 and
+        the client's global handler moves the tab to the login screen."""
+        return jsonify({"success": True, "user": current_user.username})
 
     @app.route("/api/account/sessions")
     @login_required
     def api_account_sessions():
         """This user's active login sessions (devices), newest-active first, with the current one
         flagged. Scoped to current_user — a user only ever sees or manages their own sessions."""
-        from panel.db.models import UserSession
+        from panel.db.models import UserSession, prune_expired_sessions
+        # Sweep first. A row outlives its cookie by nothing — but it used to outlive it by up to
+        # 45 days, which is how a session that expired last week still sat on this page labelled
+        # "active", with a Revoke button that revoked something already gone.
+        prune_expired_sessions(current_user.id)
         cur = getattr(current_user, "_sid", None)
         # Adopt a legacy login: a cookie issued before per-session tracking has no sid, so there's no
         # row for it — which would show a confusing empty list while you're clearly logged in. Create

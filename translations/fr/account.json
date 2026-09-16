@@ -70,9 +70,9 @@
  "Scan this QR code with your authenticator app.": "Scannez ce QR code avec votre application d'authentification.",
  "Session revoked": "Session révoquée",
  "Sign Out": "Se déconnecter",
- "Sign out everywhere": "Se déconnecter partout",
+ "Sign out everywhere else": "Déconnecter tous les autres appareils",
  "Status:": "État :",
- "Think a device was compromised? Sign out of every session at once, including this one — you'll log back in fresh.": "Vous pensez qu'un appareil a été compromis ? Déconnectez toutes les sessions d'un coup, y compris celle-ci — vous vous reconnecterez à neuf.",
+ "Think a device was compromised? Sign out every other device at once — this one stays signed in, so you don't have to log back in to check.": "Vous pensez qu'un appareil a été compromis ? Déconnectez tous les autres appareils d'un coup — celui-ci reste connecté, vous n'avez donc pas à vous reconnecter pour vérifier.",
  "This device": "Cet appareil",
  "This is now the panel default.": "C'est maintenant la disposition par défaut du panneau.",
  "This will be the super admin account — full access to everything.": "Ce sera le compte super administrateur — accès complet à tout.",
@@ -87,6 +87,6 @@
  "Your 2FA backup codes": "Vos codes de secours 2FA",
  "Your dashboard is back to the default order.": "Votre tableau de bord est revenu à l'ordre par défaut.",
  "Your panel is ready to go. Sign in with the admin account you created.": "Votre panneau est prêt. Connectez-vous avec le compte administrateur que vous avez créé.",
- "just now": "à l'instant",
- "logged-in session for your account (including this one) — you'll log back in fresh.": "session connectée de votre compte (y compris celle-ci) — vous devrez vous reconnecter."
+ "Your session expired — signing you back in.": "Votre session a expiré — retour à la page de connexion.",
+ "just now": "à l'instant"
 }

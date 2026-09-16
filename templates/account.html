@@ -125,11 +125,11 @@
         don't recognise — the one you're using now is marked <span class="badge bg-success">This device</span>.</p>
       <div id="sessions-list" class="mb-2"><div class="text-secondary small">Loading…</div></div>
       <hr class="my-3">
-      <p class="text-secondary small mb-2">Think a device was compromised? Sign out of every session
-        at once, including this one — you'll log back in fresh.</p>
+      <p class="text-secondary small mb-2">Think a device was compromised? Sign out every other
+        device at once — this one stays signed in, so you don't have to log back in to check.</p>
       <form method="POST" action="{{ url_for('account_revoke_sessions') }}" id="revoke-sessions-form">
         <button class="btn btn-outline-danger btn-sm" type="button" data-action="_acctSignOutAll">
-          <i class="bi bi-box-arrow-right"></i> Sign out everywhere
+          <i class="bi bi-box-arrow-right"></i> Sign out everywhere else
         </button>
       </form>
     </div>

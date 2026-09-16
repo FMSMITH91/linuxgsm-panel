@@ -337,10 +337,16 @@ def register(app):
         u.password_hash = hash_password(new)
         u.auth_epoch = (u.auth_epoch or 0) + 1   # sign out every other session/remember cookie
         from panel.db.models import UserSession
+        # Carry this device's "remember me" across the re-login, or changing a password would
+        # silently downgrade a remembered login to one that expires in hours.
+        _sid = getattr(current_user, "_sid", None)
+        _cur = UserSession.query.filter_by(sid=_sid, user_id=u.id).first() if _sid else None
+        _remember = bool(_cur.remember) if _cur is not None else bool(
+            request.cookies.get(app.config.get("REMEMBER_COOKIE_NAME", "remember_token")))
         UserSession.query.filter_by(user_id=u.id).delete()   # epoch bump killed them all; clear rows
         db.session.commit()
-        _register_session(u)                     # fresh session row for THIS device
-        login_user(u)                            # refresh THIS session (new epoch + sid) so we stay in
+        _register_session(u, _remember)          # fresh session row for THIS device
+        login_user(u, remember=_remember)        # refresh THIS session (new epoch + sid) so we stay in
         log_action(u, "password_changed", target=u.username)
         flash("Your password has been changed. Any other sessions were signed out.", "success")
         return redirect(url_for("account"))

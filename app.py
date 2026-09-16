@@ -63,7 +63,7 @@ with _w.catch_warnings():
 del _w
 
 import secrets
-from flask import (Flask, g, jsonify, request, session, url_for)
+from flask import (Flask, current_app, g, jsonify, request, session, url_for)
 from markupsafe import Markup
 from panel.core import i18n
 from flask_login import (current_user)
@@ -152,19 +152,24 @@ def _session_label(ua):
     return br or os_ or "Unknown device"
 
 
-def _register_session(user):
+def _register_session(user, remember=None):
     """Record a server-side row for this login and tag `user` with its sid so User.get_id embeds it
-    (letting load_user validate it and the account page revoke it individually). Also prunes this
-    user's long-dead sessions. Returns the sid, or None on failure — login still proceeds either way,
-    the cookie just falls back to epoch-only (not individually revocable)."""
-    from datetime import timedelta
-    from panel.db.models import UserSession
+    (letting load_user validate it and the account page revoke it individually). Also drops this
+    user's expired sessions. `remember` records which cookie keeps this login alive, which is what
+    decides when the row expires — a plain login dies with the session cookie (hours), a "remember
+    me" one with the remember cookie (days). Returns the sid, or None on failure — login still
+    proceeds either way, the cookie just falls back to epoch-only (not individually revocable)."""
+    from panel.db.models import UserSession, prune_expired_sessions
     sid = secrets.token_urlsafe(24)
+    if remember is None:
+        # Not told (adopting a login that predates this bookkeeping) — ask the browser. If it is
+        # still sending a remember cookie, this login outlives the session cookie, and recording it
+        # as a plain one would expire the row hours before the login itself actually dies.
+        remember = bool(request.cookies.get(
+            current_app.config.get("REMEMBER_COOKIE_NAME", "remember_token")))
+    prune_expired_sessions(user.id)   # commits (or rolls back) on its own
     try:
-        cutoff = utcnow() - timedelta(days=45)   # forget sessions untouched for ~6 weeks
-        UserSession.query.filter(UserSession.user_id == user.id,
-                                 UserSession.last_seen < cutoff).delete(synchronize_session=False)
-        db.session.add(UserSession(user_id=user.id, sid=sid,
+        db.session.add(UserSession(user_id=user.id, sid=sid, remember=bool(remember),
                                    ip=(client_ip() or "")[:64],
                                    user_agent=(request.headers.get("User-Agent", "") or "")[:300]))
         db.session.commit()
@@ -1060,6 +1065,16 @@ def create_app():
         try:
             if request.path.startswith(_static_prefix):
                 resp.headers["Cache-Control"] = "public, max-age=604800"   # 1 week
+            elif "Cache-Control" not in resp.headers:
+                # 1b) Every signed-in page is private and must be revalidated before it is shown
+                #     again. Without this, Back (or reopening the tab) after the cookie expired
+                #     could paint the old dashboard from the disk cache — fully rendered and
+                #     completely dead, so every button on it failed instead of taking you to the
+                #     login screen. `no-cache` means "ask first", and the ask is what redirects.
+                #     Deliberately NOT `no-store`, which would also evict the page from the
+                #     back/forward cache and undo the bfcache work in panel.js; the JS side covers
+                #     a bfcache restore by pinging /api/auth/ping on pageshow.
+                resp.headers["Cache-Control"] = "no-cache, private"
         except Exception:  # nosec B110 - a cache header is an optimisation, never correctness:
             pass           # if request.path is unavailable the response still goes out, unchanged.
         # 2) gzip text responses (HTML ~10x, JSON ~17x smaller) when the client accepts it — the

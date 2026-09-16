@@ -1056,11 +1056,12 @@ check("register_routes: helper closures inside it <= %d (currently %d)"
       % (_HELPER_CEILING, _rr_helpers),
       _rr_helpers <= _HELPER_CEILING,
       "it went UP — a new helper belongs at module level, not nested in the route table")
-# 209, was 208: /api/palette is a genuinely new view (the command palette's index). This total
-# exists to catch a view VANISHING during a move, so adding one is a deliberate bump — and
-# url_map_baseline.json's diff is the record of what the new route actually is.
-check("register_routes: every one of the 209 views is still accounted for",
-      len(_rr_views) + _MOVED_VIEWS == 209,
+# 210, was 209: /api/auth/ping is a genuinely new view (the "am I still signed in?" check a page
+# makes when it wakes up from the back/forward cache). This total exists to catch a view VANISHING
+# during a move, so adding one is a deliberate bump — and url_map_baseline.json's diff is the
+# record of what the new route actually is.
+check("register_routes: every one of the 210 views is still accounted for",
+      len(_rr_views) + _MOVED_VIEWS == 210,
       "views inside=%d, moved out=%d" % (len(_rr_views), _MOVED_VIEWS))
 # These two use current_app, which only equals the closed-over `app` inside a request — every
 # caller is a view, so that holds. If they drift back inside a closure, the reasoning stops being
