@@ -20,6 +20,10 @@
     "s.max_players,s.players,typeof",
     "warn"
   ],
+  "nags.js": [
+    "_da,rows,sec",
+    "actions,pkgs"
+  ],
   "panel.js": [
     "_da,head,rows",
     "icon",
@@ -40,10 +44,9 @@
     "n"
   ],
   "remote_manage_host.js": [
-    "d,specEsc",
+    "d",
     "d.behind",
     "d.current_sha",
-    "d.message",
     "d.new_bind,window.escapeHtml",
     "d.success",
     "d.success,window.escapeHtml",
@@ -62,5 +65,16 @@
     "_da",
     "body,grp.settings.length,idx,open",
     "opts.icon"
+  ],
+  "setup_tailscale.js": [
+    "_da"
+  ],
+  "tailscale.js": [
+    "Number,data.latency_ms,safeHost",
+    "_da",
+    "safeHost,tsHint"
+  ],
+  "update_badge.js": [
+    "window.MOUNT"
   ]
 }
