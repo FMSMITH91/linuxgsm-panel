@@ -28,7 +28,8 @@ from panel.core.panel_state import (
     remote_keyed_state, server_keyed_state,
 )
 from panel.ops.ssh_manager import (
-    _remote_listening_ports, game_map, lgsm_get_values, remote_fail2ban_top_ips, remote_reboot,
+    _remote_listening_ports, game_map, host_live_metrics, lgsm_get_values, metrics_for_game,
+    remote_fail2ban_top_ips, remote_reboot,
     remote_ufw_blocked_ips, remote_ufw_deny_ip, remote_ufw_undeny_ip, run_command,
     server_live_metrics, tailnet_exempt_ips,
     console_status as sm_console_status,
@@ -132,6 +133,47 @@ def _metrics_work(servers):
     joinedloads the host), so read them once and hand the workers plain values."""
     return [(gs.remote, gs.id, gs.short_name, gs.port, gs.game_type, gs.query_type, gs.remote_id)
             for gs in servers if gs.installed]
+
+
+def _host_metrics_work(servers):
+    """Group the installed servers by HOST: [(remote, [(sid, short_name, port, game_type, query_type)])].
+
+    The rows are read HERE, in the caller's thread, for the same reason _metrics_work does it — a
+    worker that touches the ORM needs a session of its own, which costs a query per server on an
+    endpoint the dashboard polls."""
+    by_host = {}
+    for gs in servers:
+        if not gs.installed or gs.remote is None:
+            continue
+        by_host.setdefault(gs.remote_id, (gs.remote, []))[1].append(
+            (gs.id, gs.short_name, gs.port, gs.game_type, gs.query_type))
+    return list(by_host.values())
+
+
+def _query_host_metrics(work):
+    """Worker: sample ONE host once, and slice it per game. [(sid, metrics|None, remote_id, map)].
+
+    One round trip per host instead of one per game. The host figures each game's row carries are
+    identical by definition — they describe the machine — so fetching them once per game was work
+    the panel did N times to learn the same thing. Measured against an 80ms link this was the whole
+    cost of /api/dashboard/metrics: ceil(servers / 8) x latency, 1.05s at 100 servers, every 10
+    seconds per open dashboard, with a 2s cache that a 10s poll can never hit. Never raises."""
+    remote, games = work
+    try:
+        sample = host_live_metrics(remote)
+    except Exception:
+        return [(sid, None, getattr(remote, "id", None), "") for sid, _s, _p, _g, _q in games]
+    out = []
+    for sid, short_name, port, game_type, query_type in games:
+        m = metrics_for_game(sample, short_name, port)
+        mp = ""
+        if m.get("game_procs"):     # only query the map for a running server
+            try:
+                mp = game_map(remote, short_name, game_type, port, query_type)
+            except Exception:
+                mp = ""
+        out.append((sid, m, getattr(remote, "id", None), mp))
+    return out
 
 
 def _query_server_metrics(work):

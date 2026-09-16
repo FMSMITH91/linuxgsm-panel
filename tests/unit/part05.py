@@ -1,4 +1,5 @@
 """Part 5 of the unit suite. Imported for its side effects."""
+import subprocess as _sub
 from unit.part01 import (N, NS, _modfiles, _modsrc, _root, _sm_core, _sm_files, _sm_firewall, _ufw_raises, _ufw_raises_fnf, _ufw_raises_verb, check, eq, skip, json, os, sm, sys)  # noqa: F401,E402
 from unit.part02 import (_time)  # noqa: F401,E402
 from unit.part03 import (_io)  # noqa: F401,E402
@@ -875,6 +876,35 @@ for _v, _a in _VERB_SAMPLES.items():
         _drift.append("%s: helper=%r panel=%r" % (_v, _hv, _pv))
 check("privileged: helper and panel build an identical argv for every verb",
       not _drift, "; ".join(_drift[:2]))
+
+# ── Per-process CPU sampling reads the RIGHT /proc/<pid>/stat fields ──────────────────────────
+# The samplers split a stat line on the LAST ')' (comm can contain spaces and parens) and then sum
+# two fields. They summed b[13]+b[14] = stime + CUTIME. cutime only counts REAPED CHILDREN, and a
+# game server spends almost all its time in USER time, so every game reported ~0% CPU however hard
+# it was working — a plausible small number rather than a visible error, which is why it survived.
+# awk's split(s, b, " ") drops the leading blank, so after the comm b[1] is STATE and utime lands
+# at 12, stime at 13.
+#
+# Asserted against a synthetic line with DISTINCT values in every position, so an off-by-one cannot
+# coincide with the right answer, and by running the real awk expression the code builds.
+_STAT_FIELDS = ["R", "222", "333", "444", "555", "666", "777", "888", "999", "1010", "1111",
+                "70000",   # b[12] utime
+                "3000",    # b[13] stime
+                "500",     # b[14] cutime
+                "60"]      # b[15] cstime
+_STAT_LINE = "4242 (my game (server)) " + " ".join(_STAT_FIELDS)
+_awk_prog = ("{n=split($0,a,\")\"); split(a[n],b,\" \"); print %s}" % _sm_core._STAT_JIFFIES_EXPR)
+_jiff = _sub.run(["awk", _awk_prog], input=_STAT_LINE, capture_output=True, text=True)
+check("metrics: the jiffie expression sums utime+stime, not stime+cutime",
+      _jiff.stdout.strip() == "73000",
+      "got %r from %r (utime+stime=73000; stime+cutime would be 3500)"
+      % (_jiff.stdout.strip(), _sm_core._STAT_JIFFIES_EXPR))
+check("metrics: ...and a comm containing spaces and parens does not shift the fields",
+      _sub.run(["awk", _awk_prog], input="1 (weird ) name) " + " ".join(_STAT_FIELDS),
+               capture_output=True, text=True).stdout.strip() == "73000")
+# Both samplers must use it — the per-game one and the batched per-host one.
+check("metrics: the batched host sampler uses the same expression",
+      _sm_core._STAT_JIFFIES_EXPR in (_sm_core._JIFFIES_BY_USER % "GJA"))
 
 # ── The helper must refuse uid 0, wherever a name reaches it ──────────────────────────────────
 # USERNAME_RE accepts "root", and nothing downstream asked WHO the name was. The download verbs'

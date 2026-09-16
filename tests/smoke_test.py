@@ -1623,16 +1623,24 @@ try:
     # per server, every few seconds, on a page that polls. It now reads frozen values from rows the
     # request already loaded, so this asserts the data still ARRIVES — per-server figures keyed by
     # id, and the host block named from the same rows rather than a fresh lookup.
-    # The route calls _metrics_work -> _query_server_metrics, both of which live in monitoring.py
+    # The route calls _host_metrics_work -> _query_host_metrics, both of which live in monitoring.py
     # and resolve these two names in THAT module. Patching app's copies would no-op and the stubs
     # would never run — the poll would try to reach the fixture host for real.
+    #
+    # host_live_metrics, not server_live_metrics: the poll takes ONE sample per host and slices it
+    # per game, so the stub has to sit at the seam the route actually calls. The assertions below
+    # are unchanged — they are about what the ENDPOINT returns, which is the contract that matters.
     _dmapp = sys.modules["panel.services.monitoring"]
-    _sv_slm, _sv_map = _dmapp.server_live_metrics, _dmapp.game_map
+    _sv_slm, _sv_map = _dmapp.host_live_metrics, _dmapp.game_map
     try:
-        _dmapp.server_live_metrics = lambda remote, short=None, port=None, force=False: {
-            "game_procs": 2, "game_cpu_percent": 12.5, "game_ram_mb": 2048, "game_uptime_secs": 900,
-            "cpu_percent": 30.0, "ram_used": 4, "ram_total": 8, "disk_used": 1, "disk_total": 4,
-            "uptime_secs": 86400, "cores": 4}
+        _dmapp.host_live_metrics = lambda remote, force=False: {
+            "host": {"cpu_percent": 30.0, "ram_used": 4, "ram_total": 8, "disk_used": 1,
+                     "disk_total": 4, "uptime_secs": 86400, "cores": 4},
+            # Keyed by the game's Linux user, which is how the batched sample reports per-game
+            # figures — "csgoserver" is this fixture's short_name (see the GameServer above).
+            "users": {"csgoserver": {"game_procs": 2, "game_cpu_percent": 12.5,
+                                     "game_ram_mb": 2048, "game_uptime_secs": 900}},
+            "ports": set()}
         _dmapp.game_map = lambda *a, **k: "de_dust2"
         _dm = c.get("/api/dashboard/metrics")
         _dj = _dm.get_json() or {}
@@ -1652,7 +1660,7 @@ try:
               _hostblk.get("cpu") == 30.0 and _hostblk.get("ram_pct") == 50.0
               and _hostblk.get("disk_pct") == 25.0, str(_hostblk)[:110])
     finally:
-        _dmapp.server_live_metrics, _dmapp.game_map = _sv_slm, _sv_map
+        _dmapp.host_live_metrics, _dmapp.game_map = _sv_slm, _sv_map
 
     # ── perf regression guard: NO N+1 on the hot paths ────────────
     # Seed 50 game servers across 5 hosts — enough that a per-server (rather than
