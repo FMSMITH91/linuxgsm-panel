@@ -379,6 +379,15 @@ def v_iface(s):
     return s
 
 
+def v_portspec_bare(s):
+    """A port or range with NO /proto suffix — see privileged._portspec_bare. ufw's extended
+    `to any port <n> proto <p>` form rejects "27015/udp proto udp", so this verb cannot build it."""
+    spec = v_portspec(s)
+    if "/" in spec:
+        raise ValueError("port must not carry a protocol here; pass it as the proto argument")
+    return spec
+
+
 def v_cidr(s):
     """An IPv4/IPv6 address or network. Parsed, not pattern-matched, so 'any' and
     '1.2.3.4 || rm -rf /' are both rejected for the same reason: they are not addresses."""
@@ -964,6 +973,15 @@ VERBS = {
     "ufw-delete-allow-port": (
         [v_portspec],
         lambda a: [UFW, "delete", "allow", a[0]],
+        None),
+    "ufw-allow-from-port": (
+        [v_cidr, v_portspec_bare, v_choice("tcp", "udp"), v_comment],
+        lambda a: [UFW, "allow", "from", a[0], "to", "any", "port", a[1], "proto", a[2]]
+        + (["comment", a[3]] if a[3] else []),
+        None),
+    "ufw-delete-allow-from-port": (
+        [v_cidr, v_portspec_bare, v_choice("tcp", "udp")],
+        lambda a: [UFW, "delete", "allow", "from", a[0], "to", "any", "port", a[1], "proto", a[2]],
         None),
     "ufw-deny-ip": (
         [v_cidr, v_comment],

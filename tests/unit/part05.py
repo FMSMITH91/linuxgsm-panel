@@ -777,6 +777,8 @@ _VERB_SAMPLES = {
     "ufw-delete-allow-proto-port": ["udp", "27015"],
     "ufw-delete-limit-port": ["22/tcp"],
     "ufw-delete-allow-app": ["OpenSSH"],
+    "ufw-allow-from-port": ["10.0.0.0/8", "27015", "udp", "lan only"],
+    "ufw-delete-allow-from-port": ["10.0.0.0/8", "27015", "udp"],
     "ufw-deny-ip": ["203.0.113.5", "panel-autoblock"],
     "ufw-delete-deny-ip": ["203.0.113.5"],
     "ufw-delete-num": ["3"],

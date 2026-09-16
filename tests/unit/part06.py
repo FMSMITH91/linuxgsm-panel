@@ -1056,6 +1056,9 @@ check("register_routes: helper closures inside it <= %d (currently %d)"
       % (_HELPER_CEILING, _rr_helpers),
       _rr_helpers <= _HELPER_CEILING,
       "it went UP — a new helper belongs at module level, not nested in the route table")
+# 216, was 214: two genuinely new views — /api/remote/<id>/firewall/limit (UFW rate limiting was
+# reachable from the privileged layer but from no route) and /firewall/allow-from (a port open
+# only from one address or network, which no verb could express before).
 # 214, was 212: two genuinely new views for one-time invite links — /users/invite mints one
 # (superadmin only) and /invite/<token> redeems it. The redemption route is deliberately NOT
 # login_required: creating your own account is the whole point of the link.
@@ -1065,8 +1068,8 @@ check("register_routes: helper closures inside it <= %d (currently %d)"
 # password is held on until it sets its own). This total exists to catch a view VANISHING during a
 # move, so adding one is a deliberate bump — and url_map_baseline.json's diff is the record of what
 # the new route actually is.
-check("register_routes: every one of the 214 views is still accounted for",
-      len(_rr_views) + _MOVED_VIEWS == 214,
+check("register_routes: every one of the 216 views is still accounted for",
+      len(_rr_views) + _MOVED_VIEWS == 216,
       "views inside=%d, moved out=%d" % (len(_rr_views), _MOVED_VIEWS))
 # These two use current_app, which only equals the closed-over `app` inside a request — every
 # caller is a view, so that holds. If they drift back inside a closure, the reasoning stops being

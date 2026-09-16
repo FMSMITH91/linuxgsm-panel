@@ -77,6 +77,65 @@
       </div>
     </div>
 
+    <!-- Open a port to ONE address/network, and rate limiting -->
+    <div class="card mb-3">
+      <div class="card-header"><i class="bi bi-shield-lock"></i> Restrict a Port</div>
+      <div class="card-body">
+        <p class="text-secondary small mb-2">Open a port to a single address or network instead of
+          the whole internet — an admin port that only you should reach, or a game port only your
+          LAN should. A range works too (27015:27020).</p>
+        <div class="row g-2">
+          <div class="col-6">
+            <input type="text" id="src-cidr" class="form-control form-control-sm"
+                   placeholder="1.2.3.4 or 10.0.0.0/8" data-no-i18n>
+          </div>
+          <div class="col-3">
+            <input type="text" id="src-port" class="form-control form-control-sm"
+                   placeholder="Port" data-no-i18n>
+          </div>
+          <div class="col-3">
+            <select id="src-proto" class="form-select form-select-sm">
+              <option value="tcp" selected>TCP</option>
+              <option value="udp">UDP</option>
+            </select>
+          </div>
+          <div class="col-12 mt-1 d-flex gap-2">
+            <button class="btn btn-success btn-sm flex-grow-1" data-action="allowFromSource">
+              <i class="bi bi-plus-lg"></i> Allow from this source only
+            </button>
+            <button class="btn btn-outline-danger btn-sm" data-action="removeAllowFromSource"
+                    title="Remove that source rule">
+              <i class="bi bi-trash"></i>
+            </button>
+          </div>
+        </div>
+        <hr class="my-3">
+        <p class="text-secondary small mb-2">Rate limiting refuses an address that opens more than
+          6 connections in 30 seconds. Right for anything someone logs into (SSH, RCON); wrong for
+          gameplay traffic, where that is a quiet evening.</p>
+        <div class="row g-2">
+          <div class="col-6">
+            <input type="text" id="limit-port" class="form-control form-control-sm"
+                   placeholder="Port" data-no-i18n>
+          </div>
+          <div class="col-3">
+            <select id="limit-proto" class="form-select form-select-sm">
+              <option value="tcp" selected>TCP</option>
+              <option value="udp">UDP</option>
+            </select>
+          </div>
+          <div class="col-3 d-flex gap-1">
+            <button class="btn btn-warning btn-sm flex-grow-1" data-action="limitPort">Limit</button>
+            <button class="btn btn-outline-secondary btn-sm" data-action="unlimitPort"
+                    title="Remove the rate limit">
+              <i class="bi bi-x-lg"></i>
+            </button>
+          </div>
+        </div>
+        <div id="restrict-result" class="mt-2 small"></div>
+      </div>
+    </div>
+
     <!-- Game server quick ports -->
     {% if games %}
     <div class="card">

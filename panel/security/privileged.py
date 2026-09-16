@@ -204,6 +204,19 @@ def _iface(s):
     return str(s)
 
 
+def _portspec_bare(s):
+    """A port or range with NO /proto suffix.
+
+    ufw has two syntaxes and they do not mix: `allow 27015/udp` (simple) and
+    `allow from X to any port 27015 proto udp` (extended). Handing the extended form a
+    "27015/udp" would emit `port 27015/udp proto udp`, which ufw rejects — so the verb that
+    builds it only accepts a bare port, and a caller cannot express the broken command."""
+    spec = _portspec(s)
+    if "/" in spec:
+        raise VerbError("port must not carry a protocol here; pass it as the proto argument")
+    return spec
+
+
 def _cidr(s):
     try:
         ipaddress.ip_network(str(s), strict=False)
@@ -750,6 +763,17 @@ _ARGV = {
     "ufw-limit-port": ([_portspec], lambda a: [UFW, "limit", a[0]], None),
     "ufw-allow-iface": ([_iface], lambda a: [UFW, "allow", "in", "on", a[0]], None),
     "ufw-delete-allow-port": ([_portspec], lambda a: [UFW, "delete", "allow", a[0]], None),
+    # Allow a port only FROM a given address or network. Every other allow verb opens a port to
+    # the whole internet; only DENY took an address. So "SSH from my home IP" or "RCON from the
+    # LAN" could not be expressed at all — the choice was world-open or closed. Argument order is
+    # ufw's own: from <cidr> to any port <spec> proto <tcp|udp>.
+    "ufw-allow-from-port": ([_cidr, _portspec_bare, _choice("tcp", "udp"), _comment],
+                            lambda a: [UFW, "allow", "from", a[0], "to", "any",
+                                       "port", a[1], "proto", a[2]]
+                            + (["comment", a[3]] if a[3] else []), None),
+    "ufw-delete-allow-from-port": ([_cidr, _portspec_bare, _choice("tcp", "udp")],
+                                   lambda a: [UFW, "delete", "allow", "from", a[0], "to", "any",
+                                              "port", a[1], "proto", a[2]], None),
     "ufw-deny-ip": ([_cidr, _comment],
                     lambda a: [UFW, "insert", "1", "deny", "from", a[0]]
                     + (["comment", a[1]] if a[1] else []), None),

@@ -80,7 +80,7 @@ Converted so far: **`ufw`, `fail2ban-client`, `systemctl`, `apt`/`dpkg`, the log
 (`journalctl` / `tail`), cron and user management, the sshd port change, the deferred reboot,
 Ubuntu Pro, the host controls, the GMod shared-content box, the fail2ban activity report, the
 detached OS update, Tailscale's join, the panel's own restore/self-update and the VPS hardening
-steps** — 88 verbs. (`tests/unit_test.py` asserts this number against `privileged.verbs()`, so it
+steps** — 90 verbs. (`tests/unit_test.py` asserts this number against `privileged.verbs()`, so it
 cannot drift from the table again.)
 
 **A correction to the numbers previously reported here.** Earlier revisions of this section
