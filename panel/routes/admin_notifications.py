@@ -305,6 +305,28 @@ def register(app):
                                 "manage_users", username="Invite link",
                                 password=url_for("redeem_invite", token=token, _external=True))
 
+    @app.route("/users/invite/<int:invite_id>/revoke", methods=["POST"])
+    @login_required
+    @superadmin_required
+    def revoke_invite(invite_id):
+        """Take back an invite that has not been redeemed.
+
+        Without this, a link sent to the wrong address could only be waited out — and the TTL goes
+        up to 30 days. Redeemed invites are left alone: the account already exists, so there is
+        nothing to take back and the row is the only record of where it came from."""
+        inv = db.session.get(Invite, invite_id)
+        if inv is None:
+            return _form_err("That invite no longer exists.", "manage_users", code=404)
+        if inv.used_at is not None:
+            return _form_err("That invite was already redeemed — revoking it would change nothing.",
+                             "manage_users")
+        if inv.revoked_at is None:
+            inv.revoked_at = utcnow()
+            db.session.commit()
+            log_action(current_user, "invite_revoked", target=inv.note or "(no note)",
+                       detail="created by user id %s" % (inv.created_by_id,))
+        return _form_ok("Invite revoked — the link no longer works.", "manage_users")
+
     @app.route("/invite/<token>", methods=["GET", "POST"])
     def redeem_invite(token):
         """Create your own account from a one-time link. NO login required — that is the point.

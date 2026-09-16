@@ -697,6 +697,10 @@ class Invite(db.Model):
     used_at = db.Column(db.DateTime, nullable=True)
     used_by_id = db.Column(db.Integer, db.ForeignKey("user.id"), nullable=True)
     # What the account will get. Frozen at creation, never read from the invitee's form.
+    # Revocation is its own timestamp, not a reuse of used_at: "somebody redeemed this" and
+    # "the person who sent it took it back" are different facts, and collapsing them would make the
+    # list lie about what happened to a link.
+    revoked_at = db.Column(db.DateTime, nullable=True)
     grants_superadmin = db.Column(db.Boolean, default=False)
     group_ids = db.Column(db.Text, default="[]")
     note = db.Column(db.String(120), default="")
@@ -733,7 +737,20 @@ class Invite(db.Model):
     def is_usable(self):
         """Unused and unexpired. Both halves matter: a used invite must not be reusable, and an
         old one must not be usable forever if a link leaks out of someone's inbox."""
-        return self.used_at is None and (self.expires_at or utcnow()) > utcnow()
+        return (self.used_at is None and self.revoked_at is None
+                and (self.expires_at or utcnow()) > utcnow())
+
+    @property
+    def state(self):
+        """One word for the list. Order matters: a link that was redeemed AND has since expired is
+        still 'used' — what happened to it is the interesting fact, not the clock."""
+        if self.used_at is not None:
+            return "used"
+        if self.revoked_at is not None:
+            return "revoked"
+        if (self.expires_at or utcnow()) <= utcnow():
+            return "expired"
+        return "active"
 
     @property
     def groups_wanted(self):
@@ -898,6 +915,7 @@ def _run_light_migrations():
         ("game_server", "restart_pending"): "ALTER TABLE game_server ADD COLUMN restart_pending BOOLEAN DEFAULT 0",
         ("game_server", "backup_pending"): "ALTER TABLE game_server ADD COLUMN backup_pending BOOLEAN DEFAULT 0",
         ("game_server", "stop_pending"): "ALTER TABLE game_server ADD COLUMN stop_pending BOOLEAN DEFAULT 0",
+        ("invite", "revoked_at"): "ALTER TABLE invite ADD COLUMN revoked_at DATETIME",
         ("remote_server", "public_ip"): "ALTER TABLE remote_server ADD COLUMN public_ip VARCHAR(45) DEFAULT ''",
         ("remote_server", "stats_cache"): "ALTER TABLE remote_server ADD COLUMN stats_cache TEXT DEFAULT ''",
         ("remote_server", "pro_cache"): "ALTER TABLE remote_server ADD COLUMN pro_cache TEXT DEFAULT ''",
