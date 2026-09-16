@@ -14,6 +14,30 @@
 
 <div class="acct-grid">
   <div class="card">
+    <div class="card-header"><i class="bi bi-person-badge"></i> Profile</div>
+    <div class="card-body">
+      <form method="POST" action="{{ url_for('account_update_profile') }}">
+        <div class="mb-3">
+          <label class="form-label" for="acct-display-name">Display name</label>
+          <input type="text" id="acct-display-name" name="display_name" class="form-control"
+                 maxlength="120" value="{{ current_user.display_name or '' }}"
+                 placeholder="{{ current_user.username }}">
+          <div class="form-text">Shown next to your actions around the panel. Leave it empty to be
+            shown as <strong class="font-monospace">{{ current_user.username }}</strong>.</div>
+        </div>
+        <div class="mb-3">
+          <label class="form-label" for="acct-username">Username</label>
+          <input type="text" id="acct-username" class="form-control font-monospace"
+                 value="{{ current_user.username }}" disabled data-no-i18n>
+          <div class="form-text">What you sign in with. Ask an administrator to change it — it is
+            what your audit history is filed under.</div>
+        </div>
+        <button type="submit" class="btn btn-primary btn-sm">Save</button>
+      </form>
+    </div>
+  </div>
+
+  <div class="card">
     <div class="card-header"><i class="bi bi-translate"></i> Language</div>
     <div class="card-body">
       <p class="text-secondary small mb-2">Choose the language for the panel interface. This preference is saved to your account and follows you across devices.</p>

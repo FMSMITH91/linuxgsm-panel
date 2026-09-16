@@ -80,6 +80,16 @@
       "POST"
     ]
   },
+  "/account/profile": {
+    "endpoint": "account_update_profile",
+    "guards": [
+      "utils.py:decorated_view",
+      "view:account_update_profile"
+    ],
+    "methods": [
+      "POST"
+    ]
+  },
   "/account/sessions/revoke": {
     "endpoint": "account_revoke_sessions",
     "guards": [

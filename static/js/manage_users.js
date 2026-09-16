@@ -31,6 +31,10 @@ window.openEditUser = function (id) {
   form.setAttribute('action', (window.MOUNT || '') + '/users/' + uid + '/edit');
 
   document.getElementById('eu-name').textContent = u.username;   // textContent: never HTML
+  // Populated, not left blank: the field posts back as the username, so an unfilled one would
+  // submit empty and the route would read "no change" — or, with the browser's `required`, refuse
+  // to submit at all with nothing to show for it.
+  document.getElementById('eu-username').value = u.username || '';
   document.getElementById('eu-display').value = u.display_name || '';
   document.getElementById('eu-email').value = u.email || '';
 
