@@ -26,19 +26,57 @@ window.addEventListener('pageshow', function(ev){
 
 (function(){
   var _fetch = window.fetch.bind(window);
+
+  // ── Session expiry: one place that reacts, for the whole panel ────────────────────────────
+  // A page is a snapshot of a moment when you were signed in. The cookie does not ask the page
+  // before it expires, so an open tab (or one restored from the back/forward cache) stays fully
+  // rendered and completely dead — and every click then hit an endpoint that answered with the
+  // login page, which the caller tried to read as JSON. That is where the errors came from. The
+  // server now answers those calls 401 + X-Auth-Required; this takes the whole tab to /login.
+  function _loginPath(){ return (window.MOUNT || '') + '/login'; }
+  function _onLoginPage(){ return location.pathname.indexOf(_loginPath()) === 0; }
+  var _expiredHandled = false;
+  window.sessionExpired = function(){
+    if (_expiredHandled || _onLoginPage()) return;   // in-flight polls all 401 at once: redirect once
+    _expiredHandled = true;
+    var here = location.pathname + location.search;
+    try { if (window.toast) toast('Your session expired — signing you back in.', 'warning'); } catch(e){}
+    // Keep where they were, so logging back in lands on the page they were actually using.
+    location.replace(_loginPath() + '?next=' + encodeURIComponent(here));
+  };
+
   window.fetch = function(input, init){
     init = init || {};
     var method = (init.method || 'GET').toUpperCase();
+    var h = new Headers(init.headers || {});
     if (method !== 'GET' && method !== 'HEAD') {
-      var h = new Headers(init.headers || {});
       if (!h.has('X-CSRFToken')) h.set('X-CSRFToken', window.CSRF);
-      // Mark every in-page fetch so form-POST endpoints can answer with JSON (update in place)
-      // instead of a full redirect+reload. A real browser form navigation won't have this.
-      if (!h.has('X-Requested-With')) h.set('X-Requested-With', 'XMLHttpRequest');
-      init.headers = h;
     }
-    return _fetch(input, init);
+    // Mark every in-page fetch, GET included. It lets form-POST endpoints answer with JSON
+    // (update in place) instead of a full redirect+reload — and it is how the server tells an
+    // in-page call from a browser navigation when the session has expired, so it can answer
+    // with a 401 a script can act on rather than a login page a script cannot parse.
+    if (!h.has('X-Requested-With')) h.set('X-Requested-With', 'XMLHttpRequest');
+    init.headers = h;
+    return _fetch(input, init).then(function(r){
+      if (r.status === 401 && r.headers.get('X-Auth-Required')) window.sessionExpired();
+      return r;
+    });
   };
+
+  // A tab restored from the back/forward cache never re-asked the server anything — it is the old
+  // page, pixel for pixel, cookie or no cookie. Ask once on wake-up; the 401 handler above does
+  // the rest. Cheap enough to also do when a long-backgrounded tab is focused again.
+  var _lastPing = Date.now();
+  function _pingAuth(){
+    if (_expiredHandled || _onLoginPage()) return;
+    _lastPing = Date.now();
+    window.fetch((window.MOUNT || '') + '/api/auth/ping', {cache: 'no-store'}).catch(function(){});
+  }
+  window.addEventListener('pageshow', function(ev){ if (ev.persisted) _pingAuth(); });
+  document.addEventListener('visibilitychange', function(){
+    if (!document.hidden && Date.now() - _lastPing > 60000) _pingAuth();
+  });
   document.addEventListener('DOMContentLoaded', function(){
     document.querySelectorAll('form').forEach(function(f){
       var m = (f.getAttribute('method') || 'GET').toUpperCase();
@@ -368,9 +406,9 @@ window._copyDataU = function(el){ var u = el && el.dataset ? el.dataset.u : ''; 
 window._showTsKeyAdv = function(){ var e = document.getElementById('ts-key-adv'); if (e) e.style.display = 'block'; return false; };
 window._sayOnEnter = function(e){ if (e && e.key === 'Enter'){ e.preventDefault(); if (window.announceSay) announceSay(); } };
 window._acctSignOutAll = function(){
-  confirmDialog({title:'Sign out everywhere', icon:'box-arrow-right', confirmClass:'btn-danger',
-    confirmLabel:'Sign out everywhere',
-    bodyText:'Sign out of ALL sessions, including this one? You will be logged back in fresh.',
+  confirmDialog({title:'Sign out everywhere else', icon:'box-arrow-right', confirmClass:'btn-danger',
+    confirmLabel:'Sign out other devices',
+    bodyText:'Sign out every OTHER device signed in to this account? This one stays signed in.',
     onConfirm:function(){ var f = document.getElementById('revoke-sessions-form'); if (f) f.submit(); }});
 };
 (function(){

@@ -645,8 +645,89 @@ class UserSession(db.Model):
     last_seen = db.Column(db.DateTime, default=utcnow, nullable=False)
     ip = db.Column(db.String(64), default="")
     user_agent = db.Column(db.String(300), default="")
+    # Which cookie is keeping this login alive, because the two expire on very different clocks:
+    # a plain login rides the Flask session cookie (PERMANENT_SESSION_LIFETIME, hours), a
+    # "remember me" login also gets flask-login's remember cookie (REMEMBER_COOKIE_DURATION, days).
+    # Without knowing which, the row cannot say when the login actually died.
+    remember = db.Column(db.Boolean, default=False, nullable=False)
     user = db.relationship("User", backref=db.backref(
         "login_sessions", lazy="dynamic", cascade="all, delete-orphan"))
+
+    def idle_limit(self):
+        """Seconds this login may sit idle before its cookie is certainly dead."""
+        return session_idle_limits()[1 if self.remember else 0]
+
+    def is_expired(self, now=None):
+        """True once no cookie for this login can still authenticate.
+
+        Both cookies are refreshed on use, so it is idle time — not age — that kills them, and
+        `last_seen` is the panel's record of that. The registry used to prune only at 45 days,
+        so the account page listed logins that had expired days or weeks earlier as "active":
+        alarming to read, and impossible to act on, since revoking one revokes nothing.
+        """
+        last = self.last_seen or self.created_at
+        if last is None:
+            return False
+        return ((now or utcnow()) - last).total_seconds() > self.idle_limit()
+
+
+# `last_seen` is only written every ~5 minutes (the throttle in load_user), so it can lag real
+# activity by that much. Add it to every expiry window rather than cutting a live session short.
+SESSION_LAST_SEEN_GRACE = 300
+
+
+def session_idle_limits():
+    """(plain, remember) idle seconds after which a login's cookie can no longer be valid.
+
+    Read live from app.config — the same values the cookies themselves are issued with, and which
+    the settings page can change at runtime — so the registry and the browser never disagree. A
+    "remember me" login survives the shorter session-cookie window because the remember cookie
+    signs it straight back in, hence the max().
+    """
+    from datetime import timedelta
+    from flask import current_app
+
+    def _secs(value, fallback):
+        if isinstance(value, timedelta):
+            return value.total_seconds()
+        try:
+            return float(value)
+        except (TypeError, ValueError):
+            return fallback
+
+    try:
+        cfg = current_app.config
+    except RuntimeError:      # no app context (a CLI/maintenance caller) — use the shipped defaults
+        cfg = {}
+    plain = _secs(cfg.get("PERMANENT_SESSION_LIFETIME"), 8 * 3600) + SESSION_LAST_SEEN_GRACE
+    remember = _secs(cfg.get("REMEMBER_COOKIE_DURATION"), 3 * 86400) + SESSION_LAST_SEEN_GRACE
+    return plain, max(plain, remember)
+
+
+def prune_expired_sessions(user_id=None):
+    """Delete session rows whose cookies have expired. Scoped to one user when given.
+
+    Returns the number of rows removed. Best-effort: a failure here must never break the request
+    that happened to trigger the sweep.
+    """
+    from datetime import timedelta
+    from sqlalchemy import and_, or_
+    plain, remember = session_idle_limits()
+    now = utcnow()
+    q = UserSession.query
+    if user_id is not None:
+        q = q.filter(UserSession.user_id == user_id)
+    q = q.filter(or_(
+        and_(UserSession.remember.is_(True), UserSession.last_seen < now - timedelta(seconds=remember)),
+        and_(UserSession.remember.isnot(True), UserSession.last_seen < now - timedelta(seconds=plain)),
+    ))
+    try:
+        n = q.delete(synchronize_session=False)
+        db.session.commit()
+        return n
+    except Exception:
+        db.session.rollback()
+        return 0
 
 
 def _run_light_migrations():
@@ -677,6 +758,16 @@ def _run_light_migrations():
         ("user", "api_token"): "ALTER TABLE user ADD COLUMN api_token VARCHAR(64)",
         ("user", "ui_prefs"): "ALTER TABLE user ADD COLUMN ui_prefs TEXT DEFAULT '{}'",
         ("user", "last_totp_step"): "ALTER TABLE user ADD COLUMN last_totp_step INTEGER DEFAULT 0",
+        # DEFAULT 1, unlike the model's default of False, and only here: this DDL runs once, on
+        # an install that already has session rows, and its DEFAULT exists solely to backfill
+        # them. Guessing "remembered" for those is the kind guess — the expiry sweep then gives
+        # them the LONGER window, so nobody is signed out by the upgrade itself; a plain session
+        # that is really dead lingers in the list a few days and then goes. Guessing the other way
+        # signs out every remember-me login the first time they idle for an afternoon. New rows
+        # never see this default: every insert goes through the ORM, which always supplies the
+        # real value.
+        ("user_session", "remember"):
+            "ALTER TABLE user_session ADD COLUMN remember BOOLEAN DEFAULT 1 NOT NULL",
     }
     for (table, col), ddl in wanted.items():
         if table in existing and col not in existing[table]:

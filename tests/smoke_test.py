@@ -940,6 +940,36 @@ try:
         check("migrate: repeated migrations stay a safe no-op",
               "backup_codes" in _ucols() and "totp_secret" in _ucols())
 
+        # user_session.remember decides when a login row expires, so an install that upgrades
+        # into this feature must GET the column — and its existing rows must survive, backfilled
+        # to the longer window rather than swept out from under whoever is signed in.
+        from panel.core.clock import utcnow as _utcnow_s
+
+        def _scols():
+            return {col["name"] for col in _inspect(db.engine).get_columns("user_session")}
+        try:
+            db.session.execute(_t("ALTER TABLE user_session DROP COLUMN remember"))
+            db.session.commit()
+            _sdropped = True
+        except Exception:
+            db.session.rollback()
+            _sdropped = False
+        if _sdropped:
+            db.session.execute(_t("INSERT INTO user_session (user_id, sid, created_at, last_seen, "
+                                  "ip, user_agent) VALUES (1, 'smoke_migrate_sid', :n, :n, '', '')"),
+                               {"n": _utcnow_s()})
+            db.session.commit()
+            check("migrate: a pre-feature DB really is missing user_session.remember",
+                  "remember" not in _scols())
+            _run_light_migrations()
+            check("migrate: the update adds user_session.remember", "remember" in _scols())
+            _back = db.session.execute(_t("SELECT remember FROM user_session WHERE sid = "
+                                          "'smoke_migrate_sid'")).scalar()
+            check("migrate: an existing login row survives, on the longer expiry window",
+                  bool(_back), "remember=%r" % (_back,))
+            db.session.execute(_t("DELETE FROM user_session WHERE sid = 'smoke_migrate_sid'"))
+            db.session.commit()
+
     # ── Bulk action endpoint: guards + dispatch bookkeeping ───────
     ba_bad = c.post("/api/servers/bulk-action", json={"action": "nope", "server_ids": [gs_id]})
     check("bulk-action: unsupported action -> 400", ba_bad.status_code == 400)
@@ -1147,16 +1177,138 @@ try:
     check("session: can't revoke another user's session (404)", xrv.status_code == 404,
           "status=%d" % xrv.status_code)
 
+    # ── "Sign out everywhere else" keeps the device that pressed it ──
+    # It used to bump the epoch and delete every row, including the caller's — so the one button
+    # meant to evict an intruder also evicted you, onto the login page, on the phone you were
+    # holding. The epoch bump stays (it is the only thing that kills a legacy no-sid cookie and
+    # every remember cookie); this device is re-admitted with a cookie carrying the new epoch.
+    s3, _ = _real_login()                 # a second device to be signed out
     with app.app_context():
         epoch_before = db.session.get(User, admin_id).auth_epoch or 0
-    s1.post("/account/sessions/revoke")   # sign out everywhere
+        n_before = UserSession.query.filter_by(user_id=admin_id).count()
+    check("session: two devices signed in before the sweep", n_before == 2, "rows=%d" % n_before)
+    _rev = s1.post("/account/sessions/revoke", follow_redirects=False)
     with app.app_context():
-        u_after = db.session.get(User, admin_id)
         n_all = UserSession.query.filter_by(user_id=admin_id).count()
-        epoch_after = u_after.auth_epoch or 0
-    check("session: sign-out-everywhere clears all rows and bumps the epoch",
-          n_all == 0 and epoch_after > epoch_before,
+        epoch_after = db.session.get(User, admin_id).auth_epoch or 0
+    check("session: sign-out-everywhere-else bumps the epoch and leaves exactly one row",
+          n_all == 1 and epoch_after > epoch_before,
           "rows=%d epoch %d->%d" % (n_all, epoch_before, epoch_after))
+    check("session: ...and lands back on the account page, not the login page",
+          _rev.status_code in (301, 302, 303) and "/login" not in (_rev.headers.get("Location") or ""),
+          "status=%d loc=%s" % (_rev.status_code, _rev.headers.get("Location") or ""))
+    _still_in = s1.get("/account", follow_redirects=False)
+    check("session: the device that pressed it is STILL signed in",
+          _still_in.status_code == 200, "status=%d" % _still_in.status_code)
+    _kicked = s3.get("/account", follow_redirects=False)
+    check("session: the other device was signed out",
+          _kicked.status_code in (301, 302, 303) and "/login" in (_kicked.headers.get("Location") or ""),
+          "status=%d" % _kicked.status_code)
+    _sess_after = ((s1.get("/api/account/sessions").get_json() or {}).get("sessions", []))
+    check("session: the survivor is listed, and flagged as this device",
+          len(_sess_after) == 1 and _sess_after[0].get("current"), "n=%d" % len(_sess_after))
+
+    # ── An expired login is gone, not listed as active ──
+    # Rows used to be pruned only after 45 days of silence, so a session whose cookie died hours
+    # (or weeks) ago still sat on the account page labelled active, with a Revoke button that
+    # revoked something already gone. Age one row past the session-cookie window and it must
+    # vanish from the list — and its cookie must stop authenticating.
+    from panel.db.models import prune_expired_sessions as _prune
+    from datetime import timedelta as _td
+    from panel.core.clock import utcnow as _utcnow_s
+    s4, _ = _real_login()
+    with app.app_context():
+        _sids = {r.sid: r.id for r in UserSession.query.filter_by(user_id=admin_id).all()}
+    _live = ((s1.get("/api/account/sessions").get_json() or {}).get("sessions", []))
+    _stale = next((x for x in _live if not x.get("current")), None)
+    with app.app_context():
+        _row = db.session.get(UserSession, _stale["id"]) if _stale else None
+        if _row is not None:
+            _row.remember = False
+            # One second past PERMANENT_SESSION_LIFETIME + the last_seen write throttle.
+            _life = app.config.get("PERMANENT_SESSION_LIFETIME", 8 * 3600)
+            _life = _life.total_seconds() if hasattr(_life, "total_seconds") else float(_life)
+            _row.last_seen = _utcnow_s() - _td(seconds=_life + 301)
+            db.session.commit()
+    _listed = ((s1.get("/api/account/sessions").get_json() or {}).get("sessions", []))
+    check("session: an expired login is not listed as active",
+          _stale is not None and all(x["id"] != _stale["id"] for x in _listed),
+          "ids=%s expired=%s" % ([x["id"] for x in _listed], _stale and _stale["id"]))
+    with app.app_context():
+        _gone = db.session.get(UserSession, _stale["id"]) if _stale else "n/a"
+    check("session: ...and its row is deleted, not merely hidden", _gone is None, repr(_gone))
+    _dead = s4.get("/account", follow_redirects=False)
+    check("session: ...and its cookie no longer authenticates",
+          _dead.status_code in (301, 302, 303) and "/login" in (_dead.headers.get("Location") or ""),
+          "status=%d" % _dead.status_code)
+    # The loader has to reject an expired session on its own, with no sweep having run first —
+    # otherwise the only thing stopping a captured "remember me" cookie (which carries no
+    # timestamp of any kind) is whether somebody happened to open the account page.
+    s5, _ = _real_login()
+    with app.app_context():
+        _r5 = (UserSession.query.filter_by(user_id=admin_id)
+               .order_by(UserSession.created_at.desc()).first())
+        _r5.remember = False
+        _r5.last_seen = _utcnow_s() - _td(seconds=_life + 301)
+        _r5_id = _r5.id
+        db.session.commit()
+    _dead5 = s5.get("/account", follow_redirects=False)
+    check("session: the loader rejects an expired cookie without waiting for a sweep",
+          _dead5.status_code in (301, 302, 303) and "/login" in (_dead5.headers.get("Location") or ""),
+          "status=%d" % _dead5.status_code)
+    with app.app_context():
+        check("session: ...and drops the row on the way past",
+              db.session.get(UserSession, _r5_id) is None)
+    # A "remember me" login gets the longer window, not the session-cookie one — otherwise every
+    # remembered login would be swept an hour into a three-day life.
+    with app.app_context():
+        _r = UserSession(user_id=admin_id, sid="smoke_rem_sid", remember=True,
+                         last_seen=_utcnow_s() - _td(seconds=_life + 301))
+        db.session.add(_r)
+        db.session.commit()
+        _rid = _r.id
+        _swept = _prune(admin_id)
+        _survives = db.session.get(UserSession, _rid) is not None
+    check("session: a remembered login is not swept on the session-cookie clock",
+          _survives, "swept=%d" % _swept)
+    with app.app_context():
+        _rem = db.session.get(UserSession, _rid)
+        _rem.last_seen = _utcnow_s() - _td(days=400)
+        db.session.commit()
+        _prune(admin_id)
+        _rem_gone = db.session.get(UserSession, _rid) is None
+    check("session: ...but it is swept once the remember window is past too", _rem_gone)
+
+    # ── An expired cookie must bounce an in-page call, not hand it the login page ──
+    # This is what made a stale tab throw on every click: @login_required answered the fetch with
+    # a 302 to /login, fetch followed it, and the caller got 200 text/html where it expected JSON.
+    _anon = app.test_client()
+    _nav = _anon.get("/account", follow_redirects=False)
+    check("auth: a browser navigation still redirects to the login page",
+          _nav.status_code in (301, 302, 303) and "/login" in (_nav.headers.get("Location") or ""),
+          "status=%d" % _nav.status_code)
+    check("auth: ...carrying where to come back to",
+          "next=" in (_nav.headers.get("Location") or ""), _nav.headers.get("Location") or "")
+    _xhr = _anon.get("/api/account/sessions", headers={"X-Requested-With": "XMLHttpRequest"})
+    check("auth: an in-page fetch gets a 401, not the login page",
+          _xhr.status_code == 401 and _xhr.headers.get("X-Auth-Required") == "1",
+          "status=%d ct=%s" % (_xhr.status_code, _xhr.headers.get("Content-Type")))
+    check("auth: ...in the standard JSON envelope the client already understands",
+          (_xhr.get_json() or {}).get("success") is False
+          and (_xhr.get_json() or {}).get("error") == "auth_required",
+          _xhr.get_data(as_text=True)[:120])
+    _ping = s1.get("/api/auth/ping")
+    check("auth: the wake-up ping confirms a live session",
+          _ping.status_code == 200 and (_ping.get_json() or {}).get("success") is True,
+          "status=%d" % _ping.status_code)
+    _ping_anon = _anon.get("/api/auth/ping")
+    check("auth: ...and answers a dead one with the flagged 401",
+          _ping_anon.status_code == 401 and _ping_anon.headers.get("X-Auth-Required") == "1",
+          "status=%d" % _ping_anon.status_code)
+    _page = s1.get("/account")
+    check("auth: a signed-in page is never served from the browser cache unrevalidated",
+          "no-cache" in (_page.headers.get("Cache-Control") or ""),
+          "Cache-Control: %s" % (_page.headers.get("Cache-Control") or "(none)"))
 
     # A legacy cookie (client_as injects a plain _user_id with no sid, like a pre-feature login) is
     # adopted on first list — so you never see an empty list while logged in.
@@ -1167,6 +1319,24 @@ try:
     with app.app_context():
         n_leg = UserSession.query.filter_by(user_id=deleg_id).count()
     check("session: adoption created a row for the legacy login", n_leg == 1, "rows=%d" % n_leg)
+    with app.app_context():
+        _leg_rem = UserSession.query.filter_by(user_id=deleg_id).first().remember
+    check("session: a legacy login with no remember cookie is adopted on the SHORT window",
+          _leg_rem is False or _leg_rem == 0, "remember=%r" % (_leg_rem,))
+
+    # …and one that IS still sending a remember cookie gets the long window. Guessing "plain" for
+    # it would delete the row — and sign the device out — hours into a three-day login. Presence of
+    # the cookie is the only signal available for a login issued before the column existed.
+    with app.app_context():
+        UserSession.query.filter_by(user_id=deleg_id).delete()
+        db.session.commit()
+    lc2 = client_as(deleg_id)
+    lc2.set_cookie(app.config.get("REMEMBER_COOKIE_NAME", "remember_token"), "anything-non-empty")
+    lc2.get("/api/account/sessions")
+    with app.app_context():
+        _row2 = UserSession.query.filter_by(user_id=deleg_id).first()
+    check("session: a legacy login that still holds a remember cookie is adopted on the LONG window",
+          _row2 is not None and bool(_row2.remember), "row=%r" % (_row2 and _row2.remember,))
 
     # ── History endpoint: a player peak must survive down-sampling (not be decimated away) ──
     from panel.db.models import MetricSample
