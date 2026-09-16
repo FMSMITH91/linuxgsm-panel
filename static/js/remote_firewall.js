@@ -146,7 +146,7 @@ function openPort() {
 function _restrictPost(path, body, busy) {
   var out = document.getElementById('restrict-result');
   out.innerHTML = '<span class="text-secondary"><i class="bi bi-arrow-repeat"></i> ' + esc(busy) + '</span>';  // nosemgrep
-  fetch(MOUNT + '/api/remote/' + remoteId + path, {
+  fetch(MOUNT + '/api/remote/' + remoteId + path, {  // nosemgrep - same-origin; path is one of two literals above
     method: 'POST',
     headers: {'Content-Type': 'application/json'},
     body: JSON.stringify(body),
