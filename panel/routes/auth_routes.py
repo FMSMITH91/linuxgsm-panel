@@ -166,7 +166,15 @@ def register(app):
 
             user = User.query.filter_by(username=username).first()
             if user and user.is_active and check_password(password, user.password_hash):
-                if user.totp_enabled and user.totp_secret_plain:
+                # `totp_enabled` alone, NOT "enabled and the secret decrypts". totp_secret_plain
+                # returns "" whenever decryption fails (a cred_key that was not carried across a
+                # hand-rolled migration, a truncated key file), and the old condition then fell
+                # straight through to _succeed — granting a full session on the password alone for
+                # an account that has 2FA switched on, silently. A second factor that turns itself
+                # off when a file is unreadable is not a second factor. Backup codes are bcrypt
+                # hashes in their own column and do not depend on cred_key, so the prompt below is
+                # still answerable and nobody is locked out.
+                if user.totp_enabled:
                     session["_2fa_pending"] = user.id
                     session["_2fa_at"] = now
                     session["_2fa_remember"] = remember

@@ -5,7 +5,8 @@ Moved out of register_routes() verbatim — see panel/routes/__init__.py for why
 from flask import (render_template, request)
 from flask_login import (current_user, login_required)
 from panel.db.models import (GameServer, Group, RemoteServer, db)
-from panel.security.auth import (ALL_PERMISSIONS, MANAGE_GROUPS, _grantable_perms, log_action,
+from panel.security.auth import (ALL_PERMISSIONS, MANAGE_GROUPS, _grantable_perms,
+    accessible_remote_ids, get_user_servers, grantable_object_ids, log_action,
     permission_required)
 from panel.services import (notifications)
 from panel.core.http import (_form_err, _form_ok)
@@ -43,8 +44,14 @@ def register(app):
 
         group = Group(name=name, description=description)
         group.set_permissions(_grantable_perms(request.form.getlist("permissions")))
-        group.servers = _selected_remotes(request.form.getlist("servers"))
-        group.game_servers = _selected_game_servers(request.form.getlist("game_servers"))
+        # Same filter as edit_group: a new group must not be able to grant hosts or servers its
+        # creator cannot reach, or the escalation is just one extra click away.
+        group.servers = _selected_remotes(grantable_object_ids(
+            {int(i) for i in request.form.getlist("servers") if i.isdecimal()},
+            set(), accessible_remote_ids(current_user)))
+        group.game_servers = _selected_game_servers(grantable_object_ids(
+            {int(i) for i in request.form.getlist("game_servers") if i.isdecimal()},
+            set(), {g.id for g in get_user_servers(current_user)}))
 
         db.session.add(group)
         db.session.commit()
@@ -68,8 +75,19 @@ def register(app):
         group.description = (request.form.get("description") or group.description or "").strip()
         group.set_permissions(_grantable_perms(request.form.getlist("permissions"),
                                                group.get_permissions()))
-        group.servers = _selected_remotes(request.form.getlist("servers"))
-        group.game_servers = _selected_game_servers(request.form.getlist("game_servers"))
+        # Filtered like the permission list above it, and for the same reason. These two lines
+        # took any id the form supplied, so a delegated MANAGE_GROUPS admin scoped to one host
+        # could grant their own group every host and server in the install — permissions unchanged,
+        # so the escalation test still passed, while can_access_remote/can_access_server started
+        # returning True for everything.
+        _keep_r = grantable_object_ids({int(i) for i in request.form.getlist("servers") if i.isdecimal()},
+                                       {r.id for r in (group.servers or [])},
+                                       accessible_remote_ids(current_user))
+        _keep_g = grantable_object_ids({int(i) for i in request.form.getlist("game_servers") if i.isdecimal()},
+                                       {g.id for g in (group.game_servers or [])},
+                                       {g.id for g in get_user_servers(current_user)})
+        group.servers = _selected_remotes(_keep_r)
+        group.game_servers = _selected_game_servers(_keep_g)
 
         db.session.commit()
         log_action(current_user, "edit_group", target=group.name)

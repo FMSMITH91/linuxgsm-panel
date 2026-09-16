@@ -718,6 +718,50 @@ def _perm_for_action(action):
     return p
 
 
+def grantable_groups(requested_ids, existing=()):
+    """The groups a user may be left in after an edit, safely.
+
+    The sibling of _grantable_perms, and it closes the same escalation from the other side.
+    _grantable_perms stops a delegated MANAGE_GROUPS admin giving a group a permission they do not
+    hold — but MANAGE_USERS let them simply JOIN a group that already holds it, by editing their
+    own account and ticking the box. `is_superadmin` was guarded; group membership was not, and
+    get_user_permissions unions group permissions on every request, so the next request carried
+    the new privileges.
+
+    A superadmin may assign anything. Anyone else may only assign a group whose permissions are a
+    SUBSET of their own — so membership can never be a route to a permission they lack — and groups
+    already on the user are PRESERVED, so an edit by a less-privileged admin cannot silently strip
+    someone's access (the same preserve-don't-strip rule _grantable_perms follows).
+    """
+    from panel.db.models import Group
+    requested = {g for g in (db.session.get(Group, i) for i in requested_ids) if g is not None}
+    existing = set(existing or ())
+    if current_user.is_superadmin:
+        return list(requested)
+    mine = get_user_permissions(current_user)
+    keepable = {g for g in requested if set(g.get_permissions()) <= mine}
+    return list(keepable | (existing - {g for g in existing if set(g.get_permissions()) <= mine}))
+
+
+def grantable_object_ids(requested_ids, existing_ids, allowed_ids):
+    """The object ids (hosts, or game servers) a group may be left granting after an edit.
+
+    Same shape and same reason as grantable_groups: /groups/<id>/edit set group.servers and
+    group.game_servers from the submitted ids with no check that the editor could reach those
+    objects, while the permission list beside it was carefully filtered. A delegated group admin
+    scoped to one host could therefore grant their own group every host in the install — the
+    permissions were unchanged, so the existing escalation test still passed, but can_access_server
+    and can_access_remote then returned True for everything.
+
+    A superadmin may grant anything. Anyone else may only grant what they can already reach, and
+    ids already on the group are preserved.
+    """
+    requested, existing = set(requested_ids), set(existing_ids or ())
+    if current_user.is_superadmin:
+        return requested
+    return (requested & set(allowed_ids)) | (existing - set(allowed_ids))
+
+
 def _grantable_perms(requested, existing=()):
     """Compute a group's permission set after an edit, safely. A superadmin can set any
     real permission. Anyone else (a delegated MANAGE_GROUPS user) can only toggle the

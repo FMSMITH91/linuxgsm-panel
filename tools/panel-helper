@@ -280,6 +280,70 @@ WRITE_TARGETS = {
 }
 
 
+# ── What may be written INTO those destinations ───────────────────────────────────────────────
+# The table above secures the PATH: a caller names a destination, it never supplies one. That half
+# held. The content did not — it is this process's stdin, and it was written verbatim, on the
+# reasoning that "it is never an argument, so no amount of it can change what runs". True of THIS
+# process, and false of the destination: four of these files are read by something that executes
+# what they contain, so writing them was a general "run this as root" primitive for anyone who
+# could invoke the helper at all — which, under the narrow sudoers grant, is the panel user.
+#
+#   /etc/cron.d/lgsm-node-tools   cron lines carry a user field. `* * * * * root <cmd>` = root.
+#   /etc/apt/apt.conf.d/20…       APT::Update::Pre-Invoke {"<cmd>";} runs under /bin/sh as root.
+#   /etc/sysctl.d/99-tailscale    kernel.core_pattern=|<prog> makes the kernel run a program.
+#   /etc/ssh/sshd_config.d/…      AuthorizedKeysCommand + …User root, and this file is the way
+#                                 around sshd-set-directive, which validates key AND value.
+#
+# Each payload the panel actually sends is a fixed shape, so each gets a grammar that admits it and
+# nothing else. Validation is REQUIRED, not optional: a destination with no entry is refused, so
+# adding one to WRITE_TARGETS forces a decision about its content rather than inheriting "anything".
+_RE_APT_CONF = re.compile(r'APT::[A-Za-z][A-Za-z0-9:-]* "[0-9]+";')
+_RE_SYSCTL = re.compile(r"[a-z][a-z0-9_.]* *= *[0-9]+")
+_RE_SSHD_PORT = re.compile(r"(Port [0-9]{1,5}|ListenAddress \[?[0-9A-Fa-f:.]+\]?:[0-9]{1,5})")
+# fail2ban's config files are declarative: a jail names an action, and the command an action runs
+# lives in action.d/*.conf, which is NOT a write target. So these cannot execute code the way the
+# four above can, and their content is genuinely open-ended (ignoreip lists, ports, filter regexes)
+# — a grammar would break real configs for no gain. They are allowed as-is, deliberately and here
+# rather than by omission. Worst case a hostile write disables the panel's own fail2ban jail, which
+# is a loss of protection, not a gain of privilege.
+_RE_FAIL2BAN_OPEN = None
+
+
+def _lines_match(content, pattern):
+    """Every non-blank, non-comment line matches `pattern` in full."""
+    for line in (content or "").splitlines():
+        line = line.strip()
+        if not line or line.startswith("#"):
+            continue
+        if not pattern.fullmatch(line):
+            return False
+    return True
+
+
+WRITE_CONTENT = {
+    # A fixed body: the helper owns it, so the destination cannot be steered at all. The panel
+    # still sends the same bytes; they are ignored rather than trusted, which also means a future
+    # change to the schedule is a one-sided edit here instead of a lockstep one.
+    "node-tools-cron": None,
+    "apt-auto-upgrades": _RE_APT_CONF,
+    "sysctl-tailscale": _RE_SYSCTL,
+    "sshd-port-dropin": _RE_SSHD_PORT,
+    "fail2ban-jail-local": _RE_FAIL2BAN_OPEN,
+    "fail2ban-panel-whitelist": _RE_FAIL2BAN_OPEN,
+    "fail2ban-panel-filter": _RE_FAIL2BAN_OPEN,
+    "fail2ban-panel-jail": _RE_FAIL2BAN_OPEN,
+}
+
+# The one body the helper writes itself. Kept byte-identical to what the panel has always sent
+# (panel/ops/ssh_manager/hosts.py:_NODE_TOOLS_CRON) so an existing host sees no change.
+NODE_TOOLS_CRON_BODY = (
+    "# LinuxGSM Panel - keep npm + gamedig current for player queries (managed by the panel).\n"
+    "PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin\n"
+    "30 4 * * 0 root command -v npm >/dev/null 2>&1 && "
+    "npm install -g npm gamedig >/var/log/lgsm-node-tools.log 2>&1\n"
+)
+
+
 
 
 
@@ -519,9 +583,35 @@ def v_jail(s):
 
 
 def v_username(s):
-    """A Linux user name the panel is allowed to manage."""
+    """A Linux user name, by SHAPE only. See v_managed_user for the one that also asks who it is."""
     if not re.fullmatch(USERNAME_RE, s):
         raise ValueError("not a user name")
+    return s
+
+
+def v_managed_user(s):
+    """A Linux user the panel may ACT ON — shape, and never a uid-0 account.
+
+    USERNAME_RE accepts "root", and nothing downstream asked whether it should. That mattered most
+    in the download verbs, whose entire safety argument is the credential drop: setgid(0)/setuid(0)
+    are no-ops when you are already root, and the self-check `getuid() != pw.pw_uid` compares 0
+    against 0 and passes — so `game-file-read root .ssh/id_rsa` read /root/.ssh/id_rsa AS ROOT
+    through a code path whose docstring explains why reading as root must never happen. The same
+    name reached `userdel -r`, `pkill -9 -u`, `crontab -u ... -l` and `usermod -aG`.
+
+    A uid FLOOR would be the tidier rule, but it is wrong here: install.sh creates the panel's own
+    account with `useradd --system`, so the panel user is legitimately uid < 1000 and is named to
+    `tailscale-set-operator`. uid 0 is the account with no legitimate caller, so uid 0 is what this
+    refuses.
+
+    An unknown name passes — the verb's own lookup fails a moment later, and `user-create` needs to
+    name an account that does not exist yet. useradd will not give it uid 0."""
+    s = v_username(s)
+    try:
+        if pwd.getpwnam(s).pw_uid == 0:
+            raise ValueError("refusing a uid-0 account")
+    except KeyError:
+        pass          # not a user on this host (yet) — shape is valid, the verb will fail if wrong
     return s
 
 
@@ -690,7 +780,7 @@ VERBS = {
                                  SYSTEMCTL, "restart", PANEL_UNIT], None),
     # `tailscale set --operator=<user>` — see privileged.py. One caller, one validated argument;
     # the subcommand and flag are fixed on this side of the boundary.
-    "tailscale-set-operator": ([v_username],
+    "tailscale-set-operator": ([v_managed_user],
                                lambda a: ["tailscale", "set", "--operator=%s" % a[0]], None),
     "service-reload": ([v_choice(*UNITS)], lambda a: [SYSTEMCTL, "reload", a[0]], None),
     "service-enable-now": ([v_choice(*UNITS)], lambda a: [SYSTEMCTL, "enable", "--now", a[0]], None),
@@ -718,19 +808,19 @@ VERBS = {
 
     # ── the GMod shared-content box ──
     "content-scan": ([Rest(v_ident)], lambda a: [], None),
-    "content-dir-create": ([v_username], lambda a: [], None),
-    "content-game-present": ([v_username, v_ident], lambda a: [], None),
-    "content-script-present": ([v_username, v_ident], lambda a: [], None),
+    "content-dir-create": ([v_managed_user], lambda a: [], None),
+    "content-game-present": ([v_managed_user, v_ident], lambda a: [], None),
+    "content-script-present": ([v_managed_user, v_ident], lambda a: [], None),
     # script "-" means "this game has no LinuxGSM script"; anything else is validated.
-    "content-game-remove": ([v_username, v_ident, v_choice_or_ident], lambda a: [], None),
-    "content-cron-write": ([v_username], lambda a: [], None),
-    "content-cron-remove": ([v_username], lambda a: [], None),
+    "content-game-remove": ([v_managed_user, v_ident, v_choice_or_ident], lambda a: [], None),
+    "content-cron-write": ([v_managed_user], lambda a: [], None),
+    "content-cron-remove": ([v_managed_user], lambda a: [], None),
     # The group is passed rather than looked up, so the local and remote forms take the same
     # arguments — the caller already knows it. It is still checked against the content user's real
     # primary group below before anything is granted.
-    "content-grant-read": ([v_username, v_username, v_username, Rest(v_ident)],
+    "content-grant-read": ([v_managed_user, v_username, v_managed_user, Rest(v_ident)],
                            lambda a: [], None),
-    "gmod-mount-read": ([v_username], lambda a: [], None),
+    "gmod-mount-read": ([v_managed_user], lambda a: [], None),
 
     # ── Ubuntu Pro ──
     "pro-status": ([], lambda a: ["pro", "status", "--format", "json"], None),
@@ -741,7 +831,7 @@ VERBS = {
 
     # ── misc host controls ──
     # renice takes a LIST of users, so the game servers can all be re-niced in one call.
-    "renice-users": ([v_nice, Rest(v_username)],
+    "renice-users": ([v_nice, Rest(v_managed_user)],
                      lambda a: ["renice", "-n", a[0], "-u"] + a[1:], None),
     "set-timezone": ([v_timezone], lambda a: ["timedatectl", "set-timezone", a[0]], None),
     # Both of these used to end in `| awk '…'` running as root. The verb returns the raw output and
@@ -783,17 +873,17 @@ VERBS = {
     "reboot-delayed": ([], lambda a: [], None),
 
     # ── cron and user accounts ──
-    "crontab-list": ([v_username], lambda a: ["crontab", "-u", a[0], "-l"], None),
-    "user-create": ([v_username],
+    "crontab-list": ([v_managed_user], lambda a: ["crontab", "-u", a[0], "-l"], None),
+    "user-create": ([v_managed_user],
                     lambda a: ["useradd", "-m", "-s", "/bin/bash", a[0]], None),
-    "user-lock-password": ([v_username], lambda a: ["passwd", "-l", a[0]], None),
-    "user-delete": ([v_username], lambda a: ["userdel", "-r", a[0]], None),
-    "user-delete-force": ([v_username], lambda a: ["userdel", "-r", "-f", a[0]], None),
-    "user-kill-processes": ([v_username], lambda a: ["pkill", "-9", "-u", a[0]], None),
+    "user-lock-password": ([v_managed_user], lambda a: ["passwd", "-l", a[0]], None),
+    "user-delete": ([v_managed_user], lambda a: ["userdel", "-r", a[0]], None),
+    "user-delete-force": ([v_managed_user], lambda a: ["userdel", "-r", "-f", a[0]], None),
+    "user-kill-processes": ([v_managed_user], lambda a: ["pkill", "-9", "-u", a[0]], None),
     # rm -rf as root. The path is CONSTRUCTED from a validated user name (home_of), never passed
     # in, so the argument this verb receives is a name and the thing it deletes can only ever be a
     # direct child of /home.
-    "user-remove-home": ([v_username], lambda a: ["rm", "-rf", "--", home_of(a[0])], None),
+    "user-remove-home": ([v_managed_user], lambda a: ["rm", "-rf", "--", home_of(a[0])], None),
 
     # ── log reads ──
     # journalctl and tail both take a target. Neither target ever comes from a caller: the SOURCE
@@ -823,11 +913,11 @@ VERBS = {
     "panel-restore": ([], lambda a: [], None),
     "panel-self-update": ([v_git_ref, v_branch_name], lambda a: [], None),
     "tailscale-install": ([], lambda a: [], None),
-    "game-backup-read": ([v_username, v_backup_name], lambda a: [], None),
+    "game-backup-read": ([v_managed_user, v_backup_name], lambda a: [], None),
     # The file browser's download buttons: one file, or a .tar.gz of one directory, from under a
     # game user's home. Both read AS THAT USER — see do_game_file_read.
-    "game-file-read": ([v_username, v_relpath], lambda a: [], None),
-    "game-dir-tar": ([v_username, v_relpath], lambda a: [], None),
+    "game-file-read": ([v_managed_user, v_relpath], lambda a: [], None),
+    "game-dir-tar": ([v_managed_user, v_relpath], lambda a: [], None),
     "lgsm-discover": ([], lambda a: [], None),
     # Two upgrade shapes, because the panel really does want two. "phased" includes Ubuntu's
     # phased rollouts so an explicit "install updates" applies everything the Check list showed;
@@ -1397,6 +1487,9 @@ def do_game_backup_read(args, content):
     except KeyError:
         sys.stderr.write("no such user\n")
         return 1
+    if pw.pw_uid == 0:
+        sys.stderr.write("refusing a uid-0 account\n")   # see v_managed_user
+        return 1
     path = os.path.join(pw.pw_dir, "lgsm", "backup", name)
     pid = os.fork()
     if pid == 0:
@@ -1406,6 +1499,13 @@ def do_game_backup_read(args, content):
             os.setuid(pw.pw_uid)
             if os.getuid() != pw.pw_uid or os.geteuid() != pw.pw_uid:
                 os._exit(1)          # refuse to read anything if the drop did not take
+            # ...and "the drop took" is not "we are no longer root". setuid(0) SUCCEEDS when
+            # already root, so the line above compares 0 against 0 and passes — a target of uid 0
+            # sailed straight through the one guard these read verbs rest on. v_managed_user
+            # refuses that NAME now; this refuses the STATE, so any future path that reaches here
+            # with uid 0 still cannot read as root.
+            if os.getuid() == 0 or os.geteuid() == 0:
+                os._exit(1)
             with open(path, "rb") as fh:
                 buf = sys.stdout.buffer
                 while True:
@@ -1430,6 +1530,10 @@ def _game_home_path(user, relpath):
     try:
         pw = pwd.getpwnam(user)
     except KeyError:
+        return None, None
+    if pw.pw_uid == 0:
+        # Belt and braces with v_managed_user: uid 0's home is /root, and the credential drop that
+        # is supposed to contain this read is a no-op for it.
         return None, None
     home = os.path.realpath(pw.pw_dir)
     abspath = os.path.normpath(os.path.join(home, relpath))
@@ -1459,6 +1563,13 @@ def _as_game_user(pw, abspath, emit):
             os.setuid(pw.pw_uid)
             if os.getuid() != pw.pw_uid or os.geteuid() != pw.pw_uid:
                 os._exit(1)          # refuse to read anything if the drop did not take
+            # ...and "the drop took" is not "we are no longer root". setuid(0) SUCCEEDS when
+            # already root, so the line above compares 0 against 0 and passes — a target of uid 0
+            # sailed straight through the one guard these read verbs rest on. v_managed_user
+            # refuses that NAME now; this refuses the STATE, so any future path that reaches here
+            # with uid 0 still cannot read as root.
+            if os.getuid() == 0 or os.geteuid() == 0:
+                os._exit(1)
             resolved = os.path.realpath(abspath)
             if resolved != home and not resolved.startswith(home + "/"):
                 os._exit(1)          # a symlink pointing out of the home directory
@@ -1812,7 +1923,16 @@ def do_content_grant_read(args, content):
     Each step is best-effort here exactly as it was there — a host where one of them fails should
     still get the others."""
     content_user, group, gmod_user, games = args[0], args[1], args[2], args[3:]
-    actual = grp.getgrgid(pwd.getpwnam(content_user).pw_gid).gr_name
+    content_pw = pwd.getpwnam(content_user)
+    # The group is derived from an account the CALLER names, so the equality check below is
+    # self-consistent rather than restrictive: naming root made `actual` "root" and it passed,
+    # turning this into `usermod -aG root <user>` — gid 0 on every root:root 0640 file on the box.
+    # v_managed_user refuses uid 0 for the two USER slots; this refuses the GROUP, which is
+    # validated by shape alone because a host may have a group named after a system account.
+    if content_pw.pw_gid == 0:
+        print("panel-helper: refusing a gid-0 group", file=sys.stderr)
+        return 2
+    actual = grp.getgrgid(content_pw.pw_gid).gr_name
     if group != actual:
         # The caller named a group that is not this content user's. Adding the GMod user to an
         # arbitrary group is exactly the kind of thing this boundary exists to refuse.
@@ -1862,7 +1982,19 @@ def do_write_file(args, content):
 
     Written to a temporary file in the same directory and renamed, so a reader never sees a
     half-written config — fail2ban and sshd both read these while the panel is editing them."""
-    path, mode = WRITE_TARGETS[args[0]]
+    target = args[0]
+    path, mode = WRITE_TARGETS[target]
+    # Deny by default: a destination with no entry in WRITE_CONTENT is refused outright, so adding
+    # one to WRITE_TARGETS forces a decision about its content instead of inheriting "anything".
+    if target not in WRITE_CONTENT:
+        print("panel-helper: no content rule for %s" % target, file=sys.stderr)
+        return 2
+    rule = WRITE_CONTENT[target]
+    if target == "node-tools-cron":
+        content = NODE_TOOLS_CRON_BODY      # helper-owned; stdin is not trusted for a cron file
+    elif rule is not None and not _lines_match(content, rule):
+        print("panel-helper: content rejected for %s" % target, file=sys.stderr)
+        return 2
     directory = os.path.dirname(path)
     os.makedirs(directory, mode=0o755, exist_ok=True)
     fd, tmp = tempfile.mkstemp(dir=directory, prefix=".panel-", suffix=".tmp")

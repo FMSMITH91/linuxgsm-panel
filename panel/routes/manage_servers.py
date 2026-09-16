@@ -19,8 +19,9 @@ from panel.ops.ssh_manager import (GMOD_CONTENT_GAMES, GMOD_CONTENT_SIZES,
 # however the handler moves.
 from panel.ops import ssh_manager as _sm
 from panel.security.auth import (INSTALL_SERVER, MANAGE_SERVERS, RESTART_SERVER, START_SERVER,
-    STOP_SERVER, UNINSTALL_SERVER, get_game, get_remote, get_user_permissions, has_permission,
-    log_action, permission_required, server_access_required)
+    STOP_SERVER, UNINSTALL_SERVER, accessible_remote_ids, get_game, get_remote,
+    get_user_permissions, get_user_servers, has_permission, log_action, permission_required,
+    server_access_required)
 from panel.services.monitoring import (_cached_player_count)
 import threading
 import time
@@ -47,7 +48,13 @@ def register(app):
     @login_required
     @permission_required(MANAGE_SERVERS, INSTALL_SERVER)
     def manage_servers():
-        remotes = RemoteServer.query.all()
+        # Scoped to what the caller may actually reach. Every other listing in the panel does this
+        # — get_user_servers on / and /api/servers, accessible_remote_ids on /remotes — and this
+        # page did not, so a user holding MANAGE_SERVERS for ONE host read the name, game, status,
+        # owning host and public connect address of every server in the install. The write actions
+        # on the page were already refused per-object; only the reading was unbounded.
+        _my_remote_ids = accessible_remote_ids(current_user)
+        remotes = [r for r in RemoteServer.query.all() if r.id in _my_remote_ids]
         # Default to grouped-by-host order (host name, then server name); the page also lets you
         # re-sort by any column and toggle a grouped view client-side.
         from panel.db.models import ServerTag
@@ -57,6 +64,9 @@ def register(app):
         all_servers = (GameServer.query.outerjoin(RemoteServer, GameServer.remote_id == RemoteServer.id)
                        .options(selectinload(GameServer.tags))
                        .order_by(RemoteServer.name.asc(), GameServer.name.asc()).all())
+        if not current_user.is_superadmin:
+            _visible = {g.id for g in get_user_servers(current_user)}
+            all_servers = [g for g in all_servers if g.id in _visible]
         all_tags = ServerTag.query.order_by(ServerTag.name).all()
         player_counts = {gs.id: _cached_player_count(gs.id) for gs in all_servers}
         player_max = {gs.id: _cached_player_max(gs.id) for gs in all_servers}

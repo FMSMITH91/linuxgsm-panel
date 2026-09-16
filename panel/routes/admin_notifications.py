@@ -6,9 +6,9 @@ from flask import (flash, jsonify, redirect, render_template, request, url_for)
 from flask_login import (current_user, login_required)
 from panel.core import (i18n)
 from panel.core.config import (encrypt_secret, load_config, update_config)
-from panel.db.models import (Group, User, db)
-from panel.security.auth import (MANAGE_USERS, hash_password, log_action, permission_required,
-    superadmin_required)
+from panel.db.models import (User, db)
+from panel.security.auth import (MANAGE_USERS, grantable_groups, hash_password, log_action,
+    permission_required, superadmin_required)
 from panel.services import (notifications)
 from panel.services.monitoring import (_AUTOBLOCK_DEFAULT_THRESHOLD, _autoblock_threshold)
 from datetime import (timedelta)
@@ -168,11 +168,10 @@ def register(app):
             language=new_lang,   # already validated against i18n.LANGUAGES by _new_user_language
             must_change_password=True,
         )
-        # Add to selected groups
-        for gid in group_ids:
-            group = db.session.get(Group, int(gid))
-            if group:
-                user.groups.append(group)
+        # Add to selected groups — same rule as edit_user. Creating an account in a group you
+        # could not join yourself is the same escalation with an extra step (the generated
+        # password is handed straight back, so the attacker just logs in as it).
+        user.groups = grantable_groups({int(g) for g in group_ids if str(g).isdecimal()})
 
         db.session.add(user)
         db.session.commit()
@@ -229,9 +228,12 @@ def register(app):
             user.backup_codes = ""
             log_action(current_user, "2fa_reset", target=user.username)
 
-        # Update groups (one lookup per id, not two)
+        # Update groups. Through grantable_groups, not straight from the form: a delegated
+        # MANAGE_USERS admin could otherwise edit their OWN account and tick a privileged group,
+        # picking up its permissions on the next request — the exact escalation _grantable_perms
+        # exists to stop, reached from the membership side instead of the permission side.
         group_ids = {int(gid) for gid in request.form.getlist("groups")}
-        user.groups = [g for g in (db.session.get(Group, gid) for gid in group_ids) if g]
+        user.groups = grantable_groups(group_ids, existing=list(user.groups or []))
 
         # Never let an edit leave the panel with no active superadmin (e.g. self-demotion
         # or deactivating the last one) — that would lock everyone out of the web UI.

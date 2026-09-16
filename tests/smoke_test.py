@@ -1094,6 +1094,40 @@ try:
     check("query-type: blank clears the override",
           qt_clear.status_code == 200 and (qt_clear.get_json() or {}).get("query_type") == "")
 
+    # ── 2FA must not switch itself off when its secret cannot be decrypted ────────────────────
+    # totp_secret_plain returns "" on any decryption failure, and the login used to test
+    # `totp_enabled AND totp_secret_plain` — so an account with 2FA ON whose secret would not
+    # decrypt was logged straight in on the password alone. Not remotely triggerable (it needs
+    # damage to data/cred_key), but a control that silently disables itself is the wrong failure
+    # direction, and a hand-rolled migration that copies panel.db without the key does exactly it.
+    with app.app_context():
+        _tf = User(username="tfa_fail_open",
+                   password_hash=auth.hash_password("Str0ng!passw0rd"),
+                   display_name="2FA", is_superadmin=False, is_active=True,
+                   totp_enabled=True, totp_secret="enc:v1:this-will-not-decrypt")
+        _tf.set_backup_codes(["abcde-fghjk"])
+        db.session.add(_tf)
+        db.session.commit()
+        _tf_id = _tf.id
+        check("2fa: the fixture's secret really is undecryptable",
+              db.session.get(User, _tf_id).totp_secret_plain == "")
+    _tc = app.test_client()
+    _r2 = _tc.post("/login", data={"username": "tfa_fail_open", "password": "Str0ng!passw0rd"},
+                   follow_redirects=False)
+    check("2fa: a password alone does NOT create a session when 2FA is on",
+          _r2.status_code == 200, "status=%d loc=%s" % (_r2.status_code, _r2.headers.get("Location") or ""))
+    _after2 = _tc.get("/account", follow_redirects=False)
+    check("2fa: ...the caller is still anonymous",
+          _after2.status_code in (301, 302, 303) and "/login" in (_after2.headers.get("Location") or ""),
+          "status=%d" % _after2.status_code)
+    check("2fa: ...and the 2FA prompt is what came back", b"totp_code" in _r2.data)
+    # A backup code is bcrypt-hashed in its own column, so it still works without the cred key —
+    # the recovery path survives, which is what makes refusing the password-only login safe.
+    _r3 = _tc.post("/login", data={"totp_code": "abcde-fghjk"}, follow_redirects=False)
+    check("2fa: a backup code still gets them in (no lock-out)",
+          _r3.status_code in (301, 302, 303) and "/login" not in (_r3.headers.get("Location") or ""),
+          "status=%d loc=%s" % (_r3.status_code, _r3.headers.get("Location") or ""))
+
     # ── Admin-issued passwords: generated, shown once, and forced to be replaced ──────────────
     # An admin creating an account, or resetting someone's password, hands over a credential TWO
     # people know. The panel generates it (so it is not a house pattern), returns it exactly once,

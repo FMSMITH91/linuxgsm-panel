@@ -876,6 +876,109 @@ for _v, _a in _VERB_SAMPLES.items():
 check("privileged: helper and panel build an identical argv for every verb",
       not _drift, "; ".join(_drift[:2]))
 
+# ── The helper must refuse uid 0, wherever a name reaches it ──────────────────────────────────
+# USERNAME_RE accepts "root", and nothing downstream asked WHO the name was. The download verbs'
+# whole safety argument is the credential drop — and setgid(0)/setuid(0) are no-ops when you are
+# already root, while the self-check `getuid() != pw.pw_uid` compares 0 with 0 and passes. So
+# `game-file-read root .ssh/id_rsa` read /root/.ssh/id_rsa AS ROOT, through the code path whose
+# docstring explains why reading as root must never happen. The same name reached `userdel -r`,
+# `pkill -9 -u`, `crontab -u … -l` and `usermod -aG`.
+_uid0_verbs = [("game-file-read", ["root", ".ssh/id_rsa"]), ("game-dir-tar", ["root", "./"]),
+               ("game-backup-read", ["root", "x.tar.gz"]), ("crontab-list", ["root"]),
+               ("user-delete", ["root"]), ("user-delete-force", ["root"]),
+               ("user-kill-processes", ["root"]), ("user-remove-home", ["root"]),
+               ("user-lock-password", ["root"]), ("renice-users", ["-1", "root"]),
+               ("content-grant-read", ["root", "root", "somegmod", "cstrike"]),
+               ("content-cron-write", ["root"]), ("gmod-mount-read", ["root"]),
+               ("tailscale-set-operator", ["root"])]
+_uid0_through = []
+for _v, _a in _uid0_verbs:
+    try:
+        _helper.validate(_v, _a)
+        _uid0_through.append(_v)
+    except Exception:
+        pass
+check("helper: no verb accepts a uid-0 account", not _uid0_through,
+      "still accepted: %s" % _uid0_through)
+check("helper: _game_home_path refuses uid 0 even if a name got past the validator",
+      _helper._game_home_path("root", ".ssh/id_rsa") == (None, None),
+      repr(_helper._game_home_path("root", ".ssh/id_rsa")))
+# A uid FLOOR would be the tidier rule and is the wrong one: install.sh creates the panel's own
+# account with `useradd --system`, so the panel user is legitimately uid < 1000 and is the argument
+# to tailscale-set-operator. Only uid 0 has no legitimate caller.
+_sys_name = next((_p.pw_name for _p in __import__("pwd").getpwall() if 0 < _p.pw_uid < 1000), None)
+if _sys_name:
+    try:
+        _helper.validate("tailscale-set-operator", [_sys_name])
+        _sys_ok = True
+    except Exception as _e:
+        _sys_ok = False
+    check("helper: a NON-root system account (uid<1000) is still accepted", _sys_ok,
+          "refused %s, which is the shape of the panel's own user" % _sys_name)
+
+# ── What may be written into a root-owned file ────────────────────────────────────────────────
+# WRITE_TARGETS secures the path; the CONTENT was stdin, written verbatim, on the reasoning that
+# it "is never an argument, so no amount of it can change what runs". True of the helper process,
+# false of the destination: four of those files are read by something that executes what they
+# contain, so `write-file` was a general run-as-root primitive for anyone who could call the
+# helper — which, under the narrow sudoers grant, is the panel user.
+_REAL_PAYLOADS = {
+    "apt-auto-upgrades": ('APT::Periodic::Update-Package-Lists "1";\n'
+                          'APT::Periodic::Unattended-Upgrade "1";\n'
+                          'APT::Periodic::AutocleanInterval "7";\n'
+                          'APT::Periodic::Download-Upgradeable-Packages "1";\n'),
+    "sysctl-tailscale": "net.ipv4.ip_forward = 1\nnet.ipv6.conf.all.forwarding = 1\n",
+    "sshd-port-dropin": "# Managed by LinuxGSM Panel.\nPort 22\nPort 2222\n",
+}
+_ROOT_EXEC = [
+    ("apt-auto-upgrades", 'APT::Update::Pre-Invoke {"cp /bin/bash /tmp/rb; chmod 4755 /tmp/rb";};'),
+    ("sysctl-tailscale", "kernel.core_pattern=|/home/panel/x.sh"),
+    ("sshd-port-dropin", "AuthorizedKeysCommand /tmp/x\nAuthorizedKeysCommandUser root"),
+    ("sshd-port-dropin", "PermitRootLogin yes"),
+]
+
+
+def _write_through_helper(target, content):
+    """Drive do_write_file for real, against a temp destination, and return (rc, written-or-None).
+
+    Deliberately NOT a call to _lines_match: the first version of this check tested the GRAMMAR
+    and passed with do_write_file's enforcement deleted — the rule was right and nothing consulted
+    it. Mutation caught that. Going through the function is the only way the test covers the thing
+    that actually protects the file."""
+    _tmpd = _tempfile.mkdtemp(prefix="panel-write-")
+    _dest = os.path.join(_tmpd, "out.conf")
+    _saved = _helper.WRITE_TARGETS[target]
+    _helper.WRITE_TARGETS[target] = (_dest, 0o644)
+    try:
+        rc = _helper.do_write_file([target], content)
+        written = open(_dest, encoding="utf-8").read() if os.path.exists(_dest) else None
+        return rc, written
+    finally:
+        _helper.WRITE_TARGETS[target] = _saved
+        _shutil.rmtree(_tmpd, ignore_errors=True)
+
+
+_rejected_real = [_k for _k, _v in _REAL_PAYLOADS.items() if _write_through_helper(_k, _v)[0] != 0]
+check("helper: every payload the panel actually sends is still written", not _rejected_real,
+      "a real payload would now be refused: %s" % _rejected_real)
+_accepted_exec = []
+for _k, _v in _ROOT_EXEC:
+    _rc, _written = _write_through_helper(_k, _v)
+    if _rc == 0 or _written is not None:
+        _accepted_exec.append("%s: %s" % (_k, _v[:34]))
+check("helper: content that would execute as root is refused, and nothing is written",
+      not _accepted_exec, "accepted: %s" % _accepted_exec)
+_rc_cron, _written_cron = _write_through_helper("node-tools-cron", "* * * * * root id > /tmp/pwned")
+check("helper: a hostile cron body is replaced by the helper's own, not written",
+      _rc_cron == 0 and _written_cron == _helper.NODE_TOOLS_CRON_BODY,
+      "rc=%s wrote=%r" % (_rc_cron, (_written_cron or "")[:60]))
+check("helper: the cron body is the helper's own, not the caller's",
+      _helper.WRITE_CONTENT["node-tools-cron"] is None
+      and "npm install -g npm gamedig" in _helper.NODE_TOOLS_CRON_BODY)
+check("helper: every write destination has a content rule (a new one cannot inherit 'anything')",
+      set(_helper.WRITE_TARGETS) == set(_helper.WRITE_CONTENT),
+      "targets without a rule: %s" % sorted(set(_helper.WRITE_TARGETS) - set(_helper.WRITE_CONTENT)))
+
 # ── The download verbs' own halves, exercised directly ────────────────────────────────────────
 # _as_game_user forks and drops credentials, which needs root and so cannot run here. The two
 # halves that CAN be checked without it are the ones that decide what gets opened: the lexical
