@@ -190,6 +190,63 @@ def get_user_permissions(user):
     return perms
 
 
+def _groups_with_grants(user, commands=False):
+    """This user's groups, with their host and game-server grants ALREADY LOADED.
+
+    Group.servers and Group.game_servers are lazy relationships, so walking `user.groups` and
+    touching them fires one query PER GROUP — two, here, one for each collection. That is an N+1
+    on a dimension nothing was watching: tools/perf_bench.py sweeps SERVERS and holds groups at
+    five, so the cost stayed invisible while /api/dashboard/metrics — which the dashboard POLLS —
+    went from 9 queries for a user in 2 groups to 125 for a user in 60.
+
+    Same fix, and the same reasoning, as the joinedload/selectinload already on get_user_servers'
+    own query below: eager-load the collections so the count is flat. This changes only HOW the
+    rows are fetched, never WHICH — the caller's logic is untouched, which matters because these
+    two functions decide access.
+    """
+    from flask import has_app_context
+    if not has_app_context():
+        # No app context means no session to query with — a unit test holding a plain User, or a
+        # worker outside one. `user.groups` is whatever the object already carries, which is
+        # exactly what this function read before it started issuing a query, so the callers see
+        # what they always saw. Missing this cost a CI cycle: the unit suite crashed on import at
+        # the first can_access_remote() against an in-memory User.
+        return list(user.groups or [])
+    from panel.db.models import Group, user_groups
+    from sqlalchemy.orm import selectinload
+    # Memoised for the life of the app context. Both properties are needed and they pull opposite
+    # ways: eager-loading kills the per-GROUP N+1, but re-running the query on every call
+    # reintroduces the cost per CALL — and these helpers are called in loops (allowed_custom_commands
+    # per command, the bulk action and the global-ban port per server). `user.groups` used to get
+    # this for free, because a lazy relationship caches on the instance once loaded; that is the
+    # property being preserved here, not a new trick.
+    #
+    # No staleness beyond what the session already has: a re-query inside the same session returns
+    # the same identity-mapped rows. Scoped to the app context, so a background sweep that opens
+    # its own gets its own, and nothing survives the request.
+    _cache_key = ("_gwg", getattr(user, "id", None), bool(commands))
+    _cache = None
+    try:
+        from flask import g as _flask_g
+        _cache = _flask_g.__dict__.setdefault("_groups_with_grants_cache", {})
+        if _cache_key in _cache:
+            return _cache[_cache_key]
+    except (RuntimeError, AttributeError):
+        _cache = None          # outside an app context (a CLI or a worker) — just query
+    opts = [selectinload(Group.servers), selectinload(Group.game_servers)]
+    if commands:
+        # Only the custom-command callers ask for this. Left out by default because the dashboard
+        # poll goes through here and does not read it — one wasted query per request, every few
+        # seconds, for a collection nobody looks at.
+        opts.append(selectinload(Group.custom_commands))
+    rows = (Group.query.join(user_groups, user_groups.c.group_id == Group.id)
+            .filter(user_groups.c.user_id == user.id)
+            .options(*opts).all())
+    if _cache is not None:
+        _cache[_cache_key] = rows
+    return rows
+
+
 def get_user_servers(user):
     """Get game servers a user has access to (superadmin = all)."""
     from panel.db.models import GameServer
@@ -207,7 +264,7 @@ def get_user_servers(user):
     from sqlalchemy import or_
     remote_ids = set()   # whole-host grants (group.servers)
     game_ids = set()     # individual game-server grants (group.game_servers)
-    for group in user.groups or []:
+    for group in _groups_with_grants(user):
         for s in group.servers or []:
             remote_ids.add(s.id)
         for g in group.game_servers or []:
@@ -237,7 +294,7 @@ def can_access_server(user, game_server_id):
     gs = db.session.get(GameServer, game_server_id)
     if not gs:
         return False
-    for group in user.groups or []:
+    for group in _groups_with_grants(user):
         for rs in group.servers or []:          # whole-host grant
             if rs.id == gs.remote_id:
                 return True
@@ -291,7 +348,7 @@ def can_run_custom_command(user, cmd, game_server):
         return False
     if user.is_superadmin:
         return True
-    for group in user.groups or []:
+    for group in _groups_with_grants(user, commands=True):
         for c in (group.custom_commands or []):
             if c.id == cmd.id:
                 return True
@@ -308,7 +365,7 @@ def allowed_custom_commands(user, game_server):
         candidates = CustomCommand.query.filter_by(enabled=True).all()
     else:
         candidates = []
-        for group in user.groups or []:
+        for group in _groups_with_grants(user, commands=True):
             candidates.extend(group.custom_commands or [])
     for cmd in candidates:
         if cmd.id in seen:
@@ -330,7 +387,7 @@ def can_access_remote(user, remote_id):
         rid = int(remote_id)
     except (TypeError, ValueError):
         return False
-    for group in user.groups or []:
+    for group in _groups_with_grants(user):
         for rs in group.servers or []:
             if rs.id == rid:
                 return True
@@ -343,7 +400,7 @@ def accessible_remote_ids(user):
     if user.is_superadmin:
         return {r.id for r in RemoteServer.query.all()}
     ids = set()
-    for group in user.groups or []:
+    for group in _groups_with_grants(user):
         for rs in group.servers or []:
             ids.add(rs.id)
     return ids

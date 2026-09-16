@@ -357,10 +357,39 @@ PATHS = [
 RESTRICTED_PATHS = ["/", "/api/servers", "/api/dashboard/metrics"]
 
 
+# The GROUP axis. Everything above sweeps servers and holds groups at five, which is a blind spot
+# rather than a decision: Group.servers and Group.game_servers are lazy, so every helper that walks
+# a user's groups cost queries PER GROUP while staying perfectly flat as the servers grew. A user
+# in 60 groups paid 125 queries for /api/dashboard/metrics — which the dashboard polls — where one
+# in 2 paid 9, and the server sweep reported "+0" the whole time. An axis nothing varies is an axis
+# nothing measures.
+GROUP_PATHS = ["/groups", "/", "/api/servers", "/api/dashboard/metrics"]
+
+
+def run_group_size(groups, hosts, per_host, iterations):
+    """One run at a fixed dataset size, varying only how many groups the restricted user is in."""
+    app = build_app()
+    admin_id, gs_id, restricted_id = seed(app, hosts, per_host, groups=groups)
+    with app.app_context():
+        counter = QueryCounter(db.engine)
+    ca, cu = client_as(app, admin_id), client_as(app, restricted_id)
+    rows = []
+    for path in GROUP_PATHS:
+        # /groups is an admin page; the rest are measured as the NON-superadmin, because
+        # is_superadmin short-circuits the permission resolution that had the N+1.
+        r = measure(ca if path == "/groups" else cu, counter, path, iterations)
+        r["path"] = path if path == "/groups" else "(user) " + path
+        rows.append(r)
+    return {"groups": groups, "rows": rows}
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--sizes", default="10,50,200,500",
                     help="total game servers per run (comma separated)")
+    ap.add_argument("--group-sizes", default="",
+                    help="ALSO sweep how many groups a user is in, at a fixed dataset size "
+                         "(comma separated, e.g. 2,5,20,60)")
     ap.add_argument("--hosts", type=int, default=5, help="hosts to spread them over")
     ap.add_argument("--iterations", type=int, default=11)
     ap.add_argument("--json", default="", help="write the full result set here")
@@ -373,6 +402,13 @@ def main():
         mark_setup_complete()            # ...which also removed config.json, flip included
         print("seeding %d servers across %d hosts…" % (n, args.hosts), flush=True)
         runs.append(run_size(n, args.hosts, args.iterations, PATHS))
+
+    group_runs = []
+    for g in [int(x) for x in args.group_sizes.split(",") if x.strip()]:
+        cleanup()
+        mark_setup_complete()
+        print("seeding a user in %d groups…" % g, flush=True)
+        group_runs.append(run_group_size(g, args.hosts, 4, args.iterations))
 
     print("\n%-22s %7s %7s %7s %7s %8s %8s"
           % ("endpoint", "servers", "queries", "p50 ms", "p95 ms", "HTML KB", "wire KB"))
@@ -413,9 +449,32 @@ def main():
                   % (a["path"], a["queries"], b["queries"], dq, dt, a["wire_kb"], b["wire_kb"],
                      flag))
 
+    if group_runs:
+        print("\n%-28s %8s %8s %8s %8s" % ("endpoint", "groups", "queries", "p50 ms", "p95 ms"))
+        print("-" * 64)
+        for gr in group_runs:
+            for row in gr["rows"]:
+                if row.get("error"):
+                    print("%-28s %8d   HTTP %d" % (row["path"], gr["groups"], row["status"]))
+                    continue
+                print("%-28s %8d %8d %8.1f %8.1f"
+                      % (row["path"], gr["groups"], row["queries"], row["p50_ms"], row["p95_ms"]))
+            print("-" * 64)
+        first, last = group_runs[0], group_runs[-1]
+        print("\nscaling %d -> %d groups (same dataset)" % (first["groups"], last["groups"]))
+        for a, b in zip(first["rows"], last["rows"]):
+            if a.get("error") or b.get("error"):
+                continue
+            dq = b["queries"] - a["queries"]
+            flag = "  <-- QUERIES GROW WITH GROUP COUNT" if dq > 2 else ""
+            print("  %-28s queries %3d -> %3d (%+d)   time x%.1f%s"
+                  % (a["path"], a["queries"], b["queries"], dq,
+                     (b["p50_ms"] / a["p50_ms"]) if a["p50_ms"] else 0, flag))
+
     if args.json:
         with open(args.json, "w") as f:
-            json.dump(runs, f, indent=2)
+            json.dump({"by_servers": runs, "by_groups": group_runs} if group_runs else runs,
+                      f, indent=2)
         print("\nwrote %s" % args.json)
 
 

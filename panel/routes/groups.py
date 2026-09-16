@@ -18,7 +18,13 @@ def register(app):
     @login_required
     @permission_required(MANAGE_GROUPS)
     def manage_groups():
-        groups = Group.query.all()
+        # Eager-load what the template renders per group — its members, its host grants and its
+        # per-server grants. All three are lazy relationships, so the plain .all() cost THREE
+        # queries per group: 16 at two groups, 190 at sixty. selectinload makes it three in total.
+        from sqlalchemy.orm import selectinload
+        groups = (Group.query.options(selectinload(Group.users),
+                                      selectinload(Group.servers),
+                                      selectinload(Group.game_servers)).all())
         all_perms = ALL_PERMISSIONS
         all_servers = GameServer.query.all()
         all_remotes = RemoteServer.query.all()
