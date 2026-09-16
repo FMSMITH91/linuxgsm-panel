@@ -6,14 +6,16 @@ from flask import (flash, jsonify, redirect, render_template, request, url_for)
 from flask_login import (current_user, login_required)
 from panel.core import (i18n)
 from panel.core.config import (encrypt_secret, load_config, update_config)
-from panel.db.models import (User, db)
+from panel.core.clock import utcnow
+from panel.db.models import (Group, Invite, User, db)
 from panel.security.auth import (MANAGE_USERS, grantable_groups, hash_password, log_action,
     permission_required, superadmin_required)
 from panel.services import (notifications)
 from panel.services.monitoring import (_AUTOBLOCK_DEFAULT_THRESHOLD, _autoblock_threshold)
 from datetime import (timedelta)
 from panel.core.http import (_form_credential, _form_err, _form_ok, _json_body)
-from panel.core.validation import (_int_or, _valid_hex_color, generate_password, username_problem)
+from panel.core.validation import (_int_or, _valid_hex_color, generate_password,
+                                   password_problem, username_problem)
 from app import (_new_user_language)
 
 
@@ -271,6 +273,100 @@ def register(app):
             return _form_credential(f"User '{user.username}' updated.", "manage_users",
                                     username=user.username, password=new_password)
         return _form_ok(f"User '{user.username}' updated.", "manage_users")
+
+    @app.route("/users/invite", methods=["POST"])
+    @login_required
+    @superadmin_required
+    def create_invite():
+        """Mint a one-time link that lets someone create their OWN account.
+
+        Superadmin only, because an invite decides what the resulting account can do. The
+        alternative it replaces is an admin inventing a username and relaying a generated password
+        over chat — a working credential sitting in a third place from the moment it exists. This
+        carries no credential: the person opens it once, picks their own name and password, and the
+        link dies."""
+        hours = _int_or(request.form.get("hours"), Invite.INVITE_TTL_HOURS)
+        hours = max(1, min(int(hours), 24 * 30))        # an hour to a month
+        want_super = request.form.get("is_superadmin") == "on"
+        group_ids = {int(g) for g in request.form.getlist("groups") if str(g).isdecimal()}
+        # Through grantable_groups, exactly like add_user: a superadmin minting an invite still
+        # cannot hand out a group the escalation guard would refuse them directly.
+        groups = grantable_groups(group_ids)
+        inv, token = Invite.mint(current_user, hours=hours, superadmin=want_super,
+                                 group_ids=[g.id for g in groups],
+                                 note=request.form.get("note", ""))
+        db.session.add(inv)
+        db.session.commit()
+        log_action(current_user, "invite_created", target=inv.note or "(no note)",
+                   detail="expires in %dh%s" % (hours, " — GRANTS SUPERADMIN" if want_super else ""))
+        # Shown once, like a generated password: only the hash is stored, so if this is missed the
+        # link is gone and a new invite has to be minted.
+        return _form_credential("Invite link created — send it to them. It works once.",
+                                "manage_users", username="Invite link",
+                                password=url_for("redeem_invite", token=token, _external=True))
+
+    @app.route("/invite/<token>", methods=["GET", "POST"])
+    def redeem_invite(token):
+        """Create your own account from a one-time link. NO login required — that is the point.
+
+        The invite decides what the account gets (groups, superadmin); the person decides only
+        their username and password. Anything else would be a privilege they awarded themselves."""
+        inv = Invite.by_token(token)
+        if inv is None or not inv.is_usable:
+            # One message for missing, used and expired alike: a link that says "already used"
+            # confirms it was real, which is information a stranger holding a guessed token has
+            # not earned. There is nothing the person can do differently either way.
+            return render_template("invite.html", invalid=True), 404
+        if request.method == "GET":
+            return render_template("invite.html", invalid=False, token=token, invite=inv)
+
+        username = (request.form.get("username") or "").strip()
+        password = request.form.get("password") or ""
+        confirm = request.form.get("confirm_password") or ""
+        uerr = username_problem(username)
+        if uerr:
+            return render_template("invite.html", invalid=False, token=token, invite=inv,
+                                   error=uerr), 400
+        if User.query.filter_by(username=username).first():
+            return render_template("invite.html", invalid=False, token=token, invite=inv,
+                                   error="That username is taken."), 400
+        if password != confirm:
+            return render_template("invite.html", invalid=False, token=token, invite=inv,
+                                   error="The two passwords do not match."), 400
+        perr = password_problem(password)
+        if perr:
+            return render_template("invite.html", invalid=False, token=token, invite=inv,
+                                   error=perr), 400
+
+        # Claim the invite FIRST, conditionally on it still being unused, so two submissions of the
+        # same link cannot both make an account. The UPDATE ... WHERE used_at IS NULL is what makes
+        # that atomic; checking is_usable above and trusting it would be a race.
+        claimed = (db.session.query(Invite)
+                   .filter(Invite.id == inv.id, Invite.used_at.is_(None))
+                   .update({"used_at": utcnow()}, synchronize_session=False))
+        if not claimed:
+            db.session.rollback()
+            return render_template("invite.html", invalid=True), 404
+
+        user = User(username=username, password_hash=hash_password(password),
+                    display_name=username, is_superadmin=bool(inv.grants_superadmin),
+                    is_active=True, language=_new_user_language(load_config(), i18n.LANGUAGES))
+        # must_change_password stays False: they chose this password themselves, nobody handed it
+        # to them, so there is nothing to rotate away from.
+        wanted = set(inv.groups_wanted)
+        if wanted:
+            user.groups = Group.query.filter(Group.id.in_(wanted)).all()
+        db.session.add(user)
+        db.session.flush()
+        inv.used_by_id = user.id
+        db.session.commit()
+        log_action(user, "invite_redeemed", target=username,
+                   detail="from an invite created by user id %s" % (inv.created_by_id,))
+        notifications.notify("account_change", "Account created from invite",
+                             "'%s' created their account from an invite%s."
+                             % (username, " (SUPER ADMIN)" if inv.grants_superadmin else ""))
+        flash("Account created — sign in with your new username and password.", "success")
+        return redirect(url_for("login"))
 
     @app.route("/users/<int:user_id>/delete", methods=["POST"])
     @login_required

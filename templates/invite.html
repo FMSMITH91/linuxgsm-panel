@@ -1,0 +1,55 @@
+{% extends "base.html" %}
+{% block title %}{% if invalid %}Invite not valid{% else %}Create your account{% endif %}{% endblock %}
+{% block content %}
+{# Shaped like the login and force-password cards: this is a signed-OUT page, there is no sidebar
+   to sit beside, and it is the first thing a new person ever sees of the panel. #}
+<div class="d-flex justify-content-center align-items-start align-items-md-center"
+     style="min-height: calc(100vh - 4rem); min-height: calc(100dvh - 4rem);">
+  <div class="w-100 mt-3 mt-md-0" style="max-width: 460px;">
+    <div class="card">
+      <div class="card-body p-4">
+        {% if invalid %}
+          <div class="text-center">
+            <span style="font-size: 3rem;">🔗</span>
+            <h3 class="mt-2">This invite cannot be used</h3>
+            {# Deliberately one message for missing, already-used and expired. Saying which would
+               confirm to a stranger that a guessed link was real, and there is nothing the person
+               holding it can do differently either way. #}
+            <p class="text-secondary small mb-3">It may have been used already, or expired. Ask
+              whoever sent it for a new one.</p>
+            <a href="{{ url_for('login') }}" class="btn btn-outline-secondary btn-sm">Go to sign in</a>
+          </div>
+        {% else %}
+          <div class="text-center mb-4">
+            <span style="font-size: 3rem;">👋</span>
+            <h3 class="mt-2">Create your account</h3>
+            <p class="text-secondary small mb-0">Choose a username and a password. Nobody else ever
+              sees this password — it is not sent to whoever invited you.</p>
+          </div>
+          {% if error %}<div class="alert alert-danger py-2 small">{{ error }}</div>{% endif %}
+          <form method="POST" action="{{ url_for('redeem_invite', token=token) }}">
+            <div class="mb-3">
+              <label class="form-label" for="inv-username">Username</label>
+              <input type="text" name="username" id="inv-username" class="form-control"
+                     required minlength="3" maxlength="80" autofocus autocomplete="username">
+            </div>
+            <div class="mb-3">
+              <label class="form-label" for="inv-password">Password</label>
+              <input type="password" name="password" id="inv-password" class="form-control"
+                     required minlength="10" autocomplete="new-password">
+              <div class="form-text">At least 10 characters with upper &amp; lowercase, a number,
+                and a symbol. There is no maximum.</div>
+            </div>
+            <div class="mb-3">
+              <label class="form-label" for="inv-confirm">Confirm password</label>
+              <input type="password" name="confirm_password" id="inv-confirm" class="form-control"
+                     required minlength="10" autocomplete="new-password">
+            </div>
+            <button type="submit" class="btn btn-primary w-100">Create account</button>
+          </form>
+        {% endif %}
+      </div>
+    </div>
+  </div>
+</div>
+{% endblock %}
