@@ -676,6 +676,30 @@ for _rule in app.url_map.iter_rules():
 check("every <remote_id> route enforces per-host access (not just MANAGE_REMOTES)",
       not _remote_unguarded, "; ".join(sorted(_remote_unguarded)[:6]))
 
+# ── an invite must not outlive the authority behind it ────────────────────────────────────────
+# An invite is a delegation. Without this the delegation survives its grantor: an admin who is
+# offboarded — demoted, deactivated, deleted — leaves live invites behind for up to the 30-day
+# maximum TTL, and whoever holds one still gets the account they were promised, up to and
+# including SUPERADMIN. Demonstrated against the code before it was fixed.
+#
+# Checked HERE, at the route, not only on Invite.authority_intact: deleting the call from
+# redeem_invite left every model-level test green, which is the whole failure mode this guards.
+_redeem = app.view_functions.get("redeem_invite")
+while getattr(_redeem, "__wrapped__", None) is not None:
+    _redeem = _redeem.__wrapped__
+try:
+    _redeem_src = inspect.getsource(_redeem)
+except (OSError, TypeError):
+    _redeem_src = ""
+_calls_authority = any(
+    isinstance(_n, ast.Call)
+    and getattr(_n.func, "attr", getattr(_n.func, "id", None)) == "authority_intact"
+    for _n in ast.walk(ast.parse(textwrap.dedent(_redeem_src))) ) if _redeem_src else False
+check("redeem_invite refuses an invite whose creator lost their authority",
+      _calls_authority,
+      "it must call Invite.authority_intact(creator) — without it an offboarded admin's "
+      "outstanding invite still creates the account it promised, superadmin included")
+
 # ── every MUTATING endpoint leaves an audit trail ─────────────────────────────────────────────
 # The audit log is the only record of who changed what. api_remote_bootstrap had none at all —
 # and it is the most invasive thing the panel does to a machine: updates, UFW, SSH hardening,

@@ -25,4 +25,13 @@ def register(app):
         invites = []
         if current_user.is_superadmin:
             invites = Invite.query.order_by(Invite.created_at.desc()).limit(25).all()
+            # An invite whose creator has been offboarded no longer works (see
+            # Invite.authority_intact). Showing it as "Active" would be a lie about a link someone
+            # may be waiting on, so resolve the creators — ONE extra query for the whole page, not
+            # one per row — and let the template say so.
+            _cids = {i.created_by_id for i in invites if i.created_by_id}
+            _creators = ({u.id: u for u in User.query.filter(User.id.in_(_cids)).all()}
+                         if _cids else {})
+            for _i in invites:
+                _i.authority_ok = _i.authority_intact(_creators.get(_i.created_by_id))
         return render_template("manage_users.html", users=users, groups=groups, invites=invites)

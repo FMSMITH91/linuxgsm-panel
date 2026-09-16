@@ -1914,6 +1914,37 @@ _gone, _ = _Inv.mint(None)
 _gone.expires_at = _now_inv() - _td_inv(hours=1)
 check("invite: an expired one reads as expired", _gone.state == "expired", _gone.state)
 
+# An invite must not outlive the AUTHORITY behind it. Found in a security review of this same
+# feature: an admin who is offboarded — demoted, deactivated, deleted — left live invites behind
+# for up to the 30-day maximum TTL, and whoever held one still got the account they promised,
+# superadmin included. is_usable only knows about the invite's own lifecycle, so the creator check
+# is separate and the route applies both.
+class _FakeUser:
+    def __init__(self, sa=True, active=True):
+        self.is_superadmin, self.is_active = sa, active
+
+_sa_inv, _ = _Inv.mint(None, superadmin=True)
+_sa_inv.created_by_id = 42          # mint(None) leaves it NULL; a real one always has a creator
+check("invite: a superadmin-granting invite is fine while its creator is an active superadmin",
+      _sa_inv.authority_intact(_FakeUser(sa=True, active=True)))
+check("invite: ...dies when the creator is DEMOTED",
+      not _sa_inv.authority_intact(_FakeUser(sa=False, active=True)))
+check("invite: ...dies when the creator is DEACTIVATED",
+      not _sa_inv.authority_intact(_FakeUser(sa=True, active=False)))
+check("invite: ...dies when the creator's account is GONE",
+      not _sa_inv.authority_intact(None))
+
+_plain, _ = _Inv.mint(None, superadmin=False, group_ids=[1])
+_plain.created_by_id = 42
+check("invite: a plain invite survives its creator being demoted (it grants no rank)",
+      _plain.authority_intact(_FakeUser(sa=False, active=True)))
+check("invite: ...but not the creator being deactivated",
+      not _plain.authority_intact(_FakeUser(sa=False, active=False)))
+
+_orphan, _ = _Inv.mint(None)        # created_by_id stays NULL
+check("invite: one with no creator recorded has no authority to have lapsed",
+      _orphan.authority_intact(None))
+
 # Two invites must never collide, and the hash must be a pure function of the token.
 _a, _ta = _Inv.mint(None)
 _b, _tb = _Inv.mint(None)
