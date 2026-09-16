@@ -67,6 +67,31 @@ import string as _string
 _PW_SYMBOLS = set(_string.punctuation)
 
 
+# The username column is String(80) and the creation form asked only for >= 3 characters, so a
+# longer name reached the database and was silently truncated (or errored, depending on the
+# driver). Both places that set a username now go through this, so create and rename cannot drift
+# apart on what they accept.
+MIN_USERNAME_LEN = 3
+MAX_USERNAME_LEN = 80
+
+
+def username_problem(name):
+    """Return a human error if the username is unusable, else None.
+
+    FORMAT only — uniqueness needs the database and stays with the caller, which is also the only
+    place that knows whether a clash with the user's OWN current name should count."""
+    name = (name or "").strip()
+    if len(name) < MIN_USERNAME_LEN:
+        return f"Username must be at least {MIN_USERNAME_LEN} characters."
+    if len(name) > MAX_USERNAME_LEN:
+        return f"Username must be at most {MAX_USERNAME_LEN} characters."
+    if any(c.isspace() for c in name):
+        # It is typed into a login box and read off a screen; an interior space (or a tab pasted in
+        # from a spreadsheet) is invisible there and makes the account unloggable-into.
+        return "Username cannot contain spaces."
+    return None
+
+
 def password_problem(pw):
     """Return a human error if the password is too weak, else None.
     Requires: length, lower, upper, digit, and a symbol."""

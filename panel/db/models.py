@@ -238,14 +238,16 @@ class User(UserMixin, db.Model):
                 history = []
         except (ValueError, TypeError):
             history = []
+        # check_password, NOT bcrypt.checkpw: hashes are stored as `sha256$<bcrypt>` now, and a
+        # raw checkpw against one raises, which this loop would swallow as "not a match" — reuse
+        # detection would quietly stop detecting anything. Deferred import because auth.py imports
+        # this module; models.py already defers panel.core.config the same way.
+        from panel.security.auth import check_password
         for h in [self.password_hash] + history:
             if not isinstance(h, str) or not h:
                 continue
-            try:
-                if bcrypt.checkpw(candidate.encode(), h.encode()):
-                    return True
-            except (ValueError, TypeError):
-                continue      # a malformed row is not a match, and must not 500 a password change
+            if check_password(candidate, h):   # never raises; handles both hash formats
+                return True
         return False
 
     @property

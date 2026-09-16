@@ -1808,3 +1808,51 @@ check("audit: every logged action names a target (or is listed as having none)",
       " — pass target= (LOCAL_HOST_LABEL for panel-host actions), or add it to _NO_TARGET_OK "
       "with a reason")
 
+# ── passwords are not capped at bcrypt's 72 bytes ─────────────────────────────────────────────
+# bcrypt takes at most 72 BYTES. That produced two failures, neither of them visible to the person
+# hitting it: setting a longer password raised ValueError out of hash_password (uncaught -> 500,
+# because password_problem has a minimum and no maximum), and anyone who set one while bcrypt 4.x
+# was installed — 4.x truncated SILENTLY where 5.0 raises — is refused at login now, with their
+# correct password reading as "wrong password".
+#
+# hash_password SHA-256s first, so bcrypt always sees 44 bytes and length stops mattering.
+from panel.security import auth as _auth_pw
+import bcrypt as _bcrypt_pw
+
+_LONG_PW = "Aa1!" + "x" * 300
+# Caught, not left to propagate: without the pre-hash this raises at IMPORT time and takes the
+# whole suite down before it prints a tally — every other check's result goes with it, and a
+# crashed run is the one shape that can be mistaken for "nothing failed". Report it instead.
+try:
+    _h_new = _auth_pw.hash_password(_LONG_PW)
+    _h_err = None
+except Exception as _e:
+    _h_new, _h_err = "", "%s: %s" % (type(_e).__name__, _e)
+check("password: a 300+ character password hashes without raising",
+      _h_err is None and isinstance(_h_new, str) and len(_h_new) > 0, _h_err or "")
+check("password: ...and verifies", _auth_pw.check_password(_LONG_PW, _h_new))
+check("password: ...and a wrong one of the same length does not",
+      not _auth_pw.check_password("Bb2@" + "z" * 300, _h_new))
+# Two passwords sharing the first 72 bytes must NOT be interchangeable — the whole point.
+check("password: two passwords with the same first 72 bytes are distinguished",
+      not _auth_pw.check_password(_LONG_PW + "-different-tail", _h_new))
+check("password: the stored hash still fits the String(256) column", len(_h_new) <= 256)
+
+# Legacy rows (bare bcrypt over the raw password) must keep working, and be flagged for upgrade.
+_legacy = _bcrypt_pw.hashpw(b"OldP@ssw0rd1", _bcrypt_pw.gensalt(4)).decode()
+check("password: a legacy bcrypt hash still verifies",
+      _auth_pw.check_password("OldP@ssw0rd1", _legacy))
+check("password: a legacy hash is flagged for rehash", _auth_pw.needs_rehash(_legacy))
+check("password: a new hash is not", not _auth_pw.needs_rehash(_h_new))
+check("password: a wrong password against a legacy hash is still refused",
+      not _auth_pw.check_password("nope", _legacy))
+
+# The lockout: bcrypt 4.x stored the first 72 bytes, so that is what the hash is OF.
+_trunc = _bcrypt_pw.hashpw(_LONG_PW.encode()[:72], _bcrypt_pw.gensalt(4)).decode()
+check("password: an account stranded by the 4.x -> 5.0 upgrade can sign in again",
+      _auth_pw.check_password(_LONG_PW, _trunc))
+check("password: ...and that path still refuses a different long password",
+      not _auth_pw.check_password("Bb2@" + "y" * 300, _trunc))
+check("password: an empty or malformed stored hash returns False, never raises",
+      not _auth_pw.check_password("x", "") and not _auth_pw.check_password("x", "not-a-hash"))
+

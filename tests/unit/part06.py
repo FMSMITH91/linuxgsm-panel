@@ -1056,15 +1056,17 @@ check("register_routes: helper closures inside it <= %d (currently %d)"
       % (_HELPER_CEILING, _rr_helpers),
       _rr_helpers <= _HELPER_CEILING,
       "it went UP — a new helper belongs at module level, not nested in the route table")
-# 213, was 211: two genuinely new views — /api/remote/<id>/firewall/limit (UFW rate limiting was
+# 214, was 212: two genuinely new views — /api/remote/<id>/firewall/limit (UFW rate limiting was
 # reachable from the privileged layer but from no route) and /firewall/allow-from (a port open
 # only from one address or network, which no verb could express before).
+# 212, was 211: /account/profile is a genuinely new view — it lets someone change their OWN
+# display name, which previously only an admin could do through Manage Users.
 # 211, was 210: /password/change is a genuinely new view (the page an account with an admin-issued
 # password is held on until it sets its own). This total exists to catch a view VANISHING during a
 # move, so adding one is a deliberate bump — and url_map_baseline.json's diff is the record of what
 # the new route actually is.
-check("register_routes: every one of the 213 views is still accounted for",
-      len(_rr_views) + _MOVED_VIEWS == 213,
+check("register_routes: every one of the 214 views is still accounted for",
+      len(_rr_views) + _MOVED_VIEWS == 214,
       "views inside=%d, moved out=%d" % (len(_rr_views), _MOVED_VIEWS))
 # These two use current_app, which only equals the closed-over `app` inside a request — every
 # caller is a view, so that holds. If they drift back inside a closure, the reasoning stops being

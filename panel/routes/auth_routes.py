@@ -9,7 +9,7 @@ from panel.core import (i18n)
 from panel.core.clock import (utcnow)
 from panel.core.config import (encrypt_secret)
 from panel.db.models import (User, db)
-from panel.security.auth import (check_password, client_ip, dummy_password_check,
+from panel.security.auth import (hash_password, needs_rehash, check_password, client_ip, dummy_password_check,
     generate_backup_codes, generate_totp_secret, log_action, totp_provisioning_uri, verify_totp,
     verify_totp_step)
 from panel.services import (notifications)
@@ -166,6 +166,13 @@ def register(app):
 
             user = User.query.filter_by(username=username).first()
             if user and user.is_active and check_password(password, user.password_hash):
+                # Re-encode a legacy hash now that we have the plaintext in hand and know it is
+                # right. NOT set_password(): the password did not change, so this must not push a
+                # hash into the reuse history or touch auth_epoch — nobody should be signed out,
+                # or told they cannot reuse their own password, because of a format upgrade.
+                if needs_rehash(user.password_hash):
+                    user.password_hash = hash_password(password)
+                    db.session.commit()
                 # `totp_enabled` alone, NOT "enabled and the secret decrypts". totp_secret_plain
                 # returns "" whenever decryption fails (a cred_key that was not carried across a
                 # hand-rolled migration, a truncated key file), and the old condition then fell
@@ -319,6 +326,31 @@ def register(app):
         session["_2fa_setup_secret"] = secret
         uri = totp_provisioning_uri(secret, current_user.username)
         return render_template("account_2fa.html", secret=secret, qr_svg=_qr_svg(uri))
+
+    @app.route("/account/profile", methods=["POST"])
+    @login_required
+    def account_update_profile():
+        """Let someone change their OWN display name.
+
+        Only the display name. The username is what they sign in with and what every audit row is
+        filed under, so renaming stays an admin action — a person quietly renaming themselves is
+        exactly the move an audit trail exists to defeat. The display name carries no such weight:
+        it is a label, and having to ask an admin to fix a misspelling of your own name is the kind
+        of friction that has no security story behind it.
+        """
+        name = (request.form.get("display_name") or "").strip()
+        if len(name) > 120:                      # matches the column
+            flash("Display name must be at most 120 characters.", "danger")
+            return redirect(url_for("account"))
+        user = current_user._get_current_object()
+        old = user.display_name or ""
+        user.display_name = name
+        db.session.commit()
+        # Worth a row: it changes what other people see next to actions in the UI.
+        log_action(user, "account_display_name", target=user.username,
+                   detail="%r -> %r" % (old, name))
+        flash("Display name updated." if name else "Display name cleared.", "success")
+        return redirect(url_for("account"))
 
     @app.route("/account/sessions/revoke", methods=["POST"])
     @login_required

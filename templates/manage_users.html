@@ -175,8 +175,16 @@
         </div>
         <div class="modal-body">
           <div class="mb-3">
+            <label class="form-label" for="eu-username">Username</label>
+            <input type="text" name="username" id="eu-username" class="form-control"
+                   required minlength="3" maxlength="80" autocomplete="off">
+            <div class="form-text">The name they sign in with. Changing it does not sign them out,
+              and their earlier audit entries stay under the old name.</div>
+          </div>
+          <div class="mb-3">
             <label class="form-label" for="eu-display">Display Name</label>
             <input type="text" name="display_name" id="eu-display" class="form-control">
+            <div class="form-text">Shown around the panel. The user can change their own.</div>
           </div>
           <div class="mb-3">
             <label class="form-label" for="eu-email">Email</label>
