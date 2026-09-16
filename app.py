@@ -34,12 +34,10 @@ Routes:
 import logging
 import os
 import re
-from panel.core import terminal
 import threading
 import time
 import gzip as _gzip
 from datetime import timedelta
-from panel.core.clock import utcnow
 
 # eventlet announces its own deprecation on import — upstream's words, not a nit: "Eventlet is
 # deprecated ... we strongly recommend against using it for new projects ... we recommend migrating
@@ -61,6 +59,12 @@ with _w.catch_warnings():
     eventlet.monkey_patch()
 
 del _w
+
+# Panel imports live AFTER the patch, all of them. terminal/clock used to sit above it and got
+# away with it only because neither pulls in anything eventlet needs to green — a latent trap for
+# whichever of them grows a dependency first. tests/unit asserts this ordering now.
+from panel.core import terminal
+from panel.core.clock import utcnow
 
 import secrets
 from flask import (Flask, current_app, g, jsonify, redirect, request, session, url_for)
