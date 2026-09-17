@@ -177,13 +177,23 @@
     // section does not exist for this user either. Compared on PATH, so a panel mounted under a
     // sub-path (Tailscale Serve) still matches — the sidebar href carries MOUNT, the table does
     // not, and hardcoding the bare path here would silently index nothing on such an install.
+    // One shape for both section tables: the page-level ones and the per-host ones differ only
+    // in where the base href comes from and whether the row is qualified by a host name.
+    function addSection(sec, baseHref, order, host) {
+      consider({
+        label: t(sec.label) + (host ? ' — ' + host : ''),
+        href: baseHref + '#' + sec.hash,
+        icon: 'bi bi-arrow-return-right',
+        meta: host || undefined
+      // Searched over the label AND the keyword list, so "mfa" finds Two-factor even though the
+      // word appears nowhere on screen.
+      }, sec.label + ' ' + sec.kw + (host ? ' ' + host : ''), 'sections', order);
+    }
+    function pathOf(href) {
+      return (href || '').split('?')[0].replace(/\/+$/, '');
+    }
     var reachable = {};
-    available.forEach(function (p) {
-      var href = p.href || '';
-      var q = href.indexOf('?');
-      if (q >= 0) href = href.slice(0, q);
-      reachable[href.replace(/\/+$/, '')] = true;
-    });
+    available.forEach(function (p) { reachable[pathOf(p.href)] = true; });
     // One set per host in the sidebar. `hosts` comes from the same scrape, so a host the user
     // cannot reach contributes nothing.
     // /remote/<id>/manage — the route is remote_manage, and the trailing segment is easy to
@@ -192,27 +202,16 @@
     var hostRe = new RegExp('^' + (window.MOUNT || '').replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
                             + '/remote/\\d+/manage$');
     available.forEach(function (p, hi) {
-      var href = (p.href || '').split('?')[0].replace(/\/+$/, '');
+      var href = pathOf(p.href);
       if (!hostRe.test(href)) return;
       HOST_SECTIONS.forEach(function (hs, j) {
-        consider({
-          label: t(hs.label) + ' — ' + p.label,
-          href: href + '#' + hs.hash,
-          icon: 'bi bi-arrow-return-right',
-          meta: p.label
-        }, hs.label + ' ' + hs.kw + ' ' + p.label, 'sections', 100 + hi * 10 + j);
+        addSection(hs, href, 100 + hi * 10 + j, p.label);
       });
     });
     SECTIONS.forEach(function (sec, i) {
       var full = (window.MOUNT || '') + sec.page;
-      if (!reachable[full.replace(/\/+$/, '')]) return;
-      consider({
-        label: t(sec.label),
-        href: full + '#' + sec.hash,
-        icon: 'bi bi-arrow-return-right'
-      // Searched over the label AND the keyword list, so "mfa" finds Two-factor even though the
-      // word appears nowhere on screen.
-      }, sec.label + ' ' + sec.kw, 'sections', i);
+      if (!reachable[pathOf(full)]) return;
+      addSection(sec, full, i);
     });
     (servers || []).forEach(function (s, i) {
       consider({
