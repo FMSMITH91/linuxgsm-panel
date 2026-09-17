@@ -187,6 +187,25 @@ _WORKING_ACK = {
 }
 
 
+def working_ack(cmd):
+    """The "working on it" line for a command, or None when it answers instantly.
+
+    The routers ask this instead of each indexing the table: WHICH commands ack is a property of
+    the command set, not of a transport, and a branch added to one router and not the other is
+    precisely the drift that produced the /start and /update bugs. Asking here means a new slow
+    command starts acking on both bots the moment it is added to the table above, with no way for
+    one of them to be forgotten."""
+    return _WORKING_ACK.get(cmd)
+
+
+def action_ack(action, name):
+    """The "starting…" line for a server action, with the server's name already filled in.
+
+    The fallback matters: an action with no wording still has to say SOMETHING, because the ack is
+    the only thing standing between the user and a silent minute."""
+    return _ACTION_ACK.get(action, "🔄 %s — working on it…") % name
+
+
 def _bot_origin(platform, sender):
     """Audit-log actor string for a command that arrived over a chat bot.
 

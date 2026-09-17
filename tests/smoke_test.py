@@ -4044,15 +4044,43 @@ try:
         if _dfb_saved[2] is not None:
             app._run_action = _dfb_saved[2]
 
-    # Both bots must ack the same commands. The wording lives in one shared table so they cannot
-    # differ in words, but WHICH commands get acked is a per-router decision, and that is the
-    # half that can drift.
-    _tg_acked_cmds = set(_nre.findall(r'_tg_ack\(token, chat_id, _WORKING_ACK\["([a-z]+)"\]', _tg_src))
-    _dc_acked_cmds = set(_nre.findall(r'_dc_ack\(bot_token, channel_id, _WORKING_ACK\["([a-z]+)"\]', _dc_src))
+    # Both bots must ack the same commands, and exactly the ones the shared table names. Driven,
+    # not read off the source: the routers ask commands.working_ack() now, so what matters is what
+    # each one DOES with the answer. Every text helper is stubbed, so this reaches no host — the
+    # gate is about which commands announce themselves, not about what they reply.
     from panel.services.bots.commands import _WORKING_ACK as _WACK, _ACTION_ACK as _AACK
+    _ackp_cmds = {"players": "%splayers srv", "console": "%sconsole srv", "say": "%ssay srv hi",
+                  "status": "%sstatus", "servers": "%sservers", "hosts": "%shosts",
+                  "connect": "%sconnect srv"}
+    _ackp_helpers = ("_players_text", "_console_text", "_say_text", "_status_text",
+                     "_servers_text", "_hosts_text", "_connect_text")
+    _ackp_bots = (("telegram", _tgmod, "/", "_tg_ack", "_tg_reply",
+                   lambda t: _tgmod._handle_telegram_command(app, "1:tok", "1", t)),
+                  ("discord", _dcmod, "!", "_dc_ack", "_dc_reply",
+                   lambda t: _dcmod._handle_discord_command(app, "tok", "1", t)))
+    _ackp_seen, _ackp_save = {}, []
+    try:
+        for _bname, _mod, _pfx, _ackn, _replyn, _drive in _ackp_bots:
+            for _h in _ackp_helpers + (_ackn, _replyn):
+                _ackp_save.append((_mod, _h, getattr(_mod, _h)))
+            for _h in _ackp_helpers:
+                setattr(_mod, _h, lambda *a, **k: "stubbed")
+            setattr(_mod, _replyn, lambda *a, **k: None)
+            _seen = set()
+            for _cmd, _tmpl in _ackp_cmds.items():
+                _hit = []
+                setattr(_mod, _ackn, lambda *a, **k: _hit.append(1))
+                _drive(_tmpl % _pfx)
+                if _hit:
+                    _seen.add(_cmd)
+            _ackp_seen[_bname] = _seen
+    finally:
+        for _mod, _h, _fn in _ackp_save:
+            setattr(_mod, _h, _fn)
     check("bots: both routers ack the same set of slow commands",
-          _tg_acked_cmds == _dc_acked_cmds == set(_WACK),
-          "telegram=%s discord=%s table=%s" % (sorted(_tg_acked_cmds), sorted(_dc_acked_cmds),
+          _ackp_seen.get("telegram") == _ackp_seen.get("discord") == set(_WACK),
+          "telegram=%s discord=%s table=%s" % (sorted(_ackp_seen.get("telegram") or []),
+                                               sorted(_ackp_seen.get("discord") or []),
                                                sorted(_WACK)))
     # Every action the bots can dispatch needs ack wording, or it falls back to "working on it…"
     # and the user is told nothing about what is happening.
