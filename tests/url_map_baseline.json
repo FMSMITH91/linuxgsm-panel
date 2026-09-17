@@ -2211,6 +2211,17 @@
       "POST"
     ]
   },
+  "/servers/install": {
+    "endpoint": "install_server_page",
+    "guards": [
+      "utils.py:decorated_view(install_server,manage_servers)",
+      "auth.py:decorated_function(install_server,manage_servers)",
+      "view:install_server_page"
+    ],
+    "methods": [
+      "GET"
+    ]
+  },
   "/servers/manage": {
     "endpoint": "manage_servers",
     "guards": [

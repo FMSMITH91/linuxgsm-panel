@@ -83,8 +83,31 @@ def register(app):
                                player_counts=player_counts, player_max=player_max,
                                server_names=server_names, all_tags=all_tags,
                                can_edit_tags=(current_user.is_superadmin
-                                              or has_permission(current_user, MANAGE_SERVERS)))
+                                              or has_permission(current_user, MANAGE_SERVERS)),
+                               can_install=(current_user.is_superadmin
+                                            or has_permission(current_user, INSTALL_SERVER)
+                                            or has_permission(current_user, MANAGE_SERVERS)))
 
+
+    @app.route("/servers/install")
+    @login_required
+    @permission_required(INSTALL_SERVER, MANAGE_SERVERS)
+    def install_server_page():
+        """The install form, on its own page.
+
+        It used to sit on /servers/manage above the list of servers you already have — 631px of
+        mostly-empty selects for a thing you do once, ahead of the thing you came for. Same
+        permission pair as the POST it submits to, so reaching the form and using it are one
+        decision rather than two that can drift.
+        """
+        _my = accessible_remote_ids(current_user)
+        remotes = [r for r in RemoteServer.query.all() if r.id in _my]
+        # Only downloadable games: the target host is not chosen yet, so mount-only content that
+        # may already be present cannot be known here. Same reasoning as the old inline form.
+        gmod_games = [{"key": k, "label": v[0], "size": GMOD_CONTENT_SIZES.get(k, "")}
+                      for k, v in GMOD_CONTENT_GAMES.items() if v[1] is not None]
+        return render_template("install_server.html", remotes=remotes,
+                               games=load_game_list(), gmod_games=gmod_games)
 
     @app.route("/servers/add", methods=["POST"])
     @login_required
