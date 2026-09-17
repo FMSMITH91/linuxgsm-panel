@@ -217,9 +217,14 @@ def _run_watch(scripted, cfg=None):
     set_commands is stubbed HERE rather than by the caller: this helper installs its own, so an
     outer stub would be silently overwritten and record nothing. (It was, and did.)"""
     handled, calls, script, setcmds = [], [], list(scripted), []
+    # _tg_dispatch is the seam, not _handle_telegram_command: the loop hands work to the worker
+    # rather than running it, so what this helper records is what the loop DISPATCHED. The handler
+    # is stubbed too, and ran_inline below asserts the loop never reaches it directly — running a
+    # command on the poll thread is the regression this whole change removes.
+    ran_inline = []
     saved = (_TG.notifications._cfg, _TG.notifications.telegram_get_updates,
              _TG.notifications.telegram_set_commands, _TG.decrypt_secret,
-             _TG._handle_telegram_command, _TG.time)
+             _TG._handle_telegram_command, _TG._tg_dispatch, _TG.time)
     ft = _FakeTime()
     try:
         _default_cfg = {"telegram": {"enabled": True, "accept_commands": True,
@@ -235,7 +240,8 @@ def _run_watch(scripted, cfg=None):
         _TG.decrypt_secret = lambda v: v
         _TG.notifications.telegram_set_commands = \
             lambda tok, clear=False: (setcmds.append(clear), True)[1]
-        _TG._handle_telegram_command = lambda app, tok, chat, text, sender=None: handled.append(text)
+        _TG._handle_telegram_command = lambda app, tok, chat, text, sender=None: ran_inline.append(text)
+        _TG._tg_dispatch = lambda app, tok, chat, text, sender=None: handled.append(text)
         _TG.time = ft
 
         def _get(token, offset=None, timeout=25):
@@ -251,15 +257,15 @@ def _run_watch(scripted, cfg=None):
     finally:
         (_TG.notifications._cfg, _TG.notifications.telegram_get_updates,
          _TG.notifications.telegram_set_commands, _TG.decrypt_secret,
-         _TG._handle_telegram_command, _TG.time) = saved
-    return handled, calls, ft, setcmds
+         _TG._handle_telegram_command, _TG._tg_dispatch, _TG.time) = saved
+    return handled, calls, ft, setcmds, ran_inline
 
 
 # 1. THE BACKLOG IS NEVER REPLAYED. A /update sent to the bot restarts the panel; if the poller
 #    came back up and re-read that same update, it would update and restart again, forever. The
 #    first poll is a priming read (offset=-1, timeout=0) whose results are DISCARDED.
 _backlog = [{"update_id": 41, "message": {"text": "/update", "chat": {"id": "555"}}}]
-_handled, _calls, _, _sc = _run_watch([_backlog])
+_handled, _calls, _, _sc, _inline = _run_watch([_backlog])
 check("telegram watch: the first poll primes with offset=-1 and timeout=0",
       _calls and _calls[0]["offset"] == -1 and _calls[0]["timeout"] == 0, str(_calls[:1]))
 check("telegram watch: a backlog command is NOT replayed on (re)start",
@@ -272,17 +278,22 @@ check("telegram watch: and polling resumes PAST the backlog, not at it",
 _live = [{"update_id": 50, "message": {"text": "/stop prod", "chat": {"id": "999"}}},
          {"update_id": 51, "message": {"text": "/status", "chat": {"id": "555"}}},
          {"update_id": 52, "message": {"text": "not a command", "chat": {"id": "555"}}}]
-_handled, _calls, _, _sc = _run_watch([[], _live])
+_handled, _calls, _, _sc, _inline = _run_watch([[], _live])
 check("telegram watch: a command from an UNAUTHORISED chat is ignored",
       "/stop prod" not in _handled, str(_handled))
 check("telegram watch: a command from the authorised chat is handled",
       _handled == ["/status"], str(_handled))
+# The poll thread must DISPATCH, never execute. It used to run each command inline, so one
+# /console against an unreachable host held up every command sent behind it for the whole connect
+# timeout — and on Discord's socket, long enough to miss heartbeats and lose the session.
+check("telegram watch: the poll thread hands commands off instead of running them",
+      _inline == [], "ran on the poll thread: %s" % (_inline,))
 check("telegram watch: plain text in the authorised chat is not treated as a command",
       "not a command" not in _handled, str(_handled))
 
 # 3. A poll ERROR (None — a 409 from a second poller, or a network failure) backs off instead of
 #    spinning the loop at full speed.
-_handled, _calls, _ft, _sc = _run_watch([[], None])
+_handled, _calls, _ft, _sc, _inline = _run_watch([[], None])
 check("telegram watch: a failed poll backs off rather than busy-looping",
       _ft.slept and _ft.slept[-1] == _TG._TG_CMD_BACKOFF, str(_ft.slept))
 
@@ -291,13 +302,13 @@ check("telegram watch: a failed poll backs off rather than busy-looping",
 #    case reaches that branch. Asserting the cold-start case alone would have looked like coverage
 #    of the clear and tested the opposite.
 _off = {"telegram": {"enabled": True, "accept_commands": False, "token": "tok", "chat_id": "555"}}
-_handled, _calls, _ft, _sc = _run_watch([], cfg=_off)
+_handled, _calls, _ft, _sc, _inline = _run_watch([], cfg=_off)
 check("telegram watch: with accept_commands off, no update poll happens at all",
       _calls == [], str(_calls))
 
 _on = {"telegram": {"enabled": True, "accept_commands": True, "token": "tok", "chat_id": "555"}}
 # Tick 1 registers the menu and primes; from tick 2 commands are off.
-_handled, _calls, _ft, _sc = _run_watch([[]], cfg=[_on, _off])
+_handled, _calls, _ft, _sc, _inline = _run_watch([[]], cfg=[_on, _off])
 check("telegram watch: the '/' menu is registered while commands are on",
       False in _sc, str(_sc))
 check("telegram watch: turning commands off CLEARS the '/' menu, not leaving it advertising them",

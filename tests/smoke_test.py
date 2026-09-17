@@ -3802,6 +3802,26 @@ try:
     # deliberately carries no _reply_header. Captured separately so a test can assert on the
     # answer without the ack in the way — and so nothing here reaches api.telegram.org.
     _tg_saved = (_tgmod._tg_reply, _tgmod._tg_server_action, _tgmod._tg_ack)
+
+    class _InlineWorker(object):
+        """Runs queued work immediately, on the calling thread.
+
+        Commands run on a background worker now, and a test that asserts on what a command said
+        would otherwise race it. Inlining keeps the ORDER the real worker guarantees while making
+        it synchronous — what is under test here is what each command says, not the queue; the
+        queue has gates of its own below."""
+
+        def __init__(self):
+            self.submitted = 0
+
+        def submit(self, fn):
+            self.submitted += 1
+            fn()
+            return True
+
+    _tg_inline = _InlineWorker()
+    _tg_saved_worker = _tgmod._TG_WORKER
+    _tgmod._TG_WORKER = _tg_inline
     try:
         _tgmod._tg_ack = lambda tok, chat, text: _tg_acks.append(text)
         _tgmod._tg_reply = lambda tok, chat, text: _tg_sent.append(text)
@@ -3852,7 +3872,9 @@ try:
                 steamid="", num="": (_tg_mod.append((action, message)), (True, "announced"))[1]
 
             _tg_sent.clear(); _tg_acks.clear()
-            _tgmod._handle_telegram_command(app, "1:tok", "1", "/console smoke-cs")
+            # _tg_dispatch, not _handle_telegram_command: the ack is the dispatcher's job now,
+            # because queueing it with the work would put it behind whatever is already running.
+            _tgmod._tg_dispatch(app, "1:tok", "1", "/console smoke-cs")
             check("telegram: /console tails the game console",
                   _tg_sent and "Server started" in _tg_sent[0], "sent=%s" % _tg_sent[:1])
             # /console is an SSH capture: on a slow or unreachable host the chat sat silent for
@@ -3867,7 +3889,7 @@ try:
                   _tg_sent and "No server" in _tg_sent[0], "sent=%s" % _tg_sent[:1])
 
             _tg_sent.clear(); _tg_mod.clear(); _tg_acks.clear()
-            _tgmod._handle_telegram_command(app, "1:tok", "1", "/say csgoserver restarting in 5")
+            _tgmod._tg_dispatch(app, "1:tok", "1", "/say csgoserver restarting in 5")
             check("telegram: /say announces the whole message, not just the first word",
                   _tg_mod == [("say", "restarting in 5")], "moderate=%s" % _tg_mod)
             check("telegram: /say acks before it reaches the game", _tg_acks, "acks=%s" % _tg_acks)
@@ -3885,7 +3907,7 @@ try:
             # answer. Acking everything is as wrong as acking nothing.
             for _inst in ("/connect smoke-cs", "/status", "/servers", "/hosts"):
                 _tg_acks.clear()
-                _tgmod._handle_telegram_command(app, "1:tok", "1", _inst)
+                _tgmod._tg_dispatch(app, "1:tok", "1", _inst)
                 check("telegram: %s answers instantly and does not ack" % _inst.split()[0],
                       not _tg_acks, "acks=%s" % _tg_acks)
 
@@ -3897,6 +3919,7 @@ try:
             _sm_game.capture_console, _sm_game.moderate = _tg_saved_new
     finally:
         _tgmod._tg_reply, _tgmod._tg_server_action, _tgmod._tg_ack = _tg_saved
+        _tgmod._TG_WORKER = _tg_saved_worker
 
     # ── Instant feedback: ack first, then say how it ended ────────────────────────────────────
     # Every action a bot can send runs in the background, so run_action returns "'restart' issued"
@@ -3962,6 +3985,50 @@ try:
         _tgmod._tg_ack, _tgmod._tg_reply = _fb_saved[0], _fb_saved[1]
         if _fb_saved[2] is not None:
             app._run_action = _fb_saved[2]
+
+    # ── The command runs off the poll thread, and the ack does not ──────────────────────────────
+    # The poll loop used to RUN each command, so a /console on an unreachable host held up every
+    # command sent behind it for the whole connect timeout. Work is queued now — but the ack must
+    # NOT be, or a command sent while a slow one was running would stay silent until the slow one
+    # finished, which is the same silence moved rather than removed. Ordering is the whole point,
+    # so it is asserted directly.
+    _wq_order, _wq_sent, _wq_queued = [], [], []
+    _wq_saved = (_tgmod._tg_ack, _tgmod._tg_reply, _tgmod._TG_WORKER)
+
+    class _RecordingWorker(object):
+        """Records the submission instead of running it — so 'was this queued or run inline?' is
+        answerable, which a worker that ran things would hide."""
+
+        def __init__(self, accept=True):
+            self.accept = accept
+
+        def submit(self, fn):
+            _wq_order.append("submit")
+            _wq_queued.append(fn)
+            return self.accept
+
+    try:
+        _tgmod._tg_ack = lambda tok, chat, text: _wq_order.append("ack")
+        _tgmod._tg_reply = lambda tok, chat, text: (_wq_order.append("reply"), _wq_sent.append(text))
+        _tgmod._TG_WORKER = _RecordingWorker()
+        _tgmod._tg_dispatch(app, "1:tok", "1", "/console smoke-cs")
+        check("telegram: the command is handed to the worker, not run on the poll thread",
+              _wq_queued and callable(_wq_queued[0]), "order=%s" % (_wq_order,))
+        check("telegram: the ack goes out BEFORE the command is queued",
+              _wq_order == ["ack", "submit"], "order=%s" % (_wq_order,))
+        # An instant command still queues — it just has nothing to ack.
+        _wq_order[:] = []; _wq_queued[:] = []
+        _tgmod._tg_dispatch(app, "1:tok", "1", "/status")
+        check("telegram: an instant command is queued too, silently",
+              _wq_order == ["submit"], "order=%s" % (_wq_order,))
+        # A refused submit means the command will never run, so it has to be said out loud.
+        _wq_order[:] = []; _wq_sent[:] = []
+        _tgmod._TG_WORKER = _RecordingWorker(accept=False)
+        _tgmod._tg_dispatch(app, "1:tok", "1", "/console smoke-cs")
+        check("telegram: a command that did not make the queue is answered, not dropped silently",
+              _wq_sent and "again" in _wq_sent[0], "sent=%s" % (_wq_sent,))
+    finally:
+        _tgmod._tg_ack, _tgmod._tg_reply, _tgmod._TG_WORKER = _wq_saved
     # Every command the bot advertises must be one it handles — that menu is what made the /start
     # bug reachable in the first place.
     from panel.services import notifications as _notif
@@ -4055,10 +4122,12 @@ try:
     _ackp_helpers = ("_players_text", "_console_text", "_say_text", "_status_text",
                      "_servers_text", "_hosts_text", "_connect_text")
     _ackp_bots = (("telegram", _tgmod, "/", "_tg_ack", "_tg_reply",
-                   lambda t: _tgmod._handle_telegram_command(app, "1:tok", "1", t)),
+                   lambda t: _tgmod._tg_dispatch(app, "1:tok", "1", t)),
                   ("discord", _dcmod, "!", "_dc_ack", "_dc_reply",
-                   lambda t: _dcmod._handle_discord_command(app, "tok", "1", t)))
+                   lambda t: _dcmod._dc_dispatch(app, "tok", "1", t)))
     _ackp_seen, _ackp_save = {}, []
+    _ackp_workers = (_tgmod._TG_WORKER, _dcmod._DC_WORKER)
+    _tgmod._TG_WORKER = _dcmod._DC_WORKER = _InlineWorker()
     try:
         for _bname, _mod, _pfx, _ackn, _replyn, _drive in _ackp_bots:
             for _h in _ackp_helpers + (_ackn, _replyn):
@@ -4077,6 +4146,7 @@ try:
     finally:
         for _mod, _h, _fn in _ackp_save:
             setattr(_mod, _h, _fn)
+        _tgmod._TG_WORKER, _dcmod._DC_WORKER = _ackp_workers
     check("bots: both routers ack the same set of slow commands",
           _ackp_seen.get("telegram") == _ackp_seen.get("discord") == set(_WACK),
           "telegram=%s discord=%s table=%s" % (sorted(_ackp_seen.get("telegram") or []),

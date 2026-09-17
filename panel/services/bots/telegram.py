@@ -5,8 +5,8 @@ Moved out of app.py verbatim — see panel/services/bots/__init__.py.
 from panel.core.config import (decrypt_secret, load_config, update_config)
 from panel.ops import system_ops as so
 from panel.services import (notifications)
-from panel.services.bots.commands import (_bot_origin, _panel_ver_label,
-    _command_arg, _connect_text, _console_text, _find_server,
+from panel.services.bots.commands import (BUSY_REPLY, CommandWorker, _bot_origin,
+    _panel_ver_label, _command_arg, _connect_text, _console_text, _find_server,
     _hosts_text, _reply_header, _players_text, _say_text,
     _servers_text, _status_text, action_ack, working_ack)
 import logging
@@ -19,6 +19,8 @@ _log = logging.getLogger("panel.app")
 # (Notifications → Telegram → "Accept commands") and locked to the saved chat_id — no other chat is
 # honoured. Discord webhooks are send-only, so this is Telegram-only. Long-polls getUpdates.
 _TG_CMD_BACKOFF = 15
+# Commands run here, not on the long-poll thread — see commands.CommandWorker.
+_TG_WORKER = CommandWorker("telegram-commands")
 
 
 def _tg_reply(token, chat_id, text):
@@ -92,7 +94,7 @@ def _telegram_command_watch(app):
                 if chat != authorized:
                     _log.info("telegram: ignoring a command from unauthorised chat %s", chat[:32])
                     continue
-                _handle_telegram_command(app, token, authorized, text, msg.get("from"))
+                _tg_dispatch(app, token, authorized, text, msg.get("from"))
         except Exception:
             _log.debug("telegram command-watch tick failed", exc_info=True)
             time.sleep(_TG_CMD_BACKOFF)
@@ -114,6 +116,29 @@ def _tg_help_text():
             "/update — update the panel itself\n"
             "/update <name> — update that ONE game server instead\n"
             "/help — this message")
+
+
+def _tg_dispatch(app, token, chat_id, text, sender=None):
+    """Acknowledge on the POLL thread, then run the command on the worker.
+
+    The ack has to happen here rather than inside the handler. Queueing the whole handler would
+    queue its ack too, so a command sent while a slow one was running would stay silent until the
+    slow one finished — the silence this is meant to remove, moved rather than fixed. Acking first
+    and queueing second means the poll loop is reading again within milliseconds, whatever the
+    command turns out to cost.
+
+    /players, /console and /say have to leave the box — a live query to the game, an SSH console
+    capture, an in-game announcement. /status, /servers, /hosts and /connect answer from the
+    database in the same breath and are deliberately absent from the table: acking an instant
+    answer is two notifications for one reply. The table decides, not this router, so Discord
+    cannot end up acking a different set. Server actions ack separately, in _tg_server_action,
+    because theirs names the server it is acting on.
+    """
+    ack = working_ack(_parse_tg_command(text))
+    if ack:
+        _tg_ack(token, chat_id, ack)
+    if not _TG_WORKER.submit(lambda: _handle_telegram_command(app, token, chat_id, text, sender)):
+        _tg_reply(token, chat_id, BUSY_REPLY)
 
 
 def _tg_server_action(app, token, chat_id, action, arg, sender=None):
@@ -165,16 +190,6 @@ def _tg_server_action(app, token, chat_id, action, arg, sender=None):
 def _handle_telegram_command(app, token, chat_id, text, sender=None):
     cmd = _parse_tg_command(text)
     arg = _command_arg(text)
-    # Say something before the slow ones start. /players, /console and /say have to leave the box
-    # — a live query to the game, an SSH console capture, an in-game announcement — and until the
-    # answer came back the chat sat silent, which on a slow or unreachable host reads as a dead
-    # bot. /status, /servers, /hosts and /connect answer from the database in the same breath and
-    # are deliberately absent from the table: acking an instant answer is two notifications for
-    # one reply. The table decides, not this router, so Discord cannot end up acking a different
-    # set. Server actions ack separately, in _tg_server_action, because theirs names the server.
-    _ack = working_ack(cmd)
-    if _ack:
-        _tg_ack(token, chat_id, _ack)
     # A BARE /start is Telegram's own "open the chat" command and should answer with help — but
     # `/start <server>` is the documented way to start a server (it is in TG_COMMANDS, so Telegram
     # puts it in the '/' menu, and _tg_help_text lists it). Matching on the word alone swallowed

@@ -705,6 +705,46 @@ check("bots: action_ack fills in the server name",
 check("bots: an action with no wording still acks rather than going quiet",
       "codserver" in _aack("validate", "codserver"), _aack("validate", "codserver"))
 
+# ── The worker that keeps commands off the poll/socket thread ─────────────────────────────────
+# Both bots read on ONE thread and used to run on it too, so a command that reached a host held
+# up everything sent behind it. Order is the reason this is a single worker and not a pool:
+# "/stop x" then "/start x" must not race into "stopped".
+from panel.services.bots.commands import (CommandWorker as _CW,  # noqa: E402
+                                          _CMD_QUEUE_MAX as _CWMAX, BUSY_REPLY as _CWBUSY)
+import threading as _cwt  # noqa: E402
+_cw = _CW("unit-test-worker")
+_cw_order, _cw_done = [], _cwt.Event()
+
+
+def _cw_boom():
+    raise RuntimeError("a command blew up")
+
+
+_cw.submit(lambda: _cw_order.append(1))
+_cw.submit(lambda: _cw_order.append(2))
+_cw.submit(_cw_boom)          # must not take the worker down with it
+_cw.submit(lambda: _cw_order.append(3))
+_cw.submit(_cw_done.set)
+check("bot worker: queued commands actually run", _cw_done.wait(10), "order=%s" % (_cw_order,))
+check("bot worker: ...in the order they arrived", _cw_order == [1, 2, 3], _cw_order)
+# The middle one raised. If an exception escaped the loop the worker would be dead and 3 would
+# never have run — which is why the order check above is also the crash check.
+check("bot worker: one command raising does not stop the next one",
+      _cw_order[-1:] == [3], _cw_order)
+
+# A bounded queue, and full says so. Unbounded would turn a wedged host into unbounded memory and
+# a chat answering questions from ten minutes ago.
+_cw2 = _CW("unit-test-worker-full")
+_cw_running, _cw_block = _cwt.Event(), _cwt.Event()
+_cw2.submit(lambda: (_cw_running.set(), _cw_block.wait(20)))
+check("bot worker: the worker picks work up on its own thread", _cw_running.wait(10))
+_cw_accepted = sum(1 for _ in range(_CWMAX + 5) if _cw2.submit(lambda: None))
+check("bot worker: a full queue refuses instead of growing without bound",
+      _cw_accepted == _CWMAX, "accepted=%d max=%d" % (_cw_accepted, _CWMAX))
+_cw_block.set()
+check("bots: the busy reply says the command was dropped, not merely delayed",
+      "again" in _CWBUSY and "shortly" not in _CWBUSY, _CWBUSY)
+
 # telegram_set_commands registers the '/' autocomplete menu via setMyCommands (through _post).
 import json as _json_tg  # noqa: E402
 _tg_posts = []
