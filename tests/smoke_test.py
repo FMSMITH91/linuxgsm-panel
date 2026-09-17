@@ -3701,14 +3701,31 @@ try:
         with app.app_context():
             _cp_cfg = _am.load_config()
             _cp_port = _cp_cfg.get("port", 5000)
+            # NOT _cp_port + 1. The route refuses a port that is already in use, and the next port
+            # up from the panel's own is exactly where a spare dev instance tends to be sitting.
+            # When one was, the route answered 400, ensure_panel_fail2ban was never called, and
+            # the whitelist check below passed VACUOUSLY over the empty list — an unrelated
+            # process on the machine quietly turning two of these three checks into assertions
+            # about nothing. Ask for a port the route will actually accept.
+            _cp_new = next((_p for _p in range(_cp_port + 1, _cp_port + 60)
+                            if not _am.so.port_in_use(_p)), None)
+        check("change-port: a free port was found to move the panel to", _cp_new is not None,
+              "nothing free in %d-%d; the checks below would prove nothing"
+              % (_cp_port + 1, _cp_port + 59))
+        # bind_host, not bind: the route reads data.get("bind_host"), so the old key was dropped on
+        # the floor and this half of the request was never actually exercised.
         _cpr = c.post("/api/panel/change-port",
-                      json={"port": _cp_port + 1, "bind": _cp_cfg.get("bind_host", "")})
-        check("change-port: the route answered", _cpr.status_code in (200, 400, 409),
-              "got %d" % _cpr.status_code)
+                      json={"port": _cp_new, "bind_host": _cp_cfg.get("bind_host", "")})
+        # 200, not "any of 200/400/409". The port was just confirmed free and the bind is the one
+        # already in use, so there is nothing left for the route to legitimately refuse — and
+        # accepting a refusal here is what let a 400 read as "the route answered".
+        check("change-port: the route accepted a move to a free port", _cpr.status_code == 200,
+              "got %d: %s" % (_cpr.status_code, _cpr.get_data(as_text=True)[:160]))
         check("change-port: the fail2ban jail is rewritten for the new port",
-              any(p == _cp_port + 1 for p, _ in _f2b_calls), str(_f2b_calls))
+              any(p == _cp_new for p, _ in _f2b_calls), str(_f2b_calls))
         check("change-port: ...and it is rewritten WITH the security whitelist, not without",
-              all(ig and "203.0.113.8" in ig for _p, ig in _f2b_calls), str(_f2b_calls))
+              _f2b_calls and all(ig and "203.0.113.8" in ig for _p, ig in _f2b_calls),
+              str(_f2b_calls))
     finally:
         _am.so.ensure_panel_fail2ban = _sv_f2b
         _am.so.restart_panel = _sv_restart
