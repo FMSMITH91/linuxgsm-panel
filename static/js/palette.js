@@ -194,16 +194,29 @@
     }
     var reachable = {};
     available.forEach(function (p) { reachable[pathOf(p.href)] = true; });
-    // One set per host in the sidebar. `hosts` comes from the same scrape, so a host the user
+    // One set per host in the sidebar. `hosts` come from the same scrape, so a host the user
     // cannot reach contributes nothing.
-    // /remote/<id>/manage — the route is remote_manage, and the trailing segment is easy to
-    // forget: an earlier version matched '/remote/\\d+$', found no host at all, and every
-    // per-host section silently vanished from the results with nothing failing.
-    var hostRe = new RegExp('^' + (window.MOUNT || '').replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
-                            + '/remote/\\d+/manage$');
+    //
+    // String comparison rather than a RegExp built from window.MOUNT. A non-literal RegExp is a
+    // ReDoS shape whatever the input happens to be today (Opengrep flags it as one), and it also
+    // meant escaping MOUNT for regex syntax — a second subtlety for no gain. The only pattern
+    // here is a run of digits, and that stays a literal.
+    //
+    // /remote/<id>/manage — the trailing segment is easy to forget: an earlier version matched
+    // '/remote/<id>' with no '/manage', found no host at all, and every per-host section silently
+    // vanished from the results with nothing failing.
+    var hostPrefix = (window.MOUNT || '') + '/remote/';
+    var HOST_SUFFIX = '/manage';
+    function hostIdOf(path) {
+      if (path.slice(0, hostPrefix.length) !== hostPrefix) return null;
+      var rest = path.slice(hostPrefix.length);
+      if (rest.slice(-HOST_SUFFIX.length) !== HOST_SUFFIX) return null;
+      var id = rest.slice(0, rest.length - HOST_SUFFIX.length);
+      return /^[0-9]+$/.test(id) ? id : null;
+    }
     available.forEach(function (p, hi) {
       var href = pathOf(p.href);
-      if (!hostRe.test(href)) return;
+      if (hostIdOf(href) === null) return;
       HOST_SECTIONS.forEach(function (hs, j) {
         addSection(hs, href, 100 + hi * 10 + j, p.label);
       });
