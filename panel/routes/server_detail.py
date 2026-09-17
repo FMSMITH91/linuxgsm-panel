@@ -27,7 +27,7 @@ import threading
 from panel.core.http import (_json_body, _log_and_generic)
 from app import (LONG_ACTIONS, RUNNABLE_ACTIONS, _apply_mod_restart, _live_run_state, _log,
     _mark_expected_offline)
-from panel.routes._shared import (_maybe_resolve_public_ip, _server_action_buttons)
+from panel.routes._shared import (_action_log_path, _begin_action_tail, _end_action_tail, _maybe_resolve_public_ip, _server_action_buttons)
 
 
 def _summarise_action_output(detail):
@@ -657,7 +657,14 @@ def register(app):
         threading.Thread(target=_run, daemon=True).start()
 
     def _bg_action(server_id, remote_id, short_name, action, selfname=None, on_done=None):
-        """Run a long LinuxGSM command in the background (green thread)."""
+        """Run a long LinuxGSM command in the background (green thread).
+
+        The command's output is TEED THROUGH a file on the host so the console poller can tail it
+        while the action runs — see _action_log_path. The panel promises "watch the live console
+        for progress" when it accepts one of these, and for a long time that promise was empty:
+        the output was captured over SSH into a variable and only ever surfaced in the audit log
+        after the fact, so an update that spent ten minutes downloading left the console it told
+        you to watch completely silent."""
         _app = app
 
         def _run():
@@ -668,12 +675,27 @@ def register(app):
                     if not remote:
                         detail = "its host is no longer configured"
                         return
-                    act_cmd = f"{action} 2>&1"
+                    base = action
                     if action == "fastdl":
                         # fastdl asks a few yes/no questions (overwrite / force-download / continue),
                         # all default Y, and loops forever on EOF — feed Y's so it runs unattended.
-                        act_cmd = "fastdl <<< $'Y\\nY\\nY\\nY\\nY\\nY\\nY\\nY' 2>&1"
-                    out, err, rc = _sm.run_as_game_user(remote, short_name, act_cmd, timeout=1800, selfname=selfname)
+                        base = "fastdl <<< $'Y\\nY\\nY\\nY\\nY\\nY\\nY\\nY'"
+                    logf = _action_log_path(short_name, action)
+                    # `> logf` truncates, so each run starts the tail at byte 0; `cat` at the end
+                    # hands the WHOLE output back to this thread anyway, so the audit log and the
+                    # chat-bot completion summary are unchanged by the redirect. `exit $rc` keeps
+                    # LinuxGSM's own exit code rather than cat's.
+                    act_cmd = f"{base} > {logf} 2>&1; rc=$?; cat {logf} 2>/dev/null; exit $rc"
+                    _begin_action_tail(_app, server_id, action, logf, short_name)
+                    rc = None
+                    try:
+                        out, err, rc = _sm.run_as_game_user(remote, short_name, act_cmd,
+                                                            timeout=1800, selfname=selfname)
+                    finally:
+                        # rc is still None if the SSH call raised or timed out, and _end_action_tail
+                        # says so rather than guessing — a 30-minute timeout does not mean the
+                        # update stopped running on the host.
+                        _end_action_tail(_app, server_id, remote, action, rc)
                     ok, detail = (rc == 0), terminal.strip_escapes(out or err or "")
                     gs = db.session.get(GameServer, server_id)
                     log_action(None, f"{action}_complete", target=gs.name if gs else short_name,
@@ -681,6 +703,11 @@ def register(app):
                     # An update/validate/fastdl can restart the server (port cycles) — drop the
                     # cached port scan so the dashboard shows the real state on its next poll.
                     _sm._invalidate_port_scan(remote_id)
+                    # ...and an update is the one thing that moves the installed build, so the
+                    # version the detail page shows must not stay on its pre-update value for the
+                    # rest of the TTL. Dropped whatever the exit code: a half-finished update has
+                    # still changed the files on disk.
+                    _sm.invalidate_game_version(remote_id, short_name)
                     # Updated mods only load after a restart — apply it when empty, else flag pending.
                     if action == "mods-update" and rc == 0 and gs:
                         try:

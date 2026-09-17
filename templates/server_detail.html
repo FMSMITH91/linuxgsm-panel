@@ -13,6 +13,18 @@
       &middot; <span>Port</span> {{ server.port }}
       &middot; <span>Type:</span> {{ server.game_display or server.game_type }}
     </span>
+    {# Which build of the game is on disk. Filled by /api/server/<id>/version after the page has
+       drawn — reading it costs an SSH round trip plus a game query, and this page's rule is that
+       nothing on the render path touches the remote.
+
+       Its OWN line, and present from the first paint with a placeholder, because the alternative
+       shifts the page: appended to the line above it would push that line's wrap point at phone
+       widths, moving every card below it, and /server/1 is audited with CLS as a hard failure.
+       On its own line the text can grow to any length and nothing else moves. #}
+    <div class="text-secondary small">
+      <i class="bi bi-tag"></i> <span>Version</span>
+      <span id="game-version" data-no-i18n>&mdash;</span>
+    </div>
   </div>
   <div class="d-flex align-items-center gap-2">
     <span class="badge" id="status-badge"

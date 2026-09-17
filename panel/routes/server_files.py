@@ -32,7 +32,7 @@ from app import (ALERT_PROVIDERS, _GAME_LIST_CACHE, _LGSM_NAME_MAP, _MAX_UPLOAD_
     _apply_mod_restart, _clean_console_text, _log, _socketio_cors, _sync_toggles_from_cron,
     load_game_list)
 from panel.core.panel_state import (register_server_state)
-from panel.routes._shared import (_server_action_buttons)
+from panel.routes._shared import (_drain_action_output, _server_action_buttons)
 
 # ── State and constants this module OWNS ───────────────────────────────────────────────────────
 # These lived in app.py until the split left it as their only definition and this file as their
@@ -727,6 +727,12 @@ def register(app, supervise):
                                 continue
                             remote = gs.remote
                             try:
+                                # A long panel action (update/validate/backup/…) writes its output
+                                # to its own file on the host, NOT to the game's console log — so
+                                # tail that too while one is running. Without this the console
+                                # stayed silent for the whole of an update the panel had just told
+                                # the operator to watch it for.
+                                _drain_action_output(app, remote, server_id)
                                 log_path = gs.console_log
                                 size_out, _, _ = _sm.run_command(
                                     remote, f"stat -c%s {log_path} 2>/dev/null || echo 0", timeout=5

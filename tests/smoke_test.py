@@ -4331,6 +4331,423 @@ try:
          _sm_core.set_game_priority) = _pa_saved
         _pa_status("offline")
 
+    # ── A long action's output reaches the console the panel told you to watch ───────────────
+    # Accepting an update answers "'update' started — watch the live console for progress." That
+    # was not true of any of the six LONG_ACTIONS. The command ran on its own SSH channel and its
+    # output went into a Python variable, surfacing only in the audit log afterwards, truncated to
+    # 300 characters; the console the message points at is a tail of the GAME's console log, which
+    # an update never writes to. So an operator watching it saw NOTHING for the whole download —
+    # reported as "it says to watch the console for updates, there is nothing that gets sent".
+    #
+    # Four things have to hold, and each is a different way it silently went back to being empty:
+    # the command must redirect through a file, the file must be registered while it runs, the
+    # drain must send only what is new, and the POLLER must actually call the drain.
+    from panel.core.panel_state import _action_output as _ao
+    from panel.routes._shared import (_action_log_path, _begin_action_tail, _drain_action_output,
+                                      _end_action_tail)
+    from panel.routes import server_files as _r_sf
+    import re as _lat_re
+    _ao.clear()
+    _lat_saved = (_sm_core.run_as_game_user, _sm_core.run_command)
+    _lat_cmds, _lat_seen = [], []
+
+    def _lat_emit(event, payload=None, **kw):
+        _lat_seen.append((event, payload, kw.get("room")))
+
+    _lat_sio_saved = app.socketio.emit
+    try:
+        app.socketio.emit = _lat_emit
+
+        # 1. The command LinuxGSM is asked to run, and what was registered while it ran.
+        _lat_during = []
+
+        def _lat_rag(remote, short, cmd, *a, **k):
+            _lat_cmds.append(cmd)
+            _lat_during.append(dict(_ao.get(gs_id) or {}))
+            return ("Local build: 1\nRemote build: 2\nUpdate complete\n", "", 0)
+
+        _sm_core.run_as_game_user = _lat_rag
+        _sm_core.run_command = lambda *a, **k: ("0", "", 0)   # nothing to tail; drains are no-ops
+        with app.app_context():
+            _lat_gs = db.session.get(GameServer, gs_id)
+            _lat_user = _lat_gs.short_name
+            app._run_action(_lat_gs, _lat_gs.remote, "update", None)
+        check("long action: it really ran", _pa_wait(_lat_cmds), "cmds=%s" % _lat_cmds)
+        _lat_logf = _action_log_path(_lat_user, "update")
+        check("long action: its output is redirected through a file the console can tail",
+              _lat_cmds and ("> %s 2>&1" % _lat_logf) in _lat_cmds[0],
+              "ran %r" % (_lat_cmds[0] if _lat_cmds else None))
+        # ...and the whole output must still come BACK to this thread: the audit log entry and the
+        # chat bots' completion message are both built from it, so a redirect that swallowed it
+        # would trade one silence for another.
+        check("long action: the redirect still hands the full output back (cat + LinuxGSM's own rc)",
+              _lat_cmds and "cat %s" % _lat_logf in _lat_cmds[0] and "exit $rc" in _lat_cmds[0],
+              "ran %r" % (_lat_cmds[0] if _lat_cmds else None))
+        check("long action: the output file is registered for tailing WHILE it runs",
+              _lat_during and _lat_during[0].get("path") == _lat_logf
+              and _lat_during[0].get("action") == "update"
+              and _lat_during[0].get("user") == _lat_user,
+              "registered %s" % (_lat_during,))
+        _lat_dl = _pt.time() + 3.0
+        while _pt.time() < _lat_dl and gs_id in _ao:
+            _pt.sleep(0.02)
+        check("long action: ...and deregistered once it's over, so the poller stops asking",
+              gs_id not in _ao, "still registered: %s" % (_ao.get(gs_id),))
+        _lat_markers = [p.get("data") for (e, p, r) in _lat_seen if e == "console_output"]
+        check("long action: the console is told it started and how it ended",
+              any("update started" in (m or "") for m in _lat_markers)
+              and any("update finished successfully" in (m or "") for m in _lat_markers),
+              "markers=%s" % _lat_markers)
+        check("long action: the markers go to THIS server's console room only",
+              all(r == "console_%d" % gs_id for (e, p, r) in _lat_seen if e == "console_output"),
+              "rooms=%s" % [r for (e, p, r) in _lat_seen])
+
+        # 2. The drain itself: new bytes only. A tail that re-sent its window every tick would
+        # fill the console with the same SteamCMD spool over and over.
+        _lat_seen.clear()
+        _lat_file = {"text": ""}
+
+        def _lat_rc(server, command, timeout=30, sudo=None):
+            if "stat -c%s" in command and ".panel-" in command:
+                t = _lat_file["text"]
+                # What the real one-round-trip script prints: the size, then the new bytes.
+                _m = _lat_re.search(r"tail -c \+(\d+)", command)
+                _pos = (int(_m.group(1)) - 1) if _m else 0
+                body = t[_pos:] if len(t) > _pos else ""
+                return ("%d\n%s" % (len(t), body)).strip(), "", 0
+            return ("0", "", 0)
+
+        _sm_core.run_command = _lat_rc
+        with app.app_context():
+            _lat_remote = db.session.get(GameServer, gs_id).remote
+            _begin_action_tail(app, gs_id, "update", _lat_logf, _lat_user)
+            _lat_seen.clear()
+            _lat_file["text"] = "Update required\nDownloading 12%\n"
+            _drain_action_output(app, _lat_remote, gs_id)
+            _lat_first = [p.get("data") for (e, p, r) in _lat_seen if e == "console_output"]
+            _lat_seen.clear()
+            _drain_action_output(app, _lat_remote, gs_id)          # nothing new since
+            _lat_repeat = [p.get("data") for (e, p, r) in _lat_seen if e == "console_output"]
+            _lat_file["text"] += "Downloading 97%\nSuccess\n"
+            _lat_seen.clear()
+            _drain_action_output(app, _lat_remote, gs_id)
+            _lat_second = [p.get("data") for (e, p, r) in _lat_seen if e == "console_output"]
+            _end_action_tail(app, gs_id, _lat_remote, "update", 0)
+        check("console tail: the first drain sends what the action has written so far",
+              _lat_first and "Downloading 12%" in _lat_first[0], "sent %s" % _lat_first)
+        check("console tail: a drain with nothing new sends nothing (no repeated window)",
+              not _lat_repeat, "re-sent %s" % _lat_repeat)
+        check("console tail: the next drain sends ONLY the new lines",
+              _lat_second and "Downloading 97%" in _lat_second[0]
+              and "Downloading 12%" not in _lat_second[0], "sent %s" % _lat_second)
+
+        # 3. The CALLER. Every assertion above passes just as well with a drain nothing invokes —
+        # which is exactly the shape of the original bug. So drive the real console poller: give
+        # it a viewer, register an action, and wait for the bytes to come out of it.
+        _lat_seen.clear()
+        _lat_file["text"] = "SteamCMD: validating\n"
+        with _r_sf._viewers_lock:
+            _r_sf._console_viewers.setdefault(gs_id, set()).add("test-sid")
+        try:
+            _begin_action_tail(app, gs_id, "validate", _lat_logf, _lat_user)
+            _lat_seen.clear()
+            _lat_polled = []
+            _dl = _pt.time() + 8.0
+            while _pt.time() < _dl and not _lat_polled:
+                _lat_polled = [p.get("data") for (e, p, r) in _lat_seen
+                               if e == "console_output" and "validating" in (p.get("data") or "")]
+                _pt.sleep(0.05)
+            check("console poller: it drains a running action's output on its own ticks",
+                  bool(_lat_polled), "the poller never sent it: %s" % _lat_seen)
+        finally:
+            _ao.pop(gs_id, None)
+            with _r_sf._viewers_lock:
+                _r_sf._console_viewers.pop(gs_id, None)
+    finally:
+        app.socketio.emit = _lat_sio_saved
+        (_sm_core.run_as_game_user, _sm_core.run_command) = _lat_saved
+        _ao.clear()
+
+    # ── The Update button and the bulk endpoint must agree about who HAS an update ──────────
+    # They didn't. GameServer.supports_update knows the Call of Duty family is not SteamCMD-based
+    # and has no `update` command at all (_NO_UPDATE_GAMES exists for exactly that), and
+    # /api/servers/bulk-action asks it and skips those servers with "no update support". The
+    # control bar computed the same thing a second time, as `(not cmd_set) or ("update" in
+    # cmd_set)` — which for a server whose command list has not been fetched yet fails open for
+    # EVERY game, the cod family included.
+    #
+    # So the detail page offered Update on a cod server, accepted the click as a long action,
+    # answered "watch the live console for progress", ran a command LinuxGSM does not have, and
+    # threw the error away. One question, two answers, and the button had the wrong one.
+    with app.app_context():
+        _su_remote_id = db.session.get(GameServer, gs_id).remote_id
+        _su_cod = GameServer(remote_id=_su_remote_id, name="smoke-cod", short_name="cod4server",
+                             game_type="cod4", port=28960, installed=True, status="offline")
+        db.session.add(_su_cod)
+        db.session.commit()
+        _su_cod_id = _su_cod.id
+        # No commands cached — the state a freshly imported or installed server is in, and the
+        # only one where the two implementations differed.
+        check("update button: (setup) the cod server has no cached command list",
+              not db.session.get(GameServer, _su_cod_id).get_commands(),
+              "it has one, so this proves nothing about the un-fetched case")
+        check("update button: the model says a cod server has no update command",
+              db.session.get(GameServer, _su_cod_id).supports_update is False,
+              "the model thinks it does")
+        check("update button: ...and a SteamCMD game with no cached list still fails open",
+              db.session.get(GameServer, gs_id).supports_update is True,
+              "hiding Update for a game that has one is the worse failure")
+    _su_html = c.get("/server/%d" % _su_cod_id).get_data(as_text=True)
+    check("update button: the cod server's control bar does NOT offer Update",
+          'data-args=\'["update", "@self", false]\'' not in _su_html,
+          "the button is there — clicking it runs a command LinuxGSM does not have")
+    _su_gmod_html = c.get("/server/%d" % gs_id).get_data(as_text=True)
+    check("update button: ...while a SteamCMD game's bar still does",
+          'data-args=\'["update", "@self", false]\'' in _su_gmod_html,
+          "Update vanished for a game that supports it")
+    # The two paths agree now, which is the actual property. Asked via the endpoint that reads
+    # the model, so a regression in either implementation shows up as a disagreement.
+    _su_bulk = (c.post("/api/servers/bulk-action",
+                       json={"action": "update", "server_ids": [_su_cod_id, gs_id]}).get_json()
+                or {})
+    _su_skipped = [x.get("server_id") for x in _su_bulk.get("skipped", [])]
+    _su_queued = [x.get("server_id") for x in _su_bulk.get("queued", [])]
+    check("update button: the bulk endpoint skips the same server the bar hides it for",
+          _su_cod_id in _su_skipped and gs_id in _su_queued,
+          "skipped=%s queued=%s" % (_su_skipped, _su_queued))
+    with app.app_context():
+        db.session.delete(db.session.get(GameServer, _su_cod_id))
+        db.session.commit()
+
+    # ── Which build of the game is installed ────────────────────────────────────────────────
+    # "Can you show the version of the game that's installed" — and no single source answers it
+    # for the games this panel manages. SteamCMD records an exact buildid on disk and the running
+    # game reports a friendlier string over its query protocol; the Call of Duty family has no
+    # SteamCMD install at all (it is in _NO_UPDATE_GAMES for the same reason), so for those the
+    # query is the ONLY answer that exists. Both are read, and the preference between them, the
+    # fallbacks, and what happens when neither answers are each asserted — "unknown" is a real
+    # outcome here and must not read as a confident wrong number.
+    from panel.ops.ssh_manager import game as _gv_mod
+    _gv_saved = _sm_core.run_command
+    _gv_rag_saved = _sm_core.run_as_game_user
+    _gv_mod.invalidate_game_version()
+    try:
+        # The manifest as steam really writes it — tab-separated quoted pairs — plus a DECOY that
+        # sorts first. serverfiles/steamapps/ can hold a game's manifest and a dependency's, and
+        # picking whichever globs first reports a build number that never moves on an update.
+        _gv_acf = ('"AppState"\n{\n\t"appid"\t\t"4020"\n\t"name"\t\t"Garrys Mod DS"\n'
+                   '\t"LastUpdated"\t\t"1757900000"\n\t"buildid"\t\t"19765832"\n}\n')
+        _gv_calls = []
+
+        def _gv_disk(with_manifest=True, appid_in_cfg=True):
+            def _rc(server, command, timeout=30, sudo=None):
+                _gv_calls.append(command)
+                if "appmanifest" in command:      # the on-disk read
+                    if not with_manifest:
+                        return "", "", 0
+                    out = []
+                    if appid_in_cfg:
+                        out.append("appid=4020")
+                    out += ["build=19765832", "updated=1757900000"]
+                    return "\n".join(out), "", 0
+                if "gamedig" in command:          # the live query
+                    return "", "", 0
+                return "", "", 0
+            return _rc
+
+        _sm_core.run_command = _gv_disk()
+        with app.app_context():
+            _gv_gs = db.session.get(GameServer, gs_id)
+            _gv_remote, _gv_user = _gv_gs.remote, _gv_gs.short_name
+            _gv1 = _gv_mod.game_version(_gv_remote, _gv_user, game_type=_gv_gs.game_type,
+                                        port=_gv_gs.port, query_type="csgo",
+                                        selfname=_gv_gs.lgsm_name, force=True)
+        check("game version: the Steam build on disk is read when the game isn't answering",
+              _gv1.get("build") == "19765832" and _gv1.get("label") == "build 19765832",
+              "got %s" % _gv1)
+        check("game version: the build is dated, so a stale install is visible as one",
+              "files updated 2025-09-15 (UTC)" in (_gv1.get("detail") or ""),
+              "got %r" % _gv1.get("detail"))
+        check("game version: the appid comes from LinuxGSM's own config, not whichever "
+              "manifest globs first",
+              any("lgsm/config-lgsm/%s/_default.cfg" % _gv_gs.lgsm_name in _c for _c in _gv_calls),
+              "commands were %s" % [_c[:80] for _c in _gv_calls])
+
+        # The running game's own answer wins: it is the version players see, and it is the only
+        # one a non-SteamCMD game has.
+        def _gv_with_query(server, command, timeout=30, sudo=None):
+            if "gamedig" in command:
+                return "1.7", "", 0
+            return _gv_disk()(server, command, timeout, sudo)
+
+        _sm_core.run_command = _gv_with_query
+        with app.app_context():
+            _gv_gs = db.session.get(GameServer, gs_id)
+            _gv2 = _gv_mod.game_version(_gv_remote, _gv_user, game_type=_gv_gs.game_type,
+                                        port=_gv_gs.port, query_type="csgo",
+                                        selfname=_gv_gs.lgsm_name, force=True)
+        check("game version: the version the running game reports is what's shown",
+              _gv2.get("label") == "1.7" and _gv2.get("reported") == "1.7", "got %s" % _gv2)
+        check("game version: ...and the exact build is kept alongside it, not discarded",
+              _gv2.get("build") == "19765832"
+              and "Steam build 19765832" in (_gv2.get("detail") or ""), "got %s" % _gv2)
+
+        # A game with neither: no SteamCMD manifest, not answering. The page must show nothing
+        # rather than a number carried over from another server or another read.
+        _sm_core.run_command = _gv_disk(with_manifest=False)
+        with app.app_context():
+            _gv_gs = db.session.get(GameServer, gs_id)
+            _gv3 = _gv_mod.game_version(_gv_remote, _gv_user, game_type=_gv_gs.game_type,
+                                        port=_gv_gs.port, query_type="csgo",
+                                        selfname=_gv_gs.lgsm_name, force=True)
+        check("game version: neither source answering is an empty label, not a wrong number",
+              _gv3.get("label") == "" and not _gv3.get("build"), "got %s" % _gv3)
+
+        # ...and that miss must not be CACHED: an unreachable host and a mid-install server both
+        # look like this, and pinning "unknown" for the whole TTL outlasts either.
+        _sm_core.run_command = _gv_with_query
+        with app.app_context():
+            _gv_gs = db.session.get(GameServer, gs_id)
+            _gv4 = _gv_mod.game_version(_gv_remote, _gv_user, game_type=_gv_gs.game_type,
+                                        port=_gv_gs.port, query_type="csgo",
+                                        selfname=_gv_gs.lgsm_name)
+        check("game version: a total miss isn't cached — the next read tries again",
+              _gv4.get("label") == "1.7", "got %s" % _gv4)
+
+        # A real answer IS cached (this page is opened a lot, the answer moves a few times a
+        # year) — and an update has to drop it, or the panel shows the pre-update build forever.
+        _gv_calls.clear()
+        _sm_core.run_command = lambda *a, **k: (_gv_calls.append(1), ("", "", 0))[1]
+        with app.app_context():
+            _gv_gs = db.session.get(GameServer, gs_id)
+            _gv5 = _gv_mod.game_version(_gv_remote, _gv_user, game_type=_gv_gs.game_type,
+                                        port=_gv_gs.port, query_type="csgo",
+                                        selfname=_gv_gs.lgsm_name)
+        check("game version: a known answer is served from cache, with no SSH at all",
+              _gv5.get("label") == "1.7" and not _gv_calls, "calls=%d %s" % (len(_gv_calls), _gv5))
+        _gv_mod.invalidate_game_version(_gv_remote.id, _gv_user)
+        with app.app_context():
+            _gv_gs = db.session.get(GameServer, gs_id)
+            _gv_mod.game_version(_gv_remote, _gv_user, game_type=_gv_gs.game_type,
+                                 port=_gv_gs.port, query_type="csgo",
+                                 selfname=_gv_gs.lgsm_name)
+        check("game version: invalidating it forces a fresh read (what an update relies on)",
+              bool(_gv_calls), "it still answered from cache")
+        # An invalidation aimed at ANOTHER instance on the same host must not clear this one.
+        _sm_core.run_command = _gv_with_query
+        with app.app_context():
+            _gv_gs = db.session.get(GameServer, gs_id)
+            _gv_mod.game_version(_gv_remote, _gv_user, game_type=_gv_gs.game_type,
+                                 port=_gv_gs.port, query_type="csgo",
+                                 selfname=_gv_gs.lgsm_name, force=True)
+        _gv_mod.invalidate_game_version(_gv_remote.id, "some-other-instance")
+        _gv_calls.clear()
+        _sm_core.run_command = lambda *a, **k: (_gv_calls.append(1), ("", "", 0))[1]
+        with app.app_context():
+            _gv_gs = db.session.get(GameServer, gs_id)
+            _gv6 = _gv_mod.game_version(_gv_remote, _gv_user, game_type=_gv_gs.game_type,
+                                        port=_gv_gs.port, query_type="csgo",
+                                        selfname=_gv_gs.lgsm_name)
+        check("game version: invalidating another instance on the host leaves this one cached",
+              _gv6.get("label") == "1.7" and not _gv_calls, "calls=%d" % len(_gv_calls))
+
+        # THE CALL SITE. Everything above passes just as well if nothing ever invokes the
+        # invalidator — and then the panel serves the pre-update build for the rest of the TTL,
+        # which is the one moment the number is guaranteed wrong. So run a real long action and
+        # check the cached answer is gone afterwards. (A mutation removing the call from
+        # _bg_action passed every other check in this block.)
+        _sm_core.run_command = _gv_with_query
+        with app.app_context():
+            _gv_gs = db.session.get(GameServer, gs_id)
+            _gv_mod.game_version(_gv_remote, _gv_user, game_type=_gv_gs.game_type,
+                                 port=_gv_gs.port, query_type="csgo",
+                                 selfname=_gv_gs.lgsm_name, force=True)
+        check("game version: (setup) there is a cached answer for the update to drop",
+              bool(_gv_mod._version_cache), "nothing cached — the next check proves nothing")
+        _gv_done = []
+        _sm_core.run_as_game_user = lambda *a, **k: (_gv_done.append(1), ("Update complete", "", 0))[1]
+        try:
+            with app.app_context():
+                _gv_gs = db.session.get(GameServer, gs_id)
+                app._run_action(_gv_gs, _gv_gs.remote, "update", None)
+            _pa_wait(_gv_done)
+            _gv_dl = _pt.time() + 5.0
+            while _pt.time() < _gv_dl and _gv_mod._version_cache:
+                _pt.sleep(0.02)
+            check("game version: running an update drops the cached build it just changed",
+                  not _gv_mod._version_cache,
+                  "still cached after the update: %s" % dict(_gv_mod._version_cache))
+        finally:
+            _sm_core.run_as_game_user = _gv_rag_saved
+
+        # Deleting the host must forget its versions. SQLite hands a deleted row's id to the next
+        # INSERT, so a new host can arrive with the same id — and a cache keyed by host id would
+        # then show ITS game the deleted one's build. An event on the row's deletion, so it holds
+        # however the host is removed rather than only through the route that was remembered.
+        _sm_core.run_command = _gv_with_query
+        with app.app_context():
+            _gv_dead = RemoteServer(name="gv-doomed", host="192.0.2.77", port=22,
+                                    username="root", auth_method="key", auth_credential="")
+            db.session.add(_gv_dead)
+            db.session.commit()
+            _gv_dead_id = _gv_dead.id
+            _gv_mod.game_version(_gv_dead, "gmodserver", game_type="gmod", port=27015,
+                                 query_type="csgo", selfname="gmodserver", force=True)
+            check("game version: (setup) the doomed host has a cached version",
+                  any(k[0] == _gv_dead_id for k in _gv_mod._version_cache),
+                  "nothing cached for it — the check below proves nothing")
+            db.session.delete(db.session.get(RemoteServer, _gv_dead_id))
+            db.session.commit()
+        check("game version: deleting a host forgets its versions (its id gets reused)",
+              not any(k[0] == _gv_dead_id for k in _gv_mod._version_cache),
+              "a recycled host id would inherit: %s" % dict(_gv_mod._version_cache))
+
+        # The endpoint the page actually calls. It passes the server's OWN query_type through,
+        # so set one — csgo has no entry in the built-in gamedig map, and without the override
+        # the route would be asserting a short-circuit rather than the query.
+        with app.app_context():
+            db.session.get(GameServer, gs_id).query_type = "csgo"
+            db.session.commit()
+        _gv_mod.invalidate_game_version()
+        _sm_core.run_command = _gv_with_query
+        _gvj = (c.get("/api/server/%d/version" % gs_id).get_json() or {})
+        check("version api: it answers with the label the page shows",
+              _gvj.get("label") == "1.7" and _gvj.get("build") == "19765832", "got %s" % _gvj)
+        # An unreachable host is the normal case for this endpoint, not a server error: it is
+        # fetched on every load of a page that is otherwise fine, and a 500 there is noise in the
+        # log and an error in the browser console for something that is only ever a nicety.
+        #
+        # TWO checks, because the first one alone was vacuous. game_version swallows an SSH
+        # failure itself, so an unreachable host never reaches the route's own handler — the
+        # assertion below held with that handler deleted. The second stubs the read to raise, and
+        # is the one that actually exercises it.
+        _gv_mod.invalidate_game_version()
+
+        def _gv_boom(*a, **k):
+            raise ConnectionError("host unreachable")
+
+        _sm_core.run_command = _gv_boom
+        _gvr = c.get("/api/server/%d/version" % gs_id)
+        check("version api: an unreachable host is 200 with an empty label, not a 500",
+              _gvr.status_code == 200 and (_gvr.get_json() or {}).get("label") == "",
+              "got %s %s" % (_gvr.status_code, _gvr.get_json()))
+        _gv_real = _gv_mod.game_version
+        try:
+            _gv_mod.game_version = _gv_boom
+            _gvr2 = c.get("/api/server/%d/version" % gs_id)
+            check("version api: ...and a read that RAISES is handled there too, not a 500",
+                  _gvr2.status_code == 200 and (_gvr2.get_json() or {}).get("label") == "",
+                  "got %s %s" % (_gvr2.status_code, _gvr2.get_json()))
+        finally:
+            _gv_mod.game_version = _gv_real
+    finally:
+        _sm_core.run_command = _gv_saved
+        _sm_core.run_as_game_user = _gv_rag_saved
+        _gv_mod.invalidate_game_version()
+        with app.app_context():
+            db.session.get(GameServer, gs_id).query_type = None
+            db.session.commit()
+
     # ── /api/server/<id> reports the player count the rest of the panel uses ────────────────
     # It used to run `cat <console_log> | grep -c '...'` over SSH and then look for a line holding
     # both "players" and "has". grep -c prints a bare number, so the match was impossible: 0/0 for

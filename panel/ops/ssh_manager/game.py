@@ -611,3 +611,189 @@ def get_server_status(server, game_server):
             if "stopped" in low:
                 return "offline"
     return "unknown"
+
+
+# ── Which build of the game is actually installed ─────────────────────────────────────────────
+# Two independent answers, because no single one covers the games this panel manages:
+#
+#   ON DISK   SteamCMD records the installed build in serverfiles/steamapps/appmanifest_<appid>.acf
+#             — the same "buildid" LinuxGSM's own `update` compares against Steam. It is a build
+#             number rather than a marketing version, but it is exact, it is there whether or not
+#             the server is running, and it moves every time an update lands.
+#
+#   REPORTED  The running game answers a query with the version string players see (Source's
+#             A2S_INFO, idTech3's getstatus \shortversion\, Minecraft's handshake). That is the
+#             friendlier number, and for the NON-SteamCMD games — the whole Call of Duty family,
+#             which has no `update` command at all — it is the only one that exists.
+#
+# So read both, prefer the reported string for display, and keep the build alongside it. Neither
+# read is on a render path: the detail page fetches this once, asynchronously, after it has drawn.
+_version_cache = {}
+_VERSION_TTL = 600        # a build only changes when an update runs, and that invalidates it anyway
+
+
+def _steam_build(server, user, selfname=None):
+    """{appid, build, updated} from the SteamCMD app manifest on disk, or {} for a game that has
+    none (non-Steam games, or files not downloaded yet). One SSH round trip. Never raises.
+
+    The appid comes from LinuxGSM's own config rather than from whichever manifest happens to
+    sort first: serverfiles/steamapps/ can hold several (a game plus a dependency), and picking
+    the wrong one reports a build number that never moves when the game updates."""
+    selfname = selfname or user
+    sh = (
+        f"cd /home/{user} 2>/dev/null || exit 0; "
+        # appid="740" in _default.cfg (quoted or not) — keep only the digits.
+        f"a=$(grep -hoE '^[[:space:]]*appid=[\"'\"'\"']?[0-9]+' "
+        f"lgsm/config-lgsm/{selfname}/_default.cfg 2>/dev/null | head -1 | tr -dc 0-9); "
+        "m=\"\"; "
+        "if [ -n \"$a\" ] && [ -f \"serverfiles/steamapps/appmanifest_$a.acf\" ]; then "
+        "m=\"serverfiles/steamapps/appmanifest_$a.acf\"; fi; "
+        # Fall back to the only manifest there is, for a game whose config names no appid.
+        "if [ -z \"$m\" ]; then for f in serverfiles/steamapps/appmanifest_*.acf; do "
+        "if [ -f \"$f\" ]; then m=\"$f\"; break; fi; done; fi; "
+        "if [ -n \"$m\" ]; then awk -F'\"' "
+        "'$2==\"appid\"{print \"appid=\" $4} $2==\"buildid\"{print \"build=\" $4} "
+        "$2==\"LastUpdated\"{print \"updated=\" $4}' \"$m\"; fi; "
+        # Paper/Purpur/Spigot write the build they are running to this file, which is the only
+        # on-disk version a Minecraft server has — its jar carries it inside the archive.
+        "if [ -f serverfiles/version_history.json ]; then sed -n "
+        "'s/.*\"currentVersion\"[[:space:]]*:[[:space:]]*\"\\([^\"]*\\)\".*/reported=\\1/p' "
+        "serverfiles/version_history.json | head -1; fi"
+    )
+    try:
+        out, _, _ = _core.run_command(server, f"sudo -u {user} bash -c {_core._quote(sh)}",
+                                      timeout=20, sudo=False)
+    except Exception:
+        return {}
+    got = {}
+    for line in (out or "").splitlines():
+        key, _, val = line.strip().partition("=")
+        if key in ("appid", "build", "updated", "reported") and val:
+            got[key] = val[:64]
+    if "updated" in got:
+        got["updated"] = _int_or_none(got["updated"])
+    return got
+
+
+def _queried_version(server, user, game_type=None, port=None, query_type=None):
+    """The version string the RUNNING game reports, via gamedig, or "" if it can't be read.
+
+    Several protocols spell it differently and some report it as a number, so take the first of
+    the known fields that has a value and stringify it — rather than trusting one path and showing
+    nothing for every game that uses another."""
+    gdtype = cron._gamedig_type(game_type, query_type)
+    if not gdtype or not port:
+        return ""
+    jqf = ('[.version, .raw.version, .raw.shortversion, .raw.gamever, '
+           '.raw.vanilla.raw.version.name] | map(select(. != null and . != "") | tostring) '
+           '| .[0] // empty')
+    cmd = (f"gamedig --type {gdtype} {_core._gamedig_host(server)}:{int(port)} 2>/dev/null "
+           f"| jq -r {_core._quote(jqf)} 2>/dev/null")
+    try:
+        out, _, _ = _core.run_command(server, f"sudo -u {user} bash -c {_core._quote(cmd)}",
+                                      timeout=25, sudo=False)
+    except Exception:
+        return ""
+    # A version is a short token; anything longer is gamedig noise that got past the redirect.
+    val = (out or "").strip().splitlines()
+    return val[0].strip()[:48] if val and val[0].strip() != "null" else ""
+
+
+def _version_detail(info):
+    """The long form of a version, for the hover text — "where did this number come from".
+
+    Built here rather than in the browser because it is prose assembled from several optional
+    parts, and the panel's UI strings are translated by matching whole text nodes against a
+    catalog: a sentence stitched together in JavaScript from three dynamic pieces could never
+    match one. One string, one place, and the page only has to display it."""
+    bits = []
+    if info.get("reported"):
+        bits.append("reported by the running server")
+    if info.get("build"):
+        bits.append("Steam build %s" % info["build"])
+    if info.get("appid"):
+        bits.append("app %s" % info["appid"])
+    if info.get("updated"):
+        # Date only: the hour Steam happened to push a build is noise next to which build it is.
+        # UTC, not localtime: the panel process's timezone has no business deciding what date a
+        # build carries, and the browser reading it is frequently in a different one anyway.
+        bits.append("files updated %s (UTC)"
+                    % time.strftime("%Y-%m-%d", time.gmtime(info["updated"])))
+    return " \u00b7 ".join(bits)
+
+
+def game_version(server, user, game_type=None, port=None, query_type=None, selfname=None,
+                 force=False):
+    """What's installed for one game server: {reported, build, appid, updated, label}.
+
+    `reported` is the version the game itself answers with (empty when it's offline or doesn't
+    answer), `build` the SteamCMD build id on disk (empty for a non-Steam game), `updated` the
+    epoch Steam last updated those files, and `label` the single string to show — which is why
+    it's built here and not in a template: "unknown" is a real answer for a game that is neither
+    SteamCMD-based nor currently running, and the caller shouldn't have to re-derive that.
+
+    Cached for _VERSION_TTL, because nothing but an update moves any of it. Never raises."""
+    key = getattr(server, "id", None), user
+    now = time.time()
+    if not force:
+        hit = _version_cache.get(key)
+        if hit and hit[0] > now:
+            return hit[1]
+    info = _steam_build(server, user, selfname=selfname)
+    reported = _queried_version(server, user, game_type, port, query_type) or info.get("reported", "")
+    out = {"reported": reported, "build": info.get("build", ""),
+           "appid": info.get("appid", ""), "updated": info.get("updated")}
+    if reported:
+        out["label"] = reported
+    elif out["build"]:
+        out["label"] = f"build {out['build']}"
+    else:
+        out["label"] = ""
+    out["detail"] = _version_detail(out)
+    # Don't cache a total miss: it's what an unreachable host and a mid-install server both look
+    # like, and pinning "unknown" for ten minutes outlasts either.
+    if out["label"]:
+        _version_cache[key] = (now + _VERSION_TTL, out)
+    return out
+
+
+def _register_version_invalidation():
+    """Forget a host's cached versions when its row is DELETED.
+
+    SQLite hands a deleted row's id straight to the next INSERT — plain INTEGER PRIMARY KEY is the
+    rowid, no AUTOINCREMENT — so a newly added host inherits whatever the deleted one left in any
+    map keyed by host id. panel_state's note on that says it has already bitten this codebase
+    twice, both times showing a new server the previous one's state. Here it would take a recycled
+    host id AND a game user of the same name to surface, but the whole point of a version readout
+    is that the number is right, so it gets closed rather than reasoned about.
+
+    An event rather than a call in the delete route, for the reason the SSH pool's twin above
+    gives: the invariant belongs where the row goes away, not at each of the places that remove
+    one. Never raises — a cache that failed to prune must not turn into a failed commit."""
+    from sqlalchemy import event
+    from panel.db.models import RemoteServer
+
+    @event.listens_for(RemoteServer, "after_delete")
+    def _forget_versions(_mapper, _connection, target):
+        try:
+            invalidate_game_version(target.id)
+        except Exception:
+            _core._log.debug("version-cache prune failed for a deleted remote", exc_info=True)
+
+
+def invalidate_game_version(remote_id=None, user=None):
+    """Forget cached versions so the next read is fresh — call after an update/validate, which is
+    the one thing that changes the answer.
+
+    The cache is keyed by (host id, game user), which is what the instance actually is: the same
+    short_name can exist on two different hosts. Called with neither argument it clears everything,
+    which is the right blast radius for a host-wide change."""
+    if remote_id is None and user is None:
+        _version_cache.clear()
+        return
+    for k in [k for k in _version_cache
+              if (remote_id is None or k[0] == remote_id) and (user is None or k[1] == user)]:
+        _version_cache.pop(k, None)
+
+
+_register_version_invalidation()

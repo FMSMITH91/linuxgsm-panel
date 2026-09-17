@@ -1056,6 +1056,10 @@ check("register_routes: helper closures inside it <= %d (currently %d)"
       % (_HELPER_CEILING, _rr_helpers),
       _rr_helpers <= _HELPER_CEILING,
       "it went UP — a new helper belongs at module level, not nested in the route table")
+# 219, was 218: /api/server/<id>/version is a genuinely new view — which build of the game is
+# installed (the Steam manifest on disk, plus the version the running game reports). Its own
+# endpoint rather than a field on /stats, which polls every few seconds: this costs an SSH read
+# and a game query, and the answer only moves when an update runs.
 # 217, was 216: /users/invite/<id>/revoke — an invite could be minted but not taken back, so a
 # link sent to the wrong address could only be waited out (up to the 30-day max TTL).
 # 218, was 217: /servers/install is a genuinely new view — the install form moved off
@@ -1073,8 +1077,8 @@ check("register_routes: helper closures inside it <= %d (currently %d)"
 # password is held on until it sets its own). This total exists to catch a view VANISHING during a
 # move, so adding one is a deliberate bump — and url_map_baseline.json's diff is the record of what
 # the new route actually is.
-check("register_routes: every one of the 218 views is still accounted for",
-      len(_rr_views) + _MOVED_VIEWS == 218,
+check("register_routes: every one of the 219 views is still accounted for",
+      len(_rr_views) + _MOVED_VIEWS == 219,
       "views inside=%d, moved out=%d" % (len(_rr_views), _MOVED_VIEWS))
 # These two use current_app, which only equals the closed-over `app` inside a request — every
 # caller is a view, so that holds. If they drift back inside a closure, the reasoning stops being
