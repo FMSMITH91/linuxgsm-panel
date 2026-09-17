@@ -4468,6 +4468,85 @@ try:
         (_sm_core.run_as_game_user, _sm_core.run_command) = _lat_saved
         _ao.clear()
 
+    # ── A long action's output survives a reload, and keeps LinuxGSM's colour ────────────────
+    # Two follow-ups to the tail above, both reported straight after it shipped.
+    #
+    # "when you refresh the page after i did update...those messages went away" — and they did.
+    # The socket reaches only the pages open at the time, and /api/console rebuilds a console by
+    # tailing the GAME's console log, which a panel action never writes to. So the output existed
+    # in exactly one place: the DOM of whichever tab happened to be open.
+    #
+    # "in putty when i run a linuxgsm command it will show it in color" — LinuxGSM colours its own
+    # output ([  OK  ] green, [ FAIL ] red) and every display path ran it through strip_escapes,
+    # which is right for the paths that PARSE this text and wrong for the one showing it to a
+    # person.
+    from panel.core.panel_state import _console_backlog as _cb
+    from panel.routes._shared import (_CONSOLE_BACKLOG_MAX, _console_push)
+    _cb.clear()
+    _bl_saved = _sm_core.run_command
+    try:
+        _console_push(app, gs_id, "[panel] update started — its output follows.")
+        _console_push(app, gs_id, "\x1b[32m[  OK  ]\x1b[0m Update complete")
+        check("console backlog: what the panel pushed is remembered, not only broadcast",
+              len(_cb.get(gs_id, [])) == 2, "backlog=%s" % (_cb.get(gs_id),))
+        # A reload asks /api/console. The host is unreachable in this suite, which is the case
+        # that matters most: an update's output is exactly what you still want to read when the
+        # server it was updating is down.
+        _sm_core.run_command = lambda *a, **k: ("", "", 1)
+        _blj = c.get("/api/console/%d" % gs_id).get_json() or {}
+        check("console backlog: a reload gets it back from /api/console",
+              any("update started" in ln for ln in _blj.get("panel_lines", [])),
+              "panel_lines=%s" % _blj.get("panel_lines"))
+        check("console backlog: ...in its OWN field, not spliced into the game log's window",
+              _blj.get("lines") == [] and "panel_lines" in _blj,
+              "lines=%s" % (_blj.get("lines"),))
+        check("console backlog: the colour survives the round trip to the page",
+              any("\x1b[32m" in ln for ln in _blj.get("panel_lines", [])),
+              "panel_lines=%s" % _blj.get("panel_lines"))
+        # Bounded — this must never quietly become a second copy of the log.
+        for _i in range(_CONSOLE_BACKLOG_MAX + 120):
+            _console_push(app, gs_id, "line %d" % _i)
+        check("console backlog: it is capped, and keeps the NEWEST lines",
+              len(_cb[gs_id]) == _CONSOLE_BACKLOG_MAX
+              and _cb[gs_id][-1] == "line %d" % (_CONSOLE_BACKLOG_MAX + 119),
+              "len=%d last=%r" % (len(_cb[gs_id]), _cb[gs_id][-1]))
+
+        # End to end: what the DRAIN sends for a LinuxGSM-coloured line. The words must be intact
+        # and the colour must be canonical — the browser splits on ESC[<codes>m and nothing else,
+        # so a stray erase-line or OSC reaching it renders as visible junk.
+        _cb.clear()
+        _col_file = {"text": "\x1b[0;32m[  OK  ]\x1b[0m Starting\x1b[K\n\x1b]0;steamcmd\x07done\n"}
+
+        def _col_rc(server, command, timeout=30, sudo=None):
+            if "stat -c%s" in command and ".panel-" in command:
+                t = _col_file["text"]
+                _m = _lat_re.search(r"tail -c \+(\d+)", command)
+                _pos = (int(_m.group(1)) - 1) if _m else 0
+                return ("%d\n%s" % (len(t), t[_pos:] if len(t) > _pos else "")).strip(), "", 0
+            return ("0", "", 0)
+
+        _sm_core.run_command = _col_rc
+        with app.app_context():
+            _col_remote = db.session.get(GameServer, gs_id).remote
+            _begin_action_tail(app, gs_id, "update", "/home/x/.panel-update.log", "csgoserver")
+            _drain_action_output(app, _col_remote, gs_id)
+            _ao.pop(gs_id, None)
+        _col_sent = "\n".join(_cb.get(gs_id, []))
+        check("console colour: LinuxGSM's [  OK  ] reaches the page still green",
+              "\x1b[32m[  OK  ]\x1b[0m" in _col_sent, "sent %r" % _col_sent)
+        check("console colour: ...and the erase-line and window-title escapes do NOT",
+              "\x1b[K" not in _col_sent and "\x1b]" not in _col_sent
+              and "steamcmd" not in _col_sent, "sent %r" % _col_sent)
+        # Everything that is not colour must be gone: the browser builds text nodes from what is
+        # between the SGR sequences, so any other control byte would be rendered literally.
+        _col_bare = _lat_re.sub(r"\x1b\[[0-9;]*m", "", _col_sent)
+        check("console colour: no control byte but the colour itself survives the drain",
+              not any(ord(ch) < 32 and ch != "\n" for ch in _col_bare), "bare %r" % _col_bare)
+    finally:
+        _sm_core.run_command = _bl_saved
+        _cb.clear()
+        _ao.clear()
+
     # ── The Update button and the bulk endpoint must agree about who HAS an update ──────────
     # They didn't. GameServer.supports_update knows the Call of Duty family is not SteamCMD-based
     # and has no `update` command at all (_NO_UPDATE_GAMES exists for exactly that), and

@@ -31,7 +31,7 @@ from panel.core.validation import (_attachment_header)
 from app import (ALERT_PROVIDERS, _GAME_LIST_CACHE, _LGSM_NAME_MAP, _MAX_UPLOAD_BYTES,
     _apply_mod_restart, _clean_console_text, _log, _socketio_cors, _sync_toggles_from_cron,
     load_game_list)
-from panel.core.panel_state import (register_server_state)
+from panel.core.panel_state import (_console_backlog, register_server_state)
 from panel.routes._shared import (_drain_action_output, _server_action_buttons)
 
 # ── State and constants this module OWNS ───────────────────────────────────────────────────────
@@ -624,7 +624,12 @@ def register(app, supervise):
             lines = _clean_console_text(out).split("\n") if rc == 0 else []
         except Exception:
             lines = []
-        return jsonify({"lines": lines})
+        # What the PANEL pushed into this console (a long action's markers and output) — its own
+        # field, not spliced into `lines`. Two reasons: the browser de-duplicates `lines` by
+        # matching the overlap between successive windows, and a block that is stable at the end
+        # of every response would defeat that; and these did not come from the file being tailed,
+        # so a caller that wants the game log verbatim still gets exactly it.
+        return jsonify({"lines": lines, "panel_lines": list(_console_backlog.get(server_id, []))})
 
     @app.route("/api/command/<int:server_id>", methods=["POST"])
     @login_required

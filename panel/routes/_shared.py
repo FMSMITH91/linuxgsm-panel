@@ -13,7 +13,8 @@ broken route is the exact failure this repo keeps finding; here the F821 gate wa
 from flask import (jsonify)
 from flask_login import (current_user)
 from panel.core.clock import (utcnow)
-from panel.core.panel_state import (_action_output, _full_backup_lock, _game_backup_status)
+from panel.core.panel_state import (_action_output, _console_backlog, _full_backup_lock,
+    _game_backup_status)
 from panel.db.models import (GameServer, RemoteServer, db)
 from panel.ops import (backup as bk)
 from panel.ops.ssh_manager import (get_server_status, mod_restart_decision, player_count as
@@ -452,14 +453,32 @@ def _action_log_path(short_name, action):
     return f"/home/{short_name}/.panel-{action}.log"
 
 
+# How many pushed lines to keep per server for replay after a reload. A `validate` on a large
+# game is a few hundred lines of SteamCMD spool; this holds one comfortably without becoming a
+# place anyone would mistake for the log.
+_CONSOLE_BACKLOG_MAX = 600
+
+
 def _console_push(app, server_id, text):
-    """Push text into a server's live console for whoever has it open. Best-effort.
+    """Push text into a server's live console for whoever has it open, and remember it.
 
     Goes to the same `console_output` event and `console_{id}` room the console poller uses, so
     the browser needs no new handling and the lines land in its scrollback with everything else.
-    Fully swallowed: a socket problem must never be what fails an update."""
+    Fully swallowed: a socket problem must never be what fails an update.
+
+    It is also kept in _console_backlog, because the socket reaches only the pages that are open
+    RIGHT NOW. /api/console rebuilds a console from the game's console log, which a panel action
+    never writes to — so before this, reloading the page after an update threw away everything the
+    update had said."""
     if not text:
         return
+    try:
+        buf = _console_backlog.setdefault(server_id, [])
+        buf.extend(ln for ln in str(text).split("\n") if ln.strip())
+        if len(buf) > _CONSOLE_BACKLOG_MAX:
+            del buf[:len(buf) - _CONSOLE_BACKLOG_MAX]
+    except Exception:
+        _log.debug("console backlog append failed for server %s", server_id, exc_info=True)
     try:
         sio = getattr(app, "socketio", None)
         if sio is not None:
@@ -505,7 +524,9 @@ def _drain_action_output(app, remote, server_id):
         pos = 0
         body = ""
     if body.strip():
-        _console_push(app, server_id, terminal.strip_escapes(body))
+        # render_colour, not strip_escapes: LinuxGSM colours its output and that is most of what
+        # makes a long update readable at a glance. The escapes that are NOT colour still go.
+        _console_push(app, server_id, terminal.render_colour(body))
     st["pos"] = min(size, pos + _ACTION_TAIL_CHUNK)
     return True
 

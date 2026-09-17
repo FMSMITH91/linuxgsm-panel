@@ -292,13 +292,50 @@ function _newConsoleLines(have, incoming) {
   return incoming;
 }
 
+// LinuxGSM colours its output — [  OK  ] green, [ FAIL ] red — and the server now keeps that as
+// canonical ESC[<codes>m and nothing else (see panel/core/terminal.py render_colour). So there is
+// one trivial pattern to split on here, not a terminal to emulate.
+//
+// BUILT AS NODES, NEVER innerHTML. This text is the game's console: player names and chat land in
+// it verbatim, so it is attacker-authored. textContent per run keeps that inert — the same
+// property the line had when it was one textContent assignment, which is why this must not become
+// a string of <span>s however much shorter that would read.
+var _SGR_RE = /\x1b\[([0-9;]*)m/g;
+
+function _ansiRun(parent, text, codes) {
+  if (!text) return;
+  // Digits only, from the server's own allowlist — but re-checked here so nothing that reached
+  // the payload can ever become part of a class name.
+  var cls = (codes || '').split(';')
+    .filter(function (c) { return /^[0-9]{1,3}$/.test(c) && c !== '0'; })
+    .map(function (c) { return 'ansi-' + c; });
+  if (!cls.length) { parent.appendChild(document.createTextNode(text)); return; }
+  var span = document.createElement('span');
+  span.className = cls.join(' ');
+  span.textContent = text;
+  parent.appendChild(span);
+}
+
+function renderAnsi(el, line) {
+  // The overwhelmingly common case — a game console line with no colour at all.
+  if (line.indexOf('\x1b[') < 0) { el.textContent = line; return; }
+  var last = 0, codes = '', m;
+  _SGR_RE.lastIndex = 0;
+  while ((m = _SGR_RE.exec(line)) !== null) {
+    _ansiRun(el, line.slice(last, m.index), codes);
+    codes = m[1];
+    last = _SGR_RE.lastIndex;
+  }
+  _ansiRun(el, line.slice(last), codes);
+}
+
 function _appendConsole(lines) {
   if (!lines.length) return;
   var frag = document.createDocumentFragment();
   lines.forEach(function(line) {
     var div = document.createElement('div');
     div.className = 'console-line';
-    div.textContent = line;
+    renderAnsi(div, line);
     frag.appendChild(div);
   });
   consoleEl.appendChild(frag);
@@ -316,6 +353,35 @@ function _appendConsole(lines) {
   }
 }
 
+// What the panel itself pushed into this console — a long action's markers and output. The socket
+// only reaches pages that are open at the time, and /api/console rebuilds the console from the
+// GAME's console log, which an update never writes to. So reloading after an update used to throw
+// away everything the update had said ("when you refresh the page after i did update, those
+// messages went away"); the server keeps a bounded backlog and this replays it.
+//
+// ONCE per page load, guarded by its own flag rather than _consolePrimed: that one stays false
+// while the host is unreachable, and an update's output is exactly what you want to still be able
+// to read when the server it was updating is down.
+var _panelBacklogShown = false;
+
+function showPanelBacklog(panelLines) {
+  if (_panelBacklogShown || !panelLines.length) return;
+  _panelBacklogShown = true;
+  // Appended after the game-log window rather than merged into it. These are a different stream
+  // with no shared ordering, and every one of them carries a "[panel]" marker saying so — inventing
+  // an interleaving would be guessing. They are also deliberately NOT added to _consoleLines: that
+  // buffer exists to find the overlap between successive windows of the log file, and lines that
+  // are not in the file would only ever confuse the match.
+  var frag = document.createDocumentFragment();
+  panelLines.forEach(function (line) {
+    var div = document.createElement('div');
+    div.className = 'console-line';
+    renderAnsi(div, line);
+    frag.appendChild(div);
+  });
+  consoleEl.appendChild(frag);
+}
+
 function refreshConsole(forceScroll, wantLines) {
   // Don't yank the user to the bottom unless they were already there (or it's the initial load).
   var stick = forceScroll || consoleAtBottom();
@@ -323,6 +389,7 @@ function refreshConsole(forceScroll, wantLines) {
     .then(r => r.json())
     .then(data => {
       var lines = (data.lines || []).filter(function(l) { return l.trim(); });
+      var panelLines = (data.panel_lines || []).filter(function(l) { return l.trim(); });
       // Nothing changed since last time — leave the console exactly as it is (no flicker while a
       // server sits idle).
       var sig = lines.length + ' ' + (lines[lines.length - 1] || '');
@@ -347,6 +414,7 @@ function refreshConsole(forceScroll, wantLines) {
       } else {
         _appendConsole(_newConsoleLines(_consoleLines, lines));
       }
+      showPanelBacklog(panelLines);
       if (stick) stickConsole();
     })
     .catch(() => {});

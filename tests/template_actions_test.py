@@ -506,6 +506,49 @@ check(not _new,
       "in tests/html_sink_baseline.json)",
       "; ".join(_new[:3]))
 
+# ── 0d-bis. the console line renderer builds NODES, never markup ──────────────────────────────
+# The scanner above only claims a sink whose expression contains markup (a `'…<tag` literal) or an
+# accumulated HTML buffer. `span.innerHTML = text` has neither, so it sails straight through — and
+# that is the single most dangerous shape in this file. A console line is the GAME's output: player
+# names and chat arrive in it verbatim, so it is attacker-authored end to end, with no markup
+# literal anywhere for the other gate to notice.
+#
+# It used to be one `div.textContent = line`, which made the question moot. Rendering ANSI colour
+# means splitting the line into runs and building a <span> per run, and the tempting way to write
+# that is a string of spans — which would be an XSS hole with a player name as the payload. So the
+# two functions that put console text into the DOM are gated directly: no HTML sink, and the run
+# must be written with textContent. (Verified by mutation: swapping textContent for innerHTML in
+# _ansiRun passed every other suite.)
+def _js_function_body(src, name):
+    """The body of `function name(...) { ... }`, by brace matching."""
+    m = re.search(r"\bfunction\s+%s\s*\([^)]*\)\s*\{" % re.escape(name), src)
+    if not m:
+        return None
+    i, depth = m.end() - 1, 0
+    for j in range(m.end() - 1, len(src)):
+        if src[j] == "{":
+            depth += 1
+        elif src[j] == "}":
+            depth -= 1
+            if depth == 0:
+                return src[i + 1:j]
+    return None
+
+
+_sd_js = (ROOT / "static" / "js" / "server_detail.js").read_text(encoding="utf-8")
+for _fn in ("_ansiRun", "renderAnsi"):
+    _body = _js_function_body(_sd_js, _fn)
+    # Vacuity guard: a renamed function would make every check below pass by finding nothing.
+    check(_body is not None and len(_body) > 80,
+          "console render: %s() was found in server_detail.js" % _fn,
+          "extractor got %r — the checks below would prove nothing" % (_body or "")[:60])
+    check(not _SINK.search(_body or ""),
+          "console render: %s() uses no HTML sink (a player name would be the payload)" % _fn,
+          "found an innerHTML/outerHTML/insertAdjacentHTML in it")
+check(".textContent = text" in (_js_function_body(_sd_js, "_ansiRun") or ""),
+      "console render: _ansiRun writes its run with textContent",
+      "it no longer assigns textContent — the run is reaching the DOM some other way")
+
 # ── 0e. no template renders the same id= twice ────────────────────────────────────────────────
 # getElementById returns the FIRST match, so a duplicate id does not fail loudly — it silently
 # points every handler at the wrong element. remote_manage.html carried id="diag-repair-btn" on

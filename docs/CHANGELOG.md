@@ -8,6 +8,15 @@ regardless of this file — this changelog is for humans.
 ## [Unreleased]
 
 ### Added
+- **LinuxGSM's colour now survives into the console.** `[  OK  ]` green, `[ FAIL ]` red,
+  `[ INFO ]` blue — the same output `putty` shows, which is most of what makes a long `update`
+  readable at a glance. Every display path used to run the text through `strip_escapes`, which is
+  right for the paths that *parse* console output and wrong for the one showing it to a person.
+  The server keeps SGR (and only SGR — erase-line, cursor moves, window titles and stray `ESC`
+  bytes are still removed) and the page turns each run into a styled node. Applies to a game's own
+  console too, so a Minecraft server's JLine colour comes through as well. Console lines are built
+  as DOM nodes and never as markup: player names and chat arrive in that text verbatim, so it is
+  attacker-authored end to end, and there is now a gate pinning that.
 - **The installed game version is shown on the server detail page**, on its own line under the
   host and port. Two sources are read, because no single one answers it for every game the panel
   manages: SteamCMD records an exact build id on disk (`serverfiles/steamapps/appmanifest_*.acf`
@@ -119,6 +128,13 @@ regardless of this file — this changelog is for humans.
   non-ASCII — through a real shell and requires each to come back verbatim as a single argument.
 
 ### Fixed
+- **A long action's output no longer vanishes when you reload the page.** "when you refresh the
+  page after i did update...those messages went away" — and they did: the console socket reaches
+  only the pages open at the time, and `/api/console` rebuilds a console by tailing the *game's*
+  console log, which a panel action never writes to. So an update's output lived in exactly one
+  place, the DOM of whichever tab happened to be open. The panel keeps a bounded per-server
+  backlog of what it pushed and replays it on the next console load — including when the host is
+  unreachable, which is when you most want to still be able to read what the update said.
 - **"Watch the live console for progress" was not true of any long action.** Accepting an update,
   validate, backup, force-update, mods-update or fastdl answered with exactly that, and then sent
   nothing to the console at all — reported as "it says to watch the console for updates, there is
