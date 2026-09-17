@@ -15,8 +15,13 @@ from panel.ops.ssh_manager import (_remote_listening_ports, get_server_status)
 # module would never be seen — attribute access resolves at call time and is stable
 # however the handler moves.
 from panel.ops import ssh_manager as _sm
-from panel.security.auth import (INSTALL_SERVER, MANAGE_SERVERS, get_game, get_remote,
-    get_user_servers, permission_required, server_access_required)
+from panel.security.auth import (INSTALL_SERVER, MANAGE_SERVERS, _perm_for_action, get_game,
+    get_remote, get_user_servers, has_permission, permission_required, server_access_required)
+
+# The only actions the command palette will offer. Deliberately the three you do without thinking
+# — a search box is the wrong place to reach uninstall or a branch switch, both of which have a
+# confirmation flow on the page that owns them.
+PALETTE_ACTIONS = ("start", "restart", "stop")
 from panel.services.monitoring import (_PLAYER_POLL_WORKERS, _cached_player_count,
     _host_metrics_work, _query_host_metrics)
 import concurrent.futures
@@ -148,12 +153,26 @@ def register(app):
         Access is get_user_servers(), the same filter the dashboard uses, so the palette can never
         surface a server the user cannot already see.
         """
+        # Which of these the user may RUN, not just reach. Computed here rather than in the
+        # browser for the same reason the palette scrapes the sidebar instead of hardcoding a nav:
+        # the answer is the server's to give, and a palette that offered an action the user cannot
+        # perform would be a menu of 403s. Mirrors the check api_server_action itself makes, so the
+        # two cannot disagree about what is allowed.
+        #
+        # Only ever these three. The palette is for the things you do without thinking; uninstall,
+        # branch switches and mod changes are not those, and each carries its own confirmation
+        # flow on the page that owns it.
+        _allowed = [a for a in PALETTE_ACTIONS
+                    if current_user.is_superadmin
+                    or has_permission(current_user, _perm_for_action(a))]
         return jsonify([{
             "id": gs.id,
             "name": gs.name,
             "game": gs.game_type or "",
             "host": gs.remote.name if gs.remote else "",
             "installed": bool(gs.installed),
+            # An un-installed server has nothing to start, so it gets no verbs even for an admin.
+            "actions": _allowed if gs.installed else [],
         } for gs in get_user_servers(current_user)])
 
     @app.route("/api/servers")

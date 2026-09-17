@@ -19,6 +19,10 @@
 // user-authored text arriving from an API, and the safe way to put it on the page is to never
 // treat it as markup in the first place.
 (function () {
+  var ACTION_LABEL = { start: 'Start', restart: 'Restart', stop: 'Stop' };
+  var ACTION_ICON = { start: 'bi bi-play-fill', restart: 'bi bi-arrow-clockwise',
+                      stop: 'bi bi-stop-fill' };
+  var GROUP_ORDER = { pages: 0, servers: 1, actions: 2 };
   var EL = {};                 // cached element refs, filled on first open
   var servers = null;          // null = not fetched yet; [] = fetched and empty
   var items = [];              // what is currently rendered, in order
@@ -111,10 +115,27 @@
         icon: 'bi bi-hdd-stack',
         meta: [s.game, s.host].filter(Boolean).join(' · ')
       }, s.name + ' ' + (s.game || '') + ' ' + (s.host || ''), 'servers', i);
+      // ...and the things you can DO to it. The palette used to be a way to reach a page, which
+      // left "restart it" as search -> land -> find the button -> click. These rows run.
+      //
+      // `s.actions` is what the SERVER said this user may run (api_palette computes it with the
+      // same check the action endpoint makes). Never a client-side guess: a palette offering an
+      // action the user cannot perform is a menu of 403s.
+      (s.actions || []).forEach(function (act, j) {
+        consider({
+          label: ACTION_LABEL[act] + ' ' + s.name,
+          act: act, sid: s.id, sname: s.name,
+          icon: ACTION_ICON[act] || 'bi bi-play-fill',
+          meta: [s.game, s.host].filter(Boolean).join(' · ')
+        // Matchable by verb OR by name, so "restart" lists every server you could restart and
+        // "cod" lists everything you can do to that one.
+        }, act + ' ' + s.name + ' ' + (s.game || '') + ' ' + (s.host || ''),
+           'actions', i * 10 + j);
+      });
     });
     out.sort(function (a, b) {
       if (a.rank !== b.rank) return a.rank - b.rank;
-      if (a.group !== b.group) return a.group === 'pages' ? -1 : 1;
+      if (a.group !== b.group) return GROUP_ORDER[a.group] - GROUP_ORDER[b.group];
       return a.order - b.order;
     });
     return out.slice(0, 40);
@@ -126,7 +147,9 @@
     li.id = 'cmdk-opt-' + index;
     li.setAttribute('role', 'option');
     li.setAttribute('aria-selected', 'false');
-    li.dataset.href = entry.href;
+    if (entry.href) li.dataset.href = entry.href;
+    if (entry.act) { li.dataset.act = entry.act; li.dataset.sid = entry.sid;
+                     li.dataset.sname = entry.sname; }
 
     var icon = document.createElement('i');
     icon.className = entry.icon;
@@ -173,7 +196,8 @@
         var head = document.createElement('li');
         head.className = 'cmdk-group';
         head.setAttribute('role', 'presentation');
-        head.textContent = t(group === 'pages' ? 'Pages' : 'Game servers');
+        head.textContent = t(group === 'pages' ? 'Pages'
+                            : group === 'servers' ? 'Game servers' : 'Actions');
         EL.list.appendChild(head);
       }
       var li = row(entry, items.length);
@@ -196,10 +220,46 @@
     items[active].scrollIntoView({ block: 'nearest' });
   }
 
+  // Stop and restart disconnect whoever is playing. The buttons on the page ask first, and a
+  // search box must not be the one place where a keystroke skips that — Enter is easy to hit on
+  // a row you did not mean to land on. Start is not destructive and runs straight away.
+  function runAction(action, id, name) {
+    function fire() {
+      // No X-CSRFToken here on purpose: panel.js wraps fetch and adds it to every mutating
+      // request. Setting it a second time would just be a second place to keep it right.
+      fetch((window.MOUNT || '') + '/api/server/' + encodeURIComponent(id) + '/action', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ action: action })
+      })
+        .then(function (r) { return r.json(); })
+        .then(function (d) {
+          if (window.toast) {
+            window.toast(d.message || (d.success ? (ACTION_LABEL[action] + ' issued for ' + name)
+                                                 : 'Action failed'),
+                         d.success ? 'success' : 'danger');
+          }
+        })
+        .catch(function () { if (window.toast) window.toast('Action failed', 'danger'); });
+    }
+    if ((action === 'stop' || action === 'restart') && window.confirmDialog) {
+      window.confirmDialog({
+        title: ACTION_LABEL[action], icon: 'exclamation-triangle',
+        confirmLabel: ACTION_LABEL[action], confirmClass: 'btn-danger',
+        bodyText: ACTION_LABEL[action] + ' ' + name + '? Anyone playing will be disconnected.',
+        onConfirm: fire
+      });
+      return;
+    }
+    fire();
+  }
+
   function go() {
     if (active < 0 || !items[active]) return;
-    var href = items[active].dataset.href;
+    var el = items[active];
+    var href = el.dataset.href, act = el.dataset.act;
     close();
+    // Closed BEFORE acting either way, so the confirm dialog is not stacked under the palette.
+    if (act) { runAction(act, el.dataset.sid, el.dataset.sname); return; }
     if (href) window.location.href = href;
   }
 

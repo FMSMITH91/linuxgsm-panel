@@ -1691,6 +1691,60 @@ try:
     check("manage: with NO visible servers the form is open by default",
           " open" in _tag2, _tag2[:90] or "no install-server element rendered")
 
+    # ── the palette offers only actions the user may actually run ────────────────────────────
+    # The palette can now START/RESTART/STOP from the search box, which makes /api/palette an
+    # authorization surface rather than a list of names. The rule it has to keep: never name an
+    # action the caller would be refused for. Checked against a REAL restricted user, because a
+    # superadmin passes every permission test and would prove nothing.
+    _pal = c.get("/api/palette")
+    check("palette: the index still loads", _pal.status_code == 200, "status=%d" % _pal.status_code)
+    _pj = _pal.get_json() or []
+    check("palette: it lists the servers", len(_pj) >= 1, "%d entries" % len(_pj))
+    check("palette: a superadmin is offered all three verbs",
+          any(sorted(e.get("actions") or []) == ["restart", "start", "stop"]
+              for e in _pj if e.get("installed")),
+          str([(e["name"], e.get("actions")) for e in _pj])[:200])
+    # An account that can SEE a server but has no action permissions must get names and no verbs.
+    # The group is given ACCESS to the game server as well as VIEW_SERVERS. Without the access
+    # grant the user sees an empty list, and `all(... for e in [])` is True — so the check below
+    # passed while examining nothing, and stripping the permission filter entirely failed no test.
+    # Mutation caught it. The non-emptiness is now asserted before the claim that rests on it.
+    with app.app_context():
+        _vg = Group(name="smoke-viewonly")
+        _vg.set_permissions([auth.VIEW_SERVERS])
+        _vg.game_servers.append(db.session.get(GameServer, gs_id))
+        db.session.add(_vg)
+        db.session.flush()
+        _viewer = User(username="paletteviewer",
+                       password_hash=auth.hash_password("Str0ng!passw0rd"),
+                       is_superadmin=False, is_active=True)
+        _viewer.groups.append(_vg)
+        db.session.add(_viewer)
+        db.session.commit()
+        _viewer_id = _viewer.id
+    _pal2 = client_as(_viewer_id).get("/api/palette")
+    check("palette: a view-only user still reaches it", _pal2.status_code == 200,
+          "status=%d" % _pal2.status_code)
+    _pj2 = _pal2.get_json() or []
+    check("palette: the view-only user actually SEES a server, so the next check examines one",
+          len(_pj2) >= 1, "%d entries — an empty list would pass the next check vacuously"
+          % len(_pj2))
+    check("palette: ...and is offered NO actions at all",
+          _pj2 and all(not (e.get("actions") or []) for e in _pj2),
+          str([(e["name"], e.get("actions")) for e in _pj2])[:200])
+    # An un-installed server has nothing to start, even for an admin.
+    check("palette: an un-installed server carries no verbs",
+          all(not (e.get("actions") or []) for e in _pj if not e.get("installed")),
+          str([(e["name"], e.get("actions")) for e in _pj if not e.get("installed")])[:200])
+    # And the endpoint's answer must agree with the one the ACTION route enforces, or the palette
+    # is offering a button that 403s.
+    _act_denied = client_as(_viewer_id).post("/api/server/%d/action" % gs_id,
+                                             json={"action": "start"},
+                                             headers={"X-Requested-With": "XMLHttpRequest"})
+    check("palette: the action route refuses that same user, so the empty list was honest",
+          _act_denied.status_code in (403, 302, 401),
+          "status=%d" % _act_denied.status_code)
+
     # ── Discover / import existing LinuxGSM servers on a host ──
     dsc = c.get("/api/remote/%d/discover" % remote_id)
     check("discover: superadmin gets a servers list (SSH to the fixture host yields none)",
