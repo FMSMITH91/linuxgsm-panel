@@ -65,15 +65,32 @@
 
 {% if show_app_chrome %}
 <!-- Mobile topbar -->
+{# The topbar names the PAGE, not the product. It was 54px of "LinuxGSM" — a word that never
+   changes and that the sidebar brand already says — sitting directly above a 40-103px block on
+   every page whose job was to say where you are. Two rows doing one job, and on a phone that was
+   a third of the first screen spent before any content. self.title() re-renders the {% block
+   title %} each page already declares for <title>, so every page gets this with no edit of its
+   own, and a page can never end up with a topbar that disagrees with its tab. #}
 <div class="topbar">
   <button class="hamburger" id="hamburger" data-action="toggleSidebar" aria-label="Menu">
     <i class="bi bi-list"></i>
   </button>
-  <a href="{{ url_for('index') }}" class="topbar-title" data-no-i18n>LinuxGSM</a>
-  <button class="hamburger ms-auto" data-action="openPalette" aria-label="{{ t('Search the panel') }}"
-          title="{{ t('Search the panel') }}">
-    <i class="bi bi-search" aria-hidden="true"></i>
-  </button>
+  <span class="topbar-title" title="{{ self.title() }}">{{ self.title() }}</span>
+  <div class="topbar-status ms-auto">
+    {# Nags live here as one tappable chip each, rather than as banners that push the page down.
+       A warning you see on every page is a permanent tax on the first screen; an icon says the
+       same thing, keeps saying it, and costs nothing. The full explanation is one tap away. #}
+    {% if current_user.is_superadmin and not current_user.totp_enabled and not current_user.otp_nag_dismissed %}
+    <a href="{{ url_for('account_2fa_enable') }}" class="topbar-chip topbar-chip-warn" id="otp-chip"
+       aria-label="{{ t('Two-factor authentication is off') }}" title="{{ t('Two-factor authentication is off') }}">
+      <i class="bi bi-shield-exclamation" aria-hidden="true"></i>
+    </a>
+    {% endif %}
+    <button class="hamburger" data-action="openPalette" aria-label="{{ t('Search the panel') }}"
+            title="{{ t('Search the panel') }}">
+      <i class="bi bi-search" aria-hidden="true"></i>
+    </button>
+  </div>
 </div>
 
 <!-- Sidebar backdrop -->
@@ -238,7 +255,11 @@
 <!-- Main content -->
 <main class="main-content{% if not show_app_chrome %} main-content-full{% endif %}">
   <div class="content-wrap">
-    {% if show_app_chrome and current_user.is_superadmin and not current_user.totp_enabled and not current_user.otp_nag_dismissed %}
+    {# The full banner now appears only on Account — the page you would open to act on it.
+       On every other page it is an 89px interruption repeating what the topbar chip already
+       says, and 89px of an 812px phone screen is 11% of everything you can see, spent on a
+       warning you have already read. #}
+    {% if show_app_chrome and request.endpoint in ('account', 'account_2fa_enable') and current_user.is_superadmin and not current_user.totp_enabled and not current_user.otp_nag_dismissed %}
     <!-- Sits on EVERY page, so its height is a tax on every screen. Measured at 375x812 it was
          243px — 30% of the viewport — and pushed the first page-specific content to y=987, past
          the fold. The rationale text and the long dismiss label are therefore shown from `sm` up

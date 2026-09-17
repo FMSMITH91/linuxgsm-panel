@@ -1259,6 +1259,28 @@ check(len(_pinned) >= 3, "palette: there are /server-management sections to chec
       "%d found — the gate below proves nothing if this is 0" % len(_pinned))
 _host_only_missing = [h for h in _pinned
                       if _is_panel_host_only(_rm_html, h) is False and h not in _host_hashes]
+# ── The topbar shows the page's own name, so every page must have one ─────────────────────────
+# base.html renders {{ self.title() }} in the mobile topbar — the same {% block title %} each page
+# already declares for <title>. That is what let the topbar carry page identity without editing 27
+# templates, and it is also a new dependency: a page that extends base.html and forgets the block
+# gets a BLANK topbar on a phone, with nothing to say where it is. Nothing else would fail — the
+# page renders, the tab title is just empty, and no route or smoke check looks at it.
+_no_title = []
+for _tf in sorted(TEMPLATES.glob("*.html")):
+    _ts = _tf.read_text(encoding="utf-8")
+    if "extends" not in _ts or '"base.html"' not in _ts:
+        continue
+    if not re.search(r"\{%-?\s*block\s+title\s", _ts):
+        _no_title.append(_tf.name)
+_extending = [f.name for f in sorted(TEMPLATES.glob("*.html"))
+              if "extends" in f.read_text(encoding="utf-8")
+              and '"base.html"' in f.read_text(encoding="utf-8")]
+check(len(_extending) >= 15, "topbar: pages extending base.html were found",
+      "%d found — the gate below proves nothing if this is 0" % len(_extending))
+check(not _no_title,
+      "topbar: every page that extends base.html declares a title for it to show",
+      "blank topbar on mobile for: %s" % _no_title)
+
 check(not _host_only_missing,
       "palette: a card every host renders is offered for every host, not just the panel one",
       "renders on remote hosts too but is only in SECTIONS: %s — add to HOST_SECTIONS"

@@ -128,7 +128,25 @@
     .topbar-title {
       font-weight: 700; font-size: 1rem;
       color: var(--text-heading); text-decoration: none;
+      /* The page's own name lives here now, so it has to survive a long one on a 375px screen
+         without wrapping the bar to two rows or shoving the status chips off the end. */
+      overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+      min-width: 0; flex: 1 1 auto;
     }
+    .topbar-status {
+      display: flex; align-items: center; gap: .15rem;
+      flex: 0 0 auto;
+    }
+    /* A nag as an icon rather than a banner: permanently visible, costs no vertical space, and
+       is a tap away from the page that fixes it. */
+    .topbar-chip {
+      display: inline-flex; align-items: center; justify-content: center;
+      width: 40px; height: 40px; border-radius: 8px;
+      font-size: 1.15rem; text-decoration: none;
+      color: var(--text);
+    }
+    .topbar-chip:active { background: var(--bg-elevated); }
+    .topbar-chip-warn { color: #e3b341; }
     .sidebar-backdrop {
       display: none; position: fixed; inset: 0;
       background: rgba(0,0,0,.6);
@@ -490,6 +508,16 @@
       .main-content { padding: 1.5rem; }
     }
     @media (max-width: 767.98px) {
+      /* The topbar names the page, so the in-page <h1> repeats it. Hidden rather than deleted
+         from the templates: the heading is still the right thing on a desktop, where there is no
+         topbar at all and the sidebar shows only the section. Kept in the DOM and readable by
+         screen readers — this is a visual duplicate, not a structural one, so it must not leave
+         the page without an h1. */
+      .page-title {
+        position: absolute; width: 1px; height: 1px;
+        padding: 0; margin: -1px; overflow: hidden;
+        clip: rect(0, 0, 0, 0); white-space: nowrap; border: 0;
+      }
       .sidebar { transform: translateX(-100%); width: 280px; }
       .sidebar.open { transform: translateX(0); box-shadow: 8px 0 40px rgba(0,0,0,.7); }
       .topbar { display: flex; }
