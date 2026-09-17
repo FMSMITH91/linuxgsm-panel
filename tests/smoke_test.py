@@ -1738,6 +1738,45 @@ try:
         db.session.add(_noinst)
         db.session.commit()
         _noinst_id = _noinst.id
+    # A one-host panel must not ask which host. The placeholder is a required field whose only
+    # valid answer is the single option under it — a click that can only be made one way. With two
+    # or more the placeholder stays, because then the choice is real and a silent default would
+    # install onto whichever host happened to sort first.
+    def _host_options(html):
+        """The <option>s inside the target-host select, so a count means hosts and not markup."""
+        if 'id="remote-select"' not in html:
+            return ""
+        return html.split('id="remote-select"')[1].split("</select>")[0]
+
+    _multi_sel = _host_options(_ih)
+    _multi_n = _multi_sel.count("<option")
+    check("install page: the superadmin fixture really does have several hosts",
+          _multi_n >= 3, "%d options — with fewer the next check proves nothing" % _multi_n)
+    check("install page: with SEVERAL hosts it still asks which one",
+          "Select a server" in _multi_sel and "selected" not in _multi_sel,
+          "%d options: %.140s" % (_multi_n, _multi_sel))
+    with app.app_context():
+        _1hg = Group(name="smoke-onehost")
+        _1hg.set_permissions([auth.INSTALL_SERVER])
+        _1hg.servers.append(db.session.get(RemoteServer, remote_id))
+        db.session.add(_1hg)
+        db.session.flush()
+        _1hu = User(username="onehost", password_hash=auth.hash_password("Str0ng!passw0rd"),
+                    is_superadmin=False, is_active=True)
+        _1hu.groups.append(_1hg)
+        db.session.add(_1hu)
+        db.session.commit()
+        _1hu_id = _1hu.id
+    _one = client_as(_1hu_id).get("/servers/install")
+    check("install page: a single-host user reaches it", _one.status_code == 200,
+          "status=%d" % _one.status_code)
+    _oh = _one.get_data(as_text=True)
+    _sel_block = _oh.split('id="remote-select"')[1].split("</select>")[0] if 'id="remote-select"' in _oh else ""
+    check("install page: ...and sees exactly one host option",
+          _sel_block.count("<option") == 1, "%d options: %.120s" % (_sel_block.count("<option"), _sel_block))
+    check("install page: ...pre-selected, with no 'Select a server...' to click past",
+          "selected" in _sel_block and "Select a server" not in _sel_block, _sel_block[:160])
+
     _denied = client_as(_noinst_id).get("/servers/install", follow_redirects=False)
     check("install page: a user without install/manage permission is refused",
           _denied.status_code in (302, 303, 403),
