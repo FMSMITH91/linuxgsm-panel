@@ -11,6 +11,8 @@ from panel.ops import ssh_manager as _sm
 from panel.ops import system_ops as so
 from panel.ops.ssh_manager import (player_list)
 import logging
+import queue
+import threading
 
 # Same logger name app.py used, so existing log filters and greps keep working.
 _log = logging.getLogger("panel.app")
@@ -185,6 +187,75 @@ _WORKING_ACK = {
     "console": "🔎 Fetching the console…",
     "say": "📣 Sending it in-game…",
 }
+
+
+# ── Running commands off the poll/socket thread ────────────────────────────────────────────────
+# Both bots read their commands on ONE thread — Telegram long-polls getUpdates, Discord holds a
+# Gateway socket — and used to run them on that same thread. A command that reaches a host costs an
+# SSH round trip, so while one was running the reader was not reading: everything sent behind it
+# sat untouched at the transport until the slow one returned. A single /console on an unreachable
+# host stalled every command after it for the whole connect timeout. On Discord it is worse than
+# slow — the socket that is not being read is also the one that must answer heartbeats, so a long
+# command can get the session dropped and reconnected underneath you.
+#
+# ONE worker, not a pool: order is part of what a command bot promises. `/stop x` then `/start x`
+# has to happen in that order, and a pool would let them race into "stopped" — the opposite of what
+# was asked. Serial execution costs nothing here, because the slow actions were already handed to
+# their own background threads by run_action; what is left on this queue is short.
+#
+# The queue is BOUNDED and full is reported, not swallowed. An unbounded queue turns a wedged host
+# into unbounded memory and a chat that answers questions from ten minutes ago; saying "still
+# working through earlier commands" is the honest answer to a bot that is genuinely behind.
+_CMD_QUEUE_MAX = 32
+
+
+class CommandWorker:
+    """A single daemon thread that runs queued bot commands in arrival order.
+
+    Started lazily on first use and restarted if it ever dies, so an unconfigured bot costs no
+    thread and a crashed one does not silently stop answering for the life of the process."""
+
+    def __init__(self, name):
+        self.name = name
+        self._q = queue.Queue(maxsize=_CMD_QUEUE_MAX)
+        self._thread = None
+        self._lock = threading.Lock()
+
+    def submit(self, fn):
+        """Queue `fn` to run on the worker. False when the queue is full — the caller answers."""
+        self._ensure_running()
+        try:
+            self._q.put_nowait(fn)
+            return True
+        except queue.Full:
+            _log.warning("%s: command queue is full (%d deep); refusing new commands",
+                         self.name, _CMD_QUEUE_MAX)
+            return False
+
+    def _ensure_running(self):
+        with self._lock:
+            if self._thread is None or not self._thread.is_alive():
+                self._thread = threading.Thread(target=self._run, name=self.name, daemon=True)
+                self._thread.start()
+
+    def _run(self):
+        while True:
+            fn = self._q.get()
+            try:
+                fn()
+            except Exception:
+                # Never let one command take the worker down with it: the next command in the
+                # queue is unrelated and still deserves to run.
+                _log.debug("%s: a queued command failed", self.name, exc_info=True)
+            finally:
+                self._q.task_done()
+
+
+# What to say when a bot is genuinely behind. Shared, like the rest of the wording. Worded as a
+# REFUSAL, not a delay: a submit that returns False means the command was not queued and will
+# never run, so "I'll get to it shortly" would be a promise the bot cannot keep.
+BUSY_REPLY = ("⏳ I'm still working through earlier commands, so that one didn't make the queue. "
+              "Send it again in a moment.")
 
 
 def working_ack(cmd):

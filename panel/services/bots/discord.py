@@ -5,8 +5,8 @@ Moved out of app.py verbatim — see panel/services/bots/__init__.py.
 from panel.core.config import (decrypt_secret, load_config, update_config)
 from panel.ops import system_ops as so
 from panel.services import (notifications)
-from panel.services.bots.commands import (_bot_origin, _panel_ver_label,
-    _command_arg, _connect_text, _console_text, _find_server,
+from panel.services.bots.commands import (BUSY_REPLY, CommandWorker, _bot_origin,
+    _panel_ver_label, _command_arg, _connect_text, _console_text, _find_server,
     _hosts_text, _reply_header, _players_text, _say_text,
     _servers_text, _status_text, action_ack, working_ack)
 import logging
@@ -22,6 +22,10 @@ _log = logging.getLogger("panel.app")
 # command SET, auth model (only the configured channel), and per-command text are shared with the
 # Telegram bot — only the transport (reply send / update-pending marker) differs.
 _DC_CMD_BACKOFF = 15
+# Commands run here, not on the Gateway socket thread. More than a latency fix on this transport:
+# the socket that is not being read is the same one that has to answer Discord's heartbeats, so a
+# command that blocked it could get the session dropped and reconnected mid-answer.
+_DC_WORKER = CommandWorker("discord-commands")
 
 
 def _dc_reply(bot_token, channel_id, text):
@@ -67,7 +71,7 @@ def _discord_command_watch(app):
                     return
                 if (content or "")[:1] not in ("!", "/"):
                     return
-                _handle_discord_command(app, _tok, _chan, content.strip(), author)
+                _dc_dispatch(app, _tok, _chan, content.strip(), author)
 
             notifications.discord_gateway_run(bot_token, _on_message)   # returns when the socket drops
         except Exception:
@@ -91,6 +95,17 @@ def _dc_help_text():
             "`!update` — update the panel itself\n"
             "`!update <name>` — update that ONE game server instead\n"
             "`!help` — this message")
+
+
+def _dc_dispatch(app, bot_token, channel_id, text, sender=None):
+    """Ack on the socket thread, run the command on the worker — Telegram's twin, see _tg_dispatch
+    for why the ack cannot be queued along with the work."""
+    ack = working_ack(_parse_dc_command(text))
+    if ack:
+        _dc_ack(bot_token, channel_id, ack)
+    if not _DC_WORKER.submit(
+            lambda: _handle_discord_command(app, bot_token, channel_id, text, sender)):
+        _dc_reply(bot_token, channel_id, BUSY_REPLY)
 
 
 def _dc_server_action(app, bot_token, channel_id, action, arg, sender=None):
@@ -132,10 +147,6 @@ def _dc_server_action(app, bot_token, channel_id, action, arg, sender=None):
 def _handle_discord_command(app, bot_token, channel_id, text, sender=None):
     cmd = _parse_dc_command(text)
     arg = _command_arg(text)
-    # Same table, same rule, same place in the flow as Telegram's — see _handle_telegram_command.
-    _ack = working_ack(cmd)
-    if _ack:
-        _dc_ack(bot_token, channel_id, _ack)
     if cmd == "help":
         _dc_reply(bot_token, channel_id, _dc_help_text())
     elif cmd == "status":
