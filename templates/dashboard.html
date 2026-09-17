@@ -1,5 +1,42 @@
 {% extends "base.html" %}
-{% block title %}Dashboard{% endblock %}
+{% block title %}Dashboard{% if can_edit_tags %}
+{# Tags moved here when /servers/manage folded into the dashboard. Collapsed because
+   this page is what you look at to ACT on servers; defining labels is configuration,
+   and it sat below the fold on /servers/manage anyway. The dashboard already filters
+   by tag, so both halves of tagging now live in one place. #}
+<details class="card mb-3" id="sec-tags">
+  <summary class="card-header" style="cursor:pointer; list-style:none;">
+    <i class="bi bi-tags-fill"></i> Tags
+    <span class="text-secondary small ms-auto">tap to open</span>
+  </summary>
+  <div class="card-header"><i class="bi bi-tags-fill"></i> Tags</div>
+  <div class="card-body">
+    <p class="text-secondary small mb-3">Labels shared by everyone on this panel, for grouping and filtering servers. Filter the dashboard by a tag and act on the whole group at once. A muted tag keeps its servers out of the alert channel without turning the alert off for everything else.</p>
+    <div class="d-flex gap-2 flex-wrap align-items-end mb-3">
+      <div>
+        <label class="form-label small mb-1" for="tag-name">Name</label>
+        <input type="text" id="tag-name" class="form-control form-control-sm" style="width:190px;"
+               maxlength="32" placeholder="production" autocomplete="off">
+      </div>
+      <div>
+        <label class="form-label small mb-1" for="tag-color">Colour</label>
+        <input type="color" id="tag-color" class="form-control form-control-color form-control-sm"
+               value="#4c8bf5" title="Chip colour">
+      </div>
+      <div class="form-check ms-1 mb-1">
+        <input class="form-check-input" type="checkbox" id="tag-notify" checked>
+        <label class="form-check-label small" for="tag-notify">Send alerts for these servers</label>
+      </div>
+      <button class="btn btn-primary btn-sm" data-action="createTag" data-args='["@self"]'>
+        <i class="bi bi-plus-lg"></i> Add tag
+      </button>
+    </div>
+    <div id="tag-list" class="d-flex flex-column gap-2" data-no-i18n></div>
+  </div>
+</details>
+{% endif %}
+
+{% endblock %}
 {% block content %}
 
 {# Bulk-action bar, rendered both above and below the server list so it's reachable from either
@@ -257,6 +294,21 @@
               <a href="{{ url_for('server_detail', server_id=srv.id) }}" class="btn btn-outline-secondary btn-sm srv-console{% if busy %} disabled{% endif %}" title="Console &amp; stats" aria-label="Console &amp; stats for {{ srv.name }}"{% if busy %} tabindex="-1" aria-disabled="true"{% endif %}>
                 <i class="bi bi-terminal-fill"></i>
               </a>
+              {# Files & Config and the tag button came from /servers/manage when it folded into
+                 this page. server_files was reachable from that row and NOWHERE else in a list
+                 view, so dropping the page without carrying this would have removed the one-click
+                 path to editing a config. #}
+              <a href="{{ url_for('server_files', server_id=srv.id) }}"
+                 class="btn btn-outline-secondary btn-sm{% if busy %} disabled{% endif %}"
+                 title="Edit config &amp; browse/upload files"
+                 aria-label="Files and config for {{ srv.name }}"{% if busy %} tabindex="-1" aria-disabled="true"{% endif %}>
+                <i class="bi bi-folder2-open"></i>
+              </a>
+              {% if can_edit_tags %}
+              <button type="button" class="btn btn-outline-secondary btn-sm" data-action="editServerTags"
+                      data-args='[{{ srv.id }}, "@self"]' title="Choose which tags this server carries"
+                      aria-label="Edit tags for {{ srv.name }}"><i class="bi bi-tags"></i></button>
+              {% endif %}
               {# Same buttons-not-drag reasoning as the host cards, and doubly so here: these rows sit
                  inside a horizontally scrolling .table-responsive wrapper. #}
               <span class="btn-group btn-group-sm srv-move ms-1" role="group" aria-label="Reorder {{ srv.name }}">
@@ -288,4 +340,9 @@
 
 {% block scripts %}
 <script nonce="{{ csp_nonce }}" src="{{ asset_url('js/dashboard.js') }}"></script>
+{# Tag create/assign came here with /servers/manage. Loaded only when the user may edit them —
+   the buttons are behind the same can_edit_tags, so fetching the script otherwise is dead weight. #}
+{% if can_edit_tags %}
+<script nonce="{{ csp_nonce }}" src="{{ asset_url('js/server_tags.js') }}"></script>
+{% endif %}
 {% endblock %}

@@ -99,7 +99,9 @@
 
   <div class="sidebar-section">Overview</div>
   <ul class="sidebar-nav">
-    <li><a href="{{ url_for('index') }}" class="{% if request.endpoint == 'index' %}active{% endif %}">
+    {# The dashboard IS the server list since /servers/manage folded into it, so its highlight
+       covers the per-server pages that used to sit under "Game Servers". #}
+    <li><a href="{{ url_for('index') }}" class="{% if request.endpoint in ('index', 'server_detail', 'server_files') %}active{% endif %}">
       <i class="bi bi-speedometer2"></i> Dashboard</a></li>
   </ul>
 
@@ -109,8 +111,6 @@
   {% if has_permission('manage_servers') or has_permission('install_server') %}
   <div class="sidebar-section">Servers</div>
   <ul class="sidebar-nav">
-    <li><a href="{{ url_for('manage_servers') }}" class="{% if request.endpoint in ('manage_servers', 'server_detail', 'server_files') %}active{% endif %}">
-      <i class="bi bi-hdd-stack"></i> Game Servers</a></li>
     {# No guard of its own: this section's own {% if %} is already
        manage_servers OR install_server, which is exactly the pair install_server_page requires. #}
     <li><a href="{{ url_for('install_server_page') }}" class="{% if request.endpoint == 'install_server_page' %}active{% endif %}">

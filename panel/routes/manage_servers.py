@@ -18,17 +18,15 @@ from panel.ops.ssh_manager import (GMOD_CONTENT_GAMES, GMOD_CONTENT_SIZES,
 # module would never be seen — attribute access resolves at call time and is stable
 # however the handler moves.
 from panel.ops import ssh_manager as _sm
-from panel.security.auth import (INSTALL_SERVER, MANAGE_SERVERS, RESTART_SERVER, START_SERVER,
-    STOP_SERVER, UNINSTALL_SERVER, accessible_remote_ids, get_game, get_remote,
-    get_user_permissions, get_user_servers, has_permission, log_action, permission_required,
+from panel.security.auth import (INSTALL_SERVER, MANAGE_SERVERS, UNINSTALL_SERVER,
+    accessible_remote_ids, get_game, get_remote, log_action, permission_required,
     server_access_required)
-from panel.services.monitoring import (_cached_player_count)
 import threading
 import time
 from panel.core.http import (_form_err, _form_ok, _log_and_generic, _wants_json)
 from panel.core.validation import (GAME_TYPE_RE, INSTANCE_NAME_RE, MAX_PORT, MIN_PORT,
     SAFE_LABEL_RE, _port_or)
-from app import (_cached_player_max, _cached_player_name, _extract_start_error, _log, _prune_jobs,
+from app import (_extract_start_error, _log, _prune_jobs,
     _resolve_source_aux_ports, load_game_list, resolve_free_port)
 from panel.routes._shared import (_looks_installed, _notify_servers_changed)
 
@@ -48,46 +46,16 @@ def register(app):
     @login_required
     @permission_required(MANAGE_SERVERS, INSTALL_SERVER)
     def manage_servers():
-        # Scoped to what the caller may actually reach. Every other listing in the panel does this
-        # — get_user_servers on / and /api/servers, accessible_remote_ids on /remotes — and this
-        # page did not, so a user holding MANAGE_SERVERS for ONE host read the name, game, status,
-        # owning host and public connect address of every server in the install. The write actions
-        # on the page were already refused per-object; only the reading was unbounded.
-        _my_remote_ids = accessible_remote_ids(current_user)
-        remotes = [r for r in RemoteServer.query.all() if r.id in _my_remote_ids]
-        # Default to grouped-by-host order (host name, then server name); the page also lets you
-        # re-sort by any column and toggle a grouped view client-side.
-        from panel.db.models import ServerTag
-        from sqlalchemy.orm import selectinload
-        # selectinload the tags: they render per row, and this page has no per-server query budget
-        # only because nothing here is lazy — keep it that way.
-        all_servers = (GameServer.query.outerjoin(RemoteServer, GameServer.remote_id == RemoteServer.id)
-                       .options(selectinload(GameServer.tags))
-                       .order_by(RemoteServer.name.asc(), GameServer.name.asc()).all())
-        if not current_user.is_superadmin:
-            _visible = {g.id for g in get_user_servers(current_user)}
-            all_servers = [g for g in all_servers if g.id in _visible]
-        all_tags = ServerTag.query.order_by(ServerTag.name).all()
-        player_counts = {gs.id: _cached_player_count(gs.id) for gs in all_servers}
-        player_max = {gs.id: _cached_player_max(gs.id) for gs in all_servers}
-        server_names = {gs.id: _cached_player_name(gs.id) for gs in all_servers}
-        can_control = current_user.is_superadmin or bool(
-            {START_SERVER, STOP_SERVER, RESTART_SERVER} & get_user_permissions(current_user))
-        # Only downloadable games on the install form — the target host isn't chosen yet, so we can't
-        # know what mount-only (owned) content is already present. Those show on the server's own page.
-        gmod_games = [{"key": k, "label": v[0], "size": GMOD_CONTENT_SIZES.get(k, "")}
-                      for k, v in GMOD_CONTENT_GAMES.items() if v[1] is not None]
-        return render_template("manage_servers.html", remotes=remotes,
-                               all_servers=all_servers, games=load_game_list(),
-                               can_control=can_control, gmod_games=gmod_games,
-                               player_counts=player_counts, player_max=player_max,
-                               server_names=server_names, all_tags=all_tags,
-                               can_edit_tags=(current_user.is_superadmin
-                                              or has_permission(current_user, MANAGE_SERVERS)),
-                               can_install=(current_user.is_superadmin
-                                            or has_permission(current_user, INSTALL_SERVER)
-                                            or has_permission(current_user, MANAGE_SERVERS)))
+        """Kept as a REDIRECT, not deleted.
 
+        The server list folded into the dashboard: the two pages showed seven of the same eight
+        columns and shared no code at all — doAction vs msrvAction, sortDashCol vs sortServers —
+        so one of them was a second implementation of the other, drifting on its own.
+
+        The route stays because the URL is in people's bookmarks, in the sidebar's muscle memory,
+        and in any link anyone has shared. A 302 costs nothing; a 404 is a support question.
+        """
+        return redirect(url_for("index"))
 
     @app.route("/servers/install")
     @login_required

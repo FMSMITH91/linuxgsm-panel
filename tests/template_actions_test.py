@@ -1112,7 +1112,7 @@ _SECTION_PAGE_TEMPLATE = {
     "/account": "account.html",
     "/settings": "settings.html",
     "/users": "manage_users.html",
-    "/servers/manage": "manage_servers.html",
+    "/": "dashboard.html",
     "/servers/install": "install_server.html",
 }
 _pal_src = (ROOT / "static" / "js" / "palette.js").read_text(encoding="utf-8")
