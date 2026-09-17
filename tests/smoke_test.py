@@ -1658,7 +1658,19 @@ try:
           "/files" in _dash, "server_files was reachable from the old row and nowhere else")
     check("one-table: ...the per-server tag button",
           'data-action="editServerTags"' in _dash)
-    check("one-table: ...and the Tags card", 'id="sec-tags"' in _dash)
+    # Split the <head> off first. This check passed while the Tags card was accidentally emitted
+    # INSIDE {% block title %} — the string was in the HTML, so a whole-document substring test
+    # was true, the tab title was full of raw markup and the card rendered nowhere. A page-level
+    # assertion has to look at the page.
+    _dash_body = _dash.split("</head>", 1)[-1]
+    check("one-table: the dashboard's <title> is a title, not markup",
+          "<details" not in _dash.split("</title>")[0],
+          _dash.split("</title>")[0][-120:])
+    check("one-table: ...and the Tags card is in the BODY", 'id="sec-tags"' in _dash_body)
+    check("one-table: ...rendered once, not twice",
+          _dash_body.count("bi-tags-fill") == 1,
+          "%d tag headers — the <summary> replaced the card-header, both should not remain"
+          % _dash_body.count("bi-tags-fill"))
     check("one-table: ...with the script that makes those buttons work",
           "server_tags.js" in _dash, "the tag handlers would be dead without it")
 

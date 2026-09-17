@@ -1,42 +1,5 @@
 {% extends "base.html" %}
-{% block title %}Dashboard{% if can_edit_tags %}
-{# Tags moved here when /servers/manage folded into the dashboard. Collapsed because
-   this page is what you look at to ACT on servers; defining labels is configuration,
-   and it sat below the fold on /servers/manage anyway. The dashboard already filters
-   by tag, so both halves of tagging now live in one place. #}
-<details class="card mb-3" id="sec-tags">
-  <summary class="card-header" style="cursor:pointer; list-style:none;">
-    <i class="bi bi-tags-fill"></i> Tags
-    <span class="text-secondary small ms-auto">tap to open</span>
-  </summary>
-  <div class="card-header"><i class="bi bi-tags-fill"></i> Tags</div>
-  <div class="card-body">
-    <p class="text-secondary small mb-3">Labels shared by everyone on this panel, for grouping and filtering servers. Filter the dashboard by a tag and act on the whole group at once. A muted tag keeps its servers out of the alert channel without turning the alert off for everything else.</p>
-    <div class="d-flex gap-2 flex-wrap align-items-end mb-3">
-      <div>
-        <label class="form-label small mb-1" for="tag-name">Name</label>
-        <input type="text" id="tag-name" class="form-control form-control-sm" style="width:190px;"
-               maxlength="32" placeholder="production" autocomplete="off">
-      </div>
-      <div>
-        <label class="form-label small mb-1" for="tag-color">Colour</label>
-        <input type="color" id="tag-color" class="form-control form-control-color form-control-sm"
-               value="#4c8bf5" title="Chip colour">
-      </div>
-      <div class="form-check ms-1 mb-1">
-        <input class="form-check-input" type="checkbox" id="tag-notify" checked>
-        <label class="form-check-label small" for="tag-notify">Send alerts for these servers</label>
-      </div>
-      <button class="btn btn-primary btn-sm" data-action="createTag" data-args='["@self"]'>
-        <i class="bi bi-plus-lg"></i> Add tag
-      </button>
-    </div>
-    <div id="tag-list" class="d-flex flex-column gap-2" data-no-i18n></div>
-  </div>
-</details>
-{% endif %}
-
-{% endblock %}
+{% block title %}Dashboard{% endblock %}
 {% block content %}
 
 {# Bulk-action bar, rendered both above and below the server list so it's reachable from either
@@ -334,6 +297,42 @@
 
 {% if can_control %}{{ bulk_bar('bottom') }}{% endif %}
 
+{% endif %}
+
+{% if can_edit_tags %}
+{# Tags moved here when /servers/manage folded into the dashboard. Collapsed because
+   this page is what you look at to ACT on servers; defining labels is configuration,
+   and it sat below the fold on /servers/manage anyway. The dashboard already filters
+   by tag, so both halves of tagging now live in one place. #}
+<details class="card mb-3" id="sec-tags">
+  <summary class="card-header" style="cursor:pointer; list-style:none;">
+    <i class="bi bi-tags-fill"></i> Tags
+    <span class="text-secondary small ms-auto">tap to open</span>
+  </summary>
+  <div class="card-body">
+    <p class="text-secondary small mb-3">Labels shared by everyone on this panel, for grouping and filtering servers. Filter the dashboard by a tag and act on the whole group at once. A muted tag keeps its servers out of the alert channel without turning the alert off for everything else.</p>
+    <div class="d-flex gap-2 flex-wrap align-items-end mb-3">
+      <div>
+        <label class="form-label small mb-1" for="tag-name">Name</label>
+        <input type="text" id="tag-name" class="form-control form-control-sm" style="width:190px;"
+               maxlength="32" placeholder="production" autocomplete="off">
+      </div>
+      <div>
+        <label class="form-label small mb-1" for="tag-color">Colour</label>
+        <input type="color" id="tag-color" class="form-control form-control-color form-control-sm"
+               value="#4c8bf5" title="Chip colour">
+      </div>
+      <div class="form-check ms-1 mb-1">
+        <input class="form-check-input" type="checkbox" id="tag-notify" checked>
+        <label class="form-check-label small" for="tag-notify">Send alerts for these servers</label>
+      </div>
+      <button class="btn btn-primary btn-sm" data-action="createTag" data-args='["@self"]'>
+        <i class="bi bi-plus-lg"></i> Add tag
+      </button>
+    </div>
+    <div id="tag-list" class="d-flex flex-column gap-2" data-no-i18n></div>
+  </div>
+</details>
 {% endif %}
 
 {% endblock %}
