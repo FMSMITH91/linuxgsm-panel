@@ -111,7 +111,16 @@
     { hash: 'sec-rawlogs',    label: 'Raw logs',
       kw: 'logs journal syslog raw output' },
     { hash: 'sec-ubuntupro',  label: 'Ubuntu Pro',
-      kw: 'ubuntu pro esm livepatch subscription attach' }
+      kw: 'ubuntu pro esm livepatch subscription attach' },
+    // These two cards are NOT panel-host-only — remote_manage.html renders them for every host,
+    // and only the events log and the panel's own backups/updates/diagnostics are gated on
+    // remote.is_local. They were added to SECTIONS pinned at /server-management alone, so the
+    // palette could find a remote host's firewall but not its bans. nav_remotes filters out the
+    // local host, so these expand over remote hosts only and don't double up with those entries.
+    { hash: 'sec-bans',       label: 'Banned IPs (fail2ban)',
+      kw: 'banned ban bans fail2ban blocked unban ip attacker' },
+    { hash: 'sec-top',        label: 'Top offenders',
+      kw: 'offenders attackers top ips worst repeat autoblock automatic blocking threshold' }
   ];
   var EL = {};                 // cached element refs, filled on first open
   var servers = null;          // null = not fetched yet; [] = fetched and empty

@@ -1212,6 +1212,58 @@ check(not _host_dead,
       "palette: every per-host section anchor exists in remote_manage.html",
       "dead anchors: " + ", ".join(_host_dead))
 
+# ── A card that every host has must be findable for every host ────────────────────────────────
+# remote_manage.html serves BOTH /server-management (the panel host) and /remote/<id>/manage, and
+# only some of its cards are gated on remote.is_local — the panel's own backups/updates/
+# diagnostics, and the security events log. Everything else renders for every host.
+#
+# SECTIONS pins a section to ONE page; HOST_SECTIONS is expanded over every host the sidebar
+# lists. So a card that is not is_local-gated but appears only in SECTIONS at /server-management
+# is findable for the panel host and invisible for every remote one — which is how Banned IPs and
+# Top offenders shipped: both render on every host page, and the palette offered them for exactly
+# one. This asks the template which cards are panel-only rather than trusting a list.
+_IS_LOCAL_GUARD = "is_local"
+
+
+def _is_panel_host_only(html, anchor_id):
+    """Is this id inside an {% if ... is_local ... %} block? Walks Jinja if/endif, tracking the
+    conditions currently open — the same nesting question as the data-mtab walker above, over
+    template tags instead of divs."""
+    pos = html.find('id="%s"' % anchor_id)
+    if pos < 0:
+        return None
+    stack = []
+    for m in re.finditer(r"\{%-?\s*(if|elif|else|endif)\b([^%]*)%\}", html):
+        if m.start() > pos:
+            break
+        kind, cond = m.group(1), m.group(2).strip()
+        if kind == "if":
+            stack.append(cond)
+        elif kind == "endif":
+            if stack:
+                stack.pop()
+        elif stack:
+            stack[-1] = cond if kind == "elif" else ("not " + stack[-1])
+    return any(_IS_LOCAL_GUARD in c for c in stack)
+
+
+# Vacuity guard: two ids whose gating is known independently — the panel's self-update card is
+# panel-only, the firewall card is on every host. If the Jinja walk desyncs these go first.
+check(_is_panel_host_only(_rm_html, "updates") is True
+      and _is_panel_host_only(_rm_html, "sec-firewall") is False,
+      "palette: the is_local walker agrees with two independently known cards",
+      "updates=%r sec-firewall=%r" % (_is_panel_host_only(_rm_html, "updates"),
+                                      _is_panel_host_only(_rm_html, "sec-firewall")))
+_pinned = [h for pg, h in _sections if pg == "/server-management"]
+check(len(_pinned) >= 3, "palette: there are /server-management sections to check",
+      "%d found — the gate below proves nothing if this is 0" % len(_pinned))
+_host_only_missing = [h for h in _pinned
+                      if _is_panel_host_only(_rm_html, h) is False and h not in _host_hashes]
+check(not _host_only_missing,
+      "palette: a card every host renders is offered for every host, not just the panel one",
+      "renders on remote hosts too but is only in SECTIONS: %s — add to HOST_SECTIONS"
+      % sorted(set(_host_only_missing)))
+
 # ...and the way a host link is RECOGNISED has to match the real route. Not theoretical: it
 # shipped matching '/remote/<id>' with no '/manage', found no host at all, and every per-host
 # section vanished from the results with every other check green. Nothing in the palette fails
