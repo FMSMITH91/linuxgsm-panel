@@ -1179,6 +1179,96 @@ if _prefix_m and _suffix_m:
           "palette builds %r, the route is %r — per-host sections would silently find nothing"
           % (_built, _concrete))
 
+# ── a page's data-action handlers must be defined in a script THAT PAGE LOADS ─────────────────
+# The existing dispatcher check asks whether a handler exists ANYWHERE in static/js. That is not
+# the question a click asks. install_server.html was split out of manage_servers.html carrying
+# updatePort, suggestFreePort and refreshGameList — and none of the JS: the page loaded no script
+# at all, so picking a game did not set its port, the free-port hint never appeared, and the Retry
+# button for a failed game list did nothing. Every handler existed; none was reachable. Nothing
+# failed, on any page, in any suite.
+#
+# base.html's own scripts count for every page that extends it (panel.js, the dispatcher itself).
+_BASE_JS = set(re.findall(r"asset_url\('js/([\w.-]+)'\)",
+                          (TEMPLATES / "base.html").read_text(encoding="utf-8")))
+_defs = {}                       # function name -> set of js files defining it
+for _js in sorted(STATIC_JS.glob("*.js")):
+    _src = _js.read_text(encoding="utf-8")
+    for _fn in re.findall(r"^\s*(?:window\.)?function\s+([A-Za-z_$][\w$]*)", _src, re.M):
+        _defs.setdefault(_fn, set()).add(_js.name)
+    for _fn in re.findall(r"^\s*window\.([A-Za-z_$][\w$]*)\s*=\s*function", _src, re.M):
+        _defs.setdefault(_fn, set()).add(_js.name)
+
+# A PARTIAL loads no scripts — its includer does. So a partial's handlers are checked against
+# each page that includes it, and the partial itself is not checked standalone. Without this the
+# gate reports _server_actions.html's own buttons as unreachable on every run, which would teach
+# whoever sees it to ignore the check.
+_includes = {}
+for _tpl in sorted(TEMPLATES.glob("*.html")):
+    for _inc in re.findall(r'\{%-?\s*include\s+[\'"]([\w./-]+)[\'"]', _tpl.read_text(encoding="utf-8")):
+        _includes.setdefault(_tpl.name, set()).add(_inc)
+_included_by = {}
+for _page, _incs in _includes.items():
+    for _i in _incs:
+        _included_by.setdefault(_i, set()).add(_page)
+
+_unreachable = []
+for _tpl in sorted(TEMPLATES.glob("*.html")):
+    _src = _tpl.read_text(encoding="utf-8")
+    if _tpl.name in _included_by:
+        continue                 # checked through its includers below
+    _loaded = set(re.findall(r"asset_url\('js/([\w.-]+)'\)", _src)) | _BASE_JS
+    _actions = set(re.findall(r'data-action="([A-Za-z_$][\w$]*)"', _src))
+    # {% with show_clear_console = True %}{% include ... %} — a partial's button can be behind a
+    # flag the includer sets. server_files.html includes _server_actions.html but never sets
+    # show_clear_console, so its Clear Console button does not render there and its handler is
+    # not needed. Demanding the script anyway would report a button that does not exist.
+    _set_here = set(re.findall(r"\{%-?\s*with\s+([A-Za-z_]\w*)\s*=", _src))
+    for _inc in _includes.get(_tpl.name, ()):
+        _ip = TEMPLATES / _inc
+        if not _ip.exists():
+            continue
+        _isrc = _ip.read_text(encoding="utf-8")
+        _loaded |= set(re.findall(r"asset_url\('js/([\w.-]+)'\)", _isrc))
+        # A STACK, not a count: {% if %} tags carrying an expression ("{% if a == 'b' %}") do not
+        # match a bare-variable pattern, so counting matches against endifs desynchronises and the
+        # wrong guard gets attributed. Walk every if/endif in order instead and read the innermost
+        # still-open one.
+        _toks = [(m.start(), m.group(0), m.group(1))
+                 for m in re.finditer(r"\{%-?\s*(?:(?:el)?if\s+([^%]*?)|endif)\s*-?%\}", _isrc)]
+        for _m in re.finditer(r'data-action="([A-Za-z_$][\w$]*)"', _isrc):
+            _stack = []
+            for _pos, _raw, _expr in _toks:
+                if _pos >= _m.start():
+                    break
+                if "endif" in _raw:
+                    if _stack:
+                        _stack.pop()
+                elif _raw.lstrip("{%- ").startswith("elif"):
+                    if _stack:
+                        _stack[-1] = (_expr or "").strip()
+                else:
+                    _stack.append((_expr or "").strip())
+            _guard = _stack[-1] if _stack else None
+            # Only a BARE variable is treated as a page-supplied flag; an expression is about the
+            # loop or the data, not about which page included the partial.
+            if _guard and re.fullmatch(r"[A-Za-z_]\w*", _guard) and _guard not in _set_here:
+                continue        # cannot render on this page
+            _actions.add(_m.group(1))
+    for _act in sorted(_actions):
+        _where = _defs.get(_act)
+        if not _where:
+            continue             # "does it exist at all" is the dispatcher check's job, above
+        if not (_where & _loaded):
+            _unreachable.append("%s: %s (defined in %s, not loaded)"
+                                % (_tpl.name, _act, ",".join(sorted(_where))))
+check(len(_included_by) >= 1, "js: the include map found at least one partial",
+      "no {% include %} resolved — partials would be checked as if they were pages")
+check(len(_defs) >= 50, "js: the handler-definition scan found the functions",
+      "only %d found — the check below proves nothing" % len(_defs))
+check(not _unreachable,
+      "js: every page's data-action handlers live in a script that page loads",
+      "; ".join(_unreachable[:5]))
+
 # ── report ──
 # c is True (pass), False (fail) or None (skipped — the check did not run; see skip()).
 passed = sum(1 for c, _, _ in results if c is True)

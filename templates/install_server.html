@@ -20,10 +20,16 @@
           data-ajax-after="afterServerRefresh">
       <div class="col-md-3">
         <label class="form-label" for="remote-select">Target Server</label>
+        {# With ONE host there is nothing to choose: the placeholder is a required field whose
+           only valid answer is the single option below it, so it is a click that can only be
+           made one way. Pre-selected instead, and the placeholder dropped entirely — offering
+           "Select a server..." above a list of one is offering a decision that does not exist.
+           With two or more hosts the placeholder stays, because then picking is real and a
+           silent default would install onto whichever host happened to sort first. #}
         <select name="remote_id" id="remote-select" class="form-select" required data-action="suggestFreePort" data-on="change">
-          <option value="">Select a server...</option>
+          {% if remotes|length != 1 %}<option value="">Select a server...</option>{% endif %}
           {% for r in remotes %}
-          <option value="{{ r.id }}">{{ r.display_name }}</option>
+          <option value="{{ r.id }}"{% if remotes|length == 1 %} selected{% endif %}>{{ r.display_name }}</option>
           {% endfor %}
         </select>
       </div>
@@ -89,4 +95,12 @@
   </div>
 </div>
 
+{% endblock %}
+
+{# Without this the page had NO JavaScript: updatePort (set the default port for a game),
+   suggestFreePort (the free-port hint) and refreshGameList (the Retry button when LinuxGSM's
+   game list could not be fetched) are all data-action handlers defined in manage_servers.js,
+   and the form was moved here without its script. Every one of them silently did nothing. #}
+{% block scripts %}
+<script nonce="{{ csp_nonce }}" src="{{ asset_url('js/manage_servers.js') }}"></script>
 {% endblock %}
