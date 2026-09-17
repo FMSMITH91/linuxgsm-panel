@@ -358,7 +358,14 @@ def register(app):
                                     port=gs.port, query_type=gs.query_type,
                                     selfname=gs.lgsm_name)
         except Exception:
-            _log.debug("game version read failed for server %s", server_id, exc_info=True)
+            # gs.id, not the route's own server_id — the same number, taken off the row rather
+            # than off the URL. `<int:server_id>` already makes CR/LF impossible, so nothing can
+            # be injected into the log either way, but no other route handler here logs its raw
+            # path parameter and CodeQL's py/log-injection does not model Werkzeug's converters:
+            # this is the only one that flowed request text straight to a log sink. A gate that
+            # cries wolf is how a real alert gets waved through, so break the flow rather than
+            # dismiss the alert.
+            _log.debug("game version read failed for server %s", gs.id, exc_info=True)
             info = {"reported": "", "build": "", "appid": "", "updated": None, "label": ""}
         return jsonify({"supports_update": gs.supports_update, **info})
 
