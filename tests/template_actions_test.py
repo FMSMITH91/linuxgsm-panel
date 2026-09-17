@@ -1139,6 +1139,67 @@ check(not _unmapped,
 check(not _dead, "palette: every section anchor exists in the page it points at",
       "dead anchors: " + "; ".join(_dead))
 
+# ── ...and on a TABBED page, existing is not the same as reachable ────────────────────────────
+# remote_manage.html hides every card whose data-mtab is not the open tab, so a link to a card on
+# a closed tab scrolls to a display:none element — which does nothing, silently. The page routes
+# a #hash to the right tab before scrolling, and USED to do it from a hand-written map naming four
+# ids; everything else fell through to the Overview tab. Three palette entries shipped that way
+# (Banned IPs, Top offenders, Recent security events): they opened the wrong tab and landed on a
+# hidden card, with every other check green because the id was right there in the template.
+#
+# The fix reads the tab off the DOM, so this gate asks the same question the page now asks: is the
+# id inside SOME data-mtab section? Div depth is tracked rather than parsed as HTML, because the
+# file is a Jinja template — conditional attributes would defeat an HTML parser, while the
+# {% if %} blocks here wrap whole <div>s and so leave div nesting balanced.
+_TABBED = {"/server-management": "remote_manage.html", "/remote/manage": "remote_manage.html"}
+
+
+def _mtab_owner_of(html, wanted):
+    """id -> the data-mtab section enclosing it (or None), by walking div depth."""
+    html = re.sub(r"\{#.*?#\}", "", html, flags=re.S)       # Jinja comments can contain markup
+    html = re.sub(r"<!--.*?-->", "", html, flags=re.S)
+    out, stack = {}, []
+
+    def _enclosing():
+        return next((t for t in reversed(stack) if t), None)
+
+    for m in re.finditer(r"<div\b[^>]*>|</div>|id=\"([\w-]+)\"", html):
+        tok = m.group(0)
+        if tok == "</div>":
+            if stack:
+                stack.pop()
+        elif tok.startswith("<div"):
+            mt = re.search(r'data-mtab="(\w+)"', tok)
+            mt = mt.group(1) if mt else None
+            # The id and the data-mtab are usually on the SAME div, and that tag is matched whole
+            # — so the id has to be read out of it here. Reading only free-standing id= attributes
+            # missed every card that carries both, which is all of them.
+            did = re.search(r'\bid="([\w-]+)"', tok)
+            if did and did.group(1) in wanted:
+                out[did.group(1)] = mt or _enclosing()
+            stack.append(mt)
+        elif m.group(1) in wanted:
+            out[m.group(1)] = _enclosing()     # an id on a non-div element, e.g. an <input>
+    return out
+
+
+_rm_src = (TEMPLATES / "remote_manage.html").read_text(encoding="utf-8")
+_tabbed_hashes = [h for pg, h in _sections if pg in _TABBED]
+_owners = _mtab_owner_of(_rm_src, set(_tabbed_hashes) | {"backups", "sec-bans"})
+# Vacuity guard for the walker itself: two ids whose tabs are known independently — 'backups' sits
+# on Maintenance and 'sec-bans' on Security. If the depth tracking ever desyncs these go wrong
+# first, and the gate below would otherwise pass by finding nothing.
+check(_owners.get("backups") == "maintenance" and _owners.get("sec-bans") == "security",
+      "palette: the data-mtab walker agrees with two independently known cards",
+      "backups=%r sec-bans=%r" % (_owners.get("backups"), _owners.get("sec-bans")))
+check(len(_tabbed_hashes) >= 3, "palette: there are tabbed-page sections to check",
+      "%d found — the gate below proves nothing if this is 0" % len(_tabbed_hashes))
+_unreachable = [h for h in _tabbed_hashes if not _owners.get(h)]
+check(not _unreachable,
+      "palette: every section on a tabbed page sits in a tab the page can open",
+      "not inside any data-mtab section, so the link lands on a hidden card: %s"
+      % sorted(set(_unreachable)))
+
 # HOST_SECTIONS are expanded per host at runtime, so their page is always remote_manage.html.
 # Same rot, same gate: a renamed card id there breaks every host's entry at once.
 _host_block = re.search(r"var HOST_SECTIONS = \[(.*?)\n  \];", _pal_src, re.S)
