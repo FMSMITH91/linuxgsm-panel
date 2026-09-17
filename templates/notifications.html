@@ -5,24 +5,37 @@
 <div class="d-flex justify-content-between align-items-center mb-3 flex-wrap gap-2">
   <h1 class="page-title mb-0"><i class="bi bi-bell-fill"></i> Notifications</h1>
 </div>
-<p class="text-secondary">
-  Get alerted on Telegram or Discord when something needs your attention — a server drops, a host
-  goes unreachable, a backup fails, an admin signs in. These are the panel's own alerts to you; a
-  game's in-game alerts are still set per server on its Alerts tab.
+{# First sentence dropped: it listed what the checkboxes below already list, one screen down,
+   in the same words. The second stayed, because it is the one thing this page cannot show you —
+   that a GAME's in-game alerts live somewhere else entirely, and looking here for them is a
+   wasted trip. Prose earns its place by saying what the controls can't. #}
+<p class="text-secondary small">
+  These are the panel's own alerts to you; a game's in-game alerts are still set per server on
+  its Alerts tab.
 </p>
 
+{# Channel setup is a thing you do ONCE — a bot token, a webhook URL, a topic name — and then
+   never look at again, yet the three channel cards were 56% of this page's height (1655px of
+   2950px at 375px wide), permanently, pushing "Alert me when…" — the part you actually come back
+   to change — off the bottom. Behind a disclosure now, with the ON/OFF switch left in the header
+   so a channel can still be silenced in one tap without expanding anything. #}
 <form method="POST" action="{{ url_for('notifications_save') }}">
   <div class="row">
     <!-- Telegram -->
     <div class="col-lg-6 mb-3">
       <div class="card h-100">
         <div class="card-header d-flex justify-content-between align-items-center">
-          <span><i class="bi bi-telegram"></i> Telegram</span>
+          <button type="button" class="chan-toggle btn btn-link p-0 text-decoration-none text-start"
+                  data-bs-toggle="collapse" data-bs-target="#chan-telegram"
+                  aria-expanded="false" aria-controls="chan-telegram">
+            <span><i class="bi bi-telegram"></i> Telegram</span> <i class="bi bi-chevron-down small ms-1" aria-hidden="true"></i>
+          </button>
           <div class="form-check form-switch mb-0">
             <input type="checkbox" name="telegram_enabled" class="form-check-input" role="switch" id="tg-en"
                    {% if settings.telegram.enabled %}checked{% endif %}>
           </div>
         </div>
+        <div class="collapse" id="chan-telegram">
         <div class="card-body">
           <label class="form-label small mb-1" for="notifications-telegram_token">Bot token</label>
           <input id="notifications-telegram_token" type="password" name="telegram_token" class="form-control form-control-sm" autocomplete="off"
@@ -54,18 +67,24 @@
           </div>
         </div>
       </div>
+      </div>
     </div>
 
     <!-- Discord -->
     <div class="col-lg-6 mb-3">
       <div class="card h-100">
         <div class="card-header d-flex justify-content-between align-items-center">
-          <span><i class="bi bi-discord"></i> Discord</span>
+          <button type="button" class="chan-toggle btn btn-link p-0 text-decoration-none text-start"
+                  data-bs-toggle="collapse" data-bs-target="#chan-discord"
+                  aria-expanded="false" aria-controls="chan-discord">
+            <span><i class="bi bi-discord"></i> Discord</span> <i class="bi bi-chevron-down small ms-1" aria-hidden="true"></i>
+          </button>
           <div class="form-check form-switch mb-0">
             <input type="checkbox" name="discord_enabled" class="form-check-input" role="switch" id="dc-en"
                    {% if settings.discord.enabled %}checked{% endif %}>
           </div>
         </div>
+        <div class="collapse" id="chan-discord">
         <div class="card-body">
           <label class="form-label small mb-1" for="notifications-discord_webhook">Webhook URL</label>
           <input id="notifications-discord_webhook" type="password" name="discord_webhook" class="form-control form-control-sm" autocomplete="off"
@@ -110,18 +129,24 @@
           </button>
         </div>
       </div>
+      </div>
     </div>
 
     <!-- ntfy -->
     <div class="col-lg-6 mb-3">
       <div class="card h-100">
         <div class="card-header d-flex justify-content-between align-items-center">
-          <span><i class="bi bi-bell"></i> <span data-no-i18n>ntfy</span></span>
+          <button type="button" class="chan-toggle btn btn-link p-0 text-decoration-none text-start"
+                  data-bs-toggle="collapse" data-bs-target="#chan-ntfy"
+                  aria-expanded="false" aria-controls="chan-ntfy">
+            <span><i class="bi bi-bell"></i> <span data-no-i18n>ntfy</span></span> <i class="bi bi-chevron-down small ms-1" aria-hidden="true"></i>
+          </button>
           <div class="form-check form-switch mb-0">
             <input type="checkbox" name="ntfy_enabled" class="form-check-input" role="switch" id="nt-en"
                    {% if settings.ntfy.enabled %}checked{% endif %}>
           </div>
         </div>
+        <div class="collapse" id="chan-ntfy">
         <div class="card-body">
           <label class="form-label small mb-1" for="notifications-ntfy_topic">Topic</label>
           <input id="notifications-ntfy_topic" type="text" name="ntfy_topic" class="form-control form-control-sm" autocomplete="off"
@@ -146,6 +171,7 @@
             <i class="bi bi-send"></i> Send test
           </button>
         </div>
+      </div>
       </div>
     </div>
   </div>
