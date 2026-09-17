@@ -27,13 +27,11 @@
   </span>
 </div>
 
-{% if remote.is_local %}
-<div class="alert alert-info py-2 small mb-3" style="background: rgba(16,185,129,.08); border-color: var(--accent);">
-  <i class="bi bi-info-circle"></i>
-  <strong>The server the panel runs on.</strong>
-  It is managed like any remote host, with panel-only extras below.
-</div>
-{% endif %}
+{# The "this is the machine the panel runs on" banner is gone. It was 56px of prose on every
+   visit to say something the header beside it already says — the breadcrumb reads
+   "Dashboard > Panel Server" and the title carries a "this panel" badge — and it is the kind of
+   sentence that is useful exactly once and then permanent furniture. On a 812px phone screen
+   that was 7% of everything visible, spent re-explaining the page you had already opened. #}
 
 <!-- Section tabs: group the cards so the page isn't one long wall. Cards are tagged with
      data-mtab and filtered client-side (see the mtab script), so every card keeps its exact
