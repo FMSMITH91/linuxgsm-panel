@@ -1,22 +1,63 @@
 :root {
       --sidebar-w: 250px;
-      --bg: #0a0f1a;
-      --bg-card: #111827;
-      --bg-elevated: #1a2332;
-      --border: #1f2937;
-      --text: #d1d5db;
-      --text-muted: #9ca3af;  /* AA-contrast (>=4.5:1) on the dark card bg; was #6b7280 (3.6:1) */
-      --text-heading: #f3f4f6;
-      --accent: #10b981;
-      --accent-hover: #34d399;
-      --accent-glow: rgba(16, 185, 129, .15);
-      --danger: #ef4444;
-      --warning: #f59e0b;
-      --radius: 10px;
-      --radius-sm: 6px;
+
+      /* ── Surfaces ──────────────────────────────────────────────────────────────────────────
+         Warm graphite rather than the blue-black this used to be (#0a0f1a, hue 220). A console
+         should read as metal and ink, not as navy, and the old palette was Tailwind's slate
+         scale used as-is — which is why it looked like every other dark dashboard.
+         Five steps instead of three: a SUNKEN level was missing, so consoles, logs and code
+         wells were drawn on the same plane as the cards containing them and had to be outlined
+         to read as recessed. */
+      --bg: #12151c;          /* the working surface — deliberately the LIGHTEST chrome tone */
+      --bg-sunken: #0a0c10;
+      --bg-card: #1b1f28;
+      --bg-elevated: #252a36;
+      --bg-hover: #2b313f;
+      --border: #2f3542;
+      --border-strong: #404757;
+      /* The navigation is the darkest thing on screen, not the same tone as the cards. Chrome
+         should recede and content should come forward; the old palette had them within 0x0d of
+         each other, so the eye had nothing to separate "where I am" from "what I am reading". */
+      --bg-chrome: #0a0b0f;
+
+      /* ── Ink ───────────────────────────────────────────────────────────────────────────────
+         Slightly warmer and a touch softer than pure grey; --text-muted keeps its AA contrast
+         (>=4.5:1) against --bg-card, which an earlier fix established and which this must not
+         quietly give back. */
+      --text: #ced3dc;
+      --text-muted: #969db0;
+      --text-heading: #f5f7fa;
+
+      /* ── Accent ────────────────────────────────────────────────────────────────────────────
+         Still green — it is LinuxGSM's identity and "running" reads green everywhere in this
+         app — but off the neon emerald and onto something with more body, so it sits on the
+         warm neutrals instead of vibrating against them. Overridden per-install by
+         Settings -> Branding; this is only the built-in default. */
+      --accent: #2ecc8f;
+      --accent-hover: #55e0a8;
+      --accent-glow: rgba(46, 204, 143, .15);
+      --danger: #f2555a;
+      --warning: #e8a33d;
+      --info: #4aa8e0;
+
+      /* ── Depth ─────────────────────────────────────────────────────────────────────────────
+         The old theme had no shadows at all: every surface sat on the same plane and separation
+         came entirely from 1px borders, which is what made dense pages read as a wall. */
+      --shadow-sm: 0 1px 2px rgba(0,0,0,.35);
+      --shadow: 0 2px 6px rgba(0,0,0,.4), 0 1px 2px rgba(0,0,0,.3);
+      --shadow-lg: 0 14px 38px rgba(0,0,0,.55);
+
+      --radius: 12px;
+      --radius-sm: 8px;
+      --radius-xs: 5px;
+
       --font-size-base: 0.9375rem;
       --font-size-sm: 0.8125rem;
       --font-size-xs: 0.7rem;
+      /* This panel is full of values that are read character by character — IPs, ports, commit
+         hashes, versions, player counts. They belong in a tabular mono, where a 0 cannot be an
+         O and columns of numbers line up. */
+      --font-mono: ui-monospace, 'SF Mono', SFMono-Regular, 'JetBrains Mono', Menlo, Consolas, monospace;
     }
     * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
     /* Reserve a minimum width for icon glyphs so they can't shift layout while the
@@ -43,7 +84,7 @@
       width: var(--sidebar-w); height: 100vh;
       height: 100dvh;   /* dynamic viewport: on mobile 100vh is taller than the screen, pushing the
                            footer (Sign Out) off the bottom with nothing to scroll to */
-      background: var(--bg-card);
+      background: var(--bg-chrome);
       border-right: 1px solid var(--border);
       z-index: 100;
       display: flex; flex-direction: column;
@@ -110,7 +151,7 @@
       display: none;
       position: fixed; top: 0; left: 0; right: 0;
       height: 54px;
-      background: var(--bg-card);
+      background: var(--bg-chrome);
       border-bottom: 1px solid var(--border);
       z-index: 200;
       align-items: center; gap: .5rem;
@@ -181,16 +222,45 @@
       border: 1px solid var(--border);
       border-radius: var(--radius);
       margin-bottom: 1rem;
+      box-shadow: var(--shadow);
+      /* A one-pixel highlight along the top edge. It is what makes a surface read as lit from
+         above and sitting ON the page rather than cut out of it, and it costs no layout — the
+         old cards were outlines around a fill, which is why a column of them looked like a
+         table of boxes instead of a stack of objects. */
+      background-image: linear-gradient(var(--bg-elevated), var(--bg-elevated));
+      background-size: 100% 1px;
+      background-repeat: no-repeat;
+      background-position: 0 0;
     }
     .card-header {
-      background: var(--bg-elevated);
+      /* A shallow gradient rather than a flat fill, so the header reads as the lit face of the
+         card and the body falls away beneath it. */
+      background: linear-gradient(180deg, var(--bg-elevated), var(--bg-card));
       border-bottom: 1px solid var(--border);
       padding: .85rem 1.25rem;
       font-weight: 600; font-size: .9rem;
+      letter-spacing: .01em;
       color: var(--text-heading);
       border-radius: var(--radius) var(--radius) 0 0 !important;
       display: flex; align-items: center; gap: .5rem;
     }
+    /* Values you read character by character. A tabular mono keeps 0 and O apart and makes
+       columns of ports and counts line up instead of drifting. */
+    code, kbd, samp, pre, .mono,
+    .server-addr, .host-ip, .text-monospace {
+      font-family: var(--font-mono);
+      font-variant-numeric: tabular-nums;
+      font-size: .92em;
+    }
+    /* Recessed wells — consoles, log tails, command output. There was no sunken level at all
+       before, so these sat on the same plane as the card around them. */
+    pre, .console-out, .log-well {
+      background: var(--bg-sunken);
+      border: 1px solid var(--border);
+      border-radius: var(--radius-sm);
+    }
+    .table tbody tr { transition: background .12s ease; }
+    .table tbody tr:hover { background: var(--bg-hover); }
     .card-header i { color: var(--text-muted); }
     .card-body { padding: 1.25rem; }
     .card-footer {
@@ -508,6 +578,10 @@
       .main-content { padding: 1.5rem; }
     }
     @media (max-width: 767.98px) {
+      /* The 2FA banner is the topbar chip's job at this width — showing both is the same warning
+         twice, and the banner is 89px of an 812px screen. Above this breakpoint there is no
+         topbar at all, so the banner is the ONLY thing carrying the warning and must stay. */
+      #otp-nag { display: none !important; }
       /* The topbar names the page, so the in-page <h1> repeats it. Hidden rather than deleted
          from the templates: the heading is still the right thing on a desktop, where there is no
          topbar at all and the sidebar shows only the section. Kept in the DOM and readable by

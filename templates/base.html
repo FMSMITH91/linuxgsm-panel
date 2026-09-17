@@ -255,11 +255,13 @@
 <!-- Main content -->
 <main class="main-content{% if not show_app_chrome %} main-content-full{% endif %}">
   <div class="content-wrap">
-    {# The full banner now appears only on Account — the page you would open to act on it.
-       On every other page it is an 89px interruption repeating what the topbar chip already
-       says, and 89px of an 812px phone screen is 11% of everything you can see, spent on a
-       warning you have already read. #}
-    {% if show_app_chrome and request.endpoint in ('account', 'account_2fa_enable') and current_user.is_superadmin and not current_user.totp_enabled and not current_user.otp_nag_dismissed %}
+    {# The banner renders on every page as it always did, and CSS hides it on phones — where the
+       topbar chip takes over. Scoping it to Account in the template instead was wrong and I
+       shipped it: the topbar is display:none above 767.98px, so a desktop superadmin without 2FA
+       got the banner removed and the replacement chip hidden, and saw no warning at all. The
+       breakpoint decides which of the two shows, so it has to be CSS — Jinja cannot know the
+       viewport width. #}
+    {% if show_app_chrome and current_user.is_superadmin and not current_user.totp_enabled and not current_user.otp_nag_dismissed %}
     <!-- Sits on EVERY page, so its height is a tax on every screen. Measured at 375x812 it was
          243px — 30% of the viewport — and pushed the first page-specific content to y=987, past
          the fold. The rationale text and the long dismiss label are therefore shown from `sm` up
