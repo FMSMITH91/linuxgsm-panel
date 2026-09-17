@@ -534,7 +534,28 @@
          worst case ("100.0% · 100.0%") needs 207px. Shrinking the number to fit would mean ~14.6px
          against every other tile's 23px, so it takes the whole row instead — which is where it
          already sits in the default tile order anyway. */
-      #dash-tiles .col[data-panel="host"] { width: 100%; }
+      /* The four COUNT tiles share one row on a phone; the host tile keeps the full width it
+         needs for "100.0% · 100.0%" (see the note above).
+
+         At 2-up with full card padding the five tiles were 332px — 41% of a 375x812 screen — to
+         say "1 online, 1 offline" on a one-server install, and they pushed the first Start button
+         to y=710, right at the bottom edge of the first screen. Four-up with tighter padding is
+         137px, and the server controls land at y=515. Measured, not estimated; desktop is
+         untouched (5-up, 145px, byte-identical either way) because this whole block is inside the
+         phone media query.
+
+         The reorder/hide controls cost nothing here: .panel-tools is display:none until the
+         Customise button sets body.layout-edit (see the rule above), so a narrower tile does not
+         squeeze them. Inside that mode they take a row of their own by design — deliberately in
+         flow rather than overlaid, because an absolutely-positioned strip is what collided with
+         the tile's value — and they stay 39x33, which is the part that would otherwise make this
+         a bad trade on the device it is for. */
+      #dash-tiles { --bs-gutter-x: .4rem; --bs-gutter-y: .4rem; }
+      #dash-tiles > .col { flex: 0 0 25%; max-width: 25%; }
+      #dash-tiles > .col[data-panel="host"] { flex: 0 0 100%; max-width: 100%; }
+      #dash-tiles .card { padding: .4rem !important; }
+      #dash-tiles .h3 { font-size: 1rem; }
+      #dash-tiles .card .small { font-size: .6rem; }
       .row { --bs-gutter-x: .75rem; }
       .btn { font-size: .8rem; padding: .45rem .8rem; }
       .btn-sm { font-size: .75rem; padding: .35rem .6rem; }

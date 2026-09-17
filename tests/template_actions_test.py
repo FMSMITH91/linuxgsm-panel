@@ -805,7 +805,13 @@ check(not _early, "no page loads a script before panel.js (must use {% block scr
 # alone there in the default order) so the number keeps full size, and ≥768px shrinks the number,
 # with a line-height that keeps the card the same height as its neighbours.
 _tile_css = (ROOT / "static" / "css" / "panel.css").read_text(encoding="utf-8")
-check('#dash-tiles .col[data-panel="host"]' in _tile_css,
+# Matched on the PROPERTY, not one spelling of it. This was `width: 100%` and is now
+# `flex: 0 0 100%; max-width: 100%` — a full-row tile either way, but a literal-string gate failed
+# the refactor while the thing it protects still held. Accept either, and require a 100% so a rule
+# that merely mentions the selector cannot pass.
+_host_tile_rule = re.search(
+    r'#dash-tiles\s*>?\s*\.col\[data-panel="host"\]\s*\{([^}]*)\}', _tile_css)
+check(bool(_host_tile_rule) and "100%" in _host_tile_rule.group(1),
       "dashboard: the host tile takes the full row on mobile",
       "without it the two values wrap mid-number in a half-width tile")
 check(re.search(r"#host-summary\s*\{[^}]*font-size[^}]*line-height", _tile_css, re.S) is not None,
