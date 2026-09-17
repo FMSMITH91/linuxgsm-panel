@@ -33,6 +33,7 @@ function loadBackups(){
     // Bounds come from the server, so the number box and the clamp behind it cannot disagree.
     bkApplyLimits(d.limits);
     var kp=document.getElementById('bk-keep'); if(kp && s.keep_days) kp.value = String(s.keep_days);
+    bkShowEncState(s.encrypt===true);
     var tb=document.getElementById('bk-tbody'); if(!tb) return;
     var rows='';
     (d.backups||[]).forEach(function(b){
@@ -40,6 +41,9 @@ function loadBackups(){
       var kind = b.kind==='daily'?'<span class="badge bg-secondary">daily</span>'
                : b.kind==='prerestore'?'<span class="badge bg-info text-dark">pre-restore</span>'
                : '<span class="badge bg-primary">manual</span>';
+      // Encrypted rows are marked so a download is not mistaken for a file you can just open —
+      // and so it is obvious which archives need the passphrase to restore.
+      if(b.encrypted) kind += ' <i class="bi bi-shield-lock-fill text-success" title="Encrypted — needs the passphrase to restore"></i>';
       rows += '<tr>'
         + '<td title="'+escapeHtml(when)+'">'+escapeHtml(bkAgo(b.created))+'</td>'
         + '<td>'+kind+'</td>'
@@ -49,7 +53,7 @@ function loadBackups(){
         // stored SSH credential. Downloading it moves that off the 0700 data dir onto whatever
         // machine the browser is on, so the title says so rather than just "Download".
         + '<a class="btn btn-sm btn-outline-secondary py-0 px-1" href="'+MOUNT+'/api/panel/backup/download/'+encodeURIComponent(b.name)+'" title="Download — contains the database AND the encryption keys for every stored SSH credential. Keep it somewhere you would keep those keys."><i class="bi bi-download"></i></a> '
-        + '<button class="btn btn-sm btn-outline-warning py-0 px-1" title="Restore"' + _da('restoreBackup', [b.name, '@self']) + '><i class="bi bi-arrow-counterclockwise"></i></button> '
+        + '<button class="btn btn-sm btn-outline-warning py-0 px-1" title="Restore"' + _da('restoreBackup', [b.name, !!b.encrypted, '@self']) + '><i class="bi bi-arrow-counterclockwise"></i></button> '
         + '<button class="btn btn-sm btn-outline-danger py-0 px-1" title="Delete"' + _da('deleteBackup', [b.name, '@self']) + '><i class="bi bi-trash"></i></button>'
         + '</td></tr>';
     });
@@ -394,18 +398,92 @@ function deleteBackup(name,btn){
         .catch(function(){ bkMsg('✗ Delete failed','text-danger'); if(btn) btn.disabled=false; });
     }});
 }
-function restoreBackup(name,btn){
+function restoreBackup(name,encrypted,btn){
   confirmDialog({title:'Restore backup', icon:'arrow-counterclockwise', confirmClass:'btn-danger', confirmLabel:'Restore',
     bodyText:'Restore this backup?\n\n'+name+'\n\nThis OVERWRITES the panel\'s current database, settings and keys, then restarts the panel. A pre-restore safety backup is taken first.',
     onConfirm:function(){
       if(btn) btn.disabled=true;
       bkMsg('Restoring…','text-secondary');
-      fetch(MOUNT+'/api/panel/backup/restore',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({name:name})})
+      // No passphrase on the first attempt even for an encrypted archive: the server falls back to
+      // the configured one, which is the right key for every backup this panel wrote. Only an
+      // archive from ANOTHER panel (or from before the passphrase changed) needs to be asked for,
+      // so the common case stays one click.
+      _bkRestore(name, null, btn, encrypted);
+    }});
+}
+function _bkRestore(name, passphrase, btn, encrypted){
+  var body={name:name}; if(passphrase) body.passphrase=passphrase;
+  return fetch(MOUNT+'/api/panel/backup/restore',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)})
+    .then(r=>r.json()).then(function(d){
+      if(!d.success && encrypted && /passphrase/i.test(d.message||'')){
+        if(btn) btn.disabled=false;
+        bkMsg('','text-secondary');
+        _bkAskPassphrase(name, btn);
+        return;
+      }
+      bkMsg((d.success?'✓ ':'✗ ')+(d.message||''), d.success?'text-success':'text-danger');
+      if(d.success){ setTimeout(function(){ location.reload(); }, 8000); } else if(btn){ btn.disabled=false; }
+    })
+    .catch(function(){ bkMsg('The panel is restarting — reconnect in a moment.','text-warning'); });
+}
+function _bkAskPassphrase(name, btn){
+  confirmDialog({title:'Passphrase needed', icon:'shield-lock', confirmLabel:'Restore',
+    confirmClass:'btn-danger', requirePassword:true,
+    requireLabel:'Backup passphrase',
+    requirePlaceholder:'The passphrase this backup was written with',
+    bodyText:'This backup is encrypted, and this panel\'s configured passphrase does not open it — it was written by another panel, or before the passphrase was changed.',
+    onConfirm:function(val, api){
+      fetch(MOUNT+'/api/panel/backup/restore',{method:'POST',headers:{'Content-Type':'application/json'},
+            body:JSON.stringify({name:name, passphrase:val})})
         .then(r=>r.json()).then(function(d){
-          bkMsg((d.success?'✓ ':'✗ ')+(d.message||''), d.success?'text-success':'text-danger');
-          if(d.success){ setTimeout(function(){ location.reload(); }, 8000); } else if(btn){ btn.disabled=false; }
+          if(d.success){ api.close(); bkMsg('✓ '+(d.message||'Restoring…'),'text-success');
+                         setTimeout(function(){ location.reload(); }, 8000); }
+          else api.error(d.message||'Could not restore.');
         })
-        .catch(function(){ bkMsg('The panel is restarting — reconnect in a moment.','text-warning'); });
+        .catch(function(){ api.close(); bkMsg('The panel is restarting — reconnect in a moment.','text-warning'); });
+    }});
+}
+
+function bkShowEncState(on){
+  var badge=document.getElementById('bk-enc-status');
+  if(badge){ badge.textContent = on?'On':'Off'; badge.className = 'badge '+(on?'bg-success':'bg-secondary'); }
+  var off=document.getElementById('bk-pass-off'); if(off) off.style.display = on?'':'none';
+  var box=document.getElementById('bk-pass');
+  // Never repopulated from the server — it is never sent there. Cleared so a saved passphrase is
+  // not left sitting in a form field for the next person at this screen.
+  if(box) box.value='';
+  if(box) box.placeholder = on ? 'Set a new passphrase to replace the current one'
+                               : 'Passphrase — at least 12 characters';
+}
+function saveBackupPassphrase(btn){
+  var box=document.getElementById('bk-pass'); var pass=(box&&box.value)||'';
+  if(pass.length<12){ bkMsg('✗ Use at least 12 characters','text-danger'); if(box) box.focus(); return; }
+  confirmDialog({title:'Encrypt new backups', icon:'shield-lock', confirmLabel:'Turn on encryption',
+    bodyText:'From now on every new backup is encrypted with this passphrase.\n\nWrite it down somewhere other than this machine FIRST. There is no reset and no recovery — if you lose it, every backup written with it is permanently unreadable, including the one you would restore from.',
+    onConfirm:function(){
+      if(btn) btn.disabled=true;
+      fetch(MOUNT+'/api/panel/backup/settings',{method:'POST',headers:{'Content-Type':'application/json'},
+            body:JSON.stringify({passphrase:pass})})
+        .then(r=>r.json()).then(function(d){
+          if(btn) btn.disabled=false;
+          if(d.success){ bkMsg('✓ New backups will be encrypted','text-success'); loadBackups(); }
+          else bkMsg('✗ '+(d.message||'Could not save'),'text-danger');
+        }).catch(function(){ if(btn) btn.disabled=false; bkMsg('✗ Could not save','text-danger'); });
+    }});
+}
+function clearBackupPassphrase(btn){
+  confirmDialog({title:'Turn off backup encryption', icon:'unlock', confirmClass:'btn-danger',
+    confirmLabel:'Turn off',
+    bodyText:'New backups will be written unencrypted — database, settings and BOTH encryption keys in one openable file.\n\nArchives already encrypted stay encrypted, and still need their passphrase to restore.',
+    onConfirm:function(){
+      if(btn) btn.disabled=true;
+      fetch(MOUNT+'/api/panel/backup/settings',{method:'POST',headers:{'Content-Type':'application/json'},
+            body:JSON.stringify({passphrase:''})})
+        .then(r=>r.json()).then(function(d){
+          if(btn) btn.disabled=false;
+          bkMsg(d.success?'✓ Encryption off':'✗ Could not save', d.success?'text-warning':'text-danger');
+          loadBackups();
+        }).catch(function(){ if(btn) btn.disabled=false; bkMsg('✗ Could not save','text-danger'); });
     }});
 }
 

@@ -412,8 +412,11 @@ def register(app):
     def api_panel_backup_restore():
         """Restore a backup (destructive — takes a pre-restore safety backup, then swaps the
         data into place and restarts the panel)."""
-        name = _json_body().get("name") or ""
-        ok, msg = bk.restore_backup(name)
+        _b = _json_body()
+        name = _b.get("name") or ""
+        # Optional: only an encrypted archive needs it, and only when it was written under a
+        # different passphrase than the one configured now (or this is a fresh install).
+        ok, msg = bk.restore_backup(name, passphrase=_b.get("passphrase") or None)
         log_action(current_user, "panel_backup_restore", target=name, success=ok)
         return jsonify({"success": ok, "message": msg})
 
@@ -436,6 +439,18 @@ def register(app):
         s = bk.set_settings(enabled=data.get("enabled"), keep_days=data.get("keep_days"))
         full = bk.set_full_settings(interval_days=data.get("full_interval_days"),
                                     keep=data.get("full_keep"))
+        # Absent key = leave it alone, so an unrelated settings save cannot silently turn
+        # encryption off. "" is the explicit "stop encrypting". Never logged or echoed back.
+        if "passphrase" in data:
+            _pp = data.get("passphrase") or ""
+            if _pp and len(_pp) < 12:
+                return jsonify({"success": False,
+                                "message": "Use at least 12 characters — this is the only thing "
+                                           "protecting a backup that leaves the machine."}), 400
+            bk.set_passphrase(_pp)
+            s = bk.get_settings()
+            log_action(current_user, "panel_backup_encryption", target=LOCAL_HOST_LABEL,
+                       detail=("enabled" if _pp else "disabled"))
         log_action(current_user, "panel_backup_settings", target=LOCAL_HOST_LABEL, detail=str(s))
         return jsonify({"success": True, "settings": s, "full": full})
 
