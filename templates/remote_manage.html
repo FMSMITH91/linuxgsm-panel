@@ -265,6 +265,40 @@
       </div>
       <span id="bk-msg" class="small"></span>
     </div>
+
+    <!-- Backup encryption. The archive is the one artefact that defeats every encrypted column at
+         once (it carries cred_key alongside the DB), and it is also the one most likely to leave
+         the machine. A passphrase makes the file worthless on its own. -->
+    <div class="border rounded p-2 mb-3" id="bk-enc-box">
+      <div class="d-flex align-items-center gap-2 flex-wrap mb-1">
+        <i class="bi bi-shield-lock-fill"></i>
+        <strong class="small">Backup encryption</strong>
+        <span id="bk-enc-status" class="badge bg-secondary">Off</span>
+      </div>
+      <!-- One text node on purpose: inline markup mid-sentence splits this into two translation
+           keys, and half a sentence cannot be translated well in either language. -->
+      <p class="small text-secondary mb-2">
+        Off, one copied backup hands over the database and both encryption keys, including every stored SSH credential. On, the file is useless to anyone without the passphrase. Applies to new backups; existing ones keep whatever they were written with.
+      </p>
+      <div class="d-flex gap-2 flex-wrap align-items-center">
+        <input type="password" id="bk-pass" class="form-control form-control-sm"
+               style="max-width:22rem;" autocomplete="new-password"
+               placeholder="Passphrase — at least 12 characters">
+        <button class="btn btn-primary btn-sm" data-action="saveBackupPassphrase" data-args='["@self"]'>
+          <i class="bi bi-lock"></i> Encrypt new backups
+        </button>
+        <button class="btn btn-outline-secondary btn-sm" id="bk-pass-off"
+                data-action="clearBackupPassphrase" data-args='["@self"]' style="display:none;">
+          Turn off
+        </button>
+      </div>
+      <div class="small text-warning mt-2 mb-0">
+        <i class="bi bi-exclamation-triangle-fill"></i>
+        Keep it somewhere other than this machine. There is no reset: lose the passphrase and every
+        backup written with it is unrecoverable — including the one you would restore from.
+      </div>
+    </div>
+
     <div id="bk-list-wrap">
       <div id="bk-loading" class="text-secondary small"><i class="bi bi-arrow-repeat"></i> Loading backups…</div>
       <div class="table-responsive" id="bk-table-wrap" style="display:none;">

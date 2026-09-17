@@ -10,12 +10,15 @@ that touches them is superadmin-only, and names are strictly validated to preven
 traversal. Restore is destructive, so it first takes an automatic pre-restore safety backup,
 then swaps the files and restarts the panel from a detached unit that survives the restart.
 """
+import base64
+import json
 import logging
 import os
 import re
 import shutil
 import sqlite3
 import subprocess
+import pathlib as _pathlib
 import tarfile
 import tempfile
 
@@ -25,14 +28,142 @@ from panel.ops.system_ops import _helper_present, _run_verb
 import time
 
 from panel.core.config import (DATA_DIR, DB_PATH, CONFIG_FILE, SECRET_FILE, CRED_KEY_FILE,
-                    load_config, update_config)
+                    load_config, update_config, encrypt_secret, decrypt_secret)
 
 _log = logging.getLogger("panel.backup")
 
 BACKUP_DIR = DATA_DIR / "backups"
-# panel-backup-<YYYYMMDD-HHMMSS>-<kind>.tar.gz
-_NAME_RE = re.compile(r"^panel-backup-\d{8}-\d{6}-[a-z]+\.tar\.gz$")
+# panel-backup-<YYYYMMDD-HHMMSS>-<kind>.tar.gz — plus an optional .enc for an encrypted one.
+_NAME_RE = re.compile(r"^panel-backup-\d{8}-\d{6}-[a-z]+\.tar\.gz(\.enc)?$")
+_GLOB = "panel-backup-*.tar.gz*"
+ENC_SUFFIX = ".enc"
 _MEMBERS = ("panel.db", "config.json", "secret_key", "cred_key")
+
+# ── Backup encryption ────────────────────────────────────────────────────────────────────────
+# An unencrypted backup is a skeleton key: it holds panel.db AND secret_key AND cred_key, so one
+# copied tarball undoes every encrypted column at once. On disk that is covered (0600 in a 0700
+# dir, superadmin-only download, audit-logged), but a backup is the artefact most likely to leave
+# the machine — cloud sync, a copy onto a laptop, an off-box rsync. Encrypting it means the file
+# alone is worthless.
+#
+# Layout: b"LGSMBK1\n" | one-line JSON header (KDF params + salt) | b"\n" | Fernet token.
+# The header is plaintext BY DESIGN — restore needs the salt before it can derive anything, and
+# scrypt params must be readable so a future cost increase can still open today's archives.
+_ENC_MAGIC = b"LGSMBK1\n"
+# ~32MB, ~0.1s. A backup passphrase is typed rarely, so this can be far costlier than a login hash.
+_SCRYPT_N, _SCRYPT_R, _SCRYPT_P = 2 ** 15, 8, 1
+
+
+def _derive_key(passphrase, salt, n=_SCRYPT_N, r=_SCRYPT_R, p=_SCRYPT_P):
+    """scrypt(passphrase) -> a urlsafe-b64 Fernet key. Memory-hard, so a stolen archive cannot be
+    brute-forced at GPU speed the way a plain SHA-based KDF would allow."""
+    from cryptography.hazmat.primitives.kdf.scrypt import Scrypt
+    raw = Scrypt(salt=salt, length=32, n=n, r=r, p=p).derive(passphrase.encode("utf-8"))
+    return base64.urlsafe_b64encode(raw)
+
+
+def _is_readable_tar(path):
+    """True if `path` opens as a gzip tar. Used to ASSERT the opposite of an encrypted archive —
+    "it has a header" is not the same claim as "its contents are unreadable"."""
+    try:
+        with tarfile.open(str(path), "r:gz"):
+            return True
+    except Exception:
+        return False
+
+
+def is_encrypted_backup(name):
+    return str(name or "").endswith(ENC_SUFFIX)
+
+
+def _encrypt_archive(plain_path, dest_path, passphrase):
+    """Encrypt the tar.gz at `plain_path` to `dest_path`. Whole-file, so the archive is held in
+    memory once — fine for a panel DB (metrics are pruned; these run to single-digit MB)."""
+    from cryptography.fernet import Fernet
+    salt = os.urandom(16)
+    key = _derive_key(passphrase, salt)
+    with open(plain_path, "rb") as f:
+        blob = f.read()
+    header = json.dumps({"kdf": "scrypt", "n": _SCRYPT_N, "r": _SCRYPT_R, "p": _SCRYPT_P,
+                         "salt": base64.b64encode(salt).decode()},
+                        separators=(",", ":"), sort_keys=True).encode("utf-8")
+    with open(dest_path, "wb") as f:
+        f.write(_ENC_MAGIC)
+        f.write(header)
+        f.write(b"\n")
+        f.write(Fernet(key).encrypt(blob))
+    os.chmod(dest_path, 0o600)
+
+
+def _decrypt_archive(src_path, dest_path, passphrase):
+    """Decrypt to `dest_path`. Returns (ok, message). A wrong passphrase is reported as such and
+    never raises — Fernet authenticates, so a tampered archive fails here too rather than being
+    unpacked over the live install."""
+    from cryptography.fernet import Fernet, InvalidToken
+    try:
+        with open(src_path, "rb") as f:
+            body = f.read()
+    except OSError:
+        return False, "Could not read the backup archive."
+    if not body.startswith(_ENC_MAGIC):
+        return False, "That file is not an encrypted panel backup."
+    rest = body[len(_ENC_MAGIC):]
+    nl = rest.find(b"\n")
+    if nl < 0:
+        return False, "The encrypted backup's header is damaged."
+    try:
+        head = json.loads(rest[:nl].decode("utf-8"))
+        salt = base64.b64decode(head["salt"])
+        n, r, p = int(head["n"]), int(head["r"]), int(head["p"])
+    except Exception:
+        return False, "The encrypted backup's header is damaged."
+    if head.get("kdf") != "scrypt":
+        return False, "This backup uses an encryption scheme this panel does not know."
+    if not passphrase:
+        return False, "This backup is encrypted — a passphrase is required."
+    try:
+        key = _derive_key(passphrase, salt, n=n, r=r, p=p)
+        plain = Fernet(key).decrypt(rest[nl + 1:])
+    except InvalidToken:
+        # Fernet authenticates, so a wrong key and a modified archive raise the same thing and
+        # genuinely cannot be told apart without the key. Say both rather than guess.
+        return False, "Wrong passphrase, or the backup has been altered — it could not be opened."
+    except Exception:
+        _log.exception("backup decrypt failed")
+        return False, "The backup could not be decrypted."
+    try:
+        with open(dest_path, "wb") as f:
+            f.write(plain)
+        os.chmod(dest_path, 0o600)
+    except OSError:
+        return False, "Could not write the decrypted archive."
+    return True, ""
+
+
+def get_passphrase():
+    """The configured backup passphrase, or "" when backups are unencrypted.
+
+    Stored ENCRYPTED in config.json (under cred_key), which matters for the case this whole
+    feature is about: config.json travels inside the archive, so a leaked archive would otherwise
+    carry its own passphrase in the clear. It cannot be decrypted without cred_key, which lives
+    only on the panel host."""
+    try:
+        return decrypt_secret(load_config().get("backup_passphrase") or "") or ""
+    except Exception:
+        _log.debug("could not read backup passphrase", exc_info=True)
+        return ""
+
+
+def set_passphrase(passphrase):
+    """Set (or clear, with "") the backup passphrase. Existing archives are NOT re-encrypted —
+    they keep whatever they were written with, which is why restore accepts an explicit one."""
+    value = encrypt_secret(passphrase) if passphrase else ""
+
+    def _mut(cfg):
+        cfg["backup_passphrase"] = value
+
+    update_config(_mut)
+    return bool(passphrase)
 
 DEFAULT_KEEP_DAYS = 14
 
@@ -70,7 +201,7 @@ def _safe_path(name):
     name = os.path.basename(name or "")
     if not _NAME_RE.match(name):
         return None
-    for p in BACKUP_DIR.glob("panel-backup-*.tar.gz"):
+    for p in BACKUP_DIR.glob(_GLOB):
         if p.name == name and p.is_file():
             return p
     return None
@@ -98,7 +229,10 @@ def create_backup(kind="manual"):
     Returns (True, name) or (False, message)."""
     kind = re.sub(r"[^a-z]", "", (kind or "manual").lower()) or "manual"
     _ensure_dir()
+    passphrase = get_passphrase()
     name = "panel-backup-%s-%s.tar.gz" % (time.strftime("%Y%m%d-%H%M%S"), kind)
+    if passphrase:
+        name += ENC_SUFFIX
     dest = BACKUP_DIR / name
     tmp = tempfile.mkdtemp(prefix="lgsm-bk-")
     try:
@@ -107,12 +241,19 @@ def create_backup(kind="manual"):
                             (CRED_KEY_FILE, "cred_key")):
             if os.path.exists(src):
                 shutil.copy2(src, os.path.join(tmp, member))
-        with tarfile.open(dest, "w:gz") as tar:
+        # Built inside the temp dir when encrypting, so a plaintext archive never exists in
+        # data/backups even briefly — a crash mid-encrypt must not leave an unencrypted skeleton
+        # key sitting in the directory the user thinks is encrypted.
+        staged = os.path.join(tmp, "archive.tar.gz") if passphrase else str(dest)
+        with tarfile.open(staged, "w:gz") as tar:
             for member in _MEMBERS:
                 fp = os.path.join(tmp, member)
                 if os.path.exists(fp):
                     tar.add(fp, arcname=member)
-        os.chmod(dest, 0o600)
+        if passphrase:
+            _encrypt_archive(staged, str(dest), passphrase)
+        else:
+            os.chmod(dest, 0o600)
         return True, name
     except Exception:
         _log.exception("backup creation failed")
@@ -129,15 +270,18 @@ def list_backups():
     """All backups, newest first: [{name, size, created(epoch), kind}]."""
     _ensure_dir()
     out = []
-    for p in BACKUP_DIR.glob("panel-backup-*.tar.gz"):
+    for p in BACKUP_DIR.glob(_GLOB):
         if not _NAME_RE.match(p.name):
             continue
         try:
             st = p.stat()
         except OSError:
             continue
-        kind = p.name.rsplit("-", 1)[-1][:-len(".tar.gz")]
-        out.append({"name": p.name, "size": st.st_size, "created": int(st.st_mtime), "kind": kind})
+        enc = is_encrypted_backup(p.name)
+        tail = p.name.rsplit("-", 1)[-1]
+        kind = tail[:-len(".tar.gz" + (ENC_SUFFIX if enc else ""))]
+        out.append({"name": p.name, "size": st.st_size, "created": int(st.st_mtime),
+                    "kind": kind, "encrypted": enc})
     out.sort(key=lambda b: b["created"], reverse=True)
     return out
 
@@ -198,23 +342,53 @@ def _service_restart_launcher(script_path):
     return ["sudo", "systemd-run", "--collect", "/bin/bash", script_path]
 
 
-def restore_backup(name):
+def restore_backup(name, passphrase=None):
     """Restore a backup: take an automatic pre-restore safety backup, then swap the DB/config/
     keys into place and restart the panel — all from a DETACHED unit so it survives the panel
-    stopping. Destructive; returns (ok, message). The panel goes down for a few seconds."""
+    stopping. Destructive; returns (ok, message). The panel goes down for a few seconds.
+
+    `passphrase` is for an encrypted archive; when omitted the configured one is used. Restoring
+    onto a FRESH install is the case that needs it passed explicitly — that panel has no
+    config.json yet, and the passphrase it would need is inside the archive it cannot open."""
     src = _safe_path(name)
     if not src:
         return False, "No such backup."
-    # Validate the archive up front (members only, no path escapes) before we touch anything.
-    try:
-        with tarfile.open(src, "r:gz") as tar:
-            names = tar.getnames()
-        if not names or any(n not in _MEMBERS for n in names):
-            return False, "Backup archive looks invalid."
-    except Exception:
-        _log.exception("backup archive unreadable")
-        return False, "Could not read the backup archive."
 
+    # Decrypt FIRST, into a temp file, and only then validate. Nothing about the live install is
+    # touched — not even the pre-restore safety backup — until the archive has been opened and
+    # checked, so a wrong passphrase or a tampered file costs nothing.
+    _dec_tmp = None
+    if is_encrypted_backup(src.name):
+        _dec_tmp = tempfile.mkdtemp(prefix="lgsm-bk-dec-")
+        plain = os.path.join(_dec_tmp, "archive.tar.gz")
+        ok, msg = _decrypt_archive(str(src), plain, passphrase if passphrase else get_passphrase())
+        if not ok:
+            shutil.rmtree(_dec_tmp, ignore_errors=True)
+            return False, msg
+        src = _pathlib.Path(plain)
+
+    try:
+        # Validate the archive up front (members only, no path escapes) before we touch anything.
+        try:
+            with tarfile.open(src, "r:gz") as tar:
+                names = tar.getnames()
+            if not names or any(n not in _MEMBERS for n in names):
+                return False, "Backup archive looks invalid."
+        except Exception:
+            _log.exception("backup archive unreadable")
+            return False, "Could not read the backup archive."
+
+        # The ORIGINAL name, not src: for an encrypted archive src is now a temp file, and the
+        # user-facing message must still say which backup they restored.
+        return _restore_validated(src, os.path.basename(str(name)))
+    finally:
+        if _dec_tmp:
+            shutil.rmtree(_dec_tmp, ignore_errors=True)
+
+
+def _restore_validated(src, name):
+    """The destructive half, on an archive already decrypted and checked. `name` is only for the
+    message shown to the user — `src` is what actually gets unpacked."""
     create_backup("prerestore")     # safety net before we overwrite the live data
 
     # A FIXED staging directory inside data/, not a fresh mkdtemp. The helper's restore verb takes
@@ -307,7 +481,10 @@ def get_settings():
     except (TypeError, ValueError):
         keep = DEFAULT_KEEP_DAYS
     return {"enabled": bool(cfg.get("backup_enabled", True)),
-            "keep_days": max(MIN_KEEP_DAYS, min(MAX_KEEP_DAYS, keep))}
+            "keep_days": max(MIN_KEEP_DAYS, min(MAX_KEEP_DAYS, keep)),
+            # Whether one is set — NEVER the passphrase itself. It is the only thing standing
+            # between a leaked archive and every secret in it, so it does not travel to a browser.
+            "encrypt": bool(cfg.get("backup_passphrase"))}
 
 
 def set_settings(enabled=None, keep_days=None):

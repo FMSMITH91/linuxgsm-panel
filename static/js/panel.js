@@ -196,6 +196,9 @@ window.toast = function(msg, kind){
 //                    dialog STAYS OPEN so the caller can verify server-side, then call api.close()
 //                    on success or api.error('…') to re-prompt. onConfirm(value, api).
 //   requireLabel: label shown above the input.
+//   requirePlaceholder: placeholder for the password field. Defaults to "Your account password",
+//                    which is wrong for any gate that is not the account password (e.g. a backup
+//                    passphrase), so those pass their own.
 //   bodyNode:     a DOM node to place in the body instead of text (interactive dialog content).
 //                 NOTE: the overlay is REMOVED before onConfirm runs (see submit() below), so read
 //                 any state out of the node you passed in — `body.querySelector(...)` — never via
@@ -210,7 +213,7 @@ window.confirmDialog = function(opts){
     inputHtml = '<div class="mb-3">'
       + (opts.requireLabel ? '<label class="form-label small" for="cd-input">' + escapeHtml(opts.requireLabel) + '</label>' : '')
       + '<input type="' + (opts.requirePassword ? 'password' : 'text') + '" class="form-control" id="cd-input"'
-      + (opts.requirePassword ? ' autocomplete="current-password" placeholder="Your account password"' : ' autocomplete="off" autocapitalize="off" spellcheck="false"') + '>'
+      + (opts.requirePassword ? ' autocomplete="current-password" placeholder="' + escapeHtml(opts.requirePlaceholder || 'Your account password') + '"' : ' autocomplete="off" autocapitalize="off" spellcheck="false"') + '>'
       + '<div class="small text-danger mt-1" id="cd-err" style="display:none;"></div>'
       + '</div>';
   }
