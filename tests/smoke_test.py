@@ -1605,6 +1605,32 @@ try:
         # Idempotent, and cheap on restart: an already-reduced row must not be rewritten again.
         check("audit-ip: running it again rewrites nothing", _anon(90) == 0)
         check("audit-ip: 0 disables it entirely", _anon(0) == 0)
+        # config.json is hand-editable and "90" (quoted) is an easy thing to write. Comparing a
+        # str to an int raises TypeError, app.py swallows it with a bare except, and the control
+        # then silently never runs while the config still says it is on. A privacy control that
+        # fails quietly is worse than one that is off, because nobody goes looking.
+        _old2 = _AL(username="olduser2", action="login", ip_address="198.51.100.44",
+                    timestamp=_now - _td(days=200))
+        db.session.add(_old2)
+        db.session.commit()
+        _old2_id = _old2.id
+        # Both calls are caught: without the coercion they raise TypeError, and an exception here
+        # aborts the part before the summary prints — hiding this verdict AND every check after
+        # it. The failure has to be legible as a FAIL, not as a suite that produced no output.
+        def _anon_safely(val):
+            try:
+                return _anon(val), None
+            except Exception as _e:                      # noqa: BLE001 - the thing under test
+                return None, "%s: %s" % (type(_e).__name__, _e)
+
+        _n_str, _err_str = _anon_safely("90")
+        check("audit-ip: a NUMERIC STRING in config.json still works, rather than raising",
+              _err_str is None and _n_str >= 1
+              and db.session.get(_AL, _old2_id).ip_address == "198.51.100.0/24",
+              _err_str or repr(db.session.get(_AL, _old2_id).ip_address))
+        _n_junk, _err_junk = _anon_safely("ninety")
+        check("audit-ip: junk in config.json disables it and does not raise",
+              _err_junk is None and _n_junk == 0, _err_junk or repr(_n_junk))
         # The brute-force counter reads a 300-SECOND window, so it can never see a reduced row.
         # This is the check that says the privacy control cannot weaken login throttling.
         _recent = _AL.query.filter(_AL.action == "login_failed",

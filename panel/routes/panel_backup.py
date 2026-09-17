@@ -443,10 +443,14 @@ def register(app):
         # encryption off. "" is the explicit "stop encrypting". Never logged or echoed back.
         if "passphrase" in data:
             _pp = data.get("passphrase") or ""
-            if _pp and len(_pp) < 12:
+            # bk.MIN_PASSPHRASE_LEN, not a literal 12: set_passphrase() enforces the same rule and
+            # raises below it, so two independent numbers here would mean a drift turns a friendly
+            # 400 into a 500.
+            if _pp and len(_pp) < bk.MIN_PASSPHRASE_LEN:
                 return jsonify({"success": False,
-                                "message": "Use at least 12 characters — this is the only thing "
-                                           "protecting a backup that leaves the machine."}), 400
+                                "message": "Use at least %d characters — this is the only thing "
+                                           "protecting a backup that leaves the machine."
+                                           % bk.MIN_PASSPHRASE_LEN}), 400
             bk.set_passphrase(_pp)
             s = bk.get_settings()
             log_action(current_user, "panel_backup_encryption", target=LOCAL_HOST_LABEL,

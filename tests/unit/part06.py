@@ -1621,3 +1621,247 @@ check("unit suite: every tests/unit/part*.py is imported by the runner",
 check("unit suite: the runner imports at least as many parts as exist",
       len(_upart_files) >= 6, "found %d part files" % len(_upart_files))
 
+# ── every _run() command is a literal, or shlex.quote()d ─────────────────────────────────────
+# _run() executes with shell=True. Bandit rates that HIGH (B602) and the repo suppresses it,
+# correctly: every one of its call sites today passes either a string literal or a value wrapped
+# in shlex.quote(). But that is a property held by CONVENTION, and the suppression means nothing
+# will complain the day someone writes _run(f"systemctl restart {name}") with `name` off a form.
+# The suppression is only honest if something enforces what it assumes.
+#
+# A part is accepted when it is:
+#   * a literal, or an f-string/%-format built only from literals;
+#   * shlex.quote(...);
+#   * a local name provably bound to a literal in the same function — including a `for x in [...]`
+#     over constants. That is what makes `tee = "tee" if root else "sudo tee"` and
+#     `log_file = "/var/log/apt/history.log"` pass without a marker, since they are genuinely safe.
+# Anything else fails, and the fix is shlex.quote() — not an exemption.
+import ast as _sh_ast
+
+_SHELL_RUNNERS = {"_run"}
+
+
+def _literal_names(fn):
+    """Names bound ONLY to string literals inside `fn` — assignments, and loops over literal lists.
+    A name rebound to anything non-literal anywhere in the function is excluded, so a variable that
+    is a constant on one branch and a request value on another is never treated as safe."""
+    good, bad = set(), set()
+
+    def _is_lit(node):
+        if isinstance(node, _sh_ast.Constant):
+            return isinstance(node.value, str)
+        if isinstance(node, _sh_ast.IfExp):          # "tee" if root else "sudo tee"
+            return _is_lit(node.body) and _is_lit(node.orelse)
+        if isinstance(node, _sh_ast.JoinedStr):
+            return all(not isinstance(v, _sh_ast.FormattedValue) for v in node.values)
+        return False
+
+    for n in _sh_ast.walk(fn):
+        if isinstance(n, _sh_ast.Assign):
+            for t in n.targets:
+                if isinstance(t, _sh_ast.Name):
+                    (good if _is_lit(n.value) else bad).add(t.id)
+        elif isinstance(n, _sh_ast.For) and isinstance(n.target, _sh_ast.Name):
+            seq = n.iter
+            if (isinstance(seq, (_sh_ast.List, _sh_ast.Tuple))
+                    and all(_is_lit(e) for e in seq.elts)):
+                good.add(n.target.id)
+            else:
+                bad.add(n.target.id)
+    return good - bad
+
+
+def _shell_part_ok(node, lits):
+    if isinstance(node, _sh_ast.Constant):
+        return True
+    if isinstance(node, _sh_ast.Name):
+        return node.id in lits
+    if isinstance(node, _sh_ast.IfExp):
+        return _shell_part_ok(node.body, lits) and _shell_part_ok(node.orelse, lits)
+    if isinstance(node, _sh_ast.Call):
+        f = node.func
+        if (isinstance(f, _sh_ast.Attribute) and f.attr == "quote") or \
+                (isinstance(f, _sh_ast.Name) and f.id == "quote"):
+            return True                                     # shlex.quote(x)
+        # remote_command() is the one other accepted builder. It is safe by a different mechanism:
+        # check_args() validates every argument against the verb's own full-match validator, and
+        # the body is shlex.join() except for the _REMOTE_ACTIONS verbs that build their own
+        # string. That is not taken on trust — the injection sweep below drives every verb and
+        # argument position with shell metacharacters and fails if one reaches the interpreted
+        # part of the command. The two gates interlock: this exemption is only as good as that
+        # sweep, and that sweep is what would break first.
+        return (isinstance(f, _sh_ast.Attribute) and f.attr == "remote_command")
+    if isinstance(node, _sh_ast.JoinedStr):                 # f"..."
+        return all(_shell_part_ok(v.value, lits) if isinstance(v, _sh_ast.FormattedValue) else True
+                   for v in node.values)
+    if isinstance(node, _sh_ast.BinOp):                     # "a" + x, "a %s" % (x,)
+        if isinstance(node.op, _sh_ast.Mod):
+            rhs = node.right
+            elts = rhs.elts if isinstance(rhs, (_sh_ast.Tuple, _sh_ast.List)) else [rhs]
+            return _shell_part_ok(node.left, lits) and all(_shell_part_ok(e, lits) for e in elts)
+        return _shell_part_ok(node.left, lits) and _shell_part_ok(node.right, lits)
+    return False
+
+
+_shell_bad, _shell_seen = [], 0
+for _py in sorted(glob.glob(os.path.join(_root, "panel", "**", "*.py"), recursive=True)
+                  + [os.path.join(_root, "app.py")]):
+    try:
+        _tree = _sh_ast.parse(open(_py, encoding="utf-8").read())
+    except SyntaxError:
+        continue
+    for _fn in _sh_ast.walk(_tree):
+        if not isinstance(_fn, (_sh_ast.FunctionDef, _sh_ast.AsyncFunctionDef)):
+            continue
+        _lits = _literal_names(_fn)
+        for _c in _sh_ast.walk(_fn):
+            if (isinstance(_c, _sh_ast.Call) and isinstance(_c.func, _sh_ast.Name)
+                    and _c.func.id in _SHELL_RUNNERS and _c.args):
+                _shell_seen += 1
+                if not _shell_part_ok(_c.args[0], _lits):
+                    _shell_bad.append("%s:%d in %s()" % (os.path.basename(_py), _c.lineno, _fn.name))
+check("shell: the _run() scan actually found the call sites", _shell_seen >= 30,
+      "only %d matched — the scan stopped finding them, so the gate below proves nothing"
+      % _shell_seen)
+check("shell: every _run() command is a literal or shlex.quote()d", not _shell_bad,
+      "unquoted interpolation into a shell=True command at: " + "; ".join(_shell_bad[:5]))
+
+# ── no remote verb can put a shell metacharacter where the shell will read it ─────────────────
+# remote_command() renders a verb as a shell string that runs AS ROOT on a remote host. Most of it
+# is shlex.join(), which quotes everything. But _REMOTE_ACTIONS verbs build their own string, and
+# four of them interpolate their arguments UNQUOTED — f2b-set-sshd-ports into a sed program,
+# sshd-set-directive into another, content-scan into a for-list, content-dir-create into install
+# -o/-g.
+#
+# Those are safe today, and only because their validators are strict full-matches over charsets
+# with no metacharacters in them. Nothing tested that. Loosening one — letting a directive value
+# take a space, adding '+' to a port list — would open command injection as root over SSH, and
+# every existing test would still pass.
+#
+# So this asserts the property the quoting-free style depends on, for EVERY verb in the table
+# including ones added later: feed each argument position a payload of shell metacharacters, and
+# either the validator rejects it, or it must not survive anywhere the shell would act on it.
+# Two prefixes, and the digit one is not padding: a validator that demands a leading digit (a port
+# list) rejects every "x..." payload before the metacharacter is ever considered, so the sweep
+# passed over a real injection and only an unrelated older test caught it. A payload has to be
+# plausible enough to reach the charset being tested.
+_INJ_SEEDS = [";id", "$(id)", "`id`", "|id", "&&id", "\nid", ">out", "<in", "'y", '"y', " id",
+              "*", "$IFS", "\\", "#c"]
+# Single characters as well as seeded ones. A charset can be narrow enough to reject every payload
+# with letters in it and still admit the one character that matters — a lone "'" ends the quoting
+# around a sed program, and "1'y" was refused for the "y" while "1'" would have gone through. The
+# quote characters belong here for exactly that reason.
+_INJ_BARE = ";|&$`<>* '\"\\\n"
+_INJ_PAYLOADS = ([("x" + _s) for _s in _INJ_SEEDS] + [("1" + _s) for _s in _INJ_SEEDS]
+                 + [("1" + _c) for _c in _INJ_BARE] + [("x" + _c) for _c in _INJ_BARE])
+_INJ_META = set(";|&$`\n<>*\\\"' #")
+
+
+def _outside_single_quotes(cmd):
+    """What the SHELL still interprets: the command with '...' literals removed.
+
+    This is the right model rather than a substring search — shlex.quote() wraps its argument in
+    single quotes, and inside those the shell interprets nothing at all. So a payload that shows up
+    only inside a quoted run is harmless, and one that shows up outside is not."""
+    out, i, n = [], 0, len(cmd)
+    while i < n:
+        if cmd[i] == "'":
+            j = cmd.find("'", i + 1)
+            if j < 0:
+                out.append(cmd[i:])
+                break
+            i = j + 1
+        else:
+            out.append(cmd[i])
+            i += 1
+    return "".join(out)
+
+
+# Candidate values to fill the positions NOT under test. Anything a validator accepts will do —
+# the point is only to get past check_args so the position being probed is actually reached.
+_INJ_FILLERS = ["abc", "1", "22", "root", "yes", "no", "prohibit-password", "-", "gmod",
+                "gmodserver", "PermitRootLogin", "PasswordAuthentication", "1720000000", "2",
+                "ssh-ed25519 AAAA", "0", "10", "2026-01-02", "2026-01-02 03:04:05"]
+_inj_bad, _inj_checked, _inj_nofill, _inj_base_exposed = [], 0, [], {}
+for _verb in sorted(_priv._REMOTE_ACTIONS):
+    _spec = _priv._ARGV.get(_verb)
+    if not _spec:
+        continue
+    _vals = _spec[0]
+    _rest = _vals[-1] if _vals and isinstance(_vals[-1], _priv.Rest) else None
+    _arity = (len(_vals) - 1 + max(1, _rest.minimum)) if _rest else len(_vals)
+    # A VALID filler per position, derived from the position's own validator. A single generic
+    # filler made this sweep vacuous for every multi-argument verb: "abc" fails _sshd_key at arg0,
+    # so check_args rejected before arg1 was ever reached and the payload was never tested there.
+    _fill = []
+    for _v in (list(_vals[:-1]) + [_rest.check] * max(1, _rest.minimum)) if _rest else list(_vals):
+        _got = None
+        for _cand in _INJ_FILLERS:
+            try:
+                _v(_cand)
+                _got = _cand
+                break
+            except Exception:
+                continue
+        _fill.append(_got)
+    if any(f is None for f in _fill):
+        _inj_nofill.append(_verb)
+        continue
+    # Per-position fillers are not always a valid VECTOR: sshd-set-directive additionally requires
+    # the value to be one its key allows, so "PermitRootLogin abc" passes both validators and is
+    # still refused. Re-pick positions until check_args accepts the whole thing.
+    try:
+        _priv.check_args(_verb, _fill)
+    except Exception:
+        for _i in range(len(_fill)):
+            for _cand in _INJ_FILLERS:
+                _try = list(_fill)
+                _try[_i] = _cand
+                try:
+                    _priv.check_args(_verb, _try)
+                    _fill = _try
+                    break
+                except Exception:
+                    continue
+            try:
+                _priv.check_args(_verb, _fill)
+                break
+            except Exception:
+                continue
+    try:
+        _priv.check_args(_verb, _fill)
+        _inj_base_exposed[_verb] = _outside_single_quotes(_priv.remote_command(_verb, _fill))
+    except Exception:
+        _inj_nofill.append(_verb)
+        continue
+    for _pos in range(_arity):
+        for _pay in _INJ_PAYLOADS:
+            _args = list(_fill)
+            _args[_pos] = _pay
+            _inj_checked += 1
+            try:
+                _priv.check_args(_verb, _args)
+            except Exception:
+                continue          # rejected by the validator — the intended outcome
+            try:
+                _cmd = _priv.remote_command(_verb, _args)
+            except Exception:
+                continue
+            # Compare against the SAME command built from benign arguments and report any
+            # metacharacter the payload ADDED to the interpreted part. Asking whether the whole
+            # payload survived verbatim was too weak: a validator that accepts ";" but strips the
+            # letters after it still yields a command separator, and that check saw nothing
+            # because "1;id" was not present as a string.
+            _exposed = _outside_single_quotes(_cmd)
+            _added = [c for c in sorted(_INJ_META)
+                      if _exposed.count(c) > _inj_base_exposed[_verb].count(c)]
+            if _added:
+                _inj_bad.append("%s arg%d %r adds %r" % (_verb, _pos, _pay, "".join(_added)))
+check("privileged: every remote verb got a valid filler, so every position was reached",
+      not _inj_nofill,
+      "no filler found for: %s — those verbs' later arguments were never probed"
+      % ", ".join(_inj_nofill))
+check("privileged: the injection sweep actually ran", _inj_checked >= 200,
+      "only %d combinations tried — the sweep stopped covering the table" % _inj_checked)
+check("privileged: no remote verb lets a metacharacter reach the shell",
+      not _inj_bad,
+      "accepted AND left unquoted: " + "; ".join(_inj_bad[:6]))

@@ -117,6 +117,13 @@ def _decrypt_archive(src_path, dest_path, passphrase):
         n, r, p = int(head["n"]), int(head["r"]), int(head["p"])
     except Exception:
         return False, "The encrypted backup's header is damaged."
+    # The header is part of the FILE, so these are only as trustworthy as the archive. Nothing can
+    # upload one today — every archive here was written by this panel — but scrypt's `n` is a
+    # memory parameter, and n=2**30 asks for a gigabyte before it fails. Bound them now, while the
+    # only cost is three lines, rather than the day a "restore from a file you upload" feature
+    # makes the header attacker-supplied.
+    if not (2 ** 12 <= n <= 2 ** 20) or not (1 <= r <= 32) or not (1 <= p <= 16) or len(salt) > 64:
+        return False, "The encrypted backup's header asks for parameters this panel will not use."
     if head.get("kdf") != "scrypt":
         return False, "This backup uses an encryption scheme this panel does not know."
     if not passphrase:
@@ -154,9 +161,19 @@ def get_passphrase():
         return ""
 
 
+MIN_PASSPHRASE_LEN = 12
+
+
 def set_passphrase(passphrase):
     """Set (or clear, with "") the backup passphrase. Existing archives are NOT re-encrypted —
-    they keep whatever they were written with, which is why restore accepts an explicit one."""
+    they keep whatever they were written with, which is why restore accepts an explicit one.
+
+    Raises ValueError below MIN_PASSPHRASE_LEN. The route checks this too and returns a friendly
+    message, but the rule lives HERE as well: this is the only thing standing between a leaked
+    archive and every secret in it, and a second caller — a manage.py subcommand, a setup step —
+    would otherwise set a two-character passphrase with nothing objecting."""
+    if passphrase and len(passphrase) < MIN_PASSPHRASE_LEN:
+        raise ValueError("Backup passphrase must be at least %d characters." % MIN_PASSPHRASE_LEN)
     value = encrypt_secret(passphrase) if passphrase else ""
 
     def _mut(cfg):
