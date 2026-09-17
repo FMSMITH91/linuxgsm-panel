@@ -1179,6 +1179,19 @@ def create_app():
         except Exception:
             db.session.rollback()
 
+    # One-time (idempotent): encrypt the columns that became EncryptedString — hostnames, SSH
+    # usernames, public IPs, pinned host keys, and per-session IP/user-agent — so an existing
+    # install stops leaving a map of its machines in plain sight inside panel.db.
+    with app.app_context():
+        try:
+            from panel.db.models import encrypt_at_rest_columns
+            _touched = encrypt_at_rest_columns()
+            if _touched:
+                app.logger.info("encrypted at-rest columns on %d row(s)", _touched)
+        except Exception:
+            db.session.rollback()
+            app.logger.exception("at-rest column encryption migration failed")
+
     # Optional audit-log retention. Off by default (keep everything — audit history
     # shouldn't vanish by surprise). Set "audit_log_retention_days" in config.json to a
     # positive number to prune older entries on startup so the table can't grow forever.

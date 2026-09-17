@@ -12,6 +12,43 @@ from sqlalchemy.orm import validates
 db = SQLAlchemy()
 _log = logging.getLogger("panel.models")
 
+
+class EncryptedString(db.TypeDecorator):
+    """A column that is ciphertext in the database and plaintext in Python.
+
+    Used for values that are neither secrets (already encrypted) nor identifiers the panel has to
+    query on — a stolen panel.db should not also be a map of the machines it manages: hostnames,
+    SSH usernames, public IPs, pinned host keys, and the IP/user-agent of every session.
+
+    A TypeDecorator rather than the `_display` property pattern used for email/totp_secret, and
+    deliberately so. That pattern needs every read site changed, and there are 23 of these across
+    the SSH path; ONE missed decryption means the panel tries to open a connection to
+    "enc:v1:gAAAAA...". Here no call site can get it wrong, because none of them change.
+
+    Only safe for columns nothing filters, orders or groups by: encryption is randomised (a fresh
+    IV per write), so the same hostname produces different bytes every time and a WHERE clause
+    could never match. Verified by AST scan before adopting this — every query on a name like
+    `username` belongs to User, never RemoteServer. AuditLog.ip_address is deliberately NOT one of
+    these: the brute-force counter filters on it.
+
+    Legacy plaintext rows keep working — decrypt_secret() passes an unencrypted value straight
+    through — so an upgrade cannot lock anyone out of their own hosts while the migration runs."""
+
+    impl = db.Text
+    cache_ok = True
+
+    def process_bind_param(self, value, dialect):
+        if value is None or value == "":
+            return value
+        from panel.core.config import encrypt_secret
+        return encrypt_secret(str(value))
+
+    def process_result_value(self, value, dialect):
+        if value is None or value == "":
+            return value
+        from panel.core.config import decrypt_secret
+        return decrypt_secret(value)
+
 # How many previous passwords an account may not go straight back to. Each one costs a bcrypt
 # comparison (~0.2s at cost 12) on a password change, so this is a small number on purpose — it
 # stops the "change it, then change it back" cycle, which is what it is for, rather than trying to
@@ -349,15 +386,15 @@ class RemoteServer(db.Model):
     """A remote VPS running LinuxGSM servers."""
     id = db.Column(db.Integer, primary_key=True)
     name = db.Column(db.String(120), nullable=False)
-    host = db.Column(db.String(255), nullable=False)
+    host = db.Column(EncryptedString, nullable=False)
     port = db.Column(db.Integer, default=22)
-    username = db.Column(db.String(64), nullable=False)
+    username = db.Column(EncryptedString, nullable=False)
     auth_method = db.Column(db.String(16), default="key")  # key, password, tailscale, or local
     auth_credential = db.Column(db.Text, default="")  # password or key path
     sudo_enabled = db.Column(db.Boolean, default=False)
-    linuxgsm_user = db.Column(db.String(64), default="")  # LinuxGSM user account on remote
+    linuxgsm_user = db.Column(EncryptedString, default="")  # LinuxGSM user account on remote
     is_local = db.Column(db.Boolean, default=False)  # True = this machine, run commands locally
-    public_ip = db.Column(db.String(45), default="")  # cached public IP (for connect address)
+    public_ip = db.Column(EncryptedString, default="")  # cached public IP (for connect address)
 
     @validates("username", "linuxgsm_user")
     def _validate_ident(self, key, value):
@@ -368,7 +405,7 @@ class RemoteServer(db.Model):
         return _validate_port(key, value)
     is_online = db.Column(db.Boolean, default=False)
     last_seen = db.Column(db.DateTime, nullable=True)
-    host_key = db.Column(db.Text, default="")     # pinned SSH host key ("keytype base64"); TOFU
+    host_key = db.Column(EncryptedString, default="")   # pinned SSH host key ("keytype base64"); TOFU
     stats_cache = db.Column(db.Text, default="")  # last live stats (JSON: cpu_percent/memory/disk/uptime)
     pro_cache = db.Column(db.Text, default="")    # last Ubuntu Pro status (JSON: {data, ts}); rarely changes
     created_at = db.Column(db.DateTime, default=utcnow)
@@ -833,8 +870,8 @@ class UserSession(db.Model):
     sid = db.Column(db.String(64), unique=True, index=True, nullable=False)
     created_at = db.Column(db.DateTime, default=utcnow, nullable=False)
     last_seen = db.Column(db.DateTime, default=utcnow, nullable=False)
-    ip = db.Column(db.String(64), default="")
-    user_agent = db.Column(db.String(300), default="")
+    ip = db.Column(EncryptedString, default="")
+    user_agent = db.Column(EncryptedString, default="")
     # Which cookie is keeping this login alive, because the two expire on very different clocks:
     # a plain login rides the Flask session cookie (PERMANENT_SESSION_LIFETIME, hours), a
     # "remember me" login also gets flask-login's remember cookie (REMEMBER_COOKIE_DURATION, days).
@@ -918,6 +955,45 @@ def prune_expired_sessions(user_id=None):
     except Exception:
         db.session.rollback()
         return 0
+
+
+ENCRYPTED_AT_REST_COLUMNS = {
+    "remote_server": ("host", "username", "linuxgsm_user", "public_ip", "host_key"),
+    "user_session": ("ip", "user_agent"),
+}
+
+
+def encrypt_at_rest_columns():
+    """Encrypt any rows in ENCRYPTED_AT_REST_COLUMNS still stored as plaintext. Returns the number
+    of rows rewritten. Idempotent, and safe to call on every startup.
+
+    RAW SQL on purpose. Reading these through the ORM hands back the DECRYPTED value, so "is it
+    already encrypted?" would be answered by the decryptor and always say yes; and assigning that
+    same value back changes nothing SQLAlchemy can see, so no UPDATE would ever be emitted. The raw
+    bytes are the only place the question can be asked.
+
+    A function rather than inline startup code so it can be tested: an ordinary save does NOT
+    convert a legacy row, because SQLAlchemy only writes the columns that changed — editing a
+    host's port leaves its hostname in plaintext forever. This is the only thing that converts it."""
+    from panel.core.config import encrypt_secret, is_encrypted
+    touched = 0
+    for table, cols in ENCRYPTED_AT_REST_COLUMNS.items():
+        rows = db.session.execute(
+            text("SELECT id, %s FROM %s" % (", ".join(cols), table))).fetchall()
+        for row in rows:
+            sets, params = [], {"id": row[0]}
+            for i, col in enumerate(cols, start=1):
+                raw = row[i]
+                if raw and not is_encrypted(raw):
+                    sets.append("%s = :%s" % (col, col))
+                    params[col] = encrypt_secret(raw)
+            if sets:
+                db.session.execute(
+                    text("UPDATE %s SET %s WHERE id = :id" % (table, ", ".join(sets))), params)
+                touched += 1
+    if touched:
+        db.session.commit()
+    return touched
 
 
 def _run_light_migrations():

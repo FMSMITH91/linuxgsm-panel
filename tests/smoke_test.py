@@ -1477,6 +1477,99 @@ try:
                and "/login" not in (_lpd.headers.get("Location") or "")),
           "status=%d loc=%s" % (_lpd.status_code, _lpd.headers.get("Location") or ""))
 
+    # ── hostnames, SSH usernames and session IPs are ciphertext at rest ──────────────────────
+    # A stolen panel.db should not also be a map of the machines it manages. These columns are
+    # EncryptedString, which is transparent in Python, so the only way to prove it is doing
+    # anything is to go around the ORM and read the raw bytes.
+    from sqlalchemy import text as _enc_sql
+    _SECRET_HOST, _SECRET_USER = "vault.internal.example", "deploybot"
+    with app.app_context():
+        _er = RemoteServer(name="enc-host", host=_SECRET_HOST, port=2222,
+                           username=_SECRET_USER, auth_method="key", auth_credential="",
+                           linuxgsm_user="lgsm-secret", public_ip="203.0.113.77",
+                           host_key="ssh-ed25519 AAAAC3NzaC1lZDI1NTE5SECRETKEY")
+        db.session.add(_er)
+        db.session.commit()
+        _er_id = _er.id
+        db.session.expire_all()          # force a real re-read, not the identity map
+        _back = db.session.get(RemoteServer, _er_id)
+        check("at-rest: a hostname round-trips through the ORM unchanged",
+              _back.host == _SECRET_HOST, repr(_back.host))
+        check("at-rest: ...and so do the username, lgsm user, public IP and host key",
+              (_back.username, _back.linuxgsm_user, _back.public_ip) ==
+              (_SECRET_USER, "lgsm-secret", "203.0.113.77")
+              and _back.host_key.endswith("SECRETKEY"),
+              "%r %r %r" % (_back.username, _back.linuxgsm_user, _back.public_ip))
+        # The point: the raw column is ciphertext.
+        _raw = db.session.execute(_enc_sql(
+            "SELECT host, username, linuxgsm_user, public_ip, host_key FROM remote_server"
+            " WHERE id = :i"), {"i": _er_id}).fetchone()
+        check("at-rest: the stored hostname is ciphertext, not the hostname",
+              _raw[0] != _SECRET_HOST and _raw[0].startswith("enc:v1:"), str(_raw[0])[:40])
+        check("at-rest: no plaintext survives in ANY of the five columns",
+              not any(v in (_raw[0] or "") + (_raw[1] or "") + (_raw[2] or "")
+                             + (_raw[3] or "") + (_raw[4] or "")
+                      for v in (_SECRET_HOST, _SECRET_USER, "lgsm-secret", "203.0.113.77",
+                                "SECRETKEY")),
+              str(_raw)[:120])
+
+        # A row written by an OLDER panel is plaintext. It must keep working — an upgrade that
+        # locked someone out of their own hosts until a migration ran would be worse than the leak.
+        db.session.execute(_enc_sql(
+            "INSERT INTO remote_server (name, host, port, username, auth_method, auth_credential,"
+            " is_local, is_online) VALUES ('legacy-host', 'legacy.example', 22, 'oldroot', 'key',"
+            " '', 0, 0)"))
+        db.session.commit()
+        db.session.expire_all()
+        _leg = RemoteServer.query.filter_by(name="legacy-host").first()
+        check("at-rest: a legacy PLAINTEXT row still reads correctly",
+              _leg is not None and _leg.host == "legacy.example" and _leg.username == "oldroot",
+              "%r / %r" % (getattr(_leg, "host", None), getattr(_leg, "username", None)))
+        # An ordinary save does NOT convert it: SQLAlchemy writes only the columns that changed,
+        # so editing the port leaves the hostname in plaintext. Worth pinning, because it is the
+        # reason the migration below has to exist at all rather than being left to happen by use.
+        _leg.port = 2200
+        db.session.commit()
+        _leg_raw = db.session.execute(_enc_sql(
+            "SELECT host FROM remote_server WHERE name = 'legacy-host'")).fetchone()[0]
+        check("at-rest: an unrelated edit leaves a legacy row plaintext (so a migration is needed)",
+              _leg_raw == "legacy.example", str(_leg_raw)[:40])
+
+        # The migration is what converts it, and it is idempotent.
+        from panel.db.models import encrypt_at_rest_columns as _enc_mig
+        _n1 = _enc_mig()
+        _leg_raw2 = db.session.execute(_enc_sql(
+            "SELECT host, username FROM remote_server WHERE name = 'legacy-host'")).fetchone()
+        check("at-rest: the migration encrypts the legacy row", _n1 >= 1
+              and _leg_raw2[0].startswith("enc:v1:") and "legacy.example" not in _leg_raw2[0]
+              and "oldroot" not in (_leg_raw2[1] or ""), "touched=%s raw=%.40s" % (_n1, _leg_raw2[0]))
+        db.session.expire_all()
+        _leg2 = RemoteServer.query.filter_by(name="legacy-host").first()
+        check("at-rest: ...and the row still reads back as the same host",
+              _leg2.host == "legacy.example" and _leg2.username == "oldroot",
+              "%r / %r" % (_leg2.host, _leg2.username))
+        check("at-rest: ...and running it again rewrites nothing", _enc_mig() == 0)
+
+    # Sessions carry the same treatment: IP and user-agent are PII on every signed-in device.
+    with app.app_context():
+        from panel.db.models import UserSession as _US
+        _sess_raw = db.session.execute(_enc_sql(
+            "SELECT ip, user_agent FROM user_session WHERE ip != '' LIMIT 1")).fetchone()
+        _any_sess = db.session.query(_US).filter(_US.ip != "").first()
+        # Its ABSENCE is a failure, not a skip. Dozens of logins have happened by this point, so no
+        # row with an IP means the check is testing nothing — which must be loud, not green.
+        check("at-rest: there is a session row to inspect at all",
+              _sess_raw is not None and _any_sess is not None,
+              "no user_session row carried an IP — this block would prove nothing")
+        check("at-rest: session IP and user-agent are ciphertext",
+              _sess_raw is not None and (_sess_raw[0] or "").startswith("enc:v1:")
+              and (not _sess_raw[1] or _sess_raw[1].startswith("enc:v1:")),
+              str(_sess_raw)[:60])
+        check("at-rest: ...and still read back as the real values",
+              _any_sess is not None and bool(_any_sess.ip)
+              and not _any_sess.ip.startswith("enc:v1:"),
+              repr(getattr(_any_sess, "ip", None)))
+
     # ── Discover / import existing LinuxGSM servers on a host ──
     dsc = c.get("/api/remote/%d/discover" % remote_id)
     check("discover: superadmin gets a servers list (SSH to the fixture host yields none)",
