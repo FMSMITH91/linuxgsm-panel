@@ -1,4 +1,5 @@
 """Configuration management for LinuxGSM Panel."""
+import base64
 import copy
 import json
 import logging
@@ -171,7 +172,7 @@ def encrypt_secret(plaintext):
     the session key never orphans stored creds."""
     if not plaintext:
         return ""
-    if plaintext.startswith(_ENC_PREFIX):
+    if is_encrypted(plaintext):
         return plaintext
     return _ENC_PREFIX + _cred_fernet().encrypt(plaintext.encode()).decode()
 
@@ -181,7 +182,7 @@ def decrypt_secret(value):
     so existing installs keep working until migrated."""
     if not value:
         return ""
-    if value.startswith(_ENC_PREFIX):
+    if is_encrypted(value):
         try:
             return _cred_fernet().decrypt(value[len(_ENC_PREFIX):].encode()).decode()
         except Exception:
@@ -189,8 +190,33 @@ def decrypt_secret(value):
     return value
 
 
+def _is_fernet_token(blob):
+    """True if `blob` is STRUCTURALLY a Fernet token. Deliberately does NOT use the key.
+
+    A decrypt-based check would be stronger but is the wrong trade here: with cred_key missing or
+    rotated, every real ciphertext would read as plaintext, and the startup migration in app.py
+    would re-encrypt it under a NEW key — destroying any chance of recovering it by restoring the
+    original key. Structure is knowable without the key; decryptability is not.
+
+    Fernet layout: 0x80 | 8-byte timestamp | 16-byte IV | AES-CBC ciphertext (16-byte blocks) |
+    32-byte HMAC, base64url-encoded. 57 = 1 + 8 + 16 + 32, i.e. everything but the ciphertext."""
+    try:
+        raw = base64.urlsafe_b64decode(blob.encode("ascii"))
+    except Exception:
+        return False
+    return len(raw) >= 57 and raw[0] == 0x80 and (len(raw) - 57) % 16 == 0
+
+
 def is_encrypted(value):
-    return bool(value) and value.startswith(_ENC_PREFIX)
+    """True only for something encrypt_secret() actually produced.
+
+    The prefix alone is NOT enough. A secret that itself starts with "enc:v1:" was taken for
+    ciphertext and stored verbatim — in plaintext, by the one function whose job is to prevent
+    that — and then decrypted to "" forever, so the credential was both exposed and broken.
+    Requiring the remainder to be shaped like a Fernet token closes that, and makes decrypt_secret
+    hand such a value back unchanged (it is legacy plaintext) instead of losing it."""
+    return (bool(value) and value.startswith(_ENC_PREFIX)
+            and _is_fernet_token(value[len(_ENC_PREFIX):]))
 
 
 def harden_data_permissions():
