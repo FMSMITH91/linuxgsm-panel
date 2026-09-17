@@ -8,7 +8,7 @@ from panel.services import (notifications)
 from panel.services.bots.commands import (_bot_origin, _panel_ver_label,
     _command_arg, _connect_text, _console_text, _find_server,
     _hosts_text, _reply_header, _players_text, _say_text,
-    _servers_text, _status_text)
+    _servers_text, _status_text, action_ack, working_ack)
 import logging
 import time
 
@@ -26,6 +26,13 @@ _DC_CMD_BACKOFF = 15
 
 def _dc_reply(bot_token, channel_id, text):
     notifications.discord_bot_send(bot_token, channel_id, "%s\n%s" % (_reply_header(), text))
+
+
+def _dc_ack(bot_token, channel_id, text):
+    """The immediate "working on it" line — see telegram._tg_ack for the reasoning; this is its
+    twin, and the two bots deliberately behave the same way. No _reply_header(), because the ack
+    lands right under the command that caused it."""
+    notifications.discord_bot_send(bot_token, channel_id, text)
 
 
 def _parse_dc_command(text):
@@ -96,20 +103,39 @@ def _dc_server_action(app, bot_token, channel_id, action, arg, sender=None):
         if not run_action:
             _dc_reply(bot_token, channel_id, "That action isn't available right now.")
             return
+        # A plain string: _done runs on a worker thread once this app context has closed, where
+        # `gs` is detached and reading gs.name would raise.
+        name = gs.name
+
+        def _done(ok, detail):
+            if ok:
+                _dc_reply(bot_token, channel_id, "✅ %s — %s finished." % (name, action))
+            else:
+                _dc_reply(bot_token, channel_id, "⚠️ %s — %s failed%s"
+                          % (name, action, (": " + detail) if detail else "."))
+
+        _dc_ack(bot_token, channel_id, action_ack(action, name))
         try:
             # origin, not actor=None: this is attributable to a chat message, and the audit
             # log should say so rather than filing it under "system".
             ok, msg = run_action(gs, gs.remote, action, None,
-                                 origin=_bot_origin("discord", sender))
+                                 origin=_bot_origin("discord", sender), on_done=_done)
         except Exception:
             _log.debug("discord server action failed", exc_info=True)
             ok, msg = False, "the action failed"
-        _dc_reply(bot_token, channel_id, "%s %s — %s" % ("✅" if ok else "⚠️", gs.name, msg))
+        # Silent on success: the ack said it started and _done will say how it ended. Only a
+        # refusal needs a word here, because then nothing was backgrounded and _done never runs.
+        if not ok:
+            _dc_reply(bot_token, channel_id, "⚠️ %s — %s" % (name, msg))
 
 
 def _handle_discord_command(app, bot_token, channel_id, text, sender=None):
     cmd = _parse_dc_command(text)
     arg = _command_arg(text)
+    # Same table, same rule, same place in the flow as Telegram's — see _handle_telegram_command.
+    _ack = working_ack(cmd)
+    if _ack:
+        _dc_ack(bot_token, channel_id, _ack)
     if cmd == "help":
         _dc_reply(bot_token, channel_id, _dc_help_text())
     elif cmd == "status":

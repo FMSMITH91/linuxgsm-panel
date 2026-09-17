@@ -668,6 +668,43 @@ check("telegram: a non-command is empty", _parse_tg_command("hello there") == ""
 check("telegram: /restart <name> extracts the argument", _command_arg("/restart my server") == "my server")
 check("telegram: a bare command has no argument", _command_arg("/status") == "")
 
+# ── The one-line summary a completion message carries ─────────────────────────────────────────
+# A backgrounded action now reports back when it lands, and what it reports is one line of
+# LinuxGSM's output. LinuxGSM prints its logo first and its verdict last, so the head is always
+# the banner and the tail is always the answer.
+from panel.routes.server_detail import _summarise_action_output as _sao  # noqa: E402
+check("bots: an action summary keeps LinuxGSM's verdict, which is its LAST line",
+      _sao("[ LinuxGSM ] csgoserver\nStarting csgoserver\nFailed to start\n") == "Failed to start",
+      _sao("[ LinuxGSM ] csgoserver\nStarting csgoserver\nFailed to start\n"))
+check("bots: trailing blank lines don't become the summary",
+      _sao("Server started\n\n   \n") == "Server started", repr(_sao("Server started\n\n   \n")))
+check("bots: no output summarises to nothing, not to a placeholder",
+      _sao("") == "" and _sao(None) == "")
+# A chat message is capped; an action that spews one enormous line must not blow past it.
+check("bots: a runaway line is truncated for the chat message",
+      len(_sao("x" * 5000)) == 200, len(_sao("x" * 5000)))
+
+# Both bots share ONE ack-wording table, so the two can't drift into saying different things for
+# the same command.
+from panel.services.bots.commands import (_ACTION_ACK as _AACK, _WORKING_ACK as _WACK,  # noqa: E402
+                                          action_ack as _aack, working_ack as _wack)
+check("bots: every action ack has a slot for the server name",
+      all(v.count("%s") == 1 for v in _AACK.values()), _AACK)
+check("bots: the slow read commands are acked and the database-only ones are not",
+      set(_WACK) == {"players", "console", "say"}, sorted(_WACK))
+# Both routers ask these two rather than indexing the tables, so which commands announce
+# themselves is decided once, for both bots, instead of per transport.
+check("bots: working_ack names a slow command", _wack("console") == _WACK["console"])
+check("bots: working_ack stays silent for a command that answers from the database",
+      _wack("status") is None and _wack("servers") is None and _wack("connect") is None)
+check("bots: working_ack shrugs off a command it has never heard of", _wack("nonsense") is None)
+check("bots: action_ack fills in the server name",
+      _aack("restart", "codserver") == "🔄 codserver — restarting…", _aack("restart", "codserver"))
+# The fallback is the point: an unknown action still has to say SOMETHING, because the ack is all
+# that stands between the user and a silent minute.
+check("bots: an action with no wording still acks rather than going quiet",
+      "codserver" in _aack("validate", "codserver"), _aack("validate", "codserver"))
+
 # telegram_set_commands registers the '/' autocomplete menu via setMyCommands (through _post).
 import json as _json_tg  # noqa: E402
 _tg_posts = []

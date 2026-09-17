@@ -8,7 +8,7 @@ from panel.services import (notifications)
 from panel.services.bots.commands import (_bot_origin, _panel_ver_label,
     _command_arg, _connect_text, _console_text, _find_server,
     _hosts_text, _reply_header, _players_text, _say_text,
-    _servers_text, _status_text)
+    _servers_text, _status_text, action_ack, working_ack)
 import logging
 import time
 
@@ -23,6 +23,21 @@ _TG_CMD_BACKOFF = 15
 
 def _tg_reply(token, chat_id, text):
     notifications.send_telegram(token, chat_id, "%s\n%s" % (_reply_header(), text))
+
+
+def _tg_ack(token, chat_id, text):
+    """The immediate "I heard you, I'm working on it" line for a command that cannot answer at once.
+
+    Telegram shows nothing of its own while a bot thinks, so a command that has to reach a host
+    over SSH — or hand work to a background thread that takes minutes — left the chat completely
+    silent until it was over. Tens of seconds of nothing reads as a dead bot, and the usual
+    response is to send the command again.
+
+    No _reply_header(): this lands directly under the message you just sent, so which panel
+    answered is not in question. The ANSWER keeps the header, because it can arrive long after,
+    with other chatter in between.
+    """
+    notifications.send_telegram(token, chat_id, text)
 
 
 def _parse_tg_command(text):
@@ -111,20 +126,55 @@ def _tg_server_action(app, token, chat_id, action, arg, sender=None):
         if not run_action:
             _tg_reply(token, chat_id, "That action isn't available right now.")
             return
+        # Captured as a plain string, deliberately: _done runs on a worker thread after this app
+        # context has closed, where `gs` is a detached instance and touching gs.name would raise.
+        name = gs.name
+
+        def _done(ok, detail):
+            # The second half of the exchange. Every action the bot can send runs in the
+            # background (see the gate: they are all in LONG_ACTIONS or are power actions), so
+            # run_action returns "started", never "finished" — without this the chat heard that a
+            # restart began and never heard whether it worked.
+            if ok:
+                _tg_reply(token, chat_id, "✅ %s — %s finished." % (name, action))
+            else:
+                _tg_reply(token, chat_id, "⚠️ %s — %s failed%s"
+                          % (name, action, (": " + detail) if detail else "."))
+
+        # Ack BEFORE run_action, not after: start/stop probe the host for a live run-state before
+        # they will commit to anything, which is an SSH round trip — on an unreachable host, the
+        # full connect timeout — and that delay is exactly the silence this is here to remove.
+        _tg_ack(token, chat_id, action_ack(action, name))
         try:
             # origin, not actor=None: this is attributable to a chat message, and the audit
             # log should say so rather than filing it under "system".
             ok, msg = run_action(gs, gs.remote, action, None,
-                                 origin=_bot_origin("telegram", sender))
+                                 origin=_bot_origin("telegram", sender), on_done=_done)
         except Exception:
             _log.debug("telegram server action failed", exc_info=True)
             ok, msg = False, "the action failed"
-        _tg_reply(token, chat_id, "%s %s — %s" % ("✅" if ok else "⚠️", gs.name, msg))
+        # On success say nothing here. run_action's own message is "'restart' issued — status
+        # updates in a few seconds", which the ack above already conveyed and _done is about to
+        # supersede; relaying it too would make one restart three messages. A refusal
+        # ("already running") is different: no background work started, so nothing else will
+        # ever speak, and the ack needs correcting.
+        if not ok:
+            _tg_reply(token, chat_id, "⚠️ %s — %s" % (name, msg))
 
 
 def _handle_telegram_command(app, token, chat_id, text, sender=None):
     cmd = _parse_tg_command(text)
     arg = _command_arg(text)
+    # Say something before the slow ones start. /players, /console and /say have to leave the box
+    # — a live query to the game, an SSH console capture, an in-game announcement — and until the
+    # answer came back the chat sat silent, which on a slow or unreachable host reads as a dead
+    # bot. /status, /servers, /hosts and /connect answer from the database in the same breath and
+    # are deliberately absent from the table: acking an instant answer is two notifications for
+    # one reply. The table decides, not this router, so Discord cannot end up acking a different
+    # set. Server actions ack separately, in _tg_server_action, because theirs names the server.
+    _ack = working_ack(cmd)
+    if _ack:
+        _tg_ack(token, chat_id, _ack)
     # A BARE /start is Telegram's own "open the chat" command and should answer with help — but
     # `/start <server>` is the documented way to start a server (it is in TG_COMMANDS, so Telegram
     # puts it in the '/' menu, and _tg_help_text lists it). Matching on the word alone swallowed
