@@ -9,9 +9,9 @@ name: Security scan
 # than beside it — see the note there.
 on:
   push:
-    branches: [ main ]
+    branches: [ main, dev ]
   pull_request:
-    branches: [ main ]
+    branches: [ main, dev ]
   schedule:
     - cron: "0 6 * * 1"   # weekly, Monday 06:00 UTC
 

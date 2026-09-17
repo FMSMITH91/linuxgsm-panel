@@ -13,7 +13,7 @@ name: Security scan (code)
 # filters entirely.
 on:
   push:
-    branches: [ main ]
+    branches: [ main, dev ]
     paths-ignore:
       - '**/*.md'
       - 'docs/**'
@@ -22,7 +22,7 @@ on:
       - '.gitattributes'
       - '.editorconfig'
   pull_request:
-    branches: [ main ]
+    branches: [ main, dev ]
     paths-ignore:
       - '**/*.md'
       - 'docs/**'

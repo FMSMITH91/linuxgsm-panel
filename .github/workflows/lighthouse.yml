@@ -9,7 +9,7 @@ on:
   # Docs-only pushes/PRs skip the Lighthouse run — a README/LICENSE edit can't change the
   # rendered UI it audits. Anything else still runs it.
   push:
-    branches: [ main ]
+    branches: [ main, dev ]
     paths-ignore:
       - '**/*.md'
       - 'docs/**'
@@ -26,7 +26,7 @@ on:
       - 'lgsm/**'
       - '*.sh'
   pull_request:
-    branches: [ main ]
+    branches: [ main, dev ]
     paths-ignore:
       - '**/*.md'
       - 'docs/**'

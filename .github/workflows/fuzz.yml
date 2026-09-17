@@ -18,7 +18,7 @@ name: Fuzz
 #   by that nightly, within the day.
 on:
   pull_request:
-    branches: [ main ]
+    branches: [ main, dev ]
     paths:
       - 'panel/ops/ssh_manager/**'
       - 'panel/ops/system_ops.py'

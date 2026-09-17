@@ -5,7 +5,7 @@ on:
   # LICENSE edit shouldn't spin up the whole matrix. Any code, template, test, requirements,
   # install.sh, or workflow change still triggers CI (those all affect what the tests check).
   push:
-    branches: [ main ]
+    branches: [ main, dev ]
     paths-ignore:
       - '**/*.md'
       - 'docs/**'
@@ -14,7 +14,7 @@ on:
       - '.gitattributes'
       - '.editorconfig'
   pull_request:
-    branches: [ main ]
+    branches: [ main, dev ]
     paths-ignore:
       - '**/*.md'
       - 'docs/**'

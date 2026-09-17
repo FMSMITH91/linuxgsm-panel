@@ -9,7 +9,7 @@ name: ClusterFuzzLite
 # Bandit alerts. Keeping both is a choice — fuzz.yml is the broad sweep, this is the targeted one.
 on:
   pull_request:
-    branches: [ main ]
+    branches: [ main, dev ]
     # Same targets as fuzz.yml: this builds and runs the fuzzers in tests/fuzz against the two
     # modules they exercise. A PR that touches only templates, CSS, docs or workflows cannot change
     # what those harnesses reach, and this is the slowest job in the repo — so scope it to the code
