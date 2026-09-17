@@ -523,8 +523,51 @@ try:
     _bk.set_passphrase("")
     check("backup/enc: clearing it empties the stored value and turns encryption off",
           not _fakecfg.get("backup_passphrase") and _bk.get_passphrase() == "")
+    # A short passphrase must be refused by set_passphrase ITSELF, not only by the route. It is
+    # the only thing between a leaked archive and every secret in it, and a second caller — a
+    # manage.py subcommand, a setup step — would otherwise set a two-character one unopposed.
+    _short_ok = False
+    try:
+        _bk.set_passphrase("short")
+    except ValueError:
+        _short_ok = True
+    check("backup/enc: set_passphrase refuses a passphrase under the minimum", _short_ok)
+    check("backup/enc: ...and refusing it did not change what is stored",
+          not _fakecfg.get("backup_passphrase"))
+    check("backup/enc: the route and the helper share one minimum, so they cannot drift",
+          _bk.MIN_PASSPHRASE_LEN == 12)
 finally:
     _bk.load_config, _bk.update_config = _o_load, _o_upd
+
+# KDF parameters come out of the archive HEADER, so they are only as trustworthy as the file.
+# Nothing can upload one today, but scrypt's n is a memory parameter and n=2**30 asks for a
+# gigabyte before it fails — bound it while that is three lines rather than an incident.
+_kdf_tmp = _pl.Path(_tf.mkdtemp())
+_kdf_out = str(_kdf_tmp / "out.tar.gz")
+
+
+def _kdf_blob(n=2 ** 15, r=8, p=1, salt_len=16):
+    import base64 as _b64, json as _js
+    head = _js.dumps({"kdf": "scrypt", "n": n, "r": r, "p": p,
+                      "salt": _b64.b64encode(b"s" * salt_len).decode()},
+                     separators=(",", ":"), sort_keys=True).encode()
+    blob = _bk._ENC_MAGIC + head + b"\n" + b"not-a-real-token"
+    _f = str(_kdf_tmp / "probe.enc")
+    open(_f, "wb").write(blob)
+    return _f
+
+
+check("backup/enc: an absurd scrypt n is refused before any memory is allocated",
+      _bk._decrypt_archive(_kdf_blob(n=2 ** 30), _kdf_out, "pw")
+      == (False, "The encrypted backup's header asks for parameters this panel will not use."))
+check("backup/enc: ...and so is an absurd r, an absurd p, and an oversized salt",
+      not _bk._decrypt_archive(_kdf_blob(r=4096), _kdf_out, "pw")[0]
+      and not _bk._decrypt_archive(_kdf_blob(p=9999), _kdf_out, "pw")[0]
+      and not _bk._decrypt_archive(_kdf_blob(salt_len=8192), _kdf_out, "pw")[0])
+check("backup/enc: the parameters this panel itself writes are still accepted",
+      _bk._decrypt_archive(_kdf_blob(), _kdf_out, "pw")[1]
+      != "The encrypted backup's header asks for parameters this panel will not use.")
+_sh2.rmtree(_kdf_tmp, ignore_errors=True)
 
 _sh2.rmtree(_bktmp, ignore_errors=True)
 

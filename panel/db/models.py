@@ -1025,10 +1025,19 @@ def anonymise_audit_ips(days):
 
     Cannot affect login throttling: the brute-force counter looks back LOGIN_WINDOW, which is 300
     SECONDS, so it never reads a row old enough for this to touch."""
-    if not days or days <= 0:
+    # Coerce FIRST. config.json is hand-editable and "90" (quoted) is an easy thing to write;
+    # comparing a str to an int raises TypeError, the caller in app.py swallows it with a bare
+    # except, and the control then silently never runs while the config still says it is on. A
+    # privacy control that fails quietly is worse than one that is off, because nobody looks.
+    try:
+        days = int(days)
+    except (TypeError, ValueError):
+        _log.warning("audit_ip_retention_days is not a number (%r); IP ageing is disabled", days)
+        return 0
+    if days <= 0:
         return 0
     from datetime import timedelta
-    cutoff = utcnow() - timedelta(days=int(days))
+    cutoff = utcnow() - timedelta(days=days)
     rows = (AuditLog.query
             .filter(AuditLog.timestamp < cutoff, AuditLog.ip_address != "",
                     AuditLog.ip_address.isnot(None),
