@@ -22,7 +22,71 @@
   var ACTION_LABEL = { start: 'Start', restart: 'Restart', stop: 'Stop' };
   var ACTION_ICON = { start: 'bi bi-play-fill', restart: 'bi bi-arrow-clockwise',
                       stop: 'bi bi-stop-fill' };
-  var GROUP_ORDER = { pages: 0, servers: 1, actions: 2 };
+  var GROUP_ORDER = { pages: 0, sections: 1, servers: 2, actions: 3 };
+
+  // ── Sections: the places INSIDE a page ────────────────────────────────────────────────────
+  // The index was sidebar links plus server names, so typing "2fa", "firewall", "invite" or
+  // "api token" found nothing — 13 pages and your servers was the whole of it, and everything
+  // else had to be navigated to and then scrolled for.
+  //
+  // `page` is the sidebar href this section lives on, and a section is offered ONLY when that
+  // href is in the scraped sidebar. That is the same permission inheritance pages already get:
+  // the sidebar is rendered per user and already filtered by has_permission(), so this cannot
+  // surface a section of a page the user may not open, and needs no second permission model to
+  // keep in step with the first.
+  //
+  // `kw` is what people actually TYPE, not what the heading says: "mfa" for two-factor, "colour"
+  // for branding, "sign out" for sessions. A section nobody can name is a section nobody finds.
+  var SECTIONS = [
+    { page: '/account',  hash: 'sec-profile',      label: 'Profile & display name',
+      kw: 'profile display name username rename' },
+    { page: '/account',  hash: 'sec-password',     label: 'Change your password',
+      kw: 'password passphrase change credentials' },
+    { page: '/account',  hash: 'sec-2fa',          label: 'Two-factor authentication',
+      kw: '2fa two factor totp mfa authenticator otp backup codes' },
+    { page: '/account',  hash: 'sec-sessions',     label: 'Active sessions',
+      kw: 'sessions devices sign out logout revoke signed in' },
+    { page: '/account',  hash: 'sec-api',          label: 'API access & tokens',
+      kw: 'api token bearer script bot integration curl' },
+    { page: '/account',  hash: 'sec-language',     label: 'Your language',
+      kw: 'language translate spanish french espanol francais locale' },
+    { page: '/account',  hash: 'sec-layout',       label: 'Dashboard layout',
+      kw: 'layout dashboard tiles reorder rearrange panels customise customize' },
+    { page: '/settings', hash: 'sec-branding',     label: 'Branding & accent colour',
+      kw: 'branding colour color accent logo title tagline theme appearance' },
+    { page: '/settings', hash: 'sec-localization', label: 'Default language',
+      kw: 'language localization default locale translate' },
+    { page: '/settings', hash: 'sec-security',     label: 'Sessions & security',
+      kw: 'security session timeout remember proxy https cookie hardening' },
+    { page: '/users',    hash: 'sec-invites',      label: 'Invite links',
+      kw: 'invite invitation onboard new user link signup join' },
+    { page: '/servers/manage', hash: 'install-server', label: 'Install a game server',
+      kw: 'install new server add game create setup' },
+    { page: '/servers/manage', hash: 'sec-tags',   label: 'Server tags',
+      kw: 'tag tags label group colour filter' }
+  ];
+
+  // Sections that exist on EVERY host page. The host's own id is not knowable here, so these are
+  // expanded against the host links the sidebar already lists — which is also what keeps them
+  // permission-filtered, and what makes a host added later appear without touching this table.
+  // Labelled with the host's name because a panel with three hosts otherwise offers three
+  // identical "Firewall" rows.
+  var HOST_SECTIONS = [
+    { hash: 'sec-firewall',   label: 'Firewall',
+      kw: 'firewall ufw port ports open close allow deny block' },
+    { hash: 'sec-osupdates',  label: 'OS updates',
+      kw: 'os update updates apt upgrade patch security packages' },
+    { hash: 'sec-power',      label: 'Power',
+      kw: 'power reboot restart shutdown' },
+    { hash: 'sec-specs',      label: 'System specs',
+      kw: 'specs cpu ram memory disk hardware storage' },
+    { hash: 'sec-connection', label: 'Connection & SSH',
+      kw: 'ssh connection port key credentials host key retrust' },
+    { hash: 'sec-rawlogs',    label: 'Raw logs',
+      kw: 'logs journal syslog raw output' },
+    { hash: 'sec-ubuntupro',  label: 'Ubuntu Pro',
+      kw: 'ubuntu pro esm livepatch subscription attach' }
+  ];
   var EL = {};                 // cached element refs, filled on first open
   var servers = null;          // null = not fetched yet; [] = fetched and empty
   var items = [];              // what is currently rendered, in order
@@ -107,7 +171,61 @@
       entry.order = order;
       out.push(entry);
     }
-    pages().forEach(function (p, i) { consider(p, p.label, 'pages', i); });
+    var available = pages();
+    available.forEach(function (p, i) { consider(p, p.label, 'pages', i); });
+    // A section rides on its page's permission: if the sidebar did not offer the page, the
+    // section does not exist for this user either. Compared on PATH, so a panel mounted under a
+    // sub-path (Tailscale Serve) still matches — the sidebar href carries MOUNT, the table does
+    // not, and hardcoding the bare path here would silently index nothing on such an install.
+    // One shape for both section tables: the page-level ones and the per-host ones differ only
+    // in where the base href comes from and whether the row is qualified by a host name.
+    function addSection(sec, baseHref, order, host) {
+      consider({
+        label: t(sec.label) + (host ? ' — ' + host : ''),
+        href: baseHref + '#' + sec.hash,
+        icon: 'bi bi-arrow-return-right',
+        meta: host || undefined
+      // Searched over the label AND the keyword list, so "mfa" finds Two-factor even though the
+      // word appears nowhere on screen.
+      }, sec.label + ' ' + sec.kw + (host ? ' ' + host : ''), 'sections', order);
+    }
+    function pathOf(href) {
+      return (href || '').split('?')[0].replace(/\/+$/, '');
+    }
+    var reachable = {};
+    available.forEach(function (p) { reachable[pathOf(p.href)] = true; });
+    // One set per host in the sidebar. `hosts` come from the same scrape, so a host the user
+    // cannot reach contributes nothing.
+    //
+    // String comparison rather than a RegExp built from window.MOUNT. A non-literal RegExp is a
+    // ReDoS shape whatever the input happens to be today (Opengrep flags it as one), and it also
+    // meant escaping MOUNT for regex syntax — a second subtlety for no gain. The only pattern
+    // here is a run of digits, and that stays a literal.
+    //
+    // /remote/<id>/manage — the trailing segment is easy to forget: an earlier version matched
+    // '/remote/<id>' with no '/manage', found no host at all, and every per-host section silently
+    // vanished from the results with nothing failing.
+    var hostPrefix = (window.MOUNT || '') + '/remote/';
+    var HOST_SUFFIX = '/manage';
+    function hostIdOf(path) {
+      if (path.slice(0, hostPrefix.length) !== hostPrefix) return null;
+      var rest = path.slice(hostPrefix.length);
+      if (rest.slice(-HOST_SUFFIX.length) !== HOST_SUFFIX) return null;
+      var id = rest.slice(0, rest.length - HOST_SUFFIX.length);
+      return /^[0-9]+$/.test(id) ? id : null;
+    }
+    available.forEach(function (p, hi) {
+      var href = pathOf(p.href);
+      if (hostIdOf(href) === null) return;
+      HOST_SECTIONS.forEach(function (hs, j) {
+        addSection(hs, href, 100 + hi * 10 + j, p.label);
+      });
+    });
+    SECTIONS.forEach(function (sec, i) {
+      var full = (window.MOUNT || '') + sec.page;
+      if (!reachable[pathOf(full)]) return;
+      addSection(sec, full, i);
+    });
     (servers || []).forEach(function (s, i) {
       consider({
         label: s.name,
@@ -197,6 +315,7 @@
         head.className = 'cmdk-group';
         head.setAttribute('role', 'presentation');
         head.textContent = t(group === 'pages' ? 'Pages'
+                            : group === 'sections' ? 'On a page'
                             : group === 'servers' ? 'Game servers' : 'Actions');
         EL.list.appendChild(head);
       }
