@@ -681,6 +681,32 @@ eq("decrypt round-trips", config.decrypt_secret(enc), "hunter2")
 eq("encrypt empty -> empty", config.encrypt_secret(""), "")
 eq("decrypt legacy plaintext passthrough", config.decrypt_secret("plainpw"), "plainpw")
 
+# A secret that ITSELF starts with the marker must not be mistaken for ciphertext. The prefix
+# check alone stored it verbatim — plaintext, in the one function whose job is to prevent that —
+# and decrypt_secret then returned "" forever, so the credential was both exposed and destroyed.
+# Reachable with any user-chosen secret: an SSH password, a Telegram/Discord/ntfy token.
+_looks_enc = "enc:v1:MyActualSSHPassw0rd!"
+_stored = config.encrypt_secret(_looks_enc)
+check("encrypt: a secret starting with enc:v1: is NOT stored in plaintext",
+      _stored != _looks_enc and "MyActualSSHPassw0rd" not in _stored, _stored[:40])
+eq("encrypt: ...and it round-trips back intact", config.decrypt_secret(_stored), _looks_enc)
+check("is_encrypted: false for a plaintext value that merely carries the prefix",
+      not config.is_encrypted(_looks_enc))
+eq("decrypt: such a legacy value is handed back whole, not lost as ''",
+   config.decrypt_secret(_looks_enc), _looks_enc)
+# Idempotency — the reason the prefix check existed — must survive the stricter test.
+eq("encrypt: re-encrypting real ciphertext is still a no-op",
+   config.encrypt_secret(_stored), _stored)
+eq("encrypt: ...round-tripped after the second call too",
+   config.decrypt_secret(config.encrypt_secret(_stored)), _looks_enc)
+# The structural token test must not need the key: with cred_key gone, a real ciphertext still has
+# to read as encrypted, or the startup migration would re-encrypt it under a new key and put it
+# permanently out of reach of the original one.
+check("is_encrypted: a real ciphertext still reads as encrypted without consulting the key",
+      config._is_fernet_token(_stored[len("enc:v1:"):]))
+check("is_encrypted: rejects a prefix followed by valid base64 that is not a Fernet token",
+      not config.is_encrypted("enc:v1:aGVsbG8gd29ybGQ="))
+
 # ── UFW rule grouping: port / protocol split ──────────────────
 def _rules(rs):
     return [{"num": str(i + 1), "detail": d} for i, d in enumerate(rs)]

@@ -1145,11 +1145,22 @@ try:
     # decrypt was logged straight in on the password alone. Not remotely triggerable (it needs
     # damage to data/cred_key), but a control that silently disables itself is the wrong failure
     # direction, and a hand-rolled migration that copies panel.db without the key does exactly it.
+    # A REAL Fernet token under a key this panel does not have — which is what "copied panel.db
+    # without data/cred_key" actually leaves behind. A syntactically invalid blob was the older
+    # fixture and tested a different thing: config.is_encrypted() requires the remainder to be
+    # shaped like a Fernet token, so a malformed one is (correctly) treated as legacy plaintext
+    # and handed back whole, never reaching the decrypt path this is about.
+    from cryptography.fernet import Fernet as _AlienFernet
+    from panel.core.config import is_encrypted as _is_enc
+    _alien_totp = "enc:v1:" + _AlienFernet(_AlienFernet.generate_key()).encrypt(
+        b"JBSWY3DPEHPK3PXP").decode()
+    check("2fa: the fixture is a real ciphertext, just not one this panel can read",
+          _is_enc(_alien_totp), _alien_totp[:30])
     with app.app_context():
         _tf = User(username="tfa_fail_open",
                    password_hash=auth.hash_password("Str0ng!passw0rd"),
                    display_name="2FA", is_superadmin=False, is_active=True,
-                   totp_enabled=True, totp_secret="enc:v1:this-will-not-decrypt")
+                   totp_enabled=True, totp_secret=_alien_totp)
         _tf.set_backup_codes(["abcde-fghjk"])
         db.session.add(_tf)
         db.session.commit()
