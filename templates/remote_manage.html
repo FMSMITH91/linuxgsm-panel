@@ -47,7 +47,7 @@
 
 <!-- System Specs (static hardware & OS) -->
 <div class="card mb-3" data-mtab="overview">
-  <div class="card-header"><i class="bi bi-pc-display-horizontal"></i> System Specs</div>
+  <div class="card-header" id="sec-specs"><i class="bi bi-pc-display-horizontal"></i> System Specs</div>
   <div class="card-body">
     <div class="row g-2" id="specs-body">
       <div class="col-12 text-secondary small"><i class="bi bi-arrow-repeat"></i> Loading specs…</div>
@@ -119,7 +119,7 @@
   <!-- OS Updates -->
   <div class="col-md-4 mb-3" id="os-updates">
     <div class="card h-100">
-      <div class="card-header"><i class="bi bi-arrow-repeat"></i> OS Updates</div>
+      <div class="card-header" id="sec-osupdates"><i class="bi bi-arrow-repeat"></i> OS Updates</div>
       <div class="card-body">
         <div class="d-flex gap-2 flex-wrap">
           <button class="btn btn-sm btn-outline-secondary" data-action="checkUpdates"><i class="bi bi-search"></i> Check</button>
@@ -156,7 +156,7 @@
   <!-- Firewall -->
   <div class="col-md-4 mb-3">
     <div class="card h-100">
-      <div class="card-header"><i class="bi bi-shield-fill-check"></i> Firewall</div>
+      <div class="card-header" id="sec-firewall"><i class="bi bi-shield-fill-check"></i> Firewall</div>
       <div class="card-body">
         <p class="small text-secondary">Game ports open automatically at install.</p>
         <a href="{{ url_for('remote_firewall', remote_id=remote.id) }}" class="btn btn-sm btn-outline-secondary">
@@ -169,7 +169,7 @@
   <!-- Power -->
   <div class="col-md-4 mb-3">
     <div class="card h-100">
-      <div class="card-header"><i class="bi bi-power"></i> Power</div>
+      <div class="card-header" id="sec-power"><i class="bi bi-power"></i> Power</div>
       <div class="card-body">
         <p class="small text-secondary">{% if remote.is_local %}Takes down the panel and every game server running on it.{% else %}Autostart servers come back on their own.{% endif %}</p>
         <div class="d-flex gap-2 flex-wrap">
@@ -529,7 +529,7 @@
 {% endif %}
 
 <div class="card mb-3" data-mtab="security">
-  <div class="card-header"><i class="bi bi-file-earmark-text"></i> Raw logs</div>
+  <div class="card-header" id="sec-rawlogs"><i class="bi bi-file-earmark-text"></i> Raw logs</div>
   <div class="card-body">
     <div class="d-flex gap-2 flex-wrap mb-2">
       {% if remote.is_local %}<button class="btn btn-sm btn-outline-secondary" data-action="loadSecurityLog" data-args='["panel"]'><i class="bi bi-box-arrow-in-right"></i> Panel login log</button>{% endif %}
@@ -543,7 +543,7 @@
 
 <!-- Ubuntu Pro -->
 <div class="card mb-3" data-mtab="maintenance">
-  <div class="card-header"><i class="bi bi-shield-shaded"></i> Ubuntu Pro <span class="text-secondary ms-1" style="font-size:.7rem;font-weight:400;">free security updates (ESM) &amp; Livepatch</span></div>
+  <div class="card-header" id="sec-ubuntupro"><i class="bi bi-shield-shaded"></i> Ubuntu Pro <span class="text-secondary ms-1" style="font-size:.7rem;font-weight:400;">free security updates (ESM) &amp; Livepatch</span></div>
   <div class="card-body">
     <div id="ubuntu-pro-body"><div class="text-secondary small">Checking Ubuntu Pro…</div></div>
   </div>
@@ -551,7 +551,7 @@
 
 <!-- Connection & SSH -->
 <div class="card mb-3" data-mtab="controls" id="conn-ssh-card">
-  <div class="card-header"><i class="bi bi-shield-lock"></i> Connection &amp; SSH</div>
+  <div class="card-header" id="sec-connection"><i class="bi bi-shield-lock"></i> Connection &amp; SSH</div>
   <div class="card-body">
     {% if remote.is_local %}
     <div class="row g-3">

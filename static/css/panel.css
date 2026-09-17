@@ -152,6 +152,11 @@
        no-op below this width, so normal laptops and mobile are unaffected. */
     .content-wrap { max-width: 1600px; margin-inline: auto; }
 
+    /* Landing on #sec-2fa from the palette must not park the card under the fixed mobile
+       topbar (54px) — the browser scrolls the anchor to y=0, which is behind it. scroll-margin
+       moves the stopping point, and costs nothing on desktop where there is no topbar. */
+    [id^="sec-"], #install-server { scroll-margin-top: 70px; }
+
     /* ── CARDS ── */
     .card {
       background: var(--bg-card);

@@ -1099,6 +1099,78 @@ check(not _nonliteral,
       "xss: every sort_th() passes a literal for the |safe attribute slot",
       "non-literal `extra` at: " + "; ".join(_nonliteral))
 
+# ── every palette section points at an anchor that exists ────────────────────────────────────
+# The palette deep-links into a page (/account#sec-2fa). Nothing about a `hash` string in
+# palette.js is checked by the browser: rename the card's id and the link still "works" — it lands
+# on the right page at the top, and the user is back to scrolling for the thing they searched for,
+# which is the exact problem the sections were added to solve. Silent, and only noticed by someone
+# who already knew where it used to go.
+#
+# So: parse the SECTIONS table and require each entry's id to exist in the template its page
+# renders, with the page->template map spelled out here because there is no way to derive it.
+_SECTION_PAGE_TEMPLATE = {
+    "/account": "account.html",
+    "/settings": "settings.html",
+    "/users": "manage_users.html",
+    "/servers/manage": "manage_servers.html",
+}
+_pal_src = (ROOT / "static" / "js" / "palette.js").read_text(encoding="utf-8")
+_sec_block = re.search(r"var SECTIONS = \[(.*?)\n  \];", _pal_src, re.S)
+_sections = re.findall(r"page:\s*'([^']+)'\s*,\s*hash:\s*'([^']+)'",
+                       _sec_block.group(1) if _sec_block else "")
+check(len(_sections) >= 10, "palette: the SECTIONS table was found and parsed",
+      "%d entries parsed — the gate below proves nothing if this is 0" % len(_sections))
+
+_dead, _unmapped = [], []
+for _page, _hash in _sections:
+    _tpl = _SECTION_PAGE_TEMPLATE.get(_page)
+    if not _tpl:
+        _unmapped.append(_page)
+        continue
+    _html = (TEMPLATES / _tpl).read_text(encoding="utf-8")
+    if not re.search(r'id="%s"' % re.escape(_hash), _html):
+        _dead.append("%s#%s (not in %s)" % (_page, _hash, _tpl))
+check(not _unmapped,
+      "palette: every section's page is in the page->template map",
+      "unmapped pages: %s — add them above or the ids behind them are unchecked"
+      % sorted(set(_unmapped)))
+check(not _dead, "palette: every section anchor exists in the page it points at",
+      "dead anchors: " + "; ".join(_dead))
+
+# HOST_SECTIONS are expanded per host at runtime, so their page is always remote_manage.html.
+# Same rot, same gate: a renamed card id there breaks every host's entry at once.
+_host_block = re.search(r"var HOST_SECTIONS = \[(.*?)\n  \];", _pal_src, re.S)
+_host_hashes = re.findall(r"hash:\s*'([^']+)'", _host_block.group(1) if _host_block else "")
+check(len(_host_hashes) >= 5, "palette: the HOST_SECTIONS table was found and parsed",
+      "%d entries parsed" % len(_host_hashes))
+_rm_html = (TEMPLATES / "remote_manage.html").read_text(encoding="utf-8")
+_host_dead = [h for h in _host_hashes if not re.search(r'id="%s"' % re.escape(h), _rm_html)]
+check(not _host_dead,
+      "palette: every per-host section anchor exists in remote_manage.html",
+      "dead anchors: " + ", ".join(_host_dead))
+
+# ...and the pattern that FINDS a host link has to match the real route. This is not theoretical:
+# it shipped as '/remote/\\d+$' against a sidebar href of '/remote/1/manage', matched no host, and
+# every per-host section vanished from the results with every other check still green. Nothing in
+# the palette fails when its regex matches nothing — it just quietly finds less.
+_host_re_src = re.search(r"\+ '(/remote[^']+)'\);", _pal_src)
+check(bool(_host_re_src), "palette: the host-link pattern was found in palette.js",
+      "could not locate it — the check below proves nothing")
+if _host_re_src:
+    # The JS string '/remote/\\d+/manage$' is the regex /remote/\d+/manage$ once parsed.
+    _js_pat = _host_re_src.group(1).replace("\\\\", "\\")
+    _rule = next((r for r, v in json.loads(
+        (ROOT / "tests" / "url_map_baseline.json").read_text(encoding="utf-8")).items()
+        if v.get("endpoint") == "remote_manage"), None)
+    check(_rule is not None, "palette: the remote_manage route is in the url-map baseline",
+          "no remote_manage rule found")
+    # A concrete instance of that rule, e.g. /remote/<int:remote_id>/manage -> /remote/7/manage
+    _concrete = re.sub(r"<[^>]+>", "7", _rule or "")
+    check(bool(re.match(_js_pat, _concrete)),
+          "palette: the host-link pattern matches the real remote_manage URL",
+          "pattern %r does not match %r — per-host sections would silently find nothing"
+          % (_js_pat, _concrete))
+
 # ── report ──
 # c is True (pass), False (fail) or None (skipped — the check did not run; see skip()).
 passed = sum(1 for c, _, _ in results if c is True)
