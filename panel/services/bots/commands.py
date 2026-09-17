@@ -161,6 +161,32 @@ def _hosts_text(app):
     return "\n".join(rows) if rows else "No hosts configured."
 
 
+# ── "I'm working on it" wording, shared by both bots ───────────────────────────────────────────
+# Telegram and Discord run the same command set through the same helpers, so a user on one has no
+# reason to see different words from a user on the other. Kept here rather than in either bot for
+# that reason: two copies of a string is two copies that drift.
+
+# What an action is called while it is still running. The COMPLETION message is built from the
+# action name itself, so adding an action here is the only thing a new verb needs.
+_ACTION_ACK = {
+    "start": "🔄 %s — starting…",
+    "stop": "🔄 %s — stopping…",
+    "restart": "🔄 %s — restarting…",
+    "backup": "🔄 %s — backing up. This can take a few minutes; I'll tell you when it's done.",
+    "update": "🔄 %s — updating. This can take a few minutes; I'll tell you when it's done.",
+}
+
+# The read commands that have to leave the box before they can answer — a live query to the game
+# server, an SSH console capture, an in-game announcement. status/servers/hosts/connect answer
+# from the database and are already instant, so they are deliberately absent: acking an answer
+# that arrives in the same breath is just noise.
+_WORKING_ACK = {
+    "players": "🔎 Asking the server who's on…",
+    "console": "🔎 Fetching the console…",
+    "say": "📣 Sending it in-game…",
+}
+
+
 def _bot_origin(platform, sender):
     """Audit-log actor string for a command that arrived over a chat bot.
 

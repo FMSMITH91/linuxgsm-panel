@@ -30,6 +30,32 @@ from app import (LONG_ACTIONS, RUNNABLE_ACTIONS, _apply_mod_restart, _live_run_s
 from panel.routes._shared import (_maybe_resolve_public_ip, _server_action_buttons)
 
 
+def _summarise_action_output(detail):
+    """One short line out of a LinuxGSM command's output, for a chat-sized completion message.
+
+    LinuxGSM prints a banner, a progress spool and then its verdict, so the LAST non-empty line is
+    the one worth repeating — the first is always the logo. Blank output is normal for a clean
+    start, hence the empty-string fall-through rather than a placeholder."""
+    rows = [r.strip() for r in (detail or "").splitlines() if r.strip()]
+    return rows[-1][:200] if rows else ""
+
+
+def _fire_on_done(on_done, ok, detail, action, server_id):
+    """Deliver a backgrounded action's outcome to whoever asked to be told.
+
+    Swallows everything: on_done is a chat-bot send, i.e. a network call to a third party, and it
+    runs on the worker thread that just finished the real work. A Telegram outage must not surface
+    as 'background action failed' in the log, and must not be the last thing this thread does
+    before the bookkeeping it was actually for."""
+    if not on_done:
+        return
+    try:
+        on_done(bool(ok), _summarise_action_output(detail))
+    except Exception:
+        _log.debug("completion callback for %s on server %s failed", action, server_id,
+                   exc_info=True)
+
+
 def register(app):
 
 
@@ -99,13 +125,21 @@ def register(app):
 
 
 
-    def _run_action(gs, remote, action, actor, origin=None):
+    def _run_action(gs, remote, action, actor, origin=None, on_done=None):
         """Execute a whitelisted action (permission already checked).
         Returns (ok, message). Long actions run in the background.
 
         `origin` names a non-user caller for the audit log — currently the chat bots, which have
         no panel account to attribute to. Without it their actions were recorded as "system", so
-        the log showed a server restarting with nothing to say a chat message caused it."""
+        the log showed a server restarting with nothing to say a chat message caused it.
+
+        `on_done(ok, detail)` is called when a BACKGROUNDED action actually finishes, and only
+        then — the two background branches below return the moment the work is handed off, so
+        their (True, "...started") is "accepted", not "done". A caller with nowhere to show
+        progress needs the other half: the chat bots say "restarting…" on the return value and
+        then have nothing more to say, leaving the chat silent on whether it worked. The
+        synchronous branch never calls it, because there the return value already IS the
+        outcome."""
         # Don't fire a power action that is already a no-op. LinuxGSM answers "Server already
         # started" and exits, but start/stop run in the background here and their output is
         # discarded, so the panel reported "'start' issued — status updates in a few seconds" as a
@@ -126,7 +160,7 @@ def register(app):
         if action in ("stop", "restart"):
             _mark_expected_offline(gs.id)   # so the monitor doesn't alert on an intentional stop
         if action in LONG_ACTIONS:
-            _bg_action(gs.id, remote.id, gs.short_name, action, gs.lgsm_name)
+            _bg_action(gs.id, remote.id, gs.short_name, action, gs.lgsm_name, on_done=on_done)
             log_action(actor, f"{action}_server", target=gs.name, actor=origin)
             return True, f"'{action}' started — watch the live console for progress."
         if action in ("start", "stop", "restart"):
@@ -134,7 +168,7 @@ def register(app):
             # plus LinuxGSM confirming the outcome). Run them in the background so the click returns
             # immediately and the status poll reflects the result, instead of hanging the button.
             _bg_power_action(gs.id, remote.id, gs.short_name, action, gs.lgsm_name,
-                             actor.id if actor else None, origin=origin)
+                             actor.id if actor else None, origin=origin, on_done=on_done)
             return True, f"'{action}' issued — status updates in a few seconds."
         timeout = 90 if action == "restart" else 60
         out, err, rc = _sm.run_as_game_user(remote, gs.short_name, f"{action} 2>&1", timeout=timeout, selfname=gs.lgsm_name)
@@ -571,7 +605,8 @@ def register(app):
         log_action(current_user, "set_notify_when_empty", target=gs.name, detail=str(enabled))
         return jsonify({"success": True, "enabled": enabled})
 
-    def _bg_power_action(server_id, remote_id, short_name, action, selfname, actor_id, origin=None):
+    def _bg_power_action(server_id, remote_id, short_name, action, selfname, actor_id,
+                         origin=None, on_done=None):
         """Run a start/stop/restart in the background so the click returns immediately (the command
         is slow — srcds Steam/VAC init on start, a graceful shutdown wait on stop, plus LinuxGSM's
         confirm step). The dashboard/list status poll reflects the outcome. Mirrors the synchronous
@@ -580,17 +615,24 @@ def register(app):
         _app = app
 
         def _run():
+            # Seeded to the failure case on purpose: every exit from the try below that isn't a
+            # clean rc==0 — a raise, a vanished host row — has to reach on_done as a failure. A
+            # caller that was told "starting…" and then hears nothing cannot tell a dead server
+            # from a dead bot.
+            ok, detail = False, "the action didn't run"
             try:
                 with _app.app_context():
                     remote = db.session.get(RemoteServer, remote_id)
                     gs = db.session.get(GameServer, server_id)
                     actor = db.session.get(User, actor_id) if actor_id else None
                     if not remote or not gs:
+                        detail = "the server or its host is no longer configured"
                         return
                     timeout = 90 if action == "restart" else 60
                     out, _, rc = _sm.run_as_game_user(remote, short_name, f"{action} 2>&1",
                                                   timeout=timeout, selfname=selfname)
                     clean = terminal.strip_escapes(out or "")
+                    ok, detail = (rc == 0), clean
                     log_action(actor, f"{action}_server", target=gs.name, success=(rc == 0),
                                detail=clean[-400:], actor=origin)
                     if rc == 0:
@@ -606,18 +648,25 @@ def register(app):
                                 app.logger.debug("game priority boost failed (non-fatal)", exc_info=True)
             except Exception:
                 app.logger.exception("power action %s failed for server %s", action, server_id)
+            finally:
+                # finally, not the end of the try: the bookkeeping above (priority nudge, commit)
+                # can raise AFTER the action itself succeeded, and the caller still needs to hear
+                # that it succeeded.
+                _fire_on_done(on_done, ok, detail, action, server_id)
 
         threading.Thread(target=_run, daemon=True).start()
 
-    def _bg_action(server_id, remote_id, short_name, action, selfname=None):
+    def _bg_action(server_id, remote_id, short_name, action, selfname=None, on_done=None):
         """Run a long LinuxGSM command in the background (green thread)."""
         _app = app
 
         def _run():
+            ok, detail = False, "the action didn't run"
             try:
                 with _app.app_context():
                     remote = db.session.get(RemoteServer, remote_id)
                     if not remote:
+                        detail = "its host is no longer configured"
                         return
                     act_cmd = f"{action} 2>&1"
                     if action == "fastdl":
@@ -625,6 +674,7 @@ def register(app):
                         # all default Y, and loops forever on EOF — feed Y's so it runs unattended.
                         act_cmd = "fastdl <<< $'Y\\nY\\nY\\nY\\nY\\nY\\nY\\nY' 2>&1"
                     out, err, rc = _sm.run_as_game_user(remote, short_name, act_cmd, timeout=1800, selfname=selfname)
+                    ok, detail = (rc == 0), terminal.strip_escapes(out or err or "")
                     gs = db.session.get(GameServer, server_id)
                     log_action(None, f"{action}_complete", target=gs.name if gs else short_name,
                                success=(rc == 0), detail=(out or err or "")[-300:])
@@ -640,6 +690,8 @@ def register(app):
                                                gs.name, exc_info=True)
             except Exception:
                 app.logger.exception("background action failed")
+            finally:
+                _fire_on_done(on_done, ok, detail, action, server_id)
 
         threading.Thread(target=_run, daemon=True).start()
 

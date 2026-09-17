@@ -3797,9 +3797,13 @@ try:
     # what the routers actually see.
     from panel.services.bots import telegram as _tgmod
     from panel.services.bots import discord as _dcmod
-    _tg_sent, _tg_acted = [], []
-    _tg_saved = (_tgmod._tg_reply, _tgmod._tg_server_action)
+    _tg_sent, _tg_acted, _tg_acks = [], [], []
+    # _tg_ack is a SECOND send seam, not a variant of _tg_reply: it goes out before the work and
+    # deliberately carries no _reply_header. Captured separately so a test can assert on the
+    # answer without the ack in the way — and so nothing here reaches api.telegram.org.
+    _tg_saved = (_tgmod._tg_reply, _tgmod._tg_server_action, _tgmod._tg_ack)
     try:
+        _tgmod._tg_ack = lambda tok, chat, text: _tg_acks.append(text)
         _tgmod._tg_reply = lambda tok, chat, text: _tg_sent.append(text)
         _tgmod._tg_server_action = lambda a, tok, chat, action, arg, sender=None: _tg_acted.append(
             (action, arg))
@@ -3847,10 +3851,14 @@ try:
             _sm_game.moderate = lambda r, u, gt, action, target="", message="", selfname=None, \
                 steamid="", num="": (_tg_mod.append((action, message)), (True, "announced"))[1]
 
-            _tg_sent.clear()
+            _tg_sent.clear(); _tg_acks.clear()
             _tgmod._handle_telegram_command(app, "1:tok", "1", "/console smoke-cs")
             check("telegram: /console tails the game console",
                   _tg_sent and "Server started" in _tg_sent[0], "sent=%s" % _tg_sent[:1])
+            # /console is an SSH capture: on a slow or unreachable host the chat sat silent for
+            # the whole round trip, which reads as a dead bot. It has to say something first.
+            check("telegram: /console says it is working before it goes to the host",
+                  _tg_acks and "console" in _tg_acks[0].lower(), "acks=%s" % _tg_acks)
             check("telegram: ...with the ANSI escapes stripped",
                   _tg_sent and "\x1b[" not in _tg_sent[0], "sent=%r" % (_tg_sent[:1],))
             _tg_sent.clear()
@@ -3858,19 +3866,28 @@ try:
             check("telegram: /console on an unknown server explains itself",
                   _tg_sent and "No server" in _tg_sent[0], "sent=%s" % _tg_sent[:1])
 
-            _tg_sent.clear(); _tg_mod.clear()
+            _tg_sent.clear(); _tg_mod.clear(); _tg_acks.clear()
             _tgmod._handle_telegram_command(app, "1:tok", "1", "/say csgoserver restarting in 5")
             check("telegram: /say announces the whole message, not just the first word",
                   _tg_mod == [("say", "restarting in 5")], "moderate=%s" % _tg_mod)
+            check("telegram: /say acks before it reaches the game", _tg_acks, "acks=%s" % _tg_acks)
             _tg_sent.clear(); _tg_mod.clear()
             _tgmod._handle_telegram_command(app, "1:tok", "1", "/say csgoserver")
             check("telegram: /say with no message asks for one instead of announcing nothing",
                   not _tg_mod and _tg_sent and "announce" in _tg_sent[0], "sent=%s" % _tg_sent[:1])
 
-            _tg_sent.clear()
+            _tg_sent.clear(); _tg_acks.clear()
             _tgmod._handle_telegram_command(app, "1:tok", "1", "/connect smoke-cs")
             check("telegram: /connect gives the joinable address",
                   _tg_sent and ":27015" in _tg_sent[0], "sent=%s" % _tg_sent[:1])
+            # The other half of the rule: /connect, /status, /servers and /hosts answer out of the
+            # database in the same breath, so acking them would be two notifications for one
+            # answer. Acking everything is as wrong as acking nothing.
+            for _inst in ("/connect smoke-cs", "/status", "/servers", "/hosts"):
+                _tg_acks.clear()
+                _tgmod._handle_telegram_command(app, "1:tok", "1", _inst)
+                check("telegram: %s answers instantly and does not ack" % _inst.split()[0],
+                      not _tg_acks, "acks=%s" % _tg_acks)
 
             _tg_acted.clear()
             _tgmod._handle_telegram_command(app, "1:tok", "1", "/backup smoke-cs")
@@ -3879,7 +3896,72 @@ try:
         finally:
             _sm_game.capture_console, _sm_game.moderate = _tg_saved_new
     finally:
-        _tgmod._tg_reply, _tgmod._tg_server_action = _tg_saved
+        _tgmod._tg_reply, _tgmod._tg_server_action, _tgmod._tg_ack = _tg_saved
+
+    # ── Instant feedback: ack first, then say how it ended ────────────────────────────────────
+    # Every action a bot can send runs in the background, so run_action returns "'restart' issued"
+    # the moment the work is handed to a thread — and that was the LAST thing the chat ever heard.
+    # A /backup went quiet for minutes; a /restart never said whether it worked. The exchange is
+    # two messages now, and all three properties below are load-bearing: the ack comes BEFORE the
+    # dispatch (start/stop probe the host first, which is the delay being papered over), nothing
+    # else is said while the work runs (relaying "issued" as well would make one restart three
+    # messages), and the completion names what happened.
+    _fb_acks, _fb_sent, _fb_at_dispatch, _fb_cb = [], [], [], {}
+    _fb_saved = (_tgmod._tg_ack, _tgmod._tg_reply, getattr(app, "_run_action", None))
+    try:
+        _tgmod._tg_ack = lambda tok, chat, text: _fb_acks.append(text)
+        _tgmod._tg_reply = lambda tok, chat, text: _fb_sent.append(text)
+
+        def _fb_run_action(gs, remote, action, actor, origin=None, on_done=None):
+            _fb_at_dispatch.append(list(_fb_acks))    # what had been said by the time we were called
+            _fb_cb["fn"] = on_done
+            return True, "'%s' issued — status updates in a few seconds." % action
+
+        app._run_action = _fb_run_action
+        _tgmod._tg_server_action(app, "1:tok", "1", "restart", "smoke-cs")
+        check("telegram: a server action acks BEFORE it dispatches the action",
+              _fb_at_dispatch and _fb_at_dispatch[0]
+              and "restarting" in _fb_at_dispatch[0][0].lower(),
+              "acks-at-dispatch=%s" % (_fb_at_dispatch,))
+        check("telegram: the ack names the server it is acting on",
+              _fb_acks and "smoke-cs" in _fb_acks[0], "acks=%s" % _fb_acks)
+        check("telegram: nothing further is said while the action is still running",
+              _fb_sent == [], "sent=%s" % (_fb_sent,))
+        check("telegram: run_action is handed a completion callback",
+              callable(_fb_cb.get("fn")), "cb=%r" % (_fb_cb.get("fn"),))
+        # Not _fb_cb["fn"] directly: if the callback ever stops being passed, the check above is
+        # the honest report and the rest of the suite should still run. Calling None here would
+        # abort smoke_test entirely and hide every check after this point.
+        _fb_fire = _fb_cb.get("fn") or (lambda ok, detail: None)
+        _fb_fire(True, "Server restarted")
+        check("telegram: the completion names the server and says it finished",
+              len(_fb_sent) == 1 and "smoke-cs" in _fb_sent[0]
+              and "restart finished" in _fb_sent[0], "sent=%s" % (_fb_sent,))
+        _fb_sent[:] = []
+        _fb_fire(False, "Failed to start")
+        check("telegram: a failed action says so, and says why",
+              len(_fb_sent) == 1 and "failed" in _fb_sent[0]
+              and "Failed to start" in _fb_sent[0], "sent=%s" % (_fb_sent,))
+        # A REFUSAL backgrounds nothing, so the callback never runs and nothing else will ever
+        # speak. Staying quiet here would leave the chat holding an ack for a restart that was
+        # never going to happen.
+        app._run_action = lambda gs, remote, action, actor, origin=None, on_done=None: (
+            False, "already running. Use 'restart' if you want it bounced.")
+        _fb_sent[:] = []; _fb_acks[:] = []
+        _tgmod._tg_server_action(app, "1:tok", "1", "start", "smoke-cs")
+        check("telegram: a refused action corrects its own ack instead of going quiet",
+              len(_fb_sent) == 1 and "already running" in _fb_sent[0], "sent=%s" % (_fb_sent,))
+        # backup/update are the ones worth warning about: minutes, not seconds.
+        for _slow in ("backup", "update"):
+            _fb_acks[:] = []
+            app._run_action = _fb_run_action
+            _tgmod._tg_server_action(app, "1:tok", "1", _slow, "smoke-cs")
+            check("telegram: the %s ack warns that it takes a while" % _slow,
+                  _fb_acks and "few minutes" in _fb_acks[0], "acks=%s" % _fb_acks)
+    finally:
+        _tgmod._tg_ack, _tgmod._tg_reply = _fb_saved[0], _fb_saved[1]
+        if _fb_saved[2] is not None:
+            app._run_action = _fb_saved[2]
     # Every command the bot advertises must be one it handles — that menu is what made the /start
     # bug reachable in the first place.
     from panel.services import notifications as _notif
@@ -3901,9 +3983,11 @@ try:
     # The two bots are twins by design and drift is how the /start bug survived: one router grew a
     # branch the other didn't. Both are asserted from here on, and the parity gate below is the
     # part that catches the next one.
-    _dc_sent, _dc_acted, _dc_upd = [], [], []
-    _dc_saved = (_dcmod._dc_reply, _dcmod._dc_server_action, _dcmod._discord_do_update)
+    _dc_sent, _dc_acted, _dc_upd, _dc_acks = [], [], [], []
+    _dc_saved = (_dcmod._dc_reply, _dcmod._dc_server_action, _dcmod._discord_do_update,
+                 _dcmod._dc_ack)
     try:
+        _dcmod._dc_ack = lambda tok, chan, text: _dc_acks.append(text)
         _dcmod._dc_reply = lambda tok, chan, text: _dc_sent.append(text)
         _dcmod._dc_server_action = lambda a, tok, chan, action, arg, sender=None: _dc_acted.append(
             (action, arg))
@@ -3930,7 +4014,51 @@ try:
               _dc_sent and "Unknown command" in _dc_sent[0], "sent=%s" % _dc_sent[:1])
     finally:
         (_dcmod._dc_reply, _dcmod._dc_server_action,
-         _dcmod._discord_do_update) = _dc_saved
+         _dcmod._discord_do_update, _dcmod._dc_ack) = _dc_saved
+
+    # The same two-message exchange on Discord. The bots are twins by design and drift is how the
+    # /start bug survived — a behaviour added to one and not the other is the shape that keeps
+    # recurring, so this is asserted rather than assumed from the shared wording table.
+    _dfb_acks, _dfb_sent, _dfb_cb = [], [], {}
+    _dfb_saved = (_dcmod._dc_ack, _dcmod._dc_reply, getattr(app, "_run_action", None))
+    try:
+        _dcmod._dc_ack = lambda tok, chan, text: _dfb_acks.append(text)
+        _dcmod._dc_reply = lambda tok, chan, text: _dfb_sent.append(text)
+
+        def _dfb_run_action(gs, remote, action, actor, origin=None, on_done=None):
+            _dfb_cb["fn"] = on_done
+            return True, "'%s' issued" % action
+
+        app._run_action = _dfb_run_action
+        _dcmod._dc_server_action(app, "tok", "1", "restart", "smoke-cs")
+        check("discord: a server action acks, then stays quiet until it finishes",
+              _dfb_acks and "smoke-cs" in _dfb_acks[0] and _dfb_sent == [],
+              "acks=%s sent=%s" % (_dfb_acks, _dfb_sent))
+        check("discord: run_action is handed a completion callback",
+              callable(_dfb_cb.get("fn")), "cb=%r" % (_dfb_cb.get("fn"),))
+        (_dfb_cb.get("fn") or (lambda ok, detail: None))(True, "Server restarted")
+        check("discord: the completion message arrives when the action lands",
+              len(_dfb_sent) == 1 and "restart finished" in _dfb_sent[0], "sent=%s" % _dfb_sent)
+    finally:
+        _dcmod._dc_ack, _dcmod._dc_reply = _dfb_saved[0], _dfb_saved[1]
+        if _dfb_saved[2] is not None:
+            app._run_action = _dfb_saved[2]
+
+    # Both bots must ack the same commands. The wording lives in one shared table so they cannot
+    # differ in words, but WHICH commands get acked is a per-router decision, and that is the
+    # half that can drift.
+    _tg_acked_cmds = set(_nre.findall(r'_tg_ack\(token, chat_id, _WORKING_ACK\["([a-z]+)"\]', _tg_src))
+    _dc_acked_cmds = set(_nre.findall(r'_dc_ack\(bot_token, channel_id, _WORKING_ACK\["([a-z]+)"\]', _dc_src))
+    from panel.services.bots.commands import _WORKING_ACK as _WACK, _ACTION_ACK as _AACK
+    check("bots: both routers ack the same set of slow commands",
+          _tg_acked_cmds == _dc_acked_cmds == set(_WACK),
+          "telegram=%s discord=%s table=%s" % (sorted(_tg_acked_cmds), sorted(_dc_acked_cmds),
+                                               sorted(_WACK)))
+    # Every action the bots can dispatch needs ack wording, or it falls back to "working on it…"
+    # and the user is told nothing about what is happening.
+    _bot_actions = {"start", "stop", "restart", "backup", "update"}
+    check("bots: every dispatchable action has its own ack wording",
+          _bot_actions <= set(_AACK), "missing: %s" % sorted(_bot_actions - set(_AACK)))
 
     # Both routers must handle the same verbs. Neither is the source of truth, so compare the
     # quoted command words in each router body — a branch added to one and not the other is
@@ -4036,6 +4164,53 @@ try:
         _j = _pa_post("restart")
         check("power: restart is never refused, whatever the status says",
               _j.get("success") is True and _pa_wait(_pa_ran) and _pa_wait(_pa_prio), "got %s" % _j)
+
+        # ── The panel half of the chat bots' "I'll tell you when it's done" ──────────────────
+        # run_action returns as soon as the work is handed to a thread, so (True, "issued") means
+        # ACCEPTED, not finished. The web UI has a status column to watch; a chat bot has nothing,
+        # so it was left announcing a restart and never able to say how it went. on_done closes
+        # that — and it has to fire on BOTH outcomes, because a callback that only reports success
+        # leaves a failure indistinguishable from a bot that died.
+        _pa_status("offline"); _sm_core.server_live_metrics = _pa_metrics(False)
+        _done_ok = []
+        with app.app_context():
+            _pa_gs = db.session.get(GameServer, gs_id)
+            app._run_action(_pa_gs, _pa_gs.remote, "start", None,
+                            on_done=lambda ok, detail: _done_ok.append((ok, detail)))
+        check("run_action: a backgrounded power action reports back when it finishes",
+              _pa_wait(_done_ok) and _done_ok[0][0] is True, "done=%s" % (_done_ok,))
+        _done_fail = []
+        _sm_core.run_as_game_user = lambda *a, **k: (
+            "[ LinuxGSM ] banner\nStarting…\nFailed to start\n", "", 1)
+        _pa_status("offline"); _sm_core.server_live_metrics = _pa_metrics(False)
+        with app.app_context():
+            _pa_gs = db.session.get(GameServer, gs_id)
+            app._run_action(_pa_gs, _pa_gs.remote, "start", None,
+                            on_done=lambda ok, detail: _done_fail.append((ok, detail)))
+        check("run_action: a FAILED backgrounded action reports the failure, not silence",
+              _pa_wait(_done_fail) and _done_fail[0][0] is False, "done=%s" % (_done_fail,))
+        # LinuxGSM prints its logo first and its verdict last, so the LAST non-empty line is the
+        # one worth putting in a chat message — reporting the head would report the banner.
+        check("run_action: the completion detail is LinuxGSM's verdict, not its banner",
+              _done_fail and _done_fail[0][1] == "Failed to start", "done=%s" % (_done_fail,))
+        _sm_core.run_as_game_user = _pa_rag
+        # The OTHER background branch. backup/update go through _bg_action, not _bg_power_action,
+        # and those are the slow ones — a /backup was the longest silence of the lot.
+        _done_long = []
+        with app.app_context():
+            _pa_gs = db.session.get(GameServer, gs_id)
+            app._run_action(_pa_gs, _pa_gs.remote, "backup", None,
+                            on_done=lambda ok, detail: _done_long.append((ok, detail)))
+        check("run_action: a long action (backup) reports back too, not just power actions",
+              _pa_wait(_done_long) and _done_long[0][0] is True, "done=%s" % (_done_long,))
+        # The promise only holds because every action a bot can send is backgrounded. If one ever
+        # became synchronous, the bot would ack it and then wait for a callback that never comes.
+        from app import LONG_ACTIONS as _LONG
+        _bg_verbs = {"start", "stop", "restart"} | set(_LONG)
+        check("run_action: every action a chat bot can send is a backgrounded one",
+              {"start", "stop", "restart", "backup", "update"} <= _bg_verbs,
+              "not backgrounded: %s" % sorted({"start", "stop", "restart", "backup", "update"}
+                                              - _bg_verbs))
     finally:
         (_sm_core.server_live_metrics, _sm_core.run_as_game_user,
          _sm_core.set_game_priority) = _pa_saved
