@@ -957,6 +957,7 @@ def prune_expired_sessions(user_id=None):
         return 0
 
 
+# Columns that are ciphertext at rest. Named here so the migration and its test agree on one list.
 ENCRYPTED_AT_REST_COLUMNS = {
     "remote_server": ("host", "username", "linuxgsm_user", "public_ip", "host_key"),
     "user_session": ("ip", "user_agent"),
@@ -967,29 +968,34 @@ def encrypt_at_rest_columns():
     """Encrypt any rows in ENCRYPTED_AT_REST_COLUMNS still stored as plaintext. Returns the number
     of rows rewritten. Idempotent, and safe to call on every startup.
 
-    RAW SQL on purpose. Reading these through the ORM hands back the DECRYPTED value, so "is it
-    already encrypted?" would be answered by the decryptor and always say yes; and assigning that
-    same value back changes nothing SQLAlchemy can see, so no UPDATE would ever be emitted. The raw
-    bytes are the only place the question can be asked.
+    A function rather than inline startup code so it can be tested — and it is genuinely
+    load-bearing: an ordinary save does NOT convert a legacy row, because SQLAlchemy writes only
+    the columns that changed. Editing a host's port would leave its hostname in plaintext forever.
 
-    A function rather than inline startup code so it can be tested: an ordinary save does NOT
-    convert a legacy row, because SQLAlchemy only writes the columns that changed — editing a
-    host's port leaves its hostname in plaintext forever. This is the only thing that converts it."""
-    from panel.core.config import encrypt_secret, is_encrypted
+    type_coerce is the whole trick. Reading these columns normally hands back the DECRYPTED value,
+    so "is it already encrypted?" would be answered by the decryptor and always say yes; and
+    assigning that same value back changes nothing SQLAlchemy can see, so no UPDATE would be
+    emitted. Coercing to Text bypasses the TypeDecorator's result processing and yields the raw
+    stored bytes, which is the only place the question can be asked. The write then goes through
+    the TYPED column, so the plaintext is encrypted on its way back in.
+
+    Built with SQLAlchemy Core rather than formatted SQL strings: the table and column names come
+    from the constant above and were never attacker-controlled, but SQL assembled by string
+    formatting is worth avoiding on sight — and Core expresses this more clearly anyway."""
+    from sqlalchemy import Text as _SAText, select, type_coerce, update
+    from panel.core.config import is_encrypted
+    targets = [(RemoteServer, ENCRYPTED_AT_REST_COLUMNS["remote_server"]),
+               (UserSession, ENCRYPTED_AT_REST_COLUMNS["user_session"])]
     touched = 0
-    for table, cols in ENCRYPTED_AT_REST_COLUMNS.items():
-        rows = db.session.execute(
-            text("SELECT id, %s FROM %s" % (", ".join(cols), table))).fetchall()
-        for row in rows:
-            sets, params = [], {"id": row[0]}
-            for i, col in enumerate(cols, start=1):
-                raw = row[i]
-                if raw and not is_encrypted(raw):
-                    sets.append("%s = :%s" % (col, col))
-                    params[col] = encrypt_secret(raw)
-            if sets:
-                db.session.execute(
-                    text("UPDATE %s SET %s WHERE id = :id" % (table, ", ".join(sets))), params)
+    for model, cols in targets:
+        tbl = model.__table__
+        raw_cols = [type_coerce(tbl.c[c], _SAText).label(c) for c in cols]
+        for row in db.session.execute(select(tbl.c.id, *raw_cols)).fetchall():
+            values = {c: getattr(row, c) for c in cols
+                      if getattr(row, c) and not is_encrypted(getattr(row, c))}
+            if values:
+                # Through the typed column: process_bind_param does the encrypting.
+                db.session.execute(update(tbl).where(tbl.c.id == row.id).values(**values))
                 touched += 1
     if touched:
         db.session.commit()
