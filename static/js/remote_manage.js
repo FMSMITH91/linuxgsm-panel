@@ -174,10 +174,19 @@ function loadSecurityLog(which, jail){
 (function(){
   var nav = document.getElementById('mtab-nav'); if(!nav) return;
   var TABS = ['overview','controls','maintenance','security'];
-  // 'updates' is the PANEL's self-update card; 'os-updates' is the host's apt packages — the login
-  // banner links straight at the latter.
-  var CARD_TAB = {updates:'maintenance', backups:'maintenance', diagnostics:'maintenance',
-                  'os-updates':'controls'};
+  // Which tab holds a given card is read from the DOM, not from a list kept by hand. There WAS a
+  // hand-kept map here, naming four ids; every other card on the page — the whole Security tab
+  // among them — fell through it to show('overview'), so a link straight to one opened the wrong
+  // tab and scrolled to an element that was display:none. That is how the command palette's
+  // Banned IPs / Top offenders / Recent security events entries shipped landing on nothing.
+  // The cards already carry data-mtab, so asking the element which section it is in cannot drift
+  // the way a second copy of that mapping did.
+  function tabOf(id){
+    if(!id) return null;
+    var el = document.getElementById(id); if(!el) return null;
+    var sec = el.closest('[data-mtab]');   // the card itself, or the card an inner div lives in
+    return sec ? sec.getAttribute('data-mtab') : null;
+  }
   var _secLoaded = false;
   function show(tab){
     document.querySelectorAll('[data-mtab]').forEach(function(el){
@@ -194,9 +203,16 @@ function loadSecurityLog(which, jail){
   });
   function openHash(fallback){
     var h = (location.hash || '').replace('#','');
-    if (TABS.indexOf(h) >= 0) { show(h); }
-    else if (CARD_TAB[h]) { show(CARD_TAB[h]); var el = document.getElementById(h); if(el) el.scrollIntoView(); }
-    else if (fallback) { show('overview'); }
+    if (TABS.indexOf(h) >= 0) { show(h); return; }
+    var tab = tabOf(h);
+    if (tab) {
+      show(tab);
+      // AFTER show(): until its tab is open the card is display:none, and scrolling to a hidden
+      // element does nothing at all — silently, which is what made this hard to notice.
+      var el = document.getElementById(h); if(el) el.scrollIntoView();
+      return;
+    }
+    if (fallback) { show('overview'); }
   }
   openHash(true);
   // Following a #card link while ALREADY on this page changes the hash without reloading, so the
