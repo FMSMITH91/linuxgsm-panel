@@ -63,7 +63,33 @@
     { page: '/servers/install', hash: 'install-server', label: 'Install a game server',
       kw: 'install new server add game create setup' },
     { page: '/', hash: 'sec-tags', label: 'Server tags',
-      kw: 'tag tags label group colour filter' }
+      kw: 'tag tags label group colour filter' },
+    // The Panel Server page is the heaviest in the app — fifteen cards, ten of them hidden until
+    // something reveals them — and NONE of it was reachable from here. Typing "backup" returned
+    // Two-factor authentication, because its keywords mention backup codes; "diagnostics",
+    // "integrity", "banned" and "fail2ban" returned nothing at all. Navigating there was the only
+    // way to reach any of it, which is exactly why everything felt like it lived on that page.
+    // Labels are the destination cards' own headings, VERBATIM. Two reasons, and the second is
+    // the one that bites: a result that reads differently from the card it lands you on makes you
+    // check you arrived somewhere right, and the translation catalog matches on exact text — so
+    // 'Panel updates' next to the card's 'Panel Updates' is a second key for the same phrase,
+    // which is how a Spanish user ends up with an English search result pointing at a Spanish
+    // card. Match the heading and the existing key already covers it.
+    { page: '/server-management', hash: 'backups', label: 'Backups',
+      kw: 'backup backups restore snapshot archive download panel' },
+    { page: '/server-management', hash: 'updates', label: 'Panel Updates',
+      kw: 'panel update upgrade version branch release self-update' },
+    { page: '/server-management', hash: 'diagnostics', label: 'Diagnostics & File Integrity',
+      kw: 'diagnostics diagnostic integrity repair health check verify database' },
+    { page: '/server-management', hash: 'sec-bans', label: 'Banned IPs (fail2ban)',
+      kw: 'banned ban bans fail2ban blocked unban ip attacker' },
+    // Auto-block is a toggle INSIDE this card, not a card of its own, so it is keywords here
+    // rather than a second entry — two results landing on one card, one of them scrolling to a
+    // checkbox, is worse than one result that answers both searches.
+    { page: '/server-management', hash: 'sec-top', label: 'Top offenders',
+      kw: 'offenders attackers top ips worst repeat autoblock automatic blocking threshold' },
+    { page: '/server-management', hash: 'sec-events', label: 'Recent security events',
+      kw: 'security events intrusion attempts breach' }
   ];
 
   // Sections that exist on EVERY host page. The host's own id is not knowable here, so these are
