@@ -383,6 +383,149 @@ _old = _bk.BACKUP_DIR / "panel-backup-20000101-000000-daily.tar.gz"
 _sh2.copy(_bk.BACKUP_DIR / _bname, _old); _osb.utime(_old, (0, 0))
 check("backup: prune drops an old DAILY backup but keeps the manual one",
       _bk.prune_backups(7) == 1 and all(b["kind"] != "daily" for b in _bk.list_backups()))
+
+# ── encrypted backups ────────────────────────────────────────────────────────────────────────
+# An unencrypted archive is a skeleton key: panel.db AND secret_key AND cred_key in one file, so a
+# single copy off the machine undoes every encrypted column at once.
+#
+# get_passphrase() is STUBBED rather than set through set_passphrase(): that writes the real
+# data/config.json via update_config(), which no unit test may touch. The path constants above are
+# redirected at the module, but panel.core.config's are not.
+_bk_pass = "correct horse battery staple"
+_orig_getpass = _bk.get_passphrase
+_bk.get_passphrase = lambda: _bk_pass
+try:
+    _eok, _ename = _bk.create_backup("manual")
+    check("backup/enc: a passphrase makes the archive .enc",
+          _eok and _ename.endswith(".enc") and bool(_bk._NAME_RE.match(_ename)), str(_ename))
+    _epath = _bk._safe_path(_ename)
+    check("backup/enc: the .enc name still resolves through _safe_path", _epath is not None)
+    _eblob = _epath.read_bytes()
+    check("backup/enc: it carries the format header", _eblob.startswith(_bk._ENC_MAGIC))
+    # The point of the whole feature: nothing readable is left in the file.
+    check("backup/enc: the archive is no longer an openable tar",
+          not _bk._is_readable_tar(_epath), "it still opens as a tar — it is not encrypted")
+    check("backup/enc: no member names or key material survive in the clear",
+          b"panel.db" not in _eblob and b"cred_key" not in _eblob and b"secret_key" not in _eblob)
+    check("backup/enc: written 0600", (_osb.stat(_epath).st_mode & 0o777) == 0o600,
+          oct(_osb.stat(_epath).st_mode & 0o777))
+    check("backup/enc: the listing flags it, and the plain one is not flagged",
+          all(b["encrypted"] is b["name"].endswith(".enc") for b in _bk.list_backups()))
+    check("backup/enc: kind is still parsed correctly with the .enc suffix",
+          [b["kind"] for b in _bk.list_backups() if b["name"] == _ename] == ["manual"])
+
+    # Every assertion below reports a FAIL rather than raising. An exception here aborts the whole
+    # part file before the summary prints, which hides both this block's result AND every check
+    # after it — a broken encryption path would look like a suite that simply produced no output.
+    _out = str(_bktmp / "rt.tar.gz")
+    _dec_ok, _dec_msg = _bk._decrypt_archive(str(_epath), _out, _bk_pass)
+    check("backup/enc: the right passphrase decrypts it", _dec_ok, _dec_msg)
+    _members = None
+    if _dec_ok and _osb.path.exists(_out):
+        try:
+            with _tar.open(_out) as _t2:
+                _members = set(_t2.getnames())
+        except Exception as _e:
+            _members = "unreadable: %s" % _e
+    check("backup/enc: ...back to the same four members",
+          _members == {"panel.db", "config.json", "secret_key", "cred_key"}, str(_members))
+    check("backup/enc: a wrong passphrase is refused",
+          not _bk._decrypt_archive(str(_epath), _out, "wrong one entirely")[0])
+    check("backup/enc: no passphrase is refused, and says why",
+          _bk._decrypt_archive(str(_epath), _out, "") == (False,
+              "This backup is encrypted — a passphrase is required."))
+    # Fernet authenticates; a modified archive must never be unpacked over a live install.
+    _tamp = bytearray(_eblob); _tamp[-20] ^= 0xFF
+    _tpath = str(_bktmp / "tampered.enc"); open(_tpath, "wb").write(bytes(_tamp))
+    check("backup/enc: a single flipped ciphertext bit is refused",
+          not _bk._decrypt_archive(_tpath, _out, _bk_pass)[0])
+    # A truncated/garbage header must fail cleanly rather than raise.
+    open(_tpath, "wb").write(_bk._ENC_MAGIC + b"not json\n" + b"x" * 40)
+    check("backup/enc: a damaged header fails cleanly, without raising",
+          _bk._decrypt_archive(_tpath, _out, _bk_pass)[0] is False)
+    check("backup/enc: a plain tar.gz is not mistaken for an encrypted one",
+          _bk._decrypt_archive(str(_bk._safe_path(_bname)), _out, _bk_pass)[0] is False)
+    # Salt is per-archive, so two backups of identical input share no ciphertext prefix.
+    _eok2, _ename2 = _bk.create_backup("manual")
+    check("backup/enc: each archive gets its own salt",
+          _bk._safe_path(_ename2).read_bytes()[:200] != _eblob[:200])
+
+    # ── restore_backup end to end on an ENCRYPTED archive ──────────────────────────────────
+    # The destructive step is the privileged verb, so stubbing it leaves the whole real path
+    # covered: decrypt -> validate members -> pre-restore safety backup -> stage -> dispatch.
+    # Splitting restore_backup in two to fit decryption in front of it left `name` out of scope
+    # in the second half — an UnboundLocalError on the success line of every restore, which no
+    # suite would have hit because restore is destructive and nothing called it. flake8 caught
+    # that one; this check is what makes it stay caught.
+    _o_hp, _o_rv = _bk._helper_present, _bk._run_verb
+    _bk._helper_present = lambda: True
+    _bk._run_verb = lambda *a, **k: ("", "", 0)
+    try:
+        _rok, _rmsg = _bk.restore_backup(_ename, passphrase=_bk_pass)
+        check("backup/enc: restoring an encrypted archive succeeds end to end", _rok, str(_rmsg))
+        check("backup/enc: ...and the message names the backup, not the temp file",
+              _ename in str(_rmsg) and "/tmp" not in str(_rmsg), str(_rmsg))
+        # listdir must not raise when the restore failed: the dispatch swallows exceptions and
+        # REMOVES the stage dir on its way out, so a broken restore leaves nothing to list — and
+        # an abort here would hide this block's own verdict along with every later check.
+        _stage_dir = _osb.path.join(str(_bk.DATA_DIR), ".restore-stage")
+        _staged = sorted(_osb.listdir(_stage_dir)) if _osb.path.isdir(_stage_dir) else None
+        check("backup/enc: ...and it staged the real members",
+              _staged == ["config.json", "cred_key", "panel.db", "secret_key"], str(_staged))
+        # A wrong passphrase must stop BEFORE anything is touched — no pre-restore backup, no
+        # staging. Getting this order wrong means a mistyped passphrase still churns the install.
+        _sh2.rmtree(_stage_dir, ignore_errors=True)
+        # COUNTING backups cannot see this: create_backup names files to the second, so two
+        # pre-restore backups in the same second collide on one name and the count never moves.
+        # Counting the CALL is exact, and it is the actual claim — nothing is touched until the
+        # archive has been opened, so a mistyped passphrase costs nothing.
+        _pre_calls = []
+        _o_create = _bk.create_backup
+        _bk.create_backup = lambda kind="manual": (_pre_calls.append(kind), (True, "stub"))[1]
+        try:
+            _wok, _wmsg = _bk.restore_backup(_ename, passphrase="not the passphrase")
+        finally:
+            _bk.create_backup = _o_create
+        check("backup/enc: a wrong passphrase refuses the restore", not _wok, str(_wmsg))
+        check("backup/enc: ...and takes no pre-restore backup before it knows the archive opens",
+              _pre_calls == [], "create_backup called with %r" % (_pre_calls,))
+        check("backup/enc: ...and stages nothing", not _osb.path.exists(_stage_dir))
+    finally:
+        _bk._helper_present, _bk._run_verb = _o_hp, _o_rv
+finally:
+    _bk.get_passphrase = _orig_getpass
+
+# set_passphrase / get_passphrase against an IN-MEMORY config. Both reach panel.core.config, whose
+# CONFIG_FILE is the real data/config.json and is NOT redirected by the path overrides above — so
+# load_config/update_config are stubbed in the backup module's namespace instead. Calling the real
+# ones here would write the developer's own config.
+_fakecfg = {}
+_o_load, _o_upd = _bk.load_config, _bk.update_config
+
+
+def _fake_upd_pass(m):
+    m(_fakecfg)
+    return _fakecfg
+
+
+_bk.load_config = lambda: dict(_fakecfg)
+_bk.update_config = _fake_upd_pass
+try:
+    _bk.set_passphrase("a passphrase worth protecting")
+    _raw = _fakecfg.get("backup_passphrase", "")
+    # The archive CARRIES config.json, so a passphrase stored in the clear would ship inside every
+    # backup it protects — the one place it must never be readable.
+    check("backup/enc: the passphrase is stored encrypted, not in the clear",
+          bool(_raw) and "a passphrase worth protecting" not in _raw and config.is_encrypted(_raw),
+          _raw[:40])
+    check("backup/enc: ...and reads back correctly",
+          _bk.get_passphrase() == "a passphrase worth protecting")
+    _bk.set_passphrase("")
+    check("backup/enc: clearing it empties the stored value and turns encryption off",
+          not _fakecfg.get("backup_passphrase") and _bk.get_passphrase() == "")
+finally:
+    _bk.load_config, _bk.update_config = _o_load, _o_upd
+
 _sh2.rmtree(_bktmp, ignore_errors=True)
 
 # ── per-server backup schedules (config-backed; swap in an in-memory config) ──

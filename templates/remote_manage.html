@@ -275,10 +275,10 @@
         <strong class="small">Backup encryption</strong>
         <span id="bk-enc-status" class="badge bg-secondary">Off</span>
       </div>
+      <!-- One text node on purpose: inline markup mid-sentence splits this into two translation
+           keys, and half a sentence cannot be translated well in either language. -->
       <p class="small text-secondary mb-2">
-        Off, one copied backup hands over the database <em>and</em> both encryption keys — every
-        stored SSH credential with it. On, the file is useless to anyone without the passphrase.
-        Applies to new backups; existing ones keep whatever they were written with.
+        Off, one copied backup hands over the database and both encryption keys, including every stored SSH credential. On, the file is useless to anyone without the passphrase. Applies to new backups; existing ones keep whatever they were written with.
       </p>
       <div class="d-flex gap-2 flex-wrap align-items-center">
         <input type="password" id="bk-pass" class="form-control form-control-sm"

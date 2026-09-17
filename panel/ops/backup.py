@@ -62,6 +62,16 @@ def _derive_key(passphrase, salt, n=_SCRYPT_N, r=_SCRYPT_R, p=_SCRYPT_P):
     return base64.urlsafe_b64encode(raw)
 
 
+def _is_readable_tar(path):
+    """True if `path` opens as a gzip tar. Used to ASSERT the opposite of an encrypted archive —
+    "it has a header" is not the same claim as "its contents are unreadable"."""
+    try:
+        with tarfile.open(str(path), "r:gz"):
+            return True
+    except Exception:
+        return False
+
+
 def is_encrypted_backup(name):
     return str(name or "").endswith(ENC_SUFFIX)
 
@@ -368,14 +378,17 @@ def restore_backup(name, passphrase=None):
             _log.exception("backup archive unreadable")
             return False, "Could not read the backup archive."
 
-        return _restore_validated(src)
+        # The ORIGINAL name, not src: for an encrypted archive src is now a temp file, and the
+        # user-facing message must still say which backup they restored.
+        return _restore_validated(src, os.path.basename(str(name)))
     finally:
         if _dec_tmp:
             shutil.rmtree(_dec_tmp, ignore_errors=True)
 
 
-def _restore_validated(src):
-    """The destructive half, on an archive already decrypted and checked."""
+def _restore_validated(src, name):
+    """The destructive half, on an archive already decrypted and checked. `name` is only for the
+    message shown to the user — `src` is what actually gets unpacked."""
     create_backup("prerestore")     # safety net before we overwrite the live data
 
     # A FIXED staging directory inside data/, not a fresh mkdtemp. The helper's restore verb takes
