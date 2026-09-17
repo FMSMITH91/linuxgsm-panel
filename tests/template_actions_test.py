@@ -1113,6 +1113,7 @@ _SECTION_PAGE_TEMPLATE = {
     "/settings": "settings.html",
     "/users": "manage_users.html",
     "/": "dashboard.html",
+    "/server-management": "remote_manage.html",   # the panel host reuses the host template
     "/servers/install": "install_server.html",
 }
 _pal_src = (ROOT / "static" / "js" / "palette.js").read_text(encoding="utf-8")
