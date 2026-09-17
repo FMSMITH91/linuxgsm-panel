@@ -1640,6 +1640,57 @@ try:
               _AL.query.filter(_AL.action == "login_failed",
                                _AL.timestamp >= _now - _td(seconds=300)).count() == _recent)
 
+    # ── the servers you have come before the form for adding another ─────────────────────────
+    # /servers/manage led with the 631px install form, which put the installed-server list 1.11
+    # screens down on a 375x812 phone: you scrolled past a thing you do once to reach the thing
+    # you came for. The list leads now and the form is a <details>. Measured after: the list sits
+    # at 0.31 screens and the page is 40% shorter.
+    _ms = c.get("/servers/manage")
+    _ms_html = _ms.get_data(as_text=True)
+    check("manage: the page still renders", _ms.status_code == 200, "status=%d" % _ms.status_code)
+    check("manage: the installed-server list comes BEFORE the install form",
+          _ms_html.index("Installed Game Servers") < _ms_html.index("Install a game server"))
+    check("manage: the install form is a collapsible <details>",
+          'id="install-server"' in _ms_html and "<details" in _ms_html)
+    # The form's own controls have to survive being moved — it is still the install path.
+    check("manage: ...and it still carries the install form's controls",
+          all(x in _ms_html for x in ("remote-select", "game-type-select", "port-input")))
+    check("manage: ...and the form still refreshes the list it now sits under",
+          'data-ajax-refresh="#servers-list"' in _ms_html)
+
+    # Collapsed once you HAVE servers; open when you have none, because on a fresh install the
+    # form is the whole point of the page and a new user should not have to find a triangle.
+    _open_attr = _ms_html[_ms_html.index('id="install-server"'):]
+    _open_attr = _open_attr[:_open_attr.index(">") + 1]
+    check("manage: with servers present the form is collapsed", " open" not in _open_attr,
+          _open_attr[:90])
+    # The fresh-install case needs a user who REACHES the page and sees nothing on it. The route
+    # is permission_required(MANAGE_SERVERS, INSTALL_SERVER), so an account with neither is
+    # redirected and never renders the template — an earlier version of this check tolerated that
+    # with an else-branch, which made it pass while testing nothing. Mutation caught it: removing
+    # the `open` entirely failed no check. The group gives the permission; no server access gives
+    # the empty list; and the 200 is asserted rather than tolerated.
+    with app.app_context():
+        _nsg = Group(name="smoke-noservers")
+        _nsg.set_permissions([auth.MANAGE_SERVERS])
+        db.session.add(_nsg)
+        db.session.flush()
+        _noacc = User(username="noservers", password_hash=auth.hash_password("Str0ng!passw0rd"),
+                      is_superadmin=False, is_active=True)
+        _noacc.groups.append(_nsg)
+        db.session.add(_noacc)
+        db.session.commit()
+        _noacc_id = _noacc.id
+    _ms2 = client_as(_noacc_id).get("/servers/manage")
+    check("manage: a permitted user with no servers still reaches the page",
+          _ms2.status_code == 200, "status=%d" % _ms2.status_code)
+    _h2 = _ms2.get_data(as_text=True)
+    check("manage: ...and sees an empty list", "install-server" in _h2)
+    _tag2 = _h2[_h2.index('id="install-server"'):] if 'id="install-server"' in _h2 else ""
+    _tag2 = _tag2[:_tag2.index(">") + 1] if _tag2 else ""
+    check("manage: with NO visible servers the form is open by default",
+          " open" in _tag2, _tag2[:90] or "no install-server element rendered")
+
     # ── Discover / import existing LinuxGSM servers on a host ──
     dsc = c.get("/api/remote/%d/discover" % remote_id)
     check("discover: superadmin gets a servers list (SSH to the fixture host yields none)",
