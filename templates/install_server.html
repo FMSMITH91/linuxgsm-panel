@@ -96,3 +96,11 @@
 </div>
 
 {% endblock %}
+
+{# Without this the page had NO JavaScript: updatePort (set the default port for a game),
+   suggestFreePort (the free-port hint) and refreshGameList (the Retry button when LinuxGSM's
+   game list could not be fetched) are all data-action handlers defined in manage_servers.js,
+   and the form was moved here without its script. Every one of them silently did nothing. #}
+{% block scripts %}
+<script nonce="{{ csp_nonce }}" src="{{ asset_url('js/manage_servers.js') }}"></script>
+{% endblock %}
