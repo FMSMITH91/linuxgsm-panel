@@ -60,7 +60,7 @@
       kw: 'security session timeout remember proxy https cookie hardening' },
     { page: '/users',    hash: 'sec-invites',      label: 'Invite links',
       kw: 'invite invitation onboard new user link signup join' },
-    { page: '/servers/manage', hash: 'install-server', label: 'Install a game server',
+    { page: '/servers/install', hash: 'install-server', label: 'Install a game server',
       kw: 'install new server add game create setup' },
     { page: '/servers/manage', hash: 'sec-tags',   label: 'Server tags',
       kw: 'tag tags label group colour filter' }

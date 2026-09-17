@@ -111,6 +111,10 @@
   <ul class="sidebar-nav">
     <li><a href="{{ url_for('manage_servers') }}" class="{% if request.endpoint in ('manage_servers', 'server_detail', 'server_files') %}active{% endif %}">
       <i class="bi bi-hdd-stack"></i> Game Servers</a></li>
+    {# No guard of its own: this section's own {% if %} is already
+       manage_servers OR install_server, which is exactly the pair install_server_page requires. #}
+    <li><a href="{{ url_for('install_server_page') }}" class="{% if request.endpoint == 'install_server_page' %}active{% endif %}">
+      <i class="bi bi-plus-circle"></i> Install a Server</a></li>
   </ul>
   {% endif %}
 
