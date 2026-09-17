@@ -1213,6 +1213,19 @@ def create_app():
         except Exception:
             db.session.rollback()
 
+    # Audit IPs age out into network prefixes. Separate from audit_log_retention_days above,
+    # which DELETES rows: the history is the reason the log exists, so the default reduces the
+    # identifying part and keeps the entry rather than discarding both.
+    with app.app_context():
+        try:
+            from panel.db.models import anonymise_audit_ips
+            _anon = anonymise_audit_ips(cfg.get("audit_ip_retention_days", 90))
+            if _anon:
+                app.logger.info("reduced the IP on %d audit entries to a network prefix", _anon)
+        except Exception:
+            db.session.rollback()
+            app.logger.exception("audit IP anonymisation failed")
+
     # Register blueprints/routes
     register_routes(app)
     register_template_filters(app)

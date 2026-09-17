@@ -1001,6 +1001,45 @@ def encrypt_at_rest_columns():
         db.session.commit()
     return touched
 
+def _anonymise_ip(ip):
+    """Reduce an IP to its network prefix: 203.0.113.77 -> 203.0.113.0/24, 2001:db8::1 -> /64.
+
+    Keeps what an audit trail is actually read for — "the same network, again" — while dropping
+    the part that identifies one household or one person. The "/24" is not decoration: it makes
+    an already-anonymised row identifiable in SQL, so this can skip them instead of rewriting
+    every old row on every startup.
+
+    Anything that will not parse as an IP returns "" rather than being kept. A value that got in
+    without being an address is not something to preserve on the off-chance."""
+    import ipaddress
+    try:
+        addr = ipaddress.ip_address((ip or "").strip())
+    except ValueError:
+        return ""
+    prefix = 24 if addr.version == 4 else 64
+    return str(ipaddress.ip_network("%s/%d" % (addr, prefix), strict=False))
+
+
+def anonymise_audit_ips(days):
+    """Reduce audit IPs older than `days` to their network prefix. Returns rows changed.
+
+    Cannot affect login throttling: the brute-force counter looks back LOGIN_WINDOW, which is 300
+    SECONDS, so it never reads a row old enough for this to touch."""
+    if not days or days <= 0:
+        return 0
+    from datetime import timedelta
+    cutoff = utcnow() - timedelta(days=int(days))
+    rows = (AuditLog.query
+            .filter(AuditLog.timestamp < cutoff, AuditLog.ip_address != "",
+                    AuditLog.ip_address.isnot(None),
+                    ~AuditLog.ip_address.like("%/%"))     # already reduced -> skip
+            .all())
+    for r in rows:
+        r.ip_address = _anonymise_ip(r.ip_address)
+    if rows:
+        db.session.commit()
+    return len(rows)
+
 
 def _run_light_migrations():
     """Add columns that may be missing on databases created by older versions.
