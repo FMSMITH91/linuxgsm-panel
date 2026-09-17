@@ -30,6 +30,7 @@ __all__ = [
     "_monitor_state",
     "_expected_offline",
     "_cron_restart_pending",
+    "_action_output",
     "_install_jobs",
     "_install_lock",
     "_full_backup_lock",
@@ -124,6 +125,18 @@ _expected_offline = register_server_state({})   # server_id -> ts the panel last
 # Display only: the column is never written from this, so the panel's own queue is untouched and
 # nothing can be restarted twice.
 _cron_restart_pending = register_server_state({})
+
+# A long LinuxGSM action (update/validate/backup/…) currently running for this server, and the
+# host-side file its output is being written to. The console poller tails that file and pushes
+# the new bytes to whoever has the console open — which is what makes "watch the live console for
+# progress" true. Without it an update ran entirely out of sight: its output was captured over
+# SSH and only ever reached the audit log, so the console the panel told you to watch stayed
+# silent for the whole download.
+#
+# server_id -> {"action": str, "path": str, "user": str, "pos": int}. `pos` is the byte offset
+# the poller has already sent, and the POLLER is the only writer of it (one thread, so a plain
+# int is enough). Starting at 0 means a console opened mid-update replays from the beginning.
+_action_output = register_server_state({})
 
 # ── Background-job state ─────────────────────────────────────────────────────────────────────
 # These lived at module level in app.py, which was fine while the only readers were app.py's own

@@ -8,6 +8,17 @@ regardless of this file — this changelog is for humans.
 ## [Unreleased]
 
 ### Added
+- **The installed game version is shown on the server detail page**, on its own line under the
+  host and port. Two sources are read, because no single one answers it for every game the panel
+  manages: SteamCMD records an exact build id on disk (`serverfiles/steamapps/appmanifest_*.acf`
+  — the same `buildid` LinuxGSM's own `update` compares against Steam), and the running game
+  reports the version players see over its query protocol. The reported string is shown when
+  there is one, the build id otherwise, and the hover text says where the number came from and
+  when Steam last changed the files. For the Call of Duty family — which is not SteamCMD-based
+  and has no `update` command at all — the live query is the only version that exists, so that is
+  what appears. Neither read is on the render path: the page draws first and fills the line in
+  afterwards, and the answer is cached until an update moves it. A game that is neither
+  SteamCMD-based nor currently answering shows a dash rather than a number that might be wrong.
 - **Download the console log** from the Live Console header — the full LinuxGSM log file, not just
   the slice on screen. It reuses the file browser's download route (the log lives under the game
   user's home), so it needs the same permission; the button is hidden for anyone who would only be
@@ -108,6 +119,27 @@ regardless of this file — this changelog is for humans.
   non-ASCII — through a real shell and requires each to come back verbatim as a single argument.
 
 ### Fixed
+- **"Watch the live console for progress" was not true of any long action.** Accepting an update,
+  validate, backup, force-update, mods-update or fastdl answered with exactly that, and then sent
+  nothing to the console at all — reported as "it says to watch the console for updates, there is
+  nothing that gets sent to the console". The command ran on its own SSH channel with its output
+  captured into a variable, so the only place it ever surfaced was the audit log after the fact,
+  truncated to 300 characters; and the console the message points at is a tail of the *game's*
+  console log, which an update never writes to. An operator watching it saw an unchanging screen
+  for the whole download, with no way to tell a working update from a stalled one. A long action
+  now tees its output through a file in the game user's home, and the console poller tails that
+  file on the same ticks it already tails the game log — so the output appears as it is produced,
+  bracketed by `[panel] update started` / `[panel] update finished` markers. The full output still
+  comes back to the panel, so the audit-log entry and the chat bots' completion message are
+  unchanged.
+- **The Update button appeared for games that have no update command.** `GameServer.supports_update`
+  knows the Call of Duty family is not SteamCMD-based (`_NO_UPDATE_GAMES` exists for exactly that),
+  and `/api/servers/bulk-action` asks it and skips those servers with "no update support". The
+  control bar computed the same thing a second time, and for a server whose command list had not
+  been fetched yet its version failed open for *every* game — so the detail page offered Update on
+  a Call of Duty server, accepted the click as a long action, told the operator to watch the
+  console, ran a command LinuxGSM does not have, and discarded the error. One question with two
+  answers, and the button had the wrong one; it asks the model now.
 - **A game server could be installed on a port that does not exist.** The install form took
   `int(port)` straight from the request with no range check at all, so `0`, `-5` and `99999` were
   stored on the row, opened in the firewall and written into the LinuxGSM config. Three other port

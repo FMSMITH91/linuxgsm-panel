@@ -339,6 +339,36 @@ def register(app):
         })
 
 
+    @app.route("/api/server/<int:server_id>/version")
+    @login_required
+    @server_access_required
+    def api_server_version(server_id):
+        """Which build of the game is installed on this server.
+
+        Its OWN endpoint rather than a field on /stats: that one polls every few seconds and this
+        costs an SSH read plus a game query, where the answer only changes when an update runs.
+        The detail page fetches this once after it has drawn, and ssh_manager caches it, so a
+        second tab or a reload is free.
+
+        A host that can't be reached is an expected condition here too (see api_server_stats), so
+        it answers 200 with an empty label rather than a 500 on a page that is otherwise fine."""
+        gs = get_game(server_id)
+        try:
+            info = _sm.game_version(gs.remote, gs.short_name, game_type=gs.game_type,
+                                    port=gs.port, query_type=gs.query_type,
+                                    selfname=gs.lgsm_name)
+        except Exception:
+            # gs.id, not the route's own server_id — the same number, taken off the row rather
+            # than off the URL. `<int:server_id>` already makes CR/LF impossible, so nothing can
+            # be injected into the log either way, but no other route handler here logs its raw
+            # path parameter and CodeQL's py/log-injection does not model Werkzeug's converters:
+            # this is the only one that flowed request text straight to a log sink. A gate that
+            # cries wolf is how a real alert gets waved through, so break the flow rather than
+            # dismiss the alert.
+            _log.debug("game version read failed for server %s", gs.id, exc_info=True)
+            info = {"reported": "", "build": "", "appid": "", "updated": None, "label": ""}
+        return jsonify({"supports_update": gs.supports_update, **info})
+
     @app.route("/api/server/<int:server_id>/install-status")
     @login_required
     @server_access_required

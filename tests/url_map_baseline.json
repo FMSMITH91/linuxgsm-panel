@@ -1637,6 +1637,17 @@
       "POST"
     ]
   },
+  "/api/server/<int:server_id>/version": {
+    "endpoint": "api_server_version",
+    "guards": [
+      "utils.py:decorated_view[server_access]",
+      "auth.py:decorated_function[server_access]",
+      "view:api_server_version"
+    ],
+    "methods": [
+      "GET"
+    ]
+  },
   "/api/servers": {
     "endpoint": "api_servers",
     "guards": [

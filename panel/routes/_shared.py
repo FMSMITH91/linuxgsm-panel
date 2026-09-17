@@ -13,7 +13,7 @@ broken route is the exact failure this repo keeps finding; here the F821 gate wa
 from flask import (jsonify)
 from flask_login import (current_user)
 from panel.core.clock import (utcnow)
-from panel.core.panel_state import (_full_backup_lock, _game_backup_status)
+from panel.core.panel_state import (_action_output, _full_backup_lock, _game_backup_status)
 from panel.db.models import (GameServer, RemoteServer, db)
 from panel.ops import (backup as bk)
 from panel.ops.ssh_manager import (get_server_status, mod_restart_decision, player_count as
@@ -33,7 +33,6 @@ from app import (_apply_whitelist_everywhere, _autoblock_hosts, _log, _prune_job
     _security_whitelist_remove)
 import re
 from panel.core import (terminal)
-from panel.ops.ssh_manager import (run_command)
 
 def _begin_bootstrap(app, remote_id, opts, actor_id):
     """Seed the job registry and start the background bootstrap. Returns
@@ -143,10 +142,19 @@ def _server_action_buttons(app, gs):
     all_commands = gs.get_commands()
     if not all_commands:
         _maybe_cache_commands(app, gs.id)
-    cmd_set = {c["cmd"] for c in all_commands}
     # Some games aren't SteamCMD-based (the Call of Duty family) and have NO `update` command.
-    # An empty list means it hasn't been fetched yet — fail open rather than hide the button.
-    supports_update = (not cmd_set) or ("update" in cmd_set)
+    # GameServer.supports_update is the ONE place that decides this; it used to be decided a
+    # second time here as `(not cmd_set) or ("update" in cmd_set)`, which disagreed with the model
+    # on the case that matters. An empty command list means it has not been fetched yet, and both
+    # fail open there — except the model also knows the Call of Duty family has no `update` at
+    # all, so it keeps the button hidden for those while this copy showed it.
+    #
+    # The consequence was the whole round trip: clicking Update on a freshly imported cod server
+    # queued a LONG action, answered "watch the live console for progress", ran a command LinuxGSM
+    # does not have, and discarded the error. Meanwhile /api/servers/bulk-action — which asks the
+    # model — correctly skipped the same server as "no update support". Two answers to one
+    # question, and the button bar had the wrong one.
+    supports_update = gs.supports_update
 
     # Order matters — this is the on-screen button order (lifecycle order reads most naturally).
     actions = []
@@ -379,7 +387,7 @@ def _looks_installed(app, remote, short_name, lgsm_name):
     to reconcile an install whose live progress was lost (e.g. the panel restarted mid-install).
     Returns True (installed), False (clearly not), or None (couldn't tell)."""
     try:
-        out, err, _ = run_command(
+        out, err, _ = _sm.run_command(
             remote,
             f"sudo -u {short_name} bash -c 'cd /home/{short_name} && ./{lgsm_name} details 2>&1'",
             timeout=30, sudo=False)
@@ -389,7 +397,7 @@ def _looks_installed(app, remote, short_name, lgsm_name):
         if "status:" in low or "server ip:" in low:
             return True
         # Fallback: real content in serverfiles means the download completed.
-        out2, _, _ = run_command(
+        out2, _, _ = _sm.run_command(
             remote,
             f"sudo -u {short_name} bash -c 'du -sm /home/{short_name}/serverfiles 2>/dev/null | cut -f1'",
             timeout=20, sudo=False)
@@ -412,3 +420,120 @@ def _notify_servers_changed(app):
             sio.emit("servers_changed", {})
     except Exception:
         _log.debug("UI-nicety broadcast only — never let it affect the install/uninstall", exc_info=True)
+
+
+# ── Live output for a long LinuxGSM action ─────────────────────────────────────────────────────
+# update/validate/backup/force-update/mods-update/fastdl all run in a background thread and are
+# accepted with "watch the live console for progress". That was not true of any of them: the
+# command ran over its own SSH channel and its output went into a Python variable, so the only
+# place it ever appeared was the audit log, minutes later, truncated to 300 characters. The
+# console the message pointed at is a tail of the GAME's console log, which an update does not
+# write to at all — so an operator watching it saw nothing happen for the whole download and had
+# no way to tell a working update from a stalled one.
+#
+# The fix is to give the output a file on the host and tail it the same way the console itself is
+# tailed. These helpers are here rather than in either caller because both sides need them: the
+# action registers and drains its own file (server_detail), and the console poller drains it on
+# every tick while it is registered (server_files).
+
+# Chunk ceiling per drain, matching the console poller's. SteamCMD's progress spool is chatty; this
+# bounds one tick's emit rather than the whole action.
+_ACTION_TAIL_CHUNK = 65536
+
+
+def _action_log_path(short_name, action):
+    """Where a long action's output is written on the host, for tailing.
+
+    A dotfile in the game user's OWN home: that directory is guaranteed to exist (every LinuxGSM
+    command cds into it) so the redirect cannot fail and take the action down with it, only the
+    game user and root can write there — unlike a predictable path in /tmp — and the leading dot
+    keeps it out of the file browser's listing. `action` comes from RUNNABLE_ACTIONS and
+    short_name is validated as a shell identifier on the model, so neither can escape the path."""
+    return f"/home/{short_name}/.panel-{action}.log"
+
+
+def _console_push(app, server_id, text):
+    """Push text into a server's live console for whoever has it open. Best-effort.
+
+    Goes to the same `console_output` event and `console_{id}` room the console poller uses, so
+    the browser needs no new handling and the lines land in its scrollback with everything else.
+    Fully swallowed: a socket problem must never be what fails an update."""
+    if not text:
+        return
+    try:
+        sio = getattr(app, "socketio", None)
+        if sio is not None:
+            sio.emit("console_output", {"server_id": server_id, "data": text},
+                     room=f"console_{server_id}")
+    except Exception:
+        _log.debug("console push for server %s failed (non-fatal)", server_id, exc_info=True)
+
+
+def _drain_action_output(app, remote, server_id):
+    """Send any NEW bytes of server_id's in-flight action output to its console viewers.
+
+    Returns True if an action is registered for this server (i.e. keep draining), False if there
+    is nothing to tail. Offsets work exactly as the console poller's do, and for the same reason:
+    `stat` reports the size in the SAME round trip, because run_command strips the output it
+    returns and a length measured on stripped text would drift the offset on every tick."""
+    st = _action_output.get(server_id)
+    if not st:
+        return False
+    path, user, pos = st["path"], st["user"], st["pos"]
+    # One round trip: the size on its own first line, then the new bytes. Splitting this into a
+    # stat call and a tail call would double the SSH traffic of every tick for no gain.
+    sh = (f"s=$(stat -c%s {path} 2>/dev/null || echo 0); printf '%s\\n' \"$s\"; "
+          f"if [ \"$s\" -gt {int(pos)} ]; then "
+          f"tail -c +{int(pos) + 1} {path} 2>/dev/null | head -c {_ACTION_TAIL_CHUNK}; fi")
+    try:
+        # Through the MODULE, not the name this file also imports directly: `from ssh_manager
+        # import run_command` copies the function object at import time, so a stub placed on the
+        # definition site would be assigned cleanly and intercept nothing here. See the note at
+        # the top of panel/ops/ssh_manager/__init__.py — that is the failure this repo hits most.
+        out, _, _ = _sm.run_command(remote, f"sudo -u {user} bash -c {_sm._quote(sh)}",
+                                    timeout=15, sudo=False)
+    except Exception:
+        _log.debug("action-output tail for server %s failed; retrying next tick", server_id,
+                   exc_info=True)
+        return True
+    head, _, body = (out or "").partition("\n")
+    try:
+        size = int(head.strip())
+    except ValueError:
+        return True          # no size line — the file isn't there yet; try again next tick
+    if size < pos:           # truncated under us (a second run of the same action) — restart
+        pos = 0
+        body = ""
+    if body.strip():
+        _console_push(app, server_id, terminal.strip_escapes(body))
+    st["pos"] = min(size, pos + _ACTION_TAIL_CHUNK)
+    return True
+
+
+def _begin_action_tail(app, server_id, action, path, user):
+    """Register an action's output file for tailing and announce it in the console."""
+    _action_output[server_id] = {"action": action, "path": path, "user": user, "pos": 0}
+    _console_push(app, server_id, f"[panel] {action} started — its output follows.")
+
+
+def _end_action_tail(app, server_id, remote, action, rc):
+    """Drain whatever is left, say how it went, and stop tailing.
+
+    The final drain is the point of doing this here rather than just deleting the entry: the
+    poller ticks every two seconds, so the last — and most interesting — lines of a command that
+    has just exited are the ones that would otherwise never be sent."""
+    try:
+        _drain_action_output(app, remote, server_id)
+    except Exception:
+        _log.debug("final action-output drain for server %s failed", server_id, exc_info=True)
+    finally:
+        _action_output.pop(server_id, None)
+    if rc == 0:
+        _console_push(app, server_id, f"[panel] {action} finished successfully.")
+    elif rc is None:
+        # The SSH call raised, or timed out — we never got an exit code. Deliberately not
+        # reported as a failure of the action itself: on a 30-minute timeout the update may well
+        # still be running on the host.
+        _console_push(app, server_id, f"[panel] {action} stopped reporting — see the audit log.")
+    else:
+        _console_push(app, server_id, f"[panel] {action} failed (exit {rc}) — see above.")

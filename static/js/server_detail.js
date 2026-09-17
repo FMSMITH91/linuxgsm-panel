@@ -864,3 +864,34 @@ pollStats();
 document.addEventListener('visibilitychange', function(){ if (!document.hidden) pollStats(); });
 
 pollWhenVisible(function(){ refreshConsole(); }, 30000);
+
+// Which build of the game is installed. Fetched once, after the page has drawn — the endpoint
+// reads the Steam manifest over SSH and queries the running game, which is far too slow to sit on
+// either the render path or the stats poll. The element is already in the DOM showing an em dash,
+// so filling it in cannot shift the layout; an unreachable host simply leaves the dash.
+function loadGameVersion() {
+  var el = document.getElementById('game-version');
+  if (!el) return;
+  fetch(MOUNT + '/api/server/' + serverId + '/version', {cache: 'no-store'})
+    .then(function(r){ return r.json(); })
+    .then(function(d){
+      if (!d || !d.label) return;          // nothing known — leave the placeholder as it is
+      el.textContent = d.label;
+      if (d.detail) el.title = d.detail;   // where the number came from (build, appid, date)
+    })
+    .catch(function(){});                  // a version is a nicety; never surface it as an error
+}
+
+loadGameVersion();
+
+// An update changes the answer, so re-read it once the action that ran has finished. The panel's
+// own console markers are the signal that it did — they arrive on the same socket as everything
+// else, so watch for one rather than polling a build number that changes a few times a year.
+// Any marker but the opening one counts, including a failure: an update that died partway has
+// still changed the files on disk, and showing the pre-update build would be a lie.
+socket.on('console_output', function(data) {
+  if (data.server_id !== serverId || typeof data.data !== 'string') return;
+  if (data.data.indexOf('[panel] ') >= 0 && data.data.indexOf(' started') < 0) {
+    setTimeout(loadGameVersion, 500);
+  }
+});

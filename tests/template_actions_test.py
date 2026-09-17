@@ -1212,6 +1212,34 @@ check(not _host_dead,
       "palette: every per-host section anchor exists in remote_manage.html",
       "dead anchors: " + ", ".join(_host_dead))
 
+# ── The installed game version is readable WITHOUT opening a tab ──────────────────────────────
+# server_detail.html filters its cards by data-mtab the same way remote_manage.html does, and the
+# version was very nearly put in the Details tab. An element that exists in the template but sits
+# inside a closed tab is not an answer to "show me the version" — it is one click away from being
+# one, and nothing about its presence in the source says which.
+#
+# It is also the reason it lives on its own LINE rather than appended to the header's meta row:
+# that row already wraps at phone widths, so growing it moves every card below — and /server/1 is
+# audited with CLS as a hard failure. Both properties are asserted, because either one silently
+# reverts the moment someone tidies the header.
+_sd_src = (TEMPLATES / "server_detail.html").read_text(encoding="utf-8")
+_sd_owner = _mtab_owner_of(_sd_src, {"game-version", "console-output"})
+check(_sd_owner.get("console-output") == "console",
+      "version: the data-mtab walker agrees about server_detail's own console card",
+      "console-output=%r — the walker desynced, so the check below proves nothing"
+      % _sd_owner.get("console-output"))
+check("game-version" in _sd_owner,
+      "version: the element the page fills is in server_detail.html", "no id=\"game-version\"")
+check(_sd_owner.get("game-version") is None,
+      "version: it is outside every tab, so it is readable without clicking one",
+      "it sits in the %r tab" % _sd_owner.get("game-version"))
+# Present from the first paint with a placeholder — an element that APPEARS once the fetch lands
+# adds a line to the header and shifts the whole page down.
+_sd_ver_tag = re.search(r'<span id="game-version"[^>]*>(.*?)</span>', _sd_src, re.S)
+check(_sd_ver_tag and _sd_ver_tag.group(1).strip() != "",
+      "version: it is rendered with a placeholder, not left empty until the fetch lands",
+      "rendered as %r" % (_sd_ver_tag.group(1) if _sd_ver_tag else None))
+
 # ── A card that every host has must be findable for every host ────────────────────────────────
 # remote_manage.html serves BOTH /server-management (the panel host) and /remote/<id>/manage, and
 # only some of its cards are gated on remote.is_local — the panel's own backups/updates/
