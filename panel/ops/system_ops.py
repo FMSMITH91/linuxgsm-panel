@@ -2073,7 +2073,8 @@ _DEBUG_CONFIG_KEYS = (
     "port", "bind_host", "use_https", "trust_proxy", "cookie_secure",
     "tailscale_setup_done", "tailscale_auto_setup", "tailscale_mount",
     "setup_complete", "remember_days", "session_lifetime_hours",
-    "session_protection", "audit_log_retention_days", "site_title", "site_domain",
+    "session_protection", "audit_log_retention_days", "audit_ip_retention_days",
+    "site_title", "site_domain",
 )
 
 

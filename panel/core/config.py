@@ -49,6 +49,12 @@ DEFAULT_CONFIG = {
     "tailscale_use_funnel": False,       # Expose panel publicly via Tailscale Funnel
     "tailscale_mount": "/",              # URL mount point (usually "/" or "/lgsm-panel")
     "tailscale_setup_done": False,       # Whether Tailscale Serve has been configured
+    # Days after which an audit entry's IP is reduced to its network prefix. The row itself is
+    # KEPT — the security history is the point of the log — only the part that identifies a
+    # household or a person goes. 90 is a default, not a standard: it is long enough to
+    # investigate an incident found late and short enough that the table is not an indefinite
+    # record of where each admin was. 0 disables it and keeps full IPs forever.
+    "audit_ip_retention_days": 90,
 }
 
 

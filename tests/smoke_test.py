@@ -1570,6 +1570,50 @@ try:
               and not _any_sess.ip.startswith("enc:v1:"),
               repr(getattr(_any_sess, "ip", None)))
 
+    # ── audit IPs age out into network prefixes ──────────────────────────────────────────────
+    # The audit log kept a full IP for every action forever, which makes it an indefinite record
+    # of where each admin was. The ROW is what the log is for, so the entry stays and only the
+    # identifying part of the address goes.
+    from panel.db.models import AuditLog as _AL, anonymise_audit_ips as _anon, _anonymise_ip as _aip
+    from datetime import timedelta as _td
+    from panel.core.clock import utcnow as _utcnow
+    check("audit-ip: an IPv4 address reduces to its /24",
+          _aip("203.0.113.77") == "203.0.113.0/24", _aip("203.0.113.77"))
+    check("audit-ip: an IPv6 address reduces to its /64",
+          _aip("2001:db8:1:2:3:4:5:6") == "2001:db8:1:2::/64", _aip("2001:db8:1:2:3:4:5:6"))
+    check("audit-ip: something that is not an address is dropped, not kept",
+          _aip("not-an-ip") == "" and _aip("") == "")
+    with app.app_context():
+        _now = _utcnow()
+        _old_row = _AL(username="olduser", action="login", ip_address="198.51.100.42",
+                       timestamp=_now - _td(days=200))
+        _new_row = _AL(username="newuser", action="login", ip_address="198.51.100.43",
+                       timestamp=_now - _td(days=1))
+        db.session.add_all([_old_row, _new_row])
+        db.session.commit()
+        _old_id, _new_id = _old_row.id, _new_row.id
+        _n = _anon(90)
+        check("audit-ip: an entry older than the window is reduced", _n >= 1
+              and db.session.get(_AL, _old_id).ip_address == "198.51.100.0/24",
+              "%s / %r" % (_n, db.session.get(_AL, _old_id).ip_address))
+        check("audit-ip: ...and a recent one is left alone",
+              db.session.get(_AL, _new_id).ip_address == "198.51.100.43",
+              repr(db.session.get(_AL, _new_id).ip_address))
+        check("audit-ip: the ROW survives — only the address is reduced",
+              db.session.get(_AL, _old_id).username == "olduser"
+              and db.session.get(_AL, _old_id).action == "login")
+        # Idempotent, and cheap on restart: an already-reduced row must not be rewritten again.
+        check("audit-ip: running it again rewrites nothing", _anon(90) == 0)
+        check("audit-ip: 0 disables it entirely", _anon(0) == 0)
+        # The brute-force counter reads a 300-SECOND window, so it can never see a reduced row.
+        # This is the check that says the privacy control cannot weaken login throttling.
+        _recent = _AL.query.filter(_AL.action == "login_failed",
+                                   _AL.timestamp >= _now - _td(seconds=300)).count()
+        _anon(90)
+        check("audit-ip: ...and the throttle's own window is untouched by it",
+              _AL.query.filter(_AL.action == "login_failed",
+                               _AL.timestamp >= _now - _td(seconds=300)).count() == _recent)
+
     # ── Discover / import existing LinuxGSM servers on a host ──
     dsc = c.get("/api/remote/%d/discover" % remote_id)
     check("discover: superadmin gets a servers list (SSH to the fixture host yields none)",
