@@ -6,8 +6,8 @@ from flask import (Response, jsonify, redirect, render_template)
 from flask_login import (current_user, login_required)
 from panel.db.models import (RemoteServer, db)
 from panel.db.prefs import (_apply_user_order, _apply_user_server_order, _effective_prefs)
-from panel.security.auth import (RESTART_SERVER, START_SERVER, STOP_SERVER,
-    get_user_permissions, get_user_servers)
+from panel.security.auth import (INSTALL_SERVER, MANAGE_SERVERS, RESTART_SERVER, START_SERVER,
+    STOP_SERVER, get_user_permissions, get_user_servers, has_permission)
 from panel.services.monitoring import (_cached_player_count)
 from sqlalchemy import (text)
 from app import (_cached_player_max, _cached_player_name, is_setup_complete)
@@ -55,8 +55,19 @@ def register(app):
         server_names = {gs.id: _cached_player_name(gs.id) for gs in servers}
         total_players = sum(c for c in player_counts.values() if isinstance(c, int))
         total_max = sum(m for m in player_max.values() if isinstance(m, int))
+        # Tag context, carried over when /servers/manage folded into this page. The dashboard
+        # already FILTERED by tag; it now also edits them, so the two halves of tagging live in
+        # one place instead of one page filtering and another page defining.
+        from panel.db.models import ServerTag
+        all_tags = ServerTag.query.order_by(ServerTag.name).all()
+        can_edit_tags = (current_user.is_superadmin
+                         or has_permission(current_user, MANAGE_SERVERS))
         return render_template("dashboard.html", remotes=remotes, servers=servers,
                                server_list=servers, can_control=can_control,
                                remote_count=remote_count, player_counts=player_counts,
                                player_max=player_max, server_names=server_names,
-                               total_players=total_players, total_max=total_max)
+                               total_players=total_players, total_max=total_max,
+                               all_tags=all_tags, can_edit_tags=can_edit_tags,
+                               can_install=(current_user.is_superadmin
+                                            or has_permission(current_user, INSTALL_SERVER)
+                                            or has_permission(current_user, MANAGE_SERVERS)))

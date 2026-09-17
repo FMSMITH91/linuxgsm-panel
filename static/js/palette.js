@@ -62,7 +62,7 @@
       kw: 'invite invitation onboard new user link signup join' },
     { page: '/servers/install', hash: 'install-server', label: 'Install a game server',
       kw: 'install new server add game create setup' },
-    { page: '/servers/manage', hash: 'sec-tags',   label: 'Server tags',
+    { page: '/', hash: 'sec-tags', label: 'Server tags',
       kw: 'tag tags label group colour filter' }
   ];
 

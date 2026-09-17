@@ -1640,20 +1640,27 @@ try:
               _AL.query.filter(_AL.action == "login_failed",
                                _AL.timestamp >= _now - _td(seconds=300)).count() == _recent)
 
-    # ── the servers page is the list, and nothing else ───────────────────────────────────────
-    # It used to lead with a 631px install form, which put the list 1.11 screens down on a phone;
-    # then the form became a <details> here; now it has its own page. The checks for that
-    # <details> are gone because the thing they tested is gone — what replaced it is asserted
-    # below and in the "install page:" block, not dropped.
-    _ms = c.get("/servers/manage")
-    _ms_html = _ms.get_data(as_text=True)
-    check("manage: the page still renders", _ms.status_code == 200, "status=%d" % _ms.status_code)
-    check("manage: the installed-server list is what the page leads with",
-          "Installed Game Servers" in _ms_html)
-    check("manage: the install FORM is no longer embedded here",
-          "game-type-select" not in _ms_html and "remote-select" not in _ms_html)
-    check("manage: ...and the page offers a way to reach it",
-          "/servers/install" in _ms_html)
+    # ── one server table: /servers/manage folded into the dashboard ──────────────────────────
+    # The two pages showed seven of the same eight columns and shared no code at all — doAction vs
+    # msrvAction, sortDashCol vs sortServers — so one was a second implementation of the other.
+    # The checks that asserted the old page are replaced here, not dropped: what they tested is
+    # gone, and what replaced it is below.
+    _ms = c.get("/servers/manage", follow_redirects=False)
+    check("one-table: /servers/manage redirects rather than 404s",
+          _ms.status_code in (301, 302, 303), "status=%d" % _ms.status_code)
+    check("one-table: ...to the dashboard",
+          (_ms.headers.get("Location") or "").rstrip("/").endswith("") and
+          (_ms.headers.get("Location") or "/") in ("/", "http://localhost/"),
+          "Location=%s" % _ms.headers.get("Location"))
+    # Everything that lived only on the old page has to be on the dashboard now.
+    _dash = c.get("/").get_data(as_text=True)
+    check("one-table: the dashboard carries the per-server Files & Config link",
+          "/files" in _dash, "server_files was reachable from the old row and nowhere else")
+    check("one-table: ...the per-server tag button",
+          'data-action="editServerTags"' in _dash)
+    check("one-table: ...and the Tags card", 'id="sec-tags"' in _dash)
+    check("one-table: ...with the script that makes those buttons work",
+          "server_tags.js" in _dash, "the tag handlers would be dead without it")
 
     # ── the palette offers only actions the user may actually run ────────────────────────────
     # The palette can now START/RESTART/STOP from the search box, which makes /api/palette an
@@ -1721,10 +1728,13 @@ try:
     check("install page: ...and still posts to the install endpoint",
           "/servers/add" in _ih, "no form action pointing at the install route")
     # The page it came from must no longer carry it, or the split achieved nothing.
-    _mh = c.get("/servers/manage").get_data(as_text=True)
-    check("install page: the servers list no longer embeds the form",
+    # The list lives on the DASHBOARD now, so that is where "the form is not embedded, but is
+    # reachable" has to hold. Reading /servers/manage here would read a redirect body and assert
+    # nothing — it passed for a while precisely because an empty body contains no form either.
+    _mh = c.get("/", follow_redirects=True).get_data(as_text=True)
+    check("install page: the server list no longer embeds the form",
           "game-type-select" not in _mh and "remote-select" not in _mh)
-    check("install page: ...but links to it", "/servers/install" in _mh)
+    check("install page: ...but the list links to it", "/servers/install" in _mh)
     # Same permission pair as the POST it submits to: reaching the form and using it are one
     # decision. A user with neither must be refused the page, not shown a form that 403s on submit.
     with app.app_context():
