@@ -157,6 +157,64 @@ def _register_remote_invalidation():
 _register_remote_invalidation()
 
 
+# ── Per-remote caches, and forgetting a host that no longer exists ────────────────────────────
+# Several modules in this package memoise an answer PER HOST, keyed by RemoteServer.id. SQLite
+# hands a deleted row's id straight to the next INSERT (plain INTEGER PRIMARY KEY = rowid, no
+# AUTOINCREMENT), so whatever a deleted host left behind is inherited by the next host added —
+# and these are read to RENDER its pages and to decide where to send a player query.
+#
+# game.py already closes this for its version cache, with an after_delete listener and the
+# argument for why it belongs there rather than in the delete route ("the invariant belongs where
+# the row goes away, not at each of the places that remove one"). Three caches were left out of
+# that, and the longest-lived one has no expiry at all:
+#
+#   firewall._specs_cache      the host's CPU/RAM/disk/kernel/OS — cached for the PROCESS's life,
+#                              so a recycled id shows the deleted machine's hardware until restart
+#   hosts._pro_status_cache    Ubuntu Pro attachment + services, 24h
+#   _gamedig_host_cache        the address player queries are sent to, 1h — so a new host's
+#                              player counts would come from the OLD host's IP, and those counts
+#                              are what "is this server empty?" is decided on
+#
+# REGISTERED AT THE DECLARATION rather than named in a list here, for the reason panel_state
+# gives at length: a hand-kept list is an edit somebody has to remember to make somewhere else,
+# and that is exactly how these three were missed.
+#
+# The 2-5 second caches (_live_metrics_cache, _host_metrics_cache, portscan's) are deliberately
+# NOT registered: they self-correct before anyone could add a host, and a tuple-keyed entry is not
+# addressable by a bare row id anyway.
+_remote_caches = []
+
+
+def register_remote_cache(mapping):
+    """Mark `mapping` as keyed by RemoteServer.id so a deleted host is forgotten from it.
+    Returns `mapping`, so a declaration can wrap itself: `_x = _core.register_remote_cache({})`."""
+    _remote_caches.append(mapping)
+    return mapping
+
+
+def forget_remote_caches(remote_id):
+    """Drop every per-remote memo for `remote_id`. Safe to call for an id nothing cached."""
+    for m in _remote_caches:
+        m.pop(remote_id, None)
+
+
+def _register_remote_cache_invalidation():
+    """Forget a host's cached answers when its row is DELETED. Never raises — a cache that failed
+    to prune must not turn into a failed commit."""
+    from sqlalchemy import event
+    from panel.db.models import RemoteServer
+
+    @event.listens_for(RemoteServer, "after_delete")
+    def _forget_remote(_mapper, _connection, target):
+        try:
+            forget_remote_caches(target.id)
+        except Exception:
+            _log.debug("per-remote cache prune failed for a deleted remote", exc_info=True)
+
+
+_register_remote_cache_invalidation()
+
+
 def _kill_process_tree(p):
     """Kill a Popen and its entire process group, so no grandchildren are left orphaned."""
     try:
@@ -1258,7 +1316,9 @@ GAMEDIG_TYPE = {
 }
 
 
-_gamedig_host_cache = {}          # {remote_id: (expiry_ts, ip)} — where to point gamedig for a host
+# Registered: a deleted host's id is reused, and this decides where a player query is SENT — so a
+# stale entry points the new host's queries at the old machine. See register_remote_cache.
+_gamedig_host_cache = register_remote_cache({})   # {remote_id: (expiry_ts, ip)}
 _GAMEDIG_HOST_TTL = 3600
 
 

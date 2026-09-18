@@ -314,7 +314,10 @@ _SPECS_CMD = (
 )
 
 
-_specs_cache = {}   # key -> result; hardware/OS specs don't change without a reboot (which restarts us)
+# Registered (see _core.register_remote_cache): this one has NO expiry — specs cannot change while
+# the machine is up — so without forgetting a deleted host's id, the next host to take that id
+# reports the deleted machine's CPU, RAM, disk and OS for the life of the process.
+_specs_cache = _core.register_remote_cache({})   # remote id -> result
 
 
 def host_specs(server, force=False):

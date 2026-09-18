@@ -427,6 +427,14 @@ def _monitor_pass():
     The network probes run concurrently; everything that touches the database, the recorded state or
     a notification stays serial in this thread, so ordering and the alert logic are unchanged."""
     remotes = RemoteServer.query.all()
+    # BEFORE the early return, not after. The prune used to be the last statement in this
+    # function, which made it unreachable in the one case where it has the most to forget: delete
+    # every host and `remotes` is empty, so the sweep returns here and every registered map keeps
+    # its entries for the life of the process. Add a host back — it takes id 1 again, SQLite
+    # having no other rows to count from — and it inherits all of them. The prune needs no host to
+    # run against; it is driven by the LIVE id sets, and empty ones are a perfectly good answer.
+    _forget_deleted_rows({r.id for r in remotes},
+                         {row[0] for row in db.session.query(GameServer.id).all()})
     if not remotes:
         return
     probes = {}
@@ -530,8 +538,6 @@ def _monitor_pass():
         except Exception:
             db.session.rollback()
             _log.debug("monitor: persisting server status failed", exc_info=True)
-    _forget_deleted_rows({r.id for r in remotes},
-                         {row[0] for row in db.session.query(GameServer.id).all()})
 
 
 def _forget_deleted_rows(remote_ids, server_ids):

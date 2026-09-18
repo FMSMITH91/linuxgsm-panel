@@ -45,7 +45,9 @@ def ensure_node_tools_cron(server):
 # which go through this module and invalidate the cache — so there's no reason to re-run it on a
 # timer. The long TTL is just a safety net to eventually catch an out-of-band change (a lapsed
 # subscription, or a manual `pro detach` on the host); day-to-day it's effectively set-and-forget.
-_pro_status_cache = {}   # key -> (expiry_epoch, result)
+# Registered (see _core.register_remote_cache) so a deleted host's id is forgotten — at a 24h TTL
+# a recycled id would otherwise report the deleted machine's Ubuntu Pro subscription all day.
+_pro_status_cache = _core.register_remote_cache({})   # remote id -> (expiry_epoch, result)
 _PRO_STATUS_TTL = 86400  # 24h
 
 

@@ -5,7 +5,7 @@ Moved out of register_routes() verbatim — see panel/routes/__init__.py for why
 from flask import (flash, jsonify, redirect, render_template, request, url_for)
 from flask_login import (current_user, login_required)
 from panel.core.clock import (utcnow)
-from panel.core.config import (decrypt_secret, encrypt_secret)
+from panel.core.config import (decrypt_secret, encrypt_secret, update_config)
 from panel.db.models import (GameServer, RemoteServer, db)
 from panel.ops import (tailscale_integration as ts)
 from panel.ops.ssh_manager import (close_connection, ssh_test_connection)
@@ -15,6 +15,40 @@ from panel.core.http import (_form_err, _form_ok, _json_body, _wants_json)
 from panel.core.validation import (HOST_RE, LINUX_USER_RE, MAX_PORT, MIN_PORT, SAFE_LABEL_RE,
     _port_or)
 from panel.routes._shared import (_begin_bootstrap)
+import logging
+
+_log = logging.getLogger("panel.routes.remotes")
+
+
+def _forget_deleted_remote_config(remote_id, game_server_ids):
+    """Drop everything a deleted host left in config.json — its auto-block opt-in, and a backup
+    schedule for each game server that went with it.
+
+    These are the PERSISTED half of the same problem panel_state solves for in-memory maps: a
+    deleted row's id is handed straight to the next INSERT, and unlike a cache these survive a
+    restart. uninstall_server already calls remove_game_schedule for exactly this reason ("can't
+    be inherited if SQLite later reuses the row id") — but deleting a HOST bulk-deletes its game
+    servers without that route ever running, so their schedules were left behind.
+
+    `autoblock_hosts` is the one that matters most. It is a list of remote ids, and the hourly
+    sweep looks each one up: once the id is live again it resolves to the NEW host and starts
+    adding `ufw deny` rules to a machine whose operator never turned auto-blocking on.
+
+    Best-effort and never fatal: the rows are already gone, and a config write that fails must not
+    turn a completed delete into an error.
+    """
+    try:
+        def _mut(cfg):
+            hosts = [h for h in (cfg.get("autoblock_hosts") or []) if h != remote_id]
+            if hosts != (cfg.get("autoblock_hosts") or []):
+                cfg["autoblock_hosts"] = hosts
+            sched = cfg.get("game_schedules")
+            if isinstance(sched, dict):
+                for gid in game_server_ids:
+                    sched.pop(str(gid), None)
+        update_config(_mut)
+    except Exception:
+        _log.debug("could not clear config state for deleted remote %s", remote_id, exc_info=True)
 
 
 def register(app):
@@ -162,6 +196,13 @@ def register(app):
     def delete_remote(remote_id):
         remote = get_remote(remote_id)
         name = remote.name
+        # The id off the ROW, not off the URL — the same number either way, but only one of them
+        # is request text. api_server_version already does this and says why: `<int:remote_id>`
+        # makes a CR/LF impossible, so nothing can really be injected, but CodeQL's
+        # py/log-injection does not model Werkzeug's converters and the cleanup helper below logs
+        # this value. Breaking the flow beats dismissing the alert — a gate that cries wolf is how
+        # a real alert gets waved through.
+        row_id = remote.id
         # Re-authenticate: deleting a remote (and ALL its game servers) is destructive, so require
         # the operator to re-enter their own account password — a guard against an accidental or
         # hijacked click. Verified constant-time via bcrypt (check_password).
@@ -196,6 +237,7 @@ def register(app):
         db.session.delete(remote)
         db.session.commit()
         close_connection(remote)
+        _forget_deleted_remote_config(row_id, _doomed_ids)
         log_action(current_user, "delete_remote", target=name)
         _m = f"Remote '{name}' deleted."
         if _wants_json():
