@@ -202,6 +202,7 @@
   "Time": "Tiempo",
   "Time of day the daily restart runs, in your timezone": "Hora del día en que se ejecuta el reinicio diario, en tu zona horaria",
   "Times": "Horas",
+  "Times appear on lines as they arrive — the panel cannot know when older lines were written.": "Las horas aparecen en las líneas a medida que llegan: el panel no puede saber cuándo se escribieron las anteriores.",
   "Times are the host's local time": "Las horas son la hora local del host",
   "Times are the host's local time, which could not be read": "Las horas son la hora local del host, que no se pudo leer",
   "Tip: drag files onto the list to upload.": "Consejo: arrastra archivos a la lista para subirlos.",

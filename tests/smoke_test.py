@@ -4613,6 +4613,32 @@ try:
           "a naive ISO string with no Z is parsed as LOCAL time and is silently wrong by the offset")
 
 
+    # ── A poll delta is a line the panel WATCHED ARRIVE, so it gets a time ───────────────────
+    # The first cut stamped only socket pushes. /api/console's window was left unstamped whole —
+    # but only its PRIMING pass is history; everything after is new output the panel just read,
+    # accurate to the poll interval. Two consequences, and the second is why this was reported as
+    # "I still don't see the timestamps in the console":
+    #   * an install whose websocket cannot connect (a proxy that will not upgrade) falls back to
+    #     this poll for everything, so NO line ever got a time at all;
+    #   * on a quiet server every line on screen is the priming window, so the column is empty and
+    #     the feature looks broken rather than correct.
+    _pd_saved = _sm_core.run_command
+    try:
+        _sm_core.run_command = lambda *a, **k: ("first\nsecond", "", 0)
+        _pdj = c.get("/api/console/%d" % gs_id).get_json() or {}
+        check("console timestamps: the window carries the panel's clock for the browser to stamp "
+              "its new lines with",
+              isinstance(_pdj.get("now"), (int, float)) and _pdj["now"] > 1_700_000_000,
+              "now=%r" % _pdj.get("now"))
+        # Still NOT per-line: the window itself is history until the browser knows which of it is
+        # new, and stamping the whole thing server-side is the mistake this guards against.
+        check("console timestamps: ...but the lines themselves stay unstamped, as history",
+              all(isinstance(ln, str) for ln in (_pdj.get("lines") or [])),
+              "lines=%s" % (_pdj.get("lines"),))
+    finally:
+        _sm_core.run_command = _pd_saved
+
+
     # ── A schedule is entered in YOUR clock and written in the HOST's ────────────────────────
     # cron fires on the host's clock. set_daily_restart wrote a literal `0 5 * * *`, the panel's
     # own bootstrap sets new hosts to UTC, no host's timezone was stored anywhere, and the UI

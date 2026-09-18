@@ -234,6 +234,7 @@ socket.on('console_output', function(data) {
 function appendConsole(text, ts) {
   var stick = consoleAtBottom();   // capture BEFORE appending
   _appendConsole(String(text).split('\n').filter(function(l){ return l.trim(); }), ts);
+  updateTsNotice();
   if (stick) stickConsole();       // only auto-follow if they were at the bottom
 }
 
@@ -324,6 +325,21 @@ function applyTsVisible() {
   consoleEl.classList.toggle('ts-hidden', !_tsOn);
   var b = document.getElementById('console-ts-toggle');
   if (b) { b.setAttribute('aria-pressed', _tsOn ? 'true' : 'false'); b.classList.toggle('active', _tsOn); }
+  updateTsNotice();
+}
+
+// An idle server's console is ALL history — a window of a log file that, for most games, records
+// no per-line time. Every line is therefore unstamped, correctly, and the result is a console with
+// no times on it at all and a "Times" button that appears to do nothing. Reported as exactly that:
+// "I still don't see the timestamps in the console."
+//
+// So when nothing on screen is stamped, say why. It disappears the moment a line arrives with a
+// time, which is also the clearest possible demonstration of what the column does.
+function updateTsNotice() {
+  var n = document.getElementById('console-ts-notice');
+  if (!n) return;
+  var anyStamped = !!consoleEl.querySelector('.console-line[data-ts]');
+  n.hidden = anyStamped || !_tsOn;
 }
 
 window.toggleConsoleTs = function () {
@@ -462,9 +478,17 @@ function refreshConsole(forceScroll, wantLines) {
         consoleEl.innerHTML = '';
         _appendConsole(lines);
       } else {
-        _appendConsole(_newConsoleLines(_consoleLines, lines));
+        // A poll DELTA is new output the panel just watched arrive — accurate to the poll
+        // interval — so it is stamped, exactly like a socket push. Only the priming window above
+        // goes unstamped, because that is history written before the panel looked.
+        //
+        // This is also the path that carries everything when the websocket is unavailable (a
+        // proxy that won't upgrade, say). Leaving it unstamped meant that on such an install NO
+        // line ever got a time, and the feature looked simply broken.
+        _appendConsole(_newConsoleLines(_consoleLines, lines), data.now);
       }
       showPanelBacklog(panelLines);
+      updateTsNotice();
       if (stick) stickConsole();
     })
     .catch(() => {});

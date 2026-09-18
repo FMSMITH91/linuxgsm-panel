@@ -149,6 +149,14 @@
         </a>
         {% endif %}
       </div>
+      {# Shown only while NOTHING on screen is stamped. An idle server's console is all history —
+         a window of a log file that, for most games, carries no per-line time — so every line is
+         correctly unstamped and the column looks like a feature that does not work. Say why
+         instead; it vanishes the moment a line arrives with a time. #}
+      <div class="px-3 pt-2 text-secondary" style="font-size:.7rem;" id="console-ts-notice" hidden>
+        <i class="bi bi-info-circle"></i>
+        <span>Times appear on lines as they arrive — the panel cannot know when older lines were written.</span>
+      </div>
       <div class="card-body p-0">
         <div class="console-output" id="console-output">
           {% for line in console_lines if line.strip() %}<div class="console-line">{{ line }}</div>{% else %}<div class="text-secondary">Waiting for console output...</div>{% endfor %}

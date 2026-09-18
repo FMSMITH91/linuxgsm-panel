@@ -1289,6 +1289,29 @@ check(_sd_ver_tag and _sd_ver_tag.group(1).strip() != "",
       "version: it is rendered with a placeholder, not left empty until the fetch lands",
       "rendered as %r" % (_sd_ver_tag.group(1) if _sd_ver_tag else None))
 
+# ── The console's poll delta is stamped, and an all-history console says why it is not ────────
+# refreshConsole has two branches: the PRIMING pass (history — a window of a log file written
+# before the panel looked, correctly unstamped) and the delta (new output the panel just watched
+# arrive, which must be stamped exactly like a socket push). The first cut passed no timestamp on
+# either, so an install whose websocket cannot connect got no times at all, and a quiet server's
+# console showed an empty column that read as a broken feature.
+_rc_body = _js_function_body(_sd_js, "refreshConsole") or ""
+check(len(_rc_body) > 200, "console times: refreshConsole() was found",
+      "extractor got %d chars — the checks below prove nothing" % len(_rc_body))
+check(re.search(r"_appendConsole\(_newConsoleLines\([^)]*\)\s*,\s*data\.now\s*\)", _rc_body),
+      "console times: the poll DELTA is stamped with the panel's clock",
+      "the delta is appended with no timestamp — a socket-less install would never show one")
+check(re.search(r"_appendConsole\(lines\)\s*;", _rc_body),
+      "console times: ...and the priming window is NOT, because it is history",
+      "the priming pass is being stamped, which dates a week of history to right now")
+# The notice that explains an empty column. Without it, "correct" and "broken" look identical.
+check('id="console-ts-notice"' in _sd_src,
+      "console times: an all-history console carries the notice explaining the empty column",
+      "no #console-ts-notice in server_detail.html")
+check("updateTsNotice" in _js_function_body(_sd_js, "applyTsVisible") or "",
+      "console times: ...and the notice is re-evaluated when the column is toggled",
+      "applyTsVisible does not call updateTsNotice")
+
 # ── A card that every host has must be findable for every host ────────────────────────────────
 # remote_manage.html serves BOTH /server-management (the panel host) and /remote/<id>/manage, and
 # only some of its cards are gated on remote.is_local — the panel's own backups/updates/

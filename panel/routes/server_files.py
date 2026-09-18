@@ -638,7 +638,11 @@ def register(app, supervise):
         # most games records no per-line time — the panel is seeing them now but they were written
         # at some unknowable point before that, and stamping them "now" would put a confident wrong
         # time on a week of history. The browser leaves their gutter blank instead.
-        return jsonify({"lines": lines,
+        # `now` is the panel's clock at the moment it read this window. The browser stamps the
+        # lines that are NEW since its last poll with it — those are lines the panel just watched
+        # arrive, which is exactly what a timestamp here means. Sent from the server rather than
+        # taken from Date.now() so poll-stamped and socket-stamped lines share one clock.
+        return jsonify({"lines": lines, "now": time.time(),
                         "panel_lines": list(_console_backlog.get(server_id, []))})
 
     @app.route("/api/command/<int:server_id>", methods=["POST"])
