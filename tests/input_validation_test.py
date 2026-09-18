@@ -296,13 +296,20 @@ try:
     check("tailscale serve: a refused mount is never stored",
           _tsl().get("tailscale_mount") == _mount_before,
           "config moved to %r" % (_tsl().get("tailscale_mount"),))
-    # Positive control: a VALID mount must still get past the check above and reach the real
-    # work — which fails here because there is no tailscale binary, but with the failure message
-    # of a command that ran, not a rejected mount.
+    # Positive control: a VALID mount must get PAST the validation above and reach the real work,
+    # so the gate cannot pass by refusing everything.
+    #
+    # It asserts the REFUSAL is absent, not that the request succeeded. What happens after the
+    # mount is accepted depends on the machine: with no `tailscale` binary the command fails and
+    # the route answers 500 ("command not found"), which is the pre-existing behaviour of every
+    # failure branch here and not what this change is about. An earlier version of this control
+    # asserted `status_code < 500` and passed locally — where the no-sudo test runner fails the
+    # command differently — then failed in CI on all three matrix jobs. The status was never the
+    # thing being tested; the 400-with-"mount point" is.
     r = c.post("/api/tailscale/serve", json={"action": "enable", "mount": "/lgsm"})
     check("tailscale serve: a valid mount is not rejected as invalid (positive control)",
-          r.status_code < 500
-          and "mount point" not in (r.get_json() or {}).get("message", "").lower(),
+          r.status_code != 400
+          and "mount point" not in ((r.get_json() or {}).get("message") or "").lower(),
           "got %d %s" % (r.status_code, r.get_data(as_text=True)[:100]))
 
     # ── Structural: a port field must go through the bounded parser ──────────────────────────

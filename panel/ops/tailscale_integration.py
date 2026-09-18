@@ -352,13 +352,18 @@ def setup_tailscale_serve(port=5000, mount="/", funnel=False, backend_scheme="ht
     # the validator — api_tailscale_serve -> here -> _ts_serve_args -> ts_serve_argv -> _ts_mount
     # — caught nothing, so a typo in the mount box answered 500 with an HTML error page and no
     # word about what was wrong. This function's contract is (ok, message); a rejected argument is
-    # one of the things it is FOR. VerbError's text never contains the rejected value (see its
-    # docstring), so it is safe to show.
+    # one of the things it is FOR.
+    #
+    # The message is FIXED, with nothing from the exception in it. VerbError's own docstring
+    # promises its text never contains the rejected value, so interpolating it was safe in fact —
+    # but it is still an exception's text reaching a response, which is what py/stack-trace-exposure
+    # flags (six alerts, across this function's callers) and what _log_and_generic exists to
+    # prevent everywhere else here. The rule is worth more than the three words it added.
     try:
         mount = _priv._ts_mount(mount)
-    except _priv.VerbError as e:
-        return False, ("That isn't a usable mount point (%s). Use \"/\" or a short path like "
-                       "\"/lgsm\"." % e)
+    except _priv.VerbError:
+        return False, ("That isn't a usable mount point. Use \"/\" or a short path like "
+                       "\"/lgsm\".")
 
     # serve/funnel is privileged — make the panel user the Tailscale operator first so it
     # works (and status reads back) without root. Also make sure the tailnet interface is
@@ -481,8 +486,8 @@ def disable_tailscale_serve(mount="/"):
     """
     try:
         mount = _priv._ts_mount(mount or "/")
-    except _priv.VerbError as e:
-        return False, "That isn't a usable mount point (%s)." % e
+    except _priv.VerbError:
+        return False, "That isn't a usable mount point."
     out, err, rc = _run_ts(
         ["serve", "--bg", "--remove", mount],
         timeout=10,
