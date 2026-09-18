@@ -5,6 +5,7 @@ Moved out of register_routes() verbatim — see panel/routes/__init__.py for why
 from flask import (jsonify, render_template, request)
 from flask_login import (current_user, login_required)
 from panel.core.config import (load_config, save_config)
+from panel.security import privileged as _priv
 from panel.ops import (tailscale_integration as ts)
 from panel.security.auth import (MANAGE_REMOTES, log_action, permission_required)
 from panel.core.http import (_json_body)
@@ -81,6 +82,17 @@ def register(app):
         mount = data.get("mount", "/")
         funnel = data.get("funnel", False)
         port = load_config().get("port", 5000)
+        # Checked HERE as well as in setup_tailscale_serve, for the reason api_tags_create gives
+        # about tag names: this is where the value came from a request, so this is where a bad one
+        # can be answered as a 400 with a message the form can show. The branches below report
+        # every failure as a 500 — right for "the host refused the command", wrong for "you typed
+        # a mount point that isn't one", and the two are not distinguishable from a message.
+        try:
+            mount = _priv._ts_mount(mount or "/")
+        except _priv.VerbError:
+            return jsonify({"success": False,
+                            "message": "That isn't a usable mount point. Use \"/\" or a short "
+                                       "path like \"/lgsm\"."}), 400
 
         if action == "enable":
             success, msg = ts.setup_tailscale_serve(port=port, mount=mount, funnel=funnel,

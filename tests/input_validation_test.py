@@ -272,6 +272,46 @@ try:
         check("GameServer.query_port = None is still allowed (optional column)",
               GameServer(query_port=None).query_port is None)
 
+    # ── A hostile Tailscale mount point is a refusal, not a 500 ─────────────────────────────
+    # The mount is request JSON and it is strictly validated — privileged._ts_mount rebuilds it
+    # character by character out of a literal alphabet, so nothing outside that set survives. But
+    # it signals a bad value by RAISING (VerbError, a ValueError), and the chain from the route
+    # down to it — api_tailscale_serve -> setup_tailscale_serve -> _ts_serve_args ->
+    # ts_serve_argv -> _ts_mount — catches nothing. So a typo in the mount box answered 500 with
+    # no message saying what was wrong, which is the shape api_tags_create already catches
+    # ValueError specifically to avoid.
+    #
+    # Nothing is stored either way (the route only writes tailscale_mount when Serve succeeded),
+    # so this is about the ANSWER, not about a bad value reaching the config.
+    from panel.core.config import load_config as _tsl
+    _mount_before = _tsl().get("tailscale_mount")
+    for _bad in ("../etc", "/a/../../b", "not-a-path", "/" + "x" * 40, "/a;b", "//host"):
+        r = c.post("/api/tailscale/serve", json={"action": "enable", "mount": _bad})
+        check("tailscale serve mount=%r is refused, not a 500" % _bad,
+              r.status_code < 500,
+              "got %d %s" % (r.status_code, r.get_data(as_text=True)[:80]))
+        check("tailscale serve mount=%r says it was refused" % _bad,
+              (r.get_json() or {}).get("success") is False,
+              "body was %s" % r.get_data(as_text=True)[:80])
+    check("tailscale serve: a refused mount is never stored",
+          _tsl().get("tailscale_mount") == _mount_before,
+          "config moved to %r" % (_tsl().get("tailscale_mount"),))
+    # Positive control: a VALID mount must get PAST the validation above and reach the real work,
+    # so the gate cannot pass by refusing everything.
+    #
+    # It asserts the REFUSAL is absent, not that the request succeeded. What happens after the
+    # mount is accepted depends on the machine: with no `tailscale` binary the command fails and
+    # the route answers 500 ("command not found"), which is the pre-existing behaviour of every
+    # failure branch here and not what this change is about. An earlier version of this control
+    # asserted `status_code < 500` and passed locally — where the no-sudo test runner fails the
+    # command differently — then failed in CI on all three matrix jobs. The status was never the
+    # thing being tested; the 400-with-"mount point" is.
+    r = c.post("/api/tailscale/serve", json={"action": "enable", "mount": "/lgsm"})
+    check("tailscale serve: a valid mount is not rejected as invalid (positive control)",
+          r.status_code != 400
+          and "mount point" not in ((r.get_json() or {}).get("message") or "").lower(),
+          "got %d %s" % (r.status_code, r.get_data(as_text=True)[:100]))
+
     # ── Structural: a port field must go through the bounded parser ──────────────────────────
     # This is the check that generalises. _int_or guarantees "an int" and carries no range; every
     # place that took a port through it is where a bad port got in. Naming the parser is what stops

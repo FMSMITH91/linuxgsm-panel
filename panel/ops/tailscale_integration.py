@@ -347,6 +347,23 @@ def setup_tailscale_serve(port=5000, mount="/", funnel=False, backend_scheme="ht
     """
     verb = "funnel" if funnel else "serve"
     mount = mount or "/"
+    # Validate HERE and answer, rather than letting _ts_mount raise out of the call below.
+    # `mount` is request JSON (POST /api/tailscale/serve), and the chain from the route down to
+    # the validator — api_tailscale_serve -> here -> _ts_serve_args -> ts_serve_argv -> _ts_mount
+    # — caught nothing, so a typo in the mount box answered 500 with an HTML error page and no
+    # word about what was wrong. This function's contract is (ok, message); a rejected argument is
+    # one of the things it is FOR.
+    #
+    # The message is FIXED, with nothing from the exception in it. VerbError's own docstring
+    # promises its text never contains the rejected value, so interpolating it was safe in fact —
+    # but it is still an exception's text reaching a response, which is what py/stack-trace-exposure
+    # flags (six alerts, across this function's callers) and what _log_and_generic exists to
+    # prevent everywhere else here. The rule is worth more than the three words it added.
+    try:
+        mount = _priv._ts_mount(mount)
+    except _priv.VerbError:
+        return False, ("That isn't a usable mount point. Use \"/\" or a short path like "
+                       "\"/lgsm\".")
 
     # serve/funnel is privileged — make the panel user the Tailscale operator first so it
     # works (and status reads back) without root. Also make sure the tailnet interface is
@@ -456,7 +473,21 @@ def tailscale_up_local(enable_ssh=True):
 
 
 def disable_tailscale_serve(mount="/"):
-    """Remove a Tailscale Serve/Funnel mapping."""
+    """Remove a Tailscale Serve/Funnel mapping.
+
+    The mount is validated before it becomes an argument, for the same reason the enable path
+    validates it — CodeQL #375, py/command-line-injection. This function was left out of that
+    change: it hand-builds its argv instead of going through ts_serve_argv, so the mount reached
+    the CLI unchecked and a value beginning with "-" would be read by `tailscale` as an OPTION
+    rather than as a path. No shell is involved either way, so this was never command injection;
+    it is argument injection, which is the thing _ts_mount exists to stop. _run_ts's own docstring
+    already claimed every argument reaching it was built by a validating builder — this is what
+    makes that true.
+    """
+    try:
+        mount = _priv._ts_mount(mount or "/")
+    except _priv.VerbError:
+        return False, "That isn't a usable mount point."
     out, err, rc = _run_ts(
         ["serve", "--bg", "--remove", mount],
         timeout=10,
