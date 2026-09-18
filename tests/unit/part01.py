@@ -1236,3 +1236,43 @@ check("download header: every value is latin-1 clean, as WSGI headers must be",
       _appmod._attachment_header("día ñ [v2].bsp").encode("latin-1"))
 eq("download header: an empty name still has something to save as",
    _appmod._attachment_header(""), "attachment; filename=\"download\"; filename*=UTF-8''download")
+
+# ...and every route that sends a download actually USES it. The helper is only worth having if
+# nothing rolls its own beside it, and something did: the game-backup download built
+# `'attachment; filename="%s"' % basename(name)` by hand from a name read off the HOST's
+# filesystem — list_game_backups basenames whatever sits in ~/lgsm/backup, so the panel does not
+# choose it. Both ways that can go are a 500 on a download that should have worked: Werkzeug
+# raises ValueError on a CR/LF in a header value, and any character outside latin-1 (an em-dash, a
+# CJK name, an emoji in a map-pack archive) raises UnicodeEncodeError when the response is
+# serialised. A gate, not a one-off fix, because the next download route would repeat it.
+import ast as _cd_ast
+_cd_sources = []
+for _cd_dir in (os.path.join(_root, "panel"),):
+    for _cd_base, _cd_dirs, _cd_names in os.walk(_cd_dir):
+        _cd_sources += [os.path.join(_cd_base, n) for n in _cd_names if n.endswith(".py")]
+_cd_sources.append(os.path.join(_root, "app.py"))
+_cd_sites, _cd_bad = 0, []
+for _cd_path in sorted(_cd_sources):
+    _cd_tree = _cd_ast.parse(open(_cd_path, encoding="utf-8").read(), filename=_cd_path)
+    for _cd_n in _cd_ast.walk(_cd_tree):
+        # resp.headers["Content-Disposition"] = <value>
+        if not isinstance(_cd_n, _cd_ast.Assign):
+            continue
+        for _cd_t in _cd_n.targets:
+            if not (isinstance(_cd_t, _cd_ast.Subscript)
+                    and isinstance(_cd_t.slice, _cd_ast.Constant)
+                    and _cd_t.slice.value == "Content-Disposition"):
+                continue
+            _cd_sites += 1
+            _cd_v = _cd_n.value
+            _cd_ok = (isinstance(_cd_v, _cd_ast.Call)
+                      and ((isinstance(_cd_v.func, _cd_ast.Name)
+                            and _cd_v.func.id == "_attachment_header")
+                           or (isinstance(_cd_v.func, _cd_ast.Attribute)
+                               and _cd_v.func.attr == "_attachment_header")))
+            if not _cd_ok:
+                _cd_bad.append("%s:%d" % (os.path.relpath(_cd_path, _root), _cd_n.lineno))
+check("download header: every Content-Disposition the panel sets goes through _attachment_header",
+      not _cd_bad, "hand-built at: %s" % ", ".join(_cd_bad))
+check("download header: ...and the scan really found the places that set one",
+      _cd_sites >= 2, "found only %d Content-Disposition assignment(s)" % _cd_sites)

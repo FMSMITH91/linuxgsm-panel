@@ -42,6 +42,7 @@ __all__ = [
     "register_remote_state",
     "server_keyed_state",
     "remote_keyed_state",
+    "keyed_state_with_locks",
 ]
 
 
@@ -58,39 +59,58 @@ __all__ = [
 # Registering at the declaration means the pruner's list and the declarations are the same list,
 # and a map that is deliberately not pruned (see _os_update_state) is now visibly not registered
 # rather than indistinguishable from one that was forgotten.
+#
+# Entries are (mapping, lock). `lock` is None for a map nothing serialises, and the map's own
+# lock where one exists — the pruner runs on the monitor thread, so a map that its writers only
+# ever touch under a lock must be pruned under the same one. Every such lock in this module is
+# held for a dict operation and nothing else (no I/O, no network), so taking it here cannot stall
+# the sweep.
 _server_keyed_state = []
 _remote_keyed_state = []
 
 
-def register_server_state(mapping):
+def register_server_state(mapping, lock=None):
     """Mark `mapping` as keyed by GameServer.id so the pruner clears deleted ids from it.
-    Returns `mapping`, so a declaration can wrap itself: `_x = register_server_state({})`."""
-    _server_keyed_state.append(mapping)
+    Returns `mapping`, so a declaration can wrap itself: `_x = register_server_state({})`.
+
+    Pass `lock` when the map has one — the pruner will hold it while it prunes."""
+    _server_keyed_state.append((mapping, lock))
     return mapping
 
 
-def register_remote_state(mapping):
+def register_remote_state(mapping, lock=None):
     """Mark `mapping` as keyed by RemoteServer.id. Returns `mapping` — see above."""
-    _remote_keyed_state.append(mapping)
+    _remote_keyed_state.append((mapping, lock))
     return mapping
 
 
 def server_keyed_state():
     """Every registered GameServer.id-keyed map. A tuple: the registry is appended to at import
     time and only read afterwards, and handing out the live list invites a caller to mutate it."""
-    return tuple(_server_keyed_state)
+    return tuple(m for m, _lock in _server_keyed_state)
 
 
 def remote_keyed_state():
     """Every registered RemoteServer.id-keyed map."""
-    return tuple(_remote_keyed_state)
+    return tuple(m for m, _lock in _remote_keyed_state)
+
+
+def keyed_state_with_locks():
+    """(server entries, remote entries), each entry a (mapping, lock) pair — what the pruner
+    walks. Separate from the two accessors above because every OTHER reader wants the maps and
+    only the pruner needs to know which of them is serialised."""
+    return tuple(_server_keyed_state), tuple(_remote_keyed_state)
+
+_rwe_lock = threading.Lock()
 
 # Hosts the operator asked to "reboot when empty" — reboot once every game server on them is idle.
 # remote_id -> {"by": username, "since": epoch}. In-memory on purpose: a panel restart clears any
 # pending request, so no surprise reboot ever survives a restart.
-_reboot_when_empty = {}
-
-_rwe_lock = threading.Lock()
+#
+# Registered WITH its lock rather than pruned by name in _forget_deleted_rows, which is what it
+# used to be: it was the one row-keyed map the registry could not express, so it stayed a
+# hand-written special case beside the loop that walks everything else.
+_reboot_when_empty = register_remote_state({}, _rwe_lock)
 
 _max_players_cache = register_server_state({})   # server_id -> int  (capacity is ~static, so read it once and reuse)
 
@@ -165,8 +185,16 @@ _console_partial = register_server_state({})   # server_id -> str
 
 # Live game-server install progress, keyed by GameServer id (same process, so a plain dict + lock
 # is fine). Written by the install job runner, read by /api/server/<id>/install-status.
-_install_jobs = {}
+#
+# REGISTERED, like every other row-keyed map. It was not, and it is keyed by a GameServer id that
+# SQLite reuses: deleting a remote takes its game servers with it (delete_remote bulk-deletes them
+# with no check for an install in flight), so a finished — or still "running" — job outlives the
+# row it describes. The next server to take that id then answers /install-status with the dead
+# one's outcome, and a "running" leftover makes uninstall_server refuse it as "still installing".
+# _prune_jobs bounds this by AGE, which is a different guarantee: it only runs when a new install
+# starts, and not for two hours.
 _install_lock = threading.Lock()
+_install_jobs = register_server_state({}, _install_lock)
 
 # Only one game-file backup at a time (full OR single-server) — they are slow and space-heavy.
 _full_backup_lock = threading.Lock()

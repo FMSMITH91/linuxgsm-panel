@@ -106,9 +106,13 @@ def register(app):
     @permission_required(MANAGE_GROUPS)
     def delete_group(group_id):
         group = Group.query.get_or_404(group_id)
-        # Remove from all users
-        for user in group.users:
-            user.groups.remove(group)
+        # The membership clear used to be a loop over group.users calling user.groups.remove(group)
+        # — and User.groups back-populates Group.users, so every removal shortened the very list
+        # being iterated and the loop visited every OTHER member. It was never a bug: SQLAlchemy
+        # deletes a parent's secondary-table rows for it, which was checked by removing
+        # `group.users = []` and watching the association rows go anyway. So the loop was doing no
+        # work while reading as though it were what made the delete safe. The assignments stay as
+        # the explicit statement of what a deleted group releases; the loop does not.
         group.users = []
         group.servers = []
         group.game_servers = []

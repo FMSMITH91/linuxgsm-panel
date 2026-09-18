@@ -4432,6 +4432,20 @@ try:
             _lat_seen.clear()
             _drain_action_output(app, _lat_remote, gs_id)
             _lat_second = [p.get("data") for (e, p, r) in _lat_seen if e == "console_output"]
+            # The file is TRUNCATED under the tail. Running the same action again re-opens its log
+            # with `>`, and _begin_action_tail resets the offset — but only after the SSH call is
+            # issued, so a tick landing between the two leaves the poller holding an offset past
+            # the end of a brand-new file. The drain noticed that already; what it then did was
+            # advance the offset to the NEW file's size without ever sending those bytes, so the
+            # first chunk of the re-run's output was dropped on the floor and nothing said so.
+            _lat_file["text"] = "Second run: validating\n"
+            _lat_seen.clear()
+            _drain_action_output(app, _lat_remote, gs_id)     # sees size < pos
+            _lat_trunc_now = [p.get("data") for (e, p, r) in _lat_seen if e == "console_output"]
+            _lat_trunc_pos = dict(_ao.get(gs_id) or {}).get("pos")
+            _lat_seen.clear()
+            _drain_action_output(app, _lat_remote, gs_id)     # ...and re-reads from the start
+            _lat_trunc_next = [p.get("data") for (e, p, r) in _lat_seen if e == "console_output"]
             _end_action_tail(app, gs_id, _lat_remote, "update", 0)
         check("console tail: the first drain sends what the action has written so far",
               _lat_first and "Downloading 12%" in _lat_first[0], "sent %s" % _lat_first)
@@ -4440,6 +4454,12 @@ try:
         check("console tail: the next drain sends ONLY the new lines",
               _lat_second and "Downloading 97%" in _lat_second[0]
               and "Downloading 12%" not in _lat_second[0], "sent %s" % _lat_second)
+        check("console tail: a truncated log rewinds the offset instead of skipping past it",
+              _lat_trunc_pos == 0, "offset left at %r after the truncation" % (_lat_trunc_pos,))
+        check("console tail: ...so the re-run's output is still delivered, one tick later",
+              any("Second run: validating" in (m or "")
+                  for m in (_lat_trunc_now + _lat_trunc_next)),
+              "now=%s next=%s" % (_lat_trunc_now, _lat_trunc_next))
 
         # 3. The CALLER. Every assertion above passes just as well with a drain nothing invokes —
         # which is exactly the shape of the original bug. So drive the real console poller: give
@@ -4467,6 +4487,43 @@ try:
         app.socketio.emit = _lat_sio_saved
         (_sm_core.run_as_game_user, _sm_core.run_command) = _lat_saved
         _ao.clear()
+
+    # ── join_console and leave_console must agree on the KEY ────────────────────────────────
+    # The viewer registry is what the console poller iterates: an id left in it costs an SSH round
+    # trip every two seconds for a console nobody is watching. join_console coerces the id to int
+    # before using it — deliberately, and with a comment saying why the room name and the map key
+    # have to be the same value — and leave_console did not, so a client that spelled the id as a
+    # string left the ROOM (the f-string reads the same either way) and left its sid behind in the
+    # map. Only a socket disconnect cleaned that up.
+    #
+    # Driven through the real socket, not by calling the handler: the coercion only matters
+    # because a client chooses the spelling, and that is the half a direct call cannot exercise.
+    _sio_err = ""
+    try:
+        _sio_c = app.socketio.test_client(app, flask_test_client=client_as(admin_id))
+        _sio_ok = _sio_c.is_connected()
+    except Exception as _e:                      # never a silent skip — a gate that cannot run failed
+        _sio_c, _sio_ok, _sio_err = None, False, "%s: %s" % (type(_e).__name__, _e)
+    check("console socket: an authenticated test client connects", _sio_ok, _sio_err)
+    if _sio_ok:
+        try:
+            with _r_sf._viewers_lock:
+                _r_sf._console_viewers.pop(gs_id, None)
+            _sio_c.emit("join_console", {"server_id": gs_id})
+            check("console socket: joining registers the viewer",
+                  bool(_r_sf._console_viewers.get(gs_id)),
+                  "viewers=%r" % (_r_sf._console_viewers.get(gs_id),))
+            _sio_c.emit("leave_console", {"server_id": str(gs_id)})   # the string spelling
+            check("console socket: leaving deregisters it however the id was spelled",
+                  not _r_sf._console_viewers.get(gs_id),
+                  "left behind: %r" % (_r_sf._console_viewers.get(gs_id),))
+        finally:
+            with _r_sf._viewers_lock:
+                _r_sf._console_viewers.pop(gs_id, None)
+            try:
+                _sio_c.disconnect()
+            except Exception:
+                pass
 
     # ── A long action's output survives a reload, and keeps LinuxGSM's colour ────────────────
     # Two follow-ups to the tail above, both reported straight after it shipped.
@@ -5245,6 +5302,7 @@ try:
             if _gg:
                 db.session.delete(_gg)
         db.session.commit()
+
 
     # ── A TOTP code is single-use on the password-change path too ────────────────────
     # The login path has recorded the spent step since single-use was introduced; this — the panel's

@@ -10,6 +10,7 @@ _whitelisted, _host_reachable, _metrics_work). app.py imports them back. The dep
 is deliberate — routes may reach into monitoring; monitoring never reaches into routes.
 """
 import concurrent.futures
+import contextlib
 import ipaddress
 import logging
 import re
@@ -25,7 +26,7 @@ from panel.db.models import GameServer, HostSample, MetricSample, RemoteServer, 
 from panel.core.panel_state import (
     _cron_restart_pending, _expected_offline, _max_players_cache, _monitor_state,
     _player_counts, _reboot_when_empty, _rwe_lock, _server_full_alerted, _server_peak_notified,
-    remote_keyed_state, server_keyed_state,
+    keyed_state_with_locks,
 )
 from panel.ops.ssh_manager import (
     _remote_listening_ports, game_map, host_live_metrics, lgsm_get_values, metrics_for_game,
@@ -563,15 +564,16 @@ def _forget_deleted_rows(remote_ids, server_ids):
     login banner for up to a day — under a row id a newly added host may already own, which means
     its name and package count show to whoever can access the NEW host. Both are idempotent.
     """
-    for m in remote_keyed_state():
-        for gone in [k for k in m if k not in remote_ids]:
-            m.pop(gone, None)
-    for m in server_keyed_state():
-        for gone in [k for k in m if k not in server_ids]:
-            m.pop(gone, None)
-    with _rwe_lock:
-        for gone in [k for k in _reboot_when_empty if k not in remote_ids]:
-            _reboot_when_empty.pop(gone, None)
+    server_maps, remote_maps = keyed_state_with_locks()
+    for entries, live in ((remote_maps, remote_ids), (server_maps, server_ids)):
+        for m, lock in entries:
+            # Under the map's own lock where it has one — _install_jobs and _bootstrap_jobs are
+            # written from request handlers and job threads that only ever touch them locked, and
+            # this sweep runs on the monitor thread. Each of those locks covers a dict operation
+            # and nothing else, so holding it here cannot stall the sweep.
+            with lock if lock is not None else contextlib.nullcontext():
+                for gone in [k for k in m if k not in live]:
+                    m.pop(gone, None)
 
 
 def _reboot_when_empty_watch(app):
