@@ -133,17 +133,31 @@ def _sgr_apply(style, codes):
     for part in (codes or "0").split(";"):
         part = part.strip()
         nums.append(int(part) if part.isdecimal() else 0)   # `ESC[;32m` — an empty field is 0
-    for n in nums:
+    i = 0
+    while i < len(nums):
+        n = nums[i]
+        # 38/48/58 are the EXTENDED colour introducers and they CONSUME the parameters after
+        # them: `38;5;n` is one 256-colour instruction, `38;2;r;g;b` one truecolor instruction.
+        # Reading those sub-parameters as if each were its own attribute is not a near miss, it
+        # is arbitrary formatting from arithmetic: Minecraft turns a plugin's §x hex colour into
+        # exactly this, so `48;2;1;9;3` became dim + bold + STRIKETHROUGH + italic and struck a
+        # line through an Essentials warning and the URL under it. The panel does not render
+        # extended colour, so the whole instruction is consumed and dropped.
+        if n in (38, 48, 58):
+            nxt = nums[i + 1] if i + 1 < len(nums) else None
+            i += 3 if nxt == 5 else 5 if nxt == 2 else 1   # malformed: drop just the introducer
+            continue
         if n == 0:
             out = []
         elif n not in _SGR_ALLOWED:
-            continue
+            pass
         elif n == 39:
             out = [c for c in out if not (30 <= c <= 37 or 90 <= c <= 97)]
         elif n == 49:
             out = [c for c in out if not (40 <= c <= 47 or 100 <= c <= 107)]
         elif n not in out:
             out.append(n)
+        i += 1
     return tuple(out)
 
 
