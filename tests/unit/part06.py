@@ -1563,6 +1563,11 @@ _sys_unit = re.search(r'SYSTEM_UNIT="([^"]+)"', _uninst)
 _uninst_rm = set()
 for _line in _uninst.splitlines():
     _cmd = _line.strip()
+    # A removal may be prefixed with the sudo-when-not-root variable: the pieces install.sh writes
+    # via `sudo` on a PER-USER install need the same to come back off, so those lines read
+    # `${U_SUDO} rm -rf …`. Strip a leading variable expansion before the prefix test, or every
+    # one of them reads as "not a removal" — which is how this gate first responded to the fix.
+    _cmd = re.sub(r"^\$\{[A-Za-z_][A-Za-z0-9_]*\}\s+", "", _cmd)
     if not _cmd.startswith("rm "):
         continue
     if _sys_unit:
@@ -1593,6 +1598,38 @@ _inst_paths = set(re.findall(r"/(?:etc|usr/local)/[A-Za-z0-9._/-]*linuxgsm[A-Za-
 _inst_paths |= set(re.findall(r"/etc/cron\.d/[A-Za-z0-9._-]+", _inst_src))
 _inst_paths = {_p.rstrip("/") for _p in _inst_paths if _p.count("/") > 2}
 _unremoved = sorted(_p for _p in _inst_paths if not _is_removed(_p))
+# The scan above proves a path is rm'd SOMEWHERE in the file. It has no model of the `if
+# [ "${MODE}" = "system" ]` guard, so for a long time it passed while three of those removals were
+# unreachable on a per-user install — install.sh calls ensure_gamedig() and install_root_tools()
+# unconditionally, before its own root/user split, and both use sudo when not root. So the paths
+# that a user-mode install CREATES must be rm'd outside that branch.
+# rindex, not index: uninstall.sh tests MODE earlier too (to print the service user in the
+# summary), and splitting on the first occurrence puts the whole cleanup block on the wrong side
+# — which is how this check first reported a fix that was already in place.
+_uninst_cut = _uninst.rindex('if [ "${MODE}" = "system" ]; then')
+_uninst_sys = _uninst[_uninst_cut:]
+_uninst_common = _uninst[:_uninst_cut]
+_user_created = ["/usr/local/lib/linuxgsm-panel", "/etc/cron.d/lgsm-node-tools",
+                 "/usr/local/bin/linuxgsm-panel-recover"]
+
+
+def _rm_targets(text):
+    """The paths this chunk of script actually passes to `rm` — MENTIONING one is not removing it.
+    The `if [ -f <path> ]` guard names it too, and a first version of this check was satisfied by
+    that guard alone: the removal moved back into the system-only branch and it still passed."""
+    out = set()
+    for _l in text.splitlines():
+        _c = re.sub(r"^\$\{[A-Za-z_][A-Za-z0-9_]*\}\s+", "", _l.strip())
+        if _c.startswith("rm "):
+            out |= set(re.findall(r"/(?:etc|usr/local)/[A-Za-z0-9._/${}-]+", _c))
+    return out
+
+
+_common_rm = _rm_targets(_uninst_common)
+_only_system = [p for p in _user_created if p not in _common_rm]
+check("uninstall.sh: what a PER-USER install creates is removed outside the system-only branch",
+      not _only_system, "system-mode only: %s" % _only_system)
+
 check("uninstall.sh accounts for every panel path install.sh writes outside PANEL_DIR",
       not _unremoved, "not removed: %s" % _unremoved)
 
@@ -1671,6 +1708,40 @@ for _dead in ("stat-card", "stat-value", "empty-state"):
           not re.search(r"\.%s[\w-]*\s*\{" % _dead, _css))
     check("...and nothing in the UI asks for .%s" % _dead, _dead not in _markup)
 
+
+# ── A harness must not delete the developer's last database copy ──────────────────────────────
+# Each of these refuses to run while data/panel.db EXISTS, and then cleans up after itself by
+# unlinking what it created. panel.db.backup was not in the "already there, leave it alone" set,
+# so it was unlinked every run — and it is not scratch: models._ensure_db_healthy keeps it as the
+# rolling KNOWN-GOOD copy and restores from it when the live database is corrupt.
+#
+# The window is narrow and it is precisely the wrong one: the only state in which these run AND
+# the backup exists is "panel.db is gone and this copy is the last one left".
+import ast as _pe_ast
+_PE_HARNESSES = ["tests/perf_budget_test.py", "tests/manage_test.py",
+                 "tests/setup_wizard_test.py", "tests/input_validation_test.py",
+                 "tools/perf_bench.py"]
+_pe_bad, _pe_seen = [], 0
+for _f in _PE_HARNESSES:
+    _src = open(os.path.join(_root, _f), encoding="utf-8").read()
+    _tree = _pe_ast.parse(_src)
+    # The names the cleanup unlinks, and the names it treats as pre-existing.
+    _pre = None
+    for _n in _pe_ast.walk(_tree):
+        if (isinstance(_n, _pe_ast.Assign) and len(_n.targets) == 1
+                and getattr(_n.targets[0], "id", "") == "_PREEXISTING"):
+            _pre = _pe_ast.get_source_segment(_src, _n.value) or ""
+    if _pre is None:
+        _pe_bad.append("%s has no _PREEXISTING at all" % _f)
+        continue
+    _pe_seen += 1
+    for _guarded in ("panel.db.backup", "panel.db-wal", "panel.db-shm"):
+        if _guarded in _src and _guarded not in _pre:
+            _pe_bad.append("%s unlinks %s but does not protect a pre-existing one" % (_f, _guarded))
+check("harnesses: none deletes a pre-existing panel.db.backup / WAL / SHM",
+      not _pe_bad, "; ".join(_pe_bad[:4]))
+check("harnesses: ...and the scan actually read all of them", _pe_seen == len(_PE_HARNESSES),
+      "only inspected %d of %d" % (_pe_seen, len(_PE_HARNESSES)))
 
 # ── recover.sh must not be pointed at another user's "panel" ──────────────────────────────────
 # It runs as root during a lockout and scans /home/*/.config/systemd/user/ for a unit, reading

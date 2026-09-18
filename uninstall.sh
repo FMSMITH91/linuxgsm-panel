@@ -121,26 +121,49 @@ if [ -n "${PANEL_DIR}" ] && [ "${PANEL_DIR}" != "/" ] && [ -d "${PANEL_DIR}" ]; 
     ok "Removed ${PANEL_DIR}"
 fi
 
-if [ "${MODE}" = "system" ]; then
-    rm -f /etc/sudoers.d/linuxgsm-panel
-    rm -f /usr/local/bin/linuxgsm-panel-recover
-    ok "Removed the sudoers entry"
-
-    # The root-owned pieces install_root_tools() places OUTSIDE the panel directory. They are the
-    # whole reason PANEL_DIR is not the full footprint: the helper, the offline DB-repair copy,
-    # panel.conf (which records the install's paths) and the root-owned installer.
-    if [ -d /usr/local/lib/linuxgsm-panel ]; then
-        rm -rf /usr/local/lib/linuxgsm-panel
-        ok "Removed the root-owned helper, DB-repair tool, panel.conf and installer copy"
+# ── Root-owned pieces a PER-USER install creates too ───────────────────────────────────────────
+# These were inside the `system` branch below, and three of them are written on BOTH paths:
+# install.sh calls ensure_gamedig() and install_root_tools() unconditionally, before its
+# root/user split, and both use `sudo` when they are not already root. So a per-user uninstall
+# removed the panel and left behind a weekly ROOT cron running `npm install -g` every Sunday
+# forever, the root-owned helper tree, a panel.conf pointing at a deleted directory and a
+# dangling recovery symlink — then printed "LinuxGSM Panel has been uninstalled."
+#
+# That is exactly the leftover this file's own header calls "the point" of removing more than
+# PANEL_DIR, and per-user is the ordinary way to install.
+U_SUDO=""
+[ "$(id -u)" -ne 0 ] && U_SUDO="sudo"
+if [ -d /usr/local/lib/linuxgsm-panel ] || [ -f /etc/cron.d/lgsm-node-tools ] \
+   || [ -L /usr/local/bin/linuxgsm-panel-recover ]; then
+    if [ -n "${U_SUDO}" ]; then
+        info "Some pieces live outside your home directory and need sudo to remove…"
     fi
-
+    # The root-owned pieces install_root_tools() places OUTSIDE the panel directory: the helper,
+    # the offline DB-repair copy, panel.conf (which records the install's paths) and the
+    # root-owned installer.
+    if [ -d /usr/local/lib/linuxgsm-panel ]; then
+        ${U_SUDO} rm -rf /usr/local/lib/linuxgsm-panel \
+            && ok "Removed the root-owned helper, DB-repair tool, panel.conf and installer copy" \
+            || warn "Could not remove /usr/local/lib/linuxgsm-panel — remove it by hand."
+    fi
     # A weekly ROOT cron that keeps npm + gamedig current for player queries. With the panel gone
     # it has nothing to serve, and it would otherwise keep running `npm install -g` as root every
     # Sunday forever.
     if [ -f /etc/cron.d/lgsm-node-tools ]; then
-        rm -f /etc/cron.d/lgsm-node-tools
-        ok "Removed the weekly npm/gamedig update cron"
+        ${U_SUDO} rm -f /etc/cron.d/lgsm-node-tools \
+            && ok "Removed the weekly npm/gamedig update cron" \
+            || warn "Could not remove /etc/cron.d/lgsm-node-tools — remove it by hand."
     fi
+    if [ -L /usr/local/bin/linuxgsm-panel-recover ] || [ -f /usr/local/bin/linuxgsm-panel-recover ]; then
+        ${U_SUDO} rm -f /usr/local/bin/linuxgsm-panel-recover \
+            && ok "Removed the linuxgsm-panel-recover command" \
+            || warn "Could not remove /usr/local/bin/linuxgsm-panel-recover — remove it by hand."
+    fi
+fi
+
+if [ "${MODE}" = "system" ]; then
+    rm -f /etc/sudoers.d/linuxgsm-panel
+    ok "Removed the sudoers entry"
 
     # Host-wide kernel tuning the installer applied for the panel's sake (vm.swappiness). Re-apply
     # the remaining sysctl config so the host goes back to its own values now, not at next boot.
