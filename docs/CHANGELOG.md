@@ -156,6 +156,22 @@ regardless of this file — this changelog is for humans.
   non-ASCII — through a real shell and requires each to come back verbatim as a single argument.
 
 ### Fixed
+- **The console no longer loses output, or cuts a line in half, during a busy burst.** The poller
+  reads at most 64KB per tick but then advanced its offset to the log's *full* size, so anything
+  past that cap was silently discarded — and the 64KB boundary itself landed mid-line, reaching
+  the screen as a fragment (a bare `[20` where a timestamp had been sliced). A server writing more
+  than 64KB between two 2-second polls is not hypothetical: it is every Garry's Mod start, loading
+  hundreds of Lua modules, which is exactly when someone is watching. The offset now advances by
+  what was actually read, so a burst drains over the next few ticks instead of being thrown away,
+  and a chunk's trailing half-line is held until the next read completes it.
+- **The panel no longer offers to turn LinuxGSM's `logtimestamp` on**, and offers a way to turn it
+  off. It works — the log really is stamped at write time — but LinuxGSM builds the capture as
+  `cat | gawk '{ print strftime(...), $0 }' >> consolelog`, and gawk writing to a *file* is block
+  buffered, not line buffered: measured at 0 lines reaching the log after 33 lines of input, with
+  everything appearing only once 4KB had accumulated. On a quiet server that is an apparently
+  frozen console. The pipeline is built in `command_start.sh`, so nothing in the panel can add an
+  `fflush`. Shipped as a one-click offer before that was measured; the parsing stays, so a log
+  stamped by hand still reads correctly, but the invitation is gone.
 - **Console lines with a timestamp are no longer taller than lines without one.** The gutter is an
   inline-block, and per CSS an inline-block whose `overflow` is not `visible` takes its baseline
   from its bottom margin edge rather than its last line box — so it hung below the text beside it

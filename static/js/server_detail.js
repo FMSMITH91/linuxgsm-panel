@@ -537,6 +537,8 @@ function refreshConsole(forceScroll, wantLines) {
       }
       showPanelBacklog(panelLines);
       updateTsNotice();
+      var offEl = document.getElementById('console-ts-off');
+      if (offEl) offEl.hidden = !data.log_timestamps;
       if (stick) stickConsole();
     })
     .catch(() => {});
@@ -1174,27 +1176,31 @@ socket.on('console_output', function(data) {
   }
 });
 
-// Turn on LinuxGSM's own `logtimestamp`. It pipes the tmux capture through gawk's strftime, so
-// every line is dated as it is WRITTEN — the only way history gets real times, since the panel
-// tails the file and can otherwise date only what it watched arrive.
+// Turn LinuxGSM's `logtimestamp` OFF. There is deliberately no control to turn it ON.
 //
-// It edits the instance's LinuxGSM config and tmux's pipe-pane is wired up at start, so it takes
-// effect on the next restart. The confirm says so rather than leaving it to be discovered.
-function enableLogTimestamps(btn) {
+// It does what it says — the log really is stamped at write time, which is the only way console
+// HISTORY can carry real times — but LinuxGSM builds the capture as
+// `cat | gawk '{ print strftime(...), $0 }' >> consolelog`, and gawk writing to a FILE is BLOCK
+// buffered: measured at 0 lines reaching the log after 33 lines of input, everything appearing
+// only once 4KB had accumulated. On a quiet server that is an apparently frozen console for
+// hours. The pipeline lives in command_start.sh, so nothing out here can add an fflush.
+//
+// The parsing stays: a log that IS stamped (someone set it by hand) is still read correctly.
+function disableLogTimestamps(btn) {
   confirmDialog({
-    title: t('Stamp the console log'),
-    body: t('LinuxGSM can write a timestamp onto every console line as it happens, so older lines have real times too. This changes the server’s LinuxGSM config and takes effect the next time the server starts.'),
-    confirmLabel: t('Turn it on'),
+    title: t('Stop stamping the console log'),
+    body: t('LinuxGSM stamps each line by piping the console through gawk, which buffers in 4KB blocks when writing to a file \u2014 so live output stops appearing until enough has built up. Turning this off restores the live console. It takes effect the next time the server starts.'),
+    confirmLabel: t('Turn it off'),
     onConfirm: function () {
       btn.disabled = true;
       fetch(MOUNT + '/api/server/' + serverId + '/log-timestamps', {
         method: 'POST', headers: {'Content-Type': 'application/json'},
-        body: JSON.stringify({ enabled: true })
+        body: JSON.stringify({ enabled: false })
       })
       .then(r => r.json())
       .then(function (d) {
         if (d.error) { toast(d.error, 'danger'); return; }
-        toast(t('LinuxGSM will stamp the log from the next restart.'), 'success');
+        toast(t('Stamping is off. Restart the server to restore the live console.'), 'success');
       })
       .catch(function () { toast(t('Could not reach the panel'), 'danger'); })
       .finally(function () { btn.disabled = false; });   // nosemgrep

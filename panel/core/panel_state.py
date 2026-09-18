@@ -32,6 +32,7 @@ __all__ = [
     "_cron_restart_pending",
     "_action_output",
     "_console_backlog",
+    "_console_partial",
     "_install_jobs",
     "_install_lock",
     "_full_backup_lock",
@@ -148,6 +149,11 @@ _action_output = register_server_state({})
 # Not persisted: a panel restart clearing the last update's output is fine, and this must never
 # grow into a second log file. _CONSOLE_BACKLOG_MAX caps it per server.
 _console_backlog = register_server_state({})   # server_id -> [line, ...]
+
+# The tail of a console-log chunk that the poller's byte-range read cut mid-line, held until the
+# next read completes it. Without it a 64KB boundary lands inside a line and the console shows the
+# halves as two — seen in the wild as a bare "[20" where a LinuxGSM timestamp had been sliced.
+_console_partial = register_server_state({})   # server_id -> str
 
 # ── Background-job state ─────────────────────────────────────────────────────────────────────
 # These lived at module level in app.py, which was fine while the only readers were app.py's own
