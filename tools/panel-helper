@@ -1273,6 +1273,79 @@ def _db_repair_detached(db_path):
     os._exit(0)
 
 
+def _copy_one_regular(src, dst):
+    """Copy ONE regular file, refusing to follow a symlink at either end. True if it was copied,
+    False if `src` is not there.
+
+    O_NOFOLLOW ON BOTH SIDES, and that is the whole point of this function.
+
+    The staging directory belongs to the PANEL USER — it is the panel that creates it and unpacks
+    the archive into it — and this code runs as ROOT. The loop this replaces was
+    `if os.path.isfile(src): shutil.copyfile(src, dst)`, and both of those follow symlinks. So a
+    panel that had been compromised could stage a SYMLINK under one of the four member names and
+    have root do its reading and writing for it:
+
+      * a link at stage/cred_key -> /etc/shadow, and root copies shadow's contents into the data
+        directory as a real file the panel user owns and can read. Arbitrary read as root.
+      * a link at data_dir/cred_key -> /etc/cron.d/anything, and root writes the staged content
+        THROUGH it. Arbitrary write as root, which is a root shell a minute later.
+
+    That is precisely the boundary this helper exists to create, so the fixed staging path is not
+    enough on its own: the directory being fixed says nothing about what the names inside it
+    resolve to. O_NOFOLLOW refuses a symlink AT OPEN TIME, atomically, so there is no window
+    between checking and opening for the link to be swapped in.
+
+    S_ISREG as well, because O_NOFOLLOW alone still opens a fifo or a device node — a fifo would
+    hang the restore holding the panel down, and /dev/zero would fill the disk.
+
+    Hardlinks are the one shape this cannot see: a hardlink is indistinguishable from the file.
+    They are covered by the kernel instead — fs.protected_hardlinks is 1 by default on every
+    distro the panel targets, which forbids linking to a file you can neither read nor own.
+    """
+    try:
+        sfd = os.open(src, os.O_RDONLY | os.O_NOFOLLOW)
+    except OSError:
+        # ENOENT (nothing staged for this member) and ELOOP (it is a symlink) are both "do not
+        # copy this one", and neither is worth failing the whole restore over.
+        return False
+    try:
+        st = os.fstat(sfd)
+        if not stat.S_ISREG(st.st_mode):
+            return False
+        try:
+            dfd = os.open(dst, os.O_WRONLY | os.O_CREAT | os.O_TRUNC | os.O_NOFOLLOW, 0o600)
+        except OSError:
+            return False            # the destination is a symlink, or cannot be created
+        try:
+            with open(sfd, "rb", closefd=False) as fsrc, open(dfd, "wb", closefd=False) as fdst:
+                shutil.copyfileobj(fsrc, fdst)
+            os.fchmod(dfd, stat.S_IMODE(st.st_mode))
+        finally:
+            os.close(dfd)
+    finally:
+        os.close(sfd)
+    return True
+
+
+def restore_copy_members(stage, data_dir):
+    """Copy the staged backup members over the live ones. Returns the names actually copied.
+
+    Extracted from _restore_detached so a test can drive it: that function forks, detaches and
+    ends in os._exit, so anything left inside it can only be tested by reimplementing it — and a
+    test that reimplements the code it is guarding is how the original symlink follow would have
+    stayed invisible.
+    """
+    copied = []
+    if os.path.islink(stage) or not os.path.isdir(stage):
+        return copied           # the staging dir itself must be a real directory, not a link
+    for member in RESTORE_MEMBERS:
+        src = os.path.join(stage, member)
+        dst = os.path.join(data_dir, "panel.db" if member == "panel.db" else member)
+        if _copy_one_regular(src, dst):
+            copied.append(member)
+    return copied
+
+
 def _restore_detached(data_dir):
     """The restore swap itself, in the grandchild. NEVER RETURNS — every path ends in os._exit.
 
@@ -1298,12 +1371,7 @@ def _restore_detached(data_dir):
         systemctl = resolve("systemctl")
         subprocess.run([systemctl, "stop", PANEL_UNIT],  # nosec B603 - fixed argv
                        check=False, timeout=120)
-        for member in RESTORE_MEMBERS:
-            src = os.path.join(stage, member)
-            dst = os.path.join(data_dir, "panel.db" if member == "panel.db" else member)
-            if os.path.isfile(src):
-                shutil.copyfile(src, dst)
-                shutil.copymode(src, dst)
+        restore_copy_members(stage, data_dir)
         # The restored database is authoritative; a stale WAL/SHM pair beside it is not.
         for side in ("-wal", "-shm"):
             try:
