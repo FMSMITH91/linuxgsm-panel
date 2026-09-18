@@ -343,8 +343,17 @@ check("ssh_manager: no submodule binds another's function by name (the stub seam
 _smg_pkg_stubs = []
 # Built here rather than reusing _STUB_FILES: that is defined further down the file, and a gate
 # that silently depends on statement order is the kind of thing that starts passing vacuously.
+#
+# tools/nosudo_runner.py is in this list because it was the one that got it wrong, and the gate
+# would have caught it the day it was written. It stubbed _run_local, subprocess and
+# _real_subprocess onto the PACKAGE; _core kept the real ones, every internal caller resolved
+# those, and a local privileged command ran REAL sudo while the run's own summary printed
+# "0 refused — this run never tried to escalate". On a developer machine that is pam_faillock
+# counting genuine auth failures against their account — the exact harm the wrapper exists to
+# prevent, with its own reporting saying it had not happened.
 _SMG_STUB_FILES = ["tests/unit_test.py", "tests/smoke_test.py", "tests/rbac_test.py",
-                   "tests/setup_wizard_test.py", "tools/perf_bench.py"]
+                   "tests/setup_wizard_test.py", "tools/perf_bench.py",
+                   "tools/nosudo_runner.py"]
 for _f in _SMG_STUB_FILES:
     _src = open(os.path.join(_root, _f), encoding="utf-8").read()
     _tree = _smg_ast.parse(_src)
@@ -360,6 +369,37 @@ for _f in _SMG_STUB_FILES:
             _smg_pkg_stubs.append("%s:%d %s.%s" % (_f, _n.lineno, _n.value.id, _n.attr))
 check("ssh_manager: no test stubs onto the PACKAGE (it would shadow __getattr__)",
       not _smg_pkg_stubs, "; ".join(_smg_pkg_stubs[:4]))
+
+# The positive half: the no-sudo wrapper must actually INTERCEPT, which the check above cannot
+# say — "does not stub the package" is satisfied by stubbing nothing at all. Run its _install()
+# and confirm the seams it claims. Real sudo is never invoked here: the assertion is that the
+# stub is in place, and _is_sudo is a pure function.
+_nsr_src = open(os.path.join(_root, "tools", "nosudo_runner.py"), encoding="utf-8").read()
+_nsr_ns = {"__name__": "nsr_probe", "__file__": os.path.join(_root, "tools", "nosudo_runner.py")}
+exec(compile(_nsr_src.split("if __name__ ==")[0], "nosudo_runner.py", "exec"), _nsr_ns)   # nosec
+_nsr_ns["_install"]()
+from panel.ops.ssh_manager import _core as _nsr_core, cron as _nsr_cron, files as _nsr_files
+from panel.ops import system_ops as _nsr_so
+check("no-sudo runner: it stubs the DEFINITION site of _run_local, not just the package",
+      _nsr_core._run_local.__qualname__.startswith("_install"),
+      "_core._run_local is %s" % _nsr_core._run_local.__qualname__)
+check("no-sudo runner: system_ops._run is stubbed too", _nsr_so._run.__qualname__.startswith("_install"))
+_nsr_unshimmed = [m.__name__ for m in (_nsr_core, _nsr_cron, _nsr_files)
+                  if getattr(m, "subprocess", None).__class__.__name__ == "module"]
+check("no-sudo runner: every ssh_manager submodule's subprocess is shimmed",
+      not _nsr_unshimmed, "still real in: %s" % _nsr_unshimmed)
+check("no-sudo runner: ...including _core's separate eventlet handle",
+      _nsr_core._real_subprocess.__class__.__name__ != "module")
+# The shape that escaped: the local privileged path is bash -c "sudo bash -c ...", so a check on
+# argv[0] alone never sees the sudo.
+for _cmd, _want in ((["sudo", "id"], True),
+                    (["/bin/bash", "-c", "sudo bash -c x"], True),
+                    (["/usr/bin/sudo", "id"], True),
+                    ("sudo -n true", True),
+                    (["/bin/bash", "-c", "echo hi"], False),
+                    (["echo", "pseudonym"], False)):
+    check("no-sudo runner: _is_sudo(%r) is %s" % (_cmd, _want),
+          _nsr_ns["_is_sudo"](_cmd) is _want)
 
 # A module-level PRIVATE variable that nothing in its own module reads is dead code to CodeQL
 # (py/unused-global-variable) however many sibling modules import it — `from x import _y` is not a

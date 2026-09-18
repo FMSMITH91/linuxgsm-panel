@@ -14,10 +14,32 @@ from panel.security.auth import (MANAGE_REMOTES, accessible_remote_ids, check_pa
 from panel.core.http import (_form_err, _form_ok, _json_body, _wants_json)
 from panel.core.validation import (HOST_RE, LINUX_USER_RE, MAX_PORT, MIN_PORT, SAFE_LABEL_RE,
     _port_or)
-from panel.routes._shared import (_begin_bootstrap)
+from panel.core.panel_state import (_install_jobs, _install_lock)
+from panel.routes._shared import (_begin_bootstrap, _bootstrap_jobs, _bootstrap_lock)
 import logging
 
 _log = logging.getLogger("panel.routes.remotes")
+
+
+def _forget_deleted_remote_state(remote_id, game_server_ids):
+    """Drop the in-memory job entries for a host and the game servers that went with it.
+
+    The panel_state registry already covers these — but it is swept by the monitor, so it clears
+    them on the NEXT pass rather than now. Demonstrated end to end: delete a host whose server had
+    a failed install, add a new server that takes the freed row id, and /install-status answers
+    with the DELETED server's failure ("SteamCMD could not log in") until the sweep catches up.
+
+    An after_delete listener is not an option here and that is worth writing down: delete_remote
+    removes this host's game servers with a BULK query, which bypasses the ORM entirely, so no
+    per-row event ever fires for them. That is the same reason _forget_deleted_rows is driven off
+    the live id sets instead of the delete routes. So the route clears what it knows it just
+    deleted, and the sweep stays the backstop for everything that does not come through here.
+    """
+    with _install_lock:
+        for gid in game_server_ids:
+            _install_jobs.pop(gid, None)
+    with _bootstrap_lock:
+        _bootstrap_jobs.pop(remote_id, None)
 
 
 def _forget_deleted_remote_config(remote_id, game_server_ids):
@@ -238,6 +260,7 @@ def register(app):
         db.session.commit()
         close_connection(remote)
         _forget_deleted_remote_config(row_id, _doomed_ids)
+        _forget_deleted_remote_state(row_id, _doomed_ids)
         log_action(current_user, "delete_remote", target=name)
         _m = f"Remote '{name}' deleted."
         if _wants_json():

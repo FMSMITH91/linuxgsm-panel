@@ -50,7 +50,7 @@ def _parse_cfg(text):
 # SQLAlchemy @validates hook: it fires on ASSIGNMENT, and never on rows loaded from the database.
 # A row written before the validator existed, or restored from a tampered backup, reaches this
 # code unchecked — and `user` is interpolated into `sudo -u {user}` and into /home/{user}.
-_SAFE_UNIX_USER_RE = re.compile(r"^[A-Za-z0-9_][A-Za-z0-9._-]{0,63}$")
+_SAFE_UNIX_USER_RE = re.compile(r"^[A-Za-z0-9_][A-Za-z0-9._-]{0,63}\Z")
 
 
 def _safe_abspath(user, relpath):

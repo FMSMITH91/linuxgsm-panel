@@ -34,6 +34,18 @@ def register(app):
     def api_remote_tailscale_up(remote_id):
         """Start `tailscale up` and return a browser login URL (no auth key needed)."""
         remote = get_remote(remote_id)
+        # The same guard tailscale-install and tailscale-bootstrap carry, and for the reason
+        # _refuse_on_panel_host states: these three "can change the tailnet identity of the very
+        # machine the operator is reaching it through". This route IS the Tailscale join — the UI
+        # offers it and tailscale-bootstrap as the two buttons in one dialog ("Get login link" vs
+        # "Connect with key") — and it was the one of the pair that never got the server-side half.
+        # manage_remotes.html hides the button for the local host, and a UI-only restriction on a
+        # privileged action is not a restriction: the route still accepted the local host's id,
+        # ran `tailscale up --ssh` on the panel's own machine and handed back the login URL, so
+        # whoever called it chose which tailnet the panel host joined, with Tailscale SSH on.
+        refused = _refuse_on_panel_host(remote, "Tailscale join")
+        if refused:
+            return refused
         data = _json_body()
         try:
             ok, result = remote_tailscale_up_url(

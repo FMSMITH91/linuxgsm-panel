@@ -115,6 +115,12 @@ function _doModerate(btn, action, name, steamid, num, scope, reason){
     body:JSON.stringify({action:action, target:name, steamid:steamid, num:num, scope:scope, reason:reason||''})})
     .then(function(r){return r.json();}).then(function(d){
       window.toast(d.message || (d.success?'Done':'Failed'), d.success?'success':'danger');
+      // Re-enable on a REFUSAL too, not only when fetch throws. A request that answers
+      // {success:false} — no permission, the player already left, console unreachable — left the
+      // button dead, and the reload below is not a way back: renderPlayers returns early when the
+      // list comes back `unknown`, which is exactly what an unreachable server produces. So the
+      // one case where you most want to retry was the one that took the button away.
+      if (!d.success) btn.disabled = false;
       setTimeout(function(){ loadPlayers(true); }, 1200);   // you just moderated — re-read (console ok)
     }).catch(function(){ window.toast('Moderation failed','danger'); btn.disabled=false; });
 }

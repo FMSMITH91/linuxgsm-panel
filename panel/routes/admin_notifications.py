@@ -214,11 +214,31 @@ def register(app):
                 return _form_err("Username already exists.", "manage_users")
             user.username = _new_username
 
+        _pending_audit = []      # (action, target, detail) — written after the commit below
         user.display_name = (request.form.get("display_name") or user.display_name or "").strip()
         _new_email = request.form.get("email", "").strip()
         user.email = encrypt_secret(_new_email) if _new_email else None
         user.is_active = request.form.get("is_active") == "on"
         user.is_superadmin = want_superadmin
+
+        # THE LOCKOUT GUARD RUNS HERE, before anything below can commit. It used to sit at the very
+        # end, after the password-reset and 2FA branches — and each of those calls log_action(),
+        # which ends in db.session.commit(). So on the one edit that matters most (the sole
+        # superadmin unticking "Super admin" while also ticking "Reset password", both controls in
+        # the SAME form in manage_users.html) the demotion was already committed by the time the
+        # guard looked. Its db.session.rollback() then had nothing to undo, and the route answered
+        # "That change would leave no active superadmin — aborted." with zero superadmins left and
+        # the web UI locked for everyone, recoverable only through manage.py.
+        #
+        # Driven end to end before this moved: superadmins before 1, route answered 400 with the
+        # abort message, superadmins after 0.
+        #
+        # Nothing between here and the commit changes is_superadmin or is_active, so checking at
+        # this point is the same question asked while the answer can still be acted on.
+        db.session.flush()
+        if User.query.filter_by(is_superadmin=True, is_active=True).count() == 0:
+            db.session.rollback()
+            return _form_err("That change would leave no active superadmin — aborted.", "manage_users")
 
         # Reset the password on request. Generated, never typed by the admin — same reasoning as
         # add_user. Resetting is an explicit tick, not a blank field that means "keep": an edit that
@@ -236,30 +256,33 @@ def register(app):
             # forcing them through a change screen would protect nothing.
             if user.id != current_user.id:
                 user.must_change_password = True
-            log_action(current_user, "reset_user_password", target=user.username)
+            # DEFERRED, not written here. log_action commits, and a commit in the middle of a
+            # handler makes every later guard unable to undo what came before it — see the lockout
+            # note above, and the group-id parse below, which could 500 after this branch had
+            # already committed a password reset that nobody ever saw.
+            _pending_audit.append(("reset_user_password", user.username, ""))
 
         # Admin reset of a user's 2FA (for when they lose their authenticator).
         if request.form.get("reset_2fa") == "on" and user.totp_enabled:
             user.totp_enabled = False
             user.totp_secret = None
             user.backup_codes = ""
-            log_action(current_user, "2fa_reset", target=user.username)
+            _pending_audit.append(("2fa_reset", user.username, ""))   # deferred — see above
 
         # Update groups. Through grantable_groups, not straight from the form: a delegated
         # MANAGE_USERS admin could otherwise edit their OWN account and tick a privileged group,
         # picking up its permissions on the next request — the exact escalation _grantable_perms
         # exists to stop, reached from the membership side instead of the permission side.
-        group_ids = {int(gid) for gid in request.form.getlist("groups")}
+        # isdecimal() like every sibling parse (add_user, create_invite, _assign_command_groups).
+        # This one was bare int(), so `groups=abc` raised straight out of the handler — a 500, and
+        # worse in combination: the password-reset branch above used to have committed by now, so
+        # the account was left with a reset password and revoked sessions that nobody ever saw.
+        group_ids = {int(gid) for gid in request.form.getlist("groups") if str(gid).isdecimal()}
         user.groups = grantable_groups(group_ids, existing=list(user.groups or []))
 
-        # Never let an edit leave the panel with no active superadmin (e.g. self-demotion
-        # or deactivating the last one) — that would lock everyone out of the web UI.
-        db.session.flush()
-        if User.query.filter_by(is_superadmin=True, is_active=True).count() == 0:
-            db.session.rollback()
-            return _form_err("That change would leave no active superadmin — aborted.", "manage_users")
-
         db.session.commit()
+        for _act, _tgt, _detail in _pending_audit:
+            log_action(current_user, _act, target=_tgt, detail=_detail)
         if _new_username and _new_username != _old_username:
             # Its own entry, and keyed on the OLD name: every earlier row for this account is filed
             # under that, so this is the only line that connects the two.

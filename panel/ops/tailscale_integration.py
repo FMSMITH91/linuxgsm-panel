@@ -291,7 +291,7 @@ def get_tailscale_ip(version=4) -> Optional[str]:
 # and this value is argv[-1], so a leading dash is read as one. There is no shell here, so this is
 # option injection rather than command injection — but "the argument cannot be an option" is the
 # same rule privileged.USERNAME_RE and models._SHELL_IDENT_RE already apply for the same reason.
-_PEER_HOST_RE = re.compile(r"^[A-Za-z0-9\[][A-Za-z0-9._:\[\]-]{0,254}$")
+_PEER_HOST_RE = re.compile(r"^[A-Za-z0-9\[][A-Za-z0-9._:\[\]-]{0,254}\Z")
 
 
 def valid_peer_host(host):

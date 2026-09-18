@@ -362,6 +362,61 @@ check("paths: no stray data/ or translations/ dir was created inside panel/",
 
 # ── terminal.py: ONE renderer, because this had drifted into four incompatible ANSI regexes and two
 # carriage-return rules that contradicted each other (each docstring calling the other wrong).
+# ── Every security validator rejects a trailing newline ───────────────────────────────────────
+# `$` matches BEFORE a final \n, so `^[a-z]+$` accepts "lgsm\n". Every one of these gates a value
+# that becomes a shell argument, a filesystem path, a URL, a CSS literal or a stored column, and
+# all of them were anchored that way — including _SHELL_IDENT_RE, whose docstring calls itself a
+# hard guarantee that "no code path can ever store a value that could break out of a shell
+# command". edit_remote does not strip its input, so `linuxgsm_user = "lgsm\n"` stored clean and
+# `sudo -u lgsm\n bash -c ...` ran the panel's command as the SSH login account instead.
+#
+# Driven as a TABLE so the next validator added is covered by adding one line, and so a fix that
+# only reaches the one that was reported cannot pass.
+from panel.db.models import _SHELL_IDENT_RE as _V_SHELL, TAG_NAME_RE as _V_TAG
+from panel.core import validation as _V
+from panel.core.clock import valid_timezone as _v_tz
+from panel.ops.ssh_manager import files as _v_files, gmod as _v_gmod, cron as _v_cron
+from panel.ops import backup as _v_backup, tailscale_integration as _v_ts
+from panel.services import lgsm_data as _v_lgsm
+
+_VALIDATORS = [
+    ("models._SHELL_IDENT_RE", _V_SHELL, "gmodserver"),
+    ("models.TAG_NAME_RE", _V_TAG, "prod"),
+    ("validation.GAME_TYPE_RE", _V.GAME_TYPE_RE, "csgo"),
+    ("validation.INSTANCE_NAME_RE", _V.INSTANCE_NAME_RE, "myserver"),
+    ("validation.LINUX_USER_RE", _V.LINUX_USER_RE, "lgsm"),
+    ("validation.HOST_RE", _V.HOST_RE, "10.0.0.1"),
+    ("validation.SAFE_LABEL_RE", _V.SAFE_LABEL_RE, "My Host"),
+    ("validation._HEX_COLOR_RE", _V._HEX_COLOR_RE, "#aabbcc"),
+    ("files._SAFE_UNIX_USER_RE", _v_files._SAFE_UNIX_USER_RE, "gmodserver"),
+    ("gmod._CU_NAME_RE", _v_gmod._CU_NAME_RE, "gmodcontent"),
+    ("cron._GAME_BACKUP_NAME", _v_cron._GAME_BACKUP_NAME, "srv-2026.tar.gz"),
+    ("backup._NAME_RE", _v_backup._NAME_RE, "panel-backup-20260918-120000-manual.tar.gz"),
+    ("lgsm_data._OS_SLUG_RE", _v_lgsm._OS_SLUG_RE, "ubuntu-24.04"),
+    ("tailscale._PEER_HOST_RE", _v_ts._PEER_HOST_RE, "box.tail1234.ts.net"),
+]
+for _vname, _vrx, _vgood in _VALIDATORS:
+    check("validator %s ACCEPTS its good value (the gate can still say yes)" % _vname,
+          bool(_vrx.match(_vgood)), repr(_vgood))
+    check("validator %s REJECTS a trailing newline" % _vname,
+          not _vrx.match(_vgood + "\n"), "%r was accepted" % (_vgood + "\n"))
+# The two that are FUNCTIONS, not bare patterns. Both .strip() before matching, so a trailing
+# newline was never a way through them — what matters is that what they RETURN carries none,
+# since one becomes a CSS custom property and the other a stored, rendered column.
+check("validation._valid_hex_color returns nothing with a newline in it",
+      _V._valid_hex_color("#aabbcc\n") == "#aabbcc" and "\n" not in _V._valid_hex_color("#aabbcc\n"))
+check("clock.valid_timezone returns nothing with a newline in it",
+      _v_tz("Europe/London\n") == "Europe/London")
+# ...and the model validator must REFUSE, not merely fail to match.
+from panel.db.models import _validate_shell_ident as _v_ident
+_vi_raised = False
+try:
+    _v_ident("short_name", "gmodserver\n")
+except ValueError:
+    _vi_raised = True
+check("models._validate_shell_ident raises on a trailing newline (the 'hard guarantee')",
+      _vi_raised, "it returned the value instead")
+
 from panel.core import terminal as _term
 eq("terminal: SGR colour stripped", _term.strip_escapes("\x1b[31mred\x1b[0m"), "red")
 eq("terminal: erase-line stripped (an SGR-only regex left a literal '[K')",
@@ -372,6 +427,18 @@ eq("terminal: two-byte escapes stripped (these rendered as '>' and '=')",
    _term.strip_escapes("\x1b>a\x1b=b\x1b(Bc"), "abc")
 eq("terminal: OSC window title stripped", _term.strip_escapes("\x1b]0;title\x07x"), "x")
 eq("terminal: control CHARACTERS are left for the renderers", _term.strip_escapes("a\rb\bc"), "a\rb\bc")
+# ...but only the FOUR that mean something. This module's docstring promises "control bytes do not
+# reach the page", and ESC was the only one it removed: NUL, BEL, VT and FF all survived both
+# renderers. A player picks their own name and chat text, so those bytes are authored rather than
+# accidental, and the guarantee was a claim rather than a property.
+eq("terminal: a control byte with no rendering meaning does NOT survive strip_escapes",
+   _term.strip_escapes("a\x00b\x07c\x0bd\x0ce\x7ff"), "abcdef")
+eq("terminal: ...nor the colour renderer, which makes the same promise",
+   _term.render_line_colour("a\x00b\x07c\x0bd\x0ce\x7ff"), "abcdef")
+eq("terminal: TAB is kept — it renders", _term.strip_escapes("a\tb"), "a\tb")
+eq("terminal: ...through the colour renderer too", _term.render_line_colour("a\tb"), "a\tb")
+eq("terminal: and colour still survives (the filter did not eat the SGR it writes)",
+   _term.render_line_colour("\x1b[32mok\x1b[0m"), "\x1b[32mok\x1b[0m")
 eq("terminal: \\r overwrites from column 0", _term.apply_carriage_returns("abcdef\rXY"), "XYcdef")
 eq("terminal: a line ENDING in \\r keeps its content (split('\\r')[-1] would lose it)",
    _term.apply_carriage_returns("done\r"), "done")

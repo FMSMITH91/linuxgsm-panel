@@ -4555,6 +4555,15 @@ try:
           and _dr_rid in _dr_fw._specs_cache,
           "autoblock=%s schedules=%s" % (_dr_cfg().get("autoblock_hosts"),
                                          list((_dr_cfg().get("game_schedules") or {}))))
+    # ...and a FAILED install job for that server, exactly as _run_install_job leaves one. This is
+    # the half that is visible to a user: the monitor's sweep prunes it, but only on its next pass,
+    # so until then /api/server/<id>/install-status answers for whatever server takes the freed row
+    # id with the DELETED one's failure. Driven end to end below rather than asserted from the map.
+    from panel.core.panel_state import _install_jobs as _dr_jobs, _install_lock as _dr_jlock
+    with _dr_jlock:
+        _dr_jobs[_dr_gid] = {"status": "failed", "step": 3, "total": 8, "step_name": "Downloading",
+                             "message": "SteamCMD could not log in", "log": ["boom"],
+                             "started": _pt.time(), "updated": _pt.time(), "name": "smoke-delgame"}
     _dr_resp = c.post("/remotes/%d/delete" % _dr_rid, json={"password": "Str0ng!passw0rd"},
                       headers={"X-Requested-With": "XMLHttpRequest"})
     check("delete host: the request succeeds",
@@ -4576,6 +4585,31 @@ try:
                  if _dr_rid in _m]
     check("delete host: the per-remote SSH caches forgot it",
           not _dr_stale, "still cached by: %s" % ", ".join(_dr_stale))
+    # The row id is now free. Re-create a server — SQLite hands it straight back — and ask the
+    # endpoint about the NEW one. Anything but "none" is the deleted server's job answering.
+    with app.app_context():
+        _dr_r2 = RemoteServer(name="smoke-freshhost", host="127.0.0.1", port=22, username="root",
+                              auth_method="key", auth_credential="")
+        db.session.add(_dr_r2)
+        db.session.flush()
+        _dr_gs2 = GameServer(remote_id=_dr_r2.id, name="smoke-brandnew", short_name="newgameserver",
+                             game_type="gmod", port=27098, installed=True, status="offline")
+        db.session.add(_dr_gs2)
+        db.session.commit()
+        _dr_gid2, _dr_rid2 = _dr_gs2.id, _dr_r2.id
+    _dr_is = c.get("/api/server/%d/install-status" % _dr_gid2).get_json() or {}
+    check("delete host: a server reusing the freed id does NOT inherit its install outcome",
+          _dr_is.get("status") == "none",
+          "id reused=%s, install-status=%r" % (_dr_gid2 == _dr_gid, _dr_is))
+    with app.app_context():                       # tidy up
+        for _m, _i in ((GameServer, _dr_gid2), (RemoteServer, _dr_rid2)):
+            _row = db.session.get(_m, _i)
+            if _row:
+                db.session.delete(_row)
+        db.session.commit()
+    with _dr_jlock:
+        _dr_jobs.pop(_dr_gid, None)
+        _dr_jobs.pop(_dr_gid2, None)
 
     # ── join_console and leave_console must agree on the KEY ────────────────────────────────
     # The viewer registry is what the console poller iterates: an id left in it costs an SSH round
@@ -5365,6 +5399,60 @@ try:
         _g = db.session.get(GameServer, gs_id)
         check("edit server: ...and the stored port is untouched", _g.port == _port_before)
         _g.name = "smoke-cs"          # put the fixture back for the checks that follow
+        db.session.commit()
+
+    # ── An edit that would leave no superadmin must really abort ───────────────────────────────
+    # The guard used to be the LAST thing in edit_user, after the password-reset and 2FA branches —
+    # and log_action() ends in db.session.commit(), so those branches had already committed the
+    # demotion by the time it looked. Its rollback then had nothing to undo: the route answered
+    # "That change would leave no active superadmin — aborted." with zero superadmins left and the
+    # web UI locked for everyone, recoverable only through manage.py.
+    #
+    # Both controls sit in ONE form in manage_users.html, so this is a single ordinary submit.
+    # Driven against a throwaway sole-superadmin so the suite's own fixtures stay intact.
+    with app.app_context():
+        for _u in User.query.filter(User.is_superadmin.is_(True), User.is_active.is_(True)).all():
+            _u.is_active = False            # park the real ones so `sole` really is sole
+        _sole = User(username="smoke_sole", display_name="Sole",
+                     password_hash=auth.hash_password("Str0ng!passw0rd"),
+                     is_superadmin=True, is_active=True)
+        db.session.add(_sole)
+        db.session.commit()
+        _sole_id = _sole.id
+        _parked = [u.id for u in User.query.filter(User.is_superadmin.is_(True),
+                                                   User.is_active.is_(False)).all()]
+    _sc = client_as(_sole_id)
+    _lr = _sc.post("/users/%d/edit" % _sole_id,
+                   data={"username": "smoke_sole", "reset_password": "on"},   # superadmin UNticked
+                   headers={"X-Requested-With": "XMLHttpRequest"})
+    with app.app_context():
+        _left = User.query.filter_by(is_superadmin=True, is_active=True).count()
+        _row = db.session.get(User, _sole_id)
+        check("edit user: an edit that would leave no superadmin really aborts",
+              _left >= 1, "the panel was left with %d active superadmin(s)" % _left)
+        check("edit user: ...and the row is unchanged, not half-committed",
+              _row.is_superadmin and _row.is_active,
+              "is_superadmin=%s is_active=%s" % (_row.is_superadmin, _row.is_active))
+        check("edit user: the refusal is reported as one", _lr.status_code == 400,
+              "got %d" % _lr.status_code)
+    # A junk group id is a refusal, not a 500 — and must not have committed a password reset that
+    # the 500 then prevented anyone from ever seeing.
+    _jr = _sc.post("/users/%d/edit" % _sole_id,
+                   data={"username": "smoke_sole", "is_superadmin": "on", "is_active": "on",
+                         "groups": "abc", "reset_password": "on"},
+                   headers={"X-Requested-With": "XMLHttpRequest"})
+    check("edit user: a non-numeric group id does not 500", _jr.status_code < 500,
+          "got %d" % _jr.status_code)
+    check("edit user: ...and the reset password is actually handed back",
+          bool((_jr.get_json() or {}).get("credential")), _jr.get_data(as_text=True)[:120])
+    with app.app_context():                 # restore the suite's own superadmins
+        for _i in _parked:
+            _u = db.session.get(User, _i)
+            if _u:
+                _u.is_active = True
+        _s = db.session.get(User, _sole_id)
+        if _s:
+            db.session.delete(_s)
         db.session.commit()
 
     # ── Renaming a group onto an existing name is a 400, not a 500 ─────────────────────

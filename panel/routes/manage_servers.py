@@ -598,6 +598,11 @@ def register(app):
             try:
                 bk.remove_game_schedule(server_id)
                 _game_backup_status.pop(server_id, None)
+                # ...and this server's install job. Same reason as the schedule beside it: the row
+                # id is handed to the next server created, and /install-status would answer for it
+                # with THIS one's outcome. The monitor sweep also prunes it, one pass later.
+                with _install_lock:
+                    _install_jobs.pop(server_id, None)
             except Exception:
                 _log.debug("uninstall: schedule cleanup failed", exc_info=True)
             _notify_servers_changed(app)   # row disappears live on other sessions

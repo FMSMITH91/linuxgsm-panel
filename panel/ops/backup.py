@@ -34,7 +34,7 @@ _log = logging.getLogger("panel.backup")
 
 BACKUP_DIR = DATA_DIR / "backups"
 # panel-backup-<YYYYMMDD-HHMMSS>-<kind>.tar.gz — plus an optional .enc for an encrypted one.
-_NAME_RE = re.compile(r"^panel-backup-\d{8}-\d{6}-[a-z]+\.tar\.gz(\.enc)?$")
+_NAME_RE = re.compile(r"^panel-backup-\d{8}-\d{6}-[a-z]+\.tar\.gz(\.enc)?\Z")
 _GLOB = "panel-backup-*.tar.gz*"
 ENC_SUFFIX = ".enc"
 _MEMBERS = ("panel.db", "config.json", "secret_key", "cred_key")

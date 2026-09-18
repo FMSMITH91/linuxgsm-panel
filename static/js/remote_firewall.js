@@ -124,7 +124,7 @@ function openPort() {
   fetch(MOUNT + '/api/remote/' + remoteId + '/firewall/open', {
     method: 'POST',
     headers: {'Content-Type': 'application/json'},
-    body: JSON.stringify({port: parseInt(port), protocol: proto, comment: comment}),
+    body: JSON.stringify({port: parseInt(port, 10), protocol: proto, comment: comment}),
   })
   .then(r => r.json())
   .then(data => {

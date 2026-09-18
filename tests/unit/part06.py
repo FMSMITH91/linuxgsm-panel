@@ -1302,6 +1302,38 @@ for _ra, _cfg, _want in (("127.0.0.1", {}, True), ("::1", {}, True),
           % (_ra, bool(_cfg.get("trust_proxy")), _want),
           _mw.PrefixMiddleware._may_trust_header({"REMOTE_ADDR": _ra}, _cfg) is _want)
 
+# A Location is "already prefixed" only when it is the prefix itself or a path UNDER it. The test
+# was `v.startswith(prefix)`, which is also true of a path that merely shares the first characters:
+# with the panel mounted at /panel, a redirect to /panelserver read as already-prefixed and was
+# sent out unchanged, pointing outside the mount — a 404 for the user, and the one thing this
+# middleware exists to prevent.
+class _MwStart:
+    def __init__(self):
+        self.headers = None
+
+    def __call__(self, status, headers, *a):
+        self.headers = headers
+
+
+def _mw_location(loc, prefix="/panel"):
+    """The Location header a response carries after the middleware has rewritten it."""
+    _sr = _MwStart()
+
+    def _app(_environ, start_response):
+        start_response("302 FOUND", [("Location", loc)])
+        return [b""]
+
+    _mid = _mw.PrefixMiddleware(_app, prefix)
+    # Loopback + no X-Forwarded-Prefix, so the mount comes from the constructor argument.
+    _mid({"REMOTE_ADDR": "127.0.0.1", "PATH_INFO": "/", "wsgi.url_scheme": "http"}, _sr)
+    return dict(_sr.headers).get("Location")
+
+eq("prefix: a path UNDER the mount is left alone", _mw_location("/panel/servers"), "/panel/servers")
+eq("prefix: the mount itself is left alone", _mw_location("/panel"), "/panel")
+eq("prefix: an unprefixed path gets the mount", _mw_location("/servers"), "/panel/servers")
+eq("prefix: a path that merely STARTS WITH the mount is a different path, and gets prefixed",
+   _mw_location("/panelserver"), "/panel/panelserver")
+
 # ── The installer refreshes the root-owned helper on an UPDATE, not only a fresh install ──────
 # The helper/db_maintenance/panel.conf/installer block used to sit AFTER the update path's
 # `exit 0`, so every update — in-panel self-update, the CI auto-deploy, a plain re-run — shipped

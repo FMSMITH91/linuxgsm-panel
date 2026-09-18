@@ -893,7 +893,7 @@ def remote_bootstrap_vps(server, set_timezone="UTC", enable_ufw=True, install_lg
     # @validates), and it's interpolated into root-run useradd/id/passwd — so validate it to a
     # safe Linux-username charset (must start with a letter/underscore; no shell metacharacters,
     # no leading dash) and refuse anything else rather than let it reach the shell.
-    if username and not re.match(r"^[A-Za-z_][A-Za-z0-9._-]*$", username):
+    if username and not re.match(r"^[A-Za-z_][A-Za-z0-9._-]*\Z", username):
         note(f"Skipped account creation: '{username[:32]}' isn't a valid username")
     elif username:
         emit(f"Creating LinuxGSM user: {username}")
@@ -1117,8 +1117,15 @@ def remote_migrate_to_tailscale(server, new_auth_method="tailscale"):
     status = remote_check_tailscale(server)
     if not status["running"]:
         return None, "Tailscale is not running on the remote"
-    # Prefer MagicDNS name, fall back to Tailscale IP
-    new_host = status["dns_name"] or status["tailscale_ip"].split(", ")[0] if status["tailscale_ip"] else server.host
+    # Prefer MagicDNS name, fall back to Tailscale IP.
+    #
+    # The parentheses are load-bearing. `a or b if c else d` binds as `(a or b) if c else d`, so
+    # without them a node that HAS a MagicDNS name but reports no address returned server.host —
+    # the pre-migration address — while the caller went on to set auth_method="tailscale", blank
+    # the stored SSH credential and force port 22. The record then pointed at the old host with no
+    # way back, and the panel reported "Migrated to Tailscale SSH: <old host>".
+    new_host = status["dns_name"] or (status["tailscale_ip"].split(", ")[0]
+                                      if status["tailscale_ip"] else server.host)
 
     # Safely close port 22 on UFW since tailscale0 is already allowed
     try:
@@ -1182,7 +1189,7 @@ def _valid_ip(s):
     return _canonical_ip(s) is not None
 
 
-_F2B_JAIL_RE = re.compile(r"^[A-Za-z0-9._-]{1,64}$")
+_F2B_JAIL_RE = re.compile(r"^[A-Za-z0-9._-]{1,64}\Z")
 
 
 def remote_fail2ban_overview(server):

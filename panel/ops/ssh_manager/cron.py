@@ -522,7 +522,7 @@ def backup_disk_info(server, user):
 
 # Game-backup file names are "<selfname>-YYYY-MM-DD-HHMMSS.tar.<ext>" — a strict shape we
 # require before ever touching a path (callers ALSO check the name is in the real backup list).
-_GAME_BACKUP_NAME = re.compile(r"^[A-Za-z0-9._-]+\.tar\.[A-Za-z0-9.]+$")
+_GAME_BACKUP_NAME = re.compile(r"^[A-Za-z0-9._-]+\.tar\.[A-Za-z0-9.]+\Z")
 
 
 def delete_game_backup(server, user, name):

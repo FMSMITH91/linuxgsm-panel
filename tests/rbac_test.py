@@ -221,7 +221,13 @@ try:
     _ac = client_as(admin_id)
     for _path, _label in (("/api/remote/%d/bootstrap" % _local_id, "VPS bootstrap"),
                           ("/api/remote/%d/tailscale-install" % _local_id, "Tailscale install"),
-                          ("/api/remote/%d/tailscale-bootstrap" % _local_id, "Tailscale join")):
+                          ("/api/remote/%d/tailscale-bootstrap" % _local_id, "Tailscale join"),
+                          # tailscale-up is the OTHER half of the join — the UI offers the two as
+                          # "Get login link" and "Connect with key" in one dialog — and it was the
+                          # one that never got the server-side guard. Aimed at the panel's own host
+                          # it ran `tailscale up --ssh` there and returned the login URL, so the
+                          # caller chose which tailnet the panel host joined.
+                          ("/api/remote/%d/tailscale-up" % _local_id, "Tailscale join (login link)")):
         _r = _ac.post(_path, json={"auth_key": "tskey-auth-abcdefghij"})
         check("%s is REFUSED on the panel's own host" % _label,
               _r.status_code == 400, "%s -> %d" % (_path, _r.status_code))

@@ -55,7 +55,12 @@ class PrefixMiddleware:
             # Rewrite outgoing Location headers so redirects include the prefix
             if prefix:
                 for i, (k, v) in enumerate(headers):
-                    if k.lower() == "location" and v.startswith("/") and not v.startswith(prefix):
+                    # "already under the prefix" means the prefix itself or a path below it — NOT
+                    # merely sharing its first characters. With prefix "/panel" a redirect to
+                    # "/panelserver" starts with it and is a different location entirely, so it
+                    # was left unprefixed and pointed outside the mount.
+                    if k.lower() == "location" and v.startswith("/") \
+                            and not (v == prefix or v.startswith(prefix + "/")):
                         headers[i] = (k, prefix + v)
             return start_response(status, headers, *args)
 

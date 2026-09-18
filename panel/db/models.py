@@ -66,7 +66,7 @@ PASSWORD_HISTORY_LEN = 3
 # Bounded at 64 to match the column width. SQLite does NOT enforce VARCHAR length, so without
 # the {0,63} here a 10KB "username" stores happily and then gets interpolated into every
 # remote command built for that server.
-_SHELL_IDENT_RE = re.compile(r"^[A-Za-z0-9_][A-Za-z0-9._-]{0,63}$")
+_SHELL_IDENT_RE = re.compile(r"^[A-Za-z0-9_][A-Za-z0-9._-]{0,63}\Z")
 
 
 def _validate_shell_ident(key, value):
@@ -660,7 +660,7 @@ class CustomCommand(db.Model):
 # The tag-name rule, shared with the routes so a request can be rejected with THIS fixed message
 # instead of echoing the exception back — returning str(exc) to a client is how raw internals leak
 # into API responses (CodeQL py/stack-trace-exposure), and this codebase's rule is never to do it.
-TAG_NAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9 _.\-]{0,31}$")
+TAG_NAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9 _.\-]{0,31}\Z")
 TAG_NAME_HELP = ("A tag name must start with a letter or number and use only letters, numbers, "
                  "spaces, dots, hyphens or underscores (up to 32 characters).")
 

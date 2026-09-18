@@ -33,7 +33,7 @@ DEPS = "ubuntu-24.04.csv"
 # /etc/os-release — which is attacker-influenceable if that host is compromised. So it has to match
 # LinuxGSM's own filename shape exactly and nothing else: no slashes, no dots beyond a version, no
 # traversal, nothing that could address a different path on the server.
-_OS_SLUG_RE = __import__("re").compile(r"^[a-z][a-z0-9]{1,15}-[0-9]{1,2}(?:\.[0-9]{1,2})?$")
+_OS_SLUG_RE = __import__("re").compile(r"^[a-z][a-z0-9]{1,15}-[0-9]{1,2}(?:\.[0-9]{1,2})?\Z")
 
 
 def deps_name(os_slug):
