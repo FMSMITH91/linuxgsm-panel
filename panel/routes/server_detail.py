@@ -4,7 +4,7 @@ Moved out of register_routes() verbatim — see panel/routes/__init__.py for why
 """
 from flask import (flash, jsonify, redirect, render_template, request, url_for)
 from flask_login import (current_user, login_required)
-from panel.core import (terminal)
+from panel.core import (clock, terminal)
 from panel.core.panel_state import (_cron_restart_pending)
 from panel.db.models import (CUSTOM_ARG_DEFAULT_PATTERN, CUSTOM_ARG_PLACEHOLDER, CustomCommand,
     GameServer, GlobalBan, RemoteServer, User, db)
@@ -27,7 +27,8 @@ import threading
 from panel.core.http import (_json_body, _log_and_generic)
 from app import (LONG_ACTIONS, RUNNABLE_ACTIONS, _apply_mod_restart, _live_run_state, _log,
     _mark_expected_offline)
-from panel.routes._shared import (_action_log_path, _begin_action_tail, _end_action_tail, _maybe_resolve_public_ip, _server_action_buttons)
+from panel.routes._shared import (_action_log_path, _begin_action_tail, _end_action_tail,
+    _host_timezone_cached, _maybe_resolve_public_ip, _server_action_buttons)
 
 
 def _summarise_action_output(detail):
@@ -114,6 +115,9 @@ def register(app):
                                can_kick=can_kick, can_ban=can_ban, can_say=can_say,
                                custom_commands=custom_commands,
                                can_autostart=can_autostart, public_host=public_host,
+                               # Which clock this host's cron entries fire on. "" when it could
+                               # not be read, which the page says rather than assuming UTC.
+                               host_timezone=_host_timezone_cached(remote, app),
                                # The console log lives under the game user's home, so the file
                                # browser's download route already serves it — no second endpoint.
                                # It needs MANAGE_SERVERS though, where the console itself only
@@ -572,19 +576,46 @@ def register(app):
     @login_required
     @server_access_required
     def api_server_daily_restart(server_id):
-        """Toggle the daily restart-when-empty schedule for this server."""
+        """Toggle the daily restart-when-empty schedule, and set the time it runs.
+
+        The time arrives in the VIEWER's zone (`time` as "HH:MM", `tz` as the IANA name their
+        browser reports) and is converted to the host's before it reaches the crontab, because
+        cron fires on the host's clock and nothing else's. Both renderings come back, so the page
+        can say "05:00 your time — 11:00 on that host" rather than printing a number whose
+        meaning depends on a box the operator never looks at."""
         gs = get_game(server_id)
         if not current_user.is_superadmin and not has_permission(current_user, RESTART_SERVER):
             return jsonify({"success": False, "message": "Permission denied"}), 403
-        enabled = bool(_json_body().get("enabled"))
+        body = _json_body()
+        enabled = bool(body.get("enabled"))
+        viewer_tz = clock.valid_timezone(body.get("tz"))
+        host_tz = _host_timezone_cached(gs.remote)
         try:
+            # No time given (the plain on/off toggle) keeps whatever is already set, so flicking
+            # the switch off and on again cannot silently move the schedule to a default.
+            if body.get("time"):
+                want_h, want_m = clock.parse_hhmm(body.get("time"))
+                # Entered in the viewer's zone -> stored in the host's. With either zone unknown
+                # this is a no-op, which leaves the time where the operator put it rather than
+                # shifting it by a guess.
+                host_h, host_m = clock.convert_wall_time(want_h, want_m, viewer_tz, host_tz)
+            else:
+                host_h, host_m = clock.parse_hhmm(gs.daily_restart_at)
             ok, detail = set_daily_restart(gs.remote, gs.short_name, gs.lgsm_name,
-                                           gs.game_type, gs.port, enabled)
+                                           gs.game_type, gs.port, enabled,
+                                           hour=host_h, minute=host_m)
             if ok:
                 gs.daily_restart = enabled
+                gs.daily_restart_at = "%02d:%02d" % (host_h, host_m)
                 db.session.commit()
-                log_action(current_user, "set_daily_restart", target=gs.name, detail=str(enabled))
-                return jsonify({"success": True, "enabled": enabled})
+                log_action(current_user, "set_daily_restart", target=gs.name,
+                           detail="%s at %s %s" % (enabled, gs.daily_restart_at,
+                                                   host_tz or "host time"))
+                back_h, back_m = clock.convert_wall_time(host_h, host_m, host_tz, viewer_tz)
+                return jsonify({"success": True, "enabled": enabled,
+                                "host_time": gs.daily_restart_at, "host_tz": host_tz,
+                                "local_time": "%02d:%02d" % (back_h, back_m),
+                                "viewer_tz": viewer_tz})
             return jsonify({"success": False, "message": detail or "Failed to update schedule"}), 500
         except Exception:
             return jsonify({"success": False, "message": _log_and_generic("request failed")}), 500

@@ -14,7 +14,7 @@ from flask import (jsonify)
 from flask_login import (current_user)
 from panel.core.clock import (utcnow)
 from panel.core.panel_state import (_action_output, _console_backlog, _full_backup_lock,
-    _game_backup_status)
+    _game_backup_status, register_remote_state)
 from panel.db.models import (GameServer, RemoteServer, db)
 from panel.ops import (backup as bk)
 from panel.ops.ssh_manager import (get_server_status, mod_restart_decision, player_count as
@@ -565,3 +565,55 @@ def _end_action_tail(app, server_id, remote, action, rc):
         _console_push(app, server_id, f"[panel] {action} stopped reporting — see the audit log.")
     else:
         _console_push(app, server_id, f"[panel] {action} failed (exit {rc}) — see above.")
+
+
+_tz_resolve_attempts = register_remote_state({})   # remote_id -> last attempt (rate limit)
+
+
+def _maybe_resolve_host_timezone(app, remote_id):
+    """Read + cache a host's IANA timezone in the BACKGROUND, rate-limited per remote.
+
+    Same shape and the same reason as _maybe_resolve_public_ip above: the detail page's rule is
+    that nothing on the render path touches the remote, because an unreachable host then hangs the
+    render for the whole SSH connect timeout. The page shows what is stored and picks the real
+    value up on a later load. Best-effort; never raises."""
+    now = time.time()
+    if now - _tz_resolve_attempts.get(remote_id, 0) < 300:
+        return
+    _tz_resolve_attempts[remote_id] = now
+    _app = app
+
+    def _run():
+        with _app.app_context():
+            try:
+                remote = db.session.get(RemoteServer, remote_id)
+                if remote is None or remote.timezone:
+                    return
+                tz = _sm.host_timezone(remote)
+                if tz:
+                    remote.timezone = tz
+                    db.session.commit()
+            except Exception:
+                db.session.rollback()
+                _log.debug("background host-timezone read failed for remote %s", remote_id,
+                           exc_info=True)
+
+    threading.Thread(target=_run, daemon=True).start()
+
+
+def _host_timezone_cached(remote, app=None):
+    """The host's IANA timezone from the row, WITHOUT touching the remote.
+
+    Cron fires on the host's clock, so every schedule the panel shows or writes needs this — and
+    it is needed on ordinary page loads, which is exactly where an SSH round trip does not belong.
+    So this only ever reads the stored value; pass `app` to have a miss kick off the background
+    read that fills it in for next time.
+
+    Returns "" when it has not been read yet or could not be. The UI says so rather than assuming
+    UTC: a timezone shown confidently and wrong is the bug this whole change exists to remove."""
+    if remote is None:
+        return ""
+    tz = (getattr(remote, "timezone", "") or "").strip()
+    if not tz and app is not None and getattr(remote, "id", None) is not None:
+        _maybe_resolve_host_timezone(app, remote.id)
+    return tz

@@ -1290,19 +1290,26 @@ def _gamedig_host(server):
     return ip
 
 
-def set_daily_restart(server, user, selfname=None, game_type=None, port=None, enabled=True):
+def set_daily_restart(server, user, selfname=None, game_type=None, port=None, enabled=True,
+                      hour=5, minute=0):
     """Enable/disable a daily restart that only fires when the server is EMPTY.
     A daily cron sets a 'restart-pending' flag; an hourly cron checks the player
     count (via gamedig) and restarts + clears the flag once it hits 0. So if players
-    are on at the daily time, it waits and rechecks each hour until they leave."""
+    are on at the daily time, it waits and rechecks each hour until they leave.
+
+    `hour`/`minute` are in the HOST's local time, because that is the clock cron reads — the
+    caller converts from whatever the operator entered. They used to be a hardcoded 05:00, which
+    on a VPS bootstrapped to UTC (the panel's own default) meant 23:00 for someone in US Central,
+    with no time shown anywhere in the UI to notice it by."""
+    hour, minute = int(hour) % 24, int(minute) % 60
     selfname = selfname or user
     flag = f"/home/{user}/.restart-pending"
     gdtype = GAMEDIG_TYPE.get(game_type or "", "")
 
     # Crontab-only (no separate script file — file writes inside a `sudo bash -c`
     # pipeline misbehave under eventlet's green subprocess; crontab-only works).
-    #   daily 05:00: set the "pending" flag
-    #   hourly :10 : if flag set and server empty (gamedig), restart + clear flag
+    #   daily <hour>:<minute>: set the "pending" flag
+    #   hourly :10           : if flag set and server empty (gamedig), restart + clear flag
     getp = (f"P=$(gamedig --type {gdtype} {_gamedig_host(server)}:{port} 2>/dev/null | jq -r '.players|length' 2>/dev/null); "
             if (gdtype and port) else "P=; ")
     check_cmd = (
@@ -1310,7 +1317,7 @@ def set_daily_restart(server, user, selfname=None, game_type=None, port=None, en
         f'if [ -z "$P" ] || [ "$P" = 0 ] || [ "$P" = null ]; then '
         f"/home/{user}/{selfname} restart >/dev/null 2>&1; rm -f {flag}; fi; }}"
     )
-    touch_line = f"0 5 * * * {cron._record_managed_cmd(user, f'touch {flag}')}"
+    touch_line = f"{minute} {hour} * * * {cron._record_managed_cmd(user, f'touch {flag}')}"
     check_line = f"10 * * * * {check_cmd}"
     # Both lines contain the flag path — strip by that to remove/rebuild idempotently.
     grep_args = f"-vF {_quote(flag)}"

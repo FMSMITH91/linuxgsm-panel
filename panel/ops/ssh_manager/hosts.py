@@ -3,7 +3,7 @@ Also supports local execution for running on the panel's own machine."""
 import os
 import re
 import socket
-from panel.core import terminal
+from panel.core import clock, terminal
 import time
 import paramiko
 from panel.core.config import decrypt_secret
@@ -1719,3 +1719,32 @@ def _pro_trim(blob):
     """Collapse a pro CLI output blob to a short, single-line message."""
     import re as _re
     return _re.sub(r"\s+", " ", blob or "").strip()[-300:]
+
+
+def host_timezone(server):
+    """The host's own IANA timezone ("Etc/UTC", "America/Chicago"), or "" if it can't be read.
+
+    Unprivileged on purpose — this is read on ordinary page loads and must not cost a sudo session
+    per host. Three sources because not every box has all three: `timedatectl` is absent on a
+    container without systemd, `/etc/timezone` is Debian-family only, and the symlink is the one
+    thing every glibc system has. Never raises.
+
+    WHY THE PANEL NEEDS THIS AT ALL. Cron fires on the host's clock, so a schedule's number is
+    meaningless until you know which clock it is — and the panel's own bootstrap sets new hosts to
+    UTC, which is almost never the operator's zone."""
+    sh = ("timedatectl show -p Timezone --value 2>/dev/null "
+          "|| cat /etc/timezone 2>/dev/null "
+          "|| readlink -f /etc/localtime 2>/dev/null | sed 's#.*/zoneinfo/##'")
+    try:
+        out, _, _ = _core.run_command(server, sh, timeout=10)
+    except Exception:
+        _core._log.debug("host timezone read failed for %s", getattr(server, "name", "?"),
+                         exc_info=True)
+        return ""
+    # First non-empty line only: the `||` chain can print more than one if an earlier command
+    # succeeds with empty output and the next one then runs.
+    for line in (out or "").splitlines():
+        tz = clock.valid_timezone(line.strip())
+        if tz:
+            return tz
+    return ""
