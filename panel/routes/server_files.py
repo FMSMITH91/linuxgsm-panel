@@ -774,14 +774,22 @@ def register(app, supervise):
 
     @socketio.on("leave_console")
     def on_leave_console(data):
-        server_id = data.get("server_id")
-        if server_id:
-            leave_room(f"console_{server_id}")
-            with _viewers_lock:
-                if server_id in _console_viewers:
-                    _console_viewers[server_id].discard(request.sid)
-                    if not _console_viewers[server_id]:
-                        del _console_viewers[server_id]
+        # int(), for the same reason join does it: _console_viewers is keyed by the int the join
+        # handler put there, so a client that sent "3" here left the ROOM (the f-string spells the
+        # same name either way) and then looked its sid up under a key that does not exist. The
+        # entry survived, and the console poller went on paying an SSH round trip every two
+        # seconds for a console nobody was watching — until the socket itself dropped, which is
+        # the only other thing that clears it.
+        try:
+            server_id = int(data.get("server_id"))
+        except (TypeError, ValueError):
+            return
+        leave_room(f"console_{server_id}")
+        with _viewers_lock:
+            if server_id in _console_viewers:
+                _console_viewers[server_id].discard(request.sid)
+                if not _console_viewers[server_id]:
+                    del _console_viewers[server_id]
 
     @socketio.on("disconnect")
     def on_console_disconnect():

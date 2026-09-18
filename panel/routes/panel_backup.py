@@ -18,6 +18,7 @@ import os
 import threading
 import time
 from panel.core.http import (_json_body, _log_and_generic)
+from panel.core.validation import (_attachment_header)
 from app import (_find_game_backup)
 
 
@@ -241,8 +242,15 @@ def register(app):
         resp = Response(stream_game_backup(gs.remote, gs.short_name, match["name"]),
                         mimetype="application/octet-stream")
         resp.headers["Content-Length"] = str(match["size"])
-        resp.headers["Content-Disposition"] = (
-            'attachment; filename="%s"' % os.path.basename(match["name"]))
+        # _attachment_header, not a hand-built one: this name is read off the HOST's filesystem
+        # (list_game_backups basenames whatever is in ~/lgsm/backup), so it is not the panel's
+        # string to trust. A quoted f-string put it straight into a header that WSGI encodes as
+        # latin-1, and both ways that can go are a 500 on a download that should have worked:
+        # Werkzeug raises ValueError on a CR/LF in the value, and any character outside latin-1 —
+        # an em-dash, a CJK name, an emoji in a map-pack archive — raises UnicodeEncodeError when
+        # the response is serialised. The helper scrubs the ASCII copy and carries the real name
+        # in RFC 5987's filename*, which is what the file browser's own download already does.
+        resp.headers["Content-Disposition"] = _attachment_header(match["name"])
         return resp
 
     @app.route("/api/panel/backup/game/<int:server_id>/schedule", methods=["POST"])

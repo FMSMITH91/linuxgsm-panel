@@ -1561,7 +1561,7 @@ from panel.core import panel_state as _ps_reg
 from panel.services.monitoring import _forget_deleted_rows as _fdr
 import panel.routes.server_files as _sf_reg   # noqa: F401 - imported so its map registers
 _reg_maps = _ps_reg.server_keyed_state() + _ps_reg.remote_keyed_state()
-check("panel_state: every row-keyed map is registered for pruning (>= 12)", len(_reg_maps) >= 12,
+check("panel_state: every row-keyed map is registered for pruning (>= 15)", len(_reg_maps) >= 15,
       "only %d registered" % len(_reg_maps))
 _saved = [dict(_m) for _m in _reg_maps]
 for _m in _reg_maps:
@@ -1576,6 +1576,28 @@ check("state pruning: a LIVE id is untouched (it does not just clear everything)
 check("state pruning: the two maps that were missed are registered",
       any(_m is _ps_reg._game_backup_status for _m in _ps_reg.server_keyed_state())
       and any(_m is _sf_reg._gmod_content_apply_state for _m in _ps_reg.server_keyed_state()))
+# ...and the two JOB registries, which were the next ones missed. Both are keyed by a row id and
+# both outlive the row: delete_remote bulk-deletes a host's game servers with no check for an
+# install in flight, so a finished install job answers /install-status for whatever server SQLite
+# next hands that id, and a "running" leftover makes uninstall_server refuse the new server as
+# "still installing". _bootstrap_jobs is worse-behaved still — _begin_bootstrap reads it to decide
+# whether to refuse, so a stranded entry blocks the NEW host's bootstrap outright.
+import panel.routes._shared as _sh_reg   # noqa: F401 - imported so its map registers
+check("state pruning: the install-job registry is pruned with the rest",
+      any(_m is _ps_reg._install_jobs for _m in _ps_reg.server_keyed_state()))
+check("state pruning: the VPS-bootstrap job registry is pruned with the rest",
+      any(_m is _sh_reg._bootstrap_jobs for _m in _ps_reg.remote_keyed_state()))
+# A map registered WITH a lock must be pruned holding it — the sweep runs on the monitor thread
+# while request handlers write these under the same lock. Assert the registry carries the lock,
+# since the pruning loop above cannot show which arm it took.
+_locked = {id(_m): _lk for _e in _ps_reg.keyed_state_with_locks() for _m, _lk in _e}
+check("state pruning: the job registries are registered WITH their locks",
+      _locked.get(id(_ps_reg._install_jobs)) is _ps_reg._install_lock
+      and _locked.get(id(_sh_reg._bootstrap_jobs)) is _sh_reg._bootstrap_lock,
+      "install=%r bootstrap=%r" % (_locked.get(id(_ps_reg._install_jobs)),
+                                   _locked.get(id(_sh_reg._bootstrap_jobs))))
+check("state pruning: reboot-when-empty went through the registry too, lock and all",
+      _locked.get(id(_ps_reg._reboot_when_empty)) is _ps_reg._rwe_lock)
 for _m, _orig in zip(_reg_maps, _saved):          # leave the process state as we found it
     _m.clear()
     _m.update(_orig)

@@ -364,8 +364,14 @@ def _maybe_cache_commands(app, server_id):
 # In-memory registry of running/finished VPS bootstrap jobs, keyed by remote_id.
 # Populated by the async bootstrap runner and read by the status endpoint. Both
 # live in the same (single) panel process, so a plain dict + lock is sufficient.
-_bootstrap_jobs = {}
+#
+# REGISTERED (with its lock), like every other map keyed by a database row id — see
+# panel_state.register_remote_state. It was not, and remote_id is a rowid SQLite hands straight to
+# the next INSERT: delete a host mid-bootstrap and the job outlives the row, so the next host to
+# take that id is refused by _begin_bootstrap with "A bootstrap is already running for this
+# server" until _prune_jobs ages the entry out two hours later.
 _bootstrap_lock = threading.Lock()
+_bootstrap_jobs = register_remote_state({}, _bootstrap_lock)
 # ── State that used to live inside register_routes() ──────────────────────────────────────────
 # These were assigned in the body of register_routes, which made them closure cells: reachable
 # only from the functions defined alongside them. Nothing outside could see them — including the
@@ -527,9 +533,14 @@ def _drain_action_output(app, remote, server_id):
         size = int(head.strip())
     except ValueError:
         return True          # no size line — the file isn't there yet; try again next tick
-    if size < pos:           # truncated under us (a second run of the same action) — restart
-        pos = 0
-        body = ""
+    if size < pos:
+        # Truncated under us — a second run of the same action re-opens the file with `>`. Start
+        # over from byte 0 and read it on the NEXT tick rather than falling through: `body` here is
+        # whatever the command returned for a range that no longer exists, and the offset write at
+        # the end of this function would then advance pos over bytes nothing has emitted, silently
+        # eating the first chunk of the new run's output. Two seconds late beats losing it.
+        st["pos"] = 0
+        return True
     if body.strip():
         # render_colour, not strip_escapes: LinuxGSM colours its output and that is most of what
         # makes a long update readable at a glance. The escapes that are NOT colour still go.
