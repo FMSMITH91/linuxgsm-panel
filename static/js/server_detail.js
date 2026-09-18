@@ -566,11 +566,96 @@ function toggleAutostart(el) {
   .finally(() => { el.disabled = false; });
 }
 
+// ── The daily restart's time, and whose clock it is ──────────────────────────────────────────
+// The schedule is a crontab line ON THE HOST, so it fires on the host's clock — which the panel's
+// own bootstrap sets to UTC and which is almost never the operator's. "Daily 5am" was therefore a
+// number with no meaning attached. The input takes the time in YOUR zone; the server converts it
+// to the host's before writing the crontab and tells us both, so the hint underneath can say what
+// it actually wrote.
+function _viewerTz() {
+  try { return Intl.DateTimeFormat().resolvedOptions().timeZone || ''; } catch (e) { return ''; }
+}
+
+// A recurring wall time moved between two IANA zones, done the way the platform already knows how:
+// format an instant in the target zone rather than doing offset arithmetic, which gets DST wrong.
+function _wallTimeIn(hhmm, fromTz, toTz) {
+  if (!fromTz || !toTz || fromTz === toTz) return hhmm;
+  var parts = /^(\d{1,2}):(\d{2})$/.exec(hhmm || '');
+  if (!parts) return hhmm;
+  try {
+    // Find the instant that reads as hh:mm in fromTz today, by probing the offset at that wall
+    // time. One correction pass is enough: the guess is at most a few hours out.
+    var now = new Date();
+    var guess = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate(),
+                                  Number(parts[1]), Number(parts[2])));
+    for (var i = 0; i < 2; i++) {
+      var shown = _hhmmIn(guess, fromTz);
+      var want = Number(parts[1]) * 60 + Number(parts[2]);
+      var got = Number(shown.split(':')[0]) * 60 + Number(shown.split(':')[1]);
+      var diff = want - got;
+      if (diff > 720) { diff -= 1440; } else if (diff < -720) { diff += 1440; }
+      if (!diff) break;
+      guess = new Date(guess.getTime() + diff * 60000);
+    }
+    return _hhmmIn(guess, toTz);
+  } catch (e) { return hhmm; }
+}
+
+function _hhmmIn(date, tz) {
+  return new Intl.DateTimeFormat('en-GB', {
+    timeZone: tz, hour: '2-digit', minute: '2-digit', hour12: false
+  }).format(date);
+}
+
+function renderDailyRestart() {
+  var el = document.getElementById('dailyrestart-time');
+  var hint = document.getElementById('dailyrestart-hosthint');
+  if (!el) return;
+  var hostTime = el.dataset.hostTime || '05:00';
+  var hostTz = el.dataset.hostTz || '';
+  var mine = _wallTimeIn(hostTime, hostTz, _viewerTz());
+  if ('value' in el && el.tagName === 'INPUT') { el.value = mine; } else { el.textContent = mine; }
+  if (!hint) return;
+  // Say what is on the host, ALWAYS — including when its zone could not be read, which is a
+  // different and more useful statement than showing the host's number as if it were yours.
+  // Only the values are set here; the words are in the template so they can be translated.
+  var tEl = document.getElementById('drh-time');
+  var tzEl = document.getElementById('drh-tz');
+  var onEl = document.getElementById('drh-on');
+  var unkEl = document.getElementById('drh-on-unknown');
+  if (tEl) tEl.textContent = hostTime;
+  if (tzEl) tzEl.textContent = hostTz ? '(' + hostTz + ')' : '';
+  if (onEl) onEl.hidden = !hostTz;
+  if (unkEl) unkEl.hidden = !!hostTz;
+  hint.hidden = false;
+}
+
+function setDailyRestartTime(el) {
+  el.disabled = true;
+  fetch(MOUNT + '/api/server/' + serverId + '/daily-restart', {
+    method: 'POST', headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({
+      enabled: (document.getElementById('dailyrestart-toggle') || {}).checked || false,
+      time: el.value, tz: _viewerTz()
+    })
+  })
+  .then(r => r.json())
+  .then(d => {
+    if (!d.success) { if (window.toast) toast(d.message || 'Failed to set the restart time', 'danger'); return; }
+    el.dataset.hostTime = d.host_time || el.dataset.hostTime;
+    el.dataset.hostTz = d.host_tz || '';
+    renderDailyRestart();
+    if (window.toast) toast(t('Daily restart time saved'), 'success');
+  })
+  .catch(() => { if (window.toast) toast('Could not reach the panel', 'danger'); })
+  .finally(() => { el.disabled = false; });   // nosemgrep
+}
+
 function toggleDailyRestart(el) {
   el.disabled = true;
   fetch(MOUNT + '/api/server/' + serverId + '/daily-restart', {
     method: 'POST', headers: {'Content-Type': 'application/json'},
-    body: JSON.stringify({ enabled: el.checked })
+    body: JSON.stringify({ enabled: el.checked, tz: _viewerTz() })
   })
   .then(r => r.json())
   .then(d => {
@@ -1001,6 +1086,7 @@ function loadGameVersion() {
 }
 
 applyTsVisible();
+renderDailyRestart();
 
 loadGameVersion();
 

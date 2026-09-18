@@ -32,7 +32,8 @@ from app import (ALERT_PROVIDERS, _GAME_LIST_CACHE, _LGSM_NAME_MAP, _MAX_UPLOAD_
     _apply_mod_restart, _clean_console_text, _log, _socketio_cors, _sync_toggles_from_cron,
     load_game_list)
 from panel.core.panel_state import (_console_backlog, register_server_state)
-from panel.routes._shared import (_drain_action_output, _server_action_buttons)
+from panel.routes._shared import (_drain_action_output, _host_timezone_cached,
+    _server_action_buttons)
 
 # ── State and constants this module OWNS ───────────────────────────────────────────────────────
 # These lived in app.py until the split left it as their only definition and this file as their
@@ -88,7 +89,11 @@ def register(app, supervise):
         # change, so it has to offer the button.
         actions, maintenance, _all_cmds, _sup = _server_action_buttons(app, gs)
         return render_template("server_files.html", server=gs, remote=gs.remote,
-                               actions=actions, maintenance=maintenance)
+                               actions=actions, maintenance=maintenance,
+                               # Every cron line on this page fires on the HOST's clock. Without
+                               # saying which clock that is, "Daily 5am" is a number with no
+                               # meaning — and the panel's own bootstrap sets new hosts to UTC.
+                               host_timezone=_host_timezone_cached(gs.remote, app))
 
     @app.route("/api/server/<int:server_id>/config", methods=["GET", "POST"])
     @login_required

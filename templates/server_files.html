@@ -304,6 +304,18 @@
       <button type="button" class="btn btn-outline-secondary btn-sm py-0 px-2" style="font-size:.7rem;" data-cron="0 5 1 * *">Monthly (1st)</button>
       <button type="button" class="btn btn-outline-secondary btn-sm py-0 px-2" style="font-size:.7rem;" data-cron="@reboot">At boot</button>
     </div>
+    {# WHOSE CLOCK. cron runs on the host, so every time on this page — the presets above
+       included — is the host's local time, not yours. The panel's own bootstrap sets new hosts to
+       UTC, so for most operators these numbers are hours away from what they read on the wall,
+       and nothing said so. #}
+    <div class="text-secondary mb-2" style="font-size:.68rem;">
+      <i class="bi bi-clock-history"></i>
+      {% if host_timezone %}
+        <span>Times are the host's local time</span> <code data-no-i18n>{{ host_timezone }}</code>
+      {% else %}
+        <span>Times are the host's local time, which could not be read</span>
+      {% endif %}
+    </div>
     <!-- Live explainer (crontab.guru style) -->
     <div id="cron-explain" class="mb-1 px-2 py-2 rounded" style="border:1px solid var(--border); background:var(--bg-elevated);">
       <div id="cron-desc" class="text-secondary" style="font-size:.8rem;"><i class="bi bi-magic"></i> Type a schedule (or pick one above) to see what it means.</div>

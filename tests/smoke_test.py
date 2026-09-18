@@ -4613,6 +4613,88 @@ try:
           "a naive ISO string with no Z is parsed as LOCAL time and is silently wrong by the offset")
 
 
+    # ── A schedule is entered in YOUR clock and written in the HOST's ────────────────────────
+    # cron fires on the host's clock. set_daily_restart wrote a literal `0 5 * * *`, the panel's
+    # own bootstrap sets new hosts to UTC, no host's timezone was stored anywhere, and the UI
+    # showed no time at all — so "daily restart" on a US Central operator's server fired at 23:00
+    # local, in peak hours, with nothing on screen to notice it by.
+    from panel.core import clock as _tzc
+    _tz_saved = (_sm_core.run_command, _sm_core._rewrite_crontab)
+    _tz_lines = []
+    try:
+        _sm_core._rewrite_crontab = lambda s, u, g, add, extra_pre="": (_tz_lines.extend(add),
+                                                                        (True, "ok"))[1]
+        # A host on UTC, which is what this panel's own bootstrap gives a new VPS.
+        with app.app_context():
+            db.session.get(RemoteServer, remote_id).timezone = "Etc/UTC"
+            db.session.commit()
+        # 05:00 America/Chicago is 10:00 or 11:00 UTC depending on the season, so compute the
+        # expectation the same way rather than hardcoding one of them — a test that pins 11:00
+        # goes red every spring for a reason that has nothing to do with the code.
+        _tz_exp_h, _tz_exp_m = _tzc.convert_wall_time(5, 0, "America/Chicago", "Etc/UTC")
+        _tz_lines.clear()
+        _tzj = c.post("/api/server/%d/daily-restart" % gs_id,
+                      json={"enabled": True, "time": "05:00", "tz": "America/Chicago"}).get_json() or {}
+        check("schedule tz: the crontab line is written in the HOST's clock, not the viewer's",
+              any(_l.startswith("%d %d * * *" % (_tz_exp_m, _tz_exp_h)) for _l in _tz_lines),
+              "wrote %s, wanted the daily line at %02d:%02d UTC" % (_tz_lines, _tz_exp_h, _tz_exp_m))
+        check("schedule tz: ...and the response says BOTH times, so the page can show which is which",
+              _tzj.get("host_time") == "%02d:%02d" % (_tz_exp_h, _tz_exp_m)
+              and _tzj.get("local_time") == "05:00" and _tzj.get("host_tz") == "Etc/UTC",
+              "got %s" % _tzj)
+        with app.app_context():
+            check("schedule tz: the stored time is the host's, which is what the crontab says",
+                  db.session.get(GameServer, gs_id).daily_restart_at
+                  == "%02d:%02d" % (_tz_exp_h, _tz_exp_m),
+                  "stored %r" % db.session.get(GameServer, gs_id).daily_restart_at)
+        # Flicking the switch sends NO time. That must keep the schedule where it is — a toggle
+        # that silently reset it to a default would move a restart into peak hours.
+        _tz_lines.clear()
+        c.post("/api/server/%d/daily-restart" % gs_id, json={"enabled": False})
+        _tz_lines.clear()
+        c.post("/api/server/%d/daily-restart" % gs_id, json={"enabled": True})
+        check("schedule tz: toggling off and on again does not move the time",
+              any(_l.startswith("%d %d * * *" % (_tz_exp_m, _tz_exp_h)) for _l in _tz_lines),
+              "wrote %s" % _tz_lines)
+        # An UNREADABLE host must leave the time exactly where the operator put it. Converting
+        # against a guessed zone would silently shift every schedule on that host.
+        with app.app_context():
+            db.session.get(RemoteServer, remote_id).timezone = ""
+            db.session.commit()
+        _sm_core.run_command = lambda *a, **k: ("", "", 1)      # timezone unreadable
+        _tz_lines.clear()
+        _tzj2 = c.post("/api/server/%d/daily-restart" % gs_id,
+                       json={"enabled": True, "time": "07:30", "tz": "America/Chicago"}).get_json() or {}
+        check("schedule tz: an unreadable host timezone leaves the time alone, it does not guess",
+              any(_l.startswith("30 7 * * *") for _l in _tz_lines) and _tzj2.get("host_tz") == "",
+              "wrote %s, said %s" % (_tz_lines, _tzj2))
+        # The conversion itself, including the direction that matters and the no-ops.
+        check("schedule tz: (unit) a wall time converts between zones",
+              _tzc.convert_wall_time(5, 0, "America/Chicago", "Etc/UTC")[0] in (10, 11),
+              "got %s" % (_tzc.convert_wall_time(5, 0, "America/Chicago", "Etc/UTC"),))
+        check("schedule tz: (unit) the same zone, or an unknown one, is a no-op",
+              _tzc.convert_wall_time(5, 0, "Etc/UTC", "Etc/UTC") == (5, 0)
+              and _tzc.convert_wall_time(5, 0, "Nope/Nope", "Etc/UTC") == (5, 0)
+              and _tzc.convert_wall_time(5, 0, "", "Etc/UTC") == (5, 0))
+        # The zone name arrives from the browser AND from a remote host's timedatectl, and ends
+        # up indexing the zone database, in a stored column and on the page — so what matters is
+        # that a non-zone never survives, whichever layer refuses it (this module's shape check,
+        # or zoneinfo's own rejection of absolute paths and `..`).
+        check("schedule tz: a zone name that is not one is refused, path traversal included",
+              _tzc.valid_timezone("../../etc/passwd") == ""
+              and _tzc.valid_timezone("Etc/../../x") == ""
+              and _tzc.valid_timezone("A" * 80) == ""
+              and _tzc.valid_timezone("America/Chicago") == "America/Chicago")
+        check("schedule tz: (unit) a malformed time falls back rather than raising",
+              _tzc.parse_hhmm("25:00") == (5, 0) and _tzc.parse_hhmm("") == (5, 0)
+              and _tzc.parse_hhmm("7:05") == (7, 5))
+    finally:
+        (_sm_core.run_command, _sm_core._rewrite_crontab) = _tz_saved
+        with app.app_context():
+            db.session.get(RemoteServer, remote_id).timezone = ""
+            db.session.commit()
+
+
     # ── The Update button and the bulk endpoint must agree about who HAS an update ──────────
     # They didn't. GameServer.supports_update knows the Call of Duty family is not SteamCMD-based
     # and has no `update` command at all (_NO_UPDATE_GAMES exists for exactly that), and

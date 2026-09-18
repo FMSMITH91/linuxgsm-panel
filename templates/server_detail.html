@@ -376,6 +376,40 @@
               {% endif %}
             </td>
           </tr>
+          {# The time it runs, and WHOSE CLOCK. The schedule is a crontab line on the host, so it
+             fires on the host's clock — which the panel's own bootstrap sets to UTC, and which is
+             almost never the operator's. The number alone was therefore meaningless: this row
+             takes the time in YOUR zone, converts on the way in, and shows what it actually wrote
+             on the host underneath. #}
+          <tr>
+            <td class="text-secondary">Restart at
+              <span class="text-muted" style="font-size:.7rem;">(your time)</span></td>
+            <td class="text-end">
+              {% if can_autostart %}
+              <input type="time" class="form-control form-control-sm d-inline-block"
+                     style="width:7.5rem;" id="dailyrestart-time"
+                     aria-label="Time of day the daily restart runs, in your timezone"
+                     data-host-time="{{ server.daily_restart_at or '05:00' }}"
+                     data-host-tz="{{ host_timezone }}"
+                     data-action="setDailyRestartTime" data-args='["@self"]' data-on="change">
+              {% else %}
+              <span id="dailyrestart-time" data-host-time="{{ server.daily_restart_at or '05:00' }}"
+                    data-host-tz="{{ host_timezone }}" data-no-i18n></span>
+              {% endif %}
+              {# The words live HERE, not in the JS. base.html translates whole text nodes, so a
+                 sentence stitched together in JavaScript from three dynamic pieces could never
+                 match a catalog entry — the same reason the header's Port/Type/Version row is
+                 built this way. JS fills only the two values. #}
+              <div class="text-muted" style="font-size:.68rem;" id="dailyrestart-hosthint"
+                   hidden><span>Runs at</span>
+                <span id="drh-time" data-no-i18n></span>
+                {# Both phrasings live here and JS only toggles which is shown; writing the
+                   other one from JS would put English over a translated text node. #}
+                <span id="drh-on">on the host</span><span id="drh-on-unknown"
+                  hidden>on the host (its timezone could not be read)</span>
+                <span id="drh-tz" data-no-i18n></span></div>
+            </td>
+          </tr>
           {% if can_autostart %}
           <tr>
             <td class="text-secondary">Notify when empty

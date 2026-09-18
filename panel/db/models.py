@@ -395,6 +395,12 @@ class RemoteServer(db.Model):
     linuxgsm_user = db.Column(EncryptedString, default="")  # LinuxGSM user account on remote
     is_local = db.Column(db.Boolean, default=False)  # True = this machine, run commands locally
     public_ip = db.Column(EncryptedString, default="")  # cached public IP (for connect address)
+    # The host's OWN clock, as an IANA name ("Etc/UTC", "America/Chicago"). Cron fires on this,
+    # not on the panel's clock and not on the viewer's — so without it "daily at 5am" was a number
+    # with no meaning attached, and on a VPS bootstrapped to UTC (which is the panel's own default)
+    # it silently meant 11pm for someone in US Central. Learned from the host, refreshed lazily;
+    # "" means not yet read, which the UI shows as unknown rather than guessing UTC.
+    timezone = db.Column(db.String(64), default="")
 
     @validates("username", "linuxgsm_user")
     def _validate_ident(self, key, value):
@@ -525,6 +531,9 @@ class GameServer(db.Model):
     installed = db.Column(db.Boolean, default=False)
     autostart = db.Column(db.Boolean, default=True)
     daily_restart = db.Column(db.Boolean, default=False)  # daily restart when empty of players
+    # "HH:MM" in the HOST's local time — which is exactly what the crontab line says, so the panel
+    # and the box can never disagree about it. The UI converts to and from the viewer's clock.
+    daily_restart_at = db.Column(db.String(5), default="05:00")
     notify_when_empty = db.Column(db.Boolean, default=False)  # one-shot: alert once this server hits 0 players
     peak_players = db.Column(db.Integer, default=0)  # highest player count seen (for the new-record alert)
     restart_pending = db.Column(db.Boolean, default=False)  # a mod change needs a restart to load it
@@ -1058,6 +1067,8 @@ def _run_light_migrations():
     existing = {t: {c["name"] for c in insp.get_columns(t)} for t in insp.get_table_names()}
     wanted = {
         ("game_server", "commands"): "ALTER TABLE game_server ADD COLUMN commands TEXT DEFAULT '[]'",
+        ("game_server", "daily_restart_at"):
+            "ALTER TABLE game_server ADD COLUMN daily_restart_at VARCHAR(5) DEFAULT '05:00'",
         ("game_server", "query_type"): "ALTER TABLE game_server ADD COLUMN query_type VARCHAR(40)",
         ("game_server", "daily_restart"): "ALTER TABLE game_server ADD COLUMN daily_restart BOOLEAN DEFAULT 0",
         ("game_server", "notify_when_empty"): "ALTER TABLE game_server ADD COLUMN notify_when_empty BOOLEAN DEFAULT 0",
@@ -1070,6 +1081,8 @@ def _run_light_migrations():
         ("remote_server", "stats_cache"): "ALTER TABLE remote_server ADD COLUMN stats_cache TEXT DEFAULT ''",
         ("remote_server", "pro_cache"): "ALTER TABLE remote_server ADD COLUMN pro_cache TEXT DEFAULT ''",
         ("remote_server", "host_key"): "ALTER TABLE remote_server ADD COLUMN host_key TEXT DEFAULT ''",
+        ("remote_server", "timezone"):
+            "ALTER TABLE remote_server ADD COLUMN timezone VARCHAR(64) DEFAULT ''",
         ("user", "totp_secret"): "ALTER TABLE user ADD COLUMN totp_secret TEXT",
         ("user", "totp_enabled"): "ALTER TABLE user ADD COLUMN totp_enabled BOOLEAN DEFAULT 0",
         ("user", "auth_epoch"): "ALTER TABLE user ADD COLUMN auth_epoch INTEGER DEFAULT 0",

@@ -142,6 +142,19 @@ regardless of this file — this changelog is for humans.
   non-ASCII — through a real shell and requires each to come back verbatim as a single argument.
 
 ### Fixed
+- **Schedules are now set in your own time, not the host's.** A cron entry fires on the host's
+  clock — which this panel's own bootstrap sets to **UTC** — and the daily restart wrote a
+  hardcoded `0 5 * * *` with no time shown in the UI at all. So "daily restart when empty" on a
+  server run by someone in US Central fired at 23:00 their time, in peak hours, and nothing on
+  screen said so. The panel now learns each host's timezone and keeps it; the restart time is
+  entered in **your** timezone and converted before it reaches the crontab, with the host's own
+  time shown underneath ("Runs at 19:00 on the host (Asia/Tokyo)"). The cron editor carries the
+  same label, so its "Daily 5am" preset finally says whose 5am. A host whose timezone cannot be
+  read says exactly that and leaves your time untouched rather than guessing UTC.
+
+  One caveat that cannot be engineered away here: a crontab line is a fixed wall time on the host,
+  so where two timezones' daylight-saving rules differ the schedule is an hour out after the next
+  changeover. The panel writes what is correct today and shows you the host time it wrote.
 - **A long action's output no longer vanishes when you reload the page.** "when you refresh the
   page after i did update...those messages went away" — and they did: the console socket reaches
   only the pages open at the time, and `/api/console` rebuilds a console by tailing the *game's*
