@@ -118,7 +118,7 @@
               {% else %}<span class="badge bg-secondary">Expired</span>{% endif %}
             </td>
             <td class="d-none d-md-table-cell text-secondary small text-nowrap"
-                data-no-i18n>{{ inv.expires_at.strftime('%Y-%m-%d %H:%M') if inv.expires_at }}</td>
+                data-no-i18n>{{ inv.expires_at|datetime if inv.expires_at }}</td>
             <td class="d-none d-lg-table-cell text-secondary small">
               {% if inv.grants_superadmin %}<span class="text-warning">Super Administrator</span>
               {% else %}{{ inv.groups_wanted | length }} group(s){% endif %}

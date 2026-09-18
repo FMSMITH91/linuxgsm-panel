@@ -459,7 +459,7 @@ def _action_log_path(short_name, action):
 _CONSOLE_BACKLOG_MAX = 600
 
 
-def _console_push(app, server_id, text):
+def _console_push(app, server_id, text, ts=None):
     """Push text into a server's live console for whoever has it open, and remember it.
 
     Goes to the same `console_output` event and `console_{id}` room the console poller uses, so
@@ -469,12 +469,19 @@ def _console_push(app, server_id, text):
     It is also kept in _console_backlog, because the socket reaches only the pages that are open
     RIGHT NOW. /api/console rebuilds a console from the game's console log, which a panel action
     never writes to — so before this, reloading the page after an update threw away everything the
-    update had said."""
+    update had said.
+
+    `ts` is when the panel SAW this text — epoch seconds, UTC — and rides ALONGSIDE the payload
+    rather than being prefixed onto it. That is not a style choice: the browser stitches its
+    scrollback by matching line STRINGS between successive overlapping windows of the log, so a
+    timestamp inside the text would make every line unique, defeat the overlap match, and render
+    the whole window twice on every poll."""
     if not text:
         return
+    ts = float(ts if ts is not None else time.time())
     try:
         buf = _console_backlog.setdefault(server_id, [])
-        buf.extend(ln for ln in str(text).split("\n") if ln.strip())
+        buf.extend({"t": ts, "line": ln} for ln in str(text).split("\n") if ln.strip())
         if len(buf) > _CONSOLE_BACKLOG_MAX:
             del buf[:len(buf) - _CONSOLE_BACKLOG_MAX]
     except Exception:
@@ -482,7 +489,7 @@ def _console_push(app, server_id, text):
     try:
         sio = getattr(app, "socketio", None)
         if sio is not None:
-            sio.emit("console_output", {"server_id": server_id, "data": text},
+            sio.emit("console_output", {"server_id": server_id, "data": text, "ts": ts},
                      room=f"console_{server_id}")
     except Exception:
         _log.debug("console push for server %s failed (non-fatal)", server_id, exc_info=True)

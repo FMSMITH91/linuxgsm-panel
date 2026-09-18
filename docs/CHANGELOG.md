@@ -8,6 +8,20 @@ regardless of this file — this changelog is for humans.
 ## [Unreleased]
 
 ### Added
+- **Each console line now carries the time the panel saw it**, in your own timezone, with a
+  "Times" toggle in the Live Console header (remembered per browser — a Minecraft server already
+  prefixes its own `[HH:MM:SS]`, so the gutter is duplication there). 24-hour in the gutter so the
+  column stays aligned and the same width all day; the hover text gives the full date in your
+  locale's own format. Lines the panel *watched arrive* are stamped — a push from the console
+  poller, or output from an update it ran itself, which is why an update's output still reads with
+  its timestamps after a reload. The window fetched on page load is a fresh tail of the game's log
+  file, which for most games records no per-line time at all: those lines were written at some
+  unknowable point before the panel looked, so their gutter stays **blank** rather than claiming
+  the moment you opened the page.
+- **Three remaining timestamps now render in your timezone too** — ban dates, invite expiry and
+  Tailscale peer last-seen. They formatted the stored UTC value themselves, so they showed UTC
+  with nothing saying so, which reads as a wrong local time rather than as a UTC one. There is now
+  a check that no template can format a stored timestamp itself.
 - **LinuxGSM's colour now survives into the console.** `[  OK  ]` green, `[ FAIL ]` red,
   `[ INFO ]` blue — the same output `putty` shows, which is most of what makes a long `update`
   readable at a glance. Every display path used to run the text through `strip_escapes`, which is

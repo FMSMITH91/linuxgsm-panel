@@ -548,6 +548,12 @@ for _fn in ("_ansiRun", "renderAnsi"):
 check(".textContent = text" in (_js_function_body(_sd_js, "_ansiRun") or ""),
       "console render: _ansiRun writes its run with textContent",
       "it no longer assigns textContent — the run is reaching the DOM some other way")
+# renderAnsi APPENDS; assigning el.textContent replaces every child the line already has — which
+# is how the timestamp gutter came to vanish from every line without colour (the majority of real
+# console output), while the coloured ones kept theirs and made it look like a colour bug.
+check(not re.search(r"\bel\.textContent\s*=", _js_function_body(_sd_js, "renderAnsi") or ""),
+      "console render: renderAnsi appends to the line, never replaces its contents",
+      "it assigns el.textContent, which wipes the timestamp gutter put there before it")
 
 # ── 0e. no template renders the same id= twice ────────────────────────────────────────────────
 # getElementById returns the FIRST match, so a duplicate id does not fail loudly — it silently
