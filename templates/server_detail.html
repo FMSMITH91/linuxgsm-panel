@@ -156,6 +156,16 @@
       <div class="px-3 pt-2 text-secondary" style="font-size:.7rem;" id="console-ts-notice" hidden>
         <i class="bi bi-info-circle"></i>
         <span>Times appear on lines as they arrive — the panel cannot know when older lines were written.</span>
+        {# The fix, offered where the gap is noticed. LinuxGSM can stamp the log AT WRITE TIME
+           (logtimestamp), which is the only way a line written while nobody was watching gets a
+           real time. It edits the instance config and only takes effect on the next start, so it
+           is opt-in and says both. #}
+        {% if can_download_log %}
+        <button type="button" class="btn btn-link p-0 align-baseline" style="font-size:.7rem;"
+                id="console-ts-enable" data-action="enableLogTimestamps" data-args='["@self"]'>
+          <span>Have LinuxGSM stamp the log</span>
+        </button>
+        {% endif %}
       </div>
       <div class="card-body p-0">
         <div class="console-output" id="console-output">

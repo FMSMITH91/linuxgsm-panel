@@ -8,6 +8,20 @@ regardless of this file — this changelog is for humans.
 ## [Unreleased]
 
 ### Added
+- **Console history can have real timestamps, not just lines you watched arrive.** The panel tails
+  the console log, so on its own it can only date what it saw — on an idle server that means the
+  whole of history is blank. LinuxGSM can stamp the log *at write time* (`logtimestamp`, which
+  pipes the tmux capture through `gawk strftime`), and the Live Console now offers to turn that on
+  where the gap is noticed. Once it is, every line arrives already dated, for every game — the
+  Call of Duty family included, which has no per-line time of its own.
+
+  The stamp LinuxGSM writes is in the **host's** local time with no offset, so the panel reads it
+  against that host's timezone, converts it to a UTC instant, and the browser renders it in yours
+  — a line written at 05:09 in Tokyo reads as 15:09 in US Central. It is stripped from the text
+  and shown in the gutter, so the time is not printed twice. A host whose timezone is not known
+  yet leaves those lines undated rather than reading them against a guess, and turning the setting
+  on edits the instance's LinuxGSM config and takes effect at the server's next start — the
+  confirmation says both.
 - **Each console line now carries the time the panel saw it**, in your own timezone, with a
   "Times" toggle in the Live Console header (remembered per browser — a Minecraft server already
   prefixes its own `[HH:MM:SS]`, so the gutter is duplication there). 24-hour in the gutter so the
