@@ -4785,20 +4785,14 @@ try:
         _lt_wr = _lt_sf.lgsm_write_config
         try:
             _lt_sf.lgsm_write_config = lambda s, u, n, upd: (_lt_writes.append(upd), (True, "ok"))[1]
-            _ltp = c.post("/api/server/%d/log-timestamps" % gs_id,
-                          json={"enabled": True}).get_json() or {}
-            check("log stamps: turning it on writes logtimestamp=on to the instance config",
-                  _lt_writes and _lt_writes[0].get("logtimestamp") == "on",
-                  "wrote %s" % _lt_writes)
-            check("log stamps: ...and says it needs a restart, because pipe-pane is set up at start",
-                  _ltp.get("success") is True and _ltp.get("needs_restart") is True,
-                  "got %s" % _ltp)
-            _lt_writes.clear()
             _ltp2 = c.post("/api/server/%d/log-timestamps" % gs_id,
                            json={"enabled": False}).get_json() or {}
-            check("log stamps: turning it off writes 'off', not a missing key",
+            check("log stamps: turning it OFF writes 'off', not a missing key",
                   _lt_writes and _lt_writes[0].get("logtimestamp") == "off"
                   and _ltp2.get("enabled") is False, "wrote %s got %s" % (_lt_writes, _ltp2))
+            check("log stamps: ...and says it needs a restart, because pipe-pane is set up at start",
+                  _ltp2.get("success") is True and _ltp2.get("needs_restart") is True,
+                  "got %s" % _ltp2)
         finally:
             _lt_sf.lgsm_write_config = _lt_wr
     finally:
@@ -4807,6 +4801,83 @@ try:
             db.session.get(RemoteServer, remote_id).timezone = ""
             db.session.commit()
 
+
+    # ── A burst bigger than the read cap must not lose output, or cut a line in half ─────────
+    # The poller reads at most 64KB per tick and then set last_pos to the file's FULL size, so
+    # everything past the cap was silently discarded — and the 64KB boundary itself landed
+    # mid-line, which reached the screen as a bare "[20" where a timestamp had been sliced. A
+    # server writing more than 64KB between two 2-second polls is not hypothetical: it is every
+    # GMod start, loading hundreds of Lua modules, which is exactly when someone is watching.
+    # Reported as "as the server loads it stops".
+    _bs_log = "".join("[2026-09-18 06:22:08] MODULE: cc_module_%05d.lua\n" % i for i in range(3000))
+    check("console burst: (setup) the fixture is bigger than one read", len(_bs_log) > 65536 * 2,
+          "only %d bytes — the cap would never be hit" % len(_bs_log))
+
+    # Drive the REAL reassembly, not a copy of it: _console_whole_lines is what the poller calls.
+    # The first version of this test walked its own copy of the arithmetic and passed cheerfully
+    # with the carry deleted from the production code it was meant to guard.
+    from panel.routes.server_files import _console_whole_lines as _bs_whole_lines
+    from panel.core.panel_state import _console_partial as _bs_partial_state
+    _bs_partial_state.pop(-99, None)
+    _bs_pos, _bs_seen = 0, []
+    for _ in range(12):
+        if _bs_pos >= len(_bs_log):
+            break
+        _bs_diff = min(len(_bs_log) - _bs_pos, 65536)
+        # exactly what the shell returns: the byte range, plus the sentinel
+        _bs_out = _bs_whole_lines(-99, _bs_log[_bs_pos:_bs_pos + _bs_diff] + "E")
+        if _bs_out:
+            _bs_seen.extend(_bs_out.split("\n"))
+        _bs_pos = _bs_pos + _bs_diff          # the fix: advance by what was READ
+    check("console burst: nothing is dropped — every line of the burst arrives",
+          len(_bs_seen) == 3000, "saw %d of 3000 lines" % len(_bs_seen))
+    check("console burst: ...and not one of them is a fragment",
+          all(l.startswith("[2026-09-18 06:22:08] MODULE: ") and l.endswith(".lua")
+              for l in _bs_seen),
+          "a line was cut at a read boundary: %s"
+          % [l for l in _bs_seen if not l.endswith(".lua")][:2])
+    check("console burst: ...in order, with no duplicates",
+          _bs_seen == [l for l in _bs_log.split("\n") if l],
+          "the reassembled stream does not match the file")
+    # The source of the bug, pinned directly: advancing to the file's size instead of to what was
+    # read is what threw the rest away.
+    _bs_src = open(os.path.join(_repo_root, "panel", "routes", "server_files.py"),
+                   encoding="utf-8").read()
+    check("console burst: the poller advances by bytes READ, not to the file's current size",
+          "last_positions[server_id] = last_pos + diff" in _bs_src
+          and "last_positions[server_id] = current_size\n" not in _bs_src.replace(
+              "                                        last_positions[server_id] = current_size\n",
+              "", 1),
+          "it still jumps to current_size somewhere past the first-read case — that discards "
+          "everything beyond the 64KB cap")
+    check("console burst: a rotated log drops the half-line held from the old file",
+          "_console_partial.pop(server_id, None)" in _bs_src,
+          "the fragment from the previous log survives the rotation and is glued to the new one")
+
+
+    # ── The panel must never OFFER to turn LinuxGSM's logtimestamp on ───────────────────────
+    # It works, and the cost is the live console. LinuxGSM builds the capture as
+    # `cat | gawk '{ print strftime(...), $0 }' >> consolelog`, and gawk writing to a FILE is BLOCK
+    # buffered, not line buffered: measured at 0 lines reaching the log after 33 lines of input,
+    # with everything appearing only once 4KB had accumulated. On a quiet server that is an
+    # apparently frozen console for hours, which is how it was reported. The pipeline is built in
+    # command_start.sh, so nothing in the panel can add an fflush or stdbuf.
+    #
+    # Shipped as a one-click offer before anyone measured that. The parsing stays (a log someone
+    # stamped by hand still reads correctly) and the OFF switch stays (anyone who turned it on
+    # needs the way back), but the invitation is gone and must not come back.
+    _sd_html = c.get("/server/%d" % gs_id).get_data(as_text=True)
+    check("log stamps: the page does not offer to TURN ON LinuxGSM's stamping",
+          "enableLogTimestamps" not in _sd_html,
+          "the enable control is back — it starves the live console (gawk block-buffers to a file)")
+    check("log stamps: ...but it does offer the way back OFF",
+          "disableLogTimestamps" in _sd_html,
+          "no way to turn it off — anyone who enabled it is stuck with a frozen console")
+    _sd_js_src = open(os.path.join(_repo_root, "static", "js", "server_detail.js"),
+                      encoding="utf-8").read()
+    check("log stamps: and no JS path enables it either",
+          "enabled: true" not in _sd_js_src.replace(" ", "").replace("enabled:true", "enabled: true"),
+          "some JS still POSTs enabled:true to the log-timestamps endpoint")
 
     # ── The Update button and the bulk endpoint must agree about who HAS an update ──────────
     # They didn't. GameServer.supports_update knows the Call of Duty family is not SteamCMD-based

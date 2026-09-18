@@ -31,7 +31,8 @@ from panel.core.validation import (_attachment_header)
 from app import (ALERT_PROVIDERS, _GAME_LIST_CACHE, _LGSM_NAME_MAP, _MAX_UPLOAD_BYTES,
     _apply_mod_restart, _clean_console_text, _log, _socketio_cors, _sync_toggles_from_cron,
     load_game_list)
-from panel.core.panel_state import (_console_backlog, register_server_state)
+from panel.core.panel_state import (_console_backlog, _console_partial,
+    register_server_state)
 from panel.routes._shared import (_console_rows, _drain_action_output,
     _host_timezone_cached, _server_action_buttons)
 
@@ -60,6 +61,30 @@ _CONSOLE_LINES_MAX = 2000
 _gmod_content_apply_state = register_server_state({})   # server_id -> {"status", "msg", "ts"}
 _console_viewers = {}          # server_id -> set of socket session ids
 _viewers_lock = threading.Lock()
+
+
+def _console_whole_lines(server_id, raw):
+    """The COMPLETE lines in a byte-cut chunk; the trailing fragment is held for the next read.
+
+    The poller reads the console log by byte range, so a chunk almost always ends mid-line. Emit
+    that half and the console shows one line as two — seen in the wild as a bare "[20" where a
+    LinuxGSM timestamp had been sliced across a 64KB read boundary.
+
+    `raw` carries a trailing 'E' sentinel from the shell, because run_command STRIPS what it
+    returns: without it the chunk's own final newline is eaten and a line that was complete looks
+    partial, so every read would hold back a line that is already whole.
+
+    Extracted rather than inlined so it can be driven directly by a test. It was inline first, and
+    the test reimplemented the arithmetic instead of calling it — which passed happily with the
+    carry deleted from the code it was supposed to be guarding."""
+    raw = raw[:-1] if raw.endswith("E") else raw
+    chunk = _console_partial.pop(server_id, "") + (raw or "")
+    whole, nl, rest = chunk.rpartition("\n")
+    if nl:
+        _console_partial[server_id] = rest
+        return whole
+    _console_partial[server_id] = chunk
+    return ""
 
 
 def register(app, supervise):
@@ -798,18 +823,30 @@ def register(app, supervise):
                                     continue
                                 last_pos = last_positions.get(server_id, 0)
                                 if current_size < last_pos:  # log rotated/truncated
+                                    # LinuxGSM rotates the console log on every start
+                                    # (command_start.sh mv's it to a dated name), so this fires on
+                                    # each restart. Drop the half-line held from the OLD file —
+                                    # gluing it onto the new one's first line is a line that never
+                                    # existed.
                                     last_pos = 0
+                                    _console_partial.pop(server_id, None)
                                 if current_size > last_pos:
                                     if last_pos == 0:
                                         last_positions[server_id] = current_size
                                         continue
                                     diff = min(current_size - last_pos, 65536)  # cap 64KB/poll
                                     # tail -c +N | head -c diff: two reads, not one-per-byte.
+                                    # The trailing 'E' is a SENTINEL, not decoration: run_command
+                                    # strips what it returns, which would eat the chunk's own
+                                    # trailing newline and make a COMPLETE last line look partial
+                                    # to the split below.
                                     out, _, _ = _sm.run_command(
                                         remote,
-                                        f"tail -c +{last_pos + 1} {log_path} 2>/dev/null | head -c {diff}",
+                                        f"{{ tail -c +{last_pos + 1} {log_path} 2>/dev/null "
+                                        f"| head -c {diff}; printf E; }}",
                                         timeout=5,
                                     )
+                                    out = _console_whole_lines(server_id, out)
                                     if out:
                                         out = _clean_console_text(out)
                                     if out:
@@ -827,7 +864,15 @@ def register(app, supervise):
                                                       {"server_id": server_id, "data": out,
                                                        "rows": rows, "ts": time.time()},
                                                       room=f"console_{server_id}")
-                                    last_positions[server_id] = current_size
+                                    # Advance by what was ACTUALLY READ, never to current_size.
+                                    # `head -c diff` emits exactly diff bytes (diff is clamped to
+                                    # what the file holds), so this is exact — where jumping to
+                                    # current_size silently DISCARDED everything past the 64KB cap.
+                                    # A server that writes more than that between two polls is not
+                                    # hypothetical: it is every GMod start, loading hundreds of Lua
+                                    # modules, which is exactly when someone is watching. The
+                                    # backlog now drains over the next few ticks instead.
+                                    last_positions[server_id] = last_pos + diff
                             except Exception:  # nosec B112 - try/except/continue is the point:
                                 # one unreadable console must not stop the poll for every OTHER
                                 # server. The next tick retries this one; the failure is visible
