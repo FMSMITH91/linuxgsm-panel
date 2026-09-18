@@ -4527,9 +4527,9 @@ try:
         check("console timestamps: (setup) the game-log window came back non-empty",
               len(_blj2.get("lines") or []) >= 2,
               "lines=%s — the check below would pass vacuously" % (_blj2.get("lines"),))
-        check("console timestamps: the game log's own window carries NO invented time",
-              all(isinstance(ln, str) for ln in (_blj2.get("lines") or [])),
-              "a line was stamped with the moment the panel read it: %s" % (_blj2.get("lines"),))
+        check("console timestamps: an UNSTAMPED history line carries no invented time",
+              all(r.get("t") is None for r in (_blj2.get("lines") or [])),
+              "a line was dated to the moment the panel read it: %s" % (_blj2.get("lines"),))
         check("console backlog: the colour survives the round trip to the page",
               any("\x1b[32m" in (r.get("line") or "") for r in _bl_rows),
               "panel_lines=%s" % _bl_rows)
@@ -4630,10 +4630,10 @@ try:
               "its new lines with",
               isinstance(_pdj.get("now"), (int, float)) and _pdj["now"] > 1_700_000_000,
               "now=%r" % _pdj.get("now"))
-        # Still NOT per-line: the window itself is history until the browser knows which of it is
-        # new, and stamping the whole thing server-side is the mistake this guards against.
-        check("console timestamps: ...but the lines themselves stay unstamped, as history",
-              all(isinstance(ln, str) for ln in (_pdj.get("lines") or [])),
+        # Still not dated per line: an unstamped window is history until the browser knows which of
+        # it is new, and dating the whole thing server-side is the mistake this guards against.
+        check("console timestamps: ...but an unstamped window stays undated, as history",
+              all(r.get("t") is None for r in (_pdj.get("lines") or [])),
               "lines=%s" % (_pdj.get("lines"),))
     finally:
         _sm_core.run_command = _pd_saved
@@ -4716,6 +4716,93 @@ try:
               and _tzc.parse_hhmm("7:05") == (7, 5))
     finally:
         (_sm_core.run_command, _sm_core._rewrite_crontab) = _tz_saved
+        with app.app_context():
+            db.session.get(RemoteServer, remote_id).timezone = ""
+            db.session.commit()
+
+
+    # ── LinuxGSM's own per-line stamp gives HISTORY a real time ─────────────────────────────
+    # The panel tails the console log, so on its own it can only date what it watched arrive — an
+    # idle server's whole history is blank, which is what "can you make it always keep track of
+    # time" was asking about. LinuxGSM can stamp the log AT WRITE TIME (`logtimestamp="on"` pipes
+    # the tmux capture through `gawk strftime`, command_start.sh), and that stamp survives in the
+    # file. It is written in the HOST's local time with no offset, which is why this needs
+    # RemoteServer.timezone — the whole reason that column exists.
+    from panel.core import terminal as _lt_term
+    from panel.routes._shared import _console_rows as _lt_rows
+    _lt_saved = _sm_core.run_command
+    try:
+        check("log stamps: LinuxGSM's shape is parsed off the line, and stripped from the text",
+              _lt_term.split_log_timestamp("[2026-09-18 05:09:57] ] Player connected")
+              == ("2026-09-18 05:09:57", "] Player connected"),
+              "got %s" % (_lt_term.split_log_timestamp("[2026-09-18 05:09:57] ] Player connected"),))
+        # A game printing something bracket-shaped of its own must not be mistaken for a stamp and
+        # have its first word eaten.
+        check("log stamps: a bracketed line that is NOT a timestamp is left completely alone",
+              _lt_term.split_log_timestamp("[PH:X Integrity Check] No errors found.")
+              == (None, "[PH:X Integrity Check] No errors found."),
+              "got %s" % (_lt_term.split_log_timestamp("[PH:X Integrity Check] No errors."),))
+        # The conversion: written in the host's clock, stored as an epoch, rendered in the
+        # viewer's. 05:09:57 in Tokyo is NOT 05:09:57 anywhere else.
+        _lt_rowset = _lt_rows(["[2026-09-18 05:09:57] hello", "no stamp here"], "Asia/Tokyo")
+        _lt_want = _tzc.host_stamp_to_epoch("2026-09-18 05:09:57", "Asia/Tokyo")
+        check("log stamps: the stamp becomes a UTC epoch read in the HOST's timezone",
+              _lt_rowset[0]["t"] == _lt_want and _lt_want is not None,
+              "got %s, wanted %s" % (_lt_rowset[0]["t"], _lt_want))
+        check("log stamps: ...and it is a DIFFERENT instant than the same wall time elsewhere",
+              _tzc.host_stamp_to_epoch("2026-09-18 05:09:57", "Asia/Tokyo")
+              != _tzc.host_stamp_to_epoch("2026-09-18 05:09:57", "America/Chicago"),
+              "two zones produced the same epoch — the host timezone is being ignored")
+        check("log stamps: an unstamped line beside a stamped one still carries no time",
+              _lt_rowset[1]["t"] is None and _lt_rowset[1]["line"] == "no stamp here",
+              "got %s" % (_lt_rowset[1],))
+        # A host whose timezone is unknown must NOT have its stamps read against a guess: a line
+        # dated nine hours wrong is worse than one with no date.
+        check("log stamps: an unknown host timezone yields no time rather than a guessed one",
+              _lt_rows(["[2026-09-18 05:09:57] hello"], "")[0]["t"] is None,
+              "a stamp was converted against a guessed zone")
+
+        # End to end through the endpoint the console actually calls.
+        with app.app_context():
+            db.session.get(RemoteServer, remote_id).timezone = "Asia/Tokyo"
+            db.session.commit()
+        _sm_core.run_command = lambda *a, **k: ("[2026-09-18 05:09:57] stamped line\nplain line", "", 0)
+        _ltj = c.get("/api/console/%d" % gs_id).get_json() or {}
+        _lt_got = _ltj.get("lines") or []
+        check("log stamps: the console window carries the real time for a stamped line",
+              len(_lt_got) == 2 and _lt_got[0]["t"] == _lt_want
+              and _lt_got[0]["line"] == "stamped line",
+              "got %s" % (_lt_got,))
+        check("log stamps: ...and none for the unstamped one beside it",
+              len(_lt_got) == 2 and _lt_got[1]["t"] is None, "got %s" % (_lt_got,))
+        check("log stamps: the window says whether the log is stamped at all",
+              _ltj.get("log_timestamps") is True, "log_timestamps=%r" % _ltj.get("log_timestamps"))
+
+        # Turning it on is a LinuxGSM CONFIG edit, so it needs the config permission and it only
+        # takes effect on the next start — both reported rather than assumed away.
+        _lt_writes = []
+        import panel.routes.server_files as _lt_sf
+        _lt_wr = _lt_sf.lgsm_write_config
+        try:
+            _lt_sf.lgsm_write_config = lambda s, u, n, upd: (_lt_writes.append(upd), (True, "ok"))[1]
+            _ltp = c.post("/api/server/%d/log-timestamps" % gs_id,
+                          json={"enabled": True}).get_json() or {}
+            check("log stamps: turning it on writes logtimestamp=on to the instance config",
+                  _lt_writes and _lt_writes[0].get("logtimestamp") == "on",
+                  "wrote %s" % _lt_writes)
+            check("log stamps: ...and says it needs a restart, because pipe-pane is set up at start",
+                  _ltp.get("success") is True and _ltp.get("needs_restart") is True,
+                  "got %s" % _ltp)
+            _lt_writes.clear()
+            _ltp2 = c.post("/api/server/%d/log-timestamps" % gs_id,
+                           json={"enabled": False}).get_json() or {}
+            check("log stamps: turning it off writes 'off', not a missing key",
+                  _lt_writes and _lt_writes[0].get("logtimestamp") == "off"
+                  and _ltp2.get("enabled") is False, "wrote %s got %s" % (_lt_writes, _ltp2))
+        finally:
+            _lt_sf.lgsm_write_config = _lt_wr
+    finally:
+        _sm_core.run_command = _lt_saved
         with app.app_context():
             db.session.get(RemoteServer, remote_id).timezone = ""
             db.session.commit()

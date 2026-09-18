@@ -33,7 +33,7 @@ from app import (_apply_whitelist_everywhere, _autoblock_hosts, _log, _prune_job
     _run_autoblock_now, _security_whitelist, _security_whitelist_add,
     _security_whitelist_remove)
 import re
-from panel.core import (terminal)
+from panel.core import (clock, terminal)
 
 def _begin_bootstrap(app, remote_id, opts, actor_id):
     """Seed the job registry and start the background bootstrap. Returns
@@ -617,3 +617,21 @@ def _host_timezone_cached(remote, app=None):
     if not tz and app is not None and getattr(remote, "id", None) is not None:
         _maybe_resolve_host_timezone(app, remote.id)
     return tz
+
+
+def _console_rows(lines, host_tz):
+    """[{t, line}] for console text: LinuxGSM's own per-line timestamp parsed off the front.
+
+    `t` is a UTC epoch and is set ONLY where the line actually carried a stamp — the panel tails a
+    file, so for an unstamped line it knows when it READ the line and not when the game wrote it,
+    and there is no honest time to put there. The stamp is stripped from the text because the page
+    shows it in the gutter; leaving it inline would print the same time twice.
+
+    A host whose timezone is unknown yields t=None even for stamped lines: the stamp is in the
+    host's local time and converting it against a guess would date every line hours wrong."""
+    rows = []
+    for ln in lines:
+        stamp, rest = terminal.split_log_timestamp(ln)
+        rows.append({"t": clock.host_stamp_to_epoch(stamp, host_tz) if stamp else None,
+                     "line": rest})
+    return rows

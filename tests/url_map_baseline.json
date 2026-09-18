@@ -1493,6 +1493,18 @@
       "GET"
     ]
   },
+  "/api/server/<int:server_id>/log-timestamps": {
+    "endpoint": "api_server_log_timestamps",
+    "guards": [
+      "utils.py:decorated_view[server_access]",
+      "auth.py:decorated_function[server_access]",
+      "view:api_server_log_timestamps"
+    ],
+    "methods": [
+      "GET",
+      "POST"
+    ]
+  },
   "/api/server/<int:server_id>/moderate": {
     "endpoint": "api_server_moderate",
     "guards": [

@@ -32,8 +32,8 @@ from app import (ALERT_PROVIDERS, _GAME_LIST_CACHE, _LGSM_NAME_MAP, _MAX_UPLOAD_
     _apply_mod_restart, _clean_console_text, _log, _socketio_cors, _sync_toggles_from_cron,
     load_game_list)
 from panel.core.panel_state import (_console_backlog, register_server_state)
-from panel.routes._shared import (_drain_action_output, _host_timezone_cached,
-    _server_action_buttons)
+from panel.routes._shared import (_console_rows, _drain_action_output,
+    _host_timezone_cached, _server_action_buttons)
 
 # ── State and constants this module OWNS ───────────────────────────────────────────────────────
 # These lived in app.py until the split left it as their only definition and this file as their
@@ -623,10 +623,11 @@ def register(app, supervise):
         except (TypeError, ValueError):
             want = _CONSOLE_LINES
         want = max(50, min(want, _CONSOLE_LINES_MAX))
+        host_tz = _host_timezone_cached(remote, app)
         try:
             log_path = gs.console_log
             out, err, rc = _sm.run_command(remote, f"tail -{want} {log_path} 2>/dev/null", timeout=15)
-            lines = _clean_console_text(out).split("\n") if rc == 0 else []
+            lines = _console_rows(_clean_console_text(out).split("\n"), host_tz) if rc == 0 else []
         except Exception:
             lines = []
         # What the PANEL pushed into this console (a long action's markers and output) — its own
@@ -634,16 +635,51 @@ def register(app, supervise):
         # matching the overlap between successive windows, and a block that is stable at the end
         # of every response would defeat that; and these did not come from the file being tailed,
         # so a caller that wants the game log verbatim still gets exactly it.
-        # `lines` carry NO timestamp on purpose. They are a fresh tail of the log file, which for
-        # most games records no per-line time — the panel is seeing them now but they were written
-        # at some unknowable point before that, and stamping them "now" would put a confident wrong
-        # time on a week of history. The browser leaves their gutter blank instead.
-        # `now` is the panel's clock at the moment it read this window. The browser stamps the
-        # lines that are NEW since its last poll with it — those are lines the panel just watched
-        # arrive, which is exactly what a timestamp here means. Sent from the server rather than
-        # taken from Date.now() so poll-stamped and socket-stamped lines share one clock.
+        # Each row is {t, line}. `t` is set ONLY where the line carries LinuxGSM's own timestamp,
+        # written into the log at write time and converted here from the host's clock to an epoch
+        # — the one way a line written while nobody was watching can have a real time. Everything
+        # else has t=null: the panel is seeing those now but they were written at some unknowable
+        # point before that, and dating them "now" would put a confident wrong time on a week of
+        # history.
+        #
+        # `now` is the panel's clock at the moment it read this window, for the browser to stamp
+        # the lines that are NEW since its last poll — those it did watch arrive. Sent from the
+        # server rather than taken from Date.now() so every console time shares one clock.
         return jsonify({"lines": lines, "now": time.time(),
+                        "log_timestamps": any(r.get("t") for r in lines),
                         "panel_lines": list(_console_backlog.get(server_id, []))})
+
+    @app.route("/api/server/<int:server_id>/log-timestamps", methods=["GET", "POST"])
+    @login_required
+    @server_access_required
+    def api_server_log_timestamps(server_id):
+        """Read or set LinuxGSM's own `logtimestamp`, which stamps the console log AT WRITE TIME.
+
+        This is the only way a line written while nobody was watching can carry a real time — the
+        panel tails the file, so on its own it can date only what it saw arrive, and an idle
+        server's whole history is therefore blank. With this on, LinuxGSM pipes the tmux capture
+        through `gawk strftime` and every line arrives already dated.
+
+        It edits the instance's LinuxGSM config, so it needs the same permission as the rest of
+        the config editor, and it only takes effect on the server's next START — `pipe-pane` is
+        wired up in command_start.sh. Both facts are reported rather than assumed away."""
+        gs = get_game(server_id)
+        if not _can_manage_files():
+            return jsonify({"error": "Permission denied"}), 403
+        try:
+            if request.method == "POST":
+                want = "on" if _json_body().get("enabled") else "off"
+                ok, msg = lgsm_write_config(gs.remote, gs.short_name, gs.lgsm_name,
+                                            {"logtimestamp": want})
+                if not ok:
+                    return jsonify({"error": msg or "Could not write the LinuxGSM config"}), 502
+                log_action(current_user, "set_log_timestamps", target=gs.name, detail=want)
+                return jsonify({"success": True, "enabled": want == "on",
+                                "needs_restart": True})
+            vals = lgsm_get_values(gs.remote, gs.short_name, gs.lgsm_name, ["logtimestamp"])
+            return jsonify({"enabled": (vals.get("logtimestamp") or "").strip().strip('"') == "on"})
+        except Exception:
+            return jsonify({"error": _log_and_generic("request failed")}), 500
 
     @app.route("/api/command/<int:server_id>", methods=["POST"])
     @login_required
@@ -777,6 +813,11 @@ def register(app, supervise):
                                     if out:
                                         out = _clean_console_text(out)
                                     if out:
+                                        # Parsed per line: a LinuxGSM-stamped line carries its OWN
+                                        # time, which is more accurate than the moment the poller
+                                        # happened to read it.
+                                        rows = _console_rows(out.split("\n"),
+                                                             _host_timezone_cached(remote))
                                         # ts = when the panel READ these bytes, alongside the
                                         # payload rather than inside it (see _console_push). It is
                                         # accurate to one poll interval, which is the best anything
@@ -784,7 +825,7 @@ def register(app, supervise):
                                         # time of its own for most games.
                                         socketio.emit("console_output",
                                                       {"server_id": server_id, "data": out,
-                                                       "ts": time.time()},
+                                                       "rows": rows, "ts": time.time()},
                                                       room=f"console_{server_id}")
                                     last_positions[server_id] = current_size
                             except Exception:  # nosec B112 - try/except/continue is the point:

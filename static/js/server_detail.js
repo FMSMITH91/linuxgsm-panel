@@ -221,9 +221,20 @@ socket.on('disconnect', function() {
 });
 
 socket.on('console_output', function(data) {
-  if (data.server_id === serverId && data.data) {
+  if (data.server_id !== serverId || !data.data) return;
+  var stick = consoleAtBottom();   // capture BEFORE appending
+  if (data.rows && data.rows.length) {
+    // Per-line rows: a LinuxGSM-stamped line carries the time the GAME wrote it, which beats the
+    // moment the poller happened to read it. data.ts is the fallback for lines with no stamp —
+    // those the panel did watch arrive, so it is an honest time for them.
+    _appendConsoleRows(data.rows.filter(function (r) {
+      return r && typeof r.line === 'string' && r.line.trim();
+    }), data.ts);
+    updateTsNotice();
+  } else {
     appendConsole(data.data, data.ts);
   }
+  if (stick) stickConsole();
 });
 
 // Live output pushed over the websocket. This is the path that actually runs on a busy server, and
@@ -388,6 +399,32 @@ function renderAnsi(el, line) {
   _ansiRun(el, line.slice(last), codes);
 }
 
+// _newConsoleLines returns a SUFFIX of what it was given, so the matching rows are the same-length
+// suffix. Keeping the overlap maths on plain text this way leaves that function — and the
+// duplicate-detection it exists for — exactly as it was tested.
+function _newConsoleRows(haveLines, rows) {
+  var fresh = _newConsoleLines(haveLines, rows.map(function (r) { return r.line; }));
+  return fresh.length ? rows.slice(rows.length - fresh.length) : [];
+}
+
+// Each row may carry its own time (LinuxGSM stamped the log). `fallbackTs` is the panel's clock
+// for rows that do not — used only where the caller knows the panel WATCHED them arrive.
+function _appendConsoleRows(rows, fallbackTs) {
+  if (!rows.length) return;
+  var frag = document.createDocumentFragment();
+  rows.forEach(function (row) {
+    var div = document.createElement('div');
+    div.className = 'console-line';
+    var ts = row.t || fallbackTs;
+    if (ts) { div.dataset.ts = ts; stampLine(div, ts); }
+    renderAnsi(div, row.line);
+    frag.appendChild(div);
+  });
+  consoleEl.appendChild(frag);
+  _consoleLines = _consoleLines.concat(rows.map(function (r) { return r.line; }));
+  _trimConsole();
+}
+
 function _appendConsole(lines, ts) {
   if (!lines.length) return;
   var frag = document.createDocumentFragment();
@@ -400,11 +437,15 @@ function _appendConsole(lines, ts) {
   });
   consoleEl.appendChild(frag);
   _consoleLines = _consoleLines.concat(lines);
-  // Trim the DOM and the buffer INDEPENDENTLY, each against its own length. They are deliberately
-  // not assumed to be in step: sendCommand echoes the typed command straight into the console as a
-  // line that was never in the log, so a shared counter would remove the wrong number of nodes.
-  // The buffer is only ever consulted for its tail (overlap detection), so dropping from its front
-  // is always safe.
+  _trimConsole();
+}
+
+// Trim the DOM and the buffer INDEPENDENTLY, each against its own length. They are deliberately
+// not assumed to be in step: sendCommand echoes the typed command straight into the console as a
+// line that was never in the log, so a shared counter would remove the wrong number of nodes. The
+// buffer is only ever consulted for its tail (overlap detection), so dropping from its front is
+// always safe.
+function _trimConsole() {
   if (_consoleLines.length > CONSOLE_MAX_LINES) {
     _consoleLines.splice(0, _consoleLines.length - CONSOLE_MAX_LINES);
   }
@@ -452,7 +493,11 @@ function refreshConsole(forceScroll, wantLines) {
   fetch(MOUNT + '/api/console/' + serverId + (wantLines ? '?lines=' + wantLines : ''))
     .then(r => r.json())
     .then(data => {
-      var lines = (data.lines || []).filter(function(l) { return l.trim(); });
+      // Rows now, not strings: each carries LinuxGSM's own per-line time when the log has one.
+      var rows = (data.lines || []).filter(function(r) {
+        return r && typeof r.line === 'string' && r.line.trim();
+      });
+      var lines = rows.map(function(r) { return r.line; });
       var panelLines = (data.panel_lines || []).filter(function(r) {
         return r && typeof r.line === 'string' && r.line.trim();
       });
@@ -476,7 +521,10 @@ function refreshConsole(forceScroll, wantLines) {
         _consolePrimed = true;
         _consoleLines = [];
         consoleEl.innerHTML = '';
-        _appendConsole(lines);
+        // The priming window is history, so it gets NO arrival time — but a row that carries
+        // LinuxGSM's own stamp keeps it, which is the whole point: that one is a real time for a
+        // line written long before the panel looked.
+        _appendConsoleRows(rows);
       } else {
         // A poll DELTA is new output the panel just watched arrive — accurate to the poll
         // interval — so it is stamped, exactly like a socket push. Only the priming window above
@@ -485,7 +533,7 @@ function refreshConsole(forceScroll, wantLines) {
         // This is also the path that carries everything when the websocket is unavailable (a
         // proxy that won't upgrade, say). Leaving it unstamped meant that on such an install NO
         // line ever got a time, and the feature looked simply broken.
-        _appendConsole(_newConsoleLines(_consoleLines, lines), data.now);
+        _appendConsoleRows(_newConsoleRows(_consoleLines, rows), data.now);
       }
       showPanelBacklog(panelLines);
       updateTsNotice();
@@ -1125,3 +1173,31 @@ socket.on('console_output', function(data) {
     setTimeout(loadGameVersion, 500);
   }
 });
+
+// Turn on LinuxGSM's own `logtimestamp`. It pipes the tmux capture through gawk's strftime, so
+// every line is dated as it is WRITTEN — the only way history gets real times, since the panel
+// tails the file and can otherwise date only what it watched arrive.
+//
+// It edits the instance's LinuxGSM config and tmux's pipe-pane is wired up at start, so it takes
+// effect on the next restart. The confirm says so rather than leaving it to be discovered.
+function enableLogTimestamps(btn) {
+  confirmDialog({
+    title: t('Stamp the console log'),
+    body: t('LinuxGSM can write a timestamp onto every console line as it happens, so older lines have real times too. This changes the server’s LinuxGSM config and takes effect the next time the server starts.'),
+    confirmLabel: t('Turn it on'),
+    onConfirm: function () {
+      btn.disabled = true;
+      fetch(MOUNT + '/api/server/' + serverId + '/log-timestamps', {
+        method: 'POST', headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({ enabled: true })
+      })
+      .then(r => r.json())
+      .then(function (d) {
+        if (d.error) { toast(d.error, 'danger'); return; }
+        toast(t('LinuxGSM will stamp the log from the next restart.'), 'success');
+      })
+      .catch(function () { toast(t('Could not reach the panel'), 'danger'); })
+      .finally(function () { btn.disabled = false; });   // nosemgrep
+    }
+  });
+}

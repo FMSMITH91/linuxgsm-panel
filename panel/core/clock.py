@@ -102,3 +102,25 @@ def convert_wall_time(hour, minute, from_tz, to_tz, on=None):
         return moved.hour, moved.minute
     except Exception:
         return hour, minute
+
+
+def host_stamp_to_epoch(stamp, host_tz):
+    """LinuxGSM's "YYYY-MM-DD HH:MM:SS" (written in the HOST's local time) as a UTC epoch float,
+    or None if it cannot be read.
+
+    Epoch, not a string: it is the one representation with no timezone ambiguity left in it, and
+    it is what the browser already renders console times from. An unknown host timezone returns
+    None rather than assuming UTC — a line dated several hours wrong is worse than one with no
+    date, which is the rule the rest of this feature follows.
+
+    An ambiguous local time (the hour that repeats when clocks go back) resolves to the FIRST of
+    the two, which is what `fold=0` means and is the conventional reading."""
+    host_tz = valid_timezone(host_tz)
+    if not stamp or not host_tz:
+        return None
+    try:
+        from zoneinfo import ZoneInfo
+        naive = datetime.strptime(stamp.strip(), "%Y-%m-%d %H:%M:%S")
+        return naive.replace(tzinfo=ZoneInfo(host_tz)).timestamp()
+    except Exception:
+        return None

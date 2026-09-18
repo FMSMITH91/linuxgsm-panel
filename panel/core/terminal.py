@@ -209,3 +209,27 @@ def render_colour(text):
     if not text:
         return text
     return "\n".join(render_line_colour(ln) for ln in text.replace("\r\n", "\n").split("\n"))
+
+
+# ── LinuxGSM's own per-line timestamp ─────────────────────────────────────────────────────────
+# LinuxGSM can stamp the console log AT WRITE TIME: with `logtimestamp="on"` it pipes the tmux
+# capture through `gawk '{ print strftime("[%Y-%m-%d %H:%M:%S]"), $0 }'` (command_start.sh). That
+# is the only way a line written while nobody was watching can carry a real time — the panel tails
+# the file and can date only what it saw arrive, so without this the whole of history is blank.
+#
+# The stamp is in the HOST's local time and carries no offset, which is why the panel had to learn
+# each host's timezone first (see panel/core/clock.py and RemoteServer.timezone). Parsed here,
+# converted there.
+LOG_TS_RE = re.compile(r"^\[(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2})\]\s?")
+
+
+def split_log_timestamp(line):
+    """("YYYY-MM-DD HH:MM:SS", rest) for a LinuxGSM-stamped line, else (None, line).
+
+    The stamp is REMOVED from the text, because the panel shows it in the gutter — leaving it
+    inline would print the same time twice on every line. Only the exact shape LinuxGSM writes is
+    matched: a game that happens to print something bracket-shaped of its own keeps it."""
+    if not line:
+        return None, line
+    m = LOG_TS_RE.match(line)
+    return (m.group(1), line[m.end():]) if m else (None, line)
