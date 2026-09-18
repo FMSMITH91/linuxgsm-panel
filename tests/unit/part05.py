@@ -959,6 +959,74 @@ if _sys_name:
     check("helper: a NON-root system account (uid<1000) is still accepted", not _sys_why,
           "refused %s, which is the shape of the panel's own user: %s" % (_sys_name, _sys_why))
 
+# ── The restore must not follow a symlink out of the staging directory ────────────────────────
+# The staging directory is FIXED, and the helper's own note says why that matters: root copying
+# "whatever is in the directory you name" would let a caller stage a directory it cannot read and
+# have root hand its contents back. But fixing the DIRECTORY says nothing about what the names
+# INSIDE it resolve to — and the panel user owns that directory, because the panel is what creates
+# it and unpacks the archive into it.
+#
+# The copy was `if os.path.isfile(src): shutil.copyfile(src, dst)`. Both follow symlinks, and this
+# runs as root, so a compromised panel could have root do its reading and writing for it. Driven
+# through restore_copy_members itself rather than a reimplementation of the loop — a test that
+# reimplements the code it guards is exactly how this would have stayed invisible.
+import stat as _rs_stat
+_rs_tmp = _tempfile.mkdtemp(prefix="restore-sym-")
+_rs_secret = os.path.join(_rs_tmp, "root_only")
+with open(_rs_secret, "w", encoding="utf-8") as _fh:
+    _fh.write("SECRET-THE-PANEL-USER-MUST-NOT-SEE")
+_rs_data = os.path.join(_rs_tmp, "data")
+_rs_stage = os.path.join(_rs_data, _helper.RESTORE_STAGE)
+os.makedirs(_rs_stage)
+
+# 1. A symlink staged under a member name must not be read through.
+os.symlink(_rs_secret, os.path.join(_rs_stage, "cred_key"))
+_rs_copied = _helper.restore_copy_members(_rs_stage, _rs_data)
+_rs_landed = os.path.join(_rs_data, "cred_key")
+check("helper restore: a symlinked staged member is not followed (no arbitrary read as root)",
+      "cred_key" not in _rs_copied and not os.path.exists(_rs_landed),
+      "copied=%s, landed=%r" % (_rs_copied,
+                                open(_rs_landed).read() if os.path.exists(_rs_landed) else None))
+
+# 2. A symlink at the DESTINATION must not be written through — that one is a root-owned file of
+#    the attacker's choosing, i.e. a root shell rather than a disclosure.
+os.unlink(os.path.join(_rs_stage, "cred_key"))
+with open(os.path.join(_rs_stage, "secret_key"), "w", encoding="utf-8") as _fh:
+    _fh.write("payload")
+_rs_victim = os.path.join(_rs_tmp, "root_owned_target")
+with open(_rs_victim, "w", encoding="utf-8") as _fh:
+    _fh.write("original")
+os.symlink(_rs_victim, os.path.join(_rs_data, "secret_key"))
+_helper.restore_copy_members(_rs_stage, _rs_data)
+check("helper restore: a symlinked DESTINATION is not written through (no arbitrary write as root)",
+      open(_rs_victim, encoding="utf-8").read() == "original",
+      "the victim file was overwritten with %r" % open(_rs_victim, encoding="utf-8").read())
+os.unlink(os.path.join(_rs_data, "secret_key"))
+
+# 3. Positive control: a REAL staged file is still restored, with its mode. Without this the two
+#    checks above pass just as well against a copy that does nothing at all.
+with open(os.path.join(_rs_stage, "config.json"), "w", encoding="utf-8") as _fh:
+    _fh.write("{\"real\": true}")
+os.chmod(os.path.join(_rs_stage, "config.json"), 0o600)
+_rs_ok = _helper.restore_copy_members(_rs_stage, _rs_data)
+_rs_dst = os.path.join(_rs_data, "config.json")
+check("helper restore: a real staged file IS still copied (positive control)",
+      "config.json" in _rs_ok and os.path.isfile(_rs_dst)
+      and open(_rs_dst, encoding="utf-8").read() == "{\"real\": true}",
+      "copied=%s" % (_rs_ok,))
+check("helper restore: ...and it keeps the staged file's mode",
+      _rs_stat.S_IMODE(os.stat(_rs_dst).st_mode) == 0o600,
+      oct(_rs_stat.S_IMODE(os.stat(_rs_dst).st_mode)))
+
+# 4. A staging directory that is itself a symlink is refused outright.
+_rs_data2 = os.path.join(_rs_tmp, "data2")
+os.makedirs(_rs_data2)
+os.symlink(_rs_stage, os.path.join(_rs_data2, _helper.RESTORE_STAGE))
+check("helper restore: a symlinked staging directory copies nothing",
+      _helper.restore_copy_members(os.path.join(_rs_data2, _helper.RESTORE_STAGE), _rs_data2) == [],
+      "it copied something")
+_shutil.rmtree(_rs_tmp, ignore_errors=True)
+
 # ── What may be written into a root-owned file ────────────────────────────────────────────────
 # WRITE_TARGETS secures the path; the CONTENT was stdin, written verbatim, on the reasoning that
 # it "is never an argument, so no amount of it can change what runs". True of the helper process,
