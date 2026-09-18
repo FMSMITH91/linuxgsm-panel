@@ -414,6 +414,34 @@ eq("console: \\r overwrites by COLUMN, not by byte, when colour is present",
 # A code nothing renders (256-colour/truecolor) is dropped rather than passed to the page.
 eq("console: an unrenderable SGR code is dropped, its text kept",
    _clean_console_text("\x1b[38;5;208morange"), "orange")
+# ── 38/48 CONSUME their parameters; reading those as attributes invents formatting ────────────
+# SGR 38/48/58 are extended-colour introducers: `38;5;n` is one 256-colour instruction and
+# `38;2;r;g;b` one truecolor instruction. Treating each sub-parameter as its own attribute turns
+# an RGB triple into arbitrary formatting — Minecraft converts a plugin's §x hex colour into
+# exactly these sequences, so `48;2;1;9;3` came out as dim + bold + STRIKETHROUGH + italic and
+# drew a line through an Essentials warning and the URL beneath it. Reported from a real console.
+eq("console: an extended-colour sequence applies NO attributes of its own",
+   _clean_console_text("\x1b[48;2;1;9;3mtext"), "text")
+eq("console: ...nor does a 256-colour one",
+   _clean_console_text("\x1b[38;5;208morange"), "orange")
+eq("console: ...and a malformed introducer drops only itself",
+   _clean_console_text("\x1b[38mtext"), "text")
+# The sub-parameters must be CONSUMED, not merely filtered: a real code after them still applies.
+eq("console: a real code following an extended colour is not swallowed",
+   _clean_console_text("\x1b[38;2;1;9;3m\x1b[33myellow"), "\x1b[33myellow\x1b[0m")
+# ...including in the SAME sequence, which is where the consumed COUNT has to be exact. Separate
+# sequences cannot catch an over-consuming parser: it would eat the parameter after the triple and
+# nothing would notice. `38;2;r;g;b;33` is one instruction then a colour, and both must survive.
+eq("console: consuming a truecolor triple takes exactly five parameters, not six",
+   _clean_console_text("\x1b[38;2;1;9;3;33myellow"), "\x1b[33myellow\x1b[0m")
+eq("console: ...and a 256-colour one takes exactly three",
+   _clean_console_text("\x1b[38;5;208;33myellow"), "\x1b[33myellow\x1b[0m")
+# ...and the attributes themselves still work when the game genuinely asks for them.
+eq("console: a genuine strikethrough is still rendered",
+   _clean_console_text("\x1b[9mstruck"), "\x1b[9mstruck\x1b[0m")
+eq("console: a genuine colour is still rendered",
+   _clean_console_text("\x1b[33mwarn"), "\x1b[33mwarn\x1b[0m")
+
 # A carriage return OVERWRITES from column 0 — it does not start a new line. Rendering it as a
 # newline (the old behaviour) split JLine's prompt-erase into stray blank lines.
 eq("console: \\r overwrites from column 0 instead of starting a line",

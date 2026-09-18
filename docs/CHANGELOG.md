@@ -156,6 +156,15 @@ regardless of this file — this changelog is for humans.
   non-ASCII — through a real shell and requires each to come back verbatim as a single argument.
 
 ### Fixed
+- **Console text is no longer struck through, bolded or italicised at random.** SGR 38/48/58 are
+  extended-colour *introducers* that consume the parameters after them — `38;5;n` is one
+  256-colour instruction, `38;2;r;g;b` one truecolor instruction. The panel dropped the introducer
+  and then read each sub-parameter as if it were its own attribute, so an RGB triple became
+  formatting: `48;2;1;9;3` came out as dim + bold + **strikethrough** + italic. Minecraft converts
+  a plugin's `§x` hex colour into exactly these sequences, which is how a line ended up drawn
+  through an EssentialsX warning and the URL beneath it. The whole instruction is consumed and
+  dropped now (the panel does not render extended colour), and a real code sharing the same
+  sequence still applies.
 - **The console no longer loses output, or cuts a line in half, during a busy burst.** The poller
   reads at most 64KB per tick but then advanced its offset to the log's *full* size, so anything
   past that cap was silently discarded — and the 64KB boundary itself landed mid-line, reaching
