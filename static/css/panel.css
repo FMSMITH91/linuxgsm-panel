@@ -408,6 +408,13 @@
       /* .console-line is pre-wrap and that inherits: without this the stamp wraps INSIDE its own
          fixed-width box and pushes the line onto a second row. */
       white-space: nowrap; overflow: hidden;
+      /* LOAD-BEARING, and not obvious. An inline-block whose `overflow` is not `visible` takes its
+         baseline from its BOTTOM MARGIN EDGE rather than from its last line box, so it sits lower
+         than the text beside it and the line box grows by a descender to contain it. Measured:
+         every stamped line was 24.44px against 18.72px for an unstamped one — reported as "why is
+         there like a extra space inbetween lines". Taking the gutter out of baseline alignment
+         removes the effect and renders identically, since both share a line-height. */
+      vertical-align: top;
       -webkit-user-select: none; user-select: none;   /* copying the log should not copy the gutter */
     }
     .console-output.ts-hidden .console-ts { display: none; }

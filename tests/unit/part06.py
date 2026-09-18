@@ -1591,6 +1591,28 @@ def _toplevel_class_rules(css):
     return out
 
 
+# ── The console's timestamp gutter must not make its line taller ──────────────────────────────
+# `.console-ts` is an inline-block with `overflow: hidden`, and per CSS an inline-block whose
+# overflow is not `visible` takes its baseline from its BOTTOM MARGIN EDGE instead of from its last
+# line box. It therefore hangs below the text beside it and the line box grows by a descender to
+# fit: measured at 24.44px per stamped line against 18.72px for an unstamped one, which reads as
+# ragged double-spacing wherever the two meet. Reported as "why is there like a extra space
+# inbetween lines".
+#
+# `vertical-align` takes the gutter out of baseline alignment and the effect goes, rendering
+# identically. This pins the PAIR, because either declaration alone is harmless and it is only
+# together that they misbehave — so a later tidy that drops the vertical-align brings it back.
+_cts = re.search(r"\.console-ts\s*\{([^}]*)\}", _css)
+check("panel.css: the console timestamp gutter rule was found", _cts is not None,
+      "no .console-ts rule — the check below would prove nothing")
+_cts_body = _cts.group(1) if _cts else ""
+check("panel.css: a clipped inline-block gutter also sets vertical-align, or it grows the line",
+      not (re.search(r"overflow\s*:\s*(hidden|auto|scroll)", _cts_body)
+           and "inline-block" in _cts_body)
+      or re.search(r"vertical-align\s*:", _cts_body),
+      "overflow on an inline-block moves its baseline to the bottom margin edge; without "
+      "vertical-align every stamped console line is ~6px taller than an unstamped one")
+
 _css_rules = _toplevel_class_rules(_css)
 _dupe_rules = sorted({r for r in _css_rules if _css_rules.count(r) > 1})
 check("panel.css: no single-class rule is declared twice at the top level",

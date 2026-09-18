@@ -142,6 +142,12 @@ regardless of this file — this changelog is for humans.
   non-ASCII — through a real shell and requires each to come back verbatim as a single argument.
 
 ### Fixed
+- **Console lines with a timestamp are no longer taller than lines without one.** The gutter is an
+  inline-block, and per CSS an inline-block whose `overflow` is not `visible` takes its baseline
+  from its bottom margin edge rather than its last line box — so it hung below the text beside it
+  and the line box grew by a descender to contain it. Measured at 24.44px per stamped line against
+  18.72px unstamped, which reads as ragged double-spacing wherever stamped and unstamped lines
+  meet. Reported as "why is there like a extra space inbetween lines".
 - **Console timestamps now appear on a server that only polls, and an empty column says why.**
   Reported as "I still don't see the timestamps in the console", and it was two things. The
   timestamp was attached only to lines pushed over the websocket; the 30-second HTTP poll that
