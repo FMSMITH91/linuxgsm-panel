@@ -392,8 +392,28 @@ check("console: bare '> ' prompt lines dropped",
 check("console: real log lines preserved",
       "[02:46:21 INFO]: UUID of player Kitty is abc" in _mc_clean
       and "[02:46:21 INFO]: Connection closed" in _mc_clean)
-eq("console: ANSI colour codes stripped",
-   _clean_console_text("\x1b[0;32mgreen\x1b[0m text"), "green text")
+# Colour is KEPT now — LinuxGSM's [  OK  ]/[ FAIL ] tags are most of what makes a long update
+# readable, and throwing them away was right only for the paths that PARSE this text. What reaches
+# the browser is canonical: the redundant "0;" prefix is gone and the run is closed explicitly, so
+# the JS has one shape to split on. `_bare` below is the same line as a reader sees it, which is
+# what every assertion about CONTENT uses — colour must not be able to hide a rendering bug.
+def _bare(text):
+    """`text` with the colour this now keeps removed — what the words alone say."""
+    return re.sub(r"\x1b\[[0-9;]*m", "", text)
+
+
+eq("console: ANSI colour is kept, canonicalised",
+   _clean_console_text("\x1b[0;32mgreen\x1b[0m text"), "\x1b[32mgreen\x1b[0m text")
+eq("console: ...and the words alone are unchanged by keeping it",
+   _bare(_clean_console_text("\x1b[0;32mgreen\x1b[0m text")), "green text")
+# A \r overwrite ACROSS a colour boundary is the case a naive implementation gets wrong: leave the
+# escapes in the string and the overwrite counts them as columns, so it lands in the wrong place —
+# silently, and only on the download-progress spool this was added to show.
+eq("console: \\r overwrites by COLUMN, not by byte, when colour is present",
+   _clean_console_text("\x1b[32m123456\x1b[0m\rabc"), "abc\x1b[32m456\x1b[0m")
+# A code nothing renders (256-colour/truecolor) is dropped rather than passed to the page.
+eq("console: an unrenderable SGR code is dropped, its text kept",
+   _clean_console_text("\x1b[38;5;208morange"), "orange")
 # A carriage return OVERWRITES from column 0 — it does not start a new line. Rendering it as a
 # newline (the old behaviour) split JLine's prompt-erase into stray blank lines.
 eq("console: \\r overwrites from column 0 instead of starting a line",
@@ -417,10 +437,24 @@ _jline_real = ("> s\b\x1b[31msa\x1b[0m\x1b[K\b\bsay\x1b[K\x1b[31m \x1b[0m\b \x1b
                "[23:52:54 INFO]: [Not Secure] [Server] hi\r\n")
 _jline_clean = _clean_console_text(_jline_real)
 eq("console: a real JLine command echo renders as typed",
-   [ln for ln in _jline_clean.split("\n") if ln.strip()],
+   [_bare(ln) for ln in _jline_clean.split("\n") if ln.strip()],
    ["> say hi", "[23:52:54 INFO]: [Not Secure] [Server] hi"])
-check("console: no control characters survive to the browser",
-      not any(ord(c) < 32 and c != "\n" for c in _jline_clean), repr(_jline_clean[:80]))
+check("console: ...and JLine's own syntax colour survives it",
+      "\x1b[36m" in _jline_clean, repr(_jline_clean[:120]))
+# The invariant NARROWED deliberately: colour now reaches the browser, and nothing else does.
+# Both halves are asserted, because the dangerous direction is the second one — erase-line, OSC,
+# the two-byte escapes and a stray ESC all render as visible junk (or worse) if they get through,
+# and "we kept some escapes now" is exactly the change that would let them.
+check("console: no control characters survive to the browser except colour",
+      not any(ord(c) < 32 and c != "\n" for c in _bare(_jline_clean)), repr(_jline_clean[:80]))
+check("console: the escapes that are NOT colour are still all removed",
+      not any(ord(c) < 32 and c != "\n"
+              for c in _bare(_clean_console_text(
+                  "\x1b[K erase \x1b]0;title\x07 osc \x1b> two-byte \x1b[2C cursor \x1bZ stray"))),
+      repr(_clean_console_text("\x1b[K erase \x1b]0;title\x07 osc \x1b> two-byte")))
+check("console: a bare ESC that completes no sequence never reaches the page",
+      "\x1b" not in _bare(_clean_console_text("player\x1b\x00name")),
+      repr(_clean_console_text("player\x1b\x00name")))
 eq("console: an echoed command line ('> list') is kept",
    _clean_console_text("> list"), "> list")
 eq("console: plain Source/CoD line untouched",

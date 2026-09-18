@@ -874,6 +874,10 @@ _BAN_SPIKE_THRESHOLD = 3
 # as a literal "[K" once the ESC byte is dropped), carriage returns to redraw the input line, and a
 # bare "> " prompt line after every message. Plain-text consoles (Source/CoD/GMod) have none of it.
 _CONSOLE_PROMPT_RE = re.compile(r"^>\s*$")
+# The prompt test runs on the line with its colour REMOVED. JLine wraps its prompt in SGR, and
+# once render_colour started keeping those, "\x1b[0m> \x1b[0m" stopped matching "^>\s*$" — so
+# every prompt line the panel has been dropping for a year would have come back at once.
+_sgr_bare = re.compile(r"\x1b\[[0-9;]*m")
 
 
 def _clean_console_text(text):
@@ -882,8 +886,8 @@ def _clean_console_text(text):
     are *just* the prompt are removed, so an echoed command like '> list' is kept."""
     if not text:
         return text
-    return "\n".join(ln for ln in terminal.render(text).split("\n")
-                      if not _CONSOLE_PROMPT_RE.match(ln))
+    return "\n".join(ln for ln in terminal.render_colour(text).split("\n")
+                      if not _CONSOLE_PROMPT_RE.match(_sgr_bare.sub("", ln)))
 
 
 def create_app():

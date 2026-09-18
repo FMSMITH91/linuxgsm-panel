@@ -31,6 +31,7 @@ __all__ = [
     "_expected_offline",
     "_cron_restart_pending",
     "_action_output",
+    "_console_backlog",
     "_install_jobs",
     "_install_lock",
     "_full_backup_lock",
@@ -137,6 +138,16 @@ _cron_restart_pending = register_server_state({})
 # the poller has already sent, and the POLLER is the only writer of it (one thread, so a plain
 # int is enough). Starting at 0 means a console opened mid-update replays from the beginning.
 _action_output = register_server_state({})
+
+# The lines the PANEL itself pushed into a server's console — a long action's markers and output.
+# Bounded, in memory, and the reason it exists is a refresh: /api/console rebuilds the console by
+# tailing the GAME's console log, which an update never writes to, so everything the panel pushed
+# lived only in the open page and vanished the moment you reloaded it ("when you refresh the page
+# after i did update, those messages went away"). Replayed on the next console load instead.
+#
+# Not persisted: a panel restart clearing the last update's output is fine, and this must never
+# grow into a second log file. _CONSOLE_BACKLOG_MAX caps it per server.
+_console_backlog = register_server_state({})   # server_id -> [line, ...]
 
 # ── Background-job state ─────────────────────────────────────────────────────────────────────
 # These lived at module level in app.py, which was fine while the only readers were app.py's own

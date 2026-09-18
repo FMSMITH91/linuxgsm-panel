@@ -395,6 +395,45 @@
     .console-line { white-space: pre-wrap; word-break: break-all; }
     .console-line:empty { display: none; }
 
+    /* ── ANSI COLOUR IN THE CONSOLE ──
+       LinuxGSM colours its own output ([  OK  ] green, [ FAIL ] red, [ INFO ] blue) and that is
+       most of what makes a long `update` readable at a glance in a terminal. The server keeps SGR
+       as canonical ESC[<codes>m and server_detail.js turns each run into a <span class="ansi-N">
+       (nodes, never innerHTML — chat and player names reach this text).
+
+       The values are the standard 16 tuned UP for the console's near-black #080d17: the usual
+       terminal blue (#0000ee) and black (#000) are unreadable on it, so those two are lifted
+       furthest. Fixed rather than themed — the console pane is dark in both themes. */
+    .ansi-30 { color: #6b7a90; }   /* "black" — legible grey, not invisible */
+    .ansi-31 { color: #ff6b6b; }
+    .ansi-32 { color: #4ade80; }
+    .ansi-33 { color: #fbbf24; }
+    .ansi-34 { color: #60a5fa; }   /* lifted: LinuxGSM's [ INFO ] is blue on near-black */
+    .ansi-35 { color: #d68fff; }
+    .ansi-36 { color: #4fd6e0; }
+    .ansi-37 { color: #c8d3e3; }
+    .ansi-90 { color: #7d8ca3; }
+    .ansi-91 { color: #ff9494; }
+    .ansi-92 { color: #86efac; }
+    .ansi-93 { color: #fcd34d; }
+    .ansi-94 { color: #93c5fd; }
+    .ansi-95 { color: #e9b8ff; }
+    .ansi-96 { color: #86e8f0; }
+    .ansi-97 { color: #ffffff; }
+    .ansi-40 { background: #1c2333; }
+    .ansi-41 { background: #7f1d1d; }
+    .ansi-42 { background: #14532d; }
+    .ansi-43 { background: #78350f; }
+    .ansi-44 { background: #1e3a8a; }
+    .ansi-45 { background: #581c87; }
+    .ansi-46 { background: #155e75; }
+    .ansi-47 { background: #3f4a5e; }
+    .ansi-1 { font-weight: 700; }
+    .ansi-2 { opacity: .7; }
+    .ansi-3 { font-style: italic; }
+    .ansi-4 { text-decoration: underline; }
+    .ansi-9 { text-decoration: line-through; }
+
     /* ── LIVE STAT TILES ── */
     .stat-tile {
       background: #0d1420; border: 1px solid var(--border);
