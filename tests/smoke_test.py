@@ -4488,6 +4488,95 @@ try:
         (_sm_core.run_as_game_user, _sm_core.run_command) = _lat_saved
         _ao.clear()
 
+    # ── The sweep prunes even when the last host is gone ───────────────────────────────────────
+    # _forget_deleted_rows is what keeps every row-keyed map honest, and it was the LAST statement
+    # in _monitor_pass — after `if not remotes: return`. So in the one state where it has the most
+    # to forget (every host deleted) it never ran at all, and the next host added takes id 1 again
+    # and inherits the lot. Driven with an empty host list, which is exactly that state.
+    from panel.services import monitoring as _mp_mon
+    from panel.core import panel_state as _mp_ps
+    _mp_saved = _mp_mon.RemoteServer
+
+    class _NoRemotes:
+        class query:
+            @staticmethod
+            def all():
+                return []
+    try:
+        with app.app_context():
+            _mp_mon._player_counts[91919] = {"count": 3, "max": 8, "name": "ghost", "ts": 0}
+            _mp_ps._max_players_cache[91919] = 64
+            _mp_mon.RemoteServer = _NoRemotes
+            _mp_mon._monitor_pass()
+        check("monitor sweep: it still forgets deleted rows when NO hosts are left",
+              91919 not in _mp_mon._player_counts and 91919 not in _mp_ps._max_players_cache,
+              "left: counts=%s max=%s" % (91919 in _mp_mon._player_counts,
+                                          91919 in _mp_ps._max_players_cache))
+    finally:
+        _mp_mon.RemoteServer = _mp_saved
+        _mp_mon._player_counts.pop(91919, None)
+        _mp_ps._max_players_cache.pop(91919, None)
+
+    # ── Deleting a host forgets everything keyed on its id ─────────────────────────────────────
+    # SQLite hands a deleted row's id straight to the next INSERT, and delete_remote is the one
+    # route that removes a host — taking its game servers with it, without uninstall_server ever
+    # running. Three kinds of state were left behind:
+    #
+    #   * config["autoblock_hosts"] — a LIST OF REMOTE IDS, persisted, so a restart does not clear
+    #     it. The hourly sweep looks each id up; once it is live again that is the NEW host, and
+    #     the panel starts adding `ufw deny` rules to a machine nobody enabled auto-blocking on.
+    #   * config["game_schedules"] — per-server backup overrides, keyed by game-server id.
+    #     uninstall_server already removes these deliberately; the cascade never did.
+    #   * ssh_manager's per-remote caches. _specs_cache has NO expiry, so a recycled id reported
+    #     the deleted machine's CPU/RAM/disk/OS until the panel restarted.
+    with app.app_context():
+        _dr_remote = RemoteServer(name="smoke-delhost", host="127.0.0.1", port=22,
+                                  username="root", auth_method="key", auth_credential="")
+        db.session.add(_dr_remote)
+        db.session.flush()
+        _dr_gs = GameServer(remote_id=_dr_remote.id, name="smoke-delgame",
+                            short_name="delgameserver", game_type="csgo", port=27099,
+                            installed=True, status="offline")
+        db.session.add(_dr_gs)
+        db.session.commit()
+        _dr_rid, _dr_gid = _dr_remote.id, _dr_gs.id
+    from panel.core.config import load_config as _dr_cfg, update_config as _dr_upd
+    from panel.ops import backup as _dr_bk
+    from panel.ops.ssh_manager import _core as _dr_core, firewall as _dr_fw, hosts as _dr_hosts
+    _dr_upd(lambda c: c.__setitem__("autoblock_hosts",
+                                    sorted(set(c.get("autoblock_hosts") or []) | {_dr_rid})))
+    _dr_bk.set_game_schedule(_dr_gid, 3, 2)
+    _dr_fw._specs_cache[_dr_rid] = {"os": "deleted host"}
+    _dr_hosts._pro_status_cache[_dr_rid] = (9e18, {"attached": True})
+    _dr_core._gamedig_host_cache[_dr_rid] = (9e18, "203.0.113.9")
+    check("delete host: the fixtures really armed (autoblock + schedule + caches)",
+          _dr_rid in (_dr_cfg().get("autoblock_hosts") or [])
+          and str(_dr_gid) in (_dr_cfg().get("game_schedules") or {})
+          and _dr_rid in _dr_fw._specs_cache,
+          "autoblock=%s schedules=%s" % (_dr_cfg().get("autoblock_hosts"),
+                                         list((_dr_cfg().get("game_schedules") or {}))))
+    _dr_resp = c.post("/remotes/%d/delete" % _dr_rid, json={"password": "Str0ng!passw0rd"},
+                      headers={"X-Requested-With": "XMLHttpRequest"})
+    check("delete host: the request succeeds",
+          (_dr_resp.get_json() or {}).get("success") is True,
+          "%d %s" % (_dr_resp.status_code, _dr_resp.get_data(as_text=True)[:120]))
+    _dr_after = _dr_cfg()
+    check("delete host: its auto-block opt-in is gone from config (a reused id would inherit it)",
+          _dr_rid not in (_dr_after.get("autoblock_hosts") or []),
+          "still listed: %s" % (_dr_after.get("autoblock_hosts"),))
+    check("delete host: its game server's backup schedule is gone from config too",
+          str(_dr_gid) not in (_dr_after.get("game_schedules") or {}),
+          "still present: %s" % (list(_dr_after.get("game_schedules") or {}),))
+    # Named individually, NOT walked off _core._remote_caches: iterating the registry makes this
+    # pass vacuously the moment a cache stops being registered — which is the exact regression it
+    # is here to catch. (Verified: it passed against an unregistered build before this changed.)
+    _dr_stale = [n for n, _m in (("host specs", _dr_fw._specs_cache),
+                                 ("ubuntu pro", _dr_hosts._pro_status_cache),
+                                 ("gamedig host", _dr_core._gamedig_host_cache))
+                 if _dr_rid in _m]
+    check("delete host: the per-remote SSH caches forgot it",
+          not _dr_stale, "still cached by: %s" % ", ".join(_dr_stale))
+
     # ── join_console and leave_console must agree on the KEY ────────────────────────────────
     # The viewer registry is what the console poller iterates: an id left in it costs an SSH round
     # trip every two seconds for a console nobody is watching. join_console coerces the id to int

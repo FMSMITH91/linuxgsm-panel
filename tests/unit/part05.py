@@ -1598,6 +1598,28 @@ check("state pruning: the job registries are registered WITH their locks",
                                    _locked.get(id(_sh_reg._bootstrap_jobs))))
 check("state pruning: reboot-when-empty went through the registry too, lock and all",
       _locked.get(id(_ps_reg._reboot_when_empty)) is _ps_reg._rwe_lock)
+# ── The per-remote caches inside ssh_manager ──────────────────────────────────────────────────
+# Same problem, a different mechanism: this package memoises per HOST, keyed by RemoteServer.id,
+# and closes it with an after_delete listener rather than the monitor's sweep (game.py's version
+# cache has done that for a while, and says why). Three were left out of it — one of them with no
+# expiry at all, so a recycled id reported the deleted machine's hardware until the next restart.
+from panel.ops.ssh_manager import _core as _rc_core
+from panel.ops.ssh_manager import firewall as _rc_fw
+from panel.ops.ssh_manager import hosts as _rc_hosts
+check("ssh_manager: the host-specs cache is registered for per-remote invalidation",
+      any(_m is _rc_fw._specs_cache for _m in _rc_core._remote_caches))
+check("ssh_manager: the Ubuntu Pro status cache is registered",
+      any(_m is _rc_hosts._pro_status_cache for _m in _rc_core._remote_caches))
+check("ssh_manager: the gamedig-host cache is registered",
+      any(_m is _rc_core._gamedig_host_cache for _m in _rc_core._remote_caches))
+# ...and forgetting really empties them. _specs_cache is the one that matters most: it has no TTL,
+# so nothing else would ever evict a deleted host's entry.
+for _m in (_rc_fw._specs_cache, _rc_hosts._pro_status_cache, _rc_core._gamedig_host_cache):
+    _m[4242] = "left behind by a deleted host"
+_rc_core.forget_remote_caches(4242)
+check("ssh_manager: forgetting a deleted host clears every registered per-remote cache",
+      not [1 for _m in _rc_core._remote_caches if 4242 in _m],
+      "%d cache(s) still hold it" % len([1 for _m in _rc_core._remote_caches if 4242 in _m]))
 for _m, _orig in zip(_reg_maps, _saved):          # leave the process state as we found it
     _m.clear()
     _m.update(_orig)
