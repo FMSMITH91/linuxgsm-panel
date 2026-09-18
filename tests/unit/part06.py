@@ -1640,6 +1640,67 @@ for _dead in ("stat-card", "stat-value", "empty-state"):
     check("...and nothing in the UI asks for .%s" % _dead, _dead not in _markup)
 
 
+# ── recover.sh must not be pointed at another user's "panel" ──────────────────────────────────
+# It runs as root during a lockout and scans /home/*/.config/systemd/user/ for a unit, reading
+# WorkingDirectory out of it. /home/* is one directory PER LOCAL USER, and the panel creates a
+# Linux account per game server (useradd -m), so those homes exist by design — anyone with code
+# execution as a game server can plant a unit there. The scan took the FIRST match and broke, and
+# glob order is alphabetical, so "aaaserver" beat "ubuntu" and `sudo linuxgsm-panel-recover` ran
+# their manage.py and was handed the new superadmin password the operator was typing.
+#
+# Driven by RUNNING the real script against a sandbox /home (PANEL_RECOVER_HOMES), not by grepping
+# it — the property is which install it picks, and only running it can answer that.
+import subprocess as _rv_sub
+import tempfile as _rv_tmp
+
+_rv_root = _rv_tmp.mkdtemp(prefix="recover-homes-")
+
+
+def _rv_plant(user, dirname):
+    """A per-user install: a unit naming `dirname`, and a manage.py in it."""
+    _unit_dir = os.path.join(_rv_root, user, ".config", "systemd", "user")
+    os.makedirs(_unit_dir, exist_ok=True)
+    _panel = os.path.join(_rv_root, user, dirname)
+    os.makedirs(_panel, exist_ok=True)
+    open(os.path.join(_panel, "manage.py"), "w").close()
+    with open(os.path.join(_unit_dir, "linuxgsm-panel.service"), "w", encoding="utf-8") as _fh:
+        _fh.write("WorkingDirectory=%s\n" % _panel)
+    return _panel
+
+
+def _rv_run():
+    """recover.sh with the scan pointed at the sandbox. HOME is set somewhere empty so the
+    per-user branch above the scan cannot match, and list-users keeps it read-only."""
+    return _rv_sub.run(["bash", os.path.join(_root, "recover.sh"), "list-users"],
+                       capture_output=True, text=True, timeout=60,
+                       env={**os.environ, "PANEL_RECOVER_HOMES": _rv_root,
+                            "HOME": os.path.join(_rv_root, "_nohome")})
+
+
+_rv_real = _rv_plant("ubuntu", "linuxgsm-panel")
+_rv_evil = _rv_plant("aaaserver", "evil")
+_rv_two = _rv_run()
+check("recover.sh: two candidate installs is a refusal, not a silent pick",
+      _rv_two.returncode == 1 and "Refusing to guess" in _rv_two.stderr,
+      "rc=%d err=%r" % (_rv_two.returncode, _rv_two.stderr[-200:]))
+check("recover.sh: ...and it never chose the alphabetically-first one",
+      _rv_evil not in (_rv_two.stdout + _rv_two.stderr).split("Using ")[-1].split("\n")[0],
+      "it announced %r" % (_rv_two.stderr[-200:],))
+check("recover.sh: the refusal NAMES both, so the operator can tell them apart",
+      _rv_real in _rv_two.stderr and _rv_evil in _rv_two.stderr,
+      _rv_two.stderr[-300:])
+
+# Positive control: ONE candidate is still found and used without complaint — otherwise this gate
+# passes just as well against a script that refuses everything and helps nobody.
+_shutil.rmtree(os.path.join(_rv_root, "aaaserver"))
+_rv_one = _rv_run()
+check("recover.sh: a single install is still located (positive control)",
+      "Refusing to guess" not in _rv_one.stderr and _rv_real in _rv_one.stderr,
+      "rc=%d err=%r" % (_rv_one.returncode, _rv_one.stderr[-200:]))
+check("recover.sh: ...and it says which install it is driving, before any password is typed",
+      ("Using %s" % _rv_real) in _rv_one.stderr, _rv_one.stderr[-200:])
+_shutil.rmtree(_rv_root, ignore_errors=True)
+
 # ── Every part file must actually be RUN ──────────────────────────────────────────────────────
 # The suite is now a runner plus tests/unit/part*.py, and the runner names the parts explicitly.
 # Drop one from that list — or add a part and forget to — and the suite reports a smaller total
