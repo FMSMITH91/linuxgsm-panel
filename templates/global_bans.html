@@ -69,7 +69,7 @@
             <td>{{ b.player_name or '—' }}</td>
             <td class="small">{{ b.reason or '' }}</td>
             <td class="d-none d-md-table-cell small text-secondary">{{ b.created_by }}</td>
-            <td class="d-none d-md-table-cell small text-secondary">{{ b.created_at.strftime('%Y-%m-%d') if b.created_at else '' }}</td>
+            <td class="d-none d-md-table-cell small text-secondary">{{ b.created_at|datetime if b.created_at else '' }}</td>
             <td class="text-end text-nowrap">
               <form method="POST" action="{{ url_for('global_bans_delete', ban_id=b.id) }}" class="d-inline mb-0">
                 <button class="btn btn-outline-secondary btn-sm" title="Remove from the list and unban on every server">

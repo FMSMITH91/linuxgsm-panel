@@ -392,8 +392,26 @@
   outline: none;
   box-shadow: inset 0 0 0 1px var(--accent);
 }
-    .console-line { white-space: pre-wrap; word-break: break-all; }
+    /* padding-left + a negative text-indent: the timestamp gutter sits in the padding, and a
+       WRAPPED line hangs to the same column instead of starting under the clock. */
+    .console-line { white-space: pre-wrap; word-break: break-all;
+                    padding-left: 4.9rem; text-indent: -4.9rem; }
     .console-line:empty { display: none; }
+
+    /* Per-line timestamp gutter. Fixed width and tabular figures so the log text starts at the
+       same column on every line — a ragged left edge is far harder to scan than no times at all.
+       Lines the panel did not watch arrive carry no stamp; the gutter is simply absent there, and
+       the text still lines up because the indent lives on .console-line, not on the stamp. */
+    .console-ts {
+      display: inline-block; width: 4.6rem; margin-right: .3rem;
+      color: #5d6b82; font-variant-numeric: tabular-nums; text-indent: 0;
+      /* .console-line is pre-wrap and that inherits: without this the stamp wraps INSIDE its own
+         fixed-width box and pushes the line onto a second row. */
+      white-space: nowrap; overflow: hidden;
+      -webkit-user-select: none; user-select: none;   /* copying the log should not copy the gutter */
+    }
+    .console-output.ts-hidden .console-ts { display: none; }
+    .console-output.ts-hidden .console-line { padding-left: 0; text-indent: 0; }
 
     /* ── ANSI COLOUR IN THE CONSOLE ──
        LinuxGSM colours its own output ([  OK  ] green, [ FAIL ] red, [ INFO ] blue) and that is

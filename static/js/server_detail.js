@@ -222,7 +222,7 @@ socket.on('disconnect', function() {
 
 socket.on('console_output', function(data) {
   if (data.server_id === serverId && data.data) {
-    appendConsole(data.data);
+    appendConsole(data.data, data.ts);
   }
 });
 
@@ -231,9 +231,9 @@ socket.on('console_output', function(data) {
 // provided, the next chat message trimmed the console back to 500 lines. It also appended without
 // telling the scrollback buffer, which would then let the next poll re-append the same lines as if
 // they were new. Both paths go through _appendConsole now: one cap, one buffer, no duplicates.
-function appendConsole(text) {
+function appendConsole(text, ts) {
   var stick = consoleAtBottom();   // capture BEFORE appending
-  _appendConsole(String(text).split('\n').filter(function(l){ return l.trim(); }));
+  _appendConsole(String(text).split('\n').filter(function(l){ return l.trim(); }), ts);
   if (stick) stickConsole();       // only auto-follow if they were at the bottom
 }
 
@@ -292,6 +292,46 @@ function _newConsoleLines(have, incoming) {
   return incoming;
 }
 
+// ── Per-line timestamps ──────────────────────────────────────────────────────────────────────
+// The time is WHEN THE PANEL SAW THE LINE, and the panel only knows that for lines it watched
+// arrive: a push from the console poller (accurate to one poll interval) or a line it wrote
+// itself. The window /api/console returns on load is a fresh tail of the log file, which for most
+// games carries no per-line time at all — those lines were written at some unknowable point
+// before we looked, so their gutter stays BLANK rather than being stamped "now" and putting a
+// confident wrong time on a week of history.
+//
+// Rendered with toLocaleTimeString, so it is the VIEWER's own clock — the same rule the rest of
+// the panel follows for stored timestamps (see localizeTimes in panel.js). Two people in
+// different timezones each read their own.
+var _tsOn = true;
+try { _tsOn = localStorage.getItem('sd.consoleTs') !== '0'; } catch (e) { /* private mode */ }
+
+function stampLine(div, ts) {
+  var d = new Date(Number(ts) * 1000);
+  if (isNaN(d.getTime())) return;
+  var g = document.createElement('span');
+  g.className = 'console-ts';
+  // 24-hour, deliberately, even where the viewer's locale is 12-hour: "7:35:57 PM" is three
+  // characters wider than "19:35:57" and overflowed the gutter, and a log column that changes
+  // width between noon and midnight cannot align. The tooltip keeps the viewer's own full
+  // date-and-time format, so nothing is lost — only the gutter is normalised.
+  g.textContent = d.toLocaleTimeString([], {hour12: false});
+  g.title = d.toLocaleString();          // the full date, for a console left open overnight
+  div.appendChild(g);                    // called before renderAnsi fills the line, so this is first
+}
+
+function applyTsVisible() {
+  consoleEl.classList.toggle('ts-hidden', !_tsOn);
+  var b = document.getElementById('console-ts-toggle');
+  if (b) { b.setAttribute('aria-pressed', _tsOn ? 'true' : 'false'); b.classList.toggle('active', _tsOn); }
+}
+
+window.toggleConsoleTs = function () {
+  _tsOn = !_tsOn;
+  try { localStorage.setItem('sd.consoleTs', _tsOn ? '1' : '0'); } catch (e) { /* private mode */ }
+  applyTsVisible();
+};
+
 // LinuxGSM colours its output — [  OK  ] green, [ FAIL ] red — and the server now keeps that as
 // canonical ESC[<codes>m and nothing else (see panel/core/terminal.py render_colour). So there is
 // one trivial pattern to split on here, not a terminal to emulate.
@@ -317,8 +357,11 @@ function _ansiRun(parent, text, codes) {
 }
 
 function renderAnsi(el, line) {
-  // The overwhelmingly common case — a game console line with no colour at all.
-  if (line.indexOf('\x1b[') < 0) { el.textContent = line; return; }
+  // APPENDS to el; it must never ASSIGN el.textContent. This fast path used to, and it silently
+  // wiped the timestamp span that _appendConsole had just put in the gutter — so every line
+  // WITHOUT colour lost its time, which is most real console output. Only the coloured lines kept
+  // theirs, which made it look like a colour bug rather than what it was.
+  if (line.indexOf('\x1b[') < 0) { el.appendChild(document.createTextNode(line)); return; }
   var last = 0, codes = '', m;
   _SGR_RE.lastIndex = 0;
   while ((m = _SGR_RE.exec(line)) !== null) {
@@ -329,12 +372,13 @@ function renderAnsi(el, line) {
   _ansiRun(el, line.slice(last), codes);
 }
 
-function _appendConsole(lines) {
+function _appendConsole(lines, ts) {
   if (!lines.length) return;
   var frag = document.createDocumentFragment();
   lines.forEach(function(line) {
     var div = document.createElement('div');
     div.className = 'console-line';
+    if (ts) { div.dataset.ts = ts; stampLine(div, ts); }
     renderAnsi(div, line);
     frag.appendChild(div);
   });
@@ -373,10 +417,14 @@ function showPanelBacklog(panelLines) {
   // buffer exists to find the overlap between successive windows of the log file, and lines that
   // are not in the file would only ever confuse the match.
   var frag = document.createDocumentFragment();
-  panelLines.forEach(function (line) {
+  panelLines.forEach(function (row) {
     var div = document.createElement('div');
     div.className = 'console-line';
-    renderAnsi(div, line);
+    // The backlog is the ONE source that carries a real time for lines you did not watch arrive:
+    // the panel wrote them, so it knows exactly when. That is why an update's output still reads
+    // with its timestamps after a reload, where the game log's own window cannot.
+    if (row && row.t) { div.dataset.ts = row.t; stampLine(div, row.t); }
+    renderAnsi(div, (row && row.line) || '');
     frag.appendChild(div);
   });
   consoleEl.appendChild(frag);
@@ -389,7 +437,9 @@ function refreshConsole(forceScroll, wantLines) {
     .then(r => r.json())
     .then(data => {
       var lines = (data.lines || []).filter(function(l) { return l.trim(); });
-      var panelLines = (data.panel_lines || []).filter(function(l) { return l.trim(); });
+      var panelLines = (data.panel_lines || []).filter(function(r) {
+        return r && typeof r.line === 'string' && r.line.trim();
+      });
       // Nothing changed since last time — leave the console exactly as it is (no flicker while a
       // server sits idle).
       var sig = lines.length + ' ' + (lines[lines.length - 1] || '');
@@ -949,6 +999,8 @@ function loadGameVersion() {
     })
     .catch(function(){});                  // a version is a nicety; never surface it as an error
 }
+
+applyTsVisible();
 
 loadGameVersion();
 

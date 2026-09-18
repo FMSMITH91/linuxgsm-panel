@@ -322,7 +322,11 @@
                 </td>
                 <td class="text-secondary small" style="font-size:.65rem;">
                   {% if peer.last_seen %}
-                    {{ peer.last_seen[:19] }}
+                    {# An ISO-8601 STRING from the Tailscale API, not a datetime column, so
+                       the |datetime filter cannot take it — but localizeTimes only needs a
+                       parseable data-utc, and this carries its own offset. #}
+                    <span class="localtime" data-utc="{{ peer.last_seen }}"
+                          data-no-i18n>{{ peer.last_seen[:19] }}</span>
                   {% else %}
                     —
                   {% endif %}

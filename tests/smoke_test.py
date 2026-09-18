@@ -4485,30 +4485,60 @@ try:
     _cb.clear()
     _bl_saved = _sm_core.run_command
     try:
-        _console_push(app, gs_id, "[panel] update started — its output follows.")
-        _console_push(app, gs_id, "\x1b[32m[  OK  ]\x1b[0m Update complete")
+        _console_push(app, gs_id, "[panel] update started — its output follows.", ts=1700000000.0)
+        _console_push(app, gs_id, "\x1b[32m[  OK  ]\x1b[0m Update complete", ts=1700000042.0)
         check("console backlog: what the panel pushed is remembered, not only broadcast",
               len(_cb.get(gs_id, [])) == 2, "backlog=%s" % (_cb.get(gs_id),))
+        # The time rides ALONGSIDE the line, never inside it. The browser stitches its scrollback
+        # by matching line strings between overlapping windows of the log, so a timestamp prefixed
+        # onto the text would make every line unique and render the whole window twice per poll.
+        check("console timestamps: the time is kept beside the line, not prefixed onto it",
+              all(r["t"] and "1700000" not in r["line"] for r in _cb[gs_id]),
+              "backlog=%s" % (_cb.get(gs_id),))
+        check("console timestamps: ...and it is the time the panel actually saw that line",
+              [r["t"] for r in _cb[gs_id]] == [1700000000.0, 1700000042.0],
+              "times=%s" % [r["t"] for r in _cb[gs_id]])
         # A reload asks /api/console. The host is unreachable in this suite, which is the case
         # that matters most: an update's output is exactly what you still want to read when the
         # server it was updating is down.
         _sm_core.run_command = lambda *a, **k: ("", "", 1)
         _blj = c.get("/api/console/%d" % gs_id).get_json() or {}
+        _bl_rows = _blj.get("panel_lines") or []
         check("console backlog: a reload gets it back from /api/console",
-              any("update started" in ln for ln in _blj.get("panel_lines", [])),
-              "panel_lines=%s" % _blj.get("panel_lines"))
+              any("update started" in (r.get("line") or "") for r in _bl_rows),
+              "panel_lines=%s" % _bl_rows)
+        check("console backlog: ...with the times, so a reload keeps them for the ONE source "
+              "that has real ones",
+              [r.get("t") for r in _bl_rows] == [1700000000.0, 1700000042.0],
+              "times=%s" % [r.get("t") for r in _bl_rows])
         check("console backlog: ...in its OWN field, not spliced into the game log's window",
               _blj.get("lines") == [] and "panel_lines" in _blj,
               "lines=%s" % (_blj.get("lines"),))
+        # THE ONE THAT MATTERS MOST, and the one every other check here passes without: the game
+        # log's window must carry NO time. Those lines are a fresh tail of a file that records no
+        # per-line time for most games — the panel is reading them now but they were written at
+        # some unknowable point before that. Stamping them with the read time would put a
+        # confident wrong time on a week of history, which is worse than a blank gutter, and it
+        # looks exactly right until you notice every old line claims the moment you opened the
+        # page. Asserted on a reachable host so `lines` is non-empty and the check has something
+        # to be wrong about.
+        _sm_core.run_command = lambda *a, **k: ("old line one\nold line two", "", 0)
+        _blj2 = c.get("/api/console/%d" % gs_id).get_json() or {}
+        check("console timestamps: (setup) the game-log window came back non-empty",
+              len(_blj2.get("lines") or []) >= 2,
+              "lines=%s — the check below would pass vacuously" % (_blj2.get("lines"),))
+        check("console timestamps: the game log's own window carries NO invented time",
+              all(isinstance(ln, str) for ln in (_blj2.get("lines") or [])),
+              "a line was stamped with the moment the panel read it: %s" % (_blj2.get("lines"),))
         check("console backlog: the colour survives the round trip to the page",
-              any("\x1b[32m" in ln for ln in _blj.get("panel_lines", [])),
-              "panel_lines=%s" % _blj.get("panel_lines"))
+              any("\x1b[32m" in (r.get("line") or "") for r in _bl_rows),
+              "panel_lines=%s" % _bl_rows)
         # Bounded — this must never quietly become a second copy of the log.
         for _i in range(_CONSOLE_BACKLOG_MAX + 120):
             _console_push(app, gs_id, "line %d" % _i)
         check("console backlog: it is capped, and keeps the NEWEST lines",
               len(_cb[gs_id]) == _CONSOLE_BACKLOG_MAX
-              and _cb[gs_id][-1] == "line %d" % (_CONSOLE_BACKLOG_MAX + 119),
+              and _cb[gs_id][-1]["line"] == "line %d" % (_CONSOLE_BACKLOG_MAX + 119),
               "len=%d last=%r" % (len(_cb[gs_id]), _cb[gs_id][-1]))
 
         # End to end: what the DRAIN sends for a LinuxGSM-coloured line. The words must be intact
@@ -4531,7 +4561,7 @@ try:
             _begin_action_tail(app, gs_id, "update", "/home/x/.panel-update.log", "csgoserver")
             _drain_action_output(app, _col_remote, gs_id)
             _ao.pop(gs_id, None)
-        _col_sent = "\n".join(_cb.get(gs_id, []))
+        _col_sent = "\n".join(r["line"] for r in _cb.get(gs_id, []))
         check("console colour: LinuxGSM's [  OK  ] reaches the page still green",
               "\x1b[32m[  OK  ]\x1b[0m" in _col_sent, "sent %r" % _col_sent)
         check("console colour: ...and the erase-line and window-title escapes do NOT",
@@ -4546,6 +4576,42 @@ try:
         _sm_core.run_command = _bl_saved
         _cb.clear()
         _ao.clear()
+
+    # ── Every stored timestamp on a page is rendered in the VIEWER's clock ──────────────────
+    # The panel stores naive UTC everywhere (panel/core/clock.py) and localises on the CLIENT, so
+    # two admins in different countries each read their own time off the same row. That only holds
+    # for values emitted through the |datetime filter — three templates formatted a datetime with
+    # .strftime() instead and showed raw UTC with nothing saying so, which reads as a wrong local
+    # time rather than as a UTC one. Asserted as "no template renders a stored datetime without
+    # going through the filter", so the next one added is caught rather than the three being
+    # spot-checked forever.
+    import glob as _tz_glob
+    import re as _tz_re
+    _tz_bad = []
+    for _tz_path in sorted(_tz_glob.glob(os.path.join(_repo_root, "templates", "*.html"))):
+        _tz_src = open(_tz_path, encoding="utf-8").read()
+        _tz_src = _tz_re.sub(r"\{#.*?#\}", "", _tz_src, flags=_tz_re.S)   # Jinja comments
+        for _tz_m in _tz_re.finditer(r"\{\{(.*?)\}\}", _tz_src, _tz_re.S):
+            _tz_expr = _tz_m.group(1)
+            if ".strftime(" in _tz_expr and "|datetime" not in _tz_expr:
+                _tz_bad.append("%s: {{%s}}" % (os.path.basename(_tz_path), _tz_expr.strip()[:70]))
+    check("time: no template formats a stored timestamp itself (it must go through |datetime)",
+          not _tz_bad, "raw strftime in a template shows UTC as if it were local: %s" % _tz_bad[:3])
+    # Vacuity guard: the scan must actually be finding the filter, or the check above passes on a
+    # repo where nothing renders a timestamp at all.
+    _tz_filtered = sum(1 for _p in _tz_glob.glob(os.path.join(_repo_root, "templates", "*.html"))
+                       if "|datetime" in open(_p, encoding="utf-8").read())
+    check("time: (setup) templates really do use the |datetime filter",
+          _tz_filtered >= 4, "only %d templates use it — the gate above proves little" % _tz_filtered)
+    # And the filter has to emit what the client-side localiser looks for, or it silently shows UTC.
+    _tz_html = c.get("/logs").get_data(as_text=True)
+    check("time: the filter emits a localtime span the browser can rewrite",
+          'class="localtime" data-utc="' in _tz_html,
+          "no .localtime[data-utc] in /logs — localizeTimes() has nothing to act on")
+    check("time: ...and the value it carries is UTC-anchored, so the browser parses it as UTC",
+          _tz_re.search(r'data-utc="\d{4}-\d{2}-\d{2}T[\d:]+Z"', _tz_html) is not None,
+          "a naive ISO string with no Z is parsed as LOCAL time and is silently wrong by the offset")
+
 
     # ── The Update button and the bulk endpoint must agree about who HAS an update ──────────
     # They didn't. GameServer.supports_update knows the Call of Duty family is not SteamCMD-based

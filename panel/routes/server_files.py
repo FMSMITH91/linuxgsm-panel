@@ -629,7 +629,12 @@ def register(app, supervise):
         # matching the overlap between successive windows, and a block that is stable at the end
         # of every response would defeat that; and these did not come from the file being tailed,
         # so a caller that wants the game log verbatim still gets exactly it.
-        return jsonify({"lines": lines, "panel_lines": list(_console_backlog.get(server_id, []))})
+        # `lines` carry NO timestamp on purpose. They are a fresh tail of the log file, which for
+        # most games records no per-line time — the panel is seeing them now but they were written
+        # at some unknowable point before that, and stamping them "now" would put a confident wrong
+        # time on a week of history. The browser leaves their gutter blank instead.
+        return jsonify({"lines": lines,
+                        "panel_lines": list(_console_backlog.get(server_id, []))})
 
     @app.route("/api/command/<int:server_id>", methods=["POST"])
     @login_required
@@ -763,8 +768,14 @@ def register(app, supervise):
                                     if out:
                                         out = _clean_console_text(out)
                                     if out:
+                                        # ts = when the panel READ these bytes, alongside the
+                                        # payload rather than inside it (see _console_push). It is
+                                        # accurate to one poll interval, which is the best anything
+                                        # tailing a file can claim — the log carries no per-line
+                                        # time of its own for most games.
                                         socketio.emit("console_output",
-                                                      {"server_id": server_id, "data": out},
+                                                      {"server_id": server_id, "data": out,
+                                                       "ts": time.time()},
                                                       room=f"console_{server_id}")
                                     last_positions[server_id] = current_size
                             except Exception:  # nosec B112 - try/except/continue is the point:
