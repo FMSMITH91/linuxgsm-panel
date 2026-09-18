@@ -142,6 +142,16 @@ regardless of this file — this changelog is for humans.
   non-ASCII — through a real shell and requires each to come back verbatim as a single argument.
 
 ### Fixed
+- **Console timestamps now appear on a server that only polls, and an empty column says why.**
+  Reported as "I still don't see the timestamps in the console", and it was two things. The
+  timestamp was attached only to lines pushed over the websocket; the 30-second HTTP poll that
+  also feeds the console passed none — so on an install whose websocket cannot connect, *no* line
+  ever got a time. A poll delta is new output the panel just watched arrive (accurate to the poll
+  interval) and is stamped now; only the first window, which is history written before the panel
+  looked, stays blank. Second, on an idle server every line on screen IS that first window, so the
+  column was legitimately empty and indistinguishable from a broken feature — the console now says
+  "Times appear on lines as they arrive" while nothing is stamped, and drops the note the moment
+  one is.
 - **Schedules are now set in your own time, not the host's.** A cron entry fires on the host's
   clock — which this panel's own bootstrap sets to **UTC** — and the daily restart wrote a
   hardcoded `0 5 * * *` with no time shown in the UI at all. So "daily restart when empty" on a
