@@ -196,6 +196,13 @@ def register(app):
     def delete_remote(remote_id):
         remote = get_remote(remote_id)
         name = remote.name
+        # The id off the ROW, not off the URL — the same number either way, but only one of them
+        # is request text. api_server_version already does this and says why: `<int:remote_id>`
+        # makes a CR/LF impossible, so nothing can really be injected, but CodeQL's
+        # py/log-injection does not model Werkzeug's converters and the cleanup helper below logs
+        # this value. Breaking the flow beats dismissing the alert — a gate that cries wolf is how
+        # a real alert gets waved through.
+        row_id = remote.id
         # Re-authenticate: deleting a remote (and ALL its game servers) is destructive, so require
         # the operator to re-enter their own account password — a guard against an accidental or
         # hijacked click. Verified constant-time via bcrypt (check_password).
@@ -230,7 +237,7 @@ def register(app):
         db.session.delete(remote)
         db.session.commit()
         close_connection(remote)
-        _forget_deleted_remote_config(remote_id, _doomed_ids)
+        _forget_deleted_remote_config(row_id, _doomed_ids)
         log_action(current_user, "delete_remote", target=name)
         _m = f"Remote '{name}' deleted."
         if _wants_json():
