@@ -87,10 +87,13 @@
     <div class="d-flex justify-content-between align-items-start flex-wrap gap-2">
       <div>
         <h2 class="h6 mb-1">
-          <i class="bi {% if remote.is_local %}bi-laptop{% else %}bi-hdd-network-fill{% endif %}"></i> {{ remote.name }}
-          {% if remote.is_local %}
-            <span class="badge bg-info text-dark ms-2">This Machine</span>
-          {% else %}
+          <i class="bi bi-hdd-network-fill"></i> {{ remote.name }}
+          {# No is_local branch anywhere on this page: manage_remotes() lists
+             RemoteServer.query.filter_by(is_local=False), because the panel's own host is managed
+             under System → Panel Server. Six conditionals here tested a flag that is False for
+             every row the route can hand it — including a "This Machine" badge and a "Runs locally
+             on this server" line that no visitor has ever been shown, and which read as though
+             this page lists the local host. tests/smoke_test.py pins the route's filter. #}
             {# Same wording as the dashboard host card: on a HOST this is SSH reachability, not
                the online/offline a game server reports. #}
             {% set _probed = host_probed(remote.id) %}
@@ -98,9 +101,7 @@
                   title="{% if remote.is_online %}The panel can reach this host over SSH{% elif not _probed %}The panel has not checked this host yet{% else %}The panel cannot reach this host over SSH{% endif %}">
               {% if remote.is_online %}Reachable{% elif not _probed %}Checking…{% else %}Unreachable{% endif %}
             </span>
-          {% endif %}
         </h2>
-        {% if not remote.is_local %}
         <span class="text-secondary small">
           <code>{{ remote.username }}@{{ remote.host }}:{{ remote.port }}</code>
           &middot; Auth:
@@ -117,12 +118,6 @@
           {% if remote.linuxgsm_user %} &middot; <span>LGSM User:</span> {{ remote.linuxgsm_user }}{% endif %}
           &middot; Sudo: {{ "Yes" if remote.sudo_enabled else "No" }}
         </span>
-        {% else %}
-        <span class="text-secondary small">
-          <span>Runs locally on this server</span> &middot; <span>Sudo:</span> {{ "Yes" if remote.sudo_enabled else "No" }}
-          {% if remote.linuxgsm_user %} &middot; <span>LGSM User:</span> {{ remote.linuxgsm_user }}{% endif %}
-        </span>
-        {% endif %}
         <!-- Live stats: last-known values rendered now, refreshed in place by JS -->
         {% set st = remote.cached_stats %}
         <div id="live-stats-{{ remote.id }}" class="small text-secondary mt-1" style="font-size:.72rem;"
@@ -136,7 +131,6 @@
             <i class="bi bi-arrow-repeat"></i> Loading stats...
           {% endif %}
         </div>
-        {% if not remote.is_local %}
         <!-- Bootstrap progress (persists across page loads while a job is active) -->
         <div id="bootstrap-card-{{ remote.id }}" class="mt-2" style="display:none;max-width:640px;">
           <div class="d-flex justify-content-between small mb-1">
@@ -150,7 +144,6 @@
           <a href="#" class="small text-secondary ms-2" style="font-size:.7rem;display:none;" id="bs-dismiss-{{ remote.id }}" data-action="dismissBootstrap" data-args='[{{ remote.id }}]' data-prevent>dismiss</a>
           <pre id="bs-log-{{ remote.id }}" class="small mt-1" style="display:none;max-height:180px;overflow:auto;font-size:.68rem;background:#0d1117;padding:6px;border-radius:4px;"></pre>
         </div>
-        {% endif %}
       </div>
       {# ms-auto matters only once the row WRAPS: alone on its own line, justify-content-between
          has nothing to space against and would left-align the actions, so a card with a long host
@@ -159,14 +152,12 @@
         <a href="{{ url_for('remote_manage', remote_id=remote.id) }}" class="btn btn-primary btn-sm" title="Manage — live resources, updates, reboot">
           <i class="bi bi-sliders2"></i> Manage
         </a>
-        {% if not remote.is_local %}
         <form method="POST" action="{{ url_for('test_remote', remote_id=remote.id) }}" style="display:inline;"
               class="ajax-form" data-ajax-refresh="#remotes-list" data-ajax-after="afterRemotesRefresh">
           <button type="submit" class="btn btn-outline-secondary btn-sm" title="Test Connection">
             <i class="bi bi-plug"></i> Test
           </button>
-        </form>{% endif %}
-        {% if not remote.is_local %}
+        </form>
         <button class="btn btn-outline-info btn-sm" title="Set up Tailscale networking on this server"
                 data-ts-check data-remote-id="{{ remote.id }}" data-remote-name="{{ remote.name }}">
           <i class="bi bi-wifi"></i> Tailscale
@@ -175,7 +166,6 @@
                 data-ts-bootstrap data-remote-id="{{ remote.id }}" data-remote-name="{{ remote.name }}">
           <i class="bi bi-rocket-takeoff"></i> Prepare
         </button>
-        {% endif %}
         <a href="{{ url_for('remote_firewall', remote_id=remote.id) }}" class="btn btn-outline-info btn-sm" title="Open or close firewall ports">
           <i class="bi bi-shield-fill-check"></i> Firewall
         </a>

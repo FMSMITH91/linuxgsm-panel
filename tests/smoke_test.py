@@ -547,6 +547,32 @@ try:
     mrc = client_as(mru_id)
     check("MANAGE_REMOTES user: /remotes renders (200)",
           mrc.get("/remotes").status_code == 200)
+    # manage_remotes.html carries no is_local branch any more — six of them tested a flag that is
+    # False for every row this route can hand it, including a "This Machine" badge and a "Runs
+    # locally on this server" line no visitor was ever shown. That is only true while the route
+    # keeps filtering, so the filter is pinned here rather than left as a comment: the panel's own
+    # host is managed under System -> Panel Server, and listing it here would offer Test, Tailscale
+    # and Prepare against the machine the panel is running on.
+    # Seeded HERE and removed again, not added to the fixture: an is_local host changes the host
+    # card count, the per-host groups and the dashboard's own tables, and this is the only check
+    # that needs one.
+    with app.app_context():
+        _lh = RemoteServer(name="smoke-localhost", host="127.0.0.1", port=22,
+                           username="root", auth_method="key", is_local=True)
+        db.session.add(_lh)
+        db.session.commit()
+        _lh_id = _lh.id
+    _rl = c.get("/remotes")
+    _rlh = _rl.get_data(as_text=True)
+    check("remotes: the page still renders with a local host in the table",
+          _rl.status_code == 200 and "smoke-host" in _rlh,
+          "status=%d — an empty body would pass the next check vacuously" % _rl.status_code)
+    check("remotes: ...and it is not listed",
+          "smoke-localhost" not in _rlh and ("/remote/%d/manage" % _lh_id) not in _rlh,
+          "the local host is on a page whose template no longer has a branch for it")
+    with app.app_context():
+        db.session.delete(db.session.get(RemoteServer, _lh_id))
+        db.session.commit()
     check("MANAGE_REMOTES user: non-granted remote -> 403",
           mrc.get("/api/remote/%d/firewall" % remote2_id).status_code == 403)
     check("MANAGE_REMOTES user: non-granted remote reboot -> 403",
