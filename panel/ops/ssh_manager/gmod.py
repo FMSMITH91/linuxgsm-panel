@@ -109,8 +109,20 @@ def _valid_content_games(games):
 
 
 def _user_primary_group(server, user):
-    grp, _, _ = _core.run_command(server, f"id -gn {_core._quote(user)} 2>/dev/null", timeout=10)
-    return (grp or "").strip() or user
+    """The account's primary group name, or "" if we could not read it.
+
+    It used to discard the rc and fall back to the USERNAME on failure. That is a guess, and it
+    feeds `content-grant-read`, whose job is `usermod -aG <group> <gmod user>` — so a failed
+    lookup granted membership of whatever group happened to share the account's name. On a remote
+    host the only other thing standing in front of that is the denylist in privileged.py.
+
+    "" instead, so the caller can tell a real group from a failed read; the grant refuses rather
+    than guessing which group to join."""
+    grp, _, rc = _core.run_command(server, f"id -gn {_core._quote(user)} 2>/dev/null", timeout=10)
+    if rc != 0:
+        _core._log.warning("could not read the primary group of %s", user)
+        return ""
+    return (grp or "").strip()
 
 
 def detect_content_user(server, games=("cstrike",)):
@@ -354,6 +366,13 @@ def gmod_mount_setup(server, gmod_user, content_user, games):
         return False, "invalid content user"
     if games:
         group = _user_primary_group(server, content_user)
+        if not group:
+            # No group, no grant. This used to receive the content user's NAME as a fallback when
+            # the lookup failed, and hand that to `usermod -aG` — joining whatever group happened
+            # to share the name. Refusing costs a mount that cannot read the shared content, which
+            # the caller reports; guessing costs a group membership nobody asked for.
+            return False, ("Couldn't read %s's group, so the content mount was not granted. "
+                           "Check the account exists on this host." % content_user)
         # Read access: add the GMod user to the content group, and make the content group-traversable
         # (home) + group-readable (each game tree). Best-effort per command.
         _core.run_privileged(server, "content-grant-read",

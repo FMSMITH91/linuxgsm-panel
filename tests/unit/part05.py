@@ -3343,3 +3343,114 @@ check("load_user: the gate found the function", bool(_lu), "load_user not locate
 check("load_user: a DB error DENIES the request instead of returning the user",
       "db.session.rollback()" in _lu and _lu.rindex("return None") > _lu.rindex("db.session.rollback()"),
       "the handler still falls through to `return user`")
+
+# ── four more guards that answered from a read they never made ────────────────────────────────
+# 1. _is_panel_account: the two structural tests are skipped when panel.conf cannot answer, and
+#    the verb behind them is `userdel -r` plus an rm of that home. SUDO_UID alone is inert whenever
+#    the helper is invoked directly as root rather than through the panel's own sudo.
+_o_pc, _o_env = _helper.panel_conf, os.environ.get("SUDO_UID")
+try:
+    _helper.panel_conf = lambda: {}          # the case that used to leave this wide open
+    os.environ.pop("SUDO_UID", None)
+    _o_home = _helper.home_of
+    _homes = {"lgsmpanel": "/panelhome", "gmodserver": "/gamehome", "gone": "/notthere"}
+    _helper.home_of = lambda n: _homes.get(n, "/notthere")
+    import tempfile as _pa_tmp
+    _root_dir = _pa_tmp.mkdtemp(prefix="panelacct-")
+    # a panel home: app.py beside panel/ and data/, one level down
+    _p_home = os.path.join(_root_dir, "panelhome", "linuxgsm-panel")
+    os.makedirs(os.path.join(_p_home, "panel")); os.makedirs(os.path.join(_p_home, "data"))
+    open(os.path.join(_p_home, "app.py"), "w").close()
+    # a game home: what LinuxGSM actually leaves
+    _g_home = os.path.join(_root_dir, "gamehome")
+    os.makedirs(os.path.join(_g_home, "lgsm")); os.makedirs(os.path.join(_g_home, "serverfiles"))
+    _homes = {"lgsmpanel": os.path.join(_root_dir, "panelhome"), "gmodserver": _g_home,
+              "gone": os.path.join(_root_dir, "missing")}
+    _helper.home_of = lambda n: _homes.get(n, os.path.join(_root_dir, "missing"))
+    check("panel account: an install-bearing home is protected even with no panel.conf",
+          _helper._is_panel_account("lgsmpanel") is True)
+    check("panel account: ...and an ordinary game home is still removable",
+          _helper._is_panel_account("gmodserver") is False)
+    # All three markers, not any one of them, and the decoys must sit at the depth the check
+    # actually looks at (<home>/<entry>/...). A game tree can plausibly hold a folder called
+    # `panel` or a stray app.py, and a false positive here refuses a legitimate removal.
+    os.makedirs(os.path.join(_g_home, "serverfiles", "panel"), exist_ok=True)
+    check("panel account: a game tree containing a `panel` folder is NOT a panel install",
+          _helper._is_panel_account("gmodserver") is False)
+    open(os.path.join(_g_home, "serverfiles", "app.py"), "w").close()
+    check("panel account: ...nor one with app.py and panel/ but no data/ beside them",
+          _helper._is_panel_account("gmodserver") is False)
+    os.makedirs(os.path.join(_g_home, "serverfiles", "data"), exist_ok=True)
+    check("panel account: ...and WITH all three it is treated as an install, as it must be",
+          _helper._is_panel_account("gmodserver") is True)
+    check("panel account: ...and a home that does not exist is not a panel",
+          _helper._is_panel_account("gone") is False)
+    _shutil.rmtree(_root_dir, ignore_errors=True)
+    _helper.home_of = _o_home
+finally:
+    _helper.panel_conf = _o_pc
+    if _o_env is not None:
+        os.environ["SUDO_UID"] = _o_env
+
+# 2. the tailnet rule: load_config degrades a CORRUPT config.json to defaults and says nothing, so
+#    tailscale_setup_done read False and un-protected the rule keeping the panel reachable.
+from panel.ops.ssh_manager import firewall as _fw2                                 # noqa: E402
+from panel.core import config as _cfg2                                             # noqa: E402
+import pathlib as _pl2                                                             # noqa: E402
+_o_cf = _cfg2.CONFIG_FILE
+_cfg_dir = _pa_tmp.mkdtemp(prefix="cfgprobe-")
+try:
+    _cfg2.CONFIG_FILE = _pl2.Path(_cfg_dir, "absent.json")
+    check("config probe: a host with NO config.json is answerable, not 'unreadable'",
+          _fw2._config_unreadable() is False)
+    for _name, _body, _want in (("truncated", "{ oops", True), ("not-an-object", "[1,2,3]", True),
+                                ("valid", '{"port": 5000}', False)):
+        _f = _pl2.Path(_cfg_dir, _name + ".json"); _f.write_text(_body)
+        _cfg2.CONFIG_FILE = _f
+        check("config probe: %s -> unreadable=%s" % (_name, _want),
+              _fw2._config_unreadable() is _want)
+    # ...and the CALLER has to consult it. Covering _config_unreadable is not covering the guard:
+    # a mutation that deleted the `if _config_unreadable(): return True` line survived a green run.
+    _o_local6 = _core_mod_is_local = _sm_core.is_local_server
+    try:
+        _sm_core.is_local_server = lambda s: True
+        _bad = _pl2.Path(_cfg_dir, "broken.json"); _bad.write_text("{ nope")
+        _cfg2.CONFIG_FILE = _bad
+        check("tailnet rule: a CORRUPT config protects the rule keeping the panel reachable",
+              _fw2._panel_served_over_tailscale(NS()) is True)
+        _good = _pl2.Path(_cfg_dir, "good.json"); _good.write_text('{"tailscale_setup_done": false}')
+        _cfg2.CONFIG_FILE = _good
+        check("tailnet rule: ...and a READABLE config still answers from what it says",
+              _fw2._panel_served_over_tailscale(NS()) is False)
+    finally:
+        _sm_core.is_local_server = _o_local6
+finally:
+    _cfg2.CONFIG_FILE = _o_cf
+    _shutil.rmtree(_cfg_dir, ignore_errors=True)
+
+# 3. the group that feeds `usermod -aG` must be read, never guessed.
+_o_rc6 = _sm_core.run_command
+try:
+    _sm_core.run_command = lambda s, c, **k: ("", "", 1)      # the lookup fails
+    check("content grant: a failed group lookup returns '' rather than guessing the username",
+          _sm_gmod._user_primary_group(NS(), "gmodcontent") == "")
+    _granted = []
+    _o_rp7 = _sm_core.run_privileged
+    try:
+        _sm_core.run_privileged = lambda *a, **k: (_granted.append(a), ("", "", 0))[1]
+        _g_ok, _g_msg = _sm_gmod.gmod_mount_setup(NS(), "gmodserver", "gmodcontent", ["cstrike"])
+        check("content grant: ...and no group membership is handed out on that guess",
+              _g_ok is False and not any("content-grant-read" in str(a) for a in _granted),
+              "ok=%s granted=%s" % (_g_ok, _granted))
+    finally:
+        _sm_core.run_privileged = _o_rp7
+finally:
+    _sm_core.run_command = _o_rc6
+
+# 4. server_access_required reads kwargs["server_id"]; on a route spelled otherwise the check is
+#    skipped entirely and every request passes. Make the misuse impossible, at import.
+from panel.security.auth import server_access_required as _sar                     # noqa: E402
+check("access gate: a route WITH server_id still decorates",
+      callable(_sar(lambda server_id: None)))
+check("access gate: a route WITHOUT server_id is refused at import, not at request time",
+      _ufw_raises(lambda: _sar(lambda gs_id: None)))

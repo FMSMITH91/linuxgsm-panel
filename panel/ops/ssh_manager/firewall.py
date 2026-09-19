@@ -1,5 +1,6 @@
 """SSH connection manager for remote LinuxGSM servers.
 Also supports local execution for running on the panel's own machine."""
+import json as _json
 import re
 from panel.ops.ssh_manager import (_core, hosts)  # noqa: E402,F401  (module objects: the
 # reference resolves at CALL time, which is what keeps a stub on the definition site
@@ -153,6 +154,22 @@ def _panel_web_port(server):
         return 5000
 
 
+def _config_unreadable():
+    """True when config.json EXISTS but cannot be parsed into an object.
+
+    Deliberately not "load_config returned defaults": a host with no config.json yet is a normal,
+    answerable state and defaults really are the answer. The dangerous case is narrower — a file
+    that is there and unusable, where every setting silently reads as its default."""
+    try:
+        from panel.core.config import CONFIG_FILE
+        with open(CONFIG_FILE, encoding="utf-8") as fh:
+            return not isinstance(_json.load(fh), dict)
+    except FileNotFoundError:
+        return False
+    except (OSError, ValueError):
+        return True
+
+
 def _panel_served_over_tailscale(server):
     """True when THIS host is the panel AND its web UI is published over Tailscale Serve
     (tailscale_setup_done). In that case the *inbound* tailscale0 UFW rule is exactly what
@@ -160,13 +177,22 @@ def _panel_served_over_tailscale(server):
     inbound tailnet traffic to Serve and locks you out of the panel. It's the mirror image
     of _panel_web_port: once Serve is the way in, the public port is free to close BUT the
     tailscale0 rule becomes load-bearing and must be protected."""
+    if not _core.is_local_server(server):
+        return False
+    # load_config() degrades a CORRUPT config.json to DEFAULT_CONFIG and says nothing — by design,
+    # so one bad edit does not take every request down. But reading tailscale_setup_done out of
+    # those defaults answers False, which un-protects the tailscale0 rule: the thing keeping the
+    # panel reachable once Serve is the way in. A guard against locking yourself out must not be
+    # switched off by a file it could not read.
+    if _config_unreadable():
+        return True
     try:
-        if not _core.is_local_server(server):
-            return False
         from panel.core.config import load_config
         return bool(load_config().get("tailscale_setup_done"))
     except Exception:
-        return False
+        _core._log.warning("could not read the panel config; protecting the tailnet rule",
+                           exc_info=True)
+        return True
 
 
 def _annotate_firewall_protection(server, enabled, groups):

@@ -692,6 +692,40 @@ def v_destroyable_user(s):
     return s
 
 
+def _home_holds_a_panel(name):
+    """True if `name`'s home contains what a panel install looks like.
+
+    The fallback for _is_panel_account when panel.conf cannot say where the install lives. Checked
+    by MARKERS rather than by a name, because the account can be called anything: install.sh's
+    `lgsmpanel` on a root install, or an ordinary account like `ubuntu` on a per-user one.
+
+    Deliberately requires all three (app.py, panel/, data/) in one directory: any one alone could
+    plausibly appear in a game user's home, and a false positive here refuses a legitimate removal.
+    """
+    try:
+        home = os.path.realpath(home_of(name))
+    except ValueError:
+        return False
+    try:
+        entries = os.listdir(home)
+    except FileNotFoundError:
+        # The home does not exist. That IS definitive — there is no panel install in a directory
+        # that is not there — and refusing here would block cleaning up an account whose home was
+        # already removed, which is an ordinary thing to want.
+        return False
+    except OSError:
+        # It exists and could not be read. Not evidence the account is safe to destroy, and this
+        # is the last thing between a caller and `userdel -r`, so say yes.
+        return True
+    for entry in entries:
+        d = os.path.join(home, entry)
+        if (os.path.isfile(os.path.join(d, "app.py"))
+                and os.path.isdir(os.path.join(d, "panel"))
+                and os.path.isdir(os.path.join(d, "data"))):
+            return True
+    return False
+
+
 def _is_panel_account(name):
     """True if `name` is the account the panel itself runs as, or one whose home CONTAINS the
     panel install. Those are the accounts the destructive user verbs must never be pointed at.
@@ -728,7 +762,17 @@ def _is_panel_account(name):
     except Exception:
         panel_dir = ""
     if not panel_dir:
-        return False
+        # panel.conf could not answer, so the two structural tests below have nothing to compare
+        # against. Returning False here left ONLY the SUDO_UID test — which is inert whenever the
+        # helper is invoked directly as root rather than through the panel's own sudo, and the
+        # verb it guards is `userdel -r` plus an rm of that home.
+        #
+        # Ask the home directly instead. A panel install is app.py beside panel/ and data/; no
+        # game account's home has ever looked like that (a LinuxGSM home is lgsm/, serverfiles/,
+        # log/ and the instance script). So this refuses the account whose home would take the
+        # install with it, without needing any config to say so, and still lets every ordinary
+        # game-server removal through.
+        return _home_holds_a_panel(name)
     panel_dir = os.path.realpath(panel_dir)
     try:
         home = os.path.realpath(home_of(name))

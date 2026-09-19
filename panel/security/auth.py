@@ -5,6 +5,7 @@ import secrets
 import threading
 import time
 from panel.core.clock import utcnow
+from contextlib import suppress
 from functools import wraps
 from urllib.parse import quote
 
@@ -544,6 +545,18 @@ def server_access_required(f):
     route taking <int:server_id> needs this as well as its permission decorator. rbac_test asserts
     that structurally via the marker below, which is why the marker exists rather than each route
     being probed one at a time (probing a destructive route on a real install would fire it)."""
+    # The check reads kwargs["server_id"]. On a route whose parameter is spelled anything else
+    # that is None, and `if server_id is not None` then skips the check entirely — a decorator
+    # that looks applied, passes rbac_test's structural marker, and grants everyone access to
+    # everything. All 44 current routes name it correctly; this makes the 45th impossible rather
+    # than silent, and it fires at import, not on the request that needed protecting.
+    _params = f.__code__.co_varnames[:f.__code__.co_argcount]
+    if "server_id" not in _params:
+        raise TypeError(
+            "server_access_required on %s, which takes %s — the check reads a `server_id` "
+            "parameter and would silently pass for every request. Rename the route parameter to "
+            "server_id, or check access inside the view." % (f.__name__, list(_params)))
+
     @wraps(f)
     def decorated_function(*args, **kwargs):
         if not current_user.is_authenticated:
@@ -653,12 +666,14 @@ def init_auth(app):
                 # the other direction costs a revoked device staying live for as long as the
                 # database is unhappy. Logged at warning, because a database that cannot answer
                 # this is something the operator should see.
-                try:
+                # suppress(), not try/except/pass: same intent — logging must never be what
+                # turns a deny into a 500, and load_user is reachable outside an app context —
+                # without the shape every linter flags and every reader has to check for a
+                # swallowed error that matters.
+                with suppress(Exception):
                     current_app.logger.warning(
                         "load_user: could not verify session %s — denying this request",
                         (sid or "")[:8], exc_info=True)
-                except Exception:
-                    pass          # logging must never be what turns a deny into a 500
                 return None
         return user
 

@@ -1470,6 +1470,12 @@ try:
             return ("__LIVE__", "", 0) if _gm_state["live"] else ("NO_SESSION", "", 3)
         if "base64 -d" in cmd:                      # the mount.cfg write
             return ("__OK__", "", 0)
+        if cmd.startswith("id -gn"):
+            # A real host answers this with the group name. The stub used to fall through to the
+            # catch-all ("", "", 0), and gmod_mount_setup carried on because _user_primary_group
+            # guessed the USERNAME when the read came back empty — the guess that fed `usermod -aG`
+            # and is gone now. Answer it the way the host does.
+            return ("gmodcontent", "", 0)
         return ("", "", 0)
 
     _sm_core.run_command = _gm_run
