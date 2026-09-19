@@ -525,9 +525,16 @@ def register(app, supervise):
                     if cu:
                         _, removed, _m = uninstall_gmod_content(remote, cu["user"], games)
                     # Drop the removed games from THIS server's mount.cfg (other servers just skip the
-                    # now-missing mount). Best-effort.
-                    remaining = [g for g in gmod_current_mounts(remote, gmod_user) if g not in games]
-                    gmod_mount_setup(remote, gmod_user, (cu or {}).get("user", ""), remaining)
+                    # now-missing mount). Best-effort — but NOT when the current mounts could not be
+                    # read: `remaining` would be [], and writing that back unmounts everything the
+                    # server had, including games nobody asked to remove.
+                    _cur = gmod_current_mounts(remote, gmod_user)
+                    if _cur is None:
+                        _log.warning("gmod content uninstall: mounts unreadable for %s — leaving "
+                                     "mount.cfg alone", gmod_user)
+                    else:
+                        gmod_mount_setup(remote, gmod_user, (cu or {}).get("user", ""),
+                                         [g for g in _cur if g not in games])
                     _gmod_content_apply_state[server_id] = {
                         "status": "done", "msg": "Removed from host: " + (", ".join(removed) or "(none)"),
                         "ts": time.time()}
@@ -554,7 +561,7 @@ def register(app, supervise):
         remote = gs.remote
         if request.method == "GET":
             try:
-                mounted = gmod_current_mounts(remote, gs.short_name)
+                mounted = gmod_current_mounts(remote, gs.short_name) or []
                 cu = detect_content_user(remote, tuple(GMOD_CONTENT_GAMES))
                 present = set((cu or {}).get("present", {}))
                 games = [{"key": k, "label": GMOD_CONTENT_GAMES[k][0], "size": GMOD_CONTENT_SIZES.get(k, ""),

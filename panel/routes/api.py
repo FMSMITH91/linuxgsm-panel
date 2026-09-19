@@ -319,11 +319,26 @@ def register(app):
             # 500 on every poll of an offline server.
             return jsonify({"error": _log_and_generic("server stats failed")}), 200
 
+        # ram_total is the sentinel, the same one _live_run_state and _record_metric_samples use.
+        # server_live_metrics builds its dict UP FRONT and returns it all-zero when the read
+        # produced no output, so port_open=False / game_procs=0 is indistinguishable from a real
+        # stopped server — and this endpoint COMMITS that as gs.status. `free -b` never fails on a
+        # reachable host, so a zero there means the sample did not happen.
+        #
+        # app.py's _live_run_state says it is "deliberately the SAME predicate /api/server/<id>/stats
+        # uses to set gs.status", and it guards on ram_total; this did not, so the two disagreed in
+        # exactly the case the sentinel exists for. A wrongly persisted "offline" is not cosmetic:
+        # _query_server_slots short-circuits on it and returns 0 players WITHOUT querying, which
+        # satisfies the one-shot notify_when_empty ("now has 0 players — safe to make changes") and
+        # clears the flag, while players are still connected.
+        _readable = bool(m and m.get("ram_total"))
         status = "online" if (m.get("port_open") or m.get("game_procs")) else "offline"
         changed = False
-        if gs.status != status:
+        if _readable and gs.status != status:
             gs.status = status
             changed = True
+        elif not _readable:
+            status = gs.status or "unknown"     # report what we last knew, do not persist a guess
         # Resolve + cache the remote's public IP (for the connect address) in the background —
         # non-blocking, so this polled endpoint never stalls on a slow/unreachable remote.
         if not remote.public_ip:

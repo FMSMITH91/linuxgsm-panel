@@ -382,11 +382,26 @@ _MOUNT_LINE_RE = re.compile(r'"([a-z0-9_]+)"\s+"/')
 
 def gmod_current_mounts(server, gmod_user):
     """Which content games a GMod server currently mounts, parsed from its garrysmod/cfg/mount.cfg.
-    Returns a list of known game keys (order as written). [] if no file / none. Read-only."""
+    Returns a list of known game keys (order as written), [] when the file is absent or mounts
+    nothing, or None when the mount state could not be READ. Read-only.
+
+    The None is the whole point. This used to return [] for a failed read too, and the uninstall
+    path computes `remaining = [g for g in gmod_current_mounts(...) if g not in games]` and writes
+    THAT back — so a blip turned "remove CS:S" into an empty mount.cfg that dropped every other
+    mount the server had, and reported "Unmounted all content". Measured on the test host: a server
+    mounting cstrike AND hl2mp, asked to remove only hl2mp with the read failing, ended with an
+    empty mountcfg and lost cstrike.
+
+    The helper exits 0 whether or not a mount.cfg exists, so a non-zero rc here means the call
+    itself did not complete — which is exactly the distinction "[] vs None" needs."""
     if not _CU_NAME_RE.match(gmod_user or ""):
         return []
-    out, _, _ = _core.run_privileged(server, "gmod-mount-read", [gmod_user], timeout=10,
+    out, _, rc = _core.run_privileged(server, "gmod-mount-read", [gmod_user], timeout=10,
                                merge_stderr=False)
+    if rc != 0:
+        _core._log.warning("gmod_current_mounts: could not read mounts for %s — reporting unknown",
+                           gmod_user)
+        return None
     found = []
     for line in (out or "").splitlines():
         s = line.strip()

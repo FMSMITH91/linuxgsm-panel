@@ -635,9 +635,20 @@ def _ensure_backup_headroom(server, user, keep):
         # Estimate the next backup from the LARGEST existing one (worst case), ignoring 0-byte
         # failed archives — the newest can be tiny or empty and badly underestimate the need.
         est = max((b.get("size", 0) for b in backups), default=0)
-        free = backup_disk_info(server, user).get("free", 0)
-        if not est or free >= int(est * 1.15):
-            return ""   # plenty of room — keep full safety (old backup survives if the new fails)
+        _disk = backup_disk_info(server, user)
+        free, total = _disk.get("free", 0), _disk.get("total", 0)
+        # `total` is the sentinel, exactly as run_game_backup's pre-flight check uses it: a failed
+        # `df` reads as 0/0, and free=0 is always below any threshold — so a transport hiccup sent
+        # this straight into the delete loop and removed backups to make room it never measured.
+        # Measured on the test host: with df working, nothing was deleted; with the df read timed
+        # out, two of four backups were deleted and the run reported "freed space first".
+        #
+        # The sibling 100 lines away already says the rule out loud — "Only enforce when we
+        # actually read the disk (total > 0); a failed df reads as 0/0" — but it guards the path
+        # that BLOCKS a backup. This is the path that DELETES them, which is the worse of the two
+        # to get wrong, and it is the one that was missing the check.
+        if not est or not total or free >= int(est * 1.15):
+            return ""   # plenty of room, or we could not measure — keep full safety
         # 0-byte archives are failed backups (junk) — delete them first and never protect one.
         # Protect the newest keep-1 VALID backups; delete the oldest valid ones beyond that.
         valid = [b for b in backups if b.get("size", 0) > 0]        # newest first

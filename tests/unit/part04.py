@@ -1093,3 +1093,48 @@ for _p, _what in (("./lgsm", "the LinuxGSM control tree"),
                   ("./%s" % _SELF, "the server's own script")):
     check("file guard: %r cannot sneak past and take %s" % (_p, _what),
           _sm_files._is_protected_path(_p, _SELF) is True)
+
+
+# ── a mount state that could not be READ must not be written back as "nothing mounted" ──────────
+# gmod_current_mounts returned [] for a failed read as well as for "no mounts", and the uninstall
+# path computes `remaining = [g for g in gmod_current_mounts(...) if g not in games]` and writes
+# THAT back. So a blip turned "remove CS:S" into an empty mount.cfg that dropped every other mount
+# the server had, and reported "Unmounted all content". Measured on the test host: a server
+# mounting cstrike AND hl2mp, asked to remove only hl2mp with the read failing, ended with an empty
+# mountcfg and lost cstrike.
+_gm_orig = _sm_core.run_privileged
+try:
+    _gm = {"resp": ("", "", 0)}
+    _sm_core.run_privileged = lambda s, v, a=(), **k: _gm["resp"]
+
+    _REAL = ('"mountcfg"\n{\n\t"cstrike"\t"/home/gmodcontent/serverfiles/cstrike"\n'
+             '\t"hl2mp"\t"/home/gmodcontent/serverfiles/hl2mp"\n}\n')
+    _gm["resp"] = (_REAL, "", 0)
+    eq("gmod mounts: a real mount.cfg parses to its games",
+       _sm_gmod.gmod_current_mounts(NS(), "gmodserver"), ["cstrike", "hl2mp"])
+
+    # An empty-but-READ mount.cfg is genuinely "nothing mounted".
+    _gm["resp"] = ('"mountcfg"\n{\n}\n', "", 0)
+    eq("gmod mounts: an empty mount.cfg is [] — really nothing mounted",
+       _sm_gmod.gmod_current_mounts(NS(), "gmodserver"), [])
+    # So is an absent file: the helper exits 0 and prints nothing.
+    _gm["resp"] = ("", "", 0)
+    eq("gmod mounts: an absent mount.cfg is [] too", _sm_gmod.gmod_current_mounts(NS(), "gmodserver"), [])
+
+    # THE BUG: a failed read must be UNKNOWN, not "nothing mounted".
+    for _desc, _r in (("a timed-out read", ("", "SSH command timed out", -1)),
+                      ("a helper failure", ("", "some error", 1))):
+        _gm["resp"] = _r
+        check("gmod mounts: %s is unknown (None), not []" % _desc,
+              _sm_gmod.gmod_current_mounts(NS(), "gmodserver") is None,
+              repr(_sm_gmod.gmod_current_mounts(NS(), "gmodserver")))
+
+    # And the consequence the None exists to prevent: `remaining` must never be computed from it.
+    _src = open(os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))),
+                             "panel", "routes", "server_files.py"), encoding="utf-8").read()
+    check("gmod mounts: the uninstall path skips the rewrite when mounts are unreadable",
+          "_cur is None" in _src and "leaving " in _src, "guard missing in server_files.py")
+    check("gmod mounts: ...and no longer computes `remaining` straight from the call",
+          "remaining = [g for g in gmod_current_mounts(" not in _src)
+finally:
+    _sm_core.run_privileged = _gm_orig
