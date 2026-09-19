@@ -1239,12 +1239,58 @@ try:
     # trailing newline; stream_path does NOT strip, so download and edit disagreed about the same
     # file. Driven through the real function with a transport that strips exactly as the real one
     # does, so the framing is what is under test and not the stub.
+    #
+    # The body inside the frame is BASE64 now, because framing cannot reach the OTHER way the
+    # transport rewrites a file: both read paths decode in text mode, and Python's universal
+    # newlines turn every CRLF into LF before read_file sees a byte. The write path is byte-exact
+    # (it base64s too), so the damage was asymmetric and silent — open a CRLF config, press Save
+    # without typing, and every line ending is permanently converted. Measured against a real
+    # host: 'alpha\r\nbeta\r\ngamma\n' on disk came back as 'alpha\nbeta\ngamma\n'.
+    import base64 as _rf_b64
+
+    def _rf_transport(body):
+        """What the host really sends: the frame, base64 inside it, then the transport's strip."""
+        enc = _rf_b64.b64encode(body.encode()).decode()
+        return lambda s, c, **k: (
+            ("%s%s%s" % (_sm_files._READ_BEGIN, enc, _sm_files._READ_END)).strip(), "", 0)
+
     _ORIG_BODY = "\n\n-- header\nlocal x = 1\n\n\n"
-    _sm_core.run_command = lambda s, c, **k: (
-        ("%s%s%s" % (_sm_files._READ_BEGIN, _ORIG_BODY, _sm_files._READ_END)).strip(), "", 0)
+    _sm_core.run_command = _rf_transport(_ORIG_BODY)
     _rf_body, _rf_err = _sm_files.read_file(_FakeSrv(), "csgoserver", "cfg/server.cfg")
     eq("read_file: the file's bytes survive the transport's strip", _rf_body, _ORIG_BODY)
     check("read_file: ...with no error", _rf_err is None, repr(_rf_err))
+    # The regression this base64 exists for. A text-mode transport cannot carry these.
+    _CRLF_BODY = "alpha\r\nbeta\r\ngamma\n"
+    _sm_core.run_command = _rf_transport(_CRLF_BODY)
+    eq("read_file: CRLF line endings survive, so the editor cannot silently convert them",
+       _sm_files.read_file(_FakeSrv(), "csgoserver", "cfg/server.cfg")[0], _CRLF_BODY)
+    _CR_BODY = "old\rmac\rendings\r"
+    _sm_core.run_command = _rf_transport(_CR_BODY)
+    eq("read_file: ...and so do bare CRs", 
+       _sm_files.read_file(_FakeSrv(), "csgoserver", "cfg/server.cfg")[0], _CR_BODY)
+    _sm_core.run_command = _rf_transport("")
+    eq("read_file: a genuinely empty file reads as empty, not as a failure",
+       _sm_files.read_file(_FakeSrv(), "csgoserver", "cfg/server.cfg"), ("", None))
+    # A framed body that is NOT base64 means something mangled it in transit — that must read as a
+    # failed read, never as content, or the editor saves the garbage back over the real file.
+    _sm_core.run_command = lambda s, c, **k: (
+        "%s not!base64!!%s" % (_sm_files._READ_BEGIN, _sm_files._READ_END), "", 0)
+    _rf_bad, _rf_baderr = _sm_files.read_file(_FakeSrv(), "csgoserver", "cfg/server.cfg")
+    check("read_file: a framed body that is not base64 is a FAILED read, not content",
+          _rf_bad is None and bool(_rf_baderr), repr(_rf_bad))
+    # Every check above stubs the TRANSPORT, so they all still pass if the shell side goes back to
+    # a bare `cat` — the stub would keep sending base64 either way. Assert the command actually
+    # ASKS the host to encode. [[test-the-caller-not-just-the-helper]]
+    _rf_cmds = []
+    _sm_core.run_command = lambda s, c, **k: (
+        _rf_cmds.append(c),
+        ("%s%s%s" % (_sm_files._READ_BEGIN, _rf_b64.b64encode(b"x").decode(), _sm_files._READ_END)),
+        )[1] and (("%s%s%s" % (_sm_files._READ_BEGIN, _rf_b64.b64encode(b"x").decode(),
+                               _sm_files._READ_END)), "", 0)
+    _sm_files.read_file(_FakeSrv(), "csgoserver", "cfg/server.cfg")
+    check("read_file: the command tells the HOST to base64 the body, not cat it raw",
+          len(_rf_cmds) == 1 and "base64 " in _rf_cmds[0] and "; cat " not in _rf_cmds[0],
+          _rf_cmds[0][:150] if _rf_cmds else "no command captured")
     # ...and the markers the script really does emit are still recognised.
     for _mark, _want in (("__NOFILE__", "File not found"),
                          ("__TOOBIG__", "File is too large to edit in the browser"),
