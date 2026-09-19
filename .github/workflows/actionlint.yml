@@ -13,14 +13,14 @@ on:
     branches: [ main ]
     paths:
       - '.github/workflows/**'
-      # ...and the lint's OWN config: a malformed
-      # .github/actionlint.yaml makes actionlint fail, and the reviewdog pipeline
-      # has no pipefail, so zero findings reads as clean. Editing it must run it.
+      # ...and the lint's OWN config: a malformed .github/actionlint.yaml makes actionlint
+      # itself fail, so editing it must run the lint.
       - '.github/actionlint.yaml'
   pull_request:
     branches: [ main ]
     paths:
       - '.github/workflows/**'
+      - '.github/actionlint.yaml'
 
 # Least-privilege default; the job below escalates only to post its check-run annotations.
 # Supersede rather than stack: Only the newest push's workflow lint is of any interest.
@@ -37,13 +37,41 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 10
     permissions:
-      contents: read
-      checks: write   # reviewdog posts actionlint findings as a check run
+      contents: read   # no checks: write — nothing posts annotations now; the job's own exit says it
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+
+      # The BINARY, pinned and checksummed, rather than a wrapper action. Two reasons, both found
+      # by auditing what this gate actually proves:
+      #
+      #  1. reviewdog/action-actionlint's entrypoint is
+      #        actionlint -oneline ${FLAGS} | while read -r r; do … done | reviewdog …
+      #     with no `pipefail`. If ACTIONLINT ITSELF fails — and a malformed
+      #     .github/actionlint.yaml (this repo has one) is enough — it prints nothing, reviewdog
+      #     sees zero findings and exits 0, and the check is green having linted nothing.
+      #     Reproduced locally with actionlint stubbed to fail: "reviewdog: 0 findings", exit 0.
+      #     Pinning the action did not fix that and neither did bumping it.
+      #
+      #  2. v1.75.0 moved the actionlint build from rhysd/actionlint (the canonical project) to
+      #     kjanat/actionlint — a fork created 2026-08-07 with 26 stars — and to a version number
+      #     that does not exist upstream. That may well be a reasonable call for them; it is not a
+      #     trust decision this repo needs to inherit for a gate that lints its own workflows.
+      #
+      # Bump deliberately: update VERSION and SHA256 together. The checksum below was verified
+      # against the release's own actionlint_<v>_checksums.txt.
       - name: actionlint
-        uses: reviewdog/action-actionlint@ab7138020abfe6cd20b742c82e5b7a9749fb5884 # v1.75.0
-        with:
-          reporter: github-check
-          filter_mode: nofilter   # lint EVERY workflow file, not just lines a PR changed
-          fail_level: error
+        env:
+          VERSION: '1.7.12'
+          SHA256: '8aca8db96f1b94770f1b0d72b6dddcb1ebb8123cb3712530b08cc387b349a3d8'
+        run: |
+          set -euo pipefail
+          TARBALL="actionlint_${VERSION}_linux_amd64.tar.gz"
+          curl -sSfL -o "/tmp/${TARBALL}" \
+            "https://github.com/rhysd/actionlint/releases/download/v${VERSION}/${TARBALL}"
+          echo "${SHA256}  /tmp/${TARBALL}" | sha256sum -c -
+          tar -xz -C /tmp -f "/tmp/${TARBALL}" actionlint
+          /tmp/actionlint -version
+          # No pipe, so a failure in actionlint is the step's failure. shellcheck is preinstalled
+          # on the runner and actionlint picks it up for the embedded run: scripts, which is the
+          # same coverage the wrapper's image gave.
+          /tmp/actionlint -color
