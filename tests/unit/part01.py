@@ -1643,3 +1643,147 @@ check("download header: every Content-Disposition the panel sets goes through _a
       not _cd_bad, "hand-built at: %s" % ", ".join(_cd_bad))
 check("download header: ...and the scan really found the places that set one",
       _cd_sites >= 2, "found only %d Content-Disposition assignment(s)" % _cd_sites)
+
+
+# ── lgsm_write_config must never write a config it could not read ───────────────────────────────
+# It was `cat … 2>/dev/null` with the rc DISCARDED (`out, _, _ =`). run_command does not raise on a
+# transport failure — it returns ("", "…timed out", -1) — so a hiccup made `out` empty, `lines`
+# empty, and the join wrote a config containing ONLY the keys being updated, OVER the real instance
+# config, returning ok=True. Measured on a live host: a 5-line, 189-byte fctrserver.cfg became one
+# line, `port="34197"`. That path runs during an install, a port change, and every alert edit.
+#
+# `2>/dev/null` also hid the distinction that matters: a MISSING instance cfg is legitimate (a fresh
+# instance has none), a failed read is not. These pin both halves.
+import base64 as _wc_b64
+
+_wc_orig = (_sm_core.run_command, _sm_files._write_file_as_user)
+try:
+    _wc = {"written": [], "read": None}
+    _sm_files._write_file_as_user = lambda s, u, p, b: (
+        _wc["written"].append((p, b.decode())), (True, ""))[1]
+
+    def _wc_transport(resp):
+        _wc["read"] = resp
+        _sm_core.run_command = lambda s, c, **k: resp
+
+    def _framed(text):
+        enc = _wc_b64.b64encode(text.encode()).decode()
+        return ("%s%s%s" % (_sm_files._READ_BEGIN, enc, _sm_files._READ_END), "", 0)
+
+    EXISTING = '## header\nport="27015"\nmaxplayers="16"\n'
+
+    # 1. THE BUG: a failed read must abort, not write a truncated file.
+    _wc["written"] = []
+    _wc_transport(("", "SSH command timed out", -1))
+    _ok, _msg = _sm_files.lgsm_write_config(NS(), "fctrserver", "fctrserver", {"port": "34197"})
+    check("lgsm_write_config: a FAILED read refuses to write", _ok is False, repr(_msg))
+    check("lgsm_write_config: ...and writes nothing at all", _wc["written"] == [],
+          repr(_wc["written"])[:110])
+    check("lgsm_write_config: ...and says the config was not changed",
+          "nothing has been changed" in (_msg or "").lower(), repr(_msg))
+
+    # 2. A missing instance cfg is legitimate — the updates become the file.
+    _wc["written"] = []
+    _wc_transport(("__NOFILE__", "", 0))
+    _ok, _msg = _sm_files.lgsm_write_config(NS(), "fctrserver", "fctrserver", {"port": "34197"})
+    check("lgsm_write_config: a MISSING cfg still writes the updates", _ok is True, repr(_msg))
+    eq("lgsm_write_config: ...as the whole file",
+       _wc["written"][0][1] if _wc["written"] else None, 'port="34197"\n')
+
+    # 3. An existing key is replaced and every other line survives.
+    _wc["written"] = []
+    _wc_transport(_framed(EXISTING))
+    _sm_files.lgsm_write_config(NS(), "fctrserver", "fctrserver", {"port": "34197"})
+    _body = _wc["written"][0][1] if _wc["written"] else ""
+    check("lgsm_write_config: the changed key is replaced in place",
+          'port="34197"' in _body and 'port="27015"' not in _body, repr(_body))
+    check("lgsm_write_config: ...and the rest of the file survives",
+          "## header" in _body and 'maxplayers="16"' in _body, repr(_body))
+
+    # 4. A new key is appended, not substituted for the file.
+    _wc["written"] = []
+    _wc_transport(_framed(EXISTING))
+    _sm_files.lgsm_write_config(NS(), "fctrserver", "fctrserver", {"newkey": "yes"})
+    _body = _wc["written"][0][1] if _wc["written"] else ""
+    check("lgsm_write_config: a NEW key is appended to the existing file",
+          'newkey="yes"' in _body and "## header" in _body and 'port="27015"' in _body, repr(_body))
+
+    # 5. A framed body that is not base64 means something mangled it — refuse.
+    _wc["written"] = []
+    _sm_core.run_command = lambda s, c, **k: (
+        "%s not!base64!!%s" % (_sm_files._READ_BEGIN, _sm_files._READ_END), "", 0)
+    _ok, _msg = _sm_files.lgsm_write_config(NS(), "fctrserver", "fctrserver", {"port": "1"})
+    check("lgsm_write_config: a non-base64 framed body refuses too", _ok is False and not _wc["written"],
+          repr(_msg))
+
+    # 6. The caller side: the command must actually ask for the frame, or every check above still
+    #    passes with the old `cat`. [[test-the-caller-not-just-the-helper]]
+    _wc_cmds = []
+    _sm_core.run_command = lambda s, c, **k: (_wc_cmds.append(c), _framed(EXISTING))[1]
+    _sm_files.lgsm_write_config(NS(), "fctrserver", "fctrserver", {"port": "1"})
+    check("lgsm_write_config: the read command is framed, not a bare cat",
+          len(_wc_cmds) == 1 and _sm_files._READ_BEGIN in _wc_cmds[0] and "__NOFILE__" in _wc_cmds[0],
+          (_wc_cmds[0][:140] if _wc_cmds else "none"))
+finally:
+    _sm_core.run_command, _sm_files._write_file_as_user = _wc_orig
+
+
+# ── lgsm_read_config: a marker that can fuse to file content, and no failure detection ──────────
+# The Raw tab read three files with `echo ===MARKER; cat file`. `echo` only lands on its own line
+# if the PREVIOUS file ended with a newline — a common.cfg without one produced `a=1===INSTANCE`,
+# which matches nothing, so the INSTANCE section stayed empty and `raw` came back "". The editor
+# then showed an EMPTY box for a real config and Save wrote that "" over it. Measured on a live
+# host: a 5-line fctrserver.cfg rendered as 0 bytes with error=None.
+# rc was discarded too (`out, _, _ =`), so a timed-out read was indistinguishable from an empty one.
+_rc_orig = _sm_core.run_command
+try:
+    def _sections(default="", common="", instance="", omit=()):
+        """What the framed reader really receives, with the transport's strip applied."""
+        parts = []
+        for tag, text in (("DEFAULT", default), ("COMMON", common), ("INSTANCE", instance)):
+            if tag in omit:
+                continue
+            enc = _wc_b64.b64encode(text.encode()).decode()
+            parts.append("__LGSMP_%s_B__%s__LGSMP_%s_E__" % (tag, enc, tag))
+        return ("".join(parts).strip(), "", 0)
+
+    _INST = '## header\nport="27015"\n'
+
+    # THE BUG: a common.cfg with no trailing newline used to swallow the INSTANCE marker.
+    _sm_core.run_command = lambda s, c, **k: _sections(common="a=1", instance=_INST)
+    _r = _sm_files.lgsm_read_config(NS(), "fctrserver", "fctrserver")
+    eq("lgsm_read_config: a common.cfg with NO trailing newline still yields the instance raw",
+       _r.get("raw"), _INST)
+    check("lgsm_read_config: ...and reports no error", _r.get("error") is None, repr(_r.get("error")))
+
+    # Byte fidelity, same reason read_file needed it: the editor saves what it was shown.
+    _CRLF = 'a="1"\r\nb="2"\r\n'
+    _sm_core.run_command = lambda s, c, **k: _sections(instance=_CRLF)
+    eq("lgsm_read_config: CRLF survives into the raw editor", 
+       _sm_files.lgsm_read_config(NS(), "fctrserver", "fctrserver").get("raw"), _CRLF)
+
+    # A genuinely absent file is an empty section, not a failure.
+    _sm_core.run_command = lambda s, c, **k: _sections(instance="")
+    _r = _sm_files.lgsm_read_config(NS(), "fctrserver", "fctrserver")
+    check("lgsm_read_config: an absent instance cfg is empty, not an error",
+          _r.get("raw") == "" and _r.get("error") is None, repr(_r.get("error")))
+
+    # A FAILED read (no frames at all) must say so, not hand the editor "".
+    for _desc, _resp in (("a timed-out read", ("", "SSH command timed out", -1)),
+                         ("a sudo refusal", ("", "sudo: a password is required", 1)),
+                         ("a partial answer", _sections(instance=_INST, omit=("INSTANCE",)))):
+        _sm_core.run_command = lambda s, c, _r=_resp, **k: _r
+        _r2 = _sm_files.lgsm_read_config(NS(), "fctrserver", "fctrserver")
+        check("lgsm_read_config: %s is an ERROR, not an empty config" % _desc,
+              _r2.get("raw") == "" and bool(_r2.get("error")), repr(_r2)[:90])
+
+    # The caller side: the command must actually frame, or every check above passes with `echo ===`.
+    _rc_cmds = []
+    _sm_core.run_command = lambda s, c, **k: (_rc_cmds.append(c), _sections(instance=_INST))[1]
+    _sm_files.lgsm_read_config(NS(), "fctrserver", "fctrserver")
+    check("lgsm_read_config: the command frames each section instead of echoing a marker",
+          len(_rc_cmds) == 1 and "__LGSMP_INSTANCE_B__" in _rc_cmds[0]
+          and "echo ===INSTANCE" not in _rc_cmds[0],
+          (_rc_cmds[0][:130] if _rc_cmds else "none"))
+finally:
+    _sm_core.run_command = _rc_orig
