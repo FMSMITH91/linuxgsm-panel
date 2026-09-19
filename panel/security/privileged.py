@@ -524,23 +524,33 @@ def _is_panel_account(name):
 
     Uses the panel process's own uid rather than SUDO_UID: unlike the helper, this code IS the
     panel, so it can simply ask who it is."""
-    try:
-        if pwd.getpwuid(os.getuid()).pw_name == name:
-            return True
-    except (KeyError, OSError):
-        pass
-    try:
-        home = os.path.realpath(HOME_ROOT + "/" + name)
-    except (ValueError, OSError):
-        return False
+    if _pw_name(os.getuid()) == name:
+        return True
+    home = os.path.realpath(HOME_ROOT + "/" + name)
     if _PANEL_DIR == home or _PANEL_DIR.startswith(home + "/"):
         return True
+    return _owner_of(_PANEL_DIR) == name
+
+
+def _pw_name(uid):
+    """The account name for a uid, or "" when the host has no such account.
+
+    A named lookup rather than a try/except around each call site: an empty `except: pass` is
+    py/empty-except, and more to the point a caller that swallowed the error in place read as if
+    the comparison had happened and failed. "" is a name no account can have, so it compares
+    false against every candidate."""
     try:
-        if pwd.getpwuid(os.stat(_PANEL_DIR).st_uid).pw_name == name:
-            return True
-    except (OSError, KeyError, ValueError):
-        pass
-    return False
+        return pwd.getpwuid(uid).pw_name
+    except (KeyError, OSError, ValueError, OverflowError):
+        return ""
+
+
+def _owner_of(path):
+    """The name of the account owning `path`, or "" if that cannot be determined."""
+    try:
+        return _pw_name(os.stat(path).st_uid)
+    except OSError:
+        return ""
 
 
 def home_of(user):

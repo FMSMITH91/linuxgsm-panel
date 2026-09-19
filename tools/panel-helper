@@ -691,12 +691,8 @@ def _is_panel_account(name):
 
     Fails CLOSED only where it can answer; an unreadable panel.conf leaves the last two silent
     rather than refusing every account, because that would break legitimate game-server removal."""
-    try:
-        sudo_uid = os.environ.get("SUDO_UID")
-        if sudo_uid and pwd.getpwuid(int(sudo_uid)).pw_name == name:
-            return True
-    except (KeyError, ValueError, TypeError, OverflowError):
-        pass
+    if _pw_name(_int_or_none(os.environ.get("SUDO_UID"))) == name:
+        return True
     try:
         panel_dir = panel_conf().get("panel_dir", "")
     except Exception:
@@ -710,12 +706,38 @@ def _is_panel_account(name):
         return False
     if panel_dir == home or panel_dir.startswith(home + "/"):
         return True
+    return _owner_of(panel_dir) == name
+
+
+def _int_or_none(s):
+    """int(s), or None when it is missing or not a number."""
     try:
-        if pwd.getpwuid(os.stat(panel_dir).st_uid).pw_name == name:
-            return True
-    except (OSError, KeyError, ValueError):
-        pass
-    return False
+        return int(s)
+    except (TypeError, ValueError):
+        return None
+
+
+def _pw_name(uid):
+    """The account name for a uid, or "" when there is no such account (or uid is None).
+
+    A named lookup rather than a try/except around each call site: an empty `except: pass` is
+    py/empty-except, and more to the point a caller that swallowed the error in place read as if
+    the comparison had happened and failed. "" is a name no account can have, so it compares false
+    against every candidate."""
+    if uid is None:
+        return ""
+    try:
+        return pwd.getpwuid(uid).pw_name
+    except (KeyError, OSError, ValueError, OverflowError):
+        return ""
+
+
+def _owner_of(path):
+    """The name of the account owning `path`, or "" if that cannot be determined."""
+    try:
+        return _pw_name(os.stat(path).st_uid)
+    except OSError:
+        return ""
 
 
 def home_of(user):
