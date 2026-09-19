@@ -1044,12 +1044,24 @@ def create_app():
     # keeps whatever behaviour it has today (including propagating under TESTING).
     @app.errorhandler(Exception)
     def _json_for_api_errors(e):
-        if isinstance(e, HTTPException):
-            return e            # abort(404) and friends render as they always have
         wants_json = (request.path.startswith("/api/")
                       or request.headers.get("X-Requested-With") == "XMLHttpRequest")
         if not wants_json:
-            raise e
+            # RETURN an HTTPException, do not re-raise it: Flask renders a returned one as its
+            # normal page, while a raised one propagates — and under TESTING that means
+            # `GET /logout` (405) stops being a 405 and becomes a crash in the caller.
+            if isinstance(e, HTTPException):
+                return e
+            raise e             # a page render keeps whatever behaviour it has today
+        if isinstance(e, HTTPException):
+            # abort(404) from get_or_404, a 405, flask-wtf's CSRF 400 — all of them rendered
+            # Werkzeug's HTML page, which is the same unparseable body as the 500 below. 401 is
+            # the exception: panel.js's session-expired handling reads the status and the
+            # X-Auth-Required header off it, and that contract is not ours to reshape here.
+            if e.code == 401:
+                return e
+            return jsonify({"success": False,
+                            "message": e.description or e.name}), (e.code or 500)
         _log.exception("unhandled error serving %s",
                        (request.url_rule.endpoint if request.url_rule else "?"))
         return jsonify({"success": False,

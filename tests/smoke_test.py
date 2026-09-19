@@ -3328,6 +3328,52 @@ try:
                                          and "\\" not in _loc and "://" not in _loc),
               "Location: %r" % _loc)
         _lc.get("/logout")
+
+    # ── A JSON endpoint must answer JSON, whatever went wrong ─────────────────────────────────
+    # There was no errorhandler anywhere in this project, so an exception in a route came back as
+    # Werkzeug's HTML 500 — and every caller here is `.then(r => r.json())`, which then fails to
+    # parse it. The user sees a generic "failed" instead of the reason and the log fills with
+    # tracebacks that read like the panel is broken. The ordinary trigger is not a bug at all:
+    # run_privileged raises ConnectionError for a host that is down and VerbError for an argument
+    # a verb refuses, and nothing between the ops layer and the browser catches either.
+    #
+    # Driven against a host that cannot be reached (192.0.2.x is TEST-NET-1, and the runner's
+    # egress guard refuses it anyway), and against the paths that must NOT change.
+    _eh_c = app.test_client()
+    _eh_c.post("/login", data={"username": "smoke_admin", "password": "Str0ng!passw0rd"})
+    with app.app_context():
+        _eh_r = RemoteServer(name="eh-down", host="192.0.2.10", port=22, username="u",
+                             auth_method="key", auth_credential="", sudo_enabled=True)
+        db.session.add(_eh_r)
+        db.session.commit()
+        _eh_rid = _eh_r.id
+    _eh_html = []
+    for _p, _b in (("/api/remote/%d/firewall/open" % _eh_rid, {"port": 27015}),
+                   ("/api/remote/%d/reboot" % _eh_rid, {}),
+                   ("/api/remote/%d/run-updates" % _eh_rid, {})):
+        _resp = _eh_c.post(_p, json=_b)
+        if "json" not in (_resp.headers.get("Content-Type") or ""):
+            _eh_html.append("%s -> %s %s" % (_p, _resp.status_code,
+                                             (_resp.headers.get("Content-Type") or "")[:24]))
+    check("errors: a mutating API route answers JSON when the host is unreachable",
+          not _eh_html, "; ".join(_eh_html))
+    # An abort(404) on an API path is the same unparseable body, one status code over.
+    _resp = _eh_c.get("/api/server/99999/history")
+    check("errors: an abort() on an API path answers JSON too",
+          "json" in (_resp.headers.get("Content-Type") or "") and _resp.status_code == 404,
+          "%s %s" % (_resp.status_code, _resp.headers.get("Content-Type")))
+    # ...and a PAGE keeps the plain HTML error it has always had.
+    _resp = _eh_c.get("/no-such-page-at-all")
+    check("errors: a page render still gets the ordinary HTML error",
+          _resp.status_code == 404 and "html" in (_resp.headers.get("Content-Type") or ""),
+          "%s %s" % (_resp.status_code, _resp.headers.get("Content-Type")))
+    # The one status the handler must not reshape: panel.js reads it and X-Auth-Required to
+    # decide the session has expired.
+    _eh_anon = app.test_client()
+    _resp = _eh_anon.get("/api/servers")
+    check("errors: an unauthenticated API call keeps its 401 contract",
+          _resp.status_code in (401, 302), "%s" % _resp.status_code)
+    _eh_c.get("/logout")
     # ...and a genuine same-site destination is still honoured, or the guard is just breaking things.
     _okc = app.test_client()
     _okr = _okc.post("/login?next=/settings",
