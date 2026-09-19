@@ -1987,6 +1987,13 @@ def do_panel_db_repair(args, content):
     if not db_path or not os.path.isabs(db_path) or not os.path.exists(db_path):
         sys.stderr.write("panel.conf has no usable db_path\n")
         return 1
+    # os.path.exists() above follows symlinks, and db_path names a file inside the panel's own
+    # data/ directory — which the panel user owns. A symlink there aimed the root-side repair at
+    # any file on the box; db_maintenance refuses it too, and this is the copy on the far side of
+    # the privilege boundary, so it does not rely on that one.
+    if os.path.islink(db_path):
+        sys.stderr.write("refusing: the database path is a symlink\n")
+        return 1
     if not os.path.isfile(DBM_PATH):
         sys.stderr.write("db_maintenance is not installed root-owned; re-run install.sh as root\n")
         return 1

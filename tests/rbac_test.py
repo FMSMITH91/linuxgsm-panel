@@ -451,6 +451,70 @@ try:
     check("escalation: ...and keeps the group they legitimately had",
           auth.MANAGE_USERS in _now, "ended up with: %s" % sorted(_now))
 
+    # ── ...and cannot join a group whose PERMISSIONS they hold but whose HOSTS they do not ──────
+    # grantable_groups tested `set(g.get_permissions()) <= mine` and nothing else, while
+    # can_access_server unions Group.servers (whole-host grants) and Group.game_servers. So a
+    # group carrying a host you were never granted passed the check, and you held that host on the
+    # next request — with your permission set unchanged, which is why the test above stayed green.
+    with app.app_context():
+        _reach = Group(name=tag + "_reach", description="RBAC test reach (auto)", is_default=False)
+        _reach.set_permissions([auth.MANAGE_USERS])          # a SUBSET of what the MU admin holds
+        _reach.servers.append(RemoteServer.query.get(other_remote))   # ...carrying a host they lack
+        db.session.add(_reach)
+        db.session.commit()
+        _reach_gid = _reach.id
+    cmu.post("/users/%d/edit" % _mu_uid,
+             data={"display_name": "MU admin", "is_active": "on",
+                   "groups": [str(_mu_gid), str(_reach_gid)]})
+    with app.app_context():
+        _mu_after = db.session.get(User, _mu_uid)
+        _got_host = auth.can_access_server(_mu_after, other_id)
+    check("escalation: joining a permission-subset group does not hand over its hosts",
+          _got_host is False, "gained access to server %s on an ungranted host" % other_id)
+
+    # ── MANAGE_USERS must not reach an account holding permissions the actor lacks ──────────────
+    # The superadmin flag was the ONLY actor-vs-target test, so MANAGE_USERS alone edited every
+    # other account — and reset_password mints a new one and hands the plaintext straight back,
+    # while reset_2fa clears their second factor. One request took over a more-privileged peer and
+    # walked around _grantable_perms/grantable_groups entirely: not by acquiring the permission,
+    # but by becoming someone who already had it.
+    with app.app_context():
+        _vic_grp = Group(name=tag + "_vic", description="RBAC test victim (auto)", is_default=False)
+        _vic_grp.set_permissions([auth.UNINSTALL_SERVER, auth.MANAGE_REMOTES])
+        db.session.add(_vic_grp)
+        db.session.flush()
+        _vic = User(username=tag + "_victim",
+                    password_hash=auth.hash_password(secrets.token_hex(16)),
+                    display_name="victim", is_superadmin=False, is_active=True)
+        _vic.groups.append(_vic_grp)
+        db.session.add(_vic)
+        db.session.commit()
+        _vic_id, _vic_hash = _vic.id, _vic.password_hash
+    _r_take = cmu.post("/users/%d/edit" % _vic_id,
+                       data={"display_name": "victim", "is_active": "on",
+                             "reset_password": "on", "reset_2fa": "on"})
+    with app.app_context():
+        _vic_now = db.session.get(User, _vic_id)
+        _hash_changed = _vic_now.password_hash != _vic_hash
+    check("escalation: MANAGE_USERS cannot reset the password of a more-privileged account",
+          not _hash_changed, "the victim's password hash was replaced")
+    check("escalation: ...and the response does not hand back a credential",
+          "lgsm_" not in _r_take.get_data(as_text=True),
+          "a credential appeared in the refusal body")
+    # The control must still work where it legitimately applies: a LESS-privileged target.
+    with app.app_context():
+        _low = User(username=tag + "_low", password_hash=auth.hash_password(secrets.token_hex(16)),
+                    display_name="low", is_superadmin=False, is_active=True)
+        db.session.add(_low)
+        db.session.commit()
+        _low_id, _low_hash = _low.id, _low.password_hash
+    cmu.post("/users/%d/edit" % _low_id,
+             data={"display_name": "low", "is_active": "on", "reset_password": "on"})
+    with app.app_context():
+        _low_changed = db.session.get(User, _low_id).password_hash != _low_hash
+    check("escalation: ...but MAY still administer an account within their own permissions",
+          _low_changed, "a legitimate reset was refused too — the guard is too broad")
+
     # The same via /users/add — creating the account in the privileged group, then logging in as it
     # (the generated password is handed straight back to the caller).
     _new_name = tag + "_mu_made"

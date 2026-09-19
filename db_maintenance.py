@@ -195,6 +195,22 @@ def repair(path=None, backup=None):
         backup = backup if backup is not None else _b
     if not os.path.exists(path):
         return False, "no database file to repair"
+    # NEITHER of these may be a symlink. This function runs as ROOT (panel-helper's
+    # panel-db-repair execs it with the system python), and both paths live in the panel's own
+    # data/ directory, which the panel user owns. os.path.exists() follows links, shutil.copy2()
+    # opens its DESTINATION "wb" and so writes THROUGH one, and `backup` is just
+    # `<db_path>.backup` — so pointing panel.db at a root-owned file and putting a valid SQLite
+    # database (integrity_check passes; a SQLite file can carry any bytes you like inside a TEXT
+    # value) at panel.db.backup made root overwrite that file, and copystat then set its mode.
+    # The rebuild branch fails first on a non-database target, which is what routes execution to
+    # the copy.
+    #
+    # lstat, not realpath: the question is whether this exact name is a link, and O_NOFOLLOW is
+    # the same question asked by open(). Refusing is right — a symlink here is never something the
+    # panel put there.
+    for _p, _what in ((path, "database"), (backup, "backup")):
+        if _p and os.path.islink(_p):
+            return False, "refusing to repair through a symlinked %s path" % _what
 
     aside = _aside(path)
     kept = (" (original kept at %s)" % os.path.basename(aside)) if aside else ""
@@ -216,11 +232,20 @@ def repair(path=None, backup=None):
         ok, _ = integrity_check(backup)
         if ok:
             try:
-                shutil.copy2(backup, path)
+                # Copy to a temp beside the target and RENAME, rather than copy2 onto the target.
+                # os.replace does not follow a symlink at the destination — it replaces the name —
+                # so even if the islink check above were ever removed or raced, the write cannot
+                # land on whatever the link points at. Same reason the rebuild branch above is
+                # safe: it already goes through os.replace.
+                _restore_tmp = path + ".restoring"
+                _silent_rm(_restore_tmp)
+                shutil.copy2(backup, _restore_tmp)
+                os.replace(_restore_tmp, path)
                 for ext in ("-wal", "-shm"):
                     _silent_rm(path + ext)
                 return True, "restored the last healthy backup" + kept
             except OSError:
+                _silent_rm(path + ".restoring")
                 _log.debug("db repair: could not restore the backup", exc_info=True)
     return False, "could not repair — rebuild failed and no healthy backup exists" + kept
 

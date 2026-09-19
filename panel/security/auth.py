@@ -898,8 +898,49 @@ def grantable_groups(requested_ids, existing=()):
     if current_user.is_superadmin:
         return list(requested)
     mine = get_user_permissions(current_user)
-    keepable = {g for g in requested if set(g.get_permissions()) <= mine}
-    return list(keepable | (existing - {g for g in existing if set(g.get_permissions()) <= mine}))
+    # Permissions AND object reach. The subset test covered Group.permissions only, while
+    # can_access_server unions Group.servers (whole-host grants) and Group.game_servers — so a
+    # group whose permissions you already hold, but which carries a host you were never granted,
+    # passed this check and handed you that host on the next request. The permission set was
+    # unchanged, which is why the existing escalation tests stayed green. grantable_object_ids
+    # closes the same gap from the group-editing side; this is the membership side.
+    mine_remotes = set(accessible_remote_ids(current_user))
+    mine_servers = {gs.id for gs in get_user_servers(current_user)}
+
+    def _within_my_reach(g):
+        if not set(g.get_permissions()) <= mine:
+            return False
+        if not {r.id for r in (g.servers or [])} <= mine_remotes:
+            return False
+        return {s.id for s in (g.game_servers or [])} <= mine_servers
+
+    keepable = {g for g in requested if _within_my_reach(g)}
+    return list(keepable | (existing - {g for g in existing if _within_my_reach(g)}))
+
+
+def can_administer_user(actor, target):
+    """Whether `actor` may edit or delete `target`.
+
+    MANAGE_USERS was a single gate. Holding it let you edit EVERY non-superadmin account —
+    including one whose permissions you do not have — and the edit form's own branches then hand
+    you the account: reset_password mints a new one and _form_credential shows it to you, and
+    reset_2fa clears their second factor. One request took over a more-privileged peer.
+
+    That walks straight around _grantable_perms and grantable_groups, which exist precisely to
+    stop a delegated admin acquiring permissions they lack. They guard the grant; this guards the
+    other route to the same place, which is to become someone who already has them.
+
+    The rule is theirs, applied to the target as a whole: a non-superadmin may only administer an
+    account whose permissions are a SUBSET of their own. Editing yourself is always allowed —
+    your own permissions are trivially a subset of your own, but say it outright so a future
+    change to get_user_permissions cannot lock someone out of their own account page."""
+    if getattr(actor, "is_superadmin", False):
+        return True
+    if getattr(target, "is_superadmin", False):
+        return False
+    if actor.id == target.id:
+        return True
+    return set(get_user_permissions(target)) <= set(get_user_permissions(actor))
 
 
 def grantable_object_ids(requested_ids, existing_ids, allowed_ids):

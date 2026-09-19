@@ -401,6 +401,23 @@ def remote_ufw_close_game_port(server, port):
 
 # LinuxGSM dependencies common to most game servers on Debian/Ubuntu. The game
 # user has no sudo, so the panel installs these as root before/around auto-install.
+# A Debian package name, optionally with an architecture qualifier (libstdc++5:i386). Debian
+# policy: lowercase alphanumeric plus + - . , at least two characters, starting alphanumeric.
+APT_PKG_RE = re.compile(r"[a-z0-9][a-z0-9+.-]+(?::[a-z0-9][a-z0-9-]*)?\Z")
+
+
+def _apt_pkgs(names):
+    """The names from `names` that really are package names, in order, without duplicates."""
+    out = []
+    for n in names:
+        n = (n or "").strip()
+        if n and n not in out and APT_PKG_RE.fullmatch(n):
+            out.append(n)
+        elif n and not APT_PKG_RE.fullmatch(n):
+            _core._log.warning("dependency list: refusing %r — not a package name", n[:60])
+    return out
+
+
 LGSM_COMMON_DEPS = (
     "curl wget ca-certificates file bzip2 gzip xz-utils unzip bsdmainutils pigz "
     "python3 binutils bc jq tmux netcat-openbsd distro-info "
@@ -506,7 +523,19 @@ def install_game_dependencies(server, game_type=None, extra=""):
         needs_steamcmd = True
         extra_pkgs = [p for p in extra_pkgs if p != "steamcmd"]
     base = " ".join(per_game) if per_game else LGSM_COMMON_DEPS
-    pkgs = (base + (" " + " ".join(extra_pkgs) if extra_pkgs else "")).strip()
+    # Every name is checked against APT_PKG_RE before it reaches the pipeline below, which runs as
+    # ROOT with the list interpolated bare (twice — the batch install and the per-package retry).
+    #
+    # `per_game` comes from lgsm_data.deps(), which parses data/lgsm/<distro>.csv with no charset
+    # check at all: it splits on commas and keeps whatever is between them. _looks_like() guards
+    # the FETCH path only — a cache file already on disk is read straight back, and data/lgsm/ is
+    # inside the panel's own data directory. So a package list is panel-writable input arriving at
+    # a root shell, and `cod,libstdc++5:i386 $(id > /tmp/pwned)` reached it intact. Commas are the
+    # field separator, which rules out nothing: $(), backticks and ; need no comma.
+    #
+    # Dropping a bad name rather than refusing the batch: an unparseable entry in LinuxGSM's own
+    # CSV must not make "install dependencies" fail shut on every game.
+    pkgs = " ".join(_apt_pkgs(base.split() + extra_pkgs))
     steam_block = ""
     if needs_steamcmd:
         steam_block = (

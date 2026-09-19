@@ -1097,6 +1097,93 @@ if _sys_name:
     check("helper: a NON-root system account (uid<1000) is still accepted", not _sys_why,
           "refused %s, which is the shape of the panel's own user: %s" % (_sys_name, _sys_why))
 
+# ── The offline DB repair runs as ROOT and must not be steerable through a symlink ────────────
+# db_maintenance.repair() is exec'd as root by panel-helper's panel-db-repair. Both paths it
+# touches live in the panel's own data/ directory, which the panel user owns: os.path.exists()
+# follows links, shutil.copy2() opens its DESTINATION "wb" and writes THROUGH one, and `backup` is
+# just `<db_path>.backup`. Aim panel.db at a root-owned file, put a healthy SQLite database (which
+# can carry any bytes you like inside a TEXT value) at panel.db.backup, and root overwrote that
+# file — the rebuild branch fails first on a non-database target, which is what routes execution
+# to the copy. Driven for real against a sandbox, not asserted from the source text.
+import sqlite3 as _dbr_sqlite                                                      # noqa: E402
+import db_maintenance as _dbr                                                      # noqa: E402
+
+_dbr_tmp = _tempfile.mkdtemp(prefix="dbrepair-sym-")
+_dbr_target = os.path.join(_dbr_tmp, "target.txt")
+_dbr_db = os.path.join(_dbr_tmp, "panel.db")
+_dbr_bak = _dbr_db + ".backup"
+with open(_dbr_target, "w", encoding="utf-8") as _fh:
+    _fh.write("ORIGINAL ROOT-OWNED CONTENT")
+_dbr_c = _dbr_sqlite.connect(_dbr_bak)
+_dbr_c.execute("create table t(x)")
+_dbr_c.execute("insert into t values('ssh-ed25519 AAAAPAYLOAD attacker')")
+_dbr_c.commit()
+_dbr_c.close()
+os.symlink(_dbr_target, _dbr_db)
+_dbr_ok, _dbr_msg = _dbr.repair(path=_dbr_db, backup=_dbr_bak)
+check("db repair: refuses a symlinked database path", _dbr_ok is False, _dbr_msg)
+# Read BYTES: if the guard ever fails, what lands here is a SQLite file, and decoding it as UTF-8
+# raises out of the module and takes the rest of the suite with it instead of failing this check.
+with open(_dbr_target, "rb") as _fh:
+    _dbr_after = _fh.read()
+check("db repair: ...and the symlink's target is untouched",
+      _dbr_after == b"ORIGINAL ROOT-OWNED CONTENT", repr(_dbr_after[:60]))
+# It must still repair a genuinely corrupt database, or the guard has broken the feature.
+os.remove(_dbr_db)
+with open(_dbr_db, "wb") as _fh:
+    _fh.write(b"this is not a sqlite database at all")
+_dbr_ok2, _dbr_msg2 = _dbr.repair(path=_dbr_db, backup=_dbr_bak)
+check("db repair: a real corrupt database is still restored", _dbr_ok2 is True, _dbr_msg2)
+check("db repair: ...to a healthy file", _dbr.integrity_check(_dbr_db)[0], "not healthy")
+check("db repair: ...leaving no .restoring temp behind",
+      not os.path.exists(_dbr_db + ".restoring"))
+
+
+# ── The root dependency install must not take package names from a panel-writable file ────────
+# install_game_dependencies interpolates its package list BARE into a pipeline it runs with
+# sudo=True — twice, the batch install and the per-package retry. The list comes from
+# lgsm_data.deps(), which parses data/lgsm/<distro>.csv by splitting on commas and keeping
+# whatever lies between them. _looks_like() guards the FETCH path only; a cache file already on
+# disk is read straight back, and data/lgsm/ is inside the panel's own data directory. So
+# `cod,libstdc++5:i386 $(id > /tmp/pwned)` reached a root shell intact.
+import panel.services.lgsm_data as _ld                                             # noqa: E402
+from panel.ops.ssh_manager import hosts as _dep_hosts                               # noqa: E402
+
+_ld._mem.clear()
+_o_ld_text = _ld._text
+_o_dep_run, _o_dep_slug = _dep_hosts._core.run_command, _dep_hosts.host_os_slug
+_dep_seen = {}
+try:
+    _ld._text = lambda name, allow_fetch=True: (
+        "all,curl\ncod,libstdc++5:i386 $(id > /tmp/pwned)\nx,`whoami`\ny,a;b\n")
+    _dep_hosts._core.run_command = lambda s, c, **k: (_dep_seen.update(cmd=c, kw=k), ("", "", 0))[1]
+    _dep_hosts.host_os_slug = lambda s: "ubuntu-24.04"
+
+    class _DepSrv:
+        id, host, port, username = 1, "h", 22, "u"
+        auth_method, sudo_enabled, is_local, linuxgsm_user = "key", True, False, ""
+
+    _dep_hosts.install_game_dependencies(_DepSrv(), game_type="cod")
+    _dep_cmd = _dep_seen.get("cmd", "")
+    check("deps: the pipeline still escalates (so this test is testing the root path)",
+          _dep_seen.get("kw", {}).get("sudo") is True, str(_dep_seen.get("kw")))
+    for _payload in ("$(id", "`whoami`", "a;b", "/tmp/pwned"):
+        check("deps: %r never reaches the root pipeline" % _payload, _payload not in _dep_cmd)
+    check("deps: ...and the legitimate packages still do",
+          "curl" in _dep_cmd and "libstdc++5:i386" in _dep_cmd, _dep_cmd[:120])
+finally:
+    _ld._text = _o_ld_text
+    _dep_hosts._core.run_command, _dep_hosts.host_os_slug = _o_dep_run, _o_dep_slug
+    _ld._mem.clear()
+
+# The validator itself: an architecture qualifier is legal, a shell metacharacter is not.
+eq("deps: a real package list survives _apt_pkgs",
+   _dep_hosts._apt_pkgs(["curl", "libstdc++5:i386", "lib32gcc-s1", "python3"]),
+   ["curl", "libstdc++5:i386", "lib32gcc-s1", "python3"])
+eq("deps: _apt_pkgs drops anything that is not a package name",
+   _dep_hosts._apt_pkgs(["curl", "$(id)", "a;b", "../x", "", "`w`"]), ["curl"])
+
+
 # ── The destructive user verbs must refuse the PANEL'S OWN account ────────────────────────────
 # `user-delete`, `user-delete-force`, `user-remove-home` and `user-kill-processes` take their name
 # from the "server name" field of the install form — shape-checked against INSTANCE_NAME_RE and
