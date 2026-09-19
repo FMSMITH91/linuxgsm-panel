@@ -1217,7 +1217,7 @@ def do_sshd_socket_discard(args, content):
     try:
         os.unlink(SSHD_SOCKET_DROPIN_BAK)
     except FileNotFoundError:
-        pass
+        pass          # there was no drop-in to snapshot; nothing to clean up
     return 0
 
 
