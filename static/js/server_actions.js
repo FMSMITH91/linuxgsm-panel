@@ -104,7 +104,6 @@ function actionWithPlayerCheck(action, btn) {
 }
 
 function actionPlayersDialog(action, n, btn) {
-  var verb = _cap(action);                                   // Restart / Stop
   var lower = action;                                        // restart / stop
   var endpoint = action === 'stop' ? 'stop-when-empty' : 'restart-when-empty';
   var nowIcon = action === 'stop' ? 'stop-fill' : 'arrow-clockwise';
