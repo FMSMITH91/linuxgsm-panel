@@ -1242,20 +1242,35 @@ for _av, _aargs in (("tailscale-set-operator", [_pa_me]),
     check("privileged: %s still ACCEPTS the panel's own account" % _av, _ok,
           "refused %r (%s)" % (_pa_me, _why if not _ok else ""))
 # Helper side: SUDO_UID is how it learns who invoked it on a root install.
+#
+# SKIPPED when the suite is run AS ROOT, because the premise does not hold there: this block asks
+# whether the helper singles out "the panel's own account" among ordinary managed accounts, and
+# root is refused by v_managed_user for a different and correct reason (uid 0). Run as root the
+# last check raised ValueError("refusing a uid-0 account") — an uncaught exception at import time,
+# which aborted the whole suite and took ~1,890 other checks with it. Found by running the suite
+# as root on the test VPS. The panel itself never runs as root (it is a per-user install), so this
+# is about the harness, not the boundary.
 _pa_env = os.environ.get("SUDO_UID")
 os.environ["SUDO_UID"] = str(os.getuid())
 try:
-    _pa_h_why = ""
-    try:
-        _helper.v_destroyable_user(_pa_me)
-    except Exception as _e:
-        _pa_h_why = str(_e)
-    check("helper: v_destroyable_user refuses the account that invoked it",
-          "panel" in _pa_h_why.lower(), "accepted %r (%r)" % (_pa_me, _pa_h_why))
-    check("helper: ...and an ordinary game-server account is still accepted",
-          _helper.v_destroyable_user("codserver") == "codserver")
-    check("helper: v_managed_user itself still accepts it, so the 16 non-destructive verbs work",
-          _helper.v_managed_user(_pa_me) == _pa_me)
+    if os.getuid() == 0:
+        for _n in ("helper: v_destroyable_user refuses the account that invoked it",
+                   "helper: ...and an ordinary game-server account is still accepted",
+                   "helper: v_managed_user itself still accepts it, so the 16 non-destructive "
+                   "verbs work"):
+            skip(_n, "suite running as root: uid 0 is refused for its own reason")
+    else:
+        _pa_h_why = ""
+        try:
+            _helper.v_destroyable_user(_pa_me)
+        except Exception as _e:
+            _pa_h_why = str(_e)
+        check("helper: v_destroyable_user refuses the account that invoked it",
+              "panel" in _pa_h_why.lower(), "accepted %r (%r)" % (_pa_me, _pa_h_why))
+        check("helper: ...and an ordinary game-server account is still accepted",
+              _helper.v_destroyable_user("codserver") == "codserver")
+        check("helper: v_managed_user itself still accepts it, so the 16 non-destructive verbs work",
+              _helper.v_managed_user(_pa_me) == _pa_me)
 finally:
     if _pa_env is None:
         os.environ.pop("SUDO_UID", None)

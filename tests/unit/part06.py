@@ -2121,12 +2121,24 @@ def _rv_plant(user, dirname):
 
 
 def _rv_run():
-    """recover.sh with the scan pointed at the sandbox. HOME is set somewhere empty so the
-    per-user branch above the scan cannot match, and list-users keeps it read-only."""
+    """recover.sh with the WHOLE of its detection pointed at the sandbox, and list-users keeping
+    it read-only.
+
+    All three inputs, not just the scan. recover.sh consults the system unit, then the user unit,
+    then the /home scan — so on a host that really has a panel unit installed the first branch won
+    and these checks silently exercised something they were not written for. Measured on a
+    deployed host: recover.sh answered "Using <the test's own directory> (service user lgsmpanel)",
+    mixing a directory from one branch with a service user from another, and the ambiguity checks
+    below failed for a reason that had nothing to do with ambiguity. PANEL_DIR is cleared too: it
+    outranks every branch, and inheriting a stray one from the environment would skip detection
+    entirely."""
+    _env = {k: v for k, v in os.environ.items() if k != "PANEL_DIR"}
+    _env.update({"PANEL_RECOVER_HOMES": _rv_root,
+                 "PANEL_RECOVER_SYSTEM_UNIT": os.path.join(_rv_root, "_no_system_unit"),
+                 "PANEL_RECOVER_USER_UNIT": os.path.join(_rv_root, "_no_user_unit"),
+                 "HOME": os.path.join(_rv_root, "_nohome")})
     return _rv_sub.run(["bash", os.path.join(_root, "recover.sh"), "list-users"],
-                       capture_output=True, text=True, timeout=60,
-                       env={**os.environ, "PANEL_RECOVER_HOMES": _rv_root,
-                            "HOME": os.path.join(_rv_root, "_nohome")})
+                       capture_output=True, text=True, timeout=60, env=_env)
 
 
 _rv_real = _rv_plant("ubuntu", "linuxgsm-panel")

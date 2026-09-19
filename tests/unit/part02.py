@@ -4,10 +4,24 @@ from unit.part01 import (NS, SO, _privmod, _sm_core, _sm_cron, _sm_files, _sm_fi
 
 # ── local-host injection defenses: system_ops runs commands on THIS machine (shell=True), so its
 #    request-fed values (block/unban IPs, jail names) must be neutralised before reaching _run. ──
-_orig_so_run = SO._run
+#
+# _run_verb is stubbed as well as _run, and that is the whole point. _run_verb has THREE branches:
+# the helper when it is installed, the tool directly when already root, and the pre-helper shell
+# form otherwise — and only the third goes through _run. So stubbing _run alone leaves the first
+# two live: on a machine with the helper installed (i.e. any properly installed panel host) these
+# checks reached the REAL boundary. Running this suite as `ubuntu` on the test VPS wrote two real
+# `ufw deny` rules, for 10.0.0.5 and 10.0.0.6, to a live firewall — from a suite whose own header
+# in run-tests.sh calls it "pure logic; no network". It passed on dev machines and in CI only
+# because neither has the helper, so the fallback branch was taken and the stub caught it.
+#
+# The replacement routes through the same shell-form builder the fallback would have used, so every
+# assertion below is unchanged and no branch can escape to the real host.
+_orig_so_run, _orig_so_verb = SO._run, SO._run_verb
 try:
     _so = []
     SO._run = lambda cmd, *a, **k: (_so.append(cmd), ("", "", 0))[1]
+    SO._run_verb = lambda v, a=(), timeout=30, merge_stderr=True: (
+        _so.append(_privmod.remote_command(v, a, merge_stderr=merge_stderr)), ("", "", 0))[1]
 
     _ok, _ = SO.ufw_deny_ip("1.2.3.4; rm -rf /")
     check("ufw_deny_ip: non-IP rejected, runs nothing", _ok is False and not _so)
@@ -23,14 +37,18 @@ try:
     _ok, _ = SO.ufw_undeny_ip("not-an-ip")
     check("ufw_undeny_ip: non-IP rejected, runs nothing", _ok is False and not _so)
 finally:
-    SO._run = _orig_so_run
+    SO._run, SO._run_verb = _orig_so_run, _orig_so_verb
 
 # ── fail2ban_unban: jail must be metacharacter-free AND on the host's real jail allowlist;
 #    IP is canonicalised through ipaddress. Both are shlex-quoted at the sink. ──
-_orig_so_run2, _orig_jails = SO._run, SO._fail2ban_jails
+# _run_verb stubbed here too — same reason as the ufw block above: without it, a host with the
+# helper installed runs `fail2ban-client set <jail> unbanip <ip>` for real.
+_orig_so_run2, _orig_jails, _orig_so_verb2 = SO._run, SO._fail2ban_jails, SO._run_verb
 try:
     _fb = []
     SO._run = lambda cmd, *a, **k: (_fb.append(cmd), ("", "", 0))[1]
+    SO._run_verb = lambda v, a=(), timeout=30, merge_stderr=True: (
+        _fb.append(_privmod.remote_command(v, a, merge_stderr=merge_stderr)), ("", "", 0))[1]
     SO._fail2ban_jails = lambda: ["sshd", "panel-login"]
 
     _ok, _ = SO.fail2ban_unban("sshd; rm -rf /", "1.2.3.4")
@@ -46,7 +64,7 @@ try:
     check("fail2ban_unban: valid jail+IP reaches fail2ban-client",
           _ok is True and any("fail2ban-client set sshd unbanip 9.9.9.9" in c for c in _fb))
 finally:
-    SO._run, SO._fail2ban_jails = _orig_so_run2, _orig_jails
+    SO._run, SO._fail2ban_jails, SO._run_verb = _orig_so_run2, _orig_jails, _orig_so_verb2
 
 # ── GMod mountable content: the game picker is allow-listed, and the mount config is generated from a
 #    validated content username + constant game keys (so it's safe to write verbatim). ──
