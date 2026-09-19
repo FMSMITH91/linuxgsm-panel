@@ -109,7 +109,7 @@ from panel.db.models import (AuditLog, GameServer, Group, RemoteServer, SetupSta
 from panel.ops.ssh_manager import (_remote_listening_ports, is_local_server, get_server_status,
     game_engine, console_steamid_ban, pro_status, list_game_backups, game_engine as
     sm_game_engine, set_game_priority_bulk, lgsm_get_values, remote_set_fail2ban_ignoreip,
-    ensure_node_tools_cron)
+    ensure_node_tools_cron, ensure_persistent_bans)
 # Reached through the MODULE, not bound by name: these are the seams the test suite
 # monkeypatches. `from x import f` copies the function object, so a stub on the source
 # module would never be seen — attribute access resolves at call time and is stable
@@ -637,27 +637,80 @@ def _valve_game_servers():
 
 
 def _fan_out_global_ban(app, steamid, unban=False):
-    """Apply (or lift) one SteamID on every running valve server across all hosts. Best-effort and
-    backgrounded — a stopped server picks the ban up from writeid/banned_user.cfg or the next Sync."""
+    """Apply (or lift) one SteamID on every valve server across all hosts, and RECORD what happened.
+
+    Backgrounded, so the flash that started it cannot report the result — which is exactly why the
+    result has to land in the audit log. console_steamid_ban already computes a precise outcome
+    ('banned' / 'unbanned' / 'offline' / 'failed'); this used to call it for effect and throw that
+    away, while the page said "Banned <id> across all Source servers" and the audit row — written
+    BEFORE this thread starts, with log_action's default success=True — asserted a success nobody
+    had checked. A server that was stopped, mid-restart, or on an unreachable host simply did not
+    get the ban, and nothing anywhere said so.
+
+    The old docstring claimed "a stopped server picks the ban up from writeid/banned_user.cfg or
+    the next Sync". It cannot: banid/writeid run THROUGH the console, so no console means no write
+    to banned_user.cfg, and _sync_global_bans takes the identical path — a server down at ban time
+    and at sync time never receives it at all. The tally below is what makes that visible.
+
+    ensure_persistent_bans runs first, because a ban the engine drops on the next map change is not
+    a ban. It was only ever called on the INSTALL path, so every IMPORTED valve server was missing
+    the `exec banned_user.cfg` line. It is idempotent and cheap (a grep, then an append only when
+    absent), and this is the one place that knows a ban is about to be applied to this server."""
+    done, offline, failed = [], [], []
     with app.app_context():
         for gs in _valve_game_servers():
             try:
-                console_steamid_ban(gs.remote, gs.short_name, gs.lgsm_name, steamid, unban=unban)
+                ensure_persistent_bans(gs.remote, gs.short_name, gs.lgsm_name)
+                ok, why = console_steamid_ban(gs.remote, gs.short_name, gs.lgsm_name, steamid,
+                                              unban=unban)
+                (done if ok else (offline if why == "offline" else failed)).append(gs.short_name)
             except Exception:
+                failed.append(getattr(gs, "short_name", "?"))
                 _log.debug("global-ban fan-out failed for %s", getattr(gs, "short_name", "?"), exc_info=True)
+        _log_ban_fanout("global_ban_apply" if not unban else "global_ban_lift",
+                        steamid, done, offline, failed)
+
+
+def _log_ban_fanout(action, steamid, done, offline, failed):
+    """One audit row saying what a ban fan-out actually achieved. success=False when any server
+    missed it, so /logs shows the difference between "applied everywhere" and "applied where it
+    could" — which is the whole point of collecting the outcomes."""
+    bits = ["%d applied" % len(done)]
+    if offline:
+        bits.append("%d not running (%s)" % (len(offline), ", ".join(sorted(offline)[:6])))
+    if failed:
+        bits.append("%d failed (%s)" % (len(failed), ", ".join(sorted(failed)[:6])))
+    try:
+        log_action(None, action, target=steamid, detail="; ".join(bits),
+                   success=not (offline or failed))
+    except Exception:
+        _log.debug("could not record the ban fan-out outcome", exc_info=True)
 
 
 def _sync_global_bans(app):
-    """Re-apply the WHOLE global ban list to every running valve server (covers newly added servers
-    and any whose native ban list was reset). Best-effort, backgrounded."""
+    """Re-apply the WHOLE global ban list to every valve server (covers newly added servers and any
+    whose native ban list was reset), and record the outcome — same reasoning as
+    _fan_out_global_ban: this runs in the background, so the audit row is the only place the result
+    can appear."""
     with app.app_context():
         bans = [b.steamid for b in GlobalBan.query.all()]
+        done, offline, failed = [], [], []
         for gs in _valve_game_servers():
+            try:
+                ensure_persistent_bans(gs.remote, gs.short_name, gs.lgsm_name)
+            except Exception:
+                _log.debug("persistent-ban setup failed for %s", getattr(gs, "short_name", "?"),
+                           exc_info=True)
             for sid in bans:
                 try:
-                    console_steamid_ban(gs.remote, gs.short_name, gs.lgsm_name, sid)
+                    ok, why = console_steamid_ban(gs.remote, gs.short_name, gs.lgsm_name, sid)
+                    (done if ok else (offline if why == "offline" else failed)).append(
+                        "%s/%s" % (gs.short_name, sid))
                 except Exception:
+                    failed.append("%s/%s" % (getattr(gs, "short_name", "?"), sid))
                     _log.debug("global-ban sync failed for %s", getattr(gs, "short_name", "?"), exc_info=True)
+        if bans:
+            _log_ban_fanout("global_ban_sync", "%d ban(s)" % len(bans), done, offline, failed)
 
 
 def _local_remote_id():

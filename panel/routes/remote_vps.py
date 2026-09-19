@@ -265,11 +265,29 @@ def register(app):
 
     @app.route("/api/remote/<int:remote_id>/game-port/<int:port>/open", methods=["POST"])
     @login_required
-    @permission_required(MANAGE_REMOTES, INSTALL_SERVER)
+    @permission_required(MANAGE_REMOTES)
     def api_remote_game_port_open(remote_id, port):
+        """Open ONE game server's port in the host firewall.
+
+        MANAGE_REMOTES only. This used to accept MANAGE_REMOTES *or* INSTALL_SERVER, while every
+        other firewall write on the same host (/firewall/open, /allow-from, /limit, /close,
+        /delete-rule) requires MANAGE_REMOTES alone — so a user with a host grant and only
+        INSTALL_SERVER could open any port on that host to the internet, on a firewall they
+        otherwise have no rights over. `port` is entirely caller-chosen: 22, 3306, 6379 are as
+        valid to the route as 27015.
+
+        And the port must actually BELONG to a game server on this host, which is what the route's
+        name has always claimed. The row was looked up only to pick the UFW comment, falling back
+        to "Game" when it did not exist — so a port nothing serves was opened just as readily. The
+        safe sibling, api_server_sync_ports, derives its ports from detect_game_ports() rather than
+        trusting the caller; this now refuses rather than guessing."""
         remote = get_remote(remote_id)
         gs = GameServer.query.filter_by(remote_id=remote_id, port=port).first()
-        count, msg = remote_ufw_allow_game_port(remote, port, gs.short_name if gs else "Game")
+        if gs is None:
+            return jsonify({"success": False,
+                            "message": "No game server on this host uses port %d — refusing to "
+                                       "open it." % port}), 400
+        count, msg = remote_ufw_allow_game_port(remote, port, gs.short_name)
         success = count >= 1
         log_action(current_user, "game_port_open", target=f"{remote.name}:{port}", success=success)
         return jsonify({"success": success, "message": msg, "rules_added": count})
