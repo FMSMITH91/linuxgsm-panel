@@ -257,6 +257,10 @@ def _valid_ntfy_server(server):
     return _ntfy_url(server, "probe") is not None
 
 
+# The only values `provider` is ever called with, as literals. See the log line inside _post.
+_PROVIDER_LABELS = {"telegram": "telegram", "discord": "discord", "ntfy": "ntfy"}
+
+
 def _post(url, data, headers, allow_configured_host=False, provider="?"):
     """POST to a validated https URL. Returns (ok, reason): ok is True on a 2xx. `reason` is a FIXED
     word describing the outcome — 'sent' / 'rejected' (the provider answered with an error status) /
@@ -291,10 +295,26 @@ def _post(url, data, headers, allow_configured_host=False, provider="?"):
         # scrubbed hostname read the same to a person and not to CodeQL — py/log-injection kept
         # flagging the flow, and the answer to a gate that will not be convinced is to give it
         # nothing to trace, not to dismiss it.
-        _log.warning("notification rejected by %s: HTTP %s", provider, getattr(e, "code", "?"))
+        # The status as an INT. `e.code` is set from the provider's own response, so a string
+        # there could carry a newline and forge a second log line; an int cannot. Same reasoning
+        # as `provider` above — give the tracker nothing, rather than argue with it.
+        try:
+            _code = int(getattr(e, "code", 0) or 0)
+        except (TypeError, ValueError):
+            _code = 0
+        # ...and the provider through a fixed table, so the string that reaches the log is a
+        # module-level literal rather than a parameter. Every caller already passes one of these
+        # three words; the lookup just makes that visible to a reader and to the scanner.
+        _log.warning("notification rejected by %s: HTTP %d",
+                     _PROVIDER_LABELS.get(provider, "?"), _code)
         return False, "rejected"
-    except (urllib.error.URLError, OSError, ValueError):
-        _log.debug("notification POST failed", exc_info=True)
+    except (urllib.error.URLError, OSError, ValueError) as e:
+        # The exception TYPE, not exc_info. A URLError renders the URL into its message and the
+        # traceback, and for ntfy that URL carries an operator-chosen host and topic — so
+        # exc_info=True put a value from outside this module into the log verbatim. The class
+        # name is a stdlib literal and says the same thing at this level (cannot resolve /
+        # refused / timed out / TLS), which is all a debug line here needs.
+        _log.debug("notification POST failed (%s)", e.__class__.__name__)
         return False, "unreachable"
 
 

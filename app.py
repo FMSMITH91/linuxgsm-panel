@@ -1067,8 +1067,16 @@ def create_app():
                 return e
             return jsonify({"success": False,
                             "message": e.description or e.name}), (e.code or 500)
-        _log.exception("unhandled error serving %s",
-                       (request.url_rule.endpoint if request.url_rule else "?"))
+        # The endpoint name taken from app.view_functions, not off the request. Werkzeug only ever
+        # matches a request to one of the app's own rules, so the two are the same string — but
+        # py/log-injection traces every value reached through `request`, and this repo's answer to
+        # a gate that will not be convinced is to give it nothing to trace rather than to dismiss
+        # it (see the note in notifications._post). The string logged is now literally one of the
+        # app's own dict keys.
+        _rule = request.url_rule
+        _ep = next((n for n in app.view_functions
+                    if _rule is not None and n == _rule.endpoint), "?")
+        _log.exception("unhandled error serving %s", _ep)
         return jsonify({"success": False,
                         "message": "Something went wrong — see the panel log."}), 500
 

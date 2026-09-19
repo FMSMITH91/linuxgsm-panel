@@ -140,9 +140,13 @@ def register(app):
         # mount-point refusal and says why: the branches below report every failure as a 500,
         # right for "the host refused the command", wrong for "you pasted something that isn't a
         # key", and the two are not distinguishable from the message.
-        except _priv.VerbError as _ve:
+        except _priv.VerbError:
+            # A FIXED message. Interpolating the VerbError put exception text in the response —
+            # ours today ("not an auth key"), but the boundary raises it from several places and
+            # "what the validator said" is not a contract this endpoint should re-export to the
+            # browser. The 400 already tells the form which field to blame.
             return jsonify({"success": False,
-                            "message": "That isn't a usable Tailscale auth key (%s)." % _ve}), 400
+                            "message": "That isn't a usable Tailscale auth key."}), 400
         except Exception:
             return jsonify({"success": False, "message": _log_and_generic("request failed"), "log": ""}), 500
 

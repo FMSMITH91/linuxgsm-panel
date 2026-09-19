@@ -38,21 +38,27 @@ def _cleanup():
     if _CONFIG_SNAPSHOT is not None:
         try:
             CONFIG_FILE.write_bytes(_CONFIG_SNAPSHOT)
-        except OSError:
+        except OSError as exc:
             # Best effort, and this runs at interpreter exit: the data dir may already be gone
             # (a `rm -rf` racing the shutdown), or read-only. Raising here would replace the
             # process's real exit status with a traceback from atexit and restore nothing anyway.
-            pass
+            # SAID OUT LOUD, though: the docstring above calls a config left with setup_complete
+            # behind "not a leftover file, it is a changed install", and a restore that silently
+            # fails leaves exactly that. stderr, because at atexit the logging module may already
+            # have shut down its handlers.
+            print("lhci_serve: could NOT restore %s (%s) — check it by hand"
+                  % (CONFIG_FILE, exc.__class__.__name__), file=sys.stderr)
     for _p in (DB_PATH, DB_PATH.with_name("panel.db-wal"), DB_PATH.with_name("panel.db-shm"),
                SECRET_FILE, CRED_KEY_FILE, CONFIG_FILE):
         if _p in _PREEXISTING or not _p.exists():
             continue
         try:
             _p.unlink()
-        except OSError:
+        except OSError as exc:
             # Same reasoning, per file: one that cannot be removed must not stop the others, and
             # every path here was created by THIS process (anything pre-existing is skipped above).
-            pass
+            print("lhci_serve: could NOT remove %s (%s)" % (_p, exc.__class__.__name__),
+                  file=sys.stderr)
 
 
 # is_setup_complete() needs this flag AND a SetupState row (added below), or every
