@@ -655,7 +655,7 @@ function sendCommand(ev) {
 
 function bannerDoNow(btn){
   var b = document.getElementById('restart-pending-banner');
-  serverAction((b && b.dataset.action) || 'restart', btn);
+  serverAction((b && b.dataset.pendingAction) || 'restart', btn);
 }
 
 function toggleAutostart(el) {

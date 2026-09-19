@@ -50,9 +50,16 @@
   the Users page — each user gets the combined abilities of every group they're in. Hand out game
   commands to groups on the Custom Commands page. (Super Administrators bypass groups entirely.)
 </p>
+{# Gated like the sidebar already gates both (base.html): manage_users needs MANAGE_USERS and
+   manage_commands is @superadmin_required, so a delegated group admin holding only manage_groups
+   was offered two shortcuts that bounce straight back to the dashboard. #}
 <p class="small mb-3">
+  {% if current_user.is_superadmin or has_permission('manage_users') %}
   <a href="{{ url_for('manage_users') }}">Users</a>
+  {% endif %}
+  {% if current_user.is_superadmin %}
   <a href="{{ url_for('manage_commands') }}" class="ms-3">Custom Commands</a>
+  {% endif %}
 </p>
 
 <div id="groups-list">
@@ -139,7 +146,7 @@
           </div>
           <div class="col-md-4">
             {# No `for`: this heads a GROUP of checkboxes, not a single control. It used to point
-               at manage-groups-name-2 — the Add Group modal's Name box — so clicking it moved
+               at manage-groups-name-new — the Add Group modal's Name box — so clicking it moved
                focus into a hidden dialog. #}
             <span class="form-label fw-bold d-block">Permissions</span>
             {{ role_presets() }}
@@ -207,12 +214,12 @@
           <div class="row">
             <div class="col-md-4">
               <div class="mb-3">
-                <label class="form-label" for="manage-groups-name-2">Group Name</label>
-                <input id="manage-groups-name-2" type="text" name="name" class="form-control" required>
+                <label class="form-label" for="manage-groups-name-new">Group Name</label>
+                <input id="manage-groups-name-new" type="text" name="name" class="form-control" required>
               </div>
               <div class="mb-3">
-                <label class="form-label" for="manage-groups-description-2">Description</label>
-                <input id="manage-groups-description-2" type="text" name="description" class="form-control" placeholder="e.g. Server moderators">
+                <label class="form-label" for="manage-groups-description-new">Description</label>
+                <input id="manage-groups-description-new" type="text" name="description" class="form-control" placeholder="e.g. Server moderators">
               </div>
             </div>
             <div class="col-md-4">

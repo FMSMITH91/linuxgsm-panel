@@ -531,7 +531,15 @@ def register(app):
         OS updates, reboot and firewall — the same experience as the Panel Server."""
         remote = get_remote(remote_id)
         games = GameServer.query.filter_by(remote_id=remote_id).all()
-        return render_template("remote_manage.html", remote=remote, games=games)
+        # config=, because remote_manage.html reads config.port / config.bind_host /
+        # config.tailscale_setup_done for the panel-host card. Without it Jinja fell back to
+        # FLASK'S app.config — truthy, but with no lowercase keys — so every read was empty and
+        # every `if config else <default>` fallback was dead code that could not fire. The page
+        # said "Public panel access (port )" with the number missing, claimed Serve was not set
+        # up when it was, and pre-filled the binding form with 0.0.0.0 and a blank port next to an
+        # "Apply & restart" button. server_management passes it; this route did not.
+        return render_template("remote_manage.html", remote=remote, games=games,
+                               config=load_config())
 
     @app.route("/api/remote/<int:remote_id>/specs")
     @login_required

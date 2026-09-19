@@ -141,7 +141,7 @@ function actionPlayersDialog(action, n, btn) {
 function showPendingBanner(action){
   var b = document.getElementById('restart-pending-banner');
   if (!b) return;
-  b.dataset.action = action;
+  b.dataset.pendingAction = action;   // see the note on the banner in server_detail.html
   // A whole sentence, not the bare verb: #rpb-verb is one complete clause in the banner so that
   // both halves of it can be translated (see the note on the banner in server_detail.html).
   var v = document.getElementById('rpb-verb');

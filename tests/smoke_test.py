@@ -1656,6 +1656,61 @@ try:
     _dash = c.get("/").get_data(as_text=True)
     check("one-table: the dashboard carries the per-server Files & Config link",
           "/files" in _dash, "server_files was reachable from the old row and nowhere else")
+    # ...for someone who may USE it. The row's three action buttons and both bulk bars hung off a
+    # single can_control flag that was the UNION of start/stop/restart, and the Files button hung
+    # off nothing at all — so a moderator holding only start_server was shown Stop and Restart on
+    # every row, and every viewer got a Files button that round-trips to a red "You don't have
+    # permission to manage server files."  Driven as a REAL restricted user, because a superadmin
+    # satisfies every gate and would prove nothing; and asserting the button that must be THERE as
+    # well as the ones that must not, because a route that computes the flags and forgets to pass
+    # them to render_template leaves Jinja an Undefined that is silently falsy — which is exactly
+    # what happened, and an absence-only check would have called that a pass.
+    with app.app_context():
+        _sog = Group(name="smoke-startonly")
+        _sog.set_permissions([auth.VIEW_SERVERS, auth.START_SERVER])
+        _sog.game_servers.append(db.session.get(GameServer, gs_id))
+        db.session.add(_sog)
+        db.session.flush()
+        _sou = User(username="startonly", password_hash=auth.hash_password("Str0ng!passw0rd"),
+                    is_superadmin=False, is_active=True)
+        _sou.groups.append(_sog)
+        db.session.add(_sou)
+        db.session.commit()
+        _sou_id = _sou.id
+    _sod = client_as(_sou_id).get("/").get_data(as_text=True)
+    check("dashboard perms: the start-only user's row is rendered, so the checks below see one",
+          'data-action="doAction"' in _sod,
+          "no action buttons at all — every absence check below would pass vacuously")
+    check("dashboard perms: ...and carries the Start button they hold",
+          '[%d, "start", "@self"]' % gs_id in _sod, "start_server granted, no Start button")
+    check("dashboard perms: ...but not Restart",
+          '[%d, "restart", "@self"]' % gs_id not in _sod, "Restart offered without the permission")
+    check("dashboard perms: ...nor Stop",
+          '[%d, "stop", "@self"]' % gs_id not in _sod, "Stop offered without the permission")
+    check("dashboard perms: the bulk bar offers Start", "'[\"start\"]'" in _sod,
+          "the bulk bar dropped the one action they can run")
+    check("dashboard perms: ...and not bulk Stop", "'[\"stop\"]'" not in _sod,
+          "a bulk Stop across a tag group fails wholesale with Permission denied")
+    check("dashboard perms: ...and no Files & Config button",
+          "/server/%d/files" % gs_id not in _sod,
+          "server_files is MANAGE_SERVERS; the button 403s for this user")
+    _sof = client_as(_sou_id).get("/server/%d/files" % gs_id, follow_redirects=False)
+    check("dashboard perms: ...because that route refuses them, so the absence was honest",
+          _sof.status_code in (403, 302, 401), "status=%d" % _sof.status_code)
+    # The other way in was the detail page's tab bar, which is the SAME permission
+    # (_can_manage_files) and was equally unconditional — so gating only the dashboard row would
+    # have moved the dead end rather than closed it. A superadmin must still see both, or the gate
+    # is just a deletion.
+    _sodet = client_as(_sou_id).get("/server/%d" % gs_id)
+    check("dashboard perms: the detail page renders for the start-only user",
+          _sodet.status_code == 200 and 'data-mtab-btn="console"' in
+          _sodet.get_data(as_text=True), "status=%d" % _sodet.status_code)
+    check("dashboard perms: ...and its Files & Config TAB is gone too",
+          "/server/%d/files" % gs_id not in _sodet.get_data(as_text=True),
+          "the tab bar still offers a page that flashes a permission error")
+    _sadet = c.get("/server/%d" % gs_id).get_data(as_text=True)
+    check("dashboard perms: ...while a superadmin still has that tab",
+          "/server/%d/files" % gs_id in _sadet, "the gate removed it for everyone")
     check("one-table: ...the per-server tag button",
           'data-action="editServerTags"' in _dash)
     # Split the <head> off first. This check passed while the Tags card was accidentally emitted
