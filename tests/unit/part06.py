@@ -1688,6 +1688,26 @@ check("i18n: every translatable template string is in the catalog",
                                "; ".join("%r in %s" % (_k, ",".join(sorted(_v)))
                                          for _k, _v in sorted(_i18n_gaps.items())[:4])))
 
+# ── ...and no string is welded to a {{ }} where no catalog entry could ever reach it ───────────
+# The gate above asks whether a translatable string is IN the catalog. This one asks whether it
+# could be used if it were. Jinja emits one contiguous text run, so `{{ n }} entr{{ 'y' if ... }}`
+# reaches the browser as the single node "7 entries" — different for every request, matching no
+# key, and no catalog entry can fix it; the template has to put the static half in its own
+# element. Ten strings were in that state, so a Spanish or French user read "7 entries",
+# "3 rules", "5 left" and "2 Source servers" in English on pages that were otherwise translated.
+#
+# A dynamic string that IS in the catalog is inert rather than broken — it is translated wherever
+# it appears as a node of its own — so only the ones with no entry are failures.
+_i18n_dyn_cat = _i18n_scan.load_catalog("es", translation_dir=_i18n_dir)
+_, _i18n_dyn = _i18n_scan.scan_templates(os.path.join(_root, "templates"))
+_i18n_unreachable = {_k: _v for _k, _v in _i18n_dyn.items() if _k not in _i18n_dyn_cat}
+check("i18n: no translatable string is glued to a {{ }} with no catalog entry to reach it",
+      not _i18n_unreachable,
+      "%d unreachable — give the static half its own element: %s"
+      % (len(_i18n_unreachable),
+         "; ".join("%r in %s" % (_k, ",".join(sorted(_v)))
+                   for _k, _v in sorted(_i18n_unreachable.items())[:4])))
+
 # ...and the same for the strings the JAVASCRIPT builds. Toasts, confirm dialogs and JS-rendered
 # labels go through the very same MutationObserver, so they are translated on identical terms —
 # which is how the host Specs card came to show "Memory" in Spanish next to "Operating System" in

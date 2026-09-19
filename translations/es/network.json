@@ -266,6 +266,7 @@
   "Whitelist": "Lista blanca",
   "Yes": "Sí",
   "You started Tailscale but never approved this machine on your tailnet. Click below to get a fresh login link, approve it in your Tailscale account, and the panel will finish connecting automatically — no need to hunt for the link from the install step.": "Iniciaste Tailscale pero nunca aprobaste esta máquina en tu tailnet. Pulsa abajo para obtener un enlace de acceso nuevo, apruébalo en tu cuenta de Tailscale y el panel terminará de conectarse automáticamente: no hace falta buscar el enlace del paso de instalación.",
+  "blocked": "bloqueadas",
   "e.g. 1.2.3.4 or 10.0.0.0/8": "p. ej. 1.2.3.4 o 10.0.0.0/8",
   "e.g. 2222": "p. ej. 2222",
   "e.g. Main VPS": "p. ej. VPS principal",
@@ -279,6 +280,8 @@
   "privately on your tailnet": "de forma privada en tu tailnet",
   "realtime": "en tiempo real",
   "remote server": "servidor remoto",
+  "rule": "regla",
+  "rules": "reglas",
   "tailnet-only": "solo tailnet",
   "· Auth:": "· Autenticación:",
   "🔒 Private tailnet — only your devices can reach it": "🔒 Tailnet privada: solo tus dispositivos pueden acceder"

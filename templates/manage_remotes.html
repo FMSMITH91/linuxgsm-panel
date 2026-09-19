@@ -116,7 +116,7 @@
               <i class="bi bi-exclamation-triangle-fill"></i> Password</span>
           {% endif %}
           {% if remote.linuxgsm_user %} &middot; <span>LGSM User:</span> {{ remote.linuxgsm_user }}{% endif %}
-          &middot; Sudo: {{ "Yes" if remote.sudo_enabled else "No" }}
+          &middot; <span>Sudo:</span> {% if remote.sudo_enabled %}<span>Yes</span>{% else %}<span>No</span>{% endif %}
         </span>
         <!-- Live stats: last-known values rendered now, refreshed in place by JS -->
         {% set st = remote.cached_stats %}

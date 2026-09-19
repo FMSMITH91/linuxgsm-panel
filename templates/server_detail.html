@@ -58,7 +58,7 @@
     {% if cron_restart_pending and not (server.restart_pending or server.stop_pending) %}<span>It was queued by the daily-restart schedule.</span>{% endif %}
     <span>It will run automatically once the server is empty, or you can do it now.</span></span>
   <button class="btn btn-sm btn-warning" data-action="bannerDoNow" data-args='["@self"]'>
-    <i class="bi bi-lightning-charge"></i> <span id="rpb-btn">{{ 'Stop' if server.stop_pending else 'Restart' }} now</span>
+    <i class="bi bi-lightning-charge"></i> <span id="rpb-btn">{% if server.stop_pending %}<span>Stop now</span>{% else %}<span>Restart now</span>{% endif %}</span>
   </button>
 </div>
 

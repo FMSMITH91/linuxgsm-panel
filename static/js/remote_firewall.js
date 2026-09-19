@@ -33,7 +33,18 @@ function refreshFirewall() {
       } else {
         listEl.innerHTML = '<div class="p-3 text-center text-secondary small">No open ports yet.</div>';
       }
-      document.getElementById('rules-count').textContent = openGroups.length + (openGroups.length === 1 ? ' rule' : ' rules');
+      // The number and the WORD as separate nodes, matching what the template renders. As one
+      // text node the result was "3 rules", which is not a catalog key and never can be — so this
+      // repaint replaced a translated count with an English one on every refresh. t() is the same
+      // catalog the DOM walker uses, so the word is right immediately rather than after the
+      // observer catches up.
+      var rc = document.getElementById('rules-count');
+      if (rc) {
+        rc.textContent = openGroups.length + ' ';
+        var rw = document.createElement('span');
+        rw.textContent = t(openGroups.length === 1 ? 'rule' : 'rules');
+        rc.appendChild(rw);
+      }
 
       // Blocked IPs (separate card)
       var blocksEl = document.getElementById('blocks-list');
@@ -54,7 +65,12 @@ function refreshFirewall() {
           blocksEl.innerHTML = '<div class="p-3 text-center text-secondary small">No IPs are blocked.</div>';
         }
         var bc = document.getElementById('blocks-count');
-        if (bc) bc.textContent = blockGroups.length + ' blocked';
+        if (bc) {
+          bc.textContent = blockGroups.length + ' ';
+          var bw = document.createElement('span');
+          bw.textContent = t('blocked');
+          bc.appendChild(bw);
+        }
       }
     })
     // The one fetch chain on this page without a rejection handler — every sibling has one, and

@@ -19,7 +19,7 @@
     </h1>
     <span class="text-secondary small">
       {% if remote.is_local %}{{ remote.display_host or 'this host' }}{% else %}{{ remote.username }}@{{ remote.host }}:{{ remote.port }} &middot; Auth: {{ remote.auth_method }}{% endif %}
-      {% if remote.games %}&middot; {{ remote.games|length }} game server{{ '' if remote.games|length == 1 else 's' }}{% endif %}
+      {% if remote.games %}&middot; {{ remote.games|length }} {% if remote.games|length == 1 %}<span>game server</span>{% else %}<span>game servers</span>{% endif %}{% endif %}
     </span>
   </div>
   <span class="badge {% if remote.is_online %}bg-success{% else %}bg-secondary{% endif %}" id="remote-status">

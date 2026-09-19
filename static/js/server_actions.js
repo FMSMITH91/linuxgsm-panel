@@ -146,6 +146,10 @@ function showPendingBanner(action){
   // both halves of it can be translated (see the note on the banner in server_detail.html).
   var v = document.getElementById('rpb-verb');
   if (v) v.textContent = t(action === 'stop' ? 'A stop is queued.' : 'A restart is queued.');
-  var bt = document.getElementById('rpb-btn'); if (bt) bt.textContent = _cap(action) + ' now';
+  // The phrase, not a word spliced into one: "Stop now" and "Restart now" are catalog keys, and
+  // the banner's template renders each as its own element for exactly that reason. t() here so
+  // the button is right immediately instead of waiting for the walker.
+  var bt = document.getElementById('rpb-btn');
+  if (bt) bt.textContent = t(action === 'stop' ? 'Stop now' : 'Restart now');
   b.classList.remove('d-none');
 }
