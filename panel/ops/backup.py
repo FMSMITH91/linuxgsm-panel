@@ -427,10 +427,17 @@ def restore_backup(name, passphrase=None, skip_safety_backup=False):
             # unreadable, say so plainly — the alternative is an "incorrect passphrase" error that
             # sends someone hunting for a typo when the real problem is cred_key.
             _pp = passphrase if passphrase else get_passphrase()
-        except PassphraseUnreadable as exc:
+        except PassphraseUnreadable:
             shutil.rmtree(_dec_tmp, ignore_errors=True)
-            return False, ("Cannot decrypt this backup: %s. Enter the passphrase explicitly, or "
-                           "restore data/cred_key first." % exc)
+            # A LITERAL, not the exception. Its text is a fixed string of ours, so interpolating it
+            # leaked nothing — but it is still an exception object flowing into an HTTP response
+            # (CodeQL py/stack-trace-exposure flagged exactly that), and the shape is the problem:
+            # the next person to raise this with a path, a filename or a decryption detail in the
+            # message would ship it to the browser without noticing. The log keeps the detail.
+            _log.warning("restore refused: the stored backup passphrase could not be decrypted")
+            return False, ("Cannot decrypt this backup: a passphrase is configured but could not "
+                           "be decrypted on this host. Enter the passphrase explicitly, or "
+                           "restore data/cred_key first.")
         ok, msg = _decrypt_archive(str(src), plain, _pp)
         if not ok:
             shutil.rmtree(_dec_tmp, ignore_errors=True)
