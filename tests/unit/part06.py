@@ -1842,6 +1842,36 @@ check("uninstall.sh accounts for every panel path install.sh writes outside PANE
 _css_raw = open(os.path.join(_root, "static", "css", "panel.css"), encoding="utf-8").read()
 _css = re.sub(r"/\*.*?\*/", "", _css_raw, flags=re.S)      # comments describe rules; they are not rules
 
+# ── Every SGR code the server keeps has to be STYLED, or it is dropped in silence ──────────────
+# Three layers have to agree and nothing made them: terminal.py's _SGR_ALLOWED decides which codes
+# survive, server_detail.js emits `ansi-<code>` for every code it is handed, and panel.css decides
+# what that class looks like. A code allowed by the first two with no rule in the third renders as
+# PLAIN TEXT — no error, no warning, just the emphasis quietly gone.
+#
+# It had happened to nine of them: reverse video (7) and the whole bright-background range
+# (100-107). Measured in a browser against the real stylesheet — .ansi-41 painted
+# rgb(127,29,29) and .ansi-101 painted rgba(0,0,0,0).
+#
+# Derived from the allowlist rather than listed here, so widening _SGR_ALLOWED fails this until
+# the rule exists.
+from panel.core import terminal as _sgr_term  # noqa: E402
+_sgr_css = {int(_m) for _m in re.findall(r"\.ansi-(\d+)\s*\{", _css_raw)}
+# The codes that TURN SOMETHING OFF need no rule: the server applies them itself (39 and 49 strip
+# the colour from the run) or they end a run, and the JS never emits a class for 0.
+_SGR_RESETS = {0, 21, 22, 23, 24, 27, 29, 39, 49}
+_sgr_unstyled = sorted(c for c in _sgr_term._SGR_ALLOWED if c not in _SGR_RESETS and c not in _sgr_css)
+check("console: every SGR code the server keeps has a CSS rule", not _sgr_unstyled,
+      "allowed and emitted but styled by nothing: %s" % _sgr_unstyled)
+check("console: ...and no rule exists for a code the server strips",
+      not sorted(c for c in _sgr_css if c not in _sgr_term._SGR_ALLOWED),
+      "styled but never emitted: %s" % sorted(c for c in _sgr_css if c not in _sgr_term._SGR_ALLOWED))
+# Reverse video is the one that cannot be a plain colour swap in CSS: currentColor paints the
+# background with the run's own colour, and the glyphs need the console's background put back —
+# through -webkit-text-fill-color, because `color` is what currentColor reads.
+check("console: reverse video actually inverts rather than doing nothing",
+      "background: currentColor" in _css_raw and "-webkit-text-fill-color" in _css_raw,
+      ".ansi-7 does not swap anything")
+
 
 def _toplevel_class_rules(css):
     """Single-class selectors declared at the TOP level, i.e. outside any @media block.

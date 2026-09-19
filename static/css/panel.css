@@ -466,11 +466,32 @@
     .ansi-45 { background: #581c87; }
     .ansi-46 { background: #155e75; }
     .ansi-47 { background: #3f4a5e; }
+    /* Bright backgrounds (100-107). terminal.py's _SGR_ALLOWED keeps these and server_detail.js
+       emits `ansi-<code>` for every code it is given, so without a rule here the span was styled
+       by nothing at all and a bright background rendered as plain text. Measured against this
+       stylesheet: .ansi-41 painted rgb(127,29,29) and .ansi-101 painted rgba(0,0,0,0). One step
+       brighter than 40-47, the same relationship 90-97 have to 30-37. */
+    .ansi-100 { background: #3a4457; }
+    .ansi-101 { background: #b91c1c; }
+    .ansi-102 { background: #15803d; }
+    .ansi-103 { background: #b45309; }
+    .ansi-104 { background: #1d4ed8; }
+    .ansi-105 { background: #7e22ce; }
+    .ansi-106 { background: #0e7490; }
+    .ansi-107 { background: #64748b; }
     .ansi-1 { font-weight: 700; }
     .ansi-2 { opacity: .7; }
     .ansi-3 { font-style: italic; }
     .ansi-4 { text-decoration: underline; }
     .ansi-9 { text-decoration: line-through; }
+    /* Reverse video (7), which was allowed through the whole pipeline and then styled by nothing —
+       measured identical to plain text. `currentColor` paints the background with whatever colour
+       the run is already in, and -webkit-text-fill-color (not `color`, which currentColor reads)
+       puts the console's own background back into the glyphs. An APPROXIMATION where the run also
+       sets a background: a true reverse would swap the two, and CSS cannot read one to write the
+       other. Uncoloured text — which is what LinuxGSM and most servers actually use 7 for — is
+       exact. */
+    .ansi-7 { background: currentColor; -webkit-text-fill-color: #080d17; }
 
     /* ── LIVE STAT TILES ── */
     .stat-tile {
