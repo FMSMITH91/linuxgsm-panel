@@ -23,9 +23,11 @@ regexes = [
                                     # generic-api-key rule keys off "AUTH" in AUTH_LOG_PATH; not a secret
   # An eighteen-digit run IS a Discord snowflake by shape, so discord-client-id is right to flag
   # one — this is the obviously-sequential placeholder in a unit-test fixture. The working tree
-  # builds it ("9" * 18) instead; this entry is only because gitleaks scans the full HISTORY and
-  # the literal is still in commit 6c75748.
-  '''^123456789012345678$''',
+  # builds it ("9" * 18) instead; this entry exists only because gitleaks scans the full HISTORY
+  # and the literal is still in commit 6c75748. Matched against the whole `_DISCORD_CHANNEL_RE`
+  # assignment, because regexTarget = "match" above compares the MATCH, not the secret alone —
+  # anchoring on the digits matched nothing and left the gate red.
+  '''_DISCORD_CHANNEL_RE": "123456789012345678"''',
 ]
 # Belt-and-suspenders: these files only contain example/placeholder strings, never
 # real credentials.
