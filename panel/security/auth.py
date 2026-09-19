@@ -641,7 +641,25 @@ def init_auth(app):
                     sess.last_seen = now              # throttled "last active" update (~5 min)
                     db.session.commit()
             except Exception:
-                db.session.rollback()                 # a DB hiccup must never lock a valid user out
+                db.session.rollback()
+                # DENY this request. The handler used to fall through to `return user`, which
+                # skipped BOTH checks above it — the revoked-device check and the remember-cookie
+                # expiry — so a database error authenticated a cookie that had been revoked. For a
+                # revocation check, "I could not look" has to mean no.
+                #
+                # The old comment feared locking a valid user out. It does not: load_user runs per
+                # REQUEST and this returns None for this one only. The session cookie is untouched,
+                # so a transient lock costs a redirect to the login page, not a logout — whereas
+                # the other direction costs a revoked device staying live for as long as the
+                # database is unhappy. Logged at warning, because a database that cannot answer
+                # this is something the operator should see.
+                try:
+                    current_app.logger.warning(
+                        "load_user: could not verify session %s — denying this request",
+                        (sid or "")[:8], exc_info=True)
+                except Exception:
+                    pass          # logging must never be what turns a deny into a 500
+                return None
         return user
 
     @login_manager.unauthorized_handler

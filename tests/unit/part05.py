@@ -3277,3 +3277,69 @@ check("host key: get_connection refuses an unreadable pin before building the po
       < _core_src2.find("policy = _PinPolicy(") != -1)
 check("host key: ...and only where the pin is actually enforced (not tailscale/local)",
       "if enforce_pin and isinstance(server.host_key, UnreadableSecret):" in _core_src2)
+
+# ── two more "could not check" reading as "it's fine" ──────────────────────────────────────────
+# Same family as the CodeQL _groups_of bug and the two in #271: a guard whose READ fails, and a
+# caller that takes the permissive branch. Both of these were deliberate, and both comments said
+# so — which is what made them easy to miss.
+from panel.ops.ssh_manager import hosts as _fw_h, firewall as _fw_f                # noqa: E402
+
+_fw_deleted = []
+_o_rp5, _o_status = _sm_core.run_privileged, _fw_f.remote_ufw_status
+try:
+    _sm_core.run_privileged = lambda *a, **k: (_fw_deleted.append(a), ("", "", 0))[1]
+
+    def _boom_status(_s):
+        raise OSError("the host did not answer")
+
+    for _label, _st in (("an unreachable host", {"installed": False, "groups": [],
+                                                 "unreachable": True}),
+                        ("a host with no UFW", {"installed": False, "groups": []}),
+                        ("a probe that raises", _boom_status)):
+        _fw_f.remote_ufw_status = _st if callable(_st) else (lambda _s, _r=_st: _r)
+        _fw_deleted.clear()
+        _ok, _msg = _fw_h.remote_ufw_delete_rule(NS(), 3)
+        # The guard exists to stop you deleting the rule that keeps SSH or the tailnet open. An
+        # empty group list marked NOTHING protected, so every rule became deletable.
+        check("ufw delete: %s refuses, rather than deleting unverified" % _label,
+              _ok is False and not _fw_deleted, "ok=%s deleted=%s" % (_ok, bool(_fw_deleted)))
+    # ...and the two failure modes must not tell the same story.
+    _fw_f.remote_ufw_status = lambda _s: {"installed": False, "groups": []}
+    _, _m_noufw = _fw_h.remote_ufw_delete_rule(NS(), 3)
+    _fw_f.remote_ufw_status = lambda _s: {"installed": False, "groups": [], "unreachable": True}
+    _, _m_unreach = _fw_h.remote_ufw_delete_rule(NS(), 3)
+    check("ufw delete: 'no UFW here' and 'cannot reach it' say different things",
+          _m_noufw != _m_unreach and "isn't installed" in _m_noufw, "%r / %r" % (_m_noufw, _m_unreach))
+
+    # A readable firewall still behaves exactly as before, both ways.
+    _fw_f.remote_ufw_status = lambda _s: {"installed": True, "groups": [
+        {"nums": [3], "protected": True, "protect_reason": "keeps SSH open"}]}
+    _fw_deleted.clear()
+    _ok_p, _msg_p = _fw_h.remote_ufw_delete_rule(NS(), 3)
+    check("ufw delete: a protected rule is still refused by name",
+          _ok_p is False and not _fw_deleted and "SSH" in _msg_p, _msg_p[:60])
+    _fw_f.remote_ufw_status = lambda _s: {"installed": True, "groups": [
+        {"nums": [9], "protected": False}]}
+    _fw_deleted.clear()
+    _ok_o, _ = _fw_h.remote_ufw_delete_rule(NS(), 3)
+    check("ufw delete: an ordinary rule on a readable firewall still deletes",
+          _ok_o is True and len(_fw_deleted) == 1, "ok=%s sent=%s" % (_ok_o, _fw_deleted))
+    # force=True is the deliberate override and must still bypass the guard.
+    _fw_f.remote_ufw_status = _boom_status
+    _fw_deleted.clear()
+    _ok_f, _ = _fw_h.remote_ufw_delete_rule(NS(), 3, force=True)
+    check("ufw delete: force=True still overrides, so nothing is unrecoverable",
+          _ok_f is True and len(_fw_deleted) == 1, "ok=%s sent=%s" % (_ok_f, _fw_deleted))
+finally:
+    _sm_core.run_privileged, _fw_f.remote_ufw_status = _o_rp5, _o_status
+
+# load_user: a database error skipped the revoked-device AND cookie-expiry checks and returned the
+# user, so a revoked cookie authenticated for as long as the database stayed unhappy.
+_auth_src = open(os.path.join(_root, "panel", "security", "auth.py"), encoding="utf-8").read()
+_lu_at = _auth_src.find("def load_user")
+_lu_end = _auth_src.find("@login_manager.unauthorized_handler", _lu_at)
+_lu = _auth_src[_lu_at:_lu_end] if _lu_at != -1 and _lu_end > _lu_at else ""
+check("load_user: the gate found the function", bool(_lu), "load_user not located")
+check("load_user: a DB error DENIES the request instead of returning the user",
+      "db.session.rollback()" in _lu and _lu.rindex("return None") > _lu.rindex("db.session.rollback()"),
+      "the handler still falls through to `return user`")
