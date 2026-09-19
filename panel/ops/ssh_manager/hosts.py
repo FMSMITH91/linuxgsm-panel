@@ -1812,10 +1812,38 @@ def tailnet_exempt_ips(server, ips):
             cand.add(str(addr))
     if not cand:
         return set()   # nothing in the tailnet range → skip the (relatively costly) tailscale probe
+    # "Can't confirm" must EXEMPT here, which is the opposite of what fail-safe means everywhere
+    # else in this file. The only consumer is _autoblock_reconcile, and a missing exemption does not
+    # mean "do nothing" — it means the address gets a UFW deny inserted at POSITION 1, which the
+    # note above _TAILNET_CGNAT says "would cut off tailnet access ... it would override the
+    # tailscale0 allow rule". So a failed probe has to fall the protective way.
+    #
+    # This used to be `_tailscale_conn_state(server)[0]`, which collapses "Tailscale is not running"
+    # and "the probe did not run" into the same False — correct for _tailnet_ssh_state, which is
+    # deciding whether a way in EXISTS, and wrong here, where it decides whether to take one away.
+    # Its own command hid the difference too: `tailscale status --json 2>/dev/null || echo '{}'`
+    # always exits 0. The plain command is run here so the rc survives.
+    #
+    # rc == -1 is the panel's sentinel for "the command did not run" (run_command returns
+    # ("", "…timed out", -1) and never raises). Any other rc means the HOST answered — tailscale
+    # missing (127) or stopped (non-zero with a Stopped backend) are real answers, and an address
+    # in the CGNAT range genuinely is not protected then, so blocking it is allowed.
+    import json as _json
     try:
-        return cand if _tailscale_conn_state(server)[0] else set()
+        out, _err, rc = _core.run_command(server, "tailscale status --json", timeout=10)
     except Exception:
-        return set()   # can't confirm Tailscale → don't exempt
+        _core._log.debug("tailnet exemption probe failed", exc_info=True)
+        return cand      # could not even attempt it → protect the address
+    if rc == -1:
+        _core._log.warning("tailnet exemption: tailscale probe did not run on %s — exempting %d "
+                           "tailnet address(es) rather than risk blocking one",
+                           getattr(server, "name", "?"), len(cand))
+        return cand
+    try:
+        running = _json.loads(out or "{}").get("BackendState") == "Running"
+    except ValueError:
+        return cand      # the host answered with something unparseable → protect the address
+    return cand if running else set()
 
 
 def _tailnet_ssh_state(server):
