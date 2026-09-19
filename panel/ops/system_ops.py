@@ -1523,11 +1523,24 @@ def _f2b_ignoreip_line(ignore_ips):
     return " ".join(out)
 
 
+# A FILE backend, stated explicitly. Debian and Ubuntu ship
+# /etc/fail2ban/jail.d/defaults-debian.conf containing `[DEFAULT] backend = systemd`, and that
+# DEFAULT applies to every jail — including this one. A jail on the systemd backend reads the
+# JOURNAL and ignores `logpath` entirely, so this jail reported itself active while monitoring no
+# file at all: `fail2ban-client get linuxgsm-panel logpath` answered "No file is currently
+# monitored", and the panel writes its failures to data/auth.log, which is a file. Measured on
+# Ubuntu 24.04.5 — 0 bans ever possible, with the panel UI showing "Active" the whole time.
+# "auto" rather than "polling": it picks pyinotify where available (confirmed on the same host)
+# and falls back to polling, and either way it is a file backend, which is the point.
+_F2B_PANEL_BACKEND = "auto"
+
+
 def _panel_f2b_jail_body(auth_log, web_port, ignore_ips=None):
     """Jail: 5 failures in 10 min → 1-hour ban, on the panel's web port. In jail.d/ so it sits
     alongside (doesn't conflict with) any [sshd] jail. `ignore_ips` (validated) are never banned."""
     return ("[linuxgsm-panel]\n"
             "enabled = true\n"
+            "backend = " + _F2B_PANEL_BACKEND + "\n"
             "port = %d\n"
             "filter = linuxgsm-panel\n"
             "logpath = %s\n"
@@ -1535,6 +1548,24 @@ def _panel_f2b_jail_body(auth_log, web_port, ignore_ips=None):
             "findtime = 10m\n"
             "bantime = 1h\n"
             "ignoreip = %s\n" % (web_port, auth_log, _f2b_ignoreip_line(ignore_ips)))
+
+
+def _panel_f2b_jail_value(key):
+    """The value of a simple `key = value` line in the current panel jail file, or None.
+
+    Used to notice a jail that is present and enabled but no longer describes THIS install —
+    a logpath left behind by a move (the panel reinstalled under a different account leaves
+    `logpath = /home/<old>/…`, which fail2ban tails forever without complaining) or a jail written
+    before this backend was pinned. Both look healthy to a status read."""
+    try:
+        with open(_F2B_PANEL_JAIL) as f:
+            for line in f:
+                m = re.match(r"\s*%s\s*=\s*(\S+)\s*$" % re.escape(key), line)
+                if m:
+                    return m.group(1)
+    except OSError:
+        _log.debug("f2b: could not read jail %s", key, exc_info=True)
+    return None
 
 
 def _panel_f2b_jail_ignoreip():
@@ -1959,7 +1990,13 @@ def ensure_panel_fail2ban(auth_log, web_port, ignore_ips=None):
     if not st.get("installed"):
         return False, "fail2ban isn't installed on this host."
     want_ignore = _f2b_ignoreip_line(ignore_ips).split()
+    # The logpath and the backend are part of "healthy", not just the port and the whitelist.
+    # Checking only the latter two let a jail that monitors NOTHING report itself as already
+    # active, forever: this function is the only thing that would ever rewrite it, and it returned
+    # early. Found on a host whose jail still carried a logpath from a previous install path.
     if (st.get("enabled") and _panel_f2b_jail_port() == web_port
+            and _panel_f2b_jail_value("logpath") == str(auth_log)
+            and _panel_f2b_jail_value("backend") == _F2B_PANEL_BACKEND
             and (_panel_f2b_jail_ignoreip() or []) == want_ignore):
         return True, "panel-login jail already active on port %d" % web_port
     return configure_panel_fail2ban(auth_log, web_port, ignore_ips)
