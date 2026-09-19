@@ -565,10 +565,18 @@ function loadMoreConsole(btn) {
   fetch(MOUNT + '/api/console/' + serverId + '?lines=2000')
     .then(r => r.json())
     .then(function(data) {
-      var older = (data.lines || []).filter(function(l) { return l.trim(); });
+      // ROWS, not strings. /api/console returns lines as [{t, line}] — _console_rows builds
+      // them — and this called l.trim() on each, which is `undefined` on an object: a TypeError
+      // inside the .then, swallowed by the .catch below, so the button has only ever answered
+      // "Could not load more console output". Verified in a browser against the real payload:
+      // `TypeError: l.trim is not a function`. refreshConsole, one screen up, has always read
+      // the same payload correctly; this call site simply was not updated with the API.
+      var older = (data.lines || []).filter(function (r) {
+        return r && typeof r.line === 'string' && r.line.trim();
+      });
       _consoleLines = [];
       consoleEl.innerHTML = '';
-      _appendConsole(older);
+      _appendConsoleRows(older, null);
       _consoleSig = null;   // let the next poll re-evaluate against the new buffer
       if (window.toast) toast('Loaded ' + older.length + ' lines from the log', 'success');
     })

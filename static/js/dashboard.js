@@ -85,6 +85,17 @@ function refreshStatus() {
       if (oc) oc.innerHTML = '<span class="status-dot status-online"></span> ' + online;  // nosemgrep
       if (fc) fc.innerHTML = '<span class="status-dot status-offline"></span> ' + offline;  // nosemgrep
       if (tc) tc.textContent = data.length;
+      // The "+N installing or failed" line under Offline. It was rendered once by the template
+      // and never touched again, so as servers finished installing the three tiles above moved to
+      // agree while this one kept claiming the old count — the tile contradicting its own
+      // arithmetic, which is the confusion the comment beside it says it exists to prevent.
+      // Hidden rather than removed when it reaches zero, so it can come back without a reload.
+      var other = data.length - online - offline;
+      var oo = document.getElementById('offline-other');
+      if (oo) {
+        oo.textContent = '+' + other + ' installing or failed';
+        oo.hidden = other <= 0;
+      }
       // Total online / total capacity = sums of the known per-server values (unknowns excluded).
       var totalPlayers = data.reduce(function(a, s){ return a + (typeof s.players === 'number' ? s.players : 0); }, 0);
       var totalMax = data.reduce(function(a, s){ return a + (typeof s.max_players === 'number' ? s.max_players : 0); }, 0);

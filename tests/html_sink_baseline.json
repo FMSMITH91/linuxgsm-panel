@@ -12,7 +12,6 @@
     "_da",
     "_da,remoteId",
     "body,title",
-    "data.cpu_percent,data.disk,data.memory,data.uptime",
     "data.log"
   ],
   "manage_servers.js": [
@@ -55,7 +54,7 @@
     "window.escapeHtml"
   ],
   "server_actions.js": [
-    "lower,n,nowIcon,verb",
+    "gerund,lower,n,nowIcon",
     "ok"
   ],
   "server_detail.js": [

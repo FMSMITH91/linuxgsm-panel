@@ -76,10 +76,15 @@ function loadLiveStats(remoteId) {
     .then(r => r.json())
     .then(data => {
       if (data.success) {
-        el.innerHTML = '<i class="bi bi-cpu"></i> CPU: ' + data.cpu_percent + '%'  // nosemgrep
-          + ' &middot; <i class="bi bi-memory"></i> RAM: ' + data.memory
-          + ' &middot; <i class="bi bi-hdd"></i> ' + data.disk
-          + ' &middot; ' + data.uptime;
+        // escapeHtml, like refreshLocalStats below and renderTailscaleStatus above: every one
+        // of these is raw output read off the REMOTE host — `uptime` is literally whatever
+        // `uptime -p` printed, taken as line[7:] with no tokenising — and a host the panel
+        // manages is exactly the thing that may be compromised. The CSP stops it becoming script
+        // execution; it does not stop markup.
+        el.innerHTML = '<i class="bi bi-cpu"></i> CPU: ' + escapeHtml(String(data.cpu_percent)) + '%'  // nosemgrep
+          + ' &middot; <i class="bi bi-memory"></i> RAM: ' + escapeHtml(String(data.memory))
+          + ' &middot; <i class="bi bi-hdd"></i> ' + escapeHtml(String(data.disk))
+          + ' &middot; ' + escapeHtml(String(data.uptime));
         el.dataset.loaded = '1';
       } else if (el.dataset.loaded !== '1') {
         el.innerHTML = '<span class="text-danger">Stats unavailable</span>';

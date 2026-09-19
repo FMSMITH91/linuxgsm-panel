@@ -74,7 +74,12 @@
       {% if current_user.is_superadmin or has_permission('manage_remotes') %}
         <br>Start by adding a remote server, then install a game server from the Game Servers page.
         <br><a href="{{ url_for('manage_remotes') }}">Add a remote server</a>
-        <a href="{{ url_for('manage_servers') }}" class="ms-3">Go to Game Servers</a>
+        {# install_server_page, not manage_servers: that route is now a pure redirect to this
+           very page (kept for bookmarks), so the empty state's own call to action reloaded the
+           empty state. It also needs install/manage rights, which this branch does not test. #}
+        {% if current_user.is_superadmin or has_permission('install_server') or has_permission('manage_servers') %}
+        <a href="{{ url_for('install_server_page') }}" class="ms-3">Install a game server</a>
+        {% endif %}
       {% endif %}
     </p>
   </div>
@@ -107,7 +112,9 @@
     {{ n_offline }}
   </div>
   <div class="text-secondary small">Offline</div>
-  {% if n_other %}<div class="small text-warning mt-1" id="offline-other">+{{ n_other }} installing or failed</div>{% endif %}
+  {# Always rendered, hidden when zero: the poll updates it in place, and an element that only
+     exists when n_other was non-zero AT RENDER can never be updated or brought back. #}
+  <div class="small text-warning mt-1" id="offline-other" {% if not n_other %}hidden{% endif %}>+{{ n_other }} installing or failed</div>
 {% endmacro %}
 {% macro tile_players() %}
   <div class="h3 mb-0" id="total-players"><i class="bi bi-people-fill text-info"></i> {{ total_players }}{% if total_max %} / {{ total_max }}{% endif %}</div>

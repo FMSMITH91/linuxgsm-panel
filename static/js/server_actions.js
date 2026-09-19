@@ -108,12 +108,15 @@ function actionPlayersDialog(action, n, btn) {
   var lower = action;                                        // restart / stop
   var endpoint = action === 'stop' ? 'stop-when-empty' : 'restart-when-empty';
   var nowIcon = action === 'stop' ? 'stop-fill' : 'arrow-clockwise';
+  // "Stop" + "ping" happens to spell Stopping; "Restart" + "ping" spells Restartping, which is
+  // what this dialog said on every restart with players connected.
+  var gerund = action === 'stop' ? 'Stopping' : 'Restarting';
   var ov = document.createElement('div');
   ov.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,.6);z-index:1080;display:flex;align-items:center;justify-content:center;padding:1rem;';
   ov.innerHTML = '<div class="card" style="max-width:540px;width:100%;">'  // nosemgrep
     + '<div class="card-header"><i class="bi bi-people-fill"></i> Players are online</div>'
     + '<div class="card-body">'
-    + '<p class="mb-2"><strong>' + n + '</strong> player' + (n===1?' is':'s are') + ' connected to <strong>' + _esc(SERVER_NAME) + '</strong>. ' + verb + 'ping now disconnects ' + (n===1?'them':'everyone') + '.</p>'
+    + '<p class="mb-2"><strong>' + n + '</strong> player' + (n===1?' is':'s are') + ' connected to <strong>' + _esc(SERVER_NAME) + '</strong>. ' + gerund + ' now disconnects ' + (n===1?'them':'everyone') + '.</p>'
     + '<p class="small text-secondary mb-3">Are you sure you want to ' + lower + ' with players on?</p>'
     + '<div class="d-flex flex-column gap-2">'
     + '<button class="btn btn-warning" id="rd-now"><i class="bi bi-' + nowIcon + '"></i> Yes, ' + lower + ' now (disconnect ' + n + ' player' + (n===1?'':'s') + ')</button>'

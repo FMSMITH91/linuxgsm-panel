@@ -136,6 +136,13 @@ function openPort() {
     } else {
       resultEl.innerHTML = '<span class="text-danger">❌ ' + esc(data.message) + '</span>';  // nosemgrep
     }
+  })
+  // Its siblings blockIp() and _restrictPost() both have one; this did not, so an unreachable
+  // host or an expired session (a non-JSON body makes r.json() reject) left "⟳ Opening..." on
+  // screen forever with no way to tell whether the rule had been created.
+  .catch(function () {
+    resultEl.innerHTML = '<span class="text-danger">❌ The request failed — the host may be '
+      + 'unreachable, or your session may have expired. Refresh and check the rules.</span>';
   });
 }
 
