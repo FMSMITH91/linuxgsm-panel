@@ -303,6 +303,38 @@ check("parser(minecraft): names from a prefixed log line",
 check("parser(minecraft): empty server -> no players",
       _sm_game._parse_minecraft_list("There are 0 of a max of 20 players online: ") == [])
 
+# ── the console capture must JOIN tmux's wrapped lines ────────────────────────────────────────
+# capture-pane returns the pane's VISUAL lines by default: every logical line hard-wrapped at the
+# pane width, mid-word. Measured against a live Minecraft server on a test host — 49 wrapped lines
+# where there were 33 real ones, every one cut at exactly 80 columns.
+#
+# The display is the visible half. The PARSERS are the damaging half, and this is why the check
+# lives beside them: a vanilla `list` reply puts every online player on ONE line, so twelve
+# players is 160 characters, the panel received two 80-column fragments, and the parser read ONE
+# player — named "Ali", cut mid-name. That count feeds the Players panel, the empty-server
+# notification, reboot-when-empty and the ids moderation acts on. Five ordinary names cross 80.
+_MC_LONG = ("[14:30:00] [Server thread/INFO]: There are 12 of a max of 20 players online: "
+            + ", ".join(["Alice", "Bob", "Charlie", "Dave", "Eve", "Mallory", "Trent",
+                         "Peggy", "Victor", "Walter", "Yvonne", "Zach"]))
+_MC_WRAPPED = "\n".join(_MC_LONG[_i:_i + 80] for _i in range(0, len(_MC_LONG), 80))
+check("parser(minecraft): a 12-player reply parses when it arrives whole",
+      len(_sm_game._parse_minecraft_list(_MC_LONG)) == 12,
+      str([p["name"] for p in _sm_game._parse_minecraft_list(_MC_LONG)]))
+check("parser(minecraft): ...and is mangled if it arrives 80-column wrapped, which is why -J",
+      len(_sm_game._parse_minecraft_list(_MC_WRAPPED)) < 12,
+      "wrapping is harmless here, so the -J check below is the only thing holding this up")
+# The fix itself: the capture command has to carry -J.
+_cap_cmds = []
+_o_cap_run = _sm_game._core.run_command
+try:
+    _sm_game._core.run_command = lambda s, c, **k: (_cap_cmds.append(c), ("", "", 0))[1]
+    _sm_game.capture_console(NS(), "mcserver", selfname="mcserver")
+finally:
+    _sm_game._core.run_command = _o_cap_run
+check("console: capture-pane joins wrapped lines (-J), so a long line is not cut at the pane width",
+      bool(_cap_cmds) and "capture-pane -p -J " in _cap_cmds[0],
+      _cap_cmds[0][:140] if _cap_cmds else "no command built")
+
 # _gamedig_host: Source servers reply to A2S from the host's real IP, so a 127.0.0.1 query is
 # silently dropped — the panel must query the host's primary IP. (run_command runs the awk pipeline
 # remotely, so the stub returns what awk WOULD emit: just the IP, or nothing.)

@@ -71,9 +71,22 @@ def _sanitize_slotnum(s):
 
 def capture_console(server, user, selfname=None, lines=180):
     """Read-only snapshot of the last `lines` of a LinuxGSM instance's live tmux console. Used to
-    read a `status`/`list` reply back. rc 3 + NO_SESSION when the server isn't running."""
+    read a `status`/`list` reply back. rc 3 + NO_SESSION when the server isn't running.
+
+    -J (join wrapped lines), because capture-pane otherwise returns the pane's VISUAL lines: every
+    logical line is hard-wrapped at the pane width, mid-word, and both the console the user reads
+    and the parsers below get the fragments. Measured against a live Minecraft server on a test
+    host: 49 wrapped lines where there were 33 real ones, every one cut at exactly 80 columns
+    ("...All dimensions are s" / "aved").
+
+    The display is the visible half; the parsers are the damaging half. A vanilla `list` reply puts
+    every online player on ONE line, so a 12-player server sends 160 characters and the panel
+    received two 80-column fragments — _parse_minecraft_list then read ONE player, named "Ali",
+    and eleven were gone. That count feeds the Players panel, the empty-server notification and
+    reboot-when-empty, and the ids moderation acts on. Five players with ordinary names is enough
+    to cross 80 columns."""
     selfname = selfname or user
-    inner = _core._tmux_live_socket_sh(selfname) + f'tmux -L "$SOCK" capture-pane -p -t {selfname} -S -{int(lines)}'
+    inner = _core._tmux_live_socket_sh(selfname) + f'tmux -L "$SOCK" capture-pane -p -J -t {selfname} -S -{int(lines)}'
     cmd = f"sudo -u {user} bash -c {_core._quote(inner)}"
     return _core.run_command(server, cmd, timeout=15, sudo=False)
 
