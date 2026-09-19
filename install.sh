@@ -84,6 +84,10 @@ if [ -n "${PANEL_BRANCH:-}" ] && printf '%s' "${PANEL_BRANCH}" | grep -Eq '^[A-Z
     DEFAULT_BRANCH="${PANEL_BRANCH}"
 fi
 SERVICE_USER="lgsmpanel"          # dedicated user created for root installs
+# The group the panel's SECOND sudoers line names in its Runas position. Membership of it means
+# "the panel may become this account" — never root, which stays reachable only through the helper.
+# Must match privileged.GAME_GROUP and tools/panel-helper's GAME_GROUP.
+GAME_GROUP="lgsmpanel-games"
 KEEP_BACKUPS=3                    # how many previous-version snapshots to retain
 
 RED='\033[0;31m'; GREEN='\033[0;32m'; YELLOW='\033[1;33m'; CYAN='\033[0;36m'; NC='\033[0m'
@@ -795,11 +799,65 @@ root_tools_present() {
     return 0
 }
 
+# Every account the panel DRIVES — a game instance's user, the shared GMod content user — joins
+# GAME_GROUP, which the narrow grant's second line names. Idempotent, and run on updates too, so an
+# existing host picks up its accounts the first time it takes this version.
+#
+# The rule for "is this a game account" is deliberately a property of the HOME DIRECTORY, not a uid
+# range: a LinuxGSM instance (lgsm/config-lgsm) or a Steam content tree (serverfiles). A human's
+# account has neither, and must not end up here — the group is a grant, and adding a person to it
+# would let the panel become them.
+sync_game_user_group() {
+    [ "${RUN_AS_ROOT}" -eq 1 ] || return 0
+    groupadd -f "${GAME_GROUP}" >/dev/null 2>&1 || {
+        warn "Could not create group '${GAME_GROUP}'; game accounts stay outside the grant."
+        return 0
+    }
+    _joined=0
+    for _gh in /home/*; do
+        [ -d "${_gh}" ] || continue
+        _gu="$(basename "${_gh}")"
+        [ "${_gu}" = "${PANEL_USER}" ] && continue
+        { [ -d "${_gh}/lgsm/config-lgsm" ] || [ -d "${_gh}/serverfiles" ]; } || continue
+        id "${_gu}" >/dev/null 2>&1 || continue
+        # NEVER enrol an account that can already escalate. The grant says the panel may BECOME a
+        # member, so a member who can run sudo makes it NOPASSWD:ALL with one extra hop. Running
+        # LinuxGSM under your own sudo-capable account is an ordinary setup — it is what LinuxGSM's
+        # own docs show, and the panel's discovery imports exactly those — so this is a likely
+        # account to meet here, not an unlikely one.
+        if id -nG "${_gu}" 2>/dev/null | tr " " "\n" | grep -qxE "sudo|admin|wheel|root" \
+           || sudo -l -U "${_gu}" 2>/dev/null | grep -q "may run the following"; then
+            warn "Not enrolling '${_gu}' in ${GAME_GROUP}: it already has sudo rights."
+            warn "  The panel will not be able to manage that account's servers on this host."
+            continue
+        fi
+        if id -nG "${_gu}" 2>/dev/null | tr ' ' '\n' | grep -qx "${GAME_GROUP}"; then
+            continue
+        fi
+        if usermod -aG "${GAME_GROUP}" "${_gu}" >/dev/null 2>&1; then
+            _joined=$((_joined + 1))
+        fi
+    done
+    if [ "${_joined}" -gt 0 ]; then
+        ok "Added ${_joined} game account(s) to '${GAME_GROUP}'"
+    fi
+    return 0
+}
+
 write_sudoers_grant() {
     [ "${RUN_AS_ROOT}" -eq 1 ] || return 0
     if { [ "${HELPER_OK}" -eq 1 ] && [ "${ROOT_TOOLS_OK}" -eq 1 ]; } || root_tools_present; then
-        echo "${PANEL_USER} ALL=(root) NOPASSWD: ${HELPER_DST}" > /etc/sudoers.d/linuxgsm-panel
-        SUDO_SCOPE="narrow (panel-helper only)"
+        sync_game_user_group
+        # TWO lines, and the split is the whole point. Root is reachable only by running the
+        # root-owned helper, which validates every argument against its own table. Becoming a GAME
+        # account needs no helper — the panel does it for the file browser, the GMod content
+        # mounts, the cron writers and the install flows, about 45 call sites — so it is granted
+        # directly, but only for accounts in GAME_GROUP. `sudo -u root` stays refused.
+        {
+            echo "${PANEL_USER} ALL=(root) NOPASSWD: ${HELPER_DST}"
+            echo "${PANEL_USER} ALL=(%${GAME_GROUP}) NOPASSWD: ALL"
+        } > /etc/sudoers.d/linuxgsm-panel
+        SUDO_SCOPE="narrow (panel-helper for root; game accounts in ${GAME_GROUP})"
     else
         echo "${PANEL_USER} ALL=(ALL) NOPASSWD:ALL" > /etc/sudoers.d/linuxgsm-panel
         SUDO_SCOPE="WIDE (NOPASSWD:ALL) — the root-owned helper pieces are not all installed"
@@ -812,7 +870,8 @@ write_sudoers_grant() {
     # Say which one loudly when it is the wide one. This runs on updates now, so a host that was
     # narrow and could not place the helper this time gets its grant widened again — a real
     # security downgrade, and it should not slide past in a wall of green ticks.
-    if [ "${SUDO_SCOPE}" = "narrow (panel-helper only)" ]; then
+    case "${SUDO_SCOPE}" in narrow*) _narrow=1 ;; *) _narrow=0 ;; esac
+    if [ "${_narrow}" -eq 1 ]; then
         ok "sudo grant: ${SUDO_SCOPE}"
     else
         warn "sudo grant: ${SUDO_SCOPE}"

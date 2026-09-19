@@ -905,12 +905,54 @@ def discover_linuxgsm_servers(server):
 _SAFE_GAME_IDENT = re.compile(r"^[A-Za-z0-9_][A-Za-z0-9._-]{0,63}\Z")
 
 
-def run_as_game_user(server, user, action_cmd, timeout=30, selfname=None):
-    """Run a LinuxGSM command as the instance's Ubuntu user, from its home dir.
-    `user` is the (possibly custom) account name; `selfname` is the LinuxGSM script
-    name (always '{game_type}server' — canonical). They differ when the instance was
-    given a custom name: only the user is renamed, the script stays canonical.
-    Defaults selfname to user for standard installs."""
+def create_game_user(server, user, timeout=30):
+    """Create an account the panel will act AS, and put it in the group its grant names.
+
+    Every caller of `user-create` creates an account the panel then drives with `sudo -u` — a game
+    instance's user, or the shared GMod content user. On the panel's own host with the narrow
+    sudoers grant, being able to become that account is exactly what the second grant line allows,
+    and that line names a GROUP (see privileged.GAME_GROUP). An account created outside the group
+    is one the panel cannot drive, which is the bug this pairing exists to stop happening again —
+    silently, one new server at a time.
+
+    The group step is local-only and best-effort: a remote host's sudoers is the operator's to
+    arrange and the group means nothing there, and an older helper without the verb must not turn
+    a working server install into a failed one. Returns user-create's own (out, err, rc)."""
+    out, err, rc = run_privileged(server, "user-create", [user], timeout=timeout)
+    if rc == 0 and is_local_server(server):
+        try:
+            _, g_err, g_rc = run_privileged(server, "gameuser-group", [user], timeout=15,
+                                            merge_stderr=False)
+            if g_rc != 0:
+                _log.warning("could not add %s to %s: %s", user, _priv.GAME_GROUP,
+                             (g_err or "")[:200])
+        except Exception:
+            _log.debug("gameuser-group failed (non-fatal)", exc_info=True)
+    return out, err, rc
+
+
+def run_as_game_user(server, user, action, timeout=30, selfname=None, answers=None,
+                     tee_log=False):
+    """Run ONE LinuxGSM action as the instance's Ubuntu user, from its home dir.
+
+    `user` is the (possibly custom) account name; `selfname` is the LinuxGSM script name (always
+    '{game_type}server' — canonical). They differ when the instance was given a custom name: only
+    the user is renamed, the script stays canonical. Defaults selfname to user for standard
+    installs.
+
+    `action` is ONE word from privileged.LGSM_ACTIONS — not a command line. It used to be a shell
+    fragment the callers assembled ("details 2>&1", 'mods-install <<< "abort"', a redirect into a
+    log file followed by `cat`), which is why this function could not route through a privileged
+    verb and had to shell out. `answers` and `tee_log` carry what those fragments were really for:
+    the keystrokes LinuxGSM prompts for, and the tail-able log a long action writes.
+
+    TWO TRANSPORTS, and the local one is why this changed at all. On the panel's own host with the
+    helper installed it is now the `lgsm-command` verb, because the narrow sudoers grant install.sh
+    writes permits the helper and nothing else — the old `sudo -u <user> bash -c ...` was not
+    covered by it, so on a hardened install every server control silently failed while the
+    dashboard's port-scan path still showed servers online. See tools/panel-helper:do_lgsm_command.
+    Remote hosts keep the shell form: their sudoers is the operator's business, and nothing about
+    it changed."""
     selfname = selfname or user
     # Validated HERE, at the one choke point every mods_* call goes through. files.py explains at
     # length why the model's @validates hook is not enough: it fires on ASSIGNMENT and never on a
@@ -921,8 +963,49 @@ def run_as_game_user(server, user, action_cmd, timeout=30, selfname=None):
     if not (_SAFE_GAME_IDENT.match(user or "") and _SAFE_GAME_IDENT.match(selfname or "")):
         _log.warning("refusing to run as an unsafe account/script name")
         return "", "invalid account or script name", 1
-    # TERM=xterm avoids LinuxGSM's `tput: unknown terminal "unknown"` noise.
-    inner = f"cd /home/{_quote(user)} && TERM=xterm ./{_quote(selfname)} {action_cmd}"
+    answers = [str(a) for a in (answers or [])]
+    arg_answers = ",".join(answers) if answers else "-"
+    verb_args = [user, selfname, action, arg_answers, "yes" if tee_log else "no"]
+    # Both transports are held to the SAME table, so a value one would refuse cannot reach the
+    # other. Without this the shell path would keep accepting whatever it could quote.
+    try:
+        _priv.check_args("lgsm-command", verb_args)
+    except Exception as exc:
+        _log.warning("refusing LinuxGSM action: %s", exc)
+        return "", str(exc), 1
+
+    if is_local_server(server) and helper_present():
+        try:
+            argv = _priv.helper_argv("lgsm-command", verb_args)
+        except Exception as exc:
+            # Unreachable while check_args above agrees with it — they read the same table. It is
+            # here because this function's contract is a TUPLE and never a raise: every caller
+            # unpacks (out, err, rc), and several run inside a background thread whose only
+            # report to the user is that rc. A raise here reached them as silence.
+            _log.warning("refusing LinuxGSM action: %s", exc)
+            return "", str(exc), 1
+        out, err, rc = _exec_local_argv(argv, timeout=timeout)
+        # The shell form used `2>&1` and every caller reads LinuxGSM's errors out of stdout, so
+        # merge here too — switching transport must not move a message from one stream to the other.
+        return ("\n".join(x for x in (out, err) if x)).strip(), "", rc
+
+    # Remote, or a host whose install.sh run predates the helper: the pre-helper shell form.
+    body = f"./{_quote(selfname)} {_quote(action)}"
+    if answers:
+        # `printf` rather than a here-string: the answers are arguments to it, so none of them is
+        # ever part of the text bash parses.
+        body = "printf '%s\\n' " + " ".join(_quote(a) for a in answers) + " | " + body
+    if tee_log:
+        # Mirrors panel/routes/_shared.py:_action_log_path, which is what the live console tails.
+        # `> log` truncates so each run starts the tail at byte 0; the trailing `cat` hands the
+        # whole output back anyway, and `exit $rc` keeps LinuxGSM's exit code rather than cat's.
+        logf = _quote(f"/home/{user}/.panel-{action}.log")
+        body = f"{body} > {logf} 2>&1; rc=$?; cat {logf} 2>/dev/null; exit $rc"
+    else:
+        body = f"{body} 2>&1"
+    # `export`, not a `TERM=xterm cmd` prefix: with `answers` the command is a PIPELINE, and a
+    # prefix would set TERM for printf and leave LinuxGSM emitting `tput: unknown terminal`.
+    inner = f"cd /home/{_quote(user)} && export TERM=xterm && {body}"
     cmd = f"sudo -u {_quote(user)} bash -c {_quote(inner)}"
     # The command self-escalates via `sudo -u`, so don't double-wrap with sudo.
     return run_command(server, cmd, timeout=timeout, sudo=False)
@@ -1361,17 +1444,28 @@ def _rewrite_crontab(server, user, grep_args, add_lines, extra_pre="", drop_line
         _log.warning("refusing to rewrite a crontab for an unsafe account name")
         return False, "invalid account name"
     _u = _quote(user)
+    # No `-u`, and no root. `crontab -l` and `crontab <file>` run AS the account operate on that
+    # account's own crontab, which is exactly what all five callers want — so this ran as ROOT for
+    # no reason at all.
     pipeline = (
-        f'{env_pre}{extra_pre}T=$(mktemp); crontab -u {_u} -l 2>/dev/null | {filt}> "$T"; '
-        f'{appends}crontab -u {_u} "$T"; RC=$?; rm -f "$T"; exit $RC'
+        f'{env_pre}{extra_pre}T=$(mktemp); crontab -l 2>/dev/null | {filt}> "$T"; '
+        f'{appends}crontab "$T"; RC=$?; rm -f "$T"; exit $RC'
     )
-    # A hand-built `sudo bash -c …` passed with sudo=False is the exact shape SECURITY.md records
-    # as gone ("_sudo_sh | 0 — the route is gone"), and it is invisible to all three escalation
+    # It WAS a hand-built `sudo bash -c …` passed with sudo=False — the exact shape SECURITY.md
+    # records as gone ("_sudo_sh | 0 — the route is gone"), and invisible to all three escalation
     # ratchets: one counts calls to a function named _sudo_sh, one counts the sudo=True keyword,
-    # and one looks for an argv list starting with "sudo". This is none of those. It stays a shell
-    # pipeline because `crontab -u … -l | filter > tmp; crontab -u … tmp` is genuinely a pipeline,
-    # but every value interpolated into it is now validated and quoted.
-    cmd = f"sudo bash -c {_quote(pipeline)}"
+    # and one looks for an argv list starting with "sudo". This was none of those.
+    #
+    # Dropping it to the game user removes that root escalation outright, and is also what makes
+    # cron work on a narrow-grant host: there the panel reaches root only by running the helper,
+    # so the old form was refused and every cron write — autostart, scheduled restarts, backup
+    # schedules — failed. Measured on a test host, as the panel user:
+    #     sudo -n bash -c 'crontab -u gmodserver -l'  -> sudo: a password is required
+    #     sudo -n -u gmodserver crontab -l            -> the crontab, and `crontab <file>` wrote it
+    #
+    # It stays a shell pipeline because `crontab -l | filter > tmp; crontab tmp` is genuinely a
+    # pipeline, but every value interpolated into it is validated and quoted.
+    cmd = f"sudo -u {_u} bash -c {_quote(pipeline)}"
     out, err, rc = run_command(server, cmd, timeout=20, sudo=False)
     return rc == 0, (err or out or "")
 

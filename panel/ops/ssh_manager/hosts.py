@@ -967,7 +967,7 @@ def remote_bootstrap_vps(server, set_timezone="UTC", enable_ufw=True, install_lg
         if "NOTEXISTS" not in out:
             note(f"User {username} already exists")
         else:
-            _core.run_privileged(server, "user-create", [username], timeout=15)
+            _core.create_game_user(server, username, timeout=15)
             _core.run_privileged(server, "user-lock-password", [username], timeout=10)
             note(f"User {username} created (login password locked)")
 

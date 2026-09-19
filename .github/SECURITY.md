@@ -79,9 +79,10 @@ one it names: `bash` does not resolve.
 Converted so far: **`ufw`, `fail2ban-client`, `systemctl`, `apt`/`dpkg`, the log reads
 (`journalctl` / `tail`), cron and user management, the sshd port change, the deferred reboot,
 Ubuntu Pro, the host controls, the GMod shared-content box, the fail2ban activity report, the
-detached OS update, Tailscale's join, the panel's own restore/self-update and the VPS hardening
-steps** — 95 verbs. (`tests/unit_test.py` asserts this number against `privileged.verbs()`, so it
-cannot drift from the table again.)
+detached OS update, Tailscale's join, the panel's own restore/self-update, the VPS hardening
+steps, running a LinuxGSM action as the game user and enrolling a game account in the group the
+grant names** — 97 verbs. (`tests/unit_test.py` asserts
+this number against `privileged.verbs()`, so it cannot drift from the table again.)
 
 **A correction to the numbers previously reported here.** Earlier revisions of this section
 said the panel had "113" privileged call sites and tracked them down to 42. That counted only
@@ -111,9 +112,41 @@ shape is one f-string. `_core._rewrite_crontab` renders `crontab -u <user>` into
 `sudo bash -c '<pipeline>'` and passes `sudo=False`, reachable from five cron routes. The account
 name went in **unquoted**, into a pipeline that runs as root, held only by the model's `@validates`
 hook — which fires on assignment and never on a row loaded from the database. It is validated and
-quoted at that site now, and a test drives a hostile name through it; the shape itself remains,
-because `crontab -u … -l | filter > tmp; crontab -u … tmp` genuinely is a pipeline. Read the table
-above as "no `_sudo_sh` **function**", not as "no hand-built escalation".
+quoted at that site now, and a test drives a hostile name through it.
+
+**And it no longer runs as root at all.** `crontab -l` and `crontab <file>` run *as* an account
+operate on that account's own crontab — exactly what all five cron routes want — so the `-u` and
+the root shell were never needed. It is `sudo -u <user> bash -c '<pipeline>'` now: one fewer root
+escalation, and the only reason cron works on a narrow-grant host, where `sudo bash` is refused and
+every autostart toggle, scheduled restart and backup schedule failed silently. Verified on a test
+host: `sudo -n bash -c 'crontab -u gmodserver -l'` answered "sudo: a password is required", while
+the new form read the crontab, added a line and removed it again, leaving the real entries intact.
+The pipeline SHAPE remains, because `crontab -l | filter > tmp; crontab tmp` genuinely is a
+pipeline. Read the table above as "no `_sudo_sh` **function**", not as "no hand-built escalation".
+
+**A third hand-built escalation, and the one that actually broke the hardened install.**
+`run_as_game_user` rendered `sudo -u <user> bash -c '<inner>'` and passed `sudo=False` — the same
+shape as `_rewrite_crontab`, invisible to all three ratchets for the same reason. Unlike the cron
+one it was not merely unnarrowed, it was **broken**: the narrow grant permits the helper and
+nothing else, so on a host where install.sh reported `sudo grant: narrow` the panel could not run
+a single LinuxGSM command. Measured on a test host with that grant — `sudo -n -u gmodserver id`
+answered "sudo: a password is required"; a restart issued through the API left the pid unchanged
+and logged `restart_server success=False`; `/api/server/<id>` reported `"unknown"`. The dashboard
+showed those servers **online** throughout, because `/api/servers` port-scans instead of asking
+LinuxGSM. Status, start/stop/restart, console, mods and LinuxGSM backups were all dead, silently.
+
+It is the `lgsm-command` verb now: a managed non-uid-0 account, a script name re-resolved inside
+that user's home after the credential drop, one action from a fixed list, and prompt answers as
+bare tokens fed down a pipe. No shell on the local path at all. Remote hosts keep the old form,
+which is correct — their sudoers is the operator's to arrange.
+
+**What that fix does NOT cover, stated plainly.** `run_as_game_user` was one of about 45 sites
+that build `sudo -u <game user> bash -c '<shell>'` and pass `sudo=False`: the file browser,
+the GMod content mounts, the cron readers, the install flows and the disk-usage probes are all
+the same shape, and all of them fail under the narrow grant exactly as server control did. The
+count in the table below is of `sudo=True` sites and has never included any of these. Converting
+them is not finished; until it is, a host with the narrow grant has working server control and a
+file browser that does not work.
 
 **Two of the four `sudo=True` sites that remain cannot be narrowed by a verb at all** — they are the
 downloaded-script installers named below. The other two were described here as the LinuxGSM
@@ -224,15 +257,47 @@ allowlist exists to deny. Wrapping either would move the risk, not reduce it. If
 one you want, those two bootstrap steps are the thing to change, not the helper.
 
 **Every one of those is converted, and the grant has narrowed.** On an install where the three
-root-owned pieces are present, `/etc/sudoers.d/linuxgsm-panel` contains one line:
+root-owned pieces are present, `/etc/sudoers.d/linuxgsm-panel` contains two lines:
 
 ```
-<panel-user> ALL=(root) NOPASSWD: /usr/local/lib/linuxgsm-panel/panel-helper
+<panel-user> ALL=(root)              NOPASSWD: /usr/local/lib/linuxgsm-panel/panel-helper
+<panel-user> ALL=(%lgsmpanel-games)  NOPASSWD: ALL
 ```
 
-Nothing else. In particular **not** `/bin/bash`, `/bin/sh`, `systemd-run`, the `tailscale`
-binary, or `sudo -u` — each of those runs whatever argv you hand it, so permitting any one of
-them would be `NOPASSWD:ALL` wearing a disguise. Each was a call site once; each is a verb now.
+**Root is reachable only by running the helper.** In particular **not** `/bin/bash`, `/bin/sh`,
+`systemd-run`, the `tailscale` binary, or `sudo -u root` — each of those runs whatever argv you
+hand it, so permitting any one of them would be `NOPASSWD:ALL` wearing a disguise. Each was a call
+site once; each is a verb now.
+
+**The second line is the game accounts, and it is a real grant — stated rather than buried.** The
+panel drives those accounts directly at about 45 sites: the file browser reads and writes files as
+them, the GMod content mounts, the cron writers, the install flows. For one release the grant was
+the first line alone, and every one of those silently failed on exactly the install this document
+recommends; `lgsm-command` converted server control, and the rest are the same shape. So the right
+to *become a game account* is granted, and bounded by a group instead:
+
+* the Runas target is `%lgsmpanel-games`, never `ALL` and never a named user, so `sudo -u root`
+  stays refused — verified on a test host, along with a non-member account also being refused;
+* membership is controlled by install.sh and by the `gameuser-group` verb, which takes the account
+  as its only argument and holds the group name as a literal — a caller that could name the group
+  could name one that root is in;
+* install.sh only enrols a home with a LinuxGSM instance (`lgsm/config-lgsm`) or a Steam content
+  tree (`serverfiles`). A person's account has neither, and must never be enrolled: the group is
+  the right for the panel to act as that account;
+* **and no account that can already escalate is ever enrolled, by either route.** This is the
+  check the whole split rests on: the grant says the panel may *become* a member, so a member who
+  can run `sudo` makes it `NOPASSWD:ALL` with one extra hop — `sudo -u them bash -c 'sudo -i'`.
+  It is also not an exotic case. Running LinuxGSM under your own sudo-capable account is an
+  ordinary setup, it is what LinuxGSM's own documentation shows, and the panel's discovery scan
+  exists to import exactly those installs — so such an account is a *likely* candidate for
+  enrolment, not an unlikely one. install.sh refuses one in `sudo`/`admin`/`wheel`/`root` or with
+  any `sudo -l -U` privileges and says so; the `gameuser-group` verb refuses the same, reading the
+  group database and the sudoers files itself, and treats anything it cannot parse as "can
+  escalate". A false refusal costs one account the panel cannot drive, and is reported; a false
+  accept costs root.
+
+What this does NOT give the panel is root. A game account cannot write `/etc`, cannot install
+packages, cannot read another account's home, and cannot edit the helper or the sudoers file.
 
 Three conditions bound that claim, and all are enforced rather than asserted:
 

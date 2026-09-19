@@ -285,7 +285,7 @@ def register(app):
                                        merge_stderr=False)
                     idout, _, _ = _sm.run_command(remote, f"id {short_name} 2>/dev/null && echo EXISTS || echo NOTEXISTS", timeout=10)
                     if "NOTEXISTS" in idout:
-                        _sm.run_privileged(remote, "user-create", [short_name], timeout=15)
+                        _sm.create_game_user(remote, short_name, timeout=15)
                         time.sleep(0.3)
 
                     # 2. Download & set up LinuxGSM (canonical script name).
@@ -465,7 +465,7 @@ def register(app):
                     _p(start_step, "Starting server")
                     start_out = ""
                     try:
-                        start_out, _, s_rc = _sm.run_as_game_user(remote, short_name, "start 2>&1", timeout=120, selfname=gs.lgsm_name)
+                        start_out, _, s_rc = _sm.run_as_game_user(remote, short_name, "start", timeout=120, selfname=gs.lgsm_name)
                     except Exception:
                         s_rc = 1
                         _log.debug("_run: start command failed", exc_info=True)
@@ -545,7 +545,7 @@ def register(app):
             # eating CPU/RAM and holding its port. Graceful LinuxGSM stop first, then a hard kill of
             # anything left, then delete.
             try:
-                _sm.run_as_game_user(remote, short_name, "stop 2>&1", timeout=60, selfname=selfname)
+                _sm.run_as_game_user(remote, short_name, "stop", timeout=60, selfname=selfname)
             except Exception:
                 _log.debug("uninstall: graceful stop failed; force-killing next", exc_info=True)
             try:

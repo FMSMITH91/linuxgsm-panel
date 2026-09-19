@@ -77,6 +77,7 @@ TOOLS = {
     "timedatectl": ("/usr/bin/timedatectl", "/bin/timedatectl"),
     "df": ("/usr/bin/df", "/bin/df"),
     "usermod": ("/usr/sbin/usermod", "/sbin/usermod"),
+    "groupadd": ("/usr/sbin/groupadd", "/sbin/groupadd"),
     "fallocate": ("/usr/bin/fallocate", "/bin/fallocate"),
     "mkswap": ("/usr/sbin/mkswap", "/sbin/mkswap"),
     "swapon": ("/usr/sbin/swapon", "/sbin/swapon"),
@@ -884,6 +885,109 @@ def v_choice(*allowed):
     return check
 
 
+# ── LinuxGSM commands, run as the game user ─────────────────────────────────────
+# The actions the panel may run. Mirrors app.RUNNABLE_ACTIONS plus the two mods subcommands that
+# panel/ops/ssh_manager/files.py drives; the unit suite asserts the three lists agree, so a new
+# action added to the panel cannot silently become unrunnable here.
+# The group the panel's sudoers grant names in its Runas position, so that
+# `lgsmpanel ALL=(%lgsmpanel-games) NOPASSWD: ALL` means "may become a game account, and no other".
+# A literal here and in install.sh; never caller-supplied, because the name IS the boundary --
+# a caller that could choose it could choose `root` and name the group it is already in.
+GAME_GROUP = "lgsmpanel-games"
+
+# Groups whose members can already reach root on a Debian/Ubuntu host.
+PRIVILEGED_GROUPS = ("sudo", "admin", "wheel", "root")
+
+
+def _groups_of(user):
+    """Every group name `user` belongs to, primary included.
+
+    RAISES if the group database cannot be read. It used to swallow that and return whatever it
+    had, which made the security check built on it fail OPEN: an unreadable group database yielded
+    an empty set, no privileged group was found, and the account was enrolled. CodeQL flagged the
+    two bare `except: pass` clauses; the empty handler was the visible half of a real defect, not a
+    style problem. _can_already_escalate turns a raise into "yes, it can escalate"."""
+    names = set()
+    try:
+        pw = pwd.getpwnam(user)
+    except KeyError:
+        pw = None          # not an account on this host yet — it has no memberships to find, and
+                           # user-create names one that does not exist. NOT a failure to read.
+    if pw is not None:
+        names.add(grp.getgrgid(pw.pw_gid).gr_name)
+    names |= {g.gr_name for g in grp.getgrall() if user in g.gr_mem}
+    return names
+
+
+def _can_already_escalate(user):
+    """True if `user` can reach root on its own — by privileged group, or by a sudoers entry.
+
+    THIS is what keeps the panel's second sudoers grant bounded. That line says the panel may
+    BECOME any member of GAME_GROUP. If a member could itself run sudo, the grant would be
+    NOPASSWD:ALL with one extra hop (`sudo -u them bash -c 'sudo -i'`) and the split between
+    "root only through the helper" and "game accounts directly" would be decorative.
+
+    This is not an exotic case to guard against. Installing LinuxGSM under your own, sudo-capable
+    account is an ordinary setup — it is what LinuxGSM's own documentation shows — and the panel's
+    discovery scan exists to import exactly those installs, so such an account is a LIKELY
+    argument here, not an unlikely one.
+
+    Deliberately conservative: anything it cannot read or parse confidently counts as "can
+    escalate". A false refusal costs one account the panel cannot drive, and says so out loud; a
+    false accept costs root.
+    """
+    try:
+        names = _groups_of(user)
+    except Exception:
+        # The group database did not answer. This function decides whether an account may be put
+        # INSIDE the panel's sudo grant, so an unknown answer has to read as "yes, it can
+        # escalate" — the asymmetry below is the whole point: a false refusal costs one account
+        # the panel cannot drive, and says so; a false accept costs root.
+        sys.stderr.write("could not read the group database for %s; refusing to enrol it\n" % user)
+        return True
+    if names & set(PRIVILEGED_GROUPS):
+        return True
+    specs = set([user] + ["%" + n for n in names])
+    for path in ["/etc/sudoers"] + sorted(glob.glob("/etc/sudoers.d/*")):
+        try:
+            with open(path, encoding="utf-8", errors="replace") as fh:
+                for line in fh:
+                    line = line.split("#")[0].strip()
+                    if not line or line.startswith(("Defaults", "@include", "#include")):
+                        continue
+                    parts = line.split()
+                    if parts and parts[0] in specs:
+                        return True
+        except OSError:
+            continue
+    return False
+
+
+LGSM_ACTIONS = ("start", "stop", "restart", "monitor", "update", "validate", "backup",
+                "details", "check-update", "force-update", "update-lgsm", "mods-update",
+                "postdetails", "test-alert", "fastdl", "mods-install", "mods-remove")
+
+
+def v_answers(s):
+    """Keystrokes fed to a LinuxGSM command's stdin, comma-separated, or "-" for none.
+
+    LinuxGSM prompts, and the panel has to answer unattended: mods-install/mods-remove want a mod
+    id and then a "Y", and fastdl asks eight yes/no questions and loops forever on EOF. The panel
+    answered with a here-string it built by f-string -- `f"{cmd} <<< $\'{mod_id}\\nY\'"` -- which is
+    a shell fragment assembled from a value. This is a bounded token list instead: every answer is
+    a bare word, and the helper joins them with newlines itself, so no quoting decision is ever
+    made from caller text."""
+    if s == "-":
+        return s
+    parts = s.split(",")
+    if not (1 <= len(parts) <= 16):
+        raise ValueError("expected 1..16 answers")
+    for part in parts:
+        if not re.fullmatch(r"[A-Za-z0-9_.-]{1,64}", part):
+            raise ValueError("not an answer list")
+    return s
+
+
 # ── The verb table ────────────────────────────────────────────────────────────────────────────
 # verb -> (validators, build(args) -> argv, stdin or None)
 #
@@ -1076,6 +1180,11 @@ VERBS = {
     "game-file-read": ([v_managed_user, v_relpath], lambda a: [], None),
     "game-dir-tar": ([v_managed_user, v_relpath], lambda a: [], None),
     "lgsm-discover": ([], lambda a: [], None),
+    # One LinuxGSM action, run as the game user -- see do_lgsm_command for why this verb exists.
+    "lgsm-command": ([v_managed_user, v_ident, v_choice(*LGSM_ACTIONS), v_answers,
+                      v_choice("yes", "no")], lambda a: [], None),
+    # Put a game account in the group the sudoers grant names -- see do_gameuser_group.
+    "gameuser-group": ([v_managed_user], lambda a: [], None),
     # Two upgrade shapes, because the panel really does want two. "phased" includes Ubuntu's
     # phased rollouts so an explicit "install updates" applies everything the Check list showed;
     # "standard" is apt's default set, used when bootstrapping a host.
@@ -1871,6 +1980,35 @@ def _game_home_path(user, relpath):
     return pw, abspath
 
 
+def _drop_to(pw, own_groups=False):
+    """Become `pw` irreversibly. True if the drop took, False if anything about it did not.
+
+    Order matters: supplementary groups, then gid, then uid, because setuid first makes the other
+    two impossible.
+
+    The checks afterwards are not belt-and-braces. setuid(0) SUCCEEDS when already root, so
+    `getuid() != pw.pw_uid` compares 0 against 0 and passes -- a target of uid 0 sailed straight
+    through the one guard the read verbs rest on. v_managed_user refuses that NAME; this refuses
+    the STATE, so any future path reaching here with uid 0 still cannot act as root.
+
+    `own_groups` picks which supplementary groups the process ends up with, and the two callers
+    genuinely want different answers. A read verb wants NONE: it is opening a path chosen by the
+    caller, and every group the account happens to be in is reach it does not need. Running a game
+    wants the account's OWN groups, which is what `sudo -u` gave it before this verb existed --
+    the panel puts game users in a shared group for content directories, and the game process
+    inherits these, so dropping them would take mounted content away at runtime.
+    """
+    if own_groups:
+        os.initgroups(pw.pw_name, pw.pw_gid)
+    else:
+        os.setgroups([])
+    os.setgid(pw.pw_gid)
+    os.setuid(pw.pw_uid)
+    if os.getuid() != pw.pw_uid or os.geteuid() != pw.pw_uid:
+        return False
+    return not (os.getuid() == 0 or os.geteuid() == 0)
+
+
 def _as_game_user(pw, abspath, emit):
     """Fork, drop to `pw`, re-resolve `abspath` inside that user's home, then emit(resolved).
 
@@ -1887,18 +2025,8 @@ def _as_game_user(pw, abspath, emit):
     pid = os.fork()
     if pid == 0:
         try:
-            os.setgroups([])
-            os.setgid(pw.pw_gid)
-            os.setuid(pw.pw_uid)
-            if os.getuid() != pw.pw_uid or os.geteuid() != pw.pw_uid:
+            if not _drop_to(pw):
                 os._exit(1)          # refuse to read anything if the drop did not take
-            # ...and "the drop took" is not "we are no longer root". setuid(0) SUCCEEDS when
-            # already root, so the line above compares 0 against 0 and passes — a target of uid 0
-            # sailed straight through the one guard these read verbs rest on. v_managed_user
-            # refuses that NAME now; this refuses the STATE, so any future path that reaches here
-            # with uid 0 still cannot read as root.
-            if os.getuid() == 0 or os.geteuid() == 0:
-                os._exit(1)
             resolved = os.path.realpath(abspath)
             if resolved != home and not resolved.startswith(home + "/"):
                 os._exit(1)          # a symlink pointing out of the home directory
@@ -1953,6 +2081,147 @@ def _emit_dir_tar(path, buf):
                            recursive=False)
                 except OSError:
                     continue
+
+
+def _lgsm_log_path(home, action):
+    """Where a long action's output is tee'd, DERIVED rather than passed in.
+
+    panel/routes/_shared.py:_action_log_path builds the same path from the same two values, so the
+    panel can tail the file while the action runs. Deriving it on both sides instead of sending it
+    means this verb takes no path argument at all -- there is nothing to point somewhere else."""
+    return os.path.join(home, ".panel-%s.log" % action)
+
+
+def _lgsm_child(pw, home, selfname, action, stdin_text, tee):
+    """The dropped half of do_lgsm_command: runs the LinuxGSM script, returns its exit status.
+
+    Everything here happens AS THE GAME USER, and not only because LinuxGSM refuses to run as root
+    (`[ FAIL ] Do NOT run as root!` -- which it prints while exiting 0, so a command wrongly run as
+    root reads as a success). The script, its config and every file it touches sit under a home
+    directory the game, its mods and anyone with a shell as that account can write, so running it
+    as root would make a symlink there a route to the rest of the box.
+    """
+    try:
+        if not _drop_to(pw, own_groups=True):
+            return 1
+        script = os.path.realpath(os.path.join(home, selfname))
+        if script != home and not script.startswith(home + "/"):
+            return 1                      # a symlink pointing out of the home directory
+        if not (os.path.isfile(script) and os.access(script, os.X_OK)):
+            sys.stderr.write("no executable %s in %s\n" % (selfname, home))
+            return 1
+        # Built here, not inherited: the panel's own environment carries its secrets, and LinuxGSM
+        # reads a good deal of what it finds.
+        env = {
+            "HOME": home, "USER": pw.pw_name, "LOGNAME": pw.pw_name, "PWD": home,
+            "SHELL": "/bin/bash",
+            "PATH": "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
+            # Without this LinuxGSM emits `tput: unknown terminal "unknown"` on almost every line.
+            "TERM": "xterm",
+            "LANG": os.environ.get("LANG", "C.UTF-8"),
+        }
+        out_fd = os.dup(1)
+        log_fd = None
+        if tee:
+            try:
+                # O_NOFOLLOW because the destination sits in a directory the game user writes: the
+                # final component is the one part of this path that could have become a symlink.
+                log_fd = os.open(_lgsm_log_path(home, action),
+                                 os.O_WRONLY | os.O_CREAT | os.O_TRUNC | os.O_NOFOLLOW, 0o600)
+            except OSError:
+                tee = False               # no log to tail, but the action still runs
+        try:
+            proc = subprocess.Popen(          # nosec B603 - argv from an allowlisted action
+                [script, action], cwd=home, env=env, stdin=subprocess.PIPE,
+                stdout=(log_fd if tee else out_fd), stderr=subprocess.STDOUT)
+            proc.communicate(stdin_text.encode())
+            rc = proc.returncode
+        finally:
+            if log_fd is not None:
+                os.close(log_fd)
+        if tee:
+            # Hand the whole output back too, exactly as the shell form's trailing `cat` did: the
+            # audit entry and the bot's completion summary read it from here, while the live
+            # console tails the file as it fills.
+            with open(_lgsm_log_path(home, action), "rb") as fh:
+                with os.fdopen(os.dup(out_fd), "wb") as sink:
+                    shutil.copyfileobj(fh, sink, 262144)
+        return rc if 0 <= rc <= 255 else 1
+    except Exception:
+        return 1
+
+
+def do_gameuser_group(args, content):
+    """Put a game account in GAME_GROUP, creating the group if it is not there yet.
+
+    This is the other half of the fix `lgsm-command` started. Converting run_as_game_user to a
+    verb put SERVER CONTROL back on a narrow-grant host, but it was one of about 45 sites that
+    build `sudo -u <game user> bash -c '<shell>'`: the file browser, the GMod content mounts, the
+    cron writers and the install flows are the same shape and fail the same way. Rather than
+    leave those broken, install.sh grants the panel the right to become an account IN THIS GROUP
+    -- never root, which stays reachable only through this helper.
+
+    So membership of this group is a privilege boundary, and the group name is a literal here
+    rather than an argument: a caller that could name the group could name one that root is in.
+    The ACCOUNT is still checked -- v_managed_user refuses uid 0 -- so this cannot be used to put
+    a root-equivalent account inside the panel's reach either.
+
+    `groupadd -f` succeeds when the group already exists, and `usermod -aG` is append-only, so
+    running this for an account that is already a member is a no-op."""
+    user = args[0]
+    if _can_already_escalate(user):
+        sys.stderr.write("refusing to enrol %s in %s: it can already run sudo, so the panel's "
+                         "grant would become a path to root\n" % (user, GAME_GROUP))
+        return 1
+    rc = subprocess.run([resolve("groupadd"), "-f", GAME_GROUP],      # nosec B603 - fixed argv
+                        shell=False, capture_output=True, timeout=30).returncode
+    if rc != 0:
+        sys.stderr.write("could not create group %s\n" % GAME_GROUP)
+        return rc
+    r = subprocess.run([resolve("usermod"), "-aG", GAME_GROUP, user],  # nosec B603 - fixed argv
+                       shell=False, capture_output=True, timeout=30)
+    if r.returncode != 0:
+        sys.stderr.write(r.stderr.decode("utf-8", "replace")[:400])
+    return r.returncode
+
+
+def do_lgsm_command(args, content):
+    """Run ONE LinuxGSM action as a game user, from that user's home directory.
+
+    WHY THIS VERB EXISTS
+        run_as_game_user was the last local escalation that did not route through one. It built
+        `sudo -u <user> bash -c '<inner>'` and ran it with sudo=False, so the narrow sudoers grant
+        install.sh writes -- which permits this helper and nothing else -- never covered it.
+
+        That grant is not an edge case, it is the hardened install: run as root, install.sh creates
+        a dedicated non-root `lgsmpanel` and reports `sudo grant: narrow`. On such a host, measured
+        on a test box: `sudo -n -u gmodserver id` answered "sudo: a password is required",
+        run_as_game_user returned rc=1 with no output, a restart through the API left the pid
+        unchanged at 96218 and logged `restart_server success=False`, and /api/server/<id> reported
+        "unknown" -- while /api/servers, which port-scans instead, still reported "online", so the
+        dashboard looked entirely healthy. Status, start/stop/restart, console, mods and LinuxGSM
+        backups were all dead.
+
+    WHAT BOUNDS IT
+        The account must be a managed, non-uid-0 user; the script name is an identifier and is
+        re-resolved inside that user's home after the drop; the action is one word from
+        LGSM_ACTIONS; the answers are bare tokens joined with newlines here. Nothing in this verb
+        is assembled into a shell string -- the command is argv and the answers go down a pipe.
+    """
+    user, selfname, action, answers, tee = args[0], args[1], args[2], args[3], args[4]
+    try:
+        pw = pwd.getpwnam(user)
+    except KeyError:
+        sys.stderr.write("no such user\n")
+        return 1
+    home = os.path.realpath(pw.pw_dir)
+    stdin_text = "" if answers == "-" else "".join(a + "\n" for a in answers.split(","))
+
+    pid = os.fork()
+    if pid == 0:
+        os._exit(_lgsm_child(pw, home, selfname, action, stdin_text, tee == "yes"))
+    _pid, status = os.waitpid(pid, 0)
+    return os.WEXITSTATUS(status) if os.WIFEXITED(status) else 1
 
 
 def do_game_file_read(args, content):
@@ -2450,6 +2719,8 @@ ACTIONS = {
     "game-file-read": do_game_file_read,
     "game-dir-tar": do_game_dir_tar,
     "lgsm-discover": do_lgsm_discover,
+    "lgsm-command": do_lgsm_command,
+    "gameuser-group": do_gameuser_group,
     "sshd-set-directive": do_sshd_set_directive,
     "create-swapfile": do_create_swapfile,
 }

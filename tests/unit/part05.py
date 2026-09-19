@@ -961,6 +961,8 @@ _VERB_SAMPLES = {
     "game-file-read": ["codserver", "serverfiles/cfg/server.cfg"],
     "game-dir-tar": ["codserver", "serverfiles/addons"],
     "lgsm-discover": [],
+    "lgsm-command": ["gmodserver", "gmodserver", "details", "-", "no"],
+    "gameuser-group": ["gmodserver"],
     "content-scan": ["cstrike", "hl2"],
 }
 check("privileged: every verb has a sample (new verbs cannot skip the parity check)",
@@ -1713,7 +1715,8 @@ check("helper: resolves ufw", _helper.resolve("ufw").endswith("/ufw") if os.path
 check("helper: knows exactly the tools its verbs need, and no more",
       sorted(_helper.TOOLS) == ["add-apt-repository", "apt-get", "bash_installer", "crontab",
                                 "curl", "df", "dpkg",
-                                "fail2ban-client", "fallocate", "fuser", "journalctl", "mkswap",
+                                "fail2ban-client", "fallocate", "fuser", "groupadd", "journalctl",
+                                "mkswap",
                                 "npm", "passwd", "pgrep", "pkill", "pro", "reboot", "renice", "rm",
                                 "sh_installer", "ss", "sshd", "swapon", "sysctl",
                                 "systemctl", "systemd-run",
@@ -2713,3 +2716,323 @@ for _evil in ("ExecStartPre=/bin/sh -c id",
 # way past the grammar: a directive is a directive whether or not comments surround it.
 check("ssh.socket: ...and a comment header does not smuggle a directive past it",
       not _helper._lines_match("# Managed by LinuxGSM Panel\n\nExecStart=/bin/sh\n", _sock_rule))
+
+
+# ── `lgsm-command`: the verb that put server control back on a narrow-grant host ───────────────
+# run_as_game_user built `sudo -u <user> bash -c '<inner>'` and passed sudo=False. The narrow
+# sudoers grant install.sh writes permits the helper and NOTHING else, so on the install it calls
+# hardened the panel could not run a single LinuxGSM command — while /api/servers kept reporting
+# those servers "online", because it port-scans instead of asking LinuxGSM. Proven on a test host:
+# `sudo -n -u gmodserver id` -> "sudo: a password is required", a restart left the pid unchanged.
+from app import RUNNABLE_ACTIONS as _RA                                            # noqa: E402
+
+check("lgsm-command: the helper and the panel agree on the action list",
+      tuple(_helper.LGSM_ACTIONS) == tuple(_priv.LGSM_ACTIONS),
+      "helper=%s panel=%s" % (_helper.LGSM_ACTIONS, _priv.LGSM_ACTIONS))
+# The third list. An action the panel offers but the verb will not run is a button that fails only
+# on a hardened host — precisely the shape of the bug this verb exists to fix.
+check("lgsm-command: every action the panel offers is one the verb will run",
+      set(_RA) <= set(_priv.LGSM_ACTIONS),
+      "panel-only=%s" % sorted(set(_RA) - set(_priv.LGSM_ACTIONS)))
+check("lgsm-command: ...and the two mods subcommands files.py drives are in it too",
+      {"mods-install", "mods-remove"} <= set(_priv.LGSM_ACTIONS))
+
+# What the table refuses. Each of these reached a root-adjacent shell before the verb existed.
+for _bad, _why in (
+    (["root", "gmodserver", "details", "-", "no"], "a uid-0 account"),
+    (["gmodserver", "gmodserver", "rm", "-", "no"], "an action that is not on the list"),
+    (["gmodserver", "gmodserver", "details 2>&1", "-", "no"], "a shell fragment as the action"),
+    (["gmodserver", "gmodserver", "details", "a;id", "no"], "a shell metacharacter in an answer"),
+    (["gmodserver", "gmodserver", "details", "-", "sometimes"], "a tee flag that is not yes/no"),
+):
+    _refused = False
+    try:
+        _priv.check_args("lgsm-command", _bad)
+    except Exception:
+        _refused = True
+    check("lgsm-command: refuses %s" % _why, _refused, "ACCEPTED %r" % (_bad,))
+check("lgsm-command: ...and still accepts the real thing",
+      _priv.check_args("lgsm-command", ["gmodserver", "gmodserver", "mods-install", "sourcemod,Y",
+                                        "no"])[3] == "sourcemod,Y")
+
+# ── ...and run_as_game_user actually TAKES the verb on a local host ────────────────────────────
+# The gate that matters: covering the verb is not covering the call site that chooses it. Without
+# this, the whole fix could be present and never reached.
+_ragu_argv, _ragu_shell = [], []
+_o_local, _o_hp = _sm_core.is_local_server, _sm_core.helper_present
+_o_exec, _o_rc = _sm_core._exec_local_argv, _sm_core.run_command
+try:
+    _sm_core.is_local_server = lambda s: True
+    _sm_core.helper_present = lambda: True
+    _sm_core._exec_local_argv = lambda argv, **k: (_ragu_argv.append(argv), ("out", "", 0))[1]
+    _sm_core.run_command = lambda s, c, **k: (_ragu_shell.append(c), ("", "", 0))[1]
+
+    _sm_core.run_as_game_user(NS(), "gmodserver", "restart", selfname="gmodserver")
+    check("run_as_game_user: a LOCAL host with the helper runs the verb, not a shell",
+          len(_ragu_argv) == 1 and not _ragu_shell, "argv=%s shell=%s" % (_ragu_argv, _ragu_shell))
+    check("run_as_game_user: ...and it is the lgsm-command verb with the action as one word",
+          _ragu_argv and _ragu_argv[0][-4:] == ["gmodserver", "restart", "-", "no"],
+          str(_ragu_argv))
+    check("run_as_game_user: ...and no element of that argv contains a shell metacharacter",
+          _ragu_argv and not any(ch in el for el in _ragu_argv[0] for ch in ";|&$`<>"),
+          str(_ragu_argv))
+
+    # The refusal has to bite BEFORE the transport, or a bad value reaches one of them.
+    _ragu_argv.clear(); _ragu_shell.clear()
+    _o, _e, _r = _sm_core.run_as_game_user(NS(), "gmodserver", "details 2>&1")
+    check("run_as_game_user: a shell fragment is refused, not quoted and run",
+          _r == 1 and not _ragu_argv and not _ragu_shell, "rc=%s sent=%s" % (_r, _ragu_argv))
+
+    # ── the REMOTE rendering, which is the pre-helper form and must stay correct ──
+    _sm_core.is_local_server = lambda s: False
+    _ragu_shell.clear()
+    _sm_core.run_as_game_user(NS(), "gmodserver", "mods-install", answers=["sourcemod", "Y"])
+    _cmd = _ragu_shell[0] if _ragu_shell else ""
+    check("run_as_game_user: a REMOTE host still gets the sudo -u shell form", "sudo -u" in _cmd)
+    check("run_as_game_user: ...with the answers as printf ARGUMENTS, not a here-string",
+          "printf" in _cmd and "<<<" not in _cmd, _cmd[:160])
+    # The bug a naive port makes: `TERM=xterm printf … | ./gmodserver …` sets TERM for PRINTF and
+    # leaves LinuxGSM emitting `tput: unknown terminal "unknown"` over every line of output.
+    check("run_as_game_user: ...and TERM is EXPORTED, so it survives into the pipeline",
+          "export TERM=xterm" in _cmd, _cmd[:160])
+    _ragu_shell.clear()
+    _sm_core.run_as_game_user(NS(), "gmodserver", "update", tee_log=True)
+    _cmd = _ragu_shell[0] if _ragu_shell else ""
+    check("run_as_game_user: tee_log writes where _action_log_path says the console will tail",
+          "/home/gmodserver/.panel-update.log" in _cmd, _cmd[:200])
+    check("run_as_game_user: ...and keeps LinuxGSM's exit code rather than cat's",
+          "rc=$?" in _cmd and "exit $rc" in _cmd, _cmd[:200])
+finally:
+    _sm_core.is_local_server, _sm_core.helper_present = _o_local, _o_hp
+    _sm_core._exec_local_argv, _sm_core.run_command = _o_exec, _o_rc
+
+# The helper derives the tee path itself rather than accepting one; both sides must land on the
+# same file or the console tails something the action never writes.
+from panel.routes._shared import _action_log_path as _alp                          # noqa: E402
+check("lgsm-command: the helper's log path and the panel's _action_log_path agree",
+      _helper._lgsm_log_path("/home/gmodserver", "update") == _alp("gmodserver", "update"),
+      "%s vs %s" % (_helper._lgsm_log_path("/home/gmodserver", "update"),
+                    _alp("gmodserver", "update")))
+
+# The contract is a TUPLE, never a raise — several callers run in a background thread whose only
+# report back to the user is that rc, so an escaping exception reached them as silence. Found by
+# mutation: with the validation call removed, the suite did not fail, it DIED, and a harness that
+# counted "FAIL" lines read a dead suite as a clean one.
+_o_local2, _o_hp2 = _sm_core.is_local_server, _sm_core.helper_present
+try:
+    _sm_core.is_local_server = lambda s: True
+    _sm_core.helper_present = lambda: True
+    for _bad_user, _bad_act in (("root", "details"), ("gmodserver", "rm -rf /"), ("", "details")):
+        _raised = None
+        try:
+            _r = _sm_core.run_as_game_user(NS(), _bad_user, _bad_act)
+        except Exception as _e:
+            _raised = _e
+        check("run_as_game_user: (%r, %r) returns a tuple rather than raising"
+              % (_bad_user, _bad_act),
+              _raised is None and isinstance(_r, tuple) and len(_r) == 3 and _r[2] != 0,
+              "raised=%r result=%r" % (_raised, _raised is None and _r or None))
+finally:
+    _sm_core.is_local_server, _sm_core.helper_present = _o_local2, _o_hp2
+
+# The claim in run_as_game_user is that BOTH transports are held to the same table. Only the local
+# one re-validates on its own (helper_argv checks again), so deleting the shared check_args call
+# left every check passing while the remote rendering quietly accepted anything quotable. Found by
+# mutation: the mutant survived 2127 green checks.
+_o_local3, _o_rc3 = _sm_core.is_local_server, _sm_core.run_command
+_rem_sent = []
+try:
+    _sm_core.is_local_server = lambda s: False
+    _sm_core.run_command = lambda s, c, **k: (_rem_sent.append(c), ("", "", 0))[1]
+    for _bad_act, _bad_ans, _why in (
+        ("details 2>&1", None, "a shell fragment as the action"),
+        ("rm", None, "an action that is not on the list"),
+        ("details", ["a;id"], "a shell metacharacter in an answer"),
+    ):
+        _rem_sent.clear()
+        _o2, _e2, _r2 = _sm_core.run_as_game_user(NS(), "gmodserver", _bad_act, answers=_bad_ans)
+        check("run_as_game_user: the REMOTE path refuses %s too" % _why,
+              _r2 == 1 and not _rem_sent, "rc=%s sent=%s" % (_r2, _rem_sent))
+finally:
+    _sm_core.is_local_server, _sm_core.run_command = _o_local3, _o_rc3
+
+
+# ── gameuser-group: the account the panel creates must land inside the grant ───────────────────
+# The narrow grant's second line names a GROUP. An account created outside it is one the panel
+# cannot drive — and the failure is silent and per-server, which is exactly how the original bug
+# stayed hidden. create_game_user pairs the two so a new call site cannot forget the second half.
+check("gameuser-group: the verb takes the ACCOUNT and holds the group name as a literal",
+      _priv.check_args("gameuser-group", ["gmodserver"]) == ["gmodserver"]
+      and _helper.GAME_GROUP == _priv.GAME_GROUP == "lgsmpanel-games",
+      "helper=%r panel=%r" % (_helper.GAME_GROUP, _priv.GAME_GROUP))
+check("gameuser-group: refuses a uid-0 account, so root cannot be put inside the grant",
+      _ufw_raises_verb(lambda: _priv.check_args("gameuser-group", ["root"])))
+
+_cgu = []
+_o_rp, _o_local4 = _sm_core.run_privileged, _sm_core.is_local_server
+try:
+    def _cgu_rp(server, verb, args=(), **k):
+        _cgu.append((verb, list(args)))
+        return ("", "", 0)
+    _sm_core.run_privileged = _cgu_rp
+
+    _sm_core.is_local_server = lambda s: True
+    _cgu.clear(); _sm_core.create_game_user(NS(), "gmodserver")
+    check("create_game_user: a LOCAL host creates the account AND enrols it",
+          [v for v, _a in _cgu] == ["user-create", "gameuser-group"], str(_cgu))
+
+    _sm_core.is_local_server = lambda s: False
+    _cgu.clear(); _sm_core.create_game_user(NS(), "gmodserver")
+    check("create_game_user: a REMOTE host only creates it — the group means nothing there",
+          [v for v, _a in _cgu] == ["user-create"], str(_cgu))
+
+    # A failed creation must not be followed by an enrolment of an account that does not exist.
+    _sm_core.is_local_server = lambda s: True
+    _sm_core.run_privileged = lambda s, verb, args=(), **k: (
+        _cgu.append((verb, list(args))), ("", "useradd: failure", 1))[1]
+    _cgu.clear(); _o2, _e2, _r2 = _sm_core.create_game_user(NS(), "gmodserver")
+    check("create_game_user: a FAILED creation is not followed by an enrolment",
+          [v for v, _a in _cgu] == ["user-create"] and _r2 == 1, "%s rc=%s" % (_cgu, _r2))
+
+    # ...and the reverse: an old helper without the verb must not turn a working install into a
+    # failed one. The server is created; it just is not in the group yet.
+    def _cgu_halfway(server, verb, args=(), **k):
+        _cgu.append((verb, list(args)))
+        if verb == "gameuser-group":
+            raise RuntimeError("unknown verb")
+        return ("", "", 0)
+    _sm_core.run_privileged = _cgu_halfway
+    _cgu.clear(); _o3, _e3, _r3 = _sm_core.create_game_user(NS(), "gmodserver")
+    check("create_game_user: an enrolment that FAILS still reports the account as created",
+          _r3 == 0 and [v for v, _a in _cgu] == ["user-create", "gameuser-group"],
+          "rc=%s %s" % (_r3, _cgu))
+finally:
+    _sm_core.run_privileged, _sm_core.is_local_server = _o_rp, _o_local4
+
+# No route may call user-create on its own again: that is the shape that leaves an account outside
+# the grant. Scanned across the package, so a new call site has to go through the pairing.
+_uc_sites = []
+for _dp, _dn, _fn in os.walk(os.path.join(_root, "panel")):
+    _dn[:] = [_d for _d in _dn if _d != "__pycache__"]
+    for _name in _fn:
+        if not _name.endswith(".py") or _name == "privileged.py":
+            continue                       # privileged.py is where the verb is DEFINED
+        _f = os.path.join(_dp, _name)
+        _txt = open(_f, encoding="utf-8").read()
+        if '"user-create"' not in _txt:
+            continue
+        # The ONE legitimate call is the one inside create_game_user. Attributed by AST rather
+        # than by line number so moving the function does not quietly reopen the gate.
+        _allowed = set()
+        for _n in _smg_ast.walk(_smg_ast.parse(_txt)):
+            if isinstance(_n, _smg_ast.FunctionDef) and _n.name == "create_game_user":
+                _allowed = set(range(_n.lineno, (_n.end_lineno or _n.lineno) + 1))
+        for _i, _l in enumerate(_txt.splitlines(), 1):
+            if '"user-create"' in _l.split("#")[0] and _i not in _allowed:
+                _uc_sites.append("%s:%d" % (os.path.relpath(_f, _root), _i))
+check("create_game_user: nothing calls the bare user-create verb any more",
+      not _uc_sites, "still calling it: %s" % _uc_sites)
+
+# ── ...and an account that can ALREADY escalate must never be enrolled ─────────────────────────
+# The grant says the panel may BECOME a member of GAME_GROUP. A member who can run sudo makes that
+# NOPASSWD:ALL with one extra hop — `sudo -u them bash -c 'sudo -i'` — and the split between "root
+# only through the helper" and "game accounts directly" is then decorative. This is not exotic:
+# running LinuxGSM under your own sudo-capable account is what LinuxGSM's own docs show, and the
+# panel's discovery scan imports exactly those installs, so such a name is a LIKELY argument here.
+_grp_saved, _pwd_saved = _helper.grp, _helper.pwd
+_glob_saved = _helper.glob
+
+
+class _FakeGrp:
+    def __init__(self, name, mem=()):
+        self.gr_name, self.gr_mem, self.gr_gid = name, list(mem), 1234
+
+
+try:
+    _helper.glob = NS(glob=lambda _p: [])        # no sudoers.d to read in the unit environment
+    _helper.pwd = NS(getpwnam=lambda _u: NS(pw_gid=1234, pw_uid=1234, pw_name=_u))
+    _helper.grp = NS(getgrgid=lambda _g: _FakeGrp("gmodserver"),
+                     getgrall=lambda: [_FakeGrp("sudo", ["alice"]),
+                                       _FakeGrp("gmodcontent", ["gmodserver"])])
+    check("enrolment: a plain game account can be enrolled",
+          _helper._can_already_escalate("gmodserver") is False)
+    check("enrolment: an account in the sudo group cannot",
+          _helper._can_already_escalate("alice") is True)
+    for _pg in ("admin", "wheel", "root"):
+        _helper.grp = NS(getgrgid=lambda _g: _FakeGrp("users"),
+                         getgrall=lambda _p=_pg: [_FakeGrp(_p, ["bob"])])
+        check("enrolment: ...nor one in '%s'" % _pg,
+              _helper._can_already_escalate("bob") is True)
+    # A sudoers FILE naming the account directly, with no privileged group anywhere.
+    import tempfile as _sg_tmp
+    _sg_dir = _sg_tmp.mkdtemp(prefix="sudoers-")
+    with open(os.path.join(_sg_dir, "90-ops"), "w", encoding="utf-8") as _fh:
+        _fh.write("# a comment naming gmodserver must not count\n"
+                  "Defaults env_reset\n"
+                  "carol ALL=(ALL) NOPASSWD:ALL\n")
+    _helper.glob = NS(glob=lambda _p: [os.path.join(_sg_dir, "90-ops")])
+    _helper.grp = NS(getgrgid=lambda _g: _FakeGrp("users"), getgrall=lambda: [])
+    check("enrolment: an account named in a sudoers.d file cannot be enrolled",
+          _helper._can_already_escalate("carol") is True)
+    check("enrolment: ...but being MENTIONED in a comment there is not a grant",
+          _helper._can_already_escalate("gmodserver") is False)
+
+    # The verb must consult it, not merely define it.
+    _ran = []
+    _sub_saved = _helper.subprocess
+    try:
+        _helper.subprocess = NS(run=lambda *a, **k: (_ran.append(a), NS(returncode=0, stderr=b""))[1])
+        _helper.grp = NS(getgrgid=lambda _g: _FakeGrp("users"),
+                         getgrall=lambda: [_FakeGrp("sudo", ["carol"])])
+        _rc_bad = _helper.do_gameuser_group(["carol"], "")
+        check("enrolment: do_gameuser_group REFUSES a sudo-capable account",
+              _rc_bad == 1 and not _ran, "rc=%s ran=%s" % (_rc_bad, _ran))
+        _ran.clear()
+        _helper.grp = NS(getgrgid=lambda _g: _FakeGrp("gmodserver"), getgrall=lambda: [])
+        _rc_ok = _helper.do_gameuser_group(["gmodserver"], "")
+        check("enrolment: ...and still enrols a plain game account",
+              _rc_ok == 0 and len(_ran) == 2, "rc=%s ran=%s" % (_rc_ok, _ran))
+    finally:
+        _helper.subprocess = _sub_saved
+    _shutil.rmtree(_sg_dir, ignore_errors=True)
+finally:
+    _helper.grp, _helper.pwd, _helper.glob = _grp_saved, _pwd_saved, _glob_saved
+
+# install.sh must apply the same rule to the accounts it backfills.
+_inst_sh_src = open(os.path.join(_root, "install.sh"), encoding="utf-8").read()
+check("install.sh: the backfill skips an account that already has sudo rights",
+      'grep -qxE "sudo|admin|wheel|root"' in _inst_sh_src
+      and 'sudo -l -U "${_gu}"' in _inst_sh_src,
+      "guard missing from sync_game_user_group")
+
+# ...and when the group database does not answer, the check must fail CLOSED. It used to swallow
+# the error and return whatever it had, so an unreadable group database produced an EMPTY set, no
+# privileged group was found, and the account was enrolled — the exact inversion of the rule this
+# function exists to enforce. CodeQL flagged the two `except: pass` clauses; the empty handler was
+# the visible half of that, not a style problem.
+_grp_saved2, _pwd_saved2, _glob_saved2 = _helper.grp, _helper.pwd, _helper.glob
+
+
+def _boom(*_a, **_k):
+    raise OSError("group database unavailable")
+
+
+try:
+    _helper.glob = NS(glob=lambda _p: [])
+    _helper.pwd = NS(getpwnam=lambda _u: NS(pw_gid=1234, pw_uid=1234, pw_name=_u))
+    _helper.grp = NS(getgrgid=lambda _g: _FakeGrp("gmodserver"), getgrall=_boom)
+    check("enrolment: an unreadable group database reads as 'can escalate', not as 'safe'",
+          _helper._can_already_escalate("gmodserver") is True)
+    _helper.grp = NS(getgrgid=_boom, getgrall=lambda: [])
+    check("enrolment: ...and so does a primary group that cannot be resolved",
+          _helper._can_already_escalate("gmodserver") is True)
+    # An account that simply does not exist yet is NOT a failure to read — user-create names one
+    # that does not exist, and gameuser-group runs immediately after it.
+    def _no_such_user(_u):
+        raise KeyError(_u)
+    _helper.pwd = NS(getpwnam=_no_such_user)
+    _helper.grp = NS(getgrgid=lambda _g: _FakeGrp("users"), getgrall=lambda: [])
+    check("enrolment: a not-yet-existing account is not treated as an escalation risk",
+          _helper._can_already_escalate("brandnew") is False)
+finally:
+    _helper.grp, _helper.pwd, _helper.glob = _grp_saved2, _pwd_saved2, _glob_saved2

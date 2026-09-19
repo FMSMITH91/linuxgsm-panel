@@ -176,7 +176,7 @@ def register(app):
                              actor.id if actor else None, origin=origin, on_done=on_done)
             return True, f"'{action}' issued — status updates in a few seconds."
         timeout = 90 if action == "restart" else 60
-        out, err, rc = _sm.run_as_game_user(remote, gs.short_name, f"{action} 2>&1", timeout=timeout, selfname=gs.lgsm_name)
+        out, err, rc = _sm.run_as_game_user(remote, gs.short_name, action, timeout=timeout, selfname=gs.lgsm_name)
         # Strip ALL ANSI/CSI escape sequences (colors end in 'm', but LinuxGSM also
         # emits erase-line "\x1b[K" etc.), plus collapse whitespace for a clean message.
         def _clean(s):
@@ -676,7 +676,7 @@ def register(app):
                         detail = "the server or its host is no longer configured"
                         return
                     timeout = 90 if action == "restart" else 60
-                    out, _, rc = _sm.run_as_game_user(remote, short_name, f"{action} 2>&1",
+                    out, _, rc = _sm.run_as_game_user(remote, short_name, action,
                                                   timeout=timeout, selfname=selfname)
                     clean = terminal.strip_escapes(out or "")
                     ok, detail = (rc == 0), clean
@@ -722,22 +722,19 @@ def register(app):
                     if not remote:
                         detail = "its host is no longer configured"
                         return
-                    base = action
-                    if action == "fastdl":
-                        # fastdl asks a few yes/no questions (overwrite / force-download / continue),
-                        # all default Y, and loops forever on EOF — feed Y's so it runs unattended.
-                        base = "fastdl <<< $'Y\\nY\\nY\\nY\\nY\\nY\\nY\\nY'"
+                    # fastdl asks a few yes/no questions (overwrite / force-download / continue),
+                    # all default Y, and loops forever on EOF — feed Y's so it runs unattended.
+                    answers = ["Y"] * 8 if action == "fastdl" else None
+                    # tee_log makes run_as_game_user write the output where _action_log_path says
+                    # and hand the whole of it back at the end, so the audit entry and the bot's
+                    # completion summary are unchanged while the console tails the file.
                     logf = _action_log_path(short_name, action)
-                    # `> logf` truncates, so each run starts the tail at byte 0; `cat` at the end
-                    # hands the WHOLE output back to this thread anyway, so the audit log and the
-                    # chat-bot completion summary are unchanged by the redirect. `exit $rc` keeps
-                    # LinuxGSM's own exit code rather than cat's.
-                    act_cmd = f"{base} > {logf} 2>&1; rc=$?; cat {logf} 2>/dev/null; exit $rc"
                     _begin_action_tail(_app, server_id, action, logf, short_name)
                     rc = None
                     try:
-                        out, err, rc = _sm.run_as_game_user(remote, short_name, act_cmd,
-                                                            timeout=1800, selfname=selfname)
+                        out, err, rc = _sm.run_as_game_user(remote, short_name, action,
+                                                            timeout=1800, selfname=selfname,
+                                                            answers=answers, tee_log=True)
                     finally:
                         # rc is still None if the SSH call raised or timed out, and _end_action_tail
                         # says so rather than guessing — a 30-minute timeout does not mean the
