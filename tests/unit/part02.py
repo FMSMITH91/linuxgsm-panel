@@ -1603,3 +1603,42 @@ try:
           any("__DU_DONE__" in c for c in _li_cmds), repr(_li_cmds)[-120:])
 finally:
     _sh._sm.run_command = _li_orig
+
+
+# ── the stats endpoint must not persist a status it could not read ──────────────────────────────
+# server_live_metrics builds its dict UP FRONT and returns it all-zero when the read produced no
+# output, so port_open=False / game_procs=0 is indistinguishable from a real stopped server — and
+# /api/server/<id>/stats COMMITTED that as gs.status. `free -b` never fails on a reachable host, so
+# ram_total==0 is the sentinel; app.py's _live_run_state guards on it and says it is "deliberately
+# the SAME predicate /api/server/<id>/stats uses", while that endpoint did not.
+#
+# Not cosmetic: _query_server_slots short-circuits on gs.status == "offline" and returns 0 players
+# WITHOUT querying, which satisfies the one-shot notify_when_empty ("now has 0 players — safe to
+# make changes") and clears the flag, with players still connected.
+_p02_root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+_stats_src = open(os.path.join(_p02_root, "panel", "routes", "api.py"), encoding="utf-8").read()
+check("stats endpoint: the all-zero sample is rejected by the ram_total sentinel",
+      'm.get("ram_total")' in _stats_src)
+check("stats endpoint: ...and an unreadable sample does not reach gs.status",
+      "_readable and gs.status != status" in _stats_src)
+
+# The predicate that decides online/offline must stay the one _live_run_state promises it matches.
+import app as _app_mod
+_lrs_orig = _app_mod._sm.server_live_metrics
+try:
+    _lrs = {"m": {}}
+    _app_mod._sm.server_live_metrics = lambda r, s=None, p=None, force=False: _lrs["m"]
+    _gsx, _rx = NS(short_name="gmodserver", port=27015), NS()
+
+    _lrs["m"] = {"ram_total": 0, "port_open": False, "game_procs": 0}      # the failed sample
+    check("_live_run_state: an all-zero sample is 'unknown', not 'stopped'",
+          _app_mod._live_run_state(_gsx, _rx) is None)
+    _lrs["m"] = {"ram_total": 8 * 10 ** 9, "port_open": False, "game_procs": 0}
+    check("_live_run_state: a READ sample with nothing running is False",
+          _app_mod._live_run_state(_gsx, _rx) is False)
+    _lrs["m"] = {"ram_total": 8 * 10 ** 9, "port_open": True, "game_procs": 0}
+    check("_live_run_state: a listening port is True", _app_mod._live_run_state(_gsx, _rx) is True)
+    _lrs["m"] = {"ram_total": 8 * 10 ** 9, "port_open": False, "game_procs": 4}
+    check("_live_run_state: live processes are True", _app_mod._live_run_state(_gsx, _rx) is True)
+finally:
+    _app_mod._sm.server_live_metrics = _lrs_orig
