@@ -24,7 +24,7 @@ from panel.security.auth import (INSTALL_SERVER, MANAGE_REMOTES, accessible_remo
     can_access_remote, get_game,
     get_remote, has_permission, log_action, permission_required, server_access_required)
 import time
-from panel.core.http import (_json_body, _log_and_generic, _unreachable)
+from panel.core.http import (_json_body, _json_str, _log_and_generic, _unreachable)
 from app import (_local_remote_id, _log, _os_update_note)
 
 
@@ -109,7 +109,7 @@ def register(app):
         only you or only your LAN should reach had no way to say so."""
         remote = get_remote(remote_id)
         data = _json_body()
-        source = (data.get("source") or "").strip()
+        source = _json_str(data, "source")
         port = data.get("port", "")
         proto = data.get("protocol", "tcp")
         on = data.get("allow", True) is not False
@@ -208,7 +208,7 @@ def register(app):
             return jsonify({"success": False, "message": "Enter a valid port number."}), 400
         if not (1 <= new_port <= 65535):
             return jsonify({"success": False, "message": "Port must be between 1 and 65535."}), 400
-        bind = (body.get("bind") or "").strip()
+        bind = _json_str(body, "bind")
         old = remote.port
         try:
             ok, msg = change_ssh_port(remote, new_port, bind)

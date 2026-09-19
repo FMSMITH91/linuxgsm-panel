@@ -9,7 +9,8 @@ from panel.ops.ssh_manager import (close_connection, remote_bootstrap_tailscale,
     remote_check_tailscale, remote_install_tailscale, remote_migrate_to_tailscale,
     remote_tailscale_finalize, remote_tailscale_up_url)
 from panel.security.auth import (MANAGE_REMOTES, get_remote, log_action, permission_required)
-from panel.core.http import (_json_body, _log_and_generic, _unreachable)
+from panel.security import privileged as _priv
+from panel.core.http import (_json_body, _json_str, _log_and_generic, _unreachable)
 from app import (_refuse_on_panel_host)
 
 
@@ -51,7 +52,7 @@ def register(app):
             ok, result = remote_tailscale_up_url(
                 remote,
                 enable_ssh=data.get("enable_ssh", True),
-                advertise_routes=data.get("advertise_routes", "").strip(),
+                advertise_routes=_json_str(data, "advertise_routes"),
             )
             log_action(current_user, "remote_tailscale_up", target=remote.name, success=ok)
             if not ok:
@@ -59,6 +60,8 @@ def register(app):
             if result == "ALREADY_CONNECTED":
                 return jsonify({"success": True, "connected": True})
             return jsonify({"success": True, "connected": False, "url": result})
+        except ConnectionError:
+            return _unreachable("tailscale on a remote host")
         except Exception:
             return jsonify({"success": False, "message": _log_and_generic("request failed")}), 500
 
@@ -79,6 +82,8 @@ def register(app):
                 "tailscale_ip": status.get("tailscale_ip", ""),
                 "dns_name": status.get("dns_name", ""), "log": log,
             })
+        except ConnectionError:
+            return _unreachable("tailscale on a remote host")
         except Exception:
             return jsonify({"success": False, "message": _log_and_generic("request failed")}), 500
 
@@ -96,6 +101,8 @@ def register(app):
             success, msg, log = remote_install_tailscale(remote)
             log_action(current_user, "remote_tailscale_install", target=remote.name, detail=msg, success=success)
             return jsonify({"success": success, "message": msg, "log": log})
+        except ConnectionError:
+            return _unreachable("tailscale on a remote host")
         except Exception:
             return jsonify({"success": False, "message": _log_and_generic("request failed"), "log": ""}), 500
 
@@ -111,9 +118,9 @@ def register(app):
         if refused:
             return refused
         data = _json_body()
-        auth_key = data.get("auth_key", "").strip()
+        auth_key = _json_str(data, "auth_key")
         enable_ssh = data.get("enable_ssh", True)
-        advertise_routes = data.get("advertise_routes", "").strip()
+        advertise_routes = _json_str(data, "advertise_routes")
 
         if not auth_key:
             return jsonify({"success": False, "message": "Auth key is required. Get one at https://login.tailscale.com/admin/keys"}), 400
@@ -126,6 +133,16 @@ def register(app):
             )
             log_action(current_user, "remote_tailscale_bootstrap", target=remote.name, detail=msg, success=success)
             return jsonify({"success": success, "message": msg, "log": log})
+        except ConnectionError:
+            return _unreachable("tailscale on a remote host")
+        # A VerbError is the privilege boundary REFUSING the value — "not an auth key" — which is
+        # a bad request, not a panel fault. api_tailscale_serve already answers 400 for its own
+        # mount-point refusal and says why: the branches below report every failure as a 500,
+        # right for "the host refused the command", wrong for "you pasted something that isn't a
+        # key", and the two are not distinguishable from the message.
+        except _priv.VerbError as _ve:
+            return jsonify({"success": False,
+                            "message": "That isn't a usable Tailscale auth key (%s)." % _ve}), 400
         except Exception:
             return jsonify({"success": False, "message": _log_and_generic("request failed"), "log": ""}), 500
 
@@ -159,5 +176,7 @@ def register(app):
                 "tailscale_ip": status.get("tailscale_ip", ""),
                 "dns_name": status.get("dns_name", ""),
             })
+        except ConnectionError:
+            return _unreachable("tailscale on a remote host")
         except Exception:
             return jsonify({"success": False, "message": _log_and_generic("request failed")}), 500

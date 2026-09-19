@@ -13,7 +13,7 @@ from panel.ops.ssh_manager import (host_specs, tailnet_exempt_ips)
 from panel.security.auth import (log_action, superadmin_required)
 from panel.services.monitoring import (_autoblock_threshold, _whitelisted)
 from types import (SimpleNamespace)
-from panel.core.http import (_json_body, _log_and_generic)
+from panel.core.http import (_json_body, _json_str, _log_and_generic)
 from app import (_autoblock_hosts, _local_remote_id, _maybe_set_threshold, _os_update_note,
     _run_autoblock_now, _security_whitelist, _set_autoblock_host)
 from panel.routes._shared import (_whitelist_mutate)
@@ -168,7 +168,7 @@ def register(app):
     @superadmin_required
     def api_panel_switch_branch():
         """Switch the panel to another branch and pull it (same rollback-safe path as an update)."""
-        branch = (_json_body().get("branch") or "").strip()
+        branch = _json_str(_json_body(), "branch")
         success, msg = so.panel_switch_branch(branch)
         log_action(current_user, "panel_switch_branch", target=branch, detail=msg, success=success)
         return jsonify({"success": success, "message": msg})
@@ -307,7 +307,7 @@ def register(app):
     @superadmin_required
     def api_panel_security_block():
         """UFW-block (all ports, permanent) an IP on the panel host."""
-        ip = (_json_body().get("ip") or "").strip()
+        ip = _json_str(_json_body(), "ip")
         unblock = bool(_json_body().get("unblock"))
         if not unblock:
             lr = RemoteServer.query.filter_by(is_local=True).first()
@@ -356,7 +356,7 @@ def register(app):
     def api_panel_security_unban():
         """Lift a fail2ban ban (jail + IP validated server-side)."""
         d = _json_body()
-        jail, banned_ip = (d.get("jail") or "").strip(), (d.get("ip") or "").strip()
+        jail, banned_ip = _json_str(d, "jail"), _json_str(d, "ip")
         try:
             ok, msg = so.fail2ban_unban(jail, banned_ip)
             log_action(current_user, "fail2ban_unban", target=banned_ip,

@@ -13,7 +13,7 @@ from panel.security.auth import (MANAGE_USERS, grantable_groups, hash_password, 
 from panel.services import (notifications)
 from panel.services.monitoring import (_AUTOBLOCK_DEFAULT_THRESHOLD, _autoblock_threshold)
 from datetime import (timedelta)
-from panel.core.http import (_form_credential, _form_err, _form_ok, _json_body)
+from panel.core.http import (_form_credential, _form_err, _form_ok, _json_body, _json_str)
 from panel.core.validation import (_int_or, _valid_hex_color, generate_password,
                                    password_problem, username_problem)
 from app import (_new_user_language)
@@ -44,11 +44,11 @@ def register(app):
     @superadmin_required
     def panel_settings_save():
         f = request.form
-        title = (f.get("site_title") or "").strip()[:80] or "LinuxGSM Panel"
-        domain = (f.get("site_domain") or "").strip()[:255]
-        tagline = (f.get("login_tagline") or "").strip()[:200]
+        title = _json_str(f, "site_title")[:80] or "LinuxGSM Panel"
+        domain = _json_str(f, "site_domain")[:255]
+        tagline = _json_str(f, "login_tagline")[:200]
         accent = _valid_hex_color(f.get("accent_color"))          # "" if blank/invalid -> built-in
-        lang = (f.get("default_language") or "").strip()
+        lang = _json_str(f, "default_language")
         lang = lang if lang in i18n.LANGUAGES else "en"           # always store a real language
         protection = f.get("session_protection") if f.get("session_protection") in ("strong", "basic") else "strong"
         hours = max(1, min(_int_or(f.get("session_lifetime_hours"), 8), 168))     # 1h .. 7d
@@ -88,10 +88,10 @@ def register(app):
         f = request.form
         # A blank secret field means "keep the stored one" (None), so the real token/webhook is
         # never required to round-trip through the browser just to change a toggle.
-        tg_token = f.get("telegram_token", "").strip()
-        dc_webhook = f.get("discord_webhook", "").strip()
-        dc_bot_token = f.get("discord_bot_token", "").strip()
-        nt_token = f.get("ntfy_token", "").strip()
+        tg_token = _json_str(f, "telegram_token")
+        dc_webhook = _json_str(f, "discord_webhook")
+        dc_bot_token = _json_str(f, "discord_bot_token")
+        nt_token = _json_str(f, "ntfy_token")
         notifications.save_settings(
             telegram={"enabled": bool(f.get("telegram_enabled")),
                       "chat_id": f.get("telegram_chat_id", ""),
@@ -122,12 +122,12 @@ def register(app):
         # Test the values typed into the form (so you don't have to Save first); blank fields fall
         # back to whatever's already saved.
         ok, msg = notifications.test_send(
-            (b.get("channel") or "").strip(),
-            token=(b.get("token") or "").strip() or None,
-            chat_id=(b.get("chat_id") or "").strip() or None,
-            webhook=(b.get("webhook") or "").strip() or None,
-            server=(b.get("server") or "").strip() or None,
-            topic=(b.get("topic") or "").strip() or None,
+            _json_str(b, "channel"),
+            token=_json_str(b, "token") or None,
+            chat_id=_json_str(b, "chat_id") or None,
+            webhook=_json_str(b, "webhook") or None,
+            server=_json_str(b, "server") or None,
+            topic=_json_str(b, "topic") or None,
         )
         return jsonify({"success": ok, "message": msg})
 

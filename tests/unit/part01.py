@@ -257,6 +257,52 @@ finally:
     else:
         _c["ssh_timeout"] = _sshto_saved
     _cfgmod.save_config(_c)
+# ── a config.json that is valid JSON but not an OBJECT ───────────────────────────────────────
+# config.json is explicitly a file a human can hand-edit, and load_config() is on every request
+# path and in every background poller. The except caught a MALFORMED file; it did not catch
+# `null`, `[1,2,3]`, `"hello"` or `123`, each of which parses fine and then raises inside
+# dict.update — so a truncated file degraded to defaults while a stray `null` 500'd every page.
+# CONFIG_FILE is redirected to a temp path here: these bodies must never touch the real one.
+import pathlib as _pl_cfg
+import tempfile as _tf_cfg
+_cfg_file_saved = _cfgmod.CONFIG_FILE
+_cfg_tmp = _pl_cfg.Path(_tf_cfg.mkdtemp()) / "config.json"
+try:
+    _cfgmod.CONFIG_FILE = _cfg_tmp
+    for _body, _label in (('{"port": 5001}', "an object is read normally"),
+                          ("null", "null"),
+                          ("[1,2,3]", "an array"),
+                          ('"hello"', "a bare string"),
+                          ("123", "a bare number"),
+                          ("{ truncated", "a truncated file")):
+        _cfg_tmp.write_text(_body, encoding="utf-8")
+        _cfgmod._cfg_cache["key"] = None
+        try:
+            _got = _cfgmod.load_config()
+            _ok, _detail = isinstance(_got, dict), ""
+        except Exception as _e:
+            _ok, _detail = False, "%s: %s" % (type(_e).__name__, _e)
+        check("config: %s does not raise out of load_config" % _label, _ok, _detail)
+    # ...and the one that IS an object still wins, so the guard is not a blanket "always defaults".
+    # Both reads go through _port(), which reports the exception as a value rather than letting it
+    # abort the suite — the point of these checks is what load_config DOES with a bad file, and a
+    # traceback out of the harness prints no verdict at all.
+    def _port():
+        _cfgmod._cfg_cache["key"] = None
+        try:
+            return _cfgmod.load_config().get("port")
+        except Exception as _e:
+            return "RAISED %s" % type(_e).__name__
+
+    _cfg_tmp.write_text('{"port": 5001}', encoding="utf-8")
+    eq("config: a real object's values still come through", _port(), 5001)
+    _cfg_tmp.write_text("null", encoding="utf-8")
+    eq("config: ...and a non-object falls back to the documented default",
+       _port(), _cfgmod.DEFAULT_CONFIG["port"])
+finally:
+    _cfgmod.CONFIG_FILE = _cfg_file_saved
+    _cfgmod._cfg_cache["key"] = None
+
 eq("config: with no override the SSH layer uses the documented default",
    _sm_core._ssh_connect_timeout(), _cfgmod.DEFAULT_CONFIG["ssh_timeout"])
 # Reads app.py AND the route modules: the line moved out with its section when register_routes

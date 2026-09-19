@@ -4776,6 +4776,45 @@ try:
         _mp_mon._player_counts.pop(91919, None)
         _mp_ps._max_players_cache.pop(91919, None)
 
+    # ── a JSON field of the wrong TYPE is a bad request, not a panel fault ─────────────────────
+    # _json_body guarantees the BODY is a dict and says nothing about the VALUES, so two dozen
+    # handlers read `(body.get(k) or "").strip()` — safe against a missing key, and an
+    # AttributeError on {"command": 5}. Every one answered 500 with "Something went wrong — see
+    # the panel log", which is the panel accusing itself of a bug the caller caused, and which
+    # makes 5xx alerting fire on a malformed request. Driven as a superadmin against every
+    # mutating JSON endpoint the review named, with a NUMBER where a string belongs.
+    _typed = [
+        ("/api/command/%d" % gs_id, {"command": 5}),
+        ("/api/server/%d/action" % gs_id, {"action": 5}),
+        ("/api/servers/bulk-action", {"action": 5, "ids": [gs_id]}),
+        ("/api/server/%d/query-type" % gs_id, {"query_type": 5}),
+        ("/api/server/%d/moderate" % gs_id, {"action": 5}),
+        ("/api/server/%d/alerts" % gs_id, {"values": 5}),
+        ("/api/server/%d/config" % gs_id, {"raw": 5}),
+        ("/api/server/%d/mods" % gs_id, {"action": "install", "mod": 5}),
+        ("/api/tags", {"name": 5}),
+        ("/api/panel/security/block", {"ip": 5}),
+        ("/api/panel/security/whitelist", {"ip": 5, "action": "add"}),
+        ("/api/panel/backup/delete", {"name": 5}),
+        ("/api/panel/backup/full", {"mode": 5}),
+        ("/api/remote/%d/security/block" % remote_id, {"ip": 5}),
+        ("/api/remote/%d/security/unban" % remote_id, {"jail": 5, "ip": 5}),
+        ("/api/remote/%d/pro-service" % remote_id, {"service": 5, "action": 5}),
+        ("/api/remote/%d/tailscale-bootstrap" % remote_id, {"auth_key": 5}),
+        ("/api/tailscale/check-peer", {"host": 5}),
+        ("/api/remote/%d/import" % remote_id, {"servers": [{"user": "u", "game_type": 5}]}),
+        ("/notifications/test", {"channel": 5}),
+    ]
+    _typed_500 = []
+    for _path, _body in _typed:
+        _tr = c.post(_path, json=_body, headers={"X-Requested-With": "XMLHttpRequest"})
+        if _tr.status_code >= 500:
+            _typed_500.append("%s -> %d" % (_path, _tr.status_code))
+    check("typed body: %d endpoints were driven, so this is not an empty sweep" % len(_typed),
+          len(_typed) >= 20, "the list shrank — the check below would prove less")
+    check("typed body: a number where a string belongs never 500s",
+          not _typed_500, "; ".join(_typed_500[:6]))
+
     # ── Deleting a user kills the invites they minted ──────────────────────────────────────────
     # authority_intact() resolves the creator with db.session.get(User, created_by_id) and fails
     # closed when it is gone — "a missing creator fails closed: the row is deleted or the id

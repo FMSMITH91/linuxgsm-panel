@@ -13,6 +13,7 @@ broken route is the exact failure this repo keeps finding; here the F821 gate wa
 from flask import (jsonify)
 from flask_login import (current_user)
 from panel.core.clock import (utcnow)
+from panel.core.http import (_json_str)
 from panel.core.panel_state import (_action_output, _console_backlog, _full_backup_lock,
     _game_backup_status, register_remote_state)
 from panel.db.models import (GameServer, RemoteServer, db)
@@ -82,7 +83,7 @@ def _whitelist_mutate(app, body):
     for the address so a just-whitelisted admin isn't left locked out until the next tick. The
     slow firewall work (jail reload, unban) is backgrounded so the button responds instantly —
     the config is already saved and reflected in the response."""
-    raw = (body.get("ip") or "").strip()
+    raw = _json_str(body, "ip")
     remove = bool(body.get("remove"))
     if remove:
         canon = _security_whitelist_remove(raw)

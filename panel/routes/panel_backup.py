@@ -17,7 +17,7 @@ import concurrent.futures
 import os
 import threading
 import time
-from panel.core.http import (_json_body, _log_and_generic)
+from panel.core.http import (_json_body, _json_str, _log_and_generic)
 from panel.core.validation import (_attachment_header)
 from app import (_find_game_backup)
 
@@ -130,7 +130,7 @@ def register(app):
         """Kick off a full (game-file) backup of all installed servers in the background.
         mode: 'now' → back up even busy servers (disconnects players); 'wait' → back up empty
         servers now and queue busy ones to back up once they empty; '' → skip busy servers."""
-        mode = (_json_body().get("mode") or "").strip()
+        mode = _json_str(_json_body(), "mode")
         force = (mode == "now")
         defer = (mode == "wait")
         started = _trigger_full_backup(force=force, defer=defer)
@@ -409,7 +409,9 @@ def register(app):
     @login_required
     @superadmin_required
     def api_panel_backup_delete():
-        name = _json_body().get("name") or ""
+        # _json_str, because a non-string reached backup._safe_path and raised TypeError out of
+        # os.path — "expected str, bytes or os.PathLike object, not int", as a 500.
+        name = _json_str(_json_body(), "name")
         ok, msg = bk.delete_backup(name)
         log_action(current_user, "panel_backup_delete", target=name, success=ok)
         return jsonify({"success": ok, "message": msg})
@@ -421,7 +423,7 @@ def register(app):
         """Restore a backup (destructive — takes a pre-restore safety backup, then swaps the
         data into place and restarts the panel)."""
         _b = _json_body()
-        name = _b.get("name") or ""
+        name = _json_str(_b, "name")
         # Optional: only an encrypted archive needs it, and only when it was written under a
         # different passphrase than the one configured now (or this is a fresh install).
         # skip_safety_backup: the operator's answer to a pre-restore copy that could not be

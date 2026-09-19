@@ -10,7 +10,7 @@ from panel.db.models import (GameServer, db)
 from panel.ops.ssh_manager import (content_box_users, discover_linuxgsm_servers)
 from panel.security.auth import (MANAGE_SERVERS, can_access_remote, get_remote, log_action,
     permission_required)
-from panel.core.http import (_json_body, _log_and_generic)
+from panel.core.http import (_json_body, _json_str, _log_and_generic)
 from panel.core.validation import (INSTANCE_NAME_RE)
 from app import (lgsm_name_to_game_type, load_game_list)
 from panel.routes._shared import (_bg_cache_commands)
@@ -111,7 +111,7 @@ def register(app):
         added, skipped = [], []
         for it in items:
             user = (str(it.get("user") or "")).strip()
-            gt = (it.get("game_type") or "").strip().lower()
+            gt = _json_str(it, "game_type").lower()
             if (not INSTANCE_NAME_RE.match(user) or gt not in valid_games
                     or gt not in discovered.get(user, ())
                     or user in existing or per_user.get(user, 0) > 1):

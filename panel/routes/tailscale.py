@@ -9,7 +9,7 @@ from panel.security import privileged as _priv
 from panel.ops import (tailscale_integration as ts)
 from panel.security.auth import (MANAGE_REMOTES, log_action, permission_required,
     superadmin_required)
-from panel.core.http import (_json_body)
+from panel.core.http import (_json_body, _json_str)
 from panel.db.models import LOCAL_HOST_LABEL
 from app import (_ts_backend_scheme)
 
@@ -147,7 +147,7 @@ def register(app):
     def api_tailscale_check_peer():
         """Check if a host is reachable on the tailnet."""
         data = _json_body()
-        host = (data.get("host") or "").strip()
+        host = _json_str(data, "host")
         if not host:
             return jsonify({"success": False, "message": "Host required"}), 400
         # It becomes ping's last argv element, where a leading dash reads as an option.

@@ -25,7 +25,7 @@ from panel.services.monitoring import (_PLAYER_POLL_WORKERS)
 import concurrent.futures
 import re
 import threading
-from panel.core.http import (_json_body, _log_and_generic)
+from panel.core.http import (_json_body, _json_str, _log_and_generic)
 from app import (LONG_ACTIONS, RUNNABLE_ACTIONS, _apply_mod_restart, _live_run_state, _log,
     _mark_expected_offline)
 from panel.routes._shared import (_action_log_path, _begin_action_tail, _end_action_tail,
@@ -245,7 +245,7 @@ def register(app):
         """JSON action endpoint for inline controls (dashboard/lists) — no reload."""
         gs = get_game(server_id)
         data = _json_body()
-        action = (data.get("action") or "").strip()
+        action = _json_str(data, "action")
         if action not in RUNNABLE_ACTIONS:
             return jsonify({"success": False, "message": f"Unsupported action: {action}"}), 400
         if not current_user.is_superadmin and not has_permission(current_user, _perm_for_action(action)):
@@ -288,7 +288,7 @@ def register(app):
         per-server queued/skipped list. The fan-out is capped so one request can't spawn
         an unbounded number of SSH operations."""
         data = _json_body()
-        action = (data.get("action") or "").strip()
+        action = _json_str(data, "action")
         raw_ids = data.get("server_ids")
         if action not in RUNNABLE_ACTIONS:
             return jsonify({"success": False, "message": f"Unsupported action: {action}"}), 400
@@ -389,7 +389,7 @@ def register(app):
                 or has_permission(current_user, SEND_COMMAND)
                 or has_permission(current_user, MANAGE_SERVERS)):
             return jsonify({"success": False, "message": "Permission denied"}), 403
-        raw = (_json_body().get("query_type") or "").strip().lower()
+        raw = _json_str(_json_body(), "query_type").lower()
         if raw and not re.fullmatch(r"[a-z0-9][a-z0-9_-]{0,39}", raw):
             return jsonify({"success": False, "message": "Invalid query type — use letters, "
                             "numbers, - or _ (see the gamedig games list)."}), 400
@@ -408,7 +408,7 @@ def register(app):
         player name is sanitized in ssh_manager.moderate() so a hostile name can't inject."""
         gs = get_game(server_id)
         data = _json_body()
-        action = (data.get("action") or "").strip()
+        action = _json_str(data, "action")
         if action not in ("kick", "ban", "say"):
             return jsonify({"success": False, "message": "Unknown action"}), 400
         # Per-action permission: a mod may hold only kick, only ban, etc. (SEND_COMMAND / the
@@ -419,7 +419,7 @@ def register(app):
         steamid = data.get("steamid", "")
         num = data.get("num", "")
         scope = (data.get("scope") or "this").strip()
-        reason = (data.get("reason") or "").strip()[:200]
+        reason = _json_str(data, "reason")[:200]
         # A Valve ban needs the SteamID up front — to also fan it out and record a global ban. The
         # on-screen list may be gamedig-sourced (no id), so resolve it from the console once here;
         # otherwise the cross-server fan-out below (guarded on `steamid`) would be silently skipped.
@@ -504,7 +504,7 @@ def register(app):
             return jsonify({"success": False, "message": "Permission denied"}), 403
         final = cmd.command_template or ""
         if cmd.has_argument:
-            value = (_json_body().get("value") or "").strip()
+            value = _json_str(_json_body(), "value")
             # COMPILE first, MATCH second. These used to be one try block: `raise ValueError` for a
             # value that did not match was caught by the same `except (re.error, ValueError)` as a
             # broken stored pattern, so every rejected value fell through to the lenient default and

@@ -13,7 +13,7 @@ from panel.ops.ssh_manager import (remote_fail2ban_overview, remote_fail2ban_top
 from panel.security.auth import (MANAGE_REMOTES, get_remote, log_action, permission_required,
     superadmin_required)
 from panel.services.monitoring import (_autoblock_threshold, _whitelisted)
-from panel.core.http import (_json_body, _log_and_generic)
+from panel.core.http import (_json_body, _json_str, _log_and_generic, _unreachable)
 from panel.core.validation import (MAX_PORT, MIN_UNPRIVILEGED_PORT, _port_or)
 from app import (AUTH_LOG_PATH, _autoblock_hosts, _maybe_set_threshold, _run_autoblock_now,
     _security_whitelist, _set_autoblock_host)
@@ -51,7 +51,7 @@ def register(app):
     def api_remote_security_block(remote_id):
         """UFW-block (all ports, permanent) an IP on a remote host."""
         remote = get_remote(remote_id)
-        ip = (_json_body().get("ip") or "").strip()
+        ip = _json_str(_json_body(), "ip")
         unblock = bool(_json_body().get("unblock"))
         if not unblock and tailnet_exempt_ips(remote, {ip}):
             return jsonify({"success": False, "message":
@@ -107,12 +107,14 @@ def register(app):
     def api_remote_security_unban(remote_id):
         remote = get_remote(remote_id)
         d = _json_body()
-        jail, banned_ip = (d.get("jail") or "").strip(), (d.get("ip") or "").strip()
+        jail, banned_ip = _json_str(d, "jail"), _json_str(d, "ip")
         try:
             ok, msg = remote_fail2ban_unban(remote, jail, banned_ip)
             log_action(current_user, "fail2ban_unban", target=banned_ip,
                        detail="%s on %s — %s" % (jail, remote.name, msg), success=ok)
             return jsonify({"success": ok, "message": msg})
+        except ConnectionError:
+            return _unreachable("fail2ban unban")
         except Exception:
             return jsonify({"success": False, "message": _log_and_generic("unban failed")}), 500
 

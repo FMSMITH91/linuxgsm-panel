@@ -19,6 +19,21 @@ def _json_body():
     return d if isinstance(d, dict) else {}
 
 
+def _json_str(body, key, default=""):
+    """A request field as a stripped string, whatever JSON type actually arrived.
+
+    _json_body guarantees the BODY is a dict; it says nothing about the VALUES. Two dozen handlers
+    read a field as `(body.get(k) or "").strip()`, which is safe against a missing key and not
+    against `{"command": 5}` — int has no .strip(), so the handler raised AttributeError and the
+    caller got a 500 where 400 is the honest answer. (`{"name": []}` is the same shape;
+    `{"raw": 5}` died deeper, inside the write path.) A list or dict coerces to "" rather than to
+    its repr, because "[1, 2]" is not a value anybody meant to send."""
+    v = body.get(key, default)
+    if v is None or isinstance(v, (dict, list)):
+        return ""
+    return str(v).strip()
+
+
 def _wants_json():
     """True when the caller is an in-page fetch() (so form-POST endpoints can answer with JSON and
     let the page update in place instead of doing a full redirect+reload). The global fetch wrapper
