@@ -1544,3 +1544,62 @@ try:
 finally:
     (_sm_cron.list_game_backups, _sm_cron.backup_disk_info,
      _sm_cron.delete_game_backup) = _hr_orig
+
+
+# ── "couldn't tell" must not be reported as "clearly not installed" ─────────────────────────────
+# _looks_installed documents three states — True / False / None — but its du fallback could only
+# ever produce two. run_command does not raise on a transport failure (it returns
+# ("", "…timed out", -1)), and `2>/dev/null` means a MISSING serverfiles dir prints nothing either,
+# so both read as "" and `int("0") > 50` answered False: "clearly NOT installed".
+#
+# That verdict is acted on. app.py's reconcile ticker sets installed=False / status="failed" on it
+# — while its own next line reads "None (host unreachable): leave it", which is exactly the case
+# False was stealing — and manage_servers.py wipes lgsm/tmp and re-runs a 30-minute auto-install,
+# three times over, for a server that had finished downloading.
+import panel.routes._shared as _sh
+
+_li_orig = _sh._sm.run_command
+try:
+    _li = {"details": ("", "", 0), "du": ("", "", 0)}
+    _sh._sm.run_command = lambda r, c, **k: (_li["du"] if "du -sm" in c else _li["details"])
+    _app = NS(logger=NS(debug=lambda *a, **k: None))
+
+    # THE BUG: both reads fail, nothing raises.
+    _li["details"], _li["du"] = ("", "SSH command timed out", -1), ("", "SSH command timed out", -1)
+    check("_looks_installed: a FAILED read is 'couldn't tell', not 'not installed'",
+          _sh._looks_installed(_app, NS(), "gmodserver", "gmodserver") is None,
+          repr(_sh._looks_installed(_app, NS(), "gmodserver", "gmodserver")))
+
+    # A serverfiles dir that really is absent: the command RAN, it just found nothing.
+    _li["du"] = ("__DU_DONE__", "", 0)
+    check("_looks_installed: an absent serverfiles really is False",
+          _sh._looks_installed(_app, NS(), "gmodserver", "gmodserver") is False)
+
+    # A completed download.
+    _li["du"] = ("6100\n__DU_DONE__", "", 0)
+    check("_looks_installed: a full serverfiles is True",
+          _sh._looks_installed(_app, NS(), "gmodserver", "gmodserver") is True)
+
+    # A tiny serverfiles is a failed download, not a complete one.
+    _li["du"] = ("3\n__DU_DONE__", "", 0)
+    check("_looks_installed: a nearly-empty serverfiles is still False",
+          _sh._looks_installed(_app, NS(), "gmodserver", "gmodserver") is False)
+
+    # The positive paths from `details` must be untouched.
+    _li["details"] = ("Status: STARTED\nServer IP: 1.2.3.4", "", 0)
+    check("_looks_installed: a real `details` answer still wins",
+          _sh._looks_installed(_app, NS(), "gmodserver", "gmodserver") is True)
+    _li["details"] = ("[ FAIL ] serverfiles not found — please run ./gmodserver install", "", 0)
+    check("_looks_installed: ...and so does an explicit 'not installed'",
+          _sh._looks_installed(_app, NS(), "gmodserver", "gmodserver") is False)
+
+    # The caller side: the command must carry the marker, or the checks above pass without it.
+    _li_cmds = []
+    _li["details"] = ("", "", 0)
+    _sh._sm.run_command = lambda r, c, **k: (_li_cmds.append(c),
+                                             ("50\n__DU_DONE__", "", 0) if "du -sm" in c else ("", "", 0))[1]
+    _sh._looks_installed(_app, NS(), "gmodserver", "gmodserver")
+    check("_looks_installed: the du command carries the completion marker",
+          any("__DU_DONE__" in c for c in _li_cmds), repr(_li_cmds)[-120:])
+finally:
+    _sh._sm.run_command = _li_orig

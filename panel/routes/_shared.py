@@ -405,12 +405,28 @@ def _looks_installed(app, remote, short_name, lgsm_name):
         if "status:" in low or "server ip:" in low:
             return True
         # Fallback: real content in serverfiles means the download completed.
+        #
+        # The sentinel is what makes this a THREE-state answer instead of two. run_command does not
+        # raise on a transport failure — it returns ("", "…timed out", -1) — and `2>/dev/null` means
+        # a missing serverfiles dir ALSO prints nothing. Without the marker both read as "" and the
+        # old `int("0") > 50` answered False, i.e. "clearly NOT installed", for a read that never
+        # happened. That verdict is acted on: the reconcile ticker in app.py sets
+        # installed=False / status="failed" on it (its own next line says "None (host unreachable):
+        # leave it" — exactly the case False was stealing), and the install retry in
+        # manage_servers.py wipes lgsm/tmp and re-runs a 30-minute auto-install, three times over.
+        #
+        # With the marker: no marker means the command did not complete -> None ("couldn't tell").
+        # Marker present and no number means serverfiles really is absent -> False.
         out2, _, _ = _sm.run_command(
             remote,
-            f"sudo -u {short_name} bash -c 'du -sm /home/{short_name}/serverfiles 2>/dev/null | cut -f1'",
+            f"sudo -u {short_name} bash -c 'du -sm /home/{short_name}/serverfiles 2>/dev/null "
+            f"| cut -f1; echo __DU_DONE__'",
             timeout=20, sudo=False)
+        if "__DU_DONE__" not in (out2 or ""):
+            return None
+        _mb = (out2 or "").replace("__DU_DONE__", "").strip()
         try:
-            return int((out2 or "0").strip() or "0") > 50
+            return int(_mb or "0") > 50
         except ValueError:
             return None
     except Exception:
