@@ -73,6 +73,34 @@ def _forget_deleted_remote_config(remote_id, game_server_ids):
         _log.debug("could not clear config state for deleted remote %s", remote_id, exc_info=True)
 
 
+def _forget_deleted_from_ui_prefs(remote_id, game_server_ids):
+    """Drop a deleted host/server from every user's saved layout.
+
+    ui_prefs stores host_order (a list of remote ids) and server_order ({remote_id: [server id]}),
+    and nothing cleared them — so after SQLite recycles the rowid a brand-new host or server
+    silently inherited the deleted one's saved position in every user's dashboard, for every user
+    who had ever reordered. _apply_user_order degrades gracefully, so the effect is ordering only;
+    it is the same class as the other three things cleared beside it here and it belongs with them.
+    """
+    from panel.db.models import User
+    gone = set(game_server_ids or ())
+    try:
+        for u in User.query.all():
+            prefs = u.get_ui_prefs() or {}
+            hosts = [h for h in (prefs.get("host_order") or []) if h != remote_id]
+            servers = {k: [s for s in v if s not in gone]
+                       for k, v in (prefs.get("server_order") or {}).items()
+                       if str(k) != str(remote_id)}
+            if hosts != (prefs.get("host_order") or []):
+                u.set_ui_pref("host_order", hosts)
+            if servers != (prefs.get("server_order") or {}):
+                u.set_ui_pref("server_order", servers)
+        db.session.commit()
+    except Exception:
+        db.session.rollback()
+        _log.debug("could not clear ui_prefs for deleted remote %s", remote_id, exc_info=True)
+
+
 def register(app):
     @app.route("/remotes")
     @login_required
@@ -269,6 +297,7 @@ def register(app):
         close_connection(remote)
         _forget_deleted_remote_config(row_id, _doomed_ids)
         _forget_deleted_remote_state(row_id, _doomed_ids)
+        _forget_deleted_from_ui_prefs(row_id, _doomed_ids)
         log_action(current_user, "delete_remote", target=name)
         _m = f"Remote '{name}' deleted."
         if _wants_json():

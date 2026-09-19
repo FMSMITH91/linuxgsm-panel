@@ -544,9 +544,12 @@ def _monitor_pass():
             # stale: the chat bots' /servers and /status, and _query_server_slots, which short-
             # circuits a server it believes offline to 0 players WITHOUT querying it — so a server
             # that came back up while nobody was looking reported "offline (0/24)" indefinitely.
-            st = "online" if up else "offline"
-            if gs.status != st:
-                gs.status = st
+            # _new_status, not `st`: `st` is the host's load-state dict twenty lines up, and
+            # rebinding it to a string here is harmless ONLY because that assignment re-runs at the
+            # top of each host iteration. Moving either block would make it a silent bug.
+            _new_status = "online" if up else "offline"
+            if gs.status != _new_status:
+                gs.status = _new_status
                 status_changed = True
     if status_changed:
         try:

@@ -4917,6 +4917,19 @@ try:
         _dr_samples_before = _dr_MS.query.filter_by(server_id=_dr_gid).count()
     check("delete host: the sample fixture armed", _dr_samples_before >= 1,
           "no MetricSample row — the check after the delete would pass vacuously")
+    # ...and a saved LAYOUT position for both. ui_prefs holds host_order (remote ids) and
+    # server_order ({remote_id: [server id]}), and nothing cleared them — so after the rowid is
+    # recycled a brand-new host or server inherited the deleted one's slot in every user's
+    # dashboard, for every user who had ever reordered.
+    with app.app_context():
+        _dr_u = User.query.filter_by(username="smoke_admin").first()
+        _dr_u.set_ui_pref("host_order", [_dr_rid, 99999])
+        _dr_u.set_ui_pref("server_order", {str(_dr_rid): [_dr_gid]})
+        db.session.commit()
+        _dr_prefs_before = _dr_u.get_ui_prefs()
+    check("delete host: the layout fixture armed",
+          _dr_rid in (_dr_prefs_before.get("host_order") or []),
+          "no saved order — the check after the delete would pass vacuously")
     _dr_fw._specs_cache[_dr_rid] = {"os": "deleted host"}
     _dr_hosts._pro_status_cache[_dr_rid] = (9e18, {"attached": True})
     _dr_core._gamedig_host_cache[_dr_rid] = (9e18, "203.0.113.9")
@@ -4949,6 +4962,16 @@ try:
           "still present: %s" % (list(_dr_after.get("game_schedules") or {}),))
     with app.app_context():
         _dr_samples_after = _dr_MS.query.filter_by(server_id=_dr_gid).count()
+    with app.app_context():
+        _dr_prefs_after = User.query.filter_by(username="smoke_admin").first().get_ui_prefs()
+    check("delete host: it is gone from every saved dashboard order",
+          _dr_rid not in (_dr_prefs_after.get("host_order") or [])
+          and str(_dr_rid) not in (_dr_prefs_after.get("server_order") or {}),
+          "still placed: %s / %s" % (_dr_prefs_after.get("host_order"),
+                                     list(_dr_prefs_after.get("server_order") or {})))
+    check("delete host: ...while another user's unrelated entries are left alone",
+          99999 in (_dr_prefs_after.get("host_order") or []),
+          "the sweep removed more than the deleted host: %s" % (_dr_prefs_after.get("host_order"),))
     check("delete host: its game servers' metric history goes with it",
           _dr_samples_after == 0,
           "%d sample(s) left — a recycled server id would serve the deleted one's history"

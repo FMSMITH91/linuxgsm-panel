@@ -309,7 +309,10 @@ def remote_ufw_status(server):
     if rc != 0 or "Status:" not in out:
         return {"installed": False, "enabled": False, "rules": [], "groups": [], "unreachable": True}
 
-    enabled = "Status: active" in out
+    # _ufw_is_active(), not a substring test — that helper exists in this file precisely so the
+    # literal "Status: active" is not re-tested by hand, and a rule COMMENT carrying that text
+    # would answer it. (It errs toward more protection, so this is consistency, not a live bug.)
+    enabled = _ufw_is_active(out)
     rules = []
     # `ufw status numbered` prints each rule as "[ N] <to>  <action>  <from>".
     # Collapse runs of spaces so the detail reads cleanly.

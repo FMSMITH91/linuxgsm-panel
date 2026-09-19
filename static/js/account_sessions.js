@@ -78,57 +78,69 @@
   if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', load);
   else load();
 
-  // Publish this superadmin's own layout as the panel default. Confirmed because it changes what
-  // every OTHER account sees on reset (and what new accounts start from).
-  window.publishDashLayout = function(btn){
-    confirmDialog({title:'Publish as the panel default', icon:'broadcast-pin',
-      confirmClass:'btn-primary', confirmLabel:'Publish default',
-      bodyText:'Make your current dashboard arrangement the default for this panel? New accounts '
-             + 'start from it, and anyone who resets their layout returns to it. Users who have '
-             + 'arranged their own layout keep theirs.',
-      onConfirm:function(){
-        fetch(mp() + '/api/settings/ui-default', {method:'POST'})
-          .then(function(r){ return r.json().then(function(d){ return {ok:r.ok, d:d}; }); })
-          .then(function(res){
-            if(!res.ok || !res.d || res.d.success === false) throw new Error((res.d && res.d.message) || '');
-            if(window.toast) toast('This is now the panel default.', 'success');
-          })
-          .catch(function(e){ if(window.toast) toast(e.message || 'Could not publish the default', 'danger'); });
-      }});
-  };
+})();
 
-  window.clearDashDefault = function(btn){
-    confirmDialog({title:'Remove the panel default', icon:'x-circle', confirmClass:'btn-warning',
-      confirmLabel:'Remove default',
-      bodyText:'Remove this panel’s default layout? Accounts without their own arrangement go '
-             + 'back to the built-in order. Nobody’s personal layout is affected.',
-      onConfirm:function(){
-        fetch(mp() + '/api/settings/ui-default/clear', {method:'POST'})
-          .then(function(r){ if(!r.ok) throw 0; return r.json(); })
-          .then(function(d){
-            if(!d || d.success === false) throw 0;
-            if(btn) btn.disabled = true;
-            if(window.toast) toast('Panel default removed.', 'success');
-          })
-          .catch(function(){ if(window.toast) toast('Could not remove the default', 'danger'); });
-      }});
-  };
+// ── Dashboard layout controls ─────────────────────────────────────────────────────────────────
+// Their OWN IIFE, not the sessions one above. That block starts with
+// `var box = document.getElementById('sessions-list'); if (!box) return;`, so defining these
+// inside it made three buttons depend on the sessions list existing on the same page. They happen
+// to share account.html today and #sessions-list is unconditional there, so nothing is broken —
+// but moving the layout card to a page without the sessions list, or gating that card, would
+// silently kill all three with no error anywhere.
+(function(){
+  function mp(){ return window.MOUNT || ''; }   // set by base.html, before this file loads
 
-  // Discard this user's saved dashboard order. Confirmed first: it is not recoverable, and on a
-  // busy install the order may have taken real effort to arrange.
-  window.resetDashLayout = function(btn){
-    confirmDialog({title:'Reset dashboard layout', icon:'arrow-counterclockwise',
-      confirmClass:'btn-warning', confirmLabel:'Reset layout',
-      bodyText:'Discard your saved panel order and go back to the default? Your other preferences are not affected.',
-      onConfirm:function(){
-        fetch(mp() + '/api/account/ui-order/reset', {method:'POST'})
-          .then(function(r){ if(!r.ok) throw 0; return r.json(); })
-          .then(function(d){
-            if(!d || d.success === false) throw 0;
-            if(btn) btn.disabled = true;
-            if(window.toast) toast('Your dashboard is back to the default order.', 'success');
-          })
-          .catch(function(){ if(window.toast) toast('Could not reset your layout', 'danger'); });
-      }});
-  };
+// Publish this superadmin's own layout as the panel default. Confirmed because it changes what
+// every OTHER account sees on reset (and what new accounts start from).
+window.publishDashLayout = function(btn){
+  confirmDialog({title:'Publish as the panel default', icon:'broadcast-pin',
+    confirmClass:'btn-primary', confirmLabel:'Publish default',
+    bodyText:'Make your current dashboard arrangement the default for this panel? New accounts '
+           + 'start from it, and anyone who resets their layout returns to it. Users who have '
+           + 'arranged their own layout keep theirs.',
+    onConfirm:function(){
+      fetch(mp() + '/api/settings/ui-default', {method:'POST'})
+        .then(function(r){ return r.json().then(function(d){ return {ok:r.ok, d:d}; }); })
+        .then(function(res){
+          if(!res.ok || !res.d || res.d.success === false) throw new Error((res.d && res.d.message) || '');
+          if(window.toast) toast('This is now the panel default.', 'success');
+        })
+        .catch(function(e){ if(window.toast) toast(e.message || 'Could not publish the default', 'danger'); });
+    }});
+};
+
+window.clearDashDefault = function(btn){
+  confirmDialog({title:'Remove the panel default', icon:'x-circle', confirmClass:'btn-warning',
+    confirmLabel:'Remove default',
+    bodyText:'Remove this panel’s default layout? Accounts without their own arrangement go '
+           + 'back to the built-in order. Nobody’s personal layout is affected.',
+    onConfirm:function(){
+      fetch(mp() + '/api/settings/ui-default/clear', {method:'POST'})
+        .then(function(r){ if(!r.ok) throw 0; return r.json(); })
+        .then(function(d){
+          if(!d || d.success === false) throw 0;
+          if(btn) btn.disabled = true;
+          if(window.toast) toast('Panel default removed.', 'success');
+        })
+        .catch(function(){ if(window.toast) toast('Could not remove the default', 'danger'); });
+    }});
+};
+
+// Discard this user's saved dashboard order. Confirmed first: it is not recoverable, and on a
+// busy install the order may have taken real effort to arrange.
+window.resetDashLayout = function(btn){
+  confirmDialog({title:'Reset dashboard layout', icon:'arrow-counterclockwise',
+    confirmClass:'btn-warning', confirmLabel:'Reset layout',
+    bodyText:'Discard your saved panel order and go back to the default? Your other preferences are not affected.',
+    onConfirm:function(){
+      fetch(mp() + '/api/account/ui-order/reset', {method:'POST'})
+        .then(function(r){ if(!r.ok) throw 0; return r.json(); })
+        .then(function(d){
+          if(!d || d.success === false) throw 0;
+          if(btn) btn.disabled = true;
+          if(window.toast) toast('Your dashboard is back to the default order.', 'success');
+        })
+        .catch(function(){ if(window.toast) toast('Could not reset your layout', 'danger'); });
+    }});
+};
 })();
