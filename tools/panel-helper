@@ -1182,6 +1182,8 @@ VERBS = {
     "game-file-read": ([v_managed_user, v_relpath], lambda a: [], None),
     "game-dir-tar": ([v_managed_user, v_relpath], lambda a: [], None),
     "lgsm-discover": ([], lambda a: [], None),
+    # Which game users have a pending cron restart -- see do_restart_flags.
+    "restart-flags": ([], lambda a: [], None),
     # One LinuxGSM action, run as the game user -- see do_lgsm_command for why this verb exists.
     "lgsm-command": ([v_managed_user, v_ident, v_choice(*LGSM_ACTIONS), v_answers,
                       v_choice("yes", "no")], lambda a: [], None),
@@ -2233,6 +2235,36 @@ def do_steamcmd_install(args, content):
     return r.returncode
 
 
+def do_restart_flags(args, content):
+    """Print the game users whose ~/.restart-pending flag exists, one per line.
+
+    The panel ran `ls -1d /home/*/.restart-pending`. Globbing /home is fine -- it is 0755 -- but
+    the final component is not a wildcard, so the shell STATS each candidate, and that needs
+    search permission on the game user's 0750 home. As the panel user every stat is EACCES, the
+    glob matches nothing, `|| true` swallows the rc, and the caller receives an empty set: a
+    confident "no restarts pending" produced by a read that never happened.
+
+    Walking as root is the one part that needed root. Nothing here is built from an argument --
+    the verb takes none.
+    """
+    try:
+        homes = sorted(os.listdir("/home"))
+    except OSError as exc:
+        sys.stderr.write("cannot list /home: %s\n" % exc)
+        return 1
+    for name in homes:
+        if not re.fullmatch(r"[A-Za-z0-9._-]{1,64}", name):
+            continue
+        try:
+            if os.path.exists(os.path.join("/home", name, ".restart-pending")):
+                print(name)
+        except OSError:
+            # One unreadable home must not lose the others. The caller distinguishes "none
+            # pending" from "could not look" by this verb's EXIT CODE, not by empty output.
+            continue
+    return 0
+
+
 def do_lgsm_command(args, content):
     """Run ONE LinuxGSM action as a game user, from that user's home directory.
 
@@ -2768,6 +2800,7 @@ ACTIONS = {
     "game-dir-tar": do_game_dir_tar,
     "lgsm-discover": do_lgsm_discover,
     "lgsm-command": do_lgsm_command,
+    "restart-flags": do_restart_flags,
     "steamcmd-install": do_steamcmd_install,
     "gameuser-group": do_gameuser_group,
     "sshd-set-directive": do_sshd_set_directive,

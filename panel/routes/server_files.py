@@ -677,7 +677,10 @@ def register(app, supervise):
         host_tz = _host_timezone_cached(remote, app)
         try:
             log_path = gs.console_log
-            out, err, rc = _sm.run_command(remote, f"tail -{want} {log_path} 2>/dev/null", timeout=15)
+            # AS THE GAME USER, not as root: the log sits inside a 0750 home. See
+            # _core.read_as_game_user for why this was a root read and what that cost.
+            out, err, rc = _sm.read_as_game_user(
+                remote, gs.short_name, f"tail -{want} {log_path} 2>/dev/null", timeout=15)
             lines = _console_rows(_clean_console_text(out).split("\n"), host_tz) if rc == 0 else []
         except Exception:
             lines = []
@@ -853,8 +856,9 @@ def register(app, supervise):
                                 # the operator to watch it for.
                                 _drain_action_output(app, remote, server_id)
                                 log_path = gs.console_log
-                                size_out, _, _ = _sm.run_command(
-                                    remote, f"stat -c%s {log_path} 2>/dev/null || echo 0", timeout=5
+                                size_out, _, _ = _sm.read_as_game_user(
+                                    remote, gs.short_name,
+                                    f"stat -c%s {log_path} 2>/dev/null || echo 0", timeout=5
                                 )
                                 try:
                                     current_size = int(size_out.strip())
@@ -879,8 +883,8 @@ def register(app, supervise):
                                     # strips what it returns, which would eat the chunk's own
                                     # trailing newline and make a COMPLETE last line look partial
                                     # to the split below.
-                                    out, _, _ = _sm.run_command(
-                                        remote,
+                                    out, _, _ = _sm.read_as_game_user(
+                                        remote, gs.short_name,
                                         f"{{ tail -c +{last_pos + 1} {log_path} 2>/dev/null "
                                         f"| head -c {diff}; printf E; }}",
                                         timeout=5,

@@ -81,7 +81,8 @@ Converted so far: **`ufw`, `fail2ban-client`, `systemctl`, `apt`/`dpkg`, the log
 Ubuntu Pro, the host controls, the GMod shared-content box, the fail2ban activity report, the
 detached OS update, Tailscale's join, the panel's own restore/self-update, the VPS hardening
 steps, running a LinuxGSM action as the game user, enrolling a game account in the group the
-grant names and installing a game's dependencies** — 99 verbs. (`tests/unit_test.py` asserts
+grant names, installing a game's dependencies and reading the pending-restart flags** —
+100 verbs. (`tests/unit_test.py` asserts
 this number against `privileged.verbs()`, so it cannot drift from the table again.)
 
 **A correction to the numbers previously reported here.** Earlier revisions of this section
@@ -123,6 +124,32 @@ host: `sudo -n bash -c 'crontab -u gmodserver -l'` answered "sudo: a password is
 the new form read the crontab, added a line and removed it again, leaving the real entries intact.
 The pipeline SHAPE remains, because `crontab -l | filter > tmp; crontab tmp` genuinely is a
 pipeline. Read the table above as "no `_sudo_sh` **function**", not as "no hand-built escalation".
+
+**And the largest group was not a hand-built escalation at all — it was a DEFAULT.**
+`run_command(server, cmd)` takes `sudo=None`, which resolved to `server.sudo_enabled`; the panel's
+own host row is created with that True. So every caller that did not pass `sudo=` sent its command
+to the panel's own machine as `sudo bash -c '<cmd>'` — about twenty of which need no privilege
+whatsoever: the dashboard's port scan, disk and load, uptime, `/etc/os-release`, `id`,
+`tailscale status`. Measured on a test host, as the panel user, with the panel's own code:
+
+```
+run_command(local, "echo ok")      ->  rc=1  sudo: a password is required
+run_command(local, "ss -H -lntu")  ->  rc=1  sudo: a password is required
+```
+
+Under the narrow grant that is the dashboard, the host cards and the console failing; under the
+wide grant it was `/proc` being read as root for no reason. Locally, an escalation must now be
+asked for explicitly — the privileged path is `run_privileged()` and the helper, which is the whole
+point of the verb table. `sudo_enabled` still means what it says for a remote host, which is the
+only place it was ever a useful default.
+
+Two reads genuinely needed more than the panel user, and were converted FIRST, because flipping
+the default without them would have broken the console on every host with the wide grant, where it
+works today: the console log reads now run **as the game account** (its home is 0750, so this is
+less privilege than before, not more), and the cron restart flags became the `restart-flags` verb.
+That one had never worked unprivileged anyway — `ls -1d /home/*/.restart-pending` stats a literal
+final component, so every candidate was EACCES, the glob matched nothing, `|| true` discarded the
+rc, and the caller received a confident empty set. It returns `None` for "could not look" now.
 
 **A third hand-built escalation, and the one that actually broke the hardened install.**
 `run_as_game_user` rendered `sudo -u <user> bash -c '<inner>'` and passed `sudo=False` — the same

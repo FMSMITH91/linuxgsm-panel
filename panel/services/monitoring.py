@@ -32,6 +32,7 @@ from panel.ops.ssh_manager import (
     _remote_listening_ports, game_map, host_live_metrics, lgsm_get_values, metrics_for_game,
     remote_fail2ban_top_ips, remote_reboot,
     remote_ufw_blocked_ips, remote_ufw_deny_ip, remote_ufw_undeny_ip, run_command,
+    run_privileged,
     server_live_metrics, tailnet_exempt_ips,
     console_status as sm_console_status,
     game_engine as sm_game_engine,
@@ -395,13 +396,34 @@ _MONITOR_HOST_WORKERS = 8
 
 
 def _host_restart_flags(remote):
-    """The set of game users on `remote` whose ~/.restart-pending flag exists. One cheap ls."""
+    """Game users on `remote` with a pending ~/.restart-pending flag, or None if we could not look.
+
+    None matters. This was `ls -1d /home/*/.restart-pending … || true` sent with no `sudo=`, so on
+    the panel's own host it went out as `sudo bash -c`, and the narrow grant refuses that. Even
+    unprivileged it could not work: the final path component is literal, so the shell STATS each
+    candidate, which needs search permission on a 0750 home. Every stat was EACCES, the glob
+    matched nothing, `|| true` threw the rc away, and the caller got an empty set — a confident
+    "nothing pending" from a read that never happened.
+
+    A verb now, and it reports failure: rc != 0 is None, not set(). See
+    tools/panel-helper:do_restart_flags."""
     try:
-        out, _, _ = run_command(
-            remote, "ls -1d /home/*/.restart-pending 2>/dev/null || true", timeout=10)
-        return {ln.split("/")[2] for ln in (out or "").splitlines() if ln.startswith("/home/")}
+        out, _, rc = run_privileged(remote, "restart-flags", [], timeout=10, merge_stderr=False)
     except Exception:
-        return set()
+        _log.debug("restart flags: probe failed", exc_info=True)
+        return None
+    if rc != 0:
+        return None
+    names = set()
+    for ln in (out or "").splitlines():
+        ln = ln.strip()
+        if ln.startswith("/home/"):          # the remote rendering prints whole paths
+            parts = ln.split("/")
+            if len(parts) > 2:
+                names.add(parts[2])
+        elif ln:                             # the helper prints bare user names
+            names.add(ln)
+    return names
 
 
 def _probe_host(remote):
@@ -515,7 +537,12 @@ def _monitor_pass():
                 continue
             up = gs.port in ports
             # Display-only: does the BOX think a restart is queued for this server?
-            _cron_restart_pending[gs.id] = gs.short_name in (probe.get("restart_flagged") or set())
+            # None means "could not look", and that must not be written as "no restart pending"
+            # — the badge would simply go out, which is indistinguishable from the cron having
+            # run. Leaving the previous value keeps the last thing actually measured.
+            _rf = probe.get("restart_flagged")
+            if _rf is not None:
+                _cron_restart_pending[gs.id] = gs.short_name in _rf
             prev_up = _monitor_state["servers"].get(gs.id)
             # State is tracked either way — only the ALERT is muted by a tag, so a server that goes
             # down while muted still reports "back online" correctly once it is unmuted.
