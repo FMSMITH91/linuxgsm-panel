@@ -243,6 +243,18 @@ def register(app):
             # Same shape of orphan, pre-existing: per-server group grants are keyed the same way.
             _ggs = db.Table("group_game_servers", db.metadata, autoload_with=db.engine)
             db.session.execute(_ggs.delete().where(_ggs.c.game_server_id.in_(_doomed_ids)))
+            # ...and their metric history, for the same reason and here rather than in models.py.
+            # _prune_host_game_samples listens on RemoteServer's after_delete and finds the rows to
+            # delete with `server_id IN (SELECT id FROM game_server WHERE remote_id = ...)` — but
+            # the bulk delete above has already removed those game_server rows, so by the time it
+            # fires the subquery matches nothing and it deletes nothing. The listener was written
+            # BECAUSE the bulk delete bypasses the per-server one; it just could not see past it.
+            # Reproduced in a throwaway SQLite DB: the samples survive, both rowids are recycled,
+            # and the next server created serves the deleted one's CPU/RAM/player history on
+            # /api/server/<id>/history for the whole 14-day prune window.
+            from panel.db.models import MetricSample
+            db.session.execute(MetricSample.__table__.delete()
+                               .where(MetricSample.server_id.in_(_doomed_ids)))
         # Delete group associations
         group_servers_table = db.Table(
             "group_servers", db.metadata, autoload_with=db.engine

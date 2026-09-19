@@ -1061,6 +1061,39 @@ gp = {x["port_num"]: x for x in g}
 check("LIMIT SSH rule recognised as SSH", gp["22"]["is_ssh"])
 check("LIMIT SSH rule protected as the only way in", gp["22"]["protected"])
 
+# `ufw allow OpenSSH` — ufw's APP PROFILE, the form Ubuntu's own docs and `ufw app list` steer
+# people to. It prints the profile NAME in the To column, so port_num is "OpenSSH" and the
+# pn.isdecimal() test was False: is_ssh and is_access were both False, which means protected AND
+# warn were both False, and remote_ufw_delete_rule (which gates only on protected) deleted the
+# host's only way in without a word.
+g = protect(NS(port=22), ["OpenSSH ALLOW IN Anywhere", "5000/tcp ALLOW IN Anywhere"])
+gp = {x["port_num"]: x for x in g}
+check("ufw app profile 'OpenSSH' is recognised as SSH", gp["OpenSSH"]["is_ssh"])
+check("...and protected as the only way in", gp["OpenSSH"]["protected"])
+check("...while a non-SSH profile-less port beside it is not", not gp["5000"]["is_ssh"])
+
+# `ufw allow in on eth0 to any port 22` — interface-scoped SSH. It prints "22 on eth0", so
+# is_iface was True and the blanket `not is_iface` threw it away. An inbound rule on ANY interface
+# to an SSH port is still a way in.
+g = protect(NS(port=22), ["22 on eth0 ALLOW IN Anywhere"])
+gp = {x["port_num"]: x for x in g}
+check("interface-scoped SSH is recognised as SSH", gp["22"]["is_ssh"])
+check("...and protected as the only way in", gp["22"]["protected"])
+
+# The panel's own web port opened with `ufw limit` — is_ssh learned that LIMIT is a way in and
+# is_panel did not, so the only route to the panel UI stayed deletable. And is_panel never checked
+# direction, so an ALLOW OUT rule on that port was treated AS the panel rule and made undeletable.
+g = protect(NS(port=22), ["22/tcp ALLOW IN Anywhere", "5000/tcp LIMIT IN Anywhere"],
+            is_local=True, cfg={"port": 5000})
+gp = {x["port_num"]: x for x in g}
+check("a rate-limited panel web port is still the panel rule", gp["5000"]["is_panel"])
+check("...and is protected", gp["5000"]["protected"])
+g = protect(NS(port=22), ["22/tcp ALLOW IN Anywhere", "5000/tcp ALLOW OUT Anywhere"],
+            is_local=True, cfg={"port": 5000})
+gp = {x["port_num"]: x for x in g}
+check("an OUTbound rule on the panel port is not the panel rule", not gp["5000"]["is_panel"])
+check("...and is therefore deletable", not gp["5000"]["protected"])
+
 # Custom SSH port + a tailscale0 rule, WITH Tailscale actually running -> two real ways in
 # -> the SSH rule can be removed (warn); custom port recognised as SSH.
 g = protect(NS(port=2222), ["2222/tcp ALLOW IN Anywhere",

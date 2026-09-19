@@ -4776,6 +4776,51 @@ try:
         _mp_mon._player_counts.pop(91919, None)
         _mp_ps._max_players_cache.pop(91919, None)
 
+    # ── Deleting a user kills the invites they minted ──────────────────────────────────────────
+    # authority_intact() resolves the creator with db.session.get(User, created_by_id) and fails
+    # closed when it is gone — "a missing creator fails closed: the row is deleted or the id
+    # dangles". But user.id is a bare INTEGER PRIMARY KEY, so SQLite hands the freed rowid to the
+    # very next account created: the creator is then not missing, it is a DIFFERENT PERSON, and
+    # the check says yes. Offboard an admin, create their replacement, and the dead invite is live
+    # again — for a superadmin invite as soon as that replacement is promoted, which is exactly
+    # what happens in that scenario. manage_users lists it as "Active" throughout.
+    from panel.db.models import Invite as _InvS
+    with app.app_context():
+        _ivu = User(username="smoke_inviter", password_hash=auth.hash_password("Str0ng!passw0rd"),
+                    is_superadmin=True, is_active=True)
+        db.session.add(_ivu)
+        db.session.commit()
+        _ivu_id = _ivu.id
+        _inv_row, _ = _InvS.mint(_ivu, hours=48, superadmin=True)
+        db.session.add(_inv_row)
+        db.session.commit()
+        _inv_id = _inv_row.id
+        check("invite: it is usable while its creator exists",
+              _inv_row.is_usable and _inv_row.authority_intact(db.session.get(User, _ivu_id)),
+              "the next check would prove nothing otherwise")
+        db.session.delete(db.session.get(User, _ivu_id))
+        db.session.commit()
+        _inv_after = db.session.get(_InvS, _inv_id)
+        check("invite: deleting its creator revokes it", _inv_after.revoked_at is not None,
+              "revoked_at=%r" % _inv_after.revoked_at)
+        check("invite: ...so it is not usable", not _inv_after.is_usable)
+        # And prove the resurrection route really is open: take the recycled id deliberately.
+        _heir = User(id=_ivu_id, username="smoke_replacement",
+                     password_hash=auth.hash_password("Str0ng!passw0rd"),
+                     is_superadmin=True, is_active=True)
+        db.session.add(_heir)
+        db.session.commit()
+        check("invite: the replacement account really does take the freed id",
+              _heir.id == _ivu_id, "id=%d want=%d" % (_heir.id, _ivu_id))
+        check("invite: ...and authority_intact now says YES about a different person",
+              _inv_after.authority_intact(db.session.get(User, _ivu_id)) is True,
+              "if this ever says False the revocation above is no longer what closes the hole")
+        check("invite: ...but the stamped revocation still holds", not _inv_after.is_usable,
+              "a rowid cannot undo revoked_at")
+        db.session.delete(db.session.get(_InvS, _inv_id))
+        db.session.delete(db.session.get(User, _ivu_id))
+        db.session.commit()
+
     # ── Deleting a host forgets everything keyed on its id ─────────────────────────────────────
     # SQLite hands a deleted row's id straight to the next INSERT, and delete_remote is the one
     # route that removes a host — taking its game servers with it, without uninstall_server ever
@@ -4805,6 +4850,20 @@ try:
     _dr_upd(lambda c: c.__setitem__("autoblock_hosts",
                                     sorted(set(c.get("autoblock_hosts") or []) | {_dr_rid})))
     _dr_bk.set_game_schedule(_dr_gid, 3, 2)
+    # ...and a metric sample for that game server. _prune_host_game_samples listens on
+    # RemoteServer's after_delete and deletes by `server_id IN (SELECT id FROM game_server WHERE
+    # remote_id = ...)` — but delete_remote BULK-deletes the game servers first, so by the time it
+    # fires the subquery matches nothing. Both rowids are then recycled and the next server created
+    # serves the deleted one's history on /api/server/<id>/history for the 14-day prune window.
+    from panel.db.models import MetricSample as _dr_MS
+    from panel.core.clock import utcnow as _utcnow_mon
+    with app.app_context():
+        db.session.add(_dr_MS(server_id=_dr_gid, ts=_utcnow_mon(),
+                              cpu=99.0, ram_mb=512, players=7))
+        db.session.commit()
+        _dr_samples_before = _dr_MS.query.filter_by(server_id=_dr_gid).count()
+    check("delete host: the sample fixture armed", _dr_samples_before >= 1,
+          "no MetricSample row — the check after the delete would pass vacuously")
     _dr_fw._specs_cache[_dr_rid] = {"os": "deleted host"}
     _dr_hosts._pro_status_cache[_dr_rid] = (9e18, {"attached": True})
     _dr_core._gamedig_host_cache[_dr_rid] = (9e18, "203.0.113.9")
@@ -4835,6 +4894,12 @@ try:
     check("delete host: its game server's backup schedule is gone from config too",
           str(_dr_gid) not in (_dr_after.get("game_schedules") or {}),
           "still present: %s" % (list(_dr_after.get("game_schedules") or {}),))
+    with app.app_context():
+        _dr_samples_after = _dr_MS.query.filter_by(server_id=_dr_gid).count()
+    check("delete host: its game servers' metric history goes with it",
+          _dr_samples_after == 0,
+          "%d sample(s) left — a recycled server id would serve the deleted one's history"
+          % _dr_samples_after)
     # Named individually, NOT walked off _core._remote_caches: iterating the registry makes this
     # pass vacuously the moment a cache stops being registered — which is the exact regression it
     # is here to catch. (Verified: it passed against an unregistered build before this changed.)

@@ -1358,6 +1358,25 @@ def _register_sample_pruning():
     event.listen(GameServer, "after_delete", _prune(MetricSample, MetricSample.server_id))
     event.listen(RemoteServer, "after_delete", _prune(HostSample, HostSample.remote_id))
 
+    # An invite must die with the account that minted it. authority_intact() resolves the creator
+    # with db.session.get(User, created_by_id) and fails closed when it is gone — but user.id is a
+    # bare INTEGER PRIMARY KEY, so SQLite hands the freed rowid to the very NEXT account created.
+    # The creator is then not missing; it is a different person, and the check says yes. Offboard
+    # an admin and create their replacement and the dead invite is live again, for an ordinary
+    # account as soon as the new one is active — and for a SUPERADMIN invite as soon as the
+    # replacement is promoted, which is exactly what happens in that scenario. manage_users lists
+    # the resurrected invite as "Active". revoked_at already exists and is_usable already honours
+    # it, so stamping it is enough and no rowid can undo it.
+    @event.listens_for(User, "after_delete")
+    def _revoke_invites_of_deleted_user(_mapper, connection, target):
+        try:
+            connection.execute(Invite.__table__.update()
+                               .where(Invite.created_by_id == target.id)
+                               .where(Invite.revoked_at.is_(None))
+                               .values(revoked_at=utcnow()))
+        except Exception:
+            _log.debug("revoking a deleted user's invites failed", exc_info=True)
+
     # A host's game servers go with it, and remotes.py deletes them in BULK — which bypasses the
     # ORM, so the per-server listener above never fires for them. Clear their samples by
     # subquery on the host id instead of relying on that cascade.
