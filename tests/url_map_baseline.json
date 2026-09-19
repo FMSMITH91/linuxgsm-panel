@@ -787,8 +787,8 @@
   "/api/remote/<int:remote_id>/game-port/<int:port>/open": {
     "endpoint": "api_remote_game_port_open",
     "guards": [
-      "utils.py:decorated_view(install_server,manage_remotes)",
-      "auth.py:decorated_function(install_server,manage_remotes)",
+      "utils.py:decorated_view(manage_remotes)",
+      "auth.py:decorated_function(manage_remotes)",
       "view:api_remote_game_port_open"
     ],
     "methods": [
