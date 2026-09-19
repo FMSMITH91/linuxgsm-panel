@@ -531,6 +531,19 @@ def get_connection(server, force_new=False):
     # authenticated by WireGuard, so there the tailnet is the trust anchor, not the SSH
     # host key — capture it but don't reject a change (tailscaled may rotate it).
     enforce_pin = server.auth_method not in ("tailscale", "local")
+    # A pin that EXISTS but cannot be decrypted is not "no pin". EncryptedString answers "" for
+    # both, and _PinPolicy reads "" as first contact: it accepts whatever key is presented and
+    # _persist_host_key then overwrites the stored pin with it. So a rotated or restored cred_key
+    # silently turned the one control that detects a man-in-the-middle into a control that trusts
+    # one and remembers it. Refuse instead, and say which of the two it is.
+    from panel.db.models import UnreadableSecret
+    if enforce_pin and isinstance(server.host_key, UnreadableSecret):
+        raise HostKeyMismatch(
+            'The stored SSH host key for %s cannot be decrypted on this host, so it cannot be '
+            'checked against the key this server is presenting. That usually means data/cred_key '
+            'was replaced or restored from elsewhere. Refusing to connect rather than trusting an '
+            'unverified key — click "Re-trust host key" on the server page if you are certain this '
+            'is the right server.' % getattr(server, "name", "this server"))
     policy = _PinPolicy(expected=(server.host_key or ""), reject_on_change=enforce_pin)
     client.set_missing_host_key_policy(policy)
 

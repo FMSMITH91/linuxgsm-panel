@@ -3214,3 +3214,66 @@ check("install probe: ...and nothing is deleted unless the account actually exis
 # make every fresh install look like an existing account and skip creating it.
 check("install probe: the EXISTS test is not fooled by NOTEXISTS",
       '"NOTEXISTS" not in idout and "EXISTS" in idout' in _ms_src2)
+# ── "could not decrypt it" must never read as "nothing is set" ─────────────────────────────────
+# decrypt_secret answers "" for BOTH, and two callers acted on the difference: an undecryptable
+# SSH host-key pin read as "never pinned" and was re-pinned to whatever key was presented, and an
+# undecryptable backup passphrase read as "backups are unencrypted" and wrote the archive — which
+# carries panel.db, config.json, secret_key AND cred_key — in the clear, daily, unattended.
+from cryptography.fernet import Fernet as _Fer                                     # noqa: E402
+from panel.core import config as _cfg                                              # noqa: E402
+from panel.db.models import EncryptedString as _ES, UnreadableSecret as _US        # noqa: E402
+from panel.db.models import RemoteServer as _RS                                    # noqa: E402
+from panel.ops import backup as _bk                                                # noqa: E402
+
+_foreign = _cfg._ENC_PREFIX + _Fer(_Fer.generate_key()).encrypt(b"hunter2").decode()
+check("secrets: a token this host cannot decrypt IS structurally encrypted",
+      _cfg.is_encrypted(_foreign) and _cfg.decrypt_secret(_foreign) == "")
+_rv = _ES().process_result_value(_foreign, None)
+check("secrets: ...and the column hands back the UNREADABLE sentinel, not a bare ''",
+      isinstance(_rv, _US), repr(_rv))
+check("secrets: the sentinel is still empty, so no existing caller changes behaviour",
+      _rv == "" and not _rv and isinstance(_rv, str) and len(_rv) == 0)
+check("secrets: an EMPTY column is still plain '' (nothing stored is not an error)",
+      not isinstance(_ES().process_result_value("", None), _US))
+check("secrets: a legacy PLAINTEXT value still passes through untouched",
+      _ES().process_result_value("plain-value", None) == "plain-value"
+      and not isinstance(_ES().process_result_value("plain-value", None), _US))
+
+# backup: refuse, do not write a plaintext archive of every secret the panel holds
+_o_lc = _bk.load_config
+try:
+    _bk.load_config = lambda: {"backup_passphrase": _foreign}
+    _raised = None
+    try:
+        _bk.get_passphrase()
+    except _bk.PassphraseUnreadable as _e:
+        _raised = _e
+    check("backup: a configured-but-unreadable passphrase RAISES", _raised is not None)
+    _bok, _bmsg = _bk.create_backup(kind="unittest")
+    check("backup: ...and create_backup refuses instead of writing it in the clear",
+          _bok is False and "refused" in (_bmsg or "").lower(), "%r %r" % (_bok, _bmsg))
+    _bk.load_config = lambda: {}
+    check("backup: an UNCONFIGURED passphrase is still plainly '' (unencrypted on purpose)",
+          _bk.get_passphrase() == "")
+finally:
+    _bk.load_config = _o_lc
+
+# host-key pin: an unreadable pin is not first contact
+_pin_row = _RS(name="box", auth_method="key")
+_pin_row.__dict__["host_key"] = _US()
+check("host key: the fingerprint says UNREADABLE rather than 'none pinned'",
+      "unreadable" in _pin_row.host_key_fingerprint, repr(_pin_row.host_key_fingerprint))
+_pin_row.__dict__["host_key"] = ""
+check("host key: ...and a genuinely unpinned host still reads as ''",
+      _pin_row.host_key_fingerprint == "")
+# The escape hatch must still work, or refusing would be an unrecoverable lockout.
+check("host key: clearing the pin is still possible (the re-trust route writes \"\")",
+      'remote.host_key = ""' in open(os.path.join(_root, "panel", "routes", "remote_vps.py"),
+                                     encoding="utf-8").read())
+_core_src2 = open(os.path.join(_root, "panel", "ops", "ssh_manager", "_core.py"),
+                  encoding="utf-8").read()
+check("host key: get_connection refuses an unreadable pin before building the policy",
+      _core_src2.find("isinstance(server.host_key, UnreadableSecret)")
+      < _core_src2.find("policy = _PinPolicy(") != -1)
+check("host key: ...and only where the pin is actually enforced (not tailscale/local)",
+      "if enforce_pin and isinstance(server.host_key, UnreadableSecret):" in _core_src2)

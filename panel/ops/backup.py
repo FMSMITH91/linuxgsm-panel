@@ -147,6 +147,14 @@ def _decrypt_archive(src_path, dest_path, passphrase):
     return True, ""
 
 
+class PassphraseUnreadable(Exception):
+    """A backup passphrase IS configured, but this host cannot decrypt it.
+
+    Its own exception because the only safe response is to REFUSE: writing the archive would
+    produce a plaintext copy of every secret the panel holds, named as though it were encrypted.
+    """
+
+
 def get_passphrase():
     """The configured backup passphrase, or "" when backups are unencrypted.
 
@@ -155,10 +163,24 @@ def get_passphrase():
     carry its own passphrase in the clear. It cannot be decrypted without cred_key, which lives
     only on the panel host."""
     try:
-        return decrypt_secret(load_config().get("backup_passphrase") or "") or ""
+        stored = load_config().get("backup_passphrase") or ""
     except Exception:
-        _log.debug("could not read backup passphrase", exc_info=True)
-        return ""
+        _log.debug("could not read the panel config", exc_info=True)
+        raise PassphraseUnreadable("the panel config could not be read")
+    if not stored:
+        return ""                     # genuinely not configured: unencrypted backups are the ask
+    value = decrypt_secret(stored)
+    if not value:
+        # Configured, and this host cannot decrypt it — a rotated, restored or replaced cred_key.
+        # decrypt_secret answers "" for that, the same answer it gives for "nothing configured",
+        # and create_backup read that as "backups are unencrypted": it wrote the archive in the
+        # CLEAR, without the .enc suffix that would have shown it, on the daily schedule, with
+        # nobody watching. The archive carries panel.db, config.json, secret_key AND cred_key —
+        # so the failure hands over the whole key set. Proven by execution with a real Fernet
+        # token encrypted under a different key: is_encrypted -> True, decrypt_secret -> "".
+        raise PassphraseUnreadable(
+            "a backup passphrase is configured but cannot be decrypted on this host")
+    return value
 
 
 MIN_PASSPHRASE_LEN = 12
@@ -255,7 +277,16 @@ def create_backup(kind="manual", encrypt=True):
     which is 0700, and the file itself is 0600."""
     kind = re.sub(r"[^a-z]", "", (kind or "manual").lower()) or "manual"
     _ensure_dir()
-    passphrase = get_passphrase() if encrypt else ""
+    try:
+        passphrase = get_passphrase() if encrypt else ""
+    except PassphraseUnreadable as exc:
+        # Refuse. The alternative is a plaintext archive of panel.db, config.json, secret_key and
+        # cred_key that looks like a successful encrypted backup.
+        _log.error("backup refused: %s", exc)
+        return False, ("Backup refused: a passphrase is configured but could not be decrypted on "
+                       "this host, and writing the archive would leave it unencrypted. Check "
+                       "data/cred_key, or clear the backup passphrase to take plain backups "
+                       "deliberately.")
     name = "panel-backup-%s-%s.tar.gz" % (time.strftime("%Y%m%d-%H%M%S"), kind)
     if passphrase:
         name += ENC_SUFFIX
@@ -391,7 +422,16 @@ def restore_backup(name, passphrase=None, skip_safety_backup=False):
     if is_encrypted_backup(src.name):
         _dec_tmp = tempfile.mkdtemp(prefix="lgsm-bk-dec-")
         plain = os.path.join(_dec_tmp, "archive.tar.gz")
-        ok, msg = _decrypt_archive(str(src), plain, passphrase if passphrase else get_passphrase())
+        try:
+            # An operator-supplied passphrase wins; only fall back to the stored one. If THAT is
+            # unreadable, say so plainly — the alternative is an "incorrect passphrase" error that
+            # sends someone hunting for a typo when the real problem is cred_key.
+            _pp = passphrase if passphrase else get_passphrase()
+        except PassphraseUnreadable as exc:
+            shutil.rmtree(_dec_tmp, ignore_errors=True)
+            return False, ("Cannot decrypt this backup: %s. Enter the passphrase explicitly, or "
+                           "restore data/cred_key first." % exc)
+        ok, msg = _decrypt_archive(str(src), plain, _pp)
         if not ok:
             shutil.rmtree(_dec_tmp, ignore_errors=True)
             return False, msg
