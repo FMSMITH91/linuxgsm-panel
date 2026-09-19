@@ -1747,3 +1747,61 @@ finally:
     (_sm_core.run_privileged, _sm_core.write_root_file, _sm_core._restart_sshd,
      _sm_core.is_local_server, _sm_hosts.remote_ufw_open_port,
      _sm_hosts.remote_ufw_close_port, _so.host_has_ip) = _lb_orig
+
+
+# ── a tailnet address must not be firewall-blocked because the probe failed ─────────────────────
+# tailnet_exempt_ips decides which candidate IPs _autoblock_reconcile must NOT deny. A missing
+# exemption is not "do nothing": the address gets a UFW deny inserted at POSITION 1, which the note
+# above _TAILNET_CGNAT says "would cut off tailnet access ... it would override the tailscale0 allow
+# rule". So a probe that did not run has to fall the protective way — the opposite of fail-safe
+# everywhere else in that file, where False means "assume no way in exists".
+#
+# It used to call _tailscale_conn_state()[0], which collapses "Tailscale is not running" and "the
+# probe did not run" into the same False, and whose command (`… || echo '{}'`) always exits 0 so the
+# rc could not tell them apart. Note _autoblock_reconcile already guards its OTHER input this way
+# ("A failed read answers None. Releasing on it would unblock every IP…") — this input did not.
+_tn_orig = _sm_core.run_command
+try:
+    _tn = {"resp": ("", "", 0)}
+    _sm_core.run_command = lambda s, c, **k: _tn["resp"]
+    _CAND = {"100.101.102.103", "100.64.0.9"}
+    _MIXED = _CAND | {"203.0.113.5", "10.0.0.7"}
+
+    # Tailscale up: every CGNAT address is exempt, public ones are not.
+    _tn["resp"] = ('{"BackendState": "Running"}', "", 0)
+    eq("tailnet exempt: with Tailscale up, only the CGNAT addresses are exempt",
+       _sm_hosts.tailnet_exempt_ips(NS(), _MIXED), _CAND)
+
+    # Tailscale genuinely stopped, or not installed: the host ANSWERED, so blocking is allowed.
+    for _desc, _r in (("a stopped backend", ('{"BackendState": "Stopped"}', "", 1)),
+                      ("tailscale not installed", ("", "command not found", 127))):
+        _tn["resp"] = _r
+        eq("tailnet exempt: %s exempts nothing — the host answered" % _desc,
+           _sm_hosts.tailnet_exempt_ips(NS(), _MIXED), set())
+
+    # THE BUG: the probe did not run. rc -1 is the panel's sentinel for that.
+    for _desc, _r in (("a timed-out probe", ("", "Command timed out", -1)),
+                      ("a transport error", ("", "command execution error", -1))):
+        _tn["resp"] = _r
+        eq("tailnet exempt: %s protects the tailnet addresses" % _desc,
+           _sm_hosts.tailnet_exempt_ips(NS(), _MIXED), _CAND)
+
+    # An answer we cannot parse is also not a confirmation.
+    _tn["resp"] = ("<html>proxy error</html>", "", 0)
+    eq("tailnet exempt: an unparseable answer protects them too",
+       _sm_hosts.tailnet_exempt_ips(NS(), _MIXED), _CAND)
+
+    # ...and the probe is skipped entirely when nothing is in range (it is not free).
+    _tn_calls = []
+    _sm_core.run_command = lambda s, c, **k: (_tn_calls.append(c), ("", "", 0))[1]
+    eq("tailnet exempt: no CGNAT candidates → no probe at all",
+       _sm_hosts.tailnet_exempt_ips(NS(), {"203.0.113.5"}), set())
+    check("tailnet exempt: ...and it really did not run the probe", _tn_calls == [], repr(_tn_calls))
+
+    def _tn_boom(*a, **k):
+        raise OSError("ssh down")
+    _sm_core.run_command = _tn_boom
+    eq("tailnet exempt: an exception protects them as well",
+       _sm_hosts.tailnet_exempt_ips(NS(), _MIXED), _CAND)
+finally:
+    _sm_core.run_command = _tn_orig
