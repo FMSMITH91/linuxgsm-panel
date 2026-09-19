@@ -1521,6 +1521,57 @@ def _tcp_reachable(host, port, timeout=8):
         return False
 
 
+def _restart_ssh_listener(server, socket_mode):
+    """Restart whichever unit owns the listening socket.
+
+    Socket-activated: restart ssh.socket — restarting ssh.service alone re-execs the daemon behind
+    a socket systemd is still holding on the OLD port, so the change appears to do nothing. Also
+    restart the service, so a connection already being served does not outlive the config."""
+    if socket_mode:
+        out, err, rc = _core.run_privileged(server, "service-restart", ["ssh.socket"], timeout=20)
+        _core._restart_sshd(server, timeout=20)
+        return out, err, rc
+    return _core._restart_sshd(server, timeout=20)
+
+
+def _sshd_socket_activated(server):
+    """Whether this host's sshd is SOCKET-ACTIVATED (Ubuntu 22.10+ default).
+
+    When it is, ssh.socket holds the listening socket and sshd inherits it, so `Port` and
+    `ListenAddress` in sshd_config are parsed, pass `sshd -t`, and are then IGNORED. Writing the
+    port to an sshd_config drop-in on such a host changes nothing: the panel opened the firewall,
+    wrote the file, restarted sshd, found the port not listening and reverted — correct and safe,
+    and the feature simply never worked on the current Ubuntu LTS. Measured on 24.04.5.
+
+    `systemctl is-active ssh.socket` prints "active" and exits 0 only when the socket unit is the
+    thing listening. Anything else — inactive, not-found, no systemd, a failed read — answers False
+    and the caller takes the sshd_config path, which is what every pre-24.04 host needs."""
+    try:
+        out, _err, rc = _core.run_privileged(server, "sshd-socket-active", [], timeout=10,
+                                             merge_stderr=False)
+    except Exception:
+        _core._log.debug("sshd socket-activation check failed", exc_info=True)
+        return False
+    return rc == 0 and (out or "").strip() == "active"
+
+
+def _socket_listen_lines(ports, bind_addr):
+    """The ssh.socket drop-in body for `ports`.
+
+    The bare `ListenStream=` first is load-bearing: systemd APPENDS to a unit's list, so without it
+    the unit's own ListenStream=0.0.0.0:22 survives and a bind change restricts nothing. With no
+    bind address both families are emitted, because that is what the shipped unit does and a
+    port-only change must not quietly drop IPv6."""
+    body = "[Socket]\nListenStream=\n"
+    for p in ports:
+        if bind_addr:
+            a = "[%s]" % bind_addr if ":" in bind_addr else bind_addr
+            body += "ListenStream=%s:%s\n" % (a, p)
+        else:
+            body += "ListenStream=0.0.0.0:%s\nListenStream=[::]:%s\n" % (p, p)
+    return body
+
+
 def change_ssh_port(server, new_port, bind_addr=""):
     """Move this host's sshd onto `new_port`, optionally restricting it to a single `bind_addr` IP
     (for hosts with several IPs), WITHOUT risking a lockout.
@@ -1562,27 +1613,40 @@ def change_ssh_port(server, new_port, bind_addr=""):
 
     # 2. Snapshot any existing drop-in (so a failed bind change restores the EXACT prior state),
     #    then write the new one. Ubuntu 22.04/24.04 Include /etc/ssh/sshd_config.d/*.conf by default.
-    _core.run_privileged(server, "sshd-backup-dropin", [], timeout=10, merge_stderr=False)
+    socket_mode = _sshd_socket_activated(server)
+    _backup_verb, _restore_verb, _discard_verb, _target = (
+        ("sshd-socket-backup", "sshd-socket-restore", "sshd-socket-discard", "sshd-socket-dropin")
+        if socket_mode else
+        ("sshd-backup-dropin", "sshd-restore-dropin", "sshd-discard-backup", "sshd-port-dropin"))
+    _core.run_privileged(server, _backup_verb, [], timeout=10, merge_stderr=False)
     header = ("# Managed by LinuxGSM Panel. The previous SSH port is kept as a fallback; close it\n"
               "# from the panel's Firewall page once you've confirmed the new port works.\n")
-    if bind_addr:
+    if socket_mode:
+        # Socket-activated: the port lives on ssh.socket, and sshd_config's Port is ignored.
+        body = _socket_listen_lines(ports, bind_addr)
+    elif bind_addr:
         # sshd needs an IPv6 literal bracketed when a port follows: ListenAddress [::1]:22.
         _a = "[%s]" % bind_addr if ":" in bind_addr else bind_addr
         body = "".join("ListenAddress %s:%s\n" % (_a, p) for p in ports)
     else:
         body = "".join("Port %s\n" % p for p in ports)
-    _core.write_root_file(server, "sshd-port-dropin", header + body, timeout=15)
+    _core.write_root_file(server, _target, header + body, timeout=15)
+    if socket_mode:
+        # A changed unit file is inert until systemd re-reads it.
+        _core.run_privileged(server, "systemd-daemon-reload", [], timeout=20, merge_stderr=False)
 
     def _revert(msg):
         # Restore the snapshot if we took one, else drop the file, then restart sshd. The prior
         # binding is untouched the whole time, so SSH keeps working.
-        _core.run_privileged(server, "sshd-restore-dropin", [], timeout=10, merge_stderr=False)
+        _core.run_privileged(server, _restore_verb, [], timeout=10, merge_stderr=False)
+        if socket_mode:
+            _core.run_privileged(server, "systemd-daemon-reload", [], timeout=20, merge_stderr=False)
         # ...and close the hole step 1 opened. It only restored the drop-in before, so every revert
         # path left a public ALLOW for a port nothing serves — including the step-3 path, whose
         # message says "sshd rejected the new config — nothing changed". Best-effort, like the
         # open: a host without UFW no-ops either way.
         remote_ufw_close_port(server, new_port, "tcp")
-        _core._restart_sshd(server, timeout=20)
+        _restart_ssh_listener(server, socket_mode)
         return False, msg
 
     # 3. Validate the WHOLE sshd config; if the drop-in breaks it, roll back and abort (no restart).
@@ -1596,8 +1660,8 @@ def change_ssh_port(server, new_port, bind_addr=""):
                    merge_stderr=False)
     _core.run_privileged(server, "service-restart", ["fail2ban"], timeout=20, merge_stderr=False)
 
-    # 5. Restart sshd (Ubuntu's unit is 'ssh'; fall back to 'sshd'). Established sessions survive.
-    _core._restart_sshd(server, timeout=20)
+    # 5. Restart whatever actually holds the port. Established sessions survive either way.
+    _restart_ssh_listener(server, socket_mode)
 
     # 6. Verify. A bind change must confirm the panel can still REACH the host (no all-interfaces
     #    fallback); a port-only change just confirms sshd bound the new port.
@@ -1613,7 +1677,7 @@ def change_ssh_port(server, new_port, bind_addr=""):
         if not re.search(r"[:.]%d\s" % new_port, out or ""):
             return _revert("sshd didn't come up on port %d — reverted. Your existing SSH still works." % new_port)
 
-    _core.run_privileged(server, "sshd-discard-backup", [], timeout=10,
+    _core.run_privileged(server, _discard_verb, [], timeout=10,
                    merge_stderr=False)   # success — drop the snapshot
     where = (" on %s" % bind_addr) if bind_addr else ""
     return True, ("SSH now listens on port %d%s (firewall + fail2ban updated). The previous port is "

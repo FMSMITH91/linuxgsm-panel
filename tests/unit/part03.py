@@ -1476,3 +1476,111 @@ check("repo url: ...and both open in a new tab without leaking the referrer",
       "%d occurrences" % _base_html.count('rel="noopener noreferrer"'))
 check("repo url: ...and a checkout with no resolvable repo still renders the name",
       "{% else %}LinuxGSM Panel{% endif %}" in _base_html)
+# ── sshd socket activation: the port lives on ssh.socket, not in sshd_config ────────────────────
+# Ubuntu 22.10+ ships sshd socket-activated. ssh.socket owns the listening socket and sshd inherits
+# it, so Port/ListenAddress in sshd_config are parsed, pass `sshd -t`, and are then IGNORED. The
+# panel wrote its port to an sshd_config drop-in, restarted sshd, found the port not listening and
+# reverted — safe, and the feature could never work on the current Ubuntu LTS. Measured on 24.04.5:
+# ssh.socket enabled+active with ListenStream=0.0.0.0:22, `sshd -T` still saying `port 22` with the
+# drop-in in place, and both ports answering as soon as the ports were written to the SOCKET.
+_sl = _sm_hosts._socket_listen_lines
+
+check("ssh.socket: the body starts by RESETTING systemd's inherited list",
+      _sl(["2222"], "").startswith("[Socket]\nListenStream=\n"),
+      repr(_sl(["2222"], ""))[:80])
+# Without the bare ListenStream=, systemd APPENDS and the unit's own 0.0.0.0:22 survives — which
+# would silently defeat a bind change while looking like it worked.
+check("ssh.socket: ...which is what stops a bind change from being a no-op",
+      _sl(["2222"], "10.0.0.5").count("ListenStream=\n") == 1)
+check("ssh.socket: a port-only change keeps BOTH families, as the shipped unit does",
+      "ListenStream=0.0.0.0:2222" in _sl(["2222"], "")
+      and "ListenStream=[::]:2222" in _sl(["2222"], ""))
+check("ssh.socket: ...and every port, so the old one stays reachable",
+      all(("ListenStream=0.0.0.0:%s" % p) in _sl(["2222", "22"], "") for p in ("2222", "22")))
+check("ssh.socket: a bind address restricts to that address only",
+      _sl(["22"], "10.0.0.5").strip().endswith("ListenStream=10.0.0.5:22")
+      and "0.0.0.0" not in _sl(["22"], "10.0.0.5"))
+check("ssh.socket: an IPv6 bind address is bracketed",
+      "ListenStream=[fd00::1]:22" in _sl(["22"], "fd00::1"), _sl(["22"], "fd00::1"))
+
+# The detector: only a literal "active" with rc 0 counts. Everything else takes the sshd_config
+# path, which is what every pre-22.10 host needs — [[empty-is-not-a-measurement]] in the safe
+# direction, because guessing "socket" on an ordinary host would break a working feature.
+_orig_rp = _sm_core.run_privileged
+try:
+    _sa = {"v": ("active", "", 0)}
+    _sm_core.run_privileged = lambda *a, **k: _sa["v"]
+    check("ssh.socket: 'active' + rc 0 is socket-activated", _sm_hosts._sshd_socket_activated(NS()) is True)
+    for _desc, _v in (("inactive", ("inactive", "", 3)), ("unit not found", ("", "", 4)),
+                      ("rc 0 but not active", ("failed", "", 0)),
+                      ("an empty read", ("", "", 0))):
+        _sa["v"] = _v
+        check("ssh.socket: %s is NOT socket-activated" % _desc,
+              _sm_hosts._sshd_socket_activated(NS()) is False, repr(_v))
+
+    def _sa_boom(*a, **k):
+        raise OSError("no systemd")
+    _sm_core.run_privileged = _sa_boom
+    check("ssh.socket: a failed check falls back to the sshd_config path, not an exception",
+          _sm_hosts._sshd_socket_activated(NS()) is False)
+finally:
+    _sm_core.run_privileged = _orig_rp
+
+
+# Covering the two helpers is not covering the BRANCH that picks between them — the bug was in the
+# call site, which wrote to a file the OS ignores. So drive change_ssh_port itself and assert which
+# destination it names. [[test-the-caller-not-just-the-helper]]
+_orig = (_sm_core.run_privileged, _sm_core.write_root_file, _sm_core._restart_sshd,
+         _sm_core.is_local_server, _sm_hosts.remote_ufw_open_port, _sm_hosts.remote_ufw_close_port)
+try:
+    _cs = {"socket": "active", "writes": [], "verbs": []}
+
+    def _cs_priv(server, verb, args=(), timeout=30, merge_stderr=True, **k):
+        _cs["verbs"].append((verb, list(args)))
+        if verb == "sshd-socket-active":
+            return (_cs["socket"], "", 0 if _cs["socket"] == "active" else 3)
+        if verb == "listening-sockets":
+            return ("LISTEN 0 128 0.0.0.0:2222 0.0.0.0:*\nLISTEN 0 128 0.0.0.0:22 0.0.0.0:*\n", "", 0)
+        if verb == "sshd-current-ports":
+            return ("Port 22\n", "", 0)
+        return ("", "", 0)
+
+    _sm_core.run_privileged = _cs_priv
+    _sm_core.write_root_file = lambda server, target, content, timeout=15: (
+        _cs["writes"].append((target, content)), ("", "", 0))[1]
+    _sm_core._restart_sshd = lambda *a, **k: ("", "", 0)
+    _sm_core.is_local_server = lambda s: True
+    _sm_hosts.remote_ufw_open_port = lambda *a, **k: (True, "")
+    _sm_hosts.remote_ufw_close_port = lambda *a, **k: (True, "")
+
+    _cs["socket"] = "active"
+    _ok, _msg = _sm_hosts.change_ssh_port(NS(port=22), 2222)
+    _t = [t for t, _c in _cs["writes"]]
+    check("ssh.socket: a socket-activated host gets the SOCKET drop-in, not the sshd_config one",
+          _ok is True and _t == ["sshd-socket-dropin"], "%r %r" % (_ok, _t))
+    _body = _cs["writes"][0][1]
+    check("ssh.socket: ...with the reset line and both ports",
+          "ListenStream=\n" in _body and "ListenStream=0.0.0.0:2222" in _body
+          and "ListenStream=0.0.0.0:22" in _body, repr(_body)[:110])
+    check("ssh.socket: ...and systemd is told to re-read the unit",
+          any(v == "systemd-daemon-reload" for v, _a in _cs["verbs"]))
+    check("ssh.socket: ...and the SOCKET unit is the one restarted",
+          ("service-restart", ["ssh.socket"]) in _cs["verbs"],
+          repr([a for v, a in _cs["verbs"] if v == "service-restart"]))
+    check("ssh.socket: ...and the socket snapshot is the one discarded on success",
+          any(v == "sshd-socket-discard" for v, _a in _cs["verbs"]))
+
+    _cs["writes"], _cs["verbs"], _cs["socket"] = [], [], "inactive"
+    _ok2, _msg2 = _sm_hosts.change_ssh_port(NS(port=22), 2222)
+    _t2 = [t for t, _c in _cs["writes"]]
+    check("ssh.socket: a NON socket-activated host still gets the sshd_config drop-in",
+          _ok2 is True and _t2 == ["sshd-port-dropin"], "%r %r" % (_ok2, _t2))
+    check("ssh.socket: ...with Port lines, and no systemd reload it does not need",
+          "Port 2222" in _cs["writes"][0][1]
+          and not any(v == "systemd-daemon-reload" for v, _a in _cs["verbs"]))
+    check("ssh.socket: ...and ssh.socket is NOT restarted on such a host",
+          ("service-restart", ["ssh.socket"]) not in _cs["verbs"])
+finally:
+    (_sm_core.run_privileged, _sm_core.write_root_file, _sm_core._restart_sshd,
+     _sm_core.is_local_server, _sm_hosts.remote_ufw_open_port,
+     _sm_hosts.remote_ufw_close_port) = _orig

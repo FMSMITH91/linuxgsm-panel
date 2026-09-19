@@ -80,7 +80,7 @@ Converted so far: **`ufw`, `fail2ban-client`, `systemctl`, `apt`/`dpkg`, the log
 (`journalctl` / `tail`), cron and user management, the sshd port change, the deferred reboot,
 Ubuntu Pro, the host controls, the GMod shared-content box, the fail2ban activity report, the
 detached OS update, Tailscale's join, the panel's own restore/self-update and the VPS hardening
-steps** — 90 verbs. (`tests/unit_test.py` asserts this number against `privileged.verbs()`, so it
+steps** — 95 verbs. (`tests/unit_test.py` asserts this number against `privileged.verbs()`, so it
 cannot drift from the table again.)
 
 **A correction to the numbers previously reported here.** Earlier revisions of this section
@@ -140,7 +140,7 @@ Two of those verb families are worth describing, because the narrowing is in the
 types rather than in the command names:
 
 - The systemd verbs take a unit from an **exhaustive list** (`ssh`, `sshd`, `fail2ban`,
-  `whoopsie`, `cups`, `modemmanager`, `unattended-upgrades`). Those are the only services the panel
+  `ssh.socket`, `whoopsie`, `cups`, `modemmanager`, `unattended-upgrades`). Those are the only services the panel
   ever touches, so a unit-name *pattern* would only buy the ability to control units nobody asked it
   to. The panel's OWN unit is deliberately not in that list — it is reachable through exactly one
   verb, `panel-restart`, which takes a bounded delay and nothing else.
