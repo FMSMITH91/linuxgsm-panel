@@ -118,7 +118,8 @@ def _install():
     # module that assignment lands on _core's instance and files.py keeps its own, so the patch
     # reached nothing, files.py ran the shim's real Popen against a `sudo -n panel-helper` argv,
     # got /bin/false, and the download tests failed with an empty argv list.
-    import subprocess as _greened      # what every module above holds after monkey_patch()
+    # what every module above holds after eventlet.monkey_patch()
+    import subprocess as _greened  # nosec B404 - the shim below is what refuses sudo
     _shim = _make_shim(_greened)
     _targets = (system_ops, backup, db_maintenance, tailscale_integration,
                 _sm_core, _sm_cron, _sm_files, _sm_game, _sm_fw, _sm_gmod, _sm_hosts, _sm_ps)

@@ -142,22 +142,28 @@ if [ -d /usr/local/lib/linuxgsm-panel ] || [ -f /etc/cron.d/lgsm-node-tools ] \
     # the offline DB-repair copy, panel.conf (which records the install's paths) and the
     # root-owned installer.
     if [ -d /usr/local/lib/linuxgsm-panel ]; then
-        ${U_SUDO} rm -rf /usr/local/lib/linuxgsm-panel \
-            && ok "Removed the root-owned helper, DB-repair tool, panel.conf and installer copy" \
-            || warn "Could not remove /usr/local/lib/linuxgsm-panel — remove it by hand."
+        if ${U_SUDO} rm -rf /usr/local/lib/linuxgsm-panel; then
+            ok "Removed the root-owned helper, DB-repair tool, panel.conf and installer copy"
+        else
+            warn "Could not remove /usr/local/lib/linuxgsm-panel — remove it by hand."
+        fi
     fi
     # A weekly ROOT cron that keeps npm + gamedig current for player queries. With the panel gone
     # it has nothing to serve, and it would otherwise keep running `npm install -g` as root every
     # Sunday forever.
     if [ -f /etc/cron.d/lgsm-node-tools ]; then
-        ${U_SUDO} rm -f /etc/cron.d/lgsm-node-tools \
-            && ok "Removed the weekly npm/gamedig update cron" \
-            || warn "Could not remove /etc/cron.d/lgsm-node-tools — remove it by hand."
+        if ${U_SUDO} rm -f /etc/cron.d/lgsm-node-tools; then
+            ok "Removed the weekly npm/gamedig update cron"
+        else
+            warn "Could not remove /etc/cron.d/lgsm-node-tools — remove it by hand."
+        fi
     fi
     if [ -L /usr/local/bin/linuxgsm-panel-recover ] || [ -f /usr/local/bin/linuxgsm-panel-recover ]; then
-        ${U_SUDO} rm -f /usr/local/bin/linuxgsm-panel-recover \
-            && ok "Removed the linuxgsm-panel-recover command" \
-            || warn "Could not remove /usr/local/bin/linuxgsm-panel-recover — remove it by hand."
+        if ${U_SUDO} rm -f /usr/local/bin/linuxgsm-panel-recover; then
+            ok "Removed the linuxgsm-panel-recover command"
+        else
+            warn "Could not remove /usr/local/bin/linuxgsm-panel-recover — remove it by hand."
+        fi
     fi
 fi
 

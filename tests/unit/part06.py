@@ -1763,7 +1763,9 @@ for _line in _uninst.splitlines():
     # via `sudo` on a PER-USER install need the same to come back off, so those lines read
     # `${U_SUDO} rm -rf …`. Strip a leading variable expansion before the prefix test, or every
     # one of them reads as "not a removal" — which is how this gate first responded to the fix.
+    _cmd = re.sub(r"^if\s+", "", _cmd)
     _cmd = re.sub(r"^\$\{[A-Za-z_][A-Za-z0-9_]*\}\s+", "", _cmd)
+    _cmd = re.sub(r";\s*then\s*$", "", _cmd)
     if not _cmd.startswith("rm "):
         continue
     if _sys_unit:
@@ -1815,7 +1817,9 @@ def _rm_targets(text):
     that guard alone: the removal moved back into the system-only branch and it still passed."""
     out = set()
     for _l in text.splitlines():
-        _c = re.sub(r"^\$\{[A-Za-z_][A-Za-z0-9_]*\}\s+", "", _l.strip())
+        _c = re.sub(r"^if\s+", "", _l.strip())
+        _c = re.sub(r"^\$\{[A-Za-z_][A-Za-z0-9_]*\}\s+", "", _c)
+        _c = re.sub(r";\s*then\s*$", "", _c)
         if _c.startswith("rm "):
             out |= set(re.findall(r"/(?:etc|usr/local)/[A-Za-z0-9._/${}-]+", _c))
     return out
