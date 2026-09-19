@@ -4832,6 +4832,9 @@ try:
         _ivu_id = _ivu.id
         _inv_row, _ = _InvS.mint(_ivu, hours=48, superadmin=True)
         db.session.add(_inv_row)
+        # ...and an audit entry attributed to them, for the AuditLog half of the same delete.
+        db.session.add(_AL(user_id=_ivu_id, username="smoke_inviter", action="login",
+                           target="", detail="", success=True))
         db.session.commit()
         _inv_id = _inv_row.id
         check("invite: it is usable while its creator exists",
@@ -4856,6 +4859,17 @@ try:
               "if this ever says False the revocation above is no longer what closes the hole")
         check("invite: ...but the stamped revocation still holds", not _inv_after.is_usable,
               "a rowid cannot undo revoked_at")
+        # Same delete, the other dangling pointer: AuditLog.user_id is a FK with no cascade, the
+        # app never sets PRAGMA foreign_keys, and the rowid is recycled — so the deleted admin's
+        # entries pointed at their replacement. The entries themselves must SURVIVE (username is
+        # the auditable fact and is meant to outlive the account); only the pointer must not lie.
+        _al_rows = _AL.query.filter_by(username="smoke_inviter").count()
+        check("audit: the deleted user's entries are still there", _al_rows >= 1,
+              "no rows to check — the next check would pass vacuously")
+        check("audit: ...but none of them still points at the recycled id",
+              _AL.query.filter_by(user_id=_ivu_id).count() == 0,
+              "%d row(s) now resolve to smoke_replacement"
+              % _AL.query.filter_by(user_id=_ivu_id).count())
         db.session.delete(db.session.get(_InvS, _inv_id))
         db.session.delete(db.session.get(User, _ivu_id))
         db.session.commit()

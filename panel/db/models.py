@@ -1383,6 +1383,22 @@ def _register_sample_pruning():
         except Exception:
             _log.debug("revoking a deleted user's invites failed", exc_info=True)
 
+    # AuditLog.user_id is a FK with no cascade, this app never sets PRAGMA foreign_keys, and the
+    # rowid is recycled — so after a delete the column pointed at whoever took the freed id.
+    # Verified: alice's rows read back as bob's. No render path joins on it today (they all use
+    # the denormalised `username`, which is the auditable fact and is MEANT to outlive the
+    # account), so this is a foot-gun rather than a live defect — for the next feature that does
+    # join, "show this user's activity" would hand bob alice's history. Nulled rather than
+    # deleted: the entries must survive, only the pointer must not lie.
+    @event.listens_for(User, "after_delete")
+    def _detach_audit_rows_of_deleted_user(_mapper, connection, target):
+        try:
+            connection.execute(AuditLog.__table__.update()
+                               .where(AuditLog.user_id == target.id)
+                               .values(user_id=None))
+        except Exception:
+            _log.debug("detaching a deleted user's audit rows failed", exc_info=True)
+
     # A host's game servers go with it, and remotes.py deletes them in BULK — which bypasses the
     # ORM, so the per-server listener above never fires for them. Clear their samples by
     # subquery on the host id instead of relying on that cascade.
