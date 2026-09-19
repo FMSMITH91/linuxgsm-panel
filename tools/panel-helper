@@ -104,7 +104,7 @@ SYSTEMCTL = "systemctl"
 # does is in this list, so a unit-name PATTERN would only buy the ability to control units nobody
 # asked it to control. sshd is here because the ssh unit is called ssh on Debian/Ubuntu and sshd
 # elsewhere, and the panel tries both.
-UNITS = ("ssh", "sshd", "fail2ban", "whoopsie", "cups", "modemmanager",
+UNITS = ("ssh", "sshd", "ssh.socket", "fail2ban", "whoopsie", "cups", "modemmanager",
          "unattended-upgrades")
 
 # The panel's OWN systemd unit, and the transient-unit runner used to restart it. Deliberately a
@@ -158,6 +158,12 @@ HOME_ROOT = "/home"
 # file named "….conf.bak" is inert there — which is why the backup can live next to the original.
 SSHD_DROPIN = "/etc/ssh/sshd_config.d/99-panel-sshport.conf"
 SSHD_DROPIN_BAK = SSHD_DROPIN + ".bak"
+# Ubuntu 22.10+ ships sshd SOCKET-ACTIVATED: ssh.socket holds the listening socket and sshd inherits
+# it, so Port/ListenAddress in sshd_config are parsed, pass `sshd -t`, and are then IGNORED. On such
+# a host the port has to be set on the SOCKET. The snapshot again avoids the directory's own glob --
+# systemd reads "*.conf" from a unit's .d directory, so a ".conf.bak" beside it is inert.
+SSHD_SOCKET_DROPIN = "/etc/systemd/system/ssh.socket.d/99-panel-sshport.conf"
+SSHD_SOCKET_DROPIN_BAK = SSHD_SOCKET_DROPIN + ".bak"
 # fail2ban's operator-owned jail file. Named here rather than inline in the verb so
 # every path this script touches is declared in one place — and so a test can point it
 # at a sandbox without rewriting the source.
@@ -277,6 +283,7 @@ WRITE_TARGETS = {
     # owns outright; this one changes how the operator reaches the machine, which is why it was
     # held back until the backup/validate/restore verbs existed to go with it.
     "sshd-port-dropin": (SSHD_DROPIN, 0o644),
+    "sshd-socket-dropin": (SSHD_SOCKET_DROPIN, 0o644),
 }
 
 
@@ -300,6 +307,11 @@ WRITE_TARGETS = {
 _RE_APT_CONF = re.compile(r'APT::[A-Za-z][A-Za-z0-9:-]* "[0-9]+";')
 _RE_SYSCTL = re.compile(r"[a-z][a-z0-9_.]* *= *[0-9]+")
 _RE_SSHD_PORT = re.compile(r"(Port [0-9]{1,5}|ListenAddress \[?[0-9A-Fa-f:.]+\]?:[0-9]{1,5})")
+# A systemd unit file is NOT a config file of directives that only configure -- ExecStartPre= runs
+# a command as root the moment the unit starts. So this grammar admits the section header, the
+# empty ListenStream= that RESETS systemd's inherited list, and address:port entries. Nothing else:
+# no Exec*, no User=, no EnvironmentFile=, no Also=.
+_RE_SSHD_SOCKET = re.compile(r"(\[Socket\]|ListenStream=|ListenStream=\[?[0-9A-Fa-f:.]+\]?:[0-9]{1,5})")
 # fail2ban's config files are declarative and their content is genuinely open-ended — ignoreip
 # lists, ports, log paths, filter regexes — so a grammar over the whole file would break real
 # configs for no gain. Two KEYS are the exception, because they are the ones that decide what
@@ -362,6 +374,7 @@ WRITE_CONTENT = {
     "apt-auto-upgrades": _RE_APT_CONF,
     "sysctl-tailscale": _RE_SYSCTL,
     "sshd-port-dropin": _RE_SSHD_PORT,
+    "sshd-socket-dropin": _RE_SSHD_SOCKET,
     "fail2ban-jail-local": _RE_FAIL2BAN_OPEN,
     "fail2ban-panel-whitelist": _RE_FAIL2BAN_OPEN,
     "fail2ban-panel-filter": _RE_FAIL2BAN_OPEN,
@@ -999,6 +1012,11 @@ VERBS = {
     # Every step of the panel's port change, so the sequence that protects the operator — snapshot,
     # write, VALIDATE, restart, verify, restore on any failure — survives intact without a shell.
     "sshd-backup-dropin": ([], lambda a: [], None),
+    "sshd-socket-backup": ([], lambda a: [], None),
+    "sshd-socket-restore": ([], lambda a: [], None),
+    "sshd-socket-discard": ([], lambda a: [], None),
+    "sshd-socket-active": ([], lambda a: [SYSTEMCTL, "is-active", "ssh.socket"], None),
+    "systemd-daemon-reload": ([], lambda a: [SYSTEMCTL, "daemon-reload"], None),
     "sshd-restore-dropin": ([], lambda a: [], None),
     "sshd-discard-backup": ([], lambda a: [], None),
     "f2b-set-sshd-ports": ([v_portlist], lambda a: [], None),
@@ -1168,6 +1186,38 @@ def do_sshd_discard_backup(args, content):
         os.unlink(SSHD_DROPIN_BAK)
     except FileNotFoundError:
         pass          # there was no drop-in to snapshot; nothing to clean up
+    return 0
+
+
+def do_sshd_socket_backup(args, content):
+    """Snapshot the panel's ssh.socket drop-in, if it exists. Exact mirror of do_sshd_backup."""
+    if os.path.isfile(SSHD_SOCKET_DROPIN):
+        shutil.copy2(SSHD_SOCKET_DROPIN, SSHD_SOCKET_DROPIN_BAK)
+    return 0
+
+
+def do_sshd_socket_restore(args, content):
+    """Put the socket snapshot back, or remove the drop-in if there was no snapshot.
+
+    The rollback for a port change on a socket-activated host, and the exact inverse of
+    do_sshd_socket_backup: a host that had no drop-in before ends with none. systemd still needs a
+    daemon-reload after this; the caller does that, because a reload is not the helper's to decide."""
+    if os.path.isfile(SSHD_SOCKET_DROPIN_BAK):
+        os.replace(SSHD_SOCKET_DROPIN_BAK, SSHD_SOCKET_DROPIN)
+    else:
+        try:
+            os.unlink(SSHD_SOCKET_DROPIN)
+        except FileNotFoundError:
+            pass          # reverted before the drop-in was written; a normal path
+    return 0
+
+
+def do_sshd_socket_discard(args, content):
+    """Drop the socket snapshot after a successful change."""
+    try:
+        os.unlink(SSHD_SOCKET_DROPIN_BAK)
+    except FileNotFoundError:
+        pass
     return 0
 
 
@@ -2373,6 +2423,9 @@ def do_write_file(args, content):
 ACTIONS = {
     "write-file": do_write_file,
     "sshd-backup-dropin": do_sshd_backup,
+    "sshd-socket-backup": do_sshd_socket_backup,
+    "sshd-socket-restore": do_sshd_socket_restore,
+    "sshd-socket-discard": do_sshd_socket_discard,
     "sshd-restore-dropin": do_sshd_restore,
     "sshd-discard-backup": do_sshd_discard_backup,
     "f2b-set-sshd-ports": do_f2b_sshd_ports,

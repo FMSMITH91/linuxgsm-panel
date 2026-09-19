@@ -61,7 +61,7 @@ F2B = "fail2ban-client"
 SYSTEMCTL = "systemctl"
 
 # The services the panel is allowed to touch, named exhaustively — see tools/panel-helper.
-UNITS = ("ssh", "sshd", "fail2ban", "whoopsie", "cups", "modemmanager",
+UNITS = ("ssh", "sshd", "ssh.socket", "fail2ban", "whoopsie", "cups", "modemmanager",
          "unattended-upgrades")
 
 # The panel's OWN systemd unit, and the transient-unit runner used to restart it. Deliberately a
@@ -107,6 +107,14 @@ HOME_ROOT = "/home"
 # "….conf.bak" sitting next to it is inert.
 SSHD_DROPIN = "/etc/ssh/sshd_config.d/99-panel-sshport.conf"
 SSHD_DROPIN_BAK = SSHD_DROPIN + ".bak"
+# Ubuntu 22.10+ ships sshd SOCKET-ACTIVATED: ssh.socket owns the listening socket and sshd inherits
+# it, so `Port`/`ListenAddress` in sshd_config are parsed, validated by `sshd -t`, and then IGNORED.
+# On such a host the drop-in above changes nothing and the port move always failed (safely -- the
+# panel checked, saw the port was not listening, and reverted). The port has to be set on the SOCKET
+# instead. Confirmed on Ubuntu 24.04.5: ssh.socket enabled+active with ListenStream=0.0.0.0:22, and
+# `sshd -T` still reporting `port 22` with a Port drop-in in place.
+SSHD_SOCKET_DROPIN = "/etc/systemd/system/ssh.socket.d/99-panel-sshport.conf"
+SSHD_SOCKET_DROPIN_BAK = SSHD_SOCKET_DROPIN + ".bak"
 # fail2ban's operator-owned jail file — see tools/panel-helper.
 F2B_JAIL_LOCAL = "/etc/fail2ban/jail.local"
 # The fail2ban log family, current plus rotated — see tools/panel-helper.
@@ -173,6 +181,10 @@ WRITE_TARGETS = {
     "sysctl-tailscale": ("/etc/sysctl.d/99-tailscale.conf", 0o644),
     # Added deliberately alongside the sshd verbs — see tools/panel-helper.
     "sshd-port-dropin": (SSHD_DROPIN, 0o644),
+    # The socket-activated equivalent. Its content rule admits [Socket] and ListenStream lines and
+    # NOTHING else: a systemd unit file accepts ExecStartPre=, so an unconstrained write here would
+    # be arbitrary root execution, which the Port drop-in's grammar never had to consider.
+    "sshd-socket-dropin": (SSHD_SOCKET_DROPIN, 0o644),
 }
 
 
@@ -777,6 +789,13 @@ _ARGV = {
     # ── sshd port changes ──
     "sshd-backup-dropin": ([], lambda a: [], None),
     "sshd-restore-dropin": ([], lambda a: [], None),
+    "sshd-socket-backup": ([], lambda a: [], None),
+    "sshd-socket-restore": ([], lambda a: [], None),
+    "sshd-socket-discard": ([], lambda a: [], None),
+    # Is sshd socket-activated on this host? Decides WHICH drop-in the port move writes.
+    "sshd-socket-active": ([], lambda a: [SYSTEMCTL, "is-active", "ssh.socket"], None),
+    # A changed unit file is inert until systemd re-reads it.
+    "systemd-daemon-reload": ([], lambda a: [SYSTEMCTL, "daemon-reload"], None),
     "sshd-discard-backup": ([], lambda a: [], None),
     "f2b-set-sshd-ports": ([_portlist], lambda a: [], None),
     "sshd-validate": ([], lambda a: ["sshd", "-t"], None),
@@ -912,6 +931,13 @@ _REMOTE_ACTIONS = {
                            % (shlex.quote(SSHD_DROPIN_BAK), shlex.quote(SSHD_DROPIN_BAK),
                               shlex.quote(SSHD_DROPIN), shlex.quote(SSHD_DROPIN)),
     "sshd-discard-backup": lambda a: "rm -f %s" % shlex.quote(SSHD_DROPIN_BAK),
+    "sshd-socket-backup": lambda a: "[ -f %s ] && cp -f %s %s || true"
+                          % (shlex.quote(SSHD_SOCKET_DROPIN), shlex.quote(SSHD_SOCKET_DROPIN),
+                             shlex.quote(SSHD_SOCKET_DROPIN_BAK)),
+    "sshd-socket-restore": lambda a: "if [ -f %s ]; then mv -f %s %s; else rm -f %s; fi"
+                           % (shlex.quote(SSHD_SOCKET_DROPIN_BAK), shlex.quote(SSHD_SOCKET_DROPIN_BAK),
+                              shlex.quote(SSHD_SOCKET_DROPIN), shlex.quote(SSHD_SOCKET_DROPIN)),
+    "sshd-socket-discard": lambda a: "rm -f %s" % shlex.quote(SSHD_SOCKET_DROPIN_BAK),
     "f2b-set-sshd-ports": lambda a: (
         "if [ -f %s ]; then "
         "sed -i '/^\\[sshd\\]/,/^\\[/{s/^port *=.*/port = %s/}' %s; "
