@@ -2215,16 +2215,24 @@ def _dedupe_log_tracebacks(text):
     return "\n".join(rendered)
 
 
-def _github_issues_url():
-    """New-issue URL for wherever this checkout's origin points (upstream for most,
-    a fork if they forked). Falls back to the canonical repo."""
-    fallback = "https://github.com/FMSMITH91/linuxgsm-panel/issues/new"
+_CANONICAL_REPO = "https://github.com/FMSMITH91/linuxgsm-panel"
+
+
+def github_repo_url():
+    """Web URL of wherever this checkout's origin points (upstream for most, a fork if they
+    forked). Falls back to the canonical repo. No trailing slash, so callers can append a path."""
     try:
         out, _, rc = _git(["config", "--get", "remote.origin.url"])
         m = re.search(r"github\.com[:/]([^/\s]+/[^/\s.]+)", out.strip()) if rc == 0 else None
-        return "https://github.com/%s/issues/new" % m.group(1) if m else fallback
+        return "https://github.com/%s" % m.group(1) if m else _CANONICAL_REPO
     except Exception:
-        return fallback
+        return _CANONICAL_REPO
+
+
+def _github_issues_url():
+    """New-issue URL for wherever this checkout's origin points (upstream for most,
+    a fork if they forked). Falls back to the canonical repo."""
+    return github_repo_url() + "/issues/new"
 
 
 def generate_debug_report():

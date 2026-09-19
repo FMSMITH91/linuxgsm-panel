@@ -235,6 +235,13 @@ try:
     PANEL_COMMIT = so.panel_commit()
 except Exception:
     PANEL_COMMIT = ""
+# Same reasoning: a checkout's origin cannot change under a running process. Derived from the
+# remote rather than hardcoded, so a fork's panel links to the fork -- the same rule the
+# "report an issue" URL already follows.
+try:
+    PANEL_REPO_URL = so.github_repo_url()
+except Exception:
+    PANEL_REPO_URL = ""
 
 
 # Largest file the browser upload accepts (enforced in the upload route AND as the app-wide
@@ -1472,6 +1479,7 @@ def register_context_processors(app):
             "mount_prefix": app.config.get("_MOUNT_PREFIX", "/"),
             "panel_version": PANEL_VERSION,
             "panel_commit": PANEL_COMMIT,
+            "panel_repo_url": PANEL_REPO_URL,
             "csp_nonce": getattr(g, "csp_nonce", ""),
             "nav_remotes": nav_remotes,
             "local_remote_id": local_remote_id,
