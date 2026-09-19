@@ -8,9 +8,10 @@ Routes:
   GET  /server/<id>         -> Single server detail + console
   POST /server/<id>/action  -> Execute server action (start/stop/restart/update)
   POST /server/<id>/command -> Send console command
-  GET  /servers/manage      -> Manage game servers on a remote
-  POST /servers/install     -> Install a new game server
-  POST /servers/uninstall   -> Uninstall a game server
+  GET  /servers/manage      -> Redirects to the dashboard (the list folded into it)
+  GET  /servers/install     -> The install form
+  POST /servers/add         -> Install a new game server
+  POST /servers/<id>/delete -> Uninstall a game server
   GET  /remotes             -> Manage remote VPS connections
   POST /remotes/add         -> Add a remote VPS
   POST /remotes/<id>/edit   -> Edit remote VPS
@@ -29,7 +30,8 @@ Routes:
   GET  /api/server/<id>     -> JSON server status
   GET  /api/console/<id>    -> JSON console log (recent lines)
   POST /api/command/<id>    -> JSON send command
-  WebSocket /console/<id>   -> Live console streaming
+  socket.io join_console    -> Live console streaming (events, not a route:
+                               connect / join_console / leave_console / disconnect)
 """
 import logging
 import os
