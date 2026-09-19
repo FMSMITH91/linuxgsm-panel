@@ -1602,3 +1602,67 @@ finally:
     (_sm_core.run_privileged, _sm_core.write_root_file, _sm_core._restart_sshd,
      _sm_core.is_local_server, _sm_hosts.remote_ufw_open_port,
      _sm_hosts.remote_ufw_close_port) = _orig
+
+
+# ── the panel-login fail2ban jail must actually READ the panel's auth.log ───────────────────────
+# Debian and Ubuntu ship /etc/fail2ban/jail.d/defaults-debian.conf with `[DEFAULT] backend = systemd`,
+# and that DEFAULT applies to every jail. A jail on the systemd backend reads the JOURNAL and ignores
+# `logpath` entirely. The panel's jail set logpath and never set backend, so on the distro the panel
+# targets it monitored no file at all while reporting itself Active — measured on Ubuntu 24.04.5:
+# `fail2ban-client get linuxgsm-panel logpath` answered "No file is currently monitored", and the
+# panel writes its failures to data/auth.log, a file. Zero bans were possible, ever.
+check("f2b jail: the body pins a FILE backend, so [DEFAULT] backend = systemd cannot apply",
+      "backend = auto" in _so._panel_f2b_jail_body("/x/auth.log", 5000, []),
+      _so._panel_f2b_jail_body("/x/auth.log", 5000, [])[:90])
+check("f2b jail: ...and it is not the journal backend",
+      "backend = systemd" not in _so._panel_f2b_jail_body("/x/auth.log", 5000, []))
+check("f2b jail: ...and the logpath is still written",
+      "logpath = /x/auth.log" in _so._panel_f2b_jail_body("/x/auth.log", 5000, []))
+
+# ensure_panel_fail2ban is the ONLY thing that would ever rewrite the jail, and it returned early
+# when the port and whitelist matched — so a jail carrying a logpath from a previous install path
+# (`/home/<old-user>/…`, which fail2ban tails forever without complaining) stayed broken for good.
+_f2b_orig = (_so.panel_fail2ban_status, _so._panel_f2b_jail_port, _so._panel_f2b_jail_value,
+             _so._panel_f2b_jail_ignoreip, _so.configure_panel_fail2ban)
+try:
+    _jail = {"port": 5000, "logpath": "/home/panel/data/auth.log", "backend": "auto",
+             "ignoreip": ["127.0.0.1/8", "::1"], "rewrote": []}
+    _so.panel_fail2ban_status = lambda: {"installed": True, "enabled": True, "banned": 0}
+    _so._panel_f2b_jail_port = lambda: _jail["port"]
+    _so._panel_f2b_jail_value = lambda key: _jail.get(key)
+    _so._panel_f2b_jail_ignoreip = lambda: _jail["ignoreip"]
+    _so.configure_panel_fail2ban = lambda a, p, i=None: (
+        _jail["rewrote"].append((a, p)), (True, "rewritten"))[1]
+
+    _ok, _msg = _so.ensure_panel_fail2ban("/home/panel/data/auth.log", 5000, [])
+    check("f2b jail: a jail that already matches is left alone (no needless reload)",
+          _ok is True and not _jail["rewrote"] and "already active" in _msg, _msg)
+
+    # THE BUG: the install moved, the jail still names the old path, everything else matches.
+    _jail["rewrote"] = []
+    _ok, _msg = _so.ensure_panel_fail2ban("/home/newuser/data/auth.log", 5000, [])
+    check("f2b jail: a STALE logpath forces a rewrite — it used to report 'already active'",
+          _ok is True and _jail["rewrote"] == [("/home/newuser/data/auth.log", 5000)], _msg)
+
+    # A jail written before the backend was pinned: present, enabled, right port and path, and
+    # silently on the journal.
+    _jail["rewrote"], _jail["backend"] = [], None
+    _ok, _msg = _so.ensure_panel_fail2ban("/home/panel/data/auth.log", 5000, [])
+    check("f2b jail: a jail with NO backend line is rewritten, not trusted",
+          _ok is True and len(_jail["rewrote"]) == 1, _msg)
+
+    _jail["rewrote"], _jail["backend"] = [], "systemd"
+    _ok, _msg = _so.ensure_panel_fail2ban("/home/panel/data/auth.log", 5000, [])
+    check("f2b jail: ...and so is one explicitly on the journal backend",
+          _ok is True and len(_jail["rewrote"]) == 1, _msg)
+
+    # The pre-existing reasons to rewrite must still work.
+    _jail["rewrote"], _jail["backend"], _jail["port"] = [], "auto", 5001
+    _ok, _msg = _so.ensure_panel_fail2ban("/home/panel/data/auth.log", 5000, [])
+    check("f2b jail: a changed PORT still forces a rewrite", len(_jail["rewrote"]) == 1)
+    _jail["rewrote"], _jail["port"], _jail["ignoreip"] = [], 5000, ["127.0.0.1/8"]
+    _ok, _msg = _so.ensure_panel_fail2ban("/home/panel/data/auth.log", 5000, [])
+    check("f2b jail: a changed WHITELIST still forces a rewrite", len(_jail["rewrote"]) == 1)
+finally:
+    (_so.panel_fail2ban_status, _so._panel_f2b_jail_port, _so._panel_f2b_jail_value,
+     _so._panel_f2b_jail_ignoreip, _so.configure_panel_fail2ban) = _f2b_orig
