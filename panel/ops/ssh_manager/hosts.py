@@ -535,34 +535,60 @@ def install_game_dependencies(server, game_type=None, extra=""):
     #
     # Dropping a bad name rather than refusing the batch: an unparseable entry in LinuxGSM's own
     # CSV must not make "install dependencies" fail shut on every game.
-    pkgs = " ".join(_apt_pkgs(base.split() + extra_pkgs))
-    steam_block = ""
+    pkgs = _apt_pkgs(base.split() + extra_pkgs)
+
+    # ── one shell pipeline -> a sequence of verbs ────────────────────────────────────────────
+    # This ran as `run_command(pipeline, sudo=True)`, which on the panel's own host becomes
+    # `sudo bash -c '<pipeline>'`. The narrow sudoers grant install.sh writes permits the helper
+    # and becoming a game account, and NEITHER covers that — so on the install the panel calls
+    # hardened, step 3 of "Install Server" was refused outright. Measured on a test host, as the
+    # panel user: `sudo -n bash -c 'apt-get install -y --dry-run ca-certificates'` answered
+    # "sudo: a password is required". The call site swallowed it in a bare `except`, so the
+    # install carried on and failed later looking like a download problem.
+    #
+    # Every step already had a verb or needed a small one. Nothing here builds a command string.
+    def _verb(name, args=(), timeout=120, **kw):
+        return _core.run_privileged(server, name, list(args), timeout=timeout, **kw)
+
+    # i386 for SteamCMD and the 32-bit game runtimes; universe+multiverse for libstdc++5:i386
+    # and steamcmd. All three are idempotent and non-fatal — a box that already has them, or a
+    # distro without `add-apt-repository`, must not fail the whole dependency step.
+    _verb("dpkg-add-arch", ["i386"], timeout=120, merge_stderr=False)
+    for _repo in ("universe", "multiverse"):
+        _verb("apt-add-repo", [_repo], timeout=120, merge_stderr=False)
+    _verb("apt-update", [], timeout=300, merge_stderr=False)
+
+    steam_ok = True
     if needs_steamcmd:
-        steam_block = (
-            "echo steam steam/question select 'I AGREE' | debconf-set-selections ; "
-            "echo steam steam/license note '' | debconf-set-selections ; "
-            "DEBIAN_FRONTEND=noninteractive apt-get install -y steamcmd steamcmd:i386 2>&1 | tail -3 "
-            "|| DEBIAN_FRONTEND=noninteractive apt-get install -y steamcmd 2>&1 | tail -3 || true ; "
-        )
-    pipeline = (
-        "dpkg --add-architecture i386 >/dev/null 2>&1 ; "
-        "add-apt-repository -y universe >/dev/null 2>&1 || true ; "
-        "add-apt-repository -y multiverse >/dev/null 2>&1 || true ; "
-        "apt-get update -qq >/dev/null 2>&1 ; "
-        f"{steam_block}"
-        f"DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends {pkgs} 2>&1 | tail -4 "
-        f"|| for p in {pkgs} ; do DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \"$p\" >/dev/null 2>&1 || true ; done ; "
-        "echo deps-done"
-    )
-    # sudo=True, not a hand-built `sudo bash -c` with sudo=False — which is what this was, and
-    # which produces the IDENTICAL command while being invisible to all three escalation ratchets:
-    # one counts calls to a function NAMED _sudo_sh, one counts the sudo=True keyword, and one
-    # scans for argv LISTS starting with the literal "sudo". An f-string passed with sudo=False
-    # matches none of them, so SECURITY.md's "0 — the route is gone" was contradicted by the code
-    # and no gate could say so. The two other steps in this module that deliberately keep a shell
-    # (NodeSource, Tailscale) already pass sudo=True and carry a comment saying why.
-    out, err, rc = _core.run_command(server, pipeline, timeout=1200, sudo=True)
-    return rc == 0, (out or err)
+        _s_out, _s_err, _s_rc = _verb("steamcmd-install", [], timeout=1800)
+        steam_ok = (_s_rc == 0)
+        if not steam_ok:
+            _core._log.warning("steamcmd install failed: %s", (_s_err or _s_out or "")[:200])
+
+    if not pkgs:
+        return steam_ok, "no dependencies to install"
+
+    # apt-get install is ATOMIC — one unavailable package aborts the batch — so a failed batch
+    # falls back to one at a time, which is what the shell `|| for p in …` loop did. Chunked
+    # because the verb table caps a Rest() argument list, and a game's list plus the common set
+    # plus retries can be long.
+    def _chunks(seq, size=48):
+        for i in range(0, len(seq), size):
+            yield seq[i:i + size]
+
+    out, err, rc = "", "", 0
+    for chunk in _chunks(pkgs):
+        c_out, c_err, c_rc = _verb("apt-install-minimal", chunk, timeout=1800)
+        out, err = (out + (c_out or ""))[-4000:], (err + (c_err or ""))[-2000:]
+        if c_rc != 0:
+            rc = c_rc
+            for one in chunk:
+                _verb("apt-install-minimal", [one], timeout=600, merge_stderr=False)
+
+    # rc now reports the BATCH. It used to report `echo deps-done`, the last command in the
+    # pipeline, so this function returned True however badly the install had gone — which is the
+    # other half of why a refused step never surfaced.
+    return (rc == 0 and steam_ok), (out or err or "")
 
 
 def parse_missing_deps(output):

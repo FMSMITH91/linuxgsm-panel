@@ -76,8 +76,9 @@ APT = "apt-get"
 # take the package default for one they have not — see tools/panel-helper.
 APT_CONFOLD = ["-o", "Dpkg::Options::=--force-confdef", "-o", "Dpkg::Options::=--force-confold"]
 # Verbs that need DEBIAN_FRONTEND=noninteractive so apt never blocks on a prompt nobody can answer.
-NONINTERACTIVE = {"apt-full-upgrade", "apt-upgrade", "apt-install"}
-REPOS = ("universe",)
+NONINTERACTIVE = {"apt-full-upgrade", "apt-upgrade", "apt-install", "apt-install-minimal"}
+# steamcmd and libstdc++5:i386 are in multiverse; the rest of the game deps in universe.
+REPOS = ("universe", "multiverse")
 
 # Log sources. The panel reads exactly these, so they are named here and the caller passes a NAME —
 # never a unit and never a path.
@@ -901,6 +902,15 @@ _ARGV = {
     "apt-upgrade": ([], lambda a: [APT, "upgrade", "-y"] + APT_CONFOLD, None),
     "apt-autoremove": ([], lambda a: [APT, "autoremove", "-y"], None),
     "apt-install": ([Rest(_package)], lambda a: [APT, "install", "-y"] + a, None),
+    # A separate verb rather than a flag on apt-install: --no-install-recommends is right for a
+    # game's dependency list (LinuxGSM names exactly what it needs, and recommends drag in
+    # desktop-sized trees on a headless box) and wrong for the panel's own installs of fail2ban
+    # and unattended-upgrades, which rely on theirs.
+    "apt-install-minimal": ([Rest(_package)],
+                            lambda a: [APT, "install", "-y", "--no-install-recommends"] + a, None),
+    # steamcmd's Steam licence is a debconf prompt; unanswered, apt blocks forever on input nobody
+    # can give. The preseed is a fixed string in the helper — see do_steamcmd_install.
+    "steamcmd-install": ([], lambda a: [], None),
     "apt-add-repo": ([_choice(*REPOS)], lambda a: ["add-apt-repository", "-y", a[0]], None),
     "dpkg-add-arch": ([_choice("i386")], lambda a: ["dpkg", "--add-architecture", a[0]], None),
     # Fixed pgrep patterns: pgrep takes a regex, so it is written here and never comes from a caller.

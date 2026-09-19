@@ -307,9 +307,23 @@ def register(app):
                     # 3. System dependencies (as root — the game user has no sudo).
                     _p(3, "Installing dependencies")
                     try:
-                        install_game_dependencies(remote, game_type)
+                        deps_ok, deps_msg = install_game_dependencies(remote, game_type)
                     except Exception:
-                        _log.debug("_run: ignored non-fatal error", exc_info=True)
+                        deps_ok, deps_msg = False, "the dependency step raised"
+                        _log.debug("_run: install_game_dependencies raised", exc_info=True)
+                    if not deps_ok:
+                        # Deliberately NOT fatal: LinuxGSM re-reports what is missing at step 4 and
+                        # this runs again with those exact names, and plenty of games install fine
+                        # without the optional ones. But it has to be VISIBLE. This was a bare
+                        # `except` logging at debug level, and the function returned success
+                        # regardless (its pipeline ended in `echo deps-done`) — so on a host where
+                        # the whole step was REFUSED by sudo, nothing was written anywhere and the
+                        # install carried on to fail later looking like a bad download.
+                        _p(3, "Installing dependencies", message=(
+                            "Some dependencies did not install — continuing; step 4 reports "
+                            "anything still missing. %s" % (deps_msg or "")[-200:]))
+                        _log.warning("install %s: dependency step failed: %s",
+                                     short_name, (deps_msg or "")[:300])
 
                     # 4. Download the game server files (the long step). A truncated / corrupt archive
                     #    can leave LinuxGSM "done" — even with exit code 0 — but with NO game files
@@ -327,7 +341,11 @@ def register(app):
                         missing = parse_missing_deps((out or "") + "\n" + (err or ""))
                         if missing:
                             try:
-                                install_game_dependencies(remote, game_type, extra=" ".join(missing))
+                                _r_ok, _r_msg = install_game_dependencies(
+                                    remote, game_type, extra=" ".join(missing))
+                                if not _r_ok:
+                                    _log.warning("install %s: retry of the dependency step failed: "
+                                                 "%s", short_name, (_r_msg or "")[:300])
                                 out, err, rc = _sm.run_command(remote, auto, timeout=1800, sudo=False)
                                 last_out = out or err or last_out
                             except Exception:

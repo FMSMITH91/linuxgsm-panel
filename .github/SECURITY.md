@@ -80,8 +80,8 @@ Converted so far: **`ufw`, `fail2ban-client`, `systemctl`, `apt`/`dpkg`, the log
 (`journalctl` / `tail`), cron and user management, the sshd port change, the deferred reboot,
 Ubuntu Pro, the host controls, the GMod shared-content box, the fail2ban activity report, the
 detached OS update, Tailscale's join, the panel's own restore/self-update, the VPS hardening
-steps, running a LinuxGSM action as the game user and enrolling a game account in the group the
-grant names** — 97 verbs. (`tests/unit_test.py` asserts
+steps, running a LinuxGSM action as the game user, enrolling a game account in the group the
+grant names and installing a game's dependencies** — 99 verbs. (`tests/unit_test.py` asserts
 this number against `privileged.verbs()`, so it cannot drift from the table again.)
 
 **A correction to the numbers previously reported here.** Earlier revisions of this section
@@ -97,9 +97,9 @@ of going unnoticed. Current state:
 
 | route | sites remaining |
 |---|---|
-| `run_command(..., sudo=True)` | 4 |
+| `run_command(..., sudo=True)` | 3 |
 | `_sudo_sh(...)` | **0 — the route is gone** |
-| **root total** | **4** (from 131) |
+| **root total** | **3** (from 131) |
 
 `_sudo_sh()` built `sudo bash -c '<pipeline>'` itself and passed `sudo=False`, which is why a
 search for `sudo=True` never saw it and why its 18 call sites went uncounted for half this work.
@@ -148,7 +148,17 @@ count in the table below is of `sudo=True` sites and has never included any of t
 them is not finished; until it is, a host with the narrow grant has working server control and a
 file browser that does not work.
 
-**Two of the four `sudo=True` sites that remain cannot be narrowed by a verb at all** — they are the
+**The dependency installer is a verb now, and it was not merely unnarrowed — it was broken.**
+`install_game_dependencies` ran one `sudo bash -c '<pipeline>'`, which the narrow grant refuses, and
+it is **step 3 of the Install Server flow**, not a bootstrap step. Its call site swallowed the
+failure in a bare `except` that logs at debug level, and the pipeline ended in `echo deps-done`, so
+the function returned success however badly it had gone: a refused step surfaced as neither an
+error nor a log line, and the install went on to fail later looking like a bad download. It is a
+sequence of verbs now — `dpkg-add-arch`, `apt-add-repo` (universe **and** multiverse),
+`apt-update`, `steamcmd-install`, then `apt-install-minimal` in chunks with a per-package retry —
+and it reports the batch's real result, which the caller now surfaces.
+
+**Two of the three `sudo=True` sites that remain cannot be narrowed by a verb at all** — they are the
 downloaded-script installers named below. The other two were described here as the LinuxGSM
 discovery scan and the per-server metrics probe, "both reads, both with their interpolated values
 validated upstream". The count of four is right; two of the three claims about it were not. The

@@ -569,7 +569,7 @@ import ast as _ast
 
 _ESCALATION_FILES = ["app.py", "auth.py", "ssh_manager.py", "system_ops.py", "notifications.py",
                      "backup.py", "db_maintenance.py", "tailscale_integration.py", "manage.py"]
-_CEILING = {"sudo=True": 4, "_sudo_sh": 0}   # measured at the time of writing; lower only
+_CEILING = {"sudo=True": 3, "_sudo_sh": 0}   # measured at the time of writing; lower only
 
 def _is_dispatch(call):
     """True when this escalation is NOT a call site composing a shell string.
@@ -632,6 +632,15 @@ for _kind, _limit in _CEILING.items():
     check("escalation census: %s sites <= %d (currently %d) — ratchet, never raise"
           % (_kind, _limit, _census[_kind]),
           _census[_kind] <= _limit, "found %d" % _census[_kind])
+    # ...and the ceiling must be TIGHT. A `<=` bound cannot notice itself being raised — mutation
+    # -testing this gate showed exactly that: changing 3 to 9 broke nothing, so the "never raise"
+    # half was a comment, not a check. Requiring equality makes converting a site a two-line edit
+    # (convert, then lower) and makes ADDING one an explicit, reviewed change to this number
+    # rather than something that quietly fits under the slack.
+    check("escalation census: the %s ceiling is tight — lower it when a site converts" % _kind,
+          _limit == _census[_kind],
+          "ceiling %d but %d site(s) found — set _CEILING[%r] = %d"
+          % (_limit, _census[_kind], _kind, _census[_kind]))
 
 # tailscale-serve is the only verb whose upstream URL is ASSEMBLED on the far side rather than
 # handed in. These prove a caller cannot aim Tailscale Serve at anything but loopback on this box —
