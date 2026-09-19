@@ -2906,3 +2906,24 @@ check("regex anchors: no unclassified $-anchored inline re.match/search either",
       not _inline_bad,
       "use \\Z for a VALIDATOR, or add the file to _INLINE_DOLLAR_OK saying why $ is right: %s"
       % _inline_bad[:5])
+
+# ── A no-op UPDATE must still refresh what lives outside the checkout ─────────────────────────
+# "Nothing to fetch" is not "nothing to do". The helper, db_maintenance.py and the sudoers grant
+# live outside PANEL_DIR, so they can be stale or missing while the code is perfectly current —
+# and this branch used to `exit 0` before reaching any of them. Two consequences, both measured:
+# the remedy install.sh itself prints ("re-run this installer as root…") did nothing on a host
+# whose code was current, and a host that took new code by another route (the panel's own
+# self-update, or a git pull) kept an old helper and an old grant — so new verbs answered
+# "unknown verb" and the game-user grant was never written, while the run reported success.
+_noop_i = _inst.find('[ "${CURRENT_SHA}" = "${TARGET_SHA}" ]')
+_noop_j = _inst.find("Already up to date", _noop_i) if _noop_i != -1 else -1
+check("install.sh: the no-op update branch is where this gate expects it",
+      _noop_i != -1 and _noop_j > _noop_i, "start=%d end=%d" % (_noop_i, _noop_j))
+_noop = _inst[_noop_i:_noop_j] if (_noop_i != -1 and _noop_j > _noop_i) else ""
+for _needed in ("install_root_tools", "write_sudoers_grant", "check_origin_trusted"):
+    check("install.sh: a no-op update still runs %s" % _needed,
+          _needed in _noop, "missing from the up-to-date branch")
+# ...and it must still be gated on the origin, exactly as the real update path is: an untrusted
+# origin must not be able to get a grant written for it by doing nothing.
+check("install.sh: ...with the grant still gated on a trusted origin",
+      '[ "${ORIGIN_TRUSTED}" -eq 1 ] && write_sudoers_grant' in _noop, _noop[-200:])

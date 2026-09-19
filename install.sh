@@ -907,6 +907,24 @@ if [ "${IS_UPDATE}" -eq 1 ]; then
      Nothing was changed."
     fi
     if [ -n "${CURRENT_SHA}" ] && [ "${CURRENT_SHA}" = "${TARGET_SHA}" ]; then
+        # Nothing to FETCH is not nothing to DO. The root-owned pieces and the sudoers grant live
+        # outside the checkout, so they can be stale or missing while the code is perfectly current
+        # — and this branch used to `exit 0` before reaching either of them.
+        #
+        # That made the remedy this script prints ("re-run this installer as root once the helper
+        # can be placed to narrow it again") a no-op on any host whose code was already up to date,
+        # which is most of them by the time an operator gets round to it. It also stranded every
+        # host that took new code by another route — the panel's own self-update, or a plain
+        # `git pull` — with an old helper and an old grant: new verbs answered "unknown verb", and
+        # the grant naming the game-user group was never written, so the panel could not manage a
+        # single server while reporting itself up to date.
+        #
+        # All three are idempotent and cheap: the helper is re-copied from the checkout, the grant
+        # is rewritten and re-validated with visudo, and the group sync is `groupadd -f` plus an
+        # append-only `usermod -aG`. So do them, then report.
+        check_origin_trusted
+        install_root_tools
+        [ "${ORIGIN_TRUSTED}" -eq 1 ] && write_sudoers_grant
         ok "Already up to date (version ${FROM_VER}) — no snapshot taken, panel left running."
         exit 0
     fi
