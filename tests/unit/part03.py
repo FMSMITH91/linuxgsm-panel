@@ -201,6 +201,24 @@ try:
 finally:
     _so._run = _orig_sorun
 
+# ONE function may answer to this name. ssh_manager/hosts.py used to define a second `port_in_use`,
+# taking (server, port) instead of (port) and querying a REMOTE — with nothing calling it. Two
+# functions, one name, different arity, and crucially different failure meaning: system_ops returns
+# False on error deliberately ("don't block a change on a flaky check"), which is right for
+# refusing to move the panel's own port, and exactly wrong for the install-time use somebody would
+# eventually reach for the remote one for — a failed SSH read would report a busy port as FREE and
+# hand an install a port that cannot bind. The install path never used it (resolve_free_port goes
+# through _remote_listening_ports and reasons about a failed scan explicitly), so the dead twin was
+# only ever a trap for the next person. Deleting it is the fix; this keeps it deleted.
+import panel.ops.ssh_manager as _sm_pkg
+check("port_in_use: only system_ops defines it — the ssh_manager twin stays deleted",
+      not hasattr(_sm_pkg, "port_in_use"),
+      "ssh_manager resolves it to %s" % getattr(getattr(_sm_pkg, "port_in_use", None), "__module__", "-"))
+check("port_in_use: ...and the surviving one is the single-argument local check",
+      _so.port_in_use.__code__.co_argcount == 1
+      and _so.port_in_use.__module__ == "panel.ops.system_ops",
+      "%s arity %d" % (_so.port_in_use.__module__, _so.port_in_use.__code__.co_argcount))
+
 _orig_sorun2 = _so._run
 try:
     _so._run = lambda c, **k: ("127.0.0.1\n100.84.48.111\n45.76.63.211\n", "", 0)
