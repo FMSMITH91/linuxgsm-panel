@@ -1805,3 +1805,30 @@ try:
        _sm_hosts.tailnet_exempt_ips(NS(), _MIXED), _CAND)
 finally:
     _sm_core.run_command = _tn_orig
+
+
+# ── the game-port firewall write is a MANAGE_REMOTES action, like every other one ────────────────
+# api_remote_game_port_open accepted MANAGE_REMOTES *or* INSTALL_SERVER, while every other firewall
+# write on the same host (/firewall/open, /allow-from, /limit, /close, /delete-rule) requires
+# MANAGE_REMOTES alone. `port` is entirely caller-chosen, and the GameServer lookup was cosmetic —
+# it only picked the UFW comment and fell back to "Game" when no row matched. So a user with a host
+# grant and only INSTALL_SERVER could open 22, 3306 or 6379 to the internet on a host whose
+# firewall they otherwise have no rights over. Nothing in templates/ or static/js/ calls it.
+_rv_src = open(os.path.join(_root, "panel", "routes", "remote_vps.py"), encoding="utf-8").read()
+_gp_at = _rv_src.find('"/api/remote/<int:remote_id>/game-port/<int:port>/open"')
+check("game-port: the route exists to be checked", _gp_at > 0)
+_gp_block = _rv_src[_gp_at:_gp_at + 1800]
+check("game-port: requires MANAGE_REMOTES",
+      "@permission_required(MANAGE_REMOTES)" in _gp_block, _gp_block[:160])
+check("game-port: ...and no longer accepts INSTALL_SERVER as an alternative",
+      "permission_required(MANAGE_REMOTES, INSTALL_SERVER)" not in _gp_block)
+check("game-port: ...and refuses a port no game server on the host uses",
+      "if gs is None:" in _gp_block and "refusing to" in _gp_block, _gp_block[-220:])
+
+# Every OTHER firewall write on that host must stay MANAGE_REMOTES-only, so this check keeps
+# meaning if a new one is added.
+for _route in ("/firewall/open", "/firewall/allow-from", "/firewall/limit"):
+    _at = _rv_src.find('"/api/remote/<int:remote_id>%s"' % _route)
+    check("game-port: sibling %s is MANAGE_REMOTES-only" % _route,
+          _at > 0 and "@permission_required(MANAGE_REMOTES)" in _rv_src[_at:_at + 260],
+          _rv_src[_at:_at + 160] if _at > 0 else "route not found")

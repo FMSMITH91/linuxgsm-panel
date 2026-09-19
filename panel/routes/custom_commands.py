@@ -40,7 +40,10 @@ def register(app):
         db.session.commit()
         log_action(current_user, "global_ban_add", target=sid, detail=gb.reason)
         threading.Thread(target=lambda: _fan_out_global_ban(app, sid, unban=False), daemon=True).start()
-        flash("Banned %s across all Source servers." % sid, "success")
+        # Not "Banned across all Source servers" — the fan-out has not run yet and a stopped or
+        # unreachable server will not receive it. The audit log records what actually landed.
+        flash("Banning %s — applying it to every Source server now; see the audit log for the "
+              "result." % sid, "success")
         return redirect(url_for("global_bans_page"))
 
     @app.route("/global-bans/<int:ban_id>/delete", methods=["POST"])
@@ -53,7 +56,8 @@ def register(app):
         db.session.commit()
         log_action(current_user, "global_ban_remove", target=sid)
         threading.Thread(target=lambda: _fan_out_global_ban(app, sid, unban=True), daemon=True).start()
-        flash("Removed %s — unbanning it on all Source servers." % sid, "success")
+        flash("Removed %s — lifting it on every Source server now; see the audit log for the "
+              "result." % sid, "success")
         return redirect(url_for("global_bans_page"))
 
     @app.route("/global-bans/sync", methods=["POST"])
