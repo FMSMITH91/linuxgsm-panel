@@ -16,8 +16,14 @@ on:
   push:
     branches: [ main ]
 
-# Read-only at the top level; the analysis job adds only the one write scope it needs.
-permissions: read-all
+# NAMED rather than read-all. This is hygiene, not a behaviour change: a job-level `permissions`
+# block REPLACES the top-level one, and the single job below declares its own — so its token is
+# unaffected either way. It matters because read-all grants every read scope in the token to any
+# future job that does not declare its own, and because scorecard's own Token-Permissions check
+# reads these files and scores a top-level read-all as weaker than an explicit list.
+permissions:
+  contents: read
+  actions: read
 
 concurrency:
   group: scorecard

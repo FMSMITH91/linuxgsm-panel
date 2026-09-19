@@ -104,6 +104,16 @@ if esprima:
 # importExisting() refreshes exactly that card: after importing discovered servers, Uninstall
 # posted with no token. Measured in a browser against the real panel.js — token present on load,
 # null after the swap, present again after ensureCsrfFields().
+if not esprima:
+    # SKIPPED, not silently absent. These four sat inside `if esprima:` and simply stopped
+    # existing without it: the tally is len(results), so the suite reported "95 / 95 checks
+    # passed" with four CSRF gates gone and exited 0. A check that did not run has to appear in
+    # the count as a check that did not run.
+    for _n in ("panel.js exports ensureCsrfFields for markup that arrives after load",
+               "panel.js: refreshSection re-arms the token on the markup it swaps in",
+               "static/js: a native form.submit() re-arms its CSRF token first",
+               "static/js: the submit()-site walk found call sites at all"):
+        skip(_n, "esprima not installed (pip install esprima)")
 if esprima:
     _csrf_js = (ROOT / "static" / "js" / "panel.js").read_text(encoding="utf-8")
     check("window.ensureCsrfFields = function" in _csrf_js,
@@ -1737,4 +1747,9 @@ if skipped:
     print("\n%d CHECK(S) DID NOT RUN:" % len(skipped))
     for name, detail in skipped:
         print("  SKIP  %s   [%s]" % (name, detail))
-sys.exit(0 if failed == 0 else 1)
+# A SKIP fails the suite. The others treat a skip as "the environment is not the code's fault",
+# but this one is invoked from CI where esprima IS installed, and its skips take the JS parse gate
+# and four CSRF gates with them — exactly the "294 smoke checks stayed green" failure the parse
+# check exists to catch. Red here says `pip install esprima`, which is a one-line fix; green here
+# said nothing at all.
+sys.exit(0 if (failed == 0 and not skipped) else 1)

@@ -13,6 +13,10 @@ on:
     branches: [ main ]
     paths:
       - '.github/workflows/**'
+      # ...and the lint's OWN config: a malformed
+      # .github/actionlint.yaml makes actionlint fail, and the reviewdog pipeline
+      # has no pipefail, so zero findings reads as clean. Editing it must run it.
+      - '.github/actionlint.yaml'
   pull_request:
     branches: [ main ]
     paths:

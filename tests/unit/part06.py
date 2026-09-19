@@ -1159,8 +1159,21 @@ _flake_inv = " ".join(l.strip().rstrip("\\") for l in _rt_src.splitlines()
                       if "flake8 --select" in l or "--extend-exclude" in l)
 check("coverage: panel-helper is flake8'd (its default glob would miss it)",
       "tools/panel-helper" in _flake_inv, _flake_inv[:120])
+# Matched on the FLAGS line rather than a single literal invocation: the bandit step now runs
+# twice (SARIF for code scanning, JSON so errors[] can be checked) off one shared flag list, so
+# pinning the exact string "bandit -r . tools/panel-helper" would break on a refactor that kept
+# the coverage intact. What must hold is that the recursive walk names the helper explicitly —
+# bandit -r globs *.py, and tools/panel-helper is Python with a shebang and no extension.
+_bandit_flags = " ".join(l.strip() for l in _bandit_src.splitlines()
+                         if "FLAGS=" in l or "bandit -r" in l)
 check("coverage: panel-helper is bandit-scanned (bandit -r . globs *.py and would miss it)",
-      "bandit -r . tools/panel-helper" in _bandit_src)
+      "-r ." in _bandit_flags and "tools/panel-helper" in _bandit_flags, _bandit_flags[:140])
+# ...and the errors[] guard: a file bandit cannot PARSE contributes zero results and exits 0, so
+# without this the module holding the privilege boundary could be reported clean for not being
+# read at all. Proven by execution with a syntax error injected into system_ops.py.
+check("coverage: a file bandit could not read fails the job instead of reading as clean",
+      "errors | length" in _bandit_src and "-f json" in _bandit_src,
+      "no errors[] check after the bandit run")
 # ...and the file really is Python, so those three tools have something to say about it.
 check("coverage: panel-helper is a python script (shebang), justifying the above",
       open(os.path.join(_root, 'tools', 'panel-helper'), encoding='utf-8').readline().startswith("#!") and "python" in open(os.path.join(_root, 'tools', 'panel-helper'), encoding='utf-8').readline())

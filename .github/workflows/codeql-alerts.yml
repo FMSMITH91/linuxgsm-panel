@@ -57,10 +57,16 @@ jobs:
     #   is a merge commit, which is exactly the thing a PR check should be. A PR that would turn
     #   main red now turns itself red instead.
     name: Open code-scanning alerts
+    #
+    #   The workflow_dispatch arm is separate because on a manual run `github.event.workflow_run`
+    #   is undefined: the property access yields null, `null == 'success'` is false, and the job
+    #   was SKIPPED — reporting success and judging nothing. The manual entry point had never once
+    #   run (173 workflow_run runs, 0 workflow_dispatch).
     if: >-
-      github.event.workflow_run.conclusion == 'success' &&
-      (github.event.workflow_run.head_branch == 'main' ||
-       github.event.workflow_run.event == 'pull_request')
+      github.event_name == 'workflow_dispatch' ||
+      (github.event.workflow_run.conclusion == 'success' &&
+       (github.event.workflow_run.head_branch == 'main' ||
+        github.event.workflow_run.event == 'pull_request'))
     runs-on: ubuntu-latest
     timeout-minutes: 10
     permissions:
@@ -73,7 +79,9 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           WR_EVENT: ${{ github.event.workflow_run.event }}
-          WR_BRANCH: ${{ github.event.workflow_run.head_branch }}
+          # Falls back to this workflow's own ref on a manual run, where workflow_run is undefined
+          # and WR_BRANCH would be empty — which built `ref=refs/heads/` and asked about nothing.
+          WR_BRANCH: ${{ github.event.workflow_run.head_branch || github.ref_name }}
           WR_SHA: ${{ github.event.workflow_run.head_sha }}
         run: |
           set -euo pipefail

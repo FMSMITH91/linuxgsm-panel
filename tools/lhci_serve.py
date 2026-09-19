@@ -86,8 +86,12 @@ with app.app_context():
                          username="root", auth_method="key", auth_credential="")
         db.session.add(r)
         db.session.flush()
+        # installed=True, or GameServer.installed defaults to FALSE and server_detail redirects
+        # ("that server is still installing") to manage_servers, which redirects on to /. So the
+        # console page — the thing this panel is for — was never audited: Lighthouse scored the
+        # DASHBOARD three times under three URLs and the CLS/a11y gate passed on it.
         db.session.add(GameServer(remote_id=r.id, name="lhci-cs", short_name="csgoserver",
-                                  game_type="csgo", port=27015))
+                                  game_type="csgo", port=27015, installed=True))
     db.session.commit()
 
 # Plain HTTP (no ssl_args) so Lighthouse's headless Chrome can hit it without cert wrangling.

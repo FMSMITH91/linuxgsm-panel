@@ -73,6 +73,18 @@ def main():
 
     try:
         issues, answered = fetch_errors()
+    except urllib.error.HTTPError as exc:
+        # A 401/403/404 is PERMANENT and actionable — the repository went private, anonymous
+        # access was withdrawn, the endpoint moved — and this workflow is schedule-only, so a
+        # ::warning:: nobody reads would let it report green daily, forever. The comment in
+        # codacy-alerts.yml names that exact scenario. A 5xx is an outage and stays non-fatal.
+        if exc.code in (401, 403, 404):
+            print("::error::the Codacy API refused the request (HTTP %d) for %s/%s — refusing to "
+                  "report it clean. Anonymous access may have been withdrawn." % (exc.code, ORG, REPO))
+            return 1
+        print("::warning::the Codacy API errored (HTTP %d) — not failing the build; the next "
+              "scheduled run will re-check." % exc.code)
+        return 0
     except (urllib.error.URLError, OSError, ValueError) as exc:
         print("::warning::could not reach the Codacy API (%s) — not failing the build; the next "
               "scheduled run will re-check." % type(exc).__name__)
