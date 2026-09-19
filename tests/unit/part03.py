@@ -1346,6 +1346,29 @@ _wire = []
 
 
 class _FakeChan:
+    """Stands in for a paramiko Channel. run_command drains the channel itself now (it must read
+    both streams BEFORE asking for the exit status, or a command whose output exceeds the 2 MiB
+    window can never exit), so a stub that implements only recv_exit_status no longer models the
+    object under test. These tests assert what reaches the WIRE, so the streams are empty — but
+    they have to be empty in the shape the real channel would present."""
+    def settimeout(self, _t):
+        return None
+
+    def recv_ready(self):
+        return False
+
+    def recv_stderr_ready(self):
+        return False
+
+    def recv(self, _n):
+        return b""
+
+    def recv_stderr(self, _n):
+        return b""
+
+    def exit_status_ready(self):
+        return True
+
     def recv_exit_status(self):
         return 0
 

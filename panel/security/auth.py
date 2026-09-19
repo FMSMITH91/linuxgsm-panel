@@ -592,7 +592,8 @@ def init_auth(app):
         if ":" not in s:
             # Legacy cookie issued before epochs existed — accept by plain id (one-time, until they
             # next log in and get an epoch-tagged cookie).
-            return db.session.get(User, int(s)) if s.isdecimal() else None
+            legacy = db.session.get(User, int(s)) if s.isdecimal() else None
+            return legacy if (legacy is not None and legacy.is_active) else None   # see below
         parts = s.split(":")
         uid, epoch = parts[0], parts[1]
         sid = parts[2] if len(parts) > 2 and parts[2] else None
@@ -600,6 +601,20 @@ def init_auth(app):
             return None
         user = db.session.get(User, int(uid))
         if user is None or str(user.auth_epoch or 0) != epoch:
+            return None
+        # Belt to flask-login's braces, NOT the thing that makes deactivation work. What makes it
+        # work today is subtle enough to be worth writing down: this model is
+        # `class User(UserMixin, db.Model)` with `is_active` declared as a Column, and
+        # UserMixin.is_authenticated is `return self.is_active` (flask_login/mixins.py:17) — so
+        # overriding the column silently overrides is_authenticated too, and @login_required
+        # already refuses a deactivated account. Verified by running it, not by reading it.
+        #
+        # That is a load-bearing coincidence between a mixin property and a column name. If the
+        # model ever declares its own is_authenticated, or drops UserMixin for a plain object, the
+        # coupling disappears with no error anywhere and every open session of every deactivated
+        # account starts working again — for up to remember_days, refreshed on each use. This line
+        # is what keeps that from being silent, and it costs an attribute read.
+        if not user.is_active:
             return None
         if sid:
             try:

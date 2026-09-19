@@ -877,11 +877,46 @@ check("install.sh: the narrow grant is conditional on the root-owned pieces bein
       '[ "${HELPER_OK}" -eq 1 ] && [ "${ROOT_TOOLS_OK}" -eq 1 ]' in _inst)
 check("install.sh: still validates whichever grant it wrote with visudo",
       "visudo -cf /etc/sudoers.d/linuxgsm-panel" in _inst)
+
+# ── …and the grant must never be WIDENED by the side it constrains ───────────────────────────
+# HELPER_OK was set from `[ -f "${PANEL_DIR}/tools/panel-helper" ]`, a path the panel user owns.
+# `git update-index --skip-worktree` makes a deletion survive the update's `git reset --hard`, so
+# the panel user could delete that file, leave it deleted, and have this function replace the
+# narrow rule with NOPASSWD:ALL. The grant now also asks whether the helper is actually INSTALLED.
+check("install.sh: a failed REFRESH cannot widen a grant that is already narrow",
+      "|| root_tools_present" in _inst)
+check("install.sh: root_tools_present reads the installed destinations, not the checkout",
+      'for f in "${HELPER_DST:-}" "${DBM_DST:-}" "${INSTALLER_DST:-}" "${PANEL_CONF:-}"' in _inst
+      and "PANEL_DIR" not in _inst[_inst.index("root_tools_present() {"):_inst.index("write_sudoers_grant() {")])
+check("install.sh: and it requires each of them to be root-owned",
+      'stat -c ' + chr(39) + '%U' + chr(39) + ' "${f}"' in _inst and '= "root"' in _inst)
+
+# ── Root's copy of a boundary file comes from the object store, not the working tree ──────────
+# `git reset --hard` does NOT guarantee the working tree matches the commit: --skip-worktree
+# exempts a path from it, and a smudge filter in .git/info/attributes rewrites the file DURING
+# checkout. Both live in .git/, which is panel-owned, and _gitc runs git AS THE CHECKOUT OWNER.
+# `git cat-file blob` reads the committed bytes and consults neither.
+check("install.sh: the root-owned pieces are staged with git cat-file, not copied from the tree",
+      '_gitc cat-file blob "HEAD:${rel}"' in _inst)
+check("install.sh: staging lands in the root-owned HELPER_DIR, not a panel-writable path",
+      'local rel="$1" out="${HELPER_DIR}/.stage-$2"' in _inst)
+for _src in ("HELPER_SRC", "DBM_SRC"):
+    check("install.sh: no longer installs root-owned files straight from %s" % _src,
+          _src not in _inst)
+
 # The narrow grant must not quietly re-admit any of the things that were call sites. Each of these
 # runs whatever argv you hand it, so permitting one is permitting everything.
-_narrow = _inst[_inst.index('if [ "${HELPER_OK}"'):_inst.index("chmod 440 /etc/sudoers.d")]
+# Sliced with find(), not index(): an anchor that has MOVED must fail this gate, not raise out of
+# the module and take the other 1900 checks with it. (Injecting a change to the grant condition
+# did exactly that — the suite died at import with a ValueError instead of reporting a failure.)
+_g_i = _inst.find('if { [ "${HELPER_OK}"')
+_g_j = _inst.find("chmod 440 /etc/sudoers.d")
+check("install.sh: the sudoers grant block is where this gate expects it",
+      _g_i != -1 and _g_j > _g_i, "start=%d end=%d" % (_g_i, _g_j))
+_narrow = _inst[_g_i:_g_j] if (_g_i != -1 and _g_j > _g_i) else ""
 for _never in ("systemd-run", "/bin/bash", "/bin/sh", "tailscale", "sudo -u"):
-    check("install.sh: the narrow grant does not permit %s" % _never, _never not in _narrow)
+    check("install.sh: the narrow grant does not permit %s" % _never,
+          bool(_narrow) and _never not in _narrow)
 
 # ── The update's snapshot and its rollback, RUN rather than read ──────────────────────────────
 # The snapshot is the only thing standing between a failed update and a dead install, and its
@@ -967,7 +1002,7 @@ if len(_rt_set) == 1:
     check("install.sh: ...and only once panel.conf AND the root-owned installer both landed",
           _rt_guard == 'if [ "${CONF_OK}" -eq 1 ] && [ "${INST_OK}" -eq 1 ]; then', _rt_guard)
     check("install.sh: the installer copy records its own success rather than `|| true`",
-          '"${INSTALLER_SRC}" "${INSTALLER_DST}" 2>/dev/null && INST_OK=1' in _inst_txt)
+          '"${_istage}" "${INSTALLER_DST}" 2>/dev/null && INST_OK=1' in _inst_txt)
 
 # ── panel-self-update: what root executes out of a directory the panel owns ────────────────────
 # `panel-self-update` runs the root-owned install.sh as root with cwd=PANEL_DIR, and its docstring
@@ -1572,10 +1607,14 @@ check("install.sh: the UPDATE path also re-evaluates the sudoers grant",
       "write_sudoers_grant" in _upd_body)
 check("install.sh: the update path still exits before the fresh-install steps",
       "    exit 0\n" in _upd_body)
-# The root-owned installer copy must come from the CHECKOUT: the documented quick install is
-# `curl … | bash`, where "$0" is the shell — the old form copied /usr/bin/bash into place.
-check("install.sh: the root-owned installer copy is sourced from the checkout, not \"$0\"",
-      'INSTALLER_SRC="${PANEL_DIR}/install.sh"' in _inst)
+# The root-owned installer copy must come from the COMMIT, not from the working tree (which the
+# panel user owns) and not from "$0" (the documented quick install is `curl … | bash`, where "$0"
+# is the shell — an older form copied /usr/bin/bash into place). SCRIPT_PATH survives only as the
+# fallback for a tree with no install.sh in it, and the shebang test is what keeps bash out.
+check("install.sh: the root-owned installer copy is staged from the commit",
+      "stage_root_source install.sh install.sh" in _inst)
+check("install.sh: ...with SCRIPT_PATH only as a fallback, still shebang-checked",
+      '${SCRIPT_PATH}' in _inst and "head -n1 \"${_istage}\" | grep -q '^#!.*sh'" in _inst)
 
 # ── Disabling Tailscale Serve removes the mount it is actually ON ─────────────────────────────
 # disableServe() hardcoded mount:'/'. `tailscale serve --remove /` exits 0 on a node whose mapping

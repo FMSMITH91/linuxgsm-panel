@@ -312,7 +312,8 @@ def register(app):
         remote = get_remote(remote_id)
         success, msg = ssh_test_connection(
             remote.host, remote.port, remote.username,
-            remote.auth_method, decrypt_secret(remote.auth_credential)
+            remote.auth_method, decrypt_secret(remote.auth_credential),
+            host_key=remote.host_key or "",
         )
         remote.is_online = bool(success)
         remote.last_seen = utcnow()

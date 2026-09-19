@@ -929,6 +929,28 @@ _CR_TAB = ("  */5 * * * * /home/gm/gmodserver monitor\n"
 _cr_sb = _cr_tmp.mkdtemp(prefix="cron-rewrite-")
 
 
+# ── ...and the account name it builds that pipeline from must be validated HERE ───────────────
+# _rewrite_crontab renders `crontab -u <user>` inside a `sudo bash -c …` that it passes with
+# sudo=False — a hand-built escalation none of the three ratchets can see (one counts calls to a
+# function named _sudo_sh, one counts the sudo=True keyword, one looks for an argv starting with
+# "sudo"). `user` went in UNQUOTED, into a pipeline that runs as ROOT. The only thing standing in
+# front of it was the model's @validates hook, which fires on ASSIGNMENT and never on a row loaded
+# from the database — so a pre-validator row, or one from a restored backup, was root RCE.
+_rc_seen = []
+_rc_o_run = _sm_core.run_command
+try:
+    _sm_core.run_command = lambda s, c, **k: (_rc_seen.append(c), ("", "", 0))[1]
+    _rc_ok, _rc_msg = _sm_core._rewrite_crontab(NS(), "gm; id > /tmp/pwned; #", "", ["x"])
+    check("_rewrite_crontab: an unsafe account name is refused", _rc_ok is False, repr(_rc_msg))
+    check("_rewrite_crontab: ...and no command was sent at all", not _rc_seen, str(_rc_seen)[:160])
+    _rc_seen.clear()
+    _sm_core._rewrite_crontab(NS(), "gmodserver", "", ["* * * * * /home/gmodserver/x"])
+    check("_rewrite_crontab: a legitimate account still builds its pipeline",
+          len(_rc_seen) == 1 and "crontab -u gmodserver" in _rc_seen[0], str(_rc_seen)[:160])
+finally:
+    _sm_core.run_command = _rc_o_run
+
+
 def _cr_drive(fn, *a, **kw):
     """Run a cron editor for real: capture its command and execute it against files."""
     seen = {}
@@ -1230,11 +1252,27 @@ try:
         _sm_core.run_command = lambda s, c, _m=_mark, **k: (_m, "", 0)
         eq("read_file: %s is still reported" % _mark,
            _sm_files.read_file(_FakeSrv(), "csgoserver", "cfg/server.cfg")[1], _want)
-    # An unframed body (an older host, or a script that never reached `cat`) falls back rather
-    # than returning nothing.
+    # An unframed body means the read never got as far as `cat`. It used to be returned as
+    # CONTENT ("fall back rather than returning nothing"), and that is destructive rather than
+    # merely wrong: run_command does not raise on the local or Tailscale transports — it returns
+    # ("", "…timed out", -1) — and a `sudo -u` refusal puts its message on stderr with empty
+    # stdout. Either way api_server_file answered 200 {"content": ""}, the editor showed an empty
+    # file, and pressing Save wrote "" over the real config. The sentinel framing already knows
+    # the difference; these pin that it SAYS so.
     _sm_core.run_command = lambda s, c, **k: ("plain contents", "", 0)
-    eq("read_file: an unframed body still comes through",
-       _sm_files.read_file(_FakeSrv(), "csgoserver", "cfg/server.cfg")[0], "plain contents")
+    _rf_u, _rf_uerr = _sm_files.read_file(_FakeSrv(), "csgoserver", "cfg/server.cfg")
+    check("read_file: an unframed body is a FAILED read, not content", _rf_u is None, repr(_rf_u))
+    check("read_file: ...and it reports the error, so the editor cannot save it back",
+          bool(_rf_uerr), repr(_rf_uerr))
+    # The destructive case by name: a transport that failed without raising.
+    _sm_core.run_command = lambda s, c, **k: ("", "SSH command timed out", -1)
+    eq("read_file: a failed transport does not read as an empty file",
+       _sm_files.read_file(_FakeSrv(), "csgoserver", "cfg/server.cfg")[0], None)
+    # A genuinely empty file still round-trips — it arrives FRAMED.
+    _sm_core.run_command = lambda s, c, **k: (
+        ("%s%s" % (_sm_files._READ_BEGIN, _sm_files._READ_END)).strip(), "", 0)
+    eq("read_file: a file that really is empty still reads as empty",
+       _sm_files.read_file(_FakeSrv(), "csgoserver", "cfg/server.cfg")[0], "")
 
     # The host-side symlink guard. _safe_abspath is lexical and cannot see a symlink planted under
     # the game user's home, so every file operation now carries a realpath check that runs WHERE

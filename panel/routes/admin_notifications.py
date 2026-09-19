@@ -218,7 +218,17 @@ def register(app):
         user.display_name = (request.form.get("display_name") or user.display_name or "").strip()
         _new_email = request.form.get("email", "").strip()
         user.email = encrypt_secret(_new_email) if _new_email else None
+        _was_active = bool(user.is_active)
         user.is_active = request.form.get("is_active") == "on"
+        if _was_active and not user.is_active:
+            # load_user() refuses an inactive account, so the sessions are already dead the moment
+            # this commits. Clear the registry rows and bump the epoch anyway: an offboarded
+            # account should not go on listing "active sessions" on its account page, and the
+            # epoch is what invalidates a legacy cookie that carries no sid to delete.
+            from panel.db.models import UserSession
+            UserSession.query.filter_by(user_id=user.id).delete(synchronize_session=False)
+            user.auth_epoch = (user.auth_epoch or 0) + 1
+            user.revoke_api_token()
         user.is_superadmin = want_superadmin
 
         # THE LOCKOUT GUARD RUNS HERE, before anything below can commit. It used to sit at the very
@@ -251,6 +261,14 @@ def register(app):
             # reset just took away from them.
             user.set_password(hash_password(new_password))
             user.auth_epoch = (user.auth_epoch or 0) + 1   # revoke existing sessions
+            # The API token too. It is a SECOND credential for the same account, and it did not
+            # answer to any of the controls that exist to take an account back: it carries no
+            # auth_epoch, so a password change did not touch it, and "sign out everywhere" deleted
+            # every UserSession row and left it working. app.py's note that "cookie theft is also
+            # recoverable via sign out everywhere" was not true while one existed. Minting one
+            # needs only a live session (no password, no 2FA), so an attacker with a stolen cookie
+            # could leave themselves a key that survived the victim's whole recovery.
+            user.revoke_api_token()
             # Only when the password now belongs to two people. An admin resetting their OWN
             # password knows it because they chose to see it, and has nobody to take it back from;
             # forcing them through a change screen would protect nothing.

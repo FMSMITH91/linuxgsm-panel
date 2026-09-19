@@ -590,6 +590,44 @@ check_origin_trusted() {
     return 0
 }
 
+# ── Where root's copy of a boundary file comes from ────────────────────────────────────────────
+# NOT the working tree. install_root_tools installs three files root-owned: the helper the sudoers
+# rule names, db_maintenance.py (root runs it) and this installer (root runs it on every
+# self-update). All three live in ${PANEL_DIR}, which belongs to the PANEL user, and the integrity
+# argument was "fetch_code ran `git reset --hard` first, so these are upstream's bytes". They are
+# not. Two untracked, panel-owned files inside .git/ defeat it, and _gitc runs git AS THE CHECKOUT
+# OWNER, so git honours both:
+#
+#   * `git update-index --skip-worktree <path>` makes `reset --hard` leave that path alone.
+#     Attacker content survives it — and so does a DELETION, which used to zero HELPER_OK and made
+#     write_sudoers_grant widen the grant back to NOPASSWD:ALL. The panel user could delete its own
+#     sudo restriction by removing a file it owns.
+#   * a smudge filter (.git/info/attributes plus filter.<name>.smudge in .git/config) rewrites the
+#     file DURING checkout, so `reset --hard` writes the filter's output, not the committed blob.
+#
+# check_origin_trusted() compares the remote URL and is blind to both.
+#
+# `git cat-file blob <rev>:<path>` reads the object store: it returns the committed bytes, applies
+# no filter, and never consults the working tree or the index. Root stages that output inside
+# HELPER_DIR, which is root-owned 0755 and therefore not panel-writable — which is what closes the
+# window between staging and `install`.
+stage_root_source() {
+    local rel="$1" out="${HELPER_DIR}/.stage-$2"
+    ${H_SUDO} rm -f "${out}" 2>/dev/null || true
+    if [ -d "${PANEL_DIR}/.git" ]; then
+        _gitc cat-file blob "HEAD:${rel}" 2>/dev/null \
+            | ${H_SUDO} tee "${out}" >/dev/null 2>&1 || { ${H_SUDO} rm -f "${out}" 2>/dev/null; return 1; }
+    else
+        # No git: a tarball / --src install, where the tree IS the operator's own copy and there is
+        # no object store to prefer over it.
+        ${H_SUDO} cp -- "${PANEL_DIR}/${rel}" "${out}" 2>/dev/null \
+            || { ${H_SUDO} rm -f "${out}" 2>/dev/null; return 1; }
+    fi
+    [ -s "${out}" ] || { ${H_SUDO} rm -f "${out}" 2>/dev/null; return 1; }
+    ${H_SUDO} chown root:root "${out}" 2>/dev/null || true
+    printf '%s\n' "${out}"
+}
+
 # Sets HELPER_OK / ROOT_TOOLS_OK, which write_sudoers_grant reads.
 install_root_tools() {
     if [ "${ORIGIN_TRUSTED:-1}" -ne 1 ]; then
@@ -599,13 +637,25 @@ install_root_tools() {
     fi
     HELPER_OK=0
     ROOT_TOOLS_OK=0
-    HELPER_SRC="${PANEL_DIR}/tools/panel-helper"
     HELPER_DIR="/usr/local/lib/linuxgsm-panel"
     HELPER_DST="${HELPER_DIR}/panel-helper"
+    INSTALLER_DST="${HELPER_DIR}/install.sh"
+    DBM_DST="${HELPER_DIR}/db_maintenance.py"
+    PANEL_CONF="${HELPER_DIR}/panel.conf"
     H_SUDO=""; [ "$(id -u)" -ne 0 ] && H_SUDO="sudo"
-    if [ -f "${HELPER_SRC}" ]; then
-        if ${H_SUDO} install -d -o root -g root -m 0755 "${HELPER_DIR}" 2>/dev/null \
-           && ${H_SUDO} install -o root -g root -m 0755 "${HELPER_SRC}" "${HELPER_DST}" 2>/dev/null; then
+
+    local _stage="" _istage=""
+
+    # Root-owned and 0755 BEFORE anything is staged into it: stage_root_source depends on the panel
+    # user being unable to write here.
+    if ! ${H_SUDO} install -d -o root -g root -m 0755 "${HELPER_DIR}" 2>/dev/null; then
+        warn "Could not create ${HELPER_DIR} (needs root). The panel still works; re-run this"
+        warn "installer as root to place the root-owned components."
+        return 0
+    fi
+
+    if _stage="$(stage_root_source tools/panel-helper panel-helper)"; then
+        if ${H_SUDO} install -o root -g root -m 0755 "${_stage}" "${HELPER_DST}" 2>/dev/null; then
             HELPER_OK=1
             ok "Privileged helper installed at ${HELPER_DST}"
         else
@@ -615,6 +665,9 @@ install_root_tools() {
             warn "Could not install/refresh the privileged helper (needs root). The panel still"
             warn "works; re-run this installer as root to place the current one."
         fi
+        ${H_SUDO} rm -f "${_stage}" 2>/dev/null || true
+    else
+        warn "Could not read tools/panel-helper from the repository — the helper was NOT refreshed."
     fi
 
     # db_maintenance.py is installed ROOT-OWNED beside the helper, and panel.conf records the one
@@ -626,23 +679,9 @@ install_root_tools() {
     # checkout is owned by the panel user and rewritten by `git pull` on every self-update. Root
     # executing it — or the checkout's venv interpreter — would make the boundary decorative. The
     # helper runs THIS copy with the SYSTEM python instead.
-    INSTALLER_DST="${HELPER_DIR}/install.sh"
-    DBM_SRC="${PANEL_DIR}/db_maintenance.py"
-    DBM_DST="${HELPER_DIR}/db_maintenance.py"
-    PANEL_CONF="${HELPER_DIR}/panel.conf"
-    if [ -f "${DBM_SRC}" ] && [ -d "${HELPER_DIR}" ]; then
-        if ${H_SUDO} install -o root -g root -m 0755 "${DBM_SRC}" "${DBM_DST}" 2>/dev/null; then
-            # The installer itself, root-owned, for the same reason: the self-update runs it as
-            # root, and the copy in the checkout is panel-writable.
-            #
-            # Source it from the CHECKOUT, not from "$0"/SCRIPT_PATH. The documented quick install
-            # is `curl -fsSL … | bash`, where "$0" is the shell — so the old form happily copied
-            # /usr/bin/bash to ${INSTALLER_DST} and the self-update then "ran the installer" by
-            # executing bash with no script. ${PANEL_DIR}/install.sh is always present and always
-            # the version that matches the code; SCRIPT_PATH is the fallback for a local run from
-            # somewhere else.
-            INSTALLER_SRC="${PANEL_DIR}/install.sh"
-            [ -f "${INSTALLER_SRC}" ] || INSTALLER_SRC="${SCRIPT_PATH}"
+    if _stage="$(stage_root_source db_maintenance.py db_maintenance.py)"; then
+        if ${H_SUDO} install -o root -g root -m 0755 "${_stage}" "${DBM_DST}" 2>/dev/null; then
+            ${H_SUDO} rm -f "${_stage}" 2>/dev/null || true
             CONF_OK=0
             printf 'db_path=%s\ndata_dir=%s\npanel_dir=%s\n' \
                 "${PANEL_DIR}/data/panel.db" "${PANEL_DIR}/data" "${PANEL_DIR}" \
@@ -650,29 +689,41 @@ install_root_tools() {
                 && ${H_SUDO} chmod 0644 "${PANEL_CONF}" 2>/dev/null \
                 && ${H_SUDO} chown root:root "${PANEL_CONF}" 2>/dev/null && CONF_OK=1
             INST_OK=0
-            if [ -f "${INSTALLER_SRC}" ] && head -n1 "${INSTALLER_SRC}" | grep -q '^#!.*sh'; then
-                ${H_SUDO} install -o root -g root -m 0755 "${INSTALLER_SRC}" "${INSTALLER_DST}" 2>/dev/null && INST_OK=1
-            else
-                warn "Could not find this installer on disk to copy root-owned — skipping."
+            # The installer itself, root-owned, for the same reason: the self-update runs it as
+            # root, and the copy in the checkout is panel-writable.
+            if ! _istage="$(stage_root_source install.sh install.sh)"; then
+                # The documented quick install is `curl -fsSL … | bash`, where there may be no
+                # install.sh in the checkout yet. Fall back to the script actually running — the
+                # shebang test below is what stops that being /usr/bin/bash.
+                _istage=""
+                if [ -f "${SCRIPT_PATH}" ]; then
+                    _istage="${HELPER_DIR}/.stage-install.sh"
+                    ${H_SUDO} cp -- "${SCRIPT_PATH}" "${_istage}" 2>/dev/null || _istage=""
+                fi
             fi
+            if [ -n "${_istage}" ] && head -n1 "${_istage}" | grep -q '^#!.*sh'; then
+                ${H_SUDO} install -o root -g root -m 0755 "${_istage}" "${INSTALLER_DST}" 2>/dev/null && INST_OK=1
+            else
+                warn "Could not find this installer to copy root-owned — skipping."
+            fi
+            [ -n "${_istage}" ] && ${H_SUDO} rm -f "${_istage}" 2>/dev/null || true
             # ALL THREE, not just db_maintenance. The grant below is documented as meaning "every
             # root-owned piece is in place … the helper, db_maintenance, and the root-owned
-            # installer", and this flag is what it reads — but the panel.conf write was an
-            # unchecked && chain whose status was discarded and the installer copy carried
-            # `|| true`, so a narrow grant could be written on a host missing either. The helper
-            # fails loudly when they are absent, so the cost was a claim the code never verified —
-            # which is the pattern the grant logic exists to avoid.
+            # installer", and this flag is what it reads.
             if [ "${CONF_OK}" -eq 1 ] && [ "${INST_OK}" -eq 1 ]; then
                 ROOT_TOOLS_OK=1
                 ok "Offline DB repair installed root-owned at ${DBM_DST}"
             else
                 warn "db_maintenance is in place but panel.conf or the root-owned installer is not."
-                warn "Keeping the wider sudoers grant until a re-run as root places all three."
+                warn "Keeping the existing sudoers grant until a re-run as root places all three."
             fi
         else
+            ${H_SUDO} rm -f "${_stage}" 2>/dev/null || true
             warn "Could not install the root-owned db_maintenance copy (needs root)."
             warn "The panel falls back to the pre-helper repair path until you re-run this as root."
         fi
+    else
+        warn "Could not read db_maintenance.py from the repository — it was NOT refreshed."
     fi
 }
 
@@ -692,14 +743,35 @@ install_root_tools() {
 #
 # Called from the update path as well as the fresh one, so a host that has now received the
 # root-owned pieces actually gets its grant narrowed instead of keeping the wide one forever.
+# Is every root-owned piece actually in place, root-owned, RIGHT NOW? This asks about the
+# INSTALLED state, not about whether this run managed to refresh it — two different questions, and
+# only the second one is answerable by the panel user.
+#
+# install_root_tools used to set HELPER_OK from `[ -f "${PANEL_DIR}/tools/panel-helper" ]`, a path
+# the panel user owns. Deleting that file — and making the deletion survive `git reset --hard` with
+# `git update-index --skip-worktree` — zeroed the flag, and write_sudoers_grant then replaced the
+# narrow rule with NOPASSWD:ALL. The untrusted side could widen its own sudo grant by removing a
+# file it owned. What the grant actually depends on is whether the helper root will execute EXISTS,
+# so read that instead, and never widen while it does.
+root_tools_present() {
+    local f
+    for f in "${HELPER_DST:-}" "${DBM_DST:-}" "${INSTALLER_DST:-}" "${PANEL_CONF:-}"; do
+        [ -n "${f}" ] && [ -f "${f}" ] || return 1
+        [ "$(stat -c '%U' "${f}" 2>/dev/null)" = "root" ] || return 1
+    done
+    return 0
+}
+
 write_sudoers_grant() {
     [ "${RUN_AS_ROOT}" -eq 1 ] || return 0
-    if [ "${HELPER_OK}" -eq 1 ] && [ "${ROOT_TOOLS_OK}" -eq 1 ]; then
+    if { [ "${HELPER_OK}" -eq 1 ] && [ "${ROOT_TOOLS_OK}" -eq 1 ]; } || root_tools_present; then
         echo "${PANEL_USER} ALL=(root) NOPASSWD: ${HELPER_DST}" > /etc/sudoers.d/linuxgsm-panel
         SUDO_SCOPE="narrow (panel-helper only)"
     else
         echo "${PANEL_USER} ALL=(ALL) NOPASSWD:ALL" > /etc/sudoers.d/linuxgsm-panel
         SUDO_SCOPE="WIDE (NOPASSWD:ALL) — the root-owned helper pieces are not all installed"
+        warn "  (Reached only when the root-owned pieces are genuinely absent from ${HELPER_DIR:-/usr/local/lib/linuxgsm-panel};"
+        warn "   a failure to REFRESH them no longer widens a grant that is already narrow.)"
     fi
     chmod 440 /etc/sudoers.d/linuxgsm-panel
     visudo -cf /etc/sudoers.d/linuxgsm-panel >/dev/null \

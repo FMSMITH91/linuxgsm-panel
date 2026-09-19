@@ -648,7 +648,9 @@ def v_managed_user(s):
     refuses.
 
     An unknown name passes — the verb's own lookup fails a moment later, and `user-create` needs to
-    name an account that does not exist yet. useradd will not give it uid 0."""
+    name an account that does not exist yet. useradd will not give it uid 0.
+
+    uid 0 is not the only account with no legitimate caller, though — see _is_panel_account."""
     s = v_username(s)
     try:
         if pwd.getpwnam(s).pw_uid == 0:
@@ -656,6 +658,100 @@ def v_managed_user(s):
     except KeyError:
         pass          # not a user on this host (yet) — shape is valid, the verb will fail if wrong
     return s
+
+
+def v_destroyable_user(s):
+    """A Linux user the panel may DESTROY — v_managed_user, and never the panel's own account.
+
+    Deliberately separate from v_managed_user, which gates 20 verbs. Only four of them destroy
+    anything, and the panel legitimately names its OWN account to several of the rest:
+    `tailscale-set-operator` exists precisely to pass it (tailscale_integration passes
+    _current_os_user()), and on a single-box install where LinuxGSM runs under the same account as
+    the panel, `game-file-read`, `game-dir-tar`, `game-backup-read` and `crontab-list` all take it
+    too. Putting the refusal on v_managed_user broke every one of those — the file browser,
+    downloads, backups, cron and Tailscale setup — to protect four verbs. Scope it to the four."""
+    s = v_managed_user(s)
+    if _is_panel_account(s):
+        raise ValueError("refusing the panel's own account")
+    return s
+
+
+def _is_panel_account(name):
+    """True if `name` is the account the panel itself runs as, or one whose home CONTAINS the
+    panel install. Those are the accounts the destructive user verbs must never be pointed at.
+
+    Why this exists. `user-delete`, `user-delete-force`, `user-remove-home` and
+    `user-kill-processes` take their name from the "server name" field of the install form — shape
+    checked against USERNAME_RE and nothing more. install.sh creates the panel's own account with
+    `useradd --system`, which gives it a uid below 1000 but NOT 0, so the uid-0 test above lets it
+    straight through. Installing a game server named `lgsmpanel` ran, as root:
+
+        userdel -r lgsmpanel
+        rm -rf -- /home/lgsmpanel
+
+    and /home/lgsmpanel is where panel.db, secret_key, cred_key, config.json and every panel backup
+    live. The panel deleted itself, unrecoverably — unrecoverably because the backups kept for
+    exactly this situation were inside the tree being removed. It needed only MANAGE_SERVERS, not
+    superadmin, and there was no confirmation step.
+
+    home_of()'s docstring says the path "can only ever be a direct child of /home". That is true,
+    and it is not the property that matters: the question it never asked is WHOSE child.
+
+    Three tests, because no one of them covers both install models:
+      * SUDO_UID — whoever invoked us. On a root/system install that is the service account.
+      * whether removing this account's home would take the install tree with it. This is the one
+        that catches a per-user install, where the panel runs as an ordinary account like `ubuntu`.
+      * the owner of the install tree.
+
+    Fails CLOSED only where it can answer; an unreadable panel.conf leaves the last two silent
+    rather than refusing every account, because that would break legitimate game-server removal."""
+    if _pw_name(_int_or_none(os.environ.get("SUDO_UID"))) == name:
+        return True
+    try:
+        panel_dir = panel_conf().get("panel_dir", "")
+    except Exception:
+        panel_dir = ""
+    if not panel_dir:
+        return False
+    panel_dir = os.path.realpath(panel_dir)
+    try:
+        home = os.path.realpath(home_of(name))
+    except ValueError:
+        return False
+    if panel_dir == home or panel_dir.startswith(home + "/"):
+        return True
+    return _owner_of(panel_dir) == name
+
+
+def _int_or_none(s):
+    """int(s), or None when it is missing or not a number."""
+    try:
+        return int(s)
+    except (TypeError, ValueError):
+        return None
+
+
+def _pw_name(uid):
+    """The account name for a uid, or "" when there is no such account (or uid is None).
+
+    A named lookup rather than a try/except around each call site: an empty `except: pass` is
+    py/empty-except, and more to the point a caller that swallowed the error in place read as if
+    the comparison had happened and failed. "" is a name no account can have, so it compares false
+    against every candidate."""
+    if uid is None:
+        return ""
+    try:
+        return pwd.getpwuid(uid).pw_name
+    except (KeyError, OSError, ValueError, OverflowError):
+        return ""
+
+
+def _owner_of(path):
+    """The name of the account owning `path`, or "" if that cannot be determined."""
+    try:
+        return _pw_name(os.stat(path).st_uid)
+    except OSError:
+        return ""
 
 
 def home_of(user):
@@ -920,13 +1016,13 @@ VERBS = {
     "user-create": ([v_managed_user],
                     lambda a: ["useradd", "-m", "-s", "/bin/bash", a[0]], None),
     "user-lock-password": ([v_managed_user], lambda a: ["passwd", "-l", a[0]], None),
-    "user-delete": ([v_managed_user], lambda a: ["userdel", "-r", a[0]], None),
-    "user-delete-force": ([v_managed_user], lambda a: ["userdel", "-r", "-f", a[0]], None),
-    "user-kill-processes": ([v_managed_user], lambda a: ["pkill", "-9", "-u", a[0]], None),
+    "user-delete": ([v_destroyable_user], lambda a: ["userdel", "-r", a[0]], None),
+    "user-delete-force": ([v_destroyable_user], lambda a: ["userdel", "-r", "-f", a[0]], None),
+    "user-kill-processes": ([v_destroyable_user], lambda a: ["pkill", "-9", "-u", a[0]], None),
     # rm -rf as root. The path is CONSTRUCTED from a validated user name (home_of), never passed
     # in, so the argument this verb receives is a name and the thing it deletes can only ever be a
     # direct child of /home.
-    "user-remove-home": ([v_managed_user], lambda a: ["rm", "-rf", "--", home_of(a[0])], None),
+    "user-remove-home": ([v_destroyable_user], lambda a: ["rm", "-rf", "--", home_of(a[0])], None),
 
     # ── log reads ──
     # journalctl and tail both take a target. Neither target ever comes from a caller: the SOURCE

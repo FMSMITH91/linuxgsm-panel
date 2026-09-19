@@ -140,6 +140,14 @@ def cmd_reset_password(args):
         # recovery path, and a recovery tool that can refuse you is not one.
         u.set_password(auth.hash_password(_read_password(args)))
         u.auth_epoch = (u.auth_epoch or 0) + 1   # revoke existing sessions
+            # The API token too. It is a SECOND credential for the same account, and it did not
+            # answer to any of the controls that exist to take an account back: it carries no
+            # auth_epoch, so a password change did not touch it, and "sign out everywhere" deleted
+            # every UserSession row and left it working. app.py's note that "cookie theft is also
+            # recoverable via sign out everywhere" was not true while one existed. Minting one
+            # needs only a live session (no password, no 2FA), so an attacker with a stolen cookie
+            # could leave themselves a key that survived the victim's whole recovery.
+        u.revoke_api_token()
         db.session.commit()
         print("Password reset for '%s' (existing sessions revoked)." % username)
 
@@ -172,7 +180,17 @@ def cmd_disable_2fa(args):
 def _set_flag(username, field, value, label):
     with app.app_context():
         u = _require_user(username)
+        _was_active = bool(u.is_active)
         setattr(u, field, value)
+        if field == "is_active" and _was_active and not value:
+            # Same reasoning as the /users edit form: load_user() is what stops the sessions
+            # working, and this is what stops them being LISTED as live — which matters most here,
+            # because this is the recovery CLI an operator reaches for when they think an account
+            # is compromised.
+            from panel.db.models import UserSession
+            UserSession.query.filter_by(user_id=u.id).delete(synchronize_session=False)
+            u.auth_epoch = (u.auth_epoch or 0) + 1
+            u.revoke_api_token()
         db.session.flush()
         # Never let the panel end up with no way to administer it.
         if User.query.filter_by(is_superadmin=True, is_active=True).count() == 0:

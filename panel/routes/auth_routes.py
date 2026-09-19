@@ -383,6 +383,14 @@ def register(app):
             others = others.filter(UserSession.id != keep.id)
         n = others.delete(synchronize_session=False)
         user.auth_epoch = (user.auth_epoch or 0) + 1
+            # The API token too. It is a SECOND credential for the same account, and it did not
+            # answer to any of the controls that exist to take an account back: it carries no
+            # auth_epoch, so a password change did not touch it, and "sign out everywhere" deleted
+            # every UserSession row and left it working. app.py's note that "cookie theft is also
+            # recoverable via sign out everywhere" was not true while one existed. Minting one
+            # needs only a live session (no password, no 2FA), so an attacker with a stolen cookie
+            # could leave themselves a key that survived the victim's whole recovery.
+        user.revoke_api_token()
         db.session.commit()
         if keep is None:
             # A legacy login (cookie from before per-session tracking) has no row to keep, so give
