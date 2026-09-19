@@ -1501,3 +1501,46 @@ try:
           _ok4 is True and "restart" in _msg4.lower(), _msg4)
 finally:
     _sm_core.run_command, _sm_core.run_privileged = _orig_gm_run, _orig_gm_priv
+
+
+# ── a backup must never be deleted to make room the panel could not measure ─────────────────────
+# backup_disk_info returns {"free": 0, "total": 0} on ANY failure (its rc is discarded), and
+# free=0 is below every threshold — so a timed-out `df` sent _ensure_backup_headroom straight into
+# its delete loop. Measured on the test host: with df working nothing was deleted; with the df read
+# failing, two of four backups were deleted and the run reported "freed space first".
+# run_game_backup's pre-flight check already states the rule — "Only enforce when we actually read
+# the disk (total > 0); a failed df reads as 0/0" — but it guards the path that BLOCKS a backup,
+# not the one that DELETES them.
+_hr_orig = (_sm_cron.list_game_backups, _sm_cron.backup_disk_info, _sm_cron.delete_game_backup)
+try:
+    _hr = {"deleted": [], "disk": {"free": 0, "total": 0}}
+    _BKS = [{"name": "s-2026-09-18-100000.tar.zst", "size": 1000},
+            {"name": "s-2026-09-17-100000.tar.zst", "size": 1000},
+            {"name": "s-2026-09-16-100000.tar.zst", "size": 1000},
+            {"name": "s-2026-09-15-100000.tar.zst", "size": 1000}]
+    _sm_cron.list_game_backups = lambda s, u: list(_BKS)
+    _sm_cron.backup_disk_info = lambda s, u: _hr["disk"]
+    _sm_cron.delete_game_backup = lambda s, u, n: (_hr["deleted"].append(n), True)[1]
+
+    # THE BUG: a failed df is 0/0, and 0 free is below any threshold.
+    _hr["deleted"], _hr["disk"] = [], {"free": 0, "total": 0}
+    _note = _sm_cron._ensure_backup_headroom(NS(), "ut2k4srv", 3)
+    check("backup headroom: a FAILED df deletes nothing", _hr["deleted"] == [], repr(_hr["deleted"]))
+    check("backup headroom: ...and reports no freeing it did not do", _note == "", repr(_note))
+
+    # A real, genuinely tight disk must still free space — the guard must not disable the feature.
+    _hr["deleted"], _hr["disk"] = [], {"free": 500, "total": 10 ** 9}
+    _note = _sm_cron._ensure_backup_headroom(NS(), "ut2k4srv", 3)
+    check("backup headroom: a real tight disk still frees space", len(_hr["deleted"]) > 0, repr(_note))
+    check("backup headroom: ...keeping the newest keep-1",
+          "s-2026-09-18-100000.tar.zst" not in _hr["deleted"], repr(_hr["deleted"]))
+    check("backup headroom: ...and deleting the OLDEST first",
+          _hr["deleted"][0] == "s-2026-09-15-100000.tar.zst", repr(_hr["deleted"]))
+
+    # A real, roomy disk deletes nothing.
+    _hr["deleted"], _hr["disk"] = [], {"free": 10 ** 9, "total": 10 ** 9}
+    check("backup headroom: a roomy disk deletes nothing",
+          _sm_cron._ensure_backup_headroom(NS(), "ut2k4srv", 3) == "" and _hr["deleted"] == [])
+finally:
+    (_sm_cron.list_game_backups, _sm_cron.backup_disk_info,
+     _sm_cron.delete_game_backup) = _hr_orig
