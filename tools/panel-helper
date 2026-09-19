@@ -77,6 +77,7 @@ TOOLS = {
     "timedatectl": ("/usr/bin/timedatectl", "/bin/timedatectl"),
     "df": ("/usr/bin/df", "/bin/df"),
     "usermod": ("/usr/sbin/usermod", "/sbin/usermod"),
+    "debconf-set-selections": ("/usr/bin/debconf-set-selections",),
     "groupadd": ("/usr/sbin/groupadd", "/sbin/groupadd"),
     "fallocate": ("/usr/bin/fallocate", "/bin/fallocate"),
     "mkswap": ("/usr/sbin/mkswap", "/sbin/mkswap"),
@@ -125,10 +126,11 @@ APT_CONFOLD = ["-o", "Dpkg::Options::=--force-confdef", "-o", "Dpkg::Options::=-
 # Verbs that must run with DEBIAN_FRONTEND=noninteractive, so apt never blocks on a prompt nobody
 # can answer. Set as an environment variable on the child rather than as a `VAR=value cmd` prefix,
 # which would need a shell.
-NONINTERACTIVE = {"apt-full-upgrade", "apt-upgrade", "apt-install"}
+NONINTERACTIVE = {"apt-full-upgrade", "apt-upgrade", "apt-install", "apt-install-minimal"}
 
 # The only extra apt sources the panel adds.
-REPOS = ("universe",)
+# steamcmd and libstdc++5:i386 are in multiverse; the rest of the game deps in universe.
+REPOS = ("universe", "multiverse")
 
 # Log sources. The panel reads exactly these, so they are named here and the caller passes a NAME —
 # never a unit and never a path.
@@ -1197,6 +1199,15 @@ VERBS = {
     "apt-upgrade": ([], lambda a: [APT, "upgrade", "-y"] + APT_CONFOLD, None),
     "apt-autoremove": ([], lambda a: [APT, "autoremove", "-y"], None),
     "apt-install": ([Rest(v_package)], lambda a: [APT, "install", "-y"] + a, None),
+    # A separate verb rather than a flag on apt-install: --no-install-recommends is right for a
+    # game's dependency list (LinuxGSM names exactly what it needs, and recommends drag in
+    # desktop-sized trees on a headless box) and wrong for the panel's own installs of fail2ban
+    # and unattended-upgrades, which rely on theirs.
+    "apt-install-minimal": ([Rest(v_package)],
+                            lambda a: [APT, "install", "-y", "--no-install-recommends"] + a, None),
+    # steamcmd needs its Steam licence pre-accepted or apt blocks forever on a prompt nobody can
+    # answer -- see do_steamcmd_install.
+    "steamcmd-install": ([], lambda a: [], None),
     "apt-add-repo": ([v_choice(*REPOS)], lambda a: ["add-apt-repository", "-y", a[0]], None),
     "dpkg-add-arch": ([v_choice("i386")], lambda a: ["dpkg", "--add-architecture", a[0]], None),
 
@@ -2185,6 +2196,43 @@ def do_gameuser_group(args, content):
     return r.returncode
 
 
+def do_steamcmd_install(args, content):
+    """Install steamcmd, having pre-accepted its Steam licence.
+
+    steamcmd is in multiverse and its licence is a debconf prompt. Unanswered, apt blocks forever
+    waiting for input nobody can give -- which on the panel's own host meant the install step of
+    a new Steam game hung until its timeout.
+
+    The two preseed lines are FIXED STRINGS written here, not arguments: the only thing a caller
+    could vary about them is which question gets which answer, and there is no legitimate reason
+    to vary that. debconf-set-selections reads them on stdin, so nothing is interpolated into a
+    command either.
+
+    Tries the 32-bit package alongside the 64-bit one first and falls back to 64-bit alone,
+    because steamcmd:i386 is unavailable on some releases while steamcmd itself installs fine. A
+    box that gets only the 64-bit package still runs SteamCMD.
+    """
+    preseed = ("steam steam/question select I AGREE\n"
+               "steam steam/license note \n")
+    r = subprocess.run([resolve("debconf-set-selections")],   # nosec B603 - fixed argv
+                       shell=False, input=preseed, text=True, capture_output=True, timeout=60)
+    if r.returncode != 0:
+        sys.stderr.write("could not preseed the steam licence: %s\n"
+                         % r.stderr[:200])
+        # Carry on anyway: on a host where the licence was already accepted the install still
+        # works, and refusing here would turn a cosmetic failure into no steamcmd at all.
+    env = dict(os.environ, DEBIAN_FRONTEND="noninteractive")
+    apt = resolve(APT)
+    for pkgs in (["steamcmd", "steamcmd:i386"], ["steamcmd"]):
+        r = subprocess.run([apt, "install", "-y"] + pkgs,     # nosec B603 - fixed argv
+                           shell=False, env=env, capture_output=True, text=True, timeout=1800)
+        sys.stdout.write(r.stdout[-2000:])
+        if r.returncode == 0:
+            return 0
+    sys.stderr.write(r.stderr[-500:])
+    return r.returncode
+
+
 def do_lgsm_command(args, content):
     """Run ONE LinuxGSM action as a game user, from that user's home directory.
 
@@ -2720,6 +2768,7 @@ ACTIONS = {
     "game-dir-tar": do_game_dir_tar,
     "lgsm-discover": do_lgsm_discover,
     "lgsm-command": do_lgsm_command,
+    "steamcmd-install": do_steamcmd_install,
     "gameuser-group": do_gameuser_group,
     "sshd-set-directive": do_sshd_set_directive,
     "create-swapfile": do_create_swapfile,

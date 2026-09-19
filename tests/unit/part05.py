@@ -963,6 +963,8 @@ _VERB_SAMPLES = {
     "lgsm-discover": [],
     "lgsm-command": ["gmodserver", "gmodserver", "details", "-", "no"],
     "gameuser-group": ["gmodserver"],
+    "apt-install-minimal": ["libc6:i386", "curl"],
+    "steamcmd-install": [],
     "content-scan": ["cstrike", "hl2"],
 }
 check("privileged: every verb has a sample (new verbs cannot skip the parity check)",
@@ -1714,7 +1716,7 @@ finally:
 check("helper: resolves ufw", _helper.resolve("ufw").endswith("/ufw") if os.path.exists("/usr/sbin/ufw") else True)
 check("helper: knows exactly the tools its verbs need, and no more",
       sorted(_helper.TOOLS) == ["add-apt-repository", "apt-get", "bash_installer", "crontab",
-                                "curl", "df", "dpkg",
+                                "curl", "debconf-set-selections", "df", "dpkg",
                                 "fail2ban-client", "fallocate", "fuser", "groupadd", "journalctl",
                                 "mkswap",
                                 "npm", "passwd", "pgrep", "pkill", "pro", "reboot", "renice", "rm",
@@ -1752,7 +1754,7 @@ _BAD = {
     # place an attacker-supplied string gets to be a whole argument — so it is charset-checked.
     "apt-install": ["curl; id", "$(id)", "--reinstall", "-o", "Curl", "pkg name", ""],
     "dpkg-add-arch": ["amd64", "i386; id", ""],
-    "apt-add-repo": ["ppa:someone/ppa", "universe; id", "multiverse"],
+    "apt-add-repo": ["ppa:someone/ppa", "universe; id", "restricted"],
     "apt-full-upgrade": ["phased; id", "everything", ""],
     # The log verbs take a SOURCE NAME, never a path or a unit — so a traversal is not rejected by
     # a filter, it is simply not expressible.
@@ -3036,3 +3038,70 @@ try:
           _helper._can_already_escalate("brandnew") is False)
 finally:
     _helper.grp, _helper.pwd, _helper.glob = _grp_saved2, _pwd_saved2, _glob_saved2
+
+# ── install_game_dependencies: step 3 of Install Server, and it was refused on a hardened host ──
+# It ran ONE `run_command(pipeline, sudo=True)`, which locally becomes `sudo bash -c '<pipeline>'`
+# — permitted by neither line of the narrow grant. Measured on a test host, as the panel user:
+# `sudo -n bash -c 'apt-get install -y --dry-run ca-certificates'` -> "sudo: a password is
+# required". Two things then hid it: the call site swallowed the result in a bare `except`, and the
+# pipeline ended in `echo deps-done`, so the function returned success however badly it had gone.
+from panel.ops.ssh_manager import hosts as _hh                                     # noqa: E402
+
+_dep_calls = []
+_o_rp2 = _sm_core.run_privileged
+_o_deps = _hh.deps_for_game
+_o_slug = _hh.host_os_slug
+try:
+    _hh.deps_for_game = lambda _g, _s: (["libc6:i386", "curl"], True)
+    _hh.host_os_slug = lambda _s: "ubuntu-24.04"
+
+    def _dep_rp(server, verb, args=(), **k):
+        _dep_calls.append((verb, list(args)))
+        return ("ok", "", 0)
+    _sm_core.run_privileged = _dep_rp
+
+    _ok, _msg = _hh.install_game_dependencies(NS(is_local=True), "gmod")
+    _verbs = [v for v, _a in _dep_calls]
+    check("game deps: it is a sequence of VERBS, with no shell anywhere",
+          _verbs and all(_v in _priv.verbs() for _v in _verbs), str(_verbs))
+    check("game deps: it enables i386 and BOTH repos the packages live in",
+          ("dpkg-add-arch", ["i386"]) in _dep_calls
+          and ("apt-add-repo", ["universe"]) in _dep_calls
+          and ("apt-add-repo", ["multiverse"]) in _dep_calls, str(_dep_calls))
+    check("game deps: ...refreshes the index before installing",
+          "apt-update" in _verbs and _verbs.index("apt-update")
+          < _verbs.index("apt-install-minimal"), str(_verbs))
+    check("game deps: ...installs steamcmd through the verb that pre-accepts its licence",
+          "steamcmd-install" in _verbs, str(_verbs))
+    check("game deps: ...and the packages go through apt-install-minimal as ARGUMENTS",
+          ("apt-install-minimal", ["libc6:i386", "curl"]) in _dep_calls, str(_dep_calls))
+    check("game deps: a clean run reports success", _ok is True, "%r %r" % (_ok, _msg))
+
+    # apt-get install is ATOMIC — one unavailable package aborts the batch — so a failed batch has
+    # to retry one at a time, which is what the shell `|| for p in …` loop did.
+    _dep_calls.clear()
+    _sm_core.run_privileged = lambda server, verb, args=(), **k: (
+        _dep_calls.append((verb, list(args))),
+        ("", "E: Unable to locate package", 1) if verb == "apt-install-minimal" and len(args) > 1
+        else ("ok", "", 0))[1]
+    _ok2, _ = _hh.install_game_dependencies(NS(is_local=True), "gmod")
+    _singles = [a for v, a in _dep_calls if v == "apt-install-minimal" and len(a) == 1]
+    check("game deps: a failed BATCH falls back to one package at a time",
+          _singles == [["libc6:i386"], ["curl"]], str(_singles))
+    check("game deps: ...and the failure is REPORTED, not swallowed by a trailing echo",
+          _ok2 is False, "returned %r" % (_ok2,))
+
+    # The whole point: nothing may reach a root shell any more.
+    check("game deps: no verb it calls is a shell",
+          not any(_v in ("bash_installer", "sh_installer") for _v in _verbs), str(_verbs))
+finally:
+    _sm_core.run_privileged = _o_rp2
+    _hh.deps_for_game, _hh.host_os_slug = _o_deps, _o_slug
+
+# ...and the caller must SURFACE it. A bare `except` logging at debug level is how a refused step
+# reached the operator as a download failure three minutes later.
+_ms_src = open(os.path.join(_root, "panel", "routes", "manage_servers.py"), encoding="utf-8").read()
+check("game deps: the install flow reads the result instead of discarding it",
+      "deps_ok, deps_msg = install_game_dependencies(" in _ms_src)
+check("game deps: ...and says so in the job when it fails",
+      "if not deps_ok:" in _ms_src and "Some dependencies did not install" in _ms_src)
