@@ -300,22 +300,56 @@ WRITE_TARGETS = {
 _RE_APT_CONF = re.compile(r'APT::[A-Za-z][A-Za-z0-9:-]* "[0-9]+";')
 _RE_SYSCTL = re.compile(r"[a-z][a-z0-9_.]* *= *[0-9]+")
 _RE_SSHD_PORT = re.compile(r"(Port [0-9]{1,5}|ListenAddress \[?[0-9A-Fa-f:.]+\]?:[0-9]{1,5})")
-# fail2ban's config files are declarative: a jail names an action, and the command an action runs
-# lives in action.d/*.conf, which is NOT a write target. So these cannot execute code the way the
-# four above can, and their content is genuinely open-ended (ignoreip lists, ports, filter regexes)
-# — a grammar would break real configs for no gain. They are allowed as-is, deliberately and here
-# rather than by omission. Worst case a hostile write disables the panel's own fail2ban jail, which
-# is a loss of protection, not a gain of privilege.
-_RE_FAIL2BAN_OPEN = None
+# fail2ban's config files are declarative and their content is genuinely open-ended — ignoreip
+# lists, ports, log paths, filter regexes — so a grammar over the whole file would break real
+# configs for no gain. Two KEYS are the exception, because they are the ones that decide what
+# fail2ban RUNS, and it runs it as root on reload:
+#
+#   action / banaction / action_*   names a definition in action.d/, whose actionstart and
+#                                   actionban are shell commands. fail2ban resolves the name by
+#                                   joining it onto "action.d", so a value carrying a path
+#                                   separator may reach a file outside that directory — and
+#                                   filter.d/linuxgsm-panel.conf IS a write target, so a caller
+#                                   could write its own actionban there and then point a jail at
+#                                   it. I could not verify the traversal (no fail2ban here to test
+#                                   against), so this is a guard against a maybe rather than a
+#                                   proven hole — but the panel never writes any of these keys, so
+#                                   refusing a separator in them costs nothing at all.
+#   filter                          same shape, one directory over.
+#
+# A legitimate value for either is a bare name. Everything else in these files stays unconstrained.
+# Every action* spelling, not just "action": actionban, actionstart, actionstop, actionunban and
+# actioncheck are the lines that hold the COMMAND, and banaction/banactionallports name one.
+_RE_F2B_RUNNABLE_KEY = re.compile(r"(?:ban)?action[a-z0-9_]*|filter|chain", re.IGNORECASE)
+_RE_F2B_PLAIN_NAME = re.compile(r"[A-Za-z0-9][A-Za-z0-9_.-]*")
+
+
+def _fail2ban_line_ok(line):
+    """A fail2ban config line the panel may write. See the note above for the two keys that are
+    constrained and why every other key is not."""
+    if "=" not in line:
+        return True                       # a [section] header, or a bare flag
+    key, value = line.split("=", 1)
+    if not _RE_F2B_RUNNABLE_KEY.fullmatch(key.strip()):
+        return True
+    return bool(_RE_F2B_PLAIN_NAME.fullmatch(value.strip()))
+
+
+_RE_FAIL2BAN_OPEN = _fail2ban_line_ok
 
 
 def _lines_match(content, pattern):
-    """Every non-blank, non-comment line matches `pattern` in full."""
+    """Every non-blank, non-comment line is accepted by `pattern`.
+
+    `pattern` is a compiled regex (matched in FULL) or a callable taking the line — the fail2ban
+    rule needs the second form, because only two of its keys are constrained."""
+    check = pattern if callable(pattern) and not hasattr(pattern, "fullmatch") \
+        else pattern.fullmatch
     for line in (content or "").splitlines():
         line = line.strip()
         if not line or line.startswith("#"):
             continue
-        if not pattern.fullmatch(line):
+        if not check(line):
             return False
     return True
 
@@ -1273,9 +1307,13 @@ def _db_repair_detached(db_path):
     os._exit(0)
 
 
-def _copy_one_regular(src, dst):
+def _copy_one_regular(src, dst, src_dir_fd=None, dst_dir_fd=None):
     """Copy ONE regular file, refusing to follow a symlink at either end. True if it was copied,
     False if `src` is not there.
+
+    `src`/`dst` are plain NAMES when the directory descriptors are given, which is how
+    restore_copy_members calls it — see there for why the directory has to be a descriptor and
+    not a path.
 
     O_NOFOLLOW ON BOTH SIDES, and that is the whole point of this function.
 
@@ -1303,7 +1341,7 @@ def _copy_one_regular(src, dst):
     distro the panel targets, which forbids linking to a file you can neither read nor own.
     """
     try:
-        sfd = os.open(src, os.O_RDONLY | os.O_NOFOLLOW)
+        sfd = os.open(src, os.O_RDONLY | os.O_NOFOLLOW, dir_fd=src_dir_fd)
     except OSError:
         # ENOENT (nothing staged for this member) and ELOOP (it is a symlink) are both "do not
         # copy this one", and neither is worth failing the whole restore over.
@@ -1313,7 +1351,8 @@ def _copy_one_regular(src, dst):
         if not stat.S_ISREG(st.st_mode):
             return False
         try:
-            dfd = os.open(dst, os.O_WRONLY | os.O_CREAT | os.O_TRUNC | os.O_NOFOLLOW, 0o600)
+            dfd = os.open(dst, os.O_WRONLY | os.O_CREAT | os.O_TRUNC | os.O_NOFOLLOW, 0o600,
+                          dir_fd=dst_dir_fd)
         except OSError:
             return False            # the destination is a symlink, or cannot be created
         try:
@@ -1336,13 +1375,31 @@ def restore_copy_members(stage, data_dir):
     stayed invisible.
     """
     copied = []
-    if os.path.islink(stage) or not os.path.isdir(stage):
+    # BOTH directories are opened ONCE, O_NOFOLLOW, and every member is opened relative to those
+    # descriptors. The check this replaces — islink(stage) and then os.path.join(stage, member) —
+    # was a check on a PATH followed by a use of that path: O_NOFOLLOW covers only the last
+    # component, so swapping `stage` itself for a symlink between the two had root reading
+    # <somewhere else>/panel.db and writing it over the live one. Narrow (it needs a file named
+    # exactly like a member, in a directory of the attacker's choosing, in that window) and free
+    # to close: a descriptor cannot be re-pointed once it is open.
+    try:
+        sdir = os.open(stage, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+    except OSError:
         return copied           # the staging dir itself must be a real directory, not a link
-    for member in RESTORE_MEMBERS:
-        src = os.path.join(stage, member)
-        dst = os.path.join(data_dir, "panel.db" if member == "panel.db" else member)
-        if _copy_one_regular(src, dst):
-            copied.append(member)
+    try:
+        try:
+            ddir = os.open(data_dir, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+        except OSError:
+            return copied
+        try:
+            for member in RESTORE_MEMBERS:
+                dst = "panel.db" if member == "panel.db" else member
+                if _copy_one_regular(member, dst, src_dir_fd=sdir, dst_dir_fd=ddir):
+                    copied.append(member)
+        finally:
+            os.close(ddir)
+    finally:
+        os.close(sdir)
     return copied
 
 
@@ -1522,10 +1579,28 @@ def do_lgsm_discover(args, content):
         cron_lines = [ln for ln in cron.splitlines()
                       if ln.strip() and not ln.strip().startswith("#")]
         autostart = sum(1 for ln in cron_lines if "@reboot" in ln or "monitor" in ln)
+        # The FILE reads happen as that user, not as root. Everything below lives inside their own
+        # home, so every path component is theirs to replace: a symlink at ~/lgsm/config-lgsm/x/
+        # x.cfg turned this into a port-number oracle over any root-readable file, one at
+        # ~/lgsm/backup into a directory-entry count, and one at ~/lgsm/mods/installed-mods.txt
+        # into a line count. Small answers, but the same class as the mount.cfg read, and the fix
+        # is the one the download verbs already use. crontab -u stays in the parent: it is the one
+        # thing here that genuinely needs root.
+        _discover_user(user, cfg_dir, cron_lines, autostart)
+    return 0
+
+
+def _discover_user(user, cfg_dir, cron_lines, autostart):
+    """Emit the FOUND| lines for one /home user, reading their files AS THEM.
+
+    Forks and drops when running as root, which is when it matters. Unprivileged (a test, or a
+    per-user install) there is no boundary to cross, so it reads in-process and the answer is
+    identical."""
+    def _emit():
         try:
             instances = sorted(os.listdir(cfg_dir))
         except OSError:
-            continue
+            return
         for inst in instances:
             if not os.access(os.path.join(HOME_ROOT, user, inst), os.X_OK):
                 continue               # the launcher script is what makes it a real instance
@@ -1553,7 +1628,29 @@ def do_lgsm_discover(args, content):
                 mods = 0
             sys.stdout.write("FOUND|%s|%s|%d|%d|%d|%d|%d\n"
                              % (user, inst, port, backups, mods, len(cron_lines), autostart))
-    return 0
+
+    try:
+        pw = pwd.getpwnam(user)
+    except KeyError:
+        pw = None
+    if os.getuid() != 0 or pw is None or pw.pw_uid == 0:
+        _emit()                       # nothing to drop to, or nothing to drop FROM
+        return
+    sys.stdout.flush()                # the child gets a copy of this buffer; do not double-print
+    pid = os.fork()
+    if pid == 0:
+        try:
+            os.setgroups([])
+            os.setgid(pw.pw_gid)
+            os.setuid(pw.pw_uid)
+            if os.getuid() != pw.pw_uid or os.geteuid() == 0:
+                os._exit(1)           # refuse to read anything if the drop did not take
+            _emit()
+            sys.stdout.flush()
+        except Exception:
+            os._exit(1)
+        os._exit(0)
+    os.waitpid(pid, 0)
 
 
 def do_game_backup_read(args, content):

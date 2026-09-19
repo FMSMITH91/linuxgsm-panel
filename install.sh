@@ -393,10 +393,24 @@ resolve_update_target() {
     return 0
 }
 
+# pip runs setup.py and wheel hooks, so "install the dependencies" is "execute code from
+# requirements.txt". On the UPDATE path both the pip binary and that file belong to the panel
+# user, and the update runs as root — so this was the panel choosing what root executes. Drop to
+# the owner when there is an owner to drop to: the venv is theirs anyway, and a root-built one
+# leaves root-owned files the service then cannot rewrite.
+#
+# The condition is "PANEL_DIR already belongs to PANEL_USER", which is precisely when dropping
+# works. On the FRESH path it does not yet (the chown comes later), and there the requirements
+# came from a clone of REPO_URL that the operator asked for as root — so that path is unchanged.
 install_deps() {
-    python3 -m venv "${PANEL_DIR}/venv"
-    "${PANEL_DIR}/venv/bin/pip" install --quiet --upgrade pip
-    "${PANEL_DIR}/venv/bin/pip" install --quiet -r "${PANEL_DIR}/requirements.txt"
+    local as_owner=""
+    if [ "$(id -u)" -eq 0 ] && [ -n "${PANEL_USER:-}" ] && [ "${PANEL_USER}" != "root" ] \
+       && [ "$(stat -c '%U' "${PANEL_DIR}" 2>/dev/null || echo root)" = "${PANEL_USER}" ]; then
+        as_owner="sudo -u ${PANEL_USER}"
+    fi
+    ${as_owner} python3 -m venv "${PANEL_DIR}/venv"
+    ${as_owner} "${PANEL_DIR}/venv/bin/pip" install --quiet --upgrade pip
+    ${as_owner} "${PANEL_DIR}/venv/bin/pip" install --quiet -r "${PANEL_DIR}/requirements.txt"
 }
 
 # Node.js LTS + jq + gamedig, for the panel's game-server player queries (player count/list, the
@@ -549,8 +563,40 @@ SYSCTLEOF
 # stopped working with no message anywhere. The grant was never re-evaluated either, which meant a
 # host that first installed pre-helper kept NOPASSWD:ALL forever.
 #
+# Is this checkout's `origin` the repository THIS installer knows?
+#
+# The update path runs `git reset --hard origin/<branch>` and then, as root, installs files out of
+# the result — including tools/panel-helper over the path the sudoers rule names. `origin` is
+# recorded in the panel-owned .git/config and `_gitc` runs git AS THE CHECKOUT OWNER, so a
+# compromised panel could point it at a repository of its own and have root install its code as
+# the privilege boundary. It cannot change THIS file: install.sh runs from a root-owned copy
+# outside the checkout, so REPO_URL here is the thing to compare against.
+#
+# Running a fork is legitimate, so this does not refuse the update — the code still updates. It
+# withholds only the ROOT-OWNED installs, which is the part that crosses a boundary, and says so.
+# The panel's Diagnostics card already surfaces a helper/code version mismatch.
+ORIGIN_TRUSTED=1
+check_origin_trusted() {
+    [ -d "${PANEL_DIR}/.git" ] || return 0
+    local url
+    url="$(_gitc remote get-url origin 2>/dev/null || echo)"
+    case "${url}" in
+        "${REPO_URL}"|"${REPO_URL%.git}"|"${REPO_URL%.git}.git") return 0 ;;
+    esac
+    ORIGIN_TRUSTED=0
+    warn "This checkout's git origin is '${url:-unset}', not ${REPO_URL}."
+    warn "Root-owned components (the privileged helper, db_maintenance, this installer) will NOT"
+    warn "be refreshed from it. Re-run this installer by hand if you mean to update them."
+    return 0
+}
+
 # Sets HELPER_OK / ROOT_TOOLS_OK, which write_sudoers_grant reads.
 install_root_tools() {
+    if [ "${ORIGIN_TRUSTED:-1}" -ne 1 ]; then
+        # Leave HELPER_OK / ROOT_TOOLS_OK as they are: write_sudoers_grant is skipped alongside
+        # this, so the host keeps whatever grant it already had rather than being widened.
+        return 0
+    fi
     HELPER_OK=0
     ROOT_TOOLS_OK=0
     HELPER_SRC="${PANEL_DIR}/tools/panel-helper"
@@ -740,8 +786,26 @@ if [ "${IS_UPDATE}" -eq 1 ]; then
     # part of the INSTALLED version, so it's present whenever this newer install.sh runs.
     info "[2/6] Checking + optimising the database…"
     svc stop linuxgsm-panel.service || true
-    if [ -x "${PANEL_DIR}/venv/bin/python3" ] && [ -f "${PANEL_DIR}/db_maintenance.py" ]; then
-        if "${PANEL_DIR}/venv/bin/python3" "${PANEL_DIR}/db_maintenance.py" update; then
+    # WHICH python and WHICH script, as root, matters here — this runs at step [2/6], BEFORE any
+    # git fetch, so nothing about it is "the new code we just verified". It used to be
+    # ${PANEL_DIR}/venv/bin/python3 running ${PANEL_DIR}/db_maintenance.py: an interpreter and a
+    # script that both belong to the panel user, executed as root at the panel's own request
+    # (panel-self-update runs this installer). That is arbitrary root execution with no update
+    # involved at all.
+    #
+    # The root-owned copy at ${HELPER_DIR}/db_maintenance.py exists for exactly this, and the
+    # helper already runs it with the SYSTEM python for exactly this reason. Root uses that pair;
+    # an unprivileged (systemd --user) install keeps the checkout copy, where there is no boundary
+    # to cross — it is the same account either way.
+    DBM_RUN=""
+    if [ "$(id -u)" -eq 0 ]; then
+        [ -f "/usr/local/lib/linuxgsm-panel/db_maintenance.py" ] \
+            && DBM_RUN="python3 /usr/local/lib/linuxgsm-panel/db_maintenance.py"
+    elif [ -x "${PANEL_DIR}/venv/bin/python3" ] && [ -f "${PANEL_DIR}/db_maintenance.py" ]; then
+        DBM_RUN="${PANEL_DIR}/venv/bin/python3 ${PANEL_DIR}/db_maintenance.py"
+    fi
+    if [ -n "${DBM_RUN}" ]; then
+        if ${DBM_RUN} update; then
             ok "Database checked"
         else
             _dbrc=$?
@@ -756,7 +820,7 @@ if [ "${IS_UPDATE}" -eq 1 ]; then
             warn "Database maintenance reported a non-fatal issue (rc=${_dbrc}) — continuing."
         fi
     else
-        info "  (database maintenance tool not present in this version — skipping)"
+        info "  (no root-owned database maintenance tool yet — skipping; this run installs one)"
     fi
 
     info "[3/6] Fetching the new version…"
@@ -783,8 +847,9 @@ if [ "${IS_UPDATE}" -eq 1 ]; then
     # helper answers those with `unknown verb` and no fallback. This is also the only place an
     # existing install's sudoers grant is ever re-evaluated, so a host that first installed before
     # the helper existed gets narrowed here instead of keeping NOPASSWD:ALL indefinitely.
+    check_origin_trusted
     install_root_tools
-    write_sudoers_grant
+    [ "${ORIGIN_TRUSTED}" -eq 1 ] && write_sudoers_grant
 
     info "[5/6] Starting the service…"
     ensure_service_tuning   # refresh the low-priority drop-in (existing installs get it on update)

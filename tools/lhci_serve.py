@@ -39,6 +39,9 @@ def _cleanup():
         try:
             CONFIG_FILE.write_bytes(_CONFIG_SNAPSHOT)
         except OSError:
+            # Best effort, and this runs at interpreter exit: the data dir may already be gone
+            # (a `rm -rf` racing the shutdown), or read-only. Raising here would replace the
+            # process's real exit status with a traceback from atexit and restore nothing anyway.
             pass
     for _p in (DB_PATH, DB_PATH.with_name("panel.db-wal"), DB_PATH.with_name("panel.db-shm"),
                SECRET_FILE, CRED_KEY_FILE, CONFIG_FILE):
@@ -47,6 +50,8 @@ def _cleanup():
         try:
             _p.unlink()
         except OSError:
+            # Same reasoning, per file: one that cannot be removed must not stop the others, and
+            # every path here was created by THIS process (anything pre-existing is skipped above).
             pass
 
 

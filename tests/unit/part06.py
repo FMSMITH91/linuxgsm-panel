@@ -960,6 +960,116 @@ if len(_rt_set) == 1:
     check("install.sh: the installer copy records its own success rather than `|| true`",
           '"${INSTALLER_SRC}" "${INSTALLER_DST}" 2>/dev/null && INST_OK=1' in _inst_txt)
 
+# ── panel-self-update: what root executes out of a directory the panel owns ────────────────────
+# `panel-self-update` runs the root-owned install.sh as root with cwd=PANEL_DIR, and its docstring
+# argues the ROOT-run part is "fixed and small". Three lines said otherwise, and a compromised
+# panel reaches all three by writing into its own checkout and calling the verb:
+#
+#   [2/6]  root ran ${PANEL_DIR}/venv/bin/python3 on ${PANEL_DIR}/db_maintenance.py — a
+#          panel-owned interpreter on a panel-owned script, BEFORE any git fetch, so nothing
+#          about it is "the new code we verified". Arbitrary root execution, no update involved.
+#   deps   root ran the panel-owned venv pip against the panel-owned requirements.txt, and pip
+#          executes setup.py and wheel hooks.
+#   root   install_root_tools copies ${PANEL_DIR}/tools/panel-helper over the path the sudoers
+#   tools  rule names — root replacing the privilege boundary with a file from the checkout.
+#          `git reset --hard origin/<branch>` overwrites the checkout first, but `origin` lives in
+#          the panel-owned .git/config and _gitc runs git AS THE CHECKOUT OWNER.
+#
+# All three are EXTRACTED from install.sh and run here, with id/sudo/stat/python3 shimmed so
+# nothing escalates: what is asserted is the argv that would have run.
+import shlex as _su_shlex
+_su_txt = open(os.path.join(_root, "install.sh"), encoding="utf-8").read()
+
+
+def _su_between(start, end):
+    i = _su_txt.index(start)
+    j = _su_txt.index(end, i)
+    return _su_txt[i:j + len(end)]
+
+
+def _su_run(body, env_lines, extra=""):
+    return _sh_sub.run(["bash", "-c", "set -uo pipefail\nwarn() { echo \"WARN $*\"; }\n"
+                        + extra + env_lines + body], capture_output=True, text=True)
+
+
+_su_sb = _tempfile.mkdtemp(prefix="selfupdate-")
+try:
+    os.makedirs(os.path.join(_su_sb, "panel", "venv", "bin"))
+    open(os.path.join(_su_sb, "panel", "venv", "bin", "python3"), "w").close()
+    import stat as _su_stat
+    os.chmod(os.path.join(_su_sb, "panel", "venv", "bin", "python3"),
+             _su_stat.S_IRWXU)
+    open(os.path.join(_su_sb, "panel", "db_maintenance.py"), "w").close()
+    os.makedirs(os.path.join(_su_sb, "rootlib"))
+    open(os.path.join(_su_sb, "rootlib", "db_maintenance.py"), "w").close()
+    _su_env = "PANEL_DIR=%s\n" % _su_shlex.quote(os.path.join(_su_sb, "panel"))
+
+    _su_dbm = _su_between('    DBM_RUN=""', '    fi\n    if [ -n "${DBM_RUN}" ]; then')
+    _su_dbm = _su_dbm.rsplit("    if [ -n", 1)[0] + '\necho "DBM_RUN=${DBM_RUN}"\n'
+    _su_real = _su_dbm.replace("/usr/local/lib/linuxgsm-panel/db_maintenance.py",
+                               os.path.join(_su_sb, "rootlib", "db_maintenance.py"))
+    _su_gone = _su_dbm.replace("/usr/local/lib/linuxgsm-panel/db_maintenance.py",
+                               os.path.join(_su_sb, "nope.py"))
+    _r = _su_run(_su_real, _su_env, extra="id() { echo 0; }\n").stdout.strip()
+    check("install.sh: as ROOT, db maintenance is the root-owned script under the system python",
+          _r == "DBM_RUN=python3 %s" % os.path.join(_su_sb, "rootlib", "db_maintenance.py"), _r)
+    _r = _su_run(_su_gone, _su_env, extra="id() { echo 0; }\n").stdout.strip()
+    check("install.sh: ...and with no root-owned copy it runs NOTHING, rather than the checkout's",
+          _r == "DBM_RUN=", _r)
+    _r = _su_run(_su_real, _su_env, extra="id() { echo 1000; }\n").stdout.strip()
+    check("install.sh: an unprivileged install still uses its own venv (no boundary to cross)",
+          _r.endswith("/panel/venv/bin/python3 %s/panel/db_maintenance.py" % _su_sb), _r)
+
+    # pip: as the OWNER on the update path, unchanged on the fresh one (where PANEL_DIR is still
+    # root's and the requirements came from a clone of REPO_URL the operator asked for).
+    _su_deps = _su_between("install_deps() {", "\n}\n") + "\ninstall_deps\n"
+    _su_me = _sh_sub.run(["id", "-un"], capture_output=True, text=True).stdout.strip()
+    _su_shim = ("id() { echo 0; }\n"
+                "stat() { echo %s; }\n"
+                "sudo() { echo \"SUDO $*\"; }\n"
+                "python3() { echo \"python3 $*\"; }\n")
+    _r = _su_run(_su_deps, _su_env + "PANEL_USER=%s\n" % _su_shlex.quote(_su_me),
+                 extra=_su_shim % _su_shlex.quote(_su_me)).stdout
+    check("install.sh: on the update path pip runs as the checkout's owner, not as root",
+          _r.count("SUDO -u %s" % _su_me) >= 2, repr(_r[:200]))
+    _r = _su_run(_su_deps, _su_env + "PANEL_USER=%s\n" % _su_shlex.quote(_su_me),
+                 extra=_su_shim % "root").stdout
+    check("install.sh: ...and the fresh path, where PANEL_DIR is still root's, is unchanged",
+          "SUDO" not in _r and "python3 -m venv" in _r, repr(_r[:200]))
+
+    # origin: the URL the root-owned installs are taken from, compared against this file's own
+    # REPO_URL — which the panel cannot edit, because install.sh runs from outside the checkout.
+    _su_git = os.path.join(_su_sb, "git")
+    _sh_sub.run(["git", "init", "-q", _su_git], check=True)
+    _su_origin = ('_gitc() { git -C "${PANEL_DIR}" "$@"; }\n'
+                  + _su_between("ORIGIN_TRUSTED=1\ncheck_origin_trusted() {", "\n}\n")
+                  + '\ncheck_origin_trusted\necho "ORIGIN_TRUSTED=${ORIGIN_TRUSTED}"\n')
+    _su_verdicts = []
+    for _url, _want in (("https://github.com/FMSMITH91/linuxgsm-panel.git", "1"),
+                        ("https://github.com/FMSMITH91/linuxgsm-panel", "1"),
+                        ("https://github.com/attacker/evil.git", "0"),
+                        ("", "0")):
+        _sh_sub.run(["git", "-C", _su_git, "remote", "remove", "origin"], capture_output=True)
+        if _url:
+            _sh_sub.run(["git", "-C", _su_git, "remote", "add", "origin", _url], check=True)
+        _r = _su_run(_su_origin,
+                     "PANEL_DIR=%s\nREPO_URL=https://github.com/FMSMITH91/linuxgsm-panel.git\n"
+                     % _su_shlex.quote(_su_git)).stdout
+        _got = [ln.split("=")[1] for ln in _r.splitlines() if ln.startswith("ORIGIN_TRUSTED=")]
+        if not _got or _got[-1] != _want:
+            _su_verdicts.append("%s -> %s (want %s)" % (_url or "(unset)", _got, _want))
+    check("install.sh: a checkout whose origin is not this repository is not trusted for root installs",
+          not _su_verdicts, "; ".join(_su_verdicts))
+    # ...and the flag has to actually gate both root-owned steps.
+    check("install.sh: install_root_tools returns early when the origin is not trusted",
+          'if [ "${ORIGIN_TRUSTED:-1}" -ne 1 ]; then' in _su_txt
+          and _su_txt.index('if [ "${ORIGIN_TRUSTED:-1}" -ne 1 ]; then')
+          > _su_txt.index("install_root_tools() {"))
+    check("install.sh: ...and the sudoers grant is not rewritten from an untrusted checkout",
+          '[ "${ORIGIN_TRUSTED}" -eq 1 ] && write_sudoers_grant' in _su_txt)
+finally:
+    _shutil.rmtree(_su_sb, ignore_errors=True)
+
 # ── The discovery scan, reimplemented in the helper, must speak the parser's dialect ───────────
 # discover_linuxgsm_servers used to be a twenty-line shell program run under `sudo bash -c`. It
 # needed root for exactly one thing — reading another user's crontab — and everything else was
