@@ -76,6 +76,28 @@ def register(app):
         items = _json_body().get("servers") or []
         if not isinstance(items, list) or not items:
             return jsonify({"success": False, "message": "Nothing selected."}), 400
+        # Re-scan, and import ONLY what the scan just found. The list arrives from the client and
+        # the account name is checked against INSTANCE_NAME_RE — which "root", "ubuntu" and
+        # "postgres" all satisfy, since it is a Linux-username grammar, not an allowlist. Nothing
+        # here contacted the host, so a POST naming any account created a GameServer row for it;
+        # a whole-host grant then makes every GameServer on that host accessible (auth.py's
+        # can_access_server), and every game op builds `sudo -u <short_name> bash -c ...`. That is
+        # a non-superadmin turning a host grant into root on that host. The scan is the authority
+        # on what exists: an account it did not report cannot be imported.
+        try:
+            _found = discover_linuxgsm_servers(remote)
+        except Exception:
+            return jsonify({"success": False,
+                            "message": _log_and_generic("server discovery failed")}), 200
+        _content = content_box_users(_found)
+        discovered = {}
+        for _f in _found:
+            _u = _f.get("user") or ""
+            if _u in _content:
+                continue      # a GMod content box is not a server — api_remote_discover skips it
+            _gt = lgsm_name_to_game_type(_f.get("lgsm_name") or "")
+            if _gt:
+                discovered.setdefault(_u, set()).add(_gt)
         existing = {gs.short_name for gs in GameServer.query.filter_by(remote_id=remote_id).all()}
         game_names = {g["shortname"]: g["name"] for g in load_game_list()}
         valid_games = set(game_names)
@@ -91,6 +113,7 @@ def register(app):
             user = (str(it.get("user") or "")).strip()
             gt = (it.get("game_type") or "").strip().lower()
             if (not INSTANCE_NAME_RE.match(user) or gt not in valid_games
+                    or gt not in discovered.get(user, ())
                     or user in existing or per_user.get(user, 0) > 1):
                 skipped.append(user or "?")
                 continue

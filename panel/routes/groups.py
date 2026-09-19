@@ -5,9 +5,9 @@ Moved out of register_routes() verbatim — see panel/routes/__init__.py for why
 from flask import (render_template, request)
 from flask_login import (current_user, login_required)
 from panel.db.models import (GameServer, Group, RemoteServer, db)
-from panel.security.auth import (ALL_PERMISSIONS, MANAGE_GROUPS, _grantable_perms,
-    accessible_remote_ids, get_user_servers, grantable_object_ids, log_action,
-    permission_required)
+from panel.security.auth import (ALL_PERMISSIONS, MANAGE_GROUPS, SUPER_ADMIN, _grantable_perms,
+    accessible_remote_ids, get_user_permissions, get_user_servers, grantable_object_ids,
+    log_action, permission_required)
 from panel.services import (notifications)
 from panel.core.http import (_form_err, _form_ok)
 from app import (_selected_game_servers, _selected_remotes)
@@ -106,6 +106,23 @@ def register(app):
     @permission_required(MANAGE_GROUPS)
     def delete_group(group_id):
         group = Group.query.get_or_404(group_id)
+        # The SAME escalation rule the edit path enforces. _grantable_perms preserves a permission
+        # the editor cannot grant "so an edit can't silently strip them", and grantable_object_ids
+        # does the same for host and per-server grants — and then delete threw the whole group
+        # away for anyone holding MANAGE_GROUPS. One POST achieved exactly what the edit path
+        # exists to refuse: a delegated group admin could strip every non-superadmin in the
+        # install of all access, permissions they never held included.
+        if not current_user.is_superadmin:
+            _mine = get_user_permissions(current_user) - {SUPER_ADMIN}
+            _over = (set(group.get_permissions()) - _mine,
+                     {r.id for r in (group.servers or [])} - accessible_remote_ids(current_user),
+                     ({g.id for g in (group.game_servers or [])}
+                      - {g.id for g in get_user_servers(current_user)}))
+            if any(_over):
+                log_action(current_user, "delete_group", target=group.name, success=False,
+                           detail="refused: the group holds access the caller cannot grant")
+                return _form_err("That group holds permissions or server access you can't grant, "
+                                 "so you can't delete it either.", "manage_groups")
         # The membership clear used to be a loop over group.users calling user.groups.remove(group)
         # — and User.groups back-populates Group.users, so every removal shortened the very list
         # being iterated and the loop visited every OTHER member. It was never a bug: SQLAlchemy
@@ -113,11 +130,16 @@ def register(app):
         # `group.users = []` and watching the association rows go anyway. So the loop was doing no
         # work while reading as though it were what made the delete safe. The assignments stay as
         # the explicit statement of what a deleted group releases; the loop does not.
+        _gname = group.name   # read before the delete: the instance is gone after the commit
         group.users = []
         group.servers = []
         group.game_servers = []
         group.custom_commands = []
         db.session.delete(group)
         db.session.commit()
-        log_action(current_user, "delete_group", target=group.name)
-        return _form_ok(f"Group '{group.name}' deleted.", "manage_groups")
+        log_action(current_user, "delete_group", target=_gname)
+        # add_group and edit_group both notify; the DESTRUCTIVE path did not, so an operator
+        # subscribed to account_change saw a group created and edited and never saw it deleted.
+        notifications.notify("account_change", "Permission group deleted",
+                             "%s deleted the group '%s'." % (current_user.username, _gname))
+        return _form_ok(f"Group '{_gname}' deleted.", "manage_groups")

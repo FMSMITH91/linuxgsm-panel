@@ -17,7 +17,8 @@ from panel.ops.ssh_manager import (GAMEDIG_TYPE as GAMEDIG_TYPE_MAP, _resolve_fr
 # however the handler moves.
 from panel.ops import ssh_manager as _sm
 from panel.security.auth import (MANAGE_SERVERS, MODERATE_SERVER, READONLY_ACTIONS,
-    RESTART_SERVER, SEND_COMMAND, _can_manage_files, _perm_for_action, allowed_custom_commands,
+    RESTART_SERVER, SEND_COMMAND, VIEW_CONSOLE, _can_manage_files, _perm_for_action,
+    allowed_custom_commands,
     can_access_server, can_moderate_action, can_run_custom_command, get_game,
     get_user_permissions, has_permission, log_action, server_access_required)
 from panel.services.monitoring import (_PLAYER_POLL_WORKERS)
@@ -348,7 +349,15 @@ def register(app):
         gamedig only (never the game console); the panel sends `?console=1` only when you click the
         refresh button, so a single `status` is issued on your explicit request, not on a timer."""
         gs = get_game(server_id)
-        allow_console = request.args.get("console") == "1"
+        # The console opt-in needs VIEW_CONSOLE, like /api/console does. gamedig touches nothing on
+        # the host, but allow_console falls through to console_player_list, which TYPES `status`
+        # into the game's tmux pane and reads the pane back — so an account that could merely SEE a
+        # server could run a console command on it and collect every player's SteamID, on a GET
+        # that CSRF does not cover. The read-only half stays open to anyone with access: it is the
+        # console half that reaches the host.
+        allow_console = (request.args.get("console") == "1"
+                         and (current_user.is_superadmin
+                              or has_permission(current_user, VIEW_CONSOLE)))
         try:
             players = player_list(gs.remote, gs.short_name, gs.game_type, gs.port, gs.query_type,
                                   selfname=gs.lgsm_name, allow_console=allow_console)
@@ -782,9 +791,19 @@ def register(app):
             cmds = _sm.list_server_commands(gs.remote, gs.short_name, gs.lgsm_name)
             gs.set_commands(cmds)
             db.session.commit()
+            # ...and an audit row, which the docstring above says was the other half of the bug
+            # ("with no audit row") and which the permission fix left undone. The stored list
+            # drives the control bar and install_game_cron: a host that answers oddly can empty
+            # it, hiding Start/Stop/Update for everyone, and /logs showed nothing happened.
+            # api_server_query_type — same permission set, same "writes server configuration"
+            # rationale — has logged since it was written.
+            log_action(current_user, "refresh_commands", target=gs.name,
+                       detail="%d commands" % len(cmds), success=True)
             flash(f"Loaded {len(cmds)} commands for '{gs.name}'.", "success")
         except Exception:
             _log.debug("command list refresh failed for %s", gs.name, exc_info=True)
+            log_action(current_user, "refresh_commands", target=gs.name,
+                       detail="could not read the command list", success=False)
             flash(f"Could not read the command list for '{gs.name}'.", "danger")
         return redirect(url_for("server_detail", server_id=server_id))
 

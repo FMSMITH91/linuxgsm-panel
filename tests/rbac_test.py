@@ -699,14 +699,14 @@ _MUT_NO_PERM_OK = {
     "account_regenerate_backup_codes", "api_account_ui_order", "api_account_prefs", "logout",
     "account_2fa_setup", "account_set_language", "api_account_session_revoke",
     "api_account_ui_order_reset", "account_dismiss_otp_nag",
+    # The viewer's own UI language. POST because the PROFILE write is a stored state change and
+    # csrf.protect() is a no-op on safe methods; it is still self-service, and it is reachable
+    # pre-login (the switcher is on the login page), so there is no permission to require.
+    "set_language",
     # Unauthenticated by design: login, the setup wizard, an invite redemption. The two setup
     # Tailscale endpoints carry their own gate — _setup_open() — because no login exists yet.
     "login", "login_2fa", "redeem_invite", "force_password_change",
     "api_setup_ts_install", "api_setup_ts_serve", "api_setup_ts_up",
-    # Dismisses a finished install's PROGRESS CARD from memory. It changes nothing on the host and
-    # nothing in the database, and @server_access_required already scopes it to a server the caller
-    # can see.
-    "api_server_install_dismiss",
 }
 _mut_unguarded, _mut_seen = [], []
 
@@ -785,11 +785,11 @@ check("redeem_invite refuses an invite whose creator lost their authority",
 _NO_AUDIT_OK = {
     "api_account_ui_order",          # the viewer's own dashboard tile order — a UI preference
     "api_remote_bootstrap_dismiss",  # dismisses a banner
-    "api_server_install_dismiss",    # dismisses a banner
+    "api_server_install_dismiss",    # dismisses a banner (it does carry a permission gate now)
     "api_server_upload_check",       # pre-flight check before an upload; changes nothing
     "api_tailscale_check_peer",      # connectivity probe; changes nothing
+    "set_language",                  # the viewer's own UI language; usable pre-login
     "test_remote",                   # SSH reachability probe; changes nothing
-    "refresh_server_commands",       # refreshes a cached command list
     "notifications_test",            # sends one test notification to the configured channel
 }
 _calls, _logs_direct = {}, set()

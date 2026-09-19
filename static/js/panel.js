@@ -116,7 +116,11 @@ document.addEventListener('change', function(e){
   // Save the choice (session + profile) for next load. NOT fire-and-forget: if the profile write
   // fails the language still changes here and now, but it will not follow you to another device —
   // and silently pretending otherwise is how a preference appears to "not stick".
-  if (tmpl) fetch(tmpl.replace('LANGCODE', encodeURIComponent(lang)) + '?ajax=1', {cache: 'no-store'})
+  // POST, because set-language only writes the PROFILE on POST: as a GET it was a state change
+  // CSRF could not cover. The wrapper above adds the token; pre-login there is no user row to
+  // write, and the session half of the switch works on either method.
+  if (tmpl) fetch(tmpl.replace('LANGCODE', encodeURIComponent(lang)) + '?ajax=1',
+                  {method: 'POST', cache: 'no-store'})
     .then(function(r){ return r.ok ? r.json() : null; })
     .then(function(d){
       if (d && d.success === false && window.toast) toast(d.message || 'Saved for this session only.', 'warning');

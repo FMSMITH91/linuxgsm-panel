@@ -1781,8 +1781,8 @@
   "/api/tailscale/install": {
     "endpoint": "api_tailscale_install",
     "guards": [
-      "utils.py:decorated_view(manage_remotes)",
-      "auth.py:decorated_function(manage_remotes)",
+      "utils.py:decorated_view(super_admin)",
+      "auth.py:decorated_function(super_admin)",
       "view:api_tailscale_install"
     ],
     "methods": [
@@ -1792,8 +1792,8 @@
   "/api/tailscale/serve": {
     "endpoint": "api_tailscale_serve",
     "guards": [
-      "utils.py:decorated_view(manage_remotes)",
-      "auth.py:decorated_function(manage_remotes)",
+      "utils.py:decorated_view(super_admin)",
+      "auth.py:decorated_function(super_admin)",
       "view:api_tailscale_serve"
     ],
     "methods": [
@@ -1803,8 +1803,8 @@
   "/api/tailscale/up": {
     "endpoint": "api_tailscale_up",
     "guards": [
-      "utils.py:decorated_view(manage_remotes)",
-      "auth.py:decorated_function(manage_remotes)",
+      "utils.py:decorated_view(super_admin)",
+      "auth.py:decorated_function(super_admin)",
       "view:api_tailscale_up"
     ],
     "methods": [
@@ -2262,7 +2262,8 @@
       "view:set_language"
     ],
     "methods": [
-      "GET"
+      "GET",
+      "POST"
     ]
   },
   "/settings": {

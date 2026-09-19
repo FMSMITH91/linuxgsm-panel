@@ -1900,14 +1900,40 @@ try:
     check("import: empty selection -> 400", imp_empty.status_code == 400)
     # Import validates each entry like a fresh install: a bad username or unknown game is
     # skipped (so an imported short_name can never carry shell metacharacters); a valid one is added.
-    imp = c.post("/api/remote/%d/import" % remote_id, json={"servers": [
-        {"user": "importedcs", "game_type": "csgo", "port": 27015},
-        {"user": "BAD NAME", "game_type": "csgo", "port": 1},
-        {"user": "okuser", "game_type": "notarealgame", "port": 1}]})
-    _im = imp.get_json() or {}
-    check("import: adds the valid server, skips the bad name + unknown game",
-          imp.status_code == 200 and _im.get("added") == ["importedcs"] and len(_im.get("skipped", [])) == 2,
-          "got %s" % _im)
+    # Discovery is stubbed, because import now re-SCANS and accepts only what the scan reports —
+    # see the "root" check below for what that closes.
+    from panel.routes import discover as _imp_mod
+    _imp_orig = _imp_mod.discover_linuxgsm_servers
+    try:
+        _imp_mod.discover_linuxgsm_servers = lambda _s: [
+            {"user": "importedcs", "lgsm_name": "csgoserver", "port": 27015,
+             "backups": 0, "mods": 0, "cron": 0, "autostart": False}]
+        imp = c.post("/api/remote/%d/import" % remote_id, json={"servers": [
+            {"user": "importedcs", "game_type": "csgo", "port": 27015},
+            {"user": "BAD NAME", "game_type": "csgo", "port": 1},
+            {"user": "okuser", "game_type": "notarealgame", "port": 1}]})
+        _im = imp.get_json() or {}
+        check("import: adds the valid server, skips the bad name + unknown game",
+              imp.status_code == 200 and _im.get("added") == ["importedcs"]
+              and len(_im.get("skipped", [])) == 2, "got %s" % _im)
+        # The account name arrives from the CLIENT and INSTANCE_NAME_RE is a Linux-username
+        # grammar, not an allowlist: "root", "ubuntu" and "postgres" all match it. Nothing in the
+        # route contacted the host, so a POST naming any account created a GameServer row for it —
+        # and a whole-host grant makes every GameServer on that host accessible, after which every
+        # game op builds `sudo -u root bash -c ...`. The scan is the authority on what exists.
+        check("import: the fixture's scan does not report root, so the next check means something",
+              "root" not in [r["user"] for r in _imp_mod.discover_linuxgsm_servers(None)],
+              "the stub would have to report root for this to be a real test")
+        imp_root = c.post("/api/remote/%d/import" % remote_id, json={"servers": [
+            {"user": "root", "game_type": "csgo", "port": 27015}]})
+        _imr = imp_root.get_json() or {}
+        check("import: an account the scan never reported is refused, root included",
+              _imr.get("added") == [] and _imr.get("skipped") == ["root"], str(_imr)[:140])
+        with app.app_context():
+            _root_rows = GameServer.query.filter_by(remote_id=remote_id, short_name="root").count()
+        check("import: ...and no row was written for it", _root_rows == 0, "rows=%d" % _root_rows)
+    finally:
+        _imp_mod.discover_linuxgsm_servers = _imp_orig
     imp_denied = client_as(mru_id).post("/api/remote/%d/import" % remote_id,
                                         json={"servers": [{"user": "x", "game_type": "csgo"}]})
     check("import: caller without manage_servers is denied",
@@ -1991,12 +2017,27 @@ try:
           (_rev404.get_json() or {}).get("success") is False
           and "ok" not in (_rev404.get_json() or {}),
           _rev404.get_data(as_text=True)[:120])
-    _lang = s1.get("/set-language/es?ajax=1")
+    # POST, like the switcher in panel.js now sends. The PROFILE write is POST-only: csrf.protect()
+    # is a no-op on safe methods, so as a GET this was a stored state change any cross-site page
+    # could make with <img src=".../set-language/zh">.
+    _lang = s1.post("/set-language/es?ajax=1")
     check("language: the ajax save answers in the standard envelope",
           (_lang.get_json() or {}).get("success") is True
           and "ok" not in (_lang.get_json() or {}),
           _lang.get_data(as_text=True)[:120])
-    s1.get("/set-language/en?ajax=1")   # put it back
+    with app.app_context():
+        check("language: ...and a POST really writes the profile",
+              (User.query.filter_by(username="smoke_admin").first().language or "") == "es",
+              "language=%r" % (User.query.filter_by(username="smoke_admin").first().language,))
+    _lang_get = s1.get("/set-language/fr?ajax=1")
+    check("language: a GET still switches the session", _lang_get.status_code == 200,
+          "status=%d" % _lang_get.status_code)
+    with app.app_context():
+        check("language: ...but a GET does NOT write the profile — CSRF cannot cover a GET",
+              (User.query.filter_by(username="smoke_admin").first().language or "") == "es",
+              "a cross-site <img> would have made this stick: language=%r"
+              % (User.query.filter_by(username="smoke_admin").first().language,))
+    s1.post("/set-language/en?ajax=1")   # put it back
 
     j1 = (s1.get("/api/account/sessions").get_json() or {})
     sess1 = j1.get("sessions", [])

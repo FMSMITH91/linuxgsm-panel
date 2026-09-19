@@ -434,7 +434,15 @@ def register(app):
     @login_required
     @server_access_required
     def api_server_install_dismiss(server_id):
-        """Clear a finished install job so its progress card goes away."""
+        """Clear a finished install job so its progress card goes away.
+
+        The same permission that owns installs, because _install_jobs is SHARED: popping the job
+        clears the progress (or failure) card for every session watching that install, not just
+        the caller's. @server_access_required alone let anyone who could see the server do it."""
+        if not (current_user.is_superadmin
+                or has_permission(current_user, INSTALL_SERVER)
+                or has_permission(current_user, MANAGE_SERVERS)):
+            return jsonify({"success": False, "message": "Permission denied"}), 403
         with _install_lock:
             j = _install_jobs.get(server_id)
             if j and j["status"] in ("done", "failed"):
