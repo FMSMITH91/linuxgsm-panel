@@ -131,6 +131,11 @@ _good_csv = "shortname,gameservername,gamename,os\n" + ("a%d,a%dserver,Game %d,u
 _lgd.urllib.request.urlopen = lambda req, timeout=None: _FakeResp(_good_csv)
 check("lgsm data: ...and accepts a real one", _lgd._fetch(_lgd.SERVERLIST) is not None)
 _lgd.urllib.request.urlopen = _orig_urlopen_lgd
+# NOT restored at the end of this block, deliberately: every lgsm check below depends on "the
+# network is down", and putting the real _fetch back makes them hit the network. It is a
+# suite-wide fixture rather than a leak — but it IS still installed when part05 and part06 run,
+# so nothing later may capture it as "the original". (Measured: restoring it here fails two
+# checks; leaving it flips none.)
 _lgd._fetch = lambda name: (_lgd_fetches.append(name), None)[1]   # back to "the network is down"
 
 # A failed fetch must stay retryable. Memoising [] would make one bad moment permanent for the

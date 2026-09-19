@@ -332,14 +332,26 @@ try:
     import pathlib
     _root = pathlib.Path(__file__).resolve().parent.parent
     offenders = []
+    _int_or_sites = 0
     for py in sorted((_root / "panel").rglob("*.py")) + [_root / "app.py"]:
         for node in ast.walk(ast.parse(py.read_text(encoding="utf-8"))):
             if not (isinstance(node, ast.Call) and getattr(node.func, "id", "") == "_int_or"):
                 continue
+            _int_or_sites += 1
             # The assignment target's name is what says whether this is a port.
             src = ast.get_source_segment(py.read_text(encoding="utf-8"), node) or ""
             if "port" in src.lower():
                 offenders.append("%s:%d  %s" % (py.relative_to(_root), node.lineno, src[:70]))
+    # ...and a positive control, because the scan matches a hardcoded NAME. Rename _int_or and
+    # every `node.func.id == "_int_or"` stops matching: the loop runs zero times and the gate
+    # reports clean. Proven by renaming it to _intOr across 13 call sites in 4 files — 142/142,
+    # all passing. Counting the call sites makes the rename a failure instead.
+    # >= 1, deliberately: the failure being guarded is ZERO, and a higher floor would just be a
+    # number to maintain every time a call site is legitimately added or removed. (Measured at 4
+    # when this was written.)
+    check("the _int_or scan found call sites at all", _int_or_sites >= 1,
+          "%d call sites — the check below would pass vacuously (was _int_or renamed?)"
+          % _int_or_sites)
     check("no port is parsed with _int_or (the parser without a range)", not offenders,
           "; ".join(offenders))
 

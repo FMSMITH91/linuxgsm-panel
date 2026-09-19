@@ -130,7 +130,16 @@ def main():
     _doc = (pathlib.Path(__file__).resolve().parent.parent / "app.py").read_text(
         encoding="utf-8").split('"""')[1]
     _live = {re.sub(r"<[^>]+>", "<>", r): meta for r, meta in current.items()}
-    for _verb, _rule in re.findall(r"^\s{2}(GET|POST)\s+(\S+)", _doc, re.M):
+    # The regex pins the docstring's SHAPE (two leading spaces, then the verb). Re-indent that
+    # list by one space and findall returns nothing, the loop below runs zero times, and the gate
+    # reports clean having read nothing — proven by doing exactly that: 29 matching lines became
+    # 0 and the suite still said PASS. A sweep has to assert it found its subject.
+    _claimed = re.findall(r"^\s{2}(GET|POST)\s+(\S+)", _doc, re.M)
+    if len(_claimed) < 20:
+        problems.append("DOCSTRING  app.py's route list did not parse (%d lines matched, expected "
+                        "~29) — the docstring's shape changed and this gate read nothing"
+                        % len(_claimed))
+    for _verb, _rule in _claimed:
         _key = re.sub(r"<[^>]+>", "<>", _rule)
         if _key not in _live:
             problems.append("DOCSTRING  app.py advertises %s %s, which is not a route" % (_verb, _rule))

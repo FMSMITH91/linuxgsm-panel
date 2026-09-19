@@ -1195,6 +1195,7 @@ Game 27015 udp
 Client 27005 udp
 SourceTV 27020 udp
 """
+_orig_ragu_first = _sm_core.run_as_game_user   # restored after the second stub below
 _sm_core.run_as_game_user = lambda *a, **k: (_GMOD_DETAILS, "", 0)
 res = _sm_game.detect_game_ports(NS(), "gmodserver")
 eq("gmod game_port", res["game_port"], 27015)
@@ -1208,9 +1209,16 @@ RCON 27015 tcp
 SourceTV 27020 udp
 Client 27005 udp
 """
-_sm_core.run_as_game_user = lambda *a, **k: (_SRC_DETAILS, "", 0)
-res = _sm_game.detect_game_ports(NS(), "srv")
-eq("source: opens game + query only", res["open_ports"], [27015, 27016])
+try:
+    _sm_core.run_as_game_user = lambda *a, **k: (_SRC_DETAILS, "", 0)
+    res = _sm_game.detect_game_ports(NS(), "srv")
+    eq("source: opens game + query only", res["open_ports"], [27015, 27016])
+finally:
+    # Restored. A stub left installed is not merely untidy: part03's own later blocks capture
+    # `_orig = <module>.<attr>` to restore it, and a leaked stub is what they capture — so they
+    # put the STUB back believing it is the original. That is the mechanism that silently
+    # disabled the rest of this file once before.
+    _sm_core.run_as_game_user = _orig_ragu_first
 
 # ── per-remote access control (fix: MANAGE_REMOTES alone must NOT grant every host) ──
 def _user(is_admin, *group_remote_ids):

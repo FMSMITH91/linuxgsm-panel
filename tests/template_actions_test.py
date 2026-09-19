@@ -51,6 +51,22 @@ STATIC_JS = ROOT / "static" / "js"
 srcs = {p.name: p.read_text(encoding="utf-8") for p in sorted(TEMPLATES.glob("*.html"))}
 srcs.update({p.name: p.read_text(encoding="utf-8") for p in sorted(STATIC_JS.glob("*.js"))})
 
+# ── the sweeps have to find their subject ─────────────────────────────────────────────────────
+# Almost every gate in this file is "no bad pattern anywhere in `srcs`". Fed an EMPTY srcs they
+# all pass: `not []` is True, `x not in ""` is True, `all(... for x in [])` is True. Measured by
+# forcing both globs to return nothing — the suite reported 95/100 and 97/100, i.e. only the few
+# gates with their own positive control noticed. The trigger is not exotic: templates/ or
+# static/js/ moving is exactly the kind of change the panel/routes split already made once.
+#
+# The counts are floors, not inventories — they exist to catch "the sweep found nothing", not to
+# be maintained. tests/unit/part01._modpath does the same job by raising.
+_n_tpl = sum(1 for n in srcs if n.endswith(".html"))
+_n_js = sum(1 for n in srcs if n.endswith(".js"))
+check(_n_tpl >= 20, "sweep: the templates/ scan found files to read",
+      "%d .html — every template gate below would pass vacuously" % _n_tpl)
+check(_n_js >= 20, "sweep: the static/js/ scan found files to read",
+      "%d .js — every JS gate below would pass vacuously" % _n_js)
+
 # ── 0. inline <script> blocks must still be JavaScript ────────────────────────────────────────
 # Jinja strips {# … #} before the browser ever sees it, so a comment inside a <script> renders
 # fine and looks harmless. Static analysers read the TEMPLATE, though, and to a JS parser "{#" is
@@ -1752,4 +1768,4 @@ if skipped:
 # and four CSRF gates with them — exactly the "294 smoke checks stayed green" failure the parse
 # check exists to catch. Red here says `pip install esprima`, which is a one-line fix; green here
 # said nothing at all.
-sys.exit(0 if (failed == 0 and not skipped) else 1)
+sys.exit(0 if (results and failed == 0 and not skipped) else 1)

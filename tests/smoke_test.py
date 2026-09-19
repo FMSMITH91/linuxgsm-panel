@@ -111,7 +111,11 @@ def _check_template_url_for():
     import re
     endpoints = {r.endpoint for r in app.url_map.iter_rules()}
     bad = []
-    for p in sorted(pathlib.Path("templates").glob("*.html")):
+    _tpls = sorted(pathlib.Path("templates").glob("*.html"))
+    # A "no bad url_for anywhere" gate passes on an empty sweep. Floor, not an inventory.
+    check("templates: the url_for sweep found templates to read", len(_tpls) >= 20,
+          "%d templates — the check below would pass vacuously" % len(_tpls))
+    for p in _tpls:
         for m in re.finditer(r"""url_for\(\s*['"]([A-Za-z_][\w]*)['"]""", p.read_text(encoding="utf-8")):
             if m.group(1) not in endpoints:
                 bad.append("%s -> url_for('%s')" % (p.name, m.group(1)))
@@ -2451,7 +2455,10 @@ try:
           _home.count("window.escapeHtml = function") == 1)
     import pathlib as _pl_esc
     _tpl_dir = _pl_esc.Path(__file__).resolve().parent.parent / "templates"
-    _failopen = [p.name for p in _tpl_dir.glob("*.html")
+    _esc_tpls = sorted(_tpl_dir.glob("*.html"))
+    check("escaping: the fallback sweep found templates to read", len(_esc_tpls) >= 20,
+          "%d templates — the check below would pass vacuously" % len(_esc_tpls))
+    _failopen = [p.name for p in _esc_tpls
                  if "window.escapeHtml ?" in p.read_text(encoding="utf-8")]
     check("escaping: no template falls back to the raw string", not _failopen, str(_failopen))
 

@@ -98,6 +98,11 @@ eq("port-block: multi-port block steps past a partial overlap",
 
 # ── panel file integrity + repair (git-based) ─────────────────
 from panel.ops import system_ops as _so
+# Captured at the FIRST stub, not at the later one. A stub left installed is what subsequent
+# blocks in this file capture as "the original" (`_orig_isgit = _so._is_git_checkout`) — so they
+# put a STUB back believing it is the real function. That is the mechanism that silently disabled
+# the rest of this file once before. Restored at the end of the integrity section.
+_orig_git, _orig_isgit_real = _so._git, _so._is_git_checkout
 _so._is_git_checkout = lambda: True
 _so._git = lambda args, timeout=45: (
     ("abc1234\n", "", 0) if list(args) == ["rev-parse", "--short", "HEAD"]
@@ -281,6 +286,7 @@ _so._is_git_checkout = lambda: False
 check("integrity: handles non-git checkout", _so.panel_integrity(force=True)["git"] is False)
 _ok3, _msg3, _ = _so.panel_repair()
 check("repair: refuses when not a git checkout", _ok3 is False)
+_so._git, _so._is_git_checkout = _orig_git, _orig_isgit_real
 
 # ── automatic security updates detection ──────────────────────
 def _mk_run(installed_rc, apt_out):
@@ -353,6 +359,7 @@ _cron = {}
 def _cap_rewrite(server, user, grep_args, add_lines, extra_pre=""):
     _cron.update(grep=grep_args, add=list(add_lines), pre=extra_pre)
     return True, "ok"
+_orig_rewrite = _sm_core._rewrite_crontab
 _sm_core._rewrite_crontab = _cap_rewrite
 
 _sm_core.set_autostart(None, "gmodserver", True)
@@ -390,6 +397,8 @@ check("daily_restart(unmapped game): skips gamedig, no player query",
 _sm_core.set_daily_restart(None, "gmodserver", enabled=False)
 check("daily_restart(disable): adds nothing and clears the flag",
       _cron["add"] == [] and "rm -f" in _cron["pre"])
+
+_sm_core._rewrite_crontab = _orig_rewrite   # restored: see the note at the git stubs above
 
 # ── server_live_metrics parses SSH output into a numeric dict ──
 _METRICS_OUT = "\n".join([
@@ -937,6 +946,7 @@ finally:
 
 # ── Tailscale: installed-but-not-authenticated (NeedsLogin) must not 500 ─
 from panel.ops import tailscale_integration as _tsi
+_orig_run_ts, _orig_run_ts_json = _tsi._run_ts, _tsi._run_ts_json
 _tsi._run_ts = lambda args, timeout=5: (("1.0", "", 0) if args and args[0] in ("version", "--version")
                                         else ("", "", 0))
 # After `tailscale up` prints a login URL the user hasn't clicked, status --json has
@@ -979,6 +989,7 @@ try:
 finally:
     _tsi.get_tailscale_info = _orig_gti
     _tsi._cache["info"] = None
+_tsi._run_ts, _tsi._run_ts_json = _orig_run_ts, _orig_run_ts_json   # restored, as above
 
 # ── Debug report: repeated tracebacks in the log tail get collapsed ───
 _pfx = "Jul 05 23:44:%02d vultr python[74699]: "

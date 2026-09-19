@@ -1654,6 +1654,14 @@ if os.path.isfile(_manifest):
 # Duplicates are banned outright rather than only conflicting ones: an identical duplicate is the
 # state a conflicting one starts from, and the fix for both is the same — put the key in one file.
 _i18n_dir = os.path.join(_root, "translations")
+# The sweeps below are all "no bad key anywhere". Fed an empty catalog every one of them passes —
+# two empty sets compare equal, `not {}` is True, and a missing-keys diff over nothing is empty.
+# Measured by pointing tools/i18n_scan's globs at "*.MUTATED": the suite reported 1888/1888 with
+# all three i18n gates green, having scanned zero files. Floors, not inventories.
+_i18n_seen = {_l: len(glob.glob(os.path.join(_i18n_dir, _l, "*.json"))) for _l in ("es", "fr")}
+check("sweep: the translations/ scan found catalog files to read",
+      all(_n >= 4 for _n in _i18n_seen.values()),
+      "%s — every i18n gate below would pass vacuously" % _i18n_seen)
 for _lang in ("es", "fr"):
     _homes = {}
     for _f in sorted(glob.glob(os.path.join(_i18n_dir, _lang, "*.json"))):
@@ -1692,6 +1700,15 @@ check("i18n: es and fr translate the same set of keys",
 # that must stay verbatim (a hostname, a hex colour, a brand name) — mark it data-no-i18n.
 sys.path.insert(0, os.path.join(_root, "tools"))
 import i18n_scan as _i18n_scan  # noqa: E402
+# The scanner has its own globs, and proof B above was exactly those drifting while templates/
+# and static/js/ were untouched. Assert it actually read something before trusting its answer.
+_i18n_found, _ = _i18n_scan.scan_templates(os.path.join(_root, "templates"))
+check("sweep: i18n_scan read the templates (its own globs can drift)",
+      len(_i18n_found) >= 400,
+      "%d translatable strings — the gates below would pass on an empty scan" % len(_i18n_found))
+_i18n_js_seen = _i18n_scan.scan_js(os.path.join(_root, "static", "js"))
+check("sweep: ...and the JS", len(_i18n_js_seen) >= 40,
+      "%d strings — the JS catalog gate would pass on an empty scan" % len(_i18n_js_seen))
 _i18n_gaps = _i18n_scan.missing("es",
                                 template_dir=os.path.join(_root, "templates"),
                                 translation_dir=_i18n_dir)

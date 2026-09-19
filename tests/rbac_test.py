@@ -843,4 +843,6 @@ for ok, name, detail in results:
         line += "   [%s]" % detail
     print(line)
 print("\n%d / %d checks passed" % (passed, len(results)))
-sys.exit(0 if passed == len(results) else 1)
+# `results and`, like every other suite has: with results == [] the comparison is 0 == 0 and the
+# suite exits 0 having asserted nothing at all.
+sys.exit(0 if results and passed == len(results) else 1)

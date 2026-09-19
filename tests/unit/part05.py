@@ -456,6 +456,10 @@ check("ssh_manager: every module-private variable is read in its OWN module (Cod
 import pathlib as _tp                                                              # noqa: E402
 _repo = _tp.Path(_UNIT_ROOT)
 _suites = sorted(p.name for p in (_repo / "tests").glob("*_test.py"))
+# Both wiring checks below are "every suite is referenced somewhere". With _suites empty they pass
+# having compared nothing — measured by emptying the glob. A floor, not an inventory.
+check("sweep: the tests/*_test.py scan found suites", len(_suites) >= 6,
+      "%d suites — the two wiring checks below would pass vacuously" % len(_suites))
 _runner = (_repo / "tools" / "run-tests.sh").read_text(encoding="utf-8")
 _missing_runner = [s for s in _suites if s not in _runner]
 check("test wiring: every tests/*_test.py is referenced by tools/run-tests.sh",
@@ -668,8 +672,12 @@ _fixture_shapes = [
 ]
 # The suite is several files now; a gate reading only one of them would stop covering the
 # fixtures in the others while still passing.
-_own = "\n".join(open(_p, encoding="utf-8").read()
-                 for _p in sorted(_pl.Path(_UNIT_ROOT, "tests").rglob("*.py")))
+_own_files = sorted(_pl.Path(_UNIT_ROOT, "tests").rglob("*.py"))
+_own = "\n".join(open(_p, encoding="utf-8").read() for _p in _own_files)
+# ...and this one is "no fixture anywhere looks like a real credential", which an empty sweep
+# satisfies trivially. The suite is several files now, so the count is the thing to assert.
+check("sweep: the tests/**/*.py scan found the suite's own source", len(_own_files) >= 10,
+      "%d files — the credential-shape checks below would pass vacuously" % len(_own_files))
 for _label, _pat in _fixture_shapes:
     _hits = _re_fx.findall(_pat, _own)
     check("fixtures: no test value is shaped like a real %s" % _label, not _hits,
@@ -815,14 +823,23 @@ _probe = (
     "warnings.warn('probe', DeprecationWarning);"
     "print('HEARD' if heard else 'DEAF')" % _root
 )
+# skip(), not check(..., True, "skipped: ..."). The handler set _heard = True on ANY exception —
+# including the 120s TimeoutExpired and any OSError — which is verbatim the pattern skip()'s own
+# docstring forbids: "a green line for a check that never executed". Proven by raising before the
+# subprocess: PASS, 1888/1888, rc=0, no SKIP reported. The except is narrowed to what it claims to
+# be for (a sandbox that forbids subprocess), so a timeout or a crash is a real failure again.
+_probe_ran, _heard, _detail = True, False, ""
 try:
     _out = _sp.run([sys.executable, "-W", "always::DeprecationWarning", "-c", _probe],
                    capture_output=True, text=True, timeout=120, cwd=_root)
     _heard = "HEARD" in _out.stdout
     _detail = (_out.stdout.strip()[-60:] + " " + _out.stderr.strip()[-120:])
-except Exception as _e:            # a sandbox that forbids subprocess shouldn't fail the suite
-    _heard, _detail = True, "skipped: %s" % _e
-check("importing app leaves -W always::DeprecationWarning working", _heard, _detail)
+except (OSError, ValueError) as _e:   # no subprocess at all in this sandbox — not a code failure
+    _probe_ran, _detail = False, repr(_e)
+if _probe_ran:
+    check("importing app leaves -W always::DeprecationWarning working", _heard, _detail)
+else:
+    skip("importing app leaves -W always::DeprecationWarning working", _detail)
 
 # eventlet's own banner IS silenced now — by message, since it is not a DeprecationWarning at all.
 _quiet = _sp.run([sys.executable, "-c", "import sys; sys.path.insert(0, %r); import app" % _root],
