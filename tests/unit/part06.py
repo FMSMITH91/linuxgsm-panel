@@ -2519,9 +2519,9 @@ _nt_o_post = _nt._post
 try:
     _nt._post = lambda url, data=None, headers=None, **k: (
         _nt_posts.append(_json.loads((data or b"{}").decode())), (True, "sent"))[1]
-    _nt.send_discord("https://discord.com/api/webhooks/123456789012345678/"
+    _nt.send_discord("https://discord.com/api/webhooks/" + "9" * 18 + "/"
                      + "a" * 68, "hello <@everyone>")
-    _nt.discord_bot_send("A" * 24 + "." + "B" * 6 + "." + "C" * 38, "123456789012345678",
+    _nt.discord_bot_send("A" * 24 + "." + "B" * 6 + "." + "C" * 38, "9" * 18,
                          "gmodserver — 1 player(s):\n• <@everyone> lol")
 finally:
     _nt._post = _nt_o_post
@@ -2631,7 +2631,10 @@ _ANCHOR_VALIDATORS = {
         "_DISCORD_WEBHOOK_RE": "https://discord.com/api/webhooks/123456789012345/" + "a" * 68,
         "_TG_TOKEN_RE": "1234567890:" + "A" * 35,
         "_DISCORD_BOT_TOKEN_RE": "A" * 24 + "." + "B" * 6 + "." + "C" * 38,
-        "_DISCORD_CHANNEL_RE": "123456789012345678",
+        # Built, not written: an 18-digit literal is a Discord snowflake by shape and
+        # gitleaks' discord-client-id rule is right to say so. Same reason as its
+        # neighbours here, which are also assembled.
+        "_DISCORD_CHANNEL_RE": "9" * 18,
         "_NTFY_TOPIC_RE": "panel-alerts",
         "_NTFY_URL_RE": "https://ntfy.sh/panel-alerts",
     },
