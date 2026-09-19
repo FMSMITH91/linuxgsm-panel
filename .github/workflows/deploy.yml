@@ -35,8 +35,20 @@ concurrency:
 
 jobs:
   deploy:
-    # Only after CI SUCCEEDED on main, and only when explicitly enabled.
+    # Only after CI SUCCEEDED on a PUSH to main, and only when explicitly enabled.
+    #
+    # `event == 'push'` is the load-bearing clause. CI also runs on pull_request, and for a PR
+    # from a FORK the resulting workflow_run carries the HEAD REPO's branch name — a fork's
+    # default branch is main, so head_branch == 'main' was satisfied by any fork PR opened from
+    # that fork's default branch, and an outside contributor's PR triggered an unattended
+    # production deploy on the live host (service restart, health check, possible rollback).
+    #
+    # Not a code-injection vector — the deploy SSHes in and runs `git checkout origin/main --
+    # install.sh`, i.e. the BASE repo's main, never the PR's code — but nobody asked for the
+    # deploy. codeql-alerts.yml already distinguishes the two event kinds for its own reasons;
+    # this is the mirror image of that clause.
     if: >-
+      github.event.workflow_run.event == 'push' &&
       github.event.workflow_run.conclusion == 'success' &&
       github.event.workflow_run.head_branch == 'main' &&
       vars.DEPLOY_ENABLED == 'true'

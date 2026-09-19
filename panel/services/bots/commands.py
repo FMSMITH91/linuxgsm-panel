@@ -98,7 +98,14 @@ def _console_text(app, arg, lines=20):
         except Exception:
             _log.debug("telegram console tail failed", exc_info=True)
             return "%s — couldn't read the console." % gs.name
-        # rc 3 + NO_SESSION is capture_console's "the server isn't running", not an error.
+        # rc 3 + NO_SESSION is capture_console's "the server isn't running", not an error — and
+        # it was unpacked and never read, so the sentinel was rendered to the user as if it were
+        # game output: "CoD Server — last 1 console line(s): NO_SESSION". `echo NO_SESSION` goes
+        # to STDOUT, so the `if not rows` guard below could never fire. The command that exists to
+        # answer "why did the start fail?" answered NO_SESSION. Both other callers of
+        # capture_console guard on rc (game.py:205 and :232).
+        if rc != 0 or "NO_SESSION" in (out or ""):
+            return "%s — the server isn't running, so there's no console to read." % gs.name
         text = terminal.strip_escapes(out or "")
         rows = [r.rstrip() for r in text.splitlines() if r.strip()][-lines:]
         if not rows:

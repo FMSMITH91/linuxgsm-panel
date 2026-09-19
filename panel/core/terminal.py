@@ -24,18 +24,34 @@ OSC_RE = re.compile(r"\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)")
 ESC2_RE = re.compile(r"\x1b[ -/]*[0-~]")
 
 
+# The C0 control bytes that MEAN something here and must survive: newline and tab render, and \r
+# and \b are consumed by apply_carriage_returns / apply_backspaces below. Every other one (NUL,
+# BEL, VT, FF, the rest) has no rendering meaning in a console line.
+_C0_KEEP = "\n\t\r\b"
+_C0_RE = re.compile(r"[\x00-\x08\x0b-\x1f\x7f]")
+
+
+def _strip_c0(text):
+    """Every C0 control except the four in _C0_KEEP. ESC is handled by its own patterns first."""
+    return _C0_RE.sub(lambda m: "" if m.group(0) not in _C0_KEEP else m.group(0), text)
+
+
 def strip_escapes(text):
-    """`text` with OSC, CSI and two-byte escape sequences removed. Control CHARACTERS (\\r, \\b) are
-    left alone — they carry rendering meaning; see apply_carriage_returns / apply_backspaces."""
+    """`text` with OSC, CSI and two-byte escape sequences removed, and every control character that
+    carries no rendering meaning dropped. `\r` and `\b` are KEPT — they do carry meaning; see
+    apply_carriage_returns / apply_backspaces — as are `\n` and `\t`."""
     if not text:
         return text
     text = ESC2_RE.sub("", CSI_RE.sub("", OSC_RE.sub("", text)))
     # Any ESC still standing is a sequence that never completed: a log read mid-write, or ESC
-    # followed by something none of the three grammars accept (\x1b\t, \x1b\x00, a trailing \x1b).
-    # Player names and chat reach this text, so those bytes are authored, not just accidental. They
-    # carry no rendering meaning on their own, and the one guarantee this module owes its callers is
-    # that control bytes do not reach the page.
-    return text.replace("\x1b", "")
+    # followed by something none of the three grammars accept. Player names and chat reach this
+    # text, so those bytes are authored, not accidental.
+    #
+    # ESC used to be the ONLY one removed, while this module's docstring promises that "the one
+    # guarantee this module owes its callers is that control bytes do not reach the page". NUL,
+    # BEL, VT and FF all survived it — a player can put any of them in their name — so the
+    # guarantee was a claim rather than a property. _strip_c0 is what makes it true.
+    return _strip_c0(text.replace("\x1b", ""))
 
 
 def apply_carriage_returns(line):
@@ -183,7 +199,11 @@ def render_line_colour(line):
     # A lone ESC that completed none of the grammars above — a log read mid-write, or an authored
     # byte from a player name. strip_escapes drops those and so does this: the guarantee that no
     # control byte reaches the page except the SGR written here is the whole point.
-    cells = [c for c in cells if c[0] != "\x1b"]
+    # ...and every other control character that carries no meaning here. \r and \b never
+    # reach a cell (_put consumes them), so what is left to drop is NUL, BEL, VT, FF and
+    # friends. strip_escapes drops the same set — the guarantee that no control byte reaches
+    # the page except the SGR written here is the whole point, and it was only true of ESC.
+    cells = [c for c in cells if c[0] == "\t" or not _C0_RE.match(c[0])]
     return _coalesce(cells)
 
 

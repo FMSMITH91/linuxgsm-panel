@@ -9,10 +9,18 @@ module.exports = async (browser) => {
     if (!page.url().includes('/login') || !(await page.$('#username'))) return;
     await page.type('#username', 'lhci');
     await page.type('#password', 'Str0ng!passw0rd-lhci');
+    // No .catch() on the navigation, and the result is CHECKED. Swallowing it meant a login that
+    // never completed — a renamed field, a changed password, a slow boot — left LHCI
+    // unauthenticated, every URL landed on /login, and the CLS/a11y assertions passed on a login
+    // form. Throwing here fails the collect step, which is the honest outcome.
     await Promise.all([
-      page.waitForNavigation({ waitUntil: 'load', timeout: 20000 }).catch(() => {}),
+      page.waitForNavigation({ waitUntil: 'load', timeout: 20000 }),
       page.click('button[type="submit"]'),
     ]);
+    if (page.url().includes('/login')) {
+      throw new Error('lhci-login: still on /login after submitting — every page would be '
+                      + 'audited as the login form. Check the credentials in tools/lhci_serve.py.');
+    }
   } finally {
     await page.close();
   }

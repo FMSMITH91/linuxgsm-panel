@@ -66,7 +66,7 @@ PASSWORD_HISTORY_LEN = 3
 # Bounded at 64 to match the column width. SQLite does NOT enforce VARCHAR length, so without
 # the {0,63} here a 10KB "username" stores happily and then gets interpolated into every
 # remote command built for that server.
-_SHELL_IDENT_RE = re.compile(r"^[A-Za-z0-9_][A-Za-z0-9._-]{0,63}$")
+_SHELL_IDENT_RE = re.compile(r"^[A-Za-z0-9_][A-Za-z0-9._-]{0,63}\Z")
 
 
 def _validate_shell_ident(key, value):
@@ -145,7 +145,13 @@ class User(UserMixin, db.Model):
     id = db.Column(db.Integer, primary_key=True)
     username = db.Column(db.String(80), unique=True, nullable=False, index=True)
     password_hash = db.Column(db.String(256), nullable=False)
-    email = db.Column(db.String(120), unique=True, nullable=True)
+    # NOT unique: every writer stores encrypt_secret(email) and Fernet uses a fresh IV per write,
+    # so two accounts with the same address produce different ciphertext and the constraint never
+    # fired. Demonstrated — two rows, one address, both committed. The column is also unindexable
+    # for the same reason (EncryptedString's own docstring: "only safe for columns nothing filters,
+    # orders or groups by"), and nothing looks a user up by email. If uniqueness is ever wanted it
+    # needs a separate deterministic email_hash (HMAC) column carrying the index.
+    email = db.Column(db.String(120), nullable=True)
     display_name = db.Column(db.String(120), default="")
     is_superadmin = db.Column(db.Boolean, default=False)
     is_active = db.Column(db.Boolean, default=True)
@@ -660,7 +666,7 @@ class CustomCommand(db.Model):
 # The tag-name rule, shared with the routes so a request can be rejected with THIS fixed message
 # instead of echoing the exception back — returning str(exc) to a client is how raw internals leak
 # into API responses (CodeQL py/stack-trace-exposure), and this codebase's rule is never to do it.
-TAG_NAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9 _.\-]{0,31}$")
+TAG_NAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9 _.\-]{0,31}\Z")
 TAG_NAME_HELP = ("A tag name must start with a letter or number and use only letters, numbers, "
                  "spaces, dots, hyphens or underscores (up to 32 characters).")
 
@@ -837,8 +843,15 @@ class SetupState(db.Model):
 
 class MetricSample(db.Model):
     """A periodic snapshot of one game server's live figures (game CPU%, RAM MB, player count) for the
-    history charts. Written by the metrics-history sampler (~1/min) and pruned after ~14 days. No FK —
-    orphans from an uninstalled server just age out — so it stays cheap to write."""
+    history charts. Written by the metrics-history sampler (~1/min) and pruned after ~14 days.
+
+    No FK, so the write stays cheap — but the orphans do NOT "just age out" harmlessly, which is
+    what this used to say. SQLite hands a deleted row's id straight to the next INSERT (plain
+    INTEGER PRIMARY KEY = rowid, no AUTOINCREMENT), so for up to 14 days a freshly-installed
+    server whose id was recycled shows the DELETED server's CPU, RAM and player counts on its
+    history chart — silently wrong data on the page an operator uses to decide whether a box is
+    overloaded. The after_delete listener at the bottom of this module clears them with the row,
+    which is the same rule the per-remote caches and panel_state already follow."""
     # The history charts ask "one server, last 7 (or 1) days, in time order" — server_id AND ts
     # together. With only the two single-column indexes SQLite picked server_id and then sorted
     # the whole 14-day slice in a temp B-tree to satisfy ORDER BY. Measured on 806k rows (40
@@ -854,7 +867,9 @@ class MetricSample(db.Model):
 
 
 class HostSample(db.Model):
-    """A periodic snapshot of one host's whole-VPS figures (CPU%, RAM%, disk%) for the history charts."""
+    """A periodic snapshot of one host's whole-VPS figures (CPU%, RAM%, disk%) for the history charts.
+
+    Cleared when the host row is deleted — see MetricSample for why aging out is not enough."""
     # Same (id, ts) shape as MetricSample, and this one was worse: with far fewer distinct hosts
     # than servers, SQLite preferred the ts index and scanned half the table before filtering
     # remote_id. Measured on 100k rows: 7.7ms -> 2.7ms, a 2.8x improvement on the same query the
@@ -1323,6 +1338,81 @@ def _ensure_db_healthy(path=None):
                        "tool if you need to salvage its data", path, aside)
     except Exception:
         _log.exception("database self-heal check failed (continuing startup)")
+
+
+# ── A deleted row must not leave its history behind ───────────────────────────────────────────
+# MetricSample and HostSample carry no FK (deliberately — see MetricSample), so nothing removed
+# their rows when a server or host was deleted, and SQLite then handed the id to the next INSERT.
+# Measured: delete a game server with 3 samples, add another that takes the same id, and
+# /api/server/<id>/history returned the deleted server's 99% CPU and 31 players.
+#
+# Done as a listener rather than in the delete routes, for the reason game.py's version already
+# gives: the invariant belongs where the row goes away, not at each of the places that remove one.
+# The DELETE goes through the flush's own connection, so it is part of the same transaction — a
+# rolled-back delete does not lose the samples.
+def _register_sample_pruning():
+    from sqlalchemy import event
+
+    def _prune(model, column):
+        def _handler(_mapper, connection, target):
+            try:
+                connection.execute(model.__table__.delete().where(column == target.id))
+            except Exception:
+                _log.debug("sample prune failed for a deleted row", exc_info=True)
+        return _handler
+
+    event.listen(GameServer, "after_delete", _prune(MetricSample, MetricSample.server_id))
+    event.listen(RemoteServer, "after_delete", _prune(HostSample, HostSample.remote_id))
+
+    # An invite must die with the account that minted it. authority_intact() resolves the creator
+    # with db.session.get(User, created_by_id) and fails closed when it is gone — but user.id is a
+    # bare INTEGER PRIMARY KEY, so SQLite hands the freed rowid to the very NEXT account created.
+    # The creator is then not missing; it is a different person, and the check says yes. Offboard
+    # an admin and create their replacement and the dead invite is live again, for an ordinary
+    # account as soon as the new one is active — and for a SUPERADMIN invite as soon as the
+    # replacement is promoted, which is exactly what happens in that scenario. manage_users lists
+    # the resurrected invite as "Active". revoked_at already exists and is_usable already honours
+    # it, so stamping it is enough and no rowid can undo it.
+    @event.listens_for(User, "after_delete")
+    def _revoke_invites_of_deleted_user(_mapper, connection, target):
+        try:
+            connection.execute(Invite.__table__.update()
+                               .where(Invite.created_by_id == target.id)
+                               .where(Invite.revoked_at.is_(None))
+                               .values(revoked_at=utcnow()))
+        except Exception:
+            _log.debug("revoking a deleted user's invites failed", exc_info=True)
+
+    # AuditLog.user_id is a FK with no cascade, this app never sets PRAGMA foreign_keys, and the
+    # rowid is recycled — so after a delete the column pointed at whoever took the freed id.
+    # Verified: alice's rows read back as bob's. No render path joins on it today (they all use
+    # the denormalised `username`, which is the auditable fact and is MEANT to outlive the
+    # account), so this is a foot-gun rather than a live defect — for the next feature that does
+    # join, "show this user's activity" would hand bob alice's history. Nulled rather than
+    # deleted: the entries must survive, only the pointer must not lie.
+    @event.listens_for(User, "after_delete")
+    def _detach_audit_rows_of_deleted_user(_mapper, connection, target):
+        try:
+            connection.execute(AuditLog.__table__.update()
+                               .where(AuditLog.user_id == target.id)
+                               .values(user_id=None))
+        except Exception:
+            _log.debug("detaching a deleted user's audit rows failed", exc_info=True)
+
+    # A host's game servers go with it, and remotes.py deletes them in BULK — which bypasses the
+    # ORM, so the per-server listener above never fires for them. Clear their samples by
+    # subquery on the host id instead of relying on that cascade.
+    @event.listens_for(RemoteServer, "after_delete")
+    def _prune_host_game_samples(_mapper, connection, target):
+        try:
+            connection.execute(MetricSample.__table__.delete().where(
+                MetricSample.server_id.in_(
+                    db.select(GameServer.id).where(GameServer.remote_id == target.id))))
+        except Exception:
+            _log.debug("game-server sample prune failed for a deleted host", exc_info=True)
+
+
+_register_sample_pruning()
 
 
 def init_db(app):

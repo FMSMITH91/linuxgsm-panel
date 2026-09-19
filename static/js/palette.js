@@ -419,9 +419,14 @@
 
   document.addEventListener('keydown', function (e) {
     if ((e.ctrlKey || e.metaKey) && !e.altKey && (e.key === 'k' || e.key === 'K')) {
-      e.preventDefault();
+      // Look the element up BEFORE cancelling the key. palette.js is loaded unconditionally by
+      // base.html but #cmdk is rendered only under {% if show_app_chrome %}, so on login,
+      // force_password and the setup pages this took the browser's own Ctrl/Cmd+K away and gave
+      // nothing back — open() returns immediately when there is no box.
       var box = document.getElementById('cmdk');
-      if (box && !box.hidden) { close(); } else { open(); }
+      if (!box) return;
+      e.preventDefault();
+      if (!box.hidden) { close(); } else { open(); }
       return;
     }
     if (!EL.box || EL.box.hidden) return;

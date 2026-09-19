@@ -13,7 +13,7 @@ from panel.ops.ssh_manager import (remote_fail2ban_overview, remote_fail2ban_top
 from panel.security.auth import (MANAGE_REMOTES, get_remote, log_action, permission_required,
     superadmin_required)
 from panel.services.monitoring import (_autoblock_threshold, _whitelisted)
-from panel.core.http import (_json_body, _log_and_generic)
+from panel.core.http import (_json_body, _json_str, _log_and_generic, _unreachable)
 from panel.core.validation import (MAX_PORT, MIN_UNPRIVILEGED_PORT, _port_or)
 from app import (AUTH_LOG_PATH, _autoblock_hosts, _maybe_set_threshold, _run_autoblock_now,
     _security_whitelist, _set_autoblock_host)
@@ -38,7 +38,7 @@ def register(app):
         """Top offending IPs on a remote host (last 7 days), aggregated from its fail2ban log."""
         remote = get_remote(remote_id)
         try:
-            return jsonify({"ips": remote_fail2ban_top_ips(remote, 100, days=7),
+            return jsonify({"ips": remote_fail2ban_top_ips(remote, 100, days=7) or [],
                             "autoblock": remote_id in _autoblock_hosts(),
                             "threshold": _autoblock_threshold(),
                             "whitelist": _security_whitelist()})
@@ -51,7 +51,7 @@ def register(app):
     def api_remote_security_block(remote_id):
         """UFW-block (all ports, permanent) an IP on a remote host."""
         remote = get_remote(remote_id)
-        ip = (_json_body().get("ip") or "").strip()
+        ip = _json_str(_json_body(), "ip")
         unblock = bool(_json_body().get("unblock"))
         if not unblock and tailnet_exempt_ips(remote, {ip}):
             return jsonify({"success": False, "message":
@@ -71,11 +71,16 @@ def register(app):
     @login_required
     @permission_required(MANAGE_REMOTES)
     def api_remote_security_autoblock(remote_id):
-        """Turn the rolling auto-block (attempts >= threshold over 7 days) on/off for a remote host,
-        and optionally update the shared threshold."""
+        """Turn the rolling auto-block (attempts >= threshold over 7 days) on/off for a remote host.
+
+        Turning it on or off is PER HOST, which is what MANAGE_REMOTES is for. The THRESHOLD is
+        install-wide — the panel-host sibling that writes it is @superadmin_required — so a host
+        admin scoped to one VPS could move it for every host, to 3 (mass-blocking) or to a huge
+        value (disabling it everywhere). Confirmed by driving both routes as such a user."""
         remote = get_remote(remote_id)
         enabled = bool(_json_body().get("enabled"))
-        _maybe_set_threshold(_json_body())
+        if current_user.is_superadmin:
+            _maybe_set_threshold(_json_body())
         _set_autoblock_host(remote_id, enabled)
         log_action(current_user, "autoblock_toggle", target=remote.name, detail="on" if enabled else "off")
         if enabled:
@@ -84,10 +89,15 @@ def register(app):
 
     @app.route("/api/remote/<int:remote_id>/security/whitelist", methods=["POST"])
     @login_required
-    @permission_required(MANAGE_REMOTES)
+    @superadmin_required
     def api_remote_security_whitelist(remote_id):
-        """Add/remove a global security-whitelist entry from a remote host's page (the whitelist is
-        global; the panel-jail ignoreip it feeds is applied on the panel host)."""
+        """Add/remove a global security-whitelist entry from a remote host's page.
+
+        The whitelist is INSTALL-WIDE — this route does not even use its remote_id beyond the
+        access check — and the panel-host sibling that writes the same list is
+        @superadmin_required. At MANAGE_REMOTES a host admin scoped to one VPS could make any
+        address permanently exempt from fail2ban bans and UFW auto-blocks everywhere, and lift any
+        ban it already had, including on the panel host they have no rights to."""
         get_remote(remote_id)
         return _whitelist_mutate(app, _json_body())
 
@@ -97,12 +107,14 @@ def register(app):
     def api_remote_security_unban(remote_id):
         remote = get_remote(remote_id)
         d = _json_body()
-        jail, banned_ip = (d.get("jail") or "").strip(), (d.get("ip") or "").strip()
+        jail, banned_ip = _json_str(d, "jail"), _json_str(d, "ip")
         try:
             ok, msg = remote_fail2ban_unban(remote, jail, banned_ip)
             log_action(current_user, "fail2ban_unban", target=banned_ip,
                        detail="%s on %s — %s" % (jail, remote.name, msg), success=ok)
             return jsonify({"success": ok, "message": msg})
+        except ConnectionError:
+            return _unreachable("fail2ban unban")
         except Exception:
             return jsonify({"success": False, "message": _log_and_generic("unban failed")}), 500
 
@@ -207,16 +219,23 @@ def register(app):
         now_public = new_bind in wildcard
         fw_note = ""
         if local:
+            # Each of these returns (ok, msg) and all three were called for effect, with fw_note
+            # assigned on the next line regardless — so the panel could restart onto a port the
+            # firewall does not allow having just said "Firewall: opened 5055.", on the one route
+            # whose docstring is "Refuses anything that would leave the panel unreachable".
             try:
                 if now_public:
-                    remote_ufw_open_port(local, new_port, "tcp", "LinuxGSM Panel")
-                    fw_note = f" Firewall: opened {new_port}."
+                    _fw_ok, _fw_msg = remote_ufw_open_port(local, new_port, "tcp", "LinuxGSM Panel")
+                    fw_note = (f" Firewall: opened {new_port}." if _fw_ok
+                               else f" FIREWALL NOT UPDATED — port {new_port} may be blocked ({_fw_msg}).")
                 else:
-                    remote_ufw_close_port(local, new_port, "tcp")
-                    fw_note = f" Firewall: {new_port} kept tailnet-only."
+                    _fw_ok, _fw_msg = remote_ufw_close_port(local, new_port, "tcp")
+                    fw_note = (f" Firewall: {new_port} kept tailnet-only." if _fw_ok
+                               else f" Firewall rule for {new_port} could not be removed ({_fw_msg}).")
                 if new_port != cur_port:
-                    remote_ufw_close_port(local, cur_port, "tcp")
-                    fw_note += f" Removed the old rule for {cur_port}."
+                    _old_ok, _old_msg = remote_ufw_close_port(local, cur_port, "tcp")
+                    fw_note += (f" Removed the old rule for {cur_port}." if _old_ok
+                                else f" The old rule for {cur_port} is still there ({_old_msg}).")
             except Exception:
                 app.logger.warning("change-port: firewall update failed", exc_info=True)
 

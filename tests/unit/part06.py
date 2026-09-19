@@ -169,8 +169,17 @@ try:
     _sm_core._HELPER_STATE["present"] = True
     for _v, _a, _w in _T_SAMPLE:
         _sm_core.run_privileged(_T_LOCAL, _v, _a, timeout=5)
+    # Guarded: if run_privileged took the SHELL path instead, _argvs stays empty and
+    # `all(... for a in [])` is True — the check that owns the sudo boundary's argv discipline
+    # would pass while the boundary was gone. (Today an IndexError five lines down happens to
+    # catch it; that is an accident, not a gate.)
+    check("transport: the argv path was actually taken, so the next checks examine a call",
+          len(_argvs) == len(_T_SAMPLE),
+          "%d of %d calls captured — the argv checks would be vacuous" % (len(_argvs),
+                                                                          len(_T_SAMPLE)))
     check("transport: with the helper installed, the local path invokes it with argv",
-          all(a[:3] == ["sudo", "-n", _priv.HELPER_PATH] for a in _argvs), str(_argvs[:1]))
+          _argvs and all(a[:3] == ["sudo", "-n", _priv.HELPER_PATH] for a in _argvs),
+          str(_argvs[:1]))
     check("transport: the helper path never builds a shell command",
           not any("bash" in x or "2>&1" in x for a in _argvs for x in a), str(_argvs[:1]))
     check("transport: the verb and its arguments arrive as separate argv elements",
@@ -874,6 +883,202 @@ _narrow = _inst[_inst.index('if [ "${HELPER_OK}"'):_inst.index("chmod 440 /etc/s
 for _never in ("systemd-run", "/bin/bash", "/bin/sh", "tailscale", "sudo -u"):
     check("install.sh: the narrow grant does not permit %s" % _never, _never not in _narrow)
 
+# ── The update's snapshot and its rollback, RUN rather than read ──────────────────────────────
+# The snapshot is the only thing standing between a failed update and a dead install, and its
+# check was `[ -s ... ]` — non-empty. The failure the comment beside it names by name is the disk
+# filling mid-write, which produces a TRUNCATED archive: non-empty, so it passed. The rollback
+# then wiped PANEL_DIR of everything but data/ and venv/ and fed that stream to `tar -xzf` as the
+# ONE bare command in the whole failure path — so `set -e` killed the script right there, past
+# install_deps, past the service restart and past BOTH die messages, leaving a half-populated
+# install and no explanation. The in-panel self-update only watches the log, so nobody is told.
+#
+# Both halves are EXTRACTED FROM install.sh and executed here. A reimplementation of them would
+# pass whatever install.sh actually says.
+import subprocess as _sh_sub
+from shlex import quote as _shlex_q
+_inst_txt = open(os.path.join(_root, "install.sh"), encoding="utf-8").read()
+_snap_fn = [ln for ln in _inst_txt.splitlines() if ln.strip().startswith("snapshot_ok() {")]
+check("install.sh: the snapshot check is a named function this test can run",
+      len(_snap_fn) == 1, str(_snap_fn))
+_rb_start = '    if ! tar -C "${PANEL_DIR}" -xzf "${BACKUP}/code.tgz"; then'
+check("install.sh: the rollback's unpack is guarded, not bare",
+      _rb_start in _inst_txt and 'tar -C "${PANEL_DIR}" -xzf "${BACKUP}/code.tgz"\n' not in _inst_txt)
+if _snap_fn and _rb_start in _inst_txt:
+    _rb_i = _inst_txt.index(_rb_start)
+    _rb_block = _inst_txt[_rb_i:_inst_txt.index("\n    fi\n", _rb_i) + len("\n    fi\n")]
+
+    def _run_snip(body, panel_dir, backup):
+        script = ("set -euo pipefail\n"
+                  'die() { echo "DIE: $*"; exit 1; }\n'
+                  'PANEL_DIR=%s\nBACKUP=%s\n' % (_shlex_q(panel_dir), _shlex_q(backup))
+                  + body + "\necho REACHED_END\n")
+        return _sh_sub.run(["bash", "-c", script], capture_output=True, text=True)
+
+    _sb = _tempfile.mkdtemp(prefix="inst-rollback-")
+    _pd, _bk_dir = os.path.join(_sb, "panel"), os.path.join(_sb, "backup")
+    os.makedirs(os.path.join(_pd, "data"))
+    os.makedirs(os.path.join(_pd, "venv"))
+    os.makedirs(_bk_dir)
+    for _f in ("app.py", "manage.py"):
+        with open(os.path.join(_pd, _f), "w", encoding="utf-8") as _fh:
+            _fh.write("# %s\n" % _f)
+    _sh_sub.run(["tar", "-C", _pd, "--exclude=./venv", "--exclude=./data", "-czf",
+                 os.path.join(_bk_dir, "good.tgz"), "."], check=True)
+    _good = open(os.path.join(_bk_dir, "good.tgz"), "rb").read()
+    # A snapshot truncated by a disk filling mid-write: non-empty, unreadable.
+    with open(os.path.join(_bk_dir, "code.tgz"), "wb") as _fh:
+        _fh.write(_good[:max(64, len(_good) // 3)])
+    _snap_body = _snap_fn[0].strip() + '\nsnapshot_ok "${BACKUP}/code.tgz" || die "empty or unreadable"'
+    _r = _run_snip(_snap_body, _pd, _bk_dir)
+    check("install.sh: a TRUNCATED snapshot is refused (it is non-empty, which -s called fine)",
+          _r.returncode == 1 and "DIE:" in _r.stdout and "REACHED_END" not in _r.stdout,
+          "%s %r" % (_r.returncode, _r.stdout))
+    _r = _run_snip(_snap_fn[0].strip() + '\nsnapshot_ok "${BACKUP}/good.tgz" || die "no"', _pd, _bk_dir)
+    check("install.sh: ...and a good one still passes",
+          _r.returncode == 0 and "REACHED_END" in _r.stdout, "%s %r" % (_r.returncode, _r.stdout))
+    # The rollback itself, against that truncated snapshot: it must DIE with an explanation, not
+    # be killed by set -e in the middle.
+    _r = _run_snip(_rb_block, _pd, _bk_dir)
+    check("install.sh: a rollback that cannot unpack says so instead of dying silently",
+          _r.returncode == 1 and "DIE:" in _r.stdout and "INCOMPLETE" in _r.stdout
+          and "REACHED_END" not in _r.stdout, "%s %r %r" % (_r.returncode, _r.stdout, _r.stderr))
+    check("install.sh: ...and the message names the snapshot the operator has to restore by hand",
+          "code.tgz" in _r.stdout, repr(_r.stdout))
+    # Control: a good snapshot rolls back and carries on to the rest of the failure path.
+    _sh_sub.run(["cp", os.path.join(_bk_dir, "good.tgz"), os.path.join(_bk_dir, "code.tgz")],
+                check=True)
+    os.remove(os.path.join(_pd, "app.py"))
+    _r = _run_snip(_rb_block, _pd, _bk_dir)
+    check("install.sh: a good snapshot rolls back and execution continues past it",
+          _r.returncode == 0 and "REACHED_END" in _r.stdout
+          and os.path.exists(os.path.join(_pd, "app.py")), "%s %r" % (_r.returncode, _r.stdout))
+    _shutil.rmtree(_sb, ignore_errors=True)
+
+# ROOT_TOOLS_OK is what write_sudoers_grant reads, and its own comment says it means "every
+# root-owned piece is in place … the helper, db_maintenance, and the root-owned installer". It was
+# set on the db_maintenance install alone: the panel.conf write was an unchecked && chain whose
+# status was discarded, and the installer copy carried `|| true`. A narrow grant could be written
+# on a host missing either.
+_rt_lines = _inst_txt.splitlines()
+_rt_set = [i for i, ln in enumerate(_rt_lines) if ln.strip() == "ROOT_TOOLS_OK=1"]
+check("install.sh: ROOT_TOOLS_OK is set in exactly one place", len(_rt_set) == 1, str(_rt_set))
+if len(_rt_set) == 1:
+    _rt_guard = _rt_lines[_rt_set[0] - 1].strip()
+    check("install.sh: ...and only once panel.conf AND the root-owned installer both landed",
+          _rt_guard == 'if [ "${CONF_OK}" -eq 1 ] && [ "${INST_OK}" -eq 1 ]; then', _rt_guard)
+    check("install.sh: the installer copy records its own success rather than `|| true`",
+          '"${INSTALLER_SRC}" "${INSTALLER_DST}" 2>/dev/null && INST_OK=1' in _inst_txt)
+
+# ── panel-self-update: what root executes out of a directory the panel owns ────────────────────
+# `panel-self-update` runs the root-owned install.sh as root with cwd=PANEL_DIR, and its docstring
+# argues the ROOT-run part is "fixed and small". Three lines said otherwise, and a compromised
+# panel reaches all three by writing into its own checkout and calling the verb:
+#
+#   [2/6]  root ran ${PANEL_DIR}/venv/bin/python3 on ${PANEL_DIR}/db_maintenance.py — a
+#          panel-owned interpreter on a panel-owned script, BEFORE any git fetch, so nothing
+#          about it is "the new code we verified". Arbitrary root execution, no update involved.
+#   deps   root ran the panel-owned venv pip against the panel-owned requirements.txt, and pip
+#          executes setup.py and wheel hooks.
+#   root   install_root_tools copies ${PANEL_DIR}/tools/panel-helper over the path the sudoers
+#   tools  rule names — root replacing the privilege boundary with a file from the checkout.
+#          `git reset --hard origin/<branch>` overwrites the checkout first, but `origin` lives in
+#          the panel-owned .git/config and _gitc runs git AS THE CHECKOUT OWNER.
+#
+# All three are EXTRACTED from install.sh and run here, with id/sudo/stat/python3 shimmed so
+# nothing escalates: what is asserted is the argv that would have run.
+import shlex as _su_shlex
+_su_txt = open(os.path.join(_root, "install.sh"), encoding="utf-8").read()
+
+
+def _su_between(start, end):
+    i = _su_txt.index(start)
+    j = _su_txt.index(end, i)
+    return _su_txt[i:j + len(end)]
+
+
+def _su_run(body, env_lines, extra=""):
+    return _sh_sub.run(["bash", "-c", "set -uo pipefail\nwarn() { echo \"WARN $*\"; }\n"
+                        + extra + env_lines + body], capture_output=True, text=True)
+
+
+_su_sb = _tempfile.mkdtemp(prefix="selfupdate-")
+try:
+    os.makedirs(os.path.join(_su_sb, "panel", "venv", "bin"))
+    open(os.path.join(_su_sb, "panel", "venv", "bin", "python3"), "w").close()
+    import stat as _su_stat
+    os.chmod(os.path.join(_su_sb, "panel", "venv", "bin", "python3"),
+             _su_stat.S_IRWXU)
+    open(os.path.join(_su_sb, "panel", "db_maintenance.py"), "w").close()
+    os.makedirs(os.path.join(_su_sb, "rootlib"))
+    open(os.path.join(_su_sb, "rootlib", "db_maintenance.py"), "w").close()
+    _su_env = "PANEL_DIR=%s\n" % _su_shlex.quote(os.path.join(_su_sb, "panel"))
+
+    _su_dbm = _su_between('    DBM_RUN=""', '    fi\n    if [ -n "${DBM_RUN}" ]; then')
+    _su_dbm = _su_dbm.rsplit("    if [ -n", 1)[0] + '\necho "DBM_RUN=${DBM_RUN}"\n'
+    _su_real = _su_dbm.replace("/usr/local/lib/linuxgsm-panel/db_maintenance.py",
+                               os.path.join(_su_sb, "rootlib", "db_maintenance.py"))
+    _su_gone = _su_dbm.replace("/usr/local/lib/linuxgsm-panel/db_maintenance.py",
+                               os.path.join(_su_sb, "nope.py"))
+    _r = _su_run(_su_real, _su_env, extra="id() { echo 0; }\n").stdout.strip()
+    check("install.sh: as ROOT, db maintenance is the root-owned script under the system python",
+          _r == "DBM_RUN=python3 %s" % os.path.join(_su_sb, "rootlib", "db_maintenance.py"), _r)
+    _r = _su_run(_su_gone, _su_env, extra="id() { echo 0; }\n").stdout.strip()
+    check("install.sh: ...and with no root-owned copy it runs NOTHING, rather than the checkout's",
+          _r == "DBM_RUN=", _r)
+    _r = _su_run(_su_real, _su_env, extra="id() { echo 1000; }\n").stdout.strip()
+    check("install.sh: an unprivileged install still uses its own venv (no boundary to cross)",
+          _r.endswith("/panel/venv/bin/python3 %s/panel/db_maintenance.py" % _su_sb), _r)
+
+    # pip: as the OWNER on the update path, unchanged on the fresh one (where PANEL_DIR is still
+    # root's and the requirements came from a clone of REPO_URL the operator asked for).
+    _su_deps = _su_between("install_deps() {", "\n}\n") + "\ninstall_deps\n"
+    _su_me = _sh_sub.run(["id", "-un"], capture_output=True, text=True).stdout.strip()
+    _su_shim = ("id() { echo 0; }\n"
+                "stat() { echo %s; }\n"
+                "sudo() { echo \"SUDO $*\"; }\n"
+                "python3() { echo \"python3 $*\"; }\n")
+    _r = _su_run(_su_deps, _su_env + "PANEL_USER=%s\n" % _su_shlex.quote(_su_me),
+                 extra=_su_shim % _su_shlex.quote(_su_me)).stdout
+    check("install.sh: on the update path pip runs as the checkout's owner, not as root",
+          _r.count("SUDO -u %s" % _su_me) >= 2, repr(_r[:200]))
+    _r = _su_run(_su_deps, _su_env + "PANEL_USER=%s\n" % _su_shlex.quote(_su_me),
+                 extra=_su_shim % "root").stdout
+    check("install.sh: ...and the fresh path, where PANEL_DIR is still root's, is unchanged",
+          "SUDO" not in _r and "python3 -m venv" in _r, repr(_r[:200]))
+
+    # origin: the URL the root-owned installs are taken from, compared against this file's own
+    # REPO_URL — which the panel cannot edit, because install.sh runs from outside the checkout.
+    _su_git = os.path.join(_su_sb, "git")
+    _sh_sub.run(["git", "init", "-q", _su_git], check=True)
+    _su_origin = ('_gitc() { git -C "${PANEL_DIR}" "$@"; }\n'
+                  + _su_between("ORIGIN_TRUSTED=1\ncheck_origin_trusted() {", "\n}\n")
+                  + '\ncheck_origin_trusted\necho "ORIGIN_TRUSTED=${ORIGIN_TRUSTED}"\n')
+    _su_verdicts = []
+    for _url, _want in (("https://github.com/FMSMITH91/linuxgsm-panel.git", "1"),
+                        ("https://github.com/FMSMITH91/linuxgsm-panel", "1"),
+                        ("https://github.com/attacker/evil.git", "0"),
+                        ("", "0")):
+        _sh_sub.run(["git", "-C", _su_git, "remote", "remove", "origin"], capture_output=True)
+        if _url:
+            _sh_sub.run(["git", "-C", _su_git, "remote", "add", "origin", _url], check=True)
+        _r = _su_run(_su_origin,
+                     "PANEL_DIR=%s\nREPO_URL=https://github.com/FMSMITH91/linuxgsm-panel.git\n"
+                     % _su_shlex.quote(_su_git)).stdout
+        _got = [ln.split("=")[1] for ln in _r.splitlines() if ln.startswith("ORIGIN_TRUSTED=")]
+        if not _got or _got[-1] != _want:
+            _su_verdicts.append("%s -> %s (want %s)" % (_url or "(unset)", _got, _want))
+    check("install.sh: a checkout whose origin is not this repository is not trusted for root installs",
+          not _su_verdicts, "; ".join(_su_verdicts))
+    # ...and the flag has to actually gate both root-owned steps.
+    check("install.sh: install_root_tools returns early when the origin is not trusted",
+          'if [ "${ORIGIN_TRUSTED:-1}" -ne 1 ]; then' in _su_txt
+          and _su_txt.index('if [ "${ORIGIN_TRUSTED:-1}" -ne 1 ]; then')
+          > _su_txt.index("install_root_tools() {"))
+    check("install.sh: ...and the sudoers grant is not rewritten from an untrusted checkout",
+          '[ "${ORIGIN_TRUSTED}" -eq 1 ] && write_sudoers_grant' in _su_txt)
+finally:
+    _shutil.rmtree(_su_sb, ignore_errors=True)
+
 # ── The discovery scan, reimplemented in the helper, must speak the parser's dialect ───────────
 # discover_linuxgsm_servers used to be a twenty-line shell program run under `sudo bash -c`. It
 # needed root for exactly one thing — reading another user's crontab — and everything else was
@@ -954,8 +1159,21 @@ _flake_inv = " ".join(l.strip().rstrip("\\") for l in _rt_src.splitlines()
                       if "flake8 --select" in l or "--extend-exclude" in l)
 check("coverage: panel-helper is flake8'd (its default glob would miss it)",
       "tools/panel-helper" in _flake_inv, _flake_inv[:120])
+# Matched on the FLAGS line rather than a single literal invocation: the bandit step now runs
+# twice (SARIF for code scanning, JSON so errors[] can be checked) off one shared flag list, so
+# pinning the exact string "bandit -r . tools/panel-helper" would break on a refactor that kept
+# the coverage intact. What must hold is that the recursive walk names the helper explicitly —
+# bandit -r globs *.py, and tools/panel-helper is Python with a shebang and no extension.
+_bandit_flags = " ".join(l.strip() for l in _bandit_src.splitlines()
+                         if "FLAGS=" in l or "bandit -r" in l)
 check("coverage: panel-helper is bandit-scanned (bandit -r . globs *.py and would miss it)",
-      "bandit -r . tools/panel-helper" in _bandit_src)
+      "-r ." in _bandit_flags and "tools/panel-helper" in _bandit_flags, _bandit_flags[:140])
+# ...and the errors[] guard: a file bandit cannot PARSE contributes zero results and exits 0, so
+# without this the module holding the privilege boundary could be reported clean for not being
+# read at all. Proven by execution with a syntax error injected into system_ops.py.
+check("coverage: a file bandit could not read fails the job instead of reading as clean",
+      "errors | length" in _bandit_src and "-f json" in _bandit_src,
+      "no errors[] check after the bandit run")
 # ...and the file really is Python, so those three tools have something to say about it.
 check("coverage: panel-helper is a python script (shebang), justifying the above",
       open(os.path.join(_root, 'tools', 'panel-helper'), encoding='utf-8').readline().startswith("#!") and "python" in open(os.path.join(_root, 'tools', 'panel-helper'), encoding='utf-8').readline())
@@ -1234,8 +1452,10 @@ _fuzz_dir = os.path.join(_root, "tests", "fuzz")
 _harnesses = sorted(os.path.basename(f)[len("fuzz_"):-len(".py")]
                     for f in glob.glob(os.path.join(_fuzz_dir, "fuzz_*.py")))
 _fuzz_readme = open(os.path.join(_fuzz_dir, "README.md"), encoding="utf-8").read()
+check("docs: the fuzz harnesses were actually found, so the next check lists some",
+      len(_harnesses) >= 1, "glob matched nothing — the next check would pass vacuously")
 check("docs: every fuzz harness is listed in tests/fuzz/README.md",
-      all(("fuzz_%s.py" % t) in _fuzz_readme for t in _harnesses),
+      _harnesses and all(("fuzz_%s.py" % t) in _fuzz_readme for t in _harnesses),
       "missing: %s" % [t for t in _harnesses if ("fuzz_%s.py" % t) not in _fuzz_readme])
 _fuzz_wf = open(os.path.join(_root, ".github", "workflows", "fuzz.yml"), encoding="utf-8").read()
 _matrix = re.search(r"target:\s*\[([^\]]+)\]", _fuzz_wf)
@@ -1301,6 +1521,38 @@ for _ra, _cfg, _want in (("127.0.0.1", {}, True), ("::1", {}, True),
     check("prefix header: REMOTE_ADDR=%r trust_proxy=%s -> trusted=%s"
           % (_ra, bool(_cfg.get("trust_proxy")), _want),
           _mw.PrefixMiddleware._may_trust_header({"REMOTE_ADDR": _ra}, _cfg) is _want)
+
+# A Location is "already prefixed" only when it is the prefix itself or a path UNDER it. The test
+# was `v.startswith(prefix)`, which is also true of a path that merely shares the first characters:
+# with the panel mounted at /panel, a redirect to /panelserver read as already-prefixed and was
+# sent out unchanged, pointing outside the mount — a 404 for the user, and the one thing this
+# middleware exists to prevent.
+class _MwStart:
+    def __init__(self):
+        self.headers = None
+
+    def __call__(self, status, headers, *a):
+        self.headers = headers
+
+
+def _mw_location(loc, prefix="/panel"):
+    """The Location header a response carries after the middleware has rewritten it."""
+    _sr = _MwStart()
+
+    def _app(_environ, start_response):
+        start_response("302 FOUND", [("Location", loc)])
+        return [b""]
+
+    _mid = _mw.PrefixMiddleware(_app, prefix)
+    # Loopback + no X-Forwarded-Prefix, so the mount comes from the constructor argument.
+    _mid({"REMOTE_ADDR": "127.0.0.1", "PATH_INFO": "/", "wsgi.url_scheme": "http"}, _sr)
+    return dict(_sr.headers).get("Location")
+
+eq("prefix: a path UNDER the mount is left alone", _mw_location("/panel/servers"), "/panel/servers")
+eq("prefix: the mount itself is left alone", _mw_location("/panel"), "/panel")
+eq("prefix: an unprefixed path gets the mount", _mw_location("/servers"), "/panel/servers")
+eq("prefix: a path that merely STARTS WITH the mount is a different path, and gets prefixed",
+   _mw_location("/panelserver"), "/panel/panelserver")
 
 # ── The installer refreshes the root-owned helper on an UPDATE, not only a fresh install ──────
 # The helper/db_maintenance/panel.conf/installer block used to sit AFTER the update path's
@@ -1402,6 +1654,14 @@ if os.path.isfile(_manifest):
 # Duplicates are banned outright rather than only conflicting ones: an identical duplicate is the
 # state a conflicting one starts from, and the fix for both is the same — put the key in one file.
 _i18n_dir = os.path.join(_root, "translations")
+# The sweeps below are all "no bad key anywhere". Fed an empty catalog every one of them passes —
+# two empty sets compare equal, `not {}` is True, and a missing-keys diff over nothing is empty.
+# Measured by pointing tools/i18n_scan's globs at "*.MUTATED": the suite reported 1888/1888 with
+# all three i18n gates green, having scanned zero files. Floors, not inventories.
+_i18n_seen = {_l: len(glob.glob(os.path.join(_i18n_dir, _l, "*.json"))) for _l in ("es", "fr")}
+check("sweep: the translations/ scan found catalog files to read",
+      all(_n >= 4 for _n in _i18n_seen.values()),
+      "%s — every i18n gate below would pass vacuously" % _i18n_seen)
 for _lang in ("es", "fr"):
     _homes = {}
     for _f in sorted(glob.glob(os.path.join(_i18n_dir, _lang, "*.json"))):
@@ -1440,6 +1700,15 @@ check("i18n: es and fr translate the same set of keys",
 # that must stay verbatim (a hostname, a hex colour, a brand name) — mark it data-no-i18n.
 sys.path.insert(0, os.path.join(_root, "tools"))
 import i18n_scan as _i18n_scan  # noqa: E402
+# The scanner has its own globs, and proof B above was exactly those drifting while templates/
+# and static/js/ were untouched. Assert it actually read something before trusting its answer.
+_i18n_found, _ = _i18n_scan.scan_templates(os.path.join(_root, "templates"))
+check("sweep: i18n_scan read the templates (its own globs can drift)",
+      len(_i18n_found) >= 400,
+      "%d translatable strings — the gates below would pass on an empty scan" % len(_i18n_found))
+_i18n_js_seen = _i18n_scan.scan_js(os.path.join(_root, "static", "js"))
+check("sweep: ...and the JS", len(_i18n_js_seen) >= 40,
+      "%d strings — the JS catalog gate would pass on an empty scan" % len(_i18n_js_seen))
 _i18n_gaps = _i18n_scan.missing("es",
                                 template_dir=os.path.join(_root, "templates"),
                                 translation_dir=_i18n_dir)
@@ -1448,6 +1717,26 @@ check("i18n: every translatable template string is in the catalog",
       "%d untranslated: %s" % (len(_i18n_gaps),
                                "; ".join("%r in %s" % (_k, ",".join(sorted(_v)))
                                          for _k, _v in sorted(_i18n_gaps.items())[:4])))
+
+# ── ...and no string is welded to a {{ }} where no catalog entry could ever reach it ───────────
+# The gate above asks whether a translatable string is IN the catalog. This one asks whether it
+# could be used if it were. Jinja emits one contiguous text run, so `{{ n }} entr{{ 'y' if ... }}`
+# reaches the browser as the single node "7 entries" — different for every request, matching no
+# key, and no catalog entry can fix it; the template has to put the static half in its own
+# element. Ten strings were in that state, so a Spanish or French user read "7 entries",
+# "3 rules", "5 left" and "2 Source servers" in English on pages that were otherwise translated.
+#
+# A dynamic string that IS in the catalog is inert rather than broken — it is translated wherever
+# it appears as a node of its own — so only the ones with no entry are failures.
+_i18n_dyn_cat = _i18n_scan.load_catalog("es", translation_dir=_i18n_dir)
+_, _i18n_dyn = _i18n_scan.scan_templates(os.path.join(_root, "templates"))
+_i18n_unreachable = {_k: _v for _k, _v in _i18n_dyn.items() if _k not in _i18n_dyn_cat}
+check("i18n: no translatable string is glued to a {{ }} with no catalog entry to reach it",
+      not _i18n_unreachable,
+      "%d unreachable — give the static half its own element: %s"
+      % (len(_i18n_unreachable),
+         "; ".join("%r in %s" % (_k, ",".join(sorted(_v)))
+                   for _k, _v in sorted(_i18n_unreachable.items())[:4])))
 
 # ...and the same for the strings the JAVASCRIPT builds. Toasts, confirm dialogs and JS-rendered
 # labels go through the very same MutationObserver, so they are translated on identical terms —
@@ -1531,6 +1820,13 @@ _sys_unit = re.search(r'SYSTEM_UNIT="([^"]+)"', _uninst)
 _uninst_rm = set()
 for _line in _uninst.splitlines():
     _cmd = _line.strip()
+    # A removal may be prefixed with the sudo-when-not-root variable: the pieces install.sh writes
+    # via `sudo` on a PER-USER install need the same to come back off, so those lines read
+    # `${U_SUDO} rm -rf …`. Strip a leading variable expansion before the prefix test, or every
+    # one of them reads as "not a removal" — which is how this gate first responded to the fix.
+    _cmd = re.sub(r"^if\s+", "", _cmd)
+    _cmd = re.sub(r"^\$\{[A-Za-z_][A-Za-z0-9_]*\}\s+", "", _cmd)
+    _cmd = re.sub(r";\s*then\s*$", "", _cmd)
     if not _cmd.startswith("rm "):
         continue
     if _sys_unit:
@@ -1561,6 +1857,40 @@ _inst_paths = set(re.findall(r"/(?:etc|usr/local)/[A-Za-z0-9._/-]*linuxgsm[A-Za-
 _inst_paths |= set(re.findall(r"/etc/cron\.d/[A-Za-z0-9._-]+", _inst_src))
 _inst_paths = {_p.rstrip("/") for _p in _inst_paths if _p.count("/") > 2}
 _unremoved = sorted(_p for _p in _inst_paths if not _is_removed(_p))
+# The scan above proves a path is rm'd SOMEWHERE in the file. It has no model of the `if
+# [ "${MODE}" = "system" ]` guard, so for a long time it passed while three of those removals were
+# unreachable on a per-user install — install.sh calls ensure_gamedig() and install_root_tools()
+# unconditionally, before its own root/user split, and both use sudo when not root. So the paths
+# that a user-mode install CREATES must be rm'd outside that branch.
+# rindex, not index: uninstall.sh tests MODE earlier too (to print the service user in the
+# summary), and splitting on the first occurrence puts the whole cleanup block on the wrong side
+# — which is how this check first reported a fix that was already in place.
+_uninst_cut = _uninst.rindex('if [ "${MODE}" = "system" ]; then')
+_uninst_sys = _uninst[_uninst_cut:]
+_uninst_common = _uninst[:_uninst_cut]
+_user_created = ["/usr/local/lib/linuxgsm-panel", "/etc/cron.d/lgsm-node-tools",
+                 "/usr/local/bin/linuxgsm-panel-recover"]
+
+
+def _rm_targets(text):
+    """The paths this chunk of script actually passes to `rm` — MENTIONING one is not removing it.
+    The `if [ -f <path> ]` guard names it too, and a first version of this check was satisfied by
+    that guard alone: the removal moved back into the system-only branch and it still passed."""
+    out = set()
+    for _l in text.splitlines():
+        _c = re.sub(r"^if\s+", "", _l.strip())
+        _c = re.sub(r"^\$\{[A-Za-z_][A-Za-z0-9_]*\}\s+", "", _c)
+        _c = re.sub(r";\s*then\s*$", "", _c)
+        if _c.startswith("rm "):
+            out |= set(re.findall(r"/(?:etc|usr/local)/[A-Za-z0-9._/${}-]+", _c))
+    return out
+
+
+_common_rm = _rm_targets(_uninst_common)
+_only_system = [p for p in _user_created if p not in _common_rm]
+check("uninstall.sh: what a PER-USER install creates is removed outside the system-only branch",
+      not _only_system, "system-mode only: %s" % _only_system)
+
 check("uninstall.sh accounts for every panel path install.sh writes outside PANEL_DIR",
       not _unremoved, "not removed: %s" % _unremoved)
 
@@ -1572,6 +1902,36 @@ check("uninstall.sh accounts for every panel path install.sh writes outside PANE
 # collide, which is why this checks the collision and not just the disuse.
 _css_raw = open(os.path.join(_root, "static", "css", "panel.css"), encoding="utf-8").read()
 _css = re.sub(r"/\*.*?\*/", "", _css_raw, flags=re.S)      # comments describe rules; they are not rules
+
+# ── Every SGR code the server keeps has to be STYLED, or it is dropped in silence ──────────────
+# Three layers have to agree and nothing made them: terminal.py's _SGR_ALLOWED decides which codes
+# survive, server_detail.js emits `ansi-<code>` for every code it is handed, and panel.css decides
+# what that class looks like. A code allowed by the first two with no rule in the third renders as
+# PLAIN TEXT — no error, no warning, just the emphasis quietly gone.
+#
+# It had happened to nine of them: reverse video (7) and the whole bright-background range
+# (100-107). Measured in a browser against the real stylesheet — .ansi-41 painted
+# rgb(127,29,29) and .ansi-101 painted rgba(0,0,0,0).
+#
+# Derived from the allowlist rather than listed here, so widening _SGR_ALLOWED fails this until
+# the rule exists.
+from panel.core import terminal as _sgr_term  # noqa: E402
+_sgr_css = {int(_m) for _m in re.findall(r"\.ansi-(\d+)\s*\{", _css_raw)}
+# The codes that TURN SOMETHING OFF need no rule: the server applies them itself (39 and 49 strip
+# the colour from the run) or they end a run, and the JS never emits a class for 0.
+_SGR_RESETS = {0, 21, 22, 23, 24, 27, 29, 39, 49}
+_sgr_unstyled = sorted(c for c in _sgr_term._SGR_ALLOWED if c not in _SGR_RESETS and c not in _sgr_css)
+check("console: every SGR code the server keeps has a CSS rule", not _sgr_unstyled,
+      "allowed and emitted but styled by nothing: %s" % _sgr_unstyled)
+check("console: ...and no rule exists for a code the server strips",
+      not sorted(c for c in _sgr_css if c not in _sgr_term._SGR_ALLOWED),
+      "styled but never emitted: %s" % sorted(c for c in _sgr_css if c not in _sgr_term._SGR_ALLOWED))
+# Reverse video is the one that cannot be a plain colour swap in CSS: currentColor paints the
+# background with the run's own colour, and the glyphs need the console's background put back —
+# through -webkit-text-fill-color, because `color` is what currentColor reads.
+check("console: reverse video actually inverts rather than doing nothing",
+      "background: currentColor" in _css_raw and "-webkit-text-fill-color" in _css_raw,
+      ".ansi-7 does not swap anything")
 
 
 def _toplevel_class_rules(css):
@@ -1639,6 +1999,40 @@ for _dead in ("stat-card", "stat-value", "empty-state"):
           not re.search(r"\.%s[\w-]*\s*\{" % _dead, _css))
     check("...and nothing in the UI asks for .%s" % _dead, _dead not in _markup)
 
+
+# ── A harness must not delete the developer's last database copy ──────────────────────────────
+# Each of these refuses to run while data/panel.db EXISTS, and then cleans up after itself by
+# unlinking what it created. panel.db.backup was not in the "already there, leave it alone" set,
+# so it was unlinked every run — and it is not scratch: models._ensure_db_healthy keeps it as the
+# rolling KNOWN-GOOD copy and restores from it when the live database is corrupt.
+#
+# The window is narrow and it is precisely the wrong one: the only state in which these run AND
+# the backup exists is "panel.db is gone and this copy is the last one left".
+import ast as _pe_ast
+_PE_HARNESSES = ["tests/perf_budget_test.py", "tests/manage_test.py",
+                 "tests/setup_wizard_test.py", "tests/input_validation_test.py",
+                 "tools/perf_bench.py"]
+_pe_bad, _pe_seen = [], 0
+for _f in _PE_HARNESSES:
+    _src = open(os.path.join(_root, _f), encoding="utf-8").read()
+    _tree = _pe_ast.parse(_src)
+    # The names the cleanup unlinks, and the names it treats as pre-existing.
+    _pre = None
+    for _n in _pe_ast.walk(_tree):
+        if (isinstance(_n, _pe_ast.Assign) and len(_n.targets) == 1
+                and getattr(_n.targets[0], "id", "") == "_PREEXISTING"):
+            _pre = _pe_ast.get_source_segment(_src, _n.value) or ""
+    if _pre is None:
+        _pe_bad.append("%s has no _PREEXISTING at all" % _f)
+        continue
+    _pe_seen += 1
+    for _guarded in ("panel.db.backup", "panel.db-wal", "panel.db-shm"):
+        if _guarded in _src and _guarded not in _pre:
+            _pe_bad.append("%s unlinks %s but does not protect a pre-existing one" % (_f, _guarded))
+check("harnesses: none deletes a pre-existing panel.db.backup / WAL / SHM",
+      not _pe_bad, "; ".join(_pe_bad[:4]))
+check("harnesses: ...and the scan actually read all of them", _pe_seen == len(_PE_HARNESSES),
+      "only inspected %d of %d" % (_pe_seen, len(_PE_HARNESSES)))
 
 # ── recover.sh must not be pointed at another user's "panel" ──────────────────────────────────
 # It runs as root during a lockout and scans /home/*/.config/systemd/user/ for a unit, reading
@@ -1813,7 +2207,11 @@ for _py in sorted(glob.glob(os.path.join(_root, "panel", "**", "*.py"), recursiv
                 _shell_seen += 1
                 if not _shell_part_ok(_c.args[0], _lits):
                     _shell_bad.append("%s:%d in %s()" % (os.path.basename(_py), _c.lineno, _fn.name))
-check("shell: the _run() scan actually found the call sites", _shell_seen >= 30,
+# The positive control for the gate below: an AST walk that matches nothing passes it vacuously.
+# The floor tracks the real count and moves with it — it went 30 -> 29 when
+# enable_unattended_upgrades stopped hand-rolling `printf … | sudo tee` and went through the write
+# verb like every other root-owned write in that module.
+check("shell: the _run() scan actually found the call sites", _shell_seen >= 29,
       "only %d matched — the scan stopped finding them, so the gate below proves nothing"
       % _shell_seen)
 check("shell: every _run() command is a literal or shlex.quote()d", not _shell_bad,
@@ -1959,3 +2357,447 @@ check("privileged: the injection sweep actually ran", _inj_checked >= 200,
 check("privileged: no remote verb lets a metacharacter reach the shell",
       not _inj_bad,
       "accepted AND left unquoted: " + "; ".join(_inj_bad[:6]))
+
+# ── The value that keys the login throttle must not be chosen by the client ───────────────────
+# client_ip() keys the login throttle, the API-token throttle, the audit log, data/auth.log (which
+# the panel-login fail2ban jail parses) and the 7-day auto-block counts. WHOM to trust and WHAT to
+# read are different questions and only the first was being asked: the answer to the second was
+# X-Forwarded-For's FIRST hop, the one element of that header a client always controls, because a
+# proxy can only append to its right.
+#
+# Measured through the real /login with the README's own deployment: twenty failed logins from one
+# client, each with a different X-Forwarded-For, were never rate-limited and left twenty separate
+# throttle keys. With a constant value the same loop blocked at attempt 8.
+from panel.security import auth as _ip_auth                                       # noqa: E402
+from flask import Flask as _IpFlask                                               # noqa: E402
+_ip_app = _IpFlask(__name__)
+
+
+def _ip_for(headers, remote="127.0.0.1", trust_proxy=False, proxy_fix_orig=None):
+    _ip_app.config["_TRUST_PROXY"] = trust_proxy
+    env = {"REMOTE_ADDR": remote}
+    if proxy_fix_orig is not None:
+        env["werkzeug.proxy_fix.orig"] = {"REMOTE_ADDR": proxy_fix_orig}
+    with _ip_app.test_request_context("/", headers=headers, environ_overrides=env):
+        return _ip_auth.client_ip()
+
+
+eq("client_ip: X-Real-IP wins over a client-supplied X-Forwarded-For",
+   _ip_for({"X-Real-IP": "100.64.0.5", "X-Forwarded-For": "9.9.9.9"}), "100.64.0.5")
+eq("client_ip: falling back to X-Forwarded-For takes the LAST hop, not the first",
+   _ip_for({"X-Forwarded-For": "9.9.9.9, 198.51.100.4, 100.64.0.5"}), "100.64.0.5")
+eq("client_ip: a direct connection ignores both headers",
+   _ip_for({"X-Real-IP": "100.64.0.5", "X-Forwarded-For": "9.9.9.9"}, remote="203.0.113.9"),
+   "203.0.113.9")
+# With trust_proxy, ProxyFix has already rewritten remote_addr FROM the header being judged — so
+# the original socket peer is what decides, and X-Real-IP is what is read.
+eq("client_ip: behind a declared proxy, the header the proxy sets wins over the rewritten peer",
+   _ip_for({"X-Real-IP": "100.64.0.5", "X-Forwarded-For": "9.9.9.9"},
+           remote="9.9.9.9", trust_proxy=True, proxy_fix_orig="127.0.0.1"), "100.64.0.5")
+eq("client_ip: no headers at all -> the socket address",
+   _ip_for({}, remote="203.0.113.9"), "203.0.113.9")
+# ...and the deployment guide has to set the header it tells the panel to read.
+_ip_readme = open(os.path.join(_root, "README.md"), encoding="utf-8").read()
+check("README: the nginx block sets X-Forwarded-For rather than passing the client's through",
+      "proxy_add_x_forwarded_for" in _ip_readme,
+      "nginx forwards whatever the client sent")
+
+# ── Secure cookies ask whether the panel is REACHED over HTTPS ────────────────────────────────
+# The flag mirrored _effective_https's Tailscale case and not its PROXY case, so the deployment
+# the README recommends issued the session cookie and the 3-day remember token with no Secure
+# flag. And site_domain — a hostname typed into the setup wizard — counted as evidence of TLS,
+# which marked the cookies Secure on a panel serving plain HTTP: the browser drops them, the
+# password is right, and / bounces to /login forever.
+import app as _ck_app                                                              # noqa: E402
+import inspect as _ck_inspect                                                       # noqa: E402
+_ck_expr = _ck_inspect.getsource(_ck_app._https_ready)
+for _label, _cfg, _want in (
+        ("fresh install, self-signed TLS", {"use_https": True}, True),
+        ("Tailscale Serve in front", {"use_https": True, "tailscale_setup_done": True}, True),
+        ("reverse proxy in front", {"use_https": False, "trust_proxy": True}, True),
+        ("reverse proxy + a site_domain", {"use_https": False, "trust_proxy": True,
+                                           "site_domain": "p.example"}, True),
+        ("no TLS anywhere, domain typed in setup", {"use_https": False,
+                                                    "site_domain": "p.example"}, False)):
+    _got = _ck_app._https_ready(_cfg)
+    check("cookies: Secure is %s for %s" % (_want, _label), _got is _want, "got %s" % _got)
+check("cookies: the Secure predicate reads trust_proxy", "trust_proxy" in _ck_expr, _ck_expr)
+check("cookies: ...and not site_domain, which is not evidence of TLS",
+      "site_domain" not in _ck_expr, _ck_expr)
+
+# ── the mount prefix is a PATH, and it is matched as one ──────────────────────────────────────
+# _may_trust_header decides WHO may set X-Forwarded-Prefix; nothing constrained WHAT it could say,
+# so a trusted-source request could set SCRIPT_NAME to "//evil.example" and have every url_for()
+# on the page it got back, and the Location of every redirect, point off-site — the exact harm the
+# docstring says the source rule prevents. And the incoming PATH_INFO strip was a bare substring
+# test, so on mount /panel every page was served a second time outside the mount: /panelserver/1
+# arrived as SCRIPT_NAME=/panel PATH_INFO=server/1 and answered 200.
+from panel.core.middleware import PrefixMiddleware as _PM                          # noqa: E402
+for _raw, _want in (("/lgsm", "/lgsm"), ("/ok/", "/ok"), ("", ""),
+                    ("//evil.example", ""), ("https://evil.example", ""),
+                    ("/a/../../b", ""), ("/x\ny", ""), ("/a b", "")):
+    eq("prefix: %r -> %r" % (_raw, _want), _PM._clean_prefix(_raw), _want)
+
+_pm_seen = []
+
+
+def _pm_app(environ, start_response):
+    _pm_seen.append((environ.get("SCRIPT_NAME"), environ.get("PATH_INFO")))
+    start_response("200 OK", [])
+    return [b""]
+
+
+_pm = _PM(_pm_app, "/panel")
+_o_lc = _PM.__module__ and __import__("panel.core.middleware", fromlist=["load_config"])
+_pm_o_cfg = _o_lc.load_config
+_o_lc.load_config = lambda: {"tailscale_mount": "/panel"}
+try:
+    for _path, _want in (("/panel/login", ("/panel", "/login")),
+                         ("/panel", ("/panel", "/")),
+                         ("/panelserver/1", ("/panel", "/panelserver/1")),
+                         ("/paneling", ("/panel", "/paneling"))):
+        _pm_seen.clear()
+        _pm({"PATH_INFO": _path, "REMOTE_ADDR": "203.0.113.9", "SCRIPT_NAME": ""},
+            lambda *a, **k: None)
+        eq("prefix: %r is routed as %r" % (_path, _want[1]), _pm_seen[-1], _want)
+    # ...and a hostile header, all the way through __call__ — not just through _clean_prefix,
+    # which a test can call while the middleware has stopped calling it.
+    for _hostile in ("//evil.example", "https://evil.example"):
+        _pm_seen.clear()
+        _pm({"PATH_INFO": "/login", "REMOTE_ADDR": "127.0.0.1", "SCRIPT_NAME": "",
+             "HTTP_X_FORWARDED_PREFIX": _hostile}, lambda *a, **k: None)
+        check("prefix: X-Forwarded-Prefix %r never becomes SCRIPT_NAME" % _hostile,
+              _pm_seen and _pm_seen[-1][0] != _hostile, str(_pm_seen[-1:]))
+finally:
+    _o_lc.load_config = _pm_o_cfg
+
+# ── disabling 2FA revokes its backup codes, on EVERY path ─────────────────────────────────────
+# Two web paths clear them and say so; the CLI was the one that did not, leaving bcrypt hashes of
+# credentials the operator had just revoked in panel.db.
+import ast as _2fa_ast                                                             # noqa: E402
+_2fa_sources = {
+    "manage.py cmd_disable_2fa": open(os.path.join(_root, "manage.py"), encoding="utf-8").read(),
+    "tags.py": open(os.path.join(_root, "panel", "routes", "tags.py"), encoding="utf-8").read(),
+    "admin_notifications.py": open(os.path.join(_root, "panel", "routes",
+                                                "admin_notifications.py"), encoding="utf-8").read(),
+}
+_2fa_missing = []
+for _name, _src in _2fa_sources.items():
+    for _fn in _2fa_ast.walk(_2fa_ast.parse(_src)):
+        if not isinstance(_fn, (_2fa_ast.FunctionDef,)):
+            continue
+        _body = _2fa_ast.get_source_segment(_src, _fn) or ""
+        if "totp_enabled = False" in _body and "backup_codes = \"\"" not in _body:
+            _2fa_missing.append("%s:%s" % (_name, _fn.name))
+check("2FA: every path that disables it also clears the backup codes", not _2fa_missing,
+      "left behind by: %s" % _2fa_missing)
+
+# ── The dump salvage must KEEP what it read ───────────────────────────────────────────────────
+# The per-statement guard only wrapped dst.execute(); the error a corrupt page raises comes from
+# the iterdump GENERATOR, so it escaped that guard, unwound the `with dst:` and was caught by the
+# outer handler as a total failure. Measured on a 169-page database with ONE page corrupted in the
+# middle: 1477 statements were readable, zero were kept, the rebuild came out 0 bytes, and repair()
+# said "could not repair" — the exact case this function exists for. Built here rather than
+# described, because "recovers cleanly readable rows" was a docstring for a long time.
+import sqlite3 as _dbm_sqlite                                                      # noqa: E402
+import inspect as _tg_inspect                                                      # noqa: E402
+import json as _json                                                               # noqa: E402
+import importlib.util as _dbm_ilu                                                  # noqa: E402
+_dbm_spec = _dbm_ilu.spec_from_file_location("dbm_probe", os.path.join(_root, "db_maintenance.py"))
+_dbm = _dbm_ilu.module_from_spec(_dbm_spec)
+_dbm_spec.loader.exec_module(_dbm)
+
+_dbm_tmp = _tempfile.mkdtemp(prefix="dbrebuild-")
+try:
+    _dbm_src = os.path.join(_dbm_tmp, "src.db")
+    _c = _dbm_sqlite.connect(_dbm_src)
+    _c.execute("CREATE TABLE user (id INTEGER PRIMARY KEY, name TEXT)")
+    _c.executemany("INSERT INTO user (name) VALUES (?)", [("u%05d" % i,) for i in range(4000)])
+    _c.commit()
+    _c.close()
+    _dbm_size = os.path.getsize(_dbm_src)
+    # One bad page in the middle — the one-bad-sector case, not a shredded file.
+    with open(_dbm_src, "r+b") as _fh:
+        _fh.seek(_dbm_size // 2)
+        _fh.write(b"\xde\xad\xbe\xef" * 256)
+    _dbm_dst = os.path.join(_dbm_tmp, "rebuilt.db")
+    _dbm_ok = _dbm._rebuild_via_dump(_dbm_src, _dbm_dst)
+    _dbm_rows = 0
+    if os.path.exists(_dbm_dst):
+        try:
+            _rc = _dbm_sqlite.connect(_dbm_dst)
+            _dbm_rows = _rc.execute("SELECT COUNT(*) FROM user").fetchone()[0]
+            _rc.close()
+        except _dbm_sqlite.DatabaseError:
+            _dbm_rows = -1
+    check("db rebuild: a corrupt page in the middle does not discard the rows already read",
+          _dbm_ok and _dbm_rows > 100, "ok=%s rows=%s" % (_dbm_ok, _dbm_rows))
+    # ...and an intact database still rebuilds completely.
+    _dbm_src2 = os.path.join(_dbm_tmp, "good.db")
+    _c = _dbm_sqlite.connect(_dbm_src2)
+    _c.execute("CREATE TABLE user (id INTEGER PRIMARY KEY, name TEXT)")
+    _c.executemany("INSERT INTO user (name) VALUES (?)", [("u%d" % i,) for i in range(50)])
+    _c.commit(); _c.close()
+    _dbm_dst2 = os.path.join(_dbm_tmp, "rebuilt2.db")
+    _dbm._rebuild_via_dump(_dbm_src2, _dbm_dst2)
+    _rc = _dbm_sqlite.connect(_dbm_dst2)
+    _dbm_all = _rc.execute("SELECT COUNT(*) FROM user").fetchone()[0]
+    _rc.close()
+    eq("db rebuild: an intact database still rebuilds in full", _dbm_all, 50)
+finally:
+    _shutil.rmtree(_dbm_tmp, ignore_errors=True)
+
+# ── A failed priming poll must not mark the bot primed ────────────────────────────────────────
+# telegram_get_updates answers None on a network error, on a 409 (a second poller) and on
+# ok:false. `primed = True` ran regardless, leaving offset=None, so the next poll asked Telegram
+# for every unconfirmed update — and Telegram holds those for 24 hours. The window this runs in is
+# the one most likely to fail: the process has just restarted from a self-update, so a
+# `/stop codserver` sent hours earlier stops a running server.
+from panel.services.bots import telegram as _tgm                                   # noqa: E402
+_tg_src = _tg_inspect.getsource(_tgm)
+_tg_prime = _tg_src[_tg_src.index("if not primed:"):_tg_src.index("updates = notifications.telegram_get_updates(token, offset=offset")]
+check("telegram: a priming poll that did not answer leaves the bot UNPRIMED",
+      "if latest is None:" in _tg_prime and "continue" in _tg_prime.split("if latest is None:")[1].split("primed = True")[0],
+      _tg_prime)
+
+# ── /console must not print the "not running" sentinel as console output ──────────────────────
+# `echo NO_SESSION` goes to STDOUT, so out == "NO_SESSION" and the `if not rows` guard could never
+# fire: the command that exists to answer "why did the start fail?" answered NO_SESSION. rc was
+# unpacked and never read, while the comment beside it claimed the case was handled.
+from panel.services.bots import commands as _botcmd                                # noqa: E402
+_bc_src = _tg_inspect.getsource(_botcmd._console_text)
+check("bots: /console reads capture_console's rc instead of printing NO_SESSION",
+      "NO_SESSION" in _bc_src and "rc != 0" in _bc_src, _bc_src[:200])
+
+# ── Discord replies must not be able to ping the channel ──────────────────────────────────────
+# The content is not ours: player names (!players), the tail of the live console (which on most
+# engines carries in-game chat), package names from a remote host's apt output. Discord parses
+# every mention in `content` by default, so a player could pick a name that mass-pings the
+# operator's Discord every time an admin ran !players.
+from panel.services import notifications as _nt                                    # noqa: E402
+_nt_posts = []
+_nt_o_post = _nt._post
+try:
+    _nt._post = lambda url, data=None, headers=None, **k: (
+        _nt_posts.append(_json.loads((data or b"{}").decode())), (True, "sent"))[1]
+    _nt.send_discord("https://discord.com/api/webhooks/" + "9" * 18 + "/"
+                     + "a" * 68, "hello <@everyone>")
+    _nt.discord_bot_send("A" * 24 + "." + "B" * 6 + "." + "C" * 38, "9" * 18,
+                         "gmodserver — 1 player(s):\n• <@everyone> lol")
+finally:
+    _nt._post = _nt_o_post
+check("discord: every send declares allowed_mentions, so a player name cannot ping the channel",
+      len(_nt_posts) == 2 and all(p.get("allowed_mentions") == {"parse": []} for p in _nt_posts),
+      str(_nt_posts))
+
+# ── A provider that refuses every message must leave a trace ──────────────────────────────────
+# _post's HTTPError branch logged nothing and notify()'s sender calls were bare statements, so a
+# rotated token or a bot removed from a channel stopped alerting with nothing in the journal,
+# nothing in the UI and nothing in the audit log.
+import logging as _nt_logging                                                      # noqa: E402
+import io as _nt_io                                                                # noqa: E402
+_nt_buf = _nt_io.StringIO()
+_nt_h = _nt_logging.StreamHandler(_nt_buf)
+_nt_log = _nt_logging.getLogger("notifications")
+_nt_log.addHandler(_nt_h)
+_nt_o_level = _nt_log.level
+_nt_log.setLevel(_nt_logging.WARNING)
+try:
+    import urllib.error as _nt_urlerr                                              # noqa: E402
+    import urllib.request as _nt_urlreq                                            # noqa: E402
+    _o_open = _nt_urlreq.urlopen
+    _nt_urlreq.urlopen = lambda *a, **k: (_ for _ in ()).throw(
+        _nt_urlerr.HTTPError("https://api.telegram.org/x", 401, "Unauthorized", {}, None))
+    try:
+        _nt_res = _nt.send_telegram("1234567890:" + "A" * 35, "12345", "hi")
+    finally:
+        _nt_urlreq.urlopen = _o_open
+finally:
+    _nt_log.removeHandler(_nt_h)
+    _nt_log.setLevel(_nt_o_level)
+check("notifications: a provider that REJECTS a message says so in the log",
+      _nt_res[0] is False and "rejected by telegram" in _nt_buf.getvalue(),
+      "%s / %r" % (_nt_res, _nt_buf.getvalue()))
+
+# ── refresh() must report the FETCH, not the cache it read back ───────────────────────────────
+# `return bool(serverlist())` reads the cache, which every previous run populated — so this
+# answered True with every network fetch failing, and the route turned that into
+# {"success": true, "message": "Loaded 30 games."} plus an audit row saying it worked.
+from panel.services import lgsm_data as _lg                                        # noqa: E402
+_lg_o_fetch = _lg._fetch
+try:
+    _lg._fetch = lambda name: None                       # every fetch fails
+    _lg_bad = _lg.refresh(force=True)
+    _lg._fetch = lambda name: ("shortname,gameservername,gamename,os\n"
+                               "csgo,csgoserver,CS,ubuntu-24.04\n" if name == _lg.SERVERLIST
+                               else "all,bc\n")
+    _lg_good = _lg.refresh(force=True)
+finally:
+    _lg._fetch = _lg_o_fetch
+    _lg._mem.clear()
+check("lgsm_data: refresh() reports the FETCH, not the cache it read back",
+      _lg_bad is False, "returned %r with every fetch failing" % (_lg_bad,))
+check("lgsm_data: ...and still reports success when the fetch works", _lg_good is True,
+      "returned %r" % (_lg_good,))
+
+# ── "could not read" is not "nobody is playing" ───────────────────────────────────────────────
+# console_player_list answered [] for an exception, for rc != 0 (the "not running" case) and for
+# empty output, and player_list's `or []` then turned a stopped server into a confirmed-empty one:
+# the bot said "no players connected" about a server that was down, and the detail page's
+# `unknown` flag — which exists to avoid exactly that wording — never fired.
+from panel.ops.ssh_manager import game as _sm_game                                 # noqa: E402
+_pl_o_send, _pl_o_cap = _sm_game._core.send_console_command, _sm_game.capture_console
+try:
+    _sm_game._core.send_console_command = lambda *a, **k: ("", "", 0)
+    _sm_game.capture_console = lambda *a, **k: ("NO_SESSION", "", 3)
+    check("players: a stopped server reads as UNKNOWN, not as empty",
+          _sm_game.console_player_list(None, "u", "cod", selfname="codserver") is None)
+    check("players: ...and player_list passes that through instead of an empty list",
+          _sm_game.player_list(None, "u", "cod", 28960, None, "codserver",
+                               allow_console=True) is None)
+    _sm_game.capture_console = lambda *a, **k: (
+        "num score ping guid   name            lastmsg address               qport rate\n", "", 0)
+    check("players: a table that really is empty still reads as empty",
+          _sm_game.player_list(None, "u", "cod", 28960, None, "codserver",
+                               allow_console=True) == [])
+finally:
+    _sm_game._core.send_console_command, _sm_game.capture_console = _pl_o_send, _pl_o_cap
+
+# ── `$` vs `\Z`: every compiled pattern is classified, and the validators are RUN ─────────────
+# `$` matches before a trailing newline and `\Z` does not. On a pattern that decides whether a
+# value may reach a URL path, an Authorization header, a crontab line or a privileged verb, that is
+# the difference between refusing "x\n" and accepting it. On a pattern that parses ONE LINE of
+# command output — `(.*)$`, `(.+)$`, `\s*$` — the two are not interchangeable: `\Z` would refuse the
+# line's own newline and break it.
+#
+# So this is not a sweep. Every module-level `re.compile` whose pattern ends in `$` has to appear in
+# one of the two lists below, and a new one fails this gate until somebody has decided which it is.
+# The validators are then EXECUTED against "<valid sample>\n".
+import ast as _anc_ast                                                             # noqa: E402
+import glob as _anc_glob                                                           # noqa: E402
+
+# Line parsers: `$` is correct because the pattern is matched against one line and the trailing
+# whitespace/newline is either absorbed by the pattern or captured on purpose.
+_ANCHOR_LINE_PARSERS = {
+    "_CRON_VERDICT_RE", "_CFG_LINE_RE", "_MOD_AVAIL_RE", "_MOD_INST_RE", "_HOSTNAME_RE",
+    "_UFW_RULE_RE", "_CONSOLE_PROMPT_RE", "_ASCII_INT_RE", "header",
+    # One crontab line, already .strip()ed by its only caller, and its own `\s*$` absorbs
+    # whatever is left — so $ and \Z behave identically here.
+    "_CRON_WRAP_RE",
+}
+# Validators: the value goes somewhere a newline would matter. Each maps to a sample that must be
+# ACCEPTED, so the gate cannot be satisfied by a pattern that refuses everything.
+_ANCHOR_VALIDATORS = {
+    "panel.services.notifications": {
+        "_DISCORD_WEBHOOK_RE": "https://discord.com/api/webhooks/123456789012345/" + "a" * 68,
+        "_TG_TOKEN_RE": "1234567890:" + "A" * 35,
+        "_DISCORD_BOT_TOKEN_RE": "A" * 24 + "." + "B" * 6 + "." + "C" * 38,
+        # Built, not written: an 18-digit literal is a Discord snowflake by shape and
+        # gitleaks' discord-client-id rule is right to say so. Same reason as its
+        # neighbours here, which are also assembled.
+        "_DISCORD_CHANNEL_RE": "9" * 18,
+        "_NTFY_TOPIC_RE": "panel-alerts",
+        "_NTFY_URL_RE": "https://ntfy.sh/panel-alerts",
+    },
+    "panel.ops.system_ops": {"_JAIL_RE": "sshd"},
+    "panel.ops.ssh_manager.gmod": {"_DF_PATH_RE": "/home/gmodserver"},
+    "panel.ops.ssh_manager.files": {"_MOD_ID_OK": "metamodsource"},
+    "panel.db.prefs": {"_PANEL_KEY_RE": "host-tile"},
+    "panel.ops.ssh_manager.cron": {"_SIMPLE_CMD_RE": "/home/gs/gsserver monitor"},
+    "panel.ops.ssh_manager.hosts": {"_UFW_PORT_SPEC_RE": "27015:27020"},
+    "panel.core.clock": {"_HHMM_RE": "05:30"},
+}
+
+import importlib as _anc_il                                                        # noqa: E402
+_anc_bad = []
+for _mod_name, _pats in _ANCHOR_VALIDATORS.items():
+    _mod = _anc_il.import_module(_mod_name)
+    for _name, _sample in _pats.items():
+        _rx = getattr(_mod, _name, None)
+        if _rx is None:
+            _anc_bad.append("%s.%s is gone" % (_mod_name, _name))
+            continue
+        if not _rx.match(_sample):
+            _anc_bad.append("%s refuses its own valid sample %r" % (_name, _sample))
+        if _rx.match(_sample + "\n"):
+            _anc_bad.append("%s accepts a trailing newline" % _name)
+check("regex anchors: every validator refuses a trailing newline (\\Z, not $)", not _anc_bad,
+      "; ".join(_anc_bad[:4]))
+
+# ...and nothing new slips in unclassified.
+_anc_known = set(_ANCHOR_LINE_PARSERS)
+for _p in _ANCHOR_VALIDATORS.values():
+    _anc_known |= set(_p)
+_anc_unclassified = []
+for _f in sorted(_anc_glob.glob(os.path.join(_root, "panel", "**", "*.py"), recursive=True)
+                 + [os.path.join(_root, n) for n in ("app.py", "manage.py", "db_maintenance.py")]):
+    try:
+        _tree = _anc_ast.parse(open(_f, encoding="utf-8").read())
+    except SyntaxError:
+        continue
+    for _n in _anc_ast.walk(_tree):
+        if not (isinstance(_n, _anc_ast.Assign) and isinstance(_n.value, _anc_ast.Call)
+                and getattr(_n.value.func, "attr", "") == "compile" and _n.value.args):
+            continue
+        _parts = [a.value for a in _n.value.args[:1] + getattr(_n.value.args[0], "values", [])
+                  if isinstance(a, _anc_ast.Constant) and isinstance(a.value, str)]
+        _pat = "".join(_parts) if _parts else ""
+        if not _pat or not _pat.endswith("$") or _pat.endswith("\\$"):
+            continue
+        for _t in _n.targets:
+            if isinstance(_t, _anc_ast.Name) and _t.id not in _anc_known:
+                _anc_unclassified.append("%s:%d %s" % (os.path.basename(_f), _n.lineno, _t.id))
+check("regex anchors: every $-anchored pattern is classified as a validator or a line parser",
+      not _anc_unclassified,
+      "unclassified (decide, then add to the list in this test): %s" % _anc_unclassified[:5])
+
+# ── the same question for an INLINE re.match/fullmatch/search ─────────────────────────────────
+# The sweep above walks module-level `X = re.compile(...)` assignments, which is a shape an
+# inline `re.match(r"^...$", value)` does not have — so it could not see notifications.py's ntfy
+# token check, which said in its own comment that it was there so "a pasted value carrying a
+# newline can never split the header" and then used `$`, the one anchor that matches before a
+# trailing newline. Exactly the class the sweep exists to prevent, in the blind spot it left.
+# Listed rather than banned: an inline `$` is fine in a LINE parser (the string being matched is
+# already one line); what must not happen is a new one appearing without somebody deciding which
+# it is.
+# Keyed on the PATTERN, not on a line number, so moving the code does not silently re-allow it.
+# Each of these is handed one line that has already been split off, so there is no trailing
+# newline for `$` to be lenient about — which is the whole difference between a line parser and a
+# validator. The six that were VALIDATORS by that test now use \\Z: two IP-shape checks on values
+# read off a remote host, a LinuxGSM config key, a .cfg filename going into `find`, an apt package
+# name, and a mod id.
+_INLINE_DOLLAR_OK = {
+    r"\)\s+CMD\s+\((.*)\)\s*$",                                  # a syslog cron line
+    r"^#{3,}\s+(.+?)\s+#{3,}\s*$",                                 # a config section header
+    r"^(.*)/(tcp|udp)$",                                            # a ufw port column
+    r"^\s*\[\s*(\d+)\]\s*(.*)$",                                   # a `ufw status numbered` row
+    r"\s*(\d+)\s+(-?\d+)\s+(\d+)\s+([0-9A-Fa-f]{6,})\s+(.+)$",      # an idTech3 player row
+    r"^\s*([a-z][a-z0-9-]*)\s+([a-z]{1,4})\s+\|\s+(.+?)\s*$",        # a LinuxGSM table row
+    r"github\.com[/:]([^/]+/[^/]+?)(?:\.git)?/?\s*$",                # a `git remote -v` line
+    r"\s*port\s*=\s*(\d+)\s*$",                                     # an sshd_config line
+    r"^(https?://\S+)\s*(\(.*\))?$",                                # a `tailscale up` output line
+}
+_inline_bad = []
+for _f in sorted(_anc_glob.glob(os.path.join(_root, "panel", "**", "*.py"), recursive=True)
+                 + [os.path.join(_root, n) for n in ("app.py", "manage.py", "db_maintenance.py")]):
+    _rel = os.path.relpath(_f, _root)
+    try:
+        _tree = _anc_ast.parse(open(_f, encoding="utf-8").read())
+    except SyntaxError:
+        continue
+    for _n in _anc_ast.walk(_tree):
+        if not (isinstance(_n, _anc_ast.Call)
+                and getattr(_n.func, "attr", "") in ("match", "fullmatch", "search")
+                and getattr(getattr(_n.func, "value", None), "id", "") == "re"
+                and _n.args and isinstance(_n.args[0], _anc_ast.Constant)
+                and isinstance(_n.args[0].value, str)):
+            continue
+        _pat = _n.args[0].value
+        if not _pat.endswith("$") or _pat.endswith("\\$"):
+            continue
+        if _pat not in _INLINE_DOLLAR_OK:
+            _inline_bad.append("%s:%d %r" % (_rel, _n.lineno, _pat[:44]))
+check("regex anchors: no unclassified $-anchored inline re.match/search either",
+      not _inline_bad,
+      "use \\Z for a VALIDATOR, or add the file to _INLINE_DOLLAR_OK saying why $ is right: %s"
+      % _inline_bad[:5])

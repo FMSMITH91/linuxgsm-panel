@@ -14,7 +14,11 @@ def register(app):
     @login_required
     @permission_required(VIEW_LOGS)
     def view_logs():
-        page = request.args.get("page", 1, type=int)
+        # Clamped at BOTH ends. type=int rejects "abc" and paginate(error_out=False) clamps a
+        # page below 1, but nothing clamped it above: (page-1)*50 for page=184467440737095518
+        # overflows SQLite's INTEGER and /logs answers a bare 500 (a page route, so the JSON
+        # errorhandler does not even dress it up).
+        page = max(1, min(request.args.get("page", 1, type=int) or 1, 10_000_000))
         per_page = 50
         q = (request.args.get("q") or "").strip()
         f_action = (request.args.get("action") or "").strip()

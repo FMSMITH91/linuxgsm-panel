@@ -8,9 +8,10 @@ Routes:
   GET  /server/<id>         -> Single server detail + console
   POST /server/<id>/action  -> Execute server action (start/stop/restart/update)
   POST /server/<id>/command -> Send console command
-  GET  /servers/manage      -> Manage game servers on a remote
-  POST /servers/install     -> Install a new game server
-  POST /servers/uninstall   -> Uninstall a game server
+  GET  /servers/manage      -> Redirects to the dashboard (the list folded into it)
+  GET  /servers/install     -> The install form
+  POST /servers/add         -> Install a new game server
+  POST /servers/<id>/delete -> Uninstall a game server
   GET  /remotes             -> Manage remote VPS connections
   POST /remotes/add         -> Add a remote VPS
   POST /remotes/<id>/edit   -> Edit remote VPS
@@ -29,7 +30,8 @@ Routes:
   GET  /api/server/<id>     -> JSON server status
   GET  /api/console/<id>    -> JSON console log (recent lines)
   POST /api/command/<id>    -> JSON send command
-  WebSocket /console/<id>   -> Live console streaming
+  socket.io join_console    -> Live console streaming (events, not a route:
+                               connect / join_console / leave_console / disconnect)
 """
 import logging
 import os
@@ -72,6 +74,7 @@ from markupsafe import Markup
 from panel.core import i18n
 from flask_login import (current_user)
 from flask_wtf.csrf import CSRFProtect
+from werkzeug.exceptions import HTTPException
 
 from panel.security.auth import (ALL_PERMISSIONS, client_ip, get_user_permissions, init_auth,
     log_action, strip_legacy_superadmin_grants)
@@ -346,7 +349,10 @@ def _resolve_source_aux_ports(remote, remote_id, short_name, lgsm_name, main_por
             for k in _SOURCE_AUX_PORT_KEYS if str(cur.get(k, "")).strip().isdecimal()}
     if not have:
         return {}                        # game has no SourceTV/client ports — nothing to do
-    occupied = set(_remote_listening_ports(remote))
+    # `or ()`: None means the scan failed. Treating that as 'no ports occupied' can suggest
+    # a port that is actually taken — the install then fails with a clear error, which is
+    # the same outcome this had before the scanner learned to say 'I could not read'.
+    occupied = set(_remote_listening_ports(remote) or ())
     occupied.add(int(main_port))
     for e in GameServer.query.filter_by(remote_id=remote_id).all():
         for k in range(_port_span(e.game_type)):
@@ -929,13 +935,21 @@ def create_app():
     # form endpoints (the JSON API additionally requires an application/json body).
     app.config["SESSION_COOKIE_HTTPONLY"] = True
     app.config["SESSION_COOKIE_SAMESITE"] = "Lax"
-    # Secure defaults ON once the panel is served over HTTPS — via built-in self-signed
-    # TLS, Tailscale Serve, or a reverse proxy once a site_domain is configured. Only OFF
-    # if HTTPS is explicitly disabled AND there's no proxy in front. Override cookie_secure.
-    _https_ready = (_effective_https(cfg)
-                    or bool(cfg.get("tailscale_setup_done", False))
-                    or bool((cfg.get("site_domain") or "").strip()))
-    app.config["SESSION_COOKIE_SECURE"] = cfg.get("cookie_secure", _https_ready)
+    # Secure defaults ON once the panel is REACHED over HTTPS — whether it terminates TLS
+    # itself, or something in front does. Override with cookie_secure.
+    #
+    # This used to mirror _effective_https's Tailscale case and not its PROXY case, so the
+    # deployment the README recommends — `trust_proxy: true` behind nginx/Caddy — issued the
+    # session cookie and the 3-day remember-me token with no Secure flag, and both then travel in
+    # cleartext on any http:// request to the same host (a typo'd link, the first visit before
+    # HSTS pins, a downgrade). A captured remember token is a working login for remember_days.
+    # _security_headers already emits HSTS on those requests, so the rest of the code knew.
+    #
+    # site_domain is NOT evidence of TLS — it is a hostname typed into the setup wizard — and
+    # counting it was the mirror mistake: `use_https: false` plus a domain marked the cookies
+    # Secure while the panel served plain HTTP, which a browser answers by dropping them. The
+    # password is right, the cookie never comes back, and / bounces to /login forever.
+    app.config["SESSION_COOKIE_SECURE"] = cfg.get("cookie_secure", _https_ready(cfg))
 
     # "Remember me" cookie (flask-login). Capped at the configured remember_days (default 3,
     # max 90 — see settings.html) instead of
@@ -1006,10 +1020,65 @@ def create_app():
         # today (a custom header forces a CORS preflight, and the SameSite=Lax cookie is not sent
         # cross-site anyway), which is why this is a narrowing and not a patch — but an exemption
         # should rest on the condition it claims.
+        # EVERY cookie flask-login would authenticate from, not just the session one. The
+        # remember cookie is the other: flask-login's _load_user tries it BEFORE the request
+        # loader, so a login whose session cookie has expired is still authenticated by it — and
+        # such a request is not "cookie-less". Measured: drop only the session cookie, keep
+        # remember_token, POST /logout with no CSRF token and an INVALID Bearer header, and the
+        # UserSession row was deleted. For up to remember_days that made every mutating endpoint
+        # reachable cross-site by adding one header. A custom header does force a CORS preflight
+        # the panel does not answer, which is the same reasoning the comment above already rates
+        # as not good enough on its own: an exemption should rest on the condition it claims.
+        _auth_cookies = (app.config["SESSION_COOKIE_NAME"],
+                         app.config.get("REMEMBER_COOKIE_NAME", "remember_token"))
         if (request.headers.get("Authorization", "").startswith("Bearer ")
-                and not request.cookies.get(app.config["SESSION_COOKIE_NAME"])):
+                and not any(request.cookies.get(_c) for _c in _auth_cookies)):
             return   # genuinely cookie-less API-token request: CSRF cannot apply
         csrf.protect()   # session/cookie request: full CSRF enforcement (no-op on safe methods)
+
+    # ── An unhandled exception on a JSON endpoint must answer JSON ───────────────────────────
+    # There was no errorhandler anywhere in this project, so an exception in a route came back as
+    # Werkzeug's HTML 500 page. Every mutating endpoint here is called with
+    # `.then(r => r.json())`, which then fails to parse it — so the user sees a generic "failed"
+    # instead of the reason, and the panel log fills with tracebacks that look like the panel is
+    # broken. The ordinary trigger is not a bug in the panel at all: run_privileged raises
+    # ConnectionError for a host that is down and VerbError for an argument a verb refuses, and
+    # nothing between the ops layer and the browser catches either.
+    #
+    # Only requests that ASKED for JSON are converted. Anything else re-raises, so a page render
+    # keeps whatever behaviour it has today (including propagating under TESTING).
+    @app.errorhandler(Exception)
+    def _json_for_api_errors(e):
+        wants_json = (request.path.startswith("/api/")
+                      or request.headers.get("X-Requested-With") == "XMLHttpRequest")
+        if not wants_json:
+            # RETURN an HTTPException, do not re-raise it: Flask renders a returned one as its
+            # normal page, while a raised one propagates — and under TESTING that means
+            # `GET /logout` (405) stops being a 405 and becomes a crash in the caller.
+            if isinstance(e, HTTPException):
+                return e
+            raise e             # a page render keeps whatever behaviour it has today
+        if isinstance(e, HTTPException):
+            # abort(404) from get_or_404, a 405, flask-wtf's CSRF 400 — all of them rendered
+            # Werkzeug's HTML page, which is the same unparseable body as the 500 below. 401 is
+            # the exception: panel.js's session-expired handling reads the status and the
+            # X-Auth-Required header off it, and that contract is not ours to reshape here.
+            if e.code == 401:
+                return e
+            return jsonify({"success": False,
+                            "message": e.description or e.name}), (e.code or 500)
+        # The endpoint name taken from app.view_functions, not off the request. Werkzeug only ever
+        # matches a request to one of the app's own rules, so the two are the same string — but
+        # py/log-injection traces every value reached through `request`, and this repo's answer to
+        # a gate that will not be convinced is to give it nothing to trace rather than to dismiss
+        # it (see the note in notifications._post). The string logged is now literally one of the
+        # app's own dict keys.
+        _rule = request.url_rule
+        _ep = next((n for n in app.view_functions
+                    if _rule is not None and n == _rule.endpoint), "?")
+        _log.exception("unhandled error serving %s", _ep)
+        return jsonify({"success": False,
+                        "message": "Something went wrong — see the panel log."}), 500
 
     # Cap the total request body so an oversized upload can't be spooled to disk / read into memory
     # before the per-file size check runs. Werkzeug already bounds in-memory form fields, but NOT
@@ -1246,6 +1315,10 @@ def create_app():
     # X-Forwarded-* so request.is_secure/scheme + client IP reflect the real client.
     # Off by default — only enable when actually behind a trusted proxy, or these
     # headers become spoofable. (client_ip() also only trusts XFF from loopback.)
+    # Recorded in app.config so client_ip() can ask it without re-reading config.json on every
+    # request — it has to know, because ProxyFix below rewrites remote_addr from the very header
+    # client_ip is deciding whether to trust.
+    app.config["_TRUST_PROXY"] = bool(cfg.get("trust_proxy"))
     if cfg.get("trust_proxy"):
         from werkzeug.middleware.proxy_fix import ProxyFix
         app.wsgi_app = ProxyFix(app.wsgi_app, x_for=1, x_proto=1, x_host=1, x_prefix=1)
@@ -1448,7 +1521,10 @@ def resolve_free_port(remote, remote_id, desired, game_type):
     # Whatever is currently listening on the host (cached scan) — covers running servers'
     # FULL real footprint (game + query + rcon + …) and any non-panel service, so we never
     # land on one even if a game's span table entry is imperfect.
-    occupied = set(_remote_listening_ports(remote))
+    # `or ()`: None means the scan failed. Treating that as 'no ports occupied' can suggest
+    # a port that is actually taken — the install then fails with a clear error, which is
+    # the same outcome this had before the scanner learned to say 'I could not read'.
+    occupied = set(_remote_listening_ports(remote) or ())
     # Plus every panel server's reserved block (covers STOPPED servers, which aren't listening).
     for e in GameServer.query.filter_by(remote_id=remote_id).all():
         for k in range(_port_span(e.game_type)):
@@ -1997,6 +2073,18 @@ def register_routes(app):
 
 
 # ─── Main Entry Point ──────────────────────────────────────────
+
+def _https_ready(cfg):
+    """Is the panel REACHED over HTTPS — whether it terminates TLS itself or something in front
+    does? This is what decides the Secure flag on the session and remember-me cookies.
+
+    A named function so a test can ask it the question the cookie asks, rather than restating the
+    expression and then proving its own restatement right. See the note at the call site for what
+    it used to get wrong in both directions."""
+    return bool(_effective_https(cfg)
+                or cfg.get("tailscale_setup_done", False)
+                or cfg.get("trust_proxy", False))
+
 
 def _effective_https(cfg):
     """Should the panel terminate TLS itself with the built-in self-signed cert?

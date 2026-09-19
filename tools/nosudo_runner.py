@@ -19,6 +19,7 @@ against the developer's own machine.
 Prefer tools/smoke-local.sh, which also gives the suite a throwaway data dir.
 """
 import os
+import re
 import runpy
 import sys
 
@@ -30,19 +31,40 @@ _DENIED = ("", "sudo: a password is required", 1)
 
 
 def _is_sudo(cmd, sudo_flag=False):
+    """Whether this command would escalate. Checks EVERY element, not just argv[0].
+
+    argv[0] alone was not enough, and the shape it missed is the common one: the local privileged
+    path builds ["/bin/bash", "-c", "sudo bash -c '<cmd>'"], so the sudo is in argv[2] and argv[0]
+    is bash. Verified: _is_sudo(["/bin/bash", "-c", "sudo bash -c x"]) was False. An absolute
+    /usr/bin/sudo missed too."""
     if sudo_flag:
         return True
     if isinstance(cmd, (list, tuple)):
-        return bool(cmd) and str(cmd[0]) == "sudo"
-    return "sudo" in str(cmd)
+        return any(_mentions_sudo(part) for part in cmd)
+    return _mentions_sudo(cmd)
+
+
+def _mentions_sudo(part):
+    """True if `part` is the sudo binary, or a shell string that invokes it."""
+    text = str(part)
+    if os.path.basename(text) == "sudo":
+        return True
+    return bool(re.search(r"(?:^|[\s;&|(])sudo(?:\s|$)", text))
 
 
 def _install():
-    from panel.ops import ssh_manager
     from panel.ops import system_ops
+    # The SUBMODULE that defines _run_local and holds the real subprocess handles. Since the
+    # ssh_manager split, assigning to the PACKAGE only shadows its __getattr__ — the definition
+    # site is untouched and every internal caller resolves through its own module globals, so the
+    # stub is seen by nobody. That is the "half a stub, no error" failure the package docstring
+    # warns about, and this runner was doing exactly it: _run_local, subprocess and
+    # _real_subprocess were all assigned onto the package while _core kept the real ones, so a
+    # local privileged command ran REAL sudo and the summary still printed "0 refused".
+    from panel.ops.ssh_manager import _core as _sm_core
 
     _real_so_run = system_ops._run
-    _real_sm_local = ssh_manager._run_local
+    _real_sm_local = _sm_core._run_local
 
     def _so_run(cmd, timeout=30, sudo=False, text=True):
         if _is_sudo(cmd, sudo):
@@ -57,7 +79,12 @@ def _install():
         return _real_sm_local(cmd, timeout=timeout, sudo=sudo)
 
     system_ops._run = _so_run
-    ssh_manager._run_local = _sm_local
+    # The DEFINITION SITE, and only that. Every caller inside the package resolves _run_local
+    # through _core's own globals, and an external `ssh_manager._run_local` reaches it through the
+    # package's __getattr__ — so stubbing here covers both. Assigning to the package as well is
+    # what the unit gate forbids, and rightly: doing so is what made the original version look
+    # complete while intercepting nothing.
+    _sm_core._run_local = _sm_local
 
     # Patching the two helpers is NOT enough on its own. Several callers reach subprocess
     # directly — system_ops builds ["sudo", "systemd-run", ...] for the self-update, the reboot
@@ -77,32 +104,66 @@ def _install():
     import db_maintenance
     from panel.ops import tailscale_integration
 
-    for mod in (system_ops, ssh_manager, backup, db_maintenance, tailscale_integration):
+    # Each ssh_manager SUBMODULE by name, not the package: `ssh_manager.subprocess` resolves
+    # through __getattr__ to whichever submodule happens to define it, and the assignment then
+    # lands on the package while every submodule keeps its own real one. cron.py and files.py
+    # both call subprocess.Popen(["sudo", "-u", ...]) through their own globals.
+    from panel.ops.ssh_manager import cron as _sm_cron, files as _sm_files, game as _sm_game
+    from panel.ops.ssh_manager import firewall as _sm_fw, gmod as _sm_gmod, hosts as _sm_hosts
+    from panel.ops.ssh_manager import portscan as _sm_ps
+
+    # ONE shim object, shared by every target — not one per module. The real `subprocess` IS one
+    # object that all of them import, and a test that reaches for it expects that: part01 patches
+    # `_sm_core.subprocess.Popen` and then asserts what files.py's Popen received. With a shim per
+    # module that assignment lands on _core's instance and files.py keeps its own, so the patch
+    # reached nothing, files.py ran the shim's real Popen against a `sudo -n panel-helper` argv,
+    # got /bin/false, and the download tests failed with an empty argv list.
+    # what every module above holds after eventlet.monkey_patch()
+    import subprocess as _greened  # nosec B404 - the shim below is what refuses sudo
+    _shim = _make_shim(_greened)
+    _targets = (system_ops, backup, db_maintenance, tailscale_integration,
+                _sm_core, _sm_cron, _sm_files, _sm_game, _sm_fw, _sm_gmod, _sm_hosts, _sm_ps)
+    for mod in _targets:
         if getattr(mod, "subprocess", None) is not None:
-            mod.subprocess = _shim_for(mod.__name__)
-    # ssh_manager keeps a SEPARATE unpatched handle for use inside eventlet's thread pool.
-    if getattr(ssh_manager, "_real_subprocess", None) is not None:
-        ssh_manager._real_subprocess = _shim_for("ssh_manager._real_subprocess")
+            mod.subprocess = _shim
+    # _core keeps a SEPARATE handle for use inside eventlet's thread pool: eventlet.patcher's
+    # ORIGINAL, ungreened subprocess, which _run_local runs every local command through. It needs
+    # its own shim standing over THAT module, not over the greened one — eventlet's Popen
+    # re-implements communicate() and drops the `errors` argument, so _POPEN_KW's
+    # errors="replace" stopped applying and a game server printing latin-1 (which is what the
+    # three "transports must decode leniently" checks are about) came back as
+    # ("", "command execution error", -1) instead of text with a U+FFFD in it.
+    if getattr(_sm_core, "_real_subprocess", None) is not None:
+        _sm_core._real_subprocess = _make_shim(_sm_core._real_subprocess)
 
 
-def _shim_for(label):
-    """A stand-in subprocess module that refuses anything invoking sudo and passes the rest on."""
-    import subprocess as _sp  # nosec B404 - this IS the subprocess wrapper; it refuses sudo
+def _caller_label(suffix):
+    """Which module called into the shim, for the refusal report. Taken from the calling frame
+    because the shim is shared — it cannot be baked in at construction any more."""
+    try:
+        return "%s.%s" % (sys._getframe(2).f_globals.get("__name__", "?"), suffix)
+    except Exception:
+        return "?.%s" % suffix
 
+
+def _make_shim(_sp):
+    """A stand-in for one subprocess module that refuses anything invoking sudo, and passes the
+    rest to `_sp` — the module it is standing in FOR, so its semantics are the ones that module
+    had. Substituting a different subprocess module here changes behaviour the app depends on."""
     class _Shim:
         def __getattr__(self, name):
             return getattr(_sp, name)
 
         def run(self, cmd, *a, **kw):
             if _is_sudo(cmd):
-                BLOCKED.append(("%s.run" % label, str(cmd)[:120]))
+                BLOCKED.append((_caller_label("run"), str(cmd)[:120]))
                 return _sp.CompletedProcess(cmd, 1, "", "sudo: a password is required")  # nosemgrep
             # Passthrough: exactly the command the app would have run unwrapped, minus sudo.
             return _sp.run(cmd, *a, **kw)  # nosec B603  # nosemgrep
 
         def Popen(self, cmd, *a, **kw):
             if _is_sudo(cmd):
-                BLOCKED.append(("%s.Popen" % label, str(cmd)[:120]))
+                BLOCKED.append((_caller_label("Popen"), str(cmd)[:120]))
                 # Still hand back a real process object: callers poll/wait on it. /bin/false is
                 # the cheapest thing that exits non-zero and honours the stdout/stderr kwargs.
                 return _sp.Popen(["/bin/false"], *a, **kw)  # nosec B603  # nosemgrep - fixed literal

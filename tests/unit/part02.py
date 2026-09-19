@@ -481,7 +481,8 @@ try:
         # archive has been opened, so a mistyped passphrase costs nothing.
         _pre_calls = []
         _o_create = _bk.create_backup
-        _bk.create_backup = lambda kind="manual": (_pre_calls.append(kind), (True, "stub"))[1]
+        _bk.create_backup = lambda kind="manual", encrypt=True: (
+            _pre_calls.append((kind, encrypt)), (True, "stub"))[1]
         try:
             _wok, _wmsg = _bk.restore_backup(_ename, passphrase="not the passphrase")
         finally:
@@ -490,6 +491,66 @@ try:
         check("backup/enc: ...and takes no pre-restore backup before it knows the archive opens",
               _pre_calls == [], "create_backup called with %r" % (_pre_calls,))
         check("backup/enc: ...and stages nothing", not _osb.path.exists(_stage_dir))
+
+        # ── The pre-restore safety copy is the ONE thing standing between a mistaken restore and
+        # an unrecoverable install, and two things were wrong with it.
+        #
+        # 1. Its result was discarded. create_backup swallows every exception and answers
+        #    (False, "Backup failed — see panel logs.") — a full disk, a BACKUP_DIR whose mode
+        #    changed, a _snapshot_db failure on a database that is already damaged. Execution fell
+        #    straight through to the destructive verb while the UI said "the panel will restart in
+        #    a few seconds". Losing cred_key that way makes every stored SSH credential unreadable.
+        _sh2.rmtree(_stage_dir, ignore_errors=True)
+        _pre_calls.clear()
+        _bk.create_backup = lambda kind="manual", encrypt=True: (
+            _pre_calls.append((kind, encrypt)), (False, "Backup failed — see panel logs."))[1]
+        try:
+            _fok, _fmsg = _bk.restore_backup(_ename, passphrase=_bk_pass)
+        finally:
+            _bk.create_backup = _o_create
+        check("backup: a failed pre-restore safety copy stops the restore",
+              _fok is False and "safety copy" in _fmsg, str(_fmsg))
+        check("backup: ...before anything is staged", not _osb.path.exists(_stage_dir))
+        check("backup: ...and the refusal says what would be lost and how to go ahead",
+              "cred_key" in _fmsg and "Confirm again" in _fmsg, str(_fmsg))
+        # The operator's override still works — refusing outright would strand exactly the person
+        # who needs restore most, the one whose panel.db is already too damaged to snapshot.
+        _pre_calls.clear()
+        _bk.create_backup = lambda kind="manual", encrypt=True: (
+            _pre_calls.append((kind, encrypt)), (False, "Backup failed — see panel logs."))[1]
+        try:
+            _sok, _smsg = _bk.restore_backup(_ename, passphrase=_bk_pass, skip_safety_backup=True)
+        finally:
+            _bk.create_backup = _o_create
+        check("backup: ...unless the operator says to go ahead without one",
+              _sok is True and _pre_calls == [] and "NO pre-restore safety copy" in _smsg,
+              "%s %r" % (_smsg, _pre_calls))
+        # 2. It was encrypted with get_passphrase() — read from config.json under cred_key, BOTH
+        #    of which the next step overwrites from the archive being restored. Restoring an
+        #    archive written under a different passphrase (from before a set_passphrase, or from
+        #    another install — the case restore's own docstring calls out) left the safety net
+        #    locked by a key that no longer existed.
+        _sh2.rmtree(_stage_dir, ignore_errors=True)
+        _pre_calls.clear()
+        _bk.create_backup = lambda kind="manual", encrypt=True: (
+            _pre_calls.append((kind, encrypt)), (True, "prerestore-stub"))[1]
+        try:
+            _eok3, _emsg3 = _bk.restore_backup(_ename, passphrase=_bk_pass)
+        finally:
+            _bk.create_backup = _o_create
+        check("backup: the pre-restore copy is written UNENCRYPTED, not under a key it is about to destroy",
+              _pre_calls == [("prerestore", False)], repr(_pre_calls))
+        check("backup: ...and the operator is told its name, since the panel is about to restart",
+              _eok3 and "prerestore-stub" in _emsg3, str(_emsg3))
+        # And create_backup honours that for real: a passphrase IS configured in this block.
+        _uok, _uname = _bk.create_backup("prerestore", encrypt=False)
+        check("backup: create_backup(encrypt=False) writes a plain archive despite a configured passphrase",
+              _uok and not _bk.is_encrypted_backup(_uname)
+              and _tar.open(str(_bk._safe_path(_uname))).getnames(), "%s %s" % (_uok, _uname))
+        check("backup: ...and it is still 0600 inside the 0700 backup dir",
+              _osb.stat(str(_bk._safe_path(_uname))).st_mode & 0o777 == 0o600,
+              oct(_osb.stat(str(_bk._safe_path(_uname))).st_mode & 0o777))
+        _sh2.rmtree(_stage_dir, ignore_errors=True)
     finally:
         _bk._helper_present, _bk._run_verb = _o_hp, _o_rv
 finally:
@@ -823,39 +884,96 @@ eq("cron: split @shortcut", _sm_cron._split_cron_line("@reboot /home/gm/x start"
 eq("cron: split rejects short line", _sm_cron._split_cron_line("0 3 * *"), (None, None))
 
 # ── anti-lockout: disabling public SSH must be refused with no Tailscale path back in ──
+# ...and the RESULT must be read back off the host. remote_set_public_ssh used to return True
+# unconditionally after firing its verbs, so a host with no ufw at all answered "✓ Public SSH is
+# now disabled (tailnet-only)" with port 22 open to the internet, and wrote an audit row saying
+# the hardening succeeded. Its exit codes cannot settle it either — a delete of an absent rule is
+# a normal non-zero, which is exactly why they were being ignored — so it asks ufw what it ended
+# up with. That makes the firewall state part of these fixtures.
 _orig_rc = _sm_core.run_command
-def _rc_no_tailnet(server, cmd, **kw):
-    if "status --json" in cmd:
-        return ('{"BackendState":"Stopped"}', "", 0)   # Tailscale not running
-    return ("", "", 0)
-_sm_core.run_command = _rc_no_tailnet
-_ok, _msg = _sm_hosts.remote_set_public_ssh(object(), "off")
-check("ssh off REFUSED when no Tailscale path (anti-lockout)", _ok is False and "lock you out" in _msg.lower())
+_orig_rp = _sm_core.run_privileged
 
-def _rc_ts_ssh(server, cmd, **kw):
-    if "status --json" in cmd:
-        return ('{"BackendState":"Running"}', "", 0)
-    if "debug prefs" in cmd:
-        return ('{"RunSSH": true}', "", 0)                # Tailscale SSH enabled
-    return ("", "", 0)
-_sm_core.run_command = _rc_ts_ssh
-check("ssh off ALLOWED when Tailscale SSH enabled", _sm_hosts.remote_set_public_ssh(object(), "off")[0] is True)
+# `ufw status` as it reads for each resulting mode. remote_public_ssh_status parses this.
+_UFW_BY_MODE = {
+    "allow": "Status: active\n\n22/tcp                     ALLOW IN    Anywhere\n",
+    "limit": "Status: active\n\n22/tcp                     LIMIT IN    Anywhere\n",
+    "off": "Status: active\n\n27015                      ALLOW IN    Anywhere\n",
+}
 
-def _rc_iface(server, cmd, **kw):
-    if "status --json" in cmd:
-        return ('{"BackendState":"Running"}', "", 0)
-    if "debug prefs" in cmd:
-        return ('{"RunSSH": false}', "", 0)
-    if "ufw status" in cmd:
-        return ("Anywhere on tailscale0     ALLOW IN    Anywhere", "", 0)  # tailscale0 allowed
-    return ("", "", 0)
-_sm_core.run_command = _rc_iface
-check("ssh off ALLOWED when tailscale0 allowed in UFW", _sm_hosts.remote_set_public_ssh(object(), "off")[0] is True)
 
-_sm_core.run_command = lambda *a, **k: ("", "", 0)
-check("ssh allow is never lockout-guarded", _sm_hosts.remote_set_public_ssh(object(), "allow")[0] is True)
-check("ssh limit is never lockout-guarded", _sm_hosts.remote_set_public_ssh(object(), "limit")[0] is True)
-_sm_core.run_command = _orig_rc
+def _ufw_says(mode, tailscale_iface=False):
+    """Stub run_privileged so the host reports having ended up in `mode`.
+
+    `ufw-status verbose` is a DIFFERENT question — _tailnet_ssh_state asks it to find out whether
+    the tailscale0 interface is allowed — so the two are answered separately."""
+    def _rp(s, v, a=(), **k):
+        if v != "ufw-status":
+            return ("", "", 0)
+        if list(a)[:1] == ["verbose"]:
+            return ("Anywhere on tailscale0     ALLOW IN    Anywhere\n" if tailscale_iface
+                    else "Status: active\n", "", 0)
+        return (_UFW_BY_MODE[mode], "", 0)
+    _sm_core.run_privileged = _rp
+
+
+try:
+    def _rc_no_tailnet(server, cmd, **kw):
+        if "status --json" in cmd:
+            return ('{"BackendState":"Stopped"}', "", 0)   # Tailscale not running
+        return ("", "", 0)
+    _sm_core.run_command = _rc_no_tailnet
+    _ufw_says("off")
+    _ok, _msg = _sm_hosts.remote_set_public_ssh(object(), "off")
+    check("ssh off REFUSED when no Tailscale path (anti-lockout)",
+          _ok is False and "lock you out" in _msg.lower(), str(_msg))
+
+    def _rc_ts_ssh(server, cmd, **kw):
+        if "status --json" in cmd:
+            return ('{"BackendState":"Running"}', "", 0)
+        if "debug prefs" in cmd:
+            return ('{"RunSSH": true}', "", 0)                # Tailscale SSH enabled
+        return ("", "", 0)
+    _sm_core.run_command = _rc_ts_ssh
+    _ufw_says("off")
+    check("ssh off ALLOWED when Tailscale SSH enabled",
+          _sm_hosts.remote_set_public_ssh(object(), "off")[0] is True)
+
+    def _rc_iface(server, cmd, **kw):
+        if "status --json" in cmd:
+            return ('{"BackendState":"Running"}', "", 0)
+        if "debug prefs" in cmd:
+            return ('{"RunSSH": false}', "", 0)
+        if "ufw status" in cmd:
+            return ("Anywhere on tailscale0     ALLOW IN    Anywhere", "", 0)  # tailscale0 allowed
+        return ("", "", 0)
+    _sm_core.run_command = _rc_iface
+    _ufw_says("off", tailscale_iface=True)
+    check("ssh off ALLOWED when tailscale0 allowed in UFW",
+          _sm_hosts.remote_set_public_ssh(object(), "off")[0] is True)
+
+    _sm_core.run_command = lambda *a, **k: ("", "", 0)
+    _ufw_says("allow")
+    check("ssh allow is never lockout-guarded",
+          _sm_hosts.remote_set_public_ssh(object(), "allow")[0] is True)
+    _ufw_says("limit")
+    check("ssh limit is never lockout-guarded",
+          _sm_hosts.remote_set_public_ssh(object(), "limit")[0] is True)
+
+    # A host with no ufw: every verb fails and the firewall reports nothing. This used to answer
+    # (True, "Public SSH is now rate-limited").
+    _sm_core.run_privileged = lambda s, v, a=(), **k: ("", "ufw: command not found", 127)
+    _ok, _msg = _sm_hosts.remote_set_public_ssh(object(), "limit")
+    check("ssh mode: a host with no active UFW is refused, not reported as hardened",
+          _ok is False and "not active" in _msg.lower(), str(_msg))
+
+    # ...and a host where UFW is up but the rule did not take.
+    _ufw_says("allow")
+    _ok, _msg = _sm_hosts.remote_set_public_ssh(object(), "limit")
+    check("ssh mode: a rule that did not take is reported as the failure it is",
+          _ok is False and "still reports" in _msg.lower(), str(_msg))
+finally:
+    _sm_core.run_command = _orig_rc
+    _sm_core.run_privileged = _orig_rp
 
 # ── secret encryption round-trip ──────────────────────────────
 _pre = {p for p in (config.CRED_KEY_FILE, config.SECRET_FILE, config.CONFIG_FILE)
@@ -942,6 +1060,39 @@ g = protect(NS(port=22), ["22/tcp LIMIT IN Anywhere", "28960 ALLOW IN Anywhere"]
 gp = {x["port_num"]: x for x in g}
 check("LIMIT SSH rule recognised as SSH", gp["22"]["is_ssh"])
 check("LIMIT SSH rule protected as the only way in", gp["22"]["protected"])
+
+# `ufw allow OpenSSH` — ufw's APP PROFILE, the form Ubuntu's own docs and `ufw app list` steer
+# people to. It prints the profile NAME in the To column, so port_num is "OpenSSH" and the
+# pn.isdecimal() test was False: is_ssh and is_access were both False, which means protected AND
+# warn were both False, and remote_ufw_delete_rule (which gates only on protected) deleted the
+# host's only way in without a word.
+g = protect(NS(port=22), ["OpenSSH ALLOW IN Anywhere", "5000/tcp ALLOW IN Anywhere"])
+gp = {x["port_num"]: x for x in g}
+check("ufw app profile 'OpenSSH' is recognised as SSH", gp["OpenSSH"]["is_ssh"])
+check("...and protected as the only way in", gp["OpenSSH"]["protected"])
+check("...while a non-SSH profile-less port beside it is not", not gp["5000"]["is_ssh"])
+
+# `ufw allow in on eth0 to any port 22` — interface-scoped SSH. It prints "22 on eth0", so
+# is_iface was True and the blanket `not is_iface` threw it away. An inbound rule on ANY interface
+# to an SSH port is still a way in.
+g = protect(NS(port=22), ["22 on eth0 ALLOW IN Anywhere"])
+gp = {x["port_num"]: x for x in g}
+check("interface-scoped SSH is recognised as SSH", gp["22"]["is_ssh"])
+check("...and protected as the only way in", gp["22"]["protected"])
+
+# The panel's own web port opened with `ufw limit` — is_ssh learned that LIMIT is a way in and
+# is_panel did not, so the only route to the panel UI stayed deletable. And is_panel never checked
+# direction, so an ALLOW OUT rule on that port was treated AS the panel rule and made undeletable.
+g = protect(NS(port=22), ["22/tcp ALLOW IN Anywhere", "5000/tcp LIMIT IN Anywhere"],
+            is_local=True, cfg={"port": 5000})
+gp = {x["port_num"]: x for x in g}
+check("a rate-limited panel web port is still the panel rule", gp["5000"]["is_panel"])
+check("...and is protected", gp["5000"]["protected"])
+g = protect(NS(port=22), ["22/tcp ALLOW IN Anywhere", "5000/tcp ALLOW OUT Anywhere"],
+            is_local=True, cfg={"port": 5000})
+gp = {x["port_num"]: x for x in g}
+check("an OUTbound rule on the panel port is not the panel rule", not gp["5000"]["is_panel"])
+check("...and is therefore deletable", not gp["5000"]["protected"])
 
 # Custom SSH port + a tailscale0 rule, WITH Tailscale actually running -> two real ways in
 # -> the SSH rule can be removed (warn); custom port recognised as SSH.
@@ -1044,6 +1195,7 @@ Game 27015 udp
 Client 27005 udp
 SourceTV 27020 udp
 """
+_orig_ragu_first = _sm_core.run_as_game_user   # restored after the second stub below
 _sm_core.run_as_game_user = lambda *a, **k: (_GMOD_DETAILS, "", 0)
 res = _sm_game.detect_game_ports(NS(), "gmodserver")
 eq("gmod game_port", res["game_port"], 27015)
@@ -1057,9 +1209,16 @@ RCON 27015 tcp
 SourceTV 27020 udp
 Client 27005 udp
 """
-_sm_core.run_as_game_user = lambda *a, **k: (_SRC_DETAILS, "", 0)
-res = _sm_game.detect_game_ports(NS(), "srv")
-eq("source: opens game + query only", res["open_ports"], [27015, 27016])
+try:
+    _sm_core.run_as_game_user = lambda *a, **k: (_SRC_DETAILS, "", 0)
+    res = _sm_game.detect_game_ports(NS(), "srv")
+    eq("source: opens game + query only", res["open_ports"], [27015, 27016])
+finally:
+    # Restored. A stub left installed is not merely untidy: part03's own later blocks capture
+    # `_orig = <module>.<attr>` to restore it, and a leaked stub is what they capture — so they
+    # put the STUB back believing it is the original. That is the mechanism that silently
+    # disabled the rest of this file once before.
+    _sm_core.run_as_game_user = _orig_ragu_first
 
 # ── per-remote access control (fix: MANAGE_REMOTES alone must NOT grant every host) ──
 def _user(is_admin, *group_remote_ids):

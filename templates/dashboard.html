@@ -8,9 +8,12 @@
 <div class="bulk-bar card shadow-lg" style="display:none; position:sticky; {{ 'top' if pos == 'top' else 'bottom' }}:1rem; z-index:1020; border:1px solid var(--bs-border-color);">
   <div class="card-body py-2 d-flex align-items-center gap-2 flex-wrap">
     <span class="fw-bold me-1"><i class="bi bi-check2-square"></i> <span class="bulk-count">0</span> selected</span>
-    <button class="btn btn-outline-success btn-sm" data-action="bulkAction" data-args='["start"]'><i class="bi bi-play-fill"></i> Start</button>
-    <button class="btn btn-outline-warning btn-sm" data-action="bulkAction" data-args='["restart"]'><i class="bi bi-arrow-repeat"></i> Restart</button>
-    <button class="btn btn-outline-danger btn-sm" data-action="bulkAction" data-args='["stop"]'><i class="bi bi-stop-fill"></i> Stop</button>
+    {# One button per PERMISSION, like the Update button below already is. A user holding only
+       start_server used to get all three here, and a bulk Stop across a whole tag group then
+       failed wholesale with "Permission denied". #}
+    {% if can_start %}<button class="btn btn-outline-success btn-sm" data-action="bulkAction" data-args='["start"]'><i class="bi bi-play-fill"></i> Start</button>{% endif %}
+    {% if can_restart %}<button class="btn btn-outline-warning btn-sm" data-action="bulkAction" data-args='["restart"]'><i class="bi bi-arrow-repeat"></i> Restart</button>{% endif %}
+    {% if can_stop %}<button class="btn btn-outline-danger btn-sm" data-action="bulkAction" data-args='["stop"]'><i class="bi bi-stop-fill"></i> Stop</button>{% endif %}
     {% if current_user.is_superadmin or has_permission('update_server') %}
     <button class="btn btn-outline-info btn-sm bulk-update-btn" data-action="bulkAction" data-args='["update"]'><i class="bi bi-download"></i> Update</button>
     {% endif %}
@@ -74,7 +77,12 @@
       {% if current_user.is_superadmin or has_permission('manage_remotes') %}
         <br>Start by adding a remote server, then install a game server from the Game Servers page.
         <br><a href="{{ url_for('manage_remotes') }}">Add a remote server</a>
-        <a href="{{ url_for('manage_servers') }}" class="ms-3">Go to Game Servers</a>
+        {# install_server_page, not manage_servers: that route is now a pure redirect to this
+           very page (kept for bookmarks), so the empty state's own call to action reloaded the
+           empty state. It also needs install/manage rights, which this branch does not test. #}
+        {% if current_user.is_superadmin or has_permission('install_server') or has_permission('manage_servers') %}
+        <a href="{{ url_for('install_server_page') }}" class="ms-3">Install a game server</a>
+        {% endif %}
       {% endif %}
     </p>
   </div>
@@ -107,7 +115,9 @@
     {{ n_offline }}
   </div>
   <div class="text-secondary small">Offline</div>
-  {% if n_other %}<div class="small text-warning mt-1" id="offline-other">+{{ n_other }} installing or failed</div>{% endif %}
+  {# Always rendered, hidden when zero: the poll updates it in place, and an element that only
+     exists when n_other was non-zero AT RENDER can never be updated or brought back. #}
+  <div class="small text-warning mt-1" id="offline-other" {% if not n_other %}hidden{% endif %}>+{{ n_other }} installing or failed</div>
 {% endmacro %}
 {% macro tile_players() %}
   <div class="h3 mb-0" id="total-players"><i class="bi bi-people-fill text-info"></i> {{ total_players }}{% if total_max %} / {{ total_max }}{% endif %}</div>
@@ -213,22 +223,33 @@
           <tr data-server-id="{{ srv.id }}" data-name="{{ srv.name }}" data-type="{{ srv.game_display or srv.game_type }}" data-status="{{ srv.status }}" data-players="{{ player_counts.get(srv.id) if player_counts.get(srv.id) is not none else -1 }}">
             {% if can_control %}<td><input type="checkbox" class="form-check-input srv-check" value="{{ srv.id }}" data-name="{{ srv.name }}" data-supports-update="{{ 'true' if srv.supports_update else 'false' }}" aria-label="Select {{ srv.name }}"></td>{% endif %}
             <td>
-              <strong>{{ srv.name }}</strong>
+              {# data-no-i18n on all three, for the same reason the tag chips below already carry it:
+                 these are USER-AUTHORED names, and the walker translates any text node whose exact
+                 text is a catalog key. The es catalog holds exactly the words people name servers
+                 with — Console, Backups, Online, Status, Players. Measured in a browser against the
+                 real i18n.js with LANG='es': a server called "Console" rendered as "Consola", and
+                 the in-game name dashboard.js writes into #game-name-<id> with textContent went
+                 from "Online" to "En línea". #}
+              <strong data-no-i18n>{{ srv.name }}</strong>
               <span class="game-name text-info d-block text-truncate" id="game-name-{{ srv.id }}"
-                    style="font-size:.72rem;max-width:22ch;" title="In-game server name (what players see)">{{ server_names.get(srv.id) or '' }}</span>
-              <span class="text-secondary d-block" style="font-size: .75rem;">{{ srv.short_name }}</span>
-              {% if srv.tags %}
+                    style="font-size:.72rem;max-width:22ch;" title="In-game server name (what players see)" data-no-i18n>{{ server_names.get(srv.id) or '' }}</span>
+              <span class="text-secondary d-block" style="font-size: .75rem;" data-no-i18n>{{ srv.short_name }}</span>
               {# data-no-i18n: tag names are user-authored, and the translation walker would happily
                  "translate" one that collides with a catalog key ("Online", "Status", …). The colour
-                 is stored only after passing _valid_hex_color, so it is safe in a style attribute. #}
-              <span class="d-block mt-1 srv-tags" data-no-i18n>
+                 is stored only after passing _valid_hex_color, so it is safe in a style attribute.
+
+                 Rendered even when the server has no tags, and carrying an id: server_tags.js
+                 repaints THIS element after a save, and the tag filter in dashboard.js reads the
+                 chips inside it. Behind an `{% if srv.tags %}` there was nothing to repaint, so a
+                 server's first tag could not appear without a reload. panel.css gives it its top
+                 margin only when it is non-empty. #}
+              <span id="srv-tags-{{ srv.id }}" class="d-block srv-tags" data-no-i18n>
                 {% for tag in srv.tags|sort(attribute='name') %}
                 <span class="badge tag-chip" data-tag-id="{{ tag.id }}" data-no-i18n
                       {% if tag.color %}style="background-color: {{ tag.color }};"{% endif %}
                       {% if not tag.notify %}title="Alerts are muted for this tag"{% endif %}>{{ tag.name }}{% if not tag.notify %} <i class="bi bi-bell-slash"></i>{% endif %}</span>
                 {% endfor %}
               </span>
-              {% endif %}
               <span class="text-secondary d-none" id="map-{{ srv.id }}" style="font-size:.72rem;" title="Current map"></span>
             </td>
             <td class="d-none d-md-table-cell">{{ srv.game_display or srv.game_type }}</td>
@@ -249,24 +270,28 @@
             </td>
             {% set busy = (not srv.installed) or srv.status in ('installing', 'configuring') %}
             <td class="text-end text-nowrap col-actions">
-              {% if can_control %}
-              <button class="btn btn-outline-success btn-sm srv-ctl" title="Start" aria-label="Start {{ srv.name }}" data-action="doAction" data-args='[{{ srv.id }}, "start", "@self"]'{% if busy %} disabled{% endif %}><i class="bi bi-play-fill"></i></button>
-              <button class="btn btn-outline-warning btn-sm srv-ctl" title="Restart" aria-label="Restart {{ srv.name }}" data-action="doAction" data-args='[{{ srv.id }}, "restart", "@self"]'{% if busy %} disabled{% endif %}><i class="bi bi-arrow-repeat"></i></button>
-              <button class="btn btn-outline-danger btn-sm srv-ctl" title="Stop" aria-label="Stop {{ srv.name }}" data-action="doAction" data-args='[{{ srv.id }}, "stop", "@self"]'{% if busy %} disabled{% endif %}><i class="bi bi-stop-fill"></i></button>
-              {% endif %}
+              {% if can_start %}<button class="btn btn-outline-success btn-sm srv-ctl" title="Start" aria-label="Start {{ srv.name }}" data-action="doAction" data-args='[{{ srv.id }}, "start", "@self"]'{% if busy %} disabled{% endif %}><i class="bi bi-play-fill"></i></button>{% endif %}
+              {% if can_restart %}<button class="btn btn-outline-warning btn-sm srv-ctl" title="Restart" aria-label="Restart {{ srv.name }}" data-action="doAction" data-args='[{{ srv.id }}, "restart", "@self"]'{% if busy %} disabled{% endif %}><i class="bi bi-arrow-repeat"></i></button>{% endif %}
+              {% if can_stop %}<button class="btn btn-outline-danger btn-sm srv-ctl" title="Stop" aria-label="Stop {{ srv.name }}" data-action="doAction" data-args='[{{ srv.id }}, "stop", "@self"]'{% if busy %} disabled{% endif %}><i class="bi bi-stop-fill"></i></button>{% endif %}
               <a href="{{ url_for('server_detail', server_id=srv.id) }}" class="btn btn-outline-secondary btn-sm srv-console{% if busy %} disabled{% endif %}" title="Console &amp; stats" aria-label="Console &amp; stats for {{ srv.name }}"{% if busy %} tabindex="-1" aria-disabled="true"{% endif %}>
                 <i class="bi bi-terminal-fill"></i>
               </a>
               {# Files & Config and the tag button came from /servers/manage when it folded into
                  this page. server_files was reachable from that row and NOWHERE else in a list
                  view, so dropping the page without carrying this would have removed the one-click
-                 path to editing a config. #}
+                 path to editing a config.
+
+                 can_files, because server_files requires MANAGE_SERVERS: unconditional, every
+                 viewer got a button that round-tripped to "You don't have permission to manage
+                 server files." The tag button beside it was already gated this way. #}
+              {% if can_files %}
               <a href="{{ url_for('server_files', server_id=srv.id) }}"
                  class="btn btn-outline-secondary btn-sm{% if busy %} disabled{% endif %}"
                  title="Edit config &amp; browse/upload files"
                  aria-label="Files and config for {{ srv.name }}"{% if busy %} tabindex="-1" aria-disabled="true"{% endif %}>
                 <i class="bi bi-folder2-open"></i>
               </a>
+              {% endif %}
               {% if can_edit_tags %}
               <button type="button" class="btn btn-outline-secondary btn-sm" data-action="editServerTags"
                       data-args='[{{ srv.id }}, "@self"]' title="Choose which tags this server carries"

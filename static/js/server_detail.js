@@ -19,7 +19,23 @@
     var b = e.target.closest('[data-mtab-btn]'); if(b) show(b.getAttribute('data-mtab-btn'));
   });
   var h = (location.hash || '').replace('#','');
-  show(TABS.indexOf(h) >= 0 ? h : 'console');
+  // DEFERRED to after this file has finished executing. show() guards on
+  // window.applyPlayersVisibility and window.loadHistory, and both are ASSIGNED further down this
+  // same file (not hoisted function declarations) — so on the initial load both guards were
+  // falsy and neither ran. Two visible consequences: the players card, which the template renders
+  // hidden and show() unhides, flashed in empty on every load and stayed if the first
+  // /playerlist fetch failed; and opening /server/<id>#history — which happens on any reload
+  // after clicking History, because show() replaceState's the hash — left three blank canvases
+  // until the 30s poll came round.
+  //
+  // A click on a tab was always fine: by then the whole file has run. Only the FIRST call, made
+  // during execution, could see the half-initialised module.
+  var _initial = TABS.indexOf(h) >= 0 ? h : 'console';
+  if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', function () { show(_initial); });
+  } else {
+    setTimeout(function () { show(_initial); }, 0);
+  }
 })();
 
 var consoleEl = document.getElementById('console-output');
@@ -115,6 +131,12 @@ function _doModerate(btn, action, name, steamid, num, scope, reason){
     body:JSON.stringify({action:action, target:name, steamid:steamid, num:num, scope:scope, reason:reason||''})})
     .then(function(r){return r.json();}).then(function(d){
       window.toast(d.message || (d.success?'Done':'Failed'), d.success?'success':'danger');
+      // Re-enable on a REFUSAL too, not only when fetch throws. A request that answers
+      // {success:false} — no permission, the player already left, console unreachable — left the
+      // button dead, and the reload below is not a way back: renderPlayers returns early when the
+      // list comes back `unknown`, which is exactly what an unreachable server produces. So the
+      // one case where you most want to retry was the one that took the button away.
+      if (!d.success) btn.disabled = false;
       setTimeout(function(){ loadPlayers(true); }, 1200);   // you just moderated — re-read (console ok)
     }).catch(function(){ window.toast('Moderation failed','danger'); btn.disabled=false; });
 }
@@ -559,10 +581,18 @@ function loadMoreConsole(btn) {
   fetch(MOUNT + '/api/console/' + serverId + '?lines=2000')
     .then(r => r.json())
     .then(function(data) {
-      var older = (data.lines || []).filter(function(l) { return l.trim(); });
+      // ROWS, not strings. /api/console returns lines as [{t, line}] — _console_rows builds
+      // them — and this called l.trim() on each, which is `undefined` on an object: a TypeError
+      // inside the .then, swallowed by the .catch below, so the button has only ever answered
+      // "Could not load more console output". Verified in a browser against the real payload:
+      // `TypeError: l.trim is not a function`. refreshConsole, one screen up, has always read
+      // the same payload correctly; this call site simply was not updated with the API.
+      var older = (data.lines || []).filter(function (r) {
+        return r && typeof r.line === 'string' && r.line.trim();
+      });
       _consoleLines = [];
       consoleEl.innerHTML = '';
-      _appendConsole(older);
+      _appendConsoleRows(older, null);
       _consoleSig = null;   // let the next poll re-evaluate against the new buffer
       if (window.toast) toast('Loaded ' + older.length + ' lines from the log', 'success');
     })
@@ -625,7 +655,7 @@ function sendCommand(ev) {
 
 function bannerDoNow(btn){
   var b = document.getElementById('restart-pending-banner');
-  serverAction((b && b.dataset.action) || 'restart', btn);
+  serverAction((b && b.dataset.pendingAction) || 'restart', btn);
 }
 
 function toggleAutostart(el) {
@@ -1125,6 +1155,13 @@ window.hidePanel = function(btn){
 };
 
 window.showDetailPanel = function(region, key, btn){
+  // Same shape, same fix as dashboard.js's showPanel — see the note there.
+  var reg = document.querySelector('[data-region="' + region + '"]');
+  if (reg){
+    var ph = document.createElement('div');
+    ph.setAttribute('data-panel', key);
+    reg.appendChild(ph);
+  }
   btn.remove();
   saveDetailLayout(function(){ location.reload(); });
 };

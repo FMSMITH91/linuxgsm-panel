@@ -33,7 +33,7 @@ DEPS = "ubuntu-24.04.csv"
 # /etc/os-release — which is attacker-influenceable if that host is compromised. So it has to match
 # LinuxGSM's own filename shape exactly and nothing else: no slashes, no dots beyond a version, no
 # traversal, nothing that could address a different path on the server.
-_OS_SLUG_RE = __import__("re").compile(r"^[a-z][a-z0-9]{1,15}-[0-9]{1,2}(?:\.[0-9]{1,2})?$")
+_OS_SLUG_RE = __import__("re").compile(r"^[a-z][a-z0-9]{1,15}-[0-9]{1,2}(?:\.[0-9]{1,2})?\Z")
 
 
 def deps_name(os_slug):
@@ -123,9 +123,12 @@ def _text(name, allow_fetch=True):
         if fresh is not None:
             try:
                 _write_cache(name, fresh)
+                _last_error.pop(name, None)
             except OSError as e:
+                # ...and NOT popped on the next line regardless, which is what this did: the
+                # cache-write error was recorded and immediately discarded, so a read-only data/
+                # (every boot re-fetching, nothing ever persisting) was invisible in status().
                 _last_error[name] = "could not write the cache (%s)" % e.__class__.__name__
-            _last_error.pop(name, None)
             return fresh
     if age is not None:          # the fetch failed, but an older copy is still on disk
         try:
@@ -181,29 +184,51 @@ def deps(os_slug=None, allow_fetch=True):
 
 
 def status():
-    """What the UI needs to explain itself: whether we have data, how old, and what went wrong."""
+    """What the UI needs to explain itself: whether we have data, how old, and what went wrong.
+
+    `reason` is the one-line form for a page to print. This function had NO CALLERS at all while
+    two comments — this module's header and app.load_game_list's docstring — both said the install
+    page surfaced it; the page showed a fixed generic warning and never asked. install_server.html
+    reads it now."""
     ages = {n: _age(n) for n in (SERVERLIST, DEPS)}
+    errs = dict(_last_error)
+    reason = ""
+    if errs:
+        # The serverlist is the one the menu is built from; name it first if both failed.
+        _first = SERVERLIST if SERVERLIST in errs else sorted(errs)[0]
+        reason = "%s: %s" % (_first, errs[_first])
     return {
         "have_serverlist": bool(serverlist(allow_fetch=False)),
         "cached": {n: (None if a is None else int(a)) for n, a in ages.items()},
-        "errors": dict(_last_error),
+        "errors": errs,
+        "reason": reason,
     }
 
 
 def refresh(force=True):
-    """Re-fetch both files now. Returns True if the game list ended up populated."""
+    """Re-fetch both files now. Returns True if the FETCH succeeded — not merely if a list exists.
+
+    `return bool(serverlist())` read the CACHE back, which is populated by every previous run, so
+    this answered True with every network fetch failing. The route turns that into
+    `{"success": true, "message": "Loaded 30 games."}` and an audit row saying the refresh worked:
+    a superadmin pressing Retry because a newly-supported game is missing is told it loaded, and
+    the list is unchanged."""
+    ok = True
     with _lock:
         _mem.clear()
         if force:
             for n in (SERVERLIST, DEPS):
                 fresh = _fetch(n)
-                if fresh is not None:
-                    try:
-                        _write_cache(n, fresh)
-                        _last_error.pop(n, None)
-                    except OSError as e:
-                        _last_error[n] = "could not write the cache (%s)" % e.__class__.__name__
-    return bool(serverlist())
+                if fresh is None:
+                    ok = False
+                    continue
+                try:
+                    _write_cache(n, fresh)
+                    _last_error.pop(n, None)
+                except OSError as e:
+                    _last_error[n] = "could not write the cache (%s)" % e.__class__.__name__
+                    ok = False
+    return ok and bool(serverlist())
 
 
 def warm():

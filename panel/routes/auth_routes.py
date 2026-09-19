@@ -270,16 +270,22 @@ def register(app):
         flash("API token revoked.", "success")
         return redirect(url_for("account"))
 
-    @app.route("/set-language/<lang>")
+    @app.route("/set-language/<lang>", methods=["GET", "POST"])
     def set_language(lang):
         """Switch the UI language. Saved to the session, and to the user's profile when logged in
         (so it follows them across devices). Usable pre-login too. The switcher calls this with
         ?ajax=1 and then reloads the current page itself, so we never redirect to a user-supplied
-        URL (no open-redirect surface); a plain GET just lands on the dashboard."""
+        URL (no open-redirect surface); a plain GET just lands on the dashboard.
+
+        The PROFILE write needs POST. csrf.protect() is a no-op on safe methods, so while this was
+        GET-only any cross-site page could permanently change a logged-in admin's stored UI
+        language with <img src="https://panel/set-language/zh">. The session half stays on GET —
+        it is per-session and transient, and the switcher on the login page has no token to send —
+        but nothing cross-site gets to write the user row."""
         lang = i18n.normalize_lang(lang)
         session["lang"] = lang
         saved = True
-        if getattr(current_user, "is_authenticated", False):
+        if request.method == "POST" and getattr(current_user, "is_authenticated", False):
             try:
                 current_user.language = lang
                 db.session.commit()

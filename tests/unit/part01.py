@@ -257,6 +257,52 @@ finally:
     else:
         _c["ssh_timeout"] = _sshto_saved
     _cfgmod.save_config(_c)
+# ── a config.json that is valid JSON but not an OBJECT ───────────────────────────────────────
+# config.json is explicitly a file a human can hand-edit, and load_config() is on every request
+# path and in every background poller. The except caught a MALFORMED file; it did not catch
+# `null`, `[1,2,3]`, `"hello"` or `123`, each of which parses fine and then raises inside
+# dict.update — so a truncated file degraded to defaults while a stray `null` 500'd every page.
+# CONFIG_FILE is redirected to a temp path here: these bodies must never touch the real one.
+import pathlib as _pl_cfg
+import tempfile as _tf_cfg
+_cfg_file_saved = _cfgmod.CONFIG_FILE
+_cfg_tmp = _pl_cfg.Path(_tf_cfg.mkdtemp()) / "config.json"
+try:
+    _cfgmod.CONFIG_FILE = _cfg_tmp
+    for _body, _label in (('{"port": 5001}', "an object is read normally"),
+                          ("null", "null"),
+                          ("[1,2,3]", "an array"),
+                          ('"hello"', "a bare string"),
+                          ("123", "a bare number"),
+                          ("{ truncated", "a truncated file")):
+        _cfg_tmp.write_text(_body, encoding="utf-8")
+        _cfgmod._cfg_cache["key"] = None
+        try:
+            _got = _cfgmod.load_config()
+            _ok, _detail = isinstance(_got, dict), ""
+        except Exception as _e:
+            _ok, _detail = False, "%s: %s" % (type(_e).__name__, _e)
+        check("config: %s does not raise out of load_config" % _label, _ok, _detail)
+    # ...and the one that IS an object still wins, so the guard is not a blanket "always defaults".
+    # Both reads go through _port(), which reports the exception as a value rather than letting it
+    # abort the suite — the point of these checks is what load_config DOES with a bad file, and a
+    # traceback out of the harness prints no verdict at all.
+    def _port():
+        _cfgmod._cfg_cache["key"] = None
+        try:
+            return _cfgmod.load_config().get("port")
+        except Exception as _e:
+            return "RAISED %s" % type(_e).__name__
+
+    _cfg_tmp.write_text('{"port": 5001}', encoding="utf-8")
+    eq("config: a real object's values still come through", _port(), 5001)
+    _cfg_tmp.write_text("null", encoding="utf-8")
+    eq("config: ...and a non-object falls back to the documented default",
+       _port(), _cfgmod.DEFAULT_CONFIG["port"])
+finally:
+    _cfgmod.CONFIG_FILE = _cfg_file_saved
+    _cfgmod._cfg_cache["key"] = None
+
 eq("config: with no override the SSH layer uses the documented default",
    _sm_core._ssh_connect_timeout(), _cfgmod.DEFAULT_CONFIG["ssh_timeout"])
 # Reads app.py AND the route modules: the line moved out with its section when register_routes
@@ -362,6 +408,61 @@ check("paths: no stray data/ or translations/ dir was created inside panel/",
 
 # ── terminal.py: ONE renderer, because this had drifted into four incompatible ANSI regexes and two
 # carriage-return rules that contradicted each other (each docstring calling the other wrong).
+# ── Every security validator rejects a trailing newline ───────────────────────────────────────
+# `$` matches BEFORE a final \n, so `^[a-z]+$` accepts "lgsm\n". Every one of these gates a value
+# that becomes a shell argument, a filesystem path, a URL, a CSS literal or a stored column, and
+# all of them were anchored that way — including _SHELL_IDENT_RE, whose docstring calls itself a
+# hard guarantee that "no code path can ever store a value that could break out of a shell
+# command". edit_remote does not strip its input, so `linuxgsm_user = "lgsm\n"` stored clean and
+# `sudo -u lgsm\n bash -c ...` ran the panel's command as the SSH login account instead.
+#
+# Driven as a TABLE so the next validator added is covered by adding one line, and so a fix that
+# only reaches the one that was reported cannot pass.
+from panel.db.models import _SHELL_IDENT_RE as _V_SHELL, TAG_NAME_RE as _V_TAG
+from panel.core import validation as _V
+from panel.core.clock import valid_timezone as _v_tz
+from panel.ops.ssh_manager import files as _v_files, gmod as _v_gmod, cron as _v_cron
+from panel.ops import backup as _v_backup, tailscale_integration as _v_ts
+from panel.services import lgsm_data as _v_lgsm
+
+_VALIDATORS = [
+    ("models._SHELL_IDENT_RE", _V_SHELL, "gmodserver"),
+    ("models.TAG_NAME_RE", _V_TAG, "prod"),
+    ("validation.GAME_TYPE_RE", _V.GAME_TYPE_RE, "csgo"),
+    ("validation.INSTANCE_NAME_RE", _V.INSTANCE_NAME_RE, "myserver"),
+    ("validation.LINUX_USER_RE", _V.LINUX_USER_RE, "lgsm"),
+    ("validation.HOST_RE", _V.HOST_RE, "10.0.0.1"),
+    ("validation.SAFE_LABEL_RE", _V.SAFE_LABEL_RE, "My Host"),
+    ("validation._HEX_COLOR_RE", _V._HEX_COLOR_RE, "#aabbcc"),
+    ("files._SAFE_UNIX_USER_RE", _v_files._SAFE_UNIX_USER_RE, "gmodserver"),
+    ("gmod._CU_NAME_RE", _v_gmod._CU_NAME_RE, "gmodcontent"),
+    ("cron._GAME_BACKUP_NAME", _v_cron._GAME_BACKUP_NAME, "srv-2026.tar.gz"),
+    ("backup._NAME_RE", _v_backup._NAME_RE, "panel-backup-20260918-120000-manual.tar.gz"),
+    ("lgsm_data._OS_SLUG_RE", _v_lgsm._OS_SLUG_RE, "ubuntu-24.04"),
+    ("tailscale._PEER_HOST_RE", _v_ts._PEER_HOST_RE, "box.tail1234.ts.net"),
+]
+for _vname, _vrx, _vgood in _VALIDATORS:
+    check("validator %s ACCEPTS its good value (the gate can still say yes)" % _vname,
+          bool(_vrx.match(_vgood)), repr(_vgood))
+    check("validator %s REJECTS a trailing newline" % _vname,
+          not _vrx.match(_vgood + "\n"), "%r was accepted" % (_vgood + "\n"))
+# The two that are FUNCTIONS, not bare patterns. Both .strip() before matching, so a trailing
+# newline was never a way through them — what matters is that what they RETURN carries none,
+# since one becomes a CSS custom property and the other a stored, rendered column.
+check("validation._valid_hex_color returns nothing with a newline in it",
+      _V._valid_hex_color("#aabbcc\n") == "#aabbcc" and "\n" not in _V._valid_hex_color("#aabbcc\n"))
+check("clock.valid_timezone returns nothing with a newline in it",
+      _v_tz("Europe/London\n") == "Europe/London")
+# ...and the model validator must REFUSE, not merely fail to match.
+from panel.db.models import _validate_shell_ident as _v_ident
+_vi_raised = False
+try:
+    _v_ident("short_name", "gmodserver\n")
+except ValueError:
+    _vi_raised = True
+check("models._validate_shell_ident raises on a trailing newline (the 'hard guarantee')",
+      _vi_raised, "it returned the value instead")
+
 from panel.core import terminal as _term
 eq("terminal: SGR colour stripped", _term.strip_escapes("\x1b[31mred\x1b[0m"), "red")
 eq("terminal: erase-line stripped (an SGR-only regex left a literal '[K')",
@@ -372,6 +473,18 @@ eq("terminal: two-byte escapes stripped (these rendered as '>' and '=')",
    _term.strip_escapes("\x1b>a\x1b=b\x1b(Bc"), "abc")
 eq("terminal: OSC window title stripped", _term.strip_escapes("\x1b]0;title\x07x"), "x")
 eq("terminal: control CHARACTERS are left for the renderers", _term.strip_escapes("a\rb\bc"), "a\rb\bc")
+# ...but only the FOUR that mean something. This module's docstring promises "control bytes do not
+# reach the page", and ESC was the only one it removed: NUL, BEL, VT and FF all survived both
+# renderers. A player picks their own name and chat text, so those bytes are authored rather than
+# accidental, and the guarantee was a claim rather than a property.
+eq("terminal: a control byte with no rendering meaning does NOT survive strip_escapes",
+   _term.strip_escapes("a\x00b\x07c\x0bd\x0ce\x7ff"), "abcdef")
+eq("terminal: ...nor the colour renderer, which makes the same promise",
+   _term.render_line_colour("a\x00b\x07c\x0bd\x0ce\x7ff"), "abcdef")
+eq("terminal: TAB is kept — it renders", _term.strip_escapes("a\tb"), "a\tb")
+eq("terminal: ...through the colour renderer too", _term.render_line_colour("a\tb"), "a\tb")
+eq("terminal: and colour still survives (the filter did not eat the SGR it writes)",
+   _term.render_line_colour("\x1b[32mok\x1b[0m"), "\x1b[32mok\x1b[0m")
 eq("terminal: \\r overwrites from column 0", _term.apply_carriage_returns("abcdef\rXY"), "XYcdef")
 eq("terminal: a line ENDING in \\r keeps its content (split('\\r')[-1] would lose it)",
    _term.apply_carriage_returns("done\r"), "done")
@@ -767,8 +880,125 @@ try:
     _wpct = _sm_cron._wrap_cron_command(None, "gm", "echo %H")
     check("cron wrap: a '%' command uses the base64 runner (cron-safe)",
           ".lgsm-cron/run " in _wpct and "%H" not in _wpct)
+    # The .restart-pending branch ran BEFORE _SIMPLE_CMD_RE and before the base64 runner — which
+    # is the thing that makes `%` safe — while _validate_cron permits `%`. cron truncates a line at
+    # the first unescaped `%` and feeds the remainder in as stdin, so an admin's
+    # `… restart >> ~/log/r-%Y.log` quietly became `… restart >> ~/log/r-` while the panel's editor
+    # showed the whole thing back.
+    _wpend = _sm_cron._wrap_cron_command(
+        None, "gm", "rm -f /home/gm/.restart-pending; /home/gm/gmodserver restart >> /home/gm/r-%Y.log")
+    check("cron wrap: a verbatim .restart-pending line still escapes % for cron",
+          "\\%Y" in _wpend and not __import__("re").search(r"(?<!\\)%", _wpend), repr(_wpend))
+    check("cron wrap: ...and the editor is shown the command the admin wrote, not the escaped form",
+          _sm_cron._unwrap_cron_command(_wpend)[0]
+          == "rm -f /home/gm/.restart-pending; /home/gm/gmodserver restart >> /home/gm/r-%Y.log",
+          repr(_sm_cron._unwrap_cron_command(_wpend)[0]))
+    # ORDER: the panel's OWN daily-restart line is `touch /home/<u>/.restart-pending`, a plain
+    # command that set_daily_restart writes WRAPPED. list_cron_jobs unwraps it for display, and
+    # rescheduling that display form in the generic editor sent it back through the
+    # .restart-pending branch, which returned it bare — so the panel's own line silently stopped
+    # reporting last-run and success after any edit.
+    _wflag = _sm_cron._record_managed_cmd("gm", "touch /home/gm/.restart-pending")
+    _wdisp, _wjid = _sm_cron._unwrap_cron_command(_wflag)
+    _wagain = _sm_cron._wrap_cron_command(None, "gm", _wdisp)
+    check("cron wrap: rescheduling the panel's own daily-restart line keeps its run tracking",
+          _sm_cron._unwrap_cron_command(_wagain)[1] is not None, repr(_wagain))
+    check("cron wrap: ...and it stays visible, which is what the flag-path grep matches on",
+          "/home/gm/.restart-pending" in _wagain, repr(_wagain))
 finally:
     _sm_core.run_command = _orig_wrap_rc
+
+# ── `raw` is the identity for delete/update, and the transport had already changed it ─────────
+# Every transport returns out.strip() — the whole crontab listing as ONE blob — so the FIRST
+# line comes back without its indentation, which is legal and common in a hand-edited crontab.
+# That stripped text is the `raw` the panel hands the browser and the browser hands back, and
+# `grep -vxF` matches whole lines exactly: delete reported success and removed nothing, while
+# update appended its rewrite beside the original so the job ran on two schedules.
+#
+# Driven through the REAL pipeline: the command the editor builds is captured and executed, with
+# only `crontab -u <user> -l` and `crontab -u <user> <file>` redirected at files. A test that
+# reimplemented the filter would pass whatever the filter happens to be.
+import shlex as _cr_shlex
+import shutil as _cr_shutil
+import subprocess as _cr_sub
+import tempfile as _cr_tmp
+
+_CR_TAB = ("  */5 * * * * /home/gm/gmodserver monitor\n"
+           "0 6 * * * /home/gm/backup.sh --re '^.*[x]$' \\n\n"
+           "30 4 * * * /home/gm/other.sh   \n")
+_cr_sb = _cr_tmp.mkdtemp(prefix="cron-rewrite-")
+
+
+def _cr_drive(fn, *a, **kw):
+    """Run a cron editor for real: capture its command and execute it against files."""
+    seen = {}
+    _o_rc, _o_rp = _sm_core.run_command, _sm_core.run_privileged
+    _o_st, _o_rt = _sm_cron._read_cron_status, _sm_cron._read_cron_run_times
+    _o_icr = _sm_cron._install_cron_runner
+    try:
+        _sm_core.run_privileged = lambda *_a, **_k: (_CR_TAB.strip(), "", 0)
+        _sm_cron._read_cron_status = lambda *_a, **_k: {}
+        _sm_cron._read_cron_run_times = lambda *_a, **_k: {}
+        _sm_cron._install_cron_runner = lambda *_a, **_k: None
+        _sm_core.run_command = lambda s, c, **k: (seen.__setitem__("cmd", c), ("", "", 0))[1]
+        fn(*a, **kw)
+    finally:
+        _sm_core.run_command, _sm_core.run_privileged = _o_rc, _o_rp
+        _sm_cron._read_cron_status, _sm_cron._read_cron_run_times = _o_st, _o_rt
+        _sm_cron._install_cron_runner = _o_icr
+    cmd = seen.get("cmd") or ""
+    if not cmd.startswith("sudo bash -c "):
+        return None, "did not build a rewrite: %r" % cmd[:80]
+    pipeline = _cr_shlex.split(cmd)[3]
+    _src = os.path.join(_cr_sb, "in")
+    _dst = os.path.join(_cr_sb, "out")
+    with open(_src, "w", encoding="utf-8") as _fh:
+        _fh.write(_CR_TAB)
+    if os.path.exists(_dst):
+        os.remove(_dst)
+    pipeline = pipeline.replace("crontab -u gm -l 2>/dev/null", "cat %s" % _cr_shlex.quote(_src))
+    pipeline = pipeline.replace('crontab -u gm "$T"', 'cp "$T" %s' % _cr_shlex.quote(_dst))
+    _r = _cr_sub.run(["bash", "-c", pipeline], capture_output=True, text=True)
+    return (open(_dst, encoding="utf-8").read() if os.path.exists(_dst) else None), _r.stderr
+
+
+try:
+    _cr_jobs = None
+    _o_rp2, _o_st2, _o_rt2 = (_sm_core.run_privileged, _sm_cron._read_cron_status,
+                              _sm_cron._read_cron_run_times)
+    try:
+        _sm_core.run_privileged = lambda *_a, **_k: (_CR_TAB.strip(), "", 0)
+        _sm_cron._read_cron_status = lambda *_a, **_k: {}
+        _sm_cron._read_cron_run_times = lambda *_a, **_k: {}
+        _cr_jobs = _sm_cron.list_cron_jobs(None, "gm")
+    finally:
+        _sm_core.run_privileged, _sm_cron._read_cron_status = _o_rp2, _o_st2
+        _sm_cron._read_cron_run_times = _o_rt2
+    _cr_raw = _cr_jobs[0]["raw"]
+    check("cron identity: the browser is handed the line WITHOUT its indentation (the transport strips)",
+          _cr_raw == "*/5 * * * * /home/gm/gmodserver monitor", repr(_cr_raw))
+    _out, _err = _cr_drive(_sm_cron.delete_cron_job, None, "gm", _cr_raw)
+    check("cron delete: an indented first line is actually removed",
+          _out is not None and "gmodserver monitor" not in _out
+          and len(_out.splitlines()) == 2, "%r / %r" % (_out, _err))
+    _out, _err = _cr_drive(_sm_cron.update_cron_job, None, "gm", _cr_raw, "0 3 * * *",
+                           "/home/gm/gmodserver monitor")
+    check("cron update: rescheduling it replaces the line instead of adding a second one",
+          _out is not None
+          and sum(1 for ln in _out.splitlines() if "gmodserver monitor" in ln) == 1
+          and _out.splitlines()[-1].startswith("0 3 * * * "), "%r / %r" % (_out, _err))
+    # A line full of regex and shell metacharacters, and a backslash — the reason the comparison
+    # goes through awk's ENVIRON rather than a pattern or a `-v` assignment.
+    _cr_meta = _cr_jobs[1]["raw"]
+    _out, _err = _cr_drive(_sm_cron.delete_cron_job, None, "gm", _cr_meta)
+    check("cron delete: a line of metacharacters is matched literally, not as a pattern",
+          _out is not None and "backup.sh" not in _out and len(_out.splitlines()) == 2,
+          "%r / %r" % (_out, _err))
+    # And a line the user did NOT name stays, trailing whitespace and all.
+    check("cron delete: ...and nothing else is touched",
+          _out is not None and "/home/gm/other.sh   " in _out, repr(_out))
+finally:
+    _cr_shutil.rmtree(_cr_sb, ignore_errors=True)
 
 # node-tools auto-update: a weekly ROOT cron keeps npm + gamedig (player-query tools) current.
 check("node-tools: the cron updates npm + gamedig weekly and logs it",
@@ -952,6 +1182,59 @@ try:
        ["server.cfg"])
     check("stat_upload_targets: a traversal attempt returns None, not a listing",
           _sm_files.stat_upload_targets(_FakeSrv(), "u", "../../etc", ["passwd"]) is None)
+
+    # ── the CONFIG/MODS half of files.py validates its idents too ──────────────────────────────
+    # _safe_abspath rejects an unsafe `user` for the eight PATH-taking functions; seven builders
+    # beside them interpolated `user` into `sudo -u {user}` and `/home/{user}`, and `selfname`
+    # into the bash -c script BODY, with nothing in front of them. `user` lands in the OUTER
+    # shell — before sudo, as the PANEL user. Demonstrated with "x; id > /tmp/pwned; #", which
+    # produced `sudo -u x; id > /tmp/pwned; # bash -c ...`. Not reachable from a request today
+    # (every caller passes gs.short_name / gs.lgsm_name, pinned on assignment), which is exactly
+    # the residual the note above _SAFE_UNIX_USER_RE describes.
+    _hostile = "x; id > /tmp/pwned; #"
+    _reached = []
+    _sm_core.run_command = lambda s, c, **k: (_reached.append(c), ("", "", 0))[1]
+    _sm_files.lgsm_read_config(_FakeSrv(), _hostile, "codserver")
+    _sm_files.lgsm_get_values(_FakeSrv(), _hostile, "codserver", ["a"])
+    _sm_files.lgsm_write_config(_FakeSrv(), _hostile, "codserver", {"a": "b"})
+    _sm_files.lgsm_game_config(_FakeSrv(), "codserver", _hostile)
+    _sm_files.mods_available(_FakeSrv(), _hostile, "codserver")
+    _sm_files.mods_installed(_FakeSrv(), "codserver", _hostile)
+    _sm_files.mods_action(_FakeSrv(), _hostile, "codserver", "install", "sourcemod")
+    check("shell idents: a hostile account/script name reaches no shell at all",
+          not _reached, str(_reached)[:200])
+    # ...and the guard is not a blanket refusal: a legitimate name still builds its command.
+    _reached.clear()
+    _sm_files.lgsm_read_config(_FakeSrv(), "codserver", "codserver")
+    check("shell idents: ...while a legitimate name still runs",
+          len(_reached) == 1 and "sudo -u codserver" in _reached[0], str(_reached)[:120])
+
+    # ── the editor must get the file's bytes, not a stripped copy ──────────────────────────────
+    # Both transports strip: _core._finish returns (out or "").strip() and the paramiko branch
+    # does out.strip(). read_file returned run_command's stdout unchanged, so the editor was handed
+    # a file with its leading blank lines and its trailing newline removed — and write_file wrote
+    # that back verbatim. Open any config, press Save without typing, and the file loses its
+    # trailing newline; stream_path does NOT strip, so download and edit disagreed about the same
+    # file. Driven through the real function with a transport that strips exactly as the real one
+    # does, so the framing is what is under test and not the stub.
+    _ORIG_BODY = "\n\n-- header\nlocal x = 1\n\n\n"
+    _sm_core.run_command = lambda s, c, **k: (
+        ("%s%s%s" % (_sm_files._READ_BEGIN, _ORIG_BODY, _sm_files._READ_END)).strip(), "", 0)
+    _rf_body, _rf_err = _sm_files.read_file(_FakeSrv(), "csgoserver", "cfg/server.cfg")
+    eq("read_file: the file's bytes survive the transport's strip", _rf_body, _ORIG_BODY)
+    check("read_file: ...with no error", _rf_err is None, repr(_rf_err))
+    # ...and the markers the script really does emit are still recognised.
+    for _mark, _want in (("__NOFILE__", "File not found"),
+                         ("__TOOBIG__", "File is too large to edit in the browser"),
+                         ("__BINARY__", "Binary file — download/replace via upload instead")):
+        _sm_core.run_command = lambda s, c, _m=_mark, **k: (_m, "", 0)
+        eq("read_file: %s is still reported" % _mark,
+           _sm_files.read_file(_FakeSrv(), "csgoserver", "cfg/server.cfg")[1], _want)
+    # An unframed body (an older host, or a script that never reached `cat`) falls back rather
+    # than returning nothing.
+    _sm_core.run_command = lambda s, c, **k: ("plain contents", "", 0)
+    eq("read_file: an unframed body still comes through",
+       _sm_files.read_file(_FakeSrv(), "csgoserver", "cfg/server.cfg")[0], "plain contents")
 
     # The host-side symlink guard. _safe_abspath is lexical and cannot see a symlink planted under
     # the game user's home, so every file operation now carries a realpath check that runs WHERE

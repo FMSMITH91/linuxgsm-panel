@@ -19,7 +19,7 @@
     </h1>
     <span class="text-secondary small">
       {% if remote.is_local %}{{ remote.display_host or 'this host' }}{% else %}{{ remote.username }}@{{ remote.host }}:{{ remote.port }} &middot; Auth: {{ remote.auth_method }}{% endif %}
-      {% if remote.games %}&middot; {{ remote.games|length }} game server{{ '' if remote.games|length == 1 else 's' }}{% endif %}
+      {% if remote.games %}&middot; {{ remote.games|length }} {% if remote.games|length == 1 %}<span>game server</span>{% else %}<span>game servers</span>{% endif %}{% endif %}
     </span>
   </div>
   <span class="badge {% if remote.is_online %}bg-success{% else %}bg-secondary{% endif %}" id="remote-status">
@@ -190,7 +190,8 @@
   </div>
   <div class="card-body">
     <p class="small text-secondary mb-2">Finds LinuxGSM servers already installed on this host (any user) and imports the ones missing from the panel — with their backups, mods and cron. Read-only until you import.</p>
-    <div id="disc-result"></div>
+    {# data-no-i18n: scanExisting fills this with Linux usernames read off the host. #}
+    <div id="disc-result" data-no-i18n></div>
   </div>
 </div>
 {% endif %}
@@ -346,7 +347,8 @@
     </div>
     <div id="fb-disk" class="small text-secondary mb-1"></div>
     <div id="fb-summary" class="small text-info-emphasis mb-2"></div>
-    <div id="fb-games" class="small"></div>
+    {# data-no-i18n: remote_manage_backups.js writes game and host NAMES in here. #}
+    <div id="fb-games" class="small" data-no-i18n></div>
   </div>
 </div>
 
@@ -553,7 +555,13 @@
 <div class="card mb-3" data-mtab="controls" id="conn-ssh-card">
   <div class="card-header" id="sec-connection"><i class="bi bi-shield-lock"></i> Connection &amp; SSH</div>
   <div class="card-body">
-    {% if remote.is_local %}
+    {# ...and is_superadmin, which the Panel Updates / Diagnostics card two cards up already
+       requires. This route is @permission_required(MANAGE_REMOTES) and the Groups page offers the
+       panel host itself as a grantable checkbox, so a delegated host operator reaching
+       the local host's own /remote/.../manage page was shown the panel's bind address, web port,
+       "Apply & restart", public-SSH allow/limit/disable and the SSH port change — every one of which
+       answers 403 from the endpoint behind it. #}
+    {% if remote.is_local and current_user.is_superadmin %}
     <div class="row g-3">
       <div class="col-md-6">
         <div class="d-flex align-items-center gap-2 mb-1">

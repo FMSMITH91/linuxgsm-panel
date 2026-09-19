@@ -393,10 +393,24 @@ resolve_update_target() {
     return 0
 }
 
+# pip runs setup.py and wheel hooks, so "install the dependencies" is "execute code from
+# requirements.txt". On the UPDATE path both the pip binary and that file belong to the panel
+# user, and the update runs as root — so this was the panel choosing what root executes. Drop to
+# the owner when there is an owner to drop to: the venv is theirs anyway, and a root-built one
+# leaves root-owned files the service then cannot rewrite.
+#
+# The condition is "PANEL_DIR already belongs to PANEL_USER", which is precisely when dropping
+# works. On the FRESH path it does not yet (the chown comes later), and there the requirements
+# came from a clone of REPO_URL that the operator asked for as root — so that path is unchanged.
 install_deps() {
-    python3 -m venv "${PANEL_DIR}/venv"
-    "${PANEL_DIR}/venv/bin/pip" install --quiet --upgrade pip
-    "${PANEL_DIR}/venv/bin/pip" install --quiet -r "${PANEL_DIR}/requirements.txt"
+    local as_owner=""
+    if [ "$(id -u)" -eq 0 ] && [ -n "${PANEL_USER:-}" ] && [ "${PANEL_USER}" != "root" ] \
+       && [ "$(stat -c '%U' "${PANEL_DIR}" 2>/dev/null || echo root)" = "${PANEL_USER}" ]; then
+        as_owner="sudo -u ${PANEL_USER}"
+    fi
+    ${as_owner} python3 -m venv "${PANEL_DIR}/venv"
+    ${as_owner} "${PANEL_DIR}/venv/bin/pip" install --quiet --upgrade pip
+    ${as_owner} "${PANEL_DIR}/venv/bin/pip" install --quiet -r "${PANEL_DIR}/requirements.txt"
 }
 
 # Node.js LTS + jq + gamedig, for the panel's game-server player queries (player count/list, the
@@ -549,8 +563,40 @@ SYSCTLEOF
 # stopped working with no message anywhere. The grant was never re-evaluated either, which meant a
 # host that first installed pre-helper kept NOPASSWD:ALL forever.
 #
+# Is this checkout's `origin` the repository THIS installer knows?
+#
+# The update path runs `git reset --hard origin/<branch>` and then, as root, installs files out of
+# the result — including tools/panel-helper over the path the sudoers rule names. `origin` is
+# recorded in the panel-owned .git/config and `_gitc` runs git AS THE CHECKOUT OWNER, so a
+# compromised panel could point it at a repository of its own and have root install its code as
+# the privilege boundary. It cannot change THIS file: install.sh runs from a root-owned copy
+# outside the checkout, so REPO_URL here is the thing to compare against.
+#
+# Running a fork is legitimate, so this does not refuse the update — the code still updates. It
+# withholds only the ROOT-OWNED installs, which is the part that crosses a boundary, and says so.
+# The panel's Diagnostics card already surfaces a helper/code version mismatch.
+ORIGIN_TRUSTED=1
+check_origin_trusted() {
+    [ -d "${PANEL_DIR}/.git" ] || return 0
+    local url
+    url="$(_gitc remote get-url origin 2>/dev/null || echo)"
+    case "${url}" in
+        "${REPO_URL}"|"${REPO_URL%.git}"|"${REPO_URL%.git}.git") return 0 ;;
+    esac
+    ORIGIN_TRUSTED=0
+    warn "This checkout's git origin is '${url:-unset}', not ${REPO_URL}."
+    warn "Root-owned components (the privileged helper, db_maintenance, this installer) will NOT"
+    warn "be refreshed from it. Re-run this installer by hand if you mean to update them."
+    return 0
+}
+
 # Sets HELPER_OK / ROOT_TOOLS_OK, which write_sudoers_grant reads.
 install_root_tools() {
+    if [ "${ORIGIN_TRUSTED:-1}" -ne 1 ]; then
+        # Leave HELPER_OK / ROOT_TOOLS_OK as they are: write_sudoers_grant is skipped alongside
+        # this, so the host keeps whatever grant it already had rather than being widened.
+        return 0
+    fi
     HELPER_OK=0
     ROOT_TOOLS_OK=0
     HELPER_SRC="${PANEL_DIR}/tools/panel-helper"
@@ -586,11 +632,6 @@ install_root_tools() {
     PANEL_CONF="${HELPER_DIR}/panel.conf"
     if [ -f "${DBM_SRC}" ] && [ -d "${HELPER_DIR}" ]; then
         if ${H_SUDO} install -o root -g root -m 0755 "${DBM_SRC}" "${DBM_DST}" 2>/dev/null; then
-            printf 'db_path=%s\ndata_dir=%s\npanel_dir=%s\n' \
-                "${PANEL_DIR}/data/panel.db" "${PANEL_DIR}/data" "${PANEL_DIR}" \
-                | ${H_SUDO} tee "${PANEL_CONF}" >/dev/null 2>&1 \
-                && ${H_SUDO} chmod 0644 "${PANEL_CONF}" 2>/dev/null \
-                && ${H_SUDO} chown root:root "${PANEL_CONF}" 2>/dev/null
             # The installer itself, root-owned, for the same reason: the self-update runs it as
             # root, and the copy in the checkout is panel-writable.
             #
@@ -602,13 +643,32 @@ install_root_tools() {
             # somewhere else.
             INSTALLER_SRC="${PANEL_DIR}/install.sh"
             [ -f "${INSTALLER_SRC}" ] || INSTALLER_SRC="${SCRIPT_PATH}"
+            CONF_OK=0
+            printf 'db_path=%s\ndata_dir=%s\npanel_dir=%s\n' \
+                "${PANEL_DIR}/data/panel.db" "${PANEL_DIR}/data" "${PANEL_DIR}" \
+                | ${H_SUDO} tee "${PANEL_CONF}" >/dev/null 2>&1 \
+                && ${H_SUDO} chmod 0644 "${PANEL_CONF}" 2>/dev/null \
+                && ${H_SUDO} chown root:root "${PANEL_CONF}" 2>/dev/null && CONF_OK=1
+            INST_OK=0
             if [ -f "${INSTALLER_SRC}" ] && head -n1 "${INSTALLER_SRC}" | grep -q '^#!.*sh'; then
-                ${H_SUDO} install -o root -g root -m 0755 "${INSTALLER_SRC}" "${INSTALLER_DST}" 2>/dev/null || true
+                ${H_SUDO} install -o root -g root -m 0755 "${INSTALLER_SRC}" "${INSTALLER_DST}" 2>/dev/null && INST_OK=1
             else
                 warn "Could not find this installer on disk to copy root-owned — skipping."
             fi
-            ROOT_TOOLS_OK=1
-            ok "Offline DB repair installed root-owned at ${DBM_DST}"
+            # ALL THREE, not just db_maintenance. The grant below is documented as meaning "every
+            # root-owned piece is in place … the helper, db_maintenance, and the root-owned
+            # installer", and this flag is what it reads — but the panel.conf write was an
+            # unchecked && chain whose status was discarded and the installer copy carried
+            # `|| true`, so a narrow grant could be written on a host missing either. The helper
+            # fails loudly when they are absent, so the cost was a claim the code never verified —
+            # which is the pattern the grant logic exists to avoid.
+            if [ "${CONF_OK}" -eq 1 ] && [ "${INST_OK}" -eq 1 ]; then
+                ROOT_TOOLS_OK=1
+                ok "Offline DB repair installed root-owned at ${DBM_DST}"
+            else
+                warn "db_maintenance is in place but panel.conf or the root-owned installer is not."
+                warn "Keeping the wider sudoers grant until a re-run as root places all three."
+            fi
         else
             warn "Could not install the root-owned db_maintenance copy (needs root)."
             warn "The panel falls back to the pre-helper repair path until you re-run this as root."
@@ -704,13 +764,19 @@ if [ "${IS_UPDATE}" -eq 1 ]; then
     # then we VERIFY the archive is non-empty, so a GENUINE failure (disk full, etc.) still aborts
     # cleanly with a clear message instead of a cryptic exit code.
     tar -C "${PANEL_DIR}" --ignore-failed-read --exclude=./venv --exclude=./data -cf - . 2>/dev/null | ${SNAP_GZ} > "${BACKUP}/code.tgz" || true
-    [ -s "${BACKUP}/code.tgz" ] || die "Couldn't snapshot the current version (backup came out empty) —
+    # `-s` only asks whether it is non-empty, and the failure this check names by name — the disk
+    # filling mid-write — produces a TRUNCATED archive, which is non-empty. It passed, and the
+    # rollback below then wiped PANEL_DIR and fed the truncated stream to tar. `tar -tz` reads the
+    # whole thing: it fails on a broken gzip stream and on a truncated member, which is the actual
+    # question ("can this be unpacked again?").
+    snapshot_ok() { [ -s "$1" ] && tar -tzf "$1" >/dev/null 2>&1; }
+    snapshot_ok "${BACKUP}/code.tgz" || die "Couldn't snapshot the current version (the backup is empty or unreadable) —
      update ABORTED, the panel is unchanged. Check free disk space with 'df -h' and try again."
     # …and the whole data dir (DB + encryption keys + config), since the app runs a
     # startup migration that mutates the DB — we restore this verbatim on rollback.
     if [ -d "${PANEL_DIR}/data" ]; then
         tar -C "${PANEL_DIR}/data" --ignore-failed-read --exclude=./.backups -cf - . 2>/dev/null | ${SNAP_GZ} > "${BACKUP}/data.tgz" || true
-        [ -s "${BACKUP}/data.tgz" ] || die "Couldn't snapshot the database/config (backup empty) — update ABORTED, the panel is unchanged."
+        snapshot_ok "${BACKUP}/data.tgz" || die "Couldn't snapshot the database/config (backup empty or unreadable) — update ABORTED, the panel is unchanged."
     fi
     ok "Snapshot saved"
 
@@ -720,8 +786,26 @@ if [ "${IS_UPDATE}" -eq 1 ]; then
     # part of the INSTALLED version, so it's present whenever this newer install.sh runs.
     info "[2/6] Checking + optimising the database…"
     svc stop linuxgsm-panel.service || true
-    if [ -x "${PANEL_DIR}/venv/bin/python3" ] && [ -f "${PANEL_DIR}/db_maintenance.py" ]; then
-        if "${PANEL_DIR}/venv/bin/python3" "${PANEL_DIR}/db_maintenance.py" update; then
+    # WHICH python and WHICH script, as root, matters here — this runs at step [2/6], BEFORE any
+    # git fetch, so nothing about it is "the new code we just verified". It used to be
+    # ${PANEL_DIR}/venv/bin/python3 running ${PANEL_DIR}/db_maintenance.py: an interpreter and a
+    # script that both belong to the panel user, executed as root at the panel's own request
+    # (panel-self-update runs this installer). That is arbitrary root execution with no update
+    # involved at all.
+    #
+    # The root-owned copy at ${HELPER_DIR}/db_maintenance.py exists for exactly this, and the
+    # helper already runs it with the SYSTEM python for exactly this reason. Root uses that pair;
+    # an unprivileged (systemd --user) install keeps the checkout copy, where there is no boundary
+    # to cross — it is the same account either way.
+    DBM_RUN=""
+    if [ "$(id -u)" -eq 0 ]; then
+        [ -f "/usr/local/lib/linuxgsm-panel/db_maintenance.py" ] \
+            && DBM_RUN="python3 /usr/local/lib/linuxgsm-panel/db_maintenance.py"
+    elif [ -x "${PANEL_DIR}/venv/bin/python3" ] && [ -f "${PANEL_DIR}/db_maintenance.py" ]; then
+        DBM_RUN="${PANEL_DIR}/venv/bin/python3 ${PANEL_DIR}/db_maintenance.py"
+    fi
+    if [ -n "${DBM_RUN}" ]; then
+        if ${DBM_RUN} update; then
             ok "Database checked"
         else
             _dbrc=$?
@@ -736,7 +820,7 @@ if [ "${IS_UPDATE}" -eq 1 ]; then
             warn "Database maintenance reported a non-fatal issue (rc=${_dbrc}) — continuing."
         fi
     else
-        info "  (database maintenance tool not present in this version — skipping)"
+        info "  (no root-owned database maintenance tool yet — skipping; this run installs one)"
     fi
 
     info "[3/6] Fetching the new version…"
@@ -763,8 +847,9 @@ if [ "${IS_UPDATE}" -eq 1 ]; then
     # helper answers those with `unknown verb` and no fallback. This is also the only place an
     # existing install's sudoers grant is ever re-evaluated, so a host that first installed before
     # the helper existed gets narrowed here instead of keeping NOPASSWD:ALL indefinitely.
+    check_origin_trusted
     install_root_tools
-    write_sudoers_grant
+    [ "${ORIGIN_TRUSTED}" -eq 1 ] && write_sudoers_grant
 
     info "[5/6] Starting the service…"
     ensure_service_tuning   # refresh the low-priority drop-in (existing installs get it on update)
@@ -843,10 +928,24 @@ if [ "${IS_UPDATE}" -eq 1 ]; then
     # We only wipe app files, never data/ or venv (venv is rebuilt below anyway).
     find "${PANEL_DIR}" -mindepth 1 -maxdepth 1 \
         ! -name data ! -name venv -exec rm -rf {} + 2>/dev/null || true
-    tar -C "${PANEL_DIR}" -xzf "${BACKUP}/code.tgz"
+    # Guarded, and it is the reason the guard matters: PANEL_DIR has just been emptied, so an
+    # unpack that fails leaves a half-populated install. Bare, `set -e` killed the script right
+    # here — past install_deps, past the service restart, and past BOTH die messages below — so
+    # the operator (or the in-panel self-update, which only watches the log) got a dead panel and
+    # no explanation at all. This says what happened and where the snapshot is.
+    if ! tar -C "${PANEL_DIR}" -xzf "${BACKUP}/code.tgz"; then
+        die "Update FAILED, and so did the rollback: the code snapshot could not be unpacked.
+     ${PANEL_DIR} is INCOMPLETE and the panel will not start. Restore it by hand from:
+       ${BACKUP}/code.tgz
+     (data/ and venv/ were not touched.)"
+    fi
     if [ -f "${BACKUP}/data.tgz" ]; then
         find "${PANEL_DIR}/data" -mindepth 1 -maxdepth 1 ! -name .backups -exec rm -rf {} + 2>/dev/null || true
-        tar -C "${PANEL_DIR}/data" -xzf "${BACKUP}/data.tgz"
+        if ! tar -C "${PANEL_DIR}/data" -xzf "${BACKUP}/data.tgz"; then
+            die "Update FAILED, and so did the rollback: the data snapshot could not be unpacked.
+     ${PANEL_DIR}/data is INCOMPLETE — the database and encryption keys are missing. Restore by hand from:
+       ${BACKUP}/data.tgz"
+        fi
     fi
     install_deps || true
     [ "${RUN_AS_ROOT}" -eq 1 ] && chown -R "${PANEL_USER}:${PANEL_USER}" "${PANEL_DIR}"

@@ -43,14 +43,34 @@ jobs:
       # excludes the UI's token *placeholders* so they don't trip a false positive.
       - name: Gitleaks
         env:
-          # Authenticate the release lookup — an anonymous api.github.com call is capped
-          # at 60/hour per runner IP and intermittently 403s (rate limit). The built-in
-          # token lifts that to 5000/hour, so the download stops flaking.
-          GH_TOKEN: ${{ github.token }}
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          # PINNED and CHECKSUMMED. Every `uses:` in this repo is SHA-pinned; the one tool that
+          # actually decides the secret-scanning verdict was resolved from releases/latest at run
+          # time and piped straight into tar. A behaviour change upstream (gitleaks has been
+          # moving `detect` toward `git`/`dir`) would change what this gate scans with no commit
+          # here. Bump deliberately: update both the version and the sha256.
+          GITLEAKS_VERSION: '8.30.1'
+          GITLEAKS_SHA256: '551f6fc83ea457d62a0d98237cbad105af8d557003051f41f3e7ca7b3f2470eb'
         run: |
-          URL=$(curl -sSfL -H "Authorization: Bearer $GH_TOKEN" \
-                     https://api.github.com/repos/gitleaks/gitleaks/releases/latest \
-                | grep -o 'https://[^"]*linux_x64\.tar\.gz' | head -1)
-          curl -sSfL "$URL" | tar -xz -C /tmp gitleaks
-          /tmp/gitleaks detect --source . --config .github/gitleaks.toml \
-            --redact --verbose --exit-code 1
+          set -euo pipefail
+          TARBALL="gitleaks_${GITLEAKS_VERSION}_linux_x64.tar.gz"
+          curl -sSfL -o "/tmp/${TARBALL}" \
+            "https://github.com/gitleaks/gitleaks/releases/download/v${GITLEAKS_VERSION}/${TARBALL}"
+          echo "${GITLEAKS_SHA256}  /tmp/${TARBALL}" | sha256sum -c -
+          tar -xz -C /tmp -f "/tmp/${TARBALL}" gitleaks
+
+          # SCOPED to what is under review. `detect --source .` with fetch-depth 0 walks the whole
+          # object store, so a PR was judged on commits from unrelated branches: a finding on a
+          # branch this PR does not contain turned this PR red, and symmetrically a branch could
+          # suppress a real finding for itself with an allowlist in its own tree. On a PR, scan the
+          # range; everywhere else (main, the weekly cron) keep scanning full history.
+          if [ -n "${BASE_SHA:-}" ] && [ -n "${HEAD_SHA:-}" ]; then
+            echo "Scanning ${BASE_SHA}..${HEAD_SHA}"
+            /tmp/gitleaks detect --source . --config .github/gitleaks.toml \
+              --log-opts "${BASE_SHA}..${HEAD_SHA}" --redact --verbose --exit-code 1
+          else
+            echo "Scanning full history"
+            /tmp/gitleaks detect --source . --config .github/gitleaks.toml \
+              --redact --verbose --exit-code 1
+          fi

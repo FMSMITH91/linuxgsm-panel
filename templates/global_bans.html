@@ -19,7 +19,7 @@
       <span class="d-block mt-1">It's applied through each server's own console, using the game's native
         banid and writeid commands, so it uses the game's own ban list and survives restarts.</span>
       <span class="d-block mt-1">Currently propagates to
-        <strong>{{ valve_count }}</strong> Source server{{ '' if valve_count == 1 else 's' }}.</span>
+        <strong>{{ valve_count }}</strong> {% if valve_count == 1 %}<span>Source server</span>{% else %}<span>Source servers</span>{% endif %}.</span>
       <span class="d-block mt-1 text-secondary">Other engines (Minecraft bans by name, Call of Duty by slot) don't use SteamIDs, so they aren't covered here.</span>
     </p>
     <form method="POST" action="{{ url_for('global_bans_add') }}" class="row g-2 align-items-end">

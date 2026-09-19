@@ -13,7 +13,7 @@ from panel.security.auth import (MANAGE_USERS, grantable_groups, hash_password, 
 from panel.services import (notifications)
 from panel.services.monitoring import (_AUTOBLOCK_DEFAULT_THRESHOLD, _autoblock_threshold)
 from datetime import (timedelta)
-from panel.core.http import (_form_credential, _form_err, _form_ok, _json_body)
+from panel.core.http import (_form_credential, _form_err, _form_ok, _json_body, _json_str)
 from panel.core.validation import (_int_or, _valid_hex_color, generate_password,
                                    password_problem, username_problem)
 from app import (_new_user_language)
@@ -44,11 +44,11 @@ def register(app):
     @superadmin_required
     def panel_settings_save():
         f = request.form
-        title = (f.get("site_title") or "").strip()[:80] or "LinuxGSM Panel"
-        domain = (f.get("site_domain") or "").strip()[:255]
-        tagline = (f.get("login_tagline") or "").strip()[:200]
+        title = _json_str(f, "site_title")[:80] or "LinuxGSM Panel"
+        domain = _json_str(f, "site_domain")[:255]
+        tagline = _json_str(f, "login_tagline")[:200]
         accent = _valid_hex_color(f.get("accent_color"))          # "" if blank/invalid -> built-in
-        lang = (f.get("default_language") or "").strip()
+        lang = _json_str(f, "default_language")
         lang = lang if lang in i18n.LANGUAGES else "en"           # always store a real language
         protection = f.get("session_protection") if f.get("session_protection") in ("strong", "basic") else "strong"
         hours = max(1, min(_int_or(f.get("session_lifetime_hours"), 8), 168))     # 1h .. 7d
@@ -88,10 +88,10 @@ def register(app):
         f = request.form
         # A blank secret field means "keep the stored one" (None), so the real token/webhook is
         # never required to round-trip through the browser just to change a toggle.
-        tg_token = f.get("telegram_token", "").strip()
-        dc_webhook = f.get("discord_webhook", "").strip()
-        dc_bot_token = f.get("discord_bot_token", "").strip()
-        nt_token = f.get("ntfy_token", "").strip()
+        tg_token = _json_str(f, "telegram_token")
+        dc_webhook = _json_str(f, "discord_webhook")
+        dc_bot_token = _json_str(f, "discord_bot_token")
+        nt_token = _json_str(f, "ntfy_token")
         notifications.save_settings(
             telegram={"enabled": bool(f.get("telegram_enabled")),
                       "chat_id": f.get("telegram_chat_id", ""),
@@ -122,12 +122,12 @@ def register(app):
         # Test the values typed into the form (so you don't have to Save first); blank fields fall
         # back to whatever's already saved.
         ok, msg = notifications.test_send(
-            (b.get("channel") or "").strip(),
-            token=(b.get("token") or "").strip() or None,
-            chat_id=(b.get("chat_id") or "").strip() or None,
-            webhook=(b.get("webhook") or "").strip() or None,
-            server=(b.get("server") or "").strip() or None,
-            topic=(b.get("topic") or "").strip() or None,
+            _json_str(b, "channel"),
+            token=_json_str(b, "token") or None,
+            chat_id=_json_str(b, "chat_id") or None,
+            webhook=_json_str(b, "webhook") or None,
+            server=_json_str(b, "server") or None,
+            topic=_json_str(b, "topic") or None,
         )
         return jsonify({"success": ok, "message": msg})
 
@@ -214,11 +214,31 @@ def register(app):
                 return _form_err("Username already exists.", "manage_users")
             user.username = _new_username
 
+        _pending_audit = []      # (action, target, detail) — written after the commit below
         user.display_name = (request.form.get("display_name") or user.display_name or "").strip()
         _new_email = request.form.get("email", "").strip()
         user.email = encrypt_secret(_new_email) if _new_email else None
         user.is_active = request.form.get("is_active") == "on"
         user.is_superadmin = want_superadmin
+
+        # THE LOCKOUT GUARD RUNS HERE, before anything below can commit. It used to sit at the very
+        # end, after the password-reset and 2FA branches — and each of those calls log_action(),
+        # which ends in db.session.commit(). So on the one edit that matters most (the sole
+        # superadmin unticking "Super admin" while also ticking "Reset password", both controls in
+        # the SAME form in manage_users.html) the demotion was already committed by the time the
+        # guard looked. Its db.session.rollback() then had nothing to undo, and the route answered
+        # "That change would leave no active superadmin — aborted." with zero superadmins left and
+        # the web UI locked for everyone, recoverable only through manage.py.
+        #
+        # Driven end to end before this moved: superadmins before 1, route answered 400 with the
+        # abort message, superadmins after 0.
+        #
+        # Nothing between here and the commit changes is_superadmin or is_active, so checking at
+        # this point is the same question asked while the answer can still be acted on.
+        db.session.flush()
+        if User.query.filter_by(is_superadmin=True, is_active=True).count() == 0:
+            db.session.rollback()
+            return _form_err("That change would leave no active superadmin — aborted.", "manage_users")
 
         # Reset the password on request. Generated, never typed by the admin — same reasoning as
         # add_user. Resetting is an explicit tick, not a blank field that means "keep": an edit that
@@ -236,30 +256,33 @@ def register(app):
             # forcing them through a change screen would protect nothing.
             if user.id != current_user.id:
                 user.must_change_password = True
-            log_action(current_user, "reset_user_password", target=user.username)
+            # DEFERRED, not written here. log_action commits, and a commit in the middle of a
+            # handler makes every later guard unable to undo what came before it — see the lockout
+            # note above, and the group-id parse below, which could 500 after this branch had
+            # already committed a password reset that nobody ever saw.
+            _pending_audit.append(("reset_user_password", user.username, ""))
 
         # Admin reset of a user's 2FA (for when they lose their authenticator).
         if request.form.get("reset_2fa") == "on" and user.totp_enabled:
             user.totp_enabled = False
             user.totp_secret = None
             user.backup_codes = ""
-            log_action(current_user, "2fa_reset", target=user.username)
+            _pending_audit.append(("2fa_reset", user.username, ""))   # deferred — see above
 
         # Update groups. Through grantable_groups, not straight from the form: a delegated
         # MANAGE_USERS admin could otherwise edit their OWN account and tick a privileged group,
         # picking up its permissions on the next request — the exact escalation _grantable_perms
         # exists to stop, reached from the membership side instead of the permission side.
-        group_ids = {int(gid) for gid in request.form.getlist("groups")}
+        # isdecimal() like every sibling parse (add_user, create_invite, _assign_command_groups).
+        # This one was bare int(), so `groups=abc` raised straight out of the handler — a 500, and
+        # worse in combination: the password-reset branch above used to have committed by now, so
+        # the account was left with a reset password and revoked sessions that nobody ever saw.
+        group_ids = {int(gid) for gid in request.form.getlist("groups") if str(gid).isdecimal()}
         user.groups = grantable_groups(group_ids, existing=list(user.groups or []))
 
-        # Never let an edit leave the panel with no active superadmin (e.g. self-demotion
-        # or deactivating the last one) — that would lock everyone out of the web UI.
-        db.session.flush()
-        if User.query.filter_by(is_superadmin=True, is_active=True).count() == 0:
-            db.session.rollback()
-            return _form_err("That change would leave no active superadmin — aborted.", "manage_users")
-
         db.session.commit()
+        for _act, _tgt, _detail in _pending_audit:
+            log_action(current_user, _act, target=_tgt, detail=_detail)
         if _new_username and _new_username != _old_username:
             # Its own entry, and keyed on the OLD name: every earlier row for this account is filed
             # under that, so this is the only line that connects the two.

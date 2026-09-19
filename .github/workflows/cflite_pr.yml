@@ -15,7 +15,11 @@ on:
     # what those harnesses reach, and this is the slowest job in the repo — so scope it to the code
     # it actually fuzzes rather than paying for it on every PR.
     paths:
-      - 'panel/ops/ssh_manager.py'
+      # A DIRECTORY since the ssh_manager split — the old 'panel/ops/ssh_manager.py' never
+      # matched anything again, and four of the six fuzz harnesses target parsers inside it, so
+      # "fuzz the diff" silently stopped running for them. fuzz.yml was updated at the time;
+      # this file was not.
+      - 'panel/ops/ssh_manager/**'
       - 'panel/ops/system_ops.py'
       - 'panel/core/terminal.py'
       - 'tests/fuzz/**'

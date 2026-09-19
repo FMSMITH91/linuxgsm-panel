@@ -41,7 +41,14 @@
    used to be blind to. cron_restart_pending is display-only (the monitor reads the flag; nothing
    writes the column from it), so the two queues stay independent and nothing restarts twice. #}
 <div class="alert alert-warning py-2 px-3 d-flex justify-content-between align-items-center flex-wrap gap-2 {% if not (server.restart_pending or server.stop_pending or cron_restart_pending) %}d-none{% endif %}"
-     id="restart-pending-banner" data-action="{{ 'stop' if server.stop_pending else 'restart' }}">
+     {# data-PENDING-action, not data-action: panel.js's dispatcher calls window[<data-action>]
+        on any click inside a [data-action] element, and `stop` is a real Window method. Clicking
+        the banner's TEXT — a wide alert bar whose button is at the far right, easy to miss on a
+        phone — called window.stop(), which aborts every request in flight: this page polls stats
+        and console with fetch() and socket.io's polling transport uses XHR, so the poll's .catch
+        then reported a connection error on a page that was working fine. (`restart` was simply
+        undefined, so that half was a silent no-op.) #}
+     id="restart-pending-banner" data-pending-action="{{ 'stop' if server.stop_pending else 'restart' }}">
   {# The verb is its OWN complete sentence, not a word spliced into one. Written as
      "A <span>{{ verb }}</span> is queued" the only text nodes were "A" and "is queued", and no
      catalog can translate a sentence it only ever sees in two halves — nor can a language that
@@ -51,7 +58,7 @@
     {% if cron_restart_pending and not (server.restart_pending or server.stop_pending) %}<span>It was queued by the daily-restart schedule.</span>{% endif %}
     <span>It will run automatically once the server is empty, or you can do it now.</span></span>
   <button class="btn btn-sm btn-warning" data-action="bannerDoNow" data-args='["@self"]'>
-    <i class="bi bi-lightning-charge"></i> <span id="rpb-btn">{{ 'Stop' if server.stop_pending else 'Restart' }} now</span>
+    <i class="bi bi-lightning-charge"></i> <span id="rpb-btn">{% if server.stop_pending %}<span>Stop now</span>{% else %}<span>Restart now</span>{% endif %}</span>
   </button>
 </div>
 
@@ -62,7 +69,10 @@
   <li class="nav-item"><button type="button" class="nav-link active" data-mtab-btn="console"><i class="bi bi-terminal-fill"></i> Console</button></li>
   <li class="nav-item"><button type="button" class="nav-link" data-mtab-btn="history"><i class="bi bi-graph-up"></i> History</button></li>
   <li class="nav-item"><button type="button" class="nav-link" data-mtab-btn="details"><i class="bi bi-info-circle"></i> Details</button></li>
-  <li class="nav-item"><a class="nav-link" href="{{ url_for('server_files', server_id=server.id) }}"><i class="bi bi-folder2-open"></i> Files &amp; Config</a></li>
+  {# can_download_log is _can_manage_files() — the same permission server_files itself requires.
+     Unconditional, this tab was a permanent invitation for every viewer to round-trip to a red
+     "You don't have permission to manage server files." #}
+  {% if can_download_log %}<li class="nav-item"><a class="nav-link" href="{{ url_for('server_files', server_id=server.id) }}"><i class="bi bi-folder2-open"></i> Files &amp; Config</a></li>{% endif %}
   {# Same as the dashboard: the rearranging controls stay hidden until asked for. #}
   <li class="nav-item ms-auto"><button type="button" class="nav-link" data-action="toggleLayoutEdit"
       aria-pressed="false" title="Show the controls for rearranging this tab"><i class="bi bi-grid-1x2"></i>

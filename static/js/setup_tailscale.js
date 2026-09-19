@@ -1,4 +1,5 @@
 // Tailscale step of the setup wizard.
+var _tsPoll = null;   // only one live status poll — see tsDoUp
 function tsEsc(s){ return window.escapeHtml(s); }
 function tsApi(p, opts){ return fetch((window.MOUNT||'') + '/api/setup/tailscale/' + p, opts).then(function(r){ return r.json(); }); }  // nosemgrep
 var tsBox = document.getElementById('ts-box');
@@ -58,7 +59,18 @@ function tsDoUp(){
       + '<a href="'+tsEsc(d.auth_url)+'" target="_blank" style="word-break:break-all;">'+tsEsc(d.auth_url)+'</a>'
       + ' <button type="button" class="btn btn-sm btn-outline-secondary py-0"' + _da('copyText', [d.auth_url]) + '><i class="bi bi-clipboard"></i></button><br>'
       + '<strong>2.</strong> <span id="ts-wait"><i class="bi bi-hourglass-split"></i> Waiting for you to authorize…</span></div>';
-    var t=setInterval(function(){ tsApi('status').then(function(s){ if(s.running){ clearInterval(t); tsRender(s); } }); }, 4000);
+    // Deadline + a single live poll, and a .catch so a failed status read does not leave an
+    // unhandled rejection every 4s. Its only exit was running:true, so a wizard left open on this
+    // step polled forever and each press of the button started another.
+    if (_tsPoll) clearInterval(_tsPoll);
+    var _tsEnd = Date.now() + 5 * 60 * 1000;
+    var t = setInterval(function(){
+      if (Date.now() > _tsEnd) { clearInterval(t); _tsPoll = null; return; }
+      tsApi('status').then(function(s){
+        if (s.running) { clearInterval(t); _tsPoll = null; tsRender(s); }
+      }).catch(function(){});
+    }, 4000);
+    _tsPoll = t;
   }).catch(function(){ tsOut().innerHTML='<span class="text-danger">Request failed.</span>'; });
 }
 

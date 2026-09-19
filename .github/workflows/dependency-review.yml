@@ -15,9 +15,15 @@ on:
     # This action diffs the dependency manifest for newly-introduced vulnerable or
     # incompatibly-licensed packages. With no manifest change there is no diff to review, so the
     # run can only ever report "nothing changed".
+    # ...and the workflow files, because the dependency GRAPH tracks GitHub Actions too
+    # (`gh api .../dependency-graph/sbom` lists pkg:githubactions/* entries). A third-party action
+    # bump is the PR that most needs this review and it matched neither path, so the workflow did
+    # not trigger at all — and with no required status checks, a missing check reads as a pass.
+    # Confirmed on a live action-bump PR: 17 checks, no Dependency Review among them.
     paths:
       - 'requirements.txt'
-      - '.github/workflows/dependency-review.yml'
+      - '.github/workflows/**'
+      - '.github/actions/**'
 
 # Least-privilege: this only needs to read the repo + its dependency graph.
 # Supersede rather than stack: Only the newest push's dependency diff is of any interest.

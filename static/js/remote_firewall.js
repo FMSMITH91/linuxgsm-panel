@@ -33,7 +33,18 @@ function refreshFirewall() {
       } else {
         listEl.innerHTML = '<div class="p-3 text-center text-secondary small">No open ports yet.</div>';
       }
-      document.getElementById('rules-count').textContent = openGroups.length + (openGroups.length === 1 ? ' rule' : ' rules');
+      // The number and the WORD as separate nodes, matching what the template renders. As one
+      // text node the result was "3 rules", which is not a catalog key and never can be — so this
+      // repaint replaced a translated count with an English one on every refresh. t() is the same
+      // catalog the DOM walker uses, so the word is right immediately rather than after the
+      // observer catches up.
+      var rc = document.getElementById('rules-count');
+      if (rc) {
+        rc.textContent = openGroups.length + ' ';
+        var rw = document.createElement('span');
+        rw.textContent = t(openGroups.length === 1 ? 'rule' : 'rules');
+        rc.appendChild(rw);
+      }
 
       // Blocked IPs (separate card)
       var blocksEl = document.getElementById('blocks-list');
@@ -54,8 +65,22 @@ function refreshFirewall() {
           blocksEl.innerHTML = '<div class="p-3 text-center text-secondary small">No IPs are blocked.</div>';
         }
         var bc = document.getElementById('blocks-count');
-        if (bc) bc.textContent = blockGroups.length + ' blocked';
+        if (bc) {
+          bc.textContent = blockGroups.length + ' ';
+          var bw = document.createElement('span');
+          bw.textContent = t('blocked');
+          bc.appendChild(bw);
+        }
       }
+    })
+    // The one fetch chain on this page without a rejection handler — every sibling has one, and
+    // openPort's was added with a note about "⟳ Opening..." being stuck on screen forever. This
+    // runs after EVERY successful mutation (block, unblock, open, delete, sync), so an unreachable
+    // host or an expired session (an HTML login page makes r.json() reject) left the rules table
+    // showing the pre-change state: a rule you just deleted still listed, with no error anywhere.
+    .catch(function(){
+      if (window.toast) toast('Could not refresh the firewall rules — the host may be unreachable.',
+                              'danger');
     });
 }
 
@@ -124,7 +149,7 @@ function openPort() {
   fetch(MOUNT + '/api/remote/' + remoteId + '/firewall/open', {
     method: 'POST',
     headers: {'Content-Type': 'application/json'},
-    body: JSON.stringify({port: parseInt(port), protocol: proto, comment: comment}),
+    body: JSON.stringify({port: parseInt(port, 10), protocol: proto, comment: comment}),
   })
   .then(r => r.json())
   .then(data => {
@@ -136,6 +161,13 @@ function openPort() {
     } else {
       resultEl.innerHTML = '<span class="text-danger">❌ ' + esc(data.message) + '</span>';  // nosemgrep
     }
+  })
+  // Its siblings blockIp() and _restrictPost() both have one; this did not, so an unreachable
+  // host or an expired session (a non-JSON body makes r.json() reject) left "⟳ Opening..." on
+  // screen forever with no way to tell whether the rule had been created.
+  .catch(function () {
+    resultEl.innerHTML = '<span class="text-danger">❌ The request failed — the host may be '
+      + 'unreachable, or your session may have expired. Refresh and check the rules.</span>';
   });
 }
 

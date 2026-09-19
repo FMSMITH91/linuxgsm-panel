@@ -77,8 +77,18 @@ window.addEventListener('pageshow', function(ev){
   document.addEventListener('visibilitychange', function(){
     if (!document.hidden && Date.now() - _lastPing > 60000) _pingAuth();
   });
-  document.addEventListener('DOMContentLoaded', function(){
-    document.querySelectorAll('form').forEach(function(f){
+  // Give every POST form under `root` its hidden token. Exported and IDEMPOTENT, because
+  // DOMContentLoaded is not the only time a form appears: refreshSection() re-fetches the page and
+  // swaps a container's innerHTML, and what comes back is the SERVER-rendered markup — without the
+  // field this added to the live DOM. The uninstall form on the host page is inside such a
+  // container (importExisting refreshes #host-servers-card) and is submitted with form.submit(),
+  // a native POST that carries no header — so after importing servers, Uninstall failed CSRF.
+  // Measured in a browser against this file: token present on load, null after the swap.
+  //
+  // The fetch wrapper above covers everything submitted with fetch(); this covers the rest, and
+  // form.submit() fires no 'submit' event, so a delegated listener could not have.
+  window.ensureCsrfFields = function(root){
+    (root || document).querySelectorAll('form').forEach(function(f){
       var m = (f.getAttribute('method') || 'GET').toUpperCase();
       if (m === 'POST' && !f.querySelector('input[name="csrf_token"]')) {
         var i = document.createElement('input');
@@ -86,7 +96,8 @@ window.addEventListener('pageshow', function(ev){
         f.appendChild(i);
       }
     });
-  });
+  };
+  document.addEventListener('DOMContentLoaded', function(){ window.ensureCsrfFields(document); });
 })();
 
 // Escape a string for safe interpolation into innerHTML — use this whenever a
@@ -105,7 +116,11 @@ document.addEventListener('change', function(e){
   // Save the choice (session + profile) for next load. NOT fire-and-forget: if the profile write
   // fails the language still changes here and now, but it will not follow you to another device —
   // and silently pretending otherwise is how a preference appears to "not stick".
-  if (tmpl) fetch(tmpl.replace('LANGCODE', encodeURIComponent(lang)) + '?ajax=1', {cache: 'no-store'})
+  // POST, because set-language only writes the PROFILE on POST: as a GET it was a state change
+  // CSRF could not cover. The wrapper above adds the token; pre-login there is no user row to
+  // write, and the session half of the switch works on either method.
+  if (tmpl) fetch(tmpl.replace('LANGCODE', encodeURIComponent(lang)) + '?ajax=1',
+                  {method: 'POST', cache: 'no-store'})
     .then(function(r){ return r.ok ? r.json() : null; })
     .then(function(d){
       if (d && d.success === false && window.toast) toast(d.message || 'Saved for this session only.', 'warning');
@@ -128,12 +143,32 @@ document.addEventListener('change', function(e){
 // keeps identical freshness while you're looking at a page and does zero work when you're
 // not. Returns the interval id (clearable). Use in place of setInterval for anything that
 // fetches live data on a timer.
+var _visPolls = {};   // interval id -> its visibilitychange listener, so stopPolling can undo both
 window.pollWhenVisible = function(fn, intervalMs){
-  var id = setInterval(function(){ if(!document.hidden){ try { fn(); } catch(e){} } }, intervalMs);
-  document.addEventListener('visibilitychange', function(){
-    if(!document.hidden){ try { fn(); } catch(e){} }   // catch up the moment the tab is focused
-  });
+  // The catch-up on focus is THROTTLED, and the listener can be removed. Unthrottled, the interval
+  // argument meant nothing on that path: nags.js registers osUpdatesNagCheck at one hour and
+  // rebootNagCheck at ten minutes, and rebootNagCheck hits /api/remote/<id>/reboot-required, which
+  // is an SSH command — so alt-tabbing between the panel and a terminal cost one SSH round trip
+  // per switch. Measured: ten focus events on a one-HOUR poll ran the work ten times. And the
+  // returned id could not stop it, because clearInterval leaves the listener behind and the
+  // listener was unreachable; five more focuses still ran after clearInterval.
+  var last = 0;
+  var gap = Math.min(intervalMs, 60000);
+  function run(){ last = Date.now(); try { fn(); } catch(e){} }
+  var id = setInterval(function(){ if(!document.hidden) run(); }, intervalMs);
+  function onVis(){ if(!document.hidden && Date.now() - last >= gap) run(); }
+  document.addEventListener('visibilitychange', onVis);
+  // setInterval returns a NUMBER, so the teardown cannot hang off the id — it goes in a registry
+  // keyed by it. Existing callers keep passing the id to clearInterval and are unaffected; they
+  // just leave the listener behind, which is what stopPolling exists to finish.
+  _visPolls[id] = onVis;
   return id;
+};
+
+// Stop a pollWhenVisible poll COMPLETELY: the interval and its focus catch-up.
+window.stopPolling = function(id){
+  clearInterval(id);
+  if (_visPolls[id]) { document.removeEventListener('visibilitychange', _visPolls[id]); delete _visPolls[id]; }
 };
 
 // "3h ago" for a unix timestamp. Shared: the backups list and the OS Updates card both say when
@@ -296,6 +331,9 @@ window.refreshSection = function(sel, afterName){
       // nosemgrep - a fragment of THIS panel's own server-rendered page (Jinja autoescapes),
       // re-parsed same-origin to refresh one region in place.
       if (fresh && cur) cur.innerHTML = fresh.innerHTML;  // nosemgrep
+      // The swapped-in markup is what the SERVER rendered, so any POST form in it arrives without
+      // the hidden token — see ensureCsrfFields.
+      if (cur && window.ensureCsrfFields) window.ensureCsrfFields(cur);
       // nosemgrep - the delegated dispatcher this whole UI is built on: afterName comes from a
       // data- attribute in our own template, and the typeof guard is the contract.
       if (afterName && typeof window[afterName] === 'function') { try { window[afterName](); } catch(e){} }  // nosemgrep
@@ -423,7 +461,9 @@ window._acctSignOutAll = function(){
   confirmDialog({title:'Sign out everywhere else', icon:'box-arrow-right', confirmClass:'btn-danger',
     confirmLabel:'Sign out other devices',
     bodyText:'Sign out every OTHER device signed in to this account? This one stays signed in.',
-    onConfirm:function(){ var f = document.getElementById('revoke-sessions-form'); if (f) f.submit(); }});
+    onConfirm:function(){ var f = document.getElementById('revoke-sessions-form');
+      // A native POST: no fetch wrapper, so the hidden field is the only token there is.
+      if (f) { window.ensureCsrfFields(f); f.submit(); } }});
 };
 (function(){
   function fire(el, e){
@@ -602,7 +642,13 @@ window.copyText = function(text, label){
 // link silently dies (or pops an ugly "no app found" dialog). On touch devices
 // we intercept it, copy the ip:port instead, and tell the user to paste it into
 // their game — the phone is for managing, the actual joining happens elsewhere.
-window.__isTouch = ('ontouchstart' in window) || (navigator.maxTouchPoints || 0) > 0;
+// `pointer: coarse` — the POINTER, not the capability. maxTouchPoints > 0 is true on every
+// touchscreen Windows laptop, Surface and touch-enabled Chromebook, machines that do have Steam:
+// clicking Join with a mouse there never launched steam://connect/…, it copied the address and
+// toasted instead, and the href was cancelled so there was no way to get the real link. A hybrid
+// device with a mouse reports `pointer: fine` and keeps the hand-off.
+window.__isTouch = (window.matchMedia && window.matchMedia('(pointer: coarse)').matches)
+  || (!window.matchMedia && (('ontouchstart' in window) || (navigator.maxTouchPoints || 0) > 0));
 document.addEventListener('click', function(ev){
   var j = ev.target.closest && ev.target.closest('.join-link');
   if(!j || !window.__isTouch) return;

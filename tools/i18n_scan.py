@@ -90,8 +90,16 @@ class _Walker(HTMLParser):
         HTMLParser.__init__(self, convert_charrefs=True)
         self.strings = {}
         self.dynamic = {}
-        self._skip_depth = 0      # >0 while inside a SKIP_TAGS element or a data-no-i18n subtree
-        self._skip_stack = []     # tag names that opened the current skip regions
+        # EVERY open element, not just the ones that opened a skip. The skip used to be tracked
+        # as a stack of skipping tags alone, popped whenever the closing tag matched its top —
+        # so a <div data-no-i18n> containing a plain nested <div> ended its skip region at the
+        # INNER close, and everything after it was collected. Verified:
+        #   <div data-no-i18n><div>x</div>Leaked text</div>  ->  {'Leaked text'}
+        #   <div data-no-i18n><span>x</span>Safe text</div>  ->  {}
+        # The runtime walker recurses the real DOM and cannot make that mistake, and this file's
+        # contract is that it mirrors the runtime's rules exactly.
+        self._open = []           # names of every currently-open non-void element
+        self._skip_at = None      # len(self._open) when the innermost skip began; None = not skipping
 
     # Void elements never close, so they must not push onto the skip stack.
     _VOID = {"area", "base", "br", "col", "embed", "hr", "img", "input",
@@ -104,7 +112,7 @@ class _Walker(HTMLParser):
         # BEFORE it reaches the attribute loop, so an element's own data-no-i18n exempts its
         # title/placeholder too. Testing only the outer depth reported placeholders as gaps that
         # the runtime never even looks at.
-        if not self._skip_depth and not skips:
+        if self._skip_at is None and not skips:
             for name in I18N_ATTRS:
                 value = attr_map.get(name)
                 if value is None or _DYNAMIC in value or _SPLIT in value:
@@ -112,17 +120,24 @@ class _Walker(HTMLParser):
                 value = html.unescape(value).strip()
                 if is_translatable(value):
                     self.strings.setdefault(value, set()).add("@" + name)
-        if skips and tag not in self._VOID:
-            self._skip_stack.append(tag)
-            self._skip_depth += 1
+        if tag in self._VOID:
+            return                # never closes, so it opens no region
+        self._open.append(tag)
+        if skips and self._skip_at is None:
+            self._skip_at = len(self._open)   # the depth this skip region starts at
 
     def handle_endtag(self, tag):
-        if self._skip_stack and self._skip_stack[-1] == tag:
-            self._skip_stack.pop()
-            self._skip_depth -= 1
+        if tag in self._VOID or tag not in self._open:
+            return                # a stray close, or one for an element that never opened
+        # Unwind to the matching open tag: browsers close implicitly-open elements the same way,
+        # and an unbalanced template must not leave the walker permanently skipping (or never).
+        while self._open and self._open.pop() != tag:
+            pass
+        if self._skip_at is not None and len(self._open) < self._skip_at:
+            self._skip_at = None              # left the element that opened the skip
 
     def handle_data(self, data):
-        if self._skip_depth:
+        if self._skip_at is not None:
             return
         for run in data.split(_SPLIT):
             collapsed = re.sub(r"\s+", " ", run.replace(_DYNAMIC, "\x00")).strip()

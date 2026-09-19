@@ -28,8 +28,15 @@ def fetch_errors():
     """Every Error-level issue Codacy currently reports for the default branch.
 
     Pages through the cursor rather than trusting one response to hold them all — a gate that
-    silently reads only the first page reports "clean" the moment the list grows past it."""
-    out, cursor = [], None
+    silently reads only the first page reports "clean" the moment the list grows past it.
+
+    Returns (issues, answered). `answered` is False when no page carried a `data` key at all —
+    "the API told us nothing" is not the same claim as "there are no issues", and reporting the
+    second on the strength of the first is the failure this gate exists to prevent. Its sibling
+    codeql-alerts.yml states the rule outright: "'No analysis' is never treated as 'no alerts'."
+    A repo that has not been analysed, an endpoint that moved, a filter shape that changed, or
+    anonymous access being withdrawn all yield a 200 with nothing useful in it."""
+    out, cursor, answered = [], None, False
     headers = {"Content-Type": "application/json", "Accept": "application/json"}
     token = os.environ.get("CODACY_API_TOKEN")
     if token:
@@ -40,11 +47,13 @@ def fetch_errors():
             url, data=json.dumps({"levels": ["Error"]}).encode(), headers=headers, method="POST")
         with urllib.request.urlopen(req, timeout=30) as resp:   # nosec B310 - constant https host
             page = json.loads(resp.read().decode("utf-8", "replace"))
+        if isinstance(page, dict) and isinstance(page.get("data"), list):
+            answered = True          # a real, well-formed result set — even an empty one
         out.extend(page.get("data") or [])
         cursor = (page.get("pagination") or {}).get("cursor")
         if not cursor:
             break
-    return out
+    return out, answered
 
 
 def main():
@@ -63,11 +72,31 @@ def main():
              for a in accepted}
 
     try:
-        issues = fetch_errors()
+        issues, answered = fetch_errors()
+    except urllib.error.HTTPError as exc:
+        # A 401/403/404 is PERMANENT and actionable — the repository went private, anonymous
+        # access was withdrawn, the endpoint moved — and this workflow is schedule-only, so a
+        # ::warning:: nobody reads would let it report green daily, forever. The comment in
+        # codacy-alerts.yml names that exact scenario. A 5xx is an outage and stays non-fatal.
+        if exc.code in (401, 403, 404):
+            print("::error::the Codacy API refused the request (HTTP %d) for %s/%s — refusing to "
+                  "report it clean. Anonymous access may have been withdrawn." % (exc.code, ORG, REPO))
+            return 1
+        print("::warning::the Codacy API errored (HTTP %d) — not failing the build; the next "
+              "scheduled run will re-check." % exc.code)
+        return 0
     except (urllib.error.URLError, OSError, ValueError) as exc:
         print("::warning::could not reach the Codacy API (%s) — not failing the build; the next "
               "scheduled run will re-check." % type(exc).__name__)
         return 0
+    if not answered:
+        # A 200 that carried no `data` at all. Distinct from the unreachable case above, which is
+        # an outage and is deliberately not fatal: this is the API answering in a shape this gate
+        # cannot read, and reporting "nothing unreviewed" from it would be inventing the answer.
+        print("::error::the Codacy API returned no issue list for %s/%s — refusing to report it "
+              "clean. Check the endpoint, the filter shape, and whether the repository is still "
+              "being analysed." % (ORG, REPO))
+        return 1
 
     unreviewed, seen = [], set()
     for i in issues:

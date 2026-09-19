@@ -111,7 +111,11 @@ def _check_template_url_for():
     import re
     endpoints = {r.endpoint for r in app.url_map.iter_rules()}
     bad = []
-    for p in sorted(pathlib.Path("templates").glob("*.html")):
+    _tpls = sorted(pathlib.Path("templates").glob("*.html"))
+    # A "no bad url_for anywhere" gate passes on an empty sweep. Floor, not an inventory.
+    check("templates: the url_for sweep found templates to read", len(_tpls) >= 20,
+          "%d templates — the check below would pass vacuously" % len(_tpls))
+    for p in _tpls:
         for m in re.finditer(r"""url_for\(\s*['"]([A-Za-z_][\w]*)['"]""", p.read_text(encoding="utf-8")):
             if m.group(1) not in endpoints:
                 bad.append("%s -> url_for('%s')" % (p.name, m.group(1)))
@@ -547,6 +551,32 @@ try:
     mrc = client_as(mru_id)
     check("MANAGE_REMOTES user: /remotes renders (200)",
           mrc.get("/remotes").status_code == 200)
+    # manage_remotes.html carries no is_local branch any more — six of them tested a flag that is
+    # False for every row this route can hand it, including a "This Machine" badge and a "Runs
+    # locally on this server" line no visitor was ever shown. That is only true while the route
+    # keeps filtering, so the filter is pinned here rather than left as a comment: the panel's own
+    # host is managed under System -> Panel Server, and listing it here would offer Test, Tailscale
+    # and Prepare against the machine the panel is running on.
+    # Seeded HERE and removed again, not added to the fixture: an is_local host changes the host
+    # card count, the per-host groups and the dashboard's own tables, and this is the only check
+    # that needs one.
+    with app.app_context():
+        _lh = RemoteServer(name="smoke-localhost", host="127.0.0.1", port=22,
+                           username="root", auth_method="key", is_local=True)
+        db.session.add(_lh)
+        db.session.commit()
+        _lh_id = _lh.id
+    _rl = c.get("/remotes")
+    _rlh = _rl.get_data(as_text=True)
+    check("remotes: the page still renders with a local host in the table",
+          _rl.status_code == 200 and "smoke-host" in _rlh,
+          "status=%d — an empty body would pass the next check vacuously" % _rl.status_code)
+    check("remotes: ...and it is not listed",
+          "smoke-localhost" not in _rlh and ("/remote/%d/manage" % _lh_id) not in _rlh,
+          "the local host is on a page whose template no longer has a branch for it")
+    with app.app_context():
+        db.session.delete(db.session.get(RemoteServer, _lh_id))
+        db.session.commit()
     check("MANAGE_REMOTES user: non-granted remote -> 403",
           mrc.get("/api/remote/%d/firewall" % remote2_id).status_code == 403)
     check("MANAGE_REMOTES user: non-granted remote reboot -> 403",
@@ -1656,6 +1686,61 @@ try:
     _dash = c.get("/").get_data(as_text=True)
     check("one-table: the dashboard carries the per-server Files & Config link",
           "/files" in _dash, "server_files was reachable from the old row and nowhere else")
+    # ...for someone who may USE it. The row's three action buttons and both bulk bars hung off a
+    # single can_control flag that was the UNION of start/stop/restart, and the Files button hung
+    # off nothing at all — so a moderator holding only start_server was shown Stop and Restart on
+    # every row, and every viewer got a Files button that round-trips to a red "You don't have
+    # permission to manage server files."  Driven as a REAL restricted user, because a superadmin
+    # satisfies every gate and would prove nothing; and asserting the button that must be THERE as
+    # well as the ones that must not, because a route that computes the flags and forgets to pass
+    # them to render_template leaves Jinja an Undefined that is silently falsy — which is exactly
+    # what happened, and an absence-only check would have called that a pass.
+    with app.app_context():
+        _sog = Group(name="smoke-startonly")
+        _sog.set_permissions([auth.VIEW_SERVERS, auth.START_SERVER])
+        _sog.game_servers.append(db.session.get(GameServer, gs_id))
+        db.session.add(_sog)
+        db.session.flush()
+        _sou = User(username="startonly", password_hash=auth.hash_password("Str0ng!passw0rd"),
+                    is_superadmin=False, is_active=True)
+        _sou.groups.append(_sog)
+        db.session.add(_sou)
+        db.session.commit()
+        _sou_id = _sou.id
+    _sod = client_as(_sou_id).get("/").get_data(as_text=True)
+    check("dashboard perms: the start-only user's row is rendered, so the checks below see one",
+          'data-action="doAction"' in _sod,
+          "no action buttons at all — every absence check below would pass vacuously")
+    check("dashboard perms: ...and carries the Start button they hold",
+          '[%d, "start", "@self"]' % gs_id in _sod, "start_server granted, no Start button")
+    check("dashboard perms: ...but not Restart",
+          '[%d, "restart", "@self"]' % gs_id not in _sod, "Restart offered without the permission")
+    check("dashboard perms: ...nor Stop",
+          '[%d, "stop", "@self"]' % gs_id not in _sod, "Stop offered without the permission")
+    check("dashboard perms: the bulk bar offers Start", "'[\"start\"]'" in _sod,
+          "the bulk bar dropped the one action they can run")
+    check("dashboard perms: ...and not bulk Stop", "'[\"stop\"]'" not in _sod,
+          "a bulk Stop across a tag group fails wholesale with Permission denied")
+    check("dashboard perms: ...and no Files & Config button",
+          "/server/%d/files" % gs_id not in _sod,
+          "server_files is MANAGE_SERVERS; the button 403s for this user")
+    _sof = client_as(_sou_id).get("/server/%d/files" % gs_id, follow_redirects=False)
+    check("dashboard perms: ...because that route refuses them, so the absence was honest",
+          _sof.status_code in (403, 302, 401), "status=%d" % _sof.status_code)
+    # The other way in was the detail page's tab bar, which is the SAME permission
+    # (_can_manage_files) and was equally unconditional — so gating only the dashboard row would
+    # have moved the dead end rather than closed it. A superadmin must still see both, or the gate
+    # is just a deletion.
+    _sodet = client_as(_sou_id).get("/server/%d" % gs_id)
+    check("dashboard perms: the detail page renders for the start-only user",
+          _sodet.status_code == 200 and 'data-mtab-btn="console"' in
+          _sodet.get_data(as_text=True), "status=%d" % _sodet.status_code)
+    check("dashboard perms: ...and its Files & Config TAB is gone too",
+          "/server/%d/files" % gs_id not in _sodet.get_data(as_text=True),
+          "the tab bar still offers a page that flashes a permission error")
+    _sadet = c.get("/server/%d" % gs_id).get_data(as_text=True)
+    check("dashboard perms: ...while a superadmin still has that tab",
+          "/server/%d/files" % gs_id in _sadet, "the gate removed it for everyone")
     check("one-table: ...the per-server tag button",
           'data-action="editServerTags"' in _dash)
     # Split the <head> off first. This check passed while the Tags card was accidentally emitted
@@ -1715,10 +1800,16 @@ try:
     check("palette: ...and is offered NO actions at all",
           _pj2 and all(not (e.get("actions") or []) for e in _pj2),
           str([(e["name"], e.get("actions")) for e in _pj2])[:200])
-    # An un-installed server has nothing to start, even for an admin.
+    # An un-installed server has nothing to start, even for an admin. Guarded, because
+    # `all(... for e in <empty>)` is True: with no un-installed server in the fixture this check
+    # would examine nothing and pass while the filter it tests was gone. The view-only check above
+    # was found vacuous exactly this way.
+    _pj_uninst = [e for e in _pj if not e.get("installed")]
+    check("palette: the fixture HAS an un-installed server, so the next check examines one",
+          len(_pj_uninst) >= 1, "no un-installed entry — the next check would pass vacuously")
     check("palette: an un-installed server carries no verbs",
-          all(not (e.get("actions") or []) for e in _pj if not e.get("installed")),
-          str([(e["name"], e.get("actions")) for e in _pj if not e.get("installed")])[:200])
+          _pj_uninst and all(not (e.get("actions") or []) for e in _pj_uninst),
+          str([(e["name"], e.get("actions")) for e in _pj_uninst])[:200])
     # And the endpoint's answer must agree with the one the ACTION route enforces, or the palette
     # is offering a button that 403s.
     _act_denied = client_as(_viewer_id).post("/api/server/%d/action" % gs_id,
@@ -1813,14 +1904,40 @@ try:
     check("import: empty selection -> 400", imp_empty.status_code == 400)
     # Import validates each entry like a fresh install: a bad username or unknown game is
     # skipped (so an imported short_name can never carry shell metacharacters); a valid one is added.
-    imp = c.post("/api/remote/%d/import" % remote_id, json={"servers": [
-        {"user": "importedcs", "game_type": "csgo", "port": 27015},
-        {"user": "BAD NAME", "game_type": "csgo", "port": 1},
-        {"user": "okuser", "game_type": "notarealgame", "port": 1}]})
-    _im = imp.get_json() or {}
-    check("import: adds the valid server, skips the bad name + unknown game",
-          imp.status_code == 200 and _im.get("added") == ["importedcs"] and len(_im.get("skipped", [])) == 2,
-          "got %s" % _im)
+    # Discovery is stubbed, because import now re-SCANS and accepts only what the scan reports —
+    # see the "root" check below for what that closes.
+    from panel.routes import discover as _imp_mod
+    _imp_orig = _imp_mod.discover_linuxgsm_servers
+    try:
+        _imp_mod.discover_linuxgsm_servers = lambda _s: [
+            {"user": "importedcs", "lgsm_name": "csgoserver", "port": 27015,
+             "backups": 0, "mods": 0, "cron": 0, "autostart": False}]
+        imp = c.post("/api/remote/%d/import" % remote_id, json={"servers": [
+            {"user": "importedcs", "game_type": "csgo", "port": 27015},
+            {"user": "BAD NAME", "game_type": "csgo", "port": 1},
+            {"user": "okuser", "game_type": "notarealgame", "port": 1}]})
+        _im = imp.get_json() or {}
+        check("import: adds the valid server, skips the bad name + unknown game",
+              imp.status_code == 200 and _im.get("added") == ["importedcs"]
+              and len(_im.get("skipped", [])) == 2, "got %s" % _im)
+        # The account name arrives from the CLIENT and INSTANCE_NAME_RE is a Linux-username
+        # grammar, not an allowlist: "root", "ubuntu" and "postgres" all match it. Nothing in the
+        # route contacted the host, so a POST naming any account created a GameServer row for it —
+        # and a whole-host grant makes every GameServer on that host accessible, after which every
+        # game op builds `sudo -u root bash -c ...`. The scan is the authority on what exists.
+        check("import: the fixture's scan does not report root, so the next check means something",
+              "root" not in [r["user"] for r in _imp_mod.discover_linuxgsm_servers(None)],
+              "the stub would have to report root for this to be a real test")
+        imp_root = c.post("/api/remote/%d/import" % remote_id, json={"servers": [
+            {"user": "root", "game_type": "csgo", "port": 27015}]})
+        _imr = imp_root.get_json() or {}
+        check("import: an account the scan never reported is refused, root included",
+              _imr.get("added") == [] and _imr.get("skipped") == ["root"], str(_imr)[:140])
+        with app.app_context():
+            _root_rows = GameServer.query.filter_by(remote_id=remote_id, short_name="root").count()
+        check("import: ...and no row was written for it", _root_rows == 0, "rows=%d" % _root_rows)
+    finally:
+        _imp_mod.discover_linuxgsm_servers = _imp_orig
     imp_denied = client_as(mru_id).post("/api/remote/%d/import" % remote_id,
                                         json={"servers": [{"user": "x", "game_type": "csgo"}]})
     check("import: caller without manage_servers is denied",
@@ -1904,12 +2021,27 @@ try:
           (_rev404.get_json() or {}).get("success") is False
           and "ok" not in (_rev404.get_json() or {}),
           _rev404.get_data(as_text=True)[:120])
-    _lang = s1.get("/set-language/es?ajax=1")
+    # POST, like the switcher in panel.js now sends. The PROFILE write is POST-only: csrf.protect()
+    # is a no-op on safe methods, so as a GET this was a stored state change any cross-site page
+    # could make with <img src=".../set-language/zh">.
+    _lang = s1.post("/set-language/es?ajax=1")
     check("language: the ajax save answers in the standard envelope",
           (_lang.get_json() or {}).get("success") is True
           and "ok" not in (_lang.get_json() or {}),
           _lang.get_data(as_text=True)[:120])
-    s1.get("/set-language/en?ajax=1")   # put it back
+    with app.app_context():
+        check("language: ...and a POST really writes the profile",
+              (User.query.filter_by(username="smoke_admin").first().language or "") == "es",
+              "language=%r" % (User.query.filter_by(username="smoke_admin").first().language,))
+    _lang_get = s1.get("/set-language/fr?ajax=1")
+    check("language: a GET still switches the session", _lang_get.status_code == 200,
+          "status=%d" % _lang_get.status_code)
+    with app.app_context():
+        check("language: ...but a GET does NOT write the profile — CSRF cannot cover a GET",
+              (User.query.filter_by(username="smoke_admin").first().language or "") == "es",
+              "a cross-site <img> would have made this stick: language=%r"
+              % (User.query.filter_by(username="smoke_admin").first().language,))
+    s1.post("/set-language/en?ajax=1")   # put it back
 
     j1 = (s1.get("/api/account/sessions").get_json() or {})
     sess1 = j1.get("sessions", [])
@@ -2323,7 +2455,10 @@ try:
           _home.count("window.escapeHtml = function") == 1)
     import pathlib as _pl_esc
     _tpl_dir = _pl_esc.Path(__file__).resolve().parent.parent / "templates"
-    _failopen = [p.name for p in _tpl_dir.glob("*.html")
+    _esc_tpls = sorted(_tpl_dir.glob("*.html"))
+    check("escaping: the fallback sweep found templates to read", len(_esc_tpls) >= 20,
+          "%d templates — the check below would pass vacuously" % len(_esc_tpls))
+    _failopen = [p.name for p in _esc_tpls
                  if "window.escapeHtml ?" in p.read_text(encoding="utf-8")]
     check("escaping: no template falls back to the raw string", not _failopen, str(_failopen))
 
@@ -2369,8 +2504,17 @@ try:
     check("tags: the chip renders on the row with its name and do-not-translate marker",
           ('class="badge tag-chip" data-tag-id="%d" data-no-i18n' % _tag_id) in _dash_html
           and "production</span>" in _dash_html
-          and 'class="d-block mt-1 srv-tags" data-no-i18n' in _dash_html,
+          and ('id="srv-tags-%d" class="d-block srv-tags" data-no-i18n' % gs_id) in _dash_html,
           "chip markup missing from the rendered dashboard")
+    # ...and the container is there even for a server with NO tags, because that is what
+    # server_tags.js repaints into and what the dashboard's tag filter reads from.
+    c.post("/api/server/%d/tags" % gs_id, json={"tag_ids": []})
+    _untagged_html = c.get("/").get_data(as_text=True)
+    check("tags: the chip container is rendered even when the server has no tags",
+          ('id="srv-tags-%d"' % gs_id) in _untagged_html
+          and ('data-tag-id="%d"' % _tag_id) not in _untagged_html.split('id="srv-tags-%d"' % gs_id)[1][:400],
+          "no container for an untagged server — its first tag could not appear without a reload")
+    c.post("/api/server/%d/tags" % gs_id, json={"tag_ids": [_tag_id]})
     # The muted-tag branch (bell-slash + title) only renders when a MUTED tag is actually assigned.
     c.post("/api/server/%d/tags" % gs_id, json={"tag_ids": [_tag_id, _mute_id]})
     _muted_html = c.get("/").get_data(as_text=True)
@@ -2769,6 +2913,36 @@ try:
                 db.session.rollback()
                 check("migration: a dropped column is restored by _run_light_migrations", False, repr(_e))
 
+    # ── A deleted row must not leave its history for the next row to inherit ──────────────────────
+    # MetricSample and HostSample carry no FK — deliberately, so the ~1/min write stays cheap — and
+    # the docstring called the orphans harmless ("just age out"). They are not: SQLite hands a deleted
+    # row's id to the next INSERT, so for up to 14 days a freshly-installed server whose id was
+    # recycled showed the DELETED server's CPU, RAM and player counts on its history chart. Measured
+    # before the fix: 3 rows survived the delete and the new server's chart returned all three.
+    from panel.db.models import (db as _hs_db, GameServer as _HSGame,                  # noqa: E402
+                                 RemoteServer as _HSRemote, MetricSample as _HSMetric,
+                                 HostSample as _HSHost)
+    with app.app_context():
+        _hs_r = _HSRemote(name="hs-host", host="192.0.2.77", port=22, username="u",
+                          auth_method="key", auth_credential="")
+        _hs_db.session.add(_hs_r); _hs_db.session.commit()
+        _hs_g = _HSGame(name="hs-cod", short_name="hscodserver", game_type="cod", port=28961,
+                        remote_id=_hs_r.id)
+        _hs_db.session.add(_hs_g); _hs_db.session.commit()
+        for _ in range(3):
+            _hs_db.session.add(_HSMetric(server_id=_hs_g.id, cpu=99.0, ram_mb=4096, players=31))
+            _hs_db.session.add(_HSHost(remote_id=_hs_r.id, cpu=97.5, ram_pct=91.0, disk_pct=88.0))
+        _hs_db.session.commit()
+        _hs_gid, _hs_rid = _hs_g.id, _hs_r.id
+        _hs_db.session.delete(_hs_g); _hs_db.session.commit()
+        check("history: deleting a game server clears its metric samples",
+              _hs_db.session.query(_HSMetric).filter_by(server_id=_hs_gid).count() == 0,
+              "%d rows survived" % _hs_db.session.query(_HSMetric).filter_by(server_id=_hs_gid).count())
+        _hs_db.session.delete(_hs_r); _hs_db.session.commit()
+        check("history: deleting a host clears its host samples",
+              _hs_db.session.query(_HSHost).filter_by(remote_id=_hs_rid).count() == 0,
+              "%d rows survived" % _hs_db.session.query(_HSHost).filter_by(remote_id=_hs_rid).count())
+
     # ── Monitor + player-count poller transition logic ────────────────────────────────────────────
     # These background passes drive the admin notifications. create_app() does NOT start the watcher
     # threads, so we run a pass by hand — single-threaded, with the host/SSH helpers stubbed — to
@@ -2873,15 +3047,56 @@ try:
                   _st_inst == "installing", "status=%r" % _st_inst)
             _mon.status = "online"; db.session.commit()
 
+            # ── a scan that could not be READ is not a scan that found nothing ───────────────
+            # _remote_listening_ports returned set() for both, and on a local or Tailscale-SSH
+            # host a timed-out command does not raise — the transport answers ("", "...", -1) — so
+            # one flaky `ss` read arrived at _probe_host as "reachable, nothing listening". The
+            # sweep then declared every server on that host down: an alert each, gs.status written
+            # offline (which the bots and the dashboard then repeated), the one-shot notify-when-
+            # empty falsely fired AND consumed, and a matching "back online" storm 60s later.
+            _reset_mon()
+            _monmod._remote_listening_ports = lambda r: {27100}
+            _rec.clear(); _monmod._monitor_pass()          # baseline: up
+            _monmod._remote_listening_ports = lambda r: None    # the read FAILED
+            _st_blip = _status_after_pass("online")
+            check("monitor: a failed port scan does not fire server_down",
+                  "server_down" not in _rec, "fired: %s" % _rec)
+            check("monitor: ...and does not write the server offline",
+                  _st_blip == "online", "status=%r" % _st_blip)
+            # ...while a scan that really did come back empty still means the server is down.
+            _monmod._remote_listening_ports = lambda r: set()
+            _st_real = _status_after_pass("online")
+            check("monitor: an EMPTY scan still means down, so the guard is not blanket",
+                  _st_real == "offline", "status=%r" % _st_real)
+            _mon.status = "online"; db.session.commit()
+            _monmod._remote_listening_ports = lambda r: {27100}
+
             # A reachable host that stops responding -> remote_unreachable.
             _reset_mon()
             _ps._monitor_state["remotes"].clear()
             _ps._monitor_state["remotes"][_r1_id] = True
+            # Start from True on the ROW as well, or the False below could be the value the
+            # fixture already had and the check would pass with the write deleted.
+            _r1.is_online = True
+            db.session.commit()
             _monmod._host_reachable = lambda r: r.id != _r1_id
             _rec.clear(); _monmod._monitor_pass()
             check("monitor: remote_unreachable fires when a host stops responding",
                   "remote_unreachable" in _rec)
+            # ...and the COLUMN follows, not just this pass's memory. is_online was written only by
+            # host creation (hardcoded True), the manual Test button and a successful bootstrap, so
+            # a host down for days rendered a green "Reachable" badge on the dashboard, the host
+            # cards and the bots' /hosts — all of which branch on this column first.
+            db.session.rollback()
+            db.session.refresh(_r1)
+            check("monitor: ...and writes is_online=False to the host row",
+                  _r1.is_online is False, "is_online=%r" % _r1.is_online)
             _monmod._host_reachable = lambda r: True
+            _rec.clear(); _monmod._monitor_pass()
+            db.session.rollback()
+            db.session.refresh(_r1)
+            check("monitor: ...and back to True when it answers again",
+                  _r1.is_online is True, "is_online=%r" % _r1.is_online)
 
             # gs.status is an INPUT to the poller: _query_server_slots answers a server it believes
             # offline with a confident 0 players and never queries it. The monitor now keeps that
@@ -3298,6 +3513,52 @@ try:
                                          and "\\" not in _loc and "://" not in _loc),
               "Location: %r" % _loc)
         _lc.get("/logout")
+
+    # ── A JSON endpoint must answer JSON, whatever went wrong ─────────────────────────────────
+    # There was no errorhandler anywhere in this project, so an exception in a route came back as
+    # Werkzeug's HTML 500 — and every caller here is `.then(r => r.json())`, which then fails to
+    # parse it. The user sees a generic "failed" instead of the reason and the log fills with
+    # tracebacks that read like the panel is broken. The ordinary trigger is not a bug at all:
+    # run_privileged raises ConnectionError for a host that is down and VerbError for an argument
+    # a verb refuses, and nothing between the ops layer and the browser catches either.
+    #
+    # Driven against a host that cannot be reached (192.0.2.x is TEST-NET-1, and the runner's
+    # egress guard refuses it anyway), and against the paths that must NOT change.
+    _eh_c = app.test_client()
+    _eh_c.post("/login", data={"username": "smoke_admin", "password": "Str0ng!passw0rd"})
+    with app.app_context():
+        _eh_r = RemoteServer(name="eh-down", host="192.0.2.10", port=22, username="u",
+                             auth_method="key", auth_credential="", sudo_enabled=True)
+        db.session.add(_eh_r)
+        db.session.commit()
+        _eh_rid = _eh_r.id
+    _eh_html = []
+    for _p, _b in (("/api/remote/%d/firewall/open" % _eh_rid, {"port": 27015}),
+                   ("/api/remote/%d/reboot" % _eh_rid, {}),
+                   ("/api/remote/%d/run-updates" % _eh_rid, {})):
+        _resp = _eh_c.post(_p, json=_b)
+        if "json" not in (_resp.headers.get("Content-Type") or ""):
+            _eh_html.append("%s -> %s %s" % (_p, _resp.status_code,
+                                             (_resp.headers.get("Content-Type") or "")[:24]))
+    check("errors: a mutating API route answers JSON when the host is unreachable",
+          not _eh_html, "; ".join(_eh_html))
+    # An abort(404) on an API path is the same unparseable body, one status code over.
+    _resp = _eh_c.get("/api/server/99999/history")
+    check("errors: an abort() on an API path answers JSON too",
+          "json" in (_resp.headers.get("Content-Type") or "") and _resp.status_code == 404,
+          "%s %s" % (_resp.status_code, _resp.headers.get("Content-Type")))
+    # ...and a PAGE keeps the plain HTML error it has always had.
+    _resp = _eh_c.get("/no-such-page-at-all")
+    check("errors: a page render still gets the ordinary HTML error",
+          _resp.status_code == 404 and "html" in (_resp.headers.get("Content-Type") or ""),
+          "%s %s" % (_resp.status_code, _resp.headers.get("Content-Type")))
+    # The one status the handler must not reshape: panel.js reads it and X-Auth-Required to
+    # decide the session has expired.
+    _eh_anon = app.test_client()
+    _resp = _eh_anon.get("/api/servers")
+    check("errors: an unauthenticated API call keeps its 401 contract",
+          _resp.status_code in (401, 302), "%s" % _resp.status_code)
+    _eh_c.get("/logout")
     # ...and a genuine same-site destination is still honoured, or the guard is just breaking things.
     _okc = app.test_client()
     _okr = _okc.post("/login?next=/settings",
@@ -4398,9 +4659,14 @@ try:
               any("update started" in (m or "") for m in _lat_markers)
               and any("update finished successfully" in (m or "") for m in _lat_markers),
               "markers=%s" % _lat_markers)
+        # Same vacuity guard: with no console_output captured, all(...) over the empty filter is
+        # True and the room assertion tests nothing.
+        _lat_rooms = [r for (e, p, r) in _lat_seen if e == "console_output"]
+        check("long action: console_output was actually captured, so the room check sees some",
+              len(_lat_rooms) >= 1, "no console_output events — the next check would be vacuous")
         check("long action: the markers go to THIS server's console room only",
-              all(r == "console_%d" % gs_id for (e, p, r) in _lat_seen if e == "console_output"),
-              "rooms=%s" % [r for (e, p, r) in _lat_seen])
+              _lat_rooms and all(r == "console_%d" % gs_id for r in _lat_rooms),
+              "rooms=%s" % _lat_rooms)
 
         # 2. The drain itself: new bytes only. A tail that re-sent its window every tick would
         # fill the console with the same SteamCMD spool over and over.
@@ -4517,6 +4783,104 @@ try:
         _mp_mon._player_counts.pop(91919, None)
         _mp_ps._max_players_cache.pop(91919, None)
 
+    # ── a JSON field of the wrong TYPE is a bad request, not a panel fault ─────────────────────
+    # _json_body guarantees the BODY is a dict and says nothing about the VALUES, so two dozen
+    # handlers read `(body.get(k) or "").strip()` — safe against a missing key, and an
+    # AttributeError on {"command": 5}. Every one answered 500 with "Something went wrong — see
+    # the panel log", which is the panel accusing itself of a bug the caller caused, and which
+    # makes 5xx alerting fire on a malformed request. Driven as a superadmin against every
+    # mutating JSON endpoint the review named, with a NUMBER where a string belongs.
+    _typed = [
+        ("/api/command/%d" % gs_id, {"command": 5}),
+        ("/api/server/%d/action" % gs_id, {"action": 5}),
+        ("/api/servers/bulk-action", {"action": 5, "ids": [gs_id]}),
+        ("/api/server/%d/query-type" % gs_id, {"query_type": 5}),
+        ("/api/server/%d/moderate" % gs_id, {"action": 5}),
+        ("/api/server/%d/alerts" % gs_id, {"values": 5}),
+        ("/api/server/%d/config" % gs_id, {"raw": 5}),
+        ("/api/server/%d/mods" % gs_id, {"action": "install", "mod": 5}),
+        ("/api/tags", {"name": 5}),
+        ("/api/panel/security/block", {"ip": 5}),
+        ("/api/panel/security/whitelist", {"ip": 5, "action": "add"}),
+        ("/api/panel/backup/delete", {"name": 5}),
+        ("/api/panel/backup/full", {"mode": 5}),
+        ("/api/remote/%d/security/block" % remote_id, {"ip": 5}),
+        ("/api/remote/%d/security/unban" % remote_id, {"jail": 5, "ip": 5}),
+        ("/api/remote/%d/pro-service" % remote_id, {"service": 5, "action": 5}),
+        ("/api/remote/%d/tailscale-bootstrap" % remote_id, {"auth_key": 5}),
+        ("/api/tailscale/check-peer", {"host": 5}),
+        ("/api/remote/%d/import" % remote_id, {"servers": [{"user": "u", "game_type": 5}]}),
+        ("/notifications/test", {"channel": 5}),
+    ]
+    _typed_500 = []
+    for _path, _body in _typed:
+        _tr = c.post(_path, json=_body, headers={"X-Requested-With": "XMLHttpRequest"})
+        if _tr.status_code >= 500:
+            _typed_500.append("%s -> %d" % (_path, _tr.status_code))
+    check("typed body: %d endpoints were driven, so this is not an empty sweep" % len(_typed),
+          len(_typed) >= 20, "the list shrank — the check below would prove less")
+    check("typed body: a number where a string belongs never 500s",
+          not _typed_500, "; ".join(_typed_500[:6]))
+
+    # ── Deleting a user kills the invites they minted ──────────────────────────────────────────
+    # authority_intact() resolves the creator with db.session.get(User, created_by_id) and fails
+    # closed when it is gone — "a missing creator fails closed: the row is deleted or the id
+    # dangles". But user.id is a bare INTEGER PRIMARY KEY, so SQLite hands the freed rowid to the
+    # very next account created: the creator is then not missing, it is a DIFFERENT PERSON, and
+    # the check says yes. Offboard an admin, create their replacement, and the dead invite is live
+    # again — for a superadmin invite as soon as that replacement is promoted, which is exactly
+    # what happens in that scenario. manage_users lists it as "Active" throughout.
+    from panel.db.models import Invite as _InvS
+    with app.app_context():
+        _ivu = User(username="smoke_inviter", password_hash=auth.hash_password("Str0ng!passw0rd"),
+                    is_superadmin=True, is_active=True)
+        db.session.add(_ivu)
+        db.session.commit()
+        _ivu_id = _ivu.id
+        _inv_row, _ = _InvS.mint(_ivu, hours=48, superadmin=True)
+        db.session.add(_inv_row)
+        # ...and an audit entry attributed to them, for the AuditLog half of the same delete.
+        db.session.add(_AL(user_id=_ivu_id, username="smoke_inviter", action="login",
+                           target="", detail="", success=True))
+        db.session.commit()
+        _inv_id = _inv_row.id
+        check("invite: it is usable while its creator exists",
+              _inv_row.is_usable and _inv_row.authority_intact(db.session.get(User, _ivu_id)),
+              "the next check would prove nothing otherwise")
+        db.session.delete(db.session.get(User, _ivu_id))
+        db.session.commit()
+        _inv_after = db.session.get(_InvS, _inv_id)
+        check("invite: deleting its creator revokes it", _inv_after.revoked_at is not None,
+              "revoked_at=%r" % _inv_after.revoked_at)
+        check("invite: ...so it is not usable", not _inv_after.is_usable)
+        # And prove the resurrection route really is open: take the recycled id deliberately.
+        _heir = User(id=_ivu_id, username="smoke_replacement",
+                     password_hash=auth.hash_password("Str0ng!passw0rd"),
+                     is_superadmin=True, is_active=True)
+        db.session.add(_heir)
+        db.session.commit()
+        check("invite: the replacement account really does take the freed id",
+              _heir.id == _ivu_id, "id=%d want=%d" % (_heir.id, _ivu_id))
+        check("invite: ...and authority_intact now says YES about a different person",
+              _inv_after.authority_intact(db.session.get(User, _ivu_id)) is True,
+              "if this ever says False the revocation above is no longer what closes the hole")
+        check("invite: ...but the stamped revocation still holds", not _inv_after.is_usable,
+              "a rowid cannot undo revoked_at")
+        # Same delete, the other dangling pointer: AuditLog.user_id is a FK with no cascade, the
+        # app never sets PRAGMA foreign_keys, and the rowid is recycled — so the deleted admin's
+        # entries pointed at their replacement. The entries themselves must SURVIVE (username is
+        # the auditable fact and is meant to outlive the account); only the pointer must not lie.
+        _al_rows = _AL.query.filter_by(username="smoke_inviter").count()
+        check("audit: the deleted user's entries are still there", _al_rows >= 1,
+              "no rows to check — the next check would pass vacuously")
+        check("audit: ...but none of them still points at the recycled id",
+              _AL.query.filter_by(user_id=_ivu_id).count() == 0,
+              "%d row(s) now resolve to smoke_replacement"
+              % _AL.query.filter_by(user_id=_ivu_id).count())
+        db.session.delete(db.session.get(_InvS, _inv_id))
+        db.session.delete(db.session.get(User, _ivu_id))
+        db.session.commit()
+
     # ── Deleting a host forgets everything keyed on its id ─────────────────────────────────────
     # SQLite hands a deleted row's id straight to the next INSERT, and delete_remote is the one
     # route that removes a host — taking its game servers with it, without uninstall_server ever
@@ -4546,6 +4910,33 @@ try:
     _dr_upd(lambda c: c.__setitem__("autoblock_hosts",
                                     sorted(set(c.get("autoblock_hosts") or []) | {_dr_rid})))
     _dr_bk.set_game_schedule(_dr_gid, 3, 2)
+    # ...and a metric sample for that game server. _prune_host_game_samples listens on
+    # RemoteServer's after_delete and deletes by `server_id IN (SELECT id FROM game_server WHERE
+    # remote_id = ...)` — but delete_remote BULK-deletes the game servers first, so by the time it
+    # fires the subquery matches nothing. Both rowids are then recycled and the next server created
+    # serves the deleted one's history on /api/server/<id>/history for the 14-day prune window.
+    from panel.db.models import MetricSample as _dr_MS
+    from panel.core.clock import utcnow as _utcnow_mon
+    with app.app_context():
+        db.session.add(_dr_MS(server_id=_dr_gid, ts=_utcnow_mon(),
+                              cpu=99.0, ram_mb=512, players=7))
+        db.session.commit()
+        _dr_samples_before = _dr_MS.query.filter_by(server_id=_dr_gid).count()
+    check("delete host: the sample fixture armed", _dr_samples_before >= 1,
+          "no MetricSample row — the check after the delete would pass vacuously")
+    # ...and a saved LAYOUT position for both. ui_prefs holds host_order (remote ids) and
+    # server_order ({remote_id: [server id]}), and nothing cleared them — so after the rowid is
+    # recycled a brand-new host or server inherited the deleted one's slot in every user's
+    # dashboard, for every user who had ever reordered.
+    with app.app_context():
+        _dr_u = User.query.filter_by(username="smoke_admin").first()
+        _dr_u.set_ui_pref("host_order", [_dr_rid, 99999])
+        _dr_u.set_ui_pref("server_order", {str(_dr_rid): [_dr_gid]})
+        db.session.commit()
+        _dr_prefs_before = _dr_u.get_ui_prefs()
+    check("delete host: the layout fixture armed",
+          _dr_rid in (_dr_prefs_before.get("host_order") or []),
+          "no saved order — the check after the delete would pass vacuously")
     _dr_fw._specs_cache[_dr_rid] = {"os": "deleted host"}
     _dr_hosts._pro_status_cache[_dr_rid] = (9e18, {"attached": True})
     _dr_core._gamedig_host_cache[_dr_rid] = (9e18, "203.0.113.9")
@@ -4555,6 +4946,15 @@ try:
           and _dr_rid in _dr_fw._specs_cache,
           "autoblock=%s schedules=%s" % (_dr_cfg().get("autoblock_hosts"),
                                          list((_dr_cfg().get("game_schedules") or {}))))
+    # ...and a FAILED install job for that server, exactly as _run_install_job leaves one. This is
+    # the half that is visible to a user: the monitor's sweep prunes it, but only on its next pass,
+    # so until then /api/server/<id>/install-status answers for whatever server takes the freed row
+    # id with the DELETED one's failure. Driven end to end below rather than asserted from the map.
+    from panel.core.panel_state import _install_jobs as _dr_jobs, _install_lock as _dr_jlock
+    with _dr_jlock:
+        _dr_jobs[_dr_gid] = {"status": "failed", "step": 3, "total": 8, "step_name": "Downloading",
+                             "message": "SteamCMD could not log in", "log": ["boom"],
+                             "started": _pt.time(), "updated": _pt.time(), "name": "smoke-delgame"}
     _dr_resp = c.post("/remotes/%d/delete" % _dr_rid, json={"password": "Str0ng!passw0rd"},
                       headers={"X-Requested-With": "XMLHttpRequest"})
     check("delete host: the request succeeds",
@@ -4567,6 +4967,22 @@ try:
     check("delete host: its game server's backup schedule is gone from config too",
           str(_dr_gid) not in (_dr_after.get("game_schedules") or {}),
           "still present: %s" % (list(_dr_after.get("game_schedules") or {}),))
+    with app.app_context():
+        _dr_samples_after = _dr_MS.query.filter_by(server_id=_dr_gid).count()
+    with app.app_context():
+        _dr_prefs_after = User.query.filter_by(username="smoke_admin").first().get_ui_prefs()
+    check("delete host: it is gone from every saved dashboard order",
+          _dr_rid not in (_dr_prefs_after.get("host_order") or [])
+          and str(_dr_rid) not in (_dr_prefs_after.get("server_order") or {}),
+          "still placed: %s / %s" % (_dr_prefs_after.get("host_order"),
+                                     list(_dr_prefs_after.get("server_order") or {})))
+    check("delete host: ...while another user's unrelated entries are left alone",
+          99999 in (_dr_prefs_after.get("host_order") or []),
+          "the sweep removed more than the deleted host: %s" % (_dr_prefs_after.get("host_order"),))
+    check("delete host: its game servers' metric history goes with it",
+          _dr_samples_after == 0,
+          "%d sample(s) left — a recycled server id would serve the deleted one's history"
+          % _dr_samples_after)
     # Named individually, NOT walked off _core._remote_caches: iterating the registry makes this
     # pass vacuously the moment a cache stops being registered — which is the exact regression it
     # is here to catch. (Verified: it passed against an unregistered build before this changed.)
@@ -4576,6 +4992,31 @@ try:
                  if _dr_rid in _m]
     check("delete host: the per-remote SSH caches forgot it",
           not _dr_stale, "still cached by: %s" % ", ".join(_dr_stale))
+    # The row id is now free. Re-create a server — SQLite hands it straight back — and ask the
+    # endpoint about the NEW one. Anything but "none" is the deleted server's job answering.
+    with app.app_context():
+        _dr_r2 = RemoteServer(name="smoke-freshhost", host="127.0.0.1", port=22, username="root",
+                              auth_method="key", auth_credential="")
+        db.session.add(_dr_r2)
+        db.session.flush()
+        _dr_gs2 = GameServer(remote_id=_dr_r2.id, name="smoke-brandnew", short_name="newgameserver",
+                             game_type="gmod", port=27098, installed=True, status="offline")
+        db.session.add(_dr_gs2)
+        db.session.commit()
+        _dr_gid2, _dr_rid2 = _dr_gs2.id, _dr_r2.id
+    _dr_is = c.get("/api/server/%d/install-status" % _dr_gid2).get_json() or {}
+    check("delete host: a server reusing the freed id does NOT inherit its install outcome",
+          _dr_is.get("status") == "none",
+          "id reused=%s, install-status=%r" % (_dr_gid2 == _dr_gid, _dr_is))
+    with app.app_context():                       # tidy up
+        for _m, _i in ((GameServer, _dr_gid2), (RemoteServer, _dr_rid2)):
+            _row = db.session.get(_m, _i)
+            if _row:
+                db.session.delete(_row)
+        db.session.commit()
+    with _dr_jlock:
+        _dr_jobs.pop(_dr_gid, None)
+        _dr_jobs.pop(_dr_gid2, None)
 
     # ── join_console and leave_console must agree on the KEY ────────────────────────────────
     # The viewer registry is what the console poller iterates: an id left in it costs an SSH round
@@ -4778,9 +5219,13 @@ try:
               "now=%r" % _pdj.get("now"))
         # Still not dated per line: an unstamped window is history until the browser knows which of
         # it is new, and dating the whole thing server-side is the mistake this guards against.
+        # ...over lines that exist: an empty window makes all(...) True and the claim empty.
+        _pd_lines = _pdj.get("lines") or []
+        check("console timestamps: the unstamped window came back with lines in it",
+              len(_pd_lines) >= 1, "no lines — the next check would pass vacuously")
         check("console timestamps: ...but an unstamped window stays undated, as history",
-              all(r.get("t") is None for r in (_pdj.get("lines") or [])),
-              "lines=%s" % (_pdj.get("lines"),))
+              _pd_lines and all(r.get("t") is None for r in _pd_lines),
+              "lines=%s" % (_pd_lines,))
     finally:
         _sm_core.run_command = _pd_saved
 
@@ -5365,6 +5810,60 @@ try:
         _g = db.session.get(GameServer, gs_id)
         check("edit server: ...and the stored port is untouched", _g.port == _port_before)
         _g.name = "smoke-cs"          # put the fixture back for the checks that follow
+        db.session.commit()
+
+    # ── An edit that would leave no superadmin must really abort ───────────────────────────────
+    # The guard used to be the LAST thing in edit_user, after the password-reset and 2FA branches —
+    # and log_action() ends in db.session.commit(), so those branches had already committed the
+    # demotion by the time it looked. Its rollback then had nothing to undo: the route answered
+    # "That change would leave no active superadmin — aborted." with zero superadmins left and the
+    # web UI locked for everyone, recoverable only through manage.py.
+    #
+    # Both controls sit in ONE form in manage_users.html, so this is a single ordinary submit.
+    # Driven against a throwaway sole-superadmin so the suite's own fixtures stay intact.
+    with app.app_context():
+        for _u in User.query.filter(User.is_superadmin.is_(True), User.is_active.is_(True)).all():
+            _u.is_active = False            # park the real ones so `sole` really is sole
+        _sole = User(username="smoke_sole", display_name="Sole",
+                     password_hash=auth.hash_password("Str0ng!passw0rd"),
+                     is_superadmin=True, is_active=True)
+        db.session.add(_sole)
+        db.session.commit()
+        _sole_id = _sole.id
+        _parked = [u.id for u in User.query.filter(User.is_superadmin.is_(True),
+                                                   User.is_active.is_(False)).all()]
+    _sc = client_as(_sole_id)
+    _lr = _sc.post("/users/%d/edit" % _sole_id,
+                   data={"username": "smoke_sole", "reset_password": "on"},   # superadmin UNticked
+                   headers={"X-Requested-With": "XMLHttpRequest"})
+    with app.app_context():
+        _left = User.query.filter_by(is_superadmin=True, is_active=True).count()
+        _row = db.session.get(User, _sole_id)
+        check("edit user: an edit that would leave no superadmin really aborts",
+              _left >= 1, "the panel was left with %d active superadmin(s)" % _left)
+        check("edit user: ...and the row is unchanged, not half-committed",
+              _row.is_superadmin and _row.is_active,
+              "is_superadmin=%s is_active=%s" % (_row.is_superadmin, _row.is_active))
+        check("edit user: the refusal is reported as one", _lr.status_code == 400,
+              "got %d" % _lr.status_code)
+    # A junk group id is a refusal, not a 500 — and must not have committed a password reset that
+    # the 500 then prevented anyone from ever seeing.
+    _jr = _sc.post("/users/%d/edit" % _sole_id,
+                   data={"username": "smoke_sole", "is_superadmin": "on", "is_active": "on",
+                         "groups": "abc", "reset_password": "on"},
+                   headers={"X-Requested-With": "XMLHttpRequest"})
+    check("edit user: a non-numeric group id does not 500", _jr.status_code < 500,
+          "got %d" % _jr.status_code)
+    check("edit user: ...and the reset password is actually handed back",
+          bool((_jr.get_json() or {}).get("credential")), _jr.get_data(as_text=True)[:120])
+    with app.app_context():                 # restore the suite's own superadmins
+        for _i in _parked:
+            _u = db.session.get(User, _i)
+            if _u:
+                _u.is_active = True
+        _s = db.session.get(User, _sole_id)
+        if _s:
+            db.session.delete(_s)
         db.session.commit()
 
     # ── Renaming a group onto an existing name is a 400, not a 500 ─────────────────────

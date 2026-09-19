@@ -5,6 +5,7 @@ function tsEsc(s){ return window.escapeHtml(s); }
 // Shared "bring Tailscale up + show the login link" flow. Used both by the first-time
 // install button (not-installed state) and the "Link this machine" button (installed but
 // NeedsLogin/Stopped) so a user who skipped the link step can always get a fresh link.
+var _tsUpPoll = null;   // only one at a time — see the note inside tsUp
 function tsUp(outEl, btn){
   outEl.innerHTML = '<i class="bi bi-arrow-repeat"></i> Starting Tailscale…';
   fetch(MOUNT + '/api/tailscale/up', {method:'POST'}).then(function(r){return r.json();}).then(function(d){
@@ -15,11 +16,26 @@ function tsUp(outEl, btn){
       + '<a href="' + tsEsc(d.auth_url) + '" target="_blank" rel="noopener" style="word-break:break-all;">' + tsEsc(d.auth_url) + '</a>'
       + ' <button type="button" class="btn btn-sm btn-outline-secondary py-0"' + _da('_copyDataU', ['@self']) + ' data-u="' + tsEsc(d.auth_url) + '"><i class="bi bi-clipboard"></i></button><br>'
       + '<strong>2.</strong> <span id="ts-wait"><i class="bi bi-hourglass-split"></i> Waiting for you to authorize…</span></div>';
+    // One live poll, with a deadline. Its only exit was the host reporting running:true, so the
+    // ordinary path — open the link in another tab, come back later, or give up — left it hitting
+    // /api/tailscale every 4s for the life of the page, and every press of the button added
+    // another.
+    if (_tsUpPoll) clearInterval(_tsUpPoll);
+    var _deadline = Date.now() + 5 * 60 * 1000;
     var t = setInterval(function(){
+      if (Date.now() > _deadline) {
+        clearInterval(t); _tsUpPoll = null;
+        var w = document.getElementById('ts-wait');
+        if (w) w.innerHTML = '<span class="text-secondary">Still waiting — press the button again '
+          + 'once you have approved this machine.</span>';
+        return;
+      }
       fetch(MOUNT + '/api/tailscale').then(function(r){return r.json();}).then(function(s){
-        if(s.running){ clearInterval(t); window.refreshSection('#ts-page','wireTsButtons'); }
+        if(s.running){ clearInterval(t); _tsUpPoll = null;
+                       window.refreshSection('#ts-page','wireTsButtons'); }
       }).catch(function(){});
     }, 4000);
+    _tsUpPoll = t;
   }).catch(function(){ outEl.innerHTML = '<span class="text-danger">Request failed.</span>'; if(btn) btn.disabled = false; });
 }
 

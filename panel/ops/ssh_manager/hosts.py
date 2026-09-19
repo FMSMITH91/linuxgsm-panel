@@ -1,5 +1,6 @@
 """SSH connection manager for remote LinuxGSM servers.
 Also supports local execution for running on the panel's own machine."""
+import ipaddress as _ipaddress
 import os
 import re
 import socket
@@ -30,8 +31,10 @@ _NODE_TOOLS_CRON = (
 def ensure_node_tools_cron(server):
     """Idempotently install the weekly root cron that keeps npm + gamedig current on `server`, so the
     panel's player queries don't rot. Best-effort; never raises. Returns True if the write succeeded.
-    The cron file is written under `sudo bash -c` (root) so it lands root-owned regardless of any
-    per-remote linuxgsm_user, and base64-piped so no quoting/`%` can mangle it."""
+    Root-owned: locally the helper does the write itself, and remotely it is `sudo bash -c` with
+    base64 so no quoting or `%` can mangle it. This used to claim it landed root-owned "regardless
+    of any per-remote linuxgsm_user", which was the opposite of what happened — that field turned
+    every sudo=True command into `sudo -u <that user>`, this one included. See _core.run_command."""
     try:
         _out, _err, rc = _core.write_root_file(server, "node-tools-cron", _NODE_TOOLS_CRON, timeout=20)
         return rc == 0
@@ -60,7 +63,11 @@ def _pro_cache_invalidate(server):
 
 
 def pro_status(server, force=False):
-    """Ubuntu Pro attachment/service status for a host (cached ~5 min; pass force=True to refresh)."""
+    """Ubuntu Pro attachment/service status for a host (cached 24h; pass force=True to refresh).
+
+    The TTL was deliberately raised to _PRO_STATUS_TTL — see the note above it — and this said
+    "~5 min" for long enough that someone debugging stale Pro state would look anywhere but here.
+    """
     key = _pro_key(server)
     now = time.time()
     if not force:
@@ -203,6 +210,11 @@ def remote_ufw_open_port(server, port, protocol="tcp", comment=""):
     return False, err or out or "Unknown error"
 
 
+# What ufw accepts after `port`: one port, or a lo:hi range. The verb's own _portspec is the
+# authority; this is the same shape, checked early so the answer is a message and not a 500.
+_UFW_PORT_SPEC_RE = re.compile(r"^[0-9]{1,5}(?::[0-9]{1,5})?\Z")
+
+
 def remote_ufw_allow_from(server, source, port, protocol="tcp", comment="", allow=True):
     """Open a port only FROM one address or network (or remove that rule).
 
@@ -223,6 +235,18 @@ def remote_ufw_allow_from(server, source, port, protocol="tcp", comment="", allo
     spec = str(port or "").strip()
     if not spec:
         return False, "Port required"
+    # Validated HERE, like remote_ufw_open_port's sibling checks. The verb validates too, but it
+    # signals failure by RAISING VerbError — run_privileged does not catch it, nor does the route,
+    # and the project has no Flask errorhandler — so a hostname in the "allow from" box or a
+    # malformed port returned a bare 500 HTML page. The caller's `.then(r => r.json())` then failed
+    # to parse it, so the user saw a generic "Failed" with no reason and the panel log got a
+    # traceback. Same two answers the sibling gives, as (ok, msg).
+    try:
+        _ipaddress.ip_network(src, strict=False)
+    except ValueError:
+        return False, "Source must be an IP address or network (e.g. 10.0.0.0/24)"
+    if not _UFW_PORT_SPEC_RE.match(spec):
+        return False, "Port must be a number or a range like 27015:27020"
     if allow:
         cmt = re.sub(r"[^A-Za-z0-9 _.-]", "", comment or "")[:60]
         verb, vargs = "ufw-allow-from-port", [src, spec, proto, cmt]
@@ -319,8 +343,16 @@ def remote_ufw_allow_game_port(server, port, name="Game"):
     """Open the game server port for BOTH TCP and UDP in ONE UFW rule, tagging the
     rule with the game server's name (its LinuxGSM username) so the firewall list
     shows which server each port belongs to. A bare `ufw allow <port>` covers tcp+udp."""
+    # Range-checked HERE, like every sibling in this module. The verb's _portspec raises
+    # VerbError, run_privileged does not catch it, and there is no route-level handler — so
+    # `POST /api/remote/<id>/game-port/70000/open` came back as a bare HTML 500 that the caller's
+    # .then(r => r.json()) could not parse.
+    try:
+        port = _ufw_port_int(port)
+    except (TypeError, ValueError):
+        return 0, "Invalid port"
     comment = re.sub(r"[^A-Za-z0-9 _.-]", "", name or "Game")[:60] or "Game"
-    out, err, rc = _core.run_privileged(server, "ufw-allow-port", [port, comment], timeout=15)
+    out, err, rc = _core.run_privileged(server, "ufw-allow-port", [str(port), comment], timeout=15)
     ok = rc == 0
     return (1 if ok else 0), f"Port {port}: {'opened (TCP+UDP)' if ok else (err or out or 'failed')}"
 
@@ -382,7 +414,16 @@ _DEPS_CSV_CACHE = {}
 
 
 # Per-distro package lists, keyed by slug — one host may be 22.04 and another 24.04.
-_OS_SLUG_CACHE = {}
+#
+# Registered, and keyed by the remote id alone. It had NO expiry and was not registered, and its
+# key was the tuple ("srv", id) — which forget_remote_caches could not have popped even if it had
+# been. That is the exact shape firewall.py's _specs_cache note describes: delete a remote, add
+# another that takes the same rowid (SQLite reuses them), and deps_for_game loads the DELETED
+# host's distro package list. A Debian 12 box gets ubuntu-22.04.csv; apt-get install is atomic, so
+# one nonexistent package aborts the batch and install_game_dependencies' per-package fallback
+# silently drops the rest. The game server then fails to start on a missing library with nothing
+# in the log pointing at why, for the life of the process.
+_OS_SLUG_CACHE = _core.register_remote_cache({})
 
 
 def host_os_slug(server):
@@ -392,7 +433,7 @@ def host_os_slug(server):
     host: a box does not change release between two package installs, and this would otherwise be
     an extra SSH round trip on every install.
     """
-    key = id(server) if not hasattr(server, "id") else ("srv", getattr(server, "id", None))
+    key = _pro_key(server)
     if key in _OS_SLUG_CACHE:
         return _OS_SLUG_CACHE[key]
     slug = None
@@ -484,8 +525,14 @@ def install_game_dependencies(server, game_type=None, extra=""):
         f"|| for p in {pkgs} ; do DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \"$p\" >/dev/null 2>&1 || true ; done ; "
         "echo deps-done"
     )
-    cmd = f"sudo bash -c {_core._quote(pipeline)}"
-    out, err, rc = _core.run_command(server, cmd, timeout=1200, sudo=False)
+    # sudo=True, not a hand-built `sudo bash -c` with sudo=False — which is what this was, and
+    # which produces the IDENTICAL command while being invisible to all three escalation ratchets:
+    # one counts calls to a function NAMED _sudo_sh, one counts the sudo=True keyword, and one
+    # scans for argv LISTS starting with the literal "sudo". An f-string passed with sudo=False
+    # matches none of them, so SECURITY.md's "0 — the route is gone" was contradicted by the code
+    # and no gate could say so. The two other steps in this module that deliberately keep a shell
+    # (NodeSource, Tailscale) already pass sudo=True and carry a comment saying why.
+    out, err, rc = _core.run_command(server, pipeline, timeout=1200, sudo=True)
     return rc == 0, (out or err)
 
 
@@ -496,7 +543,7 @@ def parse_missing_deps(output):
     deps = []
     for m in re.finditer(r"[Mm]issing dependencies:\s*(.+?)(?:\s+Run:|[\r\n]|$)", text):
         for pkg in m.group(1).split():
-            if re.match(r"^[a-z0-9][a-z0-9+._:-]*$", pkg) and pkg not in deps:
+            if re.match(r"^[a-z0-9][a-z0-9+._:-]*\Z", pkg) and pkg not in deps:
                 deps.append(pkg)
     return deps
 
@@ -619,7 +666,7 @@ def remote_reboot_required(server):
     return {"required": True, "packages": packages}
 
 
-_uptime_cache = {}   # server.id -> (expiry_epoch, dict) — de-dups concurrent viewers of the card
+_uptime_cache = _core.register_remote_cache({})   # server.id -> (expiry, dict), de-dups viewers
 _UPTIME_TTL = 8      # the manage-remotes card polls ~every 15s; this only collapses overlap
 
 
@@ -893,7 +940,7 @@ def remote_bootstrap_vps(server, set_timezone="UTC", enable_ufw=True, install_lg
     # @validates), and it's interpolated into root-run useradd/id/passwd — so validate it to a
     # safe Linux-username charset (must start with a letter/underscore; no shell metacharacters,
     # no leading dash) and refuse anything else rather than let it reach the shell.
-    if username and not re.match(r"^[A-Za-z_][A-Za-z0-9._-]*$", username):
+    if username and not re.match(r"^[A-Za-z_][A-Za-z0-9._-]*\Z", username):
         note(f"Skipped account creation: '{username[:32]}' isn't a valid username")
     elif username:
         emit(f"Creating LinuxGSM user: {username}")
@@ -1117,8 +1164,15 @@ def remote_migrate_to_tailscale(server, new_auth_method="tailscale"):
     status = remote_check_tailscale(server)
     if not status["running"]:
         return None, "Tailscale is not running on the remote"
-    # Prefer MagicDNS name, fall back to Tailscale IP
-    new_host = status["dns_name"] or status["tailscale_ip"].split(", ")[0] if status["tailscale_ip"] else server.host
+    # Prefer MagicDNS name, fall back to Tailscale IP.
+    #
+    # The parentheses are load-bearing. `a or b if c else d` binds as `(a or b) if c else d`, so
+    # without them a node that HAS a MagicDNS name but reports no address returned server.host —
+    # the pre-migration address — while the caller went on to set auth_method="tailscale", blank
+    # the stored SSH credential and force port 22. The record then pointed at the old host with no
+    # way back, and the panel reported "Migrated to Tailscale SSH: <old host>".
+    new_host = status["dns_name"] or (status["tailscale_ip"].split(", ")[0]
+                                      if status["tailscale_ip"] else server.host)
 
     # Safely close port 22 on UFW since tailscale0 is already allowed
     try:
@@ -1182,7 +1236,7 @@ def _valid_ip(s):
     return _canonical_ip(s) is not None
 
 
-_F2B_JAIL_RE = re.compile(r"^[A-Za-z0-9._-]{1,64}$")
+_F2B_JAIL_RE = re.compile(r"^[A-Za-z0-9._-]{1,64}\Z")
 
 
 def remote_fail2ban_overview(server):
@@ -1284,7 +1338,14 @@ def remote_fail2ban_top_ips(server, limit=20, days=7):
     # The remote twin of system_ops.fail2ban_top_ips, which #118 converted. Same split: the verb
     # reads and filters the rotated logs, and the tally — the second awk — is the shared Python.
     from panel.ops import system_ops as _so
-    out, _, _ = _core.run_privileged(server, "f2b-log-lines", [cutoff], timeout=25, merge_stderr=False)
+    # None, not [], when the read FAILED — see system_ops.fail2ban_top_ips for why the two have to
+    # be distinguishable. On a local or Tailscale-SSH host a timeout does not raise: the transport
+    # returns ("", "...timed out", -1), so without the rc this looked exactly like "no offenders".
+    out, _, rc = _core.run_privileged(server, "f2b-log-lines", [cutoff], timeout=25,
+                                      merge_stderr=False)
+    if rc != 0:
+        _core._log.debug("remote top-ips: the fail2ban log read failed (rc=%s)", rc)
+        return None
     out = _so._tally_f2b_lines(out, limit)
     banned = set()
     try:
@@ -1314,9 +1375,11 @@ def remote_fail2ban_top_ips(server, limit=20, days=7):
 
 def remote_fail2ban_unban(server, jail, ip):
     """Lift a fail2ban ban on a REMOTE host (jail + IP validated). (ok, msg)."""
-    # fullmatch, not match: with a "^…$" pattern, .match accepts a TRAILING NEWLINE ("sshd\n"
-    # passes), which the panel-host version rejects. It is shell-quoted below so this was never an
-    # injection, but the two validators disagreeing is exactly what this audit was looking for.
+    # fullmatch, not match: .match anchors only the START, so "sshd; rm -rf /" would pass a
+    # pattern that only says what the FIRST characters may be. (`\Z` rather than `$` is the
+    # separate half of the same question — see the anchor gate in tests/unit/part06.py.) It is
+    # shell-quoted below so this was never an injection, but the panel-host version fullmatches
+    # and two validators disagreeing is exactly what this audit was looking for.
     if not _F2B_JAIL_RE.fullmatch((jail or "").strip()):
         return False, "Invalid jail name."
     jail = jail.strip()
@@ -1484,6 +1547,11 @@ def change_ssh_port(server, new_port, bind_addr=""):
         # Restore the snapshot if we took one, else drop the file, then restart sshd. The prior
         # binding is untouched the whole time, so SSH keeps working.
         _core.run_privileged(server, "sshd-restore-dropin", [], timeout=10, merge_stderr=False)
+        # ...and close the hole step 1 opened. It only restored the drop-in before, so every revert
+        # path left a public ALLOW for a port nothing serves — including the step-3 path, whose
+        # message says "sshd rejected the new config — nothing changed". Best-effort, like the
+        # open: a host without UFW no-ops either way.
+        remote_ufw_close_port(server, new_port, "tcp")
         _core._restart_sshd(server, timeout=20)
         return False, msg
 
@@ -1523,6 +1591,11 @@ def change_ssh_port(server, new_port, bind_addr=""):
                   "close the old one from the Firewall page." % (new_port, where, new_port))
 
 
+# A ufw rule whose To column IS port 22 — the number (with or without /tcp) or the app profile.
+# Anchored: the To column is the first thing on the line.
+_SSH22_RE = re.compile(r"\s*(?:22(?:/tcp)?|OpenSSH)\s", re.I)
+
+
 def remote_public_ssh_status(server, panel_port=None):
     """Report public SSH state on port 22: 'allow', 'limit', or 'off' (no rule —
     reachable only over tailscale0), plus whether UFW is active at all. When
@@ -1536,7 +1609,13 @@ def remote_public_ssh_status(server, panel_port=None):
     port_re = re.compile(r"\b%d\b" % int(panel_port)) if panel_port else None
     for line in (out or "").splitlines():
         low = line.lower()
-        if ("22/tcp" in low or "openssh" in low) and " (v6)" not in low:
+        # ANCHORED to the To column, which is what `ufw status` prints first. `"22/tcp" in low`
+        # is a substring test, and "2222/tcp" contains it — so after the panel's own
+        # change_ssh_port moved sshd to 2222 and the operator closed 22 as the panel told them
+        # to, this still reported port 22 rate-limited, marked that button active-and-disabled,
+        # and never once showed the true `off` state. 8022, 1022 and 22022 read the same way, and
+        # so did a source address ending in .22 once you widen the test to a word boundary.
+        if _SSH22_RE.match(line) and " (v6)" not in low:
             if "limit" in low:
                 mode = "limit"
             elif "allow" in low:
@@ -1647,6 +1726,18 @@ def remote_set_public_ssh(server, mode):
     for verb, vargs in steps:
         _core.run_privileged(server, verb, vargs, timeout=15)  # deletes of absent rules are harmless
     labels = {"allow": "open (allow)", "limit": "rate-limited", "off": "disabled (tailnet-only)"}
+    # ASK THE HOST what it ended up with. This used to return True unconditionally, so on a host
+    # with no ufw at all every verb failed and the operator still got "✓ Public SSH is now disabled
+    # (tailnet-only)", an audit row saying the hardening succeeded, and port 22 open to the
+    # internet. The exit codes cannot answer it either: a delete of an absent rule is a normal
+    # non-zero, which is exactly why they were being ignored.
+    state = remote_public_ssh_status(server)
+    if not state.get("active"):
+        return False, ("UFW is not active on this host, so public SSH cannot be controlled from "
+                       "here — port 22 is governed by whatever else is in front of it.")
+    if state.get("mode") != mode:
+        return False, ("Could not set public SSH to %s — the firewall still reports it as %s."
+                       % (labels[mode], labels.get(state.get("mode"), state.get("mode"))))
     return True, f"Public SSH is now {labels[mode]}"
 
 

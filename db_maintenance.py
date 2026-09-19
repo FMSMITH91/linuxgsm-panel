@@ -138,21 +138,45 @@ def _rebuild_via_recover(src_path, dst_path):
 
 def _rebuild_via_dump(src_path, dst_path):
     """Fallback salvage using Python's iterdump — recovers cleanly readable rows, skipping any
-    statement that hits corruption. Handles lighter damage when the CLI isn't installed."""
+    statement that hits corruption. Handles lighter damage when the CLI isn't installed.
+
+    KEEP WHAT WAS READ. The per-statement guard only wrapped `dst.execute(line)`, and the error a
+    corrupt page raises comes from the `src.iterdump()` GENERATOR — so it escaped that guard,
+    unwound the `with dst:` (rolling the destination back to empty) and was caught by the outer
+    handler as a total failure. Measured on a 169-page database with ONE page corrupted in the
+    middle: 1477 statements were readable and zero were kept, the rebuild came out 0 bytes, and
+    repair() reported "could not repair".
+
+    That is the case this function exists for. The generator is stepped by hand now, so the
+    statements read BEFORE the bad page are committed, and each commit is its own transaction so
+    the rollback cannot take them either. It is still only a salvage: the caller runs an integrity
+    check on the result and refuses to swap in a rebuild that is not healthy."""
     try:
         src = sqlite3.connect(src_path, timeout=15)
         dst = sqlite3.connect(dst_path)
+        kept = 0
         try:
-            with dst:
-                for line in src.iterdump():
-                    try:
-                        dst.execute(line)
-                    except sqlite3.DatabaseError:
-                        # Skip an unrecoverable statement and keep salvaging the rest.
-                        _log.debug("db rebuild: skipped an unrecoverable statement", exc_info=True)
+            lines = src.iterdump()
+            while True:
+                try:
+                    line = next(lines)
+                except StopIteration:
+                    break
+                except sqlite3.DatabaseError:
+                    # The corrupt page. Everything before it is already committed below.
+                    _log.debug("db rebuild: the dump stopped at unreadable data", exc_info=True)
+                    break
+                try:
+                    dst.execute(line)
+                    kept += 1
+                except sqlite3.DatabaseError:
+                    # A statement the destination will not take — skip it and keep salvaging.
+                    _log.debug("db rebuild: skipped an unrecoverable statement", exc_info=True)
+            dst.commit()
         finally:
             src.close()
             dst.close()
+        _log.debug("db rebuild: kept %d statement(s) from the dump", kept)
         return os.path.exists(dst_path) and os.path.getsize(dst_path) > 0
     except sqlite3.DatabaseError:
         return False

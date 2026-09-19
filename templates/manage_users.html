@@ -121,7 +121,7 @@
                 data-no-i18n>{{ inv.expires_at|datetime if inv.expires_at }}</td>
             <td class="d-none d-lg-table-cell text-secondary small">
               {% if inv.grants_superadmin %}<span class="text-warning">Super Administrator</span>
-              {% else %}{{ inv.groups_wanted | length }} group(s){% endif %}
+              {% else %}{{ inv.groups_wanted | length }} {% if inv.groups_wanted | length == 1 %}<span>group</span>{% else %}<span>groups</span>{% endif %}{% endif %}
             </td>
             <td class="text-end">
               {% if inv.state == 'active' and inv.authority_ok %}

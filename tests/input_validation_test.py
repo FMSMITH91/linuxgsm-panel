@@ -38,7 +38,19 @@ if DB_PATH.exists():
     print("SKIP: %s already exists — this suite only runs against a throwaway DB." % DB_PATH)
     sys.exit(0)
 
-_PREEXISTING = {p for p in (SECRET_FILE, CRED_KEY_FILE, CONFIG_FILE) if p.exists()}
+# panel.db.backup is in here, and it is the one that matters. It is not scratch: models.
+# _ensure_db_healthy keeps it as the rolling KNOWN-GOOD copy and restores from it when the live
+# database is corrupt. The cleanup below unlinks it, and "not in _PREEXISTING" was the only thing
+# standing between a developer's data and that unlink — so it was deleted every run.
+#
+# The window is narrow and it is exactly the wrong one: these harnesses refuse to run at all while
+# panel.db EXISTS, so the only state in which they run and the backup is present is "the live
+# database is missing and this copy is the last one left". The WAL/SHM pair is here for the same
+# reason — they hold committed pages the main file may not have yet.
+_PREEXISTING = {p for p in (SECRET_FILE, CRED_KEY_FILE, CONFIG_FILE,
+                            DB_PATH.with_name("panel.db.backup"),
+                            DB_PATH.with_name("panel.db-wal"),
+                            DB_PATH.with_name("panel.db-shm")) if p.exists()}
 # A config that was already there is RESTORED BYTE-FOR-BYTE at the end, not just left in place.
 # This suite has to edit config.json to boot the app (setup_complete, ssh_timeout), and on a
 # developer's tree that file is theirs. Deleting it only when we created it is not enough — the
@@ -320,14 +332,26 @@ try:
     import pathlib
     _root = pathlib.Path(__file__).resolve().parent.parent
     offenders = []
+    _int_or_sites = 0
     for py in sorted((_root / "panel").rglob("*.py")) + [_root / "app.py"]:
         for node in ast.walk(ast.parse(py.read_text(encoding="utf-8"))):
             if not (isinstance(node, ast.Call) and getattr(node.func, "id", "") == "_int_or"):
                 continue
+            _int_or_sites += 1
             # The assignment target's name is what says whether this is a port.
             src = ast.get_source_segment(py.read_text(encoding="utf-8"), node) or ""
             if "port" in src.lower():
                 offenders.append("%s:%d  %s" % (py.relative_to(_root), node.lineno, src[:70]))
+    # ...and a positive control, because the scan matches a hardcoded NAME. Rename _int_or and
+    # every `node.func.id == "_int_or"` stops matching: the loop runs zero times and the gate
+    # reports clean. Proven by renaming it to _intOr across 13 call sites in 4 files — 142/142,
+    # all passing. Counting the call sites makes the rename a failure instead.
+    # >= 1, deliberately: the failure being guarded is ZERO, and a higher floor would just be a
+    # number to maintain every time a call site is legitimately added or removed. (Measured at 4
+    # when this was written.)
+    check("the _int_or scan found call sites at all", _int_or_sites >= 1,
+          "%d call sites — the check below would pass vacuously (was _int_or renamed?)"
+          % _int_or_sites)
     check("no port is parsed with _int_or (the parser without a range)", not offenders,
           "; ".join(offenders))
 

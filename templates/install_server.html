@@ -16,8 +16,12 @@
       The auto-install process runs in the background — check back after a few minutes.
     </p>
     <form id="install-form" method="POST" action="{{ url_for('install_game_server') }}"
-          class="row g-2 align-items-start ajax-form" data-ajax-refresh="#servers-list"
-          data-ajax-after="afterServerRefresh">
+          {# No data-ajax-refresh: #servers-list is rendered by no template — it was the container
+             on the page this form was split out of. refreshSection therefore re-FETCHED this whole
+             page on every successful install (panel.js does fetch(location.href)), found nothing
+             to swap in either document, and threw it away. The form stays an ajax-form so the
+             submit still goes through the wrapper and the user still gets the toast. #}
+          class="row g-2 align-items-start ajax-form">
       <div class="col-md-3">
         <label class="form-label" for="remote-select">Target Server</label>
         {# With ONE host there is nothing to choose: the placeholder is a required field whose
@@ -54,6 +58,11 @@
           Couldn't load LinuxGSM's game list, and there's no cached copy yet.
           <button type="button" class="btn btn-link btn-sm p-0 align-baseline" data-action="refreshGameList" data-args='["@self"]'>Retry</button>
           <span class="d-block text-secondary" style="font-size:.72rem;">The panel fetches it from LinuxGSM's repository; this host may have no outbound access to GitHub.</span>
+          {% if lgsm_status and lgsm_status.reason %}
+          {# The actual failure, not a guess at one: a DNS error, an HTTP 403, a response that was
+             not a CSV and a read-only data/ all end up here looking nothing alike. #}
+          <span class="d-block font-monospace text-secondary" style="font-size:.7rem;" data-no-i18n>{{ lgsm_status.reason }}</span>
+          {% endif %}
         </div>
         {% endif %}
       </div>

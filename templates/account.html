@@ -126,7 +126,7 @@
         </form>
         <hr class="my-3">
         <p class="mb-2"><i class="bi bi-key"></i> <strong>Backup codes</strong>
-          <span class="badge {% if current_user.backup_codes_remaining > 2 %}bg-secondary{% else %}bg-warning text-dark{% endif %} ms-1">{{ current_user.backup_codes_remaining }} left</span>
+          <span class="badge {% if current_user.backup_codes_remaining > 2 %}bg-secondary{% else %}bg-warning text-dark{% endif %} ms-1">{{ current_user.backup_codes_remaining }} <span>left</span></span>
         </p>
         <p class="text-secondary small mb-0">One-time codes to sign in if you lose your authenticator — each works once.
           They were shown only when you enabled 2FA and can't be displayed again. If you've run low or lost them,

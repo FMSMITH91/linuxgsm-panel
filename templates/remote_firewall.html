@@ -179,7 +179,7 @@
     <div class="card">
       <div class="card-header d-flex justify-content-between align-items-center">
         <span><i class="bi bi-list-columns"></i> Open Ports &amp; Rules</span>
-        <span class="small text-secondary" id="rules-count">{{ open_groups|length }} rule{{ '' if open_groups|length == 1 else 's' }}</span>
+        <span class="small text-secondary" id="rules-count">{{ open_groups|length }} {% if open_groups|length == 1 %}<span>rule</span>{% else %}<span>rules</span>{% endif %}</span>
       </div>
       <div class="card-body p-0">
         <div id="rules-list" style="max-height: 500px; overflow: auto;">
@@ -247,7 +247,7 @@
     <div class="card">
       <div class="card-header d-flex justify-content-between align-items-center">
         <span><i class="bi bi-shield-slash"></i> Blocked IPs</span>
-        <span class="small text-secondary" id="blocks-count">{{ block_groups|length }} blocked</span>
+        <span class="small text-secondary" id="blocks-count">{{ block_groups|length }} <span>blocked</span></span>
       </div>
       <div class="card-body">
         <p class="small text-secondary mb-2">

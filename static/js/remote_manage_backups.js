@@ -411,8 +411,9 @@ function restoreBackup(name,encrypted,btn){
       _bkRestore(name, null, btn, encrypted);
     }});
 }
-function _bkRestore(name, passphrase, btn, encrypted){
+function _bkRestore(name, passphrase, btn, encrypted, skipSafety){
   var body={name:name}; if(passphrase) body.passphrase=passphrase;
+  if(skipSafety) body.skip_safety_backup=true;
   return fetch(MOUNT+'/api/panel/backup/restore',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)})
     .then(r=>r.json()).then(function(d){
       if(!d.success && encrypted && /passphrase/i.test(d.message||'')){
@@ -421,10 +422,31 @@ function _bkRestore(name, passphrase, btn, encrypted){
         _bkAskPassphrase(name, btn);
         return;
       }
+      // The pre-restore safety copy could not be written. The server refuses rather than
+      // overwriting the keys with no way back, and this is where the operator says to go ahead —
+      // which is the whole point of refusing: the decision reaches a person, before the fact.
+      if(!d.success && !skipSafety && /safety copy/i.test(d.message||'')){
+        if(btn) btn.disabled=false;
+        bkMsg('','text-secondary');
+        _bkAskSkipSafety(name, passphrase, btn, encrypted, d.message||'');
+        return;
+      }
       bkMsg((d.success?'✓ ':'✗ ')+(d.message||''), d.success?'text-success':'text-danger');
       if(d.success){ setTimeout(function(){ location.reload(); }, 8000); } else if(btn){ btn.disabled=false; }
     })
     .catch(function(){ bkMsg('The panel is restarting — reconnect in a moment.','text-warning'); });
+}
+function _bkAskSkipSafety(name, passphrase, btn, encrypted, why){
+  confirmDialog({title:'No safety copy', icon:'exclamation-triangle',
+    confirmLabel:'Restore anyway', confirmClass:'btn-danger',
+    bodyText:why,
+    onConfirm:function(){
+      // A plain confirmDialog has already closed itself by the time this runs (panel.js) — only
+      // the requirePassword form leaves it open for the caller.
+      if(btn) btn.disabled=true;
+      bkMsg('Restoring…','text-secondary');
+      _bkRestore(name, passphrase, btn, encrypted, true);
+    }});
 }
 function _bkAskPassphrase(name, btn){
   confirmDialog({title:'Passphrase needed', icon:'shield-lock', confirmLabel:'Restore',
@@ -501,7 +523,11 @@ document.addEventListener('click', function(e){
     body:'Uninstall <strong>'+escapeHtml(name)+'</strong>? This permanently deletes the server, all its files, AND every backup it has — this cannot be undone.',
     requireText: short,
     requireLabel:'Type the server’s username ('+short+') to confirm:',
-    onConfirm:function(){ form.submit(); }
+    // form.submit() is a NATIVE post: no fetch wrapper, so no X-CSRFToken header, so the hidden
+    // field is the only token there is — and this list is re-rendered by refreshSection after an
+    // import, which brings back the server's markup without it. Belt as well as braces: panel.js
+    // re-arms after every swap, and this re-arms the one form about to be submitted.
+    onConfirm:function(){ if (window.ensureCsrfFields) window.ensureCsrfFields(form); form.submit(); }
   });
 });
 

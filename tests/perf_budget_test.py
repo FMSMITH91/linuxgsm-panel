@@ -37,7 +37,19 @@ if DB_PATH.exists():
 # data/ dir; the ones that do it safely note the pre-existing files and restore the config they
 # edited. A probe that skipped this step rewrote a real config.json and the loss was not
 # recoverable from the checkout — hence the care here.
-_PREEXISTING = {p for p in (SECRET_FILE, CRED_KEY_FILE, CONFIG_FILE) if p.exists()}
+# panel.db.backup is in here, and it is the one that matters. It is not scratch: models.
+# _ensure_db_healthy keeps it as the rolling KNOWN-GOOD copy and restores from it when the live
+# database is corrupt. The cleanup below unlinks it, and "not in _PREEXISTING" was the only thing
+# standing between a developer's data and that unlink — so it was deleted every run.
+#
+# The window is narrow and it is exactly the wrong one: these harnesses refuse to run at all while
+# panel.db EXISTS, so the only state in which they run and the backup is present is "the live
+# database is missing and this copy is the last one left". The WAL/SHM pair is here for the same
+# reason — they hold committed pages the main file may not have yet.
+_PREEXISTING = {p for p in (SECRET_FILE, CRED_KEY_FILE, CONFIG_FILE,
+                            DB_PATH.with_name("panel.db.backup"),
+                            DB_PATH.with_name("panel.db-wal"),
+                            DB_PATH.with_name("panel.db-shm")) if p.exists()}
 
 # A config that was already on disk is RESTORED BYTE-FOR-BYTE at the end. Every DB-owning suite
 # has to edit config.json to boot the app, and deleting it only when the suite CREATED it is not

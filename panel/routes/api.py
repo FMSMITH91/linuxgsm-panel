@@ -204,7 +204,10 @@ def register(app):
         def _scan(item):
             remote, gslist = item
             try:
-                return gslist, remote, _remote_listening_ports(remote)
+                # `or set()`: the scanner answers None for a failed read. Here that is the
+                # same as 'nothing listening' — this endpoint reports per-server status and a
+                # blip already shows as offline; it is the MONITOR that must not alert on it.
+                return gslist, remote, (_remote_listening_ports(remote) or set())
             except Exception:
                 _log.debug("api_servers: port scan failed", exc_info=True)
                 return gslist, remote, None
@@ -434,7 +437,15 @@ def register(app):
     @login_required
     @server_access_required
     def api_server_install_dismiss(server_id):
-        """Clear a finished install job so its progress card goes away."""
+        """Clear a finished install job so its progress card goes away.
+
+        The same permission that owns installs, because _install_jobs is SHARED: popping the job
+        clears the progress (or failure) card for every session watching that install, not just
+        the caller's. @server_access_required alone let anyone who could see the server do it."""
+        if not (current_user.is_superadmin
+                or has_permission(current_user, INSTALL_SERVER)
+                or has_permission(current_user, MANAGE_SERVERS)):
+            return jsonify({"success": False, "message": "Permission denied"}), 403
         with _install_lock:
             j = _install_jobs.get(server_id)
             if j and j["status"] in ("done", "failed"):

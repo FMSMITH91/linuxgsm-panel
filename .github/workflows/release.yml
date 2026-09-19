@@ -54,5 +54,12 @@ jobs:
           # Changelog: commits since the previous tag (or all history for the first).
           PREV="$(git describe --tags --abbrev=0 "$V^" 2>/dev/null || true)"
           if [ -n "$PREV" ]; then RANGE="$PREV..$V"; else RANGE="$V"; fi
-          NOTES="$(git log --no-merges --pretty='- %s' "$RANGE" | head -40)"
+          # `-n 40`, NOT `| head -40`. Under `set -euo pipefail`, head closing the pipe kills
+          # git with SIGPIPE and the step exits 141 — and by this line `git push origin "$V"` has
+          # ALREADY run, so the tag exists on the remote with no Release created. Re-running then
+          # hits the "already tagged — nothing to release" branch above and exits 0, so the run
+          # goes green with the release permanently missing. Reproduced: with more than 40 commits
+          # in the range the outer shell returns 141. The first stable release takes this path,
+          # because with no previous tag RANGE is the whole history.
+          NOTES="$(git log --no-merges -n 40 --pretty='- %s' "$RANGE")"
           gh release create "$V" --title "$V" --notes "${NOTES:-Release $V}"

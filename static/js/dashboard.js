@@ -85,6 +85,17 @@ function refreshStatus() {
       if (oc) oc.innerHTML = '<span class="status-dot status-online"></span> ' + online;  // nosemgrep
       if (fc) fc.innerHTML = '<span class="status-dot status-offline"></span> ' + offline;  // nosemgrep
       if (tc) tc.textContent = data.length;
+      // The "+N installing or failed" line under Offline. It was rendered once by the template
+      // and never touched again, so as servers finished installing the three tiles above moved to
+      // agree while this one kept claiming the old count — the tile contradicting its own
+      // arithmetic, which is the confusion the comment beside it says it exists to prevent.
+      // Hidden rather than removed when it reaches zero, so it can come back without a reload.
+      var other = data.length - online - offline;
+      var oo = document.getElementById('offline-other');
+      if (oo) {
+        oo.textContent = '+' + other + ' installing or failed';
+        oo.hidden = other <= 0;
+      }
       // Total online / total capacity = sums of the known per-server values (unknowns excluded).
       var totalPlayers = data.reduce(function(a, s){ return a + (typeof s.players === 'number' ? s.players : 0); }, 0);
       var totalMax = data.reduce(function(a, s){ return a + (typeof s.max_players === 'number' ? s.max_players : 0); }, 0);
@@ -327,6 +338,20 @@ window.hidePanel = function(btn){
 // Restoring needs the panel's markup back, which only the server has — so save first, then reload
 // once the save is acknowledged. Reloading before it lands would resurrect the old layout.
 window.showPanel = function(region, key, btn){
+  // Declare the key before saving, or the server puts it straight back in `hidden`. collectPanels
+  // builds the payload FROM THE DOM: once the restore chip is removed the key is in neither
+  // `panels` nor `hidden`, so it is not in `declared` either — and the endpoint's merge rule is to
+  // keep every stored key the page did not declare, precisely so one page cannot erase another
+  // page's layout. So the unhide saved a payload that read as "this page knows nothing about
+  // 'offline'", the server kept it hidden, and the reload rendered it hidden again. Verified by
+  // feeding the real payload through the real merge: the key comes back in `hidden` every time.
+  // A placeholder node is enough — the reload replaces the region wholesale.
+  var reg = document.querySelector('[data-region="' + region + '"]');
+  if (reg){
+    var ph = document.createElement('div');
+    ph.setAttribute('data-panel', key);
+    reg.appendChild(ph);
+  }
   btn.remove();
   saveHostOrder(function(){ location.reload(); });
 };
