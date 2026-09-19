@@ -1183,6 +1183,59 @@ try:
     check("stat_upload_targets: a traversal attempt returns None, not a listing",
           _sm_files.stat_upload_targets(_FakeSrv(), "u", "../../etc", ["passwd"]) is None)
 
+    # ── the CONFIG/MODS half of files.py validates its idents too ──────────────────────────────
+    # _safe_abspath rejects an unsafe `user` for the eight PATH-taking functions; seven builders
+    # beside them interpolated `user` into `sudo -u {user}` and `/home/{user}`, and `selfname`
+    # into the bash -c script BODY, with nothing in front of them. `user` lands in the OUTER
+    # shell — before sudo, as the PANEL user. Demonstrated with "x; id > /tmp/pwned; #", which
+    # produced `sudo -u x; id > /tmp/pwned; # bash -c ...`. Not reachable from a request today
+    # (every caller passes gs.short_name / gs.lgsm_name, pinned on assignment), which is exactly
+    # the residual the note above _SAFE_UNIX_USER_RE describes.
+    _hostile = "x; id > /tmp/pwned; #"
+    _reached = []
+    _sm_core.run_command = lambda s, c, **k: (_reached.append(c), ("", "", 0))[1]
+    _sm_files.lgsm_read_config(_FakeSrv(), _hostile, "codserver")
+    _sm_files.lgsm_get_values(_FakeSrv(), _hostile, "codserver", ["a"])
+    _sm_files.lgsm_write_config(_FakeSrv(), _hostile, "codserver", {"a": "b"})
+    _sm_files.lgsm_game_config(_FakeSrv(), "codserver", _hostile)
+    _sm_files.mods_available(_FakeSrv(), _hostile, "codserver")
+    _sm_files.mods_installed(_FakeSrv(), "codserver", _hostile)
+    _sm_files.mods_action(_FakeSrv(), _hostile, "codserver", "install", "sourcemod")
+    check("shell idents: a hostile account/script name reaches no shell at all",
+          not _reached, str(_reached)[:200])
+    # ...and the guard is not a blanket refusal: a legitimate name still builds its command.
+    _reached.clear()
+    _sm_files.lgsm_read_config(_FakeSrv(), "codserver", "codserver")
+    check("shell idents: ...while a legitimate name still runs",
+          len(_reached) == 1 and "sudo -u codserver" in _reached[0], str(_reached)[:120])
+
+    # ── the editor must get the file's bytes, not a stripped copy ──────────────────────────────
+    # Both transports strip: _core._finish returns (out or "").strip() and the paramiko branch
+    # does out.strip(). read_file returned run_command's stdout unchanged, so the editor was handed
+    # a file with its leading blank lines and its trailing newline removed — and write_file wrote
+    # that back verbatim. Open any config, press Save without typing, and the file loses its
+    # trailing newline; stream_path does NOT strip, so download and edit disagreed about the same
+    # file. Driven through the real function with a transport that strips exactly as the real one
+    # does, so the framing is what is under test and not the stub.
+    _ORIG_BODY = "\n\n-- header\nlocal x = 1\n\n\n"
+    _sm_core.run_command = lambda s, c, **k: (
+        ("%s%s%s" % (_sm_files._READ_BEGIN, _ORIG_BODY, _sm_files._READ_END)).strip(), "", 0)
+    _rf_body, _rf_err = _sm_files.read_file(_FakeSrv(), "csgoserver", "cfg/server.cfg")
+    eq("read_file: the file's bytes survive the transport's strip", _rf_body, _ORIG_BODY)
+    check("read_file: ...with no error", _rf_err is None, repr(_rf_err))
+    # ...and the markers the script really does emit are still recognised.
+    for _mark, _want in (("__NOFILE__", "File not found"),
+                         ("__TOOBIG__", "File is too large to edit in the browser"),
+                         ("__BINARY__", "Binary file — download/replace via upload instead")):
+        _sm_core.run_command = lambda s, c, _m=_mark, **k: (_m, "", 0)
+        eq("read_file: %s is still reported" % _mark,
+           _sm_files.read_file(_FakeSrv(), "csgoserver", "cfg/server.cfg")[1], _want)
+    # An unframed body (an older host, or a script that never reached `cat`) falls back rather
+    # than returning nothing.
+    _sm_core.run_command = lambda s, c, **k: ("plain contents", "", 0)
+    eq("read_file: an unframed body still comes through",
+       _sm_files.read_file(_FakeSrv(), "csgoserver", "cfg/server.cfg")[0], "plain contents")
+
     # The host-side symlink guard. _safe_abspath is lexical and cannot see a symlink planted under
     # the game user's home, so every file operation now carries a realpath check that runs WHERE
     # THE PATH IS. Assert the guard is actually attached and that its sentinel is honoured.

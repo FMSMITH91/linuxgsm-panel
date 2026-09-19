@@ -830,6 +830,10 @@ def discover_linuxgsm_servers(server):
     return found
 
 
+# Same charset files._SAFE_UNIX_USER_RE enforces, and for the same reason it gives.
+_SAFE_GAME_IDENT = re.compile(r"^[A-Za-z0-9_][A-Za-z0-9._-]{0,63}\Z")
+
+
 def run_as_game_user(server, user, action_cmd, timeout=30, selfname=None):
     """Run a LinuxGSM command as the instance's Ubuntu user, from its home dir.
     `user` is the (possibly custom) account name; `selfname` is the LinuxGSM script
@@ -837,9 +841,18 @@ def run_as_game_user(server, user, action_cmd, timeout=30, selfname=None):
     given a custom name: only the user is renamed, the script stays canonical.
     Defaults selfname to user for standard installs."""
     selfname = selfname or user
+    # Validated HERE, at the one choke point every mods_* call goes through. files.py explains at
+    # length why the model's @validates hook is not enough: it fires on ASSIGNMENT and never on a
+    # row loaded from the database, so a row written before the validator existed, or restored
+    # from a tampered backup, reaches this code unchecked. `user` is interpolated ahead of `sudo`,
+    # so it breaks out as the PANEL user, and `selfname` lands inside the bash -c script body.
+    # Demonstrated: user="x; id > /tmp/pwned; #" produced `sudo -u x; id > /tmp/pwned; # bash -c`.
+    if not (_SAFE_GAME_IDENT.match(user or "") and _SAFE_GAME_IDENT.match(selfname or "")):
+        _log.warning("refusing to run as an unsafe account/script name")
+        return "", "invalid account or script name", 1
     # TERM=xterm avoids LinuxGSM's `tput: unknown terminal "unknown"` noise.
-    inner = f"cd /home/{user} && TERM=xterm ./{selfname} {action_cmd}"
-    cmd = f"sudo -u {user} bash -c {_quote(inner)}"
+    inner = f"cd /home/{_quote(user)} && TERM=xterm ./{_quote(selfname)} {action_cmd}"
+    cmd = f"sudo -u {_quote(user)} bash -c {_quote(inner)}"
     # The command self-escalates via `sudo -u`, so don't double-wrap with sudo.
     return run_command(server, cmd, timeout=timeout, sudo=False)
 
