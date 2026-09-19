@@ -1,20 +1,54 @@
 """Boot a throwaway panel for Lighthouse CI.
 
-Marks setup complete (so /login renders instead of redirecting to /setup), creates
-a minimal admin, and serves plain HTTP on 127.0.0.1:5000 so headless Chrome in CI
-can reach it. Refuses to run if a real database already exists — like the smoke
-test, it only ever touches a fresh, throwaway data dir.
+Marks setup complete (so /login renders instead of redirecting to /setup), creates a minimal
+admin, and serves plain HTTP on 127.0.0.1:5000 so headless Chrome in CI can reach it.
+
+IT WRITES THE REAL data/ DIRECTORY, and the guard below is only that no database exists yet. On a
+CI runner that is a fresh checkout and the distinction does not arise; run it on a developer
+machine to debug the Lighthouse config and it used to permanently flip setup_complete in their
+config.json and leave a live superadmin — with a password published in this file — sitting in a
+panel.db the panel will happily boot from, since the repo root IS the install layout.
+
+Every sibling harness snapshots config.json and restores it (perf_bench, perf_budget_test,
+manage_test). This one does the same now, and removes only what it created.
 """
 import os
 import sys
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from panel.core.config import DB_PATH, load_config, save_config
+import atexit
+
+from panel.core.config import (CONFIG_FILE, CRED_KEY_FILE, DB_PATH, SECRET_FILE,
+                               load_config, save_config)
 
 if DB_PATH.exists():
     print("refusing: a real database exists at %s" % DB_PATH)
     sys.exit(1)
+
+# What was already here BEFORE this script touched anything, so cleanup removes only what it
+# created and restores what it edited. Byte-for-byte for config.json: leaving setup_complete=True
+# behind in a developer's own config is not "a leftover file", it is a changed install.
+_PREEXISTING = {p for p in (SECRET_FILE, CRED_KEY_FILE, CONFIG_FILE) if p.exists()}
+_CONFIG_SNAPSHOT = CONFIG_FILE.read_bytes() if CONFIG_FILE in _PREEXISTING else None
+
+
+@atexit.register
+def _cleanup():
+    if _CONFIG_SNAPSHOT is not None:
+        try:
+            CONFIG_FILE.write_bytes(_CONFIG_SNAPSHOT)
+        except OSError:
+            pass
+    for _p in (DB_PATH, DB_PATH.with_name("panel.db-wal"), DB_PATH.with_name("panel.db-shm"),
+               SECRET_FILE, CRED_KEY_FILE, CONFIG_FILE):
+        if _p in _PREEXISTING or not _p.exists():
+            continue
+        try:
+            _p.unlink()
+        except OSError:
+            pass
+
 
 # is_setup_complete() needs this flag AND a SetupState row (added below), or every
 # page — including /login — funnels into the setup wizard.
