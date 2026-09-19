@@ -246,6 +246,22 @@ def _kill_process_tree(p):
         pass
 
 
+def _already_escalated(cmd):
+    """True when `cmd` carries its own escalation, so `sudo bash -c` must not wrap it again.
+
+    A named function rather than an inline condition because it cannot be reached from a test
+    otherwise: tools/nosudo_runner replaces _run_local wholesale and blocks anything with
+    sudo=True before the real body runs, so the branch this decides is invisible to the suite.
+
+    It used to be `cmd.strip().startswith("sudo") or "sudo -u" in cmd`, and that second half was a
+    SUBSTRING match over the whole command. Any command that merely MENTIONED `sudo -u` — inside a
+    quoted argument, a grep pattern, a config line being written — skipped the wrap and ran
+    UNPRIVILEGED, which for a caller that asked for root is a silent failure rather than an error.
+    A caller that builds its own escalation passes sudo=False and never arrives here, so only the
+    leading form is a real "already escalated"."""
+    return cmd.strip().startswith("sudo ")
+
+
 def _run_local(cmd, timeout=30, sudo=False):
     """Run a command locally on the panel's own machine.
     If the command already uses privilege escalation, don't double-wrap.
@@ -258,9 +274,17 @@ def _run_local(cmd, timeout=30, sudo=False):
     that bug and keeps the event hub from blocking on long commands."""
     if not sudo:
         full_cmd = cmd
-    elif cmd.strip().startswith("sudo") or "sudo -u" in cmd:
+    elif _already_escalated(cmd):
         full_cmd = cmd  # already escalated
     else:
+        # The test above used to be `startswith("sudo") or "sudo -u" in cmd`, and the second half
+        # was a SUBSTRING match against the whole command. Any command that merely mentioned
+        # `sudo -u` — inside a quoted argument, a grep pattern, a config line being written —
+        # skipped the wrap and ran UNPRIVILEGED, which for a caller that asked for root is a
+        # silent failure rather than an error. Nothing reaches it today (every caller that builds
+        # its own `sudo -u` passes sudo=False, which never gets here), so this is a landmine
+        # removed rather than a bug fixed — but it is exactly the kind that goes off years later.
+        #
         # Wrap the WHOLE command in `sudo bash -c` (like the remote path) so pipes and
         # redirects run under root too. `sudo {cmd}` would only elevate the first command
         # in a pipe — e.g. `sudo yes | ufw delete N` runs ufw as the panel user ("need to

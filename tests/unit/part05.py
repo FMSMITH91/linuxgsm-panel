@@ -3454,3 +3454,39 @@ check("access gate: a route WITH server_id still decorates",
       callable(_sar(lambda server_id: None)))
 check("access gate: a route WITHOUT server_id is refused at import, not at request time",
       _ufw_raises(lambda: _sar(lambda gs_id: None)))
+
+# ── `sudo -u` mentioned anywhere used to mean "already escalated" ──────────────────────────────
+# The test was `cmd.strip().startswith("sudo") or "sudo -u" in cmd` — a SUBSTRING match over the
+# whole command. Any command merely MENTIONING `sudo -u` (a quoted argument, a grep pattern, a
+# config line being written) skipped the root wrap and ran unprivileged: for a caller that asked
+# for root, a silent failure rather than an error.
+#
+# Driven through the extracted decision, not through _run_local: tools/nosudo_runner replaces
+# _run_local wholesale and blocks sudo=True before the real body runs, so the branch is invisible
+# from the suite. A first attempt at this test captured nothing for exactly that reason and read
+# like a broken fix.
+for _c, _want, _why in (
+        ("grep -F 'sudo -u' /etc/sudoers.d/linuxgsm-panel", False, "merely MENTIONS it"),
+        ('echo "sudo -u someone" > /tmp/x', False, "writes that text into a file"),
+        ("awk '/sudo -u/ {print}' /var/log/auth.log", False, "matches it as a pattern"),
+        ("sudo -u gmodserver bash -c 'id'", True, "genuinely starts with sudo"),
+        ("sudo ufw status", True, "...and so does a plain sudo command"),
+        ("  sudo ufw status", True, "...even indented"),
+        ("sudoedit /etc/hosts", False, "sudoedit is a different program, not an escalation"),
+        ("echo hi", False, "an ordinary command")):
+    check("already_escalated(%s): %s" % (_why, _want),
+          _sm_core._already_escalated(_c) is _want, repr(_c)[:56])
+# ...and _run_local must actually CONSULT it. Nothing can observe that at runtime — nosudo_runner
+# replaces _run_local wholesale — so this reads the AST: a real Call node inside that function, not
+# a substring that a comment mentioning the name would satisfy.
+_alr_src = open(os.path.join(_root, "panel", "ops", "ssh_manager", "_core.py"),
+                encoding="utf-8").read()
+_alr_fn = next((n for n in _smg_ast.walk(_smg_ast.parse(_alr_src))
+                if isinstance(n, _smg_ast.FunctionDef) and n.name == "_run_local"), None)
+check("already_escalated: _run_local was located for the gate", _alr_fn is not None)
+check("already_escalated: ...and it calls the decision rather than inlining one",
+      _alr_fn is not None and any(
+          isinstance(c, _smg_ast.Call)
+          and getattr(c.func, "id", getattr(c.func, "attr", "")) == "_already_escalated"
+          for c in _smg_ast.walk(_alr_fn)),
+      "no _already_escalated() call inside _run_local")
