@@ -1419,3 +1419,60 @@ try:
           _wire == ["whoami"], str(_wire))
 finally:
     _sm_core.get_connection = _o_conn
+
+
+# ── the repo URL the panel links to is DERIVED from the checkout's origin ───────────────────────
+# The sidebar footer links "LinuxGSM Panel" to the repo and the running commit SHA to that exact
+# commit, so "what is actually deployed" is one click. Both come from github_repo_url(), which
+# reads remote.origin.url for the same reason the "report an issue" link already did: somebody
+# running a fork must be sent to THEIR repo, not to upstream. _github_issues_url() is built on it
+# now rather than repeating the regex, so the two can never disagree about which repo this is.
+_orig_git_ru = _so._git
+try:
+    _ru_out = {"v": ("https://github.com/someone/their-fork.git", "", 0)}
+    _so._git = lambda *a, **k: _ru_out["v"]
+
+    check("repo url: derived from the checkout's own origin",
+          _so.github_repo_url() == "https://github.com/someone/their-fork",
+          _so.github_repo_url())
+    check("repo url: ...and the issues link is built from it, not a second regex",
+          _so._github_issues_url() == "https://github.com/someone/their-fork/issues/new",
+          _so._github_issues_url())
+    # A commit link is repo + "/commit/<sha>", so a trailing slash would produce a double slash.
+    check("repo url: no trailing slash, so callers can append a path",
+          not _so.github_repo_url().endswith("/"), _so.github_repo_url())
+
+    _ru_out["v"] = ("git@github.com:someone/their-fork.git", "", 0)
+    check("repo url: an SSH remote resolves to the same web URL",
+          _so.github_repo_url() == "https://github.com/someone/their-fork",
+          _so.github_repo_url())
+
+    # Not GitHub, no remote, and a failed git call must all fall back rather than build nonsense.
+    for _desc, _val in (("a non-GitHub remote", ("https://gitlab.com/x/y.git", "", 0)),
+                        ("no remote configured", ("", "", 1)),
+                        ("git itself failing", ("", "fatal: not a git repository", 128))):
+        _ru_out["v"] = _val
+        check("repo url: %s falls back to the canonical repo" % _desc,
+              _so.github_repo_url() == _so._CANONICAL_REPO, _so.github_repo_url())
+
+    def _ru_boom(*a, **k):
+        raise OSError("git exploded")
+    _so._git = _ru_boom
+    check("repo url: an exception falls back too, rather than propagating into a render",
+          _so.github_repo_url() == _so._CANONICAL_REPO, _so.github_repo_url())
+finally:
+    _so._git = _orig_git_ru
+
+# The footer is the only place this is surfaced, so assert the template actually uses it — a
+# context value nothing renders is the shape [[template-reads-a-name-the-route-never-passed]]
+# warns about, in reverse.
+_base_html = open(os.path.join(_root, "templates", "base.html"), encoding="utf-8").read()
+check("repo url: base.html links the panel name at it",
+      'href="{{ panel_repo_url }}"' in _base_html)
+check("repo url: ...and the commit SHA at that exact commit",
+      'href="{{ panel_repo_url }}/commit/{{ panel_commit }}"' in _base_html)
+check("repo url: ...and both open in a new tab without leaking the referrer",
+      _base_html.count('rel="noopener noreferrer"') >= 2,
+      "%d occurrences" % _base_html.count('rel="noopener noreferrer"'))
+check("repo url: ...and a checkout with no resolvable repo still renders the name",
+      "{% else %}LinuxGSM Panel{% endif %}" in _base_html)
