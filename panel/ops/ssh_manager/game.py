@@ -441,7 +441,7 @@ def ensure_persistent_bans(server, user, selfname):
         raw = (files.lgsm_get_values(server, user, selfname, ["servercfg"]).get("servercfg") or "").strip()
         fname = (raw.replace("${selfname}", selfname).replace("$selfname", selfname)
                  or "%s.cfg" % selfname)
-        if not re.match(r"^[A-Za-z0-9_.-]+\.cfg$", fname):     # guard the value going into `find`
+        if not re.match(r"^[A-Za-z0-9_.-]+\.cfg\Z", fname):     # guard the value going into `find`
             fname = "%s.cfg" % selfname
         inner = (
             f"F=$(find ~/serverfiles -maxdepth 4 -path '*/cfg/{fname}' 2>/dev/null | head -1); "

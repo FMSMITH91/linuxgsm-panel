@@ -543,7 +543,7 @@ def parse_missing_deps(output):
     deps = []
     for m in re.finditer(r"[Mm]issing dependencies:\s*(.+?)(?:\s+Run:|[\r\n]|$)", text):
         for pkg in m.group(1).split():
-            if re.match(r"^[a-z0-9][a-z0-9+._:-]*$", pkg) and pkg not in deps:
+            if re.match(r"^[a-z0-9][a-z0-9+._:-]*\Z", pkg) and pkg not in deps:
                 deps.append(pkg)
     return deps
 

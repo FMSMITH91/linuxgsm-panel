@@ -619,10 +619,19 @@ finally:
 from panel.ops import tailscale_integration as TS
 
 for _h in ("100.64.0.1", "100.115.92.7", "fd7a:115c:a1e0::1",
-           "ns106051.taile87e07.ts.net", "box.tail1234.ts.net", "host.taile87e07.example"):
+           "ns106051.taile87e07.ts.net", "box.tail1234.ts.net",
+           "BOX.TAILE87E07.TS.NET"):     # MagicDNS names are case-insensitive
     check("tailnet: %r is recognised" % _h, TS.is_tailscale_ip(_h) is True)
+# The near-misses. The first three used to answer True: `".taile" in host` is an UNANCHORED
+# substring anywhere in the string, and `host.startswith("100.")` is a string prefix rather than
+# a range — so a domain somebody else controls was reported as being on the tailnet, and so was
+# 100.0.0.1, which is a PUBLIC address outside Tailscale's 100.64.0.0/10 CGNAT block.
+# "host.taile87e07.example" was in the recognised list above and should never have been: a
+# MagicDNS name always ends .ts.net.
 for _h in ("10.0.0.1", "192.168.1.5", "1.100.0.1", "203.0.113.9", "example.ts.net.evil.com",
-           "fd7b:115c::1", "", None, "100abc.example.com"):
+           "fd7b:115c::1", "", None, "100abc.example.com",
+           "host.taile87e07.example", "evil.tailed-hosting.example",
+           "100.telemetry.example.com", "100.0.0.1", "100.128.0.1"):
     check("tailnet: %r is NOT taken for a tailnet address" % (_h,), TS.is_tailscale_ip(_h) is False)
 
 # get_magic_url: the port is omitted for the standard ones and appended otherwise, and there is no

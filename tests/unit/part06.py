@@ -2700,3 +2700,54 @@ for _f in sorted(_anc_glob.glob(os.path.join(_root, "panel", "**", "*.py"), recu
 check("regex anchors: every $-anchored pattern is classified as a validator or a line parser",
       not _anc_unclassified,
       "unclassified (decide, then add to the list in this test): %s" % _anc_unclassified[:5])
+
+# ── the same question for an INLINE re.match/fullmatch/search ─────────────────────────────────
+# The sweep above walks module-level `X = re.compile(...)` assignments, which is a shape an
+# inline `re.match(r"^...$", value)` does not have — so it could not see notifications.py's ntfy
+# token check, which said in its own comment that it was there so "a pasted value carrying a
+# newline can never split the header" and then used `$`, the one anchor that matches before a
+# trailing newline. Exactly the class the sweep exists to prevent, in the blind spot it left.
+# Listed rather than banned: an inline `$` is fine in a LINE parser (the string being matched is
+# already one line); what must not happen is a new one appearing without somebody deciding which
+# it is.
+# Keyed on the PATTERN, not on a line number, so moving the code does not silently re-allow it.
+# Each of these is handed one line that has already been split off, so there is no trailing
+# newline for `$` to be lenient about — which is the whole difference between a line parser and a
+# validator. The six that were VALIDATORS by that test now use \\Z: two IP-shape checks on values
+# read off a remote host, a LinuxGSM config key, a .cfg filename going into `find`, an apt package
+# name, and a mod id.
+_INLINE_DOLLAR_OK = {
+    r"\)\s+CMD\s+\((.*)\)\s*$",                                  # a syslog cron line
+    r"^#{3,}\s+(.+?)\s+#{3,}\s*$",                                 # a config section header
+    r"^(.*)/(tcp|udp)$",                                            # a ufw port column
+    r"^\s*\[\s*(\d+)\]\s*(.*)$",                                   # a `ufw status numbered` row
+    r"\s*(\d+)\s+(-?\d+)\s+(\d+)\s+([0-9A-Fa-f]{6,})\s+(.+)$",      # an idTech3 player row
+    r"^\s*([a-z][a-z0-9-]*)\s+([a-z]{1,4})\s+\|\s+(.+?)\s*$",        # a LinuxGSM table row
+    r"github\.com[/:]([^/]+/[^/]+?)(?:\.git)?/?\s*$",                # a `git remote -v` line
+    r"\s*port\s*=\s*(\d+)\s*$",                                     # an sshd_config line
+    r"^(https?://\S+)\s*(\(.*\))?$",                                # a `tailscale up` output line
+}
+_inline_bad = []
+for _f in sorted(_anc_glob.glob(os.path.join(_root, "panel", "**", "*.py"), recursive=True)
+                 + [os.path.join(_root, n) for n in ("app.py", "manage.py", "db_maintenance.py")]):
+    _rel = os.path.relpath(_f, _root)
+    try:
+        _tree = _anc_ast.parse(open(_f, encoding="utf-8").read())
+    except SyntaxError:
+        continue
+    for _n in _anc_ast.walk(_tree):
+        if not (isinstance(_n, _anc_ast.Call)
+                and getattr(_n.func, "attr", "") in ("match", "fullmatch", "search")
+                and getattr(getattr(_n.func, "value", None), "id", "") == "re"
+                and _n.args and isinstance(_n.args[0], _anc_ast.Constant)
+                and isinstance(_n.args[0].value, str)):
+            continue
+        _pat = _n.args[0].value
+        if not _pat.endswith("$") or _pat.endswith("\\$"):
+            continue
+        if _pat not in _INLINE_DOLLAR_OK:
+            _inline_bad.append("%s:%d %r" % (_rel, _n.lineno, _pat[:44]))
+check("regex anchors: no unclassified $-anchored inline re.match/search either",
+      not _inline_bad,
+      "use \\Z for a VALIDATOR, or add the file to _INLINE_DOLLAR_OK saying why $ is right: %s"
+      % _inline_bad[:5])

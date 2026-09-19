@@ -415,8 +415,13 @@ def send_ntfy(server, topic, token, text):
                "X-Title": "LinuxGSM Panel"}
     token = (token or "").strip()
     if token:
-        # Charset-bounded so a pasted value carrying a newline can never split the header.
-        if not re.match(r"^[A-Za-z0-9_.\-]{1,256}$", token):
+        # \Z, not $. `$` also matches BEFORE a trailing newline, which is the one thing this
+        # check exists to stop — "a pasted value carrying a newline can never split the header"
+        # is what the anchor has to deliver, and `$` does not. The .strip() above happens to
+        # remove it first, so nothing was exploitable; the anchor was still the wrong one, and
+        # the repo's anchor gate could not see it because it walks module-level re.compile
+        # assignments and this is an inline re.match.
+        if not re.match(r"^[A-Za-z0-9_.\-]{1,256}\Z", token):
             return False, "that access token has characters ntfy tokens don't use."
         headers["Authorization"] = "Bearer %s" % token
     ok, reason = _post(url, text[:3800].encode("utf-8"), headers,

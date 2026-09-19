@@ -926,7 +926,7 @@ def remote_public_ip(server):
         try:
             out, _, rc = run_command(server, cmd, timeout=8)
             ip = (out or "").strip().split("\n")[0].strip()
-            if re.match(r"^\d{1,3}(\.\d{1,3}){3}$", ip):
+            if re.match(r"^\d{1,3}(\.\d{1,3}){3}\Z", ip):
                 return ip
         except Exception:  # nosec B112
             continue   # best-effort: fall through to the next IP-detection command
@@ -1388,7 +1388,7 @@ def _gamedig_host(server):
             "ip route get 1.1.1.1 2>/dev/null | awk 'NR==1{for(i=1;i<=NF;i++)if($i==\"src\")print $(i+1)}'",
             timeout=8)
         cand = (out or "").strip()
-        if re.match(r"^\d{1,3}(?:\.\d{1,3}){3}$", cand):
+        if re.match(r"^\d{1,3}(?:\.\d{1,3}){3}\Z", cand):
             ip = cand
     except Exception:
         _log.debug("gamedig-host: default-route IP lookup failed", exc_info=True)

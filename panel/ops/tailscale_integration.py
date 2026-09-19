@@ -5,6 +5,7 @@ provides network diagnostics, and recommends optimal bind settings.
 """
 import json
 import logging
+import ipaddress
 import re
 import socket
 import subprocess
@@ -499,15 +500,32 @@ def disable_tailscale_serve(mount="/"):
     return False, f"Failed to remove: {err or out}"
 
 
+# A tailnet's MagicDNS name is <host>.<tailnet>.ts.net, and Tailscale's own IPv4 range is the
+# CGNAT block 100.64.0.0/10 (its IPv6 is fd7a:115c:a1e0::/48).
+_TS_DNS_RE = re.compile(r"\.ts\.net\Z", re.IGNORECASE)
+_TS_V4_NET = ipaddress.ip_network("100.64.0.0/10")
+_TS_V6_NET = ipaddress.ip_network("fd7a:115c:a1e0::/48")
+
+
 def is_tailscale_ip(host):
-    """Check if a host/IP looks like a Tailscale address."""
+    """Check if a host/IP looks like a Tailscale address.
+
+    Anchored, and the address halves are parsed rather than prefix-matched. `".taile" in host` is
+    an UNANCHORED substring anywhere in the string, so evil.tailed-hosting.example answered True;
+    `host.startswith("100.")` is a string prefix, not a range, so 100.telemetry.example.com did
+    too — and 100.0.0.1 is a public address outside the CGNAT block. Nothing branches on this
+    today (it feeds a display flag on check-peer), which is precisely when a wrong answer is
+    cheapest to fix and most likely to become load-bearing later."""
+    host = (host or "").strip()
     if not host:
         return False
-    if host.startswith("100.") or host.startswith("fd7a:"):
+    if _TS_DNS_RE.search(host):
         return True
-    if host.endswith(".ts.net") or ".taile" in host:
-        return True
-    return False
+    try:
+        addr = ipaddress.ip_address(host)
+    except ValueError:
+        return False
+    return addr in _TS_V4_NET or addr in _TS_V6_NET
 
 
 def suggest_best_bind(port=5000):

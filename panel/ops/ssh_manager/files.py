@@ -284,7 +284,7 @@ def lgsm_write_config(server, user, selfname, updates):
     out, _, _ = _core.run_command(server, f"sudo -u {_core._quote(user)} bash -c {_core._quote('cat ' + _core._quote(inst) + ' 2>/dev/null')}", timeout=15, sudo=False)
     lines = (out or "").splitlines()
     for key, val in (updates or {}).items():
-        if not re.match(r"^[A-Za-z_][A-Za-z0-9_]*$", key or ""):
+        if not re.match(r"^[A-Za-z_][A-Za-z0-9_]*\Z", key or ""):
             continue
         val = str(val).replace('"', '\\"').replace("\n", " ")
         newline = f'{key}="{val}"'

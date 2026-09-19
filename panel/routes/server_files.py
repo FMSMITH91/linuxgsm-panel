@@ -222,7 +222,7 @@ def register(app, supervise):
         data = _json_body()
         which = "install" if data.get("action") == "install" else ("remove" if data.get("action") == "remove" else "")
         mod_id = _json_str(data, "mod")   # coerces, so a numeric/other type cannot crash .strip()
-        if not which or not re.match(r"^[A-Za-z0-9._-]+$", mod_id):
+        if not which or not re.match(r"^[A-Za-z0-9._-]+\Z", mod_id):
             return jsonify({"success": False, "message": "Pick a valid mod to " + (which or "act on") + "."}), 400
         try:
             out, err, rc = mods_action(gs.remote, gs.short_name, gs.lgsm_name, which, mod_id)
