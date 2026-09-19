@@ -471,12 +471,22 @@ def read_file(server, user, relpath, max_bytes=1048576):
     # file loses its trailing newline. (stream_path does NOT strip, so download and edit
     # disagreed about the same file.) Framing keeps the fix inside this function: the strip can
     # only reach the whitespace OUTSIDE the sentinels.
+    #
+    # ...and it is BASE64 inside the frame, because framing cannot reach the other way the
+    # transport rewrites a file: both read paths decode in TEXT mode, and Python's universal
+    # newlines turn every CRLF into LF before this function ever sees the bytes. The write path is
+    # byte-exact (it base64s too), so the damage was asymmetric and silent — open a CRLF config in
+    # the editor, press Save without typing, and every line ending in the file is permanently
+    # converted. Measured against a real host: 'alpha\r\nbeta\r\ngamma\n' on disk came back as
+    # 'alpha\nbeta\ngamma\n'. UT2004's .ini files and anything pasted from Windows are CRLF.
+    # Encoding on the host means no byte can be altered in transit, which is the same reason
+    # _write_file_as_user has always done it in the other direction.
     inner = (
         f"if [ ! -f {_core._quote(ap)} ]; then echo __NOFILE__; exit 0; fi; "
         f"sz=$(stat -c %s {_core._quote(ap)} 2>/dev/null); "
         f"if [ \"$sz\" -gt {int(max_bytes)} ]; then echo __TOOBIG__; exit 0; fi; "
         f"if [ ! -s {_core._quote(ap)} ] || grep -qI . {_core._quote(ap)} 2>/dev/null; then "
-        f"printf %s {_core._quote(_READ_BEGIN)}; cat {_core._quote(ap)}; "
+        f"printf %s {_core._quote(_READ_BEGIN)}; base64 {_core._quote(ap)} | tr -d '\\n'; "
         f"printf %s {_core._quote(_READ_END)}; else echo __BINARY__; fi"
     )
     out, _err, _rc = _core.run_command(server, f"sudo -u {_core._quote(user)} bash -c {_core._quote(_guarded(user, ap, inner))}",
@@ -496,7 +506,17 @@ def read_file(server, user, relpath, max_bytes=1048576):
     i = body.find(_READ_BEGIN)
     j = body.rfind(_READ_END)
     if i != -1 and j > i:
-        return body[i + len(_READ_BEGIN):j], None
+        framed = body[i + len(_READ_BEGIN):j].strip()
+        if not framed:
+            return "", None          # a genuinely empty file, framed and confirmed
+        try:
+            import base64 as _b64
+            # errors="replace" matches what the text transport did for a file that is not valid
+            # UTF-8: grep -qI calls it text, and the editor still has to show something.
+            return _b64.b64decode(framed, validate=True).decode("utf-8", "replace"), None
+        except Exception:
+            _core._log.warning("read_file: framed body for %s was not valid base64", ap)
+            return None, "Could not read that file — the host did not answer. Nothing has been changed."
     # No frame, and none of the three sentinels above: the read never got as far as `cat`. This
     # used to `return body, None` — i.e. "" with no error — and that is destructive, not merely
     # wrong. run_command does not raise on the local or Tailscale transports; it returns
