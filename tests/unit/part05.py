@@ -480,8 +480,13 @@ check("test wiring: every suite is measured by the coverage job",
 from app import ALERT_PROVIDERS as _AP                                            # noqa: E402
 from panel.routes.server_files import _ALERT_KEYS as _AK, _ALERT_KEY_SET as _AKS   # noqa: E402
 
+# len() first, both times: `all(... for x in [])` is True, so an emptied ALERT_PROVIDERS or
+# _ALERT_KEYS would pass every structural claim below while the feature was gone.
+check("alert providers: there ARE providers, so the claims below examine some", len(_AP) >= 1)
+check("alert providers: ...and keys", len(_AK) >= 1)
 check("alert providers: every entry has id, label, toggle and fields",
-      all(p.get("id") and p.get("label") and p.get("toggle") and p.get("fields") for p in _AP))
+      _AP and all(p.get("id") and p.get("label") and p.get("toggle") and p.get("fields")
+                  for p in _AP))
 check("alert providers: every toggle is a LinuxGSM <name>alert flag",
       all(p["toggle"].endswith("alert") for p in _AP),
       str([p["toggle"] for p in _AP if not p["toggle"].endswith("alert")]))
@@ -1470,8 +1475,11 @@ try:
         _tarbuf.seek(0)
         with _tarfile.open(fileobj=_tarbuf, mode="r|gz") as _tf:
             _members = {m.name: m for m in _tf}
+        check("helper: the archive is not empty, so the layout claim examines members",
+              len(_members) >= 1, "no tar members — the next check would pass vacuously")
         check("helper: the archive has ONE root named after the folder, not the whole host path",
-              all(n == "addons" or n.startswith("addons/") for n in _members), str(sorted(_members)))
+              _members and all(n == "addons" or n.startswith("addons/") for n in _members),
+              str(sorted(_members)))
         eq("helper: nested files keep their relative layout",
            sorted(n for n in _members if n.endswith((".vpk", ".txt"))),
            ["addons/a.vpk", "addons/sub/b.txt"])

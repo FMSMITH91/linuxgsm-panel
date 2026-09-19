@@ -1796,10 +1796,16 @@ try:
     check("palette: ...and is offered NO actions at all",
           _pj2 and all(not (e.get("actions") or []) for e in _pj2),
           str([(e["name"], e.get("actions")) for e in _pj2])[:200])
-    # An un-installed server has nothing to start, even for an admin.
+    # An un-installed server has nothing to start, even for an admin. Guarded, because
+    # `all(... for e in <empty>)` is True: with no un-installed server in the fixture this check
+    # would examine nothing and pass while the filter it tests was gone. The view-only check above
+    # was found vacuous exactly this way.
+    _pj_uninst = [e for e in _pj if not e.get("installed")]
+    check("palette: the fixture HAS an un-installed server, so the next check examines one",
+          len(_pj_uninst) >= 1, "no un-installed entry — the next check would pass vacuously")
     check("palette: an un-installed server carries no verbs",
-          all(not (e.get("actions") or []) for e in _pj if not e.get("installed")),
-          str([(e["name"], e.get("actions")) for e in _pj if not e.get("installed")])[:200])
+          _pj_uninst and all(not (e.get("actions") or []) for e in _pj_uninst),
+          str([(e["name"], e.get("actions")) for e in _pj_uninst])[:200])
     # And the endpoint's answer must agree with the one the ACTION route enforces, or the palette
     # is offering a button that 403s.
     _act_denied = client_as(_viewer_id).post("/api/server/%d/action" % gs_id,
@@ -4564,9 +4570,14 @@ try:
               any("update started" in (m or "") for m in _lat_markers)
               and any("update finished successfully" in (m or "") for m in _lat_markers),
               "markers=%s" % _lat_markers)
+        # Same vacuity guard: with no console_output captured, all(...) over the empty filter is
+        # True and the room assertion tests nothing.
+        _lat_rooms = [r for (e, p, r) in _lat_seen if e == "console_output"]
+        check("long action: console_output was actually captured, so the room check sees some",
+              len(_lat_rooms) >= 1, "no console_output events — the next check would be vacuous")
         check("long action: the markers go to THIS server's console room only",
-              all(r == "console_%d" % gs_id for (e, p, r) in _lat_seen if e == "console_output"),
-              "rooms=%s" % [r for (e, p, r) in _lat_seen])
+              _lat_rooms and all(r == "console_%d" % gs_id for r in _lat_rooms),
+              "rooms=%s" % _lat_rooms)
 
         # 2. The drain itself: new bytes only. A tail that re-sent its window every tick would
         # fill the console with the same SteamCMD spool over and over.
@@ -4978,9 +4989,13 @@ try:
               "now=%r" % _pdj.get("now"))
         # Still not dated per line: an unstamped window is history until the browser knows which of
         # it is new, and dating the whole thing server-side is the mistake this guards against.
+        # ...over lines that exist: an empty window makes all(...) True and the claim empty.
+        _pd_lines = _pdj.get("lines") or []
+        check("console timestamps: the unstamped window came back with lines in it",
+              len(_pd_lines) >= 1, "no lines — the next check would pass vacuously")
         check("console timestamps: ...but an unstamped window stays undated, as history",
-              all(r.get("t") is None for r in (_pdj.get("lines") or [])),
-              "lines=%s" % (_pdj.get("lines"),))
+              _pd_lines and all(r.get("t") is None for r in _pd_lines),
+              "lines=%s" % (_pd_lines,))
     finally:
         _sm_core.run_command = _pd_saved
 

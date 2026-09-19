@@ -169,8 +169,17 @@ try:
     _sm_core._HELPER_STATE["present"] = True
     for _v, _a, _w in _T_SAMPLE:
         _sm_core.run_privileged(_T_LOCAL, _v, _a, timeout=5)
+    # Guarded: if run_privileged took the SHELL path instead, _argvs stays empty and
+    # `all(... for a in [])` is True — the check that owns the sudo boundary's argv discipline
+    # would pass while the boundary was gone. (Today an IndexError five lines down happens to
+    # catch it; that is an accident, not a gate.)
+    check("transport: the argv path was actually taken, so the next checks examine a call",
+          len(_argvs) == len(_T_SAMPLE),
+          "%d of %d calls captured — the argv checks would be vacuous" % (len(_argvs),
+                                                                          len(_T_SAMPLE)))
     check("transport: with the helper installed, the local path invokes it with argv",
-          all(a[:3] == ["sudo", "-n", _priv.HELPER_PATH] for a in _argvs), str(_argvs[:1]))
+          _argvs and all(a[:3] == ["sudo", "-n", _priv.HELPER_PATH] for a in _argvs),
+          str(_argvs[:1]))
     check("transport: the helper path never builds a shell command",
           not any("bash" in x or "2>&1" in x for a in _argvs for x in a), str(_argvs[:1]))
     check("transport: the verb and its arguments arrive as separate argv elements",
@@ -1430,8 +1439,10 @@ _fuzz_dir = os.path.join(_root, "tests", "fuzz")
 _harnesses = sorted(os.path.basename(f)[len("fuzz_"):-len(".py")]
                     for f in glob.glob(os.path.join(_fuzz_dir, "fuzz_*.py")))
 _fuzz_readme = open(os.path.join(_fuzz_dir, "README.md"), encoding="utf-8").read()
+check("docs: the fuzz harnesses were actually found, so the next check lists some",
+      len(_harnesses) >= 1, "glob matched nothing — the next check would pass vacuously")
 check("docs: every fuzz harness is listed in tests/fuzz/README.md",
-      all(("fuzz_%s.py" % t) in _fuzz_readme for t in _harnesses),
+      _harnesses and all(("fuzz_%s.py" % t) in _fuzz_readme for t in _harnesses),
       "missing: %s" % [t for t in _harnesses if ("fuzz_%s.py" % t) not in _fuzz_readme])
 _fuzz_wf = open(os.path.join(_root, ".github", "workflows", "fuzz.yml"), encoding="utf-8").read()
 _matrix = re.search(r"target:\s*\[([^\]]+)\]", _fuzz_wf)
