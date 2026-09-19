@@ -123,9 +123,12 @@ def _text(name, allow_fetch=True):
         if fresh is not None:
             try:
                 _write_cache(name, fresh)
+                _last_error.pop(name, None)
             except OSError as e:
+                # ...and NOT popped on the next line regardless, which is what this did: the
+                # cache-write error was recorded and immediately discarded, so a read-only data/
+                # (every boot re-fetching, nothing ever persisting) was invisible in status().
                 _last_error[name] = "could not write the cache (%s)" % e.__class__.__name__
-            _last_error.pop(name, None)
             return fresh
     if age is not None:          # the fetch failed, but an older copy is still on disk
         try:
@@ -191,19 +194,29 @@ def status():
 
 
 def refresh(force=True):
-    """Re-fetch both files now. Returns True if the game list ended up populated."""
+    """Re-fetch both files now. Returns True if the FETCH succeeded — not merely if a list exists.
+
+    `return bool(serverlist())` read the CACHE back, which is populated by every previous run, so
+    this answered True with every network fetch failing. The route turns that into
+    `{"success": true, "message": "Loaded 30 games."}` and an audit row saying the refresh worked:
+    a superadmin pressing Retry because a newly-supported game is missing is told it loaded, and
+    the list is unchanged."""
+    ok = True
     with _lock:
         _mem.clear()
         if force:
             for n in (SERVERLIST, DEPS):
                 fresh = _fetch(n)
-                if fresh is not None:
-                    try:
-                        _write_cache(n, fresh)
-                        _last_error.pop(n, None)
-                    except OSError as e:
-                        _last_error[n] = "could not write the cache (%s)" % e.__class__.__name__
-    return bool(serverlist())
+                if fresh is None:
+                    ok = False
+                    continue
+                try:
+                    _write_cache(n, fresh)
+                    _last_error.pop(n, None)
+                except OSError as e:
+                    _last_error[n] = "could not write the cache (%s)" % e.__class__.__name__
+                    ok = False
+    return ok and bool(serverlist())
 
 
 def warm():

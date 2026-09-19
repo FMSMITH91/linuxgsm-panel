@@ -196,14 +196,19 @@ def console_player_list(server, user, game_type, selfname=None):
     if not eng:
         return None
     cmd = "list" if eng == "minecraft" else "status"
+    # NONE for "could not read", [] only for a table that really had no rows in it. These both
+    # answered [], and player_list's `or []` then turned a stopped server into a confirmed-empty
+    # one: the bot's /players said "no players connected" about a server that was down. Its own
+    # docstring already draws the distinction ("an empty list for a confirmed-empty server, or
+    # None when it can't be read"); only the code did not.
     try:
         _core.send_console_command(server, user, cmd, timeout=12, selfname=selfname)
         time.sleep(0.8)   # let the server print its reply into the pane before we capture it
         out, _, rc = capture_console(server, user, selfname=selfname, lines=180)
     except Exception:
-        return []
-    if rc != 0 or not out:
-        return []
+        return None
+    if rc != 0 or not out or "NO_SESSION" in out:
+        return None
     if eng == "idtech3":
         return _parse_idtech3_status(out)
     if eng == "minecraft":
@@ -297,7 +302,9 @@ def player_list(server, user, game_type=None, port=None, query_type=None, selfna
     if pl is not None:
         return pl                       # gamedig answered (players, or a confirmed-empty server)
     if allow_console and game_engine(game_type):   # explicit, on-demand console read only
-        return console_player_list(server, user, game_type, selfname=selfname) or []
+        # No `or []`: None here means the console could not be read, which is not the same
+        # answer as "nobody is playing" and is the distinction this function's contract turns on.
+        return console_player_list(server, user, game_type, selfname=selfname)
     return None                         # can't read over the network; console not requested
 
 

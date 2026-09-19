@@ -837,8 +837,15 @@ class SetupState(db.Model):
 
 class MetricSample(db.Model):
     """A periodic snapshot of one game server's live figures (game CPU%, RAM MB, player count) for the
-    history charts. Written by the metrics-history sampler (~1/min) and pruned after ~14 days. No FK —
-    orphans from an uninstalled server just age out — so it stays cheap to write."""
+    history charts. Written by the metrics-history sampler (~1/min) and pruned after ~14 days.
+
+    No FK, so the write stays cheap — but the orphans do NOT "just age out" harmlessly, which is
+    what this used to say. SQLite hands a deleted row's id straight to the next INSERT (plain
+    INTEGER PRIMARY KEY = rowid, no AUTOINCREMENT), so for up to 14 days a freshly-installed
+    server whose id was recycled shows the DELETED server's CPU, RAM and player counts on its
+    history chart — silently wrong data on the page an operator uses to decide whether a box is
+    overloaded. The after_delete listener at the bottom of this module clears them with the row,
+    which is the same rule the per-remote caches and panel_state already follow."""
     # The history charts ask "one server, last 7 (or 1) days, in time order" — server_id AND ts
     # together. With only the two single-column indexes SQLite picked server_id and then sorted
     # the whole 14-day slice in a temp B-tree to satisfy ORDER BY. Measured on 806k rows (40
@@ -854,7 +861,9 @@ class MetricSample(db.Model):
 
 
 class HostSample(db.Model):
-    """A periodic snapshot of one host's whole-VPS figures (CPU%, RAM%, disk%) for the history charts."""
+    """A periodic snapshot of one host's whole-VPS figures (CPU%, RAM%, disk%) for the history charts.
+
+    Cleared when the host row is deleted — see MetricSample for why aging out is not enough."""
     # Same (id, ts) shape as MetricSample, and this one was worse: with far fewer distinct hosts
     # than servers, SQLite preferred the ts index and scanned half the table before filtering
     # remote_id. Measured on 100k rows: 7.7ms -> 2.7ms, a 2.8x improvement on the same query the
@@ -1323,6 +1332,46 @@ def _ensure_db_healthy(path=None):
                        "tool if you need to salvage its data", path, aside)
     except Exception:
         _log.exception("database self-heal check failed (continuing startup)")
+
+
+# ── A deleted row must not leave its history behind ───────────────────────────────────────────
+# MetricSample and HostSample carry no FK (deliberately — see MetricSample), so nothing removed
+# their rows when a server or host was deleted, and SQLite then handed the id to the next INSERT.
+# Measured: delete a game server with 3 samples, add another that takes the same id, and
+# /api/server/<id>/history returned the deleted server's 99% CPU and 31 players.
+#
+# Done as a listener rather than in the delete routes, for the reason game.py's version already
+# gives: the invariant belongs where the row goes away, not at each of the places that remove one.
+# The DELETE goes through the flush's own connection, so it is part of the same transaction — a
+# rolled-back delete does not lose the samples.
+def _register_sample_pruning():
+    from sqlalchemy import event
+
+    def _prune(model, column):
+        def _handler(_mapper, connection, target):
+            try:
+                connection.execute(model.__table__.delete().where(column == target.id))
+            except Exception:
+                _log.debug("sample prune failed for a deleted row", exc_info=True)
+        return _handler
+
+    event.listen(GameServer, "after_delete", _prune(MetricSample, MetricSample.server_id))
+    event.listen(RemoteServer, "after_delete", _prune(HostSample, HostSample.remote_id))
+
+    # A host's game servers go with it, and remotes.py deletes them in BULK — which bypasses the
+    # ORM, so the per-server listener above never fires for them. Clear their samples by
+    # subquery on the host id instead of relying on that cascade.
+    @event.listens_for(RemoteServer, "after_delete")
+    def _prune_host_game_samples(_mapper, connection, target):
+        try:
+            connection.execute(MetricSample.__table__.delete().where(
+                MetricSample.server_id.in_(
+                    db.select(GameServer.id).where(GameServer.remote_id == target.id))))
+        except Exception:
+            _log.debug("game-server sample prune failed for a deleted host", exc_info=True)
+
+
+_register_sample_pruning()
 
 
 def init_db(app):

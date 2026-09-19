@@ -75,7 +75,16 @@ def _telegram_command_watch(app):
                 # Populate Telegram's '/' autocomplete menu with the bot's commands.
                 registered = bool(notifications.telegram_set_commands(token))
             if not primed:
+                # PRIMED ONLY IF THE POLL ANSWERED. telegram_get_updates returns None on a network
+                # error, on a 409 (a second poller) and on ok:false — and `primed = True` used to
+                # run regardless, leaving offset=None, so the next poll asked Telegram for every
+                # unconfirmed update. Telegram holds those for 24 hours, and the window this runs
+                # in is the one most likely to fail: the process has just restarted from a
+                # self-update. A `/stop codserver` sent hours earlier then stops a running server.
                 latest = notifications.telegram_get_updates(token, offset=-1, timeout=0)
+                if latest is None:
+                    time.sleep(_TG_CMD_BACKOFF)
+                    continue          # try again; do NOT mark primed on an answer we never got
                 if latest:
                     offset = latest[-1].get("update_id", 0) + 1
                 primed = True

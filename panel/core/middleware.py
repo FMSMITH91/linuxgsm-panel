@@ -15,6 +15,26 @@ class PrefixMiddleware:
         self.prefix = prefix.rstrip("/")
 
     @staticmethod
+    def _clean_prefix(raw):
+        """A mount prefix, or "" — the header says WHO, this says WHAT.
+
+        _may_trust_header decides whether X-Forwarded-Prefix is believable; nothing constrained
+        what it was allowed to say, so a trusted-source request could set SCRIPT_NAME to
+        "//evil.example" or "https://evil.example" and have every url_for() on the page it got
+        back, and the Location of every redirect, point off-site. That is the exact harm the
+        docstring below says the source rule prevents — which would have read to the next
+        maintainer as a solved problem.
+
+        A mount is a path: one leading slash, then path characters. Anything else is refused
+        outright rather than sanitised, because there is no "nearly a mount point"."""
+        raw = (raw or "").strip()
+        if not raw or not raw.startswith("/") or raw.startswith("//"):
+            return ""
+        if any(c in raw for c in ("\\", "\r", "\n", "\t", " ", ":", "?", "#", "@")) or ".." in raw:
+            return ""
+        return raw.rstrip("/")
+
+    @staticmethod
     def _may_trust_header(environ, cfg):
         """Whether X-Forwarded-Prefix is believable on this request.
 
@@ -35,7 +55,8 @@ class PrefixMiddleware:
     def __call__(self, environ, start_response):
         cfg = load_config()
         # Priority: X-Forwarded-Prefix header (Tailscale Serve), then config
-        prefix = environ.get("HTTP_X_FORWARDED_PREFIX", "") if self._may_trust_header(environ, cfg) else ""
+        prefix = (self._clean_prefix(environ.get("HTTP_X_FORWARDED_PREFIX", ""))
+                  if self._may_trust_header(environ, cfg) else "")
         if not prefix:
             mount = cfg.get("tailscale_mount", "")
             if mount and mount != "/":
@@ -48,7 +69,14 @@ class PrefixMiddleware:
         if prefix:
             environ["SCRIPT_NAME"] = prefix
             path_info = environ.get("PATH_INFO", "")
-            if path_info.startswith(prefix):
+            # "under the prefix" means the prefix itself or a path below it — the same rule the
+            # outgoing Location rewrite below spells out, applied to the INCOMING path, where it
+            # was a bare substring test. With mount "/panel" that served every page a second time
+            # at a URL outside the mount: /panelserver/1 became SCRIPT_NAME=/panel PATH_INFO=
+            # server/1 and answered 200, and /paneling became PATH_INFO=ing.
+            if path_info == prefix:
+                environ["PATH_INFO"] = "/"
+            elif path_info.startswith(prefix + "/"):
                 environ["PATH_INFO"] = path_info[len(prefix):]
 
         def _start_response(status, headers, *args):

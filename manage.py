@@ -161,6 +161,10 @@ def cmd_disable_2fa(args):
         u = _require_user(username)
         u.totp_enabled = False
         u.totp_secret = None
+        # ...and its backup codes, which no longer apply — the two web paths that disable 2FA both
+        # clear them and say so. Leaving bcrypt hashes of credentials the operator has just revoked
+        # in panel.db is the kind of divergence that only becomes reachable later.
+        u.backup_codes = ""
         db.session.commit()
         print("Two-factor auth disabled for '%s'." % username)
 

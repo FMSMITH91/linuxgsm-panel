@@ -2769,6 +2769,36 @@ try:
                 db.session.rollback()
                 check("migration: a dropped column is restored by _run_light_migrations", False, repr(_e))
 
+    # ── A deleted row must not leave its history for the next row to inherit ──────────────────────
+    # MetricSample and HostSample carry no FK — deliberately, so the ~1/min write stays cheap — and
+    # the docstring called the orphans harmless ("just age out"). They are not: SQLite hands a deleted
+    # row's id to the next INSERT, so for up to 14 days a freshly-installed server whose id was
+    # recycled showed the DELETED server's CPU, RAM and player counts on its history chart. Measured
+    # before the fix: 3 rows survived the delete and the new server's chart returned all three.
+    from panel.db.models import (db as _hs_db, GameServer as _HSGame,                  # noqa: E402
+                                 RemoteServer as _HSRemote, MetricSample as _HSMetric,
+                                 HostSample as _HSHost)
+    with app.app_context():
+        _hs_r = _HSRemote(name="hs-host", host="192.0.2.77", port=22, username="u",
+                          auth_method="key", auth_credential="")
+        _hs_db.session.add(_hs_r); _hs_db.session.commit()
+        _hs_g = _HSGame(name="hs-cod", short_name="hscodserver", game_type="cod", port=28961,
+                        remote_id=_hs_r.id)
+        _hs_db.session.add(_hs_g); _hs_db.session.commit()
+        for _ in range(3):
+            _hs_db.session.add(_HSMetric(server_id=_hs_g.id, cpu=99.0, ram_mb=4096, players=31))
+            _hs_db.session.add(_HSHost(remote_id=_hs_r.id, cpu=97.5, ram_pct=91.0, disk_pct=88.0))
+        _hs_db.session.commit()
+        _hs_gid, _hs_rid = _hs_g.id, _hs_r.id
+        _hs_db.session.delete(_hs_g); _hs_db.session.commit()
+        check("history: deleting a game server clears its metric samples",
+              _hs_db.session.query(_HSMetric).filter_by(server_id=_hs_gid).count() == 0,
+              "%d rows survived" % _hs_db.session.query(_HSMetric).filter_by(server_id=_hs_gid).count())
+        _hs_db.session.delete(_hs_r); _hs_db.session.commit()
+        check("history: deleting a host clears its host samples",
+              _hs_db.session.query(_HSHost).filter_by(remote_id=_hs_rid).count() == 0,
+              "%d rows survived" % _hs_db.session.query(_HSHost).filter_by(remote_id=_hs_rid).count())
+
     # ── Monitor + player-count poller transition logic ────────────────────────────────────────────
     # These background passes drive the admin notifications. create_app() does NOT start the watcher
     # threads, so we run a pass by hand — single-threaded, with the host/SSH helpers stubbed — to

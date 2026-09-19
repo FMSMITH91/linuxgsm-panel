@@ -930,13 +930,21 @@ def create_app():
     # form endpoints (the JSON API additionally requires an application/json body).
     app.config["SESSION_COOKIE_HTTPONLY"] = True
     app.config["SESSION_COOKIE_SAMESITE"] = "Lax"
-    # Secure defaults ON once the panel is served over HTTPS — via built-in self-signed
-    # TLS, Tailscale Serve, or a reverse proxy once a site_domain is configured. Only OFF
-    # if HTTPS is explicitly disabled AND there's no proxy in front. Override cookie_secure.
-    _https_ready = (_effective_https(cfg)
-                    or bool(cfg.get("tailscale_setup_done", False))
-                    or bool((cfg.get("site_domain") or "").strip()))
-    app.config["SESSION_COOKIE_SECURE"] = cfg.get("cookie_secure", _https_ready)
+    # Secure defaults ON once the panel is REACHED over HTTPS — whether it terminates TLS
+    # itself, or something in front does. Override with cookie_secure.
+    #
+    # This used to mirror _effective_https's Tailscale case and not its PROXY case, so the
+    # deployment the README recommends — `trust_proxy: true` behind nginx/Caddy — issued the
+    # session cookie and the 3-day remember-me token with no Secure flag, and both then travel in
+    # cleartext on any http:// request to the same host (a typo'd link, the first visit before
+    # HSTS pins, a downgrade). A captured remember token is a working login for remember_days.
+    # _security_headers already emits HSTS on those requests, so the rest of the code knew.
+    #
+    # site_domain is NOT evidence of TLS — it is a hostname typed into the setup wizard — and
+    # counting it was the mirror mistake: `use_https: false` plus a domain marked the cookies
+    # Secure while the panel served plain HTTP, which a browser answers by dropping them. The
+    # password is right, the cookie never comes back, and / bounces to /login forever.
+    app.config["SESSION_COOKIE_SECURE"] = cfg.get("cookie_secure", _https_ready(cfg))
 
     # "Remember me" cookie (flask-login). Capped at the configured remember_days (default 3,
     # max 90 — see settings.html) instead of
@@ -1007,8 +1015,19 @@ def create_app():
         # today (a custom header forces a CORS preflight, and the SameSite=Lax cookie is not sent
         # cross-site anyway), which is why this is a narrowing and not a patch — but an exemption
         # should rest on the condition it claims.
+        # EVERY cookie flask-login would authenticate from, not just the session one. The
+        # remember cookie is the other: flask-login's _load_user tries it BEFORE the request
+        # loader, so a login whose session cookie has expired is still authenticated by it — and
+        # such a request is not "cookie-less". Measured: drop only the session cookie, keep
+        # remember_token, POST /logout with no CSRF token and an INVALID Bearer header, and the
+        # UserSession row was deleted. For up to remember_days that made every mutating endpoint
+        # reachable cross-site by adding one header. A custom header does force a CORS preflight
+        # the panel does not answer, which is the same reasoning the comment above already rates
+        # as not good enough on its own: an exemption should rest on the condition it claims.
+        _auth_cookies = (app.config["SESSION_COOKIE_NAME"],
+                         app.config.get("REMEMBER_COOKIE_NAME", "remember_token"))
         if (request.headers.get("Authorization", "").startswith("Bearer ")
-                and not request.cookies.get(app.config["SESSION_COOKIE_NAME"])):
+                and not any(request.cookies.get(_c) for _c in _auth_cookies)):
             return   # genuinely cookie-less API-token request: CSRF cannot apply
         csrf.protect()   # session/cookie request: full CSRF enforcement (no-op on safe methods)
 
@@ -1270,6 +1289,10 @@ def create_app():
     # X-Forwarded-* so request.is_secure/scheme + client IP reflect the real client.
     # Off by default — only enable when actually behind a trusted proxy, or these
     # headers become spoofable. (client_ip() also only trusts XFF from loopback.)
+    # Recorded in app.config so client_ip() can ask it without re-reading config.json on every
+    # request — it has to know, because ProxyFix below rewrites remote_addr from the very header
+    # client_ip is deciding whether to trust.
+    app.config["_TRUST_PROXY"] = bool(cfg.get("trust_proxy"))
     if cfg.get("trust_proxy"):
         from werkzeug.middleware.proxy_fix import ProxyFix
         app.wsgi_app = ProxyFix(app.wsgi_app, x_for=1, x_proto=1, x_host=1, x_prefix=1)
@@ -2021,6 +2044,18 @@ def register_routes(app):
 
 
 # ─── Main Entry Point ──────────────────────────────────────────
+
+def _https_ready(cfg):
+    """Is the panel REACHED over HTTPS — whether it terminates TLS itself or something in front
+    does? This is what decides the Secure flag on the session and remember-me cookies.
+
+    A named function so a test can ask it the question the cookie asks, rather than restating the
+    expression and then proving its own restatement right. See the note at the call site for what
+    it used to get wrong in both directions."""
+    return bool(_effective_https(cfg)
+                or cfg.get("tailscale_setup_done", False)
+                or cfg.get("trust_proxy", False))
+
 
 def _effective_https(cfg):
     """Should the panel terminate TLS itself with the built-in self-signed cert?

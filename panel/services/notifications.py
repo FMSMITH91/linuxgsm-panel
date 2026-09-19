@@ -280,7 +280,15 @@ def _post(url, data, headers, allow_configured_host=False):
     try:
         with urllib.request.urlopen(req, timeout=8) as resp:  # nosec B310 - https, host-allowlisted
             return (200 <= resp.getcode() < 300), "sent"
-    except urllib.error.HTTPError:      # the provider answered with a 4xx/5xx
+    except urllib.error.HTTPError as e:      # the provider answered with a 4xx/5xx
+        # LOGGED, at WARNING. This is how alerting stops: a rotated bot token, a deleted webhook,
+        # a bot removed from the channel. The module docstring says "a failure is logged and
+        # swallowed" — it was only swallowed, and the panel configures no logging at all, so even
+        # the _log.debug below the unreachable case never printed. There was nothing in the
+        # journal, nothing in the UI and nothing in the audit log to say alerts had stopped; the
+        # only way to find out was to open the settings page and press Test.
+        _log.warning("notification rejected by the provider: HTTP %s for %s",
+                     getattr(e, "code", "?"), (url or "").split("?")[0][:80])
         return False, "rejected"
     except (urllib.error.URLError, OSError, ValueError):
         _log.debug("notification POST failed", exc_info=True)
@@ -362,13 +370,22 @@ def telegram_set_commands(token, clear=False):
     return ok
 
 
+# Discord parses every mention in `content` by default, and this content is not ours: it carries
+# player names (`!players`), the tail of the live console — which on most engines includes in-game
+# chat — and package names from a remote host's apt output. Anyone who can join a public game
+# server could pick a name that mass-pings the operator's Discord every time an admin ran
+# `!players`. An empty `parse` turns every mention in the body into inert text.
+_DISCORD_NO_MENTIONS = {"parse": []}
+
+
 def send_discord(webhook, text):
     """Send a Discord webhook message. Returns (ok, detail). The URL is rebuilt onto a constant host
     from the validated webhook id/token, so the request can only ever go to Discord."""
     url = _discord_api_url(webhook)
     if not url:
         return False, "that isn't a valid discord.com webhook URL"
-    ok, reason = _post(url, json.dumps({"content": text[:1900]}).encode(),
+    ok, reason = _post(url, json.dumps({"content": text[:1900],
+                                        "allowed_mentions": _DISCORD_NO_MENTIONS}).encode(),
                        {"Content-Type": "application/json"})
     if ok:
         return True, ""
@@ -440,7 +457,8 @@ def discord_bot_send(bot_token, channel_id, text):
         return False, "the channel ID is missing or malformed"
     if not _valid_discord_bot_token(bot_token):
         return False, "the bot token is missing or malformed"
-    body = json.dumps({"content": text[:1900]}).encode()
+    body = json.dumps({"content": text[:1900],
+                       "allowed_mentions": _DISCORD_NO_MENTIONS}).encode()
     ok, reason = _post(url, body, {"Content-Type": "application/json",
                                    "Authorization": "Bot %s" % bot_token})
     if ok:
@@ -554,14 +572,24 @@ def notify(event_key, title, body=""):
         nt = cfg.get("ntfy") or {}
 
         def _go():
+            # Each result is CHECKED. They were called as bare statements, so a provider that
+            # refused every message left no trace at all — see _post's HTTPError branch.
             try:
-                if tg.get("enabled"):
-                    send_telegram(decrypt_secret(tg.get("token") or ""), (tg.get("chat_id") or "").strip(), text)
-                if dc.get("enabled"):
-                    send_discord(decrypt_secret(dc.get("webhook") or ""), text)
-                if nt.get("enabled"):
-                    send_ntfy(nt.get("server") or NTFY_DEFAULT_SERVER, nt.get("topic") or "",
-                              decrypt_secret(nt.get("token") or ""), text)
+                for _name, _enabled, _send in (
+                        ("telegram", tg.get("enabled"),
+                         lambda: send_telegram(decrypt_secret(tg.get("token") or ""),
+                                               (tg.get("chat_id") or "").strip(), text)),
+                        ("discord", dc.get("enabled"),
+                         lambda: send_discord(decrypt_secret(dc.get("webhook") or ""), text)),
+                        ("ntfy", nt.get("enabled"),
+                         lambda: send_ntfy(nt.get("server") or NTFY_DEFAULT_SERVER,
+                                           nt.get("topic") or "",
+                                           decrypt_secret(nt.get("token") or ""), text))):
+                    if not _enabled:
+                        continue
+                    _ok, _why = _send()
+                    if not _ok:
+                        _log.warning("notification to %s failed (%s): %s", _name, event_key, _why)
             except Exception:
                 _log.debug("notify send failed", exc_info=True)
         threading.Thread(target=_go, daemon=True).start()

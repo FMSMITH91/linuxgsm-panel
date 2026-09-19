@@ -2296,3 +2296,308 @@ check("privileged: the injection sweep actually ran", _inj_checked >= 200,
 check("privileged: no remote verb lets a metacharacter reach the shell",
       not _inj_bad,
       "accepted AND left unquoted: " + "; ".join(_inj_bad[:6]))
+
+# ── The value that keys the login throttle must not be chosen by the client ───────────────────
+# client_ip() keys the login throttle, the API-token throttle, the audit log, data/auth.log (which
+# the panel-login fail2ban jail parses) and the 7-day auto-block counts. WHOM to trust and WHAT to
+# read are different questions and only the first was being asked: the answer to the second was
+# X-Forwarded-For's FIRST hop, the one element of that header a client always controls, because a
+# proxy can only append to its right.
+#
+# Measured through the real /login with the README's own deployment: twenty failed logins from one
+# client, each with a different X-Forwarded-For, were never rate-limited and left twenty separate
+# throttle keys. With a constant value the same loop blocked at attempt 8.
+from panel.security import auth as _ip_auth                                       # noqa: E402
+from flask import Flask as _IpFlask                                               # noqa: E402
+_ip_app = _IpFlask(__name__)
+
+
+def _ip_for(headers, remote="127.0.0.1", trust_proxy=False, proxy_fix_orig=None):
+    _ip_app.config["_TRUST_PROXY"] = trust_proxy
+    env = {"REMOTE_ADDR": remote}
+    if proxy_fix_orig is not None:
+        env["werkzeug.proxy_fix.orig"] = {"REMOTE_ADDR": proxy_fix_orig}
+    with _ip_app.test_request_context("/", headers=headers, environ_overrides=env):
+        return _ip_auth.client_ip()
+
+
+eq("client_ip: X-Real-IP wins over a client-supplied X-Forwarded-For",
+   _ip_for({"X-Real-IP": "100.64.0.5", "X-Forwarded-For": "9.9.9.9"}), "100.64.0.5")
+eq("client_ip: falling back to X-Forwarded-For takes the LAST hop, not the first",
+   _ip_for({"X-Forwarded-For": "9.9.9.9, 198.51.100.4, 100.64.0.5"}), "100.64.0.5")
+eq("client_ip: a direct connection ignores both headers",
+   _ip_for({"X-Real-IP": "100.64.0.5", "X-Forwarded-For": "9.9.9.9"}, remote="203.0.113.9"),
+   "203.0.113.9")
+# With trust_proxy, ProxyFix has already rewritten remote_addr FROM the header being judged — so
+# the original socket peer is what decides, and X-Real-IP is what is read.
+eq("client_ip: behind a declared proxy, the header the proxy sets wins over the rewritten peer",
+   _ip_for({"X-Real-IP": "100.64.0.5", "X-Forwarded-For": "9.9.9.9"},
+           remote="9.9.9.9", trust_proxy=True, proxy_fix_orig="127.0.0.1"), "100.64.0.5")
+eq("client_ip: no headers at all -> the socket address",
+   _ip_for({}, remote="203.0.113.9"), "203.0.113.9")
+# ...and the deployment guide has to set the header it tells the panel to read.
+_ip_readme = open(os.path.join(_root, "README.md"), encoding="utf-8").read()
+check("README: the nginx block sets X-Forwarded-For rather than passing the client's through",
+      "proxy_add_x_forwarded_for" in _ip_readme,
+      "nginx forwards whatever the client sent")
+
+# ── Secure cookies ask whether the panel is REACHED over HTTPS ────────────────────────────────
+# The flag mirrored _effective_https's Tailscale case and not its PROXY case, so the deployment
+# the README recommends issued the session cookie and the 3-day remember token with no Secure
+# flag. And site_domain — a hostname typed into the setup wizard — counted as evidence of TLS,
+# which marked the cookies Secure on a panel serving plain HTTP: the browser drops them, the
+# password is right, and / bounces to /login forever.
+import app as _ck_app                                                              # noqa: E402
+import inspect as _ck_inspect                                                       # noqa: E402
+_ck_expr = _ck_inspect.getsource(_ck_app._https_ready)
+for _label, _cfg, _want in (
+        ("fresh install, self-signed TLS", {"use_https": True}, True),
+        ("Tailscale Serve in front", {"use_https": True, "tailscale_setup_done": True}, True),
+        ("reverse proxy in front", {"use_https": False, "trust_proxy": True}, True),
+        ("reverse proxy + a site_domain", {"use_https": False, "trust_proxy": True,
+                                           "site_domain": "p.example"}, True),
+        ("no TLS anywhere, domain typed in setup", {"use_https": False,
+                                                    "site_domain": "p.example"}, False)):
+    _got = _ck_app._https_ready(_cfg)
+    check("cookies: Secure is %s for %s" % (_want, _label), _got is _want, "got %s" % _got)
+check("cookies: the Secure predicate reads trust_proxy", "trust_proxy" in _ck_expr, _ck_expr)
+check("cookies: ...and not site_domain, which is not evidence of TLS",
+      "site_domain" not in _ck_expr, _ck_expr)
+
+# ── the mount prefix is a PATH, and it is matched as one ──────────────────────────────────────
+# _may_trust_header decides WHO may set X-Forwarded-Prefix; nothing constrained WHAT it could say,
+# so a trusted-source request could set SCRIPT_NAME to "//evil.example" and have every url_for()
+# on the page it got back, and the Location of every redirect, point off-site — the exact harm the
+# docstring says the source rule prevents. And the incoming PATH_INFO strip was a bare substring
+# test, so on mount /panel every page was served a second time outside the mount: /panelserver/1
+# arrived as SCRIPT_NAME=/panel PATH_INFO=server/1 and answered 200.
+from panel.core.middleware import PrefixMiddleware as _PM                          # noqa: E402
+for _raw, _want in (("/lgsm", "/lgsm"), ("/ok/", "/ok"), ("", ""),
+                    ("//evil.example", ""), ("https://evil.example", ""),
+                    ("/a/../../b", ""), ("/x\ny", ""), ("/a b", "")):
+    eq("prefix: %r -> %r" % (_raw, _want), _PM._clean_prefix(_raw), _want)
+
+_pm_seen = []
+
+
+def _pm_app(environ, start_response):
+    _pm_seen.append((environ.get("SCRIPT_NAME"), environ.get("PATH_INFO")))
+    start_response("200 OK", [])
+    return [b""]
+
+
+_pm = _PM(_pm_app, "/panel")
+_o_lc = _PM.__module__ and __import__("panel.core.middleware", fromlist=["load_config"])
+_pm_o_cfg = _o_lc.load_config
+_o_lc.load_config = lambda: {"tailscale_mount": "/panel"}
+try:
+    for _path, _want in (("/panel/login", ("/panel", "/login")),
+                         ("/panel", ("/panel", "/")),
+                         ("/panelserver/1", ("/panel", "/panelserver/1")),
+                         ("/paneling", ("/panel", "/paneling"))):
+        _pm_seen.clear()
+        _pm({"PATH_INFO": _path, "REMOTE_ADDR": "203.0.113.9", "SCRIPT_NAME": ""},
+            lambda *a, **k: None)
+        eq("prefix: %r is routed as %r" % (_path, _want[1]), _pm_seen[-1], _want)
+    # ...and a hostile header, all the way through __call__ — not just through _clean_prefix,
+    # which a test can call while the middleware has stopped calling it.
+    for _hostile in ("//evil.example", "https://evil.example"):
+        _pm_seen.clear()
+        _pm({"PATH_INFO": "/login", "REMOTE_ADDR": "127.0.0.1", "SCRIPT_NAME": "",
+             "HTTP_X_FORWARDED_PREFIX": _hostile}, lambda *a, **k: None)
+        check("prefix: X-Forwarded-Prefix %r never becomes SCRIPT_NAME" % _hostile,
+              _pm_seen and _pm_seen[-1][0] != _hostile, str(_pm_seen[-1:]))
+finally:
+    _o_lc.load_config = _pm_o_cfg
+
+# ── disabling 2FA revokes its backup codes, on EVERY path ─────────────────────────────────────
+# Two web paths clear them and say so; the CLI was the one that did not, leaving bcrypt hashes of
+# credentials the operator had just revoked in panel.db.
+import ast as _2fa_ast                                                             # noqa: E402
+_2fa_sources = {
+    "manage.py cmd_disable_2fa": open(os.path.join(_root, "manage.py"), encoding="utf-8").read(),
+    "tags.py": open(os.path.join(_root, "panel", "routes", "tags.py"), encoding="utf-8").read(),
+    "admin_notifications.py": open(os.path.join(_root, "panel", "routes",
+                                                "admin_notifications.py"), encoding="utf-8").read(),
+}
+_2fa_missing = []
+for _name, _src in _2fa_sources.items():
+    for _fn in _2fa_ast.walk(_2fa_ast.parse(_src)):
+        if not isinstance(_fn, (_2fa_ast.FunctionDef,)):
+            continue
+        _body = _2fa_ast.get_source_segment(_src, _fn) or ""
+        if "totp_enabled = False" in _body and "backup_codes = \"\"" not in _body:
+            _2fa_missing.append("%s:%s" % (_name, _fn.name))
+check("2FA: every path that disables it also clears the backup codes", not _2fa_missing,
+      "left behind by: %s" % _2fa_missing)
+
+# ── The dump salvage must KEEP what it read ───────────────────────────────────────────────────
+# The per-statement guard only wrapped dst.execute(); the error a corrupt page raises comes from
+# the iterdump GENERATOR, so it escaped that guard, unwound the `with dst:` and was caught by the
+# outer handler as a total failure. Measured on a 169-page database with ONE page corrupted in the
+# middle: 1477 statements were readable, zero were kept, the rebuild came out 0 bytes, and repair()
+# said "could not repair" — the exact case this function exists for. Built here rather than
+# described, because "recovers cleanly readable rows" was a docstring for a long time.
+import sqlite3 as _dbm_sqlite                                                      # noqa: E402
+import inspect as _tg_inspect                                                      # noqa: E402
+import json as _json                                                               # noqa: E402
+import importlib.util as _dbm_ilu                                                  # noqa: E402
+_dbm_spec = _dbm_ilu.spec_from_file_location("dbm_probe", os.path.join(_root, "db_maintenance.py"))
+_dbm = _dbm_ilu.module_from_spec(_dbm_spec)
+_dbm_spec.loader.exec_module(_dbm)
+
+_dbm_tmp = _tempfile.mkdtemp(prefix="dbrebuild-")
+try:
+    _dbm_src = os.path.join(_dbm_tmp, "src.db")
+    _c = _dbm_sqlite.connect(_dbm_src)
+    _c.execute("CREATE TABLE user (id INTEGER PRIMARY KEY, name TEXT)")
+    _c.executemany("INSERT INTO user (name) VALUES (?)", [("u%05d" % i,) for i in range(4000)])
+    _c.commit()
+    _c.close()
+    _dbm_size = os.path.getsize(_dbm_src)
+    # One bad page in the middle — the one-bad-sector case, not a shredded file.
+    with open(_dbm_src, "r+b") as _fh:
+        _fh.seek(_dbm_size // 2)
+        _fh.write(b"\xde\xad\xbe\xef" * 256)
+    _dbm_dst = os.path.join(_dbm_tmp, "rebuilt.db")
+    _dbm_ok = _dbm._rebuild_via_dump(_dbm_src, _dbm_dst)
+    _dbm_rows = 0
+    if os.path.exists(_dbm_dst):
+        try:
+            _rc = _dbm_sqlite.connect(_dbm_dst)
+            _dbm_rows = _rc.execute("SELECT COUNT(*) FROM user").fetchone()[0]
+            _rc.close()
+        except _dbm_sqlite.DatabaseError:
+            _dbm_rows = -1
+    check("db rebuild: a corrupt page in the middle does not discard the rows already read",
+          _dbm_ok and _dbm_rows > 100, "ok=%s rows=%s" % (_dbm_ok, _dbm_rows))
+    # ...and an intact database still rebuilds completely.
+    _dbm_src2 = os.path.join(_dbm_tmp, "good.db")
+    _c = _dbm_sqlite.connect(_dbm_src2)
+    _c.execute("CREATE TABLE user (id INTEGER PRIMARY KEY, name TEXT)")
+    _c.executemany("INSERT INTO user (name) VALUES (?)", [("u%d" % i,) for i in range(50)])
+    _c.commit(); _c.close()
+    _dbm_dst2 = os.path.join(_dbm_tmp, "rebuilt2.db")
+    _dbm._rebuild_via_dump(_dbm_src2, _dbm_dst2)
+    _rc = _dbm_sqlite.connect(_dbm_dst2)
+    _dbm_all = _rc.execute("SELECT COUNT(*) FROM user").fetchone()[0]
+    _rc.close()
+    eq("db rebuild: an intact database still rebuilds in full", _dbm_all, 50)
+finally:
+    _shutil.rmtree(_dbm_tmp, ignore_errors=True)
+
+# ── A failed priming poll must not mark the bot primed ────────────────────────────────────────
+# telegram_get_updates answers None on a network error, on a 409 (a second poller) and on
+# ok:false. `primed = True` ran regardless, leaving offset=None, so the next poll asked Telegram
+# for every unconfirmed update — and Telegram holds those for 24 hours. The window this runs in is
+# the one most likely to fail: the process has just restarted from a self-update, so a
+# `/stop codserver` sent hours earlier stops a running server.
+from panel.services.bots import telegram as _tgm                                   # noqa: E402
+_tg_src = _tg_inspect.getsource(_tgm)
+_tg_prime = _tg_src[_tg_src.index("if not primed:"):_tg_src.index("updates = notifications.telegram_get_updates(token, offset=offset")]
+check("telegram: a priming poll that did not answer leaves the bot UNPRIMED",
+      "if latest is None:" in _tg_prime and "continue" in _tg_prime.split("if latest is None:")[1].split("primed = True")[0],
+      _tg_prime)
+
+# ── /console must not print the "not running" sentinel as console output ──────────────────────
+# `echo NO_SESSION` goes to STDOUT, so out == "NO_SESSION" and the `if not rows` guard could never
+# fire: the command that exists to answer "why did the start fail?" answered NO_SESSION. rc was
+# unpacked and never read, while the comment beside it claimed the case was handled.
+from panel.services.bots import commands as _botcmd                                # noqa: E402
+_bc_src = _tg_inspect.getsource(_botcmd._console_text)
+check("bots: /console reads capture_console's rc instead of printing NO_SESSION",
+      "NO_SESSION" in _bc_src and "rc != 0" in _bc_src, _bc_src[:200])
+
+# ── Discord replies must not be able to ping the channel ──────────────────────────────────────
+# The content is not ours: player names (!players), the tail of the live console (which on most
+# engines carries in-game chat), package names from a remote host's apt output. Discord parses
+# every mention in `content` by default, so a player could pick a name that mass-pings the
+# operator's Discord every time an admin ran !players.
+from panel.services import notifications as _nt                                    # noqa: E402
+_nt_posts = []
+_nt_o_post = _nt._post
+try:
+    _nt._post = lambda url, data=None, headers=None, **k: (
+        _nt_posts.append(_json.loads((data or b"{}").decode())), (True, "sent"))[1]
+    _nt.send_discord("https://discord.com/api/webhooks/123456789012345678/"
+                     + "a" * 68, "hello <@everyone>")
+    _nt.discord_bot_send("A" * 24 + "." + "B" * 6 + "." + "C" * 38, "123456789012345678",
+                         "gmodserver — 1 player(s):\n• <@everyone> lol")
+finally:
+    _nt._post = _nt_o_post
+check("discord: every send declares allowed_mentions, so a player name cannot ping the channel",
+      len(_nt_posts) == 2 and all(p.get("allowed_mentions") == {"parse": []} for p in _nt_posts),
+      str(_nt_posts))
+
+# ── A provider that refuses every message must leave a trace ──────────────────────────────────
+# _post's HTTPError branch logged nothing and notify()'s sender calls were bare statements, so a
+# rotated token or a bot removed from a channel stopped alerting with nothing in the journal,
+# nothing in the UI and nothing in the audit log.
+import logging as _nt_logging                                                      # noqa: E402
+import io as _nt_io                                                                # noqa: E402
+_nt_buf = _nt_io.StringIO()
+_nt_h = _nt_logging.StreamHandler(_nt_buf)
+_nt_log = _nt_logging.getLogger("notifications")
+_nt_log.addHandler(_nt_h)
+_nt_o_level = _nt_log.level
+_nt_log.setLevel(_nt_logging.WARNING)
+try:
+    import urllib.error as _nt_urlerr                                              # noqa: E402
+    import urllib.request as _nt_urlreq                                            # noqa: E402
+    _o_open = _nt_urlreq.urlopen
+    _nt_urlreq.urlopen = lambda *a, **k: (_ for _ in ()).throw(
+        _nt_urlerr.HTTPError("https://api.telegram.org/x", 401, "Unauthorized", {}, None))
+    try:
+        _nt_res = _nt.send_telegram("1234567890:" + "A" * 35, "12345", "hi")
+    finally:
+        _nt_urlreq.urlopen = _o_open
+finally:
+    _nt_log.removeHandler(_nt_h)
+    _nt_log.setLevel(_nt_o_level)
+check("notifications: a provider that REJECTS a message says so in the log",
+      _nt_res[0] is False and "rejected by the provider" in _nt_buf.getvalue(),
+      "%s / %r" % (_nt_res, _nt_buf.getvalue()))
+
+# ── refresh() must report the FETCH, not the cache it read back ───────────────────────────────
+# `return bool(serverlist())` reads the cache, which every previous run populated — so this
+# answered True with every network fetch failing, and the route turned that into
+# {"success": true, "message": "Loaded 30 games."} plus an audit row saying it worked.
+from panel.services import lgsm_data as _lg                                        # noqa: E402
+_lg_o_fetch = _lg._fetch
+try:
+    _lg._fetch = lambda name: None                       # every fetch fails
+    _lg_bad = _lg.refresh(force=True)
+    _lg._fetch = lambda name: ("shortname,gameservername,gamename,os\n"
+                               "csgo,csgoserver,CS,ubuntu-24.04\n" if name == _lg.SERVERLIST
+                               else "all,bc\n")
+    _lg_good = _lg.refresh(force=True)
+finally:
+    _lg._fetch = _lg_o_fetch
+    _lg._mem.clear()
+check("lgsm_data: refresh() reports the FETCH, not the cache it read back",
+      _lg_bad is False, "returned %r with every fetch failing" % (_lg_bad,))
+check("lgsm_data: ...and still reports success when the fetch works", _lg_good is True,
+      "returned %r" % (_lg_good,))
+
+# ── "could not read" is not "nobody is playing" ───────────────────────────────────────────────
+# console_player_list answered [] for an exception, for rc != 0 (the "not running" case) and for
+# empty output, and player_list's `or []` then turned a stopped server into a confirmed-empty one:
+# the bot said "no players connected" about a server that was down, and the detail page's
+# `unknown` flag — which exists to avoid exactly that wording — never fired.
+from panel.ops.ssh_manager import game as _sm_game                                 # noqa: E402
+_pl_o_send, _pl_o_cap = _sm_game._core.send_console_command, _sm_game.capture_console
+try:
+    _sm_game._core.send_console_command = lambda *a, **k: ("", "", 0)
+    _sm_game.capture_console = lambda *a, **k: ("NO_SESSION", "", 3)
+    check("players: a stopped server reads as UNKNOWN, not as empty",
+          _sm_game.console_player_list(None, "u", "cod", selfname="codserver") is None)
+    check("players: ...and player_list passes that through instead of an empty list",
+          _sm_game.player_list(None, "u", "cod", 28960, None, "codserver",
+                               allow_console=True) is None)
+    _sm_game.capture_console = lambda *a, **k: (
+        "num score ping guid   name            lastmsg address               qport rate\n", "", 0)
+    check("players: a table that really is empty still reads as empty",
+          _sm_game.player_list(None, "u", "cod", 28960, None, "codserver",
+                               allow_console=True) == [])
+finally:
+    _sm_game._core.send_console_command, _sm_game.capture_console = _pl_o_send, _pl_o_cap
