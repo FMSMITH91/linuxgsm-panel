@@ -285,7 +285,7 @@ def register(app):
                                        merge_stderr=False)
                     idout, _, _ = _sm.run_command(remote, f"id {short_name} 2>/dev/null && echo EXISTS || echo NOTEXISTS", timeout=10)
                     if "NOTEXISTS" in idout:
-                        _sm.run_privileged(remote, "user-create", [short_name], timeout=15)
+                        _sm.create_game_user(remote, short_name, timeout=15)
                         time.sleep(0.3)
 
                     # 2. Download & set up LinuxGSM (canonical script name).

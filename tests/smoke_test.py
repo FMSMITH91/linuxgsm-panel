@@ -4610,7 +4610,7 @@ try:
     import re as _lat_re
     _ao.clear()
     _lat_saved = (_sm_core.run_as_game_user, _sm_core.run_command)
-    _lat_cmds, _lat_seen = [], []
+    _lat_cmds, _lat_seen, _lat_kw = [], [], []
 
     def _lat_emit(event, payload=None, **kw):
         _lat_seen.append((event, payload, kw.get("room")))
@@ -4624,6 +4624,7 @@ try:
 
         def _lat_rag(remote, short, cmd, *a, **k):
             _lat_cmds.append(cmd)
+            _lat_kw.append(dict(k))
             _lat_during.append(dict(_ao.get(gs_id) or {}))
             return ("Local build: 1\nRemote build: 2\nUpdate complete\n", "", 0)
 
@@ -4635,15 +4636,25 @@ try:
             app._run_action(_lat_gs, _lat_gs.remote, "update", None)
         check("long action: it really ran", _pa_wait(_lat_cmds), "cmds=%s" % _lat_cmds)
         _lat_logf = _action_log_path(_lat_user, "update")
-        check("long action: its output is redirected through a file the console can tail",
-              _lat_cmds and ("> %s 2>&1" % _lat_logf) in _lat_cmds[0],
+        # The route used to hand run_as_game_user a whole shell line — the action, a redirect into
+        # this file, a `cat` and an `exit $rc` — which is exactly why that call could not route
+        # through a privileged verb. It passes the ACTION plus tee_log now, and run_as_game_user
+        # renders the redirect (remote) or the helper writes the file itself (local). Both derive
+        # the path from the same two values _action_log_path does; part05 holds that check and the
+        # rendering ones, so what this asserts is that the ROUTE still asks for the tee'd log.
+        check("long action: it asks for output tee'd through a file the console can tail",
+              _lat_kw and _lat_kw[0].get("tee_log") is True,
+              "kwargs %r" % (_lat_kw[0] if _lat_kw else None))
+        check("long action: ...and passes a bare LinuxGSM action, not a shell fragment",
+              _lat_cmds and _lat_cmds[0] == "update",
               "ran %r" % (_lat_cmds[0] if _lat_cmds else None))
         # ...and the whole output must still come BACK to this thread: the audit log entry and the
-        # chat bots' completion message are both built from it, so a redirect that swallowed it
-        # would trade one silence for another.
-        check("long action: the redirect still hands the full output back (cat + LinuxGSM's own rc)",
-              _lat_cmds and "cat %s" % _lat_logf in _lat_cmds[0] and "exit $rc" in _lat_cmds[0],
-              "ran %r" % (_lat_cmds[0] if _lat_cmds else None))
+        # chat bots' completion message are both built from it, so a tee that swallowed it would
+        # trade one silence for another. The stub above returns output, and the completion marker
+        # checked below is built from it.
+        check("long action: fastdl is the one that also needs its prompts answered",
+              _lat_kw and "answers" in _lat_kw[0],
+              "kwargs %r" % (_lat_kw[0] if _lat_kw else None))
         check("long action: the output file is registered for tailing WHILE it runs",
               _lat_during and _lat_during[0].get("path") == _lat_logf
               and _lat_during[0].get("action") == "update"

@@ -691,6 +691,11 @@ def _choice(*allowed):
 # The LinuxGSM actions the panel may run as a game user. Mirrors app.RUNNABLE_ACTIONS plus the two
 # mods subcommands panel/ops/ssh_manager/files.py drives; the unit suite asserts the three lists
 # agree, so an action added to the panel cannot silently become unrunnable.
+# The group install.sh names in the Runas position of the panel's second sudoers line, so that
+# `lgsmpanel ALL=(%lgsmpanel-games) NOPASSWD: ALL` means "may become a game account, and no other".
+# A literal here and in tools/panel-helper; never caller-supplied — the name IS the boundary.
+GAME_GROUP = "lgsmpanel-games"
+
 LGSM_ACTIONS = ("start", "stop", "restart", "monitor", "update", "validate", "backup",
                 "details", "check-update", "force-update", "update-lgsm", "mods-update",
                 "postdetails", "test-alert", "fastdl", "mods-install", "mods-remove")
@@ -886,6 +891,9 @@ _ARGV = {
     # see run_as_game_user, which picks the transport and keeps the remote form unchanged.
     "lgsm-command": ([_managed_user, _ident, _choice(*LGSM_ACTIONS), _answers,
                       _choice("yes", "no")], lambda a: [], None),
+    # Put a game account in the group the local sudoers grant names. Local-only: on a remote host
+    # the panel's rights are the operator's sudoers to arrange, and this group means nothing there.
+    "gameuser-group": ([_managed_user], lambda a: [], None),
     "apt-full-upgrade": ([_choice("phased", "standard")],
                          lambda a: [APT, "full-upgrade", "-y"]
                          + (["-o", "APT::Get::Always-Include-Phased-Updates=true"]

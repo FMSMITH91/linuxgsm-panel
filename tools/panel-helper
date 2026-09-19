@@ -77,6 +77,7 @@ TOOLS = {
     "timedatectl": ("/usr/bin/timedatectl", "/bin/timedatectl"),
     "df": ("/usr/bin/df", "/bin/df"),
     "usermod": ("/usr/sbin/usermod", "/sbin/usermod"),
+    "groupadd": ("/usr/sbin/groupadd", "/sbin/groupadd"),
     "fallocate": ("/usr/bin/fallocate", "/bin/fallocate"),
     "mkswap": ("/usr/sbin/mkswap", "/sbin/mkswap"),
     "swapon": ("/usr/sbin/swapon", "/sbin/swapon"),
@@ -888,6 +889,67 @@ def v_choice(*allowed):
 # The actions the panel may run. Mirrors app.RUNNABLE_ACTIONS plus the two mods subcommands that
 # panel/ops/ssh_manager/files.py drives; the unit suite asserts the three lists agree, so a new
 # action added to the panel cannot silently become unrunnable here.
+# The group the panel's sudoers grant names in its Runas position, so that
+# `lgsmpanel ALL=(%lgsmpanel-games) NOPASSWD: ALL` means "may become a game account, and no other".
+# A literal here and in install.sh; never caller-supplied, because the name IS the boundary --
+# a caller that could choose it could choose `root` and name the group it is already in.
+GAME_GROUP = "lgsmpanel-games"
+
+# Groups whose members can already reach root on a Debian/Ubuntu host.
+PRIVILEGED_GROUPS = ("sudo", "admin", "wheel", "root")
+
+
+def _groups_of(user):
+    """Every group name `user` belongs to, primary included."""
+    names = set()
+    try:
+        pw = pwd.getpwnam(user)
+        names.add(grp.getgrgid(pw.pw_gid).gr_name)
+    except (KeyError, OSError):
+        pass
+    try:
+        names |= {g.gr_name for g in grp.getgrall() if user in g.gr_mem}
+    except OSError:
+        pass
+    return names
+
+
+def _can_already_escalate(user):
+    """True if `user` can reach root on its own — by privileged group, or by a sudoers entry.
+
+    THIS is what keeps the panel's second sudoers grant bounded. That line says the panel may
+    BECOME any member of GAME_GROUP. If a member could itself run sudo, the grant would be
+    NOPASSWD:ALL with one extra hop (`sudo -u them bash -c 'sudo -i'`) and the split between
+    "root only through the helper" and "game accounts directly" would be decorative.
+
+    This is not an exotic case to guard against. Installing LinuxGSM under your own, sudo-capable
+    account is an ordinary setup — it is what LinuxGSM's own documentation shows — and the panel's
+    discovery scan exists to import exactly those installs, so such an account is a LIKELY
+    argument here, not an unlikely one.
+
+    Deliberately conservative: anything it cannot read or parse confidently counts as "can
+    escalate". A false refusal costs one account the panel cannot drive, and says so out loud; a
+    false accept costs root.
+    """
+    names = _groups_of(user)
+    if names & set(PRIVILEGED_GROUPS):
+        return True
+    specs = set([user] + ["%" + n for n in names])
+    for path in ["/etc/sudoers"] + sorted(glob.glob("/etc/sudoers.d/*")):
+        try:
+            with open(path, encoding="utf-8", errors="replace") as fh:
+                for line in fh:
+                    line = line.split("#")[0].strip()
+                    if not line or line.startswith(("Defaults", "@include", "#include")):
+                        continue
+                    parts = line.split()
+                    if parts and parts[0] in specs:
+                        return True
+        except OSError:
+            continue
+    return False
+
+
 LGSM_ACTIONS = ("start", "stop", "restart", "monitor", "update", "validate", "backup",
                 "details", "check-update", "force-update", "update-lgsm", "mods-update",
                 "postdetails", "test-alert", "fastdl", "mods-install", "mods-remove")
@@ -1108,6 +1170,8 @@ VERBS = {
     # One LinuxGSM action, run as the game user -- see do_lgsm_command for why this verb exists.
     "lgsm-command": ([v_managed_user, v_ident, v_choice(*LGSM_ACTIONS), v_answers,
                       v_choice("yes", "no")], lambda a: [], None),
+    # Put a game account in the group the sudoers grant names -- see do_gameuser_group.
+    "gameuser-group": ([v_managed_user], lambda a: [], None),
     # Two upgrade shapes, because the panel really does want two. "phased" includes Ubuntu's
     # phased rollouts so an explicit "install updates" applies everything the Check list showed;
     # "standard" is apt's default set, used when bootstrapping a host.
@@ -2074,6 +2138,40 @@ def _lgsm_child(pw, home, selfname, action, stdin_text, tee):
         return 1
 
 
+def do_gameuser_group(args, content):
+    """Put a game account in GAME_GROUP, creating the group if it is not there yet.
+
+    This is the other half of the fix `lgsm-command` started. Converting run_as_game_user to a
+    verb put SERVER CONTROL back on a narrow-grant host, but it was one of about 45 sites that
+    build `sudo -u <game user> bash -c '<shell>'`: the file browser, the GMod content mounts, the
+    cron writers and the install flows are the same shape and fail the same way. Rather than
+    leave those broken, install.sh grants the panel the right to become an account IN THIS GROUP
+    -- never root, which stays reachable only through this helper.
+
+    So membership of this group is a privilege boundary, and the group name is a literal here
+    rather than an argument: a caller that could name the group could name one that root is in.
+    The ACCOUNT is still checked -- v_managed_user refuses uid 0 -- so this cannot be used to put
+    a root-equivalent account inside the panel's reach either.
+
+    `groupadd -f` succeeds when the group already exists, and `usermod -aG` is append-only, so
+    running this for an account that is already a member is a no-op."""
+    user = args[0]
+    if _can_already_escalate(user):
+        sys.stderr.write("refusing to enrol %s in %s: it can already run sudo, so the panel's "
+                         "grant would become a path to root\n" % (user, GAME_GROUP))
+        return 1
+    rc = subprocess.run([resolve("groupadd"), "-f", GAME_GROUP],      # nosec B603 - fixed argv
+                        shell=False, capture_output=True, timeout=30).returncode
+    if rc != 0:
+        sys.stderr.write("could not create group %s\n" % GAME_GROUP)
+        return rc
+    r = subprocess.run([resolve("usermod"), "-aG", GAME_GROUP, user],  # nosec B603 - fixed argv
+                       shell=False, capture_output=True, timeout=30)
+    if r.returncode != 0:
+        sys.stderr.write(r.stderr.decode("utf-8", "replace")[:400])
+    return r.returncode
+
+
 def do_lgsm_command(args, content):
     """Run ONE LinuxGSM action as a game user, from that user's home directory.
 
@@ -2609,6 +2707,7 @@ ACTIONS = {
     "game-dir-tar": do_game_dir_tar,
     "lgsm-discover": do_lgsm_discover,
     "lgsm-command": do_lgsm_command,
+    "gameuser-group": do_gameuser_group,
     "sshd-set-directive": do_sshd_set_directive,
     "create-swapfile": do_create_swapfile,
 }

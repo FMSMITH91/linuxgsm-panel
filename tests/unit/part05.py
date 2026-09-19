@@ -962,6 +962,7 @@ _VERB_SAMPLES = {
     "game-dir-tar": ["codserver", "serverfiles/addons"],
     "lgsm-discover": [],
     "lgsm-command": ["gmodserver", "gmodserver", "details", "-", "no"],
+    "gameuser-group": ["gmodserver"],
     "content-scan": ["cstrike", "hl2"],
 }
 check("privileged: every verb has a sample (new verbs cannot skip the parity check)",
@@ -1714,7 +1715,8 @@ check("helper: resolves ufw", _helper.resolve("ufw").endswith("/ufw") if os.path
 check("helper: knows exactly the tools its verbs need, and no more",
       sorted(_helper.TOOLS) == ["add-apt-repository", "apt-get", "bash_installer", "crontab",
                                 "curl", "df", "dpkg",
-                                "fail2ban-client", "fallocate", "fuser", "journalctl", "mkswap",
+                                "fail2ban-client", "fallocate", "fuser", "groupadd", "journalctl",
+                                "mkswap",
                                 "npm", "passwd", "pgrep", "pkill", "pro", "reboot", "renice", "rm",
                                 "sh_installer", "ss", "sshd", "swapon", "sysctl",
                                 "systemctl", "systemd-run",
@@ -2853,3 +2855,152 @@ try:
               _r2 == 1 and not _rem_sent, "rc=%s sent=%s" % (_r2, _rem_sent))
 finally:
     _sm_core.is_local_server, _sm_core.run_command = _o_local3, _o_rc3
+
+
+# ── gameuser-group: the account the panel creates must land inside the grant ───────────────────
+# The narrow grant's second line names a GROUP. An account created outside it is one the panel
+# cannot drive — and the failure is silent and per-server, which is exactly how the original bug
+# stayed hidden. create_game_user pairs the two so a new call site cannot forget the second half.
+check("gameuser-group: the verb takes the ACCOUNT and holds the group name as a literal",
+      _priv.check_args("gameuser-group", ["gmodserver"]) == ["gmodserver"]
+      and _helper.GAME_GROUP == _priv.GAME_GROUP == "lgsmpanel-games",
+      "helper=%r panel=%r" % (_helper.GAME_GROUP, _priv.GAME_GROUP))
+check("gameuser-group: refuses a uid-0 account, so root cannot be put inside the grant",
+      _ufw_raises_verb(lambda: _priv.check_args("gameuser-group", ["root"])))
+
+_cgu = []
+_o_rp, _o_local4 = _sm_core.run_privileged, _sm_core.is_local_server
+try:
+    def _cgu_rp(server, verb, args=(), **k):
+        _cgu.append((verb, list(args)))
+        return ("", "", 0)
+    _sm_core.run_privileged = _cgu_rp
+
+    _sm_core.is_local_server = lambda s: True
+    _cgu.clear(); _sm_core.create_game_user(NS(), "gmodserver")
+    check("create_game_user: a LOCAL host creates the account AND enrols it",
+          [v for v, _a in _cgu] == ["user-create", "gameuser-group"], str(_cgu))
+
+    _sm_core.is_local_server = lambda s: False
+    _cgu.clear(); _sm_core.create_game_user(NS(), "gmodserver")
+    check("create_game_user: a REMOTE host only creates it — the group means nothing there",
+          [v for v, _a in _cgu] == ["user-create"], str(_cgu))
+
+    # A failed creation must not be followed by an enrolment of an account that does not exist.
+    _sm_core.is_local_server = lambda s: True
+    _sm_core.run_privileged = lambda s, verb, args=(), **k: (
+        _cgu.append((verb, list(args))), ("", "useradd: failure", 1))[1]
+    _cgu.clear(); _o2, _e2, _r2 = _sm_core.create_game_user(NS(), "gmodserver")
+    check("create_game_user: a FAILED creation is not followed by an enrolment",
+          [v for v, _a in _cgu] == ["user-create"] and _r2 == 1, "%s rc=%s" % (_cgu, _r2))
+
+    # ...and the reverse: an old helper without the verb must not turn a working install into a
+    # failed one. The server is created; it just is not in the group yet.
+    def _cgu_halfway(server, verb, args=(), **k):
+        _cgu.append((verb, list(args)))
+        if verb == "gameuser-group":
+            raise RuntimeError("unknown verb")
+        return ("", "", 0)
+    _sm_core.run_privileged = _cgu_halfway
+    _cgu.clear(); _o3, _e3, _r3 = _sm_core.create_game_user(NS(), "gmodserver")
+    check("create_game_user: an enrolment that FAILS still reports the account as created",
+          _r3 == 0 and [v for v, _a in _cgu] == ["user-create", "gameuser-group"],
+          "rc=%s %s" % (_r3, _cgu))
+finally:
+    _sm_core.run_privileged, _sm_core.is_local_server = _o_rp, _o_local4
+
+# No route may call user-create on its own again: that is the shape that leaves an account outside
+# the grant. Scanned across the package, so a new call site has to go through the pairing.
+_uc_sites = []
+for _dp, _dn, _fn in os.walk(os.path.join(_root, "panel")):
+    _dn[:] = [_d for _d in _dn if _d != "__pycache__"]
+    for _name in _fn:
+        if not _name.endswith(".py") or _name == "privileged.py":
+            continue                       # privileged.py is where the verb is DEFINED
+        _f = os.path.join(_dp, _name)
+        _txt = open(_f, encoding="utf-8").read()
+        if '"user-create"' not in _txt:
+            continue
+        # The ONE legitimate call is the one inside create_game_user. Attributed by AST rather
+        # than by line number so moving the function does not quietly reopen the gate.
+        _allowed = set()
+        for _n in _smg_ast.walk(_smg_ast.parse(_txt)):
+            if isinstance(_n, _smg_ast.FunctionDef) and _n.name == "create_game_user":
+                _allowed = set(range(_n.lineno, (_n.end_lineno or _n.lineno) + 1))
+        for _i, _l in enumerate(_txt.splitlines(), 1):
+            if '"user-create"' in _l.split("#")[0] and _i not in _allowed:
+                _uc_sites.append("%s:%d" % (os.path.relpath(_f, _root), _i))
+check("create_game_user: nothing calls the bare user-create verb any more",
+      not _uc_sites, "still calling it: %s" % _uc_sites)
+
+# ── ...and an account that can ALREADY escalate must never be enrolled ─────────────────────────
+# The grant says the panel may BECOME a member of GAME_GROUP. A member who can run sudo makes that
+# NOPASSWD:ALL with one extra hop — `sudo -u them bash -c 'sudo -i'` — and the split between "root
+# only through the helper" and "game accounts directly" is then decorative. This is not exotic:
+# running LinuxGSM under your own sudo-capable account is what LinuxGSM's own docs show, and the
+# panel's discovery scan imports exactly those installs, so such a name is a LIKELY argument here.
+_grp_saved, _pwd_saved = _helper.grp, _helper.pwd
+_glob_saved = _helper.glob
+
+
+class _FakeGrp:
+    def __init__(self, name, mem=()):
+        self.gr_name, self.gr_mem, self.gr_gid = name, list(mem), 1234
+
+
+try:
+    _helper.glob = NS(glob=lambda _p: [])        # no sudoers.d to read in the unit environment
+    _helper.pwd = NS(getpwnam=lambda _u: NS(pw_gid=1234, pw_uid=1234, pw_name=_u))
+    _helper.grp = NS(getgrgid=lambda _g: _FakeGrp("gmodserver"),
+                     getgrall=lambda: [_FakeGrp("sudo", ["alice"]),
+                                       _FakeGrp("gmodcontent", ["gmodserver"])])
+    check("enrolment: a plain game account can be enrolled",
+          _helper._can_already_escalate("gmodserver") is False)
+    check("enrolment: an account in the sudo group cannot",
+          _helper._can_already_escalate("alice") is True)
+    for _pg in ("admin", "wheel", "root"):
+        _helper.grp = NS(getgrgid=lambda _g: _FakeGrp("users"),
+                         getgrall=lambda _p=_pg: [_FakeGrp(_p, ["bob"])])
+        check("enrolment: ...nor one in '%s'" % _pg,
+              _helper._can_already_escalate("bob") is True)
+    # A sudoers FILE naming the account directly, with no privileged group anywhere.
+    import tempfile as _sg_tmp
+    _sg_dir = _sg_tmp.mkdtemp(prefix="sudoers-")
+    with open(os.path.join(_sg_dir, "90-ops"), "w", encoding="utf-8") as _fh:
+        _fh.write("# a comment naming gmodserver must not count\n"
+                  "Defaults env_reset\n"
+                  "carol ALL=(ALL) NOPASSWD:ALL\n")
+    _helper.glob = NS(glob=lambda _p: [os.path.join(_sg_dir, "90-ops")])
+    _helper.grp = NS(getgrgid=lambda _g: _FakeGrp("users"), getgrall=lambda: [])
+    check("enrolment: an account named in a sudoers.d file cannot be enrolled",
+          _helper._can_already_escalate("carol") is True)
+    check("enrolment: ...but being MENTIONED in a comment there is not a grant",
+          _helper._can_already_escalate("gmodserver") is False)
+
+    # The verb must consult it, not merely define it.
+    _ran = []
+    _sub_saved = _helper.subprocess
+    try:
+        _helper.subprocess = NS(run=lambda *a, **k: (_ran.append(a), NS(returncode=0, stderr=b""))[1])
+        _helper.grp = NS(getgrgid=lambda _g: _FakeGrp("users"),
+                         getgrall=lambda: [_FakeGrp("sudo", ["carol"])])
+        _rc_bad = _helper.do_gameuser_group(["carol"], "")
+        check("enrolment: do_gameuser_group REFUSES a sudo-capable account",
+              _rc_bad == 1 and not _ran, "rc=%s ran=%s" % (_rc_bad, _ran))
+        _ran.clear()
+        _helper.grp = NS(getgrgid=lambda _g: _FakeGrp("gmodserver"), getgrall=lambda: [])
+        _rc_ok = _helper.do_gameuser_group(["gmodserver"], "")
+        check("enrolment: ...and still enrols a plain game account",
+              _rc_ok == 0 and len(_ran) == 2, "rc=%s ran=%s" % (_rc_ok, _ran))
+    finally:
+        _helper.subprocess = _sub_saved
+    _shutil.rmtree(_sg_dir, ignore_errors=True)
+finally:
+    _helper.grp, _helper.pwd, _helper.glob = _grp_saved, _pwd_saved, _glob_saved
+
+# install.sh must apply the same rule to the accounts it backfills.
+_inst_sh_src = open(os.path.join(_root, "install.sh"), encoding="utf-8").read()
+check("install.sh: the backfill skips an account that already has sudo rights",
+      'grep -qxE "sudo|admin|wheel|root"' in _inst_sh_src
+      and 'sudo -l -U "${_gu}"' in _inst_sh_src,
+      "guard missing from sync_game_user_group")

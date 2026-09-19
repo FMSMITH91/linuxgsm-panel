@@ -946,7 +946,13 @@ try:
     _rc_seen.clear()
     _sm_core._rewrite_crontab(NS(), "gmodserver", "", ["* * * * * /home/gmodserver/x"])
     check("_rewrite_crontab: a legitimate account still builds its pipeline",
-          len(_rc_seen) == 1 and "crontab -u gmodserver" in _rc_seen[0], str(_rc_seen)[:160])
+          len(_rc_seen) == 1 and "sudo -u gmodserver bash -c" in _rc_seen[0], str(_rc_seen)[:160])
+    # It used to be `sudo bash -c 'crontab -u <user> …'` — ROOT, for an operation that never needed
+    # it, and refused outright on a host whose grant reaches root only through the helper, so every
+    # cron write failed there: autostart, scheduled restarts, backup schedules.
+    check("_rewrite_crontab: ...as the GAME USER, not as root",
+          _rc_seen and "sudo bash -c" not in _rc_seen[0] and "crontab -u" not in _rc_seen[0],
+          str(_rc_seen)[:200])
 finally:
     _sm_core.run_command = _rc_o_run
 
@@ -969,17 +975,19 @@ def _cr_drive(fn, *a, **kw):
         _sm_cron._read_cron_status, _sm_cron._read_cron_run_times = _o_st, _o_rt
         _sm_cron._install_cron_runner = _o_icr
     cmd = seen.get("cmd") or ""
-    if not cmd.startswith("sudo bash -c "):
+    # `sudo -u gm bash -c '<pipeline>'` — it was `sudo bash -c` (root) until the pipeline stopped
+    # needing root at all; the shape is asserted separately above, this only has to take it apart.
+    if not cmd.startswith("sudo -u gm bash -c "):
         return None, "did not build a rewrite: %r" % cmd[:80]
-    pipeline = _cr_shlex.split(cmd)[3]
+    pipeline = _cr_shlex.split(cmd)[5]
     _src = os.path.join(_cr_sb, "in")
     _dst = os.path.join(_cr_sb, "out")
     with open(_src, "w", encoding="utf-8") as _fh:
         _fh.write(_CR_TAB)
     if os.path.exists(_dst):
         os.remove(_dst)
-    pipeline = pipeline.replace("crontab -u gm -l 2>/dev/null", "cat %s" % _cr_shlex.quote(_src))
-    pipeline = pipeline.replace('crontab -u gm "$T"', 'cp "$T" %s' % _cr_shlex.quote(_dst))
+    pipeline = pipeline.replace("crontab -l 2>/dev/null", "cat %s" % _cr_shlex.quote(_src))
+    pipeline = pipeline.replace('crontab "$T"', 'cp "$T" %s' % _cr_shlex.quote(_dst))
     _r = _cr_sub.run(["bash", "-c", pipeline], capture_output=True, text=True)
     return (open(_dst, encoding="utf-8").read() if os.path.exists(_dst) else None), _r.stderr
 

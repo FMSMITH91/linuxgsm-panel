@@ -905,6 +905,32 @@ def discover_linuxgsm_servers(server):
 _SAFE_GAME_IDENT = re.compile(r"^[A-Za-z0-9_][A-Za-z0-9._-]{0,63}\Z")
 
 
+def create_game_user(server, user, timeout=30):
+    """Create an account the panel will act AS, and put it in the group its grant names.
+
+    Every caller of `user-create` creates an account the panel then drives with `sudo -u` — a game
+    instance's user, or the shared GMod content user. On the panel's own host with the narrow
+    sudoers grant, being able to become that account is exactly what the second grant line allows,
+    and that line names a GROUP (see privileged.GAME_GROUP). An account created outside the group
+    is one the panel cannot drive, which is the bug this pairing exists to stop happening again —
+    silently, one new server at a time.
+
+    The group step is local-only and best-effort: a remote host's sudoers is the operator's to
+    arrange and the group means nothing there, and an older helper without the verb must not turn
+    a working server install into a failed one. Returns user-create's own (out, err, rc)."""
+    out, err, rc = run_privileged(server, "user-create", [user], timeout=timeout)
+    if rc == 0 and is_local_server(server):
+        try:
+            _, g_err, g_rc = run_privileged(server, "gameuser-group", [user], timeout=15,
+                                            merge_stderr=False)
+            if g_rc != 0:
+                _log.warning("could not add %s to %s: %s", user, _priv.GAME_GROUP,
+                             (g_err or "")[:200])
+        except Exception:
+            _log.debug("gameuser-group failed (non-fatal)", exc_info=True)
+    return out, err, rc
+
+
 def run_as_game_user(server, user, action, timeout=30, selfname=None, answers=None,
                      tee_log=False):
     """Run ONE LinuxGSM action as the instance's Ubuntu user, from its home dir.
@@ -1418,17 +1444,28 @@ def _rewrite_crontab(server, user, grep_args, add_lines, extra_pre="", drop_line
         _log.warning("refusing to rewrite a crontab for an unsafe account name")
         return False, "invalid account name"
     _u = _quote(user)
+    # No `-u`, and no root. `crontab -l` and `crontab <file>` run AS the account operate on that
+    # account's own crontab, which is exactly what all five callers want — so this ran as ROOT for
+    # no reason at all.
     pipeline = (
-        f'{env_pre}{extra_pre}T=$(mktemp); crontab -u {_u} -l 2>/dev/null | {filt}> "$T"; '
-        f'{appends}crontab -u {_u} "$T"; RC=$?; rm -f "$T"; exit $RC'
+        f'{env_pre}{extra_pre}T=$(mktemp); crontab -l 2>/dev/null | {filt}> "$T"; '
+        f'{appends}crontab "$T"; RC=$?; rm -f "$T"; exit $RC'
     )
-    # A hand-built `sudo bash -c …` passed with sudo=False is the exact shape SECURITY.md records
-    # as gone ("_sudo_sh | 0 — the route is gone"), and it is invisible to all three escalation
+    # It WAS a hand-built `sudo bash -c …` passed with sudo=False — the exact shape SECURITY.md
+    # records as gone ("_sudo_sh | 0 — the route is gone"), and invisible to all three escalation
     # ratchets: one counts calls to a function named _sudo_sh, one counts the sudo=True keyword,
-    # and one looks for an argv list starting with "sudo". This is none of those. It stays a shell
-    # pipeline because `crontab -u … -l | filter > tmp; crontab -u … tmp` is genuinely a pipeline,
-    # but every value interpolated into it is now validated and quoted.
-    cmd = f"sudo bash -c {_quote(pipeline)}"
+    # and one looks for an argv list starting with "sudo". This was none of those.
+    #
+    # Dropping it to the game user removes that root escalation outright, and is also what makes
+    # cron work on a narrow-grant host: there the panel reaches root only by running the helper,
+    # so the old form was refused and every cron write — autostart, scheduled restarts, backup
+    # schedules — failed. Measured on a test host, as the panel user:
+    #     sudo -n bash -c 'crontab -u gmodserver -l'  -> sudo: a password is required
+    #     sudo -n -u gmodserver crontab -l            -> the crontab, and `crontab <file>` wrote it
+    #
+    # It stays a shell pipeline because `crontab -l | filter > tmp; crontab tmp` is genuinely a
+    # pipeline, but every value interpolated into it is validated and quoted.
+    cmd = f"sudo -u {_u} bash -c {_quote(pipeline)}"
     out, err, rc = run_command(server, cmd, timeout=20, sudo=False)
     return rc == 0, (err or out or "")
 

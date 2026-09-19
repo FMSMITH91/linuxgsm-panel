@@ -890,8 +890,24 @@ check("install.sh: no symlink points /usr/local/bin at the checkout's recover.sh
 # install.sh re-run as root still falls back to `sudo bash -c '<verb as text>'`, and narrowing
 # under it would break every privileged action rather than secure anything.
 _inst = open(os.path.join(_root, "install.sh"), encoding="utf-8").read()
-check("install.sh: writes a narrow grant permitting only the helper",
-      'NOPASSWD: ${HELPER_DST}" > /etc/sudoers.d/linuxgsm-panel' in _inst)
+check("install.sh: the narrow grant reaches ROOT only through the helper",
+      'ALL=(root) NOPASSWD: ${HELPER_DST}' in _inst)
+# The second line, and why it is not a widening: about 45 sites drive a game account with
+# `sudo -u <user> bash -c ...` — the file browser, the GMod content mounts, the cron writers, the
+# install flows — and under a helper-only grant every one of them failed. This grants those, and
+# only those: a Runas GROUP, whose membership install.sh and the gameuser-group verb control.
+check("install.sh: ...and grants becoming a GAME account, scoped to the group",
+      'ALL=(%${GAME_GROUP}) NOPASSWD: ALL' in _inst)
+check("install.sh: ...and that group is never root — the Runas list names no user directly",
+      'NOPASSWD: ALL' not in _inst.replace('ALL=(%${GAME_GROUP}) NOPASSWD: ALL', '')
+      .replace('ALL=(ALL) NOPASSWD:ALL', ''))
+check("install.sh: the group is synced before the grant that names it is written",
+      _inst.find("sync_game_user_group\n") < _inst.find('ALL=(%${GAME_GROUP})')
+      and "sync_game_user_group()" in _inst)
+# A person's account must never land in a grant that lets the panel become them. The rule is a
+# property of the home directory — a LinuxGSM instance or a Steam content tree — not a uid range.
+check("install.sh: only homes with a LinuxGSM/Steam tree join the group",
+      '[ -d "${_gh}/lgsm/config-lgsm" ] || [ -d "${_gh}/serverfiles" ]' in _inst)
 check("install.sh: the narrow grant is conditional on the root-owned pieces being installed",
       '[ "${HELPER_OK}" -eq 1 ] && [ "${ROOT_TOOLS_OK}" -eq 1 ]' in _inst)
 check("install.sh: still validates whichever grant it wrote with visudo",
@@ -933,9 +949,28 @@ _g_j = _inst.find("chmod 440 /etc/sudoers.d")
 check("install.sh: the sudoers grant block is where this gate expects it",
       _g_i != -1 and _g_j > _g_i, "start=%d end=%d" % (_g_i, _g_j))
 _narrow = _inst[_g_i:_g_j] if (_g_i != -1 and _g_j > _g_i) else ""
+# Scanned as the LINES THAT ARE WRITTEN, not as the whole block. The block's comments explain what
+# the grant deliberately excludes, and naming `sudo -u` or `/bin/bash` in prose must not read as
+# granting them — but the substring scan said it did. Extracting the echoed lines is also the
+# stricter reading: with it, a widening cannot hide inside a comment either.
+_g_else = _inst.find("\n    else\n", _g_i)
+_narrow_branch = _inst[_g_i:_g_else] if (_g_i != -1 and _g_else > _g_i) else ""
+_grant_lines = re.findall(r'echo "(\$\{PANEL_USER\}[^"]*)"', _narrow_branch)
+check("install.sh: the gate found the narrow grant's own lines",
+      len(_grant_lines) == 2, "found %r" % (_grant_lines,))
 for _never in ("systemd-run", "/bin/bash", "/bin/sh", "tailscale", "sudo -u"):
     check("install.sh: the narrow grant does not permit %s" % _never,
-          bool(_narrow) and _never not in _narrow)
+          bool(_grant_lines) and not any(_never in _l for _l in _grant_lines),
+          "grant=%r" % (_grant_lines,))
+# ...and the Runas targets are exactly root (reachable only by running the helper) and the game
+# group. An `ALL=(ALL)` here would be the wide grant wearing the narrow branch's name, and a named
+# user would be a target whose membership nothing controls.
+check("install.sh: the narrow grant's Runas targets are root-via-helper and the game group",
+      sorted(re.findall(r"ALL=\((.*?)\)", " ".join(_grant_lines))) == ["%${GAME_GROUP}", "root"],
+      "grant=%r" % (_grant_lines,))
+check("install.sh: ...and root's line permits ONLY the helper, nothing else",
+      any(_l.endswith("NOPASSWD: ${HELPER_DST}") for _l in _grant_lines if "(root)" in _l),
+      "grant=%r" % (_grant_lines,))
 
 # ── The update's snapshot and its rollback, RUN rather than read ──────────────────────────────
 # The snapshot is the only thing standing between a failed update and a dead install, and its

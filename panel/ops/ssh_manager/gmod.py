@@ -150,7 +150,7 @@ def ensure_content_user(server):
     if "Y" not in (exists or ""):
         # Was one root shell: useradd && passwd -l ; install -d. Three verbs, and the
         # serverfiles path is built by the helper from the validated name.
-        _, err, rc = _core.run_privileged(server, "user-create", [u], timeout=30)
+        _, err, rc = _core.create_game_user(server, u, timeout=30)
         if rc == 0:
             _core.run_privileged(server, "user-lock-password", [u], timeout=10, merge_stderr=False)
             _, err, rc = _core.run_privileged(server, "content-dir-create", [u], timeout=30)
