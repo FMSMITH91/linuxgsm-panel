@@ -586,11 +586,6 @@ install_root_tools() {
     PANEL_CONF="${HELPER_DIR}/panel.conf"
     if [ -f "${DBM_SRC}" ] && [ -d "${HELPER_DIR}" ]; then
         if ${H_SUDO} install -o root -g root -m 0755 "${DBM_SRC}" "${DBM_DST}" 2>/dev/null; then
-            printf 'db_path=%s\ndata_dir=%s\npanel_dir=%s\n' \
-                "${PANEL_DIR}/data/panel.db" "${PANEL_DIR}/data" "${PANEL_DIR}" \
-                | ${H_SUDO} tee "${PANEL_CONF}" >/dev/null 2>&1 \
-                && ${H_SUDO} chmod 0644 "${PANEL_CONF}" 2>/dev/null \
-                && ${H_SUDO} chown root:root "${PANEL_CONF}" 2>/dev/null
             # The installer itself, root-owned, for the same reason: the self-update runs it as
             # root, and the copy in the checkout is panel-writable.
             #
@@ -602,13 +597,32 @@ install_root_tools() {
             # somewhere else.
             INSTALLER_SRC="${PANEL_DIR}/install.sh"
             [ -f "${INSTALLER_SRC}" ] || INSTALLER_SRC="${SCRIPT_PATH}"
+            CONF_OK=0
+            printf 'db_path=%s\ndata_dir=%s\npanel_dir=%s\n' \
+                "${PANEL_DIR}/data/panel.db" "${PANEL_DIR}/data" "${PANEL_DIR}" \
+                | ${H_SUDO} tee "${PANEL_CONF}" >/dev/null 2>&1 \
+                && ${H_SUDO} chmod 0644 "${PANEL_CONF}" 2>/dev/null \
+                && ${H_SUDO} chown root:root "${PANEL_CONF}" 2>/dev/null && CONF_OK=1
+            INST_OK=0
             if [ -f "${INSTALLER_SRC}" ] && head -n1 "${INSTALLER_SRC}" | grep -q '^#!.*sh'; then
-                ${H_SUDO} install -o root -g root -m 0755 "${INSTALLER_SRC}" "${INSTALLER_DST}" 2>/dev/null || true
+                ${H_SUDO} install -o root -g root -m 0755 "${INSTALLER_SRC}" "${INSTALLER_DST}" 2>/dev/null && INST_OK=1
             else
                 warn "Could not find this installer on disk to copy root-owned — skipping."
             fi
-            ROOT_TOOLS_OK=1
-            ok "Offline DB repair installed root-owned at ${DBM_DST}"
+            # ALL THREE, not just db_maintenance. The grant below is documented as meaning "every
+            # root-owned piece is in place … the helper, db_maintenance, and the root-owned
+            # installer", and this flag is what it reads — but the panel.conf write was an
+            # unchecked && chain whose status was discarded and the installer copy carried
+            # `|| true`, so a narrow grant could be written on a host missing either. The helper
+            # fails loudly when they are absent, so the cost was a claim the code never verified —
+            # which is the pattern the grant logic exists to avoid.
+            if [ "${CONF_OK}" -eq 1 ] && [ "${INST_OK}" -eq 1 ]; then
+                ROOT_TOOLS_OK=1
+                ok "Offline DB repair installed root-owned at ${DBM_DST}"
+            else
+                warn "db_maintenance is in place but panel.conf or the root-owned installer is not."
+                warn "Keeping the wider sudoers grant until a re-run as root places all three."
+            fi
         else
             warn "Could not install the root-owned db_maintenance copy (needs root)."
             warn "The panel falls back to the pre-helper repair path until you re-run this as root."
@@ -704,13 +718,19 @@ if [ "${IS_UPDATE}" -eq 1 ]; then
     # then we VERIFY the archive is non-empty, so a GENUINE failure (disk full, etc.) still aborts
     # cleanly with a clear message instead of a cryptic exit code.
     tar -C "${PANEL_DIR}" --ignore-failed-read --exclude=./venv --exclude=./data -cf - . 2>/dev/null | ${SNAP_GZ} > "${BACKUP}/code.tgz" || true
-    [ -s "${BACKUP}/code.tgz" ] || die "Couldn't snapshot the current version (backup came out empty) —
+    # `-s` only asks whether it is non-empty, and the failure this check names by name — the disk
+    # filling mid-write — produces a TRUNCATED archive, which is non-empty. It passed, and the
+    # rollback below then wiped PANEL_DIR and fed the truncated stream to tar. `tar -tz` reads the
+    # whole thing: it fails on a broken gzip stream and on a truncated member, which is the actual
+    # question ("can this be unpacked again?").
+    snapshot_ok() { [ -s "$1" ] && tar -tzf "$1" >/dev/null 2>&1; }
+    snapshot_ok "${BACKUP}/code.tgz" || die "Couldn't snapshot the current version (the backup is empty or unreadable) —
      update ABORTED, the panel is unchanged. Check free disk space with 'df -h' and try again."
     # …and the whole data dir (DB + encryption keys + config), since the app runs a
     # startup migration that mutates the DB — we restore this verbatim on rollback.
     if [ -d "${PANEL_DIR}/data" ]; then
         tar -C "${PANEL_DIR}/data" --ignore-failed-read --exclude=./.backups -cf - . 2>/dev/null | ${SNAP_GZ} > "${BACKUP}/data.tgz" || true
-        [ -s "${BACKUP}/data.tgz" ] || die "Couldn't snapshot the database/config (backup empty) — update ABORTED, the panel is unchanged."
+        snapshot_ok "${BACKUP}/data.tgz" || die "Couldn't snapshot the database/config (backup empty or unreadable) — update ABORTED, the panel is unchanged."
     fi
     ok "Snapshot saved"
 
@@ -843,10 +863,24 @@ if [ "${IS_UPDATE}" -eq 1 ]; then
     # We only wipe app files, never data/ or venv (venv is rebuilt below anyway).
     find "${PANEL_DIR}" -mindepth 1 -maxdepth 1 \
         ! -name data ! -name venv -exec rm -rf {} + 2>/dev/null || true
-    tar -C "${PANEL_DIR}" -xzf "${BACKUP}/code.tgz"
+    # Guarded, and it is the reason the guard matters: PANEL_DIR has just been emptied, so an
+    # unpack that fails leaves a half-populated install. Bare, `set -e` killed the script right
+    # here — past install_deps, past the service restart, and past BOTH die messages below — so
+    # the operator (or the in-panel self-update, which only watches the log) got a dead panel and
+    # no explanation at all. This says what happened and where the snapshot is.
+    if ! tar -C "${PANEL_DIR}" -xzf "${BACKUP}/code.tgz"; then
+        die "Update FAILED, and so did the rollback: the code snapshot could not be unpacked.
+     ${PANEL_DIR} is INCOMPLETE and the panel will not start. Restore it by hand from:
+       ${BACKUP}/code.tgz
+     (data/ and venv/ were not touched.)"
+    fi
     if [ -f "${BACKUP}/data.tgz" ]; then
         find "${PANEL_DIR}/data" -mindepth 1 -maxdepth 1 ! -name .backups -exec rm -rf {} + 2>/dev/null || true
-        tar -C "${PANEL_DIR}/data" -xzf "${BACKUP}/data.tgz"
+        if ! tar -C "${PANEL_DIR}/data" -xzf "${BACKUP}/data.tgz"; then
+            die "Update FAILED, and so did the rollback: the data snapshot could not be unpacked.
+     ${PANEL_DIR}/data is INCOMPLETE — the database and encryption keys are missing. Restore by hand from:
+       ${BACKUP}/data.tgz"
+        fi
     fi
     install_deps || true
     [ "${RUN_AS_ROOT}" -eq 1 ] && chown -R "${PANEL_USER}:${PANEL_USER}" "${PANEL_DIR}"

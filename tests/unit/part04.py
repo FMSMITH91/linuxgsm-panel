@@ -252,6 +252,46 @@ _COD = ('num score ping guid                             name            lastmsg
         '  1     0   67 1100001bbbbbbbbbbbbbbbbbbbbbbbbb Bob Smith            50 9.9.9.9:28961 54321 25000\n')
 check("parser(idtech3): slot numbers + names (colours stripped, spaces kept)",
       [(p["num"], p["name"]) for p in _sm_game._parse_idtech3_status(_COD)] == [(0, "Alice"), (1, "Bob Smith")])
+# ── A player's NAME is on the line both parsers read, so both were steerable by a player ─────
+# 1. The SteamID was searched for across the whole row, and the name column comes BEFORE the
+#    uniqueid column — so a persona name shaped like a SteamID won, and the row carried an id of
+#    the player's choosing. The admin clicks Ban, the browser posts that id back, moderate()
+#    re-validates its SHAPE and bans it: fleet-wide under scope "all", and into GlobalBan for a
+#    superadmin, which re-applies to servers added later. An arbitrary third party, permanently,
+#    while the attacker stays connected.
+_SPOOF = ('# userid name uniqueid connected ping loss state adr\n'
+          '#  2 "STEAM_0:1:11111111" STEAM_0:0:99999999 05:23 45 0 active 10.0.0.9:27005\n'
+          '#  3 "Victim" STEAM_0:1:44444444 01:02 30 0 active 10.0.0.8:27005\n')
+check("parser(valve): a persona name shaped like a SteamID does not become the row's SteamID",
+      [(p["name"], p["steamid"]) for p in _sm_game._parse_valve_status(_SPOOF)]
+      == [("STEAM_0:1:11111111", "STEAM_0:0:99999999"), ("Victim", "STEAM_0:1:44444444")],
+      str(_sm_game._parse_valve_status(_SPOOF)))
+# 2. The header was "any line containing uniqueid", and a player can be called that. Last in the
+#    table it emptied the list; mid-table it hid the attacker AND everyone above them. Either way
+#    _resolve_from_console — the only source of SteamIDs for a gamedig-sourced list — then answers
+#    None for the whole server, so nobody can be kicked or banned at all.
+_HDR = ('# userid name uniqueid connected ping loss state adr\n'
+        '#  2 "Alice" STEAM_0:1:44444444 01:02 30 0 active 10.0.0.8:27005\n'
+        '#  3 "my uniqueid" STEAM_0:0:99999999 05:23 45 0 active 10.0.0.9:27005\n')
+check("parser(valve): a player named 'uniqueid' does not blank the list",
+      [p["name"] for p in _sm_game._parse_valve_status(_HDR)] == ["Alice", "my uniqueid"],
+      str(_sm_game._parse_valve_status(_HDR)))
+# The same shape in the idTech3 header scan — "numscoreping" is twelve characters, well inside a
+# CoD name limit.
+_COD_HDR = ('num score ping guid   name            lastmsg address               qport rate\n'
+            '  0    12   45 aabbccdd Alice              50 10.0.0.8:28960        1234 25000\n'
+            '  2     3   60 11223344 Bob                50 10.0.0.7:28960        1235 25000\n'
+            '  4     0   99 99887766 numscoreping       50 10.0.0.9:28960        1236 25000\n')
+check("parser(idtech3): a player named 'numscoreping' does not blank the list",
+      [(p["num"], p["name"]) for p in _sm_game._parse_idtech3_status(_COD_HDR)]
+      == [(0, "Alice"), (2, "Bob"), (4, "numscoreping")],
+      str(_sm_game._parse_idtech3_status(_COD_HDR)))
+# ...and the property the header scan exists for — only the MOST RECENT table — still holds.
+check("parser(valve): a second status reply still supersedes the first",
+      [p["name"] for p in _sm_game._parse_valve_status(_HDR + _SPOOF)]
+      == ["STEAM_0:1:11111111", "Victim"],
+      str([p["name"] for p in _sm_game._parse_valve_status(_HDR + _SPOOF)]))
+
 _MC = "[12:34:56] [Server thread/INFO]: There are 2 of a max of 20 players online: Alice, Bob_1"
 check("parser(minecraft): names from a prefixed log line",
       [p["name"] for p in _sm_game._parse_minecraft_list(_MC)] == ["Alice", "Bob_1"])
@@ -367,6 +407,15 @@ try:
           _sm_game.moderate(None, "u", "cod", "ban", num="3; quit")[0] is False)
     _sm_game.moderate(None, "u", "mc", "ban", target="Steve")
     check("moderation: minecraft ban is a bare name command", _msent.get("cmd") == "ban Steve")
+    # `kick <player> [reason]` separates on a SPACE, which _MOD_BAD_CHARS does not strip — right
+    # for Source and idTech3, whose consoles separate on ';' and newline only, and wrong here.
+    # Bedrock gamertags may contain spaces and a gamedig-sourced list carries the raw name, so
+    # "<someone else> griefing" sent the admin's kick to that someone else. No quoting is correct
+    # across Java, Bedrock and PocketMine, so it refuses instead of guessing.
+    _msent.clear()
+    _mc_ok, _mc_why = _sm_game.moderate(None, "u", "mc", "kick", target="Victim griefing")
+    check("moderation: a minecraft name with a space is refused, not sent as name + reason",
+          _mc_ok is False and "cmd" not in _msent and "space" in _mc_why, "%s %r" % (_mc_why, _msent))
     check("moderation: a non-console game (rust) refuses moderation",
           _sm_game.moderate(None, "u", "rust", "ban", target="x")[0] is False)
     # on-demand id resolution: a gamedig-sourced list carries no ids, so kick/ban looks the player

@@ -93,6 +93,81 @@ if esprima:
             _broken.append("%s: %s" % (_p.name, _e))
     check(not _broken, "static/js: every file parses as JavaScript", "; ".join(_broken[:3]))
 
+# ── A form that appears AFTER page load carries no CSRF token ─────────────────────────────────
+# panel.js gives every POST form a hidden csrf_token, once, on DOMContentLoaded, and wraps fetch()
+# so every mutating fetch carries the header. A form submitted with form.submit() has neither:
+# it is a native POST, so no wrapper runs, and form.submit() fires no 'submit' event either, so a
+# delegated listener could not stand in. refreshSection() re-fetches the page and swaps a
+# container's innerHTML — the SERVER's markup, without the field panel.js added to the live DOM.
+#
+# The host page's uninstall form sits in #host-servers-card and is submitted that way, and
+# importExisting() refreshes exactly that card: after importing discovered servers, Uninstall
+# posted with no token. Measured in a browser against the real panel.js — token present on load,
+# null after the swap, present again after ensureCsrfFields().
+if esprima:
+    _csrf_js = (ROOT / "static" / "js" / "panel.js").read_text(encoding="utf-8")
+    check("window.ensureCsrfFields = function" in _csrf_js,
+          "panel.js exports ensureCsrfFields for markup that arrives after load", "not exported")
+    # It must run at the end of refreshSection, or every swapped-in form loses its token.
+    _rs = _csrf_js[_csrf_js.index("window.refreshSection ="):]
+    _rs = _rs[:_rs.index("function _submitAjaxForm")]
+    check("window.ensureCsrfFields(cur)" in _rs,
+          "panel.js: refreshSection re-arms the token on the markup it swaps in", _rs[:300])
+
+    # The general invariant, over the AST rather than the text: every CallExpression of the form
+    # <x>.submit() must sit inside a function that also calls ensureCsrfFields. A native submit is
+    # the one path the fetch wrapper cannot cover, and form.submit() fires no 'submit' event, so a
+    # delegated listener could not stand in for it either.
+    def _walk(node, fn_stack, hits):
+        t = getattr(node, "type", None)
+        pushed = False
+        if t in ("FunctionDeclaration", "FunctionExpression", "ArrowFunctionExpression"):
+            fn_stack.append({"node": node, "submits": [], "armed": False})
+            pushed = True
+        if t == "CallExpression":
+            callee = getattr(node, "callee", None)
+            prop = getattr(getattr(callee, "property", None), "name", None)
+            name = getattr(callee, "name", None) or getattr(
+                getattr(callee, "property", None), "name", None)
+            if prop == "submit":
+                _submit_sites[0] += 1
+                if fn_stack:
+                    fn_stack[-1]["submits"].append(getattr(node.loc, "start", None))
+            if name == "ensureCsrfFields":
+                for fr in fn_stack:
+                    fr["armed"] = True
+        for k in list(getattr(node, "__dict__", {})):
+            v = getattr(node, k)
+            if isinstance(v, list):
+                for e in v:
+                    if hasattr(e, "type"):
+                        _walk(e, fn_stack, hits)
+            elif hasattr(v, "type"):
+                _walk(v, fn_stack, hits)
+        if pushed:
+            fr = fn_stack.pop()
+            if fr["submits"] and not fr["armed"]:
+                hits.extend(fr["submits"])
+        return hits
+
+    _submit_sites = [0]
+
+    def _csrf_submit_sites():
+        return _submit_sites[0]
+
+    _naked_submit = []
+    for _p in sorted((ROOT / "static" / "js").glob("*.js")):
+        _text = _p.read_text(encoding="utf-8")
+        if ".submit()" not in _text:
+            continue
+        for _loc in _walk(esprima.parseScript(_text, options={"loc": True}), [], []):
+            _naked_submit.append("%s:%s" % (_p.name, getattr(_loc, "line", "?")))
+    # The positive control: an AST walk that matches nothing passes vacuously.
+    check(_csrf_submit_sites() > 0, "static/js: the submit()-site walk found call sites at all",
+          "found none, so the gate below proves nothing")
+    check(not _naked_submit, "static/js: a native form.submit() re-arms its CSRF token first",
+          "form.submit() with no ensureCsrfFields in the same function at: %s" % _naked_submit[:4])
+
 # ── 0b. the server tab bar is the SAME set of destinations on both pages ──────────────────────
 # server_detail.html and server_files.html each render the tab strip, and server_files.html even
 # documents the rule ("same set as the server detail page"). It drifted anyway: History was on the

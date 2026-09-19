@@ -125,6 +125,16 @@ def _install_cron_runner(server, user):
     _core.run_command(server, f"sudo -u {user} bash -c {_core._quote(inner)}", timeout=15, sudo=False)
 
 
+def _escape_cron_percent(cmd):
+    r"""`\%` for every unescaped `%`. cron reads a bare `%` as "end of command, stdin follows"."""
+    return re.sub(r"(?<!\\)%", r"\\%", cmd or "")
+
+
+def _unescape_cron_percent(cmd):
+    """The inverse, for DISPLAY: what cron will actually deliver to the shell."""
+    return (cmd or "").replace("\\%", "%")
+
+
 # A plain command — a path plus simple args, with no shell operators, quotes, or cron-special `%`. Such
 # a command is safe to keep VISIBLE via the inline recorder, so the Autostart detection (which greps
 # the raw crontab for `<base> monitor`) still finds it after the admin reschedules it here.
@@ -137,10 +147,23 @@ def _wrap_cron_command(server, user, command):
     reschedule; anything with `%`, quotes, or shell operators uses the base64 runner (robust, no
     escaping needed)."""
     cmd = (command or "").strip()
-    if ".restart-pending" in cmd:
-        return cmd                              # daily-restart flag line: keep it verbatim + visible
+    # ORDER MATTERS, and it was the other way round. The panel's OWN daily-restart line is
+    # `touch /home/<u>/.restart-pending` — a plain command, which set_daily_restart writes WRAPPED
+    # via the inline recorder. list_cron_jobs unwraps it for display, and rescheduling it in the
+    # generic editor sent that display form back through here, where the .restart-pending branch
+    # returned it bare: the panel's own line silently stopped reporting last-run and success after
+    # any edit. Checked second, the branch now only catches a command the recorder cannot take.
     if _SIMPLE_CMD_RE.match(cmd):
         return _record_managed_cmd(user, cmd)   # plain command (incl. `<base> monitor`): visible + tracked
+    if ".restart-pending" in cmd:
+        # Kept VERBATIM because the daily-restart detection greps the raw crontab for this, and
+        # wrapping a compound command in the inline recorder would move its redirect and its exit
+        # status onto only the last statement. But verbatim is not the same as unescaped: this
+        # branch ran BEFORE the base64 runner, which is the thing that makes `%` safe, and
+        # _validate_cron permits `%`. cron truncates a line at the first unescaped `%` and feeds
+        # the remainder in as stdin, so `… restart >> ~/log/r-%Y.log` quietly became
+        # `… restart >> ~/log/r-` while the panel's editor showed the whole thing back.
+        return _escape_cron_percent(cmd)
     import base64
     _install_cron_runner(server, user)
     b64 = base64.b64encode(cmd.encode()).decode()
@@ -181,8 +204,11 @@ def _unwrap_cron_command(command):
             return command, None
     m2 = _CRON_REC_RE.match(c)
     if m2:
-        return m2.group(1).strip(), m2.group(2)
-    return command, None
+        return _unescape_cron_percent(m2.group(1).strip()), m2.group(2)
+    # Unwrapped: a legacy line, or one this module wrote verbatim. `\%` in a crontab IS an escaped
+    # percent, so showing it as `%` is showing what cron will hand the shell — and it is what has
+    # to come back from the editor for a round-trip through _escape_cron_percent to be a no-op.
+    return _unescape_cron_percent(command), None
 
 
 # Rendering a failed job's captured output into ONE readable line. LinuxGSM paints its console
@@ -429,7 +455,8 @@ def update_cron_job(server, user, old_raw, schedule, command, selfname=None):
     wrapped = _wrap_cron_command(server, user, command)
     # -vxF: drop the line that exactly (whole-line, fixed-string) matches old_raw,
     # keep everything else, then append the rewritten (recorder-wrapped) entry.
-    return _core._rewrite_crontab(server, user, f"-vxF {_core._quote(old_raw)}", [f"{schedule} {wrapped}"])
+    return _core._rewrite_crontab(server, user, "", [f"{schedule} {wrapped}"],
+                                  drop_line=old_raw)
 
 
 def delete_cron_job(server, user, old_raw, selfname=None):
@@ -439,7 +466,7 @@ def delete_cron_job(server, user, old_raw, selfname=None):
     old_raw = old_raw or ""
     if _cron_line_managed(old_raw, user, selfname):
         return False, "That entry is managed by the panel — use its own toggle to change it."
-    return _core._rewrite_crontab(server, user, f"-vxF {_core._quote(old_raw)}", [])
+    return _core._rewrite_crontab(server, user, "", [], drop_line=old_raw)
 
 
 def list_game_backups(server, user):
@@ -697,7 +724,7 @@ def player_slots(server, user, game_type=None, port=None, query_type=None):
     return cur, mx, nm
 
 
-_game_map_cache = {}          # {(remote_id, port): (expiry_ts, mapname)}
+_game_map_cache = _core.register_remote_cache({})   # {(remote_id, port): (expiry, mapname)}
 _GAME_MAP_TTL = 30
 
 

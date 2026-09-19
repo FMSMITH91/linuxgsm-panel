@@ -874,6 +874,92 @@ _narrow = _inst[_inst.index('if [ "${HELPER_OK}"'):_inst.index("chmod 440 /etc/s
 for _never in ("systemd-run", "/bin/bash", "/bin/sh", "tailscale", "sudo -u"):
     check("install.sh: the narrow grant does not permit %s" % _never, _never not in _narrow)
 
+# ── The update's snapshot and its rollback, RUN rather than read ──────────────────────────────
+# The snapshot is the only thing standing between a failed update and a dead install, and its
+# check was `[ -s ... ]` — non-empty. The failure the comment beside it names by name is the disk
+# filling mid-write, which produces a TRUNCATED archive: non-empty, so it passed. The rollback
+# then wiped PANEL_DIR of everything but data/ and venv/ and fed that stream to `tar -xzf` as the
+# ONE bare command in the whole failure path — so `set -e` killed the script right there, past
+# install_deps, past the service restart and past BOTH die messages, leaving a half-populated
+# install and no explanation. The in-panel self-update only watches the log, so nobody is told.
+#
+# Both halves are EXTRACTED FROM install.sh and executed here. A reimplementation of them would
+# pass whatever install.sh actually says.
+import subprocess as _sh_sub
+from shlex import quote as _shlex_q
+_inst_txt = open(os.path.join(_root, "install.sh"), encoding="utf-8").read()
+_snap_fn = [ln for ln in _inst_txt.splitlines() if ln.strip().startswith("snapshot_ok() {")]
+check("install.sh: the snapshot check is a named function this test can run",
+      len(_snap_fn) == 1, str(_snap_fn))
+_rb_start = '    if ! tar -C "${PANEL_DIR}" -xzf "${BACKUP}/code.tgz"; then'
+check("install.sh: the rollback's unpack is guarded, not bare",
+      _rb_start in _inst_txt and 'tar -C "${PANEL_DIR}" -xzf "${BACKUP}/code.tgz"\n' not in _inst_txt)
+if _snap_fn and _rb_start in _inst_txt:
+    _rb_i = _inst_txt.index(_rb_start)
+    _rb_block = _inst_txt[_rb_i:_inst_txt.index("\n    fi\n", _rb_i) + len("\n    fi\n")]
+
+    def _run_snip(body, panel_dir, backup):
+        script = ("set -euo pipefail\n"
+                  'die() { echo "DIE: $*"; exit 1; }\n'
+                  'PANEL_DIR=%s\nBACKUP=%s\n' % (_shlex_q(panel_dir), _shlex_q(backup))
+                  + body + "\necho REACHED_END\n")
+        return _sh_sub.run(["bash", "-c", script], capture_output=True, text=True)
+
+    _sb = _tempfile.mkdtemp(prefix="inst-rollback-")
+    _pd, _bk_dir = os.path.join(_sb, "panel"), os.path.join(_sb, "backup")
+    os.makedirs(os.path.join(_pd, "data"))
+    os.makedirs(os.path.join(_pd, "venv"))
+    os.makedirs(_bk_dir)
+    for _f in ("app.py", "manage.py"):
+        with open(os.path.join(_pd, _f), "w", encoding="utf-8") as _fh:
+            _fh.write("# %s\n" % _f)
+    _sh_sub.run(["tar", "-C", _pd, "--exclude=./venv", "--exclude=./data", "-czf",
+                 os.path.join(_bk_dir, "good.tgz"), "."], check=True)
+    _good = open(os.path.join(_bk_dir, "good.tgz"), "rb").read()
+    # A snapshot truncated by a disk filling mid-write: non-empty, unreadable.
+    with open(os.path.join(_bk_dir, "code.tgz"), "wb") as _fh:
+        _fh.write(_good[:max(64, len(_good) // 3)])
+    _snap_body = _snap_fn[0].strip() + '\nsnapshot_ok "${BACKUP}/code.tgz" || die "empty or unreadable"'
+    _r = _run_snip(_snap_body, _pd, _bk_dir)
+    check("install.sh: a TRUNCATED snapshot is refused (it is non-empty, which -s called fine)",
+          _r.returncode == 1 and "DIE:" in _r.stdout and "REACHED_END" not in _r.stdout,
+          "%s %r" % (_r.returncode, _r.stdout))
+    _r = _run_snip(_snap_fn[0].strip() + '\nsnapshot_ok "${BACKUP}/good.tgz" || die "no"', _pd, _bk_dir)
+    check("install.sh: ...and a good one still passes",
+          _r.returncode == 0 and "REACHED_END" in _r.stdout, "%s %r" % (_r.returncode, _r.stdout))
+    # The rollback itself, against that truncated snapshot: it must DIE with an explanation, not
+    # be killed by set -e in the middle.
+    _r = _run_snip(_rb_block, _pd, _bk_dir)
+    check("install.sh: a rollback that cannot unpack says so instead of dying silently",
+          _r.returncode == 1 and "DIE:" in _r.stdout and "INCOMPLETE" in _r.stdout
+          and "REACHED_END" not in _r.stdout, "%s %r %r" % (_r.returncode, _r.stdout, _r.stderr))
+    check("install.sh: ...and the message names the snapshot the operator has to restore by hand",
+          "code.tgz" in _r.stdout, repr(_r.stdout))
+    # Control: a good snapshot rolls back and carries on to the rest of the failure path.
+    _sh_sub.run(["cp", os.path.join(_bk_dir, "good.tgz"), os.path.join(_bk_dir, "code.tgz")],
+                check=True)
+    os.remove(os.path.join(_pd, "app.py"))
+    _r = _run_snip(_rb_block, _pd, _bk_dir)
+    check("install.sh: a good snapshot rolls back and execution continues past it",
+          _r.returncode == 0 and "REACHED_END" in _r.stdout
+          and os.path.exists(os.path.join(_pd, "app.py")), "%s %r" % (_r.returncode, _r.stdout))
+    _shutil.rmtree(_sb, ignore_errors=True)
+
+# ROOT_TOOLS_OK is what write_sudoers_grant reads, and its own comment says it means "every
+# root-owned piece is in place … the helper, db_maintenance, and the root-owned installer". It was
+# set on the db_maintenance install alone: the panel.conf write was an unchecked && chain whose
+# status was discarded, and the installer copy carried `|| true`. A narrow grant could be written
+# on a host missing either.
+_rt_lines = _inst_txt.splitlines()
+_rt_set = [i for i, ln in enumerate(_rt_lines) if ln.strip() == "ROOT_TOOLS_OK=1"]
+check("install.sh: ROOT_TOOLS_OK is set in exactly one place", len(_rt_set) == 1, str(_rt_set))
+if len(_rt_set) == 1:
+    _rt_guard = _rt_lines[_rt_set[0] - 1].strip()
+    check("install.sh: ...and only once panel.conf AND the root-owned installer both landed",
+          _rt_guard == 'if [ "${CONF_OK}" -eq 1 ] && [ "${INST_OK}" -eq 1 ]; then', _rt_guard)
+    check("install.sh: the installer copy records its own success rather than `|| true`",
+          '"${INSTALLER_SRC}" "${INSTALLER_DST}" 2>/dev/null && INST_OK=1' in _inst_txt)
+
 # ── The discovery scan, reimplemented in the helper, must speak the parser's dialect ───────────
 # discover_linuxgsm_servers used to be a twenty-line shell program run under `sudo bash -c`. It
 # needed root for exactly one thing — reading another user's crontab — and everything else was
@@ -1916,7 +2002,11 @@ for _py in sorted(glob.glob(os.path.join(_root, "panel", "**", "*.py"), recursiv
                 _shell_seen += 1
                 if not _shell_part_ok(_c.args[0], _lits):
                     _shell_bad.append("%s:%d in %s()" % (os.path.basename(_py), _c.lineno, _fn.name))
-check("shell: the _run() scan actually found the call sites", _shell_seen >= 30,
+# The positive control for the gate below: an AST walk that matches nothing passes it vacuously.
+# The floor tracks the real count and moves with it — it went 30 -> 29 when
+# enable_unattended_upgrades stopped hand-rolling `printf … | sudo tee` and went through the write
+# verb like every other root-owned write in that module.
+check("shell: the _run() scan actually found the call sites", _shell_seen >= 29,
       "only %d matched — the scan stopped finding them, so the gate below proves nothing"
       % _shell_seen)
 check("shell: every _run() command is a literal or shlex.quote()d", not _shell_bad,

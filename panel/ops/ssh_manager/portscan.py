@@ -16,7 +16,7 @@ from panel.ops.ssh_manager import (_core)  # noqa: E402,F401  (module objects: t
 # would be a cycle. app.py imports these back under their old names, so its call sites and the
 # tests that clear the cache are untouched (same dict object, not a copy).
 
-_port_scan_cache = {}
+_port_scan_cache = _core.register_remote_cache({})
 _PORT_SCAN_TTL = 5
 
 def _remote_listening_ports(remote):

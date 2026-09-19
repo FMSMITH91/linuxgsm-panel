@@ -399,8 +399,10 @@ _METRICS_OUT = "\n".join([
     "DISK 100000000000 33000000000", "CORES 4", "UPTIME 123456",
     "GAMERAM 524288 3", "GUP 3600", "PORT 1",
 ])
+_o_metrics_rc = _sm_core.run_command
 _sm_core.run_command = lambda server, cmd, timeout=30, sudo=None: (_METRICS_OUT, "", 0)
 _m = _sm_core.server_live_metrics(None, "gmodserver", 27015)
+_sm_core.run_command = _o_metrics_rc
 eq("metrics: ram_total parsed", _m["ram_total"], 8000000000)
 eq("metrics: ram_percent computed", _m["ram_percent"], 50.0)
 eq("metrics: disk_percent computed", _m["disk_percent"], 33.0)
@@ -421,8 +423,10 @@ _RLM_OUT = "\n".join([
     "===DISK", "Filesystem 1B-blocks Used Available Use% Mounted on",
     "/dev/vda2 100000000000 40000000000 60000000000 40% /",
 ])
+_o_rlm_rc = _sm_core.run_command
 _sm_core.run_command = lambda server, cmd, timeout=12, **k: (_RLM_OUT, "", 0)
 _rlm = _sm_core.remote_live_metrics(NS(is_local=False, auth_method="tailscale", host="x", name="x"))
+_sm_core.run_command = _o_rlm_rc
 eq("remote metrics: disk_total parsed", _rlm["disk_total"], 100000000000)
 eq("remote metrics: disk_used parsed", _rlm["disk_used"], 40000000000)
 eq("remote metrics: disk_percent computed", _rlm["disk_percent"], 40.0)
@@ -1094,3 +1098,265 @@ check("game backup: name shape accepts a real archive",
 
 # ── discover_linuxgsm_servers: parse the one-shot host scan output ──
 _orig_disc_rc = _sm_core.run_command
+
+
+# ── system_ops / hosts: nine things that were wrong about escalation, caching and parsing ─────
+# Each is driven through the real function with only the transport stubbed.
+import json as _so_json
+from unit.part01 import _sm_game  # noqa: E402
+
+
+def _so_stub(**kw):
+    """Swap attributes on system_ops for the duration of a `with` block."""
+    import contextlib
+
+    @contextlib.contextmanager
+    def _cm():
+        old = {k: getattr(SO, k) for k in kw}
+        for k, v in kw.items():
+            setattr(SO, k, v)
+        try:
+            yield
+        finally:
+            for k, v in old.items():
+                setattr(SO, k, v)
+    return _cm()
+
+
+# 1. A host installed the hardened way has `<user> ALL=(root) NOPASSWD: <helper>` — under which
+#    `sudo -n true` is DENIED while `sudo -n <helper> apt-upgrade` works. Both of these were gated
+#    on _check_sudo() alone, so they refused with a message telling the admin to configure
+#    passwordless sudo: to undo the hardening install.sh had just applied. Every other privileged
+#    path in the module already branches on the helper.
+_so_calls = []
+SO._SUDO_PROBE.update(at=0.0, ok=None)
+SO._HELPER_STATE["present"] = True
+with _so_stub(_run=lambda c, **k: (_so_calls.append(c), ("NOPASS", "", 0))[1],
+              _run_verb=lambda v, a=(), **k: (_so_calls.append(v), ("", "", 0))[1]):
+    check("system_ops: the OS update works under the NARROW sudoers grant (helper, not sudo -n true)",
+          SO.os_run_update()[0] is True, str(SO.os_run_update()))
+    check("system_ops: ...and so does the reboot", SO.server_reboot(0)[0] is True)
+    # 13. delay_seconds arrived raw from the JSON body and went into time.sleep() in a daemon
+    #     thread: a non-numeric value killed that thread with a TypeError AFTER the route had
+    #     answered success and written a server_reboot audit entry. restart_panel clamps; this did
+    #     not.
+    _rb_ok, _rb_msg = SO.server_reboot("abc")
+    check("system_ops: a non-numeric reboot delay is refused, not logged as a reboot that happens",
+          _rb_ok is False and "number of seconds" in _rb_msg, str(_rb_msg))
+    check("system_ops: ...and an absurd one is clamped rather than slept on",
+          SO.server_reboot(99999) == (True, "Server will reboot in 300 seconds."),
+          str(SO.server_reboot(99999)))
+# ...and with no helper and no sudo it still refuses, which is the whole point of the gate.
+SO._HELPER_STATE["present"] = False
+SO._SUDO_PROBE.update(at=0.0, ok=None)
+with _so_stub(_run=lambda c, **k: ("NOPASS", "", 0), _run_verb=lambda *a, **k: ("", "", 0)):
+    check("system_ops: with neither helper nor sudo, both still refuse",
+          SO.os_run_update()[0] is False and SO.server_reboot()[0] is False)
+SO._HELPER_STATE["present"] = None
+
+# 4. Tailscale on Linux is USERSPACE WireGuard over a TUN, so `ip link show type wireguard` can
+#    never list tailscale0 — the first detection method matched any name containing "wg" and could
+#    only ever return something that is not Tailscale. On a host running both, "Allow Tailscale"
+#    ran `ufw allow in on wg0`: all inbound traffic on an unrelated VPN, reported as success.
+def _ts_run(cmd, **k):
+    if "type wireguard" in cmd:
+        return "wg0\n", "", 0
+    if "grep -i tailscale" in cmd:
+        return "tailscale0\n", "", 0
+    return "", "", 0
+
+
+with _so_stub(_run=_ts_run):
+    check("system_ops: a plain WireGuard interface is not mistaken for Tailscale's",
+          SO.detect_tailscale_interface() == "tailscale0",
+          str(SO.detect_tailscale_interface()))
+# A host that really does run tailscaled against the kernel module still matches, by NAME.
+with _so_stub(_run=lambda c, **k: (("tailscale-wg0\n", "", 0) if "type wireguard" in c
+                                   else ("", "", 0))):
+    check("system_ops: ...but a wireguard device that says tailscale still counts",
+          SO.detect_tailscale_interface() == "tailscale-wg0")
+
+# 10. The verb runs `ufw status verbose`, which has no rule numbers — only `ufw status numbered`
+#     does. The branch tested parts[0][0].isdecimal() and called the result "num", so a port landed
+#     in the number field and every rule whose To column is not numeric was dropped: the tailscale0
+#     allow, app profiles like OpenSSH, and every panel-block DENY.
+_UFW_V = """Status: active
+Logging: on (low)
+Default: deny (incoming), allow (outgoing), disabled (routed)
+New profiles: skip
+
+To                         Action      From
+--                         ------      ----
+22/tcp                     LIMIT IN    Anywhere
+27015                      ALLOW IN    Anywhere                   # codserver
+Anywhere on tailscale0     ALLOW IN    Anywhere
+OpenSSH                    ALLOW IN    Anywhere
+Anywhere                   DENY IN     203.0.113.9                # panel-block
+"""
+with _so_stub(_run_verb=lambda v, a=(), **k: (_UFW_V, "", 0)):
+    _ufw_parsed = SO.ufw_status()
+check("system_ops: ufw_status reports every rule, not only the ones starting with a digit",
+      len(_ufw_parsed["rules"]) == 5, _so_json.dumps(_ufw_parsed["rules"]))
+check("system_ops: ...including the tailscale0 allow, the app profile and the panel-block DENY",
+      [r["to"] for r in _ufw_parsed["rules"]]
+      == ["22/tcp", "27015", "Anywhere on tailscale0", "OpenSSH", "Anywhere"],
+      str([r["to"] for r in _ufw_parsed["rules"]]))
+check("system_ops: ...and a DENY's source is the From column, not the To column",
+      _ufw_parsed["rules"][-1]["action"] == "DENY"
+      and _ufw_parsed["rules"][-1]["from"].startswith("203.0.113.9"),
+      str(_ufw_parsed["rules"][-1]))
+
+# 11. apt's history.log writes Install:/Upgrade:/Remove:/Purge:, never "Packages:" — so that list
+#     was always empty. And `tail -50` almost always starts mid-record, so the first entry used to
+#     be emitted with no "start" key at all.
+_APT_HIST = """Install: curl:amd64 (7.81.0-1)
+End-Date: 2026-09-08  04:09:59
+
+Start-Date: 2026-09-08  04:10:01
+Commandline: /usr/bin/unattended-upgrade
+Upgrade: libssl3:amd64 (3.0.2-0ubuntu1, 3.0.2-0ubuntu1.1), zlib1g:amd64 (1:1.2.11, 1:1.2.12)
+End-Date: 2026-09-08  04:10:30
+"""
+with _so_stub(_run=lambda c, **k: (_APT_HIST, "", 0)):
+    _o_exists = SO.os.path.exists
+    SO.os.path.exists = lambda p: True
+    try:
+        _apt_entries = SO.os_update_log()
+    finally:
+        SO.os.path.exists = _o_exists
+check("system_ops: os_update_log reports the packages apt actually names",
+      len(_apt_entries) == 1 and _apt_entries[0]["packages"] == ["libssl3", "zlib1g"],
+      str(_apt_entries))
+check("system_ops: ...and a record whose Start-Date tail cut off is dropped, not emitted keyless",
+      all("start" in e for e in _apt_entries), str(_apt_entries))
+
+# 5. "22/tcp" in low is a SUBSTRING test, so 2222/tcp, 8022/tcp and 22022/tcp all read as a rule
+#    for port 22. The panel's own change_ssh_port moves sshd to 2222 and tells the operator to
+#    close 22 — after which the Public SSH card still reported it open and never showed the true
+#    off state, so nobody could tell from the UI whether public SSH was exposed.
+_SSH_UFW = """Status: active
+
+To                         Action      From
+--                         ------      ----
+2222/tcp                   LIMIT IN    Anywhere
+27015                      ALLOW IN    Anywhere
+2222/tcp (v6)              LIMIT IN    Anywhere (v6)
+"""
+_o_rp_h = _sm_hosts._core.run_privileged
+try:
+    _sm_hosts._core.run_privileged = lambda *a, **k: (_SSH_UFW, "", 0)
+    check("hosts: a rule for 2222 is not read as a rule for port 22",
+          _sm_hosts.remote_public_ssh_status(object()) == {"active": True, "mode": "off"},
+          str(_sm_hosts.remote_public_ssh_status(object())))
+    _SSH_UFW = _SSH_UFW.replace("2222/tcp                   LIMIT IN",
+                                "22/tcp                     LIMIT IN")
+    check("hosts: ...and a real rule for 22 still is",
+          _sm_hosts.remote_public_ssh_status(object())["mode"] == "limit")
+finally:
+    _sm_hosts._core.run_privileged = _o_rp_h
+
+# 8. Documented as returning (ok, msg), it let the verb's VerbError out instead — through
+#    run_privileged, through the route, and out as a bare Flask 500 HTML page that the caller's
+#    .then(r => r.json()) could not parse.
+_o_rp_h = _sm_hosts._core.run_privileged
+try:
+    _sm_hosts._core.run_privileged = lambda *a, **k: ("", "", 0)
+    _uf_raised = []
+    for _src, _port in (("my-lan", "27015"), ("10.0.0.1", "not-a-port"), ("", "27015")):
+        try:
+            _r = _sm_hosts.remote_ufw_allow_from(object(), _src, _port)
+            if _r[0]:
+                _uf_raised.append("%s/%s was ACCEPTED" % (_src, _port))
+        except Exception as _e:
+            _uf_raised.append("%s/%s raised %s" % (_src, _port, type(_e).__name__))
+    check("hosts: remote_ufw_allow_from answers (ok, msg) instead of raising out of the request",
+          not _uf_raised, "; ".join(_uf_raised))
+    check("hosts: ...and a real address and port range still go through",
+          _sm_hosts.remote_ufw_allow_from(object(), "10.0.0.0/8", "27015:27020")[0] is True)
+finally:
+    _sm_hosts._core.run_privileged = _o_rp_h
+
+# 3. _OS_SLUG_CACHE had NO expiry and was keyed ("srv", id), which forget_remote_caches could not
+#    have popped even if it had been registered. SQLite reuses rowids, so the next host to take a
+#    deleted one inherited its distro — and deps_for_game then loads ubuntu-22.04.csv for a Debian
+#    12 box, where apt-get install (atomic) aborts on the first nonexistent package.
+_o_rc_h = _sm_hosts._core.run_command
+try:
+    _slug = ["ubuntu-22.04"]
+    _sm_hosts._core.run_command = lambda *a, **k: (_slug[0], "", 0)
+    _sm_hosts._OS_SLUG_CACHE.clear()
+    _srv7 = NS(id=7, host="h7")
+    _first = _sm_hosts.host_os_slug(_srv7)
+    _sm_core.forget_remote_caches(7)          # what the after_delete listener does
+    _slug[0] = "debian-12"
+    _second = _sm_hosts.host_os_slug(NS(id=7, host="h7"))
+    check("hosts: a deleted host's OS slug is not inherited by the next host with its rowid",
+          (_first, _second) == ("ubuntu-22.04", "debian-12"), "%s then %s" % (_first, _second))
+    check("hosts: ...and it is still cached between reads for the SAME host",
+          _sm_hosts.host_os_slug(NS(id=7, host="h7")) == "debian-12"
+          and _sm_hosts._OS_SLUG_CACHE.get(7) == "debian-12",
+          str(_sm_hosts._OS_SLUG_CACHE))
+finally:
+    _sm_hosts._core.run_command = _o_rc_h
+    _sm_hosts._OS_SLUG_CACHE.clear()
+
+# forget_remote_caches has to reach TUPLE keys, or registering a cache keyed (remote id, port)
+# would look like protection while doing nothing.
+_tuple_cache = _sm_core.register_remote_cache({(7, 27015): "a", (8, 27015): "b", 7: "c"})
+_sm_core.forget_remote_caches(7)
+check("_core: forgetting a deleted host reaches tuple-keyed per-remote caches too",
+      _tuple_cache == {(8, 27015): "b"}, str(_tuple_cache))
+_sm_core._remote_caches.remove(_tuple_cache)
+# Every per-remote cache in the package is registered — the list of deliberate exceptions is what
+# hid _OS_SLUG_CACHE, which had no expiry at all.
+_unreg = [n for n, m in (("hosts._OS_SLUG_CACHE", _sm_hosts._OS_SLUG_CACHE),
+                         ("hosts._uptime_cache", _sm_hosts._uptime_cache),
+                         ("hosts._pro_status_cache", _sm_hosts._pro_status_cache),
+                         ("_core._host_metrics_cache", _sm_core._host_metrics_cache),
+                         ("_core._live_metrics_cache", _sm_core._live_metrics_cache),
+                         ("_core._gamedig_host_cache", _sm_core._gamedig_host_cache),
+                         ("cron._game_map_cache", _sm_cron._game_map_cache),
+                         ("game._version_cache", _sm_game._version_cache),
+                         ("firewall._specs_cache", _sm_firewall._specs_cache))
+          if not any(m is r for r in _sm_core._remote_caches)]
+check("_core: every per-remote cache is registered for pruning", not _unreg,
+      "not registered: %s" % _unreg)
+
+# 2. sudo=True has to mean ROOT. It used to mean `sudo -u <the remote's linuxgsm_user>` whenever
+#    that optional field was filled in, which silently demoted every privileged operation in
+#    hosts.py — ufw, apt, fail2ban, the sshd hardening and its drop-in write, the node-tools cron
+#    and the whole VPS bootstrap, which still reported "VPS bootstrap complete".
+class _LgsmSrv:
+    id, host, port, username, auth_method = 99, "h", 22, "u", "key"
+    sudo_enabled, is_local, linuxgsm_user = True, False, "gmodserver"
+
+
+_wire = []
+
+
+class _FakeChan:
+    def recv_exit_status(self):
+        return 0
+
+
+class _FakeStd:
+    channel = _FakeChan()
+
+    def read(self):
+        return b""
+
+
+_o_conn = _sm_core.get_connection
+try:
+    _sm_core.get_connection = lambda s: NS(exec_command=lambda c, timeout=None: (
+        _wire.append(c), (_FakeStd(), _FakeStd(), _FakeStd()))[1])
+    _sm_core.run_command(_LgsmSrv(), "ufw --force enable", sudo=True)
+    check("_core: a remote's linuxgsm_user no longer demotes a privileged command",
+          _wire and _wire[-1].startswith("sudo bash -c ") and "sudo -u" not in _wire[-1],
+          str(_wire[-1:]))
+    _wire.clear()
+    _sm_core.run_command(_LgsmSrv(), "whoami", sudo=False)
+    check("_core: ...and sudo=False is still unescalated",
+          _wire == ["whoami"], str(_wire))
+finally:
+    _sm_core.get_connection = _o_conn

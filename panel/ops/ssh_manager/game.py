@@ -78,26 +78,49 @@ def capture_console(server, user, selfname=None, lines=180):
     return _core.run_command(server, cmd, timeout=15, sudo=False)
 
 
+# '#<userid> "<name>"' — the start of a Source/GoldSrc status row. Used to READ a row and, by
+# negation, to tell the column header from a row: both carry the word "uniqueid" when a player
+# picks the right name, and only one of them starts with a number.
+_VALVE_ROW_RE = re.compile(r'\s*#\s*\d+\s+"([^"]*)"')
+
+
 def _parse_valve_status(text):
     """Parse a Source/GoldSrc `status` reply into [{name, steamid, num, score, time}]. Player rows
     start with '#' and carry a quoted name + a STEAM_/[U:..] id; bots have no id. Only the MOST
-    RECENT table is used (rows after the last 'uniqueid' header), so players who left don't linger."""
+    RECENT table is used (rows after the last 'uniqueid' header), so players who left don't linger.
+
+    Both halves of that are things a PLAYER CONTROLS, because their name is on the line:
+
+      * The header scan looked for "uniqueid" anywhere in a line. A player called "my uniqueid"
+        made their own row the header, so parsing started after it — naming themselves that and
+        sitting at the bottom of the table returned an empty list, and mid-table it hid them AND
+        everyone above them. The Players panel goes blank and _resolve_from_console — the only
+        source of SteamIDs for a gamedig-sourced list — answers None for everybody. A header is a
+        line that is NOT a player row, and that is now what is required.
+      * The SteamID was searched for across the WHOLE line, and in a status row the name column
+        comes BEFORE the uniqueid column. A persona name of "STEAM_0:1:11111111" won the search,
+        so the row carried a SteamID of the player's choosing rather than their own. The admin
+        clicks Ban, the browser posts that id back, moderate() re-validates its SHAPE and bans it —
+        fleet-wide with scope "all", and into GlobalBan for a superadmin, which re-applies to
+        servers added later. An arbitrary third party, permanently, while the attacker stays
+        connected. The id is read from the text AFTER the closing quote now, where the column is.
+    """
     lines = (text or "").splitlines()
     start = 0
     for i, ln in enumerate(lines):
-        if "uniqueid" in ln.lower():
+        if "uniqueid" in ln.lower() and not _VALVE_ROW_RE.match(ln):
             start = i + 1
     players, seen = [], set()
     for ln in lines[start:]:
         # A real player row is '#<userid> "<name>" …'. Requiring the leading '#' + number rejects the
         # '# userid name uniqueid' header AND stray chat/console lines that merely contain quotes.
-        m = re.match(r'\s*#\s*\d+\s+"([^"]*)"', ln)
+        m = _VALVE_ROW_RE.match(ln)
         if not m:
             continue
         name = m.group(1).strip()
         if not name:
             continue
-        steamid = _sanitize_steamid(ln)
+        steamid = _sanitize_steamid(ln[m.end():])
         key = (name, steamid)
         if key in seen:
             continue
@@ -115,7 +138,13 @@ def _parse_idtech3_status(text):
     start = 0
     for i, ln in enumerate(lines):
         low = ln.lower()
-        if "num" in low and "score" in low and "ping" in low:
+        # ...and the header is a line that is NOT a player row. Every row begins with the slot
+        # number and the header begins with the word "num", so the leading character separates
+        # them. Without that, a player called "numscoreping" — twelve characters, well inside a
+        # CoD name limit — made their own row the header: last in the table it returned an empty
+        # list, mid-table it dropped them and everyone above them, and either way the slot numbers
+        # moderation needs came back None for the whole server.
+        if "num" in low and "score" in low and "ping" in low and not re.match(r"\s*\d", ln):
             start = i + 1
     players, seen = [], set()
     for ln in lines[start:]:
@@ -355,6 +384,18 @@ def moderate(server, user, game_type, action, target="", message="", selfname=No
         nm = _mod_sanitize(target, 64)
         if not nm:
             return False, "No player selected."
+        # `kick <player> [reason]` — the name and the reason are separated by a SPACE, and
+        # _MOD_BAD_CHARS does not strip one. That is right for Source and idTech3, whose consoles
+        # separate on ';' and newline only, and wrong here: _ENG_MINECRAFT covers mcbe/mcb/
+        # pocketmine, Bedrock gamertags may contain spaces, and a gamedig-sourced list carries the
+        # raw name (only _parse_minecraft_list sanitises, and that is the console path). So a
+        # player named "<someone else> griefing" sends the admin's kick to that someone else.
+        # There is no quoting that is correct across Java, Bedrock and PocketMine, so this refuses
+        # rather than guessing — a misdirected ban is worse than a button that says why it stopped.
+        if re.search(r"\s", nm):
+            return False, ("That player's name contains a space, which this game's console reads "
+                           "as the start of the reason — kick or ban them from the server "
+                           "console directly.")
         cmd = "%s %s" % ("kick" if action == "kick" else "ban", nm)
     else:
         return False, "That action isn't supported for this game."
@@ -628,7 +669,7 @@ def get_server_status(server, game_server):
 #
 # So read both, prefer the reported string for display, and keep the build alongside it. Neither
 # read is on a render path: the detail page fetches this once, asynchronously, after it has drawn.
-_version_cache = {}
+_version_cache = _core.register_remote_cache({})
 _VERSION_TTL = 600        # a build only changes when an update runs, and that invalidates it anyway
 
 

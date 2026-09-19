@@ -481,7 +481,8 @@ try:
         # archive has been opened, so a mistyped passphrase costs nothing.
         _pre_calls = []
         _o_create = _bk.create_backup
-        _bk.create_backup = lambda kind="manual": (_pre_calls.append(kind), (True, "stub"))[1]
+        _bk.create_backup = lambda kind="manual", encrypt=True: (
+            _pre_calls.append((kind, encrypt)), (True, "stub"))[1]
         try:
             _wok, _wmsg = _bk.restore_backup(_ename, passphrase="not the passphrase")
         finally:
@@ -490,6 +491,66 @@ try:
         check("backup/enc: ...and takes no pre-restore backup before it knows the archive opens",
               _pre_calls == [], "create_backup called with %r" % (_pre_calls,))
         check("backup/enc: ...and stages nothing", not _osb.path.exists(_stage_dir))
+
+        # ── The pre-restore safety copy is the ONE thing standing between a mistaken restore and
+        # an unrecoverable install, and two things were wrong with it.
+        #
+        # 1. Its result was discarded. create_backup swallows every exception and answers
+        #    (False, "Backup failed — see panel logs.") — a full disk, a BACKUP_DIR whose mode
+        #    changed, a _snapshot_db failure on a database that is already damaged. Execution fell
+        #    straight through to the destructive verb while the UI said "the panel will restart in
+        #    a few seconds". Losing cred_key that way makes every stored SSH credential unreadable.
+        _sh2.rmtree(_stage_dir, ignore_errors=True)
+        _pre_calls.clear()
+        _bk.create_backup = lambda kind="manual", encrypt=True: (
+            _pre_calls.append((kind, encrypt)), (False, "Backup failed — see panel logs."))[1]
+        try:
+            _fok, _fmsg = _bk.restore_backup(_ename, passphrase=_bk_pass)
+        finally:
+            _bk.create_backup = _o_create
+        check("backup: a failed pre-restore safety copy stops the restore",
+              _fok is False and "safety copy" in _fmsg, str(_fmsg))
+        check("backup: ...before anything is staged", not _osb.path.exists(_stage_dir))
+        check("backup: ...and the refusal says what would be lost and how to go ahead",
+              "cred_key" in _fmsg and "Confirm again" in _fmsg, str(_fmsg))
+        # The operator's override still works — refusing outright would strand exactly the person
+        # who needs restore most, the one whose panel.db is already too damaged to snapshot.
+        _pre_calls.clear()
+        _bk.create_backup = lambda kind="manual", encrypt=True: (
+            _pre_calls.append((kind, encrypt)), (False, "Backup failed — see panel logs."))[1]
+        try:
+            _sok, _smsg = _bk.restore_backup(_ename, passphrase=_bk_pass, skip_safety_backup=True)
+        finally:
+            _bk.create_backup = _o_create
+        check("backup: ...unless the operator says to go ahead without one",
+              _sok is True and _pre_calls == [] and "NO pre-restore safety copy" in _smsg,
+              "%s %r" % (_smsg, _pre_calls))
+        # 2. It was encrypted with get_passphrase() — read from config.json under cred_key, BOTH
+        #    of which the next step overwrites from the archive being restored. Restoring an
+        #    archive written under a different passphrase (from before a set_passphrase, or from
+        #    another install — the case restore's own docstring calls out) left the safety net
+        #    locked by a key that no longer existed.
+        _sh2.rmtree(_stage_dir, ignore_errors=True)
+        _pre_calls.clear()
+        _bk.create_backup = lambda kind="manual", encrypt=True: (
+            _pre_calls.append((kind, encrypt)), (True, "prerestore-stub"))[1]
+        try:
+            _eok3, _emsg3 = _bk.restore_backup(_ename, passphrase=_bk_pass)
+        finally:
+            _bk.create_backup = _o_create
+        check("backup: the pre-restore copy is written UNENCRYPTED, not under a key it is about to destroy",
+              _pre_calls == [("prerestore", False)], repr(_pre_calls))
+        check("backup: ...and the operator is told its name, since the panel is about to restart",
+              _eok3 and "prerestore-stub" in _emsg3, str(_emsg3))
+        # And create_backup honours that for real: a passphrase IS configured in this block.
+        _uok, _uname = _bk.create_backup("prerestore", encrypt=False)
+        check("backup: create_backup(encrypt=False) writes a plain archive despite a configured passphrase",
+              _uok and not _bk.is_encrypted_backup(_uname)
+              and _tar.open(str(_bk._safe_path(_uname))).getnames(), "%s %s" % (_uok, _uname))
+        check("backup: ...and it is still 0600 inside the 0700 backup dir",
+              _osb.stat(str(_bk._safe_path(_uname))).st_mode & 0o777 == 0o600,
+              oct(_osb.stat(str(_bk._safe_path(_uname))).st_mode & 0o777))
+        _sh2.rmtree(_stage_dir, ignore_errors=True)
     finally:
         _bk._helper_present, _bk._run_verb = _o_hp, _o_rv
 finally:

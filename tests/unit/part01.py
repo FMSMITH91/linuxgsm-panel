@@ -834,8 +834,125 @@ try:
     _wpct = _sm_cron._wrap_cron_command(None, "gm", "echo %H")
     check("cron wrap: a '%' command uses the base64 runner (cron-safe)",
           ".lgsm-cron/run " in _wpct and "%H" not in _wpct)
+    # The .restart-pending branch ran BEFORE _SIMPLE_CMD_RE and before the base64 runner — which
+    # is the thing that makes `%` safe — while _validate_cron permits `%`. cron truncates a line at
+    # the first unescaped `%` and feeds the remainder in as stdin, so an admin's
+    # `… restart >> ~/log/r-%Y.log` quietly became `… restart >> ~/log/r-` while the panel's editor
+    # showed the whole thing back.
+    _wpend = _sm_cron._wrap_cron_command(
+        None, "gm", "rm -f /home/gm/.restart-pending; /home/gm/gmodserver restart >> /home/gm/r-%Y.log")
+    check("cron wrap: a verbatim .restart-pending line still escapes % for cron",
+          "\\%Y" in _wpend and not __import__("re").search(r"(?<!\\)%", _wpend), repr(_wpend))
+    check("cron wrap: ...and the editor is shown the command the admin wrote, not the escaped form",
+          _sm_cron._unwrap_cron_command(_wpend)[0]
+          == "rm -f /home/gm/.restart-pending; /home/gm/gmodserver restart >> /home/gm/r-%Y.log",
+          repr(_sm_cron._unwrap_cron_command(_wpend)[0]))
+    # ORDER: the panel's OWN daily-restart line is `touch /home/<u>/.restart-pending`, a plain
+    # command that set_daily_restart writes WRAPPED. list_cron_jobs unwraps it for display, and
+    # rescheduling that display form in the generic editor sent it back through the
+    # .restart-pending branch, which returned it bare — so the panel's own line silently stopped
+    # reporting last-run and success after any edit.
+    _wflag = _sm_cron._record_managed_cmd("gm", "touch /home/gm/.restart-pending")
+    _wdisp, _wjid = _sm_cron._unwrap_cron_command(_wflag)
+    _wagain = _sm_cron._wrap_cron_command(None, "gm", _wdisp)
+    check("cron wrap: rescheduling the panel's own daily-restart line keeps its run tracking",
+          _sm_cron._unwrap_cron_command(_wagain)[1] is not None, repr(_wagain))
+    check("cron wrap: ...and it stays visible, which is what the flag-path grep matches on",
+          "/home/gm/.restart-pending" in _wagain, repr(_wagain))
 finally:
     _sm_core.run_command = _orig_wrap_rc
+
+# ── `raw` is the identity for delete/update, and the transport had already changed it ─────────
+# Every transport returns out.strip() — the whole crontab listing as ONE blob — so the FIRST
+# line comes back without its indentation, which is legal and common in a hand-edited crontab.
+# That stripped text is the `raw` the panel hands the browser and the browser hands back, and
+# `grep -vxF` matches whole lines exactly: delete reported success and removed nothing, while
+# update appended its rewrite beside the original so the job ran on two schedules.
+#
+# Driven through the REAL pipeline: the command the editor builds is captured and executed, with
+# only `crontab -u <user> -l` and `crontab -u <user> <file>` redirected at files. A test that
+# reimplemented the filter would pass whatever the filter happens to be.
+import shlex as _cr_shlex
+import shutil as _cr_shutil
+import subprocess as _cr_sub
+import tempfile as _cr_tmp
+
+_CR_TAB = ("  */5 * * * * /home/gm/gmodserver monitor\n"
+           "0 6 * * * /home/gm/backup.sh --re '^.*[x]$' \\n\n"
+           "30 4 * * * /home/gm/other.sh   \n")
+_cr_sb = _cr_tmp.mkdtemp(prefix="cron-rewrite-")
+
+
+def _cr_drive(fn, *a, **kw):
+    """Run a cron editor for real: capture its command and execute it against files."""
+    seen = {}
+    _o_rc, _o_rp = _sm_core.run_command, _sm_core.run_privileged
+    _o_st, _o_rt = _sm_cron._read_cron_status, _sm_cron._read_cron_run_times
+    _o_icr = _sm_cron._install_cron_runner
+    try:
+        _sm_core.run_privileged = lambda *_a, **_k: (_CR_TAB.strip(), "", 0)
+        _sm_cron._read_cron_status = lambda *_a, **_k: {}
+        _sm_cron._read_cron_run_times = lambda *_a, **_k: {}
+        _sm_cron._install_cron_runner = lambda *_a, **_k: None
+        _sm_core.run_command = lambda s, c, **k: (seen.__setitem__("cmd", c), ("", "", 0))[1]
+        fn(*a, **kw)
+    finally:
+        _sm_core.run_command, _sm_core.run_privileged = _o_rc, _o_rp
+        _sm_cron._read_cron_status, _sm_cron._read_cron_run_times = _o_st, _o_rt
+        _sm_cron._install_cron_runner = _o_icr
+    cmd = seen.get("cmd") or ""
+    if not cmd.startswith("sudo bash -c "):
+        return None, "did not build a rewrite: %r" % cmd[:80]
+    pipeline = _cr_shlex.split(cmd)[3]
+    _src = os.path.join(_cr_sb, "in")
+    _dst = os.path.join(_cr_sb, "out")
+    with open(_src, "w", encoding="utf-8") as _fh:
+        _fh.write(_CR_TAB)
+    if os.path.exists(_dst):
+        os.remove(_dst)
+    pipeline = pipeline.replace("crontab -u gm -l 2>/dev/null", "cat %s" % _cr_shlex.quote(_src))
+    pipeline = pipeline.replace('crontab -u gm "$T"', 'cp "$T" %s' % _cr_shlex.quote(_dst))
+    _r = _cr_sub.run(["bash", "-c", pipeline], capture_output=True, text=True)
+    return (open(_dst, encoding="utf-8").read() if os.path.exists(_dst) else None), _r.stderr
+
+
+try:
+    _cr_jobs = None
+    _o_rp2, _o_st2, _o_rt2 = (_sm_core.run_privileged, _sm_cron._read_cron_status,
+                              _sm_cron._read_cron_run_times)
+    try:
+        _sm_core.run_privileged = lambda *_a, **_k: (_CR_TAB.strip(), "", 0)
+        _sm_cron._read_cron_status = lambda *_a, **_k: {}
+        _sm_cron._read_cron_run_times = lambda *_a, **_k: {}
+        _cr_jobs = _sm_cron.list_cron_jobs(None, "gm")
+    finally:
+        _sm_core.run_privileged, _sm_cron._read_cron_status = _o_rp2, _o_st2
+        _sm_cron._read_cron_run_times = _o_rt2
+    _cr_raw = _cr_jobs[0]["raw"]
+    check("cron identity: the browser is handed the line WITHOUT its indentation (the transport strips)",
+          _cr_raw == "*/5 * * * * /home/gm/gmodserver monitor", repr(_cr_raw))
+    _out, _err = _cr_drive(_sm_cron.delete_cron_job, None, "gm", _cr_raw)
+    check("cron delete: an indented first line is actually removed",
+          _out is not None and "gmodserver monitor" not in _out
+          and len(_out.splitlines()) == 2, "%r / %r" % (_out, _err))
+    _out, _err = _cr_drive(_sm_cron.update_cron_job, None, "gm", _cr_raw, "0 3 * * *",
+                           "/home/gm/gmodserver monitor")
+    check("cron update: rescheduling it replaces the line instead of adding a second one",
+          _out is not None
+          and sum(1 for ln in _out.splitlines() if "gmodserver monitor" in ln) == 1
+          and _out.splitlines()[-1].startswith("0 3 * * * "), "%r / %r" % (_out, _err))
+    # A line full of regex and shell metacharacters, and a backslash — the reason the comparison
+    # goes through awk's ENVIRON rather than a pattern or a `-v` assignment.
+    _cr_meta = _cr_jobs[1]["raw"]
+    _out, _err = _cr_drive(_sm_cron.delete_cron_job, None, "gm", _cr_meta)
+    check("cron delete: a line of metacharacters is matched literally, not as a pattern",
+          _out is not None and "backup.sh" not in _out and len(_out.splitlines()) == 2,
+          "%r / %r" % (_out, _err))
+    # And a line the user did NOT name stays, trailing whitespace and all.
+    check("cron delete: ...and nothing else is touched",
+          _out is not None and "/home/gm/other.sh   " in _out, repr(_out))
+finally:
+    _cr_shutil.rmtree(_cr_sb, ignore_errors=True)
 
 # node-tools auto-update: a weekly ROOT cron keeps npm + gamedig (player-query tools) current.
 check("node-tools: the cron updates npm + gamedig weekly and logs it",

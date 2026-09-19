@@ -176,12 +176,9 @@ def register(app):
     def edit_remote(remote_id):
         remote = get_remote(remote_id)
         new_user = request.form.get("ssh_user", remote.username)
-        new_lgsm = request.form.get("lgsm_user", remote.linuxgsm_user)
-        # SECURITY: validate the username fields (reach `sudo -u <user>` / SSH commands).
+        # SECURITY: validate the username field (it reaches `sudo -u <user>` / SSH commands).
         if new_user and not LINUX_USER_RE.match(new_user):
             return _form_err("SSH user must be a valid Linux username.", "manage_remotes")
-        if new_lgsm and not LINUX_USER_RE.match(new_lgsm):
-            return _form_err("LinuxGSM user must be a valid Linux username.", "manage_remotes")
         new_name = request.form.get("name", remote.name)
         if new_name and not SAFE_LABEL_RE.match(new_name):
             return _form_err("Name cannot contain < > \" ' ` or backslashes.", "manage_remotes")
@@ -207,7 +204,6 @@ def register(app):
         if new_cred:
             remote.auth_credential = encrypt_secret(new_cred)
         remote.sudo_enabled = request.form.get("sudo_enabled") == "on"
-        remote.linuxgsm_user = new_lgsm
         db.session.commit()
         log_action(current_user, "edit_remote", target=remote.name)
         return _form_ok(f"Remote '{remote.name}' updated.", "manage_remotes")

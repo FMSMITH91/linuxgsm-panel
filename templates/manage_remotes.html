@@ -227,16 +227,15 @@
             <input id="manage-remotes-credential-{{ remote.id }}" type="password" name="credential" class="form-control" value=""
                    autocomplete="off" placeholder="Leave blank to keep current">
           </div>
-          <div class="col-md-2 d-flex align-items-center">
+          {# No "LGSM User" box here any more: it wrote a column that nothing reads. The value
+             records which account the fresh-server bootstrap was asked to create, and that is
+             already shown in the summary line above. #}
+          <div class="col-md-4 d-flex align-items-center">
             <div class="form-check pt-3">
               <input type="checkbox" name="sudo_enabled" class="form-check-input" id="sudo-{{ remote.id }}"
                      {% if remote.sudo_enabled %}checked{% endif %}>
               <label class="form-check-label" for="sudo-{{ remote.id }}">Use sudo</label>
             </div>
-          </div>
-          <div class="col-md-2">
-            <label class="form-label" for="manage-remotes-lgsm_user-{{ remote.id }}">LGSM User</label>
-            <input id="manage-remotes-lgsm_user-{{ remote.id }}" type="text" name="lgsm_user" class="form-control" value="{{ remote.linuxgsm_user }}">
           </div>
           <div class="col-md-1 d-flex align-items-end">
             <button type="submit" class="btn btn-primary btn-sm w-100">

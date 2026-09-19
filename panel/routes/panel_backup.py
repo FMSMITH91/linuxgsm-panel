@@ -424,7 +424,10 @@ def register(app):
         name = _b.get("name") or ""
         # Optional: only an encrypted archive needs it, and only when it was written under a
         # different passphrase than the one configured now (or this is a fresh install).
-        ok, msg = bk.restore_backup(name, passphrase=_b.get("passphrase") or None)
+        # skip_safety_backup: the operator's answer to a pre-restore copy that could not be
+        # written. Never a default — see backup._restore_validated.
+        ok, msg = bk.restore_backup(name, passphrase=_b.get("passphrase") or None,
+                                    skip_safety_backup=bool(_b.get("skip_safety_backup")))
         log_action(current_user, "panel_backup_restore", target=name, success=ok)
         return jsonify({"success": ok, "message": msg})
 

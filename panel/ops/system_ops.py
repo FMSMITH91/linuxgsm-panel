@@ -164,6 +164,20 @@ def _helper_present():
     return _HELPER_STATE["present"]
 
 
+def _can_escalate():
+    """Whether this host can run a privileged verb at all — the helper, being root already, or
+    passwordless sudo.
+
+    `_check_sudo()` alone was the gate on the OS update and the reboot, and it is the WRONG
+    question on a hardened host: install.sh writes `<user> ALL=(root) NOPASSWD: <helper>` once the
+    root-owned pieces are in place, and under that grant `sudo -n true` is DENIED while
+    `sudo -n <helper> apt-upgrade` works perfectly. So the two actions refused, with a message
+    telling the admin to configure passwordless sudo — that is, to undo the hardening the
+    installer had just applied. Every other privileged path here already branches on the helper;
+    these two did not."""
+    return _helper_present() or (hasattr(os, "geteuid") and os.geteuid() == 0) or _check_sudo()
+
+
 def _run_verb(verb, args=(), timeout=30, merge_stderr=True):
     """Run a privileged VERB (privileged.py) on this host. system_ops is always the panel's own
     machine, so there is no remote transport here — just the helper when it is installed, the tool
@@ -275,15 +289,23 @@ def ufw_status():
         if "(" in line and ")" in line:
             continue  # Skip header lines like (v6)
 
-        parts = line.split()
-        if len(parts) >= 3 and parts[0][0].isdecimal():
-            # Numbered rule
-            num = parts[0]
-            action = parts[1] if len(parts) > 1 else ""
-            rest = " ".join(parts[2:])
-            rules.append({"num": num, "action": action, "detail": rest})
+        # The verb runs `ufw status verbose`, whose columns are "To  Action  From" — there are
+        # NO rule numbers (only `ufw status numbered` has those). The branch here tested
+        # parts[0][0].isdecimal() and called the result "num", so a port landed in the number
+        # field and EVERY rule whose To column is not numeric was dropped entirely: the
+        # tailscale0 allow, app profiles like OpenSSH, and every `panel-block` DENY. Split on the
+        # ACTION instead, which is the one column with a fixed vocabulary.
+        m = _UFW_RULE_RE.match(line)
+        if m:
+            rules.append({"to": m.group(1).strip(), "action": m.group(2),
+                          "direction": m.group(3), "from": m.group(4).strip()})
 
     return {"enabled": enabled, "status_text": status_text, "rules": rules}
+
+
+# "<to>  <ACTION> <DIR>  <from>" — the shape of every rule row in `ufw status verbose`.
+# ALLOW/DENY/REJECT/LIMIT is the only column with a closed vocabulary, so it is the anchor.
+_UFW_RULE_RE = re.compile(r"^(.+?)\s{2,}(ALLOW|DENY|REJECT|LIMIT)\s+(IN|OUT|FWD)\s*(.*)$")
 
 
 def ufw_allow_tailscale(ts_interface=None):
@@ -313,12 +335,23 @@ def ufw_allow_tailscale(ts_interface=None):
 
 
 def detect_tailscale_interface():
-    """Detect the Tailscale network interface name."""
-    # Method 1: ip link show type wireguard
+    """Detect the Tailscale network interface name.
+
+    Every method here must return a TAILSCALE interface or nothing. The first one used to list
+    kernel-WireGuard devices (`ip link show type wireguard`) and accept any name containing "wg" —
+    but Tailscale on Linux is USERSPACE WireGuard over a TUN, so that listing can never contain
+    tailscale0 and the branch could only ever return something else. On a host running both
+    Tailscale and plain WireGuard it returned wg0, and the "Allow Tailscale" button then ran
+    `ufw allow in on wg0` — opening all inbound traffic on an unrelated VPN — and reported success
+    naming it, while tailscale0 stayed blocked and get_server_status()["tailscale_ufw_allowed"]
+    (a substring match on that name) read True.
+    """
+    # Method 1: a wireguard-type device that is actually Tailscale's (some setups do run
+    # tailscaled against the kernel module). The name must say so — "wg" does not.
     out, _, rc = _run("ip -o link show type wireguard 2>/dev/null | awk -F': ' '{print $2}'", timeout=5)
     if rc == 0 and out:
         for iface in out.split("\n"):
-            if "tailscale" in iface.lower() or "wg" in iface.lower():
+            if "tailscale" in iface.lower():
                 return iface.strip()
 
     # Method 2: Look for tailscale interface in ip link
@@ -451,8 +484,7 @@ def os_update_available(refresh=True):
 
 def os_run_update():
     """Run apt upgrade in background. Returns (success, message)."""
-    has_sudo = _check_sudo()
-    if not has_sudo:
+    if not _can_escalate():
         return False, "Sudo access required. Configure passwordless sudo for the panel user."
 
     # Run in background thread
@@ -472,16 +504,29 @@ def os_update_log():
     out, _, rc = _run(f"tail -50 {log_file}", timeout=5)
     lines = out.split("\n") if out else []
     entries = []
-    current = {}
+    current = None
     for line in lines:
         if line.startswith("Start-Date:"):
             if current:
                 entries.append(current)
             current = {"start": line.replace("Start-Date: ", ""), "command": "", "packages": []}
-        elif line.startswith("Commandline:"):
+            continue
+        if current is None:
+            # `tail -50` almost always starts mid-record, so the first lines belong to an entry
+            # whose Start-Date was cut off. It used to be emitted anyway, with no "start" key at
+            # all, which a caller reading e["start"] would raise on.
+            continue
+        if line.startswith("Commandline:"):
             current["command"] = line.replace("Commandline: ", "")
-        elif line.startswith("Packages:"):
-            current["packages"] = line.replace("Packages: ", "").split()
+        elif line.split(":", 1)[0] in _APT_PACKAGE_FIELDS:
+            # apt writes Install:/Upgrade:/Remove:/Purge:, never "Packages:" — so this list was
+            # always empty. Each field is "name:arch (ver), name:arch (old, new), …", and a
+            # version can itself contain a comma, so split on "), " rather than on every comma.
+            body = line.split(":", 1)[1].strip()
+            for item in body.split("), "):
+                name = item.strip().split(" ", 1)[0].split(":", 1)[0]
+                if name and name not in current["packages"]:
+                    current["packages"].append(name)
     if current:
         entries.append(current)
     return entries[-10:]  # Last 10
@@ -489,21 +534,33 @@ def os_update_log():
 
 # ─── Reboot ───────────────────────────────────────────────────
 
+# What apt's /var/log/apt/history.log actually calls its package lists.
+_APT_PACKAGE_FIELDS = ("Install", "Upgrade", "Remove", "Purge", "Downgrade", "Reinstall")
+
+
 def server_reboot(delay_seconds=5):
     """Reboot the server with an optional delay."""
-    has_sudo = _check_sudo()
-    if not has_sudo:
+    if not _can_escalate():
         return False, "Sudo access required for reboot."
+
+    # Clamped, as restart_panel's is. delay_seconds arrives raw from the request body and went
+    # straight into time.sleep() in a daemon thread: a non-numeric value killed that thread with a
+    # TypeError AFTER the route had already answered success and written a server_reboot audit
+    # entry — a reboot that is logged and never happens.
+    try:
+        delay = max(0, min(300, int(delay_seconds)))
+    except (TypeError, ValueError):
+        return False, "The reboot delay must be a number of seconds (0-300)."
 
     # Schedule reboot in background
     def _do_reboot():
         import time
-        time.sleep(delay_seconds)
+        time.sleep(delay)
         _run_verb("reboot", [], timeout=30)
 
     thread = threading.Thread(target=_do_reboot, daemon=True)
     thread.start()
-    return True, f"Server will reboot in {delay_seconds} seconds."
+    return True, f"Server will reboot in {delay} seconds."
 
 
 # Host CPU% without shelling out to `top`. Measured: `top -bn1` was 208ms of /server-management's
@@ -1411,10 +1468,14 @@ def enable_unattended_upgrades():
     _run_verb("apt-install", ["unattended-upgrades"], timeout=300)
     # 2) write the APT periodic config that actually turns it on. printf is
     # unprivileged; only the file write (via `sudo tee`) needs root.
+    # Through the write verb, like every other root-owned write here and like the REMOTE form of
+    # this same operation (hosts.py uses write_root_file("apt-auto-upgrades", …)). The hand-rolled
+    # `sudo tee` was the last one left: on a host with the narrow sudoers grant it is simply
+    # refused, so the file was never written and this always answered "Could not confirm…" while
+    # the identical action on a remote worked.
     conf = ('APT::Periodic::Update-Package-Lists "1";\n'
             'APT::Periodic::Unattended-Upgrade "1";\n')
-    _run("printf %s " + shlex.quote(conf) +
-         " | sudo tee /etc/apt/apt.conf.d/20auto-upgrades >/dev/null", timeout=30)
+    _write_root_file("/etc/apt/apt.conf.d/20auto-upgrades", conf)
     st = unattended_upgrades_status()
     if st.get("enabled"):
         return True, "Automatic security updates are now enabled."
