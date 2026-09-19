@@ -179,21 +179,51 @@ def lgsm_read_config(server, user, selfname):
         return {"settings": {}, "raw": "", "error": "Invalid account or script name"}
     d = _lgsm_cfg_dir(user, selfname)
     inst = f"{d}/{selfname}.cfg"
-    inner = (f"echo ===DEFAULT; cat {_core._quote(d + '/_default.cfg')} 2>/dev/null; "
-             f"echo ===COMMON; cat {_core._quote(d + '/common.cfg')} 2>/dev/null; "
-             f"echo ===INSTANCE; cat {_core._quote(inst)} 2>/dev/null")
+    # Each section is FRAMED and base64'd, for two reasons a plain `echo ===MARKER; cat file` could
+    # not give.
+    #
+    # 1. The marker was emitted with `echo` AFTER a `cat`, so it only landed on its own line if the
+    #    previous file ended with a newline. A common.cfg without one produced `a=1===INSTANCE`,
+    #    which matches nothing — `cur` stayed COMMON, sec["INSTANCE"] stayed empty, and `raw` came
+    #    back "". The Raw tab then showed an EMPTY editor for a real config, and Save wrote that ""
+    #    straight over it. Measured on a live host: a 5-line fctrserver.cfg rendered as 0 bytes with
+    #    error=None. A sentinel that cannot fuse to file content is the fix; base64 guarantees it,
+    #    because the encoded body cannot contain the marker's characters.
+    # 2. The same byte fidelity read_file needed: the transport decodes in text mode, so CRLF became
+    #    LF on the way to an editor whose Save writes the result back byte-exact.
+    #
+    # And a section whose frame is MISSING means the read never ran — not "an empty file". That is
+    # the destructive case read_file already names: rc was discarded here (`out, _, _ =`), so a
+    # timed-out or sudo-refused read returned {"raw": "", "error": None} and the editor offered to
+    # save it back.
+    def _frame(path, tag):
+        b, e = "__LGSMP_%s_B__" % tag, "__LGSMP_%s_E__" % tag
+        return (f"printf %s {_core._quote(b)}; base64 {_core._quote(path)} 2>/dev/null | tr -d '\n'; "
+                f"printf %s {_core._quote(e)}; ")
+
+    inner = (_frame(d + "/_default.cfg", "DEFAULT") + _frame(d + "/common.cfg", "COMMON")
+             + _frame(inst, "INSTANCE"))
     out, _, _ = _core.run_command(server, f"sudo -u {_core._quote(user)} bash -c {_core._quote(inner)}", timeout=20, sudo=False)
-    sec = {"DEFAULT": [], "COMMON": [], "INSTANCE": []}
-    cur = None
-    for line in (out or "").splitlines():
-        if line in ("===DEFAULT", "===COMMON", "===INSTANCE"):
-            cur = line[3:]
-            continue
-        if cur is not None:
-            sec[cur].append(line)
-    defaults = _parse_cfg("\n".join(sec["DEFAULT"]))
-    common = _parse_cfg("\n".join(sec["COMMON"]))
-    instance_text = "\n".join(sec["INSTANCE"])
+    body = out or ""
+    sect = {}
+    for tag in ("DEFAULT", "COMMON", "INSTANCE"):
+        b, e = "__LGSMP_%s_B__" % tag, "__LGSMP_%s_E__" % tag
+        i, j = body.find(b), body.find(e)
+        if i == -1 or j < i:
+            _core._log.warning("lgsm_read_config: no %s frame for %s — reporting a failed read", tag, inst)
+            return {"settings": {}, "raw": "", "merged": {}, "instance": {},
+                    "error": "Could not read the config — the host did not answer."}
+        enc = body[i + len(b):j].strip()
+        try:
+            import base64 as _b64
+            sect[tag] = _b64.b64decode(enc, validate=True).decode("utf-8", "replace") if enc else ""
+        except Exception:
+            _core._log.warning("lgsm_read_config: %s frame for %s was not valid base64", tag, inst)
+            return {"settings": {}, "raw": "", "merged": {}, "instance": {},
+                    "error": "Could not read the config — the host did not answer."}
+    defaults = _parse_cfg(sect["DEFAULT"])
+    common = _parse_cfg(sect["COMMON"])
+    instance_text = sect["INSTANCE"]
     instance = _parse_cfg(instance_text)
     merged = dict(defaults); merged.update(common); merged.update(instance)
     # Curated "common" quick list.
@@ -209,7 +239,7 @@ def lgsm_read_config(server, user, selfname):
     # LinuxGSM setting is editable (not just the curated ones).
     groups = []
     cur = None
-    for line in sec["DEFAULT"]:
+    for line in sect["DEFAULT"].splitlines():
         h = re.match(r"^#{3,}\s+(.+?)\s+#{3,}\s*$", line.strip())
         if h:
             cur = {"section": h.group(1), "settings": []}
@@ -281,8 +311,41 @@ def lgsm_write_config(server, user, selfname, updates):
         return False, "Invalid account or script name"
     d = _lgsm_cfg_dir(user, selfname)
     inst = f"{d}/{selfname}.cfg"
-    out, _, _ = _core.run_command(server, f"sudo -u {_core._quote(user)} bash -c {_core._quote('cat ' + _core._quote(inst) + ' 2>/dev/null')}", timeout=15, sudo=False)
-    lines = (out or "").splitlines()
+    # The read is FRAMED, and a read that did not happen ABORTS the write.
+    #
+    # This was `cat … 2>/dev/null` with the rc discarded (`out, _, _ =`). run_command does not raise
+    # on a transport failure — it returns ("", "…timed out", -1) — so a hiccup made `out` empty,
+    # `lines` empty, and the join below wrote a config containing ONLY the keys being updated,
+    # OVER the real instance config, and returned ok=True. Measured on a live host: a 5-line,
+    # 189-byte fctrserver.cfg became one line, `port="34197"`. That runs during an install, a port
+    # change and every alert/config edit.
+    #
+    # `2>/dev/null` also hid the difference that matters: a MISSING instance cfg is legitimate (a
+    # fresh instance has none, and appending the updates is the right thing), while a failed read
+    # is not. The sentinels tell those apart — the same fix, for the same reason, as read_file.
+    _probe = (
+        f"if [ ! -f {_core._quote(inst)} ]; then echo __NOFILE__; else "
+        f"printf %s {_core._quote(_READ_BEGIN)}; base64 {_core._quote(inst)} | tr -d '\n'; "
+        f"printf %s {_core._quote(_READ_END)}; fi"
+    )
+    out, _, _ = _core.run_command(server, f"sudo -u {_core._quote(user)} bash -c {_core._quote(_probe)}",
+                                  timeout=15, sudo=False)
+    body = out or ""
+    if body.strip() == "__NOFILE__":
+        lines = []                      # no instance cfg yet — the updates become the file
+    else:
+        i, j = body.find(_READ_BEGIN), body.rfind(_READ_END)
+        if i == -1 or j <= i:
+            _core._log.warning("lgsm_write_config: could not read %s — refusing to write", inst)
+            return False, "Could not read the current config — nothing has been changed."
+        try:
+            import base64 as _b64
+            _framed = body[i + len(_READ_BEGIN):j].strip()
+            _cur = _b64.b64decode(_framed, validate=True).decode("utf-8", "replace") if _framed else ""
+        except Exception:
+            _core._log.warning("lgsm_write_config: framed body for %s was not valid base64", inst)
+            return False, "Could not read the current config — nothing has been changed."
+        lines = _cur.splitlines()
     for key, val in (updates or {}).items():
         if not re.match(r"^[A-Za-z_][A-Za-z0-9_]*\Z", key or ""):
             continue
