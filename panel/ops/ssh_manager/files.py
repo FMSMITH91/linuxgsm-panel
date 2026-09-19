@@ -437,7 +437,8 @@ def mods_available(server, user, selfname, timeout=60):
     """Returns (available_mods, supported). `supported` is False for games with no LinuxGSM mods
     installer (e.g. cod), where mods-install answers 'Unknown command' — so the UI can hide the
     whole card rather than show an empty one."""
-    out, err, _ = _core.run_as_game_user(server, user, 'mods-install <<< "abort"', timeout=timeout, selfname=selfname)
+    out, err, _ = _core.run_as_game_user(server, user, "mods-install", timeout=timeout,
+                                         selfname=selfname, answers=["abort"])
     text = (out or "") + "\n" + (err or "")
     supported = _game_supports_mods(text)
     return (_parse_mods_available(text) if supported else []), supported
@@ -445,7 +446,8 @@ def mods_available(server, user, selfname, timeout=60):
 
 def mods_installed(server, user, selfname, timeout=60):
     """Returns (installed_mods, supported). See mods_available for `supported`."""
-    out, err, _ = _core.run_as_game_user(server, user, 'mods-remove <<< "abort"', timeout=timeout, selfname=selfname)
+    out, err, _ = _core.run_as_game_user(server, user, "mods-remove", timeout=timeout,
+                                         selfname=selfname, answers=["abort"])
     text = (out or "") + "\n" + (err or "")
     supported = _game_supports_mods(text)
     return (_parse_mods_installed(text) if supported else []), supported
@@ -460,7 +462,8 @@ def mods_action(server, user, selfname, which, mod_id, timeout=600):
     if not _MOD_ID_OK.match(mod_id or ""):
         return "", "invalid mod id", 1
     cmd = "mods-install" if which == "install" else "mods-remove"
-    out, err, rc = _core.run_as_game_user(server, user, f"{cmd} <<< $'{mod_id}\\nY'", timeout=timeout, selfname=selfname)
+    out, err, rc = _core.run_as_game_user(server, user, cmd, timeout=timeout, selfname=selfname,
+                                          answers=[mod_id, "Y"])
     return out, err, rc
 
 

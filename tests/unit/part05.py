@@ -961,6 +961,7 @@ _VERB_SAMPLES = {
     "game-file-read": ["codserver", "serverfiles/cfg/server.cfg"],
     "game-dir-tar": ["codserver", "serverfiles/addons"],
     "lgsm-discover": [],
+    "lgsm-command": ["gmodserver", "gmodserver", "details", "-", "no"],
     "content-scan": ["cstrike", "hl2"],
 }
 check("privileged: every verb has a sample (new verbs cannot skip the parity check)",
@@ -2713,3 +2714,142 @@ for _evil in ("ExecStartPre=/bin/sh -c id",
 # way past the grammar: a directive is a directive whether or not comments surround it.
 check("ssh.socket: ...and a comment header does not smuggle a directive past it",
       not _helper._lines_match("# Managed by LinuxGSM Panel\n\nExecStart=/bin/sh\n", _sock_rule))
+
+
+# ── `lgsm-command`: the verb that put server control back on a narrow-grant host ───────────────
+# run_as_game_user built `sudo -u <user> bash -c '<inner>'` and passed sudo=False. The narrow
+# sudoers grant install.sh writes permits the helper and NOTHING else, so on the install it calls
+# hardened the panel could not run a single LinuxGSM command — while /api/servers kept reporting
+# those servers "online", because it port-scans instead of asking LinuxGSM. Proven on a test host:
+# `sudo -n -u gmodserver id` -> "sudo: a password is required", a restart left the pid unchanged.
+from app import RUNNABLE_ACTIONS as _RA                                            # noqa: E402
+
+check("lgsm-command: the helper and the panel agree on the action list",
+      tuple(_helper.LGSM_ACTIONS) == tuple(_priv.LGSM_ACTIONS),
+      "helper=%s panel=%s" % (_helper.LGSM_ACTIONS, _priv.LGSM_ACTIONS))
+# The third list. An action the panel offers but the verb will not run is a button that fails only
+# on a hardened host — precisely the shape of the bug this verb exists to fix.
+check("lgsm-command: every action the panel offers is one the verb will run",
+      set(_RA) <= set(_priv.LGSM_ACTIONS),
+      "panel-only=%s" % sorted(set(_RA) - set(_priv.LGSM_ACTIONS)))
+check("lgsm-command: ...and the two mods subcommands files.py drives are in it too",
+      {"mods-install", "mods-remove"} <= set(_priv.LGSM_ACTIONS))
+
+# What the table refuses. Each of these reached a root-adjacent shell before the verb existed.
+for _bad, _why in (
+    (["root", "gmodserver", "details", "-", "no"], "a uid-0 account"),
+    (["gmodserver", "gmodserver", "rm", "-", "no"], "an action that is not on the list"),
+    (["gmodserver", "gmodserver", "details 2>&1", "-", "no"], "a shell fragment as the action"),
+    (["gmodserver", "gmodserver", "details", "a;id", "no"], "a shell metacharacter in an answer"),
+    (["gmodserver", "gmodserver", "details", "-", "sometimes"], "a tee flag that is not yes/no"),
+):
+    _refused = False
+    try:
+        _priv.check_args("lgsm-command", _bad)
+    except Exception:
+        _refused = True
+    check("lgsm-command: refuses %s" % _why, _refused, "ACCEPTED %r" % (_bad,))
+check("lgsm-command: ...and still accepts the real thing",
+      _priv.check_args("lgsm-command", ["gmodserver", "gmodserver", "mods-install", "sourcemod,Y",
+                                        "no"])[3] == "sourcemod,Y")
+
+# ── ...and run_as_game_user actually TAKES the verb on a local host ────────────────────────────
+# The gate that matters: covering the verb is not covering the call site that chooses it. Without
+# this, the whole fix could be present and never reached.
+_ragu_argv, _ragu_shell = [], []
+_o_local, _o_hp = _sm_core.is_local_server, _sm_core.helper_present
+_o_exec, _o_rc = _sm_core._exec_local_argv, _sm_core.run_command
+try:
+    _sm_core.is_local_server = lambda s: True
+    _sm_core.helper_present = lambda: True
+    _sm_core._exec_local_argv = lambda argv, **k: (_ragu_argv.append(argv), ("out", "", 0))[1]
+    _sm_core.run_command = lambda s, c, **k: (_ragu_shell.append(c), ("", "", 0))[1]
+
+    _sm_core.run_as_game_user(NS(), "gmodserver", "restart", selfname="gmodserver")
+    check("run_as_game_user: a LOCAL host with the helper runs the verb, not a shell",
+          len(_ragu_argv) == 1 and not _ragu_shell, "argv=%s shell=%s" % (_ragu_argv, _ragu_shell))
+    check("run_as_game_user: ...and it is the lgsm-command verb with the action as one word",
+          _ragu_argv and _ragu_argv[0][-4:] == ["gmodserver", "restart", "-", "no"],
+          str(_ragu_argv))
+    check("run_as_game_user: ...and no element of that argv contains a shell metacharacter",
+          _ragu_argv and not any(ch in el for el in _ragu_argv[0] for ch in ";|&$`<>"),
+          str(_ragu_argv))
+
+    # The refusal has to bite BEFORE the transport, or a bad value reaches one of them.
+    _ragu_argv.clear(); _ragu_shell.clear()
+    _o, _e, _r = _sm_core.run_as_game_user(NS(), "gmodserver", "details 2>&1")
+    check("run_as_game_user: a shell fragment is refused, not quoted and run",
+          _r == 1 and not _ragu_argv and not _ragu_shell, "rc=%s sent=%s" % (_r, _ragu_argv))
+
+    # ── the REMOTE rendering, which is the pre-helper form and must stay correct ──
+    _sm_core.is_local_server = lambda s: False
+    _ragu_shell.clear()
+    _sm_core.run_as_game_user(NS(), "gmodserver", "mods-install", answers=["sourcemod", "Y"])
+    _cmd = _ragu_shell[0] if _ragu_shell else ""
+    check("run_as_game_user: a REMOTE host still gets the sudo -u shell form", "sudo -u" in _cmd)
+    check("run_as_game_user: ...with the answers as printf ARGUMENTS, not a here-string",
+          "printf" in _cmd and "<<<" not in _cmd, _cmd[:160])
+    # The bug a naive port makes: `TERM=xterm printf … | ./gmodserver …` sets TERM for PRINTF and
+    # leaves LinuxGSM emitting `tput: unknown terminal "unknown"` over every line of output.
+    check("run_as_game_user: ...and TERM is EXPORTED, so it survives into the pipeline",
+          "export TERM=xterm" in _cmd, _cmd[:160])
+    _ragu_shell.clear()
+    _sm_core.run_as_game_user(NS(), "gmodserver", "update", tee_log=True)
+    _cmd = _ragu_shell[0] if _ragu_shell else ""
+    check("run_as_game_user: tee_log writes where _action_log_path says the console will tail",
+          "/home/gmodserver/.panel-update.log" in _cmd, _cmd[:200])
+    check("run_as_game_user: ...and keeps LinuxGSM's exit code rather than cat's",
+          "rc=$?" in _cmd and "exit $rc" in _cmd, _cmd[:200])
+finally:
+    _sm_core.is_local_server, _sm_core.helper_present = _o_local, _o_hp
+    _sm_core._exec_local_argv, _sm_core.run_command = _o_exec, _o_rc
+
+# The helper derives the tee path itself rather than accepting one; both sides must land on the
+# same file or the console tails something the action never writes.
+from panel.routes._shared import _action_log_path as _alp                          # noqa: E402
+check("lgsm-command: the helper's log path and the panel's _action_log_path agree",
+      _helper._lgsm_log_path("/home/gmodserver", "update") == _alp("gmodserver", "update"),
+      "%s vs %s" % (_helper._lgsm_log_path("/home/gmodserver", "update"),
+                    _alp("gmodserver", "update")))
+
+# The contract is a TUPLE, never a raise — several callers run in a background thread whose only
+# report back to the user is that rc, so an escaping exception reached them as silence. Found by
+# mutation: with the validation call removed, the suite did not fail, it DIED, and a harness that
+# counted "FAIL" lines read a dead suite as a clean one.
+_o_local2, _o_hp2 = _sm_core.is_local_server, _sm_core.helper_present
+try:
+    _sm_core.is_local_server = lambda s: True
+    _sm_core.helper_present = lambda: True
+    for _bad_user, _bad_act in (("root", "details"), ("gmodserver", "rm -rf /"), ("", "details")):
+        _raised = None
+        try:
+            _r = _sm_core.run_as_game_user(NS(), _bad_user, _bad_act)
+        except Exception as _e:
+            _raised = _e
+        check("run_as_game_user: (%r, %r) returns a tuple rather than raising"
+              % (_bad_user, _bad_act),
+              _raised is None and isinstance(_r, tuple) and len(_r) == 3 and _r[2] != 0,
+              "raised=%r result=%r" % (_raised, _raised is None and _r or None))
+finally:
+    _sm_core.is_local_server, _sm_core.helper_present = _o_local2, _o_hp2
+
+# The claim in run_as_game_user is that BOTH transports are held to the same table. Only the local
+# one re-validates on its own (helper_argv checks again), so deleting the shared check_args call
+# left every check passing while the remote rendering quietly accepted anything quotable. Found by
+# mutation: the mutant survived 2127 green checks.
+_o_local3, _o_rc3 = _sm_core.is_local_server, _sm_core.run_command
+_rem_sent = []
+try:
+    _sm_core.is_local_server = lambda s: False
+    _sm_core.run_command = lambda s, c, **k: (_rem_sent.append(c), ("", "", 0))[1]
+    for _bad_act, _bad_ans, _why in (
+        ("details 2>&1", None, "a shell fragment as the action"),
+        ("rm", None, "an action that is not on the list"),
+        ("details", ["a;id"], "a shell metacharacter in an answer"),
+    ):
+        _rem_sent.clear()
+        _o2, _e2, _r2 = _sm_core.run_as_game_user(NS(), "gmodserver", _bad_act, answers=_bad_ans)
+        check("run_as_game_user: the REMOTE path refuses %s too" % _why,
+              _r2 == 1 and not _rem_sent, "rc=%s sent=%s" % (_r2, _rem_sent))
+finally:
+    _sm_core.is_local_server, _sm_core.run_command = _o_local3, _o_rc3

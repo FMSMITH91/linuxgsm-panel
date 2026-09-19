@@ -905,12 +905,28 @@ def discover_linuxgsm_servers(server):
 _SAFE_GAME_IDENT = re.compile(r"^[A-Za-z0-9_][A-Za-z0-9._-]{0,63}\Z")
 
 
-def run_as_game_user(server, user, action_cmd, timeout=30, selfname=None):
-    """Run a LinuxGSM command as the instance's Ubuntu user, from its home dir.
-    `user` is the (possibly custom) account name; `selfname` is the LinuxGSM script
-    name (always '{game_type}server' — canonical). They differ when the instance was
-    given a custom name: only the user is renamed, the script stays canonical.
-    Defaults selfname to user for standard installs."""
+def run_as_game_user(server, user, action, timeout=30, selfname=None, answers=None,
+                     tee_log=False):
+    """Run ONE LinuxGSM action as the instance's Ubuntu user, from its home dir.
+
+    `user` is the (possibly custom) account name; `selfname` is the LinuxGSM script name (always
+    '{game_type}server' — canonical). They differ when the instance was given a custom name: only
+    the user is renamed, the script stays canonical. Defaults selfname to user for standard
+    installs.
+
+    `action` is ONE word from privileged.LGSM_ACTIONS — not a command line. It used to be a shell
+    fragment the callers assembled ("details 2>&1", 'mods-install <<< "abort"', a redirect into a
+    log file followed by `cat`), which is why this function could not route through a privileged
+    verb and had to shell out. `answers` and `tee_log` carry what those fragments were really for:
+    the keystrokes LinuxGSM prompts for, and the tail-able log a long action writes.
+
+    TWO TRANSPORTS, and the local one is why this changed at all. On the panel's own host with the
+    helper installed it is now the `lgsm-command` verb, because the narrow sudoers grant install.sh
+    writes permits the helper and nothing else — the old `sudo -u <user> bash -c ...` was not
+    covered by it, so on a hardened install every server control silently failed while the
+    dashboard's port-scan path still showed servers online. See tools/panel-helper:do_lgsm_command.
+    Remote hosts keep the shell form: their sudoers is the operator's business, and nothing about
+    it changed."""
     selfname = selfname or user
     # Validated HERE, at the one choke point every mods_* call goes through. files.py explains at
     # length why the model's @validates hook is not enough: it fires on ASSIGNMENT and never on a
@@ -921,8 +937,49 @@ def run_as_game_user(server, user, action_cmd, timeout=30, selfname=None):
     if not (_SAFE_GAME_IDENT.match(user or "") and _SAFE_GAME_IDENT.match(selfname or "")):
         _log.warning("refusing to run as an unsafe account/script name")
         return "", "invalid account or script name", 1
-    # TERM=xterm avoids LinuxGSM's `tput: unknown terminal "unknown"` noise.
-    inner = f"cd /home/{_quote(user)} && TERM=xterm ./{_quote(selfname)} {action_cmd}"
+    answers = [str(a) for a in (answers or [])]
+    arg_answers = ",".join(answers) if answers else "-"
+    verb_args = [user, selfname, action, arg_answers, "yes" if tee_log else "no"]
+    # Both transports are held to the SAME table, so a value one would refuse cannot reach the
+    # other. Without this the shell path would keep accepting whatever it could quote.
+    try:
+        _priv.check_args("lgsm-command", verb_args)
+    except Exception as exc:
+        _log.warning("refusing LinuxGSM action: %s", exc)
+        return "", str(exc), 1
+
+    if is_local_server(server) and helper_present():
+        try:
+            argv = _priv.helper_argv("lgsm-command", verb_args)
+        except Exception as exc:
+            # Unreachable while check_args above agrees with it — they read the same table. It is
+            # here because this function's contract is a TUPLE and never a raise: every caller
+            # unpacks (out, err, rc), and several run inside a background thread whose only
+            # report to the user is that rc. A raise here reached them as silence.
+            _log.warning("refusing LinuxGSM action: %s", exc)
+            return "", str(exc), 1
+        out, err, rc = _exec_local_argv(argv, timeout=timeout)
+        # The shell form used `2>&1` and every caller reads LinuxGSM's errors out of stdout, so
+        # merge here too — switching transport must not move a message from one stream to the other.
+        return ("\n".join(x for x in (out, err) if x)).strip(), "", rc
+
+    # Remote, or a host whose install.sh run predates the helper: the pre-helper shell form.
+    body = f"./{_quote(selfname)} {_quote(action)}"
+    if answers:
+        # `printf` rather than a here-string: the answers are arguments to it, so none of them is
+        # ever part of the text bash parses.
+        body = "printf '%s\\n' " + " ".join(_quote(a) for a in answers) + " | " + body
+    if tee_log:
+        # Mirrors panel/routes/_shared.py:_action_log_path, which is what the live console tails.
+        # `> log` truncates so each run starts the tail at byte 0; the trailing `cat` hands the
+        # whole output back anyway, and `exit $rc` keeps LinuxGSM's exit code rather than cat's.
+        logf = _quote(f"/home/{user}/.panel-{action}.log")
+        body = f"{body} > {logf} 2>&1; rc=$?; cat {logf} 2>/dev/null; exit $rc"
+    else:
+        body = f"{body} 2>&1"
+    # `export`, not a `TERM=xterm cmd` prefix: with `answers` the command is a PIPELINE, and a
+    # prefix would set TERM for printf and leave LinuxGSM emitting `tput: unknown terminal`.
+    inner = f"cd /home/{_quote(user)} && export TERM=xterm && {body}"
     cmd = f"sudo -u {_quote(user)} bash -c {_quote(inner)}"
     # The command self-escalates via `sudo -u`, so don't double-wrap with sudo.
     return run_command(server, cmd, timeout=timeout, sudo=False)

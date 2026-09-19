@@ -284,7 +284,7 @@ def _run_due_restarts(app):
                     db.session.commit()
                 elif decision == "restart":
                     act = "stop" if gs.stop_pending else "restart"
-                    _sm.run_as_game_user(gs.remote, gs.short_name, act + " 2>&1",
+                    _sm.run_as_game_user(gs.remote, gs.short_name, act,
                                      timeout=90, selfname=gs.lgsm_name)
                     if act == "restart":
                         try:

@@ -616,7 +616,7 @@ def detect_game_ports(server, user, selfname=None):
     Garry's Mod lists Game 27015 + SourceTV 27020, but only 27015 is needed. Returns:
       {"game_port": int|None, "open_ports": [ports to open], "ports": [all parsed]}.
     """
-    out, _, _ = _core.run_as_game_user(server, user, "details 2>&1", timeout=45, selfname=selfname)
+    out, _, _ = _core.run_as_game_user(server, user, "details", timeout=45, selfname=selfname)
     text = terminal.strip_escapes(out or "")
     ports, game_port, in_table = [], None, False
     for line in text.splitlines():
@@ -656,7 +656,7 @@ def get_server_status(server, game_server):
     LinuxGSM has no `status` command; `details` prints a "Status: STARTED/STOPPED"
     line, so we run that and parse it."""
     out, err, rc = _core.run_as_game_user(
-        server, game_server.short_name, "details 2>&1", timeout=30,
+        server, game_server.short_name, "details", timeout=30,
         selfname=game_server.lgsm_name,
     )
     text = (out or "") + "\n" + (err or "")

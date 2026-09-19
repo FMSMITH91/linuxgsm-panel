@@ -79,9 +79,9 @@ one it names: `bash` does not resolve.
 Converted so far: **`ufw`, `fail2ban-client`, `systemctl`, `apt`/`dpkg`, the log reads
 (`journalctl` / `tail`), cron and user management, the sshd port change, the deferred reboot,
 Ubuntu Pro, the host controls, the GMod shared-content box, the fail2ban activity report, the
-detached OS update, Tailscale's join, the panel's own restore/self-update and the VPS hardening
-steps** — 95 verbs. (`tests/unit_test.py` asserts this number against `privileged.verbs()`, so it
-cannot drift from the table again.)
+detached OS update, Tailscale's join, the panel's own restore/self-update, the VPS hardening
+steps and running a LinuxGSM action as the game user** — 96 verbs. (`tests/unit_test.py` asserts
+this number against `privileged.verbs()`, so it cannot drift from the table again.)
 
 **A correction to the numbers previously reported here.** Earlier revisions of this section
 said the panel had "113" privileged call sites and tracked them down to 42. That counted only
@@ -114,6 +114,30 @@ hook — which fires on assignment and never on a row loaded from the database. 
 quoted at that site now, and a test drives a hostile name through it; the shape itself remains,
 because `crontab -u … -l | filter > tmp; crontab -u … tmp` genuinely is a pipeline. Read the table
 above as "no `_sudo_sh` **function**", not as "no hand-built escalation".
+
+**A third hand-built escalation, and the one that actually broke the hardened install.**
+`run_as_game_user` rendered `sudo -u <user> bash -c '<inner>'` and passed `sudo=False` — the same
+shape as `_rewrite_crontab`, invisible to all three ratchets for the same reason. Unlike the cron
+one it was not merely unnarrowed, it was **broken**: the narrow grant permits the helper and
+nothing else, so on a host where install.sh reported `sudo grant: narrow` the panel could not run
+a single LinuxGSM command. Measured on a test host with that grant — `sudo -n -u gmodserver id`
+answered "sudo: a password is required"; a restart issued through the API left the pid unchanged
+and logged `restart_server success=False`; `/api/server/<id>` reported `"unknown"`. The dashboard
+showed those servers **online** throughout, because `/api/servers` port-scans instead of asking
+LinuxGSM. Status, start/stop/restart, console, mods and LinuxGSM backups were all dead, silently.
+
+It is the `lgsm-command` verb now: a managed non-uid-0 account, a script name re-resolved inside
+that user's home after the credential drop, one action from a fixed list, and prompt answers as
+bare tokens fed down a pipe. No shell on the local path at all. Remote hosts keep the old form,
+which is correct — their sudoers is the operator's to arrange.
+
+**What that fix does NOT cover, stated plainly.** `run_as_game_user` was one of about 45 sites
+that build `sudo -u <game user> bash -c '<shell>'` and pass `sudo=False`: the file browser,
+the GMod content mounts, the cron readers, the install flows and the disk-usage probes are all
+the same shape, and all of them fail under the narrow grant exactly as server control did. The
+count in the table below is of `sudo=True` sites and has never included any of these. Converting
+them is not finished; until it is, a host with the narrow grant has working server control and a
+file browser that does not work.
 
 **Two of the four `sudo=True` sites that remain cannot be narrowed by a verb at all** — they are the
 downloaded-script installers named below. The other two were described here as the LinuxGSM

@@ -688,6 +688,32 @@ def _choice(*allowed):
 # This mirrors tools/panel-helper's VERBS. Keep them identical — a unit test compares every verb's
 # argv for a set of sample arguments and fails if they disagree.
 
+# The LinuxGSM actions the panel may run as a game user. Mirrors app.RUNNABLE_ACTIONS plus the two
+# mods subcommands panel/ops/ssh_manager/files.py drives; the unit suite asserts the three lists
+# agree, so an action added to the panel cannot silently become unrunnable.
+LGSM_ACTIONS = ("start", "stop", "restart", "monitor", "update", "validate", "backup",
+                "details", "check-update", "force-update", "update-lgsm", "mods-update",
+                "postdetails", "test-alert", "fastdl", "mods-install", "mods-remove")
+
+
+def _answers(s):
+    """Keystrokes fed to a LinuxGSM command's stdin, comma-separated, or "-" for none.
+
+    LinuxGSM prompts and the panel has to answer unattended -- a mod id then a "Y", or the eight
+    yes/no questions fastdl asks and loops forever on at EOF. This replaces a here-string the panel
+    built by f-string; see tools/panel-helper's v_answers for the full account."""
+    s = str(s)
+    if s == "-":
+        return s
+    parts = s.split(",")
+    if not (1 <= len(parts) <= 16):
+        raise VerbError("expected 1..16 answers")
+    for part in parts:
+        if not re.fullmatch(r"[A-Za-z0-9_.-]{1,64}", part):
+            raise VerbError("not an answer list")
+    return s
+
+
 _ARGV = {
     "ufw-status": ([_choice("plain", "numbered", "verbose")],
                    lambda a: [UFW, "status"] if a[0] == "plain" else [UFW, "status", a[0]], None),
@@ -855,6 +881,11 @@ _ARGV = {
     # Find LinuxGSM instances already installed on this host. Zero arguments; the helper walks
     # /home itself. It needed root for one thing only — reading another user's crontab.
     "lgsm-discover": ([], lambda a: [], None),
+    # One LinuxGSM action, run as the game user. Local-only by design: a remote host runs the same
+    # thing over SSH as `sudo -u <user>`, which is the operator's sudoers to arrange, not ours --
+    # see run_as_game_user, which picks the transport and keeps the remote form unchanged.
+    "lgsm-command": ([_managed_user, _ident, _choice(*LGSM_ACTIONS), _answers,
+                      _choice("yes", "no")], lambda a: [], None),
     "apt-full-upgrade": ([_choice("phased", "standard")],
                          lambda a: [APT, "full-upgrade", "-y"]
                          + (["-o", "APT::Get::Always-Include-Phased-Updates=true"]
