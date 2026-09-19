@@ -13,6 +13,21 @@ db = SQLAlchemy()
 _log = logging.getLogger("panel.models")
 
 
+class UnreadableSecret(str):
+    """An encrypted column that exists but could not be decrypted with this host's key.
+
+    Deliberately an EMPTY str subclass: `if not value` and `value == ""` keep answering what they
+    always did, so nothing downstream changes behaviour by accident. A caller that must not treat
+    "could not read it" as "nothing is set" checks isinstance instead — see
+    panel/ops/ssh_manager/_core.get_connection and panel/ops/backup.get_passphrase.
+    """
+
+    __slots__ = ()
+
+    def __new__(cls):
+        return super().__new__(cls, "")
+
+
 class EncryptedString(db.TypeDecorator):
     """A column that is ciphertext in the database and plaintext in Python.
 
@@ -46,8 +61,18 @@ class EncryptedString(db.TypeDecorator):
     def process_result_value(self, value, dialect):
         if value is None or value == "":
             return value
-        from panel.core.config import decrypt_secret
-        return decrypt_secret(value)
+        from panel.core.config import decrypt_secret, is_encrypted
+        out = decrypt_secret(value)
+        if not out and is_encrypted(value):
+            # Something IS stored and this host cannot decrypt it — a rotated, restored or
+            # replaced cred_key. decrypt_secret answers "" for that, which is the same answer it
+            # gives for "nothing stored", and callers acted on the difference: an undecryptable
+            # SSH host-key pin read as "never pinned" and was re-pinned to whatever key was
+            # presented; an undecryptable backup passphrase read as "backups are unencrypted" and
+            # wrote the archive in the clear. UnreadableSecret is still an empty string, so every
+            # existing caller behaves exactly as before; the two that must tell them apart now can.
+            return UnreadableSecret()
+        return out
 
 # How many previous passwords an account may not go straight back to. Each one costs a bcrypt
 # comparison (~0.2s at cost 12) on a password change, so this is a small number on purpose — it
@@ -484,6 +509,11 @@ class RemoteServer(db.Model):
     def host_key_fingerprint(self):
         """SHA256 fingerprint of the pinned SSH host key (OpenSSH format), or "" if none
         is pinned yet. Shown so the operator can eyeball what they're trusting."""
+        if isinstance(self.host_key, UnreadableSecret):
+            # A pin IS stored, this host just cannot read it. Saying "" here would print "none
+            # pinned" in the UI while get_connection refuses with "the stored key cannot be
+            # decrypted" — two different stories about the same row. Say which it is.
+            return "unreadable (cred_key mismatch)"
         if not self.host_key:
             return ""
         try:
