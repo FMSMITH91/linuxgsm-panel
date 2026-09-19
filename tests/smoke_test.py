@@ -3040,15 +3040,56 @@ try:
                   _st_inst == "installing", "status=%r" % _st_inst)
             _mon.status = "online"; db.session.commit()
 
+            # ── a scan that could not be READ is not a scan that found nothing ───────────────
+            # _remote_listening_ports returned set() for both, and on a local or Tailscale-SSH
+            # host a timed-out command does not raise — the transport answers ("", "...", -1) — so
+            # one flaky `ss` read arrived at _probe_host as "reachable, nothing listening". The
+            # sweep then declared every server on that host down: an alert each, gs.status written
+            # offline (which the bots and the dashboard then repeated), the one-shot notify-when-
+            # empty falsely fired AND consumed, and a matching "back online" storm 60s later.
+            _reset_mon()
+            _monmod._remote_listening_ports = lambda r: {27100}
+            _rec.clear(); _monmod._monitor_pass()          # baseline: up
+            _monmod._remote_listening_ports = lambda r: None    # the read FAILED
+            _st_blip = _status_after_pass("online")
+            check("monitor: a failed port scan does not fire server_down",
+                  "server_down" not in _rec, "fired: %s" % _rec)
+            check("monitor: ...and does not write the server offline",
+                  _st_blip == "online", "status=%r" % _st_blip)
+            # ...while a scan that really did come back empty still means the server is down.
+            _monmod._remote_listening_ports = lambda r: set()
+            _st_real = _status_after_pass("online")
+            check("monitor: an EMPTY scan still means down, so the guard is not blanket",
+                  _st_real == "offline", "status=%r" % _st_real)
+            _mon.status = "online"; db.session.commit()
+            _monmod._remote_listening_ports = lambda r: {27100}
+
             # A reachable host that stops responding -> remote_unreachable.
             _reset_mon()
             _ps._monitor_state["remotes"].clear()
             _ps._monitor_state["remotes"][_r1_id] = True
+            # Start from True on the ROW as well, or the False below could be the value the
+            # fixture already had and the check would pass with the write deleted.
+            _r1.is_online = True
+            db.session.commit()
             _monmod._host_reachable = lambda r: r.id != _r1_id
             _rec.clear(); _monmod._monitor_pass()
             check("monitor: remote_unreachable fires when a host stops responding",
                   "remote_unreachable" in _rec)
+            # ...and the COLUMN follows, not just this pass's memory. is_online was written only by
+            # host creation (hardcoded True), the manual Test button and a successful bootstrap, so
+            # a host down for days rendered a green "Reachable" badge on the dashboard, the host
+            # cards and the bots' /hosts — all of which branch on this column first.
+            db.session.rollback()
+            db.session.refresh(_r1)
+            check("monitor: ...and writes is_online=False to the host row",
+                  _r1.is_online is False, "is_online=%r" % _r1.is_online)
             _monmod._host_reachable = lambda r: True
+            _rec.clear(); _monmod._monitor_pass()
+            db.session.rollback()
+            db.session.refresh(_r1)
+            check("monitor: ...and back to True when it answers again",
+                  _r1.is_online is True, "is_online=%r" % _r1.is_online)
 
             # gs.status is an INPUT to the poller: _query_server_slots answers a server it believes
             # offline with a confident 0 players and never queries it. The monitor now keeps that

@@ -1754,7 +1754,12 @@ def _parse_top_ips(out, banned_now, blocked):
 def fail2ban_top_ips(limit=20, days=7):
     """The most-active offending IPs from the fail2ban log over the last `days` days (current +
     rotated), ranked by detected attempts. Each: {ip, attempts, bans, banned_now, blocked}.
-    Best-effort ([] if fail2ban/log absent)."""
+    [] when fail2ban/the log is absent — the verb exits 0 with nothing to report. NONE when the
+    read FAILED (helper missing, sudo refused, the 25s timeout on a large log): those also produce
+    no output, and returning [] for them made "the read broke" indistinguishable from "there are
+    no offenders". _autoblock_reconcile takes the second to mean every auto-block should be
+    released, so one failed read unblocked every brute-forcer the panel had firewalled — and wrote
+    an audit row saying so as though it were the intended reconciliation."""
     from datetime import datetime, timedelta
     limit = max(1, min(int(limit or 20), 100))
     try:
@@ -1765,7 +1770,10 @@ def fail2ban_top_ips(limit=20, days=7):
     # Was a five-stage zcat|awk|grep|awk|sort|head pipeline running as root, with the cutoff date
     # and the limit interpolated into it. The verb reads the rotated logs and returns the lines;
     # everything the awk did — filter by date, extract Ban/Found, tally per IP — is Python now.
-    out, _, _ = _run_verb("f2b-log-lines", [cutoff], timeout=25, merge_stderr=False)
+    out, _, rc = _run_verb("f2b-log-lines", [cutoff], timeout=25, merge_stderr=False)
+    if rc != 0:
+        _log.debug("top-ips: the fail2ban log read failed (rc=%s)", rc)
+        return None
     out = _tally_f2b_lines(out, limit)
     banned_now = set()
     try:

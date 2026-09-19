@@ -293,7 +293,9 @@ def register(app):
     def api_panel_security_top_ips():
         """Top offending IPs on the panel host (last 7 days), aggregated from the fail2ban log."""
         try:
-            return jsonify({"ips": so.fail2ban_top_ips(100, days=7),
+            # `or []`: the reader answers None when the read failed, which the card renders as
+            # "no offenders" either way — but the DIFFERENCE now matters to _autoblock_reconcile.
+            return jsonify({"ips": so.fail2ban_top_ips(100, days=7) or [],
                             "autoblock": _local_remote_id() in _autoblock_hosts(),
                             "threshold": _autoblock_threshold(),
                             "whitelist": _security_whitelist()})

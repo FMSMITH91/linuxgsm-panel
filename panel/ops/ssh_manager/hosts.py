@@ -1338,7 +1338,14 @@ def remote_fail2ban_top_ips(server, limit=20, days=7):
     # The remote twin of system_ops.fail2ban_top_ips, which #118 converted. Same split: the verb
     # reads and filters the rotated logs, and the tally — the second awk — is the shared Python.
     from panel.ops import system_ops as _so
-    out, _, _ = _core.run_privileged(server, "f2b-log-lines", [cutoff], timeout=25, merge_stderr=False)
+    # None, not [], when the read FAILED — see system_ops.fail2ban_top_ips for why the two have to
+    # be distinguishable. On a local or Tailscale-SSH host a timeout does not raise: the transport
+    # returns ("", "...timed out", -1), so without the rc this looked exactly like "no offenders".
+    out, _, rc = _core.run_privileged(server, "f2b-log-lines", [cutoff], timeout=25,
+                                      merge_stderr=False)
+    if rc != 0:
+        _core._log.debug("remote top-ips: the fail2ban log read failed (rc=%s)", rc)
+        return None
     out = _so._tally_f2b_lines(out, limit)
     banned = set()
     try:

@@ -474,7 +474,8 @@ def register(app):
                         for _ in range(5):                    # poll ~15s: give a heavy first boot time to bind
                             time.sleep(3)
                             _sm._invalidate_port_scan(remote.id)  # force a fresh scan each try
-                            if gs.port and gs.port in _remote_listening_ports(remote):
+                            if gs.port and gs.port in (_remote_listening_ports(remote)
+                                                       or set()):
                                 really_up = True
                                 break
                     except Exception:

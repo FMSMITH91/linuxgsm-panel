@@ -38,7 +38,7 @@ def register(app):
         """Top offending IPs on a remote host (last 7 days), aggregated from its fail2ban log."""
         remote = get_remote(remote_id)
         try:
-            return jsonify({"ips": remote_fail2ban_top_ips(remote, 100, days=7),
+            return jsonify({"ips": remote_fail2ban_top_ips(remote, 100, days=7) or [],
                             "autoblock": remote_id in _autoblock_hosts(),
                             "threshold": _autoblock_threshold(),
                             "whitelist": _security_whitelist()})

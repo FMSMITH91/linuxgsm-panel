@@ -204,7 +204,10 @@ def register(app):
         def _scan(item):
             remote, gslist = item
             try:
-                return gslist, remote, _remote_listening_ports(remote)
+                # `or set()`: the scanner answers None for a failed read. Here that is the
+                # same as 'nothing listening' — this endpoint reports per-server status and a
+                # blip already shows as offline; it is the MONITOR that must not alert on it.
+                return gslist, remote, (_remote_listening_ports(remote) or set())
             except Exception:
                 _log.debug("api_servers: port scan failed", exc_info=True)
                 return gslist, remote, None

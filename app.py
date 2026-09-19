@@ -349,7 +349,10 @@ def _resolve_source_aux_ports(remote, remote_id, short_name, lgsm_name, main_por
             for k in _SOURCE_AUX_PORT_KEYS if str(cur.get(k, "")).strip().isdecimal()}
     if not have:
         return {}                        # game has no SourceTV/client ports — nothing to do
-    occupied = set(_remote_listening_ports(remote))
+    # `or ()`: None means the scan failed. Treating that as 'no ports occupied' can suggest
+    # a port that is actually taken — the install then fails with a clear error, which is
+    # the same outcome this had before the scanner learned to say 'I could not read'.
+    occupied = set(_remote_listening_ports(remote) or ())
     occupied.add(int(main_port))
     for e in GameServer.query.filter_by(remote_id=remote_id).all():
         for k in range(_port_span(e.game_type)):
@@ -1510,7 +1513,10 @@ def resolve_free_port(remote, remote_id, desired, game_type):
     # Whatever is currently listening on the host (cached scan) — covers running servers'
     # FULL real footprint (game + query + rcon + …) and any non-panel service, so we never
     # land on one even if a game's span table entry is imperfect.
-    occupied = set(_remote_listening_ports(remote))
+    # `or ()`: None means the scan failed. Treating that as 'no ports occupied' can suggest
+    # a port that is actually taken — the install then fails with a clear error, which is
+    # the same outcome this had before the scanner learned to say 'I could not read'.
+    occupied = set(_remote_listening_ports(remote) or ())
     # Plus every panel server's reserved block (covers STOPPED servers, which aren't listening).
     for e in GameServer.query.filter_by(remote_id=remote_id).all():
         for k in range(_port_span(e.game_type)):
