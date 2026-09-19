@@ -1926,13 +1926,27 @@ def do_content_dir_create(args, content):
     The shell form created this group-readable (`install -m 750`) whether or not any GMod user had
     been granted access — the group bits were there from the moment the directory existed. They are
     added by content-grant-read now, when access is actually granted, so an ungranted content box
-    shares nothing."""
+    shares nothing.
+
+    Created with mkdir and then adjusted THROUGH A DESCRIPTOR, because makedirs(exist_ok=True)
+    accepts a SYMLINK TO A DIRECTORY — its check is isdir(), which follows — and the chown and
+    chmod that came after followed it too. The parent here is /home/<user>, which the user owns,
+    so `ln -s /root ~/serverfiles` made root hand /root to that account: write
+    /root/.ssh/authorized_keys and the boundary is gone. O_NOFOLLOW refuses the link outright
+    rather than resolving it, and a descriptor cannot be swapped for something else afterwards."""
     user = args[0]
     path = home_of(user) + "/" + CONTENT_SUBDIR
-    os.makedirs(path, mode=stat.S_IRWXU, exist_ok=True)
     info = pwd.getpwnam(user)
-    os.chown(path, info.pw_uid, info.pw_gid)
-    os.chmod(path, stat.S_IRWXU)
+    try:
+        os.mkdir(path, stat.S_IRWXU)
+    except FileExistsError:
+        pass                      # already there; the fchown/fchmod below still normalise it
+    fd = os.open(path, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+    try:
+        os.fchown(fd, info.pw_uid, info.pw_gid)
+        os.fchmod(fd, stat.S_IRWXU)
+    finally:
+        os.close(fd)
     return 0
 
 
@@ -1969,9 +1983,33 @@ def do_content_game_remove(args, content):
     return 0
 
 
+def content_cron_line_re(user):
+    """What a /etc/cron.d/lgsm-gmod-content-<user> line may say.
+
+    The same argument as WRITE_CONTENT above, for the second writer of a cron.d file. That table
+    guards `write-file`, and this verb is not one of its destinations — the path is per-user, so it
+    cannot be a fixed name — which left this the one root-owned write with no content rule at all.
+    Its stdin went to /etc/cron.d verbatim, and a cron.d line carries a USER FIELD: one
+    `* * * * * root <cmd>` and the caller has root, within the minute, across reboots.
+
+    The panel's body (ssh_manager/gmod.py:_content_update_cron_body) is a fixed shape, so it gets a
+    grammar that admits that shape and nothing else. The user field is pinned to the VALIDATED
+    ARGUMENT — not to a name in the payload — so the worst a hostile body can ask for is that the
+    content account run its own ~/<script>, which is what the account is for."""
+    u = re.escape(v_username(user))
+    return re.compile(
+        r"(?:PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
+        r"|[0-9]{1,2} [12] \* \* 0 %(u)s /home/%(u)s/[a-z0-9][a-z0-9_-]{0,31}"
+        r" update(?:-lgsm)? > /dev/null 2>&1)" % {"u": u})
+
+
 def do_content_cron_write(args, content):
     """Write the weekly content-update cron for one content user."""
-    path = "%s-%s" % (CONTENT_CRON_PREFIX, v_username(args[0]))
+    user = v_username(args[0])
+    if not _lines_match(content, content_cron_line_re(user)):
+        print("panel-helper: content-cron-write body rejected", file=sys.stderr)
+        return 2
+    path = "%s-%s" % (CONTENT_CRON_PREFIX, user)
     fd, tmp = tempfile.mkstemp(dir=os.path.dirname(path), prefix=".panel-", suffix=".tmp")
     with os.fdopen(fd, "w") as fh:
         fh.write(content)
@@ -1992,14 +2030,45 @@ def do_content_cron_remove(args, content):
 
 
 def do_gmod_mount_read(args, content):
-    """Print a GMod server's mount.cfg, or nothing. Was `cat <path> 2>/dev/null || true`."""
-    path = home_of(args[0]) + "/" + GMOD_CFG_SUBPATH + "/mount.cfg"
+    """Print a GMod server's mount.cfg, or nothing. Was `cat <path> 2>/dev/null || true`.
+
+    Read AS THE GAME USER, through the same fork-and-drop the download verbs use. Opening it as
+    root was the hole those verbs were written to avoid: every component of the path sits inside
+    that account's own home, so `ln -s /etc/shadow ~/serverfiles/garrysmod/cfg/mount.cfg` made
+    this verb print /etc/shadow into the panel UI. _as_game_user re-resolves after the drop, so a
+    link that leaves the home is refused by the kernel rather than trusted by a check."""
+    pw, abspath = _game_home_path(args[0], GMOD_CFG_SUBPATH + "/mount.cfg")
+    if pw is None:
+        return 0                  # no such user: empty, which the caller reads as "no mounts"
+    _as_game_user(pw, abspath, lambda path: _emit_file(path, sys.stdout.buffer))
+    return 0                      # missing or unreadable is "no mounts", as it has always been
+
+
+def _chmod_nofollow(path, add, x_if_user=False, dir_fd=None):
+    """Add mode bits to `path` WITHOUT following it if it is a symlink.
+
+    os.chmod follows, and Linux has no lchmod, so `chmod -R g+rX` over a tree the content account
+    owns was a chmod of whatever anything in it pointed AT. Worse than a stray permission: the walk
+    read the mode with lstat and wrote it back with chmod, and a symlink's own mode is 0777 — so
+    every link in the tree made its TARGET world-writable. Two of those (/etc/shadow, /etc/cron.d)
+    are root.
+
+    O_NOFOLLOW makes the kernel refuse the open instead. O_NONBLOCK so a FIFO cannot park root
+    forever, and non-regular, non-directory entries are left alone — a device or socket has no
+    content to share and no business being chmod'd by this."""
+    fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK, dir_fd=dir_fd)
     try:
-        with open(path, encoding="utf-8", errors="replace") as fh:
-            sys.stdout.write(fh.read())
-    except OSError:
-        pass                      # no file, or unreadable: the caller treats empty as "no mounts"
-    return 0
+        st = os.fstat(fd)
+        if not (stat.S_ISREG(st.st_mode) or stat.S_ISDIR(st.st_mode)):
+            return
+        mode = stat.S_IMODE(st.st_mode) | add
+        # g+rX: read for everything, execute only where a user already has it. That is what
+        # `chmod -R g+rX` means, and why it is not a blanket g+rx.
+        if x_if_user and mode & stat.S_IXUSR:
+            mode |= stat.S_IXGRP
+        os.fchmod(fd, mode)
+    finally:
+        os.close(fd)
 
 
 def do_content_grant_read(args, content):
@@ -2032,26 +2101,23 @@ def do_content_grant_read(args, content):
     # it does not any more, so the grant is what opens the path.
     for _dir in (home_of(content_user), content_path(content_user, CONTENT_SUBDIR)):
         try:
-            os.chmod(_dir, stat.S_IMODE(os.stat(_dir).st_mode) | stat.S_IXGRP)
+            _chmod_nofollow(_dir, stat.S_IXGRP)
         except OSError:
             pass                  # traversal bit is best-effort, as it was in the shell form
     for game in games:
         path = content_path(content_user, CONTENT_SUBDIR, game)
-        for root, dirs, files in os.walk(path):
+        # fwalk, not walk, and follow_symlinks=False: it hands each level a DESCRIPTOR and checks
+        # that the directory it descended into is the one it stat'd, so a component swapped
+        # mid-walk stops the descent instead of redirecting it.
+        for _root, dirs, files, rootfd in os.fwalk(path, follow_symlinks=False,
+                                                   onerror=lambda _e: None):
             for name in dirs + files:
-                target = os.path.join(root, name)
                 try:
-                    mode = stat.S_IMODE(os.lstat(target).st_mode)
-                    # g+rX: read for everything, execute only where a user already has it. That is
-                    # what `chmod -R g+rX` means, and why it is not a blanket g+rx.
-                    mode |= stat.S_IRGRP
-                    if mode & stat.S_IXUSR:
-                        mode |= stat.S_IXGRP
-                    os.chmod(target, mode)
+                    _chmod_nofollow(name, stat.S_IRGRP, x_if_user=True, dir_fd=rootfd)
                 except OSError:
                     continue
         try:
-            os.chmod(path, stat.S_IMODE(os.stat(path).st_mode) | stat.S_IRGRP | stat.S_IXGRP)
+            _chmod_nofollow(path, stat.S_IRGRP | stat.S_IXGRP)
         except OSError:
             # This game's tree is missing or not ours to chmod. The shell form was per-command
             # best-effort for the same reason, and the other granted games must still be done.
@@ -2194,6 +2260,11 @@ def main(argv):
         # change what runs.
         try:
             return action(checked, sys.stdin.read())
+        except KeyError as e:
+            # pwd.getpwnam on a name that is not an account here. Only the class is printed: a
+            # KeyError carries the rejected name, and this stderr is surfaced in the panel UI.
+            print("panel-helper: %s failed (%s)" % (verb, e.__class__.__name__), file=sys.stderr)
+            return 1
         except OSError as e:
             print("panel-helper: %s failed (%s)" % (verb, e.__class__.__name__), file=sys.stderr)
             return 1

@@ -112,35 +112,57 @@ def _install():
     from panel.ops.ssh_manager import firewall as _sm_fw, gmod as _sm_gmod, hosts as _sm_hosts
     from panel.ops.ssh_manager import portscan as _sm_ps
 
+    # ONE shim object, shared by every target — not one per module. The real `subprocess` IS one
+    # object that all of them import, and a test that reaches for it expects that: part01 patches
+    # `_sm_core.subprocess.Popen` and then asserts what files.py's Popen received. With a shim per
+    # module that assignment lands on _core's instance and files.py keeps its own, so the patch
+    # reached nothing, files.py ran the shim's real Popen against a `sudo -n panel-helper` argv,
+    # got /bin/false, and the download tests failed with an empty argv list.
+    import subprocess as _greened      # what every module above holds after monkey_patch()
+    _shim = _make_shim(_greened)
     _targets = (system_ops, backup, db_maintenance, tailscale_integration,
                 _sm_core, _sm_cron, _sm_files, _sm_game, _sm_fw, _sm_gmod, _sm_hosts, _sm_ps)
     for mod in _targets:
         if getattr(mod, "subprocess", None) is not None:
-            mod.subprocess = _shim_for(mod.__name__)
-    # _core keeps a SEPARATE unpatched handle for use inside eventlet's thread pool — the one the
-    # local exec paths actually run through.
+            mod.subprocess = _shim
+    # _core keeps a SEPARATE handle for use inside eventlet's thread pool: eventlet.patcher's
+    # ORIGINAL, ungreened subprocess, which _run_local runs every local command through. It needs
+    # its own shim standing over THAT module, not over the greened one — eventlet's Popen
+    # re-implements communicate() and drops the `errors` argument, so _POPEN_KW's
+    # errors="replace" stopped applying and a game server printing latin-1 (which is what the
+    # three "transports must decode leniently" checks are about) came back as
+    # ("", "command execution error", -1) instead of text with a U+FFFD in it.
     if getattr(_sm_core, "_real_subprocess", None) is not None:
-        _sm_core._real_subprocess = _shim_for("ssh_manager._core._real_subprocess")
+        _sm_core._real_subprocess = _make_shim(_sm_core._real_subprocess)
 
 
-def _shim_for(label):
-    """A stand-in subprocess module that refuses anything invoking sudo and passes the rest on."""
-    import subprocess as _sp  # nosec B404 - this IS the subprocess wrapper; it refuses sudo
+def _caller_label(suffix):
+    """Which module called into the shim, for the refusal report. Taken from the calling frame
+    because the shim is shared — it cannot be baked in at construction any more."""
+    try:
+        return "%s.%s" % (sys._getframe(2).f_globals.get("__name__", "?"), suffix)
+    except Exception:
+        return "?.%s" % suffix
 
+
+def _make_shim(_sp):
+    """A stand-in for one subprocess module that refuses anything invoking sudo, and passes the
+    rest to `_sp` — the module it is standing in FOR, so its semantics are the ones that module
+    had. Substituting a different subprocess module here changes behaviour the app depends on."""
     class _Shim:
         def __getattr__(self, name):
             return getattr(_sp, name)
 
         def run(self, cmd, *a, **kw):
             if _is_sudo(cmd):
-                BLOCKED.append(("%s.run" % label, str(cmd)[:120]))
+                BLOCKED.append((_caller_label("run"), str(cmd)[:120]))
                 return _sp.CompletedProcess(cmd, 1, "", "sudo: a password is required")  # nosemgrep
             # Passthrough: exactly the command the app would have run unwrapped, minus sudo.
             return _sp.run(cmd, *a, **kw)  # nosec B603  # nosemgrep
 
         def Popen(self, cmd, *a, **kw):
             if _is_sudo(cmd):
-                BLOCKED.append(("%s.Popen" % label, str(cmd)[:120]))
+                BLOCKED.append((_caller_label("Popen"), str(cmd)[:120]))
                 # Still hand back a real process object: callers poll/wait on it. /bin/false is
                 # the cheapest thing that exits non-zero and honours the stdout/stderr kwargs.
                 return _sp.Popen(["/bin/false"], *a, **kw)  # nosec B603  # nosemgrep - fixed literal

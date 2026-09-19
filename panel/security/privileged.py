@@ -44,6 +44,7 @@ STATUS
     SECURITY.md carries the full account, including what deliberately is not narrowed.
 """
 import ipaddress
+import pwd
 import re
 import shlex
 
@@ -469,6 +470,37 @@ def _username(s):
     return str(s)
 
 
+# Groups a content user's primary group is never called, and that would hand out privilege if it
+# were. See _content_grant_remote.
+_NEVER_A_CONTENT_GROUP = frozenset({"root", "wheel", "sudo", "admin", "adm", "shadow", "docker",
+                                    "lxd", "disk", "staff"})
+
+
+def _managed_user(s):
+    """A Linux user name the panel may ACT ON — shape, and never a uid-0 account.
+
+    The mirror of the helper's v_managed_user. Both tables are meant to say the same thing, and
+    twenty slots had drifted: the helper refused uid 0 and this copy still accepted "root", so the
+    REMOTE rendering of `userdel -r`, `pkill -9 -u`, `crontab -u … -l`, `usermod -aG` and the three
+    download verbs would build the root form and send it. Locally the helper catches it; a remote
+    host has no helper, which is exactly where the mirror is the only check there is.
+
+    Two tests, because neither alone is enough. The NAME, because a remote host's passwd file is
+    not this one's and "root" is uid 0 everywhere. And the local LOOKUP, for a host that has given
+    uid 0 a second name. As in the helper it is uid 0, not a uid floor: install.sh creates the
+    panel's own account with `useradd --system`, so a legitimate argument here is often uid < 1000.
+    """
+    s = _username(s)
+    if s == "root":
+        raise VerbError("refusing a uid-0 account")
+    try:
+        if pwd.getpwnam(s).pw_uid == 0:
+            raise VerbError("refusing a uid-0 account")
+    except KeyError:
+        pass          # not an account HERE; the name is still a valid shape for a remote host
+    return s
+
+
 def home_of(user):
     """The home directory for a validated user name — built, never accepted. See the helper."""
     path = HOME_ROOT + "/" + _username(user)
@@ -613,7 +645,7 @@ _ARGV = {
     # `serve` and `serve status` work without root afterwards. One caller (ensure_operator), one
     # argument, validated as a Linux user name. The flag is fixed here so a caller cannot turn
     # `set` into any other tailscale subcommand.
-    "tailscale-set-operator": ([_username],
+    "tailscale-set-operator": ([_managed_user],
                                lambda a: ["tailscale", "set", "--operator=%s" % a[0]], None),
     "service-reload": ([_choice(*UNITS)], lambda a: [SYSTEMCTL, "reload", a[0]], None),
     "service-enable-now": ([_choice(*UNITS)], lambda a: [SYSTEMCTL, "enable", "--now", a[0]], None),
@@ -640,15 +672,15 @@ _ARGV = {
 
     # ── the GMod shared-content box ──
     "content-scan": ([Rest(_ident)], lambda a: [], None),
-    "content-dir-create": ([_username], lambda a: [], None),
-    "content-game-present": ([_username, _ident], lambda a: [], None),
-    "content-script-present": ([_username, _ident], lambda a: [], None),
-    "content-game-remove": ([_username, _ident, _ident_or_dash], lambda a: [], None),
-    "content-cron-write": ([_username], lambda a: [], None),
-    "content-cron-remove": ([_username], lambda a: [], None),
-    "content-grant-read": ([_username, _username, _username, Rest(_ident)],
+    "content-dir-create": ([_managed_user], lambda a: [], None),
+    "content-game-present": ([_managed_user, _ident], lambda a: [], None),
+    "content-script-present": ([_managed_user, _ident], lambda a: [], None),
+    "content-game-remove": ([_managed_user, _ident, _ident_or_dash], lambda a: [], None),
+    "content-cron-write": ([_managed_user], lambda a: [], None),
+    "content-cron-remove": ([_managed_user], lambda a: [], None),
+    "content-grant-read": ([_managed_user, _username, _managed_user, Rest(_ident)],
                            lambda a: [], None),
-    "gmod-mount-read": ([_username], lambda a: [], None),
+    "gmod-mount-read": ([_managed_user], lambda a: [], None),
 
     # ── Ubuntu Pro ──
     "pro-status": ([], lambda a: ["pro", "status", "--format", "json"], None),
@@ -659,7 +691,7 @@ _ARGV = {
 
     # ── misc host controls ──
     # renice takes a LIST of users, so the game servers can all be re-niced in one call.
-    "renice-users": ([_nice, Rest(_username)],
+    "renice-users": ([_nice, Rest(_managed_user)],
                      lambda a: ["renice", "-n", a[0], "-u"] + a[1:], None),
     "set-timezone": ([_timezone], lambda a: ["timedatectl", "set-timezone", a[0]], None),
     # Both of these used to end in `| awk '…'` running as root. The verb returns the raw output and
@@ -688,14 +720,14 @@ _ARGV = {
     "reboot-delayed": ([], lambda a: [], None),
 
     # ── cron and user accounts ──
-    "crontab-list": ([_username], lambda a: ["crontab", "-u", a[0], "-l"], None),
-    "user-create": ([_username], lambda a: ["useradd", "-m", "-s", "/bin/bash", a[0]], None),
-    "user-lock-password": ([_username], lambda a: ["passwd", "-l", a[0]], None),
-    "user-delete": ([_username], lambda a: ["userdel", "-r", a[0]], None),
-    "user-delete-force": ([_username], lambda a: ["userdel", "-r", "-f", a[0]], None),
-    "user-kill-processes": ([_username], lambda a: ["pkill", "-9", "-u", a[0]], None),
+    "crontab-list": ([_managed_user], lambda a: ["crontab", "-u", a[0], "-l"], None),
+    "user-create": ([_managed_user], lambda a: ["useradd", "-m", "-s", "/bin/bash", a[0]], None),
+    "user-lock-password": ([_managed_user], lambda a: ["passwd", "-l", a[0]], None),
+    "user-delete": ([_managed_user], lambda a: ["userdel", "-r", a[0]], None),
+    "user-delete-force": ([_managed_user], lambda a: ["userdel", "-r", "-f", a[0]], None),
+    "user-kill-processes": ([_managed_user], lambda a: ["pkill", "-9", "-u", a[0]], None),
     # rm -rf as root: the path is CONSTRUCTED from a validated name, never passed in.
-    "user-remove-home": ([_username], lambda a: ["rm", "-rf", "--", home_of(a[0])], None),
+    "user-remove-home": ([_managed_user], lambda a: ["rm", "-rf", "--", home_of(a[0])], None),
 
     # ── log reads ──
     # Neither journalctl nor tail is ever handed a caller's target: the SOURCE is a name from a
@@ -730,13 +762,13 @@ _ARGV = {
     # Stream a game server backup for download. The helper drops to the GAME user before opening
     # the file — reading it as root would turn a download button into "hand me any file on the
     # box". See tools/panel-helper.
-    "game-backup-read": ([_username, _backup_name], lambda a: [], None),
+    "game-backup-read": ([_managed_user, _backup_name], lambda a: [], None),
     # Download one file, or a .tar.gz of one directory, from under a game user's home — the read
     # side of the panel's file browser. Both drop to the GAME user before opening anything, for
     # the same reason game-backup-read does: reading as root would turn a download button into
     # "hand me any file on the box". See tools/panel-helper.
-    "game-file-read": ([_username, _relpath], lambda a: [], None),
-    "game-dir-tar": ([_username, _relpath], lambda a: [], None),
+    "game-file-read": ([_managed_user, _relpath], lambda a: [], None),
+    "game-dir-tar": ([_managed_user, _relpath], lambda a: [], None),
     # Find LinuxGSM instances already installed on this host. Zero arguments; the helper walks
     # /home itself. It needed root for one thing only — reading another user's crontab.
     "lgsm-discover": ([], lambda a: [], None),
@@ -784,8 +816,17 @@ _ARGV = {
 
 
 def _content_grant_remote(a):
-    """The remote form of content-grant-read: usermod, then the traversal and read bits."""
+    """The remote form of content-grant-read: usermod, then the traversal and read bits.
+
+    The GROUP is read off the host (`id -gn <content user>`) and handed back in, so a host that
+    answers "root" turns this into `usermod -aG root <gmod user>` — gid 0 on every root:root 0640
+    file there. The helper refuses that locally by comparing the named group against the content
+    user's REAL primary group; a remote host has no helper and no passwd file this process can
+    read, so the name is what there is to check. root and the standard escalation groups are the
+    ones with no legitimate answer here: a content account's primary group is its own name."""
     content_user, group, gmod_user, games = a[0], a[1], a[2], a[3:]
+    if group in _NEVER_A_CONTENT_GROUP:
+        raise VerbError("refusing to grant membership of that group")
     parts = ["usermod -aG %s %s" % (shlex.quote(group), shlex.quote(gmod_user)),
              # Traversal outermost-first: the home, then serverfiles. The shell form skipped
              # serverfiles because it was created group-readable; it is created private now.
@@ -977,3 +1018,10 @@ def remote_content_cron_command(user, content):
 def verbs():
     """Every verb this module knows, for tests and for the operator-facing docs."""
     return sorted(_ARGV)
+
+
+def verb_validators(verb):
+    """The validator list for `verb`. For the anti-drift test, which compares this table's
+    STRICTNESS against the helper's — the argv comparison cannot, because the verbs the helper
+    implements itself build [] on both sides whatever their arguments were."""
+    return list(_ARGV[verb][0])

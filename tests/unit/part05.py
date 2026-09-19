@@ -390,6 +390,25 @@ check("no-sudo runner: every ssh_manager submodule's subprocess is shimmed",
       not _nsr_unshimmed, "still real in: %s" % _nsr_unshimmed)
 check("no-sudo runner: ...including _core's separate eventlet handle",
       _nsr_core._real_subprocess.__class__.__name__ != "module")
+# ONE shim object across the modules, because the real `subprocess` is one object across them and
+# tests reach for it that way: part01 patches _sm_core.subprocess.Popen and then asserts what
+# files.py's Popen was handed. A shim PER MODULE made that assignment land on _core's instance
+# while files.py kept its own, so the patch reached nothing and files.py ran the shim's passthrough
+# against a `sudo -n panel-helper` argv — it got /bin/false back and the download checks failed
+# with an empty argv list.
+check("no-sudo runner: the submodules share ONE shim, as they shared one subprocess module",
+      _nsr_core.subprocess is _nsr_files.subprocess is _nsr_cron.subprocess is _nsr_so.subprocess,
+      "core=%r files=%r" % (id(_nsr_core.subprocess), id(_nsr_files.subprocess)))
+# ...but _real_subprocess is a DIFFERENT module (eventlet.patcher's ungreened original), so it
+# needs its own shim over that one. Standing the greened module in for it dropped _POPEN_KW's
+# errors="replace" — eventlet's Popen re-implements communicate() without it — and a game server
+# printing latin-1 came back as ("", "command execution error", -1).
+check("no-sudo runner: _real_subprocess's shim stands over the ORIGINAL module, not the greened one",
+      _nsr_core._real_subprocess is not _nsr_core.subprocess)
+_nsr_latin = _nsr_core._run_local(r"printf 'caf\351: x\n'", timeout=10, sudo=False)
+check("no-sudo runner: ...so undecodable output still comes back as text",
+      _nsr_latin[2] == 0 and _nsr_latin[0].startswith("caf") and "\ufffd" in _nsr_latin[0],
+      repr(_nsr_latin))
 # The shape that escaped: the local privileged path is bash -c "sudo bash -c ...", so a check on
 # argv[0] alone never sees the sudo.
 for _cmd, _want in ((["sudo", "id"], True),
@@ -983,6 +1002,54 @@ for _v, _a in _uid0_verbs:
         pass
 check("helper: no verb accepts a uid-0 account", not _uid0_through,
       "still accepted: %s" % _uid0_through)
+# ...and the PANEL's copy of the table must refuse the same names. It did not: twenty slots still
+# held _username, so `remote_command("user-delete", ["root"])` rendered `userdel -r root` and sent
+# it. Locally the helper is the second check; a REMOTE host has no helper, so this copy is the
+# only one there is. The argv-comparison gate above cannot see this — every content verb builds []
+# on both sides, so identical argv says nothing about which names were let through.
+_uid0_panel = []
+for _v, _a in _uid0_verbs:
+    try:
+        _priv.check_args(_v, _a)
+        _uid0_panel.append(_v)
+    except Exception:
+        pass
+check("privileged: the panel's table refuses a uid-0 account everywhere the helper does",
+      not _uid0_panel, "still accepted: %s" % _uid0_panel)
+# The general form, so a verb added later cannot drift the same way: for EVERY verb and every
+# argument slot, if the helper refuses "root" there, the panel must too.
+_slot_drift = []
+for _v in sorted(_helper.VERBS):
+    if _v not in _priv.verbs():
+        continue
+    _hs, _ps = _helper.VERBS[_v][0], _priv.verb_validators(_v)
+    for _i, (_hc, _pc) in enumerate(zip(_hs, _ps)):
+        _hc = _hc.check if isinstance(_hc, _helper.Rest) else _hc
+        _pc = _pc.check if isinstance(_pc, _priv.Rest) else _pc
+        def _takes(_f):
+            try:
+                _f("root")
+                return True
+            except Exception:
+                return False
+        if not _takes(_hc) and _takes(_pc):
+            _slot_drift.append("%s arg%d" % (_v, _i + 1))
+check("privileged: no argument slot is stricter in the helper than in the panel",
+      not _slot_drift, "helper refuses 'root' but the panel does not at: %s" % _slot_drift[:6])
+# The remote grant renders `usermod -aG <group> <user>` from a group name READ OFF THE HOST. The
+# helper checks it against the content user's real primary group; the remote form cannot, so the
+# groups that hand out privilege are refused by name.
+_grp_ok = _priv.remote_command("content-grant-read", ["cu", "cu", "gm", "cstrike"])
+_grp_bad = []
+for _g in ("root", "sudo", "wheel", "docker", "shadow"):
+    try:
+        _priv.remote_command("content-grant-read", ["cu", _g, "gm", "cstrike"])
+        _grp_bad.append(_g)
+    except Exception:
+        pass
+check("privileged: the remote content grant refuses a privileged group", not _grp_bad,
+      "rendered usermod -aG for: %s" % _grp_bad)
+check("privileged: ...and still renders the real one", "usermod -aG cu gm" in _grp_ok, _grp_ok[:60])
 check("helper: _game_home_path refuses uid 0 even if a name got past the validator",
       _helper._game_home_path("root", ".ssh/id_rsa") == (None, None),
       repr(_helper._game_home_path("root", ".ssh/id_rsa")))
@@ -998,6 +1065,170 @@ if _sys_name:
         _sys_why = repr(_sys_exc)
     check("helper: a NON-root system account (uid<1000) is still accepted", not _sys_why,
           "refused %s, which is the shape of the panel's own user: %s" % (_sys_name, _sys_why))
+
+# ── The three content verbs must not be steerable through a symlink ───────────────────────────
+# The GMod shared-content box is the one corner of the helper that works INSIDE a home directory,
+# and a home directory belongs to the account that lives in it. install.sh creates /home/lgsmpanel
+# with `useradd --create-home`, and the panel creates one per game server — so "an attacker who
+# owns a directory under /home for a name v_managed_user accepts" is not a hypothetical, it is the
+# panel's own account and every game server it has ever installed.
+#
+# Each verb is driven for real, with HOME_ROOT redirected at a sandbox. Every attack is paired
+# with the legitimate call it must not break, because a verb that refuses everything is not a fix.
+import grp as _cs_grp
+import stat as _cs_stat
+from panel.ops.ssh_manager import gmod as _sm_gmod  # noqa: E402
+_cs_tmp = _tempfile.mkdtemp(prefix="content-sym-")
+_cs_me = __import__("pwd").getpwuid(os.getuid()).pw_name
+_cs_home_root, _cs_home = os.path.join(_cs_tmp, "home"), os.path.join(_cs_tmp, "home", _cs_me)
+os.makedirs(_cs_home)
+_cs_saved_root, _cs_saved_cron = _helper.HOME_ROOT, _helper.CONTENT_CRON_PREFIX
+_helper.HOME_ROOT = _cs_home_root
+_helper.CONTENT_CRON_PREFIX = os.path.join(_cs_tmp, "cron.d", "lgsm-gmod-content")
+os.makedirs(os.path.join(_cs_tmp, "cron.d"))
+try:
+    # 1. content-dir-create: makedirs(exist_ok=True) accepts a SYMLINK to a directory (its check is
+    #    isdir, which follows) and the chown/chmod after it followed too — so `ln -s /root
+    #    ~/serverfiles` made root give /root away to the content account.
+    _cs_victim = os.path.join(_cs_tmp, "victim")
+    os.makedirs(_cs_victim)
+    os.chmod(_cs_victim, 0o755)
+    _cs_sf = os.path.join(_cs_home, _helper.CONTENT_SUBDIR)
+    os.symlink(_cs_victim, _cs_sf)
+    try:
+        _helper.do_content_dir_create([_cs_me], "")
+        _cs_dc_err = ""
+    except OSError as _e:
+        _cs_dc_err = type(_e).__name__
+    check("helper content-dir-create: a symlinked serverfiles is refused, not followed",
+          _cs_dc_err and _cs_stat.S_IMODE(os.stat(_cs_victim).st_mode) == 0o755,
+          "err=%r victim mode=%s" % (_cs_dc_err,
+                                     oct(_cs_stat.S_IMODE(os.stat(_cs_victim).st_mode))))
+    os.unlink(_cs_sf)
+    _helper.do_content_dir_create([_cs_me], "")
+    _helper.do_content_dir_create([_cs_me], "")        # and it is still idempotent
+    check("helper content-dir-create: ...and a real one is still created 0700",
+          os.path.isdir(_cs_sf) and not os.path.islink(_cs_sf)
+          and _cs_stat.S_IMODE(os.stat(_cs_sf).st_mode) == 0o700,
+          oct(_cs_stat.S_IMODE(os.stat(_cs_sf).st_mode)))
+
+    # 2. content-grant-read: the g+rX walk read the mode with lstat (does not follow) and wrote it
+    #    with chmod (does). A symlink's own mode is 0777, so every link in the tree ended as
+    #    `chmod 0777` on its TARGET — /etc/shadow, /etc/sudoers.d, /etc/cron.d.
+    _cs_tree = os.path.join(_cs_sf, "cstrike")
+    os.makedirs(os.path.join(_cs_tree, "maps"))
+    _cs_real = os.path.join(_cs_tree, "maps", "de_dust2.bsp")
+    with open(_cs_real, "w", encoding="utf-8") as _fh:
+        _fh.write("x")
+    os.chmod(_cs_real, 0o600)
+    _cs_exec = os.path.join(_cs_tree, "run.sh")
+    with open(_cs_exec, "w", encoding="utf-8") as _fh:
+        _fh.write("x")
+    os.chmod(_cs_exec, 0o700)
+    _cs_tf = os.path.join(_cs_tmp, "shadowish")
+    with open(_cs_tf, "w", encoding="utf-8") as _fh:
+        _fh.write("x")
+    os.chmod(_cs_tf, 0o640)
+    _cs_td = os.path.join(_cs_tmp, "sudoersd")
+    os.makedirs(_cs_td)
+    os.chmod(_cs_td, 0o700)
+    os.symlink(_cs_tf, os.path.join(_cs_tree, "a"))
+    os.symlink(_cs_td, os.path.join(_cs_tree, "b"))
+    _helper.do_content_grant_read(
+        [_cs_me, _cs_grp.getgrgid(__import__("pwd").getpwnam(_cs_me).pw_gid).gr_name,
+         _cs_me, "cstrike"], "")
+    check("helper content-grant-read: a symlink's 0777 does not land on its target",
+          _cs_stat.S_IMODE(os.stat(_cs_tf).st_mode) == 0o640
+          and _cs_stat.S_IMODE(os.stat(_cs_td).st_mode) == 0o700,
+          "file=%s dir=%s" % (oct(_cs_stat.S_IMODE(os.stat(_cs_tf).st_mode)),
+                              oct(_cs_stat.S_IMODE(os.stat(_cs_td).st_mode))))
+    check("helper content-grant-read: ...and g+rX still reaches the real files",
+          _cs_stat.S_IMODE(os.stat(_cs_real).st_mode) == 0o640
+          and _cs_stat.S_IMODE(os.stat(_cs_exec).st_mode) == 0o750
+          and _cs_stat.S_IMODE(os.stat(_cs_sf).st_mode) & 0o010,
+          "file=%s exec=%s serverfiles=%s"
+          % (oct(_cs_stat.S_IMODE(os.stat(_cs_real).st_mode)),
+             oct(_cs_stat.S_IMODE(os.stat(_cs_exec).st_mode)),
+             oct(_cs_stat.S_IMODE(os.stat(_cs_sf).st_mode))))
+
+    # 3. content-cron-write: its stdin went to /etc/cron.d verbatim. A cron.d line carries a USER
+    #    FIELD, so `* * * * * root <cmd>` was root, within the minute, across reboots — the exact
+    #    hole WRITE_CONTENT closes for node-tools-cron, in the one cron writer that table does not
+    #    reach (the destination is per-user, so it cannot be a fixed name).
+    _cs_cron = "%s-%s" % (_helper.CONTENT_CRON_PREFIX, _cs_me)
+    _cs_rc = _helper.do_content_cron_write(
+        [_cs_me], "* * * * * root cp /bin/bash /tmp/rb && chmod u+s /tmp/rb\n")
+    check("helper content-cron-write: a root cron line is refused",
+          _cs_rc == 2 and not os.path.exists(_cs_cron),
+          "rc=%s exists=%s" % (_cs_rc, os.path.exists(_cs_cron)))
+    _cs_body = _sm_gmod._content_update_cron_body(_cs_me, ["gmodserver", "csgoserver"])
+    _cs_rc = _helper.do_content_cron_write([_cs_me], _cs_body)
+    check("helper content-cron-write: ...and the body the panel actually sends is written verbatim",
+          _cs_rc == 0 and os.path.exists(_cs_cron)
+          and open(_cs_cron, encoding="utf-8").read() == _cs_body, "rc=%s" % _cs_rc)
+    # The user field is pinned to the ARGUMENT, not to whatever the body claims.
+    _cs_rc = _helper.do_content_cron_write(
+        [_cs_me], _cs_body.replace(" 0 %s /home/" % _cs_me, " 0 root /home/", 1))
+    check("helper content-cron-write: the cron user field cannot name anyone but the argument",
+          _cs_rc == 2, "rc=%s" % _cs_rc)
+
+    # 4. gmod-mount-read: opened as root, through a path every component of which lives in that
+    #    account's own home — so a symlinked mount.cfg printed any root-readable file into the UI.
+    #    It goes through the download verbs' fork-and-drop now, so the path is only resolved once
+    #    privileges are gone.
+    _cs_secret = os.path.join(_cs_tmp, "shadow")
+    with open(_cs_secret, "w", encoding="utf-8") as _fh:
+        _fh.write("root:$6$SECRET")
+    _cs_cfg = os.path.join(_cs_home, _helper.GMOD_CFG_SUBPATH)
+    os.makedirs(_cs_cfg)
+    os.symlink(_cs_secret, os.path.join(_cs_cfg, "mount.cfg"))
+    _cs_r, _cs_w = os.pipe()
+    _cs_saved_fd = os.dup(1)
+    os.dup2(_cs_w, 1)
+    os.close(_cs_w)
+    try:
+        _helper.do_gmod_mount_read([_cs_me], "")
+    finally:
+        sys.stdout.flush()
+        os.dup2(_cs_saved_fd, 1)
+        os.close(_cs_saved_fd)
+    _cs_out = os.read(_cs_r, 65536).decode("utf-8", "replace")
+    os.close(_cs_r)
+    check("helper gmod-mount-read: a symlinked mount.cfg does not leak its target",
+          "SECRET" not in _cs_out, repr(_cs_out[:80]))
+    # The read itself: _as_game_user needs root to drop, so the drop is stood in for and what is
+    # checked is that the verb hands it the right path and emits that file.
+    os.unlink(os.path.join(_cs_cfg, "mount.cfg"))
+    with open(os.path.join(_cs_cfg, "mount.cfg"), "w", encoding="utf-8") as _fh:
+        _fh.write('"cstrike" "/home/cu/serverfiles/cstrike"\n')
+    _cs_pw = __import__("pwd").getpwnam(_cs_me)
+    _cs_fake = __import__("pwd").struct_passwd(
+        (_cs_pw.pw_name, _cs_pw.pw_passwd, _cs_pw.pw_uid, _cs_pw.pw_gid, _cs_pw.pw_gecos,
+         _cs_home, _cs_pw.pw_shell))
+    _cs_seen = []
+    _cs_real_pwd, _cs_real_drop = _helper.pwd, _helper._as_game_user
+    _helper.pwd = type("P", (), {"getpwnam": staticmethod(lambda n: _cs_fake)})()
+    _helper._as_game_user = lambda pw, p, emit: (_cs_seen.append(p), emit(os.path.realpath(p)))[0]
+    _cs_r, _cs_w = os.pipe()
+    _cs_saved_fd = os.dup(1)
+    os.dup2(_cs_w, 1)
+    os.close(_cs_w)
+    try:
+        _helper.do_gmod_mount_read([_cs_me], "")
+    finally:
+        sys.stdout.flush()
+        os.dup2(_cs_saved_fd, 1)
+        os.close(_cs_saved_fd)
+        _helper.pwd, _helper._as_game_user = _cs_real_pwd, _cs_real_drop
+    _cs_out = os.read(_cs_r, 65536).decode("utf-8", "replace")
+    os.close(_cs_r)
+    check("helper gmod-mount-read: ...and a real mount.cfg is still read, under the game user",
+          _cs_out == '"cstrike" "/home/cu/serverfiles/cstrike"\n'
+          and _cs_seen == [os.path.join(_cs_cfg, "mount.cfg")],
+          "out=%r handed=%s" % (_cs_out, _cs_seen))
+finally:
+    _helper.HOME_ROOT, _helper.CONTENT_CRON_PREFIX = _cs_saved_root, _cs_saved_cron
+    _shutil.rmtree(_cs_tmp, ignore_errors=True)
 
 # ── The restore must not follow a symlink out of the staging directory ────────────────────────
 # The staging directory is FIXED, and the helper's own note says why that matters: root copying
