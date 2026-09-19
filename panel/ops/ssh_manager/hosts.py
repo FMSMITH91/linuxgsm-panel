@@ -326,13 +326,34 @@ def remote_ufw_delete_rule(server, num, force=False):
     if n < 1:
         return False, "Invalid rule number"
     if not force:
+        # The guard reads the firewall to find out which rules are load-bearing. If that read
+        # FAILS it returns no groups — and iterating nothing marked nothing protected, so every
+        # rule became deletable, including the one keeping SSH or the tailnet open. The old
+        # `except` said as much out loud ("don't let the safety check itself block a legitimate
+        # delete on error"), which is the wrong trade for a guard whose entire job is preventing a
+        # lockout: "I could not check" is not "it is safe".
+        #
+        # So an unverifiable firewall refuses, and says how to proceed. force=True remains the
+        # deliberate override — the caller has to mean it.
         try:
-            for g in firewall.remote_ufw_status(server).get("groups", []):
-                if n in g.get("nums", []) and g.get("protected"):
-                    return False, g.get("protect_reason") or \
-                        "This rule protects your access to the host and can't be removed here."
+            status = firewall.remote_ufw_status(server)
         except Exception:
-            _core._log.debug("don't let the safety check itself block a legitimate delete on error", exc_info=True)
+            _core._log.warning("ufw delete: the safety check could not read the firewall",
+                               exc_info=True)
+            status = None
+        if status is None or status.get("unreachable"):
+            return False, ("Couldn't read the firewall to check whether rule %d is the one "
+                           "keeping your access open, so this refuses rather than risk locking "
+                           "you out. Check the host is reachable and try again." % n)
+        if not status.get("installed"):
+            # A different answer, not the same failure: UFW genuinely is not here, so there is no
+            # rule numbered anything and the delete would fail regardless. Say that rather than
+            # send someone checking a connection that is fine.
+            return False, "UFW isn't installed on this host, so there's no rule %d to delete." % n
+        for g in status.get("groups", []):
+            if n in g.get("nums", []) and g.get("protected"):
+                return False, g.get("protect_reason") or \
+                    "This rule protects your access to the host and can't be removed here."
     out, err, rc = _core.run_privileged(server, "ufw-delete-num", [n], timeout=15)
     if rc == 0:
         return True, f"Rule {n} deleted"
