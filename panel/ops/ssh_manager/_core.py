@@ -783,8 +783,27 @@ def run_command(server, command, timeout=30, sudo=None):
     Returns (stdout, stderr, exit_code).
     """
     if is_local_server(server):
-        use_sudo = sudo if sudo is not None else server.sudo_enabled
-        return _run_local(command, timeout=timeout, sudo=use_sudo)
+        # NO IMPLICIT ESCALATION on the panel's own host. `sudo` defaulted to server.sudo_enabled,
+        # and the local host row is created with sudo_enabled=True (panel/routes/host_local.py,
+        # panel/routes/remotes.py) — so every caller that did not pass `sudo=` sent its command as
+        # `sudo bash -c '<cmd>'`. About twenty of them need no privilege whatsoever: the dashboard
+        # port scan, disk and load, uptime, /etc/os-release, `id`, `tailscale status`. Measured on
+        # a test host with this code, as the panel user:
+        #     run_command(local, "echo ok")     -> sudo: a password is required
+        #     run_command(local, "ss -H -lntu") -> sudo: a password is required
+        # so under the narrow grant the dashboard, the host cards and the console all failed, and
+        # under the wide grant they were quietly running as root to read /proc.
+        #
+        # sudo_enabled still means what it says for a REMOTE host, which is the only place it was
+        # ever a useful default: there it records whether the operator's account can escalate at
+        # all. Locally the privileged path is run_privileged() and the helper — that is the entire
+        # point of the verb table — so an escalation here has to be asked for explicitly.
+        #
+        # The reads that genuinely need more than the panel user were converted FIRST, in the same
+        # change: the console log reads go through read_as_game_user (a 0750 home), and the cron
+        # restart flags through the restart-flags verb. Flipping this default without them would
+        # have broken the console on every host with the wide grant, where it works today.
+        return _run_local(command, timeout=timeout, sudo=bool(sudo))
 
     # Tailscale SSH is not doable with paramiko (auth is handled by tailscaled),
     # so use the system ssh client for those remotes.
@@ -929,6 +948,28 @@ def create_game_user(server, user, timeout=30):
         except Exception:
             _log.debug("gameuser-group failed (non-fatal)", exc_info=True)
     return out, err, rc
+
+
+def read_as_game_user(server, user, sh, timeout=30):
+    """Run a READ-ONLY shell snippet as a game account, and return (out, err, rc).
+
+    For the reads that genuinely need that account's permissions rather than root: a game user's
+    home is 0750, so the panel user cannot traverse it, and the console log lives three levels
+    inside it. These used to be plain `run_command(server, "tail …")` calls with no `sudo=`, which
+    means they inherited `server.sudo_enabled` — True on the panel's own host row — and went out
+    as `sudo bash -c 'tail …'`. Root could read the file, so it worked, and under the narrow
+    sudoers grant it is refused outright.
+
+    Running as the ACCOUNT is both the fix and the smaller privilege: it is what the narrow grant
+    permits, it works unchanged on a host with the wide grant, and a console read stops being a
+    root operation. `sh` is panel-built text, never user input; `user` is validated here for the
+    reason run_as_game_user gives at length.
+    """
+    if not _SAFE_GAME_IDENT.match(user or ""):
+        _log.warning("refusing to read as an unsafe account name")
+        return "", "invalid account name", 1
+    return run_command(server, "sudo -u %s bash -c %s" % (_quote(user), _quote(sh)),
+                       timeout=timeout, sudo=False)
 
 
 def run_as_game_user(server, user, action, timeout=30, selfname=None, answers=None,

@@ -274,17 +274,40 @@ def register(app):
 
                     # 1. User account (clean any half-finished leftover first).
                     _p(1, "Preparing user account")
-                    chk, _, _ = _sm.run_command(remote, f"test -x /home/{short_name}/linuxgsm.sh && echo EXISTS || echo NOTEXISTS", timeout=10)
-                    if "NOTEXISTS" in chk:
-                        # Was one root shell running `userdel -r X; rm -rf /home/X`. Two verbs
-                        # now, and the home path is built by the helper from the validated name
-                        # rather than interpolated into an `rm -rf`.
-                        _sm.run_privileged(remote, "user-delete", [short_name], timeout=15,
-                                       merge_stderr=False)
-                        _sm.run_privileged(remote, "user-remove-home", [short_name], timeout=15,
-                                       merge_stderr=False)
-                    idout, _, _ = _sm.run_command(remote, f"id {short_name} 2>/dev/null && echo EXISTS || echo NOTEXISTS", timeout=10)
-                    if "NOTEXISTS" in idout:
+                    # ORDER MATTERS, and the old order was a loaded gun. This asked whether
+                    # /home/<n>/linuxgsm.sh was executable and, on "no", ran user-delete +
+                    # user-remove-home — `userdel -r` and an rm of that home. The probe went out
+                    # with no `sudo=`, so it inherited the host row's sudo_enabled and ran as
+                    # ROOT, which is the only reason it could read a 0750 home at all. Unprivileged
+                    # it answers EACCES, `test -x` fails, and the shell prints the literal
+                    # NOTEXISTS — "cannot look" rendered as "nothing there", immediately before
+                    # the destructive branch.
+                    #
+                    # So ask about the ACCOUNT first: `id` needs no privilege and answers
+                    # definitively. Only if it exists is there anything to clean up, and only then
+                    # is the script probed — AS THAT USER, which is both what can read the home and
+                    # what the narrow grant permits. A probe that FAILS (rc != 0) is not evidence
+                    # of a half-finished install, so it cleans up nothing.
+                    idout, _, _ = _sm.run_command(
+                        remote, f"id {short_name} >/dev/null 2>&1 && echo EXISTS || echo NOTEXISTS",
+                        timeout=10)
+                    user_exists = "NOTEXISTS" not in idout and "EXISTS" in idout
+                    if user_exists:
+                        chk, _, chk_rc = _sm.read_as_game_user(
+                            remote, short_name,
+                            f"test -x /home/{short_name}/linuxgsm.sh && echo EXISTS "
+                            f"|| echo NOTEXISTS", timeout=10)
+                        if chk_rc == 0 and "NOTEXISTS" in chk:
+                            # A genuine half-finished leftover: the account is there, the script
+                            # is not. Was one root shell running `userdel -r X; rm -rf /home/X`.
+                            # Two verbs now, and the home path is built by the helper from the
+                            # validated name rather than interpolated into an `rm -rf`.
+                            _sm.run_privileged(remote, "user-delete", [short_name], timeout=15,
+                                               merge_stderr=False)
+                            _sm.run_privileged(remote, "user-remove-home", [short_name], timeout=15,
+                                               merge_stderr=False)
+                            user_exists = False
+                    if not user_exists:
                         _sm.create_game_user(remote, short_name, timeout=15)
                         time.sleep(0.3)
 

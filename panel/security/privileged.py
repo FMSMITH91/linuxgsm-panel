@@ -887,6 +887,9 @@ _ARGV = {
     # Find LinuxGSM instances already installed on this host. Zero arguments; the helper walks
     # /home itself. It needed root for one thing only — reading another user's crontab.
     "lgsm-discover": ([], lambda a: [], None),
+    # Which game users have a pending cron restart. Local: the helper walks /home as root.
+    # Remote: the shell form below, which is what this always was.
+    "restart-flags": ([], lambda a: [], None),
     # One LinuxGSM action, run as the game user. Local-only by design: a remote host runs the same
     # thing over SSH as `sudo -u <user>`, which is the operator's sudoers to arrange, not ours --
     # see run_as_game_user, which picks the transport and keeps the remote form unchanged.
@@ -1054,6 +1057,7 @@ _REMOTE_ACTIONS = {
     "gmod-mount-read": lambda a: "cat %s 2>/dev/null || true"
                        % shlex.quote(home_of(a[0]) + "/" + GMOD_CFG_SUBPATH + "/mount.cfg"),
     "content-grant-read": _content_grant_remote,
+    "restart-flags": lambda a: "ls -1d /home/*/.restart-pending 2>/dev/null || true",
 }
 
 

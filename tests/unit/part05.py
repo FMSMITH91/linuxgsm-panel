@@ -962,6 +962,7 @@ _VERB_SAMPLES = {
     "game-dir-tar": ["codserver", "serverfiles/addons"],
     "lgsm-discover": [],
     "lgsm-command": ["gmodserver", "gmodserver", "details", "-", "no"],
+    "restart-flags": [],
     "gameuser-group": ["gmodserver"],
     "apt-install-minimal": ["libc6:i386", "curl"],
     "steamcmd-install": [],
@@ -3105,3 +3106,111 @@ check("game deps: the install flow reads the result instead of discarding it",
       "deps_ok, deps_msg = install_game_dependencies(" in _ms_src)
 check("game deps: ...and says so in the job when it fails",
       "if not deps_ok:" in _ms_src and "Some dependencies did not install" in _ms_src)
+
+
+# ── The panel's own host escalated EVERY command that did not say otherwise ────────────────────
+# run_command's `sudo` default is None, which resolves to server.sudo_enabled — True on the local
+# host row (panel/routes/host_local.py, panel/routes/remotes.py). So an unprivileged read went out
+# as `sudo bash -c '<cmd>'`. Measured on a test host with the panel's own code:
+#     run_command(local, 'echo ok') -> _run_local(sudo=True) -> rc=1 "a password is required"
+# and the same for the dashboard's port scan. These cover the reads that genuinely DO need
+# privilege, which had to be fixed first: dropping the implicit escalation without them would have
+# broken the console on every host with the wide grant, where it works today as root.
+_rag_sent = []
+_o_rc4 = _sm_core.run_command
+try:
+    _sm_core.run_command = lambda s, c, **k: (_rag_sent.append((c, k.get("sudo"))), ("x", "", 0))[1]
+    _sm_core.read_as_game_user(NS(), "gmodserver", "tail -5 /home/gmodserver/log/x.log")
+    _cmd, _sudo = _rag_sent[0]
+    check("console read: it runs AS THE GAME USER, not as root",
+          _cmd.startswith("sudo -u gmodserver bash -c ") and _sudo is False, "%r %r" % (_cmd, _sudo))
+    check("console read: ...and the snippet is quoted as ONE argument",
+          "tail -5" in _cmd and _cmd.count("sudo -u") == 1, _cmd[:120])
+    _rag_sent.clear()
+    _o, _e, _r = _sm_core.read_as_game_user(NS(), "bad name; id", "tail -1 /x")
+    check("console read: an unsafe account name is refused before anything is sent",
+          _r == 1 and not _rag_sent, "rc=%s sent=%s" % (_r, _rag_sent))
+finally:
+    _sm_core.run_command = _o_rc4
+
+# ...and the three console sites must actually USE it — covering the helper is not covering them.
+_sf_src = open(os.path.join(_root, "panel", "routes", "server_files.py"), encoding="utf-8").read()
+check("console read: all three console reads go through it",
+      _sf_src.count("read_as_game_user(") == 3, "found %d" % _sf_src.count("read_as_game_user("))
+check("console read: ...and none of them is a bare run_command on the log any more",
+      "run_command(\n                                    remote, f\"stat -c%s" not in _sf_src)
+
+# ── restart flags: a read that could not happen is not "nothing pending" ───────────────────────
+from panel.services import monitoring as _mon                                      # noqa: E402
+_o_rp3 = _mon.run_privileged
+try:
+    _mon.run_privileged = lambda *a, **k: ("gmodserver\ncsgoserver\n", "", 0)
+    check("restart flags: the helper's bare-name output is parsed",
+          _mon._host_restart_flags(NS()) == {"gmodserver", "csgoserver"})
+    _mon.run_privileged = lambda *a, **k: ("/home/gmodserver/.restart-pending\n", "", 0)
+    check("restart flags: ...and so is the remote rendering's full-path output",
+          _mon._host_restart_flags(NS()) == {"gmodserver"})
+    _mon.run_privileged = lambda *a, **k: ("", "", 0)
+    check("restart flags: a successful look with no flags is an empty SET",
+          _mon._host_restart_flags(NS()) == set())
+    _mon.run_privileged = lambda *a, **k: ("", "sudo: a password is required", 1)
+    check("restart flags: a FAILED look is None, not 'nothing pending'",
+          _mon._host_restart_flags(NS()) is None)
+
+    def _boom_rf(*a, **k):
+        raise OSError("boom")
+    _mon.run_privileged = _boom_rf
+    check("restart flags: ...and so is a raising probe",
+          _mon._host_restart_flags(NS()) is None)
+finally:
+    _mon.run_privileged = _o_rp3
+
+_mon_src = open(os.path.join(_root, "panel", "services", "monitoring.py"), encoding="utf-8").read()
+check("restart flags: the consumer SKIPS an unknown answer instead of writing False",
+      "if _rf is not None:" in _mon_src and "_rf = probe.get(\"restart_flagged\")" in _mon_src)
+
+
+# The default itself. Nothing may escalate on the panel's own host without asking.
+_ls_sent = []
+_o_rl = _sm_core._run_local
+try:
+    _sm_core._run_local = lambda cmd, timeout=30, sudo=False: (
+        _ls_sent.append((cmd, sudo)), ("", "", 0))[1]
+    _local_row = NS(is_local=True, auth_method="local", sudo_enabled=True)
+    _sm_core.run_command(_local_row, "echo ok")
+    check("local host: an unprivileged read is NOT escalated (sudo_enabled is not a default)",
+          _ls_sent and _ls_sent[-1][1] is False, str(_ls_sent[-1:]))
+    _sm_core.run_command(_local_row, "ufw status")
+    check("local host: ...and still is not, whatever the command looks like",
+          _ls_sent[-1][1] is False, str(_ls_sent[-1:]))
+    _sm_core.run_command(_local_row, "ufw status", sudo=True)
+    check("local host: an EXPLICIT sudo=True still escalates",
+          _ls_sent[-1][1] is True, str(_ls_sent[-1:]))
+finally:
+    _sm_core._run_local = _o_rl
+
+# ── The install job's leftover-cleanup probe drives userdel -r and an rm of the home ───────────
+# It asked "is /home/<n>/linuxgsm.sh executable?" and, on "no", deleted the account and its home.
+# The probe ran as ROOT only because it inherited the host row's sudo_enabled — which is the one
+# thing that let it read a 0750 home. Unprivileged it answers EACCES, `test -x` fails, and the
+# shell prints the literal NOTEXISTS: "cannot look" rendered as "nothing there", one line above
+# the destructive branch. Order is the fix — ask about the ACCOUNT first, then the script AS that
+# account, and treat a failed probe as no evidence at all.
+_ms_src2 = open(os.path.join(_root, "panel", "routes", "manage_servers.py"), encoding="utf-8").read()
+_probe_at = _ms_src2.find("user_exists =")
+_del_at = _ms_src2.find('"user-delete"')
+check("install probe: the account check comes BEFORE the destructive branch",
+      _probe_at != -1 and _del_at > _probe_at, "probe=%d delete=%d" % (_probe_at, _del_at))
+check("install probe: the script is read AS THE GAME USER, not as root",
+      "read_as_game_user(" in _ms_src2
+      and "test -x /home/{short_name}/linuxgsm.sh" in _ms_src2)
+check("install probe: a FAILED probe is not evidence of a leftover",
+      'if chk_rc == 0 and "NOTEXISTS" in chk:' in _ms_src2, "the rc is not consulted")
+_ue_at = _ms_src2.find("if user_exists:")
+check("install probe: ...and nothing is deleted unless the account actually exists",
+      _ue_at != -1 and _ue_at < _del_at,
+      "guard at %d, delete at %d (-1 = the guard is gone)" % (_ue_at, _del_at))
+# "NOTEXISTS" CONTAINS "EXISTS" — a naive `"EXISTS" in out` is true for both answers, which would
+# make every fresh install look like an existing account and skip creating it.
+check("install probe: the EXISTS test is not fooled by NOTEXISTS",
+      '"NOTEXISTS" not in idout and "EXISTS" in idout' in _ms_src2)
