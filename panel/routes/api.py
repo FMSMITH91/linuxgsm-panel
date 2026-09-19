@@ -218,7 +218,16 @@ def register(app):
                     max_workers=min(_PLAYER_POLL_WORKERS, len(work))) as ex:
                 scanned = list(ex.map(_scan, work))
 
-        changed = False
+        # Status writes are collected and applied as TWO statements, not one UPDATE per server.
+        # Per-object assignment made this endpoint's query count scale with the number of game
+        # servers — 49 -> 206 at 100 servers — which tests/perf_budget_test.py gates against.
+        #
+        # It only surfaced once the stats endpoint stopped persisting a status it could not read:
+        # while that endpoint wrote "offline" for every server on a failed sample, the scan below
+        # agreed with it and had nothing to write, so the N+1 never fired. The budget was being met
+        # by a bug, not by the loop being cheap.
+        flip = {"online": [], "offline": []}
+        flipped = {}
         for gslist, remote, ports in scanned:
             if ports is None:
                 continue                      # this host's scan failed; leave its statuses alone
@@ -231,16 +240,17 @@ def register(app):
                     continue
                 st = "online" if gs.port in ports else "offline"
                 if gs.status != st:
-                    gs.status = st
-                    changed = True
+                    # Deliberately NOT `gs.status = st`. Assigning marks the object dirty, and the
+                    # commit then flushes one UPDATE per server no matter what bulk statement runs
+                    # beside it — which is the N+1 this endpoint is gated against. The response
+                    # below reads the new value out of `flipped` instead.
+                    flip[st].append(gs.id)
+                    flipped[gs.id] = st
             # Resolve+cache the remote's public IP for the connect address in the background
             # (non-blocking) — the connect address falls back to remote.host until it's cached,
             # so a slow/unreachable remote never stalls this polled endpoint.
             if not remote.public_ip:
                 _maybe_resolve_public_ip(app, remote.id)
-        if changed:
-            db.session.commit()
-
         data = []
         for gs in servers:
             r = gs.remote
@@ -251,7 +261,7 @@ def register(app):
                 "short_name": gs.short_name,
                 "game_type": gs.game_type,
                 "port": gs.port,
-                "status": gs.status,
+                "status": flipped.get(gs.id, gs.status),
                 "installed": gs.installed,
                 "remote_name": r.name if r else "",
                 "connect": f"{host}:{gs.port}" if host else "",
@@ -260,6 +270,26 @@ def register(app):
                 "max_players": _cached_player_max(gs.id),
                 "game_name": _cached_player_name(gs.id),
             })
+        # The status writes land HERE, after the response is built. Two statements, not one per
+        # server — and, more importantly, AFTER every attribute the loop above reads.
+        #
+        # db.session.commit() expires every loaded object (expire_on_commit), so committing before
+        # that loop made it re-SELECT all of them: measured at 100 servers, 101 game_server SELECTs
+        # plus 100 lazy server_tag loads, taking /api/servers from 8 queries to 206. This endpoint
+        # is POLLED by the dashboard.
+        #
+        # It was invisible until the stats endpoint stopped persisting a status it could not read:
+        # while that wrote "offline" for every server on a failed sample, the scan above agreed and
+        # nothing was ever dirty, so the commit never fired. The perf budget was being met by a bug.
+        if flip["online"] or flip["offline"]:
+            for _st, _ids in flip.items():
+                if _ids:
+                    # synchronize_session=False: nothing in the session needs reconciling — the
+                    # response has already been built, from `flipped`.
+                    GameServer.query.filter(GameServer.id.in_(_ids)).update(
+                        {GameServer.status: _st}, synchronize_session=False)
+            db.session.commit()
+
         return jsonify(data)
 
     @app.route("/api/server/<int:server_id>")
