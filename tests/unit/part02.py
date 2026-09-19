@@ -1501,3 +1501,144 @@ try:
           _ok4 is True and "restart" in _msg4.lower(), _msg4)
 finally:
     _sm_core.run_command, _sm_core.run_privileged = _orig_gm_run, _orig_gm_priv
+
+
+# ── a backup must never be deleted to make room the panel could not measure ─────────────────────
+# backup_disk_info returns {"free": 0, "total": 0} on ANY failure (its rc is discarded), and
+# free=0 is below every threshold — so a timed-out `df` sent _ensure_backup_headroom straight into
+# its delete loop. Measured on the test host: with df working nothing was deleted; with the df read
+# failing, two of four backups were deleted and the run reported "freed space first".
+# run_game_backup's pre-flight check already states the rule — "Only enforce when we actually read
+# the disk (total > 0); a failed df reads as 0/0" — but it guards the path that BLOCKS a backup,
+# not the one that DELETES them.
+_hr_orig = (_sm_cron.list_game_backups, _sm_cron.backup_disk_info, _sm_cron.delete_game_backup)
+try:
+    _hr = {"deleted": [], "disk": {"free": 0, "total": 0}}
+    _BKS = [{"name": "s-2026-09-18-100000.tar.zst", "size": 1000},
+            {"name": "s-2026-09-17-100000.tar.zst", "size": 1000},
+            {"name": "s-2026-09-16-100000.tar.zst", "size": 1000},
+            {"name": "s-2026-09-15-100000.tar.zst", "size": 1000}]
+    _sm_cron.list_game_backups = lambda s, u: list(_BKS)
+    _sm_cron.backup_disk_info = lambda s, u: _hr["disk"]
+    _sm_cron.delete_game_backup = lambda s, u, n: (_hr["deleted"].append(n), True)[1]
+
+    # THE BUG: a failed df is 0/0, and 0 free is below any threshold.
+    _hr["deleted"], _hr["disk"] = [], {"free": 0, "total": 0}
+    _note = _sm_cron._ensure_backup_headroom(NS(), "ut2k4srv", 3)
+    check("backup headroom: a FAILED df deletes nothing", _hr["deleted"] == [], repr(_hr["deleted"]))
+    check("backup headroom: ...and reports no freeing it did not do", _note == "", repr(_note))
+
+    # A real, genuinely tight disk must still free space — the guard must not disable the feature.
+    _hr["deleted"], _hr["disk"] = [], {"free": 500, "total": 10 ** 9}
+    _note = _sm_cron._ensure_backup_headroom(NS(), "ut2k4srv", 3)
+    check("backup headroom: a real tight disk still frees space", len(_hr["deleted"]) > 0, repr(_note))
+    check("backup headroom: ...keeping the newest keep-1",
+          "s-2026-09-18-100000.tar.zst" not in _hr["deleted"], repr(_hr["deleted"]))
+    check("backup headroom: ...and deleting the OLDEST first",
+          _hr["deleted"][0] == "s-2026-09-15-100000.tar.zst", repr(_hr["deleted"]))
+
+    # A real, roomy disk deletes nothing.
+    _hr["deleted"], _hr["disk"] = [], {"free": 10 ** 9, "total": 10 ** 9}
+    check("backup headroom: a roomy disk deletes nothing",
+          _sm_cron._ensure_backup_headroom(NS(), "ut2k4srv", 3) == "" and _hr["deleted"] == [])
+finally:
+    (_sm_cron.list_game_backups, _sm_cron.backup_disk_info,
+     _sm_cron.delete_game_backup) = _hr_orig
+
+
+# ── "couldn't tell" must not be reported as "clearly not installed" ─────────────────────────────
+# _looks_installed documents three states — True / False / None — but its du fallback could only
+# ever produce two. run_command does not raise on a transport failure (it returns
+# ("", "…timed out", -1)), and `2>/dev/null` means a MISSING serverfiles dir prints nothing either,
+# so both read as "" and `int("0") > 50` answered False: "clearly NOT installed".
+#
+# That verdict is acted on. app.py's reconcile ticker sets installed=False / status="failed" on it
+# — while its own next line reads "None (host unreachable): leave it", which is exactly the case
+# False was stealing — and manage_servers.py wipes lgsm/tmp and re-runs a 30-minute auto-install,
+# three times over, for a server that had finished downloading.
+import panel.routes._shared as _sh
+
+_li_orig = _sh._sm.run_command
+try:
+    _li = {"details": ("", "", 0), "du": ("", "", 0)}
+    _sh._sm.run_command = lambda r, c, **k: (_li["du"] if "du -sm" in c else _li["details"])
+    _app = NS(logger=NS(debug=lambda *a, **k: None))
+
+    # THE BUG: both reads fail, nothing raises.
+    _li["details"], _li["du"] = ("", "SSH command timed out", -1), ("", "SSH command timed out", -1)
+    check("_looks_installed: a FAILED read is 'couldn't tell', not 'not installed'",
+          _sh._looks_installed(_app, NS(), "gmodserver", "gmodserver") is None,
+          repr(_sh._looks_installed(_app, NS(), "gmodserver", "gmodserver")))
+
+    # A serverfiles dir that really is absent: the command RAN, it just found nothing.
+    _li["du"] = ("__DU_DONE__", "", 0)
+    check("_looks_installed: an absent serverfiles really is False",
+          _sh._looks_installed(_app, NS(), "gmodserver", "gmodserver") is False)
+
+    # A completed download.
+    _li["du"] = ("6100\n__DU_DONE__", "", 0)
+    check("_looks_installed: a full serverfiles is True",
+          _sh._looks_installed(_app, NS(), "gmodserver", "gmodserver") is True)
+
+    # A tiny serverfiles is a failed download, not a complete one.
+    _li["du"] = ("3\n__DU_DONE__", "", 0)
+    check("_looks_installed: a nearly-empty serverfiles is still False",
+          _sh._looks_installed(_app, NS(), "gmodserver", "gmodserver") is False)
+
+    # The positive paths from `details` must be untouched.
+    _li["details"] = ("Status: STARTED\nServer IP: 1.2.3.4", "", 0)
+    check("_looks_installed: a real `details` answer still wins",
+          _sh._looks_installed(_app, NS(), "gmodserver", "gmodserver") is True)
+    _li["details"] = ("[ FAIL ] serverfiles not found — please run ./gmodserver install", "", 0)
+    check("_looks_installed: ...and so does an explicit 'not installed'",
+          _sh._looks_installed(_app, NS(), "gmodserver", "gmodserver") is False)
+
+    # The caller side: the command must carry the marker, or the checks above pass without it.
+    _li_cmds = []
+    _li["details"] = ("", "", 0)
+    _sh._sm.run_command = lambda r, c, **k: (_li_cmds.append(c),
+                                             ("50\n__DU_DONE__", "", 0) if "du -sm" in c else ("", "", 0))[1]
+    _sh._looks_installed(_app, NS(), "gmodserver", "gmodserver")
+    check("_looks_installed: the du command carries the completion marker",
+          any("__DU_DONE__" in c for c in _li_cmds), repr(_li_cmds)[-120:])
+finally:
+    _sh._sm.run_command = _li_orig
+
+
+# ── the stats endpoint must not persist a status it could not read ──────────────────────────────
+# server_live_metrics builds its dict UP FRONT and returns it all-zero when the read produced no
+# output, so port_open=False / game_procs=0 is indistinguishable from a real stopped server — and
+# /api/server/<id>/stats COMMITTED that as gs.status. `free -b` never fails on a reachable host, so
+# ram_total==0 is the sentinel; app.py's _live_run_state guards on it and says it is "deliberately
+# the SAME predicate /api/server/<id>/stats uses", while that endpoint did not.
+#
+# Not cosmetic: _query_server_slots short-circuits on gs.status == "offline" and returns 0 players
+# WITHOUT querying, which satisfies the one-shot notify_when_empty ("now has 0 players — safe to
+# make changes") and clears the flag, with players still connected.
+_p02_root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+_stats_src = open(os.path.join(_p02_root, "panel", "routes", "api.py"), encoding="utf-8").read()
+check("stats endpoint: the all-zero sample is rejected by the ram_total sentinel",
+      'm.get("ram_total")' in _stats_src)
+check("stats endpoint: ...and an unreadable sample does not reach gs.status",
+      "_readable and gs.status != status" in _stats_src)
+
+# The predicate that decides online/offline must stay the one _live_run_state promises it matches.
+import app as _app_mod
+_lrs_orig = _app_mod._sm.server_live_metrics
+try:
+    _lrs = {"m": {}}
+    _app_mod._sm.server_live_metrics = lambda r, s=None, p=None, force=False: _lrs["m"]
+    _gsx, _rx = NS(short_name="gmodserver", port=27015), NS()
+
+    _lrs["m"] = {"ram_total": 0, "port_open": False, "game_procs": 0}      # the failed sample
+    check("_live_run_state: an all-zero sample is 'unknown', not 'stopped'",
+          _app_mod._live_run_state(_gsx, _rx) is None)
+    _lrs["m"] = {"ram_total": 8 * 10 ** 9, "port_open": False, "game_procs": 0}
+    check("_live_run_state: a READ sample with nothing running is False",
+          _app_mod._live_run_state(_gsx, _rx) is False)
+    _lrs["m"] = {"ram_total": 8 * 10 ** 9, "port_open": True, "game_procs": 0}
+    check("_live_run_state: a listening port is True", _app_mod._live_run_state(_gsx, _rx) is True)
+    _lrs["m"] = {"ram_total": 8 * 10 ** 9, "port_open": False, "game_procs": 4}
+    check("_live_run_state: live processes are True", _app_mod._live_run_state(_gsx, _rx) is True)
+finally:
+    _app_mod._sm.server_live_metrics = _lrs_orig
