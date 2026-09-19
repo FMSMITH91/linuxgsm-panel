@@ -54,6 +54,11 @@
           Couldn't load LinuxGSM's game list, and there's no cached copy yet.
           <button type="button" class="btn btn-link btn-sm p-0 align-baseline" data-action="refreshGameList" data-args='["@self"]'>Retry</button>
           <span class="d-block text-secondary" style="font-size:.72rem;">The panel fetches it from LinuxGSM's repository; this host may have no outbound access to GitHub.</span>
+          {% if lgsm_status and lgsm_status.reason %}
+          {# The actual failure, not a guess at one: a DNS error, an HTTP 403, a response that was
+             not a CSV and a read-only data/ all end up here looking nothing alike. #}
+          <span class="d-block font-monospace text-secondary" style="font-size:.7rem;" data-no-i18n>{{ lgsm_status.reason }}</span>
+          {% endif %}
         </div>
         {% endif %}
       </div>

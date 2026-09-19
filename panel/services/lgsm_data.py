@@ -184,12 +184,24 @@ def deps(os_slug=None, allow_fetch=True):
 
 
 def status():
-    """What the UI needs to explain itself: whether we have data, how old, and what went wrong."""
+    """What the UI needs to explain itself: whether we have data, how old, and what went wrong.
+
+    `reason` is the one-line form for a page to print. This function had NO CALLERS at all while
+    two comments — this module's header and app.load_game_list's docstring — both said the install
+    page surfaced it; the page showed a fixed generic warning and never asked. install_server.html
+    reads it now."""
     ages = {n: _age(n) for n in (SERVERLIST, DEPS)}
+    errs = dict(_last_error)
+    reason = ""
+    if errs:
+        # The serverlist is the one the menu is built from; name it first if both failed.
+        _first = SERVERLIST if SERVERLIST in errs else sorted(errs)[0]
+        reason = "%s: %s" % (_first, errs[_first])
     return {
         "have_serverlist": bool(serverlist(allow_fetch=False)),
         "cached": {n: (None if a is None else int(a)) for n, a in ages.items()},
-        "errors": dict(_last_error),
+        "errors": errs,
+        "reason": reason,
     }
 
 

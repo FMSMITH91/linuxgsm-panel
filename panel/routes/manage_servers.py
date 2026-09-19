@@ -7,6 +7,7 @@ from flask_login import (current_user, login_required)
 from panel.core.panel_state import (_game_backup_status, _install_jobs, _install_lock)
 from panel.db.models import (GameServer, RemoteServer, db)
 from panel.ops import (backup as bk)
+from panel.services import (lgsm_data)
 from panel.ops.ssh_manager import (GMOD_CONTENT_GAMES, GMOD_CONTENT_SIZES,
     _remote_listening_ports, detect_game_ports, ensure_content_user, ensure_persistent_bans,
     game_engine as sm_game_engine, gmod_mount_setup, install_game_cron,
@@ -74,8 +75,12 @@ def register(app):
         # may already be present cannot be known here. Same reasoning as the old inline form.
         gmod_games = [{"key": k, "label": v[0], "size": GMOD_CONTENT_SIZES.get(k, "")}
                       for k, v in GMOD_CONTENT_GAMES.items() if v[1] is not None]
+        # lgsm_status so the "no games" warning can say WHY rather than guessing at GitHub —
+        # a DNS failure, an HTTP 403, a response that was not a CSV and a read-only data/ all
+        # look identical from the template otherwise.
         return render_template("install_server.html", remotes=remotes,
-                               games=load_game_list(), gmod_games=gmod_games)
+                               games=load_game_list(), gmod_games=gmod_games,
+                               lgsm_status=lgsm_data.status())
 
     @app.route("/servers/add", methods=["POST"])
     @login_required

@@ -1050,7 +1050,8 @@ def create_app():
                       or request.headers.get("X-Requested-With") == "XMLHttpRequest")
         if not wants_json:
             raise e
-        _log.exception("unhandled error serving %s", request.path)
+        _log.exception("unhandled error serving %s",
+                       (request.url_rule.endpoint if request.url_rule else "?"))
         return jsonify({"success": False,
                         "message": "Something went wrong — see the panel log."}), 500
 

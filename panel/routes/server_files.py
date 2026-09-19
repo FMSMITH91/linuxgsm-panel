@@ -367,9 +367,20 @@ def register(app, supervise):
         _LGSM_NAME_MAP["data"] = None
         games = len(load_game_list())
         log_action(current_user, "lgsm_data_refresh", success=ok, detail="%d games" % games)
-        return jsonify({"success": bool(ok and games), "games": games,
-                        "message": ("Loaded %d games." % games) if games
-                                   else "Could not reach LinuxGSM — check this host's outbound access."})
+        # `ok` is the FETCH; `games` is what the page can show. They disagree when the fetch failed
+        # and a cached list is still on disk — which used to read as "Loaded 30 games." because the
+        # message only looked at the count, on the one button an operator presses BECAUSE a game is
+        # missing. Name the real error when there is one.
+        why = (lgsm_data.status().get("reason") or "").strip()
+        if ok:
+            message = "Loaded %d games." % games
+        elif games:
+            message = ("Could not reach LinuxGSM — still showing the cached list of %d games%s."
+                       % (games, (" (%s)" % why) if why else ""))
+        else:
+            message = ("Could not reach LinuxGSM — check this host's outbound access%s."
+                       % ((" (%s)" % why) if why else ""))
+        return jsonify({"success": bool(ok and games), "games": games, "message": message})
 
     @app.route("/api/server/<int:server_id>/cron", methods=["GET", "POST"])
     @login_required

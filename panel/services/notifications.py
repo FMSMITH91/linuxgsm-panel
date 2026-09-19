@@ -287,8 +287,10 @@ def _post(url, data, headers, allow_configured_host=False):
         # the _log.debug below the unreachable case never printed. There was nothing in the
         # journal, nothing in the UI and nothing in the audit log to say alerts had stopped; the
         # only way to find out was to open the settings page and press Test.
-        _log.warning("notification rejected by the provider: HTTP %s for %s",
-                     getattr(e, "code", "?"), (url or "").split("?")[0][:80])
+        _host = urllib.parse.urlsplit(url or "").hostname or ""
+        _log.warning("notification rejected by the provider: HTTP %s from %s",
+                     getattr(e, "code", "?"),
+                     _host if re.fullmatch(r"[A-Za-z0-9.\-]{1,80}", _host) else "?")
         return False, "rejected"
     except (urllib.error.URLError, OSError, ValueError):
         _log.debug("notification POST failed", exc_info=True)
