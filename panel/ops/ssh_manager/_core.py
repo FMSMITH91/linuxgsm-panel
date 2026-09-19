@@ -277,8 +277,14 @@ def _run_local(cmd, timeout=30, sudo=False):
 # path: command output is game-server output (player names, mod chatter, latin-1 logs) and is NOT
 # guaranteed valid UTF-8; a strict decode would raise, get swallowed, and return rc=-1 with empty
 # output — indistinguishable from "the command printed nothing".
+# stdin=DEVNULL, not the default of inheriting: a privileged child must never be handed the
+# panel's own stdin. The helper's Python-implemented verbs used to read stdin to EOF whether or
+# not they wanted a payload, so a panel whose fd 0 was a pipe or tty -- anything but the systemd
+# unit -- hung every such verb for its caller's full timeout. Both ends are fixed; this one stops
+# a child from reaching the panel's input at all, which is right regardless of what it does with it.
 _POPEN_KW = dict(stdout=_real_subprocess.PIPE, stderr=_real_subprocess.PIPE, text=True,
-                 encoding="utf-8", errors="replace", start_new_session=True)
+                 encoding="utf-8", errors="replace", start_new_session=True,
+                 stdin=_real_subprocess.DEVNULL)
 
 
 def _finish(p, timeout, stdin_text=None):
@@ -329,9 +335,10 @@ def _exec_local_argv(argv, timeout=30, stdin_text=None):
     def _do():
         p = None
         try:
-            p = _real_subprocess.Popen(
-                argv, stdin=(_real_subprocess.PIPE if stdin_text is not None else None),
-                **_POPEN_KW)
+            kw = dict(_POPEN_KW)
+            if stdin_text is not None:
+                kw["stdin"] = _real_subprocess.PIPE
+            p = _real_subprocess.Popen(argv, **kw)
             return _finish(p, timeout, stdin_text=stdin_text)
         except Exception:
             _log.debug("local command failed", exc_info=True)

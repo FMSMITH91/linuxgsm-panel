@@ -2368,7 +2368,8 @@ def do_write_file(args, content):
 
 
 # Verbs implemented by a function here instead of by running a tool. Each takes the validated
-# arguments and the content read from this process's stdin.
+# arguments and the content read from this process's stdin -- but only the verbs in STDIN_VERBS
+# below are actually SENT anything, and only those have their stdin read.
 ACTIONS = {
     "write-file": do_write_file,
     "sshd-backup-dropin": do_sshd_backup,
@@ -2399,6 +2400,18 @@ ACTIONS = {
     "sshd-set-directive": do_sshd_set_directive,
     "create-swapfile": do_create_swapfile,
 }
+
+# The only two ACTIONS verbs that CONSUME their payload. The other 26 take the parameter and
+# ignore it, and `sys.stdin.read()` for those is a blocking read to EOF of a descriptor nobody
+# intends to write to -- so the verb hung for its caller's whole timeout whenever the panel's own
+# stdin was an open pipe or tty rather than /dev/null. Under systemd it is /dev/null and this
+# never showed; started any other way (a terminal, install.sh, a test harness) `content-dir-create`
+# and 25 others simply stopped. Found by running the real GMod content flow on the test host.
+#
+# tests/unit/part05.py derives this set from the source and fails if it drifts, so adding a verb
+# that reads stdin without listing it here cannot silently start returning "".
+STDIN_VERBS = frozenset({"write-file", "content-cron-write"})
+
 
 
 def validate(verb, args):
@@ -2459,7 +2472,7 @@ def main(argv):
         # The payload is this process's stdin. It is never an argument, so no amount of it can
         # change what runs.
         try:
-            return action(checked, sys.stdin.read())
+            return action(checked, sys.stdin.read() if verb in STDIN_VERBS else "")
         except KeyError as e:
             # pwd.getpwnam on a name that is not an account here. Only the class is printed: a
             # KeyError carries the rejected name, and this stderr is surfaced in the panel UI.

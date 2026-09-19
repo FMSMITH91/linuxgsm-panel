@@ -745,11 +745,11 @@ def stream_path(server, user, relpath, as_tar=False, limit=None, chunk=262144):
                 argv = ["ssh", "-T", "-o", "StrictHostKeyChecking=accept-new", "-o", "BatchMode=yes",
                         "-p", str(server.port or 22), f"{server.username}@{host}", shell]
             # stdin is a pipe only for the SSH form, which expects the path there. The local forms
-            # take it in argv (helper) or already resolved (the pre-helper fallback), and inherit
-            # stdin as before.
+            # take it in argv (helper) or already resolved (the pre-helper fallback), and get
+            # DEVNULL -- never the panel's own stdin, which a helper verb would read to EOF.
             feed = rel.encode() if argv[0] == "ssh" else None
             p = subprocess.Popen(argv, stdout=subprocess.PIPE,  # nosec B603  # nosemgrep - argv list, no shell; argv[0] is a literal
-                                 stdin=subprocess.PIPE if feed is not None else None)
+                                 stdin=subprocess.PIPE if feed is not None else subprocess.DEVNULL)
             if feed is not None:
                 try:
                     p.stdin.write(feed)
