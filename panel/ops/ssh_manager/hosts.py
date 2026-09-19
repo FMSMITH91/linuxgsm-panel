@@ -1586,6 +1586,42 @@ def change_ssh_port(server, new_port, bind_addr=""):
     bind_addr = (str(bind_addr) if bind_addr else "").strip()
     if bind_addr and not _valid_ip(bind_addr):
         return False, "Bind address must be a valid IP address, or blank for all interfaces."
+    # A LOOPBACK bind is the one lockout this function cannot undo, so it is refused before
+    # anything is touched rather than caught afterwards.
+    #
+    # Every other bad bind address fails loudly: sshd cannot bind an address the host does not
+    # have, so it does not come up, the listening check below sees that, and the drop-in is
+    # reverted. 127.0.0.1 is a real address on every host, so sshd starts perfectly, the port IS
+    # listening, and the verification passes — while remote SSH is gone. Measured on the test host:
+    # ok=True, "SSH now listens on port 22 on 127.0.0.1", listeners 127.0.0.1:22, and nothing
+    # answering on the host's real IP. For the panel's OWN host there is not even a reachability
+    # test to fall back on: `_tcp_reachable` only runs for a remote.
+    #
+    # The panel's own bind address has carried this guard for a while (routes/remote_security.py
+    # refuses a loopback-only panel bind unless Tailscale Serve is in front of it). sshd has no
+    # equivalent proxy, so here it is refused outright.
+    if bind_addr:
+        import ipaddress
+        try:
+            if ipaddress.ip_address(bind_addr).is_loopback:
+                return False, ("Binding SSH to %s would make it reachable only from the host "
+                               "itself — remote SSH would stop working, and binding is "
+                               "all-or-nothing so there is no fallback to revert to. Use the "
+                               "address you actually connect on." % bind_addr)
+        except ValueError:
+            return False, "Bind address must be a valid IP address, or blank for all interfaces."
+        # ...and on the panel's own host, an address the host does not HAVE. This used to be caught
+        # for free: sshd could not bind a missing address, so it failed to start and the listening
+        # check reverted. Under socket activation systemd creates the socket anyway, so something
+        # IS listening on the port and that check passes while SSH is reachable nowhere. Measured:
+        # `ListenStream=192.0.2.99:22` left `192.0.2.99:22` in ss and nothing answering on the
+        # host's real IP. For a remote, _tcp_reachable below is still the backstop.
+        if _core.is_local_server(server):
+            from panel.ops import system_ops as _so
+            if not _so.host_has_ip(bind_addr):
+                return False, ("%s isn't an address on this host, so sshd could only bind it in "
+                               "name — SSH would answer nowhere. Use one of the host's own "
+                               "addresses." % bind_addr)
 
     old_ports = _sshd_current_ports(server) or [str(int(getattr(server, "port", 22) or 22))]
     if not bind_addr and old_ports == [str(new_port)]:
@@ -1663,15 +1699,29 @@ def change_ssh_port(server, new_port, bind_addr=""):
         # Was `ss -lnt | grep -qE '[:.]<port>[[:space:]]' && echo OK || echo NO` — the new port
         # was interpolated into a regex running as root. Same match in Python.
         out, _, _ = _core.run_privileged(server, "listening-sockets", [], timeout=15, merge_stderr=False)
-        if not re.search(r"[:.]%d\s" % new_port, out or ""):
+        if bind_addr:
+            # The ADDRESS has to appear, not just the port. `ss` prints "0.0.0.0:22" / "[::1]:22",
+            # so a port-only match is satisfied by any listener on that port — including sshd bound
+            # somewhere useless, which is exactly the case this is here to catch.
+            _a = re.escape("[%s]" % bind_addr if ":" in bind_addr else bind_addr)
+            if not re.search(r"(?:^|\s)%s:%d\s" % (_a, new_port), out or "", re.M):
+                return _revert("sshd isn't listening on %s:%d — reverted. Your existing SSH still "
+                               "works." % (bind_addr, new_port))
+        elif not re.search(r"[:.]%d\s" % new_port, out or ""):
             return _revert("sshd didn't come up on port %d — reverted. Your existing SSH still works." % new_port)
 
     _core.run_privileged(server, _discard_verb, [], timeout=10,
                    merge_stderr=False)   # success — drop the snapshot
-    where = (" on %s" % bind_addr) if bind_addr else ""
-    return True, ("SSH now listens on port %d%s (firewall + fail2ban updated). The previous port is "
+    if bind_addr:
+        # No fallback sentence here: ListenAddress is all-or-nothing (this function's own docstring
+        # says so), so sshd is now on THIS address and nothing else. Telling the operator a previous
+        # port is still available would be untrue exactly when it matters most.
+        return True, ("SSH now listens on %s:%d, and only there (firewall + fail2ban updated). "
+                      "Confirm you can still reach it before closing anything."
+                      % (bind_addr, new_port))
+    return True, ("SSH now listens on port %d (firewall + fail2ban updated). The previous port is "
                   "still available as a fallback — once you've confirmed you can reach SSH on %d, "
-                  "close the old one from the Firewall page." % (new_port, where, new_port))
+                  "close the old one from the Firewall page." % (new_port, new_port))
 
 
 # A ufw rule whose To column IS port 22 — the number (with or without /tcp) or the app profile.

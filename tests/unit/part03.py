@@ -1666,3 +1666,84 @@ try:
 finally:
     (_so.panel_fail2ban_status, _so._panel_f2b_jail_port, _so._panel_f2b_jail_value,
      _so._panel_f2b_jail_ignoreip, _so.configure_panel_fail2ban) = _f2b_orig
+# ── binding sshd to loopback is the one lockout change_ssh_port cannot undo ─────────────────────
+# Every other bad bind address fails loudly: sshd cannot bind an address the host does not have,
+# so it does not start, the listening check sees that, and the drop-in is reverted. 127.0.0.1 is a
+# real address on every host — sshd starts perfectly, the port IS listening, verification passes,
+# and remote SSH is gone. Measured on the test host before the guard: ok=True, "SSH now listens on
+# port 22 on 127.0.0.1", listeners 127.0.0.1:22, nothing answering on the host's real IP. For the
+# panel's OWN host there is not even a reachability test to fall back on — _tcp_reachable only runs
+# for a remote.
+_lb_orig = (_sm_core.run_privileged, _sm_core.write_root_file, _sm_core._restart_sshd,
+            _sm_core.is_local_server, _sm_hosts.remote_ufw_open_port, _sm_hosts.remote_ufw_close_port,
+            _so.host_has_ip)
+try:
+    _lb = {"touched": [], "host_ips": {"10.0.0.5"}}
+    # The local-host pre-check asks the REAL machine otherwise, and 10.0.0.5 is not on it.
+    _so.host_has_ip = lambda ip: ip in _lb["host_ips"]
+
+    def _lb_priv(server, verb, args=(), timeout=30, merge_stderr=True, **k):
+        _lb["touched"].append(verb)
+        if verb == "sshd-socket-active":
+            return ("inactive", "", 3)
+        if verb == "listening-sockets":
+            # Both ports, so the verification step is not what most of this block is testing.
+            return (_lb.get("listening") or
+                    ("LISTEN 0 128 127.0.0.1:22 0.0.0.0:*\n"
+                     "LISTEN 0 128 10.0.0.5:22 0.0.0.0:*\n"
+                     "LISTEN 0 128 0.0.0.0:2222 0.0.0.0:*\n"), "", 0)
+        return ("", "", 0)
+
+    _sm_core.run_privileged = _lb_priv
+    _sm_core.write_root_file = lambda *a, **k: (_lb["touched"].append("WRITE"), ("", "", 0))[1]
+    _sm_core._restart_sshd = lambda *a, **k: ("", "", 0)
+    _sm_core.is_local_server = lambda s: True
+    _sm_hosts.remote_ufw_open_port = lambda *a, **k: (_lb["touched"].append("UFW"), (True, ""))[1]
+    _sm_hosts.remote_ufw_close_port = lambda *a, **k: (True, "")
+
+    for _addr in ("127.0.0.1", "::1", "127.0.0.53"):
+        _lb["touched"] = []
+        _ok, _msg = _sm_hosts.change_ssh_port(NS(port=22), 22, bind_addr=_addr)
+        check("ssh bind: %s is refused — it would leave sshd reachable only from the host" % _addr,
+              _ok is False and "remote SSH would stop working" in _msg, _msg[:80])
+        check("ssh bind: ...and refused BEFORE anything is touched (no ufw hole, no write)",
+              _lb["touched"] == [], repr(_lb["touched"]))
+
+    # A real address must still go through, or the guard has broken the feature it protects.
+    _lb["touched"] = []
+    _ok, _msg = _sm_hosts.change_ssh_port(NS(port=22), 22, bind_addr="10.0.0.5")
+    check("ssh bind: a non-loopback address still proceeds", _ok is True, _msg[:80])
+    check("ssh bind: ...and the file is actually written", "WRITE" in _lb["touched"])
+    # ListenAddress is all-or-nothing, so the port-only message's "previous port is still available
+    # as a fallback" is FALSE for a bind change — and false exactly when it matters most.
+    check("ssh bind: ...and the message does NOT promise a fallback that does not exist",
+          "fallback" not in _msg.lower() and "10.0.0.5:22" in _msg, _msg[:110])
+
+    _lb["touched"] = []
+    _ok, _msg = _sm_hosts.change_ssh_port(NS(port=22), 2222)
+    check("ssh bind: a PORT-only change still says the old port remains a fallback",
+          _ok is True and "fallback" in _msg.lower(), _msg[:110])
+    # The address the host does NOT have: under socket activation systemd binds it anyway, so the
+    # old port-only verification passed while SSH answered nowhere. Refused up front now.
+    _lb["touched"] = []
+    _ok, _msg = _sm_hosts.change_ssh_port(NS(port=22), 22, bind_addr="192.0.2.99")
+    check("ssh bind: an address the host does NOT have is refused, not bound in name",
+          _ok is False and "isn't an address on this host" in _msg, _msg[:80])
+    check("ssh bind: ...and that too is refused before anything is touched",
+          _lb["touched"] == [], repr(_lb["touched"]))
+
+    # The backstop, for an address that IS on the host but where sshd ends up somewhere else: the
+    # verification must look for that ADDRESS, not merely something on that port. A port-only match
+    # is satisfied by any listener on 22 — which is what let a useless bind read as success.
+    _lb["host_ips"] = {"10.0.0.5"}
+    _lb["listening"] = "LISTEN 0 128 0.0.0.0:22 0.0.0.0:*\n"      # port 22, but NOT on 10.0.0.5
+    _lb["touched"] = []
+    _ok, _msg = _sm_hosts.change_ssh_port(NS(port=22), 22, bind_addr="10.0.0.5")
+    check("ssh bind: a listener on the right PORT but the wrong ADDRESS still reverts",
+          _ok is False and "isn't listening on 10.0.0.5:22" in _msg, _msg[:90])
+    check("ssh bind: ...and the revert restored the drop-in",
+          "sshd-restore-dropin" in _lb["touched"], repr(_lb["touched"]))
+finally:
+    (_sm_core.run_privileged, _sm_core.write_root_file, _sm_core._restart_sshd,
+     _sm_core.is_local_server, _sm_hosts.remote_ufw_open_port,
+     _sm_hosts.remote_ufw_close_port, _so.host_has_ip) = _lb_orig
