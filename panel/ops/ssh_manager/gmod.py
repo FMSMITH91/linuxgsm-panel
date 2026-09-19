@@ -52,6 +52,7 @@ GMOD_CONTENT_SIZES = {"cstrike": "~1.6 GB", "tf": "~13 GB", "dod": "~1.1 GB", "h
                       "insurgency": "~7 GB", "nmrih": "~6 GB", "fof": "~2 GB", "zps": "~2 GB",
                       "pvkii": "~3 GB", "dystopia": "~1.5 GB", "empires": "~2 GB", "cure": "~2 GB",
                       "dab": "~3 GB"}
+_GMOD_SELFNAME = "gmodserver"   # GameServer.lgsm_name is always "<game_type>server"
 _CONTENT_USER = "gmodcontent"                         # panel-managed content user, created if none exists
 _CU_NAME_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9._-]*\Z")   # Linux username charset (reaches root-run cmds)
 
@@ -317,6 +318,30 @@ def _gmod_mount_files(content_user, games):
     return mountcfg, depots
 
 
+def _mount_needs_restart(server, gmod_user):
+    """Whether a mount change still needs a server restart before GMod can act on it.
+
+    Two separate reasons, both only cleared by a restart: GMod reads mount.cfg once at startup, and
+    `content-grant-read`'s `usermod -aG` reaches only processes started AFTER it -- a running srcds
+    keeps the group set it was spawned with and cannot read a single content file. Measured on the
+    test host: before the restart the process had `Groups: 1003`, after it `Groups: 1003 1010`, and
+    only then did GMod log `Adding mount.cfg path: /home/gmodcontent/serverfiles/cstrike`.
+
+    A read that FAILS answers True. A spurious "restart to apply" costs a restart nobody needed; a
+    missing one tells the user their content is mounted when it silently is not there."""
+    inner = _core._tmux_live_socket_sh(_GMOD_SELFNAME) + "echo __LIVE__"
+    try:
+        out, _err, rc = _core.run_command(
+            server, "sudo -u %s bash -c %s" % (_core._quote(gmod_user), _core._quote(inner)),
+            timeout=15, sudo=False)
+    except Exception:
+        _core._log.debug("mount restart check failed", exc_info=True)
+        return True
+    if rc == 3 and "NO_SESSION" in (out or ""):
+        return False                     # positively stopped: the next start reads the new mounts
+    return True
+
+
 def gmod_mount_setup(server, gmod_user, content_user, games):
     """Write a GMod server's mount config to mount exactly `games` from the content user, granting the
     GMod user read access first. An EMPTY `games` writes an empty mount.cfg (unmounts everything).
@@ -345,9 +370,11 @@ def gmod_mount_setup(server, gmod_user, content_user, games):
                                timeout=30, sudo=False)
     if rc != 0 or "__OK__" not in (out or ""):
         return False, (err or out or "mount write failed")[:200]
-    if not games:
-        return True, "Unmounted all content"
-    return True, "Mounted: " + ", ".join(GMOD_CONTENT_GAMES[g][0] for g in games)
+    _msg = ("Unmounted all content" if not games else
+            "Mounted: " + ", ".join(GMOD_CONTENT_GAMES[g][0] for g in games))
+    if _mount_needs_restart(server, gmod_user):
+        _msg += " — restart the server to apply"
+    return True, _msg
 
 
 _MOUNT_LINE_RE = re.compile(r'"([a-z0-9_]+)"\s+"/')

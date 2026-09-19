@@ -1451,3 +1451,53 @@ _with_stdin = sorted(v for v, spec in _privmod._ARGV.items() if spec[2] is not N
 check("local exec: _run_verb sends a verb's declared stdin and nothing else's",
       _with_stdin == ["ufw-delete-num"] and _privmod.stdin_for("ufw-status") is None,
       "declared=%s of %d verbs" % (_with_stdin, len(_privmod._ARGV)))
+
+
+# ── a mount change that needs a restart says so ────────────────────────────────────────────────
+# gmod_mount_setup returned "Mounted: Counter-Strike: Source" the moment the files were written,
+# and the route surfaces that string verbatim. Two things make it untrue for a RUNNING server:
+# GMod reads mount.cfg once at startup, and content-grant-read's `usermod -aG` reaches only
+# processes started after it. Measured on the test host — before the restart the srcds process had
+# `Groups: 1003` and could not read one content file; after it, `Groups: 1003 1010` and GMod logged
+# `Adding mount.cfg path: /home/gmodcontent/serverfiles/cstrike`. So the user was told their
+# content was mounted while the running server could not see any of it.
+_orig_gm_run, _orig_gm_priv = _sm_core.run_command, _sm_core.run_privileged
+try:
+    _gm_state = {"live": True}
+
+    def _gm_run(server, cmd, timeout=30, sudo=True, **kw):
+        if "__LIVE__" in cmd:                       # the liveness probe
+            return ("__LIVE__", "", 0) if _gm_state["live"] else ("NO_SESSION", "", 3)
+        if "base64 -d" in cmd:                      # the mount.cfg write
+            return ("__OK__", "", 0)
+        return ("", "", 0)
+
+    _sm_core.run_command = _gm_run
+    _sm_core.run_privileged = lambda *a, **k: ("", "", 0)
+
+    _gm_state["live"] = True
+    _ok, _msg = _sm_gmod.gmod_mount_setup(NS(), "gmodserver", "gmodcontent", ["cstrike"])
+    check("gmod mounts: a RUNNING server is told the change needs a restart",
+          _ok is True and "Counter-Strike: Source" in _msg and "restart" in _msg.lower(), _msg)
+
+    _gm_state["live"] = False
+    _ok2, _msg2 = _sm_gmod.gmod_mount_setup(NS(), "gmodserver", "gmodcontent", ["cstrike"])
+    check("gmod mounts: ...and a STOPPED server is not nagged to restart",
+          _ok2 is True and "Counter-Strike: Source" in _msg2 and "restart" not in _msg2.lower(), _msg2)
+
+    _gm_state["live"] = True
+    _ok3, _msg3 = _sm_gmod.gmod_mount_setup(NS(), "gmodserver", "", [])
+    check("gmod mounts: unmounting a running server needs the restart too",
+          _ok3 is True and "Unmounted" in _msg3 and "restart" in _msg3.lower(), _msg3)
+
+    # A liveness read that FAILS must warn, not stay silent: a spurious restart costs a restart,
+    # a missing one costs the user content that silently is not there.
+    def _gm_boom(*a, **k):
+        raise OSError("ssh down")
+    _sm_core.run_command = lambda server, cmd, **kw: (
+        _gm_boom() if "__LIVE__" in cmd else ("__OK__", "", 0))
+    _ok4, _msg4 = _sm_gmod.gmod_mount_setup(NS(), "gmodserver", "gmodcontent", ["cstrike"])
+    check("gmod mounts: a liveness check that FAILS warns rather than claiming it is live",
+          _ok4 is True and "restart" in _msg4.lower(), _msg4)
+finally:
+    _sm_core.run_command, _sm_core.run_privileged = _orig_gm_run, _orig_gm_priv
