@@ -207,10 +207,14 @@ def _run_verb(verb, args=(), timeout=30, merge_stderr=True):
         # standing Error while the lower one worked. Comma-separated on a single line is what
         # actually suppresses both. -audit fires on "not a static string", -tainted-env-args on
         # "user controlled data".
+        # stdin: the verb's own text when it has one, else DEVNULL. NOT the default of
+        # inheriting -- see _POPEN_KW in ssh_manager/_core.py for what that cost.
+        _in = _priv.stdin_for(verb)
+        _stdin_kw = {"input": _in} if _in is not None else {"stdin": subprocess.DEVNULL}
         # nosemgrep: python.lang.security.audit.dangerous-subprocess-use-audit.dangerous-subprocess-use-audit,python.lang.security.audit.dangerous-subprocess-use-tainted-env-args.dangerous-subprocess-use-tainted-env-args
         r = subprocess.run(argv, shell=False,  # nosec B603 - argv from privileged.py's fixed table
-                           input=_priv.stdin_for(verb), capture_output=True, text=True,
-                           timeout=timeout)
+                           capture_output=True, text=True,
+                           timeout=timeout, **_stdin_kw)
     except subprocess.TimeoutExpired:
         return "", "Command timed out", -1
     except FileNotFoundError:
@@ -234,6 +238,7 @@ def _run(cmd, timeout=30, sudo=False, text=True):
     try:
         r = subprocess.run(
             cmd, shell=True, capture_output=True, text=text, timeout=timeout,
+            stdin=subprocess.DEVNULL,
         )
         return r.stdout.strip(), r.stderr.strip(), r.returncode
     except subprocess.TimeoutExpired:

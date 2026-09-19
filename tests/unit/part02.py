@@ -1399,3 +1399,55 @@ check("history: ...and set_password replaces the garbage with a real one-entry h
 _nu = _User()
 _nu.set_password(_hp("Brand1!new"))
 check("history: a first password records no history", not _hist(_nu))
+
+
+# ── a locally-spawned child never inherits the PANEL's stdin ────────────────────────────────────
+# Popen's default is to inherit fd 0. tools/panel-helper's Python verbs read stdin to EOF, so a
+# panel started anywhere but under systemd (which supplies /dev/null) handed them a descriptor that
+# never closed and every such verb timed out. The helper no longer reads stdin it was sent nothing
+# on; this is the other half — the panel does not expose its input to a child in the first place,
+# which holds whatever the child decides to do with it.
+#
+# fd 0 is replaced with the read end of a pipe whose WRITE end is held open, so an inherited stdin
+# blocks and a DEVNULL stdin reads "" at once. Without that substitution the suite's own fd 0 is
+# already /dev/null on most runners and both branches would pass.
+import subprocess as _sp2
+import sys as _sys2
+
+_READER = "import sys; sys.stdout.write('READ:%r' % sys.stdin.read())"
+_r_fd, _w_fd = os.pipe()
+_saved_fd0 = os.dup(0)
+try:
+    os.dup2(_r_fd, 0)
+    _argv_out, _argv_err, _argv_rc = _sm_core._exec_local_argv(
+        [_sys2.executable, "-c", _READER], timeout=8)
+    _sh_out, _sh_err, _sh_rc = _sm_core._exec_local_shell(
+        "%s -c %s" % (_sys2.executable, _sm_core._quote(_READER)), timeout=8)
+    _so_out, _so_err, _so_rc = SO._run(
+        "%s -c %s" % (_sys2.executable, _sm_core._quote(_READER)), timeout=8)
+    # The PIPE branch must still deliver a payload to the verbs that do want one.
+    _fed_out, _fed_err, _fed_rc = _sm_core._exec_local_argv(
+        [_sys2.executable, "-c", _READER], timeout=8, stdin_text="payload")
+finally:
+    os.dup2(_saved_fd0, 0)
+    for _fd in (_saved_fd0, _r_fd, _w_fd):
+        try:
+            os.close(_fd)
+        except OSError:
+            pass
+
+check("local exec: _exec_local_argv gives the child DEVNULL, not the panel's stdin",
+      _argv_rc == 0 and _argv_out == "READ:''", "rc=%r out=%r err=%r" % (_argv_rc, _argv_out[:60], _argv_err[:60]))
+check("local exec: _exec_local_shell likewise",
+      _sh_rc == 0 and _sh_out == "READ:''", "rc=%r out=%r err=%r" % (_sh_rc, _sh_out[:60], _sh_err[:60]))
+check("local exec: system_ops._run likewise",
+      _so_rc == 0 and _so_out == "READ:''", "rc=%r out=%r err=%r" % (_so_rc, _so_out[:60], _so_err[:60]))
+check("local exec: ...and stdin_text still reaches the child that asked for it",
+      _fed_rc == 0 and _fed_out == "READ:'payload'", "rc=%r out=%r" % (_fed_rc, _fed_out[:60]))
+check("local exec: _POPEN_KW pins stdin to DEVNULL for every local spawn",
+      _sm_core._POPEN_KW.get("stdin") is _sp2.DEVNULL, repr(_sm_core._POPEN_KW.get("stdin")))
+# _run_verb picks input= only when the verb declares stdin text; otherwise DEVNULL.
+_with_stdin = sorted(v for v, spec in _privmod._ARGV.items() if spec[2] is not None)
+check("local exec: _run_verb sends a verb's declared stdin and nothing else's",
+      _with_stdin == ["ufw-delete-num"] and _privmod.stdin_for("ufw-status") is None,
+      "declared=%s of %d verbs" % (_with_stdin, len(_privmod._ARGV)))

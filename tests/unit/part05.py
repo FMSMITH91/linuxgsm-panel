@@ -2631,3 +2631,46 @@ import hashlib as _hl_inv
 check("invite: the stored hash is sha256 of the token",
       _a.token_hash == _hl_inv.sha256(_ta.encode()).hexdigest())
 
+
+
+# ── the helper reads stdin ONLY for the verbs that consume it ───────────────────────────────────
+# `main()` used to do `action(checked, sys.stdin.read())` for every ACTIONS verb. 26 of the 28 take
+# that parameter and ignore it, and read() on an inherited descriptor blocks until EOF — so on a
+# panel whose fd 0 was a pipe or a tty rather than /dev/null, those 26 verbs hung for the caller's
+# entire timeout and came back "Command timed out". Under systemd fd 0 IS /dev/null, which is why
+# it never showed in the live deployment; it showed the moment the GMod content flow was driven by
+# hand on the test host, where `content-dir-create` sat for 30s and ensure_content_user gave up.
+#
+# The set is derived from the source here rather than written out, so a new verb that reads stdin
+# without being added to STDIN_VERBS fails this instead of silently receiving "".
+import ast as _ast
+
+_h_src = open(_helper_path).read()
+_h_tree = _ast.parse(_h_src)
+_h_funcs = {n.name: n for n in _ast.walk(_h_tree) if isinstance(n, _ast.FunctionDef)}
+
+
+def _payload_is_used(fn_name):
+    """Whether that action's body actually references its stdin parameter (docstring excluded)."""
+    f = _h_funcs[fn_name]
+    param = f.args.args[1].arg
+    body = f.body[1:] if (f.body and isinstance(f.body[0], _ast.Expr)
+                          and isinstance(f.body[0].value, _ast.Constant)) else f.body
+    return any(isinstance(x, _ast.Name) and x.id == param
+               for b in body for x in _ast.walk(b))
+
+
+# ACTIONS maps verb -> function object; recover the NAME from the module's own globals.
+_h_name_of = {v: k for k, v in vars(_helper).items() if callable(v)}
+_h_consumers = {verb for verb, fn in _helper.ACTIONS.items()
+                if _payload_is_used(_h_name_of[fn])}
+check("helper: STDIN_VERBS is exactly the set of actions that use their payload",
+      _helper.STDIN_VERBS == _h_consumers,
+      "declared=%s derived=%s" % (sorted(_helper.STDIN_VERBS), sorted(_h_consumers)))
+check("helper: ...and that is a strict subset of ACTIONS (most verbs want no stdin)",
+      _h_consumers < set(_helper.ACTIONS) and len(_h_consumers) < len(_helper.ACTIONS),
+      "%d of %d" % (len(_h_consumers), len(_helper.ACTIONS)))
+# The positive control: without one, an empty ACTIONS (or a broken parse) passes both lines above.
+check("helper: ...and the derivation actually read the verb table",
+      len(_helper.ACTIONS) >= 20 and "write-file" in _h_consumers,
+      "%d actions" % len(_helper.ACTIONS))
