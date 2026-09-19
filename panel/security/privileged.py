@@ -44,6 +44,7 @@ STATUS
     SECURITY.md carries the full account, including what deliberately is not narrowed.
 """
 import ipaddress
+import os
 import pwd
 import re
 import shlex
@@ -498,7 +499,48 @@ def _managed_user(s):
             raise VerbError("refusing a uid-0 account")
     except KeyError:
         pass          # not an account HERE; the name is still a valid shape for a remote host
+    if _is_panel_account(s):
+        raise VerbError("refusing the panel's own account")
     return s
+
+
+# The panel's own install tree: this file is panel/security/privileged.py, so three levels up is
+# the checkout root. Derived rather than imported to keep this module dependency-free (it is
+# mirrored by tools/panel-helper, which must not import panel code).
+_PANEL_DIR = os.path.realpath(os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", ".."))
+
+
+def _is_panel_account(name):
+    """True if `name` is the account the panel runs as, or one whose home CONTAINS the panel
+    install. The mirror of the helper's _is_panel_account — see that docstring for the full
+    account; the short version is that `useradd --system` gives the panel's own user a uid below
+    1000 but NOT 0, so the uid-0 test above let it through, and installing a game server named
+    after it ran `userdel -r` and `rm -rf -- /home/<panel user>` as root over the panel's own
+    database, both encryption keys, its config and every one of its backups.
+
+    This copy is not redundant with the helper's. The helper is the check that runs on THIS host;
+    this one is the only check there is on two paths the helper never sees — a remote host, which
+    has no helper installed, and a local host still on the pre-helper wide sudo grant.
+
+    Uses the panel process's own uid rather than SUDO_UID: unlike the helper, this code IS the
+    panel, so it can simply ask who it is."""
+    try:
+        if pwd.getpwuid(os.getuid()).pw_name == name:
+            return True
+    except (KeyError, OSError):
+        pass
+    try:
+        home = os.path.realpath(HOME_ROOT + "/" + name)
+    except (ValueError, OSError):
+        return False
+    if _PANEL_DIR == home or _PANEL_DIR.startswith(home + "/"):
+        return True
+    try:
+        if pwd.getpwuid(os.stat(_PANEL_DIR).st_uid).pw_name == name:
+            return True
+    except (OSError, KeyError, ValueError):
+        pass
+    return False
 
 
 def home_of(user):

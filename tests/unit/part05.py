@@ -1097,6 +1097,61 @@ if _sys_name:
     check("helper: a NON-root system account (uid<1000) is still accepted", not _sys_why,
           "refused %s, which is the shape of the panel's own user: %s" % (_sys_name, _sys_why))
 
+# ── The destructive user verbs must refuse the PANEL'S OWN account ────────────────────────────
+# `user-delete`, `user-delete-force`, `user-remove-home` and `user-kill-processes` take their name
+# from the "server name" field of the install form — shape-checked against INSTANCE_NAME_RE and
+# nothing more — and manage_servers' install job calls the first two whenever
+# /home/<name>/linuxgsm.sh is absent. install.sh creates the panel's own account with
+# `useradd --system`, giving it a uid below 1000 but NOT 0, so the uid-0 test let it straight
+# through: installing a server named `lgsmpanel` ran `userdel -r lgsmpanel` and, as root,
+# `rm -rf -- /home/lgsmpanel` — which is where panel.db, secret_key, cred_key, config.json and
+# every panel backup live. Unrecoverable, because the backups were inside the tree being deleted.
+# MANAGE_SERVERS was enough; no superadmin, no confirmation.
+#
+# Both sides are asserted. The helper is the check that runs on THIS host; privileged.py's copy is
+# the ONLY check on the two paths the helper never sees — a remote host, which has no helper, and
+# a local host still on the pre-helper wide sudo grant.
+_pa_me = __import__("pwd").getpwuid(os.getuid()).pw_name
+_pa_why = ""
+try:
+    _priv_mod = __import__("panel.security.privileged", fromlist=["x"])
+    _priv_mod._managed_user(_pa_me)
+except Exception as _e:
+    _pa_why = str(_e)
+check("privileged: _managed_user refuses the account the panel itself runs as",
+      "panel" in _pa_why.lower(), "accepted %r (%r)" % (_pa_me, _pa_why))
+check("privileged: ...and an ordinary game-server account is still accepted",
+      _priv_mod._managed_user("codserver") == "codserver")
+# The verb itself, not just the validator — the argv must never be built.
+_pa_verb_why = ""
+try:
+    _priv_mod.helper_argv("user-remove-home", [_pa_me])
+except Exception as _e:
+    _pa_verb_why = str(_e)
+check("privileged: the user-remove-home VERB refuses it too",
+      bool(_pa_verb_why), "built an argv for %r" % _pa_me)
+check("privileged: ...and still builds for a real game server",
+      _priv_mod.helper_argv("user-remove-home", ["codserver"])[-2:]
+      == ["user-remove-home", "codserver"])
+# Helper side: SUDO_UID is how it learns who invoked it on a root install.
+_pa_env = os.environ.get("SUDO_UID")
+os.environ["SUDO_UID"] = str(os.getuid())
+try:
+    _pa_h_why = ""
+    try:
+        _helper.v_managed_user(_pa_me)
+    except Exception as _e:
+        _pa_h_why = str(_e)
+    check("helper: v_managed_user refuses the account that invoked it",
+          "panel" in _pa_h_why.lower(), "accepted %r (%r)" % (_pa_me, _pa_h_why))
+    check("helper: ...and an ordinary game-server account is still accepted",
+          _helper.v_managed_user("codserver") == "codserver")
+finally:
+    if _pa_env is None:
+        os.environ.pop("SUDO_UID", None)
+    else:
+        os.environ["SUDO_UID"] = _pa_env
+
 # ── The three content verbs must not be steerable through a symlink ───────────────────────────
 # The GMod shared-content box is the one corner of the helper that works INSIDE a home directory,
 # and a home directory belongs to the account that lives in it. install.sh creates /home/lgsmpanel

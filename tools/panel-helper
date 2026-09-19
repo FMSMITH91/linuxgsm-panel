@@ -648,14 +648,74 @@ def v_managed_user(s):
     refuses.
 
     An unknown name passes — the verb's own lookup fails a moment later, and `user-create` needs to
-    name an account that does not exist yet. useradd will not give it uid 0."""
+    name an account that does not exist yet. useradd will not give it uid 0.
+
+    uid 0 is not the only account with no legitimate caller, though — see _is_panel_account."""
     s = v_username(s)
     try:
         if pwd.getpwnam(s).pw_uid == 0:
             raise ValueError("refusing a uid-0 account")
     except KeyError:
         pass          # not a user on this host (yet) — shape is valid, the verb will fail if wrong
+    if _is_panel_account(s):
+        raise ValueError("refusing the panel's own account")
     return s
+
+
+def _is_panel_account(name):
+    """True if `name` is the account the panel itself runs as, or one whose home CONTAINS the
+    panel install. Those are the accounts the destructive user verbs must never be pointed at.
+
+    Why this exists. `user-delete`, `user-delete-force`, `user-remove-home` and
+    `user-kill-processes` take their name from the "server name" field of the install form — shape
+    checked against USERNAME_RE and nothing more. install.sh creates the panel's own account with
+    `useradd --system`, which gives it a uid below 1000 but NOT 0, so the uid-0 test above lets it
+    straight through. Installing a game server named `lgsmpanel` ran, as root:
+
+        userdel -r lgsmpanel
+        rm -rf -- /home/lgsmpanel
+
+    and /home/lgsmpanel is where panel.db, secret_key, cred_key, config.json and every panel backup
+    live. The panel deleted itself, unrecoverably — unrecoverably because the backups kept for
+    exactly this situation were inside the tree being removed. It needed only MANAGE_SERVERS, not
+    superadmin, and there was no confirmation step.
+
+    home_of()'s docstring says the path "can only ever be a direct child of /home". That is true,
+    and it is not the property that matters: the question it never asked is WHOSE child.
+
+    Three tests, because no one of them covers both install models:
+      * SUDO_UID — whoever invoked us. On a root/system install that is the service account.
+      * whether removing this account's home would take the install tree with it. This is the one
+        that catches a per-user install, where the panel runs as an ordinary account like `ubuntu`.
+      * the owner of the install tree.
+
+    Fails CLOSED only where it can answer; an unreadable panel.conf leaves the last two silent
+    rather than refusing every account, because that would break legitimate game-server removal."""
+    try:
+        sudo_uid = os.environ.get("SUDO_UID")
+        if sudo_uid and pwd.getpwuid(int(sudo_uid)).pw_name == name:
+            return True
+    except (KeyError, ValueError, TypeError, OverflowError):
+        pass
+    try:
+        panel_dir = panel_conf().get("panel_dir", "")
+    except Exception:
+        panel_dir = ""
+    if not panel_dir:
+        return False
+    panel_dir = os.path.realpath(panel_dir)
+    try:
+        home = os.path.realpath(home_of(name))
+    except ValueError:
+        return False
+    if panel_dir == home or panel_dir.startswith(home + "/"):
+        return True
+    try:
+        if pwd.getpwuid(os.stat(panel_dir).st_uid).pw_name == name:
+            return True
+    except (OSError, KeyError, ValueError):
+        pass
+    return False
 
 
 def home_of(user):

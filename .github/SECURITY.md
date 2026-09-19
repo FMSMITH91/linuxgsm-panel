@@ -102,15 +102,28 @@ of going unnoticed. Current state:
 
 `_sudo_sh()` built `sudo bash -c '<pipeline>'` itself and passed `sudo=False`, which is why a
 search for `sudo=True` never saw it and why its 18 call sites went uncounted for half this work.
-It has no callers left and the function itself has been deleted, so that route cannot come back by
-accident.
+It has no callers left and the function itself has been deleted.
 
-**Two of the four that remain cannot be narrowed by a verb at all** — they are the downloaded-script
-installers named below. The other two are large read-only shell programs that gather host state (the
-LinuxGSM server discovery scan and the per-server metrics probe): both are reads, both have their
-interpolated values validated upstream, and converting either means reimplementing a working
-multi-stage scan inside the helper. They are the least valuable and highest risk of what is left,
-which is why they are last.
+**"…so that route cannot come back by accident" was wrong, and it had already come back.** The
+ratchets count three things — calls to a function *named* `_sudo_sh`, the `sudo=True` keyword, and
+an argv list beginning with `"sudo"` — and the route is none of those; it is a *shape*, and the
+shape is one f-string. `_core._rewrite_crontab` renders `crontab -u <user>` into exactly such a
+`sudo bash -c '<pipeline>'` and passes `sudo=False`, reachable from five cron routes. The account
+name went in **unquoted**, into a pipeline that runs as root, held only by the model's `@validates`
+hook — which fires on assignment and never on a row loaded from the database. It is validated and
+quoted at that site now, and a test drives a hostile name through it; the shape itself remains,
+because `crontab -u … -l | filter > tmp; crontab -u … tmp` genuinely is a pipeline. Read the table
+above as "no `_sudo_sh` **function**", not as "no hand-built escalation".
+
+**Two of the four `sudo=True` sites that remain cannot be narrowed by a verb at all** — they are the
+downloaded-script installers named below. The other two were described here as the LinuxGSM
+discovery scan and the per-server metrics probe, "both reads, both with their interpolated values
+validated upstream". The count of four is right; two of the three claims about it were not. The
+metrics probe no longer escalates at all (`_core` notes it reads world-readable state). The actual
+fourth site is `hosts.install_game_dependencies`, which is not a read: it is an `apt-get install`
+as root whose package list is interpolated from `data/lgsm/<distro>.csv`, a file inside the
+panel-owned data directory that is parsed with no charset validation on the read path. That one is
+worth narrowing before either installer.
 
 (Those counts exclude six calls that ARE the verb layer's own transport — the `run_command` /
 `_run_local` / `_run` at the end of `run_privileged`, `write_root_file`, `write_content_cron` and
@@ -229,12 +242,30 @@ Three conditions bound that claim, and all are enforced rather than asserted:
   `sudo bash -c '<verb rendered as text>'` and narrowing under that would break every
   privileged action rather than secure anything. The installer prints which grant it wrote.
 
-* **Root no longer executes anything out of the panel's checkout.** `PANEL_DIR` is owned by the
-  service user and rewritten by `git pull` on every self-update, so a boundary that let root run
-  files from there would have been decorative — the panel could take root by writing to its own
-  files. The offline DB repair and the self-update now run root-owned copies placed only by
-  `install.sh`, never by a verb. This mattered more than the sudoers line itself: narrowing
-  without it would have produced something that looked locked down and was not.
+* **Root no longer executes anything out of the panel's checkout — and no longer *installs* from
+  it either.** `PANEL_DIR` is owned by the service user and rewritten by `git pull` on every
+  self-update, so a boundary that let root run files from there would have been decorative. The
+  offline DB repair and the self-update run root-owned copies placed only by `install.sh`, never
+  by a verb.
+
+  The second half of that sentence was missing, and it mattered: `install_root_tools` *copied*
+  those root-owned pieces **out of the working tree**, and the integrity argument was that
+  `fetch_code` ran `git reset --hard` first. That is not a guarantee. `git update-index
+  --skip-worktree <path>` exempts a path from `reset --hard`, so attacker content — or a deletion —
+  survives it; a smudge filter in `.git/info/attributes` plus a `filter.*.smudge` in `.git/config`
+  rewrites the file *during* checkout. Both live in `.git/`, which is untracked and panel-owned,
+  and `_gitc` runs git **as the checkout owner**, so git honours them. `check_origin_trusted`
+  compares the remote URL and sees neither. The deletion variant was the sharper one: a missing
+  `tools/panel-helper` zeroed `HELPER_OK`, and `write_sudoers_grant` then replaced the narrow rule
+  with `NOPASSWD:ALL` — the panel user could remove its own sudo restriction by deleting a file it
+  owned.
+
+  Both are closed. The three pieces are now staged with `git cat-file blob HEAD:<path>`, which
+  returns the committed bytes and consults neither the working tree nor the index nor any filter,
+  into `HELPER_DIR` — root-owned 0755, so there is no window in which the panel user can swap the
+  staged copy. And the grant asks `root_tools_present`, i.e. whether the helper root will execute
+  actually exists and is root-owned, so a failure to *refresh* can no longer widen a grant that is
+  already narrow.
 
 * **The installed helper has to stay in step with the panel's code.** It lives outside the
   checkout, so the panel cannot refresh it — only `install.sh` can, as root. The verb table grows

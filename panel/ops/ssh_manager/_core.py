@@ -710,6 +710,67 @@ def _run_via_ssh_cli(server, command, timeout=30, sudo=None):
         return "", "ssh command error", -1
 
 
+# Paramiko's per-channel window is 2 MiB (DEFAULT_WINDOW_SIZE = 64 * 2**15). A command that
+# writes more than that with nobody reading blocks in the remote's write() — so it never exits, so
+# recv_exit_status(), which is `status_event.wait()` with NO timeout, never returns. The `timeout=`
+# handed to exec_command sets the channel's recv timeout; it is not a deadline for the exit status,
+# so nothing ends the wait. run_command used to call recv_exit_status BEFORE reading, which is
+# precisely the ordering paramiko's own recv_exit_status docstring warns about, and the greenthread,
+# its request, its DB session and the channel then leaked permanently.
+#
+# It is not only a hostile-host problem. Three ordinary things here clear 2 MiB: the cron tab's
+# `journalctl _COMM=cron --since "-14 days"` (no -n, and the [-800:] slice happens after the whole
+# thing is read), the security page's `zcat -f /var/log/fail2ban.log* | grep -E 'Ban|Found'` on a
+# host under sustained SSH brute force, and a long update's `cat` of the full SteamCMD log.
+#
+# So drain both streams WHILE the command runs and take the exit status afterwards. Both halves
+# matter: draining stdout to EOF first would deadlock the same way the moment stderr filled its own
+# window.
+#
+# Deliberately NOT a new deadline. On this path `timeout` never bounded a command's DURATION —
+# recv_exit_status blocked for as long as the command took — so imposing one now would newly fail
+# long-running work that has always succeeded (an `apt full-upgrade` under a nominal 30s timeout).
+# Past the byte cap the loop keeps reading and DISCARDS rather than stopping: continuing to read is
+# what keeps the remote's flow control moving, and stopping would re-create the hang this fixes.
+_MAX_OUTPUT_BYTES = 8 * 1024 * 1024
+
+
+def _drain_exec(chan, max_bytes=_MAX_OUTPUT_BYTES):
+    """Read stdout+stderr to EOF, then the exit status. Returns (out, err, rc, truncated)."""
+    out, err = bytearray(), bytearray()
+    truncated = False
+    chan.settimeout(0.0)          # non-blocking; we poll and yield rather than block on one stream
+    while True:
+        moved = False
+        try:
+            while chan.recv_ready():
+                b = chan.recv(65536)
+                if not b:
+                    break
+                moved = True
+                if len(out) < max_bytes:
+                    out += b[:max_bytes - len(out)]
+                else:
+                    truncated = True
+            while chan.recv_stderr_ready():
+                b = chan.recv_stderr(65536)
+                if not b:
+                    break
+                moved = True
+                if len(err) < max_bytes:
+                    err += b[:max_bytes - len(err)]
+                else:
+                    truncated = True
+        except (socket.timeout, OSError):
+            pass                  # raced recv_ready(); the loop re-checks
+        if moved:
+            continue
+        if chan.exit_status_ready() and not chan.recv_ready() and not chan.recv_stderr_ready():
+            break
+        time.sleep(0.01)          # eventlet-patched, so this yields rather than burning the worker
+    return bytes(out), bytes(err), chan.recv_exit_status(), truncated
+
+
 def run_command(server, command, timeout=30, sudo=None):
     """Run a command on the remote server via SSH, or locally if it's the local machine.
     Returns (stdout, stderr, exit_code).
@@ -739,9 +800,12 @@ def run_command(server, command, timeout=30, sudo=None):
         # nosec B601 - full_cmd is assembled HERE from _quote()d components; there is no
         # interpolation of caller text into it that has not been through _quote first.
         stdin, stdout, stderr = client.exec_command(full_cmd, timeout=timeout)  # nosec B601  # nosemgrep
-        exit_code = stdout.channel.recv_exit_status()
-        out = stdout.read().decode("utf-8", errors="replace")
-        err = stderr.read().decode("utf-8", errors="replace")
+        out_b, err_b, exit_code, truncated = _drain_exec(stdout.channel)
+        out = out_b.decode("utf-8", errors="replace")
+        err = err_b.decode("utf-8", errors="replace")
+        if truncated:
+            _log.warning("remote command output exceeded %d bytes and was truncated",
+                         _MAX_OUTPUT_BYTES)
         return out.strip(), err.strip(), exit_code
     except Exception as e:
         raise ConnectionError(f"Command failed: {e}")
@@ -1280,10 +1344,26 @@ def _rewrite_crontab(server, user, grep_args, add_lines, extra_pre="", drop_line
     else:
         filt = f"grep {grep_args} " if grep_args else "cat "
     appends = "".join(f'printf \'%s\\n\' {_quote(l)} >> "$T"; ' for l in (add_lines or []))
+    # Validated and quoted HERE, for the reason run_as_game_user spells out above: the model's
+    # @validates hook fires on ASSIGNMENT and never on a row loaded from the database, so a row
+    # written before that validator existed — or restored from a tampered backup — reaches this
+    # function unchecked. It matters more here than there: `user` went in UNQUOTED, and the
+    # pipeline below runs as ROOT, so `crontab -u <user>` was a root command-injection point one
+    # bad row away. Five cron routes reach this.
+    if not _SAFE_GAME_IDENT.match(user or ""):
+        _log.warning("refusing to rewrite a crontab for an unsafe account name")
+        return False, "invalid account name"
+    _u = _quote(user)
     pipeline = (
-        f'{env_pre}{extra_pre}T=$(mktemp); crontab -u {user} -l 2>/dev/null | {filt}> "$T"; '
-        f'{appends}crontab -u {user} "$T"; RC=$?; rm -f "$T"; exit $RC'
+        f'{env_pre}{extra_pre}T=$(mktemp); crontab -u {_u} -l 2>/dev/null | {filt}> "$T"; '
+        f'{appends}crontab -u {_u} "$T"; RC=$?; rm -f "$T"; exit $RC'
     )
+    # A hand-built `sudo bash -c …` passed with sudo=False is the exact shape SECURITY.md records
+    # as gone ("_sudo_sh | 0 — the route is gone"), and it is invisible to all three escalation
+    # ratchets: one counts calls to a function named _sudo_sh, one counts the sudo=True keyword,
+    # and one looks for an argv list starting with "sudo". This is none of those. It stays a shell
+    # pipeline because `crontab -u … -l | filter > tmp; crontab -u … tmp` is genuinely a pipeline,
+    # but every value interpolated into it is now validated and quoted.
     cmd = f"sudo bash -c {_quote(pipeline)}"
     out, err, rc = run_command(server, cmd, timeout=20, sudo=False)
     return rc == 0, (err or out or "")

@@ -479,7 +479,7 @@ def read_file(server, user, relpath, max_bytes=1048576):
         f"printf %s {_core._quote(_READ_BEGIN)}; cat {_core._quote(ap)}; "
         f"printf %s {_core._quote(_READ_END)}; else echo __BINARY__; fi"
     )
-    out, _, _ = _core.run_command(server, f"sudo -u {_core._quote(user)} bash -c {_core._quote(_guarded(user, ap, inner))}",
+    out, _err, _rc = _core.run_command(server, f"sudo -u {_core._quote(user)} bash -c {_core._quote(_guarded(user, ap, inner))}",
                             timeout=20, sudo=False)
     if _OUTSIDE_HOME in (out or ""):
         return None, "Invalid path"
@@ -491,14 +491,24 @@ def read_file(server, user, relpath, max_bytes=1048576):
     if stripped == "__BINARY__":
         return None, "Binary file — download/replace via upload instead"
     # First BEGIN, LAST end: a file that happens to contain a sentinel still round-trips unless it
-    # contains both, in that order, which no real config does. No frame at all means the read did
-    # not get as far as cat — fall back to the old behaviour rather than returning nothing.
+    # contains both, in that order, which no real config does.
     body = out or ""
     i = body.find(_READ_BEGIN)
     j = body.rfind(_READ_END)
     if i != -1 and j > i:
         return body[i + len(_READ_BEGIN):j], None
-    return body, None
+    # No frame, and none of the three sentinels above: the read never got as far as `cat`. This
+    # used to `return body, None` — i.e. "" with no error — and that is destructive, not merely
+    # wrong. run_command does not raise on the local or Tailscale transports; it returns
+    # ("", "…timed out", -1), and a `sudo -u` refusal puts its message on stderr with empty stdout.
+    # So a transient failure reached api_server_file as 200 {"content": ""}, the editor showed an
+    # empty file, and pressing Save wrote "" over the real config.
+    #
+    # The sentinel framing already distinguishes "got as far as cat" from "did not"; it just has to
+    # say so. (The repo's own "empty is not a measurement", with a destructive consequence rather
+    # than a merely wrong readout.)
+    _core._log.warning("read_file: no sentinel frame for %s (rc=%s) — reporting a failed read", ap, _rc)
+    return None, "Could not read that file — the host did not answer. Nothing has been changed."
 
 
 def write_file(server, user, relpath, content):

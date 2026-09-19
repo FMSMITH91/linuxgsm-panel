@@ -743,6 +743,7 @@ def _wait_for_reboot(server, on_wait=None, down_timeout=150, up_timeout=480):
             ok, _ = ssh_test_connection(
                 server.host, server.port or 22, server.username,
                 server.auth_method, decrypt_secret(server.auth_credential),
+                host_key=server.host_key or "",
             )
             return ok
         except Exception:
@@ -1741,8 +1742,22 @@ def remote_set_public_ssh(server, mode):
     return True, f"Public SSH is now {labels[mode]}"
 
 
-def ssh_test_connection(host, port=22, username="root", auth_method="key", credential=""):
-    """Test an SSH connection and return (success, message)."""
+def ssh_test_connection(host, port=22, username="root", auth_method="key", credential="",
+                        host_key=""):
+    """Test an SSH connection and return (success, message).
+
+    `host_key` is the pin to check against, for the callers that HAVE one. It was not a parameter
+    at all, so `expected` was always "" and this accepted any key from any server — while three of
+    the four callers pass an EXISTING remote's stored credential: the "Test connection" button
+    (routes/remotes.py), _wait_for_reboot below, and the setup wizard. For a password remote that
+    means offering the plaintext SSH password to whoever answers on that address, and reporting
+    "Connection successful" afterwards. get_connection() pins correctly (_core.get_connection), so
+    this was a hole in an implemented control rather than an absent one — and _wait_for_reboot is
+    the attractive window, because the host is EXPECTED to be down and the panel retries for up to
+    ten minutes while the operator watches a progress bar.
+
+    Left unpinned only where there is genuinely nothing to compare against: adding a remote, which
+    is the first contact the TOFU pin is established from."""
     # Tailscale SSH must use the system ssh client (tailscaled handles auth).
     if auth_method == "tailscale":
         class _S:
@@ -1761,11 +1776,21 @@ def ssh_test_connection(host, port=22, username="root", auth_method="key", crede
         return False, f"Tailscale SSH failed: {(err or out or 'unknown')[:150]}"
 
     client = paramiko.SSHClient()
-    # Pre-save connectivity probe: nothing to compare against yet, so capture-only (no
-    # AutoAddPolicy). The key gets pinned for real on the first operational connection.
-    client.set_missing_host_key_policy(_core._PinPolicy(reject_on_change=False))
+    # Pinned when the caller has a pin (an existing remote); capture-only on genuine first contact,
+    # where there is nothing to compare against. Never AutoAddPolicy either way.
+    client.set_missing_host_key_policy(
+        _core._PinPolicy(expected=host_key or "", reject_on_change=bool(host_key)))
     try:
-        if auth_method == "password" and credential:
+        if auth_method == "password":
+            if not credential:
+                # A password remote with no usable credential must FAIL, not fall through to the
+                # key branch below and authenticate with the panel user's own ~/.ssh/id_rsa — a
+                # different credential, against a host the operator never authorised it for.
+                # decrypt_secret() returns "" both for "nothing stored" and for "stored but could
+                # not be decrypted" (a restored backup with a mismatched cred_key, a corrupt row),
+                # so this is also the only place that failure becomes visible.
+                return False, ("No usable SSH password is stored for this host. If the panel was "
+                               "restored from a backup, its credential key may not match.")
             client.connect(
                 host, port=port, username=username,
                 password=credential, timeout=10,

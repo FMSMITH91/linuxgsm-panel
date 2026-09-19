@@ -5954,6 +5954,70 @@ try:
               app.test_client().get("/api/servers", headers={
                   "Authorization": "Bearer %s" % _shown.group(1)}).status_code != 200)
 
+    # ── An API token is a SECOND credential, and it has to answer to the controls that take an
+    # account back. It answered to none of them: it carries no auth_epoch, so a password change
+    # did not touch it, and "sign out everywhere" deleted every UserSession row and left it
+    # working. app.py's note that "cookie theft is also recoverable via sign out everywhere" was
+    # untrue while one existed — and minting one needs only a live session (no password, no 2FA),
+    # so an attacker holding a stolen cookie could leave themselves a key that survived the
+    # victim's entire recovery.
+    _tok_c = client_as(admin_id)
+    _mint2 = _tok_c.post("/account/api-token/generate")
+    _m = _re_as.search(r"(lgsm_[0-9a-f]{48})", _mint2.get_data(as_text=True) or "")
+    check("api token: minted for the revocation tests", bool(_m),
+          _mint2.get_data(as_text=True)[:120])
+    if _m:
+        _tok = _m.group(1)
+        _bearer = lambda: app.test_client().get(
+            "/api/servers", headers={"Authorization": "Bearer %s" % _tok}).status_code
+        check("api token: it authenticates before the revoke", _bearer() == 200)
+        _tok_c.post("/account/sessions/revoke")
+        check("api token: 'sign out everywhere' also revokes the API token", _bearer() != 200,
+              "status=%s" % _bearer())
+
+    # ── Deactivating an account must END its open sessions, and nothing asserted that it did.
+    # It does — but through a coupling nobody would find by reading the panel: this model is
+    # `User(UserMixin, db.Model)` with `is_active` as a Column, and UserMixin.is_authenticated is
+    # `return self.is_active`, so declaring the column also redefines is_authenticated and
+    # @login_required refuses the account. Declare an is_authenticated of your own, or drop
+    # UserMixin, and every open session of every deactivated account silently works again.
+    # These pin the BEHAVIOUR, so it survives whichever layer happens to provide it.
+    with app.app_context():
+        _victim = User(username="deactivateme", is_active=True,
+                       password_hash=auth.hash_password("Str0ng!passw0rd"))
+        db.session.add(_victim)
+        db.session.commit()
+        _vid = _victim.id
+    # BOTH cookie shapes, because load_user has two branches and client_as() only exercises one.
+    # A bare "<id>" is the legacy cookie; a real login carries "<id>:<auth_epoch>", and that is the
+    # branch every current session actually takes — a gate that covers only the legacy form would
+    # pass with the modern branch wide open.
+    def _client_with_id(raw_id):
+        _c = app.test_client()
+        with _c.session_transaction() as _s:
+            _s["_user_id"] = str(raw_id)
+            _s["_fresh"] = True
+        return _c
+
+    with app.app_context():
+        _modern_id = db.session.get(User, _vid).get_id()
+    check("deactivation: the modern cookie form is <id>:<epoch>, not a bare id",
+          ":" in _modern_id, _modern_id)
+    _vc_legacy, _vc_modern = _client_with_id(_vid), _client_with_id(_modern_id)
+    check("deactivation: the legacy-cookie session works while the account is active",
+          _vc_legacy.get("/api/servers").status_code == 200)
+    check("deactivation: the epoch-cookie session works while the account is active",
+          _vc_modern.get("/api/servers").status_code == 200)
+    with app.app_context():
+        db.session.get(User, _vid).is_active = False
+        db.session.commit()
+    _after_l = _vc_legacy.get("/api/servers").status_code
+    _after_m = _vc_modern.get("/api/servers").status_code
+    check("deactivation: the legacy-cookie session stops working once deactivated",
+          _after_l != 200, "status=%s" % _after_l)
+    check("deactivation: the epoch-cookie session stops working once deactivated",
+          _after_m != 200, "status=%s" % _after_m)
+
     # ── can_run_custom_command: who may press a superadmin-authored console button ────────────────
     # Every branch of this decides whether a non-superadmin gets to run a console command on a
     # server, and none of it was asserted.
