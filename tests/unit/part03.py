@@ -230,9 +230,19 @@ finally:
     _so._run = _orig_ss_run
     _so._status_cache["data"] = None
 
+# BOTH branches pinned, and neither may escape. restart_panel picks its path with
+# _is_system_service(): a per-user unit builds its own argv and goes through subprocess.Popen
+# (what this block stubs), while a SYSTEM unit goes through _run_verb -> the helper. Dev machines
+# and CI runners have no system unit, so they always took the Popen branch and these assertions
+# only ever covered it. On the test VPS, where the panel really is a system service, the stub
+# caught nothing — and on a host whose sudoers permits the verb, running this suite could have
+# scheduled a REAL panel restart. _run_verb is stubbed as the backstop.
 _orig_popen = _so.subprocess.Popen
+_orig_rp_verb, _orig_rp_sys = _so._run_verb, _so._is_system_service
 _cap = {}
 try:
+    _so._run_verb = lambda v, a=(), **k: (_cap.update(verb=v, verb_args=list(a)), ("", "", 0))[1]
+    _so._is_system_service = lambda: False        # the per-user branch these checks describe
     _so.subprocess.Popen = lambda a, **k: (_cap.update(args=a), type("P", (), {})())[1]
     _ok, _ = _so.restart_panel()
     check("restart_panel: dispatches successfully", _ok is True)
@@ -241,8 +251,23 @@ try:
           and "linuxgsm-panel.service" in _cap["args"])
     check("restart_panel: delays so the HTTP response can flush",
           any(str(x).startswith("--on-active=") for x in _cap["args"]))
+    # ...and the SYSTEM-unit branch, which is what a real install actually runs. It must go
+    # through the verb — never `sudo systemd-run`, since a sudoers rule permitting systemd-run is
+    # equivalent to NOPASSWD:ALL — and hand it nothing but the clamped delay.
+    _cap.clear()
+    _so._is_system_service = lambda: True
+    _ok_sys, _ = _so.restart_panel(delay_seconds=2)
+    check("restart_panel: a system unit goes through the panel-restart VERB, not sudo systemd-run",
+          _ok_sys is True and _cap.get("verb") == "panel-restart", str(_cap)[:120])
+    check("restart_panel: ...and the verb is handed only the clamped delay",
+          _cap.get("verb_args") == ["2"], str(_cap.get("verb_args")))
+    _cap.clear()
+    _so.restart_panel(delay_seconds=99999)
+    check("restart_panel: ...with the delay clamped to the documented 1..300",
+          _cap.get("verb_args") == ["300"], str(_cap.get("verb_args")))
 finally:
     _so.subprocess.Popen = _orig_popen
+    _so._run_verb, _so._is_system_service = _orig_rp_verb, _orig_rp_sys
 check("integrity: parses modified status",
       {"path": "app.py", "status": "modified"} in _intg["modified"])
 check("integrity: parses deleted status",

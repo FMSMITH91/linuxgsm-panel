@@ -13,8 +13,14 @@
 #   curl -fsSL .../recover.sh | sudo bash -s -- disable-2fa alice
 set -euo pipefail
 
-SYSTEM_UNIT="/etc/systemd/system/linuxgsm-panel.service"
-USER_UNIT="${HOME}/.config/systemd/user/linuxgsm-panel.service"
+# All three overridable, for the reason the HOMES comment already gives. The unit paths were
+# fixed strings, and they are consulted BEFORE the scan — so on a host that really has a panel
+# unit (i.e. any real install) the sandbox below was bypassed entirely and the ambiguity checks
+# in tests/unit/part06.py silently exercised a branch they were not written for. Found by running
+# the suite on a deployed host, where recover.sh reported the test's own directory with the live
+# service user. Defaults are unchanged, so production behaviour is identical.
+SYSTEM_UNIT="${PANEL_RECOVER_SYSTEM_UNIT:-/etc/systemd/system/linuxgsm-panel.service}"
+USER_UNIT="${PANEL_RECOVER_USER_UNIT:-${HOME}/.config/systemd/user/linuxgsm-panel.service}"
 # Where per-user installs are looked for. A variable so a test can point the scan at a sandbox
 # without rewriting this script — the same reason panel-helper declares its paths in one place.
 HOMES="${PANEL_RECOVER_HOMES:-/home}"
