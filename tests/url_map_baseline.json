@@ -1029,8 +1029,8 @@
   "/api/remote/<int:remote_id>/security/whitelist": {
     "endpoint": "api_remote_security_whitelist",
     "guards": [
-      "utils.py:decorated_view(manage_remotes)",
-      "auth.py:decorated_function(manage_remotes)",
+      "utils.py:decorated_view(super_admin)",
+      "auth.py:decorated_function(super_admin)",
       "view:api_remote_security_whitelist"
     ],
     "methods": [

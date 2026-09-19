@@ -84,10 +84,11 @@ def register(app):
         # duplicates — picking a game essentially at random and reporting partial success as
         # success. That is what a GMod content box looked like when it reached this endpoint.
         # Refuse the whole account instead: an arbitrary winner is not a better answer than none.
-        per_user = collections.Counter((it.get("user") or "").strip() for it in items[:100])
+        items = [it for it in items[:100] if isinstance(it, dict)]
+        per_user = collections.Counter((str(it.get("user") or "")).strip() for it in items)
         added, skipped = [], []
-        for it in items[:100]:
-            user = (it.get("user") or "").strip()
+        for it in items:
+            user = (str(it.get("user") or "")).strip()
             gt = (it.get("game_type") or "").strip().lower()
             if (not INSTANCE_NAME_RE.match(user) or gt not in valid_games
                     or user in existing or per_user.get(user, 0) > 1):

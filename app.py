@@ -72,6 +72,7 @@ from markupsafe import Markup
 from panel.core import i18n
 from flask_login import (current_user)
 from flask_wtf.csrf import CSRFProtect
+from werkzeug.exceptions import HTTPException
 
 from panel.security.auth import (ALL_PERMISSIONS, client_ip, get_user_permissions, init_auth,
     log_action, strip_legacy_superadmin_grants)
@@ -1010,6 +1011,29 @@ def create_app():
                 and not request.cookies.get(app.config["SESSION_COOKIE_NAME"])):
             return   # genuinely cookie-less API-token request: CSRF cannot apply
         csrf.protect()   # session/cookie request: full CSRF enforcement (no-op on safe methods)
+
+    # ── An unhandled exception on a JSON endpoint must answer JSON ───────────────────────────
+    # There was no errorhandler anywhere in this project, so an exception in a route came back as
+    # Werkzeug's HTML 500 page. Every mutating endpoint here is called with
+    # `.then(r => r.json())`, which then fails to parse it — so the user sees a generic "failed"
+    # instead of the reason, and the panel log fills with tracebacks that look like the panel is
+    # broken. The ordinary trigger is not a bug in the panel at all: run_privileged raises
+    # ConnectionError for a host that is down and VerbError for an argument a verb refuses, and
+    # nothing between the ops layer and the browser catches either.
+    #
+    # Only requests that ASKED for JSON are converted. Anything else re-raises, so a page render
+    # keeps whatever behaviour it has today (including propagating under TESTING).
+    @app.errorhandler(Exception)
+    def _json_for_api_errors(e):
+        if isinstance(e, HTTPException):
+            return e            # abort(404) and friends render as they always have
+        wants_json = (request.path.startswith("/api/")
+                      or request.headers.get("X-Requested-With") == "XMLHttpRequest")
+        if not wants_json:
+            raise e
+        _log.exception("unhandled error serving %s", request.path)
+        return jsonify({"success": False,
+                        "message": "Something went wrong — see the panel log."}), 500
 
     # Cap the total request body so an oversized upload can't be spooled to disk / read into memory
     # before the per-file size check runs. Werkzeug already bounds in-memory form fields, but NOT

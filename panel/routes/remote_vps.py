@@ -505,7 +505,9 @@ def register(app):
         with _rwe_lock:
             _reboot_when_empty.pop(remote_id, None)
         success, msg = remote_reboot(remote)
-        log_action(current_user, "remote_reboot", target=remote.name)
+        # success=, or log_action's default (True) records a refused reboot as one that happened —
+        # and /logs filtered to failures hides it. The OS-update sibling on this page passes it.
+        log_action(current_user, "remote_reboot", target=remote.name, success=success)
         return jsonify({"success": success, "message": msg})
 
     @app.route("/api/remote/<int:remote_id>/reboot-cancel", methods=["POST"])

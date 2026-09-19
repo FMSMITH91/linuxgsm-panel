@@ -884,39 +884,96 @@ eq("cron: split @shortcut", _sm_cron._split_cron_line("@reboot /home/gm/x start"
 eq("cron: split rejects short line", _sm_cron._split_cron_line("0 3 * *"), (None, None))
 
 # ── anti-lockout: disabling public SSH must be refused with no Tailscale path back in ──
+# ...and the RESULT must be read back off the host. remote_set_public_ssh used to return True
+# unconditionally after firing its verbs, so a host with no ufw at all answered "✓ Public SSH is
+# now disabled (tailnet-only)" with port 22 open to the internet, and wrote an audit row saying
+# the hardening succeeded. Its exit codes cannot settle it either — a delete of an absent rule is
+# a normal non-zero, which is exactly why they were being ignored — so it asks ufw what it ended
+# up with. That makes the firewall state part of these fixtures.
 _orig_rc = _sm_core.run_command
-def _rc_no_tailnet(server, cmd, **kw):
-    if "status --json" in cmd:
-        return ('{"BackendState":"Stopped"}', "", 0)   # Tailscale not running
-    return ("", "", 0)
-_sm_core.run_command = _rc_no_tailnet
-_ok, _msg = _sm_hosts.remote_set_public_ssh(object(), "off")
-check("ssh off REFUSED when no Tailscale path (anti-lockout)", _ok is False and "lock you out" in _msg.lower())
+_orig_rp = _sm_core.run_privileged
 
-def _rc_ts_ssh(server, cmd, **kw):
-    if "status --json" in cmd:
-        return ('{"BackendState":"Running"}', "", 0)
-    if "debug prefs" in cmd:
-        return ('{"RunSSH": true}', "", 0)                # Tailscale SSH enabled
-    return ("", "", 0)
-_sm_core.run_command = _rc_ts_ssh
-check("ssh off ALLOWED when Tailscale SSH enabled", _sm_hosts.remote_set_public_ssh(object(), "off")[0] is True)
+# `ufw status` as it reads for each resulting mode. remote_public_ssh_status parses this.
+_UFW_BY_MODE = {
+    "allow": "Status: active\n\n22/tcp                     ALLOW IN    Anywhere\n",
+    "limit": "Status: active\n\n22/tcp                     LIMIT IN    Anywhere\n",
+    "off": "Status: active\n\n27015                      ALLOW IN    Anywhere\n",
+}
 
-def _rc_iface(server, cmd, **kw):
-    if "status --json" in cmd:
-        return ('{"BackendState":"Running"}', "", 0)
-    if "debug prefs" in cmd:
-        return ('{"RunSSH": false}', "", 0)
-    if "ufw status" in cmd:
-        return ("Anywhere on tailscale0     ALLOW IN    Anywhere", "", 0)  # tailscale0 allowed
-    return ("", "", 0)
-_sm_core.run_command = _rc_iface
-check("ssh off ALLOWED when tailscale0 allowed in UFW", _sm_hosts.remote_set_public_ssh(object(), "off")[0] is True)
 
-_sm_core.run_command = lambda *a, **k: ("", "", 0)
-check("ssh allow is never lockout-guarded", _sm_hosts.remote_set_public_ssh(object(), "allow")[0] is True)
-check("ssh limit is never lockout-guarded", _sm_hosts.remote_set_public_ssh(object(), "limit")[0] is True)
-_sm_core.run_command = _orig_rc
+def _ufw_says(mode, tailscale_iface=False):
+    """Stub run_privileged so the host reports having ended up in `mode`.
+
+    `ufw-status verbose` is a DIFFERENT question — _tailnet_ssh_state asks it to find out whether
+    the tailscale0 interface is allowed — so the two are answered separately."""
+    def _rp(s, v, a=(), **k):
+        if v != "ufw-status":
+            return ("", "", 0)
+        if list(a)[:1] == ["verbose"]:
+            return ("Anywhere on tailscale0     ALLOW IN    Anywhere\n" if tailscale_iface
+                    else "Status: active\n", "", 0)
+        return (_UFW_BY_MODE[mode], "", 0)
+    _sm_core.run_privileged = _rp
+
+
+try:
+    def _rc_no_tailnet(server, cmd, **kw):
+        if "status --json" in cmd:
+            return ('{"BackendState":"Stopped"}', "", 0)   # Tailscale not running
+        return ("", "", 0)
+    _sm_core.run_command = _rc_no_tailnet
+    _ufw_says("off")
+    _ok, _msg = _sm_hosts.remote_set_public_ssh(object(), "off")
+    check("ssh off REFUSED when no Tailscale path (anti-lockout)",
+          _ok is False and "lock you out" in _msg.lower(), str(_msg))
+
+    def _rc_ts_ssh(server, cmd, **kw):
+        if "status --json" in cmd:
+            return ('{"BackendState":"Running"}', "", 0)
+        if "debug prefs" in cmd:
+            return ('{"RunSSH": true}', "", 0)                # Tailscale SSH enabled
+        return ("", "", 0)
+    _sm_core.run_command = _rc_ts_ssh
+    _ufw_says("off")
+    check("ssh off ALLOWED when Tailscale SSH enabled",
+          _sm_hosts.remote_set_public_ssh(object(), "off")[0] is True)
+
+    def _rc_iface(server, cmd, **kw):
+        if "status --json" in cmd:
+            return ('{"BackendState":"Running"}', "", 0)
+        if "debug prefs" in cmd:
+            return ('{"RunSSH": false}', "", 0)
+        if "ufw status" in cmd:
+            return ("Anywhere on tailscale0     ALLOW IN    Anywhere", "", 0)  # tailscale0 allowed
+        return ("", "", 0)
+    _sm_core.run_command = _rc_iface
+    _ufw_says("off", tailscale_iface=True)
+    check("ssh off ALLOWED when tailscale0 allowed in UFW",
+          _sm_hosts.remote_set_public_ssh(object(), "off")[0] is True)
+
+    _sm_core.run_command = lambda *a, **k: ("", "", 0)
+    _ufw_says("allow")
+    check("ssh allow is never lockout-guarded",
+          _sm_hosts.remote_set_public_ssh(object(), "allow")[0] is True)
+    _ufw_says("limit")
+    check("ssh limit is never lockout-guarded",
+          _sm_hosts.remote_set_public_ssh(object(), "limit")[0] is True)
+
+    # A host with no ufw: every verb fails and the firewall reports nothing. This used to answer
+    # (True, "Public SSH is now rate-limited").
+    _sm_core.run_privileged = lambda s, v, a=(), **k: ("", "ufw: command not found", 127)
+    _ok, _msg = _sm_hosts.remote_set_public_ssh(object(), "limit")
+    check("ssh mode: a host with no active UFW is refused, not reported as hardened",
+          _ok is False and "not active" in _msg.lower(), str(_msg))
+
+    # ...and a host where UFW is up but the rule did not take.
+    _ufw_says("allow")
+    _ok, _msg = _sm_hosts.remote_set_public_ssh(object(), "limit")
+    check("ssh mode: a rule that did not take is reported as the failure it is",
+          _ok is False and "still reports" in _msg.lower(), str(_msg))
+finally:
+    _sm_core.run_command = _orig_rc
+    _sm_core.run_privileged = _orig_rp
 
 # ── secret encryption round-trip ──────────────────────────────
 _pre = {p for p in (config.CRED_KEY_FILE, config.SECRET_FILE, config.CONFIG_FILE)

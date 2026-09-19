@@ -343,8 +343,16 @@ def remote_ufw_allow_game_port(server, port, name="Game"):
     """Open the game server port for BOTH TCP and UDP in ONE UFW rule, tagging the
     rule with the game server's name (its LinuxGSM username) so the firewall list
     shows which server each port belongs to. A bare `ufw allow <port>` covers tcp+udp."""
+    # Range-checked HERE, like every sibling in this module. The verb's _portspec raises
+    # VerbError, run_privileged does not catch it, and there is no route-level handler — so
+    # `POST /api/remote/<id>/game-port/70000/open` came back as a bare HTML 500 that the caller's
+    # .then(r => r.json()) could not parse.
+    try:
+        port = _ufw_port_int(port)
+    except (TypeError, ValueError):
+        return 0, "Invalid port"
     comment = re.sub(r"[^A-Za-z0-9 _.-]", "", name or "Game")[:60] or "Game"
-    out, err, rc = _core.run_privileged(server, "ufw-allow-port", [port, comment], timeout=15)
+    out, err, rc = _core.run_privileged(server, "ufw-allow-port", [str(port), comment], timeout=15)
     ok = rc == 0
     return (1 if ok else 0), f"Port {port}: {'opened (TCP+UDP)' if ok else (err or out or 'failed')}"
 
@@ -1709,6 +1717,18 @@ def remote_set_public_ssh(server, mode):
     for verb, vargs in steps:
         _core.run_privileged(server, verb, vargs, timeout=15)  # deletes of absent rules are harmless
     labels = {"allow": "open (allow)", "limit": "rate-limited", "off": "disabled (tailnet-only)"}
+    # ASK THE HOST what it ended up with. This used to return True unconditionally, so on a host
+    # with no ufw at all every verb failed and the operator still got "✓ Public SSH is now disabled
+    # (tailnet-only)", an audit row saying the hardening succeeded, and port 22 open to the
+    # internet. The exit codes cannot answer it either: a delete of an absent rule is a normal
+    # non-zero, which is exactly why they were being ignored.
+    state = remote_public_ssh_status(server)
+    if not state.get("active"):
+        return False, ("UFW is not active on this host, so public SSH cannot be controlled from "
+                       "here — port 22 is governed by whatever else is in front of it.")
+    if state.get("mode") != mode:
+        return False, ("Could not set public SSH to %s — the firewall still reports it as %s."
+                       % (labels[mode], labels.get(state.get("mode"), state.get("mode"))))
     return True, f"Public SSH is now {labels[mode]}"
 
 

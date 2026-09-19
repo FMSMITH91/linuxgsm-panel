@@ -71,11 +71,16 @@ def register(app):
     @login_required
     @permission_required(MANAGE_REMOTES)
     def api_remote_security_autoblock(remote_id):
-        """Turn the rolling auto-block (attempts >= threshold over 7 days) on/off for a remote host,
-        and optionally update the shared threshold."""
+        """Turn the rolling auto-block (attempts >= threshold over 7 days) on/off for a remote host.
+
+        Turning it on or off is PER HOST, which is what MANAGE_REMOTES is for. The THRESHOLD is
+        install-wide — the panel-host sibling that writes it is @superadmin_required — so a host
+        admin scoped to one VPS could move it for every host, to 3 (mass-blocking) or to a huge
+        value (disabling it everywhere). Confirmed by driving both routes as such a user."""
         remote = get_remote(remote_id)
         enabled = bool(_json_body().get("enabled"))
-        _maybe_set_threshold(_json_body())
+        if current_user.is_superadmin:
+            _maybe_set_threshold(_json_body())
         _set_autoblock_host(remote_id, enabled)
         log_action(current_user, "autoblock_toggle", target=remote.name, detail="on" if enabled else "off")
         if enabled:
@@ -84,10 +89,15 @@ def register(app):
 
     @app.route("/api/remote/<int:remote_id>/security/whitelist", methods=["POST"])
     @login_required
-    @permission_required(MANAGE_REMOTES)
+    @superadmin_required
     def api_remote_security_whitelist(remote_id):
-        """Add/remove a global security-whitelist entry from a remote host's page (the whitelist is
-        global; the panel-jail ignoreip it feeds is applied on the panel host)."""
+        """Add/remove a global security-whitelist entry from a remote host's page.
+
+        The whitelist is INSTALL-WIDE — this route does not even use its remote_id beyond the
+        access check — and the panel-host sibling that writes the same list is
+        @superadmin_required. At MANAGE_REMOTES a host admin scoped to one VPS could make any
+        address permanently exempt from fail2ban bans and UFW auto-blocks everywhere, and lift any
+        ban it already had, including on the panel host they have no rights to."""
         get_remote(remote_id)
         return _whitelist_mutate(app, _json_body())
 
@@ -207,16 +217,23 @@ def register(app):
         now_public = new_bind in wildcard
         fw_note = ""
         if local:
+            # Each of these returns (ok, msg) and all three were called for effect, with fw_note
+            # assigned on the next line regardless — so the panel could restart onto a port the
+            # firewall does not allow having just said "Firewall: opened 5055.", on the one route
+            # whose docstring is "Refuses anything that would leave the panel unreachable".
             try:
                 if now_public:
-                    remote_ufw_open_port(local, new_port, "tcp", "LinuxGSM Panel")
-                    fw_note = f" Firewall: opened {new_port}."
+                    _fw_ok, _fw_msg = remote_ufw_open_port(local, new_port, "tcp", "LinuxGSM Panel")
+                    fw_note = (f" Firewall: opened {new_port}." if _fw_ok
+                               else f" FIREWALL NOT UPDATED — port {new_port} may be blocked ({_fw_msg}).")
                 else:
-                    remote_ufw_close_port(local, new_port, "tcp")
-                    fw_note = f" Firewall: {new_port} kept tailnet-only."
+                    _fw_ok, _fw_msg = remote_ufw_close_port(local, new_port, "tcp")
+                    fw_note = (f" Firewall: {new_port} kept tailnet-only." if _fw_ok
+                               else f" Firewall rule for {new_port} could not be removed ({_fw_msg}).")
                 if new_port != cur_port:
-                    remote_ufw_close_port(local, cur_port, "tcp")
-                    fw_note += f" Removed the old rule for {cur_port}."
+                    _old_ok, _old_msg = remote_ufw_close_port(local, cur_port, "tcp")
+                    fw_note += (f" Removed the old rule for {cur_port}." if _old_ok
+                                else f" The old rule for {cur_port} is still there ({_old_msg}).")
             except Exception:
                 app.logger.warning("change-port: firewall update failed", exc_info=True)
 
