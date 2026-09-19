@@ -577,17 +577,6 @@ def parse_missing_deps(output):
     return deps
 
 
-def port_in_use(server, port):
-    """True if something is already listening on `port` (tcp or udp) on the remote."""
-    try:
-        out, _, _ = _core.run_command(
-            server, f"ss -Hlntu 'sport = :{port}' 2>/dev/null | wc -l", timeout=8
-        )
-        return out.strip().isdecimal() and int(out.strip()) > 0
-    except Exception:
-        return False
-
-
 
 
 # ─── Remote OS Commands ───────────────────────────────────────
