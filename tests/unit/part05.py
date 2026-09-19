@@ -1115,37 +1115,60 @@ _pa_me = __import__("pwd").getpwuid(os.getuid()).pw_name
 _pa_why = ""
 try:
     _priv_mod = __import__("panel.security.privileged", fromlist=["x"])
-    _priv_mod._managed_user(_pa_me)
+    _priv_mod._destroyable_user(_pa_me)
 except Exception as _e:
     _pa_why = str(_e)
-check("privileged: _managed_user refuses the account the panel itself runs as",
+check("privileged: _destroyable_user refuses the account the panel itself runs as",
       "panel" in _pa_why.lower(), "accepted %r (%r)" % (_pa_me, _pa_why))
 check("privileged: ...and an ordinary game-server account is still accepted",
-      _priv_mod._managed_user("codserver") == "codserver")
-# The verb itself, not just the validator — the argv must never be built.
-_pa_verb_why = ""
-try:
-    _priv_mod.helper_argv("user-remove-home", [_pa_me])
-except Exception as _e:
-    _pa_verb_why = str(_e)
-check("privileged: the user-remove-home VERB refuses it too",
-      bool(_pa_verb_why), "built an argv for %r" % _pa_me)
-check("privileged: ...and still builds for a real game server",
-      _priv_mod.helper_argv("user-remove-home", ["codserver"])[-2:]
-      == ["user-remove-home", "codserver"])
+      _priv_mod._destroyable_user("codserver") == "codserver")
+
+# ── The guard belongs on the FOUR destructive verbs, not on v_managed_user ────────────────────
+# v_managed_user gates 20 verbs. Only four destroy anything, and the panel legitimately names its
+# OWN account to several of the rest — `tailscale-set-operator` exists to pass it
+# (tailscale_integration hands it _current_os_user()), and on a single-box install where LinuxGSM
+# runs under the same account as the panel, the game-file reads and `crontab-list` take it too.
+# Putting the refusal on v_managed_user refused ALL TWENTY: it broke the file browser, downloads,
+# backups, cron and Tailscale operator setup on every install, to protect four verbs. Both halves
+# are asserted here, because only the second half catches that regression.
+for _dv in ("user-delete", "user-delete-force", "user-kill-processes", "user-remove-home"):
+    _why = ""
+    try:
+        _priv_mod.helper_argv(_dv, [_pa_me])
+    except Exception as _e:
+        _why = str(_e)
+    check("privileged: %s refuses the panel's own account" % _dv,
+          bool(_why), "built an argv for %r" % _pa_me)
+    check("privileged: %s still builds for a real game server" % _dv,
+          _priv_mod.helper_argv(_dv, ["codserver"])[-1] == "codserver")
+for _av, _aargs in (("tailscale-set-operator", [_pa_me]),
+                    ("game-file-read", [_pa_me, "cfg/server.cfg"]),
+                    ("game-dir-tar", [_pa_me, "serverfiles"]),
+                    ("game-backup-read", [_pa_me, "b.tar.gz"]),
+                    ("crontab-list", [_pa_me]),
+                    ("user-create", [_pa_me])):
+    _ok = True
+    try:
+        _priv_mod.helper_argv(_av, _aargs)
+    except Exception as _e:
+        _ok, _why = False, str(_e)
+    check("privileged: %s still ACCEPTS the panel's own account" % _av, _ok,
+          "refused %r (%s)" % (_pa_me, _why if not _ok else ""))
 # Helper side: SUDO_UID is how it learns who invoked it on a root install.
 _pa_env = os.environ.get("SUDO_UID")
 os.environ["SUDO_UID"] = str(os.getuid())
 try:
     _pa_h_why = ""
     try:
-        _helper.v_managed_user(_pa_me)
+        _helper.v_destroyable_user(_pa_me)
     except Exception as _e:
         _pa_h_why = str(_e)
-    check("helper: v_managed_user refuses the account that invoked it",
+    check("helper: v_destroyable_user refuses the account that invoked it",
           "panel" in _pa_h_why.lower(), "accepted %r (%r)" % (_pa_me, _pa_h_why))
     check("helper: ...and an ordinary game-server account is still accepted",
-          _helper.v_managed_user("codserver") == "codserver")
+          _helper.v_destroyable_user("codserver") == "codserver")
+    check("helper: v_managed_user itself still accepts it, so the 16 non-destructive verbs work",
+          _helper.v_managed_user(_pa_me) == _pa_me)
 finally:
     if _pa_env is None:
         os.environ.pop("SUDO_UID", None)

@@ -499,6 +499,18 @@ def _managed_user(s):
             raise VerbError("refusing a uid-0 account")
     except KeyError:
         pass          # not an account HERE; the name is still a valid shape for a remote host
+    return s
+
+
+def _destroyable_user(s):
+    """A Linux user the panel may DESTROY — _managed_user, and never the panel's own account.
+
+    The mirror of the helper's v_destroyable_user, and separate from _managed_user for the reason
+    given there: _managed_user gates 20 verbs, only four of which destroy anything, and the panel
+    legitimately passes its OWN account to several of the others — `tailscale-set-operator` is
+    built to take it, and on a single-box install the game-file reads and `crontab-list` take it
+    too."""
+    s = _managed_user(s)
     if _is_panel_account(s):
         raise VerbError("refusing the panel's own account")
     return s
@@ -775,11 +787,11 @@ _ARGV = {
     "crontab-list": ([_managed_user], lambda a: ["crontab", "-u", a[0], "-l"], None),
     "user-create": ([_managed_user], lambda a: ["useradd", "-m", "-s", "/bin/bash", a[0]], None),
     "user-lock-password": ([_managed_user], lambda a: ["passwd", "-l", a[0]], None),
-    "user-delete": ([_managed_user], lambda a: ["userdel", "-r", a[0]], None),
-    "user-delete-force": ([_managed_user], lambda a: ["userdel", "-r", "-f", a[0]], None),
-    "user-kill-processes": ([_managed_user], lambda a: ["pkill", "-9", "-u", a[0]], None),
+    "user-delete": ([_destroyable_user], lambda a: ["userdel", "-r", a[0]], None),
+    "user-delete-force": ([_destroyable_user], lambda a: ["userdel", "-r", "-f", a[0]], None),
+    "user-kill-processes": ([_destroyable_user], lambda a: ["pkill", "-9", "-u", a[0]], None),
     # rm -rf as root: the path is CONSTRUCTED from a validated name, never passed in.
-    "user-remove-home": ([_managed_user], lambda a: ["rm", "-rf", "--", home_of(a[0])], None),
+    "user-remove-home": ([_destroyable_user], lambda a: ["rm", "-rf", "--", home_of(a[0])], None),
 
     # ── log reads ──
     # Neither journalctl nor tail is ever handed a caller's target: the SOURCE is a name from a

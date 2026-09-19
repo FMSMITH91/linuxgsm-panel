@@ -657,6 +657,20 @@ def v_managed_user(s):
             raise ValueError("refusing a uid-0 account")
     except KeyError:
         pass          # not a user on this host (yet) — shape is valid, the verb will fail if wrong
+    return s
+
+
+def v_destroyable_user(s):
+    """A Linux user the panel may DESTROY — v_managed_user, and never the panel's own account.
+
+    Deliberately separate from v_managed_user, which gates 20 verbs. Only four of them destroy
+    anything, and the panel legitimately names its OWN account to several of the rest:
+    `tailscale-set-operator` exists precisely to pass it (tailscale_integration passes
+    _current_os_user()), and on a single-box install where LinuxGSM runs under the same account as
+    the panel, `game-file-read`, `game-dir-tar`, `game-backup-read` and `crontab-list` all take it
+    too. Putting the refusal on v_managed_user broke every one of those — the file browser,
+    downloads, backups, cron and Tailscale setup — to protect four verbs. Scope it to the four."""
+    s = v_managed_user(s)
     if _is_panel_account(s):
         raise ValueError("refusing the panel's own account")
     return s
@@ -1002,13 +1016,13 @@ VERBS = {
     "user-create": ([v_managed_user],
                     lambda a: ["useradd", "-m", "-s", "/bin/bash", a[0]], None),
     "user-lock-password": ([v_managed_user], lambda a: ["passwd", "-l", a[0]], None),
-    "user-delete": ([v_managed_user], lambda a: ["userdel", "-r", a[0]], None),
-    "user-delete-force": ([v_managed_user], lambda a: ["userdel", "-r", "-f", a[0]], None),
-    "user-kill-processes": ([v_managed_user], lambda a: ["pkill", "-9", "-u", a[0]], None),
+    "user-delete": ([v_destroyable_user], lambda a: ["userdel", "-r", a[0]], None),
+    "user-delete-force": ([v_destroyable_user], lambda a: ["userdel", "-r", "-f", a[0]], None),
+    "user-kill-processes": ([v_destroyable_user], lambda a: ["pkill", "-9", "-u", a[0]], None),
     # rm -rf as root. The path is CONSTRUCTED from a validated user name (home_of), never passed
     # in, so the argument this verb receives is a name and the thing it deletes can only ever be a
     # direct child of /home.
-    "user-remove-home": ([v_managed_user], lambda a: ["rm", "-rf", "--", home_of(a[0])], None),
+    "user-remove-home": ([v_destroyable_user], lambda a: ["rm", "-rf", "--", home_of(a[0])], None),
 
     # ── log reads ──
     # journalctl and tail both take a target. Neither target ever comes from a caller: the SOURCE
