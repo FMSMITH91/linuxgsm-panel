@@ -5,7 +5,7 @@
 (function(){
   var box = document.getElementById('sessions-list');
   if (!box) return;
-  function mp(){ return window.MOUNT || ''; }   // set by base.html's footer script (after this block)
+  function mp(){ return window.MOUNT || ''; }   // set by base.html, before this file loads
   function rel(iso){
     if(!iso) return '';
     var s = (Date.now() - new Date(iso).getTime())/1000;
@@ -70,8 +70,11 @@
         if(btn){ btn.disabled = false; btn.textContent = 'Revoke'; }
       });
   }
-  // This block is parsed INSIDE the content, before base.html's footer sets window.MOUNT — so wait
-  // for DOMContentLoaded (footer scripts have run by then) before the first fetch, or MOUNT is blank.
+  // Deferred to DOMContentLoaded so the first fetch happens once the page has actually rendered.
+  // It used to be deferred because this code was INLINE in the content block, ahead of the
+  // window.MOUNT assignment in base.html's footer — that stopped being true when it was extracted
+  // into {% block scripts %}, which loads after both MOUNT and panel.js, and a comment describing
+  // the old ordering sends the next reader looking for a hazard that is gone.
   if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', load);
   else load();
 

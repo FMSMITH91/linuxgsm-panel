@@ -168,6 +168,80 @@ if esprima:
     check(not _naked_submit, "static/js: a native form.submit() re-arms its CSRF token first",
           "form.submit() with no ensureCsrfFields in the same function at: %s" % _naked_submit[:4])
 
+# ── data-no-i18n has to survive a JS write ────────────────────────────────────────────────────
+# `walk()` consults the attribute only on the node it is ENTERED at, and the MutationObserver
+# enters at the freshly added TEXT node (which has no attributes) or at an appended child — never
+# at the guarded ancestor. `el.textContent = x` replaces the children with a brand-new Text node,
+# so `<span data-no-i18n>` above it was never read: measured in a browser with LANG='es', a
+# guarded span written with textContent 'Online' displayed 'En línea', indistinguishable from an
+# unguarded one. Every template-side guard of that shape — #tag-list, #game-version,
+# #acct-username, #eu-name — was decorative, and a username called Admin rendered as
+# "Administrador".
+#
+# Structural, because this suite parses JavaScript and cannot execute it. Measured in a browser
+# against the real i18n.js before and after: guarded text now stays 'Online' and 'Status' while an
+# unguarded control still becomes 'Copias de seguridad'.
+_i18n_src = (ROOT / "static" / "js" / "i18n.js").read_text(encoding="utf-8")
+check("function guardedAbove(" in _i18n_src and "el.parentNode" in _i18n_src,
+      "i18n: there is a guardedAbove() that walks up the ancestors", "no ancestor check")
+_obs = _i18n_src[_i18n_src.index("new MutationObserver"):]
+_obs = _obs[:_obs.index(".observe(")]
+_obs_walks = [ln for ln in _obs.splitlines() if "walk(" in ln]
+check(bool(_obs_walks) and all("guardedAbove" in ln for ln in _obs_walks),
+      "i18n: every walk() the observer starts is gated on guardedAbove first",
+      "ungated: %s" % [ln.strip()[:60] for ln in _obs_walks if "guardedAbove" not in ln])
+
+# ── the flash sweep must not close a standing warning ─────────────────────────────────────────
+# chrome.js selected every `.alert-dismissible` in the document at T+6s, and nags.js gives the
+# OS-updates banner that class to park its close button — so the panel's "System updates waiting /
+# N security" warning erased itself six seconds after every page load, recorded no dismissal, and
+# flickered back on the next visibility poll. A flash is a transient reply to something the user
+# just did; a standing warning is not. Measured in a browser: banner still there, flash dismissed.
+_chrome_src = (ROOT / "static" / "js" / "chrome.js").read_text(encoding="utf-8")
+check("'.flash-container .alert-dismissible'" in _chrome_src
+      or '".flash-container .alert-dismissible"' in _chrome_src,
+      "chrome: the 6s auto-dismiss is scoped to the flash container",
+      "it still sweeps every .alert-dismissible on the page")
+
+# ── the tag chips are repainted into an element that exists ───────────────────────────────────
+# `msrv-tags-<id>` was the container on the deleted /servers/manage page, so the lookup had been
+# returning null ever since: the row kept its old chips after a save, and the dashboard's tag
+# FILTER reads its truth from those very chips, so filtering by a tag just added hid the server
+# that now carries it.
+_tags_src = (ROOT / "static" / "js" / "server_tags.js").read_text(encoding="utf-8")
+_dash_tpl = (ROOT / "templates" / "dashboard.html").read_text(encoding="utf-8")
+check("getElementById('srv-tags-' + serverId)" in _tags_src
+      and "getElementById('msrv-tags-" not in _tags_src,
+      "tags: the chip repaint targets the id the dashboard actually renders",
+      "still looking up msrv-tags-<id>")
+check('id="srv-tags-{{ srv.id }}"' in _dash_tpl,
+      "tags: ...and the dashboard renders it", "no srv-tags-<id> container")
+
+# ── a file called "Backups" must not be renamed by the translator ─────────────────────────────
+# A directory can legitimately be called Backups, Console, Status or Log — all keys in
+# translations/*/ — and without a guard the browser renders the name of a directory that does not
+# exist under that name, in the listing, the breadcrumb, the upload-destination label and the
+# editor header. `backups/` is a standard LinuxGSM directory. The file already knew: _conflictNode
+# guards the overwrite label for exactly this reason.
+_sf_src = (ROOT / "static" / "js" / "server_files.js").read_text(encoding="utf-8")
+_sf_missing = []
+for _label, _needle in (
+        ("the row's name span", "font-size:.85rem;\" data-no-i18n>'+esc(opts.name)"),
+        ("each breadcrumb segment", "'+esc(acc)+'\" data-no-i18n>'+esc(p)+'"),
+        ("the upload destination", "dest.setAttribute('data-no-i18n','')"),
+        ("the editor header", "_ep.setAttribute('data-no-i18n','')")):
+    if _needle not in _sf_src:
+        _sf_missing.append(_label)
+check(not _sf_missing, "files: every element holding a path segment is marked do-not-translate",
+      "unguarded: %s" % _sf_missing)
+
+# ── the document-wide drop suppression must not take the textareas with it ────────────────────
+# preventDefault() on a bubbled event still cancels the default action, so suppressing the
+# browser's own file-drop handler document-wide also cancelled drops into this page's three
+# textareas: dragging a selection into the raw config editor did nothing, on this page only.
+check("closest('textarea, input" in _sf_src,
+      "files: the drop suppression exempts form controls", "a drop into the editor is cancelled")
+
 # ── 0b. the server tab bar is the SAME set of destinations on both pages ──────────────────────
 # server_detail.html and server_files.html each render the tab strip, and server_files.html even
 # documents the rule ("same set as the server detail page"). It drifted anyway: History was on the

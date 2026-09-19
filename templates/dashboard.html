@@ -224,18 +224,22 @@
               <span class="game-name text-info d-block text-truncate" id="game-name-{{ srv.id }}"
                     style="font-size:.72rem;max-width:22ch;" title="In-game server name (what players see)">{{ server_names.get(srv.id) or '' }}</span>
               <span class="text-secondary d-block" style="font-size: .75rem;">{{ srv.short_name }}</span>
-              {% if srv.tags %}
               {# data-no-i18n: tag names are user-authored, and the translation walker would happily
                  "translate" one that collides with a catalog key ("Online", "Status", …). The colour
-                 is stored only after passing _valid_hex_color, so it is safe in a style attribute. #}
-              <span class="d-block mt-1 srv-tags" data-no-i18n>
+                 is stored only after passing _valid_hex_color, so it is safe in a style attribute.
+
+                 Rendered even when the server has no tags, and carrying an id: server_tags.js
+                 repaints THIS element after a save, and the tag filter in dashboard.js reads the
+                 chips inside it. Behind an `{% if srv.tags %}` there was nothing to repaint, so a
+                 server's first tag could not appear without a reload. panel.css gives it its top
+                 margin only when it is non-empty. #}
+              <span id="srv-tags-{{ srv.id }}" class="d-block srv-tags" data-no-i18n>
                 {% for tag in srv.tags|sort(attribute='name') %}
                 <span class="badge tag-chip" data-tag-id="{{ tag.id }}" data-no-i18n
                       {% if tag.color %}style="background-color: {{ tag.color }};"{% endif %}
                       {% if not tag.notify %}title="Alerts are muted for this tag"{% endif %}>{{ tag.name }}{% if not tag.notify %} <i class="bi bi-bell-slash"></i>{% endif %}</span>
                 {% endfor %}
               </span>
-              {% endif %}
               <span class="text-secondary d-none" id="map-{{ srv.id }}" style="font-size:.72rem;" title="Current map"></span>
             </td>
             <td class="d-none d-md-table-cell">{{ srv.game_display or srv.game_type }}</td>

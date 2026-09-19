@@ -120,7 +120,13 @@
       // Pre-tick from the JUST-FETCHED membership, not from the chips in the row: the row can be
       // stale (another admin tagged this server since page load), and because saving REPLACES the
       // whole set, a stale unticked box would silently delete their change.
-      var have = {}, holder = document.getElementById('msrv-tags-' + serverId);
+      // `msrv-tags-<id>` was the container on the deleted /servers/manage page; the dashboard
+      // renders `srv-tags-<id>`. The lookup had been returning null since that page went, so both
+      // repaints below were dead code — the row kept its old chips after a save, and the
+      // dashboard's tag FILTER reads its truth from those very chips (dashboard.js builds `have`
+      // from tr.querySelectorAll('.tag-chip')), so filtering by a tag just added hid the server
+      // that now carries it.
+      var have = {}, holder = document.getElementById('srv-tags-' + serverId);
       TAGS.forEach(function(tag){
         if ((tag.server_ids || []).indexOf(serverId) !== -1) have[tag.id] = true;
       });
@@ -168,7 +174,9 @@
     });
   };
 
-  // MOUNT is set by base.html's footer, after this block is parsed.
+  // Deferred to DOMContentLoaded so the first fetch waits for the page. (This used to be about
+  // window.MOUNT, which base.html's footer set AFTER the inline block this file was extracted
+  // from; {% block scripts %} loads after it, so that ordering hazard no longer exists.)
   if (document.getElementById('tag-list')){
     if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', function(){ loadTags(); });
     else loadTags();

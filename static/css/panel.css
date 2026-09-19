@@ -284,6 +284,9 @@
                 font-weight: 500; margin-right: .25rem; }
     .tag-chip[style*="background-color"] { color: #0a0f1a; border-color: transparent; }
     .btn.tag-filter.active { background: var(--accent); border-color: var(--accent); color: #0a0f1a; }
+    /* The tag-chip row is rendered even for a server with no tags, so server_tags.js has a
+       container to repaint after a save — :not(:empty) keeps the empty one from adding a gap. */
+    .srv-tags:not(:empty) { margin-top: .25rem; }
 
     /* ── MOVABLE PANELS ──
        Layout controls are HIDDEN during normal use and only appear in edit mode (the "Customise"

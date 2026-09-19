@@ -2369,8 +2369,17 @@ try:
     check("tags: the chip renders on the row with its name and do-not-translate marker",
           ('class="badge tag-chip" data-tag-id="%d" data-no-i18n' % _tag_id) in _dash_html
           and "production</span>" in _dash_html
-          and 'class="d-block mt-1 srv-tags" data-no-i18n' in _dash_html,
+          and ('id="srv-tags-%d" class="d-block srv-tags" data-no-i18n' % gs_id) in _dash_html,
           "chip markup missing from the rendered dashboard")
+    # ...and the container is there even for a server with NO tags, because that is what
+    # server_tags.js repaints into and what the dashboard's tag filter reads from.
+    c.post("/api/server/%d/tags" % gs_id, json={"tag_ids": []})
+    _untagged_html = c.get("/").get_data(as_text=True)
+    check("tags: the chip container is rendered even when the server has no tags",
+          ('id="srv-tags-%d"' % gs_id) in _untagged_html
+          and ('data-tag-id="%d"' % _tag_id) not in _untagged_html.split('id="srv-tags-%d"' % gs_id)[1][:400],
+          "no container for an untagged server — its first tag could not appear without a reload")
+    c.post("/api/server/%d/tags" % gs_id, json={"tag_ids": [_tag_id]})
     # The muted-tag branch (bell-slash + title) only renders when a MUTED tag is actually assigned.
     c.post("/api/server/%d/tags" % gs_id, json={"tag_ids": [_tag_id, _mute_id]})
     _muted_html = c.get("/").get_data(as_text=True)

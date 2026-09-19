@@ -32,6 +32,15 @@ window.t = function(s){ return (window.I18N && window.I18N[s]) || s; };
     var out = (v !== undefined) ? v : en;
     if (el.getAttribute(a) !== out) el.setAttribute(a, out);
   }
+  // Is anything ABOVE this node guarded? The recursive walk below stops at a guarded element on
+  // the way down, so it never needs to ask — but the observer enters at an ARBITRARY node and
+  // knows nothing about its ancestors, which is where the guard was being lost.
+  function guardedAbove(node){
+    for (var el = node && node.parentNode; el && el.nodeType === 1; el = el.parentNode){
+      if (SKIP[el.tagName] || el.hasAttribute('data-no-i18n')) return true;
+    }
+    return false;
+  }
   function walk(node){
     if (!node) return;
     if (node.nodeType === 3){ tText(node); return; }
@@ -46,8 +55,17 @@ window.t = function(s){ return (window.I18N && window.I18N[s]) || s; };
     new MutationObserver(function(muts){
       for (var i = 0; i < muts.length; i++){
         var m = muts[i];
-        if (m.type === 'characterData') walk(m.target);
-        else for (var j = 0; j < m.addedNodes.length; j++) walk(m.addedNodes[j]);
+        // guardedAbove FIRST. `el.textContent = x` REPLACES the children with a brand-new Text
+        // node, so what arrives here is that text node — which has no attributes — and
+        // `<span data-no-i18n>` above it was never consulted. Appending an element into a
+        // guarded parent had the same hole. Measured before this: a guarded span written with
+        // textContent 'Online' displayed 'En línea', indistinguishable from an unguarded one, so
+        // every template-side guard of that shape (#tag-list, #game-version, #acct-username,
+        // #eu-name) was decorative — and a username called Admin rendered as "Administrador".
+        if (m.type === 'characterData'){ if (!guardedAbove(m.target)) walk(m.target); continue; }
+        for (var j = 0; j < m.addedNodes.length; j++){
+          if (!guardedAbove(m.addedNodes[j])) walk(m.addedNodes[j]);
+        }
       }
     }).observe(document.body, {childList:true, subtree:true, characterData:true});
   }
