@@ -2,7 +2,10 @@
 {% block title %}Groups & Permissions{% endblock %}
 
 {% macro game_server_access(all_remotes, all_servers, selected_ids, idprefix) %}
-<label class="form-label fw-bold mt-3" for="manage-groups-name">Individual game servers</label>
+{# No `for`: this heads a LIST of per-server checkboxes, not one control. It used to point at
+   manage-groups-name — the Group Name text box in a different card entirely — which gave that
+   input the accessible name "Individual game servers". #}
+<span class="form-label fw-bold mt-3 d-block">Individual game servers</span>
 <div class="form-text mt-0 mb-2">Optional — grant specific servers (adds to any whole-host access above).</div>
 <div style="max-height: 180px; overflow-y: auto;">
   {% for r in all_remotes %}
@@ -126,16 +129,19 @@
         <div class="row">
           <div class="col-md-4">
             <div class="mb-3">
-              <label class="form-label">Group Name</label>
-              <input id="manage-groups-name" type="text" name="name" class="form-control" value="{{ group.name }}" required>
+              <label class="form-label" for="manage-groups-name-{{ group.id }}">Group Name</label>
+              <input id="manage-groups-name-{{ group.id }}" type="text" name="name" class="form-control" value="{{ group.name }}" required>
             </div>
             <div class="mb-3">
-              <label class="form-label" for="manage-groups-description">Description</label>
-              <input id="manage-groups-description" type="text" name="description" class="form-control" value="{{ group.description }}">
+              <label class="form-label" for="manage-groups-description-{{ group.id }}">Description</label>
+              <input id="manage-groups-description-{{ group.id }}" type="text" name="description" class="form-control" value="{{ group.description }}">
             </div>
           </div>
           <div class="col-md-4">
-            <label class="form-label fw-bold" for="manage-groups-name-2">Permissions</label>
+            {# No `for`: this heads a GROUP of checkboxes, not a single control. It used to point
+               at manage-groups-name-2 — the Add Group modal's Name box — so clicking it moved
+               focus into a hidden dialog. #}
+            <span class="form-label fw-bold d-block">Permissions</span>
             {{ role_presets() }}
             <div style="max-height: 300px; overflow-y: auto;">
               {% for perm_key, perm_desc in all_perms.items() %}
@@ -201,7 +207,7 @@
           <div class="row">
             <div class="col-md-4">
               <div class="mb-3">
-                <label class="form-label">Group Name</label>
+                <label class="form-label" for="manage-groups-name-2">Group Name</label>
                 <input id="manage-groups-name-2" type="text" name="name" class="form-control" required>
               </div>
               <div class="mb-3">

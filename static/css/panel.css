@@ -417,7 +417,20 @@
       vertical-align: top;
       -webkit-user-select: none; user-select: none;   /* copying the log should not copy the gutter */
     }
+    /* A line with NO stamp needs the gutter reserved anyway, or its text starts where the clock
+       would have. The comment above claimed the indent on .console-line was enough; measured
+       against this stylesheet, stamped text began at x=103.39 and unstamped at x=25.00 — 78.39px
+       apart, exactly the 4.9rem indent. And that is the ORDINARY state of the console: the
+       priming window is a tail of the log file, which for most games carries no per-line time at
+       all, so history sat at one margin and live output at another. Same width and margin as
+       .console-ts so the two agree by construction. */
+    .console-line:not([data-ts])::before {
+      content: ""; display: inline-block; width: 4.6rem; margin-right: .3rem;
+      vertical-align: top;   /* same reason .console-ts sets it — see its own note */
+    }
     .console-output.ts-hidden .console-ts { display: none; }
+    /* ...and with the gutter switched off, neither the stamp nor its placeholder takes space. */
+    .console-output.ts-hidden .console-line::before { content: none; }
     .console-output.ts-hidden .console-line { padding-left: 0; text-indent: 0; }
 
     /* ── ANSI COLOUR IN THE CONSOLE ──
@@ -592,7 +605,13 @@
            column stayed put. Reported as "the gray doesn't go all the way across" on mobile, which
            is the only width the column is sticky at. */
         background-color: var(--bs-table-bg);
-        box-shadow: inset 0 0 0 9999px var(--bs-table-accent-bg),
+        /* The same fallback chain Bootstrap's own cell rule uses. 5.3 moved the row-state overlay
+           to --bs-table-bg-state and left --bs-table-accent-bg declared on .table as a constant
+           `transparent` — so reading only that last fallback made this layer a permanent no-op
+           and the pinned Actions column kept its resting shade while the rest of the row
+           lightened. Which is the exact symptom the note above says this rule exists to fix. */
+        box-shadow: inset 0 0 0 9999px var(--bs-table-bg-state,
+                                         var(--bs-table-bg-type, var(--bs-table-accent-bg))),
                     -10px 0 10px -10px rgba(0, 0, 0, .7);
       }
       /* The header has its own colour by design, and no accent state to track. */

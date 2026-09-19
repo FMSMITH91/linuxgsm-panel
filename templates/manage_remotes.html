@@ -199,32 +199,32 @@
               data-ajax-after="afterRemotesRefresh" data-ajax-reset="off">
           <input type="hidden" name="remote_id" value="{{ remote.id }}">
           <div class="col-md-3">
-            <label class="form-label" for="manage-remotes-name-2">Name</label>
-            <input id="manage-remotes-name-2" type="text" name="name" class="form-control" value="{{ remote.name }}">
+            <label class="form-label" for="manage-remotes-name-{{ remote.id }}">Name</label>
+            <input id="manage-remotes-name-{{ remote.id }}" type="text" name="name" class="form-control" value="{{ remote.name }}">
           </div>
           <div class="col-md-3">
-            <label class="form-label" for="manage-remotes-host-2">Host</label>
-            <input id="manage-remotes-host-2" type="text" name="host" class="form-control" value="{{ remote.host }}">
+            <label class="form-label" for="manage-remotes-host-{{ remote.id }}">Host</label>
+            <input id="manage-remotes-host-{{ remote.id }}" type="text" name="host" class="form-control" value="{{ remote.host }}">
           </div>
           <div class="col-md-1">
-            <label class="form-label" for="manage-remotes-ssh_port-2">Port</label>
-            <input id="manage-remotes-ssh_port-2" type="number" name="ssh_port" class="form-control" value="{{ remote.port }}">
+            <label class="form-label" for="manage-remotes-ssh_port-{{ remote.id }}">Port</label>
+            <input id="manage-remotes-ssh_port-{{ remote.id }}" type="number" name="ssh_port" class="form-control" value="{{ remote.port }}">
           </div>
           <div class="col-md-1">
-            <label class="form-label" for="manage-remotes-ssh_user-2">User</label>
-            <input id="manage-remotes-ssh_user-2" type="text" name="ssh_user" class="form-control" value="{{ remote.username }}">
+            <label class="form-label" for="manage-remotes-ssh_user-{{ remote.id }}">User</label>
+            <input id="manage-remotes-ssh_user-{{ remote.id }}" type="text" name="ssh_user" class="form-control" value="{{ remote.username }}">
           </div>
           <div class="col-md-2">
-            <label class="form-label" for="manage-remotes-auth_method-2">Auth method</label>
-            <select id="manage-remotes-auth_method-2" name="auth_method" class="form-select" data-action="toggleEditCreds" data-args='["@self", {{ remote.id }}]' data-on="change">
+            <label class="form-label" for="manage-remotes-auth_method-{{ remote.id }}">Auth method</label>
+            <select id="manage-remotes-auth_method-{{ remote.id }}" name="auth_method" class="form-select" data-action="toggleEditCreds" data-args='["@self", {{ remote.id }}]' data-on="change">
               <option value="key" {% if remote.auth_method == 'key' %}selected{% endif %}>SSH Key</option>
               <option value="password" {% if remote.auth_method == 'password' %}selected{% endif %}>Password</option>
               <option value="tailscale" {% if remote.auth_method == 'tailscale' %}selected{% endif %}>Tailscale SSH</option>
             </select>
           </div>
           <div class="col-md-2" id="edit-cred-group-{{ remote.id }}">
-            <label class="form-label" for="manage-remotes-credential-2">Credential</label>
-            <input id="manage-remotes-credential-2" type="password" name="credential" class="form-control" value=""
+            <label class="form-label" for="manage-remotes-credential-{{ remote.id }}">Credential</label>
+            <input id="manage-remotes-credential-{{ remote.id }}" type="password" name="credential" class="form-control" value=""
                    autocomplete="off" placeholder="Leave blank to keep current">
           </div>
           <div class="col-md-2 d-flex align-items-center">
@@ -235,8 +235,8 @@
             </div>
           </div>
           <div class="col-md-2">
-            <label class="form-label" for="manage-remotes-lgsm_user-2">LGSM User</label>
-            <input id="manage-remotes-lgsm_user-2" type="text" name="lgsm_user" class="form-control" value="{{ remote.linuxgsm_user }}">
+            <label class="form-label" for="manage-remotes-lgsm_user-{{ remote.id }}">LGSM User</label>
+            <input id="manage-remotes-lgsm_user-{{ remote.id }}" type="text" name="lgsm_user" class="form-control" value="{{ remote.linuxgsm_user }}">
           </div>
           <div class="col-md-1 d-flex align-items-end">
             <button type="submit" class="btn btn-primary btn-sm w-100">

@@ -19,7 +19,23 @@
     var b = e.target.closest('[data-mtab-btn]'); if(b) show(b.getAttribute('data-mtab-btn'));
   });
   var h = (location.hash || '').replace('#','');
-  show(TABS.indexOf(h) >= 0 ? h : 'console');
+  // DEFERRED to after this file has finished executing. show() guards on
+  // window.applyPlayersVisibility and window.loadHistory, and both are ASSIGNED further down this
+  // same file (not hoisted function declarations) — so on the initial load both guards were
+  // falsy and neither ran. Two visible consequences: the players card, which the template renders
+  // hidden and show() unhides, flashed in empty on every load and stayed if the first
+  // /playerlist fetch failed; and opening /server/<id>#history — which happens on any reload
+  // after clicking History, because show() replaceState's the hash — left three blank canvases
+  // until the 30s poll came round.
+  //
+  // A click on a tab was always fine: by then the whole file has run. Only the FIRST call, made
+  // during execution, could see the half-initialised module.
+  var _initial = TABS.indexOf(h) >= 0 ? h : 'console';
+  if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', function () { show(_initial); });
+  } else {
+    setTimeout(function () { show(_initial); }, 0);
+  }
 })();
 
 var consoleEl = document.getElementById('console-output');
