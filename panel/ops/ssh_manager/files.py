@@ -50,7 +50,7 @@ def _parse_cfg(text):
 # SQLAlchemy @validates hook: it fires on ASSIGNMENT, and never on rows loaded from the database.
 # A row written before the validator existed, or restored from a tampered backup, reaches this
 # code unchecked — and `user` is interpolated into `sudo -u {user}` and into /home/{user}.
-_SAFE_UNIX_USER_RE = re.compile(r"^[A-Za-z0-9_][A-Za-z0-9._-]{0,63}$")
+_SAFE_UNIX_USER_RE = re.compile(r"^[A-Za-z0-9_][A-Za-z0-9._-]{0,63}\Z")
 
 
 def _safe_abspath(user, relpath):
@@ -128,7 +128,7 @@ def _write_file_as_user(server, user, abspath, data_bytes):
     if len(b64) <= _ONE_SHOT_B64:
         inner = (f"{mk} && printf %s {_core._quote(b64)} | base64 -d > {_core._quote(tmp)} "
                  f"&& mv -f {_core._quote(tmp)} {_core._quote(abspath)}")
-        out, e, rc = _core.run_command(server, f"sudo -u {user} bash -c {_core._quote(_guarded(user, abspath, inner))}",
+        out, e, rc = _core.run_command(server, f"sudo -u {_core._quote(user)} bash -c {_core._quote(_guarded(user, abspath, inner))}",
                                  timeout=60, sudo=False)
         if _OUTSIDE_HOME in (out or ""):
             return False, "Invalid path"
@@ -142,7 +142,7 @@ def _write_file_as_user(server, user, abspath, data_bytes):
         if first:
             inner = f"{mk} && {inner}"
             inner = _guarded(user, abspath, inner)
-        out, e, rc = _core.run_command(server, f"sudo -u {user} bash -c {_core._quote(inner)}", timeout=60, sudo=False)
+        out, e, rc = _core.run_command(server, f"sudo -u {_core._quote(user)} bash -c {_core._quote(inner)}", timeout=60, sudo=False)
         if first and _OUTSIDE_HOME in (out or ""):
             return False, "Invalid path"
         if rc != 0:
@@ -150,8 +150,21 @@ def _write_file_as_user(server, user, abspath, data_bytes):
         op = ">>"
         first = False
     fin = f"base64 -d {_core._quote(tmp)} > {_core._quote(abspath)}.new && mv -f {_core._quote(abspath)}.new {_core._quote(abspath)} && rm -f {_core._quote(tmp)}"
-    o, e, rc = _core.run_command(server, f"sudo -u {user} bash -c {_core._quote(fin)}", timeout=60, sudo=False)
+    o, e, rc = _core.run_command(server, f"sudo -u {_core._quote(user)} bash -c {_core._quote(fin)}", timeout=60, sudo=False)
     return (rc == 0), (e or o or "")
+
+
+# Applied at the top of every config/mods entry point below. _safe_abspath already rejects an
+# unsafe `user` for the eight PATH-taking functions, and this is the other half of the same
+# module: seven builders interpolated `user` into `sudo -u {user}` and `/home/{user}`, and
+# `selfname` into the bash -c script BODY, with no validation at all. Demonstrated with
+# user="x; id > /tmp/pwned; #": the injection lands in the OUTER shell, before sudo, as the panel
+# user. Not reachable from a request today — every caller passes gs.short_name / gs.lgsm_name,
+# which models._validate_shell_ident pins on assignment — which is exactly the residual threat the
+# note above _SAFE_UNIX_USER_RE describes, left open on seven of this module's fifteen builders.
+def _idents_ok(*names):
+    """True when every name is a safe Unix ident (so it can be interpolated into a command)."""
+    return all(_SAFE_UNIX_USER_RE.match(n or "") for n in names)
 
 
 def _lgsm_cfg_dir(user, selfname):
@@ -162,12 +175,14 @@ def lgsm_read_config(server, user, selfname):
     """Read a game's LinuxGSM config: the curated common settings (merged from
     _default.cfg < common.cfg < instance <selfname>.cfg) plus the raw instance cfg
     text for the advanced editor."""
+    if not _idents_ok(user, selfname):
+        return {"settings": {}, "raw": "", "error": "Invalid account or script name"}
     d = _lgsm_cfg_dir(user, selfname)
     inst = f"{d}/{selfname}.cfg"
     inner = (f"echo ===DEFAULT; cat {_core._quote(d + '/_default.cfg')} 2>/dev/null; "
              f"echo ===COMMON; cat {_core._quote(d + '/common.cfg')} 2>/dev/null; "
              f"echo ===INSTANCE; cat {_core._quote(inst)} 2>/dev/null")
-    out, _, _ = _core.run_command(server, f"sudo -u {user} bash -c {_core._quote(inner)}", timeout=20, sudo=False)
+    out, _, _ = _core.run_command(server, f"sudo -u {_core._quote(user)} bash -c {_core._quote(inner)}", timeout=20, sudo=False)
     sec = {"DEFAULT": [], "COMMON": [], "INSTANCE": []}
     cur = None
     for line in (out or "").splitlines():
@@ -222,8 +237,11 @@ def lgsm_game_config(server, user, selfname):
     or cod's serverfiles/main/<name>.cfg) by parsing LinuxGSM `details`. This is the
     file where in-game settings like sv_maxclients actually live for many games.
     Returns {rel, content, exists, error}."""
+    if not _idents_ok(user, selfname):
+        return {"rel": "", "content": "", "exists": False,
+                "error": "Invalid account or script name"}
     o, _, _ = _core.run_command(
-        server, f"sudo -u {user} bash -c {_core._quote(f'cd /home/{user} && ./{selfname} details 2>&1')}",
+        server, f"sudo -u {_core._quote(user)} bash -c {_core._quote(f'cd /home/{_core._quote(user)} && ./{_core._quote(selfname)} details 2>&1')}",
         timeout=45, sudo=False,
     )
     text = terminal.strip_escapes(o or "")
@@ -245,11 +263,13 @@ def lgsm_game_config(server, user, selfname):
 def lgsm_get_values(server, user, selfname, keys):
     """Return {key: value} for `keys` from the merged LinuxGSM config (_default < common <
     instance — instance wins). Missing keys come back as "". Used by focused editors (alerts)."""
+    if not _idents_ok(user, selfname):
+        return {k: "" for k in (keys or ())}
     d = _lgsm_cfg_dir(user, selfname)
     inner = (f"cat {_core._quote(d + '/_default.cfg')} 2>/dev/null; "
              f"cat {_core._quote(d + '/common.cfg')} 2>/dev/null; "
              f"cat {_core._quote(d + '/' + selfname + '.cfg')} 2>/dev/null")
-    out, _, _ = _core.run_command(server, f"sudo -u {user} bash -c {_core._quote(inner)}", timeout=20, sudo=False)
+    out, _, _ = _core.run_command(server, f"sudo -u {_core._quote(user)} bash -c {_core._quote(inner)}", timeout=20, sudo=False)
     merged = _parse_cfg(out or "")
     return {k: merged.get(k, "") for k in keys}
 
@@ -257,12 +277,14 @@ def lgsm_get_values(server, user, selfname, keys):
 def lgsm_write_config(server, user, selfname, updates):
     """Apply key→value updates to the instance <selfname>.cfg (replace an existing
     uncommented line, else append). Other files (_default/common) are left alone."""
+    if not _idents_ok(user, selfname):
+        return False, "Invalid account or script name"
     d = _lgsm_cfg_dir(user, selfname)
     inst = f"{d}/{selfname}.cfg"
-    out, _, _ = _core.run_command(server, f"sudo -u {user} bash -c {_core._quote('cat ' + _core._quote(inst) + ' 2>/dev/null')}", timeout=15, sudo=False)
+    out, _, _ = _core.run_command(server, f"sudo -u {_core._quote(user)} bash -c {_core._quote('cat ' + _core._quote(inst) + ' 2>/dev/null')}", timeout=15, sudo=False)
     lines = (out or "").splitlines()
     for key, val in (updates or {}).items():
-        if not re.match(r"^[A-Za-z_][A-Za-z0-9_]*$", key or ""):
+        if not re.match(r"^[A-Za-z_][A-Za-z0-9_]*\Z", key or ""):
             continue
         val = str(val).replace('"', '\\"').replace("\n", " ")
         newline = f'{key}="{val}"'
@@ -288,7 +310,7 @@ def lgsm_write_config(server, user, selfname, updates):
 #   mods-remove  (installed):  one line per mod, "<id> - <name> - <desc>".
 _MOD_AVAIL_RE = re.compile(r"^\s*\*\s+(\S+)\s*$")               # available: " * <id>"
 _MOD_INST_RE = re.compile(r"^([A-Za-z0-9._-]+)\s+-\s+(.+)$")    # installed: "<id> - <name> - …"
-_MOD_ID_OK = re.compile(r"^[A-Za-z0-9._-]+$")                   # safe id charset (guards here-string)
+_MOD_ID_OK = re.compile(r"^[A-Za-z0-9._-]+\Z")                   # safe id charset (guards here-string)
 
 
 def _strip_ansi(s):
@@ -412,7 +434,7 @@ def browse_dir(server, user, relpath="", selfname=None):
     if ap is None:
         return None
     inner = f"find {_core._quote(ap)} -maxdepth 1 -mindepth 1 -printf '%y\\t%s\\t%f\\n' 2>/dev/null"
-    out, _, _ = _core.run_command(server, f"sudo -u {user} bash -c {_core._quote(_guarded(user, ap, inner))}",
+    out, _, _ = _core.run_command(server, f"sudo -u {_core._quote(user)} bash -c {_core._quote(_guarded(user, ap, inner))}",
                             timeout=20, sudo=False)
     if _OUTSIDE_HOME in (out or ""):
         return None
@@ -431,19 +453,33 @@ def browse_dir(server, user, relpath="", selfname=None):
     return {"path": base, "entries": entries}
 
 
+# Sentinels framing a file's bytes on the wire — see read_file for why they are needed.
+_READ_BEGIN = "__LGSMP_FILE_BEGIN__"
+_READ_END = "__LGSMP_FILE_END__"
+
+
 def read_file(server, user, relpath, max_bytes=1048576):
     """Read a text file from the game user's home. Returns (content, error).
     Refuses binaries and files larger than max_bytes."""
     ap = _safe_abspath(user, relpath)
     if ap is None:
         return None, "Invalid path"
+    # The body is FRAMED, because both transports strip: _core._finish returns
+    # (out or "").strip() and the paramiko branch does out.strip(). So the editor was handed a
+    # copy of the file with its leading blank lines and its trailing newline removed, and
+    # write_file wrote that back verbatim — open any config, press Save without typing, and the
+    # file loses its trailing newline. (stream_path does NOT strip, so download and edit
+    # disagreed about the same file.) Framing keeps the fix inside this function: the strip can
+    # only reach the whitespace OUTSIDE the sentinels.
     inner = (
         f"if [ ! -f {_core._quote(ap)} ]; then echo __NOFILE__; exit 0; fi; "
         f"sz=$(stat -c %s {_core._quote(ap)} 2>/dev/null); "
         f"if [ \"$sz\" -gt {int(max_bytes)} ]; then echo __TOOBIG__; exit 0; fi; "
-        f"if [ ! -s {_core._quote(ap)} ] || grep -qI . {_core._quote(ap)} 2>/dev/null; then cat {_core._quote(ap)}; else echo __BINARY__; fi"
+        f"if [ ! -s {_core._quote(ap)} ] || grep -qI . {_core._quote(ap)} 2>/dev/null; then "
+        f"printf %s {_core._quote(_READ_BEGIN)}; cat {_core._quote(ap)}; "
+        f"printf %s {_core._quote(_READ_END)}; else echo __BINARY__; fi"
     )
-    out, _, _ = _core.run_command(server, f"sudo -u {user} bash -c {_core._quote(_guarded(user, ap, inner))}",
+    out, _, _ = _core.run_command(server, f"sudo -u {_core._quote(user)} bash -c {_core._quote(_guarded(user, ap, inner))}",
                             timeout=20, sudo=False)
     if _OUTSIDE_HOME in (out or ""):
         return None, "Invalid path"
@@ -454,7 +490,15 @@ def read_file(server, user, relpath, max_bytes=1048576):
         return None, "File is too large to edit in the browser"
     if stripped == "__BINARY__":
         return None, "Binary file — download/replace via upload instead"
-    return (out or ""), None
+    # First BEGIN, LAST end: a file that happens to contain a sentinel still round-trips unless it
+    # contains both, in that order, which no real config does. No frame at all means the read did
+    # not get as far as cat — fall back to the old behaviour rather than returning nothing.
+    body = out or ""
+    i = body.find(_READ_BEGIN)
+    j = body.rfind(_READ_END)
+    if i != -1 and j > i:
+        return body[i + len(_READ_BEGIN):j], None
+    return body, None
 
 
 def write_file(server, user, relpath, content):
@@ -483,7 +527,7 @@ def stat_upload_targets(server, user, reldir, names):
         return None
     inner = (f"find {_core._quote(apdir)} -maxdepth 1 -mindepth 1 "
              f"-printf '%y\\t%s\\t%T@\\t%f\\n' 2>/dev/null")
-    out, _, _ = _core.run_command(server, f"sudo -u {user} bash -c {_core._quote(_guarded(user, apdir, inner))}",
+    out, _, _ = _core.run_command(server, f"sudo -u {_core._quote(user)} bash -c {_core._quote(_guarded(user, apdir, inner))}",
                             timeout=20, sudo=False)
     if _OUTSIDE_HOME in (out or ""):
         return None
@@ -530,7 +574,7 @@ def upload_file(server, user, reldir, filename, data_bytes, overwrite=True):
         return False, "Invalid path"
     if not overwrite:
         chk = f"test -e {_core._quote(target)} && echo __YES__ || true"
-        out, _, _ = _core.run_command(server, f"sudo -u {user} bash -c {_core._quote(_guarded(user, target, chk))}",
+        out, _, _ = _core.run_command(server, f"sudo -u {_core._quote(user)} bash -c {_core._quote(_guarded(user, target, chk))}",
                                 timeout=15, sudo=False)
         if _OUTSIDE_HOME in (out or ""):
             return False, "Invalid path"
@@ -551,7 +595,7 @@ def delete_path(server, user, relpath, selfname=None):
     inner = f"rm -rf -- {_core._quote(ap)} && echo __OK__"
     # The most destructive of the six, so it gets the same host-side resolution check: a symlink
     # under the home dir must not turn `rm -rf` loose on whatever it points at.
-    out, e, rc = _core.run_command(server, f"sudo -u {user} bash -c {_core._quote(_guarded(user, ap, inner))}",
+    out, e, rc = _core.run_command(server, f"sudo -u {_core._quote(user)} bash -c {_core._quote(_guarded(user, ap, inner))}",
                              timeout=30, sudo=False)
     if _OUTSIDE_HOME in (out or ""):
         return False, "Refusing to delete this path"
@@ -584,7 +628,7 @@ def stat_path(server, user, relpath):
     inner = (f"if [ -d {_core._quote(ap)} ]; then echo d 0; "
              f"elif [ -f {_core._quote(ap)} ]; then echo f $(stat -Lc %s {_core._quote(ap)} 2>/dev/null); "
              f"else echo __NOFILE__; fi")
-    out, _, _ = _core.run_command(server, f"sudo -u {user} bash -c {_core._quote(_guarded(user, ap, inner))}",
+    out, _, _ = _core.run_command(server, f"sudo -u {_core._quote(user)} bash -c {_core._quote(_guarded(user, ap, inner))}",
                             timeout=20, sudo=False)
     if _OUTSIDE_HOME in (out or ""):
         return None
@@ -623,7 +667,7 @@ def _remote_read_command(user, as_tar):
             f'case "$p" in {hq}|{hq}/*) : ;; *) echo {_OUTSIDE_HOME}; exit 9 ;; esac; ')
     body += ('tar czf - -C "$(dirname "$p")" -- "$(basename "$p")"' if as_tar
              else 'cat -- "$p"')
-    return f"sudo -u {user} bash -c {_core._quote(body)}"
+    return f"sudo -u {_core._quote(user)} bash -c {_core._quote(body)}"
 
 
 def stream_path(server, user, relpath, as_tar=False, limit=None, chunk=262144):

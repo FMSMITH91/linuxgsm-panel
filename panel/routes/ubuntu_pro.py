@@ -6,7 +6,7 @@ from flask import (jsonify, request)
 from flask_login import (current_user, login_required)
 from panel.ops.ssh_manager import (pro_attach, pro_detach, pro_service, remote_live_metrics)
 from panel.security.auth import (MANAGE_REMOTES, get_remote, log_action, permission_required)
-from panel.core.http import (_json_body, _log_and_generic, _unreachable)
+from panel.core.http import (_json_body, _json_str, _log_and_generic, _unreachable)
 from app import (_pro_status_cached)
 
 
@@ -26,8 +26,15 @@ def register(app):
     @permission_required(MANAGE_REMOTES)
     def api_remote_pro_attach(remote_id):
         remote = get_remote(remote_id)
-        token = _json_body().get("token", "")
-        ok, msg = pro_attach(remote, token)
+        token = _json_str(_json_body(), "token")
+        # ConnectionError -> 200 + unreachable, like this module's own pro-status already does.
+        # A host that is switched off is a normal condition for this panel, and these three had no
+        # handler at all, so a reboot mid-session produced an unhandled traceback and 5xx alerting
+        # fired on nothing being wrong.
+        try:
+            ok, msg = pro_attach(remote, token)
+        except ConnectionError:
+            return _unreachable("pro attach")
         # NOTE: the token is deliberately never logged.
         if ok:
             _pro_status_cached(remote, force=True)   # state changed → refresh the stored status
@@ -40,9 +47,12 @@ def register(app):
     def api_remote_pro_service(remote_id):
         remote = get_remote(remote_id)
         data = _json_body()
-        service = (data.get("service") or "").strip()
-        action = (data.get("action") or "").strip()
-        ok, msg = pro_service(remote, service, action)
+        service = _json_str(data, "service")
+        action = _json_str(data, "action")
+        try:
+            ok, msg = pro_service(remote, service, action)
+        except ConnectionError:
+            return _unreachable("pro service")
         if ok:
             _pro_status_cached(remote, force=True)   # a service toggled → refresh the stored status
         log_action(current_user, f"pro_{action or 'service'}", target=remote.name,
@@ -54,7 +64,10 @@ def register(app):
     @permission_required(MANAGE_REMOTES)
     def api_remote_pro_detach(remote_id):
         remote = get_remote(remote_id)
-        ok, msg = pro_detach(remote)
+        try:
+            ok, msg = pro_detach(remote)
+        except ConnectionError:
+            return _unreachable("pro detach")
         if ok:
             _pro_status_cached(remote, force=True)   # detached → refresh the stored status
         log_action(current_user, "pro_detach", target=remote.name, success=ok)

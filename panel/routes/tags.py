@@ -9,7 +9,7 @@ from panel.db.models import (db)
 from panel.db.prefs import (_clean_panel_map)
 from panel.security.auth import (_can_edit_tags, check_password, get_game, get_user_servers,
     hash_password, log_action, server_access_required, verify_totp_step)
-from panel.core.http import (_json_body, _log_and_generic)
+from panel.core.http import (_json_body, _json_str, _log_and_generic)
 from panel.core.validation import (_valid_hex_color, password_problem)
 from app import (_has_remember_cookie, _log, _register_session, _tag_json)
 
@@ -36,7 +36,7 @@ def register(app):
             return jsonify({"success": False, "message": "Permission denied"}), 403
         from panel.db.models import TAG_NAME_RE, TAG_NAME_HELP
         data = _json_body()
-        name = (data.get("name") or "").strip()
+        name = _json_str(data, "name")
         if not name:
             return jsonify({"success": False, "message": "A tag needs a name."}), 400
         # Check the shared rule here so the caller gets a helpful, FIXED message. The model's

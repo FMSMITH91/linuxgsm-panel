@@ -17,14 +17,15 @@ from panel.ops.ssh_manager import (GAMEDIG_TYPE as GAMEDIG_TYPE_MAP, _resolve_fr
 # however the handler moves.
 from panel.ops import ssh_manager as _sm
 from panel.security.auth import (MANAGE_SERVERS, MODERATE_SERVER, READONLY_ACTIONS,
-    RESTART_SERVER, SEND_COMMAND, _can_manage_files, _perm_for_action, allowed_custom_commands,
+    RESTART_SERVER, SEND_COMMAND, VIEW_CONSOLE, _can_manage_files, _perm_for_action,
+    allowed_custom_commands,
     can_access_server, can_moderate_action, can_run_custom_command, get_game,
     get_user_permissions, has_permission, log_action, server_access_required)
 from panel.services.monitoring import (_PLAYER_POLL_WORKERS)
 import concurrent.futures
 import re
 import threading
-from panel.core.http import (_json_body, _log_and_generic)
+from panel.core.http import (_json_body, _json_str, _log_and_generic)
 from app import (LONG_ACTIONS, RUNNABLE_ACTIONS, _apply_mod_restart, _live_run_state, _log,
     _mark_expected_offline)
 from panel.routes._shared import (_action_log_path, _begin_action_tail, _end_action_tail,
@@ -244,7 +245,7 @@ def register(app):
         """JSON action endpoint for inline controls (dashboard/lists) — no reload."""
         gs = get_game(server_id)
         data = _json_body()
-        action = (data.get("action") or "").strip()
+        action = _json_str(data, "action")
         if action not in RUNNABLE_ACTIONS:
             return jsonify({"success": False, "message": f"Unsupported action: {action}"}), 400
         if not current_user.is_superadmin and not has_permission(current_user, _perm_for_action(action)):
@@ -287,7 +288,7 @@ def register(app):
         per-server queued/skipped list. The fan-out is capped so one request can't spawn
         an unbounded number of SSH operations."""
         data = _json_body()
-        action = (data.get("action") or "").strip()
+        action = _json_str(data, "action")
         raw_ids = data.get("server_ids")
         if action not in RUNNABLE_ACTIONS:
             return jsonify({"success": False, "message": f"Unsupported action: {action}"}), 400
@@ -348,7 +349,15 @@ def register(app):
         gamedig only (never the game console); the panel sends `?console=1` only when you click the
         refresh button, so a single `status` is issued on your explicit request, not on a timer."""
         gs = get_game(server_id)
-        allow_console = request.args.get("console") == "1"
+        # The console opt-in needs VIEW_CONSOLE, like /api/console does. gamedig touches nothing on
+        # the host, but allow_console falls through to console_player_list, which TYPES `status`
+        # into the game's tmux pane and reads the pane back — so an account that could merely SEE a
+        # server could run a console command on it and collect every player's SteamID, on a GET
+        # that CSRF does not cover. The read-only half stays open to anyone with access: it is the
+        # console half that reaches the host.
+        allow_console = (request.args.get("console") == "1"
+                         and (current_user.is_superadmin
+                              or has_permission(current_user, VIEW_CONSOLE)))
         try:
             players = player_list(gs.remote, gs.short_name, gs.game_type, gs.port, gs.query_type,
                                   selfname=gs.lgsm_name, allow_console=allow_console)
@@ -380,7 +389,7 @@ def register(app):
                 or has_permission(current_user, SEND_COMMAND)
                 or has_permission(current_user, MANAGE_SERVERS)):
             return jsonify({"success": False, "message": "Permission denied"}), 403
-        raw = (_json_body().get("query_type") or "").strip().lower()
+        raw = _json_str(_json_body(), "query_type").lower()
         if raw and not re.fullmatch(r"[a-z0-9][a-z0-9_-]{0,39}", raw):
             return jsonify({"success": False, "message": "Invalid query type — use letters, "
                             "numbers, - or _ (see the gamedig games list)."}), 400
@@ -399,7 +408,7 @@ def register(app):
         player name is sanitized in ssh_manager.moderate() so a hostile name can't inject."""
         gs = get_game(server_id)
         data = _json_body()
-        action = (data.get("action") or "").strip()
+        action = _json_str(data, "action")
         if action not in ("kick", "ban", "say"):
             return jsonify({"success": False, "message": "Unknown action"}), 400
         # Per-action permission: a mod may hold only kick, only ban, etc. (SEND_COMMAND / the
@@ -410,7 +419,7 @@ def register(app):
         steamid = data.get("steamid", "")
         num = data.get("num", "")
         scope = (data.get("scope") or "this").strip()
-        reason = (data.get("reason") or "").strip()[:200]
+        reason = _json_str(data, "reason")[:200]
         # A Valve ban needs the SteamID up front — to also fan it out and record a global ban. The
         # on-screen list may be gamedig-sourced (no id), so resolve it from the console once here;
         # otherwise the cross-server fan-out below (guarded on `steamid`) would be silently skipped.
@@ -495,15 +504,22 @@ def register(app):
             return jsonify({"success": False, "message": "Permission denied"}), 403
         final = cmd.command_template or ""
         if cmd.has_argument:
-            value = (_json_body().get("value") or "").strip()
+            value = _json_str(_json_body(), "value")
+            # COMPILE first, MATCH second. These used to be one try block: `raise ValueError` for a
+            # value that did not match was caught by the same `except (re.error, ValueError)` as a
+            # broken stored pattern, so every rejected value fell through to the lenient default and
+            # a command restricted to `^(easy|normal|hard)$` accepted `9999` and `rm-rf`. The
+            # shell-injection half of the guard still held (the default charset has no
+            # metacharacters); the AUTHORIZATION half — "this mod may change the map, but only to
+            # these three" — did nothing at all. Driven through the real route to confirm it.
             try:
-                if not re.fullmatch(cmd.effective_pattern(), value):
-                    raise ValueError
-            except (re.error, ValueError):
-                # A bad stored pattern must not become a bypass — fall back to the safe default.
-                if not re.fullmatch(CUSTOM_ARG_DEFAULT_PATTERN, value):
-                    return jsonify({"success": False,
-                                    "message": "Invalid value for %s." % (cmd.argument_label or "argument")}), 400
+                pattern = re.compile(cmd.effective_pattern())
+            except re.error:
+                # A bad STORED pattern must not become a bypass — fall back to the safe default.
+                pattern = re.compile(CUSTOM_ARG_DEFAULT_PATTERN)
+            if not pattern.fullmatch(value):
+                return jsonify({"success": False,
+                                "message": "Invalid value for %s." % (cmd.argument_label or "argument")}), 400
             final = final.replace(CUSTOM_ARG_PLACEHOLDER, value)
         try:
             out, err, rc = send_console_command(gs.remote, gs.short_name, final,
@@ -757,14 +773,37 @@ def register(app):
     @login_required
     @server_access_required
     def refresh_server_commands(server_id):
+        """Re-read this server's supported commands from LinuxGSM and store them.
+
+        Gated like api_server_query_type, and for the same reason: this SSHes to the host and
+        overwrites stored server configuration — the list the control bar and install_game_cron
+        are built from. It carried @server_access_required alone, so any account that could SEE a
+        server could make the panel connect to its host and rewrite that list, with no audit row.
+        rbac_test checks server ACCESS structurally and nothing checks that a mutating route needs
+        a PERMISSION, so no gate caught it."""
         gs = get_game(server_id)
+        if not (current_user.is_superadmin or has_permission(current_user, MODERATE_SERVER)
+                or has_permission(current_user, SEND_COMMAND)
+                or has_permission(current_user, MANAGE_SERVERS)):
+            flash("You don't have permission to refresh this server's commands.", "danger")
+            return redirect(url_for("server_detail", server_id=server_id))
         try:
             cmds = _sm.list_server_commands(gs.remote, gs.short_name, gs.lgsm_name)
             gs.set_commands(cmds)
             db.session.commit()
+            # ...and an audit row, which the docstring above says was the other half of the bug
+            # ("with no audit row") and which the permission fix left undone. The stored list
+            # drives the control bar and install_game_cron: a host that answers oddly can empty
+            # it, hiding Start/Stop/Update for everyone, and /logs showed nothing happened.
+            # api_server_query_type — same permission set, same "writes server configuration"
+            # rationale — has logged since it was written.
+            log_action(current_user, "refresh_commands", target=gs.name,
+                       detail="%d commands" % len(cmds), success=True)
             flash(f"Loaded {len(cmds)} commands for '{gs.name}'.", "success")
         except Exception:
             _log.debug("command list refresh failed for %s", gs.name, exc_info=True)
+            log_action(current_user, "refresh_commands", target=gs.name,
+                       detail="could not read the command list", success=False)
             flash(f"Could not read the command list for '{gs.name}'.", "danger")
         return redirect(url_for("server_detail", server_id=server_id))
 

@@ -262,8 +262,22 @@ function reconcileServerList() {
     })
     .catch(function(){});
 }
-pollWhenVisible(reconcileServerList, 8000);
-if (window.onServersChanged) onServersChanged(reconcileServerList);
+// ── Only poll for markup this page actually has ───────────────────────────────────────────────
+// The server list folded into the dashboard; install_server.html is the one page that loads this
+// script, and it renders none of #servers-list, install-row-*, server-row-* or msrv-*. So
+// serverIdsOnPage() always returned '', every poll saw "every server is new", and
+// refreshSection('#servers-list') fetched THIS PAGE IN FULL, found nothing to swap, and let
+// afterServerRefresh reset the baseline to '' — so the next tick did it again. Leaving the page
+// open cost a whole-page fetch plus /api/servers every 8s, and /api/dashboard/metrics (which this
+// file's own comment calls "an SSH sample per server") every 10s, all of it discarded.
+//
+// Guarded on the container rather than deleted: if the list ever comes back to a page that loads
+// this script, the pollers come back with it.
+var _hasServerList = !!document.getElementById('servers-list');
+if (_hasServerList) {
+  pollWhenVisible(reconcileServerList, 8000);
+  if (window.onServersChanged) onServersChanged(reconcileServerList);
+}
 
 // Live per-server resources (CPU/RAM/uptime) in the Resources column — a slower, heavier poll (an
 // SSH sample per server) than the status reconcile above.
@@ -293,8 +307,12 @@ function refreshMsrvMetrics(){
       });
     }).catch(function(){});
 }
-refreshMsrvMetrics();
-pollWhenVisible(refreshMsrvMetrics, 10000);
+// Same guard, and this is the expensive one: /api/dashboard/metrics takes an SSH sample per
+// HOST. Nothing on this page has an msrv-* cell to put the answer in.
+if (document.querySelector('[id^="msrv-res-"]')) {
+  refreshMsrvMetrics();
+  pollWhenVisible(refreshMsrvMetrics, 10000);
+}
 
 // After the servers table is swapped in place (AJAX install), re-arm the install-progress pollers
 // for any new "installing" rows and adopt the new server set, so the live-sync poller above doesn't

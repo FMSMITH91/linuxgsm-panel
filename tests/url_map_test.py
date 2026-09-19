@@ -25,6 +25,8 @@ refuses to let it happen by accident.
 """
 import json
 import os
+import pathlib
+import re
 import sys
 
 _ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -118,6 +120,32 @@ def main():
                 if was[field] != now[field]:
                     problems.append("CHANGED  %s  %s\n             was: %s\n             now: %s"
                                     % (path, field, was[field], now[field]))
+
+    # app.py's module docstring opens with a hand-written route list. It is the first thing anyone
+    # reads about this file, and it had drifted: it advertised POST /servers/install (a GET-only
+    # page), POST /servers/uninstall (deleted — it is POST /servers/<id>/delete) and a
+    # "WebSocket /console/<id>" route that has never existed, the console being socket.io events on
+    # the default namespace. Checked against the live map rather than the baseline file so it
+    # cannot go stale in the same commit that regenerates the baseline.
+    _doc = (pathlib.Path(__file__).resolve().parent.parent / "app.py").read_text(
+        encoding="utf-8").split('"""')[1]
+    _live = {re.sub(r"<[^>]+>", "<>", r): meta for r, meta in current.items()}
+    # The regex pins the docstring's SHAPE (two leading spaces, then the verb). Re-indent that
+    # list by one space and findall returns nothing, the loop below runs zero times, and the gate
+    # reports clean having read nothing — proven by doing exactly that: 29 matching lines became
+    # 0 and the suite still said PASS. A sweep has to assert it found its subject.
+    _claimed = re.findall(r"^\s{2}(GET|POST)\s+(\S+)", _doc, re.M)
+    if len(_claimed) < 20:
+        problems.append("DOCSTRING  app.py's route list did not parse (%d lines matched, expected "
+                        "~29) — the docstring's shape changed and this gate read nothing"
+                        % len(_claimed))
+    for _verb, _rule in _claimed:
+        _key = re.sub(r"<[^>]+>", "<>", _rule)
+        if _key not in _live:
+            problems.append("DOCSTRING  app.py advertises %s %s, which is not a route" % (_verb, _rule))
+        elif _verb not in _live[_key]["methods"]:
+            problems.append("DOCSTRING  app.py advertises %s %s, which accepts %s"
+                            % (_verb, _rule, ",".join(_live[_key]["methods"])))
 
     print("url map: %d rules checked against the baseline" % len(current))
     if problems:

@@ -7,8 +7,9 @@ from flask_login import (current_user, login_required)
 from panel.core.config import (load_config, save_config)
 from panel.security import privileged as _priv
 from panel.ops import (tailscale_integration as ts)
-from panel.security.auth import (MANAGE_REMOTES, log_action, permission_required)
-from panel.core.http import (_json_body)
+from panel.security.auth import (MANAGE_REMOTES, log_action, permission_required,
+    superadmin_required)
+from panel.core.http import (_json_body, _json_str)
 from panel.db.models import LOCAL_HOST_LABEL
 from app import (_ts_backend_scheme)
 
@@ -47,9 +48,17 @@ def register(app):
             "suggestion": suggestion,
         })
 
+    # superadmin, not MANAGE_REMOTES, on all three below. These act on the PANEL HOST, not on a
+    # granted remote — get_remote never runs, so a host admin scoped to one VPS was changing the
+    # machine the panel itself runs on. Their equivalents under System -> Panel Server are already
+    # superadmin: /api/server-management/ts-ssh-enable is the same state change as `up` (which
+    # hardcodes enable_ssh=True), and /api/panel/change-port is the same class of change as
+    # `serve`, which with funnel=true publishes the panel to the public internet and rewrites
+    # config.json. Whoever opens the login URL `up` returns also chooses the tailnet this host
+    # joins, with SSH enabled.
     @app.route("/api/tailscale/install", methods=["POST"])
     @login_required
-    @permission_required(MANAGE_REMOTES)
+    @superadmin_required
     def api_tailscale_install():
         """Install Tailscale on the PANEL HOST itself — the same in-panel flow the setup
         wizard and the remote-server bootstrap use, instead of sending the user off to
@@ -60,21 +69,28 @@ def register(app):
 
     @app.route("/api/tailscale/up", methods=["POST"])
     @login_required
-    @permission_required(MANAGE_REMOTES)
+    @superadmin_required
     def api_tailscale_up():
         """Run `tailscale up` on the panel host and return the browser login URL to
         approve this machine (or connected=True if it's already on the tailnet)."""
         ok, res = ts.tailscale_up_local(enable_ssh=True)
+        # Logged BEFORE the branching, on every outcome. log_action used to sit inside the
+        # ALREADY_CONNECTED arm — the one where nothing changed — so the failure path and the path
+        # that actually starts the join (returning the login URL that decides which tailnet this
+        # host joins, with SSH on) both returned with the audit log silent. Its two siblings,
+        # api_tailscale_install and api_remote_tailscale_up, both log unconditionally.
+        log_action(current_user, "tailscale_up_local", target=LOCAL_HOST_LABEL, success=ok,
+                   detail=("already connected" if res == "ALREADY_CONNECTED"
+                           else "login URL issued" if ok else "failed"))
         if not ok:
             return jsonify({"success": False, "message": res})
         if res == "ALREADY_CONNECTED":
-            log_action(current_user, "tailscale_up_local", target=LOCAL_HOST_LABEL, success=True)
             return jsonify({"success": True, "connected": True})
         return jsonify({"success": True, "connected": False, "auth_url": res})
 
     @app.route("/api/tailscale/serve", methods=["POST"])
     @login_required
-    @permission_required(MANAGE_REMOTES)  # Infrastructure management
+    @superadmin_required
     def api_tailscale_serve():
         """Enable/disable Tailscale Serve for the panel."""
         data = _json_body()
@@ -131,7 +147,7 @@ def register(app):
     def api_tailscale_check_peer():
         """Check if a host is reachable on the tailnet."""
         data = _json_body()
-        host = (data.get("host") or "").strip()
+        host = _json_str(data, "host")
         if not host:
             return jsonify({"success": False, "message": "Host required"}), 400
         # It becomes ping's last argv element, where a leading dash reads as an option.

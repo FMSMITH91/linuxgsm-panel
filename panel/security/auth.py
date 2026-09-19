@@ -11,7 +11,7 @@ from urllib.parse import quote
 import base64
 import bcrypt
 import hashlib
-from flask import abort, flash, jsonify, redirect, request, url_for
+from flask import abort, current_app, flash, jsonify, redirect, request, url_for
 from flask_login import LoginManager, current_user
 
 from panel.db.models import AuditLog, GameServer, RemoteServer, User, db
@@ -726,24 +726,52 @@ def _token_auth_record(ip, ok):
 def client_ip():
     """Real client IP of the connected user.
 
-    The panel usually sits behind Tailscale Serve (127.0.0.1:5000), which sets
-    X-Forwarded-For with the caller's tailnet IP. We only trust that header when the
-    request actually arrived from the LOCAL proxy (loopback). On a direct connection
-    (the panel also supports binding 0.0.0.0:5000), X-Forwarded-For is fully
-    attacker-controlled — trusting it there would let a client forge audit-log IPs and
-    rotate the login-throttle key to defeat the brute-force limit. So in that case we
-    use the real socket address instead."""
+    This value keys the login throttle, the API-token throttle, the audit log, data/auth.log
+    (which the panel-login fail2ban jail parses) and the 7-day auto-block counts. If a client can
+    choose it, none of those work: password guessing is unlimited, and every ban lands on whatever
+    address the attacker named instead.
+
+    WHOM to trust and WHAT to read are two different questions, and only the first was being
+    asked. The answer to the second was X-Forwarded-For's FIRST hop — the one element of that
+    header a client always controls, because a proxy can only append to its right. Measured
+    through the real /login with the README's own deployment (`trust_proxy: true` behind nginx):
+    twenty failed logins from one client, each with a different X-Forwarded-For, were never
+    rate-limited and left twenty separate throttle keys. With a constant value the same loop
+    blocked at attempt 8, which is LOGIN_MAX_FAILS working exactly as designed.
+
+    So:
+
+      * X-Real-IP first. `proxy_set_header` REPLACES, so a proxy that sets it has overwritten
+        anything the client sent — it is the one header in the README's nginx block, and the one
+        value in it that the proxy actually chose.
+      * then the LAST X-Forwarded-For hop, not the first. That is what the nearest trusted proxy
+        appended (`$proxy_add_x_forwarded_for`, Tailscale Serve, Caddy); everything to its left
+        came from further out and may be invented.
+      * and neither unless the request reached us from a proxy at all — loopback, or trust_proxy
+        set, in which case the ORIGINAL socket peer is used to decide, because ProxyFix has by
+        then already rewritten request.remote_addr from the header we are trying to judge.
+
+    A `trust_proxy` install that also accepts direct connections (binding 0.0.0.0 alongside the
+    proxy) still trusts these headers from anyone who reaches the port — bind loopback, or put the
+    proxy on the only reachable address."""
     if not request:
         return ""
     remote = request.remote_addr or ""
-    if remote in ("127.0.0.1", "::1"):
+    # ProxyFix stores what it overwrote; without it this is just remote_addr.
+    peer = (request.environ.get("werkzeug.proxy_fix.orig") or {}).get("REMOTE_ADDR") or remote
+    behind_proxy = peer in ("127.0.0.1", "::1")
+    if not behind_proxy:
+        try:
+            behind_proxy = bool(current_app.config.get("_TRUST_PROXY"))
+        except Exception:
+            behind_proxy = False     # outside an app context: trust nothing
+    if behind_proxy:
+        xr = (request.headers.get("X-Real-IP") or "").strip()
+        if xr:
+            return xr
         xff = request.headers.get("X-Forwarded-For", "")
         if xff:
-            # First hop is the original client; the rest are proxies.
-            return xff.split(",")[0].strip()
-        xr = request.headers.get("X-Real-IP", "")
-        if xr:
-            return xr.strip()
+            return xff.split(",")[-1].strip()
     return remote
 
 

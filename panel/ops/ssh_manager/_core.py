@@ -13,6 +13,60 @@ import time
 import paramiko
 from panel.core.config import decrypt_secret
 from panel.security import privileged as _priv
+# ── Per-remote caches, and forgetting a host that no longer exists ────────────────────────────
+# Several modules in this package memoise an answer PER HOST, keyed by RemoteServer.id. SQLite
+# hands a deleted row's id straight to the next INSERT (plain INTEGER PRIMARY KEY = rowid, no
+# AUTOINCREMENT), so whatever a deleted host left behind is inherited by the next host added —
+# and these are read to RENDER its pages and to decide where to send a player query.
+#
+# game.py already closes this for its version cache, with an after_delete listener and the
+# argument for why it belongs there rather than in the delete route ("the invariant belongs where
+# the row goes away, not at each of the places that remove one"). Three caches were left out of
+# that, and the longest-lived one has no expiry at all (hosts._OS_SLUG_CACHE, found later, has
+# none either):
+#
+#   firewall._specs_cache      the host's CPU/RAM/disk/kernel/OS — cached for the PROCESS's life,
+#                              so a recycled id shows the deleted machine's hardware until restart
+#   hosts._pro_status_cache    Ubuntu Pro attachment + services, 24h
+#   _gamedig_host_cache        the address player queries are sent to, 1h — so a new host's
+#                              player counts would come from the OLD host's IP, and those counts
+#                              are what "is this server empty?" is decided on
+#
+# REGISTERED AT THE DECLARATION rather than named in a list here, for the reason panel_state
+# gives at length: a hand-kept list is an edit somebody has to remember to make somewhere else,
+# and that is exactly how these three were missed.
+#
+# EVERY per-remote cache is registered now, the short-lived ones included. They used to be left
+# out on the grounds that "they self-correct before anyone could add a host, and a tuple-keyed
+# entry is not addressable by a bare row id anyway" — the second half of which was true and is the
+# real reason to fix forget_remote_caches rather than to keep a list of exceptions. It drops tuple
+# keys containing the id now, so registration costs nothing and the exception list is gone. What
+# that list actually hid was hosts._OS_SLUG_CACHE: no expiry at all, keyed ("srv", id), and NOT in
+# it — a deleted host's distro slug chose the package list for whatever host took its rowid next.
+_remote_caches = []
+
+
+def register_remote_cache(mapping):
+    """Mark `mapping` as keyed by RemoteServer.id so a deleted host is forgotten from it.
+    Returns `mapping`, so a declaration can wrap itself: `_x = _core.register_remote_cache({})`."""
+    _remote_caches.append(mapping)
+    return mapping
+
+
+def forget_remote_caches(remote_id):
+    """Drop every per-remote memo for `remote_id`. Safe to call for an id nothing cached.
+
+    TUPLE keys are handled as well as bare ids. Several of these memos are keyed by
+    (remote id, port) or (remote id, user) — `m.pop(remote_id)` could never reach those, so
+    registering such a cache would have looked like protection while doing nothing, which is
+    worse than not registering it. A tuple containing the id is dropped; the worst a coincidence
+    costs (a port that happens to equal a deleted host's id) is one re-read."""
+    for m in _remote_caches:
+        m.pop(remote_id, None)
+        for key in [k for k in list(m) if isinstance(k, tuple) and remote_id in k]:
+            m.pop(key, None)
+
+
 from panel.ops.ssh_manager import (cron)  # noqa: E402,F401  (module objects: the
 # reference resolves at CALL time, which is what keeps a stub on the definition site
 # visible to every caller — see the package docstring.
@@ -155,47 +209,6 @@ def _register_remote_invalidation():
 
 
 _register_remote_invalidation()
-
-
-# ── Per-remote caches, and forgetting a host that no longer exists ────────────────────────────
-# Several modules in this package memoise an answer PER HOST, keyed by RemoteServer.id. SQLite
-# hands a deleted row's id straight to the next INSERT (plain INTEGER PRIMARY KEY = rowid, no
-# AUTOINCREMENT), so whatever a deleted host left behind is inherited by the next host added —
-# and these are read to RENDER its pages and to decide where to send a player query.
-#
-# game.py already closes this for its version cache, with an after_delete listener and the
-# argument for why it belongs there rather than in the delete route ("the invariant belongs where
-# the row goes away, not at each of the places that remove one"). Three caches were left out of
-# that, and the longest-lived one has no expiry at all:
-#
-#   firewall._specs_cache      the host's CPU/RAM/disk/kernel/OS — cached for the PROCESS's life,
-#                              so a recycled id shows the deleted machine's hardware until restart
-#   hosts._pro_status_cache    Ubuntu Pro attachment + services, 24h
-#   _gamedig_host_cache        the address player queries are sent to, 1h — so a new host's
-#                              player counts would come from the OLD host's IP, and those counts
-#                              are what "is this server empty?" is decided on
-#
-# REGISTERED AT THE DECLARATION rather than named in a list here, for the reason panel_state
-# gives at length: a hand-kept list is an edit somebody has to remember to make somewhere else,
-# and that is exactly how these three were missed.
-#
-# The 2-5 second caches (_live_metrics_cache, _host_metrics_cache, portscan's) are deliberately
-# NOT registered: they self-correct before anyone could add a host, and a tuple-keyed entry is not
-# addressable by a bare row id anyway.
-_remote_caches = []
-
-
-def register_remote_cache(mapping):
-    """Mark `mapping` as keyed by RemoteServer.id so a deleted host is forgotten from it.
-    Returns `mapping`, so a declaration can wrap itself: `_x = _core.register_remote_cache({})`."""
-    _remote_caches.append(mapping)
-    return mapping
-
-
-def forget_remote_caches(remote_id):
-    """Drop every per-remote memo for `remote_id`. Safe to call for an id nothing cached."""
-    for m in _remote_caches:
-        m.pop(remote_id, None)
 
 
 def _register_remote_cache_invalidation():
@@ -670,13 +683,8 @@ def _run_via_ssh_cli(server, command, timeout=30, sudo=None):
     running from this tailnet node, can — exactly like PuTTY does). Uses connection
     multiplexing so back-to-back commands don't each pay a fresh SSH handshake."""
     use_sudo = sudo if sudo is not None else server.sudo_enabled
-    if use_sudo:
-        if server.linuxgsm_user:
-            remote_cmd = f"sudo -u {server.linuxgsm_user} bash -c {_quote(command)}"
-        else:
-            remote_cmd = f"sudo bash -c {_quote(command)}"
-    else:
-        remote_cmd = command
+    # ROOT, not the remote's optional linuxgsm_user — see run_command for what that demotion did.
+    remote_cmd = f"sudo bash -c {_quote(command)}" if use_sudo else command
     host = _resolve_ts_host(server)
     ssh_cmd = [
         "ssh", "-T",
@@ -718,13 +726,14 @@ def run_command(server, command, timeout=30, sudo=None):
     client = get_connection(server)
     use_sudo = sudo if sudo is not None else server.sudo_enabled
 
-    if use_sudo:
-        if server.linuxgsm_user:
-            full_cmd = f"sudo -u {server.linuxgsm_user} bash -c {_quote(command)}"
-        else:
-            full_cmd = f"sudo bash -c {_quote(command)}"
-    else:
-        full_cmd = command
+    # sudo=True means ROOT. It used to mean "sudo -u <the remote's linuxgsm_user> when that
+    # optional field is set", which silently demoted every privileged operation this module has:
+    # ufw, apt, fail2ban, the sshd hardening and its drop-in write, the node-tools cron, and the
+    # whole VPS bootstrap — which still reported "VPS bootstrap complete". Nothing else in the
+    # codebase reads that field: game operations build their own `sudo -u <GameServer.username>`
+    # and pass sudo=False, so the demotion was its only surviving effect, on a form the Add Remote
+    # page invited the operator to fill in.
+    full_cmd = f"sudo bash -c {_quote(command)}" if use_sudo else command
 
     try:
         # nosec B601 - full_cmd is assembled HERE from _quote()d components; there is no
@@ -821,6 +830,10 @@ def discover_linuxgsm_servers(server):
     return found
 
 
+# Same charset files._SAFE_UNIX_USER_RE enforces, and for the same reason it gives.
+_SAFE_GAME_IDENT = re.compile(r"^[A-Za-z0-9_][A-Za-z0-9._-]{0,63}\Z")
+
+
 def run_as_game_user(server, user, action_cmd, timeout=30, selfname=None):
     """Run a LinuxGSM command as the instance's Ubuntu user, from its home dir.
     `user` is the (possibly custom) account name; `selfname` is the LinuxGSM script
@@ -828,9 +841,18 @@ def run_as_game_user(server, user, action_cmd, timeout=30, selfname=None):
     given a custom name: only the user is renamed, the script stays canonical.
     Defaults selfname to user for standard installs."""
     selfname = selfname or user
+    # Validated HERE, at the one choke point every mods_* call goes through. files.py explains at
+    # length why the model's @validates hook is not enough: it fires on ASSIGNMENT and never on a
+    # row loaded from the database, so a row written before the validator existed, or restored
+    # from a tampered backup, reaches this code unchecked. `user` is interpolated ahead of `sudo`,
+    # so it breaks out as the PANEL user, and `selfname` lands inside the bash -c script body.
+    # Demonstrated: user="x; id > /tmp/pwned; #" produced `sudo -u x; id > /tmp/pwned; # bash -c`.
+    if not (_SAFE_GAME_IDENT.match(user or "") and _SAFE_GAME_IDENT.match(selfname or "")):
+        _log.warning("refusing to run as an unsafe account/script name")
+        return "", "invalid account or script name", 1
     # TERM=xterm avoids LinuxGSM's `tput: unknown terminal "unknown"` noise.
-    inner = f"cd /home/{user} && TERM=xterm ./{selfname} {action_cmd}"
-    cmd = f"sudo -u {user} bash -c {_quote(inner)}"
+    inner = f"cd /home/{_quote(user)} && TERM=xterm ./{_quote(selfname)} {action_cmd}"
+    cmd = f"sudo -u {_quote(user)} bash -c {_quote(inner)}"
     # The command self-escalates via `sudo -u`, so don't double-wrap with sudo.
     return run_command(server, cmd, timeout=timeout, sudo=False)
 
@@ -904,14 +926,14 @@ def remote_public_ip(server):
         try:
             out, _, rc = run_command(server, cmd, timeout=8)
             ip = (out or "").strip().split("\n")[0].strip()
-            if re.match(r"^\d{1,3}(\.\d{1,3}){3}$", ip):
+            if re.match(r"^\d{1,3}(\.\d{1,3}){3}\Z", ip):
                 return ip
         except Exception:  # nosec B112
             continue   # best-effort: fall through to the next IP-detection command
     return ""
 
 
-_live_metrics_cache = {}   # (server.id, short_name, game_port) -> (expiry_epoch, dict)
+_live_metrics_cache = register_remote_cache({})   # (server.id, short_name, port) -> (exp, dict)
 _LIVE_METRICS_TTL = 2      # de-dups concurrent viewers of the SAME server (the detail page polls
 #                            every 4s, so a single viewer still gets a fresh read each poll)
 
@@ -939,7 +961,7 @@ _STAT_JIFFIES_EXPR = "b[%d]+b[%d]" % (_STAT_UTIME_IDX, _STAT_STIME_IDX)
 # command is a FIXED SIZE no matter how many games run there, rather than growing a fragment per
 # game until it stops fitting in a shell. Every game's CPU share is also measured across the same
 # 0.25s window as the host's, which the per-game version could not do.
-_host_metrics_cache = {}   # remote id -> (expiry_epoch, parsed dict)
+_host_metrics_cache = register_remote_cache({})   # remote id -> (expiry_epoch, parsed dict)
 
 # Sum utime+stime per user in ONE awk pass: ps gives pid -> user, getline reads each
 # /proc/<pid>/stat. comm can contain spaces and ')', so split on the LAST ')' — the same rule the
@@ -1220,7 +1242,16 @@ def remote_live_metrics(server):
     }
 
 
-def _rewrite_crontab(server, user, grep_args, add_lines, extra_pre=""):
+# Drops the one line whose content — leading and trailing whitespace ignored — equals
+# $CRON_DROP. Through ENVIRON, not `-v`: awk expands backslash escapes in a `-v` value, and a
+# cron command may legitimately contain one.
+_CRON_DROP_AWK = (
+    'awk \'BEGIN{w=ENVIRON["CRON_DROP"]} '
+    '{t=$0; gsub(/^[ \\t]+|[ \\t]+$/,"",t); if (t!=w) print}\' '
+)
+
+
+def _rewrite_crontab(server, user, grep_args, add_lines, extra_pre="", drop_line=None):
     """Reliably rewrite `user`'s crontab: keep every existing line except those
     matched by `grep_args` (arguments passed to grep, already quoted, e.g.
     "-vF <pat>"; empty keeps all), then append `add_lines`.
@@ -1230,11 +1261,27 @@ def _rewrite_crontab(server, user, grep_args, add_lines, extra_pre=""):
     eventlet's green subprocess — the shell can be reaped before crontab finishes
     reading stdin, so the write silently no-ops while returncode stays 0 — whereas
     reads and file-argument installs work correctly. `extra_pre` runs first (used
-    to clean up flag files)."""
-    filt = f"grep {grep_args} " if grep_args else "cat "
+    to clean up flag files).
+
+    `drop_line` removes one line by its content IGNORING LEADING AND TRAILING WHITESPACE, which is
+    what the cron editor needs and what `grep -vxF` could not give it. Every transport returns
+    `out.strip()` — the whole listing as one blob — so the FIRST line of a crontab comes back
+    without its indentation, and indentation is legal and common in a hand-edited crontab. That
+    stripped text is the `raw` the panel hands the browser, and the browser hands it back as the
+    identity to delete or update; a whole-line fixed-string match then missed the real line.
+    delete_cron_job reported success and removed nothing, and update_cron_job appended its rewrite
+    beside the original, so the job ran on two schedules. Compared through awk's ENVIRON rather
+    than `-v`, because `-v` processes backslash escapes in the value and a cron command may
+    contain one."""
+    env_pre = ""
+    if drop_line is not None:
+        env_pre = "CRON_DROP=%s; export CRON_DROP; " % _quote(str(drop_line).strip())
+        filt = _CRON_DROP_AWK
+    else:
+        filt = f"grep {grep_args} " if grep_args else "cat "
     appends = "".join(f'printf \'%s\\n\' {_quote(l)} >> "$T"; ' for l in (add_lines or []))
     pipeline = (
-        f'{extra_pre}T=$(mktemp); crontab -u {user} -l 2>/dev/null | {filt}> "$T"; '
+        f'{env_pre}{extra_pre}T=$(mktemp); crontab -u {user} -l 2>/dev/null | {filt}> "$T"; '
         f'{appends}crontab -u {user} "$T"; RC=$?; rm -f "$T"; exit $RC'
     )
     cmd = f"sudo bash -c {_quote(pipeline)}"
@@ -1341,7 +1388,7 @@ def _gamedig_host(server):
             "ip route get 1.1.1.1 2>/dev/null | awk 'NR==1{for(i=1;i<=NF;i++)if($i==\"src\")print $(i+1)}'",
             timeout=8)
         cand = (out or "").strip()
-        if re.match(r"^\d{1,3}(?:\.\d{1,3}){3}$", cand):
+        if re.match(r"^\d{1,3}(?:\.\d{1,3}){3}\Z", cand):
             ip = cand
     except Exception:
         _log.debug("gamedig-host: default-route IP lookup failed", exc_info=True)

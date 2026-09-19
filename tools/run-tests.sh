@@ -47,7 +47,10 @@ run_suite() {
         echo "  !! ${path} exited ${rc}" >&2
         return "$rc"
     fi
-    if printf '%s' "$out" | grep -qiE '^SKIP:'; then
+    # Both spellings: the DB-owning suites print "SKIP: ..." at the start of a line, and
+    # template_actions_test prints an indented "  SKIP  name  [reason]". The anchored pattern
+    # matched only the first, so an all-skipped run of the second sailed through as a pass.
+    if printf '%s' "$out" | grep -qiE '(^|[[:space:]])SKIP[: ]'; then
         echo "  !! ${path} SKIPPED — that is a gap, not a pass. See the note in $0." >&2
         return 1
     fi
@@ -61,6 +64,11 @@ echo "== byte-compile (syntax errors) =="
 "$PY" -m py_compile tools/panel-helper
 
 echo "== lint: real bugs + unused imports/vars (undefined names, bad syntax, F401, F811, F841) =="
+# REQUIRE_TOOLS=1 (set by CI) turns "the tool isn't here" from a skip into a failure. The probe
+# below cannot tell "not installed" from "installed and raising on import" — a dependency conflict
+# or a bad wheel — and either way it printed "skipping" and the script went on to say
+# "All checks passed." Proven by execution: with flake8 made to raise, an injected F821 was
+# reported as a clean run.
 if "$PY" -m flake8 --version >/dev/null 2>&1; then
     # F401 (unused import) + F841 (unused local var) are included so dead code is caught
     # here rather than later by CodeQL / Codacy in the Security tab.
@@ -72,6 +80,9 @@ if "$PY" -m flake8 --version >/dev/null 2>&1; then
     # the cheapest possible check for that, so it runs here rather than only in a cloud tool.
     "$PY" -m flake8 --select=E9,F63,F7,F82,F401,F811,F841 --show-source --statistics \
         --extend-exclude=venv,.venv . tools/panel-helper
+elif [ "${REQUIRE_TOOLS:-0}" = "1" ]; then
+    echo "  !! flake8 is required here (REQUIRE_TOOLS=1) and could not be run" >&2
+    exit 1
 else
     echo "  (flake8 not installed — skipping)"
 fi
@@ -82,6 +93,9 @@ if command -v shellcheck >/dev/null 2>&1; then
     # been missing from it. `git ls-files` so a new script is covered the day it is committed.
     # shellcheck disable=SC2046  # word-splitting is what we want here; no shell script has a space
     shellcheck -S warning $(git ls-files '*.sh')
+elif [ "${REQUIRE_TOOLS:-0}" = "1" ]; then
+    echo "  !! shellcheck is required here (REQUIRE_TOOLS=1) and is not on PATH" >&2
+    exit 1
 else
     echo "== shellcheck (not installed — skipping) =="
 fi
@@ -89,10 +103,11 @@ fi
 echo "== unit tests (pure logic; no network) =="
 "$PY" tests/unit_test.py
 
-echo "== template actions (JS parses; every data-action button is wired) =="
-# esprima is optional locally (the test says so and skips); CI installs it so the JS parse
-# gate always runs there.
-"$PY" tests/template_actions_test.py
+# Through run_suite, not bare: this suite can SKIP (esprima is optional locally), and a skip here
+# silently removes the JS parse gate and four CSRF gates from the run. Bare, its exit code was the
+# only signal and nothing looked at its output.
+run_suite "template actions (JS parses; every data-action button is wired)" \
+          tests/template_actions_test.py
 
 echo "== url map (every rule, endpoint, method and guard, vs the committed baseline) =="
 # The safety net for splitting register_routes() up. A route that silently loses a method, an

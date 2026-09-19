@@ -74,7 +74,13 @@ jobs:
       - name: Run all checks (compile, lint, unit, smoke, shellcheck)
         # Same script developers run locally via ./tools/run-tests.sh, so green here == green there.
         # shellcheck is pre-installed on the ubuntu runners.
-        run: PYTHON=python bash tools/run-tests.sh
+        # REQUIRE_TOOLS=1: a linter that is missing OR broken must fail this job rather than be
+        # skipped. The probes in run-tests.sh cannot tell the two apart, and both printed
+        # "skipping" before the script went on to say "All checks passed" — shown by execution,
+        # with flake8 made to raise, an injected undefined name reported as a clean run.
+        # shellcheck is pre-installed on the ubuntu runners and flake8 is installed above, so this
+        # only ever fires when the runner image changes under us.
+        run: PYTHON=python REQUIRE_TOOLS=1 bash tools/run-tests.sh
 
   coverage:
     name: coverage

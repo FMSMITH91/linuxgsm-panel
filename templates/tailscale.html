@@ -20,9 +20,14 @@
       tailnet — no open firewall ports. The panel installs it and walks you through
       connecting, just like it does for remote servers.
     </p>
+    {# Superadmin, matching the endpoint behind it: /api/tailscale/install, /up and /serve act
+       on the PANEL HOST and are superadmin-only. This page is MANAGE_REMOTES, so a host admin
+       reached it and was offered four buttons that all answer 403. #}
+    {% if current_user.is_superadmin %}
     <button type="button" class="btn btn-primary" id="ts-install-btn">
       <i class="bi bi-download"></i> Install &amp; connect Tailscale
     </button>
+    {% endif %}
     <div class="text-secondary small mt-2">
       Runs on the panel host (needs sudo). Prefer to do it by hand?
       <a href="https://tailscale.com/download" target="_blank" rel="noopener" data-no-i18n>tailscale.com/download</a>.
@@ -56,9 +61,11 @@
             approve in your Tailscale account.
           {% endif %}
         </p>
+        {% if current_user.is_superadmin %}
         <button type="button" class="btn btn-primary" id="ts-connect-btn">
           <i class="bi bi-box-arrow-in-right"></i> Link this machine to Tailscale
         </button>
+        {% endif %}
         <div id="ts-connect-out" class="small mt-3"></div>
       </div>
     </div>
@@ -209,9 +216,11 @@
               <input id="tailscale-mount" type="text" name="mount" class="form-control form-control-sm"
                      value="{{ config.tailscale_mount or '/' }}">
             </div>
+            {% if current_user.is_superadmin %}
             <button type="button" class="btn btn-success btn-sm" data-action="enableServe" data-args='["@self"]'>
               <i class="bi bi-wifi"></i> Enable Serve <span class="text-uppercase" style="font-size:.65em;opacity:.8;">(private)</span>
             </button>
+            {% endif %}
           </div>
           <div class="form-check">
             <input type="checkbox" id="funnel-check" class="form-check-input">
@@ -236,10 +245,12 @@
         {# The mount is carried on the button, not hardcoded in the handler: `tailscale serve
            --remove /` exits 0 on a node whose mapping is at /lgsm-panel, so the panel would report
            success, clear tailscale_setup_done and tailscale_mount, and leave Serve running. #}
+        {% if current_user.is_superadmin %}
         <button class="btn btn-outline-danger btn-sm" data-action="disableServe" data-args='["@self"]'
                 data-mount="{{ config.tailscale_mount or '/' }}">
           <i class="bi bi-x-circle"></i> Disable
         </button>
+        {% endif %}
         {% endif %}
       </div>
       <div class="card-body p-0">

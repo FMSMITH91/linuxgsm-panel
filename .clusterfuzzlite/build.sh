@@ -39,5 +39,11 @@ for fuzzer in "$SRC_DIR"/tests/fuzz/fuzz_*.py; do
   corpus_dir="$SRC_DIR/tests/fuzz/corpus/${name#fuzz_}"
   if [ -d "$corpus_dir" ]; then
     zip -j -q -r "$OUT/${name}_seed_corpus.zip" "$corpus_dir"
+  else
+    # LOUD. A renamed or deleted corpus directory used to be silent: the target still built, still
+    # fuzzed, and started from nothing — the one condition under which a fuzzing run proves far
+    # less than its green tick suggests. Not fatal (a brand-new target legitimately has no seeds
+    # yet), but it has to be visible in the build log.
+    echo "WARNING: no seed corpus for ${name} at ${corpus_dir} — it will fuzz from scratch" >&2
   fi
 done

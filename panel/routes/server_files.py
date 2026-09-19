@@ -26,7 +26,7 @@ from panel.services import (lgsm_data)
 import re
 import threading
 import time
-from panel.core.http import (_json_body, _log_and_generic)
+from panel.core.http import (_json_body, _json_str, _log_and_generic, _unreachable)
 from panel.core.validation import (_attachment_header)
 from app import (ALERT_PROVIDERS, _GAME_LIST_CACHE, _LGSM_NAME_MAP, _MAX_UPLOAD_BYTES,
     _apply_mod_restart, _clean_console_text, _log, _socketio_cors, _sync_toggles_from_cron,
@@ -135,6 +135,11 @@ def register(app, supervise):
         data = _json_body()
         try:
             if data.get("raw") is not None:
+                # A file's contents must be a STRING. A number or a list reached write_file and
+                # died on .encode() — deep in the write path, reported as a 500.
+                if not isinstance(data["raw"], str):
+                    return jsonify({"success": False,
+                                    "message": "The file contents must be text."}), 400
                 rel = f"lgsm/config-lgsm/{gs.lgsm_name}/{gs.lgsm_name}.cfg"
                 ok, msg = write_file(gs.remote, gs.short_name, rel, data["raw"])
             else:
@@ -174,7 +179,10 @@ def register(app, supervise):
                 app.logger.debug("alerts read failed", exc_info=True)
             return jsonify({"providers": ALERT_PROVIDERS, "values": vals})
         # POST: only the known alert keys; toggles coerced to on/off.
-        data = _json_body().get("values") or {}
+        # isinstance, not `or {}`: a non-empty non-dict (a number, a list) passes the `or` and
+        # then .items() raises AttributeError — a 500 for a bad request body.
+        data = _json_body().get("values")
+        data = data if isinstance(data, dict) else {}
         updates = {}
         for k, v in data.items():
             if k not in _ALERT_KEY_SET:
@@ -213,8 +221,8 @@ def register(app, supervise):
             return jsonify({"success": False, "message": "Permission denied"}), 403
         data = _json_body()
         which = "install" if data.get("action") == "install" else ("remove" if data.get("action") == "remove" else "")
-        mod_id = str(data.get("mod") or "").strip()   # str() so a numeric/other type can't crash .strip()
-        if not which or not re.match(r"^[A-Za-z0-9._-]+$", mod_id):
+        mod_id = _json_str(data, "mod")   # coerces, so a numeric/other type cannot crash .strip()
+        if not which or not re.match(r"^[A-Za-z0-9._-]+\Z", mod_id):
             return jsonify({"success": False, "message": "Pick a valid mod to " + (which or "act on") + "."}), 400
         try:
             out, err, rc = mods_action(gs.remote, gs.short_name, gs.lgsm_name, which, mod_id)
@@ -367,9 +375,20 @@ def register(app, supervise):
         _LGSM_NAME_MAP["data"] = None
         games = len(load_game_list())
         log_action(current_user, "lgsm_data_refresh", success=ok, detail="%d games" % games)
-        return jsonify({"success": bool(ok and games), "games": games,
-                        "message": ("Loaded %d games." % games) if games
-                                   else "Could not reach LinuxGSM — check this host's outbound access."})
+        # `ok` is the FETCH; `games` is what the page can show. They disagree when the fetch failed
+        # and a cached list is still on disk — which used to read as "Loaded 30 games." because the
+        # message only looked at the count, on the one button an operator presses BECAUSE a game is
+        # missing. Name the real error when there is one.
+        why = (lgsm_data.status().get("reason") or "").strip()
+        if ok:
+            message = "Loaded %d games." % games
+        elif games:
+            message = ("Could not reach LinuxGSM — still showing the cached list of %d games%s."
+                       % (games, (" (%s)" % why) if why else ""))
+        else:
+            message = ("Could not reach LinuxGSM — check this host's outbound access%s."
+                       % ((" (%s)" % why) if why else ""))
+        return jsonify({"success": bool(ok and games), "games": games, "message": message})
 
     @app.route("/api/server/<int:server_id>/cron", methods=["GET", "POST"])
     @login_required
@@ -702,7 +721,7 @@ def register(app, supervise):
                 return jsonify({"success": True, "enabled": want == "on",
                                 "needs_restart": True})
             vals = lgsm_get_values(gs.remote, gs.short_name, gs.lgsm_name, ["logtimestamp"])
-            return jsonify({"enabled": (vals.get("logtimestamp") or "").strip().strip('"') == "on"})
+            return jsonify({"enabled": _json_str(vals, "logtimestamp").strip('"') == "on"})
         except Exception:
             return jsonify({"error": _log_and_generic("request failed")}), 500
 
@@ -713,7 +732,7 @@ def register(app, supervise):
         gs = get_game(server_id)
         remote = gs.remote
         data = _json_body()
-        cmd_text = data.get("command", "").strip()
+        cmd_text = _json_str(data, "command")
 
         if not cmd_text:
             return jsonify({"error": "No command provided"}), 400
@@ -727,6 +746,11 @@ def register(app, supervise):
             if rc != 0:
                 return jsonify({"error": "Console (tmux) not accessible. Is the server running?"}), 502
             return jsonify({"success": True, "command": cmd_text})
+        # A host that is switched off is a normal condition, not a fault in the panel — the same
+        # distinction api_remote_live_stats draws. Anything that is NOT a ConnectionError stays a
+        # 500 on purpose: those are ours.
+        except ConnectionError:
+            return _unreachable("send console command")
         except Exception:
             return jsonify({"error": _log_and_generic("request failed")}), 500
 

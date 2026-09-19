@@ -38,7 +38,9 @@
         </div>
 
         <div class="mt-2">
-          <label class="form-label" for="setup-remote-credential">Auth Method</label>
+          {# `auth-method`, the select directly below — it pointed at setup-remote-credential, the
+             SSH credential box, so clicking "Auth Method" focused the wrong field. #}
+          <label class="form-label" for="auth-method">Auth Method</label>
           <select name="auth_method" class="form-select" id="auth-method" data-action="toggleSetupCreds" data-on="change">
             <option value="key">SSH Key</option>
             <option value="password">Password</option>
@@ -66,7 +68,7 @@
           <div class="col-6">
             <label class="form-label" style="font-size: .8rem;" for="setup-remote-lgsm_user">LinuxGSM User (optional)</label>
             <input id="setup-remote-lgsm_user" type="text" name="lgsm_user" class="form-control" placeholder="e.g. gmodserver">
-            <div class="form-text">Leave blank to use the SSH user</div>
+            <div class="form-text">A Linux account to create during fresh-server setup</div>
           </div>
         </div>
 

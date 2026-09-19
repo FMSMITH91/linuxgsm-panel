@@ -53,7 +53,7 @@ GMOD_CONTENT_SIZES = {"cstrike": "~1.6 GB", "tf": "~13 GB", "dod": "~1.1 GB", "h
                       "pvkii": "~3 GB", "dystopia": "~1.5 GB", "empires": "~2 GB", "cure": "~2 GB",
                       "dab": "~3 GB"}
 _CONTENT_USER = "gmodcontent"                         # panel-managed content user, created if none exists
-_CU_NAME_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9._-]*$")   # Linux username charset (reaches root-run cmds)
+_CU_NAME_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9._-]*\Z")   # Linux username charset (reaches root-run cmds)
 
 # The LinuxGSM script names that exist on a host purely as GMod mountable content.
 CONTENT_LGSM_NAMES = frozenset(n for _label, n in GMOD_CONTENT_GAMES.values() if n)
@@ -159,7 +159,7 @@ def ensure_content_user(server):
     return {"user": u, "group": _user_primary_group(server, u), "present": {}}
 
 
-_DF_PATH_RE = re.compile(r"^/[\w./-]*$")   # absolute path, no shell metacharacters
+_DF_PATH_RE = re.compile(r"^/[\w./-]*\Z")   # absolute path, no shell metacharacters
 
 
 def path_disk_free(server, path="/home"):

@@ -24,7 +24,7 @@ from panel.security.auth import (INSTALL_SERVER, MANAGE_REMOTES, accessible_remo
     can_access_remote, get_game,
     get_remote, has_permission, log_action, permission_required, server_access_required)
 import time
-from panel.core.http import (_json_body, _log_and_generic, _unreachable)
+from panel.core.http import (_json_body, _json_str, _log_and_generic, _unreachable)
 from app import (_local_remote_id, _log, _os_update_note)
 
 
@@ -109,7 +109,7 @@ def register(app):
         only you or only your LAN should reach had no way to say so."""
         remote = get_remote(remote_id)
         data = _json_body()
-        source = (data.get("source") or "").strip()
+        source = _json_str(data, "source")
         port = data.get("port", "")
         proto = data.get("protocol", "tcp")
         on = data.get("allow", True) is not False
@@ -208,7 +208,7 @@ def register(app):
             return jsonify({"success": False, "message": "Enter a valid port number."}), 400
         if not (1 <= new_port <= 65535):
             return jsonify({"success": False, "message": "Port must be between 1 and 65535."}), 400
-        bind = (body.get("bind") or "").strip()
+        bind = _json_str(body, "bind")
         old = remote.port
         try:
             ok, msg = change_ssh_port(remote, new_port, bind)
@@ -505,7 +505,9 @@ def register(app):
         with _rwe_lock:
             _reboot_when_empty.pop(remote_id, None)
         success, msg = remote_reboot(remote)
-        log_action(current_user, "remote_reboot", target=remote.name)
+        # success=, or log_action's default (True) records a refused reboot as one that happened —
+        # and /logs filtered to failures hides it. The OS-update sibling on this page passes it.
+        log_action(current_user, "remote_reboot", target=remote.name, success=success)
         return jsonify({"success": success, "message": msg})
 
     @app.route("/api/remote/<int:remote_id>/reboot-cancel", methods=["POST"])
@@ -529,7 +531,15 @@ def register(app):
         OS updates, reboot and firewall — the same experience as the Panel Server."""
         remote = get_remote(remote_id)
         games = GameServer.query.filter_by(remote_id=remote_id).all()
-        return render_template("remote_manage.html", remote=remote, games=games)
+        # config=, because remote_manage.html reads config.port / config.bind_host /
+        # config.tailscale_setup_done for the panel-host card. Without it Jinja fell back to
+        # FLASK'S app.config — truthy, but with no lowercase keys — so every read was empty and
+        # every `if config else <default>` fallback was dead code that could not fire. The page
+        # said "Public panel access (port )" with the number missing, claimed Serve was not set
+        # up when it was, and pre-filled the binding form with 0.0.0.0 and a blank port next to an
+        # "Apply & restart" button. server_management passes it; this route did not.
+        return render_template("remote_manage.html", remote=remote, games=games,
+                               config=load_config())
 
     @app.route("/api/remote/<int:remote_id>/specs")
     @login_required

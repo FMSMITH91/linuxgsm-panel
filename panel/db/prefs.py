@@ -13,7 +13,7 @@ from panel.db.models import UI_PREF_KEYS
 
 _log = logging.getLogger("panel.prefs")
 
-_PANEL_KEY_RE = re.compile(r"^[a-z0-9_-]{1,32}$")
+_PANEL_KEY_RE = re.compile(r"^[a-z0-9_-]{1,32}\Z")
 
 
 def _clean_panel_map(raw):

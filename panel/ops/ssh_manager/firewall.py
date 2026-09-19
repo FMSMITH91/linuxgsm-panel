@@ -49,6 +49,11 @@ def _parse_ufw_rule(detail):
     }
 
 
+# ufw ships these as fixed app-profile names (`ufw app list`); they are what `ufw allow OpenSSH`
+# puts in the To column. Lowercased for comparison.
+_SSH_APP_PROFILES = frozenset({"openssh", "ssh"})
+
+
 def _group_ufw_rules(rules):
     """Collapse the raw numbered rules into user-friendly groups, merging the separate
     IPv4 and IPv6 entries UFW keeps for the same rule into a single row (with the list
@@ -180,10 +185,26 @@ def _annotate_firewall_protection(server, enabled, groups):
         # just as much a way in as an ALLOW — miss it and the panel would let you delete
         # your only SSH access.
         inbound = g.get("direction", "IN") != "OUT"
-        g["is_ssh"] = (not g.get("is_iface") and g.get("action") in ("ALLOW", "LIMIT") and inbound
-                       and pn.isdecimal() and int(pn) in ssh_ports)
-        g["is_tailscale"] = (bool(g.get("is_iface")) and g.get("action") == "ALLOW" and inbound
-                             and str(g.get("iface", "")).startswith("tailscale"))
+        _iface = str(g.get("iface", "") or "")
+        _ts_iface = _iface.startswith("tailscale")
+        # An SSH rule the panel can recognise is one of three shapes, and it used to see only the
+        # first:
+        #   22/tcp                     — a bare port number
+        #   OpenSSH                    — ufw's APP PROFILE, which is the form Ubuntu's own docs and
+        #                                `ufw app list` steer people to. It prints the profile name
+        #                                in the To column, so pn.isdecimal() was False.
+        #   22 on eth0                 — interface-scoped, which `not is_iface` threw away
+        # Both missed shapes came back is_ssh=False AND is_access=False, so protected and warn were
+        # both False and remote_ufw_delete_rule — which gates only on protected — deleted the
+        # host's only way in without a word. Reproduced against this module's own parser.
+        # A tailscale-scoped rule stays out of is_ssh so the two categories remain disjoint;
+        # is_tailscale already covers it and the messages below differ.
+        _named_ssh = pn.strip().lower() in _SSH_APP_PROFILES
+        g["is_ssh"] = (g.get("action") in ("ALLOW", "LIMIT") and inbound and not _ts_iface
+                       and ((pn.isdecimal() and int(pn) in ssh_ports) or _named_ssh))
+        # LIMIT here too, for the reason spelled out above: a rate-limited rule is a way in.
+        g["is_tailscale"] = (bool(g.get("is_iface")) and g.get("action") in ("ALLOW", "LIMIT")
+                             and inbound and _ts_iface)
         g["is_access"] = g["is_ssh"] or g["is_tailscale"]
 
     panel_port = _panel_web_port(server)
@@ -204,8 +225,13 @@ def _annotate_firewall_protection(server, enabled, groups):
         g["protected"] = False
         g["warn"] = False
         g["protect_reason"] = ""
+        # ALLOW *or LIMIT*, and inbound — the same two corrections is_ssh already carries.
+        # `ufw limit 5000/tcp` on the panel's own web port is an ordinary thing to do and left the
+        # only route to the panel UI deletable; an `ALLOW OUT` rule on that port was conversely
+        # treated AS the panel rule and made undeletable.
         g["is_panel"] = (panel_port is not None and not g.get("is_iface")
-                         and g.get("action") == "ALLOW"
+                         and g.get("action") in ("ALLOW", "LIMIT")
+                         and g.get("direction", "IN") != "OUT"
                          and str(g.get("port_num", "")).isdecimal()
                          and int(g["port_num"]) == panel_port)
         if not enabled:
@@ -283,7 +309,10 @@ def remote_ufw_status(server):
     if rc != 0 or "Status:" not in out:
         return {"installed": False, "enabled": False, "rules": [], "groups": [], "unreachable": True}
 
-    enabled = "Status: active" in out
+    # _ufw_is_active(), not a substring test — that helper exists in this file precisely so the
+    # literal "Status: active" is not re-tested by hand, and a rule COMMENT carrying that text
+    # would answer it. (It errs toward more protection, so this is consistency, not a live bug.)
+    enabled = _ufw_is_active(out)
     rules = []
     # `ufw status numbered` prints each rule as "[ N] <to>  <action>  <from>".
     # Collapse runs of spaces so the detail reads cleanly.

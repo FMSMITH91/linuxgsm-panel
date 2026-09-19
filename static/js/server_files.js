@@ -149,11 +149,17 @@ function saveRaw(){
 // ── File browser ──
 function renderBreadcrumb(){
   var parts = curDir? curDir.split('/'):[];
-  var html='<a href="#" data-nav=""><i class="bi bi-house-door"></i> home</a>';
+  // data-no-i18n on every element that holds a PATH SEGMENT. A directory can legitimately be
+  // called Backups, Console, Status or Log — all of them keys in translations/*/ — and the
+  // walker would render the name of a directory that does not exist under that name. `backups/`
+  // is a standard LinuxGSM directory, so this is not an exotic case. (This file already knew:
+  // _conflictNode guards the overwrite label for exactly this reason.)
+  var html='<a href="#" data-nav="" data-no-i18n><i class="bi bi-house-door"></i> home</a>';
   var acc='';
-  parts.forEach(function(p){ acc = acc?acc+'/'+p:p; html+=' <span class="text-secondary">/</span> <a href="#" data-nav="'+esc(acc)+'">'+esc(p)+'</a>'; });
+  parts.forEach(function(p){ acc = acc?acc+'/'+p:p; html+=' <span class="text-secondary">/</span> <a href="#" data-nav="'+esc(acc)+'" data-no-i18n>'+esc(p)+'</a>'; });
   document.getElementById('breadcrumb').innerHTML = html;  // nosemgrep
-  var dest=document.getElementById('upload-dest'); if(dest) dest.textContent = curDir||'home';
+  var dest=document.getElementById('upload-dest');
+  if(dest){ dest.setAttribute('data-no-i18n',''); dest.textContent = curDir||'home'; }
 }
 function mkRow(opts){
   // opts: {name, path, type: 'dir'|'file'|'up', size, deletable, protected, icon}
@@ -162,7 +168,7 @@ function mkRow(opts){
   row.style.cursor='pointer';
   row.dataset.path=opts.path; row.dataset.type=opts.type;
   var left=document.createElement('span'); left.style.flex='1'; left.style.minWidth='0'; left.style.overflow='hidden'; left.style.textOverflow='ellipsis'; left.style.whiteSpace='nowrap';
-  left.innerHTML=opts.icon+' <span style="font-size:.85rem;">'+esc(opts.name)+'</span>';  // nosemgrep
+  left.innerHTML=opts.icon+' <span style="font-size:.85rem;" data-no-i18n>'+esc(opts.name)+'</span>';  // nosemgrep
   var right=document.createElement('span'); right.className='d-flex align-items-center gap-2 flex-shrink-0';
   if(opts.size!=null){ var s=document.createElement('span'); s.className='text-secondary'; s.style.fontSize='.68rem'; s.textContent=fmtSize(opts.size); right.appendChild(s); }
   // A real <a href>, not a button: the browser downloads it natively, "Save link as" and
@@ -211,7 +217,9 @@ function openFile(path){
     curFile=path;
     document.getElementById('editor-empty').style.display='none';
     document.getElementById('editor-wrap').style.display='';
-    document.getElementById('editor-path').textContent=path;
+    var _ep=document.getElementById('editor-path');
+    _ep.setAttribute('data-no-i18n','');   // the header must name the file being saved, not a translation of it
+    _ep.textContent=path;
     document.getElementById('editor').value=d.content||'';
     syncGutter();
     var edl=document.getElementById('editor-download');
@@ -645,8 +653,16 @@ document.getElementById('breadcrumb').addEventListener('click', function(ev){
   // the listing is short — so a near miss opened the file in the tab, which is indistinguishable
   // from "drag and drop does not work on Linux". Suppressing it document-wide means a miss does
   // nothing at all, and the card below is a target the size of the whole card.
+  // ...but NOT over a form control. preventDefault() on a bubbled event still cancels the
+  // default action, so the document-wide suppression also cancelled drops into this page's three
+  // textareas — dragging a selection into the raw config editor or the file editor did nothing,
+  // on this page and only this page. Measured: defaultPrevented was true for a drop on #editor.
   ['dragenter','dragover','drop'].forEach(function(t){
-    document.addEventListener(t, function(ev){ ev.preventDefault(); }, false);
+    document.addEventListener(t, function(ev){
+      var el = ev.target;
+      if (el && el.closest && el.closest('textarea, input, [contenteditable=""], [contenteditable="true"]')) return;
+      ev.preventDefault();
+    }, false);
   });
 
   ['dragenter','dragover'].forEach(function(t){

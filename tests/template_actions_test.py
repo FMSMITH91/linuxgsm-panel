@@ -51,6 +51,22 @@ STATIC_JS = ROOT / "static" / "js"
 srcs = {p.name: p.read_text(encoding="utf-8") for p in sorted(TEMPLATES.glob("*.html"))}
 srcs.update({p.name: p.read_text(encoding="utf-8") for p in sorted(STATIC_JS.glob("*.js"))})
 
+# ── the sweeps have to find their subject ─────────────────────────────────────────────────────
+# Almost every gate in this file is "no bad pattern anywhere in `srcs`". Fed an EMPTY srcs they
+# all pass: `not []` is True, `x not in ""` is True, `all(... for x in [])` is True. Measured by
+# forcing both globs to return nothing — the suite reported 95/100 and 97/100, i.e. only the few
+# gates with their own positive control noticed. The trigger is not exotic: templates/ or
+# static/js/ moving is exactly the kind of change the panel/routes split already made once.
+#
+# The counts are floors, not inventories — they exist to catch "the sweep found nothing", not to
+# be maintained. tests/unit/part01._modpath does the same job by raising.
+_n_tpl = sum(1 for n in srcs if n.endswith(".html"))
+_n_js = sum(1 for n in srcs if n.endswith(".js"))
+check(_n_tpl >= 20, "sweep: the templates/ scan found files to read",
+      "%d .html — every template gate below would pass vacuously" % _n_tpl)
+check(_n_js >= 20, "sweep: the static/js/ scan found files to read",
+      "%d .js — every JS gate below would pass vacuously" % _n_js)
+
 # ── 0. inline <script> blocks must still be JavaScript ────────────────────────────────────────
 # Jinja strips {# … #} before the browser ever sees it, so a comment inside a <script> renders
 # fine and looks harmless. Static analysers read the TEMPLATE, though, and to a JS parser "{#" is
@@ -92,6 +108,165 @@ if esprima:
         except Exception as _e:
             _broken.append("%s: %s" % (_p.name, _e))
     check(not _broken, "static/js: every file parses as JavaScript", "; ".join(_broken[:3]))
+
+# ── A form that appears AFTER page load carries no CSRF token ─────────────────────────────────
+# panel.js gives every POST form a hidden csrf_token, once, on DOMContentLoaded, and wraps fetch()
+# so every mutating fetch carries the header. A form submitted with form.submit() has neither:
+# it is a native POST, so no wrapper runs, and form.submit() fires no 'submit' event either, so a
+# delegated listener could not stand in. refreshSection() re-fetches the page and swaps a
+# container's innerHTML — the SERVER's markup, without the field panel.js added to the live DOM.
+#
+# The host page's uninstall form sits in #host-servers-card and is submitted that way, and
+# importExisting() refreshes exactly that card: after importing discovered servers, Uninstall
+# posted with no token. Measured in a browser against the real panel.js — token present on load,
+# null after the swap, present again after ensureCsrfFields().
+if not esprima:
+    # SKIPPED, not silently absent. These four sat inside `if esprima:` and simply stopped
+    # existing without it: the tally is len(results), so the suite reported "95 / 95 checks
+    # passed" with four CSRF gates gone and exited 0. A check that did not run has to appear in
+    # the count as a check that did not run.
+    for _n in ("panel.js exports ensureCsrfFields for markup that arrives after load",
+               "panel.js: refreshSection re-arms the token on the markup it swaps in",
+               "static/js: a native form.submit() re-arms its CSRF token first",
+               "static/js: the submit()-site walk found call sites at all"):
+        skip(_n, "esprima not installed (pip install esprima)")
+if esprima:
+    _csrf_js = (ROOT / "static" / "js" / "panel.js").read_text(encoding="utf-8")
+    check("window.ensureCsrfFields = function" in _csrf_js,
+          "panel.js exports ensureCsrfFields for markup that arrives after load", "not exported")
+    # It must run at the end of refreshSection, or every swapped-in form loses its token.
+    _rs = _csrf_js[_csrf_js.index("window.refreshSection ="):]
+    _rs = _rs[:_rs.index("function _submitAjaxForm")]
+    check("window.ensureCsrfFields(cur)" in _rs,
+          "panel.js: refreshSection re-arms the token on the markup it swaps in", _rs[:300])
+
+    # The general invariant, over the AST rather than the text: every CallExpression of the form
+    # <x>.submit() must sit inside a function that also calls ensureCsrfFields. A native submit is
+    # the one path the fetch wrapper cannot cover, and form.submit() fires no 'submit' event, so a
+    # delegated listener could not stand in for it either.
+    def _walk(node, fn_stack, hits):
+        t = getattr(node, "type", None)
+        pushed = False
+        if t in ("FunctionDeclaration", "FunctionExpression", "ArrowFunctionExpression"):
+            fn_stack.append({"node": node, "submits": [], "armed": False})
+            pushed = True
+        if t == "CallExpression":
+            callee = getattr(node, "callee", None)
+            prop = getattr(getattr(callee, "property", None), "name", None)
+            name = getattr(callee, "name", None) or getattr(
+                getattr(callee, "property", None), "name", None)
+            if prop == "submit":
+                _submit_sites[0] += 1
+                if fn_stack:
+                    fn_stack[-1]["submits"].append(getattr(node.loc, "start", None))
+            if name == "ensureCsrfFields":
+                for fr in fn_stack:
+                    fr["armed"] = True
+        for k in list(getattr(node, "__dict__", {})):
+            v = getattr(node, k)
+            if isinstance(v, list):
+                for e in v:
+                    if hasattr(e, "type"):
+                        _walk(e, fn_stack, hits)
+            elif hasattr(v, "type"):
+                _walk(v, fn_stack, hits)
+        if pushed:
+            fr = fn_stack.pop()
+            if fr["submits"] and not fr["armed"]:
+                hits.extend(fr["submits"])
+        return hits
+
+    _submit_sites = [0]
+
+    def _csrf_submit_sites():
+        return _submit_sites[0]
+
+    _naked_submit = []
+    for _p in sorted((ROOT / "static" / "js").glob("*.js")):
+        _text = _p.read_text(encoding="utf-8")
+        if ".submit()" not in _text:
+            continue
+        for _loc in _walk(esprima.parseScript(_text, options={"loc": True}), [], []):
+            _naked_submit.append("%s:%s" % (_p.name, getattr(_loc, "line", "?")))
+    # The positive control: an AST walk that matches nothing passes vacuously.
+    check(_csrf_submit_sites() > 0, "static/js: the submit()-site walk found call sites at all",
+          "found none, so the gate below proves nothing")
+    check(not _naked_submit, "static/js: a native form.submit() re-arms its CSRF token first",
+          "form.submit() with no ensureCsrfFields in the same function at: %s" % _naked_submit[:4])
+
+# ── data-no-i18n has to survive a JS write ────────────────────────────────────────────────────
+# `walk()` consults the attribute only on the node it is ENTERED at, and the MutationObserver
+# enters at the freshly added TEXT node (which has no attributes) or at an appended child — never
+# at the guarded ancestor. `el.textContent = x` replaces the children with a brand-new Text node,
+# so `<span data-no-i18n>` above it was never read: measured in a browser with LANG='es', a
+# guarded span written with textContent 'Online' displayed 'En línea', indistinguishable from an
+# unguarded one. Every template-side guard of that shape — #tag-list, #game-version,
+# #acct-username, #eu-name — was decorative, and a username called Admin rendered as
+# "Administrador".
+#
+# Structural, because this suite parses JavaScript and cannot execute it. Measured in a browser
+# against the real i18n.js before and after: guarded text now stays 'Online' and 'Status' while an
+# unguarded control still becomes 'Copias de seguridad'.
+_i18n_src = (ROOT / "static" / "js" / "i18n.js").read_text(encoding="utf-8")
+check("function guardedAbove(" in _i18n_src and "el.parentNode" in _i18n_src,
+      "i18n: there is a guardedAbove() that walks up the ancestors", "no ancestor check")
+_obs = _i18n_src[_i18n_src.index("new MutationObserver"):]
+_obs = _obs[:_obs.index(".observe(")]
+_obs_walks = [ln for ln in _obs.splitlines() if "walk(" in ln]
+check(bool(_obs_walks) and all("guardedAbove" in ln for ln in _obs_walks),
+      "i18n: every walk() the observer starts is gated on guardedAbove first",
+      "ungated: %s" % [ln.strip()[:60] for ln in _obs_walks if "guardedAbove" not in ln])
+
+# ── the flash sweep must not close a standing warning ─────────────────────────────────────────
+# chrome.js selected every `.alert-dismissible` in the document at T+6s, and nags.js gives the
+# OS-updates banner that class to park its close button — so the panel's "System updates waiting /
+# N security" warning erased itself six seconds after every page load, recorded no dismissal, and
+# flickered back on the next visibility poll. A flash is a transient reply to something the user
+# just did; a standing warning is not. Measured in a browser: banner still there, flash dismissed.
+_chrome_src = (ROOT / "static" / "js" / "chrome.js").read_text(encoding="utf-8")
+check("'.flash-container .alert-dismissible'" in _chrome_src
+      or '".flash-container .alert-dismissible"' in _chrome_src,
+      "chrome: the 6s auto-dismiss is scoped to the flash container",
+      "it still sweeps every .alert-dismissible on the page")
+
+# ── the tag chips are repainted into an element that exists ───────────────────────────────────
+# `msrv-tags-<id>` was the container on the deleted /servers/manage page, so the lookup had been
+# returning null ever since: the row kept its old chips after a save, and the dashboard's tag
+# FILTER reads its truth from those very chips, so filtering by a tag just added hid the server
+# that now carries it.
+_tags_src = (ROOT / "static" / "js" / "server_tags.js").read_text(encoding="utf-8")
+_dash_tpl = (ROOT / "templates" / "dashboard.html").read_text(encoding="utf-8")
+check("getElementById('srv-tags-' + serverId)" in _tags_src
+      and "getElementById('msrv-tags-" not in _tags_src,
+      "tags: the chip repaint targets the id the dashboard actually renders",
+      "still looking up msrv-tags-<id>")
+check('id="srv-tags-{{ srv.id }}"' in _dash_tpl,
+      "tags: ...and the dashboard renders it", "no srv-tags-<id> container")
+
+# ── a file called "Backups" must not be renamed by the translator ─────────────────────────────
+# A directory can legitimately be called Backups, Console, Status or Log — all keys in
+# translations/*/ — and without a guard the browser renders the name of a directory that does not
+# exist under that name, in the listing, the breadcrumb, the upload-destination label and the
+# editor header. `backups/` is a standard LinuxGSM directory. The file already knew: _conflictNode
+# guards the overwrite label for exactly this reason.
+_sf_src = (ROOT / "static" / "js" / "server_files.js").read_text(encoding="utf-8")
+_sf_missing = []
+for _label, _needle in (
+        ("the row's name span", "font-size:.85rem;\" data-no-i18n>'+esc(opts.name)"),
+        ("each breadcrumb segment", "'+esc(acc)+'\" data-no-i18n>'+esc(p)+'"),
+        ("the upload destination", "dest.setAttribute('data-no-i18n','')"),
+        ("the editor header", "_ep.setAttribute('data-no-i18n','')")):
+    if _needle not in _sf_src:
+        _sf_missing.append(_label)
+check(not _sf_missing, "files: every element holding a path segment is marked do-not-translate",
+      "unguarded: %s" % _sf_missing)
+
+# ── the document-wide drop suppression must not take the textareas with it ────────────────────
+# preventDefault() on a bubbled event still cancels the default action, so suppressing the
+# browser's own file-drop handler document-wide also cancelled drops into this page's three
+# textareas: dragging a selection into the raw config editor did nothing, on this page only.
+check("closest('textarea, input" in _sf_src,
+      "files: the drop suppression exempts form controls", "a drop into the editor is cancelled")
 
 # ── 0b. the server tab bar is the SAME set of destinations on both pages ──────────────────────
 # server_detail.html and server_files.html each render the tab strip, and server_files.html even
@@ -1488,6 +1663,95 @@ check(not _unreachable,
 
 # ── report ──
 # c is True (pass), False (fail) or None (skipped — the check did not run; see skip()).
+
+# ── every restore-a-hidden-panel path must DECLARE the key it is restoring ────────────────────
+# collectPanels/collectLayout build the save payload FROM THE DOM, and the endpoint's merge rule is
+# to keep every stored key the page did not declare (so one page cannot erase another page's
+# layout). showPanel removed the restore chip first, so the key was in neither `panels` nor
+# `hidden` and therefore not in `declared` — the server kept it hidden and the reload rendered it
+# hidden. Verified by feeding the real payload through the real merge: the key comes back in
+# `hidden` every time. Both pages have this shape; both are checked.
+for _sf, _fn in (("dashboard.js", "showPanel"), ("server_detail.js", "showDetailPanel")):
+    _src = (ROOT / "static" / "js" / _sf).read_text(encoding="utf-8")
+    _body = _src[_src.index("window.%s = function" % _fn):]
+    _body = _body[:_body.index("\n};")]
+    check("setAttribute('data-panel'" in _body and "btn.remove()" in _body,
+          "js: %s declares the key it restores before saving" % _fn,
+          "the server's merge rule would put it straight back in hidden")
+
+# ── a poll whose only exit is success runs until the page is closed ───────────────────────────
+# Each of these polls an endpoint that costs an SSH round trip, and each had exactly one
+# clearInterval, reachable only when the remote reported running:true. The ordinary path — open
+# the login link in another tab and come back later, or close the modal — left it running, and
+# every press of the button started another. Measured in a browser: three clicks and 13s gave four
+# live intervals and nine requests.
+for _sf, _needle in (("manage_remotes.js", "_tsUpPolls"), ("tailscale.js", "_tsUpPoll"),
+                     ("setup_tailscale.js", "_tsPoll")):
+    _src = (ROOT / "static" / "js" / _sf).read_text(encoding="utf-8")
+    check(_needle in _src and "Date.now()" in _src,
+          "js: %s's tailscale-up poll is deduped and has a deadline" % _sf,
+          "no single-poll registry or no deadline")
+
+# ── the bootstrap poll's teardown sat below the line that returned ────────────────────────────
+_mr = (ROOT / "static" / "js" / "manage_remotes.js").read_text(encoding="utf-8")
+check("if (!stepEl) { clearInterval(_bootstrapPoll)" in _mr,
+      "js: the bootstrap poll stops when its modal is gone, instead of bailing forever",
+      "showModal removes #ts-modal, and every clearInterval sits below the early return")
+
+# ── the SSH card's live state is refilled after the section is swapped ────────────────────────
+# refreshSection only re-runs a callback when one is NAMED, and loadSshStatus is the only thing
+# that fills that card — it ran once, at load. So after any Tailscale-SSH action the swap brought
+# back the server render and the card read "Currently: …", a literal ellipsis.
+_rh = (ROOT / "static" / "js" / "remote_manage_host.js").read_text(encoding="utf-8")
+check(_rh.count("refreshSection('#conn-ssh-card', 'loadSshStatus')") == 4
+      and "refreshSection('#conn-ssh-card')" not in _rh,
+      "js: every #conn-ssh-card refresh re-runs loadSshStatus",
+      "%d of the call sites name the callback" % _rh.count("'loadSshStatus'"))
+
+# ── Ctrl/Cmd+K must not be cancelled on a page with no palette ────────────────────────────────
+# palette.js is loaded unconditionally by base.html; #cmdk renders only under show_app_chrome. On
+# login, force_password and the setup pages the shortcut was cancelled and nothing opened.
+_pal = (ROOT / "static" / "js" / "palette.js").read_text(encoding="utf-8")
+_kseg = _pal[_pal.index("e.key === 'k'"):]
+_kseg = _kseg[:_kseg.index("\n    }")]          # the whole Ctrl/Cmd+K branch
+check(_kseg.index("getElementById('cmdk')") < _kseg.index("e.preventDefault")
+      and "if (!box) return;" in _kseg,
+      "js: the palette looks for #cmdk before cancelling Ctrl/Cmd+K",
+      "it still preventDefaults on pages that have no palette")
+
+# ── the copy button on the backup-codes page must survive an insecure origin ──────────────────
+# navigator.clipboard is undefined on http://, which the panel serves by default, so the property
+# read threw before any promise existed and the rejection handler never ran: the click did nothing
+# at all, silently, on the page whose whole point is getting the codes out of the browser.
+_bc = (ROOT / "static" / "js" / "backup_codes.js").read_text(encoding="utf-8")
+check("navigator.clipboard &&" in _bc and "execCommand" in _bc,
+      "js: the backup-codes copy guards navigator.clipboard and falls back",
+      "an http:// install gets a button that does nothing")
+
+# ── a Jinja comment is invisible to the browser and NOT to the HTML scanner ───────────────────
+# CodeQL parses the template as HTML, comments included, so prose describing a Flask route as
+# "/remote/<local id>/manage" is read as a start tag `local` carrying a valueless `id` attribute
+# and raises js/malformed-html-id — a red "Open code-scanning alerts" check on a pull request
+# whose only change to that file was a comment. It cost a CI round trip here. Write route
+# placeholders as /remote/.../manage, or name the parameter in words.
+#
+# Deliberately narrow: mentioning <span> or <option> in a comment is fine and several already do.
+# What is flagged is only a tag-shaped run carrying a BARE `id` attribute, which is the shape the
+# rule fires on.
+_BARE_ID_IN_TAG = re.compile(r"<[A-Za-z][A-Za-z0-9-]*(?:\s+[^>]*?)?\s+id\s*(?:>|\s)")
+_id_offenders = []
+for _tpl in sorted((ROOT / "templates").rglob("*.html")):
+    _s = _tpl.read_text(encoding="utf-8")
+    for _m in re.finditer(r"\{#.*?#\}", _s, re.S):
+        _hit = _BARE_ID_IN_TAG.search(_m.group(0))
+        if _hit:
+            _id_offenders.append("%s:%d %s" % (_tpl.name, _s[:_m.start()].count("\n") + 1,
+                                               _hit.group(0)))
+check(not _id_offenders,
+      "templates: no Jinja comment holds a tag-shaped run with a bare id attribute",
+      "; ".join(_id_offenders))
+
+
 passed = sum(1 for c, _, _ in results if c is True)
 failed = sum(1 for c, _, _ in results if c is False)
 skipped = [(name, detail) for c, name, detail in results if c is None]
@@ -1499,4 +1763,9 @@ if skipped:
     print("\n%d CHECK(S) DID NOT RUN:" % len(skipped))
     for name, detail in skipped:
         print("  SKIP  %s   [%s]" % (name, detail))
-sys.exit(0 if failed == 0 else 1)
+# A SKIP fails the suite. The others treat a skip as "the environment is not the code's fault",
+# but this one is invoked from CI where esprima IS installed, and its skips take the JS parse gate
+# and four CSRF gates with them — exactly the "294 smoke checks stayed green" failure the parse
+# check exists to catch. Red here says `pip install esprima`, which is a one-line fix; green here
+# said nothing at all.
+sys.exit(0 if (results and failed == 0 and not skipped) else 1)

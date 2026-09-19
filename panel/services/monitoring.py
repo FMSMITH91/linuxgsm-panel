@@ -289,7 +289,13 @@ def _record_metric_samples(app):
         rows, hosts_seen = [], set()
         with concurrent.futures.ThreadPoolExecutor(max_workers=min(_PLAYER_POLL_WORKERS, len(work))) as ex:
             for sid, m, rid, _mp in ex.map(_query_server_metrics, work):
-                if not m:
+                # ram_total is the sentinel app.py's _live_run_state already uses: `free -b` never
+                # fails on a reachable host, so a zero there means the read did not happen.
+                # server_live_metrics builds its dict UP FRONT and returns it all-zero when the SSH
+                # read produces no output — truthy, so `if not m` passed it through and every blip
+                # wrote a 0% CPU / 0 MB sample per game and a 0/0/0 host sample. The trend charts
+                # then showed dips that never happened, and a host at 95% disk recorded 0%.
+                if not m or not m.get("ram_total"):
                     continue
                 rows.append(MetricSample(server_id=sid, ts=now,
                                          cpu=round(m.get("game_cpu_percent") or 0, 1),
@@ -462,6 +468,16 @@ def _monitor_pass():
             notifications.notify("remote_recovered", "Host back online",
                                  "%s is responding again." % remote.display_name)
         _monitor_state["remotes"][remote.id] = reachable
+        # ...and to the COLUMN, not just this pass's memory. is_online was written in exactly three
+        # places — host creation (hardcoded True), the manual "Test connection" button, and a
+        # successful bootstrap — so a host that went down stayed green forever and one whose single
+        # manual test failed stayed red forever after it recovered. The dashboard badge, the host
+        # cards and the bots' /hosts all branch on this column first (host_probed only separates
+        # "not checked yet"), so every one of them repeated the stale answer. This is the same fix
+        # the game-server status column already got below, for the same reason.
+        if remote.is_online != reachable:
+            remote.is_online = reachable
+            status_changed = True
         if not reachable:
             continue
         pct = probe["disk"]
@@ -528,9 +544,12 @@ def _monitor_pass():
             # stale: the chat bots' /servers and /status, and _query_server_slots, which short-
             # circuits a server it believes offline to 0 players WITHOUT querying it — so a server
             # that came back up while nobody was looking reported "offline (0/24)" indefinitely.
-            st = "online" if up else "offline"
-            if gs.status != st:
-                gs.status = st
+            # _new_status, not `st`: `st` is the host's load-state dict twenty lines up, and
+            # rebinding it to a string here is harmless ONLY because that assignment re-runs at the
+            # top of each host iteration. Moving either block would make it a silent bug.
+            _new_status = "online" if up else "offline"
+            if gs.status != _new_status:
+                gs.status = _new_status
                 status_changed = True
     if status_changed:
         try:
@@ -673,6 +692,12 @@ def _autoblock_reconcile(remote):
             return remote_ufw_deny_ip(remote, ip, tag=_AUTOBLOCK_TAG)
         def undeny(ip):
             return remote_ufw_undeny_ip(remote, ip)
+    # A failed read answers None. Releasing on it would unblock every IP the panel has auto-blocked
+    # — and they only come back if a LATER successful read still finds them over the threshold
+    # inside the 7-day window, so anything that has since aged out is gone for good.
+    if top is None:
+        _log.debug("autoblock: skipping %s — the fail2ban read failed", remote.name)
+        return 0, 0
     qualify = {r["ip"] for r in top if r.get("ip") and (r.get("attempts") or 0) >= threshold}
     qualify -= tailnet_exempt_ips(remote, qualify)   # never auto-block your own tailnet (Tailscale up)
     _nets = _whitelist_networks()

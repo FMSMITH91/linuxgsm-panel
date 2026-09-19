@@ -47,9 +47,20 @@ def register(app):
         remote_count = RemoteServer.query.filter_by(is_local=False).count()
         servers = _apply_user_server_order(get_user_servers(current_user), _prefs)
         uperms = get_user_permissions(current_user)
-        can_control = current_user.is_superadmin or bool(
-            {START_SERVER, STOP_SERVER, RESTART_SERVER} & uperms
-        )
+        # PER ACTION, not a union. One flag for all three meant a moderator holding only
+        # start_server got Stop and Restart on every row and in both bulk bars, and a bulk Stop
+        # across a whole tag group failed wholesale with "Permission denied" — while the server
+        # detail page's own control bar (_shared._server_action_buttons) filtered correctly, so
+        # the two pages disagreed about the same user's rights on the same server.
+        _sa = current_user.is_superadmin
+        can_start = _sa or START_SERVER in uperms
+        can_stop = _sa or STOP_SERVER in uperms
+        can_restart = _sa or RESTART_SERVER in uperms
+        can_control = can_start or can_stop or can_restart
+        # Files & Config goes to server_files, which requires MANAGE_SERVERS — the button and the
+        # tab were rendered for anyone who could SEE the server, so every viewer got a control on
+        # every row that round-tripped to a red "You don't have permission to manage server files."
+        can_files = _sa or MANAGE_SERVERS in uperms
         player_counts = {gs.id: _cached_player_count(gs.id) for gs in servers}
         player_max = {gs.id: _cached_player_max(gs.id) for gs in servers}
         server_names = {gs.id: _cached_player_name(gs.id) for gs in servers}
@@ -64,6 +75,8 @@ def register(app):
                          or has_permission(current_user, MANAGE_SERVERS))
         return render_template("dashboard.html", remotes=remotes, servers=servers,
                                server_list=servers, can_control=can_control,
+                               can_start=can_start, can_stop=can_stop,
+                               can_restart=can_restart, can_files=can_files,
                                remote_count=remote_count, player_counts=player_counts,
                                player_max=player_max, server_names=server_names,
                                total_players=total_players, total_max=total_max,

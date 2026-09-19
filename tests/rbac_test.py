@@ -221,7 +221,13 @@ try:
     _ac = client_as(admin_id)
     for _path, _label in (("/api/remote/%d/bootstrap" % _local_id, "VPS bootstrap"),
                           ("/api/remote/%d/tailscale-install" % _local_id, "Tailscale install"),
-                          ("/api/remote/%d/tailscale-bootstrap" % _local_id, "Tailscale join")):
+                          ("/api/remote/%d/tailscale-bootstrap" % _local_id, "Tailscale join"),
+                          # tailscale-up is the OTHER half of the join — the UI offers the two as
+                          # "Get login link" and "Connect with key" in one dialog — and it was the
+                          # one that never got the server-side guard. Aimed at the panel's own host
+                          # it ran `tailscale up --ssh` there and returned the login URL, so the
+                          # caller chose which tailnet the panel host joined.
+                          ("/api/remote/%d/tailscale-up" % _local_id, "Tailscale join (login link)")):
         _r = _ac.post(_path, json={"auth_key": "tskey-auth-abcdefghij"})
         check("%s is REFUSED on the panel's own host" % _label,
               _r.status_code == 400, "%s -> %d" % (_path, _r.status_code))
@@ -676,6 +682,69 @@ for _rule in app.url_map.iter_rules():
 check("every <remote_id> route enforces per-host access (not just MANAGE_REMOTES)",
       not _remote_unguarded, "; ".join(sorted(_remote_unguarded)[:6]))
 
+# ── ...and a mutating route must check a PERMISSION, not just access to the object ─────────────
+# The two gates above answer "may this user reach THIS object?". Neither answers "may they CHANGE
+# it?" — so refresh_server_commands carried @server_access_required alone, and any account that
+# could see a server could make the panel SSH to its host and overwrite the stored command list,
+# with no audit row. Its neighbours on the same page all gate inline, which is why nothing looked
+# odd.
+#
+# Derived from the url map so a mutating route added later has to answer for itself. The allowlist
+# is the routes whose lack of a permission gate is the design.
+_MUT_NO_PERM_OK = {
+    # Self-service: the object IS the caller.
+    "account_update_profile", "account_change_password", "account_2fa_enable",
+    "account_2fa_disable", "account_2fa_verify", "account_revoke_sessions",
+    "account_revoke_session", "account_api_token_generate", "account_api_token_revoke",
+    "account_regenerate_backup_codes", "api_account_ui_order", "api_account_prefs", "logout",
+    "account_2fa_setup", "account_set_language", "api_account_session_revoke",
+    "api_account_ui_order_reset", "account_dismiss_otp_nag",
+    # The viewer's own UI language. POST because the PROFILE write is a stored state change and
+    # csrf.protect() is a no-op on safe methods; it is still self-service, and it is reachable
+    # pre-login (the switcher is on the login page), so there is no permission to require.
+    "set_language",
+    # Unauthenticated by design: login, the setup wizard, an invite redemption. The two setup
+    # Tailscale endpoints carry their own gate — _setup_open() — because no login exists yet.
+    "login", "login_2fa", "redeem_invite", "force_password_change",
+    "api_setup_ts_install", "api_setup_ts_serve", "api_setup_ts_up",
+}
+_mut_unguarded, _mut_seen = [], []
+
+
+def _mut_scanned():
+    return len(_mut_seen)
+
+
+_GATE_TOKENS = ("permission_required", "superadmin_required", "has_permission",
+                "can_moderate_action", "can_run_custom_command", "_can_manage_files",
+                "_can_edit_tags", "is_superadmin", "_required_perms")
+for _rule in app.url_map.iter_rules():
+    if not ({"POST", "PUT", "PATCH", "DELETE"} & set(_rule.methods or ())):
+        continue
+    _mut_seen.append(_rule.endpoint)
+    if _rule.endpoint in _MUT_NO_PERM_OK or _rule.endpoint == "static":
+        continue
+    _fn = app.view_functions.get(_rule.endpoint)
+    _perms = ()
+    _inner = _fn
+    while _inner is not None:
+        _perms = _perms or getattr(_inner, "_required_perms", ())
+        _nxt = getattr(_inner, "__wrapped__", None)
+        if _nxt is None:
+            break
+        _inner = _nxt
+    try:
+        _src = inspect.getsource(_inner)
+    except (OSError, TypeError):
+        _src = ""
+    if not (_perms or any(_t in _src for _t in _GATE_TOKENS)):
+        _mut_unguarded.append(str(_rule))
+# The positive control: a walk that finds no mutating routes at all would pass silently.
+check("rbac: the mutating-route scan found routes to check", _mut_scanned() > 40,
+      "only %d mutating routes seen — the gate below proves nothing" % _mut_scanned())
+check("every mutating route checks a PERMISSION, not just object access",
+      not _mut_unguarded, "no permission gate on: %s" % sorted(_mut_unguarded)[:6])
+
 # ── an invite must not outlive the authority behind it ────────────────────────────────────────
 # An invite is a delegation. Without this the delegation survives its grantor: an admin who is
 # offboarded — demoted, deactivated, deleted — leaves live invites behind for up to the 30-day
@@ -716,11 +785,11 @@ check("redeem_invite refuses an invite whose creator lost their authority",
 _NO_AUDIT_OK = {
     "api_account_ui_order",          # the viewer's own dashboard tile order — a UI preference
     "api_remote_bootstrap_dismiss",  # dismisses a banner
-    "api_server_install_dismiss",    # dismisses a banner
+    "api_server_install_dismiss",    # dismisses a banner (it does carry a permission gate now)
     "api_server_upload_check",       # pre-flight check before an upload; changes nothing
     "api_tailscale_check_peer",      # connectivity probe; changes nothing
+    "set_language",                  # the viewer's own UI language; usable pre-login
     "test_remote",                   # SSH reachability probe; changes nothing
-    "refresh_server_commands",       # refreshes a cached command list
     "notifications_test",            # sends one test notification to the configured channel
 }
 _calls, _logs_direct = {}, set()
@@ -774,4 +843,6 @@ for ok, name, detail in results:
         line += "   [%s]" % detail
     print(line)
 print("\n%d / %d checks passed" % (passed, len(results)))
-sys.exit(0 if passed == len(results) else 1)
+# `results and`, like every other suite has: with results == [] the comparison is 0 == 0 and the
+# suite exits 0 having asserted nothing at all.
+sys.exit(0 if results and passed == len(results) else 1)

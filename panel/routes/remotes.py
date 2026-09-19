@@ -14,10 +14,32 @@ from panel.security.auth import (MANAGE_REMOTES, accessible_remote_ids, check_pa
 from panel.core.http import (_form_err, _form_ok, _json_body, _wants_json)
 from panel.core.validation import (HOST_RE, LINUX_USER_RE, MAX_PORT, MIN_PORT, SAFE_LABEL_RE,
     _port_or)
-from panel.routes._shared import (_begin_bootstrap)
+from panel.core.panel_state import (_install_jobs, _install_lock)
+from panel.routes._shared import (_begin_bootstrap, _bootstrap_jobs, _bootstrap_lock)
 import logging
 
 _log = logging.getLogger("panel.routes.remotes")
+
+
+def _forget_deleted_remote_state(remote_id, game_server_ids):
+    """Drop the in-memory job entries for a host and the game servers that went with it.
+
+    The panel_state registry already covers these — but it is swept by the monitor, so it clears
+    them on the NEXT pass rather than now. Demonstrated end to end: delete a host whose server had
+    a failed install, add a new server that takes the freed row id, and /install-status answers
+    with the DELETED server's failure ("SteamCMD could not log in") until the sweep catches up.
+
+    An after_delete listener is not an option here and that is worth writing down: delete_remote
+    removes this host's game servers with a BULK query, which bypasses the ORM entirely, so no
+    per-row event ever fires for them. That is the same reason _forget_deleted_rows is driven off
+    the live id sets instead of the delete routes. So the route clears what it knows it just
+    deleted, and the sweep stays the backstop for everything that does not come through here.
+    """
+    with _install_lock:
+        for gid in game_server_ids:
+            _install_jobs.pop(gid, None)
+    with _bootstrap_lock:
+        _bootstrap_jobs.pop(remote_id, None)
 
 
 def _forget_deleted_remote_config(remote_id, game_server_ids):
@@ -49,6 +71,34 @@ def _forget_deleted_remote_config(remote_id, game_server_ids):
         update_config(_mut)
     except Exception:
         _log.debug("could not clear config state for deleted remote %s", remote_id, exc_info=True)
+
+
+def _forget_deleted_from_ui_prefs(remote_id, game_server_ids):
+    """Drop a deleted host/server from every user's saved layout.
+
+    ui_prefs stores host_order (a list of remote ids) and server_order ({remote_id: [server id]}),
+    and nothing cleared them — so after SQLite recycles the rowid a brand-new host or server
+    silently inherited the deleted one's saved position in every user's dashboard, for every user
+    who had ever reordered. _apply_user_order degrades gracefully, so the effect is ordering only;
+    it is the same class as the other three things cleared beside it here and it belongs with them.
+    """
+    from panel.db.models import User
+    gone = set(game_server_ids or ())
+    try:
+        for u in User.query.all():
+            prefs = u.get_ui_prefs() or {}
+            hosts = [h for h in (prefs.get("host_order") or []) if h != remote_id]
+            servers = {k: [s for s in v if s not in gone]
+                       for k, v in (prefs.get("server_order") or {}).items()
+                       if str(k) != str(remote_id)}
+            if hosts != (prefs.get("host_order") or []):
+                u.set_ui_pref("host_order", hosts)
+            if servers != (prefs.get("server_order") or {}):
+                u.set_ui_pref("server_order", servers)
+        db.session.commit()
+    except Exception:
+        db.session.rollback()
+        _log.debug("could not clear ui_prefs for deleted remote %s", remote_id, exc_info=True)
 
 
 def register(app):
@@ -154,12 +204,9 @@ def register(app):
     def edit_remote(remote_id):
         remote = get_remote(remote_id)
         new_user = request.form.get("ssh_user", remote.username)
-        new_lgsm = request.form.get("lgsm_user", remote.linuxgsm_user)
-        # SECURITY: validate the username fields (reach `sudo -u <user>` / SSH commands).
+        # SECURITY: validate the username field (it reaches `sudo -u <user>` / SSH commands).
         if new_user and not LINUX_USER_RE.match(new_user):
             return _form_err("SSH user must be a valid Linux username.", "manage_remotes")
-        if new_lgsm and not LINUX_USER_RE.match(new_lgsm):
-            return _form_err("LinuxGSM user must be a valid Linux username.", "manage_remotes")
         new_name = request.form.get("name", remote.name)
         if new_name and not SAFE_LABEL_RE.match(new_name):
             return _form_err("Name cannot contain < > \" ' ` or backslashes.", "manage_remotes")
@@ -185,7 +232,6 @@ def register(app):
         if new_cred:
             remote.auth_credential = encrypt_secret(new_cred)
         remote.sudo_enabled = request.form.get("sudo_enabled") == "on"
-        remote.linuxgsm_user = new_lgsm
         db.session.commit()
         log_action(current_user, "edit_remote", target=remote.name)
         return _form_ok(f"Remote '{remote.name}' updated.", "manage_remotes")
@@ -225,6 +271,18 @@ def register(app):
             # Same shape of orphan, pre-existing: per-server group grants are keyed the same way.
             _ggs = db.Table("group_game_servers", db.metadata, autoload_with=db.engine)
             db.session.execute(_ggs.delete().where(_ggs.c.game_server_id.in_(_doomed_ids)))
+            # ...and their metric history, for the same reason and here rather than in models.py.
+            # _prune_host_game_samples listens on RemoteServer's after_delete and finds the rows to
+            # delete with `server_id IN (SELECT id FROM game_server WHERE remote_id = ...)` — but
+            # the bulk delete above has already removed those game_server rows, so by the time it
+            # fires the subquery matches nothing and it deletes nothing. The listener was written
+            # BECAUSE the bulk delete bypasses the per-server one; it just could not see past it.
+            # Reproduced in a throwaway SQLite DB: the samples survive, both rowids are recycled,
+            # and the next server created serves the deleted one's CPU/RAM/player history on
+            # /api/server/<id>/history for the whole 14-day prune window.
+            from panel.db.models import MetricSample
+            db.session.execute(MetricSample.__table__.delete()
+                               .where(MetricSample.server_id.in_(_doomed_ids)))
         # Delete group associations
         group_servers_table = db.Table(
             "group_servers", db.metadata, autoload_with=db.engine
@@ -238,6 +296,8 @@ def register(app):
         db.session.commit()
         close_connection(remote)
         _forget_deleted_remote_config(row_id, _doomed_ids)
+        _forget_deleted_remote_state(row_id, _doomed_ids)
+        _forget_deleted_from_ui_prefs(row_id, _doomed_ids)
         log_action(current_user, "delete_remote", target=name)
         _m = f"Remote '{name}' deleted."
         if _wants_json():

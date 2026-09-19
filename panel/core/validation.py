@@ -27,16 +27,16 @@ from urllib.parse import quote
 # anything outside a safe charset here is what prevents shell/command injection into
 # the install pipeline (a user with INSTALL_SERVER must NOT be able to run arbitrary
 # root commands on a host).
-GAME_TYPE_RE = re.compile(r"^[a-z0-9]{1,32}$")
-INSTANCE_NAME_RE = re.compile(r"^[a-z][a-z0-9_-]{0,30}$")   # valid Linux username shape
-LINUX_USER_RE = re.compile(r"^[a-z_][a-z0-9_-]{0,31}$")     # for linuxgsm_user / ssh user
+GAME_TYPE_RE = re.compile(r"^[a-z0-9]{1,32}\Z")
+INSTANCE_NAME_RE = re.compile(r"^[a-z][a-z0-9_-]{0,30}\Z")   # valid Linux username shape
+LINUX_USER_RE = re.compile(r"^[a-z_][a-z0-9_-]{0,31}\Z")     # for linuxgsm_user / ssh user
 # Hostname / IPv4 / IPv6 / Tailscale MagicDNS — no HTML or shell metacharacters, so a
 # stored host can't inject markup where it's shown (e.g. the dashboard connect address).
-HOST_RE = re.compile(r"^[A-Za-z0-9._:\[\]-]{1,255}$")
+HOST_RE = re.compile(r"^[A-Za-z0-9._:\[\]-]{1,255}\Z")
 # Free-text display labels (e.g. a remote's name): allow spaces/punctuation but reject the
 # characters that would let a stored label break out of HTML or a JS string when it's shown
 # in the UI's client-side rendering. Defense-in-depth alongside output encoding.
-SAFE_LABEL_RE = re.compile(r"""^[^<>"'`\r\n\\]{1,120}$""")
+SAFE_LABEL_RE = re.compile(r"""^[^<>"'`\r\n\\]{1,120}\Z""")
 
 
 # Filenames reach a Content-Disposition header, whose WSGI value is latin-1 — see
@@ -193,7 +193,7 @@ def _port_or(value, default, lo=MIN_PORT, hi=MAX_PORT):
 
 
 
-_HEX_COLOR_RE = re.compile(r"^#[0-9A-Fa-f]{6}$")
+_HEX_COLOR_RE = re.compile(r"^#[0-9A-Fa-f]{6}\Z")
 
 
 def _valid_hex_color(value):

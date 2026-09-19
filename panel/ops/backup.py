@@ -34,7 +34,7 @@ _log = logging.getLogger("panel.backup")
 
 BACKUP_DIR = DATA_DIR / "backups"
 # panel-backup-<YYYYMMDD-HHMMSS>-<kind>.tar.gz — plus an optional .enc for an encrypted one.
-_NAME_RE = re.compile(r"^panel-backup-\d{8}-\d{6}-[a-z]+\.tar\.gz(\.enc)?$")
+_NAME_RE = re.compile(r"^panel-backup-\d{8}-\d{6}-[a-z]+\.tar\.gz(\.enc)?\Z")
 _GLOB = "panel-backup-*.tar.gz*"
 ENC_SUFFIX = ".enc"
 _MEMBERS = ("panel.db", "config.json", "secret_key", "cred_key")
@@ -241,12 +241,21 @@ def _snapshot_db(dest):
         src.close()
 
 
-def create_backup(kind="manual"):
+def create_backup(kind="manual", encrypt=True):
     """Create a new backup archive. `kind` is a short lowercase tag (manual/daily/pre-restore).
-    Returns (True, name) or (False, message)."""
+    Returns (True, name) or (False, message).
+
+    `encrypt=False` writes it in the clear even when a passphrase is configured, for the ONE
+    caller that must be able to open the result afterwards: the pre-restore safety copy. Its
+    passphrase comes from config.json decrypted under cred_key, and the very next step of a
+    restore overwrites BOTH of those from the archive being restored — so an archive written
+    under a different passphrase (one from before a set_passphrase, or carried from another
+    install, which is the case restore's own docstring calls out) left the safety net locked by a
+    key that no longer existed, at exactly the moment it was needed. It stays inside BACKUP_DIR,
+    which is 0700, and the file itself is 0600."""
     kind = re.sub(r"[^a-z]", "", (kind or "manual").lower()) or "manual"
     _ensure_dir()
-    passphrase = get_passphrase()
+    passphrase = get_passphrase() if encrypt else ""
     name = "panel-backup-%s-%s.tar.gz" % (time.strftime("%Y%m%d-%H%M%S"), kind)
     if passphrase:
         name += ENC_SUFFIX
@@ -359,14 +368,18 @@ def _service_restart_launcher(script_path):
     return ["sudo", "systemd-run", "--collect", "/bin/bash", script_path]
 
 
-def restore_backup(name, passphrase=None):
+def restore_backup(name, passphrase=None, skip_safety_backup=False):
     """Restore a backup: take an automatic pre-restore safety backup, then swap the DB/config/
     keys into place and restart the panel — all from a DETACHED unit so it survives the panel
     stopping. Destructive; returns (ok, message). The panel goes down for a few seconds.
 
     `passphrase` is for an encrypted archive; when omitted the configured one is used. Restoring
     onto a FRESH install is the case that needs it passed explicitly — that panel has no
-    config.json yet, and the passphrase it would need is inside the archive it cannot open."""
+    config.json yet, and the passphrase it would need is inside the archive it cannot open.
+
+    `skip_safety_backup` is the operator's answer to "the safety copy could not be written, go
+    ahead anyway" — see _restore_validated. It is not a default because the thing being
+    overwritten includes cred_key, without which every stored SSH credential is unreadable."""
     src = _safe_path(name)
     if not src:
         return False, "No such backup."
@@ -397,16 +410,33 @@ def restore_backup(name, passphrase=None):
 
         # The ORIGINAL name, not src: for an encrypted archive src is now a temp file, and the
         # user-facing message must still say which backup they restored.
-        return _restore_validated(src, os.path.basename(str(name)))
+        return _restore_validated(src, os.path.basename(str(name)),
+                                  skip_safety_backup=skip_safety_backup)
     finally:
         if _dec_tmp:
             shutil.rmtree(_dec_tmp, ignore_errors=True)
 
 
-def _restore_validated(src, name):
+def _restore_validated(src, name, skip_safety_backup=False):
     """The destructive half, on an archive already decrypted and checked. `name` is only for the
     message shown to the user — `src` is what actually gets unpacked."""
-    create_backup("prerestore")     # safety net before we overwrite the live data
+    # The safety net, and its result is CHECKED. create_backup swallows every exception and
+    # answers (False, "Backup failed — see panel logs.") — a full disk, a BACKUP_DIR whose mode
+    # changed, a _snapshot_db failure on a database that is already damaged. Both results were
+    # discarded, so execution fell straight through to the destructive verb and the UI still said
+    # "the panel will restart in a few seconds" while there was no recovery point at all. Losing
+    # cred_key that way means every stored SSH credential is undecryptable.
+    #
+    # Written UNENCRYPTED (see create_backup): the passphrase this one would use is about to be
+    # overwritten by the archive being restored.
+    safety = ""
+    if not skip_safety_backup:
+        ok, safety = create_backup("prerestore", encrypt=False)
+        if not ok:
+            return False, ("The pre-restore safety copy could not be written (%s). Restoring "
+                           "would overwrite panel.db, config.json, secret_key and cred_key with "
+                           "no way back — without cred_key every stored SSH credential becomes "
+                           "unreadable. Confirm again to restore without one." % safety)
 
     # A FIXED staging directory inside data/, not a fresh mkdtemp. The helper's restore verb takes
     # no path argument — root copying "whatever is in the directory you name" over the panel's keys
@@ -440,13 +470,13 @@ def _restore_validated(src, name):
         if _helper_present():
             out, err, rc = _run_verb("panel-restore", [], timeout=20)
             if rc == 0:
-                return True, "Restoring from %s — the panel will restart in a few seconds." % name
+                return True, _restore_started_msg(name, safety)
             _log.error("restore verb failed: rc=%s %s", rc, (err or out or "")[:200])
             shutil.rmtree(stage, ignore_errors=True)
             return False, "Could not start the restore."
         # Pre-helper fallback, unchanged in shape: a host that has not re-run install.sh as root
         # still needs to be able to restore.
-        return _legacy_restore_dispatch(stage, name)
+        return _legacy_restore_dispatch(stage, name, safety)
     except Exception:
         _log.exception("restore dispatch failed")
         # Nothing will run the cleanup, so don't leave the keys staged either.
@@ -454,7 +484,17 @@ def _restore_validated(src, name):
         return False, "Could not start the restore."
 
 
-def _legacy_restore_dispatch(stage, name):
+def _restore_started_msg(name, safety):
+    """What the operator is told. It names the safety copy, because that archive IS their way back
+    and it is the only place its name appears — the panel is about to restart."""
+    if safety:
+        return ("Restoring from %s — the panel will restart in a few seconds. Your previous data "
+                "was saved as %s." % (name, safety))
+    return ("Restoring from %s — the panel will restart in a few seconds. NO pre-restore safety "
+            "copy was made." % name)
+
+
+def _legacy_restore_dispatch(stage, name, safety=""):
     """The pre-helper restore: write a script and run it under `sudo systemd-run`.
 
     Kept ONLY for a host that has the new code but has not had install.sh re-run as root, which is
@@ -483,7 +523,7 @@ def _legacy_restore_dispatch(stage, name):
     # nosemgrep: python.lang.security.audit.dangerous-subprocess-use-audit.dangerous-subprocess-use-audit
     subprocess.Popen(_service_restart_launcher(script),
                      stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, env=os.environ.copy())
-    return True, "Restoring from %s — the panel will restart in a few seconds." % name
+    return True, _restore_started_msg(name, safety)
 
 
 def _sh(s):

@@ -45,7 +45,7 @@ def aware_utcnow():
 # So a schedule is ENTERED in the viewer's zone and STORED in the host's, converted here.
 import re as _re
 
-_HHMM_RE = _re.compile(r"^([01]?[0-9]|2[0-3]):([0-5][0-9])$")
+_HHMM_RE = _re.compile(r"^([01]?[0-9]|2[0-3]):([0-5][0-9])\Z")
 
 
 def parse_hhmm(value, default=(5, 0)):
@@ -69,7 +69,7 @@ def valid_timezone(name):
     filesystem-backed lookup on a browser-reachable path, and the value that can be stored and
     rendered is held to a known charset and length."""
     name = (name or "").strip()
-    if not name or len(name) > 64 or not _re.match(r"^[A-Za-z0-9+_/-]+$", name) or ".." in name:
+    if not name or len(name) > 64 or not _re.match(r"^[A-Za-z0-9+_/-]+\Z", name) or ".." in name:
         return ""
     try:
         from zoneinfo import ZoneInfo
