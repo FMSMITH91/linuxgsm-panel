@@ -3004,3 +3004,35 @@ check("install.sh: the backfill skips an account that already has sudo rights",
       'grep -qxE "sudo|admin|wheel|root"' in _inst_sh_src
       and 'sudo -l -U "${_gu}"' in _inst_sh_src,
       "guard missing from sync_game_user_group")
+
+# ...and when the group database does not answer, the check must fail CLOSED. It used to swallow
+# the error and return whatever it had, so an unreadable group database produced an EMPTY set, no
+# privileged group was found, and the account was enrolled — the exact inversion of the rule this
+# function exists to enforce. CodeQL flagged the two `except: pass` clauses; the empty handler was
+# the visible half of that, not a style problem.
+_grp_saved2, _pwd_saved2, _glob_saved2 = _helper.grp, _helper.pwd, _helper.glob
+
+
+def _boom(*_a, **_k):
+    raise OSError("group database unavailable")
+
+
+try:
+    _helper.glob = NS(glob=lambda _p: [])
+    _helper.pwd = NS(getpwnam=lambda _u: NS(pw_gid=1234, pw_uid=1234, pw_name=_u))
+    _helper.grp = NS(getgrgid=lambda _g: _FakeGrp("gmodserver"), getgrall=_boom)
+    check("enrolment: an unreadable group database reads as 'can escalate', not as 'safe'",
+          _helper._can_already_escalate("gmodserver") is True)
+    _helper.grp = NS(getgrgid=_boom, getgrall=lambda: [])
+    check("enrolment: ...and so does a primary group that cannot be resolved",
+          _helper._can_already_escalate("gmodserver") is True)
+    # An account that simply does not exist yet is NOT a failure to read — user-create names one
+    # that does not exist, and gameuser-group runs immediately after it.
+    def _no_such_user(_u):
+        raise KeyError(_u)
+    _helper.pwd = NS(getpwnam=_no_such_user)
+    _helper.grp = NS(getgrgid=lambda _g: _FakeGrp("users"), getgrall=lambda: [])
+    check("enrolment: a not-yet-existing account is not treated as an escalation risk",
+          _helper._can_already_escalate("brandnew") is False)
+finally:
+    _helper.grp, _helper.pwd, _helper.glob = _grp_saved2, _pwd_saved2, _glob_saved2

@@ -900,17 +900,22 @@ PRIVILEGED_GROUPS = ("sudo", "admin", "wheel", "root")
 
 
 def _groups_of(user):
-    """Every group name `user` belongs to, primary included."""
+    """Every group name `user` belongs to, primary included.
+
+    RAISES if the group database cannot be read. It used to swallow that and return whatever it
+    had, which made the security check built on it fail OPEN: an unreadable group database yielded
+    an empty set, no privileged group was found, and the account was enrolled. CodeQL flagged the
+    two bare `except: pass` clauses; the empty handler was the visible half of a real defect, not a
+    style problem. _can_already_escalate turns a raise into "yes, it can escalate"."""
     names = set()
     try:
         pw = pwd.getpwnam(user)
+    except KeyError:
+        pw = None          # not an account on this host yet — it has no memberships to find, and
+                           # user-create names one that does not exist. NOT a failure to read.
+    if pw is not None:
         names.add(grp.getgrgid(pw.pw_gid).gr_name)
-    except (KeyError, OSError):
-        pass
-    try:
-        names |= {g.gr_name for g in grp.getgrall() if user in g.gr_mem}
-    except OSError:
-        pass
+    names |= {g.gr_name for g in grp.getgrall() if user in g.gr_mem}
     return names
 
 
@@ -931,7 +936,15 @@ def _can_already_escalate(user):
     escalate". A false refusal costs one account the panel cannot drive, and says so out loud; a
     false accept costs root.
     """
-    names = _groups_of(user)
+    try:
+        names = _groups_of(user)
+    except Exception:
+        # The group database did not answer. This function decides whether an account may be put
+        # INSIDE the panel's sudo grant, so an unknown answer has to read as "yes, it can
+        # escalate" — the asymmetry below is the whole point: a false refusal costs one account
+        # the panel cannot drive, and says so; a false accept costs root.
+        sys.stderr.write("could not read the group database for %s; refusing to enrol it\n" % user)
+        return True
     if names & set(PRIVILEGED_GROUPS):
         return True
     specs = set([user] + ["%" + n for n in names])
