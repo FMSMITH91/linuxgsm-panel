@@ -1138,3 +1138,55 @@ try:
           "remaining = [g for g in gmod_current_mounts(" not in _src)
 finally:
     _sm_core.run_privileged = _gm_orig
+
+
+# ── db_maintenance must find the database WITHOUT importing the panel package ───────────────────
+# install.sh installs a root-owned copy of db_maintenance.py at /usr/local/lib/linuxgsm-panel/ and
+# runs it with the SYSTEM python — deliberately, so root never executes the panel user's own
+# interpreter or code — and writes panel.conf beside it recording db_path. Its comment says as much:
+# "panel.conf records the one path it needs".
+#
+# _paths() imported panel.core.config instead, which is exactly what cannot work there. Every root
+# run raised ModuleNotFoundError; install.sh logged "Database maintenance reported a non-fatal issue
+# (rc=1) — continuing" and carried on. So on the primary (root / system-service) install the
+# pre-update database step never ran: no integrity check, no refreshed rolling backup, and the rc=2
+# branch that ABORTS an update to protect a database it could not repair could never fire, because
+# the script died with rc=1 before checking anything. Seen on a real host mid-update:
+#
+#     File ".../db_maintenance.py", line 31, in _paths
+#       from panel.core.config import DB_PATH
+#   ModuleNotFoundError: No module named 'panel'
+import tempfile as _pc_tmp
+
+_pc_dir = _pc_tmp.mkdtemp(prefix="dbm-conf-")
+_pc_orig_file = _dbm.__file__
+try:
+    # Pretend this module lives beside a panel.conf, as the root-owned copy does.
+    _dbm.__file__ = os.path.join(_pc_dir, "db_maintenance.py")
+    with open(os.path.join(_pc_dir, "panel.conf"), "w", encoding="utf-8") as _fh:
+        _fh.write("db_path=/srv/panel/data/panel.db\ndata_dir=/srv/panel/data\npanel_dir=/srv/panel\n")
+    eq("db_maintenance: panel.conf supplies the db path without importing panel",
+       _dbm._paths(), ("/srv/panel/data/panel.db", "/srv/panel/data/panel.db.backup"))
+
+    # A conf listing other keys first must still find db_path.
+    with open(os.path.join(_pc_dir, "panel.conf"), "w", encoding="utf-8") as _fh:
+        _fh.write("panel_dir=/srv/p\ndata_dir=/srv/p/data\ndb_path=/srv/p/data/panel.db\n")
+    eq("db_maintenance: ...whatever order the keys are in",
+       _dbm._paths()[0], "/srv/p/data/panel.db")
+
+    # A conf with no db_path is not a usable answer — fall through to the import.
+    with open(os.path.join(_pc_dir, "panel.conf"), "w", encoding="utf-8") as _fh:
+        _fh.write("panel_dir=/srv/p\n")
+    check("db_maintenance: a conf without db_path falls back to the panel import",
+          _dbm._paths()[0].endswith("panel.db"), repr(_dbm._paths()))
+
+    # No panel.conf at all: the in-checkout copy, where the import is the right answer.
+    os.remove(os.path.join(_pc_dir, "panel.conf"))
+    check("db_maintenance: with no panel.conf the checkout copy still works",
+          _dbm._paths()[0].endswith("panel.db"), repr(_dbm._paths()))
+    check("db_maintenance: ...and the rolling backup is always db_path + .backup",
+          _dbm._paths()[1] == _dbm._paths()[0] + ".backup")
+finally:
+    _dbm.__file__ = _pc_orig_file
+    import shutil as _pc_sh
+    _pc_sh.rmtree(_pc_dir, ignore_errors=True)

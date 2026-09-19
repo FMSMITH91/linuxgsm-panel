@@ -26,8 +26,34 @@ _log = logging.getLogger("panel.db_maintenance")
 
 
 def _paths():
-    """(db_path, rolling_backup_path) from the panel config. Imported lazily so the module
-    stays usable in tests that pass explicit paths without a config on disk."""
+    """(db_path, rolling_backup_path).
+
+    panel.conf FIRST, because that is the case this file exists for. install.sh installs a
+    root-owned copy of this script at /usr/local/lib/linuxgsm-panel/ and runs it with the SYSTEM
+    python — deliberately, so root never executes the panel user's own interpreter or code — and
+    writes panel.conf beside it recording `db_path`. Its comment says so: "panel.conf records the
+    one path it needs".
+
+    Importing panel.core.config is exactly what CANNOT work there: the panel package is not on the
+    system python's path, so every root run raised ModuleNotFoundError. install.sh reported
+    "Database maintenance reported a non-fatal issue (rc=1) — continuing" and carried on, which
+    means that on the primary (root / system-service) install the pre-update database step never
+    ran at all: no integrity check, no refreshed rolling backup, and — the part that matters most —
+    the rc=2 branch that ABORTS an update to protect a database it could not repair could never
+    fire, because the script died with rc=1 before checking anything. Seen on a real host mid-update.
+
+    The import stays as the fallback for the in-checkout copy (an unprivileged systemd --user
+    install runs that one, where panel IS importable and no panel.conf is written)."""
+    conf = os.path.join(os.path.dirname(os.path.abspath(__file__)), "panel.conf")
+    try:
+        with open(conf, encoding="utf-8") as fh:
+            for line in fh:
+                key, _sep, val = line.partition("=")
+                if key.strip() == "db_path" and val.strip():
+                    p = val.strip()
+                    return p, p + ".backup"
+    except OSError:
+        pass          # no panel.conf beside us — the checkout copy, handled below
     from panel.core.config import DB_PATH
     p = str(DB_PATH)
     return p, p + ".backup"
