@@ -159,7 +159,7 @@ def ensure_content_user(server):
     return {"user": u, "group": _user_primary_group(server, u), "present": {}}
 
 
-_DF_PATH_RE = re.compile(r"^/[\w./-]*$")   # absolute path, no shell metacharacters
+_DF_PATH_RE = re.compile(r"^/[\w./-]*\Z")   # absolute path, no shell metacharacters
 
 
 def path_disk_free(server, path="/home"):

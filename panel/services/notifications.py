@@ -52,14 +52,14 @@ EVENTS = {
 # CONSTANT host, so the host the panel connects to is never taken from user input (no SSRF). The id
 # and token are charset-bounded, so the path can't traverse either.
 _DISCORD_WEBHOOK_RE = re.compile(
-    r"^https://(?:ptb\.|canary\.)?discord(?:app)?\.com/api/webhooks/(\d{5,25})/([\w-]{1,120})$")
-_TG_TOKEN_RE = re.compile(r"^(\d{5,}):([A-Za-z0-9_-]{20,})$")   # (bot id):(secret) — captured for the URL rebuild
+    r"^https://(?:ptb\.|canary\.)?discord(?:app)?\.com/api/webhooks/(\d{5,25})/([\w-]{1,120})\Z")
+_TG_TOKEN_RE = re.compile(r"^(\d{5,}):([A-Za-z0-9_-]{20,})\Z")   # (bot id):(secret) — captured for the URL rebuild
 # A Discord *bot* token (for the Gateway command bot). It only ever goes into an `Authorization: Bot`
 # HTTP header, never a URL — the charset here forbids whitespace/control chars so it can't inject a
 # header, and it's deliberately loose on the internal `.`-separated shape so future token formats still
 # validate. A Discord channel id is a snowflake (digits only) and lands only in a charset-checked path.
-_DISCORD_BOT_TOKEN_RE = re.compile(r"^[A-Za-z0-9_.\-]{40,120}$")
-_DISCORD_CHANNEL_RE = re.compile(r"^\d{5,25}$")
+_DISCORD_BOT_TOKEN_RE = re.compile(r"^[A-Za-z0-9_.\-]{40,120}\Z")
+_DISCORD_CHANNEL_RE = re.compile(r"^\d{5,25}\Z")
 
 # ── ntfy ───────────────────────────────────────────────────────────────────────────────────────
 # ntfy is the one provider whose SERVER is chosen by the operator: the public ntfy.sh, or their own
@@ -75,9 +75,9 @@ _DISCORD_CHANNEL_RE = re.compile(r"^\d{5,25}$")
 # power they hold several times over. What they cannot do is smuggle a path, a redirect target or
 # credentials through it, and _post still returns only fixed reason words, so nothing read back
 # from the response can be exfiltrated.
-_NTFY_TOPIC_RE = re.compile(r"^[A-Za-z0-9_-]{1,64}$")
+_NTFY_TOPIC_RE = re.compile(r"^[A-Za-z0-9_-]{1,64}\Z")
 _NTFY_URL_RE = re.compile(r"^https://[A-Za-z0-9](?:[A-Za-z0-9.-]{0,251}[A-Za-z0-9])?"
-                          r"(?::\d{1,5})?/[A-Za-z0-9_-]{1,64}$")
+                          r"(?::\d{1,5})?/[A-Za-z0-9_-]{1,64}\Z")
 NTFY_DEFAULT_SERVER = "https://ntfy.sh"
 
 
@@ -257,7 +257,7 @@ def _valid_ntfy_server(server):
     return _ntfy_url(server, "probe") is not None
 
 
-def _post(url, data, headers, allow_configured_host=False):
+def _post(url, data, headers, allow_configured_host=False, provider="?"):
     """POST to a validated https URL. Returns (ok, reason): ok is True on a 2xx. `reason` is a FIXED
     word describing the outcome — 'sent' / 'rejected' (the provider answered with an error status) /
     'unreachable' (couldn't connect) / 'blocked' (host not allow-listed). It carries no data read
@@ -287,10 +287,11 @@ def _post(url, data, headers, allow_configured_host=False):
         # the _log.debug below the unreachable case never printed. There was nothing in the
         # journal, nothing in the UI and nothing in the audit log to say alerts had stopped; the
         # only way to find out was to open the settings page and press Test.
-        _host = urllib.parse.urlsplit(url or "").hostname or ""
-        _log.warning("notification rejected by the provider: HTTP %s from %s",
-                     getattr(e, "code", "?"),
-                     _host if re.fullmatch(r"[A-Za-z0-9.\-]{1,80}", _host) else "?")
+        # `provider` is a LITERAL passed by the caller, not anything taken off the URL. A
+        # scrubbed hostname read the same to a person and not to CodeQL — py/log-injection kept
+        # flagging the flow, and the answer to a gate that will not be convinced is to give it
+        # nothing to trace, not to dismiss it.
+        _log.warning("notification rejected by %s: HTTP %s", provider, getattr(e, "code", "?"))
         return False, "rejected"
     except (urllib.error.URLError, OSError, ValueError):
         _log.debug("notification POST failed", exc_info=True)
@@ -307,7 +308,8 @@ def send_telegram(token, chat_id, text):
         return False, "the chat ID is missing"
     body = urllib.parse.urlencode({"chat_id": chat_id, "text": text[:4000],
                                    "disable_web_page_preview": "true"}).encode()
-    ok, reason = _post(url, body, {"Content-Type": "application/x-www-form-urlencoded"})
+    ok, reason = _post(url, body, {"Content-Type": "application/x-www-form-urlencoded"},
+                       provider="telegram")
     if ok:
         return True, ""
     if reason == "unreachable":
@@ -368,7 +370,8 @@ def telegram_set_commands(token, clear=False):
         return False
     cmds = [] if clear else [{"command": c, "description": d} for c, d in TG_COMMANDS]
     body = json.dumps({"commands": cmds}).encode()
-    ok, _reason = _post(url, body, {"Content-Type": "application/json"})
+    ok, _reason = _post(url, body, {"Content-Type": "application/json"},
+                        provider="telegram")
     return ok
 
 
@@ -388,7 +391,7 @@ def send_discord(webhook, text):
         return False, "that isn't a valid discord.com webhook URL"
     ok, reason = _post(url, json.dumps({"content": text[:1900],
                                         "allowed_mentions": _DISCORD_NO_MENTIONS}).encode(),
-                       {"Content-Type": "application/json"})
+                       {"Content-Type": "application/json"}, provider="discord")
     if ok:
         return True, ""
     if reason == "unreachable":
@@ -416,7 +419,8 @@ def send_ntfy(server, topic, token, text):
         if not re.match(r"^[A-Za-z0-9_.\-]{1,256}$", token):
             return False, "that access token has characters ntfy tokens don't use."
         headers["Authorization"] = "Bearer %s" % token
-    ok, reason = _post(url, text[:3800].encode("utf-8"), headers, allow_configured_host=True)
+    ok, reason = _post(url, text[:3800].encode("utf-8"), headers,
+                       allow_configured_host=True, provider="ntfy")
     if ok:
         return True, ""
     if reason == "unreachable":
@@ -462,7 +466,7 @@ def discord_bot_send(bot_token, channel_id, text):
     body = json.dumps({"content": text[:1900],
                        "allowed_mentions": _DISCORD_NO_MENTIONS}).encode()
     ok, reason = _post(url, body, {"Content-Type": "application/json",
-                                   "Authorization": "Bot %s" % bot_token})
+                                   "Authorization": "Bot %s" % bot_token}, provider="discord")
     if ok:
         return True, ""
     if reason == "unreachable":

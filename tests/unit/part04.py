@@ -799,7 +799,7 @@ import json as _json_tg  # noqa: E402
 _tg_posts = []
 _orig_post = N._post
 try:
-    N._post = lambda url, data, headers: (_tg_posts.append((url, data)), (True, "sent"))[1]
+    N._post = lambda url, data, headers, **k: (_tg_posts.append((url, data)), (True, "sent"))[1]
     check("telegram: set_commands posts to setMyCommands with the registered command set",
           N.telegram_set_commands("123456:AAABBBCCCDDDEEEFFF_gg-hh")
           and _tg_posts[-1][0].endswith("/setMyCommands")
@@ -848,7 +848,7 @@ check("discord: a bot token with a newline (header injection) is rejected",
 _dc_posts = []
 _orig_post2 = N._post
 try:
-    N._post = lambda url, data, headers: (_dc_posts.append((url, headers)), (True, "sent"))[1]
+    N._post = lambda url, data, headers, **k: (_dc_posts.append((url, headers)), (True, "sent"))[1]
     _ok_send, _ = N.discord_bot_send("A" * 50, "112233445566778899", "hi")
     check("discord: a bot reply posts to the constant discord.com channels API",
           _ok_send and _dc_posts[-1][0] == "https://discord.com/api/v10/channels/112233445566778899/messages")

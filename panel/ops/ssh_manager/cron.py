@@ -138,7 +138,7 @@ def _unescape_cron_percent(cmd):
 # A plain command — a path plus simple args, with no shell operators, quotes, or cron-special `%`. Such
 # a command is safe to keep VISIBLE via the inline recorder, so the Autostart detection (which greps
 # the raw crontab for `<base> monitor`) still finds it after the admin reschedules it here.
-_SIMPLE_CMD_RE = re.compile(r"^[\w./ @:+=,-]+$")
+_SIMPLE_CMD_RE = re.compile(r"^[\w./ @:+=,-]+\Z")
 
 
 def _wrap_cron_command(server, user, command):

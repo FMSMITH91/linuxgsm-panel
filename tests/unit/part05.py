@@ -91,7 +91,7 @@ check("no route flashes an exception's text to the browser (py/stack-trace-expos
 _sent = []
 
 
-def _fake_post(url, data, headers):
+def _fake_post(url, data, headers, **_kw):
     _sent.append((url, json.loads(data.decode()), headers))
     return True, "sent"
 
@@ -125,10 +125,10 @@ try:
 
     # The failure reasons must be distinguishable — "can't reach Discord" and "Discord said no" are
     # different problems for whoever is debugging why an alert never arrived.
-    N._post = lambda u, d, h: (False, "unreachable")
+    N._post = lambda u, d, h, **k: (False, "unreachable")
     _ok3, _d3 = N.send_discord(_WH, "hi")
     check("discord: an unreachable host says so", _ok3 is False and "couldn't reach" in _d3, _d3)
-    N._post = lambda u, d, h: (False, "rejected")
+    N._post = lambda u, d, h, **k: (False, "rejected")
     _ok4, _d4 = N.send_discord(_WH, "hi")
     check("discord: a rejected webhook says so instead", _ok4 is False and "rejected it" in _d4, _d4)
 finally:

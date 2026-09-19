@@ -41,8 +41,12 @@ class PrefixMiddleware:
         Same rule auth.client_ip() applies to X-Forwarded-For, and for the same reason: on a direct
         bind (the panel supports 0.0.0.0) the header is fully client-controlled. Trusting it there
         let any caller set SCRIPT_NAME for its own response, which is what every url_for() and every
-        outgoing Location header is built from — so a request could rewrite each link on the page it
-        got back, including to a protocol-relative "//host" that resolves off-site.
+        outgoing Location header is built from.
+
+        This answers WHO may set it and nothing else. What they may SAY — including the
+        protocol-relative "//host" that resolves off-site — is _clean_prefix's job, above; this
+        docstring used to claim both, which is a solved problem the next reader would not go
+        looking for.
 
         Trusted when the request actually arrived from the local proxy (Tailscale Serve runs on
         loopback, which is the case this header exists for), or when the operator has declared a

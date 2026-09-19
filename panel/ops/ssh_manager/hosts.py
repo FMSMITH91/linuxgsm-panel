@@ -212,7 +212,7 @@ def remote_ufw_open_port(server, port, protocol="tcp", comment=""):
 
 # What ufw accepts after `port`: one port, or a lo:hi range. The verb's own _portspec is the
 # authority; this is the same shape, checked early so the answer is a message and not a 500.
-_UFW_PORT_SPEC_RE = re.compile(r"^[0-9]{1,5}(?::[0-9]{1,5})?$")
+_UFW_PORT_SPEC_RE = re.compile(r"^[0-9]{1,5}(?::[0-9]{1,5})?\Z")
 
 
 def remote_ufw_allow_from(server, source, port, protocol="tcp", comment="", allow=True):
@@ -1368,9 +1368,11 @@ def remote_fail2ban_top_ips(server, limit=20, days=7):
 
 def remote_fail2ban_unban(server, jail, ip):
     """Lift a fail2ban ban on a REMOTE host (jail + IP validated). (ok, msg)."""
-    # fullmatch, not match: with a "^…$" pattern, .match accepts a TRAILING NEWLINE ("sshd\n"
-    # passes), which the panel-host version rejects. It is shell-quoted below so this was never an
-    # injection, but the two validators disagreeing is exactly what this audit was looking for.
+    # fullmatch, not match: .match anchors only the START, so "sshd; rm -rf /" would pass a
+    # pattern that only says what the FIRST characters may be. (`\Z` rather than `$` is the
+    # separate half of the same question — see the anchor gate in tests/unit/part06.py.) It is
+    # shell-quoted below so this was never an injection, but the panel-host version fullmatches
+    # and two validators disagreeing is exactly what this audit was looking for.
     if not _F2B_JAIL_RE.fullmatch((jail or "").strip()):
         return False, "Invalid jail name."
     jail = jail.strip()

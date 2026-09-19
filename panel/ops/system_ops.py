@@ -1613,7 +1613,7 @@ def panel_fail2ban_banned_ips():
     return set(p for p in (m.group(1).split() if m else []) if p)
 
 
-_JAIL_RE = re.compile(r"^[A-Za-z0-9._-]{1,64}$")
+_JAIL_RE = re.compile(r"^[A-Za-z0-9._-]{1,64}\Z")
 
 
 def _fail2ban_jails():

@@ -288,7 +288,7 @@ def lgsm_write_config(server, user, selfname, updates):
 #   mods-remove  (installed):  one line per mod, "<id> - <name> - <desc>".
 _MOD_AVAIL_RE = re.compile(r"^\s*\*\s+(\S+)\s*$")               # available: " * <id>"
 _MOD_INST_RE = re.compile(r"^([A-Za-z0-9._-]+)\s+-\s+(.+)$")    # installed: "<id> - <name> - …"
-_MOD_ID_OK = re.compile(r"^[A-Za-z0-9._-]+$")                   # safe id charset (guards here-string)
+_MOD_ID_OK = re.compile(r"^[A-Za-z0-9._-]+\Z")                   # safe id charset (guards here-string)
 
 
 def _strip_ansi(s):

@@ -2555,7 +2555,7 @@ finally:
     _nt_log.removeHandler(_nt_h)
     _nt_log.setLevel(_nt_o_level)
 check("notifications: a provider that REJECTS a message says so in the log",
-      _nt_res[0] is False and "rejected by the provider" in _nt_buf.getvalue(),
+      _nt_res[0] is False and "rejected by telegram" in _nt_buf.getvalue(),
       "%s / %r" % (_nt_res, _nt_buf.getvalue()))
 
 # ── refresh() must report the FETCH, not the cache it read back ───────────────────────────────
@@ -2601,3 +2601,88 @@ try:
                                allow_console=True) == [])
 finally:
     _sm_game._core.send_console_command, _sm_game.capture_console = _pl_o_send, _pl_o_cap
+
+# ── `$` vs `\Z`: every compiled pattern is classified, and the validators are RUN ─────────────
+# `$` matches before a trailing newline and `\Z` does not. On a pattern that decides whether a
+# value may reach a URL path, an Authorization header, a crontab line or a privileged verb, that is
+# the difference between refusing "x\n" and accepting it. On a pattern that parses ONE LINE of
+# command output — `(.*)$`, `(.+)$`, `\s*$` — the two are not interchangeable: `\Z` would refuse the
+# line's own newline and break it.
+#
+# So this is not a sweep. Every module-level `re.compile` whose pattern ends in `$` has to appear in
+# one of the two lists below, and a new one fails this gate until somebody has decided which it is.
+# The validators are then EXECUTED against "<valid sample>\n".
+import ast as _anc_ast                                                             # noqa: E402
+import glob as _anc_glob                                                           # noqa: E402
+
+# Line parsers: `$` is correct because the pattern is matched against one line and the trailing
+# whitespace/newline is either absorbed by the pattern or captured on purpose.
+_ANCHOR_LINE_PARSERS = {
+    "_CRON_VERDICT_RE", "_CFG_LINE_RE", "_MOD_AVAIL_RE", "_MOD_INST_RE", "_HOSTNAME_RE",
+    "_UFW_RULE_RE", "_CONSOLE_PROMPT_RE", "_ASCII_INT_RE", "header",
+    # One crontab line, already .strip()ed by its only caller, and its own `\s*$` absorbs
+    # whatever is left — so $ and \Z behave identically here.
+    "_CRON_WRAP_RE",
+}
+# Validators: the value goes somewhere a newline would matter. Each maps to a sample that must be
+# ACCEPTED, so the gate cannot be satisfied by a pattern that refuses everything.
+_ANCHOR_VALIDATORS = {
+    "panel.services.notifications": {
+        "_DISCORD_WEBHOOK_RE": "https://discord.com/api/webhooks/123456789012345/" + "a" * 68,
+        "_TG_TOKEN_RE": "1234567890:" + "A" * 35,
+        "_DISCORD_BOT_TOKEN_RE": "A" * 24 + "." + "B" * 6 + "." + "C" * 38,
+        "_DISCORD_CHANNEL_RE": "123456789012345678",
+        "_NTFY_TOPIC_RE": "panel-alerts",
+        "_NTFY_URL_RE": "https://ntfy.sh/panel-alerts",
+    },
+    "panel.ops.system_ops": {"_JAIL_RE": "sshd"},
+    "panel.ops.ssh_manager.gmod": {"_DF_PATH_RE": "/home/gmodserver"},
+    "panel.ops.ssh_manager.files": {"_MOD_ID_OK": "metamodsource"},
+    "panel.db.prefs": {"_PANEL_KEY_RE": "host-tile"},
+    "panel.ops.ssh_manager.cron": {"_SIMPLE_CMD_RE": "/home/gs/gsserver monitor"},
+    "panel.ops.ssh_manager.hosts": {"_UFW_PORT_SPEC_RE": "27015:27020"},
+    "panel.core.clock": {"_HHMM_RE": "05:30"},
+}
+
+import importlib as _anc_il                                                        # noqa: E402
+_anc_bad = []
+for _mod_name, _pats in _ANCHOR_VALIDATORS.items():
+    _mod = _anc_il.import_module(_mod_name)
+    for _name, _sample in _pats.items():
+        _rx = getattr(_mod, _name, None)
+        if _rx is None:
+            _anc_bad.append("%s.%s is gone" % (_mod_name, _name))
+            continue
+        if not _rx.match(_sample):
+            _anc_bad.append("%s refuses its own valid sample %r" % (_name, _sample))
+        if _rx.match(_sample + "\n"):
+            _anc_bad.append("%s accepts a trailing newline" % _name)
+check("regex anchors: every validator refuses a trailing newline (\\Z, not $)", not _anc_bad,
+      "; ".join(_anc_bad[:4]))
+
+# ...and nothing new slips in unclassified.
+_anc_known = set(_ANCHOR_LINE_PARSERS)
+for _p in _ANCHOR_VALIDATORS.values():
+    _anc_known |= set(_p)
+_anc_unclassified = []
+for _f in sorted(_anc_glob.glob(os.path.join(_root, "panel", "**", "*.py"), recursive=True)
+                 + [os.path.join(_root, n) for n in ("app.py", "manage.py", "db_maintenance.py")]):
+    try:
+        _tree = _anc_ast.parse(open(_f, encoding="utf-8").read())
+    except SyntaxError:
+        continue
+    for _n in _anc_ast.walk(_tree):
+        if not (isinstance(_n, _anc_ast.Assign) and isinstance(_n.value, _anc_ast.Call)
+                and getattr(_n.value.func, "attr", "") == "compile" and _n.value.args):
+            continue
+        _parts = [a.value for a in _n.value.args[:1] + getattr(_n.value.args[0], "values", [])
+                  if isinstance(a, _anc_ast.Constant) and isinstance(a.value, str)]
+        _pat = "".join(_parts) if _parts else ""
+        if not _pat or not _pat.endswith("$") or _pat.endswith("\\$"):
+            continue
+        for _t in _n.targets:
+            if isinstance(_t, _anc_ast.Name) and _t.id not in _anc_known:
+                _anc_unclassified.append("%s:%d %s" % (os.path.basename(_f), _n.lineno, _t.id))
+check("regex anchors: every $-anchored pattern is classified as a validator or a line parser",
+      not _anc_unclassified,
+      "unclassified (decide, then add to the list in this test): %s" % _anc_unclassified[:5])
