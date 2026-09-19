@@ -556,8 +556,8 @@
     {# ...and is_superadmin, which the Panel Updates / Diagnostics card two cards up already
        requires. This route is @permission_required(MANAGE_REMOTES) and the Groups page offers the
        panel host itself as a grantable checkbox, so a delegated host operator reaching
-       /remote/<local id>/manage was shown the panel's own bind address, web port, "Apply &
-       restart", public-SSH allow/limit/disable and the SSH port change — every one of which
+       the local host's own /remote/.../manage page was shown the panel's bind address, web port,
+       "Apply & restart", public-SSH allow/limit/disable and the SSH port change — every one of which
        answers 403 from the endpoint behind it. #}
     {% if remote.is_local and current_user.is_superadmin %}
     <div class="row g-3">

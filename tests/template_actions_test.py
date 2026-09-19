@@ -1637,6 +1637,31 @@ check(not _unreachable,
 
 # ── report ──
 # c is True (pass), False (fail) or None (skipped — the check did not run; see skip()).
+
+# ── a Jinja comment is invisible to the browser and NOT to the HTML scanner ───────────────────
+# CodeQL parses the template as HTML, comments included, so prose describing a Flask route as
+# "/remote/<local id>/manage" is read as a start tag `local` carrying a valueless `id` attribute
+# and raises js/malformed-html-id — a red "Open code-scanning alerts" check on a pull request
+# whose only change to that file was a comment. It cost a CI round trip here. Write route
+# placeholders as /remote/.../manage, or name the parameter in words.
+#
+# Deliberately narrow: mentioning <span> or <option> in a comment is fine and several already do.
+# What is flagged is only a tag-shaped run carrying a BARE `id` attribute, which is the shape the
+# rule fires on.
+_BARE_ID_IN_TAG = re.compile(r"<[A-Za-z][A-Za-z0-9-]*(?:\s+[^>]*?)?\s+id\s*(?:>|\s)")
+_id_offenders = []
+for _tpl in sorted((ROOT / "templates").rglob("*.html")):
+    _s = _tpl.read_text(encoding="utf-8")
+    for _m in re.finditer(r"\{#.*?#\}", _s, re.S):
+        _hit = _BARE_ID_IN_TAG.search(_m.group(0))
+        if _hit:
+            _id_offenders.append("%s:%d %s" % (_tpl.name, _s[:_m.start()].count("\n") + 1,
+                                               _hit.group(0)))
+check(not _id_offenders,
+      "templates: no Jinja comment holds a tag-shaped run with a bare id attribute",
+      "; ".join(_id_offenders))
+
+
 passed = sum(1 for c, _, _ in results if c is True)
 failed = sum(1 for c, _, _ in results if c is False)
 skipped = [(name, detail) for c, name, detail in results if c is None]
