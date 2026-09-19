@@ -1638,6 +1638,70 @@ check(not _unreachable,
 # ── report ──
 # c is True (pass), False (fail) or None (skipped — the check did not run; see skip()).
 
+# ── every restore-a-hidden-panel path must DECLARE the key it is restoring ────────────────────
+# collectPanels/collectLayout build the save payload FROM THE DOM, and the endpoint's merge rule is
+# to keep every stored key the page did not declare (so one page cannot erase another page's
+# layout). showPanel removed the restore chip first, so the key was in neither `panels` nor
+# `hidden` and therefore not in `declared` — the server kept it hidden and the reload rendered it
+# hidden. Verified by feeding the real payload through the real merge: the key comes back in
+# `hidden` every time. Both pages have this shape; both are checked.
+for _sf, _fn in (("dashboard.js", "showPanel"), ("server_detail.js", "showDetailPanel")):
+    _src = (ROOT / "static" / "js" / _sf).read_text(encoding="utf-8")
+    _body = _src[_src.index("window.%s = function" % _fn):]
+    _body = _body[:_body.index("\n};")]
+    check("setAttribute('data-panel'" in _body and "btn.remove()" in _body,
+          "js: %s declares the key it restores before saving" % _fn,
+          "the server's merge rule would put it straight back in hidden")
+
+# ── a poll whose only exit is success runs until the page is closed ───────────────────────────
+# Each of these polls an endpoint that costs an SSH round trip, and each had exactly one
+# clearInterval, reachable only when the remote reported running:true. The ordinary path — open
+# the login link in another tab and come back later, or close the modal — left it running, and
+# every press of the button started another. Measured in a browser: three clicks and 13s gave four
+# live intervals and nine requests.
+for _sf, _needle in (("manage_remotes.js", "_tsUpPolls"), ("tailscale.js", "_tsUpPoll"),
+                     ("setup_tailscale.js", "_tsPoll")):
+    _src = (ROOT / "static" / "js" / _sf).read_text(encoding="utf-8")
+    check(_needle in _src and "Date.now()" in _src,
+          "js: %s's tailscale-up poll is deduped and has a deadline" % _sf,
+          "no single-poll registry or no deadline")
+
+# ── the bootstrap poll's teardown sat below the line that returned ────────────────────────────
+_mr = (ROOT / "static" / "js" / "manage_remotes.js").read_text(encoding="utf-8")
+check("if (!stepEl) { clearInterval(_bootstrapPoll)" in _mr,
+      "js: the bootstrap poll stops when its modal is gone, instead of bailing forever",
+      "showModal removes #ts-modal, and every clearInterval sits below the early return")
+
+# ── the SSH card's live state is refilled after the section is swapped ────────────────────────
+# refreshSection only re-runs a callback when one is NAMED, and loadSshStatus is the only thing
+# that fills that card — it ran once, at load. So after any Tailscale-SSH action the swap brought
+# back the server render and the card read "Currently: …", a literal ellipsis.
+_rh = (ROOT / "static" / "js" / "remote_manage_host.js").read_text(encoding="utf-8")
+check(_rh.count("refreshSection('#conn-ssh-card', 'loadSshStatus')") == 4
+      and "refreshSection('#conn-ssh-card')" not in _rh,
+      "js: every #conn-ssh-card refresh re-runs loadSshStatus",
+      "%d of the call sites name the callback" % _rh.count("'loadSshStatus'"))
+
+# ── Ctrl/Cmd+K must not be cancelled on a page with no palette ────────────────────────────────
+# palette.js is loaded unconditionally by base.html; #cmdk renders only under show_app_chrome. On
+# login, force_password and the setup pages the shortcut was cancelled and nothing opened.
+_pal = (ROOT / "static" / "js" / "palette.js").read_text(encoding="utf-8")
+_kseg = _pal[_pal.index("e.key === 'k'"):]
+_kseg = _kseg[:_kseg.index("\n    }")]          # the whole Ctrl/Cmd+K branch
+check(_kseg.index("getElementById('cmdk')") < _kseg.index("e.preventDefault")
+      and "if (!box) return;" in _kseg,
+      "js: the palette looks for #cmdk before cancelling Ctrl/Cmd+K",
+      "it still preventDefaults on pages that have no palette")
+
+# ── the copy button on the backup-codes page must survive an insecure origin ──────────────────
+# navigator.clipboard is undefined on http://, which the panel serves by default, so the property
+# read threw before any promise existed and the rejection handler never ran: the click did nothing
+# at all, silently, on the page whose whole point is getting the codes out of the browser.
+_bc = (ROOT / "static" / "js" / "backup_codes.js").read_text(encoding="utf-8")
+check("navigator.clipboard &&" in _bc and "execCommand" in _bc,
+      "js: the backup-codes copy guards navigator.clipboard and falls back",
+      "an http:// install gets a button that does nothing")
+
 # ── a Jinja comment is invisible to the browser and NOT to the HTML scanner ───────────────────
 # CodeQL parses the template as HTML, comments included, so prose describing a Flask route as
 # "/remote/<local id>/manage" is read as a start tag `local` carrying a valueless `id` attribute

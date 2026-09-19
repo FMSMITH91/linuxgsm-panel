@@ -338,6 +338,20 @@ window.hidePanel = function(btn){
 // Restoring needs the panel's markup back, which only the server has — so save first, then reload
 // once the save is acknowledged. Reloading before it lands would resurrect the old layout.
 window.showPanel = function(region, key, btn){
+  // Declare the key before saving, or the server puts it straight back in `hidden`. collectPanels
+  // builds the payload FROM THE DOM: once the restore chip is removed the key is in neither
+  // `panels` nor `hidden`, so it is not in `declared` either — and the endpoint's merge rule is to
+  // keep every stored key the page did not declare, precisely so one page cannot erase another
+  // page's layout. So the unhide saved a payload that read as "this page knows nothing about
+  // 'offline'", the server kept it hidden, and the reload rendered it hidden again. Verified by
+  // feeding the real payload through the real merge: the key comes back in `hidden` every time.
+  // A placeholder node is enough — the reload replaces the region wholesale.
+  var reg = document.querySelector('[data-region="' + region + '"]');
+  if (reg){
+    var ph = document.createElement('div');
+    ph.setAttribute('data-panel', key);
+    reg.appendChild(ph);
+  }
   btn.remove();
   saveHostOrder(function(){ location.reload(); });
 };

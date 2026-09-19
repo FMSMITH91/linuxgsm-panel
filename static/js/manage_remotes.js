@@ -1,4 +1,8 @@
 // ── Live stats for each remote card ──────────────────────
+// One live tailscale-up poll per host. Its only exit used to be the remote reporting
+// running:true, so closing the modal or walking away left it polling — an SSH round trip
+// per tick — for the life of the page, and every press of the button added another.
+var _tsUpPolls = {};
 document.addEventListener('DOMContentLoaded', function() {
   var statEls = document.querySelectorAll('[id^="live-stats-"]');
   statEls.forEach(function(el) {
@@ -76,7 +80,7 @@ function loadLiveStats(remoteId) {
     .then(r => r.json())
     .then(data => {
       if (data.success) {
-        // escapeHtml, like refreshLocalStats below and renderTailscaleStatus above: every one
+        // escapeHtml, like renderTailscaleStatus above: every one
         // of these is raw output read off the REMOTE host — `uptime` is literally whatever
         // `uptime -p` printed, taken as line[7:] with no tokenising — and a host the panel
         // manages is exactly the thing that may be compromised. The CSP stops it becoming script
@@ -103,56 +107,12 @@ pollWhenVisible(function() {
     var id = el.id.replace('live-stats-', '');
     if (id) { loadLiveStats(id); }   // update in place; no "Refreshing…" flicker
   });
-  // Also refresh CPU/RAM on local server management page
-  var cpuEl = document.getElementById('cpu-pct');
-  if (cpuEl) refreshLocalStats();
+  // (refreshLocalStats and setBar lived here. Every id they wrote to — cpu-pct, cpu-bar, mem-bar,
+  //  cpu-detail, mem-pct, mem-detail, load-1/5/15 — is rendered by no template: they belonged to
+  //  the old /server-management page, which now renders remote_manage.html. The `if (cpuEl)` guard
+  //  meant no user-visible symptom, but 56 lines that read as live code, named a real endpoint and
+  //  would mislead the next reader.)
 }, 15000);
-
-function refreshLocalStats() {
-  fetch(MOUNT + '/api/server-management')
-    .then(r => r.json())
-    .then(data => {
-      var u = data.uptime;
-      if (!u) return;   // no fresh stats -> keep the values already on screen
-      var updateEl = function(id, val) {
-        var el = document.getElementById(id);
-        if (el) el.textContent = val;
-      };
-      updateEl('uptime', u.uptime);
-      updateEl('cpu-pct', u.cpu_percent);
-      updateEl('mem-pct', u.memory_percent);
-      updateEl('memory', u.memory);
-      updateEl('mem-detail', u.memory);
-      updateEl('disk', u.disk_root);
-      updateEl('kernel', u.kernel);
-      updateEl('load-1', u.load_1m);
-      updateEl('load-5', u.load_5m);
-      updateEl('load-15', u.load_15m);
-      // Update progress bars separately
-      var cpuBar = document.getElementById('cpu-bar');
-      if (cpuBar) cpuBar.style.width = parseFloat(u.cpu_percent) + '%';
-      var memBar = document.getElementById('mem-bar');
-      if (memBar) memBar.style.width = parseFloat(u.memory_percent) + '%';
-      var cpuDetail = document.getElementById('cpu-detail');
-      if (cpuDetail) {
-        // escapeHtml: both figures are read off the REMOTE host and land in innerHTML below.
-        var txt = '';
-        if (u.cpu_per_core) txt += escapeHtml(String(u.cpu_per_core)) + '%/core &middot; ';
-        txt += escapeHtml(String(u.cpu_cores)) + ' cores';
-        cpuDetail.innerHTML = txt;  // nosemgrep
-      }
-    })
-    .catch(function() {});
-}
-
-function setBar(pct) {
-  var pctFloat = parseFloat(pct);
-  if (isNaN(pctFloat)) return;
-  var cpuBar = document.getElementById('cpu-bar');
-  var memBar = document.getElementById('mem-bar');
-  if (cpuBar) cpuBar.style.width = pctFloat + '%';
-  if (memBar) memBar.style.width = pctFloat + '%';
-}
 
 function toggleCreds(select) {
   var group = document.getElementById('credential-group');
@@ -277,11 +237,25 @@ function tailscaleUp(remoteId) {
       + '<a href="' + escapeHtml(d.url) + '" target="_blank" rel="noopener" class="d-inline-block my-1" style="word-break:break-all;">' + escapeHtml(d.url) + '</a>'
       + ' <button class="btn btn-sm btn-outline-secondary py-0"' + _da('copyText', [d.url]) + '><i class="bi bi-clipboard"></i></button>'
       + '<br><strong>2.</strong> <span id="ts-wait-' + remoteId + '"><i class="bi bi-hourglass-split"></i> Waiting for you to authorize…</span></div>';
-    // poll for connection
+    // Poll for connection — with a deadline and a single live timer per host. Its only exit used
+    // to be the remote reporting running:true, so the ordinary path (open the link in another tab
+    // and come back later, close the modal, give up) left it polling for the life of the page, and
+    // each press of the button added another. /api/remote/<id>/tailscale-check is an SSH round
+    // trip to the remote host: measured, three clicks and 13s produced four live intervals and
+    // nine requests.
+    if (_tsUpPolls[remoteId]) clearInterval(_tsUpPolls[remoteId]);
+    var _tsDeadline = Date.now() + 5 * 60 * 1000;
     var t = setInterval(function() {
+      if (Date.now() > _tsDeadline) {
+        clearInterval(t); delete _tsUpPolls[remoteId];
+        var wOut = document.getElementById('ts-wait-' + remoteId);
+        if (wOut) wOut.innerHTML = '<span class="text-secondary">Still waiting — press the button '
+          + 'again once you have approved the machine.</span>';
+        return;
+      }
       fetch(MOUNT + '/api/remote/' + remoteId + '/tailscale-check').then(r => r.json()).then(s => {
         if (s.running) {
-          clearInterval(t);
+          clearInterval(t); delete _tsUpPolls[remoteId];
           var w = document.getElementById('ts-wait-' + remoteId);
           if (w) w.innerHTML = '<span class="text-success"><i class="bi bi-check-circle"></i> Connected! Finalizing (UFW)…</span>';
           // Always allow the tailscale0 interface in UFW, then offer to switch the
@@ -301,6 +275,7 @@ function tailscaleUp(remoteId) {
         }
       }).catch(function(){});
     }, 4000);
+    _tsUpPolls[remoteId] = t;   // so the next press replaces this one instead of adding to it
   })
   .catch(function() { el.innerHTML = '<span class="text-danger">Connection failed starting Tailscale.</span>'; });
 }
@@ -500,7 +475,13 @@ function pollBootstrap(remoteId, btn) {
         var pctEl = document.getElementById('bootstrap-pct');
         var logEl = document.getElementById('bootstrap-log');
         var elEl = document.getElementById('bootstrap-elapsed');
-        if (!stepEl) return; // modal closed
+        // Clear it, don't just bail. showModal() removes any existing #ts-modal before building a
+        // new one, so opening the Tailscale check or Prepare on ANY other host deletes this node —
+        // and every `done`/`failed` branch that owns a clearInterval sits BELOW this line. The
+        // poll then hit /api/remote/<id>/bootstrap-status every 2.5s, bailed here every time, and
+        // ran until the page was closed. watchBootstrap keeps the card's own copy alive, so
+        // nothing is lost by stopping this one.
+        if (!stepEl) { clearInterval(_bootstrapPoll); _bootstrapPoll = null; return; }
         pctEl.textContent = (s.total ? (s.step + '/' + s.total) : '') + '  ' + s.percent + '%';
         barEl.style.width = s.percent + '%';
         elEl.textContent = 'Elapsed: ' + s.elapsed + 's';

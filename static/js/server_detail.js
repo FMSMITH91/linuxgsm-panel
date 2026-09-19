@@ -1155,6 +1155,13 @@ window.hidePanel = function(btn){
 };
 
 window.showDetailPanel = function(region, key, btn){
+  // Same shape, same fix as dashboard.js's showPanel — see the note there.
+  var reg = document.querySelector('[data-region="' + region + '"]');
+  if (reg){
+    var ph = document.createElement('div');
+    ph.setAttribute('data-panel', key);
+    reg.appendChild(ph);
+  }
   btn.remove();
   saveDetailLayout(function(){ location.reload(); });
 };

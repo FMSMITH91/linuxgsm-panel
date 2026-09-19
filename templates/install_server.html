@@ -16,8 +16,12 @@
       The auto-install process runs in the background — check back after a few minutes.
     </p>
     <form id="install-form" method="POST" action="{{ url_for('install_game_server') }}"
-          class="row g-2 align-items-start ajax-form" data-ajax-refresh="#servers-list"
-          data-ajax-after="afterServerRefresh">
+          {# No data-ajax-refresh: #servers-list is rendered by no template — it was the container
+             on the page this form was split out of. refreshSection therefore re-FETCHED this whole
+             page on every successful install (panel.js does fetch(location.href)), found nothing
+             to swap in either document, and threw it away. The form stays an ajax-form so the
+             submit still goes through the wrapper and the user still gets the toast. #}
+          class="row g-2 align-items-start ajax-form">
       <div class="col-md-3">
         <label class="form-label" for="remote-select">Target Server</label>
         {# With ONE host there is nothing to choose: the placeholder is a required field whose

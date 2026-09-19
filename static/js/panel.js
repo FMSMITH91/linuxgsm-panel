@@ -143,12 +143,32 @@ document.addEventListener('change', function(e){
 // keeps identical freshness while you're looking at a page and does zero work when you're
 // not. Returns the interval id (clearable). Use in place of setInterval for anything that
 // fetches live data on a timer.
+var _visPolls = {};   // interval id -> its visibilitychange listener, so stopPolling can undo both
 window.pollWhenVisible = function(fn, intervalMs){
-  var id = setInterval(function(){ if(!document.hidden){ try { fn(); } catch(e){} } }, intervalMs);
-  document.addEventListener('visibilitychange', function(){
-    if(!document.hidden){ try { fn(); } catch(e){} }   // catch up the moment the tab is focused
-  });
+  // The catch-up on focus is THROTTLED, and the listener can be removed. Unthrottled, the interval
+  // argument meant nothing on that path: nags.js registers osUpdatesNagCheck at one hour and
+  // rebootNagCheck at ten minutes, and rebootNagCheck hits /api/remote/<id>/reboot-required, which
+  // is an SSH command — so alt-tabbing between the panel and a terminal cost one SSH round trip
+  // per switch. Measured: ten focus events on a one-HOUR poll ran the work ten times. And the
+  // returned id could not stop it, because clearInterval leaves the listener behind and the
+  // listener was unreachable; five more focuses still ran after clearInterval.
+  var last = 0;
+  var gap = Math.min(intervalMs, 60000);
+  function run(){ last = Date.now(); try { fn(); } catch(e){} }
+  var id = setInterval(function(){ if(!document.hidden) run(); }, intervalMs);
+  function onVis(){ if(!document.hidden && Date.now() - last >= gap) run(); }
+  document.addEventListener('visibilitychange', onVis);
+  // setInterval returns a NUMBER, so the teardown cannot hang off the id — it goes in a registry
+  // keyed by it. Existing callers keep passing the id to clearInterval and are unaffected; they
+  // just leave the listener behind, which is what stopPolling exists to finish.
+  _visPolls[id] = onVis;
   return id;
+};
+
+// Stop a pollWhenVisible poll COMPLETELY: the interval and its focus catch-up.
+window.stopPolling = function(id){
+  clearInterval(id);
+  if (_visPolls[id]) { document.removeEventListener('visibilitychange', _visPolls[id]); delete _visPolls[id]; }
 };
 
 // "3h ago" for a unix timestamp. Shared: the backups list and the OS Updates card both say when
@@ -622,7 +642,13 @@ window.copyText = function(text, label){
 // link silently dies (or pops an ugly "no app found" dialog). On touch devices
 // we intercept it, copy the ip:port instead, and tell the user to paste it into
 // their game — the phone is for managing, the actual joining happens elsewhere.
-window.__isTouch = ('ontouchstart' in window) || (navigator.maxTouchPoints || 0) > 0;
+// `pointer: coarse` — the POINTER, not the capability. maxTouchPoints > 0 is true on every
+// touchscreen Windows laptop, Surface and touch-enabled Chromebook, machines that do have Steam:
+// clicking Join with a mouse there never launched steam://connect/…, it copied the address and
+// toasted instead, and the href was cancelled so there was no way to get the real link. A hybrid
+// device with a mouse reports `pointer: fine` and keeps the hand-off.
+window.__isTouch = (window.matchMedia && window.matchMedia('(pointer: coarse)').matches)
+  || (!window.matchMedia && (('ontouchstart' in window) || (navigator.maxTouchPoints || 0) > 0));
 document.addEventListener('click', function(ev){
   var j = ev.target.closest && ev.target.closest('.join-link');
   if(!j || !window.__isTouch) return;

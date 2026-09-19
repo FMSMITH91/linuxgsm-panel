@@ -12,6 +12,12 @@ function retrustHostKey(){
     }});
 }
 var SSH_LABELS={allow:'open (allow)',limit:'rate-limited (limit)',off:'disabled — tailnet only'};
+// Named as refreshSection's `afterName` at all four call sites below. refreshSection only
+// re-runs a callback when one is given, and this is the only thing that fills the card's
+// live state — it ran ONCE, at load. So after Migrate to Tailscale SSH, Enable/Disable
+// Tailscale SSH or Allow tailscale0, the swap brought back the raw server render and the
+// card read `Currently: …` (a literal ellipsis), with the Allow/Limit/Disable buttons
+// losing their current-mode marking, until a full page reload.
 function loadSshStatus(){
   var el=document.getElementById('ssh-mode'); if(!el) return;
   fetch(MOUNT+'/api/remote/'+REMOTE_ID+'/ssh-status').then(r=>r.json())
@@ -140,7 +146,7 @@ function switchToTailscale(){
 function _switchToTailscale(){
   var el=document.getElementById('migrate-msg'); el.textContent='Migrating…'; el.className='small mt-1 text-secondary';
   fetch(MOUNT+'/api/remote/'+REMOTE_ID+'/tailscale-migrate',{method:'POST'}).then(r=>r.json())
-    .then(d=>{ if(d.success){ el.textContent='✓ '+(d.message||'Migrated'); el.className='small mt-1 text-success'; setTimeout(function(){window.refreshSection('#conn-ssh-card');},1200); } else { el.textContent='✗ '+(d.message||'Failed'); el.className='small mt-1 text-danger'; } })
+    .then(d=>{ if(d.success){ el.textContent='✓ '+(d.message||'Migrated'); el.className='small mt-1 text-success'; setTimeout(function(){window.refreshSection('#conn-ssh-card', 'loadSshStatus');},1200); } else { el.textContent='✗ '+(d.message||'Failed'); el.className='small mt-1 text-danger'; } })
     .catch(()=>{ el.textContent='✗ Migration failed'; el.className='small mt-1 text-danger'; });
 }
 // ── System specs (static — fetched once) ──
@@ -178,7 +184,7 @@ function tsSshEnable(){
     bodyText:'Enable Tailscale SSH? This re-authenticates Tailscale with SSH support enabled.',
     onConfirm:function(){
       fetch(MOUNT+'/api/server-management/ts-ssh-enable',{method:'POST'}).then(r=>r.json())
-        .then(d=>{ if(window.toast) toast(d.message||(d.success?'Enabled':'Failed'), d.success?'success':'danger'); if(d.success) setTimeout(function(){window.refreshSection('#conn-ssh-card');},800); })
+        .then(d=>{ if(window.toast) toast(d.message||(d.success?'Enabled':'Failed'), d.success?'success':'danger'); if(d.success) setTimeout(function(){window.refreshSection('#conn-ssh-card', 'loadSshStatus');},800); })
         .catch(()=>{ if(window.toast) toast('Failed to enable Tailscale SSH','danger'); });
     }});
 }
@@ -187,13 +193,13 @@ function tsSshDisable(){
     bodyText:'Disable Tailscale SSH?',
     onConfirm:function(){
       fetch(MOUNT+'/api/server-management/ts-ssh-disable',{method:'POST'}).then(r=>r.json())
-        .then(d=>{ if(window.toast) toast(d.message||(d.success?'Disabled':'Failed'), d.success?'success':'danger'); if(d.success) setTimeout(function(){window.refreshSection('#conn-ssh-card');},800); })
+        .then(d=>{ if(window.toast) toast(d.message||(d.success?'Disabled':'Failed'), d.success?'success':'danger'); if(d.success) setTimeout(function(){window.refreshSection('#conn-ssh-card', 'loadSshStatus');},800); })
         .catch(()=>{ if(window.toast) toast('Failed to disable Tailscale SSH','danger'); });
     }});
 }
 function ufwAllowTailscale(){
   fetch(MOUNT+'/api/server-management/ufw-allow-tailscale',{method:'POST'}).then(r=>r.json())
-    .then(d=>{ if(window.toast) toast(d.message||(d.success?'Allowed':'Failed'), d.success?'success':'danger'); if(d.success) setTimeout(function(){window.refreshSection('#conn-ssh-card');},800); })
+    .then(d=>{ if(window.toast) toast(d.message||(d.success?'Allowed':'Failed'), d.success?'success':'danger'); if(d.success) setTimeout(function(){window.refreshSection('#conn-ssh-card', 'loadSshStatus');},800); })
     .catch(()=>{ if(window.toast) toast('Failed to configure UFW','danger'); });
 }
 function renderUpdate(d){

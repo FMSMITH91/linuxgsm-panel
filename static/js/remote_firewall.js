@@ -56,6 +56,15 @@ function refreshFirewall() {
         var bc = document.getElementById('blocks-count');
         if (bc) bc.textContent = blockGroups.length + ' blocked';
       }
+    })
+    // The one fetch chain on this page without a rejection handler — every sibling has one, and
+    // openPort's was added with a note about "⟳ Opening..." being stuck on screen forever. This
+    // runs after EVERY successful mutation (block, unblock, open, delete, sync), so an unreachable
+    // host or an expired session (an HTML login page makes r.json() reject) left the rules table
+    // showing the pre-change state: a rule you just deleted still listed, with no error anywhere.
+    .catch(function(){
+      if (window.toast) toast('Could not refresh the firewall rules — the host may be unreachable.',
+                              'danger');
     });
 }
 

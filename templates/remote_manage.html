@@ -190,7 +190,8 @@
   </div>
   <div class="card-body">
     <p class="small text-secondary mb-2">Finds LinuxGSM servers already installed on this host (any user) and imports the ones missing from the panel — with their backups, mods and cron. Read-only until you import.</p>
-    <div id="disc-result"></div>
+    {# data-no-i18n: scanExisting fills this with Linux usernames read off the host. #}
+    <div id="disc-result" data-no-i18n></div>
   </div>
 </div>
 {% endif %}
@@ -346,7 +347,8 @@
     </div>
     <div id="fb-disk" class="small text-secondary mb-1"></div>
     <div id="fb-summary" class="small text-info-emphasis mb-2"></div>
-    <div id="fb-games" class="small"></div>
+    {# data-no-i18n: remote_manage_backups.js writes game and host NAMES in here. #}
+    <div id="fb-games" class="small" data-no-i18n></div>
   </div>
 </div>
 

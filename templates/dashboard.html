@@ -223,10 +223,17 @@
           <tr data-server-id="{{ srv.id }}" data-name="{{ srv.name }}" data-type="{{ srv.game_display or srv.game_type }}" data-status="{{ srv.status }}" data-players="{{ player_counts.get(srv.id) if player_counts.get(srv.id) is not none else -1 }}">
             {% if can_control %}<td><input type="checkbox" class="form-check-input srv-check" value="{{ srv.id }}" data-name="{{ srv.name }}" data-supports-update="{{ 'true' if srv.supports_update else 'false' }}" aria-label="Select {{ srv.name }}"></td>{% endif %}
             <td>
-              <strong>{{ srv.name }}</strong>
+              {# data-no-i18n on all three, for the same reason the tag chips below already carry it:
+                 these are USER-AUTHORED names, and the walker translates any text node whose exact
+                 text is a catalog key. The es catalog holds exactly the words people name servers
+                 with — Console, Backups, Online, Status, Players. Measured in a browser against the
+                 real i18n.js with LANG='es': a server called "Console" rendered as "Consola", and
+                 the in-game name dashboard.js writes into #game-name-<id> with textContent went
+                 from "Online" to "En línea". #}
+              <strong data-no-i18n>{{ srv.name }}</strong>
               <span class="game-name text-info d-block text-truncate" id="game-name-{{ srv.id }}"
-                    style="font-size:.72rem;max-width:22ch;" title="In-game server name (what players see)">{{ server_names.get(srv.id) or '' }}</span>
-              <span class="text-secondary d-block" style="font-size: .75rem;">{{ srv.short_name }}</span>
+                    style="font-size:.72rem;max-width:22ch;" title="In-game server name (what players see)" data-no-i18n>{{ server_names.get(srv.id) or '' }}</span>
+              <span class="text-secondary d-block" style="font-size: .75rem;" data-no-i18n>{{ srv.short_name }}</span>
               {# data-no-i18n: tag names are user-authored, and the translation walker would happily
                  "translate" one that collides with a catalog key ("Online", "Status", …). The colour
                  is stored only after passing _valid_hex_color, so it is safe in a style attribute.
