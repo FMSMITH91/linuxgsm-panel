@@ -611,6 +611,10 @@ check_origin_trusted() {
 # no filter, and never consults the working tree or the index. Root stages that output inside
 # HELPER_DIR, which is root-owned 0755 and therefore not panel-writable — which is what closes the
 # window between staging and `install`.
+# Root-owned, outside the panel's checkout — see stage_root_source and SECURITY.md.
+HELPER_DIR="/usr/local/lib/linuxgsm-panel"
+
+
 stage_root_source() {
     local rel="$1" out="${HELPER_DIR}/.stage-$2"
     ${H_SUDO} rm -f "${out}" 2>/dev/null || true
@@ -628,6 +632,36 @@ stage_root_source() {
     printf '%s\n' "${out}"
 }
 
+# ── The recovery command ───────────────────────────────────────────────────────────────────────
+# `sudo linuxgsm-panel-recover` is what this installer prints as the lockout remedy and what
+# README documents, so it runs as ROOT. It used to be a symlink to ${PANEL_DIR}/recover.sh — a
+# file inside the checkout, which this script chowns to the panel user. A compromised panel
+# rewrote it and waited for the operator to reach for the documented recovery command. recover.sh
+# is careful to drop to the service user before it touches the database, but that is line 112:
+# everything above it is root, and an attacker replaces the whole file anyway.
+#
+# So install a root-owned copy beside the helper, taken from the COMMIT rather than the working
+# tree (stage_root_source explains why that distinction matters), and point the symlink at that.
+# Falls back to the checkout only when no root-owned copy can be placed — the same trade
+# install_root_tools makes for the helper, because a working recovery command matters more than
+# the boundary on a host that has no root-owned anything.
+install_recovery_command() {
+    local link="/usr/local/bin/linuxgsm-panel-recover" stage="" target=""
+    H_SUDO=""; [ "$(id -u)" -ne 0 ] && H_SUDO="sudo"
+    if ${H_SUDO} install -d -o root -g root -m 0755 "${HELPER_DIR}" 2>/dev/null \
+       && stage="$(stage_root_source recover.sh recover.sh)" \
+       && ${H_SUDO} install -o root -g root -m 0755 "${stage}" "${HELPER_DIR}/recover.sh" 2>/dev/null; then
+        target="${HELPER_DIR}/recover.sh"
+        ${H_SUDO} rm -f "${stage}" 2>/dev/null || true
+    elif [ -f "${PANEL_DIR}/recover.sh" ]; then
+        target="${PANEL_DIR}/recover.sh"
+        warn "Recovery command points into the checkout — no root-owned copy could be placed."
+        warn "Re-run this installer as root so \`sudo linuxgsm-panel-recover\` is not panel-writable."
+    fi
+    [ -n "${target}" ] || return 0
+    ${H_SUDO} ln -sf "${target}" "${link}" 2>/dev/null || true
+}
+
 # Sets HELPER_OK / ROOT_TOOLS_OK, which write_sudoers_grant reads.
 install_root_tools() {
     if [ "${ORIGIN_TRUSTED:-1}" -ne 1 ]; then
@@ -637,7 +671,6 @@ install_root_tools() {
     fi
     HELPER_OK=0
     ROOT_TOOLS_OK=0
-    HELPER_DIR="/usr/local/lib/linuxgsm-panel"
     HELPER_DST="${HELPER_DIR}/panel-helper"
     INSTALLER_DST="${HELPER_DIR}/install.sh"
     DBM_DST="${HELPER_DIR}/db_maintenance.py"
@@ -931,13 +964,7 @@ if [ "${IS_UPDATE}" -eq 1 ]; then
     # Ensure the path-independent recovery command exists on existing installs too — including
     # non-root (systemd --user) installs, where writing to /usr/local/bin needs sudo. This used to be
     # root-only, so `--user` installs never got `linuxgsm-panel-recover` (command not found).
-    if [ -f "${PANEL_DIR}/recover.sh" ]; then
-        if [ "$(id -u)" -eq 0 ]; then
-            ln -sf "${PANEL_DIR}/recover.sh" /usr/local/bin/linuxgsm-panel-recover 2>/dev/null || true
-        else
-            sudo ln -sf "${PANEL_DIR}/recover.sh" /usr/local/bin/linuxgsm-panel-recover 2>/dev/null || true
-        fi
-    fi
+    install_recovery_command
 
     info "[6/6] Verifying the panel came back up…"
     if health_check; then
@@ -1144,7 +1171,7 @@ SERVICEEOF
     systemctl daemon-reload
     systemctl enable --now linuxgsm-panel.service
     # Path-independent recovery command: `sudo linuxgsm-panel-recover` from anywhere.
-    ln -sf "${PANEL_DIR}/recover.sh" /usr/local/bin/linuxgsm-panel-recover 2>/dev/null || true
+    install_recovery_command
     SERVICE_HINT="sudo systemctl status linuxgsm-panel"
     LOG_HINT="sudo journalctl -u linuxgsm-panel -f"
 else
@@ -1175,7 +1202,7 @@ SERVICEEOF
     SERVICE_HINT="systemctl --user status linuxgsm-panel"
     LOG_HINT="journalctl --user -u linuxgsm-panel -f"
     # Recovery command for --user installs too — this branch is non-root, so sudo writes /usr/local/bin.
-    sudo ln -sf "${PANEL_DIR}/recover.sh" /usr/local/bin/linuxgsm-panel-recover 2>/dev/null || true
+    install_recovery_command
 fi
 ensure_service_tuning                          # low CPU/IO priority so the panel yields to games
 ensure_system_tuning                           # prefer RAM over swap (vm.swappiness)

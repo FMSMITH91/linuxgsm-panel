@@ -865,6 +865,25 @@ check("install.sh: skips the service user's own home when scanning for a per-use
 check("install.sh: requires a user UNIT file, not just an app.py, to call it an install",
       ".config/systemd/user/linuxgsm-panel.service" in _inst_guard)
 
+# ── `sudo linuxgsm-panel-recover` must not execute a panel-writable file ─────────────────────
+# The installer prints it as the lockout remedy and README documents it, so it runs as ROOT. It
+# was a symlink to ${PANEL_DIR}/recover.sh — inside the checkout, which install.sh chowns to the
+# panel user — so a compromised panel rewrote it and waited for the operator to reach for the
+# documented recovery command. recover.sh does drop to the service user before touching the
+# database, but that is line 112: everything above it is root, and an attacker replaces the whole
+# file anyway.
+_rec = open(os.path.join(_root, "install.sh"), encoding="utf-8").read()
+check("install.sh: the recovery command is installed through one shared function",
+      "install_recovery_command() {" in _rec and _rec.count("install_recovery_command") >= 4)
+check("install.sh: ...which takes recover.sh from the COMMIT, not the working tree",
+      "stage_root_source recover.sh recover.sh" in _rec)
+check("install.sh: ...installs it root-owned beside the helper",
+      '-o root -g root -m 0755 "${stage}" "${HELPER_DIR}/recover.sh"' in _rec)
+# The point of the whole change: no call site may still symlink into the checkout directly.
+check("install.sh: no symlink points /usr/local/bin at the checkout's recover.sh",
+      'ln -sf "${PANEL_DIR}/recover.sh"' not in _rec,
+      "a call site still links straight into PANEL_DIR")
+
 # ── The sudoers grant itself ──────────────────────────────────────────────────────────────────
 # The whole point of the verb table. install.sh writes a NARROW grant when every root-owned piece
 # is in place, and the wide one otherwise — because a host that has the new code but has not had

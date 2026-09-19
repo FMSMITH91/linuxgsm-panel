@@ -8,7 +8,8 @@ from panel.core import (i18n)
 from panel.core.config import (encrypt_secret, load_config, update_config)
 from panel.core.clock import utcnow
 from panel.db.models import (Group, Invite, User, db)
-from panel.security.auth import (MANAGE_USERS, grantable_groups, hash_password, log_action,
+from panel.security.auth import (MANAGE_USERS, can_administer_user, grantable_groups,
+                                 hash_password, log_action,
     permission_required, superadmin_required)
 from panel.services import (notifications)
 from panel.services.monitoring import (_AUTOBLOCK_DEFAULT_THRESHOLD, _autoblock_threshold)
@@ -199,6 +200,13 @@ def register(app):
                 return _form_err("Only a superadmin can modify a superadmin account.", "manage_users")
             if want_superadmin != user.is_superadmin:
                 return _form_err("Only a superadmin can change superadmin status.", "manage_users")
+            # ...and not an account that holds permissions this admin does not. The superadmin
+            # flag was the ONLY actor-vs-target test, so MANAGE_USERS alone reached every other
+            # account — and the branches below reset the password (handing the plaintext back)
+            # and clear 2FA. See can_administer_user.
+            if not can_administer_user(current_user, user):
+                return _form_err("That account holds permissions you don't have — "
+                                 "only a superadmin can edit it.", "manage_users")
 
         # Renaming. Admins could change everything about an account EXCEPT the name it signs in
         # with, so a typo at creation (or a person changing theirs) meant deleting the account and
@@ -445,6 +453,9 @@ def register(app):
         # other admins), and never the last one.
         if user.is_superadmin and not current_user.is_superadmin:
             return _form_err("Only a superadmin can delete a superadmin account.", "manage_users")
+        if not can_administer_user(current_user, user):
+            return _form_err("That account holds permissions you don't have — "
+                             "only a superadmin can delete it.", "manage_users")
         if user.is_superadmin and User.query.filter_by(is_superadmin=True).count() <= 1:
             return _form_err("Cannot delete the last superadmin.", "manage_users")
         if user.id == current_user.id:
