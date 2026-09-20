@@ -1022,16 +1022,41 @@ try:
     finally:
         _so._update_touches_runtime = _o_touch
 
-    # everything still verifying → offer nothing, explain why.
+    # Everything still verifying → offer NOTHING, and say why.
+    #
+    # This used to offer it. The card then read "Update available: v0.10.0-alpha (1 commit behind)"
+    # and, in the same card, "This update is still being verified — try again once they've passed",
+    # because _do_panel_update refuses while ci_state is "pending" or "failing". The invariant these
+    # two checks hold is that the card and the installer agree: update_available is true exactly
+    # when the update would be allowed to install.
     _so._remote_ci_state = lambda sha: "pending"
     _r = _so._compute_update_status()
-    check("update-target: all pending -> the update is still OFFERED, not hidden",
-          _r["update_available"] is True and _r["ci_state"] == "pending",
+    check("update-target: all pending -> NOT offered, because the installer would refuse it",
+          _r["update_available"] is False and _r["ci_state"] == "pending",
           "available=%s ci=%s" % (_r.get("update_available"), _r.get("ci_state")))
-    check("update-target: ...and it says why, rather than claiming to be up to date",
-          "still running" in (_r.get("message") or ""), repr(_r.get("message"))[:70])
-    check("update-target: ...and it targets the tip, since nothing newer is verified",
+    check("update-target: ...and the line says a newer version is being verified",
+          "being verified" in (_r.get("message") or ""), repr(_r.get("message"))[:80])
+    check("update-target: ...and it still reports how far behind it really is",
+          _r.get("behind_tip") == 3, _r.get("behind_tip"))
+    check("update-target: ...and it still names the tip, for the card's changelog",
           bool(_r.get("target_sha")), "no target_sha")
+
+    # A tip that FAILED CI is the same: the installer refuses it, so the card must not offer it.
+    _so._remote_ci_state = lambda sha: "failing"
+    _rf = _so._compute_update_status()
+    check("update-target: a failed tip is not offered either",
+          _rf["update_available"] is False and _rf["ci_state"] == "failing",
+          "available=%s ci=%s" % (_rf.get("update_available"), _rf.get("ci_state")))
+    check("update-target: ...and it says the checks did not pass",
+          "did not pass" in (_rf.get("message") or ""), repr(_rf.get("message"))[:80])
+
+    # The guard that makes all of this safe: a verified commit BELOW a pending tip is still
+    # offered, so a slow tip never freezes the panel on an old version.
+    _so._remote_ci_state = lambda sha: {"a" * 40: "pending"}.get(sha, "passing")
+    _rm = _so._compute_update_status()
+    check("update-target: a verified commit under a pending tip is still offered",
+          _rm["update_available"] is True and _rm["target_sha"] == "b" * 40,
+          "available=%s target=%s" % (_rm.get("update_available"), _rm.get("target_sha")))
 finally:
     _so._git = _cus_git
     _so._is_git_checkout = _cus_isco
