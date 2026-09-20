@@ -741,6 +741,19 @@ try:
     check("install failure: _fail strips before recording, so every caller benefits",
           'detail = " ".join(terminal.strip_escapes(detail or "").split())' in _ms_esc)
 
+    # A CLASSIFIED reason stands alone on the row. The raw tail is the tool's own last word, and
+    # the tool is sometimes wrong: LinuxGSM ends an "Invalid platform" failure with "Check
+    # steamcmdforcewindows setting and system architecture", which points at the host — and the
+    # host is not the problem (the app publishes no Linux launch configuration; proven on the test
+    # box, where forcing the platform fails identically). Appending that after the correct sentence
+    # undoes it, so the row gets the explanation and the live job keeps the unabridged output.
+    check("install failure: a classified reason is not followed by the tool's own wrong hint",
+          "explained=bool(why)" in _ms_esc
+          and "_row.install_error = (name if (explained or not detail)" in _ms_esc,
+          "the raw tail is still appended to a classified reason")
+    check("install failure: ...while an UNclassified one still carries its tail, which is all it has",
+          'else "%s: %s" % (name, detail))' in _ms_esc)
+
     # ── a failed install has to say WHY, and offer the two things you can actually do ───────────
     # The row said "Failed" and nothing else. The reason lived in the install job's memory until
     # the panel restarted; Retry did not exist; and Remove was on the host page, a different page

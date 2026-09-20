@@ -250,7 +250,7 @@ def register(app):
                     j["message"] = message
                 j["log"].append(f"[{step}/{j['total']}] {name}")
 
-        def _fail(name, detail="", retryable=True):
+        def _fail(name, detail="", retryable=True, explained=False):
             """Record a failed install — in the live job AND on the row.
 
             The job dict is in memory, so until now the reason existed only until the panel
@@ -261,6 +261,14 @@ def register(app):
             `retryable` is False for the causes nothing about trying again changes — a game that
             needs a Steam account owning it, one LinuxGSM caps at an older Ubuntu, one SteamCMD
             has no build of for this platform. The row then offers Remove instead of Retry.
+
+            `explained` means `name` IS the whole explanation, so the raw tail is not appended to
+            it on the row. It matters because the tail is the tool's own last word, and the tool
+            is sometimes wrong: LinuxGSM ends an "Invalid platform" failure with "Check
+            steamcmdforcewindows setting and system architecture", which points at the host, and
+            the host is not the problem (the app publishes no Linux launch configuration — proven
+            on the test box). Appending that after the correct sentence undoes it. The tail still
+            goes to the live job, which is where the unabridged output belongs.
             """
             # Strip the ANSI before it goes anywhere. LinuxGSM and SteamCMD colour their output,
             # and the last 300 bytes of a failed install is nearly all escape sequences — which is
@@ -281,7 +289,8 @@ def register(app):
                 from panel.db.models import db as _db, GameServer as _GS
                 _row = _db.session.get(_GS, gs_id)
                 if _row is not None:
-                    _row.install_error = (("%s: %s" % (name, detail)) if detail else name)[:1000]
+                    _row.install_error = (name if (explained or not detail)
+                                          else "%s: %s" % (name, detail))[:1000]
                     _row.install_retryable = bool(retryable)
                     _db.session.commit()
             except Exception:
@@ -457,7 +466,7 @@ def register(app):
                         _fail(why[1] if why else
                               ("Game files didn't install after 3 tries — the download may be corrupt "
                                "or the mirror unreachable. Try again shortly."),
-                              last_out[-300:], retryable=not why); return
+                              last_out[-300:], retryable=not why, explained=bool(why)); return
                     # Files have landed — the server IS installed, but it still needs configuring
                     # and starting (steps 5-8). Use a distinct "configuring" status (NOT "installing")
                     # so the state model is honest: the status poller skips it just like "installing"
