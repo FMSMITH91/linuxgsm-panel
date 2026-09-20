@@ -993,11 +993,45 @@ try:
     check("update-target: tip passed -> target is the tip",
           _r["update_available"] and _r["target_sha"] == "a" * 40 and _r["newer_unverified"] == 0)
 
+    # The card's OTHER half, which nothing asserted: behind 0 means up to date. A mutation that
+    # made every check report an available update survived a green run, so the one state the
+    # operator sees most of the time was never pinned.
+    _so._git = _mk_git(0, _C)
+    _so._remote_ci_state = lambda sha: "passing"
+    _r_cur = _so._compute_update_status()
+    check("update-target: nothing behind -> NO update, which is the up-to-date line",
+          _r_cur["update_available"] is False and _r_cur["behind"] == 0,
+          "available=%s behind=%s" % (_r_cur.get("update_available"), _r_cur.get("behind")))
+    _so._git = _mk_git(3, _C)
+
+    # DOCS-ONLY commits still count as an update. The card is asked "am I up to date?", and
+    # answering "no newer commits run in the panel" left it showing a green tick while the install
+    # was several commits behind — which is what the operator sees and can check. What the commits
+    # happen to touch is not the question.
+    _o_touch = _so._update_touches_runtime
+    try:
+        _so._update_touches_runtime = lambda _ref: False
+        _so._remote_ci_state = lambda sha: "passing"
+        _r_docs = _so._compute_update_status()
+        check("update-target: docs-only commits are STILL an available update",
+              _r_docs["update_available"] is True,
+              "available=%s docs_only=%s" % (_r_docs.get("update_available"),
+                                             _r_docs.get("docs_only")))
+        check("update-target: ...and the card is told they are docs-only, for its own wording",
+              _r_docs.get("docs_only") is True)
+    finally:
+        _so._update_touches_runtime = _o_touch
+
     # everything still verifying → offer nothing, explain why.
     _so._remote_ci_state = lambda sha: "pending"
     _r = _so._compute_update_status()
-    check("update-target: all pending -> no update offered",
-          _r["update_available"] is False and _r["ci_state"] == "pending")
+    check("update-target: all pending -> the update is still OFFERED, not hidden",
+          _r["update_available"] is True and _r["ci_state"] == "pending",
+          "available=%s ci=%s" % (_r.get("update_available"), _r.get("ci_state")))
+    check("update-target: ...and it says why, rather than claiming to be up to date",
+          "still running" in (_r.get("message") or ""), repr(_r.get("message"))[:70])
+    check("update-target: ...and it targets the tip, since nothing newer is verified",
+          bool(_r.get("target_sha")), "no target_sha")
 finally:
     _so._git = _cus_git
     _so._is_git_checkout = _cus_isco

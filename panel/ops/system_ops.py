@@ -938,10 +938,9 @@ def _compute_update_status():
     # show a permanent "verifying" and never apply. Offer the branch tip directly instead —
     # the snapshot + health-check + auto-rollback still guards against a branch that won't boot.
     if branch != _DEFAULT_BRANCH:
-        if not _update_touches_runtime(ref):
-            return {**base, "update_available": False, "ci_state": "unverified", "behind": behind_n,
-                    "docs_only": True,
-                    "message": "New commits on this branch only change docs/CI — nothing the panel runs."}
+        # docs_only is still REPORTED (the card can note it), but it no longer suppresses the
+        # badge: the question this card answers is "am I running the latest?", and the answer to
+        # that does not depend on what the newer commits happen to touch.
         tgt_ver, _, tv_rc = _git(["show", "%s:VERSION" % ref])
         rem_full, _, _ = _git(["rev-parse", ref])
         rc_log = _runtime_changelog("HEAD.." + ref)
@@ -970,22 +969,27 @@ def _compute_update_status():
             break   # newest verified commit — anything above it is still unverified
 
     if not target_sha:
-        # Nothing in range has passed yet (all still pending, or failed).
-        msg = ("An update is being verified — its checks are still running."
-               if tip_state == "pending"
-               else "The latest commit didn't pass its checks; holding off on this update.")
-        return {**base, "update_available": False, "ci_state": tip_state,
-                "behind": behind_n, "message": msg}
+        # Nothing in range has cleared CI yet — still SAY there is an update, because there is one.
+        # Hiding it made the card answer "is there a verified update?" when what it is asked is
+        # "am I up to date?". The install still carries its snapshot + health-check + rollback.
+        full_tip = commits[0] if commits else ""
+        tip_ver, _, tv_rc = _git(["show", "%s:VERSION" % ref])
+        return {**base, "update_available": True, "ci_state": tip_state,
+                "behind": behind_n, "behind_tip": behind_n,
+                "target_sha": full_tip,
+                "remote_version": ((tip_ver.strip() if tv_rc == 0 else "") or "?"),
+                "changes": _runtime_changelog("HEAD.." + ref)[:10],
+                "message": ("An update is available — its checks are still running."
+                            if tip_state == "pending"
+                            else "An update is available, but its checks did not pass.")}
 
     # We have a verified target (possibly older than the tip if newer commits are still verifying).
     behind_target = behind_n - newer_unverified   # commits from HEAD up to & including the target
     # Don't nag if everything between here and the verified target is docs/CI/tests only — those
     # changes don't affect the running panel. (A later commit with real code will move the target
     # up and re-trigger the badge once it passes CI.)
-    if not _update_touches_runtime(target_sha):
-        return {**base, "update_available": False, "ci_state": target_state,
-                "behind": behind_target, "behind_tip": behind_n, "docs_only": True,
-                "message": "Newer commits only change docs/CI — nothing the panel runs."}
+    # docs_only is reported, not used to suppress — see the branch case above.
+    _docs_only = not _update_touches_runtime(target_sha)
     tgt_ver, _, tv_rc = _git(["show", f"{target_sha}:VERSION"])
     rc_log = _runtime_changelog(f"HEAD..{target_sha}")   # runtime commits only (drops docs/CI)
     msg = None
@@ -995,6 +999,7 @@ def _compute_update_status():
     return {
         **base,
         "update_available": True,
+        "docs_only": _docs_only,
         "ci_state": target_state,
         "behind": len(rc_log) or behind_target,   # count only commits that change what the panel runs
         "behind_tip": behind_n,
