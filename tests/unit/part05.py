@@ -1082,6 +1082,16 @@ check("install failure: ...including the 'No License' wording SteamCMD uses",
 check("install failure: an app SteamCMD has no build of for this platform is named",
       (_cif("ERROR! Failed to install app '222860' (Invalid platform)") or (None,))[0]
       == "steam_platform")
+# ...and says the thing that is actually true. Chased to the bottom on the test host for Left 4
+# Dead 2 (app 222860): a LINUX depot exists (222863), but the app's only launch configuration is
+# oslist=windows, and that is what SteamCMD checks. `+@sSteamCmdForcePlatformType linux` fails
+# identically. LinuxGSM's own hint — "Check steamcmdforcewindows setting and system architecture"
+# — points at the host, which is not the problem, so the panel must not repeat it.
+_cif_plat = (_cif("ERROR! Failed to install app '222860' (Invalid platform)") or (None, ""))[1]
+check("install failure: ...as Steam not publishing a Linux server, not as a host problem",
+      "does not publish" in _cif_plat and "Linux host" in _cif_plat, _cif_plat[:90])
+check("install failure: ...and it does not send the operator after steamcmdforcewindows",
+      "would download Windows binaries that cannot run here" in _cif_plat, _cif_plat[-90:])
 check("install failure: a game LinuxGSM caps at an older Ubuntu is named",
       (_cif("Failure! BATTALION: Legacy is not supported on Ubuntu 24.04.5 LTS "
             "(requires 22.04)") or (None,))[0] == "os_unsupported")
