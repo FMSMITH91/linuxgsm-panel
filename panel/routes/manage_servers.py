@@ -568,15 +568,45 @@ def register(app):
                     # 6. Sync to LinuxGSM's real port(s) and open ALL of them (many
                     #    games need game+query+rcon+etc., not just the main port).
                     _p(6, "Detecting ports & opening firewall")
+                    port_conflict = None
                     try:
                         info = detect_game_ports(remote, short_name, gs.lgsm_name)
                         real_port = info.get("game_port")
+                        # Adopt the port LinuxGSM reports — but NOT one another server on this host
+                        # already reserves. resolve_free_port picked a genuinely free port at
+                        # request time; this step exists because auto-install uses the game's
+                        # default instead, so the panel has to follow reality. A game that ignores
+                        # the port the panel wrote into its LinuxGSM config reports its own default
+                        # here, and adopting that blindly points TWO panel servers at one port.
+                        #
+                        # Reproduced on the test box with a Velocity proxy, which reads
+                        # velocity.toml and not the LinuxGSM key: it reported 25565, the host's
+                        # Minecraft server already had it, and the proxy logged
+                        #
+                        #     [ERROR]: Can't bind to /0.0.0.0:25565
+                        #     bind(..) failed with error(-98): Address already in use
+                        #
+                        # while LinuxGSM still said STARTED. Worse, the panel would then call that
+                        # proxy ONLINE, because something IS listening on 25565 — a port check
+                        # cannot tell whose socket it is. Not adopting the port is what stops the
+                        # panel manufacturing that state.
+                        _conflict_with = None
                         if real_port and real_port != gs.port:
+                            _conflict_with = next(
+                                (e for e in GameServer.query.filter_by(remote_id=remote.id).all()
+                                 if e.id != gs.id and e.port == real_port), None)
+                        if real_port and real_port != gs.port and _conflict_with is None:
                             old_port = gs.port; gs.port = real_port; db.session.commit()
                             try:
                                 remote_ufw_close_game_port(remote, old_port)
                             except Exception:
                                 _log.debug("_run: ignored non-fatal error", exc_info=True)
+                        elif _conflict_with is not None:
+                            port_conflict = (real_port, _conflict_with.name)
+                            _log.warning("install %s: %s reports port %s, which '%s' already has "
+                                         "— keeping %s and not adopting it",
+                                         short_name, lgsm_name, real_port,
+                                         _conflict_with.name, gs.port)
                         to_open = info.get("open_ports") or ([gs.port] if gs.port else [])
                         remote_ufw_allow_game_ports(remote, to_open, short_name)
                     except Exception:
@@ -660,7 +690,19 @@ def register(app):
                     except Exception:
                         _log.debug("_run: post-start port re-detect failed", exc_info=True)
 
-                    if really_up:
+                    if port_conflict:
+                        # The files are there and LinuxGSM will keep reporting STARTED, so this is
+                        # not a failed install — but the server cannot serve anyone until the
+                        # clash is resolved, and saying nothing would leave someone staring at a
+                        # server that looks fine and answers nobody.
+                        _finish(f"{short_name} installed, but it wants port {port_conflict[0]}, "
+                                f"which '{port_conflict[1]}' on this host already uses. This game "
+                                f"ignores the port the panel sets, so change it in the game's own "
+                                f"config (Files & Config) or move the other server.", warn=True)
+                        log_action(None, "install_complete", target=gs.name, success=False,
+                                   detail=("port %s clashes with %s"
+                                           % (port_conflict[0], port_conflict[1]))[:300])
+                    elif really_up:
                         _finish(f"{short_name} installed and started")
                         log_action(None, "install_complete", target=gs.name, success=True)
                     else:

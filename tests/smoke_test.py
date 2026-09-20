@@ -754,6 +754,34 @@ try:
     check("install failure: ...while an UNclassified one still carries its tail, which is all it has",
           'else "%s: %s" % (name, detail))' in _ms_esc)
 
+    # ── the install must not point two servers at one port ──────────────────────────────────────
+    # resolve_free_port picks a genuinely free port at request time — it unions the host's live
+    # listening ports with every panel server's reserved block. Step 6 then adopts whatever port
+    # LinuxGSM REPORTS, because auto-install uses the game's default rather than the port the panel
+    # wrote. That adoption had no conflict check.
+    #
+    # A game that ignores the panel's port key reports its own default there. Reproduced on the
+    # test box with a Velocity proxy (it reads velocity.toml, not the LinuxGSM key): it reported
+    # 25565, the host's Minecraft server already had it, and the proxy logged
+    #
+    #     [ERROR]: Can't bind to /0.0.0.0:25565
+    #     bind(..) failed with error(-98): Address already in use
+    #
+    # while LinuxGSM still said STARTED. And the panel would then call that proxy ONLINE, because
+    # something IS listening on 25565 — a port check cannot tell whose socket it is. So the clash
+    # must not be created in the first place.
+    _ms_pc = open(os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+                               "panel", "routes", "manage_servers.py"), encoding="utf-8").read()
+    check("install: the reported port is not adopted when another server on the host has it",
+          "_conflict_with = next(" in _ms_pc
+          and "real_port != gs.port and _conflict_with is None" in _ms_pc,
+          "step 6 still adopts the reported port unconditionally")
+    check("install: ...and the clash is reported rather than left to be discovered",
+          "port_conflict" in _ms_pc and "already uses" in _ms_pc)
+    check("install: ...while a reported port nobody else holds is still adopted",
+          "old_port = gs.port; gs.port = real_port" in _ms_pc,
+          "the adoption itself was lost, which is what step 6 is for")
+
     # ── the install works around SteamCMD's "Invalid platform" bug itself ───────────────────────
     # Left 4 Dead 2 refuses to install with "ERROR! Failed to install app '222860' (Invalid
     # platform)". It is not a missing Linux build — the app has a Linux depot (222863) — it is a
