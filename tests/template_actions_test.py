@@ -1708,6 +1708,40 @@ check(_rh.count("refreshSection('#conn-ssh-card', 'loadSshStatus')") == 4
       "js: every #conn-ssh-card refresh re-runs loadSshStatus",
       "%d of the call sites name the callback" % _rh.count("'loadSshStatus'"))
 
+# ── the update card's changelog links each commit ─────────────────────────────────────────────
+# "d456826 fix: a failed install was a dead end" told you a subject and a sha you then had to go
+# and look up by hand. The sha is now a link to the commit, at the repo THIS checkout tracks (a
+# fork links to the fork), which is where the changelog stops being a teaser.
+#
+# The href is assembled, so what matters is what it is assembled FROM. Both halves are pinned
+# here: the sha comes out of a hex-only regex, and the repo URL is matched against an
+# https://host/owner/repo shape before it is used at all. Anything else falls back to the plain
+# text line — a link nobody vetted is worse than no link.
+_upd = _rh[_rh.index("function renderUpdate"):]
+_upd = _upd[:_upd.index("\n}")]
+check("'/commit/'" in _upd or "'/commit/' +" in _upd or "/commit/" in _upd,
+      "js: the update changelog builds a commit URL")
+check("[0-9a-f]{7,40}" in _upd,
+      "js: ...from a sha it has proved is hex, not from arbitrary text")
+check("^https:" in _upd and "d.repo_url" in _upd,
+      "js: ...and a repo URL it has matched against a repo-shaped https URL")
+check("li.textContent = c" in _upd or "li.textContent=c" in _upd,
+      "js: ...falling back to the plain line when either check fails",
+      "no plain-text fallback — an unvetted link would render instead")
+check("a.rel = 'noopener noreferrer'" in _upd,
+      "js: ...and the new tab cannot reach back through window.opener")
+
+# The "(#282)" at the end of a squash-merged subject is the part worth reading before taking an
+# update — the PR says what changed and why. Same rule as the sha: the only interpolated piece is
+# constrained (digits), the repo URL is the one the caller already vetted, and a missing repo URL
+# falls back to plain text rather than to a half-built href.
+_subj = _rh[_rh.index("function appendSubject"):]
+_subj = _subj[:_subj.index("\n}")]
+check("'/pull/'" in _subj, "js: a changelog subject links its PR number")
+check("\\d{1,9}" in _subj, "js: ...from digits only, not from arbitrary text")
+check("if(!repo)" in _subj and "createTextNode(text)" in _subj,
+      "js: ...and renders plain text when there is no vetted repo URL")
+
 # ── Ctrl/Cmd+K must not be cancelled on a page with no palette ────────────────────────────────
 # palette.js is loaded unconditionally by base.html; #cmdk renders only under show_app_chrome. On
 # login, force_password and the setup pages the shortcut was cancelled and nothing opened.

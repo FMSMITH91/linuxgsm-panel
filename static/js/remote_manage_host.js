@@ -202,6 +202,31 @@ function ufwAllowTailscale(){
     .then(d=>{ if(window.toast) toast(d.message||(d.success?'Allowed':'Failed'), d.success?'success':'danger'); if(d.success) setTimeout(function(){window.refreshSection('#conn-ssh-card', 'loadSshStatus');},800); })
     .catch(()=>{ if(window.toast) toast('Failed to configure UFW','danger'); });
 }
+// A squash-merged subject ends in "(#282)", which is the thing you actually want to read before
+// taking an update — the PR says what changed and why, where the subject only names it. Emit the
+// "#282" as a link and everything around it as plain text.
+//
+// Built node by node rather than by splicing markup into a string: the only thing interpolated is
+// m[1], which the regex has already constrained to digits, and the repo URL the caller has
+// already matched against a repo-shaped https URL. "/pull/<n>" is right even for a number that
+// turns out to be an issue — GitHub redirects that way, not the other.
+function appendSubject(li, text, repo){
+  if(!repo){ li.appendChild(document.createTextNode(text)); return; }
+  var re=/#(\d{1,9})\b/g, last=0, m;
+  while((m=re.exec(text))!==null){
+    if(m.index>last) li.appendChild(document.createTextNode(text.slice(last, m.index)));
+    var a=document.createElement('a');
+    a.href=repo+'/pull/'+m[1];
+    a.target='_blank';
+    a.rel='noopener noreferrer';
+    a.setAttribute('data-no-i18n','');   // an issue number is never a catalog key
+    a.textContent=m[0];
+    li.appendChild(a);
+    last=m.index+m[0].length;
+  }
+  if(last<text.length) li.appendChild(document.createTextNode(text.slice(last)));
+}
+
 function renderUpdate(d){
   var st=document.getElementById('pu-status'); if(!st) return;
   var btn=document.getElementById('pu-update-btn'); var changes=document.getElementById('pu-changes');
@@ -223,7 +248,34 @@ function renderUpdate(d){
     }
     btn.style.display='';
     var ul=document.getElementById('pu-changes-list'); ul.innerHTML='';
-    (d.changes||[]).forEach(function(c){ var li=document.createElement('li'); li.textContent=c; ul.appendChild(li); });
+    // Each changelog line is "<short sha> <subject>". Link the sha to the commit so the entry can
+    // actually be read — the subject alone rarely says enough to decide whether to update.
+    //
+    // The href is built from two things that cannot carry markup: a sha the regex has already
+    // proved is hex, and a repo URL matched against an https://host/owner/repo shape. Anything
+    // else falls through to the old plain-text line rather than producing a link nobody vetted.
+    var repo = (typeof d.repo_url === 'string'
+                && /^https:\/\/[a-z0-9.-]+\/[A-Za-z0-9._-]+\/[A-Za-z0-9._-]+$/.test(d.repo_url))
+               ? d.repo_url : '';
+    (d.changes||[]).forEach(function(c){
+      var li=document.createElement('li');
+      var m = /^([0-9a-f]{7,40})[ \t]+([\s\S]+)$/.exec(String(c));
+      if (repo && m) {
+        var a = document.createElement('a');
+        a.href = repo + '/commit/' + m[1];
+        a.target = '_blank';
+        a.rel = 'noopener noreferrer';
+        a.className = 'font-monospace';
+        a.setAttribute('data-no-i18n', '');   // a sha is never a catalog key
+        a.textContent = m[1];
+        li.appendChild(a);
+        li.appendChild(document.createTextNode(' '));
+        appendSubject(li, m[2], repo);
+      } else {
+        li.textContent = c;
+      }
+      ul.appendChild(li);
+    });
     changes.style.display=(d.changes&&d.changes.length)?'':'none';
   } else if(d.message){
     // "Nothing to OFFER" is not the same fact as "you are on the newest commit", and this branch
