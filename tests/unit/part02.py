@@ -1626,7 +1626,15 @@ _stats_src = open(os.path.join(_p02_root, "panel", "routes", "api.py"), encoding
 check("stats endpoint: the all-zero sample is rejected by the ram_total sentinel",
       'm.get("ram_total")' in _stats_src)
 check("stats endpoint: ...and an unreadable sample does not reach gs.status",
-      "_readable and gs.status != status" in _stats_src)
+      "_readable and gs.installed and gs.status not in" in _stats_src)
+# game_procs is `ps -u <game user> | wc -l`: the tmux server, a cron update and an install's
+# steamcmd all count, so it reported (and PERSISTED) "online" for a server that had never
+# started. The status column means "a player could connect" — that is the listening port.
+check("stats endpoint: online means the port is listening, not that the user owns a process",
+      'status = "online" if m.get("port_open") else "offline"' in _stats_src,
+      [l for l in _stats_src.splitlines() if 'status = "online"' in l])
+check("stats endpoint: ...and an install in progress is never overwritten",
+      '_readable and gs.installed and gs.status not in ("installing", "configuring")' in _stats_src)
 
 # The predicate that decides online/offline must stay the one _live_run_state promises it matches.
 import app as _app_mod
@@ -1648,3 +1656,63 @@ try:
     check("_live_run_state: live processes are True", _app_mod._live_run_state(_gsx, _rx) is True)
 finally:
     _app_mod._sm.server_live_metrics = _lrs_orig
+
+
+# ── a crashed server must not report itself online (panel bug #22) ───────────────────────────────
+# LinuxGSM's STARTED means "a tmux session with this name exists" — check_status.sh counts
+# `tmux list-sessions`, nothing more. What runs inside that session is usually a WRAPPER
+# (srcds_run, hlds_run, a Java launcher) that survives the game binary dying and relaunches it in
+# a loop, so a server that crashed — or one whose config stops it booting at all — reports STARTED
+# for as long as the box is up. Reproduced on the test host: tmux session and ./srcds_run alive,
+# no game process, `details` says STARTED.
+#
+# That answer was not merely displayed. /api/server/<id> COMMITS it to gs.status, overwriting the
+# correct "offline" the monitor had just written from the port scan — so the detail page
+# contradicted the dashboard AND won.
+from panel.ops.ssh_manager import game as _gsm, _core as _gcore, portscan as _gps
+
+_g_rag, _g_rlp = _gcore.run_as_game_user, _gps._remote_listening_ports
+try:
+    _g = {"out": "", "ports": set()}
+    _gcore.run_as_game_user = lambda *a, **k: (_g["out"], "", 0)
+    _gps._remote_listening_ports = lambda r: _g["ports"]
+    _srv = NS(short_name="gmodserver", lgsm_name="gmodserver", port=27015)
+
+    _g["out"], _g["ports"] = "Status:  STARTED", {27015, 22}
+    check("status: STARTED with the game's port listening is online",
+          _gsm.get_server_status(NS(id=1), _srv) == "online")
+
+    # THE BUG: the session is there, the game is not.
+    _g["out"], _g["ports"] = "Status:  STARTED", {22}
+    check("status: STARTED with nothing listening on the game's port is NOT online",
+          _gsm.get_server_status(NS(id=1), _srv) == "offline",
+          _gsm.get_server_status(NS(id=1), _srv))
+
+    # ...but an unreadable host must never be what downgrades it. None is not an empty set.
+    _g["ports"] = None
+    check("status: a failed port scan leaves LinuxGSM's answer alone",
+          _gsm.get_server_status(NS(id=1), _srv) == "online")
+    _gps._remote_listening_ports = lambda r: (_ for _ in ()).throw(RuntimeError("ssh down"))
+    check("status: ...and so does a port scan that raises",
+          _gsm.get_server_status(NS(id=1), _srv) == "online")
+    _gps._remote_listening_ports = lambda r: _g["ports"]
+
+    # A server with no port on record has nothing to confirm against.
+    _g["ports"] = {22}
+    check("status: a server with no port keeps LinuxGSM's answer",
+          _gsm.get_server_status(NS(id=1), NS(short_name="x", lgsm_name="x", port=None)) == "online")
+
+    # STOPPED stays authoritative: no session, no server, whoever holds the port.
+    _g["out"], _g["ports"] = "Status:  STOPPED", {27015}
+    check("status: STOPPED is offline even when something is on the port",
+          _gsm.get_server_status(NS(id=1), _srv) == "offline")
+
+    # The cross-check must not have cost us the ANSI/`ismygameserver.online` handling.
+    _g["out"], _g["ports"] = "\x1b[0;31mStatus:\x1b[0m\t\x1b[0;32mSTARTED\x1b[0m", {27015}
+    check("status: the Status line is still read through ANSI colour",
+          _gsm.get_server_status(NS(id=1), _srv) == "online")
+    _g["out"], _g["ports"] = "Check: https://ismygameserver.online/?ip=1.2.3.4", {27015}
+    check("status: 'ismygameserver.online' in the blob is still not a status",
+          _gsm.get_server_status(NS(id=1), _srv) == "unknown")
+finally:
+    _gcore.run_as_game_user, _gps._remote_listening_ports = _g_rag, _g_rlp

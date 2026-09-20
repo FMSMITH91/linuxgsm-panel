@@ -3,7 +3,7 @@ Also supports local execution for running on the panel's own machine."""
 import re
 from panel.core import terminal
 import time
-from panel.ops.ssh_manager import (_core, cron, files)  # noqa: E402,F401  (module objects: the
+from panel.ops.ssh_manager import (_core, cron, files, portscan)  # noqa: E402,F401  (module objects: the
 # reference resolves at CALL time, which is what keeps a stub on the definition site
 # visible to every caller — see the package docstring.
 
@@ -651,10 +651,33 @@ def detect_game_ports(server, user, selfname=None):
 
 
 def get_server_status(server, game_server):
-    """Get the status of a LinuxGSM game server.
+    """Get the status of a LinuxGSM game server: 'online', 'offline' or 'unknown'.
 
     LinuxGSM has no `status` command; `details` prints a "Status: STARTED/STOPPED"
-    line, so we run that and parse it."""
+    line, so we run that and parse it.
+
+    STARTED is a weaker claim than it reads. LinuxGSM's check is "is there a tmux session
+    with this name" (check_status.sh counts `tmux list-sessions`), and for most of the games
+    here what runs inside that session is a WRAPPER — srcds_run, hlds_run, the Java launcher
+    — which outlives the game binary and relaunches it in a loop. A server that crashed, or
+    one whose config stops it booting at all, therefore reports STARTED indefinitely while
+    nobody can connect to it. Seen on the test box: the tmux session and `./srcds_run` alive,
+    no game process, `details` cheerfully STARTED.
+
+    So STARTED is confirmed against the only signal that means what a player means by online:
+    is the server's port actually listening. That is already what /api/servers and the monitor
+    report from, so this makes the panel's answers agree instead of the detail page
+    contradicting the dashboard and overwriting it in the database.
+
+    Two things this deliberately does NOT do:
+
+      * downgrade on a failed scan. _remote_listening_ports answers None when it could not
+        read the host, and None is not "nothing is listening" — see empty-is-not-a-measurement.
+      * downgrade a server with no port on record. There is nothing to confirm against, so
+        LinuxGSM's answer stands.
+
+    STOPPED is left authoritative as it always was: no session means no server, whatever else
+    happens to be holding the port."""
     out, err, rc = _core.run_as_game_user(
         server, game_server.short_name, "details", timeout=30,
         selfname=game_server.lgsm_name,
@@ -668,10 +691,28 @@ def get_server_status(server, game_server):
         low = line.lower()
         if "status:" in low:
             if "started" in low:
-                return "online"
+                return "online" if _really_serving(server, game_server) else "offline"
             if "stopped" in low:
                 return "offline"
     return "unknown"
+
+
+def _really_serving(server, game_server):
+    """Is the game's own port listening on the host? True unless we can prove otherwise.
+
+    Split out from get_server_status so the cross-check has one place to be stubbed and
+    tested. Returns True for "we could not tell" as well as for "yes", because the caller
+    uses it to DOWNGRADE LinuxGSM's answer and an unreadable host must never do that."""
+    port = getattr(game_server, "port", None)
+    if not port:
+        return True
+    try:
+        ports = portscan._remote_listening_ports(server)
+    except Exception:
+        return True
+    if ports is None:          # the scan failed; that is not an empty set
+        return True
+    return port in ports
 
 
 # ── Which build of the game is actually installed ─────────────────────────────────────────────

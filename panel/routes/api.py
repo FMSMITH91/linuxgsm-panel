@@ -361,10 +361,28 @@ def register(app):
         # _query_server_slots short-circuits on it and returns 0 players WITHOUT querying, which
         # satisfies the one-shot notify_when_empty ("now has 0 players — safe to make changes") and
         # clears the flag, while players are still connected.
+        #
+        # `port_open`, NOT `port_open or game_procs`. game_procs is `ps -u <game user> | wc -l` —
+        # EVERY process that user owns, which includes the tmux server, a cron `update`, and the
+        # steamcmd of an install in progress. So it answered "online" for a server that had never
+        # started, for one whose game had crashed inside a surviving srcds_run, and for one still
+        # downloading; and it persisted that. A listening port is what a player means by online,
+        # it is what /api/servers and the monitor already report, and get_server_status now
+        # confirms LinuxGSM's STARTED against it too — four answers, one definition.
+        #
+        # game_procs stays in the payload (the page shows the process count) and stays in
+        # _live_run_state, which asks a different question: "is ANY trace of this server alive",
+        # the right test for refusing a redundant start/stop. A crashed server reads offline here
+        # and still has processes there, so the Stop that clears its tmux session is not refused.
         _readable = bool(m and m.get("ram_total"))
-        status = "online" if (m.get("port_open") or m.get("game_procs")) else "offline"
+        status = "online" if m.get("port_open") else "offline"
         changed = False
-        if _readable and gs.status != status:
+        # Never overwrite an in-progress install, exactly as /api/servers refuses to: this endpoint
+        # is polled by the very page that shows the install progress, and "installing" -> "online"
+        # (steamcmd is a process; with the old predicate it was also 'online') ends the progress
+        # row mid-download.
+        if _readable and gs.installed and gs.status not in ("installing", "configuring") \
+                and gs.status != status:
             gs.status = status
             changed = True
         elif not _readable:
