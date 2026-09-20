@@ -1079,6 +1079,9 @@ check("install failure: a game needing a real Steam account is named",
             "/home/g_bs/lgsm/config-lgsm/bsserver") or (None,))[0] == "steam_login")
 check("install failure: ...including the 'No License' wording SteamCMD uses",
       (_cif("release state: unknown (No License)") or (None,))[0] == "steam_login")
+check("install failure: an app SteamCMD has no build of for this platform is named",
+      (_cif("ERROR! Failed to install app '222860' (Invalid platform)") or (None,))[0]
+      == "steam_platform")
 check("install failure: a game LinuxGSM caps at an older Ubuntu is named",
       (_cif("Failure! BATTALION: Legacy is not supported on Ubuntu 24.04.5 LTS "
             "(requires 22.04)") or (None,))[0] == "os_unsupported")
