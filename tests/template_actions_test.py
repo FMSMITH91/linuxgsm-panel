@@ -1731,6 +1731,17 @@ check("li.textContent = c" in _upd or "li.textContent=c" in _upd,
 check("a.rel = 'noopener noreferrer'" in _upd,
       "js: ...and the new tab cannot reach back through window.opener")
 
+# The "(#282)" at the end of a squash-merged subject is the part worth reading before taking an
+# update — the PR says what changed and why. Same rule as the sha: the only interpolated piece is
+# constrained (digits), the repo URL is the one the caller already vetted, and a missing repo URL
+# falls back to plain text rather than to a half-built href.
+_subj = _rh[_rh.index("function appendSubject"):]
+_subj = _subj[:_subj.index("\n}")]
+check("'/pull/'" in _subj, "js: a changelog subject links its PR number")
+check("\\d{1,9}" in _subj, "js: ...from digits only, not from arbitrary text")
+check("if(!repo)" in _subj and "createTextNode(text)" in _subj,
+      "js: ...and renders plain text when there is no vetted repo URL")
+
 # ── Ctrl/Cmd+K must not be cancelled on a page with no palette ────────────────────────────────
 # palette.js is loaded unconditionally by base.html; #cmdk renders only under show_app_chrome. On
 # login, force_password and the setup pages the shortcut was cancelled and nothing opened.

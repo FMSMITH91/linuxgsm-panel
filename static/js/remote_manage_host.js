@@ -202,6 +202,31 @@ function ufwAllowTailscale(){
     .then(d=>{ if(window.toast) toast(d.message||(d.success?'Allowed':'Failed'), d.success?'success':'danger'); if(d.success) setTimeout(function(){window.refreshSection('#conn-ssh-card', 'loadSshStatus');},800); })
     .catch(()=>{ if(window.toast) toast('Failed to configure UFW','danger'); });
 }
+// A squash-merged subject ends in "(#282)", which is the thing you actually want to read before
+// taking an update — the PR says what changed and why, where the subject only names it. Emit the
+// "#282" as a link and everything around it as plain text.
+//
+// Built node by node rather than by splicing markup into a string: the only thing interpolated is
+// m[1], which the regex has already constrained to digits, and the repo URL the caller has
+// already matched against a repo-shaped https URL. "/pull/<n>" is right even for a number that
+// turns out to be an issue — GitHub redirects that way, not the other.
+function appendSubject(li, text, repo){
+  if(!repo){ li.appendChild(document.createTextNode(text)); return; }
+  var re=/#(\d{1,9})\b/g, last=0, m;
+  while((m=re.exec(text))!==null){
+    if(m.index>last) li.appendChild(document.createTextNode(text.slice(last, m.index)));
+    var a=document.createElement('a');
+    a.href=repo+'/pull/'+m[1];
+    a.target='_blank';
+    a.rel='noopener noreferrer';
+    a.setAttribute('data-no-i18n','');   // an issue number is never a catalog key
+    a.textContent=m[0];
+    li.appendChild(a);
+    last=m.index+m[0].length;
+  }
+  if(last<text.length) li.appendChild(document.createTextNode(text.slice(last)));
+}
+
 function renderUpdate(d){
   var st=document.getElementById('pu-status'); if(!st) return;
   var btn=document.getElementById('pu-update-btn'); var changes=document.getElementById('pu-changes');
@@ -244,7 +269,8 @@ function renderUpdate(d){
         a.setAttribute('data-no-i18n', '');   // a sha is never a catalog key
         a.textContent = m[1];
         li.appendChild(a);
-        li.appendChild(document.createTextNode(' ' + m[2]));
+        li.appendChild(document.createTextNode(' '));
+        appendSubject(li, m[2], repo);
       } else {
         li.textContent = c;
       }
