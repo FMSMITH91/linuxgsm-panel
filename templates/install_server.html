@@ -45,7 +45,7 @@
              already shown in the help line below. #}
           <option value="">Choose game…</option>
           {% for g in games %}
-          <option value="{{ g.shortname }}">{{ g.name }}</option>
+          <option value="{{ g.shortname }}"{% if g.legacy_os %} data-legacy-os="{{ g.legacy_os }}"{% endif %}>{{ g.name }}{% if g.legacy_os %} ({{ g.legacy_os }}){% endif %}</option>
           {% endfor %}
         </select>
         {% if games %}
