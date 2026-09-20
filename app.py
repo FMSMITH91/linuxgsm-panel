@@ -823,6 +823,32 @@ ALERT_PROVIDERS = [
 _GAME_LIST_CACHE = {"games": None}
 
 
+def game_os_unsupported(game_os, host_os):
+    """True when LinuxGSM says this game tops out at an OLDER release than the host runs.
+
+    Both are LinuxGSM's own slugs ("ubuntu-24.04"). Only the four games that declare an older
+    release are ever affected — bf1942 and bfv (22.04), btl and onset (20.04) — but on a 24.04
+    host those four fail every time, and nothing told the operator before the install did.
+
+    Unknown or unparseable on either side answers False: a game whose OS we cannot read is not
+    evidence of a problem, and hiding a game that would have worked is worse than letting it try.
+    A game declaring a NEWER release than the host is left alone too — that is LinuxGSM being
+    ahead of this box, not a refusal.
+    """
+    def _parse(slug):
+        parts = (slug or "").strip().lower().split("-")
+        if len(parts) != 2 or not parts[0]:
+            return None
+        try:
+            return (parts[0], tuple(int(x) for x in parts[1].split(".")))
+        except ValueError:
+            return None
+    g, h = _parse(game_os), _parse(host_os)
+    if not g or not h or g[0] != h[0]:
+        return False
+    return g[1] < h[1]
+
+
 def load_game_list():
     """All LinuxGSM-supported games, from LinuxGSM's own serverlist.csv.
 
@@ -838,7 +864,21 @@ def load_game_list():
         sn = (row.get("shortname") or "").strip()
         name = (row.get("gamename") or "").strip()
         if sn and name:
-            games.append({"shortname": sn, "name": name})
+            # LinuxGSM's serverlist declares the newest OS it supports each game on, and that
+            # column was parsed and thrown away — so the picker offered every game on every host
+            # and four of them could only ever fail at install time, with LinuxGSM's own
+            # "not supported on Ubuntu 24.04.5" arriving minutes in. Carry it through; the caller
+            # compares it against the host.
+            games.append({"shortname": sn, "name": name,
+                          "os": (row.get("os") or "").strip()})
+    # Mark the games LinuxGSM tops out at an OLDER release than the rest of the catalogue. Only
+    # four do, and the picker cannot know which host is about to be chosen — so state the game's
+    # OWN limit rather than guess. That is true whatever the target, and it is the fact the
+    # operator needs before spending an install on it.
+    newest = max((g.get("os") or "" for g in games), default="")
+    for g in games:
+        g["legacy_os"] = (g.get("os") or "") if (g.get("os") and newest
+                                                 and game_os_unsupported(g["os"], newest)) else ""
     games.sort(key=lambda g: g["name"].lower())
     # Only memoise a real answer: caching [] would make one failed fetch permanent for the life
     # of the process, so a later retry (or the background warm) could never take effect.

@@ -3490,3 +3490,70 @@ check("already_escalated: ...and it calls the decision rather than inlining one"
           and getattr(c.func, "id", getattr(c.func, "attr", "")) == "_already_escalated"
           for c in _smg_ast.walk(_alr_fn)),
       "no _already_escalated() call inside _run_local")
+
+# ── the serverlist declares a max OS per game, and it was parsed then thrown away ──────────────
+# Four of the 140 top out below the rest: bf1942/bfv at ubuntu-22.04, btl/onset at ubuntu-20.04.
+# The picker offered all 140 on every host, so on a 24.04 box those four could only ever fail —
+# with LinuxGSM's "not supported on Ubuntu 24.04.5" arriving minutes into the install, after the
+# account had been created. Measured on the test VPS for bf1942, bfv and btl.
+from app import game_os_unsupported as _gosu, load_game_list as _lgl               # noqa: E402
+
+for _g, _h, _want, _why in (
+        ("ubuntu-22.04", "ubuntu-24.04", True,  "an older game OS than the host"),
+        ("ubuntu-20.04", "ubuntu-24.04", True,  "...two releases older"),
+        ("ubuntu-24.04", "ubuntu-24.04", False, "the same release"),
+        ("ubuntu-22.04", "ubuntu-22.04", False, "older game on its own release is fine"),
+        ("ubuntu-24.04", "ubuntu-22.04", False, "a NEWER game OS is LinuxGSM ahead, not a refusal"),
+        ("", "ubuntu-24.04", False, "an unknown game OS is not evidence of a problem"),
+        ("ubuntu-24.04", "", False, "...nor an unknown host OS"),
+        ("debian-12", "ubuntu-24.04", False, "a different distro is not comparable"),
+        ("ubuntu", "ubuntu-24.04", False, "an unparseable slug"),
+        ("ubuntu-nope", "ubuntu-24.04", False, "a non-numeric release")):
+    check("game os: %s -> %s" % (_why, _want), _gosu(_g, _h) is _want,
+          "%r vs %r gave %s" % (_g, _h, _gosu(_g, _h)))
+
+# ...and the list itself must carry the flag, or the picker has nothing to show. Driven from a
+# FIXED serverlist rather than the machine's cached copy: reading the live one made this depend on
+# whatever an earlier suite had already cached.
+import app as _app_mod                                                             # noqa: E402
+from panel.services import lgsm_data as _ld                                        # noqa: E402
+_o_sl, _o_cache = _ld.serverlist, dict(_app_mod._GAME_LIST_CACHE)
+try:
+    _ld.serverlist = lambda *a, **k: [
+        {"shortname": "cs", "gameservername": "csserver", "gamename": "Counter-Strike 1.6",
+         "os": "ubuntu-24.04"},
+        {"shortname": "bf1942", "gameservername": "bf1942server", "gamename": "Battlefield 1942",
+         "os": "ubuntu-22.04"},
+        {"shortname": "onset", "gameservername": "onsetserver", "gamename": "Onset",
+         "os": "ubuntu-20.04"},
+        {"shortname": "noos", "gameservername": "noosserver", "gamename": "No OS Declared",
+         "os": ""},
+    ]
+    _app_mod._GAME_LIST_CACHE["games"] = None
+    _games = _lgl()
+    _flagged = {g["shortname"]: g.get("legacy_os") for g in _games if g.get("legacy_os")}
+    check("game os: exactly the games capped below the catalogue are flagged",
+          set(_flagged) == {"bf1942", "onset"}, str(sorted(_flagged)))
+    check("game os: ...and each carries the release it actually tops out at",
+          _flagged.get("bf1942") == "ubuntu-22.04" and _flagged.get("onset") == "ubuntu-20.04",
+          str(_flagged))
+    check("game os: a game on the newest release is NOT flagged",
+          not next((g for g in _games if g["shortname"] == "cs"), {}).get("legacy_os"))
+    check("game os: ...nor one that declares no OS at all",
+          not next((g for g in _games if g["shortname"] == "noos"), {}).get("legacy_os"))
+    check("game os: the os column survives into the row",
+          all("os" in g for g in _games), "a row lost its os field")
+finally:
+    _ld.serverlist = _o_sl
+    _app_mod._GAME_LIST_CACHE.clear()
+    _app_mod._GAME_LIST_CACHE.update(_o_cache)
+
+_tpl_is = open(os.path.join(_root, "templates", "install_server.html"), encoding="utf-8").read()
+check("game os: the picker LABELS a capped game, not just tags it",
+      "({{ g.legacy_os }})" in _tpl_is, "the option no longer shows the release")
+check("game os: ...and still tags it for anything that wants to react",
+      "data-legacy-os=" in _tpl_is)
+# <option> holds a single text node, so a static half-sentence beside {{ }} is unreachable to the
+# i18n walker — the gate that caught "(… only)" here.
+check("game os: ...without gluing static text to the interpolation",
+      "only)" not in _tpl_is)
