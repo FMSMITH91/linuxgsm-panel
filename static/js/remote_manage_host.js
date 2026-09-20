@@ -277,44 +277,16 @@ function renderUpdate(d){
       ul.appendChild(li);
     });
     changes.style.display=(d.changes&&d.changes.length)?'':'none';
-  } else if(d.message){
-    // "Nothing to OFFER" is not the same fact as "you are on the newest commit", and this branch
-    // reported both as "You're up to date". That is a claim the operator can check, and when a
-    // commit was sitting in CI, or had failed it, or only touched docs, it was simply false —
-    // the panel WAS behind. _compute_update_status() already writes the honest sentence for each
-    // of those three states; all that was missing was showing it.
-    //
-    // Built with DOM calls, not innerHTML: the tone/icon pair varies per state, and concatenating
-    // even safe locals into a markup string is the shape the HTML-sink check exists to refuse.
-    var bad = d.ci_state === 'failing';
-    st.textContent = '';
-    var line = document.createElement('span');
-    line.className = bad ? 'text-warning' : (d.docs_only ? 'text-success' : 'text-secondary');
-    var ico = document.createElement('i');
-    ico.className = 'bi bi-' + (bad ? 'exclamation-triangle' : (d.docs_only ? 'check-circle' : 'hourglass-split'));
-    ico.setAttribute('aria-hidden', 'true');
-    line.appendChild(ico);
-    line.appendChild(document.createTextNode(' ' + d.message));
-    st.appendChild(line);
-    if(d.current_sha){
-      // "Running" and the sha in separate elements: welded together they are one text node whose
-      // text changes every commit, which no catalog key could ever match.
-      var sub = document.createElement('span');
-      sub.className = 'd-block text-secondary';
-      sub.style.fontSize = '.85em';
-      var word = document.createElement('span');
-      word.textContent = 'Running';
-      var sha = document.createElement('span');
-      sha.setAttribute('data-no-i18n', '');
-      sha.textContent = d.current_sha;
-      sub.appendChild(word);
-      sub.appendChild(document.createTextNode(' '));
-      sub.appendChild(sha);
-      st.appendChild(sub);
-    }
-    btn.style.display='none'; changes.style.display='none';
   } else {
-    // Genuinely nothing newer on the branch (behind === 0) — the only state that earns this line.
+    // Two states, nothing in between: there is an update to install, or there is not.
+    //
+    // This used to have a third branch, for "behind, but nothing installable" — a commit sitting in
+    // CI, or one that failed it. The card is glanced at, and that line appeared for a few minutes
+    // after every push, said nothing anyone could act on, and was gone by the next glance. The
+    // server now leaves `message` out for those states so they land here.
+    //
+    // It is not a claim that cannot be checked: the running SHA is printed right in this line, and
+    // ci_state / behind_tip are still in the API response for anything that wants them.
     st.innerHTML='<span class="text-success"><i class="bi bi-check-circle"></i> You\'re up to date'+(d.current_sha?' ('+escapeHtml(d.current_sha)+')':'')+'.</span>';  // nosemgrep
     btn.style.display='none'; changes.style.display='none';
   }

@@ -1040,8 +1040,13 @@ try:
     check("update-target: all pending -> NOT offered, because the installer would refuse it",
           _r["update_available"] is False and _r["ci_state"] == "pending",
           "available=%s ci=%s" % (_r.get("update_available"), _r.get("ci_state")))
-    check("update-target: ...and the line says a newer version is being verified",
-          "being verified" in (_r.get("message") or ""), repr(_r.get("message"))[:80])
+    # No message at all: the card has two states and nothing in between, so this one falls into
+    # its plain up-to-date line rather than a third wording that appears for a few minutes after
+    # every push and says nothing anyone can act on.
+    check("update-target: ...and carries NO in-between message for the card to show",
+          not _r.get("message"), repr(_r.get("message"))[:80])
+    check("update-target: ...while ci_state is still reported for the API",
+          _r.get("ci_state") == "pending", _r.get("ci_state"))
     check("update-target: ...and it still reports how far behind it really is",
           _r.get("behind_tip") == 3, _r.get("behind_tip"))
     check("update-target: ...and it still names the tip, for the card's changelog",
@@ -1053,8 +1058,8 @@ try:
     check("update-target: a failed tip is not offered either",
           _rf["update_available"] is False and _rf["ci_state"] == "failing",
           "available=%s ci=%s" % (_rf.get("update_available"), _rf.get("ci_state")))
-    check("update-target: ...and it says the checks did not pass",
-          "did not pass" in (_rf.get("message") or ""), repr(_rf.get("message"))[:80])
+    check("update-target: ...with no in-between message either",
+          not _rf.get("message"), repr(_rf.get("message"))[:80])
 
     # The guard that makes all of this safe: a verified commit BELOW a pending tip is still
     # offered, so a slow tip never freezes the panel on an old version.
