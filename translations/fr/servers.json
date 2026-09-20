@@ -229,6 +229,7 @@
   "Turn it on": "Activer",
   "Type:": "Type :",
   "Uninstall": "Désinstaller",
+  "Uninstall — deletes the server, its files and its backups": "Désinstaller — supprime le serveur, ses fichiers et ses sauvegardes",
   "Updates automatically (a sample is recorded every minute)": "Se met à jour automatiquement (un relevé est enregistré chaque minute)",
   "Upload": "Téléverser",
   "Upload a whole folder, including its subfolders": "Téléverser un dossier entier, sous-dossiers compris",

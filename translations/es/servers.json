@@ -229,6 +229,7 @@
   "Turn it on": "Activarlo",
   "Type:": "Tipo:",
   "Uninstall": "Desinstalar",
+  "Uninstall — deletes the server, its files and its backups": "Desinstalar: elimina el servidor, sus archivos y sus copias de seguridad",
   "Updates automatically (a sample is recorded every minute)": "Se actualiza automáticamente (se registra una muestra cada minuto)",
   "Upload": "Subir",
   "Upload a whole folder, including its subfolders": "Subir una carpeta entera, incluidas sus subcarpetas",
