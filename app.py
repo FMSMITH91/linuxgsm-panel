@@ -2100,13 +2100,22 @@ def register_routes(app):
     # SKIPS anything "installing"/"configuring", so such a server would sit stuck forever. On boot
     # (and periodically, to also catch a host that was unreachable earlier) reconcile each against
     # the real server: verified-installed → offline (metrics flip it online), clearly-not → failed.
+    #
+    # "failed" is in that list for the same reason, in the other direction. An install that failed
+    # for a fixable reason — a game needing a Steam account that owns it is the common one — is
+    # recoverable IN THE PANEL: its LinuxGSM config survives (the download is what failed, not the
+    # setup), the Files & Config page now opens on it, and the control bar's Update runs SteamCMD
+    # again. Without this the files would land and nothing would notice: installed stayed False,
+    # the row stayed "failed", and the server the operator had just repaired remained unusable.
+    # A row that is genuinely dead costs one `details` per 10 minutes, against an empty
+    # serverfiles, which is the cheap case.
     def install_reconcile_ticker():
         time.sleep(20)   # let boot settle; the per-server check is an SSH round trip
         while True:
             try:
                 with app.app_context():
                     for gs in GameServer.query.filter(
-                            GameServer.status.in_(("installing", "configuring"))).all():
+                            GameServer.status.in_(("installing", "configuring", "failed"))).all():
                         with _install_lock:
                             live = (gs.id in _install_jobs
                                     and _install_jobs[gs.id].get("status") == "running")

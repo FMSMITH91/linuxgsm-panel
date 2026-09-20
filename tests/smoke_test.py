@@ -283,6 +283,55 @@ try:
     check("files of an installing server redirects (not 200)",
           c.get("/server/%d/files" % _inst_id).status_code in (302, 303))
 
+    # ── a FAILED install must not be a dead end ─────────────────────────────────────────────────
+    # The Game Servers page offers a failed row both "Console & stats" and "Files and config", and
+    # both routes redirected away saying the server was "still installing". It was not: the install
+    # had failed, and step 2 (`./linuxgsm.sh <game>`) had already written the whole
+    # lgsm/config-lgsm/<game>/ tree — including the `steamuser="username"` line that the most common
+    # failure tells you to change. So the panel pointed at a setting and then locked the door.
+    #
+    # Verified in a rendered panel before this was written: both links present, both dead.
+    with app.app_context():
+        _fi = GameServer(remote_id=db.session.get(GameServer, gs_id).remote_id,
+                         name="failed-install", short_name="bsserver", game_type="bs",
+                         port=27045, installed=False, status="failed")
+        db.session.add(_fi); db.session.commit()
+        _fi_id = _fi.id
+    _ffr = c.get("/server/%d/files" % _fi_id)
+    check("failed install: the Files & Config page OPENS (its LinuxGSM config is what survives)",
+          _ffr.status_code == 200, _ffr.status_code)
+    _ffh = _ffr.get_data(as_text=True)
+    check("failed install: ...and says the game files never downloaded",
+          "the game files never downloaded" in _ffh)
+    # Nothing to browse, back up or install a mod into until the files exist.
+    check("failed install: the file browser is not rendered over a directory that isn't there",
+          'id="file-browser"' not in _ffh)
+    check("failed install: nor the mods card, which installs INTO serverfiles",
+          'id="mods-card"' not in _ffh)
+    # The config editor is the whole point of the page in this state.
+    check("failed install: the LinuxGSM config editor IS there", 'id="cfg-tabs"' in _ffh)
+    # The console genuinely has nothing to show, but it must not claim the install is still running
+    # — and it should hand the operator to the page that can fix it.
+    _fdr = c.get("/server/%d" % _fi_id)
+    check("failed install: the console redirects to Files & Config, not to a 'still installing' wait",
+          _fdr.status_code in (302, 303)
+          and ("/files" in (_fdr.headers.get("Location") or "")), _fdr.headers.get("Location"))
+    # A server still genuinely installing keeps the old behaviour.
+    with app.app_context():
+        _fi2 = db.session.get(GameServer, _fi_id)
+        _fi2.status = "installing"; db.session.commit()
+    check("failed install: a server that really IS installing still gets the wait message",
+          c.get("/server/%d/files" % _fi_id).status_code in (302, 303))
+    # And the reconciler has to be looking at failed rows, or files that arrive after a repair
+    # (the control bar's Update re-runs SteamCMD) are never adopted and the row stays unusable.
+    _app_src = open(os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+                                 "app.py"), encoding="utf-8").read()
+    check("failed install: the reconcile ticker re-checks failed rows, so a repair is noticed",
+          '("installing", "configuring", "failed")' in _app_src)
+    with app.app_context():
+        _d = db.session.get(GameServer, _fi_id)
+        db.session.delete(_d); db.session.commit()
+
     # ── /api/server/<id> must never write a status it could not READ ────────────────────────────
     # get_server_status answers "unknown" when the host did not answer. That is not a third kind of
     # server, and this endpoint used to commit it. It arrives more easily than it looks: the read
