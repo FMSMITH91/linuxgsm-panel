@@ -1791,40 +1791,110 @@ check('class="install-failed alert alert-warning mb-0 mx-2 mt-2 py-2 px-3"\n    
       in _dash_tpl2,
       "dashboard: ...and each banner carries the id the comparison reads")
 
-# ── an install in progress is not a possible failure ──────────────────────────────────────────
-# The tile under Offline read "+1 installing or failed", in warning yellow, for an install that was
-# running perfectly normally. Installing and failed are different news — one is the panel doing
-# what it was asked to, the other is something to look at — so they are counted apart, and the
-# yellow is kept for the half that earns it.
-# Scoped to what is EMITTED, not to the file: both places still explain the old wording in a
-# comment, and a whole-file substring scan reads that prose as if it were the code. Same defect as
-# the install.sh sudoers gate — a source gate that cannot tell a comment from a line.
+# ── the row's controls come back to life without a reload ─────────────────────────────────────
+# The status poll re-enabled start/restart/stop (.srv-ctl) and the console (.srv-console) the
+# moment an install finished — but the Files & Config link had no class to find it by, so it kept
+# whatever state it was RENDERED with. Watch a server install and Files & Config stayed greyed out
+# until a reload, while every control beside it came back on its own.
+#
+# It is not gated identically, either: a FAILED install keeps Files & Config reachable, because
+# its LinuxGSM config is what survives and that page is where the usual causes are fixed.
+_dash_tpl3 = (ROOT / "templates" / "dashboard.html").read_text(encoding="utf-8")
+check("btn btn-outline-secondary btn-sm srv-files" in _dash_tpl3,
+      "dashboard: the Files & Config link carries a class the poll can find it by")
+_dashjs4 = (ROOT / "static" / "js" / "dashboard.js").read_text(encoding="utf-8")
+check("link('.srv-files', busy && s.status !== 'failed')" in _dashjs4,
+      "dashboard: ...and the poll re-enables it, on the same rule the template renders with",
+      "the poll still only touches .srv-console")
+check("link('.srv-console', busy)" in _dashjs4,
+      "dashboard: ...without changing when the console is available")
+
+# ── the Offline tile counts failures, not installs ────────────────────────────────────────────
+# It read "+1 installing or failed" in warning yellow for an install running perfectly normally,
+# then "+1 installing" in grey — and then the install's progress moved inline, under the server
+# itself, which made any mention here a second, vaguer version of something already on screen.
+# What is left is the half worth surfacing: a failure is something to act on, and it is the other
+# reason Online + Offline does not equal Total.
 _dash_tpl = (ROOT / "templates" / "dashboard.html").read_text(encoding="utf-8")
 _tile = _dash_tpl[_dash_tpl.index('id="offline-other"'):]
 _tile = _tile[:_tile.index("</div>")]
-check("installing or failed" not in _tile,
-      "dashboard: an install in progress is not lumped in with a failure",
-      "the tile still emits 'installing or failed'")
-check("{% set n_failed =" in _dash_tpl and "{% set n_installing =" in _dash_tpl,
-      "dashboard: ...the two are counted separately")
-check("{% if n_failed %}text-warning{% else %}text-secondary{% endif %}" in _dash_tpl,
-      "dashboard: ...and only a real failure is coloured as a warning")
+check("installing" not in _tile,
+      "dashboard: the Offline tile does not mention installs at all",
+      "the tile still emits an installing count")
+check("n_failed" in _tile,
+      "dashboard: ...and still names failures, which are the reason the arithmetic does not close")
 _dashjs = (ROOT / "static" / "js" / "dashboard.js").read_text(encoding="utf-8")
-_setline = [ln for ln in _dashjs.splitlines()
-            if "oo.textContent" in ln or ("' installing" in ln and "//" not in ln.split("'")[0])]
-check(_setline and not any("installing or failed" in ln for ln in _setline),
-      "dashboard: ...in the poll too, which rewrites this line every few seconds",
-      "the poll puts the old wording straight back: %r" % (_setline[:1] or "no assignment found"))
-# The poll builds the same shape the template renders — counts and words in separate elements —
-# because base.html's walker matches a text node's EXACT text against the catalog, and "+1
-# installing" welded into one node can never match anything.
 _oo = _dashjs[_dashjs.index("var oo = document.getElementById('offline-other')"):]
-_oo = _oo[:_oo.index("// Total online")]
-check("mk('installing')" in _oo and "mk('failed')" in _oo,
-      "dashboard: ...and the poll gives each word its own element, so it can be translated",
-      "the poll welds the count to the word again")
-check("if (installing && failed)" in _oo,
-      "dashboard: ...and can say both when both are true")
+_oo = _oo[:_oo.index("// The failed-install banner")]
+check("installing" not in _oo,
+      "dashboard: ...in the poll too, which rewrites this line every few seconds",
+      "the poll puts an installing count straight back")
+check("textContent = 'failed'" in _oo or "word.textContent = 'failed'" in _oo,
+      "dashboard: ...and the word keeps its own element, so it can be translated")
+
+# ── a failure that happens while you are LOOKING has to appear ────────────────────────────────
+# The failed-install banner is rendered by the server, per host. When an install failed on a page
+# already open, the status cell flipped to "Failed" (the poll writes that) and the explanation —
+# the reason, Retry, Remove — did not appear until a manual reload. A row saying Failed with
+# nothing to act on is the state this whole feature exists to remove.
+#
+# The poll compares the failed set the API reports against the banners on screen and re-renders
+# the card region when they disagree. Verified in a rendered panel: installing -> failed, one
+# poll, banner present with its three buttons, no page reload — and a second poll fetches nothing,
+# because the sets now match.
+_dashjs2 = (ROOT / "static" / "js" / "dashboard.js").read_text(encoding="utf-8")
+check("failedShown" in _dashjs2 and "refreshSection('#server-cards')" in _dashjs2,
+      "dashboard: a failure appearing while the page is open re-renders the card region")
+check("failedNow !== failedShown" in _dashjs2,
+      "dashboard: ...only when the banners disagree with the API, so it settles after one pass",
+      "an unconditional refresh would re-fetch the page on every poll")
+_dash_tpl2 = (ROOT / "templates" / "dashboard.html").read_text(encoding="utf-8")
+check('class="install-failed alert alert-warning mb-0 mx-2 mt-2 py-2 px-3"\n         data-server-id='
+      in _dash_tpl2,
+      "dashboard: ...and each banner carries the id the comparison reads")
+
+# ── install progress belongs where the server is ──────────────────────────────────────────────
+# A game-server install runs for five to forty-five minutes, and its progress row lived on one
+# page — so starting one from "Install a Server" showed a toast and nothing else, and the dashboard
+# listed the server as installing with no progress at all.
+#
+# The first attempt was a dismissible card in the corner. Dismissing it lost it for good, which is
+# the wrong shape for something you want to keep an eye on. It is inline now: a row directly UNDER
+# the server on the dashboard, and a panel on the page you submitted from. It goes away when the
+# install does, not when you close it.
+_base_html = (ROOT / "templates" / "base.html").read_text(encoding="utf-8")
+check("js/install_progress.js" in _base_html,
+      "base: install progress is available on every page with chrome")
+_inst_tpl = (ROOT / "templates" / "install_server.html").read_text(encoding="utf-8")
+check('data-ajax-after="watchInstallsNow"' in _inst_tpl,
+      "install page: the form opens the progress panel as soon as the install is accepted")
+check('id="install-running"' in _inst_tpl and 'id="install-running-card"' in _inst_tpl,
+      "install page: ...and the page it was submitted from has somewhere to show it")
+
+_ip = (ROOT / "static" / "js" / "install_progress.js").read_text(encoding="utf-8")
+check("install-progress-stack" not in _ip and "ipc-close" not in _ip,
+      "js: the dismissible corner card is gone, not merely hidden",
+      "the corner stack is still built")
+check("data-progress-for" in _ip and "insertBefore(row, srvRow.nextSibling)" in _ip,
+      "js: the dashboard row is inserted directly under the server it belongs to")
+check("srvRow.children.length" in _ip,
+      "js: ...spanning whatever columns that table actually has",
+      "a hard-coded colspan breaks when can_control changes the column count")
+check("innerHTML" not in _ip,
+      "js: ...and it builds its DOM, never assembling a server name into markup")
+check("data-no-i18n" in _ip,
+      "js: ...with the server's own name exempt from the catalog walker")
+
+# The two integration traps a row inside this table walks into. sortDashCol sorts every `tr`, and
+# filterServers shows or hides each one on its own text and tags — a progress row carries neither,
+# so unhandled it sorted away from its server and survived a filter that hid it.
+_dashjs3 = (ROOT / "static" / "js" / "dashboard.js").read_text(encoding="utf-8")
+check("tb.querySelectorAll('tr[data-server-id]')" in _dashjs3
+      and "tb.appendChild(prog)" in _dashjs3,
+      "js: sorting moves a progress row with its server, not to one end of the table")
+check("if (tr.hasAttribute('data-progress-for')) return;" in _dashjs3
+      and "prog.style.display = match" in _dashjs3,
+      "js: filtering hides a progress row with its server, not on its own text")
 
 # ── install progress has to be visible from wherever you are ──────────────────────────────────
 # The progress row lives on the Game Servers page and nowhere else, so an install started from

@@ -109,12 +109,11 @@
      they went rather than leaving the reader to notice the arithmetic doesn't close. #}
   {% set n_online = servers|selectattr('status', 'equalto', 'online')|list|length %}
   {% set n_offline = servers|selectattr('status', 'equalto', 'offline')|list|length %}
-  {# Counted apart, because they are not the same news. An install in progress is the panel doing
-     what it was asked to; a failure is something to look at. Lumping them into one warning-yellow
-     "+N installing or failed" made every ordinary install look like it might have gone wrong. #}
+  {# Only FAILED is counted here. An install in progress is the panel doing what it was asked to,
+     and its progress now sits inline under the server itself — so a second, vaguer mention under
+     the Offline tile was noise about something already on screen. A failure is different: it is
+     something to act on, and it is the other reason Online + Offline does not equal Total. #}
   {% set n_failed = servers|selectattr('status', 'equalto', 'failed')|list|length %}
-  {% set n_installing = servers|length - n_online - n_offline - n_failed %}
-  {% set n_other = n_installing + n_failed %}
   <div class="h3 mb-0" id="offline-count">
     <span class="status-dot status-offline"></span>
     {{ n_offline }}
@@ -122,16 +121,12 @@
   <div class="text-secondary small">Offline</div>
   {# Always rendered, hidden when zero: the poll updates it in place, and an element that only
      exists when n_other was non-zero AT RENDER can never be updated or brought back. #}
-  {# The counts and the words are separate elements. base.html's walker translates a text node
-     whose exact text is a catalog key, so "+1 installing" welded into one node can never be
-     translated — the count changes it every time. Numbers carry data-no-i18n; the words stand
-     alone and ARE in the catalog. dashboard.js rebuilds this same shape on every poll. #}
-  <div class="small mt-1 {% if n_failed %}text-warning{% else %}text-secondary{% endif %}"
-       id="offline-other" {% if not n_other %}hidden{% endif %}
-       data-installing="{{ n_installing }}" data-failed="{{ n_failed }}">
-    {%- if n_installing %}<span data-no-i18n>+{{ n_installing }}</span> <span>installing</span>{% endif -%}
-    {%- if n_installing and n_failed %}<span data-no-i18n>, </span>{% endif -%}
-    {%- if n_failed %}<span data-no-i18n>{% if not n_installing %}+{% endif %}{{ n_failed }}</span> <span>failed</span>{% endif -%}
+  {# The count and the word are separate elements. base.html's walker translates a text node whose
+     exact text is a catalog key, so "+1 failed" welded into one node could never be translated —
+     the count changes it every time. dashboard.js rebuilds this same shape on every poll. #}
+  <div class="small mt-1 text-warning" id="offline-other" {% if not n_failed %}hidden{% endif %}
+       data-failed="{{ n_failed }}">
+    {%- if n_failed %}<span data-no-i18n>+{{ n_failed }}</span> <span>failed</span>{% endif -%}
   </div>
 {% endmacro %}
 {% macro tile_players() %}
@@ -366,8 +361,12 @@
                  exactly that reason, and greying this out here made the fix unreachable from the
                  one page that shows the failure. #}
               {% set files_busy = busy and srv.status != 'failed' %}
+              {# srv-files, so the status poll can re-enable this the moment the install finishes.
+                 Without a handle on it the link kept whatever state it was RENDERED with: open the
+                 dashboard while a server installs and the Files & Config button stayed greyed out
+                 until a reload, while start/stop/console beside it came back to life. #}
               <a href="{{ url_for('server_files', server_id=srv.id) }}"
-                 class="btn btn-outline-secondary btn-sm{% if files_busy %} disabled{% endif %}"
+                 class="btn btn-outline-secondary btn-sm srv-files{% if files_busy %} disabled{% endif %}"
                  title="Edit config &amp; browse/upload files"
                  aria-label="Files and config for {{ srv.name }}"{% if files_busy %} tabindex="-1" aria-disabled="true"{% endif %}>
                 <i class="bi bi-folder2-open"></i>

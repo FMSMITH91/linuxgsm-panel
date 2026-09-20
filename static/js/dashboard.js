@@ -32,8 +32,14 @@ function filterServers(){
   document.querySelectorAll('.server-remote-card').forEach(function(card){
     var cardHas = false;
     card.querySelectorAll('tbody tr').forEach(function(tr){
+      // An install-progress row belongs to the server above it: it carries no name and no tags, so
+      // matching it on its own text would hide it whenever a filter was active and show it when
+      // the server it describes was hidden. It follows its server instead.
+      if (tr.hasAttribute('data-progress-for')) return;
       var match = (!q || tr.textContent.toLowerCase().indexOf(q) !== -1) && rowHasEveryTag(tr);
       tr.style.display = match ? '' : 'none';
+      var prog = card.querySelector('tr[data-progress-for="' + tr.getAttribute('data-server-id') + '"]');
+      if (prog) prog.style.display = match ? '' : 'none';
       if(match) cardHas = true;
     });
     card.style.display = cardHas ? '' : 'none';
@@ -90,37 +96,27 @@ function refreshStatus() {
       // agree while this one kept claiming the old count — the tile contradicting its own
       // arithmetic, which is the confusion the comment beside it says it exists to prevent.
       // Hidden rather than removed when it reaches zero, so it can come back without a reload.
-      // Installing and failed are counted APART. An install in progress is the panel doing what
-      // it was asked to; a failure is something to look at. One warning-yellow "+N installing or
-      // failed" made every ordinary install read as a possible fault.
+      // Only FAILED is counted here. An install in progress is the panel doing what it was asked
+      // to, and its progress sits inline under the server itself — a second, vaguer mention under
+      // the Offline tile was noise about something already on screen.
       var failed = data.filter(function(s){ return s.status === 'failed'; }).length;
-      var installing = data.length - online - offline - failed;
-      var other = installing + failed;
       var oo = document.getElementById('offline-other');
       if (oo) {
-        // Same shape the template renders: counts and words in separate elements. A single text
-        // node reading "+1 installing" can never be translated — base.html's walker matches a
-        // node's EXACT text against the catalog, and the count changes it every time.
-        var mk = function(txt, noI18n){
-          var e = document.createElement('span');
-          e.textContent = txt;
-          if (noI18n) e.setAttribute('data-no-i18n', '');
-          return e;
-        };
+        // Count and word in separate elements: base.html's walker matches a text node's EXACT
+        // text against the catalog, so "+1 failed" in one node can never be translated.
         oo.textContent = '';
-        if (installing) {
-          oo.appendChild(mk('+' + installing, true));
-          oo.appendChild(document.createTextNode(' '));
-          oo.appendChild(mk('installing'));
-        }
-        if (installing && failed) oo.appendChild(mk(', ', true));
         if (failed) {
-          oo.appendChild(mk((installing ? '' : '+') + failed, true));
+          var num = document.createElement('span');
+          num.setAttribute('data-no-i18n', '');
+          num.textContent = '+' + failed;
+          var word = document.createElement('span');
+          word.textContent = 'failed';
+          oo.appendChild(num);
           oo.appendChild(document.createTextNode(' '));
-          oo.appendChild(mk('failed'));
+          oo.appendChild(word);
         }
-        oo.className = 'small mt-1 ' + (failed ? 'text-warning' : 'text-secondary');
-        oo.hidden = other <= 0;
+        oo.className = 'small mt-1 text-warning';
+        oo.hidden = !failed;
       }
       // The failed-install banner is rendered by the SERVER, per host, so when an install FAILS
       // while you are watching, the status cell flips to "Failed" and the explanation — the
@@ -197,12 +193,18 @@ function refreshStatus() {
           // installed yet), and re-enable them live the moment it's ready — no page reload needed.
           var busy = !s.installed || s.status === 'installing' || s.status === 'configuring';
           row.querySelectorAll('.srv-ctl').forEach(function(b){ b.disabled = busy; });
-          var con = row.querySelector('.srv-console');
-          if (con) {
-            con.classList.toggle('disabled', busy);
-            if (busy) { con.setAttribute('tabindex', '-1'); con.setAttribute('aria-disabled', 'true'); }
-            else { con.removeAttribute('tabindex'); con.removeAttribute('aria-disabled'); }
-          }
+          // Files & Config is NOT gated the same way: its LinuxGSM config exists even when the
+          // install failed, and that page is where the usual causes are fixed. Same rule the
+          // template renders with.
+          var link = function(sel, off){
+            var a = row.querySelector(sel);
+            if (!a) return;
+            a.classList.toggle('disabled', off);
+            if (off) { a.setAttribute('tabindex', '-1'); a.setAttribute('aria-disabled', 'true'); }
+            else { a.removeAttribute('tabindex'); a.removeAttribute('aria-disabled'); }
+          };
+          link('.srv-console', busy);
+          link('.srv-files', busy && s.status !== 'failed');
         }
       });
     })
@@ -218,12 +220,19 @@ window.sortDashCol = function(key, th){
   var tb = table.querySelector('tbody'); if (!tb) return;
   var dir = (table.dataset.sortKey === key) ? -(parseInt(table.dataset.sortDir || '1', 10)) : 1;
   table.dataset.sortKey = key; table.dataset.sortDir = String(dir);
-  Array.prototype.slice.call(tb.querySelectorAll('tr')).sort(function(a, b){
+  // Sort the SERVER rows only, then re-attach each progress row under its own server. Sorting
+  // every `tr` sent the progress rows (which carry no data-name/status/players) to one end, away
+  // from the server they describe.
+  Array.prototype.slice.call(tb.querySelectorAll('tr[data-server-id]')).sort(function(a, b){
     if (key === 'players') {
       return ((parseInt(a.getAttribute('data-players'), 10)) - (parseInt(b.getAttribute('data-players'), 10))) * dir;
     }
     return (a.getAttribute('data-' + key) || '').localeCompare(b.getAttribute('data-' + key) || '', undefined, {sensitivity: 'base', numeric: true}) * dir;
-  }).forEach(function(r){ tb.appendChild(r); });
+  }).forEach(function(r){
+    tb.appendChild(r);
+    var prog = tb.querySelector('tr[data-progress-for="' + r.getAttribute('data-server-id') + '"]');
+    if (prog) tb.appendChild(prog);
+  });
   table.querySelectorAll('th[data-sortkey]').forEach(function(h){
     var c = h.querySelector('.dash-caret');
     if (c) c.textContent = (h.getAttribute('data-sortkey') === key) ? (dir > 0 ? ' ▲' : ' ▼') : '';

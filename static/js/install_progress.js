@@ -1,16 +1,20 @@
-// ── Install progress, from wherever you are ───────────────────────────────────────────────────
-// A game-server install runs for five to forty-five minutes. Its progress row lives on the Game
-// Servers page, and nowhere else: start an install from "Install a Server" and you got a toast and
-// then nothing, and the dashboard showed the server as "installing" with no progress at all. So
-// this puts the live step and bar in the corner of every page instead.
+// ── Install progress, where the server is ─────────────────────────────────────────────────────
+// A game-server install runs for five to forty-five minutes. It has to be watchable, and it has
+// to be watchable in the place you are already looking:
 //
-// It is deliberately quiet: no timer runs unless something is actually installing. The widget asks
-// once on page load, then polls only while a job is live, and the `servers_changed` broadcast the
-// panel already sends when a server is added wakes it for an install started in another tab or by
-// another user.
+//   * on the dashboard, a row directly UNDER the server it belongs to;
+//   * on Install a Server, a panel on the page you just submitted from.
+//
+// This was a dismissible card in the corner first. Dismissing it lost it for good, which is the
+// wrong shape for something you want to keep an eye on — so it is inline now, and it goes away
+// when the install does, not when you close it.
+//
+// Deliberately quiet: no timer runs unless something is actually installing. It asks once on load,
+// polls only while a job is live, and the `servers_changed` broadcast the panel already sends
+// wakes it for an install started in another tab or by another user.
 (function () {
   var POLL_MS = 3000;
-  var timer = null, box = null, cards = {}, done = {};
+  var timer = null, settling = {};
 
   function el(tag, cls, text) {
     var e = document.createElement(tag);
@@ -19,100 +23,129 @@
     return e;
   }
 
-  function ensureBox() {
-    if (box) return box;
-    box = el('div', 'install-progress-stack');
-    box.setAttribute('aria-live', 'polite');
-    document.body.appendChild(box);
-    return box;
-  }
-
-  // One card per install. Built with DOM calls rather than a markup string: the server name is
-  // user-supplied and this file has no business concatenating it into HTML.
-  function card(job) {
-    var c = cards[job.id];
-    if (!c) {
-      var root = el('div', 'install-progress-card');
-      var head = el('div', 'ipc-head');
-      var name = el('span', 'ipc-name', job.name);
-      name.setAttribute('data-no-i18n', '');   // a server's own name is never a catalog key
-      var close = el('button', 'ipc-close');
-      close.type = 'button';
-      close.setAttribute('aria-label', 'Dismiss');
-      close.textContent = '×';
-      close.addEventListener('click', function () { dismiss(job.id); });
-      head.appendChild(name);
-      head.appendChild(close);
-      var step = el('div', 'ipc-step');
-      var track = el('div', 'ipc-track');
-      var bar = el('div', 'ipc-bar');
+  // The bar + step line, shared by both hosts. Built with DOM calls, never markup: the server
+  // name is user-supplied, and the step text comes from the install job.
+  function fill(box, job) {
+    var step = box.querySelector('.ip-step'), bar = box.querySelector('.ip-bar'),
+        meta = box.querySelector('.ip-meta');
+    if (!step) {
+      step = el('div', 'ip-step');
+      var track = el('div', 'ip-track');
+      bar = el('div', 'ip-bar');
       track.appendChild(bar);
-      var meta = el('div', 'ipc-meta');
-      root.appendChild(head);
-      root.appendChild(step);
-      root.appendChild(track);
-      root.appendChild(meta);
-      ensureBox().appendChild(root);
-      c = cards[job.id] = { root: root, step: step, bar: bar, meta: meta, name: name };
+      meta = el('div', 'ip-meta');
+      box.textContent = '';
+      box.appendChild(step); box.appendChild(track); box.appendChild(meta);
     }
-    c.name.textContent = job.name;
-    c.step.textContent = job.step_name || 'Working…';
-    c.bar.style.width = (job.percent || 0) + '%';
-    c.meta.textContent = (job.total ? job.step + '/' + job.total + ' · ' : '')
-                       + (job.percent || 0) + '% · ' + (job.elapsed || 0) + 's';
-    return c;
+    step.textContent = job.step_name || 'Working…';
+    bar.style.width = (job.percent || 0) + '%';
+    meta.textContent = (job.total ? job.step + '/' + job.total + ' · ' : '')
+                     + (job.percent || 0) + '% · ' + (job.elapsed || 0) + 's';
   }
 
-  function dismiss(id) {
-    var c = cards[id];
-    if (c && c.root && c.root.parentNode) c.root.parentNode.removeChild(c.root);
-    delete cards[id];
-    done[id] = true;          // don't re-open a card the viewer has closed
+  // ── the dashboard: a row under the server ───────────────────────────────────────────────────
+  function dashRow(job) {
+    var srvRow = document.querySelector('tr[data-server-id="' + job.id + '"]');
+    if (!srvRow) return null;
+    var row = document.querySelector('tr[data-progress-for="' + job.id + '"]');
+    if (!row) {
+      row = el('tr', 'install-progress-row');
+      row.setAttribute('data-progress-for', String(job.id));
+      var td = el('td');
+      td.className = 'pt-0';
+      td.colSpan = srvRow.children.length;   // span whatever this table actually has
+      row.appendChild(td);
+      srvRow.parentNode.insertBefore(row, srvRow.nextSibling);
+    }
+    fill(row.firstChild, job);
+    return row;
   }
 
-  // An install that has left the live list has either finished or failed. Say which, using the
-  // per-server endpoint that already knows — then fade the card out on its own for a success, and
-  // leave a failure up until it is dismissed.
+  function dropDashRow(id) {
+    var row = document.querySelector('tr[data-progress-for="' + id + '"]');
+    if (row && row.parentNode) row.parentNode.removeChild(row);
+  }
+
+  // ── Install a Server: a panel on the page you submitted from ────────────────────────────────
+  function pagePanel(jobs) {
+    var host = document.getElementById('install-running');
+    if (!host) return;
+    var card = document.getElementById('install-running-card');
+    if (card) card.hidden = !jobs.length;
+    if (!jobs.length) { host.textContent = ''; return; }
+    jobs.forEach(function (job) {
+      var box = host.querySelector('[data-install-id="' + job.id + '"]');
+      if (!box) {
+        box = el('div', 'install-progress-inline mb-2');
+        box.setAttribute('data-install-id', String(job.id));
+        var name = el('div', 'ip-name', job.name);
+        name.setAttribute('data-no-i18n', '');
+        var body = el('div');
+        box.appendChild(name); box.appendChild(body);
+        host.appendChild(box);
+      }
+      fill(box.lastChild, job);
+    });
+    // Anything no longer running leaves the page panel.
+    Array.prototype.forEach.call(host.querySelectorAll('[data-install-id]'), function (b) {
+      if (!jobs.some(function (j) { return String(j.id) === b.getAttribute('data-install-id'); })) {
+        if (b.parentNode) b.parentNode.removeChild(b);
+      }
+    });
+  }
+
+  // An install that has left the live list has finished or failed. The dashboard already re-renders
+  // its card region when the failed set changes (that is what brings up the reason and its
+  // buttons), so here the row only has to say how it ended and then get out of the way.
   function settle(id) {
-    var c = cards[id];
-    if (!c) return;
+    if (settling[id]) return;
+    settling[id] = true;
     fetch(MOUNT + '/api/server/' + id + '/install-status')
       .then(function (r) { return r.json(); })
       .then(function (s) {
-        if (!cards[id]) return;
-        var bad = (s.status === 'failed' || s.status === 'interrupted');
-        var warn = !!s.warn;
-        c.bar.style.width = '100%';
-        c.root.className = 'install-progress-card ' + (bad ? 'is-bad' : (warn ? 'is-warn' : 'is-ok'));
-        c.step.textContent = s.message || (bad ? 'Install failed' : 'Installed');
-        c.meta.textContent = '';
-        if (!bad) setTimeout(function () { dismiss(id); }, 12000);
+        var row = document.querySelector('tr[data-progress-for="' + id + '"]');
+        if (row) {
+          var bad = (s.status === 'failed' || s.status === 'interrupted');
+          var td = row.firstChild;
+          td.textContent = '';
+          var line = el('div', 'ip-step ' + (bad ? 'text-danger' : 'text-success'),
+                        s.message || (bad ? 'Install failed' : 'Installed'));
+          line.setAttribute('data-no-i18n', '');
+          td.appendChild(line);
+          // A failure stays until the card region re-renders with the banner that can act on it;
+          // a success has nothing left to say.
+          if (!bad) setTimeout(function () { dropDashRow(id); }, 8000);
+        }
+        pagePanel([]);   // the page panel only ever shows what is RUNNING
       })
-      .catch(function () { dismiss(id); });
+      .catch(function () { dropDashRow(id); })
+      .then(function () { delete settling[id]; });
   }
 
   function stop() { if (timer) { clearInterval(timer); timer = null; } }
+
+  function apply(jobs) {
+    var live = {};
+    jobs.forEach(function (j) { live[j.id] = true; dashRow(j); });
+    Array.prototype.forEach.call(document.querySelectorAll('tr[data-progress-for]'), function (r) {
+      var id = r.getAttribute('data-progress-for');
+      if (!live[id]) settle(id);
+    });
+    pagePanel(jobs);
+  }
 
   function tick() {
     fetch(MOUNT + '/api/installs', { cache: 'no-store' })
       .then(function (r) { return r.json(); })
       .then(function (d) {
-        var live = {};
-        (d.installs || []).forEach(function (j) {
-          live[j.id] = true;
-          if (!done[j.id]) card(j);
-        });
-        // Anything we were showing that is no longer live has just ended.
-        Object.keys(cards).forEach(function (id) {
-          if (!live[id]) settle(id);
-        });
-        if (!(d.installs || []).length) stop();
+        var jobs = d.installs || [];
+        apply(jobs);
+        if (!jobs.length) stop();
       })
       .catch(function () { stop(); });
   }
 
   window.watchInstallsNow = function () {
-    Object.keys(done).forEach(function (k) { delete done[k]; });   // a NEW install re-opens a card
     tick();
     if (!timer) timer = setInterval(tick, POLL_MS);
   };
@@ -121,13 +154,10 @@
     fetch(MOUNT + '/api/installs', { cache: 'no-store' })
       .then(function (r) { return r.json(); })
       .then(function (d) {
-        if ((d.installs || []).length) {
-          (d.installs || []).forEach(card);
-          if (!timer) timer = setInterval(tick, POLL_MS);
-        }
+        var jobs = d.installs || [];
+        if (jobs.length) { apply(jobs); if (!timer) timer = setInterval(tick, POLL_MS); }
       })
       .catch(function () {});
-    // A server added anywhere — including this tab's own install — broadcasts this already.
     if (window.onServersChanged) window.onServersChanged(function () { window.watchInstallsNow(); });
   });
 })();

@@ -107,6 +107,20 @@
   </div>
 </div>
 
+{# Installs actually running, on the page you started them from. Submitting used to leave a toast
+   and nothing else — the progress lived on a different page, so the honest reading of this screen
+   was "did that work?". install_progress.js fills this from /api/installs and hides it again when
+   nothing is running. Rendered empty rather than injected, so there is one place the markup lives
+   and the script only has to fill it. #}
+<div class="card mt-3" id="install-running-card" hidden>
+  <div class="card-header"><i class="bi bi-arrow-repeat"></i> Installing now</div>
+  <div class="card-body">
+    <p class="small text-secondary mb-3">This keeps running if you leave the page — the server
+      appears on the dashboard with the same progress under it.</p>
+    <div id="install-running"></div>
+  </div>
+</div>
+
 {% endblock %}
 
 {# Without this the page had NO JavaScript: updatePort (set the default port for a game),
