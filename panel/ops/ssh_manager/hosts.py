@@ -626,6 +626,9 @@ def classify_install_failure(output):
                     is what is left when the sweep freed nothing.
       steam_login   the game is not downloadable anonymously — it needs a Steam account that owns
                     it, set in the server's LinuxGSM config.
+      steam_platform  SteamCMD has no download of this app for this platform, whatever the
+                    catalogue says. Seen on the test host for Left 4 Dead 2 ("Failed to install
+                    app '222860' (Invalid platform)").
       os_unsupported  LinuxGSM caps this game at an older Ubuntu than the host runs.
 
     Deliberately NOT classified: "Not enough disk space". LinuxGSM prints that for SteamCMD app
@@ -649,6 +652,12 @@ def classify_install_failure(output):
             "This game is not downloadable with an anonymous Steam login — it needs an account "
             "that owns it. Put a Steam username and password in the server's LinuxGSM config "
             "(steamuser / steampass) and install again."))
+    if "invalid platform" in low:
+        return ("steam_platform", (
+            "SteamCMD has no download of this game for this platform — it refused with "
+            "\"Invalid platform\". Nothing about the host changes that, so installing again will "
+            "fail the same way. If you own the game, a Steam login that owns it sometimes has "
+            "access to a build this one does not."))
     m = re.search(r"is not supported on ([^\r\n(]{3,60})", text)
     if m:
         return ("os_unsupported", (
