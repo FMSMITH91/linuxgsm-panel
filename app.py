@@ -497,14 +497,18 @@ def _node_tools_cron_watch(app):
 
 
 def _live_run_state(gs, remote):
-    """Is this game genuinely running right now? True/False, or None when that can't be read.
+    """Is ANY trace of this server alive right now? True/False, or None when that can't be read.
 
-    Deliberately the SAME predicate /api/server/<id>/stats uses to set gs.status — a listening game
-    port OR a live process owned by the game user — so a refusal built on this always agrees with
-    what the dashboard and the chat bots' /servers are showing. Reads through server_live_metrics'
-    2s cache, which an open dashboard is usually filling anyway. An SSH blip returns the all-zero
-    default dict; ram_total is 0 only in that case (`free -b` never fails on a reachable host), so
-    it is the sentinel for "don't claim to know"."""
+    A listening game port OR a live process owned by the game user. That is deliberately WIDER
+    than the panel's `status` column, which means "a player could connect" and is the listening
+    port alone. The two used to be the same predicate, and the narrow question is the wrong one
+    here: this exists only to refuse a power action that would be a no-op, and a server whose game
+    has crashed inside a surviving srcds_run reads offline in the status column while its tmux
+    session is still there to be cleared. Refusing that Stop would leave no way out of the panel.
+
+    Reads through server_live_metrics' 2s cache, which an open dashboard is usually filling
+    anyway. An SSH blip returns the all-zero default dict; ram_total is 0 only in that case
+    (`free -b` never fails on a reachable host), so it is the sentinel for "don't claim to know"."""
     try:
         m = _sm.server_live_metrics(remote, gs.short_name, gs.port)
     except Exception:
