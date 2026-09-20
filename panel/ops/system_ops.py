@@ -969,19 +969,30 @@ def _compute_update_status():
             break   # newest verified commit — anything above it is still unverified
 
     if not target_sha:
-        # Nothing in range has cleared CI yet — still SAY there is an update, because there is one.
-        # Hiding it made the card answer "is there a verified update?" when what it is asked is
-        # "am I up to date?". The install still carries its snapshot + health-check + rollback.
+        # Nothing in range has cleared CI. Do NOT offer an update here, because the installer will
+        # not install one: _do_panel_update refuses while ci_state is "pending" or "failing". The
+        # card was announcing "Update available: v0.10.0-alpha (1 commit behind)" and, in the same
+        # card, "This update is still being verified — try again once they've passed". An offer the
+        # panel answers with a refusal is worse than no offer.
+        #
+        # The invariant is simply: update_available is true exactly when the update would be
+        # allowed to install. Everything else belongs in the sentence underneath.
+        #
+        # That sentence still must not claim you are on the newest commit — you are not, and it is
+        # a claim the operator can check. So it says what is true: there is nothing to install now,
+        # and why, with the running SHA printed beneath it by the card.
         full_tip = commits[0] if commits else ""
         tip_ver, _, tv_rc = _git(["show", "%s:VERSION" % ref])
-        return {**base, "update_available": True, "ci_state": tip_state,
+        return {**base, "update_available": False, "ci_state": tip_state,
                 "behind": behind_n, "behind_tip": behind_n,
                 "target_sha": full_tip,
                 "remote_version": ((tip_ver.strip() if tv_rc == 0 else "") or "?"),
                 "changes": _runtime_changelog("HEAD.." + ref)[:10],
-                "message": ("An update is available — its checks are still running."
+                "message": ("Up to date — a newer version is being verified, and will be offered "
+                            "here once its checks pass."
                             if tip_state == "pending"
-                            else "An update is available, but its checks did not pass.")}
+                            else "Up to date — a newer version did not pass its checks, so it is "
+                                 "not being offered.")}
 
     # We have a verified target (possibly older than the tip if newer commits are still verifying).
     behind_target = behind_n - newer_unverified   # commits from HEAD up to & including the target
