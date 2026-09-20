@@ -1731,6 +1731,14 @@ check("li.textContent = c" in _upd or "li.textContent=c" in _upd,
 check("a.rel = 'noopener noreferrer'" in _upd,
       "js: ...and the new tab cannot reach back through window.opener")
 
+# Two states, nothing in between. The "behind but nothing installable" branch is gone: the card is
+# glanced at, and it appeared for a few minutes after every push saying nothing anyone could act on.
+check(_upd.count("else if(d.message)") == 0,
+      "js: the update card has no third 'behind but not installable' state",
+      "a message-only branch is back")
+check("You\\'re up to date" in _upd and "Update available:" in _upd,
+      "js: ...just the two it is asked for")
+
 # The "(#282)" at the end of a squash-merged subject is the part worth reading before taking an
 # update — the PR says what changed and why. Same rule as the sha: the only interpolated piece is
 # constrained (digits), the repo URL is the one the caller already vetted, and a missing repo URL

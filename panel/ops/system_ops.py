@@ -982,21 +982,22 @@ def _compute_update_status():
         # The invariant is simply: update_available is true exactly when the update would be
         # allowed to install. Everything else belongs in the sentence underneath.
         #
-        # That sentence still must not claim you are on the newest commit — you are not, and it is
-        # a claim the operator can check. So it says what is true: there is nothing to install now,
-        # and why, with the running SHA printed beneath it by the card.
+        # And NO message. The card has two states and nothing in between: there is an update to
+        # install, or there is not. A third "…but something is being verified" line is noise on a
+        # card that is glanced at — it appears for a few minutes after every push, says nothing
+        # anyone can act on, and the next glance shows something different again. Leaving `message`
+        # out drops this state into the card's plain up-to-date line, which prints the running SHA,
+        # so the exact commit is still on screen for anyone who wants to check it.
+        #
+        # ci_state and behind_tip are still reported for the API and the tests; only the card's
+        # wording is deliberately silent.
         full_tip = commits[0] if commits else ""
         tip_ver, _, tv_rc = _git(["show", "%s:VERSION" % ref])
         return {**base, "update_available": False, "ci_state": tip_state,
                 "behind": behind_n, "behind_tip": behind_n,
                 "target_sha": full_tip,
                 "remote_version": ((tip_ver.strip() if tv_rc == 0 else "") or "?"),
-                "changes": _runtime_changelog("HEAD.." + ref)[:10],
-                "message": ("Up to date — a newer version is being verified, and will be offered "
-                            "here once its checks pass."
-                            if tip_state == "pending"
-                            else "Up to date — a newer version did not pass its checks, so it is "
-                                 "not being offered.")}
+                "changes": _runtime_changelog("HEAD.." + ref)[:10]}
 
     # We have a verified target (possibly older than the tip if newer commits are still verifying).
     behind_target = behind_n - newer_unverified   # commits from HEAD up to & including the target
