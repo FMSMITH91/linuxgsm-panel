@@ -375,7 +375,15 @@ function _submitAjaxForm(form){
         // behind two grey sheets, which is the same as losing it.
         var cred = res.d.credential;
         var doRefresh = function(){
+          // data-ajax-after runs whether or not there is a section to swap. It used to be handed
+          // ONLY to refreshSection, so a form with an after-hook and no data-ajax-refresh — the
+          // install form, deliberately, because the list it would refresh lives on another page —
+          // quietly never ran it. A data- attribute that is silently ignored in one configuration
+          // is a trap, not a feature.
+          // nosemgrep - the delegated dispatcher this UI is built on; `after` comes from a data-
+          // attribute in our own template and the typeof guard is the contract.
           if (sel) window.refreshSection(sel, after);
+          else if (after && typeof window[after] === 'function') { try { window[after](); } catch(e){} }  // nosemgrep
           if (cred && typeof window.showCredential === 'function'){
             try { window.showCredential(cred); } catch(e){}
           }
