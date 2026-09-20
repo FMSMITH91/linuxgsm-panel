@@ -716,6 +716,73 @@ try:
     check("cron delete without MANAGE_SERVERS -> 403",
           mrc.post("/api/server/%d/cron/delete" % gs_id, json={"raw": "x"}).status_code == 403)
 
+    from panel.core.panel_state import (_install_jobs as _install_jobs_sm,
+                                        _install_lock as _install_lock_sm)
+    # ── a failed install has to say WHY, and offer the two things you can actually do ───────────
+    # The row said "Failed" and nothing else. The reason lived in the install job's memory until
+    # the panel restarted; Retry did not exist; and Remove was on the host page, a different page
+    # from the one showing the failure. Worse, `busy = not installed` greyed out Files & Config on
+    # exactly that row — the config the failure usually asks you to change.
+    with app.app_context():
+        _rf = db.session.get(GameServer, gs_id)
+        _rf_before = (_rf.status, _rf.installed, _rf.install_error, _rf.install_retryable)
+        _rf.status, _rf.installed = "failed", False
+        _rf.install_error = "Downloading game server files: the mirror was unreachable."
+        _rf.install_retryable = True
+        db.session.commit()
+    try:
+        _dash = c.get("/").get_data(as_text=True)
+        check("failed install: the dashboard says WHY it failed",
+              "the mirror was unreachable" in _dash)
+        check("failed install: ...and offers Retry when a retry could help",
+              ("/servers/%d/retry-install" % gs_id) in _dash)
+        check("failed install: ...and Remove, which used to live on another page entirely",
+              ("/servers/%d/delete" % gs_id) in _dash)
+        # The Files link is what #282 made reachable; greying it out here made that unreachable
+        # from the one page that shows the failure.
+        # The <a> spans several lines, so read the whole tag rather than one line of it — a
+        # line-scoped check answered "no files link at all" for a link that was right there.
+        _fi = _dash.find('href="/server/%d/files"' % gs_id)
+        _ftag = _dash[_dash.rfind("<a", 0, _fi):_dash.find(">", _fi) + 1] if _fi != -1 else ""
+        check("failed install: ...and Files & Config is NOT greyed out on a failed row",
+              _fi != -1 and "disabled" not in _ftag,
+              _ftag[:160] or "no files link at all")
+
+        # The retry itself. The real job runs in a background thread and its first step is an SSH
+        # round trip to a host this suite stubs, so it fails harmlessly — what is being checked
+        # here is the ROUTE's contract: accepted, row back to installing, reason cleared.
+        _rr = c.post("/servers/%d/retry-install" % gs_id)
+        check("failed install: retry is accepted for a retryable failure",
+              _rr.status_code in (200, 302), _rr.status_code)
+        with app.app_context():
+            _after = db.session.get(GameServer, gs_id)
+            check("failed install: ...and the row goes back to installing, with the reason cleared",
+                  _after.status == "installing" and not _after.install_error, 
+                  (_after.status, _after.install_error))
+            # put it back to failed, this time with a cause no retry can fix
+            _after.status, _after.installed = "failed", False
+            _after.install_error = "This game is not downloadable with an anonymous Steam login."
+            _after.install_retryable = False
+            db.session.commit()
+        with _install_lock_sm:
+            _install_jobs_sm.pop(gs_id, None)
+        _dash2 = c.get("/").get_data(as_text=True)
+        check("failed install: a cause no retry can fix does NOT offer Retry",
+              ("/servers/%d/retry-install" % gs_id) not in _dash2)
+        check("failed install: ...and says so, instead of leaving you to guess",
+              "Trying again won" in _dash2)
+        _rr2 = c.post("/servers/%d/retry-install" % gs_id)
+        with app.app_context():
+            check("failed install: ...and the route refuses it too, not just the button",
+                  db.session.get(GameServer, gs_id).status == "failed", _rr2.status_code)
+    finally:
+        with _install_lock_sm:
+            _install_jobs_sm.pop(gs_id, None)
+        with app.app_context():
+            _rf = db.session.get(GameServer, gs_id)
+            (_rf.status, _rf.installed, _rf.install_error, _rf.install_retryable) = _rf_before
+            db.session.commit()
+
     # ── /api/installs: the progress a corner widget can follow from any page ────────────────────
     # A game-server install runs for five to forty-five minutes, and its only progress row lived on
     # the Game Servers page. Start one from "Install a Server" and you got a toast reading

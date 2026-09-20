@@ -2233,6 +2233,18 @@
       "POST"
     ]
   },
+  "/servers/<int:server_id>/retry-install": {
+    "endpoint": "retry_install",
+    "guards": [
+      "utils.py:decorated_view(install_server)[server_access]",
+      "auth.py:decorated_function(install_server)[server_access]",
+      "auth.py:decorated_function[server_access]",
+      "view:retry_install"
+    ],
+    "methods": [
+      "POST"
+    ]
+  },
   "/servers/add": {
     "endpoint": "install_game_server",
     "guards": [
