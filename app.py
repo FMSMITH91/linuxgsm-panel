@@ -875,11 +875,12 @@ def load_game_list():
     # four do, and the picker cannot know which host is about to be chosen — so state the game's
     # OWN limit rather than guess. That is true whatever the target, and it is the fact the
     # operator needs before spending an install on it.
-    newest = max((g.get("os") or "" for g in games), default="")
-    for g in games:
-        g["legacy_os"] = (g.get("os") or "") if (g.get("os") and newest
-                                                 and game_os_unsupported(g["os"], newest)) else ""
-    games.sort(key=lambda g: g["name"].lower())
+    newest = max((row.get("os") or "" for row in games), default="")
+    for row in games:
+        row["legacy_os"] = (row.get("os") or "") if (row.get("os") and newest
+                                                     and game_os_unsupported(row["os"], newest)) \
+            else ""
+    games.sort(key=lambda row: row["name"].lower())
     # Only memoise a real answer: caching [] would make one failed fetch permanent for the life
     # of the process, so a later retry (or the background warm) could never take effect.
     if games:
