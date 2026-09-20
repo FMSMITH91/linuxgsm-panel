@@ -26,6 +26,7 @@ from panel.security.auth import (INSTALL_SERVER, MANAGE_SERVERS, UNINSTALL_SERVE
 import threading
 import time
 from panel.core.http import (_form_err, _form_ok, _log_and_generic, _wants_json)
+from panel.core import terminal
 from panel.core.validation import (GAME_TYPE_RE, INSTANCE_NAME_RE, MAX_PORT, MIN_PORT,
     SAFE_LABEL_RE, _port_or)
 from app import (_extract_start_error, _log, _prune_jobs,
@@ -261,6 +262,17 @@ def register(app):
             needs a Steam account owning it, one LinuxGSM caps at an older Ubuntu, one SteamCMD
             has no build of for this platform. The row then offers Remove instead of Retry.
             """
+            # Strip the ANSI before it goes anywhere. LinuxGSM and SteamCMD colour their output,
+            # and the last 300 bytes of a failed install is nearly all escape sequences — which is
+            # what the operator was shown, verbatim:
+            #
+            #   info...\x1b[0mOK \x1b[0mERROR! Failed to install app '222860' (Invalid platform)
+            #   \x1b[0mUnloading Steam API...\x1b[0mOK \x1b[0m\x1b[31mFailure!\x1b[0m Installing…
+            #
+            # The panel has had strip_escapes since the console was written; this path just never
+            # called it. Collapse the whitespace too: the raw tail arrives full of \r and column
+            # padding that turns one sentence into five ragged lines in a corner card.
+            detail = " ".join(terminal.strip_escapes(detail or "").split())
             with _install_lock:
                 j = _install_jobs.get(gs_id)
                 cur = j["step"] if j else 0

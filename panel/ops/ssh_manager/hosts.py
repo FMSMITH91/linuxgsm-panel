@@ -653,11 +653,23 @@ def classify_install_failure(output):
             "that owns it. Put a Steam username and password in the server's LinuxGSM config "
             "(steamuser / steampass) and install again."))
     if "invalid platform" in low:
+        # Chased to the bottom on the test host for Left 4 Dead 2 (app 222860), because LinuxGSM's
+        # own hint — "Check steamcmdforcewindows setting and system architecture" — sends you
+        # looking at your machine, and the machine is not the problem:
+        #
+        #   app_info_print 222860:  depots 222862 oslist=windows, 222863 oslist=LINUX
+        #                           launch > 0  > config  oslist=windows      <- the only one
+        #
+        # A Linux depot exists; the app publishes no Linux LAUNCH configuration, and that is what
+        # SteamCMD checks. `+@sSteamCmdForcePlatformType linux` fails identically, so it is not
+        # the invocation either. And steamcmdforcewindows would fetch the Windows binaries, which
+        # ./srcds_run cannot execute here — the hint is a dead end for this class of failure.
         return ("steam_platform", (
-            "SteamCMD has no download of this game for this platform — it refused with "
-            "\"Invalid platform\". Nothing about the host changes that, so installing again will "
-            "fail the same way. If you own the game, a Steam login that owns it sometimes has "
-            "access to a build this one does not."))
+            "Steam does not publish this game's dedicated server for Linux. SteamCMD refused it "
+            "with \"Invalid platform\": the app is marked as launching on Windows only, which no "
+            "setting on this host changes — forcing the platform fails the same way, and the "
+            "steamcmdforcewindows option would download Windows binaries that cannot run here. "
+            "This one cannot be installed on a Linux host."))
     m = re.search(r"is not supported on ([^\r\n(]{3,60})", text)
     if m:
         return ("os_unsupported", (

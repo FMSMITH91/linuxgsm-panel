@@ -718,6 +718,29 @@ try:
 
     from panel.core.panel_state import (_install_jobs as _install_jobs_sm,
                                         _install_lock as _install_lock_sm)
+    # ── the recorded reason must be READABLE ────────────────────────────────────────────────────
+    # LinuxGSM and SteamCMD colour their output, and the last 300 bytes of a failed install is
+    # nearly all escape sequences. That is what the corner card showed, verbatim:
+    #
+    #   info...\x1b[0mOK \x1b[0mERROR! Failed to install app '222860' (Invalid platform)
+    #   \x1b[0mUnloading Steam API...\x1b[0mOK \x1b[0m\x1b[31mFailure!\x1b[0m Installing l4d2server…
+    #
+    # The panel has had strip_escapes since the console was written; this path never called it.
+    from panel.core import terminal as _t_esc
+    _raw_tail = ("info...\x1b[0mOK \x1b[0mERROR! Failed to install app '222860' (Invalid "
+                 "platform)\r\n   \x1b[0m\x1b[31mFailure!\x1b[0m Installing l4d2server")
+    _clean = " ".join(_t_esc.strip_escapes(_raw_tail).split())
+    check("install failure: the recorded reason carries no ANSI escapes",
+          "\x1b" not in _clean and "[0m" not in _clean, repr(_clean)[:120])
+    check("install failure: ...and is one line, not the raw column padding",
+          "\r" not in _clean and "\n" not in _clean and "   " not in _clean, repr(_clean)[:120])
+    check("install failure: ...with the actual message still in it",
+          "Invalid platform" in _clean and "l4d2server" in _clean, repr(_clean)[:120])
+    _ms_esc = open(os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+                                "panel", "routes", "manage_servers.py"), encoding="utf-8").read()
+    check("install failure: _fail strips before recording, so every caller benefits",
+          'detail = " ".join(terminal.strip_escapes(detail or "").split())' in _ms_esc)
+
     # ── a failed install has to say WHY, and offer the two things you can actually do ───────────
     # The row said "Failed" and nothing else. The reason lived in the install job's memory until
     # the panel restarted; Retry did not exist; and Remove was on the host page, a different page
