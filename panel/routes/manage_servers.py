@@ -23,6 +23,7 @@ from panel.ops import ssh_manager as _sm
 from panel.security.auth import (INSTALL_SERVER, MANAGE_SERVERS, UNINSTALL_SERVER,
     accessible_remote_ids, get_game, get_remote, log_action, permission_required,
     server_access_required)
+import shlex
 import threading
 import time
 from panel.core.http import (_form_err, _form_ok, _log_and_generic, _wants_json)
@@ -556,6 +557,40 @@ def register(app):
                             _sm.run_command(remote, f"sudo -u {short_name} bash -c \"echo 'eula=true' > /home/{short_name}/serverfiles/eula.txt 2>/dev/null; true\"", timeout=15, sudo=False)
                         except Exception:
                             _log.debug("_run: ignored non-fatal error", exc_info=True)
+                    # SCP: Secret Laboratory has the same problem Minecraft has, in a form that is
+                    # harder to see. Its launcher stops and ASKS:
+                    #
+                    #   Before starting please read and accept the SCP:SL EULA.
+                    #   Do you accept the EULA? [yes/no]
+                    #
+                    # Nothing is there to answer it, so LocalAdmin sits at the prompt for ever.
+                    # LinuxGSM reports STARTED (a tmux session exists), the game itself never
+                    # launches, and no port is ever opened — found while installing the LinuxGSM
+                    # catalogue, where it looked like a server that ran and served nobody.
+                    #
+                    # LocalAdmin records the answer in its own config, so write it there, exactly
+                    # as the line above writes Minecraft's eula.txt. Proven on the test host: with
+                    # EulaAccepted set, SCPSL.x86_64 launches and the console reaches "Waiting for
+                    # players...". Best-effort and idempotent — an existing file is edited, not
+                    # replaced, so nothing else in it is lost.
+                    if gs.game_type in ("scpsl", "scpslsm"):
+                        _eula_py = (
+                            "import json,io,os,datetime;"
+                            "p=os.path.expanduser('~/.config/SCP Secret Laboratory/config/"
+                            "localadmin_internal_data.json');"
+                            "os.makedirs(os.path.dirname(p),exist_ok=True);"
+                            "d=json.load(io.open(p,encoding='utf-8-sig')) if os.path.exists(p) else {};"
+                            "d['EulaAccepted']=datetime.datetime.now(datetime.timezone.utc)"
+                            ".strftime('%Y-%m-%dT%H:%M:%S.%f0Z');"
+                            "io.open(p,'w',encoding='utf-8').write(json.dumps(d))"
+                        )
+                        try:
+                            _sm.run_command(remote,
+                                            "sudo -u %s python3 -c %s"
+                                            % (shlex.quote(short_name), shlex.quote(_eula_py)),
+                                            timeout=20, sudo=False)
+                        except Exception:
+                            _log.debug("_run: ignored non-fatal error", exc_info=True)
                     # Source/GoldSrc: make the server reload its ban list on every start, so a banid
                     # ban actually survives a restart (without this the engine drops it on reboot and
                     # the player rejoins). Best-effort.
@@ -611,6 +646,35 @@ def register(app):
                         remote_ufw_allow_game_ports(remote, to_open, short_name)
                     except Exception:
                         _log.debug("_run: ignored non-fatal error", exc_info=True)
+
+                    # SCP:SL keeps its config PER PORT — ~/.config/SCP Secret Laboratory/config/<port>/
+                    # — and when a port has no config yet, LocalAdmin prints its settings and asks
+                    #
+                    #     Do you want to edit that configuration? [edit/keep]:
+                    #
+                    # which nothing answers inside a tmux session, so the start hangs there for
+                    # ever. The panel assigns a free port rather than the game's default, so it
+                    # walks into this on EVERY install. Seeding the directory from the config
+                    # LinuxGSM already ships is what stops it being asked. Proven on the test host:
+                    # with config/<port>/config_localadmin.txt in place the same start reaches
+                    # "Waiting for players..." instead of the prompt.
+                    #
+                    # HERE, not at step 5: the port is only final once step 6 has decided whether
+                    # to adopt the one LinuxGSM reports.
+                    if gs.game_type in ("scpsl", "scpslsm") and gs.port:
+                        _sl_sh = (
+                            'd="$HOME/.config/SCP Secret Laboratory/config/%d"; mkdir -p "$d"; '
+                            '[ -f "$d/config_localadmin.txt" ] || '
+                            'cp "$HOME/lgsm/config-default/config-game/config_localadmin.txt" '
+                            '"$d/config_localadmin.txt" 2>/dev/null; true' % int(gs.port)
+                        )
+                        try:
+                            _sm.run_command(remote,
+                                            "sudo -u %s bash -c %s"
+                                            % (shlex.quote(short_name), shlex.quote(_sl_sh)),
+                                            timeout=20, sudo=False)
+                        except Exception:
+                            _log.debug("_run: ignored non-fatal error", exc_info=True)
 
                     # 7. Enable autostart by default (the LinuxGSM monitor cron; install_game_cron
                     #    above already adds it when supported — this ensures it either way).
