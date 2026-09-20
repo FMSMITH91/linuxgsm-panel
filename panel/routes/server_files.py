@@ -104,7 +104,17 @@ def register(app, supervise):
     def server_files(server_id):
         """Config editor + live file browser for a game server."""
         gs = get_game(server_id)
-        if not gs.installed:   # files don't exist yet while it's still installing (or after a failure)
+        # A FAILED install is not "still installing", and it is the one state that most needs this
+        # page. Step 2 of the install runs `./linuxgsm.sh <game>`, which writes the whole
+        # lgsm/config-lgsm/<game>/ tree; it is step 4, the download, that fails. So the config the
+        # failure message tells you to edit — `steamuser`, most often — is sitting there, editable,
+        # while this route sent you to a list of servers and said the install was still running.
+        #
+        # The Game Servers page OFFERS this link on a failed row ("Files and config for <name>"),
+        # which made it a dead end you were invited to walk into. Verified in a rendered panel: the
+        # link is there, and both it and the Console link bounced back with "still installing".
+        failed = (gs.status == "failed")
+        if not gs.installed and not failed:
             flash("That server is still installing — its files aren't available until it's done.", "info")
             return redirect(url_for("manage_servers"))
         if not _can_manage_files():
@@ -115,6 +125,9 @@ def register(app, supervise):
         actions, maintenance, _all_cmds, _sup = _server_action_buttons(app, gs)
         return render_template("server_files.html", server=gs, remote=gs.remote,
                                actions=actions, maintenance=maintenance,
+                               # The game files never landed, so the browser has nothing to show
+                               # and the page says why instead of rendering an empty tree.
+                               install_failed=failed,
                                # Every cron line on this page fires on the HOST's clock. Without
                                # saying which clock that is, "Daily 5am" is a number with no
                                # meaning — and the panel's own bootstrap sets new hosts to UTC.

@@ -93,6 +93,24 @@
   </div>
 </div>
 
+{% if install_failed %}
+{# The install failed before the game files downloaded. The LinuxGSM config below is real and
+   editable — it is written by step 2, while it is the download that failed — and it is where the
+   usual causes are fixed (a Steam login, most often). Say that, rather than presenting a file
+   browser over a directory that does not exist. #}
+<div class="alert alert-warning d-flex gap-2 align-items-start" role="alert">
+  <i class="bi bi-exclamation-triangle-fill mt-1"></i>
+  <div>
+    <strong>This install failed — the game files never downloaded.</strong>
+    <div class="small mt-1">
+      The LinuxGSM config below is still here and can be edited. If the install failed for a
+      setting — a Steam login for a game that needs an account owning it, for instance — change it
+      here, then install the server again.
+    </div>
+  </div>
+</div>
+{% endif %}
+
 <!-- Page-level tabs — same set as the server detail page, so Files & Config reads as a tab of it. -->
 {% include "_server_actions.html" %}
 
@@ -146,6 +164,9 @@
 </div>
 
 <!-- File browser -->
+{# No serverfiles directory to browse when the download never happened — the config tabs above are
+   the whole point of the page in that state. #}
+{% if not install_failed %}
 <div class="card" id="file-browser">
   <div class="card-header d-flex justify-content-between align-items-center flex-wrap gap-2">
     <span><i class="bi bi-hdd"></i> File Browser</span>
@@ -211,9 +232,11 @@
     </div>
   </div>
 </div>
+{% endif %}{# not install_failed — the file browser #}
 
-{% if current_user.is_superadmin %}
-<!-- Backups (this server) — reuses the existing game-backup endpoints; superadmin only -->
+{% if current_user.is_superadmin and not install_failed %}
+<!-- Backups (this server) — reuses the existing game-backup endpoints; superadmin only.
+     Nothing to back up when the game files never downloaded. -->
 <div class="card mt-3" id="backup-card">
   <div class="card-header d-flex justify-content-between align-items-center flex-wrap gap-2">
     <span><i class="bi bi-archive"></i> Backups</span>
@@ -366,6 +389,8 @@
   </div>
 </div>
 
+{# Mods install INTO serverfiles, so there is nowhere to put one until the game files download. #}
+{% if not install_failed %}
 <!-- Mods / addons -->
 <div class="card mt-3" id="mods-card">
   <div class="card-header d-flex justify-content-between align-items-center flex-wrap gap-2">
@@ -388,6 +413,7 @@
     <span id="mods-msg" class="small"></span>
   </div>
 </div>
+{% endif %}{# not install_failed — mods #}
 
 {% endblock %}
 {% block scripts %}

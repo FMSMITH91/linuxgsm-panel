@@ -70,7 +70,15 @@ def register(app):
     @server_access_required
     def server_detail(server_id):
         gs = get_game(server_id)
-        if not gs.installed:   # still installing (or a failed install) — nothing to show a console for yet
+        if not gs.installed:
+            # A server that never finished installing has no console to show either way — but say
+            # which of the two it is. "Still installing" for an install that FAILED sends the
+            # operator away to wait for something that is not going to happen, and the Game Servers
+            # page offers this link on a failed row.
+            if gs.status == "failed":
+                flash("That install failed, so there's no console yet — its LinuxGSM config is on "
+                      "the Files & Config page if the failure asked you to change a setting.", "warning")
+                return redirect(url_for("server_files", server_id=gs.id))
             flash("That server is still installing — its console isn't available until it's done.", "info")
             return redirect(url_for("manage_servers"))
         remote = gs.remote
