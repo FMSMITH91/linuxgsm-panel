@@ -250,7 +250,7 @@ def register(app):
                     j["message"] = message
                 j["log"].append(f"[{step}/{j['total']}] {name}")
 
-        def _fail(name, detail="", retryable=True):
+        def _fail(name, detail="", retryable=True, explained=False):
             """Record a failed install — in the live job AND on the row.
 
             The job dict is in memory, so until now the reason existed only until the panel
@@ -261,6 +261,14 @@ def register(app):
             `retryable` is False for the causes nothing about trying again changes — a game that
             needs a Steam account owning it, one LinuxGSM caps at an older Ubuntu, one SteamCMD
             has no build of for this platform. The row then offers Remove instead of Retry.
+
+            `explained` means `name` IS the whole explanation, so the raw tail is not appended to
+            it on the row. It matters because the tail is the tool's own last word, and the tool
+            is sometimes wrong: LinuxGSM ends an "Invalid platform" failure with "Check
+            steamcmdforcewindows setting and system architecture", which points at the host, and
+            the host is not the problem (the app publishes no Linux launch configuration — proven
+            on the test box). Appending that after the correct sentence undoes it. The tail still
+            goes to the live job, which is where the unabridged output belongs.
             """
             # Strip the ANSI before it goes anywhere. LinuxGSM and SteamCMD colour their output,
             # and the last 300 bytes of a failed install is nearly all escape sequences — which is
@@ -281,11 +289,16 @@ def register(app):
                 from panel.db.models import db as _db, GameServer as _GS
                 _row = _db.session.get(_GS, gs_id)
                 if _row is not None:
-                    _row.install_error = (("%s: %s" % (name, detail)) if detail else name)[:1000]
+                    _row.install_error = (name if (explained or not detail)
+                                          else "%s: %s" % (name, detail))[:1000]
                     _row.install_retryable = bool(retryable)
                     _db.session.commit()
             except Exception:
                 _log.debug("could not record the install failure on the row", exc_info=True)
+            # Tell every open dashboard immediately, rather than leaving the explanation to appear
+            # whenever someone happens to reload. The row's status flips on the next status poll
+            # either way; this is what brings the REASON and its buttons with it.
+            _notify_servers_changed(app)
 
         def _finish(msg, warn=False):
             # A install that got here worked, whatever happened on an earlier attempt — clear the
@@ -298,6 +311,7 @@ def register(app):
                     _db.session.commit()
             except Exception:
                 _log.debug("could not clear the install failure on the row", exc_info=True)
+            _notify_servers_changed(app)   # a finished install clears a banner as surely as one appears
             with _install_lock:
                 j = _install_jobs.get(gs_id)
                 if j is not None:
@@ -413,6 +427,7 @@ def register(app):
                     installed_ok = False
                     last_out = ""
                     why = None
+                    primed_windows = False
                     for attempt in range(3):
                         _p(4, "Downloading game server files (this can take a while)"
                               + ("" if attempt == 0 else " — retry %d" % attempt))
@@ -439,6 +454,38 @@ def register(app):
                         # slot, a game LinuxGSM does not support on this release. Retrying those
                         # costs up to an hour and ends with the same wrong "may be corrupt" advice.
                         why = classify_install_failure(last_out)
+                        # ...except "Invalid platform", which CAN be fixed — it is a SteamCMD bug,
+                        # and LinuxGSM's maintainer found the way through it in
+                        # GameServerManagers/LinuxGSM#4754 (still open): set steamcmdforcewindows,
+                        # install (which pulls the Windows depot and gets SteamCMD past its own
+                        # refusal), unset it, then validate, which pulls the Linux binaries.
+                        #
+                        # The panel does that ITSELF. The alternative is telling an operator to go
+                        # and read a GitHub thread, which is the opposite of what this is for.
+                        # Once per install: if priming does not take, the next pass reports it
+                        # rather than looping.
+                        if why and why[0] == "steam_platform" and not primed_windows:
+                            primed_windows = True
+                            try:
+                                _p(4, "Working around a SteamCMD bug (priming with the Windows "
+                                      "depot — this downloads twice, so it takes a while)")
+                                lgsm_write_config(remote, short_name, lgsm_name,
+                                                  {"steamcmdforcewindows": "yes"})
+                                out, err, rc = _sm.run_command(remote, auto, timeout=2700, sudo=False)
+                                last_out = out or err or last_out
+                                # "no", not a delete: LinuxGSM tests `== "yes"`, and
+                                # lgsm_write_config replaces a key in place rather than removing
+                                # one, so this is the same thing through the safe writer.
+                                lgsm_write_config(remote, short_name, lgsm_name,
+                                                  {"steamcmdforcewindows": "no"})
+                                _p(4, "Fetching the Linux server binaries")
+                                _sm.run_as_game_user(remote, short_name, "validate",
+                                                     timeout=2700, selfname=gs.lgsm_name)
+                            except Exception:
+                                _log.warning("install %s: the Invalid-platform workaround failed",
+                                             short_name, exc_info=True)
+                            why = None          # judge it on what the next pass finds
+                            continue
                         if why:
                             break
                         # Not really installed: wipe LinuxGSM's cached (likely corrupt) archive so the
@@ -457,7 +504,7 @@ def register(app):
                         _fail(why[1] if why else
                               ("Game files didn't install after 3 tries — the download may be corrupt "
                                "or the mirror unreachable. Try again shortly."),
-                              last_out[-300:], retryable=not why); return
+                              last_out[-300:], retryable=not why, explained=bool(why)); return
                     # Files have landed — the server IS installed, but it still needs configuring
                     # and starting (steps 5-8). Use a distinct "configuring" status (NOT "installing")
                     # so the state model is honest: the status poller skips it just like "installing"

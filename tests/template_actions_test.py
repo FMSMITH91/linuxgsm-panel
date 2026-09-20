@@ -1750,6 +1750,82 @@ check("\\d{1,9}" in _subj, "js: ...from digits only, not from arbitrary text")
 check("if(!repo)" in _subj and "createTextNode(text)" in _subj,
       "js: ...and renders plain text when there is no vetted repo URL")
 
+# ── a top-level getElementById must never be dereferenced unguarded ───────────────────────────
+# server_files.html stopped rendering the File Browser, Backups and Mods cards for a server whose
+# install FAILED — there is no serverfiles to browse, back up or install a mod into. Two top-level
+# listeners in server_files.js then dereferenced #file-list and #breadcrumb, which live inside the
+# card that was gone. They ran BEFORE loadConfig/loadCron/loadAlerts, so the null threw and took
+# the rest of the file with it: the page opened with "Loading config…", "Loading scheduled tasks…"
+# and "Loading alert settings…" stuck forever — on the one page a failed install is fixed from.
+#
+# Every other top-level dereference in that file was already guarded, which is what made this easy
+# to miss. So gate the shape rather than the two names: a statement at column 0 that reaches
+# through getElementById without checking it is a page-wide crash waiting for a template change.
+import re as _re_dom
+for _js in ("server_files.js", "dashboard.js", "server_detail.js", "manage_servers.js"):
+    _src = (ROOT / "static" / "js" / _js).read_text(encoding="utf-8")
+    _bad = [ln for ln in _src.splitlines()
+            if _re_dom.match(r"document\.getElementById\('[^']+'\)\s*\.", ln)]
+    check(not _bad,
+          "js: %s dereferences no element at top level without checking it" % _js,
+          "; ".join(_bad)[:200])
+
+# ── a failure that happens while you are LOOKING has to appear ────────────────────────────────
+# The failed-install banner is rendered by the server, per host. When an install failed on a page
+# already open, the status cell flipped to "Failed" (the poll writes that) and the explanation —
+# the reason, Retry, Remove — did not appear until a manual reload. A row saying Failed with
+# nothing to act on is the state this whole feature exists to remove.
+#
+# The poll compares the failed set the API reports against the banners on screen and re-renders
+# the card region when they disagree. Verified in a rendered panel: installing -> failed, one
+# poll, banner present with its three buttons, no page reload — and a second poll fetches nothing,
+# because the sets now match.
+_dashjs2 = (ROOT / "static" / "js" / "dashboard.js").read_text(encoding="utf-8")
+check("failedShown" in _dashjs2 and "refreshSection('#server-cards')" in _dashjs2,
+      "dashboard: a failure appearing while the page is open re-renders the card region")
+check("failedNow !== failedShown" in _dashjs2,
+      "dashboard: ...only when the banners disagree with the API, so it settles after one pass",
+      "an unconditional refresh would re-fetch the page on every poll")
+_dash_tpl2 = (ROOT / "templates" / "dashboard.html").read_text(encoding="utf-8")
+check('class="install-failed alert alert-warning mb-0 mx-2 mt-2 py-2 px-3"\n         data-server-id='
+      in _dash_tpl2,
+      "dashboard: ...and each banner carries the id the comparison reads")
+
+# ── an install in progress is not a possible failure ──────────────────────────────────────────
+# The tile under Offline read "+1 installing or failed", in warning yellow, for an install that was
+# running perfectly normally. Installing and failed are different news — one is the panel doing
+# what it was asked to, the other is something to look at — so they are counted apart, and the
+# yellow is kept for the half that earns it.
+# Scoped to what is EMITTED, not to the file: both places still explain the old wording in a
+# comment, and a whole-file substring scan reads that prose as if it were the code. Same defect as
+# the install.sh sudoers gate — a source gate that cannot tell a comment from a line.
+_dash_tpl = (ROOT / "templates" / "dashboard.html").read_text(encoding="utf-8")
+_tile = _dash_tpl[_dash_tpl.index('id="offline-other"'):]
+_tile = _tile[:_tile.index("</div>")]
+check("installing or failed" not in _tile,
+      "dashboard: an install in progress is not lumped in with a failure",
+      "the tile still emits 'installing or failed'")
+check("{% set n_failed =" in _dash_tpl and "{% set n_installing =" in _dash_tpl,
+      "dashboard: ...the two are counted separately")
+check("{% if n_failed %}text-warning{% else %}text-secondary{% endif %}" in _dash_tpl,
+      "dashboard: ...and only a real failure is coloured as a warning")
+_dashjs = (ROOT / "static" / "js" / "dashboard.js").read_text(encoding="utf-8")
+_setline = [ln for ln in _dashjs.splitlines()
+            if "oo.textContent" in ln or ("' installing" in ln and "//" not in ln.split("'")[0])]
+check(_setline and not any("installing or failed" in ln for ln in _setline),
+      "dashboard: ...in the poll too, which rewrites this line every few seconds",
+      "the poll puts the old wording straight back: %r" % (_setline[:1] or "no assignment found"))
+# The poll builds the same shape the template renders — counts and words in separate elements —
+# because base.html's walker matches a text node's EXACT text against the catalog, and "+1
+# installing" welded into one node can never match anything.
+_oo = _dashjs[_dashjs.index("var oo = document.getElementById('offline-other')"):]
+_oo = _oo[:_oo.index("// Total online")]
+check("mk('installing')" in _oo and "mk('failed')" in _oo,
+      "dashboard: ...and the poll gives each word its own element, so it can be translated",
+      "the poll welds the count to the word again")
+check("if (installing && failed)" in _oo,
+      "dashboard: ...and can say both when both are true")
+
 # ── install progress has to be visible from wherever you are ──────────────────────────────────
 # The progress row lives on the Game Servers page and nowhere else, so an install started from
 # "Install a Server" showed a toast and then nothing at all, and the dashboard listed the server as

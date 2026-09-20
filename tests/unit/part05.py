@@ -1082,16 +1082,19 @@ check("install failure: ...including the 'No License' wording SteamCMD uses",
 check("install failure: an app SteamCMD has no build of for this platform is named",
       (_cif("ERROR! Failed to install app '222860' (Invalid platform)") or (None,))[0]
       == "steam_platform")
-# ...and says the thing that is actually true. Chased to the bottom on the test host for Left 4
-# Dead 2 (app 222860): a LINUX depot exists (222863), but the app's only launch configuration is
-# oslist=windows, and that is what SteamCMD checks. `+@sSteamCmdForcePlatformType linux` fails
-# identically. LinuxGSM's own hint — "Check steamcmdforcewindows setting and system architecture"
-# — points at the host, which is not the problem, so the panel must not repeat it.
+# ...and says the thing that is actually true, which took two wrong answers to reach. It is NOT
+# "Steam dropped Linux support": app 222860 has both depots (222862 windows, 222863 LINUX) and one
+# launch entry, oslist=windows, which is what SteamCMD checks. It is a SteamCMD bug, and LinuxGSM's
+# maintainer published the way through it in GameServerManagers/LinuxGSM#4754 — install with
+# steamcmdforcewindows=yes, unset it, validate. Proven on the test host: both steps reported
+# "Success! App '222860' fully installed", srcds_linux came out an ELF 32-bit LSB executable, and
+# the server started and listened. So this cause IS retryable, and the message must not tell
+# anyone to give up.
 _cif_plat = (_cif("ERROR! Failed to install app '222860' (Invalid platform)") or (None, ""))[1]
-check("install failure: ...as Steam not publishing a Linux server, not as a host problem",
-      "does not publish" in _cif_plat and "Linux host" in _cif_plat, _cif_plat[:90])
-check("install failure: ...and it does not send the operator after steamcmdforcewindows",
-      "would download Windows binaries that cannot run here" in _cif_plat, _cif_plat[-90:])
+check("install failure: ...as a SteamCMD bug, not as a game that cannot run on Linux",
+      "SteamCMD bug" in _cif_plat and "does have a Linux server" in _cif_plat, _cif_plat[:100])
+check("install failure: ...and says the panel works around it rather than telling you to give up",
+      "automatically" in _cif_plat and "give up" not in _cif_plat.lower(), _cif_plat[-100:])
 check("install failure: a game LinuxGSM caps at an older Ubuntu is named",
       (_cif("Failure! BATTALION: Legacy is not supported on Ubuntu 24.04.5 LTS "
             "(requires 22.04)") or (None,))[0] == "os_unsupported")
