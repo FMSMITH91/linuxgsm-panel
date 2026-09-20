@@ -186,16 +186,43 @@ try:
 
     # Positive control: a valid port IS accepted and IS what gets stored. Without this the block
     # above would pass against a route that refuses everything.
+    #
+    # resolve_free_port is stubbed, because it SCANS THE HOST'S LISTENING PORTS. Unstubbed, this
+    # check asserts a property of the machine rather than of the route: it passed on a dev box with
+    # nothing on 28960 and failed on the test VPS, which runs a real CoD server there — the route
+    # correctly reassigned to 28961 and the check called that a bug. The route's contract is
+    # "stores what it was given WHEN THAT PORT IS FREE", so the allocator has to be the free one.
+    import panel.routes.manage_servers as _ms_mod
+    _o_rfp = _ms_mod.resolve_free_port
     before = servers_count()
-    r = c.post("/servers/add", data={"remote_id": str(local_id), "game_type": "cod",
-                                     "server_name": "ivgood", "port": "28960"},
+    try:
+        _ms_mod.resolve_free_port = lambda remote, remote_id, desired, game_type: (desired, False)
+        r = c.post("/servers/add", data={"remote_id": str(local_id), "game_type": "cod",
+                                         "server_name": "ivgood", "port": "28960"},
+                   follow_redirects=False)
+        check("/servers/add accepts a valid port (positive control)",
+              servers_count() == before + 1,
+              "row count went %d -> %d, status %d" % (before, servers_count(), r.status_code))
+        with app.app_context():
+            _gs = GameServer.query.filter_by(short_name="ivgood").first()
+            check("/servers/add stores the port it was given",
+                  _gs is not None and _gs.port == 28960,
+                  "stored %s" % (getattr(_gs, "port", None),))
+
+        # ...and the OTHER half of the contract, which nothing asserted: a TAKEN port is
+        # reassigned rather than stored. That is what the host-dependent version was accidentally
+        # observing on the VPS, so pin it deliberately instead.
+        _ms_mod.resolve_free_port = lambda remote, remote_id, desired, game_type: (desired + 1, True)
+        c.post("/servers/add", data={"remote_id": str(local_id), "game_type": "cod",
+                                     "server_name": "ivtaken", "port": "28960"},
                follow_redirects=False)
-    check("/servers/add accepts a valid port (positive control)", servers_count() == before + 1,
-          "row count went %d -> %d, status %d" % (before, servers_count(), r.status_code))
-    with app.app_context():
-        _gs = GameServer.query.filter_by(short_name="ivgood").first()
-        check("/servers/add stores the port it was given", _gs is not None and _gs.port == 28960,
-              "stored %s" % (getattr(_gs, "port", None),))
+        with app.app_context():
+            _gs2 = GameServer.query.filter_by(short_name="ivtaken").first()
+            check("/servers/add stores the REASSIGNED port when the one asked for is taken",
+                  _gs2 is not None and _gs2.port == 28961,
+                  "stored %s" % (getattr(_gs2, "port", None),))
+    finally:
+        _ms_mod.resolve_free_port = _o_rfp
 
     # int() accepts these and they name a real port, so they must still work.
     for ok_val in _ODD_BUT_VALID:
