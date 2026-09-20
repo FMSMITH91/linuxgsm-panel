@@ -90,10 +90,36 @@ function refreshStatus() {
       // agree while this one kept claiming the old count — the tile contradicting its own
       // arithmetic, which is the confusion the comment beside it says it exists to prevent.
       // Hidden rather than removed when it reaches zero, so it can come back without a reload.
-      var other = data.length - online - offline;
+      // Installing and failed are counted APART. An install in progress is the panel doing what
+      // it was asked to; a failure is something to look at. One warning-yellow "+N installing or
+      // failed" made every ordinary install read as a possible fault.
+      var failed = data.filter(function(s){ return s.status === 'failed'; }).length;
+      var installing = data.length - online - offline - failed;
+      var other = installing + failed;
       var oo = document.getElementById('offline-other');
       if (oo) {
-        oo.textContent = '+' + other + ' installing or failed';
+        // Same shape the template renders: counts and words in separate elements. A single text
+        // node reading "+1 installing" can never be translated — base.html's walker matches a
+        // node's EXACT text against the catalog, and the count changes it every time.
+        var mk = function(txt, noI18n){
+          var e = document.createElement('span');
+          e.textContent = txt;
+          if (noI18n) e.setAttribute('data-no-i18n', '');
+          return e;
+        };
+        oo.textContent = '';
+        if (installing) {
+          oo.appendChild(mk('+' + installing, true));
+          oo.appendChild(document.createTextNode(' '));
+          oo.appendChild(mk('installing'));
+        }
+        if (installing && failed) oo.appendChild(mk(', ', true));
+        if (failed) {
+          oo.appendChild(mk((installing ? '' : '+') + failed, true));
+          oo.appendChild(document.createTextNode(' '));
+          oo.appendChild(mk('failed'));
+        }
+        oo.className = 'small mt-1 ' + (failed ? 'text-warning' : 'text-secondary');
         oo.hidden = other <= 0;
       }
       // Total online / total capacity = sums of the known per-server values (unknowns excluded).

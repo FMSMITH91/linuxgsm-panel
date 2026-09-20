@@ -422,6 +422,7 @@ def register(app):
                     installed_ok = False
                     last_out = ""
                     why = None
+                    primed_windows = False
                     for attempt in range(3):
                         _p(4, "Downloading game server files (this can take a while)"
                               + ("" if attempt == 0 else " — retry %d" % attempt))
@@ -448,6 +449,38 @@ def register(app):
                         # slot, a game LinuxGSM does not support on this release. Retrying those
                         # costs up to an hour and ends with the same wrong "may be corrupt" advice.
                         why = classify_install_failure(last_out)
+                        # ...except "Invalid platform", which CAN be fixed — it is a SteamCMD bug,
+                        # and LinuxGSM's maintainer found the way through it in
+                        # GameServerManagers/LinuxGSM#4754 (still open): set steamcmdforcewindows,
+                        # install (which pulls the Windows depot and gets SteamCMD past its own
+                        # refusal), unset it, then validate, which pulls the Linux binaries.
+                        #
+                        # The panel does that ITSELF. The alternative is telling an operator to go
+                        # and read a GitHub thread, which is the opposite of what this is for.
+                        # Once per install: if priming does not take, the next pass reports it
+                        # rather than looping.
+                        if why and why[0] == "steam_platform" and not primed_windows:
+                            primed_windows = True
+                            try:
+                                _p(4, "Working around a SteamCMD bug (priming with the Windows "
+                                      "depot — this downloads twice, so it takes a while)")
+                                lgsm_write_config(remote, short_name, lgsm_name,
+                                                  {"steamcmdforcewindows": "yes"})
+                                out, err, rc = _sm.run_command(remote, auto, timeout=2700, sudo=False)
+                                last_out = out or err or last_out
+                                # "no", not a delete: LinuxGSM tests `== "yes"`, and
+                                # lgsm_write_config replaces a key in place rather than removing
+                                # one, so this is the same thing through the safe writer.
+                                lgsm_write_config(remote, short_name, lgsm_name,
+                                                  {"steamcmdforcewindows": "no"})
+                                _p(4, "Fetching the Linux server binaries")
+                                _sm.run_as_game_user(remote, short_name, "validate",
+                                                     timeout=2700, selfname=gs.lgsm_name)
+                            except Exception:
+                                _log.warning("install %s: the Invalid-platform workaround failed",
+                                             short_name, exc_info=True)
+                            why = None          # judge it on what the next pass finds
+                            continue
                         if why:
                             break
                         # Not really installed: wipe LinuxGSM's cached (likely corrupt) archive so the

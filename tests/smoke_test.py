@@ -754,6 +754,28 @@ try:
     check("install failure: ...while an UNclassified one still carries its tail, which is all it has",
           'else "%s: %s" % (name, detail))' in _ms_esc)
 
+    # ── the install works around SteamCMD's "Invalid platform" bug itself ───────────────────────
+    # Left 4 Dead 2 refuses to install with "ERROR! Failed to install app '222860' (Invalid
+    # platform)". It is not a missing Linux build — the app has a Linux depot (222863) — it is a
+    # SteamCMD bug, and LinuxGSM's maintainer published the way through it in
+    # GameServerManagers/LinuxGSM#4754: install with steamcmdforcewindows=yes (which gets SteamCMD
+    # past its own refusal by pulling the Windows depot), unset it, then validate, which pulls the
+    # Linux binaries.
+    #
+    # Proven on the test host before this was written: both steps reported "Success! App '222860'
+    # fully installed", srcds_linux came out an ELF 32-bit LSB executable, and the server started
+    # and listened on its port with VAC active. Telling an operator to go and read a GitHub thread
+    # is the opposite of what this panel is for, so the install does it.
+    _ms_w = open(os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+                              "panel", "routes", "manage_servers.py"), encoding="utf-8").read()
+    check("install: an Invalid-platform failure primes with the Windows depot instead of giving up",
+          'why[0] == "steam_platform" and not primed_windows' in _ms_w
+          and '{"steamcmdforcewindows": "yes"}' in _ms_w)
+    check("install: ...then unsets the flag and validates, which is what pulls the Linux binaries",
+          '{"steamcmdforcewindows": "no"}' in _ms_w and '"validate"' in _ms_w)
+    check("install: ...and does it at most once, so a workaround that misses cannot loop",
+          "primed_windows = True" in _ms_w and "primed_windows = False" in _ms_w)
+
     # ── a failed install has to say WHY, and offer the two things you can actually do ───────────
     # The row said "Failed" and nothing else. The reason lived in the install job's memory until
     # the panel restarted; Retry did not exist; and Remove was on the host page, a different page

@@ -626,9 +626,9 @@ def classify_install_failure(output):
                     is what is left when the sweep freed nothing.
       steam_login   the game is not downloadable anonymously — it needs a Steam account that owns
                     it, set in the server's LinuxGSM config.
-      steam_platform  SteamCMD has no download of this app for this platform, whatever the
-                    catalogue says. Seen on the test host for Left 4 Dead 2 ("Failed to install
-                    app '222860' (Invalid platform)").
+      steam_platform  SteamCMD refused the app with "Invalid platform". A SteamCMD bug rather
+                    than a missing Linux build — the two-step install below gets past it, so this
+                    one IS retryable, unlike the other two.
       os_unsupported  LinuxGSM caps this game at an older Ubuntu than the host runs.
 
     Deliberately NOT classified: "Not enough disk space". LinuxGSM prints that for SteamCMD app
@@ -653,23 +653,27 @@ def classify_install_failure(output):
             "that owns it. Put a Steam username and password in the server's LinuxGSM config "
             "(steamuser / steampass) and install again."))
     if "invalid platform" in low:
-        # Chased to the bottom on the test host for Left 4 Dead 2 (app 222860), because LinuxGSM's
-        # own hint — "Check steamcmdforcewindows setting and system architecture" — sends you
-        # looking at your machine, and the machine is not the problem:
+        # NOT "Steam dropped Linux support", which is what this looks like and what the panel said
+        # at first. It is a SteamCMD bug, and LinuxGSM's maintainer found the way through it in
+        # GameServerManagers/LinuxGSM#4754 (still open, last touched 2026-05-03):
         #
-        #   app_info_print 222860:  depots 222862 oslist=windows, 222863 oslist=LINUX
-        #                           launch > 0  > config  oslist=windows      <- the only one
+        #   "The fix is to add steamcmdforcewindows=yes into common.cfg, run the installer and
+        #    then remove steamcmdforcewindows=yes then validate. This will download the windows
+        #    depot then download the linux depot to get the binary. Once done it works. This is
+        #    definitely a bug with SteamCMD"                      — dgibbs64, 2025-06-22
         #
-        # A Linux depot exists; the app publishes no Linux LAUNCH configuration, and that is what
-        # SteamCMD checks. `+@sSteamCmdForcePlatformType linux` fails identically, so it is not
-        # the invocation either. And steamcmdforcewindows would fetch the Windows binaries, which
-        # ./srcds_run cannot execute here — the hint is a dead end for this class of failure.
+        # Which matches what the app metadata says: app 222860 has BOTH depots (222862 windows,
+        # 222863 linux) and one launch entry, oslist=windows. SteamCMD checks the launch entry and
+        # refuses; priming it with the Windows depot gets it past that, and the validate afterwards
+        # pulls the Linux binaries it should have fetched in the first place.
+        #
+        # So the honest answer is "this needs a two-step install", not "give up" — and the panel
+        # does that itself rather than making an operator follow a GitHub thread.
         return ("steam_platform", (
-            "Steam does not publish this game's dedicated server for Linux. SteamCMD refused it "
-            "with \"Invalid platform\": the app is marked as launching on Windows only, which no "
-            "setting on this host changes — forcing the platform fails the same way, and the "
-            "steamcmdforcewindows option would download Windows binaries that cannot run here. "
-            "This one cannot be installed on a Linux host."))
+            "SteamCMD refused this game with \"Invalid platform\" — a known SteamCMD bug, not a "
+            "problem with this host: the game does have a Linux server. The way through it is to "
+            "prime the download with the Windows depot and then validate, which pulls the Linux "
+            "binaries. The panel does that automatically on a retry."))
     m = re.search(r"is not supported on ([^\r\n(]{3,60})", text)
     if m:
         return ("os_unsupported", (

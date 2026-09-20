@@ -1750,6 +1750,41 @@ check("\\d{1,9}" in _subj, "js: ...from digits only, not from arbitrary text")
 check("if(!repo)" in _subj and "createTextNode(text)" in _subj,
       "js: ...and renders plain text when there is no vetted repo URL")
 
+# ── an install in progress is not a possible failure ──────────────────────────────────────────
+# The tile under Offline read "+1 installing or failed", in warning yellow, for an install that was
+# running perfectly normally. Installing and failed are different news — one is the panel doing
+# what it was asked to, the other is something to look at — so they are counted apart, and the
+# yellow is kept for the half that earns it.
+# Scoped to what is EMITTED, not to the file: both places still explain the old wording in a
+# comment, and a whole-file substring scan reads that prose as if it were the code. Same defect as
+# the install.sh sudoers gate — a source gate that cannot tell a comment from a line.
+_dash_tpl = (ROOT / "templates" / "dashboard.html").read_text(encoding="utf-8")
+_tile = _dash_tpl[_dash_tpl.index('id="offline-other"'):]
+_tile = _tile[:_tile.index("</div>")]
+check("installing or failed" not in _tile,
+      "dashboard: an install in progress is not lumped in with a failure",
+      "the tile still emits 'installing or failed'")
+check("{% set n_failed =" in _dash_tpl and "{% set n_installing =" in _dash_tpl,
+      "dashboard: ...the two are counted separately")
+check("{% if n_failed %}text-warning{% else %}text-secondary{% endif %}" in _dash_tpl,
+      "dashboard: ...and only a real failure is coloured as a warning")
+_dashjs = (ROOT / "static" / "js" / "dashboard.js").read_text(encoding="utf-8")
+_setline = [ln for ln in _dashjs.splitlines()
+            if "oo.textContent" in ln or ("' installing" in ln and "//" not in ln.split("'")[0])]
+check(_setline and not any("installing or failed" in ln for ln in _setline),
+      "dashboard: ...in the poll too, which rewrites this line every few seconds",
+      "the poll puts the old wording straight back: %r" % (_setline[:1] or "no assignment found"))
+# The poll builds the same shape the template renders — counts and words in separate elements —
+# because base.html's walker matches a text node's EXACT text against the catalog, and "+1
+# installing" welded into one node can never match anything.
+_oo = _dashjs[_dashjs.index("var oo = document.getElementById('offline-other')"):]
+_oo = _oo[:_oo.index("// Total online")]
+check("mk('installing')" in _oo and "mk('failed')" in _oo,
+      "dashboard: ...and the poll gives each word its own element, so it can be translated",
+      "the poll welds the count to the word again")
+check("if (installing && failed)" in _oo,
+      "dashboard: ...and can say both when both are true")
+
 # ── install progress has to be visible from wherever you are ──────────────────────────────────
 # The progress row lives on the Game Servers page and nowhere else, so an install started from
 # "Install a Server" showed a toast and then nothing at all, and the dashboard listed the server as

@@ -109,7 +109,12 @@
      they went rather than leaving the reader to notice the arithmetic doesn't close. #}
   {% set n_online = servers|selectattr('status', 'equalto', 'online')|list|length %}
   {% set n_offline = servers|selectattr('status', 'equalto', 'offline')|list|length %}
-  {% set n_other = servers|length - n_online - n_offline %}
+  {# Counted apart, because they are not the same news. An install in progress is the panel doing
+     what it was asked to; a failure is something to look at. Lumping them into one warning-yellow
+     "+N installing or failed" made every ordinary install look like it might have gone wrong. #}
+  {% set n_failed = servers|selectattr('status', 'equalto', 'failed')|list|length %}
+  {% set n_installing = servers|length - n_online - n_offline - n_failed %}
+  {% set n_other = n_installing + n_failed %}
   <div class="h3 mb-0" id="offline-count">
     <span class="status-dot status-offline"></span>
     {{ n_offline }}
@@ -117,7 +122,17 @@
   <div class="text-secondary small">Offline</div>
   {# Always rendered, hidden when zero: the poll updates it in place, and an element that only
      exists when n_other was non-zero AT RENDER can never be updated or brought back. #}
-  <div class="small text-warning mt-1" id="offline-other" {% if not n_other %}hidden{% endif %}>+{{ n_other }} installing or failed</div>
+  {# The counts and the words are separate elements. base.html's walker translates a text node
+     whose exact text is a catalog key, so "+1 installing" welded into one node can never be
+     translated — the count changes it every time. Numbers carry data-no-i18n; the words stand
+     alone and ARE in the catalog. dashboard.js rebuilds this same shape on every poll. #}
+  <div class="small mt-1 {% if n_failed %}text-warning{% else %}text-secondary{% endif %}"
+       id="offline-other" {% if not n_other %}hidden{% endif %}
+       data-installing="{{ n_installing }}" data-failed="{{ n_failed }}">
+    {%- if n_installing %}<span data-no-i18n>+{{ n_installing }}</span> <span>installing</span>{% endif -%}
+    {%- if n_installing and n_failed %}<span data-no-i18n>, </span>{% endif -%}
+    {%- if n_failed %}<span data-no-i18n>{% if not n_installing %}+{% endif %}{{ n_failed }}</span> <span>failed</span>{% endif -%}
+  </div>
 {% endmacro %}
 {% macro tile_players() %}
   <div class="h3 mb-0" id="total-players"><i class="bi bi-people-fill text-info"></i> {{ total_players }}{% if total_max %} / {{ total_max }}{% endif %}</div>
