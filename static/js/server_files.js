@@ -20,7 +20,8 @@ function fileIcon(name){
 
 // ── Config tabs ──
 var gameCfgLoaded=false, gameCfgRel=null;
-document.getElementById('cfg-tabs').addEventListener('click', function(ev){
+var _el_cfg_tabs = document.getElementById('cfg-tabs');
+if (_el_cfg_tabs) _el_cfg_tabs.addEventListener('click', function(ev){
   var b=ev.target.closest('[data-tab]'); if(!b) return;
   document.querySelectorAll('#cfg-tabs .nav-link').forEach(function(n){ n.classList.remove('active'); });
   b.classList.add('active');
@@ -71,7 +72,8 @@ function loadConfig(){
   }).catch(()=>{ document.getElementById('cfg-loading').innerHTML='<span class="text-danger">Failed to load config</span>'; });
 }
 // Accordion toggle (delegated).
-document.getElementById('cfg-groups').addEventListener('click', function(ev){
+var _el_cfg_groups = document.getElementById('cfg-groups');
+if (_el_cfg_groups) _el_cfg_groups.addEventListener('click', function(ev){
   var b=ev.target.closest('[data-acc]'); if(!b) return;
   var body=document.querySelector('[data-accbody="'+b.dataset.acc+'"]');
   var ic=b.querySelector('i');
@@ -618,7 +620,14 @@ function doUpload(ev){
 }
 
 // Event delegation for the file list (rows + delete buttons).
-document.getElementById('file-list').addEventListener('click', function(ev){
+// Guarded, because the File Browser is NOT rendered for a server whose install failed — its
+// serverfiles does not exist, so there is nothing to browse. These two listeners are top-level
+// and ran before loadConfig/loadCron/loadAlerts, so a null here threw and took the whole rest of
+// the file with it: the page opened with "Loading config…", "Loading scheduled tasks…" and
+// "Loading alert settings…" all stuck forever, on the one page a failed install has to be fixed
+// from. Every other top-level dereference in this file was already guarded; these two were not.
+var _fileList = document.getElementById('file-list');
+if (_fileList) _fileList.addEventListener('click', function(ev){
   var del = ev.target.closest('[data-action="delete"]');
   if(del){ ev.stopPropagation(); var r=del.closest('[data-path]'); deletePath(r.dataset.path, r.dataset.type==='dir'); return; }
   var dl = ev.target.closest('[data-action="download"]');
@@ -638,8 +647,9 @@ document.getElementById('file-list').addEventListener('click', function(ev){
     openFile(row.dataset.path);
   } else browse(row.dataset.path);
 });
-// Breadcrumb navigation (delegated).
-document.getElementById('breadcrumb').addEventListener('click', function(ev){
+// Breadcrumb navigation (delegated). Guarded for the same reason as #file-list above.
+var _crumb = document.getElementById('breadcrumb');
+if (_crumb) _crumb.addEventListener('click', function(ev){
   var a=ev.target.closest('[data-nav]'); if(a){ ev.preventDefault(); browse(a.getAttribute('data-nav')); }
 });
 // Drag & drop upload — files AND folders, onto the whole File Browser card.
@@ -774,7 +784,8 @@ function cancelCronEdit(){
   document.getElementById('cron-cancel').style.display='none';
   updateCronExplain();
 }
-document.getElementById('cron-tbody').addEventListener('click', function(ev){
+var _el_cron_tbody = document.getElementById('cron-tbody');
+if (_el_cron_tbody) _el_cron_tbody.addEventListener('click', function(ev){
   var row=ev.target.closest('tr[data-raw]'); if(!row) return;
   if(ev.target.closest('[data-cron-edit]')){
     cronEditRaw=row.getAttribute('data-raw');
@@ -895,8 +906,10 @@ document.getElementById('cron-tbody').addEventListener('click', function(ev){
     nx.textContent = runs.length ? ('Next: '+runs.map(fmtWhen).join('  ·  ')+'   (your browser’s time — the server may use a different zone)') : 'No upcoming runs within a year.';
   };
 })();
-document.getElementById('cron-sched').addEventListener('input', updateCronExplain);
-document.getElementById('cron-presets').addEventListener('click', function(ev){
+var _el_cron_sched = document.getElementById('cron-sched');
+if (_el_cron_sched) _el_cron_sched.addEventListener('input', updateCronExplain);
+var _el_cron_presets = document.getElementById('cron-presets');
+if (_el_cron_presets) _el_cron_presets.addEventListener('click', function(ev){
   var b=ev.target.closest('[data-cron]'); if(!b) return;
   document.getElementById('cron-sched').value=b.getAttribute('data-cron');
   updateCronExplain();
@@ -967,6 +980,12 @@ function modRow(m, installed){
 function loadMods(force){
   var load=document.getElementById('mods-loading'), body=document.getElementById('mods-body'),
       uns=document.getElementById('mods-unsupported');
+  // The Mods card is not rendered for a server whose install FAILED — a mod installs INTO
+  // serverfiles, and there is no serverfiles. This is called at top level, so without the guard
+  // the null threw and took loadBackups() (and anything added after it) with it. Same shape as
+  // the #file-list / #breadcrumb listeners above: the template can legitimately omit the card,
+  // so the code that drives it has to cope with the card being gone.
+  if(!load || !body || !uns) return;
   if(force){ load.style.display=''; body.style.display='none'; uns.style.display='none'; modsMsg(''); }
   fetch(MOUNT+'/api/server/'+serverId+'/mods').then(r=>r.json()).then(function(d){
     if(d.error){ load.innerHTML='<span class="text-danger">'+esc(d.error)+'</span>'; return; }  // nosemgrep

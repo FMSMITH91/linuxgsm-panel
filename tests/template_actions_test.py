@@ -1750,6 +1750,26 @@ check("\\d{1,9}" in _subj, "js: ...from digits only, not from arbitrary text")
 check("if(!repo)" in _subj and "createTextNode(text)" in _subj,
       "js: ...and renders plain text when there is no vetted repo URL")
 
+# ── a top-level getElementById must never be dereferenced unguarded ───────────────────────────
+# server_files.html stopped rendering the File Browser, Backups and Mods cards for a server whose
+# install FAILED — there is no serverfiles to browse, back up or install a mod into. Two top-level
+# listeners in server_files.js then dereferenced #file-list and #breadcrumb, which live inside the
+# card that was gone. They ran BEFORE loadConfig/loadCron/loadAlerts, so the null threw and took
+# the rest of the file with it: the page opened with "Loading config…", "Loading scheduled tasks…"
+# and "Loading alert settings…" stuck forever — on the one page a failed install is fixed from.
+#
+# Every other top-level dereference in that file was already guarded, which is what made this easy
+# to miss. So gate the shape rather than the two names: a statement at column 0 that reaches
+# through getElementById without checking it is a page-wide crash waiting for a template change.
+import re as _re_dom
+for _js in ("server_files.js", "dashboard.js", "server_detail.js", "manage_servers.js"):
+    _src = (ROOT / "static" / "js" / _js).read_text(encoding="utf-8")
+    _bad = [ln for ln in _src.splitlines()
+            if _re_dom.match(r"document\.getElementById\('[^']+'\)\s*\.", ln)]
+    check(not _bad,
+          "js: %s dereferences no element at top level without checking it" % _js,
+          "; ".join(_bad)[:200])
+
 # ── a failure that happens while you are LOOKING has to appear ────────────────────────────────
 # The failed-install banner is rendered by the server, per host. When an install failed on a page
 # already open, the status cell flipped to "Failed" (the poll writes that) and the explanation —
