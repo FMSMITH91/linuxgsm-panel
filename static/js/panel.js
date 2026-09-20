@@ -9,6 +9,33 @@ window.ensureSocket = function(){
   }
   return window.socket;
 };
+// ── Uninstalling a game server ────────────────────────────────────────────────────────────────
+// Lives here, not on the host page, because uninstall was only reachable from Remote Servers ->
+// a host -> the Overview tab -> a table far down it. The servers themselves live on the
+// dashboard, which offered no way to remove one at all. Delegated on document so any page that
+// renders an .uninstall-form gets the same gate, and so it survives a list re-render.
+// Uninstall a game server from the list: in-app confirm + type-the-username gate, then submit the
+// form (a full POST — this admin page reloads to show the server gone). Delegated so it survives
+// any list re-render.
+document.addEventListener('click', function(e){
+  var b = e.target.closest && e.target.closest('.uninstall-trigger');
+  if(!b) return;
+  var form = b.closest('form'); if(!form) return;
+  var name = form.getAttribute('data-server-name') || '';
+  var short = form.getAttribute('data-server-short') || '';
+  confirmDialog({
+    title:'Uninstall server', icon:'trash', confirmClass:'btn-danger', confirmLabel:'Uninstall',
+    body:'Uninstall <strong>'+escapeHtml(name)+'</strong>? This permanently deletes the server, all its files, AND every backup it has — this cannot be undone.',
+    requireText: short,
+    requireLabel:'Type the server’s username ('+short+') to confirm:',
+    // form.submit() is a NATIVE post: no fetch wrapper, so no X-CSRFToken header, so the hidden
+    // field is the only token there is — and this list is re-rendered by refreshSection after an
+    // import, which brings back the server's markup without it. Belt as well as braces: panel.js
+    // re-arms after every swap, and this re-arms the one form about to be submitted.
+    onConfirm:function(){ if (window.ensureCsrfFields) window.ensureCsrfFields(form); form.submit(); }
+  });
+});
+
 window.onServersChanged = function(cb){
   var s = window.ensureSocket();
   if(s){ s.on('servers_changed', cb); }

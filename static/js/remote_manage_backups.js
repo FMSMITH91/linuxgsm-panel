@@ -509,27 +509,9 @@ function clearBackupPassphrase(btn){
     }});
 }
 
-// Uninstall a game server from the list: in-app confirm + type-the-username gate, then submit the
-// form (a full POST — this admin page reloads to show the server gone). Delegated so it survives
-// any list re-render.
-document.addEventListener('click', function(e){
-  var b = e.target.closest && e.target.closest('.uninstall-trigger');
-  if(!b) return;
-  var form = b.closest('form'); if(!form) return;
-  var name = form.getAttribute('data-server-name') || '';
-  var short = form.getAttribute('data-server-short') || '';
-  confirmDialog({
-    title:'Uninstall server', icon:'trash', confirmClass:'btn-danger', confirmLabel:'Uninstall',
-    body:'Uninstall <strong>'+escapeHtml(name)+'</strong>? This permanently deletes the server, all its files, AND every backup it has — this cannot be undone.',
-    requireText: short,
-    requireLabel:'Type the server’s username ('+short+') to confirm:',
-    // form.submit() is a NATIVE post: no fetch wrapper, so no X-CSRFToken header, so the hidden
-    // field is the only token there is — and this list is re-rendered by refreshSection after an
-    // import, which brings back the server's markup without it. Belt as well as braces: panel.js
-    // re-arms after every swap, and this re-arms the one form about to be submitted.
-    onConfirm:function(){ if (window.ensureCsrfFields) window.ensureCsrfFields(form); form.submit(); }
-  });
-});
+// The uninstall confirm used to live here. It moved to panel.js so that the SAME gate — type the
+// server's username, and the warning that this deletes every backup too — works on the dashboard,
+// which is where the servers are. Delegated on document, so both pages get it from one place.
 
 loadSshStatus();                     // public-SSH controls now exist on both local + remote (no-ops if absent)
 if(IS_LOCAL){ checkPanelUpdate(false); loadPanelBranches(); loadIntegrity(); loadDbStats(); loadAutoUpd(); loadBackups(); } // panel-only cards

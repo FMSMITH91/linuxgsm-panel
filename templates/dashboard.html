@@ -258,13 +258,13 @@
             </a>
             {% endif %}
             {% if can_uninstall %}
+            {# The SAME gate as the row's own Uninstall and the host page — type the username.
+               This used to take a plain yes/no, a weaker confirmation for an identical,
+               irreversible action on the same object. #}
             <form method="POST" action="{{ url_for('uninstall_server', server_id=srv.id) }}"
-                  class="ajax-form d-inline"
-                  data-confirm="Remove {{ srv.name }} and everything it downloaded?"
-                  data-confirm-title="Remove this server"
-                  data-confirm-label="Remove"
-                  data-confirm-class="btn-danger">
-              <button type="submit" class="btn btn-sm btn-outline-danger">
+                  class="uninstall-form d-inline" data-server-name="{{ srv.name }}"
+                  data-server-short="{{ srv.short_name }}">
+              <button type="button" class="btn btn-sm btn-outline-danger uninstall-trigger">
                 <i class="bi bi-trash"></i> Remove
               </button>
             </form>
@@ -376,6 +376,20 @@
               <button type="button" class="btn btn-outline-secondary btn-sm" data-action="editServerTags"
                       data-args='[{{ srv.id }}, "@self"]' title="Choose which tags this server carries"
                       aria-label="Edit tags for {{ srv.name }}"><i class="bi bi-tags"></i></button>
+              {% endif %}
+              {% if can_uninstall %}
+              {# Uninstall was reachable only from Remote Servers -> a host -> the Overview tab ->
+                 a table well down it. The servers live HERE, and this page offered no way to
+                 remove one — so in practice there was no way to uninstall a server at all.
+                 Same gate as the host page, deliberately: type the server's username, and the
+                 warning that this takes every backup with it. panel.js carries it for both. #}
+              <form method="POST" action="{{ url_for('uninstall_server', server_id=srv.id) }}"
+                    class="uninstall-form d-inline" data-server-name="{{ srv.name }}"
+                    data-server-short="{{ srv.short_name }}">
+                <button type="button" class="btn btn-outline-danger btn-sm uninstall-trigger"
+                        title="Uninstall — deletes the server, its files and its backups"
+                        aria-label="Uninstall {{ srv.name }}"><i class="bi bi-trash"></i></button>
+              </form>
               {% endif %}
               {# Same buttons-not-drag reasoning as the host cards, and doubly so here: these rows sit
                  inside a horizontally scrolling .table-responsive wrapper. #}

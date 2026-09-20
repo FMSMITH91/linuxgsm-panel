@@ -1791,6 +1791,34 @@ check('class="install-failed alert alert-warning mb-0 mx-2 mt-2 py-2 px-3"\n    
       in _dash_tpl2,
       "dashboard: ...and each banner carries the id the comparison reads")
 
+# ── you have to be able to uninstall a server ─────────────────────────────────────────────────
+# There was no way to, in practice. The servers live on the dashboard, and the dashboard offered
+# start, restart, stop, console, files, tags and reorder — no remove. The only Uninstall in the
+# panel sat on Remote Servers -> a host -> the Overview tab -> a table well down it, which is not
+# somewhere anyone goes to manage a server.
+#
+# The gate is deliberately the SAME one, not a new weaker prompt: type the server's username, with
+# the warning that this deletes every backup too. It moved from remote_manage_backups.js (host page
+# only) into panel.js so both pages get it from one place, delegated on document so it survives a
+# list re-render.
+_pjs = (ROOT / "static" / "js" / "panel.js").read_text(encoding="utf-8")
+check("uninstall-trigger" in _pjs and "requireText: short" in _pjs,
+      "js: the uninstall gate lives in the shared script, so every page has it")
+_rmb = (ROOT / "static" / "js" / "remote_manage_backups.js").read_text(encoding="utf-8")
+check("uninstall-trigger" not in _rmb,
+      "js: ...and is not a second copy left behind on the host page",
+      "the host page still carries its own handler — two copies will drift")
+_dash_tpl4 = (ROOT / "templates" / "dashboard.html").read_text(encoding="utf-8")
+check(_dash_tpl4.count("uninstall-trigger") == 2,
+      "dashboard: a server can be uninstalled from the row AND from a failed install's banner",
+      "found %d uninstall triggers" % _dash_tpl4.count("uninstall-trigger"))
+check(_dash_tpl4.count('class="uninstall-form d-inline"') == 2
+      and "data-confirm=\"Remove" not in _dash_tpl4,
+      "dashboard: ...both through the type-the-username gate, not a plain yes/no",
+      "one of them still takes a weaker confirmation for the same irreversible action")
+check("{% if can_uninstall %}" in _dash_tpl4,
+      "dashboard: ...and only for someone allowed to uninstall")
+
 # ── the row's controls come back to life without a reload ─────────────────────────────────────
 # The status poll re-enabled start/restart/stop (.srv-ctl) and the console (.srv-console) the
 # moment an install finished — but the Files & Config link had no class to find it by, so it kept
