@@ -249,13 +249,43 @@ def register(app):
                     j["message"] = message
                 j["log"].append(f"[{step}/{j['total']}] {name}")
 
-        def _fail(name, detail=""):
+        def _fail(name, detail="", retryable=True):
+            """Record a failed install — in the live job AND on the row.
+
+            The job dict is in memory, so until now the reason existed only until the panel
+            restarted or the operator navigated away, and the Game Servers row said "Failed" and
+            nothing else. That is the state the user is left in: no reason, no retry, nothing to
+            act on. Persisting it is what lets the row say why and offer the right next step.
+
+            `retryable` is False for the causes nothing about trying again changes — a game that
+            needs a Steam account owning it, one LinuxGSM caps at an older Ubuntu, one SteamCMD
+            has no build of for this platform. The row then offers Remove instead of Retry.
+            """
             with _install_lock:
                 j = _install_jobs.get(gs_id)
                 cur = j["step"] if j else 0
             _p(cur, name, status="failed", message=detail)
+            try:
+                from panel.db.models import db as _db, GameServer as _GS
+                _row = _db.session.get(_GS, gs_id)
+                if _row is not None:
+                    _row.install_error = (("%s: %s" % (name, detail)) if detail else name)[:1000]
+                    _row.install_retryable = bool(retryable)
+                    _db.session.commit()
+            except Exception:
+                _log.debug("could not record the install failure on the row", exc_info=True)
 
         def _finish(msg, warn=False):
+            # A install that got here worked, whatever happened on an earlier attempt — clear the
+            # recorded reason, or a retried server keeps showing the failure it recovered from.
+            try:
+                from panel.db.models import db as _db, GameServer as _GS
+                _row = _db.session.get(_GS, gs_id)
+                if _row is not None and (_row.install_error or not _row.install_retryable):
+                    _row.install_error, _row.install_retryable = "", True
+                    _db.session.commit()
+            except Exception:
+                _log.debug("could not clear the install failure on the row", exc_info=True)
             with _install_lock:
                 j = _install_jobs.get(gs_id)
                 if j is not None:
@@ -409,10 +439,13 @@ def register(app):
                             _log.debug("_run: ignored non-fatal error", exc_info=True)
                     if not installed_ok:
                         gs.installed = False; gs.status = "failed"; db.session.commit()
+                        # A classified cause is one a retry cannot fix — say so, and let the row
+                        # offer Remove rather than a button that will spend another half hour
+                        # arriving at the same line.
                         _fail(why[1] if why else
                               ("Game files didn't install after 3 tries — the download may be corrupt "
                                "or the mirror unreachable. Try again shortly."),
-                              last_out[-300:]); return
+                              last_out[-300:], retryable=not why); return
                     # Files have landed — the server IS installed, but it still needs configuring
                     # and starting (steps 5-8). Use a distinct "configuring" status (NOT "installing")
                     # so the state model is honest: the status poller skips it just like "installing"
@@ -600,6 +633,56 @@ def register(app):
                 app.logger.exception("install job failed")
 
         threading.Thread(target=_run, daemon=True).start()
+
+    @app.route("/servers/<int:server_id>/retry-install", methods=["POST"])
+    @login_required
+    @permission_required(INSTALL_SERVER)
+    @server_access_required
+    def retry_install(server_id):
+        """Run the install again for a row whose install failed.
+
+        A failed install was a dead end: the row said "Failed", the reason lived in memory until
+        the panel restarted, and the only way forward was to delete the server and start over —
+        which also throws away the LinuxGSM config the failure usually asks you to change. The
+        install job is re-entrant by construction (step 1 keeps an account whose linuxgsm.sh is
+        there and rebuilds one whose isn't), so this simply runs it again on the same row.
+
+        Refused for a cause a retry cannot fix. install_retryable is False when the failure was
+        classified — a game needing a Steam account that owns it, one LinuxGSM caps at an older
+        Ubuntu, one SteamCMD has no build of for this platform — and spending another half hour
+        arriving at the same line is not a service to anyone. Changing the config that caused it
+        (a steamuser, say) clears the flag, because that IS a change worth retrying on.
+        """
+        gs = get_game(server_id)
+        if gs.status not in ("failed",) or gs.installed:
+            return _form_err("That server's install didn't fail, so there's nothing to retry.",
+                             "manage_servers")
+        with _install_lock:
+            live = (gs.id in _install_jobs
+                    and _install_jobs[gs.id].get("status") == "running")
+        if live:
+            return _form_err("That install is already running.", "manage_servers")
+        if not gs.install_retryable:
+            return _form_err(
+                "Trying again won't change this one — " + (gs.install_error or "see the reason on "
+                "the row") + " Fix the cause first, or remove the server.", "manage_servers")
+        remote = gs.remote
+        if remote is None:
+            return _form_err("That server's host is gone.", "manage_servers")
+        gs.status = "installing"
+        gs.install_error, gs.install_retryable = "", True
+        db.session.commit()
+        with _install_lock:
+            _install_jobs[gs.id] = {
+                "status": "running", "step": 0, "total": 8, "step_name": "Queued",
+                "message": "", "log": [], "started": time.time(), "updated": time.time(),
+                "name": gs.name,
+            }
+        _run_install_job(gs.id, remote.id, gs.short_name, gs.game_type, gs.lgsm_name, gs.port)
+        _notify_servers_changed(app)   # the corner progress widget picks it up from here
+        log_action(current_user, "retry_install", target=gs.name)
+        return _form_ok(f"Installing {gs.short_name} again. "
+                        f"Progress is shown in the corner while it runs.", "manage_servers")
 
     @app.route("/servers/<int:server_id>/delete", methods=["POST"])
     @login_required

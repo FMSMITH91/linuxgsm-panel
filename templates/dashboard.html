@@ -204,6 +204,65 @@
     </span>
   </div>
   <div class="card-body p-0">
+    {# Failed installs for THIS host, above its table.
+       "Failed", and nothing else, was the whole message. The reason lived in the install job's
+       memory until the panel restarted, Retry did not exist, and Remove was on the host page — a
+       different page from the one showing the failure. So the row reported that something had
+       gone wrong and offered no way to learn what, or to act on it.
+       Outside the table on purpose: sortDashCol sorts every `tbody tr` and filterServers shows or
+       hides each one on its own text and tags, so an extra row would sort away from its server and
+       survive a filter that hid it — and the Server column is 126px wide, which is no place for a
+       reason and three buttons.
+       Which buttons appear depends on the cause: install_retryable is False for the ones nothing
+       about trying again changes. #}
+    {% for srv in servers if srv.remote_id == remote.id and srv.status == 'failed' %}
+    <div class="install-failed alert alert-warning mb-0 mx-2 mt-2 py-2 px-3">
+      <div class="d-flex gap-2 align-items-start">
+        <i class="bi bi-exclamation-triangle-fill mt-1"></i>
+        <div class="flex-grow-1 small">
+          <strong data-no-i18n>{{ srv.name }}</strong> <span>— this install failed.</span>
+          {% if srv.install_error %}
+          <div class="mt-1" data-no-i18n>{{ srv.install_error }}</div>
+          {% else %}
+          <div class="mt-1">No reason was recorded — most likely a panel restart interrupted it.
+            Trying again is the quickest way to find out.</div>
+          {% endif %}
+          {% if not srv.install_retryable %}
+          <div class="mt-1 text-secondary">Trying again won't change this one. Fix the cause, or
+            remove the server.</div>
+          {% endif %}
+          <div class="mt-2 d-flex gap-2 flex-wrap">
+            {% if can_install and srv.install_retryable %}
+            <form method="POST" action="{{ url_for('retry_install', server_id=srv.id) }}"
+                  class="ajax-form d-inline" data-ajax-after="watchInstallsNow">
+              <button type="submit" class="btn btn-sm btn-warning">
+                <i class="bi bi-arrow-clockwise"></i> Retry install
+              </button>
+            </form>
+            {% endif %}
+            {% if can_files %}
+            <a href="{{ url_for('server_files', server_id=srv.id) }}"
+               class="btn btn-sm btn-outline-secondary">
+              <i class="bi bi-folder2-open"></i> Edit its config
+            </a>
+            {% endif %}
+            {% if can_uninstall %}
+            <form method="POST" action="{{ url_for('uninstall_server', server_id=srv.id) }}"
+                  class="ajax-form d-inline"
+                  data-confirm="Remove {{ srv.name }} and everything it downloaded?"
+                  data-confirm-title="Remove this server"
+                  data-confirm-label="Remove"
+                  data-confirm-class="btn-danger">
+              <button type="submit" class="btn btn-sm btn-outline-danger">
+                <i class="bi bi-trash"></i> Remove
+              </button>
+            </form>
+            {% endif %}
+          </div>
+        </div>
+      </div>
+    </div>
+    {% endfor %}
     <div class="table-responsive">
       <table class="table table-hover mb-0">
         <thead>
@@ -285,10 +344,16 @@
                  viewer got a button that round-tripped to "You don't have permission to manage
                  server files." The tag button beside it was already gated this way. #}
               {% if can_files %}
+              {# NOT disabled for a failed install. The download is what failed; step 2 already
+                 wrote the whole lgsm/config-lgsm/<game>/ tree, and that config is where the usual
+                 causes are fixed — a steamuser, most often. server_files opens on a failed row for
+                 exactly that reason, and greying this out here made the fix unreachable from the
+                 one page that shows the failure. #}
+              {% set files_busy = busy and srv.status != 'failed' %}
               <a href="{{ url_for('server_files', server_id=srv.id) }}"
-                 class="btn btn-outline-secondary btn-sm{% if busy %} disabled{% endif %}"
+                 class="btn btn-outline-secondary btn-sm{% if files_busy %} disabled{% endif %}"
                  title="Edit config &amp; browse/upload files"
-                 aria-label="Files and config for {{ srv.name }}"{% if busy %} tabindex="-1" aria-disabled="true"{% endif %}>
+                 aria-label="Files and config for {{ srv.name }}"{% if files_busy %} tabindex="-1" aria-disabled="true"{% endif %}>
                 <i class="bi bi-folder2-open"></i>
               </a>
               {% endif %}

@@ -1372,6 +1372,11 @@ check("register_routes: helper closures inside it <= %d (currently %d)"
       % (_HELPER_CEILING, _rr_helpers),
       _rr_helpers <= _HELPER_CEILING,
       "it went UP — a new helper belongs at module level, not nested in the route table")
+# 222, was 221: /servers/<id>/retry-install is a genuinely new view. A failed install was a dead
+# end — the row said "Failed", the reason lived in the install job's memory until the panel
+# restarted, and the only way forward was to delete the server and start over, which also throws
+# away the LinuxGSM config the failure usually asks you to change. The install job is re-entrant
+# by construction, so this runs it again on the same row; it refuses a cause no retry can fix.
 # 221, was 220: /api/installs is a genuinely new view — "is anything installing, and how far
 # along", which nothing answered. The per-server endpoint below it says how ONE install is doing,
 # which is all the Game Servers page needed because its row is already on screen; an install
@@ -1403,8 +1408,8 @@ check("register_routes: helper closures inside it <= %d (currently %d)"
 # password is held on until it sets its own). This total exists to catch a view VANISHING during a
 # move, so adding one is a deliberate bump — and url_map_baseline.json's diff is the record of what
 # the new route actually is.
-check("register_routes: every one of the 221 views is still accounted for",
-      len(_rr_views) + _MOVED_VIEWS == 221,
+check("register_routes: every one of the 222 views is still accounted for",
+      len(_rr_views) + _MOVED_VIEWS == 222,
       "views inside=%d, moved out=%d" % (len(_rr_views), _MOVED_VIEWS))
 # These two use current_app, which only equals the closed-over `app` inside a request — every
 # caller is a view, so that holds. If they drift back inside a closure, the reasoning stops being

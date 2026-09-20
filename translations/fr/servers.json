@@ -64,6 +64,7 @@
   "Drop to upload to": "Déposez pour téléverser vers",
   "Edit config & browse files": "Modifier la configuration et parcourir les fichiers",
   "Edit config & browse/upload files": "Modifier la configuration et parcourir/téléverser les fichiers",
+  "Edit its config": "Modifier sa configuration",
   "ERROR": "ERREUR",
   "Every LinuxGSM setting for this game. Changes save to": "Tous les paramètres LinuxGSM pour ce jeu. Les modifications sont enregistrées dans",
   "Every task can be rescheduled or deleted here, including the ones the panel installed. Lines tagged autostart or daily-restart also have a switch on the server page, and deleting the monitor task turns Autostart off.": "Chaque tâche peut être reprogrammée ou supprimée ici, y compris celles installées par le panneau. Les lignes marquées autostart ou daily-restart disposent aussi d'un interrupteur sur la page du serveur, et supprimer la tâche monitor désactive le démarrage automatique.",
@@ -149,6 +150,7 @@
   "No history yet — a sample is recorded every minute. Check back shortly.": "Aucun historique pour le moment — un échantillon est enregistré chaque minute. Revenez dans un instant.",
   "No hosts configured yet.": "Aucun hôte configuré pour l'instant.",
   "No players connected.": "Aucun joueur connecté.",
+  "No reason was recorded — most likely a panel restart interrupted it. Trying again is the quickest way to find out.": "Aucune raison n'a été enregistrée : un redémarrage du panneau l'a très probablement interrompue. Réessayer est le moyen le plus rapide de le savoir.",
   "No tags yet. Add one above, then use the tag button on a server row.": "Aucune étiquette pour l'instant. Ajoutes-en une ci-dessus, puis utilise le bouton d'étiquette sur la ligne d'un serveur.",
   "Not configured": "Non configuré",
   "Not installed": "Non installé",
@@ -169,6 +171,7 @@
   "Restore all from installed version": "Tout restaurer depuis la version installée",
   "Restoring only replaces panel code files — your database, keys and config are never touched. Restart the panel afterwards to load the corrected code.": "La restauration ne remplace que les fichiers de code du panneau — votre base de données, vos clés et votre configuration ne sont jamais touchées. Redémarrez le panneau ensuite pour charger le code corrigé.",
   "Retry": "Réessayer",
+  "Retry install": "Relancer l'installation",
   "Run on the live console — granted to your group by an admin.": "S'exécutent sur la console en direct — accordées à votre groupe par un administrateur.",
   "Runs at": "S'exécute à",
   "Runs LinuxGSM monitor every 5 minutes: it starts the server again after a reboot or a crash, and leaves it alone if you stopped it deliberately.": "Exécute le monitor LinuxGSM toutes les 5 minutes : il redémarre le serveur après un redémarrage de la machine ou un plantage, et le laisse tranquille si vous l'avez arrêté volontairement.",
@@ -217,6 +220,7 @@
   "Times are the host's local time, which could not be read": "Les heures sont l'heure locale de l'hôte, qui n'a pas pu être lue",
   "Tip: drag files onto the list to upload.": "Astuce : glissez des fichiers sur la liste pour les téléverser.",
   "Tip: drag files or folders anywhere onto this card to upload (subfolders included), or use the buttons above.": "Astuce : glissez des fichiers ou des dossiers n'importe où sur cette carte pour les téléverser (sous-dossiers compris), ou utilisez les boutons ci-dessus.",
+  "Trying again won't change this one. Fix the cause, or remove the server.": "Réessayer n'y changera rien. Corrigez la cause, ou supprimez le serveur.",
   "Turn it off": "Désactiver",
   "Turn it on": "Activer",
   "Type:": "Type :",
@@ -229,5 +233,6 @@
   "Waiting for console output...": "En attente de la sortie de la console...",
   "Your servers": "Vos serveurs",
   "— everything is downloaded automatically.": "— tout est téléchargé automatiquement.",
+  "— this install failed.": "— cette installation a échoué.",
   "● Live": "● En direct"
 }

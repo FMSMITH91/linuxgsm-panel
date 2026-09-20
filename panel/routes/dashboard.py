@@ -7,7 +7,7 @@ from flask_login import (current_user, login_required)
 from panel.db.models import (RemoteServer, db)
 from panel.db.prefs import (_apply_user_order, _apply_user_server_order, _effective_prefs)
 from panel.security.auth import (INSTALL_SERVER, MANAGE_SERVERS, RESTART_SERVER, START_SERVER,
-    STOP_SERVER, get_user_permissions, get_user_servers, has_permission)
+    STOP_SERVER, UNINSTALL_SERVER, get_user_permissions, get_user_servers, has_permission)
 from panel.services.monitoring import (_cached_player_count)
 from sqlalchemy import (text)
 from app import (_cached_player_max, _cached_player_name, is_setup_complete)
@@ -83,4 +83,10 @@ def register(app):
                                all_tags=all_tags, can_edit_tags=can_edit_tags,
                                can_install=(current_user.is_superadmin
                                             or has_permission(current_user, INSTALL_SERVER)
-                                            or has_permission(current_user, MANAGE_SERVERS)))
+                                            or has_permission(current_user, MANAGE_SERVERS)),
+                               # A failed install's only two honest next steps are "try again" and
+                               # "remove it", and Remove lived on the host page — a different page
+                               # from the one the failure is shown on. The row offers both now, so
+                               # this flag has to come with it.
+                               can_uninstall=(current_user.is_superadmin
+                                              or has_permission(current_user, UNINSTALL_SERVER)))

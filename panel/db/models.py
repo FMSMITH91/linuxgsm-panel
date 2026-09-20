@@ -564,6 +564,14 @@ class GameServer(db.Model):
     query_port = db.Column(db.Integer, nullable=True)
     query_type = db.Column(db.String(40), nullable=True)  # gamedig type override (else GAMEDIG_TYPE map)
     status = db.Column(db.String(32), default="offline")
+    # Why the last install failed, in the operator's words, and whether a retry could ever help.
+    # status="failed" on its own is a dead end: the row says Failed, the reason lived in memory
+    # until the panel restarted, and there was nothing on screen to act on. Cleared the moment an
+    # install succeeds. install_retryable is False for the causes nothing about trying again
+    # changes — a game that needs a Steam account owning it, one LinuxGSM caps at an older Ubuntu,
+    # one SteamCMD has no build of for this platform.
+    install_error = db.Column(db.Text, default="")
+    install_retryable = db.Column(db.Boolean, default=True)
     installed = db.Column(db.Boolean, default=False)
     autostart = db.Column(db.Boolean, default=True)
     daily_restart = db.Column(db.Boolean, default=False)  # daily restart when empty of players
@@ -1121,6 +1129,13 @@ def _run_light_migrations():
         ("game_server", "restart_pending"): "ALTER TABLE game_server ADD COLUMN restart_pending BOOLEAN DEFAULT 0",
         ("game_server", "backup_pending"): "ALTER TABLE game_server ADD COLUMN backup_pending BOOLEAN DEFAULT 0",
         ("game_server", "stop_pending"): "ALTER TABLE game_server ADD COLUMN stop_pending BOOLEAN DEFAULT 0",
+        # Empty on upgrade: a failure that already happened has no reason recorded anywhere to
+        # backfill from, and DEFAULT 1 for retryable is the safe guess — it offers the button
+        # rather than withholding it from a row whose cause nobody can name any more.
+        ("game_server", "install_error"):
+            "ALTER TABLE game_server ADD COLUMN install_error TEXT DEFAULT ''",
+        ("game_server", "install_retryable"):
+            "ALTER TABLE game_server ADD COLUMN install_retryable BOOLEAN DEFAULT 1",
         ("invite", "revoked_at"): "ALTER TABLE invite ADD COLUMN revoked_at DATETIME",
         ("remote_server", "public_ip"): "ALTER TABLE remote_server ADD COLUMN public_ip VARCHAR(45) DEFAULT ''",
         ("remote_server", "stats_cache"): "ALTER TABLE remote_server ADD COLUMN stats_cache TEXT DEFAULT ''",
