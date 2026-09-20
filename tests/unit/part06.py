@@ -1634,7 +1634,17 @@ class _MwStart:
 
 
 def _mw_location(loc, prefix="/panel"):
-    """The Location header a response carries after the middleware has rewritten it."""
+    """The Location header a response carries after the middleware has rewritten it.
+
+    load_config is stubbed for the call. __call__ resolves the mount as
+    X-Forwarded-Prefix -> cfg["tailscale_mount"] -> the constructor argument, so the constructor
+    argument is the LAST resort — and this helper used to say the opposite ("so the mount comes
+    from the constructor argument"), which was true only on a machine with no mount configured.
+
+    That made these four checks read the HOST's config.json. Green on CI and on a dev box, four
+    failures on any real deployment served over a Tailscale mount — found by running this suite on
+    the test VPS, where tailscale_mount is "/lgsm" and every expected "/panel/..." came back
+    "/lgsm/...". A unit test has to mean the same thing on every machine."""
     _sr = _MwStart()
 
     def _app(_environ, start_response):
@@ -1642,8 +1652,14 @@ def _mw_location(loc, prefix="/panel"):
         return [b""]
 
     _mid = _mw.PrefixMiddleware(_app, prefix)
-    # Loopback + no X-Forwarded-Prefix, so the mount comes from the constructor argument.
-    _mid({"REMOTE_ADDR": "127.0.0.1", "PATH_INFO": "/", "wsgi.url_scheme": "http"}, _sr)
+    _o_lc = _mw.load_config
+    try:
+        _mw.load_config = lambda: {}
+        # Loopback + no X-Forwarded-Prefix + no configured mount, so the constructor argument is
+        # what is under test.
+        _mid({"REMOTE_ADDR": "127.0.0.1", "PATH_INFO": "/", "wsgi.url_scheme": "http"}, _sr)
+    finally:
+        _mw.load_config = _o_lc
     return dict(_sr.headers).get("Location")
 
 eq("prefix: a path UNDER the mount is left alone", _mw_location("/panel/servers"), "/panel/servers")
@@ -1651,6 +1667,35 @@ eq("prefix: the mount itself is left alone", _mw_location("/panel"), "/panel")
 eq("prefix: an unprefixed path gets the mount", _mw_location("/servers"), "/panel/servers")
 eq("prefix: a path that merely STARTS WITH the mount is a different path, and gets prefixed",
    _mw_location("/panelserver"), "/panel/panelserver")
+
+
+def _mw_location_cfg(loc, cfg, prefix="/panel"):
+    """Same, but with a CONFIG the middleware will read."""
+    _sr = _MwStart()
+
+    def _app(_environ, start_response):
+        start_response("302 FOUND", [("Location", loc)])
+        return [b""]
+
+    _mid = _mw.PrefixMiddleware(_app, prefix)
+    _o_lc = _mw.load_config
+    try:
+        _mw.load_config = lambda: cfg
+        _mid({"REMOTE_ADDR": "127.0.0.1", "PATH_INFO": "/", "wsgi.url_scheme": "http"}, _sr)
+    finally:
+        _mw.load_config = _o_lc
+    return dict(_sr.headers).get("Location")
+
+
+# The precedence nothing asserted, which is how the helper's wrong claim survived: a CONFIGURED
+# mount beats the constructor argument. Asserting it makes the dependency visible instead of
+# turning up as four failures on someone's real install.
+eq("prefix: a configured tailscale_mount OUTRANKS the constructor argument",
+   _mw_location_cfg("/servers", {"tailscale_mount": "/lgsm"}), "/lgsm/servers")
+eq("prefix: ...and a mount of '/' is not a mount, so the argument stands",
+   _mw_location_cfg("/servers", {"tailscale_mount": "/"}), "/panel/servers")
+eq("prefix: ...and no mount key at all leaves the argument in charge",
+   _mw_location_cfg("/servers", {}), "/panel/servers")
 
 # ── The installer refreshes the root-owned helper on an UPDATE, not only a fresh install ──────
 # The helper/db_maintenance/panel.conf/installer block used to sit AFTER the update path's
@@ -2936,3 +2981,31 @@ for _needed in ("install_root_tools", "write_sudoers_grant", "check_origin_trust
 # origin must not be able to get a grant written for it by doing nothing.
 check("install.sh: ...with the grant still gated on a trusted origin",
       '[ "${ORIGIN_TRUSTED}" -eq 1 ] && write_sudoers_grant' in _noop, _noop[-200:])
+
+# ── no unit check may READ or WRITE the machine's own config.json ──────────────────────────────
+# Two turned up in one audit. part06's PrefixMiddleware checks READ it, so they passed on a dev box
+# and failed four ways on any host with a Tailscale mount. part03's round-trip WROTE to it — the
+# live config of a running panel — restoring the text in a finally that a kill would skip, and
+# leaving a stray `_roundtrip_probe` behind entirely on a machine that had no config.json to
+# restore. Both are the same defect: a unit test that means different things on different machines,
+# and the machines it goes wrong on are the real installs.
+#
+# The rule: touch config through a redirected CONFIG_FILE or a stubbed load_config, never the
+# module's own path. Checked per FILE, because the redirect and the use are rarely adjacent.
+_cfg_guard = []
+for _f in sorted(os.listdir(os.path.join(_root, "tests", "unit"))):
+    if not _f.endswith(".py"):
+        continue
+    _src = open(os.path.join(_root, "tests", "unit", _f), encoding="utf-8").read()
+    _uses = sum(1 for _n in _ast.walk(_ast.parse(_src))
+                if isinstance(_n, _ast.Call)
+                and getattr(_n.func, "attr", getattr(_n.func, "id", "")) in
+                ("load_config", "save_config"))
+    if not _uses:
+        continue
+    _redirects = ("CONFIG_FILE =" in _src or ".CONFIG_FILE=" in _src
+                  or "load_config =" in _src)
+    if not _redirects:
+        _cfg_guard.append("%s (%d call(s), no redirect)" % (_f, _uses))
+check("suites: no unit file reads or writes the machine's own config.json",
+      not _cfg_guard, "; ".join(_cfg_guard))
