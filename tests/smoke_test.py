@@ -283,6 +283,38 @@ try:
     check("files of an installing server redirects (not 200)",
           c.get("/server/%d/files" % _inst_id).status_code in (302, 303))
 
+    # ── /api/server/<id> must never write a status it could not READ ────────────────────────────
+    # get_server_status answers "unknown" when the host did not answer. That is not a third kind of
+    # server, and this endpoint used to commit it. It arrives more easily than it looks: the read
+    # runs LinuxGSM `details`, which does a full `du` of serverfiles — measured at 13s on a 6.5GB
+    # server against a 30s timeout — and a timed-out command does not raise here, it returns
+    # ("", "timed out", -1). So a big server wrote "unknown" over a perfectly good "online", and
+    # the dashboard, the chat bots' /servers and _query_server_slots all repeated it.
+    _stat_saved = _sm_core.run_as_game_user
+    try:
+        with app.app_context():
+            _sg = db.session.get(GameServer, gs_id)
+            _sg.installed, _sg.status = True, "online"
+            db.session.commit()
+        # THE BUG: the host did not answer. No raise, no output.
+        _sm_core.run_as_game_user = lambda *a, **k: ("", "SSH command timed out", -1)
+        _sr = c.get("/api/server/%d" % gs_id)
+        check("status endpoint: an unreadable host reports unknown",
+              (_sr.get_json() or {}).get("status") == "unknown", _sr.get_json())
+        with app.app_context():
+            check("status endpoint: ...and does NOT write it over the last known status",
+                  db.session.get(GameServer, gs_id).status == "online",
+                  db.session.get(GameServer, gs_id).status)
+        # A status it really did read still lands, or the guard above would just freeze the column.
+        _sm_core.run_as_game_user = lambda *a, **k: ("Status: STOPPED", "", 0)
+        c.get("/api/server/%d" % gs_id)
+        with app.app_context():
+            check("status endpoint: a status it DID read is still persisted",
+                  db.session.get(GameServer, gs_id).status == "offline",
+                  db.session.get(GameServer, gs_id).status)
+    finally:
+        _sm_core.run_as_game_user = _stat_saved
+
     # Alerts endpoint: GET returns the provider list; POST filters to known keys and never 500s
     # (the config write to the game host fails on the test box, but returns gracefully).
     al = c.get("/api/server/%d/alerts" % gs_id)

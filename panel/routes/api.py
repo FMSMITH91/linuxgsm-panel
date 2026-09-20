@@ -302,7 +302,18 @@ def register(app):
             status = get_server_status(remote, gs)
             # Don't clobber an in-progress install's status (see /api/servers) — only persist
             # running/stopped for a server that's actually installed and not mid-install/config.
-            if gs.installed and gs.status not in ("installing", "configuring"):
+            #
+            # And never persist "unknown". That is what get_server_status answers when it could not
+            # READ the host — not a third kind of server. It arrives more easily than it looks:
+            # the status read runs LinuxGSM `details`, which does a full `du` of serverfiles, and
+            # that was measured at 13s on a 6.5GB server against a 30s timeout. A big enough server
+            # times out, the transport returns ("", "timed out", -1) without raising, and this wrote
+            # "unknown" over a perfectly good "online" — where the dashboard, the chat bots' /servers
+            # and _query_server_slots all then repeated it until something else happened to correct
+            # it. Same rule /api/servers already applies to a failed port scan, and /stats to an
+            # all-zero sample: a failed read leaves the column alone.
+            if status in ("online", "offline") and gs.installed \
+                    and gs.status not in ("installing", "configuring") and gs.status != status:
                 gs.status = status
                 db.session.commit()
         except Exception:
