@@ -201,6 +201,52 @@ try:
         code = c.get(p).status_code
         check("limited user DENIED %s" % p, code != 200, "got %d" % code)
 
+    # ── Two guards that each redirect to the other are an infinite loop ────────────────────────
+    # A failed install sends the console to Files & Config, because that is where the LinuxGSM
+    # config the failure talks about lives. Files & Config sends a user without MANAGE_SERVERS to
+    # the console. For a user who is BOTH — can see the server, cannot manage files, and the
+    # install failed — the two bounce off each other until the browser gives up with
+    # ERR_TOO_MANY_REDIRECTS. Reproduced before this was written: twelve hops and still going.
+    #
+    # So the check is not "does it redirect somewhere sensible" but "does the chain END".
+    with app.app_context():
+        _loopfail = GameServer(remote_id=granted_remote, name="rbac-failed-install",
+                               short_name="bsserver", game_type="bs", port=27145,
+                               installed=False, status="failed")
+        db.session.add(_loopfail)
+        db.session.commit()
+        _loopfail_id = _loopfail.id
+    try:
+        _path, _chain = "/server/%d" % _loopfail_id, []
+        for _ in range(12):
+            _r = c.get(_path)
+            _chain.append("%s -> %s" % (_path, _r.status_code))
+            if _r.status_code not in (301, 302, 303, 307, 308):
+                break
+            _loc = _r.headers.get("Location") or ""
+            _path = _loc.split("localhost", 1)[-1] if _loc.startswith("http") else _loc
+        check("failed install + no MANAGE_SERVERS: the redirect chain terminates",
+              len(_chain) < 12, " | ".join(_chain[:6]))
+        check("failed install + no MANAGE_SERVERS: ...on a page that actually renders",
+              _chain and _chain[-1].endswith("200"), _chain[-1] if _chain else "no response")
+        # And the same from the other end, for someone who followed a Files & Config link.
+        _path, _chain2 = "/server/%d/files" % _loopfail_id, []
+        for _ in range(12):
+            _r = c.get(_path)
+            _chain2.append("%s -> %s" % (_path, _r.status_code))
+            if _r.status_code not in (301, 302, 303, 307, 308):
+                break
+            _loc = _r.headers.get("Location") or ""
+            _path = _loc.split("localhost", 1)[-1] if _loc.startswith("http") else _loc
+        check("failed install + no MANAGE_SERVERS: ...and from the Files & Config side too",
+              len(_chain2) < 12 and _chain2[-1].endswith("200"), " | ".join(_chain2[:6]))
+    finally:
+        with app.app_context():
+            _row = db.session.get(GameServer, _loopfail_id)
+            if _row is not None:
+                db.session.delete(_row)
+                db.session.commit()
+
     # ── VPS-preparation routes must refuse the panel's OWN host ────────────────────────────────
     # manage_remotes.html hides Prepare / Tailscale for the local host, but the ROUTES accepted a
     # POST carrying its id. Those actions apt full-upgrade the machine, rewrite its sshd config,

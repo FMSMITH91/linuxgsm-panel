@@ -133,7 +133,11 @@ function refreshStatus() {
               function(el){ return el.getAttribute('data-server-id'); }).sort().join(',');
       if (failedNow !== failedShown && document.getElementById('server-cards')
           && window.refreshSection) {
-        window.refreshSection('#server-cards');
+        // With the after-hook, same as the other #server-cards swap above. Without it the region
+        // comes back re-rendered but un-re-armed: a filter the user has typed stops applying (every
+        // row reappears) and host-card dragging stops working, until a reload. The swap replaces
+        // the tbody elements, so whatever was bound to the old ones is gone.
+        window.refreshSection('#server-cards', 'afterDashRefresh');
       }
       // Total online / total capacity = sums of the known per-server values (unknowns excluded).
       var totalPlayers = data.reduce(function(a, s){ return a + (typeof s.players === 'number' ? s.players : 0); }, 0);

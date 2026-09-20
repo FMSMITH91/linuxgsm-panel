@@ -992,6 +992,57 @@ check("privileged: helper and panel build an identical argv for every verb",
       not _drift, "; ".join(_drift[:2]))
 
 
+# ── a verb must not render to an EMPTY command on a remote host ───────────────────────────────
+# run_privileged sends `_priv.remote_command(verb, args)` over SSH. For a verb the helper performs
+# itself (empty argv, an ACTIONS entry) with no _REMOTE_ACTIONS rendering, that string is just
+# " 2>&1" — which runs, prints nothing, exits 0, and tells the caller the verb SUCCEEDED.
+#
+# steam-dumps-sweep shipped that way. Its whole purpose is to stop a host wedging at ten Steam
+# crash-dump slots, and on every remote host — the normal case for this panel — it did nothing at
+# all while reporting success. steamcmd-install had the same hole.
+#
+# So the gate is on the SHAPE, not on those two names: every verb whose argv is empty must either
+# have a remote rendering or be declared local-only, with a reason. A new action verb cannot be
+# added without choosing.
+_empty_remote = []
+for _v in _priv.verbs():
+    try:
+        _argv = _priv.tool_argv(_v, _VERB_SAMPLES.get(_v, []))
+    except Exception:
+        continue
+    if not _argv and _v not in _priv._REMOTE_ACTIONS and _v not in _priv.LOCAL_ONLY_VERBS:
+        _empty_remote.append(_v)
+check("privileged: no verb silently renders to an empty command over SSH",
+      not _empty_remote,
+      "these run as ' 2>&1' on a remote host and report success: %s" % _empty_remote)
+
+# The local sweep and the remote sweep are two implementations of one list. If they drift, the
+# slots that only one of them knows about fill up on exactly one kind of host — which is the
+# shape of the bug this whole section exists to stop.
+check("privileged: the panel and the helper sweep the same Steam dump slots",
+      tuple(_priv.STEAM_DUMP_SLOTS) == tuple(_helper.STEAM_DUMP_SLOTS),
+      "panel=%s helper=%s" % (_priv.STEAM_DUMP_SLOTS, _helper.STEAM_DUMP_SLOTS))
+_sweep_sh = _priv.remote_command("steam-dumps-sweep", ["gmodserver"])
+check("privileged: the remote sweep names every slot in that list",
+      all((" %s;" % _p) in _sweep_sh or (" %s " % _p) in _sweep_sh
+          for _p in _priv.STEAM_DUMP_SLOTS),
+      "missing from the rendered command: %s"
+      % [_p for _p in _priv.STEAM_DUMP_SLOTS if _p not in _sweep_sh])
+
+# ...and the two that were broken really do send something now.
+check("privileged: steam-dumps-sweep has a remote rendering that names the account",
+      "gmodserver" in _priv.remote_command("steam-dumps-sweep", ["gmodserver"])
+      and "/tmp/dumps" in _priv.remote_command("steam-dumps-sweep", ["gmodserver"]))
+# Fail CLOSED remotely, exactly as the helper does locally: `getent` answers 2 for "no such key"
+# and other codes for "could not look", so only 2 may delete a slot.
+check("privileged: ...and only a definite 'no such uid' frees a slot remotely",
+      'rc" = 2 ' in _priv.remote_command("steam-dumps-sweep", ["gmodserver"]),
+      "an unreadable passwd database would delete every slot")
+check("privileged: ...and it never follows a symlink",
+      '[ -L "$d" ] && continue' in _priv.remote_command("steam-dumps-sweep", ["gmodserver"]))
+check("privileged: steamcmd-install preseeds the licence remotely too",
+      "debconf-set-selections" in _priv.remote_command("steamcmd-install", []))
+
 # ── Steam's ten crash-dump slots, and the panel filling them ────────────────────────────────────
 # Steam will only use a crash-dump directory the running user OWNS, and it tries exactly ten names:
 # /tmp/dumps, then /tmp/dumps01..09. One slot per Linux account, permanently. The panel makes one
@@ -1098,6 +1149,42 @@ check("install failure: ...and says the panel works around it rather than tellin
 check("install failure: a game LinuxGSM caps at an older Ubuntu is named",
       (_cif("Failure! BATTALION: Legacy is not supported on Ubuntu 24.04.5 LTS "
             "(requires 22.04)") or (None,))[0] == "os_unsupported")
+# ── Being classified is not the same as being hopeless ───────────────────────────────────────
+# The first version marked EVERY classified cause non-retryable (`retryable=not why`), which took
+# the Retry button away from three causes whose own message ends by telling you to try again. The
+# steam_platform message is the sharpest case: it says "The panel does that automatically on a
+# retry" above a row that offered only Remove.
+from panel.ops.ssh_manager.hosts import INSTALL_FAILURE_FINAL as _iff   # noqa: E402
+
+_CIF_CASES = {
+    "steam_dumps": "FATAL: Steam cannot run. Please delete some /tmp/dumps* directories.",
+    "steam_login": "Steam login not set. Update steamuser in /home/g_bs/lgsm/config-lgsm/bsserver",
+    "steam_platform": "ERROR! Failed to install app '222860' (Invalid platform)",
+    "os_unsupported": "Failure! BATTALION: Legacy is not supported on Ubuntu 24.04.5 LTS",
+}
+check("install failure: the only cause beyond a retry is the one the host cannot change",
+      set(_iff) == {"os_unsupported"},
+      "marked final: %s" % sorted(_iff))
+check("install failure: ...and every case the classifier names is accounted for",
+      set(_CIF_CASES) >= set(_iff) and
+      all((_cif(_o) or (None,))[0] == _c for _c, _o in _CIF_CASES.items()),
+      "a cause was renamed or a new one added without saying whether a retry can get past it")
+# The message and the button have to agree: if the sentence tells the operator to act and try
+# again, the row must offer Retry.
+_cif_says_retry = {
+    _c for _c, _o in _CIF_CASES.items()
+    if any(_w in (_cif(_o) or (None, ""))[1].lower()
+           for _w in ("install again", "on a retry", "try again", "and install"))
+}
+check("install failure: no cause tells you to try again while refusing to let you",
+      not (_cif_says_retry & set(_iff)),
+      "these say to retry but are marked final: %s" % sorted(_cif_says_retry & set(_iff)))
+check("install failure: ...and the retry decision is taken from that set, not from 'was it named'",
+      "retryable=not (why and why[0] in INSTALL_FAILURE_FINAL)"
+      in open(os.path.join(_root, "panel", "routes", "manage_servers.py"),
+              encoding="utf-8").read(),
+      "the call site went back to marking every classified cause non-retryable")
+
 # The one we must NOT name. LinuxGSM prints "Not enough disk space" for SteamCMD app state 0x202,
 # and on the test host 0x202 came back for games the account had no licence for, with 27 GB free.
 # A confident wrong diagnosis is worse than the generic one.

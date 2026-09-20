@@ -109,6 +109,57 @@ if esprima:
             _broken.append("%s: %s" % (_p.name, _e))
     check(not _broken, "static/js: every file parses as JavaScript", "; ".join(_broken[:3]))
 
+# ── Every swap of one region has to re-arm it the SAME way ────────────────────────────────────
+# refreshSection(sel, afterName) replaces a region's innerHTML with freshly server-rendered markup.
+# The elements inside are new objects, so anything bound to the old ones is gone; afterName is the
+# hook that puts it back. Two call sites swapped #server-cards and only one named the hook, so
+# which of the two fired decided whether a filter the user had typed kept applying and whether
+# host-card dragging still worked. Nothing looked broken — the region re-rendered correctly.
+#
+# So: for any region that names a hook ANYWHERE, every call site must name it. Read from the AST
+# and not from the text, because `refreshSection('#servers-list')` also appears in a COMMENT in
+# manage_servers.js, and a regex over the source reports that as a second, non-existent bug.
+if not esprima:
+    skip("static/js: every refreshSection of one region re-arms it the same way",
+         "esprima not installed")
+else:
+    _rs = {}          # selector -> {afterName or None}
+    _rs_where = {}    # selector -> [file:line]
+
+    def _walk_calls(node, fname, out, where):
+        if isinstance(node, dict):
+            if node.get("type") == "CallExpression":
+                _c = node.get("callee") or {}
+                _name = (_c.get("name") if _c.get("type") == "Identifier"
+                         else (_c.get("property") or {}).get("name"))
+                if _name == "refreshSection":
+                    _args = node.get("arguments") or []
+                    _sel = (_args[0] or {}).get("value") if _args else None
+                    _after = (_args[1] or {}).get("value") if len(_args) > 1 else None
+                    if isinstance(_sel, str):
+                        out.setdefault(_sel, set()).add(_after if isinstance(_after, str) else None)
+                        where.setdefault(_sel, []).append(
+                            "%s:%s" % (fname, ((node.get("loc") or {}).get("start") or {}).get("line")))
+            for _v in node.values():
+                _walk_calls(_v, fname, out, where)
+        elif isinstance(node, list):
+            for _v in node:
+                _walk_calls(_v, fname, out, where)
+
+    for _p in sorted((ROOT / "static" / "js").glob("*.js")):
+        try:
+            _ast = esprima.parseScript(_p.read_text(encoding="utf-8"), {"loc": True}).toDict()
+        except Exception:
+            continue      # the parse gate above is what reports an unparseable file
+        _walk_calls(_ast, _p.name, _rs, _rs_where)
+
+    check(len(_rs) >= 4, "sweep: the refreshSection scan found call sites to check",
+          "found %d" % len(_rs))
+    _mixed = {k: sorted(x or "(no hook)" for x in v) for k, v in _rs.items() if len(v) > 1}
+    check(not _mixed,
+          "static/js: every refreshSection of one region re-arms it the same way",
+          "; ".join("%s %s at %s" % (k, v, _rs_where[k]) for k, v in sorted(_mixed.items())))
+
 # ── A form that appears AFTER page load carries no CSRF token ─────────────────────────────────
 # panel.js gives every POST form a hidden csrf_token, once, on DOMContentLoaded, and wraps fetch()
 # so every mutating fetch carries the header. A form submitted with form.submit() has neither:
@@ -1781,8 +1832,14 @@ for _js in ("server_files.js", "dashboard.js", "server_detail.js", "manage_serve
 # poll, banner present with its three buttons, no page reload — and a second poll fetches nothing,
 # because the sets now match.
 _dashjs2 = (ROOT / "static" / "js" / "dashboard.js").read_text(encoding="utf-8")
-check("failedShown" in _dashjs2 and "refreshSection('#server-cards')" in _dashjs2,
+check("failedShown" in _dashjs2 and "refreshSection('#server-cards'" in _dashjs2,
       "dashboard: a failure appearing while the page is open re-renders the card region")
+# ...and re-arms it while it is at it. The call used to pass no after-hook, so this swap left the
+# region rendered but un-bound: a typed filter stopped applying and host-card dragging died.
+check(_dashjs2.count("refreshSection('#server-cards', 'afterDashRefresh')") == 2,
+      "dashboard: ...with the same re-arm as every other swap of that region",
+      "%d of the 2 call sites name the hook"
+      % _dashjs2.count("refreshSection('#server-cards', 'afterDashRefresh')"))
 check("failedNow !== failedShown" in _dashjs2,
       "dashboard: ...only when the banners disagree with the API, so it settles after one pass",
       "an unconditional refresh would re-fetch the page on every poll")
@@ -1859,28 +1916,6 @@ check("installing" not in _oo,
       "the poll puts an installing count straight back")
 check("textContent = 'failed'" in _oo or "word.textContent = 'failed'" in _oo,
       "dashboard: ...and the word keeps its own element, so it can be translated")
-
-# ── a failure that happens while you are LOOKING has to appear ────────────────────────────────
-# The failed-install banner is rendered by the server, per host. When an install failed on a page
-# already open, the status cell flipped to "Failed" (the poll writes that) and the explanation —
-# the reason, Retry, Remove — did not appear until a manual reload. A row saying Failed with
-# nothing to act on is the state this whole feature exists to remove.
-#
-# The poll compares the failed set the API reports against the banners on screen and re-renders
-# the card region when they disagree. Verified in a rendered panel: installing -> failed, one
-# poll, banner present with its three buttons, no page reload — and a second poll fetches nothing,
-# because the sets now match.
-_dashjs2 = (ROOT / "static" / "js" / "dashboard.js").read_text(encoding="utf-8")
-check("failedShown" in _dashjs2 and "refreshSection('#server-cards')" in _dashjs2,
-      "dashboard: a failure appearing while the page is open re-renders the card region")
-check("failedNow !== failedShown" in _dashjs2,
-      "dashboard: ...only when the banners disagree with the API, so it settles after one pass",
-      "an unconditional refresh would re-fetch the page on every poll")
-_dash_tpl2 = (ROOT / "templates" / "dashboard.html").read_text(encoding="utf-8")
-check('class="install-failed alert alert-warning mb-0 mx-2 mt-2 py-2 px-3"\n         data-server-id='
-      in _dash_tpl2,
-      "dashboard: ...and each banner carries the id the comparison reads")
-
 # ── install progress belongs where the server is ──────────────────────────────────────────────
 # A game-server install runs for five to forty-five minutes, and its progress row lived on one
 # page — so starting one from "Install a Server" showed a toast and nothing else, and the dashboard
@@ -2004,7 +2039,10 @@ failed = sum(1 for c, _, _ in results if c is False)
 skipped = [(name, detail) for c, name, detail in results if c is None]
 for c, name, detail in results:
     label = "PASS" if c is True else "FAIL" if c is False else "SKIP"
-    print("%s  %s%s" % (label, name, "" if c is True else "  -> " + detail))
+    # str(): a check that passed an int (or None) as its detail used to crash HERE, on the very
+    # last loop of the suite, so a genuine FAIL was reported as a TypeError traceback and every
+    # result after it was lost. The reporter must never be the thing that breaks.
+    print("%s  %s%s" % (label, name, "" if c is True else "  -> " + str(detail)))
 print("\n%d / %d checks passed" % (passed, len(results) - len(skipped)))
 if skipped:
     print("\n%d CHECK(S) DID NOT RUN:" % len(skipped))

@@ -11,7 +11,8 @@ from panel.services import (lgsm_data)
 from panel.ops.ssh_manager import (GMOD_CONTENT_GAMES, GMOD_CONTENT_SIZES,
     _remote_listening_ports, detect_game_ports, ensure_content_user, ensure_persistent_bans,
     game_engine as sm_game_engine, gmod_mount_setup, install_game_cron,
-    classify_install_failure, install_game_dependencies, install_gmod_content,
+    INSTALL_FAILURE_FINAL, classify_install_failure, install_game_dependencies,
+    install_gmod_content,
     lgsm_write_config, parse_missing_deps,
     remote_ufw_allow_game_ports, remote_ufw_close_by_name, remote_ufw_close_game_port,
     set_autostart)
@@ -43,6 +44,44 @@ from panel.routes._shared import (_looks_installed, _notify_servers_changed)
 # it (py/unused-global-variable). The lock is only correct as a single shared object, so there is
 # exactly one definition and no one else may make another.
 _install_alloc_lock = threading.Lock()
+
+
+def decide_port_adoption(real_port, cur_port, panel_ports, live_ports):
+    """Should the install adopt the port LinuxGSM reports? -> (adopt, taken_by).
+
+    `taken_by` is a phrase for the user when the answer is no and the reason is worth saying;
+    (False, None) just means there is nothing to adopt.
+
+    The panel's own table is only HALF of "is this port free". The other half is what is actually
+    listening on the host — a hand-installed server, a container, anything never imported through
+    /discover. Asking only the table turns a lookup MISS into the measured fact "nobody has it",
+    and adopting a foreign process's port makes every status answer read ITS socket: a server that
+    never bound anything is then reported online, permanently.
+
+    Nothing of OURS can be listening when this runs — the first start comes later in the install —
+    so anything holding real_port at that moment is someone else.
+
+    Three answers, not two, because a scan that FAILED is not an empty one:
+
+        live_ports() is None   could not look -> keep the port the panel allocated, the only one
+                               it knows to be free
+        real_port in it        taken by something that is not us
+        otherwise              free, adopt it
+
+    `live_ports` is a callable so the SSH round trip only happens when the table cannot answer.
+    `panel_ports` maps port -> name for the OTHER servers on this host.
+    """
+    if not real_port or real_port == cur_port:
+        return False, None
+    other = panel_ports.get(real_port)
+    if other:
+        return False, "'%s' on this host" % other
+    live = live_ports()
+    if live is None:
+        return False, "something the panel could not check for"
+    if real_port in live:
+        return False, "another process on this host"
+    return True, None
 
 
 def register(app):
@@ -259,9 +298,12 @@ def register(app):
             nothing else. That is the state the user is left in: no reason, no retry, nothing to
             act on. Persisting it is what lets the row say why and offer the right next step.
 
-            `retryable` is False for the causes nothing about trying again changes — a game that
-            needs a Steam account owning it, one LinuxGSM caps at an older Ubuntu, one SteamCMD
-            has no build of for this platform. The row then offers Remove instead of Retry.
+            `retryable` is False only for a cause nothing about trying again changes — today
+            that is a game LinuxGSM caps at an older Ubuntu than the host runs. The row then
+            offers Remove instead of Retry. A cause the operator can act on (free a dump slot,
+            add a Steam account, let the Windows-prime workaround run) stays retryable: its
+            message tells them what to do, and Retry is how they do it. See
+            INSTALL_FAILURE_FINAL.
 
             `explained` means `name` IS the whole explanation, so the raw tail is not appended to
             it on the row. It matters because the tail is the tool's own last word, and the tool
@@ -499,13 +541,16 @@ def register(app):
                             _log.debug("_run: ignored non-fatal error", exc_info=True)
                     if not installed_ok:
                         gs.installed = False; gs.status = "failed"; db.session.commit()
-                        # A classified cause is one a retry cannot fix — say so, and let the row
-                        # offer Remove rather than a button that will spend another half hour
-                        # arriving at the same line.
+                        # Being classified is not the same as being hopeless. Three of the four
+                        # causes are "do this, then try again" and their messages say exactly
+                        # that, so taking Retry away contradicts the sentence above the button.
+                        # Only INSTALL_FAILURE_FINAL is beyond a retry.
                         _fail(why[1] if why else
                               ("Game files didn't install after 3 tries — the download may be corrupt "
                                "or the mirror unreachable. Try again shortly."),
-                              last_out[-300:], retryable=not why, explained=bool(why)); return
+                              last_out[-300:],
+                              retryable=not (why and why[0] in INSTALL_FAILURE_FINAL),
+                              explained=bool(why)); return
                     # Files have landed — the server IS installed, but it still needs configuring
                     # and starting (steps 5-8). Use a distinct "configuring" status (NOT "installing")
                     # so the state model is honest: the status poller skips it just like "installing"
@@ -625,24 +670,33 @@ def register(app):
                         # proxy ONLINE, because something IS listening on 25565 — a port check
                         # cannot tell whose socket it is. Not adopting the port is what stops the
                         # panel manufacturing that state.
-                        _conflict_with = None
-                        if real_port and real_port != gs.port:
-                            _conflict_with = next(
-                                (e for e in GameServer.query.filter_by(remote_id=remote.id).all()
-                                 if e.id != gs.id and e.port == real_port), None)
-                        if real_port and real_port != gs.port and _conflict_with is None:
+                        # See decide_port_adoption for why this is three answers and not two.
+                        _panel_ports = {e.port: e.name
+                                        for e in GameServer.query.filter_by(
+                                            remote_id=remote.id).all()
+                                        if e.id != gs.id and e.port}
+                        _adopt, _taken_by = decide_port_adoption(
+                            real_port, gs.port, _panel_ports,
+                            lambda: _remote_listening_ports(remote))
+                        if _adopt:
                             old_port = gs.port; gs.port = real_port; db.session.commit()
                             try:
                                 remote_ufw_close_game_port(remote, old_port)
                             except Exception:
                                 _log.debug("_run: ignored non-fatal error", exc_info=True)
-                        elif _conflict_with is not None:
-                            port_conflict = (real_port, _conflict_with.name)
-                            _log.warning("install %s: %s reports port %s, which '%s' already has "
+                        elif _taken_by is not None:
+                            port_conflict = (real_port, _taken_by)
+                            _log.warning("install %s: %s reports port %s, which %s already has "
                                          "— keeping %s and not adopting it",
-                                         short_name, lgsm_name, real_port,
-                                         _conflict_with.name, gs.port)
-                        to_open = info.get("open_ports") or ([gs.port] if gs.port else [])
+                                         short_name, lgsm_name, real_port, _taken_by, gs.port)
+                        # Only open what this server is actually entitled to. On the conflict
+                        # branch the panel has just REFUSED the reported port, so opening
+                        # info["open_ports"] — which contains it — would hand a hole in the
+                        # firewall to the other process, attributed to this server.
+                        if port_conflict:
+                            to_open = [gs.port] if gs.port else []
+                        else:
+                            to_open = info.get("open_ports") or ([gs.port] if gs.port else [])
                         remote_ufw_allow_game_ports(remote, to_open, short_name)
                     except Exception:
                         _log.debug("_run: ignored non-fatal error", exc_info=True)
@@ -760,9 +814,9 @@ def register(app):
                         # clash is resolved, and saying nothing would leave someone staring at a
                         # server that looks fine and answers nobody.
                         _finish(f"{short_name} installed, but it wants port {port_conflict[0]}, "
-                                f"which '{port_conflict[1]}' on this host already uses. This game "
-                                f"ignores the port the panel sets, so change it in the game's own "
-                                f"config (Files & Config) or move the other server.", warn=True)
+                                f"which {port_conflict[1]} already uses. This game ignores the "
+                                f"port the panel sets, so change it in the game's own config "
+                                f"(Files & Config), or free that port on the host.", warn=True)
                         log_action(None, "install_complete", target=gs.name, success=False,
                                    detail=("port %s clashes with %s"
                                            % (port_conflict[0], port_conflict[1]))[:300])

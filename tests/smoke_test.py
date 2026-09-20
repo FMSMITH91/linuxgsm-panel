@@ -770,17 +770,40 @@ try:
     # while LinuxGSM still said STARTED. And the panel would then call that proxy ONLINE, because
     # something IS listening on 25565 — a port check cannot tell whose socket it is. So the clash
     # must not be created in the first place.
-    _ms_pc = open(os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
-                               "panel", "routes", "manage_servers.py"), encoding="utf-8").read()
-    check("install: the reported port is not adopted when another server on the host has it",
-          "_conflict_with = next(" in _ms_pc
-          and "real_port != gs.port and _conflict_with is None" in _ms_pc,
-          "step 6 still adopts the reported port unconditionally")
-    check("install: ...and the clash is reported rather than left to be discovered",
-          "port_conflict" in _ms_pc and "already uses" in _ms_pc)
-    check("install: ...while a reported port nobody else holds is still adopted",
-          "old_port = gs.port; gs.port = real_port" in _ms_pc,
-          "the adoption itself was lost, which is what step 6 is for")
+    # The first version of this checked for substrings in manage_servers.py, which says only that
+    # some text is present. The decision is now its own function, so drive it: the panel's table,
+    # a foreign listener, and a scan that could not answer are three different results.
+    from panel.routes.manage_servers import decide_port_adoption as _dpa
+
+    _scans = []
+
+    def _live(value):
+        def f():
+            _scans.append(1)
+            return value
+        return f
+
+    check("install: a reported port nobody holds is adopted",
+          _dpa(25565, 25566, {}, _live({22, 80})) == (True, None))
+    check("install: ...but not one another PANEL server on the host has",
+          _dpa(25565, 25566, {25565: "mc"}, _live(set()))[0] is False)
+    check("install: ...nor one a NON-panel process is already listening on",
+          _dpa(25565, 25566, {}, _live({25565}))[0] is False,
+          "adopting a foreign socket makes every status answer read that process, so a server "
+          "that never bound anything is reported online for ever")
+    check("install: ...nor when the port scan could not answer at all",
+          _dpa(25565, 25566, {}, _live(None))[0] is False,
+          "a failed scan is not an empty one — 'could not look' must not read as 'free'")
+    check("install: ...and each refusal says which of the three it was",
+          len({_dpa(25565, 25566, {25565: "mc"}, _live(set()))[1],
+               _dpa(25565, 25566, {}, _live({25565}))[1],
+               _dpa(25565, 25566, {}, _live(None))[1]}) == 3,
+          "two of the three reasons reach the user as the same sentence")
+    _scans.clear()
+    _dpa(25565, 25565, {}, _live(set()))
+    _dpa(25565, 25566, {25565: "mc"}, _live(set()))
+    check("install: ...without an SSH round trip the table could have answered",
+          not _scans, "the host is scanned even when the panel already knows the port is taken")
 
     # ── SCP: Secret Laboratory asks two questions nobody can answer ─────────────────────────────
     # Found while walking the LinuxGSM catalogue: scpsl installed, LinuxGSM reported STARTED, and
@@ -857,13 +880,19 @@ try:
               ("/servers/%d/delete" % gs_id) in _dash)
         # The Files link is what #282 made reachable; greying it out here made that unreachable
         # from the one page that shows the failure.
-        # The <a> spans several lines, so read the whole tag rather than one line of it — a
-        # line-scoped check answered "no files link at all" for a link that was right there.
-        _fi = _dash.find('href="/server/%d/files"' % gs_id)
+        #
+        # Find it by its CLASS, not by its href. There are TWO links to /server/<id>/files on this
+        # page — the banner's "Edit its config" above the table, and the row's own button — and the
+        # banner's comes first in the document and is never disabled. A check that took the first
+        # href therefore passed whatever the row button did, which is no check at all. Only the row
+        # button carries `srv-files`.
+        _fi = _dash.find("srv-files")
         _ftag = _dash[_dash.rfind("<a", 0, _fi):_dash.find(">", _fi) + 1] if _fi != -1 else ""
         check("failed install: ...and Files & Config is NOT greyed out on a failed row",
               _fi != -1 and "disabled" not in _ftag,
-              _ftag[:160] or "no files link at all")
+              _ftag[:200] or "no srv-files button at all")
+        check("failed install: ...and the banner offers the same page in words",
+              'href="/server/%d/files"' % gs_id in _dash and "Edit its config" in _dash)
 
         # The retry itself. The real job runs in a background thread and its first step is an SSH
         # round trip to a host this suite stubs, so it fails harmlessly — what is being checked

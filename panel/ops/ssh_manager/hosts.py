@@ -612,6 +612,16 @@ def install_game_dependencies(server, game_type=None, extra=""):
     return (rc == 0 and steam_ok), (out or err or "")
 
 
+# Which classified causes a RETRY cannot get past. Only one: the rest are all "do this, then try
+# again", and their own messages say so — free a dump slot, put a Steam account in the config, or
+# let the panel run the two-step Windows-prime workaround. Marking those non-retryable takes the
+# Retry button away from the person the message just told to press it.
+#
+# os_unsupported is different in kind: LinuxGSM caps the game at an older release than the host
+# runs, and nothing the operator does on this host changes that answer.
+INSTALL_FAILURE_FINAL = frozenset({"os_unsupported"})
+
+
 def classify_install_failure(output):
     """Why a LinuxGSM install failed, as (code, message), or None when nothing is recognised.
 
