@@ -1187,6 +1187,9 @@ VERBS = {
     "user-delete": ([v_destroyable_user], lambda a: ["userdel", "-r", a[0]], None),
     "user-delete-force": ([v_destroyable_user], lambda a: ["userdel", "-r", "-f", a[0]], None),
     "user-kill-processes": ([v_destroyable_user], lambda a: ["pkill", "-9", "-u", a[0]], None),
+    # Free Steam's per-user crash-dump slots (see do_steam_dumps_sweep). Takes an account name and
+    # nothing else: the ten paths it may remove are a constant in this file.
+    "steam-dumps-sweep": ([v_managed_user], lambda a: [], None),
     # rm -rf as root. The path is CONSTRUCTED from a validated user name (home_of), never passed
     # in, so the argument this verb receives is a name and the thing it deletes can only ever be a
     # direct child of /home.
@@ -2242,6 +2245,76 @@ def do_gameuser_group(args, content):
     return r.returncode
 
 
+# Steam's crash handler insists on a crash-dump directory under /tmp that the RUNNING user owns,
+# and it only ever tries ten names: /tmp/dumps, then /tmp/dumps01 .. /tmp/dumps09. That is one slot
+# per Linux account, taken for good. The panel creates one account per game server, so the ELEVENTH
+# Steam game on a host finds the table full and every SteamCMD run there dies:
+#
+#     src/crashhandler/breakpad_linux.cpp (740) : Fatal Assertion Failed:
+#     FATAL: Steam cannot run. Please delete some /tmp/dumps* directories or change their
+#     ownership to the local user.
+#
+# Not just installs — `update` and `validate` on servers that were working yesterday go with it.
+# LinuxGSM reports it as "No appmanifest_<appid>.acf found", which is why this took so long to see.
+#
+# And the panel was the one filling the table: `user-delete` removes the account and leaves the
+# directory, so the slot outlives the server. Ten uninstalls wedge a host with nothing running on
+# it. Reproduced on the test box, where four of the ten slots belonged to accounts that no longer
+# existed; freeing one let a fresh account's SteamCMD log in immediately.
+#
+# The paths are a FIXED list built here. Nothing a caller sends can name a path, and a slot is
+# removed only when its owner is gone or is the account being named — never another live user's.
+STEAM_DUMP_SLOTS = ("/tmp/dumps",) + tuple("/tmp/dumps%02d" % i for i in range(1, 10))
+
+
+def do_steam_dumps_sweep(args, content):
+    """Free Steam crash-dump slots: the orphaned ones, plus the named account's own.
+
+    Call it BEFORE deleting the account, while the name still resolves; a slot missed that way is
+    picked up as an orphan by the next sweep, so this is self-healing either order.
+
+    Fail-closed on a lookup that does not simply say "no such uid": a passwd database that cannot
+    be read must not make every slot look orphaned."""
+    user = args[0]
+    try:
+        own_uid = pwd.getpwnam(user).pw_uid
+    except KeyError:
+        own_uid = None            # already deleted — the orphan rule below still frees its slot
+    freed, held = [], []
+    for path in STEAM_DUMP_SLOTS:
+        try:
+            st = os.lstat(path)
+        except OSError:
+            continue
+        # lstat, and a directory test that a symlink fails: a symlink wearing one of these names is
+        # left exactly where it is rather than followed out of /tmp.
+        if not stat.S_ISDIR(st.st_mode):
+            continue
+        if st.st_uid == own_uid:
+            drop = True
+        else:
+            try:
+                pwd.getpwuid(st.st_uid)
+                drop = False
+            except KeyError:
+                drop = True       # no account owns it any more
+            except Exception:
+                drop = False      # could not tell: keep it
+        if not drop:
+            held.append(path)
+            continue
+        try:
+            shutil.rmtree(path)
+            freed.append(path)
+        except OSError as exc:
+            sys.stderr.write("could not free %s: %s\n" % (path, exc))
+    sys.stdout.write("freed=%d held=%d slots=%d\n"
+                     % (len(freed), len(held), len(STEAM_DUMP_SLOTS)))
+    for path in freed:
+        sys.stdout.write("freed %s\n" % path)
+    return 0
+
+
 def do_steamcmd_install(args, content):
     """Install steamcmd, having pre-accepted its Steam licence.
 
@@ -2846,6 +2919,7 @@ ACTIONS = {
     "lgsm-command": do_lgsm_command,
     "restart-flags": do_restart_flags,
     "steamcmd-install": do_steamcmd_install,
+    "steam-dumps-sweep": do_steam_dumps_sweep,
     "gameuser-group": do_gameuser_group,
     "sshd-set-directive": do_sshd_set_directive,
     "create-swapfile": do_create_swapfile,

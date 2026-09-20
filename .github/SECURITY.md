@@ -81,8 +81,8 @@ Converted so far: **`ufw`, `fail2ban-client`, `systemctl`, `apt`/`dpkg`, the log
 Ubuntu Pro, the host controls, the GMod shared-content box, the fail2ban activity report, the
 detached OS update, Tailscale's join, the panel's own restore/self-update, the VPS hardening
 steps, running a LinuxGSM action as the game user, enrolling a game account in the group the
-grant names, installing a game's dependencies and reading the pending-restart flags** —
-100 verbs. (`tests/unit_test.py` asserts
+grant names, installing a game's dependencies, reading the pending-restart flags and freeing
+Steam's per-account crash-dump slots** — 101 verbs. (`tests/unit_test.py` asserts
 this number against `privileged.verbs()`, so it cannot drift from the table again.)
 
 **A correction to the numbers previously reported here.** Earlier revisions of this section

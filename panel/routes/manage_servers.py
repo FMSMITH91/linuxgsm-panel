@@ -11,7 +11,8 @@ from panel.services import (lgsm_data)
 from panel.ops.ssh_manager import (GMOD_CONTENT_GAMES, GMOD_CONTENT_SIZES,
     _remote_listening_ports, detect_game_ports, ensure_content_user, ensure_persistent_bans,
     game_engine as sm_game_engine, gmod_mount_setup, install_game_cron,
-    install_game_dependencies, install_gmod_content, lgsm_write_config, parse_missing_deps,
+    classify_install_failure, install_game_dependencies, install_gmod_content,
+    lgsm_write_config, parse_missing_deps,
     remote_ufw_allow_game_ports, remote_ufw_close_by_name, remote_ufw_close_game_port,
     set_autostart)
 # Reached through the MODULE, not bound by name: these are the seams the test suite
@@ -354,8 +355,17 @@ def register(app):
                     #    code: after each attempt verify the files actually landed (_looks_installed),
                     #    and on failure wipe LinuxGSM's cached download and retry from scratch.
                     auto = f"sudo -u {short_name} bash -c 'cd /home/{short_name} && ./{lgsm_name} auto-install' 2>&1"
+                    # Free any Steam crash-dump slot left behind by a deleted game account. Steam
+                    # has ten, one per account, and a full table stops SteamCMD dead on a host
+                    # whose servers were all working — see do_steam_dumps_sweep. Best-effort: a
+                    # host that has never run out has nothing to free.
+                    try:
+                        _sm.run_privileged(remote, "steam-dumps-sweep", [short_name], timeout=20)
+                    except Exception:
+                        _log.debug("_run: steam dumps sweep failed", exc_info=True)
                     installed_ok = False
                     last_out = ""
+                    why = None
                     for attempt in range(3):
                         _p(4, "Downloading game server files (this can take a while)"
                               + ("" if attempt == 0 else " — retry %d" % attempt))
@@ -378,6 +388,12 @@ def register(app):
                         if _looks_installed(app, remote, short_name, lgsm_name) is True:
                             installed_ok = True
                             break
+                        # Some failures a second download cannot fix: no Steam licence, no crash-dump
+                        # slot, a game LinuxGSM does not support on this release. Retrying those
+                        # costs up to an hour and ends with the same wrong "may be corrupt" advice.
+                        why = classify_install_failure(last_out)
+                        if why:
+                            break
                         # Not really installed: wipe LinuxGSM's cached (likely corrupt) archive so the
                         # next attempt re-downloads fresh instead of reusing the bad file.
                         try:
@@ -388,8 +404,10 @@ def register(app):
                             _log.debug("_run: ignored non-fatal error", exc_info=True)
                     if not installed_ok:
                         gs.installed = False; gs.status = "failed"; db.session.commit()
-                        _fail("Game files didn't install after 3 tries — the download may be corrupt or "
-                              "the mirror unreachable. Try again shortly.", last_out[-300:]); return
+                        _fail(why[1] if why else
+                              ("Game files didn't install after 3 tries — the download may be corrupt "
+                               "or the mirror unreachable. Try again shortly."),
+                              last_out[-300:]); return
                     # Files have landed — the server IS installed, but it still needs configuring
                     # and starting (steps 5-8). Use a distinct "configuring" status (NOT "installing")
                     # so the state model is honest: the status poller skips it just like "installing"
@@ -621,6 +639,14 @@ def register(app):
             #   6   no such user — already gone, so there is nothing to orphan and the row SHOULD go
             #   12  the account was removed but its home could not be — partial, worth saying out loud
             #   *   the account is still there; keeping the row is what lets the operator retry
+            # Free this account's Steam crash-dump slot while its name still resolves. Steam has
+            # ten of them per host and `userdel` leaves the directory behind, so without this each
+            # uninstall permanently costs the host one slot — and at ten, SteamCMD stops working
+            # for every server on it, installed or not.
+            try:
+                _sm.run_privileged(remote, "steam-dumps-sweep", [short_name], timeout=20)
+            except Exception:
+                _log.debug("uninstall: steam dumps sweep failed", exc_info=True)
             out, err, rc = _sm.run_privileged(remote, "user-delete-force", [short_name], timeout=30)
             _gone = rc in (0, 6, 12)
             log_action(current_user, "uninstall_server", target=gs.name, success=_gone)
