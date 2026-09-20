@@ -782,6 +782,37 @@ try:
           "old_port = gs.port; gs.port = real_port" in _ms_pc,
           "the adoption itself was lost, which is what step 6 is for")
 
+    # ── SCP: Secret Laboratory asks two questions nobody can answer ─────────────────────────────
+    # Found while walking the LinuxGSM catalogue: scpsl installed, LinuxGSM reported STARTED, and
+    # the game never launched. Its launcher stops and asks, inside a tmux session with no input:
+    #
+    #   1. "Before starting please read and accept the SCP:SL EULA. Do you accept? [yes/no]"
+    #   2. "Do you want to edit that configuration? [edit/keep]"
+    #
+    # The second is the subtle one: LocalAdmin keeps its config PER PORT, under
+    # config/<port>/, and asks whenever a port has no config yet. The panel assigns a FREE port
+    # rather than the game's default, so it walks into that on every install.
+    #
+    # The panel already writes Minecraft's eula.txt at the same step, so accepting is the
+    # established pattern here rather than a new decision. Proven end to end through the panel's
+    # own routes on the test host: SCPSL.x86_64 running, console at "Level loaded. Creating
+    # match...", and the panel reporting the server online.
+    _ms_sl = open(os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+                               "panel", "routes", "manage_servers.py"), encoding="utf-8").read()
+    check("scpsl: the EULA is accepted the way Minecraft's already is",
+          "EulaAccepted" in _ms_sl and "localadmin_internal_data.json" in _ms_sl,
+          "the install still stops at the EULA prompt with nothing to answer it")
+    check("scpsl: ...and the per-port config is seeded, or LocalAdmin asks about it instead",
+          "config/%d" in _ms_sl and "config_localadmin.txt" in _ms_sl)
+    # AFTER step 6, not at step 5: the port is only final once step 6 has decided whether to adopt
+    # the one LinuxGSM reports, and seeding the wrong directory helps nobody.
+    check("scpsl: ...seeded once the port is final, not before step 6 can change it",
+          _ms_sl.index("config_localadmin.txt") > _ms_sl.index("# 6. Sync to LinuxGSM's real port"),
+          "the per-port config is written before the port is settled")
+    check("scpsl: ...and an existing config is left alone",
+          '[ -f "$d/config_localadmin.txt" ] ||' in _ms_sl,
+          "it would overwrite a config the operator had edited")
+
     # ── the install works around SteamCMD's "Invalid platform" bug itself ───────────────────────
     # Left 4 Dead 2 refuses to install with "ERROR! Failed to install app '222860' (Invalid
     # platform)". It is not a missing Linux build — the app has a Linux depot (222863) — it is a
