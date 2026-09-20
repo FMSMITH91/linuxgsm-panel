@@ -122,6 +122,23 @@ function refreshStatus() {
         oo.className = 'small mt-1 ' + (failed ? 'text-warning' : 'text-secondary');
         oo.hidden = other <= 0;
       }
+      // The failed-install banner is rendered by the SERVER, per host, so when an install FAILS
+      // while you are watching, the status cell flips to "Failed" and the explanation — the
+      // reason, Retry, Remove — does not appear until a manual reload. Which is what it looked
+      // like: a row saying Failed and nothing to act on, until you pressed refresh.
+      //
+      // So compare the failed set the API reports against the banners actually on screen, and
+      // re-render the card region when they disagree. It settles after one pass (the banners then
+      // match), so this cannot loop, and a dashboard with nothing failed never fetches at all.
+      var failedNow = data.filter(function(s){ return s.status === 'failed'; })
+                          .map(function(s){ return String(s.id); }).sort().join(',');
+      var failedShown = Array.prototype.map
+        .call(document.querySelectorAll('.install-failed[data-server-id]'),
+              function(el){ return el.getAttribute('data-server-id'); }).sort().join(',');
+      if (failedNow !== failedShown && document.getElementById('server-cards')
+          && window.refreshSection) {
+        window.refreshSection('#server-cards');
+      }
       // Total online / total capacity = sums of the known per-server values (unknowns excluded).
       var totalPlayers = data.reduce(function(a, s){ return a + (typeof s.players === 'number' ? s.players : 0); }, 0);
       var totalMax = data.reduce(function(a, s){ return a + (typeof s.max_players === 'number' ? s.max_players : 0); }, 0);

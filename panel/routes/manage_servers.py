@@ -295,6 +295,10 @@ def register(app):
                     _db.session.commit()
             except Exception:
                 _log.debug("could not record the install failure on the row", exc_info=True)
+            # Tell every open dashboard immediately, rather than leaving the explanation to appear
+            # whenever someone happens to reload. The row's status flips on the next status poll
+            # either way; this is what brings the REASON and its buttons with it.
+            _notify_servers_changed(app)
 
         def _finish(msg, warn=False):
             # A install that got here worked, whatever happened on an earlier attempt — clear the
@@ -307,6 +311,7 @@ def register(app):
                     _db.session.commit()
             except Exception:
                 _log.debug("could not clear the install failure on the row", exc_info=True)
+            _notify_servers_changed(app)   # a finished install clears a banner as surely as one appears
             with _install_lock:
                 j = _install_jobs.get(gs_id)
                 if j is not None:

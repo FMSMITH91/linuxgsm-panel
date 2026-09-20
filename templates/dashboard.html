@@ -231,7 +231,8 @@
        Which buttons appear depends on the cause: install_retryable is False for the ones nothing
        about trying again changes. #}
     {% for srv in servers if srv.remote_id == remote.id and srv.status == 'failed' %}
-    <div class="install-failed alert alert-warning mb-0 mx-2 mt-2 py-2 px-3">
+    <div class="install-failed alert alert-warning mb-0 mx-2 mt-2 py-2 px-3"
+         data-server-id="{{ srv.id }}">
       <div class="d-flex gap-2 align-items-start">
         <i class="bi bi-exclamation-triangle-fill mt-1"></i>
         <div class="flex-grow-1 small">

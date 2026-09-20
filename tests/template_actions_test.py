@@ -1750,6 +1750,27 @@ check("\\d{1,9}" in _subj, "js: ...from digits only, not from arbitrary text")
 check("if(!repo)" in _subj and "createTextNode(text)" in _subj,
       "js: ...and renders plain text when there is no vetted repo URL")
 
+# ── a failure that happens while you are LOOKING has to appear ────────────────────────────────
+# The failed-install banner is rendered by the server, per host. When an install failed on a page
+# already open, the status cell flipped to "Failed" (the poll writes that) and the explanation —
+# the reason, Retry, Remove — did not appear until a manual reload. A row saying Failed with
+# nothing to act on is the state this whole feature exists to remove.
+#
+# The poll compares the failed set the API reports against the banners on screen and re-renders
+# the card region when they disagree. Verified in a rendered panel: installing -> failed, one
+# poll, banner present with its three buttons, no page reload — and a second poll fetches nothing,
+# because the sets now match.
+_dashjs2 = (ROOT / "static" / "js" / "dashboard.js").read_text(encoding="utf-8")
+check("failedShown" in _dashjs2 and "refreshSection('#server-cards')" in _dashjs2,
+      "dashboard: a failure appearing while the page is open re-renders the card region")
+check("failedNow !== failedShown" in _dashjs2,
+      "dashboard: ...only when the banners disagree with the API, so it settles after one pass",
+      "an unconditional refresh would re-fetch the page on every poll")
+_dash_tpl2 = (ROOT / "templates" / "dashboard.html").read_text(encoding="utf-8")
+check('class="install-failed alert alert-warning mb-0 mx-2 mt-2 py-2 px-3"\n         data-server-id='
+      in _dash_tpl2,
+      "dashboard: ...and each banner carries the id the comparison reads")
+
 # ── an install in progress is not a possible failure ──────────────────────────────────────────
 # The tile under Offline read "+1 installing or failed", in warning yellow, for an install that was
 # running perfectly normally. Installing and failed are different news — one is the panel doing
