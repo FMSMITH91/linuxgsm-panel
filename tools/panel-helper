@@ -2264,7 +2264,14 @@ def do_gameuser_group(args, content):
 #
 # The paths are a FIXED list built here. Nothing a caller sends can name a path, and a slot is
 # removed only when its owner is gone or is the account being named — never another live user's.
-STEAM_DUMP_SLOTS = ("/tmp/dumps",) + tuple("/tmp/dumps%02d" % i for i in range(1, 10))
+# Bandit flags a hard-coded /tmp path; these are not OUR temp paths to choose. They are the ten
+# names Steam's crash handler hard-codes, so they are a fact to be read, not a location we could
+# make unpredictable. Nothing is ever created here: the verb only REMOVES, after an lstat that
+# refuses anything but a real directory (so a planted symlink is left alone) and an ownership test
+# that keeps every live account's. shutil.rmtree walks by file descriptor on Linux, so there is no
+# traversal to race.
+STEAM_DUMP_SLOTS = ("/tmp/dumps",) + tuple("/tmp/dumps%02d" % i   # nosec B108 - Steam's own paths
+                                           for i in range(1, 10))
 
 
 def do_steam_dumps_sweep(args, content):

@@ -635,7 +635,9 @@ def classify_install_failure(output):
     """
     text = terminal.strip_escapes(output or "")
     low = text.lower()
-    if "please delete some /tmp/dumps" in low or "/tmp/dumps* directories" in low:
+    # Bandit's hard-coded-/tmp rule: this is a substring of SteamCMD's error text being matched,
+    # not a path anything here opens or writes.
+    if "please delete some /tmp/dumps" in low or "/tmp/dumps* directories" in low:   # nosec B108
         return ("steam_dumps", (
             "Steam keeps only ten crash-dump slots on a host (/tmp/dumps … /tmp/dumps09), one per "
             "Linux account, and every one of them is in use by a game account that still exists. "
