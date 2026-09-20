@@ -676,17 +676,34 @@ finally:
     _seen.pop(_host.id, None)
 
 # ── config save/load round-trips (guards the atomic-write path) ─
-_cfg_backup = config.CONFIG_FILE.read_text() if config.CONFIG_FILE.exists() else None
+# Against a TEMP file, not the install's own config.json. This used to read the real config, write
+# a probe key into it with save_config() and restore the original text in a finally — i.e. it
+# mutated the live configuration of whatever machine it ran on, while the panel was running and
+# able to read it. Two ways that bites: the restore never happens if the process is killed
+# mid-block, and when CONFIG_FILE did not exist beforehand `_cfg_backup` is None, so the finally
+# left a config.json behind containing `_roundtrip_probe` on a machine that had none.
+#
+# Nothing here needs the real file — the point is the atomic-write path, which is the same code
+# wherever CONFIG_FILE points. Found while auditing the suites for live-host-state reads, after
+# four other checks turned out to read the host's config; see part06's prefix tests.
+import tempfile as _cfg_tmp
+import pathlib as _cfg_pl
+_cfg_dir = _cfg_tmp.mkdtemp(prefix="cfg-roundtrip-")
+_cfg_orig = config.CONFIG_FILE
 try:
+    config.CONFIG_FILE = _cfg_pl.Path(_cfg_dir, "config.json")
     _c = config.load_config()
     _c["_roundtrip_probe"] = "value-123"
     config.save_config(_c)
     check("config: value survives a save/load round-trip",
           config.load_config().get("_roundtrip_probe") == "value-123")
     check("config: file exists after atomic save", config.CONFIG_FILE.exists())
+    check("config: ...and the real install's config was never the thing written to",
+          config.CONFIG_FILE != _cfg_orig and str(_cfg_dir) in str(config.CONFIG_FILE))
 finally:
-    if _cfg_backup is not None:
-        config.CONFIG_FILE.write_text(_cfg_backup)
+    config.CONFIG_FILE = _cfg_orig
+    _cfg_shutil = __import__("shutil")
+    _cfg_shutil.rmtree(_cfg_dir, ignore_errors=True)
 
 # ── database corruption detection + self-heal (bad drive / power loss) ─
 import sqlite3 as _sqlite
