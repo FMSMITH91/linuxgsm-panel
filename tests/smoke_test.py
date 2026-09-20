@@ -283,6 +283,26 @@ try:
     check("files of an installing server redirects (not 200)",
           c.get("/server/%d/files" % _inst_id).status_code in (302, 303))
 
+    # ── an install must not call a slow first boot a failure ────────────────────────────────────
+    # The install started the server, then polled ~15s for its port and, if it wasn't up, finished
+    # with "installed, but it didn't start". Measured while installing the LinuxGSM catalogue on
+    # the test host: most games bind immediately, Nuclear Dawn took 20s and Insurgency 40s, and the
+    # heavier Unreal/Unity titles are slower again. All of those ended an otherwise perfect install
+    # with the one sentence that sends an operator hunting a fault that isn't there.
+    #
+    # Two things had to change together, so both are pinned: the window, and the fact that a start
+    # LinuxGSM did not complain about is not a failed start.
+    _ms_src2 = open(os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+                                 "panel", "routes", "manage_servers.py"), encoding="utf-8").read()
+    check("install: the post-start port poll waits ~90s, not 15",
+          "for _ in range(30):" in _ms_src2 and "for _ in range(5):" not in _ms_src2,
+          "still polling 5 times")
+    check("install: a start LinuxGSM did not complain about is reported as still coming up",
+          "if reason or s_rc != 0:" in _ms_src2 and "installed and starting" in _ms_src2,
+          "the didn't-start wording is still unconditional")
+    check("install: ...and a start that DID report a problem still says it didn't start",
+          "installed, but it didn't start" in _ms_src2)
+
     # ── a FAILED install must not be a dead end ─────────────────────────────────────────────────
     # The Game Servers page offers a failed row both "Console & stats" and "Files and config", and
     # both routes redirected away saying the server was "still installing". It was not: the install

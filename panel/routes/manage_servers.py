@@ -528,9 +528,18 @@ def register(app):
                     except Exception:
                         s_rc = 1
                         _log.debug("_run: start command failed", exc_info=True)
+                    # Poll up to 90s, not 15. Measured on the test host while installing the
+                    # LinuxGSM catalogue: most games bind immediately, but Nuclear Dawn took 20s
+                    # and Insurgency 40s, and the heavier Unreal/Unity titles are slower again.
+                    # At 15s those all finished the install with "installed, but it didn't start"
+                    # on a server that was simply still booting — the one sentence that makes an
+                    # operator go looking for a fault that isn't there.
+                    #
+                    # This is a background job, so the wait costs the browser nothing; the progress
+                    # row already says "Starting server" while it runs.
                     really_up = False
                     try:
-                        for _ in range(5):                    # poll ~15s: give a heavy first boot time to bind
+                        for _ in range(30):                   # ~90s
                             time.sleep(3)
                             _sm._invalidate_port_scan(remote.id)  # force a fresh scan each try
                             if gs.port and gs.port in (_remote_listening_ports(remote)
@@ -558,12 +567,26 @@ def register(app):
                         _finish(f"{short_name} installed and started")
                         log_action(None, "install_complete", target=gs.name, success=True)
                     else:
+                        # Two different outcomes shared one sentence. If LinuxGSM's own `start`
+                        # REPORTED a problem, say it didn't start — that is a fault, and the reason
+                        # is in the log. If start succeeded and only the port hasn't appeared yet,
+                        # the install worked and the server is still coming up: say THAT, and don't
+                        # dress it as a failure. Slow-booting games (ARK, Rust, the Unreal titles)
+                        # are the normal case for this, and the monitor flips the status to online
+                        # by itself the moment the port opens.
                         reason = _extract_start_error(start_out)
-                        note = f"{short_name} installed, but it didn't start"
-                        note += (" — " + reason) if reason else " — check the console for the reason."
+                        if reason or s_rc != 0:
+                            note = f"{short_name} installed, but it didn't start"
+                            note += (" — " + reason) if reason else " — check the console for the reason."
+                            _detail = ("start failed: " + reason) if reason else "start failed"
+                        else:
+                            note = (f"{short_name} installed and starting — it hasn't opened port "
+                                    f"{gs.port} yet, which some games take a few minutes to do. "
+                                    f"It will show as online on its own once it does.")
+                            _detail = "started; port %s not open after 90s" % gs.port
                         _finish(note, warn=True)
                         log_action(None, "install_complete", target=gs.name, success=False,
-                                   detail=(("start failed: " + reason) if reason else "start failed")[:300])
+                                   detail=_detail[:300])
             except Exception as e:
                 with _install_lock:
                     j = _install_jobs.get(gs_id)
