@@ -993,6 +993,12 @@ try:
     check("update-target: tip passed -> target is the tip",
           _r["update_available"] and _r["target_sha"] == "a" * 40 and _r["newer_unverified"] == 0)
 
+    # The card links each changelog line to its commit, which needs the repo THIS checkout tracks
+    # — a fork must link to the fork, not upstream. Same source the footer's linked SHA uses.
+    check("update-target: the payload carries the repo URL, so the changelog can link commits",
+          _re_bk.match(r"^https://github\.com/[^/]+/[^/]+$", _r.get("repo_url") or ""),
+          repr(_r.get("repo_url")))
+
     # The card's OTHER half, which nothing asserted: behind 0 means up to date. A mutation that
     # made every check report an available update survived a green run, so the one state the
     # operator sees most of the time was never pinned.

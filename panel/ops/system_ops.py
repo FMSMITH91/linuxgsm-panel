@@ -929,7 +929,11 @@ def _compute_update_status():
 
     base = {"git": True, "fetched": True, "current_version": cur_ver,
             "current_sha": cur_sha.strip(), "remote_sha": rem_sha.strip(),
-            "branch": branch, "checked_at": int(time.time())}
+            "branch": branch, "checked_at": int(time.time()),
+            # So the card can link each changelog line to the commit it names. Resolved from THIS
+            # checkout's origin, so a fork links to the fork rather than upstream — the same
+            # source the footer's linked SHA already uses.
+            "repo_url": github_repo_url()}
     if behind_n == 0:
         return {**base, "update_available": False, "ci_state": "passing", "behind": 0}
 
