@@ -224,8 +224,13 @@ def register(app):
                    detail=f"Type: {game_type}, port: {final_port}")
         port_note = (f" (port {desired_port} was busy — using {final_port})" if port_changed else "")
         name_note = (f" (the default name was taken — using '{short_name}')" if name_changed else "")
+        # "Progress is shown live below" was not true here. This route is submitted from the
+        # Install a Server page, whose only progress row is on a DIFFERENT page — so the install
+        # produced a toast pointing at nothing, and the dashboard then showed the server as
+        # "installing" with no progress of any kind. The corner widget (install_progress.js) is
+        # what makes the sentence true now, on whatever page you happen to be on.
         return _form_ok(f"Installing {short_name} on port {final_port}{port_note}{name_note}. "
-                        f"Progress is shown live below.", "manage_servers")
+                        f"Progress is shown in the corner while it runs.", "manage_servers")
 
     def _run_install_job(gs_id, remote_id, short_name, game_type, lgsm_name, final_port, content_games=None):
         """Full game-server install as a tracked background job with step progress.

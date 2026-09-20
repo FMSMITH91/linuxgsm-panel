@@ -202,6 +202,16 @@
       "GET"
     ]
   },
+  "/api/installs": {
+    "endpoint": "api_installs",
+    "guards": [
+      "utils.py:decorated_view",
+      "view:api_installs"
+    ],
+    "methods": [
+      "GET"
+    ]
+  },
   "/api/lgsm-data/refresh": {
     "endpoint": "api_lgsm_data_refresh",
     "guards": [

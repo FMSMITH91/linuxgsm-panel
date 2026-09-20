@@ -446,6 +446,42 @@ def register(app):
             info = {"reported": "", "build": "", "appid": "", "updated": None, "label": ""}
         return jsonify({"supports_update": gs.supports_update, **info})
 
+    @app.route("/api/installs")
+    @login_required
+    def api_installs():
+        """Every install this user can see that is still running, for the corner progress widget.
+
+        The per-server endpoint below answers "how is THIS install doing", which is all the Game
+        Servers page ever needed because the row is already on screen. Nothing answered "is
+        anything installing", so an install started from the Install a Server page produced a
+        toast and then nothing at all: the progress row lives on a different page, and the
+        dashboard shows the server as installing with no progress of any kind. An install runs for
+        five to forty-five minutes. It has to be visible from wherever you are.
+
+        Access is get_user_servers(), the same filter the dashboard and the palette use, so this
+        can never name a server the viewer is not allowed to see. That is also why the socket ping
+        that drives the widget carries no payload — the authorization happens here.
+        """
+        mine = {gs.id: gs for gs in get_user_servers(current_user)}
+        out = []
+        with _install_lock:
+            for sid, j in list(_install_jobs.items()):
+                if sid not in mine or j.get("status") != "running":
+                    continue
+                total = j.get("total") or 8
+                step = j.get("step") or 0
+                out.append({
+                    "id": sid,
+                    "name": j.get("name") or mine[sid].name,
+                    "step": step,
+                    "total": total,
+                    "percent": max(0, min(100, int(step * 100 / total))) if total else 0,
+                    "step_name": j.get("step_name") or "",
+                    "elapsed": int(time.time() - (j.get("started") or time.time())),
+                })
+        out.sort(key=lambda r: r["id"])
+        return jsonify({"installs": out})
+
     @app.route("/api/server/<int:server_id>/install-status")
     @login_required
     @server_access_required

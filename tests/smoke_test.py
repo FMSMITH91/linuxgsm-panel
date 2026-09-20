@@ -716,6 +716,66 @@ try:
     check("cron delete without MANAGE_SERVERS -> 403",
           mrc.post("/api/server/%d/cron/delete" % gs_id, json={"raw": "x"}).status_code == 403)
 
+    # ── /api/installs: the progress a corner widget can follow from any page ────────────────────
+    # A game-server install runs for five to forty-five minutes, and its only progress row lived on
+    # the Game Servers page. Start one from "Install a Server" and you got a toast reading
+    # "Progress is shown live below" — below was nothing — and the dashboard then listed the server
+    # as installing with no progress of any kind. Nothing answered "is anything installing", so
+    # this endpoint does, and install_progress.js renders it wherever you are.
+    #
+    # The access filter is the part that matters: the socket ping that drives the widget carries no
+    # payload precisely because authorization happens HERE.
+    import time as _ij_time
+    from panel.core.panel_state import _install_jobs as _ij, _install_lock as _il
+    with _il:
+        _ij[gs_id] = {"status": "running", "step": 3, "total": 8,
+                      "step_name": "Installing dependencies", "message": "", "log": [],
+                      "started": _ij_time.time() - 42, "updated": _ij_time.time(),
+                      "name": "probe-install"}
+    try:
+        _ins = c.get("/api/installs")
+        _ij_rows = (_ins.get_json() or {}).get("installs") or []
+        check("installs: a running install is listed", _ins.status_code == 200 and len(_ij_rows) == 1,
+              _ins.get_json())
+        _row = _ij_rows[0] if _ij_rows else {}
+        check("installs: ...with the step, the total and a percentage the widget can draw",
+              _row.get("step") == 3 and _row.get("total") == 8 and _row.get("percent") == 37,
+              _row)
+        check("installs: ...and how long it has been going",
+              isinstance(_row.get("elapsed"), int) and _row["elapsed"] >= 40, _row.get("elapsed"))
+        # THE security property: a viewer who cannot see the server must not learn its name from
+        # this endpoint, or an install would announce every server on the panel to everyone.
+        # A user in NO group sees no remotes, so get_user_servers() is empty for them — the same
+        # filter the dashboard and the palette use, which is the whole argument for the socket ping
+        # that drives the widget carrying no payload of its own.
+        with app.app_context():
+            _nou = User(username="noaccess-installs",
+                        password_hash=auth.hash_password("Str0ng!passw0rd-na"),
+                        display_name="No Access", is_superadmin=False, is_active=True)
+            db.session.add(_nou); db.session.commit()
+            _nou_id = _nou.id
+        try:
+            _mine_ins = client_as(_nou_id).get("/api/installs")
+            check("installs: a user without access to that server is told about NO install",
+                  _mine_ins.status_code == 200
+                  and not ((_mine_ins.get_json() or {}).get("installs") or []),
+                  _mine_ins.get_json())
+        finally:
+            with app.app_context():
+                _d = db.session.get(User, _nou_id)
+                if _d:
+                    db.session.delete(_d); db.session.commit()
+        # A finished job is not an install in progress — the widget settles those through the
+        # per-server endpoint, and leaving them here would pin a card open forever.
+        with _il:
+            _ij[gs_id]["status"] = "done"
+        check("installs: a finished job drops out of the live list",
+              not ((c.get("/api/installs").get_json() or {}).get("installs") or []))
+    finally:
+        with _il:
+            _ij.pop(gs_id, None)
+
+
     # ── Cookie-reuse defense: a session/remember cookie captured before logout must
     #    NOT work after logout. We log in for real (so we get genuine signed session +
     #    remember_token cookies), clone the cookie jar the way a thief would, log out,

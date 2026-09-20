@@ -304,6 +304,12 @@ window.CSRF = "{{ csrf_token() }}";
 {% if show_app_chrome and current_user.is_superadmin %}
 <script nonce="{{ csp_nonce }}" src="{{ asset_url('js/update_badge.js') }}"></script>
 {% endif %}
+{# The install-progress corner widget. Inside show_app_chrome because a login/setup page has no
+   servers to install, and it asks /api/installs once on load — which answers [] for anyone with
+   no install running, and starts no timer. #}
+{% if show_app_chrome %}
+<script nonce="{{ csp_nonce }}" src="{{ asset_url('js/install_progress.js') }}"></script>
+{% endif %}
 <script nonce="{{ csp_nonce }}" src="{{ asset_url('js/chrome.js') }}"></script>
 {% block scripts %}{% endblock %}
 </body>

@@ -1372,6 +1372,12 @@ check("register_routes: helper closures inside it <= %d (currently %d)"
       % (_HELPER_CEILING, _rr_helpers),
       _rr_helpers <= _HELPER_CEILING,
       "it went UP — a new helper belongs at module level, not nested in the route table")
+# 221, was 220: /api/installs is a genuinely new view — "is anything installing, and how far
+# along", which nothing answered. The per-server endpoint below it says how ONE install is doing,
+# which is all the Game Servers page needed because its row is already on screen; an install
+# started from the Install a Server page had no row anywhere, so it showed a toast and then
+# nothing for the next five to forty-five minutes. Access is get_user_servers(), which is also why
+# the socket ping that drives the corner widget carries no payload.
 # 220, was 219: /api/server/<id>/log-timestamps is a genuinely new view — it reads and sets
 # LinuxGSM's own `logtimestamp`, which stamps the console log AT WRITE TIME. That is the only way a
 # line written while nobody was watching can carry a real time; the panel tails the file and can
@@ -1397,8 +1403,8 @@ check("register_routes: helper closures inside it <= %d (currently %d)"
 # password is held on until it sets its own). This total exists to catch a view VANISHING during a
 # move, so adding one is a deliberate bump — and url_map_baseline.json's diff is the record of what
 # the new route actually is.
-check("register_routes: every one of the 220 views is still accounted for",
-      len(_rr_views) + _MOVED_VIEWS == 220,
+check("register_routes: every one of the 221 views is still accounted for",
+      len(_rr_views) + _MOVED_VIEWS == 221,
       "views inside=%d, moved out=%d" % (len(_rr_views), _MOVED_VIEWS))
 # These two use current_app, which only equals the closed-over `app` inside a request — every
 # caller is a view, so that holds. If they drift back inside a closure, the reasoning stops being

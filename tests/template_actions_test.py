@@ -1750,6 +1750,37 @@ check("\\d{1,9}" in _subj, "js: ...from digits only, not from arbitrary text")
 check("if(!repo)" in _subj and "createTextNode(text)" in _subj,
       "js: ...and renders plain text when there is no vetted repo URL")
 
+# ── install progress has to be visible from wherever you are ──────────────────────────────────
+# The progress row lives on the Game Servers page and nowhere else, so an install started from
+# "Install a Server" showed a toast and then nothing at all, and the dashboard listed the server as
+# installing with no progress. Three things had to line up, and all three are pinned: the widget is
+# loaded on every chrome page, the install form names the hook that opens it immediately, and the
+# shared ajax-form handler actually RUNS that hook.
+_base_html = (ROOT / "templates" / "base.html").read_text(encoding="utf-8")
+check("js/install_progress.js" in _base_html,
+      "base: the install-progress widget is loaded on every page with chrome")
+_inst_tpl = (ROOT / "templates" / "install_server.html").read_text(encoding="utf-8")
+check('data-ajax-after="watchInstallsNow"' in _inst_tpl,
+      "install page: the form opens the progress widget as soon as the install is accepted")
+
+# data-ajax-after used to be handed ONLY to refreshSection, which runs only when data-ajax-refresh
+# is set. The install form deliberately has no refresh target — the list it would refresh is on
+# another page — so the attribute was silently ignored, which is the trap this pins shut.
+_pj = (ROOT / "static" / "js" / "panel.js").read_text(encoding="utf-8")
+_dr = _pj[_pj.index("var doRefresh = function()"):]
+_dr = _dr[:_dr.index("};")]
+check("else if (after &&" in _dr and "window[after]()" in _dr,
+      "js: an ajax-form's after-hook runs even with no section to refresh",
+      "data-ajax-after is dropped unless data-ajax-refresh is also set")
+
+# The widget names a server, and a server name is user-supplied. It must never be concatenated
+# into markup, and it must never be translated.
+_ip = (ROOT / "static" / "js" / "install_progress.js").read_text(encoding="utf-8")
+check("innerHTML" not in _ip,
+      "js: the install widget builds its DOM, never assembling a server name into markup")
+check("data-no-i18n" in _ip,
+      "js: ...and a server's own name is exempt from the catalog walker")
+
 # ── Ctrl/Cmd+K must not be cancelled on a page with no palette ────────────────────────────────
 # palette.js is loaded unconditionally by base.html; #cmdk renders only under show_app_chrome. On
 # login, force_password and the setup pages the shortcut was cancelled and nothing opened.
