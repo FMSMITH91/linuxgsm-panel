@@ -898,6 +898,9 @@ _ARGV = {
     # Put a game account in the group the local sudoers grant names. Local-only: on a remote host
     # the panel's rights are the operator's sudoers to arrange, and this group means nothing there.
     "gameuser-group": ([_managed_user], lambda a: [], None),
+    # Free Steam's per-user crash-dump slots. The helper owns the path list; this side only
+    # validates the account name. See do_steam_dumps_sweep in tools/panel-helper.
+    "steam-dumps-sweep": ([_managed_user], lambda a: [], None),
     "apt-full-upgrade": ([_choice("phased", "standard")],
                          lambda a: [APT, "full-upgrade", "-y"]
                          + (["-o", "APT::Get::Always-Include-Phased-Updates=true"]

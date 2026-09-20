@@ -612,6 +612,51 @@ def install_game_dependencies(server, game_type=None, extra=""):
     return (rc == 0 and steam_ok), (out or err or "")
 
 
+def classify_install_failure(output):
+    """Why a LinuxGSM install failed, as (code, message), or None when nothing is recognised.
+
+    The panel used to answer every failed install with "the download may be corrupt or the mirror
+    unreachable. Try again shortly.", after retrying three times. For the three causes below that
+    advice is wrong and the retries cannot help: nothing about a second download changes whether
+    the account owns the game or whether Steam has a crash-dump slot left.
+
+    `code` is for the caller's retry decision, `message` is for the operator:
+
+      steam_dumps   Steam's ten /tmp/dumps slots are all held by live accounts. Sweep first; this
+                    is what is left when the sweep freed nothing.
+      steam_login   the game is not downloadable anonymously — it needs a Steam account that owns
+                    it, set in the server's LinuxGSM config.
+      os_unsupported  LinuxGSM caps this game at an older Ubuntu than the host runs.
+
+    Deliberately NOT classified: "Not enough disk space". LinuxGSM prints that for SteamCMD app
+    state 0x202, which it is not — 0x202 came back on this host for games the account had no
+    licence for, with 27 GB free. Repeating a wrong diagnosis with more confidence is worse than
+    the generic message, so 0x202 alone stays generic and only the unambiguous lines are named.
+    """
+    text = terminal.strip_escapes(output or "")
+    low = text.lower()
+    # Bandit's hard-coded-/tmp rule: this is a substring of SteamCMD's error text being matched,
+    # not a path anything here opens or writes.
+    if "please delete some /tmp/dumps" in low or "/tmp/dumps* directories" in low:   # nosec B108
+        return ("steam_dumps", (
+            "Steam keeps only ten crash-dump slots on a host (/tmp/dumps … /tmp/dumps09), one per "
+            "Linux account, and every one of them is in use by a game account that still exists. "
+            "SteamCMD cannot run at all until one is freed — remove a game server you no longer "
+            "need, or delete one of those directories on the host."))
+    if "steam login not set" in low or 'change steamuser="username"' in low \
+            or "no license" in low or "no subscription" in low:
+        return ("steam_login", (
+            "This game is not downloadable with an anonymous Steam login — it needs an account "
+            "that owns it. Put a Steam username and password in the server's LinuxGSM config "
+            "(steamuser / steampass) and install again."))
+    m = re.search(r"is not supported on ([^\r\n(]{3,60})", text)
+    if m:
+        return ("os_unsupported", (
+            "LinuxGSM does not support this game on %s. It caps this one at an older Ubuntu "
+            "release; the game picker marks those." % m.group(1).strip()))
+    return None
+
+
 def parse_missing_deps(output):
     """Extract package names LinuxGSM reported as missing (from its
     'Missing dependencies: pkg1 pkg2 ... Run:' warning)."""

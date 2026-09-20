@@ -964,6 +964,7 @@ _VERB_SAMPLES = {
     "lgsm-command": ["gmodserver", "gmodserver", "details", "-", "no"],
     "restart-flags": [],
     "gameuser-group": ["gmodserver"],
+    "steam-dumps-sweep": ["gmodserver"],
     "apt-install-minimal": ["libc6:i386", "curl"],
     "steamcmd-install": [],
     "content-scan": ["cstrike", "hl2"],
@@ -989,6 +990,119 @@ for _v, _a in _VERB_SAMPLES.items():
         _drift.append("%s: helper=%r panel=%r" % (_v, _hv, _pv))
 check("privileged: helper and panel build an identical argv for every verb",
       not _drift, "; ".join(_drift[:2]))
+
+
+# ── Steam's ten crash-dump slots, and the panel filling them ────────────────────────────────────
+# Steam will only use a crash-dump directory the running user OWNS, and it tries exactly ten names:
+# /tmp/dumps, then /tmp/dumps01..09. One slot per Linux account, permanently. The panel makes one
+# account per game server and `userdel` leaves the directory behind, so every uninstall cost the
+# host a slot — and at ten, SteamCMD stopped working for EVERY server on that host, installed or
+# not, with LinuxGSM reporting "No appmanifest_<appid>.acf found". Reproduced on the test box; four
+# of its ten slots belonged to accounts that no longer existed, and freeing one fixed it at once.
+#
+# The decision this verifies is which slots the sweep will remove. It must free the orphans and the
+# named account's own, keep every live account's, and fail CLOSED on a lookup it cannot make.
+_sd_orig = (_helper.os.lstat, _helper.pwd.getpwuid, _helper.pwd.getpwnam, _helper.shutil.rmtree)
+try:
+    _sd_removed = []
+    # /tmp/dumps..09 by index: uid 500 = the account being swept, 501 = another LIVE account,
+    # 502 = an account that no longer exists, 503 = one whose lookup BREAKS, and a symlink.
+    # dumps04 is a SYMLINK owned by the same gone-account uid as dumps02, so ownership gives it no
+    # protection at all: only the directory test can save it. (Owned by a live account it passed
+    # whether or not the guard was there — a check that proves nothing.)
+    _sd_owner = {"/tmp/dumps": 500, "/tmp/dumps01": 501, "/tmp/dumps02": 502,
+                 "/tmp/dumps03": 503, "/tmp/dumps04": 502}
+    _sd_link = "/tmp/dumps04"
+
+    class _SdStat(object):
+        def __init__(self, uid, isdir): self.st_uid, self.st_mode = uid, (0o040755 if isdir else 0o120777)
+
+    def _sd_lstat(path):
+        if path not in _sd_owner:
+            raise OSError("no such slot")
+        return _SdStat(_sd_owner[path], path != _sd_link)
+
+    def _sd_getpwuid(uid):
+        if uid == 502:
+            raise KeyError(uid)                 # the account is gone
+        if uid == 503:
+            raise OSError("passwd database unreadable")
+        return NS(pw_uid=uid)
+
+    _helper.os.lstat = _sd_lstat
+    _helper.pwd.getpwuid = _sd_getpwuid
+    _helper.pwd.getpwnam = lambda n: NS(pw_uid=500)
+    _helper.shutil.rmtree = lambda p: _sd_removed.append(p)
+
+    _helper.do_steam_dumps_sweep(["gmodserver"], None)
+    check("steam dumps: the swept account's own slot is freed",
+          "/tmp/dumps" in _sd_removed, _sd_removed)
+    check("steam dumps: a slot whose owner no longer exists is freed",
+          "/tmp/dumps02" in _sd_removed, _sd_removed)
+    check("steam dumps: a LIVE account's slot is left alone",
+          "/tmp/dumps01" not in _sd_removed, _sd_removed)
+    # Fail closed: an unreadable passwd database must not make every slot look orphaned.
+    check("steam dumps: a slot whose owner cannot be looked up is kept",
+          "/tmp/dumps03" not in _sd_removed, _sd_removed)
+    # A symlink wearing one of the ten names is never followed out of /tmp.
+    check("steam dumps: a symlink in a slot's place is not removed",
+          _sd_link not in _sd_removed, _sd_removed)
+
+    # Called for an account that is ALREADY gone (a sweep that lost the race with userdel): the
+    # orphan rule still has to free its slot, or the host stays wedged.
+    _sd_removed[:] = []
+    def _sd_missing(n): raise KeyError(n)
+    _helper.pwd.getpwnam = _sd_missing
+    _helper.do_steam_dumps_sweep(["gmodserver"], None)
+    check("steam dumps: an already-deleted account's slot is still freed, as an orphan",
+          "/tmp/dumps02" in _sd_removed and "/tmp/dumps01" not in _sd_removed, _sd_removed)
+finally:
+    (_helper.os.lstat, _helper.pwd.getpwuid, _helper.pwd.getpwnam, _helper.shutil.rmtree) = _sd_orig
+
+# The paths must be a constant in the helper, not anything a caller can influence.
+check("steam dumps: the ten slot paths are fixed, and only those ten",
+      _helper.STEAM_DUMP_SLOTS == ("/tmp/dumps",) + tuple("/tmp/dumps%02d" % i for i in range(1, 10)),
+      _helper.STEAM_DUMP_SLOTS)
+
+
+# ── what the panel TELLS you when an install fails ──────────────────────────────────────────────
+# Every failed install answered "the download may be corrupt or the mirror unreachable. Try again
+# shortly." — after three full re-downloads. For these causes that is wrong twice over: the advice
+# is wrong and the retries cannot help.
+from panel.ops.ssh_manager.hosts import classify_install_failure as _cif
+
+check("install failure: the Steam crash-dump wedge is named",
+      (_cif("FATAL: Steam cannot run. Please delete some /tmp/dumps* directories or change "
+            "their ownership to the local user.") or (None,))[0] == "steam_dumps")
+check("install failure: a game needing a real Steam account is named",
+      (_cif("[ FAIL ] Installing bsserver: Steam login not set. Update steamuser in "
+            "/home/g_bs/lgsm/config-lgsm/bsserver") or (None,))[0] == "steam_login")
+check("install failure: ...including the 'No License' wording SteamCMD uses",
+      (_cif("release state: unknown (No License)") or (None,))[0] == "steam_login")
+check("install failure: a game LinuxGSM caps at an older Ubuntu is named",
+      (_cif("Failure! BATTALION: Legacy is not supported on Ubuntu 24.04.5 LTS "
+            "(requires 22.04)") or (None,))[0] == "os_unsupported")
+# The one we must NOT name. LinuxGSM prints "Not enough disk space" for SteamCMD app state 0x202,
+# and on the test host 0x202 came back for games the account had no licence for, with 27 GB free.
+# A confident wrong diagnosis is worse than the generic one.
+check("install failure: SteamCMD 0x202 is left generic, not reported as a disk problem",
+      _cif("Error! App '740' state is 0x202 after update job.\n"
+           "Failure! Installing csgoserver: SteamCMD: Not enough disk space to download server "
+           "files") is None)
+check("install failure: unrecognised output stays generic",
+      _cif("some unrelated noise") is None and _cif("") is None and _cif(None) is None)
+
+# The install flow has to ACT on it: sweep before downloading, and stop retrying a cause a retry
+# cannot fix. Both are one line each and both were the actual bug.
+_ms_src = open(os.path.join(_root, "panel", "routes", "manage_servers.py"), encoding="utf-8").read()
+check("install flow: a stale crash-dump slot is swept before the download",
+      '"steam-dumps-sweep"' in _ms_src and _ms_src.count('"steam-dumps-sweep"') == 2, 
+      _ms_src.count('"steam-dumps-sweep"'))
+check("install flow: a classified failure breaks the retry loop instead of re-downloading",
+      "why = classify_install_failure(last_out)" in _ms_src and "if why:" in _ms_src)
+check("uninstall flow: the account's slot is freed before the account is deleted",
+      _ms_src.index('"steam-dumps-sweep"', _ms_src.index("user-delete-force") - 900)
+      < _ms_src.index('"user-delete-force"'))
 
 # ── Per-process CPU sampling reads the RIGHT /proc/<pid>/stat fields ──────────────────────────
 # The samplers split a stat line on the LAST ')' (comm can contain spaces and parens) and then sum
