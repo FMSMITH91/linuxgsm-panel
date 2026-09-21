@@ -3408,3 +3408,103 @@ check("terminal: a BUSY pump still closes its own descriptor, not the caller",
 _gate6.set()
 if _proc7.poll() is None:
     _proc7.kill()
+
+# ── the opt-in host-terminal sudo grant, RUN rather than read ─────────────────────────────────
+# The operator asked for sudo in the terminal that PROMPTS for a password, which is a different
+# thing from the NOPASSWD grants everywhere else in this file: a compromised panel holds no secret
+# that a password-required rule turns into root. That distinction is one word (`NOPASSWD:`) in one
+# line, so it is checked by running the writer and reading what it actually produced, not by
+# grepping the script for the word.
+#
+# The function is extracted from install.sh and executed with the sudoers directory pointed at a
+# temp dir — the same shape as the snapshot/rollback checks above, which exist because a
+# reimplementation would pass whatever install.sh happens to say.
+_inst6 = open(os.path.join(_root, "install.sh"), encoding="utf-8").read()
+_fn_i6 = _inst6.find("write_terminal_sudo_grant() {")
+_fn_j6 = _inst6.find("\n}\n", _fn_i6)
+check("install.sh: write_terminal_sudo_grant is where this gate expects it",
+      _fn_i6 != -1 and _fn_j6 > _fn_i6, "start=%d end=%d" % (_fn_i6, _fn_j6))
+check("install.sh: ...and it writes its OWN sudoers file, not the narrow grant's",
+      "/etc/sudoers.d/00-linuxgsm-panel-terminal" in _inst6[_fn_i6:_fn_j6 + 3],
+      "the terminal grant does not name a separate file — writing into "
+      "/etc/sudoers.d/linuxgsm-panel would be erased by the next self-update, and would put a "
+      "general rule in the file the narrow-grant gates guard")
+
+# ...and it must sort BEFORE the narrow grant. sudo reads /etc/sudoers.d in lexical order and the
+# LAST matching rule wins, so a general `ALL=(ALL) ALL` in a later-sorting file overrides the
+# narrow grant's NOPASSWD line for the helper — every privileged panel action then waits for a
+# password nothing can type. Confirmed on a real host: the same two rules worked or broke purely
+# by which filename sorted last. Renaming either file is enough to reintroduce it, so compare them
+# the way sudo does.
+_terminal_grant_name6 = "00-linuxgsm-panel-terminal"
+_narrow_grant_name6 = "linuxgsm-panel"
+check("install.sh: the terminal grant sorts BEFORE the narrow grant in /etc/sudoers.d",
+      sorted([_terminal_grant_name6, _narrow_grant_name6])[0] == _terminal_grant_name6,
+      "%r sorts after %r, so its general rule becomes the last match for the helper command and "
+      "every privileged panel action starts asking for a password"
+      % (_terminal_grant_name6, _narrow_grant_name6))
+check("install.sh: ...and that is the name it actually writes",
+      "/etc/sudoers.d/%s" % _terminal_grant_name6 in _inst6,
+      "install.sh does not write /etc/sudoers.d/%s" % _terminal_grant_name6)
+check("uninstall.sh: ...and the uninstaller removes that same file",
+      "/etc/sudoers.d/%s" % _terminal_grant_name6
+      in open(os.path.join(_root, "uninstall.sh"), encoding="utf-8").read(),
+      "a general sudo rule would be left naming an account that no longer exists")
+
+_fn_src6 = _inst6[_fn_i6:_fn_j6 + 3] if _fn_j6 > _fn_i6 > -1 else ""
+_sud_dir6 = _tempfile.mkdtemp(prefix="panel-tsudo-")
+_grant_f6 = os.path.join(_sud_dir6, "00-linuxgsm-panel-terminal")
+
+
+def _run_tsudo6(setting, pw_state="P"):
+    """Run the real function with the sudoers dir redirected. Returns (rc, output)."""
+    body = _fn_src6.replace("/etc/sudoers.d", _sud_dir6)
+    script = (
+        "set -u\n"
+        "RUN_AS_ROOT=1\n"
+        "PANEL_USER=paneluser\n"
+        "ok(){ echo \"OK: $*\"; }\n"
+        "warn(){ echo \"WARN: $*\"; }\n"
+        "info(){ echo \"INFO: $*\"; }\n"
+        "die(){ echo \"DIE: $*\"; exit 9; }\n"
+        "visudo(){ return 0; }\n"
+        # `passwd -S` prints: <user> <status> <date> ... — status P means a usable password.
+        "passwd(){ echo \"paneluser %s 01/01/2020 0 99999 7 -1\"; }\n" % pw_state
+        + body + "\n"
+        + ("" if setting is None else "PANEL_TERMINAL_SUDO=%s\nexport PANEL_TERMINAL_SUDO\n" % setting)
+        + "write_terminal_sudo_grant\n")
+    r = _sh_sub.run(["bash", "-c", script], capture_output=True, text=True)
+    return r.returncode, (r.stdout + r.stderr)
+
+
+_rc6, _out6 = _run_tsudo6(None)
+check("install.sh: with PANEL_TERMINAL_SUDO unset, nothing is written",
+      _rc6 == 0 and not os.path.exists(_grant_f6),
+      "an update granted the panel user general sudo without being asked: rc=%s %r" % (_rc6, _out6))
+
+_rc6, _out6 = _run_tsudo6("1")
+_granted6 = open(_grant_f6, encoding="utf-8").read().strip() if os.path.exists(_grant_f6) else ""
+check("install.sh: PANEL_TERMINAL_SUDO=1 writes the grant",
+      _rc6 == 0 and _granted6 != "", "rc=%s file=%r out=%r" % (_rc6, _granted6, _out6))
+check("install.sh: ...and the grant REQUIRES a password (this is the whole point)",
+      "NOPASSWD" not in _granted6,
+      "the terminal grant is passwordless — that is NOPASSWD:ALL for the panel user, which is "
+      "exactly what the narrow grant exists to avoid: %r" % (_granted6,))
+check("install.sh: ...and it grants the panel user, not everyone",
+      _granted6.startswith("paneluser "), "grant=%r" % (_granted6,))
+check("install.sh: ...and the file is not world-readable",
+      os.path.exists(_grant_f6) and (os.stat(_grant_f6).st_mode & 0o777) == 0o440,
+      "mode=%o" % (os.stat(_grant_f6).st_mode & 0o777 if os.path.exists(_grant_f6) else 0))
+
+# An account with no password can never answer the prompt, so the feature would look broken rather
+# than absent. It has to say so.
+_rc6, _out6 = _run_tsudo6("1", pw_state="L")
+check("install.sh: ...and it warns when the account has no usable password",
+      "passwd paneluser" in _out6,
+      "nothing told the operator that sudo can never succeed until a password is set: %r" % (_out6,))
+
+_rc6, _out6 = _run_tsudo6("0")
+check("install.sh: PANEL_TERMINAL_SUDO=0 removes the grant again",
+      _rc6 == 0 and not os.path.exists(_grant_f6),
+      "rc=%s still present: %r" % (_rc6, _out6))
+_shutil.rmtree(_sud_dir6, ignore_errors=True)

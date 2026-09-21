@@ -98,7 +98,9 @@ def sudo_hint(server, is_local):
         return ""
     return ("This shell runs as %s. If `sudo` refuses rather than asking for a password, that "
             "account has no general sudo entry — the panel's grant covers only its privileged "
-            "helper. Granting more is an install-time decision." % user)
+            "helper. To allow it, re-run the installer as root with PANEL_TERMINAL_SUDO=1 and "
+            "give %s a password; sudo will then prompt for it every time. Note that you would be "
+            "typing that password into a terminal the panel renders." % (user, user))
 
 
 class Session:

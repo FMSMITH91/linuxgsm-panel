@@ -844,6 +844,65 @@ sync_game_user_group() {
     return 0
 }
 
+# ── Optional: sudo in the host terminal, with a password ───────────────────────────────────────
+# Off by default. `PANEL_TERMINAL_SUDO=1 ./install.sh` turns it on, `=0` turns it off, and leaving
+# it UNSET changes nothing — so an update neither grants this behind the operator's back nor takes
+# away a grant they asked for.
+#
+# Its own file, never /etc/sudoers.d/linuxgsm-panel: the main grant is rewritten from scratch on
+# every install and self-update, and the gates on that narrow rule are worth keeping exactly as
+# strict as they are.
+#
+# The `00-` prefix is load-bearing, not decoration. sudo reads /etc/sudoers.d in LEXICAL order and
+# the LAST matching rule wins, so a general `ALL=(ALL) ALL` in a file sorting after
+# `linuxgsm-panel` overrides the narrow grant's NOPASSWD line for the helper — and then every
+# privileged action the panel takes sits waiting for a password that nothing can type. Measured on
+# a real host: `sudo -n <helper>` went from succeeding to "a password is required" purely from the
+# filename. Sorting first leaves the narrow NOPASSWD rules as the last match for the helper, while
+# everything else still prompts.
+#
+# NOT NOPASSWD, and that is the entire difference. The note at the top of this file argues that a
+# sudoers rule permitting a shell is equivalent to NOPASSWD:ALL — true of a passwordless rule, and
+# not true of this one: a compromised panel holds no secret that this line turns into root.
+#
+# What it DOES weaken is worth saying plainly, because it is not obvious: the operator types that
+# password into a terminal the panel is rendering. A panel that is already compromised can read it
+# as it is typed. This is strictly weaker than the same sudo over real SSH, and it is the reason
+# this is opt-in rather than the default.
+write_terminal_sudo_grant() {
+    [ "${RUN_AS_ROOT}" -eq 1 ] || return 0
+    _tsudo_f=/etc/sudoers.d/00-linuxgsm-panel-terminal
+    case "${PANEL_TERMINAL_SUDO:-}" in
+        1|yes|true)
+            ;;
+        0|no|false)
+            if [ -f "${_tsudo_f}" ]; then
+                rm -f "${_tsudo_f}"
+                ok "Host-terminal sudo disabled (removed ${_tsudo_f})"
+            fi
+            return 0
+            ;;
+        *)
+            # Unset: leave the host exactly as it is, and say which way that is.
+            [ -f "${_tsudo_f}" ] && info "Host-terminal sudo is enabled (${_tsudo_f})"
+            return 0
+            ;;
+    esac
+    echo "${PANEL_USER} ALL=(ALL) ALL" > "${_tsudo_f}"
+    chmod 440 "${_tsudo_f}"
+    visudo -cf "${_tsudo_f}" >/dev/null \
+        || { rm -f "${_tsudo_f}"; die "terminal sudoers entry invalid"; }
+    ok "Host-terminal sudo enabled: ${PANEL_USER} may run any command, after entering a password"
+    # A --system account has no password at all, so sudo would prompt for one that can never be
+    # given and the feature would look broken rather than absent. Check, and say what to run.
+    case "$(passwd -S "${PANEL_USER}" 2>/dev/null | awk '{print $2}')" in
+        P)  ;;
+        *)  warn "  '${PANEL_USER}' has no password set, so that sudo can never succeed."
+            warn "  Set one with:  passwd ${PANEL_USER}"
+            ;;
+    esac
+}
+
 write_sudoers_grant() {
     [ "${RUN_AS_ROOT}" -eq 1 ] || return 0
     if { [ "${HELPER_OK}" -eq 1 ] && [ "${ROOT_TOOLS_OK}" -eq 1 ]; } || root_tools_present; then
@@ -925,6 +984,7 @@ if [ "${IS_UPDATE}" -eq 1 ]; then
         check_origin_trusted
         install_root_tools
         [ "${ORIGIN_TRUSTED}" -eq 1 ] && write_sudoers_grant
+        write_terminal_sudo_grant
         ok "Already up to date (version ${FROM_VER}) — no snapshot taken, panel left running."
         exit 0
     fi
@@ -1032,6 +1092,7 @@ if [ "${IS_UPDATE}" -eq 1 ]; then
     check_origin_trusted
     install_root_tools
     [ "${ORIGIN_TRUSTED}" -eq 1 ] && write_sudoers_grant
+    write_terminal_sudo_grant
 
     info "[5/6] Starting the service…"
     ensure_service_tuning   # refresh the low-priority drop-in (existing installs get it on update)
@@ -1223,6 +1284,7 @@ if [ "${RUN_AS_ROOT}" -eq 1 ]; then
     # note at the top of this file for why it cannot currently be scoped, and delete
     # /etc/sudoers.d/linuxgsm-panel if you only manage remotes.
     write_sudoers_grant
+    write_terminal_sudo_grant
 
     cat > "${UNIT_FILE}" <<SERVICEEOF
 [Unit]
