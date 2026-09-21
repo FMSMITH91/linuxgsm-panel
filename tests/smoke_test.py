@@ -2078,6 +2078,66 @@ try:
           _r3.status_code in (301, 302, 303) and "/login" not in (_r3.headers.get("Location") or ""),
           "status=%d loc=%s" % (_r3.status_code, _r3.headers.get("Location") or ""))
 
+    # ── turning 2FA OFF needs the second factor, not just the password ────────────────────────
+    # /account/2fa/disable asked for the password alone — a weaker gate than the one on CHANGING
+    # the password in the same file, which demands the password AND a live code. That is
+    # backwards: removing the second factor is the change that makes every later login easier.
+    # A session someone else is sitting in front of, plus a password they already knew, could
+    # strip it. The route had no test entering it at all.
+    from panel.db.models import User as _TU
+
+    with app.app_context():
+        _td_codes = auth.generate_backup_codes()
+        _td_secret = auth.generate_totp_secret()
+        _td = _TU(username="tfa_disable", password_hash=auth.hash_password("Str0ng!passw0rd"),
+                  display_name="2FA off", is_superadmin=False, is_active=True,
+                  totp_enabled=True, totp_secret=encrypt_secret(_td_secret))
+        _td.set_backup_codes(_td_codes)
+        db.session.add(_td)
+        db.session.commit()
+        _td_id = _td.id
+
+    def _td_still_on():
+        with app.app_context():
+            _row = db.session.get(_TU, _td_id)
+            return bool(_row.totp_enabled and _row.totp_secret)
+
+    _tdc = client_as(_td_id)
+    _r = _tdc.post("/account/2fa/disable", data={"password": "Str0ng!passw0rd"},
+                   follow_redirects=True)
+    check("2fa disable: the password alone does NOT turn it off", _td_still_on(),
+          "2FA was removed on a password a borrowed session already had")
+    check("2fa disable: ...and the page says a code is needed",
+          b"code didn&#39;t match" in _r.data or b"code didn't match" in _r.data,
+          "no reason shown: %r" % _r.data[-200:])
+
+    _r = _tdc.post("/account/2fa/disable",
+                   data={"password": "wrong-password", "totp_code": _td_codes[1]},
+                   follow_redirects=True)
+    check("2fa disable: ...nor does a code with the wrong password", _td_still_on())
+    with app.app_context():
+        # Counted, not re-checked: use_backup_code CONSUMES, so asking "is it still valid" would
+        # spend it. The password is verified first precisely so a one-time code is never burnt by
+        # a request that fails for another reason.
+        check("2fa disable: ...and that backup code was NOT spent on the failed attempt",
+              db.session.get(_TU, _td_id).backup_codes_remaining == len(_td_codes),
+              "%d of %d codes left — a one-time code was consumed by a request that failed for "
+              "another reason" % (db.session.get(_TU, _td_id).backup_codes_remaining,
+                                  len(_td_codes)))
+
+    # The real thing: password + a backup code (what the card tells people to use when the
+    # authenticator is gone).
+    _r = _tdc.post("/account/2fa/disable",
+                   data={"password": "Str0ng!passw0rd", "totp_code": _td_codes[0]},
+                   follow_redirects=True)
+    check("2fa disable: password + a valid backup code DOES turn it off (positive control)",
+          not _td_still_on(),
+          "the route now refuses everything, which would make the checks above meaningless")
+    with app.app_context():
+        _row = db.session.get(_TU, _td_id)
+        check("2fa disable: ...and its backup codes are cleared with it",
+              not (_row.backup_codes or ""), "codes left behind: %r" % (_row.backup_codes or "")[:40])
+
     # ── Admin-issued passwords: generated, shown once, and forced to be replaced ──────────────
     # An admin creating an account, or resetting someone's password, hands over a credential TWO
     # people know. The panel generates it (so it is not a house pattern), returns it exactly once,

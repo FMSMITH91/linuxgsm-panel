@@ -266,14 +266,48 @@ def register(app):
     @app.route("/account/2fa/disable", methods=["POST"])
     @login_required
     def account_2fa_disable():
-        if not check_password(request.form.get("password", ""), current_user.password_hash):
+        """Turn 2FA off. Needs the password AND a current authenticator (or backup) code.
+
+        The password alone used to be enough — a weaker gate than the one on CHANGING the password
+        in the same file, which demands both. That is backwards: removing the second factor is the
+        change that makes every later login easier, and a session that someone else is sitting in
+        front of could strip it with a password they already knew. The account holder always has
+        one of the two codes (a backup code works, and is what the card below tells them to use),
+        and an admin can clear 2FA for someone who has lost both — so nobody is stranded by this.
+        """
+        # The real row, not the proxy — same as the password change below, because
+        # last_totp_step and the backup-code list are written here.
+        u = current_user._get_current_object()
+        if not check_password(request.form.get("password", ""), u.password_hash):
             flash("Password incorrect — two-factor authentication was not changed.", "danger")
             return redirect(url_for("account"))
-        current_user.totp_enabled = False
-        current_user.totp_secret = None
-        current_user.backup_codes = ""   # 2FA off → its backup codes no longer apply
+        # Checked LAST, and in this order, for the same reasons the password change gives: a
+        # one-time backup code must never be spent on an otherwise-invalid request, and a TOTP
+        # code stays valid for ~90s, so accepting it on validity alone lets an observed code be
+        # replayed within that window. verify_totp_STEP + last_totp_step is what makes it single
+        # use, and it is committed below with the rest.
+        code = (request.form.get("totp_code") or "").strip()
+        if u.totp_enabled:
+            ok_2fa = False
+            _step = verify_totp_step(u.totp_secret_plain, code) if u.totp_secret_plain else None
+            if _step is not None:
+                if _step <= (u.last_totp_step or 0):
+                    flash("That code has already been used — wait for your authenticator to show "
+                          "the next one.", "danger")
+                    return redirect(url_for("account"))
+                u.last_totp_step = _step
+                ok_2fa = True
+            elif u.use_backup_code(code):
+                ok_2fa = True
+            if not ok_2fa:
+                flash("That authenticator code didn't match — two-factor authentication was not "
+                      "turned off.", "danger")
+                return redirect(url_for("account"))
+        u.totp_enabled = False
+        u.totp_secret = None
+        u.backup_codes = ""   # 2FA off → its backup codes no longer apply
         db.session.commit()
-        log_action(current_user, "2fa_disabled", target=current_user.username)
+        log_action(u, "2fa_disabled", target=u.username)
         flash("Two-factor authentication disabled.", "success")
         return redirect(url_for("account"))
 

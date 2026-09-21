@@ -117,10 +117,14 @@
       {% if current_user.totp_enabled %}
         <p class="mb-3"><span class="badge bg-success"><i class="bi bi-check-circle-fill"></i> Enabled</span>
           <span class="text-secondary ms-2">You'll be asked for an authenticator code when you sign in.</span></p>
+        {# The code field is not optional decoration: the route requires it, exactly as the
+           password change above does. Turning the second factor OFF is the change that makes
+           every later login easier, so it asks for the same proof. A backup code works here. #}
         <form method="POST" action="{{ url_for('account_2fa_disable') }}">
-          <label class="form-label small">Confirm your password to turn 2FA off</label>
-          <div class="d-flex gap-2" style="max-width: 420px;">
-            <input type="password" name="password" class="form-control form-control-sm" autocomplete="current-password" required>
+          <label class="form-label small">Confirm your password and a current code to turn 2FA off</label>
+          <div class="d-flex gap-2 flex-wrap" style="max-width: 560px;">
+            <input type="password" name="password" class="form-control form-control-sm" style="min-width:12rem;flex:1 1 12rem;" autocomplete="current-password" placeholder="Password" required>
+            <input type="text" name="totp_code" class="form-control form-control-sm" style="min-width:9rem;flex:0 1 9rem;" inputmode="numeric" autocomplete="one-time-code" placeholder="Code or backup code" required>
             <button class="btn btn-outline-danger btn-sm text-nowrap" type="submit">Disable 2FA</button>
           </div>
         </form>
