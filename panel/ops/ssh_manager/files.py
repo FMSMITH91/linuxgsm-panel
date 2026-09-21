@@ -623,10 +623,20 @@ def stat_upload_targets(server, user, reldir, names):
         return None
     inner = (f"find {_core._quote(apdir)} -maxdepth 1 -mindepth 1 "
              f"-printf '%y\\t%s\\t%T@\\t%f\\n' 2>/dev/null")
-    out, _, _ = _core.run_command(server, f"sudo -u {_core._quote(user)} bash -c {_core._quote(_guarded(user, apdir, inner))}",
+    out, err, rc = _core.run_command(server, f"sudo -u {_core._quote(user)} bash -c {_core._quote(_guarded(user, apdir, inner))}",
                             timeout=20, sudo=False)
     if _OUTSIDE_HOME in (out or ""):
         return None
+    # A listing that did not RUN is not a listing with nothing in it. rc was discarded here, so an
+    # unreachable host produced out="" -> no matches -> the caller answered {"existing": [],
+    # "checked": true}: "we looked, nothing conflicts". That is the false clear the upload-check
+    # route exists to prevent, and its own except branch already handles this correctly ("An
+    # unreachable host is the ordinary case here ... it must not answer 'nothing exists'") — it
+    # was simply never reached, because run_command returns ("", "...", -1) instead of raising for
+    # the local and Tailscale transports. An empty directory still exits 0, so this only fires
+    # when the command itself failed.
+    if rc != 0:
+        raise ConnectionError((err or out or "could not list the upload directory").strip()[:200])
     present = {}
     for line in (out or "").splitlines():
         parts = line.split("\t")

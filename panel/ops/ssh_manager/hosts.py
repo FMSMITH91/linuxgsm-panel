@@ -1096,7 +1096,10 @@ def remote_bootstrap_vps(server, set_timezone="UTC", enable_ufw=True, install_lg
     elif username:
         emit(f"Creating LinuxGSM user: {username}")
         out, _, _ = _core.run_command(server, f"id {_core._quote(username)} 2>/dev/null && echo 'EXISTS' || echo 'NOTEXISTS'", timeout=10)
-        if "NOTEXISTS" not in out:
+        # Same correction: an unread probe is not "the account is already there". Reading it that
+        # way SKIPPED the account creation below, and the bootstrap then carried on against a user
+        # that does not exist.
+        if "NOTEXISTS" not in out and "EXISTS" in out:
             note(f"User {username} already exists")
         else:
             _core.create_game_user(server, username, timeout=15)
@@ -1157,7 +1160,13 @@ def remote_bootstrap_vps(server, set_timezone="UTC", enable_ufw=True, install_lg
 def remote_check_tailscale(server):
     """Check if Tailscale is already installed and running on the remote."""
     installed_out, _, installed_rc = _core.run_command(server, "which tailscale 2>/dev/null && echo 'INSTALLED' || echo 'NOTINSTALLED'", timeout=10)
-    installed = "NOTINSTALLED" not in installed_out  # "INSTALLED" is a substring of "NOTINSTALLED"
+    # BOTH halves, and the same shape manage_servers.py already uses for its `id` probe:
+    # `"NOTEXISTS" not in idout and "EXISTS" in idout`. A bare negative test reads an EMPTY answer
+    # as the positive one — "NOTINSTALLED" is not in "", so a probe that never ran said Tailscale
+    # IS installed. run_command returns ("", "...timed out", -1) rather than raising for the local
+    # and Tailscale transports, so that is the ordinary unreachable case, not a rare one.
+    installed = ("NOTINSTALLED" not in installed_out    # "INSTALLED" is a substring of it
+                 and "INSTALLED" in installed_out)
 
     running = False
     ts_ip = ""

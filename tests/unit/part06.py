@@ -2266,6 +2266,60 @@ check("recover.sh: ...and it says which install it is driving, before any passwo
 _shutil.rmtree(_rv_root, ignore_errors=True)
 
 # ── Every part file must actually be RUN ──────────────────────────────────────────────────────
+# ── a negative sentinel must be paired with its positive one ─────────────────────────────────
+# The probes in this codebase are `cmd && echo 'FOUND' || echo 'NOTFOUND'`, and a caller that
+# tests only the NEGATIVE token inverts its answer on an EMPTY read: `"NOTFOUND" not in ""` is
+# True. run_command returns ("", "...timed out", -1) rather than raising for the local and
+# Tailscale transports, so "" is the ordinary unreachable case, not an exotic one.
+#
+# Three sites read that way at once: a Tailscale check that called an unreachable host
+# "installed", an interface probe that named an interface it never saw, and a bootstrap `id`
+# probe that said the account already existed and therefore SKIPPED creating it. The fourth site
+# was already correct and is the idiom: `"NOTEXISTS" not in idout and "EXISTS" in idout`.
+import ast as _sent_ast
+_sent_root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+_sent_bad, _sent_seen = [], 0
+for _dirpath, _dirnames, _filenames in os.walk(os.path.join(_sent_root, "panel")):
+    _dirnames[:] = [_d for _d in _dirnames if _d != "__pycache__"]
+    for _fn in sorted(_filenames):
+        if not _fn.endswith(".py"):
+            continue
+        _rel = os.path.relpath(os.path.join(_dirpath, _fn), _sent_root)
+        _tree = _sent_ast.parse(open(os.path.join(_dirpath, _fn), encoding="utf-8").read())
+        for _n in _sent_ast.walk(_tree):
+            if not isinstance(_n, _sent_ast.Compare) or len(_n.ops) != 1:
+                continue
+            if not isinstance(_n.ops[0], _sent_ast.NotIn):
+                continue
+            _lhs = _n.left
+            if not (isinstance(_lhs, _sent_ast.Constant) and isinstance(_lhs.value, str)
+                    and _lhs.value.startswith("NOT") and len(_lhs.value) > 3):
+                continue
+            _sent_seen += 1
+            _positive = _lhs.value[3:]          # "NOTINSTALLED" -> "INSTALLED"
+            # The positive token must be tested somewhere in the same enclosing expression.
+            _ok = False
+            for _outer in _sent_ast.walk(_tree):
+                if not isinstance(_outer, _sent_ast.BoolOp):
+                    continue
+                if not any(_c is _n for _c in _sent_ast.walk(_outer)):
+                    continue
+                for _c in _sent_ast.walk(_outer):
+                    if (isinstance(_c, _sent_ast.Compare) and len(_c.ops) == 1
+                            and isinstance(_c.ops[0], _sent_ast.In)
+                            and isinstance(_c.left, _sent_ast.Constant)
+                            and _c.left.value == _positive):
+                        _ok = True
+            if not _ok:
+                _sent_bad.append("%s:%d  %r without a matching %r"
+                                 % (_rel, _n.lineno, _lhs.value, _positive))
+
+check("sweep: the negative-sentinel scan found probes to check", _sent_seen >= 3,
+      "found %d" % _sent_seen)
+check("probes: a negative sentinel is always paired with its positive one",
+      not _sent_bad,
+      "an EMPTY read passes these, inverting the answer: %s" % "; ".join(_sent_bad))
+
 # ── a suite's REPORTER must not be the thing that fails ──────────────────────────────────────
 # Every suite here ends by printing its results. That loop did `"  [%s]" % detail`, which raises
 # TypeError when detail is a tuple or an int — and it only ever runs that branch for a FAILING
