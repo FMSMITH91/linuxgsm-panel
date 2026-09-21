@@ -920,6 +920,53 @@ try:
                 _sa_row.is_superadmin, _sa_row.is_active = True, True
             db.session.commit()
 
+    # ── deleting a user ───────────────────────────────────────────────────────────────────────
+    # /users/<id>/delete had no test executing it at all. It refuses on four counts, but only two
+    # of them are REACHABLE: the explicit "only a superadmin may delete a superadmin" is already
+    # covered by can_administer_user (a superadmin's permissions are never a subset of a delegated
+    # admin's), and "never the last one" needs a caller who is a superadmin AND a target who is
+    # the only superadmin — which can only be the caller, caught first by the self check. Both are
+    # belt-and-braces. So these assert the OUTCOME rather than which line produced it: removing
+    # any single guard changes nothing, which is the point of having them.
+    _del_tag = "del_" + secrets.token_hex(3)
+    with app.app_context():
+        _victim_sa = User(username=_del_tag + "_sa",
+                          password_hash=auth.hash_password(secrets.token_hex(16)),
+                          display_name="victim sa", is_superadmin=True, is_active=True)
+        _victim_ord = User(username=_del_tag + "_ord",
+                           password_hash=auth.hash_password(secrets.token_hex(16)),
+                           display_name="victim ord", is_superadmin=False, is_active=True)
+        db.session.add_all([_victim_sa, _victim_ord])
+        db.session.commit()
+        _vsa_id, _vord_id = _victim_sa.id, _victim_ord.id
+
+    def _alive(uid):
+        with app.app_context():
+            return db.session.get(User, uid) is not None
+
+    ca_del = client_as(admin_id)
+
+    # 1. A delegated admin must not remove a superadmin.
+    cmu.post("/users/%d/delete" % _vsa_id)
+    check("delete user: MANAGE_USERS alone cannot delete a SUPERADMIN", _alive(_vsa_id),
+          "a non-superadmin removed a superadmin account")
+
+    # 2. The control that makes 1 mean something: a real superadmin CAN delete that same account,
+    #    so the refusal above is authorization and not "deleting a superadmin never works".
+    ca_del.post("/users/%d/delete" % _vsa_id)
+    check("delete user: ...while a superadmin CAN delete that same account", not _alive(_vsa_id),
+          "the control failed, so the refusal above proves nothing")
+
+    # 3. And an ordinary account, the plain path.
+    ca_del.post("/users/%d/delete" % _vord_id)
+    check("delete user: a superadmin can delete an ordinary account", not _alive(_vord_id))
+
+    # 4. Nobody deletes themselves — the one guard here that is reachable on its own, and the one
+    #    standing between a panel and having no administrator at all.
+    ca_del.post("/users/%d/delete" % admin_id)
+    check("delete user: you cannot delete your own account", _alive(admin_id),
+          "the acting superadmin deleted themselves — the panel would have no admin left")
+
     # ── Superadmin sanity: still full access ──
     ca = client_as(admin_id)
     for p in ["/users", "/groups", "/logs", "/remotes", "/server-management", "/tailscale",
