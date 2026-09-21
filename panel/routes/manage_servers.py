@@ -326,6 +326,12 @@ def register(app):
         # games (validated against the known set). This adds a content step to the install job.
         content_games = ([g for g in request.form.getlist("content_games") if g in GMOD_CONTENT_GAMES]
                          if game_type == "gmod" else [])
+        # Persist it: this list arrives on the form and nowhere else, so without a copy on the row
+        # a retry cannot reproduce it even in principle — it re-ran the job with no selection, the
+        # content step was skipped, and the server came back without the maps and props that were
+        # asked for, silently.
+        gs.content_games = ",".join(content_games)
+        db.session.commit()
         _prune_jobs(_install_jobs, _install_lock)
         with _install_lock:
             _install_jobs[gs.id] = {
@@ -1000,13 +1006,20 @@ def register(app):
         gs.status = "installing"
         gs.install_error, gs.install_retryable = "", True
         db.session.commit()
+        # The same selection the original install was given, revalidated on the way out so an
+        # edited row cannot widen it — and the same step count derived from it, rather than a
+        # hardcoded 8 that made the retry's progress bar wrong for exactly these servers.
+        _retry_content = ([g for g in (gs.content_games or "").split(",")
+                           if g in GMOD_CONTENT_GAMES] if gs.game_type == "gmod" else [])
         with _install_lock:
             _install_jobs[gs.id] = {
-                "status": "running", "step": 0, "total": 8, "step_name": "Queued",
+                "status": "running", "step": 0, "total": (9 if _retry_content else 8),
+                "step_name": "Queued",
                 "message": "", "log": [], "started": time.time(), "updated": time.time(),
                 "name": gs.name,
             }
-        _run_install_job(gs.id, remote.id, gs.short_name, gs.game_type, gs.lgsm_name, gs.port)
+        _run_install_job(gs.id, remote.id, gs.short_name, gs.game_type, gs.lgsm_name, gs.port,
+                         _retry_content)
         _notify_servers_changed(app)   # the corner progress widget picks it up from here
         log_action(current_user, "retry_install", target=gs.name)
         return _form_ok(f"Installing {gs.short_name} again. "
@@ -1037,7 +1050,13 @@ def register(app):
             if _wants_json():
                 return jsonify({"success": False, "message": _m}), 409
             flash(_m, "warning")
-            return redirect(url_for("manage_servers"))
+            # index, not manage_servers: this route needs UNINSTALL_SERVER, and
+            # /servers/manage needs MANAGE_SERVERS or INSTALL_SERVER — neither of which
+            # an uninstall-only operator has. The form is a native POST, so the browser
+            # FOLLOWS this redirect and the uninstall they just did successfully ended
+            # on "You do not have permission to do that." /servers/manage is itself only
+            # a 302 to index, so this changes nothing for anyone who could reach it.
+            return redirect(url_for("index"))
         remote = gs.remote
         short_name = gs.short_name
         game_port = gs.port
@@ -1104,7 +1123,7 @@ def register(app):
                 if _wants_json():
                     return jsonify({"success": False, "message": _em}), 500
                 flash(_em, "danger")
-                return redirect(url_for("manage_servers"))
+                return redirect(url_for("index"))
             if rc == 12:
                 fw_note += (" The account was removed but its home directory could not be — "
                             "check /home/%s on the host." % short_name)
@@ -1129,7 +1148,7 @@ def register(app):
             if _wants_json():
                 return jsonify({"success": True, "message": _m})
             flash(_m, "success")
-            return redirect(url_for("manage_servers"))
+            return redirect(url_for("index"))
 
         except Exception:
             _em = _log_and_generic("uninstall failed")
@@ -1137,7 +1156,7 @@ def register(app):
             if _wants_json():
                 return jsonify({"success": False, "message": _em}), 500
             flash(_em, "danger")
-            return redirect(url_for("manage_servers"))
+            return redirect(url_for("index"))
 
     @app.route("/servers/<int:server_id>/edit", methods=["POST"])
     @login_required

@@ -108,6 +108,7 @@
   "installed": "installé",
   "installing": "installation",
   "Installing now": "Installation en cours",
+  "Progress unavailable — still trying": "Progression indisponible — nouvelle tentative en cours",
   "Installing…": "Installation…",
   "It was queued by the daily-restart schedule.": "Il a été mis en file d'attente par la planification de redémarrage quotidien.",
   "It will run automatically once the server is empty, or you can do it now.": "Il s'exécutera automatiquement dès que le serveur sera vide, ou vous pouvez le faire maintenant.",

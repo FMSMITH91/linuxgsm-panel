@@ -1227,6 +1227,31 @@ check("install: the firewall opens are AST-visible at all", _open_calls >= 2,
 check("install: no firewall open ignores the port the panel refused to adopt",
       not _unguarded, "; ".join(_unguarded))
 
+# ── uninstall must not hand you to a page your permission cannot open ────────────────────────
+# uninstall_server needs UNINSTALL_SERVER; /servers/manage needs MANAGE_SERVERS or INSTALL_SERVER.
+# An uninstall-only operator has neither, and the dashboard's Uninstall form is a native POST, so
+# the browser FOLLOWS the redirect: the uninstall succeeded and the page they landed on said "You
+# do not have permission to do that."
+#
+# The rbac suite drives one of the four exits. This covers the other three, which differ only in
+# which failure got them there.
+_uninstall_bad = []
+for _n in _ast.walk(_ms_ast):
+    if not (isinstance(_n, _ast.FunctionDef) and _n.name == "uninstall_server"):
+        continue
+    for _c in _ast.walk(_n):
+        if (isinstance(_c, _ast.Call) and getattr(_c.func, "id", "") == "url_for"
+                and _c.args and isinstance(_c.args[0], _ast.Constant)
+                and _c.args[0].value == "manage_servers"):
+            _uninstall_bad.append("line %d" % _c.lineno)
+check("uninstall: the function was found to check at all",
+      any(isinstance(_n, _ast.FunctionDef) and _n.name == "uninstall_server"
+          for _n in _ast.walk(_ms_ast)),
+      "uninstall_server was renamed — this check is now looking at nothing")
+check("uninstall: no exit sends the operator to a page their permission cannot open",
+      not _uninstall_bad,
+      "redirects to /servers/manage at: %s" % ", ".join(_uninstall_bad))
+
 # ── The Invalid-platform workaround must always be unwound ───────────────────────────────────
 # It writes steamcmdforcewindows=yes into the INSTANCE config, runs the download, and writes it
 # back to "no". The key outlives the install: left at "yes", every later update and validate for

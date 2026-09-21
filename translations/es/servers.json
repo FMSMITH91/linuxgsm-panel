@@ -108,6 +108,7 @@
   "installed": "instalado",
   "installing": "instalando",
   "Installing now": "Instalando ahora",
+  "Progress unavailable — still trying": "Progreso no disponible: seguimos intentándolo",
   "Installing…": "Instalando…",
   "It was queued by the daily-restart schedule.": "Lo puso en cola la programación de reinicio diario.",
   "It will run automatically once the server is empty, or you can do it now.": "Se ejecutará automáticamente cuando el servidor esté vacío, o puedes hacerlo ahora.",

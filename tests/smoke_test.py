@@ -1063,6 +1063,71 @@ try:
             (_rf.status, _rf.installed, _rf.install_error, _rf.install_retryable) = _rf_before
             db.session.commit()
 
+    # ── a retry must reproduce the install it is retrying ─────────────────────────────────────
+    # The mounted-content games for a GMod server arrive on the install FORM and were never stored,
+    # so retry_install re-ran the job with no seventh argument: `if content_games and game_type ==
+    # "gmod"` was false, the content step was skipped, no mount.cfg was written, and the server
+    # came back missing the maps and props that were asked for — with nothing on screen saying so.
+    # The retry's progress bar also hardcoded 8 steps while the original derived 9 for these.
+    with app.app_context():
+        _cg = db.session.get(GameServer, gs_id)
+        _cg_before = (_cg.content_games, _cg.status, _cg.installed,
+                      _cg.install_error, _cg.install_retryable, _cg.game_type)
+        _cg_remote_id = _cg.remote_id
+        _cg.content_games = "cstrike,tf"          # real GMOD_CONTENT_GAMES keys
+        _cg.game_type, _cg.status, _cg.installed = "gmod", "failed", False
+        _cg.install_error, _cg.install_retryable = "mirror unreachable", True
+        db.session.commit()
+    try:
+        c.post("/servers/%d/retry-install" % gs_id)
+        with _install_lock_sm:
+            _cgj = dict(_install_jobs_sm.get(gs_id) or {})
+        check("retry: a GMod retry counts the content step the original did",
+              _cgj.get("total") == 9,
+              "total=%r — the progress bar is short by the content step" % (_cgj.get("total"),))
+        with app.app_context():
+            check("retry: ...and the selection survived on the row to be replayed",
+                  (db.session.get(GameServer, gs_id).content_games or "") == "cstrike,tf",
+                  db.session.get(GameServer, gs_id).content_games)
+        # ...and it gets there from the FORM. Writing the column by hand above tests the replay
+        # but not the capture, and the capture is the half that was missing: the selection arrived
+        # on this POST and was dropped on the floor.
+        # The route refuses when it cannot read the host's ports ("Can't reach ... right now"), and
+        # this suite's remote is a 127.0.0.1 nothing answers on. Stub the scan for this POST only.
+        _appmod_cg = sys.modules["app"]
+        _cg_rlp = _appmod_cg._remote_listening_ports
+        _appmod_cg._remote_listening_ports = lambda r: {22}
+        _add = c.post("/servers/add", data={
+            "remote_id": str(_cg_remote_id), "game_type": "gmod",
+            "server_name": "cgcapture", "port": "28980",
+            "content_games": ["cstrike", "tf"],
+        }, follow_redirects=True)
+        _appmod_cg._remote_listening_ports = _cg_rlp
+        with app.app_context():
+            _new = GameServer.query.filter_by(short_name="cgcapture").first()
+            _captured = (_new.content_games or "") if _new is not None else "<no row>"
+            _new_id = _new.id if _new is not None else None
+        check("retry: the content selection is captured from the install form in the first place",
+              _captured == "cstrike,tf",
+              "row stored %r (POST -> %s)" % (_captured, _add.status_code))
+        if _new_id is not None:
+            with app.app_context():
+                _n = db.session.get(GameServer, _new_id)
+                if _n is not None:
+                    db.session.delete(_n); db.session.commit()
+            with _install_lock_sm:
+                _install_jobs_sm.pop(_new_id, None)
+    finally:
+        with app.app_context():
+            # Restore what it WAS, including game_type — putting back a hardcoded "gmod" left
+            # the row lying about itself and failed four unrelated checks further down the suite.
+            _cg = db.session.get(GameServer, gs_id)
+            (_cg.content_games, _cg.status, _cg.installed,
+             _cg.install_error, _cg.install_retryable, _cg.game_type) = _cg_before
+            db.session.commit()
+        with _install_lock_sm:
+            _install_jobs_sm.pop(gs_id, None)
+
     # ── /api/installs: the progress a corner widget can follow from any page ────────────────────
     # A game-server install runs for five to forty-five minutes, and its only progress row lived on
     # the Game Servers page. Start one from "Install a Server" and you got a toast reading

@@ -160,6 +160,67 @@ else:
           "static/js: every refreshSection of one region re-arms it the same way",
           "; ".join("%s %s at %s" % (k, v, _rs_where[k]) for k, v in sorted(_mixed.items())))
 
+# ── a FAILED poll is not the answer "nothing is installing" ──────────────────────────────────
+# install_progress.js polled /api/installs and, on any error, called stop() — which clears the
+# interval. Nothing re-arms it: watchInstallsNow is called only from the servers_changed socket
+# event and the install/retry form hooks, and servers_changed fires at the START and END of an
+# install, never per step. So one dropped request ended progress for the rest of the page's life,
+# and the bar stayed on screen showing the last step it received — a frozen reading presented as
+# a live one, which is the worst of the three possible outcomes.
+if not esprima:
+    skip("install_progress: a failed poll does not stop the poller", "esprima not installed")
+else:
+    _ip_src = (ROOT / "static" / "js" / "install_progress.js").read_text(encoding="utf-8")
+    _ip_ast = esprima.parseScript(_ip_src, {"loc": True}).toDict()
+
+    def _calls_named(node, name):
+        found = []
+
+        def walk(n):
+            if isinstance(n, dict):
+                if (n.get("type") == "CallExpression"
+                        and (n.get("callee") or {}).get("type") == "Identifier"
+                        and (n.get("callee") or {}).get("name") == name):
+                    found.append(((n.get("loc") or {}).get("start") or {}).get("line"))
+                for v in n.values():
+                    walk(v)
+            elif isinstance(n, list):
+                for v in n:
+                    walk(v)
+        walk(node)
+        return found
+
+    _catch_stops, _catches = [], 0
+
+    def _scan_catches(n):
+        global _catches
+        if isinstance(n, dict):
+            if (n.get("type") == "CallExpression"
+                    and (n.get("callee") or {}).get("type") == "MemberExpression"
+                    and ((n.get("callee") or {}).get("property") or {}).get("name") == "catch"):
+                _catches += 1
+                for _a in (n.get("arguments") or []):
+                    _catch_stops.extend(_calls_named(_a, "stop"))
+            for v in n.values():
+                _scan_catches(v)
+        elif isinstance(n, list):
+            for v in n:
+                _scan_catches(v)
+
+    _scan_catches(_ip_ast)
+    check(_catches >= 2, "install_progress: the poll's error handlers were found",
+          "found %d .catch handlers" % _catches)
+    check(not _catch_stops,
+          "install_progress: a failed poll does not stop the poller",
+          "stop() is called from a .catch at line(s) %s — one dropped request then ends progress "
+          "for the life of the page" % ", ".join(str(x) for x in _catch_stops))
+    # ...and the frozen bar must say it is frozen, rather than looking like a live reading.
+    check("markStale" in _ip_src and "ip-stale" in _ip_src,
+          "install_progress: ...and a row it has stopped getting readings for is marked stale")
+    _css = (ROOT / "static" / "css" / "panel.css").read_text(encoding="utf-8")
+    check(".ip-stale{" in _css,
+          "install_progress: ...with a style, so 'stale' is visible and not just a class name")
+
 # ── A form that appears AFTER page load carries no CSRF token ─────────────────────────────────
 # panel.js gives every POST form a hidden csrf_token, once, on DOMContentLoaded, and wraps fetch()
 # so every mutating fetch carries the header. A form submitted with form.submit() has neither:
@@ -1963,9 +2024,39 @@ check("data-no-i18n" in _ip,
 # filterServers shows or hides each one on its own text and tags — a progress row carries neither,
 # so unhandled it sorted away from its server and survived a filter that hid it.
 _dashjs3 = (ROOT / "static" / "js" / "dashboard.js").read_text(encoding="utf-8")
-check("tb.querySelectorAll('tr[data-server-id]')" in _dashjs3
-      and "tb.appendChild(prog)" in _dashjs3,
-      "js: sorting moves a progress row with its server, not to one end of the table")
+check("tb.querySelectorAll('tr[data-server-id]')" in _dashjs3,
+      "js: sorting sorts the SERVER rows, not every tr in the table")
+# THREE paths reorder rows — the column sort, the up/down arrows and the drag handle — and only
+# the first carried the progress row with it. The other two left the bar sitting under whichever
+# server ended up above it, for the rest of the page's life: install_progress.js never moves an
+# existing row, it only refills the one it finds by data-progress-for. So assert every reorder
+# path goes through the one helper, counted from the AST — the identifier also appears in the
+# comment that explains it.
+if not esprima:
+    skip("js: every path that reorders rows carries the progress row with them",
+         "esprima not installed")
+else:
+    _d3_ast = esprima.parseScript(_dashjs3, {"loc": True}).toDict()
+    _reattach = []
+
+    def _count_reattach(n):
+        if isinstance(n, dict):
+            if (n.get("type") == "CallExpression"
+                    and (n.get("callee") or {}).get("type") == "Identifier"
+                    and (n.get("callee") or {}).get("name") == "reattachProgressRows"):
+                _reattach.append(((n.get("loc") or {}).get("start") or {}).get("line"))
+            for v in n.values():
+                _count_reattach(v)
+        elif isinstance(n, list):
+            for v in n:
+                _count_reattach(v)
+
+    _count_reattach(_d3_ast)
+    check(len(_reattach) >= 3,
+          "js: every path that reorders rows carries the progress row with them",
+          "reattachProgressRows is called from %d place(s) (lines %s); the column sort, the "
+          "up/down arrows and the drag handle all need it"
+          % (len(_reattach), ", ".join(str(x) for x in _reattach)))
 check("if (tr.hasAttribute('data-progress-for')) return;" in _dashjs3
       and "prog.style.display = match" in _dashjs3,
       "js: filtering hides a progress row with its server, not on its own text")

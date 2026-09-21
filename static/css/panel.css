@@ -802,3 +802,7 @@
 }
 .ip-bar{ height:100%; width:0; background:var(--bs-info, #4dabf7); transition:width .4s ease; }
 .ip-meta{ font-size:.75rem; opacity:.6; }
+/* The panel has stopped getting readings for this row. Dimmed and with the bar's motion
+   removed, so a frozen bar does not read as a live one. */
+.ip-stale{ opacity:.55; }
+.ip-stale .ip-bar{ transition:none; filter:grayscale(1); }

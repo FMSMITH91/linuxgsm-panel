@@ -234,9 +234,8 @@ window.sortDashCol = function(key, th){
     return (a.getAttribute('data-' + key) || '').localeCompare(b.getAttribute('data-' + key) || '', undefined, {sensitivity: 'base', numeric: true}) * dir;
   }).forEach(function(r){
     tb.appendChild(r);
-    var prog = tb.querySelector('tr[data-progress-for="' + r.getAttribute('data-server-id') + '"]');
-    if (prog) tb.appendChild(prog);
   });
+  reattachProgressRows(tb);
   table.querySelectorAll('th[data-sortkey]').forEach(function(h){
     var c = h.querySelector('.dash-caret');
     if (c) c.textContent = (h.getAttribute('data-sortkey') === key) ? (dir > 0 ? ' ▲' : ' ▼') : '';
@@ -300,7 +299,8 @@ function bindDragRegions(){
   makeSortable(document.getElementById('server-cards'),
                {itemSelector: '.server-remote-card', axis: 'y', onDrop: saveHostOrder});
   document.querySelectorAll('.server-remote-card tbody').forEach(function(tb){
-    makeSortable(tb, {itemSelector: 'tr[data-server-id]', axis: 'y', onDrop: saveHostOrder});
+    makeSortable(tb, {itemSelector: 'tr[data-server-id]', axis: 'y',
+                      onDrop: function(){ reattachProgressRows(tb); saveHostOrder(); }});
   });
 }
 
@@ -469,6 +469,23 @@ window.moveHostCard = function(dir, btn){
 // Move one server row within its own host card. Rows hidden by the search filter are SKIPPED, so a
 // move always lands where the user can see it — swapping with an invisible neighbour looks like the
 // button did nothing.
+// Keep each install-progress row directly under the server it describes.
+//
+// install_progress.js inserts `tr[data-progress-for=<id>]` immediately after that server's row and
+// never moves it again — dashRow() finds an existing one by that attribute and only refills it. So
+// every path that REORDERS server rows has to carry the progress row with them. Sorting a column
+// already did this inline; the arrow buttons and the drag handle did not, and left the bar sitting
+// under whichever server happened to end up above it.
+function reattachProgressRows(tb){
+  if (!tb) return;
+  Array.prototype.forEach.call(tb.querySelectorAll('tr[data-server-id]'), function(r){
+    var prog = tb.querySelector('tr[data-progress-for="' + r.getAttribute('data-server-id') + '"]');
+    // insertBefore(x, r.nextSibling) puts it straight after r, and moves it if it is elsewhere.
+    if (prog && r.nextSibling !== prog) tb.insertBefore(prog, r.nextSibling);
+  });
+}
+window.reattachProgressRows = reattachProgressRows;
+
 window.moveServerRow = function(dir, btn){
   var row = btn.closest('tr[data-server-id]');
   if (!row) return;
@@ -479,6 +496,7 @@ window.moveServerRow = function(dir, btn){
   if (at < 0 || to < 0 || to >= rows.length) return;      // already first/last visible: no-op
   if (dir < 0) body.insertBefore(row, rows[to]);
   else body.insertBefore(rows[to], row);
+  reattachProgressRows(body);
   var keep = row.querySelector('.srv-move button:not([disabled])');
   if (keep) keep.focus();
   saveHostOrder();

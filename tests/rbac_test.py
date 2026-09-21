@@ -247,6 +247,43 @@ try:
                 db.session.delete(_row)
                 db.session.commit()
 
+    # ── a successful uninstall must not land on a page the uninstaller cannot open ─────────────
+    # Every exit of uninstall_server redirected to /servers/manage, which needs MANAGE_SERVERS or
+    # INSTALL_SERVER — neither of which an UNINSTALL_SERVER-only operator has. The dashboard's
+    # Uninstall form is a native POST, so the browser follows the redirect: the uninstall worked
+    # and the page they landed on said "You do not have permission to do that."
+    with app.app_context():
+        _ug = Group(name=tag + "_un", description="RBAC test UNINSTALL only (auto)",
+                    is_default=False)
+        _ug.set_permissions([auth.VIEW_SERVERS, auth.UNINSTALL_SERVER])
+        _ug.servers.append(RemoteServer.query.get(granted_remote))
+        db.session.add(_ug); db.session.flush()
+        _uu = User(username=tag + "_un", password_hash=auth.hash_password(secrets.token_hex(16)),
+                   display_name=tag + "_un", is_superadmin=False, is_active=True)
+        _uu.groups.append(_ug)
+        db.session.add(_uu)
+        _ugs = GameServer(remote_id=granted_remote, name="rbac-uninstall", short_name="rbacuninst",
+                          game_type="gmod", port=28970, installed=False, status="installing")
+        db.session.add(_ugs)
+        db.session.commit()
+        _uu_id, _ugs_id = _uu.id, _ugs.id
+    try:
+        _uc = client_as(_uu_id)
+        # The 409 "still installing" exit is the one an uninstall-only user can reach without any
+        # SSH at all, and it takes the same redirect as the success path.
+        _ur = _uc.post("/servers/%d/delete" % _ugs_id, follow_redirects=True)
+        _utext = _ur.get_data(as_text=True)
+        check("uninstall-only user: the page they land on is one they may open",
+              "do not have permission" not in _utext.lower(), "landed on a refusal")
+        check("uninstall-only user: ...and it actually rendered", _ur.status_code == 200,
+              "got %d" % _ur.status_code)
+    finally:
+        with app.app_context():
+            for _obj in (db.session.get(GameServer, _ugs_id), db.session.get(User, _uu_id)):
+                if _obj is not None:
+                    db.session.delete(_obj)
+            db.session.commit()
+
     # ── the Retry button and the route it posts to must agree about who may press it ───────────
     # The dashboard renders "Retry install" on the can_install flag, which is
     # INSTALL_SERVER *or* MANAGE_SERVERS — the same pair /servers/install and /servers/add accept.
