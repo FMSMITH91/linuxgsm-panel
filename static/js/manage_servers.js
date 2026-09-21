@@ -134,6 +134,11 @@ document.addEventListener('DOMContentLoaded', function() {
   document.querySelectorAll('.install-progress-row[data-installing="1"]').forEach(function(row) {
     watchInstall(row.id.substring('install-row-'.length));
   });
+  // Filter on LOAD, not only on `change`. With a single host the select is rendered already
+  // selected and never fires one, so on the setup most panels have — one host — the capped games
+  // sat in the menu exactly as before the filter existed. Reported from the panel, with a
+  // screenshot of BATTALION still listed after updating.
+  if (document.getElementById('game-type-select')) filterGamesForHost();
 });
 
 var _instTimers = {};

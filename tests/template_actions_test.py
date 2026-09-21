@@ -221,6 +221,48 @@ else:
     check(".ip-stale{" in _css,
           "install_progress: ...with a style, so 'stale' is visible and not just a class name")
 
+# ── a filter that only runs on `change` does not run on the common setup ─────────────────────
+# The install picker greys out the games LinuxGSM caps below the host's release, from the host
+# selector's change event. With ONE host the select is rendered already selected and never fires
+# one, so on the setup most panels have, nothing filtered anything: reported from the panel with
+# a screenshot of BATTALION listed and selectable after the feature shipped. Reproduced in a
+# browser — disabled:false on all four, empty note — and fixed by calling it at load too.
+#
+# From the AST, because "filterGamesForHost" appears in this file's own comments.
+if not esprima:
+    skip("manage_servers: the game filter runs on page LOAD, not only on host change",
+         "esprima not installed")
+else:
+    _ms_ast = esprima.parseScript(
+        (ROOT / "static" / "js" / "manage_servers.js").read_text(encoding="utf-8"),
+        {"loc": True}).toDict()
+    _dcl_bodies = []
+
+    def _scan_dcl(n):
+        if isinstance(n, dict):
+            if (n.get("type") == "CallExpression"
+                    and ((n.get("callee") or {}).get("property") or {}).get("name") == "addEventListener"
+                    and (n.get("arguments") or [{}])[0].get("value") == "DOMContentLoaded"):
+                _dcl_bodies.extend((n.get("arguments") or [])[1:2])
+            for v in n.values():
+                _scan_dcl(v)
+        elif isinstance(n, list):
+            for v in n:
+                _scan_dcl(v)
+
+    _scan_dcl(_ms_ast)
+    check(bool(_dcl_bodies),
+          "manage_servers: a DOMContentLoaded handler was found to check",
+          "none — the check below would pass vacuously")
+    _at_load = []
+    for _b in _dcl_bodies:
+        for _nm in ("filterGamesForHost", "hostChanged"):
+            _at_load.extend(_calls_named(_b, _nm))
+    check(bool(_at_load),
+          "manage_servers: the game filter runs on page LOAD, not only on host change",
+          "nothing calls filterGamesForHost/hostChanged at load — with a single host the select "
+          "never fires `change`, so every capped game stays selectable")
+
 # ── A form that appears AFTER page load carries no CSRF token ─────────────────────────────────
 # panel.js gives every POST form a hidden csrf_token, once, on DOMContentLoaded, and wraps fetch()
 # so every mutating fetch carries the header. A form submitted with form.submit() has neither:
