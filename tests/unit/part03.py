@@ -1843,6 +1843,56 @@ finally:
 # rule". So a probe that did not run has to fall the protective way — the opposite of fail-safe
 # everywhere else in that file, where False means "assume no way in exists".
 #
+# ── migrating to Tailscale SSH must not burn the bridge before testing the new one ───────────
+# remote_migrate_to_tailscale closes port 22, and its caller then blanks auth_credential — the
+# record's ONLY credential — and sets auth_method="tailscale". That all used to happen on the
+# strength of BackendState == "Running", which says tailscaled is up and nothing more: not whether
+# this node runs Tailscale SSH, and not whether the panel can actually log in that way. With
+# RunSSH off, or a tailnet ACL that refuses SSH to this node/user, the panel closed the only door
+# and discarded the key, with no way back from the UI.
+_mig_saved = (_sm_hosts.remote_check_tailscale, _sm_hosts._tailscale_conn_state,
+              _sm_hosts.ssh_test_connection, _sm_hosts.remote_ufw_close_port_22)
+try:
+    _mig_closed = []
+    _sm_hosts.remote_check_tailscale = lambda s: {
+        "running": True, "dns_name": "host.tail1234.ts.net", "tailscale_ip": "100.64.0.9"}
+    _sm_hosts.remote_ufw_close_port_22 = lambda s: _mig_closed.append(getattr(s, "id", "?"))
+    _mig_srv = NS(); _mig_srv.id, _mig_srv.host, _mig_srv.username = 7001, "203.0.113.9", "root"
+
+    # 1. tailscaled up but its SSH server OFF — refuse, and close nothing.
+    _sm_hosts._tailscale_conn_state = lambda s: (True, False)
+    _sm_hosts.ssh_test_connection = lambda *a, **k: (True, "should not be reached")
+    _h, _why = _sm_hosts.remote_migrate_to_tailscale(_mig_srv)
+    check("tailscale migrate: refused when the node does not run Tailscale SSH", _h is None,
+          "migrated to %r with no SSH server on the far end" % (_h,))
+    check("tailscale migrate: ...and port 22 was NOT closed", not _mig_closed,
+          "closed the only way in on %s" % (_mig_closed,))
+    check("tailscale migrate: ...and says what to do about it",
+          "tailscale set --ssh" in (_why or ""), _why)
+
+    # 2. SSH server on, but the login does not actually work (ACL, node offline) — same.
+    _mig_closed.clear()
+    _sm_hosts._tailscale_conn_state = lambda s: (True, True)
+    _sm_hosts.ssh_test_connection = lambda *a, **k: (
+        False, "Tailscale SSH denied — check the tailnet ACL allows SSH to this node/user.")
+    _h2, _why2 = _sm_hosts.remote_migrate_to_tailscale(_mig_srv)
+    check("tailscale migrate: refused when Tailscale SSH cannot actually log in", _h2 is None)
+    check("tailscale migrate: ...and again port 22 stayed open", not _mig_closed,
+          "closed on %s" % (_mig_closed,))
+    check("tailscale migrate: ...and passes the real reason back", "ACL" in (_why2 or ""), _why2)
+
+    # 3. The control: verified both ways, so the migration proceeds and closes the port.
+    _mig_closed.clear()
+    _sm_hosts.ssh_test_connection = lambda *a, **k: (True, "Tailscale SSH connection successful")
+    _h3, _ = _sm_hosts.remote_migrate_to_tailscale(_mig_srv)
+    check("tailscale migrate: a verified tailnet path DOES migrate",
+          _h3 == "host.tail1234.ts.net", "got %r" % (_h3,))
+    check("tailscale migrate: ...and only then closes port 22", _mig_closed == [7001],
+          "closed %s" % (_mig_closed,))
+finally:
+    (_sm_hosts.remote_check_tailscale, _sm_hosts._tailscale_conn_state,
+     _sm_hosts.ssh_test_connection, _sm_hosts.remote_ufw_close_port_22) = _mig_saved
+
 # It used to call _tailscale_conn_state()[0], which collapses "Tailscale is not running" and "the
 # probe did not run" into the same False, and whose command (`… || echo '{}'`) always exits 0 so the
 # rc could not tell them apart. Note _autoblock_reconcile already guards its OTHER input this way
