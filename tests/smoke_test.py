@@ -7941,6 +7941,142 @@ try:
             _rp_gs.status, _rp_gs.query_type = _rp_status_before, _rp_qt_before
             db.session.commit()
 
+    # ── the default group cannot be deleted by a direct POST ──────────────────────────────────
+    # manage_groups.html hides the delete button behind `{% if not group.is_default %}`, and that
+    # was the ONLY thing stopping it: the route never looked at the flag. The default group is
+    # what every new account and every invite starts pre-ticked with, so deleting it leaves the
+    # install with no default for anyone created afterwards. A guard that lives in the markup is
+    # not a guard — anything that can POST bypasses it.
+    # A FRESH login. s1 is long dead by this point in the suite and an unauthenticated POST
+    # answers success=False all on its own — which is exactly what several of these checks are
+    # looking for, so they passed against a session that had expired. Prove the client is logged
+    # in before trusting anything it says.
+    _lc, _lr = _real_login()
+    check("late-suite client: the fresh login actually authenticated (the checks below need it)",
+          _lc.get("/groups").status_code == 200,
+          "GET /groups answered %s — every check below would pass for the wrong reason"
+          % (_lc.get("/groups").status_code,))
+    with app.app_context():
+        _dflt = Group.query.filter_by(is_default=True).first()
+        if _dflt is None:
+            _dflt = Group(name="smoke-default-grp", description="", is_default=True)
+            db.session.add(_dflt)
+            db.session.commit()
+        _dflt_id = _dflt.id
+    _dg = _lc.post("/groups/%d/delete" % _dflt_id, follow_redirects=False)
+    with app.app_context():
+        _dflt_after = db.session.get(Group, _dflt_id)
+    check("groups: a direct POST cannot delete the default group", _dflt_after is not None,
+          "the default group was deleted by POST /groups/%d/delete (status %s)"
+          % (_dflt_id, _dg.status_code))
+    check("groups: ...and it is still marked default",
+          _dflt_after is not None and bool(_dflt_after.is_default),
+          "the flag was cleared instead")
+    # Positive control: a NON-default group still deletes, so the guard above is not just a
+    # broken route.
+    with app.app_context():
+        _ndg = Group(name="smoke-deletable-grp", description="", is_default=False)
+        db.session.add(_ndg)
+        db.session.commit()
+        _ndg_id = _ndg.id
+    _lc.post("/groups/%d/delete" % _ndg_id, follow_redirects=False)
+    with app.app_context():
+        check("groups: ...while an ordinary group still deletes (positive control)",
+              db.session.get(Group, _ndg_id) is None,
+              "the guard is refusing every delete, not just the default one")
+
+    # ── sync-ports reports what the firewall TOOK, not what was asked for ─────────────────────
+    # It discarded remote_ufw_allow_game_ports' return value and answered
+    # "Ports 27015, 27016 opened." with an audit row saying success=True, whether or not a single
+    # rule landed. An audit row recording an action that did not happen is worse than no row.
+    import panel.routes.remote_vps as _rv_mod
+    from panel.db.models import AuditLog as _SPAudit
+    _rv_detect = _rv_mod.detect_game_ports
+    _rv_allow = _rv_mod.remote_ufw_allow_game_ports
+    try:
+        _rv_mod.detect_game_ports = lambda *a, **k: {"game_port": 27015,
+                                                     "open_ports": [27015, 27016],
+                                                     "ports": [27015, 27016]}
+        _rv_mod.remote_ufw_allow_game_ports = lambda *a, **k: ([], "opened 0 port(s): none")
+        _sp = _lc.post("/api/server/%d/sync-ports" % gs_id, json={})
+        _spj = _sp.get_json() or {}
+        check("sync-ports: a firewall that opened nothing is not reported as success",
+              _spj.get("success") is False,
+              "answered success=%r message=%r" % (_spj.get("success"), _spj.get("message")))
+        check("sync-ports: ...and the message names the ports that failed",
+              "27015" in (_spj.get("message") or "") and "27016" in (_spj.get("message") or ""),
+              "message=%r" % (_spj.get("message"),))
+        with app.app_context():
+            _spa = (_SPAudit.query.filter_by(action="sync_ports")
+                    .order_by(_SPAudit.id.desc()).first())
+        check("sync-ports: ...and the audit row does not claim it succeeded",
+              _spa is not None and not _spa.success,
+              "audit row: %r" % (getattr(_spa, "success", "no row"),))
+        # Positive control: when the firewall takes them, it says so and audits success.
+        _rv_mod.remote_ufw_allow_game_ports = lambda *a, **k: ([27015, 27016], "opened 2")
+        _sp2 = _lc.post("/api/server/%d/sync-ports" % gs_id, json={})
+        _spj2 = _sp2.get_json() or {}
+        check("sync-ports: ...while ports that really opened are reported as success",
+              _spj2.get("success") is True and _spj2.get("open_ports") == [27015, 27016],
+              "answered %r" % (_spj2,))
+        # A PARTIAL result is the case the old code hid completely.
+        _rv_mod.remote_ufw_allow_game_ports = lambda *a, **k: ([27015], "opened 1")
+        _sp3 = _lc.post("/api/server/%d/sync-ports" % gs_id, json={})
+        _spj3 = _sp3.get_json() or {}
+        check("sync-ports: ...and a PARTIAL open is reported as a failure naming the missing port",
+              _spj3.get("success") is False and _spj3.get("failed_ports") == [27016]
+              and "27016" in (_spj3.get("message") or ""),
+              "answered %r" % (_spj3,))
+    finally:
+        _rv_mod.detect_game_ports = _rv_detect
+        _rv_mod.remote_ufw_allow_game_ports = _rv_allow
+
+    # ── a validation regex is not silently truncated into a DIFFERENT one ─────────────────────
+    # The pattern was compiled in full and then stored as arg_pattern[:200]. A cut does not always
+    # break a regex: an alternation sliced just after a `|` leaves a trailing empty branch, and an
+    # empty branch matches everything — so a superadmin's whitelist became "accept anything" for
+    # everyone allowed to run the command. The pattern below is built so that its first 200
+    # characters are exactly that: still valid, and wide open.
+    # Built by arithmetic, not by searching for a cut point: each branch below is exactly 8
+    # characters, so 25 of them are exactly 200 and the 200-character prefix ends on the `|`.
+    # (A search loop here spun forever — the separator never lands on index 199 for a branch
+    # length that does not divide into it.)
+    _branch = "^(?:x)$|"                      # 8 chars
+    _wide = _branch * 25 + "^(?:y)$"          # [:200] is exactly 25 branches, ending in `|`
+    import re as _spre
+    _cut = _wide[:200]
+    check("commands: the test's own pattern really does widen when cut (not a vacuous check)",
+          len(_wide) > 200 and _cut.endswith("|")
+          and _spre.match(_wide, "anything-at-all; rm -rf /") is None
+          and _spre.match(_cut, "anything-at-all; rm -rf /") is not None,
+          "the constructed pattern does not demonstrate the widening: full=%r cut=%r"
+          % (_wide[-20:], _cut[-20:]))
+    _cf = {"name": "smoke-trunc-cmd", "command_template": "say {}", "argument_label": "Map",
+           "scope": "all|", "enabled": "on", "argument_pattern": _wide}
+    _cr = _lc.post("/commands/add", data=_cf, follow_redirects=False)
+    with app.app_context():
+        _stored = CustomCommand.query.filter_by(name="smoke-trunc-cmd").first()
+        _stored_pat = _stored.argument_pattern if _stored else None
+    check("commands: an over-long validation pattern is refused, not truncated",
+          _stored is None or _stored_pat == _wide,
+          "stored a %d-char pattern from a %d-char one — %r"
+          % (len(_stored_pat or ""), len(_wide), (_stored_pat or "")[-30:]))
+    # Positive control: a pattern that FITS is still accepted, in full.
+    _ok_pat = "^(?:de_dust2|de_inferno|de_nuke)$"
+    _lc.post("/commands/add", data=dict(_cf, name="smoke-ok-cmd", argument_pattern=_ok_pat),
+             follow_redirects=False)
+    with app.app_context():
+        _ok_cmd = CustomCommand.query.filter_by(name="smoke-ok-cmd").first()
+        check("commands: ...while a pattern that fits is stored exactly as written",
+              _ok_cmd is not None and _ok_cmd.argument_pattern == _ok_pat,
+              "stored %r" % (getattr(_ok_cmd, "argument_pattern", None),))
+        for _c in (CustomCommand.query.filter_by(name="smoke-trunc-cmd").first(),
+                   CustomCommand.query.filter_by(name="smoke-ok-cmd").first()):
+            if _c is not None:
+                _c.groups = []
+                db.session.delete(_c)
+        db.session.commit()
+
 except Exception:
     # A crash part-way through otherwise just prints fewer checks and still reads as green-ish.
     # That has hidden three separate mistakes while writing these; a crash is a FAILURE.

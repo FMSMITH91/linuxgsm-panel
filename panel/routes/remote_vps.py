@@ -335,14 +335,29 @@ def register(app):
                 gs.port = gp
                 db.session.commit()
             to_open = info.get("open_ports") or ([gs.port] if gs.port else [])
-            # The count and message are deliberately unused — the reply below states what was
-            # REQUESTED, and a partially-applied rule set is reported by the firewall page
-            # rather than here. Not bound at all: a leading underscore is a convention CodeQL
-            # does not read, and an unused name is an unused name.
-            remote_ufw_allow_game_ports(gs.remote, to_open, gs.short_name)
-            log_action(current_user, "sync_ports", target=gs.name, detail=str(to_open), success=True)
-            return jsonify({"success": True, "message": f"Ports {', '.join(map(str, to_open)) or '—'} opened.",
-                            "ports": info.get("ports", []), "open_ports": to_open, "game_port": gp})
+            # Report what the firewall ACTUALLY took, not what was asked for. The return value
+            # used to be discarded on the reasoning that "the firewall page reports a partially
+            # applied rule set" — but this said "Ports 27015, 27016 opened." and wrote an audit
+            # row with success=True whether or not a single rule landed. An audit row that
+            # records an action which did not happen is worse than no row.
+            opened, _ = remote_ufw_allow_game_ports(gs.remote, to_open, gs.short_name)
+            opened = sorted(set(opened or []))
+            missed = [p for p in to_open if p not in set(opened)]
+            ok = not missed
+            log_action(current_user, "sync_ports", target=gs.name, success=ok,
+                       detail=("opened %s" % (opened or "none")) if ok
+                       else "opened %s; FAILED %s" % (opened or "none", missed))
+            if ok:
+                msg = "Ports %s opened." % (", ".join(map(str, opened)) or "—")
+            elif opened:
+                msg = ("Opened %s, but %s could not be opened — check the host's firewall."
+                       % (", ".join(map(str, opened)), ", ".join(map(str, missed))))
+            else:
+                msg = ("No ports could be opened (%s) — the host's firewall did not accept the "
+                       "rules." % ", ".join(map(str, missed)))
+            return jsonify({"success": ok, "message": msg,
+                            "ports": info.get("ports", []), "open_ports": opened,
+                            "requested_ports": to_open, "failed_ports": missed, "game_port": gp})
         except Exception:
             return jsonify({"success": False, "message": _log_and_generic("request failed")}), 500
 

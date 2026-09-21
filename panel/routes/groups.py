@@ -113,6 +113,17 @@ def register(app):
     @permission_required(MANAGE_GROUPS)
     def delete_group(group_id):
         group = Group.query.get_or_404(group_id)
+        # The default group is the one every new account and every invite starts pre-ticked with
+        # (manage_users.html checks the box for it), and models.py creates it at setup. Only the
+        # TEMPLATE refused to delete it — manage_groups.html hides the button behind
+        # `{% if not group.is_default %}` — so a direct POST to this route deleted it anyway and
+        # left the install with no default for anyone created afterwards. A guard that lives only
+        # in the markup is not a guard.
+        if group.is_default:
+            log_action(current_user, "delete_group", target=group.name, success=False,
+                       detail="refused: the default group cannot be deleted")
+            return _form_err("The default group can't be deleted — every new account and invite "
+                             "starts in it.", "manage_groups")
         # The SAME escalation rule the edit path enforces. _grantable_perms preserves a permission
         # the editor cannot grant "so an edit can't silently strip them", and grantable_object_ids
         # does the same for host and per-server grants — and then delete threw the whole group

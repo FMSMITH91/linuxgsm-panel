@@ -442,11 +442,26 @@ function loadIntegrity(){
     var wrap=document.getElementById('diag-integrity');
     var clean=document.getElementById('diag-integrity-clean');
     var bad=document.getElementById('diag-integrity-bad');
+    var unknown=document.getElementById('diag-integrity-unknown');
     if(!wrap) return;
     wrap.style.display='';
-    if(!d.git){ clean.style.display='none'; bad.style.display='none'; return; }
-    if(d.clean){ clean.style.display=''; bad.style.display='none'; return; }
-    clean.style.display='none'; bad.style.display='';
+    var hide=function(){ clean.style.display='none'; bad.style.display='none';
+                         if(unknown) unknown.style.display='none'; };
+    // `verified` FIRST, before `clean`. The server sets clean:true + verified:false when it could
+    // not run git at all — it refuses to claim the files are verified-clean, and reading `clean`
+    // on its own put the green tick back on top of that refusal. Not a git checkout is the same
+    // kind of answer: nothing was checked, so say so rather than showing nothing.
+    if(!d.git || d.verified===false){
+      hide();
+      if(unknown){
+        document.getElementById('diag-integrity-unknown-msg').textContent =
+          d.message || 'File integrity could not be verified on this host.';
+        unknown.style.display='';
+      }
+      return;
+    }
+    if(d.clean){ hide(); clean.style.display=''; return; }
+    hide(); bad.style.display='';
     document.getElementById('diag-bad-count').textContent=d.count;
     var ul=document.getElementById('diag-bad-list'); ul.textContent='';
     (d.modified||[]).forEach(function(m){
