@@ -311,6 +311,26 @@ check("repair: rejects paths not in tampered set",
       "/etc/passwd" not in _co.get("args", []) and "../../secret" not in _co.get("args", []))
 check("repair: uses HEAD + '--' path guard", _co["args"][:3] == ["checkout", "HEAD", "--"])
 
+# ...and an EMPTY selection is a request to restore NOTHING. `if paths:` sent [] down the
+# restore-everything branch, so a caller saying "these files" with nothing ticked got every
+# modified file checked out and an audit row recording it. Only paths=None may mean all — which
+# is what the UI sends ({} → None), and what the check below the next one covers.
+_so._git = _repair_git
+_co.clear()
+_ok_empty, _msg_empty, _restored_empty = _so.panel_repair([])
+check("repair: an EMPTY path list restores nothing",
+      _restored_empty == [] and "checkout" not in _co.get("args", []),
+      "restored %r via %r — an empty selection checked out every modified file"
+      % (_restored_empty, _co.get("args")))
+check("repair: ...and says so rather than reporting a restore",
+      _ok_empty is False and "No files were selected" in _msg_empty,
+      "ok=%r msg=%r" % (_ok_empty, _msg_empty))
+_co.clear()
+_ok_all, _msg_all, _restored_all = _so.panel_repair(None)
+check("repair: ...while None still restores them all (positive control)",
+      _restored_all == ["app.py"],
+      "restore-all stopped working, so the checks above would pass with the feature removed")
+
 _so._git = lambda args, timeout=45: (
     ("abc1234\n", "", 0) if list(args) == ["rev-parse", "--short", "HEAD"] else ("", "", 0))
 _ok2, _msg2, _ = _so.panel_repair()
