@@ -669,6 +669,48 @@ try:
     check("escalation: a MANAGE_GROUPS admin cannot grant hosts they cannot reach",
           _granted <= {granted_remote}, "group now grants hosts: %s" % sorted(_granted))
 
+    # ── ...and the PAGE must not offer them what the POST will refuse ────────────────────────────
+    # /groups rendered every host and every game server on the panel, with a tick box beside each,
+    # to any MANAGE_GROUPS holder. The write path above refuses the ones outside their reach — so
+    # ticking one did nothing and said nothing, and the names of hosts they have no access to were
+    # disclosed on the way. Asserted on the tick boxes (value="<id>"), not on names, because a
+    # group's EXISTING grants are listed separately and legitimately.
+    with app.app_context():
+        _unreachable = [r.id for r in RemoteServer.query.all() if r.id != granted_remote]
+        _unreach_games = [g.id for g in GameServer.query.all()
+                          if g.remote_id in set(_unreachable)]
+    _gp = c4.get("/groups")
+    _gp_html = _gp.get_data(as_text=True)
+
+    def _boxes(name, ids):
+        """The ids this page offers as <input name=...> tick boxes."""
+        import re as _re
+        found = set()
+        for _m in _re.finditer(r'<input[^>]*name="%s"[^>]*>' % name, _gp_html):
+            _v = _re.search(r'value="(\d+)"', _m.group(0))
+            if _v:
+                found.add(int(_v.group(1)))
+        return found & set(ids)
+
+    check("groups page: it renders for a delegated admin at all",
+          _gp.status_code == 200, "status %d — the checks below would prove nothing" % _gp.status_code)
+    check("groups page: ...and offers the host the admin CAN reach (positive control)",
+          granted_remote in _boxes("servers", [granted_remote]),
+          "the page offers no host at all, so the check below would pass with the form removed")
+    check("groups page: a delegated admin is not offered hosts they cannot reach",
+          not _boxes("servers", _unreachable),
+          "offers host ids %s — ticking one is silently dropped by the POST guard, and the "
+          "names are disclosed either way" % sorted(_boxes("servers", _unreachable)))
+    if _unreach_games:
+        check("groups page: ...nor the game servers on them",
+              not _boxes("game_servers", _unreach_games),
+              "offers server ids %s" % sorted(_boxes("game_servers", _unreach_games)))
+    # A superadmin still sees everything — the filter is per-viewer, not a blanket narrowing.
+    _sa_html = _ac.get("/groups").get_data(as_text=True)
+    _sa_missing = [i for i in _unreachable if ('value="%d"' % i) not in _sa_html]
+    check("groups page: ...while a superadmin is still offered every host",
+          not _sa_missing, "a superadmin is missing host ids %s" % _sa_missing)
+
     # ── Bulk actions are access-checked per id ────────────────────────────────────────────────────
     # /api/servers/bulk-action is not an /<int:server_id> route, so the structural sweep below
     # never sees it, and it carries no @server_access_required — the check is hand-written in the
