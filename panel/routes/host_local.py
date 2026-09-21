@@ -208,7 +208,10 @@ def register(app):
         if paths is not None and not isinstance(paths, list):
             paths = None
         try:
-            ok, msg, restored = so.panel_repair(paths or None)
+            # `paths`, not `paths or None`: an empty list is a request to restore NOTHING, and
+            # collapsing it to None turned that into "restore every modified file". The UI sends
+            # {} for restore-all, which is still None here.
+            ok, msg, restored = so.panel_repair(paths)
             if ok and restored:
                 log_action(current_user, "panel_repair", target="panel",
                            detail=", ".join(restored)[:500], success=True)

@@ -1478,11 +1478,17 @@ def panel_repair(paths=None):
     tampered = sorted(m["path"] for m in info["modified"])
     if not tampered:
         return True, "Nothing to repair — all panel files match the installed version.", []
-    if paths:
+    # `paths is not None`, not `if paths`. An empty LIST is a caller who asked for nothing, and
+    # it took the else-branch: "restore these files" with an empty selection restored EVERY
+    # modified file, and the audit row then recorded a mass checkout nobody asked for. Only
+    # `paths=None` — the documented "restore all" — may mean all.
+    if paths is not None:
         requested = set(paths)
         targets = [p for p in tampered if p in requested]
         if not targets:
-            return False, "None of the requested files are currently modified.", []
+            return False, ("No files were selected to restore."
+                           if not requested else
+                           "None of the requested files are currently modified."), []
     else:
         targets = list(tampered)
     # Restore from HEAD. The explicit '--' plus paths validated against git's own
