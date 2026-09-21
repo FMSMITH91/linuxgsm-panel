@@ -36,6 +36,19 @@ try:
     _so.clear()
     _ok, _ = SO.ufw_undeny_ip("not-an-ip")
     check("ufw_undeny_ip: non-IP rejected, runs nothing", _ok is False and not _so)
+    # ...and the RESULT is read. This discarded the tuple and returned True unconditionally,
+    # while ufw_deny_ip right above it fails on a non-zero rc. So a timeout, a missing helper
+    # binary or a sudo refusal all answered "Unblocked", turned the toast green, and wrote an
+    # audit row recording a successful unblock — for a deny rule still sitting in the firewall.
+    _so.clear()
+    SO._run_verb = lambda v, a=(), timeout=30, merge_stderr=True: ("", "Command timed out", -1)
+    _ok, _msg = SO.ufw_undeny_ip("10.0.0.7")
+    check("ufw_undeny_ip: a command that FAILED is not reported as an unblock",
+          _ok is False, "returned %r / %r" % (_ok, _msg))
+    check("ufw_undeny_ip: ...and says what went wrong", "timed out" in (_msg or ""), _msg)
+    SO._run_verb = lambda v, a=(), timeout=30, merge_stderr=True: ("", "", 0)
+    _ok, _ = SO.ufw_undeny_ip("10.0.0.7")
+    check("ufw_undeny_ip: ...while a clean run still reports success", _ok is True)
 finally:
     SO._run, SO._run_verb = _orig_so_run, _orig_so_verb
 
@@ -1269,6 +1282,36 @@ check("verify_totp accepts the current code", verify_totp(_sec, _pyotp.TOTP(_sec
 check("verify_totp accepts a spaced code", verify_totp(_sec, " " + _pyotp.TOTP(_sec).now() + " "))
 check("verify_totp rejects a wrong code", not verify_totp(_sec, "000000"))
 check("verify_totp rejects empty", not verify_totp(_sec, ""))
+
+# ── remote_uptime says whether the host actually ANSWERED ────────────────────────────────────
+# Its placeholder dict ("uptime": "unknown", load/disk/memory/cpu all "?") is what comes back when
+# nothing was read — and it is indistinguishable from a successful parse of a field that was
+# missing, because that path writes the same words. The helper itself has always known the
+# difference: it refuses to put a failed read in its own cache. Callers that PERSIST the dict need
+# the same fact, so it is now on the dict.
+from panel.ops.ssh_manager import hosts as _up_hosts, _core as _up_core   # noqa: E402
+
+_up_saved = _up_core.run_command
+_up_ns = type("NS", (), {})
+try:
+    _up_hosts._uptime_cache.clear()
+    _up_core.run_command = lambda *a, **k: ("", "ssh: connect to host ... timed out", -1)
+    _srv = _up_ns(); _srv.id = 90001
+    _d_fail = _up_hosts.remote_uptime(_srv, force=True)
+    check("remote_uptime: a read that never happened says so",
+          _d_fail.get("read_ok") is False, "read_ok=%r" % _d_fail.get("read_ok"))
+    check("remote_uptime: ...and is not cached, as it never was",
+          _srv.id not in _up_hosts._uptime_cache)
+    _up_core.run_command = lambda *a, **k: (
+        "UPTIME up 3 days\nLOAD 0.1 0.2 0.3\nDISK 5G/20G\nMEM 1G/4G\nMEMPCT 25.0\n", "", 0)
+    _up_hosts._uptime_cache.clear()
+    _srv2 = _up_ns(); _srv2.id = 90002
+    _d_ok = _up_hosts.remote_uptime(_srv2, force=True)
+    check("remote_uptime: a real reading says so too", _d_ok.get("read_ok") is True,
+          "read_ok=%r uptime=%r" % (_d_ok.get("read_ok"), _d_ok.get("uptime")))
+finally:
+    _up_core.run_command = _up_saved
+    _up_hosts._uptime_cache.clear()
 
 # ── no ROUTE may consume a live code with the yes/no form ────────────────────────────────────
 # verify_totp answers "is it valid", which is not enough: a code is good for ~90s, so an observed

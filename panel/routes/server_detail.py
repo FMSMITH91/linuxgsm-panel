@@ -804,6 +804,20 @@ def register(app):
             return redirect(url_for("server_detail", server_id=server_id))
         try:
             cmds = _sm.list_server_commands(gs.remote, gs.short_name, gs.lgsm_name)
+            # An EMPTY list is not a measurement. list_server_commands captures rc and never
+            # reads it, so a timeout, a non-zero exit or an empty pane all parse to [] — and
+            # run_command does not raise for the local host or a Tailscale host (both return
+            # ("", "...error", -1)), so the except branch below never sees it. Writing [] over a
+            # good list is exactly the outcome the comment under this block describes: "a host
+            # that answers oddly can empty it, hiding Start/Stop/Update for everyone". Keep what
+            # we had and say the read failed, rather than recording an absence as a fact.
+            if not cmds:
+                log_action(current_user, "refresh_commands", target=gs.name,
+                           detail="host returned no commands — keeping the stored list",
+                           success=False)
+                flash(f"Couldn't read the command list for '{gs.name}' — the host returned "
+                      f"nothing, so the stored list is unchanged.", "warning")
+                return redirect(url_for("server_detail", server_id=gs.id))
             gs.set_commands(cmds)
             db.session.commit()
             # ...and an audit row, which the docstring above says was the other half of the bug

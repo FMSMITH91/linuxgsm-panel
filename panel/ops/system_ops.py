@@ -1757,8 +1757,15 @@ def ufw_undeny_ip(ip):
         ip = str(ipaddress.ip_address((ip or "").strip()))
     except (ValueError, TypeError):
         return False, "Invalid IP address."
-    _run_verb("ufw-delete-deny-ip", [ip], timeout=15)
-    return True, "Unblocked %s." % ip
+    # Read the result. This discarded the tuple and returned True unconditionally, while its
+    # sibling ufw_deny_ip five lines up captures (out, err, rc) and fails on non-zero — so a
+    # timeout ("", "Command timed out", -1), a missing helper binary, or a sudo refusal all
+    # reported "Unblocked", showed a green toast, and wrote an audit row saying the unblock
+    # succeeded, for a deny rule that is still in the firewall.
+    out, err, rc = _run_verb("ufw-delete-deny-ip", [ip], timeout=15)
+    if rc == 0:
+        return True, "Unblocked %s." % ip
+    return False, ((out or err or "Unblock failed").replace("\n", " ")[:200])
 
 
 _F2B_EVENT_RE = re.compile(r"\[([A-Za-z0-9._-]+)\] (Ban|Found) ([0-9a-fA-F:.]+)")

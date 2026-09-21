@@ -6893,6 +6893,101 @@ try:
     check("deactivation: the epoch-cookie session stops working once deactivated",
           _after_m != 200, "status=%s" % _after_m)
 
+    # ── a failed READ must not be written down as a fact ──────────────────────────────────────
+    # Two routes did it in different ways. Both are driven here with the read stubbed to fail the
+    # way it actually fails on this codebase: run_command does not raise, it returns
+    # ("", "...timed out", -1).
+    import panel.routes.remote_vps as _rvmod
+    import panel.ops.ssh_manager as _fr_pkg   # noqa: F401  (documented: stub the DEFINITION site)
+    from panel.ops.ssh_manager import game as _fr_game
+
+    # 1. close-panel-port answered "already closed" from a firewall it never managed to read.
+    #    remote_ufw_status returns {"installed": False, ..., "groups": []} for a missing ufw and
+    #    adds "unreachable": True when the command failed — its docstring says it does that so a
+    #    down remote is not shown as an installed firewall with no rules. Reading only .get(
+    #    "groups") threw that away: no rules found, so "closed", success=True, no audit row, while
+    #    the panel was still listening on 0.0.0.0.
+    _fr_saved = {}
+
+    def _fr_stub(mod, name, fn):
+        _fr_saved[(mod, name)] = getattr(mod, name)
+        setattr(mod, name, fn)
+
+    try:
+        # The LOCAL host: this route refuses anything else with "Only applies to the panel host."
+        # Picking a remote one made the check pass on that refusal instead of on the firewall
+        # read — green, and measuring nothing. Flagged back afterwards.
+        with app.app_context():
+            _fr_remote = RemoteServer.query.filter_by(is_local=True).first() \
+                or RemoteServer.query.first()
+            _fr_rid = _fr_remote.id
+            _fr_was_local = bool(_fr_remote.is_local)
+            _fr_remote.is_local = True
+            db.session.commit()
+        _fr_cfg = load_config()
+        _fr_cfg_saved = dict(_fr_cfg)
+        _fr_cfg["tailscale_setup_done"] = True
+        save_config(_fr_cfg)
+        _fr_stub(_rvmod, "remote_ufw_status",
+                 lambda r: {"installed": False, "enabled": False, "rules": [], "groups": [],
+                            "unreachable": True})
+        _fr_deleted = []
+        _fr_stub(_rvmod, "remote_ufw_delete_rule",
+                 lambda r, n, force=False: _fr_deleted.append(n))
+        _fr_r = c.post("/api/remote/%d/close-panel-port" % _fr_rid,
+                       headers={"X-Requested-With": "XMLHttpRequest"})
+        _fr_j = _fr_r.get_json() or {}
+        check("failed read: an unreadable firewall is NOT reported as 'port already closed'",
+              _fr_j.get("success") is not True,
+              "answered %r — the panel is still listening on that port"
+              % (_fr_j.get("message"),))
+        check("failed read: ...and nothing was deleted from a firewall it could not read",
+              not _fr_deleted, "deleted rule numbers %s" % (_fr_deleted,))
+    finally:
+        for (_m, _n), _v in _fr_saved.items():
+            setattr(_m, _n, _v)
+        save_config(_fr_cfg_saved)
+        _fr_saved.clear()
+        with app.app_context():
+            _r = db.session.get(RemoteServer, _fr_rid)
+            if _r is not None:
+                _r.is_local = _fr_was_local
+                db.session.commit()
+
+    # 2. refresh-commands overwrote the stored list with whatever came back, and [] is what
+    #    list_server_commands returns for a timeout, a non-zero exit or an empty pane.
+    try:
+        with app.app_context():
+            _rc_gs = db.session.get(GameServer, gs_id)
+            _rc_before = _rc_gs.commands
+            _rc_gs.set_commands([{"cmd": "start", "short": "st", "desc": "Start the server."},
+                                 {"cmd": "stop", "short": "sp", "desc": "Stop it."}])
+            db.session.commit()
+        _fr_stub(_fr_game, "list_server_commands", lambda *a, **k: [])
+        c.post("/server/%d/refresh-commands" % gs_id)
+        with app.app_context():
+            _rc_after = db.session.get(GameServer, gs_id).get_commands()
+        check("failed read: an empty command list does not wipe the stored one",
+              len(_rc_after) == 2,
+              "the stored list became %r — Start/Stop/Update vanish from the control bar for "
+              "everyone" % (_rc_after,))
+        # ...and a real answer still replaces it, so the guard is not "never update".
+        _fr_stub(_fr_game, "list_server_commands",
+                 lambda *a, **k: [{"cmd": "start", "short": "st", "desc": "Start."},
+                                  {"cmd": "stop", "short": "sp", "desc": "Stop."},
+                                  {"cmd": "update", "short": "u", "desc": "Update."}])
+        c.post("/server/%d/refresh-commands" % gs_id)
+        with app.app_context():
+            _rc_new = db.session.get(GameServer, gs_id).get_commands()
+        check("failed read: ...while a real answer still replaces it", len(_rc_new) == 3,
+              "got %r" % (_rc_new,))
+    finally:
+        for (_m, _n), _v in _fr_saved.items():
+            setattr(_m, _n, _v)
+        with app.app_context():
+            db.session.get(GameServer, gs_id).commands = _rc_before
+            db.session.commit()
+
     # ── the custom-command FORM: the guard that stops a template smuggling a second command ──────
     # A custom command's template is sent to tmux as a console LINE. A newline in it is a second
     # keystroke sequence — a command the author did not write and the reviewer did not see.
