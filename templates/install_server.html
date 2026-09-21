@@ -48,11 +48,13 @@
              already shown in the help line below. #}
           <option value="">Choose game…</option>
           {% for g in games %}
-          {# data-game-os is the game's OWN cap, always emitted. data-legacy-os stays for the
-             at-a-glance label, but the real decision is per HOST: LinuxGSM caps four games at an
-             older release, and a 20.04 remote under a 24.04 panel runs them perfectly well. The
-             script filters against the selected host's slug from /api/remote/<id>/specs. #}
-          <option value="{{ g.shortname }}"{% if g.os %} data-game-os="{{ g.os }}"{% endif %}{% if g.legacy_os %} data-legacy-os="{{ g.legacy_os }}"{% endif %}>{{ g.name }}{% if g.legacy_os %} ({{ g.legacy_os }}){% endif %}</option>
+          {# data-legacy-os is the cap LinuxGSM sets BELOW the rest of the catalogue — only four
+             games have one. It is both the at-a-glance label and what the script compares against
+             the selected host's slug from /api/remote/<id>/specs, because the decision is per
+             HOST: a 20.04 remote under a 24.04 panel runs those games perfectly well. The game's
+             raw os column is not it — every game declares the newest release LinuxGSM builds deps
+             for, so that comparison would grey out the whole menu on a 26.04 host. #}
+          <option value="{{ g.shortname }}"{% if g.legacy_os %} data-legacy-os="{{ g.legacy_os }}"{% endif %}>{{ g.name }}{% if g.legacy_os %} ({{ g.legacy_os }}){% endif %}</option>
           {% endfor %}
         </select>
         {% if games %}

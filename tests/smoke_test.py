@@ -7030,9 +7030,9 @@ try:
     _os_before = _appmod_ij._remote_listening_ports
     _os_real_list = _os_mod.load_game_list
 
-    def _os_try(name, port):
-        """POST an install of the capped game and say whether a row was created."""
-        c.post("/servers/add", data={"remote_id": str(_cg_remote_id), "game_type": "btl",
+    def _os_try(name, port, game="btl"):
+        """POST an install and say whether a row was created."""
+        c.post("/servers/add", data={"remote_id": str(_cg_remote_id), "game_type": game,
                                      "server_name": name, "port": str(port)},
                follow_redirects=True)
         with app.app_context():
@@ -7069,6 +7069,20 @@ try:
         check("install OS: ...and a host whose OS could not be read is not refused",
               _os_try("osunknown", 28852),
               "this fails closed — an unreadable OS blocks an install that may be fine")
+
+        # The host NEWER than the whole catalogue. Every game declares the newest release LinuxGSM
+        # builds its dependency list for — 136 of 140 say ubuntu-24.04 — so a guard that compares
+        # that column against the host refuses EVERYTHING on an Ubuntu 26.04 box. The first
+        # version of this change did, and the 26.04 leg of CI caught it. Only the catalogue-
+        # relative cap (legacy_os) may decide.
+        _os_sm.host_os_slug = lambda s: "ubuntu-26.04"
+        check("install OS: ...and an ordinary game is still installable on a host NEWER than the "
+              "whole catalogue",
+              _os_try("osnewhost", 28853, game="csgo"),
+              "every game declares 24.04, so this refuses the entire catalogue on a 26.04 host")
+        check("install OS: ...while a capped game on that same newer host is still refused",
+              not _os_try("osnewcap", 28854),
+              "the 20.04 cap is real whatever the host is, and a 26.04 box is further past it")
     finally:
         _os_mod.load_game_list = _os_real_list
         _os_sm.host_os_slug = _os_saved

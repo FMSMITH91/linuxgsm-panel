@@ -44,16 +44,20 @@ window.hostChanged = hostChanged;
 
 // Which games THIS host can actually install.
 //
-// LinuxGSM caps a few games at an older Ubuntu than the rest of the catalogue, and the picker used
-// to mark them against the newest release in the CATALOGUE — a stand-in for the host, because the
-// list is rendered before a host is chosen. That is the wrong comparison once one IS chosen: a
-// 20.04 remote under a 24.04 panel runs those games perfectly well, while on a 24.04 host they
-// fail every time, minutes into the download. So ask the selected host what it runs and disable
-// what it cannot take.
+// LinuxGSM caps a few games at an older Ubuntu than the rest of the catalogue, and the picker
+// marks them against the newest release in the CATALOGUE — a stand-in for the host, because the
+// list is rendered before a host is chosen. Once one IS chosen the comparison can be the real
+// one: a 20.04 remote under a 24.04 panel runs those games perfectly well, while on a 24.04 host
+// they fail every time, minutes into the download.
+//
+// What is compared is data-legacy-os — the cap LinuxGSM sets BELOW the rest of the catalogue —
+// and not each game's declared release. Every game declares the newest release LinuxGSM builds
+// its dependency list for, so comparing that against the host would grey out the entire menu on
+// an Ubuntu 26.04 box.
 //
 // Fails OPEN, exactly as the server-side guard does: a host whose OS cannot be read, or a game
-// that declares none, leaves everything selectable. Refusing an install that would have worked is
-// the worse error, and the install route re-checks anyway.
+// with no cap, leaves everything selectable. Refusing an install that would have worked is the
+// worse error, and the install route re-checks anyway.
 function _osOlder(gameOs, hostOs) {
   var g = String(gameOs || '').toLowerCase().split('-');
   var h = String(hostOs || '').toLowerCase().split('-');
@@ -74,7 +78,7 @@ function filterGamesForHost() {
   var apply = function (hostOs) {
     var hidden = 0;
     Array.prototype.forEach.call(sel.options, function (opt) {
-      var gameOs = opt.getAttribute('data-game-os');
+      var gameOs = opt.getAttribute('data-legacy-os');
       if (!opt.value || !gameOs) return;
       var bad = !!hostOs && _osOlder(gameOs, hostOs);
       opt.disabled = bad;

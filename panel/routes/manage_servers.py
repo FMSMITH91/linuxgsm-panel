@@ -215,16 +215,20 @@ def register(app):
         if not GAME_TYPE_RE.match(game_type) or game_type not in {g["shortname"] for g in load_game_list()}:
             return _form_err("Invalid or unknown game type.", "manage_servers")
         # Refuse a game LinuxGSM caps BELOW the release this host runs, now that both facts are
-        # known. The picker marks these, but it marks them against the newest OS in the catalogue
-        # — it cannot know which host is about to be chosen, and a 20.04 game is perfectly
-        # installable on a 20.04 box. HERE the host is chosen, so the comparison is the real one
-        # instead of a proxy, and the alternative is a download that spends minutes arriving at
-        # LinuxGSM's own "not supported on Ubuntu 24.04.5" and leaves a failed row to clean up.
+        # known. The alternative is a download that spends minutes arriving at LinuxGSM's own
+        # "not supported on Ubuntu 24.04.5" and leaves a failed row to clean up.
         #
-        # Fails OPEN, like game_os_unsupported itself: an unreadable host OS, or a game that
-        # declares none, is not evidence of a problem, and refusing an install that would have
+        # The cap compared here is legacy_os, NOT the raw os column, and the difference is the
+        # whole correctness of this guard. Every game declares the newest release LinuxGSM builds
+        # its dependency list for — 136 of 140 say ubuntu-24.04 — so comparing the raw column
+        # against the host refuses EVERY game on an Ubuntu 26.04 box. legacy_os is only set for
+        # the handful LinuxGSM caps below the rest of the catalogue (btl and onset at 20.04,
+        # bf1942 and bfv at 22.04), which is the real signal. CI on the 26.04 runner caught this.
+        #
+        # Fails OPEN, like game_os_unsupported itself: an unreadable host OS, or a game with no
+        # declared cap, is not evidence of a problem, and refusing an install that would have
         # worked is the worse error.
-        _game_os = next((g.get("os") for g in load_game_list()
+        _game_os = next((g.get("legacy_os") for g in load_game_list()
                          if g["shortname"] == game_type), "")
         try:
             _host_os = _sm.host_os_slug(remote)
