@@ -1245,14 +1245,18 @@ def panel_switch_branch(branch):
             _cfg.update_config(lambda cfg: cfg.update({"panel_branch": _previous})
                                if _previous else cfg.pop("panel_branch", None))
         except Exception:
-            # Sanitised at the log site. `branch` already cleared _valid_branch
-            # (^[A-Za-z0-9._/-]{1,100}$, so it cannot carry a newline to forge a log entry), but
-            # it still arrives from a request, and this is the one place it reaches a log. Strip
-            # it here rather than dismiss the alert: the guarantee then lives next to the use,
-            # and does not depend on a caller two functions away staying as strict as it is now.
+            # The branch name is deliberately NOT interpolated here. It arrives from a request,
+            # and this is the only place it would reach a log; CodeQL flags that as
+            # py/log-injection. It cannot actually forge an entry — it has already cleared
+            # _valid_branch, ^[A-Za-z0-9._/-]{1,100}$, which admits no newline — and an explicit
+            # re.sub() at the log site did not satisfy the query either. The value adds nothing
+            # an operator cannot read straight from panel_branch in config.json, which is exactly
+            # what this message tells them to check, so the simplest correct answer is not to
+            # echo it.
             _log.exception("switch-branch: could not restore the tracked branch after a failed "
-                           "launch — the panel now tracks '%s' but was not switched to it",
-                           re.sub(r"[^A-Za-z0-9._/-]", "", str(branch))[:100])
+                           "launch — panel_branch in config.json now names a branch the checkout "
+                           "was NOT switched to, and the next update would follow it. Check that "
+                           "key.")
     return ok, launch_msg
 
 
