@@ -865,6 +865,51 @@ try:
             db.session.get(User, _sa_id).is_superadmin = True
             db.session.commit()
 
+        # 3b. A GROUP grant is the same rank, and it used to survive demotion. Minting is
+        #     superadmin-only and the groups are validated against the minter AT MINT TIME —
+        #     which for a superadmin is everything — so a superadmin who minted an invite into a
+        #     privileged group and was then demoted (while staying active) left a live link that
+        #     still created an account holding the permissions they had just lost. Whoever kept
+        #     the link, including them, could redeem it.
+        with app.app_context():
+            _priv_grp = Group(name=_inv_tag + "_priv", description="privileged (auto)",
+                              is_default=False)
+            _priv_grp.set_permissions([auth.MANAGE_USERS, auth.MANAGE_REMOTES])
+            db.session.add(_priv_grp)
+            db.session.commit()
+            _priv_gid = _priv_grp.id
+            _ginv, _tok_grp = _Inv.mint(_sa, group_ids=[_priv_gid])
+            db.session.add(_ginv)
+            db.session.commit()
+        with app.app_context():                    # the minter loses the rank behind the grant
+            db.session.get(User, _sa_id).is_superadmin = False
+            db.session.commit()
+        _r_grp = _accept(_tok_grp, _inv_tag + "_grp")
+
+        def _groups_of(username):
+            # INSIDE a context: _user() hands back a detached row, and touching .groups on it
+            # raises DetachedInstanceError rather than answering.
+            with app.app_context():
+                _u = User.query.filter_by(username=username).first()
+                return None if _u is None else sorted(g.name for g in _u.groups)
+
+        _grp_got = _groups_of(_inv_tag + "_grp")
+        check("invite route: a GROUP grant does not outlive its minter's authority either",
+              _grp_got is None,
+              "a demoted admin's invite still created an account carrying %s (status %s)"
+              % (_grp_got, _r_grp.status_code))
+        with app.app_context():
+            db.session.get(User, _sa_id).is_superadmin = True
+            db.session.commit()
+            _ginv2, _tok_grp2 = _Inv.mint(_sa, group_ids=[_priv_gid])
+            db.session.add(_ginv2)
+            db.session.commit()
+        _accept(_tok_grp2, _inv_tag + "_grp_ok")
+        _grp_ok = _groups_of(_inv_tag + "_grp_ok")
+        check("invite route: ...while an intact minter's group invite still works",
+              _grp_ok is not None and (_inv_tag + "_priv") in _grp_ok,
+              "the control failed (%s) — the refusal above proves nothing" % (_grp_ok,))
+
         # 4. Deactivated, not merely demoted: nobody is standing behind the invite at all.
         _iid_d, _tok_d = _mint(_sa)
         with app.app_context():
@@ -919,7 +964,7 @@ try:
               % (_r_exp.status_code, _r_bogus.status_code, " || ".join(_diff[:4])[:400]))
     finally:
         with app.app_context():
-            for _n in ("_ok", "_twice", "_demoted", "_inactive", "_exp", "_race"):
+            for _n in ("_ok", "_twice", "_demoted", "_inactive", "_exp", "_race", "_grp", "_grp_ok"):
                 _u = User.query.filter_by(username=_inv_tag + _n).first()
                 if _u is not None:
                     db.session.delete(_u)

@@ -8,8 +8,8 @@ from panel.core import (i18n)
 from panel.core.config import (encrypt_secret, load_config, update_config)
 from panel.core.clock import utcnow
 from panel.db.models import (Group, Invite, User, db)
-from panel.security.auth import (MANAGE_USERS, can_administer_user, grantable_groups,
-                                 hash_password, log_action,
+from panel.security.auth import (MANAGE_USERS, can_administer_user, get_user_permissions,
+                                 grantable_groups, hash_password, log_action,
     permission_required, superadmin_required)
 from panel.services import (notifications)
 from panel.services.monitoring import (_AUTOBLOCK_DEFAULT_THRESHOLD, _autoblock_threshold)
@@ -429,9 +429,30 @@ def register(app):
                     is_active=True, language=_new_user_language(load_config(), i18n.LANGUAGES))
         # must_change_password stays False: they chose this password themselves, nobody handed it
         # to them, so there is nothing to rotate away from.
+        # The GROUPS must still be within the creator's authority, not just the superadmin flag.
+        #
+        # authority_intact() covers the flag, and deliberately stays a pure predicate — it takes a
+        # creator and touches no session. Groups need the database, so the re-validation belongs
+        # here. Without it the delegation outlives the authority on the other axis: minting is
+        # superadmin-only and the groups were checked against the minter AT MINT TIME (for a
+        # superadmin, everything), so a superadmin who minted an invite into a privileged group
+        # and was then DEMOTED — while staying active, so the flag check passes — left a live link
+        # that still created an account holding the permissions they had just lost. Whoever kept
+        # the link, including them, could redeem it.
+        #
+        # Same rule grantable_groups applies everywhere else: a superadmin may grant anything,
+        # anyone else only a group whose permissions are a SUBSET of their own. Fail CLOSED on the
+        # whole invite rather than quietly granting less than it promised — the person redeeming
+        # it would otherwise get an account that silently lacks what they were told they'd have.
         wanted = set(inv.groups_wanted)
         if wanted:
-            user.groups = Group.query.filter(Group.id.in_(wanted)).all()
+            _groups = Group.query.filter(Group.id.in_(wanted)).all()
+            if _creator is not None and not _creator.is_superadmin:
+                _mine = set(get_user_permissions(_creator))
+                if any(not (g.get_permissions() <= _mine) for g in _groups):
+                    db.session.rollback()
+                    return render_template("invite.html", invalid=True), 404
+            user.groups = _groups
         db.session.add(user)
         db.session.flush()
         inv.used_by_id = user.id

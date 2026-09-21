@@ -1490,6 +1490,57 @@ try:
         check("2FA: the spent timestep is recorded", (_u2.last_totp_step or 0) > 0,
               "last_totp_step=%r" % _u2.last_totp_step)
 
+    # ── ...and the code that ENROLS 2FA is spent too ─────────────────────────────────────────
+    # Three routes in this panel consume a live authenticator code: login step 2, the password
+    # change, and enrolment. The first two switched to verify_totp_STEP and record the step they
+    # used, precisely so an observed code cannot be replayed for the rest of its ~90s window.
+    # Enrolment was missed by that audit and still asked the yes/no question — and last_totp_step
+    # defaults to 0, so the very code that turned 2FA on was step S against a guard of 0, and it
+    # still logged the account in.
+    _en_name = "smoke_2fa_enrol"
+    with app.app_context():
+        _en = User(username=_en_name, password_hash=auth.hash_password("Str0ng!passw0rd"),
+                   display_name=_en_name, is_superadmin=False, is_active=True)
+        db.session.add(_en); db.session.commit()
+        _en_id = _en.id
+    try:
+        _enc = client_as(_en_id)
+        _enc.get("/account/2fa/enable")                    # seeds the pending secret in-session
+        with _enc.session_transaction() as _sess:
+            _en_secret = _sess.get("_2fa_setup_secret")
+        check("2FA enrol: the page issues a pending secret", bool(_en_secret))
+        _en_code = _po.TOTP(_en_secret).now()
+        _en_r = _enc.post("/account/2fa/enable", data={"totp_code": _en_code})
+        with app.app_context():
+            _en_row = db.session.get(User, _en_id)
+            check("2FA enrol: a valid code enables two-factor",
+                  bool(_en_row.totp_enabled), "status=%s" % _en_r.status_code)
+            check("2FA enrol: ...and the step it used is RECORDED, like the other two routes do",
+                  (_en_row.last_totp_step or 0) > 0,
+                  "last_totp_step=%r — the enrolling code is still unspent"
+                  % _en_row.last_totp_step)
+        # The property that matters: that same code must no longer log the account in.
+        _en_t = app.test_client()
+        _en_t.post("/login", data={"username": _en_name, "password": "Str0ng!passw0rd"})
+        _en_login = _en_t.post("/login", data={"totp_code": _en_code})
+        check("2FA enrol: the enrolling code cannot then be REPLAYED at login",
+              _en_login.status_code != 302,
+              "the code that turned 2FA on also signed in (status %s)" % _en_login.status_code)
+        # ...and a fresh code still works, so the refusal above is single-use and not a break.
+        _en_t2 = app.test_client()
+        _en_t2.post("/login", data={"username": _en_name, "password": "Str0ng!passw0rd"})
+        with app.app_context():
+            db.session.get(User, _en_id).last_totp_step = 0     # simulate the next step arriving
+            db.session.commit()
+        _en_ok = _en_t2.post("/login", data={"totp_code": _po.TOTP(_en_secret).now()})
+        check("2FA enrol: ...while an unspent code still signs in", _en_ok.status_code == 302,
+              "got %s — the refusal above is blocking valid codes too" % _en_ok.status_code)
+    finally:
+        with app.app_context():
+            _row = db.session.get(User, _en_id)
+            if _row is not None:
+                db.session.delete(_row); db.session.commit()
+
     # The setup wizard is UNAUTHENTICATED by necessity. Its lock must not depend on config.json:
     # load_config() falls back to DEFAULT_CONFIG (setup_complete=False) on any unreadable/invalid
     # file, so gating on is_setup_complete() reopened the wizard on a configured install, where
