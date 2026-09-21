@@ -132,6 +132,12 @@ def live_metrics():
         _log.debug("disk_usage('/') failed — reporting zeros", exc_info=True)
 
     return {
+        # Same flag as the remote twin (ssh_manager._core.remote_live_metrics), and the same
+        # meaning: every number here is 0 when nothing could be read, and a caller cannot tell
+        # that from a genuinely idle host. /proc is local, so this is almost always True — but
+        # remote_live_metrics DELEGATES here for the panel's own host, and a dict without the
+        # flag would read as "unreadable" the moment anyone checks it.
+        "read_ok": bool(ram_total and cores),
         "cpu_overall": overall,
         "cpu_cores": cores,
         "core_count": len(cores),

@@ -376,5 +376,7 @@
   "user, target or detail…": "usuario, objetivo o detalle…",
   "whole host": "todo el host",
   "“Send test” checks what you've typed above — you don't need to save first.": "«Enviar prueba» comprueba lo que has escrito arriba: no necesitas guardar primero.",
-  "…only alert if CPU/memory stays high for at least": "…avisar solo si la CPU o la memoria se mantienen altas durante al menos"
+  "…only alert if CPU/memory stays high for at least": "…avisar solo si la CPU o la memoria se mantienen altas durante al menos",
+  "Live figures are paused — the host did not answer. The numbers below are the last reading.": "Las cifras en vivo están en pausa — el host no respondió. Los números de abajo son la última lectura.",
+  "Live figures are paused — the last read failed.": "Las cifras en vivo están en pausa — la última lectura falló."
 }

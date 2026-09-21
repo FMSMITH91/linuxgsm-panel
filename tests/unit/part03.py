@@ -2091,3 +2091,49 @@ finally:
     (_sm_core.run_command, _sm_core.run_privileged, _sm_core.write_root_file,
      _sm_core.create_game_user, _sm_core.is_local_server, _sm_core.close_connection,
      _sm_hosts._wait_for_reboot, _sm_core._wait_for_dpkg_lock) = _bs_saved
+
+# ── a live-metrics read that produced nothing is not a host sitting at 0% ────────────────────
+# run_command returns ("", "...timed out", -1) and does not raise, so every number the metrics
+# dict derives came out 0: cpu 0%, 0 cores, RAM 0 of 0, disk 0. The route published that and the
+# card rendered an idle, healthy-looking machine — for a host that never answered. remote_uptime
+# beside it already carries a read_ok flag for exactly this; this one had no way to say it.
+_lm_saved = _sm_core.run_command
+try:
+    _sm_core.run_command = lambda *a, **k: ("", "ssh: connect to host ... timed out", -1)
+    _lm_dead = _sm_core.remote_live_metrics(NS(id=9300, host="203.0.113.30"))
+    check("live metrics: a read that produced nothing is not reported as a reading",
+          _lm_dead.get("read_ok") is False,
+          "read_ok=%r with cpu_overall=%r ram_total=%r — an unreachable host renders as idle"
+          % (_lm_dead.get("read_ok"), _lm_dead.get("cpu_overall"), _lm_dead.get("ram_total")))
+
+    _lm_good = ("===A\ncpu  100 0 100 800 0 0 0\ncpu0 50 0 50 400 0 0 0\n"
+                "===B\ncpu  110 0 110 880 0 0 0\ncpu0 55 0 55 440 0 0 0\n"
+                "===MEM\nMemTotal: 2048000 kB\nMemAvailable: 1024000 kB\n"
+                "SwapTotal: 0 kB\nSwapFree: 0 kB\n"
+                "===DISK\nFilesystem 1B-blocks Used Available Use% Mounted\n"
+                "/dev/vda1 10000000 4000000 6000000 40% /\n")
+    _sm_core.run_command = lambda *a, **k: (_lm_good, "", 0)
+    _lm_ok = _sm_core.remote_live_metrics(NS(id=9301, host="203.0.113.31"))
+    check("live metrics: ...while a host that DID answer is (positive control)",
+          _lm_ok.get("read_ok") is True and _lm_ok.get("ram_total") == 2048000 * 1024,
+          "read_ok=%r ram_total=%r — the control failed, so the check above proves nothing"
+          % (_lm_ok.get("read_ok"), _lm_ok.get("ram_total")))
+    check("live metrics: ...and it still reports the figures it read",
+          _lm_ok.get("core_count") == 1 and _lm_ok.get("disk_total") == 10000000,
+          "cores=%r disk_total=%r" % (_lm_ok.get("core_count"), _lm_ok.get("disk_total")))
+
+    # A host that answers but whose memory line is missing is not a reading either: every RAM
+    # figure would be 0 and the percentage with it.
+    _sm_core.run_command = lambda *a, **k: ("===A\ncpu 1 0 1 8 0 0 0\n===B\ncpu 2 0 2 9 0 0 0\n", "", 0)
+    check("live metrics: ...and a reply with no MemTotal is not one either",
+          _sm_core.remote_live_metrics(NS(id=9302, host="203.0.113.32")).get("read_ok") is False,
+          "RAM 0 of 0 was published as a reading")
+finally:
+    _sm_core.run_command = _lm_saved
+
+# The panel's OWN host goes through the same helper, which delegates to system_ops.live_metrics.
+# A dict without the flag reads as unreadable the moment anyone checks it — which is what the
+# route now does on every poll.
+check("live metrics: the panel host's own reading carries the flag too",
+      _so.live_metrics().get("read_ok") is True,
+      "the local delegate has no read_ok, so the panel's own live card would report unreachable")
