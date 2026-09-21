@@ -827,7 +827,6 @@ try:
     #   \x1b[0mUnloading Steam API...\x1b[0mOK \x1b[0m\x1b[31mFailure!\x1b[0m Installing l4d2server…
     #
     # The panel has had strip_escapes since the console was written; this path never called it.
-    from panel.core import terminal as _t_esc
     _raw_tail = ("info...\x1b[0mOK \x1b[0mERROR! Failed to install app '222860' (Invalid "
                  "platform)\r\n   \x1b[0m\x1b[31mFailure!\x1b[0m Installing l4d2server")
     # The PANEL'S function, not a copy of it rebuilt here. These three used to assert properties
