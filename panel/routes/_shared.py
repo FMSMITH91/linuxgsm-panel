@@ -254,6 +254,17 @@ def _run_pending_backups(app):
                         # Backed up (or genuinely failed) — either way the wait is over.
                         gs.backup_pending = False
                         db.session.commit()
+                        if ok:
+                            # ...and the clock moves. record_game_backup was called from the
+                            # scheduled ticker alone, so a server archived by THIS sweep still
+                            # looked overdue and the next tick backed it up all over again.
+                            #
+                            # Only when it WORKED, which is narrower than the ticker above (that
+                            # one records a genuine failure too, so it does not retry hourly). A
+                            # failure here leaves the clock alone and the ticker picks the server
+                            # up on its own schedule — one retry, not a loop, because this sweep
+                            # has already cleared backup_pending.
+                            bk.record_game_backup(gs.id)
                         _game_backup_status[gs.id] = {"running": False, "ok": ok,
                                                       "msg": (reason or ("Backed up" if ok else "failed")),
                                                       "ts": time.time()}
