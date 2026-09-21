@@ -614,12 +614,33 @@
          Measured at 375px the table is 578px wide inside a 341px viewport, putting that column's
          right edge at x=595 — reachable only by horizontally scrolling a table that gives no hint
          there is anything to the right of it. Pin it to the row instead: the data columns scroll
-         underneath and the controls stay in reach. */
+         underneath and the controls stay in reach.
+
+         ...which held while the column fitted. It stopped fitting. The table is 676px now, not
+         578 — a column was added after that note was written — and seven buttons at 33px made
+         this column 270px of the 341px viewport. A sticky cell is opaque and lifted out of the
+         row's paint order (see the background note below), so it was not scrolling underneath
+         anything: it was painted ON TOP of the name, status, players and address, leaving 31px
+         of readable row. Measured in a rendered panel at 375px, elementFromPoint over the server
+         name returned the Start button, and "CS2 Public" showed as "CS2 Pub".
+
+         So the column is given a width that makes its buttons WRAP instead of pushing sideways.
+         190px is the measured point where seven buttons fall into exactly two rows: at 160px they
+         take three rows and the row grows 80px -> 115px, and at 175px and below they still do.
+         At 190px the row goes 80px -> 82px, the buttons keep their 31px touch target, all seven
+         stay pinned and reachable, and the name is no longer covered at all.
+
+         white-space needs !important because the cell carries Bootstrap's .text-nowrap utility,
+         which is itself !important — without it this computes to nowrap and nothing wraps, which
+         is exactly how the measurement came out when tried. */
       .table-responsive .table th.col-actions,
       .table-responsive .table td.col-actions {
         position: sticky;
         right: 0;
         z-index: 2;
+        white-space: normal !important;
+        width: 190px;
+        min-width: 190px;
         /* A sticky cell is lifted out of the row's paint order, so it needs an opaque background
            of its OWN and cannot inherit the row's. Take BOOTSTRAP'S table variables rather than a
            fixed colour: --bs-table-bg is what every other cell paints, and --bs-table-accent-bg is
@@ -638,6 +659,13 @@
                                          var(--bs-table-bg-type, var(--bs-table-accent-bg))),
                     -10px 0 10px -10px rgba(0, 0, 0, .7);
       }
+      .table-responsive .table td.col-actions .btn { margin: 1px; }
+      /* The second column is which server the row IS, and the table's auto layout gives it
+         whatever is left — 62px, measured, which wraps "CS2 Public" to two lines. Unpinning the
+         Actions column frees 80px but the algorithm does not hand it here on its own, so the
+         identity column gets a floor. 120px fits the name and its short_name underneath. */
+      .table-responsive .table thead th:nth-child(2),
+      .table-responsive .table tbody td:nth-child(2) { min-width: 120px; }
       /* The header has its own colour by design, and no accent state to track. */
       .table-responsive .table thead th.col-actions { background-color: var(--bg-elevated); }
       /* The host tile is the only one carrying TWO values, and it did not fit. Measured at 375px:
