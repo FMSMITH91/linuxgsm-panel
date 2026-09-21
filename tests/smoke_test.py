@@ -1553,6 +1553,28 @@ try:
         check("migrate: repeated migrations stay a safe no-op",
               "backup_codes" in _ucols() and "totp_secret" in _ucols())
 
+        # game_server.content_games / install_error / install_retryable: the same for the install
+        # failure and GMod-content columns. A column the MODEL declares and the TABLE lacks is a
+        # 500 on every page that touches that row — and it only ever happens on an UPGRADED
+        # install, never on the fresh one a developer tests with.
+        def _gcols():
+            return {col["name"] for col in _inspect(db.engine).get_columns("game_server")}
+
+        for _col in ("content_games", "install_error", "install_retryable"):
+            _gdropped = False
+            try:
+                db.session.execute(_t("ALTER TABLE game_server DROP COLUMN %s" % _col))
+                db.session.commit()
+                _gdropped = True
+            except Exception:
+                db.session.rollback()     # SQLite too old to DROP COLUMN
+            if _gdropped:
+                check("migrate: a legacy DB is missing game_server.%s" % _col,
+                      _col not in _gcols())
+                _run_light_migrations()
+                check("migrate: ...and the update adds it back", _col in _gcols(),
+                      "an upgraded install 500s on every page that reads this row")
+
         # invite.revoked_at: an install that upgrades INTO revocation must get the column, or every
         # invite page 500s on a column the model expects and the table does not have.
         def _icols():
