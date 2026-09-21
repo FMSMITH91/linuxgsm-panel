@@ -194,6 +194,31 @@ def register(app):
                             state.data = json.dumps(data)
 
                 if action == "skip" or request.form.get("done") == "1":
+                    # Setup is not over until it has produced an ADMIN.
+                    #
+                    # This handler dispatches on the `step` field FROM THE FORM, so nothing makes
+                    # a caller walk the wizard in order — and the wizard is unauthenticated until
+                    # it completes, which is the whole point of a first-run flow. So on a freshly
+                    # installed panel anyone who could reach the port could POST
+                    # step=remote_server&action=skip and close setup with zero accounts.
+                    # Reproduced: SetupState.complete True, config setup_complete True,
+                    # superadmins 0, and every page then redirecting to a login nobody can pass.
+                    # Getting back in needs `manage.py create-admin` from a shell.
+                    #
+                    # The same request also ran the Tailscale auto-setup below, so an
+                    # unauthenticated POST reconfigured the host's serve settings.
+                    #
+                    # Counting ANY superadmin row rather than only active ones, deliberately: a
+                    # deactivated sole admin is a job for manage.py, and reopening the wizard for
+                    # an install that already has an owner would hand the next caller an account.
+                    # The panel refuses to leave zero superadmins through the UI, so zero here
+                    # means setup genuinely never finished.
+                    if User.query.filter_by(is_superadmin=True).first() is None:
+                        flash("Create the administrator account before finishing setup.", "danger")
+                        state.step = "admin_user"
+                        state.data = json.dumps(data)
+                        db.session.commit()
+                        return redirect("/setup")
                     state.step = "complete"
                     state.complete = True
                     state.data = json.dumps(data)
