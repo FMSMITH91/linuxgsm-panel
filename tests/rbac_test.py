@@ -889,14 +889,24 @@ try:
         _r_bogus = _anon_inv.get("/invite/%s" % ("z" * 43))
         check("invite route: an expired invite is refused",
               _r_exp.status_code == 404 and _user(_inv_tag + "_exp") is None)
-        # The CSP nonce is fresh per response by design, so it is normalised out — comparing the
-        # raw bodies reported a difference that is not one. Everything else must match: a page
-        # that said "already used" would confirm to a stranger that a guessed token was real.
+        # Per-REQUEST values are normalised out before comparing: the CSP nonce and the CSRF
+        # token are fresh every response by design and say nothing about the invite. Everything
+        # else must match, because a page that said "already used" would confirm to a stranger
+        # that a guessed token was real.
+        #
+        # The nonce alone was not enough. CI failed this where the machine that wrote it passed:
+        # the CSRF token is time-based, so two requests in the same second produce the same one
+        # and two that straddle a second do not. A test that depends on how fast the machine is
+        # is not a test.
         import difflib as _dl
         import re as _inv_re
 
         def _no_nonce(t):
-            return _inv_re.sub(r'nonce="[^"]*"', 'nonce="X"', t)
+            t = _inv_re.sub(r'nonce="[^"]*"', 'nonce="X"', t)
+            t = _inv_re.sub(r'window\.CSRF\s*=\s*"[^"]*"', 'window.CSRF = "X"', t)
+            t = _inv_re.sub(r'name="csrf_token"[^>]*value="[^"]*"',
+                            'name="csrf_token" value="X"', t)
+            return t
 
         _d_exp, _d_bog = _no_nonce(_r_exp.get_data(as_text=True)), \
             _no_nonce(_r_bogus.get_data(as_text=True))
