@@ -253,30 +253,67 @@ function _fmtUptimeShort(s){
   var d = Math.floor(s/86400), h = Math.floor((s%86400)/3600), m = Math.floor((s%3600)/60);
   return d ? (d+'d '+h+'h') : (h ? (h+'h '+m+'m') : (m+'m'));
 }
+// The three ways a host card can read, kept as data because the dashboard template renders the
+// SAME three and the two must not drift — tests/unit gates them against each other.
+var HOST_REACH = {
+  yes:     {cls: 'bg-success',   text: 'Reachable',
+            title: 'The panel can reach this host over SSH'},
+  no:      {cls: 'bg-danger',    text: 'Unreachable',
+            title: 'The panel cannot reach this host over SSH — the servers below show their last known state'},
+  unknown: {cls: 'bg-secondary', text: 'Checking…',
+            title: 'The panel has not checked this host yet — the first check runs shortly after startup'}
+};
+function paintHostReach(rid, h){
+  var b = document.getElementById('host-reach-' + rid);
+  // No entry for this host means the endpoint did not speak about it. Saying nothing is right:
+  // the badge keeps whatever the server rendered rather than being downgraded on a hunch.
+  if(!b || !h) return;
+  var st = HOST_REACH[h.reachable ? 'yes' : (h.probed ? 'no' : 'unknown')];
+  b.className = 'badge ' + st.cls;
+  // textContent, not innerHTML: i18n.js's observer translates the new text node, and the title
+  // attribute, on its own. Setting English here is what makes the swapped badge localised too.
+  b.textContent = st.text;
+  b.setAttribute('title', st.title);
+}
 function refreshMetrics(){
   fetch(MOUNT + '/api/dashboard/metrics').then(function(r){ return r.ok ? r.json() : null; })
     .then(function(d){
       if(!d) return;
       var hosts = d.hosts || {}, servers = d.servers || {}, summary = null;
-      Object.keys(hosts).forEach(function(rid){
-        var h = hosts[rid], el = document.getElementById('host-metrics-' + rid);
-        if(el) el.textContent = 'CPU ' + h.cpu + '% · RAM ' + h.ram_pct + '% · Disk ' + h.disk_pct + '%';
-        if(h.local || summary === null) summary = h;
+      // Driven by what is ON THE PAGE, not by what the payload happens to carry. A host that
+      // stops answering vanishes from `hosts`, and iterating the payload's own keys therefore
+      // never reached its card — so its CPU/RAM/Disk line stayed frozen at the last reading,
+      // beside a summary tile that had already fallen back to "—". Measured in a live panel:
+      // "CPU 12.5% · RAM 40.1% · Disk 55.2%" survived a payload with no hosts at all.
+      Array.prototype.forEach.call(document.querySelectorAll('[id^="host-metrics-"]'), function(el){
+        var rid = el.id.substring('host-metrics-'.length), h = hosts[rid];
+        el.textContent = (h && h.metrics)
+          ? ('CPU ' + h.cpu + '% · RAM ' + h.ram_pct + '% · Disk ' + h.disk_pct + '%')
+          : '';
+        if(h && h.metrics && (h.local || summary === null)) summary = h;
+        paintHostReach(rid, h);
       });
       var sum = document.getElementById('host-summary');
       if(sum) sum.innerHTML = summary  // nosemgrep
         ? '<i class="bi bi-cpu text-info"></i> ' + summary.cpu + '% · ' + summary.ram_pct + '%'
         : '<i class="bi bi-cpu text-info"></i> <span class="text-secondary">—</span>';
-      Object.keys(servers).forEach(function(sid){
-        var s = servers[sid], cell = document.getElementById('res-' + sid);
-        if(cell) cell.innerHTML = s.up  // nosemgrep
+      // Same reasoning as the host line above: a server whose host went quiet drops out of the
+      // payload entirely, and its Resources cell used to keep the last CPU/RAM it was given —
+      // with an uptime that no longer advanced. Walk the CELLS, so absent means "—".
+      Array.prototype.forEach.call(document.querySelectorAll('[id^="res-"]'), function(cell){
+        var sid = cell.id.substring('res-'.length), s = servers[sid];
+        // These ids are res-<server id> and nothing else. The prefix is short enough that an
+        // unrelated id could grow into it one day (this page already sits a keystroke away from
+        // "res-ult"), and blanking someone else's element would be a silent, puzzling bug.
+        if(!/^[0-9]+$/.test(sid)) return;
+        cell.innerHTML = (s && s.up)  // nosemgrep
           ? ('<i class="bi bi-cpu"></i> ' + s.cpu + '% · ' + s.ram_mb + ' MB'
              + (s.uptime ? ' · <span title="Uptime"><i class="bi bi-clock"></i> ' + _fmtUptimeShort(s.uptime) + '</span>' : ''))
           : '<span class="text-secondary">—</span>';
         var mapEl = document.getElementById('map-' + sid);
         if(mapEl){
           // The map name is whatever the QUERIED GAME SERVER reports, so it is escaped.
-          if(s.up && s.map){ mapEl.innerHTML = '<i class="bi bi-geo-alt"></i> ' + escapeHtml(s.map);  // nosemgrep
+          if(s && s.up && s.map){ mapEl.innerHTML = '<i class="bi bi-geo-alt"></i> ' + escapeHtml(s.map);  // nosemgrep
             mapEl.classList.remove('d-none'); }
           else { mapEl.classList.add('d-none'); }
         }

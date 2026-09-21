@@ -201,6 +201,7 @@
   "Restrict a Port": "Restreindre un port",
   "Right after adding: system updates, essential packages, firewall, SSH hardening, fail2ban, gamedig, auto-security-updates, then reboot.": "Juste après l'ajout : mises à jour système, paquets essentiels, pare-feu, durcissement SSH, fail2ban, gamedig, mises à jour de sécurité automatiques, puis redémarrage.",
   "Routes": "Routes",
+  "Rules can't be read while this host is unreachable.": "Les règles ne peuvent pas être lues tant que cet hôte est injoignable.",
   "Runs locally on this server": "S'exécute localement sur ce serveur",
   "Runs unattended and answers prompts safely — it keeps any config file you've edited and assumes yes to installs, so it never gets stuck waiting. You'll see here if it kept a config file.": "S'exécute sans surveillance et répond aux invites en toute sécurité — il conserve tout fichier de configuration que vous avez modifié et accepte les installations, il ne reste donc jamais bloqué. Vous verrez ici s'il a conservé un fichier de configuration.",
   "SSH Key": "Clé SSH",

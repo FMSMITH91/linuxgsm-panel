@@ -425,6 +425,17 @@ def register(app, supervise):
                 except Exception:
                     app.logger.debug("cron tracking upgrade skipped", exc_info=True)
                 jobs = _sm.list_cron_jobs(gs.remote, gs.short_name, gs.lgsm_name)
+                # The same distinction the file browser two cards up already makes, for the
+                # same reason: a read that FAILED and an account with no jobs both used to
+                # arrive here as [], and the page said "No scheduled tasks yet." about a
+                # crontab it had never reached. _sync_toggles_from_cron refuses None as
+                # well — this is the caller that made an unreadable crontab destructive
+                # rather than merely misleading.
+                if jobs is None:
+                    return jsonify({"error": "Couldn't read the scheduled tasks — %s didn't "
+                                             "answer. This is not the same as there being none."
+                                             % (gs.remote.display_name if gs.remote
+                                                else "the host")})
                 _sync_toggles_from_cron(gs, jobs)
                 return jsonify({"jobs": jobs})
             except Exception:

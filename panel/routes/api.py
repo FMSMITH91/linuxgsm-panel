@@ -49,7 +49,24 @@ def register(app):
         # asking once per game fetched the same host figures N times; the pool now spreads over
         # hosts, which is what the SSH round trips actually cost.
         work = _host_metrics_work(servers)
-        out_servers, hosts = {}, {}
+        # An entry for EVERY host on the page, seeded BEFORE any sample is taken. A host the panel
+        # cannot reach produces no sample at all, and a payload that simply left it out told the
+        # dashboard nothing — so the page kept painting the last figures it ever saw, including an
+        # uptime that had stopped advancing, next to a summary tile that had already fallen back to
+        # "—". Absence is not "unchanged", it is "unknown", and the page can only say so if it is
+        # told. `metrics` is what separates the two.
+        #
+        # reachable/probed come from the SAME pair the dashboard template branches on, reached
+        # through the jinja global rather than re-derived here: the badge this feeds must never be
+        # able to disagree with what a reload would render.
+        _probed = app.jinja_env.globals.get("host_probed") or (lambda _rid: True)
+        hosts = {str(rid): {"name": getattr(r, "display_name", "") or "",
+                            "local": bool(getattr(r, "is_local", False)),
+                            "reachable": bool(getattr(r, "is_online", False)),
+                            "probed": bool(_probed(rid)),
+                            "metrics": False}
+                 for rid, r in remote_by_id.items()}
+        out_servers = {}
         if work:
             with concurrent.futures.ThreadPoolExecutor(max_workers=min(_PLAYER_POLL_WORKERS, len(work))) as ex:
                 for sid, m, rid, mp in itertools.chain.from_iterable(ex.map(_query_host_metrics, work)):
@@ -62,18 +79,27 @@ def register(app):
                         "up": bool(m.get("game_procs")),   # a live game process, not just a listening port
                         "map": mp or "",
                     }
-                    if rid is not None and str(rid) not in hosts:
+                    if rid is not None and not hosts.get(str(rid), {}).get("metrics"):
                         rt, dt = m.get("ram_total") or 0, m.get("disk_total") or 0
                         _rem = remote_by_id.get(rid)
-                        hosts[str(rid)] = {
+                        hosts.setdefault(str(rid), {
                             "name": getattr(_rem, "display_name", "") or "",
                             "local": bool(getattr(_rem, "is_local", False)),
+                            "reachable": True,
+                            "probed": True,
+                        }).update({
                             "cpu": round(m.get("cpu_percent") or 0, 1),
                             "ram_pct": round(100.0 * (m.get("ram_used") or 0) / rt, 1) if rt else 0,
                             "disk_pct": round(100.0 * (m.get("disk_used") or 0) / dt, 1) if dt else 0,
                             "uptime": int(m.get("uptime_secs") or 0),
                             "cores": int(m.get("cores") or 1),
-                        }
+                            # A sample came back, so this host answered — whatever the monitor's
+                            # column last said. Reporting `reachable: False` beside live CPU
+                            # figures would put the page's own two halves at odds.
+                            "reachable": True,
+                            "probed": True,
+                            "metrics": True,
+                        })
         return jsonify({"servers": out_servers, "hosts": hosts})
 
     @app.route("/api/server/<int:server_id>/history")

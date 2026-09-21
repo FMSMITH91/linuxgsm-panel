@@ -1887,8 +1887,17 @@ def _sync_toggles_from_cron(gs, jobs):
     Scheduled Tasks (whose own help text promised that deleting `monitor` turns Autostart off).
     So the Details page could show Off while `*/5 * * * * ... monitor` was scheduled and
     running. Reconciles on every read or write of the cron list; returns True if it changed
-    anything."""
-    roles = {j.get("role") for j in (jobs or [])}
+    anything.
+
+    `jobs` of None means the crontab could not be READ, and is refused. This function writes
+    columns from an ABSENCE — "the monitor line is not in this list" — so a failed read fed to
+    it as [] is not a no-op, it is a wipe: both switches go off, the host's crontab keeps
+    running the lines, and nothing ever turns them back on. That is what an unreachable host
+    did to a server whose Files & Config page you merely OPENED. `or []` would restore exactly
+    that, which is why the guard is on `is None` and the comprehension no longer carries one."""
+    if jobs is None:
+        return False
+    roles = {j.get("role") for j in jobs}
     changed = False
     for field, role in (("autostart", "autostart"), ("daily_restart", "daily-restart")):
         live = role in roles

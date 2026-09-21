@@ -368,14 +368,41 @@ def _match_run_time(run_times, cmd):
     return best
 
 
+# What `crontab -u X -l` says, measured on a live host:
+#
+#   rc 0                                          the crontab was read (empty or not)
+#   rc 1  stderr "no crontab for X"               the account genuinely has none
+#   rc 1  stderr "crontab:  user `X\' unknown"     no such account
+#   rc -1                                         the transport failed — an unreachable host
+#                                                 answers ("", "...", -1), it does not raise
+#
+# Only the first two are ANSWERS. The message match is the one locale-dependent part, and it
+# fails in the SAFE direction: a host whose cron speaks another language reports "couldn't read"
+# for an account with no crontab, which is a worse page and not a wrong write.
+_NO_CRONTAB_RE = re.compile(r"no crontab for", re.I)
+
+
 def list_cron_jobs(server, user, selfname=None):
-    """Read the game user's crontab as a list of jobs. Comment/blank lines are
-    skipped. Each job: {raw, schedule, command, managed, last_run, ok, error}. `raw` is the
-    exact line (identity for edit/delete); `command` is the un-wrapped, human-readable form.
-    Run history comes from the recorder for user-added jobs (time + ok/error) and from cron's
-    own log for managed/legacy jobs (time only — ok stays None, cron doesn't log exit status)."""
+    """Read the game user's crontab as a list of jobs, or None if it could not be READ.
+
+    Comment/blank lines are skipped. Each job: {raw, schedule, command, managed, last_run, ok,
+    error}. `raw` is the exact line (identity for edit/delete); `command` is the un-wrapped,
+    human-readable form. Run history comes from the recorder for user-added jobs (time + ok/error)
+    and from cron's own log for managed/legacy jobs (time only — ok stays None, cron doesn't log
+    exit status).
+
+    None, NOT []. The rc was discarded here, so a host that did not answer produced "" and parsed
+    to an empty list — indistinguishable from a user with no jobs. Two things acted on that:
+    the page said "No scheduled tasks yet.", and _sync_toggles_from_cron treats the crontab as the
+    source of truth for the Autostart and Daily-restart switches, so it saw both lines "gone" and
+    turned both columns OFF. Merely OPENING Files & Config for a server whose host was briefly
+    unreachable silently disabled its autostart — verified in a rendered panel: seeded with
+    autostart=1, one page load, column 0, crontab on the host untouched. Nothing turns it back on,
+    because the reconcile only ever mirrors what it read."""
     selfname = selfname or user
-    out, _, _ = _core.run_privileged(server, "crontab-list", [user], timeout=10, merge_stderr=False)
+    out, err, rc = _core.run_privileged(server, "crontab-list", [user], timeout=10, merge_stderr=False)
+    if rc != 0 and not _NO_CRONTAB_RE.search("%s\n%s" % (err or "", out or "")):
+        return None
     status = _read_cron_status(server, user)
     run_times = _read_cron_run_times(server, user)
     jobs = []
