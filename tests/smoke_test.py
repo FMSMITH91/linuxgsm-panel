@@ -7550,6 +7550,35 @@ try:
     finally:
         _ivmod.utcnow = _iv_saved_now
 
+    # ── and the ROUTE must not publish a reading nobody took ──────────────────────────────────
+    # The helper now says read_ok; this is the caller that has to act on it. Driven through the
+    # endpoint the page actually polls, because a flag no route reads changes nothing on screen.
+    import panel.routes.ubuntu_pro as _lrmod
+
+    _lr_saved = _lrmod.remote_live_metrics
+    try:
+        _lr_zeros = {"read_ok": False, "cpu_overall": 0.0, "cpu_cores": [], "core_count": 0,
+                     "ram_used": 0, "ram_total": 0, "ram_percent": 0, "swap_used": 0,
+                     "swap_total": 0, "swap_percent": 0, "disk_used": 0, "disk_total": 0,
+                     "disk_percent": 0}
+        _lrmod.remote_live_metrics = lambda r: _lr_zeros
+        _lr = c.get("/api/remote/%d/live" % remote_id).get_json() or {}
+        check("live route: a read that produced nothing answers an error, not zeros",
+              bool(_lr.get("error")) and "cpu_overall" not in _lr,
+              "published %r — the card renders CPU 0%%, 0 cores and RAM 0 of 0 for a host that "
+              "never answered" % (sorted(_lr.items())[:4],))
+        check("live route: ...and says the host did not answer, so the card can say so too",
+              _lr.get("unreachable") is True, "no unreachable flag: %r" % (_lr,))
+
+        _lrmod.remote_live_metrics = lambda r: dict(_lr_zeros, read_ok=True, cpu_overall=12.5,
+                                                    ram_total=2048, ram_used=1024, core_count=2)
+        _lr2 = c.get("/api/remote/%d/live" % remote_id).get_json() or {}
+        check("live route: ...while a real reading is still published (positive control)",
+              _lr2.get("cpu_overall") == 12.5 and not _lr2.get("error"),
+              "the route stopped publishing readings at all: %r" % (_lr2,))
+    finally:
+        _lrmod.remote_live_metrics = _lr_saved
+
     # ── backups: the schedule clock, and an audit line that matches what happened ─────────────
     # Three accounting bugs, all the same shape: a backup path that did (or did not do) something
     # and told the rest of the panel otherwise.

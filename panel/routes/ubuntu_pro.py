@@ -80,8 +80,15 @@ def register(app):
         """Realtime per-core + overall CPU and RAM/swap for a remote's live bars."""
         remote = get_remote(remote_id)
         try:
-            return jsonify(remote_live_metrics(remote))
+            _lm = remote_live_metrics(remote)
         except ConnectionError:
             return _unreachable("remote live metrics")
         except Exception:
             return jsonify({"error": _log_and_generic("request failed")}), 500
+        # A read that produced nothing is not a host at 0%. run_command does not raise on a
+        # timeout, so without this the card rendered CPU 0%, 0 cores and RAM 0 of 0 for a host
+        # that never answered — the most reassuring possible display of an unreachable machine.
+        if not _lm.get("read_ok"):
+            return jsonify({"error": "The host did not answer the live-metrics read.",
+                            "unreachable": True}), 200
+        return jsonify(_lm)

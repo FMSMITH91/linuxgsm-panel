@@ -249,7 +249,18 @@ function buildCores(n){
 }
 function pollLive(){
   fetch(MOUNT + '/api/remote/'+REMOTE_ID+'/live').then(r=>r.json()).then(d=>{
-    if(d.error) return;
+    // A read that failed used to arrive as zeros and render an idle-looking host. The route
+    // refuses to publish those now, so `error` is what a dead host looks like here — and the
+    // card has to SAY so: silently leaving the last good numbers on screen is a live display
+    // of a reading nobody took.
+    var stale = document.getElementById('live-stale');
+    if(d.error){
+      if(stale){ stale.textContent = d.unreachable
+        ? 'Live figures are paused — the host did not answer. The numbers below are the last reading.'
+        : 'Live figures are paused — the last read failed.'; stale.style.display=''; }
+      return;
+    }
+    if(stale){ stale.textContent=''; stale.style.display='none'; }
     var ov=d.cpu_overall||0;
     document.getElementById('cpu-overall-val').textContent=ov;
     var ob=document.getElementById('cpu-overall-bar'); ob.style.width=ov+'%'; ob.style.backgroundColor=barColor(ov);

@@ -1425,7 +1425,7 @@ def remote_live_metrics(server):
     cmd = ("echo ===A; grep '^cpu' /proc/stat; echo ===B; sleep 0.25; grep '^cpu' /proc/stat; "
            "echo ===MEM; grep -E 'MemTotal|MemAvailable|SwapTotal|SwapFree' /proc/meminfo; "
            "echo ===DISK; df -PB1 /")
-    out, _, _ = run_command(server, cmd, timeout=12)
+    out, _, _lm_rc = run_command(server, cmd, timeout=12)
     section = None
     A, B, mem = {}, {}, {}
     disk_total = disk_used = 0
@@ -1461,7 +1461,17 @@ def remote_live_metrics(server):
     ram_used = ram_total - mem.get("MemAvailable", 0)
     swap_total = mem.get("SwapTotal", 0)
     swap_used = swap_total - mem.get("SwapFree", 0)
+    # read_ok, because every number below is 0 when NOTHING was read: run_command returns
+    # ("", "...timed out", -1) rather than raising, "".splitlines() is empty, and the dict comes
+    # back cpu 0%, 0 cores, RAM 0 of 0 — an idle, healthy-looking host that is in fact
+    # unreachable. remote_uptime beside this already carries the same flag for the same reason
+    # ("don't cache a failed/empty read"); this one had no way to say it.
+    #
+    # The test is the two readings the whole dict is derived from: a CPU sample in BOTH /proc/stat
+    # passes, and a MemTotal. A host that answered has them; nothing else produces them.
+    read_ok = bool(_lm_rc == 0 and "cpu" in A and "cpu" in B and ram_total)
     return {
+        "read_ok": read_ok,
         "cpu_overall": _pct("cpu"),
         "cpu_cores": cores,
         "core_count": len(cores),
