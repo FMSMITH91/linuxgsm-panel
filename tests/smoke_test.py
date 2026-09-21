@@ -1136,13 +1136,40 @@ try:
     # The host is stubbed to SUCCEED so the job walks the whole way: dependencies, download,
     # config, port adoption, firewall, autostart, start, and the post-start liveness poll.
     import panel.routes.manage_servers as _msmod
-    import time as _ij_time
+    import time as _ijw_time
     # Stub at the DEFINITION SITE, never on the package. panel/ops/ssh_manager/__init__.py exposes
     # these through __getattr__ precisely so there is one stub target, and its docstring says not
     # to bind names on it. Setting them on the package shadows the forwarding — and "restoring"
     # them afterwards makes that shadow permanent, so every later stub on _core stops being seen.
     # That is not hypothetical: doing it here broke six power-action checks further down the file.
     from panel.ops.ssh_manager import game as _ij_game, portscan as _ij_ps
+
+    def _ij_wait(gid, secs=180):
+        """Wait until the install job for `gid` is genuinely FINISHED.
+
+        Both halves matter. The job dict can stop saying "running" while the worker still has work
+        left, and the worker only touches the row at the end — so waiting on either one alone lets
+        the block finish, restore its stubs, and leave a thread still running against whatever the
+        NEXT block installs. That is not hypothetical: CI logged the first job adopting the second
+        scenario's ports, because the first block had already handed the stubs back.
+        """
+        # int(), and a floor of one pass: a fractional or zero `secs` made range() empty, so the
+        # loop never ran and the return below referenced an unbound name — the guard crashed the
+        # suite instead of reporting the stall it exists to report. Found by mutating it.
+        _row_status = "unread"
+        _deadline = max(1, int(secs * 10))
+        for _ in range(_deadline):
+            with _install_lock_sm:
+                j = dict(_install_jobs_sm.get(gid) or {})
+            with app.app_context():
+                _r = db.session.get(GameServer, gid)
+                _row_status = _r.status if _r is not None else "gone"
+            if j.get("status") not in ("running", None) and _row_status != "installing":
+                return j, _row_status, True
+            _ijw_time.sleep(0.1)
+        with _install_lock_sm:
+            j = dict(_install_jobs_sm.get(gid) or {})
+        return j, _row_status, False
 
     _ij_saved, _ij_calls, _ij_state = {}, [], {"started": False}
 
@@ -1198,29 +1225,31 @@ try:
               "no row — the job never started (POST %s)" % _ij_resp.status_code)
 
         if _ij_id is not None:
-            for _ in range(600):                      # the post-start poll sleeps 3s once
-                with _install_lock_sm:
-                    _st = (_install_jobs_sm.get(_ij_id) or {}).get("status")
-                if _st != "running":
-                    break
-                _ij_time.sleep(0.1)
+            _job, _row_st, _ij_settled = _ij_wait(_ij_id)
+            _st = _job.get("status")
+            # What the job itself said, so a failure here names the step it stopped on instead of
+            # only the end state. CI failed this where the machine running it passed, and "status
+            # is still installing" on its own does not say which stub the job walked past.
+            _why_job = "job=%r step=%r/%r name=%r msg=%r" % (
+                _st, _job.get("step"), _job.get("total"), _job.get("step_name"),
+                (_job.get("message") or "")[:200])
             with app.app_context():
                 _ij_done = db.session.get(GameServer, _ij_id)
                 _ij_final = (_ij_done.status, _ij_done.installed, _ij_done.port,
                              _ij_done.install_error)
             check("install job: it runs to completion instead of dying at step 2",
-                  _st != "running", "job status=%r" % (_st,))
+                  _ij_settled, _why_job)
             check("install job: ...and the server ends up installed and online",
                   _ij_final[0] == "online" and _ij_final[1] is True,
-                  "status=%r installed=%r error=%r" % (_ij_final[0], _ij_final[1], _ij_final[3]))
+                  "status=%r installed=%r error=%r | %s" % (_ij_final[0], _ij_final[1], _ij_final[3], _why_job))
             check("install job: ...having adopted the port LinuxGSM reported",
-                  _ij_final[2] == 28991, "port=%r" % (_ij_final[2],))
+                  _ij_final[2] == 28991, "port=%r | %s" % (_ij_final[2], _why_job))
             check("install job: ...and started the server, not just installed it",
                   ("run_as_game_user", "start") in _ij_calls,
-                  "calls: %s" % (_ij_calls[:8],))
+                  "calls: %s | %s" % (_ij_calls[:8], _why_job))
             _ij_opened = [c2 for c2 in _ij_calls if c2[0] == "ufw_allow"]
             check("install job: ...and opened the reported ports in the firewall",
-                  any(28991 in c2[1] for c2 in _ij_opened), "ufw calls: %s" % (_ij_opened,))
+                  any(28991 in c2[1] for c2 in _ij_opened), "ufw calls: %s | %s" % (_ij_opened, _why_job))
             with app.app_context():
                 _d = db.session.get(GameServer, _ij_id)
                 if _d is not None:
@@ -1289,12 +1318,11 @@ try:
             _cf_id = _cf_row.id if _cf_row else None
         check("install job (clash): the POST created a row", _cf_id is not None)
         if _cf_id is not None:
-            for _ in range(600):
-                with _install_lock_sm:
-                    _cst = (_install_jobs_sm.get(_cf_id) or {}).get("status")
-                if _cst != "running":
-                    break
-                _ij_time.sleep(0.1)
+            _cjob, _crow_st, _cf_settled = _ij_wait(_cf_id)
+            check("install job (clash): the job finished before the stubs are handed back",
+                  _cf_settled,
+                  "job=%r row=%r — a thread still running here would walk into the next block's "
+                  "stubs" % (_cjob.get("status"), _crow_st))
             with app.app_context():
                 _cf_port = db.session.get(GameServer, _cf_id).port
             check("install job (clash): the panel KEEPS its own port, it does not adopt one "
