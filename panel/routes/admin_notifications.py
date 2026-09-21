@@ -366,14 +366,30 @@ def register(app):
         inv = db.session.get(Invite, invite_id)
         if inv is None:
             return _form_err("That invite no longer exists.", "manage_users", code=404)
-        if inv.used_at is not None:
+        _note, _by = inv.note, inv.created_by_id   # read before the UPDATE expires the row
+        # Claimed the same way redemption claims it: one UPDATE ... WHERE used_at IS NULL, not a
+        # read followed by a write. Redemption's own comment says it — "checking is_usable above
+        # and trusting it would be a race" — and this side was the read-then-write half of that
+        # same race: a link redeemed between the check and the commit produced a row stamped BOTH
+        # used and revoked, and a flash saying the link no longer works to an admin whose invitee
+        # had just created their account.
+        _claimed = (Invite.query
+                    .filter(Invite.id == invite_id, Invite.used_at.is_(None),
+                            Invite.revoked_at.is_(None))
+                    .update({"revoked_at": utcnow()}, synchronize_session=False))
+        db.session.commit()
+        if _claimed:
+            log_action(current_user, "invite_revoked", target=_note or "(no note)",
+                       detail="created by user id %s" % (_by,))
+            return _form_ok("Invite revoked — the link no longer works.", "manage_users")
+        # Nothing claimed: re-read to say WHICH, rather than reporting a revocation that did not
+        # happen. Already-revoked stays a success — the caller wanted it gone and it is.
+        inv = db.session.get(Invite, invite_id)
+        if inv is not None and inv.used_at is not None:
             return _form_err("That invite was already redeemed — revoking it would change nothing.",
                              "manage_users")
-        if inv.revoked_at is None:
-            inv.revoked_at = utcnow()
-            db.session.commit()
-            log_action(current_user, "invite_revoked", target=inv.note or "(no note)",
-                       detail="created by user id %s" % (inv.created_by_id,))
+        if inv is None:
+            return _form_err("That invite no longer exists.", "manage_users", code=404)
         return _form_ok("Invite revoked — the link no longer works.", "manage_users")
 
     @app.route("/invite/<token>", methods=["GET", "POST"])
