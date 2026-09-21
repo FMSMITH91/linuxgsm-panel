@@ -11,6 +11,7 @@ events are covered by neither CSRFProtect nor rbac_test's url_map sweeps: nothin
 watching them.
 """
 import threading
+import time
 
 from flask import render_template, request
 from flask_login import current_user, login_required
@@ -26,10 +27,30 @@ from panel.security.auth import (USE_TERMINAL, get_remote, has_permission, log_a
 _sid_host = {}
 _sid_lock = threading.Lock()
 
+# sid -> (monotonic, allowed). Per-host access was checked when the shell OPENED and never again,
+# so revoking someone's access to a host left their live shell typing into it until they closed
+# the tab or the idle sweeper reaped it fifteen minutes later. Re-checking on every keystroke
+# would put a group query behind every character, so it is re-checked at most this often.
+_sid_access = {}
+_ACCESS_RECHECK_SECONDS = 10.0
+
 
 def _may_use_terminal():
-    return bool(current_user.is_authenticated
-                and (current_user.is_superadmin or has_permission(current_user, USE_TERMINAL)))
+    """Every socket event asks this, because a socket event is not an HTTP request.
+
+    must_change_password is enforced by an @app.before_request (app.py), and before_request never
+    runs for a Socket.IO event — so an account holding a handed-over temporary password was
+    redirected to the change-password page for every route in the panel and could still emit
+    term_open and get a shell. The whole point of that gate is that the admin who typed the
+    temporary password must not be able to keep using it, and a shell is the last place to make an
+    exception. The route above is covered by before_request; these events are not, so they ask
+    here.
+    """
+    if not current_user.is_authenticated:
+        return False
+    if getattr(current_user, "must_change_password", False):
+        return False
+    return bool(current_user.is_superadmin or has_permission(current_user, USE_TERMINAL))
 
 
 def register(app, socketio, supervise):
@@ -43,7 +64,8 @@ def register(app, socketio, supervise):
         what rbac_test's <remote_id> sweep requires to see."""
         remote = get_remote(remote_id)
         return render_template("terminal.html", remote=remote,
-                               sudo_note=_ts.sudo_hint(remote, bool(remote.is_local)))
+                               sudo_note=_ts.sudo_hint(remote, bool(remote.is_local)),
+                               local_user=_ts.panel_account())
 
     # ── socket events ─────────────────────────────────────────────────────────────────────────
     def _send(sid, data):
@@ -90,9 +112,33 @@ def register(app, socketio, supervise):
         log_action(current_user, "terminal_open", target=remote.name)
         emit("term_ready", {"host": remote.display_name})
 
+    def _still_allowed(sid):
+        """Does this socket's user STILL have access to the host its shell is on?
+
+        Cached for _ACCESS_RECHECK_SECONDS: the answer changes when an admin edits a group, not
+        between keystrokes, and a group lookup per character would be absurd. Revocation therefore
+        takes effect within ten seconds rather than at the next reconnect.
+        """
+        with _sid_lock:
+            remote_id = _sid_host.get(sid)
+        if remote_id is None:
+            return True                       # no open session of ours on this socket
+        now = time.monotonic()
+        cached = _sid_access.get(sid)
+        if cached is not None and (now - cached[0]) < _ACCESS_RECHECK_SECONDS:
+            return cached[1]
+        from panel.security.auth import can_access_remote
+        ok = bool(current_user.is_superadmin or can_access_remote(current_user, remote_id))
+        _sid_access[sid] = (now, ok)
+        if not ok:
+            emit("term_error", {"message": "Your access to this host was removed, so the "
+                                           "terminal has been closed."})
+            _close_and_audit(sid, "access to the host was revoked")
+        return ok
+
     @socketio.on("term_input")
     def on_term_input(data):
-        if not _may_use_terminal():
+        if not _may_use_terminal() or not _still_allowed(request.sid):
             return
         sess = _ts.get(request.sid)
         if sess is not None:
@@ -100,7 +146,7 @@ def register(app, socketio, supervise):
 
     @socketio.on("term_resize")
     def on_term_resize(data):
-        if not _may_use_terminal():
+        if not _may_use_terminal() or not _still_allowed(request.sid):
             return
         sess = _ts.get(request.sid)
         if sess is not None:
@@ -119,11 +165,20 @@ def register(app, socketio, supervise):
         lambda sid: _close_and_audit(sid, "the connection closed"))
 
     def _close_and_audit(sid, reason):
+        # TEAR DOWN FIRST, and never on the strength of the audit bookkeeping. _sid_host[sid] is
+        # written AFTER open_session returns, while the session itself is registered (and counting
+        # against the per-user limit) BEFORE the transport is opened — and paramiko's connect can
+        # take the full ssh_timeout. A disconnect in that window found no _sid_host entry and
+        # returned right here, leaving the shell running and the slot held until the idle sweeper
+        # reaped it fifteen minutes later; three of those and the fourth open is refused with "you
+        # already have 3 terminals open" while none are. close_for_sid is a no-op when there is no
+        # session, so calling it unconditionally costs nothing.
+        _ts.close_for_sid(sid, reason)
+        _sid_access.pop(sid, None)
         with _sid_lock:
             remote_id = _sid_host.pop(sid, None)
         if remote_id is None:
-            return          # this socket had no terminal — nothing to do
-        _ts.close_for_sid(sid, reason)
+            return          # nothing to audit: this socket never got as far as an open session
         try:
             remote = RemoteServer.query.get(remote_id)
             log_action(current_user if current_user.is_authenticated else None,

@@ -29,11 +29,16 @@ the host's own sudoers — which on a root install means it will refuse outright
 service account has no general sudo entry and no password at all. `sudo_hint()` exists so the UI
 can say that up front instead of letting the operator discover it as a mystery.
 """
+import codecs
+import collections
+import fcntl
 import logging
 import os
 import pty
 import select
 import signal
+import socket
+import termios
 import subprocess  # nosec B404 - the tailscale transport needs a real process under a pty
 import threading
 import time
@@ -54,6 +59,20 @@ _IDLE_TIMEOUT = 15 * 60
 # How long each teardown signal gets before the next, harder one. Short: the normal case is the
 # child exiting on the pty master's EIO before the first signal is even sent, and this only runs
 # when it did not. Three steps, so a process that ignores everything costs 0.75s once.
+# How long a single write may spend waiting for the far side to take the bytes. A pty's input
+# queue holds about 8 KB of line-terminated text; past that the write waits for the foreground
+# program to read, and a program that never reads stdin (a build, an apt run, a game console)
+# never lets it finish. Measured: 8160 bytes went straight through, 12288 blocked indefinitely.
+# How long a single paramiko send may spend waiting for the channel to take the bytes. The pty
+# path does not need this — its writes are queued and drained by the pump — but a channel send has
+# no queue behind it.
+_WRITE_BUDGET = 2.0
+
+# The most unwritten input to hold for a program that is not reading. The pty's own queue takes
+# about 8 KB, so this is one refused paste plus headroom; past it the operator is told rather than
+# the panel growing a buffer without limit.
+_MAX_PENDING_INPUT = 256 * 1024
+
 _KILL_GRACE = 0.25
 
 # How long a teardown waits for the pump thread to notice EOF and close its own fd. The child is
@@ -69,6 +88,22 @@ _sessions_lock = threading.Lock()
 
 class TerminalError(Exception):
     """Anything the operator should be shown as text in the terminal, rather than a traceback."""
+
+
+def panel_account():
+    """The account a LOCAL terminal will run as, or "" if it cannot be read.
+
+    Same source sudo_hint reads. The page used to state "running as the panel's own account — not
+    as root" for every local session, which is true of a root install's service account and reads
+    as a contradiction on a per-user one, where the hint immediately above it says the account may
+    already be root. Naming the account says the same thing without asserting anything about it.
+    """
+    try:
+        import pwd
+        return pwd.getpwuid(os.geteuid()).pw_name or ""
+    except Exception:
+        _log.debug("could not read the panel's own account name", exc_info=True)
+        return ""
 
 
 def sudo_hint(server, is_local):
@@ -96,11 +131,74 @@ def sudo_hint(server, is_local):
         return ""
     if user == "root":
         return ""
+    # WHICH install this is decides the whole answer, and the first version of this hint only knew
+    # about one of them. A root install runs as a dedicated service account whose sudoers entry
+    # names one command, so sudo refuses. A PER-USER install runs as the operator's own account —
+    # and on a cloud image that account usually has NOPASSWD:ALL, so sudo neither refuses nor
+    # prompts, it just works. Reported from a live panel: `sudo apt full-upgrade` ran to completion
+    # under a banner explaining how to enable sudo.
+    from panel.ops.system_ops import _is_system_service
+    if not _is_system_service():
+        return ("This shell runs as %s — your own account, because this panel is installed "
+                "per-user rather than as a system service. It has exactly the sudo %s has, and on "
+                "a typical cloud image that is full root with no password prompt. Anyone you give "
+                "the terminal permission to gets the same." % (user, user))
     return ("This shell runs as %s. If `sudo` refuses rather than asking for a password, that "
             "account has no general sudo entry — the panel's grant covers only its privileged "
             "helper. To allow it, re-run the installer as root with PANEL_TERMINAL_SUDO=1 and "
             "give %s a password; sudo will then prompt for it every time. Note that you would be "
             "typing that password into a terminal the panel renders." % (user, user))
+
+
+def _drain_input(sess, fd):
+    """Write whatever `write()` queued, from the PUMP — the one greenlet that owns this fd.
+
+    The obvious shape, waiting for writability from the socket-event greenlet, does not work here:
+    eventlet allows only one greenlet to wait on a descriptor for a given event, and the pump is
+    already select()ing on this one. Doing it anyway raises "Second simultaneous write on fileno
+    N", which Session.write caught and turned into a closed session — every keystroke killed the
+    terminal. The module docstring already said this thread owns the descriptor; now it does.
+
+    Returns the number of bytes dropped because the far side would not take them.
+    """
+    dropped = 0
+    while sess._inq:
+        chunk = sess._inq[0]
+        try:
+            n = os.write(fd, chunk)
+        except BlockingIOError:
+            return dropped          # no room right now; the next pass will try again
+        except OSError:
+            sess._inq.clear()
+            raise
+        if n >= len(chunk):
+            sess._inq.popleft()
+        else:
+            sess._inq[0] = chunk[n:]
+            return dropped          # partial: leave the rest for the next writable pass
+    return dropped
+
+
+def _send_chan(chan, data, budget=_WRITE_BUDGET):
+    """The same for a paramiko channel, which is non-blocking (settimeout(0.0)) for the pump.
+
+    Channel.send returns the number of bytes it took and paramiko's own docs put the onus on the
+    caller to check it; a short send was being discarded, which silently truncated a paste.
+    """
+    mv = memoryview(data)
+    sent, deadline = 0, time.monotonic() + budget
+    while sent < len(mv):
+        try:
+            n = chan.send(mv[sent:])
+        except socket.timeout:
+            n = 0
+        if n:
+            sent += n
+        elif time.monotonic() >= deadline:
+            return sent
+        else:
+            time.sleep(0.02)                      # patched by eventlet → yields
+    return sent
 
 
 class Session:
@@ -125,6 +223,14 @@ class Session:
         self._fd = None            # pty master fd
         self._proc = None          # subprocess.Popen
         self._pump = None          # the thread reading this session's transport
+        # ONE decoder for the whole session, not one per chunk. A read boundary falls wherever the
+        # kernel or the ssh channel put it, so a multi-byte character — a box-drawing glyph in a
+        # TUI, an accented name in a log line, an emoji in a MOTD — is routinely split across two
+        # reads. Decoding each chunk on its own turned every one of those into two replacement
+        # characters, permanently, because the tail of one chunk and the head of the next were
+        # never the same string. An incremental decoder holds the partial sequence instead.
+        self._decoder = codecs.getincrementaldecoder("utf-8")("replace")
+        self._inq = collections.deque()        # keystrokes waiting for the pump to write them
 
     # ── output ────────────────────────────────────────────────────────────────────────────────
     def _emit(self, data):
@@ -149,14 +255,35 @@ class Session:
         if self._closed or not data:
             return
         self.last_input = time.time()
-        try:
-            if self._chan is not None:
-                self._chan.send(data)
-            elif self._fd is not None:
-                os.write(self._fd, data.encode("utf-8", errors="replace"))
-        except Exception:
-            _log.debug("terminal write failed for %s", self.label, exc_info=True)
-            self.close("the session ended")
+        payload = data.encode("utf-8", errors="replace")
+        if self._chan is not None:
+            try:
+                sent = _send_chan(self._chan, payload)
+            except Exception:
+                _log.debug("terminal write failed for %s", self.label, exc_info=True)
+                self.close("the session ended")
+                return
+            if sent < len(payload):
+                self._report_dropped(len(payload) - sent)
+            return
+        if self._fd is None:
+            return
+        # QUEUED, not written here. The pump owns the descriptor (see _drain_input), and the queue
+        # is bounded so a program that never reads its input cannot grow it without limit — the
+        # pty's own buffer holds about 8 KB, so this is the paste that did not fit plus room.
+        queued = sum(len(c) for c in self._inq)
+        if queued + len(payload) > _MAX_PENDING_INPUT:
+            self._report_dropped(len(payload))
+            return
+        self._inq.append(payload)
+
+    def _report_dropped(self, n):
+        """Say so. Dropping input silently is how a pasted config ends up half-applied with
+        nothing on screen to suggest it."""
+        _log.warning("terminal %s: dropped %d input bytes — the program is not reading",
+                     self.label, n)
+        self._emit("\r\n\x1b[33m[%d bytes of input were dropped — the program running here is "
+                   "not reading its input]\x1b[0m\r\n" % n)
 
     def resize(self, cols, rows):
         """Follow the browser's window. Without this, anything full-screen draws to the wrong box."""
@@ -291,7 +418,7 @@ def _pump_channel(sess):
                 data = chan.recv(_READ_CHUNK)
                 if not data:
                     break
-                sess._emit(data.decode("utf-8", errors="replace"))
+                sess._emit(sess._decoder.decode(data))
                 continue
             if chan.exit_status_ready() and not chan.recv_ready():
                 break
@@ -312,28 +439,37 @@ def _pump_fd(sess):
     try:
         while not sess.closed:
             try:
-                r, _, _ = select.select([fd], [], [], 0.2)
+                # One greenlet, one descriptor, both directions. Asking for writability only when
+                # something is queued keeps the common case a plain read wait.
+                r, w, _ = select.select([fd], [fd] if sess._inq else [], [], 0.2)
+                if w:
+                    _drain_input(sess, fd)
                 if not r:
                     continue
                 data = os.read(fd, _READ_CHUNK)
                 if not data:
                     break
-                sess._emit(data.decode("utf-8", errors="replace"))
+                sess._emit(sess._decoder.decode(data))
+            except BlockingIOError:
+                # The descriptor is non-blocking now (see _write_fd). select said readable and the
+                # byte was gone by the time we read: that is not the end of the session.
+                continue
             except (OSError, ValueError):
                 break
             except Exception:
                 break
     finally:
-        # Claim it before closing: _close_fd reads this to decide whether it still has to.
+        # Claim it before closing — and close it ONLY if the claim succeeded. os.close used to sit
+        # outside this branch, which undid the very race the claim exists for: when _close_fd's
+        # join times out it takes the fd and closes it, the kernel hands that NUMBER to the next
+        # open() anywhere in the process, and this line then closed a descriptor belonging to
+        # something else. The except below cannot catch that — closing a recycled number succeeds.
         if sess._fd == fd:
             sess._fd = None
-        try:
-            os.close(fd)
-        except OSError:
-            # EBADF: a teardown whose join timed out closed it from the caller first. Closing it
-            # twice is the thing to avoid — a third party can already hold this number — and that
-            # has been avoided by the time this raises.
-            pass
+            try:
+                os.close(fd)
+            except OSError:
+                pass        # already gone; nothing owed
     sess.close("the shell exited")
 
 
@@ -427,11 +563,38 @@ def _open_local(sess, cols, rows):
     env["TERM"] = "xterm-256color"
     # A login shell, so the operator gets their own profile rather than the service unit's stripped
     # environment. start_new_session gives it its own process group for the SIGHUP on teardown.
-    proc = subprocess.Popen(  # nosec B603  # nosemgrep - argv list, no shell=True; argv[0] is
-        # this account's own passwd shell, never caller input and never read from the environment.
-        [shell, "-l"], stdin=slave, stdout=slave, stderr=slave,
-        start_new_session=True, env=env, cwd=os.path.expanduser("~"))
+    def _attach_ctty():
+        """Make the slave this process's CONTROLLING terminal, in the child, after setsid().
+
+        start_new_session=True calls setsid, which is necessary but not sufficient: the child then
+        has no controlling terminal at all, because it INHERITS the slave as a descriptor rather
+        than opening it. Without one there is no foreground process group, so the line discipline
+        has nobody to send SIGINT to — Ctrl-C does nothing.
+
+        It read as working because bash only complains ("cannot set terminal process group", "no
+        job control in this shell") and carries on. fish refuses outright: "No TTY for interactive
+        shell (tcgetpgrp failed)", and exits immediately — which is how this was finally noticed,
+        on a machine whose passwd shell is fish.
+        """
+        fcntl.ioctl(0, termios.TIOCSCTTY, 0)
+
+    try:
+        proc = subprocess.Popen(  # nosec B603  # nosemgrep - argv list, no shell=True; argv[0] is
+            # this account's own passwd shell, never caller input and never read from the
+            # environment.
+            [shell, "-l"], stdin=slave, stdout=slave, stderr=slave,
+            preexec_fn=_attach_ctty,  # nosec B606 - not a shell; see the docstring above
+            start_new_session=True, env=env, cwd=os.path.expanduser("~"))
+    except Exception:
+        # Both ends, or the pair leaks with a /dev/pts device behind it. open_session's handler
+        # calls sess.close(), but nothing has been attached to the session yet, so every teardown
+        # step is a no-op — and the operator's response to "could not start a shell" is to click
+        # again. cwd is a real failure mode here: a service account made without -m has no home.
+        os.close(master)
+        os.close(slave)
+        raise
     os.close(slave)
+    os.set_blocking(master, False)      # see _write_fd: a blocking write here stops the whole hub
     sess._fd = master
     sess._proc = proc
     sess.resize(cols, rows)
@@ -487,10 +650,16 @@ def _open_tailscale(sess, server, cols, rows):
     env = dict(os.environ)
     env["TERM"] = "xterm-256color"
     argv = _ssh_argv(server)
-    proc = subprocess.Popen(  # nosec B603  # nosemgrep - see _ssh_argv: a list, no shell, and the
-        # one element carrying stored data cannot be read by ssh as an option.
-        argv, stdin=slave, stdout=slave, stderr=slave, start_new_session=True, env=env)
+    try:
+        proc = subprocess.Popen(  # nosec B603  # nosemgrep - see _ssh_argv: a list, no shell, and
+            # the one element carrying stored data cannot be read by ssh as an option.
+            argv, stdin=slave, stdout=slave, stderr=slave, start_new_session=True, env=env)
+    except Exception:
+        os.close(master)      # argv[0] is "ssh": a host without openssh-client leaks a pair each try
+        os.close(slave)
+        raise
     os.close(slave)
+    os.set_blocking(master, False)      # see _write_fd: a blocking write here stops the whole hub
     sess._fd = master
     sess._proc = proc
     sess.resize(cols, rows)

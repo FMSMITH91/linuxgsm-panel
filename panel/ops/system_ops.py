@@ -893,15 +893,22 @@ def _update_touches_runtime(target_ref):
     return any(_is_runtime_path(f) for f in files)
 
 
-def _runtime_changelog(rev_range):
-    """ALL commits in `rev_range` that actually change files the panel RUNS, newest first, as
-    'shorthash subject' lines. Docs-only / CI-only / test-only commits are dropped, so both the
-    'N commits behind' count (len) and the update card's changelog (capped by the caller) ignore
-    e.g. a README edit. One `git log` call; a commit is kept only if a file it touched is runtime."""
+def _runtime_changelog(rev_range, runtime_only=True):
+    """Commits in `rev_range`, newest first, as 'shorthash subject' lines.
+
+    With runtime_only (the default) a commit is kept only if it touches a file the panel RUNS, so
+    a README edit does not make the card nag. Callers that are about to SHOW the list pass False
+    when the filtered list comes back empty: the card used to report "1 commit behind" from the
+    unfiltered count while listing the filtered one, so an update consisting of a tests-only
+    commit announced itself and then had nothing to show. Reported from a live panel sitting one
+    commit behind a change to tests/ and tools/."""
     out, _, rc = _git(["log", "--no-decorate", "--format=%h%x09%s", "--name-only", rev_range])
     if rc != 0 or not out:
         return []
-    header = re.compile(r"^([0-9a-f]{7,40})\t(.*)$")
+    header = re.compile(r"^([0-9a-f]{7,40})\t(.*)\Z")
+    if not runtime_only:
+        return [("%s %s" % (m.group(1), m.group(2)))
+                for m in (header.match(ln) for ln in out.splitlines()) if m]
     result, cur, runtime = [], None, False
     for line in out.splitlines():
         m = header.match(line)
@@ -956,8 +963,14 @@ def _compute_update_status():
         # that does not depend on what the newer commits happen to touch.
         tgt_ver, _, tv_rc = _git(["show", "%s:VERSION" % ref])
         rem_full, _, _ = _git(["rev-parse", ref])
-        rc_log = _runtime_changelog("HEAD.." + ref)
+        runtime_log = _runtime_changelog("HEAD.." + ref)
+        # Same fallback as the verified branch below, and docs_only reported here too — the card's
+        # "none of these change what the panel runs" note keys off it, and leaving it out of one
+        # of the two update branches meant the note appeared or not depending on which one the
+        # panel happened to be in.
+        rc_log = runtime_log or _runtime_changelog("HEAD.." + ref, runtime_only=False)
         return {**base, "update_available": True, "ci_state": "unverified",
+                "docs_only": not runtime_log,
                 "behind": len(rc_log) or behind_n, "behind_tip": behind_n,
                 "remote_version": ((tgt_ver.strip() if tv_rc == 0 else "") or "?"),
                 "target_sha": rem_full.strip(),
@@ -1017,6 +1030,12 @@ def _compute_update_status():
     _docs_only = not _update_touches_runtime(target_sha)
     tgt_ver, _, tv_rc = _git(["show", f"{target_sha}:VERSION"])
     rc_log = _runtime_changelog(f"HEAD..{target_sha}")   # runtime commits only (drops docs/CI)
+    # What is COUNTED and what is LISTED must be the same set. `len(rc_log) or behind_target` used
+    # the filtered count when it had one and the raw count when it did not — so an update made
+    # only of test or tooling commits said "1 commit behind" and then showed an empty list,
+    # because `changes` stayed filtered. When nothing runtime changed, show the commits that DID
+    # change and let docs_only say what they are.
+    shown_log = rc_log or _runtime_changelog(f"HEAD..{target_sha}", runtime_only=False)
     msg = None
     if newer_unverified > 0:
         msg = ("Updating to the latest verified version — %d newer commit%s still being verified."
@@ -1026,13 +1045,13 @@ def _compute_update_status():
         "update_available": True,
         "docs_only": _docs_only,
         "ci_state": target_state,
-        "behind": len(rc_log) or behind_target,   # count only commits that change what the panel runs
+        "behind": len(shown_log) or behind_target,   # always the number of commits listed below
         "behind_tip": behind_n,
         "newer_unverified": newer_unverified,
         "remote_version": ((tgt_ver.strip() if tv_rc == 0 else "") or "?"),
         "remote_sha": target_sha[:7],
         "target_sha": target_sha,
-        "changes": rc_log[:10],
+        "changes": shown_log[:10],
         **({"message": msg} if msg else {}),
     }
 

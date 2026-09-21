@@ -48,7 +48,19 @@
      this actually is instead of making a promise that is false on the hosts where it matters
      most. #}
   {% if remote.is_local %}
-  <span>This is a real shell on the host, running as the panel's own account — not as root.</span>
+  {# Named, not characterised. "not as root" is true of a root install's service account and
+     misleading on a per-user one, where the hint above says this account may already be able to
+     become root without a password — which is what a live panel actually did. #}
+  {# Two branches, not `{{ local_user or "..." }}`: the fallback carried an apostrophe, Jinja
+     escaped it to &#39; in the rendered page, and the test asserting the fallback was ABSENT
+     therefore passed even when it was present. Text a test has to find should not contain a
+     character the renderer rewrites. #}
+  {% if local_user %}
+  <span data-no-i18n>This is a real shell on this host, running as
+    <code>{{ local_user }}</code>.</span>
+  {% else %}
+  <span>This is a real shell on this host, running as the account the panel runs under.</span>
+  {% endif %}
   {% else %}
   <span data-no-i18n>This is a real shell on {{ remote.display_name }}, running as
     <code>{{ remote.username or 'root' }}</code> — the account the panel connects with.</span>

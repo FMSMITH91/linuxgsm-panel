@@ -3654,6 +3654,18 @@ try:
           _denied6 == ["203.0.113.9"],
           "denied %r — the guard is refusing every cycle, not just the unreadable ones"
           % (_denied6,))
+    check("firewall: ...and a block that WORKED is counted",
+          _res6 == (1, 0), "returned %r for one successful block" % (_res6,))
+    # ...and one that did NOT work is not. The caller turns these two numbers straight into an
+    # audit row ("+%d blocked, -%d released"), so counting attempts means the log records rules
+    # that never landed — ufw down, or the host stopped answering mid-cycle.
+    _denied6.clear()
+    _mon6.so.ufw_deny_ip = lambda ip, tag=None: (_denied6.append(ip), (False, "ufw: command not found"))[1]
+    _res6 = _mon6._autoblock_reconcile(_FakeRemote6())
+    check("firewall: a block the host REFUSED is not counted as applied",
+          _res6 == (0, 0) and _denied6 == ["203.0.113.9"],
+          "returned %r after a deny that failed — the audit row would claim a rule that never "
+          "landed (attempted: %r)" % (_res6, _denied6))
 finally:
     (_mon6.so.fail2ban_top_ips, _mon6.so.ufw_blocked_ips,
      _mon6.so.ufw_deny_ip, _mon6.so.ufw_undeny_ip) = _saved6
@@ -3778,3 +3790,376 @@ check("route_coverage: ...and it runs every suite the repo has",
       _rc_suites6 == _repo_suites6,
       "SUITES=%r but tests/ has %r — a suite missing from it makes every route only that suite "
       "covers look untested" % (_rc_suites6, _repo_suites6))
+
+# ── the sudo hint has to know WHICH install it is talking about ───────────────────────────────
+# It only knew about the root install: "if sudo refuses rather than asking for a password, that
+# account has no general sudo entry ... re-run the installer with PANEL_TERMINAL_SUDO=1". On a
+# PER-USER install the panel runs as the operator's own account, which on a cloud image usually
+# has NOPASSWD:ALL — so sudo neither refuses nor prompts. Reported from a live panel: a full
+# `sudo apt full-upgrade` ran to completion underneath that banner.
+import pwd as _pwd7
+_ts7 = _il6.import_module("panel.ops.terminal_session")
+_so7 = _il6.import_module("panel.ops.system_ops")
+_saved7 = (_pwd7.getpwuid, _so7._is_system_service)
+
+
+class _Pw7:
+    pw_name = "ubuntu"
+    pw_shell = "/bin/bash"
+
+
+try:
+    _pwd7.getpwuid = lambda uid: _Pw7()
+    _so7._is_system_service = lambda: False           # per-user install
+    _peruser7 = _ts7.sudo_hint(None, True)
+    _so7._is_system_service = lambda: True            # root/system install
+    _system7 = _ts7.sudo_hint(None, True)
+finally:
+    (_pwd7.getpwuid, _so7._is_system_service) = _saved7
+
+check("sudo hint: a per-user install is not told sudo will refuse",
+      "refuses rather than asking" not in _peruser7,
+      "the per-user hint still explains how to enable a sudo that already works: %r" % (_peruser7,))
+check("sudo hint: ...it says the shell has whatever sudo that account has",
+      "full root" in _peruser7 and "ubuntu" in _peruser7,
+      "the per-user hint does not say the terminal may already be root: %r" % (_peruser7,))
+check("sudo hint: a SYSTEM install still gets the narrow-grant explanation",
+      "PANEL_TERMINAL_SUDO=1" in _system7 and "privileged helper" in _system7,
+      "the root-install hint lost the advice that is correct for it: %r" % (_system7,))
+check("sudo hint: ...and the two installs are not told the same thing",
+      _peruser7 != _system7,
+      "both install types render identical text, so one of them is wrong")
+
+# ── a paste the program is not reading must not stop the panel ────────────────────────────────
+# os.write on a BLOCKING pty master waits for the foreground program to read it. eventlet greens
+# os.write but a blocking descriptor gives it nothing to poll, so the wait is the whole hub, not
+# one greenlet — the entire panel stops serving. Measured on this machine: writing 20 KB of
+# line-terminated text to a pty whose child was not reading never returned and no other greenlet
+# ran at all; 8160 bytes went straight through and 12288 did not.
+#
+# Fixed by not writing from here AT ALL: write() queues and the pump — the one greenlet that owns
+# the descriptor — drains it. The first attempt waited for writability from this side and raised
+# "Second simultaneous write on fileno N", which write() caught and turned into a closed session,
+# so every keystroke killed the terminal. eventlet allows one greenlet per descriptor per event.
+#
+# Driven through a thread with a join deadline ON PURPOSE: if this regresses the call never
+# returns, and a test that hangs the suite reports "crashed" instead of naming the broken check.
+_wt_master, _wt_slave = _pty6.openpty()
+_wt_proc = _sp6.Popen([sys.executable, "-c", "import time; time.sleep(30)"],
+                      stdin=_wt_slave, stdout=_sp6.DEVNULL, stderr=_sp6.DEVNULL,
+                      start_new_session=True)
+os.close(_wt_slave)
+os.set_blocking(_wt_master, False)
+_wt_told = []
+_wt_sess = _tsmod.Session("wt", "wt", lambda sid, d: _wt_told.append(d), lambda sid, r: None)
+_wt_sess._fd = _wt_master
+_wt_done = []
+
+
+def _wt_run():
+    _t0 = _time.time()
+    _wt_sess.write(("x" * 79 + "\n") * 250)          # 20 KB: measured above as the blocking size
+    _wt_done.append(_time.time() - _t0)
+
+
+_wt_thread = _th6.Thread(target=_wt_run, daemon=True)
+_wt_thread.start()
+try:
+    _wt_thread.join(timeout=10)
+except BaseException:
+    # BaseException, not Exception: eventlet's green join RAISES eventlet.timeout.Timeout rather
+    # than returning quietly, and that class derives from BaseException BY DESIGN so it cannot be
+    # swallowed by a generic handler. An exception at module level takes the whole suite down —
+    # which is what happened the first two times this guard ran against the regression it exists
+    # to catch. _wt_done staying empty is what the check below reports.
+    pass
+check("terminal: a paste the program is not reading RETURNS instead of hanging",
+      bool(_wt_done),
+      "Session.write did not come back within 10s — writing to the descriptor from here waits on "
+      "the whole event loop, not just this session")
+check("terminal: ...immediately, because it only queues",
+      bool(_wt_done) and _wt_done[0] < 1.0,
+      "took %r seconds; the pump owns the descriptor and should be doing the writing" % (_wt_done,))
+check("terminal: ...and the session survives it",
+      not _wt_sess.closed,
+      "writing closed the session — 'Second simultaneous write on fileno N' caught by write() "
+      "turns every keystroke into a dead terminal")
+# ...and input beyond the bound is refused out loud rather than buffered without limit.
+_wt_told[:] = []
+_wt_sess.write("y" * (_tsmod._MAX_PENDING_INPUT + 1))
+check("terminal: input past the queue bound is dropped WITH a message",
+      any("dropped" in _d for _d in _wt_told),
+      "input vanished with nothing on screen to say so: %r" % (_wt_told[:2],))
+try:
+    os.close(_wt_master)
+except OSError:
+    pass                      # the pump owns it in a real session; here there is no pump
+_wt_proc.kill()
+
+# ── seven defects an adversarial review of this session's own terminal turned up ──────────────
+_ht_js7 = open(os.path.join(_root, "static", "js", "host_terminal.js"), encoding="utf-8").read()
+_ts_src7 = _modsrc("panel/ops/terminal_session.py")
+_htr_src7 = _modsrc("panel/routes/host_terminal.py")
+
+# (a) The pump must close the pty master ONLY if it still owned it. os.close sat outside the
+# `if sess._fd == fd` claim, so when _close_fd's join timed out and took the fd, the kernel handed
+# that NUMBER to the next open() and the pump closed a descriptor belonging to something else. The
+# `except OSError` cannot catch it: closing a recycled number succeeds.
+# Parsed, not indented: the mutated shape put os.close inside a `try:` at the same indentation as
+# the claim's body, so an indentation comparison could not tell the two apart.
+_pf_tree7 = _ast6.parse(_ts_src7)
+_pf_fn7 = next((n for n in _ast6.walk(_pf_tree7)
+                if isinstance(n, _ast6.FunctionDef) and n.name == "_pump_fd"), None)
+
+
+def _closes_outside_if7(fn):
+    """os.close(...) calls in fn that are NOT inside any If."""
+    guarded = set()
+    for node in _ast6.walk(fn):
+        if isinstance(node, _ast6.If):
+            for inner in _ast6.walk(node):
+                if isinstance(inner, _ast6.Call):
+                    guarded.add(id(inner))
+    loose = []
+    for node in _ast6.walk(fn):
+        if isinstance(node, _ast6.Call) and id(node) not in guarded \
+           and getattr(node.func, "attr", None) == "close" \
+           and getattr(getattr(node.func, "value", None), "id", None) == "os":
+            loose.append(node.lineno)
+    return loose
+
+
+_loose7 = _closes_outside_if7(_pf_fn7) if _pf_fn7 else ["_pump_fd not found"]
+check("terminal: the pump closes the pty master only inside its ownership claim",
+      _pf_fn7 is not None and not _loose7,
+      "os.close sits outside `if sess._fd == fd` at %r — there it closes whatever process-wide "
+      "descriptor has since been given that number, and `except OSError` cannot see it because "
+      "closing a recycled number succeeds" % (_loose7,))
+
+# (b) A failed Popen must not leak the pty pair. open_session's handler calls sess.close(), but
+# nothing is attached to the session yet, so every teardown step is a no-op.
+_tsmod7 = _il6.import_module("panel.ops.terminal_session")
+
+
+class _FailRemote7:
+    name = "fail"; host = "127.0.0.1"; port = 22; username = "root"
+    auth_method = "local"; is_local = True; display_name = "fail"; id = 99
+
+
+def _open_fds7():
+    try:
+        return len(os.listdir("/proc/self/fd"))
+    except OSError:
+        return None
+
+
+_saved_popen7 = _tsmod7.subprocess.Popen
+_tsmod7.subprocess.Popen = lambda *a, **k: (_ for _ in ()).throw(BlockingIOError(11, "EAGAIN"))
+try:
+    _before7 = _open_fds7()
+    for _i7 in range(5):
+        try:
+            _tsmod7.open_session("leak-%d" % _i7, _FailRemote7(), True, user_key=1,
+                                 on_output=lambda s, d: None, on_exit=lambda s, r: None)
+        except Exception:
+            pass
+    _after7 = _open_fds7()
+finally:
+    _tsmod7.subprocess.Popen = _saved_popen7
+check("terminal: a shell that fails to start leaks no descriptors",
+      _before7 is None or _after7 is None or _after7 <= _before7 + 1,
+      "five failed opens took the process from %s to %s open descriptors — two per attempt is a "
+      "pty pair and a /dev/pts device each time, and the operator's answer to 'could not start a "
+      "shell' is to click again" % (_before7, _after7))
+check("terminal: ...and leaves no session registered either",
+      _tsmod7.count() == 0, "sessions left behind: %d" % _tsmod7.count())
+
+# (c) One decoder per SESSION, not per chunk: a read boundary lands wherever the kernel puts it,
+# so a multi-byte character split across two reads became two replacement characters forever.
+# Driven through the REAL pump over a real pty, in two writes with a pause between them so the
+# reads genuinely split the character. Calling _decoder.decode() directly tested the decoder and
+# passed happily with the pump still decoding each chunk on its own.
+_got7 = []
+_dm7, _ds7 = _pty6.openpty()
+_sess7 = _tsmod7.Session("dec", "dec", lambda sid, d: _got7.append(d), lambda sid, r: None)
+_sess7._fd = _dm7
+_sess7._pump = _th6.Thread(target=_tsmod7._pump_fd, args=(_sess7,), daemon=True)
+_sess7._pump.start()
+_raw7 = ("─" * 3).encode("utf-8")           # U+2500, three bytes each
+os.write(_ds7, _raw7[:4])                   # boundary falls mid-character
+_time.sleep(0.4)
+os.write(_ds7, _raw7[4:])
+_time.sleep(0.4)
+_seen7 = "".join(_got7)
+_sess7.close("done")
+try:
+    os.close(_ds7)
+except OSError:
+    pass
+check("terminal: a character split across two reads survives intact",
+      "\ufffd" not in _seen7 and _seen7.count("─") == 3,
+      "the pump emitted %r — a box-drawing run, an accented name or an emoji in a MOTD arrives "
+      "corrupted when each read is decoded on its own" % (_seen7,))
+
+# (d) Teardown must not depend on the audit bookkeeping: _sid_host[sid] is written AFTER
+# open_session returns, and the session is registered BEFORE the transport opens.
+_cna7 = _htr_src7.split("def _close_and_audit", 1)[-1].split("\n    @", 1)[0]
+_cna_code7 = "\n".join(_l for _l in _cna7.splitlines() if not _l.lstrip().startswith("#"))
+check("terminal: a disconnect tears the session down before consulting the audit map",
+      "close_for_sid" in _cna_code7 and "_sid_host.pop" in _cna_code7
+      and _cna_code7.index("close_for_sid") < _cna_code7.index("_sid_host.pop"),
+      "_close_and_audit returns early when there is no _sid_host entry, which is exactly the "
+      "state a socket is in while term_open is still connecting — the shell stays up and the "
+      "per-user slot stays held")
+
+# (e) The reconnect guard has to actually hold: socket.io reconnects by itself.
+# Counted, not searched: `var ... opened = false` is the declaration and must stay, so a bare
+# `"opened = false" not in src` matched it and failed against correct code.
+_reset7 = [_ln.strip() for _ln in _ht_js7.splitlines()
+           if "opened" in _ln and "= false" in _ln.replace("=false", "= false")
+           and not _ln.lstrip().startswith(("//", "*"))
+           and not _ln.lstrip().startswith("var ")]
+check("terminal: the reconnect guard is never cleared",
+      not _reset7,
+      "`opened` is reset at %r, so socket.io's own reconnect re-fires the connect handler and "
+      "silently opens a SECOND shell while the status line says to reload" % (_reset7,))
+
+# (f) Socket events are not HTTP requests, so before_request never runs for them.
+# Comments and docstrings stripped: the explanation beside each guard names the very identifier
+# the check looks for, so searching the raw source passed with the guard deleted.
+_htr_code7 = re.sub(r'"""(?:.|\n)*?"""', "", _htr_src7)
+_htr_code7 = "\n".join(_l for _l in _htr_code7.splitlines() if not _l.lstrip().startswith("#"))
+check("terminal: the socket events enforce the forced password change themselves",
+      re.search(r"\bmust_change_password\b", _htr_code7) is not None,
+      "must_change_password is enforced by an @app.before_request, which a Socket.IO event never "
+      "enters — a handed-over temporary password could open a shell")
+
+# (g) ...and per-host access is re-checked while the shell is live, not only when it opened.
+_input_body7 = _htr_code7.split("def on_term_input", 1)[-1].split("\n    @", 1)[0]
+check("terminal: host access is re-validated during a live session",
+      "_still_allowed" in _input_body7
+      and re.search(r"\bcan_access_remote\b", _htr_code7) is not None,
+      "access is checked only at open, so revoking it leaves the live shell typing into the host")
+
+# ── the local shell needs a CONTROLLING terminal, not just its own session ────────────────────
+# start_new_session=True calls setsid, which is necessary and not sufficient: the child inherits
+# the pty slave as a descriptor rather than opening it, so it ends up with no controlling terminal
+# at all. No controlling terminal means no foreground process group, which means the line
+# discipline has nobody to deliver SIGINT to — Ctrl-C does nothing.
+#
+# It read as working because bash only warns ("cannot set terminal process group", "no job control
+# in this shell") and carries on. fish refuses and exits, which is how it was finally noticed. The
+# child now issues TIOCSCTTY in preexec_fn, after setsid.
+#
+# Driven with bash for predictable job control, and every wait is bounded so a regression fails
+# instead of hanging the suite.
+_ctty_saved7 = _tsmod7._login_shell
+_tsmod7._login_shell = lambda: "/bin/bash"
+_ctty_out7 = []
+
+
+class _CttyRemote7:
+    name = "ctty"; is_local = True; display_name = "ctty"; id = 1
+
+
+try:
+    _ctty_sess7 = _tsmod7.open_session("ctty-sid", _CttyRemote7(), True, user_key=1,
+                                       on_output=lambda s, d: _ctty_out7.append(d),
+                                       on_exit=lambda s, r: None)
+
+    def _ctty_children7():
+        _r = _sh_sub.run(["pgrep", "-P", str(_ctty_sess7._proc.pid)],
+                         capture_output=True, text=True)
+        return [_x for _x in _r.stdout.split() if _x]
+
+    _t0_7 = _time.time()
+    while _time.time() - _t0_7 < 5 and not "".join(_ctty_out7):
+        _time.sleep(0.2)
+    # A SOURCE gate, deliberately, and the reason is worth stating: no behavioural probe on this
+    # machine can tell the fix from its absence. setsid detaches the child from any controlling
+    # terminal, but a session leader that then OPENS a tty acquires it — so bash and dash both end
+    # up with one either way, and /proc/<pid>/stat's tty_nr reads non-zero in both cases
+    # (measured: 34823 with the preexec_fn and 34823 without). fish is the one that notices,
+    # because it calls tcgetpgrp before that acquisition happens, and it exits: "No TTY for
+    # interactive shell". Testing that would mean requiring fish on every runner.
+    #
+    # So this pins the mechanism rather than pretending to observe its effect, and the checks
+    # below stay as an end-to-end "the terminal works and job control functions" pass — they are
+    # not a guard for THIS fix and are not labelled as one.
+    _open_local_src7 = _ts_src7.split("def _open_local", 1)[-1].split("\ndef ", 1)[0]
+    check("terminal: the local shell is given a controlling terminal before exec",
+          "TIOCSCTTY" in _open_local_src7 and "preexec_fn=" in _open_local_src7,
+          "setsid alone leaves the child with no controlling terminal, so there is no foreground "
+          "process group for the line discipline to send SIGINT to — bash carries on with a "
+          "warning, fish exits outright")
+
+    _ctty_sess7.write("sleep 120\n")
+    _t0_7 = _time.time()
+    while _time.time() - _t0_7 < 6 and not _ctty_children7():
+        _time.sleep(0.2)
+    _ctty_started7 = _ctty_children7()
+    check("terminal: ...a foreground job really starts (the next check needs one)",
+          bool(_ctty_started7),
+          "nothing was running, so the Ctrl-C check below would pass against a dead shell")
+    _ctty_sess7.write("\x03")
+    _t0_7 = _time.time()
+    while _time.time() - _t0_7 < 6 and _ctty_children7():
+        _time.sleep(0.2)
+    check("terminal: ...and Ctrl-C interrupts it",
+          bool(_ctty_started7) and not _ctty_children7(),
+          "the job %r survived Ctrl-C — without a controlling terminal the line discipline has no "
+          "foreground process group to signal" % (_ctty_started7,))
+finally:
+    _tsmod7._login_shell = _ctty_saved7
+    try:
+        _tsmod7.close_for_sid("ctty-sid", "test over")
+    except Exception:
+        pass
+
+# ── the update card's count and its list must be the same set ─────────────────────────────────
+# Reported from a live panel: "Update available: v0.10.0-alpha (1 commit behind)" with no commits
+# listed underneath. The count came from the RAW log and the list from the runtime-filtered one —
+# `len(rc_log) or behind_target` used the filtered number when it had one and the unfiltered
+# number when it did not — so an update made only of test or tooling commits announced itself and
+# then had nothing to show.
+#
+# `git` is STUBBED. The suites run in a throwaway tree built from `git ls-files`, which carries no
+# .git at all, so every git call there fails and returns nothing — the first version of this asked
+# the real repo for a real range and "no runtime commits" passed because the answer was empty for
+# the wrong reason.
+_uc_saved7 = _so6._git
+_UC_LOG7 = ("bf64153\tMeasure the routes nothing enters (#327)\n"
+            "tests/smoke_test.py\n"
+            "tools/route_coverage.py\n")
+try:
+    _so6._git = lambda *a, **k: (_UC_LOG7, "", 0)
+    _uc_filtered7 = _so6._runtime_changelog("HEAD..origin/main")
+    _uc_all7 = _so6._runtime_changelog("HEAD..origin/main", runtime_only=False)
+finally:
+    _so6._git = _uc_saved7
+check("update card: a commit touching only tests and tooling is dropped by the runtime filter",
+      _uc_filtered7 == [],
+      "expected no runtime commits, got %r" % (_uc_filtered7,))
+check("update card: ...but it can still be listed when that is all there is",
+      len(_uc_all7) == 1 and _uc_all7[0].startswith("bf64153"),
+      "the unfiltered changelog is %r — with nothing to list, the card shows a count it cannot "
+      "explain" % (_uc_all7,))
+# ...and the two fields are built from ONE name, so they cannot drift apart again.
+_ucs7 = _modsrc("panel/ops/system_ops.py")
+_uc_body7 = _ucs7.split("def _compute_update_status", 1)[-1]
+_uc_code7 = "\n".join(_l for _l in _uc_body7.splitlines() if not _l.lstrip().startswith("#"))
+_uc_behind7 = re.search(r'"behind":\s*len\((\w+)\)', _uc_code7)
+_uc_changes7 = re.search(r'"changes":\s*(\w+)\[', _uc_code7)
+# The name check alone does NOT catch this — reverting the fix leaves both fields reading the same
+# variable and only removes the fallback, so it passed against the bug. What has to be pinned is
+# that the list the card shows falls back to the unfiltered log when the filtered one is empty.
+check("update card: an update with no runtime commits still has something to show",
+      "runtime_only=False" in _uc_code7,
+      "_compute_update_status never asks for the unfiltered changelog, so an update made only of "
+      "docs, tests or tooling reports a count with an empty list underneath it")
+check("update card: the count and the changelog are built from the same list",
+      _uc_behind7 is not None and _uc_changes7 is not None
+      and _uc_behind7.group(1) == _uc_changes7.group(1),
+      "behind counts %r while changes lists %r — whichever is filtered differently is the one the "
+      "operator cannot reconcile"
+      % (_uc_behind7 and _uc_behind7.group(1), _uc_changes7 and _uc_changes7.group(1)))

@@ -276,6 +276,16 @@ function renderUpdate(d){
       }
       ul.appendChild(li);
     });
+    // When every commit in the update is docs, tests or tooling, say so rather than leaving the
+    // reader to wonder why a listed change does not alter anything. The count and this list are
+    // the same set now; before, the count came from the raw log and the list from the
+    // runtime-filtered one, so a tests-only update announced "1 commit behind" and showed nothing.
+    var note = document.getElementById('pu-changes-note');
+    if (note) {
+      note.textContent = d.docs_only
+        ? 'None of these change what the panel runs — they are docs, tests or tooling.' : '';
+      note.style.display = d.docs_only ? '' : 'none';
+    }
     changes.style.display=(d.changes&&d.changes.length)?'':'none';
   } else {
     // Two states, nothing in between: there is an update to install, or there is not.

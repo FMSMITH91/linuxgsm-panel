@@ -737,13 +737,31 @@ def _autoblock_reconcile(remote):
     _nets = _whitelist_networks()
     qualify = {ip for ip in qualify if not _whitelisted(ip, _nets)}   # never auto-block a whitelisted IP
     auto = {ip for ip, tag in blocked.items() if tag == _AUTOBLOCK_TAG}
+    # COUNT WHAT APPLIED, not what was attempted. Both writers return (ok, msg) and both were
+    # being called for their side effect only — so the caller's audit row ("+%d blocked, -%d
+    # released") reported rules that never landed when ufw was down or the host stopped answering
+    # mid-cycle. Same defect as the sync-ports route, in the function whose two READS were already
+    # guarded a few lines above: an audit row recording an action that did not happen is worse
+    # than no row.
     added = removed = 0
+    failed = []
     for ip in qualify - set(blocked.keys()):   # over threshold, not blocked yet → auto-block
-        deny(ip)
-        added += 1
+        ok, _msg = deny(ip)
+        if ok:
+            added += 1
+        else:
+            failed.append("block %s" % ip)
     for ip in auto - qualify:                   # our auto-block fell below threshold / got whitelisted → release
-        undeny(ip)
-        removed += 1
+        ok, _msg = undeny(ip)
+        if ok:
+            removed += 1
+        else:
+            failed.append("release %s" % ip)
+    if failed:
+        # Not silent: the counts above are now honest, which on their own would make a failing
+        # host look like a quiet one.
+        _log.warning("autoblock on %s: %d change(s) did not apply (%s)",
+                     getattr(remote, "name", "?"), len(failed), ", ".join(failed)[:200])
     return added, removed
 
 

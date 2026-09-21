@@ -105,16 +105,19 @@ function initTerminal() {
     term.write('\r\n\x1b[31m' + msg + '\x1b[0m\r\n');
   });
 
+  // `opened` is set once and never cleared. It used to be reset in both handlers below, which
+  // made the guard on connect dead: socket.io reconnects on its own after a blip, the connect
+  // handler fired again, and the page silently opened a SECOND shell — a fresh session with none
+  // of the scrollback, while the status line was telling the operator to reload to get one. The
+  // message and the behaviour now agree: one page, one session, and a reload to start another.
   sock.on('term_exit', function (d) {
     var why = (d && d.reason) || 'the session ended';
-    _status('Session closed — ' + why + '.', 'warn');
+    _status('Session closed — ' + why + '. Reload the page to start another.', 'warn');
     term.write('\r\n\x1b[33m[' + why + ']\x1b[0m\r\n');
-    opened = false;
   });
 
   sock.on('disconnect', function () {
     _status('Disconnected. Reload the page to start a new session.', 'warn');
-    opened = false;
   });
 
   // Keystrokes go straight out and are never stored anywhere, here or on the server: people type
