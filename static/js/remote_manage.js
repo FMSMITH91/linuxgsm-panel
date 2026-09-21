@@ -308,6 +308,20 @@ function renderUpdates(d, note){
          + escapeHtml(p.name)+'</span> '+ver+'</div>';
   }).join('') + '</div>';
   el.innerHTML=head+rows;   // nosemgrep — head/rows are composed above from escapeHtml()'d values
+  // ...and the button follows the count. Offering "Install updates" on a host the panel has just
+  // reported as up to date is an action whose only possible outcome is a progress modal that says
+  // "0 upgraded, 0 newly installed" — the control should carry what the card already knows.
+  setInstallUpdatesState(n > 0 ? 'available' : 'uptodate');
+}
+// available → enabled. uptodate → disabled, saying why. unknown → enabled, because a check that
+// failed is not evidence there is nothing to do, and forcing the upgrade by hand is a legitimate
+// way out of exactly that state.
+function setInstallUpdatesState(state){
+  var b=document.getElementById('btn-install-updates'); if(!b) return;
+  b.disabled = (state === 'uptodate');
+  b.title = state === 'uptodate' ? 'Nothing to install — the system is up to date.'
+          : state === 'unknown'  ? "The last check didn't complete — you can still run the upgrade."
+          : 'Install the updates found by the last check.';
 }
 // Force a fresh check (the Check button): runs `apt update` on the host, so it's the slow path.
 var _updatesAsked = false;   // a forced check outranks the cached fill, whichever lands first
@@ -319,11 +333,12 @@ function checkUpdates(){
       // A check that FAILED returns an empty list, exactly like a clean host — saying "up to date"
       // there would report a state nobody actually managed to read.
       if(d.ok===false){ el.innerHTML='<span class="text-warning"><i class="bi bi-exclamation-triangle"></i> '  // nosemgrep
-        + "Couldn't read the package list — apt may be busy. Try again in a minute.</span>"; return; }
+        + "Couldn't read the package list — apt may be busy. Try again in a minute.</span>";
+        setInstallUpdatesState('unknown'); return; }
       renderUpdates(d, '');
       if(window.osUpdatesNagCheck) window.osUpdatesNagCheck();   // the banner reflects this too
     })
-    .catch(()=>el.textContent='Check failed');
+    .catch(function(){ el.textContent='Check failed'; setInstallUpdatesState('unknown'); });
 }
 // Page load: show what the last check found, from the panel's own memory. No apt, no SSH — the
 // daily sweep already asked, and an empty card until you press Check is not an answer.
@@ -334,6 +349,9 @@ function checkUpdates(){
       var el=document.getElementById('update-info'); if(!el || _updatesAsked) return;
       if(!d || !d.known){
         el.innerHTML='<span class="text-secondary">Not checked yet — press Check.</span>';  // nosemgrep
+        // Never checked is not "up to date" — leave the button usable rather than disabling it
+        // on the strength of a reading nobody has taken.
+        setInstallUpdatesState('unknown');
         return;
       }
       renderUpdates(d, 'Last checked '+window.agoText(d.at));

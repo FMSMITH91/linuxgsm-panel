@@ -3160,3 +3160,21 @@ check("deploy: ...reads the system install through sudo",
 check("deploy: ...and runs git as the checkout's owner, not as root",
       'sudo -n -u "${OWNER}" git -C' in _deploy_wf,
       "git as root on a repo owned by the service user trips safe.directory")
+
+# ── the admin's 2FA reset must be VISIBLE, not just present ──────────────────────────────────
+# The switch lives in the Edit User modal and used to sit in a `display:none` block that JS
+# revealed only for an account that already had 2FA on. Correct, and undiscoverable: an admin
+# opening the dialog to reset someone's second factor saw an empty section and no way to tell an
+# inapplicable feature from an absent one. It is rendered disabled with a reason instead.
+#
+# Matched INSIDE the tag (`id="eu-2fa-block" ... display:none`), not anywhere in the file — the
+# comment above that div explains the old behaviour and would satisfy a looser search. Same trap
+# the deploy gate hit.
+_mu_html = open(os.path.join(_root, "templates", "manage_users.html"), encoding="utf-8").read()
+check("users page: the 2FA reset control is not hidden at render time",
+      not re.search(r'id="eu-2fa-block"[^>]*display\s*:\s*none', _mu_html),
+      "the block is display:none again — an admin looking for the 2FA reset finds nothing")
+_mu_js = open(os.path.join(_root, "static", "js", "manage_users.js"), encoding="utf-8").read()
+check("users page: ...and the script disables it rather than hiding it",
+      "box.disabled = !u.totp_enabled" in _mu_js,
+      "nothing marks the switch inert for an account with no 2FA, so it would post a no-op")

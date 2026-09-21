@@ -768,7 +768,10 @@ try:
     # gamedig query reports 2 players; the LinuxGSM backup command must NOT run.
     def _run_busy(s, c, **k):
         if "gamedig" in c:
-            return ("2", "", 0)
+            # {c, ok}, the shape player_count asks jq for now: a bare number could not tell a
+            # real answer from gamedig's {"error":...}, whose .players is null and whose
+            # `length` jq reports as 0.
+            return ('{"c":2,"ok":true}', "", 0)
         return ("", "", 0)
     _cap_busy = {"cmds": []}
     _sm_core.run_command = lambda s, c, **k: (_cap_busy["cmds"].append(c), _run_busy(s, c, **k))[1]
@@ -788,7 +791,8 @@ finally:
 # ── empty/unqueryable server: player_count None, backup proceeds ──
 _orig_run8c = _sm_core.run_command
 try:
-    _sm_core.run_command = lambda s, c, **k: ("0", "", 0) if "gamedig" in c else ("", "", 0)
+    _sm_core.run_command = lambda s, c, **k: (('{"c":0,"ok":true}', "", 0) if "gamedig" in c
+                                              else ("", "", 0))
     check("player_count: 0 players -> 0", _sm_cron.player_count(None, "gm", "gmod", 27015) == 0)
     check("player_count: unmapped game -> None (unknown)", _sm_cron.player_count(None, "gm", "nosuchgame", 27015) is None)
     check("player_count: no port -> None", _sm_cron.player_count(None, "gm", "gmod", None) is None)

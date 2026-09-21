@@ -697,15 +697,34 @@ def player_count(server, user, game_type=None, port=None, query_type=None):
     gdtype = _gamedig_type(game_type, query_type)
     if not gdtype or not port:
         return None
-    cmd = f"gamedig --type {gdtype} {_core._gamedig_host(server)}:{int(port)} 2>/dev/null | jq -r '.players|length' 2>/dev/null"
+    # `{c, ok}`, not a bare `.players|length` — and `ok` is the whole point. gamedig writes its
+    # FAILURE as a JSON object on stdout ({"error":"Failed all 1 attempts"}), `.players` is then
+    # null, and **jq reports the length of null as 0**. So the old filter turned every failed
+    # query into a confident "0 players", which is the one answer this function must never invent:
+    # mod_restart_decision, _host_idle_state and the reboot-when-empty poller all read 0 as
+    # "nobody is on, it is safe to act", and a stopped, firewalled or GSLT-less server produces it
+    # just as readily as an empty one.
+    #
+    # player_slots twenty lines below has carried this guard from the start, and its comment says
+    # exactly this ("a FAILED query reads as '0 players'"). This function simply never got it.
+    jqf = '{c:(.players|length), ok:(.players|type=="array")}'
+    cmd = (f"gamedig --type {gdtype} {_core._gamedig_host(server)}:{int(port)} 2>/dev/null "
+           f"| jq -c {_core._quote(jqf)} 2>/dev/null")
     try:
         out, _, _ = _core.run_command(server, f"sudo -u {user} bash -c {_core._quote(cmd)}", timeout=25, sudo=False)
     except Exception:
         return None
-    s = (out or "").strip().splitlines()[-1].strip() if (out or "").strip() else ""
-    if not s or s == "null" or not s.isdecimal():
+    line = (out or "").strip().splitlines()[-1].strip() if (out or "").strip() else ""
+    if not line:
         return None
-    return int(s)
+    try:
+        import json as _json
+        d = _json.loads(line)
+    except (ValueError, TypeError):
+        return None
+    if not (isinstance(d, dict) and d.get("ok")):
+        return None      # gamedig could not read the server — unknown, NOT zero
+    return d.get("c") if isinstance(d.get("c"), int) else None
 
 
 def player_slots(server, user, game_type=None, port=None, query_type=None):

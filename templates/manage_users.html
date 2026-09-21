@@ -357,14 +357,18 @@
               Uncheck to block this user from logging in, without deleting the account.
             </div>
           </div>
-          <div id="eu-2fa-block" style="display:none;">
+          {# Always rendered. It used to be display:none unless the account had 2FA on, so an
+             admin who opened the dialog looking for "reset this person's 2FA" saw nothing at all
+             and had no way to tell the feature from an absent one. It is shown disabled instead,
+             saying why — the switch is still inert for an account with no second factor. #}
+          <div id="eu-2fa-block">
             <hr class="border-secondary">
             <label class="form-label mb-1"><i class="bi bi-shield-lock"></i> Two-Factor Auth</label>
             <div class="form-check form-switch">
               <input type="checkbox" name="reset_2fa" class="form-check-input" role="switch" id="eu-reset2fa">
               <label class="form-check-label" for="eu-reset2fa">Reset (disable) this user's 2FA</label>
             </div>
-            <div class="form-text mt-0">
+            <div class="form-text mt-0" id="eu-2fa-help">
               Use this if they've lost their authenticator. They can re-enable it from their Account page.
             </div>
           </div>

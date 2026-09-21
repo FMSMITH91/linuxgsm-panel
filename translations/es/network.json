@@ -284,5 +284,8 @@
   "rules": "reglas",
   "tailnet-only": "solo tailnet",
   "· Auth:": "· Autenticación:",
-  "🔒 Private tailnet — only your devices can reach it": "🔒 Tailnet privada: solo tus dispositivos pueden acceder"
+  "🔒 Private tailnet — only your devices can reach it": "🔒 Tailnet privada: solo tus dispositivos pueden acceder",
+  "Nothing to install — the system is up to date.": "No hay nada que instalar — el sistema está actualizado.",
+  "The last check didn't complete — you can still run the upgrade.": "La última comprobación no se completó — aún puedes ejecutar la actualización.",
+  "Install the updates found by the last check.": "Instala las actualizaciones encontradas en la última comprobación."
 }

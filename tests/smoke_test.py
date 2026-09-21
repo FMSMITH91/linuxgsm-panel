@@ -7477,6 +7477,177 @@ try:
         check("custom command: a missing command is refused, not an exception",
               _crcc(_adm, None, _gs) is False)
 
+    # ── a superadmin resetting SOMEONE ELSE's 2FA ─────────────────────────────────────────────
+    # rbac_test covers the refusal (a MANAGE_USERS admin must not reach a more-privileged
+    # account). The path that is supposed to WORK had no test at all, and it is the one the whole
+    # 2FA design leans on: /account/2fa/disable now demands a second factor, and "an admin can
+    # clear it for someone who lost both" is what makes that safe to require.
+    from panel.db.models import User as _R2U
+
+    with app.app_context():
+        _r2 = _R2U(username="reset2fa_target",
+                   password_hash=auth.hash_password("Str0ng!passw0rd"),
+                   display_name="target", is_superadmin=False, is_active=True,
+                   totp_enabled=True, totp_secret=encrypt_secret(auth.generate_totp_secret()))
+        _r2.set_backup_codes(auth.generate_backup_codes())
+        db.session.add(_r2)
+        db.session.commit()
+        _r2_id = _r2.id
+        _AL.query.filter_by(action="2fa_reset").delete()
+        db.session.commit()
+
+    # The control is only reachable if the page TELLS the modal this account has 2FA — the switch
+    # is disabled without it. Assert the data island carries the flag, not just that the route
+    # works, or the feature can be correct and unreachable at the same time.
+    import json as _r2_json
+    import re as _r2_re
+    _r2_page = c.get("/users").get_data(as_text=True)
+    _r2_m = _r2_re.search(r'id="users-data"[^>]*>(.*?)</script>', _r2_page, _r2_re.S)
+    _r2_island = _r2_json.loads(_r2_m.group(1)) if _r2_m else []
+    _r2_row = next((r for r in _r2_island if r.get("id") == _r2_id), None)
+    check("admin 2fa reset: the users page tells the edit modal this account HAS 2FA",
+          (_r2_row or {}).get("totp_enabled") is True,
+          "island row %r — without this the switch renders disabled and the admin cannot use it"
+          % (_r2_row,))
+
+    c.post("/users/%d/edit" % _r2_id,
+           data={"username": "reset2fa_target", "display_name": "target",
+                 "is_active": "on", "reset_2fa": "on"}, follow_redirects=True)
+    with app.app_context():
+        _r2_after = db.session.get(_R2U, _r2_id)
+        _r2_still = bool(_r2_after.totp_enabled and _r2_after.totp_secret)
+        _r2_codes = _r2_after.backup_codes_remaining
+        _r2_audit = _AL.query.filter_by(action="2fa_reset").count()
+    check("admin 2fa reset: a superadmin clears another user's 2FA", not _r2_still,
+          "2FA survived the reset, so an operator who lost their authenticator has no way back in")
+    check("admin 2fa reset: ...and its backup codes go with it", _r2_codes == 0,
+          "%d backup codes still accepted for a second factor that is gone" % _r2_codes)
+    check("admin 2fa reset: ...and it is audited", _r2_audit == 1,
+          "%d 2fa_reset rows — clearing someone's second factor must leave a trace" % _r2_audit)
+
+    # ...and it does NOT fire when the box is left unticked, which is every other edit.
+    with app.app_context():
+        _r2b = db.session.get(_R2U, _r2_id)
+        _r2b.totp_enabled = True
+        _r2b.totp_secret = encrypt_secret(auth.generate_totp_secret())
+        db.session.commit()
+    c.post("/users/%d/edit" % _r2_id,
+           data={"username": "reset2fa_target", "display_name": "target renamed",
+                 "is_active": "on"}, follow_redirects=True)
+    with app.app_context():
+        check("admin 2fa reset: ...and an ordinary edit leaves 2FA alone (positive control)",
+              bool(db.session.get(_R2U, _r2_id).totp_enabled),
+              "every save now strips the user's second factor")
+        db.session.delete(db.session.get(_R2U, _r2_id))
+        db.session.commit()
+
+    # ── the SSH-port and SSH-mode routes, which nothing entered ───────────────────────────────
+    # Both change how an operator reaches a host, and a wrong outcome written down is how someone
+    # believes they still have a way in. Neither route body was executed by any suite: the port
+    # one validates input, then updates RemoteServer.port so the panel's own future connections
+    # follow — and that update must happen only when the change actually took.
+    import panel.routes.remote_vps as _shmod
+
+    _sh_saved = (_shmod.change_ssh_port, _shmod.remote_set_public_ssh)
+    _sh_calls = []
+
+    def _al_last(action):
+        """The most recent audit row for `action`, as a plain dict (the row is detached after)."""
+        with app.app_context():
+            _row = _AL.query.filter_by(action=action).order_by(_AL.id.desc()).first()
+            return {"success": _row.success, "detail": _row.detail} if _row else None
+
+    try:
+        with app.app_context():
+            _sh_before = db.session.get(RemoteServer, remote_id).port
+
+        def _sh_port(remote, port):
+            return c.post("/api/remote/%d/ssh-port" % remote_id, json={"port": port})
+
+        def _sh_stored():
+            with app.app_context():
+                return db.session.get(RemoteServer, remote_id).port
+
+        _shmod.change_ssh_port = lambda r, p, b="": (_sh_calls.append(p), (True, "moved"))[1]
+        for _bad, _why in ((0, "zero"), (65536, "above the range"), ("nope", "not a number"),
+                           (None, "missing")):
+            _sh_calls.clear()
+            _r = _sh_port(remote_id, _bad)
+            check("ssh port: %r (%s) is refused before anything is changed" % (_bad, _why),
+                  _r.status_code == 400 and not _sh_calls,
+                  "status=%d, change_ssh_port called with %s" % (_r.status_code, _sh_calls))
+        check("ssh port: ...and the stored port is untouched by all of that",
+              _sh_stored() == _sh_before, "port moved to %r on a refused request" % _sh_stored())
+
+        # A change that FAILED must not move the panel's own idea of the port: it would then
+        # connect to a port sshd is not on, and the operator's next visit says the host is down.
+        _shmod.change_ssh_port = lambda r, p, b="": (False, "sshd rejected the new config")
+        _r = _sh_port(remote_id, 2222)
+        check("ssh port: a change that FAILED does not repoint the panel at the new port",
+              _sh_stored() == _sh_before,
+              "stored port is now %r though the change failed — the panel will dial a port "
+              "nothing is listening on" % _sh_stored())
+        check("ssh port: ...and it is audited as a failure",
+              (_al_last("change_ssh_port") or {}).get("success") is False,
+              "audited %r" % ((_al_last("change_ssh_port") or {}).get("success"),))
+
+        # ...and the control: one that worked DOES move it, and is audited as a success.
+        _shmod.change_ssh_port = lambda r, p, b="": (True, "moved")
+        _r = _sh_port(remote_id, 2223)
+        check("ssh port: a change that WORKED repoints the panel (positive control)",
+              _sh_stored() == 2223,
+              "stored port is %r — the panel keeps dialling the old one" % _sh_stored())
+        check("ssh port: ...and is audited as a success",
+              (_al_last("change_ssh_port") or {}).get("success") is True,
+              "audited %r" % ((_al_last("change_ssh_port") or {}).get("success"),))
+
+        # ssh-mode: its whole job is the audit row, since the outcome is on the host.
+        _shmod.remote_set_public_ssh = lambda r, m: (False, "ufw refused")
+        c.post("/api/remote/%d/ssh-mode" % remote_id, json={"mode": "limit"})
+        check("ssh mode: a refused change is audited as a failure",
+              (_al_last("remote_ssh_mode") or {}).get("success") is False,
+              "audited %r" % ((_al_last("remote_ssh_mode") or {}).get("success"),))
+        _shmod.remote_set_public_ssh = lambda r, m: (True, "ok")
+        c.post("/api/remote/%d/ssh-mode" % remote_id, json={"mode": "off"})
+        check("ssh mode: ...and one that worked is audited as a success (positive control)",
+              (_al_last("remote_ssh_mode") or {}).get("success") is True,
+              "audited %r" % ((_al_last("remote_ssh_mode") or {}).get("success"),))
+    finally:
+        (_shmod.change_ssh_port, _shmod.remote_set_public_ssh) = _sh_saved
+        with app.app_context():
+            db.session.get(RemoteServer, remote_id).port = _sh_before
+            db.session.commit()
+
+    # ── deleting a UFW rule by number, which nothing entered either ───────────────────────────
+    # The route hands `num` to a helper whose whole job is refusing a delete that would lock the
+    # operator out — including when the firewall could not be READ, because "I could not check"
+    # is not "it is safe". The route's own contribution is the audit row, and that it never
+    # passes force=True: a caller cannot reach the override through the API.
+    import panel.routes.remote_vps as _fwmod
+
+    _fw_saved = _fwmod.remote_ufw_delete_rule
+    _fw_args = []
+    try:
+        def _fw_stub(server, num, force=False):
+            _fw_args.append({"num": num, "force": force})
+            return (False, "refused")
+        _fwmod.remote_ufw_delete_rule = _fw_stub
+        c.post("/api/remote/%d/firewall/delete-rule" % remote_id, json={"num": 3})
+        check("ufw delete: the route never asks for the force override",
+              _fw_args and _fw_args[-1]["force"] is False,
+              "called with force=%r — the API would be able to delete the rule keeping SSH open"
+              % (_fw_args[-1:] or None,))
+        check("ufw delete: a refusal is audited as a failure",
+              (_al_last("remote_ufw_delete_rule") or {}).get("success") is False,
+              "audited %r" % ((_al_last("remote_ufw_delete_rule") or {}).get("success"),))
+        _fwmod.remote_ufw_delete_rule = lambda s, n, force=False: (True, "deleted")
+        c.post("/api/remote/%d/firewall/delete-rule" % remote_id, json={"num": 3})
+        check("ufw delete: ...and a delete that happened is audited as a success (control)",
+              (_al_last("remote_ufw_delete_rule") or {}).get("success") is True,
+              "audited %r" % ((_al_last("remote_ufw_delete_rule") or {}).get("success"),))
+    finally:
+        _fwmod.remote_ufw_delete_rule = _fw_saved
+
     # ── revoking an invite must claim it, not read it and then write ─────────────────────────────
     # Redemption claims the row atomically — "UPDATE ... WHERE used_at IS NULL", with a comment
     # saying that checking is_usable and trusting it would be a race. Revocation was the
