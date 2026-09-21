@@ -244,20 +244,45 @@ def register(app):
             port = 5000
 
         def _panel_port_rule_nums():
+            """(rule numbers, read_ok). An unread firewall is NOT an empty one."""
+            st = remote_ufw_status(remote)
+            # remote_ufw_status answers {"installed": False, ..., "groups": []} when ufw is
+            # missing, and adds "unreachable": True when the command failed or printed no
+            # "Status:" line — its own docstring says it does that so a down remote is not shown
+            # as an installed firewall with no rules. Reading only .get("groups") threw that away:
+            # a host that never answered produced nums == [], which this route reported as
+            # "already closed" with success=True and no audit row, while the panel was still
+            # listening on 0.0.0.0. The sibling hardening path already refuses an unverifiable
+            # firewall — remote_set_public_ssh returns "UFW is not active on this host, so public
+            # SSH cannot be controlled from here", after an earlier version of THAT produced "an
+            # audit row saying the hardening succeeded, and port 22 open to the internet".
+            if st.get("unreachable") or not st.get("installed"):
+                return [], False
             nums = []
-            for g in remote_ufw_status(remote).get("groups", []):
-                if not g.get("is_iface") and str(g.get("port_num", "")) == str(port):
+            for g in st.get("groups", []):
+                # ...and only rules that actually HOLD THE PORT OPEN. The action test matches the
+                # is_panel classifier in firewall.py; without it a DENY on this port was collected
+                # and force-deleted as though it were letting traffic in.
+                if (not g.get("is_iface") and str(g.get("port_num", "")) == str(port)
+                        and g.get("action", "ALLOW") in ("ALLOW", "LIMIT")
+                        and g.get("direction", "IN") != "OUT"):
                     nums.extend(g.get("nums", []))
-            return sorted(set(nums), reverse=True)   # highest first so numbering stays valid
+            return sorted(set(nums), reverse=True), True   # highest first so numbering stays valid
 
-        nums = _panel_port_rule_nums()
+        nums, read_ok = _panel_port_rule_nums()
+        if not read_ok:
+            return jsonify({"success": False, "message": (
+                f"Couldn't read the firewall on this host, so port {port} can't be closed from "
+                f"here. Check the host is reachable and that UFW is installed, then try again.")})
         if not nums:
             return jsonify({"success": True, "message": f"Public port {port} is already closed."})
         # Delete by rule NUMBER (reliable across any rule format), force=True since this is
         # the intentional guided close and Serve is already confirmed as the way in.
         for n in nums:
             remote_ufw_delete_rule(remote, n, force=True)
-        ok = not _panel_port_rule_nums()
+        _left, _verify_ok = _panel_port_rule_nums()
+        # A verify read that FAILED cannot say the port is closed either.
+        ok = _verify_ok and not _left
         log_action(current_user, "close_panel_port", target=str(port), success=ok)
         return jsonify({"success": ok, "message": (
             f"Public port {port} closed — the panel is now reachable only over your tailnet."
@@ -331,11 +356,19 @@ def register(app):
         remote = get_remote(remote_id)
         try:
             stats = remote_uptime(remote)
-            try:
-                remote.update_cached_stats(stats)
-                db.session.commit()
-            except Exception:
-                db.session.rollback()
+            # Only persist a reading that actually happened. remote_uptime does not raise when the
+            # host says nothing — it returns its placeholder dict ("uptime": "unknown", load/disk/
+            # memory/cpu all "?") — and it refuses to put that in its OWN cache: see the
+            # `if server is not None and out:   # don't cache a failed/empty read` at the end of
+            # it. Writing the same dict to the database was strictly worse than the thing the
+            # helper declines to do: one unreachable poll replaced the row's last-known values
+            # with "?" for good, which is what the card renders on the next load.
+            if stats.get("read_ok"):
+                try:
+                    remote.update_cached_stats(stats)
+                    db.session.commit()
+                except Exception:
+                    db.session.rollback()
             return jsonify({"success": True, **stats})
         except Exception:
             # Unreachable host is expected — 200 with an error field, not a console 500.

@@ -872,6 +872,11 @@ def remote_uptime(server, force=False):
             d["cpu_per_core"] = f"{float(d['cpu_percent']) / int(d['cpu_cores']):.1f}"
         except (ValueError, ZeroDivisionError):
             _core._log.debug("remote_uptime: per-core calc skipped", exc_info=True)
+    # Say plainly whether the host actually answered. The dict is otherwise indistinguishable
+    # from a real reading of a very quiet machine — "unknown"/"?" are also what a SUCCESSFUL parse
+    # produces for a field it could not find — and callers that persist it need to tell the two
+    # apart. This flag is what the cache guard below has always keyed on; it is now visible.
+    d["read_ok"] = bool(out)
     if server is not None and out:   # don't cache a failed/empty read
         _uptime_cache[server.id] = (now + _UPTIME_TTL, d)
     return d
