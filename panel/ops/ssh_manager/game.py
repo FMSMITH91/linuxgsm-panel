@@ -518,7 +518,10 @@ def run_game_backup(server, user, selfname=None, keep=3, game_type=None, port=No
     # disk with a partial archive and can leave a stale lock behind — far worse than not starting.
     # We estimate the next archive from the largest existing one; with none to go by we let it try.
     try:
-        _bks = cron.list_game_backups(server, user)
+        # `or []`: this is only the ESTIMATE, and an unreadable listing means no estimate —
+        # which the `_est and _total` guard below already treats as "let it try". It must
+        # not BLOCK a backup, for the same reason a failed df must not.
+        _bks = cron.list_game_backups(server, user) or []
         _est = max((b.get("size", 0) for b in _bks), default=0)
         _disk = cron.backup_disk_info(server, user)
         _free, _total = _disk.get("free", 0), _disk.get("total", 0)

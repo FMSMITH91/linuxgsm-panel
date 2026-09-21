@@ -9,6 +9,7 @@
   "Backups": "Sauvegardes",
   "Could not restore.": "Restauration impossible.",
   "Could not save": "Enregistrement impossible",
+  "Couldn't read this server's backups — the host didn't answer. This is not the same as there being none.": "Impossible de lire les sauvegardes de ce serveur — l'hôte n'a pas répondu. Ce n'est pas la même chose qu'une absence de sauvegarde.",
   "Daily": "Quotidien",
   "Daily 5am": "Quotidien 5 h",
   "Daily restart": "Redémarrage quotidien",

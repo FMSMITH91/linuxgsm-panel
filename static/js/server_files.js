@@ -1112,7 +1112,23 @@ function renderBackups(d){
       + '</td></tr>';
   });
   var tb=document.getElementById('bk-rows');
-  if(tb) tb.innerHTML = rows.length ? rows.join('') : '<tr><td colspan="4" class="text-secondary text-center py-3">No backups yet.</td></tr>';  // nosemgrep
+  if(tb){
+    if(rows.length){ tb.innerHTML = rows.join(''); }  // nosemgrep
+    else {
+      // "No backups yet." and "the host did not answer" are different facts, and only one of
+      // them means nothing is protecting this server. list_game_backups discarded the exit code,
+      // so an unreachable host came back as an empty list and this card stated the alarming one.
+      // Built as text, not concatenated into innerHTML — the same shape the file browser two
+      // cards up uses to say this.
+      tb.textContent='';
+      var tr=document.createElement('tr'), td=document.createElement('td');
+      td.colSpan=4; td.className='text-secondary text-center py-3';
+      td.textContent = d.backups_unreadable
+        ? "Couldn't read this server's backups — the host didn't answer. This is not the same as there being none."
+        : 'No backups yet.';
+      tr.appendChild(td); tb.appendChild(tr);
+    }
+  }
   // Poll while a backup is running; stop once it finishes.
   var running=s && s.running;
   if(running && !_bkPoll) _bkPoll=setInterval(loadBackups, 4000);
