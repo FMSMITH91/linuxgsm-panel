@@ -8133,6 +8133,158 @@ try:
                     db.session.delete(_row)
             db.session.commit()
 
+    # ── a custom command's argument guard, driven through the real route ─────────────────────
+    # The route COMPILES the stored pattern and MATCHES the value in two separate try blocks, and
+    # the comment there records why: they used to be one, so `raise ValueError` for a value that
+    # did not match was caught by the same `except (re.error, ValueError)` as a broken stored
+    # pattern and fell through to the lenient default. A command restricted to
+    # ^(easy|normal|hard)$ accepted 9999. The shell-injection half still held — the default
+    # charset has no metacharacters — but the AUTHORIZATION half did nothing at all.
+    #
+    # That was found and fixed by hand. No suite enters this route, so nothing would catch it
+    # coming back. The helpers are covered in unit; this is the CALLER.
+    import panel.routes.server_detail as _cc_mod
+    _cc_sent = []
+
+    def _fake_send(remote, short, cmd, timeout=10, selfname=None):
+        _cc_sent.append(cmd)
+        return ("", "", 0)
+
+    _cc_saved = _cc_mod.send_console_command
+    _cc_mod.send_console_command = _fake_send
+    with app.app_context():
+        _cc = CustomCommand(name="smoke-difficulty", command_template="difficulty {}",
+                            argument_label="Difficulty",
+                            argument_pattern="^(easy|normal|hard)$",
+                            scope_type="all", scope_value="", enabled=True,
+                            created_by="smoke_admin")
+        db.session.add(_cc)
+        db.session.commit()
+        _cc_id = _cc.id
+    try:
+        _u = "/api/server/%d/custom-command/%d" % (gs_id, _cc_id)
+        _cc_sent[:] = []
+        _r_ok = _lc.post(_u, json={"value": "hard"})
+        check("custom command: a value the pattern allows runs, substituted into the template",
+              _r_ok.status_code == 200 and _cc_sent == ["difficulty hard"],
+              "status=%d sent=%r" % (_r_ok.status_code, _cc_sent))
+        _cc_sent[:] = []
+        _r_no = _lc.post(_u, json={"value": "9999"})
+        check("custom command: a value the pattern REFUSES is rejected, not run",
+              _r_no.status_code == 400 and _cc_sent == [],
+              "status=%d sent=%r — the authorization half of the guard is back to doing nothing"
+              % (_r_no.status_code, _cc_sent))
+        # A BROKEN stored pattern must fall back to the safe default, not become a bypass.
+        with app.app_context():
+            db.session.get(CustomCommand, _cc_id).argument_pattern = "^(unclosed"
+            db.session.commit()
+        _cc_sent[:] = []
+        _r_meta = _lc.post(_u, json={"value": "a;rm -rf /"})
+        check("custom command: a broken stored pattern still refuses a value the default refuses",
+              _r_meta.status_code == 400 and _cc_sent == [],
+              "status=%d sent=%r — an uncompilable pattern became an ALLOW-ALL"
+              % (_r_meta.status_code, _cc_sent))
+        _cc_sent[:] = []
+        _r_plain = _lc.post(_u, json={"value": "9999"})
+        check("custom command: ...and it falls back to the DEFAULT, not to refusing everything",
+              _r_plain.status_code == 200 and _cc_sent == ["difficulty 9999"],
+              "status=%d sent=%r — 9999 matches the default charset, so this should run; "
+              "refusing it would mean the fallback is 'deny all' rather than the documented default"
+              % (_r_plain.status_code, _cc_sent))
+    finally:
+        _cc_mod.send_console_command = _cc_saved
+        with app.app_context():
+            _row = db.session.get(CustomCommand, _cc_id)
+            if _row is not None:
+                _row.groups = []
+                db.session.delete(_row)
+                db.session.commit()
+
+    # ── the terminal's two audit promises, driven through a real socket ──────────────────────
+    # The feature claims "a row per session opened and closed, and NEVER what was typed", and
+    # nothing checked either. Socket events are covered by neither CSRFProtect nor rbac_test's
+    # url_map sweeps — host_terminal.py's own docstring says so — which makes this the code path
+    # with the least watching it.
+    #
+    # The transport is stubbed: the question is what the ROUTE records, not whether a shell
+    # spawns. The disconnect leg is the real prize — it goes through the console's disconnect
+    # handler and the socket_hooks chain, which is what #323 broke and a later commit fixed.
+    import panel.ops.terminal_session as _tsmod
+    _TERM_SECRET = "hunter2-do-not-log-this"
+
+    class _FakeTermSess(object):
+        def __init__(self): self.writes = []
+        def write(self, d): self.writes.append(d)
+        def resize(self, c, r): pass
+
+    _fake_sessions = {}
+    _ts_saved = (_tsmod.open_session, _tsmod.get, _tsmod.close_for_sid)
+
+    def _fake_open(sid, server, is_local, user_key, on_output, on_exit, cols=80, rows=24):
+        _fake_sessions[sid] = _FakeTermSess()
+        return _fake_sessions[sid]
+
+    with app.app_context():
+        _ta_host = RemoteServer(name="smoke-audit-host", host="127.0.0.1", port=22,
+                                username="root", auth_method="key", auth_credential="",
+                                is_local=True)
+        db.session.add(_ta_host)
+        db.session.commit()
+        _ta_id, _ta_name = _ta_host.id, _ta_host.name
+    _tsmod.open_session = _fake_open
+    _tsmod.get = lambda sid: _fake_sessions.get(sid)
+    _tsmod.close_for_sid = lambda sid, reason="": _fake_sessions.pop(sid, None)
+    _ta_err = ""
+    try:
+        _ta_c = app.socketio.test_client(app, flask_test_client=client_as(admin_id))
+        _ta_ok = _ta_c.is_connected()
+    except Exception as _e:
+        _ta_c, _ta_ok, _ta_err = None, False, "%s: %s" % (type(_e).__name__, _e)
+    check("terminal audit: a terminal socket client connects", _ta_ok, _ta_err)
+    try:
+        if _ta_ok:
+            _ta_c.emit("term_open", {"remote_id": _ta_id, "cols": 80, "rows": 24})
+            with app.app_context():
+                _opened = _SPAudit.query.filter_by(action="terminal_open",
+                                                   target=_ta_name).first()
+            check("terminal audit: opening a session writes a row naming the host",
+                  _opened is not None,
+                  "no terminal_open row for %r — the feature claims one per session" % (_ta_name,))
+            _ta_c.emit("term_input", {"data": _TERM_SECRET})
+            _wrote = [w for s_ in _fake_sessions.values() for w in s_.writes]
+            check("terminal audit: ...and the keystrokes really did reach the session",
+                  _TERM_SECRET in _wrote,
+                  "the input event did nothing, so the next check would pass vacuously: %r"
+                  % (_wrote,))
+            with app.app_context():
+                _leaked = [r.id for r in _SPAudit.query.all()
+                           if _TERM_SECRET in ((r.detail or "") + (r.target or "")
+                                               + (r.action or ""))]
+            check("terminal audit: ...and NOTHING typed is written to the audit log",
+                  not _leaked,
+                  "what was typed into the terminal appears in audit row(s) %r — people type "
+                  "passwords into terminals" % (_leaked,))
+            _ta_c.disconnect()
+            with app.app_context():
+                _closed = _SPAudit.query.filter_by(action="terminal_close",
+                                                   target=_ta_name).first()
+            check("terminal audit: a disconnect writes the closing row",
+                  _closed is not None,
+                  "no terminal_close row — the socket_hooks chain did not reach the terminal, "
+                  "which is exactly what a second disconnect handler would cause")
+    finally:
+        (_tsmod.open_session, _tsmod.get, _tsmod.close_for_sid) = _ts_saved
+        try:
+            if _ta_c is not None and _ta_c.is_connected():
+                _ta_c.disconnect()
+        except Exception:
+            pass
+        with app.app_context():
+            _row = db.session.get(RemoteServer, _ta_id)
+            if _row is not None:
+                db.session.delete(_row)
+                db.session.commit()
+
     # ── the two exemptions that rest on SameSite ─────────────────────────────────────────────
     # A WebSocket handshake is NOT subject to the same-origin policy: any page the operator visits
     # can open one to the panel, and the browser attaches cookies for the target origin. What

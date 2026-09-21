@@ -3747,3 +3747,34 @@ check("docs: ...and the scan can actually find a .md reference (not a dead regex
       len(re.findall(r"""["']([^"']*?\b([A-Z][A-Za-z0-9_-]*\.md)\b[^"']*)["']""",
                      'x = "see README.md for more"')) == 1,
       "the pattern matches nothing, so the gate above would pass against any dangling pointer")
+
+# ── the route-coverage tool must not flatter its own answer ───────────────────────────────────
+# tools/route_coverage.py reports which route bodies no suite enters. Its first version shared one
+# work tree across all nine suites, and three of them refuse to run when data/panel.db exists —
+# they print SKIP and **exit 0**. So the first suite's database silently disabled four of the
+# others and the tool reported a SMALLER untested set than the truth: a measurement wrong in the
+# direction that looks like progress.
+#
+# Two properties make the answer honest, and both are one line each to delete by accident.
+_rc_src6 = open(os.path.join(_root, "tools", "route_coverage.py"), encoding="utf-8").read()
+_rc_code6 = "\n".join(_ln for _ln in _rc_src6.splitlines()
+                      if not _ln.lstrip().startswith("#"))          # not its own explanation
+# Scoped to the LOOP, not to the file: _report() clears data/ too, so searching the whole source
+# matched that copy and the gate passed with the clearing deleted from the loop — which is the
+# only place it prevents anything. Caught by mutation, which is the entire point of doing it.
+_rc_loop6 = _rc_code6.split("def _run_suites", 1)[-1].split("\ndef ", 1)[0]
+check("route_coverage: data/ is cleared before each suite runs",
+      "rmtree" in _rc_loop6 and '"data"' in _rc_loop6,
+      "nothing removes data/ inside the suite loop, so the suites that refuse to run against an "
+      "existing database will SKIP and the tool will report fewer untested routes than there are")
+check("route_coverage: ...and a SKIPped suite stops it reporting at all",
+      'startswith("SKIP:")' in _rc_code6 and "refusing to report" in _rc_code6,
+      "a suite that printed SKIP and exited 0 would be counted as having covered everything")
+_rc_suites6 = sorted(re.findall(r'"([a-z_]+)"',
+                                _rc_src6.split("SUITES = (", 1)[1].split(")", 1)[0]))
+_repo_suites6 = sorted(os.path.basename(_p)[:-len("_test.py")]
+                       for _p in glob.glob(os.path.join(_root, "tests", "*_test.py")))
+check("route_coverage: ...and it runs every suite the repo has",
+      _rc_suites6 == _repo_suites6,
+      "SUITES=%r but tests/ has %r — a suite missing from it makes every route only that suite "
+      "covers look untested" % (_rc_suites6, _repo_suites6))
