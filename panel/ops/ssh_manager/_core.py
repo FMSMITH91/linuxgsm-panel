@@ -527,9 +527,21 @@ def _ssh_connect_timeout():
         return 10
 
 
-def get_connection(server, force_new=False):
+def get_connection(server, force_new=False, pooled=True):
     """Get or create a cached SSH connection to a remote server.
-    For local servers, returns None (no SSH needed)."""
+    For local servers, returns None (no SSH needed).
+
+    `pooled=False` builds the client exactly the same way — same auth methods, same host-key
+    pinning, same timeouts — and then does NOT put it in the pool. The caller owns it and must
+    close it.
+
+    That exists for the interactive terminal, and the reason is the line at the bottom of this
+    function: `_connections[key] = client` runs even under force_new, so a caller that took a
+    "fresh" client and later closed it would be closing the one every other panel operation had
+    started using. A long-lived shell channel needs its own client for the same reason — an
+    `invoke_shell` sitting on the pooled transport ties every command on that host to the lifetime
+    of somebody's browser tab. Duplicating the connect logic here instead would mean a second
+    implementation of host-key pinning, which is the last thing that should have two copies."""
     if is_local_server(server):
         return None
 
@@ -636,6 +648,9 @@ def get_connection(server, force_new=False):
             _tr.set_keepalive(30)
     except Exception:  # nosec B110
         _log.debug("set_keepalive failed (non-fatal)", exc_info=True)
+
+    if not pooled:
+        return client      # caller owns it — see the docstring
 
     with _conn_lock:
         existing = _connections.get(key)

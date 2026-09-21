@@ -1404,12 +1404,15 @@ check("register_routes: helper closures inside it <= %d (currently %d)"
 # login_required: creating your own account is the whole point of the link.
 # 212, was 211: /account/profile is a genuinely new view — it lets someone change their OWN
 # display name, which previously only an admin could do through Manage Users.
+# 223, was 222: /terminal/<id> is a genuinely new view — an interactive shell on a host, behind
+# its own USE_TERMINAL permission rather than MANAGE_REMOTES, because a shell is every capability
+# the session's account has at once and should be granted on purpose.
 # 211, was 210: /password/change is a genuinely new view (the page an account with an admin-issued
 # password is held on until it sets its own). This total exists to catch a view VANISHING during a
 # move, so adding one is a deliberate bump — and url_map_baseline.json's diff is the record of what
 # the new route actually is.
-check("register_routes: every one of the 222 views is still accounted for",
-      len(_rr_views) + _MOVED_VIEWS == 222,
+check("register_routes: every one of the 223 views is still accounted for",
+      len(_rr_views) + _MOVED_VIEWS == 223,
       "views inside=%d, moved out=%d" % (len(_rr_views), _MOVED_VIEWS))
 # These two use current_app, which only equals the closed-over `app` inside a request — every
 # caller is a view, so that holds. If they drift back inside a closure, the reasoning stops being

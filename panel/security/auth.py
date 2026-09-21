@@ -25,6 +25,8 @@ login_manager.login_message = "Please log in to access this page."
 # ─── Permission constants ─────────────────────────────────────
 VIEW_SERVERS = "view_servers"
 VIEW_CONSOLE = "view_console"
+# Not VIEW_CONSOLE: that one is a read-only view of a game's log. This is an interactive shell.
+USE_TERMINAL = "use_terminal"
 SEND_COMMAND = "send_command"
 MODERATE_SERVER = "moderate_server"     # Umbrella: kick + ban + announce (grants all three below)
 KICK_PLAYER = "kick_player"             # Kick players from the server
@@ -64,6 +66,11 @@ ALL_PERMISSIONS = {
     MANAGE_USERS: "Manage user accounts",
     MANAGE_GROUPS: "Manage groups and permissions",
     VIEW_LOGS: "View audit logs",
+    # Last, and deliberately not folded into MANAGE_REMOTES: a shell is not "managing a host",
+    # it is every capability the session's account has, at once. On a remote that account is
+    # usually root, so this grant is the most powerful one in the table and should be given on
+    # purpose rather than inherited from the permission that adds a VPS.
+    USE_TERMINAL: "Open a shell on a host (powerful — see SECURITY.md)",
 }
 
 ACTION_PERMISSION_MAP = {

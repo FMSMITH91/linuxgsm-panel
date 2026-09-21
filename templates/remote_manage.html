@@ -163,6 +163,22 @@
   </div>
 
   <!-- Firewall -->
+  {# Gated on the permission, not merely on being logged in: a shell is the most powerful grant
+     in the table, so an account without it should not see the door either. #}
+  {% if has_permission('use_terminal') %}
+  <div class="col-md-4 mb-3">
+    <div class="card h-100">
+      <div class="card-header" id="sec-terminal"><i class="bi bi-terminal-fill"></i> Terminal</div>
+      <div class="card-body">
+        <p class="small text-secondary">A shell on this host, as the panel's own account.</p>
+        <a href="{{ url_for('host_terminal', remote_id=remote.id) }}" class="btn btn-sm btn-outline-secondary">
+          <i class="bi bi-terminal"></i> Open terminal
+        </a>
+      </div>
+    </div>
+  </div>
+  {% endif %}
+
   <div class="col-md-4 mb-3">
     <div class="card h-100">
       <div class="card-header" id="sec-firewall"><i class="bi bi-shield-fill-check"></i> Firewall</div>

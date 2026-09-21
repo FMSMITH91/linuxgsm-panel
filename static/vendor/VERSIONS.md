@@ -16,6 +16,8 @@ deliberate two-line change (file + this table) that shows up in review.
 | Bootstrap Icons | 1.11.3 | `bootstrap-icons/bootstrap-icons.min.css` | https://cdnjs.cloudflare.com/ajax/libs/bootstrap-icons/ |
 | Chart.js | 4.4.1 | `chartjs/chart.umd.min.js` | https://cdnjs.cloudflare.com/ajax/libs/Chart.js/ |
 | Socket.IO (client) | 4.7.5 | `socketio/socket.io.min.js` | https://cdnjs.cloudflare.com/ajax/libs/socket.io/ |
+| xterm.js (JS) | 5.5.0 | `xterm/xterm.min.js` | https://cdn.jsdelivr.net/npm/@xterm/xterm/ |
+| xterm.js (CSS) | 5.5.0 | `xterm/xterm.min.css` | https://cdn.jsdelivr.net/npm/@xterm/xterm/ |
 
 ## Bootstrap's two halves must match
 
@@ -31,3 +33,17 @@ rows to agree, so the next split fails the build instead of sitting there.
 2. Replace the file in place — keep the same filename, so no template changes.
 3. Update its row in the table above.
 4. Run `./tools/run-tests.sh`; the JS parse gate and this manifest gate both run.
+
+## xterm.js is two files from one release, like Bootstrap
+
+The host terminal needs a real terminal emulator, not a `<pre>`: anything full-screen — `top`,
+`less`, `nano`, a package manager's progress bar — uses cursor addressing and the alternate
+screen, which line-oriented rendering cannot show. `panel/core/terminal.py` renders the game
+console's one-way log output and is deliberately not used here.
+
+Fetched from jsDelivr rather than cdnjs for a boring reason that matters to the gate above: cdnjs
+serves this bundle with no banner at all, so nothing in the file states its own version and the
+manifest check has nothing to verify against. jsDelivr prepends `Original file:
+/npm/@xterm/xterm@5.5.0/...` to both, which is the same thing that makes the Chart.js row
+checkable. The package is `@xterm/xterm` — the project renamed at 5.4, and the old unscoped
+`xterm` name on cdnjs stops being the same lineage.
