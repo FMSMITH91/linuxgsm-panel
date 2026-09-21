@@ -8107,9 +8107,25 @@ try:
               "local=%d remote=%d" % (_t_local.status_code, _t_remote.status_code))
         _tl = _t_local.get_data(as_text=True)
         _tr = _t_remote.get_data(as_text=True)
-        check("terminal page: the panel host still says it is not root",
-              "not as root" in _tl,
-              "the local host's copy lost the sentence that is true there")
+        # The local page NAMES the account now rather than promising what it is not: "running as
+        # the panel's own account — not as root" is true of a root install's service account and
+        # misleading on a per-user one, where that account is usually able to become root without
+        # a password. Asserting the real OS account name also catches the Jinja trap — a forgotten
+        # `local_user=` kwarg is silently Undefined and falsy, so the fallback would render and
+        # this would look fine.
+        import panel.ops.terminal_session as _tp_ts
+        _tp_acct = _tp_ts.panel_account()
+        # The FALLBACK phrase is the discriminator, not the account name: the name also appears in
+        # the sudo hint higher up the page, so `acct in html` is satisfied whether or not the
+        # footer rendered it. Checked by removing the kwarg and watching the first version of this
+        # pass 977/977 — the exact Jinja trap this change could have walked into.
+        check("terminal page: the local host names the account the shell runs as",
+              bool(_tp_acct) and ("<code>%s</code>" % _tp_acct) in _tl
+              and "the account the panel runs under" not in _tl   # the local_user-missing branch
+              and "not as root" not in _tl,
+              "expected the footer to name %r inside <code>; fallback-branch present=%r means the "
+              "route did not pass local_user"
+              % (_tp_acct, "the account the panel runs under" in _tl))
         check("terminal page: a REMOTE does not claim to be 'not as root'",
               "not as root" not in _tr,
               "a remote whose configured account is root renders a promise that it is not root")

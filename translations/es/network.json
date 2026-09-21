@@ -266,7 +266,7 @@
   "The panel restarts to apply; reconnect on the new address or port.": "El panel se reinicia para aplicarlo; vuelve a conectarte en la nueva dirección o puerto.",
   "The server the panel runs on.": "El servidor en el que se ejecuta el panel.",
   "The terminal could not be opened.": "No se pudo abrir la terminal.",
-  "This is a real shell on the host, running as the panel's own account — not as root.": "Esto es un shell real en el host, ejecutándose con la propia cuenta del panel, no como root.",
+  "This is a real shell on this host, running as the account the panel runs under.": "Esto es un shell real en este host, ejecutándose con la cuenta bajo la que corre el panel.",
   "This is the server the LinuxGSM Panel itself runs on.": "Este es el servidor en el que se ejecuta el propio LinuxGSM Panel.",
   "Top offenders": "Principales infractores",
   "Tracking branch:": "Rama de seguimiento:",
