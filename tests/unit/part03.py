@@ -2137,3 +2137,47 @@ finally:
 check("live metrics: the panel host's own reading carries the flag too",
       _so.live_metrics().get("read_ok") is True,
       "the local delegate has no read_ok, so the panel's own live card would report unreachable")
+
+# ── a folder the panel could not read is not an empty folder ─────────────────────────────────
+# `find ... 2>/dev/null` prints nothing for an empty directory AND for a read that never ran, and
+# run_command returns ("", "...timed out", -1) on the tailscale and local transports rather than
+# raising. So the file browser announced "(empty folder)" about a directory full of somebody's
+# game files. rc is the only thing that separates the two.
+_fb_saved = _sm_core.run_command
+try:
+    _sm_core.run_command = lambda *a, **k: ("", "SSH command timed out", -1)
+    _fb = _sm_files.browse_dir(NS(id=9400, host="203.0.113.40"), "csgoserver", "cfg")
+    check("file browser: a listing that failed is not reported as an empty folder",
+          isinstance(_fb, dict) and _fb.get("unreadable") is True and _fb.get("entries") == [],
+          "returned %r — the browser renders '(empty folder)' for a directory it never read"
+          % (_fb,))
+    check("file browser: ...and not as a path-traversal attempt either",
+          _fb is not None,
+          "None means 'Invalid path' to the route, which is a second wrong statement")
+
+    _sm_core.run_command = lambda *a, **k: ("", "", 0)
+    _fb_empty = _sm_files.browse_dir(NS(id=9401, host="203.0.113.41"), "csgoserver", "cfg")
+    check("file browser: ...while a directory that really IS empty still says so",
+          isinstance(_fb_empty, dict) and not _fb_empty.get("unreadable")
+          and _fb_empty.get("entries") == [],
+          "returned %r — an empty folder is now reported as unreadable" % (_fb_empty,))
+
+    _sm_core.run_command = lambda *a, **k: ("f\t120\tserver.cfg\nd\t0\tlogs\n", "", 0)
+    _fb_full = _sm_files.browse_dir(NS(id=9402, host="203.0.113.42"), "csgoserver", "cfg")
+    check("file browser: ...and a directory with files still lists them (positive control)",
+          len((_fb_full or {}).get("entries") or []) == 2,
+          "listing stopped working: %r" % (_fb_full,))
+
+    # The upload existence check: same silence, same fix. A failed probe read as "nothing there"
+    # and the upload replaced a file the caller had asked not to overwrite.
+    _sm_core.run_command = lambda *a, **k: ("", "SSH command timed out", -1)
+    _up_ok, _up_msg = _sm_files.upload_file(NS(id=9403, host="203.0.113.43"), "csgoserver",
+                                            "cfg", "server.cfg", b"x", overwrite=False)
+    # "already exists" would match BOTH this message and UPLOAD_EXISTS, so it does not
+    # discriminate — assert the sentence that only the unread-probe branch produces.
+    check("upload: a failed existence check does not become 'no file there'",
+          _up_ok is False and "couldn't check" in _up_msg.lower(),
+          "ok=%r msg=%r — the upload went ahead and overwrote a file nobody agreed to replace"
+          % (_up_ok, _up_msg))
+finally:
+    _sm_core.run_command = _fb_saved

@@ -207,7 +207,14 @@ function browse(path){
         icon: e.is_dir?'<i class="bi bi-folder-fill text-warning"></i>':'<i class="bi '+fileIcon(e.name)+'"></i>'
       }));
     });
-    if(!(d.entries||[]).length) l.insertAdjacentHTML('beforeend','<div class="text-secondary small p-3 text-center">(empty folder)</div>');
+    // "(empty folder)" is a statement about the folder. Say it only when the host actually
+    // answered: a read that failed returns no entries either, and the browser used to announce
+    // that as an empty directory — about a folder full of somebody's game files.
+    if(!(d.entries||[]).length){
+      l.insertAdjacentHTML('beforeend', d.unreadable  // nosemgrep
+        ? '<div class="text-warning small p-3 text-center">Could not read this folder — the host did not answer. This is not the same as it being empty.</div>'
+        : '<div class="text-secondary small p-3 text-center">(empty folder)</div>');
+    }
     // Re-highlight the open file if it's in this directory.
     if(curFile){ var open=l.querySelector('[data-path="'+CSS.escape(curFile)+'"]'); if(open) open.classList.add('active'); }
   }).catch(()=>{});
