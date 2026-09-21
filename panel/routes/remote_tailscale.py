@@ -159,7 +159,13 @@ def register(app):
         try:
             new_host, status = remote_migrate_to_tailscale(remote)
             if not new_host:
-                return jsonify({"success": False, "message": "Tailscale is not running on the remote"}), 400
+                # `status` is the REASON when the migration refused, and it was being thrown away
+                # for one hardcoded sentence. The reasons are actionable and different from each
+                # other — tailscaled down, SSH server not enabled, ACL refusing this node/user —
+                # and the operator can only act on the one they actually hit.
+                return jsonify({"success": False, "message": (
+                    status if isinstance(status, str) and status
+                    else "Tailscale is not running on the remote")}), 400
 
             old_host = remote.host
             remote.host = new_host

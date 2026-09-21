@@ -1325,7 +1325,27 @@ def remote_migrate_to_tailscale(server, new_auth_method="tailscale"):
     new_host = status["dns_name"] or (status["tailscale_ip"].split(", ")[0]
                                       if status["tailscale_ip"] else server.host)
 
-    # Safely close port 22 on UFW since tailscale0 is already allowed
+    # Do not burn the bridge until the new one carries weight.
+    #
+    # This closed port 22 and let the caller blank auth_credential — the record's ONLY credential —
+    # on the strength of BackendState == Running. That says tailscaled is up. It says nothing about
+    # whether this node runs Tailscale SSH, and nothing about whether the panel can actually log in
+    # that way. With RunSSH off, or a tailnet ACL that does not permit SSH to this node/user, the
+    # panel had just closed the only door and thrown away the key, with no way back from the UI.
+    #
+    # Both checks already live in this module; neither was called from here.
+    _running, _ssh_enabled = _tailscale_conn_state(server)
+    if not _ssh_enabled:
+        return None, ("Tailscale is running on this host, but its SSH server is not enabled, so "
+                      "the panel would have no way back in once port 22 is closed. Run "
+                      "`tailscale set --ssh` on the host, then try again.")
+    _login_ok, _login_msg = ssh_test_connection(new_host, 22, server.username,
+                                                auth_method="tailscale")
+    if not _login_ok:
+        return None, ("Tailscale SSH did not work from here, so the migration stopped before "
+                      "changing anything: %s" % _login_msg)
+
+    # Verified: the tailnet really is a way in. NOW the public door can close.
     try:
         remote_ufw_close_port_22(server)
     except Exception:
