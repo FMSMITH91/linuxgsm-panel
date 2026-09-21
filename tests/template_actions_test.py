@@ -2349,6 +2349,40 @@ check("rules-count" in _fw_win,
       "firewall: ...and the rule COUNT is cleared too, not left reading 0",
       "the page states a count for a firewall nothing read")
 
+# ── the backups card must not say "none" about a host it could not read ───────────────────────
+# Same family as the firewall page and the cron card: list_game_backups discarded the rc, an
+# unreachable host parsed to [], and the card stated the alarming half of the pair — "nothing is
+# protecting this server" — about a directory it had never reached. The endpoint reports
+# backups_unreadable now, and the card branches on it.
+#
+# The PANEL backup list next door is deliberately untouched: it reads the panel's own data dir,
+# which cannot be unreachable, so an empty list there really does mean none.
+_bk_js = (ROOT / "static" / "js" / "server_files.js").read_text(encoding="utf-8")
+_bk_win = _between(_bk_js, "var tb=document.getElementById('bk-rows');", "// Poll while a backup")
+check(bool(_bk_win),
+      "backups: the card's empty state is where this check thinks it is",
+      "the bk-rows render was not found")
+check("d.backups_unreadable" in _bk_win,
+      "backups: the card asks whether the listing could be READ before saying there are none",
+      "an unreachable host still renders 'No backups yet.'")
+check("'No backups yet.'" in _bk_win,
+      "backups: ...and still says that for a server that genuinely has none",
+      "the real empty case lost its message")
+_bk_py = (ROOT / "panel" / "routes" / "panel_backup.py").read_text(encoding="utf-8")
+check(_bk_py.count('"backups_unreadable"') == 2,
+      "backups: BOTH payloads carry it — the per-server card and the all-servers list",
+      "found %d of the 2 places that list backups"
+      % _bk_py.count('"backups_unreadable"'))
+check("return sid, None" in _bk_py,
+      "backups: ...and the all-servers worker reports a failed read as unknown, not as empty",
+      "its except branch still answers [] for a host it could not reach")
+# The delete path is the one that must never act on a listing it does not have.
+_bk_cron = (ROOT / "panel" / "ops" / "ssh_manager" / "cron.py").read_text(encoding="utf-8")
+_hr = _between(_bk_cron, "def _ensure_backup_headroom", "def run_game_backup")
+check("if backups is None:" in _hr,
+      "backups: the prune-to-make-room path refuses a listing it could not read",
+      "the one path here that DELETES backups still acts on an unknown listing")
+
 passed = sum(1 for c, _, _ in results if c is True)
 failed = sum(1 for c, _, _ in results if c is False)
 skipped = [(name, detail) for c, name, detail in results if c is None]

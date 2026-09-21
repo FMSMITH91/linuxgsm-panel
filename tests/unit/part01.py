@@ -1052,6 +1052,53 @@ try:
           and len(_cron_rc(_CR_TAB.strip(), "", 0)) == len(_cr_jobs),
           "the success path changed shape")
 
+    # ── the backup listing is three answers, not two ────────────────────────────────────────
+    # It discarded the rc, so a host that did not answer parsed to [] and the Backups card said
+    # "No backups yet." about a directory it had never reached — "nothing is protecting this
+    # server" being the alarming half of the pair. The SENTINEL is the other half of the fix: the
+    # command ends in a pipeline through `head`, which exits 0 whatever happened before it.
+    # Measured on the test host — a game user with two archives prints both and then the
+    # sentinel; `sudo -u <missing user>` prints "unknown user" and NO sentinel, with the rc of
+    # the outer shell still 0.
+    def _bk_rc(out, rc):
+        _o = _sm_core.run_command
+        try:
+            _sm_core.run_command = lambda *_a, **_k: (out, "", rc)
+            return _sm_cron.list_game_backups(None, "gm")
+        finally:
+            _sm_core.run_command = _o
+
+    _BKD = _sm_cron._BACKUP_LIST_DONE
+    check("backups list: a host that did not answer reads as UNKNOWN, not as no backups",
+          _bk_rc("", -1) is None,
+          "a failed read still parses to a list, and the card calls that 'No backups yet.'")
+    check("backups list: a run cut short reads as UNKNOWN even when the rc is 0",
+          _bk_rc("", 0) is None,
+          "the trailing `| head` exits 0 whatever happened before it, so rc alone cannot see this")
+    check("backups list: a server with genuinely no backups reads as none",
+          _bk_rc(_BKD + "\n", 0) == [],
+          "the common empty case is being reported as a failure")
+    check("backups list: archives still parse, newest first",
+          [b["name"] for b in (_bk_rc("F\ta.tar.gz\t100\t1000\nF\tb.tar.zst\t200\t2000\n" + _BKD + "\n", 0) or [])]
+          == ["b.tar.zst", "a.tar.gz"],
+          "the success path changed shape")
+    # The sentinel has to be IN the command, or it can never come back and every read reads as
+    # unknown — which would break backups everywhere rather than only mis-wording one card.
+    _bk_cmd = {}
+
+    def _bk_cap(_server, cmd, **_k):
+        _bk_cmd["c"] = cmd
+        return "", "", 0
+    _o_rc = _sm_core.run_command
+    try:
+        _sm_core.run_command = _bk_cap
+        _sm_cron.list_game_backups(None, "gm")
+    finally:
+        _sm_core.run_command = _o_rc
+    check("backups list: the command actually prints the sentinel it is checked for",
+          _BKD in _bk_cmd.get("c", ""),
+          "the check can never be satisfied, so every listing would read as unreadable")
+
     _cr_raw = _cr_jobs[0]["raw"]
     check("cron identity: the browser is handed the line WITHOUT its indentation (the transport strips)",
           _cr_raw == "*/5 * * * * /home/gm/gmodserver monitor", repr(_cr_raw))

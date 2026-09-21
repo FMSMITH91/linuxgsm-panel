@@ -317,7 +317,12 @@ def register(app):
         try:
             backups = list_game_backups(gs.remote, gs.short_name) if gs.remote_id else []
         except Exception:
-            backups = []
+            backups = None
+        # None means the host could not be READ. It used to arrive as [] — same as a server with
+        # no backups yet — and the card said "No backups yet." about a directory it never reached.
+        # Reported separately from the (now empty) list so the totals below stay arithmetic.
+        backups_unreadable = backups is None
+        backups = backups or []
         try:
             disk = backup_disk_info(gs.remote, gs.short_name) if gs.remote_id else {"free": 0, "total": 0}
         except Exception:
@@ -330,6 +335,7 @@ def register(app):
             "schedule": bk.get_game_schedule(gs.id),
             "default": {"interval_days": default["interval_days"], "keep": default["keep"]},
             "backups": backups,
+            "backups_unreadable": backups_unreadable,
             "disk": {"free": disk.get("free", 0), "total": disk.get("total", 0)},
             "est_backup": est,
             "status": _game_backup_status.get(gs.id),
@@ -365,7 +371,7 @@ def register(app):
                 try:
                     return sid, list_game_backups(remote, short)
                 except Exception:
-                    return sid, []
+                    return sid, None        # could not read — NOT "this server has none"
 
             def _bk_disk(item):
                 rid, short = item
@@ -388,7 +394,9 @@ def register(app):
                     for rid, di in ex.map(_bk_disk, list(remote_short.items())):
                         disk_by_remote[rid] = di
             for gs in servers:
-                gb = gb_by_sid.get(gs.id, [])
+                gb = gb_by_sid.get(gs.id)
+                gb_unreadable = gb is None
+                gb = gb or []
                 # A backup being written right now is partial — don't count it toward totals or the
                 # next-size estimate (it would read as a too-small worst case).
                 done = [b for b in gb if not b.get("in_progress")]
@@ -399,6 +407,7 @@ def register(app):
                 rem = gs.remote
                 host_label = "This host" if getattr(rem, "is_local", False) else (rem.name or rem.host or "remote")
                 games.append({"id": gs.id, "name": gs.name, "backups": gb,
+                              "backups_unreadable": gb_unreadable,
                               "status": _game_backup_status.get(gs.id),
                               "schedule": bk.get_game_schedule(gs.id),
                               "host": host_label,

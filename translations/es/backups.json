@@ -9,6 +9,7 @@
   "Backups": "Copias de seguridad",
   "Could not restore.": "No se pudo restaurar.",
   "Could not save": "No se pudo guardar",
+  "Couldn't read this server's backups — the host didn't answer. This is not the same as there being none.": "No se pudieron leer las copias de seguridad de este servidor — el host no respondió. Esto no es lo mismo que no haya ninguna.",
   "Daily": "Diario",
   "Daily 5am": "Diario 5:00",
   "Daily restart": "Reinicio diario",

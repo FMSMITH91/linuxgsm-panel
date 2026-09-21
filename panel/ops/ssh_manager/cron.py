@@ -505,11 +505,20 @@ def delete_cron_job(server, user, old_raw, selfname=None):
     return _core._rewrite_crontab(server, user, "", [], drop_line=old_raw)
 
 
+# Printed LAST by the backup listing, so an answer that was cut short is not read as "none".
+_BACKUP_LIST_DONE = "__LGSMP_BK_DONE__"
+
+
 def list_game_backups(server, user):
     """A game server's LinuxGSM backups (~/lgsm/backup/*.tar.*): [{name, size, created}],
     newest first. Read as the game user; best-effort (empty on error). LinuxGSM compresses with
     zstd when available (.tar.zst), else gzip (.tar.gz) — match all archive types like LinuxGSM's
-    own tooling does, not just .tar.gz."""
+    own tooling does, not just .tar.gz.
+
+    Returns None if the host could not be READ, which is not the same as a server with no backups.
+    Both used to come back as [], and the Backups card said "No backups yet." about a directory it
+    had never reached. Every caller has to choose: the two that size a new backup treat unknown as
+    "no estimate" (they already did), and the one that DELETES to make room must not act on it."""
     bdir = "/home/%s/lgsm/backup" % user
     # Also report the backup.lock's start time (LinuxGSM holds it only while a backup runs, and
     # writes the archive under its final name while it's still growing). We report the lock's mtime
@@ -520,8 +529,14 @@ def list_game_backups(server, user):
            'printf "F\\t%%s\\t%%s\\t%%s\\n" "$(basename "$f")" "$(stat -c%%s "$f")" "$(stat -c%%Y "$f")"; '
            'done; '
            'find /home/%s -maxdepth 4 -name "*backup.lock" -mmin -60 -printf "LOCK\\t%%T@\\n" '
-           '2>/dev/null | head -1') % (bdir, user)
-    out, _, _ = _core.run_command(server, f"sudo -u {user} bash -c {_core._quote(cmd)}", timeout=20, sudo=False)
+           '2>/dev/null | head -1; printf "%%s\\n" ' + _BACKUP_LIST_DONE) % (bdir, user)
+    out, _, rc = _core.run_command(server, f"sudo -u {user} bash -c {_core._quote(cmd)}", timeout=20, sudo=False)
+    # A host that did not answer prints nothing, and so does a server with no backups yet.
+    # rc is what tells them apart, and it was discarded. The SENTINEL is the other half, the
+    # same shape _looks_installed uses: `cmd` ends in a pipeline through `head`, which exits 0
+    # whatever happened before it, so rc alone cannot see a run that was cut short.
+    if rc != 0 or _BACKUP_LIST_DONE not in (out or ""):
+        return None
     res = []
     lock_mtime = None
     for line in (out or "").splitlines():
@@ -665,7 +680,13 @@ def _ensure_backup_headroom(server, user, keep):
     on "not enough disk space". Normally backups prune AFTER the run (peak = keep+1); this only
     kicks in when free disk is below ~1.15× the expected new-backup size. Returns a short note."""
     try:
-        backups = list_game_backups(server, user)   # newest first
+        backups = list_game_backups(server, user)   # newest first, or None if unreadable
+        if backups is None:
+            # This function DELETES backups. A listing that could not be read tells us
+            # nothing about what is on the host, and "nothing to prune" is the only safe
+            # reading — the same stance the `total > 0` disk check below takes, for the
+            # same reason, and that one was a bug here once already.
+            return ""
         if not backups:
             return ""   # first backup — nothing to prune; let LinuxGSM/disk decide
         # Estimate the next backup from the LARGEST existing one (worst case), ignoring 0-byte
