@@ -34,7 +34,13 @@ def register(app):
         if not _full_backup_lock.acquire(blocking=False):
             return
         try:
-            keep = bk.get_full_settings()["keep"]
+            # The keep is resolved PER SERVER inside the loop below, not once out here. A server
+            # can carry its own retention override — the schedule route writes it,
+            # get_game_schedule resolves "its override where set, else the global default", the
+            # API and the disk projection in the UI both show it — and pruning is an unconditional
+            # `rm` of everything past `keep`. Reading the global value once meant a full backup
+            # deleted archives the operator had explicitly said to retain, on every server that
+            # had raised its own number. Only the scheduled ticker was getting this right.
             ok_n = fail_n = skip_n = 0
             failures = []      # every failure, for the recorded summary
             alertable = []     # the subset whose servers aren't muted by a tag, for the alert
@@ -46,7 +52,8 @@ def register(app):
                 for gs in servers:
                     try:
                         ok, reason, was_skipped = run_game_backup(
-                            gs.remote, gs.short_name, gs.lgsm_name, keep,
+                            gs.remote, gs.short_name, gs.lgsm_name,
+                            bk.get_game_schedule(gs.id)["keep"],
                             game_type=gs.game_type, port=gs.port, force=force)
                         if was_skipped:
                             skip_n += 1
@@ -164,7 +171,10 @@ def register(app):
         # off to the worker (config read throws, thread can't start), release it ourselves — a leaked
         # lock would wedge ALL backups until a panel restart.
         try:
-            keep = bk.get_full_settings()["keep"]
+            # This server's own retention, not the global default — see the comment in
+            # _run_full_backup. "Back up now" pruning to the global number deleted archives the
+            # per-server override said to keep.
+            keep = bk.get_game_schedule(server_id)["keep"]
             gname = gs.name   # plain string for logging; the ORM objects are re-fetched in the worker
             _game_backup_status[server_id] = {"running": True, "ok": None, "msg": "", "ts": time.time()}
             _start_backup_worker(server_id, gname, keep, force)
