@@ -127,7 +127,12 @@
       <div class="card-body">
         <div class="d-flex gap-2 flex-wrap">
           <button class="btn btn-sm btn-outline-secondary" data-action="checkUpdates"><i class="bi bi-search"></i> Check</button>
-          <button class="btn btn-sm btn-outline-primary" data-action="runUpdates"><i class="bi bi-download"></i> Install updates</button>
+          {# Starts DISABLED. The card below is filled from the last check, and renderUpdates
+             enables this the moment that check says there is something to install. Rendering it
+             live when the panel already knows the host is up to date offers an action whose only
+             outcome is a progress modal that says "0 upgraded". #}
+          <button class="btn btn-sm btn-outline-primary" id="btn-install-updates" data-action="runUpdates" disabled
+                  title="Checking for updates…"><i class="bi bi-download"></i> Install updates</button>
         </div>
         <div class="small mt-2 text-secondary" id="update-info"></div>
       </div>
