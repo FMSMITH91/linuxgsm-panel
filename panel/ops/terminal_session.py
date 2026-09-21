@@ -268,6 +268,9 @@ class Session:
             try:
                 os.close(fd)
             except OSError:
+                # EBADF: the pump reached it between the join timing out and this line. That is
+                # the outcome this branch wanted anyway — the descriptor is closed either way and
+                # there is nothing left to do about it.
                 pass
 
     def _close_client(self):
@@ -327,6 +330,9 @@ def _pump_fd(sess):
         try:
             os.close(fd)
         except OSError:
+            # EBADF: a teardown whose join timed out closed it from the caller first. Closing it
+            # twice is the thing to avoid — a third party can already hold this number — and that
+            # has been avoided by the time this raises.
             pass
     sess.close("the shell exited")
 
@@ -385,6 +391,29 @@ def open_session(sid, server, is_local, user_key, on_output, on_exit, cols=80, r
     return sess
 
 
+def _login_shell():
+    """This account's own login shell, from its passwd entry.
+
+    It read os.environ["SHELL"] before. Under systemd that variable is not set at all, so a root
+    install always got the /bin/bash fallback no matter what shell the account actually has — and
+    on a per-user install it got whatever the launching session happened to export, which is the
+    environment's answer rather than the account's.
+
+    A non-interactive shell is rejected: `useradd --system` gives /usr/sbin/nologin by default
+    (this installer passes --shell /bin/bash, but an operator who created the account themselves
+    may not have), and spawning nologin produces a terminal that prints one line and exits.
+    """
+    shell = ""
+    try:
+        import pwd
+        shell = pwd.getpwuid(os.geteuid()).pw_shell or ""
+    except Exception:
+        _log.debug("could not read the account's passwd entry", exc_info=True)
+    if os.path.basename(shell) in ("nologin", "false", "sync", ""):
+        return "/bin/bash"
+    return shell
+
+
 def _open_local(sess, cols, rows):
     """The panel user's own login shell, under a pty.
 
@@ -393,12 +422,13 @@ def _open_local(sess, cols, rows):
     grant is for.
     """
     master, slave = pty.openpty()
-    shell = os.environ.get("SHELL") or "/bin/bash"
+    shell = _login_shell()
     env = dict(os.environ)
     env["TERM"] = "xterm-256color"
     # A login shell, so the operator gets their own profile rather than the service unit's stripped
     # environment. start_new_session gives it its own process group for the SIGHUP on teardown.
-    proc = subprocess.Popen(  # nosec B603 - fixed argv, no shell=True, no caller input
+    proc = subprocess.Popen(  # nosec B603  # nosemgrep - argv list, no shell=True; argv[0] is
+        # this account's own passwd shell, never caller input and never read from the environment.
         [shell, "-l"], stdin=slave, stdout=slave, stderr=slave,
         start_new_session=True, env=env, cwd=os.path.expanduser("~"))
     os.close(slave)
@@ -423,26 +453,42 @@ def _open_paramiko(sess, server, cols, rows):
     sess._pump.start()
 
 
+def _ssh_argv(server):
+    """The ssh command line for a tailscale remote. Pure, so the property below can be tested.
+
+    ssh has no `--` to end its options, so an argv element that BEGINS with `-` is read as one —
+    and `server.host` is stored data. HOST_RE permits a leading dash (`-o` and `--` both match
+    it), so the thing that makes this safe is not the host pattern: it is that the destination is
+    always `user@host`, and LINUX_USER_RE forces the username to start with a letter or
+    underscore. The element therefore never begins with `-` whatever the host says.
+
+    That is a property worth pinning rather than asserting in a comment, so tests/unit drives this
+    function with hostile hosts and checks every element.
+    """
+    # The SAME resolver the non-interactive tailscale transport uses. A second copy of MagicDNS
+    # handling would be one more place to get a hostname subtly wrong.
+    from panel.ops.ssh_manager import _core
+    user = getattr(server, "username", "") or "root"
+    host = _core._resolve_ts_host(server)
+    return ["ssh", "-tt",
+            "-o", "StrictHostKeyChecking=accept-new",
+            "-o", "ConnectTimeout=20",
+            "-p", str(int(getattr(server, "port", 22) or 22)),
+            "%s@%s" % (user, host)]
+
+
 def _open_tailscale(sess, server, cols, rows):
     """Tailscale remotes: tailscaled holds the credentials, so this is the system ssh client.
 
     `-tt` forces a pty even though our stdin is not one from ssh's point of view, which is what
     makes an interactive shell possible at all here.
     """
-    from panel.ops.ssh_manager import _core
-    # The SAME resolver the non-interactive tailscale transport uses. A second copy of MagicDNS
-    # handling would be one more place to get a hostname subtly wrong.
-    host = _core._resolve_ts_host(server)
-    user = getattr(server, "username", "") or "root"
     master, slave = pty.openpty()
     env = dict(os.environ)
     env["TERM"] = "xterm-256color"
-    argv = ["ssh", "-tt",
-            "-o", "StrictHostKeyChecking=accept-new",
-            "-o", "ConnectTimeout=20",
-            "-p", str(int(getattr(server, "port", 22) or 22)),
-            "%s@%s" % (user, host)]
-    proc = subprocess.Popen(  # nosec B603 - argv built here from validated fields, no shell
+    argv = _ssh_argv(server)
+    proc = subprocess.Popen(  # nosec B603  # nosemgrep - see _ssh_argv: a list, no shell, and the
+        # one element carrying stored data cannot be read by ssh as an option.
         argv, stdin=slave, stdout=slave, stderr=slave, start_new_session=True, env=env)
     os.close(slave)
     sess._fd = master

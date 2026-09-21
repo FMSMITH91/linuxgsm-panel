@@ -3508,3 +3508,84 @@ check("install.sh: PANEL_TERMINAL_SUDO=0 removes the grant again",
       _rc6 == 0 and not os.path.exists(_grant_f6),
       "rc=%s still present: %r" % (_rc6, _out6))
 _shutil.rmtree(_sud_dir6, ignore_errors=True)
+
+# ── the terminal's ssh argv cannot be turned into ssh OPTIONS ─────────────────────────────────
+# ssh has no `--` to end its options, so an argv element that begins with `-` is read as one, and
+# `server.host` is stored data an admin types. HOST_RE does NOT stop this on its own — `-o` and
+# `--` both match it. What makes it safe is that the destination is always `user@host` and
+# LINUX_USER_RE forces the username to start with a letter or underscore, so the element can never
+# begin with a dash. That is a property, not a comment, so it is driven here with hostile hosts.
+_tsm6 = _il6.import_module("panel.ops.terminal_session")
+
+
+class _HostileRemote6:
+    username = "root"
+    port = 22
+    auth_method = "tailscale"
+
+    def __init__(self, host):
+        self.host = host
+
+
+# _resolve_ts_host reaches for tailscale's MagicDNS domain for a bare name; stub it so this test
+# asks about argv construction and nothing else (and never touches the network).
+_core6 = _il6.import_module("panel.ops.ssh_manager._core")
+_real_resolve6 = _core6._resolve_ts_host
+_core6._resolve_ts_host = lambda srv: srv.host
+try:
+    _hostile6 = ["-oProxyCommand=id", "--", "-o", "-F/tmp/evil", "-E", "1.2.3.4", "box.ts.net"]
+    _bad6 = []
+    for _h6 in _hostile6:
+        _argv6 = _tsm6._ssh_argv(_HostileRemote6(_h6))
+        # Everything after the fixed option block is data. None of it may look like an option.
+        _tail6 = _argv6[len(_argv6) - 1:]
+        if any(_e.startswith("-") for _e in _tail6):
+            _bad6.append((_h6, _argv6))
+        if not _argv6[-1].startswith("root@"):
+            _bad6.append((_h6, _argv6))
+    check("terminal: a hostile remote host cannot become an ssh option", not _bad6,
+          "ssh would parse the destination as an option for: %r" % (_bad6,))
+    check("terminal: ...and the check above actually built something",
+          _tsm6._ssh_argv(_HostileRemote6("box.ts.net"))[0] == "ssh",
+          "argv[0] is not ssh — this gate is asking about the wrong thing")
+    # The port is stringified through int(), so a non-numeric port cannot add an argument either.
+    _p6 = _HostileRemote6("box.ts.net")
+    _p6.port = "22; rm -rf /"
+    try:
+        _tsm6._ssh_argv(_p6)
+        _port_safe6 = False
+    except (TypeError, ValueError):
+        _port_safe6 = True
+    check("terminal: ...and a non-numeric port is rejected rather than passed through",
+          _port_safe6, "a port that is not a number reached the ssh command line")
+finally:
+    _core6._resolve_ts_host = _real_resolve6
+
+# ── the local shell comes from the ACCOUNT, not the environment ───────────────────────────────
+# It read os.environ["SHELL"], which systemd does not set — so a root install always took the
+# /bin/bash fallback whatever shell the account had. And a --system account may legitimately have
+# /usr/sbin/nologin, which spawns a terminal that prints one line and exits.
+import pwd as _pwd6
+_real_getpw6 = _pwd6.getpwuid
+
+
+class _FakePw6:
+    def __init__(self, sh): self.pw_shell = sh
+
+
+try:
+    _pwd6.getpwuid = lambda uid: _FakePw6("/usr/sbin/nologin")
+    check("terminal: a nologin account falls back to a real shell",
+          _tsm6._login_shell() == "/bin/bash",
+          "the terminal would spawn nologin: %r" % (_tsm6._login_shell(),))
+    _pwd6.getpwuid = lambda uid: _FakePw6("/bin/zsh")
+    check("terminal: ...and an ordinary account gets its own shell",
+          _tsm6._login_shell() == "/bin/zsh", "got %r" % (_tsm6._login_shell(),))
+    _pwd6.getpwuid = lambda uid: _FakePw6("")
+    check("terminal: ...and an empty passwd shell falls back too",
+          _tsm6._login_shell() == "/bin/bash", "got %r" % (_tsm6._login_shell(),))
+finally:
+    _pwd6.getpwuid = _real_getpw6
+check("terminal: the shell is not read from the environment",
+      "environ.get(\"SHELL\")" not in _modsrc("panel/ops/terminal_session.py"),
+      "$SHELL is back — systemd does not set it, so this silently ignores the account's shell")
