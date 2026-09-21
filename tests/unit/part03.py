@@ -2269,3 +2269,42 @@ try:
           "a rule was added to a firewall that reported itself off")
 finally:
     (_sm_core.run_command, _sm_core.run_privileged, _sm_hosts.remote_check_tailscale) = _ts_saved
+
+# ── a gamedig query that FAILED is not a server with nobody on it ────────────────────────────
+# gamedig writes its failure as JSON on stdout ({"error":"Failed all 1 attempts"}), so `.players`
+# is null — and jq reports the length of null as 0. `jq -r '.players|length'` therefore turned
+# every failed query into a confident "0 players". That is the one answer player_count must never
+# invent: mod_restart_decision, _host_idle_state and the reboot-when-empty poller all read 0 as
+# "nobody is on, it is safe to act", so a stopped, firewalled or GSLT-less server authorised the
+# same actions an empty one does. player_slots has guarded this from the start with the same
+# `ok:(.players|type=="array")` test; player_count never got it.
+_pcs = _sm_cron.player_count
+_pc_saved = _sm_core.run_command
+try:
+    _sm_core.run_command = lambda *a, **k: ('{"c":0,"ok":false}', "", 0)
+    check("player count: a FAILED gamedig query is unknown, not zero",
+          _sm_cron.player_count(NS(id=9500), "csgoserver", "csgo", 27015, "csgo") is None,
+          "a query that failed was reported as a confirmed-empty server, which is what "
+          "restart-when-empty and the reboot poller act on")
+    _sm_core.run_command = lambda *a, **k: ('{"c":0,"ok":true}', "", 0)
+    check("player count: ...while a server that ANSWERED zero really is empty",
+          _sm_cron.player_count(NS(id=9501), "csgoserver", "csgo", 27015, "csgo") == 0,
+          "a genuinely empty server now reads as unknown, which blocks the empty-only actions")
+    _sm_core.run_command = lambda *a, **k: ('{"c":7,"ok":true}', "", 0)
+    check("player count: ...and a populated one reports its count (positive control)",
+          _sm_cron.player_count(NS(id=9502), "csgoserver", "csgo", 27015, "csgo") == 7,
+          "counting stopped working, so the checks above would pass with the feature removed")
+    _sm_core.run_command = lambda *a, **k: ("", "ssh: connect to host ... timed out", -1)
+    check("player count: ...and an unread probe is unknown too",
+          _sm_cron.player_count(NS(id=9503), "csgoserver", "csgo", 27015, "csgo") is None,
+          "an empty answer from a dropped connection was parsed as a reading")
+    # The filter the host actually runs has to carry the ok flag, or the guard above is decided
+    # by a field nothing computes.
+    _pc_cmds = []
+    _sm_core.run_command = lambda s, c, **k: (_pc_cmds.append(c), ('{"c":0,"ok":true}', "", 0))[1]
+    _sm_cron.player_count(NS(id=9504), "csgoserver", "csgo", 27015, "csgo")
+    check("player count: ...and the jq filter it sends asks whether players is an ARRAY",
+          _pc_cmds and 'type==' in _pc_cmds[-1] and "players" in _pc_cmds[-1],
+          "the command sent was %r" % (_pc_cmds[-1:] or None,))
+finally:
+    _sm_core.run_command = _pc_saved
