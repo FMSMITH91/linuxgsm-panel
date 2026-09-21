@@ -94,7 +94,12 @@ function actionWithPlayerCheck(action, btn) {
   btn.disabled = true; btn.innerHTML = '<span class="spinner-border spinner-border-sm"></span>';
   fetch(MOUNT + '/api/server/' + serverId + '/players').then(r => r.json()).then(function(d){
     btn.disabled = false; btn.innerHTML = orig;  // nosemgrep
-    var n = (d && d.players) || 0;   // null/unknown -> treat as none (show a plain in-app confirm)
+    // null is "could not read", not "nobody is on" — the route returns it for a failed query and
+    // for a game that cannot be queried at all. Folded into 0 it produced a plain confirm, and a
+    // restart that disconnected players the panel had just failed to count. The fetch-failed
+    // branch below already says this; the unreadable-answer branch did not.
+    var n = (d && typeof d.players === 'number') ? d.players : null;
+    if (n === null) { confirmActionDialog(action, btn, "(couldn't check who's online)"); return; }
     if (!n) { confirmActionDialog(action, btn); return; }
     actionPlayersDialog(action, n, btn);
   }).catch(function(){

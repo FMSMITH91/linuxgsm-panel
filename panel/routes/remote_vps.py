@@ -496,19 +496,34 @@ def register(app):
     @permission_required(MANAGE_REMOTES)
     def api_remote_players(remote_id):
         """Players connected across ALL installed game servers on this host, so a reboot can warn
-        before disconnecting everyone. Returns {total, busy:[{name, players}]}."""
+        before disconnecting everyone. Returns {total, busy:[{name, players}], unknown:[{name}]}.
+
+        `unknown` is the whole point of the third field: player_count returns None both for "the
+        query failed" and "this game cannot be queried", and a None folded into the busy check is
+        a server reported as EMPTY. Verified on the test box — an online server the panel could
+        not read answered {"busy":[],"total":0}, and the reboot confirm then said nothing about
+        it and disconnected whoever was on. Servers the panel believes are STOPPED are not listed:
+        they are unreadable because nothing is running, which is not a warning.
+
+        query_type is passed. Without it a server whose game has no built-in gamedig type and an
+        operator-set override — the only way those games are queryable at all — was unreadable
+        here while the Players panel read it fine."""
         remote = get_remote(remote_id)
-        busy = []
+        busy, unknown = [], []
         total = 0
         for gs in GameServer.query.filter_by(remote_id=remote.id, installed=True).all():
             try:
-                pc = sm_player_count(gs.remote, gs.short_name, gs.game_type, gs.port)
+                pc = sm_player_count(gs.remote, gs.short_name, gs.game_type, gs.port, gs.query_type)
             except Exception:
                 pc = None
             if pc and pc > 0:
                 busy.append({"name": gs.name, "players": pc})
                 total += pc
-        return jsonify({"total": total, "busy": busy})
+            elif pc is None and (gs.status or "") != "offline":
+                unknown.append({"name": gs.name,
+                                "queryable": bool(sm_is_player_queryable(gs.game_type,
+                                                                        gs.query_type))})
+        return jsonify({"total": total, "busy": busy, "unknown": unknown})
 
     @app.route("/api/remote/<int:remote_id>/reboot-required")
     @login_required
