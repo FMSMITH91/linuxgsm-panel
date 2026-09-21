@@ -81,4 +81,38 @@ jobs:
           # snapshot/health-check/rollback — also means the deploy validates the CURRENT commit's
           # updater, not the previous one.
           ssh -o StrictHostKeyChecking=accept-new -o ConnectTimeout=20 \
-            "$U@$DEPLOY_HOST" 'cd ~/linuxgsm-panel && git fetch --quiet origin main && git checkout origin/main -- install.sh && PANEL_NO_UPGRADE=1 bash install.sh'
+            "$U@$DEPLOY_HOST" 'bash -s' <<'REMOTE'
+          set -eu
+          # WHERE the panel is, asked of the host instead of assumed.
+          #
+          # install.sh supports two service models: a per-user install under the invoking user's
+          # home (systemctl --user), and a ROOT install that runs as the dedicated 'lgsmpanel'
+          # service user out of ITS home (a system unit). This step hardcoded the first —
+          # `cd ~/linuxgsm-panel` — so the day a host was converted to the hardened root model the
+          # deploy started failing on every single run, with `cd: No such file or directory`, and
+          # kept failing 62 times before anyone read the log. The unit knows where it lives; ask it.
+          PD="$(systemctl show -p WorkingDirectory --value linuxgsm-panel 2>/dev/null || true)"
+
+          if [ -n "${PD}" ] && sudo -n test -d "${PD}"; then
+              # System install. The service user's home is 0750, so the deploy user cannot even
+              # stat the checkout — every read here goes through sudo. The git work runs AS THE
+              # OWNER, not as root: root on a repo it does not own trips git's safe.directory.
+              OWNER="$(sudo -n stat -c %U "${PD}")"
+              echo "System install at ${PD} (service user ${OWNER})"
+              sudo -n -u "${OWNER}" git -C "${PD}" fetch --quiet origin main
+              sudo -n -u "${OWNER}" git -C "${PD}" checkout origin/main -- install.sh
+              sudo -n env PANEL_NO_UPGRADE=1 bash "${PD}/install.sh"
+          elif [ -d "${HOME}/linuxgsm-panel" ]; then
+              echo "Per-user install at ${HOME}/linuxgsm-panel"
+              cd "${HOME}/linuxgsm-panel"
+              git fetch --quiet origin main
+              git checkout origin/main -- install.sh
+              PANEL_NO_UPGRADE=1 bash install.sh
+          else
+              echo "No panel install found on this host, so there was nothing to deploy to." >&2
+              echo "  - the linuxgsm-panel unit reported WorkingDirectory='${PD}'" >&2
+              echo "  - and there is no ${HOME}/linuxgsm-panel" >&2
+              echo "A system install also needs this account to have passwordless sudo." >&2
+              exit 1
+          fi
+          REMOTE
