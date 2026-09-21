@@ -1074,12 +1074,21 @@ def remote_bootstrap_vps(server, set_timezone="UTC", enable_ufw=True, install_lg
 
     # ── 7. Create swap if none exists ──
     emit("Ensuring swap space exists")
-    swap_out, _, _ = _core.run_command(server, "swapon --show | wc -l", timeout=10)
-    if swap_out.strip() == "0":
-        _core.run_privileged(server, "create-swapfile", [], timeout=60, merge_stderr=False)
-        note("2G swap file created")
+    # `== "0"` alone is an unread probe reported as "Swap already present": run_command returns
+    # ("", "...timed out", -1) rather than raising, and "" is not "0", so a host that never
+    # answered was recorded as having swap and never got any. Read the rc and require a NUMBER.
+    swap_out, _, _swap_rc = _core.run_command(server, "swapon --show | wc -l", timeout=10)
+    _swap_txt = (swap_out or "").strip()
+    if _swap_rc == 0 and _swap_txt.isdecimal():
+        if _swap_txt == "0":
+            _core.run_privileged(server, "create-swapfile", [], timeout=60, merge_stderr=False)
+            note("2G swap file created")
+        else:
+            note("Swap already present")
     else:
-        note("Swap already present")
+        # Not "no swap" — unknown. Creating one anyway on a host that has some would waste 2G of
+        # disk on the very box whose disk we could not read, so say so and leave it.
+        note("Could not check for swap on this host — left alone. Check it from the host's page.")
 
     # ── 8. Disable unnecessary services ──
     emit("Disabling unnecessary services")
@@ -1318,11 +1327,20 @@ def remote_bootstrap_tailscale(server, auth_key="", enable_ssh=True, advertise_r
     if rc != 0:
         return False, f"Tailscale auth failed: {err or out[-200:]}", "\n".join(log)
 
-    # 3. Enable UFW for Tailscale if UFW is active
-    ufw_out, _, _ = _core.run_privileged(server, "ufw-status", ["plain"], timeout=10)
-    if firewall._ufw_is_active(ufw_out):
+    # 3. Enable UFW for Tailscale if UFW is active — or if we could not tell.
+    #
+    # _ufw_is_active("") is False, and an unread status is the ordinary way to get "". Skipping
+    # the allow on a host whose firewall IS active is how the panel loses the tailnet it just
+    # brought up: the rule is what keeps tailscale0 reachable. `ufw allow in on tailscale0` is
+    # idempotent and does nothing at all while UFW is inactive, so adding it on an unknown
+    # answer costs nothing and not adding it can cost the host.
+    ufw_out, _, _ufw_rc = _core.run_privileged(server, "ufw-status", ["plain"], timeout=10)
+    _ufw_known = _ufw_rc == 0 and bool((ufw_out or "").strip())
+    if firewall._ufw_is_active(ufw_out) or not _ufw_known:
         _core.run_privileged(server, "ufw-allow-iface", ["tailscale0"], timeout=15)
-        log.append("UFW: allowed tailscale0 interface")
+        log.append("UFW: allowed tailscale0 interface"
+                   if _ufw_known else
+                   "UFW: status could not be read — allowed tailscale0 anyway (no-op if UFW is off)")
 
     # 4. Get status
     status = remote_check_tailscale(server)

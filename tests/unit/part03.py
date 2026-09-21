@@ -2181,3 +2181,91 @@ try:
           % (_up_ok, _up_msg))
 finally:
     _sm_core.run_command = _fb_saved
+
+# ── two more bootstrap probes that answered from a read that never happened ──────────────────
+# Same shape as the reboot probe beside them: run_command returns ("", "...timed out", -1) and
+# does not raise, so the answer a failed read produces is whatever `""` happens to satisfy.
+_sw_saved = (_sm_core.run_command, _sm_core.run_privileged, _sm_core.write_root_file,
+             _sm_core.create_game_user, _sm_core.is_local_server, _sm_core.close_connection,
+             _sm_hosts._wait_for_reboot, _sm_core._wait_for_dpkg_lock)
+try:
+    _sw_priv = []
+    _sm_core.is_local_server = lambda s: False
+    _sm_core.run_privileged = lambda s, verb, args=None, **k: (_sw_priv.append(verb), ("", "", 0))[1]
+    _sm_core.write_root_file = lambda *a, **k: ("", "", 0)
+    _sm_core.create_game_user = lambda *a, **k: ("", "", 0)
+    _sm_core.close_connection = lambda *a, **k: None
+    _sm_core._wait_for_dpkg_lock = lambda *a, **k: True
+    _sm_hosts._wait_for_reboot = lambda *a, **k: True
+
+    def _sw_go(swap_answer):
+        _sw_priv.clear()
+
+        def _run(server, cmd, **k):
+            if "swapon" in cmd:
+                return swap_answer
+            if "reboot-required" in cmd:
+                return ("NO\n", "", 0)
+            return ("", "", 0)
+        _sm_core.run_command = _run
+        _ok, _msg, _log = _sm_hosts.remote_bootstrap_vps(
+            NS(id=9200, host="203.0.113.20", auth_method="key"), set_timezone="", enable_ufw=False,
+            install_lgsm_deps=False, username="", install_fail2ban=False, do_reboot=False)
+        return "create-swapfile" in _sw_priv, _log
+
+    _made, _log = _sw_go(("", "ssh: connect to host ... timed out", -1))
+    check("bootstrap: a swap probe that never answered is not reported as 'swap already present'",
+          "Swap already present" not in _log,
+          "a host that never answered was recorded as having swap, and never got any")
+    check("bootstrap: ...it says the check could not be read instead",
+          "Could not check for swap" in _log, _log[-200:])
+    check("bootstrap: ...and does not blind-create a 2G file on a disk it could not read",
+          not _made, "swap was created on an unknown host")
+    _made, _log = _sw_go(("0\n", "", 0))
+    check("bootstrap: ...while a host that really has none gets one (positive control)",
+          _made and "2G swap file created" in _log,
+          "swap creation stopped working, so the checks above would pass with the step removed")
+    _made, _log = _sw_go(("2\n", "", 0))
+    check("bootstrap: ...and a host that already has some is left alone",
+          not _made and "Swap already present" in _log, _log[-200:])
+finally:
+    (_sm_core.run_command, _sm_core.run_privileged, _sm_core.write_root_file,
+     _sm_core.create_game_user, _sm_core.is_local_server, _sm_core.close_connection,
+     _sm_hosts._wait_for_reboot, _sm_core._wait_for_dpkg_lock) = _sw_saved
+
+# ── and the tailscale bring-up must not skip the tailscale0 allow on an unread firewall ──────
+# _ufw_is_active("") is False, so an unread `ufw status` skipped `ufw allow in on tailscale0` —
+# on a host whose firewall may well be active, right after moving its access onto the tailnet.
+# The rule is a no-op while UFW is off, so an unknown answer must add it.
+_ts_saved = (_sm_core.run_command, _sm_core.run_privileged, _sm_hosts.remote_check_tailscale)
+try:
+    _ts_priv = []
+    _sm_hosts.remote_check_tailscale = lambda s: {"running": True, "tailscale_ip": "100.64.0.5",
+                                                  "dns_name": "h.tail.ts.net", "installed": True}
+    _sm_core.run_command = lambda *a, **k: ("", "", 0)
+
+    def _ts_go(ufw_answer):
+        _ts_priv.clear()
+
+        def _priv(server, verb, args=None, **k):
+            _ts_priv.append((verb, tuple(args or ())))
+            if verb == "ufw-status":
+                return ufw_answer
+            return ("", "", 0)
+        _sm_core.run_privileged = _priv
+        _sm_hosts.remote_bootstrap_tailscale(NS(id=9201, host="203.0.113.21",
+                                                 auth_method="key"), auth_key="tskey-probe")
+        return any(v == "ufw-allow-iface" and a[:1] == ("tailscale0",) for v, a in _ts_priv)
+
+    check("tailscale: an unread ufw status still allows tailscale0",
+          _ts_go(("", "ssh: connect to host ... timed out", -1)),
+          "the allow was skipped on a firewall nobody could read — if it is active, the tailnet "
+          "the panel just moved onto is blocked")
+    check("tailscale: ...and an ACTIVE firewall still gets it (positive control)",
+          _ts_go(("Status: active\n", "", 0)),
+          "the allow stopped happening at all, so the check above proves nothing")
+    check("tailscale: ...while a firewall that is genuinely off is left alone",
+          not _ts_go(("Status: inactive\n", "", 0)),
+          "a rule was added to a firewall that reported itself off")
+finally:
+    (_sm_core.run_command, _sm_core.run_privileged, _sm_hosts.remote_check_tailscale) = _ts_saved
