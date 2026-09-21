@@ -578,7 +578,15 @@ def register(app, supervise):
         remote = gs.remote
         if request.method == "GET":
             try:
-                mounted = gmod_current_mounts(remote, gs.short_name) or []
+                # `or []` collapsed the THIRD answer into the second. gmod_current_mounts
+                # returns a list, [] for "mounts nothing", and None for "the mount state could
+                # not be read" — its docstring calls that distinction the whole point. Collapsed,
+                # a failed read painted every checkbox unticked, i.e. "this server mounts
+                # nothing"; applying that card writes exactly the visible selection, so an empty
+                # one unmounts everything. The uninstall worker 33 lines above already guards the
+                # same call for the same reason.
+                _mounts = gmod_current_mounts(remote, gs.short_name)
+                mounted = _mounts or []
                 cu = detect_content_user(remote, tuple(GMOD_CONTENT_GAMES))
                 present = set((cu or {}).get("present", {}))
                 games = [{"key": k, "label": GMOD_CONTENT_GAMES[k][0], "size": GMOD_CONTENT_SIZES.get(k, ""),
@@ -590,6 +598,9 @@ def register(app, supervise):
                 content_path = ("/home/%s/serverfiles" % cu["user"]) if cu else "/home"
                 disk_free, disk_total = path_disk_free(remote, content_path)
                 return jsonify({"games": games, "mounted": mounted,
+                                # False = the host did not answer. The card must not offer an
+                                # Apply built on ticks it could not read.
+                                "mounts_readable": _mounts is not None,
                                 "disk_free": disk_free, "disk_total": disk_total,
                                 "job": st if (st and st.get("status") == "running") else None})
             except Exception:
@@ -604,6 +615,15 @@ def register(app, supervise):
             return jsonify({"success": True, "games": sel,
                             "message": "Removing content from the host — this frees disk for every GMod "
                                        "server here. Restart affected servers afterwards."})
+        # Refuse the write when the CURRENT mounts cannot be read, whatever the page sent.
+        # gmod_mount_setup rewrites mount.cfg to exactly this selection, so applying a card that
+        # was built from an unreadable state silently unmounts whatever the server really had.
+        # Guarding here and not only in the UI: this is the request that does the damage.
+        if gmod_current_mounts(remote, gs.short_name) is None:
+            return jsonify({"success": False, "message": (
+                "Couldn't read this server's current mounts, so the panel won't rewrite them — "
+                "applying now could unmount content the server already has. Check the host is "
+                "reachable and reload this card.")}), 409
         _bg_gmod_content_apply(gs.id, remote.id, gs.short_name, sel)
         log_action(current_user, "gmod_content", target=gs.name, detail=(",".join(sel) or "(none)"))
         return jsonify({"success": True, "games": sel,

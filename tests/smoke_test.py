@@ -6903,6 +6903,60 @@ try:
     check("deactivation: the epoch-cookie session stops working once deactivated",
           _after_m != 200, "status=%s" % _after_m)
 
+    # ── "the mounts could not be read" is not "this server mounts nothing" ────────────────────
+    # gmod_current_mounts has three answers and its docstring calls the third the whole point:
+    # a list, [] for "mounts nothing", and None for "could not be read". The status route did
+    # `or []`, so a failed read painted every checkbox unticked — and Apply rewrites mount.cfg to
+    # exactly the visible ticks, so applying that card unmounts everything the server had. The
+    # uninstall worker in the same file already guards the identical call for the identical
+    # reason.
+    # Stubbed on the ROUTE module: server_files.py imports these BY NAME, so a stub on the
+    # ssh_manager submodule is never seen. detect_content_user and path_disk_free are stubbed too
+    # — they SSH, and against this suite's unreachable host they raise, which sends the whole
+    # handler into its `except` and returns {"error": ...}. That is what the first version of
+    # this test actually measured.
+    import panel.routes.server_files as _gm_mod
+
+    _gm_saved = (_gm_mod.gmod_current_mounts, _gm_mod.detect_content_user, _gm_mod.path_disk_free)
+    try:
+        _gm_mod.detect_content_user = lambda *a, **k: {"user": "gmodcontent", "present": {}}
+        _gm_mod.path_disk_free = lambda *a, **k: (10 * 1024 ** 3, 50 * 1024 ** 3)
+        with app.app_context():
+            _gm_gs = db.session.get(GameServer, gs_id)
+            _gm_type_before = _gm_gs.game_type
+            _gm_gs.game_type = "gmod"
+            db.session.commit()
+
+        _gm_mod.gmod_current_mounts = lambda *a, **k: None       # the host did not answer
+        _gm_get = c.get("/api/server/%d/gmod-content" % gs_id).get_json() or {}
+        check("gmod mounts: an unreadable mount state is reported as unreadable",
+              _gm_get.get("mounts_readable") is False,
+              "answered %r — the card renders every box unticked, i.e. 'mounts nothing'"
+              % (_gm_get.get("mounts_readable"),))
+        _gm_post = c.post("/api/server/%d/gmod-content" % gs_id, json={"games": []},
+                          headers={"X-Requested-With": "XMLHttpRequest"})
+        check("gmod mounts: ...and applying a selection against it is REFUSED",
+              (_gm_post.get_json() or {}).get("success") is False,
+              "the panel rewrote mount.cfg from a state it could not read — an empty selection "
+              "unmounts everything the server had")
+
+        # The control: a readable state still reports and still applies.
+        _gm_mod.gmod_current_mounts = lambda *a, **k: ["cstrike"]
+        _gm_get2 = c.get("/api/server/%d/gmod-content" % gs_id).get_json() or {}
+        check("gmod mounts: a readable state says so", _gm_get2.get("mounts_readable") is True,
+              "%r" % (_gm_get2.get("mounts_readable"),))
+        _gm_post2 = c.post("/api/server/%d/gmod-content" % gs_id, json={"games": ["cstrike"]},
+                           headers={"X-Requested-With": "XMLHttpRequest"})
+        check("gmod mounts: ...and an apply against it still goes through",
+              (_gm_post2.get_json() or {}).get("success") is True,
+              "the control failed — the refusal above proves nothing")
+    finally:
+        (_gm_mod.gmod_current_mounts, _gm_mod.detect_content_user,
+         _gm_mod.path_disk_free) = _gm_saved
+        with app.app_context():
+            db.session.get(GameServer, gs_id).game_type = _gm_type_before
+            db.session.commit()
+
     # ── a ban the engine drops at the next map change is not a ban ────────────────────────────
     # `banid ...; writeid` persists the id to cfg/banned_user.cfg, but the engine only reloads that
     # file if the server config EXECS it — and ensure_persistent_bans is what appends that line.

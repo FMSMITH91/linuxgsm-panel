@@ -1005,6 +1005,18 @@ function loadGmodContent(){
     .then(function(r){ return r.json(); })
     .then(function(d){
       if(d.error){ el.innerHTML = '<span class="text-danger">'+_esc(d.error)+'</span>'; return; }  // nosemgrep
+      // The host did not answer when asked what this server currently mounts. Every checkbox
+      // would render unticked — indistinguishable from "mounts nothing" — and Apply rewrites
+      // mount.cfg to exactly the ticks, so applying that card unmounts whatever it really had.
+      // The route refuses such an apply as well; this is so the card never offers it.
+      if(d.mounts_readable === false){
+        el.innerHTML =  // nosemgrep
+          '<div class="alert alert-warning py-2 px-3 mb-0 small">'
+          + '<i class="bi bi-exclamation-triangle"></i> Couldn\'t read what this server currently '
+          + 'mounts, so the list isn\'t shown — ticking from a blank card would unmount its '
+          + 'existing content. Check the host is reachable, then reload.</div>';
+        return;
+      }
       var running = d.job && d.job.status === 'running';
       // Installable games always show; owned/mount-only games only once their content is on the host
       // (or already mounted). Mount-only content that isn't present can't be added by the panel.
