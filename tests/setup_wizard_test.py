@@ -181,6 +181,30 @@ try:
         check("open: %s creates no account (%s)" % (_name, _why), superadmins() == [],
               str(superadmins()))
 
+    # ── setup must not be able to FINISH before it has produced an admin ──────────────────────
+    # The handler dispatches on the `step` field from the FORM, so nothing makes a caller walk the
+    # wizard in order, and the wizard is unauthenticated until it completes. On a fresh panel that
+    # let anyone who could reach the port POST step=remote_server&action=skip and close setup with
+    # zero accounts: SetupState.complete True, config setup_complete True, superadmins 0 — and
+    # every page from then on redirecting to a login nobody could pass. Getting back in needed
+    # `manage.py create-admin` from a shell. The same request also ran the Tailscale auto-setup,
+    # so an unauthenticated POST reconfigured the host.
+    check("open: nobody has been created yet (the precondition for the next check)",
+          superadmins() == [], str(superadmins()))
+    _r_jump = c.post("/setup", data={"step": "remote_server", "action": "skip"})
+    with app.app_context():
+        _st_jump = SetupState.query.first()
+        _complete_jump = bool(getattr(_st_jump, "complete", False))
+    check("open: a jump straight to the last step does NOT complete setup with no admin",
+          not _complete_jump,
+          "setup closed itself with %s admins — the panel is now unreachable without the CLI"
+          % len(superadmins()))
+    check("open: ...and the config flag is not set either",
+          not load_config().get("setup_complete", False),
+          "config says setup_complete with no account to log in as")
+    check("open: ...and the wizard is still reachable to finish properly",
+          c.get("/setup").status_code == 200, "the wizard closed behind itself")
+
     # The happy path.
     r = c.post("/setup", data={"step": "admin_user", "username": "firstadmin",
                                "password": "Sufficient1!pass", "confirm_password": "Sufficient1!pass",
