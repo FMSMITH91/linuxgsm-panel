@@ -1122,17 +1122,37 @@ def remote_bootstrap_vps(server, set_timezone="UTC", enable_ufw=True, install_lg
     #        rebooting, that no tmux/screen game-server sessions are live — otherwise we just flag the
     #        pending reboot so the operator can do it when the host is empty. ──
     if not is_local:
-        reboot_req, _, _ = _core.run_command(server, "test -f /var/run/reboot-required && echo YES || echo NO", timeout=10)
-        needs_reboot = "YES" in (reboot_req or "")
-        gs_out, _, _ = _core.run_command(server, "if pgrep -x tmux >/dev/null 2>&1 || pgrep -x SCREEN "
+        # Both probes are read for rc AND for one of their own two answers, because run_command
+        # does not raise: a dropped connection returns ("", "...timed out", -1), and `"YES" in ""`
+        # is False. Read that way the second probe answered "no game servers are running" about a
+        # host it never reached — and this is the branch that REBOOTS. An unread probe now means
+        # unknown, and unknown skips the reboot.
+        reboot_req, _, _rb_rc = _core.run_command(
+            server, "test -f /var/run/reboot-required && echo YES || echo NO", timeout=10)
+        _rb_txt = reboot_req or ""
+        reboot_known = _rb_rc == 0 and ("YES" in _rb_txt or "NO" in _rb_txt)
+        needs_reboot = reboot_known and "YES" in _rb_txt
+        gs_out, _, _gs_rc = _core.run_command(server, "if pgrep -x tmux >/dev/null 2>&1 || pgrep -x SCREEN "
                                    ">/dev/null 2>&1; then echo YES; else echo NO; fi", timeout=10)
-        servers_running = "YES" in (gs_out or "")
-        if not needs_reboot:
+        _gs_txt = gs_out or ""
+        gs_known = _gs_rc == 0 and ("YES" in _gs_txt or "NO" in _gs_txt)
+        # Unknown counts as running. The cost of being wrong that way is a reboot the operator
+        # does by hand; the other way it is every player on the box disconnected mid-bootstrap.
+        servers_running = (not gs_known) or "YES" in _gs_txt
+        if not reboot_known:
+            emit("Could not check whether a reboot is needed", status="reboot-required",
+                 detail="The host did not answer the reboot-required check, so this was left "
+                        "alone. Check it from the host's page.")
+        elif not needs_reboot:
             emit("No reboot needed", detail="Updates applied without requiring a reboot.")
         elif servers_running or not do_reboot:
             emit("Reboot required — skipped to protect running servers", status="reboot-required",
-                 detail="A kernel/library update needs a reboot. Reboot this host from its page "
-                        "once its game servers are empty.")
+                 detail=("A kernel/library update needs a reboot. Reboot this host from its page "
+                         "once its game servers are empty.") if gs_known else
+                        ("A kernel/library update needs a reboot. The host did not answer the "
+                         "check for running game servers, so it was not rebooted — a reboot "
+                         "would drop any players on it. Reboot it from its page once you know "
+                         "it is empty."))
         else:
             emit("Rebooting to apply a kernel/library update", status="rebooting",
                  detail="A system update requires a reboot and no game servers are running.")

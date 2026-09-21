@@ -1991,3 +1991,83 @@ for _route in ("/firewall/open", "/firewall/allow-from", "/firewall/limit"):
     check("game-port: sibling %s is MANAGE_REMOTES-only" % _route,
           _at > 0 and "@permission_required(MANAGE_REMOTES)" in _rv_src[_at:_at + 260],
           _rv_src[_at:_at + 160] if _at > 0 else "route not found")
+
+# ── the bootstrap must not reboot a host on a probe that never answered ──────────────────────
+# Step 11 reboots when an update needs one and no game servers are running. It read that second
+# fact as `"YES" in (gs_out or "")` — and run_command returns ("", "...timed out", -1) rather
+# than raising, so a dropped connection (right after a full-upgrade, which is when one is most
+# likely) read as "no game servers are running" and the host was rebooted out from under whoever
+# was playing. Unknown must count as RUNNING here: being wrong that way costs a reboot done by
+# hand, the other way costs every player on the box.
+_bs_saved = (_sm_core.run_command, _sm_core.run_privileged, _sm_core.write_root_file,
+             _sm_core.create_game_user, _sm_core.is_local_server, _sm_core.close_connection,
+             _sm_hosts._wait_for_reboot, _sm_core._wait_for_dpkg_lock)
+try:
+    _bs_priv = []
+    _sm_core.is_local_server = lambda s: False
+    # Stubbed, or step 1 polls `dpkg-lock-held` once a second for 180s per call: run_privileged
+    # returning rc=0 means the lock IS held, and a blanket success stub says that forever. Five
+    # calls to the bootstrap = fifteen minutes of a suite that looked hung.
+    _sm_core._wait_for_dpkg_lock = lambda *a, **k: True
+    _sm_core.run_privileged = lambda s, verb, args=None, **k: (_bs_priv.append(verb), ("", "", 0))[1]
+    _sm_core.write_root_file = lambda *a, **k: ("", "", 0)
+    _sm_core.create_game_user = lambda *a, **k: ("", "", 0)
+    _sm_core.close_connection = lambda *a, **k: None
+    _sm_hosts._wait_for_reboot = lambda *a, **k: True
+
+    def _bs_run(gs_answer):
+        """Every step succeeds; reboot-required says YES; the game-server probe answers as given."""
+        def _run(server, cmd, **k):
+            if "reboot-required" in cmd:
+                return ("YES\n", "", 0)
+            if "pgrep -x tmux" in cmd:
+                return gs_answer
+            return ("", "", 0)
+        return _run
+
+    def _bs_go(gs_answer):
+        _bs_priv.clear()
+        _sm_core.run_command = _bs_run(gs_answer)
+        ok, msg, log = _sm_hosts.remote_bootstrap_vps(
+            NS(id=9100, host="203.0.113.9", auth_method="key"), set_timezone="", enable_ufw=False,
+            install_lgsm_deps=False, username="", install_fail2ban=False, do_reboot=True)
+        # log is already a STRING. "\n".join(a_string) interleaves a newline between every
+        # CHARACTER, which broke up the substring these checks look for and reported the fix as
+        # missing while the real log said exactly the right thing.
+        return "reboot-delayed" in _bs_priv, log
+
+    _rebooted, _log = _bs_go(("", "ssh: connect to host ... timed out", -1))
+    check("bootstrap: a game-server probe that never answered does not authorise a reboot",
+          not _rebooted,
+          "the host was rebooted on a probe that timed out — every player on it was dropped")
+    check("bootstrap: ...and the log says the check could not be read",
+          "did not answer the check for running game servers" in _log,
+          "it is skipped silently, so nobody knows to reboot it later: %s" % _log[-300:])
+
+    _rebooted, _ = _bs_go(("YES\n", "", 0))
+    check("bootstrap: ...a host with a live tmux session is not rebooted either",
+          not _rebooted, "a running game server did not stop the reboot")
+
+    _rebooted, _ = _bs_go(("NO\n", "", 0))
+    check("bootstrap: ...while an EMPTY host that needs one still reboots (positive control)",
+          _rebooted,
+          "nothing reboots any more, so the checks above would pass with the feature removed")
+
+    # The other probe, same shape: an unread reboot-required check must not be announced as
+    # "no reboot needed" — that is the line that stops anyone looking again.
+    def _rb_unread(server, cmd, **k):
+        if "reboot-required" in cmd:
+            return ("", "ssh: connect to host ... timed out", -1)
+        return ("NO\n", "", 0)
+    _sm_core.run_command = _rb_unread
+    _bs_priv.clear()
+    _, _, _log2 = _sm_hosts.remote_bootstrap_vps(
+        NS(id=9101, host="203.0.113.10", auth_method="key"), set_timezone="", enable_ufw=False,
+        install_lgsm_deps=False, username="", install_fail2ban=False, do_reboot=True)
+    check("bootstrap: an unread reboot-required check is not reported as 'no reboot needed'",
+          "No reboot needed" not in _log2 and "Could not check whether a reboot is needed" in _log2,
+          "a host that never answered was told it was up to date: %s" % _log2[-300:])
+finally:
+    (_sm_core.run_command, _sm_core.run_privileged, _sm_core.write_root_file,
+     _sm_core.create_game_user, _sm_core.is_local_server, _sm_core.close_connection,
+     _sm_hosts._wait_for_reboot, _sm_core._wait_for_dpkg_lock) = _bs_saved
