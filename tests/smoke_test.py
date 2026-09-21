@@ -5688,12 +5688,43 @@ try:
         ("/api/notifications/test", {"channel": 5}),
     ]
     _typed_500, _typed_404 = [], []
-    for _path, _body in _typed:
-        _tr = c.post(_path, json=_body, headers={"X-Requested-With": "XMLHttpRequest"})
-        if _tr.status_code >= 500:
-            _typed_500.append("%s -> %d" % (_path, _tr.status_code))
-        if _tr.status_code == 404:
-            _typed_404.append(_path)
+    # Hold the backup lock across the sweep. /api/panel/backup/full is in the list and a POST to
+    # it STARTS A REAL FULL BACKUP — a thread that outlives this block, walks every installed
+    # server, and calls run_game_backup on whatever that name points at by the time it gets
+    # there. It landed inside the per-server-retention test 1400 lines below, which stubs exactly
+    # that name, and reported the stray call's keep as the one the route had used. Only the
+    # slowest CI leg was slow enough to show it.
+    #
+    # Taken BLOCKING, so this also waits out any earlier straggler instead of racing it. mode is
+    # read before the lock is consulted, so the type handling under test is still exercised.
+    from panel.core.panel_state import _full_backup_lock as _typed_lock
+    import panel.routes.panel_backup as _typed_bkmod
+    # What a leaked worker DOES, recorded — not whether the lock happens to be held when asked.
+    # The first version of this check polled the lock, and a full backup of one unreachable
+    # server takes and releases it inside a single 50ms gap: removing the guard below left the
+    # check green. See a-green-gate-is-not-evidence.
+    _typed_bkcalls = []
+    _typed_bkreal = _typed_bkmod.run_game_backup
+    _typed_bkmod.run_game_backup = lambda *a, **k: (_typed_bkcalls.append(1), (True, "", False))[1]
+    _typed_lock.acquire(timeout=60)
+    try:
+        for _path, _body in _typed:
+            _tr = c.post(_path, json=_body, headers={"X-Requested-With": "XMLHttpRequest"})
+            if _tr.status_code >= 500:
+                _typed_500.append("%s -> %d" % (_path, _tr.status_code))
+            if _tr.status_code == 404:
+                _typed_404.append(_path)
+    finally:
+        try:
+            _typed_lock.release()
+        except RuntimeError:
+            pass        # the acquire timed out; nothing of ours to release
+    # Settle: a worker the sweep started returns from the route before it reaches the backup.
+    for _ in range(40):
+        if _typed_bkcalls:
+            break
+        _ijw_time.sleep(0.05)
+    _typed_bkmod.run_game_backup = _typed_bkreal
     check("typed body: %d endpoints were driven, so this is not an empty sweep" % len(_typed),
           len(_typed) >= 20, "the list shrank — the check below would prove less")
     # ...and every one of them REACHES a handler. This list had "/notifications/test" while the
@@ -5706,6 +5737,15 @@ try:
           "404 — renamed or mistyped, so the sweep never reached them: %s" % ", ".join(_typed_404))
     check("typed body: a number where a string belongs never 500s",
           not _typed_500, "; ".join(_typed_500[:6]))
+    # ...and the sweep left nothing running. A POST to /api/panel/backup/full starts a real
+    # background full backup, and a suite that walks endpoints for validation must not leave one
+    # RUNNING behind it — that thread outlives this block and calls into whatever the tests below
+    # have stubbed by the time it gets there. That is what broke CI: it reached the
+    # per-server-retention test 1400 lines down and was counted as that route's call.
+    check("typed body: ...and the sweep did not leave a full backup running behind it",
+          not _typed_bkcalls,
+          "a background backup outlived this block — it walks every server and calls whatever "
+          "run_game_backup points at by then, which is a stub in the tests below")
 
     # ── Deleting a user kills the invites they minted ──────────────────────────────────────────
     # authority_intact() resolves the creator with db.session.get(User, created_by_id) and fails
@@ -7010,6 +7050,84 @@ try:
             db.session.get(GameServer, gs_id).game_type = _gm_type_before
             db.session.commit()
 
+    # ── a game LinuxGSM caps BELOW this host's release must be refused up front ───────────────
+    # The picker marks these against the newest OS in the CATALOGUE — a stand-in, because the list
+    # renders before a host is chosen. At install time the host IS chosen, so the comparison can
+    # be the real one: LinuxGSM caps btl and onset at 20.04 and bf1942/bfv at 22.04, and on a
+    # newer host those fail every time, minutes into the download, leaving a failed row behind.
+    # Reported from the panel: Battalion 1944 offered and accepted on a 24.04 host.
+    #
+    # The catalogue is STUBBED, not read: this suite seeds a minimal serverlist.csv with no capped
+    # game in it, so reading the real list would make every check below pass on an empty set. The
+    # first version of this test did exactly that and reported it.
+    import panel.routes.manage_servers as _os_mod
+    # The DEFINITION site, not the package: panel/ops/ssh_manager/__init__.py exposes these
+    # through __getattr__ so there is one stub target, and a unit check enforces that — it caught
+    # this exact line. See ssh-manager-stub-seam-scope.
+    from panel.ops.ssh_manager import hosts as _os_sm
+
+    _os_saved = _os_sm.host_os_slug
+    _os_before = _appmod_ij._remote_listening_ports
+    _os_real_list = _os_mod.load_game_list
+
+    def _os_try(name, port, game="btl"):
+        """POST an install and say whether a row was created."""
+        c.post("/servers/add", data={"remote_id": str(_cg_remote_id), "game_type": game,
+                                     "server_name": name, "port": str(port)},
+               follow_redirects=True)
+        with app.app_context():
+            _row = GameServer.query.filter_by(short_name=name).first()
+            _made = _row is not None
+            if _row is not None:
+                db.session.delete(_row)
+                db.session.commit()
+        return _made
+
+    try:
+        _appmod_ij._remote_listening_ports = lambda r: {22}
+        _os_mod.load_game_list = lambda: [
+            {"shortname": "btl", "name": "BATTALION: Legacy", "os": "ubuntu-20.04",
+             "legacy_os": "ubuntu-20.04"},
+            {"shortname": "csgo", "name": "CS:GO", "os": "ubuntu-24.04", "legacy_os": ""},
+        ]
+
+        _os_sm.host_os_slug = lambda s: "ubuntu-24.04"
+        check("install OS: a game capped at 20.04 is refused on a 24.04 host, before the download",
+              not _os_try("osrefuse", 28850),
+              "the install started and will fail minutes in, leaving a failed row to clean up")
+
+        # The control, and the case the operator actually asked about: the SAME game on a host
+        # that CAN run it. A 20.04 remote under a 24.04 panel must still install it.
+        _os_sm.host_os_slug = lambda s: "ubuntu-20.04"
+        check("install OS: ...while the same game on a 20.04 REMOTE is still allowed",
+              _os_try("osallow", 28851),
+              "the guard is refusing installs that would have worked — the panel's own OS is not "
+              "the one that matters here")
+
+        # Fails OPEN: an unreadable host OS is not evidence of a problem.
+        _os_sm.host_os_slug = lambda s: None
+        check("install OS: ...and a host whose OS could not be read is not refused",
+              _os_try("osunknown", 28852),
+              "this fails closed — an unreadable OS blocks an install that may be fine")
+
+        # The host NEWER than the whole catalogue. Every game declares the newest release LinuxGSM
+        # builds its dependency list for — 136 of 140 say ubuntu-24.04 — so a guard that compares
+        # that column against the host refuses EVERYTHING on an Ubuntu 26.04 box. The first
+        # version of this change did, and the 26.04 leg of CI caught it. Only the catalogue-
+        # relative cap (legacy_os) may decide.
+        _os_sm.host_os_slug = lambda s: "ubuntu-26.04"
+        check("install OS: ...and an ordinary game is still installable on a host NEWER than the "
+              "whole catalogue",
+              _os_try("osnewhost", 28853, game="csgo"),
+              "every game declares 24.04, so this refuses the entire catalogue on a 26.04 host")
+        check("install OS: ...while a capped game on that same newer host is still refused",
+              not _os_try("osnewcap", 28854),
+              "the 20.04 cap is real whatever the host is, and a 26.04 box is further past it")
+    finally:
+        _os_mod.load_game_list = _os_real_list
+        _os_sm.host_os_slug = _os_saved
+        _appmod_ij._remote_listening_ports = _os_before
+
     # ── a ban the engine drops at the next map change is not a ban ────────────────────────────
     # `banid ...; writeid` persists the id to cfg/banned_user.cfg, but the engine only reloads that
     # file if the server config EXECS it — and ensure_persistent_bans is what appends that line.
@@ -7057,6 +7175,7 @@ try:
     # prune uses; anything else would be testing the config layer twice.
     import panel.routes.panel_backup as _bkroute
     from panel.ops import backup as _bkmod
+    from panel.core.panel_state import _full_backup_lock as _bk_lock_chk
 
     _keep_seen = []
     _bk_saved = {}
@@ -7065,6 +7184,13 @@ try:
         _bk_saved[(mod, name)] = getattr(mod, name)
         setattr(mod, name, fn)
 
+    # Wait for any backup worker still running before stubbing: the stub records every call by
+    # the name it replaces, and a straggler's call is not this route's. See the lock held across
+    # the typed-body sweep above, which is where one came from.
+    for _ in range(200):
+        if not _bk_lock_chk.locked():
+            break
+        _ijw_time.sleep(0.05)
     try:
         _bk_stub(_bkroute, "run_game_backup",
                  lambda remote, short, lgsm, keep, **k: (_keep_seen.append(keep),

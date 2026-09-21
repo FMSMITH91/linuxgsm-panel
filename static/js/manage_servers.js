@@ -34,6 +34,78 @@ function updatePort() {
   if (contentOpt) contentOpt.style.display = (select.value === 'gmod') ? '' : 'none';
   suggestFreePort();
 }
+// The host selector does two things now: the free-port suggestion it always did, and the game
+// filter, which needs the host before it can decide anything.
+function hostChanged() {
+  filterGamesForHost();
+  suggestFreePort();
+}
+window.hostChanged = hostChanged;
+
+// Which games THIS host can actually install.
+//
+// LinuxGSM caps a few games at an older Ubuntu than the rest of the catalogue, and the picker
+// marks them against the newest release in the CATALOGUE — a stand-in for the host, because the
+// list is rendered before a host is chosen. Once one IS chosen the comparison can be the real
+// one: a 20.04 remote under a 24.04 panel runs those games perfectly well, while on a 24.04 host
+// they fail every time, minutes into the download.
+//
+// What is compared is data-legacy-os — the cap LinuxGSM sets BELOW the rest of the catalogue —
+// and not each game's declared release. Every game declares the newest release LinuxGSM builds
+// its dependency list for, so comparing that against the host would grey out the entire menu on
+// an Ubuntu 26.04 box.
+//
+// Fails OPEN, exactly as the server-side guard does: a host whose OS cannot be read, or a game
+// with no cap, leaves everything selectable. Refusing an install that would have worked is the
+// worse error, and the install route re-checks anyway.
+function _osOlder(gameOs, hostOs) {
+  var g = String(gameOs || '').toLowerCase().split('-');
+  var h = String(hostOs || '').toLowerCase().split('-');
+  if (g.length !== 2 || h.length !== 2 || !g[0] || g[0] !== h[0]) return false;
+  var gv = g[1].split('.').map(Number), hv = h[1].split('.').map(Number);
+  if (gv.some(isNaN) || hv.some(isNaN)) return false;
+  for (var i = 0; i < Math.max(gv.length, hv.length); i++) {
+    var a = gv[i] || 0, b = hv[i] || 0;
+    if (a !== b) return a < b;
+  }
+  return false;
+}
+
+function filterGamesForHost() {
+  var sel = document.getElementById('game-type-select');
+  var remote = (document.getElementById('remote-select') || {}).value;
+  if (!sel) return;
+  var apply = function (hostOs) {
+    var hidden = 0;
+    Array.prototype.forEach.call(sel.options, function (opt) {
+      var gameOs = opt.getAttribute('data-legacy-os');
+      if (!opt.value || !gameOs) return;
+      var bad = !!hostOs && _osOlder(gameOs, hostOs);
+      opt.disabled = bad;
+      if (bad) {
+        hidden++;
+        if (opt.textContent.indexOf('needs ') === -1) {
+          opt.textContent = opt.textContent.replace(/\s*\(.*\)\s*$/, '')
+            + ' (needs ' + gameOs.replace('-', ' ') + ')';
+        }
+        // Do not leave a disabled game SELECTED — the form would post it.
+        if (sel.value === opt.value) sel.value = '';
+      }
+    });
+    var note = document.getElementById('game-os-note');
+    if (note) {
+      note.textContent = hidden
+        ? (hidden + ' game(s) are greyed out: LinuxGSM caps them at an older Ubuntu than this host runs.')
+        : '';
+    }
+  };
+  if (!remote) { apply(''); return; }
+  fetch(MOUNT + '/api/remote/' + encodeURIComponent(remote) + '/specs')
+    .then(function (r) { return r.ok ? r.json() : null; })
+    .then(function (d) { apply((d && d.os_slug) || ''); })
+    .catch(function () { apply(''); });   // unreadable host: leave everything selectable
+}
+
 // Once a target host + game are chosen, ask the panel for a free port near the default and bump the
 // field if the default is already taken (the install auto-resolves too — this just shows it up front).
 function suggestFreePort() {

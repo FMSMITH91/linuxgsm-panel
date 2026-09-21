@@ -32,7 +32,7 @@ from panel.core import terminal
 from panel.core.validation import (GAME_TYPE_RE, INSTANCE_NAME_RE, MAX_PORT, MIN_PORT,
     SAFE_LABEL_RE, _port_or)
 from app import (_extract_start_error, _log, _prune_jobs,
-    _resolve_source_aux_ports, load_game_list, resolve_free_port)
+    _resolve_source_aux_ports, game_os_unsupported, load_game_list, resolve_free_port)
 from panel.routes._shared import (_looks_installed, _notify_servers_changed)
 
 # Serializes the install "slot" allocation (pick a free port → reject a duplicate name → create the
@@ -214,6 +214,34 @@ def register(app):
         # arguments during install — validate strictly to prevent command injection.
         if not GAME_TYPE_RE.match(game_type) or game_type not in {g["shortname"] for g in load_game_list()}:
             return _form_err("Invalid or unknown game type.", "manage_servers")
+        # Refuse a game LinuxGSM caps BELOW the release this host runs, now that both facts are
+        # known. The alternative is a download that spends minutes arriving at LinuxGSM's own
+        # "not supported on Ubuntu 24.04.5" and leaves a failed row to clean up.
+        #
+        # The cap compared here is legacy_os, NOT the raw os column, and the difference is the
+        # whole correctness of this guard. Every game declares the newest release LinuxGSM builds
+        # its dependency list for — 136 of 140 say ubuntu-24.04 — so comparing the raw column
+        # against the host refuses EVERY game on an Ubuntu 26.04 box. legacy_os is only set for
+        # the handful LinuxGSM caps below the rest of the catalogue (btl and onset at 20.04,
+        # bf1942 and bfv at 22.04), which is the real signal. CI on the 26.04 runner caught this.
+        #
+        # Fails OPEN, like game_os_unsupported itself: an unreadable host OS, or a game with no
+        # declared cap, is not evidence of a problem, and refusing an install that would have
+        # worked is the worse error.
+        _game_os = next((g.get("legacy_os") for g in load_game_list()
+                         if g["shortname"] == game_type), "")
+        try:
+            _host_os = _sm.host_os_slug(remote)
+        except Exception:
+            _host_os = None
+        if _game_os and _host_os and game_os_unsupported(_game_os, _host_os):
+            return _form_err(
+                "LinuxGSM supports %s only up to %s, and this host runs %s — the install would "
+                "download for several minutes and then fail. Install it on a %s host, or pick a "
+                "different game."
+                % (game_type, _game_os.replace("-", " ").title(), _host_os.replace("-", " ").title(),
+                   _game_os.replace("-", " ").title()),
+                "manage_servers")
         if server_name:
             server_name = server_name.lower()
             if not INSTANCE_NAME_RE.match(server_name):
