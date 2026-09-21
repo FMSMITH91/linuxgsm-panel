@@ -6842,6 +6842,59 @@ try:
     check("deactivation: the epoch-cookie session stops working once deactivated",
           _after_m != 200, "status=%s" % _after_m)
 
+    # ── the custom-command FORM: the guard that stops a template smuggling a second command ──────
+    # A custom command's template is sent to tmux as a console LINE. A newline in it is a second
+    # keystroke sequence — a command the author did not write and the reviewer did not see.
+    # _custom_cmd_form() refuses control characters for exactly that reason, and nothing executed
+    # it: /commands/add, /edit and /delete were three of the 65 routes no suite ever entered.
+    # Superadmin-only, and the url_map baseline pins that, so this is about the BODY.
+    def _cc_count():
+        with app.app_context():
+            return CustomCommand.query.count()
+
+    def _cc_add(name, template, **extra):
+        _before = _cc_count()
+        data = {"name": name, "command_template": template, "scope": "all", "enabled": "on"}
+        data.update(extra)
+        c.post("/commands/add", data=data)
+        return _cc_count() - _before
+
+    check("custom command form: a valid template is accepted (the control)",
+          _cc_add("cc_ok", "say hello") == 1,
+          "the positive control failed — every refusal below proves nothing")
+    check("custom command form: a NEWLINE in the template is refused",
+          _cc_add("cc_nl", "say hi\nquit") == 0,
+          "a template that smuggles a second console line was stored")
+    check("custom command form: ...as is a carriage return",
+          _cc_add("cc_cr", "say hi\rquit") == 0)
+    check("custom command form: ...and a NUL", _cc_add("cc_nul", "say hi\x00quit") == 0)
+    check("custom command form: ...and an escape, which starts a terminal sequence",
+          _cc_add("cc_esc", "say \x1b[2J") == 0)
+    check("custom command form: two placeholders are refused",
+          _cc_add("cc_two", "say {} and {}") == 0,
+          "a second {} makes the argument substitution ambiguous")
+    check("custom command form: an empty template is refused", _cc_add("cc_empty", "") == 0)
+    check("custom command form: a scope naming a game that does not exist is refused",
+          _cc_add("cc_badgame", "say hi", scope="game|nosuchgame") == 0)
+    check("custom command form: ...and an engine that does not exist",
+          _cc_add("cc_badengine", "say hi", scope="engine|nosuchengine") == 0)
+    # An unparseable argument pattern must not 500 or store itself — it falls back to the default.
+    _cc_re_added = _cc_add("cc_badre", "say {}", argument_pattern="([unclosed")
+    check("custom command form: an invalid argument pattern does not store a broken regex",
+          _cc_re_added in (0, 1), "unexpected result %s" % _cc_re_added)
+    if _cc_re_added == 1:
+        with app.app_context():
+            _bad = CustomCommand.query.filter_by(name="cc_badre").first()
+            check("custom command form: ...it falls back to a pattern that compiles",
+                  _bad is not None and _bad.argument_pattern != "([unclosed",
+                  "stored %r" % (getattr(_bad, "argument_pattern", None),))
+    with app.app_context():
+        for _n in ("cc_ok", "cc_badre"):
+            _row = CustomCommand.query.filter_by(name=_n).first()
+            if _row is not None:
+                db.session.delete(_row)
+        db.session.commit()
+
     # ── can_run_custom_command: who may press a superadmin-authored console button ────────────────
     # Every branch of this decides whether a non-superadmin gets to run a console command on a
     # server, and none of it was asserted.
