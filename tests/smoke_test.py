@@ -4589,6 +4589,61 @@ try:
         finally:
             _sm_cron.delete_cron_job = _sv_del
 
+        # ── ...but a crontab it could not READ is not a crontab with nothing in it ────────────
+        # list_cron_jobs discarded the rc, so an unreachable host produced "" and parsed to [] —
+        # and the reconcile above writes the columns from an ABSENCE, so it read both panel lines
+        # as "gone" and turned Autostart and Daily-restart OFF. Merely OPENING Files & Config for
+        # a server whose host was briefly unreachable disabled its autostart, permanently: the
+        # host's crontab still had the lines, and nothing ever reconciles the other way.
+        # Verified in a rendered panel before the fix — seeded autostart=1, one page load, 0.
+        with app.app_context():
+            _g = db.session.get(GameServer, gs_id)
+            _g.autostart, _g.daily_restart = True, True
+            db.session.commit()
+        _sm_cron.list_cron_jobs = lambda *a, **k: None          # the host did not answer
+        _unread = c.get("/api/server/%d/cron" % gs_id)
+        with app.app_context():
+            _g = db.session.get(GameServer, gs_id)
+            _auto, _daily = _g.autostart, _g.daily_restart
+        check("autostart: a crontab that could not be READ leaves the switch alone",
+              _auto is True, "opening the page turned it off; it is now %r" % _auto)
+        check("daily restart: ...and the same for the daily-restart switch", _daily is True,
+              "now %r" % _daily)
+        _uj = _unread.get_json() or {}
+        check("cron: an unreadable crontab is reported as an error, not as an empty list",
+              bool(_uj.get("error")) and "jobs" not in _uj,
+              "the page renders 'No scheduled tasks yet.' for a host it never reached: %s"
+              % str(_uj)[:120])
+        check("cron: ...and says it is not the same as there being none",
+              "not the same as there being none" in (_uj.get("error") or ""),
+              _uj.get("error") or "no message")
+        # The reconcile's OWN guard, driven directly. The route returns before reaching it, so
+        # with only the checks above, reverting `if jobs is None: return False` inside
+        # _sync_toggles_from_cron changed nothing and the whole suite stayed green — measured.
+        # It is the function that does the destructive write, three routes call it, and a second
+        # caller that forgets the route's check would put the wipe straight back.
+        with app.app_context():
+            _g = db.session.get(GameServer, gs_id)
+            _g.autostart, _g.daily_restart = True, True
+            db.session.commit()
+            _ret = sys.modules["app"]._sync_toggles_from_cron(_g, None)
+            db.session.commit()
+            _g = db.session.get(GameServer, gs_id)
+            _kept = (_g.autostart, _g.daily_restart)
+        check("cron reconcile: handed no reading at all, it changes nothing and says so",
+              _ret is False and _kept == (True, True),
+              "returned %r, columns %r — a failed read is being written as 'the lines are gone'"
+              % (_ret, _kept))
+        with app.app_context():
+            _g = db.session.get(GameServer, gs_id)
+            _g.autostart = True
+            db.session.commit()
+            sys.modules["app"]._sync_toggles_from_cron(_g, [])
+            db.session.commit()
+            _wiped = db.session.get(GameServer, gs_id).autostart
+        check("cron reconcile: ...while an ACTUAL empty crontab still turns the switch off",
+              _wiped is False,
+              "the guard swallowed the real empty case too, so deleting the line stops working")
     finally:
         _sm_cron.list_cron_jobs = _sv_lcj
 

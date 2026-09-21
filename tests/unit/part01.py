@@ -1017,6 +1017,41 @@ try:
     finally:
         _sm_core.run_privileged, _sm_cron._read_cron_status = _o_rp2, _o_st2
         _sm_cron._read_cron_run_times = _o_rt2
+    # ── a crontab that could not be READ is not an empty crontab ────────────────────────────
+    # The rc was discarded, so every failure parsed to []. Three transports reach here: a local
+    # helper failure, an unreachable tailscale/ssh host (which answers ("", "...", -1) rather than
+    # raising), and an account with genuinely no crontab. Only the last is an ANSWER, and the
+    # measured shapes of the other two are what these stubs reproduce — taken from a live host:
+    # `crontab -u X -l` is rc 1 + "no crontab for X" for an account with none, rc 0 for an empty
+    # but present one, and rc 1 + "user `X' unknown" for a missing account.
+    def _cron_rc(out, err, rc):
+        _o = _sm_core.run_privileged
+        _s, _t = _sm_cron._read_cron_status, _sm_cron._read_cron_run_times
+        try:
+            _sm_core.run_privileged = lambda *_a, **_k: (out, err, rc)
+            _sm_cron._read_cron_status = lambda *_a, **_k: {}
+            _sm_cron._read_cron_run_times = lambda *_a, **_k: {}
+            return _sm_cron.list_cron_jobs(None, "gm")
+        finally:
+            _sm_core.run_privileged = _o
+            _sm_cron._read_cron_status, _sm_cron._read_cron_run_times = _s, _t
+
+    check("cron list: a host that did not answer reads as UNKNOWN, not as no jobs",
+          _cron_rc("", "ssh command error", -1) is None,
+          "a failed read still parses to a list, which _sync_toggles_from_cron turns into a wipe")
+    check("cron list: an account with genuinely no crontab reads as no jobs",
+          _cron_rc("", "no crontab for gm", 1) == [],
+          "the common empty case is being reported as a failure")
+    check("cron list: an account that does not exist reads as UNKNOWN",
+          _cron_rc("", "crontab:  user `gm' unknown", 1) is None,
+          "'no jobs' is a claim the panel cannot make about an account it cannot see")
+    check("cron list: an empty but PRESENT crontab reads as no jobs",
+          _cron_rc("", "", 0) == [], "rc 0 is a successful read of an empty crontab")
+    check("cron list: a crontab that read fine still parses to its jobs",
+          isinstance(_cron_rc(_CR_TAB.strip(), "", 0), list)
+          and len(_cron_rc(_CR_TAB.strip(), "", 0)) == len(_cr_jobs),
+          "the success path changed shape")
+
     _cr_raw = _cr_jobs[0]["raw"]
     check("cron identity: the browser is handed the line WITHOUT its indentation (the transport strips)",
           _cr_raw == "*/5 * * * * /home/gm/gmodserver monitor", repr(_cr_raw))
