@@ -7529,6 +7529,85 @@ try:
             _bk_gs.backup_pending = False
             db.session.commit()
 
+    # ── a host reboot must not report a server it could not read as an empty one ───────────────
+    # player_count returns None for BOTH "the query failed" and "this game is not queryable", and
+    # the reboot check folded that into its `pc > 0` test — so an online server the panel could
+    # not read was simply absent from the answer, the confirm dialog said nothing, and the reboot
+    # disconnected whoever was on it. Verified on the test box before the fix: an online server
+    # with a query_type override answered {"busy":[],"total":0}.
+    import panel.routes.remote_vps as _rpmod
+
+    _rp_saved = _rpmod.sm_player_count
+    _rp_args = []
+
+    def _rp_get():
+        return (c.get("/api/remote/%d/players" % remote_id).get_json() or {})
+
+    def _rp_unknown(d):
+        return [u["name"] for u in (d.get("unknown") or [])]
+
+    def _rp_busy(d):
+        return [b["name"] for b in (d.get("busy") or [])]
+
+    try:
+        # Named, not counted: other checks leave their own servers on this host, so "the answer
+        # has one entry" is not a fact about the server under test. The first version of these
+        # checks asserted totals and failed on somebody else's rows.
+        with app.app_context():
+            _rp_gs = db.session.get(GameServer, gs_id)
+            _rp_status_before, _rp_qt_before = _rp_gs.status, _rp_gs.query_type
+            _rp_gs.status, _rp_gs.query_type = "online", "unreal3"
+            db.session.commit()
+            _rp_name, _rp_short = _rp_gs.name, _rp_gs.short_name
+
+        def _rp_stub(server, short, game_type=None, port=None, query_type=None):
+            _rp_args.append({"short": short, "query_type": query_type})
+            return None                      # the read failed / the game cannot be queried
+        _rpmod.sm_player_count = _rp_stub
+
+        _rp = _rp_get()
+        check("host reboot: a running server whose player count could not be read is reported",
+              _rp_name in _rp_unknown(_rp) and _rp_name not in _rp_busy(_rp),
+              "unknown=%r busy=%r — the confirm says nothing about it, and the reboot disconnects "
+              "whoever was on it" % (_rp_unknown(_rp), _rp_busy(_rp)))
+        _rp_mine = [a for a in _rp_args if a["short"] == _rp_short]
+        check("host reboot: ...and the per-server query type override reaches the query",
+              _rp_mine and _rp_mine[-1]["query_type"] == "unreal3",
+              "called with %r — a game with no built-in gamedig type is queryable ONLY through "
+              "the override, so dropping it makes every one of them unreadable here while the "
+              "Players panel reads them fine" % (_rp_mine[-1:] or None,))
+
+        # A STOPPED server is unreadable because nothing is running. Listing it would put a
+        # warning on every reboot of a host with an idle server on it, which is how a real warning
+        # gets ignored.
+        with app.app_context():
+            db.session.get(GameServer, gs_id).status = "offline"
+            db.session.commit()
+        check("host reboot: ...but a stopped server is not reported as unreadable",
+              _rp_name not in _rp_unknown(_rp_get()),
+              "every idle server raises a warning, so the real one stops being read")
+
+        # ...and a server that DOES answer still counts, both ways round.
+        with app.app_context():
+            db.session.get(GameServer, gs_id).status = "online"
+            db.session.commit()
+        _rpmod.sm_player_count = lambda *a, **k: 3
+        _rp = _rp_get()
+        check("host reboot: a server with players is still reported as busy (positive control)",
+              _rp_name in _rp_busy(_rp) and _rp_name not in _rp_unknown(_rp)
+              and _rp.get("total", 0) >= 3,
+              "busy=%r unknown=%r total=%r" % (_rp_busy(_rp), _rp_unknown(_rp), _rp.get("total")))
+        _rpmod.sm_player_count = lambda *a, **k: 0
+        check("host reboot: ...and a server that answers ZERO is empty, not unknown",
+              _rp_name not in _rp_unknown(_rp_get()),
+              "a confirmed-empty server is being reported as unreadable")
+    finally:
+        _rpmod.sm_player_count = _rp_saved
+        with app.app_context():
+            _rp_gs = db.session.get(GameServer, gs_id)
+            _rp_gs.status, _rp_gs.query_type = _rp_status_before, _rp_qt_before
+            db.session.commit()
+
 except Exception:
     # A crash part-way through otherwise just prints fewer checks and still reads as green-ish.
     # That has hidden three separate mistakes while writing these; a crash is a FAILURE.

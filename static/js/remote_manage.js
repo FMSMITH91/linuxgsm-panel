@@ -390,7 +390,7 @@ function _pollOsUpdate(){
 function rebootRemote(){
   // Check for players on ANY game server on this host first — a reboot disconnects them all.
   fetch(MOUNT+'/api/remote/'+REMOTE_ID+'/players').then(r=>r.json()).then(function(d){
-    var busy=(d&&d.busy)||[], total=(d&&d.total)||0;
+    var busy=(d&&d.busy)||[], total=(d&&d.total)||0, unknown=(d&&d.unknown)||[];
     var base = IS_LOCAL ? 'Reboot the PANEL HOST now? The panel and all its game servers will go down briefly.'
                         : 'Reboot this server now? It will be briefly unreachable.';
     var q = base;
@@ -398,6 +398,17 @@ function rebootRemote(){
       var list = busy.map(function(b){ return b.name+' ('+b.players+')'; }).join(', ');
       q = '⚠ '+total+' player'+(total===1?' is':'s are')+' currently connected across '+busy.length+' server'+(busy.length===1?'':'s')+':\n  '+list
         + '\n\nRebooting will DISCONNECT all of them. '+base+'\n\nAre you sure?';
+    }
+    // A server the panel could not read is NOT an empty one. Saying nothing about it is how a
+    // reboot disconnects players it reported as absent — the count came back unknown, and the
+    // dialog turned that into silence.
+    if(unknown.length){
+      var un = unknown.map(function(u){ return u.name + (u.queryable ? '' : ' (not queryable)'); }).join(', ');
+      q = (total>0 ? q.replace('\n\nAre you sure?','') : q)
+        + '\n\n⚠ The player count could not be read for '+unknown.length+' running server'
+        + (unknown.length===1?'':'s')+': '+un
+        + '\nAnyone on '+(unknown.length===1?'it':'them')+' will be disconnected without warning.'
+        + '\n\nAre you sure?';
     }
     _confirmReboot(q);
   }).catch(function(){
