@@ -367,7 +367,10 @@ def detect_tailscale_interface():
     # Method 3: Check common names
     for name in ["tailscale0", "wg0", "utun"]:
         out, _, rc = _run(f"ip link show {name} 2>/dev/null && echo 'FOUND' || echo 'NOTFOUND'", timeout=5)
-        if "NOTFOUND" not in out:  # "FOUND" is a substring of "NOTFOUND"
+        # Both halves: "NOTFOUND" is not in "" either, so a probe that did not run named this
+        # interface as present. rc is already captured here; the positive token is the cheaper
+        # and more direct test, and matches the `id` probe in manage_servers.py.
+        if "NOTFOUND" not in out and "FOUND" in out:   # "FOUND" is a substring of "NOTFOUND"
             return name
 
     # Method 4: Parse tailscale status for interface info

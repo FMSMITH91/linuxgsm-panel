@@ -1843,6 +1843,28 @@ finally:
 # rule". So a probe that did not run has to fall the protective way — the opposite of fail-safe
 # everywhere else in that file, where False means "assume no way in exists".
 #
+# ── a negative sentinel read against an EMPTY answer inverts the result ──────────────────────
+# The probes are `cmd && echo 'FOUND' || echo 'NOTFOUND'`, and callers tested the NEGATIVE token.
+# `"NOTFOUND" not in ""` is True, so a probe that never ran read as the POSITIVE answer — and
+# run_command returns ("", "...timed out", -1) rather than raising for the local and Tailscale
+# transports, so an unreachable host is the ordinary way to get "". One of the four sites in the
+# tree already had it right and shows the idiom: `"NOTEXISTS" not in idout and "EXISTS" in idout`.
+_ns_saved = _sm_core.run_command
+try:
+    _sm_core.run_command = lambda *a, **k: ("", "ssh: connect to host ... timed out", -1)
+    check("sentinel: an unread probe does not report Tailscale as INSTALLED",
+          _sm_hosts.remote_check_tailscale(NS(id=8001)).get("installed") is False,
+          "a host that never answered was reported as having Tailscale installed")
+    _sm_core.run_command = lambda *a, **k: ("/usr/bin/tailscale\nINSTALLED\n", "", 0)
+    check("sentinel: ...while a probe that DID answer still reports it",
+          _sm_hosts.remote_check_tailscale(NS(id=8002)).get("installed") is True,
+          "the control failed — the check above proves nothing")
+    _sm_core.run_command = lambda *a, **k: ("NOTINSTALLED\n", "", 0)
+    check("sentinel: ...and a clear 'not installed' is still not installed",
+          _sm_hosts.remote_check_tailscale(NS(id=8003)).get("installed") is False)
+finally:
+    _sm_core.run_command = _ns_saved
+
 # ── migrating to Tailscale SSH must not burn the bridge before testing the new one ───────────
 # remote_migrate_to_tailscale closes port 22, and its caller then blanks auth_credential — the
 # record's ONLY credential — and sets auth_method="tailscale". That all used to happen on the

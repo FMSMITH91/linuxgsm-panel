@@ -6903,6 +6903,59 @@ try:
     check("deactivation: the epoch-cookie session stops working once deactivated",
           _after_m != 200, "status=%s" % _after_m)
 
+    # ── two more "reported success without reading the result" ────────────────────────────────
+    # Both stubbed at the seam that actually fails on this codebase: run_command returns
+    # ("", "...timed out", -1) rather than raising, which is why neither route's except branch
+    # ever saw these.
+    from panel.ops.ssh_manager import _core as _sw_core
+
+    _sw_saved = {}
+
+    def _sw_stub(mod, name, fn):
+        _sw_saved[(mod, name)] = getattr(mod, name)
+        setattr(mod, name, fn)
+
+    try:
+        # 1. upload-check answered "we looked, nothing conflicts" from a listing that never ran.
+        #    stat_upload_targets discarded rc, so out="" meant no matches, and the route reported
+        #    checked=true. The browser then uploads without asking, and the upload route's own
+        #    re-check is the only thing left between that and a clobbered file.
+        _sw_stub(_sw_core, "run_command", lambda *a, **k: ("", "ssh: connect to host ... timed out", -1))
+        _uc = c.post("/api/server/%d/upload-check" % gs_id,
+                     json={"path": "", "names": ["server.cfg"]},
+                     headers={"X-Requested-With": "XMLHttpRequest"}).get_json() or {}
+        check("upload-check: a listing that never ran is not reported as 'no conflicts'",
+              _uc.get("checked") is False,
+              "answered checked=%r existing=%r — the browser reads that as a clear and uploads "
+              "without asking" % (_uc.get("checked"), _uc.get("existing")))
+        # ...and a listing that DID run still reports checked=true, so the guard is not "always
+        # say we could not look".
+        _sw_stub(_sw_core, "run_command", lambda *a, **k: ("", "", 0))
+        _uc2 = c.post("/api/server/%d/upload-check" % gs_id,
+                      json={"path": "", "names": ["server.cfg"]},
+                      headers={"X-Requested-With": "XMLHttpRequest"}).get_json() or {}
+        check("upload-check: ...while a real listing still answers checked=true",
+              _uc2.get("checked") is True, "%r" % (_uc2,))
+
+        # 2. "Run now" on a scheduled task reported "Started" from a launch that never happened.
+        #    The job is detached, so the rc says nothing about how the job ENDS — but it does say
+        #    whether it began, and that was discarded.
+        _sw_stub(_sw_core, "run_command", lambda *a, **k: ("", "sudo: a password is required", 1))
+        _cr = c.post("/api/server/%d/cron/run" % gs_id, json={"raw": "0 5 * * * /home/x/x update"},
+                     headers={"X-Requested-With": "XMLHttpRequest"}).get_json() or {}
+        check("cron run-now: a launch that failed is not reported as 'Started'",
+              _cr.get("success") is False,
+              "answered %r — Last run never changes, and the audit row says it succeeded"
+              % (_cr.get("message"),))
+        _sw_stub(_sw_core, "run_command", lambda *a, **k: ("", "", 0))
+        _cr2 = c.post("/api/server/%d/cron/run" % gs_id, json={"raw": "0 5 * * * /home/x/x update"},
+                      headers={"X-Requested-With": "XMLHttpRequest"}).get_json() or {}
+        check("cron run-now: ...while a launch that started still says so",
+              _cr2.get("success") is True, "%r" % (_cr2,))
+    finally:
+        for (_m, _n), _v in _sw_saved.items():
+            setattr(_m, _n, _v)
+
     # ── "the mounts could not be read" is not "this server mounts nothing" ────────────────────
     # gmod_current_mounts has three answers and its docstring calls the third the whole point:
     # a list, [] for "mounts nothing", and None for "could not be read". The status route did

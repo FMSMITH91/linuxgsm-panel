@@ -426,7 +426,16 @@ def run_cron_job_now(server, user, raw, selfname=None):
     # setsid detaches the run so a long command records its result later instead of blocking;
     # `sudo -u` confines it to the game user's own privileges (same as a scheduled run).
     inner = f"mkdir -p {d}; echo {b64} | base64 -d | setsid bash >/dev/null 2>&1 &"
-    _core.run_command(server, f"sudo -u {user} bash -c {_core._quote(inner)}", timeout=15, sudo=False)
+    out, err, rc = _core.run_command(server, f"sudo -u {user} bash -c {_core._quote(inner)}",
+                                     timeout=15, sudo=False)
+    # The job itself is DETACHED, so this rc says nothing about how the job ends — that lands in
+    # the .status file and shows up under Last run. What it DOES say is whether the launch
+    # happened at all. Discarding it meant an unreachable host, a refused sudo or a missing
+    # directory all answered "Started — the result will appear under Last run shortly", with an
+    # audit row recording success, for a job that was never started and whose Last run therefore
+    # never changes. run_command does not raise for those, so the route's except never saw it.
+    if rc != 0:
+        return False, ((err or out or "Couldn't start the job on the host").replace("\n", " ")[:200])
     return True, "Started — the result will appear under Last run shortly."
 
 
