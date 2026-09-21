@@ -5685,15 +5685,25 @@ try:
         ("/api/remote/%d/tailscale-bootstrap" % remote_id, {"auth_key": 5}),
         ("/api/tailscale/check-peer", {"host": 5}),
         ("/api/remote/%d/import" % remote_id, {"servers": [{"user": "u", "game_type": 5}]}),
-        ("/notifications/test", {"channel": 5}),
+        ("/api/notifications/test", {"channel": 5}),
     ]
-    _typed_500 = []
+    _typed_500, _typed_404 = [], []
     for _path, _body in _typed:
         _tr = c.post(_path, json=_body, headers={"X-Requested-With": "XMLHttpRequest"})
         if _tr.status_code >= 500:
             _typed_500.append("%s -> %d" % (_path, _tr.status_code))
+        if _tr.status_code == 404:
+            _typed_404.append(_path)
     check("typed body: %d endpoints were driven, so this is not an empty sweep" % len(_typed),
           len(_typed) >= 20, "the list shrank — the check below would prove less")
+    # ...and every one of them REACHES a handler. This list had "/notifications/test" while the
+    # route is "/api/notifications/test", so Flask answered 404 — which is < 500, so the sweep
+    # passed, and the count above reported it as driven. The endpoint's body was entered by
+    # nothing in the suite while looking covered. Counting the LIST proves the list is long; only
+    # this proves the paths still resolve, which is what a future rename would break.
+    check("typed body: ...and every path in that list actually resolves to a route",
+          not _typed_404,
+          "404 — renamed or mistyped, so the sweep never reached them: %s" % ", ".join(_typed_404))
     check("typed body: a number where a string belongs never 500s",
           not _typed_500, "; ".join(_typed_500[:6]))
 
