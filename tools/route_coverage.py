@@ -118,7 +118,8 @@ def _report(work, cov_path):
     sys.path.insert(0, work)
     os.chdir(work)
     shutil.rmtree(os.path.join(work, "data"), ignore_errors=True)
-    cov_files = json.load(open(cov_path, encoding="utf-8")).get("files", {})
+    with open(cov_path, encoding="utf-8") as fh:
+        cov_files = json.load(fh).get("files", {})
     from app import create_app                                       # noqa: E402
     app = create_app()
     cold, total = [], 0
