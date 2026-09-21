@@ -992,6 +992,57 @@ check("privileged: helper and panel build an identical argv for every verb",
       not _drift, "; ".join(_drift[:2]))
 
 
+# ── a verb must not render to an EMPTY command on a remote host ───────────────────────────────
+# run_privileged sends `_priv.remote_command(verb, args)` over SSH. For a verb the helper performs
+# itself (empty argv, an ACTIONS entry) with no _REMOTE_ACTIONS rendering, that string is just
+# " 2>&1" — which runs, prints nothing, exits 0, and tells the caller the verb SUCCEEDED.
+#
+# steam-dumps-sweep shipped that way. Its whole purpose is to stop a host wedging at ten Steam
+# crash-dump slots, and on every remote host — the normal case for this panel — it did nothing at
+# all while reporting success. steamcmd-install had the same hole.
+#
+# So the gate is on the SHAPE, not on those two names: every verb whose argv is empty must either
+# have a remote rendering or be declared local-only, with a reason. A new action verb cannot be
+# added without choosing.
+_empty_remote = []
+for _v in _priv.verbs():
+    try:
+        _argv = _priv.tool_argv(_v, _VERB_SAMPLES.get(_v, []))
+    except Exception:
+        continue
+    if not _argv and _v not in _priv._REMOTE_ACTIONS and _v not in _priv.LOCAL_ONLY_VERBS:
+        _empty_remote.append(_v)
+check("privileged: no verb silently renders to an empty command over SSH",
+      not _empty_remote,
+      "these run as ' 2>&1' on a remote host and report success: %s" % _empty_remote)
+
+# The local sweep and the remote sweep are two implementations of one list. If they drift, the
+# slots that only one of them knows about fill up on exactly one kind of host — which is the
+# shape of the bug this whole section exists to stop.
+check("privileged: the panel and the helper sweep the same Steam dump slots",
+      tuple(_priv.STEAM_DUMP_SLOTS) == tuple(_helper.STEAM_DUMP_SLOTS),
+      "panel=%r helper=%r" % (_priv.STEAM_DUMP_SLOTS, _helper.STEAM_DUMP_SLOTS))
+_sweep_sh = _priv.remote_command("steam-dumps-sweep", ["gmodserver"])
+check("privileged: the remote sweep names every slot in that list",
+      all((" %s;" % _p) in _sweep_sh or (" %s " % _p) in _sweep_sh
+          for _p in _priv.STEAM_DUMP_SLOTS),
+      "missing from the rendered command: %s"
+      % [_p for _p in _priv.STEAM_DUMP_SLOTS if _p not in _sweep_sh])
+
+# ...and the two that were broken really do send something now.
+check("privileged: steam-dumps-sweep has a remote rendering that names the account",
+      "gmodserver" in _priv.remote_command("steam-dumps-sweep", ["gmodserver"])
+      and "/tmp/dumps" in _priv.remote_command("steam-dumps-sweep", ["gmodserver"]))
+# Fail CLOSED remotely, exactly as the helper does locally: `getent` answers 2 for "no such key"
+# and other codes for "could not look", so only 2 may delete a slot.
+check("privileged: ...and only a definite 'no such uid' frees a slot remotely",
+      'rc" = 2 ' in _priv.remote_command("steam-dumps-sweep", ["gmodserver"]),
+      "an unreadable passwd database would delete every slot")
+check("privileged: ...and it never follows a symlink",
+      '[ -L "$d" ] && continue' in _priv.remote_command("steam-dumps-sweep", ["gmodserver"]))
+check("privileged: steamcmd-install preseeds the licence remotely too",
+      "debconf-set-selections" in _priv.remote_command("steamcmd-install", []))
+
 # ── Steam's ten crash-dump slots, and the panel filling them ────────────────────────────────────
 # Steam will only use a crash-dump directory the running user OWNS, and it tries exactly ten names:
 # /tmp/dumps, then /tmp/dumps01..09. One slot per Linux account, permanently. The panel makes one
@@ -1098,6 +1149,180 @@ check("install failure: ...and says the panel works around it rather than tellin
 check("install failure: a game LinuxGSM caps at an older Ubuntu is named",
       (_cif("Failure! BATTALION: Legacy is not supported on Ubuntu 24.04.5 LTS "
             "(requires 22.04)") or (None,))[0] == "os_unsupported")
+# ── Every place the install opens a firewall port must respect the refusal ────────────────────
+# Step 6 refuses to adopt a port something else already holds, and narrows what it opens so the
+# panel does not put a hole in the firewall in front of another process. Ninety seconds later the
+# post-start re-detect re-read the same config, got the same port back, and opened it anyway —
+# undoing the refusal one statement after making it.
+#
+# It is worse than re-opening it. `ufw allow <port> comment <name>` REPLACES a rule that differs
+# only by its comment: verified on the test host, two allows for one port leave ONE rule carrying
+# the second name. So this rewrote the other server's rule to this server's name, and uninstalling
+# this server would then delete the firewall rule protecting the other, still-running one.
+#
+# Read from the AST, because both call sites sit under long comments that mention every word this
+# check cares about — a substring gate would pass on the prose alone.
+import ast as _ast                                                               # noqa: E402
+_ms_ast = _ast.parse(open(os.path.join(_root, "panel", "routes", "manage_servers.py"),
+                          encoding="utf-8").read())
+
+
+def _uses_name(node, name):
+    return any(isinstance(n, _ast.Name) and n.id == name for n in _ast.walk(node))
+
+
+# Parent map, so each call is judged against the statement list it ACTUALLY sits in. Walking
+# every ancestor body instead reports the same call once per enclosing block and checks the guard
+# against the wrong siblings.
+_parent = {}
+for _n in _ast.walk(_ms_ast):
+    for _ch in _ast.iter_child_nodes(_n):
+        _parent[_ch] = _n
+
+
+def _enclosing_bodies(node):
+    """Every (list, index) this node sits under, innermost first.
+
+    All of them, not just the innermost: the call is inside `if extra:`, while the guard that
+    narrows `extra` is a sibling of that `if` one level out. A guard anywhere up the chain, before
+    the statement that leads to the call, dominates it."""
+    out, cur = [], node
+    while cur in _parent:
+        par = _parent[cur]
+        for _field in ("body", "orelse", "finalbody"):
+            _lst = getattr(par, _field, None)
+            if isinstance(_lst, list) and cur in _lst:
+                out.append((_lst, _lst.index(cur)))
+                break
+        cur = par
+    return out
+
+
+_open_calls, _unguarded = 0, []
+for _c in _ast.walk(_ms_ast):
+    if not (isinstance(_c, _ast.Call)
+            and getattr(_c.func, "id", "") == "remote_ufw_allow_game_ports"):
+        continue
+    _open_calls += 1
+    _arg = _c.args[1] if len(_c.args) > 1 else None
+    _opened = getattr(_arg, "id", None)
+    if _opened is None:
+        continue          # a literal list is not derived from the re-read config
+    _levels = _enclosing_bodies(_c)
+    if not _levels:
+        _unguarded.append("line %d: could not place the call" % _c.lineno)
+        continue
+    _guarded = any(
+        isinstance(_p, _ast.If) and _uses_name(_p.test, "port_conflict")
+        and any(isinstance(_a, _ast.Assign)
+                and any(getattr(_t, "id", None) == _opened for _t in _a.targets)
+                for _a in _ast.walk(_p))
+        for _body, _idx in _levels for _p in _body[:_idx])
+    if not _guarded:
+        _unguarded.append("line %d opens %r with no port_conflict guard before it"
+                          % (_c.lineno, _opened))
+
+check("install: the firewall opens are AST-visible at all", _open_calls >= 2,
+      "found %d remote_ufw_allow_game_ports calls" % _open_calls)
+check("install: no firewall open ignores the port the panel refused to adopt",
+      not _unguarded, "; ".join(_unguarded))
+
+# ── uninstall must not hand you to a page your permission cannot open ────────────────────────
+# uninstall_server needs UNINSTALL_SERVER; /servers/manage needs MANAGE_SERVERS or INSTALL_SERVER.
+# An uninstall-only operator has neither, and the dashboard's Uninstall form is a native POST, so
+# the browser FOLLOWS the redirect: the uninstall succeeded and the page they landed on said "You
+# do not have permission to do that."
+#
+# The rbac suite drives one of the four exits. This covers the other three, which differ only in
+# which failure got them there.
+_uninstall_bad = []
+for _n in _ast.walk(_ms_ast):
+    if not (isinstance(_n, _ast.FunctionDef) and _n.name == "uninstall_server"):
+        continue
+    for _c in _ast.walk(_n):
+        if (isinstance(_c, _ast.Call) and getattr(_c.func, "id", "") == "url_for"
+                and _c.args and isinstance(_c.args[0], _ast.Constant)
+                and _c.args[0].value == "manage_servers"):
+            _uninstall_bad.append("line %d" % _c.lineno)
+check("uninstall: the function was found to check at all",
+      any(isinstance(_n, _ast.FunctionDef) and _n.name == "uninstall_server"
+          for _n in _ast.walk(_ms_ast)),
+      "uninstall_server was renamed — this check is now looking at nothing")
+check("uninstall: no exit sends the operator to a page their permission cannot open",
+      not _uninstall_bad,
+      "redirects to /servers/manage at: %s" % ", ".join(_uninstall_bad))
+
+# ── The Invalid-platform workaround must always be unwound ───────────────────────────────────
+# It writes steamcmdforcewindows=yes into the INSTANCE config, runs the download, and writes it
+# back to "no". The key outlives the install: left at "yes", every later update and validate for
+# that server fetches the Windows depot, so a server that installed fine breaks months later for
+# a reason nothing on screen connects to this install. The download raising — an SSH drop, a
+# timeout — skipped the reset, and the enclosing `except Exception` swallowed it.
+#
+# AST again: the words "steamcmdforcewindows" and "finally" both appear in the comments around
+# this code, so a substring check proves nothing. Assert the reset is in a finalbody.
+_prime_resets, _prime_unprotected = 0, []
+for _n in _ast.walk(_ms_ast):
+    if not (isinstance(_n, _ast.Call) and getattr(_n.func, "id", "") == "lgsm_write_config"):
+        continue
+    _src = _ast.dump(_n)
+    if "'steamcmdforcewindows'" not in _src or "'no'" not in _src:
+        continue                     # the "yes" write, or some other config write
+    _prime_resets += 1
+    # walk up: is any ancestor statement list a Try's finalbody?
+    _cur, _in_finally = _n, False
+    while _cur in _parent:
+        _par = _parent[_cur]
+        if isinstance(_par, _ast.Try) and any(_cur is _st for _st in _par.finalbody):
+            _in_finally = True
+            break
+        _cur = _par
+    if not _in_finally:
+        _prime_unprotected.append("line %d" % _n.lineno)
+
+check("install: the Windows-prime reset is present at all", _prime_resets >= 1,
+      "found %d steamcmdforcewindows=no writes" % _prime_resets)
+check("install: ...and runs in a finally, so a failed download cannot leave it set",
+      not _prime_unprotected,
+      "unprotected at: %s" % ", ".join(_prime_unprotected))
+
+
+# ── Being classified is not the same as being hopeless ───────────────────────────────────────
+# The first version marked EVERY classified cause non-retryable (`retryable=not why`), which took
+# the Retry button away from three causes whose own message ends by telling you to try again. The
+# steam_platform message is the sharpest case: it says "The panel does that automatically on a
+# retry" above a row that offered only Remove.
+from panel.ops.ssh_manager.hosts import INSTALL_FAILURE_FINAL as _iff   # noqa: E402
+
+_CIF_CASES = {
+    "steam_dumps": "FATAL: Steam cannot run. Please delete some /tmp/dumps* directories.",
+    "steam_login": "Steam login not set. Update steamuser in /home/g_bs/lgsm/config-lgsm/bsserver",
+    "steam_platform": "ERROR! Failed to install app '222860' (Invalid platform)",
+    "os_unsupported": "Failure! BATTALION: Legacy is not supported on Ubuntu 24.04.5 LTS",
+}
+check("install failure: the only cause beyond a retry is the one the host cannot change",
+      set(_iff) == {"os_unsupported"},
+      "marked final: %s" % sorted(_iff))
+check("install failure: ...and every case the classifier names is accounted for",
+      set(_CIF_CASES) >= set(_iff) and
+      all((_cif(_o) or (None,))[0] == _c for _c, _o in _CIF_CASES.items()),
+      "a cause was renamed or a new one added without saying whether a retry can get past it")
+# The message and the button have to agree: if the sentence tells the operator to act and try
+# again, the row must offer Retry.
+_cif_says_retry = {
+    _c for _c, _o in _CIF_CASES.items()
+    if any(_w in (_cif(_o) or (None, ""))[1].lower()
+           for _w in ("install again", "on a retry", "try again", "and install"))
+}
+check("install failure: no cause tells you to try again while refusing to let you",
+      not (_cif_says_retry & set(_iff)),
+      "these say to retry but are marked final: %s" % sorted(_cif_says_retry & set(_iff)))
+check("install failure: ...and the retry decision is taken from that set, not from 'was it named'",
+      "retryable=not (why and why[0] in INSTALL_FAILURE_FINAL)"
+      in open(os.path.join(_root, "panel", "routes", "manage_servers.py"),
+              encoding="utf-8").read(),
+      "the call site went back to marking every classified cause non-retryable")
+
 # The one we must NOT name. LinuxGSM prints "Not enough disk space" for SteamCMD app state 0x202,
 # and on the test host 0x202 came back for games the account had no licence for, with 27 GB free.
 # A confident wrong diagnosis is worse than the generic one.

@@ -567,11 +567,18 @@ class GameServer(db.Model):
     # Why the last install failed, in the operator's words, and whether a retry could ever help.
     # status="failed" on its own is a dead end: the row says Failed, the reason lived in memory
     # until the panel restarted, and there was nothing on screen to act on. Cleared the moment an
-    # install succeeds. install_retryable is False for the causes nothing about trying again
-    # changes — a game that needs a Steam account owning it, one LinuxGSM caps at an older Ubuntu,
-    # one SteamCMD has no build of for this platform.
+    # install succeeds. install_retryable is False only for a cause nothing about trying again
+    # changes — today that is a game LinuxGSM caps at an older Ubuntu than the host runs. (An
+    # earlier version listed "no Linux build for this platform" here; that diagnosis was wrong —
+    # it is a SteamCMD bug the install now works around itself. See INSTALL_FAILURE_FINAL.)
     install_error = db.Column(db.Text, default="")
     install_retryable = db.Column(db.Boolean, default=True)
+    # The mounted-content games picked when a GMod server was requested, comma-separated. Stored
+    # because it arrives on the install FORM and nowhere else: a retry re-ran the job without it,
+    # so the content step was skipped silently and the server came back with no mount.cfg — the
+    # maps and props the operator asked for simply missing, with nothing saying so. Revalidated
+    # against GMOD_CONTENT_GAMES on the way back out, so an edited row cannot widen it.
+    content_games = db.Column(db.Text, default="")
     installed = db.Column(db.Boolean, default=False)
     autostart = db.Column(db.Boolean, default=True)
     daily_restart = db.Column(db.Boolean, default=False)  # daily restart when empty of players
@@ -1136,6 +1143,8 @@ def _run_light_migrations():
             "ALTER TABLE game_server ADD COLUMN install_error TEXT DEFAULT ''",
         ("game_server", "install_retryable"):
             "ALTER TABLE game_server ADD COLUMN install_retryable BOOLEAN DEFAULT 1",
+        ("game_server", "content_games"):
+            "ALTER TABLE game_server ADD COLUMN content_games TEXT DEFAULT ''",
         ("invite", "revoked_at"): "ALTER TABLE invite ADD COLUMN revoked_at DATETIME",
         ("remote_server", "public_ip"): "ALTER TABLE remote_server ADD COLUMN public_ip VARCHAR(45) DEFAULT ''",
         ("remote_server", "stats_cache"): "ALTER TABLE remote_server ADD COLUMN stats_cache TEXT DEFAULT ''",

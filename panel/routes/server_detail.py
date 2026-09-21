@@ -76,9 +76,19 @@ def register(app):
             # operator away to wait for something that is not going to happen, and the Game Servers
             # page offers this link on a failed row.
             if gs.status == "failed":
-                flash("That install failed, so there's no console yet — its LinuxGSM config is on "
-                      "the Files & Config page if the failure asked you to change a setting.", "warning")
-                return redirect(url_for("server_files", server_id=gs.id))
+                # Only send them there if they can actually get in. Files & Config bounces a user
+                # without MANAGE_SERVERS straight back here, and here is a route that bounces them
+                # there — two redirects that each look reasonable alone and together are an
+                # infinite loop the browser ends with ERR_TOO_MANY_REDIRECTS. Reproduced with a
+                # VIEW_CONSOLE-only user on a failed row: twelve hops and still going.
+                if _can_manage_files():
+                    flash("That install failed, so there's no console yet — its LinuxGSM config is "
+                          "on the Files & Config page if the failure asked you to change a "
+                          "setting.", "warning")
+                    return redirect(url_for("server_files", server_id=gs.id))
+                flash("That install failed, so there's no console yet. Ask an administrator to "
+                      "retry or remove it.", "warning")
+                return redirect(url_for("index"))
             flash("That server is still installing — its console isn't available until it's done.", "info")
             return redirect(url_for("manage_servers"))
         remote = gs.remote

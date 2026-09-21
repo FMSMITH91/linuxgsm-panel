@@ -109,6 +109,118 @@ if esprima:
             _broken.append("%s: %s" % (_p.name, _e))
     check(not _broken, "static/js: every file parses as JavaScript", "; ".join(_broken[:3]))
 
+# ── Every swap of one region has to re-arm it the SAME way ────────────────────────────────────
+# refreshSection(sel, afterName) replaces a region's innerHTML with freshly server-rendered markup.
+# The elements inside are new objects, so anything bound to the old ones is gone; afterName is the
+# hook that puts it back. Two call sites swapped #server-cards and only one named the hook, so
+# which of the two fired decided whether a filter the user had typed kept applying and whether
+# host-card dragging still worked. Nothing looked broken — the region re-rendered correctly.
+#
+# So: for any region that names a hook ANYWHERE, every call site must name it. Read from the AST
+# and not from the text, because `refreshSection('#servers-list')` also appears in a COMMENT in
+# manage_servers.js, and a regex over the source reports that as a second, non-existent bug.
+if not esprima:
+    skip("static/js: every refreshSection of one region re-arms it the same way",
+         "esprima not installed")
+else:
+    _rs = {}          # selector -> {afterName or None}
+    _rs_where = {}    # selector -> [file:line]
+
+    def _walk_calls(node, fname, out, where):
+        if isinstance(node, dict):
+            if node.get("type") == "CallExpression":
+                _c = node.get("callee") or {}
+                _name = (_c.get("name") if _c.get("type") == "Identifier"
+                         else (_c.get("property") or {}).get("name"))
+                if _name == "refreshSection":
+                    _args = node.get("arguments") or []
+                    _sel = (_args[0] or {}).get("value") if _args else None
+                    _after = (_args[1] or {}).get("value") if len(_args) > 1 else None
+                    if isinstance(_sel, str):
+                        out.setdefault(_sel, set()).add(_after if isinstance(_after, str) else None)
+                        where.setdefault(_sel, []).append(
+                            "%s:%s" % (fname, ((node.get("loc") or {}).get("start") or {}).get("line")))
+            for _v in node.values():
+                _walk_calls(_v, fname, out, where)
+        elif isinstance(node, list):
+            for _v in node:
+                _walk_calls(_v, fname, out, where)
+
+    for _p in sorted((ROOT / "static" / "js").glob("*.js")):
+        try:
+            _ast = esprima.parseScript(_p.read_text(encoding="utf-8"), {"loc": True}).toDict()
+        except Exception:
+            continue      # the parse gate above is what reports an unparseable file
+        _walk_calls(_ast, _p.name, _rs, _rs_where)
+
+    check(len(_rs) >= 4, "sweep: the refreshSection scan found call sites to check",
+          "found %d" % len(_rs))
+    _mixed = {k: sorted(x or "(no hook)" for x in v) for k, v in _rs.items() if len(v) > 1}
+    check(not _mixed,
+          "static/js: every refreshSection of one region re-arms it the same way",
+          "; ".join("%s %s at %s" % (k, v, _rs_where[k]) for k, v in sorted(_mixed.items())))
+
+# ── a FAILED poll is not the answer "nothing is installing" ──────────────────────────────────
+# install_progress.js polled /api/installs and, on any error, called stop() — which clears the
+# interval. Nothing re-arms it: watchInstallsNow is called only from the servers_changed socket
+# event and the install/retry form hooks, and servers_changed fires at the START and END of an
+# install, never per step. So one dropped request ended progress for the rest of the page's life,
+# and the bar stayed on screen showing the last step it received — a frozen reading presented as
+# a live one, which is the worst of the three possible outcomes.
+if not esprima:
+    skip("install_progress: a failed poll does not stop the poller", "esprima not installed")
+else:
+    _ip_src = (ROOT / "static" / "js" / "install_progress.js").read_text(encoding="utf-8")
+    _ip_ast = esprima.parseScript(_ip_src, {"loc": True}).toDict()
+
+    def _calls_named(node, name):
+        found = []
+
+        def walk(n):
+            if isinstance(n, dict):
+                if (n.get("type") == "CallExpression"
+                        and (n.get("callee") or {}).get("type") == "Identifier"
+                        and (n.get("callee") or {}).get("name") == name):
+                    found.append(((n.get("loc") or {}).get("start") or {}).get("line"))
+                for v in n.values():
+                    walk(v)
+            elif isinstance(n, list):
+                for v in n:
+                    walk(v)
+        walk(node)
+        return found
+
+    _catch_stops, _catches = [], 0
+
+    def _scan_catches(n):
+        global _catches
+        if isinstance(n, dict):
+            if (n.get("type") == "CallExpression"
+                    and (n.get("callee") or {}).get("type") == "MemberExpression"
+                    and ((n.get("callee") or {}).get("property") or {}).get("name") == "catch"):
+                _catches += 1
+                for _a in (n.get("arguments") or []):
+                    _catch_stops.extend(_calls_named(_a, "stop"))
+            for v in n.values():
+                _scan_catches(v)
+        elif isinstance(n, list):
+            for v in n:
+                _scan_catches(v)
+
+    _scan_catches(_ip_ast)
+    check(_catches >= 2, "install_progress: the poll's error handlers were found",
+          "found %d .catch handlers" % _catches)
+    check(not _catch_stops,
+          "install_progress: a failed poll does not stop the poller",
+          "stop() is called from a .catch at line(s) %s — one dropped request then ends progress "
+          "for the life of the page" % ", ".join(str(x) for x in _catch_stops))
+    # ...and the frozen bar must say it is frozen, rather than looking like a live reading.
+    check("markStale" in _ip_src and "ip-stale" in _ip_src,
+          "install_progress: ...and a row it has stopped getting readings for is marked stale")
+    _css = (ROOT / "static" / "css" / "panel.css").read_text(encoding="utf-8")
+    check(".ip-stale{" in _css,
+          "install_progress: ...with a style, so 'stale' is visible and not just a class name")
+
 # ── A form that appears AFTER page load carries no CSRF token ─────────────────────────────────
 # panel.js gives every POST form a hidden csrf_token, once, on DOMContentLoaded, and wraps fetch()
 # so every mutating fetch carries the header. A form submitted with form.submit() has neither:
@@ -1781,8 +1893,14 @@ for _js in ("server_files.js", "dashboard.js", "server_detail.js", "manage_serve
 # poll, banner present with its three buttons, no page reload — and a second poll fetches nothing,
 # because the sets now match.
 _dashjs2 = (ROOT / "static" / "js" / "dashboard.js").read_text(encoding="utf-8")
-check("failedShown" in _dashjs2 and "refreshSection('#server-cards')" in _dashjs2,
+check("failedShown" in _dashjs2 and "refreshSection('#server-cards'" in _dashjs2,
       "dashboard: a failure appearing while the page is open re-renders the card region")
+# ...and re-arms it while it is at it. The call used to pass no after-hook, so this swap left the
+# region rendered but un-bound: a typed filter stopped applying and host-card dragging died.
+check(_dashjs2.count("refreshSection('#server-cards', 'afterDashRefresh')") == 2,
+      "dashboard: ...with the same re-arm as every other swap of that region",
+      "%d of the 2 call sites name the hook"
+      % _dashjs2.count("refreshSection('#server-cards', 'afterDashRefresh')"))
 check("failedNow !== failedShown" in _dashjs2,
       "dashboard: ...only when the banners disagree with the API, so it settles after one pass",
       "an unconditional refresh would re-fetch the page on every poll")
@@ -1843,44 +1961,33 @@ check("link('.srv-console', busy)" in _dashjs4,
 # itself, which made any mention here a second, vaguer version of something already on screen.
 # What is left is the half worth surfacing: a failure is something to act on, and it is the other
 # reason Online + Offline does not equal Total.
+# Both windows start at the LINE THAT DECIDES THE COUNT, not at the element that renders it.
+# Sliced from `id="offline-other"` the template window began at line 127 while the
+# `{% set n_failed = ... %}` predicate is at 116; sliced from `var oo = ...` the JS window began
+# one line after the filter. So the pair asserted that the RENDERING does not say "installing" —
+# which it never would — and never looked at the predicate the change was about.
 _dash_tpl = (ROOT / "templates" / "dashboard.html").read_text(encoding="utf-8")
-_tile = _dash_tpl[_dash_tpl.index('id="offline-other"'):]
-_tile = _tile[:_tile.index("</div>")]
+_tile = _dash_tpl[_dash_tpl.index("{% set n_failed"):]
+_tile = _tile[:_tile.index('id="offline-other"') + _tile[_tile.index('id="offline-other"'):].index("</div>")]
+check("{% set n_failed" in _tile and "selectattr('status', 'equalto', 'failed')" in _tile,
+      "dashboard: the Offline tile's count is the one being checked",
+      "the window missed the predicate, so the checks below prove nothing")
 check("installing" not in _tile,
       "dashboard: the Offline tile does not mention installs at all",
-      "the tile still emits an installing count")
+      "the tile still counts or emits installs")
 check("n_failed" in _tile,
       "dashboard: ...and still names failures, which are the reason the arithmetic does not close")
 _dashjs = (ROOT / "static" / "js" / "dashboard.js").read_text(encoding="utf-8")
-_oo = _dashjs[_dashjs.index("var oo = document.getElementById('offline-other')"):]
+_oo = _dashjs[_dashjs.index("var failed = data.filter("):]
 _oo = _oo[:_oo.index("// The failed-install banner")]
+check("data.filter(" in _oo and "'failed'" in _oo,
+      "dashboard: ...and so is the poll's",
+      "the window missed the filter that decides what the poll counts")
 check("installing" not in _oo,
       "dashboard: ...in the poll too, which rewrites this line every few seconds",
-      "the poll puts an installing count straight back")
+      "the poll counts or puts back an installing count")
 check("textContent = 'failed'" in _oo or "word.textContent = 'failed'" in _oo,
       "dashboard: ...and the word keeps its own element, so it can be translated")
-
-# ── a failure that happens while you are LOOKING has to appear ────────────────────────────────
-# The failed-install banner is rendered by the server, per host. When an install failed on a page
-# already open, the status cell flipped to "Failed" (the poll writes that) and the explanation —
-# the reason, Retry, Remove — did not appear until a manual reload. A row saying Failed with
-# nothing to act on is the state this whole feature exists to remove.
-#
-# The poll compares the failed set the API reports against the banners on screen and re-renders
-# the card region when they disagree. Verified in a rendered panel: installing -> failed, one
-# poll, banner present with its three buttons, no page reload — and a second poll fetches nothing,
-# because the sets now match.
-_dashjs2 = (ROOT / "static" / "js" / "dashboard.js").read_text(encoding="utf-8")
-check("failedShown" in _dashjs2 and "refreshSection('#server-cards')" in _dashjs2,
-      "dashboard: a failure appearing while the page is open re-renders the card region")
-check("failedNow !== failedShown" in _dashjs2,
-      "dashboard: ...only when the banners disagree with the API, so it settles after one pass",
-      "an unconditional refresh would re-fetch the page on every poll")
-_dash_tpl2 = (ROOT / "templates" / "dashboard.html").read_text(encoding="utf-8")
-check('class="install-failed alert alert-warning mb-0 mx-2 mt-2 py-2 px-3"\n         data-server-id='
-      in _dash_tpl2,
-      "dashboard: ...and each banner carries the id the comparison reads")
-
 # ── install progress belongs where the server is ──────────────────────────────────────────────
 # A game-server install runs for five to forty-five minutes, and its progress row lived on one
 # page — so starting one from "Install a Server" showed a toast and nothing else, and the dashboard
@@ -1917,9 +2024,39 @@ check("data-no-i18n" in _ip,
 # filterServers shows or hides each one on its own text and tags — a progress row carries neither,
 # so unhandled it sorted away from its server and survived a filter that hid it.
 _dashjs3 = (ROOT / "static" / "js" / "dashboard.js").read_text(encoding="utf-8")
-check("tb.querySelectorAll('tr[data-server-id]')" in _dashjs3
-      and "tb.appendChild(prog)" in _dashjs3,
-      "js: sorting moves a progress row with its server, not to one end of the table")
+check("tb.querySelectorAll('tr[data-server-id]')" in _dashjs3,
+      "js: sorting sorts the SERVER rows, not every tr in the table")
+# THREE paths reorder rows — the column sort, the up/down arrows and the drag handle — and only
+# the first carried the progress row with it. The other two left the bar sitting under whichever
+# server ended up above it, for the rest of the page's life: install_progress.js never moves an
+# existing row, it only refills the one it finds by data-progress-for. So assert every reorder
+# path goes through the one helper, counted from the AST — the identifier also appears in the
+# comment that explains it.
+if not esprima:
+    skip("js: every path that reorders rows carries the progress row with them",
+         "esprima not installed")
+else:
+    _d3_ast = esprima.parseScript(_dashjs3, {"loc": True}).toDict()
+    _reattach = []
+
+    def _count_reattach(n):
+        if isinstance(n, dict):
+            if (n.get("type") == "CallExpression"
+                    and (n.get("callee") or {}).get("type") == "Identifier"
+                    and (n.get("callee") or {}).get("name") == "reattachProgressRows"):
+                _reattach.append(((n.get("loc") or {}).get("start") or {}).get("line"))
+            for v in n.values():
+                _count_reattach(v)
+        elif isinstance(n, list):
+            for v in n:
+                _count_reattach(v)
+
+    _count_reattach(_d3_ast)
+    check(len(_reattach) >= 3,
+          "js: every path that reorders rows carries the progress row with them",
+          "reattachProgressRows is called from %d place(s) (lines %s); the column sort, the "
+          "up/down arrows and the drag handle all need it"
+          % (len(_reattach), ", ".join(str(x) for x in _reattach)))
 check("if (tr.hasAttribute('data-progress-for')) return;" in _dashjs3
       and "prog.style.display = match" in _dashjs3,
       "js: filtering hides a progress row with its server, not on its own text")
@@ -2004,7 +2141,10 @@ failed = sum(1 for c, _, _ in results if c is False)
 skipped = [(name, detail) for c, name, detail in results if c is None]
 for c, name, detail in results:
     label = "PASS" if c is True else "FAIL" if c is False else "SKIP"
-    print("%s  %s%s" % (label, name, "" if c is True else "  -> " + detail))
+    # str(): a check that passed an int (or None) as its detail used to crash HERE, on the very
+    # last loop of the suite, so a genuine FAIL was reported as a TypeError traceback and every
+    # result after it was lost. The reporter must never be the thing that breaks.
+    print("%s  %s%s" % (label, name, "" if c is True else "  -> " + str(detail)))
 print("\n%d / %d checks passed" % (passed, len(results) - len(skipped)))
 if skipped:
     print("\n%d CHECK(S) DID NOT RUN:" % len(skipped))

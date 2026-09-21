@@ -2266,6 +2266,52 @@ check("recover.sh: ...and it says which install it is driving, before any passwo
 _shutil.rmtree(_rv_root, ignore_errors=True)
 
 # ── Every part file must actually be RUN ──────────────────────────────────────────────────────
+# ── a suite's REPORTER must not be the thing that fails ──────────────────────────────────────
+# Every suite here ends by printing its results. That loop did `"  [%s]" % detail`, which raises
+# TypeError when detail is a tuple or an int — and it only ever runs that branch for a FAILING
+# check. So a check written with a non-string detail was green forever and, the one time it
+# mattered, printed a traceback instead of its own name, took the tally with it, and skipped the
+# suite's cleanup(). Seen twice in one day, in two different suites.
+#
+# Two gates, because either alone can be worked around: the reporter must use the tuple form, and
+# no check() call may hand it something that is obviously not a string.
+import ast as _rep_ast
+_REPORTER_SUITES = ["tests/unit_test.py", "tests/smoke_test.py", "tests/rbac_test.py",
+                    "tests/template_actions_test.py", "tests/input_validation_test.py",
+                    "tests/manage_test.py", "tests/setup_wizard_test.py"]
+_rep_fragile, _rep_seen = [], 0
+for _f in _REPORTER_SUITES:
+    _src = open(os.path.join(_root, _f), encoding="utf-8").read()
+    _rep_seen += 1
+    # the safe forms: "% (detail,)" or an explicit str()/repr() around it
+    if ('"   [%s]" % detail' in _src and '"   [%s]" % (detail,)' not in _src
+            and '% str(detail)' not in _src):
+        _rep_fragile.append(_f)
+check("suites: the result printer was actually read", _rep_seen == len(_REPORTER_SUITES),
+      "read %d of %d" % (_rep_seen, len(_REPORTER_SUITES)))
+check("suites: no result printer raises on a non-string detail",
+      not _rep_fragile,
+      "a FAILING check in these prints a TypeError instead of its name: %s" % ", ".join(_rep_fragile))
+
+_det_bad = []
+for _f in _REPORTER_SUITES + ["tests/unit/part01.py", "tests/unit/part02.py",
+                              "tests/unit/part03.py", "tests/unit/part04.py",
+                              "tests/unit/part05.py", "tests/unit/part06.py"]:
+    _tree = _rep_ast.parse(open(os.path.join(_root, _f), encoding="utf-8").read())
+    for _n in _rep_ast.walk(_tree):
+        if not (isinstance(_n, _rep_ast.Call) and getattr(_n.func, "id", "") == "check"):
+            continue
+        if len(_n.args) < 3:
+            continue
+        _d = _n.args[2]
+        # Only a MULTI-ELEMENT TUPLE is a hazard: "%s" % (1, 2) raises, while a list, an int,
+        # a dict, None and a 1-tuple all format fine. Flagging len() or sorted() here would be
+        # noise — checked directly rather than assumed.
+        if isinstance(_d, _rep_ast.Tuple) and len(_d.elts) > 1:
+            _det_bad.append("%s:%d passes a %d-tuple" % (_f, _n.lineno, len(_d.elts)))
+check("suites: no check() hands its reporter something that is not a string",
+      not _det_bad, "; ".join(_det_bad[:6]))
+
 # The suite is now a runner plus tests/unit/part*.py, and the runner names the parts explicitly.
 # Drop one from that list — or add a part and forget to — and the suite reports a smaller total
 # and still exits 0. That is the same silent pass as a suite that SKIPs, and it is the failure this

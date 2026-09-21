@@ -11,7 +11,8 @@ from panel.services import (lgsm_data)
 from panel.ops.ssh_manager import (GMOD_CONTENT_GAMES, GMOD_CONTENT_SIZES,
     _remote_listening_ports, detect_game_ports, ensure_content_user, ensure_persistent_bans,
     game_engine as sm_game_engine, gmod_mount_setup, install_game_cron,
-    classify_install_failure, install_game_dependencies, install_gmod_content,
+    INSTALL_FAILURE_FINAL, classify_install_failure, install_game_dependencies,
+    install_gmod_content,
     lgsm_write_config, parse_missing_deps,
     remote_ufw_allow_game_ports, remote_ufw_close_by_name, remote_ufw_close_game_port,
     set_autostart)
@@ -43,6 +44,120 @@ from panel.routes._shared import (_looks_installed, _notify_servers_changed)
 # it (py/unused-global-variable). The lock is only correct as a single shared object, so there is
 # exactly one definition and no one else may make another.
 _install_alloc_lock = threading.Lock()
+
+
+def scpsl_eula_payload():
+    """The python3 -c payload that accepts the SCP:SL EULA for a game account.
+
+    LocalAdmin refuses to start without it and asks, inside a tmux session nothing can type into.
+    Module-level so the test can assert on what is actually SENT: the gates for this used to grep
+    manage_servers.py for "EulaAccepted", which also appears in the comment that explains it, so
+    all four passed with the write deleted.
+    """
+    return (
+        "import json,io,os,datetime;"
+        "p=os.path.expanduser('~/.config/SCP Secret Laboratory/config/"
+        "localadmin_internal_data.json');"
+        "os.makedirs(os.path.dirname(p),exist_ok=True);"
+        "d=json.load(io.open(p,encoding='utf-8-sig')) if os.path.exists(p) else {};"
+        "d['EulaAccepted']=datetime.datetime.now(datetime.timezone.utc)"
+        ".strftime('%Y-%m-%dT%H:%M:%S.%f0Z');"
+        "io.open(p,'w',encoding='utf-8').write(json.dumps(d))"
+    )
+
+
+def scpsl_seed_config_payload(port):
+    """The shell that seeds LocalAdmin's PER-PORT config from the one LinuxGSM ships.
+
+    SCP:SL keeps config under config/<port>/, and a port with no config makes LocalAdmin print its
+    settings and ask "edit/keep" — which nothing answers inside tmux, so the start hangs for ever.
+    The panel assigns a free port rather than the game's default, so it walks into this on EVERY
+    install. `[ -f ... ] ||` so an existing config is never overwritten.
+    """
+    return ('d="$HOME/.config/SCP Secret Laboratory/config/%d"; mkdir -p "$d"; '
+            '[ -f "$d/config_localadmin.txt" ] || '
+            'cp "$HOME/lgsm/config-default/config-game/config_localadmin.txt" '
+            '"$d/config_localadmin.txt" 2>/dev/null; true' % int(port))
+
+
+def readable_reason(detail):
+    """One tidy line out of a tool's last words: ANSI stripped, whitespace collapsed.
+
+    LinuxGSM and SteamCMD colour their output, so the last 300 bytes of a failed install is
+    mostly escape sequences and column padding — which is what the panel showed, verbatim:
+
+        info...\x1b[0mOK \x1b[0mERROR! Failed to install app '222860' (Invalid platform)
+        \x1b[0mUnloading Steam API...\x1b[0mOK \x1b[0m\x1b[31mFailure!\x1b[0m Installing l4d2server
+
+    A module-level function rather than a line inside the _fail closure, so a test can drive the
+    real thing: rebuilding this expression in the test file passes with the production copy
+    deleted, which is what it did.
+    """
+    return " ".join(terminal.strip_escapes(detail or "").split())
+
+
+def record_install_failure(row, name, detail="", retryable=True, explained=False):
+    """Write a failed install onto `row`: the reason, whether a retry can help, AND the status.
+
+    All three together, because the UI reads them together. Only the step-4 path used to set the
+    status, so an install that died earlier — a bad game type, an unreachable host during LinuxGSM
+    setup, an unhandled exception — left the row at "installing" with a reason beside it that
+    nothing would ever show. The banner, Retry, Remove, the console redirect and Files & Config
+    are ALL keyed on status == "failed", and /delete refuses a row that says it is installing, so
+    that row could not even be removed. A comment here used to claim the status poll would flip
+    it; it does not — api.py skips "installing" and "configuring" rows precisely so that a poll
+    cannot end a live install early.
+
+    `explained` means `name` IS the whole explanation, so the raw tail is not appended: the tail is
+    the tool's own last word and the tool is sometimes wrong (LinuxGSM ends an "Invalid platform"
+    failure by pointing at the host, which is not the problem).
+
+    Returns the reason written, so the caller can log it.
+    """
+    reason = (name if (explained or not detail) else "%s: %s" % (name, detail))[:1000]
+    row.install_error = reason
+    row.install_retryable = bool(retryable)
+    row.installed = False
+    row.status = "failed"
+    return reason
+
+
+def decide_port_adoption(real_port, cur_port, panel_ports, live_ports):
+    """Should the install adopt the port LinuxGSM reports? -> (adopt, taken_by).
+
+    `taken_by` is a phrase for the user when the answer is no and the reason is worth saying;
+    (False, None) just means there is nothing to adopt.
+
+    The panel's own table is only HALF of "is this port free". The other half is what is actually
+    listening on the host — a hand-installed server, a container, anything never imported through
+    /discover. Asking only the table turns a lookup MISS into the measured fact "nobody has it",
+    and adopting a foreign process's port makes every status answer read ITS socket: a server that
+    never bound anything is then reported online, permanently.
+
+    Nothing of OURS can be listening when this runs — the first start comes later in the install —
+    so anything holding real_port at that moment is someone else.
+
+    Three answers, not two, because a scan that FAILED is not an empty one:
+
+        live_ports() is None   could not look -> keep the port the panel allocated, the only one
+                               it knows to be free
+        real_port in it        taken by something that is not us
+        otherwise              free, adopt it
+
+    `live_ports` is a callable so the SSH round trip only happens when the table cannot answer.
+    `panel_ports` maps port -> name for the OTHER servers on this host.
+    """
+    if not real_port or real_port == cur_port:
+        return False, None
+    other = panel_ports.get(real_port)
+    if other:
+        return False, "'%s' on this host" % other
+    live = live_ports()
+    if live is None:
+        return False, "something the panel could not check for"
+    if real_port in live:
+        return False, "another process on this host"
+    return True, None
 
 
 def register(app):
@@ -211,6 +326,12 @@ def register(app):
         # games (validated against the known set). This adds a content step to the install job.
         content_games = ([g for g in request.form.getlist("content_games") if g in GMOD_CONTENT_GAMES]
                          if game_type == "gmod" else [])
+        # Persist it: this list arrives on the form and nowhere else, so without a copy on the row
+        # a retry cannot reproduce it even in principle — it re-ran the job with no selection, the
+        # content step was skipped, and the server came back without the maps and props that were
+        # asked for, silently.
+        gs.content_games = ",".join(content_games)
+        db.session.commit()
         _prune_jobs(_install_jobs, _install_lock)
         with _install_lock:
             _install_jobs[gs.id] = {
@@ -259,9 +380,12 @@ def register(app):
             nothing else. That is the state the user is left in: no reason, no retry, nothing to
             act on. Persisting it is what lets the row say why and offer the right next step.
 
-            `retryable` is False for the causes nothing about trying again changes — a game that
-            needs a Steam account owning it, one LinuxGSM caps at an older Ubuntu, one SteamCMD
-            has no build of for this platform. The row then offers Remove instead of Retry.
+            `retryable` is False only for a cause nothing about trying again changes — today
+            that is a game LinuxGSM caps at an older Ubuntu than the host runs. The row then
+            offers Remove instead of Retry. A cause the operator can act on (free a dump slot,
+            add a Steam account, let the Windows-prime workaround run) stays retryable: its
+            message tells them what to do, and Retry is how they do it. See
+            INSTALL_FAILURE_FINAL.
 
             `explained` means `name` IS the whole explanation, so the raw tail is not appended to
             it on the row. It matters because the tail is the tool's own last word, and the tool
@@ -281,7 +405,7 @@ def register(app):
             # The panel has had strip_escapes since the console was written; this path just never
             # called it. Collapse the whitespace too: the raw tail arrives full of \r and column
             # padding that turns one sentence into five ragged lines in a corner card.
-            detail = " ".join(terminal.strip_escapes(detail or "").split())
+            detail = readable_reason(detail)
             with _install_lock:
                 j = _install_jobs.get(gs_id)
                 cur = j["step"] if j else 0
@@ -290,15 +414,12 @@ def register(app):
                 from panel.db.models import db as _db, GameServer as _GS
                 _row = _db.session.get(_GS, gs_id)
                 if _row is not None:
-                    _row.install_error = (name if (explained or not detail)
-                                          else "%s: %s" % (name, detail))[:1000]
-                    _row.install_retryable = bool(retryable)
+                    record_install_failure(_row, name, detail, retryable, explained)
                     _db.session.commit()
             except Exception:
                 _log.debug("could not record the install failure on the row", exc_info=True)
             # Tell every open dashboard immediately, rather than leaving the explanation to appear
-            # whenever someone happens to reload. The row's status flips on the next status poll
-            # either way; this is what brings the REASON and its buttons with it.
+            # whenever someone happens to reload.
             _notify_servers_changed(app)
 
         def _finish(msg, warn=False):
@@ -472,13 +593,39 @@ def register(app):
                                       "depot — this downloads twice, so it takes a while)")
                                 lgsm_write_config(remote, short_name, lgsm_name,
                                                   {"steamcmdforcewindows": "yes"})
-                                out, err, rc = _sm.run_command(remote, auto, timeout=2700, sudo=False)
-                                last_out = out or err or last_out
-                                # "no", not a delete: LinuxGSM tests `== "yes"`, and
-                                # lgsm_write_config replaces a key in place rather than removing
-                                # one, so this is the same thing through the safe writer.
-                                lgsm_write_config(remote, short_name, lgsm_name,
-                                                  {"steamcmdforcewindows": "no"})
+                                # try/finally, because leaving this key set is WORSE than the
+                                # failure that would leave it. It is written to the instance
+                                # config, which outlives the install: with it still "yes" every
+                                # later update and validate for this server fetches the WINDOWS
+                                # depot, so a server that installed fine breaks the first time it
+                                # is updated, months later, for a reason nothing on screen
+                                # connects to this install. The download raising — an SSH drop, a
+                                # timeout — used to skip the reset entirely.
+                                try:
+                                    out, err, rc = _sm.run_command(remote, auto, timeout=2700,
+                                                                   sudo=False)
+                                    last_out = out or err or last_out
+                                finally:
+                                    # "no", not a delete: LinuxGSM tests `== "yes"`, and
+                                    # lgsm_write_config replaces a key in place rather than
+                                    # removing one, so this is the same thing through the safe
+                                    # writer. It RETURNS (ok, message) and does not raise, so a
+                                    # failed reset is only visible if the result is read — try
+                                    # once more, then say plainly what is left behind.
+                                    _unset_ok = False
+                                    for _try in range(2):
+                                        _unset_ok = bool(lgsm_write_config(
+                                            remote, short_name, lgsm_name,
+                                            {"steamcmdforcewindows": "no"})[0])
+                                        if _unset_ok:
+                                            break
+                                    if not _unset_ok:
+                                        _log.warning(
+                                            "install %s: could not clear steamcmdforcewindows on "
+                                            "%s — it is still 'yes', so this server's future "
+                                            "updates will fetch the Windows depot until it is "
+                                            "changed in Files & Config",
+                                            short_name, lgsm_name)
                                 _p(4, "Fetching the Linux server binaries")
                                 _sm.run_as_game_user(remote, short_name, "validate",
                                                      timeout=2700, selfname=gs.lgsm_name)
@@ -498,14 +645,17 @@ def register(app):
                         except Exception:
                             _log.debug("_run: ignored non-fatal error", exc_info=True)
                     if not installed_ok:
-                        gs.installed = False; gs.status = "failed"; db.session.commit()
-                        # A classified cause is one a retry cannot fix — say so, and let the row
-                        # offer Remove rather than a button that will spend another half hour
-                        # arriving at the same line.
+                        # (_fail writes installed/status/reason together — see above.)
+                        # Being classified is not the same as being hopeless. Three of the four
+                        # causes are "do this, then try again" and their messages say exactly
+                        # that, so taking Retry away contradicts the sentence above the button.
+                        # Only INSTALL_FAILURE_FINAL is beyond a retry.
                         _fail(why[1] if why else
                               ("Game files didn't install after 3 tries — the download may be corrupt "
                                "or the mirror unreachable. Try again shortly."),
-                              last_out[-300:], retryable=not why, explained=bool(why)); return
+                              last_out[-300:],
+                              retryable=not (why and why[0] in INSTALL_FAILURE_FINAL),
+                              explained=bool(why)); return
                     # Files have landed — the server IS installed, but it still needs configuring
                     # and starting (steps 5-8). Use a distinct "configuring" status (NOT "installing")
                     # so the state model is honest: the status poller skips it just like "installing"
@@ -574,16 +724,7 @@ def register(app):
                     # players...". Best-effort and idempotent — an existing file is edited, not
                     # replaced, so nothing else in it is lost.
                     if gs.game_type in ("scpsl", "scpslsm"):
-                        _eula_py = (
-                            "import json,io,os,datetime;"
-                            "p=os.path.expanduser('~/.config/SCP Secret Laboratory/config/"
-                            "localadmin_internal_data.json');"
-                            "os.makedirs(os.path.dirname(p),exist_ok=True);"
-                            "d=json.load(io.open(p,encoding='utf-8-sig')) if os.path.exists(p) else {};"
-                            "d['EulaAccepted']=datetime.datetime.now(datetime.timezone.utc)"
-                            ".strftime('%Y-%m-%dT%H:%M:%S.%f0Z');"
-                            "io.open(p,'w',encoding='utf-8').write(json.dumps(d))"
-                        )
+                        _eula_py = scpsl_eula_payload()
                         try:
                             _sm.run_command(remote,
                                             "sudo -u %s python3 -c %s"
@@ -625,24 +766,33 @@ def register(app):
                         # proxy ONLINE, because something IS listening on 25565 — a port check
                         # cannot tell whose socket it is. Not adopting the port is what stops the
                         # panel manufacturing that state.
-                        _conflict_with = None
-                        if real_port and real_port != gs.port:
-                            _conflict_with = next(
-                                (e for e in GameServer.query.filter_by(remote_id=remote.id).all()
-                                 if e.id != gs.id and e.port == real_port), None)
-                        if real_port and real_port != gs.port and _conflict_with is None:
+                        # See decide_port_adoption for why this is three answers and not two.
+                        _panel_ports = {e.port: e.name
+                                        for e in GameServer.query.filter_by(
+                                            remote_id=remote.id).all()
+                                        if e.id != gs.id and e.port}
+                        _adopt, _taken_by = decide_port_adoption(
+                            real_port, gs.port, _panel_ports,
+                            lambda: _remote_listening_ports(remote))
+                        if _adopt:
                             old_port = gs.port; gs.port = real_port; db.session.commit()
                             try:
                                 remote_ufw_close_game_port(remote, old_port)
                             except Exception:
                                 _log.debug("_run: ignored non-fatal error", exc_info=True)
-                        elif _conflict_with is not None:
-                            port_conflict = (real_port, _conflict_with.name)
-                            _log.warning("install %s: %s reports port %s, which '%s' already has "
+                        elif _taken_by is not None:
+                            port_conflict = (real_port, _taken_by)
+                            _log.warning("install %s: %s reports port %s, which %s already has "
                                          "— keeping %s and not adopting it",
-                                         short_name, lgsm_name, real_port,
-                                         _conflict_with.name, gs.port)
-                        to_open = info.get("open_ports") or ([gs.port] if gs.port else [])
+                                         short_name, lgsm_name, real_port, _taken_by, gs.port)
+                        # Only open what this server is actually entitled to. On the conflict
+                        # branch the panel has just REFUSED the reported port, so opening
+                        # info["open_ports"] — which contains it — would hand a hole in the
+                        # firewall to the other process, attributed to this server.
+                        if port_conflict:
+                            to_open = [gs.port] if gs.port else []
+                        else:
+                            to_open = info.get("open_ports") or ([gs.port] if gs.port else [])
                         remote_ufw_allow_game_ports(remote, to_open, short_name)
                     except Exception:
                         _log.debug("_run: ignored non-fatal error", exc_info=True)
@@ -662,12 +812,7 @@ def register(app):
                     # HERE, not at step 5: the port is only final once step 6 has decided whether
                     # to adopt the one LinuxGSM reports.
                     if gs.game_type in ("scpsl", "scpslsm") and gs.port:
-                        _sl_sh = (
-                            'd="$HOME/.config/SCP Secret Laboratory/config/%d"; mkdir -p "$d"; '
-                            '[ -f "$d/config_localadmin.txt" ] || '
-                            'cp "$HOME/lgsm/config-default/config-game/config_localadmin.txt" '
-                            '"$d/config_localadmin.txt" 2>/dev/null; true' % int(gs.port)
-                        )
+                        _sl_sh = scpsl_seed_config_payload(gs.port)
                         try:
                             _sm.run_command(remote,
                                             "sudo -u %s bash -c %s"
@@ -749,6 +894,18 @@ def register(app):
                     try:
                         info2 = detect_game_ports(remote, short_name, gs.lgsm_name)
                         extra = info2.get("open_ports") or []
+                        if port_conflict:
+                            # Step 6 refused this port precisely so the panel would not open it in
+                            # front of someone else's process. detect_game_ports re-reads the same
+                            # unchanged config and always folds game_port back into open_ports, so
+                            # without this filter the next statement undid that decision — and
+                            # worse than "opened it again": `ufw allow <port> comment <name>`
+                            # REPLACES an existing rule that differs only by comment (verified on
+                            # the test host — two allows for one port leave one rule carrying the
+                            # second name). So this re-opened the other server's port under THIS
+                            # server's name, and uninstalling this one would then delete the rule
+                            # protecting the other, still-running server.
+                            extra = [p for p in extra if p != port_conflict[0]]
                         if extra:
                             remote_ufw_allow_game_ports(remote, extra, short_name)
                     except Exception:
@@ -760,9 +917,9 @@ def register(app):
                         # clash is resolved, and saying nothing would leave someone staring at a
                         # server that looks fine and answers nobody.
                         _finish(f"{short_name} installed, but it wants port {port_conflict[0]}, "
-                                f"which '{port_conflict[1]}' on this host already uses. This game "
-                                f"ignores the port the panel sets, so change it in the game's own "
-                                f"config (Files & Config) or move the other server.", warn=True)
+                                f"which {port_conflict[1]} already uses. This game ignores the "
+                                f"port the panel sets, so change it in the game's own config "
+                                f"(Files & Config), or free that port on the host.", warn=True)
                         log_action(None, "install_complete", target=gs.name, success=False,
                                    detail=("port %s clashes with %s"
                                            % (port_conflict[0], port_conflict[1]))[:300])
@@ -791,17 +948,29 @@ def register(app):
                         log_action(None, "install_complete", target=gs.name, success=False,
                                    detail=_detail[:300])
             except Exception as e:
-                with _install_lock:
-                    j = _install_jobs.get(gs_id)
-                    if j is not None:
-                        j["status"], j["message"], j["updated"] = "failed", str(e), time.time()
+                # Go through _fail so an unexpected crash leaves the same recoverable state as
+                # every other failure: a reason on the row, status "failed", and the dashboard
+                # told. Setting only the in-memory job left the row saying "installing" for ever
+                # — no reason, no Retry, and /delete refusing to remove it.
                 app.logger.exception("install job failed")
+                try:
+                    _fail("Install failed unexpectedly", str(e))
+                except Exception:
+                    _log.debug("could not record the unexpected install failure", exc_info=True)
+                    with _install_lock:
+                        j = _install_jobs.get(gs_id)
+                        if j is not None:
+                            j["status"], j["message"], j["updated"] = "failed", str(e), time.time()
 
         threading.Thread(target=_run, daemon=True).start()
 
     @app.route("/servers/<int:server_id>/retry-install", methods=["POST"])
     @login_required
-    @permission_required(INSTALL_SERVER)
+    # The SAME pair /servers/install and /servers/add accept. This ran the same install job behind
+    # a narrower permission, so someone with MANAGE_SERVERS could install a server but not retry
+    # the one that failed — and the dashboard's can_install flag (that pair) rendered the Retry
+    # button for them anyway, so the button was there and answered "You do not have permission".
+    @permission_required(INSTALL_SERVER, MANAGE_SERVERS)
     @server_access_required
     def retry_install(server_id):
         """Run the install again for a row whose install failed.
@@ -837,13 +1006,20 @@ def register(app):
         gs.status = "installing"
         gs.install_error, gs.install_retryable = "", True
         db.session.commit()
+        # The same selection the original install was given, revalidated on the way out so an
+        # edited row cannot widen it — and the same step count derived from it, rather than a
+        # hardcoded 8 that made the retry's progress bar wrong for exactly these servers.
+        _retry_content = ([g for g in (gs.content_games or "").split(",")
+                           if g in GMOD_CONTENT_GAMES] if gs.game_type == "gmod" else [])
         with _install_lock:
             _install_jobs[gs.id] = {
-                "status": "running", "step": 0, "total": 8, "step_name": "Queued",
+                "status": "running", "step": 0, "total": (9 if _retry_content else 8),
+                "step_name": "Queued",
                 "message": "", "log": [], "started": time.time(), "updated": time.time(),
                 "name": gs.name,
             }
-        _run_install_job(gs.id, remote.id, gs.short_name, gs.game_type, gs.lgsm_name, gs.port)
+        _run_install_job(gs.id, remote.id, gs.short_name, gs.game_type, gs.lgsm_name, gs.port,
+                         _retry_content)
         _notify_servers_changed(app)   # the corner progress widget picks it up from here
         log_action(current_user, "retry_install", target=gs.name)
         return _form_ok(f"Installing {gs.short_name} again. "
@@ -862,12 +1038,25 @@ def register(app):
         with _install_lock:
             _installing = (server_id in _install_jobs
                            and _install_jobs[server_id].get("status") == "running")
-        if _installing or (gs.status == "installing" and not gs.installed):
+        # A LIVE job is the only safe "still installing" signal. The status column was part of
+        # this test, which made any row stranded at "installing" permanently undeletable — and the
+        # panel restarting mid-install strands one every time, because the worker thread dies with
+        # the process while the row keeps saying installing. There is no cancel route, so that row
+        # could only be removed by editing the database. _install_jobs is the authority on whether
+        # a thread is running: _prune_jobs only drops an entry after two hours with no progress
+        # update, and every download attempt reports progress, so an absent entry means a dead job.
+        if _installing:
             _m = "'%s' is still installing — wait for it to finish before uninstalling." % name
             if _wants_json():
                 return jsonify({"success": False, "message": _m}), 409
             flash(_m, "warning")
-            return redirect(url_for("manage_servers"))
+            # index, not manage_servers: this route needs UNINSTALL_SERVER, and
+            # /servers/manage needs MANAGE_SERVERS or INSTALL_SERVER — neither of which
+            # an uninstall-only operator has. The form is a native POST, so the browser
+            # FOLLOWS this redirect and the uninstall they just did successfully ended
+            # on "You do not have permission to do that." /servers/manage is itself only
+            # a 302 to index, so this changes nothing for anyone who could reach it.
+            return redirect(url_for("index"))
         remote = gs.remote
         short_name = gs.short_name
         game_port = gs.port
@@ -934,7 +1123,7 @@ def register(app):
                 if _wants_json():
                     return jsonify({"success": False, "message": _em}), 500
                 flash(_em, "danger")
-                return redirect(url_for("manage_servers"))
+                return redirect(url_for("index"))
             if rc == 12:
                 fw_note += (" The account was removed but its home directory could not be — "
                             "check /home/%s on the host." % short_name)
@@ -959,7 +1148,7 @@ def register(app):
             if _wants_json():
                 return jsonify({"success": True, "message": _m})
             flash(_m, "success")
-            return redirect(url_for("manage_servers"))
+            return redirect(url_for("index"))
 
         except Exception:
             _em = _log_and_generic("uninstall failed")
@@ -967,7 +1156,7 @@ def register(app):
             if _wants_json():
                 return jsonify({"success": False, "message": _em}), 500
             flash(_em, "danger")
-            return redirect(url_for("manage_servers"))
+            return redirect(url_for("index"))
 
     @app.route("/servers/<int:server_id>/edit", methods=["POST"])
     @login_required

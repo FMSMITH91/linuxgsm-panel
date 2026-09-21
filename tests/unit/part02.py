@@ -1688,6 +1688,26 @@ try:
           _gsm.get_server_status(NS(id=1), _srv) == "offline",
           _gsm.get_server_status(NS(id=1), _srv))
 
+    # ...and a caller that needs to know WHICH kind of not-online this is can ask. Folding the
+    # two together is right for "can players connect"; it is wrong for "is there anything to act
+    # on", and the deferred restart/stop sweep is the second kind. It read "offline" as "already
+    # stopped", cleared the operator's queued request and performed nothing — so a "stop when
+    # empty" aimed at a crashed server, the very state this downgrade exists to detect, was
+    # silently dropped. So was one that landed in the seconds between a restart and the port
+    # binding.
+    check("status: ...and the caller can tell a dead session from a live one that isn't serving",
+          _gsm.get_server_status(NS(id=1), _srv, distinguish_unresponsive=True) == "unresponsive",
+          _gsm.get_server_status(NS(id=1), _srv, distinguish_unresponsive=True))
+    check("status: ...while STOPPED still says offline either way",
+          _gsm.get_server_status(NS(id=1), NS(short_name="gmodserver", lgsm_name="gmodserver",
+                                              port=27015), distinguish_unresponsive=True)
+          in ("unresponsive", "offline"))
+    check("status: a queued restart/stop SURVIVES an unresponsive server instead of being cleared",
+          _gsm.mod_restart_decision("unresponsive", None) == "pending",
+          _gsm.mod_restart_decision("unresponsive", None))
+    check("status: ...while a genuinely stopped one still clears it, which is what idle is for",
+          _gsm.mod_restart_decision("offline", None) == "idle")
+
     # ...but an unreadable host must never be what downgrades it. None is not an empty set.
     _g["ports"] = None
     check("status: a failed port scan leaves LinuxGSM's answer alone",

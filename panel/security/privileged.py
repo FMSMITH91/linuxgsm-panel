@@ -978,6 +978,40 @@ def _content_grant_remote(a):
 # Verbs the helper implements itself, with no tool to run. A REMOTE host has no helper, so each one
 # needs the shell form it has always been sent — kept here, beside the verb, so the two renderings
 # cannot drift. These are byte-identical to what the call sites used to build inline.
+# Verbs the helper performs ITSELF (empty argv) that never reach run_privileged's REMOTE branch.
+# Everything else with an empty argv needs a _REMOTE_ACTIONS entry, or remote_command renders it as
+# " 2>&1": that runs, prints nothing, exits 0, and tells the caller the verb succeeded. A unit test
+# holds this set and _REMOTE_ACTIONS between them against the verb table, so a new action verb
+# cannot be added without saying which of the two it is.
+#
+# Two reasons a verb belongs here, and the comment says which:
+#   * it is about the PANEL'S OWN machine, so a remote form is meaningless; or
+#   * its caller branches on is_local_server() first and has its own remote builder, so the
+#     helper_argv form is only ever the local half of an already-two-sided function.
+LOCAL_ONLY_VERBS = frozenset({
+    "gameuser-group",    # the group the LOCAL sudoers grant names; it means nothing on a remote
+    "lgsm-command",      # run_as_game_user picks the transport itself and never routes this here
+    "lgsm-discover",     # called through _exec_local_argv directly, never via run_privileged
+    "panel-db-repair",   # the panel's own database, which only exists on the panel's own host
+    "panel-restore",     # likewise — restoring the panel onto another machine is not a thing
+    "panel-self-update", # the panel's own checkout
+    "tailscale-install", # bootstrapping a remote's tailscale goes through its own SSH flow
+    # Two-sided callers: the remote half is a dedicated builder, not this table.
+    "write-file",        # write_root_file() -> remote_write_command() when not local
+    "content-cron-write",# write_content_cron() -> remote_content_cron_command() when not local
+    "game-file-read",    # the file browser's download: is_local_server() branch in files.py
+    "game-dir-tar",      # same call site as game-file-read
+    "game-backup-read",  # the backup download: is_local_server() branch in cron.py
+})
+
+# Steam's crash-dump slots. The helper holds the same list as STEAM_DUMP_SLOTS and a unit test
+# holds the two equal: a slot in one and not the other is a slot that fills up on exactly one
+# kind of host. Written out rather than globbed, so the two lists can be compared literally.
+STEAM_DUMP_SLOTS = ("/tmp/dumps",) + tuple("/tmp/dumps%02d" % i  # nosec B108 - Steam's own paths
+                                            for i in range(1, 10))
+_STEAM_DUMP_SLOTS_SH = " ".join(shlex.quote(p) for p in STEAM_DUMP_SLOTS)
+
+
 _REMOTE_ACTIONS = {
     "sshd-backup-dropin": lambda a: "[ -f %s ] && cp -f %s %s || true"
                           % (shlex.quote(SSHD_DROPIN), shlex.quote(SSHD_DROPIN),
@@ -986,6 +1020,40 @@ _REMOTE_ACTIONS = {
                            % (shlex.quote(SSHD_DROPIN_BAK), shlex.quote(SSHD_DROPIN_BAK),
                               shlex.quote(SSHD_DROPIN), shlex.quote(SSHD_DROPIN)),
     "sshd-discard-backup": lambda a: "rm -f %s" % shlex.quote(SSHD_DROPIN_BAK),
+    # Steam's ten crash-dump slots, as shell. The helper does this in Python on the panel's own
+    # host; a REMOTE host has no helper to call, and without an entry here the verb rendered to an
+    # empty command — which ran, printed nothing and returned 0, so every caller was told the
+    # sweep had succeeded when nothing had been swept. The slots then filled exactly as they do
+    # with no sweep at all, and SteamCMD stopped working on that host at ten accounts.
+    #
+    # Same rules as do_steam_dumps_sweep, because the two have to agree: a fixed path list, never
+    # follow a symlink (-L before -d is not enough on its own, so both are checked), remove only a
+    # slot whose owner IS the named account or is definitely gone, and FAIL CLOSED — `getent`
+    # answers 2 for "no such key" and other non-zero codes for "could not look", so only 2 counts
+    # as an orphan. Anything else keeps the directory.
+    # One format string with an explicit tuple: '%' binds tighter than both '+' and the implicit
+    # concatenation of adjacent literals, so splitting this across operators silently changes which
+    # substring each argument lands in.
+    "steam-dumps-sweep": lambda a: (
+        'u=%s; tu=$(id -u "$u" 2>/dev/null || echo ""); freed=0; held=0; '
+        'for d in %s; do '
+        '[ -L "$d" ] && continue; [ -d "$d" ] || continue; '
+        'o=$(stat -c %%u "$d" 2>/dev/null) || { held=$((held+1)); continue; }; '
+        'if [ -n "$tu" ] && [ "$o" = "$tu" ]; then rm -rf "$d" && freed=$((freed+1)); continue; fi; '
+        'getent passwd "$o" >/dev/null 2>&1; rc=$?; '
+        'if [ "$rc" = 2 ]; then rm -rf "$d" && freed=$((freed+1)); else held=$((held+1)); fi; '
+        'done; echo "freed=$freed held=$held slots=%d"'
+    ) % (shlex.quote(a[0]), _STEAM_DUMP_SLOTS_SH, len(STEAM_DUMP_SLOTS)),
+    # Same story: on a remote host this rendered to nothing, so the Steam licence was never
+    # preseeded and the package never installed — while the caller read rc 0 as "steamcmd is
+    # present". LinuxGSM fetches its own copy into the game user's home, which is why this went
+    # unnoticed; it is still a verb that claimed to have done something it had not.
+    "steamcmd-install": lambda a: (
+        "printf '%s\n%s\n' 'steam steam/question select I AGREE' 'steam steam/license note ' "
+        "| debconf-set-selections; "
+        "DEBIAN_FRONTEND=noninteractive apt-get install -y steamcmd:i386 steamcmd "
+        "|| DEBIAN_FRONTEND=noninteractive apt-get install -y steamcmd"
+    ),
     "sshd-socket-backup": lambda a: "[ -f %s ] && cp -f %s %s || true"
                           % (shlex.quote(SSHD_SOCKET_DROPIN), shlex.quote(SSHD_SOCKET_DROPIN),
                              shlex.quote(SSHD_SOCKET_DROPIN_BAK)),

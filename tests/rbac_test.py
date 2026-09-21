@@ -201,6 +201,132 @@ try:
         code = c.get(p).status_code
         check("limited user DENIED %s" % p, code != 200, "got %d" % code)
 
+    # ── Two guards that each redirect to the other are an infinite loop ────────────────────────
+    # A failed install sends the console to Files & Config, because that is where the LinuxGSM
+    # config the failure talks about lives. Files & Config sends a user without MANAGE_SERVERS to
+    # the console. For a user who is BOTH — can see the server, cannot manage files, and the
+    # install failed — the two bounce off each other until the browser gives up with
+    # ERR_TOO_MANY_REDIRECTS. Reproduced before this was written: twelve hops and still going.
+    #
+    # So the check is not "does it redirect somewhere sensible" but "does the chain END".
+    with app.app_context():
+        _loopfail = GameServer(remote_id=granted_remote, name="rbac-failed-install",
+                               short_name="bsserver", game_type="bs", port=27145,
+                               installed=False, status="failed")
+        db.session.add(_loopfail)
+        db.session.commit()
+        _loopfail_id = _loopfail.id
+    try:
+        _path, _chain = "/server/%d" % _loopfail_id, []
+        for _ in range(12):
+            _r = c.get(_path)
+            _chain.append("%s -> %s" % (_path, _r.status_code))
+            if _r.status_code not in (301, 302, 303, 307, 308):
+                break
+            _loc = _r.headers.get("Location") or ""
+            _path = _loc.split("localhost", 1)[-1] if _loc.startswith("http") else _loc
+        check("failed install + no MANAGE_SERVERS: the redirect chain terminates",
+              len(_chain) < 12, " | ".join(_chain[:6]))
+        check("failed install + no MANAGE_SERVERS: ...on a page that actually renders",
+              _chain and _chain[-1].endswith("200"), _chain[-1] if _chain else "no response")
+        # And the same from the other end, for someone who followed a Files & Config link.
+        _path, _chain2 = "/server/%d/files" % _loopfail_id, []
+        for _ in range(12):
+            _r = c.get(_path)
+            _chain2.append("%s -> %s" % (_path, _r.status_code))
+            if _r.status_code not in (301, 302, 303, 307, 308):
+                break
+            _loc = _r.headers.get("Location") or ""
+            _path = _loc.split("localhost", 1)[-1] if _loc.startswith("http") else _loc
+        check("failed install + no MANAGE_SERVERS: ...and from the Files & Config side too",
+              len(_chain2) < 12 and _chain2[-1].endswith("200"), " | ".join(_chain2[:6]))
+    finally:
+        with app.app_context():
+            _row = db.session.get(GameServer, _loopfail_id)
+            if _row is not None:
+                db.session.delete(_row)
+                db.session.commit()
+
+    # ── a successful uninstall must not land on a page the uninstaller cannot open ─────────────
+    # Every exit of uninstall_server redirected to /servers/manage, which needs MANAGE_SERVERS or
+    # INSTALL_SERVER — neither of which an UNINSTALL_SERVER-only operator has. The dashboard's
+    # Uninstall form is a native POST, so the browser follows the redirect: the uninstall worked
+    # and the page they landed on said "You do not have permission to do that."
+    with app.app_context():
+        _ug = Group(name=tag + "_un", description="RBAC test UNINSTALL only (auto)",
+                    is_default=False)
+        _ug.set_permissions([auth.VIEW_SERVERS, auth.UNINSTALL_SERVER])
+        _ug.servers.append(RemoteServer.query.get(granted_remote))
+        db.session.add(_ug); db.session.flush()
+        _uu = User(username=tag + "_un", password_hash=auth.hash_password(secrets.token_hex(16)),
+                   display_name=tag + "_un", is_superadmin=False, is_active=True)
+        _uu.groups.append(_ug)
+        db.session.add(_uu)
+        _ugs = GameServer(remote_id=granted_remote, name="rbac-uninstall", short_name="rbacuninst",
+                          game_type="gmod", port=28970, installed=False, status="installing")
+        db.session.add(_ugs)
+        db.session.commit()
+        _uu_id, _ugs_id = _uu.id, _ugs.id
+    try:
+        _uc = client_as(_uu_id)
+        # The 409 "still installing" exit is the one an uninstall-only user can reach without any
+        # SSH at all, and it takes the same redirect as the success path.
+        _ur = _uc.post("/servers/%d/delete" % _ugs_id, follow_redirects=True)
+        _utext = _ur.get_data(as_text=True)
+        check("uninstall-only user: the page they land on is one they may open",
+              "do not have permission" not in _utext.lower(), "landed on a refusal")
+        check("uninstall-only user: ...and it actually rendered", _ur.status_code == 200,
+              "got %d" % _ur.status_code)
+    finally:
+        with app.app_context():
+            for _obj in (db.session.get(GameServer, _ugs_id), db.session.get(User, _uu_id)):
+                if _obj is not None:
+                    db.session.delete(_obj)
+            db.session.commit()
+
+    # ── the Retry button and the route it posts to must agree about who may press it ───────────
+    # The dashboard renders "Retry install" on the can_install flag, which is
+    # INSTALL_SERVER *or* MANAGE_SERVERS — the same pair /servers/install and /servers/add accept.
+    # retry-install was added requiring INSTALL_SERVER alone, so a MANAGE_SERVERS holder was shown
+    # a button that answered "You do not have permission to do that." It runs the very same
+    # install job, so the narrower guard was the outlier, not the flag.
+    with app.app_context():
+        _msg = Group(name=tag + "_ms", description="RBAC test MANAGE_SERVERS (auto)",
+                     is_default=False)
+        _msg.set_permissions([auth.VIEW_SERVERS, auth.MANAGE_SERVERS])   # NOT install_server
+        _msg.servers.append(RemoteServer.query.get(granted_remote))
+        db.session.add(_msg); db.session.flush()
+        _msu = User(username=tag + "_ms", password_hash=auth.hash_password(secrets.token_hex(16)),
+                    display_name=tag + "_ms", is_superadmin=False, is_active=True)
+        _msu.groups.append(_msg)
+        db.session.add(_msu)
+        _rt = GameServer(remote_id=granted_remote, name="rbac-retry", short_name="bsserver",
+                         game_type="bs", port=27146, installed=False, status="failed")
+        _rt.install_error = "Downloading game server files: the mirror was unreachable."
+        _rt.install_retryable = True
+        db.session.add(_rt)
+        db.session.commit()
+        _msu_id, _rt_id = _msu.id, _rt.id
+    try:
+        _msc = client_as(_msu_id)
+        _dash_ms = _msc.get("/")
+        _shown = ("/servers/%d/retry-install" % _rt_id) in _dash_ms.get_data(as_text=True)
+        _posted = _msc.post("/servers/%d/retry-install" % _rt_id,
+                            headers={"X-Requested-With": "XMLHttpRequest"})
+        check("MANAGE_SERVERS: the dashboard offers Retry install on a failed row", _shown,
+              "the button was not rendered, so this proves nothing about the route")
+        check("MANAGE_SERVERS: ...and the route it posts to accepts them",
+              _posted.status_code != 403, "got %d" % _posted.status_code)
+    finally:
+        with app.app_context():
+            _r = db.session.get(GameServer, _rt_id)
+            if _r is not None:
+                db.session.delete(_r)
+            _u2 = db.session.get(User, _msu_id)
+            if _u2 is not None:
+                db.session.delete(_u2)
+            db.session.commit()
+
     # ── VPS-preparation routes must refuse the panel's OWN host ────────────────────────────────
     # manage_remotes.html hides Prepare / Tailscale for the local host, but the ROUTES accepted a
     # POST carrying its id. Those actions apt full-upgrade the machine, rewrite its sshd config,
@@ -904,7 +1030,11 @@ passed = sum(1 for ok, _, _ in results if ok)
 for ok, name, detail in results:
     line = ("PASS" if ok else "FAIL") + "  " + name
     if detail and not ok:
-        line += "   [%s]" % detail
+        line += "   [%s]" % (detail,)   # (detail,) not detail: a multi-element TUPLE detail made
+        #     THIS line raise ('not all arguments converted'), so a
+        #     FAILING check printed a traceback instead of its name
+        #     and killed the tally and cleanup. Lists and ints are fine
+        #     here; the concat-style printer elsewhere breaks on those.
     print(line)
 print("\n%d / %d checks passed" % (passed, len(results)))
 # `results and`, like every other suite has: with results == [] the comparison is 0 == 0 and the

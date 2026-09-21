@@ -453,6 +453,107 @@ try:
     finally:
         _sm_core.run_privileged = _u_orig
 
+    # ── a queued "stop/restart when empty" must not be thrown away ────────────────────────────
+    # The deferred sweep asks get_server_status and treats "offline" as "already stopped, nothing
+    # to do" — clearing BOTH flags. Once the port cross-check began answering "offline" for a
+    # server whose session is alive but not serving, that swallowed the operator's request: a
+    # "stop when empty" aimed at a crashed server (the exact state the cross-check detects) was
+    # cleared without ever being performed, and so was one that landed in the seconds between a
+    # restart and the port binding.
+    #
+    # Driven through the real sweep with the status stubbed, because the bug was in the CALLER:
+    # the helper answers correctly when asked correctly, and the sweep was not asking.
+    import panel.routes._shared as _shmod
+    _sh_gss = _shmod.get_server_status
+    try:
+        with app.app_context():
+            _rm = RemoteServer.query.first()
+            _q = _UGS(remote_id=_rm.id, name="queued-stop", short_name="queuedstop",
+                      game_type="gmod", port=28960, installed=True, status="online")
+            _q.stop_pending = True
+            db.session.add(_q); db.session.commit()
+            _q_id = _q.id
+
+        # A session that is alive but not serving. The stub answers the FOLDED word unless the
+        # caller asks the finer question — so the flag surviving proves the sweep asked.
+        _shmod.get_server_status = (lambda srv, gs, distinguish_unresponsive=False:
+                                    "unresponsive" if distinguish_unresponsive else "offline")
+        _shmod._run_due_restarts(app)
+        with app.app_context():
+            _still_queued = bool(db.session.get(_UGS, _q_id).stop_pending)
+        check("queued stop: a server whose session is alive but not serving keeps the request",
+              _still_queued,
+              "the sweep cleared stop_pending without ever stopping anything")
+
+        # ...and a genuinely stopped server still clears it — that is what 'idle' is for, and
+        # this is the control that stops the fix above from being 'never clear anything'.
+        _shmod.get_server_status = lambda srv, gs, distinguish_unresponsive=False: "offline"
+        _shmod._run_due_restarts(app)
+        with app.app_context():
+            _cleared = not db.session.get(_UGS, _q_id).stop_pending
+        check("queued stop: ...while a genuinely stopped server still clears it", _cleared,
+              "a stopped server should not keep a pending stop for ever")
+    finally:
+        _shmod.get_server_status = _sh_gss
+        with app.app_context():
+            _l = db.session.get(_UGS, _q_id)
+            if _l is not None:
+                db.session.delete(_l); db.session.commit()
+
+    # ── an install that dies EARLY must still leave a row you can act on ──────────────────────
+    # Only the step-4 path wrote status="failed". Every earlier exit — a bad game type, an
+    # unreachable host during LinuxGSM setup, an unhandled exception — wrote the REASON and left
+    # the row saying "installing". The whole recovery design is keyed on status == "failed": no
+    # banner, so the reason it had just written was never shown; no Retry; no Remove; and /delete
+    # refused it outright with "still installing". The only exit was editing the database.
+    #
+    # Driven through record_install_failure, the one writer, because the closure that used to hold
+    # this is unreachable from a test and re-implementing it here would pass with the fix deleted.
+    from panel.routes.manage_servers import record_install_failure as _rif
+
+    class _FakeRow(object):
+        pass
+
+    _fr = _FakeRow(); _fr.installed, _fr.status = True, "installing"
+    _fr_reason = _rif(_fr, "LinuxGSM setup failed", "ssh: connect to host timed out")
+    check("early install failure: the row is marked failed, not left saying 'installing'",
+          _fr.status == "failed", "status=%r" % _fr.status)
+    check("early install failure: ...and no longer claims to be installed",
+          _fr.installed is False, "installed=%r" % _fr.installed)
+    check("early install failure: ...and carries the reason and the retry verdict",
+          "timed out" in _fr.install_error and _fr.install_retryable is True,
+          "%r / %r" % (_fr.install_error, _fr.install_retryable))
+    _fr2 = _FakeRow(); _fr2.installed, _fr2.status = True, "installing"
+    _rif(_fr2, "The whole explanation.", "a noisy tool tail", retryable=False, explained=True)
+    check("early install failure: an explained reason does not get the tool's tail appended",
+          _fr2.install_error == "The whole explanation." and _fr2.install_retryable is False,
+          _fr2.install_error)
+
+    # ...and the row is removable. A panel restart mid-install strands one of these every time:
+    # the worker thread dies with the process while the row keeps saying installing, and there is
+    # no cancel route. /delete used to refuse on the STATUS COLUMN, so that row was undeletable.
+    _u_orig2 = _sm_core.run_privileged
+    try:
+        _sm_core.run_privileged = lambda *a, **k: ("", "", 0)
+        with app.app_context():
+            _rm = RemoteServer.query.first()
+            _st = _UGS(remote_id=_rm.id, name="stranded", short_name="stranded",
+                       game_type="gmod", port=28950, installed=False, status="installing")
+            db.session.add(_st); db.session.commit()
+            _st_id = _st.id
+        _sresp = c.post("/servers/%d/delete" % _st_id, json={},
+                        headers={"X-Requested-With": "XMLHttpRequest"})
+        with app.app_context():
+            _st_left = _UGS.query.get(_st_id) is not None
+        check("stranded install: a row stuck at 'installing' with no live job CAN be removed",
+              not _st_left,
+              "still there — %r" % ((_sresp.get_json() or {}).get("message"),))
+        with app.app_context():
+            _l = _UGS.query.get(_st_id)
+            if _l: db.session.delete(_l); db.session.commit()
+    finally:
+        _sm_core.run_privileged = _u_orig2
+
     # Liveness probe: unauthenticated, returns 200 + {"status":"ok"}, works pre-login.
     hz = app.test_client().get("/healthz")
     check("GET /healthz -> 200 ok (unauthenticated)",
@@ -726,10 +827,13 @@ try:
     #   \x1b[0mUnloading Steam API...\x1b[0mOK \x1b[0m\x1b[31mFailure!\x1b[0m Installing l4d2server…
     #
     # The panel has had strip_escapes since the console was written; this path never called it.
-    from panel.core import terminal as _t_esc
     _raw_tail = ("info...\x1b[0mOK \x1b[0mERROR! Failed to install app '222860' (Invalid "
                  "platform)\r\n   \x1b[0m\x1b[31mFailure!\x1b[0m Installing l4d2server")
-    _clean = " ".join(_t_esc.strip_escapes(_raw_tail).split())
+    # The PANEL'S function, not a copy of it rebuilt here. These three used to assert properties
+    # of a local `" ".join(strip_escapes(raw).split())` the test wrote itself, so they passed with
+    # the production line deleted — they were testing the test.
+    from panel.routes.manage_servers import readable_reason as _clean_fn
+    _clean = _clean_fn(_raw_tail)
     check("install failure: the recorded reason carries no ANSI escapes",
           "\x1b" not in _clean and "[0m" not in _clean, repr(_clean)[:120])
     check("install failure: ...and is one line, not the raw column padding",
@@ -738,8 +842,9 @@ try:
           "Invalid platform" in _clean and "l4d2server" in _clean, repr(_clean)[:120])
     _ms_esc = open(os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
                                 "panel", "routes", "manage_servers.py"), encoding="utf-8").read()
+    # ...and _fail routes through it, so every caller benefits rather than just this one.
     check("install failure: _fail strips before recording, so every caller benefits",
-          'detail = " ".join(terminal.strip_escapes(detail or "").split())' in _ms_esc)
+          "detail = readable_reason(detail)" in _ms_esc)
 
     # A CLASSIFIED reason stands alone on the row. The raw tail is the tool's own last word, and
     # the tool is sometimes wrong: LinuxGSM ends an "Invalid platform" failure with "Check
@@ -747,12 +852,29 @@ try:
     # host is not the problem (the app publishes no Linux launch configuration; proven on the test
     # box, where forcing the platform fails identically). Appending that after the correct sentence
     # undoes it, so the row gets the explanation and the live job keeps the unabridged output.
+    # Driven, not grepped: this used to assert that a particular line of source existed, which
+    # says nothing about what the line does and broke the moment the logic moved into a function.
+    from panel.routes.manage_servers import record_install_failure as _rif_tail
+
+    class _TailRow(object):
+        pass
+
+    def _reason(name, detail, explained):
+        _r = _TailRow(); _r.installed, _r.status = True, "installing"
+        _rif_tail(_r, name, detail, True, explained)
+        return _r.install_error
+
     check("install failure: a classified reason is not followed by the tool's own wrong hint",
-          "explained=bool(why)" in _ms_esc
-          and "_row.install_error = (name if (explained or not detail)" in _ms_esc,
+          _reason("SteamCMD refused this game — a known SteamCMD bug.",
+                  "Check steamcmdforcewindows setting and system architecture", True)
+          == "SteamCMD refused this game — a known SteamCMD bug.",
           "the raw tail is still appended to a classified reason")
     check("install failure: ...while an UNclassified one still carries its tail, which is all it has",
-          'else "%s: %s" % (name, detail))' in _ms_esc)
+          _reason("Downloading game server files", "mirror unreachable", False)
+          == "Downloading game server files: mirror unreachable")
+    check("install failure: ...and the classified call site is the one that asks for that",
+          "explained=bool(why)" in _ms_esc,
+          "step 4 no longer tells the recorder the reason is self-contained")
 
     # ── the install must not point two servers at one port ──────────────────────────────────────
     # resolve_free_port picks a genuinely free port at request time — it unions the host's live
@@ -770,17 +892,40 @@ try:
     # while LinuxGSM still said STARTED. And the panel would then call that proxy ONLINE, because
     # something IS listening on 25565 — a port check cannot tell whose socket it is. So the clash
     # must not be created in the first place.
-    _ms_pc = open(os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
-                               "panel", "routes", "manage_servers.py"), encoding="utf-8").read()
-    check("install: the reported port is not adopted when another server on the host has it",
-          "_conflict_with = next(" in _ms_pc
-          and "real_port != gs.port and _conflict_with is None" in _ms_pc,
-          "step 6 still adopts the reported port unconditionally")
-    check("install: ...and the clash is reported rather than left to be discovered",
-          "port_conflict" in _ms_pc and "already uses" in _ms_pc)
-    check("install: ...while a reported port nobody else holds is still adopted",
-          "old_port = gs.port; gs.port = real_port" in _ms_pc,
-          "the adoption itself was lost, which is what step 6 is for")
+    # The first version of this checked for substrings in manage_servers.py, which says only that
+    # some text is present. The decision is now its own function, so drive it: the panel's table,
+    # a foreign listener, and a scan that could not answer are three different results.
+    from panel.routes.manage_servers import decide_port_adoption as _dpa
+
+    _scans = []
+
+    def _live(value):
+        def f():
+            _scans.append(1)
+            return value
+        return f
+
+    check("install: a reported port nobody holds is adopted",
+          _dpa(25565, 25566, {}, _live({22, 80})) == (True, None))
+    check("install: ...but not one another PANEL server on the host has",
+          _dpa(25565, 25566, {25565: "mc"}, _live(set()))[0] is False)
+    check("install: ...nor one a NON-panel process is already listening on",
+          _dpa(25565, 25566, {}, _live({25565}))[0] is False,
+          "adopting a foreign socket makes every status answer read that process, so a server "
+          "that never bound anything is reported online for ever")
+    check("install: ...nor when the port scan could not answer at all",
+          _dpa(25565, 25566, {}, _live(None))[0] is False,
+          "a failed scan is not an empty one — 'could not look' must not read as 'free'")
+    check("install: ...and each refusal says which of the three it was",
+          len({_dpa(25565, 25566, {25565: "mc"}, _live(set()))[1],
+               _dpa(25565, 25566, {}, _live({25565}))[1],
+               _dpa(25565, 25566, {}, _live(None))[1]}) == 3,
+          "two of the three reasons reach the user as the same sentence")
+    _scans.clear()
+    _dpa(25565, 25565, {}, _live(set()))
+    _dpa(25565, 25566, {25565: "mc"}, _live(set()))
+    check("install: ...without an SSH round trip the table could have answered",
+          not _scans, "the host is scanned even when the panel already knows the port is taken")
 
     # ── SCP: Secret Laboratory asks two questions nobody can answer ─────────────────────────────
     # Found while walking the LinuxGSM catalogue: scpsl installed, LinuxGSM reported STARTED, and
@@ -799,19 +944,30 @@ try:
     # match...", and the panel reporting the server online.
     _ms_sl = open(os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
                                "panel", "routes", "manage_servers.py"), encoding="utf-8").read()
+    # Assert what is actually SENT. These were whole-file substring greps, and every string they
+    # looked for — "EulaAccepted", "config_localadmin.txt" — also appears in the COMMENTS that
+    # explain the code, so all four passed with the EULA write deleted. The ordering one was worse:
+    # .index() finds the FIRST occurrence, which is the comment, so it measured where a comment sat.
+    from panel.routes.manage_servers import (scpsl_eula_payload as _sl_eula,
+                                             scpsl_seed_config_payload as _sl_seed)
+    _eula_cmd, _seed_cmd = _sl_eula(), _sl_seed(27031)
     check("scpsl: the EULA is accepted the way Minecraft's already is",
-          "EulaAccepted" in _ms_sl and "localadmin_internal_data.json" in _ms_sl,
+          "d['EulaAccepted']" in _eula_cmd and "localadmin_internal_data.json" in _eula_cmd,
           "the install still stops at the EULA prompt with nothing to answer it")
     check("scpsl: ...and the per-port config is seeded, or LocalAdmin asks about it instead",
-          "config/%d" in _ms_sl and "config_localadmin.txt" in _ms_sl)
-    # AFTER step 6, not at step 5: the port is only final once step 6 has decided whether to adopt
-    # the one LinuxGSM reports, and seeding the wrong directory helps nobody.
-    check("scpsl: ...seeded once the port is final, not before step 6 can change it",
-          _ms_sl.index("config_localadmin.txt") > _ms_sl.index("# 6. Sync to LinuxGSM's real port"),
-          "the per-port config is written before the port is settled")
+          "config/27031" in _seed_cmd and "config_localadmin.txt" in _seed_cmd, _seed_cmd[:120])
+    check("scpsl: ...into the directory named after THAT port, not a fixed one",
+          "config/27032" in _sl_seed(27032), _sl_seed(27032)[:120])
     check("scpsl: ...and an existing config is left alone",
-          '[ -f "$d/config_localadmin.txt" ] ||' in _ms_sl,
+          '[ -f "$d/config_localadmin.txt" ] ||' in _seed_cmd,
           "it would overwrite a config the operator had edited")
+    # AFTER step 6, not at step 5: the port is only final once step 6 has decided whether to adopt
+    # the one LinuxGSM reports, and seeding the wrong directory helps nobody. Measured on the CALL,
+    # which appears once, rather than on a string the comments also contain.
+    check("scpsl: ...seeded once the port is final, not before step 6 can change it",
+          _ms_sl.index("scpsl_seed_config_payload(gs.port)")
+          > _ms_sl.index("# 6. Sync to LinuxGSM's real port"),
+          "the per-port config is written before the port is settled")
 
     # ── the install works around SteamCMD's "Invalid platform" bug itself ───────────────────────
     # Left 4 Dead 2 refuses to install with "ERROR! Failed to install app '222860' (Invalid
@@ -857,13 +1013,19 @@ try:
               ("/servers/%d/delete" % gs_id) in _dash)
         # The Files link is what #282 made reachable; greying it out here made that unreachable
         # from the one page that shows the failure.
-        # The <a> spans several lines, so read the whole tag rather than one line of it — a
-        # line-scoped check answered "no files link at all" for a link that was right there.
-        _fi = _dash.find('href="/server/%d/files"' % gs_id)
+        #
+        # Find it by its CLASS, not by its href. There are TWO links to /server/<id>/files on this
+        # page — the banner's "Edit its config" above the table, and the row's own button — and the
+        # banner's comes first in the document and is never disabled. A check that took the first
+        # href therefore passed whatever the row button did, which is no check at all. Only the row
+        # button carries `srv-files`.
+        _fi = _dash.find("srv-files")
         _ftag = _dash[_dash.rfind("<a", 0, _fi):_dash.find(">", _fi) + 1] if _fi != -1 else ""
         check("failed install: ...and Files & Config is NOT greyed out on a failed row",
               _fi != -1 and "disabled" not in _ftag,
-              _ftag[:160] or "no files link at all")
+              _ftag[:200] or "no srv-files button at all")
+        check("failed install: ...and the banner offers the same page in words",
+              'href="/server/%d/files"' % gs_id in _dash and "Edit its config" in _dash)
 
         # The retry itself. The real job runs in a background thread and its first step is an SSH
         # round trip to a host this suite stubs, so it fails harmlessly — what is being checked
@@ -875,7 +1037,7 @@ try:
             _after = db.session.get(GameServer, gs_id)
             check("failed install: ...and the row goes back to installing, with the reason cleared",
                   _after.status == "installing" and not _after.install_error, 
-                  (_after.status, _after.install_error))
+                  "status=%s error=%r" % (_after.status, _after.install_error))
             # put it back to failed, this time with a cause no retry can fix
             _after.status, _after.installed = "failed", False
             _after.install_error = "This game is not downloadable with an anonymous Steam login."
@@ -899,6 +1061,71 @@ try:
             _rf = db.session.get(GameServer, gs_id)
             (_rf.status, _rf.installed, _rf.install_error, _rf.install_retryable) = _rf_before
             db.session.commit()
+
+    # ── a retry must reproduce the install it is retrying ─────────────────────────────────────
+    # The mounted-content games for a GMod server arrive on the install FORM and were never stored,
+    # so retry_install re-ran the job with no seventh argument: `if content_games and game_type ==
+    # "gmod"` was false, the content step was skipped, no mount.cfg was written, and the server
+    # came back missing the maps and props that were asked for — with nothing on screen saying so.
+    # The retry's progress bar also hardcoded 8 steps while the original derived 9 for these.
+    with app.app_context():
+        _cg = db.session.get(GameServer, gs_id)
+        _cg_before = (_cg.content_games, _cg.status, _cg.installed,
+                      _cg.install_error, _cg.install_retryable, _cg.game_type)
+        _cg_remote_id = _cg.remote_id
+        _cg.content_games = "cstrike,tf"          # real GMOD_CONTENT_GAMES keys
+        _cg.game_type, _cg.status, _cg.installed = "gmod", "failed", False
+        _cg.install_error, _cg.install_retryable = "mirror unreachable", True
+        db.session.commit()
+    try:
+        c.post("/servers/%d/retry-install" % gs_id)
+        with _install_lock_sm:
+            _cgj = dict(_install_jobs_sm.get(gs_id) or {})
+        check("retry: a GMod retry counts the content step the original did",
+              _cgj.get("total") == 9,
+              "total=%r — the progress bar is short by the content step" % (_cgj.get("total"),))
+        with app.app_context():
+            check("retry: ...and the selection survived on the row to be replayed",
+                  (db.session.get(GameServer, gs_id).content_games or "") == "cstrike,tf",
+                  db.session.get(GameServer, gs_id).content_games)
+        # ...and it gets there from the FORM. Writing the column by hand above tests the replay
+        # but not the capture, and the capture is the half that was missing: the selection arrived
+        # on this POST and was dropped on the floor.
+        # The route refuses when it cannot read the host's ports ("Can't reach ... right now"), and
+        # this suite's remote is a 127.0.0.1 nothing answers on. Stub the scan for this POST only.
+        _appmod_cg = sys.modules["app"]
+        _cg_rlp = _appmod_cg._remote_listening_ports
+        _appmod_cg._remote_listening_ports = lambda r: {22}
+        _add = c.post("/servers/add", data={
+            "remote_id": str(_cg_remote_id), "game_type": "gmod",
+            "server_name": "cgcapture", "port": "28980",
+            "content_games": ["cstrike", "tf"],
+        }, follow_redirects=True)
+        _appmod_cg._remote_listening_ports = _cg_rlp
+        with app.app_context():
+            _new = GameServer.query.filter_by(short_name="cgcapture").first()
+            _captured = (_new.content_games or "") if _new is not None else "<no row>"
+            _new_id = _new.id if _new is not None else None
+        check("retry: the content selection is captured from the install form in the first place",
+              _captured == "cstrike,tf",
+              "row stored %r (POST -> %s)" % (_captured, _add.status_code))
+        if _new_id is not None:
+            with app.app_context():
+                _n = db.session.get(GameServer, _new_id)
+                if _n is not None:
+                    db.session.delete(_n); db.session.commit()
+            with _install_lock_sm:
+                _install_jobs_sm.pop(_new_id, None)
+    finally:
+        with app.app_context():
+            # Restore what it WAS, including game_type — putting back a hardcoded "gmod" left
+            # the row lying about itself and failed four unrelated checks further down the suite.
+            _cg = db.session.get(GameServer, gs_id)
+            (_cg.content_games, _cg.status, _cg.installed,
+             _cg.install_error, _cg.install_retryable, _cg.game_type) = _cg_before
+            db.session.commit()
+        with _install_lock_sm:
+            _install_jobs_sm.pop(gs_id, None)
 
     # ── /api/installs: the progress a corner widget can follow from any page ────────────────────
     # A game-server install runs for five to forty-five minutes, and its only progress row lived on
@@ -1325,6 +1552,28 @@ try:
         _run_light_migrations()   # re-running must be a safe no-op (far-behind upgrades re-apply)
         check("migrate: repeated migrations stay a safe no-op",
               "backup_codes" in _ucols() and "totp_secret" in _ucols())
+
+        # game_server.content_games / install_error / install_retryable: the same for the install
+        # failure and GMod-content columns. A column the MODEL declares and the TABLE lacks is a
+        # 500 on every page that touches that row — and it only ever happens on an UPGRADED
+        # install, never on the fresh one a developer tests with.
+        def _gcols():
+            return {col["name"] for col in _inspect(db.engine).get_columns("game_server")}
+
+        for _col in ("content_games", "install_error", "install_retryable"):
+            _gdropped = False
+            try:
+                db.session.execute(_t("ALTER TABLE game_server DROP COLUMN %s" % _col))
+                db.session.commit()
+                _gdropped = True
+            except Exception:
+                db.session.rollback()     # SQLite too old to DROP COLUMN
+            if _gdropped:
+                check("migrate: a legacy DB is missing game_server.%s" % _col,
+                      _col not in _gcols())
+                _run_light_migrations()
+                check("migrate: ...and the update adds it back", _col in _gcols(),
+                      "an upgraded install 500s on every page that reads this row")
 
         # invite.revoked_at: an install that upgrades INTO revocation must get the column, or every
         # invite page 500s on a column the model expects and the table does not have.
@@ -6439,7 +6688,11 @@ finally:
     for ok, name, detail in results:
         line = ("PASS" if ok else "FAIL") + "  " + name
         if detail and not ok:
-            line += "   [%s]" % detail
+            line += "   [%s]" % (detail,)   # (detail,) not detail: a multi-element TUPLE detail made
+            #     THIS line raise ('not all arguments converted'), so a
+            #     FAILING check printed a traceback instead of its name
+        #     and killed the tally and cleanup. Lists and ints are fine
+        #     here; the concat-style printer elsewhere breaks on those.
         print(line)
     print("\n%d / %d checks passed" % (passed, len(results)))
     cleanup()

@@ -119,7 +119,11 @@ def register(app, supervise):
             return redirect(url_for("manage_servers"))
         if not _can_manage_files():
             flash("You don't have permission to manage server files.", "danger")
-            return redirect(url_for("server_detail", server_id=server_id))
+            # The console is the right place to land — but only when there IS one. For a failed
+            # install server_detail redirects back HERE, and the pair loops until the browser
+            # gives up. Send those to the dashboard, which renders for anyone logged in.
+            return redirect(url_for("server_detail", server_id=server_id)
+                            if gs.installed else url_for("index"))
         # Same control bar as the detail page — this page tells you to restart to apply a
         # change, so it has to offer the button.
         actions, maintenance, _all_cmds, _sup = _server_action_buttons(app, gs)

@@ -393,7 +393,11 @@ passed = sum(1 for ok, _, _ in results if ok)
 for ok, name, detail in results:
     line = ("PASS" if ok else "FAIL") + "  " + name
     if detail and not ok:
-        line += "   [%s]" % detail
+        line += "   [%s]" % (detail,)   # (detail,) not detail: a multi-element TUPLE detail made
+        #     THIS line raise ('not all arguments converted'), so a
+        #     FAILING check printed a traceback instead of its name
+        #     and killed the tally and cleanup. Lists and ints are fine
+        #     here; the concat-style printer elsewhere breaks on those.
     print(line)
 print("\n%d / %d checks passed" % (passed, len(results)))
 sys.exit(0 if results and passed == len(results) else 1)

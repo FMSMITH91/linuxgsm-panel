@@ -134,15 +134,50 @@
     pagePanel(jobs);
   }
 
+  // A poll that FAILED is not the same answer as "nothing is installing". This used to call
+  // stop() on any error, which clears the interval — and nothing re-arms it: watchInstallsNow is
+  // only called from the servers_changed socket event and the install/retry form hooks, and
+  // servers_changed fires at the START and END of an install, never per step. So one dropped
+  // request ended progress for the rest of the page's life, and the bar stayed on screen showing
+  // the last step it happened to receive, which reads as a live measurement of an install the
+  // panel is no longer watching.
+  var missed = 0;
+
+  function markStale(on) {
+    Array.prototype.forEach.call(document.querySelectorAll('tr[data-progress-for]'),
+      function (r) {
+        r.classList.toggle('ip-stale', !!on);
+        var meta = r.querySelector('.ip-meta');
+        if (!meta) return;
+        if (on) {
+          if (meta.getAttribute('data-was') === null) {
+            meta.setAttribute('data-was', meta.textContent);
+          }
+          meta.textContent = 'Progress unavailable — still trying';
+        } else if (meta.getAttribute('data-was') !== null) {
+          meta.textContent = meta.getAttribute('data-was');
+          meta.removeAttribute('data-was');
+        }
+      });
+  }
+
   function tick() {
     fetch(MOUNT + '/api/installs', { cache: 'no-store' })
       .then(function (r) { return r.json(); })
       .then(function (d) {
+        missed = 0;
+        markStale(false);
         var jobs = d.installs || [];
         apply(jobs);
+        // Only an ANSWER that says nothing is installing stops the poll.
         if (!jobs.length) stop();
       })
-      .catch(function () { stop(); });
+      .catch(function () {
+        // Keep the interval. Say so on the second consecutive miss rather than the first, so a
+        // single dropped request does not flicker the row.
+        missed += 1;
+        if (missed >= 2) markStale(true);
+      });
   }
 
   window.watchInstallsNow = function () {
