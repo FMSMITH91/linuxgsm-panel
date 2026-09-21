@@ -8,7 +8,7 @@
 // nullish coalescing, class fields and ||=. .eslintrc.json says ecmaVersion 2021 and disagrees;
 // the gate is the binding one.
 
-var term = null, sock = null, opened = false;
+var term = null, sock = null, opened = false, hostLabel = '', sawOutput = false;
 
 function _cellSize() {
   // MEASURED, not assumed. This was hardcoded at 9x18 "close enough that a resize lands within a
@@ -77,12 +77,27 @@ function initTerminal() {
     sock.emit('term_open', { remote_id: REMOTE_ID, cols: term.cols, rows: term.rows });
   });
 
+  // term_ready means the session was OPENED, which is not the same as connected. A pty and a
+  // paramiko channel are both live by the time it fires, but the tailscale transport is a plain
+  // `ssh -tt` that Popen returns from the moment the process starts — so for an unreachable host
+  // this said "Connected to <host>." for the seventeen seconds ssh spent dialling, and only then
+  // admitted the session had closed. Measured against a host that does not answer.
+  //
+  // The first byte back is the honest signal, whichever transport it came from, so the label only
+  // claims a connection once something has actually arrived. On a reachable host the shell's
+  // prompt lands in milliseconds and this is indistinguishable from before.
   sock.on('term_ready', function (d) {
-    _status('Connected to ' + ((d && d.host) || 'the host') + '.', 'ok');
+    hostLabel = (d && d.host) || 'the host';
+    sawOutput = false;
+    _status('Opening a session on ' + hostLabel + '…');
     term.focus();
   });
 
-  sock.on('term_output', function (d) { if (d && d.data) term.write(d.data); });
+  sock.on('term_output', function (d) {
+    if (!(d && d.data)) return;
+    if (!sawOutput) { sawOutput = true; _status('Connected to ' + hostLabel + '.', 'ok'); }
+    term.write(d.data);
+  });
 
   sock.on('term_error', function (d) {
     var msg = (d && d.message) || 'The terminal could not be opened.';

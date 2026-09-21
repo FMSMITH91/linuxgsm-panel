@@ -70,7 +70,8 @@ ALL_PERMISSIONS = {
     # it is every capability the session's account has, at once. On a remote that account is
     # usually root, so this grant is the most powerful one in the table and should be given on
     # purpose rather than inherited from the permission that adds a VPS.
-    USE_TERMINAL: "Open a shell on a host (powerful — see SECURITY.md)",
+    USE_TERMINAL: ("Open a shell on a host — runs as the panel's own account, which can invoke "
+                   "every privileged action the panel can"),
 }
 
 ACTION_PERMISSION_MAP = {

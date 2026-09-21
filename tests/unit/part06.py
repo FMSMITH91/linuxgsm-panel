@@ -3678,3 +3678,72 @@ _rm_html6 = open(os.path.join(_root, "templates", "remote_manage.html"), encodin
 check("integrity: ...and there is somewhere to SAY so",
       'id="diag-integrity-unknown"' in _rm_html6 and "diag-integrity-unknown" in _fn6,
       "nothing renders the reason, so an unverifiable host shows an empty panel instead")
+
+# ── the terminal must not say "Connected" before anything has connected ───────────────────────
+# term_ready means the session was OPENED. For a pty and for a paramiko channel that is the same
+# thing as connected, but the tailscale transport is a plain `ssh -tt` and Popen returns the
+# moment the PROCESS starts — so an unreachable host read "Connected to <host>." for the whole
+# seventeen seconds ssh spent dialling, and only then admitted the session had closed. Measured
+# against a host that does not answer: status at t+3s was "Connected", the real answer
+# ("connect to host ... Connection timed out") arrived at t+16.9s.
+#
+# The first byte back is the honest signal whatever the transport, so the claim moved to the
+# output handler. A reachable host's prompt lands in milliseconds and it reads the same as before
+# — verified at 150ms for both a local pty and a real remote.
+_ht_src6 = open(os.path.join(_root, "static", "js", "host_terminal.js"), encoding="utf-8").read()
+
+
+def _handler_body6(event):
+    """The body of one sock.on('<event>', ...) handler, up to the next handler."""
+    marker = "sock.on('%s'" % event
+    if marker not in _ht_src6:
+        return None
+    rest = _ht_src6.split(marker, 1)[1]
+    nxt = rest.find("sock.on('")
+    return rest[:nxt] if nxt != -1 else rest
+
+
+_ready6 = _handler_body6("term_ready")
+_outh6 = _handler_body6("term_output")
+check("terminal: the term_ready and term_output handlers are both there to check",
+      _ready6 is not None and _outh6 is not None,
+      "a handler was renamed — re-point this gate (ready=%r output=%r)"
+      % (_ready6 is not None, _outh6 is not None))
+check("terminal: term_ready does not claim a connection",
+      _ready6 is not None and "Connected to" not in _ready6,
+      "the session being OPENED is not the host being reachable — the tailscale transport's "
+      "Popen returns before ssh has dialled, so this reads 'Connected' at a host that is down")
+check("terminal: ...and the first byte back is what claims it",
+      _outh6 is not None and "Connected to" in _outh6,
+      "nothing ever upgrades the status, so a working terminal never says it connected")
+check("terminal: ...claimed once, not on every chunk",
+      _outh6 is not None and "sawOutput" in _outh6,
+      "without a latch this re-sets the status on every chunk of output, overwriting anything "
+      "the exit handler has since put there")
+
+# ── a message must not send the reader to a file that is not there ────────────────────────────
+# PERMISSION_DESCRIPTIONS[USE_TERMINAL] read "powerful — see SECURITY.md", and SECURITY.md does
+# not exist in this repo — so the one permission whose consequences most need explaining pointed
+# an admin at nothing. Written by me, in the commit that added the permission.
+#
+# Scanned across the strings the panel SHOWS, not just that table: a docs pointer is only worth
+# printing if it resolves.
+_doc_refs6 = []
+for _pyf6 in sorted(glob.glob(os.path.join(_root, "panel", "**", "*.py"), recursive=True)):
+    _rel6 = os.path.relpath(_pyf6, _root)
+    for _lineno6, _line6 in enumerate(open(_pyf6, encoding="utf-8"), 1):
+        if _line6.lstrip().startswith("#"):
+            continue                      # a comment is for a reader of the source, not a user
+        for _m6 in re.finditer(r"""["']([^"']*?\b([A-Z][A-Za-z0-9_-]*\.md)\b[^"']*)["']""", _line6):
+            _fname6 = _m6.group(2)
+            if not os.path.exists(os.path.join(_root, _fname6)):
+                _doc_refs6.append("%s:%d -> %s" % (_rel6, _lineno6, _fname6))
+check("docs: no user-facing string points at a file that does not exist",
+      not _doc_refs6,
+      "dangling: %s — the reader is told to go and read something that is not in the repo"
+      % ("; ".join(_doc_refs6),))
+# ...and the check is not vacuous: it must be able to SEE a .md reference at all.
+check("docs: ...and the scan can actually find a .md reference (not a dead regex)",
+      len(re.findall(r"""["']([^"']*?\b([A-Z][A-Za-z0-9_-]*\.md)\b[^"']*)["']""",
+                     'x = "see README.md for more"')) == 1,
+      "the pattern matches nothing, so the gate above would pass against any dangling pointer")

@@ -42,9 +42,19 @@
 <div id="terminal"></div>
 
 <p class="text-secondary small mt-2">
-  <span>This is a real shell on the host, running as the panel's own account — not as root.
-  Nothing typed here is recorded; only the session opening and closing is written to the audit
-  log.</span>
+  {# "not as root" was written for the panel host and printed on every host. On a REMOTE the
+     session runs as whatever account that host is configured with, and for most installs that is
+     root — measured: `whoami` in a terminal on the test VPS answers root. So say which account
+     this actually is instead of making a promise that is false on the hosts where it matters
+     most. #}
+  {% if remote.is_local %}
+  <span>This is a real shell on the host, running as the panel's own account — not as root.</span>
+  {% else %}
+  <span data-no-i18n>This is a real shell on {{ remote.display_name }}, running as
+    <code>{{ remote.username or 'root' }}</code> — the account the panel connects with.</span>
+  {% endif %}
+  <span>Nothing typed here is recorded; only the session opening and closing is written to the
+  audit log.</span>
 </p>
 {% endblock %}
 
