@@ -7618,6 +7618,36 @@ try:
             db.session.get(RemoteServer, remote_id).port = _sh_before
             db.session.commit()
 
+    # ── deleting a UFW rule by number, which nothing entered either ───────────────────────────
+    # The route hands `num` to a helper whose whole job is refusing a delete that would lock the
+    # operator out — including when the firewall could not be READ, because "I could not check"
+    # is not "it is safe". The route's own contribution is the audit row, and that it never
+    # passes force=True: a caller cannot reach the override through the API.
+    import panel.routes.remote_vps as _fwmod
+
+    _fw_saved = _fwmod.remote_ufw_delete_rule
+    _fw_args = []
+    try:
+        def _fw_stub(server, num, force=False):
+            _fw_args.append({"num": num, "force": force})
+            return (False, "refused")
+        _fwmod.remote_ufw_delete_rule = _fw_stub
+        c.post("/api/remote/%d/firewall/delete-rule" % remote_id, json={"num": 3})
+        check("ufw delete: the route never asks for the force override",
+              _fw_args and _fw_args[-1]["force"] is False,
+              "called with force=%r — the API would be able to delete the rule keeping SSH open"
+              % (_fw_args[-1:] or None,))
+        check("ufw delete: a refusal is audited as a failure",
+              (_al_last("remote_ufw_delete_rule") or {}).get("success") is False,
+              "audited %r" % ((_al_last("remote_ufw_delete_rule") or {}).get("success"),))
+        _fwmod.remote_ufw_delete_rule = lambda s, n, force=False: (True, "deleted")
+        c.post("/api/remote/%d/firewall/delete-rule" % remote_id, json={"num": 3})
+        check("ufw delete: ...and a delete that happened is audited as a success (control)",
+              (_al_last("remote_ufw_delete_rule") or {}).get("success") is True,
+              "audited %r" % ((_al_last("remote_ufw_delete_rule") or {}).get("success"),))
+    finally:
+        _fwmod.remote_ufw_delete_rule = _fw_saved
+
     # ── revoking an invite must claim it, not read it and then write ─────────────────────────────
     # Redemption claims the row atomically — "UPDATE ... WHERE used_at IS NULL", with a comment
     # saying that checking is_usable and trusting it would be a race. Revocation was the
