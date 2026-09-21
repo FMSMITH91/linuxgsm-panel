@@ -598,4 +598,18 @@ def register(app):
     def api_remote_specs(remote_id):
         """Static hardware/OS specs for a remote host (loaded once, not polled)."""
         remote = get_remote(remote_id)
-        return jsonify(host_specs(remote))
+        # os_slug alongside the pretty OS name: LinuxGSM's own "<id>-<version>", which is what
+        # decides whether this host can install a game LinuxGSM caps at an older release. That is
+        # a property of THIS host — a 20.04 remote under a 24.04 panel runs those games fine — so
+        # the install picker asks here rather than guessing from the catalogue.
+        #
+        # Added in the ROUTE, not inside host_specs: that helper's contract is ONE probe per host
+        # and a unit check pins it ("host_specs: cached (one run_command for two reads)").
+        # host_os_slug keeps its own per-host cache, so this is one extra read the first time a
+        # host is looked at and nothing thereafter.
+        _specs = dict(host_specs(remote) or {})
+        try:
+            _specs["os_slug"] = _sm.host_os_slug(remote) or ""
+        except Exception:
+            _specs["os_slug"] = ""          # unreadable: the picker leaves everything selectable
+        return jsonify(_specs)

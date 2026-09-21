@@ -33,7 +33,7 @@
            "Select a server..." above a list of one is offering a decision that does not exist.
            With two or more hosts the placeholder stays, because then picking is real and a
            silent default would install onto whichever host happened to sort first. #}
-        <select name="remote_id" id="remote-select" class="form-select" required data-action="suggestFreePort" data-on="change">
+        <select name="remote_id" id="remote-select" class="form-select" required data-action="hostChanged" data-on="change">
           {% if remotes|length != 1 %}<option value="">Select a server...</option>{% endif %}
           {% for r in remotes %}
           <option value="{{ r.id }}"{% if remotes|length == 1 %} selected{% endif %}>{{ r.display_name }}</option>
@@ -48,11 +48,16 @@
              already shown in the help line below. #}
           <option value="">Choose game…</option>
           {% for g in games %}
-          <option value="{{ g.shortname }}"{% if g.legacy_os %} data-legacy-os="{{ g.legacy_os }}"{% endif %}>{{ g.name }}{% if g.legacy_os %} ({{ g.legacy_os }}){% endif %}</option>
+          {# data-game-os is the game's OWN cap, always emitted. data-legacy-os stays for the
+             at-a-glance label, but the real decision is per HOST: LinuxGSM caps four games at an
+             older release, and a 20.04 remote under a 24.04 panel runs them perfectly well. The
+             script filters against the selected host's slug from /api/remote/<id>/specs. #}
+          <option value="{{ g.shortname }}"{% if g.os %} data-game-os="{{ g.os }}"{% endif %}{% if g.legacy_os %} data-legacy-os="{{ g.legacy_os }}"{% endif %}>{{ g.name }}{% if g.legacy_os %} ({{ g.legacy_os }}){% endif %}</option>
           {% endfor %}
         </select>
         {% if games %}
         <div class="form-text"><span>All LinuxGSM games are supported</span> ({{ games|length }}) <span>— everything is downloaded automatically.</span></div>
+        <div class="form-text text-warning" id="game-os-note" data-no-i18n></div>
         {% else %}
         {# The list comes from LinuxGSM at runtime (see lgsm_data). If it could not be fetched and
            nothing is cached, say so — an empty menu with no explanation is the worst outcome. #}

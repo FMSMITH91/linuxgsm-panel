@@ -7010,6 +7010,70 @@ try:
             db.session.get(GameServer, gs_id).game_type = _gm_type_before
             db.session.commit()
 
+    # ── a game LinuxGSM caps BELOW this host's release must be refused up front ───────────────
+    # The picker marks these against the newest OS in the CATALOGUE — a stand-in, because the list
+    # renders before a host is chosen. At install time the host IS chosen, so the comparison can
+    # be the real one: LinuxGSM caps btl and onset at 20.04 and bf1942/bfv at 22.04, and on a
+    # newer host those fail every time, minutes into the download, leaving a failed row behind.
+    # Reported from the panel: Battalion 1944 offered and accepted on a 24.04 host.
+    #
+    # The catalogue is STUBBED, not read: this suite seeds a minimal serverlist.csv with no capped
+    # game in it, so reading the real list would make every check below pass on an empty set. The
+    # first version of this test did exactly that and reported it.
+    import panel.routes.manage_servers as _os_mod
+    # The DEFINITION site, not the package: panel/ops/ssh_manager/__init__.py exposes these
+    # through __getattr__ so there is one stub target, and a unit check enforces that — it caught
+    # this exact line. See ssh-manager-stub-seam-scope.
+    from panel.ops.ssh_manager import hosts as _os_sm
+
+    _os_saved = _os_sm.host_os_slug
+    _os_before = _appmod_ij._remote_listening_ports
+    _os_real_list = _os_mod.load_game_list
+
+    def _os_try(name, port):
+        """POST an install of the capped game and say whether a row was created."""
+        c.post("/servers/add", data={"remote_id": str(_cg_remote_id), "game_type": "btl",
+                                     "server_name": name, "port": str(port)},
+               follow_redirects=True)
+        with app.app_context():
+            _row = GameServer.query.filter_by(short_name=name).first()
+            _made = _row is not None
+            if _row is not None:
+                db.session.delete(_row)
+                db.session.commit()
+        return _made
+
+    try:
+        _appmod_ij._remote_listening_ports = lambda r: {22}
+        _os_mod.load_game_list = lambda: [
+            {"shortname": "btl", "name": "BATTALION: Legacy", "os": "ubuntu-20.04",
+             "legacy_os": "ubuntu-20.04"},
+            {"shortname": "csgo", "name": "CS:GO", "os": "ubuntu-24.04", "legacy_os": ""},
+        ]
+
+        _os_sm.host_os_slug = lambda s: "ubuntu-24.04"
+        check("install OS: a game capped at 20.04 is refused on a 24.04 host, before the download",
+              not _os_try("osrefuse", 28850),
+              "the install started and will fail minutes in, leaving a failed row to clean up")
+
+        # The control, and the case the operator actually asked about: the SAME game on a host
+        # that CAN run it. A 20.04 remote under a 24.04 panel must still install it.
+        _os_sm.host_os_slug = lambda s: "ubuntu-20.04"
+        check("install OS: ...while the same game on a 20.04 REMOTE is still allowed",
+              _os_try("osallow", 28851),
+              "the guard is refusing installs that would have worked — the panel's own OS is not "
+              "the one that matters here")
+
+        # Fails OPEN: an unreadable host OS is not evidence of a problem.
+        _os_sm.host_os_slug = lambda s: None
+        check("install OS: ...and a host whose OS could not be read is not refused",
+              _os_try("osunknown", 28852),
+              "this fails closed — an unreadable OS blocks an install that may be fine")
+    finally:
+        _os_mod.load_game_list = _os_real_list
+        _os_sm.host_os_slug = _os_saved
+        _appmod_ij._remote_listening_ports = _os_before
+
     # ── a ban the engine drops at the next map change is not a ban ────────────────────────────
     # `banid ...; writeid` persists the id to cfg/banned_user.cfg, but the engine only reloads that
     # file if the server config EXECS it — and ensure_persistent_bans is what appends that line.
