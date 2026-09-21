@@ -7417,6 +7417,79 @@ try:
         check("custom command: a missing command is refused, not an exception",
               _crcc(_adm, None, _gs) is False)
 
+    # ── revoking an invite must claim it, not read it and then write ─────────────────────────────
+    # Redemption claims the row atomically — "UPDATE ... WHERE used_at IS NULL", with a comment
+    # saying that checking is_usable and trusting it would be a race. Revocation was the
+    # read-then-write half of that same race: it checked used_at, and stamped revoked_at after.
+    # A link redeemed in between left a row stamped BOTH used and revoked, and told the admin the
+    # link no longer works — about an invite whose account had just been created.
+    #
+    # Driven deterministically by opening the window by hand: utcnow() is what the route calls
+    # between the two, so a stub that marks the invite used is exactly the redemption landing
+    # there. The atomic version evaluates it BEFORE the UPDATE, so the WHERE clause sees the
+    # claim and matches nothing.
+    import panel.routes.admin_notifications as _ivmod
+    from panel.db.models import Invite as _IvR
+    from sqlalchemy import text as _iv_text
+
+    _iv_saved_now = _ivmod.utcnow
+    try:
+        with app.app_context():
+            _iv_admin = db.session.get(User, admin_id)
+            _iv_row, _ = _IvR.mint(_iv_admin, hours=24)
+            db.session.add(_iv_row)
+            db.session.commit()
+            _iv_id = _iv_row.id
+            _AL.query.filter_by(action="invite_revoked").delete()
+            db.session.commit()
+
+        def _iv_redeem_mid_flight():
+            """The redemption, landing in the window the route leaves open."""
+            db.session.execute(_iv_text("UPDATE invite SET used_at = :t WHERE id = :i"),
+                               {"t": _iv_saved_now(), "i": _iv_id})
+            return _iv_saved_now()
+
+        _ivmod.utcnow = _iv_redeem_mid_flight
+        _iv_resp = c.post("/users/invite/%d/revoke" % _iv_id, follow_redirects=True)
+        _ivmod.utcnow = _iv_saved_now
+        _iv_body = _iv_resp.get_data(as_text=True)
+        with app.app_context():
+            _iv_after = db.session.get(_IvR, _iv_id)
+            _iv_used = _iv_after.used_at is not None
+            _iv_revoked = _iv_after.revoked_at is not None
+            _iv_audit = _AL.query.filter_by(action="invite_revoked").count()
+        check("invite revoke: the redemption really did land first (positive control)",
+              _iv_used, "the window never opened, so the checks below prove nothing")
+        check("invite revoke: a link redeemed in the same instant is not ALSO stamped revoked",
+              not _iv_revoked,
+              "the row is stamped used AND revoked — a read-then-write lost the race")
+        check("invite revoke: ...and the admin is told it was redeemed, not that it was revoked",
+              "already redeemed" in _iv_body and "no longer works" not in _iv_body,
+              "the page reported a revocation of an invite that had just made an account")
+        check("invite revoke: ...and nothing is audited as a revocation",
+              _iv_audit == 0, "%d invite_revoked row(s) for an invite that was redeemed" % _iv_audit)
+
+        # The ordinary path still works: an unredeemed invite is revoked and audited.
+        with app.app_context():
+            _iv_row2, _ = _IvR.mint(db.session.get(User, admin_id), hours=24)
+            db.session.add(_iv_row2)
+            db.session.commit()
+            _iv_id2 = _iv_row2.id
+        _iv_body2 = c.post("/users/invite/%d/revoke" % _iv_id2,
+                           follow_redirects=True).get_data(as_text=True)
+        with app.app_context():
+            _iv_after2 = db.session.get(_IvR, _iv_id2)
+            _iv_ok = _iv_after2.revoked_at is not None and not _iv_after2.is_usable
+            _iv_audit2 = _AL.query.filter_by(action="invite_revoked").count()
+        check("invite revoke: an unredeemed invite is still revoked (positive control)",
+              _iv_ok and "no longer works" in _iv_body2,
+              "revoking stopped working altogether, so the checks above would pass with the "
+              "route removed")
+        check("invite revoke: ...and that one IS audited", _iv_audit2 == 1,
+              "%d invite_revoked rows" % _iv_audit2)
+    finally:
+        _ivmod.utcnow = _iv_saved_now
+
     # ── backups: the schedule clock, and an audit line that matches what happened ─────────────
     # Three accounting bugs, all the same shape: a backup path that did (or did not do) something
     # and told the rest of the panel otherwise.
