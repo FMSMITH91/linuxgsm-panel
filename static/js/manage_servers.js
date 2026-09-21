@@ -368,16 +368,20 @@ function refreshMsrvMetrics(){
     .then(function(d){
       if(!d) return;
       var servers = d.servers || {};
-      Object.keys(servers).forEach(function(sid){
-        var s = servers[sid], cell = document.getElementById('msrv-res-' + sid);
-        if(cell) cell.innerHTML = s.up  // nosemgrep
+      // Walk the CELLS on the page, not the payload's keys. A host that stops answering drops
+      // every one of its servers out of this payload, and iterating the payload could therefore
+      // never reach them — so their Resources column kept the last CPU/RAM figures it was handed,
+      // with an uptime frozen mid-count, for as long as the page stayed open. Absent is unknown.
+      Array.prototype.forEach.call(document.querySelectorAll('[id^="msrv-res-"]'), function(cell){
+        var sid = cell.id.substring('msrv-res-'.length), s = servers[sid];
+        cell.innerHTML = (s && s.up)  // nosemgrep
           ? ('<i class="bi bi-cpu"></i> ' + s.cpu + '% · ' + s.ram_mb + ' MB'
              + (s.uptime ? ' · <span title="Uptime"><i class="bi bi-clock"></i> ' + _fmtUptimeShort(s.uptime) + '</span>' : ''))
           : '<span class="text-secondary">—</span>';
         var mapEl = document.getElementById('msrv-map-' + sid);
         if(mapEl){
           // The map name is whatever the QUERIED GAME SERVER reports, so it is escaped.
-          if(s.up && s.map){ mapEl.innerHTML = '<i class="bi bi-geo-alt"></i> ' + escapeHtml(s.map);  // nosemgrep
+          if(s && s.up && s.map){ mapEl.innerHTML = '<i class="bi bi-geo-alt"></i> ' + escapeHtml(s.map);  // nosemgrep
             mapEl.classList.remove('d-none'); }
           else { mapEl.classList.add('d-none'); }
         }

@@ -2211,6 +2211,107 @@ check(not _id_offenders,
       "; ".join(_id_offenders))
 
 
+# ── a live page must not keep painting figures it can no longer measure ───────────────────────
+# /api/dashboard/metrics omits a host it could not sample. Both pollers iterated the PAYLOAD's
+# keys, so an omitted host was never reached: the dashboard's "CPU 12.5% · RAM 40.1% · Disk 55.2%"
+# line and every Resources cell under it kept the last reading for as long as the page stayed
+# open — with an uptime that had stopped advancing — under a header that says "Auto-refreshing",
+# beside a summary tile that had ALREADY fallen back to "—". Measured in a rendered panel: a
+# payload of {hosts:{},servers:{}} left all three frozen and only the tile told the truth.
+#
+# The loops are driven by the CELLS ON THE PAGE now, so a host the payload does not mention blanks
+# instead of lying. Each window starts at the line that decides what is iterated, so a gate cannot
+# pass by looking at rendering the change never touched.
+#
+# Every window below is sliced with _between, which ANSWERS "" when either marker is gone. Cut
+# with a bare str.index these gates did not fail when the fix was reverted — they raised
+# ValueError, and this suite prints its results only after the last check, so a crash here
+# discarded all 172 of them and reported rc=1 with no FAIL line. A gate that cannot survive the
+# absence of what it is looking for is not a gate.
+def _between(text, first, last=None):
+    i = text.find(first)
+    if i < 0:
+        return ""
+    rest = text[i:]
+    if last is None:
+        return rest
+    j = rest.find(last)
+    return rest if j < 0 else rest[:j]
+
+
+_dm_js = (ROOT / "static" / "js" / "dashboard.js").read_text(encoding="utf-8")
+_dm_win = _between(_dm_js, "function refreshMetrics()", "refreshMetrics();")
+check(bool(_dm_win),
+      "dashboard: the metrics poll is where these checks think it is",
+      "refreshMetrics() was not found — every check below proves nothing")
+check('querySelectorAll(\'[id^="host-metrics-"]\')' in _dm_win,
+      "dashboard: the host metrics line is repainted from the page's own cards",
+      "the poll still only visits hosts the payload happened to carry")
+check("Object.keys(hosts)" not in _dm_win,
+      "dashboard: ...so a host missing from the payload is reached, not skipped",
+      "iterating the payload's keys can never reach an omitted host")
+check('querySelectorAll(\'[id^="res-"]\')' in _dm_win and "Object.keys(servers)" not in _dm_win,
+      "dashboard: the Resources cells are repainted the same way",
+      "a server whose host went quiet keeps the last CPU/RAM it was given")
+# The EXACT expression that decides the text, not the identifier appearing anywhere in the window.
+# `h.metrics` also sits on the next line (the summary pick), so a first version of this check read
+# true with the decision itself mutated to `h && h.cpu` — a host reporting 0% would then have been
+# blanked as unmeasured, and an unmeasured host with a stale cpu would have been painted.
+check("el.textContent = (h && h.metrics)" in _dm_win,
+      "dashboard: ...and 'no sample was taken' is what blanks them, not a falsy reading",
+      "the host line is blanked on a figure's value rather than on whether one exists")
+check("cell.innerHTML = (s && s.up)" in _dm_win,
+      "dashboard: ...the same way for the per-server cells",
+      "a server absent from the payload is not distinguished from one that is stopped")
+
+_ms_js2 = (ROOT / "static" / "js" / "manage_servers.js").read_text(encoding="utf-8")
+_ms_win = _between(_ms_js2, "function refreshMsrvMetrics()",
+                   "// Same guard, and this is the expensive one")
+check(bool(_ms_win),
+      "game servers: the metrics poll is where this check thinks it is",
+      "refreshMsrvMetrics() was not found")
+check('querySelectorAll(\'[id^="msrv-res-"]\')' in _ms_win
+      and "Object.keys(servers)" not in _ms_win,
+      "game servers: the Resources column is repainted from the page's own rows",
+      "the same freeze as the dashboard, on the page that lists every server")
+
+# The reachability badge was rendered once by the server and never touched again, so a host that
+# died while the dashboard was open went on reading "Reachable" until someone pressed F5 — the one
+# fact on that card you would open the page to learn.
+_dm_tpl = (ROOT / "templates" / "dashboard.html").read_text(encoding="utf-8")
+check('id="host-reach-{{ remote.id }}"' in _dm_tpl,
+      "dashboard: the reachability badge carries an id the poll can find it by",
+      "no id means the poll can never repaint it")
+check("'host-reach-' + rid" in _dm_js,
+      "dashboard: ...and the poll repaints it",
+      "the badge has an id nothing uses")
+
+# The JS now renders the same three states the template does. Two copies of one rule drift, so
+# this asserts they still agree on the PAIRING — parsed out of the object literal, because a
+# check that merely finds each word somewhere in the file would let the badge paint "Reachable"
+# red. Reverting the pairing has to FAIL, not raise: hence _between and a regex over what it
+# returns rather than an index into it.
+_badge = _between(_dm_tpl, 'id="host-reach-{{ remote.id }}"', "</span>")
+_reach_js = _between(_dm_js, "var HOST_REACH = {", "\n};")
+_reach_pairs = dict((m.group(2), m.group(1)) for m in
+                    re.finditer(r"\{cls:\s*'([^']+)',\s*text:\s*'([^']*)'", _reach_js))
+_want_pairs = {"Reachable": "bg-success", "Unreachable": "bg-danger",
+               "Checking\u2026": "bg-secondary"}
+check(len(_reach_pairs) == 3,
+      "dashboard: the poll declares exactly the three host states",
+      "parsed %d state(s) from HOST_REACH: %s" % (len(_reach_pairs), sorted(_reach_pairs)))
+_drift = ["%s wants %s, poll paints %s" % (_t, _c, _reach_pairs.get(_t, "nothing"))
+          for _t, _c in _want_pairs.items() if _reach_pairs.get(_t) != _c]
+check(not _drift,
+      "dashboard: the poll pairs each host state with the class the template renders",
+      "; ".join(_drift))
+_tpl_drift = ["%s/%s" % (_c, _t) for _t, _c in _want_pairs.items()
+              if not (_c in _badge and _t in _badge)]
+check(_badge and not _tpl_drift,
+      "dashboard: ...and those are the three the template itself renders",
+      "the server-rendered badge no longer matches: " + ", ".join(_tpl_drift or ["badge not found"]))
+
+
 passed = sum(1 for c, _, _ in results if c is True)
 failed = sum(1 for c, _, _ in results if c is False)
 skipped = [(name, detail) for c, name, detail in results if c is None]

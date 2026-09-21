@@ -207,7 +207,11 @@
          and a host card reading "Offline" above a row of servers reading "Offline" invites the
          reader to think they are the same fact. Reachability gets its own words. #}
       {% set _probed = host_probed(remote.id) %}
-      <span class="badge {% if remote.is_online %}bg-success{% elif not _probed %}bg-secondary{% else %}bg-danger{% endif %}"
+      {# id, because the 10s metrics poll repaints this: it was rendered once and never touched
+         again, so a host that died while the dashboard was open went on reading "Reachable" —
+         on a page whose header says "Auto-refreshing" — until someone pressed F5. #}
+      <span id="host-reach-{{ remote.id }}"
+            class="badge {% if remote.is_online %}bg-success{% elif not _probed %}bg-secondary{% else %}bg-danger{% endif %}"
             title="{% if remote.is_online %}The panel can reach this host over SSH{% elif not _probed %}The panel has not checked this host yet — the first check runs shortly after startup{% else %}The panel cannot reach this host over SSH — the servers below show their last known state{% endif %}">
         {% if remote.is_online %}Reachable{% elif not _probed %}Checking…{% else %}Unreachable{% endif %}
       </span>

@@ -169,6 +169,8 @@
   "LinuxGSM User": "Usuario LinuxGSM",
   "LinuxGSM User (optional)": "Usuario LinuxGSM (opcional)",
   "Live Resources": "Recursos en vivo",
+  "Live figures are paused — the host did not answer. The numbers below are the last reading.": "Las cifras en vivo están en pausa — el host no respondió. Los números de abajo son la última lectura.",
+  "Live figures are paused — the last read failed.": "Las cifras en vivo están en pausa — la última lectura falló.",
   "Load-average per core. 100% = one core fully busy; 200% = load 2.0 on a 1-core box.": "Carga media por núcleo. 100 % = un núcleo totalmente ocupado; 200 % = carga 2,0 en una máquina de un núcleo.",
   "Loading alert settings…": "Cargando ajustes de alertas…",
   "Loading specs…": "Cargando especificaciones…",
@@ -310,6 +312,9 @@
   "The UI language a newly-created account starts in. Each user can change their own afterwards on their Account page.": "El idioma de la interfaz con el que empieza una cuenta recién creada. Después, cada usuario puede cambiar el suyo en su página de Cuenta.",
   "The command line you write is trusted. If it contains a placeholder, the value the operator types is validated before it is substituted, so it cannot smuggle in extra commands. (Only Super Administrators can manage this page.)": "La línea de comando que escribes es de confianza. Si contiene un marcador de posición, el valor que teclea el operador se valida antes de sustituirlo, de modo que no puede colar comandos adicionales. (Solo los superadministradores pueden gestionar esta página.)",
   "The name they sign in with. Changing it does not sign them out, and their earlier audit entries stay under the old name.": "El nombre con el que inicia sesión. Cambiarlo no cierra su sesión, y sus entradas de auditoría anteriores se mantienen con el nombre antiguo.",
+  "The panel can reach this host over SSH": "El panel puede acceder a este host por SSH",
+  "The panel cannot reach this host over SSH — the servers below show their last known state": "El panel no puede acceder a este host por SSH — los servidores de abajo muestran su último estado conocido",
+  "The panel has not checked this host yet — the first check runs shortly after startup": "El panel aún no ha comprobado este host — la primera comprobación se ejecuta poco después del arranque",
   "This Machine": "Esta máquina",
   "This host's public IP isn't known yet": "Aún no se conoce la IP pública de este host",
   "Topic": "Tema",
@@ -376,7 +381,5 @@
   "user, target or detail…": "usuario, objetivo o detalle…",
   "whole host": "todo el host",
   "“Send test” checks what you've typed above — you don't need to save first.": "«Enviar prueba» comprueba lo que has escrito arriba: no necesitas guardar primero.",
-  "…only alert if CPU/memory stays high for at least": "…avisar solo si la CPU o la memoria se mantienen altas durante al menos",
-  "Live figures are paused — the host did not answer. The numbers below are the last reading.": "Las cifras en vivo están en pausa — el host no respondió. Los números de abajo son la última lectura.",
-  "Live figures are paused — the last read failed.": "Las cifras en vivo están en pausa — la última lectura falló."
+  "…only alert if CPU/memory stays high for at least": "…avisar solo si la CPU o la memoria se mantienen altas durante al menos"
 }
