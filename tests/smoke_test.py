@@ -1127,6 +1127,225 @@ try:
         with _install_lock_sm:
             _install_jobs_sm.pop(gs_id, None)
 
+    # ── the install JOB itself, executed end to end ───────────────────────────────────────────
+    # Coverage said manage_servers.py was 49% and named the gap: lines 499-948, which is the whole
+    # of _run() — steps 2 through 8. Every suite's host is unreachable, so /servers/add started the
+    # thread and it died at step 2; the panel's most consequential code path was held only by
+    # source-level gates. Those gates read the file. This runs it.
+    #
+    # The host is stubbed to SUCCEED so the job walks the whole way: dependencies, download,
+    # config, port adoption, firewall, autostart, start, and the post-start liveness poll.
+    import panel.routes.manage_servers as _msmod
+    import time as _ijw_time
+    # Stub at the DEFINITION SITE, never on the package. panel/ops/ssh_manager/__init__.py exposes
+    # these through __getattr__ precisely so there is one stub target, and its docstring says not
+    # to bind names on it. Setting them on the package shadows the forwarding — and "restoring"
+    # them afterwards makes that shadow permanent, so every later stub on _core stops being seen.
+    # That is not hypothetical: doing it here broke six power-action checks further down the file.
+    from panel.ops.ssh_manager import game as _ij_game, portscan as _ij_ps
+
+    def _ij_wait(gid, secs=180):
+        """Wait until the install job for `gid` is genuinely FINISHED.
+
+        Both halves matter. The job dict can stop saying "running" while the worker still has work
+        left, and the worker only touches the row at the end — so waiting on either one alone lets
+        the block finish, restore its stubs, and leave a thread still running against whatever the
+        NEXT block installs. That is not hypothetical: CI logged the first job adopting the second
+        scenario's ports, because the first block had already handed the stubs back.
+        """
+        # int(), and a floor of one pass: a fractional or zero `secs` made range() empty, so the
+        # loop never ran and the return below referenced an unbound name — the guard crashed the
+        # suite instead of reporting the stall it exists to report. Found by mutating it.
+        _row_status = "unread"
+        _deadline = max(1, int(secs * 10))
+        for _ in range(_deadline):
+            with _install_lock_sm:
+                j = dict(_install_jobs_sm.get(gid) or {})
+            with app.app_context():
+                _r = db.session.get(GameServer, gid)
+                _row_status = _r.status if _r is not None else "gone"
+            if j.get("status") not in ("running", None) and _row_status != "installing":
+                return j, _row_status, True
+            _ijw_time.sleep(0.1)
+        with _install_lock_sm:
+            j = dict(_install_jobs_sm.get(gid) or {})
+        return j, _row_status, False
+
+    _ij_saved, _ij_calls, _ij_state = {}, [], {"started": False}
+
+    def _ij_stub(mod, name, fn):
+        _ij_saved[(mod, name)] = getattr(mod, name)
+        setattr(mod, name, fn)
+
+    def _ij_ports(_remote):
+        # Before the server starts, nothing of ours is listening — which is what makes the port
+        # step 6 wants to adopt look free. After `start`, the port answers.
+        return {28991} if _ij_state["started"] else set()
+
+    def _ij_run_as(remote, user, action, **k):
+        if action == "start":
+            _ij_state["started"] = True
+        _ij_calls.append(("run_as_game_user", action))
+        return ("", "", 0)
+
+    try:
+        _ij_stub(_sm_core, "run_command", lambda *a, **k: ("", "", 0))
+        _ij_stub(_sm_core, "create_game_user", lambda *a, **k: None)
+        _ij_stub(_sm_core, "run_as_game_user", _ij_run_as)
+        _ij_stub(_sm_core, "run_privileged", lambda *a, **k: ("freed=0 held=0 slots=10", "", 0))
+        _ij_stub(_ij_game, "list_server_commands", lambda *a, **k: ["start", "stop", "monitor"])
+        _ij_stub(_ij_ps, "_invalidate_port_scan", lambda *a, **k: None)
+        _ij_stub(_msmod, "_looks_installed", lambda *a, **k: True)
+        _ij_stub(_msmod, "install_game_dependencies", lambda *a, **k: ("", "", 0))
+        _ij_stub(_msmod, "parse_missing_deps", lambda *a, **k: [])
+        _ij_stub(_msmod, "lgsm_write_config", lambda *a, **k: (True, ""))
+        _ij_stub(_msmod, "install_game_cron", lambda *a, **k: None)
+        _ij_stub(_msmod, "ensure_persistent_bans", lambda *a, **k: None)
+        _ij_stub(_msmod, "sm_game_engine", lambda *a, **k: "source")
+        _ij_stub(_msmod, "set_autostart", lambda *a, **k: (True, ""))
+        _ij_stub(_msmod, "remote_ufw_close_game_port", lambda *a, **k: None)
+        _ij_stub(_msmod, "_remote_listening_ports", _ij_ports)
+        _ij_stub(_msmod, "remote_ufw_allow_game_ports",
+                 lambda r, ports, name: _ij_calls.append(("ufw_allow", tuple(sorted(ports)))))
+        # LinuxGSM reports a port other than the one the panel allocated — the ordinary case for a
+        # game that reads its own config — and nothing else holds it, so step 6 adopts it.
+        _ij_stub(_msmod, "detect_game_ports",
+                 lambda *a, **k: {"game_port": 28991, "open_ports": [28991, 28992]})
+        _appmod_ij = sys.modules["app"]
+        _ij_saved[(_appmod_ij, "_remote_listening_ports")] = _appmod_ij._remote_listening_ports
+        _appmod_ij._remote_listening_ports = lambda r: {22}
+
+        _ij_resp = c.post("/servers/add", data={
+            "remote_id": str(_cg_remote_id), "game_type": "gmod",
+            "server_name": "jobwalk", "port": "28990"}, follow_redirects=True)
+        with app.app_context():
+            _ij_row = GameServer.query.filter_by(short_name="jobwalk").first()
+            _ij_id = _ij_row.id if _ij_row else None
+        check("install job: the POST created a row to run the job against", _ij_id is not None,
+              "no row — the job never started (POST %s)" % _ij_resp.status_code)
+
+        if _ij_id is not None:
+            _job, _row_st, _ij_settled = _ij_wait(_ij_id)
+            _st = _job.get("status")
+            # What the job itself said, so a failure here names the step it stopped on instead of
+            # only the end state. CI failed this where the machine running it passed, and "status
+            # is still installing" on its own does not say which stub the job walked past.
+            _why_job = "job=%r step=%r/%r name=%r msg=%r" % (
+                _st, _job.get("step"), _job.get("total"), _job.get("step_name"),
+                (_job.get("message") or "")[:200])
+            with app.app_context():
+                _ij_done = db.session.get(GameServer, _ij_id)
+                _ij_final = (_ij_done.status, _ij_done.installed, _ij_done.port,
+                             _ij_done.install_error)
+            check("install job: it runs to completion instead of dying at step 2",
+                  _ij_settled, _why_job)
+            check("install job: ...and the server ends up installed and online",
+                  _ij_final[0] == "online" and _ij_final[1] is True,
+                  "status=%r installed=%r error=%r | %s" % (_ij_final[0], _ij_final[1], _ij_final[3], _why_job))
+            check("install job: ...having adopted the port LinuxGSM reported",
+                  _ij_final[2] == 28991, "port=%r | %s" % (_ij_final[2], _why_job))
+            check("install job: ...and started the server, not just installed it",
+                  ("run_as_game_user", "start") in _ij_calls,
+                  "calls: %s | %s" % (_ij_calls[:8], _why_job))
+            _ij_opened = [c2 for c2 in _ij_calls if c2[0] == "ufw_allow"]
+            check("install job: ...and opened the reported ports in the firewall",
+                  any(28991 in c2[1] for c2 in _ij_opened), "ufw calls: %s | %s" % (_ij_opened, _why_job))
+            with app.app_context():
+                _d = db.session.get(GameServer, _ij_id)
+                if _d is not None:
+                    db.session.delete(_d); db.session.commit()
+            with _install_lock_sm:
+                _install_jobs_sm.pop(_ij_id, None)
+    finally:
+        for (_m, _n), _v in _ij_saved.items():
+            setattr(_m, _n, _v)
+
+    # ...and the branch where the reported port is ALREADY HELD by something that is not us.
+    # Until now this was checked by reading the AST. Here it is executed: step 6 must keep the
+    # port the panel allocated, and — the part that was actually broken — the firewall must not be
+    # opened for the port it just refused, in either of the two places that open ports.
+    _cf_saved, _cf_calls = {}, []
+
+    def _cf_stub(mod, name, fn):
+        _cf_saved[(mod, name)] = getattr(mod, name)
+        setattr(mod, name, fn)
+
+    try:
+        _cf_stub(_sm_core, "run_command", lambda *a, **k: ("", "", 0))
+        _cf_stub(_sm_core, "create_game_user", lambda *a, **k: None)
+        # The clash is about the port LinuxGSM REPORTS, not necessarily the one the game binds:
+        # here the game honours the panel's config and comes up on 28994, while 28995 stays
+        # someone else's. That also lets the post-start poll exit on its first tick instead of
+        # running its full 30 x 3s — without which the job is still mid-poll when the checks run,
+        # and the post-start re-detect (the second place that opens ports) is never reached. A
+        # mutation proved that: reverting the re-detect's filter changed nothing until this did.
+        _cf_state = {"started": False}
+
+        def _cf_run_as(remote, user, action, **k):
+            if action == "start":
+                _cf_state["started"] = True
+            return ("", "", 0)
+
+        _cf_stub(_sm_core, "run_as_game_user", _cf_run_as)
+        _cf_stub(_sm_core, "run_privileged", lambda *a, **k: ("freed=0 held=0 slots=10", "", 0))
+        _cf_stub(_ij_game, "list_server_commands", lambda *a, **k: ["start", "stop"])
+        _cf_stub(_ij_ps, "_invalidate_port_scan", lambda *a, **k: None)
+        _cf_stub(_msmod, "_looks_installed", lambda *a, **k: True)
+        _cf_stub(_msmod, "install_game_dependencies", lambda *a, **k: ("", "", 0))
+        _cf_stub(_msmod, "parse_missing_deps", lambda *a, **k: [])
+        _cf_stub(_msmod, "lgsm_write_config", lambda *a, **k: (True, ""))
+        _cf_stub(_msmod, "install_game_cron", lambda *a, **k: None)
+        _cf_stub(_msmod, "ensure_persistent_bans", lambda *a, **k: None)
+        _cf_stub(_msmod, "sm_game_engine", lambda *a, **k: "source")
+        _cf_stub(_msmod, "set_autostart", lambda *a, **k: (True, ""))
+        _cf_stub(_msmod, "remote_ufw_close_game_port", lambda *a, **k: None)
+        # 28995 is occupied by something the panel has no row for — a hand-installed server, a
+        # container, anything never imported through /discover.
+        _cf_stub(_msmod, "_remote_listening_ports",
+                 lambda r: ({22, 28995, 28994} if _cf_state["started"] else {22, 28995}))
+        _cf_stub(_msmod, "detect_game_ports",
+                 lambda *a, **k: {"game_port": 28995, "open_ports": [28995, 28996]})
+        _cf_stub(_msmod, "remote_ufw_allow_game_ports",
+                 lambda r, ports, name: _cf_calls.append(tuple(sorted(ports))))
+        _cf_saved[(_appmod_ij, "_remote_listening_ports")] = _appmod_ij._remote_listening_ports
+        _appmod_ij._remote_listening_ports = lambda r: {22, 28995}
+
+        c.post("/servers/add", data={"remote_id": str(_cg_remote_id), "game_type": "gmod",
+                                     "server_name": "jobclash", "port": "28994"},
+               follow_redirects=True)
+        with app.app_context():
+            _cf_row = GameServer.query.filter_by(short_name="jobclash").first()
+            _cf_id = _cf_row.id if _cf_row else None
+        check("install job (clash): the POST created a row", _cf_id is not None)
+        if _cf_id is not None:
+            _cjob, _crow_st, _cf_settled = _ij_wait(_cf_id)
+            check("install job (clash): the job finished before the stubs are handed back",
+                  _cf_settled,
+                  "job=%r row=%r — a thread still running here would walk into the next block's "
+                  "stubs" % (_cjob.get("status"), _crow_st))
+            with app.app_context():
+                _cf_port = db.session.get(GameServer, _cf_id).port
+            check("install job (clash): the panel KEEPS its own port, it does not adopt one "
+                  "something else is on", _cf_port == 28994,
+                  "port=%r — adopting it makes every status answer read the other process's "
+                  "socket" % (_cf_port,))
+            _cf_opened = sorted({p for call in _cf_calls for p in call})
+            check("install job (clash): ...and never opens the refused port in the firewall",
+                  28995 not in _cf_opened,
+                  "ufw was asked to open %s — `ufw allow <port> comment <name>` REPLACES a rule "
+                  "differing only by comment, so this retags the other server's rule" % (_cf_opened,))
+            check("install job (clash): ...while still opening its own",
+                  28994 in _cf_opened, "opened %s" % (_cf_opened,))
+            with app.app_context():
+                _d = db.session.get(GameServer, _cf_id)
+                if _d is not None:
+                    db.session.delete(_d); db.session.commit()
+            with _install_lock_sm:
+                _install_jobs_sm.pop(_cf_id, None)
+    finally:
+        for (_m, _n), _v in _cf_saved.items():
+            setattr(_m, _n, _v)
+
     # ── /api/installs: the progress a corner widget can follow from any page ────────────────────
     # A game-server install runs for five to forty-five minutes, and its only progress row lived on
     # the Game Servers page. Start one from "Install a Server" and you got a toast reading
