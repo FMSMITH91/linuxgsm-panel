@@ -36,7 +36,15 @@ curl -fsSL https://raw.githubusercontent.com/FMSMITH91/linuxgsm-panel/main/insta
 5. Sets up the service — **and never runs the panel as root**:
    - **As a normal user** → a `systemd --user` service with linger, so it survives logout/reboot.
    - **As root** → creates a dedicated non-login **`lgsmpanel`** user, runs a *system* service as that user, and adds a *scoped* passwordless-sudo entry so it can manage the local host (create game-server users, `apt`, `ufw`…). Also installs the `linuxgsm-panel-recover` command. Remove the sudoers entry if this panel only ever manages *remote* servers.
-6. Serves HTTPS with a built-in self-signed cert (a trusted Tailscale Serve cert is offered in the wizard), then **reboots**.
+6. Leaves the **host terminal**'s `sudo` alone. The panel user's grant names only its privileged
+   helper, so `sudo` in a terminal on the panel host *refuses* rather than prompting. To allow it,
+   re-run the installer with `PANEL_TERMINAL_SUDO=1` and give the panel user a password
+   (`sudo passwd lgsmpanel`) — sudo then asks for that password every time, and
+   `PANEL_TERMINAL_SUDO=0` removes the grant again. Worth knowing before you enable it: you would
+   be typing that password into a terminal the panel itself renders, so it protects you against a
+   stolen panel session, not against a compromised panel. Remote hosts are untouched by this —
+   whatever their own account already has is what applies.
+7. Serves HTTPS with a built-in self-signed cert (a trusted Tailscale Serve cert is offered in the wizard), then **reboots**.
 
 Then finish in the browser: open **`https://your-server:5000`** (`http://` won't load — it's TLS-only), accept the one-time cert warning (**Advanced → Proceed**), and the **setup wizard** creates your first super admin.
 

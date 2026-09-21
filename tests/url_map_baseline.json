@@ -2340,6 +2340,17 @@
       "GET"
     ]
   },
+  "/terminal/<int:remote_id>": {
+    "endpoint": "host_terminal",
+    "guards": [
+      "utils.py:decorated_view(use_terminal)",
+      "auth.py:decorated_function(use_terminal)",
+      "view:host_terminal"
+    ],
+    "methods": [
+      "GET"
+    ]
+  },
   "/users": {
     "endpoint": "manage_users",
     "guards": [

@@ -41,6 +41,10 @@
       --accent-glow: color-mix(in srgb, {{ accent_color }} 15%, transparent);
     }{% endif %}
   </style>
+  {# Per-page <head> additions. Added for the terminal's xterm.css: base.html had only title,
+     content and scripts, so a stylesheet needed by ONE page had nowhere to go except every page.
+     Placed after panel.css and the brand accent, so a page can override either. #}
+  {% block head %}{% endblock %}
 </head>
 <body>
 

@@ -28,6 +28,14 @@ regexes = [
   # assignment, because regexTarget = "match" above compares the MATCH, not the secret alone —
   # anchoring on the digits matched nothing and left the gate red.
   '''_DISCORD_CHANNEL_RE": "123456789012345678"''',
+  # xterm.js's own `FourKeyMap` enum, in the vendored minified bundle. generic-api-key keys off
+  # the `...Key...=` shape and takes the next token as the secret; the token is an array literal
+  # in a 289KB single line. Allowlisted by this exact identifier rather than by allowlisting the
+  # whole vendor path, so a DIFFERENT finding in a future xterm bump still turns the gate red and
+  # gets looked at. Reproduced locally with gitleaks 8.30.1 — the pinned version — before and
+  # after, because an allowlist that does not actually match is indistinguishable from a fixed
+  # gate until CI says otherwise.
+  '''FourKeyMap=''',
 ]
 # Belt-and-suspenders: these files only contain example/placeholder strings, never
 # real credentials.

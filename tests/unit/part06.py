@@ -1404,12 +1404,15 @@ check("register_routes: helper closures inside it <= %d (currently %d)"
 # login_required: creating your own account is the whole point of the link.
 # 212, was 211: /account/profile is a genuinely new view — it lets someone change their OWN
 # display name, which previously only an admin could do through Manage Users.
+# 223, was 222: /terminal/<id> is a genuinely new view — an interactive shell on a host, behind
+# its own USE_TERMINAL permission rather than MANAGE_REMOTES, because a shell is every capability
+# the session's account has at once and should be granted on purpose.
 # 211, was 210: /password/change is a genuinely new view (the page an account with an admin-issued
 # password is held on until it sets its own). This total exists to catch a view VANISHING during a
 # move, so adding one is a deliberate bump — and url_map_baseline.json's diff is the record of what
 # the new route actually is.
-check("register_routes: every one of the 222 views is still accounted for",
-      len(_rr_views) + _MOVED_VIEWS == 222,
+check("register_routes: every one of the 223 views is still accounted for",
+      len(_rr_views) + _MOVED_VIEWS == 223,
       "views inside=%d, moved out=%d" % (len(_rr_views), _MOVED_VIEWS))
 # These two use current_app, which only equals the closed-over `app` inside a request — every
 # caller is a view, so that holds. If they drift back inside a closure, the reasoning stops being
@@ -1579,7 +1582,7 @@ check("docs: the fuzz workflow matrix runs every harness", _matrix_targets == _h
 # inclusive `paths:` filters, so a stale entry doesn't fail the workflow — it silently stops
 # triggering it, which is the same "quietly stops being maintained" failure this block exists to
 # catch. Moving a module now either updates the filter or turns this red.
-for _mod in ("ssh_manager.py", "system_ops.py", "terminal.py"):
+for _mod in ("ssh_manager.py", "system_ops.py", "panel/core/terminal.py"):
     _p = _modpath(_mod)
     _want = os.path.relpath(_p, _root).replace(os.sep, "/") + ("/**" if os.path.isdir(_p) else "")
     check("docs: the fuzz workflow watches %s (as '%s')" % (_mod, _want),
@@ -3178,3 +3181,411 @@ _mu_js = open(os.path.join(_root, "static", "js", "manage_users.js"), encoding="
 check("users page: ...and the script disables it rather than hiding it",
       "box.disabled = !u.totp_enabled" in _mu_js,
       "nothing marks the switch inert for an account with no 2FA, so it would post a no-op")
+
+# ── exactly ONE handler per socket event ──────────────────────────────────────────────────────
+# flask-socketio does not chain handlers. python-socketio's BaseServer.on ends in
+# `self.handlers[namespace][event] = handler`, so a second @socketio.on("disconnect") REPLACES the
+# first and the first never runs again — no warning, no error, and nothing in the app's own tests
+# noticed.
+#
+# It happened: the host terminal added its own disconnect handler and deleted the console's viewer
+# cleanup. A browser that closed would have stayed in _console_viewers forever, with the poller
+# still SSH-ing `stat -c%s` at the host on its behalf, for every console ever opened. Caught by
+# reading the library, not by the suite, which is why this check exists.
+#
+# Parsed, not grepped. The first version of this gate searched the source text and failed on the
+# comment you are reading — the same way the deploy gate matched `cd ~/linuxgsm-panel` quoted in
+# its own explanation. A decorator is an AST node; prose is not.
+import ast as _ast6
+
+_sock_handlers = {}          # event -> [(relpath, funcname), ...]
+_sock_fns = {}               # (relpath, event) -> the FunctionDef node
+for _sf in sorted(glob.glob(os.path.join(_root, "panel", "**", "*.py"), recursive=True)):
+    _rel6 = os.path.relpath(_sf, _root)
+    for _node in _ast6.walk(_ast6.parse(open(_sf, encoding="utf-8").read())):
+        if not isinstance(_node, (_ast6.FunctionDef, _ast6.AsyncFunctionDef)):
+            continue
+        for _dec in _node.decorator_list:
+            if not (isinstance(_dec, _ast6.Call) and isinstance(_dec.func, _ast6.Attribute)
+                    and _dec.func.attr == "on"
+                    and isinstance(_dec.func.value, _ast6.Name)
+                    and _dec.func.value.id == "socketio"):
+                continue
+            if _dec.args and isinstance(_dec.args[0], _ast6.Constant) \
+                    and isinstance(_dec.args[0].value, str):
+                _ev = _dec.args[0].value
+                _sock_handlers.setdefault(_ev, []).append((_rel6, _node.name))
+                _sock_fns[(_rel6, _ev)] = _node
+
+_dupe_ev = {k: v for k, v in _sock_handlers.items() if len(v) > 1}
+check("socket: no event has two handlers (the second would silently replace the first)",
+      not _dupe_ev,
+      "registered twice: " + "; ".join(
+          f"{k} -> " + ", ".join(f"{fn}() in {f}" for f, fn in v) for k, v in _dupe_ev.items())
+      + " — flask-socketio keeps one handler per event, so the earlier one is now dead code")
+check("socket: the app has a disconnect handler at all",
+      "disconnect" in _sock_handlers,
+      "nothing cleans up per-socket state when a browser goes away")
+
+# ...and that the one handler still runs everyone's cleanup, not just its own.
+_disc_where = _sock_handlers.get("disconnect", [(None, None)])[0]
+_disc_fn = _sock_fns.get((_disc_where[0], "disconnect"))
+check("socket: the disconnect handler runs the registered hooks",
+      _disc_fn is not None and any(
+          isinstance(n, _ast6.Call) and getattr(n.func, "attr", getattr(n.func, "id", None))
+          == "run_disconnect_hooks" for n in _ast6.walk(_disc_fn)),
+      f"the sole disconnect handler ({_disc_where[1]} in {_disc_where[0]}) does not call "
+      "socket_hooks, so the terminal never tears its shell down when a browser closes")
+check("socket: the terminal does not register a disconnect handler of its own",
+      not any(f == "panel/routes/host_terminal.py" for f, _ in _sock_handlers.get("disconnect", [])),
+      "the terminal registered a disconnect handler again — that deletes the console's")
+_tsrc6 = _modsrc("panel/routes/host_terminal.py")
+check("socket: ...it registers a hook instead",
+      any(isinstance(n, _ast6.Call)
+          and getattr(n.func, "attr", getattr(n.func, "id", None)) == "add_disconnect_hook"
+          for n in _ast6.walk(_ast6.parse(_tsrc6))),
+      "nothing tears the shell down when a browser closes without sending term_close")
+
+# One hook raising must not skip the hooks after it: a leaked shell is no reason to leak a console
+# viewer too.
+import importlib as _il6
+_hooks_mod = _il6.import_module("panel.ops.socket_hooks")
+_seen6 = []
+_hooks_mod.add_disconnect_hook(lambda sid: (_ for _ in ()).throw(RuntimeError("boom")))
+def _second_hook(sid): _seen6.append(sid)
+_hooks_mod.add_disconnect_hook(_second_hook)
+_hooks_mod.run_disconnect_hooks("sid-1")
+check("socket: a hook that raises does not stop the ones after it", _seen6 == ["sid-1"],
+      f"the second hook did not run: {_seen6}")
+_hooks_mod.add_disconnect_hook(_second_hook)          # same function, registered twice
+_seen6.clear()
+_hooks_mod.run_disconnect_hooks("sid-2")
+check("socket: registering the same hook twice does not run it twice", _seen6 == ["sid-2"],
+      f"ran {len(_seen6)} times: {_seen6}")
+
+# ── a closed browser must take the shell with it, even when SIGHUP is ignored ─────────────────
+# The teardown sent one SIGHUP to the process group and moved on. An ignored signal disposition
+# survives fork AND execve, so when the panel process itself ignores SIGHUP — which is what
+# `nohup` does, and what anything started from such a shell inherits — killpg reported success
+# having done nothing, and every closed browser tab left an `ssh -tt` to the remote host running
+# for good. Found on the real VPS: the ssh was still there minutes after the socket dropped, and
+# /proc/<pid>/status showed SigIgn bit 0 set on both the panel and the ssh.
+#
+# The child here ignores SIGHUP *and* SIGTERM, so nothing short of the full escalation ends it.
+import logging as _lg6
+import pty as _pty6
+import subprocess as _sp6
+import threading as _th6
+
+_tsmod = _il6.import_module("panel.ops.terminal_session")
+_stubborn = ("import signal, sys, time\n"
+             "signal.signal(signal.SIGHUP, signal.SIG_IGN)\n"
+             "signal.signal(signal.SIGTERM, signal.SIG_IGN)\n"
+             "sys.stdout.write('ready\\n'); sys.stdout.flush()\n"
+             "time.sleep(120)\n")
+_m6, _s6 = _pty6.openpty()
+_proc6 = _sp6.Popen([sys.executable, "-c", _stubborn], stdin=_s6, stdout=_s6, stderr=_s6,
+                    start_new_session=True)
+os.close(_s6)
+_sess6 = _tsmod.Session("unit-sid", "unit", lambda sid, d: None, lambda sid, r: None)
+_sess6._fd = _m6
+_sess6._proc = _proc6
+# Wait for the child to SAY it has installed the handlers, rather than sleeping and hoping — a
+# race here would make this test pass for the wrong reason on a loaded machine.
+import select as _sel6
+_ready6, _t0_6 = b"", _time.time()
+while b"ready" not in _ready6 and _time.time() - _t0_6 < 10:
+    if _sel6.select([_m6], [], [], 0.2)[0]:
+        _ready6 += os.read(_m6, 1024)
+check("terminal: the stubborn child announced itself (the next checks are not vacuous)",
+      b"ready" in _ready6, "child never printed ready: %r" % (_ready6,))
+_sess6._pump = _th6.Thread(target=_tsmod._pump_fd, args=(_sess6,), daemon=True, name="unit-pump")
+_sess6._pump.start()
+
+# Capture what the teardown logs: if the pump had to be overruled it says so, and that is the
+# descriptor race this ordering exists to avoid.
+class _Cap6(_lg6.Handler):
+    def __init__(self): _lg6.Handler.__init__(self); self.msgs = []
+    def emit(self, rec): self.msgs.append(rec.getMessage())
+
+
+_cap6 = _Cap6()
+_lg6.getLogger("panel.terminal").addHandler(_cap6)
+# WHICH thread closes the pty master is the whole point, so record it. Asserting only that the fd
+# ends up None cannot tell the two apart: the caller closing it early also sets None, and that
+# version of this check passed against the very bug it was written for.
+_closed_by6 = []
+_real_close6 = os.close
+
+
+def _spy_close6(fd):
+    if fd == _m6:
+        _closed_by6.append(_th6.current_thread().name)
+    return _real_close6(fd)
+
+
+os.close = _spy_close6
+try:
+    _sess6.close("unit test")
+finally:
+    os.close = _real_close6
+    _lg6.getLogger("panel.terminal").removeHandler(_cap6)
+_t0_6 = _time.time()
+while _proc6.poll() is None and _time.time() - _t0_6 < 5:
+    _time.sleep(0.05)
+check("terminal: close() kills a child that ignores SIGHUP and SIGTERM",
+      _proc6.poll() is not None,
+      "the process outlived close() — a closed browser tab leaks an ssh to the remote host, one "
+      "more every time anyone opens a terminal")
+check("terminal: ...and does not report success without checking",
+      not any("survived SIGKILL" in m for m in _cap6.msgs),
+      "teardown logged that the process outlived SIGKILL: %r" % (_cap6.msgs,))
+check("terminal: the pump closes its own descriptor (idle pump)",
+      _closed_by6[:1] == ["unit-pump"],
+      "the pty master was closed by %r while the pump thread was still select()ing on it — that "
+      "descriptor number is immediately reusable, so the pump can wake on another session's "
+      "socket and write its bytes into this browser (log: %r)" % (_closed_by6, _cap6.msgs))
+check("terminal: ...and exactly once",
+      len(_closed_by6) == 1,
+      "the pty master was closed %d times (%r) — a second close can land on a descriptor number "
+      "something else has already been given" % (len(_closed_by6), _closed_by6))
+if _proc6.poll() is None:
+    _proc6.kill()
+
+
+# ── ...and when the pump is BUSY, which is the case the join exists for ───────────────────────
+# The check above passes with the join deleted: an idle pump is already out of select() by the
+# time the caller gets to the descriptor, so it wins the race on its own. The case that matters is
+# a pump stuck inside _emit — socketio.emit to a browser that has stopped reading — because that
+# is when the caller would close a descriptor the pump is about to use again. So block the pump on
+# an event the test controls and release it mid-teardown.
+_gate6 = _th6.Event()
+_in_emit6 = _th6.Event()
+
+
+def _slow_out6(sid, data):
+    _in_emit6.set()
+    _gate6.wait(timeout=10)
+
+
+_chatty6 = ("import sys, time\n"
+            "while True:\n"
+            "    sys.stdout.write('x' * 64 + '\\n'); sys.stdout.flush(); time.sleep(0.02)\n")
+_m7, _s7 = _pty6.openpty()
+_proc7 = _sp6.Popen([sys.executable, "-c", _chatty6], stdin=_s7, stdout=_s7, stderr=_s7,
+                    start_new_session=True)
+os.close(_s7)
+_sess7 = _tsmod.Session("unit-sid-2", "unit2", _slow_out6, lambda sid, r: None)
+_sess7._fd = _m7
+_sess7._proc = _proc7
+_sess7._pump = _th6.Thread(target=_tsmod._pump_fd, args=(_sess7,), daemon=True, name="unit-pump2")
+_sess7._pump.start()
+check("terminal: the busy pump really is stuck in _emit (the next check is not vacuous)",
+      _in_emit6.wait(timeout=10), "the pump never reached the output callback")
+
+_closed_by7 = []
+_real_close7 = os.close
+
+
+def _spy_close7(fd):
+    if fd == _m7:
+        _closed_by7.append(_th6.current_thread().name)
+    return _real_close7(fd)
+
+
+# Released while the teardown is waiting on the pump: with the join this lets the pump retire and
+# close its own descriptor, without it the caller has already closed it.
+_th6.Timer(0.2, _gate6.set).start()
+os.close = _spy_close7
+try:
+    _sess7.close("unit test")
+finally:
+    os.close = _real_close7
+check("terminal: a BUSY pump still closes its own descriptor, not the caller",
+      _closed_by7[:1] == ["unit-pump2"],
+      "the pty master was closed by %r while the pump was still inside the output callback and "
+      "would go on to read that descriptor number again" % (_closed_by7,))
+_gate6.set()
+if _proc7.poll() is None:
+    _proc7.kill()
+
+# ── the opt-in host-terminal sudo grant, RUN rather than read ─────────────────────────────────
+# The operator asked for sudo in the terminal that PROMPTS for a password, which is a different
+# thing from the NOPASSWD grants everywhere else in this file: a compromised panel holds no secret
+# that a password-required rule turns into root. That distinction is one word (`NOPASSWD:`) in one
+# line, so it is checked by running the writer and reading what it actually produced, not by
+# grepping the script for the word.
+#
+# The function is extracted from install.sh and executed with the sudoers directory pointed at a
+# temp dir — the same shape as the snapshot/rollback checks above, which exist because a
+# reimplementation would pass whatever install.sh happens to say.
+_inst6 = open(os.path.join(_root, "install.sh"), encoding="utf-8").read()
+_fn_i6 = _inst6.find("write_terminal_sudo_grant() {")
+_fn_j6 = _inst6.find("\n}\n", _fn_i6)
+check("install.sh: write_terminal_sudo_grant is where this gate expects it",
+      _fn_i6 != -1 and _fn_j6 > _fn_i6, "start=%d end=%d" % (_fn_i6, _fn_j6))
+check("install.sh: ...and it writes its OWN sudoers file, not the narrow grant's",
+      "/etc/sudoers.d/00-linuxgsm-panel-terminal" in _inst6[_fn_i6:_fn_j6 + 3],
+      "the terminal grant does not name a separate file — writing into "
+      "/etc/sudoers.d/linuxgsm-panel would be erased by the next self-update, and would put a "
+      "general rule in the file the narrow-grant gates guard")
+
+# ...and it must sort BEFORE the narrow grant. sudo reads /etc/sudoers.d in lexical order and the
+# LAST matching rule wins, so a general `ALL=(ALL) ALL` in a later-sorting file overrides the
+# narrow grant's NOPASSWD line for the helper — every privileged panel action then waits for a
+# password nothing can type. Confirmed on a real host: the same two rules worked or broke purely
+# by which filename sorted last. Renaming either file is enough to reintroduce it, so compare them
+# the way sudo does.
+_terminal_grant_name6 = "00-linuxgsm-panel-terminal"
+_narrow_grant_name6 = "linuxgsm-panel"
+check("install.sh: the terminal grant sorts BEFORE the narrow grant in /etc/sudoers.d",
+      sorted([_terminal_grant_name6, _narrow_grant_name6])[0] == _terminal_grant_name6,
+      "%r sorts after %r, so its general rule becomes the last match for the helper command and "
+      "every privileged panel action starts asking for a password"
+      % (_terminal_grant_name6, _narrow_grant_name6))
+check("install.sh: ...and that is the name it actually writes",
+      "/etc/sudoers.d/%s" % _terminal_grant_name6 in _inst6,
+      "install.sh does not write /etc/sudoers.d/%s" % _terminal_grant_name6)
+check("uninstall.sh: ...and the uninstaller removes that same file",
+      "/etc/sudoers.d/%s" % _terminal_grant_name6
+      in open(os.path.join(_root, "uninstall.sh"), encoding="utf-8").read(),
+      "a general sudo rule would be left naming an account that no longer exists")
+
+_fn_src6 = _inst6[_fn_i6:_fn_j6 + 3] if _fn_j6 > _fn_i6 > -1 else ""
+_sud_dir6 = _tempfile.mkdtemp(prefix="panel-tsudo-")
+_grant_f6 = os.path.join(_sud_dir6, "00-linuxgsm-panel-terminal")
+
+
+def _run_tsudo6(setting, pw_state="P"):
+    """Run the real function with the sudoers dir redirected. Returns (rc, output)."""
+    body = _fn_src6.replace("/etc/sudoers.d", _sud_dir6)
+    script = (
+        "set -u\n"
+        "RUN_AS_ROOT=1\n"
+        "PANEL_USER=paneluser\n"
+        "ok(){ echo \"OK: $*\"; }\n"
+        "warn(){ echo \"WARN: $*\"; }\n"
+        "info(){ echo \"INFO: $*\"; }\n"
+        "die(){ echo \"DIE: $*\"; exit 9; }\n"
+        "visudo(){ return 0; }\n"
+        # `passwd -S` prints: <user> <status> <date> ... — status P means a usable password.
+        "passwd(){ echo \"paneluser %s 01/01/2020 0 99999 7 -1\"; }\n" % pw_state
+        + body + "\n"
+        + ("" if setting is None else "PANEL_TERMINAL_SUDO=%s\nexport PANEL_TERMINAL_SUDO\n" % setting)
+        + "write_terminal_sudo_grant\n")
+    r = _sh_sub.run(["bash", "-c", script], capture_output=True, text=True)
+    return r.returncode, (r.stdout + r.stderr)
+
+
+_rc6, _out6 = _run_tsudo6(None)
+check("install.sh: with PANEL_TERMINAL_SUDO unset, nothing is written",
+      _rc6 == 0 and not os.path.exists(_grant_f6),
+      "an update granted the panel user general sudo without being asked: rc=%s %r" % (_rc6, _out6))
+
+_rc6, _out6 = _run_tsudo6("1")
+_granted6 = open(_grant_f6, encoding="utf-8").read().strip() if os.path.exists(_grant_f6) else ""
+check("install.sh: PANEL_TERMINAL_SUDO=1 writes the grant",
+      _rc6 == 0 and _granted6 != "", "rc=%s file=%r out=%r" % (_rc6, _granted6, _out6))
+check("install.sh: ...and the grant REQUIRES a password (this is the whole point)",
+      "NOPASSWD" not in _granted6,
+      "the terminal grant is passwordless — that is NOPASSWD:ALL for the panel user, which is "
+      "exactly what the narrow grant exists to avoid: %r" % (_granted6,))
+check("install.sh: ...and it grants the panel user, not everyone",
+      _granted6.startswith("paneluser "), "grant=%r" % (_granted6,))
+check("install.sh: ...and the file is not world-readable",
+      os.path.exists(_grant_f6) and (os.stat(_grant_f6).st_mode & 0o777) == 0o440,
+      "mode=%o" % (os.stat(_grant_f6).st_mode & 0o777 if os.path.exists(_grant_f6) else 0))
+
+# An account with no password can never answer the prompt, so the feature would look broken rather
+# than absent. It has to say so.
+_rc6, _out6 = _run_tsudo6("1", pw_state="L")
+check("install.sh: ...and it warns when the account has no usable password",
+      "passwd paneluser" in _out6,
+      "nothing told the operator that sudo can never succeed until a password is set: %r" % (_out6,))
+
+_rc6, _out6 = _run_tsudo6("0")
+check("install.sh: PANEL_TERMINAL_SUDO=0 removes the grant again",
+      _rc6 == 0 and not os.path.exists(_grant_f6),
+      "rc=%s still present: %r" % (_rc6, _out6))
+_shutil.rmtree(_sud_dir6, ignore_errors=True)
+
+# ── the terminal's ssh argv cannot be turned into ssh OPTIONS ─────────────────────────────────
+# ssh has no `--` to end its options, so an argv element that begins with `-` is read as one, and
+# `server.host` is stored data an admin types. HOST_RE does NOT stop this on its own — `-o` and
+# `--` both match it. What makes it safe is that the destination is always `user@host` and
+# LINUX_USER_RE forces the username to start with a letter or underscore, so the element can never
+# begin with a dash. That is a property, not a comment, so it is driven here with hostile hosts.
+_tsm6 = _il6.import_module("panel.ops.terminal_session")
+
+
+class _HostileRemote6:
+    username = "root"
+    port = 22
+    auth_method = "tailscale"
+
+    def __init__(self, host):
+        self.host = host
+
+
+# _resolve_ts_host reaches for tailscale's MagicDNS domain for a bare name; stub it so this test
+# asks about argv construction and nothing else (and never touches the network).
+_core6 = _il6.import_module("panel.ops.ssh_manager._core")
+_real_resolve6 = _core6._resolve_ts_host
+_core6._resolve_ts_host = lambda srv: srv.host
+try:
+    _hostile6 = ["-oProxyCommand=id", "--", "-o", "-F/tmp/evil", "-E", "1.2.3.4", "box.ts.net"]
+    _bad6 = []
+    for _h6 in _hostile6:
+        _argv6 = _tsm6._ssh_argv(_HostileRemote6(_h6))
+        # Everything after the fixed option block is data. None of it may look like an option.
+        _tail6 = _argv6[len(_argv6) - 1:]
+        if any(_e.startswith("-") for _e in _tail6):
+            _bad6.append((_h6, _argv6))
+        if not _argv6[-1].startswith("root@"):
+            _bad6.append((_h6, _argv6))
+    check("terminal: a hostile remote host cannot become an ssh option", not _bad6,
+          "ssh would parse the destination as an option for: %r" % (_bad6,))
+    check("terminal: ...and the check above actually built something",
+          _tsm6._ssh_argv(_HostileRemote6("box.ts.net"))[0] == "ssh",
+          "argv[0] is not ssh — this gate is asking about the wrong thing")
+    # The port is stringified through int(), so a non-numeric port cannot add an argument either.
+    _p6 = _HostileRemote6("box.ts.net")
+    _p6.port = "22; rm -rf /"
+    try:
+        _tsm6._ssh_argv(_p6)
+        _port_safe6 = False
+    except (TypeError, ValueError):
+        _port_safe6 = True
+    check("terminal: ...and a non-numeric port is rejected rather than passed through",
+          _port_safe6, "a port that is not a number reached the ssh command line")
+finally:
+    _core6._resolve_ts_host = _real_resolve6
+
+# ── the local shell comes from the ACCOUNT, not the environment ───────────────────────────────
+# It read os.environ["SHELL"], which systemd does not set — so a root install always took the
+# /bin/bash fallback whatever shell the account had. And a --system account may legitimately have
+# /usr/sbin/nologin, which spawns a terminal that prints one line and exits.
+import pwd as _pwd6
+_real_getpw6 = _pwd6.getpwuid
+
+
+class _FakePw6:
+    def __init__(self, sh): self.pw_shell = sh
+
+
+try:
+    _pwd6.getpwuid = lambda uid: _FakePw6("/usr/sbin/nologin")
+    check("terminal: a nologin account falls back to a real shell",
+          _tsm6._login_shell() == "/bin/bash",
+          "the terminal would spawn nologin: %r" % (_tsm6._login_shell(),))
+    _pwd6.getpwuid = lambda uid: _FakePw6("/bin/zsh")
+    check("terminal: ...and an ordinary account gets its own shell",
+          _tsm6._login_shell() == "/bin/zsh", "got %r" % (_tsm6._login_shell(),))
+    _pwd6.getpwuid = lambda uid: _FakePw6("")
+    check("terminal: ...and an empty passwd shell falls back too",
+          _tsm6._login_shell() == "/bin/bash", "got %r" % (_tsm6._login_shell(),))
+finally:
+    _pwd6.getpwuid = _real_getpw6
+check("terminal: the shell is not read from the environment",
+      "environ.get(\"SHELL\")" not in _modsrc("panel/ops/terminal_session.py"),
+      "$SHELL is back — systemd does not set it, so this silently ignores the account's shell")

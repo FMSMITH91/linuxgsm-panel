@@ -52,12 +52,25 @@ def _modpath(name):
     cand = os.path.join(_root, leaf)
     if os.path.exists(cand):
         return cand
+    # Every match, not the first one os.walk happens to reach. Two modules shared the basename
+    # terminal.py (the ANSI renderer in panel/core and the host-terminal routes) and this returned
+    # whichever the filesystem listed first — so a gate asking about the renderer read the routes
+    # instead, and the fuzz-path gate passed on one machine and failed on another with no code
+    # change between them. An ambiguous name is a bug in the gate; say so instead of picking one.
+    hits = []
     for pkg in _PKG_DIRS:
         for dirpath, dirnames, files in os.walk(os.path.join(_root, pkg)):
             if leaf in files:
-                return os.path.join(dirpath, leaf)
+                hits.append(os.path.join(dirpath, leaf))
             if stem in dirnames and os.path.exists(os.path.join(dirpath, stem, "__init__.py")):
-                return os.path.join(dirpath, stem)
+                hits.append(os.path.join(dirpath, stem))
+    if len(hits) > 1:
+        raise ValueError(
+            "%r is ambiguous — %s. Pass the path from the repo root instead (e.g. %r)."
+            % (leaf, " and ".join(sorted(os.path.relpath(h, _root) for h in hits)),
+               os.path.relpath(sorted(hits)[0], _root)))
+    if hits:
+        return hits[0]
     raise FileNotFoundError(
         "no panel module named %r — a source gate is pointed at a file that no longer exists" % leaf)
 

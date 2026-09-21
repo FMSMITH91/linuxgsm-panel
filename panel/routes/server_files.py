@@ -19,6 +19,7 @@ from panel.ops.ssh_manager import (GMOD_CONTENT_GAMES, GMOD_CONTENT_SIZES, UPLOA
 # module would never be seen — attribute access resolves at call time and is stable
 # however the handler moves.
 from panel.ops import ssh_manager as _sm
+from panel.ops import socket_hooks as _socket_hooks
 from panel.security.auth import (SEND_COMMAND, UPDATE_SERVER, VIEW_CONSOLE, _can_manage_files,
     can_access_server, get_game, has_permission, log_action, server_access_required,
     superadmin_required)
@@ -93,8 +94,9 @@ def register(app, supervise):
     console_poller stays here too: it pushes through this socket, so it belongs beside the
     handlers that read from it. The supervisor is passed in for it, the way os_updates takes one.
 
-    socketio is CONSTRUCTED here rather than handed in: the four @socketio.on handlers are the
-    only ones in the codebase and they live in this section, so this is where it belongs. It is
+    socketio is CONSTRUCTED here rather than handed in: this is where the console handlers live
+    and it is the app's only SocketIO instance, so panel/routes/host_terminal.py is handed THIS one
+    rather than making a second that would collide on /socket.io/. It is
     returned because register_routes still needs it — the console-poller ticker pushes through
     it, and app.socketio is what the entry point calls .run() on.
     """
@@ -864,12 +866,17 @@ def register(app, supervise):
 
     @socketio.on("disconnect")
     def on_console_disconnect():
+        # THE disconnect handler for the whole app. flask-socketio keeps one handler per event per
+        # namespace and a second registration replaces this one outright, so everything else that
+        # cleans up per-socket state goes through socket_hooks instead of adding its own.
+        sid = request.sid
         # A browser that closed without leave_console must still stop the poller.
         with _viewers_lock:
             for sid_set in list(_console_viewers.values()):
-                sid_set.discard(request.sid)
+                sid_set.discard(sid)
             for k in [k for k, v in _console_viewers.items() if not v]:
                 del _console_viewers[k]
+        _socket_hooks.run_disconnect_hooks(sid)
 
     # Console polling thread — streams new console output to WebSocket viewers.
     def console_poller():

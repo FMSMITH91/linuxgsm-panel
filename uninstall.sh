@@ -168,8 +168,11 @@ if [ -d /usr/local/lib/linuxgsm-panel ] || [ -f /etc/cron.d/lgsm-node-tools ] \
 fi
 
 if [ "${MODE}" = "system" ]; then
-    rm -f /etc/sudoers.d/linuxgsm-panel
-    ok "Removed the sudoers entry"
+    # Both of them: the narrow grant, and the opt-in password-required one the host terminal uses
+    # (PANEL_TERMINAL_SUDO=1). Leaving the second behind would leave a general sudo rule naming an
+    # account that no longer exists — and that name is reusable.
+    rm -f /etc/sudoers.d/linuxgsm-panel /etc/sudoers.d/00-linuxgsm-panel-terminal
+    ok "Removed the sudoers entries"
 
     # Host-wide kernel tuning the installer applied for the panel's sake (vm.swappiness). Re-apply
     # the remaining sysctl config so the host goes back to its own values now, not at next boot.

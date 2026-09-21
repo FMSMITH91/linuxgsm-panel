@@ -287,5 +287,13 @@
   "🔒 Private tailnet — only your devices can reach it": "🔒 Tailnet privada: solo tus dispositivos pueden acceder",
   "Nothing to install — the system is up to date.": "No hay nada que instalar — el sistema está actualizado.",
   "The last check didn't complete — you can still run the upgrade.": "La última comprobación no se completó — aún puedes ejecutar la actualización.",
-  "Install the updates found by the last check.": "Instala las actualizaciones encontradas en la última comprobación."
+  "Install the updates found by the last check.": "Instala las actualizaciones encontradas en la última comprobación.",
+  "A shell on this host, as the panel's own account.": "Una consola en este host, con la propia cuenta del panel.",
+  "Open terminal": "Abrir terminal",
+  "Back to host": "Volver al host",
+  "Connecting…": "Conectando…",
+  "This is a real shell on the host, running as the panel's own account — not as root. Nothing typed here is recorded; only the session opening and closing is written to the audit log.": "Esta es una consola real en el host, ejecutándose con la propia cuenta del panel — no como root. Nada de lo que escribas aquí se registra; solo la apertura y el cierre de la sesión se escriben en el registro de auditoría.",
+  "Terminal": "Terminal",
+  "Disconnected. Reload the page to start a new session.": "Desconectado. Recarga la página para iniciar una nueva sesión.",
+  "The terminal could not be opened.": "No se pudo abrir la terminal."
 }
