@@ -46,11 +46,19 @@ window.openEditUser = function (id) {
   document.getElementById('eu-superadmin').checked = !!u.is_superadmin;
   document.getElementById('eu-active').checked = !!u.is_active;
 
-  // The 2FA reset only makes sense for someone who has it on; it starts unchecked every time so a
-  // previous user's toggle can never carry over into the next one you open.
-  var tfa = document.getElementById('eu-2fa-block');
-  document.getElementById('eu-reset2fa').checked = false;
-  tfa.style.display = u.totp_enabled ? '' : 'none';
+  // The 2FA reset only applies to someone who has it on, but the control is SHOWN either way:
+  // hiding it meant an admin looking for "reset this person's 2FA" found an empty dialog and no
+  // way to tell a missing feature from an inapplicable one. Disabled + a reason instead.
+  // It starts unchecked every time so a previous user's toggle can never carry into the next one.
+  var box = document.getElementById('eu-reset2fa');
+  var help = document.getElementById('eu-2fa-help');
+  box.checked = false;
+  box.disabled = !u.totp_enabled;
+  if (help) {
+    help.textContent = u.totp_enabled
+      ? "Use this if they've lost their authenticator. They can re-enable it from their Account page."
+      : "This account doesn't have two-factor authentication enabled, so there's nothing to reset.";
+  }
 
   // Same reasoning as the 2FA box: a password reset is destructive and must be chosen fresh each
   // time the dialog opens, never inherited from the last user you edited.

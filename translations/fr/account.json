@@ -125,7 +125,7 @@
   "Two-Factor Authentication": "Authentification à deux facteurs",
   "Uncheck to block this user from logging in, without deleting the account.": "Décochez pour empêcher cet utilisateur de se connecter, sans supprimer le compte.",
   "Unknown device": "Appareil inconnu",
-  "Use this if they've lost their authenticator. They can re-enable it from their Account page.": "Utilisez ceci s'ils ont perdu leur authentificateur. Ils peuvent la réactiver depuis leur page Compte.",
+  "Use this if they've lost their authenticator. They can re-enable it from their Account page.": "Utilisez ceci s'ils ont perdu leur authentificateur. Ils pourront la réactiver depuis leur page Compte.",
   "Used": "Utilisé",
   "Valid for (hours)": "Valable (heures)",
   "What you sign in with. Ask an administrator to change it — it is what your audit history is filed under.": "C'est avec cela que tu te connectes. Demande à un administrateur de le changer — c'est sous ce nom qu'est classé ton historique d'audit.",
@@ -141,5 +141,6 @@
   "Your session expired — signing you back in.": "Votre session a expiré — retour à la page de connexion.",
   "just now": "à l'instant",
   "Confirm your password and a current code to turn 2FA off": "Confirmez votre mot de passe et un code actuel pour désactiver la 2FA",
-  "Code or backup code": "Code ou code de secours"
+  "Code or backup code": "Code ou code de secours",
+  "This account doesn't have two-factor authentication enabled, so there's nothing to reset.": "Ce compte n'a pas l'authentification à deux facteurs activée, il n'y a donc rien à réinitialiser."
 }

@@ -7477,6 +7477,70 @@ try:
         check("custom command: a missing command is refused, not an exception",
               _crcc(_adm, None, _gs) is False)
 
+    # ── a superadmin resetting SOMEONE ELSE's 2FA ─────────────────────────────────────────────
+    # rbac_test covers the refusal (a MANAGE_USERS admin must not reach a more-privileged
+    # account). The path that is supposed to WORK had no test at all, and it is the one the whole
+    # 2FA design leans on: /account/2fa/disable now demands a second factor, and "an admin can
+    # clear it for someone who lost both" is what makes that safe to require.
+    from panel.db.models import User as _R2U
+
+    with app.app_context():
+        _r2 = _R2U(username="reset2fa_target",
+                   password_hash=auth.hash_password("Str0ng!passw0rd"),
+                   display_name="target", is_superadmin=False, is_active=True,
+                   totp_enabled=True, totp_secret=encrypt_secret(auth.generate_totp_secret()))
+        _r2.set_backup_codes(auth.generate_backup_codes())
+        db.session.add(_r2)
+        db.session.commit()
+        _r2_id = _r2.id
+        _AL.query.filter_by(action="2fa_reset").delete()
+        db.session.commit()
+
+    # The control is only reachable if the page TELLS the modal this account has 2FA — the switch
+    # is disabled without it. Assert the data island carries the flag, not just that the route
+    # works, or the feature can be correct and unreachable at the same time.
+    import json as _r2_json
+    import re as _r2_re
+    _r2_page = c.get("/users").get_data(as_text=True)
+    _r2_m = _r2_re.search(r'id="users-data"[^>]*>(.*?)</script>', _r2_page, _r2_re.S)
+    _r2_island = _r2_json.loads(_r2_m.group(1)) if _r2_m else []
+    _r2_row = next((r for r in _r2_island if r.get("id") == _r2_id), None)
+    check("admin 2fa reset: the users page tells the edit modal this account HAS 2FA",
+          (_r2_row or {}).get("totp_enabled") is True,
+          "island row %r — without this the switch renders disabled and the admin cannot use it"
+          % (_r2_row,))
+
+    c.post("/users/%d/edit" % _r2_id,
+           data={"username": "reset2fa_target", "display_name": "target",
+                 "is_active": "on", "reset_2fa": "on"}, follow_redirects=True)
+    with app.app_context():
+        _r2_after = db.session.get(_R2U, _r2_id)
+        _r2_still = bool(_r2_after.totp_enabled and _r2_after.totp_secret)
+        _r2_codes = _r2_after.backup_codes_remaining
+        _r2_audit = _AL.query.filter_by(action="2fa_reset").count()
+    check("admin 2fa reset: a superadmin clears another user's 2FA", not _r2_still,
+          "2FA survived the reset, so an operator who lost their authenticator has no way back in")
+    check("admin 2fa reset: ...and its backup codes go with it", _r2_codes == 0,
+          "%d backup codes still accepted for a second factor that is gone" % _r2_codes)
+    check("admin 2fa reset: ...and it is audited", _r2_audit == 1,
+          "%d 2fa_reset rows — clearing someone's second factor must leave a trace" % _r2_audit)
+
+    # ...and it does NOT fire when the box is left unticked, which is every other edit.
+    with app.app_context():
+        _r2b = db.session.get(_R2U, _r2_id)
+        _r2b.totp_enabled = True
+        _r2b.totp_secret = encrypt_secret(auth.generate_totp_secret())
+        db.session.commit()
+    c.post("/users/%d/edit" % _r2_id,
+           data={"username": "reset2fa_target", "display_name": "target renamed",
+                 "is_active": "on"}, follow_redirects=True)
+    with app.app_context():
+        check("admin 2fa reset: ...and an ordinary edit leaves 2FA alone (positive control)",
+              bool(db.session.get(_R2U, _r2_id).totp_enabled),
+              "every save now strips the user's second factor")
+        db.session.delete(db.session.get(_R2U, _r2_id))
+        db.session.commit()
+
     # ── revoking an invite must claim it, not read it and then write ─────────────────────────────
     # Redemption claims the row atomically — "UPDATE ... WHERE used_at IS NULL", with a comment
     # saying that checking is_usable and trusting it would be a race. Revocation was the
