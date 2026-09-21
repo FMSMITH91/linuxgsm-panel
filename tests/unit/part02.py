@@ -1283,6 +1283,44 @@ check("verify_totp accepts a spaced code", verify_totp(_sec, " " + _pyotp.TOTP(_
 check("verify_totp rejects a wrong code", not verify_totp(_sec, "000000"))
 check("verify_totp rejects empty", not verify_totp(_sec, ""))
 
+# ── a branch switch that never launched must not leave the panel TRACKING that branch ────────
+# panel_switch_branch writes panel_branch into config BEFORE launching the installer, and the
+# launch really can fail ("install.sh is missing, so the panel can't self-update safely"). The
+# route then reports success:false and audits a failure — while the panel tracks a branch its
+# checkout is not on. _tracked_branch() reads that key, so the next ordinary "Update" would hand
+# install.sh the branch nobody switched to and reset the checkout onto it. The update-status CI
+# gate does not save you: it refuses only "pending"/"failing", and a non-default branch reports
+# "unverified", which passes.
+from panel.core import config as SO_cfgmod   # noqa: E402
+_sb_saved = (SO._git, SO._is_git_checkout, SO._launch_installer)
+_sb_cfg_saved = (SO_cfgmod.load_config, SO_cfgmod.update_config)
+try:
+    _sb_cfg = {"panel_branch": "main"}
+    SO_cfgmod.load_config = lambda: dict(_sb_cfg)
+    SO_cfgmod.update_config = lambda fn: (fn(_sb_cfg), dict(_sb_cfg))[1]
+    SO._is_git_checkout = lambda: True
+    SO._git = lambda args, timeout=20, **k: ("", "", 0)      # the branch exists on the remote
+
+    SO._launch_installer = lambda target_ref="", branch="", started_msg=None: (
+        False, "install.sh is missing, so the panel can't self-update safely.")
+    _ok, _msg = SO.panel_switch_branch("some-feature-branch")
+    check("switch-branch: a launch that failed is reported as a failure", _ok is False, _msg)
+    check("switch-branch: ...and the tracked branch is left where it was",
+          _sb_cfg.get("panel_branch") == "main",
+          "config now tracks %r, so the next ordinary Update would switch the checkout onto it"
+          % (_sb_cfg.get("panel_branch"),))
+
+    # The control: a launch that STARTS does move the tracked branch, or the guard above would
+    # just be "never record anything".
+    SO._launch_installer = lambda target_ref="", branch="", started_msg=None: (True, "started")
+    _ok2, _ = SO.panel_switch_branch("some-feature-branch")
+    check("switch-branch: a launch that started DOES record the new branch",
+          _ok2 is True and _sb_cfg.get("panel_branch") == "some-feature-branch",
+          "tracked %r" % (_sb_cfg.get("panel_branch"),))
+finally:
+    (SO._git, SO._is_git_checkout, SO._launch_installer) = _sb_saved
+    (SO_cfgmod.load_config, SO_cfgmod.update_config) = _sb_cfg_saved
+
 # ── remote_uptime says whether the host actually ANSWERED ────────────────────────────────────
 # Its placeholder dict ("uptime": "unknown", load/disk/memory/cpu all "?") is what comes back when
 # nothing was read — and it is indistinguishable from a successful parse of a field that was

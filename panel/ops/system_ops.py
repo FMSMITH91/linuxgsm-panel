@@ -1224,6 +1224,7 @@ def panel_switch_branch(branch):
         return False, "Branch '%s' doesn't exist on the remote." % branch
     try:
         from panel.core import config as _cfg
+        _previous = (_cfg.load_config().get("panel_branch") or "").strip()
         _cfg.update_config(lambda cfg: cfg.update({"panel_branch": branch}))
     except Exception:
         _log.exception("switch-branch: could not save tracked branch")
@@ -1231,7 +1232,22 @@ def panel_switch_branch(branch):
     msg = ("Switching to '%s' — the panel is backing up, checking out that branch and verifying it "
            "restarts cleanly (auto-rollback if it doesn't). This takes up to a minute." % branch)
     # target_ref empty → install.sh resets to the tip of PANEL_BRANCH.
-    return _launch_installer(target_ref="", branch=branch, started_msg=msg)
+    ok, launch_msg = _launch_installer(target_ref="", branch=branch, started_msg=msg)
+    if not ok:
+        # Put the tracked branch back. The config write above happens BEFORE the launch, and the
+        # launch really can fail ("install.sh is missing, so the panel can't self-update safely").
+        # Leaving the new value behind means the panel TRACKS a branch its checkout is not on,
+        # while the route and the audit row both report that nothing happened. _tracked_branch()
+        # reads this key, so the next ordinary "Update" would hand install.sh the branch nobody
+        # switched to and reset the checkout onto it — and the update-status CI gate refuses only
+        # "pending"/"failing", while a non-default branch reports "unverified", which passes.
+        try:
+            _cfg.update_config(lambda cfg: cfg.update({"panel_branch": _previous})
+                               if _previous else cfg.pop("panel_branch", None))
+        except Exception:
+            _log.exception("switch-branch: could not restore the tracked branch after a failed "
+                           "launch — the panel now tracks '%s' but was not switched to it", branch)
+    return ok, launch_msg
 
 
 def restart_panel(delay_seconds=2):
