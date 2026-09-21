@@ -7,7 +7,11 @@
   /* The emulator draws its own everything; this is just the box it lives in. 70vh keeps the
      status line and the header visible on a laptop without the page scrolling. */
   #terminal { height: 70vh; min-height: 320px; background: #0d1117; border-radius: .5rem;
-              padding: .5rem; }
+              padding: .5rem; overflow: hidden; }
+  /* Belt and braces. The script sizes the emulator to this box, but if that ever lands wrong the
+     screen is cols x cells wide regardless — and an 80-column screen in a 375px viewport scrolls
+     the whole PAGE sideways, not just the terminal. Clip it here so a sizing bug costs a few
+     hidden columns instead of every page gesture on a phone. */
   @media (max-width: 767.98px) { #terminal { height: 60vh; min-height: 240px; } }
 </style>
 {% endblock %}

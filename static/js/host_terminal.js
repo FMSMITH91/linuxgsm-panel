@@ -8,14 +8,32 @@
 // nullish coalescing, class fields and ||=. .eslintrc.json says ecmaVersion 2021 and disagrees;
 // the gate is the binding one.
 
-var term = null, fitAddonless = true, sock = null, opened = false;
+var term = null, sock = null, opened = false;
+
+function _cellSize() {
+  // MEASURED, not assumed. This was hardcoded at 9x18 "close enough that a resize lands within a
+  // row either way"; the real cell for this font stack is 8.4x19, so the guess was out by nearly
+  // three columns in forty and a row and a half in twenty-five. .xterm-screen is exactly
+  // cols x rows cells, so dividing gives the true figure whatever the font resolves to.
+  var el = document.querySelector('.xterm-screen');
+  if (el && term && term.cols > 0 && term.rows > 0) {
+    var r = el.getBoundingClientRect();
+    if (r.width > 0 && r.height > 0) return { w: r.width / term.cols, h: r.height / term.rows };
+  }
+  return { w: 9, h: 18 };       // only before the first render, when nothing is on screen yet
+}
 
 function _sizeFor(el) {
   // No fit addon vendored — one more file to keep in the manifest for arithmetic this simple.
-  // 9x18 is xterm's default cell for the 14px monospace stack below; close enough that a resize
-  // lands within a row either way, and the server clamps anything silly.
-  var w = Math.max(240, el.clientWidth), h = Math.max(120, el.clientHeight);
-  return { cols: Math.max(20, Math.floor(w / 9)), rows: Math.max(5, Math.floor(h / 18)) };
+  // clientWidth INCLUDES the box's padding, so sizing to it puts two columns of terminal under
+  // the padding and back out over the edge. Take the padding off first.
+  var cs = window.getComputedStyle(el);
+  var padX = (parseFloat(cs.paddingLeft) || 0) + (parseFloat(cs.paddingRight) || 0);
+  var padY = (parseFloat(cs.paddingTop) || 0) + (parseFloat(cs.paddingBottom) || 0);
+  var cell = _cellSize();
+  var w = Math.max(cell.w * 20, el.clientWidth - padX);
+  var h = Math.max(cell.h * 5, el.clientHeight - padY);
+  return { cols: Math.max(20, Math.floor(w / cell.w)), rows: Math.max(5, Math.floor(h / cell.h)) };
 }
 
 function _status(msg, kind) {
@@ -44,11 +62,19 @@ function initTerminal() {
   // authenticated session the console uses. The server's connect handler refuses anonymous ones.
   sock = io();
 
+  // Resize the emulator BEFORE telling the server, and tell it the size we actually applied.
+  // These were two different numbers: the pty was opened at the computed size while xterm stayed
+  // at its 80x24 default, so the shell wrapped at one width and the screen rendered at another —
+  // and on a phone the 80-column screen stuck 321px out of a 375px viewport, scrolling the whole
+  // page sideways.
   var size = _sizeFor(host);
+  term.resize(size.cols, size.rows);
+  size = _sizeFor(host);            // the first resize changes the cell metrics we just measured
+  term.resize(size.cols, size.rows);
   sock.on('connect', function () {
     if (opened) return;              // a reconnect must not silently open a SECOND shell
     opened = true;
-    sock.emit('term_open', { remote_id: REMOTE_ID, cols: size.cols, rows: size.rows });
+    sock.emit('term_open', { remote_id: REMOTE_ID, cols: term.cols, rows: term.rows });
   });
 
   sock.on('term_ready', function (d) {
@@ -86,7 +112,7 @@ function initTerminal() {
     resizeTimer = setTimeout(function () {
       var s = _sizeFor(host);
       term.resize(s.cols, s.rows);
-      sock.emit('term_resize', { cols: s.cols, rows: s.rows });
+      sock.emit('term_resize', { cols: term.cols, rows: term.rows });
     }, 200);
   });
 
