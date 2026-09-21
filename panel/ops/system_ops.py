@@ -1245,8 +1245,14 @@ def panel_switch_branch(branch):
             _cfg.update_config(lambda cfg: cfg.update({"panel_branch": _previous})
                                if _previous else cfg.pop("panel_branch", None))
         except Exception:
+            # Sanitised at the log site. `branch` already cleared _valid_branch
+            # (^[A-Za-z0-9._/-]{1,100}$, so it cannot carry a newline to forge a log entry), but
+            # it still arrives from a request, and this is the one place it reaches a log. Strip
+            # it here rather than dismiss the alert: the guarantee then lives next to the use,
+            # and does not depend on a caller two functions away staying as strict as it is now.
             _log.exception("switch-branch: could not restore the tracked branch after a failed "
-                           "launch — the panel now tracks '%s' but was not switched to it", branch)
+                           "launch — the panel now tracks '%s' but was not switched to it",
+                           re.sub(r"[^A-Za-z0-9._/-]", "", str(branch))[:100])
     return ok, launch_msg
 
 
