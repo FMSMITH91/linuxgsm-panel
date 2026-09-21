@@ -4,7 +4,7 @@ Moved out of register_routes() verbatim — see panel/routes/__init__.py for why
 """
 from flask import (render_template, request)
 from flask_login import (current_user, login_required)
-from panel.db.models import (GameServer, Group, RemoteServer, db)
+from panel.db.models import (Group, RemoteServer, db)
 from panel.security.auth import (ALL_PERMISSIONS, MANAGE_GROUPS, SUPER_ADMIN, _grantable_perms,
     accessible_remote_ids, get_user_permissions, get_user_servers, grantable_object_ids,
     log_action, permission_required)
@@ -26,8 +26,15 @@ def register(app):
                                       selectinload(Group.servers),
                                       selectinload(Group.game_servers)).all())
         all_perms = ALL_PERMISSIONS
-        all_servers = GameServer.query.all()
-        all_remotes = RemoteServer.query.all()
+        # Only what THIS admin can actually grant. MANAGE_GROUPS is delegable to a non-superadmin
+        # whose own access is a subset of hosts, and the page listed every host and every game
+        # server on the panel to them — names, and a tick box beside each. The write path already
+        # refuses the ones outside their scope (grantable_object_ids, below), so ticking one did
+        # nothing and said nothing: the grant silently did not happen. Same two helpers as the
+        # write path, so the form offers exactly what the POST will accept.
+        _my_remotes = accessible_remote_ids(current_user)
+        all_servers = get_user_servers(current_user)
+        all_remotes = [r for r in RemoteServer.query.all() if r.id in _my_remotes]
         return render_template("manage_groups.html", groups=groups,
                                all_perms=all_perms, all_servers=all_servers,
                                all_remotes=all_remotes)
