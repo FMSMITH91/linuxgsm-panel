@@ -46,6 +46,56 @@ from panel.routes._shared import (_looks_installed, _notify_servers_changed)
 _install_alloc_lock = threading.Lock()
 
 
+def scpsl_eula_payload():
+    """The python3 -c payload that accepts the SCP:SL EULA for a game account.
+
+    LocalAdmin refuses to start without it and asks, inside a tmux session nothing can type into.
+    Module-level so the test can assert on what is actually SENT: the gates for this used to grep
+    manage_servers.py for "EulaAccepted", which also appears in the comment that explains it, so
+    all four passed with the write deleted.
+    """
+    return (
+        "import json,io,os,datetime;"
+        "p=os.path.expanduser('~/.config/SCP Secret Laboratory/config/"
+        "localadmin_internal_data.json');"
+        "os.makedirs(os.path.dirname(p),exist_ok=True);"
+        "d=json.load(io.open(p,encoding='utf-8-sig')) if os.path.exists(p) else {};"
+        "d['EulaAccepted']=datetime.datetime.now(datetime.timezone.utc)"
+        ".strftime('%Y-%m-%dT%H:%M:%S.%f0Z');"
+        "io.open(p,'w',encoding='utf-8').write(json.dumps(d))"
+    )
+
+
+def scpsl_seed_config_payload(port):
+    """The shell that seeds LocalAdmin's PER-PORT config from the one LinuxGSM ships.
+
+    SCP:SL keeps config under config/<port>/, and a port with no config makes LocalAdmin print its
+    settings and ask "edit/keep" — which nothing answers inside tmux, so the start hangs for ever.
+    The panel assigns a free port rather than the game's default, so it walks into this on EVERY
+    install. `[ -f ... ] ||` so an existing config is never overwritten.
+    """
+    return ('d="$HOME/.config/SCP Secret Laboratory/config/%d"; mkdir -p "$d"; '
+            '[ -f "$d/config_localadmin.txt" ] || '
+            'cp "$HOME/lgsm/config-default/config-game/config_localadmin.txt" '
+            '"$d/config_localadmin.txt" 2>/dev/null; true' % int(port))
+
+
+def readable_reason(detail):
+    """One tidy line out of a tool's last words: ANSI stripped, whitespace collapsed.
+
+    LinuxGSM and SteamCMD colour their output, so the last 300 bytes of a failed install is
+    mostly escape sequences and column padding — which is what the panel showed, verbatim:
+
+        info...\x1b[0mOK \x1b[0mERROR! Failed to install app '222860' (Invalid platform)
+        \x1b[0mUnloading Steam API...\x1b[0mOK \x1b[0m\x1b[31mFailure!\x1b[0m Installing l4d2server
+
+    A module-level function rather than a line inside the _fail closure, so a test can drive the
+    real thing: rebuilding this expression in the test file passes with the production copy
+    deleted, which is what it did.
+    """
+    return " ".join(terminal.strip_escapes(detail or "").split())
+
+
 def record_install_failure(row, name, detail="", retryable=True, explained=False):
     """Write a failed install onto `row`: the reason, whether a retry can help, AND the status.
 
@@ -349,7 +399,7 @@ def register(app):
             # The panel has had strip_escapes since the console was written; this path just never
             # called it. Collapse the whitespace too: the raw tail arrives full of \r and column
             # padding that turns one sentence into five ragged lines in a corner card.
-            detail = " ".join(terminal.strip_escapes(detail or "").split())
+            detail = readable_reason(detail)
             with _install_lock:
                 j = _install_jobs.get(gs_id)
                 cur = j["step"] if j else 0
@@ -668,16 +718,7 @@ def register(app):
                     # players...". Best-effort and idempotent — an existing file is edited, not
                     # replaced, so nothing else in it is lost.
                     if gs.game_type in ("scpsl", "scpslsm"):
-                        _eula_py = (
-                            "import json,io,os,datetime;"
-                            "p=os.path.expanduser('~/.config/SCP Secret Laboratory/config/"
-                            "localadmin_internal_data.json');"
-                            "os.makedirs(os.path.dirname(p),exist_ok=True);"
-                            "d=json.load(io.open(p,encoding='utf-8-sig')) if os.path.exists(p) else {};"
-                            "d['EulaAccepted']=datetime.datetime.now(datetime.timezone.utc)"
-                            ".strftime('%Y-%m-%dT%H:%M:%S.%f0Z');"
-                            "io.open(p,'w',encoding='utf-8').write(json.dumps(d))"
-                        )
+                        _eula_py = scpsl_eula_payload()
                         try:
                             _sm.run_command(remote,
                                             "sudo -u %s python3 -c %s"
@@ -765,12 +806,7 @@ def register(app):
                     # HERE, not at step 5: the port is only final once step 6 has decided whether
                     # to adopt the one LinuxGSM reports.
                     if gs.game_type in ("scpsl", "scpslsm") and gs.port:
-                        _sl_sh = (
-                            'd="$HOME/.config/SCP Secret Laboratory/config/%d"; mkdir -p "$d"; '
-                            '[ -f "$d/config_localadmin.txt" ] || '
-                            'cp "$HOME/lgsm/config-default/config-game/config_localadmin.txt" '
-                            '"$d/config_localadmin.txt" 2>/dev/null; true' % int(gs.port)
-                        )
+                        _sl_sh = scpsl_seed_config_payload(gs.port)
                         try:
                             _sm.run_command(remote,
                                             "sudo -u %s bash -c %s"

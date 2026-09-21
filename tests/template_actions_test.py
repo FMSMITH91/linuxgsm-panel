@@ -1900,20 +1900,31 @@ check("link('.srv-console', busy)" in _dashjs4,
 # itself, which made any mention here a second, vaguer version of something already on screen.
 # What is left is the half worth surfacing: a failure is something to act on, and it is the other
 # reason Online + Offline does not equal Total.
+# Both windows start at the LINE THAT DECIDES THE COUNT, not at the element that renders it.
+# Sliced from `id="offline-other"` the template window began at line 127 while the
+# `{% set n_failed = ... %}` predicate is at 116; sliced from `var oo = ...` the JS window began
+# one line after the filter. So the pair asserted that the RENDERING does not say "installing" —
+# which it never would — and never looked at the predicate the change was about.
 _dash_tpl = (ROOT / "templates" / "dashboard.html").read_text(encoding="utf-8")
-_tile = _dash_tpl[_dash_tpl.index('id="offline-other"'):]
-_tile = _tile[:_tile.index("</div>")]
+_tile = _dash_tpl[_dash_tpl.index("{% set n_failed"):]
+_tile = _tile[:_tile.index('id="offline-other"') + _tile[_tile.index('id="offline-other"'):].index("</div>")]
+check("{% set n_failed" in _tile and "selectattr('status', 'equalto', 'failed')" in _tile,
+      "dashboard: the Offline tile's count is the one being checked",
+      "the window missed the predicate, so the checks below prove nothing")
 check("installing" not in _tile,
       "dashboard: the Offline tile does not mention installs at all",
-      "the tile still emits an installing count")
+      "the tile still counts or emits installs")
 check("n_failed" in _tile,
       "dashboard: ...and still names failures, which are the reason the arithmetic does not close")
 _dashjs = (ROOT / "static" / "js" / "dashboard.js").read_text(encoding="utf-8")
-_oo = _dashjs[_dashjs.index("var oo = document.getElementById('offline-other')"):]
+_oo = _dashjs[_dashjs.index("var failed = data.filter("):]
 _oo = _oo[:_oo.index("// The failed-install banner")]
+check("data.filter(" in _oo and "'failed'" in _oo,
+      "dashboard: ...and so is the poll's",
+      "the window missed the filter that decides what the poll counts")
 check("installing" not in _oo,
       "dashboard: ...in the poll too, which rewrites this line every few seconds",
-      "the poll puts an installing count straight back")
+      "the poll counts or puts back an installing count")
 check("textContent = 'failed'" in _oo or "word.textContent = 'failed'" in _oo,
       "dashboard: ...and the word keeps its own element, so it can be translated")
 # ── install progress belongs where the server is ──────────────────────────────────────────────

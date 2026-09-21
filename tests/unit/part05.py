@@ -1021,7 +1021,7 @@ check("privileged: no verb silently renders to an empty command over SSH",
 # shape of the bug this whole section exists to stop.
 check("privileged: the panel and the helper sweep the same Steam dump slots",
       tuple(_priv.STEAM_DUMP_SLOTS) == tuple(_helper.STEAM_DUMP_SLOTS),
-      "panel=%s helper=%s" % (_priv.STEAM_DUMP_SLOTS, _helper.STEAM_DUMP_SLOTS))
+      "panel=%r helper=%r" % (_priv.STEAM_DUMP_SLOTS, _helper.STEAM_DUMP_SLOTS))
 _sweep_sh = _priv.remote_command("steam-dumps-sweep", ["gmodserver"])
 check("privileged: the remote sweep names every slot in that list",
       all((" %s;" % _p) in _sweep_sh or (" %s " % _p) in _sweep_sh

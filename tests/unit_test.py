@@ -38,7 +38,11 @@ skipped = [(name, detail) for ok, name, detail in results if ok is None]
 for ok, name, detail in results:
     line = ("PASS" if ok is True else "FAIL" if ok is False else "SKIP") + "  " + name
     if detail and ok is not True:
-        line += "   [%s]" % detail
+        line += "   [%s]" % (detail,)   # (detail,) not detail: a multi-element TUPLE detail made
+        #     THIS line raise ('not all arguments converted'), so a
+        #     FAILING check printed a traceback instead of its name
+        #     and killed the tally and cleanup. Lists and ints are fine
+        #     here; the concat-style printer elsewhere breaks on those.
     print(line)
 print("\n%d / %d checks passed" % (passed, len(results) - len(skipped)))
 # Loud, and after the tally, because a skip is a hole in the run rather than a result in it. It

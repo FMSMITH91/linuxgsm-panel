@@ -453,6 +453,53 @@ try:
     finally:
         _sm_core.run_privileged = _u_orig
 
+    # ── a queued "stop/restart when empty" must not be thrown away ────────────────────────────
+    # The deferred sweep asks get_server_status and treats "offline" as "already stopped, nothing
+    # to do" — clearing BOTH flags. Once the port cross-check began answering "offline" for a
+    # server whose session is alive but not serving, that swallowed the operator's request: a
+    # "stop when empty" aimed at a crashed server (the exact state the cross-check detects) was
+    # cleared without ever being performed, and so was one that landed in the seconds between a
+    # restart and the port binding.
+    #
+    # Driven through the real sweep with the status stubbed, because the bug was in the CALLER:
+    # the helper answers correctly when asked correctly, and the sweep was not asking.
+    import panel.routes._shared as _shmod
+    _sh_gss = _shmod.get_server_status
+    try:
+        with app.app_context():
+            _rm = RemoteServer.query.first()
+            _q = _UGS(remote_id=_rm.id, name="queued-stop", short_name="queuedstop",
+                      game_type="gmod", port=28960, installed=True, status="online")
+            _q.stop_pending = True
+            db.session.add(_q); db.session.commit()
+            _q_id = _q.id
+
+        # A session that is alive but not serving. The stub answers the FOLDED word unless the
+        # caller asks the finer question — so the flag surviving proves the sweep asked.
+        _shmod.get_server_status = (lambda srv, gs, distinguish_unresponsive=False:
+                                    "unresponsive" if distinguish_unresponsive else "offline")
+        _shmod._run_due_restarts(app)
+        with app.app_context():
+            _still_queued = bool(db.session.get(_UGS, _q_id).stop_pending)
+        check("queued stop: a server whose session is alive but not serving keeps the request",
+              _still_queued,
+              "the sweep cleared stop_pending without ever stopping anything")
+
+        # ...and a genuinely stopped server still clears it — that is what 'idle' is for, and
+        # this is the control that stops the fix above from being 'never clear anything'.
+        _shmod.get_server_status = lambda srv, gs, distinguish_unresponsive=False: "offline"
+        _shmod._run_due_restarts(app)
+        with app.app_context():
+            _cleared = not db.session.get(_UGS, _q_id).stop_pending
+        check("queued stop: ...while a genuinely stopped server still clears it", _cleared,
+              "a stopped server should not keep a pending stop for ever")
+    finally:
+        _shmod.get_server_status = _sh_gss
+        with app.app_context():
+            _l = db.session.get(_UGS, _q_id)
+            if _l is not None:
+                db.session.delete(_l); db.session.commit()
+
     # ── an install that dies EARLY must still leave a row you can act on ──────────────────────
     # Only the step-4 path wrote status="failed". Every earlier exit — a bad game type, an
     # unreachable host during LinuxGSM setup, an unhandled exception — wrote the REASON and left
@@ -783,7 +830,11 @@ try:
     from panel.core import terminal as _t_esc
     _raw_tail = ("info...\x1b[0mOK \x1b[0mERROR! Failed to install app '222860' (Invalid "
                  "platform)\r\n   \x1b[0m\x1b[31mFailure!\x1b[0m Installing l4d2server")
-    _clean = " ".join(_t_esc.strip_escapes(_raw_tail).split())
+    # The PANEL'S function, not a copy of it rebuilt here. These three used to assert properties
+    # of a local `" ".join(strip_escapes(raw).split())` the test wrote itself, so they passed with
+    # the production line deleted — they were testing the test.
+    from panel.routes.manage_servers import readable_reason as _clean_fn
+    _clean = _clean_fn(_raw_tail)
     check("install failure: the recorded reason carries no ANSI escapes",
           "\x1b" not in _clean and "[0m" not in _clean, repr(_clean)[:120])
     check("install failure: ...and is one line, not the raw column padding",
@@ -792,8 +843,9 @@ try:
           "Invalid platform" in _clean and "l4d2server" in _clean, repr(_clean)[:120])
     _ms_esc = open(os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
                                 "panel", "routes", "manage_servers.py"), encoding="utf-8").read()
+    # ...and _fail routes through it, so every caller benefits rather than just this one.
     check("install failure: _fail strips before recording, so every caller benefits",
-          'detail = " ".join(terminal.strip_escapes(detail or "").split())' in _ms_esc)
+          "detail = readable_reason(detail)" in _ms_esc)
 
     # A CLASSIFIED reason stands alone on the row. The raw tail is the tool's own last word, and
     # the tool is sometimes wrong: LinuxGSM ends an "Invalid platform" failure with "Check
@@ -893,19 +945,30 @@ try:
     # match...", and the panel reporting the server online.
     _ms_sl = open(os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
                                "panel", "routes", "manage_servers.py"), encoding="utf-8").read()
+    # Assert what is actually SENT. These were whole-file substring greps, and every string they
+    # looked for — "EulaAccepted", "config_localadmin.txt" — also appears in the COMMENTS that
+    # explain the code, so all four passed with the EULA write deleted. The ordering one was worse:
+    # .index() finds the FIRST occurrence, which is the comment, so it measured where a comment sat.
+    from panel.routes.manage_servers import (scpsl_eula_payload as _sl_eula,
+                                             scpsl_seed_config_payload as _sl_seed)
+    _eula_cmd, _seed_cmd = _sl_eula(), _sl_seed(27031)
     check("scpsl: the EULA is accepted the way Minecraft's already is",
-          "EulaAccepted" in _ms_sl and "localadmin_internal_data.json" in _ms_sl,
+          "d['EulaAccepted']" in _eula_cmd and "localadmin_internal_data.json" in _eula_cmd,
           "the install still stops at the EULA prompt with nothing to answer it")
     check("scpsl: ...and the per-port config is seeded, or LocalAdmin asks about it instead",
-          "config/%d" in _ms_sl and "config_localadmin.txt" in _ms_sl)
-    # AFTER step 6, not at step 5: the port is only final once step 6 has decided whether to adopt
-    # the one LinuxGSM reports, and seeding the wrong directory helps nobody.
-    check("scpsl: ...seeded once the port is final, not before step 6 can change it",
-          _ms_sl.index("config_localadmin.txt") > _ms_sl.index("# 6. Sync to LinuxGSM's real port"),
-          "the per-port config is written before the port is settled")
+          "config/27031" in _seed_cmd and "config_localadmin.txt" in _seed_cmd, _seed_cmd[:120])
+    check("scpsl: ...into the directory named after THAT port, not a fixed one",
+          "config/27032" in _sl_seed(27032), _sl_seed(27032)[:120])
     check("scpsl: ...and an existing config is left alone",
-          '[ -f "$d/config_localadmin.txt" ] ||' in _ms_sl,
+          '[ -f "$d/config_localadmin.txt" ] ||' in _seed_cmd,
           "it would overwrite a config the operator had edited")
+    # AFTER step 6, not at step 5: the port is only final once step 6 has decided whether to adopt
+    # the one LinuxGSM reports, and seeding the wrong directory helps nobody. Measured on the CALL,
+    # which appears once, rather than on a string the comments also contain.
+    check("scpsl: ...seeded once the port is final, not before step 6 can change it",
+          _ms_sl.index("scpsl_seed_config_payload(gs.port)")
+          > _ms_sl.index("# 6. Sync to LinuxGSM's real port"),
+          "the per-port config is written before the port is settled")
 
     # ── the install works around SteamCMD's "Invalid platform" bug itself ───────────────────────
     # Left 4 Dead 2 refuses to install with "ERROR! Failed to install app '222860' (Invalid
@@ -975,7 +1038,7 @@ try:
             _after = db.session.get(GameServer, gs_id)
             check("failed install: ...and the row goes back to installing, with the reason cleared",
                   _after.status == "installing" and not _after.install_error, 
-                  (_after.status, _after.install_error))
+                  "status=%s error=%r" % (_after.status, _after.install_error))
             # put it back to failed, this time with a cause no retry can fix
             _after.status, _after.installed = "failed", False
             _after.install_error = "This game is not downloadable with an anonymous Steam login."
@@ -6539,7 +6602,11 @@ finally:
     for ok, name, detail in results:
         line = ("PASS" if ok else "FAIL") + "  " + name
         if detail and not ok:
-            line += "   [%s]" % detail
+            line += "   [%s]" % (detail,)   # (detail,) not detail: a multi-element TUPLE detail made
+            #     THIS line raise ('not all arguments converted'), so a
+            #     FAILING check printed a traceback instead of its name
+        #     and killed the tally and cleanup. Lists and ints are fine
+        #     here; the concat-style printer elsewhere breaks on those.
         print(line)
     print("\n%d / %d checks passed" % (passed, len(results)))
     cleanup()

@@ -274,7 +274,13 @@ def _run_due_restarts(app):
             if _bst and _bst.get("running"):
                 continue
             try:
-                status = get_server_status(gs.remote, gs)
+                # distinguish_unresponsive, because this loop is deciding whether there is
+                # anything to ACT on, not whether players can connect. Folded into "offline", a
+                # server whose session is alive but not serving read as "already stopped", so the
+                # operator's queued stop/restart was cleared and never performed — silently, and
+                # for a crashed server permanently. That is the very state the port check exists
+                # to detect, and it is exactly when a queued "stop" most needs to happen.
+                status = get_server_status(gs.remote, gs, distinguish_unresponsive=True)
                 pc = sm_player_count(gs.remote, gs.short_name, gs.game_type, gs.port) \
                     if status == "online" else None
                 # 'restart' here means "online + empty -> act now"; 'idle' = already stopped.

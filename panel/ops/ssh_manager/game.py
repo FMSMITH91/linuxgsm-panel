@@ -471,11 +471,15 @@ def ensure_persistent_bans(server, user, selfname):
 
 def mod_restart_decision(status, players, force=False):
     """Decide how to handle the restart a mod change needs, given the server `status`
-    ('online'/'offline'/'unknown'), the current player count (int, or None when unknown),
-    and whether the admin forced it. Pure/side-effect-free so it can be tested directly:
+    ('online'/'offline'/'unresponsive'/'unknown'), the current player count (int, or None when
+    unknown), and whether the admin forced it. Pure/side-effect-free so it can be tested directly:
       'idle'    — server is stopped; nothing to do (the change loads on next start)
       'restart' — restart now (server is confirmed empty, or the admin forced it)
-      'pending' — defer: players are online, or we can't confirm it's empty."""
+      'pending' — defer: players are online, or we can't confirm it's empty.
+
+    Only a status of 'offline' is idle, and only STOPPED means offline. 'unresponsive' — a
+    session running but not serving — falls through to 'pending' and keeps the request queued,
+    because clearing it would throw away something the operator asked for without doing it."""
     if status == "offline":
         return "idle"
     if force:
@@ -650,7 +654,7 @@ def detect_game_ports(server, user, selfname=None):
     return {"game_port": game_port, "open_ports": open_ports, "ports": ports}
 
 
-def get_server_status(server, game_server):
+def get_server_status(server, game_server, distinguish_unresponsive=False):
     """Get the status of a LinuxGSM game server: 'online', 'offline' or 'unknown'.
 
     LinuxGSM has no `status` command; `details` prints a "Status: STARTED/STOPPED"
@@ -677,7 +681,16 @@ def get_server_status(server, game_server):
         LinuxGSM's answer stands.
 
     STOPPED is left authoritative as it always was: no session means no server, whatever else
-    happens to be holding the port."""
+    happens to be holding the port.
+
+    `distinguish_unresponsive` separates the two things this otherwise folds into "offline":
+    STOPPED, where nothing is running at all, and STARTED-but-not-serving, where a session is
+    very much running. Callers that only care whether players can connect want them folded, and
+    get that by default. A caller deciding whether there is anything to act ON must not: the
+    deferred restart/stop sweep read "offline" as "already stopped", cleared the operator's
+    queued request and did nothing — so a "stop when empty" issued against a crashed server (the
+    exact state this port check was added to detect) was silently dropped, as was one that
+    happened to land in the seconds between a restart and the port binding."""
     out, err, rc = _core.run_as_game_user(
         server, game_server.short_name, "details", timeout=30,
         selfname=game_server.lgsm_name,
@@ -691,7 +704,12 @@ def get_server_status(server, game_server):
         low = line.lower()
         if "status:" in low:
             if "started" in low:
-                return "online" if _really_serving(server, game_server) else "offline"
+                if _really_serving(server, game_server):
+                    return "online"
+                # A session IS running; it is just not serving anyone. For most callers that is
+                # the same thing as offline and always has been. For a caller deciding whether
+                # there is something to ACT on it is not: see distinguish_unresponsive.
+                return "unresponsive" if distinguish_unresponsive else "offline"
             if "stopped" in low:
                 return "offline"
     return "unknown"
