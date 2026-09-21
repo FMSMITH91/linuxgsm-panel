@@ -10,7 +10,7 @@ from panel.core.clock import (utcnow)
 from panel.core.config import (encrypt_secret)
 from panel.db.models import (User, db)
 from panel.security.auth import (hash_password, needs_rehash, check_password, client_ip, dummy_password_check,
-    generate_backup_codes, generate_totp_secret, log_action, totp_provisioning_uri, verify_totp,
+    generate_backup_codes, generate_totp_secret, log_action, totp_provisioning_uri,
     verify_totp_step)
 from panel.services import (notifications)
 import time
@@ -315,9 +315,19 @@ def register(app):
             return redirect(url_for("account"))
         if request.method == "POST":
             secret = session.get("_2fa_setup_secret", "")
-            if secret and verify_totp(secret, request.form.get("totp_code", "")):
+            # verify_totp_STEP, not verify_totp — the third and last route that consumes a live
+            # authenticator code, and the one the earlier audit missed. Login refuses a step that
+            # has already been spent (see the comment there), and last_totp_step defaults to 0, so
+            # enrolling without recording the step left the very code that turned 2FA on still
+            # good at /login for the rest of its ~90s window: step S vs 0 passes the guard. The
+            # other two live-code routes — login step 2 and account_change_password — both switched
+            # to the step form for exactly this reason.
+            _enrol_step = (verify_totp_step(secret, request.form.get("totp_code", ""))
+                           if secret else None)
+            if _enrol_step is not None:
                 current_user.totp_secret = encrypt_secret(secret)
                 current_user.totp_enabled = True
+                current_user.last_totp_step = _enrol_step      # spend it, in the same commit
                 codes = generate_backup_codes()
                 current_user.set_backup_codes(codes)
                 db.session.commit()

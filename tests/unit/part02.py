@@ -1270,6 +1270,36 @@ check("verify_totp accepts a spaced code", verify_totp(_sec, " " + _pyotp.TOTP(_
 check("verify_totp rejects a wrong code", not verify_totp(_sec, "000000"))
 check("verify_totp rejects empty", not verify_totp(_sec, ""))
 
+# ── no ROUTE may consume a live code with the yes/no form ────────────────────────────────────
+# verify_totp answers "is it valid", which is not enough: a code is good for ~90s, so an observed
+# one stays usable for the rest of that window unless the step it used is SPENT. Three routes take
+# a live code — login step 2, the password change, and 2FA enrolment — and the first two were
+# converted to verify_totp_step while enrolment was missed, leaving the code that turned 2FA on
+# still able to sign the account in.
+#
+# Read from the AST, because the fixed routes carry comments that say "verify_totp_STEP, not
+# verify_totp" — a substring gate matches the prose that documents the fix.
+import ast as _totp_ast
+_totp_root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+_totp_bad = []
+for _rel in ["app.py"] + ["panel/" + _p for _p in [
+        "routes/auth_routes.py", "routes/tags.py", "routes/admin_notifications.py",
+        "security/auth.py"]]:
+    _path = os.path.join(_totp_root, _rel)
+    if not os.path.exists(_path):
+        continue
+    _tree = _totp_ast.parse(open(_path, encoding="utf-8").read())
+    for _n in _totp_ast.walk(_tree):
+        if not (isinstance(_n, _totp_ast.Call)
+                and getattr(_n.func, "id", getattr(_n.func, "attr", None)) == "verify_totp"):
+            continue
+        # its own definition site is allowed to exist; callers are not
+        _totp_bad.append("%s:%d" % (_rel, _n.lineno))
+check("2FA: no route consumes a live code with the yes/no verify_totp",
+      not _totp_bad,
+      "verify_totp is called at %s — use verify_totp_step and record the step, or an observed "
+      "code stays replayable for the rest of its window" % ", ".join(_totp_bad))
+
 # A TOTP code stays valid for ~90s (its own step plus one either side for clock skew), so
 # "is it valid" alone lets an observed code be replayed for the rest of that window. The login
 # path records WHICH step was spent, so it needs the step back, not a boolean.
