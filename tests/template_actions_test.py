@@ -1225,6 +1225,39 @@ if _m:
           "it must use var(--bs-table-bg) + var(--bs-table-accent-bg) so it tracks the row; "
           "a hardcoded colour leaves the column a different shade from the row it sits in")
 
+    # ── ...and it must not be WIDER than the row it is pinned over ────────────────────────────
+    # Sticky + opaque means this column is painted ON TOP of the cells it scrolls over, so its
+    # width is how much of the row it hides. Seven buttons at 33px made it 270px of a 341px
+    # viewport: measured at 375px in a rendered panel, elementFromPoint over the server name
+    # returned the Start button and 31px of the row was readable. "CS2 Public" showed as "CS2 Pub".
+    #
+    # The fix is a bounded width that makes the buttons wrap instead of pushing sideways — 190px
+    # is the measured point where seven fall into two rows (160px takes three and grows the row
+    # from 80px to 115px). Both halves are needed: a width with no wrap just clips, and a wrap
+    # with no width lets the column keep its full 270px. So gate both.
+    _w = re.search(r"(?:^|\s)width:\s*(\d+)px", _code)
+    check(_w is not None and int(_w.group(1)) <= 200,
+          "mobile: the sticky Actions column has a bounded width",
+          "it is %s — unbounded, it grows with every button added and is painted over the name, "
+          "status, players and address of the row it is pinned to"
+          % (_w.group(0).strip() if _w else "not set at all"))
+    check(re.search(r"white-space:\s*normal\s*!important", _code) is not None,
+          "mobile: ...and its buttons WRAP rather than widening it",
+          "without white-space:normal the width above just clips the buttons; it needs "
+          "!important because the cell carries Bootstrap's .text-nowrap utility, which is itself "
+          "!important")
+    # The identity column needs a floor, or the table's auto layout leaves it at the 62px that
+    # wrapped "CS2 Public" onto two lines even once the Actions column stopped covering it.
+    _idcol = re.search(r"\.table-responsive\s+\.table\s+thead\s+th:nth-child\(2\)\s*,\s*"
+                       r"\.table-responsive\s+\.table\s+tbody\s+td:nth-child\(2\)\s*\{(.*?)\}",
+                       _css, re.S)
+    _idcode = re.sub(r"/\*.*?\*/", "", _idcol.group(1), flags=re.S) if _idcol else ""
+    _idw = re.search(r"min-width:\s*(\d+)px", _idcode)
+    check(_idw is not None and int(_idw.group(1)) >= 100,
+          "mobile: the server-name column has a width floor",
+          "the column that says which server the row IS gets whatever the auto layout leaves it "
+          "— 62px, measured — unless it is given a floor")
+
 # ── every asset_url()/static file a template names must actually exist ─────────────────────────
 # A <script src> pointing at a file that is not there fails SILENTLY: the browser logs one 404 and
 # the page renders perfectly, minus every behaviour that script was carrying. No route test, no
