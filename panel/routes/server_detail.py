@@ -449,6 +449,19 @@ def register(app):
             except Exception:
                 _log.debug("moderate: steamid pre-resolve failed", exc_info=True)
         try:
+            # A ban the engine drops on the next map change is not a ban. `banid ...; writeid`
+            # persists the id to cfg/banned_user.cfg, but the engine only reloads that file if the
+            # server config execs it — and ensure_persistent_bans is what appends that line. It ran
+            # on the install path and on the two GLOBAL-ban paths, whose own docstring states the
+            # rule ("this is the one place that knows a ban is about to be applied to this
+            # server"), and not here. A server IMPORTED rather than installed through the panel
+            # therefore never had the line, so every ban issued from the Players panel lasted until
+            # the map changed. Idempotent and cheap: a grep, then an append only when absent.
+            if action == "ban":
+                try:
+                    _sm.ensure_persistent_bans(gs.remote, gs.short_name, gs.lgsm_name)
+                except Exception:
+                    _log.debug("ensure_persistent_bans failed for %s", gs.name, exc_info=True)
             ok, msg = _sm.moderate(gs.remote, gs.short_name, gs.game_type, action,
                                target=target, message=data.get("message", ""),
                                selfname=gs.lgsm_name, steamid=steamid, num=num)
@@ -477,6 +490,12 @@ def register(app):
                         if not o:
                             return False
                         try:
+                            # ...and on every server the fan-out touches, for the same reason.
+                            try:
+                                _sm.ensure_persistent_bans(o.remote, o.short_name, o.lgsm_name)
+                            except Exception:
+                                _log.debug("ensure_persistent_bans failed for %s", o.name,
+                                           exc_info=True)
                             kw = {"steamid": steamid} if origin_eng == "valve" else {"target": target}
                             ok2, _m = _sm.moderate(o.remote, o.short_name, o.game_type, "ban",
                                                selfname=o.lgsm_name, **kw)

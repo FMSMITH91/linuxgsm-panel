@@ -238,14 +238,17 @@ def _run_pending_backups(app):
         return
     try:
         with app.app_context():
-            keep = bk.get_full_settings()["keep"]
+            # Per server, like the scheduled ticker above — not the global default. Pruning is an
+            # unconditional rm of everything past `keep`, so using the global number here deleted
+            # archives a server's own retention override said to retain.
             pending = GameServer.query.filter_by(installed=True, backup_pending=True).all()
             for gs in pending:
                 if not gs.remote_id:
                     continue
                 try:
                     ok, reason, was_skipped = run_game_backup(
-                        gs.remote, gs.short_name, gs.lgsm_name, keep,
+                        gs.remote, gs.short_name, gs.lgsm_name,
+                        bk.get_game_schedule(gs.id)["keep"],
                         game_type=gs.game_type, port=gs.port)
                     if not was_skipped:
                         # Backed up (or genuinely failed) — either way the wait is over.

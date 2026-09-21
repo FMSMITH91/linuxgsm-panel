@@ -6903,6 +6903,85 @@ try:
     check("deactivation: the epoch-cookie session stops working once deactivated",
           _after_m != 200, "status=%s" % _after_m)
 
+    # ── a ban the engine drops at the next map change is not a ban ────────────────────────────
+    # `banid ...; writeid` persists the id to cfg/banned_user.cfg, but the engine only reloads that
+    # file if the server config EXECS it — and ensure_persistent_bans is what appends that line.
+    # It ran on the install path and on the two GLOBAL-ban paths, whose docstring states the rule
+    # outright ("this is the one place that knows a ban is about to be applied to this server"),
+    # and not on the per-server moderate route. A server IMPORTED rather than installed through
+    # the panel never had the line, so every ban issued from the Players panel lasted until the
+    # map changed.
+    _ban_ensured, _ban_saved = [], {}
+    try:
+        _bn_game = _sm_game
+        _ban_saved["ensure"] = _bn_game.ensure_persistent_bans
+        _ban_saved["moderate"] = _bn_game.moderate
+        _bn_game.ensure_persistent_bans = lambda r, u, sn=None: _ban_ensured.append(u)
+        _bn_game.moderate = (lambda r, u, gt, action, target="", message="", selfname=None,
+                             steamid="", num=None: (True, "ok"))
+        c.post("/api/server/%d/moderate" % gs_id,
+               json={"action": "ban", "steamid": "STEAM_0:1:1234"},
+               headers={"X-Requested-With": "XMLHttpRequest"})
+        check("ban: the server is made to reload its ban list before the ban is issued",
+              bool(_ban_ensured),
+              "ensure_persistent_bans was never called, so on an imported server the engine "
+              "drops this ban at the next map change")
+        # ...and a NON-ban action must not pay for it — this runs an SSH round trip.
+        _ban_ensured.clear()
+        c.post("/api/server/%d/moderate" % gs_id,
+               json={"action": "kick", "target": "someone"},
+               headers={"X-Requested-With": "XMLHttpRequest"})
+        check("ban: ...but a kick does not, since nothing is being persisted",
+              not _ban_ensured, "called on a kick: %s" % (_ban_ensured,))
+    finally:
+        _bn_game.ensure_persistent_bans = _ban_saved["ensure"]
+        _bn_game.moderate = _ban_saved["moderate"]
+
+    # ── a backup must prune to THIS server's retention, not the global default ────────────────
+    # The per-server override is first-class: the schedule route writes it, get_game_schedule
+    # resolves "its override where set, else the global default", the API and the disk projection
+    # in the UI both show it. But only the scheduled ticker read it. The three other paths that
+    # run a backup — "Back up now", the full backup, and the queued-when-empty sweep — passed the
+    # GLOBAL keep, and pruning is an unconditional `rm` of everything past it. A server whose
+    # operator had deliberately raised its retention lost those archives the next time any of
+    # those three ran.
+    #
+    # Asserted on the number actually handed to run_game_backup, because that is the value the
+    # prune uses; anything else would be testing the config layer twice.
+    import panel.routes.panel_backup as _bkroute
+    from panel.ops import backup as _bkmod
+
+    _keep_seen = []
+    _bk_saved = {}
+
+    def _bk_stub(mod, name, fn):
+        _bk_saved[(mod, name)] = getattr(mod, name)
+        setattr(mod, name, fn)
+
+    try:
+        _bk_stub(_bkroute, "run_game_backup",
+                 lambda remote, short, lgsm, keep, **k: (_keep_seen.append(keep),
+                                                         (True, "", False))[1])
+        _bk_global = _bkmod.get_full_settings()["keep"]
+        _bk_override = int(_bk_global) + 7          # unmistakably not the global value
+        _bkmod.set_game_schedule(gs_id, 1, _bk_override)
+        try:
+            c.post("/api/panel/backup/game/%d" % gs_id,
+                   headers={"X-Requested-With": "XMLHttpRequest"})
+            for _ in range(100):
+                if _keep_seen:
+                    break
+                _ijw_time.sleep(0.05)
+            check("backup keep: 'Back up now' prunes to THIS server's retention",
+                  _keep_seen and _keep_seen[0] == _bk_override,
+                  "handed keep=%r, but this server's override is %r (global is %r) — the extra "
+                  "archives are deleted" % (_keep_seen[:1], _bk_override, _bk_global))
+        finally:
+            _bkmod.set_game_schedule(gs_id, None, None)
+    finally:
+        for (_m, _n), _v in _bk_saved.items():
+            setattr(_m, _n, _v)
+
     # ── a failed READ must not be written down as a fact ──────────────────────────────────────
     # Two routes did it in different ways. Both are driven here with the read stubbed to fail the
     # way it actually fails on this codebase: run_command does not raise, it returns
