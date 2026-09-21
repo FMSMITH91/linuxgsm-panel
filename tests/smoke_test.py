@@ -8077,6 +8077,100 @@ try:
                 db.session.delete(_c)
         db.session.commit()
 
+    # ── the terminal page must name the account it is ACTUALLY running as ────────────────────
+    # It carried one fixed sentence for every host — "running as the panel's own account — not as
+    # root" — which was written for the panel host and printed on remotes too. On a remote the
+    # session runs as whatever account that host is configured with, and for most installs that is
+    # root: `whoami` in a terminal on the test VPS answers root, under a line promising it was not.
+    #
+    # This creates BOTH hosts itself. Two earlier versions asked about rows seeded 6000 lines up:
+    # the first used an id captured back then and compared the wrong page, and the second queried
+    # for is_local=True and found None — by this point in the suite no local host survives — then
+    # crashed the whole run formatting that None into a URL. A test that depends on another test's
+    # leftovers is testing the leftovers.
+    _tp_user = "deployacct"          # distinctive, so "it names the account" cannot match by luck
+    with app.app_context():
+        _tp_loc = RemoteServer(name="smoke-term-local", host="127.0.0.1", port=22,
+                               username="root", auth_method="key", auth_credential="",
+                               is_local=True)
+        _tp_rem = RemoteServer(name="smoke-term-remote", host="198.51.100.7", port=22,
+                               username=_tp_user, auth_method="key", auth_credential="",
+                               is_local=False)
+        db.session.add_all([_tp_loc, _tp_rem])
+        db.session.commit()
+        _tp_loc_id, _tp_rem_id = _tp_loc.id, _tp_rem.id
+    try:
+        _t_local = _lc.get("/terminal/%d" % _tp_loc_id)
+        _t_remote = _lc.get("/terminal/%d" % _tp_rem_id)
+        check("terminal page: both hosts render (the copy checks below need them)",
+              _t_local.status_code == 200 and _t_remote.status_code == 200,
+              "local=%d remote=%d" % (_t_local.status_code, _t_remote.status_code))
+        _tl = _t_local.get_data(as_text=True)
+        _tr = _t_remote.get_data(as_text=True)
+        check("terminal page: the panel host still says it is not root",
+              "not as root" in _tl,
+              "the local host's copy lost the sentence that is true there")
+        check("terminal page: a REMOTE does not claim to be 'not as root'",
+              "not as root" not in _tr,
+              "a remote whose configured account is root renders a promise that it is not root")
+        check("terminal page: ...it names the account the panel connects with",
+              _tp_user in _tr and "the account the panel connects with" in _tr,
+              "the remote's copy does not name %r as the account the session runs as" % (_tp_user,))
+        # The card that links here carried the same sentence, so check it the same way.
+        _c_local = _lc.get("/remote/%d/manage" % _tp_loc_id).get_data(as_text=True)
+        _c_remote = _lc.get("/remote/%d/manage" % _tp_rem_id).get_data(as_text=True)
+        check("host page: the Terminal card names the account on a remote",
+              "as the panel's own account" in _c_local
+              and "as the panel's own account" not in _c_remote
+              and _tp_user in _c_remote,
+              "the card says 'the panel's own account' on a host where the account is %r"
+              % (_tp_user,))
+    finally:
+        with app.app_context():
+            for _tid in (_tp_loc_id, _tp_rem_id):
+                _row = db.session.get(RemoteServer, _tid)
+                if _row is not None:
+                    db.session.delete(_row)
+            db.session.commit()
+
+    # ── the two exemptions that rest on SameSite ─────────────────────────────────────────────
+    # A WebSocket handshake is NOT subject to the same-origin policy: any page the operator visits
+    # can open one to the panel, and the browser attaches cookies for the target origin. What
+    # stops that page getting a console — or, since this branch, a SHELL — is that the session
+    # cookie is SameSite=Lax and so is not sent cross-site, which leaves the socket's connect gate
+    # seeing an anonymous client and refusing it.
+    #
+    # _socketio_cors() says so in as many words ("the SameSite=Lax cookie stops a cross-site page
+    # carrying it") and falls back to "*" for plain IP:port access on the strength of it, and the
+    # CSRF Bearer exemption a few hundred lines above rests on the same sentence. Nothing asserted
+    # it. Setting it to "None" — which is what anyone embedding the panel in an iframe would reach
+    # for — silently removes the floor under both.
+    check("cookie: the session cookie is SameSite-restricted",
+          app.config.get("SESSION_COOKIE_SAMESITE") in ("Lax", "Strict"),
+          "SESSION_COOKIE_SAMESITE is %r — the socket connect gate and the CSRF Bearer exemption "
+          "both rely on this cookie not being sent cross-site"
+          % (app.config.get("SESSION_COOKIE_SAMESITE"),))
+    check("cookie: ...and is not readable from JavaScript",
+          app.config.get("SESSION_COOKIE_HTTPONLY") is True,
+          "SESSION_COOKIE_HTTPONLY is %r" % (app.config.get("SESSION_COOKIE_HTTPONLY"),))
+    # ...and the socket's origin list is only permissive when there is genuinely no origin to pin.
+    from app import _socketio_cors as _sio_cors
+    from panel.core.config import load_config as _lc_cfg, save_config as _sc_cfg
+    _cfg_before = _lc_cfg()
+    try:
+        _sc_cfg(dict(_cfg_before, site_domain="panel.example.ts.net",
+                     socketio_cors_origins=None))
+        _pinned = _sio_cors()
+        check("socket: with a domain configured the origin list is pinned to it, not '*'",
+              _pinned != "*" and any("panel.example.ts.net" in o for o in (_pinned or [])),
+              "answered %r — a wildcard lets any page complete the handshake, leaving the session "
+              "cookie as the only thing between a visited page and a shell" % (_pinned,))
+        _sc_cfg(dict(_cfg_before, site_domain="", socketio_cors_origins=None))
+        check("socket: ...and falls back to '*' only when there is no domain to pin to",
+              _sio_cors() == "*", "answered %r with no site_domain set" % (_sio_cors(),))
+    finally:
+        _sc_cfg(_cfg_before)
+
 except Exception:
     # A crash part-way through otherwise just prints fewer checks and still reads as green-ish.
     # That has hidden three separate mistakes while writing these; a crash is a FAILURE.

@@ -170,7 +170,15 @@
     <div class="card h-100">
       <div class="card-header" id="sec-terminal"><i class="bi bi-terminal-fill"></i> Terminal</div>
       <div class="card-body">
+        {# Same trap as terminal.html carried: "the panel's own account" is true on the panel host
+           and false on a remote, where the session runs as whatever account that host is
+           configured with — usually root. Name it rather than assert it. #}
+        {% if remote.is_local %}
         <p class="small text-secondary">A shell on this host, as the panel's own account.</p>
+        {% else %}
+        <p class="small text-secondary" data-no-i18n>A shell on this host, as
+          <code>{{ remote.username or 'root' }}</code>.</p>
+        {% endif %}
         <a href="{{ url_for('host_terminal', remote_id=remote.id) }}" class="btn btn-sm btn-outline-secondary">
           <i class="bi bi-terminal"></i> Open terminal
         </a>
