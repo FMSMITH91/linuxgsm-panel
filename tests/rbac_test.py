@@ -765,6 +765,161 @@ try:
         _cfg_mod._cfg_cache.clear()
         _cfg_mod._cfg_cache.update(_real_cache)
 
+    # ...and now DRIVEN, not read. The check above asserts the call exists in the source; it cannot
+    # tell whether the route acts on the answer, and the whole acceptance path (the 61 lines from the
+    # token lookup to the committed account) was executed by nothing. An invite is the one flow where
+    # an unauthenticated caller creates an account — and can be handed superadmin — so the guards on
+    # it are worth running rather than grepping.
+    from panel.db.models import Invite as _Inv   # noqa: E402
+    from panel.core.clock import utcnow as _inv_utcnow   # noqa: E402
+    from datetime import timedelta as _inv_timedelta   # noqa: E402
+
+    _anon_inv = app.test_client()          # nobody: this route is reachable without a session
+
+
+    def _mint(creator, superadmin=False, hours=24):
+        with app.app_context():
+            inv, tok = _Inv.mint(creator, hours=hours, superadmin=superadmin)
+            db.session.add(inv)
+            db.session.commit()
+            return inv.id, tok
+
+
+    def _accept(tok, username, password="Sufficient1!pass"):
+        return _anon_inv.post("/invite/%s" % tok,
+                              data={"username": username, "password": password,
+                                    "confirm_password": password})
+
+
+    def _user(username):
+        with app.app_context():
+            return User.query.filter_by(username=username).first()
+
+
+    _inv_tag = "inv_" + secrets.token_hex(3)
+    try:
+        with app.app_context():
+            _sa = User.query.filter_by(is_superadmin=True).first()
+            _sa_id = _sa.id
+
+        # 1. The happy path, so the refusals below are not passing for the wrong reason.
+        _iid, _tok = _mint(_sa)
+        check("invite route: a valid invite is accepted and creates the account",
+              _accept(_tok, _inv_tag + "_ok").status_code in (200, 302)
+              and _user(_inv_tag + "_ok") is not None,
+              "the positive control failed — every refusal below proves nothing")
+        check("invite route: ...and does NOT grant superadmin unless the invite said so",
+              getattr(_user(_inv_tag + "_ok"), "is_superadmin", None) is False,
+              "an ordinary invite minted a superadmin")
+
+        # 2. The same link twice. The route claims the invite with UPDATE ... WHERE used_at IS NULL
+        #    precisely so two submissions cannot both make an account.
+        _r2 = _accept(_tok, _inv_tag + "_twice")
+        check("invite route: the same link cannot be redeemed twice",
+              _user(_inv_tag + "_twice") is None,
+              "a second account was created from one invite (status %s)" % _r2.status_code)
+
+        # 2b. ...and the RACE, which the sequential case above does not reach. A used invite is
+        #     already refused by the early is_usable check, so that check is what makes 2 pass —
+        #     the claim's `UPDATE ... WHERE used_at IS NULL` exists for two submissions in flight
+        #     at once. Deterministic stand-in for the race: password_problem() is the last call
+        #     before the claim, so marking the row used from inside it puts the invite in exactly
+        #     the state a competing request would have left it in.
+        import panel.routes.admin_notifications as _anmod
+        _pw_real = _anmod.password_problem
+        _iid_race, _tok_race = _mint(_sa)
+
+        def _pw_then_steal(pw):
+            with app.app_context():
+                _row = db.session.get(_Inv, _iid_race)
+                if _row is not None and _row.used_at is None:
+                    _row.used_at = _inv_utcnow()
+                    db.session.commit()
+            return _pw_real(pw)
+
+        _anmod.password_problem = _pw_then_steal
+        try:
+            _r_race = _accept(_tok_race, _inv_tag + "_race")
+        finally:
+            _anmod.password_problem = _pw_real
+        check("invite route: an invite claimed mid-request makes no second account",
+              _user(_inv_tag + "_race") is None,
+              "the claim is not conditional on used_at, so two requests in flight both win "
+              "(status %s)" % _r_race.status_code)
+
+        # 3. The delegation must not outlive the authority behind it. A superadmin-granting invite
+        #    from someone since DEMOTED must not still hand out the rank they lost.
+        _iid_sa, _tok_sa = _mint(_sa, superadmin=True)
+        with app.app_context():
+            db.session.get(User, _sa_id).is_superadmin = False
+            db.session.commit()
+        _r3 = _accept(_tok_sa, _inv_tag + "_demoted")
+        check("invite route: a superadmin invite from a DEMOTED admin is refused",
+              _user(_inv_tag + "_demoted") is None,
+              "an offboarded admin's outstanding invite still created an account "
+              "(status %s)" % _r3.status_code)
+        check("invite route: ...and the form is not even shown for it",
+              _anon_inv.get("/invite/%s" % _tok_sa).status_code == 404,
+              "a dead invite still renders its form")
+        with app.app_context():                      # put the fixture back before the next case
+            db.session.get(User, _sa_id).is_superadmin = True
+            db.session.commit()
+
+        # 4. Deactivated, not merely demoted: nobody is standing behind the invite at all.
+        _iid_d, _tok_d = _mint(_sa)
+        with app.app_context():
+            db.session.get(User, _sa_id).is_active = False
+            db.session.commit()
+        _r4 = _accept(_tok_d, _inv_tag + "_inactive")
+        check("invite route: an invite from a DEACTIVATED admin is refused",
+              _user(_inv_tag + "_inactive") is None,
+              "status %s" % _r4.status_code)
+        with app.app_context():
+            db.session.get(User, _sa_id).is_active = True
+            db.session.commit()
+
+        # 5. An expired invite, and a token nobody minted, answer the SAME way — a link that said
+        #    "already used" would confirm to a stranger that the token was real.
+        _iid_x, _tok_x = _mint(_sa, hours=1)
+        with app.app_context():
+            _x = db.session.get(_Inv, _iid_x)
+            _x.expires_at = _inv_utcnow() - _inv_timedelta(hours=2)
+            db.session.commit()
+        _r_exp = _anon_inv.get("/invite/%s" % _tok_x)
+        _r_bogus = _anon_inv.get("/invite/%s" % ("z" * 43))
+        check("invite route: an expired invite is refused",
+              _r_exp.status_code == 404 and _user(_inv_tag + "_exp") is None)
+        # The CSP nonce is fresh per response by design, so it is normalised out — comparing the
+        # raw bodies reported a difference that is not one. Everything else must match: a page
+        # that said "already used" would confirm to a stranger that a guessed token was real.
+        import difflib as _dl
+        import re as _inv_re
+
+        def _no_nonce(t):
+            return _inv_re.sub(r'nonce="[^"]*"', 'nonce="X"', t)
+
+        _d_exp, _d_bog = _no_nonce(_r_exp.get_data(as_text=True)), \
+            _no_nonce(_r_bogus.get_data(as_text=True))
+        _diff = [l for l in _dl.unified_diff(_d_exp.split("\n"), _d_bog.split("\n"),
+                                             lineterm="", n=0)
+                 if l[:1] in "+-" and l[:3] not in ("---", "+++")]
+        check("invite route: ...and a guessed token is refused the SAME way, telling it nothing",
+              _r_bogus.status_code == _r_exp.status_code and _d_bog == _d_exp,
+              "status %s vs %s; differing lines: %s"
+              % (_r_exp.status_code, _r_bogus.status_code, " || ".join(_diff[:4])[:400]))
+    finally:
+        with app.app_context():
+            for _n in ("_ok", "_twice", "_demoted", "_inactive", "_exp", "_race"):
+                _u = User.query.filter_by(username=_inv_tag + _n).first()
+                if _u is not None:
+                    db.session.delete(_u)
+            for _row in _Inv.query.all():
+                db.session.delete(_row)
+            _sa_row = db.session.get(User, _sa_id)
+            if _sa_row is not None:
+                _sa_row.is_superadmin, _sa_row.is_active = True, True
+            db.session.commit()
+
     # ── Superadmin sanity: still full access ──
     ca = client_as(admin_id)
     for p in ["/users", "/groups", "/logs", "/remotes", "/server-management", "/tailscale",
@@ -958,6 +1113,7 @@ check("redeem_invite refuses an invite whose creator lost their authority",
       _calls_authority,
       "it must call Invite.authority_intact(creator) — without it an offboarded admin's "
       "outstanding invite still creates the account it promised, superadmin included")
+
 
 # ── every MUTATING endpoint leaves an audit trail ─────────────────────────────────────────────
 # The audit log is the only record of who changed what. api_remote_bootstrap had none at all —
