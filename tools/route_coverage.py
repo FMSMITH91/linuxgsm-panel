@@ -61,7 +61,8 @@ def _run_suites(work):
     results = []
     for suite in SUITES:
         shutil.rmtree(os.path.join(work, "data"), ignore_errors=True)
-        proc = subprocess.run(  # nosec B603
+        proc = subprocess.run(  # nosec B603  # nosemgrep - argv list, no shell; PY is this
+            # repo's own venv interpreter and the suite name comes from the fixed SUITES tuple.
             [PY, "-m", "coverage", "run", "--parallel-mode", "--source=.",
              "--omit=./tests/*,./tools/*,./.venv/*",
              "tools/nosudo_runner.py", "tests/%s_test.py" % suite],
@@ -165,10 +166,10 @@ def main():
             print("\nrefusing to report — these suites did not run: %s" % ", ".join(bad),
                   file=sys.stderr)
             return 1
-        subprocess.run([PY, "-m", "coverage", "combine"],  # nosec B603
+        subprocess.run([PY, "-m", "coverage", "combine"],  # nosec B603  # nosemgrep - argv list
                        cwd=work, capture_output=True)
         cov_path = os.path.join(work, "route-cov.json")
-        subprocess.run([PY, "-m", "coverage", "json", "-o", cov_path],  # nosec B603
+        subprocess.run([PY, "-m", "coverage", "json", "-o", cov_path],  # nosec B603 # nosemgrep
                        cwd=work, capture_output=True)
         if not os.path.exists(cov_path):
             print("coverage produced no JSON", file=sys.stderr)
