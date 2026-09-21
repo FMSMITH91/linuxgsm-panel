@@ -51,6 +51,15 @@ _READ_CHUNK = 16 * 1024
 _IDLE_TIMEOUT = 15 * 60
 
 # Ceilings so a bug or a bored admin cannot spawn shells until the host runs out of pty devices.
+# How long each teardown signal gets before the next, harder one. Short: the normal case is the
+# child exiting on the pty master's EIO before the first signal is even sent, and this only runs
+# when it did not. Three steps, so a process that ignores everything costs 0.75s once.
+_KILL_GRACE = 0.25
+
+# How long a teardown waits for the pump thread to notice EOF and close its own fd. The child is
+# already dead by then, so this is one select() timeout plus slack.
+_PUMP_JOIN = 1.0
+
 _MAX_SESSIONS_TOTAL = 12
 _MAX_SESSIONS_PER_USER = 3
 
@@ -113,6 +122,7 @@ class Session:
         self._client = None        # paramiko SSHClient we own
         self._fd = None            # pty master fd
         self._proc = None          # subprocess.Popen
+        self._pump = None          # the thread reading this session's transport
 
     # ── output ────────────────────────────────────────────────────────────────────────────────
     def _emit(self, data):
@@ -177,6 +187,11 @@ class Session:
             if self._closed:
                 return
             self._closed = True
+        # The process goes first, and only then the fd: killing the child closes the pty slave,
+        # the pump's next read returns EOF, and the pump closes the master itself. Closing the fd
+        # out from under a thread that is select()ing on it is a use-after-free for file
+        # descriptors — the number is immediately reusable, so the pump can wake up on some other
+        # session's socket and write ITS bytes into this browser.
         for shut in (self._close_chan, self._close_proc, self._close_fd, self._close_client):
             try:
                 shut()
@@ -194,17 +209,64 @@ class Session:
             self._chan.close()
 
     def _close_proc(self):
-        if self._proc is not None and self._proc.poll() is None:
-            # The whole group: `ssh -tt` and the local shell both have children, and killing only
-            # the leader leaves those attached to a pty nobody is reading.
+        """Make sure the process is actually gone, rather than sending one signal and hoping.
+
+        This used to be a single SIGHUP to the process group, and a closed browser tab left an
+        `ssh -tt` to the remote host running for good — one more per session opened, forever.
+        The reason is worth writing down: an IGNORED signal disposition survives both fork and
+        execve, so if the panel process itself ignores SIGHUP every shell and ssh it spawns
+        inherits that, and killpg returns success having done nothing at all. `nohup` sets exactly
+        that disposition, and so does anything started from a shell that did. Confirmed by reading
+        SigIgn in /proc for the panel and for the orphaned ssh: bit 0 set on both.
+
+        So: escalate, and CHECK. SIGHUP is still first because it is what a login shell wants to
+        see, SIGTERM next, SIGKILL last — and nothing here reports success without poll() having
+        confirmed it.
+        """
+        proc = self._proc
+        if proc is None or proc.poll() is not None:
+            return
+        # The whole group: `ssh -tt` and the local shell both have children, and killing only the
+        # leader leaves those attached to a pty nobody is reading.
+        try:
+            pgid = os.getpgid(proc.pid)
+        except (ProcessLookupError, PermissionError):
+            pgid = None
+        for sig in (signal.SIGHUP, signal.SIGTERM, signal.SIGKILL):
             try:
-                os.killpg(os.getpgid(self._proc.pid), signal.SIGHUP)
+                if pgid is not None:
+                    os.killpg(pgid, sig)
+                else:
+                    proc.send_signal(sig)
             except (ProcessLookupError, PermissionError):
-                self._proc.terminate()
+                return                      # already gone, or never ours to kill
+            deadline = time.monotonic() + _KILL_GRACE
+            while time.monotonic() < deadline:
+                if proc.poll() is not None:
+                    return
+                time.sleep(0.05)            # patched by eventlet → yields the hub
+        _log.warning("terminal %s: pid %s survived SIGKILL", self.label, proc.pid)
 
     def _close_fd(self):
-        if self._fd is not None:
-            os.close(self._fd)
+        """Let the pump close its own fd; only take it back if the pump is wedged.
+
+        _close_proc has already made sure the child is dead, so the pump is about to read EOF and
+        retire. Waiting for it is what keeps this descriptor from being closed under a live
+        select().
+        """
+        t = self._pump
+        if t is not None and t is not threading.current_thread():
+            t.join(timeout=_PUMP_JOIN)
+        fd, self._fd = self._fd, None
+        if fd is not None:
+            # The pump did not get there — a leaked pty master is worse than a small race, and at
+            # this point the thread is not coming back.
+            _log.warning("terminal %s: pump did not retire, closing fd %s from the caller",
+                         self.label, fd)
+            try:
+                os.close(fd)
+            except OSError:
+                pass
 
     def _close_client(self):
         if self._client is not None:
@@ -235,21 +297,35 @@ def _pump_channel(sess):
 
 
 def _pump_fd(sess):
-    """Local/tailscale: select yields under eventlet; os.read on a pty fd would not."""
+    """Local/tailscale: select yields under eventlet; os.read on a pty fd would not.
+
+    This thread OWNS the pty master. Nothing else closes it while this loop is running, because a
+    descriptor closed under a live select() can be handed straight back out by the next open() and
+    this loop would go on reading it.
+    """
     fd = sess._fd
-    while not sess.closed:
-        try:
-            r, _, _ = select.select([fd], [], [], 0.2)
-            if not r:
-                continue
-            data = os.read(fd, _READ_CHUNK)
-            if not data:
+    try:
+        while not sess.closed:
+            try:
+                r, _, _ = select.select([fd], [], [], 0.2)
+                if not r:
+                    continue
+                data = os.read(fd, _READ_CHUNK)
+                if not data:
+                    break
+                sess._emit(data.decode("utf-8", errors="replace"))
+            except (OSError, ValueError):
                 break
-            sess._emit(data.decode("utf-8", errors="replace"))
-        except (OSError, ValueError):
-            break
-        except Exception:
-            break
+            except Exception:
+                break
+    finally:
+        # Claim it before closing: _close_fd reads this to decide whether it still has to.
+        if sess._fd == fd:
+            sess._fd = None
+        try:
+            os.close(fd)
+        except OSError:
+            pass
     sess.close("the shell exited")
 
 
@@ -327,7 +403,8 @@ def _open_local(sess, cols, rows):
     sess._fd = master
     sess._proc = proc
     sess.resize(cols, rows)
-    threading.Thread(target=_pump_fd, args=(sess,), daemon=True).start()
+    sess._pump = threading.Thread(target=_pump_fd, args=(sess,), daemon=True)
+    sess._pump.start()
 
 
 def _open_paramiko(sess, server, cols, rows):
@@ -340,7 +417,8 @@ def _open_paramiko(sess, server, cols, rows):
     chan = client.invoke_shell(term="xterm-256color", width=int(cols), height=int(rows))
     chan.settimeout(0.0)
     sess._chan = chan
-    threading.Thread(target=_pump_channel, args=(sess,), daemon=True).start()
+    sess._pump = threading.Thread(target=_pump_channel, args=(sess,), daemon=True)
+    sess._pump.start()
 
 
 def _open_tailscale(sess, server, cols, rows):
@@ -368,7 +446,8 @@ def _open_tailscale(sess, server, cols, rows):
     sess._fd = master
     sess._proc = proc
     sess.resize(cols, rows)
-    threading.Thread(target=_pump_fd, args=(sess,), daemon=True).start()
+    sess._pump = threading.Thread(target=_pump_fd, args=(sess,), daemon=True)
+    sess._pump.start()
 
 
 def get(sid):

@@ -1582,7 +1582,7 @@ check("docs: the fuzz workflow matrix runs every harness", _matrix_targets == _h
 # inclusive `paths:` filters, so a stale entry doesn't fail the workflow — it silently stops
 # triggering it, which is the same "quietly stops being maintained" failure this block exists to
 # catch. Moving a module now either updates the filter or turns this red.
-for _mod in ("ssh_manager.py", "system_ops.py", "terminal.py"):
+for _mod in ("ssh_manager.py", "system_ops.py", "panel/core/terminal.py"):
     _p = _modpath(_mod)
     _want = os.path.relpath(_p, _root).replace(os.sep, "/") + ("/**" if os.path.isdir(_p) else "")
     check("docs: the fuzz workflow watches %s (as '%s')" % (_mod, _want),
@@ -3181,3 +3181,230 @@ _mu_js = open(os.path.join(_root, "static", "js", "manage_users.js"), encoding="
 check("users page: ...and the script disables it rather than hiding it",
       "box.disabled = !u.totp_enabled" in _mu_js,
       "nothing marks the switch inert for an account with no 2FA, so it would post a no-op")
+
+# ── exactly ONE handler per socket event ──────────────────────────────────────────────────────
+# flask-socketio does not chain handlers. python-socketio's BaseServer.on ends in
+# `self.handlers[namespace][event] = handler`, so a second @socketio.on("disconnect") REPLACES the
+# first and the first never runs again — no warning, no error, and nothing in the app's own tests
+# noticed.
+#
+# It happened: the host terminal added its own disconnect handler and deleted the console's viewer
+# cleanup. A browser that closed would have stayed in _console_viewers forever, with the poller
+# still SSH-ing `stat -c%s` at the host on its behalf, for every console ever opened. Caught by
+# reading the library, not by the suite, which is why this check exists.
+#
+# Parsed, not grepped. The first version of this gate searched the source text and failed on the
+# comment you are reading — the same way the deploy gate matched `cd ~/linuxgsm-panel` quoted in
+# its own explanation. A decorator is an AST node; prose is not.
+import ast as _ast6
+
+_sock_handlers = {}          # event -> [(relpath, funcname), ...]
+_sock_fns = {}               # (relpath, event) -> the FunctionDef node
+for _sf in sorted(glob.glob(os.path.join(_root, "panel", "**", "*.py"), recursive=True)):
+    _rel6 = os.path.relpath(_sf, _root)
+    for _node in _ast6.walk(_ast6.parse(open(_sf, encoding="utf-8").read())):
+        if not isinstance(_node, (_ast6.FunctionDef, _ast6.AsyncFunctionDef)):
+            continue
+        for _dec in _node.decorator_list:
+            if not (isinstance(_dec, _ast6.Call) and isinstance(_dec.func, _ast6.Attribute)
+                    and _dec.func.attr == "on"
+                    and isinstance(_dec.func.value, _ast6.Name)
+                    and _dec.func.value.id == "socketio"):
+                continue
+            if _dec.args and isinstance(_dec.args[0], _ast6.Constant) \
+                    and isinstance(_dec.args[0].value, str):
+                _ev = _dec.args[0].value
+                _sock_handlers.setdefault(_ev, []).append((_rel6, _node.name))
+                _sock_fns[(_rel6, _ev)] = _node
+
+_dupe_ev = {k: v for k, v in _sock_handlers.items() if len(v) > 1}
+check("socket: no event has two handlers (the second would silently replace the first)",
+      not _dupe_ev,
+      "registered twice: " + "; ".join(
+          f"{k} -> " + ", ".join(f"{fn}() in {f}" for f, fn in v) for k, v in _dupe_ev.items())
+      + " — flask-socketio keeps one handler per event, so the earlier one is now dead code")
+check("socket: the app has a disconnect handler at all",
+      "disconnect" in _sock_handlers,
+      "nothing cleans up per-socket state when a browser goes away")
+
+# ...and that the one handler still runs everyone's cleanup, not just its own.
+_disc_where = _sock_handlers.get("disconnect", [(None, None)])[0]
+_disc_fn = _sock_fns.get((_disc_where[0], "disconnect"))
+check("socket: the disconnect handler runs the registered hooks",
+      _disc_fn is not None and any(
+          isinstance(n, _ast6.Call) and getattr(n.func, "attr", getattr(n.func, "id", None))
+          == "run_disconnect_hooks" for n in _ast6.walk(_disc_fn)),
+      f"the sole disconnect handler ({_disc_where[1]} in {_disc_where[0]}) does not call "
+      "socket_hooks, so the terminal never tears its shell down when a browser closes")
+check("socket: the terminal does not register a disconnect handler of its own",
+      not any(f == "panel/routes/host_terminal.py" for f, _ in _sock_handlers.get("disconnect", [])),
+      "the terminal registered a disconnect handler again — that deletes the console's")
+_tsrc6 = _modsrc("panel/routes/host_terminal.py")
+check("socket: ...it registers a hook instead",
+      any(isinstance(n, _ast6.Call)
+          and getattr(n.func, "attr", getattr(n.func, "id", None)) == "add_disconnect_hook"
+          for n in _ast6.walk(_ast6.parse(_tsrc6))),
+      "nothing tears the shell down when a browser closes without sending term_close")
+
+# One hook raising must not skip the hooks after it: a leaked shell is no reason to leak a console
+# viewer too.
+import importlib as _il6
+_hooks_mod = _il6.import_module("panel.ops.socket_hooks")
+_seen6 = []
+_hooks_mod.add_disconnect_hook(lambda sid: (_ for _ in ()).throw(RuntimeError("boom")))
+def _second_hook(sid): _seen6.append(sid)
+_hooks_mod.add_disconnect_hook(_second_hook)
+_hooks_mod.run_disconnect_hooks("sid-1")
+check("socket: a hook that raises does not stop the ones after it", _seen6 == ["sid-1"],
+      f"the second hook did not run: {_seen6}")
+_hooks_mod.add_disconnect_hook(_second_hook)          # same function, registered twice
+_seen6.clear()
+_hooks_mod.run_disconnect_hooks("sid-2")
+check("socket: registering the same hook twice does not run it twice", _seen6 == ["sid-2"],
+      f"ran {len(_seen6)} times: {_seen6}")
+
+# ── a closed browser must take the shell with it, even when SIGHUP is ignored ─────────────────
+# The teardown sent one SIGHUP to the process group and moved on. An ignored signal disposition
+# survives fork AND execve, so when the panel process itself ignores SIGHUP — which is what
+# `nohup` does, and what anything started from such a shell inherits — killpg reported success
+# having done nothing, and every closed browser tab left an `ssh -tt` to the remote host running
+# for good. Found on the real VPS: the ssh was still there minutes after the socket dropped, and
+# /proc/<pid>/status showed SigIgn bit 0 set on both the panel and the ssh.
+#
+# The child here ignores SIGHUP *and* SIGTERM, so nothing short of the full escalation ends it.
+import logging as _lg6
+import pty as _pty6
+import subprocess as _sp6
+import threading as _th6
+
+_tsmod = _il6.import_module("panel.ops.terminal_session")
+_stubborn = ("import signal, sys, time\n"
+             "signal.signal(signal.SIGHUP, signal.SIG_IGN)\n"
+             "signal.signal(signal.SIGTERM, signal.SIG_IGN)\n"
+             "sys.stdout.write('ready\\n'); sys.stdout.flush()\n"
+             "time.sleep(120)\n")
+_m6, _s6 = _pty6.openpty()
+_proc6 = _sp6.Popen([sys.executable, "-c", _stubborn], stdin=_s6, stdout=_s6, stderr=_s6,
+                    start_new_session=True)
+os.close(_s6)
+_sess6 = _tsmod.Session("unit-sid", "unit", lambda sid, d: None, lambda sid, r: None)
+_sess6._fd = _m6
+_sess6._proc = _proc6
+# Wait for the child to SAY it has installed the handlers, rather than sleeping and hoping — a
+# race here would make this test pass for the wrong reason on a loaded machine.
+import select as _sel6
+_ready6, _t0_6 = b"", _time.time()
+while b"ready" not in _ready6 and _time.time() - _t0_6 < 10:
+    if _sel6.select([_m6], [], [], 0.2)[0]:
+        _ready6 += os.read(_m6, 1024)
+check("terminal: the stubborn child announced itself (the next checks are not vacuous)",
+      b"ready" in _ready6, "child never printed ready: %r" % (_ready6,))
+_sess6._pump = _th6.Thread(target=_tsmod._pump_fd, args=(_sess6,), daemon=True, name="unit-pump")
+_sess6._pump.start()
+
+# Capture what the teardown logs: if the pump had to be overruled it says so, and that is the
+# descriptor race this ordering exists to avoid.
+class _Cap6(_lg6.Handler):
+    def __init__(self): _lg6.Handler.__init__(self); self.msgs = []
+    def emit(self, rec): self.msgs.append(rec.getMessage())
+
+
+_cap6 = _Cap6()
+_lg6.getLogger("panel.terminal").addHandler(_cap6)
+# WHICH thread closes the pty master is the whole point, so record it. Asserting only that the fd
+# ends up None cannot tell the two apart: the caller closing it early also sets None, and that
+# version of this check passed against the very bug it was written for.
+_closed_by6 = []
+_real_close6 = os.close
+
+
+def _spy_close6(fd):
+    if fd == _m6:
+        _closed_by6.append(_th6.current_thread().name)
+    return _real_close6(fd)
+
+
+os.close = _spy_close6
+try:
+    _sess6.close("unit test")
+finally:
+    os.close = _real_close6
+    _lg6.getLogger("panel.terminal").removeHandler(_cap6)
+_t0_6 = _time.time()
+while _proc6.poll() is None and _time.time() - _t0_6 < 5:
+    _time.sleep(0.05)
+check("terminal: close() kills a child that ignores SIGHUP and SIGTERM",
+      _proc6.poll() is not None,
+      "the process outlived close() — a closed browser tab leaks an ssh to the remote host, one "
+      "more every time anyone opens a terminal")
+check("terminal: ...and does not report success without checking",
+      not any("survived SIGKILL" in m for m in _cap6.msgs),
+      "teardown logged that the process outlived SIGKILL: %r" % (_cap6.msgs,))
+check("terminal: the pump closes its own descriptor (idle pump)",
+      _closed_by6[:1] == ["unit-pump"],
+      "the pty master was closed by %r while the pump thread was still select()ing on it — that "
+      "descriptor number is immediately reusable, so the pump can wake on another session's "
+      "socket and write its bytes into this browser (log: %r)" % (_closed_by6, _cap6.msgs))
+check("terminal: ...and exactly once",
+      len(_closed_by6) == 1,
+      "the pty master was closed %d times (%r) — a second close can land on a descriptor number "
+      "something else has already been given" % (len(_closed_by6), _closed_by6))
+if _proc6.poll() is None:
+    _proc6.kill()
+
+
+# ── ...and when the pump is BUSY, which is the case the join exists for ───────────────────────
+# The check above passes with the join deleted: an idle pump is already out of select() by the
+# time the caller gets to the descriptor, so it wins the race on its own. The case that matters is
+# a pump stuck inside _emit — socketio.emit to a browser that has stopped reading — because that
+# is when the caller would close a descriptor the pump is about to use again. So block the pump on
+# an event the test controls and release it mid-teardown.
+_gate6 = _th6.Event()
+_in_emit6 = _th6.Event()
+
+
+def _slow_out6(sid, data):
+    _in_emit6.set()
+    _gate6.wait(timeout=10)
+
+
+_chatty6 = ("import sys, time\n"
+            "while True:\n"
+            "    sys.stdout.write('x' * 64 + '\\n'); sys.stdout.flush(); time.sleep(0.02)\n")
+_m7, _s7 = _pty6.openpty()
+_proc7 = _sp6.Popen([sys.executable, "-c", _chatty6], stdin=_s7, stdout=_s7, stderr=_s7,
+                    start_new_session=True)
+os.close(_s7)
+_sess7 = _tsmod.Session("unit-sid-2", "unit2", _slow_out6, lambda sid, r: None)
+_sess7._fd = _m7
+_sess7._proc = _proc7
+_sess7._pump = _th6.Thread(target=_tsmod._pump_fd, args=(_sess7,), daemon=True, name="unit-pump2")
+_sess7._pump.start()
+check("terminal: the busy pump really is stuck in _emit (the next check is not vacuous)",
+      _in_emit6.wait(timeout=10), "the pump never reached the output callback")
+
+_closed_by7 = []
+_real_close7 = os.close
+
+
+def _spy_close7(fd):
+    if fd == _m7:
+        _closed_by7.append(_th6.current_thread().name)
+    return _real_close7(fd)
+
+
+# Released while the teardown is waiting on the pump: with the join this lets the pump retire and
+# close its own descriptor, without it the caller has already closed it.
+_th6.Timer(0.2, _gate6.set).start()
+os.close = _spy_close7
+try:
+    _sess7.close("unit test")
+finally:
+    os.close = _real_close7
+check("terminal: a BUSY pump still closes its own descriptor, not the caller",
+      _closed_by7[:1] == ["unit-pump2"],
+      "the pty master was closed by %r while the pump was still inside the output callback and "
+      "would go on to read that descriptor number again" % (_closed_by7,))
+_gate6.set()
+if _proc7.poll() is None:
+    _proc7.kill()

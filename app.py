@@ -2070,7 +2070,7 @@ def register_routes(app):
     # AFTER socketio exists, and handed it: there is exactly one SocketIO in this app and the
     # terminal's events live on its DEFAULT namespace so the connect-time auth gate above applies
     # to them too. A second SocketIO(app) would collide on /socket.io/.
-    from panel.routes import terminal as _r_terminal
+    from panel.routes import host_terminal as _r_terminal
     _r_terminal.register(app, socketio, _supervise)
     # Daily automatic backups: check hourly; daily_backup_tick() takes one only when the last
     # daily backup is ~a day old (and enabled), then prunes past the retention window.

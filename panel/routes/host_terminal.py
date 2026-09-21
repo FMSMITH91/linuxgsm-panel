@@ -17,6 +17,7 @@ from flask_login import current_user, login_required
 from flask_socketio import emit
 
 from panel.db.models import RemoteServer
+from panel.ops import socket_hooks as _socket_hooks
 from panel.ops import terminal_session as _ts
 from panel.security.auth import (USE_TERMINAL, get_remote, has_permission, log_action,
     permission_required)
@@ -109,11 +110,13 @@ def register(app, socketio, supervise):
     def on_term_close(_data=None):
         _close_and_audit(request.sid, "closed")
 
-    @socketio.on("disconnect")
-    def on_term_disconnect():
-        # A browser that closed without term_close must still take the shell with it. The console
-        # registers its own disconnect handler too; flask-socketio runs both.
-        _close_and_audit(request.sid, "the connection closed")
+    # A browser that closed without term_close must still take the shell with it — but NOT via a
+    # second @socketio.on("disconnect"). flask-socketio keeps one handler per event per namespace
+    # and the later registration wins outright, so this one would have deleted the console's viewer
+    # cleanup: every closed browser stays in _console_viewers and the poller keeps SSH-polling the
+    # host for a viewer that is gone. Measured, not guessed — see panel/ops/socket_hooks.py.
+    _socket_hooks.add_disconnect_hook(
+        lambda sid: _close_and_audit(sid, "the connection closed"))
 
     def _close_and_audit(sid, reason):
         with _sid_lock:
