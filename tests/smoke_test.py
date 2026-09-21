@@ -7541,6 +7541,83 @@ try:
         db.session.delete(db.session.get(_R2U, _r2_id))
         db.session.commit()
 
+    # ── the SSH-port and SSH-mode routes, which nothing entered ───────────────────────────────
+    # Both change how an operator reaches a host, and a wrong outcome written down is how someone
+    # believes they still have a way in. Neither route body was executed by any suite: the port
+    # one validates input, then updates RemoteServer.port so the panel's own future connections
+    # follow — and that update must happen only when the change actually took.
+    import panel.routes.remote_vps as _shmod
+
+    _sh_saved = (_shmod.change_ssh_port, _shmod.remote_set_public_ssh)
+    _sh_calls = []
+
+    def _al_last(action):
+        """The most recent audit row for `action`, as a plain dict (the row is detached after)."""
+        with app.app_context():
+            _row = _AL.query.filter_by(action=action).order_by(_AL.id.desc()).first()
+            return {"success": _row.success, "detail": _row.detail} if _row else None
+
+    try:
+        with app.app_context():
+            _sh_before = db.session.get(RemoteServer, remote_id).port
+
+        def _sh_port(remote, port):
+            return c.post("/api/remote/%d/ssh-port" % remote_id, json={"port": port})
+
+        def _sh_stored():
+            with app.app_context():
+                return db.session.get(RemoteServer, remote_id).port
+
+        _shmod.change_ssh_port = lambda r, p, b="": (_sh_calls.append(p), (True, "moved"))[1]
+        for _bad, _why in ((0, "zero"), (65536, "above the range"), ("nope", "not a number"),
+                           (None, "missing")):
+            _sh_calls.clear()
+            _r = _sh_port(remote_id, _bad)
+            check("ssh port: %r (%s) is refused before anything is changed" % (_bad, _why),
+                  _r.status_code == 400 and not _sh_calls,
+                  "status=%d, change_ssh_port called with %s" % (_r.status_code, _sh_calls))
+        check("ssh port: ...and the stored port is untouched by all of that",
+              _sh_stored() == _sh_before, "port moved to %r on a refused request" % _sh_stored())
+
+        # A change that FAILED must not move the panel's own idea of the port: it would then
+        # connect to a port sshd is not on, and the operator's next visit says the host is down.
+        _shmod.change_ssh_port = lambda r, p, b="": (False, "sshd rejected the new config")
+        _r = _sh_port(remote_id, 2222)
+        check("ssh port: a change that FAILED does not repoint the panel at the new port",
+              _sh_stored() == _sh_before,
+              "stored port is now %r though the change failed — the panel will dial a port "
+              "nothing is listening on" % _sh_stored())
+        check("ssh port: ...and it is audited as a failure",
+              (_al_last("change_ssh_port") or {}).get("success") is False,
+              "audited %r" % ((_al_last("change_ssh_port") or {}).get("success"),))
+
+        # ...and the control: one that worked DOES move it, and is audited as a success.
+        _shmod.change_ssh_port = lambda r, p, b="": (True, "moved")
+        _r = _sh_port(remote_id, 2223)
+        check("ssh port: a change that WORKED repoints the panel (positive control)",
+              _sh_stored() == 2223,
+              "stored port is %r — the panel keeps dialling the old one" % _sh_stored())
+        check("ssh port: ...and is audited as a success",
+              (_al_last("change_ssh_port") or {}).get("success") is True,
+              "audited %r" % ((_al_last("change_ssh_port") or {}).get("success"),))
+
+        # ssh-mode: its whole job is the audit row, since the outcome is on the host.
+        _shmod.remote_set_public_ssh = lambda r, m: (False, "ufw refused")
+        c.post("/api/remote/%d/ssh-mode" % remote_id, json={"mode": "limit"})
+        check("ssh mode: a refused change is audited as a failure",
+              (_al_last("remote_ssh_mode") or {}).get("success") is False,
+              "audited %r" % ((_al_last("remote_ssh_mode") or {}).get("success"),))
+        _shmod.remote_set_public_ssh = lambda r, m: (True, "ok")
+        c.post("/api/remote/%d/ssh-mode" % remote_id, json={"mode": "off"})
+        check("ssh mode: ...and one that worked is audited as a success (positive control)",
+              (_al_last("remote_ssh_mode") or {}).get("success") is True,
+              "audited %r" % ((_al_last("remote_ssh_mode") or {}).get("success"),))
+    finally:
+        (_shmod.change_ssh_port, _shmod.remote_set_public_ssh) = _sh_saved
+        with app.app_context():
+            db.session.get(RemoteServer, remote_id).port = _sh_before
+            db.session.commit()
+
     # ── revoking an invite must claim it, not read it and then write ─────────────────────────────
     # Redemption claims the row atomically — "UPDATE ... WHERE used_at IS NULL", with a comment
     # saying that checking is_usable and trusting it would be a race. Revocation was the
