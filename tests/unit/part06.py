@@ -3120,3 +3120,43 @@ for _f in sorted(os.listdir(os.path.join(_root, "tests", "unit"))):
         _cfg_guard.append("%s (%d call(s), no redirect)" % (_f, _uses))
 check("suites: no unit file reads or writes the machine's own config.json",
       not _cfg_guard, "; ".join(_cfg_guard))
+
+# ── the deploy must ASK where the panel is, not assume it ────────────────────────────────────
+# install.sh has supported two service models since 2026-07-04: a per-user install under the
+# invoking user's home, and a ROOT install that runs as the dedicated 'lgsmpanel' service user out
+# of ITS home. deploy.yml hardcoded the first — `cd ~/linuxgsm-panel` — so the day a host was
+# converted to the hardened root model the deploy broke on every single run, 62 times over three
+# days, on a `cd:` error that says nothing about why.
+#
+# Read as TEXT like the fuzz-workflow gate above — the shell lives inside a YAML block scalar, so
+# what matters is the literal string that ends up on the host — but with the COMMENT LINES
+# STRIPPED FIRST. The first version of this block did not, and failed immediately on the sentence
+# two paragraphs up that quotes `cd ~/linuxgsm-panel` while explaining why it is wrong. That cuts
+# both ways and the other way is worse: without stripping, a comment mentioning
+# `systemctl show -p WorkingDirectory` would satisfy the positive checks below while the script
+# did nothing of the kind. Lines whose first non-space character is '#' only — enough for a
+# workflow file, and it never has to parse YAML to be right about this.
+_deploy_raw = open(os.path.join(_root, ".github", "workflows", "deploy.yml"),
+                   encoding="utf-8").read()
+_deploy_wf = "\n".join(_ln for _ln in _deploy_raw.splitlines()
+                        if not _ln.lstrip().startswith("#"))
+check("deploy: the workflow does not hardcode the per-user panel path",
+      "cd ~/linuxgsm-panel" not in _deploy_wf,
+      "`cd ~/linuxgsm-panel` is back — that assumes the per-user layout and fails on every "
+      "root-install host, which is the model install.sh creates when run with sudo")
+check("deploy: ...it asks the unit where the panel lives instead",
+      "systemctl show -p WorkingDirectory" in _deploy_wf,
+      "nothing derives the install directory from the host")
+check("deploy: ...and still handles a per-user install",
+      "${HOME}/linuxgsm-panel" in _deploy_wf,
+      "the fallback branch for a per-user install is gone, so those hosts stop deploying")
+# The service user's home is 0750, so the deploy account cannot stat the checkout: every read of
+# it has to go through sudo, and the git work has to run as the OWNER (root on a repo it does not
+# own trips git's safe.directory). Both were found only by running it against a real host.
+check("deploy: ...reads the system install through sudo",
+      "sudo -n test -d" in _deploy_wf and "sudo -n stat -c %U" in _deploy_wf,
+      "a plain [ -d ] / stat on the service user's home is false-y for the deploy user, and the "
+      "script silently takes the wrong branch")
+check("deploy: ...and runs git as the checkout's owner, not as root",
+      'sudo -n -u "${OWNER}" git -C' in _deploy_wf,
+      "git as root on a repo owned by the service user trips safe.directory")
