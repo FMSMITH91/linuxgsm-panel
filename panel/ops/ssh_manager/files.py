@@ -500,10 +500,17 @@ def browse_dir(server, user, relpath="", selfname=None):
     if ap is None:
         return None
     inner = f"find {_core._quote(ap)} -maxdepth 1 -mindepth 1 -printf '%y\\t%s\\t%f\\n' 2>/dev/null"
-    out, _, _ = _core.run_command(server, f"sudo -u {_core._quote(user)} bash -c {_core._quote(_guarded(user, ap, inner))}",
+    out, _, rc = _core.run_command(server, f"sudo -u {_core._quote(user)} bash -c {_core._quote(_guarded(user, ap, inner))}",
                             timeout=20, sudo=False)
     if _OUTSIDE_HOME in (out or ""):
         return None
+    # A read that FAILED prints nothing, and so does a genuinely empty directory — rc is the only
+    # thing that tells them apart, and without it the browser rendered "this folder is empty"
+    # about a folder it never reached. That is the most alarming possible way to be wrong about
+    # somebody's game files. `unreadable` rather than None: None already means path traversal and
+    # the route answers it with "Invalid path", which would be a second wrong statement.
+    if rc != 0:
+        return {"path": (relpath or "").strip("/"), "entries": [], "unreadable": True}
     base = (relpath or "").strip("/")
     entries = []
     for line in (out or "").splitlines():
@@ -680,10 +687,17 @@ def upload_file(server, user, reldir, filename, data_bytes, overwrite=True):
         return False, "Invalid path"
     if not overwrite:
         chk = f"test -e {_core._quote(target)} && echo __YES__ || true"
-        out, _, _ = _core.run_command(server, f"sudo -u {_core._quote(user)} bash -c {_core._quote(_guarded(user, target, chk))}",
+        out, _, rc = _core.run_command(server, f"sudo -u {_core._quote(user)} bash -c {_core._quote(_guarded(user, target, chk))}",
                                 timeout=15, sudo=False)
         if _OUTSIDE_HOME in (out or ""):
             return False, "Invalid path"
+        # The probe prints NOTHING when the file is absent, so silence is its ordinary success —
+        # rc is what separates that from a read that never ran. Without it, a failed check read as
+        # "no file there" and the upload went ahead and replaced a file the caller had explicitly
+        # asked not to overwrite.
+        if rc != 0:
+            return False, ("Couldn't check whether that file already exists on the host — "
+                           "nothing was uploaded. Try again.")
         if "__YES__" in (out or ""):
             return False, UPLOAD_EXISTS
     return _write_file_as_user(server, user, target, data_bytes)

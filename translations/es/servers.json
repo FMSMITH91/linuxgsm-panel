@@ -240,5 +240,7 @@
   "Your servers": "Tus servidores",
   "— everything is downloaded automatically.": "— todo se descarga automáticamente.",
   "— this install failed.": "— esta instalación falló.",
-  "● Live": "● En vivo"
+  "● Live": "● En vivo",
+  "Could not read this folder — the host did not answer. This is not the same as it being empty.": "No se pudo leer esta carpeta — el host no respondió. Esto no es lo mismo que esté vacía.",
+  "Couldn't check whether that file already exists on the host — nothing was uploaded. Try again.": "No se pudo comprobar si ese archivo ya existe en el host — no se subió nada. Inténtalo de nuevo."
 }
