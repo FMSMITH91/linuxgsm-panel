@@ -5688,12 +5688,43 @@ try:
         ("/api/notifications/test", {"channel": 5}),
     ]
     _typed_500, _typed_404 = [], []
-    for _path, _body in _typed:
-        _tr = c.post(_path, json=_body, headers={"X-Requested-With": "XMLHttpRequest"})
-        if _tr.status_code >= 500:
-            _typed_500.append("%s -> %d" % (_path, _tr.status_code))
-        if _tr.status_code == 404:
-            _typed_404.append(_path)
+    # Hold the backup lock across the sweep. /api/panel/backup/full is in the list and a POST to
+    # it STARTS A REAL FULL BACKUP — a thread that outlives this block, walks every installed
+    # server, and calls run_game_backup on whatever that name points at by the time it gets
+    # there. It landed inside the per-server-retention test 1400 lines below, which stubs exactly
+    # that name, and reported the stray call's keep as the one the route had used. Only the
+    # slowest CI leg was slow enough to show it.
+    #
+    # Taken BLOCKING, so this also waits out any earlier straggler instead of racing it. mode is
+    # read before the lock is consulted, so the type handling under test is still exercised.
+    from panel.core.panel_state import _full_backup_lock as _typed_lock
+    import panel.routes.panel_backup as _typed_bkmod
+    # What a leaked worker DOES, recorded — not whether the lock happens to be held when asked.
+    # The first version of this check polled the lock, and a full backup of one unreachable
+    # server takes and releases it inside a single 50ms gap: removing the guard below left the
+    # check green. See a-green-gate-is-not-evidence.
+    _typed_bkcalls = []
+    _typed_bkreal = _typed_bkmod.run_game_backup
+    _typed_bkmod.run_game_backup = lambda *a, **k: (_typed_bkcalls.append(1), (True, "", False))[1]
+    _typed_lock.acquire(timeout=60)
+    try:
+        for _path, _body in _typed:
+            _tr = c.post(_path, json=_body, headers={"X-Requested-With": "XMLHttpRequest"})
+            if _tr.status_code >= 500:
+                _typed_500.append("%s -> %d" % (_path, _tr.status_code))
+            if _tr.status_code == 404:
+                _typed_404.append(_path)
+    finally:
+        try:
+            _typed_lock.release()
+        except RuntimeError:
+            pass        # the acquire timed out; nothing of ours to release
+    # Settle: a worker the sweep started returns from the route before it reaches the backup.
+    for _ in range(40):
+        if _typed_bkcalls:
+            break
+        _ijw_time.sleep(0.05)
+    _typed_bkmod.run_game_backup = _typed_bkreal
     check("typed body: %d endpoints were driven, so this is not an empty sweep" % len(_typed),
           len(_typed) >= 20, "the list shrank — the check below would prove less")
     # ...and every one of them REACHES a handler. This list had "/notifications/test" while the
@@ -5706,6 +5737,15 @@ try:
           "404 — renamed or mistyped, so the sweep never reached them: %s" % ", ".join(_typed_404))
     check("typed body: a number where a string belongs never 500s",
           not _typed_500, "; ".join(_typed_500[:6]))
+    # ...and the sweep left nothing running. A POST to /api/panel/backup/full starts a real
+    # background full backup, and a suite that walks endpoints for validation must not leave one
+    # RUNNING behind it — that thread outlives this block and calls into whatever the tests below
+    # have stubbed by the time it gets there. That is what broke CI: it reached the
+    # per-server-retention test 1400 lines down and was counted as that route's call.
+    check("typed body: ...and the sweep did not leave a full backup running behind it",
+          not _typed_bkcalls,
+          "a background backup outlived this block — it walks every server and calls whatever "
+          "run_game_backup points at by then, which is a stub in the tests below")
 
     # ── Deleting a user kills the invites they minted ──────────────────────────────────────────
     # authority_intact() resolves the creator with db.session.get(User, created_by_id) and fails
@@ -7135,6 +7175,7 @@ try:
     # prune uses; anything else would be testing the config layer twice.
     import panel.routes.panel_backup as _bkroute
     from panel.ops import backup as _bkmod
+    from panel.core.panel_state import _full_backup_lock as _bk_lock_chk
 
     _keep_seen = []
     _bk_saved = {}
@@ -7143,6 +7184,13 @@ try:
         _bk_saved[(mod, name)] = getattr(mod, name)
         setattr(mod, name, fn)
 
+    # Wait for any backup worker still running before stubbing: the stub records every call by
+    # the name it replaces, and a straggler's call is not this route's. See the lock held across
+    # the typed-body sweep above, which is where one came from.
+    for _ in range(200):
+        if not _bk_lock_chk.locked():
+            break
+        _ijw_time.sleep(0.05)
     try:
         _bk_stub(_bkroute, "run_game_backup",
                  lambda remote, short, lgsm, keep, **k: (_keep_seen.append(keep),
