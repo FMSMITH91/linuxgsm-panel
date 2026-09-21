@@ -237,8 +237,8 @@ def register(app):
         if _game_os and _host_os and game_os_unsupported(_game_os, _host_os):
             return _form_err(
                 "LinuxGSM supports %s only up to %s, and this host runs %s — the install would "
-                "download for several minutes and then fail. Install it on a %s host, or pick a "
-                "different game."
+                "download for several minutes and then fail. Install it on a host running %s, or "
+                "pick a different game."
                 % (game_type, _game_os.replace("-", " ").title(), _host_os.replace("-", " ").title(),
                    _game_os.replace("-", " ").title()),
                 "manage_servers")
