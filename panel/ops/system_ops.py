@@ -1760,8 +1760,18 @@ _UFW_BLOCK_TAG = "panel-block"          # one-off manual block
 
 
 def ufw_blocked_ips():
-    """{ip: tag} for the panel host's own UFW deny rules (tag from the rule comment). Best-effort."""
-    out, _, _ = _run_verb("ufw-status", ["plain"], timeout=15)
+    """{ip: tag} for the panel host's own UFW deny rules (tag from the rule comment).
+
+    None — NOT {} — when the firewall could not be read. The two are completely different answers
+    and the caller that matters cannot tell them apart otherwise: _autoblock_reconcile treats
+    "not in blocked" as "needs blocking", so a failed read made every offender look unblocked and
+    re-issued a delete+add for each one, every cycle, forever. It already guards its other read
+    (`if top is None`) for the same reason.
+    """
+    out, _, rc = _run_verb("ufw-status", ["plain"], timeout=15)
+    if rc != 0:
+        _log.debug("ufw_blocked_ips: the firewall read failed (rc=%s)", rc)
+        return None
     blocked = {}
     for line in (out or "").splitlines():
         if "DENY" not in line or "panel-" not in line:
@@ -1887,7 +1897,7 @@ def fail2ban_top_ips(limit=20, days=7):
     except Exception:
         _log.debug("top-ips: couldn't read current bans", exc_info=True)
     try:
-        blocked = ufw_blocked_ips()
+        blocked = ufw_blocked_ips() or {}      # None = unreadable; for an annotation, blank is fine
     except Exception:
         _log.debug("top-ips: couldn't read ufw blocks", exc_info=True)
         blocked = {}

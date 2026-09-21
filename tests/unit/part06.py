@@ -3589,3 +3589,92 @@ finally:
 check("terminal: the shell is not read from the environment",
       "environ.get(\"SHELL\")" not in _modsrc("panel/ops/terminal_session.py"),
       "$SHELL is back — systemd does not set it, so this silently ignores the account's shell")
+# ── a firewall the panel could not READ is not a firewall with nothing in it ──────────────────
+# ufw_blocked_ips discarded the return code, so an unreadable firewall answered {} — the same
+# thing "no IPs are blocked" answers. _autoblock_reconcile reads "not in blocked" as "needs
+# blocking", so every offender looked unblocked and it re-issued a delete+add for each of them,
+# every cycle, against a host that was not answering. It already guards its OTHER read the same
+# way (`if top is None`); this one was simply missed.
+_so6 = _il6.import_module("panel.ops.system_ops")
+_real_runverb6 = _so6._run_verb
+_UFW_SAMPLE6 = ("Status: active\n"
+                "To                         Action      From\n"
+                "Anywhere                   DENY IN     203.0.113.9                # panel-autoblock\n")
+try:
+    _so6._run_verb = lambda *a, **k: ("", "ufw: command not found", 127)
+    _failed6 = _so6.ufw_blocked_ips()
+    check("firewall: an unreadable firewall answers None, not an empty dict",
+          _failed6 is None,
+          "answered %r — indistinguishable from 'nothing is blocked'" % (_failed6,))
+    _so6._run_verb = lambda *a, **k: (_UFW_SAMPLE6, "", 0)
+    _read6 = _so6.ufw_blocked_ips()
+    check("firewall: ...and a successful read still parses its rules",
+          _read6 == {"203.0.113.9": "panel-autoblock"},
+          "parsed %r" % (_read6,))
+    _so6._run_verb = lambda *a, **k: ("Status: active\n", "", 0)
+    _empty6 = _so6.ufw_blocked_ips()
+    check("firewall: ...and a firewall with genuinely nothing blocked still answers {}",
+          _empty6 == {}, "answered %r — that would skip the reconcile instead" % (_empty6,))
+finally:
+    _so6._run_verb = _real_runverb6
+
+# ...and the caller must act on the difference, not just receive it.
+_mon6 = _il6.import_module("panel.services.monitoring")
+
+
+class _FakeRemote6:
+    name = "unit-host"
+    is_local = True
+    id = 4242
+
+
+_denied6 = []
+_undenied6 = []
+_saved6 = (_mon6.so.fail2ban_top_ips, _mon6.so.ufw_blocked_ips,
+           _mon6.so.ufw_deny_ip, _mon6.so.ufw_undeny_ip)
+try:
+    _mon6.so.fail2ban_top_ips = lambda *a, **k: [{"ip": "203.0.113.9", "attempts": 99999}]
+    _mon6.so.ufw_deny_ip = lambda ip, tag=None: (_denied6.append(ip), (True, "ok"))[1]
+    _mon6.so.ufw_undeny_ip = lambda ip: (_undenied6.append(ip), (True, "ok"))[1]
+    _mon6.so.ufw_blocked_ips = lambda: None            # the firewall could not be read
+    # Caught, not allowed to propagate: part06 is imported for its side effects, so an exception
+    # here takes the other 2000 checks down with it and the run reports a crash instead of a
+    # failure. Without the guard this raises AttributeError on None.items() — which IS the
+    # failure, so record it as one.
+    try:
+        _res6 = _mon6._autoblock_reconcile(_FakeRemote6())
+    except Exception as _e6:
+        _res6 = "raised %r" % (_e6,)
+    check("firewall: autoblock does nothing at all when the firewall read failed",
+          _res6 == (0, 0) and not _denied6 and not _undenied6,
+          "returned %r after denying %r / undenying %r" % (_res6, _denied6, _undenied6))
+    _mon6.so.ufw_blocked_ips = lambda: {}              # read fine, nothing blocked yet
+    _res6 = _mon6._autoblock_reconcile(_FakeRemote6())
+    check("firewall: ...and still blocks an offender when the read SUCCEEDED (positive control)",
+          _denied6 == ["203.0.113.9"],
+          "denied %r — the guard is refusing every cycle, not just the unreadable ones"
+          % (_denied6,))
+finally:
+    (_mon6.so.fail2ban_top_ips, _mon6.so.ufw_blocked_ips,
+     _mon6.so.ufw_deny_ip, _mon6.so.ufw_undeny_ip) = _saved6
+
+# ── "could not check" must not render as "all files match" ────────────────────────────────────
+# _compute_panel_integrity fails SAFE: when git cannot be run it answers clean:true WITH
+# verified:false, and its comment says "never claim the files are verified-clean when we couldn't
+# actually run the check". loadIntegrity() then read `clean` alone and showed the green tick, so
+# the front end undid the back end's refusal. Driven in a rendered panel before this was fixed:
+# the tick appeared and the server's own message was shown nowhere.
+_integ_js6 = open(os.path.join(_root, "static", "js", "remote_manage_host.js"),
+                  encoding="utf-8").read()
+_fn6 = _integ_js6.split("function loadIntegrity()", 1)[-1].split("\nfunction ", 1)[0]
+check("integrity: the pane reads `verified`, not just `clean`",
+      "d.verified" in _fn6,
+      "loadIntegrity ignores the flag the server sets when it could not run the check")
+check("integrity: ...and it tests it BEFORE deciding the files are clean",
+      "d.verified" in _fn6 and "d.clean" in _fn6
+      and _fn6.index("d.verified") < _fn6.index("d.clean"),
+      "the clean branch runs first, so an unverified answer still renders the green tick")
+_rm_html6 = open(os.path.join(_root, "templates", "remote_manage.html"), encoding="utf-8").read()
+check("integrity: ...and there is somewhere to SAY so",
+      'id="diag-integrity-unknown"' in _rm_html6 and "diag-integrity-unknown" in _fn6,
+      "nothing renders the reason, so an unverifiable host shows an empty panel instead")

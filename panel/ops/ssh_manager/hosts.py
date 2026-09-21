@@ -1526,8 +1526,15 @@ def remote_ufw_undeny_ip(server, ip):
 
 
 def remote_ufw_blocked_ips(server):
-    """{ip: tag} for the panel's own UFW deny rules — tag read from the rule comment. Best-effort."""
-    out, _, _ = _core.run_privileged(server, "ufw-status", ["plain"], timeout=15)
+    """{ip: tag} for the panel's own UFW deny rules — tag read from the rule comment.
+
+    None when the host could not be read; see ufw_blocked_ips for why that is not {}.
+    """
+    out, _, rc = _core.run_privileged(server, "ufw-status", ["plain"], timeout=15)
+    if rc != 0:
+        _core._log.debug("remote_ufw_blocked_ips: read failed on %s (rc=%s)",
+                         getattr(server, "name", "?"), rc)
+        return None
     blocked = {}
     for line in (out or "").splitlines():
         if "DENY" not in line or "panel-" not in line:
@@ -1572,7 +1579,7 @@ def remote_fail2ban_top_ips(server, limit=20, days=7):
     except Exception:
         _core._log.debug("remote top-ips: couldn't read current bans", exc_info=True)
     try:
-        blocked = remote_ufw_blocked_ips(server)
+        blocked = remote_ufw_blocked_ips(server) or {}   # None = unreadable; blank annotation is fine
     except Exception:
         _core._log.debug("remote top-ips: couldn't read ufw blocks", exc_info=True)
         blocked = {}

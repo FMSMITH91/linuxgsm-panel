@@ -1781,8 +1781,23 @@ def _custom_cmd_form(cmd=None):
             re.compile(arg_pattern)
         except re.error:
             return None, "The argument validation pattern isn't a valid regular expression."
-    return {"name": name[:80], "command_template": template[:500],
-            "argument_label": arg_label[:80], "argument_pattern": arg_pattern[:200],
+    # ...and it must FIT, checked here rather than by slicing it into the column below. The
+    # pattern was compiled in full and then stored as arg_pattern[:200], so a longer one was
+    # validated as one regex and saved as a different one. A cut does not always break a regex —
+    # an alternation sliced after a `|` leaves a trailing empty branch that matches ANYTHING — so
+    # the failure mode is a validation rule that silently accepts more than the superadmin who
+    # wrote it intended, for everyone allowed to run the command. Refuse instead of truncating.
+    if len(arg_pattern) > 200:
+        return None, ("The argument validation pattern is too long (%d characters, limit 200). "
+                      "Shorten it — truncating it here could silently widen what it accepts."
+                      % len(arg_pattern))
+    # The template is the command itself; a cut changes what runs (a lost closing quote, a lost
+    # argument). Same reasoning, same answer.
+    if len(template) > 500:
+        return None, ("The command template is too long (%d characters, limit 500)."
+                      % len(template))
+    return {"name": name[:80], "command_template": template,
+            "argument_label": arg_label[:80], "argument_pattern": arg_pattern,
             "scope_type": scope_type, "scope_value": scope_value[:64],
             "enabled": enabled}, None
 

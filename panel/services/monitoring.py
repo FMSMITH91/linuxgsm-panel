@@ -725,6 +725,13 @@ def _autoblock_reconcile(remote):
     if top is None:
         _log.debug("autoblock: skipping %s — the fail2ban read failed", remote.name)
         return 0, 0
+    # The SAME reasoning for the firewall read, which was missing it. An unreadable firewall
+    # answers None; treating that as "nothing is blocked" made every offender look unblocked and
+    # re-issued a delete+add for each of them on every cycle — up to 200 privileged commands a
+    # cycle against a host that is not answering.
+    if blocked is None:
+        _log.debug("autoblock: skipping %s — the firewall read failed", remote.name)
+        return 0, 0
     qualify = {r["ip"] for r in top if r.get("ip") and (r.get("attempts") or 0) >= threshold}
     qualify -= tailnet_exempt_ips(remote, qualify)   # never auto-block your own tailnet (Tailscale up)
     _nets = _whitelist_networks()
