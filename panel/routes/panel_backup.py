@@ -141,7 +141,14 @@ def register(app):
         force = (mode == "now")
         defer = (mode == "wait")
         started = _trigger_full_backup(force=force, defer=defer)
-        log_action(current_user, "panel_full_backup", target=LOCAL_HOST_LABEL, detail="mode=%s" % (mode or "default"), success=True)
+        # success=started, not True. The refusal below ("A full backup is already running") is a
+        # request that did nothing, and hardcoding True recorded it as one that ran — so /logs
+        # filtered to failures hid it, and the history showed two full backups where one happened.
+        # `started` is right there. The reboot route on the remote page already carries this exact
+        # correction: "log_action's default (True) records a refused reboot as one that happened".
+        log_action(current_user, "panel_full_backup", target=LOCAL_HOST_LABEL,
+                   detail="mode=%s%s" % (mode or "default", "" if started else " (refused: already running)"),
+                   success=bool(started))
         if not started:
             return jsonify({"success": True, "running": True, "message": "A full backup is already running."})
         if defer:
@@ -203,6 +210,15 @@ def register(app):
                     ok, reason, was_skipped = run_game_backup(
                         g.remote, g.short_name, g.lgsm_name, keep,
                         game_type=g.game_type, port=g.port, force=force)
+                    if ok and not was_skipped:
+                        # Move this server's schedule clock, exactly as the scheduled path does.
+                        # record_game_backup is what game_backup_due measures against, and it was
+                        # called from ONE place — so a backup taken by hand left the scheduler
+                        # believing none had happened, and the hourly ticker archived the same
+                        # server again within the hour. Not recorded when SKIPPED: the ticker
+                        # deliberately leaves the clock alone there so the server stays due and is
+                        # retried once it empties.
+                        bk.record_game_backup(server_id)
                 _game_backup_status[server_id] = {"running": False,
                                                   "ok": (None if was_skipped else ok),
                                                   "busy": was_skipped,

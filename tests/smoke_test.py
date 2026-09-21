@@ -7417,6 +7417,118 @@ try:
         check("custom command: a missing command is refused, not an exception",
               _crcc(_adm, None, _gs) is False)
 
+    # ── backups: the schedule clock, and an audit line that matches what happened ─────────────
+    # Three accounting bugs, all the same shape: a backup path that did (or did not do) something
+    # and told the rest of the panel otherwise.
+    import panel.routes.panel_backup as _bkmod
+    import panel.routes._shared as _bksh
+    import time
+    from panel.core.panel_state import _full_backup_lock as _bk_lock
+    from panel.ops import backup as _bkops
+
+    def _bk_clock(sid):
+        """This server's schedule last-run, the number game_backup_due measures against."""
+        return _bkops.get_game_schedule(sid)["last"]
+
+    def _bk_wait(sid, before, secs=5.0):
+        """Wait for the background worker to move the clock (or give up and let the check fail)."""
+        _end = time.time() + secs
+        while time.time() < _end:
+            if _bk_clock(sid) != before:
+                return True
+            time.sleep(0.05)
+        return False
+
+    _bk_saved_pb = _bkmod.run_game_backup
+    _bk_saved_sh = _bksh.run_game_backup
+    _bk_saved_trig = None
+    with app.app_context():
+        _bk_gs = db.session.get(GameServer, gs_id)
+        _bk_gs.installed = True
+        db.session.commit()
+    try:
+        # A refused full backup must be audited as a REFUSAL. The route hardcoded success=True, so
+        # "a full backup is already running" — a request that did nothing — was indistinguishable
+        # in /logs from one that ran, and the failures filter (the one an operator reaches for
+        # when a backup is missing) hid it. The reboot route already carries this exact fix.
+        with app.app_context():
+            _AL.query.filter_by(action="panel_full_backup").delete()
+            db.session.commit()
+        _bk_lock.acquire()          # exactly what a full backup in progress looks like
+        try:
+            _r = c.post("/api/panel/backup/full", json={"mode": ""})
+            _busy = (_r.get_json() or {}).get("running")
+        finally:
+            _bk_lock.release()
+        with app.app_context():
+            _al = _AL.query.filter_by(action="panel_full_backup").order_by(_AL.id.desc()).first()
+        check("full backup: a request refused because one is already running is audited as a "
+              "FAILURE", _al is not None and _al.success is False,
+              "audited success=%r — /logs filtered to failures hides this, and the history shows "
+              "two full backups where one happened" % (None if _al is None else _al.success,))
+        check("full backup: ...and the refusal says so in the entry",
+              _al is not None and "refused" in (_al.detail or ""),
+              "detail=%r" % (None if _al is None else _al.detail,))
+        check("full backup: ...and the caller was told it was busy (positive control)",
+              _busy is True,
+              "the route did not take the refusal path at all, so the checks above prove nothing")
+
+        # An on-demand "Back up now" must move that server's schedule clock. record_game_backup
+        # was called from ONE place (the hourly ticker), so a backup taken by hand left the
+        # scheduler believing none had happened and it archived the same server again within the
+        # hour — twice the disk, twice the stop/start.
+        _bkmod.run_game_backup = lambda *a, **k: (True, "", False)
+        _bkops.record_game_backup(gs_id)        # a known starting point, not whatever ran before
+        time.sleep(1.05)                        # the clock is whole seconds
+        _bk_before = _bk_clock(gs_id)
+        _r = c.post("/api/panel/backup/game/%d" % gs_id, json={})
+        _moved = _bk_wait(gs_id, _bk_before)
+        check("game backup: 'back up now' moves the server's schedule clock",
+              _moved,
+              "last=%r unchanged (%r) — the hourly ticker still thinks this server is overdue and "
+              "will archive it again within the hour" % (_bk_clock(gs_id), _bk_before))
+
+        # ...but only when a backup actually HAPPENED. Skipped = players online, and the ticker
+        # deliberately leaves the clock alone there so the server stays due and is retried once it
+        # empties. Recording a skip would silently drop that backup for a whole interval.
+        _bkmod.run_game_backup = lambda *a, **k: (True, "players online", True)
+        _bkops.record_game_backup(gs_id)
+        time.sleep(1.05)
+        _bk_before = _bk_clock(gs_id)
+        c.post("/api/panel/backup/game/%d" % gs_id, json={})
+        time.sleep(1.2)
+        check("game backup: ...but a SKIPPED one does not (it stays due, and is retried)",
+              _bk_clock(gs_id) == _bk_before,
+              "a backup that never ran moved the clock, so the server waits a full interval")
+
+        # The 'wait until empty' queue is a third path to the same archive, and it recorded
+        # nothing either: a server backed up by THIS sweep still looked overdue to the ticker in
+        # the same tick.
+        _bksh.run_game_backup = lambda *a, **k: (True, "", False)
+        with app.app_context():
+            db.session.get(GameServer, gs_id).backup_pending = True
+            db.session.commit()
+        _bkops.record_game_backup(gs_id)
+        time.sleep(1.05)
+        _bk_before = _bk_clock(gs_id)
+        _bksh._run_pending_backups(app)
+        with app.app_context():
+            _pend_after = db.session.get(GameServer, gs_id).backup_pending
+        check("queued backup: the 'wait until empty' sweep moves the clock too",
+              _bk_clock(gs_id) != _bk_before,
+              "last=%r unchanged — the ticker backs the same server up again on the next tick"
+              % (_bk_clock(gs_id),))
+        check("queued backup: ...and the server leaves the queue (positive control)",
+              _pend_after is False,
+              "the sweep never backed this server up, so the check above proves nothing")
+    finally:
+        _bkmod.run_game_backup = _bk_saved_pb
+        _bksh.run_game_backup = _bk_saved_sh
+        with app.app_context():
+            _bk_gs = db.session.get(GameServer, gs_id)
+            _bk_gs.backup_pending = False
+            db.session.commit()
+
 except Exception:
     # A crash part-way through otherwise just prints fewer checks and still reads as green-ish.
     # That has hidden three separate mistakes while writing these; a crash is a FAILURE.
