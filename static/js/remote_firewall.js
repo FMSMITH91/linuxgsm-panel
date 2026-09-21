@@ -3,10 +3,37 @@ function refreshFirewall() {
     .then(r => r.json())
     .then(data => {
       var badge = document.getElementById('ufw-badge');
+      var listEl = document.getElementById('rules-list');
+      // A host the panel could not reach has no firewall state to report. The endpoint says so —
+      // remote_ufw_status returns unreachable:true rather than claiming UFW is installed, and the
+      // ConnectionError branch answers the same shape — and the TEMPLATE renders that carefully:
+      // badge "Unknown", plus a line saying the rules can't be read. This refresh then threw all
+      // of it away: enabled is absent from that payload, so the badge became "Inactive" and the
+      // empty groups list became "No open ports yet." Measured against a down host — the page
+      // loaded honest and, one refresh later, reported an inactive firewall with nothing open.
+      // On this page that is the most alarming possible way to be wrong.
+      if (data.unreachable) {
+        badge.textContent = 'Unknown';
+        badge.className = 'badge bg-secondary';
+        if (listEl) {
+          // Built, not concatenated: the message goes in as TEXT, so this never becomes a new
+          // unescaped path into innerHTML (the repo gates every one of those). textContent also
+          // lets i18n.js's observer translate it, the same as the template's copy.
+          listEl.textContent = '';
+          var note = document.createElement('div');
+          note.className = 'p-3 text-center text-secondary small';
+          note.textContent = "Rules can't be read while this host is unreachable.";
+          listEl.appendChild(note);
+        }
+        // ...and no count beside it. "0 rules" is an arithmetic claim about a firewall nothing
+        // read, sitting immediately above a line that says it could not be read.
+        var rcu = document.getElementById('rules-count');
+        if (rcu) rcu.textContent = '\u2014';
+        return;
+      }
       badge.textContent = data.enabled ? 'Active' : 'Inactive';
       badge.className = 'badge ' + (data.enabled ? 'bg-success' : 'bg-secondary');
 
-      var listEl = document.getElementById('rules-list');
       var groups = data.groups || [];
       var openGroups = groups.filter(function(g) { return !g.is_block; });
       var blockGroups = groups.filter(function(g) { return g.is_block; });

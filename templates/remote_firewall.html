@@ -232,6 +232,11 @@
               {% endfor %}
             </tbody>
           </table>
+          {% elif status.unreachable %}
+          {# The card above already says the host is down. Saying "no firewall rules" HERE
+             contradicts it, in the more alarming direction, about the one page where being
+             wrong about an open port matters most. #}
+          <div class="p-3 text-center text-secondary small">Rules can't be read while this host is unreachable.</div>
           {% else %}
           <div class="p-3 text-center text-secondary small">No firewall rules yet.</div>
           {% endif %}

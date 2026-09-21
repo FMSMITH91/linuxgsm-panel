@@ -2312,6 +2312,43 @@ check(_badge and not _tpl_drift,
       "the server-rendered badge no longer matches: " + ", ".join(_tpl_drift or ["badge not found"]))
 
 
+# ── the firewall page must not report a firewall it never read ────────────────────────────────
+# remote_ufw_status already refuses to guess: a host that did not answer comes back with
+# unreachable:true rather than "installed, nothing open", and the ConnectionError branch answers
+# the same shape. The TEMPLATE renders that carefully — badge "Unknown", plus a line saying the
+# rules cannot be read. refreshFirewall() then threw all of it away: `enabled` is absent from that
+# payload, so the badge became "Inactive" and the empty groups list became "No open ports yet."
+#
+# Measured against a down host: the page loaded honest and, one refresh later, reported an
+# INACTIVE firewall with NOTHING OPEN. On this page that is the most alarming possible way to be
+# wrong, and the template's own comment says so about the half that was already right.
+_fw_js = (ROOT / "static" / "js" / "remote_firewall.js").read_text(encoding="utf-8")
+_fw_win = _between(_fw_js, "function refreshFirewall()", "data.enabled ? 'Active' : 'Inactive'")
+check(bool(_fw_win),
+      "firewall: the refresh is where these checks think it is",
+      "refreshFirewall() or its badge line was not found")
+check("data.unreachable" in _fw_win,
+      "firewall: the refresh checks whether the host was reachable BEFORE painting a verdict",
+      "an unreachable host still repaints the badge from an absent `enabled`")
+check("return;" in _fw_win,
+      "firewall: ...and stops there rather than falling through to the rules table",
+      "the unreachable branch carries on and renders an empty rule list")
+_fw_tpl = (ROOT / "templates" / "remote_firewall.html").read_text(encoding="utf-8")
+check("{% elif status.unreachable %}" in _fw_tpl,
+      "firewall: the server-rendered rules list says the same, instead of 'No firewall rules yet.'",
+      "the list contradicts the status card three lines above it")
+# Both halves must say it the SAME way — the refresh replaces what the template rendered, and two
+# wordings for one fact read as two different facts when the page swaps one for the other.
+_fw_msg = "Rules can't be read while this host is unreachable."
+check(_fw_msg in _fw_tpl and _fw_msg in _fw_js,
+      "firewall: ...in the same words the refresh uses, since one replaces the other",
+      "template and refresh word the same state differently")
+# The count is an arithmetic claim. "0 rules" above "the rules cannot be read" is the same defect
+# in miniature as an update card announcing a commit count it could not list.
+check("rules-count" in _fw_win,
+      "firewall: ...and the rule COUNT is cleared too, not left reading 0",
+      "the page states a count for a firewall nothing read")
+
 passed = sum(1 for c, _, _ in results if c is True)
 failed = sum(1 for c, _, _ in results if c is False)
 skipped = [(name, detail) for c, name, detail in results if c is None]
