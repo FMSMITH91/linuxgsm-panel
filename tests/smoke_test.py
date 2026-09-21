@@ -453,6 +453,60 @@ try:
     finally:
         _sm_core.run_privileged = _u_orig
 
+    # ── an install that dies EARLY must still leave a row you can act on ──────────────────────
+    # Only the step-4 path wrote status="failed". Every earlier exit — a bad game type, an
+    # unreachable host during LinuxGSM setup, an unhandled exception — wrote the REASON and left
+    # the row saying "installing". The whole recovery design is keyed on status == "failed": no
+    # banner, so the reason it had just written was never shown; no Retry; no Remove; and /delete
+    # refused it outright with "still installing". The only exit was editing the database.
+    #
+    # Driven through record_install_failure, the one writer, because the closure that used to hold
+    # this is unreachable from a test and re-implementing it here would pass with the fix deleted.
+    from panel.routes.manage_servers import record_install_failure as _rif
+
+    class _FakeRow(object):
+        pass
+
+    _fr = _FakeRow(); _fr.installed, _fr.status = True, "installing"
+    _fr_reason = _rif(_fr, "LinuxGSM setup failed", "ssh: connect to host timed out")
+    check("early install failure: the row is marked failed, not left saying 'installing'",
+          _fr.status == "failed", "status=%r" % _fr.status)
+    check("early install failure: ...and no longer claims to be installed",
+          _fr.installed is False, "installed=%r" % _fr.installed)
+    check("early install failure: ...and carries the reason and the retry verdict",
+          "timed out" in _fr.install_error and _fr.install_retryable is True,
+          "%r / %r" % (_fr.install_error, _fr.install_retryable))
+    _fr2 = _FakeRow(); _fr2.installed, _fr2.status = True, "installing"
+    _rif(_fr2, "The whole explanation.", "a noisy tool tail", retryable=False, explained=True)
+    check("early install failure: an explained reason does not get the tool's tail appended",
+          _fr2.install_error == "The whole explanation." and _fr2.install_retryable is False,
+          _fr2.install_error)
+
+    # ...and the row is removable. A panel restart mid-install strands one of these every time:
+    # the worker thread dies with the process while the row keeps saying installing, and there is
+    # no cancel route. /delete used to refuse on the STATUS COLUMN, so that row was undeletable.
+    _u_orig2 = _sm_core.run_privileged
+    try:
+        _sm_core.run_privileged = lambda *a, **k: ("", "", 0)
+        with app.app_context():
+            _rm = RemoteServer.query.first()
+            _st = _UGS(remote_id=_rm.id, name="stranded", short_name="stranded",
+                       game_type="gmod", port=28950, installed=False, status="installing")
+            db.session.add(_st); db.session.commit()
+            _st_id = _st.id
+        _sresp = c.post("/servers/%d/delete" % _st_id, json={},
+                        headers={"X-Requested-With": "XMLHttpRequest"})
+        with app.app_context():
+            _st_left = _UGS.query.get(_st_id) is not None
+        check("stranded install: a row stuck at 'installing' with no live job CAN be removed",
+              not _st_left,
+              "still there — %r" % ((_sresp.get_json() or {}).get("message"),))
+        with app.app_context():
+            _l = _UGS.query.get(_st_id)
+            if _l: db.session.delete(_l); db.session.commit()
+    finally:
+        _sm_core.run_privileged = _u_orig2
+
     # Liveness probe: unauthenticated, returns 200 + {"status":"ok"}, works pre-login.
     hz = app.test_client().get("/healthz")
     check("GET /healthz -> 200 ok (unauthenticated)",
@@ -747,12 +801,29 @@ try:
     # host is not the problem (the app publishes no Linux launch configuration; proven on the test
     # box, where forcing the platform fails identically). Appending that after the correct sentence
     # undoes it, so the row gets the explanation and the live job keeps the unabridged output.
+    # Driven, not grepped: this used to assert that a particular line of source existed, which
+    # says nothing about what the line does and broke the moment the logic moved into a function.
+    from panel.routes.manage_servers import record_install_failure as _rif_tail
+
+    class _TailRow(object):
+        pass
+
+    def _reason(name, detail, explained):
+        _r = _TailRow(); _r.installed, _r.status = True, "installing"
+        _rif_tail(_r, name, detail, True, explained)
+        return _r.install_error
+
     check("install failure: a classified reason is not followed by the tool's own wrong hint",
-          "explained=bool(why)" in _ms_esc
-          and "_row.install_error = (name if (explained or not detail)" in _ms_esc,
+          _reason("SteamCMD refused this game — a known SteamCMD bug.",
+                  "Check steamcmdforcewindows setting and system architecture", True)
+          == "SteamCMD refused this game — a known SteamCMD bug.",
           "the raw tail is still appended to a classified reason")
     check("install failure: ...while an UNclassified one still carries its tail, which is all it has",
-          'else "%s: %s" % (name, detail))' in _ms_esc)
+          _reason("Downloading game server files", "mirror unreachable", False)
+          == "Downloading game server files: mirror unreachable")
+    check("install failure: ...and the classified call site is the one that asks for that",
+          "explained=bool(why)" in _ms_esc,
+          "step 4 no longer tells the recorder the reason is self-contained")
 
     # ── the install must not point two servers at one port ──────────────────────────────────────
     # resolve_free_port picks a genuinely free port at request time — it unions the host's live

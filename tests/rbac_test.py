@@ -247,6 +247,49 @@ try:
                 db.session.delete(_row)
                 db.session.commit()
 
+    # ── the Retry button and the route it posts to must agree about who may press it ───────────
+    # The dashboard renders "Retry install" on the can_install flag, which is
+    # INSTALL_SERVER *or* MANAGE_SERVERS — the same pair /servers/install and /servers/add accept.
+    # retry-install was added requiring INSTALL_SERVER alone, so a MANAGE_SERVERS holder was shown
+    # a button that answered "You do not have permission to do that." It runs the very same
+    # install job, so the narrower guard was the outlier, not the flag.
+    with app.app_context():
+        _msg = Group(name=tag + "_ms", description="RBAC test MANAGE_SERVERS (auto)",
+                     is_default=False)
+        _msg.set_permissions([auth.VIEW_SERVERS, auth.MANAGE_SERVERS])   # NOT install_server
+        _msg.servers.append(RemoteServer.query.get(granted_remote))
+        db.session.add(_msg); db.session.flush()
+        _msu = User(username=tag + "_ms", password_hash=auth.hash_password(secrets.token_hex(16)),
+                    display_name=tag + "_ms", is_superadmin=False, is_active=True)
+        _msu.groups.append(_msg)
+        db.session.add(_msu)
+        _rt = GameServer(remote_id=granted_remote, name="rbac-retry", short_name="bsserver",
+                         game_type="bs", port=27146, installed=False, status="failed")
+        _rt.install_error = "Downloading game server files: the mirror was unreachable."
+        _rt.install_retryable = True
+        db.session.add(_rt)
+        db.session.commit()
+        _msu_id, _rt_id = _msu.id, _rt.id
+    try:
+        _msc = client_as(_msu_id)
+        _dash_ms = _msc.get("/")
+        _shown = ("/servers/%d/retry-install" % _rt_id) in _dash_ms.get_data(as_text=True)
+        _posted = _msc.post("/servers/%d/retry-install" % _rt_id,
+                            headers={"X-Requested-With": "XMLHttpRequest"})
+        check("MANAGE_SERVERS: the dashboard offers Retry install on a failed row", _shown,
+              "the button was not rendered, so this proves nothing about the route")
+        check("MANAGE_SERVERS: ...and the route it posts to accepts them",
+              _posted.status_code != 403, "got %d" % _posted.status_code)
+    finally:
+        with app.app_context():
+            _r = db.session.get(GameServer, _rt_id)
+            if _r is not None:
+                db.session.delete(_r)
+            _u2 = db.session.get(User, _msu_id)
+            if _u2 is not None:
+                db.session.delete(_u2)
+            db.session.commit()
+
     # ── VPS-preparation routes must refuse the panel's OWN host ────────────────────────────────
     # manage_remotes.html hides Prepare / Tailscale for the local host, but the ROUTES accepted a
     # POST carrying its id. Those actions apt full-upgrade the machine, rewrite its sshd config,

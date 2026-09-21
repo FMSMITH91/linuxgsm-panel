@@ -1149,6 +1149,119 @@ check("install failure: ...and says the panel works around it rather than tellin
 check("install failure: a game LinuxGSM caps at an older Ubuntu is named",
       (_cif("Failure! BATTALION: Legacy is not supported on Ubuntu 24.04.5 LTS "
             "(requires 22.04)") or (None,))[0] == "os_unsupported")
+# ── Every place the install opens a firewall port must respect the refusal ────────────────────
+# Step 6 refuses to adopt a port something else already holds, and narrows what it opens so the
+# panel does not put a hole in the firewall in front of another process. Ninety seconds later the
+# post-start re-detect re-read the same config, got the same port back, and opened it anyway —
+# undoing the refusal one statement after making it.
+#
+# It is worse than re-opening it. `ufw allow <port> comment <name>` REPLACES a rule that differs
+# only by its comment: verified on the test host, two allows for one port leave ONE rule carrying
+# the second name. So this rewrote the other server's rule to this server's name, and uninstalling
+# this server would then delete the firewall rule protecting the other, still-running one.
+#
+# Read from the AST, because both call sites sit under long comments that mention every word this
+# check cares about — a substring gate would pass on the prose alone.
+import ast as _ast                                                               # noqa: E402
+_ms_ast = _ast.parse(open(os.path.join(_root, "panel", "routes", "manage_servers.py"),
+                          encoding="utf-8").read())
+
+
+def _uses_name(node, name):
+    return any(isinstance(n, _ast.Name) and n.id == name for n in _ast.walk(node))
+
+
+# Parent map, so each call is judged against the statement list it ACTUALLY sits in. Walking
+# every ancestor body instead reports the same call once per enclosing block and checks the guard
+# against the wrong siblings.
+_parent = {}
+for _n in _ast.walk(_ms_ast):
+    for _ch in _ast.iter_child_nodes(_n):
+        _parent[_ch] = _n
+
+
+def _enclosing_bodies(node):
+    """Every (list, index) this node sits under, innermost first.
+
+    All of them, not just the innermost: the call is inside `if extra:`, while the guard that
+    narrows `extra` is a sibling of that `if` one level out. A guard anywhere up the chain, before
+    the statement that leads to the call, dominates it."""
+    out, cur = [], node
+    while cur in _parent:
+        par = _parent[cur]
+        for _field in ("body", "orelse", "finalbody"):
+            _lst = getattr(par, _field, None)
+            if isinstance(_lst, list) and cur in _lst:
+                out.append((_lst, _lst.index(cur)))
+                break
+        cur = par
+    return out
+
+
+_open_calls, _unguarded = 0, []
+for _c in _ast.walk(_ms_ast):
+    if not (isinstance(_c, _ast.Call)
+            and getattr(_c.func, "id", "") == "remote_ufw_allow_game_ports"):
+        continue
+    _open_calls += 1
+    _arg = _c.args[1] if len(_c.args) > 1 else None
+    _opened = getattr(_arg, "id", None)
+    if _opened is None:
+        continue          # a literal list is not derived from the re-read config
+    _levels = _enclosing_bodies(_c)
+    if not _levels:
+        _unguarded.append("line %d: could not place the call" % _c.lineno)
+        continue
+    _guarded = any(
+        isinstance(_p, _ast.If) and _uses_name(_p.test, "port_conflict")
+        and any(isinstance(_a, _ast.Assign)
+                and any(getattr(_t, "id", None) == _opened for _t in _a.targets)
+                for _a in _ast.walk(_p))
+        for _body, _idx in _levels for _p in _body[:_idx])
+    if not _guarded:
+        _unguarded.append("line %d opens %r with no port_conflict guard before it"
+                          % (_c.lineno, _opened))
+
+check("install: the firewall opens are AST-visible at all", _open_calls >= 2,
+      "found %d remote_ufw_allow_game_ports calls" % _open_calls)
+check("install: no firewall open ignores the port the panel refused to adopt",
+      not _unguarded, "; ".join(_unguarded))
+
+# ── The Invalid-platform workaround must always be unwound ───────────────────────────────────
+# It writes steamcmdforcewindows=yes into the INSTANCE config, runs the download, and writes it
+# back to "no". The key outlives the install: left at "yes", every later update and validate for
+# that server fetches the Windows depot, so a server that installed fine breaks months later for
+# a reason nothing on screen connects to this install. The download raising — an SSH drop, a
+# timeout — skipped the reset, and the enclosing `except Exception` swallowed it.
+#
+# AST again: the words "steamcmdforcewindows" and "finally" both appear in the comments around
+# this code, so a substring check proves nothing. Assert the reset is in a finalbody.
+_prime_resets, _prime_unprotected = 0, []
+for _n in _ast.walk(_ms_ast):
+    if not (isinstance(_n, _ast.Call) and getattr(_n.func, "id", "") == "lgsm_write_config"):
+        continue
+    _src = _ast.dump(_n)
+    if "'steamcmdforcewindows'" not in _src or "'no'" not in _src:
+        continue                     # the "yes" write, or some other config write
+    _prime_resets += 1
+    # walk up: is any ancestor statement list a Try's finalbody?
+    _cur, _in_finally = _n, False
+    while _cur in _parent:
+        _par = _parent[_cur]
+        if isinstance(_par, _ast.Try) and any(_cur is _st for _st in _par.finalbody):
+            _in_finally = True
+            break
+        _cur = _par
+    if not _in_finally:
+        _prime_unprotected.append("line %d" % _n.lineno)
+
+check("install: the Windows-prime reset is present at all", _prime_resets >= 1,
+      "found %d steamcmdforcewindows=no writes" % _prime_resets)
+check("install: ...and runs in a finally, so a failed download cannot leave it set",
+      not _prime_unprotected,
+      "unprotected at: %s" % ", ".join(_prime_unprotected))
+
+
 # ── Being classified is not the same as being hopeless ───────────────────────────────────────
 # The first version marked EVERY classified cause non-retryable (`retryable=not why`), which took
 # the Retry button away from three causes whose own message ends by telling you to try again. The

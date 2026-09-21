@@ -46,6 +46,32 @@ from panel.routes._shared import (_looks_installed, _notify_servers_changed)
 _install_alloc_lock = threading.Lock()
 
 
+def record_install_failure(row, name, detail="", retryable=True, explained=False):
+    """Write a failed install onto `row`: the reason, whether a retry can help, AND the status.
+
+    All three together, because the UI reads them together. Only the step-4 path used to set the
+    status, so an install that died earlier — a bad game type, an unreachable host during LinuxGSM
+    setup, an unhandled exception — left the row at "installing" with a reason beside it that
+    nothing would ever show. The banner, Retry, Remove, the console redirect and Files & Config
+    are ALL keyed on status == "failed", and /delete refuses a row that says it is installing, so
+    that row could not even be removed. A comment here used to claim the status poll would flip
+    it; it does not — api.py skips "installing" and "configuring" rows precisely so that a poll
+    cannot end a live install early.
+
+    `explained` means `name` IS the whole explanation, so the raw tail is not appended: the tail is
+    the tool's own last word and the tool is sometimes wrong (LinuxGSM ends an "Invalid platform"
+    failure by pointing at the host, which is not the problem).
+
+    Returns the reason written, so the caller can log it.
+    """
+    reason = (name if (explained or not detail) else "%s: %s" % (name, detail))[:1000]
+    row.install_error = reason
+    row.install_retryable = bool(retryable)
+    row.installed = False
+    row.status = "failed"
+    return reason
+
+
 def decide_port_adoption(real_port, cur_port, panel_ports, live_ports):
     """Should the install adopt the port LinuxGSM reports? -> (adopt, taken_by).
 
@@ -332,15 +358,12 @@ def register(app):
                 from panel.db.models import db as _db, GameServer as _GS
                 _row = _db.session.get(_GS, gs_id)
                 if _row is not None:
-                    _row.install_error = (name if (explained or not detail)
-                                          else "%s: %s" % (name, detail))[:1000]
-                    _row.install_retryable = bool(retryable)
+                    record_install_failure(_row, name, detail, retryable, explained)
                     _db.session.commit()
             except Exception:
                 _log.debug("could not record the install failure on the row", exc_info=True)
             # Tell every open dashboard immediately, rather than leaving the explanation to appear
-            # whenever someone happens to reload. The row's status flips on the next status poll
-            # either way; this is what brings the REASON and its buttons with it.
+            # whenever someone happens to reload.
             _notify_servers_changed(app)
 
         def _finish(msg, warn=False):
@@ -514,13 +537,39 @@ def register(app):
                                       "depot — this downloads twice, so it takes a while)")
                                 lgsm_write_config(remote, short_name, lgsm_name,
                                                   {"steamcmdforcewindows": "yes"})
-                                out, err, rc = _sm.run_command(remote, auto, timeout=2700, sudo=False)
-                                last_out = out or err or last_out
-                                # "no", not a delete: LinuxGSM tests `== "yes"`, and
-                                # lgsm_write_config replaces a key in place rather than removing
-                                # one, so this is the same thing through the safe writer.
-                                lgsm_write_config(remote, short_name, lgsm_name,
-                                                  {"steamcmdforcewindows": "no"})
+                                # try/finally, because leaving this key set is WORSE than the
+                                # failure that would leave it. It is written to the instance
+                                # config, which outlives the install: with it still "yes" every
+                                # later update and validate for this server fetches the WINDOWS
+                                # depot, so a server that installed fine breaks the first time it
+                                # is updated, months later, for a reason nothing on screen
+                                # connects to this install. The download raising — an SSH drop, a
+                                # timeout — used to skip the reset entirely.
+                                try:
+                                    out, err, rc = _sm.run_command(remote, auto, timeout=2700,
+                                                                   sudo=False)
+                                    last_out = out or err or last_out
+                                finally:
+                                    # "no", not a delete: LinuxGSM tests `== "yes"`, and
+                                    # lgsm_write_config replaces a key in place rather than
+                                    # removing one, so this is the same thing through the safe
+                                    # writer. It RETURNS (ok, message) and does not raise, so a
+                                    # failed reset is only visible if the result is read — try
+                                    # once more, then say plainly what is left behind.
+                                    _unset_ok = False
+                                    for _try in range(2):
+                                        _unset_ok = bool(lgsm_write_config(
+                                            remote, short_name, lgsm_name,
+                                            {"steamcmdforcewindows": "no"})[0])
+                                        if _unset_ok:
+                                            break
+                                    if not _unset_ok:
+                                        _log.warning(
+                                            "install %s: could not clear steamcmdforcewindows on "
+                                            "%s — it is still 'yes', so this server's future "
+                                            "updates will fetch the Windows depot until it is "
+                                            "changed in Files & Config",
+                                            short_name, lgsm_name)
                                 _p(4, "Fetching the Linux server binaries")
                                 _sm.run_as_game_user(remote, short_name, "validate",
                                                      timeout=2700, selfname=gs.lgsm_name)
@@ -540,7 +589,7 @@ def register(app):
                         except Exception:
                             _log.debug("_run: ignored non-fatal error", exc_info=True)
                     if not installed_ok:
-                        gs.installed = False; gs.status = "failed"; db.session.commit()
+                        # (_fail writes installed/status/reason together — see above.)
                         # Being classified is not the same as being hopeless. Three of the four
                         # causes are "do this, then try again" and their messages say exactly
                         # that, so taking Retry away contradicts the sentence above the button.
@@ -803,6 +852,18 @@ def register(app):
                     try:
                         info2 = detect_game_ports(remote, short_name, gs.lgsm_name)
                         extra = info2.get("open_ports") or []
+                        if port_conflict:
+                            # Step 6 refused this port precisely so the panel would not open it in
+                            # front of someone else's process. detect_game_ports re-reads the same
+                            # unchanged config and always folds game_port back into open_ports, so
+                            # without this filter the next statement undid that decision — and
+                            # worse than "opened it again": `ufw allow <port> comment <name>`
+                            # REPLACES an existing rule that differs only by comment (verified on
+                            # the test host — two allows for one port leave one rule carrying the
+                            # second name). So this re-opened the other server's port under THIS
+                            # server's name, and uninstalling this one would then delete the rule
+                            # protecting the other, still-running server.
+                            extra = [p for p in extra if p != port_conflict[0]]
                         if extra:
                             remote_ufw_allow_game_ports(remote, extra, short_name)
                     except Exception:
@@ -845,17 +906,29 @@ def register(app):
                         log_action(None, "install_complete", target=gs.name, success=False,
                                    detail=_detail[:300])
             except Exception as e:
-                with _install_lock:
-                    j = _install_jobs.get(gs_id)
-                    if j is not None:
-                        j["status"], j["message"], j["updated"] = "failed", str(e), time.time()
+                # Go through _fail so an unexpected crash leaves the same recoverable state as
+                # every other failure: a reason on the row, status "failed", and the dashboard
+                # told. Setting only the in-memory job left the row saying "installing" for ever
+                # — no reason, no Retry, and /delete refusing to remove it.
                 app.logger.exception("install job failed")
+                try:
+                    _fail("Install failed unexpectedly", str(e))
+                except Exception:
+                    _log.debug("could not record the unexpected install failure", exc_info=True)
+                    with _install_lock:
+                        j = _install_jobs.get(gs_id)
+                        if j is not None:
+                            j["status"], j["message"], j["updated"] = "failed", str(e), time.time()
 
         threading.Thread(target=_run, daemon=True).start()
 
     @app.route("/servers/<int:server_id>/retry-install", methods=["POST"])
     @login_required
-    @permission_required(INSTALL_SERVER)
+    # The SAME pair /servers/install and /servers/add accept. This ran the same install job behind
+    # a narrower permission, so someone with MANAGE_SERVERS could install a server but not retry
+    # the one that failed — and the dashboard's can_install flag (that pair) rendered the Retry
+    # button for them anyway, so the button was there and answered "You do not have permission".
+    @permission_required(INSTALL_SERVER, MANAGE_SERVERS)
     @server_access_required
     def retry_install(server_id):
         """Run the install again for a row whose install failed.
@@ -916,7 +989,14 @@ def register(app):
         with _install_lock:
             _installing = (server_id in _install_jobs
                            and _install_jobs[server_id].get("status") == "running")
-        if _installing or (gs.status == "installing" and not gs.installed):
+        # A LIVE job is the only safe "still installing" signal. The status column was part of
+        # this test, which made any row stranded at "installing" permanently undeletable — and the
+        # panel restarting mid-install strands one every time, because the worker thread dies with
+        # the process while the row keeps saying installing. There is no cancel route, so that row
+        # could only be removed by editing the database. _install_jobs is the authority on whether
+        # a thread is running: _prune_jobs only drops an entry after two hours with no progress
+        # update, and every download attempt reports progress, so an absent entry means a dead job.
+        if _installing:
             _m = "'%s' is still installing — wait for it to finish before uninstalling." % name
             if _wants_json():
                 return jsonify({"success": False, "message": _m}), 409
