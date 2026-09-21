@@ -4115,3 +4115,51 @@ finally:
         _tsmod7.close_for_sid("ctty-sid", "test over")
     except Exception:
         pass
+
+# ── the update card's count and its list must be the same set ─────────────────────────────────
+# Reported from a live panel: "Update available: v0.10.0-alpha (1 commit behind)" with no commits
+# listed underneath. The count came from the RAW log and the list from the runtime-filtered one —
+# `len(rc_log) or behind_target` used the filtered number when it had one and the unfiltered
+# number when it did not — so an update made only of test or tooling commits announced itself and
+# then had nothing to show.
+#
+# `git` is STUBBED. The suites run in a throwaway tree built from `git ls-files`, which carries no
+# .git at all, so every git call there fails and returns nothing — the first version of this asked
+# the real repo for a real range and "no runtime commits" passed because the answer was empty for
+# the wrong reason.
+_uc_saved7 = _so6._git
+_UC_LOG7 = ("bf64153\tMeasure the routes nothing enters (#327)\n"
+            "tests/smoke_test.py\n"
+            "tools/route_coverage.py\n")
+try:
+    _so6._git = lambda *a, **k: (_UC_LOG7, "", 0)
+    _uc_filtered7 = _so6._runtime_changelog("HEAD..origin/main")
+    _uc_all7 = _so6._runtime_changelog("HEAD..origin/main", runtime_only=False)
+finally:
+    _so6._git = _uc_saved7
+check("update card: a commit touching only tests and tooling is dropped by the runtime filter",
+      _uc_filtered7 == [],
+      "expected no runtime commits, got %r" % (_uc_filtered7,))
+check("update card: ...but it can still be listed when that is all there is",
+      len(_uc_all7) == 1 and _uc_all7[0].startswith("bf64153"),
+      "the unfiltered changelog is %r — with nothing to list, the card shows a count it cannot "
+      "explain" % (_uc_all7,))
+# ...and the two fields are built from ONE name, so they cannot drift apart again.
+_ucs7 = _modsrc("panel/ops/system_ops.py")
+_uc_body7 = _ucs7.split("def _compute_update_status", 1)[-1]
+_uc_code7 = "\n".join(_l for _l in _uc_body7.splitlines() if not _l.lstrip().startswith("#"))
+_uc_behind7 = re.search(r'"behind":\s*len\((\w+)\)', _uc_code7)
+_uc_changes7 = re.search(r'"changes":\s*(\w+)\[', _uc_code7)
+# The name check alone does NOT catch this — reverting the fix leaves both fields reading the same
+# variable and only removes the fallback, so it passed against the bug. What has to be pinned is
+# that the list the card shows falls back to the unfiltered log when the filtered one is empty.
+check("update card: an update with no runtime commits still has something to show",
+      "runtime_only=False" in _uc_code7,
+      "_compute_update_status never asks for the unfiltered changelog, so an update made only of "
+      "docs, tests or tooling reports a count with an empty list underneath it")
+check("update card: the count and the changelog are built from the same list",
+      _uc_behind7 is not None and _uc_changes7 is not None
+      and _uc_behind7.group(1) == _uc_changes7.group(1),
+      "behind counts %r while changes lists %r — whichever is filtered differently is the one the "
+      "operator cannot reconcile"
+      % (_uc_behind7 and _uc_behind7.group(1), _uc_changes7 and _uc_changes7.group(1)))

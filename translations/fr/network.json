@@ -148,6 +148,7 @@
   "No peers connected.": "Aucun pair connecté.",
   "No remote servers added yet. Add one to install game servers on another machine.": "Aucun serveur distant ajouté. Ajoutez-en un pour installer des serveurs de jeu sur une autre machine.",
   "No servers match your filter.": "Aucun serveur ne correspond à votre filtre.",
+  "None of these change what the panel runs — they are docs, tests or tooling.": "Aucun de ces commits ne modifie ce que le panneau exécute : documentation, tests ou outillage.",
   "Nothing to install — the system is up to date.": "Rien à installer — le système est à jour.",
   "Nothing typed here is recorded; only the session opening and closing is written to the audit log.": "Rien de ce que vous tapez ici n'est enregistré ; seules l'ouverture et la fermeture de la session sont consignées dans le journal d'audit.",
   "OS": "OS",

@@ -244,6 +244,9 @@
         <div id="pu-changes" class="small mt-2" style="display:none;">
           <div class="text-secondary mb-1">Changes since your version:</div>
           <ul id="pu-changes-list" class="mb-0" style="font-size:.8rem;"></ul>
+          {# Filled by the script when every commit in the update is docs/tests/tooling. #}
+          <div id="pu-changes-note" class="text-secondary mt-1"
+               style="font-size:.78rem;display:none;"></div>
         </div>
         <div class="mt-2 d-flex gap-2 align-items-center">
           <button class="btn btn-sm btn-outline-secondary" data-action="checkPanelUpdate" data-args='[true]'><i class="bi bi-arrow-repeat"></i> Check now</button>
